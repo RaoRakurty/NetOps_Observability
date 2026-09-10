@@ -20,6 +20,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -576,5 +577,79 @@ func TestElevationStatusAndStepDown(t *testing.T) {
 	// Idempotent: stepping down twice is not an error.
 	if st, _ := do(t, h.srv, "DELETE", "/api/auth/elevation", tok, nil); st != 204 {
 		t.Errorf("second step down: %d, want 204", st)
+	}
+}
+
+// ── 10. a sign-in the server reports as FAILED leaves no elevated access ────
+
+// TestElevationLoginRefusedAfterTheGrantLeavesNoElevatedAccess pins the
+// ordering, not the cleanup. The elevation grant is the LAST artefact an
+// elevation sign-in writes: every gate that can still refuse the sign-in runs
+// first, so a refusal cannot leave a live grant behind for the principal's next
+// ordinary session to spend.
+//
+// The refusal driven here is the F-68 concurrent-login gate failing to persist
+// its revocation, which is the one gate that sits between the grant and the
+// session in the pre-fix order.
+func TestElevationLoginRefusedAfterTheGrantLeavesNoElevatedAccess(t *testing.T) {
+	h := newElevHarness(t)
+	u := h.seedFederatedUser(t, "refused", RoleReadOnly, TenantGlobal)
+	setScopeSettings(t, h.s, TenantGlobal, func(ss *SecuritySettings) { ss.ConcurrentLogin = "deny" })
+	// A live prior session, so the deny gate has something to revoke and its
+	// revocation actually has to reach the store.
+	if _, _, err := h.s.sessions.Create(u.Username, "10.0.0.9", "prior-agent", 0, 0); err != nil {
+		t.Fatalf("seed prior session: %v", err)
+	}
+	h.s.sessions.SetKVForTest(&faultyKV{failWith: errors.New("kv unavailable: injected")})
+
+	frag := h.ssoRoundTrip(t, "elev", "refused", map[string]any{"change_ticket": "CHG-9001"})
+	if frag.Get("token") != "" {
+		t.Fatal("the concurrent-login gate refused the sign-in but a session token was still handed out")
+	}
+	if frag.Get("sso_error") == "" {
+		t.Fatal("the callback reported neither a token nor a failure")
+	}
+	if b, held := h.elevationOf(t, "refused"); held {
+		t.Fatalf("a sign-in the server REPORTED AS FAILED left live elevated access: binding %s role %s scope %s",
+			b.ID, b.RoleID, b.ScopeID)
+	}
+	for _, b := range h.s.bindings.ListByPrincipal("refused") {
+		if b.IsElevation() {
+			t.Fatalf("a refused sign-in persisted an elevation binding: %s (expires %v)", b.ID, b.ExpiresAt)
+		}
+	}
+}
+
+// TestElevationLoginRefusedByTheDenyGateKeepsThePriorGrant is the other half of
+// the same ordering: a refused sign-in must not silently drop the elevated
+// access the operator already holds either. Dropping priors is part of writing
+// the new grant, so it must not run until the sign-in is going to succeed.
+func TestElevationLoginRefusedByTheDenyGateKeepsThePriorGrant(t *testing.T) {
+	h := newElevHarness(t)
+	u := h.seedFederatedUser(t, "holder", RoleReadOnly, TenantGlobal)
+	if frag := h.ssoRoundTrip(t, "elev", "holder", map[string]any{"change_ticket": "CHG-1"}); frag.Get("token") == "" {
+		t.Fatalf("first elevation login failed: %s", frag.Get("sso_error"))
+	}
+	first, held := h.elevationOf(t, "holder")
+	if !held {
+		t.Fatal("the first login minted no grant")
+	}
+
+	setScopeSettings(t, h.s, TenantGlobal, func(ss *SecuritySettings) { ss.ConcurrentLogin = "deny" })
+	if _, _, err := h.s.sessions.Create(u.Username, "10.0.0.9", "prior-agent", 0, 0); err != nil {
+		t.Fatalf("seed prior session: %v", err)
+	}
+	h.s.sessions.SetKVForTest(&faultyKV{failWith: errors.New("kv unavailable: injected")})
+
+	if frag := h.ssoRoundTrip(t, "elev", "holder", map[string]any{"change_ticket": "CHG-2"}); frag.Get("token") != "" {
+		t.Fatal("the concurrent-login gate refused the sign-in but a token was handed out")
+	}
+	after, still := h.elevationOf(t, "holder")
+	if !still {
+		t.Fatal("a REFUSED sign-in revoked the grant the operator already held")
+	}
+	if after.ID != first.ID || after.Reason != first.Reason {
+		t.Errorf("the standing grant was rewritten by a refused sign-in: %s/%q → %s/%q",
+			first.ID, first.Reason, after.ID, after.Reason)
 	}
 }

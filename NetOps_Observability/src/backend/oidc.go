@@ -384,7 +384,12 @@ func (s *server) completeElevationSSO(w http.ResponseWriter, r *http.Request, p 
 	// SR-025 still applies: the guard is evaluated against the ACCOUNT's tenant,
 	// which is the tenant the grant will be made in.
 	role := guardFederatedRole(mappedRole, user.TenantID, username, "oidc-elevation")
-	b, err := s.completeElevationLogin(r, pol, user, role, claims.Sid, claims.Claim)
+	// ORDERING, not cleanup: the grant is validated here but PERSISTED last,
+	// after every gate that can still refuse this sign-in has passed. A grant
+	// written before the deny gate or the session mint would outlive a sign-in
+	// the server reported as failed, and elevation resolves by principal id — so
+	// the principal's next ordinary session would silently spend it.
+	grant, err := s.prepareElevationGrant(pol, user, role, claims.Sid, claims.Claim)
 	if err != nil {
 		logWarn("auth", "elevation login refused", map[string]any{
 			"user": username, "provider": pol.Provider, "reason": err.Error()})
@@ -395,8 +400,19 @@ func (s *server) completeElevationSSO(w http.ResponseWriter, r *http.Request, p 
 		s.ssoFail(w, r, err.Error())
 		return
 	}
-	access, refresh, err := s.mintSession(r, user)
+	access, refresh, sid, err := s.mintSessionWithID(r, user)
 	if err != nil {
+		s.ssoFail(w, r, err.Error())
+		return
+	}
+	b, err := s.commitElevationGrant(r, pol, user, grant, claims.Sid)
+	if err != nil {
+		// The session opened a moment ago was never handed to the client: this
+		// path answers with sso_error and no fragment. Close it rather than
+		// leave a live credential behind a refusal.
+		s.abandonSession(r, user, sid, "elevation_grant_not_persisted")
+		logWarn("auth", "elevation login refused", map[string]any{
+			"user": username, "provider": pol.Provider, "reason": err.Error()})
 		s.ssoFail(w, r, err.Error())
 		return
 	}

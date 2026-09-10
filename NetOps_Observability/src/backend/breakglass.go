@@ -351,32 +351,41 @@ func (s *server) elevationScopeID(u User, raw string) (string, error) {
 	return "", errors.New("elevation scope names a resource this account cannot reach")
 }
 
-// completeElevationLogin turns a verified sign-in through an elevation provider
-// into the one artefact it is allowed to produce. The account is READ, never
-// written: no UpsertFederated, no MergeFederated, no tenant, no role change.
+// elevationGrant is a VALIDATED but not yet persisted elevation grant. It is
+// the output of prepareElevationGrant and the input to commitElevationGrant.
+// Holding it as a value is the whole point of the split: everything that can
+// refuse the sign-in happens while this is still only a value in memory.
+type elevationGrant struct {
+	binding RoleBinding
+	expires time.Time
+	source  string
+}
+
+// prepareElevationGrant turns a verified sign-in through an elevation provider
+// into the one artefact it is allowed to produce — WITHOUT writing anything.
+// The account is READ, never written: no UpsertFederated, no MergeFederated, no
+// tenant, no role change.
 //
-// Re-login REFRESHES rather than stacks: every elevation binding the principal
-// holds is dropped first, so the second sign-in cannot leave the first one's
-// (possibly wider, possibly longer) grant standing behind it. That has to be a
-// sweep and not a same-id overwrite, because the deterministic binding id
-// covers (principal, role, scope, effect) — a login that maps to a different
-// role or a different resource would otherwise mint a SECOND live grant.
-func (s *server) completeElevationLogin(r *http.Request, pol elevation.Policy, u User, role, sid string, claim elevation.Claim) (RoleBinding, error) {
+// Every refusal an elevation sign-in owes (an expired window, a scope naming a
+// resource the account cannot reach, an unavailable binding store) is made
+// here, so the caller can run the remaining sign-in gates knowing that nothing
+// durable exists yet. Nothing in this function touches s.bindings.
+func (s *server) prepareElevationGrant(pol elevation.Policy, u User, role, sid string, claim elevation.Claim) (elevationGrant, error) {
 	if s.bindings == nil {
-		return RoleBinding{}, errors.New("role bindings are unavailable")
+		return elevationGrant{}, errors.New("role bindings are unavailable")
 	}
 	now := time.Now().UTC()
 	notBefore, expires, source, ok := pol.Window(now, claim)
 	if !ok {
-		return RoleBinding{}, errors.New("the identity provider says this elevated access has already expired")
+		return elevationGrant{}, errors.New("the identity provider says this elevated access has already expired")
 	}
 	scopeID := scopeTenant(firstNonEmpty(u.TenantID, TenantGlobal))
 	if raw, err := pol.Scope(claim); err != nil {
-		return RoleBinding{}, err
+		return elevationGrant{}, err
 	} else if raw != "" {
 		resolved, serr := s.elevationScopeID(u, raw)
 		if serr != nil {
-			return RoleBinding{}, serr
+			return elevationGrant{}, serr
 		}
 		scopeID = resolved
 	}
@@ -389,6 +398,42 @@ func (s *server) completeElevationLogin(r *http.Request, pol elevation.Policy, u
 	if sid != "" {
 		cond[ConditionElevationSID] = sid
 	}
+	return elevationGrant{
+		binding: RoleBinding{
+			PrincipalID:   u.Username,
+			PrincipalType: PrincipalUser,
+			RoleID:        role,
+			ScopeID:       scopeID,
+			Effect:        EffectAllow,
+			Condition:     cond,
+			NotBefore:     &notBefore,
+			ExpiresAt:     &expires,
+			GrantedBy:     pol.Provider,
+			Reason:        pol.Reason(claim),
+		},
+		expires: expires,
+		source:  source,
+	}, nil
+}
+
+// commitElevationGrant PERSISTS a prepared grant. It is deliberately the last
+// durable write of an elevation sign-in: by the time it runs, the sign-in can no
+// longer be refused, so live elevated access can never outlast a sign-in the
+// server reported as failed (2026-09-07: elevation is a time-bound binding, not
+// a standing grant, and a refused sign-in must leave none of it).
+//
+// Re-login REFRESHES rather than stacks: every elevation binding the principal
+// holds is dropped first, so the second sign-in cannot leave the first one's
+// (possibly wider, possibly longer) grant standing behind it. That has to be a
+// sweep and not a same-id overwrite, because the deterministic binding id
+// covers (principal, role, scope, effect) — a login that maps to a different
+// role or a different resource would otherwise mint a SECOND live grant. The
+// sweep lives here, not in prepare, for the same reason: a refused sign-in must
+// not silently drop the elevated access the operator already holds either.
+func (s *server) commitElevationGrant(r *http.Request, pol elevation.Policy, u User, g elevationGrant, sid string) (RoleBinding, error) {
+	if s.bindings == nil {
+		return RoleBinding{}, errors.New("role bindings are unavailable")
+	}
 	// Drop every prior elevation for this principal BEFORE adding the new one.
 	for _, b := range s.bindings.ListByPrincipal(u.Username) {
 		if !b.IsElevation() {
@@ -398,24 +443,13 @@ func (s *server) completeElevationLogin(r *http.Request, pol elevation.Policy, u
 			return RoleBinding{}, fmt.Errorf("replace prior elevation: %w", err)
 		}
 	}
-	b, err := s.bindings.Add(RoleBinding{
-		PrincipalID:   u.Username,
-		PrincipalType: PrincipalUser,
-		RoleID:        role,
-		ScopeID:       scopeID,
-		Effect:        EffectAllow,
-		Condition:     cond,
-		NotBefore:     &notBefore,
-		ExpiresAt:     &expires,
-		GrantedBy:     pol.Provider,
-		Reason:        pol.Reason(claim),
-	})
+	b, err := s.bindings.Add(g.binding)
 	if err != nil {
 		return RoleBinding{}, err
 	}
 	logWarn("elevation", "elevated access granted", map[string]any{
 		"user": u.Username, "provider": pol.Provider, "role": b.RoleID, "scope": b.ScopeID,
-		"expires_at": expires.Format(time.RFC3339), "expiry_source": source, "binding": b.ID,
+		"expires_at": g.expires.Format(time.RFC3339), "expiry_source": g.source, "binding": b.ID,
 	})
 	s.auditElevation(r, "ELEVATION_GRANTED", b, u.Username, u.TenantID, sid)
 	return b, nil

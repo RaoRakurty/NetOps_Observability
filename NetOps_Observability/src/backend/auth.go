@@ -350,8 +350,17 @@ func (s *server) recordSessionEvent(r *http.Request, event, userID, sessionID, t
 // refresh token bound to it. Shared by EVERY login path — password, MFA, LDAP,
 // TACACS and SSO — so all sessions get lifecycle enforcement + observability.
 func (s *server) mintSession(r *http.Request, user User) (access, refresh string, err error) {
+	access, refresh, _, err = s.mintSessionWithID(r, user)
+	return access, refresh, err
+}
+
+// mintSessionWithID is mintSession plus the session id it opened. Only the
+// elevation SSO path needs it: that path writes one more durable artefact AFTER
+// the session exists, and a failure there has to be able to close the session it
+// is abandoning rather than leave an unreachable one behind (§10 — no silent
+// failures, and no orphan artefacts from a sign-in the server refused).
+func (s *server) mintSessionWithID(r *http.Request, user User) (access, refresh, sid string, err error) {
 	ttl := accessTokenTTL()
-	var sid string
 	if s.sessions != nil {
 		idle, absolute, enforceIdle, enforceAbsolute := s.sessionPolicy(user.TenantID, user.Role, user.Username)
 		if !enforceIdle {
@@ -362,7 +371,7 @@ func (s *server) mintSession(r *http.Request, user User) (access, refresh string
 		}
 		sess, evicted, e := s.sessions.Create(user.Username, clientIP(r).String(), r.UserAgent(), idle, absolute)
 		if e != nil {
-			return "", "", e
+			return "", "", "", e
 		}
 		sid = sess.ID
 		s.recordSessionEvent(r, "SESSION_CREATED", user.Username, sid, user.TenantID, map[string]any{
@@ -377,13 +386,31 @@ func (s *server) mintSession(r *http.Request, user User) (access, refresh string
 		Iat: time.Now().Unix(), Exp: time.Now().Add(ttl).Unix(),
 	}, jwtSecret())
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	refresh, err = s.refresh.IssueForSession(user.Username, sid)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return access, refresh, nil
+	return access, refresh, sid, nil
+}
+
+// abandonSession closes a session whose tokens were never handed to the client
+// because a LATER step of the same sign-in failed. Best-effort by necessity —
+// the store may be the thing that is broken — but never silent: a session that
+// could not be closed is logged at error, because it is a live credential the
+// operator was told they did not get.
+func (s *server) abandonSession(r *http.Request, user User, sid, reason string) {
+	if s.sessions == nil || sid == "" {
+		return
+	}
+	if _, err := s.sessions.Revoke(sid); err != nil {
+		logError("auth", "abandoned session could not be closed", map[string]any{
+			"user": user.Username, "session_id": sid, "reason": reason, "err": err.Error()})
+		return
+	}
+	s.recordSessionEvent(r, "SESSION_REVOKED", user.Username, sid, user.TenantID,
+		map[string]any{"reason": reason})
 }
 
 // issueSession mints a session and returns the standard JSON login response
