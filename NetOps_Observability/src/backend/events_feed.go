@@ -220,11 +220,30 @@ func (s *server) handleEventsFeed(w http.ResponseWriter, r *http.Request) {
 	// sweep in sql_alias_shadow_guard_test.go cannot see it: qualify by hand.
 	// `ts` needs no qualifier — the projection renames it (ts_iso / ts_ms) and
 	// never shadows the DateTime64 column this predicate and the sort both bind.
+	//
+	// ONE ORDER, BOTH HALVES (3.9-02). The tie-break compares the RAW UUID
+	// column against toUUID(cursor), because the ORDER BY below sorts by the raw
+	// column and ClickHouse does NOT order a UUID the way its canonical text
+	// orders: the two 64-bit halves are swapped relative to the text, so the
+	// second text half outranks the first (MEASURED — timeintel/cursor.go
+	// documents the probe). Comparing toString(s.signal_id) against text while
+	// sorting by s.signal_id is therefore two different total orders, and a
+	// millisecond tie straddling a page boundary silently drops some rows and
+	// repeats others.
+	//
+	// The raw column is the half that moves: the table's sort key is
+	// (tenant_id, ts, signal_id), so keeping BOTH the sort and the comparison on
+	// the column keeps this page an index-ordered read, while ordering by
+	// toString(s.signal_id) would sort the whole window through a function
+	// ClickHouse cannot prove monotonic. Nothing on the Go side compares ids —
+	// the cursor only echoes the last row back — so native order costs the
+	// caller nothing. sid is a canonical UUID (decodeFeedCursor rejects
+	// everything else), so toUUID cannot throw here.
 	itemConds := where
 	if cur := strings.TrimSpace(q.Get("cursor")); cur != "" {
 		if ms, sid, ok := decodeFeedCursor(cur); ok {
 			ets := time.UnixMilli(ms).UTC().Format("2006-01-02 15:04:05.000")
-			itemConds = where + " AND (s.ts < '" + ets + "' OR (s.ts = '" + ets + "' AND toString(s.signal_id) < '" + sid + "'))"
+			itemConds = where + " AND (s.ts < '" + ets + "' OR (s.ts = '" + ets + "' AND s.signal_id < toUUID('" + sid + "')))"
 		}
 	}
 
