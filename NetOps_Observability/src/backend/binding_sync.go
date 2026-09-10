@@ -103,8 +103,10 @@ func (s *server) removeUserBindings(username string) {
 		return
 	}
 	if err := s.bindings.RemoveByPrincipal(username); err != nil {
-		// The user is gone but their role bindings may remain — a stale-grant
-		// hazard that must be visible, not discarded.
+		// The user is gone but their role bindings DO remain: the purge is
+		// persist-then-adopt, so a failed write leaves every grant in force,
+		// in memory and on disk alike. A stale-grant hazard that must be
+		// visible, not discarded.
 		logError("bindings", "removing a deleted user's bindings failed", map[string]any{
 			"user": username, "err": err.Error()})
 	}

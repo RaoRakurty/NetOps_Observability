@@ -85,9 +85,20 @@ func (s *RefreshStore) load() error {
 	return nil
 }
 
-func (s *RefreshStore) flushLocked() error {
-	list := make([]refreshToken, 0, len(s.toks))
-	for _, t := range s.toks {
+func (s *RefreshStore) flushLocked() error { return s.flushViewLocked(nil) }
+
+// flushViewLocked persists the register as it WOULD BE if `view` were the token
+// map, WITHOUT touching s.toks. A nil view means "as it is".
+//
+// It exists so a write can persist FIRST and adopt SECOND. It is not a
+// rollback: nothing is mutated and then put back, so there is no restored
+// header that can end up pointing at data changed in the meantime.
+func (s *RefreshStore) flushViewLocked(view map[string]refreshToken) error {
+	if view == nil {
+		view = s.toks
+	}
+	list := make([]refreshToken, 0, len(view))
+	for _, t := range view {
 		list = append(list, t)
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].CreatedAt.After(list[j].CreatedAt) })
@@ -98,11 +109,24 @@ func (s *RefreshStore) flushLocked() error {
 	return s.kv.Save(s.path, b)
 }
 
-// gcLocked drops tokens that expired more than a day ago, keeping the file small.
-func (s *RefreshStore) gcLocked(now time.Time) {
+// cloneToksLocked returns a separate map holding the same rows — the starting
+// point for a view a write is built into.
+func (s *RefreshStore) cloneToksLocked() map[string]refreshToken {
+	out := make(map[string]refreshToken, len(s.toks)+1)
 	for id, t := range s.toks {
+		out[id] = t
+	}
+	return out
+}
+
+// gcView drops tokens that expired more than a day ago from `view`, keeping the
+// file small. It works on a view rather than the live map because the
+// collection only happens on the way to a write: an issue whose write fails
+// must leave the register exactly as it found it.
+func gcView(view map[string]refreshToken, now time.Time) {
+	for id, t := range view {
 		if now.Sub(t.ExpiresAt) > 24*time.Hour {
-			delete(s.toks, id)
+			delete(view, id)
 		}
 	}
 }
@@ -110,6 +134,17 @@ func (s *RefreshStore) gcLocked(now time.Time) {
 // issueLocked mints a token in the given family (empty = new family), bound to
 // the given server-side session id (empty for legacy/federated logins).
 func (s *RefreshStore) issueLocked(username, family, sessionID string) (string, error) {
+	return s.issueIntoLocked(s.cloneToksLocked(), username, family, sessionID)
+}
+
+// issueIntoLocked mints the token into `view` — a private copy of the register
+// that the caller may already have applied its own change to — persists the
+// view, and only then adopts it.
+//
+// Persist FIRST, adopt SECOND. A write that fails leaves the live register
+// exactly as it was, so memory never disagrees with the file and no later write
+// can make a change that was refused durable.
+func (s *RefreshStore) issueIntoLocked(view map[string]refreshToken, username, family, sessionID string) (string, error) {
 	now := time.Now().UTC()
 	if family == "" {
 		family = randHex(8)
@@ -117,14 +152,14 @@ func (s *RefreshStore) issueLocked(username, family, sessionID string) (string, 
 	id := randHex(6)
 	secret := id + "." + randHex(24)
 	sum := sha256.Sum256([]byte(secret))
-	s.toks[id] = refreshToken{
+	view[id] = refreshToken{
 		ID: id, Hash: hex.EncodeToString(sum[:]), Username: username, Family: family, SessionID: sessionID,
 		CreatedAt: now, ExpiresAt: now.Add(s.ttl),
 	}
-	if err := s.flushLocked(); err != nil {
-		delete(s.toks, id)
+	if err := s.flushViewLocked(view); err != nil {
 		return "", err
 	}
+	s.toks = view
 	return secret, nil
 }
 
@@ -158,8 +193,11 @@ func (s *RefreshStore) Issue(username string) (string, error) {
 func (s *RefreshStore) IssueForSession(username, sessionID string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.gcLocked(time.Now().UTC())
-	return s.issueLocked(username, "", sessionID)
+	// The collection rides this write: it is applied to the view, never to the
+	// live map, so an issue that cannot persist collects nothing either.
+	view := s.cloneToksLocked()
+	gcView(view, time.Now().UTC())
+	return s.issueIntoLocked(view, username, "", sessionID)
 }
 
 // SessionOf returns the session id a refresh token belongs to, without rotating

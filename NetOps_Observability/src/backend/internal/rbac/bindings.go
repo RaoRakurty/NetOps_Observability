@@ -170,9 +170,24 @@ func (s *BindingStore) load() error {
 	return nil
 }
 
-func (s *BindingStore) flushLocked() error {
-	list := make([]RoleBinding, 0, len(s.bindings))
-	for _, rb := range s.bindings {
+// flushViewLocked persists `view` — the register as it WOULD BE after the write
+// in progress — WITHOUT touching s.bindings. Every writer builds a view, so
+// there is no "flush what is in the map" path left to call by mistake.
+//
+// This is what lets every write persist FIRST and adopt SECOND. The old order
+// changed the map and only then tried to write it, so a failed write left the
+// register silently disagreeing with the disk and the next successful write
+// made that disagreement durable — a purged grant that was never written out
+// was gone anyway, and a grant the disk refused was in force anyway (§10).
+//
+// It is deliberately not a rollback. Restoring a saved copy after a failed
+// write can hand a caller a header pointing at data that was mutated in the
+// meantime, a trap this repo has already been bitten by. Nothing here is
+// mutated and put back: the view is a separate map, adopted whole or not at
+// all.
+func (s *BindingStore) flushViewLocked(view map[string]RoleBinding) error {
+	list := make([]RoleBinding, 0, len(view))
+	for _, rb := range view {
 		list = append(list, rb)
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
@@ -181,6 +196,16 @@ func (s *BindingStore) flushLocked() error {
 		return err
 	}
 	return platformdb.Save(s.path, b)
+}
+
+// cloneBindingsLocked returns a separate map with the same rows, the starting
+// point for a view a write can be built into.
+func (s *BindingStore) cloneBindingsLocked() map[string]RoleBinding {
+	out := make(map[string]RoleBinding, len(s.bindings))
+	for id, rb := range s.bindings {
+		out[id] = rb
+	}
+	return out
 }
 
 // BindingID is a stable, deterministic id for a (principal, role, scope, effect)
@@ -258,11 +283,13 @@ func (s *BindingStore) Add(b RoleBinding) (RoleBinding, error) {
 	b.ID = BindingID(b.PrincipalID, b.RoleID, b.ScopeID, b.Effect)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.bindings[b.ID] = b
-	s.versions[b.PrincipalID]++
-	if err := s.flushLocked(); err != nil {
+	view := s.cloneBindingsLocked()
+	view[b.ID] = b
+	if err := s.flushViewLocked(view); err != nil {
 		return RoleBinding{}, err
 	}
+	s.bindings = view
+	s.versions[b.PrincipalID]++
 	return b, nil
 }
 
@@ -274,9 +301,14 @@ func (s *BindingStore) Remove(id string) error {
 	if !ok {
 		return errors.New("binding not found")
 	}
-	delete(s.bindings, id)
+	view := s.cloneBindingsLocked()
+	delete(view, id)
+	if err := s.flushViewLocked(view); err != nil {
+		return err
+	}
+	s.bindings = view
 	s.versions[rb.PrincipalID]++
-	return s.flushLocked()
+	return nil
 }
 
 // RemoveByPrincipal drops all of a principal's bindings (used when a user is
@@ -285,16 +317,25 @@ func (s *BindingStore) RemoveByPrincipal(principalID string) error {
 	principalID = strings.ToLower(strings.TrimSpace(principalID))
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	view := s.cloneBindingsLocked()
 	changed := false
-	for id, rb := range s.bindings {
+	for id, rb := range view {
 		if strings.EqualFold(rb.PrincipalID, principalID) {
-			delete(s.bindings, id)
+			delete(view, id)
 			changed = true
 		}
 	}
 	if !changed {
 		return nil
 	}
+	// Persist FIRST, adopt SECOND. The other order purged the principal in
+	// memory and then reported the failure to write, so the caller logged that
+	// the grants "may remain" while they were in fact already gone, and the
+	// next unrelated write made the loss durable.
+	if err := s.flushViewLocked(view); err != nil {
+		return err
+	}
+	s.bindings = view
 	s.versions[principalID]++
-	return s.flushLocked()
+	return nil
 }
