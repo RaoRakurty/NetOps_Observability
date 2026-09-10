@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"netops/backend/internal/applog"
 	"netops/backend/internal/platformdb"
 )
 
@@ -127,30 +129,82 @@ func newestFirst(rows []Version) {
 
 type deviceKey struct{ tenant, device string }
 
+// ErrRegisterUnreadable is returned by every write while the register file
+// exists but could not be read or parsed at start-up. It is a REFUSAL, not a
+// failure of the write itself: the file's real contents were never established,
+// so a flush would not update it, it would REPLACE it with whatever this process
+// happens to hold — which after such a load is nothing at all.
+//
+// Why REFUSE here rather than let the operator overwrite: this register is the
+// only index over the SEALED CONFIG BLOBS on disk. A row it does not hold is a
+// device configuration version nothing can find or diff any more, and no later
+// capture rebuilds the history it lost. The repair is an operator act — fix the
+// file's permissions, or remove it deliberately — and the api picks it up on the
+// next start.
+var ErrRegisterUnreadable = errors.New("configstore: the version register could not be read at start-up, so writes are refused until it is repaired or removed")
+
 // FileStore is the non-Postgres backend. Path "" keeps it purely in memory.
 type FileStore struct {
 	mu   sync.RWMutex
 	path string
 	rows map[deviceKey][]Version
+	// loadErr is set when the register file EXISTS but its contents could not
+	// be established — an I/O or permission failure, or JSON we could not
+	// parse. It is NOT set for an absent file, which is simply a register
+	// nobody has written yet.
+	loadErr error
 }
 
-// NewFileStore loads the persisted register; a missing or corrupt file starts
-// empty (the maintenance/rcafeedback convention — this state is rebuildable and
-// a parse failure must not block boot).
+// NewFileStore loads the persisted register. A MISSING file starts empty; a file
+// that exists but could not be read or parsed starts empty, is LOGGED, and
+// refuses every write from then on, so the file it could not read is never
+// replaced by an empty one.
 func NewFileStore(path string) *FileStore {
 	s := &FileStore{path: path, rows: map[deviceKey][]Version{}}
 	if path == "" {
 		return s
 	}
-	if b, err := platformdb.Load(path); err == nil && len(b) > 0 {
-		var list []Version
-		if json.Unmarshal(b, &list) == nil {
-			for _, v := range list {
-				s.insertLocked(v)
-			}
-		}
+	b, err := platformdb.Load(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Genuinely absent: nothing has been captured yet. That is the normal
+		// first-boot state and an empty register is the right answer.
+		return s
+	case err != nil:
+		// UNREADABLE IS NOT ABSENT. Folding the two together started the
+		// register empty with nothing logged, and the first capture then
+		// renamed a temp file over a file whose contents were never read.
+		s.loadErr = fmt.Errorf("configstore: the version register could not be read: %w", err)
+		applog.Error("configstore", "stored config version register could not be read; it starts EMPTY and every write is refused until the file is repaired or removed",
+			map[string]any{"err": err.Error(), "path": path})
+		return s
+	case len(b) == 0:
+		// Present but empty: nothing stored yet, nothing broken.
+		return s
+	}
+	var list []Version
+	if uerr := json.Unmarshal(b, &list); uerr != nil {
+		s.loadErr = fmt.Errorf("configstore: the version register could not be parsed: %w", uerr)
+		applog.Error("configstore", "stored config version register could not be parsed; it starts EMPTY and every write is refused until the file is repaired or removed",
+			map[string]any{"err": uerr.Error(), "path": path})
+		return s
+	}
+	for _, v := range list {
+		s.insertLocked(v)
 	}
 	return s
+}
+
+// LoadErr reports why the register could not be read, or nil. A reader uses it
+// to say "unknown" instead of reporting the empty register as a device nobody
+// ever captured.
+func (s *FileStore) LoadErr() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.loadErr
 }
 
 func (s *FileStore) insertLocked(v Version) {
@@ -178,7 +232,25 @@ func (s *FileStore) flushLocked() error { return s.flushViewLocked(nil) }
 //
 // Note that this is not a rollback. Nothing is mutated and then put back, so
 // there is no aliased backing array to restore wrongly.
+// refuseIfUnreadable is the guard every mutating method opens with, BEFORE it
+// touches s.rows: a refused write must change nothing at all, in memory or on
+// disk. The file's real contents are unknown, so a flush would not update it —
+// it would REPLACE it with what this process holds, which after an unreadable
+// load is nothing. Call it with the write lock held.
+func (s *FileStore) refuseIfUnreadable() error {
+	if s.loadErr == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", ErrRegisterUnreadable, s.loadErr)
+}
+
 func (s *FileStore) flushViewLocked(replace map[deviceKey][]Version) error {
+	// Repeated here because this is the choke point that protects the FILE: a
+	// future write path that forgets the guard above still cannot overwrite a
+	// register nobody read.
+	if err := s.refuseIfUnreadable(); err != nil {
+		return err
+	}
 	if s.path == "" {
 		return nil
 	}
@@ -266,6 +338,9 @@ func (s *FileStore) Put(_ context.Context, _ string, _ bool, v Version) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.refuseIfUnreadable(); err != nil {
+		return err
+	}
 	s.insertLocked(v)
 	return s.flushLocked()
 }
@@ -274,6 +349,9 @@ func (s *FileStore) Put(_ context.Context, _ string, _ bool, v Version) error {
 func (s *FileStore) SetGolden(_ context.Context, tenant string, cross bool, deviceID, sha string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.refuseIfUnreadable(); err != nil {
+		return err
+	}
 	found := false
 	for k, rows := range s.rows {
 		if k.device != deviceID || !visible(tenant, cross, k.tenant) {
@@ -299,6 +377,9 @@ func (s *FileStore) SetGolden(_ context.Context, tenant string, cross bool, devi
 func (s *FileStore) RecordDrift(_ context.Context, tenant string, cross bool, deviceID, sha, drift string, added, removed int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.refuseIfUnreadable(); err != nil {
+		return err
+	}
 	for k, rows := range s.rows {
 		if k.device != deviceID || !visible(tenant, cross, k.tenant) {
 			continue
@@ -319,6 +400,9 @@ func (s *FileStore) Prune(_ context.Context, tenant string, cross bool, deviceID
 	keep = clampKeep(keep)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.refuseIfUnreadable(); err != nil {
+		return nil, err
+	}
 	removed := []Version{}
 	survivors := map[deviceKey][]Version{}
 	for k, rows := range s.rows {

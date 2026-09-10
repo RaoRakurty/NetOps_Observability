@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"netops/backend/internal/applog"
 	"netops/backend/internal/platformdb"
 )
 
@@ -72,25 +74,73 @@ type FileStore struct {
 	mu   sync.RWMutex
 	path string
 	rows map[stateKey]State
+	// loadErr is set when the register file EXISTS but its contents could not
+	// be established — an I/O or permission failure, or JSON we could not
+	// parse. It is NOT set for an absent file, which is simply a register
+	// nobody has written yet.
+	//
+	// THIS STORE RECOVERS RATHER THAN REFUSES, and it is the deliberate
+	// exception among the platform's file stores. Everywhere the file holds
+	// something nothing can rebuild — a promoted case, a sealed capture, an
+	// operator's watchlist — a write over contents we never read is refused,
+	// because it would replace them with whatever this process happens to
+	// hold. Here the register is DERIVED: every row is recomputed from the
+	// next capture of that device, so rewriting the file IS the repair and
+	// blocking it would only stop drift detection over data that has no
+	// independent value. The recovery is not silent: the failure is logged at
+	// load, LoadErr reports it, and a reader can say "unknown" instead of
+	// showing a device as in-sync when we simply do not know.
+	loadErr error
 }
 
-// NewFileStore loads the persisted register; a missing or corrupt file starts
-// empty (this state is derived and fully rebuildable from the next capture).
+// NewFileStore loads the persisted register. A MISSING file starts empty; a file
+// that exists but could not be read or parsed starts empty and is LOGGED, and
+// the next capture rewrites it (see the loadErr comment for why this one store
+// recovers rather than refuses).
 func NewFileStore(path string) *FileStore {
 	s := &FileStore{path: path, rows: map[stateKey]State{}}
 	if path == "" {
 		return s
 	}
-	if b, err := platformdb.Load(path); err == nil && len(b) > 0 {
-		var list []State
-		if json.Unmarshal(b, &list) == nil {
-			for _, st := range list {
-				st.TenantID = NormTenant(st.TenantID)
-				s.rows[stateKey{st.TenantID, st.DeviceID}] = st
-			}
-		}
+	b, err := platformdb.Load(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Genuinely absent: nothing has been captured yet. That is the normal
+		// first-boot state and an empty register is the right answer.
+		return s
+	case err != nil:
+		s.loadErr = fmt.Errorf("configdrift: the drift register could not be read: %w", err)
+		applog.Error("configdrift", "stored drift register could not be read; every device reads as UNKNOWN until its next capture, which will OVERWRITE the file",
+			map[string]any{"err": err.Error(), "path": path})
+		return s
+	case len(b) == 0:
+		// Present but empty: nothing stored yet, nothing broken.
+		return s
+	}
+	var list []State
+	if uerr := json.Unmarshal(b, &list); uerr != nil {
+		s.loadErr = fmt.Errorf("configdrift: the drift register could not be parsed: %w", uerr)
+		applog.Error("configdrift", "stored drift register could not be parsed; every device reads as UNKNOWN until its next capture, which will OVERWRITE the file",
+			map[string]any{"err": uerr.Error(), "path": path})
+		return s
+	}
+	for _, st := range list {
+		st.TenantID = NormTenant(st.TenantID)
+		s.rows[stateKey{st.TenantID, st.DeviceID}] = st
 	}
 	return s
+}
+
+// LoadErr reports why the register could not be read, or nil. A reader uses it
+// to say "unknown" instead of reporting the empty register as a fleet with no
+// drift.
+func (s *FileStore) LoadErr() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.loadErr
 }
 
 func (s *FileStore) flushLocked() error {
