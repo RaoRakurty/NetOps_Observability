@@ -46,6 +46,26 @@ GigabitEthernet0/1 is administratively down, line protocol is down
      0 input errors, 0 CRC, 0 frame, 0 overrun, 0 ignored
 `
 
+// FIXTURE PROVENANCE: SYNTHETIC, authored 2026-09-10. Not a device capture.
+// It is the shape review 3.5-03 names: an operator DESCRIPTION carrying the
+// very tokens the position-independent parameter scan reads, sitting above the
+// device's own parameter lines, which carry DIFFERENT values. Every number in
+// the description is deliberately unlike the device's own, so a reading taken
+// from the wrong line cannot be mistaken for the right one. GigabitEthernet0/1
+// carries NO description and is the guard that refusing the free-text line
+// costs an ordinary record nothing.
+const ciscoInterfacesDescriptionTrap = `GigabitEthernet0/0 is up, line protocol is up
+  Hardware is CSR vNIC, address is 000c.29ab.cdef (bia 000c.29ab.cdef)
+  Description: MTU 9000 to core-02, 1Gbps uplink, Half Duplex, Last flapped never
+  Internet address is 10.0.0.1/30
+  MTU 1500 bytes, BW 100000 Kbit/sec, DLY 100 usec,
+  Full Duplex, 100Mbps, link type is auto, media type is RJ45
+GigabitEthernet0/1 is up, line protocol is up
+  Internet address is 10.0.0.5/30
+  MTU 1500 bytes, BW 100000 Kbit/sec, DLY 100 usec,
+  Full Duplex, 100Mbps, link type is auto, media type is RJ45
+`
+
 const junosShowInterfacesExtensive = `Physical interface: ge-0/0/0, Enabled, Physical link is Up
   Interface index: 148, SNMP ifIndex: 526, Generation: 151
   Description: uplink to core-02

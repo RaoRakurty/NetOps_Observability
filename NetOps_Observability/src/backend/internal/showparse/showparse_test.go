@@ -244,6 +244,43 @@ func TestParse_CiscoInterfaces(t *testing.T) {
 	}
 }
 
+// TestParse_DescriptionIsNotADeviceReading is review 3.5-03: the operator's
+// interface description is FREE TEXT, and no device parameter may ever be read
+// out of it.
+//
+// The description in the fixture says "MTU 9000 … 1Gbps … Half Duplex … Last
+// flapped never" and the device's own lines say 1500, 100000 Kbit/sec, Full,
+// 100Mbps and nothing about flapping. Every parameter field is first-write-wins,
+// so a scan that read the description won the race against the device and put a
+// number the device never reported into RCA and into LLM evidence.
+func TestParse_DescriptionIsNotADeviceReading(t *testing.T) {
+	res := mustParse(t, CmdInterfaceDetail, DialectCiscoIOSXE, ciscoInterfacesDescriptionTrap)
+	if len(res.Interfaces) != 2 {
+		t.Fatalf("got %d interfaces, want 2", len(res.Interfaces))
+	}
+	i0 := res.Interfaces[0]
+	// The description is still READ — it is the operator's label and belongs on
+	// the record. It is simply not a source of measurements.
+	wantStrP(t, "Description", i0.Description, "MTU 9000 to core-02, 1Gbps uplink, Half Duplex, Last flapped never")
+	wantIntP(t, "MTU", i0.MTU, 1500)
+	wantI64P(t, "SpeedMbps", i0.SpeedMbps, 100)
+	wantStrP(t, "Duplex", i0.Duplex, "Full")
+	wantStrP(t, "IPv4", i0.IPv4, "10.0.0.1/30")
+	if i0.LastFlap != nil {
+		t.Errorf("LastFlap = %q, want nil — the words came from the description, not the device", *i0.LastFlap)
+	}
+	// The guard: an ordinary record with NO description is unchanged by the
+	// refusal, so the fix cost the parser nothing it used to read.
+	i1 := res.Interfaces[1]
+	if i1.Description != nil {
+		t.Errorf("Description = %q, want nil for an interface with none", *i1.Description)
+	}
+	wantIntP(t, "MTU", i1.MTU, 1500)
+	wantI64P(t, "SpeedMbps", i1.SpeedMbps, 100)
+	wantStrP(t, "Duplex", i1.Duplex, "Full")
+	wantStrP(t, "IPv4", i1.IPv4, "10.0.0.5/30")
+}
+
 func TestParse_JunosInterfaces(t *testing.T) {
 	res := mustParse(t, CmdInterfaceDetail, DialectJunos, junosShowInterfacesExtensive)
 	if len(res.Interfaces) != 1 {

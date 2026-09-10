@@ -87,11 +87,34 @@ func parseCiscoInterfaces(lines []string) Result {
 		}
 		fs := fields(ln)
 		low := strings.ToLower(ln)
-		switch {
-		case strings.HasPrefix(trim(low), "description:"):
+		// THE DESCRIPTION IS OPERATOR FREE TEXT, and it is the one line in the
+		// record the DEVICE does not author. It is read for the description and
+		// the line is then DONE: the position-independent parameter scan below
+		// must never see it.
+		//
+		// It used to. The scan reads MTU/BW/duplex/speed/last-flapped off any
+		// line that carries the token, and those fields are first-write-wins, so
+		// a description reading "MTU 9000 to core, 1Gbps uplink" wrote 9000 and
+		// 1000 onto the record before the device's OWN "MTU 1500 bytes, BW
+		// 100000 Kbit/sec" line was reached, and that line could no longer
+		// correct it. The wrong number then flowed into RCA and into LLM
+		// evidence as if the device had reported it.
+		//
+		// The alternative — accepting these fields only from their canonical
+		// POSITIONS — was rejected. One parser serves five dialects here
+		// precisely because it does not depend on where in the record a line
+		// falls, and pinning positions would mean enumerating each platform's
+		// layout: a list that is always one platform behind (the same argument
+		// ciscoStateWord makes below). Skipping the free-text line removes the
+		// fabrication source and narrows nothing that is a genuine reading off a
+		// device. A number an operator typed into a label is not a measurement.
+		if strings.HasPrefix(trim(low), "description:") {
 			if v, ok := valueAfter(ln, "escription:"); ok && v != "" {
 				cur.Description = strPtr(v)
 			}
+			continue
+		}
+		switch {
 		case strings.HasPrefix(trim(low), "admin state is "):
 			if v, ok := valueAfter(ln, "admin state is "); ok && v != "" {
 				cur.Admin = strPtr(strings.TrimRight(v, ","))
