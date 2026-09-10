@@ -285,15 +285,67 @@ export function sessionWarnings(detail: SessionDetail): string[] {
 // can run it from a terminal during an incident, when the screen may be the
 // thing that is down.
 
-export function traceCommand(o: { kind: DebugKind; device: string; tenant?: string; ttlSeconds?: number; passive?: boolean; sinceSeconds?: number; path?: string }): string {
+//
+// WHAT A DEVICE NAME IS ALLOWED TO CONTAIN HERE, AND WHY IT IS A REFUSAL.
+//
+// A discovered device names ITSELF: the name on this screen can come straight
+// from the device's own sysName, and nothing between the wire and this line
+// checks its characters. The string below is not run by us — it is offered to a
+// person to paste into a terminal — so a name like `core1; curl x|sh` would be
+// the product handing an operator someone else's command to run.
+//
+// We REFUSE rather than quote. Quoting would have to be correct for the shell
+// the operator happens to be in, and POSIX single quotes are not the escape a
+// Windows command prompt reads, so a quoted line cannot be proven safe for a
+// destination we do not control. A device name is an identifier; no real one
+// needs a character a shell reads as syntax. So the safe set is an allow list,
+// anything outside it stops the whole line, and the screen says why instead of
+// printing a command that is one paste away from running.
+//
+// The same rule covers the tenant and the path filter: every value that reaches
+// this line is checked, not just the one we know a device controls.
+
+/** Characters a name may carry here: letters, digits, and the punctuation that
+ *  appears in real host names, tenant ids and gNMI paths (a gNMI key selector
+ *  is `[name=eth0]`, so the brackets, the equals and the comma are in the set).
+ *  No whitespace, no quote, and no character any shell reads as syntax. */
+const SHELL_SAFE_ARG = /^[A-Za-z0-9._:@/+=,[\]-]+$/;
+
+/** Is this value safe to place on a command line unquoted, in any shell? */
+export function isShellSafeArg(v: string): boolean {
+  return SHELL_SAFE_ARG.test(v);
+}
+
+/** What the screen shows instead of a command line, when a value cannot go on
+ *  one. Names the field that is wrong and what to do about it. */
+export function traceCommandRefusal(field: string): string {
+  return `No command line is shown here. The ${field} carries characters a terminal would read as instructions rather than as a name. Start the run with the button above instead.`;
+}
+
+/** The command line, or a refusal. Exactly one of the two is ever set, so a
+ *  caller cannot paint a refusal as a command by accident. */
+export type TraceCommand = { command: string; refused: "" } | { command: ""; refused: string };
+
+/** The placeholder for a run the operator has not named a device for yet. It is
+ *  OURS, not a value off the wire, so it never goes through the safety check. */
+const DEVICE_PLACEHOLDER = "<device>";
+
+export function traceCommand(o: { kind: DebugKind; device: string; tenant?: string; ttlSeconds?: number; passive?: boolean; sinceSeconds?: number; path?: string }): TraceCommand {
+  const device = (o.device ?? "").trim();
+  const tenant = (o.tenant ?? "").trim();
+  const path = o.passive ? (o.path ?? "").trim() : "";
+  const checked: [string, string][] = [["device name", device], ["tenant", tenant], ["path filter", path]];
+  for (const [field, v] of checked) {
+    if (v !== "" && !isShellSafeArg(v)) return { command: "", refused: traceCommandRefusal(field) };
+  }
   const parts = ["correlix-debug trace", `--kind ${o.kind}`];
   if (o.passive) parts.push("--passive");
-  if (o.device) parts.push(`--device ${o.device}`);
-  if (o.tenant) parts.push(`--tenant ${o.tenant}`);
+  parts.push(`--device ${device || DEVICE_PLACEHOLDER}`);
+  if (tenant) parts.push(`--tenant ${tenant}`);
   if (o.passive && o.sinceSeconds) parts.push(`--since ${o.sinceSeconds}s`);
-  if (o.passive && o.path) parts.push(`--path ${o.path}`);
+  if (path) parts.push(`--path ${path}`);
   if (!o.passive && o.ttlSeconds) parts.push(`--ttl ${o.ttlSeconds}s`);
-  return parts.join(" ");
+  return { command: parts.join(" "), refused: "" };
 }
 
 export function logsCommand(modules: string[], forSeconds: number): string {

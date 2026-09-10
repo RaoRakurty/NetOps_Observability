@@ -591,17 +591,25 @@ export default function PipelineDebugger() {
           </button>
           {receipt && <span className="pdbg-mono">Marker {receipt.marker}</span>}
         </div>
-        <Cli>
-          {traceCommand({
+        {(() => {
+          // A device names itself, so the name on this screen can be the
+          // device's own sysName. It is never pasted into a command line
+          // unchecked: a name outside the safe set stops the line and the
+          // screen says so, rather than offering the operator something a
+          // terminal would read as instructions.
+          const cli = traceCommand({
             kind,
-            device: device.trim() || "<device>",
+            device,
             tenant: tenant || undefined,
             ttlSeconds,
             passive,
             sinceSeconds: sinceMinutes * 60,
             path: pathFilter,
-          })}
-        </Cli>
+          });
+          return cli.refused
+            ? <Honest tone="bad" headline={cli.refused} detail="Nothing was run and nothing was sent." />
+            : <Cli>{cli.command}</Cli>;
+        })()}
 
         {traceError && <Honest tone="bad" headline={traceError} detail="This table states nothing until a run answers." />}
 

