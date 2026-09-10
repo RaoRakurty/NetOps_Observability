@@ -151,6 +151,15 @@ export default function ExperienceJourneys({ window: win }: { window: DemWindow 
 
       {editing && (
         <JourneyForm
+          // ONE FORM PER JOURNEY. Every field in JourneyForm is seeded from
+          // `initial` at mount and edited from there on, so without a key React
+          // reuses the same instance when the operator goes from editing A
+          // straight to editing B, and Save writes A's name, objective, value
+          // and whole step graph over B. The key remounts the form on the new
+          // journey. Nothing in the form outlives its instance on purpose:
+          // there are no refs, no effects and no unsaved work worth carrying
+          // across, and a save closes the form anyway.
+          key={editing === "new" ? "new" : editing.id}
           initial={editing === "new" ? undefined : editing}
           targets={targets.data?.targets ?? []}
           busy={busy}
