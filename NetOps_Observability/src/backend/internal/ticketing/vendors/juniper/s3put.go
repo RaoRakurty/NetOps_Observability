@@ -37,18 +37,94 @@ import (
 	"time"
 )
 
+// s3HostSuffix is the only domain this client will PUT a customer's evidence
+// bundle to. The bucket and region vary per upload; the domain does not.
+const s3HostSuffix = "amazonaws.com"
+
 // s3Endpoint builds the virtual-hosted-style object URL for a bucket/key.
+//
+// The bucket and the region come from the VENDOR'S reply, and they are
+// concatenated into a HOST. That makes them a reparenting vector: a "/" turns
+// the rest of the string into a path, a "#" or a "?" truncates the host, and in
+// every case the PUT lands somewhere that is not S3 — carrying the customer's
+// evidence bundle and the STS credentials that sign it. It needs a compromised
+// or spoofed vendor gateway to reach, which is why this is defence in depth
+// rather than a live hole, but the thing being misdirected is the evidence.
+//
+// So both halves are checked against their own published character sets and the
+// domain is PINNED, which is the rule Cisco's cxdBase already applies to its
+// upload host. Nothing is rewritten on the way through: an unexpected spelling
+// is REFUSED, not lowercased into something that then signs differently from
+// what the token said.
 func (c *Client) s3Endpoint(t UploadToken) (string, error) {
 	if c.baseOverride != "" {
 		// Tests point the whole flow at one fake server; keep the object path.
 		return strings.TrimRight(c.baseOverride, "/") + "/" + s3EscapePath(t.ObjectKey), nil
 	}
-	host := t.Bucket + ".s3." + t.Region + ".amazonaws.com"
-	u := &url.URL{Scheme: "https", Host: host, Path: "/" + t.ObjectKey}
-	if u.Host == "" {
-		return "", fmt.Errorf("%w: juniper: cannot build the S3 endpoint from the upload token", ErrRequestInvalid)
+	if !validS3Bucket(t.Bucket) {
+		return "", fmt.Errorf("%w: juniper: the upload token's bucket name is not a valid S3 bucket", ErrRequestInvalid)
 	}
+	if !validAWSRegion(t.Region) {
+		return "", fmt.Errorf("%w: juniper: the upload token's region is not a valid AWS region", ErrRequestInvalid)
+	}
+	host := t.Bucket + ".s3." + t.Region + "." + s3HostSuffix
+	// Belt as well as braces: whatever the two checks above allowed, the host we
+	// are about to dial must still be a subdomain of the pinned domain and
+	// nothing else.
+	if !strings.HasSuffix(host, "."+s3HostSuffix) || strings.ContainsAny(host, "/?#@:\\") {
+		return "", fmt.Errorf("%w: juniper: refusing to upload to %q — it is not an S3 endpoint", ErrRequestInvalid, host)
+	}
+	u := &url.URL{Scheme: "https", Host: host, Path: "/" + t.ObjectKey}
 	return u.Scheme + "://" + u.Host + "/" + s3EscapePath(t.ObjectKey), nil
+}
+
+// validS3Bucket applies AWS's own general-purpose bucket naming rules: 3 to 63
+// characters of lowercase letters, digits, dots and hyphens, beginning and
+// ending with a letter or a digit, with no ".." run. Everything a host could be
+// reparented with is outside that set.
+func validS3Bucket(name string) bool {
+	if len(name) < 3 || len(name) > 63 {
+		return false
+	}
+	if strings.Contains(name, "..") {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		ch := name[i]
+		switch {
+		case ch >= 'a' && ch <= 'z', ch >= '0' && ch <= '9':
+			continue
+		case ch == '.' || ch == '-':
+			if i == 0 || i == len(name)-1 {
+				return false // must begin and end with a letter or a digit
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// validAWSRegion accepts the published region-code shape — lowercase letters,
+// digits and hyphens, e.g. us-east-1 — and nothing else.
+func validAWSRegion(region string) bool {
+	if len(region) < 2 || len(region) > 32 {
+		return false
+	}
+	for i := 0; i < len(region); i++ {
+		ch := region[i]
+		switch {
+		case ch >= 'a' && ch <= 'z', ch >= '0' && ch <= '9':
+			continue
+		case ch == '-':
+			if i == 0 || i == len(region)-1 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // PutObject uploads the bundle to the token's S3 location. open is called
