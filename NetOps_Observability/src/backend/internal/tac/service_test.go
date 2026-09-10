@@ -239,7 +239,7 @@ func (s stubOpener) PrepareCase(_ context.Context, req CaseRequest) (CaseForm, e
 func (s stubOpener) SubmitCase(context.Context, CaseRequest) (CaseResult, error) {
 	return CaseResult{ConnectorID: s.info.ID}, nil
 }
-func (s stubOpener) PollStatus(context.Context, string, string) (CaseResult, error) {
+func (s stubOpener) PollStatus(context.Context, string, CaseHandle) (CaseResult, error) {
 	return CaseResult{}, ErrCapabilityUnsupported
 }
 

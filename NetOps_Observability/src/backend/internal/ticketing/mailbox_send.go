@@ -213,14 +213,21 @@ var (
 	aristaSubjectRef = regexp.MustCompile(`(?i)\bRef\.?\s*ID\s*[:#]?\s*([A-Za-z0-9._-]{1,64})\b`)
 )
 
-func caseRefFromSubject(v EmailVendor, subject string) (string, bool) {
-	var re *regexp.Regexp
+// vendorSubjectRef is the vendor's own subject-reference pattern, or nil for a
+// vendor that publishes none.
+func vendorSubjectRef(v EmailVendor) *regexp.Regexp {
 	switch v.ID {
 	case "cisco":
-		re = ciscoSubjectRef
+		return ciscoSubjectRef
 	case "arista":
-		re = aristaSubjectRef
-	default:
+		return aristaSubjectRef
+	}
+	return nil
+}
+
+func caseRefFromSubject(v EmailVendor, subject string) (string, bool) {
+	re := vendorSubjectRef(v)
+	if re == nil {
 		return "", false
 	}
 	m := re.FindStringSubmatch(subject)
@@ -230,8 +237,8 @@ func caseRefFromSubject(v EmailVendor, subject string) (string, bool) {
 	return m[1], true
 }
 
-// LookupCaseNumber reads the REPLY in the tenant's own mailbox and lifts the
-// vendor's case reference out of the subject line.
+// LookupCaseNumber reads the REPLY to ONE sent case in the tenant's own mailbox
+// and lifts the vendor's case reference out of the subject line.
 //
 // IT IS NOT A POLL, and that is why it is not the Poll capability. It reads OUR
 // mailbox, never the vendor's case system, so it can learn a case NUMBER — the
@@ -239,12 +246,33 @@ func caseRefFromSubject(v EmailVendor, subject string) (string, bool) {
 // case STATUS. Declaring Poll here would promise a status surface that does not
 // exist (research §6, the "explicit honesty rule").
 //
+// IT ANSWERS FOR ONE CASE, NOT FOR THE MAILBOX. sentSubject is the exact subject
+// the create put on the wire and sentAt is when it went; a reply is accepted
+// ONLY when it answers that message. Returning the newest reply from the vendor
+// instead — which is all a mailbox-wide read can do — hands the same number to
+// every unnumbered case the tenant has open with them, and files one vendor's
+// case number against another operator's incident.
+//
+// WHY THE SUBJECT AND NOT A MESSAGE ID. Graph's sendMail returns 202 and an
+// empty body: it assigns the message's internetMessageId itself and never tells
+// us what it chose. So the id the vendor's reply threads against is an id this
+// process has never seen, and the subject Correlix composed — which the vendor's
+// mail system quotes back, decorated with their own case reference — is the
+// strongest handle that actually exists on this path.
+//
 // It is opt-in per tenant (read_replies) because it needs a second, wider
 // permission — Mail.Read — that a tenant may reasonably refuse to grant.
-func (c *EmailCaseConnector) LookupCaseNumber(ctx context.Context, cfg TACConnectorConfig) (CaseRef, bool, error) {
+func (c *EmailCaseConnector) LookupCaseNumber(ctx context.Context, cfg TACConnectorConfig,
+	sentSubject string, sentAt time.Time) (CaseRef, bool, error) {
 	e := cfg.Email
 	if err := c.ValidateConfig(cfg); err != nil {
 		return CaseRef{}, false, err
+	}
+	if strings.TrimSpace(sentSubject) == "" {
+		// With nothing to match against, the only available answer would be a
+		// guess. Refuse instead of guessing (§3, §10).
+		return CaseRef{}, false, PermanentDeliveryError{errors.New(
+			"the reply read needs the subject the case was opened with; this case carries none")}
 	}
 	if !e.ReadReplies {
 		return CaseRef{}, false, fmt.Errorf("%w: reading the reply thread is off for this tenant", ErrUnsupported)
@@ -277,19 +305,106 @@ func (c *EmailCaseConnector) LookupCaseNumber(ctx context.Context, cfg TACConnec
 	if json.Unmarshal(raw, &out) != nil {
 		return CaseRef{}, false, PermanentDeliveryError{errors.New("microsoft 365: the reply search returned something this connector does not understand")}
 	}
-	best, found := CaseRef{}, false
-	var newest time.Time
+	// Only replies to THIS message, and only ones carrying a reference in the
+	// vendor's own published subject shape.
+	refs := map[string]bool{}
 	for _, msg := range out.Value {
-		ref, ok := caseRefFromSubject(c.vendor, msg.Subject)
-		if !ok {
+		if !replyAnswers(c.vendor, sentSubject, sentAt, msg.Subject, msg.Received) {
 			continue
 		}
-		if found && !msg.Received.After(newest) {
-			continue
+		if ref, ok := caseRefFromSubject(c.vendor, msg.Subject); ok {
+			refs[ref] = true
 		}
-		best, found, newest = CaseRef{ID: ref, Number: ref}, true, msg.Received
 	}
-	return best, found, nil
+	switch len(refs) {
+	case 0:
+		return CaseRef{}, false, nil
+	case 1:
+		for ref := range refs {
+			return CaseRef{ID: ref, Number: ref}, true, nil
+		}
+	}
+	// Two different case numbers answering one message. That is a mailbox this
+	// connector cannot read honestly — picking either would file a number
+	// against a case it may not belong to — so it says so and files none.
+	return CaseRef{}, false, PermanentDeliveryError{errors.New(
+		"the vendor's mailbox holds replies naming more than one case number for this message; read the thread and record the number by hand")}
+}
+
+// replyAnswers reports that one mailbox message is a reply to the message
+// Correlix sent for this case.
+//
+// The rule is deliberately TIGHT: too tight costs a lookup that answers "not
+// yet" and is retried on schedule, while too loose costs one vendor's case
+// number filed against another operator's incident. Two things must hold — the
+// reply cannot predate the message it answers, and once the mail client's reply
+// markers and the vendor's own case reference are taken off the front, what is
+// left must be EXACTLY the subject we sent.
+func replyAnswers(v EmailVendor, sentSubject string, sentAt time.Time, replySubject string, received time.Time) bool {
+	if !sentAt.IsZero() && !received.IsZero() && received.Before(sentAt.Add(-replyClockSkew)) {
+		return false
+	}
+	want := normalizeSubject(sentSubject)
+	if want == "" {
+		return false
+	}
+	got := normalizeSubject(replySubject)
+	if got == want {
+		return true
+	}
+	// "SR 123456789 - <our subject>": the vendor's own reference, then ours.
+	rest, ok := stripVendorReference(v, got)
+	return ok && rest == want
+}
+
+// stripVendorReference removes a vendor case reference that stands at the FRONT
+// of a subject, with whatever separator follows it. A reference found anywhere
+// else is left alone: it belongs to the text, not to the prefix.
+func stripVendorReference(v EmailVendor, subject string) (string, bool) {
+	re := vendorSubjectRef(v)
+	if re == nil {
+		return subject, false
+	}
+	loc := re.FindStringIndex(subject)
+	if loc == nil || loc[0] != 0 {
+		return subject, false
+	}
+	rest := strings.TrimSpace(subject[loc[1]:])
+	rest = strings.TrimSpace(strings.TrimLeft(rest, "-:|"))
+	return rest, true
+}
+
+// replyClockSkew is how much earlier than our own send timestamp a reply may be
+// stamped before it stops being credible. Two clocks are involved — this host's
+// and the mail service's — and neither is disciplined to the other.
+const replyClockSkew = 10 * time.Minute
+
+// replyMarkers are the prefixes a mail client puts in front of a quoted subject.
+// They are stripped repeatedly: a thread three answers deep carries three.
+var replyMarkers = []string{"re:", "re :", "fw:", "fwd:", "fw :", "fwd :", "aw:", "sv:", "tr:", "vs:"}
+
+// normalizeSubject reduces a subject line to what can be compared: lower case,
+// single spaces, no reply markers and no leading [TAG] a mail gateway stamped on
+// the front. It never removes anything from the MIDDLE of a subject, so two
+// different cases cannot normalise to the same string.
+func normalizeSubject(s string) string {
+	out := strings.ToLower(strings.Join(strings.Fields(s), " "))
+	for changed := true; changed; {
+		changed = false
+		for _, m := range replyMarkers {
+			if rest, ok := strings.CutPrefix(out, m); ok {
+				out = strings.TrimSpace(rest)
+				changed = true
+			}
+		}
+		if strings.HasPrefix(out, "[") {
+			if i := strings.Index(out, "]"); i > 0 {
+				out = strings.TrimSpace(out[i+1:])
+				changed = true
+			}
+		}
+	}
+	return out
 }
 
 // ── Gmail users.messages.send ───────────────────────────────────────────────

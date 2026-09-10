@@ -339,7 +339,10 @@ func (c *EmailCaseConnector) CreateCase(ctx context.Context, cfg TACConnectorCon
 	}
 	// There is no case id yet: the vendor assigns one and replies. Saying so is
 	// the honest answer — a fabricated ref would be worse than none.
-	return CaseRef{Number: "", URL: "", ID: ""}, nil
+	//
+	// What IS returned is the subject that just went on the wire, because that
+	// is the only handle the later reply read has on THIS case.
+	return CaseRef{Number: "", URL: "", ID: "", ThreadSubject: subject}, nil
 }
 
 // AttachBundle sends the bundle as a MIME attachment against a case reference.

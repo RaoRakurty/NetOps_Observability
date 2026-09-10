@@ -333,6 +333,33 @@ type CaseResult struct {
 	// PortalText is echoed back when the connector could not create the case, so
 	// the operator's next action is one copy away rather than a dead end.
 	PortalText string `json:"portal_text,omitempty"`
+	// ThreadSubject is the EXACT subject line the connector put on the wire when
+	// it opened this case, on the one path where the case number arrives later,
+	// in the vendor's reply, rather than in the create response.
+	//
+	// It is the only thing that ties that reply to THIS case, so it is carried
+	// back with the result and kept on the case record. It never crosses the
+	// wire: it is process state for the number lookup, not a fact about the case
+	// that any client needs.
+	ThreadSubject string `json:"-"`
+}
+
+// CaseHandle identifies ONE case to a status read.
+//
+// It is a struct rather than a bare case id because a case OPENED BY EMAIL has
+// no id at all until the vendor answers, and the only way to tell that vendor's
+// reply from every other reply in the tenant's mailbox is the message Correlix
+// actually sent: its exact subject, and when it went. A read that carries only
+// "some case at this tenant" can do no better than return the newest reply in
+// the mailbox, which is how two cases end up sharing one number.
+type CaseHandle struct {
+	// CaseID is the vendor's own number. It is EMPTY on a case whose number has
+	// not arrived yet, which is exactly when the reply read matters.
+	CaseID string
+	// ThreadSubject is the subject line the create put on the wire.
+	ThreadSubject string
+	// OpenedAt is when it went. A reply cannot predate the message it answers.
+	OpenedAt time.Time
 }
 
 // CaseSecrets carries the WRITE-ONLY, per-case credential an attach-to-existing
@@ -436,7 +463,11 @@ type CaseOpener interface {
 	SubmitCase(ctx context.Context, req CaseRequest) (CaseResult, error)
 	// PollStatus reads a case's current status back. Connectors without
 	// CapPollStatus return ErrCapabilityUnsupported.
-	PollStatus(ctx context.Context, tenantID, caseID string) (CaseResult, error)
+	//
+	// It takes the whole CaseHandle rather than a case id: a case with no number
+	// yet is identified only by the message that opened it, and a connector that
+	// cannot tell one such case from another must not answer for either.
+	PollStatus(ctx context.Context, tenantID string, h CaseHandle) (CaseResult, error)
 }
 
 var (

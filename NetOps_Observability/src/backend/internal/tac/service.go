@@ -719,12 +719,12 @@ func (s *Service) SubmitCase(ctx context.Context, tenant, incident, connectorID 
 // It is on the SERVICE rather than exposed as a bare opener because the opener
 // list is the service's, and because a connector id that is no longer wired must
 // answer honestly ("this path is gone") instead of panicking on a nil interface.
-func (s *Service) PollCase(ctx context.Context, tenant, connectorID, caseID string) (CaseResult, error) {
+func (s *Service) PollCase(ctx context.Context, tenant, connectorID string, h CaseHandle) (CaseResult, error) {
 	o, _, ok := s.opener(ctx, tenant, connectorID)
 	if !ok {
 		return CaseResult{}, ErrCapabilityUnsupported
 	}
-	return o.PollStatus(ctx, tenant, caseID)
+	return o.PollStatus(ctx, tenant, h)
 }
 
 // MarkRemembered claims the one-time investigation-memory write for this

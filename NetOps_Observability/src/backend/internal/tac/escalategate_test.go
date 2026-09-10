@@ -53,7 +53,7 @@ func newGateProbe(t *testing.T, svc *Service, role gateRole) *gateProbe {
 	p := &gateProbe{svc: svc}
 	tracker := NewCaseTracker(func() time.Time { return time.Unix(1700000000, 0).UTC() })
 	poller, err := NewCasePoller(tracker,
-		func(context.Context, string, string, string) (CaseResult, error) {
+		func(context.Context, string, string, CaseHandle) (CaseResult, error) {
 			return CaseResult{}, ErrCapabilityUnsupported
 		},
 		nil, nil)

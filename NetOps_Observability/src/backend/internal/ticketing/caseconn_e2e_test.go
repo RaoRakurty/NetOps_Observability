@@ -224,7 +224,7 @@ func TestEndToEndCiscoCreateThenCXDAttachThroughTheAdapter(t *testing.T) {
 	}
 	// Cisco's Support Case API v3 is READ-ONLY and PSS-scoped, so this connector
 	// honestly declares no poll — the chip must not promise a refreshing status.
-	if _, perr := o.PollStatus(context.Background(), "t1", res.CaseID); !errors.Is(perr, tac.ErrCapabilityUnsupported) {
+	if _, perr := o.PollStatus(context.Background(), "t1", tac.CaseHandle{CaseID: res.CaseID}); !errors.Is(perr, tac.ErrCapabilityUnsupported) {
 		t.Fatalf("CXD must refuse a status poll it cannot do, got %v", perr)
 	}
 }
@@ -321,7 +321,7 @@ func TestEndToEndJuniperCreateAttachAndStatus(t *testing.T) {
 		t.Fatalf("the upload was not SigV4-signed with the issued session token: %q / %q", f.s3Auth, f.s3Token)
 	}
 	// The status comes back, and it is what the chip renders.
-	poll, perr := o.PollStatus(context.Background(), "t1", res.CaseID)
+	poll, perr := o.PollStatus(context.Background(), "t1", tac.CaseHandle{CaseID: res.CaseID})
 	if perr != nil {
 		t.Fatalf("poll: %v", perr)
 	}
@@ -385,7 +385,7 @@ func TestEndToEndServiceNowCreatesAttachesAndPolls(t *testing.T) {
 	if !res.Attached {
 		t.Fatalf("the bundle was not attached: %s", res.AttachNote)
 	}
-	poll, perr := o.PollStatus(context.Background(), "t1", res.CaseID)
+	poll, perr := o.PollStatus(context.Background(), "t1", tac.CaseHandle{CaseID: res.CaseID})
 	if perr != nil {
 		t.Fatalf("poll: %v", perr)
 	}

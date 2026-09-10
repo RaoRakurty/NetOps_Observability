@@ -78,11 +78,11 @@ func (o *recordingOpener) SubmitCase(_ context.Context, req CaseRequest) (CaseRe
 	return res, nil
 }
 
-func (o *recordingOpener) PollStatus(_ context.Context, _, caseID string) (CaseResult, error) {
+func (o *recordingOpener) PollStatus(_ context.Context, _ string, h CaseHandle) (CaseResult, error) {
 	if !o.info.Can(CapPollStatus) {
 		return CaseResult{}, ErrCapabilityUnsupported
 	}
-	return CaseResult{ConnectorID: o.info.ID, CaseID: caseID, Status: "Open"}, nil
+	return CaseResult{ConnectorID: o.info.ID, CaseID: h.CaseID, Status: "Open"}, nil
 }
 
 // vendorConnector builds a configured, create+attach connector for a vendor.

@@ -206,6 +206,14 @@ type CaseLink struct {
 	// closed) starts it again, which is why this is derived on every read rather
 	// than latched.
 	Closed bool `json:"closed"`
+	// ThreadSubject is the exact subject line the connector sent when it opened
+	// this case. It is what a later reply is matched against on the one path
+	// where the case number arrives by email, and it is the reason two cases
+	// opened with the same vendor cannot be handed the same number.
+	//
+	// It never crosses the wire: the chip has no use for it, and a mailbox
+	// subject is the platform's own state rather than a fact about the case.
+	ThreadSubject string `json:"-"`
 }
 
 // StatusLine is the chip's sentence: what to show, in one place, so the panel,
@@ -601,7 +609,7 @@ func humanInterval(d time.Duration) string {
 // StatusReader reads one case's status back. It is the CaseOpener's PollStatus,
 // narrowed to what the poller needs and injected so the loop is testable with no
 // connectors at all.
-type StatusReader func(ctx context.Context, tenant, connectorID, caseID string) (CaseResult, error)
+type StatusReader func(ctx context.Context, tenant, connectorID string, h CaseHandle) (CaseResult, error)
 
 // CaseRecorder persists a status update — onto the incident record, and into
 // whatever the caller wants to notify.
@@ -670,7 +678,9 @@ func (p *CasePoller) Round(ctx context.Context) int {
 func (p *CasePoller) Poll(ctx context.Context, tenant, incident string, link CaseLink) CaseLink {
 	callCtx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
-	res, err := p.read(callCtx, tenant, link.Connector, link.CaseID)
+	res, err := p.read(callCtx, tenant, link.Connector, CaseHandle{
+		CaseID: link.CaseID, ThreadSubject: link.ThreadSubject, OpenedAt: link.OpenedAt,
+	})
 	now := p.now().UTC()
 	switch {
 	case err != nil && errors.Is(err, ErrCapabilityUnsupported):

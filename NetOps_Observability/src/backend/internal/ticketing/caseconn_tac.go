@@ -517,6 +517,10 @@ func (o *TACOpener) SubmitCase(ctx context.Context, req tac.CaseRequest) (tac.Ca
 		res.CaseID = orDefault(ref.Number, ref.ID)
 		res.CaseURL = ref.URL
 		res.Status = "created"
+		// An email create returns no number: the vendor replies with one. The
+		// subject it sent is what ties that reply to THIS case, so it travels
+		// with the result and is kept on the case record.
+		res.ThreadSubject = ref.ThreadSubject
 	case caps.AttachToExistingOnly:
 		// Attach-to-existing needs two values a create path does not: the
 		// EXISTING case reference, and — for Cisco CXD — the per-case upload
@@ -618,15 +622,11 @@ func attachOnlyMissingFields(req tac.CaseRequest) []string {
 // `read_replies`). It can never learn a STATUS, and this method does not pretend
 // otherwise: it returns the number and the honest "opened by email" status, and
 // once a number is known it stops asking.
-func (o *TACOpener) PollStatus(ctx context.Context, tenantID, caseID string) (tac.CaseResult, error) {
+func (o *TACOpener) PollStatus(ctx context.Context, tenantID string, h tac.CaseHandle) (tac.CaseResult, error) {
+	caseID := strings.TrimSpace(h.CaseID)
 	res := tac.CaseResult{ConnectorID: o.Connector.Name(), CaseID: caseID, SubmittedAt: o.now()}
 	if !o.Connector.Capabilities().Poll {
-		if ref, found, err := o.lookupEmailCaseNumber(ctx, tenantID, caseID); err == nil && found {
-			res.CaseID = ref
-			res.Status = EmailOpenedStatus
-			return res, nil
-		}
-		return res, tac.ErrCapabilityUnsupported
+		return o.pollByReply(ctx, tenantID, h, res)
 	}
 	cfg, err := o.tenantConfig(ctx, tenantID)
 	if err != nil {
@@ -655,33 +655,50 @@ func (o *TACOpener) PollStatus(ctx context.Context, tenantID, caseID string) (ta
 // must all say the same words.
 const EmailOpenedStatus = "opened by email"
 
-// lookupEmailCaseNumber asks the email connector to read the vendor's reply and
-// lift the case number out of the subject.
+// pollByReply is the email exception: a connector with no Poll capability that
+// can still learn the case NUMBER by reading the vendor's reply in the tenant's
+// own mailbox.
 //
-// It runs ONLY when the case has no number yet: once the number is known there
-// is nothing left for it to learn, and re-reading a mailbox on a schedule to
-// discover the same string is exactly the kind of wasted permission use that
-// makes a customer turn the permission off.
-func (o *TACOpener) lookupEmailCaseNumber(ctx context.Context, tenantID, caseID string) (string, bool, error) {
-	if strings.TrimSpace(caseID) != "" {
-		return "", false, nil
-	}
+// It runs ONLY when the case has no number yet — once the number is known there
+// is nothing left to learn, and re-reading a mailbox on a schedule to rediscover
+// the same string is exactly the wasted permission use that makes a customer
+// turn the permission off — and only when the case carries the subject its
+// create put on the wire, because that is what the reply is matched against.
+//
+// The three outcomes are kept apart on purpose (§10):
+//
+//	· nothing here can EVER answer  → ErrCapabilityUnsupported, and the poller
+//	  stops asking. That is a fact about the path, not about today.
+//	· the read FAILED               → the read's own error. A Graph outage is not
+//	  an unsupported capability, and reporting it as one would silently retire a
+//	  case's refresh schedule over a five-minute problem.
+//	· no reply yet                  → no error and no status. The vendor has not
+//	  written back; the schedule stands.
+func (o *TACOpener) pollByReply(ctx context.Context, tenantID string, h tac.CaseHandle,
+	res tac.CaseResult) (tac.CaseResult, error) {
 	em, ok := o.Connector.(*EmailCaseConnector)
-	if !ok {
-		return "", false, nil
+	subject := strings.TrimSpace(h.ThreadSubject)
+	if !ok || strings.TrimSpace(h.CaseID) != "" || subject == "" {
+		return res, tac.ErrCapabilityUnsupported
 	}
 	cfg, err := o.tenantConfig(ctx, tenantID)
 	if err != nil {
-		return "", false, err
+		return res, translateToTAC(err)
 	}
-	ref, found, err := em.LookupCaseNumber(ctx, cfg)
-	if err != nil {
-		return "", false, err
+	ref, found, err := em.LookupCaseNumber(ctx, cfg, subject, h.OpenedAt)
+	switch {
+	case errors.Is(err, ErrUnsupported):
+		// The tenant has not granted the reply read, or this mailbox is not one
+		// that can be read at all. That IS an unsupported capability.
+		return res, tac.ErrCapabilityUnsupported
+	case err != nil:
+		return res, translateToTAC(err)
+	case !found:
+		return res, nil
 	}
-	if !found {
-		return "", false, nil
-	}
-	return orDefault(ref.Number, ref.ID), true, nil
+	res.CaseID = orDefault(ref.Number, ref.ID)
+	res.Status = EmailOpenedStatus
+	return res, nil
 }
 
 // tenantConfig resolves one tenant's configuration. A nil resolver is not a

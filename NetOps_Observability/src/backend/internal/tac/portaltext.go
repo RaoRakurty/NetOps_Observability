@@ -109,7 +109,7 @@ func (p *PortalTextOpener) SubmitCase(_ context.Context, req CaseRequest) (CaseR
 }
 
 // PollStatus implements CaseOpener. There is no case to poll.
-func (p *PortalTextOpener) PollStatus(_ context.Context, _, _ string) (CaseResult, error) {
+func (p *PortalTextOpener) PollStatus(context.Context, string, CaseHandle) (CaseResult, error) {
 	return CaseResult{}, ErrCapabilityUnsupported
 }
 

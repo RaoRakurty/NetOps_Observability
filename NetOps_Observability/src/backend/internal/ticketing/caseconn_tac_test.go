@@ -308,7 +308,7 @@ func TestAdapterPortalOnlySubmitIsASuccessfulOutcome(t *testing.T) {
 
 func TestAdapterPollStatusIsRefusedWhereThereIsNoPoll(t *testing.T) {
 	o := NewTACOpener(NewCiscoCXDConnector(nil), "cisco", "", testResolver(ciscoCfg()), nil)
-	_, err := o.PollStatus(context.Background(), "org-a-tenant", "695123456")
+	_, err := o.PollStatus(context.Background(), "org-a-tenant", tac.CaseHandle{CaseID: "695123456"})
 	if !errors.Is(err, tac.ErrCapabilityUnsupported) {
 		t.Fatalf("err = %v, want ErrCapabilityUnsupported — a connector with no poll says so", err)
 	}

@@ -75,6 +75,15 @@ type CaseRef struct {
 	// matching attach call and drops them.
 	UploadHost  string `json:"-"`
 	UploadToken string `json:"-"`
+	// ThreadSubject is the EXACT subject line a create put on the wire, on the
+	// one path that has no case number to return: an email create, where the
+	// vendor assigns the number and puts it in the subject of their REPLY.
+	//
+	// It is what a later reply is matched against. Without it the mailbox read
+	// can only answer "the newest reply from this vendor", which is the same
+	// answer for every unnumbered case the tenant has open with them. Never
+	// persisted, never logged, never on the wire.
+	ThreadSubject string `json:"-"`
 }
 
 // CaseRequest is the connector-neutral case body. Vendor-specific identifiers

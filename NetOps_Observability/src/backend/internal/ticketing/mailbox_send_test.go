@@ -245,7 +245,8 @@ func TestTheReplyReadIsOffUnlessTheTenantAsksForIt(t *testing.T) {
 	c := f.connector(t, "cisco")
 	cfg := TACConnectorConfig{Email: graphCfg()}
 
-	if _, _, err := c.LookupCaseNumber(context.Background(), cfg); !errors.Is(err, ErrUnsupported) {
+	if _, _, err := c.LookupCaseNumber(context.Background(), cfg, "BGP session down on edge1",
+		time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("err = %v, want ErrUnsupported while read_replies is off", err)
 	}
 	if got := f.seen(); len(got) != 0 {
@@ -253,22 +254,25 @@ func TestTheReplyReadIsOffUnlessTheTenantAsksForIt(t *testing.T) {
 	}
 }
 
-func TestTheReplyReadLiftsTheNewestCaseNumberOutOfTheSubject(t *testing.T) {
+// The reply read answers for ONE case: the reply to the message Correlix sent,
+// not the newest thing the vendor happened to write.
+func TestTheReplyReadLiftsTheCaseNumberOutOfTheReplyToOurOwnMessage(t *testing.T) {
 	f := newFakeMailbox(t)
 	f.reply["/messages"] = `{"value":[
-		{"subject":"RE: SR 987654321 - old thread","receivedDateTime":"2026-09-01T10:00:00Z"},
-		{"subject":"Case update SR 123456789 opened","receivedDateTime":"2026-09-06T10:00:00Z"},
-		{"subject":"newsletter, no case here","receivedDateTime":"2026-09-07T10:00:00Z"}]}`
+		{"subject":"RE: SR 987654321 - a different case entirely","receivedDateTime":"2026-09-07T10:00:00Z"},
+		{"subject":"RE: SR 123456789 - BGP session down on edge1","receivedDateTime":"2026-09-06T10:00:00Z"},
+		{"subject":"newsletter, no case here","receivedDateTime":"2026-09-07T11:00:00Z"}]}`
 	c := f.connector(t, "cisco")
 	e := graphCfg()
 	e.ReadReplies = true
 
-	ref, found, err := c.LookupCaseNumber(context.Background(), TACConnectorConfig{Email: e})
+	ref, found, err := c.LookupCaseNumber(context.Background(), TACConnectorConfig{Email: e},
+		"BGP session down on edge1", time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC))
 	if err != nil || !found {
 		t.Fatalf("lookup = %v, found=%v", err, found)
 	}
 	if ref.Number != "123456789" {
-		t.Fatalf("case number = %q, want the newest SR in the thread", ref.Number)
+		t.Fatalf("case number = %q, want the SR from the reply to OUR message", ref.Number)
 	}
 	if got := f.recorded()[1].Query; !strings.Contains(got, "search") || !strings.Contains(got, "attach%40cisco.com") {
 		t.Fatalf("search query = %q, want a $search on the CLOSED-table mailbox", got)

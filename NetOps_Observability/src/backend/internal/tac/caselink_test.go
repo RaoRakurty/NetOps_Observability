@@ -366,7 +366,7 @@ func TestPollerReadsStatusAndRecordsIt(t *testing.T) {
 	tr := testTracker(&now)
 	var recorded []CaseLink
 	p, err := NewCasePoller(tr,
-		func(context.Context, string, string, string) (CaseResult, error) {
+		func(context.Context, string, string, CaseHandle) (CaseResult, error) {
 			return CaseResult{Status: "In Progress", CaseURL: "https://vendor.example/case/1"}, nil
 		},
 		func(_ context.Context, _, _ string, l CaseLink) error {
@@ -399,7 +399,7 @@ func TestPollerRecordsAFailureWithoutLosingTheLastKnownStatus(t *testing.T) {
 	tr := testTracker(&now)
 	var warned int
 	p, err := NewCasePoller(tr,
-		func(context.Context, string, string, string) (CaseResult, error) {
+		func(context.Context, string, string, CaseHandle) (CaseResult, error) {
 			return CaseResult{}, errors.New("the vendor returned 503")
 		}, nil, func(string, map[string]any) { warned++ })
 	if err != nil {
@@ -428,7 +428,7 @@ func TestPollerStopsAskingAPathThatCannotAnswer(t *testing.T) {
 	now := at(9, 0)
 	tr := testTracker(&now)
 	p, err := NewCasePoller(tr,
-		func(context.Context, string, string, string) (CaseResult, error) {
+		func(context.Context, string, string, CaseHandle) (CaseResult, error) {
 			return CaseResult{}, ErrCapabilityUnsupported
 		}, nil, nil)
 	if err != nil {
@@ -452,7 +452,7 @@ func TestPollerStopsAskingAPathThatCannotAnswer(t *testing.T) {
 }
 
 func TestPollerNeedsATrackerAndAReader(t *testing.T) {
-	if _, err := NewCasePoller(nil, func(context.Context, string, string, string) (CaseResult, error) {
+	if _, err := NewCasePoller(nil, func(context.Context, string, string, CaseHandle) (CaseResult, error) {
 		return CaseResult{}, nil
 	}, nil, nil); err == nil {
 		t.Fatal("a poller with no tracker must be refused")

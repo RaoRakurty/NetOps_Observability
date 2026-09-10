@@ -435,6 +435,9 @@ func (a *EscalateAPI) recordCase(r *http.Request, subj Subject, res CaseResult, 
 		Connector: res.ConnectorID, CaseID: res.CaseID, CaseURL: res.CaseURL,
 		Status: res.Status, Severity: severity, Attached: res.Attached,
 		AttachNote: res.AttachNote, OpenedAt: res.SubmittedAt,
+		// Kept so a later reply read can tell THIS case's reply from every other
+		// reply in the tenant's mailbox.
+		ThreadSubject: res.ThreadSubject,
 	}
 	for _, info := range a.deps.Service.Connectors(r.Context(), subj.Tenant) {
 		if info.ID != res.ConnectorID {

@@ -1434,8 +1434,8 @@ func (s *server) buildTACService() error {
 	// deterministically instead of racing a ticker.
 	s.tacCases = tac.NewCaseTracker(func() time.Time { return time.Now().UTC() })
 	poller, perr := tac.NewCasePoller(s.tacCases,
-		func(ctx context.Context, tenant, connectorID, caseID string) (tac.CaseResult, error) {
-			return svc.PollCase(ctx, tenant, connectorID, caseID)
+		func(ctx context.Context, tenant, connectorID string, h tac.CaseHandle) (tac.CaseResult, error) {
+			return svc.PollCase(ctx, tenant, connectorID, h)
 		},
 		func(ctx context.Context, tenant, incidentID string, link tac.CaseLink) error {
 			s.tacPersistCase(ctx, tenant, incidentID, link)
