@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -131,18 +132,25 @@ func encodeRESP(args ...string) []byte {
 	return b
 }
 
+// errRedisTransport marks a failure of the CONNECTION rather than of one
+// command: the socket died, the deadline expired, or the reply stream desynced.
+// It exists so a caller can tell "this key is not there" from "we could not
+// look" (§10). A `-ERR` reply from a live server is NOT transport: the stream
+// is still in sync and the next command is still meaningful.
+var errRedisTransport = errors.New("redis: connection failed")
+
 // redisCmd sends one command and reads a single reply line / bulk string.
 func redisCmd(c net.Conn, args ...string) (string, error) {
 	if _, err := c.Write(encodeRESP(args...)); err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", errRedisTransport, err)
 	}
 	r := bufio.NewReader(c)
 	line, err := r.ReadString('\n')
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", errRedisTransport, err)
 	}
 	if len(line) == 0 {
-		return "", fmt.Errorf("empty redis reply")
+		return "", fmt.Errorf("%w: empty redis reply", errRedisTransport)
 	}
 	switch line[0] {
 	case '+': // simple string
@@ -152,7 +160,12 @@ func redisCmd(c net.Conn, args ...string) (string, error) {
 	case '$': // bulk string
 		n, err := strconv.Atoi(trimCRLF(line[1:]))
 		if err != nil {
-			return "", err
+			// An unreadable length header means the stream is desynced.
+			hdr := trimCRLF(line[1:])
+			if len(hdr) > 32 {
+				hdr = hdr[:32]
+			}
+			return "", fmt.Errorf("%w: unreadable bulk length %q", errRedisTransport, hdr)
 		}
 		if n < 0 {
 			return "", nil // nil bulk → empty
@@ -161,11 +174,11 @@ func redisCmd(c net.Conn, args ...string) (string, error) {
 			// The length header is attacker-influenced wire data; allocating it
 			// blindly is a makeslice panic that kills this collector goroutine
 			// for good (§9: bounded). The stream is desynced anyway — refuse.
-			return "", fmt.Errorf("redis: bulk length %d exceeds %d-byte cap", n, maxRESPBulkLen)
+			return "", fmt.Errorf("%w: bulk length %d exceeds %d-byte cap", errRedisTransport, n, maxRESPBulkLen)
 		}
 		buf := make([]byte, n+2) // payload + CRLF
 		if _, err := readFull(r, buf); err != nil {
-			return "", err
+			return "", fmt.Errorf("%w: %w", errRedisTransport, err)
 		}
 		return string(buf[:n]), nil
 	default:
@@ -638,10 +651,21 @@ func redisRegisterDEMRunVantage(ctx context.Context, vantage string) error {
 	return err
 }
 
-// FetchDEMRuns merges the run records published by EVERY vantage. An absent key
-// is an empty batch (a prober may simply not have published yet); a MALFORMED
-// payload for one vantage costs that vantage's batch and is reported, never the
-// whole drain — one broken prober must not blind the api to every other one.
+// FetchDEMRuns merges the run records published by EVERY vantage.
+//
+// Three outcomes, and they are deliberately not the same thing (§10):
+//
+//   - an ABSENT key is an empty batch and no error. A prober that has not
+//     published yet is the ordinary first-boot state.
+//   - a MALFORMED payload, or a `-ERR` reply, for one vantage costs that
+//     vantage's batch and is reported. The drain continues: one broken prober
+//     must not blind the api to every other one.
+//   - a DEAD CONNECTION ends the drain and is reported, naming the vantage it
+//     died on. It used to fold into the absent-key branch, which returned a
+//     short batch with a NIL error: the intake counted nothing, logged nothing,
+//     and every check on a vantage nobody reached graded `unknown`. The
+//     connection-wide deadline redisDial sets makes that the ordinary outcome
+//     of a slow drain, not an exotic one (review 2026-09-08, 3.2-18).
 func FetchDEMRuns(ctx context.Context) ([]dem.WireRun, error) {
 	c, err := redisDial(ctx)
 	if err != nil {
@@ -656,7 +680,19 @@ func FetchDEMRuns(ctx context.Context) ([]dem.WireRun, error) {
 	var bad []string
 	for _, v := range vantages {
 		raw, gerr := redisCmd(c, "GET", demRunsKeyFor(v))
-		if gerr != nil || raw == "" {
+		switch {
+		case errors.Is(gerr, errRedisTransport):
+			// The channel is gone. Every remaining vantage is UNREAD, not
+			// empty, so stop and say so rather than return a short batch that
+			// reads as "these probers published nothing".
+			return out, fmt.Errorf("dem runs: the run channel failed while reading vantage %s (%d of %d vantages unread): %w",
+				v, len(vantages)-len(out), len(vantages), gerr)
+		case gerr != nil:
+			// A per-key refusal from a live server: this vantage's batch is
+			// lost, the rest of the drain is still meaningful.
+			bad = append(bad, v)
+			continue
+		case raw == "":
 			continue // an expired vantage key is not an error
 		}
 		var batch []dem.WireRun
