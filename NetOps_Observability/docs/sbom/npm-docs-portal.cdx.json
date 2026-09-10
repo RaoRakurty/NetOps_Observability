@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:c6f4bc95-5011-59eb-a170-34d19abf0c1a",
+  "serialNumber": "urn:uuid:28f608cd-cd36-5756-88d8-0c868795f797",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-09-06T04:44:18+00:00",
+    "timestamp": "2026-09-09T20:38:36+00:00",
     "tools": {
       "components": [
         {
@@ -16,9 +16,9 @@
     },
     "component": {
       "type": "application",
-      "bom-ref": "correlix@2026.09.06-g52f415c8#npm-docs-portal",
+      "bom-ref": "correlix@2026.09.09-gb34b3f5b#npm-docs-portal",
       "name": "correlix",
-      "version": "2026.09.06-g52f415c8",
+      "version": "2026.09.09-gb34b3f5b",
       "description": "Correlix \u2014 npm-docs-portal dependency inventory"
     },
     "properties": [
@@ -17265,10 +17265,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/js-yaml@3.15.1",
+      "bom-ref": "pkg:npm/js-yaml@3.15.2",
       "name": "js-yaml",
-      "version": "3.15.1",
-      "purl": "pkg:npm/js-yaml@3.15.1",
+      "version": "3.15.2",
+      "purl": "pkg:npm/js-yaml@3.15.2",
       "scope": "required",
       "properties": [
         {
@@ -17290,16 +17290,16 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "4bdf56b8edc79613b75cde3512d614365f73cd78e8271ed0be68a9c6c255c6d0814f4607105cbe88e2618d2beb995d769d8856a5968cf253c79099b4c9431b6a"
+          "content": "e84b8bf3bf5591103ed42cf9efc98a3222af8cf344ba4ebeaf525a173a1259e8d99ad7fbc566c8cb0d5edca931964cd322df536b0e89061129a46eeeb5cd4ffb"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/js-yaml@4.3.1",
+      "bom-ref": "pkg:npm/js-yaml@4.3.2",
       "name": "js-yaml",
-      "version": "4.3.1",
-      "purl": "pkg:npm/js-yaml@4.3.1",
+      "version": "4.3.2",
+      "purl": "pkg:npm/js-yaml@4.3.2",
       "scope": "required",
       "properties": [
         {
@@ -17321,7 +17321,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "098e9cac6ab7d77317f06930bc1eedce0a7df6f8d0c58d7efb9cb5d3f04a37f1947c7a9668e19030d66406fa92cec64a5a4fe28f01e55b3ce42ee96c18786359"
+          "content": "48534ebd227e0e07fff409fdd38631f828129483c2908a5aa38aa8e7596979edb94c845e8dd1f7ae1478119306a0dc77fd33f73bec335ae893165e2ca9b96dcc"
         }
       ]
     },
@@ -28394,10 +28394,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/svgo@3.3.4",
+      "bom-ref": "pkg:npm/svgo@3.3.5",
       "name": "svgo",
-      "version": "3.3.4",
-      "purl": "pkg:npm/svgo@3.3.4",
+      "version": "3.3.5",
+      "purl": "pkg:npm/svgo@3.3.5",
       "scope": "required",
       "properties": [
         {
@@ -28419,7 +28419,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "1ac3518ace1ef23c67d98f44373ffc95b27ddc2b2d1bcb2fb4c9ee45a1db885d8b4c9e6d2b4feadedfd444fabd65cef35560499cd9c9308a7a6debcaedb4a636"
+          "content": "f1240ccddaef59a0fc75e526ae7601f804b2c415605943a2960f80ef99c4ffbe9674ba63e8ba290b088056f93391cab2ffd6fbb76320edf6852e3834651719df"
         }
       ]
     },

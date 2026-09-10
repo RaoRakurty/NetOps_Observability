@@ -4,7 +4,7 @@
   "serialNumber": "urn:uuid:9f57741f-c2a0-5fa8-adb6-92b7f4282ffa",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-09-06T04:44:18+00:00",
+    "timestamp": "2026-09-09T20:38:36+00:00",
     "tools": {
       "components": [
         {
@@ -16,9 +16,9 @@
     },
     "component": {
       "type": "application",
-      "bom-ref": "correlix@2026.09.06-g52f415c8#npm-frontend",
+      "bom-ref": "correlix@2026.09.09-gb34b3f5b#npm-frontend",
       "name": "correlix",
-      "version": "2026.09.06-g52f415c8",
+      "version": "2026.09.09-gb34b3f5b",
       "description": "Correlix \u2014 npm-frontend dependency inventory"
     },
     "properties": [
