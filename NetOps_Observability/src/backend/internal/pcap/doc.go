@@ -91,6 +91,13 @@ const (
 	// StopGrace is how long past the requested duration the runtime waits before
 	// forcing the stop/cleanup commands.
 	StopGrace = 15 * time.Second
+	// TerminalWriteTimeout bounds the LAST metadata write of a capture: the row
+	// that says the capture stored, or that it failed. That write must not run
+	// on the context that bounds the device work, because the commonest reason
+	// to reach it is that that context has just fired. It must still be bounded
+	// (§9), so it gets its own budget: long enough for a store write that is
+	// merely slow, short enough that a dead store cannot pin the goroutine.
+	TerminalWriteTimeout = 15 * time.Second
 	// MaxListLimit bounds a capture listing (§9 all queues bounded).
 	MaxListLimit = 200
 	// DefaultListLimit is the unrequested page size.

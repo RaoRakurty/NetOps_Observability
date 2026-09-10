@@ -415,7 +415,14 @@ func (m *Manager) run(scope Principal, dev Device, rec Capture, bounds Bounds) {
 	rec.Bytes = int64(len(raw))
 	rec.Packets = countPackets(raw)
 	rec.BlobRef = ref
-	if err := m.deps.Store.Put(ctx, scope.Tenant, scope.Cross, rec); err != nil {
+	// TERMINAL WRITE: its own context, never the capture's. See terminalCtx.
+	// The sealed blob is already on disk here, and the failure branch below
+	// deletes it, so inheriting the device bound did not merely lose metadata —
+	// a capture that timed out one second before its bytes landed was thrown
+	// away.
+	writeCtx, writeCancel := terminalCtx(ctx)
+	defer writeCancel()
+	if err := m.deps.Store.Put(writeCtx, scope.Tenant, scope.Cross, rec); err != nil {
 		m.deps.LogError("packet capture stored but its row could not be written", map[string]any{
 			"device": dev.ID, "capture": rec.ID, "error": m.deps.Scrub(err.Error())})
 		// The blob would otherwise be unreferenced; remove it rather than leak
@@ -439,7 +446,24 @@ func (m *Manager) run(scope Principal, dev Device, rec Capture, bounds Bounds) {
 			"sensitive": true,
 		})
 	}
-	m.prune(ctx, scope, dev.ID)
+	m.prune(writeCtx, scope, dev.ID)
+}
+
+// terminalCtx is the context a capture's LAST metadata write runs under.
+//
+// It deliberately does NOT inherit the cancellation of the context that bounds
+// the device work. That context firing is the commonest reason to be writing a
+// terminal row at all, and reusing it meant the write failed with it: on the
+// Postgres backend a timed-out capture never recorded its failure and the row
+// stayed `running` for ever, on a device that could then start no other capture.
+// The file backend hid it, because it ignores the context entirely.
+//
+// It is NOT context.Background(): §9 says all IO has a timeout, and an
+// unbounded store write would pin the capture goroutine on a dead database.
+// Values (tenant, trace) ride along; only the deadline and the cancellation are
+// replaced. This is the same shape cleanup() has always used.
+func terminalCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), TerminalWriteTimeout)
 }
 
 // fail stamps the failure on the row. A failed capture is STORED, not discarded:
@@ -449,7 +473,10 @@ func (m *Manager) fail(ctx context.Context, scope Principal, rec Capture, cause 
 	rec.EndedAt = &ended
 	rec.Status = StatusFailed
 	rec.Error = m.deps.Scrub(cause.Error())
-	if err := m.deps.Store.Put(ctx, scope.Tenant, scope.Cross, rec); err != nil {
+	// TERMINAL WRITE: its own context, never the capture's. See terminalCtx.
+	writeCtx, writeCancel := terminalCtx(ctx)
+	defer writeCancel()
+	if err := m.deps.Store.Put(writeCtx, scope.Tenant, scope.Cross, rec); err != nil {
 		m.deps.LogError("failed packet capture could not be recorded", map[string]any{
 			"device": rec.DeviceID, "capture": rec.ID, "error": m.deps.Scrub(err.Error())})
 	}
@@ -459,7 +486,7 @@ func (m *Manager) fail(ctx context.Context, scope Principal, rec Capture, cause 
 	// Prune here too. Retention otherwise only runs on the success path, so a
 	// device that never answers would grow its register by a row per attempt
 	// with nothing ever trimming it (§9 bounded).
-	m.prune(ctx, scope, rec.DeviceID)
+	m.prune(writeCtx, scope, rec.DeviceID)
 }
 
 // cleanup tears the capture point down and removes the on-device file. It runs

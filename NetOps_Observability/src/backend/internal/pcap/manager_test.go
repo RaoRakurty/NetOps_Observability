@@ -7,10 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -578,5 +580,175 @@ func TestFailedCapturesArePrunedWhileTheDeviceIsStillDown(t *testing.T) {
 	if len(rows) > maxFailedCaptures {
 		t.Fatalf("an outage with no capture in between grew the register to %d rows; budget is %d",
 			len(rows), maxFailedCaptures)
+	}
+}
+
+// ── the terminal-write guardrail (review 3.5-04) ────────────────────────────
+
+// ctxStore is a store that HONOURS THE CALLER'S CONTEXT, which is what makes it
+// evidence about production. FileStore ignores the context entirely, so the
+// default harness cannot see this class of defect at all; the Postgres backend
+// hands the context straight to pgx, and a cancelled one fails every statement
+// before it reaches the database.
+type ctxStore struct {
+	Store
+	mu      sync.Mutex
+	putCtxs []context.Context
+	// pruneLive records, AT CALL TIME, whether the context each retention sweep
+	// was handed was still alive. Reading Err() afterwards proves nothing: the
+	// terminal context is cancelled by its own defer as soon as the write path
+	// returns.
+	pruneLive []bool
+}
+
+func (c *ctxStore) Put(ctx context.Context, tenant string, cross bool, rec Capture) error {
+	c.mu.Lock()
+	c.putCtxs = append(c.putCtxs, ctx)
+	c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("capture store: %w", err)
+	}
+	return c.Store.Put(ctx, tenant, cross, rec)
+}
+
+func (c *ctxStore) Prune(ctx context.Context, tenant string, cross bool, deviceID string, keep int) ([]Capture, error) {
+	c.mu.Lock()
+	c.pruneLive = append(c.pruneLive, ctx.Err() == nil)
+	c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("capture retention: %w", err)
+	}
+	return c.Store.Prune(ctx, tenant, cross, deviceID, keep)
+}
+
+func (c *ctxStore) lastPut() context.Context {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.putCtxs) == 0 {
+		return nil
+	}
+	return c.putCtxs[len(c.putCtxs)-1]
+}
+
+// ctxGateway records the context the DEVICE WORK ran under, so a test can prove
+// the terminal metadata write did not reuse it.
+type ctxGateway struct {
+	*fakeGateway
+	mu  sync.Mutex
+	ctx context.Context
+}
+
+// Fetch is the recording point on purpose. The cleanup commands run through
+// Exec with their OWN short context (that is the pattern this defect should
+// have followed), so recording there would capture the wrong one.
+func (g *ctxGateway) Fetch(ctx context.Context, dev Device, remotePath string, maxBytes int64) ([]byte, error) {
+	g.mu.Lock()
+	g.ctx = ctx
+	g.mu.Unlock()
+	return g.fakeGateway.Fetch(ctx, dev, remotePath, maxBytes)
+}
+
+func (g *ctxGateway) deviceCtx() context.Context {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.ctx
+}
+
+// TestATimedOutCaptureStillReachesATerminalRow — REGRESSION (review 3.5-04).
+// The context the capture body builds is the bound on the DEVICE WORK: when a
+// device stops answering it fires, and the fetch fails, and the failure is
+// stamped on the row. Stamping it reused that same, now dead, context. On the
+// Postgres backend the write therefore failed too, and the row the operator sees
+// stayed `running` for ever: a capture that will never end, on a device that
+// cannot start another one, with nothing saying what happened.
+func TestATimedOutCaptureStillReachesATerminalRow(t *testing.T) {
+	cs := &ctxStore{}
+	f := newFixture(t, func(d *Deps) { cs.Store = d.Store; d.Store = cs })
+
+	dev := f.devices["acme-core"]
+	captureID, err := mintID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := Capture{
+		TenantID: "acme", DeviceID: dev.ID, ID: captureID,
+		Interface: "Ethernet1/1", DurationSec: 5, StartedAt: f.now,
+		ExpiresAt: f.now.Add(time.Minute), Status: StatusRunning, Actor: "a@acme",
+	}
+	if err := f.store.Put(context.Background(), "acme", false, rec); err != nil {
+		t.Fatalf("seed the running row: %v", err)
+	}
+
+	// Exactly the state the body is in when the device stopped answering: the
+	// capture's own context has already fired.
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+	f.mgr.fail(dead, Principal{Tenant: "acme"}, rec, errors.New("capture fetch failed: context deadline exceeded"))
+
+	got, err := f.store.Get(context.Background(), "acme", false, dev.ID, rec.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status == StatusRunning {
+		t.Fatal("a timed-out capture left the row RUNNING FOR EVER: the terminal write inherited the dead device context")
+	}
+	if got.Status != StatusFailed {
+		t.Fatalf("status = %q, want %q", got.Status, StatusFailed)
+	}
+	if got.EndedAt == nil || got.Error == "" {
+		t.Fatalf("the terminal row says nothing about what happened: %+v", got)
+	}
+	// The retention sweep the failure path deliberately runs must not be
+	// cancelled either, or an unreachable device grows a row per attempt.
+	cs.mu.Lock()
+	sweeps := append([]bool(nil), cs.pruneLive...)
+	cs.mu.Unlock()
+	if len(sweeps) != 1 || !sweeps[0] {
+		t.Fatalf("retention did not run on a live context: %v", sweeps)
+	}
+}
+
+// TestTheStoredCaptureWriteDoesNotInheritTheDeviceContext — REGRESSION
+// (review 3.5-04), success half. The sealed blob is already on disk by the time
+// the row is written, so a terminal write cancelled with the device work does
+// not merely lose metadata: the handler deletes the blob it cannot reference,
+// and the capture the operator waited for is gone.
+func TestTheStoredCaptureWriteDoesNotInheritTheDeviceContext(t *testing.T) {
+	cs := &ctxStore{}
+	gw := &ctxGateway{}
+	f := newFixture(t, func(d *Deps) {
+		cs.Store = d.Store
+		d.Store = cs
+		gw.fakeGateway = d.Gateway.(*fakeGateway)
+		d.Gateway = gw
+	})
+
+	rec, err := f.mgr.Start(context.Background(), f.principal, f.devices["acme-core"],
+		StartRequest{Interface: "Ethernet1/1", DurationSec: 1}, "a@acme")
+	if err != nil {
+		t.Fatalf("Start = %v", err)
+	}
+	stored, err := f.store.Get(context.Background(), "acme", false, "acme-core", rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != StatusStored || stored.BlobRef == "" {
+		t.Fatalf("the capture did not store: %+v", stored)
+	}
+
+	devCtx, putCtx := gw.deviceCtx(), cs.lastPut()
+	if devCtx == nil || putCtx == nil {
+		t.Fatal("the harness recorded no contexts")
+	}
+	if putCtx == devCtx {
+		t.Fatal("the terminal metadata write REUSED the context that bounds the device work: when that context fires, the row and the sealed blob are both lost")
+	}
+	// Not inherited is not the same as unbounded. §9: all IO has a timeout.
+	deadline, ok := putCtx.Deadline()
+	if !ok {
+		t.Fatal("the terminal write runs on an UNBOUNDED context")
+	}
+	if devDeadline, hadOne := devCtx.Deadline(); hadOne && deadline.Equal(devDeadline) {
+		t.Fatal("the terminal write is still bounded by the device work's own deadline")
 	}
 }
