@@ -150,6 +150,18 @@ func NewAPI(d Deps) (*API, error) {
 
 // scoped resolves the caller to ONE concrete tenant, refusing a cross-tenant
 // read or write of per-tenant data (§3a). It writes the error response itself.
+//
+// It is also the ONE place this module applies the operator-visibility
+// restriction (Tenant.OperatorRestricted). RUM beacons, journeys, incidents and
+// business events are the customer's own users and the customer's own revenue —
+// a tenant that has switched the restriction on is invisible to the platform
+// owner everywhere else, and is invisible here too. A denied principal is scoped
+// to dem.RestrictedScope, which owns nothing, so every route below renders its
+// honest empty view.
+//
+// Only the DENY half exists on this lane. There is no Global-view half to filter:
+// the refusal above means a cross-tenant principal never reads experience data at
+// all, so there is no cross-tenant result set a restricted tenant could appear in.
 func (a *API) scoped(w http.ResponseWriter, r *http.Request, gate dem.Gate) (string, dem.Principal, bool) {
 	p, ok := a.deps.Authz(w, r, gate)
 	if !ok {
@@ -160,6 +172,15 @@ func (a *API) scoped(w http.ResponseWriter, r *http.Request, gate dem.Gate) (str
 		a.deps.WriteError(w, http.StatusBadRequest,
 			errors.New("select a tenant to see its digital experience (it is per-tenant data; cross-tenant access is refused)"))
 		return "", dem.Principal{}, false
+	}
+	if p.Deny {
+		if gate != dem.GateRead {
+			// Defense in depth: Deny is resolved for reads only, so this is a
+			// wiring bug. The safe answer to a write we cannot place is refusal.
+			a.deps.WriteError(w, http.StatusForbidden, errors.New("this tenant's data is operator-restricted"))
+			return "", dem.Principal{}, false
+		}
+		t = dem.RestrictedScope
 	}
 	return t, p, true
 }

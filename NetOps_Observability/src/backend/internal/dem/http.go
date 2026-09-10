@@ -49,11 +49,33 @@ const (
 	GateIngest
 )
 
+// RestrictedScope is the tenant a DENIED read is answered under. It is not a
+// tenant: no row anywhere carries it, so every store keyed by tenant returns
+// nothing for it and the caller gets a correctly shaped, empty view.
+//
+// This is how the lane says "serve nothing" without inventing a status code.
+// Logs, flows, metrics, igpmon and the BMP feed all answer a denied operator with
+// 200 and no rows — never a 403, which would confirm the tenant has data. The
+// metrics lane uses the same trick with its {device="__netops_no_visible_device__"}
+// sentinel filter; this is the tenant-keyed form of it.
+const RestrictedScope = "__netops_operator_restricted__"
+
 // Principal is the resolved caller.
 type Principal struct {
 	Tenant  string
 	Cross   bool
 	Subject string
+
+	// Deny is the per-tenant OPERATOR-VISIBILITY restriction
+	// (Tenant.OperatorRestricted): the platform operator has scoped INTO a tenant
+	// that has switched it on, so it may read nothing of that tenant's experience
+	// data. The composition root resolves it (it owns the tenant store); this
+	// package only obeys it, the same way it only obeys the tenant it is handed.
+	//
+	// It is set for READ gates only. Deny is a visibility rule, not a write rule,
+	// and a write answered under RestrictedScope would create rows no tenant can
+	// ever see — so scoped() refuses a denied write outright instead.
+	Deny bool
 }
 
 // APIDeps are the HTTP layer's injected collaborators.
@@ -158,6 +180,11 @@ func rejectUnknownQuery(r *http.Request, allowed ...string) error {
 
 // scoped resolves the caller to ONE concrete tenant, refusing a cross-tenant
 // read or write of per-tenant data (§3a). It writes the error response itself.
+//
+// It is also the ONE place this module applies the operator-visibility
+// restriction: a denied principal is scoped to RestrictedScope, so every route
+// below reads an empty catalogue and an empty score set without any of them
+// having to remember the rule.
 func (a *API) scoped(w http.ResponseWriter, r *http.Request, gate Gate) (string, Principal, bool) {
 	p, ok := a.deps.Authz(w, r, gate)
 	if !ok {
@@ -168,6 +195,15 @@ func (a *API) scoped(w http.ResponseWriter, r *http.Request, gate Gate) (string,
 		a.deps.WriteError(w, http.StatusBadRequest,
 			errors.New("select a tenant to manage its experience targets (they are per-tenant data; cross-tenant access is refused)"))
 		return "", Principal{}, false
+	}
+	if p.Deny {
+		if gate != GateRead {
+			// Defense in depth: Deny is resolved for reads only, so this is a
+			// wiring bug. The safe answer to a write we cannot place is refusal.
+			a.deps.WriteError(w, http.StatusForbidden, errors.New("this tenant's data is operator-restricted"))
+			return "", Principal{}, false
+		}
+		t = RestrictedScope
 	}
 	return t, p, true
 }

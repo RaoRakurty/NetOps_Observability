@@ -141,12 +141,29 @@ func (s *server) demAuthz(w http.ResponseWriter, r *http.Request, gate dem.Gate)
 		return dem.Principal{}, false
 	}
 	tenant, cross := principalTenant(claims)
+	// The OPERATOR-VISIBILITY restriction (Tenant.OperatorRestricted), resolved
+	// with the SAME primitive the logs path uses rather than a second copy of the
+	// rule. Experience data is RUM beacons, journeys, incidents and business
+	// events: the customer's own users and the customer's own revenue. A tenant
+	// that has switched the restriction on is hidden from the platform owner in
+	// logs, flows, metrics and the BMP feed, and must be hidden here too.
+	//
+	// Only the DENY half is resolvable on this lane, and only the deny half
+	// exists: the module refuses a cross-tenant caller outright, so there is no
+	// Global view for a restricted tenant to appear in — only the operator
+	// walking in with ?as_tenant, which is what this closes. It is resolved for
+	// the READ gate alone; the restriction is a visibility rule, and a write
+	// answered under the module's restricted scope would own nothing.
+	deny := false
+	if gate == dem.GateRead {
+		_, deny = s.operatorTelemetryRestriction(claims, tenant, cross)
+	}
 	if tenant == TenantGlobal {
 		// The platform tenant is not a customer: treat it as scopeless so the
 		// module's own refusal fires rather than reading a shared bucket.
 		tenant = ""
 	}
-	return dem.Principal{Tenant: tenant, Cross: cross, Subject: claims.Sub}, true
+	return dem.Principal{Tenant: tenant, Cross: cross, Subject: claims.Sub, Deny: deny}, true
 }
 
 // demIngestAuthz gates the experience-event ingest routes (tracker 254).
