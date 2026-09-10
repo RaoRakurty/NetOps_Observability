@@ -193,8 +193,7 @@ func (s *server) handleRcaPath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("invalid correlation id"))
 		return
 	}
-	tenant, cross := principalTenant(claims)
-	resp, status, err := s.rcaPathSpine(r.Context(), tenant, cross, chTenantScope(r), id, r.URL.Query().Get("data_class"))
+	resp, status, err := s.rcaPathSpine(r.Context(), claims, chTenantScope(r), id, r.URL.Query().Get("data_class"))
 	if err != nil {
 		writeError(w, status, err)
 		return
@@ -202,14 +201,66 @@ func (s *server) handleRcaPath(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// reasonNoPathEntity is the answer for a correlation object this caller has no
+// measured path for. It is a SHARED literal on purpose: the operator-visibility
+// restriction (below) answers with exactly these bytes, so a denied operator's
+// response is indistinguishable from "there was never a path here" — the same
+// posture logs, flows, metrics and the BMP feed hold.
+const reasonNoPathEntity = "this correlation object is not path-shaped (no measured path entity is attached)"
+
+// pathVisibility is the operator-visibility restriction (Tenant.OperatorRestricted)
+// as this lane needs it: resolved ONCE per read, from the SAME resolver the logs
+// path uses, and then consulted wherever a tenant identity enters the spine read.
+// One rule, one predicate — not a per-store copy of it.
+type pathVisibility struct {
+	deny    bool
+	exclude []string
+}
+
+// hides reports whether a record owned by tenantID is invisible to this caller.
+// Case-insensitive: the tenant store and the ClickHouse/path-graph rows mint the
+// two sides of this comparison independently.
+func (v pathVisibility) hides(tenantID string) bool {
+	if len(v.exclude) == 0 {
+		return false
+	}
+	id := strings.TrimSpace(tenantID)
+	if id == "" {
+		return false
+	}
+	for _, x := range v.exclude {
+		if strings.EqualFold(strings.TrimSpace(x), id) {
+			return true
+		}
+	}
+	return false
+}
+
 // rcaPathSpine is the whole §7 read path, shared by the standalone endpoint and by
 // the RCA timeline embed. It is where the §1 data-class rule is applied:
 // customer/default reads see ONLY live records; a non-live class can be requested
 // ONLY by a platform (cross-tenant) principal, and never becomes the default.
-func (s *server) rcaPathSpine(ctx context.Context, tenant string, cross bool, scope, correlationID, dataClassParam string) (pathSpineResponse, int, error) {
+//
+// It is ALSO where the operator-visibility restriction is applied. A measured path
+// is a customer's network: its hops are that tenant's addresses, its seams are that
+// tenant's providers. A tenant that has switched the restriction on is invisible to
+// the platform owner in logs, flows, metrics and the BMP feed, and must be here too.
+// The rule is resolved once, into pathVisibility, and obeyed at the two points a
+// tenant identity enters this read: the correlation object, and the observation.
+func (s *server) rcaPathSpine(ctx context.Context, claims jwtClaims, scope, correlationID, dataClassParam string) (pathSpineResponse, int, error) {
+	tenant, cross := principalTenant(claims)
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
+	vis := pathVisibility{deny: deny, exclude: exclude}
+
 	out := pathSpineResponse{CorrelationID: correlationID}
 	if s.pathGraph == nil {
 		out.Reason = "path graph storage is not enabled"
+		return out, http.StatusOK, nil
+	}
+	// The operator scoped INTO a restricted tenant reads nothing, and reads it
+	// before any store is touched — no ClickHouse lookup, no observation query.
+	if vis.deny {
+		out.Reason = reasonNoPathEntity
 		return out, http.StatusOK, nil
 	}
 	classes := pathgraph.LiveOnly()
@@ -234,7 +285,14 @@ func (s *server) rcaPathSpine(ctx context.Context, tenant string, cross bool, sc
 		return out, http.StatusBadGateway, err
 	}
 	if !ok || ref.DstAddress == "" {
-		out.Reason = "this correlation object is not path-shaped (no measured path entity is attached)"
+		out.Reason = reasonNoPathEntity
+		return out, http.StatusOK, nil
+	}
+	// Point one: the correlation object's OWN tenant. ClickHouse's row policies
+	// cannot express this — the platform owner reads under '__all__' by design —
+	// so the object's tenant_id, which the locator already returns, is the check.
+	if vis.hides(ref.Tenant) {
+		out.Reason = reasonNoPathEntity
 		return out, http.StatusOK, nil
 	}
 
@@ -252,6 +310,11 @@ func (s *server) rcaPathSpine(ctx context.Context, tenant string, cross bool, sc
 	if err != nil {
 		return out, http.StatusBadGateway, err
 	}
+	// Point two: the observations themselves. A cross-tenant read matches on
+	// destination address, and two tenants can measure the SAME address — so a
+	// restricted tenant's run must be dropped from the candidate set rather than
+	// merely not being the object's own.
+	cands = visiblePathObservations(cands, vis)
 	pick := pickSpineObservation(cands, time.Now().UTC(), pathFreshness())
 	if pick == nil {
 		out.Reason = "no " + strings.Join(classes, "/") + " path observation exists for " + ref.DstAddress
@@ -264,7 +327,7 @@ func (s *server) rcaPathSpine(ctx context.Context, tenant string, cross bool, sc
 	if err != nil {
 		return out, http.StatusBadGateway, err
 	}
-	if !found {
+	if !found || vis.hides(obs.TenantID) {
 		out.Reason = "no " + strings.Join(classes, "/") + " path observation exists for " + ref.DstAddress
 		return out, http.StatusOK, nil
 	}
@@ -273,6 +336,24 @@ func (s *server) rcaPathSpine(ctx context.Context, tenant string, cross bool, sc
 	out.Spine = &spine
 	out.SpineAvailable = len(spine.Spine) > 0
 	return out, http.StatusOK, nil
+}
+
+// visiblePathObservations drops a restricted tenant's runs from a candidate list.
+// It is a function rather than an inline loop so the ONE predicate is what the
+// picker sees — an observation that never enters the pool cannot be served, and
+// cannot seed the follow-up read either.
+func visiblePathObservations(in []pathgraph.PathObservation, vis pathVisibility) []pathgraph.PathObservation {
+	if len(vis.exclude) == 0 {
+		return in
+	}
+	out := make([]pathgraph.PathObservation, 0, len(in))
+	for _, o := range in {
+		if vis.hides(o.TenantID) {
+			continue
+		}
+		out = append(out, o)
+	}
+	return out
 }
 
 // buildSpineFor assembles the §7 payload for one observation: the client endpoint,
@@ -521,8 +602,7 @@ func (s *server) rcaPathBlock(ctx context.Context, r *http.Request, correlationI
 	if !ok {
 		return nil
 	}
-	tenant, cross := principalTenant(claims)
-	resp, status, err := s.rcaPathSpine(ctx, tenant, cross, chTenantScope(r), correlationID, "")
+	resp, status, err := s.rcaPathSpine(ctx, claims, chTenantScope(r), correlationID, "")
 	if err != nil || status != http.StatusOK {
 		return nil
 	}
