@@ -357,12 +357,26 @@ func (s *FileStore) Delete(_ context.Context, tenant string, cross bool, deviceI
 			if c.ID != captureID {
 				continue
 			}
-			s.rows[k] = append(rows[:i:i], rows[i+1:]...)
-			if len(s.rows[k]) == 0 {
-				delete(s.rows, k)
-			}
-			if err := s.flushLocked(); err != nil {
+			// Persist FIRST, adopt SECOND, the same rule Prune follows. The
+			// other order dropped the row from the register and only then
+			// wrote the file: a failed write left the caller correctly holding
+			// the blob (Delete returned an error, so nothing deleted it) while
+			// the register no longer listed the capture that blob belongs to,
+			// and the next successful write made that permanent. The operator
+			// who was told the delete FAILED could not even retry it — the
+			// retry answers not found (§10).
+			//
+			// The three-index slice above forces a fresh backing array, so the
+			// survivors are a separate view and s.rows[k] is untouched until
+			// the bytes have landed.
+			kept := append(rows[:i:i], rows[i+1:]...)
+			if err := s.flushViewLocked(map[deviceKey][]Capture{k: kept}); err != nil {
 				return Capture{}, err
+			}
+			if len(kept) == 0 {
+				delete(s.rows, k)
+			} else {
+				s.rows[k] = kept
 			}
 			return c, nil
 		}

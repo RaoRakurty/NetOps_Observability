@@ -78,6 +78,10 @@ func (r *Recorder) Snapshot(ctx context.Context) error {
 	readings := r.sample(ctx)
 	if err := r.store.Record(ctx, at, readings); err != nil {
 		r.failures.Add(1)
+		// The store guarantees the claim this line makes. A Record that cannot
+		// write its result folds nothing at all — the sample is not in the
+		// register and not on disk — so the roll-up really is short one
+		// sample, and the next hour's snapshot cannot count this one twice.
 		r.fail("metering: this hour's usage snapshot was not recorded; the day's roll-up is short one sample", err)
 		return err
 	}

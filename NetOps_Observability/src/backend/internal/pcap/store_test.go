@@ -292,3 +292,64 @@ func TestPruneDoesNotLoseCapturesWhenTheFlushFails(t *testing.T) {
 		}
 	}
 }
+
+// TestDeleteDoesNotLoseTheRowWhenTheFlushFails is the same rule applied to the
+// single-capture delete, which Prune's fix left behind.
+//
+// Delete removed the row from the register and only then wrote the file. On a
+// write failure it returned an error, so the caller correctly deleted no blob —
+// but the row was already gone from memory, and the next successful write made
+// that permanent. The sealed capture would then sit on the volume with nothing
+// able to list it, open it or delete it, and the operator who was told the
+// delete FAILED could never retry it: the retry answers not found.
+func TestDeleteDoesNotLoseTheRowWhenTheFlushFails(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := dir + "/captures.json"
+	s := NewFileStore(path)
+	base := time.Date(2026, 9, 2, 10, 0, 0, 0, time.UTC)
+
+	doomed := storeRow("acme", "acme-core", fmt.Sprintf("%032x", 1), base)
+	keeper := storeRow("acme", "acme-core", fmt.Sprintf("%032x", 2), base.Add(time.Minute))
+	for _, row := range []Capture{doomed, keeper} {
+		if err := s.Put(ctx, "acme", false, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Break the write: the register's directory is now a FILE.
+	s.path = path + "/captures.json"
+	if _, err := s.Delete(ctx, "acme", false, "acme-core", doomed.ID); err == nil {
+		t.Fatal("Delete must report a flush it could not complete")
+	}
+
+	got, err := s.Get(ctx, "acme", false, "acme-core", doomed.ID)
+	if err != nil {
+		t.Fatalf("METADATA LOST in memory: the capture is gone after a delete that failed: %v", err)
+	}
+	if got.BlobRef != doomed.BlobRef {
+		t.Fatalf("the capture came back pointing at %q, want %q", got.BlobRef, doomed.BlobRef)
+	}
+
+	// The next successful write must not persist the loss either.
+	s.path = path
+	later := storeRow("acme", "acme-core", fmt.Sprintf("%032x", 99), base.Add(time.Hour))
+	if err := s.Put(ctx, "acme", false, later); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewFileStore(path)
+	if _, err := reloaded.Get(ctx, "acme", false, "acme-core", doomed.ID); err != nil {
+		t.Fatalf("METADATA LOST from disk: the capture is gone after a delete that failed: %v", err)
+	}
+
+	// And a delete that CAN write still deletes.
+	if _, err := s.Delete(ctx, "acme", false, "acme-core", doomed.ID); err != nil {
+		t.Fatalf("Delete on a working write path: %v", err)
+	}
+	if _, err := NewFileStore(path).Get(ctx, "acme", false, "acme-core", doomed.ID); err == nil {
+		t.Fatal("on disk: the capture survived a delete that did persist")
+	}
+	if _, err := NewFileStore(path).Get(ctx, "acme", false, "acme-core", keeper.ID); err != nil {
+		t.Fatalf("on disk: the delete took the wrong row with it: %v", err)
+	}
+}

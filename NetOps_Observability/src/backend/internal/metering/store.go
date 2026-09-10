@@ -157,24 +157,18 @@ func (s *FileStore) loadLocked() {
 	}
 }
 
-func (s *FileStore) flushLocked() error {
-	return s.flushViewLocked(nil)
-}
-
-// flushViewLocked writes the register out, with `view` standing in for s.rows
-// when it is non-nil. It NEVER touches s.rows.
+// flushViewLocked writes out `view` — the register as it WOULD BE after the
+// write in progress. It NEVER touches s.rows. Every writer supplies a view, so
+// there is no "flush what is in the map" path left to call by mistake.
 //
-// That is what lets Prune persist first and adopt second: the survivors are
-// written from a separate view, and the in-memory register is only replaced
-// once the bytes are durable. A "delete, then flush, then roll back on error"
-// shape cannot be used here — restoring a saved header can leave a caller
-// pointing at data that was mutated in the meantime.
+// That is what lets Record and Prune persist first and adopt second: the
+// intended register is written from a separate view, and the in-memory one is
+// only replaced once the bytes are durable. A "change it, then flush, then roll
+// back on error" shape cannot be used here — restoring a saved header can leave
+// a caller pointing at data that was mutated in the meantime.
 func (s *FileStore) flushViewLocked(view map[string]map[string]DailyRecord) error {
 	if s.path == "" {
 		return nil
-	}
-	if view == nil {
-		view = s.rows
 	}
 	f := meteringFile{Records: make([]DailyRecord, 0, 64)}
 	for _, byDay := range view {
@@ -200,12 +194,38 @@ func (s *FileStore) Record(_ context.Context, at time.Time, byTenant map[string]
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.loadLocked()
+	// Persist FIRST, adopt SECOND. Everything this snapshot changes is built
+	// into a separate view, so a Record that cannot write changes nothing at
+	// all — which is exactly what the recorder tells the operator it means.
+	//
+	// The old order folded into the live register and sealed the other days
+	// there before writing. A failed write left the sample in the numbers with
+	// nothing on disk saying so, and the next hour folded a SECOND sample on
+	// top of it and persisted both: a summing meter then counted one hour
+	// twice. The seal is worse in kind, because it is LOSSY — it drops a day's
+	// identity sets — and a lossy transform must not outrun the write that
+	// records it. A partly applied snapshot (one tenant folded, the next
+	// rejected) used to survive the same way, in whatever order the map
+	// happened to iterate.
+	//
+	// This is not a rollback. Nothing is mutated and put back, so there is no
+	// saved header that can be restored pointing at data changed in the
+	// meantime. Fold is pure and Seal copies the struct, so a view that shares
+	// the untouched rows shares nothing either side can write through.
+	view := make(map[string]map[string]DailyRecord, len(s.rows)+len(byTenant))
+	for t, byDay := range s.rows {
+		days := make(map[string]DailyRecord, len(byDay)+1)
+		for d, r := range byDay {
+			days[d] = r
+		}
+		view[t] = days
+	}
 	for tenant, readings := range byTenant {
 		t := NormaliseTenant(tenant)
-		if s.rows[t] == nil {
-			s.rows[t] = map[string]DailyRecord{}
+		if view[t] == nil {
+			view[t] = map[string]DailyRecord{}
 		}
-		row, ok := s.rows[t][day]
+		row, ok := view[t][day]
 		if !ok {
 			row = DailyRecord{Day: day, TenantID: t}
 		}
@@ -213,17 +233,21 @@ func (s *FileStore) Record(_ context.Context, at time.Time, byTenant map[string]
 		if err != nil {
 			return err
 		}
-		s.rows[t][day] = next
+		view[t][day] = next
 		// Seal every OTHER day this tenant holds. A closed day's identity sets
 		// are dead weight, and sealing them here means the cleanup rides the
 		// write that was happening anyway rather than needing its own sweep.
-		for d, other := range s.rows[t] {
+		for d, other := range view[t] {
 			if d != day && !other.Sealed() {
-				s.rows[t][d] = other.Seal()
+				view[t][d] = other.Seal()
 			}
 		}
 	}
-	return s.flushLocked()
+	if err := s.flushViewLocked(view); err != nil {
+		return err
+	}
+	s.rows = view
+	return nil
 }
 
 // List returns the rows the caller may see.
