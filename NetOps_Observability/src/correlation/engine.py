@@ -1838,12 +1838,23 @@ def bound_hypotheses_blob(blob: str,
          fits (see `_rel_sort_key`) and re-emits the survivors in the builder's
          original order, so the relation list stays ordered the way a reader
          expects.
-      B. `ranking.hypotheses` — drops the LOWEST-ranked entries (the tail;
+      B. the whole `path_graph` block — but ONLY when shedding the ranking tail
+         could not fit on its own. The block embeds the entire tenant-wide
+         `PathGraphView` (observations, endpoints, service_bindings,
+         nat_sessions, routes), so whenever the oversize term is one of those,
+         no number of dropped hypotheses will ever fit. The BULK goes first and
+         the answer survives.
+      C. `ranking.hypotheses` — drops the LOWEST-ranked entries (the tail;
          `rank()` emits in descending confidence) while `_protected_hypothesis`
          holds the top one and every contradicted one.
-      C. the whole `path_graph` block.
       D. the floor: every LIST under `grounding_context` dropped, leaving the
          verdict, the protected hypotheses and the scalar grounding.
+
+    B is measured, not assumed: the ladder asks whether the document would fit
+    with the ranking already at its floor, and keeps the grounding block when
+    the answer is yes. Before 2026-09-08 the two rungs were the other way round,
+    so a fat non-`relations` block shed every competing hypothesis without ever
+    fitting and then dropped the block anyway (review 3.10-01).
 
     If even the floor exceeds the cap (only reachable with an absurd cap or a
     single enormous hypothesis) the floor is returned ANYWAY with
@@ -1904,8 +1915,34 @@ def bound_hypotheses_blob(blob: str,
     if len(out) <= cap:
         return out, marker
 
-    # ── B. the lowest-ranked hypotheses ─────────────────────────────────────
     hyps = ranking.get("hypotheses") if ranking is not None else None
+
+    def _fits_at_ranking_floor() -> bool:
+        """Would the document fit if rung C shed everything it is allowed to?
+
+        Measured on the real document, then rolled back — the ranking is not
+        modified by asking. A `False` here means the ranking tail is not the
+        oversize term and dropping it would be pure loss.
+        """
+        if not (isinstance(hyps, list) and ranking is not None):
+            return False
+        floor = [h for i, h in enumerate(hyps) if _protected_hypothesis(i, h)]
+        current = ranking.get("hypotheses")
+        ranking["hypotheses"] = floor
+        try:
+            return len(emit()) <= cap
+        finally:
+            ranking["hypotheses"] = current
+
+    # ── B. the whole path_graph block, when the tail cannot close the gap ────
+    if ctx is not None and "path_graph" in ctx and not _fits_at_ranking_floor():
+        del ctx["path_graph"]
+        marker["dropped_blocks"].append("grounding_context.path_graph")
+    out = emit()
+    if len(out) <= cap:
+        return out, marker
+
+    # ── C. the lowest-ranked hypotheses ─────────────────────────────────────
     if isinstance(hyps, list) and len(hyps) > 1 and ranking is not None:
         # Drop from the TAIL (lowest ranked; `rank()` emits in descending
         # confidence) inward, skipping every protected entry, and STOP the
@@ -1922,14 +1959,6 @@ def bound_hypotheses_blob(blob: str,
             ranking["hypotheses"] = [h for h in kept if h is not None]
             if len(emit()) <= cap:
                 break
-    out = emit()
-    if len(out) <= cap:
-        return out, marker
-
-    # ── C. the whole path_graph block ───────────────────────────────────────
-    if ctx is not None and "path_graph" in ctx:
-        del ctx["path_graph"]
-        marker["dropped_blocks"].append("grounding_context.path_graph")
     out = emit()
     if len(out) <= cap:
         return out, marker

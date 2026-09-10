@@ -223,6 +223,70 @@ def test_the_whole_path_graph_block_goes_before_the_verdict_does():
     assert doc["ranking"]["hypotheses"][0]["id"] == "tmpl-0"
 
 
+def _fat_block_blob(n_hyp: int = 4, n_obs: int = 600, pad: int = 500,
+                    obs_pad: int = 400) -> str:
+    """A blob whose oversize term is a NON-`relations` member of the path_graph
+    block. `relations` is empty, so rung A cannot help; the bulk is the embedded
+    tenant-wide PathGraphView."""
+    return json.dumps(
+        {"ranking": {"top_hypothesis": "tmpl-0", "verdict_tier": "likely",
+                     "hypotheses": [_hyp(i, contradicted=(i == 2), pad=pad)
+                                    for i in range(n_hyp)],
+                     "evidence_missing": [], "catalog_version": "cat-1"},
+         "grounding_context": {"seams": [], "path_graph": {
+             "contract_version": "1.0", "relations": [],
+             "observations": [{"id": f"o{i}", "pad": "p" * obs_pad}
+                              for i in range(n_obs)],
+             "endpoints": [], "service_bindings": [], "nat_sessions": [],
+             "routes": [], "freshness_s": 30.0}}},
+        separators=(",", ":"), sort_keys=True)
+
+
+def test_the_bulk_goes_before_the_ranking_tail():
+    """Review 2026-09-08, 3.10-01. The ladder used to shed the ranking TAIL
+    before the path_graph block. When the oversize term is a non-`relations`
+    member of that block — which embeds the whole tenant-wide PathGraphView —
+    no number of dropped hypotheses could ever fit, so the old order threw away
+    every competing hypothesis for nothing and then dropped the block anyway.
+
+    The answer must survive the bulk."""
+    blob = _fat_block_blob()
+    cap = 1 << 16
+    assert len(blob) > cap
+    out, marker = engine.bound_hypotheses_blob(blob, max_bytes=cap)
+    doc = json.loads(out)
+
+    assert len(out) <= cap
+    assert marker is not None
+    assert "grounding_context.path_graph" in marker["dropped_blocks"]
+    assert marker["dropped_hypotheses"] == 0, (
+        "the ranking tail was shed to make room for a block that was dropped "
+        "anyway")
+    assert [h["id"] for h in doc["ranking"]["hypotheses"]] == [
+        f"tmpl-{i}" for i in range(4)]
+
+
+def test_the_ranking_tail_still_goes_first_when_it_can_actually_fit():
+    """The reorder must not become "always drop the grounding". When shedding
+    the tail alone brings the document under the cap, the path_graph block —
+    which is what a replay re-grounds against — stays."""
+    blob = _fat_block_blob(n_hyp=9, n_obs=25, pad=2000)
+    cap = 1 << 16
+    assert len(blob) > cap
+    out, marker = engine.bound_hypotheses_blob(blob, max_bytes=cap)
+    doc = json.loads(out)
+
+    assert len(out) <= cap
+    assert marker is not None
+    assert marker["dropped_blocks"] == [], (
+        "the grounding block was dropped when the ranking tail alone would "
+        "have fitted")
+    assert marker["dropped_hypotheses"] >= 1
+    assert "path_graph" in doc["grounding_context"]
+    ids = [h["id"] for h in doc["ranking"]["hypotheses"]]
+    assert "tmpl-0" in ids and "tmpl-2" in ids   # top + contradicted are protected
+
+
 def test_a_cap_below_the_floor_is_clamped_up_not_obeyed():
     """A misconfigured 1 KiB cap would truncate EVERY object instead of the
     pathological tail. One HypothesisScore alone measures ~5 KiB."""
