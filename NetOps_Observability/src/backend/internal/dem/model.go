@@ -144,6 +144,16 @@ var ErrCatalogueFull = fmt.Errorf("dem: target catalogue is full (max %d targets
 // the api picks it up on the next start.
 var ErrCatalogueUnreadable = errors.New("dem: the target file could not be read at start-up, so writes are refused until it is repaired or removed")
 
+// ErrCatalogueOverCap is returned by every write while the catalogue file holds
+// a tenant bucket over MaxTargetsPerTenant. The load keeps the first
+// MaxTargetsPerTenant rows so the prober still measures what it can see, but the
+// rest were NOT loaded, so a flush would replace the file with a truncated
+// catalogue and make the loss durable. Like ErrCatalogueUnreadable this is a
+// REFUSAL, not a failed write: the operator trims the file (or imports it into
+// Postgres, which takes the whole catalogue) and the api picks it up on the next
+// start. ImportFile refuses the identical condition rather than truncating.
+var ErrCatalogueOverCap = fmt.Errorf("dem: the target file holds a tenant bucket over the %d-target cap, so writes are refused until it is trimmed or imported", MaxTargetsPerTenant)
+
 // ErrNotFound is the store's miss. The HTTP layer turns it into 404 — including
 // for a cross-tenant id, so another tenant's id is never confirmed to exist.
 var ErrNotFound = errors.New("dem: target not found")

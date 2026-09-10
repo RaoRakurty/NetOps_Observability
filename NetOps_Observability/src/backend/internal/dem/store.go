@@ -25,6 +25,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -118,15 +120,20 @@ type FileStore struct {
 	// rows is tenant → id → target. The tenant key IS the isolation boundary.
 	rows    map[string]map[string]Target
 	loadErr error
-	// unreadable is set when the catalogue file EXISTS but its contents could
-	// not be established — an I/O or permission failure, or JSON we could not
-	// parse. It is the stricter half of loadErr: loadErr also covers rows we
-	// read and deliberately dropped, where rewriting the file is the intended
-	// repair. When the contents are unknown, every write is refused, because a
-	// flush would replace the whole file with what this process happens to
-	// hold, which after such a load is nothing at all.
-	unreadable error
-	now        func() time.Time
+	// writesRefused is set when the file holds data this process did NOT load,
+	// so a flush would not update the file — it would replace it with a
+	// smaller catalogue and make the loss durable. Two conditions reach it:
+	//
+	//   - the contents could not be established at all (an I/O or permission
+	//     failure, or JSON we could not parse), so we hold nothing;
+	//   - a tenant bucket was over MaxTargetsPerTenant, so we hold the first
+	//     MaxTargetsPerTenant rows and the rest are still only in the file.
+	//
+	// It is the stricter half of loadErr: loadErr also covers rows we read and
+	// deliberately dropped (an unparseable row, a non-concrete bucket), where
+	// rewriting the file IS the intended repair.
+	writesRefused error
+	now           func() time.Time
 }
 
 var _ Catalogue = (*FileStore)(nil)
@@ -156,15 +163,19 @@ func NewFileStore(path string) *FileStore {
 		// nothing logged, and the first write then renames a temp file over a
 		// file whose contents were never read.
 		s.loadErr = fmt.Errorf("dem: the target file could not be read: %w", err)
-		s.unreadable = s.loadErr
+		s.writesRefused = s.loadErr
 		return s
 	}
 	var rows map[string][]Target
 	if err := json.Unmarshal(b, &rows); err != nil {
 		s.loadErr = fmt.Errorf("dem: the target file could not be parsed: %w", err)
-		s.unreadable = s.loadErr
+		s.writesRefused = s.loadErr
 		return s
 	}
+	// overCap records, per tenant, how many targets the file holds. It is
+	// reported AFTER the whole file is read so the message can name every
+	// affected tenant and the real count, the way ImportFile does.
+	overCap := map[string]int{}
 	for rawTenant, list := range rows {
 		t, err := concreteTenant(rawTenant)
 		if err != nil {
@@ -185,10 +196,25 @@ func NewFileStore(path string) *FileStore {
 				s.rows[t] = map[string]Target{}
 			}
 			if len(s.rows[t]) >= MaxTargetsPerTenant {
-				break
+				// OVER CAP IS NOT A QUIET TRIM. Before 2026-09-08 this was a
+				// bare break: the excess targets were unmeasured, nothing said
+				// so, and the next write flushed the whole catalogue and made
+				// the truncation durable. Keep counting so the operator is
+				// told how many, and refuse writes until the file is trimmed.
+				overCap[t]++
+				continue
 			}
 			s.rows[t][tgt.ID] = tgt
 		}
+	}
+	if len(overCap) > 0 {
+		names := make([]string, 0, len(overCap))
+		for t := range overCap {
+			names = append(names, fmt.Sprintf("%s holds %d", t, len(s.rows[t])+overCap[t]))
+		}
+		sort.Strings(names)
+		s.loadErr = fmt.Errorf("%w (%s)", ErrCatalogueOverCap, strings.Join(names, "; "))
+		s.writesRefused = s.loadErr
 	}
 	return s
 }
@@ -196,16 +222,25 @@ func NewFileStore(path string) *FileStore {
 // LoadErr reports a corrupt-file condition for the integrator to log.
 func (s *FileStore) LoadErr() error { return s.loadErr }
 
+// refusalLocked is the error every write answers with while the file holds rows
+// this process never loaded. Callers hold a lock.
+func (s *FileStore) refusalLocked() error {
+	if errors.Is(s.writesRefused, ErrCatalogueOverCap) {
+		return s.writesRefused
+	}
+	return fmt.Errorf("%w: %w", ErrCatalogueUnreadable, s.writesRefused)
+}
+
 // flushLocked persists the whole catalogue. Callers hold the write lock and
 // roll their change back when this fails, so a failed write never leaves the
 // in-memory view ahead of the file.
 func (s *FileStore) flushLocked() error {
-	if s.unreadable != nil {
-		// The file's real contents are unknown, so a flush would not update it
-		// — it would REPLACE it with what this process holds, which after an
-		// unreadable load is nothing. Refuse, and say why: the caller rolls its
-		// change back and the operator gets an error instead of a silent loss.
-		return fmt.Errorf("%w: %w", ErrCatalogueUnreadable, s.unreadable)
+	if s.writesRefused != nil {
+		// The file holds rows this process never loaded, so a flush would not
+		// update it — it would REPLACE it with what this process happens to
+		// hold. Refuse, and say why: the caller rolls its change back and the
+		// operator gets an error instead of a silent loss.
+		return s.refusalLocked()
 	}
 	if s.path == "" {
 		return nil
@@ -278,6 +313,13 @@ func (s *FileStore) Create(_ context.Context, in Target) (Target, error) {
 	in.CreatedBy = clip(in.CreatedBy, 128)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Ask the file-state question BEFORE the cap question. A catalogue whose
+	// file holds rows this process never loaded is always AT the cap, so
+	// without this the operator is told the catalogue is full when the real
+	// answer is that the file was truncated at load and must be repaired.
+	if s.writesRefused != nil {
+		return Target{}, s.refusalLocked()
+	}
 	if s.rows[in.TenantID] == nil {
 		s.rows[in.TenantID] = map[string]Target{}
 	}

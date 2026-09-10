@@ -9,7 +9,9 @@ package dem
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -267,5 +269,88 @@ func TestAbsentCatalogueFileStaysAnEmptyCatalogue(t *testing.T) {
 	}
 	if _, err := s.Create(context.Background(), newTarget("acme", "first", "10.0.0.1")); err != nil {
 		t.Fatalf("the first write on a fresh catalogue failed: %v", err)
+	}
+}
+
+// overCapFile writes a catalogue file holding one tenant bucket with n targets.
+func overCapFile(t *testing.T, path, tenant string, n int) {
+	t.Helper()
+	list := make([]Target, 0, n)
+	for i := 0; i < n; i++ {
+		list = append(list, Target{
+			TenantID: tenant, ID: fmt.Sprintf("dem-%04d", i), Name: fmt.Sprintf("tgt-%04d", i),
+			Kind: KindICMP, Host: "10.0.0.1", IntervalSec: 60,
+		})
+	}
+	raw, err := json.Marshal(map[string][]Target{tenant: list})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := writeFile(path, raw); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+}
+
+// An OVER-CAP tenant bucket was truncated at load with a bare break: no
+// loadErr, nothing logged, the excess targets simply not there — and because
+// the store then flushes the WHOLE catalogue on the next write, the truncation
+// became durable. ImportFile refuses the identical condition loudly and names
+// the tenant, so the two paths disagreed about the same file (review
+// 2026-09-08, 3.2-17).
+func TestOverCapCatalogueFileIsLoudAndIsNeverOverwritten(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dem_targets.json")
+	const over = MaxTargetsPerTenant + 7
+	overCapFile(t, path, "acme", over)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read seeded file: %v", err)
+	}
+
+	s := NewFileStore(path)
+	le := s.LoadErr()
+	if le == nil {
+		t.Fatal("an over-cap catalogue loaded silently — the excess targets are unmeasured and nothing said so")
+	}
+	if !errors.Is(le, ErrCatalogueOverCap) {
+		t.Errorf("load error %v does not carry ErrCatalogueOverCap", le)
+	}
+	for _, want := range []string{"acme", fmt.Sprintf("%d", over), fmt.Sprintf("%d", MaxTargetsPerTenant)} {
+		if !strings.Contains(le.Error(), want) {
+			t.Errorf("the load error does not name %q, so the operator cannot act on it: %v", want, le)
+		}
+	}
+
+	// And the truncation must not become durable: every write is refused while
+	// the file still holds targets this process never loaded.
+	if _, err := s.Create(context.Background(), newTarget("acme", "one-more", "10.0.0.2")); !errors.Is(err, ErrCatalogueOverCap) {
+		t.Fatalf("a write over a truncated catalogue was accepted (err %v) — the next flush persists the truncation", err)
+	}
+	if err := s.Delete(context.Background(), "acme", "dem-0000"); !errors.Is(err, ErrCatalogueOverCap) {
+		t.Fatalf("a delete over a truncated catalogue was accepted: %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file after: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("the catalogue file was rewritten while it held targets the store never loaded")
+	}
+}
+
+// A bucket exactly AT the cap is a legal catalogue: it loads clean and writes.
+func TestCatalogueFileExactlyAtTheCapLoadsClean(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dem_targets.json")
+	overCapFile(t, path, "acme", MaxTargetsPerTenant)
+	s := NewFileStore(path)
+	if err := s.LoadErr(); err != nil {
+		t.Fatalf("a catalogue exactly at the cap reported %v", err)
+	}
+	list, err := s.List(context.Background(), "acme")
+	if err != nil || len(list) != MaxTargetsPerTenant {
+		t.Fatalf("loaded %d rows (err %v), want %d", len(list), err, MaxTargetsPerTenant)
+	}
+	// The per-tenant cap still refuses a NEW target, as it always did.
+	if _, err := s.Create(context.Background(), newTarget("acme", "one-too-many", "10.0.0.2")); !errors.Is(err, ErrCatalogueFull) {
+		t.Fatalf("cap not enforced after a full load: %v", err)
 	}
 }
