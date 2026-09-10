@@ -2246,15 +2246,37 @@ export function parseElevationRefusal(body: string): ElevationRefusal | null {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...((init?.headers as Record<string, string>) ?? {}),
-  };
+/**
+ * The headers EVERY call to our api carries: the session token, and the tenant
+ * the operator is acting in.
+ *
+ * ONE PATH, NOT A CONVENTION. `request` below is the way almost everything
+ * calls the api, but a download or a text/binary body has to hand-roll its
+ * fetch, and each of those used to assemble its own headers. Four of them ended
+ * up carrying the token and NOT the acting tenant, which is not a cosmetic
+ * difference: the call then reads or writes in the caller's HOME tenant while
+ * the list beside it shows the tenant they selected, and for the platform owner
+ * — who has no home tenant to fall back to — the server refuses it outright.
+ *
+ * So there is one builder, and every fetch in this file goes through it. The
+ * two exceptions are deliberate and are the auth endpoints themselves (refresh
+ * and logout), which are about the session, not about a tenant.
+ */
+export function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const headers: Record<string, string> = { ...extra };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   const scope = getActiveScope();
   if (scope && !headers["X-Acting-Tenant"]) headers["X-Acting-Tenant"] = scope;
+  return headers;
+}
+
+async function request<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
+  const token = getToken();
+  const headers = authHeaders({
+    "Content-Type": "application/json",
+    ...((init?.headers as Record<string, string>) ?? {}),
+  });
 
   const res = await fetch(path, { ...init, headers });
   if (res.status === 401) {
@@ -5646,10 +5668,7 @@ export const api = {
     if (opts.to) p.set("to", opts.to);
     if (opts.tenant) p.set("tenant", opts.tenant);
     const q = p.toString();
-    const token = getToken();
-    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-    const scope = getActiveScope();
-    if (scope) headers["X-Acting-Tenant"] = scope;
+    const headers = authHeaders();
     const res = await fetch(`/api/system/licence/usage/report${q ? `?${q}` : ""}`, { headers });
     if (!res.ok) {
       throw new Error(`The usage report could not be produced: ${res.status} ${await res.text().catch(() => "")}`);
@@ -5697,10 +5716,7 @@ export const api = {
   // sidecar is off, falls back to the server-rendered HTML in a new tab.
   // Returns which format was delivered.
   downloadRcaReport: async (id: string, displayId: string): Promise<"pdf" | "html"> => {
-    const token = getToken();
-    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-    const scope = getActiveScope();
-    if (scope) headers["X-Acting-Tenant"] = scope;
+    const headers = authHeaders();
     const base = `/api/correlations/${encodeURIComponent(id)}/rca-report`;
     const pdf = await fetch(`${base}?format=pdf`, { headers });
     if (pdf.ok) {
@@ -6010,10 +6026,9 @@ export const api = {
   reportExecution: (id: string) => request<ReportExecutionDetail>(`/api/reports/executions/${encodeURIComponent(id)}`),
   // Live preview — renders a report's HTML on demand without scheduling/delivering.
   reportPreview: async (name: string, body: ReportBody, format: ReportFormat = "html"): Promise<string> => {
-    const token = getToken();
     const res = await fetch(`/api/reports/preview?format=${encodeURIComponent(format)}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ name, body }),
     });
     if (!res.ok) throw new Error(`${res.status}: ${await res.text().catch(() => "")}`);
@@ -6021,9 +6036,8 @@ export const api = {
   },
   // Fetch a stored artifact (auth-protected) and trigger a browser download.
   downloadArtifact: async (execId: string, format: ReportFormat): Promise<void> => {
-    const token = getToken();
     const res = await fetch(`/api/reports/executions/${encodeURIComponent(execId)}/artifact?format=${encodeURIComponent(format)}`, {
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      headers: authHeaders(),
     });
     if (!res.ok) throw new Error(`${res.status}`);
     const blob = await res.blob();
@@ -6042,10 +6056,9 @@ export const api = {
   // file. Excel reuses the server OOXML renderer; csv/json/ndjson share the
   // server encoders so every format matches Mode B byte-for-byte.
   exportLogRows: async (format: ExportFmt, columns: string[], rows: string[][], filename = "logs-export"): Promise<void> => {
-    const token = getToken();
     const res = await fetch("/api/logs/export/rows", {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ format, columns, rows, filename }),
     });
     if (!res.ok) throw new Error(`Export failed: ${res.status} ${await res.text().catch(() => "")}`);
@@ -6056,7 +6069,6 @@ export const api = {
   // download, returns {}); large sets enqueue an async job and return
   // { executionId } to poll via exportStatus → exported download_url.
   exportLogQuery: async (opts: LogExportOpts): Promise<{ executionId?: string; matched?: number }> => {
-    const token = getToken();
     const params = new URLSearchParams();
     params.set("format", opts.format);
     if (opts.query) params.set("query", opts.query);
@@ -6065,7 +6077,7 @@ export const api = {
     if (opts.signal) params.set("signal", opts.signal);
     if (opts.mode) params.set("mode", opts.mode);
     const res = await fetch(`/api/logs/export?${params.toString()}`, {
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      headers: authHeaders(),
     });
     if (res.status === 202) {
       const body = await res.json();
@@ -6194,10 +6206,7 @@ export const api = {
   // turns into a browser download (same hand-built-headers blob idiom as
   // downloadRcaReport: bearer token + acting-tenant scope).
   exportTransportPosture: async (): Promise<Blob> => {
-    const token = getToken();
-    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-    const scope = getActiveScope();
-    if (scope) headers["X-Acting-Tenant"] = scope;
+    const headers = authHeaders();
     const res = await fetch("/api/security/transport-posture/export?format=html", { headers });
     if (!res.ok) throw new Error(`Export failed: ${res.status} ${await res.text().catch(() => "")}`);
     return res.blob();
@@ -6680,10 +6689,7 @@ export const api = {
   /** Downloads the redacted zip. The SERVER builds and redacts it; the browser
    *  only names the file and hands it to the download sink. */
   tacDownloadBundle: async (incidentId: string, profile: string, filename: string): Promise<void> => {
-    const token = getToken();
-    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-    const scope = getActiveScope();
-    if (scope) headers["X-Acting-Tenant"] = scope;
+    const headers = authHeaders();
     const res = await fetch(
       `/api/incidents/${encodeURIComponent(incidentId)}/tac/bundle?profile=${encodeURIComponent(profile)}`,
       { headers },
@@ -6912,9 +6918,8 @@ export const api = {
    *  bare href would arrive unauthenticated and the route would refuse it, and
    *  the operator would read that as "the export is broken". */
   tacCandidateExport: async (dialect: string): Promise<string> => {
-    const token = getToken();
     const res = await fetch(`/api/tac/learning/export?dialect=${encodeURIComponent(dialect)}`, {
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      headers: authHeaders(),
     });
     if (!res.ok) throw new Error(`${res.status}: ${await res.text().catch(() => "")}`);
     return res.text();
@@ -6955,10 +6960,7 @@ export const api = {
    * other call throws, so 403/404 classify identically.
    */
   pcapDownload: async (deviceId: string, captureId: string): Promise<void> => {
-    const token = getToken();
-    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-    const scope = getActiveScope();
-    if (scope) headers["X-Acting-Tenant"] = scope;
+    const headers = authHeaders();
     const res = await fetch(
       `/api/devices/${encodeURIComponent(deviceId)}/pcap/${encodeURIComponent(captureId)}/download`,
       { headers },
