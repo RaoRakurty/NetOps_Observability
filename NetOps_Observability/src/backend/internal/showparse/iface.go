@@ -467,6 +467,46 @@ func parseVRPInterfaces(lines []string) Result {
 	}
 	for _, ln := range lines {
 		t := trim(ln)
+		// THE DESCRIPTION IS OPERATOR FREE TEXT, and it is the one line in the
+		// record the DEVICE does not author. It is read for the description and
+		// the line is then DONE: neither the record-boundary tests below nor the
+		// value scans after them may see it.
+		//
+		// They all used to. VRP's description fell through into the comma-split
+		// "Key: value" loop, so a description reading "core uplink, Speed :
+		// 10000, Duplex: HALF" put speed 10000 and duplex HALF on a port the
+		// device had reported as 1000 and FULL. MTU and the IPv4 address were no
+		// safer for being read from their own distinct phrases: those phrases can
+		// be typed into a description too, and "core uplink, The Maximum
+		// Transmit Unit is 9000, Internet Address is 192.0.2.99/32" wrote both.
+		// Every one of these fields is first-write-wins and the description is
+		// printed ABOVE the device's own lines, so the label won every race and
+		// the device could no longer correct it. The wrong number then flowed
+		// into RCA and into LLM evidence as if the device had reported it.
+		//
+		// The alternative — accepting these fields only from their canonical
+		// POSITIONS — was rejected for the same reason it was rejected on the
+		// Cisco (d80c7492) and Junos sides: one parser serves several dialects
+		// here precisely because it does not care where in the record a line
+		// falls, and pinning positions re-opens review H5's class of bug.
+		//
+		// It is tested FIRST, ahead of the record boundary, because free text can
+		// forge a boundary too. vrpHeaderShape looks for the words "current
+		// state" followed by a colon ANYWHERE in a line, so a description
+		// reading "core uplink, peer current state : UP" ENDED the record, and
+		// the device's own MTU, speed, duplex and address lines were then filed
+		// under no interface at all and dropped. That loss was RECORDED as a gap
+		// rather than mis-filed, so it never fabricated anything, but it has the
+		// same root cause: operator text read as device structure. A VRP
+		// interface name cannot contain a colon, so a line beginning
+		// "Description:" is never a header and testing it first costs the
+		// boundary nothing.
+		if cur != nil && strings.HasPrefix(strings.ToLower(t), "description:") {
+			if v, ok := valueAfter(t, "escription:"); ok && v != "" {
+				cur.Description = strPtr(v)
+			}
+			continue
+		}
 		if name, state, ok := vrpIfHeader(t); ok {
 			flush()
 			cur = &InterfaceState{Name: name, Admin: strPtr(state)}
@@ -510,33 +550,6 @@ func parseVRPInterfaces(lines []string) Result {
 			continue
 		case strings.EqualFold(t, "Output:"), strings.EqualFold(t, "Output :"):
 			section = "out"
-			continue
-		}
-		// THE DESCRIPTION IS OPERATOR FREE TEXT, and it is the one line in the
-		// record the DEVICE does not author. It is read for the description and
-		// the line is then DONE: none of the value scans below may see it.
-		//
-		// They all used to. VRP's description fell through into the comma-split
-		// "Key: value" loop, so a description reading "core uplink, Speed :
-		// 10000, Duplex: HALF" put speed 10000 and duplex HALF on a port the
-		// device had reported as 1000 and FULL. MTU and the IPv4 address were no
-		// safer for being read from their own distinct phrases: those phrases can
-		// be typed into a description too, and "core uplink, The Maximum
-		// Transmit Unit is 9000, Internet Address is 192.0.2.99/32" wrote both.
-		// Every one of these fields is first-write-wins and the description is
-		// printed ABOVE the device's own lines, so the label won every race and
-		// the device could no longer correct it. The wrong number then flowed
-		// into RCA and into LLM evidence as if the device had reported it.
-		//
-		// The alternative — accepting these fields only from their canonical
-		// POSITIONS — was rejected for the same reason it was rejected on the
-		// Cisco (d80c7492) and Junos sides: one parser serves several dialects
-		// here precisely because it does not care where in the record a line
-		// falls, and pinning positions re-opens review H5's class of bug.
-		if strings.HasPrefix(strings.ToLower(t), "description:") {
-			if v, ok := valueAfter(t, "escription:"); ok && v != "" {
-				cur.Description = strPtr(v)
-			}
 			continue
 		}
 		if v, ok := valueAfter(t, "The Maximum Transmit Unit is "); ok && cur.MTU == nil {

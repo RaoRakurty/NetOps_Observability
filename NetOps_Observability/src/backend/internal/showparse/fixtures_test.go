@@ -156,6 +156,40 @@ Duplex: FULL,  Negotiation: ENABLE
       Total Error: 0, Drop: 0
 `
 
+// FIXTURE PROVENANCE: SYNTHETIC, authored 2026-09-10. Not a device capture.
+// The second VRP form of the class: a description that forges a RECORD BOUNDARY
+// rather than a value. vrpHeaderShape treats the words "current state" followed
+// by a colon as the start of a new interface wherever they appear, and this
+// description carries them. The device's own MTU, speed, duplex and address
+// lines follow the description, so if the description ends the record they are
+// filed under no interface at all. GigabitEthernet0/0/2 carries NO description
+// and is the guard that the boundary itself still works.
+const vrpInterfaceDescriptionBoundaryTrap = `GigabitEthernet0/0/1 current state : UP
+Line protocol current state : UP
+Description:core uplink to spine-01, peer current state : UP
+Route Port,The Maximum Transmit Unit is 1500
+Internet Address is 10.0.0.1/30
+Port Mode: FORCE COPPER
+Speed : 1000,  Loopback: NONE
+Duplex: FULL,  Negotiation: ENABLE
+    Input:
+      CRC: 7, Overrun: 0, Fragment: 0
+      Total Error: 12, Drop: 3
+    Output:
+      Total Error: 0, Drop: 4
+GigabitEthernet0/0/2 current state : UP
+Line protocol current state : DOWN
+Route Port,The Maximum Transmit Unit is 1500
+Internet Address is 10.0.0.5/30
+Speed : 1000,  Loopback: NONE
+Duplex: FULL,  Negotiation: ENABLE
+    Input:
+      CRC: 0, Overrun: 0, Fragment: 0
+      Total Error: 0, Drop: 0
+    Output:
+      Total Error: 0, Drop: 0
+`
+
 const vrpDisplayInterface = `GigabitEthernet0/0/1 current state : UP
 Line protocol current state : UP
 Description:uplink to core-02

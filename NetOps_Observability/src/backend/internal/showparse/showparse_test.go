@@ -400,6 +400,57 @@ func TestParse_VRPDescriptionIsNotADeviceReading(t *testing.T) {
 	wantStrP(t, "IPv4", i1.IPv4, "10.0.0.5/30")
 }
 
+// TestParse_VRPDescriptionIsNotARecordBoundary is the second VRP finding from
+// the audit of this defect class: free text can forge a record BOUNDARY, not
+// only a value.
+//
+// vrpHeaderShape reads the words "current state" followed by a colon anywhere
+// in a line as the start of a new interface. That looseness is deliberate and is
+// review H5's fix: a header the value parser refuses must still end the record,
+// or the next interface's counters land on the previous one. But it also meant
+// that a description mentioning another device's state ended the record, and the
+// device's own MTU, speed, duplex and address lines that followed were filed
+// under no interface at all and dropped.
+//
+// That loss was RECORDED as a gap, so it never fabricated a field, and the
+// invariant held. It is still the same root cause: operator text read as device
+// structure. A VRP interface name cannot contain a colon, so a line beginning
+// "Description:" is never a header and can be taken off the boundary's hands.
+func TestParse_VRPDescriptionIsNotARecordBoundary(t *testing.T) {
+	res := mustParse(t, CmdInterfaceDetail, DialectHuaweiVRP, vrpInterfaceDescriptionBoundaryTrap)
+	if len(res.Interfaces) != 2 {
+		t.Fatalf("got %d interfaces, want 2", len(res.Interfaces))
+	}
+	if len(res.Gaps) != 0 {
+		t.Errorf("Gaps = %q, want none — the description is not an unreadable header", res.Gaps)
+	}
+	i0 := res.Interfaces[0]
+	wantStr(t, "Name", &i0.Name, "GigabitEthernet0/0/1")
+	wantStrP(t, "Description", i0.Description, "core uplink to spine-01, peer current state : UP")
+	// The whole record below the description survives the description.
+	wantIntP(t, "MTU", i0.MTU, 1500)
+	wantI64P(t, "SpeedMbps", i0.SpeedMbps, 1000)
+	wantStrP(t, "Duplex", i0.Duplex, "FULL")
+	wantStrP(t, "IPv4", i0.IPv4, "10.0.0.1/30")
+	wantI64P(t, "CRC", i0.CRC, 7)
+	wantI64P(t, "InErrors", i0.InErrors, 12)
+	wantI64P(t, "InDrops", i0.InDrops, 3)
+	wantI64P(t, "OutDrops", i0.OutDrops, 4)
+
+	// The guard: the record boundary itself still works. The second interface is
+	// its own record, with its own state, and none of the first one's counters.
+	i1 := res.Interfaces[1]
+	if i1.Description != nil {
+		t.Errorf("Description = %q, want nil for an interface with none", *i1.Description)
+	}
+	wantStr(t, "Name", &i1.Name, "GigabitEthernet0/0/2")
+	wantStrP(t, "Oper", i1.Oper, "DOWN")
+	wantStrP(t, "IPv4", i1.IPv4, "10.0.0.5/30")
+	wantI64P(t, "CRC", i1.CRC, 0)
+	wantI64P(t, "InErrors", i1.InErrors, 0)
+	wantI64P(t, "OutDrops", i1.OutDrops, 0)
+}
+
 func TestParse_VRPInterfaces(t *testing.T) {
 	res := mustParse(t, CmdInterfaceDetail, DialectHuaweiVRP, vrpDisplayInterface)
 	if len(res.Interfaces) != 1 {
