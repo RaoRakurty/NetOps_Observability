@@ -40,22 +40,56 @@ type RevisionStore struct {
 	mu   sync.RWMutex
 	m    map[string]map[string][]ReportRevision
 	path string
+	// unreadable is set when the file EXISTS but its contents could not be
+	// established. An UNREADABLE register is not an EMPTY one: see
+	// store_unreadable.go for why every write is refused while it is set.
+	unreadable error
 }
 
-// NewRevisionStore opens the register at path ("" = memory-only, tests).
+// NewRevisionStore opens the register at path ("" = memory-only, tests). A
+// MISSING file starts empty; a file that exists but could not be read or parsed
+// starts empty, is LOGGED, and refuses every write from then on, so the file it
+// could not read is never replaced by an empty one.
 func NewRevisionStore(path string) *RevisionStore {
 	s := &RevisionStore{m: map[string]map[string][]ReportRevision{}, path: path}
-	if b, err := platformdb.Load(path); err == nil && len(b) > 0 {
-		var m map[string]map[string][]ReportRevision
-		if json.Unmarshal(b, &m) == nil {
-			s.m = m
-		}
+	b, err := loadRegister(path, "rca report revisions")
+	if err != nil {
+		s.unreadable = err
+		return s
 	}
+	if len(b) == 0 {
+		return s
+	}
+	var m map[string]map[string][]ReportRevision
+	if uerr := json.Unmarshal(b, &m); uerr != nil {
+		s.unreadable = unparsedRegister("rca report revisions", uerr)
+		return s
+	}
+	s.m = m
 	return s
+}
+
+// Unavailable reports why the stored register could not be read, or nil. A
+// caller uses it to say "unknown" instead of reporting the empty register as a
+// case that was never generated.
+func (s *RevisionStore) Unavailable() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.unreadable
 }
 
 // F-62/F-63: returns error; callers roll back and answer 500.
 func (s *RevisionStore) saveLocked() error {
+	// The file's real contents are unknown, so a save would not update it — it
+	// would REPLACE it with what this process holds, which after an unreadable
+	// load is nothing. Refuse: the caller rolls its change back and answers 500,
+	// so the operator gets an error instead of a silent loss.
+	if err := refuseUnreadable(s.unreadable); err != nil {
+		return err
+	}
 	if s.path == "" {
 		return nil
 	}
