@@ -120,6 +120,12 @@ func TestFetchDEMRunsReportsABrokenConnection(t *testing.T) {
 	if !strings.Contains(err.Error(), "van-b") {
 		t.Errorf("the error does not name the vantage that could not be read: %v", err)
 	}
+	// The count is vantages, not runs. Saying "1 of 2 vantages were not read"
+	// is a measured number; the run total would be a different thing wearing
+	// the same words.
+	if !strings.Contains(err.Error(), "1 of 2 vantages") {
+		t.Errorf("the error does not say how many vantages went unread: %v", err)
+	}
 	// The batch that WAS read is still returned: a partial drain is worth more
 	// than nothing, as long as it is not reported as complete.
 	if len(runs) != 1 {

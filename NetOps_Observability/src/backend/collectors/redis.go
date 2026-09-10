@@ -678,15 +678,17 @@ func FetchDEMRuns(ctx context.Context) ([]dem.WireRun, error) {
 	}
 	out := make([]dem.WireRun, 0, 64)
 	var bad []string
-	for _, v := range vantages {
+	for i, v := range vantages {
 		raw, gerr := redisCmd(c, "GET", demRunsKeyFor(v))
 		switch {
 		case errors.Is(gerr, errRedisTransport):
 			// The channel is gone. Every remaining vantage is UNREAD, not
 			// empty, so stop and say so rather than return a short batch that
-			// reads as "these probers published nothing".
-			return out, fmt.Errorf("dem runs: the run channel failed while reading vantage %s (%d of %d vantages unread): %w",
-				v, len(vantages)-len(out), len(vantages), gerr)
+			// reads as "these probers published nothing". The count is this
+			// vantage plus the ones after it — a measured number, not the run
+			// total, which is a different thing entirely.
+			return out, fmt.Errorf("dem runs: the run channel failed while reading vantage %s (%d of %d vantages were not read): %w",
+				v, len(vantages)-i, len(vantages), gerr)
 		case gerr != nil:
 			// A per-key refusal from a live server: this vantage's batch is
 			// lost, the rest of the drain is still meaningful.
