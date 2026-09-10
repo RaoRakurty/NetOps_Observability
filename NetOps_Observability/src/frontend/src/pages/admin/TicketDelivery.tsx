@@ -121,11 +121,29 @@ export default function TicketDelivery() {
   const [rowBusy, setRowBusy] = useState<string | null>(null);
   const [rowNote, setRowNote] = useState<string | null>(null);
 
+  // THE OUTBOX IS READ FROM THE END, NOT THE START.
+  //
+  // Both stores return the outbox oldest first and nothing purges it, so a
+  // first page of an outbox that has been running for a month is a month-old
+  // sample. Today's dead letters sit at the far end of it. Reading the first
+  // page and then counting over it is how a screen prints "Failed 0" while
+  // deliveries are failing.
+  //
+  // So: read a page, and if the outbox is longer than one page, read the LAST
+  // page instead. `total` comes back on the first read, which is what makes the
+  // offset knowable. The counts below then describe the newest rows, and the
+  // page says so rather than presenting them as totals.
   const loadOutbox = useCallback(async () => {
     try {
-      const r = await api.ticketsOutbox(PAGE, 0);
-      setOutbox(r.outbox ?? []);
-      setOutboxTotal(r.total ?? (r.outbox ?? []).length);
+      const first = await api.ticketsOutbox(PAGE, 0);
+      const total = first.total ?? (first.outbox ?? []).length;
+      let rows = first.outbox ?? [];
+      if (total > rows.length) {
+        const tail = await api.ticketsOutbox(PAGE, Math.max(0, total - PAGE));
+        rows = tail.outbox ?? rows;
+      }
+      setOutbox(rows);
+      setOutboxTotal(total);
       setOutboxErr(null);
     } catch (e) {
       setOutbox(null);
@@ -219,6 +237,16 @@ export default function TicketDelivery() {
   }, [outbox]);
 
   const partial = outbox !== null && outbox.length < outboxTotal;
+  // What the three numbers above the table are counted over. They are totals
+  // only when the whole outbox fits on the page; otherwise they describe a
+  // sample, and the sentence beneath them says which one. A "Failed 0" counted
+  // over 50 of 1,200 rows is not "nothing failed", and must never read as it.
+  const countsNote = outbox === null
+    ? ""
+    : partial
+      ? `Counted over the ${outbox.length} most recent rows, not the whole outbox. The outbox holds ${outboxTotal.toLocaleString()} rows, so an older failure is not in these numbers.`
+      : `Counted over the whole outbox: ${outboxTotal.toLocaleString()} row${outboxTotal === 1 ? "" : "s"}.`;
+  const countLabel = (what: string) => (partial ? `${what} in the most recent ${outbox?.length ?? 0}` : what);
 
   return (
     <div className="adm">
@@ -232,14 +260,18 @@ export default function TicketDelivery() {
 
       <div className="admin-head-row" style={{ marginTop: "var(--sp-2)" }}>
         <StatStrip>
-          <Stat label="Queued" value={outbox === null ? "—" : counts.queued} />
-          <Stat label="Failed" value={outbox === null ? "—" : counts.failed} tone={counts.failed > 0 ? "bad" : ""} />
-          <Stat label="Delivered" value={outbox === null ? "—" : counts.delivered} tone="good" />
+          <Stat label={countLabel("Queued")} value={outbox === null ? "—" : counts.queued} />
+          <Stat label={countLabel("Failed")} value={outbox === null ? "—" : counts.failed} tone={counts.failed > 0 ? "bad" : ""} />
+          {/* Delivered is only "good" when it is the whole story. Over a sample
+              it is just a number, and colouring it green would say more than we
+              know. */}
+          <Stat label={countLabel("Delivered")} value={outbox === null ? "—" : counts.delivered} tone={partial ? "" : "good"} />
         </StatStrip>
         <button type="button" className="btn" onClick={() => void syncNow()} disabled={syncing}>
           {syncing ? "Sweeping…" : "Sync now"}
         </button>
       </div>
+      {countsNote && <p className="adm-line" data-testid="ticket-counts-note">{countsNote}</p>}
       <p className="adm-line">
         <b>Sync now</b> opens and closes nothing.
         <AskIris topic="ticketing.sync-now" label="the sync sweep" />
@@ -323,7 +355,7 @@ export default function TicketDelivery() {
       {outbox !== null && (
         <p className="adm-line">
           {partial
-            ? `Showing the first ${outbox.length} of ${outboxTotal.toLocaleString()} rows — this page is not the whole outbox.`
+            ? `Showing the ${outbox.length} most recent of ${outboxTotal.toLocaleString()} rows — this page is not the whole outbox.`
             : `${outboxTotal.toLocaleString()} row${outboxTotal === 1 ? "" : "s"} — this is the whole outbox.`}
         </p>
       )}

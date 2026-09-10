@@ -203,7 +203,55 @@ describe("TicketDelivery — the outbox", () => {
   it("a bounded page says it is not the whole outbox", async () => {
     ticketsOutbox.mockResolvedValue({ outbox: [FAILED], total: 900, limit: 50, offset: 0, has_more: true });
     render(<TicketDelivery />);
-    expect(await screen.findByText(/first 1 of 900 rows — this page is not the whole outbox/i)).toBeTruthy();
+    expect(await screen.findByText(/1 most recent of 900 rows — this page is not the whole outbox/i)).toBeTruthy();
+  });
+
+  // 3.1-12. The three numbers above the table were counted over one page of an
+  // outbox both stores return OLDEST FIRST and nothing purges, so on any outbox
+  // older than 50 rows the recent failures were structurally outside the
+  // sample. The screen printed "Failed 0" while deliveries were dead-lettering.
+  describe("the queued / failed / delivered numbers", () => {
+    const page = (rows: unknown[], total: number, offset: number) =>
+      ({ outbox: rows, total, limit: 50, offset, has_more: offset + rows.length < total });
+
+    /** The three labels above the table. "Failed" is also a lane filter button,
+     *  so the assertion has to look at the strip and not at the page. */
+    const statLabels = () =>
+      Array.from(document.querySelectorAll(".ds-stat-label")).map((e) => e.textContent);
+
+    it("reads the END of the outbox, where today's failures are", async () => {
+      // 900 rows: page one is ancient history, and it is all deliveries.
+      ticketsOutbox.mockImplementation(async (_limit: number, offset: number) =>
+        offset === 0 ? page([SENT], 900, 0) : page([FAILED], 900, 850));
+      render(<TicketDelivery />);
+      await waitFor(() => expect(ticketsOutbox).toHaveBeenCalledTimes(2));
+      expect(ticketsOutbox).toHaveBeenNthCalledWith(1, 50, 0);
+      expect(ticketsOutbox).toHaveBeenNthCalledWith(2, 50, 850);
+      // The failure that page one could not see is now counted.
+      await waitFor(() => expect(statLabels()).toContain("Failed in the most recent 1"));
+    });
+
+    it("never presents a sample as a total, and says what it counted", async () => {
+      ticketsOutbox.mockImplementation(async (_limit: number, offset: number) =>
+        offset === 0 ? page([SENT], 900, 0) : page([SENT], 900, 850));
+      render(<TicketDelivery />);
+      const note = await screen.findByTestId("ticket-counts-note");
+      expect(note.textContent).toMatch(/not the whole outbox/i);
+      expect(note.textContent).toMatch(/900/);
+      // A zero counted over a sample must not be labelled as if it were a total.
+      expect(statLabels()).not.toContain("Failed");
+      expect(statLabels()).toContain("Failed in the most recent 1");
+    });
+
+    it("says so plainly when the numbers ARE the whole outbox", async () => {
+      ticketsOutbox.mockResolvedValue(page([FAILED, PENDING, SENT], 3, 0));
+      render(<TicketDelivery />);
+      const note = await screen.findByTestId("ticket-counts-note");
+      expect(note.textContent).toMatch(/whole outbox: 3 rows/i);
+      // One read only: there is no second page to fetch.
+      expect(ticketsOutbox).toHaveBeenCalledTimes(1);
+      expect(statLabels()).toEqual(["Queued", "Failed", "Delivered"]);
+    });
   });
 });
 
