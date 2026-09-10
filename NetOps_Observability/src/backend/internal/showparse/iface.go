@@ -673,15 +673,37 @@ func parseSROSPortDetail(lines []string) Result {
 		if isSeparator(ln) {
 			continue
 		}
-		for k, v := range kvPairs(ln) {
+		pairs := kvPairs(ln)
+		// THE DESCRIPTION IS OPERATOR FREE TEXT, and it is the one line in this
+		// table the DEVICE does not author. It is read for the description and
+		// the line is then DONE: no other key on it may be believed.
+		//
+		// This table's columns are found by SHAPE, not by position: kvPairs cuts
+		// each part at its last run of two or more spaces, so any word an
+		// operator typed after such a run and before a colon BECOMES a key and
+		// the text after it becomes that key's value. A description reading
+		// "to core-02    MTU : 9000    Oper Speed : 10 Gbps" therefore wrote an
+		// MTU of 9000 and a speed of 10 Gbps onto a port whose own lines said
+		// 1514 and 1 Gbps, and every field here is first-write-wins, so the
+		// device could no longer correct it. The keyed switch was not the
+		// protection it looked like: it bounds WHICH fields free text can reach,
+		// not whether it can reach them.
+		//
+		// SR OS prints the description on its own full-width line, so a second
+		// key on a description line is not a device column — it is the
+		// operator's own text. Dropping the rest of the line loses no reading
+		// the device actually printed.
+		if v, ok := pairs["description"]; ok {
+			cur.Description = strPtr(v)
+			continue
+		}
+		for k, v := range pairs {
 			switch k {
 			case "interface":
 				if !strings.ContainsAny(v, " ") {
 					cur.Name = v
 					found = true
 				}
-			case "description":
-				cur.Description = strPtr(v)
 			case "admin state":
 				cur.Admin = strPtr(v)
 				found = true

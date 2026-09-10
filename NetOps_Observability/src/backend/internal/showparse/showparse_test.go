@@ -665,6 +665,56 @@ func TestSentinelSites_NumericOnly(t *testing.T) {
 	}
 }
 
+// TestParse_SROSDescriptionIsNotADeviceReading is review 3.5-03 in its SR OS
+// form, which the review did not name and the first probe missed.
+//
+// This parser reads a closed set of KEYS, which looks like protection and is
+// not: it bounds which fields free text can reach, not whether it can reach
+// them. The columns are found by SHAPE — kvPairs cuts each part at its last run
+// of two or more spaces — so a description carrying a column gap and a colon
+// makes its own key. "to core-02    MTU : 9000    Oper Speed : 10 Gbps    Rx
+// Optical Power : -1.00 dBm" therefore wrote an MTU, a speed and an optical
+// power, and since every field is first-write-wins and the description is
+// printed above the device's own lines, the port's real 1514 / 1 Gbps / -5.23
+// dBm could no longer correct them. Rx optical power is the sharpest of the
+// three: it is the number a physical-layer investigation turns on.
+func TestParse_SROSDescriptionIsNotADeviceReading(t *testing.T) {
+	res := mustParse(t, CmdInterfaceDetail, DialectNokiaSROS, srosPortDetailDescriptionTrap)
+	if len(res.Interfaces) != 1 {
+		t.Fatalf("got %d interfaces, want 1", len(res.Interfaces))
+	}
+	i := res.Interfaces[0]
+	// The description is still READ — it is the operator's label and belongs on
+	// the record. It is simply not a source of measurements.
+	wantStrP(t, "Description", i.Description, "to core-02")
+	wantStr(t, "Name", &i.Name, "1/1/1")
+	wantIntP(t, "MTU", i.MTU, 1514)
+	wantI64P(t, "SpeedMbps", i.SpeedMbps, 1000)
+	wantF64P(t, "RxPowerDbm", i.RxPowerDbm, -5.23)
+	wantF64P(t, "TxPowerDbm", i.TxPowerDbm, -2.10)
+	wantF64P(t, "TempC", i.TempC, 34.5)
+
+	// The guard: the same port with NO description is unchanged by the refusal,
+	// so the fix cost the parser nothing it used to read. An SR OS capture holds
+	// one port, so the guard is a second capture rather than a second record.
+	g := mustParse(t, CmdInterfaceDetail, DialectNokiaSROS, srosPortDetailNoDescription)
+	if len(g.Interfaces) != 1 {
+		t.Fatalf("guard: got %d interfaces, want 1", len(g.Interfaces))
+	}
+	i1 := g.Interfaces[0]
+	if i1.Description != nil {
+		t.Errorf("Description = %q, want nil for a port with none", *i1.Description)
+	}
+	wantStr(t, "Name", &i1.Name, "1/1/1")
+	wantStrP(t, "Admin", i1.Admin, "up")
+	wantStrP(t, "Oper", i1.Oper, "up")
+	wantIntP(t, "MTU", i1.MTU, 1514)
+	wantI64P(t, "SpeedMbps", i1.SpeedMbps, 1000)
+	wantF64P(t, "RxPowerDbm", i1.RxPowerDbm, -5.23)
+	wantF64P(t, "TxPowerDbm", i1.TxPowerDbm, -2.10)
+	wantF64P(t, "TempC", i1.TempC, 34.5)
+}
+
 func TestParse_SROSPortDetail(t *testing.T) {
 	res := mustParse(t, CmdInterfaceDetail, DialectNokiaSROS, srosShowPortDetail)
 	if len(res.Interfaces) != 1 {

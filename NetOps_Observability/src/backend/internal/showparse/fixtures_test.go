@@ -176,6 +176,50 @@ Duplex: FULL,  Negotiation: ENABLE
       Total Error: 0, Drop: 4
 `
 
+// FIXTURE PROVENANCE: SYNTHETIC, authored 2026-09-10. Not a device capture.
+// It is the SR OS form of the shape review 3.5-03 names. This table has no
+// "Key: value" scan to fall through into — its keys come from a closed switch —
+// but the COLUMNS are found by shape, so free text in the description that
+// carries a column gap and a colon becomes a key of its own. The description
+// here names an MTU, a speed and an Rx optical power, all unlike the device's
+// own lines (1514, 1 Gbps, -5.23 dBm), so a reading taken from the wrong line
+// cannot be mistaken for the right one.
+const srosPortDetailDescriptionTrap = `===============================================================================
+Ethernet Interface
+===============================================================================
+Description        : to core-02    MTU : 9000    Oper Speed : 10 Gbps    Rx Optical Power : -1.00 dBm
+Interface          : 1/1/1                  Oper Speed       : 1 Gbps
+Link-level         : Ethernet               Config Speed     : 1 Gbps
+Admin State        : up                     Oper State       : up
+Physical Link      : Yes                    MTU              : 1514
+IfIndex            : 35684352               Hold time up     : 0 seconds
+===============================================================================
+Transceiver Digital Diagnostic Monitoring
+===============================================================================
+Temperature (C)    : 34.5                   Rx Optical Power : -5.23 dBm
+Tx Output Power    : -2.10 dBm              Voltage          : 3.29 V
+`
+
+// FIXTURE PROVENANCE: SYNTHETIC, authored 2026-09-10. Not a device capture.
+// The guard for srosPortDetailDescriptionTrap: the same port with NO description
+// line at all. An SR OS port-detail capture carries exactly one port, so the
+// no-description record cannot sit beside the trap in one capture the way it
+// does in the Cisco, Junos and VRP fixtures.
+const srosPortDetailNoDescription = `===============================================================================
+Ethernet Interface
+===============================================================================
+Interface          : 1/1/1                  Oper Speed       : 1 Gbps
+Link-level         : Ethernet               Config Speed     : 1 Gbps
+Admin State        : up                     Oper State       : up
+Physical Link      : Yes                    MTU              : 1514
+IfIndex            : 35684352               Hold time up     : 0 seconds
+===============================================================================
+Transceiver Digital Diagnostic Monitoring
+===============================================================================
+Temperature (C)    : 34.5                   Rx Optical Power : -5.23 dBm
+Tx Output Power    : -2.10 dBm              Voltage          : 3.29 V
+`
+
 const srosShowPortDetail = `===============================================================================
 Ethernet Interface
 ===============================================================================
