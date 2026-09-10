@@ -303,8 +303,16 @@ type server struct {
 	tacEscalate   *tac.EscalateAPI
 	tacRoutingAPI *ticketing.TACRoutingAPI
 	// TAC-ROUTES-END
-	tenants          tenantRepo
-	orgs             *tenant.OrgStore
+	tenants tenantRepo
+	orgs    *tenant.OrgStore
+	// provisionMu serialises the LICENSED provisioning path — org create and
+	// tenant create. The fleet-management gate COUNTS what exists and then
+	// CREATES; if those two steps do not share one hold of this mutex, every
+	// concurrent caller reads the same free slot and they all create, which is
+	// how a ceiling of one admits eight. It is held for the whole decision, and
+	// /api/onboard holds it across BOTH creates so the pair is one decision
+	// (the same rule discovery.SetMonitoring states for the device ceiling).
+	provisionMu      sync.Mutex
 	bindings         *bindingStore
 	securitySettings *securitySettingsStore
 	loginThrottle    *loginguard.Throttle // in-memory failed-login lockout (best-effort)

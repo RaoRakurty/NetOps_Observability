@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -642,6 +643,111 @@ func TestLicenceMSPManagement(t *testing.T) {
 		s.handleOrgs(w, licReq(http.MethodPost, "/api/orgs", `{"name":"Partner"}`, licClaims()))
 		if w.Code == http.StatusPaymentRequired {
 			t.Fatalf("Enterprise includes fleet management: %s", w.Body.String())
+		}
+	})
+}
+
+// TestLicenceOnboardIsTheSameDoor pins the OTHER door onto the same gate.
+// /api/onboard creates an org AND a tenant in one call. It is the same paid
+// capability /api/orgs and /api/tenants are gated on, so it must answer the
+// same way — otherwise the gate is decoration and the capability is free
+// through the second door.
+func TestLicenceOnboardIsTheSameDoor(t *testing.T) {
+	k := newLicTestKey(t)
+	onboardBody := `{"org_name":"Acme Corp","tenant_name":"Acme Prod"}`
+
+	t.Run("community is refused at the onboard door", func(t *testing.T) {
+		s := licIdentityServer(t, k.service(t, nil))
+		w := httptest.NewRecorder()
+		s.handleOnboard(w, licReq(http.MethodPost, "/api/onboard", onboardBody, licClaims()))
+		licAssertRefusal(t, w, entitlement.KindFeature, string(entitlement.FeatureMSPManagement), entitlement.TierEnterprise)
+		// A refused onboard must leave nothing behind: no org shell, no tenant.
+		if n := len(s.orgs.List()); n != 1 {
+			t.Fatalf("orgs after a refused onboard = %d, want 1 (the seeded Global org only)", n)
+		}
+		if n := countRealTenants(s.tenants.List()); n != 0 {
+			t.Fatalf("real tenants after a refused onboard = %d, want 0", n)
+		}
+	})
+
+	t.Run("an Enterprise licence lifts onboard", func(t *testing.T) {
+		raw := k.issue(t, entitlement.TierEnterprise, []entitlement.Feature{entitlement.FeatureMSPManagement}, nil)
+		s := licIdentityServer(t, k.service(t, raw))
+		w := httptest.NewRecorder()
+		s.handleOnboard(w, licReq(http.MethodPost, "/api/onboard", onboardBody, licClaims()))
+		if w.Code != http.StatusCreated {
+			t.Fatalf("Enterprise includes fleet management; onboard = %d %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("concurrent onboards cannot slip an org past the gate", func(t *testing.T) {
+		// The gate counts and then creates. If those two steps do not share one
+		// hold of a lock, every concurrent caller reads the same free slot and
+		// they all create. The count must be taken and acted on atomically.
+		s := licIdentityServer(t, k.service(t, nil))
+		const callers = 8
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		created := make([]int, callers)
+		for i := 0; i < callers; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				body := `{"org_name":"Acme ` + strconv.Itoa(i) + `","tenant_name":"Prod ` + strconv.Itoa(i) + `"}`
+				w := httptest.NewRecorder()
+				<-start
+				s.handleOnboard(w, licReq(http.MethodPost, "/api/onboard", body, licClaims()))
+				if w.Code == http.StatusCreated {
+					created[i] = 1
+				}
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+		n := 0
+		for _, c := range created {
+			n += c
+		}
+		if n != 0 {
+			t.Fatalf("%d of %d concurrent Community onboards created an org; the gate must refuse every one", n, callers)
+		}
+		if got := len(s.orgs.List()); got != 1 {
+			t.Fatalf("orgs = %d, want 1 (the seeded Global org only)", got)
+		}
+	})
+
+	t.Run("concurrent tenant creates cannot both take the last slot", func(t *testing.T) {
+		// The same shape at the /api/tenants door: Community may hold ONE real
+		// tenant, so exactly one of N concurrent creates may succeed.
+		s := licIdentityServer(t, k.service(t, nil))
+		const callers = 8
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		codes := make([]int, callers)
+		for i := 0; i < callers; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				body := `{"name":"Tenant ` + strconv.Itoa(i) + `"}`
+				w := httptest.NewRecorder()
+				<-start
+				s.handleTenants(w, licReq(http.MethodPost, "/api/tenants", body, licClaims()))
+				codes[i] = w.Code
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+		ok := 0
+		for _, c := range codes {
+			if c == http.StatusCreated {
+				ok++
+			}
+		}
+		if ok != 1 {
+			t.Fatalf("%d of %d concurrent Community tenant creates succeeded, want exactly 1; codes = %v", ok, callers, codes)
+		}
+		if got := countRealTenants(s.tenants.List()); got != 1 {
+			t.Fatalf("real tenants = %d, want 1", got)
 		}
 	})
 }

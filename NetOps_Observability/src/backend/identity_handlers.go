@@ -373,33 +373,17 @@ func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 			}
 			req.OrgID = o.ID // store the opaque org id, never the slug
 		}
-		// LICENCE-BEGIN — MSP / fleet management of MANY tenants is the commercial
-		// capability (owner spec, 2026-09-04). Read the scope carefully, because
-		// the line matters:
-		//
-		//   NOT gated — tenant ISOLATION itself, and normal SINGLE-tenant
-		//   operation. Isolation is a safety property of every tier and is never
-		//   an entitlement; the seeded Global tenant always exists and a
-		//   deployment always has one working tenant.
-		//
-		//   GATED — running a FLEET of them from one platform, which is the MSP
-		//   product. So the SECOND real tenant is the one that asks.
-		//
-		// The gate is semantic (Entitled(FeatureMSPManagement)), never a tier
-		// comparison: a licence may grant fleet management at any tier, and the
-		// file decides, not the label.
-		if !entitlement.Entitled(s.entitlements, entitlement.FeatureMSPManagement) {
-			if n := countRealTenants(s.tenants.List()); n >= 1 {
-				entitlement.WriteRefusal(w, entitlement.Require(s.entitlements, entitlement.FeatureMSPManagement))
-				return
-			}
-		}
-		// LICENCE-END
-		t, err := s.tenants.Create(req.Name, req.Slug, req.Note, req.IsolationMode, req.OrgID)
+		// LICENCE-BEGIN — the MSP / fleet gate and the create are ONE step
+		// (createTenantGated), because a gate that counts and then creates
+		// outside a lock lets two concurrent callers both take the last slot.
+		// /api/onboard is the other door onto the same gate and goes through
+		// the same helper.
+		t, err := s.createTenantGated(req.Name, req.Slug, req.Note, req.IsolationMode, req.OrgID)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
+			writeProvisionError(w, err)
 			return
 		}
+		// LICENCE-END
 		// Assign the data-residency region at creation time, if provided.
 		if req.Region != "" {
 			updated, e := s.tenants.SetRegion(t.ID, req.Region)
@@ -726,6 +710,82 @@ func countRealTenants(all []Tenant) int {
 		}
 	}
 	return n
+}
+
+// gateFleetTenantLocked is the MSP / fleet gate for admitting ONE MORE tenant.
+// The caller holds provisionMu, and must still hold it when it creates: the
+// count this reads is only true for as long as nothing else can create.
+//
+//	NOT gated — tenant ISOLATION itself, and normal SINGLE-tenant operation.
+//	Isolation is a safety property of every tier and is never an entitlement;
+//	the seeded Global tenant always exists and a deployment always has one
+//	working tenant.
+//
+//	GATED — running a FLEET of them from one platform, which is the MSP
+//	product. So the SECOND real tenant is the one that asks.
+//
+// The gate is semantic (Entitled(FeatureMSPManagement)), never a tier
+// comparison: a licence may grant fleet management at any tier, and the file
+// decides, not the label.
+func (s *server) gateFleetTenantLocked() error {
+	if entitlement.Entitled(s.entitlements, entitlement.FeatureMSPManagement) {
+		return nil
+	}
+	if countRealTenants(s.tenants.List()) >= 1 {
+		return entitlement.Require(s.entitlements, entitlement.FeatureMSPManagement)
+	}
+	return nil
+}
+
+// createTenantLocked gates and creates in one step. Caller holds provisionMu.
+func (s *server) createTenantLocked(name, slug, note, isolationMode, orgID string) (Tenant, error) {
+	if err := s.gateFleetTenantLocked(); err != nil {
+		return Tenant{}, err
+	}
+	return s.tenants.Create(name, slug, note, isolationMode, orgID)
+}
+
+// createTenantGated is createTenantLocked for a caller that creates ONE tenant
+// and nothing else. It takes provisionMu itself.
+func (s *server) createTenantGated(name, slug, note, isolationMode, orgID string) (Tenant, error) {
+	s.provisionMu.Lock()
+	defer s.provisionMu.Unlock()
+	return s.createTenantLocked(name, slug, note, isolationMode, orgID)
+}
+
+// createOrgLocked gates and creates an ORG. Caller holds provisionMu.
+//
+// An org is the MSP/fleet construct: orgs exist to group many tenants under one
+// operator, so creating one beyond the seeded Global org IS multi-tenant fleet
+// management (owner spec, 2026-09-04). The gate is unconditional, so there is
+// no count to take and no slot to race for; it runs under the same lock anyway
+// because /api/onboard creates an org AND a tenant as one decision.
+//
+// The seeded Global org always exists and is never gated: a single-tenant
+// deployment needs no entitlement to work normally, and isolation between
+// whatever orgs already exist is a safety property no licence state can touch.
+func (s *server) createOrgLocked(name, slug, note, homeRegion, ssoConnection string) (Org, error) {
+	if err := entitlement.Require(s.entitlements, entitlement.FeatureMSPManagement); err != nil {
+		return Org{}, err
+	}
+	return s.orgs.Create(name, slug, note, homeRegion, ssoConnection)
+}
+
+// createOrgGated is createOrgLocked for a caller that creates ONE org.
+func (s *server) createOrgGated(name, slug, note, homeRegion, ssoConnection string) (Org, error) {
+	s.provisionMu.Lock()
+	defer s.provisionMu.Unlock()
+	return s.createOrgLocked(name, slug, note, homeRegion, ssoConnection)
+}
+
+// writeProvisionError renders a provisioning failure. A licence refusal is the
+// structured 402 the SPA renders as an upgrade card; anything else is the
+// ordinary 400 a bad name or a duplicate slug earns.
+func writeProvisionError(w http.ResponseWriter, err error) {
+	if entitlement.WriteRefusal(w, err) {
+		return
+	}
+	writeError(w, http.StatusBadRequest, err)
 }
 
 // LICENCE-END

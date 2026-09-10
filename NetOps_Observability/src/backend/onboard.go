@@ -59,23 +59,16 @@ func (s *server) handleOnboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1) Org — opaque id minted, slug validated/unique, SSO bound at the org.
-	org, err := s.orgs.Create(req.OrgName, req.OrgSlug, "", req.HomeRegion, req.SSOConnection)
+	// LICENCE-BEGIN — onboarding is the SAME paid capability /api/orgs and
+	// /api/tenants are gated on, reached through one call instead of two. A
+	// gate on only one door is decoration, so this goes through the same
+	// helpers, under the same lock.
+	org, t, err := s.provisionOrgWithTenant(req)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeProvisionError(w, err)
 		return
 	}
-	// 2) First tenant under the new org (the data/isolation boundary).
-	t, err := s.tenants.Create(req.TenantName, req.TenantSlug, "", req.IsolationMode, org.ID)
-	if err != nil {
-		// Roll back the org so a failed onboard never leaves a tenant-less shell.
-		if derr := s.orgs.Delete(org.ID); derr != nil {
-			logError("onboard", "org rollback failed — an empty org shell remains", map[string]any{
-				"org_id": org.ID, "err": derr.Error()})
-		}
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
+	// LICENCE-END
 	// F-81: the error was discarded here too, so onboarding a customer who
 	// requires operator-visibility restriction returned 201 with the switch OFF.
 	// The rollback below already exists for a failed tenant create; a failed
@@ -110,3 +103,32 @@ func (s *server) handleOnboard(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusCreated, onboardResponse{Org: org, Tenant: t})
 }
+
+// LICENCE-BEGIN
+// provisionOrgWithTenant creates the org and its first tenant under ONE hold of
+// provisionMu. Onboarding is a single decision — a customer is an org WITH a
+// tenant — so the fleet gate is asked once for the pair and nothing may create
+// in between. Splitting it into two independently-locked steps would put the
+// tenant count back into the check-then-act shape this helper exists to avoid.
+//
+// A failed tenant create rolls the org back, so a refused or failed onboard
+// never leaves a tenant-less shell behind.
+func (s *server) provisionOrgWithTenant(req onboardRequest) (Org, Tenant, error) {
+	s.provisionMu.Lock()
+	defer s.provisionMu.Unlock()
+	org, err := s.createOrgLocked(req.OrgName, req.OrgSlug, "", req.HomeRegion, req.SSOConnection)
+	if err != nil {
+		return Org{}, Tenant{}, err
+	}
+	t, err := s.createTenantLocked(req.TenantName, req.TenantSlug, "", req.IsolationMode, org.ID)
+	if err != nil {
+		if derr := s.orgs.Delete(org.ID); derr != nil {
+			logError("onboard", "org rollback failed — an empty org shell remains", map[string]any{
+				"org_id": org.ID, "err": derr.Error()})
+		}
+		return Org{}, Tenant{}, err
+	}
+	return org, t, nil
+}
+
+// LICENCE-END
