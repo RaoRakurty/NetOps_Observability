@@ -955,15 +955,50 @@ func (s *server) auditSSOBindingRefusal(r *http.Request, reason, alias, tenantID
 }
 
 // ssoLoginRedirectURI is the redirect_uri handed to the IdP when a login STARTS.
-// A tenant-bound connection gets its own per-tenant callback URL, derived from
-// the CONNECTION's tenant (not from the browser), so the value is deterministic
-// and matches what the provider form told the IdP team to register. Everything
+// A tenant-bound connection comes back to a per-tenant callback URL; everything
 // else keeps the generic callback, unchanged.
+//
+// The URL names the realm the browser IS IN, not the connection's tenant. It
+// used to name the connection's tenant unconditionally, which broke the
+// /org/{org_public_id} locator outright — the immutable, rename-proof entry URL
+// the admin page publishes as callback_url_immutable. A browser that started
+// there was sent to the IdP with the /t/{slug} callback, so it returned to a
+// TENANT URL holding a candidate cookie that said ORG, and ssoTenantCallback's
+// realm check refused every one of those sign-ins at its own callback. An IdP
+// registered with the immutable URL instead would have failed a step earlier,
+// at the exchange, because the code exchange echoes the callback it landed on
+// and that would never have matched the authorization request.
+//
+// The realm is server-derived either way — parsed from the locator path and
+// resolved through the directory, or read from the HMAC-signed candidate cookie
+// — and it must REACH the connection's binding, so the value can only ever be
+// one of the callback URLs already enumerated for this connection in
+// ssoClientRedirectURIs. Nothing the browser can assert widens it.
 func (s *server) ssoLoginRedirectURI(r *http.Request, p *oidcProvider, alias string) string {
-	if c, ok := s.connectionLocator(alias); ok {
-		return ssoPublicBase(r) + c.CallbackPath(alias)
+	c, ok := s.connectionLocator(alias)
+	if !ok {
+		return p.CallbackURL(r)
 	}
-	return p.CallbackURL(r)
+	if entry, ok := s.ssoEntryRealm(r); ok && entry.Reaches(c.TenantID, c.OrgID) {
+		if path := entry.CallbackPath(alias); path != "" {
+			return ssoPublicBase(r) + path
+		}
+	}
+	// No locator in play: an IdP-initiated flow through the generic entry, and
+	// every deployment from before locators existed. The connection's own
+	// tenant callback is what those registered.
+	return ssoPublicBase(r) + c.CallbackPath(alias)
+}
+
+// ssoEntryRealm is the realm the browser started this flow in: the locator in
+// the request path when the entry was /t/… or /org/…, and otherwise the signed
+// candidate cookie the sign-in page armed. ok=false means the browser is on the
+// generic front door with no realm pinned.
+func (s *server) ssoEntryRealm(r *http.Request) (tenantlocator.Candidate, bool) {
+	if kind, ref, _, _, ok := tenantlocator.ParseCallbackPath(r.URL.Path); ok {
+		return tenantlocator.Resolve(s.locatorDir(), kind, ref)
+	}
+	return s.locatorCandidate(r)
 }
 
 // ssoCallbackRedirectURI is the same value re-derived at the callback, where the
