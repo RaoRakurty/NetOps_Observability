@@ -6,6 +6,8 @@ package backend
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"netops/backend/internal/discovery"
@@ -33,6 +35,25 @@ type netboxConfigStore struct {
 	cfg   *netboxConfig
 	path  string
 	vault *vault.Vault
+	// unreadable is set when the config file EXISTS but its contents could not
+	// be established — an I/O or permission failure, or JSON we could not parse.
+	// It is NOT set for an absent file, which simply means NetBox was never
+	// configured from the UI.
+	//
+	// THIS STORE RECOVERS RATHER THAN REFUSES, and it is a deliberate exception
+	// alongside the drift register. Everywhere the file holds many owners' rows
+	// — seven notification channels, every tenant's watchlist, a register of
+	// sealed blobs — a write over contents we never read is refused, because it
+	// would silently delete rows the operator was not editing. Here the file
+	// holds ONE object that the admin PUT replaces WHOLE, so an operator who
+	// re-enters the connection is performing the repair, not losing somebody
+	// else's data.
+	//
+	// The recovery is explicit, not silent: the failure is logged at load, the
+	// GET reports it so the UI cannot render "not configured" as truth, and the
+	// one shortcut that WOULD lose a secret — a blank token meaning "keep the
+	// stored one" — is refused, because there is no stored one we can read.
+	unreadable error
 }
 
 func newNetboxConfigStore(path string, v *vault.Vault) *netboxConfigStore {
@@ -43,11 +64,25 @@ func newNetboxConfigStore(path string, v *vault.Vault) *netboxConfigStore {
 
 func (s *netboxConfigStore) load() {
 	b, err := platformdb.Load(s.path)
-	if err != nil || len(b) == 0 {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return // never configured from the UI; the env/managed paths still apply
+	case err != nil:
+		// UNREADABLE IS NOT ABSENT. Folded together, the store read as "NetBox
+		// was never configured" — discovery silently stopped using it — and the
+		// next admin save wrote over a file nobody had read.
+		s.unreadable = fmt.Errorf("read NetBox config %s: %w", s.path, err)
+		logError("netbox.config", "stored NetBox config could not be read; it reads as NOT CONFIGURED and the next save will REPLACE the file",
+			map[string]any{"error": err.Error(), "path": s.path})
 		return
+	case len(b) == 0:
+		return // present but empty: nothing stored yet, nothing broken
 	}
 	var c netboxConfig
-	if json.Unmarshal(b, &c) != nil {
+	if uerr := json.Unmarshal(b, &c); uerr != nil {
+		s.unreadable = fmt.Errorf("decode NetBox config %s: %w", s.path, uerr)
+		logError("netbox.config", "stored NetBox config could not be parsed; it reads as NOT CONFIGURED and the next save will REPLACE the file",
+			map[string]any{"error": uerr.Error(), "path": s.path})
 		return
 	}
 	// Decrypt the token (no-op when the vault.Vault is dormant / nil).
@@ -55,6 +90,17 @@ func (s *netboxConfigStore) load() {
 		c = out
 	}
 	s.cfg = &c
+}
+
+// unavailable reports why the stored config could not be read, or nil. The GET
+// discloses it so the form cannot present "not configured" as the stored truth.
+func (s *netboxConfigStore) unavailable() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.unreadable
 }
 
 // effective resolves the live config, internal-first:
@@ -109,6 +155,12 @@ func (s *netboxConfigStore) set(in netboxConfig) (netboxConfig, error) {
 	if in.Token == "" && s.cfg != nil {
 		in.Token = s.cfg.Token
 	}
+	if in.Token == "" && s.unreadable != nil && in.URL != "" {
+		// There is no stored token we can read, so "leave it as it is" would
+		// quietly save an EMPTY token and the redacted form would report the
+		// connection as configured. Make the operator say what the token is.
+		return netboxConfig{}, fmt.Errorf("the stored NetBox config could not be read, so the saved API token cannot be reused — enter the token again: %w", s.unreadable)
+	}
 	sealed, err := mapNetbox(in, sealFn(s.vault)) // encrypt at rest; in-memory stays plaintext
 	if err != nil {
 		return netboxConfig{}, err
@@ -119,6 +171,14 @@ func (s *netboxConfigStore) set(in netboxConfig) (netboxConfig, error) {
 	}
 	if err := platformdb.Save(s.path, b); err != nil {
 		return netboxConfig{}, err
+	}
+	if s.unreadable != nil {
+		// The repair: this PUT replaces the whole object, which is exactly what
+		// the file holds, so the operator's explicit save is allowed to stand in
+		// for the unreadable one. Say so rather than let it pass silently.
+		logError("netbox.config", "an operator save REPLACED the NetBox config file that could not be read at start-up",
+			map[string]any{"path": s.path})
+		s.unreadable = nil
 	}
 	stored := in
 	s.cfg = &stored
@@ -158,7 +218,15 @@ func (s *server) handleNetboxConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"config": netboxPublic(s.netboxCfg.effective())})
+		out := map[string]any{"config": netboxPublic(s.netboxCfg.effective())}
+		if err := s.netboxCfg.unavailable(); err != nil {
+			// An unreadable store must never render as a deliberate "not
+			// configured": the operator sees UNKNOWN plus the reason (the
+			// verification-settings precedent).
+			out["config_unavailable"] = true
+			out["config_error"] = "the stored NetBox config could not be read — what is shown is not the stored state, and saving will replace the file"
+		}
+		writeJSON(w, http.StatusOK, out)
 	case http.MethodPut:
 		var in netboxConfig
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in); err != nil {

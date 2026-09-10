@@ -6,6 +6,8 @@ package backend
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"net/http"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/vault"
@@ -45,11 +47,29 @@ import (
 // stored config) could set FEATURE_NTFY_NOTIFICATIONS + NTFY_ALERT_TOPIC and get
 // nothing, with no log line. One function, both boot paths, one latch.
 
+// errNotifyConfigUnreadable is returned by every save while the stored channel
+// config exists but could not be read at start-up. It is a REFUSAL, not a
+// failure of the save itself.
+//
+// Why REFUSE rather than let the operator overwrite a corrupt settings file:
+// this ONE file holds SEVEN channels and their vault-sealed secrets. An admin
+// save is a partial edit of one channel, so writing what this process holds
+// would delete every other channel's configuration AND its credential — and
+// those credentials are write-only, so nothing can put them back. Refusing costs
+// the operator nothing they would not have had to re-enter anyway, and the
+// repair is an explicit act: fix the file's permissions, or remove it, and the
+// api reseeds from env on the next start.
+var errNotifyConfigUnreadable = errors.New("the stored notification config could not be read at start-up, so saves are refused until it is repaired or removed")
+
 type notifyConfigStore struct {
 	mu   sync.RWMutex
 	path string
 	cfg  notify.ChannelConfig
 	srv  *server
+	// unreadable is set when the config file EXISTS but its contents could not
+	// be established. The live channels for this process are the shipped
+	// defaults, which is honest, but the file must not be rewritten from them.
+	unreadable error
 }
 
 // defaultNotifyConfig is the shipped channel posture: push-class channels
@@ -58,8 +78,27 @@ type notifyConfigStore struct {
 func newNotifyConfigStore(path string, srv *server) *notifyConfigStore {
 	s := &notifyConfigStore{path: path, srv: srv}
 	s.cfg = notify.DefaultChannelConfig()
-	if b, err := platformdb.Load(path); err == nil {
-		_ = json.Unmarshal(b, &s.cfg) // best-effort: corrupt state file starts from defaults
+	b, loadErr := platformdb.Load(path)
+	switch {
+	case loadErr != nil && !errors.Is(loadErr, fs.ErrNotExist):
+		// UNREADABLE IS NOT ABSENT. This branch used to fall into the first-run
+		// seed below, which SAVES: a permissions change on the file was enough
+		// for the api to overwrite every configured channel and every sealed
+		// credential with the env defaults, at boot, on its own. Refuse instead.
+		s.unreadable = fmt.Errorf("read notification config %s: %w", path, loadErr)
+		logError("notify.config", "stored notification config could not be read; the shipped defaults are live for this process and every save is REFUSED until the file is repaired or removed",
+			map[string]any{"error": loadErr.Error(), "path": path})
+	case loadErr == nil && len(b) > 0:
+		if uerr := json.Unmarshal(b, &s.cfg); uerr != nil {
+			// A config we cannot decode is unknown for the same reason. Fall
+			// back to the shipped defaults in memory, and refuse to write them
+			// over the file.
+			s.cfg = notify.DefaultChannelConfig()
+			s.unreadable = fmt.Errorf("decode notification config %s: %w", path, uerr)
+			logError("notify.config", "stored notification config could not be parsed; the shipped defaults are live for this process and every save is REFUSED until the file is repaired or removed",
+				map[string]any{"error": uerr.Error(), "path": path})
+			break
+		}
 		if dec, derr := mapNotify(s.cfg, openFn(s.vault())); derr != nil {
 			logError("notify.config", "decrypt secrets", errf(derr))
 		} else {
@@ -78,11 +117,12 @@ func newNotifyConfigStore(path string, srv *server) *notifyConfigStore {
 				logError("notify.config", "env channel migration persist failed (will retry next boot)", errf(err))
 			}
 		}
-	} else {
-		// First run (no stored config): seed Slack/PagerDuty from the legacy
-		// env wiring so an existing env-driven deployment keeps working, then
-		// becomes editable from the admin UI. (SMTP/Twilio predate this and have
-		// always defaulted off; ntfy rides the shared migration below.)
+	default:
+		// First run (an absent key, or a stored blob with nothing in it): seed
+		// Slack/PagerDuty from the legacy env wiring so an existing env-driven
+		// deployment keeps working, then becomes editable from the admin UI.
+		// (SMTP/Twilio predate this and have always defaulted off; ntfy rides
+		// the shared migration below.)
 		s.seedFromEnv()
 		if err := s.save(); err != nil {
 			// Boot-time seed: log loudly, but a failed seed must not stop the
@@ -295,6 +335,13 @@ func (s *notifyConfigStore) vault() *vault.Vault {
 // not a class fix. TestNoVoidSaveFuncs (architecture_guards_test.go) now covers
 // the `save()` spelling too.
 func (s *notifyConfigStore) save() error {
+	if s.unreadable != nil {
+		// The file's real contents are unknown, so a save would not update it —
+		// it would REPLACE seven channels and their sealed credentials with
+		// whatever this process holds, which after such a load is the shipped
+		// defaults. The caller reports the failure to the operator.
+		return fmt.Errorf("%w: %w", errNotifyConfigUnreadable, s.unreadable)
+	}
 	// Encrypt secrets at rest (platform DEK); the in-memory s.cfg stays plaintext.
 	c, err := mapNotify(s.cfg, sealFn(s.vault()))
 	if err != nil {

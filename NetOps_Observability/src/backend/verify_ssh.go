@@ -109,6 +109,12 @@ func (s *server) verifySSHRun(ctx context.Context, dev models.Device, cred verif
 	// later mismatch refused (possible MITM).
 	hostKeyCB := func(_ string, _ net.Addr, key ssh.PublicKey) error {
 		fp := sshFingerprint(key)
+		if uerr := s.sshHosts.unreadable(); uerr != nil {
+			// Not a mismatch — we could not read the pins at all, so there is
+			// nothing to compare this key against. Say that, rather than accuse
+			// the device.
+			return fmt.Errorf("host key for %s cannot be verified: %w", dev.Address, uerr)
+		}
 		if _, okHost := s.sshHosts.check(hostOnly(dev.Address), fp); !okHost {
 			return fmt.Errorf("host key mismatch for %s (possible MITM) — recorded fingerprint differs", dev.Address)
 		}

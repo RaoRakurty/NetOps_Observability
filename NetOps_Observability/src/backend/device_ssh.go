@@ -36,6 +36,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"netops/backend/internal/platformdb"
@@ -71,6 +72,18 @@ type sshHostStore struct {
 	path   string
 	hosts  map[string]string // address -> "SHA256:base64" fingerprint
 	loaded bool
+	// loadErr is set when the pin file EXISTS but its contents could not be
+	// established — an I/O or permission failure, or JSON we could not parse.
+	// It is NOT set for an absent file, which is a genuine first run.
+	//
+	// This one FAILS CLOSED rather than merely refusing to write. Folding an
+	// unreadable pin file into "no pins yet" re-armed trust-on-first-use for
+	// EVERY device at once: whatever key answered next was accepted as the
+	// first one seen and then written over the pins nobody read. That is a
+	// silent MITM window, not a data-loss inconvenience. While this is set we
+	// cannot verify a host key against what was pinned, so we do not pretend to
+	// — every connection is refused and nothing is written.
+	loadErr error
 }
 
 func newSSHHostStore(path string) *sshHostStore {
@@ -78,19 +91,58 @@ func newSSHHostStore(path string) *sshHostStore {
 		path = "/data/ssh_known_hosts.json"
 	}
 	s := &sshHostStore{path: path, hosts: map[string]string{}}
-	if b, err := platformdb.Load(path); err == nil {
-		_ = json.Unmarshal(b, &s.hosts) // best-effort: corrupt state file starts from defaults
+	b, err := platformdb.Load(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Genuine first run: nothing has been pinned yet, so TOFU is correct.
+	case err != nil:
+		s.loadErr = fmt.Errorf("the SSH host-key pin file could not be read: %w", err)
+		logError("device-ssh", "SSH host-key pins could not be read; trust-on-first-use CANNOT be verified, so every SSH session is refused until the file is repaired or removed",
+			map[string]any{"error": err.Error(), "path": path})
+	case len(b) == 0:
+		// Present but empty: nothing pinned yet, nothing broken.
+	default:
+		// Decode into a SEPARATE map: unmarshalling straight into s.hosts leaves
+		// it half-filled when the document is only partly valid, and a missing
+		// pin is exactly what re-arms TOFU for that address.
+		var hosts map[string]string
+		if uerr := json.Unmarshal(b, &hosts); uerr != nil {
+			s.loadErr = fmt.Errorf("the SSH host-key pin file could not be parsed: %w", uerr)
+			logError("device-ssh", "SSH host-key pins could not be parsed; trust-on-first-use CANNOT be verified, so every SSH session is refused until the file is repaired or removed",
+				map[string]any{"error": uerr.Error(), "path": path})
+		} else if hosts != nil {
+			s.hosts = hosts
+		}
 	}
 	s.loaded = true
 	return s
 }
 
-// check implements TOFU. Returns (firstSeen, ok): ok=false means a recorded
-// fingerprint exists and DIFFERS (refuse the connection). firstSeen=true means
-// the key was just recorded (surface it to the operator).
+// unreadable reports why the pin file could not be read, or nil. A host-key
+// callback consults it so the operator is told the truth — the pins are
+// unreadable — rather than the misleading "recorded fingerprint differs".
+func (s *sshHostStore) unreadable() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loadErr
+}
+
+// check implements TOFU. Returns (firstSeen, ok): ok=false means the connection
+// must be refused — either a recorded fingerprint exists and DIFFERS, or the pin
+// file could not be read at all, in which case there is nothing to check against
+// and nothing is recorded either. firstSeen=true means the key was just recorded
+// (surface it to the operator).
 func (s *sshHostStore) check(addr, fp string) (firstSeen, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.loadErr != nil {
+		// FAIL CLOSED. We do not know what was pinned for this address, so we
+		// can neither confirm this key nor safely record it as the first one.
+		return false, false
+	}
 	prev, exists := s.hosts[addr]
 	if exists {
 		return false, prev == fp
@@ -311,6 +363,12 @@ func (s *server) bridgeSSH(sock *ws.Conn, claims jwtClaims, tenant string, cross
 	var hostFP string
 	hostKeyCB := func(_ string, _ net.Addr, key ssh.PublicKey) error {
 		hostFP = sshFingerprint(key)
+		if uerr := s.sshHosts.unreadable(); uerr != nil {
+			// Not a mismatch — we could not read the pins at all, so there is
+			// nothing to compare this key against. Say that, rather than accuse
+			// the device.
+			return fmt.Errorf("host key for %s cannot be verified: %w", dev.Address, uerr)
+		}
 		first, okHost := s.sshHosts.check(dev.Address, hostFP)
 		if !okHost {
 			return fmt.Errorf("host key mismatch for %s (possible MITM) — recorded fingerprint differs", dev.Address)

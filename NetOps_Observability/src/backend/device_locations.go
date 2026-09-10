@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"netops/backend/internal/discovery"
 	"netops/backend/internal/platformdb"
@@ -73,14 +74,29 @@ func newDeviceLocationStore(path string) (*deviceLocationStore, error) {
 	return s, nil
 }
 
+// load reads the stored annotations. THREE states, never two: the store did not
+// answer (an error the caller turns into a refusal to boot) / it answered with
+// nothing (an absent key or an empty blob — nobody has placed a device yet) /
+// loaded.
+//
+// An unreadable file used to be folded into "absent". The store then started
+// EMPTY, every operator-placed device fell off the map with no reason given, and
+// the first placement renamed a temp file over the file it never read. Coordinates
+// somebody typed are not derivable from anything, so this is an error — the same
+// answer an unparsable file has always got here.
 func (s *deviceLocationStore) load() error {
 	b, err := platformdb.Load(s.path)
-	if err != nil {
-		return nil // absent store → empty
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil // absent store → empty, and that is the normal first boot
+	case err != nil:
+		return fmt.Errorf("read device locations %s: %w", s.path, err)
+	case len(b) == 0:
+		return nil // present but empty: nothing stored yet, nothing broken
 	}
 	var list []DeviceLocation
 	if err := json.Unmarshal(b, &list); err != nil {
-		return err
+		return fmt.Errorf("decode device locations %s: %w", s.path, err)
 	}
 	for _, l := range list {
 		s.items[l.Token] = l
