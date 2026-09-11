@@ -384,13 +384,30 @@ func proxyDialAddr(raw string) string {
 	if raw == "" {
 		return ""
 	}
+	// Two states, kept apart on purpose (CLAUDE.md §10). A parse ERROR and a
+	// parsed URL carrying no host are different facts, and folding them into one
+	// branch is what the silent-failure guard refuses: the reader cannot tell a
+	// malformed setting from one that simply names no host. Both end in "this is
+	// not a dial target", but they are reached separately and say so.
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		// No scheme: the stdlib retries it as http://host:port, so we do too.
+	switch {
+	case err != nil:
+		// Not a URL. The stdlib retries a bare host:port as http://host:port,
+		// so we do too rather than calling a legal setting malformed.
 		u, err = url.Parse("http://" + raw)
-		if err != nil || u.Host == "" {
+		if err != nil {
+			return "" // genuinely unparseable in either spelling
+		}
+	case u.Host == "":
+		// Parsed, but scheme-less ("proxy.example:3128" parses with an empty
+		// Host), so retry it the way the stdlib would.
+		u, err = url.Parse("http://" + raw)
+		if err != nil {
 			return ""
 		}
+	}
+	if u.Host == "" {
+		return "" // parsed both ways and still names no host
 	}
 	host := u.Hostname()
 	if host == "" {
