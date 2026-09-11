@@ -180,6 +180,7 @@ most likely to bite:
 | **Per-lane ingest credentials** replaced the shared `INGEST_TOKEN` | The shared token now opens no lane |
 | **ClickHouse `merge_tree` thresholds rescaled** | Without this the server refuses to start |
 | **Redpanda, Redis and Prometheus are gone** | Replaced by Apache Kafka 4.1, Valkey 8 and VictoriaMetrics self-scraping. They will not return |
+| **A tenant sign-in URL (`/t/{slug}`, `/org/{id}`) signs in that tenant's accounts only** | Platform and `global`-tenant accounts are refused there. Sign in at the installation's own address through a provider no tenant owns |
 
 ---
 

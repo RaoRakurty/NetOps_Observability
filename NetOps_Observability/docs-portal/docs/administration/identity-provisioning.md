@@ -26,7 +26,7 @@ One code path handles all three provider types, so OIDC, LDAP and TACACS+ behave
 
 Two of those rules carry more weight than the rest.
 
-**A claim never moves a tenant.** The tenant a person lands in is decided by the provider registration they signed in through, and it is written once. On every later sign-in the stored tenant is used, so a changed group, a changed directory or a re-registered provider cannot migrate an existing account, or its data, into a different tenant.
+**A claim never moves a tenant.** The tenant a person lands in is decided by the provider registration they signed in through, and it is written once. On every later sign-in the stored tenant is used, so a changed group, a changed directory or a re-registered provider cannot migrate an existing account, or its data, into a different tenant. A sign-in that starts at a tenant URL goes further and refuses the account outright when it belongs to another tenant, to the `global` tenant, or to no tenant, so nothing about the account is rewritten on the way through. Platform administrators therefore sign in at the installation's main address, not at a customer's tenant link. See [Set up a per-tenant sign-in URL](/administration/tenant-sign-in).
 
 **A deactivated account is never resurrected.** Setting an account to `disabled` is the deprovisioning action, and a later sign-in through the provider does not undo it. The refresh leaves status alone and the sign-in path refuses the account, so the disable holds until an administrator lifts it.
 
@@ -56,9 +56,10 @@ A tenant can be served by several registrations at once. Local accounts always s
 | Upstream providers behind OIDC | Several. The **Providers** list renders one button per broker alias, and the alias selects the upstream identity provider. |
 | Tenant for those aliases | All of them land in the OIDC registration's single default tenant. |
 | Who may register one | The platform administrator only. |
-| What the sign-in page shows | Every enabled provider, to every visitor. |
+| What the main sign-in page shows | Every enabled provider, to every visitor. |
+| What a tenant sign-in URL shows | That tenant's providers, plus any provider no tenant owns. |
 
-The last row is worth stating plainly. `GET /api/auth/methods` answers before anyone has signed in, so it cannot know which tenant the visitor belongs to, and the sign-in page therefore lists all enabled providers to everyone. Per-tenant sign-in URLs and home-realm discovery, so a tenant sees only its own providers, are planned (tracker 276). Mapping a group or claim value to a tenant, so one corporate provider can serve many tenants, is planned (tracker 275).
+The two rows above are worth stating plainly. `GET /api/auth/methods` answers before anyone has signed in, so the main sign-in page cannot know which tenant the visitor belongs to and lists all enabled providers to everyone. A tenant sign-in URL, `/t/{slug}` or `/org/{id}`, does name a tenant, so it shows only that tenant's doors and signs in only that tenant's accounts. Mapping a group or claim value to a tenant, so one corporate provider can serve many tenants, is planned (tracker 275).
 
 A separate provider registration for time-bound higher access, alongside the standing one a person signs in with daily, is in progress and is not in this release.
 

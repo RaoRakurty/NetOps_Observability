@@ -10,6 +10,8 @@ sidebar_position: 6
 
 Every tenant has its own sign-in link. Someone who opens it sees the tenant named on the page and only that tenant's identity providers, and an SSO sign-in that arrives on any other tenant's callback URL is refused.
 
+The link is for that tenant's own users. A platform administrator, and any account in the `global` tenant, signs in at the installation's own address instead, `https://correlix.example.com/`. A tenant link refuses an account that does not belong to the tenant it names.
+
 Two link shapes exist:
 
 | Shape | Example | Use it for |
@@ -43,22 +45,23 @@ Custom subdomains (`acme.correlix.example.com`) and customer domains are reserve
    | Redirect URI (rename-proof) | Register it as well if the tenant slug may change later. |
 
 5. Hand those values to the identity provider team and have them register the redirect URI.
-6. Open the tenant sign-in URL in a private window and sign in through the new button.
+6. Open the tenant sign-in URL in a private window and sign in through the new button, with an account that belongs to this tenant. Your own platform administrator account is refused here, because it does not belong to the tenant the URL names.
 
 ## Result
 
 The tenant sign-in page names the tenant and lists that tenant's providers plus any provider left unbound, which is the shared front door for the whole installation. Other tenants' providers are not on the page and cannot be reached by typing an identifier.
 
-Four refusals protect the callback. Each one is written to the audit log, and none of them creates a session:
+Five refusals protect the callback. Each one is written to the audit log, and none of them creates a session:
 
 - a sign-in link naming a tenant that does not exist, or one that is suspended, answers `404`, and both answer identically;
 - a provider that is not registered for the tenant in the URL is refused by name on that tenant's own page;
 - an authorization code delivered to another tenant's callback URL is refused, because the browser holds a signed candidate for the tenant it started at;
-- a provider that no tenant owns keeps the shared `/api/auth/sso/callback` address and has no per-tenant URL at all.
+- a provider that no tenant owns keeps the shared `/api/auth/sso/callback` address and has no per-tenant URL at all;
+- an account the identity provider names that belongs to another tenant, to the `global` tenant, or to no tenant is refused, whatever the provider says about it. The account keeps its role and its authentication source. The wording is identical to the second refusal above, on purpose: a distinct message would let a tenant administrator test whether a username exists elsewhere on the installation, so the real reason goes only to the audit log.
 
 A deep link keeps its page. Someone who opens `/t/acme/#/incidents/9f21` unauthenticated lands back on that incident after signing in.
 
-An account created on first sign-in through a bound provider belongs to that provider's tenant. Sign-in never moves an account that already exists.
+An account created on first sign-in through a bound provider belongs to that provider's tenant. Sign-in never moves an account that already exists, and never signs one in from outside the tenant in the URL.
 
 ## Related
 

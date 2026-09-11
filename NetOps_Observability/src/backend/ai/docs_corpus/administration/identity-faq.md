@@ -20,9 +20,10 @@ Each registration pins exactly one tenant, through its **Default tenant** field,
 
 | Limit | Status |
 | --- | --- |
-| The sign-in page lists every enabled provider to every visitor | Shipped behaviour. The page is answered before sign-in, so it cannot know the visitor's tenant. |
+| The main sign-in page lists every enabled provider to every visitor | Shipped behaviour. The page is answered before sign-in, so it cannot know the visitor's tenant. |
 | Only the platform administrator may register a provider | Shipped behaviour. Provider configuration is platform-global plumbing. |
-| Per-tenant sign-in URLs and home-realm discovery | **Planned**, tracker 276. |
+| A tenant sign-in URL lists only that tenant's providers, and signs in only that tenant's accounts | Shipped behaviour. `/t/{slug}` and `/org/{id}` name the tenant. An account in another tenant, in the `global` tenant, or in no tenant is refused there, so platform staff sign in at the main address instead. See [Set up a per-tenant sign-in URL](/administration/tenant-sign-in). |
+| Home-realm discovery from a typed identifier | Not built. Correlix does not route a visitor to a provider by their email domain. |
 | Mapping a claim value to a tenant, so one provider serves many tenants | **Planned**, tracker 275. |
 
 ## How fine-grained is the access model?
@@ -65,7 +66,7 @@ An ID token is accepted after its signature verifies against the provider's publ
 
 The claim **names** are fixed in the code. What an administrator configures is the **values** that map onto a role: the **Admin roles** and **Operator roles** lists, and the accepted assurance values. A claim arriving anywhere other than the verified ID token, such as a request body, a header or a query parameter, is never read as identity.
 
-Two guards sit behind the mapping. A claim cannot move an existing account into another tenant, because the stored tenant is used on every refresh. A claim cannot silently grant platform ownership, because the mapped role passes through a guard before it is written.
+Three guards sit behind the mapping. A claim cannot move an existing account into another tenant, because the stored tenant is used on every refresh. A claim cannot silently grant platform ownership, because the mapped role passes through a guard before it is written. A sign-in that starts at a tenant URL cannot reach an account outside that tenant at all: the store refuses it before the refresh is written, so the account keeps its role and its authentication source.
 
 ## What time-to-live applies to a token, and to elevated access?
 

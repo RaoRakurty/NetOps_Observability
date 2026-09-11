@@ -55,6 +55,18 @@ Cause. The lockout tracker is full of live locks, which happens under a username
 
 Solution. This is the deliberate response, and it clears itself as locks expire. Refusing sign-ins loudly is the lesser failure: the alternative is silently not counting failures, which would disable brute-force protection for every account while the console still reported lockout as enabled.
 
+**Error: "… is not an identity provider for … Ask your administrator for this organization's sign-in link."**
+
+Causes. Two, and the message is the same for both so that it never reveals which one applies. Either the provider is not registered for the tenant in the URL, or the account the provider named does not belong to that tenant. A platform administrator account, and any account in the `global` tenant, hits the second case on every tenant link.
+
+Solutions.
+
+1. If you are platform staff, sign in at the installation's own address, `https://<host>/`, through a provider that no tenant owns. A tenant link signs in that tenant's own accounts and nothing else.
+2. If you are a user of the tenant, ask the administrator whether that provider is registered for your tenant, under **Administration → Authentication → Single Sign-On → Identity Providers**.
+3. An administrator reads the real reason in the [audit log](/administration/audit-log). The refused sign-in is recorded there with the provider alias and the tenant, and it creates no session.
+
+See [Set up a per-tenant sign-in URL](/administration/tenant-sign-in).
+
 **Message: "You were signed out due to inactivity" or "Your session reached its time limit"**
 
 Cause. Not an error. Sessions carry an idle timeout, 30 minutes by default, and an absolute lifetime, 12 hours by default.

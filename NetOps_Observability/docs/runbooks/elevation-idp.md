@@ -23,13 +23,22 @@ Correlix supports that as a first-class **access model** on each connection:
 An elevation connection **cannot**:
 
 1. **create an account** — an unknown subject is refused with
-   *"sign in through your standing provider first"*;
+   *"sign in through your standing provider first"* on an unbound door. On a
+   TENANT-BOUND door (`/t/{slug}/…`, `/org/{id}/…`) the refusal is instead the
+   generic *"… is not an identity provider for …"* wording, byte-identical to
+   the one a mis-registered provider gets, so the pair cannot be used as a
+   cross-tenant username-existence oracle. The real reason is in the audit
+   trail;
 2. **move a tenant** — the grant is stamped with the account's own tenant; a
    claim naming a tenant is not consulted and cannot be;
 3. **change a standing role** — `UpsertFederated`/`MergeFederated` are not on
-   this path at all, so the stored account is read, never written.
+   this path at all, so the stored account is read, never written;
+4. **reach outside the realm in the URL** — an elevation door opened at a
+   tenant URL grants nothing to an account in another tenant, in the `global`
+   tenant, or in no tenant. Platform staff elevate through an unbound door at
+   the installation's own address, never through a customer's tenant link.
 
-Those three refusals are the point: the blast radius of the elevation IdP is one
+Those four refusals are the point: the blast radius of the elevation IdP is one
 expiring grant, not an identity. `FEDERATION_ALLOW_PLATFORM_OWNER` (SR-025)
 still applies to the elevated role, so an elevation IdP is not a back door to
 platform ownership either.
@@ -252,8 +261,9 @@ The lifecycle events themselves are on the same trail, under
 
 1. Sign in through the **standing** provider once, so the account exists.
 2. Sign out. Sign in through the elevation door with an account the standing
-   provider has never seen → expect the refusal naming the standing provider,
-   and **no** new account in the user store.
+   provider has never seen → on an unbound door expect the refusal naming the
+   standing provider; on a tenant-bound door expect the generic realm refusal
+   instead. Either way, **no** new account in the user store.
 3. Sign in through the elevation door as the account from step 1 → the account
    menu shows *Elevated · &lt;role&gt; · N m left*.
 4. Confirm the account's tenant and standing role are unchanged:

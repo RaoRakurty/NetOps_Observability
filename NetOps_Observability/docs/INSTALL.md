@@ -120,6 +120,12 @@ the ordinary sign-in page, which then asks the api
 permanent identifier and to arm a signed, HttpOnly candidate cookie. The slug is
 never trusted for anything but deciding which sign-in doors to show.
 
+A tenant link signs in **that tenant's accounts only**. An account in another
+tenant, in the `global` tenant, or in no tenant is refused there, so your own
+platform-administrator account does not sign in at `/t/<slug>`. Use the
+installation's own address, `https://<host>/`, and a provider no tenant owns
+(or `GET /api/auth/sso/login?idp=<alias>` directly).
+
 The SSO sub-paths are the exception and DO reach the api: an identity provider
 redirects the browser to `/t/<slug>/sso/<provider>/callback`, so
 `deployment/docker/nginx/default.conf` carries one narrow regex location that

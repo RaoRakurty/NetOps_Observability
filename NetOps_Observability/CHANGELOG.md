@@ -51,6 +51,7 @@ Anyone upgrading across this window needs each of these. Ordered oldest first; s
 | 09-02 | Teams/SNS notification channels | One-time env-seed migration moves env-configured webhooks into managed channel config |
 | 09-02 | **Go toolchain 1.25.13 → 1.26.8** | Build-environment requirement only |
 | 09-03 | On stacks already running TLS, the findings lane was unwritable | `bootstrap-opensearch.sh` is now TLS-aware and the sole owner of index templates — re-run it |
+| 09-08 | **A tenant-bound sign-in URL (`/t/{slug}`, `/org/{id}`) now refuses an account that does not belong to that realm** — platform and `global`-tenant accounts included | Platform staff sign in at the installation's own address through a provider no tenant owns, or at `/api/auth/sso/login?idp=<alias>`. A customer's tenant link no longer signs them in, and neither does an elevation door on one |
 
 ### Security
 
@@ -66,7 +67,9 @@ Anyone upgrading across this window needs each of these. Ordered oldest first; s
   formatters (critical); a session JWT carried in a WebSocket URL; SNMPv3 poll responses trusted
   before HMAC verification; SNMP trap forgery; a cross-tenant tombstone in `find_merges`; an OIDC
   bearer platform-owner self-elevation; an `/api/graphql` RBAC bypass where the query was ignored
-  entirely; and a legacy import that clobbered live RLS tables on every boot.
+  entirely; a tenant-bound SSO URL that signed in another tenant's account, up to and including the
+  platform owner's, and rewrote its role and auth source on the way through; and a legacy import
+  that clobbered live RLS tables on every boot.
 - Tenant isolation tightened across topology metric bundles, correlation intel in the AI data path,
   scheduled-report renderers and flow attribution — and made structural: a new scoped route now
   requires a real isolation test to merge.
