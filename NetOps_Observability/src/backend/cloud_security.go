@@ -110,7 +110,7 @@ SELECT `+chschema.ISO("ts")+`         AS ts_s,
 // move), keyed by the same signal_id; the read must show the CURRENT state of
 // the incident, so argMax(…, ts) picks the newest emission (the inverse of
 // cloudChangesSQL, where the FIRST observation is the truth).
-func cloudProviderEventsSQL(windowHours int, limit int, scope string) string {
+func cloudProviderEventsSQL(windowHours int, limit int, pred, scope string) string {
 	return fmt.Sprintf(`
 SELECT `+chschema.ISO("max(ts)")+`            AS ts_s,
        toString(signal_id)             AS signal_id_s,
@@ -128,13 +128,13 @@ SELECT `+chschema.ISO("max(ts)")+`            AS ts_s,
          FROM netops.corr_signals
         WHERE source = 'cloud'
           AND kind IN ('provider_event')
-          AND ts > now() - INTERVAL %d HOUR
+          AND ts > now() - INTERVAL %d HOUR%s
   )
  GROUP BY signal_id
  ORDER BY ts_s DESC, signal_id_s DESC
  LIMIT %d
  SETTINGS tenant_scope = '%s'
- FORMAT JSONEachRow`, windowHours, limit, scope)
+ FORMAT JSONEachRow`, windowHours, pred, limit, scope)
 }
 
 // cloudSeamTelemetrySQL — the LATEST state per seam endpoint plus how many
@@ -151,7 +151,7 @@ SELECT `+chschema.ISO("max(ts)")+`            AS ts_s,
 //
 // Alias resolution does not touch a qualified name, so the filter binds the raw
 // column and the projected names (the wire contract) stay as they are.
-func cloudSeamTelemetrySQL(windowHours int, limit int, scope string) string {
+func cloudSeamTelemetrySQL(windowHours int, limit int, pred, scope string) string {
 	return fmt.Sprintf(`
 SELECT entity_id                      AS entity_id,
        argMax(kind, ts)               AS kind,
@@ -163,12 +163,12 @@ SELECT entity_id                      AS entity_id,
   FROM netops.corr_signals AS s
  WHERE s.source = 'cloud'
    AND s.kind IN (%s)
-   AND s.ts > now() - INTERVAL %d HOUR
+   AND s.ts > now() - INTERVAL %d HOUR%s
  GROUP BY entity_id
  ORDER BY ts_s DESC, entity_id DESC
  LIMIT %d
  SETTINGS tenant_scope = '%s'
- FORMAT JSONEachRow`, sqlKindList(seamTelemetryKinds), windowHours, limit, scope)
+ FORMAT JSONEachRow`, sqlKindList(seamTelemetryKinds), windowHours, pred, limit, scope)
 }
 
 // ── wire shapes ──────────────────────────────────────────────────────────────
@@ -296,8 +296,9 @@ func (s *server) handleCloudSecurity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	inv := s.cloudResourceIndex(r)
+	vis := s.cloudVisibilityFor(r)
 	rows := chJSONRows[chSignalRow](cloudSecuritySQL(
-		window, cloud.AppFilterSQL(app), limit, cloud.SafeScopeLiteral(chTenantScope(r))))
+		window, cloud.AppFilterSQL(app)+vis.pred(), limit, vis.chScope(r)))
 	laneCounts := map[string]int{"waf": 0, "lb": 0, "dns": 0}
 	out := make([]cloudSecurityFinding, 0, len(rows))
 	for _, row := range rows {
@@ -353,8 +354,9 @@ func (s *server) handleCloudProviderEvents(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, werr)
 		return
 	}
+	vis := s.cloudVisibilityFor(r)
 	rows := chJSONRows[chSignalRow](cloudProviderEventsSQL(
-		window, limit, cloud.SafeScopeLiteral(chTenantScope(r))))
+		window, limit, vis.pred(), vis.chScope(r)))
 	out := make([]cloudProviderEvent, 0, len(rows))
 	for _, row := range rows {
 		a := cloud.ParseAttrs(row.Attrs)
@@ -388,8 +390,9 @@ func (s *server) handleCloudSeamTelemetry(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, werr)
 		return
 	}
+	vis := s.cloudVisibilityFor(r)
 	rows := chJSONRows[chSeamGroupRow](cloudSeamTelemetrySQL(
-		window, limit, cloud.SafeScopeLiteral(chTenantScope(r))))
+		window, limit, vis.pred(), vis.chScope(r)))
 	out := make([]cloudSeamTelemetryRow, 0, len(rows))
 	for _, row := range rows {
 		a := cloud.ParseAttrs(row.Attrs)

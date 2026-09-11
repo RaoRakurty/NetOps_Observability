@@ -43,6 +43,11 @@ const (
 // assumption (#105 — the fixtures dir is poller-rewritten now; hard-coding
 // "fixture" in the UI understated a live deployment).
 type ConnectorInfo struct {
+	// TenantID is the owner, stamped by the store on read. It is NOT part of the
+	// wire shape (the surface serves inventory provenance, not tenancy) — it
+	// exists so a cross-tenant listing can still be filtered by owner, which the
+	// operator-visibility restriction needs and the row itself could not express.
+	TenantID      string    `json:"-"`
 	Provider      Provider  `json:"provider"`
 	AccountID     string    `json:"account_id"`
 	Kind          string    `json:"kind"` // "live" | "fixture"

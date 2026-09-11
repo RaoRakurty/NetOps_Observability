@@ -251,7 +251,7 @@ func TestUndeterminedFrequencyShadowingAliasStillFailsLive(t *testing.T) {
 func TestCloudReadsWithShadowedAliasesAreAcceptedLive(t *testing.T) {
 	container := undetLiveContainer(t)
 	cases := []struct{ name, sql string }{
-		{"cloud seam telemetry", cloudSeamTelemetrySQL(24, 5, "__all__")},
+		{"cloud seam telemetry", cloudSeamTelemetrySQL(24, 5, "", "__all__")},
 		{"cloud costs", cloud.CostsSQL("2026-08-01", "2026-08-31", "", 5, "__all__")},
 	}
 	for _, tc := range cases {

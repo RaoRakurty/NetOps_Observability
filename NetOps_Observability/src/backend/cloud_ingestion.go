@@ -116,14 +116,17 @@ func (s *server) handleCloudIngestion(w http.ResponseWriter, r *http.Request) {
 	// the DB too). Provider '' = the producer didn't stamp one.
 	byProvKind := map[string]map[string]kindStat{} // provider → kind → stat
 	globalKind := map[string]kindStat{}            // any provider
+	// Volume and last-seen are facts about a tenant's own collection, so the
+	// matrix obeys the operator-visibility restriction like the signals it counts.
+	vis := s.cloudVisibilityFor(r)
 	sql := fmt.Sprintf(`
 SELECT JSONExtractString(attrs,'provider') AS prov, kind,
        count() AS volume, `+chschema.ISO("max(ts)")+` AS last_seen
   FROM netops.corr_signals
- WHERE source = 'cloud' AND ts > now() - INTERVAL %d HOUR
+ WHERE source = 'cloud' AND ts > now() - INTERVAL %d HOUR%s
  GROUP BY prov, kind
  SETTINGS tenant_scope = '%s'
- FORMAT TSV`, int(ingestStaleWindow/time.Hour), chTenantScope(r))
+ FORMAT TSV`, int(ingestStaleWindow/time.Hour), vis.pred(), vis.chScope(r))
 	for _, line := range chQuery(sql) {
 		f := strings.Split(line, "\t")
 		if len(f) < 4 {

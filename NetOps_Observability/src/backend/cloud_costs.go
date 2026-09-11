@@ -59,9 +59,16 @@ func (s *server) handleCloudCosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := cloud.ClampCostLimit(q.Get("limit"))
+	// The operator-visibility restriction. A cost row is what the provider BILLED
+	// this tenant, by account and by service — commercially sensitive on its own,
+	// and the row does not have to be read to be revealing: the account id alone
+	// names the customer's estate. A restricted tenant is dropped from the
+	// operator's Global view by tenant_id, and an operator scoped INTO one reads
+	// at a scope no row carries.
+	vis := s.cloudVisibilityFor(r)
 	rows := chJSONRows[cloud.CostRow](cloud.CostsSQL(
-		from, to, cloud.CostFilterSQL(provider, account, service), limit,
-		cloud.SafeScopeLiteral(chTenantScope(r))))
+		from, to, cloud.CostFilterSQL(provider, account, service)+vis.pred(), limit,
+		vis.chScope(r)))
 	if rows == nil {
 		rows = []cloud.CostRow{}
 	}

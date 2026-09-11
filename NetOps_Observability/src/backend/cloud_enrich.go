@@ -102,7 +102,10 @@ func vmQueryBy(ctx context.Context, q, keyLabel string) map[string]float64 {
 // cloudLiveStates builds the live view for every resource: provider verdict
 // first (the cloud itself saying the instance is impaired outranks our guesses),
 // then our active checks, then the workload's own health lane.
-func (s *server) cloudLiveStates(ctx context.Context, scope string, res []cloud.CloudResource) map[string]cloudLiveState {
+// pred is the operator-visibility exclusion for the active-probe read below; the
+// resource slice is already filtered by the caller, so this closes the second
+// door: an excluded tenant's probe failures must not be counted either.
+func (s *server) cloudLiveStates(ctx context.Context, scope, pred string, res []cloud.CloudResource) map[string]cloudLiveState {
 	out := make(map[string]cloudLiveState, len(res))
 
 	// The metric lane's 5-min provider resolution means an instant query can miss
@@ -124,10 +127,10 @@ func (s *server) cloudLiveStates(ctx context.Context, scope string, res []cloud.
 SELECT entity_id, count() AS n
   FROM netops.corr_signals
  WHERE modality_class = 'active_probe' AND severity IN ('high','crit')
-   AND ts > now() - INTERVAL 15 MINUTE
+   AND ts > now() - INTERVAL 15 MINUTE%s
  GROUP BY entity_id
  SETTINGS tenant_scope = '%s'
- FORMAT TSV`, scope)
+ FORMAT TSV`, pred, scope)
 	for _, line := range chQuery(sql) {
 		f := strings.Split(line, "\t")
 		if len(f) < 2 {

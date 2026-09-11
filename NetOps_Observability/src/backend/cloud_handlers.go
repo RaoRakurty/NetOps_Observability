@@ -26,6 +26,168 @@ import (
 	"netops/backend/internal/chschema"
 )
 
+// ── the operator-visibility restriction on this plane ───────────────────────
+//
+// The cloud plane is the customer's provider estate: its resources and their
+// names, the accounts they sit in, the flow pairs between them, the provider's
+// own change and security events, and the daily figures the provider BILLED that
+// tenant. A cost line is commercially sensitive on its own — it is what the
+// customer spends, by account and by service.
+//
+// A tenant that has switched the restriction on is invisible to the platform
+// owner in logs, flows, metrics, tunnels, igpmon and the BMP feed. It must be
+// invisible here too, and it has to be invisible through TWO storage models at
+// once: the inventory STORE, which is asked for a (tenant, cross) pair, and
+// ClickHouse, whose row policies enforce on a tenant_scope SETTING. Neither can
+// express the rule alone. The store has no notion of a tenant the operator may
+// not read, and the ClickHouse policies unlock everything under '__all__' by
+// design — that is what the platform owner reads the Global view with. So the
+// rule is resolved ONCE per request, from the same operatorTelemetryRestriction
+// resolver the logs path uses, and each half is handed to the storage model in
+// the form that model understands.
+//
+// It lives in this file rather than its own because the §2 root-package ceiling
+// counts FILES: a new file here is a new domain in the wrong place, and this is
+// not a new domain — it is the cloud read plane's own rule.
+
+const (
+	// cloudRestrictedScope is the tenant a DENIED store read is answered under.
+	// It is not a tenant: no row anywhere carries it, so every tenant-keyed store
+	// returns nothing for it and the caller gets a correctly shaped, empty view.
+	// A resource by id answers 404, which is the same answer an id that does not
+	// exist gets — never a 403, which would confirm the tenant has an estate.
+	// This is the same sentinel-scope trick the DEM lane uses.
+	cloudRestrictedScope = "__netops_operator_restricted__"
+
+	// cloudDeniedCHScope is the ClickHouse tenant_scope a DENIED read runs at.
+	// The cloud tables all carry the STRICT row policy
+	// (tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'),
+	// so a scope no row carries matches nothing — including untagged rows, which
+	// the strict policy does not share. It is the same sentinel chTenantScope
+	// already fails closed to for a request with no claims.
+	cloudDeniedCHScope = "__none__"
+)
+
+// cloudVisibility is the restriction resolved for one request. The two fields are
+// the two halves of the rule: deny is the operator scoped INTO a restricted
+// tenant (read nothing), exclude is the set of restricted tenants to drop from
+// the operator's cross-tenant Global view.
+type cloudVisibility struct {
+	deny    bool
+	exclude []string
+}
+
+// cloudVisibilityFor resolves the rule for the request's principal. It is a
+// no-op for every tenant's own users and for a platform with nothing restricted,
+// which is the default, so ordinary deployments are unaffected.
+func (s *server) cloudVisibilityFor(r *http.Request) cloudVisibility {
+	claims, _ := userFrom(r.Context())
+	tenant, cross := principalTenant(claims)
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
+	return cloudVisibility{deny: deny, exclude: exclude}
+}
+
+// storeScope narrows the (tenant, cross) pair a STORE read is issued with. A
+// denied caller is scoped to a tenant that owns nothing; everyone else is
+// unchanged.
+func (v cloudVisibility) storeScope(tenant string, cross bool) (string, bool) {
+	if v.deny {
+		return cloudRestrictedScope, false
+	}
+	return tenant, cross
+}
+
+// chScope is the ClickHouse tenant_scope literal for this read.
+func (v cloudVisibility) chScope(r *http.Request) string {
+	if v.deny {
+		return cloudDeniedCHScope
+	}
+	return cloud.SafeScopeLiteral(chTenantScope(r))
+}
+
+// pred is the SQL exclusion predicate for the operator's Global view, as a
+// leading-AND fragment ready to append to a WHERE clause. Empty for everyone
+// else. The row policies cannot express this — '__all__' unlocks every tenant by
+// design — so the exclusion has to be a predicate on the row's own tenant_id, the
+// same column the logs path names in its must_not clause.
+func (v cloudVisibility) pred() string {
+	if len(v.exclude) == 0 {
+		return ""
+	}
+	return " AND tenant_id NOT IN (" + sqlInList(v.exclude) + ")"
+}
+
+// hides reports whether a row owned by tenantID is invisible to this caller.
+// Case-insensitive and blank-tolerant: the two sides are minted by different
+// stores (the tenant store and the cloud inventory rows).
+func (v cloudVisibility) hides(tenantID string) bool {
+	if len(v.exclude) == 0 {
+		return false
+	}
+	id := strings.TrimSpace(tenantID)
+	if id == "" {
+		return false
+	}
+	for _, x := range v.exclude {
+		if strings.EqualFold(strings.TrimSpace(x), id) {
+			return true
+		}
+	}
+	return false
+}
+
+// resources drops a restricted tenant's resources from an inventory listing.
+// It is a function rather than an inline loop because the app registry, the
+// coverage report, the console links, the service-map endpoint names and the
+// topology join are all DERIVED from the same slice: filtering once, at the
+// read, is what stops a hidden resource coming back as an app, a tag-compliance
+// row or a node on a map.
+func (v cloudVisibility) resources(in []cloud.CloudResource) []cloud.CloudResource {
+	if len(v.exclude) == 0 {
+		return in
+	}
+	out := make([]cloud.CloudResource, 0, len(in))
+	for _, c := range in {
+		if v.hides(c.TenantID) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// mappings drops a restricted tenant's identity mappings — the (match_key → app)
+// rows flow attribution joins on. They name the tenant's apps and its ENIs.
+func (v cloudVisibility) mappings(in []cloud.CloudIdentityMapping) []cloud.CloudIdentityMapping {
+	if len(v.exclude) == 0 {
+		return in
+	}
+	out := make([]cloud.CloudIdentityMapping, 0, len(in))
+	for _, m := range in {
+		if v.hides(m.TenantID) {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// connectors drops a restricted tenant's inventory-source provenance rows, which
+// name the account the inventory was collected from.
+func (v cloudVisibility) connectors(in []cloud.ConnectorInfo) []cloud.ConnectorInfo {
+	if len(v.exclude) == 0 {
+		return in
+	}
+	out := make([]cloud.ConnectorInfo, 0, len(in))
+	for _, c := range in {
+		if v.hides(c.TenantID) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 // isCloudAppToken bounds an app id used in a SQL literal: real app names carry
 // letters/digits/.-_:/ and a space — never a quote/backslash/control char. Rejects
 // injection without over-restricting (we cannot use isAlphaToken — apps have dots).
@@ -34,10 +196,18 @@ func isCloudAppToken(s string) bool { return cloud.IsCloudAppToken(s) }
 func (s *server) cloudResources(r *http.Request) ([]cloud.CloudResource, string, bool, error) {
 	claims, _ := userFrom(r.Context())
 	tenant, cross := principalTenant(claims)
+	// The operator-visibility restriction, applied at the ONE shared inventory
+	// read. Everything derived from this slice — the app registry, the coverage
+	// report, the console links, the service-map endpoint names, the topology
+	// join — is derived from what survives here, so a hidden resource cannot come
+	// back through any of them.
+	vis := s.cloudVisibilityFor(r)
+	tenant, cross = vis.storeScope(tenant, cross)
 	res, err := s.cloud.ListResources(r.Context(), tenant, cross)
 	if err != nil {
 		return res, tenant, cross, err
 	}
+	res = vis.resources(res)
 	// Manual overrides win over inference EVERYWHERE this inventory is read
 	// (2026-07 review): the overlay used to apply only on the /resources
 	// handler, so a confirmed operator assignment lifted the Resources table
@@ -62,6 +232,12 @@ func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenant, cross := principalTenant(claims)
+	// The restriction narrows the scope this page is read at; a restricted
+	// tenant's rows are then dropped from the page itself, because the operator's
+	// Global page spans tenants and the store has no notion of a tenant the
+	// caller may not read.
+	vis := s.cloudVisibilityFor(r)
+	tenant, cross = vis.storeScope(tenant, cross)
 	page, err := s.cloud.QueryResources(r.Context(), tenant, cross, filter)
 	if err != nil {
 		if errors.Is(err, cloud.ErrBadCursor) {
@@ -71,7 +247,7 @@ func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	res := page.Resources
+	res := vis.resources(page.Resources)
 	// Manual operator overrides win over inference EVERYWHERE this inventory is read
 	// (2026-07 review): one shared read = one truth, so the page agrees with
 	// Apps / Coverage / Untagged. Applied to the returned page here.
@@ -89,9 +265,12 @@ func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Provenance names the ACCOUNT the inventory was collected from — a restricted
+	// tenant's account id is as much its own as the resources in it.
+	connectors = vis.connectors(connectors)
 	// Live state per resource (provider status checks, provider traffic, our
 	// active checks). Absent feeds stay "unknown" — never a fabricated healthy.
-	live := s.cloudLiveStates(r.Context(), chTenantScope(r), res)
+	live := s.cloudLiveStates(r.Context(), vis.chScope(r), vis.pred(), res)
 	out := make([]map[string]any, 0, len(res))
 	for _, rs := range res {
 		row := map[string]any{"resource": rs}
@@ -257,11 +436,16 @@ func (s *server) handleCloudIdentityMap(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	tenant, cross := principalTenant(claims)
+	// The mappings name the tenant's apps and the ENIs/IPs they live on, so they
+	// obey the restriction like the inventory they were derived from.
+	vis := s.cloudVisibilityFor(r)
+	tenant, cross = vis.storeScope(tenant, cross)
 	maps, err := s.cloud.ListMappings(r.Context(), tenant, cross)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	maps = vis.mappings(maps)
 	writeJSON(w, http.StatusOK, map[string]any{"mappings": maps, "count": len(maps)})
 }
 
@@ -275,9 +459,10 @@ func (s *server) handleCloudApps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	apps := cloud.DeriveApps(res)
+	vis := s.cloudVisibilityFor(r)
 	// Roll the resources' live state up to the app: worst health wins (an app is
 	// only as healthy as its unhealthiest resource), traffic sums.
-	live := s.cloudLiveStates(r.Context(), chTenantScope(r), res)
+	live := s.cloudLiveStates(r.Context(), vis.chScope(r), vis.pred(), res)
 	// Worst-wins rank with unknown ABOVE healthy (audit D-P2-10): an app holding
 	// an unmeasured resource must not read plain "healthy" — silence is not
 	// health. Faults still outrank blindness. "" seeds the fold so the first
@@ -384,13 +569,17 @@ func (s *server) handleCloudAppRca(w http.ResponseWriter, r *http.Request) {
 	// domain — and never the ISO String the alias renders. Latent before this
 	// (RFC 3339 text sorts like the instant); a format change or an added range
 	// predicate turns it into a silent mis-sort or code 386.
+	// The operator-visibility restriction applies to the object pick: an app name
+	// can be shared across tenants, so a restricted tenant's investigation could
+	// otherwise be served for another tenant's app.
+	vis := s.cloudVisibilityFor(r)
 	sql := `
 WITH picked AS (
      SELECT correlation_id, version, state, verdict_tier, top_confidence,
             top_hypothesis, signal_count, window_start, created_at, affected,
             plane_count
        FROM netops.corr_current FINAL
-      WHERE has(JSONExtract(affected,'apps','Array(String)'), '` + app + `')
+      WHERE has(JSONExtract(affected,'apps','Array(String)'), '` + app + `')` + vis.pred() + `
       ORDER BY created_at DESC
       LIMIT 10
 )
@@ -417,7 +606,7 @@ SELECT toString(o.correlation_id)                   AS correlation_id,
  GROUP BY o.correlation_id
  ORDER BY any(o.created_at) DESC
  FORMAT JSON`
-	proxyClickHouse(w, r, sql)
+	proxyClickHouseScope(w, r, vis.chScope(r), sql)
 }
 
 // startCloudInventory loads the cloud inventory from the fixture provider into the

@@ -91,7 +91,7 @@ func investigationScopeSQL(resources, apps []string) string {
 // investigationObjectSQL loads ONE correlation object by id (tenant-scoped;
 // invisible cross-tenant → no row → 404 upstream). id is pre-validated as a
 // UUID token by the handler.
-func investigationObjectSQL(id, scope string) string {
+func investigationObjectSQL(id, pred, scope string) string {
 	return fmt.Sprintf(`
 SELECT toString(correlation_id)  AS cid,
        toString(verdict_tier)    AS verdict_tier_s,
@@ -103,10 +103,10 @@ SELECT toString(correlation_id)  AS cid,
        affected                  AS affected,
        evidence_missing          AS evidence_missing
   FROM netops.corr_current FINAL
- WHERE correlation_id = '%s'
+ WHERE correlation_id = '%s'%s
  LIMIT 1
  SETTINGS tenant_scope = '%s'
- FORMAT JSONEachRow`, id, scope)
+ FORMAT JSONEachRow`, id, pred, scope)
 }
 
 // investigationChangesSQL reads the change signals in the onset-anchored window
@@ -171,9 +171,12 @@ func (s *server) handleCloudInvestigationChanges(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusNotFound, errNotFound)
 		return
 	}
-	scope := cloud.SafeScopeLiteral(chTenantScope(r))
+	// A restricted tenant's investigation resolves no object, so the answer is the
+	// 404 an unknown id gets — the operator never learns the id exists.
+	vis := s.cloudVisibilityFor(r)
+	scope := vis.chScope(r)
 
-	objs := chJSONRows[chObjectRow](investigationObjectSQL(id, scope))
+	objs := chJSONRows[chObjectRow](investigationObjectSQL(id, vis.pred(), scope))
 	if len(objs) == 0 {
 		// unknown OR another tenant's — indistinguishable on purpose (§3a.1)
 		writeError(w, http.StatusNotFound, errNotFound)
@@ -205,7 +208,7 @@ func (s *server) handleCloudInvestigationChanges(w http.ResponseWriter, r *http.
 
 	onsetLit := onset.UTC().Format("2006-01-02 15:04:05")
 	rows := chJSONRows[chSignalRow](investigationChangesSQL(
-		onsetLit, scopePred, investigationChangeLimit, scope))
+		onsetLit, scopePred+vis.pred(), investigationChangeLimit, scope))
 
 	inv := s.cloudResourceIndex(r)
 	out := make([]investigationChangeRow, 0, len(rows))

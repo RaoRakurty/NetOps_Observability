@@ -45,8 +45,8 @@ func TestServiceMapQueriesAreTenantScoped(t *testing.T) {
 				t.Fatalf("scope = %q, want %q", scope, tc.want)
 			}
 			for _, q := range []string{
-				cloud.ServiceMapPairSQL(24, cloud.ServiceMapMaxPairRows, scope),
-				cloud.ServiceMapRejectSQL(24, cloud.ServiceMapMaxRejectRows, scope),
+				cloud.ServiceMapPairSQL(24, cloud.ServiceMapMaxPairRows, "", scope),
+				cloud.ServiceMapRejectSQL(24, cloud.ServiceMapMaxRejectRows, "", scope),
 			} {
 				if !strings.Contains(q, "SETTINGS tenant_scope = '"+tc.want+"'") {
 					t.Fatalf("query is not scoped to %q:\n%s", tc.want, q)

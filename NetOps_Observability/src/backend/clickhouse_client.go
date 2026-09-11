@@ -379,6 +379,15 @@ func chTenantScopeFor(claims jwtClaims) string {
 // the caller's tenant_scope so the DB row policies enforce per-tenant isolation
 // even if a handler's SQL filter is ever forgotten (defense in depth).
 func proxyClickHouse(w http.ResponseWriter, r *http.Request, sql string) {
+	proxyClickHouseScope(w, r, chTenantScope(r), sql)
+}
+
+// proxyClickHouseScope is the same proxy at an EXPLICIT tenant_scope, for a
+// handler that has already narrowed the caller's scope — today the cloud plane,
+// which answers an operator-restricted read at a scope no row carries. There is
+// one transport, so the streaming, the error classification and the read-budget
+// stamping cannot drift between the two forms.
+func proxyClickHouseScope(w http.ResponseWriter, r *http.Request, scope, sql string) {
 	// Streams via the chhttp seam: the result set is passed through to the client
 	// rather than buffered, but the FAILURE path is now classified like every
 	// other ClickHouse call.
@@ -391,7 +400,7 @@ func proxyClickHouse(w http.ResponseWriter, r *http.Request, sql string) {
 	body, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).ExecStream(r.Context(), chhttp.Request{
 		SQL:   sql,
 		Op:    "api:" + r.URL.Path,
-		Scope: chTenantScope(r),
+		Scope: scope,
 		// #100 hardening: stamp the issuing endpoint into system.query_log.log_comment
 		// so per-endpoint read budgets are enforceable operationally (see
 		// scripts/ch-query-budget-check.sh) instead of reverse-engineered from

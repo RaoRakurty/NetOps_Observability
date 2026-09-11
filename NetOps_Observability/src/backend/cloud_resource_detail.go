@@ -36,13 +36,18 @@ func (s *server) handleCloudResourceByID(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	tenant, cross := principalTenant(claims)
+	// A restricted tenant's resource is answered 404 — the same answer an id that
+	// does not exist gets, never a 403 that would confirm it exists (§3a.1).
+	vis := s.cloudVisibilityFor(r)
+	tenant, cross = vis.storeScope(tenant, cross)
 	res, found, err := s.cloud.GetResource(r.Context(), tenant, cross, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if !found {
-		// Unknown and other-tenant ids are the SAME answer (§3a.1).
+	if !found || vis.hides(res.TenantID) {
+		// Unknown, other-tenant and operator-restricted ids are the SAME answer
+		// (§3a.1).
 		writeJSONError(w, http.StatusNotFound, "resource not found", "not_found")
 		return
 	}
@@ -58,7 +63,7 @@ func (s *server) handleCloudResourceByID(w http.ResponseWriter, r *http.Request)
 	body := map[string]any{"resource": one[0]}
 	// Live state (provider status / traffic / active checks). Absent feeds stay
 	// absent — unknown is never rendered as healthy.
-	if st, ok := s.cloudLiveStates(r.Context(), chTenantScope(r), one)[one[0].ResourceID]; ok {
+	if st, ok := s.cloudLiveStates(r.Context(), vis.chScope(r), vis.pred(), one)[one[0].ResourceID]; ok {
 		body["health"] = st.Health
 		body["health_basis"] = st.HealthBasis
 		if st.TrafficBytes != nil {

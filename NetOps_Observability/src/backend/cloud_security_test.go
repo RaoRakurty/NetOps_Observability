@@ -47,8 +47,8 @@ func TestCloudSecurityQueriesAreTenantScoped(t *testing.T) {
 			}
 			queries := []string{
 				cloudSecuritySQL(24, "", 100, scope),
-				cloudProviderEventsSQL(24, 100, scope),
-				cloudSeamTelemetrySQL(24, 100, scope),
+				cloudProviderEventsSQL(24, 100, "", scope),
+				cloudSeamTelemetrySQL(24, 100, "", scope),
 			}
 			for _, q := range queries {
 				if !strings.Contains(q, "SETTINGS tenant_scope = '"+tc.want+"'") {
@@ -73,8 +73,8 @@ func TestCloudSecurityQueriesAreTenantScoped(t *testing.T) {
 func TestCloudSecurityQueriesCarryWindow(t *testing.T) {
 	for _, q := range []string{
 		cloudSecuritySQL(168, "", 100, "acme"),
-		cloudProviderEventsSQL(168, 100, "acme"),
-		cloudSeamTelemetrySQL(168, 100, "acme"),
+		cloudProviderEventsSQL(168, 100, "", "acme"),
+		cloudSeamTelemetrySQL(168, 100, "", "acme"),
 	} {
 		if !strings.Contains(q, "INTERVAL 168 HOUR") {
 			t.Fatalf("query does not honor the requested window:\n%s", q)
@@ -107,7 +107,7 @@ func TestSecurityKindsCoverTheBuiltLanes(t *testing.T) {
 // signal_id with the LATEST observation winning (an update open→closed must
 // replace the stale open row, the inverse of cloudChangesSQL).
 func TestProviderEventsSQLKeepsLatestObservation(t *testing.T) {
-	q := cloudProviderEventsSQL(24, 100, "acme")
+	q := cloudProviderEventsSQL(24, 100, "", "acme")
 	if !strings.Contains(q, "GROUP BY signal_id") {
 		t.Fatalf("provider events must collapse re-emissions per signal_id:\n%s", q)
 	}
@@ -122,7 +122,7 @@ func TestProviderEventsSQLKeepsLatestObservation(t *testing.T) {
 // The seam read folds to the latest state per seam endpoint and counts window
 // churn — and the state mapping is default-closed (unknown, never "up").
 func TestSeamTelemetryContract(t *testing.T) {
-	q := cloudSeamTelemetrySQL(24, 100, "acme")
+	q := cloudSeamTelemetrySQL(24, 100, "", "acme")
 	if !strings.Contains(q, "GROUP BY entity_id") || !strings.Contains(q, "count()") {
 		t.Fatalf("seam telemetry must fold per seam with churn count:\n%s", q)
 	}

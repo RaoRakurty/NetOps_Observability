@@ -15,8 +15,8 @@ import (
 // The clamped window must parameterize both reads (echoed as meta.window_hours).
 func TestServiceMapQueriesCarryWindow(t *testing.T) {
 	for _, q := range []string{
-		ServiceMapPairSQL(168, 500, "acme"),
-		ServiceMapRejectSQL(168, 200, "acme"),
+		ServiceMapPairSQL(168, 500, "", "acme"),
+		ServiceMapRejectSQL(168, 200, "", "acme"),
 	} {
 		if !strings.Contains(q, "INTERVAL 168 HOUR") {
 			t.Fatalf("query does not honor the requested window:\n%s", q)
@@ -27,11 +27,11 @@ func TestServiceMapQueriesCarryWindow(t *testing.T) {
 // The pair read aggregates ONLY the pair kind; the blocked layer ONLY REJECT
 // flow-log evidence — the two lanes must never mix magnitudes.
 func TestServiceMapQueriesReadTheRightKinds(t *testing.T) {
-	pair := ServiceMapPairSQL(24, 500, "acme")
+	pair := ServiceMapPairSQL(24, 500, "", "acme")
 	if !strings.Contains(pair, "kind = 'cloud_flow_pair'") {
 		t.Fatalf("pair query must read cloud_flow_pair:\n%s", pair)
 	}
-	rej := ServiceMapRejectSQL(24, 200, "acme")
+	rej := ServiceMapRejectSQL(24, 200, "", "acme")
 	if !strings.Contains(rej, "kind = 'cloud_flow_log'") ||
 		!strings.Contains(rej, "JSONExtractString(attrs,'action') = 'REJECT'") {
 		t.Fatalf("reject query must read REJECT flow logs only:\n%s", rej)

@@ -18,7 +18,7 @@ import (
 func TestInvestigationChangeQueriesAreTenantScopedAndBounded(t *testing.T) {
 	for _, scope := range []string{"acme", "__none__"} {
 		queries := []string{
-			investigationObjectSQL("11111111-2222-3333-4444-555555555555", scope),
+			investigationObjectSQL("11111111-2222-3333-4444-555555555555", "", scope),
 			investigationChangesSQL("2026-07-18 00:00:00", " AND (entity_id IN ('r1'))", 50, scope),
 		}
 		for _, q := range queries {
@@ -48,7 +48,7 @@ func TestInvestigationChangeQueriesAreTenantScopedAndBounded(t *testing.T) {
 		}
 	}
 	// The object lookup uses the hot projection.
-	if !strings.Contains(investigationObjectSQL("11111111-2222-3333-4444-555555555555", "acme"),
+	if !strings.Contains(investigationObjectSQL("11111111-2222-3333-4444-555555555555", "", "acme"),
 		"netops.corr_current FINAL") {
 		t.Fatal("object lookup must use corr_current FINAL")
 	}

@@ -55,6 +55,11 @@ func (s *server) handleCloudConnectors(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		tenant, cross := principalTenant(claims)
+		// A connector names the ACCOUNT, subscription or project the tenant's
+		// estate is collected from, so it obeys the operator-visibility
+		// restriction like the inventory it produces.
+		vis := s.cloudVisibilityFor(r)
+		tenant, cross = vis.storeScope(tenant, cross)
 		list, err := s.cloudConn.List(r.Context(), tenant, cross)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
@@ -62,6 +67,9 @@ func (s *server) handleCloudConnectors(w http.ResponseWriter, r *http.Request) {
 		}
 		views := make([]cloudconn.ConnectorView, 0, len(list))
 		for _, c := range list {
+			if vis.hides(c.TenantID) {
+				continue
+			}
 			views = append(views, cloudconn.ToConnectorView(c))
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"connectors": views})
@@ -177,12 +185,18 @@ func (s *server) loadConnector(w http.ResponseWriter, r *http.Request, id string
 		return cloudconn.Connector{}, claims, false
 	}
 	tenant, cross := principalTenant(claims)
+	// The operator-visibility restriction, applied at the ONE place a connector
+	// is loaded by id — for reads and for writes alike. A hidden connector is
+	// answered 404, the same answer an id that does not exist gets, so the
+	// operator never learns it exists; break-glass is the way in.
+	vis := s.cloudVisibilityFor(r)
+	tenant, cross = vis.storeScope(tenant, cross)
 	c, found, err := s.cloudConn.Get(r.Context(), tenant, cross, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return cloudconn.Connector{}, claims, false
 	}
-	if !found {
+	if !found || vis.hides(c.TenantID) {
 		writeError(w, http.StatusNotFound, errCCNNotFound)
 		return cloudconn.Connector{}, claims, false
 	}

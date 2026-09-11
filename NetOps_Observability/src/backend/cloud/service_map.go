@@ -96,12 +96,17 @@ type FlowPairRow struct {
 }
 
 // ── SQL builders (pure — every one carries the caller's tenant_scope) ─────────
+//
+// `pred` is the operator-visibility exclusion (cloudVisibility.pred in package
+// main): the row policies unlock every tenant under '__all__' by design, so a
+// restricted tenant is dropped by a predicate on the row's own tenant_id. Empty
+// for every ordinary caller.
 
 // ServiceMapPairSQL aggregates the window's cloud_flow_pair signals per
 // (src,dst). Each pair signal is one scan cycle's NEW flow records
 // (offset-tracked producers), so summing across rows sums disjoint observation
 // windows.
-func ServiceMapPairSQL(windowHours, limit int, scope string) string {
+func ServiceMapPairSQL(windowHours, limit int, pred, scope string) string {
 	return fmt.Sprintf(`
 SELECT JSONExtractString(attrs,'srcaddr') AS src,
        JSONExtractString(attrs,'dstaddr') AS dst,
@@ -113,12 +118,12 @@ SELECT JSONExtractString(attrs,'srcaddr') AS src,
    AND kind = 'cloud_flow_pair'
    AND ts > now() - INTERVAL %d HOUR
    AND JSONExtractString(attrs,'srcaddr') != ''
-   AND JSONExtractString(attrs,'dstaddr') != ''
+   AND JSONExtractString(attrs,'dstaddr') != ''%s
  GROUP BY src, dst
  ORDER BY bytes DESC
  LIMIT %d
  SETTINGS tenant_scope = '%s'
- FORMAT JSONEachRow`, windowHours, limit, scope)
+ FORMAT JSONEachRow`, windowHours, pred, limit, scope)
 }
 
 // ServiceMapRejectSQL aggregates the window's REJECT evidence per (src,dst) —
@@ -126,7 +131,7 @@ SELECT JSONExtractString(attrs,'srcaddr') AS src,
 // mark an edge (Azure/GCP deny rollups keep a sample tuple; AWS keeps every
 // rejected pair's addresses). value semantics differ per provider, so only the
 // observation COUNT is reported, never value-derived "bytes".
-func ServiceMapRejectSQL(windowHours, limit int, scope string) string {
+func ServiceMapRejectSQL(windowHours, limit int, pred, scope string) string {
 	return fmt.Sprintf(`
 SELECT JSONExtractString(attrs,'srcaddr') AS src,
        JSONExtractString(attrs,'dstaddr') AS dst,
@@ -139,12 +144,12 @@ SELECT JSONExtractString(attrs,'srcaddr') AS src,
    AND JSONExtractString(attrs,'action') = 'REJECT'
    AND ts > now() - INTERVAL %d HOUR
    AND JSONExtractString(attrs,'srcaddr') != ''
-   AND JSONExtractString(attrs,'dstaddr') != ''
+   AND JSONExtractString(attrs,'dstaddr') != ''%s
  GROUP BY src, dst
  ORDER BY obs DESC
  LIMIT %d
  SETTINGS tenant_scope = '%s'
- FORMAT JSONEachRow`, windowHours, limit, scope)
+ FORMAT JSONEachRow`, windowHours, pred, limit, scope)
 }
 
 // ── pure graph builder ────────────────────────────────────────────────────────

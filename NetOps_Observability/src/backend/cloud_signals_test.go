@@ -156,7 +156,7 @@ func TestSignalQueriesCarryWindow(t *testing.T) {
 		cloud.EvidenceObjectsSQL(168, "", "acme"),
 		cloud.EvidenceSignalsSQL(168, "'id'", "", 100, "acme"),
 		cloud.OpenObjectCountSQL(168, "", "acme"),
-		cloud.ArchivedSignalCountSQL(168, "'id'", "acme"),
+		cloud.ArchivedSignalCountSQL(168, "'id'", "", "acme"),
 	} {
 		if !strings.Contains(q, "INTERVAL 168 HOUR") {
 			t.Fatalf("query does not honor the requested window:\n%s", q)

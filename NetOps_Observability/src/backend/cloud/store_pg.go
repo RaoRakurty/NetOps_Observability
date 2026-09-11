@@ -280,7 +280,7 @@ func (s *PGStore) ListConnectors(ctx context.Context, tenant string, cross bool)
 	defer cancel()
 	out := make([]ConnectorInfo, 0)
 	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT provider, account_id, kind, collected_at, resource_count
+		rows, err := tx.Query(ctx, `SELECT tenant_id, provider, account_id, kind, collected_at, resource_count
 		    FROM cloud_inventory_connectors ORDER BY tenant_id, provider, account_id LIMIT $1`, ListHardCap)
 		if err != nil {
 			return err
@@ -290,7 +290,7 @@ func (s *PGStore) ListConnectors(ctx context.Context, tenant string, cross bool)
 			var c ConnectorInfo
 			var provider string
 			var collected *time.Time
-			if err := rows.Scan(&provider, &c.AccountID, &c.Kind, &collected, &c.ResourceCount); err != nil {
+			if err := rows.Scan(&c.TenantID, &provider, &c.AccountID, &c.Kind, &collected, &c.ResourceCount); err != nil {
 				return err
 			}
 			c.Provider = Provider(provider)

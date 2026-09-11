@@ -345,17 +345,28 @@ func (m *memStore) ReplaceConnectors(_ context.Context, tenant string, conns []C
 	return nil
 }
 
+// ListConnectors stamps each row's owning tenant from the map key it was stored
+// under, so a cross-tenant listing stays attributable (the wire shape is
+// unchanged — ConnectorInfo.TenantID is json:"-").
 func (m *memStore) ListConnectors(_ context.Context, tenant string, cross bool) ([]ConnectorInfo, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := []ConnectorInfo{}
+	stamp := func(owner string, cs []ConnectorInfo) {
+		for _, c := range cs {
+			c.TenantID = owner
+			out = append(out, c)
+		}
+	}
 	if cross {
-		for _, cs := range m.conns {
-			out = append(out, cs...)
+		for owner, cs := range m.conns {
+			stamp(owner, cs)
 		}
 		return out, nil
 	}
-	return append(out, m.conns[normTenant(tenant)]...), nil
+	t := normTenant(tenant)
+	stamp(t, m.conns[t])
+	return out, nil
 }
 
 func (m *memStore) ListMappings(_ context.Context, tenant string, cross bool) ([]CloudIdentityMapping, error) {

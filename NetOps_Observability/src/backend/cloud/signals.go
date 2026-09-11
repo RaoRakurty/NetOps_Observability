@@ -827,15 +827,18 @@ SELECT count()
  FORMAT TSV`, windowHours, appPred, scope)
 }
 
-func ArchivedSignalCountSQL(windowHours int, idList, scope string) string {
+// `pred` carries the operator-visibility exclusion, like every builder above:
+// the ledger's TOTAL must not count a restricted tenant's signals either — a
+// count is a fact about that tenant's estate.
+func ArchivedSignalCountSQL(windowHours int, idList, pred, scope string) string {
 	return fmt.Sprintf(`
 SELECT count()
   FROM netops.corr_signals_archive
  WHERE source = 'cloud'
    AND ts > now() - INTERVAL %d HOUR
-   AND archived_for IN (%s)
+   AND archived_for IN (%s)%s
  SETTINGS tenant_scope = '%s'
- FORMAT TSV`, windowHours, idList, scope)
+ FORMAT TSV`, windowHours, idList, pred, scope)
 }
 
 // chScalarInt runs a single-value TSV query and returns the integer (0 on any

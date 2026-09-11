@@ -139,8 +139,9 @@ func (s *server) handleCloudHealth(w http.ResponseWriter, r *http.Request) {
 	// signals are stamped on a raw provider id (an ARM path, an instance id); the
 	// operator reads a name, not a path.
 	inv := s.cloudResourceIndex(r)
-	pred := cloud.AppFilterSQL(app) + cloud.SignalSearchSQL(q) + cloud.SignalCursorPredSQL(curTS, curID)
-	rows := chJSONRows[chSignalRow](cloud.HealthSQL(window, pred, limit, cloud.SafeScopeLiteral(chTenantScope(r))))
+	vis := s.cloudVisibilityFor(r)
+	pred := cloud.AppFilterSQL(app) + cloud.SignalSearchSQL(q) + cloud.SignalCursorPredSQL(curTS, curID) + vis.pred()
+	rows := chJSONRows[chSignalRow](cloud.HealthSQL(window, pred, limit, vis.chScope(r)))
 	out := make([]cloudHealthSignal, 0, len(rows))
 	for _, row := range rows {
 		a := cloud.ParseAttrs(row.Attrs)
@@ -248,9 +249,10 @@ func (s *server) handleCloudChanges(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	filter += cloud.SignalSearchSQL(q)
+	vis := s.cloudVisibilityFor(r)
+	filter += cloud.SignalSearchSQL(q) + vis.pred()
 	rows := chJSONRows[chSignalRow](cloud.ChangesSQL(window, filter,
-		cloud.ChangesCursorHavingSQL(curTS, curID), limit, cloud.SafeScopeLiteral(chTenantScope(r))))
+		cloud.ChangesCursorHavingSQL(curTS, curID), limit, vis.chScope(r)))
 	out := make([]cloudChangeEvent, 0, len(rows))
 	for _, row := range rows {
 		a := cloud.ParseAttrs(row.Attrs)
@@ -339,12 +341,16 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 	if format != "" {
 		limit = clampExportLimit(r.URL.Query().Get("limit"))
 	}
-	scope := cloud.SafeScopeLiteral(chTenantScope(r))
+	vis := s.cloudVisibilityFor(r)
+	scope := vis.chScope(r)
 
 	appPred := ""
 	if app != "" {
 		appPred = fmt.Sprintf(" AND has(JSONExtract(affected,'apps','Array(String)'), '%s')", app)
 	}
+	// The restriction rides on the object predicate, which is what both the
+	// object list and the open-object COUNT below are read with.
+	appPred += vis.pred()
 	objRows := chJSONRows[chObjectRow](cloud.EvidenceObjectsSQL(window, appPred, scope))
 	objects := make([]cloudRcaObject, 0, len(objRows))
 	byID := map[string]chObjectRow{}
@@ -374,8 +380,8 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 	totalGrounded := 0
 	nextCursor := ""
 	if list := cloud.SQLList(ids); list != "" {
-		totalGrounded = chScalarInt(cloud.ArchivedSignalCountSQL(window, list, scope))
-		extra := cloud.SignalSearchSQL(q) + cloud.SignalCursorPredSQL(curTS, curID)
+		totalGrounded = chScalarInt(cloud.ArchivedSignalCountSQL(window, list, vis.pred(), scope))
+		extra := cloud.SignalSearchSQL(q) + cloud.SignalCursorPredSQL(curTS, curID) + vis.pred()
 		grounded := chJSONRows[chSignalRow](cloud.EvidenceSignalsSQL(window, list, extra, limit, scope))
 		if len(grounded) > 0 {
 			last := grounded[len(grounded)-1]

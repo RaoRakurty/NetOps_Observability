@@ -26,6 +26,10 @@ import (
 func (s *server) cloudEndpointResolver(r *http.Request) func(string) (string, bool) {
 	claims, _ := userFrom(r.Context())
 	tenant, cross := principalTenant(claims)
+	// A denied operator resolves nothing: the identity map is read at a scope no
+	// row carries, and the inventory index behind lookupCloudResource is already
+	// filtered by the same rule at cloudResources.
+	tenant, cross = s.cloudVisibilityFor(r).storeScope(tenant, cross)
 	idx := s.cloudResourceIndex(r)
 	return func(key string) (string, bool) {
 		key = strings.TrimSpace(key)
@@ -59,9 +63,12 @@ func (s *server) handleCloudServiceMap(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, werr)
 		return
 	}
-	scope := cloud.SafeScopeLiteral(chTenantScope(r))
-	pairs := chJSONRows[cloud.FlowPairRow](cloud.ServiceMapPairSQL(window, cloud.ServiceMapMaxPairRows, scope))
-	rejects := chJSONRows[cloud.FlowPairRow](cloud.ServiceMapRejectSQL(window, cloud.ServiceMapMaxRejectRows, scope))
+	// A flow pair is who talks to whom inside the customer's estate, with the
+	// bytes on the edge. It obeys the restriction like the resources at its ends.
+	vis := s.cloudVisibilityFor(r)
+	scope := vis.chScope(r)
+	pairs := chJSONRows[cloud.FlowPairRow](cloud.ServiceMapPairSQL(window, cloud.ServiceMapMaxPairRows, vis.pred(), scope))
+	rejects := chJSONRows[cloud.FlowPairRow](cloud.ServiceMapRejectSQL(window, cloud.ServiceMapMaxRejectRows, vis.pred(), scope))
 	graph := cloud.BuildServiceMap(pairs, rejects, s.cloudEndpointResolver(r), cloud.ServiceMapMaxUnattributed)
 	graph.Meta.WindowHours = window
 	graph.Meta.GeneratedAt = time.Now().UTC().Format(time.RFC3339)

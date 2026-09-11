@@ -75,12 +75,16 @@ func (s *server) cloudInventory(r *http.Request, tenant string, cross bool) []cl
 	if s.cloud == nil {
 		return nil
 	}
+	vis := s.cloudVisibilityFor(r)
+	tenant, cross = vis.storeScope(tenant, cross)
 	res, err := s.cloud.ListResources(r.Context(), tenant, cross)
 	if err != nil {
 		logError("cloud", "topology inventory join failed — nodes render as not measured", map[string]any{"err": err.Error()})
 		return nil
 	}
-	return res
+	// A restricted tenant contributes no nodes and no seam links, so the canvas
+	// renders the honest "not measured" for it rather than its estate.
+	return vis.resources(res)
 }
 
 // cloudPathGraph returns the CLOUD half of the path graph (#130a): the projected

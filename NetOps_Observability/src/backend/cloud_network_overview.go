@@ -50,7 +50,7 @@ const (
 // first. Same #100-safe read shape as the evidence ledger: the corr_current hot
 // projection with named columns, archive prefiltered by the time window, and
 // the caller's tenant_scope enforced by the row policies.
-func overviewOpenObjectsSQL(scope string) string {
+func overviewOpenObjectsSQL(pred, scope string) string {
 	return fmt.Sprintf(`
 WITH cloud_objs AS (
      SELECT DISTINCT archived_for
@@ -68,11 +68,11 @@ SELECT toString(correlation_id)  AS cid,
        evidence_missing          AS evidence_missing
   FROM netops.corr_current FINAL
  WHERE correlation_id IN (SELECT archived_for FROM cloud_objs)
-   AND state = 'open'
+   AND state = 'open'%s
  ORDER BY window_start DESC
  LIMIT %d
  SETTINGS tenant_scope = '%s'
- FORMAT JSONEachRow`, cloudSignalWindowHours, overviewMaxOpenObjects, scope)
+ FORMAT JSONEachRow`, cloudSignalWindowHours, pred, overviewMaxOpenObjects, scope)
 }
 
 // addIssueHandle records one raw resource handle an issue's evidence named,
@@ -98,8 +98,8 @@ func addIssueHandle(seen map[string]bool, handles *[]string, h string) {
 // issue input. Best-effort like every CH read surface: an unreachable store
 // yields no issues (the overview still renders the inventory), never an error
 // that hides the whole page.
-func (s *server) cloudOpenIssues(scope string) []cloud.OverviewIssue {
-	objRows := chJSONRows[chObjectRow](overviewOpenObjectsSQL(scope))
+func (s *server) cloudOpenIssues(scope, pred string) []cloud.OverviewIssue {
+	objRows := chJSONRows[chObjectRow](overviewOpenObjectsSQL(pred, scope))
 	if len(objRows) == 0 {
 		return nil
 	}
@@ -131,7 +131,7 @@ func (s *server) cloudOpenIssues(scope string) []cloud.OverviewIssue {
 	// ids, ENIs, hosts) and the signal kinds (seam-lane kinds route the issue
 	// to a seam, §4a).
 	if list := cloud.SQLList(ids); list != "" {
-		for _, row := range chJSONRows[chSignalRow](cloud.EvidenceSignalsSQL(cloudSignalWindowHours, list, "", overviewMaxIssueSignals, scope)) {
+		for _, row := range chJSONRows[chSignalRow](cloud.EvidenceSignalsSQL(cloudSignalWindowHours, list, pred, overviewMaxIssueSignals, scope)) {
 			i, ok := byID[row.CorrelationID]
 			if !ok {
 				continue
@@ -168,13 +168,14 @@ func (s *server) handleCloudNetworkOverview(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
-	scope := cloud.SafeScopeLiteral(chTenantScope(r))
-	issues := s.cloudOpenIssues(scope)
+	vis := s.cloudVisibilityFor(r)
+	scope := vis.chScope(r)
+	issues := s.cloudOpenIssues(scope, vis.pred())
 	ov := cloud.BuildNetworkOverview(res, issues, cloud.DefaultOverviewLimits(), time.Now().UTC())
 
 	// total_open is a dedicated COUNT (the same honesty rule as the evidence
 	// ledger): the bounded `considered` set can never masquerade as the total.
-	totalOpen := chScalarInt(cloud.OpenObjectCountSQL(cloudSignalWindowHours, "", scope))
+	totalOpen := chScalarInt(cloud.OpenObjectCountSQL(cloudSignalWindowHours, vis.pred(), scope))
 	if totalOpen < len(issues) {
 		totalOpen = len(issues) // a count the store failed to serve never understates what we hold
 	}
