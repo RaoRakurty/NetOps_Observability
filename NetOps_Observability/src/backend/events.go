@@ -103,7 +103,22 @@ type Hub struct {
 	clients map[*wsClient]bool
 	max     int           // 0 = unbounded
 	dropped atomic.Uint64 // frames dropped hub-wide (slow clients)
+
+	// scopeSalt extends the per-scope broadcast cache key with anything ELSE
+	// that decides which frames a principal may receive. Today that is the
+	// operator-visibility restriction, which is resolved per SUBJECT (break-glass
+	// is a per-operator session), so two platform owners are NOT interchangeable
+	// even though principalTenant collapses both to the cross-tenant scope.
+	//
+	// It is a seam rather than a direct call because the Hub owns no stores. The
+	// composition root supplies it; a nil salt keeps the pure key, which is what
+	// the Hub's own tests use.
+	scopeSalt func(jwtClaims) string
 }
+
+// SetScopeSalt installs the extra key component described on Hub.scopeSalt. Call
+// it once, at wiring time, before any client connects.
+func (h *Hub) SetScopeSalt(f func(jwtClaims) string) { h.scopeSalt = f }
 
 func NewHub() *Hub {
 	return newHubWithLimit(envInt("WS_MAX_CLIENTS", wsDefaultMaxClients))
@@ -202,7 +217,7 @@ func (h *Hub) BroadcastFiltered(build func(claims jwtClaims) []map[string]any) {
 	clients := h.snapshot()
 	frames := make(map[string][][]byte, 4)
 	for _, c := range clients {
-		key := broadcastScopeKey(c.claims)
+		key := h.scopeKey(c.claims)
 		data, built := frames[key]
 		if !built {
 			for _, msg := range build(c.claims) {
@@ -221,13 +236,36 @@ func (h *Hub) BroadcastFiltered(build func(claims jwtClaims) []map[string]any) {
 	}
 }
 
-// broadcastScopeKey collapses a principal to the scope that fully determines the
+// scopeKey is the WHOLE cache key: the tenant scope plus whatever else decides a
+// principal's frames. Two clients share a built payload only when both parts
+// match.
+//
+// The second part is not optional decoration. broadcastScopeKey alone returned
+// the same "cross:*" for EVERY platform owner, while the operator-visibility
+// restriction keys on the subject (break-glass is a per-operator, time-boxed
+// session). Two owners with different break-glass state therefore shared one
+// cache entry, and whichever one was built first was served to both — so an
+// owner who had NOT opened a session received the frames of one who had. Fixing
+// the alert builders without fixing this key would have left that path open.
+func (h *Hub) scopeKey(c jwtClaims) string {
+	key := broadcastScopeKey(c)
+	if h.scopeSalt == nil {
+		return key
+	}
+	if salt := h.scopeSalt(c); salt != "" {
+		return key + "|hidden:" + salt
+	}
+	return key
+}
+
+// broadcastScopeKey collapses a principal to the TENANT scope that determines the
 // frames it may receive. Every tenant-sensitive builder resolves visibility
 // through principalTenant (visibleDevices / visibleDeviceIDs / alertVisibleTo),
 // so two clients with the same (tenant, cross) pair are entitled to byte-
-// identical payloads — and nothing else may share a payload. Widening this key
-// (e.g. keying on role) would be a cross-tenant leak, so it stays derived from
-// the same function the request-path filters use.
+// identical payloads — as far as tenancy goes. Widening this key (e.g. keying on
+// role) would be a cross-tenant leak, so it stays derived from the same function
+// the request-path filters use; anything that is NOT tenancy belongs in the salt
+// above, never here.
 func broadcastScopeKey(c jwtClaims) string {
 	tenant, cross := principalTenant(c)
 	if cross {

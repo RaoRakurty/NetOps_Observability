@@ -1083,6 +1083,11 @@ func newServer() *server {
 			func(msg string, fields map[string]any) { logWarn("vulns", msg, fields) },
 			func(msg string, fields map[string]any) { logInfo("vulns", msg, fields) }),
 	}
+	// The WebSocket broadcast cache key must carry the operator-visibility
+	// restriction, not just the tenant scope: break-glass is per operator, so two
+	// platform owners are not interchangeable. Wired here, after srv exists,
+	// because resolving the restriction needs the tenant store and the bindings.
+	srv.hub.SetScopeSalt(srv.broadcastRestrictionSalt)
 	// DATA-PROTECTION-BEGIN — the Data Protection domain (internal/dataprotect).
 	// Built here, after srv exists, because every seam it takes is a method on
 	// *server (the platform-admin gate, the audit sink, the OpenSearch caller).
@@ -4160,19 +4165,19 @@ func (s *server) handleCollectors(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	claims, _ := userFrom(r.Context())
 	active := s.alerts.Active()
-	// Tenant isolation: alertVisible is the one rule (own devices, plus
-	// device-less alerts that nothing owns).
-	if ids, cross := s.visibleDeviceIDs(claims); !cross {
-		tenant, _ := principalTenant(claims)
-		filtered := make([]models.Alert, 0, len(active))
-		for _, a := range active {
-			if alertVisible(a, tenant, cross, ids) {
-				filtered = append(filtered, a)
-			}
+	// Tenant isolation: alertVisibility is the one rule (own devices, plus
+	// device-less alerts that nothing owns), and it carries the operator-
+	// visibility restriction. The filter now runs for EVERY principal, not only
+	// a scoped one: the cross-tenant path is exactly where a restricted tenant's
+	// alerts used to come back.
+	vis := s.alertVisibilityFor(claims)
+	filtered := make([]models.Alert, 0, len(active))
+	for _, a := range active {
+		if vis.visible(a) {
+			filtered = append(filtered, a)
 		}
-		active = filtered
 	}
-	writeJSON(w, http.StatusOK, active)
+	writeJSON(w, http.StatusOK, filtered)
 }
 
 // handleFeatures reports which OPTIONAL UI SURFACES are switched on. It carries

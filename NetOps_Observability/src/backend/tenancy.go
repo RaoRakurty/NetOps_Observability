@@ -6,6 +6,7 @@ package backend
 import (
 	"net/http"
 	"netops/backend/internal/saved"
+	"sort"
 	"strings"
 
 	"netops/backend/models"
@@ -254,6 +255,35 @@ func (s *server) operatorTelemetryRestriction(c jwtClaims, tenant string, cross 
 	return nil, false
 }
 
+// broadcastRestrictionSalt renders the operator-visibility restriction as it
+// applies to THIS principal right now, for use as the extra component of the
+// WebSocket broadcast cache key (Hub.scopeSalt).
+//
+// Why a key component at all: the restriction is resolved per SUBJECT, because
+// break-glass is a per-operator, time-boxed session. Two platform owners collapse
+// to the same tenant scope but are NOT entitled to the same frames — one may hold
+// a live session into a restricted tenant and the other may not.
+//
+// It returns the resolved HIDDEN SET rather than the subject, on purpose. Keying
+// on the subject would give every operator its own cache entry and throw away the
+// build-once-per-scope property the hub depends on; keying on the set is exact —
+// same hidden set means the builders produce the same frames. Sorted so the key
+// is stable across calls. Empty for anyone the restriction cannot apply to, which
+// is every tenant principal, so ordinary tenant scopes keep sharing one entry.
+func (s *server) broadcastRestrictionSalt(c jwtClaims) string {
+	if !isPlatformOwner(c) || s.tenants == nil {
+		return ""
+	}
+	hidden := s.effectiveRestrictedIDs(c.Sub)
+	if len(hidden) == 0 {
+		return ""
+	}
+	sorted := make([]string, len(hidden))
+	copy(sorted, hidden)
+	sort.Strings(sorted)
+	return strings.Join(sorted, ",")
+}
+
 // sameTenant reports whether a resource owned by resourceTenant is visible to a
 // principal scoped to `tenant` (cross-tenant principals see everything). Strict:
 // only an exact tenant match — global/unassigned resources are platform-owned.
@@ -359,13 +389,79 @@ func alertVisible(a models.Alert, tenant string, cross bool, ids map[string]bool
 	return sameTenantStrict(owner, tenant)
 }
 
-// alertVisibleTo applies alertVisible to a principal's claims. Used by the
+// alertVisibility is the alert-visibility decision RESOLVED for one principal:
+// the tenant/cross pair, the device set, and the operator-visibility restriction
+// (Tenant.OperatorRestricted). It exists because both halves of the alert lane —
+// GET /api/alerts and the WebSocket feed — have to apply the same rule to a whole
+// alert set, and resolving the restriction per alert would rescan the fleet for
+// every row.
+//
+// An alert is the customer's live incident: the rule that fired, the device it
+// fired on and a summary that names that device. A tenant that has switched the
+// restriction on is hidden from the platform owner in flows, findings, logs,
+// metrics, tunnels and the BMP feed, and must be hidden here too.
+type alertVisibility struct {
+	tenant string
+	cross  bool
+	ids    map[string]bool
+
+	// deny is the operator scoped INTO a restricted tenant: it sees no alert of
+	// that tenant at all.
+	deny bool
+	// hiddenDevices are the device identifiers of restricted tenants, for the
+	// operator's Global view. Device-keyed, because that is how an alert names
+	// what it fired on.
+	hiddenDevices map[string]bool
+	// hiddenTenants is the same restriction in its tenant_id form, for the
+	// DEVICE-LESS alerts that carry an owner label instead (alertOwnerLabel).
+	hiddenTenants []string
+}
+
+// alertVisibilityFor resolves the rule ONCE for a principal. Both restriction
+// forms come from the shared resolvers (restrictedTelemetry /
+// operatorTelemetryRestriction) rather than a second copy of the rule.
+func (s *server) alertVisibilityFor(c jwtClaims) alertVisibility {
+	ids, cross := s.visibleDeviceIDs(c)
+	tenant, _ := principalTenant(c)
+	v := alertVisibility{tenant: tenant, cross: cross, ids: ids}
+
+	rt := s.restrictedTelemetry(c)
+	v.deny = rt.deny
+	if len(rt.keys) > 0 {
+		v.hiddenDevices = make(map[string]bool, len(rt.keys))
+		for _, k := range rt.keys {
+			v.hiddenDevices[k] = true
+		}
+	}
+	v.hiddenTenants, _ = s.operatorTelemetryRestriction(c, tenant, cross)
+	return v
+}
+
+// visible reports whether this principal may see one alert. The restriction is
+// applied BEFORE the ordinary tenant rule, so a hidden alert stays hidden even on
+// the cross-tenant path where alertVisible answers true for everything.
+func (v alertVisibility) visible(a models.Alert) bool {
+	if v.deny {
+		return false
+	}
+	if a.DeviceID != "" && v.hiddenDevices[a.DeviceID] {
+		return false
+	}
+	if owner := alertOwnerLabel(a); owner != "" {
+		for _, x := range v.hiddenTenants {
+			if strings.EqualFold(strings.TrimSpace(x), owner) {
+				return false
+			}
+		}
+	}
+	return alertVisible(a, v.tenant, v.cross, v.ids)
+}
+
+// alertVisibleTo applies the resolved rule to a principal's claims. Used by the
 // WebSocket alert feed and the dashboard, which have claims rather than a
 // pre-resolved device set.
 func (s *server) alertVisibleTo(a models.Alert, c jwtClaims) bool {
-	ids, cross := s.visibleDeviceIDs(c)
-	tenant, _ := principalTenant(c)
-	return alertVisible(a, tenant, cross, ids)
+	return s.alertVisibilityFor(c).visible(a)
 }
 
 // visibleDeviceIDs returns the set of device ids the principal may view, plus a
