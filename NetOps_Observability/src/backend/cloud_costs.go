@@ -68,7 +68,7 @@ func (s *server) handleCloudCosts(w http.ResponseWriter, r *http.Request) {
 	vis := s.cloudVisibilityFor(r)
 	rows := chJSONRows[cloud.CostRow](cloud.CostsSQL(
 		from, to, cloud.CostFilterSQL(provider, account, service)+vis.pred(), limit,
-		vis.chScope(r)))
+		vis.chScope()))
 	if rows == nil {
 		rows = []cloud.CostRow{}
 	}

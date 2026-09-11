@@ -174,7 +174,7 @@ func (s *server) handleCloudInvestigationChanges(w http.ResponseWriter, r *http.
 	// A restricted tenant's investigation resolves no object, so the answer is the
 	// 404 an unknown id gets — the operator never learns the id exists.
 	vis := s.cloudVisibilityFor(r)
-	scope := vis.chScope(r)
+	scope := vis.chScope()
 
 	objs := chJSONRows[chObjectRow](investigationObjectSQL(id, vis.pred(), scope))
 	if len(objs) == 0 {

@@ -20,12 +20,13 @@ import (
 // query can only ever carry ITS OWN scope, a request without claims fails closed,
 // and no query may reach ClickHouse without a scope at all.
 func TestCloudSignalQueriesAreTenantScoped(t *testing.T) {
+	srv := &server{}
 	scopeFor := func(c *jwtClaims) string {
 		r := httptest.NewRequest(http.MethodGet, "/api/cloud/health", nil)
 		if c != nil {
 			r = r.WithContext(context.WithValue(r.Context(), userCtxKey, *c))
 		}
-		return cloud.SafeScopeLiteral(chTenantScope(r))
+		return cloud.SafeScopeLiteral(srv.chTenantScope(r))
 	}
 	cases := []struct {
 		name  string

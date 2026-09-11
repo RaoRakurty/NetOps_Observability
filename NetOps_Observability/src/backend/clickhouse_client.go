@@ -295,7 +295,7 @@ func chQueryCtx(ctx context.Context, sql string) ([]string, error) {
 // principal (chTenantScope); chRowsScope is the request-free form background jobs
 // (the auto-ticketing sweeper, #78 P3) use with an explicit scope.
 func (s *server) chRows(r *http.Request, sql string) ([]map[string]any, error) {
-	return s.chRowsScope(r.Context(), chTenantScope(r), sql, "api:"+r.URL.Path)
+	return s.chRowsScope(r.Context(), s.chTenantScope(r), sql, "api:"+r.URL.Path)
 }
 
 // chRowsScope runs one ClickHouse query at an explicit tenant_scope ("__all__"
@@ -345,18 +345,22 @@ func chSelect(ctx context.Context, scope, sql string, comment ...string) ([]map[
 	return out.Data, nil
 }
 
+// chScopeNone is the scope that reads nothing: no row's tenant_id equals it and
+// it is not '__all__', so every tenant_iso row policy rejects every row.
+const chScopeNone = "__none__"
+
 // chTenantScope derives the ClickHouse `tenant_scope` custom setting for the
 // caller (#20 Phase 2). The DB row policies on flows/findings/tunnels enforce on
 // it: '__all__' unlocks everything (platform owner); a tenant id restricts to that
 // tenant's tagged rows plus untagged (the app-layer device matcher narrows the
 // untagged set). A request without claims (shouldn't reach an authed handler)
 // fails closed to a non-matching sentinel.
-func chTenantScope(r *http.Request) string {
+func (s *server) chTenantScope(r *http.Request) string {
 	claims, ok := userFrom(r.Context())
 	if !ok {
-		return "__none__"
+		return chScopeNone
 	}
-	return chTenantScopeFor(claims)
+	return s.chTenantScopeFor(claims)
 }
 
 // chTenantScopeFor is the same derivation for a caller that already HOLDS the
@@ -364,13 +368,37 @@ func chTenantScope(r *http.Request) string {
 // background workers). It exists so there is exactly one rule for what a
 // principal's ClickHouse scope is — a second hand-rolled derivation is how the
 // two drift apart.
-func chTenantScopeFor(claims jwtClaims) string {
+//
+// It is a METHOD, and the operator-visibility restriction is folded in HERE,
+// because this is the one place every request-serving ClickHouse read passes
+// through. An operator that scoped INTO a tenant which switched the restriction
+// on gets the read-nothing scope, and the row policies enforce that server-side
+// for every corr_*, rca_*, timeintel, verify, cloud and ticketing read at once —
+// rather than each of those lanes remembering to ask. A refusal is deliberately
+// not a 403: that would confirm the tenant has rows at all.
+//
+// The Global half — the operator reading across tenants while some tenant is
+// restricted — cannot be expressed here. '__all__' means all, and the policy
+// grammar has no "all except", so the exclusion has to ride in each SQL as a
+// tenant_id NOT IN predicate. See tenantIDExcludeCondFor.
+func (s *server) chTenantScopeFor(claims jwtClaims) string {
+	tenant, cross := principalTenant(claims)
+	if _, deny := s.operatorTelemetryRestriction(claims, tenant, cross); deny {
+		return chScopeNone
+	}
+	return chScopeRule(claims)
+}
+
+// chScopeRule is the PURE principal → scope rule, with no compliance overlay. It
+// exists so the derivation itself stays unit-testable; nothing outside
+// chTenantScopeFor may call it, and clickhouse_scope_chokepoint_test.go says so.
+func chScopeRule(claims jwtClaims) string {
 	tenant, cross := principalTenant(claims)
 	if cross {
 		return "__all__"
 	}
 	if tenant == "" {
-		return "__none__"
+		return chScopeNone
 	}
 	return tenant
 }
@@ -378,15 +406,20 @@ func chTenantScopeFor(claims jwtClaims) string {
 // proxyClickHouse runs sql against ClickHouse over its HTTP interface, injecting
 // the caller's tenant_scope so the DB row policies enforce per-tenant isolation
 // even if a handler's SQL filter is ever forgotten (defense in depth).
-func proxyClickHouse(w http.ResponseWriter, r *http.Request, sql string) {
-	proxyClickHouseScope(w, r, chTenantScope(r), sql)
+//
+// It is a METHOD so the scope it injects comes from s.chTenantScope, which folds
+// the operator-visibility restriction in. A free function could only have
+// hand-rolled the derivation, and that is how the two drift apart.
+func (s *server) proxyClickHouse(w http.ResponseWriter, r *http.Request, sql string) {
+	proxyClickHouseScope(w, r, s.chTenantScope(r), sql)
 }
 
 // proxyClickHouseScope is the same proxy at an EXPLICIT tenant_scope, for a
 // handler that has already narrowed the caller's scope — today the cloud plane,
 // which answers an operator-restricted read at a scope no row carries. There is
 // one transport, so the streaming, the error classification and the read-budget
-// stamping cannot drift between the two forms.
+// stamping cannot drift between the two forms. The scope it is handed must have
+// come from s.chTenantScope/s.chTenantScopeFor, never from chScopeRule.
 func proxyClickHouseScope(w http.ResponseWriter, r *http.Request, scope, sql string) {
 	// Streams via the chhttp seam: the result set is passed through to the client
 	// rather than buffered, but the FAILURE path is now classified like every

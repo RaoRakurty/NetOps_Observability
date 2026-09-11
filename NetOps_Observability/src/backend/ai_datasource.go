@@ -33,7 +33,7 @@ import (
 type aiDataSource struct {
 	srv    *server
 	ctx    context.Context
-	scope  string    // chTenantScope(r) — encodes tenant / __all__ for cross-tenant
+	scope  string    // s.chTenantScope(r) — encodes tenant / __all__ for cross-tenant
 	claims jwtClaims // caller claims for OS/VM scoping helpers (visibleDevice*)
 }
 

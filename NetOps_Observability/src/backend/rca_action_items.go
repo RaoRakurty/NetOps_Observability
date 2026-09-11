@@ -66,7 +66,7 @@ func (s *server) handleRcaActionItems(w http.ResponseWriter, r *http.Request, id
 		writeError(w, http.StatusServiceUnavailable, errors.New("action-item store unavailable"))
 		return
 	}
-	rows, err := s.chRowsScope(r.Context(), chTenantScope(r), `
+	rows, err := s.chRowsScope(r.Context(), s.chTenantScope(r), `
 SELECT tenant_id FROM netops.corr_objects
  WHERE correlation_id = '`+id+`'
  LIMIT 1

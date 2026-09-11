@@ -252,7 +252,7 @@ func (q demFlowQuerier) FlowStats(ctx context.Context, tenant string, subjects [
 		// A read with no principal cannot be scoped, so it does not happen.
 		return nil, errors.New("dem flow: the request carries no principal, so the wire cannot be read for anyone")
 	}
-	scope := chTenantScopeFor(claims)
+	scope := q.s.chTenantScopeFor(claims)
 	if scope != strings.ToLower(strings.TrimSpace(tenant)) {
 		// The experience surface resolves ONE concrete tenant before it calls
 		// here; a mismatch means a wiring mistake, and the safe answer to a

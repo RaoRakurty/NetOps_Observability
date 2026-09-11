@@ -220,7 +220,7 @@ func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwt
 		return false // fail closed to chat-without-tools (plan §4.5), disclosed via provider note
 	}
 	p := s.aiPrincipal(claims)
-	ds := aiDataSource{srv: s, ctx: r.Context(), scope: chTenantScope(r), claims: claims}
+	ds := aiDataSource{srv: s, ctx: r.Context(), scope: s.chTenantScope(r), claims: claims}
 	reg := ai.Tools(ds)
 	reg.AddDocsSearch(aiDocsIndex)
 	pol := ai.NewPolicyEngine(ai.PolicyConfig{}, envFlagLookup) // safe default: read-only

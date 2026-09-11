@@ -46,7 +46,7 @@ func rcaRevisionsPath() string {
 // read); the object is still resolved under the caller's ClickHouse tenant
 // scope FIRST so a cross-tenant id answers 404 (§3a).
 func (s *server) serveRcaRevisions(w http.ResponseWriter, r *http.Request, id string) {
-	rows, err := s.chRowsScope(r.Context(), chTenantScope(r), `
+	rows, err := s.chRowsScope(r.Context(), s.chTenantScope(r), `
 SELECT tenant_id FROM netops.corr_objects
  WHERE correlation_id = '`+id+`'
  LIMIT 1

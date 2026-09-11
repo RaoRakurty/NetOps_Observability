@@ -63,7 +63,7 @@ func (s *server) handleCloudResourceByID(w http.ResponseWriter, r *http.Request)
 	body := map[string]any{"resource": one[0]}
 	// Live state (provider status / traffic / active checks). Absent feeds stay
 	// absent — unknown is never rendered as healthy.
-	if st, ok := s.cloudLiveStates(r.Context(), vis.chScope(r), vis.pred(), one)[one[0].ResourceID]; ok {
+	if st, ok := s.cloudLiveStates(r.Context(), vis.chScope(), vis.pred(), one)[one[0].ResourceID]; ok {
 		body["health"] = st.Health
 		body["health_basis"] = st.HealthBasis
 		if st.TrafficBytes != nil {

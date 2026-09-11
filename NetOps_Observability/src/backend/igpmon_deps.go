@@ -14,7 +14,7 @@ package backend
 // silently be wrong:
 //
 //	Authz        → s.requirePerm(infrastructure:read) + principalTenant
-//	Scope        → chTenantScope(r)               (ClickHouse row policies)
+//	Scope        → s.chTenantScope(r)               (ClickHouse row policies)
 //	CHQuery      → s.chRowsScope                  (the one scoped read path)
 //	ScopeFilters → metricsScopeFilters / restrictedTelemetry (the /api/metrics
 //	               query rule, verbatim — including operator visibility)
@@ -48,7 +48,7 @@ func (s *server) buildIGPMon() (*igpmon.API, error) {
 		Authz:        s.igpmonAuthz,
 		LookupDevice: s.igpmonLookupDevice,
 		CanSee:       igpmonCanSee,
-		Scope:        chTenantScope,
+		Scope:        s.chTenantScope,
 		CHQuery:      s.igpmonCHQuery,
 		ScopeFilters: s.igpmonScopeFilters,
 		VMQuery:      s.igpmonVMQuery,

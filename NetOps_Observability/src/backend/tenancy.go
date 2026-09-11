@@ -284,6 +284,31 @@ func (s *server) broadcastRestrictionSalt(c jwtClaims) string {
 	return strings.Join(sorted, ",")
 }
 
+// tenantIDExcludeCondFor is the tenant_id-KEYED sibling of addrTenantClauseFor,
+// for the ClickHouse tables that carry a tenant_id column — the correlation
+// family (corr_current, corr_objects, corr_signals, corr_edges) above all.
+//
+// It answers the ONE half s.chTenantScopeFor cannot. The scope closes the
+// as_tenant door: an operator who scoped INTO a restricted tenant gets the
+// read-nothing scope, and the row policies enforce that server-side. But the
+// Global door is '__all__', which means all, and the row-policy grammar has no
+// "all except" — so the exclusion for an operator reading ACROSS tenants has to
+// ride in the SQL. Unified search reached the same conclusion for the same
+// reason (search_unified.go).
+//
+// Returns "" when there is nothing to exclude: a non-operator, no restricted
+// tenant, or a caller the read-nothing scope already answered. Callers AND the
+// fragment into their WHERE — it narrows, while the scope and the policies
+// isolate.
+func (s *server) tenantIDExcludeCondFor(claims jwtClaims, col string) string {
+	tenant, cross := principalTenant(claims)
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
+	if deny || len(exclude) == 0 {
+		return ""
+	}
+	return col + " NOT IN (" + sqlInList(exclude) + ")"
+}
+
 // sameTenant reports whether a resource owned by resourceTenant is visible to a
 // principal scoped to `tenant` (cross-tenant principals see everything). Strict:
 // only an exact tenant match — global/unassigned resources are platform-owned.

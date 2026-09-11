@@ -60,7 +60,7 @@ func (s *server) reportNow() time.Time {
 // clock — the deterministic-regeneration path rebuilds an unchanged analysis
 // at the PRIOR revision's generation instant so it re-renders byte-identically.
 func (s *server) buildRcaReportForIDAt(r *http.Request, claims jwtClaims, id string, version int, now time.Time) (rca.Report, int, error) {
-	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(r.Context(), chTenantScope(r), id, version)
+	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(r.Context(), claimsOf(r), id, version)
 	if err != nil {
 		return rca.Report{}, status, err
 	}
@@ -92,7 +92,7 @@ func (s *server) buildRcaReportForIDAt(r *http.Request, claims jwtClaims, id str
 	if _, isMerged := rca.MergeIncidentState(asString(meta["state"])); isMerged {
 		if first := asString(meta["merged_into"]); first != "" {
 			owner := canonicalCorrTenant(asString(meta["tenant_id"]))
-			survivingID, _ = s.resolveMergeChain(r.Context(), chTenantScope(r), owner, id, first) // best-effort: on resolve failure the original id stands
+			survivingID, _ = s.resolveMergeChain(r.Context(), s.chTenantScope(r), owner, id, first) // best-effort: on resolve failure the original id stands
 		}
 	}
 	// Manual/ITSM lifecycle stamps (tenant-scoped store) feed the detection

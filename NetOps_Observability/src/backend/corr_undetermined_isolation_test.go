@@ -217,13 +217,14 @@ func TestUndeterminedFrequencyScopeFailsClosed(t *testing.T) {
 		{"tenantless viewer fails closed", &jwtClaims{Role: "viewer", Tenant: ""}, "__none__"},
 		{"no claims fails closed", nil, "__none__"},
 	}
+	srv := &server{}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, "/api/correlations/undetermined-frequency", nil)
 			if tc.claim != nil {
 				r = r.WithContext(context.WithValue(r.Context(), userCtxKey, *tc.claim))
 			}
-			if got := chTenantScope(r); got != tc.want {
+			if got := srv.chTenantScope(r); got != tc.want {
 				t.Fatalf("chTenantScope = %q, want %q", got, tc.want)
 			}
 		})

@@ -75,7 +75,7 @@ func (s *server) handleRcaPromotion(w http.ResponseWriter, r *http.Request, id s
 	}
 	// Resolve the object's owning tenant under the caller's row-policy scope:
 	// invisible (other tenant / absent) → 404, id existence never revealed.
-	rows, err := s.chRowsScope(r.Context(), chTenantScope(r), `
+	rows, err := s.chRowsScope(r.Context(), s.chTenantScope(r), `
 SELECT tenant_id FROM netops.corr_objects
  WHERE correlation_id = '`+id+`'
  LIMIT 1

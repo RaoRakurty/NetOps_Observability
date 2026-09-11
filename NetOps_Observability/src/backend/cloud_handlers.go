@@ -75,6 +75,11 @@ const (
 type cloudVisibility struct {
 	deny    bool
 	exclude []string
+	// scope is the caller's ClickHouse tenant_scope, derived at the ONE
+	// chokepoint (s.chTenantScope) and carried here so no cloud read has to
+	// re-derive it. The chokepoint already folds the deny half in, so this is
+	// the read-nothing scope for a denied caller before chScope even looks.
+	scope string
 }
 
 // cloudVisibilityFor resolves the rule for the request's principal. It is a
@@ -84,7 +89,11 @@ func (s *server) cloudVisibilityFor(r *http.Request) cloudVisibility {
 	claims, _ := userFrom(r.Context())
 	tenant, cross := principalTenant(claims)
 	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
-	return cloudVisibility{deny: deny, exclude: exclude}
+	return cloudVisibility{
+		deny:    deny,
+		exclude: exclude,
+		scope:   cloud.SafeScopeLiteral(s.chTenantScope(r)),
+	}
 }
 
 // storeScope narrows the (tenant, cross) pair a STORE read is issued with. A
@@ -98,11 +107,17 @@ func (v cloudVisibility) storeScope(tenant string, cross bool) (string, bool) {
 }
 
 // chScope is the ClickHouse tenant_scope literal for this read.
-func (v cloudVisibility) chScope(r *http.Request) string {
+//
+// The scope was derived at the chokepoint, which already folds the deny half in
+// for every ClickHouse read in the process. The explicit deny branch stays
+// because this lane must not depend on that fold to stay closed: it is the same
+// sentinel either way, and two independent reasons for it is what defence in
+// depth means here.
+func (v cloudVisibility) chScope() string {
 	if v.deny {
 		return cloudDeniedCHScope
 	}
-	return cloud.SafeScopeLiteral(chTenantScope(r))
+	return v.scope
 }
 
 // pred is the SQL exclusion predicate for the operator's Global view, as a
@@ -270,7 +285,7 @@ func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
 	connectors = vis.connectors(connectors)
 	// Live state per resource (provider status checks, provider traffic, our
 	// active checks). Absent feeds stay "unknown" — never a fabricated healthy.
-	live := s.cloudLiveStates(r.Context(), vis.chScope(r), vis.pred(), res)
+	live := s.cloudLiveStates(r.Context(), vis.chScope(), vis.pred(), res)
 	out := make([]map[string]any, 0, len(res))
 	for _, rs := range res {
 		row := map[string]any{"resource": rs}
@@ -462,7 +477,7 @@ func (s *server) handleCloudApps(w http.ResponseWriter, r *http.Request) {
 	vis := s.cloudVisibilityFor(r)
 	// Roll the resources' live state up to the app: worst health wins (an app is
 	// only as healthy as its unhealthiest resource), traffic sums.
-	live := s.cloudLiveStates(r.Context(), vis.chScope(r), vis.pred(), res)
+	live := s.cloudLiveStates(r.Context(), vis.chScope(), vis.pred(), res)
 	// Worst-wins rank with unknown ABOVE healthy (audit D-P2-10): an app holding
 	// an unmeasured resource must not read plain "healthy" — silence is not
 	// health. Faults still outrank blindness. "" seeds the fold so the first
@@ -606,7 +621,7 @@ SELECT toString(o.correlation_id)                   AS correlation_id,
  GROUP BY o.correlation_id
  ORDER BY any(o.created_at) DESC
  FORMAT JSON`
-	proxyClickHouseScope(w, r, vis.chScope(r), sql)
+	proxyClickHouseScope(w, r, vis.chScope(), sql)
 }
 
 // startCloudInventory loads the cloud inventory from the fixture provider into the

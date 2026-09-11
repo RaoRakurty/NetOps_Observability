@@ -423,7 +423,7 @@ func (s *server) manualTicketAction(w http.ResponseWriter, r *http.Request, id, 
 // the caller decides how to surface that (only AFTER its ownership guard, so a
 // leaked foreign row never discloses another tenant's canonical id).
 func (s *server) buildTicketPayloadForObject(ctx context.Context, scope, id string) (ticketing.Payload, ticketing.IncidentPolicy, string, string, int, error) {
-	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(ctx, scope, id, 0)
+	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSliceAtScope(ctx, scope, "", id, 0)
 	if err != nil {
 		return ticketing.Payload{}, ticketing.IncidentPolicy{}, "", "", status, err
 	}

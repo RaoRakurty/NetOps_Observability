@@ -22,12 +22,13 @@ import (
 // §3a: every Wave 5 #16 query carries the CALLER's scope; no claims fails
 // closed; a scoped caller's query can never name another tenant.
 func TestCloudSecurityQueriesAreTenantScoped(t *testing.T) {
+	srv := &server{}
 	scopeFor := func(c *jwtClaims) string {
 		r := httptest.NewRequest(http.MethodGet, "/api/cloud/security", nil)
 		if c != nil {
 			r = r.WithContext(context.WithValue(r.Context(), userCtxKey, *c))
 		}
-		return cloud.SafeScopeLiteral(chTenantScope(r))
+		return cloud.SafeScopeLiteral(srv.chTenantScope(r))
 	}
 	cases := []struct {
 		name  string

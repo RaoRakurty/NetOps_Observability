@@ -20,12 +20,13 @@ import (
 // unbounded. Mirrors the cloud_signals_test.go isolation contract. (The pure
 // graph-builder and SQL-contract suites live in cloud/service_map_test.go.)
 func TestServiceMapQueriesAreTenantScoped(t *testing.T) {
+	srv := &server{}
 	scopeFor := func(c *jwtClaims) string {
 		r := httptest.NewRequest(http.MethodGet, "/api/cloud/service-map", nil)
 		if c != nil {
 			r = r.WithContext(context.WithValue(r.Context(), userCtxKey, *c))
 		}
-		return cloud.SafeScopeLiteral(chTenantScope(r))
+		return cloud.SafeScopeLiteral(srv.chTenantScope(r))
 	}
 	cases := []struct {
 		name  string

@@ -298,7 +298,7 @@ func (s *server) handleCloudSecurity(w http.ResponseWriter, r *http.Request) {
 	inv := s.cloudResourceIndex(r)
 	vis := s.cloudVisibilityFor(r)
 	rows := chJSONRows[chSignalRow](cloudSecuritySQL(
-		window, cloud.AppFilterSQL(app)+vis.pred(), limit, vis.chScope(r)))
+		window, cloud.AppFilterSQL(app)+vis.pred(), limit, vis.chScope()))
 	laneCounts := map[string]int{"waf": 0, "lb": 0, "dns": 0}
 	out := make([]cloudSecurityFinding, 0, len(rows))
 	for _, row := range rows {
@@ -356,7 +356,7 @@ func (s *server) handleCloudProviderEvents(w http.ResponseWriter, r *http.Reques
 	}
 	vis := s.cloudVisibilityFor(r)
 	rows := chJSONRows[chSignalRow](cloudProviderEventsSQL(
-		window, limit, vis.pred(), vis.chScope(r)))
+		window, limit, vis.pred(), vis.chScope()))
 	out := make([]cloudProviderEvent, 0, len(rows))
 	for _, row := range rows {
 		a := cloud.ParseAttrs(row.Attrs)
@@ -392,7 +392,7 @@ func (s *server) handleCloudSeamTelemetry(w http.ResponseWriter, r *http.Request
 	}
 	vis := s.cloudVisibilityFor(r)
 	rows := chJSONRows[chSeamGroupRow](cloudSeamTelemetrySQL(
-		window, limit, vis.pred(), vis.chScope(r)))
+		window, limit, vis.pred(), vis.chScope()))
 	out := make([]cloudSeamTelemetryRow, 0, len(rows))
 	for _, row := range rows {
 		a := cloud.ParseAttrs(row.Attrs)

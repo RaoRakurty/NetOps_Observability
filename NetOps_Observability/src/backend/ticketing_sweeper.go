@@ -171,7 +171,7 @@ func canonicalCorrTenant(t string) string { return ticketing.CanonicalCorrTenant
 func (sw *ticketSweeper) evaluate(ctx context.Context, c sweepCandidate, now time.Time) bool {
 	// Load the latest slice cross-tenant; the object's tenant authority comes from
 	// the candidate row (c.tenant), never from this read.
-	meta, sigRows, evRows, edgeRows, _, err := sw.srv.loadCorrSlice(ctx, "__all__", c.id, 0)
+	meta, sigRows, evRows, edgeRows, _, err := sw.srv.loadCorrSliceAtScope(ctx, "__all__", "", c.id, 0)
 	if err != nil {
 		logWarn("ticketing", "sweep load slice failed",
 			map[string]any{"corr_object_id": c.id, "error": err.Error()})

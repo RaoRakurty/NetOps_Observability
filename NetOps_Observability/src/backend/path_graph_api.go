@@ -193,7 +193,7 @@ func (s *server) handleRcaPath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("invalid correlation id"))
 		return
 	}
-	resp, status, err := s.rcaPathSpine(r.Context(), claims, chTenantScope(r), id, r.URL.Query().Get("data_class"))
+	resp, status, err := s.rcaPathSpine(r.Context(), claims, s.chTenantScope(r), id, r.URL.Query().Get("data_class"))
 	if err != nil {
 		writeError(w, status, err)
 		return
@@ -602,7 +602,7 @@ func (s *server) rcaPathBlock(ctx context.Context, r *http.Request, correlationI
 	if !ok {
 		return nil
 	}
-	resp, status, err := s.rcaPathSpine(ctx, claims, chTenantScope(r), correlationID, "")
+	resp, status, err := s.rcaPathSpine(ctx, claims, s.chTenantScope(r), correlationID, "")
 	if err != nil || status != http.StatusOK {
 		return nil
 	}

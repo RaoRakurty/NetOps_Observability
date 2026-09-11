@@ -141,7 +141,7 @@ func (s *server) handleCloudHealth(w http.ResponseWriter, r *http.Request) {
 	inv := s.cloudResourceIndex(r)
 	vis := s.cloudVisibilityFor(r)
 	pred := cloud.AppFilterSQL(app) + cloud.SignalSearchSQL(q) + cloud.SignalCursorPredSQL(curTS, curID) + vis.pred()
-	rows := chJSONRows[chSignalRow](cloud.HealthSQL(window, pred, limit, vis.chScope(r)))
+	rows := chJSONRows[chSignalRow](cloud.HealthSQL(window, pred, limit, vis.chScope()))
 	out := make([]cloudHealthSignal, 0, len(rows))
 	for _, row := range rows {
 		a := cloud.ParseAttrs(row.Attrs)
@@ -252,7 +252,7 @@ func (s *server) handleCloudChanges(w http.ResponseWriter, r *http.Request) {
 	vis := s.cloudVisibilityFor(r)
 	filter += cloud.SignalSearchSQL(q) + vis.pred()
 	rows := chJSONRows[chSignalRow](cloud.ChangesSQL(window, filter,
-		cloud.ChangesCursorHavingSQL(curTS, curID), limit, vis.chScope(r)))
+		cloud.ChangesCursorHavingSQL(curTS, curID), limit, vis.chScope()))
 	out := make([]cloudChangeEvent, 0, len(rows))
 	for _, row := range rows {
 		a := cloud.ParseAttrs(row.Attrs)
@@ -342,7 +342,7 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 		limit = clampExportLimit(r.URL.Query().Get("limit"))
 	}
 	vis := s.cloudVisibilityFor(r)
-	scope := vis.chScope(r)
+	scope := vis.chScope()
 
 	appPred := ""
 	if app != "" {

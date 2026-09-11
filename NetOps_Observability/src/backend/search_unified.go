@@ -83,7 +83,7 @@ func (s *server) handleUnifiedSearch(w http.ResponseWriter, r *http.Request) {
 	hits = append(hits, res...)
 	hits = append(hits, apps...)
 	hits = append(hits, s.searchAccounts(ctx, tenant, cross, vis, lq)...)
-	hits = append(hits, s.searchCases(ctx, chTenantScope(r), vis, q)...)
+	hits = append(hits, s.searchCases(ctx, s.chTenantScope(r), vis, q)...)
 
 	sort.SliceStable(hits, func(i, j int) bool {
 		if hits[i].RankScore != hits[j].RankScore {

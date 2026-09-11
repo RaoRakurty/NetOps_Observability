@@ -74,7 +74,7 @@ SELECT ` + srcExpr + ` AS src,
  ORDER BY bytes_total DESC
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
-	proxyClickHouse(w, r, sql)
+	s.proxyClickHouse(w, r, sql)
 }
 
 // flowTopDim describes one allowlisted top-N grouping dimension: the SQL
@@ -141,7 +141,7 @@ SELECT ` + dim.expr + ` AS k,
  ORDER BY bytes_total DESC
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
-	proxyClickHouse(w, r, sql)
+	s.proxyClickHouse(w, r, sql)
 }
 
 // handleFlowsFanout powers flow-based threat detection: per source address, the
@@ -182,7 +182,7 @@ SELECT src_addr AS k,
  ORDER BY ` + order + ` DESC
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
-	proxyClickHouse(w, r, sql)
+	s.proxyClickHouse(w, r, sql)
 }
 
 // handleFlowsFlags breaks TCP traffic down by tcp_flags combination
@@ -220,7 +220,7 @@ SELECT tcp_flags,
  ORDER BY flows DESC
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
-	proxyClickHouse(w, r, sql)
+	s.proxyClickHouse(w, r, sql)
 }
 
 // geoDictReady probes the geoip_country ip_trie dictionary with a single
@@ -289,7 +289,7 @@ SELECT dictGetOrDefault('netops.geoip_country', 'country', tuple(IPv6StringToNum
  ORDER BY bytes_total DESC
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
-	proxyClickHouse(w, r, sql)
+	s.proxyClickHouse(w, r, sql)
 }
 
 func (s *server) handleFlowsByProto(w http.ResponseWriter, r *http.Request) {
@@ -314,7 +314,7 @@ SELECT proto,
  GROUP BY proto
  ORDER BY bytes_total DESC
  FORMAT JSON`
-	proxyClickHouse(w, r, sql)
+	s.proxyClickHouse(w, r, sql)
 }
 
 // handleFlowsByType breaks traffic down by flow-protocol family
@@ -339,7 +339,7 @@ SELECT flow_type,
  GROUP BY flow_type
  ORDER BY flows DESC
  FORMAT JSON`
-	proxyClickHouse(w, r, sql)
+	s.proxyClickHouse(w, r, sql)
 }
 
 func (s *server) handleFlowsTimeseries(w http.ResponseWriter, r *http.Request) {
@@ -364,7 +364,7 @@ SELECT toStartOfInterval(ts, INTERVAL ` + intToString(int(step.Seconds())) + ` S
  GROUP BY bucket
  ORDER BY bucket
  FORMAT JSON`
-	proxyClickHouse(w, r, sql)
+	s.proxyClickHouse(w, r, sql)
 }
 
 func (s *server) handleFindings(w http.ResponseWriter, r *http.Request) {
@@ -427,7 +427,7 @@ SELECT ` + chschema.ISO("f.ts") + ` AS ts, id, kind, severity, score, device,
  ORDER BY f.ts DESC
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
-	proxyClickHouse(w, r, sql)
+	s.proxyClickHouse(w, r, sql)
 }
 
 // isIPish reports whether s looks like an IPv4/IPv6 literal — digits, hex
@@ -649,7 +649,7 @@ SELECT id, type, local_device, local_addr, remote_device, remote_addr,
  LIMIT 1 BY id
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
-	proxyClickHouse(w, r, sql)
+	s.proxyClickHouse(w, r, sql)
 }
 
 // intQuery parses a bounded integer query parameter.

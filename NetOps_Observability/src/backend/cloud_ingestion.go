@@ -126,7 +126,7 @@ SELECT JSONExtractString(attrs,'provider') AS prov, kind,
  WHERE source = 'cloud' AND ts > now() - INTERVAL %d HOUR%s
  GROUP BY prov, kind
  SETTINGS tenant_scope = '%s'
- FORMAT TSV`, int(ingestStaleWindow/time.Hour), vis.pred(), vis.chScope(r))
+ FORMAT TSV`, int(ingestStaleWindow/time.Hour), vis.pred(), vis.chScope())
 	for _, line := range chQuery(sql) {
 		f := strings.Split(line, "\t")
 		if len(f) < 4 {

@@ -169,7 +169,7 @@ func (s *server) handleCloudNetworkOverview(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	vis := s.cloudVisibilityFor(r)
-	scope := vis.chScope(r)
+	scope := vis.chScope()
 	issues := s.cloudOpenIssues(scope, vis.pred())
 	ov := cloud.BuildNetworkOverview(res, issues, cloud.DefaultOverviewLimits(), time.Now().UTC())
 

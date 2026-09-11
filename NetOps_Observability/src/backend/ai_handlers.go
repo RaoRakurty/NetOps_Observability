@@ -171,7 +171,7 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 // /api/ai/ask and the copilot provider-down fallback (the engine answers when
 // no LLM can). All reads ride the caller's tenant-scoped aiDataSource.
 func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestrator {
-	ds := aiDataSource{srv: s, ctx: r.Context(), scope: chTenantScope(r), claims: claims}
+	ds := aiDataSource{srv: s, ctx: r.Context(), scope: s.chTenantScope(r), claims: claims}
 	tools := ai.Tools(ds)
 	// IRIS Phase A: the read-only troubleshooting tools, wired to the seams this
 	// deployment actually has. A nil seam means the tool is NOT registered, so

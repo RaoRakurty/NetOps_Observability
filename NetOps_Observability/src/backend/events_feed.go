@@ -207,6 +207,14 @@ func (s *server) handleEventsFeed(w http.ResponseWriter, r *http.Request) {
 		lv := strings.ToLower(v)
 		conds = append(conds, "(positionCaseInsensitive(entity_id, '"+v+"') > 0 OR positionCaseInsensitive(kind, '"+lv+"') > 0)")
 	}
+	// Operator-visibility (Global half): a restricted tenant's raw signals are
+	// dropped at the source. The as_tenant half is already closed underneath,
+	// because chRows reads at s.chTenantScope and a denied operator gets the
+	// read-nothing scope. One condition, and the items, the window count and
+	// every facet chip inherit it — they all share this WHERE.
+	if ex := s.tenantIDExcludeCondFor(claims, "tenant_id"); ex != "" {
+		conds = append(conds, ex)
+	}
 	where := strings.Join(conds, " AND ")
 
 	// keyset cursor (ts DESC, signal_id DESC).

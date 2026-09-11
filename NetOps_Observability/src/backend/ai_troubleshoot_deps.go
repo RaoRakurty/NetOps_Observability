@@ -686,7 +686,7 @@ func (s *server) aiCaseTimeline(claims jwtClaims) func(context.Context, ai.Princ
 		if !isUUIDToken(correlationID) {
 			return nil, ai.ErrNotFound
 		}
-		meta, sigRows, _, _, status, err := s.loadCorrSlice(ctx, chTenantScopeFor(claims), correlationID, 0)
+		meta, sigRows, _, _, status, err := s.loadCorrSlice(ctx, claims, correlationID, 0)
 		if err != nil {
 			if status == http.StatusNotFound {
 				return nil, ai.ErrNotFound

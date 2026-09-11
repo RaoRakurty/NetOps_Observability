@@ -38,6 +38,7 @@ func TestChTenantScope(t *testing.T) {
 		// Fail-closed cases — see only untagged rows, never another tenant's.
 		{"empty tenant, not cross", &jwtClaims{Role: "viewer", Tenant: ""}, "__none__"},
 	}
+	srv := &server{}
 	for _, c := range cases {
 		var r *http.Request
 		if c.claim != nil {
@@ -45,13 +46,13 @@ func TestChTenantScope(t *testing.T) {
 		} else {
 			r = httptest.NewRequest(http.MethodGet, "/api/flows/top", nil)
 		}
-		if got := chTenantScope(r); got != c.want {
+		if got := srv.chTenantScope(r); got != c.want {
 			t.Errorf("%s: chTenantScope = %q, want %q", c.name, got, c.want)
 		}
 	}
 
 	// No claims at all (should never reach an authed handler) → fail closed.
-	if got := chTenantScope(httptest.NewRequest(http.MethodGet, "/api/flows/top", nil)); got != "__none__" {
+	if got := srv.chTenantScope(httptest.NewRequest(http.MethodGet, "/api/flows/top", nil)); got != "__none__" {
 		t.Errorf("no-claims request scope = %q, want __none__ (fail closed)", got)
 	}
 }

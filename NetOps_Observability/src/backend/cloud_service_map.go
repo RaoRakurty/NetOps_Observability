@@ -66,7 +66,7 @@ func (s *server) handleCloudServiceMap(w http.ResponseWriter, r *http.Request) {
 	// A flow pair is who talks to whom inside the customer's estate, with the
 	// bytes on the edge. It obeys the restriction like the resources at its ends.
 	vis := s.cloudVisibilityFor(r)
-	scope := vis.chScope(r)
+	scope := vis.chScope()
 	pairs := chJSONRows[cloud.FlowPairRow](cloud.ServiceMapPairSQL(window, cloud.ServiceMapMaxPairRows, vis.pred(), scope))
 	rejects := chJSONRows[cloud.FlowPairRow](cloud.ServiceMapRejectSQL(window, cloud.ServiceMapMaxRejectRows, vis.pred(), scope))
 	graph := cloud.BuildServiceMap(pairs, rejects, s.cloudEndpointResolver(r), cloud.ServiceMapMaxUnattributed)

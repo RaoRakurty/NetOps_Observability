@@ -21,12 +21,13 @@ import (
 // without claims fails closed, and no query reaches ClickHouse unscoped or
 // unbounded. Mirrors the cloud_service_map_test.go isolation contract.
 func TestCloudCostsQueryIsTenantScoped(t *testing.T) {
+	srv := &server{}
 	scopeFor := func(c *jwtClaims) string {
 		r := httptest.NewRequest(http.MethodGet, "/api/cloud/costs", nil)
 		if c != nil {
 			r = r.WithContext(context.WithValue(r.Context(), userCtxKey, *c))
 		}
-		return cloud.SafeScopeLiteral(chTenantScope(r))
+		return cloud.SafeScopeLiteral(srv.chTenantScope(r))
 	}
 	cases := []struct {
 		name  string

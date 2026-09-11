@@ -53,7 +53,7 @@ func (s *server) serveRcaPathView(w http.ResponseWriter, r *http.Request, id str
 		writeError(w, http.StatusBadRequest, errVersion)
 		return
 	}
-	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(r.Context(), chTenantScope(r), id, version)
+	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(r.Context(), claimsOf(r), id, version)
 	if err != nil {
 		writeError(w, status, err)
 		return
@@ -119,6 +119,31 @@ func (s *server) tenantRcaSince(r *http.Request, def time.Duration) (time.Durati
 	return def, nil
 }
 
+// claimsOf is the request's principal. A request that reaches an authed handler
+// always has one; the zero value is a tenantless principal, which every
+// derivation below fails closed on.
+func claimsOf(r *http.Request) jwtClaims {
+	claims, _ := userFrom(r.Context())
+	return claims
+}
+
+// corrExcludeCond is the restricted-tenant exclusion for ONE correlation read,
+// ready to AND into a WHERE clause. "" means there is nothing to exclude.
+//
+// The as_tenant half of the operator-visibility restriction is already closed
+// underneath every read here: s.chTenantScopeFor hands a denied operator the
+// read-nothing scope and the corr_* STRICT row policies enforce it server-side.
+// This is the Global half, which '__all__' cannot express.
+func (s *server) corrExcludeCond(r *http.Request) string {
+	return s.tenantIDExcludeCondFor(claimsOf(r), "tenant_id")
+}
+
+// corrExcludeCondQualified is corrExcludeCond for a query that table-qualifies
+// its columns.
+func (s *server) corrExcludeCondQualified(r *http.Request, alias string) string {
+	return s.tenantIDExcludeCondFor(claimsOf(r), alias+".tenant_id")
+}
+
 func (s *server) handleCorrelations(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
@@ -159,6 +184,12 @@ func (s *server) handleCorrelations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		latestConds = append(latestConds, "verdict_tier = '"+tier+"'")
+	}
+	// Operator-visibility (Global half): a restricted tenant's cases are dropped
+	// at the source, in the pick, so they cannot reach the page through any of
+	// the joins below either.
+	if ex := s.corrExcludeCond(r); ex != "" {
+		latestConds = append(latestConds, ex)
 	}
 	// Keyset pagination (owner directive: DON'T HIDE — a capped list must offer
 	// the rest). The cursor is the house (ts DESC, id DESC) keyset over
@@ -288,6 +319,10 @@ func (s *server) handleCorrelationStats(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	win := intToString(int(since.Seconds()))
+	statsCond := "1"
+	if ex := s.corrExcludeCond(r); ex != "" {
+		statsCond = ex
+	}
 	sql := `
 SELECT countIf(state='open')                                          AS open,
        countIf(state='open' AND verdict_tier='confirmed')             AS open_confirmed,
@@ -299,6 +334,7 @@ SELECT countIf(state='open')                                          AS open,
        uniqExactIf(top_hypothesis, top_hypothesis != 'undetermined'
                    AND created_at >= now() - INTERVAL ` + win + ` SECOND)                       AS signatures_seen
   FROM netops.corr_current FINAL
+ WHERE ` + statsCond + `
  FORMAT JSON`
 	rows, err := s.chRows(r, sql)
 	if err != nil {
@@ -393,6 +429,9 @@ func (s *server) handleCorrelationsSummary(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		extra = append(extra, "state = '"+st+"'")
+	}
+	if ex := s.corrExcludeCond(r); ex != "" {
+		extra = append(extra, ex)
 	}
 	rows, err := s.chRows(r, correlationsSummarySQL(sinceCond, extra))
 	if err != nil {
@@ -530,7 +569,7 @@ func (s *server) serveCorrelationTimeline(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, errVersion)
 		return
 	}
-	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(r.Context(), chTenantScope(r), id, version)
+	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(r.Context(), claimsOf(r), id, version)
 	if err != nil {
 		writeError(w, status, err)
 		return
@@ -566,10 +605,29 @@ func (s *server) serveCorrelationTimeline(w http.ResponseWriter, r *http.Request
 // the evidence rows, and the edges of that version. Shared by the timeline and
 // rca-path-view endpoints so the (bounded, RLS-scoped) read SQL lives once.
 // Returns an HTTP status + error for the caller to surface.
-func (s *server) loadCorrSlice(ctx context.Context, scope, id string, version int) (map[string]any, []map[string]any, []map[string]any, []map[string]any, int, error) {
-	verCond := ""
+//
+// It takes the CLAIMS rather than an already-derived scope string, because it is
+// the one function that owns this read and every caller had the claims anyway.
+// Both halves of the operator-visibility restriction are therefore resolved
+// here, once: the scope closes the as_tenant door, and the meta query carries
+// the Global-view exclusion. A restricted tenant's object answers the SAME 404
+// a missing one does, and the four sub-reads below never run, because they key
+// off the meta row this query refused to return.
+func (s *server) loadCorrSlice(ctx context.Context, claims jwtClaims, id string, version int) (map[string]any, []map[string]any, []map[string]any, []map[string]any, int, error) {
+	return s.loadCorrSliceAtScope(ctx, s.chTenantScopeFor(claims), s.tenantIDExcludeCondFor(claims, "tenant_id"), id, version)
+}
+
+// loadCorrSliceAtScope is the same read at an EXPLICIT scope, for the two
+// callers that have no principal: the ticketing sweeper and the ticket-payload
+// builder, which read cross-tenant on purpose and take the object's authority
+// from the candidate row rather than from this read. exclude may be "".
+func (s *server) loadCorrSliceAtScope(ctx context.Context, scope, exclude, id string, version int) (map[string]any, []map[string]any, []map[string]any, []map[string]any, int, error) {
+	metaCond := ""
 	if version > 0 {
-		verCond = " AND version = " + intToString(version)
+		metaCond = " AND version = " + intToString(version)
+	}
+	if exclude != "" {
+		metaCond += " AND " + exclude
 	}
 	// 1) Object meta: version + window bounds + verdict + missing evidence + trigger.
 	metaSQL := `
@@ -581,7 +639,7 @@ SELECT version, tenant_id, state,
        verdict_tier, top_hypothesis, top_confidence, evidence_missing,
        hypotheses, affected, layer_coverage, app_impact, attribution
   FROM netops.corr_objects
- WHERE correlation_id = '` + id + `'` + verCond + `
+ WHERE correlation_id = '` + id + `'` + metaCond + `
  ORDER BY version DESC
  LIMIT 1
  FORMAT JSON`
@@ -724,6 +782,12 @@ func (s *server) serveCorrelationDetail(w http.ResponseWriter, r *http.Request, 
 	if version > 0 {
 		verCond = " AND version = " + intToString(version)
 	}
+	// A restricted tenant's object answers the SAME 404 a missing one does: the
+	// exclusion is in the WHERE, not a refusal after the fact.
+	objExclude := ""
+	if ex := s.corrExcludeCondQualified(r, "o"); ex != "" {
+		objExclude = " AND " + ex
+	}
 	objSQL := `
 SELECT toString(o.correlation_id)  AS correlation_id,
        version, state,
@@ -736,7 +800,7 @@ SELECT toString(o.correlation_id)  AS correlation_id,
        engine_version, topology_version, catalog_version,
        ` + chschema.ISO("created_at") + `   AS created_at
   FROM netops.corr_objects AS o
- WHERE o.correlation_id = '` + id + `'` + verCond + `
+ WHERE o.correlation_id = '` + id + `'` + verCond + objExclude + `
  ORDER BY version DESC
  LIMIT 1
  FORMAT JSON`
@@ -786,14 +850,18 @@ func (s *server) proxyCorrelationReplay(w http.ResponseWriter, r *http.Request, 
 	// sibling route leaked the existence of any id, contra CLAUDE.md §3a
 	// rule 1).
 	//
-	// chRows applies chTenantScope(r), so the row policies filter server-side:
+	// chRows applies s.chTenantScope(r), so the row policies filter server-side:
 	// zero rows means "not yours OR does not exist" — deliberately the same
 	// 404 the sibling detail route returns, so no existence oracle remains.
 	// Same prefilter-then-authorize pattern as rca_reports_list.go.
+	ownExclude := ""
+	if ex := s.corrExcludeCondQualified(r, "o"); ex != "" {
+		ownExclude = " AND " + ex
+	}
 	ownSQL := `
 SELECT toString(o.correlation_id) AS correlation_id
   FROM netops.corr_objects AS o
- WHERE o.correlation_id = '` + id + `'
+ WHERE o.correlation_id = '` + id + `'` + ownExclude + `
  LIMIT 1
  FORMAT JSON`
 	ownRows, err := s.chRows(r, ownSQL)
@@ -874,10 +942,14 @@ type corrFeedbackObject struct {
 // the whole point (§3a rule 1: never reveal another tenant's id).
 func (s *server) loadCorrFeedbackObject(r *http.Request, id string) (corrFeedbackObject, bool, error) {
 	// id is shape-validated by isUUIDToken before it reaches here (SR-011).
-	rows, err := s.chRowsScope(r.Context(), chTenantScope(r), `
+	fbExclude := ""
+	if ex := s.corrExcludeCond(r); ex != "" {
+		fbExclude = " AND " + ex
+	}
+	rows, err := s.chRowsScope(r.Context(), s.chTenantScope(r), `
 SELECT tenant_id, version, top_hypothesis, verdict_tier
   FROM netops.corr_objects
- WHERE correlation_id = '`+id+`'
+ WHERE correlation_id = '`+id+`'`+fbExclude+`
  ORDER BY version DESC
  LIMIT 1
  FORMAT JSON`, "api:/api/correlations")
@@ -1142,7 +1214,7 @@ func (s *server) securityExposureStories(r *http.Request, limit int) ([]map[stri
 	// stories are the customer's own exposure.
 	claims, _ := userFrom(r.Context())
 	tenant, cross := principalTenant(claims)
-	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
+	_, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
 	if deny {
 		// The operator scoped INTO a restricted tenant reads nothing, and no
 		// ClickHouse query is issued at all. An empty list is the honest answer
@@ -1152,13 +1224,13 @@ func (s *server) securityExposureStories(r *http.Request, limit int) ([]map[stri
 	}
 	sinceCond := "created_at >= now() - INTERVAL " + intToString(int(since.Seconds())) + " SECOND"
 	conds := []string{"1", securityExposureStoriesCond(sinceCond)}
-	if len(exclude) > 0 {
-		// The row policies cannot express this: '__all__' unlocks every tenant
-		// by design, which is exactly the Global view a restricted tenant must
-		// not appear in. So it is a predicate on the object's own tenant_id, the
-		// same column logs.go's must_not clause names and searchCases already
-		// excludes on.
-		conds = append(conds, "tenant_id NOT IN ("+sqlInList(exclude)+")")
+	// The Global half. The row policies cannot express this: '__all__' unlocks
+	// every tenant by design, which is exactly the Global view a restricted
+	// tenant must not appear in. So it is a predicate on the object's own
+	// tenant_id, produced by the ONE producer every correlation-family read
+	// now shares, rather than a second hand-rolled NOT IN list here.
+	if ex := s.corrExcludeCond(r); ex != "" {
+		conds = append(conds, ex)
 	}
 	return s.chRows(r, correlationsListSQL(sinceCond, conds, limit))
 }

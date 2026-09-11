@@ -367,7 +367,7 @@ var routeIsolationLedger = map[string]string{
 	// proxying a caller-supplied id to the (unauthenticated, __all__-reading)
 	// correlation service with NO ownership check — a live cross-tenant leak.
 	// Audited 2026-08-04: every OTHER subresource funnels through loadCorrSlice
-	// / buildRcaReportForID, which read at chTenantScope(r) and 404 on zero rows
+	// / buildRcaReportForID, which read at s.chTenantScope(r) and 404 on zero rows
 	// (correlations.go:578-579). {id}/replay now performs the same ownership
 	// pre-read (correlations_replay_isolation_test.go pins it).
 	// Adding a NEW subresource here? It must reach data through a tenant-scoped

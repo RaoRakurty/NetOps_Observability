@@ -92,7 +92,7 @@ func newIGPFixture(t *testing.T) *igpFixture {
 		Authz:        f.s.igpmonAuthz,
 		LookupDevice: f.s.igpmonLookupDevice,
 		CanSee:       igpmonCanSee,
-		Scope:        chTenantScope,
+		Scope:        f.s.chTenantScope,
 		ScopeFilters: f.s.igpmonScopeFilters,
 		CHQuery: func(_ context.Context, scope, sql string) ([]map[string]any, error) {
 			f.ch = append(f.ch, igpCall{scope: scope, sql: sql})
@@ -289,7 +289,7 @@ func TestIgpmonTenantlessPrincipalReadsNothing(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET %s = %d (%s)", p, w.Code, w.Body.String())
 		}
-		if chTenantScope(req(http.MethodGet, p, "", tenantless)) != "__none__" {
+		if f.s.chTenantScope(req(http.MethodGet, p, "", tenantless)) != "__none__" {
 			t.Fatalf("a tenantless principal did not resolve to the __none__ sentinel")
 		}
 		if len(f.ch) != 0 {
