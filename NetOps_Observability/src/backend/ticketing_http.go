@@ -333,11 +333,18 @@ func (s *server) manualTicketAction(w http.ResponseWriter, r *http.Request, id, 
 	// allowance), so scoping a platform owner to the literal "global" would never
 	// match the platform's own objects (tenant_id=""). A tenant-scoped caller
 	// stays confined to its tenant, so a cross-tenant id 404s at the read.
-	scope := tenant
-	if cross {
-		scope = "__all__"
-	}
-	payload, policy, owner, mergedInto, status, err := s.buildTicketPayloadForObject(r.Context(), scope, id)
+	//
+	// It comes from s.chTenantScopeFor, the ONE derivation, and not from the same
+	// rule written out again here. Hand-rolling it is how this path missed the
+	// operator-visibility restriction: the chokepoint hands an operator that
+	// scoped INTO a restricted tenant the read-nothing scope, and a local copy of
+	// the tenant/cross rule silently opted out of that.
+	scope := s.chTenantScopeFor(claims)
+	// The Global half the scope cannot close: '__all__' means all, and the row-
+	// policy grammar has no "all except", so the exclusion rides in the SQL —
+	// the same tenant_id predicate every other correlation read carries.
+	payload, policy, owner, mergedInto, status, err := s.buildTicketPayloadForObject(
+		r.Context(), scope, s.tenantIDExcludeCondFor(claims, "tenant_id"), id)
 	if err != nil {
 		writeError(w, status, err)
 		return
@@ -422,8 +429,15 @@ func (s *server) manualTicketAction(w http.ResponseWriter, r *http.Request, id, 
 // mergedInto is non-empty when the object was merged into another correlation —
 // the caller decides how to surface that (only AFTER its ownership guard, so a
 // leaked foreign row never discloses another tenant's canonical id).
-func (s *server) buildTicketPayloadForObject(ctx context.Context, scope, id string) (ticketing.Payload, ticketing.IncidentPolicy, string, string, int, error) {
-	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSliceAtScope(ctx, scope, "", id, 0)
+//
+// exclude is the caller's operator-visibility exclusion, the tenant_id predicate
+// s.tenantIDExcludeCondFor produces. It is a REQUIRED argument rather than an
+// optional extra: this function used to pass "" to loadCorrSliceAtScope, which
+// is the one correlation read on the platform that carried no exclusion at all,
+// and an empty string is indistinguishable from "nothing to exclude" at the call
+// site. Naming it forces every caller to answer the question.
+func (s *server) buildTicketPayloadForObject(ctx context.Context, scope, exclude, id string) (ticketing.Payload, ticketing.IncidentPolicy, string, string, int, error) {
+	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSliceAtScope(ctx, scope, exclude, id, 0)
 	if err != nil {
 		return ticketing.Payload{}, ticketing.IncidentPolicy{}, "", "", status, err
 	}
@@ -444,6 +458,13 @@ func (s *server) buildTicketPayloadForObject(ctx context.Context, scope, id stri
 // resolveMergeChain delegates the bounded/cycle-safe/tenant-fenced walk to
 // ticketing.ResolveMergeChain (P2 RA.12); the scoped projection read stays
 // here as the injected hop reader.
+//
+// It carries no operator-visibility exclusion of its own, and does not need one:
+// it is only ever reached for an object the caller ALREADY read at an admitted
+// scope, and the walk is fenced to that object's owning tenant, so no hop can
+// land on a tenant the caller was not already allowed to see. A restricted
+// tenant's object never gets this far — buildTicketPayloadForObject answers 404
+// first.
 func (s *server) resolveMergeChain(ctx context.Context, scope, owner, requested, first string) (string, int) {
 	return ticketing.ResolveMergeChain(ctx, owner, requested, first, isUUIDToken,
 		func(ctx context.Context, id string) (ticketing.MergeHop, error) {
