@@ -191,7 +191,7 @@ type frameworkWrite struct {
 func (a *API) HandleFrameworks(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		p, ok := a.d.Authz(w, r, GateRead)
+		p, ok := a.authz(w, r, GateRead)
 		if !ok {
 			return
 		}
@@ -223,7 +223,7 @@ func (a *API) frameworkStates(r *http.Request, p Principal) (map[string]bool, bo
 	if a.d.FrameworkStore == nil {
 		return nil, false, nil
 	}
-	return a.d.FrameworkStore.FrameworkStates(r.Context(), p.Tenant, p.Cross)
+	return a.d.FrameworkStore.FrameworkStates(r.Context(), p)
 }
 
 // frameworksBody assembles the response.
@@ -266,7 +266,7 @@ func (a *API) frameworksBody(views []FrameworkView, configured bool, p Principal
 }
 
 func (a *API) putFrameworks(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.d.Authz(w, r, GateAdmin)
+	p, ok := a.authz(w, r, GateAdmin)
 	if !ok {
 		return
 	}
@@ -324,7 +324,7 @@ func (a *API) putFrameworks(w http.ResponseWriter, r *http.Request) {
 	// "this tenant has chosen" is observable and a deliberate all-off selection
 	// is not silently replaced by the defaults on the next read. A framework the
 	// body did not mention keeps whatever the caller is currently seeing.
-	current, configured, err := a.d.FrameworkStore.FrameworkStates(r.Context(), p.Tenant, p.Cross)
+	current, configured, err := a.d.FrameworkStore.FrameworkStates(r.Context(), p)
 	if err != nil {
 		a.d.WriteError(w, http.StatusBadGateway, err)
 		return
@@ -353,7 +353,7 @@ func (a *API) putFrameworks(w http.ResponseWriter, r *http.Request) {
 		sort.Strings(ids)
 		a.d.Audit(r, p.Tenant, "security_frameworks_update", map[string]any{"frameworks": ids})
 	}
-	after, afterConfigured, err := a.d.FrameworkStore.FrameworkStates(r.Context(), p.Tenant, p.Cross)
+	after, afterConfigured, err := a.d.FrameworkStore.FrameworkStates(r.Context(), p)
 	if err != nil {
 		a.d.WriteError(w, http.StatusBadGateway, err)
 		return
@@ -474,7 +474,7 @@ func (a *API) HandleCompliance(w http.ResponseWriter, r *http.Request) {
 	states, configured := map[string]bool{}, false
 	if a.d.FrameworkStore != nil {
 		var err error
-		states, configured, err = a.d.FrameworkStore.FrameworkStates(r.Context(), p.Tenant, p.Cross)
+		states, configured, err = a.d.FrameworkStore.FrameworkStates(r.Context(), p)
 		if err != nil {
 			a.d.WriteError(w, http.StatusBadGateway, err)
 			return

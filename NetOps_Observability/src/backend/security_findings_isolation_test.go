@@ -124,6 +124,24 @@ type secFakeOS struct {
 	// would empty every fixture rather than sharpen it. Switch it on wherever
 	// the WINDOW is the thing under test, and stamp the fixture with secDocAt.
 	windowAware bool
+	// aggAware makes the double COMPUTE the aggregations out of the documents
+	// that matched, instead of echoing the canned `aggs` string back whatever
+	// was asked. It is what turns the facet counts, the CTEM funnel, the
+	// coverage cardinality, the trend histogram and the compliance fold from
+	// "the handler returned 200" into evidence about what the query actually
+	// folded.
+	//
+	// It stayed OPT-IN for the same reason windowAware did: the tests that came
+	// before it assert on hand-written aggregation fixtures (a truncated fold, a
+	// bucket shape the handler has to survive) which a computed answer would
+	// overwrite. Switch it on wherever the COUNT is the thing under test — a
+	// count is a disclosure, so an isolation test has to read the real one.
+	//
+	// The vocabulary is closed and small, because the bodies in this package
+	// emit exactly four kinds: `terms`, `cardinality`, `top_hits` and
+	// `date_histogram`, nested. An aggregation outside it FAILS the test rather
+	// than being skipped, on the same reasoning oneClause does.
+	aggAware bool
 	// t reports an emitted clause the double cannot evaluate. It is set by
 	// secStartFakeOS.
 	t *testing.T
@@ -571,13 +589,13 @@ func (f *secFakeOS) all() []secOSCall {
 // page. It returns the hits to serve and the number of DOCUMENTS that matched
 // (which is what hits.total counts — collapse groups are counted by the
 // cardinality aggregation instead, and that one is canned).
-func (f *secFakeOS) secAnswer(raw string, hits []secHit) (served []secHit, total int) {
+func (f *secFakeOS) secAnswer(raw string, hits []secHit) (served []secHit, total int, folded []secHit) {
 	var body map[string]any
 	if err := json.Unmarshal([]byte(raw), &body); err != nil {
 		if f.t != nil {
 			f.t.Errorf("the API sent a body OpenSearch could not parse: %v", err)
 		}
-		return nil, 0
+		return nil, 0, nil
 	}
 	matched := make([]secHit, 0, len(hits))
 	for _, h := range hits {
@@ -586,6 +604,9 @@ func (f *secFakeOS) secAnswer(raw string, hits []secHit) (served []secHit, total
 		}
 	}
 	total = len(matched)
+	// The aggregation set is the WHOLE match, before sorting, collapsing or
+	// paging — as the cluster folds it.
+	folded = append([]secHit{}, matched...)
 
 	spec := secSortSpec(body)
 	if len(spec) > 0 {
@@ -639,7 +660,221 @@ func (f *secFakeOS) secAnswer(raw string, hits []secHit) (served []secHit, total
 	if size >= 0 && len(matched) > size {
 		matched = matched[:size]
 	}
-	return matched, total
+	return matched, total, folded
+}
+
+// computedAggs folds the matched documents into the `aggregations` object the
+// emitted body asked for. It is the aggAware half of the double: without it the
+// facet counts, the CTEM funnel, coverage, the trend and the compliance
+// scorecards are canned, and a count that crossed a tenant boundary reads
+// exactly like one that did not.
+//
+// A body with no `aggs` folds nothing (the empty string), which is what a plain
+// list query gets.
+func (f *secFakeOS) computedAggs(raw string, docs []secHit) string {
+	var body struct {
+		Aggs map[string]any `json:"aggs"`
+	}
+	if err := json.Unmarshal([]byte(raw), &body); err != nil || len(body.Aggs) == 0 {
+		return ""
+	}
+	out, err := json.Marshal(f.secAggregate(body.Aggs, docs))
+	if err != nil {
+		f.t.Errorf("secFakeOS could not render the aggregations it computed: %v", err)
+		return ""
+	}
+	return string(out)
+}
+
+// secAggregate evaluates one level of the aggregation tree over `docs`. The
+// vocabulary is exactly the four kinds the bodies in this package emit; an
+// aggregation outside it FAILS the test, for the same reason oneClause fails on
+// an unknown clause — a fold this double silently skipped would answer a
+// leaking query and a fixed one identically.
+func (f *secFakeOS) secAggregate(spec map[string]any, docs []secHit) map[string]any {
+	out := map[string]any{}
+	for name, raw := range spec {
+		a, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		sub, _ := a["aggs"].(map[string]any)
+		switch {
+		case a["terms"] != nil:
+			out[name] = map[string]any{"buckets": f.secTermsAgg(a["terms"], sub, docs)}
+		case a["cardinality"] != nil:
+			out[name] = map[string]any{"value": secCardinality(a["cardinality"], docs)}
+		case a["top_hits"] != nil:
+			out[name] = map[string]any{"hits": map[string]any{"hits": secTopHits(a["top_hits"], docs)}}
+		case a["date_histogram"] != nil:
+			out[name] = map[string]any{"buckets": f.secDateHistogram(a["date_histogram"], sub, docs)}
+		default:
+			f.t.Errorf("secFakeOS cannot evaluate the emitted aggregation %q — teach the double or a test asserting this count narrows proves nothing", name)
+		}
+	}
+	return out
+}
+
+// secTermsAgg groups by every value the field carries (an array contributes each
+// of its elements, as attrs.standards does). Order is the emitted `order` when
+// it names _key, and doc_count descending otherwise — the cluster's default.
+func (f *secFakeOS) secTermsAgg(spec any, sub map[string]any, docs []secHit) []any {
+	opts, _ := spec.(map[string]any)
+	field := secScalarString(opts["field"])
+	keys := []string{}
+	groups := map[string][]secHit{}
+	for _, h := range docs {
+		for _, v := range secFieldValues(h.src, field) {
+			if v == "" {
+				continue
+			}
+			if _, seen := groups[v]; !seen {
+				keys = append(keys, v)
+			}
+			groups[v] = append(groups[v], h)
+		}
+	}
+	byKey := false
+	if order, ok := opts["order"].([]any); ok {
+		for _, e := range order {
+			if m, ok := e.(map[string]any); ok {
+				if _, has := m["_key"]; has {
+					byKey = true
+				}
+			}
+		}
+	}
+	sort.SliceStable(keys, func(i, j int) bool {
+		if byKey {
+			return keys[i] < keys[j]
+		}
+		if len(groups[keys[i]]) != len(groups[keys[j]]) {
+			return len(groups[keys[i]]) > len(groups[keys[j]])
+		}
+		return keys[i] < keys[j]
+	})
+	if n, ok := opts["size"].(float64); ok && int(n) >= 0 && len(keys) > int(n) {
+		keys = keys[:int(n)]
+	}
+	buckets := make([]any, 0, len(keys))
+	for _, k := range keys {
+		b := map[string]any{"key": k, "doc_count": len(groups[k])}
+		for name, v := range f.secAggregate(sub, groups[k]) {
+			b[name] = v
+		}
+		buckets = append(buckets, b)
+	}
+	return buckets
+}
+
+// secCardinality counts DISTINCT non-empty values of the field — exact here,
+// where the cluster's is approximate above its precision threshold.
+func secCardinality(spec any, docs []secHit) int {
+	opts, _ := spec.(map[string]any)
+	field := secScalarString(opts["field"])
+	seen := map[string]bool{}
+	for _, h := range docs {
+		for _, v := range secFieldValues(h.src, field) {
+			if v != "" {
+				seen[v] = true
+			}
+		}
+	}
+	return len(seen)
+}
+
+// secTopHits returns the first `size` documents under the emitted sort, verbatim.
+// The `_source` includes list is IGNORED: every reader in this package pulls
+// named fields out of the source, so a wider projection cannot change an answer.
+func secTopHits(spec any, docs []secHit) []any {
+	opts, _ := spec.(map[string]any)
+	sorted := append([]secHit{}, docs...)
+	sortSpec := secSortSpec(opts)
+	if len(sortSpec) > 0 {
+		sort.SliceStable(sorted, func(i, j int) bool {
+			return secCmpTuple(secSortValues(sorted[i], sortSpec), secSortValues(sorted[j], sortSpec), sortSpec) < 0
+		})
+	}
+	size := 1
+	if n, ok := opts["size"].(float64); ok {
+		size = int(n)
+	}
+	if len(sorted) > size {
+		sorted = sorted[:size]
+	}
+	out := make([]any, 0, len(sorted))
+	for _, h := range sorted {
+		out = append(out, json.RawMessage(h.raw))
+	}
+	return out
+}
+
+// secDateHistogram buckets by the fixed interval, keyed on the bucket floor.
+// `extended_bounds` / `min_doc_count: 0` are NOT honoured: the cluster would
+// emit empty buckets across the whole range, and an empty bucket carries no
+// information an isolation test can read. A bucket appears here only when a
+// document landed in it, which is exactly the fact under test.
+func (f *secFakeOS) secDateHistogram(spec any, sub map[string]any, docs []secHit) []any {
+	opts, _ := spec.(map[string]any)
+	field := secScalarString(opts["field"])
+	step := secInterval(secScalarString(opts["fixed_interval"]))
+	if step <= 0 {
+		f.t.Errorf("secFakeOS cannot read the emitted date_histogram interval %q", opts["fixed_interval"])
+		return nil
+	}
+	keys := []int64{}
+	groups := map[int64][]secHit{}
+	for _, h := range docs {
+		raw, ok := secFieldRaw(h.src, field)
+		if !ok {
+			continue
+		}
+		ms, ok := raw.(float64)
+		if !ok {
+			continue
+		}
+		k := (int64(ms) / step) * step
+		if _, seen := groups[k]; !seen {
+			keys = append(keys, k)
+		}
+		groups[k] = append(groups[k], h)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	buckets := make([]any, 0, len(keys))
+	for _, k := range keys {
+		b := map[string]any{
+			"key":           k,
+			"key_as_string": time.UnixMilli(k).UTC().Format(time.RFC3339),
+			"doc_count":     len(groups[k]),
+		}
+		for name, v := range f.secAggregate(sub, groups[k]) {
+			b[name] = v
+		}
+		buckets = append(buckets, b)
+	}
+	return buckets
+}
+
+// secInterval reads the fixed_interval vocabulary TrendBuckets emits (minutes,
+// hours, days) into milliseconds. Anything else reads as 0, which the caller
+// reports rather than guessing at.
+func secInterval(s string) int64 {
+	if len(s) < 2 {
+		return 0
+	}
+	n, err := strconv.Atoi(s[:len(s)-1])
+	if err != nil || n <= 0 {
+		return 0
+	}
+	switch s[len(s)-1] {
+	case 'm':
+		return int64(n) * 60 * 1000
+	case 'h':
+		return int64(n) * 60 * 60 * 1000
+	case 'd':
+		return int64(n) * 24 * 60 * 60 * 1000
+	}
+	return 0
 }
 
 // secStartFakeOS wires the stand-in into the env the real client reads.
@@ -654,14 +889,19 @@ func secStartFakeOS(t *testing.T, fake *secFakeOS) {
 		if canned == "" {
 			canned = "[]"
 		}
-		served, total := fake.secAnswer(string(body), secDecodeHits(canned))
+		served, total, folded := fake.secAnswer(string(body), secDecodeHits(canned))
 		rows := make([]string, 0, len(served))
 		for _, h := range served {
 			rows = append(rows, string(h.raw))
 		}
 		out := `{"took":1,"timed_out":false,"hits":{"total":{"value":` +
 			strconv.Itoa(total) + `,"relation":"eq"},"hits":[` + strings.Join(rows, ",") + `]}`
-		if fake.aggs != "" {
+		switch {
+		case fake.aggAware:
+			if aggs := fake.computedAggs(string(body), folded); aggs != "" {
+				out += `,"aggregations":` + aggs
+			}
+		case fake.aggs != "":
 			out += `,"aggregations":` + fake.aggs
 		}
 		out += "}"

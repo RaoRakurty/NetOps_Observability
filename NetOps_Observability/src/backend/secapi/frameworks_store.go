@@ -61,7 +61,9 @@ type FrameworkStore interface {
 	// enabled, plus whether the caller's scope holds ANY row at all. A false
 	// `configured` means "has not chosen" and the caller applies the shipped
 	// default set — it does NOT mean "everything is off".
-	FrameworkStates(ctx context.Context, tenant string, cross bool) (states map[string]bool, configured bool, err error)
+	// It takes the whole Principal, not tenant+cross, because "visible" is two
+	// rules now: the tenant boundary AND the operator-visibility restriction.
+	FrameworkStates(ctx context.Context, p Principal) (states map[string]bool, configured bool, err error)
 	// SetFrameworkStates upserts the selection. owner is the tenant the rows are
 	// stamped with — derived from the authenticated principal by the handler,
 	// NEVER from the request body (§3a rule 2).
@@ -164,13 +166,13 @@ func (s *FrameworkFileStore) flushLocked() error {
 	return platformdb.Save(s.path, b)
 }
 
-func (s *FrameworkFileStore) FrameworkStates(_ context.Context, tenant string, cross bool) (map[string]bool, bool, error) {
+func (s *FrameworkFileStore) FrameworkStates(_ context.Context, p Principal) (map[string]bool, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := map[string]bool{}
 	configured := false
 	for owner, byID := range s.rows {
-		if !visible(tenant, cross, owner) {
+		if !visibleTo(p, owner) {
 			continue
 		}
 		for id, r := range byID {
@@ -221,11 +223,12 @@ type frameworkPGStore struct{ db DB }
 // NewFrameworkPGStore builds the Postgres-backed selection register.
 func NewFrameworkPGStore(db DB) FrameworkStore { return &frameworkPGStore{db: db} }
 
-func (p *frameworkPGStore) FrameworkStates(ctx context.Context, tenant string, cross bool) (map[string]bool, bool, error) {
+func (p *frameworkPGStore) FrameworkStates(ctx context.Context, pr Principal) (map[string]bool, bool, error) {
 	out := map[string]bool{}
 	configured := false
-	err := p.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT framework_id, enabled FROM security_framework_state`)
+	sql, args := excludeSQL(`SELECT framework_id, enabled FROM security_framework_state`, pr)
+	err := p.db.WithTenant(ctx, pr.Tenant, pr.Cross, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, sql, args...)
 		if err != nil {
 			return err
 		}

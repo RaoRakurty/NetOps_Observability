@@ -66,9 +66,36 @@ const (
 	GateAdmin
 )
 
+// RestrictedScope is the tenant a DENIED read is answered under. It is not a
+// tenant: no finding, no rule row and no saved view anywhere carries it, so
+// every store keyed by tenant returns nothing for it and the caller gets a
+// correctly shaped, empty view.
+//
+// This is how the plane says "serve nothing" without inventing a status code.
+// Logs, flows, metrics, igpmon, the BMP feed and the digital-experience lane all
+// answer a denied operator with 200 and no rows — never a 403, which would
+// confirm the tenant has findings at all. It is the same sentinel dem.RestrictedScope
+// uses, and the tenant-keyed form of the metrics lane's sentinel device filter.
+const RestrictedScope = "__netops_operator_restricted__"
+
+// fieldTenantID is the owning-tenant column on a findings document. It is
+// spelled here rather than imported because it is the same column
+// oslog.TenantFilter matches on and logs.go's must_not clause names — one name,
+// three readers, and this one exists so the exclusion below is readable next to
+// the clause it builds.
+const fieldTenantID = "tenant_id"
+
 // Principal is the caller's already-authorized scope. It is produced by
 // Deps.Authz from the request's claims; nothing in this package derives a
 // tenant from a query string or a request body.
+//
+// It carries the per-tenant OPERATOR-VISIBILITY restriction
+// (Tenant.OperatorRestricted) as well as the tenant, because a security finding
+// is the customer's own exposure: which of its devices fail which control, and
+// how many. The platform owner's cross-tenant read is not automatically a right
+// to read that. The composition root resolves the restriction (it owns the
+// tenant store); this package only obeys it, the same way it only obeys the
+// tenant it is handed.
 type Principal struct {
 	// Tenant is principalTenant()'s tenant; Cross is its cross-tenant flag.
 	Tenant string
@@ -82,34 +109,82 @@ type Principal struct {
 
 	// Deny and ExcludeTenants carry the per-tenant OPERATOR-VISIBILITY
 	// restriction (Tenant.OperatorRestricted), the compliance switch logs,
-	// flows, metrics, igpmon and the BMP feed all obey. Deny means the platform
-	// operator has scoped INTO a restricted tenant and may read nothing of it;
-	// ExcludeTenants are the tenant ids to drop from a cross-tenant (Global)
-	// view. Both are RESOLVED by the composition root, which owns the tenant
-	// store, exactly like Tenant and Cross.
+	// flows, metrics, igpmon, the BMP feed, unified search, the RCA path spine
+	// and the digital-experience lane all obey. Both are RESOLVED by the
+	// composition root, which owns the tenant store, exactly like Tenant and
+	// Cross; this package only obeys them.
 	//
 	// Any surface built on this principal that serves per-tenant data must obey
-	// them, in the one place that already owns its read rule. The security
-	// producer lane does, in seclane.Lane.StatusFor.
-	Deny           bool
+	// them, in the one place that already owns its read rule. This package does
+	// it in API.authz and in scope(); the security producer lane does it in
+	// seclane.Lane.StatusFor.
+
+	// Deny is set when the caller is the platform operator scoped INTO a tenant
+	// whose operator-visibility restriction is in force, and it means the caller
+	// may read nothing of that tenant. A denied read is answered under
+	// RestrictedScope: no finding, no facet count, no funnel number, no
+	// scorecard and no saved view.
+	//
+	// It is resolved by the composition root for EVERY gate, not for the read
+	// gate alone, because on this platform the gate says what a route costs in
+	// permission, not whether it discloses: seclane's status route is a pure
+	// read behind GateAdmin, and this package's own GateAdmin routes read the
+	// tenant's control-plane state back and return it.
+	//
+	// That is not the same as answering a WRITE under a scope that owns nothing,
+	// which really would create rows no tenant could ever see. API.authz refuses
+	// a denied non-read outright instead; only a denied READ is rescoped.
+	Deny bool
+
+	// ExcludeTenants are tenant ids whose rows must be filtered OUT of a
+	// cross-tenant (Global) view. It is normally empty; it is non-empty only for
+	// the platform operator while some tenant is restricted.
 	ExcludeTenants []string
 }
 
-// Excluded reports whether data owned by tenantID is hidden from this principal
-// by the operator-visibility restriction. Case-insensitive, because a tenant id
-// is an opaque handle and the two sides of this comparison are minted by
-// different stores.
+// Excluded reports whether a row owned by tenantID is hidden from this principal
+// by the operator-visibility restriction. Case-insensitive and blank-tolerant,
+// because a tenant id is an opaque handle and the two sides of this comparison
+// are minted by different stores (the tenant store and the
+// findings/control-plane rows).
 func (p Principal) Excluded(tenantID string) bool {
-	if len(p.ExcludeTenants) == 0 {
+	want := NormTenant(tenantID)
+	if want == "" {
 		return false
 	}
-	want := strings.ToLower(strings.TrimSpace(tenantID))
 	for _, id := range p.ExcludeTenants {
-		if strings.ToLower(strings.TrimSpace(id)) == want {
+		if NormTenant(id) == want {
 			return true
 		}
 	}
 	return false
+}
+
+// hiddenTenants is the normalized, blank-free exclusion list — the form a SQL
+// or OpenSearch clause names. Empty means no exclusion at all, which is the
+// normal state of every deployment where no tenant has switched the restriction
+// on.
+func (p Principal) hiddenTenants() []string {
+	out := make([]string, 0, len(p.ExcludeTenants))
+	for _, id := range p.ExcludeTenants {
+		if t := NormTenant(id); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// restricted is the principal a DENIED read is answered under. It owns nothing:
+// the sentinel tenant has no index, no rule row and no saved view, and the
+// device sets are dropped so the untagged-document branch of oslog.TenantFilter
+// cannot match either.
+//
+// Deny is KEPT on the result. Two routes on this plane do not read through
+// scope() — the exposure stories come from ClickHouse and the posture denominator
+// from the device registry — and both ask the principal whether they may read at
+// all.
+func (p Principal) restricted() Principal {
+	return Principal{Tenant: RestrictedScope, Subject: p.Subject, Deny: true}
 }
 
 // Deps are the injected collaborators (§5: interfaces for all external deps).
@@ -181,12 +256,75 @@ func (a *API) now() time.Time {
 
 func (a *API) count(op string) { a.d.Metrics.Inc(op) }
 
+// authz authorizes the caller and applies the OPERATOR-VISIBILITY restriction.
+// Every HTTP handler in this package comes through here — begin() for the ones
+// that take filters, this directly for the ones that do not — so a route added
+// later inherits the rule instead of having to remember it. (ListFindings is
+// not an HTTP route: it is the assistant's seam, and the wiring there refuses
+// to hand out any tool at all when the restriction applies.)
+//
+// A denied READ is scoped to RestrictedScope, which owns nothing, so the route
+// renders its honest empty view with a 200 and a finding by id answers 404.
+// There is no 403, because a refusal would confirm the tenant has findings at
+// all.
+//
+// A denied WRITE or ADMIN call is refused with 403. Deny is resolved for every
+// gate, not for the read gate alone, and that matters on this plane: putRules
+// and putFrameworks sit behind GateAdmin and both read the tenant's current
+// control-plane state back and return it, so a no-op PUT would otherwise report
+// which detections and which frameworks a restricted tenant has turned on.
+//
+// Refusal, not rescoping, is the right answer to a write: a write stamped with a
+// scope that owns nothing would create rows no tenant could ever see. The 403
+// discloses nothing the caller does not already have, because only the platform
+// operator is ever denied and the operator is who sets the restriction on the
+// tenant.
+func (a *API) authz(w http.ResponseWriter, r *http.Request, gate Gate) (Principal, bool) {
+	p, ok := a.d.Authz(w, r, gate)
+	if !ok {
+		return Principal{}, false
+	}
+	if !p.Deny {
+		return p, true
+	}
+	if gate != GateRead {
+		a.d.WriteError(w, http.StatusForbidden, errors.New("this tenant's data is operator-restricted"))
+		return Principal{}, false
+	}
+	return p.restricted(), true
+}
+
 // scope resolves the caller's index pattern and per-doc tenant clause. It is
 // the ONE place both are derived, so no handler can accidentally build a
 // pattern by hand (the failure mode §3a rule 4 exists to prevent).
+//
+// It is also where the GLOBAL half of the operator-visibility restriction is
+// applied. A cross-tenant principal reads `netops-secfindings-*` and carries NO
+// per-doc clause by design, so the restricted tenant's documents are named by
+// the pattern and matched by the query: the exclusion has to be a clause, and it
+// is the same `tenant_id` must_not that logs.go emits. The DENY half needs
+// nothing here — authz already handed us a principal whose tenant owns no index.
 func scope(p Principal) (index string, tenantClause map[string]any) {
-	return oslog.TenantIndexPattern(Signal, p.Tenant, p.Cross),
-		oslog.TenantFilter(p.Tenant, p.Cross, p.DeviceKeys, p.DeviceAddrs)
+	index = oslog.TenantIndexPattern(Signal, p.Tenant, p.Cross)
+	clause := oslog.TenantFilter(p.Tenant, p.Cross, p.DeviceKeys, p.DeviceAddrs)
+	hidden := p.hiddenTenants()
+	if len(hidden) == 0 {
+		return index, clause
+	}
+	terms := make([]any, 0, len(hidden))
+	for _, id := range hidden {
+		terms = append(terms, id)
+	}
+	inner := map[string]any{
+		"must_not": []any{map[string]any{"terms": map[string]any{fieldTenantID: terms}}},
+	}
+	// The tenant clause is nil for a cross-tenant caller (that IS the Global
+	// view). When it is present the two are ANDed, so an exclusion can only ever
+	// narrow what the tenant boundary already allowed.
+	if clause != nil {
+		inner["filter"] = []any{clause}
+	}
+	return index, map[string]any{"bool": inner}
 }
 
 // ---- OpenSearch response shapes --------------------------------------------
@@ -356,7 +494,7 @@ func (a *API) begin(w http.ResponseWriter, r *http.Request, gate Gate, extraPara
 		a.d.WriteError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
 		return Principal{}, Filters{}, "", nil, false
 	}
-	p, ok := a.d.Authz(w, r, gate)
+	p, ok := a.authz(w, r, gate)
 	if !ok {
 		return Principal{}, Filters{}, "", nil, false
 	}
@@ -535,7 +673,7 @@ func (a *API) HandleFindingByID(w http.ResponseWriter, r *http.Request) {
 		a.d.WriteError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
 		return
 	}
-	p, ok := a.d.Authz(w, r, GateRead)
+	p, ok := a.authz(w, r, GateRead)
 	if !ok {
 		return
 	}
@@ -947,7 +1085,12 @@ func (a *API) HandlePosture(w http.ResponseWriter, r *http.Request) {
 	}
 
 	total := 0
-	if a.d.RegistryDevices != nil {
+	// The denominator does NOT come through scope(): the seam counts the devices
+	// visible to the REQUEST's claims. A count is a disclosure — "this tenant has
+	// 412 devices" is the customer's fleet size — so a denied caller does not ask
+	// for it. The wiring applies the same rule and the cross-tenant exclusion;
+	// this is the half that does not depend on it being right.
+	if a.d.RegistryDevices != nil && !p.Deny {
 		total = a.d.RegistryDevices(r)
 	}
 	// The registry is the denominator, but a device can carry findings while
@@ -1012,7 +1155,8 @@ func (a *API) HandleExposureStories(w http.ResponseWriter, r *http.Request) {
 		a.d.WriteError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
 		return
 	}
-	if _, ok := a.d.Authz(w, r, GateRead); !ok {
+	p, ok := a.authz(w, r, GateRead)
+	if !ok {
 		return
 	}
 	if err := httppage.RejectUnknownQuery(r, "since"); err != nil {
@@ -1025,6 +1169,17 @@ func (a *API) HandleExposureStories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.count("exposure_stories")
+	// This is the one read on the plane that does NOT go through scope(): the
+	// stories are correlation objects in ClickHouse, and the injected seam reads
+	// them from the REQUEST's claims rather than from this principal. A denied
+	// caller is answered here, before the seam is called, so no ClickHouse read
+	// happens at all. The wiring applies the same rule (and the cross-tenant
+	// EXCLUSION, which only SQL can express) — this is the half that does not
+	// depend on it being right.
+	if p.Deny {
+		a.d.WriteJSON(w, http.StatusOK, []map[string]any{})
+		return
+	}
 	if a.d.ExposureStories == nil {
 		a.d.WriteJSON(w, http.StatusOK, []map[string]any{})
 		return
@@ -1057,7 +1212,7 @@ type ruleWrite struct {
 func (a *API) HandleRules(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		p, ok := a.d.Authz(w, r, GateRead)
+		p, ok := a.authz(w, r, GateRead)
 		if !ok {
 			return
 		}
@@ -1066,7 +1221,7 @@ func (a *API) HandleRules(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.count("rules")
-		states, err := a.d.Store.RuleStates(r.Context(), p.Tenant, p.Cross)
+		states, err := a.d.Store.RuleStates(r.Context(), p)
 		if err != nil {
 			a.d.WriteError(w, http.StatusBadGateway, err)
 			return
@@ -1081,7 +1236,7 @@ func (a *API) HandleRules(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) putRules(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.d.Authz(w, r, GateAdmin)
+	p, ok := a.authz(w, r, GateAdmin)
 	if !ok {
 		return
 	}
@@ -1146,7 +1301,7 @@ func (a *API) putRules(w http.ResponseWriter, r *http.Request) {
 		sort.Strings(ids)
 		a.d.Audit(r, p.Tenant, "security_rules_update", map[string]any{"rules": ids})
 	}
-	states2, err := a.d.Store.RuleStates(r.Context(), p.Tenant, p.Cross)
+	states2, err := a.d.Store.RuleStates(r.Context(), p)
 	if err != nil {
 		a.d.WriteError(w, http.StatusBadGateway, err)
 		return
@@ -1168,7 +1323,7 @@ type viewWrite struct {
 func (a *API) HandleViews(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		p, ok := a.d.Authz(w, r, GateRead)
+		p, ok := a.authz(w, r, GateRead)
 		if !ok {
 			return
 		}
@@ -1177,7 +1332,7 @@ func (a *API) HandleViews(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.count("views")
-		views, err := a.d.Store.Views(r.Context(), p.Tenant, p.Cross)
+		views, err := a.d.Store.Views(r.Context(), p)
 		if err != nil {
 			a.d.WriteError(w, http.StatusBadGateway, err)
 			return
@@ -1194,7 +1349,7 @@ func (a *API) HandleViews(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) postView(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.d.Authz(w, r, GateWrite)
+	p, ok := a.authz(w, r, GateWrite)
 	if !ok {
 		return
 	}
@@ -1250,7 +1405,7 @@ func (a *API) postView(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) deleteView(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.d.Authz(w, r, GateWrite)
+	p, ok := a.authz(w, r, GateWrite)
 	if !ok {
 		return
 	}

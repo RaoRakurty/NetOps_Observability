@@ -48,7 +48,7 @@ func TestSecurityControlPlaneRLSIsolationPG(t *testing.T) {
 		t.Fatalf("globex write: %v", err)
 	}
 
-	mine, err := st.RuleStates(ctx, "acme", false)
+	mine, err := st.RuleStates(ctx, secapi.Principal{Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("acme read: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestSecurityControlPlaneRLSIsolationPG(t *testing.T) {
 	if _, leaked := mine[ruleB]; leaked {
 		t.Fatal("TENANT LEAK: the RLS policy let acme read globex's rule override")
 	}
-	all, err := st.RuleStates(ctx, "global", true)
+	all, err := st.RuleStates(ctx, secapi.Principal{Tenant: "global", Cross: true})
 	if err != nil {
 		t.Fatalf("cross read: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestSecurityControlPlaneRLSIsolationPG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("globex add view: %v", err)
 	}
-	views, err := st.Views(ctx, "acme", false)
+	views, err := st.Views(ctx, secapi.Principal{Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("acme views: %v", err)
 	}

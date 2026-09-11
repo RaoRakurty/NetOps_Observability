@@ -138,7 +138,7 @@ func partialAPI(reply partialReply, status *int, errBody *string, jsonBody *stri
 // default set is scored.
 type partialFrameworkStore struct{}
 
-func (partialFrameworkStore) FrameworkStates(context.Context, string, bool) (map[string]bool, bool, error) {
+func (partialFrameworkStore) FrameworkStates(context.Context, Principal) (map[string]bool, bool, error) {
 	return map[string]bool{}, false, nil
 }
 

@@ -1136,7 +1136,29 @@ func (s *server) securityExposureStories(r *http.Request, limit int) ([]map[stri
 	if err != nil {
 		return nil, err
 	}
+	// Compliance: the per-tenant operator-visibility restriction, resolved with
+	// the SAME resolver the logs path uses. An exposure story names a tenant's
+	// failing controls and the devices they sit on, so a restricted tenant's
+	// stories are the customer's own exposure.
+	claims, _ := userFrom(r.Context())
+	tenant, cross := principalTenant(claims)
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
+	if deny {
+		// The operator scoped INTO a restricted tenant reads nothing, and no
+		// ClickHouse query is issued at all. An empty list is the honest answer
+		// on this route (a tenant with no correlated stories reads the same),
+		// which is why it is not a 403.
+		return []map[string]any{}, nil
+	}
 	sinceCond := "created_at >= now() - INTERVAL " + intToString(int(since.Seconds())) + " SECOND"
 	conds := []string{"1", securityExposureStoriesCond(sinceCond)}
+	if len(exclude) > 0 {
+		// The row policies cannot express this: '__all__' unlocks every tenant
+		// by design, which is exactly the Global view a restricted tenant must
+		// not appear in. So it is a predicate on the object's own tenant_id, the
+		// same column logs.go's must_not clause names and searchCases already
+		// excludes on.
+		conds = append(conds, "tenant_id NOT IN ("+sqlInList(exclude)+")")
+	}
 	return s.chRows(r, correlationsListSQL(sinceCond, conds, limit))
 }

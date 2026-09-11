@@ -5277,6 +5277,40 @@ func newSecurityFrameworkStore() secapi.FrameworkStore {
 //     is that TENANT's configuration, and a platform-global gate would put it
 //     out of the tenant's own reach while a scope-blind admin gate would put it
 //     in every other tenant's. The tenant filter is applied on top either way.
+//
+// It also resolves the OPERATOR-VISIBILITY restriction (Tenant.OperatorRestricted)
+// and hands it to the API on the Principal. A security finding is the customer's
+// own exposure — which of its devices fail which control, and how many — and a
+// count is a disclosure just as a row is. It is resolved with the SAME primitive
+// the logs path uses (operatorTelemetryRestriction, the tenant_id form) rather
+// than a second implementation, because a findings document already carries the
+// owning tenant id: no device-keyed translation is needed.
+//
+// It is resolved for EVERY gate, not for GateRead alone. The read gate is where
+// the leak that matters lives, but on this platform the gate records what a
+// route COSTS in permission, not whether it discloses, and two routes prove the
+// difference:
+//   - seclane.Lane.HandleStatus is a pure READ of a tenant's scan row and it
+//     sits behind GateAdmin, because the lane is per-tenant configuration. A
+//     GateRead-only resolution would hand it an unrestricted principal and the
+//     status row would leak.
+//   - secapi's own GateAdmin routes, putRules and putFrameworks, are
+//     read-modify-write: both read the tenant's current control-plane state
+//     back and return it, so a no-op PUT would report which detections and
+//     which frameworks a restricted tenant has turned on.
+//
+// This is the packet-capture lesson in another shape: there the DOWNLOAD, the
+// rawest route on the subtree, sat behind the write gate, so a read-only
+// resolution left it open.
+//
+// Resolving Deny on a write gate does NOT mean answering a write under an empty
+// scope — that really would create rows no tenant could ever see. The module
+// decides what its half means: secapi.API.authz refuses a denied non-read with
+// 403, and seclane refuses a denied scan the same way, while a denied READ is
+// still answered 200-with-nothing so a refusal never confirms the tenant has
+// data. The 403 discloses nothing new either: only the platform operator is
+// ever denied, and the operator is the one who sets operator_restricted on the
+// tenant in the first place.
 func (s *server) securityAuthz(w http.ResponseWriter, r *http.Request, gate secapi.Gate) (secapi.Principal, bool) {
 	module, level := "infrastructure", LevelRead
 	switch gate {
@@ -5298,7 +5332,11 @@ func (s *server) securityAuthz(w http.ResponseWriter, r *http.Request, gate seca
 	// with the SAME primitive the logs path uses rather than a second copy of the
 	// rule. The composition root resolves it because it owns the tenant store;
 	// each surface built on this principal obeys it in the one place that owns
-	// its read rule (today: seclane.Lane.StatusFor).
+	// its read rule (secapi.API.authz, seclane.Lane.StatusFor).
+	//
+	// Resolved for EVERY gate, never only for GateRead. See the note above the
+	// function: this principal is shared, and the gate says what permission a
+	// route costs, not whether it discloses.
 	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
 	return secapi.Principal{
 		Tenant: tenant, Cross: cross, Subject: claims.Sub,
@@ -5311,12 +5349,38 @@ func (s *server) securityAuthz(w http.ResponseWriter, r *http.Request, gate seca
 // caller's tenant actually OWNS, from the same visibility rule every inventory
 // surface uses. It is the registry, not the set of devices that happen to carry
 // findings — that distinction is the whole point of reporting `unassessed`.
+//
+// It honours the OPERATOR-VISIBILITY restriction, because this number IS a
+// disclosure: "this tenant has 412 devices" is the customer's fleet size, and it
+// is the denominator the CTEM funnel prints. The API refuses to ask for it on a
+// denied read; this is the storage-side half of the same rule, and the only
+// place the cross-tenant exclusion can be applied at all.
 func (s *server) securityRegistryDevices(r *http.Request) int {
 	claims, ok := userFrom(r.Context())
 	if !ok || s.discovery == nil {
 		return 0
 	}
-	return len(visibleDevices(s.discovery.Devices(), claims))
+	tenant, cross := principalTenant(claims)
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
+	if deny {
+		return 0
+	}
+	devices := visibleDevices(s.discovery.Devices(), claims)
+	if len(exclude) == 0 {
+		return len(devices)
+	}
+	hidden := make(map[string]bool, len(exclude))
+	for _, id := range exclude {
+		hidden[strings.ToLower(strings.TrimSpace(id))] = true
+	}
+	n := 0
+	for _, d := range devices {
+		if hidden[deviceTenant(d)] {
+			continue
+		}
+		n++
+	}
+	return n
 }
 
 // securityAudit records an accepted security control-plane write (the
@@ -5508,10 +5572,14 @@ func (s *server) securityLaneDeps() seclane.Deps {
 			if s.secStore == nil {
 				return nil, errors.New("security control-plane store unavailable")
 			}
-			// cross=false ALWAYS: a worker pass is scoped to one tenant, and a
+			// Cross is false ALWAYS: a worker pass is scoped to one tenant, and a
 			// cross-tenant read here would let one tenant's stored state reach
-			// another tenant's scan (§3a).
-			return s.secStore.RuleStates(ctx, tenant, false)
+			// another tenant's scan (§3a). The operator-visibility restriction
+			// is deliberately NOT applied: this is the PRODUCER reading the
+			// tenant's own configuration to scan the tenant's own devices, not
+			// an operator reading the tenant's data. A restricted tenant keeps
+			// running the detections it chose.
+			return s.secStore.RuleStates(ctx, secapi.Principal{Tenant: tenant})
 		},
 		Seams: s.securityLaneSeams,
 

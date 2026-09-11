@@ -71,13 +71,16 @@ type SavedView struct {
 // observe or mutate another tenant's rows through any method here.
 type Store interface {
 	// RuleStates returns the caller-visible overrides as rule id → enabled.
-	RuleStates(ctx context.Context, tenant string, cross bool) (map[string]bool, error)
+	// It takes the whole Principal, not tenant+cross, because "visible" is two
+	// rules now: the tenant boundary AND the operator-visibility restriction.
+	RuleStates(ctx context.Context, p Principal) (map[string]bool, error)
 	// SetRuleStates upserts overrides. owner is the tenant the rows are stamped
 	// with — derived from the authenticated principal by the handler, NEVER
 	// from the request body.
 	SetRuleStates(ctx context.Context, tenant string, cross bool, owner string, states []RuleState) error
-	// Views lists the caller's saved views, name-ordered.
-	Views(ctx context.Context, tenant string, cross bool) ([]SavedView, error)
+	// Views lists the caller's saved views, name-ordered. It takes the whole
+	// Principal for the same reason RuleStates does.
+	Views(ctx context.Context, p Principal) ([]SavedView, error)
 	// AddView stores one view; the id and timestamp are minted here.
 	AddView(ctx context.Context, tenant string, cross bool, v SavedView) (SavedView, error)
 	// DeleteView removes one view by id. found=false means "not yours or not
@@ -113,9 +116,24 @@ func defaultFilters(raw json.RawMessage) json.RawMessage {
 }
 
 // visible reports whether a caller scoped to `tenant` (or cross-tenant) may see
-// rows owned by `owner`. The ONE place the file backend answers that question.
+// rows owned by `owner`. The ONE place the file backend answers the TENANT
+// question; it is what the write paths ask.
 func visible(tenant string, cross bool, owner string) bool {
 	return cross || owner == NormTenant(tenant)
+}
+
+// visibleTo is the READ rule, and it is two rules in this order:
+//
+//  1. the OPERATOR-VISIBILITY restriction (compliance). A restricted tenant's
+//     rows are invisible even to a cross-tenant principal. A DENIED principal
+//     needs nothing here: it arrives scoped to RestrictedScope, which owns no
+//     row, so the tenant test below already answers nothing.
+//  2. the tenant boundary, default-closed.
+func visibleTo(p Principal, owner string) bool {
+	if p.Excluded(owner) {
+		return false
+	}
+	return visible(p.Tenant, p.Cross, owner)
 }
 
 // byName orders a view listing deterministically (case-insensitive name, id as
@@ -277,12 +295,12 @@ func (s *FileStore) flushLocked() error {
 	return platformdb.Save(s.path, b)
 }
 
-func (s *FileStore) RuleStates(_ context.Context, tenant string, cross bool) (map[string]bool, error) {
+func (s *FileStore) RuleStates(_ context.Context, p Principal) (map[string]bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := map[string]bool{}
 	for owner, byRule := range s.rules {
-		if !visible(tenant, cross, owner) {
+		if !visibleTo(p, owner) {
 			continue
 		}
 		for id, r := range byRule {
@@ -324,12 +342,12 @@ func (s *FileStore) snapshotRulesLocked() map[string]map[string]fileRule {
 	return out
 }
 
-func (s *FileStore) Views(_ context.Context, tenant string, cross bool) ([]SavedView, error) {
+func (s *FileStore) Views(_ context.Context, p Principal) ([]SavedView, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := []SavedView{}
 	for owner, byID := range s.views {
-		if !visible(tenant, cross, owner) {
+		if !visibleTo(p, owner) {
 			continue
 		}
 		for _, v := range byID {
@@ -395,6 +413,26 @@ func (s *FileStore) DeleteView(_ context.Context, tenant string, cross bool, id 
 	return false, nil
 }
 
+// excludeSQL appends the operator-visibility exclusion to a read, and returns
+// the arguments that go with it.
+//
+// The RLS policy cannot express this rule: a cross-tenant principal unlocks
+// every tenant by design, which is exactly the view a restricted tenant must not
+// appear in. So the exclusion is a predicate on the row's own tenant_id — the
+// same column the policy keys on and the same one logs.go names in its must_not
+// clause — bound as a parameter, never interpolated.
+//
+// It APPENDS a WHERE, so the statement handed in must not already carry one, and
+// any ORDER BY / LIMIT is appended by the caller AFTER this returns. Both call
+// sites are shaped that way.
+func excludeSQL(sql string, p Principal) (string, []any) {
+	hidden := p.hiddenTenants()
+	if len(hidden) == 0 {
+		return sql, nil
+	}
+	return sql + ` WHERE tenant_id <> ALL($1::text[])`, []any{hidden}
+}
+
 // ---- Postgres backend (tenant_iso FORCE-RLS via WithTenant, migration 0037) --
 
 // DB is the injected relational seam (the rcafeedback idiom): run fn inside a
@@ -408,10 +446,11 @@ type pgStore struct{ db DB }
 // NewPGStore builds the Postgres-backed control-plane register.
 func NewPGStore(db DB) Store { return &pgStore{db: db} }
 
-func (p *pgStore) RuleStates(ctx context.Context, tenant string, cross bool) (map[string]bool, error) {
+func (p *pgStore) RuleStates(ctx context.Context, pr Principal) (map[string]bool, error) {
 	out := map[string]bool{}
-	err := p.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT rule_id, enabled FROM security_rule_state`)
+	sql, args := excludeSQL(`SELECT rule_id, enabled FROM security_rule_state`, pr)
+	err := p.db.WithTenant(ctx, pr.Tenant, pr.Cross, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, sql, args...)
 		if err != nil {
 			return err
 		}
@@ -456,11 +495,13 @@ func (p *pgStore) SetRuleStates(ctx context.Context, tenant string, cross bool, 
 	})
 }
 
-func (p *pgStore) Views(ctx context.Context, tenant string, cross bool) ([]SavedView, error) {
+func (p *pgStore) Views(ctx context.Context, pr Principal) ([]SavedView, error) {
 	out := []SavedView{}
-	err := p.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT tenant_id, id::text, name, filters::text, created_by, created_at
-		    FROM security_saved_views ORDER BY lower(name) ASC, id ASC`)
+	sql, args := excludeSQL(`SELECT tenant_id, id::text, name, filters::text, created_by, created_at
+		    FROM security_saved_views`, pr)
+	sql += ` ORDER BY lower(name) ASC, id ASC`
+	err := p.db.WithTenant(ctx, pr.Tenant, pr.Cross, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, sql, args...)
 		if err != nil {
 			return err
 		}

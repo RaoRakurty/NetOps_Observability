@@ -35,7 +35,7 @@ func TestFileStoreViewsAreOwnOnly(t *testing.T) {
 	mine := seedView(t, s, "acme", "critical exposures")
 	theirs := seedView(t, s, "globex", "their view")
 
-	got, err := s.Views(context.Background(), "acme", false)
+	got, err := s.Views(context.Background(), Principal{Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestFileStoreViewsAreOwnOnly(t *testing.T) {
 
 	// The platform owner (cross) sees both — that is the cross-tenant flag
 	// doing its job, and the ONLY way another tenant's row is ever visible.
-	all, err := s.Views(context.Background(), "global", true)
+	all, err := s.Views(context.Background(), Principal{Tenant: "global", Cross: true})
 	if err != nil {
 		t.Fatalf("cross list: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestFileStoreCrossTenantDeleteIsNotFound(t *testing.T) {
 		t.Fatal("CROSS-TENANT DELETE: acme removed globex's saved view")
 	}
 	// …and the row is still there for its owner.
-	rows, err := s.Views(context.Background(), "globex", false)
+	rows, err := s.Views(context.Background(), Principal{Tenant: "globex"})
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("globex's view was destroyed by another tenant's delete: %v %+v", err, rows)
 	}
@@ -98,7 +98,7 @@ func TestFileStoreRuleStatesAreOwnOnly(t *testing.T) {
 		t.Fatalf("globex write: %v", err)
 	}
 
-	states, err := s.RuleStates(ctx, "acme", false)
+	states, err := s.RuleStates(ctx, Principal{Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestFileStoreRuleStatesAreOwnOnly(t *testing.T) {
 // by running nothing at all.
 func TestFileStoreDefaultsRulesOn(t *testing.T) {
 	s := NewFileStore("")
-	states, err := s.RuleStates(context.Background(), "acme", false)
+	states, err := s.RuleStates(context.Background(), Principal{Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -173,14 +173,14 @@ func TestFileStorePersistsAndReloads(t *testing.T) {
 	// A fresh store over the same file must see the same rows — under the same
 	// tenant, never widened.
 	reloaded := NewFileStore(path)
-	views, err := reloaded.Views(context.Background(), "acme", false)
+	views, err := reloaded.Views(context.Background(), Principal{Tenant: "acme"})
 	if err != nil || len(views) != 1 || views[0].ID != mine.ID {
 		t.Fatalf("reload lost the view: %v %+v", err, views)
 	}
-	if other, _ := reloaded.Views(context.Background(), "globex", false); len(other) != 0 {
+	if other, _ := reloaded.Views(context.Background(), Principal{Tenant: "globex"}); len(other) != 0 {
 		t.Fatalf("RELOAD LEAK: globex saw %d of acme's views", len(other))
 	}
-	states, err := reloaded.RuleStates(context.Background(), "acme", false)
+	states, err := reloaded.RuleStates(context.Background(), Principal{Tenant: "acme"})
 	if err != nil || states[rule] {
 		t.Fatalf("reload lost the rule override: %v %v", err, states)
 	}
@@ -209,7 +209,7 @@ func TestFileStoreDistinguishesMissingFromBroken(t *testing.T) {
 	}
 	// …and it still SERVES: refusing to boot over a preferences file would be
 	// worse than serving the shipped defaults, as long as the fact is reported.
-	states, err := bs.RuleStates(context.Background(), "acme", false)
+	states, err := bs.RuleStates(context.Background(), Principal{Tenant: "acme"})
 	if err != nil || len(states) != 0 {
 		t.Fatalf("a store that failed to load must still serve empty state: %v %v", states, err)
 	}

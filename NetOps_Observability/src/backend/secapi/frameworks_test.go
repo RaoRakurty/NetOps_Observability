@@ -121,7 +121,7 @@ func TestFrameworkFileStoreIsTenantKeyed(t *testing.T) {
 		t.Fatalf("set: %v", err)
 	}
 
-	states, configured, err := s.FrameworkStates(ctx, "acme", false)
+	states, configured, err := s.FrameworkStates(ctx, Principal{Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestFrameworkFileStoreIsTenantKeyed(t *testing.T) {
 		t.Fatalf("acme's own selection did not round-trip: %v configured=%v", states, configured)
 	}
 
-	other, otherConfigured, err := s.FrameworkStates(ctx, "globex", false)
+	other, otherConfigured, err := s.FrameworkStates(ctx, Principal{Tenant: "globex"})
 	if err != nil {
 		t.Fatalf("get globex: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestFrameworkFileStoreIsTenantKeyed(t *testing.T) {
 	}
 
 	// The platform (cross) view sees it; nothing else does.
-	all, allConfigured, err := s.FrameworkStates(ctx, "", true)
+	all, allConfigured, err := s.FrameworkStates(ctx, Principal{Tenant: "", Cross: true})
 	if err != nil {
 		t.Fatalf("get cross: %v", err)
 	}
@@ -151,10 +151,10 @@ func TestFrameworkFileStoreIsTenantKeyed(t *testing.T) {
 	if err := reloaded.LoadErr(); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if st, cfg, _ := reloaded.FrameworkStates(ctx, "globex", false); cfg || len(st) != 0 {
+	if st, cfg, _ := reloaded.FrameworkStates(ctx, Principal{Tenant: "globex"}); cfg || len(st) != 0 {
 		t.Fatalf("TENANT LEAK after reload: %v", st)
 	}
-	if st, cfg, _ := reloaded.FrameworkStates(ctx, "acme", false); !cfg || !st[compliancemodel.IDHIPAA] {
+	if st, cfg, _ := reloaded.FrameworkStates(ctx, Principal{Tenant: "acme"}); !cfg || !st[compliancemodel.IDHIPAA] {
 		t.Fatalf("acme's selection did not survive a reload: %v", st)
 	}
 }
@@ -170,7 +170,7 @@ func TestFrameworkFileStoreReportsAnUnreadableFile(t *testing.T) {
 	if s.LoadErr() == nil {
 		t.Fatal("a corrupt selection file must be reported, not folded into an empty store")
 	}
-	if st, cfg, err := s.FrameworkStates(context.Background(), "acme", false); err != nil || cfg || len(st) != 0 {
+	if st, cfg, err := s.FrameworkStates(context.Background(), Principal{Tenant: "acme"}); err != nil || cfg || len(st) != 0 {
 		t.Fatalf("a store that failed to load must still SERVE the defaults: %v %v %v", st, cfg, err)
 	}
 }
