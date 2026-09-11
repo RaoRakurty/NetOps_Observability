@@ -2662,6 +2662,22 @@ export type BgpIncidentEvidence = {
   peers_total?: number;
 };
 
+/** One prefix's remembered origin. It is what a fully propagated origin change
+ *  is detected against, and what an operator moves after a legitimate
+ *  re-homing. `source` is "first_observation" (recorded from the first
+ *  corroborated measurement; confirmed by nobody) or "operator_accepted". */
+export type BgpOriginBaseline = {
+  prefix: string;
+  origins: number[];
+  source: "first_observation" | "operator_accepted";
+  /** Distinct collector peers that corroborated the set when it was recorded.
+   *  0 on an accepted row: a decision is not a measurement. */
+  vantages: number;
+  first_seen: string;
+  updated_at: string;
+  updated_by?: string;
+};
+
 export type BgpIncident = {
   prefix: string;
   class: BgpIncidentClass;
@@ -2669,14 +2685,20 @@ export type BgpIncident = {
   severity: string;
   summary: string;
   evidence: BgpIncidentEvidence;
-  /** true when NO origin baseline was declared. The name is historical: the
-   *  server does not learn a baseline once, it re-derives one from every pass,
-   *  so only a minority unexpected origin is detectable. `baseline_note` says
+  /** true when the baseline came from THIS pass's own observation: nothing was
+   *  declared and no baseline row is stored for the prefix yet, so only a
+   *  minority unexpected origin is detectable. It is FALSE once a baseline is
+   *  recorded, because the comparison is then against an earlier pass and a
+   *  fully propagated origin change IS detected. `baseline_note` says
    *  what that costs and the UI has to show it. */
   learned_origin?: boolean;
   /** Where the origin baseline came from and what the check therefore cannot
    *  see. Set whenever no origin was declared; blank means it was declared. */
   baseline_note?: string;
+  /** The STORED origin baseline this verdict was judged against, when one is
+   *  recorded. Absent means the prefix has no baseline row, which is a first
+   *  observation, not a clean comparison. */
+  origin_baseline?: BgpOriginBaseline;
   /** A class that ALMOST fired but lacked corroboration. Shown, never hidden. */
   corroboration_shortfall?: string;
   first_seen: string;

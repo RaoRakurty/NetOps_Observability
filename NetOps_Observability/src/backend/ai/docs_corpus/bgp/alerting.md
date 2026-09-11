@@ -53,7 +53,7 @@ and the class that pages someone at 03:00 can never disagree.
      "config": {"default": {}},
      "defaults": {"max_asns_per_set": 32, "max_prefixes": 200,
                   "min_vantages": 2, "min_visibility": 0.5},
-     "note": "expected_origins empty ⇒ NO baseline is stored. Each pass compares the prefix against its own dominant origin, so only a MINORITY unexpected origin is detectable: an origin change that reaches every vantage point classifies clean. Declare the expected origin AS to detect one. upstreams empty ⇒ the route-leak heuristic does not run (there is nothing to call unexpected).",
+     "note": "expected_origins empty ⇒ the prefix falls back to its RECORDED origin baseline, the origin set corroborated the first time we measured it (see /api/bgp/alerts/baselines). That is a remembered observation, not a declared intent, and a prefix with no row yet has no origin check at all. Where no baseline register is wired, each pass compares the prefix against its own dominant origin instead, so only a MINORITY unexpected origin is detectable and a change that reaches every vantage point classifies clean. Declaring the expected origin AS overrides both and is the only one of the three somebody asserted. upstreams empty ⇒ the route-leak heuristic does not run (there is nothing to call unexpected).",
      "updated_at": "0001-01-01T00:00:00Z",
      "updated_by": ""
    }
@@ -104,9 +104,9 @@ policy's output.
 5. Select **Save policy**.
 
 The section prints the consequence of each empty set next to the field that is
-empty: an empty origin set means the baseline is learned from the first
-observation, and an empty upstream set means the route-leak check does not run.
-Neither absence is a clean result.
+empty: an empty origin set means the check falls back to the origin recorded the
+first time the prefix was measured, and an empty upstream set means the
+route-leak check does not run. Neither absence is a clean result.
 
 The platform stores what it normalizes, not what you typed. It removes duplicate
 AS numbers, refuses AS0, sorts each set, and rewrites every policy key to its
@@ -143,14 +143,16 @@ is classified `unknown`, raises no alert, and is summarized as "Not measured".
 - **A near miss is reported, not hidden.** When a class almost fired but lacked
   corroboration, the incident carries `corroboration_shortfall` naming the AS,
   how many vantage points saw it, and how many are required.
-- **An empty expected-origin set means there is NO baseline.** Nothing is stored
-  between passes, so every check takes that pass's own dominant observed origin
-  as the baseline. Only a **minority** unexpected origin can be found that way:
-  if an origin change reaches every vantage point it becomes the baseline in the
-  same pass and the prefix classifies clean. The incident carries
-  `learned_origin` and a plain-language `baseline_note` saying exactly this, and
-  the console prints it beside the verdict. Declare the expected origin AS to
-  detect a full origin change.
+- **An empty expected-origin set falls back to the RECORDED baseline.** The
+  first time a prefix is measured with a corroborated origin, that origin set is
+  written down. Every later check compares the prefix against that stored row,
+  which does not move, so an origin change is detected however widely it has
+  propagated. Three things are deliberately not incidents: a first observation,
+  because there is nothing it could have changed from; a prefix you added to the
+  watchlist since the last pass, for the same reason; and an origin change you
+  have accepted. The incident carries the row it was judged against in
+  `origin_baseline`, and a plain-language `baseline_note` saying where the
+  baseline came from. See [Origin baselines](#origin-baselines) below.
 - **An empty upstream set disables the leak heuristic.** With no declared
   transit set there is nothing to call unexpected, and Correlix does not guess
   one. Full valley-free detection needs AS relationship data that no free
@@ -159,6 +161,62 @@ is classified `unknown`, raises no alert, and is summarized as "Not measured".
 - **Two classes need no corroboration**, because neither is path-derived: the
   RPKI verdict is one validator's answer about one pair, and a bogon match is
   arithmetic on the prefix.
+
+### Origin baselines
+
+The baseline is what an origin change is measured against. Correlix records one
+per watched prefix, the first time it measures that prefix and sees an origin
+corroborated by at least `min_vantages` collector peers. It does not record one
+from a pass that already looks wrong: an RPKI-invalid announcement, a bogon
+prefix, or a pass that is itself an origin change never becomes the baseline, so
+a hijack in progress cannot be adopted as the truth about the prefix.
+
+Read them:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/api/bgp/alerts/baselines?as_tenant=lab"
+```
+
+Each row names the prefix, the origin set, how many collector peers corroborated
+it, when the prefix was first measured, and where the row came from:
+`first_observation` for one Correlix recorded itself, `operator_accepted` for one
+a person stated.
+
+**A baseline is a remembered observation, not a declared intent.** Nobody
+confirmed it. If the prefix was already being announced by the wrong AS the
+first time Correlix measured it, that is what was recorded. Declaring the
+expected origin AS in the policy is the stronger statement, and it overrides the
+row.
+
+**When the origin legitimately changes**, accept the new origin. This is what
+stops a real re-homing alerting forever:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"prefix":"203.0.113.0/24","origins":["AS64512"]}' \
+  "http://localhost:8000/api/bgp/alerts/baselines?as_tenant=lab"
+```
+
+You state the origin set you are adopting. Correlix never takes it from the
+current announcement on its own, because adopting whatever is being announced
+right now is exactly the behaviour the stored baseline replaced. The open
+incident clears on the next **measured** pass, not on the accept: Correlix
+resolves what it has re-measured, never what it was told.
+
+To make a prefix re-learn from scratch, delete its row with
+`DELETE /api/bgp/alerts/baselines?prefix=<prefix>`. Whatever is announcing the
+prefix at the next measurement becomes the new baseline, so prefer accepting an
+origin you know is right.
+
+Baselines are per tenant. A prefix another tenant holds is absent from your list
+and answers 404 on delete, which is the same answer a prefix nobody holds gets.
+
+`netops_bgpwatch_origin_baselines_recorded_total` counts the rows written. A
+watchlist with prefixes in it and a flat zero here means every prefix is still
+in its first-observation state, so no origin change has anything to be detected
+against yet.
 
 ### Bounds and cadence
 

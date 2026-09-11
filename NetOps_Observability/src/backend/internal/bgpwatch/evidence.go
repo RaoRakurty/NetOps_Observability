@@ -210,14 +210,24 @@ func EventFromIncident(tenant string, inc Incident, cfg PolicyConfig) (EvidenceE
 		attrs["bogon_block"] = inc.Evidence.Bogon.Block
 		attrs["bogon_reason"] = inc.Evidence.Bogon.Reason
 	}
-	if inc.LearnedOrigin {
-		// Honesty on the wire. "per_pass", not "learned": nothing persists a
-		// baseline, so it is re-derived from each observation and can only see
-		// a minority unexpected origin. A consumer must be able to tell that
-		// apart from a declared baseline.
-		attrs["origin_baseline"] = "per_pass"
-	} else if len(cfg.ExpectedOrigins) > 0 {
+	// Honesty on the wire: WHERE the origin baseline came from, in a closed
+	// vocabulary, because the three are not the same claim and a consumer must
+	// be able to tell them apart.
+	//
+	//   declared  — the operator stated it. The strongest.
+	//   recorded  — a stored row from an earlier pass. A real comparison, but
+	//               against a remembered observation nobody confirmed.
+	//   per_pass  — re-derived from the observation being judged, so only a
+	//               minority unexpected origin is visible at all.
+	switch {
+	case len(cfg.ExpectedOrigins) > 0:
 		attrs["origin_baseline"] = "declared"
+	case inc.Baseline != nil:
+		attrs["origin_baseline"] = "recorded"
+		attrs["origin_baseline_source"] = inc.Baseline.Source
+		attrs["origin_baseline_first_seen"] = inc.Baseline.FirstSeen.UTC().Format(time.RFC3339)
+	case inc.LearnedOrigin:
+		attrs["origin_baseline"] = "per_pass"
 	}
 	if inc.BaselineNote != "" {
 		attrs["origin_baseline_note"] = clip(inc.BaselineNote, 512)

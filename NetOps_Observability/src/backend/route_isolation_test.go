@@ -101,7 +101,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/bgp/aspa":         "globalRef",
 	"/api/bgp/geofeed":      "globalRef",
 	"/api/bgp/aspath-graph": "globalRef",
-	// BGP alerting + bogons (tracker #1/#5/#10, internal/bgpwatch). All three
+	// BGP alerting + bogons (tracker #1/#5/#10/281, internal/bgpwatch). All four
 	// are per-tenant DATA:
 	//   /api/bgp/alerts        — the tenant's own alert history and the incident
 	//     class per WATCHED prefix. Which prefixes a tenant watches, and what is
@@ -111,16 +111,25 @@ var routeIsolationLedger = map[string]string{
 	//     upstream set, thresholds). PG FORCE-RLS (migration 0041) through
 	//     WithTenant on the Postgres build, a tenant-keyed map on the file
 	//     build; the owner is stamped from the token, never the body.
+	//   /api/bgp/alerts/baselines — the RECORDED origin baseline per watched
+	//     prefix: which AS was originating it the first time we measured it, or
+	//     the one an operator accepted after a re-homing. That is a fact about
+	//     one customer's address space, and it is also a WRITE surface that
+	//     decides what gets alerted on. PG FORCE-RLS (migration 0048) through
+	//     WithTenant on the Postgres build, a tenant-keyed map on the file
+	//     build; the owner is stamped from the token, and another tenant's
+	//     prefix is simply absent (404), never "not yours".
 	//   /api/bgp/bogons        — the embedded set is public reference, but the
 	//     SIGHTINGS are per-tenant observations from that tenant's own BMP feed
 	//     and update ring, so the route is scoped as a whole.
-	// All three refuse a cross-tenant principal outright (a platform owner must
+	// All four refuse a cross-tenant principal outright (a platform owner must
 	// scope in with the switcher) — the /api/bgp/feed precedent. Cross-org
 	// isolation proven by bgp_alerts_isolation_test.go, which drives the
 	// production s.bgpWatchAuthz wiring.
-	"/api/bgp/alerts":        "scoped",
-	"/api/bgp/alerts/config": "scoped",
-	"/api/bgp/bogons":        "scoped",
+	"/api/bgp/alerts":           "scoped",
+	"/api/bgp/alerts/config":    "scoped",
+	"/api/bgp/alerts/baselines": "scoped",
+	"/api/bgp/bogons":           "scoped",
 	// DEM (S17) — Digital Experience. Per-tenant data end to end: the module
 	// refuses a cross-tenant principal, scopes every catalogue read/write to
 	// ONE concrete tenant, answers 404 for another tenant's target id, and

@@ -15,7 +15,10 @@ package backend
 //     body is impossible (there is no tenant field on the wire) — a cross-org
 //     write is refused, not silently re-owned;
 //   - a cross-tenant principal (the platform owner in the Global view) is
-//     REFUSED on all three rather than being served every tenant's rows;
+//     REFUSED on all four rather than being served every tenant's rows;
+//   - the ORIGIN BASELINE register (tracker 281) is own-tenant only on every
+//     verb: acme never lists, accepts into or deletes globex's baseline, and a
+//     cross-tenant delete answers 404 rather than admitting the row exists;
 //   - a read-only principal cannot write the policy;
 //   - with the evaluator off the routes are honest (enabled:false + a note),
 //     not an empty list that reads as "all clear";
@@ -45,6 +48,8 @@ func bgpWatchTestServer(t *testing.T, withEval bool) *server {
 	s := &server{roles: roles}
 	policies := bgpwatch.NewFileStore("") // in-memory
 	s.bgpWatchPolicy = policies
+	baselines := bgpwatch.NewBaselineFileStore("") // in-memory
+	s.bgpWatchBaseline = baselines
 	bogons := bgpwatch.NewBogonSet()
 
 	var eval *bgpwatch.Evaluator
@@ -59,6 +64,7 @@ func bgpWatchTestServer(t *testing.T, withEval bool) *server {
 			Tenants:   func() []string { return []string{"acme", "globex"} },
 			Watchlist: func(_ context.Context, tn string) ([]string, error) { return watch[tn], nil },
 			Policies:  policies,
+			Baselines: baselines,
 			Observe: func(_ context.Context, p string) (bgpwatch.Observation, error) {
 				return bgpwatch.Observation{
 					Prefix: p, Measured: true, Announced: true, AnnouncedKnown: true,
@@ -83,7 +89,7 @@ func bgpWatchTestServer(t *testing.T, withEval bool) *server {
 		eval.RunOnce(context.Background())
 		s.bgpWatchEval = eval
 	}
-	api, err := s.buildBGPWatchAPI(policies, bogons, eval)
+	api, err := s.buildBGPWatchAPI(policies, baselines, bogons, eval)
 	if err != nil {
 		t.Fatalf("buildBGPWatchAPI: %v", err)
 	}
@@ -144,9 +150,10 @@ func TestBGPAlertsAreOwnTenantOnly(t *testing.T) {
 func TestBGPAlertsRefuseCrossTenantPrincipal(t *testing.T) {
 	s := bgpWatchTestServer(t, true)
 	for name, h := range map[string]http.HandlerFunc{
-		"alerts": s.bgpWatchAPI.HandleAlerts,
-		"config": s.bgpWatchAPI.HandleAlertConfig,
-		"bogons": s.bgpWatchAPI.HandleBogons,
+		"alerts":    s.bgpWatchAPI.HandleAlerts,
+		"config":    s.bgpWatchAPI.HandleAlertConfig,
+		"baselines": s.bgpWatchAPI.HandleBaselines,
+		"bogons":    s.bgpWatchAPI.HandleBogons,
 	} {
 		w := httptest.NewRecorder()
 		h(w, req(http.MethodGet, "/api/bgp/"+name, "", platformOwner()))
@@ -250,7 +257,8 @@ func TestBGPAlertsHonestWhenEvaluatorOff(t *testing.T) {
 func TestBGPWatchNilAPIIs404(t *testing.T) {
 	s := &server{}
 	for _, h := range []http.HandlerFunc{
-		s.bgpWatchAPI.HandleAlerts, s.bgpWatchAPI.HandleAlertConfig, s.bgpWatchAPI.HandleBogons,
+		s.bgpWatchAPI.HandleAlerts, s.bgpWatchAPI.HandleAlertConfig,
+		s.bgpWatchAPI.HandleBaselines, s.bgpWatchAPI.HandleBogons,
 	} {
 		w := httptest.NewRecorder()
 		h(w, req(http.MethodGet, "/api/bgp/alerts", "", tAdmin("acme")))
@@ -341,6 +349,163 @@ func TestBGPAlertsMetricsAreTenantScoped(t *testing.T) {
 		}
 		if v != 0 {
 			t.Errorf("a tenant that has never been evaluated sees %s = %d", k, v)
+		}
+	}
+}
+
+// ── the ORIGIN BASELINE register (tracker 281) ──────────────────────────────
+//
+// CLAUDE.md §3a rule 5 for /api/bgp/alerts/baselines, through the production
+// s.bgpWatchAuthz wiring. This route matters more than a read surface: the
+// baseline it holds is what an origin_change is measured against, so reaching
+// another tenant's row would not just disclose their address space, it would
+// decide whether they get paged for a hijack.
+//
+// Proven: own-only list; the owner stamped from the token; a cross-tenant
+// accept landing in the CALLER'S OWN bucket rather than the victim's; a
+// cross-tenant delete answering 404 (absent, never "not yours"); a cross-tenant
+// principal refused outright; and a read-only principal unable to write.
+func TestBGPOriginBaselinesAreOwnTenantOnly(t *testing.T) {
+	ctx := context.Background()
+	s := bgpWatchTestServer(t, false)
+	store := s.bgpWatchBaseline
+	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+
+	// globex records a baseline for a prefix in ITS address space.
+	if _, _, err := store.Record(ctx, "globex", bgpwatch.OriginBaseline{
+		Prefix: "198.51.100.0/24", Origins: []uint32{64510}, Source: bgpwatch.BaselineFirstSeen,
+		Vantages: 3, FirstSeen: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed globex: %v", err)
+	}
+	if _, _, err := store.Record(ctx, "acme", bgpwatch.OriginBaseline{
+		Prefix: "193.0.0.0/21", Origins: []uint32{64496}, Source: bgpwatch.BaselineFirstSeen,
+		Vantages: 2, FirstSeen: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed acme: %v", err)
+	}
+
+	list := func(claims jwtClaims) []bgpwatch.OriginBaseline {
+		t.Helper()
+		w := httptest.NewRecorder()
+		s.bgpWatchAPI.HandleBaselines(w, req(http.MethodGet, "/api/bgp/alerts/baselines", "", claims))
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET baselines as %s: %d %s", claims.Sub, w.Code, w.Body.String())
+		}
+		var out struct {
+			Baselines []bgpwatch.OriginBaseline `json:"baselines"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatalf("decode: %v (%s)", err, w.Body.String())
+		}
+		return out.Baselines
+	}
+
+	// OWN-ONLY LIST.
+	acme := list(tAdmin("acme"))
+	if len(acme) != 1 || acme[0].Prefix != "193.0.0.0/21" {
+		t.Fatalf("acme's list is wrong (or carries globex's row): %+v", acme)
+	}
+	gx := list(tAdmin("globex"))
+	if len(gx) != 1 || gx[0].Prefix != "198.51.100.0/24" {
+		t.Fatalf("globex's list is wrong: %+v", gx)
+	}
+
+	// A CROSS-TENANT ACCEPT, naming globex's exact prefix, lands in acme's own
+	// bucket. globex's row is untouched and unstamped.
+	w := httptest.NewRecorder()
+	s.bgpWatchAPI.HandleBaselines(w, req(http.MethodPost, "/api/bgp/alerts/baselines",
+		`{"prefix":"198.51.100.0/24","origins":["AS65001"]}`, tAdmin("acme")))
+	if w.Code != http.StatusOK {
+		t.Fatalf("acme POST status %d: %s", w.Code, w.Body.String())
+	}
+	rows, err := store.Baselines(ctx, "globex")
+	if err != nil {
+		t.Fatalf("globex baselines: %v", err)
+	}
+	row := rows["198.51.100.0/24"]
+	if len(row.Origins) != 1 || row.Origins[0] != 64510 {
+		t.Fatalf("CROSS-TENANT WRITE: globex's baseline is now %v", row.Origins)
+	}
+	if row.UpdatedBy != "" || row.Source != bgpwatch.BaselineFirstSeen {
+		t.Fatalf("globex's row was rewritten by acme's caller: %+v", row)
+	}
+	// §3a rule 2: the owner and the tenant both come from the TOKEN.
+	own, err := store.Baselines(ctx, "acme")
+	if err != nil {
+		t.Fatalf("acme baselines: %v", err)
+	}
+	mine := own["198.51.100.0/24"]
+	if mine.UpdatedBy != "adm@acme" {
+		t.Fatalf("updated_by=%q — the owner is stamped from the token", mine.UpdatedBy)
+	}
+	if mine.Source != bgpwatch.BaselineAccepted {
+		t.Fatalf("an accepted row must say so: %+v", mine)
+	}
+
+	// A CROSS-TENANT DELETE is 404: another tenant's prefix is ABSENT here, and
+	// the answer must not distinguish it from one nobody holds.
+	before := list(tAdmin("globex"))
+	w = httptest.NewRecorder()
+	s.bgpWatchAPI.HandleBaselines(w, req(http.MethodDelete,
+		"/api/bgp/alerts/baselines?prefix=203.0.113.0/24", "", tAdmin("globex")))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("a prefix nobody holds returned %d, want 404", w.Code)
+	}
+	notMine := w.Body.String()
+	// acme holds 193.0.0.0/21; globex asking to delete it must get the SAME
+	// answer as for a prefix that does not exist at all.
+	w = httptest.NewRecorder()
+	s.bgpWatchAPI.HandleBaselines(w, req(http.MethodDelete,
+		"/api/bgp/alerts/baselines?prefix=193.0.0.0/21", "", tAdmin("globex")))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("a cross-tenant delete returned %d; it must look absent (404)", w.Code)
+	}
+	if w.Body.String() != notMine {
+		t.Fatalf("the cross-tenant 404 differs from the plain 404, which tells globex the row exists:\n plain: %s\n cross: %s", notMine, w.Body.String())
+	}
+	if after := list(tAdmin("acme")); len(after) != 2 {
+		t.Fatalf("globex's delete reached acme's rows: %+v", after)
+	}
+	if after := list(tAdmin("globex")); len(after) != len(before) {
+		t.Fatalf("globex's own rows changed: %+v", after)
+	}
+
+	// The URL each verb is actually called with: only DELETE names the prefix
+	// in the query, and the POST body carries it instead.
+	const baselinesPath = "/api/bgp/alerts/baselines"
+	const deletePath = baselinesPath + "?prefix=193.0.0.0/21"
+	const acceptBody = `{"prefix":"193.0.0.0/21","origins":["AS1"]}`
+	verbs := []struct {
+		method, path, body string
+	}{
+		{http.MethodGet, baselinesPath, ""},
+		{http.MethodPost, baselinesPath, acceptBody},
+		{http.MethodDelete, deletePath, ""},
+	}
+
+	// A CROSS-TENANT PRINCIPAL is refused outright on every verb.
+	for _, v := range verbs {
+		w = httptest.NewRecorder()
+		s.bgpWatchAPI.HandleBaselines(w, req(v.method, v.path, v.body, platformOwner()))
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s as a cross-tenant principal returned %d; it must be refused", v.method, w.Code)
+		}
+		if strings.Contains(w.Body.String(), "64510") || strings.Contains(w.Body.String(), "198.51.100") {
+			t.Fatalf("%s: the refusal leaked another tenant's data: %s", v.method, w.Body.String())
+		}
+	}
+
+	// A READ-ONLY principal can list but cannot move a baseline. Moving one
+	// changes what the tenant is paged for.
+	if got := list(tViewer("acme")); len(got) != 2 {
+		t.Fatalf("a read-only principal must still see its own rows: %+v", got)
+	}
+	for _, v := range verbs[1:] {
+		w = httptest.NewRecorder()
+		s.bgpWatchAPI.HandleBaselines(w, req(v.method, v.path, v.body, tViewer("acme")))
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("a read-only principal %s'd a baseline (status %d: %s)", v.method, w.Code, w.Body.String())
 		}
 	}
 }

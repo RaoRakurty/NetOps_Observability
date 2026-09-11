@@ -14,10 +14,11 @@ package backend
 //
 //	rm internal/bgpwatch bgp_alerts.go bgp_alerts_isolation_test.go
 //	rm internal/platformdb/migrations/0041_bgp_alert_policy.sql (+ its rollback)
+//	rm internal/platformdb/migrations/0048_bgp_origin_baseline.sql (+ its rollback)
 //	delete every main.go line between a `BGP-WATCH-BEGIN` marker and its
 //	matching `BGP-WATCH-END` (the import, the two server fields, the
 //	construction, the worker start, the three routes and the metrics write)
-//	drop the four /api/bgp/alerts* + /api/bgp/bogons rows from the route ledger
+//	drop the /api/bgp/alerts* + /api/bgp/bogons rows from the route ledger
 //
 // …and `go build ./...` is green again. Nothing in the core imports bgpwatch.
 
@@ -46,7 +47,7 @@ const bgpWatchSightingLimit = 200
 // buildBGPWatch assembles the evaluator. It returns (nil, nil) when the feature
 // flag is off — the HTTP surface is still built (the embedded bogon set is
 // useful with no evaluator), and it answers an honest "not enabled".
-func (s *server) buildBGPWatch(policies bgpwatch.PolicyStore, bogons *bgpwatch.BogonSet) (*bgpwatch.Evaluator, error) {
+func (s *server) buildBGPWatch(policies bgpwatch.PolicyStore, baselines bgpwatch.BaselineStore, bogons *bgpwatch.BogonSet) (*bgpwatch.Evaluator, error) {
 	if !envBool(bgpwatch.EnvFeatureFlag) {
 		return nil, nil
 	}
@@ -57,6 +58,7 @@ func (s *server) buildBGPWatch(policies bgpwatch.PolicyStore, bogons *bgpwatch.B
 		Tenants:   s.bgpWatchTenants,
 		Watchlist: s.bgpWatchPrefixes,
 		Policies:  policies,
+		Baselines: baselines,
 		Observe:   s.bgpWatchObserve,
 		Peers:     s.bgpWatchPeers,
 		Sightings: s.bgpWatchSightings,
@@ -104,12 +106,35 @@ func newBGPAlertPolicyStore() bgpwatch.PolicyStore {
 	return fs
 }
 
+// newBGPOriginBaselineStore picks the backend for the ORIGIN BASELINE register
+// (tracker 281), exactly as the policy store does: Postgres (migration 0048,
+// FORCE-RLS) when it is active, the file store otherwise.
+//
+// A corrupt file still SERVES, but the consequence is louder than it is for the
+// policy: an empty register makes every watched prefix look like a first
+// observation, so the evaluator would re-record a baseline from whatever is
+// being announced right now. The file store refuses every write while its
+// contents are unknown, which is what stops that, and the error is logged here
+// so the operator knows detection is degraded rather than absent-by-design.
+func newBGPOriginBaselineStore() bgpwatch.BaselineStore {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return bgpwatch.NewPGBaselineStore(ps.DB())
+	}
+	fs := bgpwatch.NewBaselineFileStore(envOr(bgpwatch.EnvBaselineFile, "/data/bgp_origin_baseline.json"))
+	if err := fs.LoadErr(); err != nil {
+		logError("bgp-watch", "the BGP origin-baseline register could not be read — no watched prefix has a recorded baseline, so a fully propagated origin change on a prefix with no declared expected origin will NOT be detected, and no new baseline can be written until the file is repaired or removed",
+			map[string]any{"err": err.Error()})
+	}
+	return fs
+}
+
 // buildBGPWatchAPI builds the HTTP surface. It is built unconditionally: the
 // embedded bogon set is a real answer with or without the evaluator.
-func (s *server) buildBGPWatchAPI(policies bgpwatch.PolicyStore, bogons *bgpwatch.BogonSet, eval *bgpwatch.Evaluator) (*bgpwatch.API, error) {
+func (s *server) buildBGPWatchAPI(policies bgpwatch.PolicyStore, baselines bgpwatch.BaselineStore, bogons *bgpwatch.BogonSet, eval *bgpwatch.Evaluator) (*bgpwatch.API, error) {
 	return bgpwatch.NewAPI(bgpwatch.APIDeps{
 		Authz:            s.bgpWatchAuthz,
 		Policies:         policies,
+		Baselines:        baselines,
 		Bogons:           bogons,
 		BogonFeedEnabled: envBool(bgpwatch.EnvBogonFeed),
 		Eval:             eval,

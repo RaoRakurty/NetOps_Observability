@@ -139,13 +139,18 @@ type Observation struct {
 // the API boundary before it ever reaches here.
 type PolicyConfig struct {
 	// ExpectedOrigins are the ASNs allowed to originate the prefix. EMPTY means
-	// "not declared", and the consequence is bigger than it reads: nothing
-	// persists a baseline between passes, so the baseline is RE-DERIVED from
-	// each pass's own dominant origin. Only a MINORITY unexpected origin can be
-	// detected that way. An origin change that reaches every vantage point
-	// becomes the baseline in the same pass and classifies clean. Incident
-	// carries that limit in BaselineNote so the operator is told, and the fix
-	// is to declare the set (or, tracker, to persist a first-seen baseline).
+	// "not declared", and what happens then depends on whether a PERSISTED
+	// baseline register is in force (see Baseline and ClassifyWithBaseline):
+	//
+	//   - with one, the origin is compared against the row recorded the first
+	//     time we measured the prefix, so an origin change is detected however
+	//     widely it has propagated;
+	//   - without one, the baseline is RE-DERIVED from each pass's own dominant
+	//     origin, so only a MINORITY unexpected origin is detectable and a
+	//     change that reaches every vantage point classifies clean.
+	//
+	// Incident.BaselineNote states which of the two happened, in the operator's
+	// words. A declared set beats both: it is the only one somebody asserted.
 	ExpectedOrigins []uint32 `json:"expected_origins,omitempty"`
 	// Upstreams are the ASNs the tenant buys transit from. EMPTY disables the
 	// route-leak heuristic entirely — with no declared transit set there is
@@ -206,15 +211,22 @@ type Incident struct {
 	Severity string          `json:"severity"`
 	Summary  string          `json:"summary"`
 	Evidence Evidence        `json:"evidence"`
-	// LearnedOrigin is set when ExpectedOrigins was NOT declared and the
-	// baseline came from the observation itself. The name is historical: this
-	// is not learned once and kept, it is re-derived on EVERY pass. Read it as
-	// "there was no declared baseline"; BaselineNote says what that costs.
+	// LearnedOrigin is set when the baseline came from THIS pass's own
+	// observation: nothing was declared and no row was recorded. Read it as
+	// "the comparison was made against the measurement being judged", which is
+	// only ever able to see a minority unexpected origin. It is FALSE when a
+	// stored baseline was used, because that is a real comparison against an
+	// earlier pass. BaselineNote says which happened in words.
 	LearnedOrigin bool `json:"learned_origin,omitempty"`
 	// BaselineNote states, in the operator's words, where the origin baseline
 	// came from and what the check can therefore NOT see. It is set whenever no
 	// origin was declared. A blank note means the baseline was declared.
 	BaselineNote string `json:"baseline_note,omitempty"`
+	// Baseline is the PERSISTED first-seen (or operator-accepted) origin row
+	// this verdict was judged against, when the register holds one. It is what
+	// the page shows beside an origin_change so the operator can see what the
+	// prefix used to announce, and it is what the accept action moves.
+	Baseline *OriginBaseline `json:"origin_baseline,omitempty"`
 	// Shortfall records a class that ALMOST fired but lacked corroboration. It
 	// is the honest counterpart to a suppressed alert (§10): the operator can
 	// see that something was observed and why it was not asserted.
@@ -235,11 +247,56 @@ type candidate struct {
 	evidence Evidence
 }
 
+// Baseline is what the PERSISTED origin register knows about this prefix, as it
+// stood when the pass started. It is the third input to a verdict, alongside
+// the measurement and the declared intent, and it is a VALUE rather than a
+// store handle so the classifier stays pure.
+//
+// The two fields answer two different questions, and conflating them is how the
+// product would start lying again:
+//
+//   - Persisted says whether a baseline register is IN FORCE at all. False is
+//     the pre-persistence world, where the baseline is re-derived from each
+//     pass and a fully propagated origin change is undetectable.
+//   - Origin is the row itself, and nil with Persisted true means THIS PREFIX
+//     HAS NO ROW YET. That is a first observation, which cannot be a change and
+//     is never classified as one.
+type Baseline struct {
+	// Persisted reports that a baseline register is in force.
+	Persisted bool
+	// Origin is the recorded row, or nil when none has been recorded yet.
+	Origin *OriginBaseline
+}
+
 // Classify turns one measurement plus the tenant's declared intent into one
-// incident verdict. It is PURE: no IO, no clock (`now` is injected), no state.
+// incident verdict, with NO persisted baseline. It is the pre-persistence
+// behaviour, kept as its own entry point because it is what a caller with no
+// baseline register should get: an honest per-pass comparison that says what it
+// cannot see.
 //
 // bogons may be nil — the bogon rule is then simply not evaluated.
 func Classify(obs Observation, cfg PolicyConfig, bogons *BogonSet, now time.Time) Incident {
+	return ClassifyWithBaseline(obs, cfg, Baseline{}, bogons, now)
+}
+
+// ClassifyWithBaseline is the same verdict judged against the PERSISTED origin
+// baseline as well (tracker 281). It is PURE: no IO, no clock (`now` is
+// injected), no state — the store read happens in the evaluator and arrives
+// here as a value.
+//
+// THE ORDER OF AUTHORITY for the origin baseline, worst case first:
+//
+//  1. cfg.ExpectedOrigins — the operator DECLARED what should originate this
+//     prefix. A declaration beats a remembered observation, always: it is the
+//     only one of the three that somebody actually asserted.
+//  2. base.Origin — the origin set recorded the first time we measured the
+//     prefix, or the one an operator has since accepted. It does NOT move
+//     between passes, which is the whole point: an origin change that reaches
+//     every vantage point is still a change, because the thing it is compared
+//     against is not this pass.
+//  3. this pass's own dominant origin — the fallback when neither exists. Only
+//     a MINORITY unexpected origin is visible that way, and the verdict says so.
+func ClassifyWithBaseline(obs Observation, cfg PolicyConfig, base Baseline, bogons *BogonSet, now time.Time) Incident {
 	cfg = cfg.withDefaults()
 	inc := Incident{
 		Prefix: obs.Prefix, Class: ClassNone, Severity: SevInfo,
@@ -326,19 +383,40 @@ func Classify(obs Observation, cfg PolicyConfig, bogons *BogonSet, now time.Time
 	}
 	learned := false
 	baselineNote := ""
-	if len(expected) == 0 {
-		// NOT DECLARED, and there is nowhere honest to get a baseline from.
-		// Classify is pure and nothing persists an origin between passes — the
-		// only SetPolicy caller in the backend is the operator's PUT handler —
-		// so the baseline below is RE-DERIVED from this pass's own observation,
-		// not learned once and remembered.
-		//
-		// That leaves exactly one detectable case: a MINORITY origin. An origin
-		// change that has reached every vantage point becomes the baseline in
-		// the same pass, and the prefix classifies clean. The note says so
-		// rather than letting the summary imply a check that did not happen.
-		// The real fix is a persisted first-seen baseline per (tenant, prefix);
-		// it is a tracker row, not something this pure function can do.
+	// baselineLabel names the set the unexpected-origin message compares
+	// against, so the sentence an operator reads always says where the
+	// expectation came from rather than printing a bare list.
+	baselineLabel := ""
+	var recorded *OriginBaseline
+	if base.Origin != nil {
+		row := cloneBaseline(*base.Origin)
+		recorded = &row
+	}
+	switch {
+	case len(expected) > 0:
+		// DECLARED. The operator stated the intent; nothing below may override
+		// it, not even a recorded row that disagrees.
+		baselineLabel = "the expected origin set (AS" + joinASNs(cfg.ExpectedOrigins) + ")"
+
+	case recorded != nil:
+		// RECORDED. This is the case tracker 281 exists for. The comparison is
+		// against a row written on an earlier pass, so an origin change that
+		// has reached every vantage point is still a change.
+		for _, a := range recorded.Origins {
+			expected[a] = true
+		}
+		baselineLabel = "the origin recorded for this prefix (AS" + joinASNs(recorded.Origins) + ")"
+		baselineNote = fmt.Sprintf(
+			"No expected origin AS is declared for %s, so the origin is compared against the STORED baseline: %s. "+
+				"That baseline is a remembered observation, not a declared intent. If the prefix was already being announced by the wrong AS the first time we measured it, that is what was recorded. "+
+				"Declare the expected origin AS to state the intent. If a legitimate re-homing changed the origin, accept the new origin to move the baseline.",
+			obs.Prefix, recorded.describe())
+
+	case base.Persisted:
+		// FIRST OBSERVATION. There is no row yet, so there is nothing this pass
+		// could have changed FROM, and it is never an origin change. The row is
+		// written AFTER this verdict, never before it, so the first measurement
+		// is never judged against a baseline derived from itself.
 		total := 0
 		for _, peers := range originVantages {
 			total += len(peers)
@@ -346,6 +424,46 @@ func Classify(obs Observation, cfg PolicyConfig, bogons *BogonSet, now time.Time
 		if dom, ok := dominantOrigin(originVantages); ok {
 			expected[dom] = true
 			learned = true
+			baselineLabel = "this pass's own dominant origin (AS" + fmt.Sprintf("%d", dom) + ")"
+			// Say what WILL happen accurately. Recording is the evaluator's
+			// decision and it has conditions, so this note describes the
+			// conditions rather than promising a row that may not be written.
+			seen := len(originVantages[dom])
+			if seen >= cfg.MinVantages {
+				baselineNote = fmt.Sprintf(
+					"%s has no recorded origin baseline yet, so this is the FIRST OBSERVATION of it and cannot be a change. "+
+						"AS%d is originating it across %d of %d vantage points, which meets the %d required, so it is recorded as the baseline unless this pass already looks wrong (an RPKI-invalid announcement, a bogon prefix or an origin change never becomes one). "+
+						"Once a baseline is recorded, a later origin change is compared against that row and detected even if it reaches every vantage point. "+
+						"A recorded baseline is a remembered observation, not a declared intent: declare the expected origin AS to state one.",
+					obs.Prefix, dom, seen, total, cfg.MinVantages)
+			} else {
+				baselineNote = fmt.Sprintf(
+					"%s has no recorded origin baseline yet, so this is the FIRST OBSERVATION of it and cannot be a change. "+
+						"AS%d is originating it across only %d of %d vantage points, below the %d required, so NO baseline is recorded from this pass and the prefix still has no origin check. "+
+						"One collector peer holding a stale path must not become the permanent truth about a prefix. "+
+						"Declare the expected origin AS to get an origin check now.",
+					obs.Prefix, dom, seen, total, cfg.MinVantages)
+			}
+		} else {
+			baselineNote = "No AS path was observed for " + obs.Prefix +
+				", so no origin baseline could be recorded and no origin check ran on this prefix. This is an absent check, not a clean result."
+		}
+
+	default:
+		// NOT DECLARED and NOT PERSISTED: the pre-persistence world, kept
+		// exactly as it was for a deployment with no baseline register. The
+		// baseline below is RE-DERIVED from this pass's own observation, so an
+		// origin change that reaches every vantage point becomes the baseline
+		// in the same pass and the prefix classifies clean. The note says so
+		// rather than letting the summary imply a check that did not happen.
+		total := 0
+		for _, peers := range originVantages {
+			total += len(peers)
+		}
+		if dom, ok := dominantOrigin(originVantages); ok {
+			expected[dom] = true
+			learned = true
+			baselineLabel = "this pass's own dominant origin (AS" + fmt.Sprintf("%d", dom) + ")"
 			baselineNote = fmt.Sprintf(
 				"No expected origin AS is declared for %s, so the baseline is this pass's own dominant origin (AS%d, %d of %d vantage points) and it is re-derived every pass. "+
 					"Only a MINORITY unexpected origin can be seen this way: an origin change that reaches every vantage point would look normal here. "+
@@ -372,16 +490,30 @@ func Classify(obs Observation, cfg PolicyConfig, bogons *BogonSet, now time.Time
 					asn, obs.Prefix, len(peers), cfg.MinVantages))
 				continue
 			}
+			label := baselineLabel
+			if label == "" {
+				label = "the expected origin set (" + asnList(cfg.ExpectedOrigins, expected) + ")"
+			}
+			detail := fmt.Sprintf("%d vantage point(s) agree on the unexpected origin. Compare with the RPKI verdict: an invalid alongside this is a strong hijack signal; a valid one usually means the origin legitimately changed and the expected set is stale.",
+				len(peers))
+			if recorded != nil && len(cfg.ExpectedOrigins) == 0 {
+				// The baseline is a STORED row, so the operator has a second
+				// thing to do besides investigate: move the row, or leave it
+				// and keep being told. Say both, and say which row.
+				detail = fmt.Sprintf("%d vantage point(s) agree on an origin that is not the one recorded for this prefix (%s). "+
+					"Compare with the RPKI verdict: an invalid alongside this is a strong hijack signal. "+
+					"If this is a legitimate re-homing, accept AS%d as the new baseline and the incident clears on the next pass.",
+					len(peers), recorded.describe(), asn)
+			}
 			cands = append(cands, candidate{
 				class: ClassOriginChange,
-				summary: fmt.Sprintf("%s is being originated by AS%d, which is not in the expected origin set (%s) — possible hijack.",
-					obs.Prefix, asn, asnList(cfg.ExpectedOrigins, expected)),
+				summary: fmt.Sprintf("%s is being originated by AS%d, which is not %s — possible hijack.",
+					obs.Prefix, asn, label),
 				evidence: Evidence{
 					Vantages: clipStrings(peers, MaxEvidenceVantages),
 					Paths:    pathsForOrigin(obs.Paths, asn),
 					Origins:  originCounts(originVantages),
-					Detail: fmt.Sprintf("%d vantage point(s) agree on the unexpected origin. Compare with the RPKI verdict: an invalid alongside this is a strong hijack signal; a valid one usually means the origin legitimately changed and the expected set is stale.",
-						len(peers)),
+					Detail:   detail,
 				},
 			})
 		}
@@ -397,9 +529,17 @@ func Classify(obs Observation, cfg PolicyConfig, bogons *BogonSet, now time.Time
 	if len(cands) == 0 {
 		inc.LearnedOrigin = learned
 		inc.BaselineNote = baselineNote
+		inc.Baseline = recorded
 		inc.Shortfall = strings.Join(shortfalls, "; ")
 		detail := "Announced, RPKI not invalid, visibility above threshold, no unexpected origin or transit."
-		if baselineNote != "" {
+		switch {
+		case recorded != nil && len(cfg.ExpectedOrigins) == 0:
+			// A STORED baseline really was compared against, so say that the
+			// check ran and name what it ran against. This is the one
+			// undeclared case where "the origin was checked" is true.
+			inc.Summary = "Origin matches the baseline recorded for this prefix (AS" + joinASNs(recorded.Origins) + "); RPKI clean; visibility normal."
+			detail = "Announced, RPKI not invalid, visibility above threshold, origin unchanged since the baseline was recorded. " + baselineNote
+		case baselineNote != "":
 			// Do not say "announced as expected" when nobody declared an
 			// expectation. Name what was actually checked instead.
 			inc.Summary = "RPKI clean and visibility normal. The origin was NOT checked against a declared baseline, because none is declared."
@@ -419,6 +559,7 @@ func Classify(obs Observation, cfg PolicyConfig, bogons *BogonSet, now time.Time
 	inc.Severity = SeverityOf(head.class)
 	inc.LearnedOrigin = learned
 	inc.BaselineNote = baselineNote
+	inc.Baseline = recorded
 	inc.Shortfall = strings.Join(shortfalls, "; ")
 	for _, c := range cands[1:] {
 		inc.Also = append(inc.Also, c.class)

@@ -324,12 +324,15 @@ describe("alert policy — the PUT body", () => {
 });
 
 describe("alert policy — what an empty set means is SAID", () => {
-  it("names the undeclared baseline's blind spot and the transit check that does not run", () => {
-    // H4: "guessed from the first observation" was the false part — the
-    // baseline is re-derived every pass, so the operator has to be told which
-    // hijack this check cannot see, not just that it is weaker.
-    expect(emptySetConsequence("expected_origins", "")).toMatch(/its own dominant origin/);
-    expect(emptySetConsequence("expected_origins", "")).toMatch(/reaches every vantage point looks normal/);
+  it("names what an undeclared baseline really is and the transit check that does not run", () => {
+    // Tracker 281: the fallback is now the RECORDED origin, so a full change
+    // IS detected. What the operator must still be told is that the row was
+    // remembered rather than stated, and that a prefix with no row has no
+    // origin check at all. Saying "only a minority origin can be found" would
+    // now be the false part.
+    expect(emptySetConsequence("expected_origins", "")).toMatch(/recorded the first time it was measured/);
+    expect(emptySetConsequence("expected_origins", "")).toMatch(/no baseline yet has no origin check at all/);
+    expect(emptySetConsequence("expected_origins", "")).not.toMatch(/dominant origin/);
     expect(emptySetConsequence("upstreams", "")).toMatch(/unexpected-transit check does not run/);
     expect(emptySetConsequence("expected_origins", "AS64500")).toBeNull();
     expect(emptySetConsequence("upstreams", "AS3356")).toBeNull();

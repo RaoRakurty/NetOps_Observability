@@ -12,9 +12,12 @@
 //   * "not measured" is its own chip and is never green.
 //   * a verdict names the vantage points that support it; a near-miss (a class
 //     that lacked corroboration) is SHOWN as a shortfall, not hidden.
-//   * an UNDECLARED origin baseline is labelled as such, and the row prints
-//     what that check cannot see. The server re-derives the baseline from
-//     every pass, so a change that reaches every vantage point looks normal.
+//   * an origin baseline that came from THIS pass rather than from a stated
+//     intent or a stored row is labelled as such, and the row prints what that
+//     check cannot see. The chip appears only while `learned_origin` is true,
+//     which is a first observation (or a deployment with no baseline register);
+//     once a baseline is recorded the comparison is a real one and the chip
+//     goes away on its own.
 
 import { Chip } from "../../components/noc";
 import type { BgpAlert, BgpAlertStatus, BgpIncident, BgpWatchEntry } from "../../services/api";
@@ -105,7 +108,7 @@ export function PrefixesPanel({
                   })}
                   {inc?.learned_origin && (
                     <Chip label="no declared baseline" tone="var(--muted)"
-                      title="No expected origin AS is declared for this prefix. Each check compares it against its own dominant origin, so only a minority unexpected origin can be found. Declare the AS to detect a full origin change." />
+                      title="No expected origin AS is declared for this prefix and no baseline has been recorded for it yet, so this check compared it against its own dominant origin. Only a minority unexpected origin can be found that way. The line below says where the baseline came from and what happens next." />
                   )}
                   {wentry.note && <span className="fact-line">{wentry.note}</span>}
                   {inc && (

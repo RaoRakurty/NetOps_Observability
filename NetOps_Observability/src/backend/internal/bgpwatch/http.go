@@ -5,10 +5,13 @@ package bgpwatch
 
 // http.go — the module's read/write HTTP surface. Three routes:
 //
-//	GET  /api/bgp/alerts         — the tenant's alert history + current incidents
-//	GET  /api/bgp/alerts/config  — the tenant's declared alert policy
-//	PUT  /api/bgp/alerts/config  — replace it (owner stamped from the token)
-//	GET  /api/bgp/bogons         — bogon sightings + the set actually in force
+//	GET    /api/bgp/alerts            — the tenant's alert history + current incidents
+//	GET    /api/bgp/alerts/config     — the tenant's declared alert policy
+//	PUT    /api/bgp/alerts/config     — replace it (owner stamped from the token)
+//	GET    /api/bgp/alerts/baselines  — the recorded origin baseline per prefix
+//	POST   /api/bgp/alerts/baselines  — accept a new origin as the baseline
+//	DELETE /api/bgp/alerts/baselines  — forget one, so the next pass records afresh
+//	GET    /api/bgp/bogons            — bogon sightings + the set actually in force
 //
 // §3a: every one of them is per-tenant DATA. A cross-tenant principal (the
 // platform owner in the Global view) must scope into a concrete tenant with the
@@ -55,6 +58,10 @@ type APIDeps struct {
 	Authz func(w http.ResponseWriter, r *http.Request, gate Gate) (Principal, bool)
 	// Policies is the per-tenant policy store. Required.
 	Policies PolicyStore
+	// Baselines is the per-tenant origin-baseline register. OPTIONAL: nil
+	// makes the baselines route answer enabled:false with an explanation,
+	// never an empty list that would read as "no prefix has a baseline".
+	Baselines BaselineStore
 	// Bogons is the compiled bogon table. Required.
 	Bogons *BogonSet
 	// BogonFeedEnabled reports whether the optional full-bogons fetch is on.
@@ -112,6 +119,9 @@ const (
 	maxBogonLimit     = SightingMaxPerTenant
 	// maxPolicyBodyBytes bounds the PUT body before it is even decoded.
 	maxPolicyBodyBytes = 128 << 10
+	// maxBaselineBodyBytes bounds the accept body. One prefix and at most
+	// MaxBaselineOrigins ASNs is a small object; anything larger is not it.
+	maxBaselineBodyBytes = 8 << 10
 )
 
 // rejectUnknownQuery refuses any query parameter this endpoint does not know.
@@ -313,9 +323,11 @@ func (a *API) HandleAlertConfig(w http.ResponseWriter, r *http.Request) {
 		a.deps.WriteJSON(w, http.StatusOK, map[string]any{
 			"config": out, "defaults": defaults,
 			"updated_by": pol.UpdatedBy, "updated_at": pol.UpdatedAt,
-			"note": "expected_origins empty ⇒ NO baseline is stored. Each pass compares the prefix against its own dominant origin, " +
-				"so only a MINORITY unexpected origin is detectable: an origin change that reaches every vantage point classifies clean. " +
-				"Declare the expected origin AS to detect one. " +
+			"note": "expected_origins empty ⇒ the prefix falls back to its RECORDED origin baseline, the origin set corroborated the first time " +
+				"we measured it (see /api/bgp/alerts/baselines). That is a remembered observation, not a declared intent, and a prefix with " +
+				"no row yet has no origin check at all. Where no baseline register is wired, each pass compares the prefix against its own " +
+				"dominant origin instead, so only a MINORITY unexpected origin is detectable and a change that reaches every vantage point " +
+				"classifies clean. Declaring the expected origin AS overrides both and is the only one of the three somebody asserted. " +
 				"upstreams empty ⇒ the route-leak heuristic does not run (there is nothing to call unexpected).",
 		})
 	case http.MethodPut:
@@ -361,6 +373,154 @@ func (a *API) HandleAlertConfig(w http.ResponseWriter, r *http.Request) {
 		a.deps.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "config": out, "defaults": defaults})
 	default:
 		a.deps.WriteError(w, http.StatusMethodNotAllowed, errors.New("GET or PUT"))
+	}
+}
+
+// baselineNoteDisabled is the honest answer when no baseline register is wired.
+const baselineNoteDisabled = "The origin-baseline register is not wired, so no prefix has a recorded baseline. " +
+	"Without one, a prefix with no declared expected origin is compared against each pass's own dominant origin, " +
+	"and an origin change that reaches every vantage point classifies clean. An empty list here means NOT RECORDED, not 'no prefix has ever changed origin'."
+
+// baselineWire is the accept request. The prefix is a string and the ASNs are
+// STRINGS ("AS64500" or "64500"), the same notation the policy route accepts,
+// and every one is parsed at this boundary.
+type baselineWire struct {
+	Prefix  string   `json:"prefix"`
+	Origins []string `json:"origins"`
+}
+
+// HandleBaselines serves GET/POST/DELETE /api/bgp/alerts/baselines.
+//
+// §3a: the register is per-tenant DATA. Every method scopes to ONE concrete
+// tenant through the same gate the alert policy uses, the store refuses a
+// non-concrete tenant outright, and a prefix another tenant owns is simply
+// ABSENT here — the same 404 a prefix nobody owns gets, so the response cannot
+// be used to discover that some other tenant watches it.
+//
+// The ACCEPT is the whole reason this route exists. A legitimate re-homing
+// changes the origin, the evaluator correctly calls it an origin change, and
+// without a way to say "yes, that was us" it would alert forever. POST is that
+// way: the operator states the origin set they are adopting, it is stored with
+// their name and the time, and the incident resolves on the next measured pass.
+// The new origin is NEVER taken from the observation automatically, because
+// adopting whatever is being announced right now is exactly what the old
+// re-derived baseline did.
+func (a *API) HandleBaselines(w http.ResponseWriter, r *http.Request) {
+	if a == nil {
+		http.NotFound(w, r)
+		return
+	}
+	allowed := []string{}
+	if r.Method == http.MethodDelete {
+		allowed = append(allowed, "prefix")
+	}
+	if err := rejectUnknownQuery(r, allowed...); err != nil {
+		a.deps.WriteError(w, http.StatusBadRequest, err)
+		return
+	}
+	gate := GateRead
+	if r.Method != http.MethodGet {
+		gate = GateWrite
+	}
+	tenant, p, ok := a.scoped(w, r, gate)
+	if !ok {
+		return
+	}
+	if a.deps.Baselines == nil {
+		if r.Method != http.MethodGet {
+			a.deps.WriteError(w, http.StatusServiceUnavailable, errors.New(baselineNoteDisabled))
+			return
+		}
+		a.deps.WriteJSON(w, http.StatusOK, map[string]any{
+			"enabled": false, "baselines": []OriginBaseline{}, "note": baselineNoteDisabled,
+		})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		rows, err := a.deps.Baselines.Baselines(r.Context(), tenant)
+		if err != nil {
+			a.deps.WriteError(w, http.StatusInternalServerError, err)
+			return
+		}
+		out := make([]OriginBaseline, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, row)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Prefix < out[j].Prefix })
+		a.deps.WriteJSON(w, http.StatusOK, map[string]any{
+			"enabled": true, "baselines": out,
+			"sources": map[string]string{
+				BaselineFirstSeen: "recorded from the first corroborated measurement of the prefix; nobody confirmed it",
+				BaselineAccepted:  "an operator stated this origin set, by name and at the time stored with it",
+			},
+			"max_prefixes": MaxBaselinePrefixes, "max_origins": MaxBaselineOrigins,
+			"note": "A baseline is a REMEMBERED OBSERVATION, not a declared intent. A prefix with no row here has never been " +
+				"measured with a corroborated origin, so a fully propagated origin change on it would not be detected yet. " +
+				"Declaring the expected origin AS on /api/bgp/alerts/config is the stronger statement and overrides the row.",
+		})
+	case http.MethodPost:
+		var req baselineWire
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBaselineBodyBytes)).Decode(&req); err != nil {
+			a.deps.WriteError(w, http.StatusBadRequest, fmt.Errorf("bad body: %w", err))
+			return
+		}
+		if len(req.Origins) > MaxBaselineOrigins {
+			a.deps.WriteError(w, http.StatusBadRequest, fmt.Errorf("at most %d origin ASNs per baseline", MaxBaselineOrigins))
+			return
+		}
+		origins := make([]uint32, 0, len(req.Origins))
+		for _, raw := range req.Origins {
+			n, err := ParseASN(raw)
+			if err != nil {
+				a.deps.WriteError(w, http.StatusBadRequest, fmt.Errorf("origins: %w", err))
+				return
+			}
+			origins = append(origins, n)
+		}
+		// §3a rule 2: the owner is stamped from the AUTHENTICATED principal,
+		// and the tenant from the resolved scope. There is no tenant field on
+		// the wire to override either with.
+		row, err := a.deps.Baselines.Accept(r.Context(), tenant, req.Prefix, p.Subject, origins, a.deps.Now())
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, ErrBaselineFull) || errors.Is(err, ErrStoreUnreadable) {
+				status = http.StatusConflict
+			}
+			a.deps.WriteError(w, status, err)
+			return
+		}
+		a.deps.WriteJSON(w, http.StatusOK, map[string]any{
+			"ok": true, "baseline": row,
+			"note": "The baseline for " + row.Prefix + " is now AS" + joinASNs(row.Origins) +
+				". An open origin-change incident for it clears on the next MEASURED pass, not immediately: the evaluator resolves what it has re-measured, never what it was told.",
+		})
+	case http.MethodDelete:
+		prefix := strings.TrimSpace(r.URL.Query().Get("prefix"))
+		if prefix == "" {
+			a.deps.WriteError(w, http.StatusBadRequest, errors.New("prefix is required"))
+			return
+		}
+		if err := a.deps.Baselines.Forget(r.Context(), tenant, prefix); err != nil {
+			if errors.Is(err, ErrNoBaseline) {
+				// The same answer another tenant's prefix gets: absent.
+				a.deps.WriteError(w, http.StatusNotFound, err)
+				return
+			}
+			status := http.StatusBadRequest
+			if errors.Is(err, ErrStoreUnreadable) {
+				status = http.StatusConflict
+			}
+			a.deps.WriteError(w, status, err)
+			return
+		}
+		a.deps.WriteJSON(w, http.StatusOK, map[string]any{
+			"ok": true,
+			"note": "The baseline was deleted. The next corroborated measurement of this prefix is recorded as a NEW first observation, " +
+				"so whatever is announcing it then becomes the baseline. Accept an origin instead if you know which one is right.",
+		})
+	default:
+		a.deps.WriteError(w, http.StatusMethodNotAllowed, errors.New("GET, POST or DELETE"))
 	}
 }
 

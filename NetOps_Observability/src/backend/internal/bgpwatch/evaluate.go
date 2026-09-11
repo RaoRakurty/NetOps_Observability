@@ -123,6 +123,13 @@ type Deps struct {
 	Watchlist func(ctx context.Context, tenant string) ([]string, error)
 	// Policies is the per-tenant declared intent. Required.
 	Policies PolicyStore
+	// Baselines is the PERSISTED first-seen origin per (tenant, prefix), and
+	// the reason a fully propagated origin change is detectable (tracker 281).
+	// OPTIONAL: nil keeps the pre-persistence behaviour exactly, where the
+	// origin baseline is re-derived from each pass and only a minority
+	// unexpected origin can be seen. Status() reports which of the two is in
+	// force, so an operator is never left to guess.
+	Baselines BaselineStore
 
 	// Observe measures ONE prefix. Required. An error means "not measured" and
 	// produces ClassUnknown — never a clean verdict.
@@ -231,6 +238,7 @@ var tenantCounterNames = []string{
 	"peer_state_unmeasured_total",
 	"bogon_sightings_total",
 	"evidence_skipped_total",
+	"origin_baselines_recorded_total",
 }
 
 // Evaluator is the runtime. One per process.
@@ -398,6 +406,22 @@ func (e *Evaluator) EvaluateTenant(ctx context.Context, tenant string) error {
 		return fmt.Errorf("alert policy unreadable for this tenant: %w", perr)
 	}
 
+	// The PERSISTED origin baselines, read ONCE per tenant per pass rather than
+	// once per prefix. Fail LOUD and STOP, exactly as the policy read does, and
+	// for a sharper reason: an unreadable register makes every watched prefix
+	// look like a first observation, so carrying on would re-record a baseline
+	// from whatever is being announced RIGHT NOW. A hijack in progress would be
+	// adopted as the truth and the incident would never fire again.
+	var baselines map[string]OriginBaseline
+	if e.deps.Baselines != nil {
+		rows, berr := e.deps.Baselines.Baselines(ctx, t)
+		if berr != nil {
+			e.setLastRun(st, now, berr.Error())
+			return fmt.Errorf("origin baselines unreadable for this tenant: %w", berr)
+		}
+		baselines = rows
+	}
+
 	prefixes, werr := e.deps.Watchlist(ctx, t)
 	if werr != nil {
 		e.setLastRun(st, now, werr.Error())
@@ -424,8 +448,19 @@ func (e *Evaluator) EvaluateTenant(ctx context.Context, tenant string) error {
 			obs.Prefix = p
 		}
 		cfg := policy.For(p)
-		inc := Classify(obs, cfg, e.deps.Bogons, now)
+		base := Baseline{Persisted: e.deps.Baselines != nil}
+		if row, ok := baselines[p]; ok {
+			base.Origin = &row
+		}
+		inc := ClassifyWithBaseline(obs, cfg, base, e.deps.Bogons, now)
 		e.bump(st, "prefixes_evaluated_total", &e.metrics.PrefixesEvaluated)
+		// Record the baseline AFTER the verdict, never before it, so the first
+		// observation is never judged against a row derived from itself.
+		if base.Persisted && base.Origin == nil {
+			if row, ok := e.recordFirstBaseline(ctx, st, t, obs, cfg, inc, now); ok {
+				inc.Baseline = &row
+			}
+		}
 		events = append(events, e.applyIncident(st, t, inc, cfg, now)...)
 	}
 
@@ -441,6 +476,95 @@ func (e *Evaluator) EvaluateTenant(ctx context.Context, tenant string) error {
 	e.setLastRun(st, now, lastErr)
 	e.bump(st, "runs_total", &e.metrics.Runs)
 	return nil
+}
+
+// recordFirstBaseline writes the origin baseline for a prefix that has none.
+// It returns the row and true only when a row was actually established.
+//
+// WHAT IT REFUSES TO RECORD, and why each refusal matters more than the row:
+//
+//   - an UNMEASURED pass. There is nothing to record, and recording "no
+//     origin" would be a baseline that matches nothing and alerts forever.
+//   - an UNCORROBORATED origin. One collector peer holding a stale path would
+//     otherwise become the permanent truth about a prefix. The same MinVantages
+//     floor that gates an origin_change gates the baseline that origin_change
+//     is measured against, which is the only way the two can agree.
+//   - a pass that ALREADY looks wrong: origin_change, rpki_invalid or bogon.
+//     Recording from those is how a hijack in progress becomes the baseline,
+//     and then stops being an incident forever. When we cannot tell, we wait:
+//     the prefix keeps its honest "no baseline yet" state and the next clean
+//     pass records one.
+//
+// A failure is COUNTED and LOGGED, never fatal to the pass: the verdict the
+// operator just got is still valid, and a store that cannot take a write must
+// not stop the prefix being classified.
+func (e *Evaluator) recordFirstBaseline(ctx context.Context, st *tenantState, tenant string, obs Observation, cfg PolicyConfig, inc Incident, now time.Time) (OriginBaseline, bool) {
+	if !obs.Measured {
+		return OriginBaseline{}, false
+	}
+	switch inc.Class {
+	case ClassOriginChange, ClassRPKIInvalid, ClassBogon:
+		return OriginBaseline{}, false
+	case ClassNone, ClassUnknown, ClassVisibilityLoss, ClassRouteLeak:
+		// A visibility loss or a leak says nothing about WHO originates the
+		// prefix, so a corroborated origin on such a pass is still a fair
+		// baseline. The three refused above are the ones that do.
+	}
+	if strings.EqualFold(obs.RPKIState, "invalid") {
+		// Belt and braces: the class above is the headline, and an invalid can
+		// ride in Also behind a worse class.
+		return OriginBaseline{}, false
+	}
+	origins, vantages := corroboratedOrigins(obs.Paths, cfg.MinVantages)
+	if len(origins) == 0 {
+		return OriginBaseline{}, false
+	}
+	row, recorded, err := e.deps.Baselines.Record(ctx, tenant, OriginBaseline{
+		Prefix: obs.Prefix, Origins: origins, Source: BaselineFirstSeen,
+		Vantages: vantages, FirstSeen: now, UpdatedAt: now,
+	})
+	if err != nil {
+		e.deps.LogWarn("the origin baseline for a watched prefix could not be recorded, so the prefix stays without one and a fully propagated origin change on it would not be detected",
+			map[string]any{"prefix": clip(obs.Prefix, 64), "err": err.Error()})
+		return OriginBaseline{}, false
+	}
+	if recorded {
+		e.bump(st, "origin_baselines_recorded_total", &e.metrics.BaselinesRecorded)
+	}
+	return row, true
+}
+
+// corroboratedOrigins returns every origin seen by at least minVantages
+// DISTINCT collector peers, sorted. More than one is normal and legitimate: an
+// anycast or multi-homed prefix really is originated by several ASNs, and
+// recording only the loudest would alert on the others forever.
+func corroboratedOrigins(paths []VantagePath, minVantages int) ([]uint32, int) {
+	if minVantages < 1 {
+		minVantages = DefaultMinVantages
+	}
+	peers := map[uint32][]string{}
+	for _, vp := range paths {
+		if o := vp.Origin(); o != 0 {
+			peers[o] = appendVantage(peers[o], vp.Peer)
+		}
+	}
+	out := make([]uint32, 0, len(peers))
+	total := 0
+	for asn, p := range peers {
+		if len(p) >= minVantages {
+			out = append(out, asn)
+			total += len(p)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	if len(out) > MaxBaselineOrigins {
+		out = out[:MaxBaselineOrigins]
+		total = 0
+		for _, asn := range out {
+			total += len(peers[asn])
+		}
+	}
+	return out, total
 }
 
 // applyIncident folds one verdict into the tenant's state and returns the
@@ -1084,7 +1208,13 @@ type Status struct {
 	PeerRule      bool      `json:"peer_rule_enabled"`
 	NotifyWired   bool      `json:"notify_wired"`
 	EvidenceWired bool      `json:"evidence_wired"`
-	Note          string    `json:"note,omitempty"`
+	// OriginBaselines reports whether the PERSISTED origin baseline register is
+	// in force. False is the pre-persistence behaviour, where an origin change
+	// that has reached every vantage point is undetectable on a prefix with no
+	// declared expected origin, and an operator must be able to see which one
+	// they are running (§10).
+	OriginBaselines bool   `json:"origin_baselines_enabled"`
+	Note            string `json:"note,omitempty"`
 }
 
 // Status returns ONE tenant's evaluator status.
@@ -1093,6 +1223,7 @@ func (e *Evaluator) Status(tenant string) Status {
 		Enabled: true, Interval: e.interval.String(), Cooldown: e.cooldown.String(),
 		EvidenceTopic: e.topic, PeerRule: e.deps.Peers != nil,
 		NotifyWired: e.deps.Notify != nil, EvidenceWired: e.evidence != nil,
+		OriginBaselines: e.deps.Baselines != nil,
 	}
 	t := normTenant(tenant)
 	e.mu.Lock()

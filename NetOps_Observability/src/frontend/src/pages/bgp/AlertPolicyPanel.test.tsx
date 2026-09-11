@@ -66,7 +66,7 @@ describe("AlertPolicyPanel", () => {
 
   it("says what an empty origin set and an empty upstream set cost", async () => {
     render(<AlertPolicyPanel />);
-    expect(await screen.findByText(/reaches every vantage point looks normal/)).toBeTruthy();
+    expect(await screen.findByText(/recorded the first time it was measured/)).toBeTruthy();
     expect(screen.getByText(/unexpected-transit check does not run/)).toBeTruthy();
   });
 

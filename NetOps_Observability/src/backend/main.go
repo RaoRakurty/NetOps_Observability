@@ -213,9 +213,10 @@ type server struct {
 	// built — the embedded RFC/IANA bogon set is a real answer with or without
 	// the evaluator — while bgpWatchEval is nil unless FEATURE_BGP_ALERTS=true,
 	// so a flag-off deployment starts no worker and makes no outbound call.
-	bgpWatchAPI    *bgpwatch.API
-	bgpWatchEval   *bgpwatch.Evaluator
-	bgpWatchPolicy bgpwatch.PolicyStore
+	bgpWatchAPI      *bgpwatch.API
+	bgpWatchEval     *bgpwatch.Evaluator
+	bgpWatchPolicy   bgpwatch.PolicyStore
+	bgpWatchBaseline bgpwatch.BaselineStore
 	// BGP-WATCH-END
 	// DEM-BEGIN — Digital Experience Monitoring (S17). The catalogue and the
 	// HTTP surface are ALWAYS built: an operator must be able to declare targets
@@ -1315,13 +1316,17 @@ func newServer() *server {
 	// useful with the evaluator off); the evaluator itself only under
 	// FEATURE_BGP_ALERTS. Construction failure is LOUD, never silently dormant.
 	srv.bgpWatchPolicy = newBGPAlertPolicyStore()
+	// The origin-baseline register (tracker 281). Built alongside the policy
+	// store and for the same reason: it is cheap, and a baseline recorded while
+	// alerting is off is a baseline already in place the day it is turned on.
+	srv.bgpWatchBaseline = newBGPOriginBaselineStore()
 	bgpBogons := bgpwatch.NewBogonSet()
-	if eval, err := srv.buildBGPWatch(srv.bgpWatchPolicy, bgpBogons); err != nil {
+	if eval, err := srv.buildBGPWatch(srv.bgpWatchPolicy, srv.bgpWatchBaseline, bgpBogons); err != nil {
 		logError("bgp-watch", "BGP alerting could not be constructed — NO watchlist alert will be raised", errf(err))
 	} else {
 		srv.bgpWatchEval = eval
 	}
-	if api, err := srv.buildBGPWatchAPI(srv.bgpWatchPolicy, bgpBogons, srv.bgpWatchEval); err != nil {
+	if api, err := srv.buildBGPWatchAPI(srv.bgpWatchPolicy, srv.bgpWatchBaseline, bgpBogons, srv.bgpWatchEval); err != nil {
 		logError("bgp-watch", "the BGP alerts/bogons routes could not be wired — they will answer 404", errf(err))
 	} else {
 		srv.bgpWatchAPI = api
@@ -2931,6 +2936,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	// bgpWatchAPI (construction refused) answers 404 on all three.
 	mux.HandleFunc("/api/bgp/alerts", s.bgpWatchAPI.HandleAlerts)
 	mux.HandleFunc("/api/bgp/alerts/config", s.bgpWatchAPI.HandleAlertConfig)
+	mux.HandleFunc("/api/bgp/alerts/baselines", s.bgpWatchAPI.HandleBaselines)
 	mux.HandleFunc("/api/bgp/bogons", s.bgpWatchAPI.HandleBogons)
 	// DEM-BEGIN — Digital Experience Monitoring (S17). Per-tenant data: the
 	// module scopes every read and write to ONE concrete tenant and answers 404

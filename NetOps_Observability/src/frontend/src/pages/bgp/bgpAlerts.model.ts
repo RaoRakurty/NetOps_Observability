@@ -241,11 +241,11 @@ export function groupSightings(rows: BgpBogonSighting[]): { block: string; why: 
 // of its four fields carry a consequence that an empty value does not announce,
 // and the editor is where that has to be said, because the wire cannot say it:
 //
-//   * `expected_origins` empty  ⇒ NO baseline is stored. Every check compares
-//     the prefix against its own dominant origin, so only a MINORITY
-//     unexpected origin can be found. An origin change that reaches every
-//     vantage point looks normal. That is not a weaker check on the same
-//     question; it is a different, much narrower question.
+//   * `expected_origins` empty  ⇒ the check falls back to the RECORDED origin
+//     baseline: the origin set corroborated the first time the prefix was
+//     measured. A full origin change is detected against it, but the row is a
+//     remembered observation rather than a declared intent, and a prefix with
+//     no row yet has no origin check at all.
 //   * `upstreams` empty         ⇒ the route-leak heuristic DOES NOT RUN. There
 //     is nothing to call unexpected, so a quiet leak column means unmeasured,
 //     not clean.
@@ -440,7 +440,7 @@ export function policyDirty(form: PolicyForm, original: PolicyForm): boolean {
 export function emptySetConsequence(field: "expected_origins" | "upstreams", value: string): string | null {
   if (value.trim() !== "") return null;
   return field === "expected_origins"
-    ? "No AS is declared here, so each check compares the prefix against its own dominant origin. Only a minority unexpected origin can be found that way — an origin change that reaches every vantage point looks normal. Declare the AS to detect one."
+    ? "No AS is declared here, so each check compares the prefix against the origin recorded the first time it was measured. That baseline is a remembered observation, not something anyone stated: if the prefix was already being announced by the wrong AS then, that is what was recorded. A prefix with no baseline yet has no origin check at all. Declare the AS to state the intent."
     : "No carriers are declared here, so the unexpected-transit check does not run — a quiet result means unmeasured, not clean.";
 }
 

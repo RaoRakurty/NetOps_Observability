@@ -79,6 +79,11 @@ const (
 	// EnvConfigFile is the FileStore fallback path for the per-tenant policy
 	// (expected origins / upstreams / thresholds) on a non-Postgres build.
 	EnvConfigFile = "BGP_ALERT_CONFIG_FILE"
+	// EnvBaselineFile is the BaselineFileStore path for the per-tenant ORIGIN
+	// BASELINE register (the first-seen origin per prefix) on a non-Postgres
+	// build. Postgres deployments never read it — migration 0048's FORCE-RLS
+	// table is the store there.
+	EnvBaselineFile = "BGP_ORIGIN_BASELINE_FILE"
 	// EnvWatchlistFile is the WatchFileStore path for the per-tenant WATCHLIST
 	// (which prefixes/ASNs a tenant asked us to watch) on a non-Postgres build.
 	// Postgres deployments never read it — migration 0035's FORCE-RLS table is
