@@ -580,8 +580,7 @@ func (s *server) handleWanInterfaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	wIDs, wNames, wCross := s.visibleDeviceMetricLabels(claims)
-	writeJSON(w, http.StatusOK, map[string]any{"interfaces": s.wanInterfaceRows(r.Context(), tenant, cross, metricsScopeFilters(wIDs, wNames, wCross))})
+	writeJSON(w, http.StatusOK, map[string]any{"interfaces": s.wanInterfaceRows(r.Context(), tenant, cross, s.metricsScopeFiltersFor(claims))})
 }
 
 // handleWanEndpoints: GET /api/wan/endpoints — the derived WAN endpoint registry.

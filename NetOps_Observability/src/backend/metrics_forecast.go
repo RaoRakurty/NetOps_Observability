@@ -30,19 +30,15 @@ import (
 const forecastThreshold = 0.90 // 90% utilization line
 const forecastMinDays = 14.0   // need ≥ this much history to forecast
 
-// forecastNoVisibleDeviceFilter is the match-nothing VM selector used when a
-// principal may see no device at all — the same impossible label value
-// proxyMetrics (metrics_query.go) uses, so both paths fail closed identically.
-const forecastNoVisibleDeviceFilter = `{device="__netops_no_visible_device__"}`
-
 // ---- tenant isolation (CLAUDE.md §3a) ---------------------------------------
 //
 // The forecast reads the SAME per-interface series the Metrics Explorer reads, so
 // it gets the SAME boundary: VictoriaMetrics `extra_filters[]` injected
 // server-side (see the long note in metrics_query.go — we never parse the PromQL),
-// built from the principal's visible device set by metricsScopeFilters /
-// metricsExcludeFilter. A scoped principal with no visible device gets the
-// match-nothing selector (fail closed), never an unfiltered query.
+// built by the one derivation every metrics lane uses, metricsScopeFiltersFor.
+// A scoped principal with no visible device gets the match-nothing selector
+// (fail closed), never an unfiltered query, and so does an operator who scoped
+// into a tenant that switched the operator-visibility restriction on.
 //
 // Because this handler — unlike proxyMetrics — assembles the response rows itself
 // in Go, it ALSO drops any series whose device labels are outside the principal's
@@ -64,23 +60,20 @@ type forecastScope struct {
 func (s *server) forecastScopeOf(c jwtClaims) forecastScope {
 	ids, names, cross := s.visibleDeviceMetricLabels(c)
 	rt := s.restrictedTelemetry(c)
-	var sc forecastScope
+	// The wire filters come from the ONE derivation; what follows only decides
+	// which in-Go row filter goes with them.
+	sc := forecastScope{filters: s.metricsScopeFiltersFor(c)}
 	switch {
 	case rt.deny:
 		// Operator scoped into an operator-restricted tenant → match nothing.
 		sc.denyAll = true
-		sc.filters = []string{forecastNoVisibleDeviceFilter}
 	case !cross:
 		// Scoped tenant → only its own devices' series.
 		sc.scoped = true
 		sc.ids, sc.names = forecastLabelSet(ids), forecastLabelSet(names)
-		sc.filters = metricsScopeFilters(ids, names, cross)
 	case len(rt.ids) > 0 || len(rt.names) > 0:
 		// Operator Global view → exclude restricted tenants' devices.
 		sc.denied = forecastLabelSet(append(append([]string{}, rt.ids...), rt.names...))
-		if f := metricsExcludeFilter(rt.ids, rt.names); f != "" {
-			sc.filters = []string{f}
-		}
 	}
 	return sc
 }

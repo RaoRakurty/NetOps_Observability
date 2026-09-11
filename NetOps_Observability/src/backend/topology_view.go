@@ -96,8 +96,7 @@ type topoMetrics struct {
 func (s *server) gatherTopoMetrics(ctx context.Context, claims jwtClaims) topoMetrics {
 	mctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	ids, names, cross := s.visibleDeviceMetricLabels(claims)
-	f := metricsScopeFilters(ids, names, cross)
+	f := s.metricsScopeFiltersFor(claims)
 	cpu, _ := s.qVecByScoped(mctx, `max by (device) (device_cpu_percent)`, "device", f)
 	mem, _ := s.qVecByScoped(mctx, `max by (device) (device_mem_percent)`, "device", f)
 	return topoMetrics{
@@ -200,8 +199,7 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 		// SEC (2026-08-04): the same device boundary gatherTopoMetrics applies —
 		// these three enrichers join by device/host name onto the caller's path,
 		// so an unscoped read renders another tenant's metrics as this tenant's.
-		pIDs, pNames, pCross := s.visibleDeviceMetricLabels(claims)
-		pf := metricsScopeFilters(pIDs, pNames, pCross)
+		pf := s.metricsScopeFiltersFor(claims)
 		enrichPathStamp(&view, s.stampByDst(r.Context(), pf))
 		// Traceroute per-hop RTT/loss (keyed by hop IP) — covers the intermediate
 		// hops STAMP never targets; the UI prefers stamp_* and falls back to trace_*.

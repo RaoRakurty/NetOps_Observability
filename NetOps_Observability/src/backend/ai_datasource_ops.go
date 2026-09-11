@@ -220,8 +220,7 @@ func (d aiDataSource) moduleDeviceHealth(p ai.Principal, name string) (ai.ToolRe
 	// already pinned to the ONE device canSeeDevice cleared above, but a pin is
 	// the handler remembering; extra_filters[] is VictoriaMetrics enforcing, and
 	// it is the same boundary /api/metrics/query applies.
-	mIDs, mNames, mCross := d.srv.visibleDeviceMetricLabels(d.claims)
-	mf := metricsScopeFilters(mIDs, mNames, mCross)
+	mf := d.srv.metricsScopeFiltersFor(d.claims)
 	storeDown := false
 	addMetric := func(cid, metric, format string) {
 		samples, err := d.srv.vmInstantScoped(d.ctx, sel(metric), mf)

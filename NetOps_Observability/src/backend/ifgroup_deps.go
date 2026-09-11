@@ -117,19 +117,7 @@ func ifgroupCanSee(d ifgroup.Device, p ifgroup.Principal) bool {
 //     as "nothing to restrict".
 func (s *server) ifgroupScopeFilters(r *http.Request, _ ifgroup.Principal) []string {
 	claims, _ := userFrom(r.Context())
-	ids, names, cross := s.visibleDeviceMetricLabels(claims)
-	rt := s.restrictedTelemetry(claims)
-	switch {
-	case rt.deny:
-		return []string{`{device="__netops_no_visible_device__"}`}
-	case !cross:
-		return metricsScopeFilters(ids, names, cross)
-	case len(rt.ids) > 0 || len(rt.names) > 0:
-		if f := metricsExcludeFilter(rt.ids, rt.names); f != "" {
-			return []string{f}
-		}
-	}
-	return nil
+	return s.metricsScopeFiltersFor(claims)
 }
 
 // errIfGroupUnscopableMetrics is the fail-closed condition when the configured

@@ -42,6 +42,10 @@ func (c *captureVM) start(t *testing.T) *httptest.Server {
 	}))
 	t.Cleanup(srv.Close)
 	t.Setenv("VICTORIA_URL", srv.URL)
+	// proxyMetrics reads METRICS_URL, the rest read VICTORIA_URL first: a
+	// capture that sets only one of them cannot see the /api/metrics/* proxy,
+	// and a route it cannot see is a route it cannot hold to the rule.
+	t.Setenv("METRICS_URL", srv.URL)
 	return srv
 }
 

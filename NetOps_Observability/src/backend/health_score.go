@@ -63,11 +63,10 @@ func (s *server) handleHealthScore(w http.ResponseWriter, r *http.Request) {
 	// device boundary. These classes emit device NAMES and their metrics, so an
 	// unscoped read renders other tenants' devices into this tenant's score —
 	// the same defect gatherTopoMetrics was hardened against (topology_view.go:86-91).
-	// metricsScopeFilters fails closed: a tenant with no visible device gets the
-	// __netops_no_visible_device__ sentinel, so a class reports "not live"
-	// rather than the whole fleet.
-	ids, names, cross := s.visibleDeviceMetricLabels(claims)
-	f := metricsScopeFilters(ids, names, cross)
+	// The chokepoint fails closed: a tenant with no visible device gets the
+	// match-nothing sentinel, so a class reports "not live" rather than the whole
+	// fleet, and a restricted tenant gets the same sentinel from an operator.
+	f := s.metricsScopeFiltersFor(claims)
 
 	// best-effort, independent class fetchers (a dead source → class not live)
 	classes := []healthscore.ClassResult{

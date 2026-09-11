@@ -82,14 +82,59 @@ func metricsExcludeFilter(ids, names []string) string {
 	return "{" + strings.Join(parts, ",") + "}"
 }
 
+// metricsNoVisibleDeviceFilter is the match-nothing selector: a label value that
+// cannot exist on any real series, so the query returns an empty result instead
+// of 400-ing or, worse, running unfiltered.
+const metricsNoVisibleDeviceFilter = `{device="__netops_no_visible_device__"}`
+
+// metricsScopeFiltersFor is THE derivation of a caller's VictoriaMetrics
+// boundary, and the reason every metrics lane is correct rather than every
+// metrics lane happening to be correct.
+//
+// It folds BOTH rules into one answer — the tenant's visible device set AND the
+// per-tenant operator-visibility restriction — the way addrTenantClauseFor does
+// for the flows lane. That fold is the whole point. While each lane called the
+// pure metricsScopeFilters itself, a lane got the device boundary and silently
+// skipped the restriction, because the restriction lived in proxyMetrics and
+// nowhere a lane would trip over it. Six lanes had drifted that way, and a lane
+// added tomorrow would have started there too.
+//
+// The four answers:
+//
+//   - operator scoped INTO a restricted tenant → the match-nothing sentinel. Not
+//     a 403: a refusal would confirm the tenant has series at all.
+//   - scoped tenant → its own devices only, and the sentinel when it has none.
+//     Never an unfiltered read.
+//   - platform owner in the Global view while some tenant is restricted → that
+//     tenant's devices excluded.
+//   - unrestricted platform owner → nil, which every lane reads as "nothing to
+//     restrict".
+//
+// metrics_scope_chokepoint_test.go fails the build if a lane builds its own
+// filter set instead of calling this.
+func (s *server) metricsScopeFiltersFor(c jwtClaims) []string {
+	ids, names, cross := s.visibleDeviceMetricLabels(c)
+	rt := s.restrictedTelemetry(c)
+	switch {
+	case rt.deny:
+		return []string{metricsNoVisibleDeviceFilter}
+	case !cross:
+		return metricsScopeFilters(ids, names, cross)
+	case len(rt.ids) > 0 || len(rt.names) > 0:
+		if f := metricsExcludeFilter(rt.ids, rt.names); f != "" {
+			return []string{f}
+		}
+	}
+	return nil
+}
+
 func metricsScopeFilters(ids, names []string, cross bool) []string {
 	if cross {
 		return nil
 	}
 	if len(ids) == 0 && len(names) == 0 {
-		// Empty namespace: match nothing. A label value that cannot exist on any
-		// real series guarantees an empty result without 400-ing the query.
-		return []string{`{device="__netops_no_visible_device__"}`}
+		// Empty namespace: match nothing.
+		return []string{metricsNoVisibleDeviceFilter}
 	}
 	var filters []string
 	if idRe := regexAlternation(ids); idRe != "" {
@@ -157,22 +202,7 @@ func (s *server) proxyMetrics(w http.ResponseWriter, r *http.Request, path strin
 	// can only read its own devices' series. The platform owner (cross) is
 	// unrestricted EXCEPT for the operator-visibility compliance rule below.
 	claims, _ := userFrom(r.Context())
-	ids, names, cross := s.visibleDeviceMetricLabels(claims)
-	rt := s.restrictedTelemetry(claims)
-	var scopeFilters []string
-	switch {
-	case rt.deny:
-		// Operator scoped into a restricted tenant → match nothing.
-		scopeFilters = []string{`{device="__netops_no_visible_device__"}`}
-	case !cross:
-		// Scoped tenant → only its own devices' series.
-		scopeFilters = metricsScopeFilters(ids, names, cross)
-	case len(rt.ids) > 0 || len(rt.names) > 0:
-		// Operator Global view → exclude restricted tenants' devices.
-		if f := metricsExcludeFilter(rt.ids, rt.names); f != "" {
-			scopeFilters = []string{f}
-		}
-	}
+	scopeFilters := s.metricsScopeFiltersFor(claims)
 	if len(scopeFilters) > 0 {
 		if !metricsUpstreamIsVictoria(base) {
 			// Fail closed: the upstream can't enforce label scoping, so we must

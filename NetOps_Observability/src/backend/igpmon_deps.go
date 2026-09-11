@@ -136,19 +136,7 @@ func (s *server) igpmonCHQuery(ctx context.Context, scope, sql string) ([]map[st
 //     as "nothing to restrict".
 func (s *server) igpmonScopeFilters(r *http.Request, _ igpmon.Principal) []string {
 	claims, _ := userFrom(r.Context())
-	ids, names, cross := s.visibleDeviceMetricLabels(claims)
-	rt := s.restrictedTelemetry(claims)
-	switch {
-	case rt.deny:
-		return []string{`{device="__netops_no_visible_device__"}`}
-	case !cross:
-		return metricsScopeFilters(ids, names, cross)
-	case len(rt.ids) > 0 || len(rt.names) > 0:
-		if f := metricsExcludeFilter(rt.ids, rt.names); f != "" {
-			return []string{f}
-		}
-	}
-	return nil
+	return s.metricsScopeFiltersFor(claims)
 }
 
 // errIGPMonUnscopableMetrics is the fail-closed condition when the configured
