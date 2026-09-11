@@ -40,10 +40,18 @@ func (s *server) handleMetricTiles(w http.ResponseWriter, r *http.Request) {
 // Tenant isolation: a scoped principal's tiles reflect only its own devices and
 // alerts — the dashboard must not leak the global fleet's counts (the platform
 // owner, cross-tenant, still sees everything).
+//
+// A TILE IS A COUNT, AND A COUNT IS A DISCLOSURE. "Critical Threats: 3" over a
+// feed that lists one alert says the other two exist, and whose they are is the
+// only thing left to guess. So the alert tile counts through the SAME resolved
+// rule GET /api/alerts and the WebSocket feed apply — alertVisibility, which
+// carries the operator-visibility restriction — and not through the raw
+// alertVisible underneath it, which answers true for everything on the
+// cross-tenant path.
 func (s *server) currentMetricTiles(claims jwtClaims) []MetricTile {
 	devs := visibleDevices(s.discovery.Devices(), claims)
 	devices := len(devs)
-	ids, cross := s.visibleDeviceIDs(claims)
+	_, cross := principalTenant(claims)
 
 	// Devices down. Platform owner: unreachable targets summed across protocol
 	// collectors (collector stats are fleet-wide, not tenant-attributable). A
@@ -70,16 +78,18 @@ func (s *server) currentMetricTiles(claims jwtClaims) []MetricTile {
 		}
 	}
 
-	// Critical threats: active critical alerts the principal is allowed to see
-	// (alertVisible — the same rule as GET /api/alerts).
+	// Critical threats: active critical alerts the principal is allowed to see.
+	// alertVisibility is the same rule GET /api/alerts and the WebSocket feed
+	// ask, resolved once for this principal, so the headline count and the list
+	// under it can never disagree about what the caller may see.
 	threats := 0
 	if s.alerts != nil {
-		tenant, _ := principalTenant(claims)
+		vis := s.alertVisibilityFor(claims)
 		for _, a := range s.alerts.Active() {
 			if !strings.EqualFold(strings.TrimSpace(a.Severity), "critical") {
 				continue
 			}
-			if !alertVisible(a, tenant, cross, ids) {
+			if !vis.visible(a) {
 				continue
 			}
 			threats++
