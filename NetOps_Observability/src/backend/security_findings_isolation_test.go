@@ -804,7 +804,7 @@ func secTopHits(spec any, docs []secHit) []any {
 	}
 	out := make([]any, 0, len(sorted))
 	for _, h := range sorted {
-		out = append(out, json.RawMessage(h.raw))
+		out = append(out, h.raw)
 	}
 	return out
 }
