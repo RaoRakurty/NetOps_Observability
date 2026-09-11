@@ -6992,13 +6992,34 @@ func (s *server) configAuthz(w http.ResponseWriter, r *http.Request, gate config
 	}, true
 }
 
+// configDriftAuthz maps the drift module's gate onto the RBAC model. Drift state
+// is per-tenant DATA, so it is requirePerm + a tenant filter, NOT a platform gate.
+//
+// It also resolves the OPERATOR-VISIBILITY restriction (Tenant.OperatorRestricted)
+// and hands it to the module on the Principal, exactly as configAuthz does for the
+// stored configurations. A drift row is the same data family: it names a device
+// and the fingerprint of the configuration running on it, plus whether that box
+// has wandered off its baseline. It is resolved with the SAME primitive the logs
+// path uses (operatorTelemetryRestriction, the tenant_id form) rather than a
+// second implementation, because the drift row already carries the owning tenant id.
+//
+// This module declares ONE gate (GateRead), so there is no write half to resolve:
+// every capture and golden-baseline write arrives through internal/configstore,
+// whose own gate is already resolved for both.
 func (s *server) configDriftAuthz(w http.ResponseWriter, r *http.Request, _ configdrift.Gate) (configdrift.Principal, bool) {
 	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
 	if !ok {
 		return configdrift.Principal{}, false
 	}
 	tenant, cross := principalTenant(claims)
-	return configdrift.Principal{Tenant: tenant, Cross: cross, Subject: claims.Sub}, true
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
+	return configdrift.Principal{
+		Tenant:         tenant,
+		Cross:          cross,
+		Subject:        claims.Sub,
+		Deny:           deny,
+		ExcludeTenants: exclude,
+	}, true
 }
 
 // configAudit is the securityAudit shape for API actions. A configuration READ

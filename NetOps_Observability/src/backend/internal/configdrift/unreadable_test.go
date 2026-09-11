@@ -50,7 +50,7 @@ func TestDriftRegisterUnreadableIsReportedNotSilentlyEmpty(t *testing.T) {
 	if s.LoadErr() == nil {
 		t.Fatal("an unreadable drift register loaded silently — every device reads as in-sync with no reason given")
 	}
-	counts, cerr := s.Counts(ctx, "acme", false)
+	counts, cerr := s.Counts(ctx, Principal{Tenant: "acme"})
 	if cerr != nil || len(counts) != 0 {
 		t.Fatalf("an unreadable register produced counts: %v %v", cerr, counts)
 	}

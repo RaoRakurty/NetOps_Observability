@@ -45,12 +45,17 @@ type StateStore interface {
 	// Put upserts a device's state. s.TenantID must already carry the owner
 	// derived from the DEVICE record.
 	Put(ctx context.Context, tenant string, cross bool, s State) error
-	// List pages the caller's OWN devices' states, ordered by device id, and
+	// List pages the rows the PRINCIPAL may see, ordered by device id, and
 	// returns the next cursor ("" = last page) and the total matching count.
-	List(ctx context.Context, tenant string, cross bool, state, cursor string, limit int) ([]State, string, int, error)
-	// Counts aggregates the caller-visible rows by state (the gauge + the badge
-	// rollup).
-	Counts(ctx context.Context, tenant string, cross bool) (map[string]int, error)
+	//
+	// It takes the whole Principal rather than (tenant, cross) because the read
+	// rule is Principal.Admits — the tenant boundary AND the operator-visibility
+	// restriction — and the total has to obey it too: a count of a restricted
+	// tenant's drifted devices is itself a disclosure.
+	List(ctx context.Context, p Principal, state, cursor string, limit int) ([]State, string, int, error)
+	// Counts aggregates the rows the principal may see, by state (the gauge +
+	// the badge rollup). Same rule, same reason.
+	Counts(ctx context.Context, p Principal) (map[string]int, error)
 }
 
 // clampLimit bounds a caller-supplied page size.
@@ -191,11 +196,13 @@ func (s *FileStore) Put(_ context.Context, _ string, _ bool, st State) error {
 	return s.flushLocked()
 }
 
-// visibleSorted collects the caller's rows, optionally filtered by state.
-func (s *FileStore) visibleSorted(tenant string, cross bool, state string) []State {
+// visibleSorted collects the rows the principal may see, optionally filtered by
+// state. Principal.Admits is the ONE rule: the tenant boundary and the
+// operator-visibility restriction in a single answer.
+func (s *FileStore) visibleSorted(p Principal, state string) []State {
 	out := make([]State, 0, len(s.rows))
 	for k, st := range s.rows {
-		if !visible(tenant, cross, k.tenant) {
+		if !p.Admits(k.tenant) {
 			continue
 		}
 		if state != "" && st.State != state {
@@ -213,11 +220,11 @@ func (s *FileStore) visibleSorted(tenant string, cross bool, state string) []Sta
 }
 
 // List implements StateStore.
-func (s *FileStore) List(_ context.Context, tenant string, cross bool, state, cursor string, limit int) ([]State, string, int, error) {
+func (s *FileStore) List(_ context.Context, p Principal, state, cursor string, limit int) ([]State, string, int, error) {
 	limit = clampLimit(limit)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	all := s.visibleSorted(tenant, cross, state)
+	all := s.visibleSorted(p, state)
 	total := len(all)
 	start := 0
 	if cursor != "" {
@@ -236,12 +243,12 @@ func (s *FileStore) List(_ context.Context, tenant string, cross bool, state, cu
 }
 
 // Counts implements StateStore.
-func (s *FileStore) Counts(_ context.Context, tenant string, cross bool) (map[string]int, error) {
+func (s *FileStore) Counts(_ context.Context, p Principal) (map[string]int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := map[string]int{}
 	for k, st := range s.rows {
-		if !visible(tenant, cross, k.tenant) {
+		if !p.Admits(k.tenant) {
 			continue
 		}
 		out[st.State]++
@@ -350,19 +357,34 @@ func (p *pgStore) Put(ctx context.Context, tenant string, cross bool, st State) 
 	})
 }
 
-func (p *pgStore) List(ctx context.Context, tenant string, cross bool, state, cursor string, limit int) ([]State, string, int, error) {
+// pgNotHidden is Principal.Admits' compliance clause in SQL. The tenant boundary
+// itself is the tenant_iso FORCE-RLS policy WithTenant installs; this predicate
+// is the half RLS cannot express, because a cross-tenant read is "all" and the
+// policy grammar has no "all except" — the same conclusion the ClickHouse lanes
+// reached. tenant_id is stored normalized (Put calls NormTenant), so the
+// comparison needs no folding.
+const pgNotHidden = ` AND NOT (tenant_id = ANY($%d::text[]))`
+
+func (p *pgStore) List(ctx context.Context, pr Principal, state, cursor string, limit int) ([]State, string, int, error) {
 	limit = clampLimit(limit)
 	out := []State{}
 	total := 0
-	err := p.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	// A denied principal is answered without a query: it may see no row of this
+	// tenant, and the count must be zero rather than a filtered-to-empty page
+	// over a total that still names how many rows exist.
+	if pr.Deny {
+		return out, "", 0, nil
+	}
+	hidden := pr.hiddenTenants()
+	err := p.db.WithTenant(ctx, pr.Tenant, pr.Cross, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM config_drift_state
-		    WHERE ($1 = '' OR state = $1)`, state).Scan(&total); err != nil {
+		    WHERE ($1 = '' OR state = $1)`+fmt.Sprintf(pgNotHidden, 2), state, hidden).Scan(&total); err != nil {
 			return err
 		}
 		rows, err := tx.Query(ctx, `SELECT `+pgStateCols+`
 		    FROM config_drift_state
-		    WHERE ($1 = '' OR state = $1) AND ($2 = '' OR device_id > $2)
-		    ORDER BY device_id ASC LIMIT $3`, state, cursor, limit)
+		    WHERE ($1 = '' OR state = $1) AND ($2 = '' OR device_id > $2)`+fmt.Sprintf(pgNotHidden, 4)+`
+		    ORDER BY device_id ASC LIMIT $3`, state, cursor, limit, hidden)
 		if err != nil {
 			return err
 		}
@@ -371,6 +393,12 @@ func (p *pgStore) List(ctx context.Context, tenant string, cross bool, state, cu
 			st, err := scanState(rows)
 			if err != nil {
 				return err
+			}
+			// Belt and braces: the Go rule runs on every row either backend
+			// returns, so a predicate that is ever dropped from the SQL still
+			// cannot put a hidden row on the wire.
+			if !pr.Admits(st.TenantID) {
+				continue
 			}
 			out = append(out, st)
 		}
@@ -386,11 +414,16 @@ func (p *pgStore) List(ctx context.Context, tenant string, cross bool, state, cu
 	return out, next, total, nil
 }
 
-func (p *pgStore) Counts(ctx context.Context, tenant string, cross bool) (map[string]int, error) {
+func (p *pgStore) Counts(ctx context.Context, pr Principal) (map[string]int, error) {
 	out := map[string]int{}
-	err := p.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	if pr.Deny {
+		return out, nil
+	}
+	hidden := pr.hiddenTenants()
+	err := p.db.WithTenant(ctx, pr.Tenant, pr.Cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT state, count(*) FROM config_drift_state
-		    GROUP BY state ORDER BY state ASC`)
+		    WHERE true`+fmt.Sprintf(pgNotHidden, 1)+`
+		    GROUP BY state ORDER BY state ASC`, hidden)
 		if err != nil {
 			return err
 		}

@@ -44,6 +44,16 @@
 // WithTenant; file backend by a tenant-keyed map), the bulk list is own-only,
 // a cross-tenant device id answers 404, and the bus record's partition key is
 // the tenant id — the same keying every other lane uses.
+//
+// The caller's Principal also carries the OPERATOR-VISIBILITY restriction, and
+// this package obeys it exactly as it obeys the tenant. A drift row names a
+// device and the fingerprint of the configuration running on it — the same data
+// family as the stored configuration itself — so a tenant that has switched the
+// compliance restriction on is invisible to the platform operator here too. The
+// restriction is RESOLVED by the composition root (it owns the tenant store) and
+// applied in Principal.Admits, which both store backends ask. The COUNT obeys it
+// as well: a tally of a restricted tenant's drifted devices is a disclosure in
+// its own right.
 package configdrift
 
 import (

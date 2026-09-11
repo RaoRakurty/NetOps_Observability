@@ -147,7 +147,7 @@ func TestDriftListPagesAndIsBounded(t *testing.T) {
 		}
 	}
 	// An oversized limit is clamped, not honoured.
-	if _, _, _, err := f.store.List(context.Background(), "acme", false, "", "", 100000); err != nil {
+	if _, _, _, err := f.store.List(context.Background(), Principal{Tenant: "acme"}, "", "", 100000); err != nil {
 		t.Fatal(err)
 	}
 	if got := clampLimit(100000); got != MaxListLimit {

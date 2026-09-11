@@ -63,10 +63,77 @@ const (
 )
 
 // Principal is the caller's already-authorized scope.
+//
+// It carries the OPERATOR-VISIBILITY restriction as well as the tenant, for the
+// same reason internal/configstore's does: a drift row names a device and the
+// fingerprint of the configuration running on it, so the platform owner's
+// cross-tenant reach is not automatically a right to read it. The composition
+// root resolves the restriction (it owns the tenant store); this package only
+// obeys it, the same way it only obeys the tenant it is handed.
 type Principal struct {
 	Tenant  string
 	Cross   bool
 	Subject string
+
+	// Deny short-circuits the list to NOTHING. It is set when the caller is the
+	// platform operator scoped INTO a tenant whose operator-visibility
+	// restriction is in force. A denied principal has no drift row here, so it
+	// lists no device, no sha and no verdict — and the total is zero, because a
+	// count of a tenant's drifted devices is itself a disclosure.
+	Deny bool
+
+	// ExcludeTenants are tenant ids whose rows must be filtered OUT of a
+	// cross-tenant (Global) view. It is normally empty; it is non-empty only for
+	// the platform operator while some tenant is restricted.
+	ExcludeTenants []string
+}
+
+// Admits reports whether this principal may see rows owned by `owner`. It is the
+// ONE read rule this package has, and it is default-closed: the compliance
+// restriction first, then the tenant boundary. Both store backends ask it, so
+// the answer cannot differ between the file and Postgres deployments.
+//
+// The restriction is checked on the scoped path too, not only the cross one: the
+// caller that resolves it never populates ExcludeTenants for a scoped read, so
+// asking both costs nothing and cannot be forgotten.
+func (p Principal) Admits(owner string) bool {
+	if p.Deny {
+		return false
+	}
+	if p.excluded(owner) {
+		return false
+	}
+	return visible(p.Tenant, p.Cross, owner)
+}
+
+// excluded reports whether `owner` is hidden from this principal by the
+// operator-visibility restriction. Case-insensitive, because a tenant id is an
+// opaque handle and the two sides of this comparison are minted by different
+// stores.
+func (p Principal) excluded(owner string) bool {
+	if len(p.ExcludeTenants) == 0 {
+		return false
+	}
+	want := NormTenant(owner)
+	for _, id := range p.ExcludeTenants {
+		if NormTenant(id) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// hiddenTenants is Admits in the form a SQL backend can use: the normalized
+// tenant ids the Global view must not return. Always non-nil, so it encodes as
+// an empty text[] rather than NULL.
+func (p Principal) hiddenTenants() []string {
+	out := make([]string, 0, len(p.ExcludeTenants))
+	for _, id := range p.ExcludeTenants {
+		if n := NormTenant(id); n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // Deps are the injected collaborators (§5). Every field is REQUIRED unless its

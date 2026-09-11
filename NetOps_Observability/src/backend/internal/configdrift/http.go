@@ -23,6 +23,9 @@ import (
 //
 // §3a: own-only. The list is paged with a keyset cursor INSIDE the tenant scope,
 // so no cursor value a caller can invent pages into another tenant's devices.
+// The same Principal also carries the OPERATOR-VISIBILITY restriction, and the
+// store applies both halves through Principal.Admits — the one read rule this
+// package has.
 
 // StatusFor is the configstore.StatusSource: one device's badge status. It is
 // wired into the device subtree handler, which has ALREADY authorized the caller
@@ -121,7 +124,11 @@ func (e *Evaluator) HandleDriftList(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	rows, next, total, err := e.deps.Store.List(r.Context(), p.Tenant, p.Cross, state, q.Get("cursor"), limit)
+	// The WHOLE principal goes to the store, not just (tenant, cross): the read
+	// rule is Principal.Admits, which is the tenant boundary AND the
+	// operator-visibility restriction, and `total` has to obey it as well — a
+	// count of a restricted tenant's drifted devices is itself a disclosure.
+	rows, next, total, err := e.deps.Store.List(r.Context(), p, state, q.Get("cursor"), limit)
 	if err != nil {
 		e.deps.LogError("drift list failed", map[string]any{"error": e.deps.Scrub(err.Error())})
 		e.deps.WriteError(w, http.StatusInternalServerError, errors.New("configuration drift is unavailable"))
