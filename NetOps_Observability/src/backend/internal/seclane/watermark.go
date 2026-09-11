@@ -117,7 +117,8 @@ func (w *FileWatermarks) Save(tenant string, until time.Time) error {
 		return fmt.Errorf("seclane: detection watermarks could not be staged: %w", err)
 	}
 	name := tmp.Name()
-	defer func() { _ = os.Remove(name) }() // no-op once the rename succeeded
+	// best-effort: a no-op once the rename succeeded; on a failure path the caller already has the real error.
+	defer func() { _ = os.Remove(name) }()
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("seclane: detection watermarks could not be secured: %w", err)

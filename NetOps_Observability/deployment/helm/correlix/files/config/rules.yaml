@@ -1082,6 +1082,52 @@ groups:
         annotations:
           summary: "Collector {{ $labels.collector }} produced 0 samples"
 
+      # 284 (2026-09-10): THE COUNTER NOBODY ALERTED ON.
+      #
+      # collectOneGuarded recovers a panic in a show-output parser so one bad
+      # device cannot take the api down with it. It logs the panic value and
+      # the stack, marks the device failed with a note, and bumps
+      # netops_protocoldiag_collector_panics_total. The counter reaches
+      # /metrics on EVERY scrape, including as a zero, so the series
+      # disappearing means a scrape problem and never "the parsers got
+      # healthy".
+      #
+      # Containment with no rule on it is the failure this stack keeps
+      # rediscovering: the fault is caught, counted, and nobody is told. A
+      # device that panics a parser on every poll then produces no protocol
+      # diagnostics for as long as nobody greps the log.
+      #
+      # THRESHOLD. Any non-zero increase is a bug in a parser reached by real
+      # device bytes, so the test is `> 0` over a window rather than a rate.
+      # increase() treats a counter going backwards as a reset, so an api
+      # restart cannot fabricate one. The 30m window is what makes it clear on
+      # its own once the panics stop.
+      #
+      # WARNING, NOT PAGE. The page tier is fixed at four conditions (CLAUDE.md
+      # "Monitoring") and this is none of them: the process survives, no engine
+      # stops consuming, no ingest goes silent and no store refuses a write. It
+      # is a correctness signal about one device's diagnostics.
+      #
+      # NO COMPANION absent() RULE, on purpose. `up{job="netops-api"} == 0` in
+      # noc-availability already covers the scrape going away, and a code change
+      # that dropped the metric line fails a blocking api unit test that drives
+      # the real handlePromMetrics and asserts both the TYPE line and the zero.
+      # An always-on advisory here would only teach an operator to ignore it.
+      - alert: ProtocolDiagCollectorPanics
+        expr: increase(netops_protocoldiag_collector_panics_total[30m]) > 0
+        for: 5m
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "a show-output parser panicked while collecting protocol diagnostics — the api survived and the device was marked failed, but that device returns no diagnostics until the parser is fixed"
+          description: >-
+            The collector recovers a panicking parser rather than letting it
+            end the process, so this is contained, not an outage. It is still a
+            bug: a parser met device output it could not handle. The api log
+            carries the panic value and the stack under "protocoldiag", with
+            the device and the command that produced it. Expect the affected
+            device to read `failed` in a battery run, with a note saying why,
+            while every other device in the run is unaffected.
+
       # G1 (2026-09-02): THIS RULE USED TO LIE ABOUT ITS OWN COVERAGE.
       #
       # It selected up{job=~"opensearch|clickhouse|victoria|postgres|redis"},
