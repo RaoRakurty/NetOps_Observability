@@ -21,7 +21,9 @@ import (
 //	1. AUTHORIZE at the right gate (read vs write) → Principal.
 //	2. RESOLVE the device and check the caller may SEE it. A device owned by
 //	   another tenant answers 404, never 403 — revealing that an id exists
-//	   elsewhere is itself the leak (§3a rule 1).
+//	   elsewhere is itself the leak (§3a rule 1). The same check applies the
+//	   OPERATOR-VISIBILITY restriction: a tenant that has switched it on has no
+//	   devices here as far as the platform owner is concerned.
 //	3. VALIDATE every path/query value (a version id is 64 hex characters or it
 //	   is not a version id).
 //	4. READ through the tenant-scoped store, so the store's own filter/RLS is
@@ -103,8 +105,12 @@ func (a *API) resolve(w http.ResponseWriter, r *http.Request, gate Gate, deviceI
 		return Principal{}, Device{}, false
 	}
 	dev, found := a.m.deps.LookupDevice(deviceID)
-	if !found || !visible(p.Tenant, p.Cross, dev.TenantID) {
-		// Absent and foreign are deliberately indistinguishable.
+	if !found || !p.Admits(dev.TenantID) {
+		// Absent, foreign and operator-restricted are deliberately
+		// indistinguishable. p.Admits is the ONE place this subtree applies both
+		// the tenant boundary and the operator-visibility restriction, and every
+		// route — versions, version text, diff, status, backup and golden —
+		// comes through here.
 		a.m.deps.WriteError(w, http.StatusNotFound, ErrNotFound)
 		return Principal{}, Device{}, false
 	}

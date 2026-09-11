@@ -83,10 +83,63 @@ const (
 )
 
 // Principal is the caller's already-authorized scope.
+//
+// It carries the OPERATOR-VISIBILITY restriction as well as the tenant, because
+// a device configuration is the box's whole operational blueprint and the
+// platform owner's cross-tenant reach is not automatically a right to read it.
+// The composition root resolves the restriction (it owns the tenant store); this
+// package only obeys it, the same way it only obeys the tenant it is handed.
 type Principal struct {
 	Tenant  string
 	Cross   bool
 	Subject string
+
+	// Deny short-circuits the whole subtree to NOTHING. It is set when the
+	// caller is the platform operator scoped INTO a tenant whose
+	// operator-visibility restriction is in force. A denied principal sees no
+	// device here, so it lists no version, reads no configuration text and
+	// renders no diff — the same answer logs, flows, metrics, igpmon and the BMP
+	// feed give.
+	Deny bool
+
+	// ExcludeTenants are tenant ids whose devices must be filtered OUT of a
+	// cross-tenant (Global) view. It is normally empty; it is non-empty only for
+	// the platform operator while some tenant is restricted.
+	ExcludeTenants []string
+}
+
+// Admits reports whether this principal may see versions owned by `owner`. It is
+// the ONE rule the HTTP surface asks, and it is default-closed: the compliance
+// restriction first, then the tenant boundary.
+//
+// The restriction is checked on the scoped path too, not only the cross one: the
+// caller that resolves it never populates ExcludeTenants for a scoped read, so
+// asking both costs nothing and cannot be forgotten.
+func (p Principal) Admits(owner string) bool {
+	if p.Deny {
+		return false
+	}
+	if p.excluded(owner) {
+		return false
+	}
+	return visible(p.Tenant, p.Cross, owner)
+}
+
+// excluded reports whether `owner` is hidden from this principal by the
+// operator-visibility restriction. Case-insensitive, because a tenant id is an
+// opaque handle and the two sides of this comparison are minted by different
+// stores.
+func (p Principal) excluded(owner string) bool {
+	if len(p.ExcludeTenants) == 0 {
+		return false
+	}
+	want := NormTenant(owner)
+	for _, id := range p.ExcludeTenants {
+		if NormTenant(id) == want {
+			return true
+		}
+	}
+	return false
 }
 
 // Deps are the module's injected collaborators (§5). Every field is REQUIRED

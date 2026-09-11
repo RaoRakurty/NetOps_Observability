@@ -47,6 +47,16 @@
 // a changed key. The session is a single non-interactive `exec` of ONE command
 // taken from the closed per-vendor table in dialect.go — never a shell, never a
 // caller-supplied string.
+//
+// ── OPERATOR VISIBILITY ─────────────────────────────────────────────────────
+// The caller's Principal also carries the OPERATOR-VISIBILITY restriction, and
+// this package obeys it exactly as it obeys the tenant. A stored configuration
+// is the box's whole operational blueprint, so a tenant that has switched the
+// compliance restriction on is invisible to the platform operator here, the same
+// way it is invisible on logs, flows, metrics, igpmon and the BMP feed. The
+// restriction is RESOLVED by the composition root (it owns the tenant store) and
+// applied in Principal.Admits, asked from resolve(), the one place every route in
+// the subtree passes through.
 package configstore
 
 import "time"

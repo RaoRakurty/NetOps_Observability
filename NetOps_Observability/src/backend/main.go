@@ -6864,6 +6864,19 @@ func (s *server) configLookupDevice(deviceID string) (configstore.Device, bool) 
 // configAuthz maps the module's gates onto the RBAC model: reads are
 // infrastructure:read, capture/golden are infrastructure:write. Config backup is
 // per-tenant DATA, so it is requirePerm + a tenant filter, NOT a platform gate.
+//
+// It also resolves the OPERATOR-VISIBILITY restriction (Tenant.OperatorRestricted)
+// and hands it to the module on the Principal. A stored configuration is the most
+// sensitive per-device artefact the platform holds, and the diff is the same
+// thing again line by line, so it is telemetry in exactly the sense that
+// compliance switch means. It is resolved with the SAME primitive the logs path
+// uses (operatorTelemetryRestriction, the tenant_id form) rather than a second
+// implementation, because the device row already carries the owning tenant id.
+//
+// It is resolved for BOTH gates. Read is the leak that matters, and the write
+// gate falls out of the same answer: an operator that may not read a tenant's
+// configurations has no business triggering a fresh capture of them or moving
+// that tenant's golden baseline.
 func (s *server) configAuthz(w http.ResponseWriter, r *http.Request, gate configstore.Gate) (configstore.Principal, bool) {
 	level := LevelRead
 	if gate == configstore.GateWrite {
@@ -6874,7 +6887,14 @@ func (s *server) configAuthz(w http.ResponseWriter, r *http.Request, gate config
 		return configstore.Principal{}, false
 	}
 	tenant, cross := principalTenant(claims)
-	return configstore.Principal{Tenant: tenant, Cross: cross, Subject: claims.Sub}, true
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
+	return configstore.Principal{
+		Tenant:         tenant,
+		Cross:          cross,
+		Subject:        claims.Sub,
+		Deny:           deny,
+		ExcludeTenants: exclude,
+	}, true
 }
 
 func (s *server) configDriftAuthz(w http.ResponseWriter, r *http.Request, _ configdrift.Gate) (configdrift.Principal, bool) {
