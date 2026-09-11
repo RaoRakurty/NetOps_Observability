@@ -7118,6 +7118,21 @@ func (s *server) pcapLookupDevice(deviceID string) (pcap.Device, bool) {
 // The gate SPLIT is the deliberate part: listing captures is infrastructure:read,
 // but STARTING one, DOWNLOADING one (a reveal of customer payload) and DELETING
 // one are infrastructure:write — a PCAP download must never be a read-level act.
+//
+// It also resolves the OPERATOR-VISIBILITY restriction (Tenant.OperatorRestricted)
+// and hands it to the module on the Principal. A capture is telemetry in exactly
+// the sense that compliance switch means, and more so: it is the customer's own
+// data plane. It is resolved with the SAME primitive the logs path uses
+// (operatorTelemetryRestriction, the tenant_id form) rather than a second
+// implementation, because the device row already carries the owning tenant id —
+// no device-keyed translation is needed here.
+//
+// It is resolved for BOTH gates, unlike the read-only lanes: on this subtree the
+// DOWNLOAD — the route that streams the packets themselves — sits behind the
+// WRITE gate, so a read-gate-only resolution would leave the rawest route open.
+// Start and delete are covered by the same answer: a restricted tenant simply
+// has no devices here, so the operator can neither read its captures nor take a
+// fresh one off its interfaces.
 func (s *server) pcapAuthz(w http.ResponseWriter, r *http.Request, gate pcap.Gate) (pcap.Principal, bool) {
 	level := LevelRead
 	if gate == pcap.GateWrite {
@@ -7128,7 +7143,14 @@ func (s *server) pcapAuthz(w http.ResponseWriter, r *http.Request, gate pcap.Gat
 		return pcap.Principal{}, false
 	}
 	tenant, cross := principalTenant(claims)
-	return pcap.Principal{Tenant: tenant, Cross: cross, Subject: claims.Sub}, true
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
+	return pcap.Principal{
+		Tenant:         tenant,
+		Cross:          cross,
+		Subject:        claims.Sub,
+		Deny:           deny,
+		ExcludeTenants: exclude,
+	}, true
 }
 
 // pcapAudit is the securityAudit shape for capture actions. The module itself

@@ -36,6 +36,15 @@
 //
 // This package holds NO ambient authority: the gateway, the store, the sealer,
 // the clock, the authz gate and the audit sink are all injected (§5).
+//
+// The caller's Principal also carries the OPERATOR-VISIBILITY restriction, and
+// this package obeys it exactly as it obeys the tenant. A capture is real frames
+// off a customer's production interface — the rawest artefact the product holds
+// — so a tenant that has switched the compliance restriction on is invisible to
+// the platform operator here, the same way it is invisible on logs, flows,
+// metrics, igpmon and the BMP feed. The restriction is RESOLVED by the
+// composition root (it owns the tenant store) and applied in Principal.Admits,
+// asked from resolve(), the one place every route in the subtree passes through.
 package pcap
 
 import "time"
