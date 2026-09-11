@@ -31,7 +31,8 @@
 //	      internal/threatlane internal/advisory internal/configdrift \
 //	      enterprise/dialects
 //	rm secapi/rules.go secapi/rules_test.go
-//	rm security_lane_isolation_test.go security_lane_removability_test.go
+//	rm security_lane_isolation_test.go seclane_restriction_test.go \
+//	   security_lane_removability_test.go
 //	delete every main.go line between a `SECURITY-LANE-BEGIN` marker and its
 //	matching `SECURITY-LANE-END` (the import, the server field, the worker start,
 //	the route registration, the metrics write, and the
@@ -364,6 +365,11 @@ var (
 	// ErrScanNoTenant is the 400 condition: a cross-tenant caller must scope
 	// into a tenant before triggering a scan.
 	ErrScanNoTenant = errors.New("scope into a tenant before triggering a security scan")
+	// ErrScanRestricted is the 403 condition: the platform operator has scoped
+	// into a tenant whose operator-visibility restriction is in force. Refusing
+	// tells the operator nothing it does not already own — it configured the
+	// restriction — and there is no honest empty answer to a write.
+	ErrScanRestricted = errors.New("this tenant's operator-visibility restriction is in force; a scan cannot be triggered on its behalf")
 )
 
 // Lane is the per-tenant security evidence producer.
@@ -583,16 +589,35 @@ func (l *Lane) record(st ScanStatus) {
 	l.status[st.TenantID] = st
 }
 
-// StatusFor returns the status rows a principal may see. §3a: own-only unless
-// the caller is the cross-tenant platform admin — a tenant must never learn that
-// another tenant exists from a status page.
-func (l *Lane) StatusFor(tenant string, cross bool) []ScanStatus {
+// StatusFor returns the status rows a principal may see. It is the ONE place
+// this lane's read rule lives, and it is default-closed.
+//
+// Two rules, in this order:
+//
+//  1. The OPERATOR-VISIBILITY restriction (compliance). Deny reads nothing at
+//     all; an excluded tenant's row is invisible even to a cross-tenant
+//     principal. A status row is derived from one tenant's estate and says how
+//     many of its devices were assessed, how many security findings the pass
+//     emitted about them and what went wrong, so it is the platform owner's to
+//     see only while that tenant allows it. The restriction is applied to the
+//     scoped path too, not only the cross one: the caller that resolves it never
+//     populates ExcludeTenants for a scoped read, so checking both costs nothing
+//     and cannot be forgotten.
+//  2. §3a: own-only unless the caller is the cross-tenant platform admin — a
+//     tenant must never learn that another tenant exists from a status page.
+func (l *Lane) StatusFor(p secapi.Principal) []ScanStatus {
+	if p.Deny {
+		return []ScanStatus{}
+	}
 	l.statusMu.Lock()
 	defer l.statusMu.Unlock()
-	want := strings.ToLower(strings.TrimSpace(tenant))
+	want := strings.ToLower(strings.TrimSpace(p.Tenant))
 	out := make([]ScanStatus, 0, len(l.status))
 	for id, st := range l.status {
-		if !cross && strings.ToLower(strings.TrimSpace(id)) != want {
+		if p.Excluded(id) {
+			continue
+		}
+		if !p.Cross && strings.ToLower(strings.TrimSpace(id)) != want {
 			continue
 		}
 		out = append(out, st)

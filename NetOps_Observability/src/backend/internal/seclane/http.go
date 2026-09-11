@@ -24,6 +24,12 @@ import (
 // the tenant filter. The cross-tenant PLATFORM admin sees one row per tenant; a
 // tenant admin sees ONLY its own row, because the mere existence of another
 // tenant is not its to know.
+//
+// The principal also carries the OPERATOR-VISIBILITY restriction, applied inside
+// StatusFor, the one place this lane's read rule lives. A restricted tenant's
+// row is dropped from the platform admin's Global list and a platform admin
+// scoped into one reads no row at all: a 200 with nothing in it, never a 403,
+// which would confirm the tenant has a lane.
 func (l *Lane) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		l.deps.WriteError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
@@ -39,7 +45,7 @@ func (l *Lane) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		"max_findings_per_tenant": l.maxFindings,
 		"topic":                   secbus.TopicSecurityEvidence,
 		"metrics":                 l.metrics.Snapshot(),
-		"tenants":                 l.StatusFor(p.Tenant, p.Cross),
+		"tenants":                 l.StatusFor(p),
 	})
 }
 
@@ -60,6 +66,16 @@ func (l *Lane) HandleScan(w http.ResponseWriter, r *http.Request) {
 	tenant := strings.ToLower(strings.TrimSpace(p.Tenant))
 	if p.Cross || tenant == "" || (l.deps.GlobalTenant != "" && tenant == l.deps.GlobalTenant) {
 		l.deps.WriteError(w, http.StatusBadRequest, ErrScanNoTenant)
+		return
+	}
+	// The OPERATOR-VISIBILITY restriction. A scan is a WRITE on this tenant's
+	// estate: it reads the tenant's devices and configurations and produces
+	// tenant-attributed evidence. An operator that may not read the tenant's lane
+	// must not drive its evidence production either, so a denied trigger is
+	// refused outright rather than answered under some empty scope — a write
+	// answered that way would create rows no tenant could ever see.
+	if p.Deny {
+		l.deps.WriteError(w, http.StatusForbidden, ErrScanRestricted)
 		return
 	}
 	if err := l.Enqueue(tenant); err != nil {

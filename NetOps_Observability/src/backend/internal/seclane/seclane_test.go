@@ -206,7 +206,7 @@ func TestScanAllIteratesTenantsAndKeysEveryRecordByTenant(t *testing.T) {
 		t.Fatalf("the pass did not cover both tenants: keys=%v", seenKeys)
 	}
 	for _, tenant := range []string{"acme", "globex"} {
-		st := fx.lane.StatusFor(tenant, false)
+		st := fx.lane.StatusFor(secapi.Principal{Tenant: tenant})
 		if len(st) != 1 || st[0].ScanID == "" {
 			t.Fatalf("no status row recorded for %s: %+v", tenant, st)
 		}
@@ -280,7 +280,7 @@ func TestRuleStateFailureFailsClosed(t *testing.T) {
 	if n := len(fx.pub.on(secbus.TopicSecurityEvidence)); n != 0 {
 		t.Fatalf("emitted %d findings under an UNKNOWN rule-enablement set — the run must fail closed", n)
 	}
-	st := fx.lane.StatusFor("acme", false)
+	st := fx.lane.StatusFor(secapi.Principal{Tenant: "acme"})
 	if len(st) != 1 || st[0].Outcome != OutcomeError {
 		t.Fatalf("outcome = %+v, want %q", st, OutcomeError)
 	}
@@ -472,7 +472,7 @@ func TestThreatLaneLogSourceFailureDoesNotSuppressOtherLanes(t *testing.T) {
 	if n := len(fx.pub.on(secbus.TopicSecurityEvidence)); n == 0 {
 		t.Fatal("a syslog outage silenced the hardening + advisory lanes too")
 	}
-	st := fx.lane.StatusFor("acme", false)
+	st := fx.lane.StatusFor(secapi.Principal{Tenant: "acme"})
 	if len(st) != 1 || st[0].Outcome != OutcomePartial {
 		t.Fatalf("outcome = %+v, want %q with the failure named", st, OutcomePartial)
 	}
@@ -493,7 +493,7 @@ func TestTruncationCapsTheRunAndCountsWhatWasDropped(t *testing.T) {
 	if len(sent) != 5 {
 		t.Fatalf("emitted %d records, want exactly the cap (5)", len(sent))
 	}
-	st := fx.lane.StatusFor("acme", false)
+	st := fx.lane.StatusFor(secapi.Principal{Tenant: "acme"})
 	if len(st) != 1 || st[0].Truncated <= 0 {
 		t.Fatalf("truncation was not reported on the status row: %+v", st)
 	}
@@ -654,7 +654,7 @@ func TestOverlappingPassIsSkippedNotStacked(t *testing.T) {
 	if fx.lane.Metrics().RunsFor("acme", OutcomeSkipped) != 1 {
 		t.Fatal("the skipped run was not counted under outcome=skipped")
 	}
-	st := fx.lane.StatusFor("acme", false)
+	st := fx.lane.StatusFor(secapi.Principal{Tenant: "acme"})
 	if len(st) != 1 || st[0].Outcome != OutcomeSkipped {
 		t.Fatalf("status = %+v, want a skipped row", st)
 	}
@@ -668,15 +668,15 @@ func TestStatusForIsOwnTenantOnlyUnlessCross(t *testing.T) {
 	fx.devices["globex"] = []Device{dev("globex-core", "globex")}
 	fx.lane.ScanAll(context.Background())
 
-	own := fx.lane.StatusFor("acme", false)
+	own := fx.lane.StatusFor(secapi.Principal{Tenant: "acme"})
 	if len(own) != 1 || own[0].TenantID != "acme" {
 		t.Fatalf("acme saw %+v — a tenant must see ONLY its own row", own)
 	}
-	cross := fx.lane.StatusFor("", true)
+	cross := fx.lane.StatusFor(secapi.Principal{Cross: true})
 	if len(cross) != 2 {
 		t.Fatalf("the platform admin saw %d rows, want 2", len(cross))
 	}
-	none := fx.lane.StatusFor("nosuch", false)
+	none := fx.lane.StatusFor(secapi.Principal{Tenant: "nosuch"})
 	if len(none) != 0 {
 		t.Fatalf("an unrelated tenant saw %+v", none)
 	}

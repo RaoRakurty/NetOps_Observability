@@ -5289,9 +5289,16 @@ func (s *server) securityAuthz(w http.ResponseWriter, r *http.Request, gate seca
 	tenant, cross := principalTenant(claims)
 	keys, _ := s.visibleDeviceKeys(claims)
 	addrs, _ := s.visibleDeviceAddrs(claims)
+	// The OPERATOR-VISIBILITY restriction (Tenant.OperatorRestricted), resolved
+	// with the SAME primitive the logs path uses rather than a second copy of the
+	// rule. The composition root resolves it because it owns the tenant store;
+	// each surface built on this principal obeys it in the one place that owns
+	// its read rule (today: seclane.Lane.StatusFor).
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
 	return secapi.Principal{
 		Tenant: tenant, Cross: cross, Subject: claims.Sub,
 		DeviceKeys: keys, DeviceAddrs: addrs,
+		Deny: deny, ExcludeTenants: exclude,
 	}, true
 }
 

@@ -79,6 +79,37 @@ type Principal struct {
 	// verbatim into oslog.TenantFilter's untagged-document matcher.
 	DeviceKeys  []string
 	DeviceAddrs []string
+
+	// Deny and ExcludeTenants carry the per-tenant OPERATOR-VISIBILITY
+	// restriction (Tenant.OperatorRestricted), the compliance switch logs,
+	// flows, metrics, igpmon and the BMP feed all obey. Deny means the platform
+	// operator has scoped INTO a restricted tenant and may read nothing of it;
+	// ExcludeTenants are the tenant ids to drop from a cross-tenant (Global)
+	// view. Both are RESOLVED by the composition root, which owns the tenant
+	// store, exactly like Tenant and Cross.
+	//
+	// Any surface built on this principal that serves per-tenant data must obey
+	// them, in the one place that already owns its read rule. The security
+	// producer lane does, in seclane.Lane.StatusFor.
+	Deny           bool
+	ExcludeTenants []string
+}
+
+// Excluded reports whether data owned by tenantID is hidden from this principal
+// by the operator-visibility restriction. Case-insensitive, because a tenant id
+// is an opaque handle and the two sides of this comparison are minted by
+// different stores.
+func (p Principal) Excluded(tenantID string) bool {
+	if len(p.ExcludeTenants) == 0 {
+		return false
+	}
+	want := strings.ToLower(strings.TrimSpace(tenantID))
+	for _, id := range p.ExcludeTenants {
+		if strings.ToLower(strings.TrimSpace(id)) == want {
+			return true
+		}
+	}
+	return false
 }
 
 // Deps are the injected collaborators (§5: interfaces for all external deps).

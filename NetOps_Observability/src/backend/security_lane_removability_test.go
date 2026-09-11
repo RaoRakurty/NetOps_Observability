@@ -27,7 +27,8 @@ package backend
 //	 also removable ON ITS OWN, which is the licensing boundary: deleting only
 //	 enterprise/ leaves the lane assessing the core dialect. Both deletions are
 //	 driven by the SAME main.go marker blocks.)
-//	rm security_lane_isolation_test.go security_lane_removability_test.go
+//	rm security_lane_isolation_test.go seclane_restriction_test.go \
+//	   security_lane_removability_test.go
 //	rm licence_dialect_gate_test.go  (the licence gate on the dialect registry;
 //	   its subject — main.go's licenceDialectAllowed — carries SECURITY-LANE
 //	   markers of its own and goes with the same deletion, after which
@@ -76,6 +77,7 @@ var securityImportAllowlist = map[string]bool{
 	"secapi/rules.go":                    true, // the catalog the read API serves
 	"secapi/rules_test.go":               true,
 	"security_lane_isolation_test.go":    true,
+	"seclane_restriction_test.go":        true, // the §3a operator-visibility test
 	"security_lane_removability_test.go": true,
 	// The licence gate on the hardening DIALECT registry. Deliberately its own
 	// file so it is `rm`-able with the producer (recipe above); the code it
