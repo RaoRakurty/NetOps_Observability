@@ -557,6 +557,39 @@ func (s *server) deviceTenantCondFor(claims jwtClaims, col string) (cond string,
 	return col + " IN (" + sqlInList(keys) + ")", false
 }
 
+// deviceTenantPairCondFor is the TWO-ENDPOINT form of deviceTenantCondFor, for a
+// table whose row names a device at EACH END (netops.tunnels: local_device /
+// remote_device). A tunnel is an edge, not a row owned by one device, so the
+// scoped clause is an OR across the two columns and the exclusion is an AND
+// across them — a restricted tenant's device at EITHER end hides the row.
+//
+// It exists because the single-column sibling could not express that shape, and
+// the tunnel handler hand-rolled its own clause instead of asking a chokepoint.
+// That hand-rolled copy is how the operator-visibility restriction, added later
+// INSIDE the chokepoints, never reached the tunnel QoE surface. One shape per
+// table layout, all of them here, is what stops the next one drifting.
+//
+// Same hybrid-model contract as its siblings: a scoped principal with no visible
+// devices reads nothing (default-closed), and the operator scoped INTO a
+// restricted tenant reads nothing at all.
+func (s *server) deviceTenantPairCondFor(claims jwtClaims, localCol, remoteCol string) (cond string, empty bool) {
+	keys, cross := s.visibleDeviceKeys(claims)
+	if rt := s.restrictedTelemetry(claims); rt.deny {
+		return "", true
+	} else if cross {
+		if len(rt.keys) > 0 {
+			in := sqlInList(rt.keys)
+			return localCol + " NOT IN (" + in + ") AND " + remoteCol + " NOT IN (" + in + ")", false
+		}
+		return "", false
+	}
+	if len(keys) == 0 {
+		return "", true
+	}
+	in := sqlInList(keys)
+	return "(" + localCol + " IN (" + in + ") OR " + remoteCol + " IN (" + in + "))", false
+}
+
 // sqlInList renders values as a quoted, comma-separated SQL list with single
 // quotes escaped. Inputs come from the device inventory (not the client), but we
 // escape regardless to keep the query well-formed and injection-safe.
@@ -584,15 +617,20 @@ func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
 		conds = append(conds, "status = '"+st+"'")
 	}
 	// Tenant isolation: a scoped principal only sees tunnels terminating on a
-	// device it can view (local or remote endpoint).
+	// device it can view (local or remote endpoint). This asks the package's
+	// device-keyed chokepoint rather than building the clause here, so the
+	// operator-visibility restriction reaches this surface like it reaches
+	// flows and findings. A tunnel row carries the customer's overlay: its two
+	// endpoint device names, both endpoint addresses, and the measured latency,
+	// jitter, loss and QoE of the link between them.
 	claims, _ := userFrom(r.Context())
-	if keys, cross := s.visibleDeviceKeys(claims); !cross {
-		if len(keys) == 0 {
-			writeEmptyClickHouse(w)
-			return
-		}
-		in := sqlInList(keys)
-		conds = append(conds, "(local_device IN ("+in+") OR remote_device IN ("+in+"))")
+	cond, empty := s.deviceTenantPairCondFor(claims, "local_device", "remote_device")
+	if empty {
+		writeEmptyClickHouse(w)
+		return
+	}
+	if cond != "" {
+		conds = append(conds, cond)
 	}
 	where := ""
 	if len(conds) > 0 {
