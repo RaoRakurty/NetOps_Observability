@@ -37,8 +37,19 @@ type vmSample struct {
 	Value  float64
 }
 
-// vmInstant runs a VictoriaMetrics instant query and returns one sample per series.
-func (s *server) vmInstant(ctx context.Context, query string) ([]vmSample, error) {
+// vmInstantUnscoped runs a VictoriaMetrics instant query with NO tenant
+// boundary on the wire. It is named for what it does, because the name is the
+// only warning a new caller gets.
+//
+// It exists for the PLATFORM lanes only: the storage and telemetry meters read
+// VictoriaMetrics' own self-metrics, which carry no tenant label and belong to
+// no tenant. Anything that serves an HTTP caller must use vmInstantScoped with
+// that caller's filters, and vm_call_scope_guard_test.go fails the build if a
+// new call site appears outside the declared platform set.
+//
+// It used to be called vmInstant, and /api/paths/health called it eight times
+// while serving a tenant-scoped request.
+func (s *server) vmInstantUnscoped(ctx context.Context, query string) ([]vmSample, error) {
 	return s.vmInstantScoped(ctx, query, nil)
 }
 
@@ -196,7 +207,7 @@ func (s *server) handlePathsHealth(w http.ResponseWriter, r *http.Request) {
 	// apply runs one VM vector query and folds each series into its path by
 	// destination host. Best-effort (a missing metric leaves its fields unset).
 	apply := func(query string, f func(a *pathAcc, v float64)) {
-		samples, err := s.vmInstant(ctx, query)
+		samples, err := s.vmInstantScoped(ctx, query, phFilters)
 		if err != nil {
 			return
 		}
@@ -260,7 +271,11 @@ func (s *server) handlePathsHealth(w http.ResponseWriter, r *http.Request) {
 	// Best-effort — nil (feature off / CH down / table empty) falls through to
 	// tiers 3–5 exactly as the MVP behaved. Tier 1 (route+hour) is a declared
 	// stub until probes carry route labels (see path_health_baselines.go).
-	hourBase := s.fetchHourBaselines(r, time.Now().UTC())
+	phPathIDs := make([]string, 0, len(paths))
+	for k := range paths {
+		phPathIDs = append(phPathIDs, k)
+	}
+	hourBase := s.fetchHourBaselines(r, time.Now().UTC(), phPathIDs)
 
 	items := make([]item, 0, len(paths))
 	for k, a := range paths {

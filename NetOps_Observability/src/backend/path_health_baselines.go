@@ -24,14 +24,26 @@ package backend
 //
 // Rows are written with tenant_id='' under the STRICT row policy — the house
 // rule pins EVERY netops.path_* table strict (TestCorrRowPoliciesStrict), so
-// an untagged row is platform-only at the database layer. The tier-2 reader
-// therefore fetches at an explicit platform scope but hard-bounds the SQL to
-// tenant_id='' AND route_fingerprint='' precompute rows: those rows are pure
-// derivations (percentiles) of the SAME unlabelled VM probe series that
-// /api/paths/health already serves to every infra-read principal, so the read
-// exposes nothing the endpoint doesn't. When probe metrics gain tenant
-// labels, the precompute must stamp them and this read must become
-// caller-scoped.
+// an untagged row is platform-only at the database layer, and no tenant scope
+// can reach it. The tier-2 reader therefore fetches at an explicit platform
+// scope, and the caller's boundary on that read is the SET OF PATH IDS it is
+// allowed to name: fetchHourBaselines takes the path ids the caller's own
+// scoped VictoriaMetrics read produced and puts them in the WHERE clause, so
+// the read can return a bucket for a path the caller already measures and
+// nothing else. An empty set reads nothing.
+//
+// The old justification for asking for every path_id was that these rows are
+// pure derivations of "the SAME unlabelled VM probe series /api/paths/health
+// already serves unscoped". That premise died when the endpoint's eight
+// baseline queries gained the caller's device boundary (path_health_api.go):
+// the series are no longer served unscoped, so neither is their precompute.
+//
+// WHAT IS STILL SHARED, stated honestly: a bucket's percentiles are computed
+// across every probe to that destination, whoever ran it. Two tenants probing
+// the same public destination therefore score against one common baseline, and
+// its sample_count counts both. That is the untenanted precompute's own shape,
+// not this reader's: when probe metrics gain tenant labels the precompute must
+// stamp them and this read must narrow on tenant_id instead of path id.
 
 import (
 	"context"
@@ -367,22 +379,37 @@ func (s *server) startPathBaselinePrecompute(ctx context.Context) {
 	}()
 }
 
-// fetchHourBaselines reads the CURRENT hour-of-week bucket for every path
-// (tier 2 of the cascade). Best-effort: any error yields nil and the cascade
-// falls through to tiers 3–5 exactly as before. route_fingerprint=” rows only
-// (tier 1 is not populated — see file header).
-func (s *server) fetchHourBaselines(r *http.Request, now time.Time) map[string]pathgraph.PathBaseline {
-	if envOr("CLICKHOUSE_URL", "") == "" {
+// fetchHourBaselines reads the CURRENT hour-of-week bucket for the paths the
+// CALLER can see (tier 2 of the cascade). Best-effort: any error yields nil and
+// the cascade falls through to tiers 3–5 exactly as before. route_fingerprint=”
+// rows only (tier 1 is not populated — see file header).
+//
+// pathIDs is the set of path ids the caller's OWN scoped VictoriaMetrics read
+// produced, and it is the tenant boundary on this read. The precompute rows are
+// untagged (tenant_id=”), so the strict row policy cannot narrow them and the
+// scope has to be the platform one; the SQL therefore names the caller's paths
+// explicitly. An empty set reads nothing at all rather than every path in the
+// table — which is also what a denied operator gets, because the sentinel
+// filter leaves that caller with no paths to name.
+//
+// Before this the read asked for EVERY path_id at the platform scope, and its
+// only protection was that the handler happened to look the map up by key. The
+// file header justified that on the grounds that the endpoint "already serves
+// these series unscoped" — a premise that stopped being true the moment the
+// eight baseline queries above gained the caller's device boundary.
+func (s *server) fetchHourBaselines(r *http.Request, now time.Time, pathIDs []string) map[string]pathgraph.PathBaseline {
+	if envOr("CLICKHOUSE_URL", "") == "" || len(pathIDs) == 0 {
 		return nil
 	}
 	sql := `SELECT path_id, latency_p50, latency_p99, jitter_p50, jitter_p99,
        sample_count, samples_total, window_days
   FROM netops.path_baselines FINAL
  WHERE hour_of_week = ` + strconv.Itoa(hourOfWeek(now)) + ` AND route_fingerprint = '' AND tenant_id = ''
+   AND path_id IN (` + sqlInList(pathIDs) + `)
  LIMIT ` + strconv.Itoa(pathBaselineMaxSeries) + ` FORMAT JSON`
-	// Explicit platform scope, hard-bounded to untagged precompute rows — see
-	// the file header for why this is not a tenant leak (strict path_* policy
-	// + rows derived from series this endpoint already serves unscoped).
+	// Explicit platform scope (the rows are untagged, so no tenant scope can
+	// reach them), hard-bounded to the untagged precompute rows for the caller's
+	// OWN paths.
 	rows, err := s.chRowsScope(r.Context(), "__all__", sql, "api:/api/paths/health")
 	if err != nil {
 		return nil

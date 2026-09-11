@@ -5809,7 +5809,7 @@ func (s *server) storageMeterDeps() storagemeter.Deps {
 		// self-metric and carries no tenant label. storagemeter calls this only
 		// on the platform path and refuses to derive a per-tenant share.
 		Victoria: func(ctx context.Context, promql string) ([]storagemeter.VMSample, error) {
-			samples, err := s.vmInstant(ctx, promql)
+			samples, err := s.vmInstantUnscoped(ctx, promql)
 			if err != nil {
 				return nil, err
 			}
@@ -6666,7 +6666,7 @@ func (s *server) meterTelemetry(ctx context.Context, add func(string, metering.R
 	// the exact confusion this package refuses to create with a zero.
 	const storeDown = "the metrics store did not answer when this sample was taken, so the counter could not be read"
 	read := func(query, absent string) (float64, string) {
-		samples, err := s.vmInstant(ctx, query)
+		samples, err := s.vmInstantUnscoped(ctx, query)
 		if err != nil {
 			return 0, storeDown
 		}
@@ -6728,7 +6728,7 @@ func (s *server) meterTelemetry(ctx context.Context, add func(string, metering.R
 	byTenant := map[string]float64{}
 	total := 0.0
 	demWhy := ""
-	samples, err := s.vmInstant(ctx, `sum by (tenant) (count_over_time(dem_probe_success[1h]))`)
+	samples, err := s.vmInstantUnscoped(ctx, `sum by (tenant) (count_over_time(dem_probe_success[1h]))`)
 	if err != nil {
 		demWhy = storeDown
 	} else {

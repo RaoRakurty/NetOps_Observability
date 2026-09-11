@@ -126,7 +126,7 @@ func TestFetchHourBaselinesGuardsDegenerate(t *testing.T) {
 	t.Setenv("CLICKHOUSE_URL", srv.URL)
 	t.Setenv("CLICKHOUSE_PASSWORD", "")
 	s := &server{}
-	got := s.fetchHourBaselines(req("GET", "/api/paths/health", "", superA()), time.Now().UTC())
+	got := s.fetchHourBaselines(req("GET", "/api/paths/health", "", superA()), time.Now().UTC(), []string{"good.example", "flat.example"})
 	if len(got) != 1 {
 		t.Fatalf("want only the non-degenerate row, got %d", len(got))
 	}
@@ -154,7 +154,7 @@ func TestFetchHourBaselinesGuardsDegenerate(t *testing.T) {
 func TestFetchHourBaselinesBestEffort(t *testing.T) {
 	t.Setenv("CLICKHOUSE_URL", "http://127.0.0.1:9")
 	s := &server{}
-	if got := s.fetchHourBaselines(req("GET", "/x", "", superA()), time.Now()); got != nil {
+	if got := s.fetchHourBaselines(req("GET", "/x", "", superA()), time.Now(), []string{"edge.example"}); got != nil {
 		t.Fatalf("unreachable CH must yield nil, got %v", got)
 	}
 }

@@ -52,7 +52,7 @@ func TestMetricsRoutesCarryCallerScope(t *testing.T) {
 		{"health score (global)", "/api/health/score?scope=global"},
 		{"topology path-trace enrichers", "/api/topology/view?mode=path_trace&src=dev-a&dst=8.8.8.8"},
 		{"wan interfaces", "/api/wan/interfaces"},
-		{"path health resolver", "/api/rca/path/health"},
+		{"path health resolver", "/api/paths/health"},
 	}
 
 	for _, rt := range routes {

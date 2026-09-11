@@ -216,9 +216,15 @@ func (d aiDataSource) moduleDeviceHealth(p ai.Principal, name string) (ai.ToolRe
 	// "this device reports no metrics" — an assistant then says the device is
 	// quiet when in truth we never asked successfully (§10, and LLM03: the model
 	// must not be handed a confident absence we cannot vouch for).
+	// The caller's device boundary rides on every read below. The selectors are
+	// already pinned to the ONE device canSeeDevice cleared above, but a pin is
+	// the handler remembering; extra_filters[] is VictoriaMetrics enforcing, and
+	// it is the same boundary /api/metrics/query applies.
+	mIDs, mNames, mCross := d.srv.visibleDeviceMetricLabels(d.claims)
+	mf := metricsScopeFilters(mIDs, mNames, mCross)
 	storeDown := false
 	addMetric := func(cid, metric, format string) {
-		samples, err := d.srv.vmInstant(d.ctx, sel(metric))
+		samples, err := d.srv.vmInstantScoped(d.ctx, sel(metric), mf)
 		if err != nil {
 			storeDown = true
 			return
@@ -233,7 +239,7 @@ func (d aiDataSource) moduleDeviceHealth(p ai.Principal, name string) (ai.ToolRe
 	}
 	addMetric("metric:cpu", "device_cpu_percent", "%s — CPU %.0f%%")
 	addMetric("metric:mem", "device_mem_percent", "%s — memory %.0f%%")
-	samples, ifErr := d.srv.vmInstant(d.ctx, fmt.Sprintf(`count(device_if_oper_status{device=%q} != 1)`, devID))
+	samples, ifErr := d.srv.vmInstantScoped(d.ctx, fmt.Sprintf(`count(device_if_oper_status{device=%q} != 1)`, devID), mf)
 	if ifErr != nil {
 		storeDown = true
 	} else if len(samples) > 0 && samples[0].Value > 0 {
