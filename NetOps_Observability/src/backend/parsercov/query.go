@@ -36,13 +36,50 @@ var scanFields = []string{
 // pattern. `cross` (the platform owner) gets the unrestricted pattern and a nil
 // clause; a scoped tenant gets its own tagged indices plus the shared untagged
 // ones, narrowed further by the device matcher.
+//
+// It is also where the OPERATOR-VISIBILITY restriction lands, for the same
+// reason: it is a rule about WHICH DOCUMENTS this caller may match, so it
+// belongs in the clause every body below already carries rather than in each
+// body separately. A restricted tenant is dropped at the source, before a hit is
+// scored, so its raw line cannot come back as a mined sample.
 func scopeOf(p Principal, lane Lane) (index string, tenantClause map[string]any) {
 	signal := "syslog"
 	if lane == LaneTrap {
 		signal = "snmptrap"
 	}
 	return oslog.TenantIndexPattern(signal, p.Tenant, p.Cross),
-		oslog.TenantFilter(p.Tenant, p.Cross, p.DeviceKeys, p.DeviceAddrs)
+		withRestriction(
+			oslog.TenantFilter(p.Tenant, p.Cross, p.DeviceKeys, p.DeviceAddrs),
+			p.ExcludeTenants)
+}
+
+// withRestriction folds the operator-visibility exclusion into the per-doc
+// clause. It is a must_not on `tenant_id`, the SAME field and the same shape the
+// interactive log search uses (logs.go), so the two doors onto this data express
+// one rule rather than two.
+//
+// A nil/empty exclusion returns the clause untouched, which is the normal case:
+// nothing is restricted, or the caller is not the platform operator. When the
+// caller IS scoped (a real tenant clause) the exclusion still applies — the
+// resolver never populates it there, so this cannot change behaviour, but it
+// also cannot be forgotten if that ever changes.
+func withRestriction(clause map[string]any, exclude []string) map[string]any {
+	ids := make([]string, 0, len(exclude))
+	for _, id := range exclude {
+		if t := strings.TrimSpace(id); t != "" {
+			ids = append(ids, t)
+		}
+	}
+	if len(ids) == 0 {
+		return clause
+	}
+	inner := map[string]any{
+		"must_not": []any{map[string]any{"terms": map[string]any{"tenant_id": ids}}},
+	}
+	if clause != nil {
+		inner["filter"] = []any{clause}
+	}
+	return map[string]any{"bool": inner}
 }
 
 // timeRange is the window clause. `format` is pinned so a locale-shifted index

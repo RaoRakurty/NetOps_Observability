@@ -4985,6 +4985,19 @@ func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 //     detection-content working state, and it APPLIES NOTHING.
 //   - READ is infrastructure:read, the same gate every other log surface uses;
 //     the tenant filter is applied on top.
+//
+// It also resolves the OPERATOR-VISIBILITY restriction (Tenant.OperatorRestricted)
+// and hands it to the module on the Principal. This lane samples RAW, UNPARSED
+// log lines verbatim, which is substantially the data the interactive log search
+// serves — and logs.go already honours the restriction, so a second door onto it
+// that did not would make the switch decorative. It is resolved with the SAME
+// primitive logs.go uses (operatorTelemetryRestriction, the tenant_id form)
+// rather than a second implementation, because the documents already carry the
+// owning tenant id.
+//
+// STATS is left alone on purpose: those counters are the parser process's own
+// totals across the fleet, not any tenant's rows, so there is nothing there for
+// the restriction to hide.
 func (s *server) parserCovAuthz(w http.ResponseWriter, r *http.Request, gate parsercov.Gate) (parsercov.Principal, bool) {
 	var claims jwtClaims
 	var ok bool
@@ -5002,9 +5015,11 @@ func (s *server) parserCovAuthz(w http.ResponseWriter, r *http.Request, gate par
 	tenant, cross := principalTenant(claims)
 	keys, _ := s.visibleDeviceKeys(claims)
 	addrs, _ := s.visibleDeviceAddrs(claims)
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
 	return parsercov.Principal{
 		Tenant: tenant, Cross: cross, Subject: claims.Sub,
 		DeviceKeys: keys, DeviceAddrs: addrs,
+		Deny: deny, ExcludeTenants: exclude,
 	}, true
 }
 

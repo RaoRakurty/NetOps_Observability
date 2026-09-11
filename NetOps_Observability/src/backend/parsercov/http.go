@@ -60,6 +60,20 @@ type Principal struct {
 	Subject     string
 	DeviceKeys  []string
 	DeviceAddrs []string
+
+	// Deny short-circuits every mining run to NOTHING. It is set when the caller
+	// is the platform operator scoped INTO a tenant whose OPERATOR-VISIBILITY
+	// restriction (Tenant.OperatorRestricted) is in force. This lane samples raw,
+	// unparsed log lines verbatim, so it is the same data the interactive log
+	// search serves — and logs.go already refuses it. The composition root
+	// resolves the restriction (it owns the tenant store); this package only
+	// obeys it, the same way it only obeys the tenant it is handed.
+	Deny bool
+
+	// ExcludeTenants are tenant ids whose documents must be filtered OUT of a
+	// cross-tenant (Global) run. It is normally empty; it is non-empty only for
+	// the platform operator while some tenant is restricted.
+	ExcludeTenants []string
 }
 
 // Deps are the injected collaborators.
@@ -344,6 +358,23 @@ func outcomeOf(run runResult) string {
 // runOrCached returns a live cached run for this exact scope+window, or mines a
 // fresh one and caches it.
 func (a *API) runOrCached(ctx context.Context, p Principal, days int, lane Lane) (runResult, bool, error) {
+	if p.Deny {
+		// The OPERATOR-VISIBILITY restriction. A denied caller reads NOTHING:
+		// this returns before the cache is consulted and before a single
+		// OpenSearch query is issued, so no store is touched at all.
+		//
+		// The answer is the run an EMPTY window produces, byte for byte — same
+		// shape, same note, same counters. It is deliberately not a 403 and not a
+		// special reason string: a distinguishable refusal would confirm that the
+		// tenant has log lines at all. The lane guard is asked first, and through
+		// the same function mine() uses, so a lane that publishes no admission
+		// verdict still answers with its own refusal rather than becoming an
+		// oracle for which tenants are restricted.
+		if err := laneVerdict(lane); err != nil {
+			return runResult{}, false, err
+		}
+		return runResult{Days: days, Lane: lane, GeneratedAt: a.now()}, false, nil
+	}
 	index, clause := scopeOf(p, lane)
 	clauseJSON, err := json.Marshal(clause)
 	if err != nil {
@@ -363,15 +394,27 @@ func (a *API) runOrCached(ctx context.Context, p Principal, days int, lane Lane)
 	return run, false, nil
 }
 
+// laneVerdict is the refusal for a lane that publishes no admission verdict.
+//
+// See admission.go: the trap lane has no trap-side screen at all, so "the engine
+// would not admit this trap" is not a set we can define. Refuse rather than mine
+// something else and call it that.
+//
+// It is ONE function with two callers — mine() and the denied path in
+// runOrCached — so a restricted caller and an ordinary one get the identical
+// answer for an unminable lane, and the restriction cannot become an oracle.
+func laneVerdict(lane Lane) error {
+	if lane == LaneTrap {
+		return fmt.Errorf("%w: the SNMP trap lane publishes no ingest admission stamp, "+
+			"so unrecognized-shape mining is not defined for it (the syslog lane does)", errNoVerdict)
+	}
+	return nil
+}
+
 // mine runs the whole scan for one scope and window.
 func (a *API) mine(ctx context.Context, index string, clause map[string]any, days int, lane Lane) (runResult, error) {
-	if lane == LaneTrap {
-		// See admission.go: the trap lane publishes no admission verdict —
-		// there is no trap-side screen at all — so "the engine would not admit
-		// this trap" is not a set we can define. Refuse rather than mine
-		// something else and call it that.
-		return runResult{}, fmt.Errorf("%w: the SNMP trap lane publishes no ingest admission stamp, "+
-			"so unrecognized-shape mining is not defined for it (the syslog lane does)", errNoVerdict)
+	if err := laneVerdict(lane); err != nil {
+		return runResult{}, err
 	}
 	now := a.now()
 	end := now
