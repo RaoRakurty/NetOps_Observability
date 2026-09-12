@@ -388,6 +388,63 @@ func TestDigestIsNotRetried(t *testing.T) {
 	}
 }
 
+// A DIGEST THAT DID NOT LAND MUST NOT TAKE ITS CONTENT WITH IT (review 3.9-09).
+//
+// The digest is not retried, and the reason written beside that rule is that
+// "a digest is re-sent next window with the accumulated content". That holds
+// only for conditions STILL FIRING: vmalert re-sends those and they re-fold. A
+// warning that fired and cleared inside the failed window is never re-sent by
+// anyone, so draining the accumulator before the push was known to have landed
+// lost it outright — the one class of event the digest exists to show
+// ("a condition that came and went inside half an hour ... is still worth
+// seeing"). The budget-refusal path in the same function already leaves the
+// accumulator alone for exactly this reason; the failure path did not.
+func TestAFailedDigestKeepsItsContentForTheNextWindow(t *testing.T) {
+	p := newFakePusher()
+	p.script = []error{rateLimited(0)} // the live 429, once
+	r := newHostRigWith(t, time.Second, p, func(d *Deps) { d.WarningDigestInterval = time.Minute })
+
+	// Fired and cleared INSIDE the window: nothing will ever re-send it.
+	if w := r.post(t, warnJSON("VectorComponentErrors", "vector component errors observed", "firing"), bearer); w.Code != http.StatusOK {
+		t.Fatalf("firing post: status = %d", w.Code)
+	}
+	r.clock.advance(10 * time.Second)
+	if w := r.post(t, warnJSON("VectorComponentErrors", "vector component errors observed", "resolved"), bearer); w.Code != http.StatusOK {
+		t.Fatalf("resolved post: status = %d", w.Code)
+	}
+
+	// Window one: the digest goes out and the server refuses it.
+	r.clock.advance(2 * time.Minute)
+	r.tick(t)
+	first := r.push.await(t, 1)
+	if !strings.Contains(first[0].Body, "VectorComponentErrors") {
+		t.Fatalf("the first digest did not carry the warning: %q", first[0].Body)
+	}
+
+	// Window two, with the server healthy again: the content comes back.
+	r.clock.advance(2 * time.Minute)
+	r.tick(t)
+	second := r.push.await(t, 1)
+	if !strings.Contains(second[0].Body, "VectorComponentErrors") {
+		t.Fatalf("the refused window's warning was dropped: nothing will ever re-send a condition "+
+			"that already cleared, so this is the operator never learning it happened. body = %q",
+			second[0].Body)
+	}
+	if !strings.Contains(strings.ToUpper(second[0].Body), "RESOLVED") {
+		t.Errorf("the restored entry lost its resolved state: %q", second[0].Body)
+	}
+	// Still one attempt per window: this is a re-send, not a retry ladder.
+	if w := r.naps.waits(); len(w) != 0 {
+		t.Fatalf("a digest must not sleep on a retry ladder, waits = %v", w)
+	}
+
+	// And once it HAS landed, the accumulator is empty: a delivered digest is
+	// not re-sent forever.
+	r.clock.advance(2 * time.Minute)
+	r.tick(t)
+	r.push.quiet(t)
+}
+
 // ── the push budget ─────────────────────────────────────────────────────────
 
 // The reserve is the guarantee: warnings and digests stop at it, a page spends

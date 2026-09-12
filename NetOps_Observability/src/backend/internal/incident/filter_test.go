@@ -67,3 +67,29 @@ func TestIncidentFilterSQLSharedByListAndCount(t *testing.T) {
 }
 
 // ── the HTTP boundary ────────────────────────────────────────────────────────
+
+// The source_type vocabulary is CLOSED, and "correlation" is not in it.
+//
+// This is pinned here because something downstream believed otherwise: the TAC
+// escalation carried an incident->correlation bridge keyed on
+// `SourceType == "correlation"`, which no stored row could ever satisfy, so it
+// was dead from the day it was written (review 3.1-19). If the vocabulary ever
+// grows that member, this test goes red in the same commit — which is the
+// signal to rebuild that bridge rather than leave it as a comment.
+func TestSourceTypeVocabularyIsClosedAndExcludesCorrelation(t *testing.T) {
+	for _, in := range []string{"correlation", "CORRELATION", " correlation ", "rca", "case"} {
+		if got := normalizeSourceType(in); got != "manual" {
+			t.Errorf("normalizeSourceType(%q) = %q — an undeclared source type must collapse to "+
+				"manual rather than be stored verbatim", in, got)
+		}
+	}
+	// ...and the declared ones still survive, case-folded.
+	for in, want := range map[string]string{
+		"alert": "alert", "Alert": "alert", " LOG ": "log",
+		"anomaly": "anomaly", "manual": "manual", SourceExperience: SourceExperience,
+	} {
+		if got := normalizeSourceType(in); got != want {
+			t.Errorf("normalizeSourceType(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

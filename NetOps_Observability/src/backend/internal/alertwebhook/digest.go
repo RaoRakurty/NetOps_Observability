@@ -175,7 +175,79 @@ func (r *receiver) maybeFlushDigest(now time.Time) {
 	r.digestMu.Unlock()
 
 	push := renderDigest(entries, overflow, window)
-	r.enqueueHost(hostJob{name: "PlatformWarningDigest", tier: tierDigest, push: push})
+	r.enqueueHost(hostJob{
+		name: "PlatformWarningDigest", tier: tierDigest, push: push,
+		// A DIGEST THAT DID NOT LAND MUST NOT TAKE ITS CONTENT WITH IT. The
+		// digest is not retried, and the reason for that rule is that it is
+		// "re-sent next window with the accumulated content" — true only for
+		// conditions STILL FIRING, which vmalert re-sends and which re-fold
+		// here. A warning that fired and cleared inside the failed window is
+		// re-sent by nobody, and it is precisely the case the digest exists to
+		// show. The budget-refusal path above already leaves the accumulator
+		// alone for this reason; so does the failure path now (review 3.9-09).
+		onFail: func() { r.restoreDigest(entries, overflow) },
+	})
+}
+
+// restoreDigest folds a failed digest's entries back into the accumulator as
+// OLDER history, so the next window's push carries them.
+//
+// It merges rather than overwrites: a warning may have folded again while the
+// push was in flight, and that newer entry holds the state the operator needs
+// to read NOW (resolved vs firing), while the restored one holds occurrences
+// and a first-seen that would otherwise be lost. The cap is re-applied on the
+// way in — a restore may not grow the accumulator past the bound it exists to
+// hold (§9), and a name that cannot come back is counted as overflow so the
+// rendered digest still says something was omitted.
+func (r *receiver) restoreDigest(entries []*digestEntry, overflow int) {
+	if len(entries) == 0 && overflow == 0 {
+		return
+	}
+	r.digestMu.Lock()
+	if r.digest == nil {
+		r.digest = make(map[string]*digestEntry, len(entries))
+	}
+	kept, dropped := 0, 0
+	for _, old := range entries {
+		cur, ok := r.digest[old.name]
+		if !ok {
+			if len(r.digest) >= maxDigestEntries {
+				dropped++
+				r.digestOverflow++
+				r.deps.Metrics.inc(&r.deps.Metrics.hostDigestOverflow)
+				continue
+			}
+			r.digest[old.name] = old
+			kept++
+			continue
+		}
+		cur.count += old.count
+		if !old.first.IsZero() && (cur.first.IsZero() || old.first.Before(cur.first)) {
+			cur.first = old.first
+		}
+		if old.last.After(cur.last) {
+			cur.last = old.last
+		}
+		if cur.summary == "" {
+			cur.summary = old.summary
+		}
+		if cur.severity == "" {
+			cur.severity = old.severity
+		}
+		// The CURRENT entry's resolved state is the newer one and wins; the
+		// restored resolve time only fills a blank.
+		if cur.resolved && cur.resolveAt.IsZero() {
+			cur.resolveAt = old.resolveAt
+		}
+		kept++
+	}
+	r.digestOverflow += overflow
+	r.digestMu.Unlock()
+
+	r.log("warn", "platform warning digest kept for the next window after a failed push", map[string]any{
+		"route": RouteHostMonitoring, "alertname": "PlatformWarningDigest", "tier": tierDigest,
+		"restored": kept, "dropped_to_overflow": dropped,
+	})
 }
 
 // logBudgetRefusal reports a push the budget refused. Rate-limited to one line
