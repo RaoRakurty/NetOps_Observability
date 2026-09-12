@@ -36,8 +36,12 @@ func (s *server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if q != "" {
-		// Devices (in-memory discovery aggregator) — tenant-scoped.
-		for _, d := range visibleDevices(s.discovery.Devices(), claims) {
+		// Devices (in-memory discovery aggregator) — tenant-scoped, and read
+		// through the registry chokepoint (s.visibleDevicesFor) so the operator-
+		// visibility restriction applies here too. Unified search already hid a
+		// restricted tenant's devices; this box did not, and it answers on a
+		// device NAME, which is the disclosure itself.
+		for _, d := range s.visibleDevicesFor(claims) {
 			m := toMap(d)
 			if blobContains(m, q) {
 				add(globalResult{
@@ -49,11 +53,14 @@ func (s *server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 				})
 			}
 		}
-		// Active alerts — alertVisible, the same rule handleAlerts applies.
-		visibleIDs, crossAlerts := s.visibleDeviceIDs(claims)
-		alertTenant, _ := principalTenant(claims)
+		// Active alerts — the RESOLVED alertVisibility, the same object
+		// handleAlerts and the WebSocket feed apply. The raw alertVisible
+		// underneath it answers true for everything on the cross-tenant path, so
+		// asking it directly surfaced a restricted tenant's incidents (and the
+		// device names in their summaries) in the omnibox.
+		alertVis := s.alertVisibilityFor(claims)
 		for _, a := range s.alerts.Active() {
-			if !alertVisible(a, alertTenant, crossAlerts, visibleIDs) {
+			if !alertVis.visible(a) {
 				continue
 			}
 			m := toMap(a)

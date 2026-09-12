@@ -42,6 +42,28 @@ applies to the platform operator, and is a no-op when no tenant is restricted.
   - **Metrics** (`proxyMetrics`) — a single AND'd negative `extra_filters[]`
     excludes restricted tenants' device id/name labels; deny → match-nothing.
 
+✅ **Inventory — the device registry and the declared sites** (`deviceVisibility`
+  / `tenantVisibility` in tenancy.go, tenant_id based). This is an OWNER DECISION,
+  not a telemetry rule: devices and sites are counted and listed per tenant, so a
+  restricted tenant's inventory is not part of the platform operator's estate.
+  - Dashboard **Devices** and **Sites** tiles (`currentMetricTiles`).
+  - `GET /api/devices` — the registry rows AND the wireless controllers/APs the
+    projection appends (`wirelessDeviceRows`); both carry `TenantID`.
+  - The **global omnibox** (`/api/search/global`) — devices and active alerts;
+    unified search (`/api/search`) already applied it.
+  - `GET /api/sites`, `GET /api/sites/{slug}` (**404**, never 403) and the
+    geomap's resolvable-slug set (`geoSiteSlugs`).
+  - `GET /api/compliance` (findings AND gaps) and `GET /api/vulns` (findings,
+    unassessed rows and the summary counts).
+  - The `device_sites` **import resolver** — a write path, but `resolve()` answers
+    by serial/address/hostname and the plan echoes the resolved device id, so it
+    is an existence oracle; an unresolvable row is a reported per-row error.
+  - The CTEM funnel's `scope` denominator (`securityRegistryDevices`).
+
+  **Deliberately NOT restricted** (accounting, not visibility — a restricted
+  tenant still pays for its devices): licence usage and ceilings, metering,
+  config-backup device sets, and the `netops_devices_total` gauge.
+
 ✅ **Raw OpenSearch Dashboards console** (`/search`) — can't be per-tenant filtered
   (security plugin off), so it is **denied entirely whenever any tenant is
   operator-restricted** (`?c=search` gate). The operator uses the in-app Logs view
@@ -51,6 +73,17 @@ A tenant's OWN users are never restricted from their own data on any surface, an
 all checks are a no-op when no tenant is restricted (default).
 
 ## Residual notes
+
+- **Dashboard "Devices Down", Global view only** — for a cross-tenant caller the
+  tile sums `Targets - Reachable` across the protocol collectors
+  (`collectors.Pool.Status()`). Those counters are two ints per COLLECTOR with no
+  device or tenant dimension, so a restricted tenant's unreachable targets are
+  still inside that number, and it can exceed the (filtered) Devices count —
+  which itself says hidden devices exist. It cannot be filtered without giving
+  the collectors a per-device reachability output (or reading the reachability
+  from VictoriaMetrics with the device-label filter `proxyMetrics` already
+  applies). The as_tenant half is already correct: a scoped view uses the
+  per-device LastSeen proxy over a device list the restriction has emptied.
 
 - Device→tenant attribution drives the ClickHouse/metrics exclusion, so a device
   must be tagged to the restricted tenant for its flows/findings/metrics to be

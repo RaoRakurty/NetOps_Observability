@@ -132,6 +132,17 @@ func (s *server) runSitesImport(tenant string, cross, overwrite, dryRun bool, ro
 // (id exact → serial → mgmt-IP → hostname, per the IRE precedence). Devices in
 // another tenant are absent, so a foreign identifier simply fails to match —
 // never a cross-tenant write.
+//
+// "Visible" here means the registry chokepoint's answer (s.visibleDevicesFor),
+// so a restricted tenant's devices are absent too. That matters even though this
+// is a write path: resolve() answers by serial, address and hostname, and the
+// result row echoes the RESOLVED DEVICE ID, so an import of guessed identifiers
+// is an existence-and-identity oracle over a fleet the operator may not read. A
+// row that does not resolve is reported as a per-row "error" and skipped — the
+// import continues, nothing is written for it and nothing already written is
+// touched — so closing the oracle costs an explicit, visible refusal rather than
+// a silent change of behaviour. Platform staff who must administer a restricted
+// tenant open a break-glass session, which un-hides it here as everywhere else.
 type deviceResolver struct {
 	byID, bySerial, byIP, byName map[string]models.Device
 }
@@ -139,7 +150,7 @@ type deviceResolver struct {
 func (s *server) newDeviceResolver(claims jwtClaims) deviceResolver {
 	dr := deviceResolver{byID: map[string]models.Device{}, bySerial: map[string]models.Device{},
 		byIP: map[string]models.Device{}, byName: map[string]models.Device{}}
-	for _, d := range visibleDevices(s.discovery.Devices(), claims) {
+	for _, d := range s.visibleDevicesFor(claims) {
 		dr.byID[d.ID] = d
 		if sn := strings.ToLower(strings.TrimSpace(d.Labels["serial"])); sn != "" {
 			dr.bySerial[sn] = d
@@ -188,7 +199,10 @@ func (s *server) runBindingsImport(claims jwtClaims, tenant string, cross, overw
 			res.Add(line, key, "error", "missing site")
 			continue
 		}
-		if _, ok := s.sites.Get(tenant, cross, slug); !ok {
+		// Same rule as the resolver above, for the same reason: "exists" vs
+		// "no such site" is an oracle on a restricted tenant's site names. Both
+		// answers end this row in an error, so nothing about the write changes.
+		if _, ok := s.visibleSiteFor(claims, slug); !ok {
 			res.Add(line, key, "error", fmt.Sprintf("no site %q visible in this tenant", slug))
 			continue
 		}

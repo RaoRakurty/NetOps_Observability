@@ -160,9 +160,12 @@ func (s *server) handleSites(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		tenant, cross := principalTenant(claims)
+		// visibleSitesFor is the store read PLUS the operator-visibility
+		// restriction (tenancy.go). The declared-sites list names where a
+		// customer operates — the same class of disclosure as its fleet size,
+		// and the Sites tile already counts this way.
 		writeJSON(w, http.StatusOK, map[string]any{
-			"sites":  s.sites.All(tenant, cross),
+			"sites":  s.visibleSitesFor(claims),
 			"active": s.activeSoT().Name(),
 		})
 	case http.MethodPost:
@@ -201,8 +204,12 @@ func (s *server) handleSiteByID(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		tenant, cross := principalTenant(claims)
-		st, found := s.sites.Get(tenant, cross, slug)
+		// Read through visibleSiteFor: the same rule that drops a restricted
+		// tenant's sites from the list drops them here, or naming the slug would
+		// read back exactly what the list withheld. PUT/DELETE below deliberately
+		// keep using the store directly — the restriction is a rule about what
+		// platform staff may READ, not about what they may administer.
+		st, found := s.visibleSiteFor(claims, slug)
 		if !found {
 			http.NotFound(w, r) // 404, never reveal another tenant's site exists
 			return

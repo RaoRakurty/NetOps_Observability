@@ -407,25 +407,42 @@ func visibleDevices(all []models.Device, c jwtClaims) []models.Device {
 // restricted tenant's inventory does not appear in the platform operator's view
 // either.
 type deviceVisibility struct {
+	// tenantVisibility carries the scope and the restriction. deviceVisibility
+	// adds only what it means for a models.Device row.
+	tenantVisibility
+}
+
+// tenantVisibility is the (tenant, cross) scope PLUS the operator-visibility
+// restriction in its tenant_id form, resolved ONCE for one principal. It is the
+// single implementation of the restriction for every store whose rows name their
+// owning tenant in a field: the device registry, the declared-sites store, and
+// the counts derived from either.
+//
+// It exists because this rule has already been leaked once by hand-transcription.
+// A reader that must not show a restricted tenant's rows asks for one of these
+// and consults it; it does not re-type "resolve the restriction, lower-case the
+// ids, compare" into its own body, because a rule at a call site is a snapshot
+// and a rule at a chokepoint is an invariant.
+type tenantVisibility struct {
 	tenant string
 	cross  bool
 
-	// deny is the operator scoped INTO a restricted tenant: it sees no device of
-	// that tenant at all.
+	// deny is the operator scoped INTO a restricted tenant: it sees no row owned
+	// by that tenant at all.
 	deny bool
 	// hiddenTenants are the restricted tenants' ids, lower-cased, for the
-	// operator's Global view. A device carries its owner in TenantID, so the
-	// tenant_id form of the restriction is the exact one.
+	// operator's Global view. A device and a site both carry their owner in
+	// TenantID, so the tenant_id form of the restriction is the exact one.
 	hiddenTenants map[string]bool
 }
 
-// deviceVisibilityFor resolves the rule ONCE for a principal. The restriction
+// tenantVisibilityFor resolves the rule ONCE for a principal. The restriction
 // comes from the shared resolver (operatorTelemetryRestriction) rather than a
 // second copy of it, so it is a no-op for non-operators, for a tenant reading its
-// own fleet, and when no tenant is restricted.
-func (s *server) deviceVisibilityFor(c jwtClaims) deviceVisibility {
+// own estate, and when no tenant is restricted.
+func (s *server) tenantVisibilityFor(c jwtClaims) tenantVisibility {
 	tenant, cross := principalTenant(c)
-	v := deviceVisibility{tenant: tenant, cross: cross}
+	v := tenantVisibility{tenant: tenant, cross: cross}
 	exclude, deny := s.operatorTelemetryRestriction(c, tenant, cross)
 	v.deny = deny
 	if len(exclude) > 0 {
@@ -437,14 +454,37 @@ func (s *server) deviceVisibilityFor(c jwtClaims) deviceVisibility {
 	return v
 }
 
+// hides reports whether a row owned by tenantID is hidden from this principal by
+// the RESTRICTION alone (the ordinary tenant scope is a separate question, asked
+// by the per-resource rule). Case- and blank-tolerant: the owner id on a row and
+// the id in the tenant store are minted by different writers, and a blank owner
+// is platform-owned, which the restriction never hides.
+func (v tenantVisibility) hides(tenantID string) bool {
+	if v.deny {
+		return true
+	}
+	if len(v.hiddenTenants) == 0 {
+		return false
+	}
+	return v.hiddenTenants[strings.ToLower(strings.TrimSpace(tenantID))]
+}
+
+// unrestricted reports whether this principal sees the whole store unchanged —
+// a cross-tenant caller with nothing to hide. Lets a filter skip a copy.
+func (v tenantVisibility) unrestricted() bool {
+	return v.cross && !v.deny && len(v.hiddenTenants) == 0
+}
+
+// deviceVisibilityFor resolves the device rule ONCE for a principal.
+func (s *server) deviceVisibilityFor(c jwtClaims) deviceVisibility {
+	return deviceVisibility{tenantVisibility: s.tenantVisibilityFor(c)}
+}
+
 // visible reports whether this principal may see one device. The restriction is
 // applied BEFORE the ordinary tenant rule, so a hidden device stays hidden on the
 // cross-tenant path, where canSeeDevice allows everything.
 func (v deviceVisibility) visible(d models.Device) bool {
-	if v.deny {
-		return false
-	}
-	if v.hiddenTenants[deviceTenant(d)] {
+	if v.hides(deviceTenant(d)) {
 		return false
 	}
 	return canSeeDevice(d, v.tenant, v.cross)
@@ -452,7 +492,7 @@ func (v deviceVisibility) visible(d models.Device) bool {
 
 // filter applies the resolved rule to a device list, preserving order.
 func (v deviceVisibility) filter(all []models.Device) []models.Device {
-	if !v.deny && len(v.hiddenTenants) == 0 && v.cross {
+	if v.unrestricted() {
 		return all
 	}
 	out := make([]models.Device, 0, len(all))
@@ -472,6 +512,70 @@ func (s *server) visibleDevicesFor(c jwtClaims) []models.Device {
 		return nil
 	}
 	return s.deviceVisibilityFor(c).filter(s.discovery.Devices())
+}
+
+// visibleSitesFor reads the DECLARED-SITES store (the internal Source of Truth)
+// through the same resolved rule the device registry is read through, so the list
+// of sites and the count of sites can never disagree about what the caller may
+// see.
+//
+// The store itself already applies the ordinary tenant scope (tenantKV.All), so
+// what this adds is exactly the operator-visibility restriction: an operator
+// scoped INTO a restricted tenant gets nothing, and the Global view drops the
+// restricted tenants' sites. A site name is where a customer operates — the same
+// class of disclosure as its fleet size, and the Sites tile already counts this
+// way (dashboard.go).
+func (s *server) visibleSitesFor(c jwtClaims) []Site {
+	if s.sites == nil {
+		return nil
+	}
+	v := s.tenantVisibilityFor(c)
+	if v.deny {
+		return nil
+	}
+	all := s.sites.All(v.tenant, v.cross)
+	if len(v.hiddenTenants) == 0 {
+		return all
+	}
+	out := make([]Site, 0, len(all))
+	for _, st := range all {
+		if v.hides(st.TenantID) {
+			continue
+		}
+		out = append(out, st)
+	}
+	return out
+}
+
+// visibleSiteFor resolves ONE declared site by slug through the same rule
+// visibleSitesFor applies to the list, so a slug the list omits cannot be read
+// back by naming it. Not-visible is reported as not-found, and the HTTP callers
+// map that to 404 — never 403, which would confirm the site exists.
+//
+// The fallback scan is not belt-and-braces: tenant.Collection.Get walks the map
+// in arbitrary order for a cross-tenant caller, so when two tenants declare the
+// same slug it can return the HIDDEN one and shadow a site the caller may see.
+func (s *server) visibleSiteFor(c jwtClaims, slug string) (Site, bool) {
+	if s.sites == nil {
+		return Site{}, false
+	}
+	v := s.tenantVisibilityFor(c)
+	if v.deny {
+		return Site{}, false
+	}
+	st, ok := s.sites.Get(v.tenant, v.cross, slug)
+	if ok && !v.hides(st.TenantID) {
+		return st, true
+	}
+	if !ok || len(v.hiddenTenants) == 0 {
+		return Site{}, false
+	}
+	for _, cand := range s.visibleSitesFor(c) {
+		if cand.Slug == slug {
+			return cand, true
+		}
+	}
+	return Site{}, false
 }
 
 // alertVisible is THE alert visibility rule. Every surface that shows alerts
