@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -155,11 +156,40 @@ func TestErrorsNeverEchoURLCredentials(t *testing.T) {
 }
 
 func TestVictoriaExportRefusesAnEmptySelector(t *testing.T) {
-	if _, err := NewVictoriaExport(&http.Client{}, "http://vm:8428")(context.Background(), "  ", time.Now(), time.Now()); err == nil {
+	if _, err := NewVictoriaExport(&http.Client{}, "http://vm:8428")(context.Background(), "  ", nil, time.Now(), time.Now()); err == nil {
 		t.Error("an export with no series selector was allowed — it would dump the whole store")
 	}
-	if _, err := NewVictoriaExport(&http.Client{}, "")(context.Background(), "up", time.Now(), time.Now()); err == nil {
+	if _, err := NewVictoriaExport(&http.Client{}, "")(context.Background(), "up", nil, time.Now(), time.Now()); err == nil {
 		t.Error("an export with no base URL was allowed")
+	}
+}
+
+// The caller's boundary must reach the wire as extra_filters[], which is how
+// every other VictoriaMetrics lane in this product scopes a read. A filter that
+// is built and then dropped in the transport is an unscoped read with a
+// convincing-looking derivation behind it.
+func TestVictoriaExportPutsTheBoundaryOnTheWire(t *testing.T) {
+	var got url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.Query()
+		_, _ = w.Write([]byte("{}\n"))
+	}))
+	defer srv.Close()
+
+	if _, err := NewVictoriaExport(srv.Client(), srv.URL)(context.Background(),
+		`{__name__=~"gnmi_.*",source="spine1"}`,
+		[]string{`{device=~"acme-core"}`, `  `, `{source=~"acme-core"}`},
+		time.Unix(1000, 0), time.Unix(2000, 0)); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if q := got["match[]"]; len(q) != 1 || !strings.Contains(q[0], `source="spine1"`) {
+		t.Fatalf("match[] = %v", q)
+	}
+	// Blank entries are dropped — an empty extra_filters[] value is a selector
+	// VictoriaMetrics would reject, and it carries no boundary anyway.
+	if f := got["extra_filters[]"]; len(f) != 2 ||
+		f[0] != `{device=~"acme-core"}` || f[1] != `{source=~"acme-core"}` {
+		t.Fatalf("extra_filters[] = %v, want the caller's two boundary filters", f)
 	}
 }
 

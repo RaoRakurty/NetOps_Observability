@@ -158,11 +158,83 @@ func TestPassiveTraceInjectsNothing(t *testing.T) {
 	}
 }
 
+// scopedOwner is the principal a real debugAuthz builds: a platform owner whose
+// metric boundary HAS been derived (and is empty, because nothing restricts
+// them). Every stage call in this file uses it, so the fail-closed guard below
+// is testing the guard rather than the fixture.
+func scopedOwner() Principal {
+	return Principal{Subject: "owner", Cross: true, CHScope: "__all__",
+		Metrics: MetricsScope{Derived: true}}
+}
+
+// THE PASSIVE STAGE READS BY DEVICE NAME, SO IT NEEDS THE CALLER'S BOUNDARY
+// (§3a rule 4, review 3.9-07).
+//
+// Nothing about `{__name__=~"gnmi_.*",source="<device>"}` is self-limiting: the
+// operator types a name and the store answers. A platform operator who is
+// restricted from a tenant's telemetry, or one scoped into a tenant with the
+// switcher, would otherwise have read any device's series by naming it — the
+// same defect the ClickHouse scope on this very Principal was built to close.
+func TestPassiveVictoriaStageCarriesTheCallersMetricBoundary(t *testing.T) {
+	f := newFakeBackend()
+	f.vmBody = []byte(`{"metric":{"__name__":"gnmi_x","source":"spine1"},"timestamps":[1757000000000],"values":[1]}` + "\n")
+	api := New(f.deps())
+
+	// A scoped operator's boundary reaches the wire, unchanged and whole.
+	scoped := Principal{Subject: "owner", Tenant: "t_acme", Cross: false,
+		Metrics: MetricsScope{Derived: true, Filters: []string{
+			`{device=~"acme-core"}`, `{source=~"acme-core"}`}}}
+	if e := api.PassiveVictoriaStage(t.Context(), scoped,
+		PassiveSpec{Kind: KindGNMI, Device: "spine1", Since: time.Minute}); e.Verdict != VerdictSeen {
+		t.Fatalf("verdict %s: %s", e.Verdict, e.Reason)
+	}
+	got := f.snap().vmFilters
+	if len(got) != 2 || got[0] != `{device=~"acme-core"}` || got[1] != `{source=~"acme-core"}` {
+		t.Fatalf("the export went out with filters %v — a read of the metric store that "+
+			"does not carry the caller's boundary is an unscoped read", got)
+	}
+
+	// An operator scoped INTO a restricted tenant carries the match-nothing
+	// sentinel, and it must be on the wire rather than dropped on the floor.
+	restricted := Principal{Subject: "owner", Tenant: "t_locked", Cross: false,
+		Metrics: MetricsScope{Derived: true,
+			Filters: []string{`{device="__netops_no_visible_device__"}`}}}
+	if e := api.PassiveVictoriaStage(t.Context(), restricted,
+		PassiveSpec{Kind: KindGNMI, Device: "spine1", Since: time.Minute}); e.Verdict != VerdictSeen {
+		t.Fatalf("the stage must still run and report what the scoped store returns: %s", e.Reason)
+	}
+	if got := f.snap().vmFilters; len(got) != 1 || !strings.Contains(got[0], "__netops_no_visible_device__") {
+		t.Fatalf("the restricted operator's match-nothing sentinel did not reach the store: %v", got)
+	}
+}
+
+// An UNDERIVED boundary is not "no boundary" — it is a caller that never ran the
+// chokepoint, and the store must not be read at all (§3 fails closed). An empty
+// filter list cannot carry this meaning: it is the legitimate answer for an
+// unrestricted platform owner.
+func TestPassiveVictoriaStageRefusesAnUnderivedBoundary(t *testing.T) {
+	f := newFakeBackend()
+	f.vmBody = []byte(`{"metric":{"__name__":"gnmi_x"},"timestamps":[1757000000000],"values":[1]}` + "\n")
+	api := New(f.deps())
+
+	e := api.PassiveVictoriaStage(t.Context(), Principal{Subject: "owner", Cross: true},
+		PassiveSpec{Kind: KindGNMI, Device: "spine1", Since: time.Minute})
+	if e.Verdict != VerdictNotObservable {
+		t.Fatalf("an underived boundary produced %s, want not-observable", e.Verdict)
+	}
+	if !strings.Contains(e.Reason, "unscoped") {
+		t.Errorf("the refusal does not say why: %q", e.Reason)
+	}
+	if f.snap().vmMatch != "" {
+		t.Fatalf("the store was read anyway, with selector %q", f.snap().vmMatch)
+	}
+}
+
 func TestPassiveVictoriaStageIsTheLoadBearingEvidence(t *testing.T) {
 	f := newFakeBackend()
 	f.vmBody = []byte(`{"metric":{"__name__":"gnmi_x","source":"spine1"},"timestamps":[1757000000000,1757000015000],"values":[1,2]}` + "\n")
 	api := New(f.deps())
-	e := api.PassiveVictoriaStage(t.Context(), PassiveSpec{Kind: KindGNMI, Device: "spine1", Since: 10 * time.Minute})
+	e := api.PassiveVictoriaStage(t.Context(), scopedOwner(), PassiveSpec{Kind: KindGNMI, Device: "spine1", Since: 10 * time.Minute})
 	if e.Verdict != VerdictSeen {
 		t.Fatalf("verdict %s: %s", e.Verdict, e.Reason)
 	}
@@ -180,7 +252,7 @@ func TestPassiveVictoriaStageIsTheLoadBearingEvidence(t *testing.T) {
 	// An empty export is a real not_seen — that IS the device's whole raw lane.
 	f.vmBody = nil
 	api = New(f.deps())
-	e = api.PassiveVictoriaStage(t.Context(), PassiveSpec{Kind: KindGNMI, Device: "spine1", Since: time.Minute})
+	e = api.PassiveVictoriaStage(t.Context(), scopedOwner(), PassiveSpec{Kind: KindGNMI, Device: "spine1", Since: time.Minute})
 	if e.Verdict != VerdictNotSeen {
 		t.Fatalf("an empty export was reported as %s", e.Verdict)
 	}
@@ -188,7 +260,7 @@ func TestPassiveVictoriaStageIsTheLoadBearingEvidence(t *testing.T) {
 	// A store that could not be reached is not_observable, never not_seen.
 	f.vmErr = os.ErrDeadlineExceeded
 	api = New(f.deps())
-	e = api.PassiveVictoriaStage(t.Context(), PassiveSpec{Kind: KindGNMI, Device: "spine1", Since: time.Minute})
+	e = api.PassiveVictoriaStage(t.Context(), scopedOwner(), PassiveSpec{Kind: KindGNMI, Device: "spine1", Since: time.Minute})
 	if e.Verdict != VerdictNotObservable {
 		t.Fatalf("an unreachable store was reported as %s", e.Verdict)
 	}

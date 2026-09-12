@@ -5116,7 +5116,32 @@ func (s *server) debugAuthz(w http.ResponseWriter, r *http.Request) (pipedebug.P
 	return pipedebug.Principal{
 		Subject: claims.Sub, Tenant: tenant, Cross: cross,
 		CHScope: s.chTenantScopeFor(claims),
+		// The metric-store boundary comes from the SAME chokepoint every other
+		// VictoriaMetrics lane uses (metrics_query.go), folded once and carried
+		// whole. The passive gNMI stage reads by DEVICE NAME, so without this a
+		// restricted tenant's series — or another tenant's, for an operator
+		// scoped in with the switcher — came back to whoever could name the
+		// device (review 3.9-07).
+		Metrics: pipedebug.MetricsScope{Derived: true, Filters: s.metricsScopeFiltersFor(claims)},
 	}, true
+}
+
+// debugVictoriaExport is Deps.VictoriaExport: the export transport, refusing a
+// scoped read it cannot enforce.
+//
+// extra_filters[] is a VictoriaMetrics extension. Against a Prometheus upstream
+// it is IGNORED, which would turn a scoped debug read into an unscoped one with
+// no error anywhere — so a caller carrying a boundary is refused instead, the
+// same rule igpmonVMQuery and the forecast lane apply.
+func (s *server) debugVictoriaExport(client *http.Client) func(context.Context, string, []string, time.Time, time.Time) ([]byte, error) {
+	base := envOr("VICTORIA_URL", envOr("METRICS_URL", "http://victoria:8428"))
+	export := pipedebug.NewVictoriaExport(client, base)
+	return func(ctx context.Context, match string, filters []string, start, end time.Time) ([]byte, error) {
+		if len(filters) > 0 && !metricsUpstreamIsVictoria(base) {
+			return nil, errors.New("metrics scoping requires a VictoriaMetrics backend; refusing an unscopable read")
+		}
+		return export(ctx, match, filters, start, end)
+	}
 }
 
 // debugUIHost adapts *server to pipedebug.UIQueryHost — the seam stage 10 runs
@@ -5174,12 +5199,11 @@ func (s *server) debugDeps() pipedebug.Deps {
 		Search:         openSearch,
 		OSIndexPattern: oslog.TenantIndexPattern,
 		CHSelect:       chSelect,
-		VictoriaExport: pipedebug.NewVictoriaExport(client,
-			envOr("VICTORIA_URL", envOr("METRICS_URL", "http://victoria:8428"))),
-		KafkaPeek:    pipedebug.NewKafkaPeek(client, sidecar, token),
-		CorrLogLevel: pipedebug.NewCorrLogLevel(client, sidecar, token),
-		CorrHealth:   pipedebug.NewCorrHealth(client, strings.TrimRight(corrURL, "/")),
-		SetAPILevel:  s.debugAPILevel.Set,
+		VictoriaExport: s.debugVictoriaExport(client),
+		KafkaPeek:      pipedebug.NewKafkaPeek(client, sidecar, token),
+		CorrLogLevel:   pipedebug.NewCorrLogLevel(client, sidecar, token),
+		CorrHealth:     pipedebug.NewCorrHealth(client, strings.TrimRight(corrURL, "/")),
+		SetAPILevel:    s.debugAPILevel.Set,
 		// Vector is deliberately NOT wired: it reads VECTOR_LOG at process start
 		// and exposes no log-level mutation on its API, so there is nothing
 		// honest to call. The handler answers with pipedebug.VectorLevelReason,

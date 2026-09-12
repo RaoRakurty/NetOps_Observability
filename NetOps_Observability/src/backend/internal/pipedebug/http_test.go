@@ -64,6 +64,7 @@ type fakeBackend struct {
 	vmBody       []byte
 	vmErr        error
 	vmMatch      string
+	vmFilters    []string
 	uiProbe      UIProbe
 	uiErr        error
 	uiCalls      []Kind
@@ -72,11 +73,12 @@ type fakeBackend struct {
 
 func newFakeBackend() *fakeBackend {
 	return &fakeBackend{
-		principal: Principal{Subject: "owner", Cross: true, CHScope: "__all__"},
-		authOK:    true,
-		osStatus:  200,
-		osBody:    `{"hits":{"total":{"value":0},"hits":[]}}`,
-		ring:      NewRing(),
+		principal: Principal{Subject: "owner", Cross: true, CHScope: "__all__",
+			Metrics: MetricsScope{Derived: true}},
+		authOK:   true,
+		osStatus: 200,
+		osBody:   `{"hits":{"total":{"value":0},"hits":[]}}`,
+		ring:     NewRing(),
 	}
 }
 
@@ -90,6 +92,7 @@ type fakeSnapshot struct {
 	osIndex        string
 	chSeen         []string
 	vmMatch        string
+	vmFilters      []string
 	uiCalls        []Kind
 	audits         []map[string]any
 }
@@ -105,6 +108,7 @@ func (f *fakeBackend) snap() fakeSnapshot {
 		osIndex:        f.osIndex,
 		chSeen:         append([]string(nil), f.chSeen...),
 		vmMatch:        f.vmMatch,
+		vmFilters:      append([]string(nil), f.vmFilters...),
 		uiCalls:        append([]Kind(nil), f.uiCalls...),
 		audits:         append([]map[string]any(nil), f.audits...),
 	}
@@ -196,10 +200,11 @@ func (f *fakeBackend) deps() Deps {
 			f.injectedFlow = append(f.injectedFlow, pkt)
 			return nil
 		},
-		VictoriaExport: func(_ context.Context, match string, _, _ time.Time) ([]byte, error) {
+		VictoriaExport: func(_ context.Context, match string, filters []string, _, _ time.Time) ([]byte, error) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
 			f.vmMatch = match
+			f.vmFilters = append([]string(nil), filters...)
 			return f.vmBody, f.vmErr
 		},
 		UIQueryRun: func(_ *http.Request, kind Kind, _ string, _ PassiveSpec, _ string) (UIProbe, error) {
@@ -417,7 +422,8 @@ func TestTraceIsAudited(t *testing.T) {
 
 func TestAScopedPrincipalCannotNameAnotherTenant(t *testing.T) {
 	f := newFakeBackend()
-	f.principal = Principal{Subject: "owner", Tenant: "t_own", Cross: false}
+	f.principal = Principal{Subject: "owner", Tenant: "t_own", Cross: false,
+		Metrics: MetricsScope{Derived: true}}
 	api := New(f.deps())
 	w := post(t, api.HandleTrace, "/api/debug/trace", `{"kind":"syslog","device":"spine1","tenant":"t_other"}`)
 	if w.Code != http.StatusBadRequest {
@@ -430,7 +436,8 @@ func TestAScopedPrincipalCannotNameAnotherTenant(t *testing.T) {
 
 func TestAScopedPrincipalsTenantComesFromTheTokenNotTheBody(t *testing.T) {
 	f := newFakeBackend()
-	f.principal = Principal{Subject: "owner", Tenant: "t_own", Cross: false}
+	f.principal = Principal{Subject: "owner", Tenant: "t_own", Cross: false,
+		Metrics: MetricsScope{Derived: true}}
 	api := New(f.deps())
 	w := post(t, api.HandleTrace, "/api/debug/trace", `{"kind":"syslog","device":"spine1"}`)
 	var got traceReceipt
@@ -454,11 +461,17 @@ func TestTraceStatusIs404ForAnotherTenantsMarkerAndForAnUnknownOne(t *testing.T)
 	// The trace POST above left a follow goroutine running, so the switch of
 	// identity goes through the lock — this is the one test that has to change
 	// the fake AFTER a run has started.
-	f.set(func(s *fakeBackend) { s.principal = Principal{Subject: "other", Tenant: "t_b", Cross: false} })
+	f.set(func(s *fakeBackend) {
+		s.principal = Principal{Subject: "other", Tenant: "t_b", Cross: false,
+			Metrics: MetricsScope{Derived: true}}
+	})
 	if w := call(t, api.HandleTraceStatus, http.MethodGet, "/api/debug/trace/"+got.Marker, ""); w.Code != http.StatusNotFound {
 		t.Errorf("cross-tenant status read got %d, want 404", w.Code)
 	}
-	f.set(func(s *fakeBackend) { s.principal = Principal{Subject: "owner", Cross: true} })
+	f.set(func(s *fakeBackend) {
+		s.principal = Principal{Subject: "owner", Cross: true,
+			Metrics: MetricsScope{Derived: true}}
+	})
 	unknown := NewMarker(time.Now())
 	if w := call(t, api.HandleTraceStatus, http.MethodGet, "/api/debug/trace/"+unknown, ""); w.Code != http.StatusNotFound {
 		t.Errorf("unknown marker got %d, want 404", w.Code)

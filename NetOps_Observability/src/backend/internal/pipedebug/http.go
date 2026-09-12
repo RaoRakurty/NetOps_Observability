@@ -477,7 +477,7 @@ func (a *API) stage(r *http.Request, p Principal, stage Stage, kind Kind, marker
 	case StageOpenSearch:
 		return a.OpenSearchStage(ctx, p, kind, marker, tenant)
 	case StageVictoria:
-		return a.VictoriaStage(ctx, kind, marker)
+		return a.VictoriaStage(ctx, p, kind, marker)
 	case StageClickHouse:
 		return a.ClickHouseStage(ctx, p, kind, marker)
 	case StageCorrelation:
