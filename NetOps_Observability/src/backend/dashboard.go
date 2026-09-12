@@ -48,8 +48,17 @@ func (s *server) handleMetricTiles(w http.ResponseWriter, r *http.Request) {
 // carries the operator-visibility restriction — and not through the raw
 // alertVisible underneath it, which answers true for everything on the
 // cross-tenant path.
+//
+// The Devices and Sites tiles count the same way, and for the same reason. The
+// owner has ruled that devices and sites are counted PER TENANT: a tenant that
+// has switched the operator-visibility restriction on is not part of the
+// platform operator's fleet, so its devices and its sites are not part of the
+// operator's counts. So both tiles read one resolved deviceVisibility, the
+// registry sibling of alertVisibility, and the Sites tile derives from the same
+// filtered device list the Devices tile counts. Neither tile can disagree with
+// the other, or with a list built from the same object.
 func (s *server) currentMetricTiles(claims jwtClaims) []MetricTile {
-	devs := visibleDevices(s.discovery.Devices(), claims)
+	devs := s.visibleDevicesFor(claims)
 	devices := len(devs)
 	_, cross := principalTenant(claims)
 

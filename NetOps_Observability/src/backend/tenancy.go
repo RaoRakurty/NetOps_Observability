@@ -390,6 +390,90 @@ func visibleDevices(all []models.Device, c jwtClaims) []models.Device {
 	return out
 }
 
+// deviceVisibility is the device-REGISTRY visibility decision RESOLVED for one
+// principal: the ordinary tenant scope, plus the operator-visibility restriction
+// (Tenant.OperatorRestricted) in its tenant_id form.
+//
+// It is the inventory sibling of alertVisibility, and it exists for the same
+// reason. The restriction is resolved per SUBJECT (break-glass is a per-operator,
+// time-boxed session), so resolving it once per device would rescan the tenant
+// store for every row. Resolving it once per principal also means a surface that
+// shows a LIST and a tile that shows its COUNT ask the same object, so they can
+// never disagree about what the caller may see.
+//
+// WHAT THE RESTRICTION MEANS HERE IS AN OWNER DECISION. The restriction started
+// as a telemetry rule and the device registry was deliberately left outside it.
+// The owner has since ruled that devices and sites are counted per tenant, so a
+// restricted tenant's inventory does not appear in the platform operator's view
+// either.
+type deviceVisibility struct {
+	tenant string
+	cross  bool
+
+	// deny is the operator scoped INTO a restricted tenant: it sees no device of
+	// that tenant at all.
+	deny bool
+	// hiddenTenants are the restricted tenants' ids, lower-cased, for the
+	// operator's Global view. A device carries its owner in TenantID, so the
+	// tenant_id form of the restriction is the exact one.
+	hiddenTenants map[string]bool
+}
+
+// deviceVisibilityFor resolves the rule ONCE for a principal. The restriction
+// comes from the shared resolver (operatorTelemetryRestriction) rather than a
+// second copy of it, so it is a no-op for non-operators, for a tenant reading its
+// own fleet, and when no tenant is restricted.
+func (s *server) deviceVisibilityFor(c jwtClaims) deviceVisibility {
+	tenant, cross := principalTenant(c)
+	v := deviceVisibility{tenant: tenant, cross: cross}
+	exclude, deny := s.operatorTelemetryRestriction(c, tenant, cross)
+	v.deny = deny
+	if len(exclude) > 0 {
+		v.hiddenTenants = make(map[string]bool, len(exclude))
+		for _, id := range exclude {
+			v.hiddenTenants[strings.ToLower(strings.TrimSpace(id))] = true
+		}
+	}
+	return v
+}
+
+// visible reports whether this principal may see one device. The restriction is
+// applied BEFORE the ordinary tenant rule, so a hidden device stays hidden on the
+// cross-tenant path, where canSeeDevice allows everything.
+func (v deviceVisibility) visible(d models.Device) bool {
+	if v.deny {
+		return false
+	}
+	if v.hiddenTenants[deviceTenant(d)] {
+		return false
+	}
+	return canSeeDevice(d, v.tenant, v.cross)
+}
+
+// filter applies the resolved rule to a device list, preserving order.
+func (v deviceVisibility) filter(all []models.Device) []models.Device {
+	if !v.deny && len(v.hiddenTenants) == 0 && v.cross {
+		return all
+	}
+	out := make([]models.Device, 0, len(all))
+	for _, d := range all {
+		if v.visible(d) {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// visibleDevicesFor is visibleDevices plus the operator-visibility restriction,
+// read straight from the registry. Callers that must not show a restricted
+// tenant's inventory ask this instead of visibleDevices.
+func (s *server) visibleDevicesFor(c jwtClaims) []models.Device {
+	if s.discovery == nil {
+		return nil
+	}
+	return s.deviceVisibilityFor(c).filter(s.discovery.Devices())
+}
+
 // alertVisible is THE alert visibility rule. Every surface that shows alerts
 // asks this one function, so a fix here cannot be applied to some paths and
 // missed on others.
