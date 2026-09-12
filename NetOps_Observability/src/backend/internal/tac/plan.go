@@ -107,8 +107,12 @@ func stepSources(in []Source) []Source {
 // TopologyNote is one line of the connected-topology context Correlix supplies
 // from its OWN model. It is evidence, not a command — the plan carries it so a
 // TAC engineer sees the neighbourhood the device sits in.
+// A "coverage" note carries no Ref: it is what Correlix could NOT see (a seam
+// register it could not read, a neighbour list it had to cut), and it qualifies
+// every other note in the section. Without it a vendor cannot tell an absent
+// neighbour from an unreported one.
 type TopologyNote struct {
-	Kind   string `json:"kind"` // neighbor | link | seam | site
+	Kind   string `json:"kind"` // neighbor | link | seam | site | coverage
 	Ref    string `json:"ref"`
 	Detail string `json:"detail,omitempty"`
 }

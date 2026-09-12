@@ -1072,7 +1072,30 @@ func (s *server) tacTopology(r *http.Request, claims jwtClaims, deviceID string)
 	if err != nil {
 		return nil
 	}
-	out := make([]tac.TopologyNote, 0, len(ctxInfo.Neighbors)+len(ctxInfo.Seams)+len(ctxInfo.Paths)+1)
+	return tacTopologyNotes(ctxInfo)
+}
+
+// tacTopologyNotes renders one ai.TopologyContext as the bundle's topology
+// section. It is a pure mapping so the rule below can be tested without a
+// server: the CAVEATS ARE PART OF THE EVIDENCE.
+//
+// ctxInfo.Notes is where the adapter records what it could NOT see — the seam
+// register being unreadable, or this device having more adjacencies than one
+// answer carries (review 3.9-12). Dropping them, as this function did, handed a
+// TAC engineer a neighbour list that looked complete when it was not, and a
+// device with no seam line that might simply never have been asked. A vendor
+// reading a bundle cannot tell an absent neighbour from an unreported one, so
+// the answer has to say which it is (§10: no silent failures).
+//
+// The caveats come FIRST because they qualify every line under them.
+func tacTopologyNotes(ctxInfo ai.TopologyContext) []tac.TopologyNote {
+	out := make([]tac.TopologyNote, 0,
+		len(ctxInfo.Notes)+len(ctxInfo.Neighbors)+len(ctxInfo.Seams)+len(ctxInfo.Paths)+1)
+	for _, n := range ctxInfo.Notes {
+		if n = strings.TrimSpace(n); n != "" {
+			out = append(out, tac.TopologyNote{Kind: "coverage", Detail: n})
+		}
+	}
 	if ctxInfo.Site != "" || ctxInfo.Role != "" {
 		out = append(out, tac.TopologyNote{Kind: "site", Ref: ctxInfo.Site, Detail: ctxInfo.Role})
 	}

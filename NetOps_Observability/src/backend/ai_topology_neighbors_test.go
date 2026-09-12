@@ -10,6 +10,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"netops/backend/ai"
+	"netops/backend/internal/tac"
 )
 
 // fleetLinks builds n adjacencies between devices that are NOT the subject, in
@@ -97,5 +100,74 @@ func TestAINeighborCapNote_NamesThisDevice(t *testing.T) {
 	}
 	if !strings.Contains(low, "incomplete") {
 		t.Error("the note does not say the answer is incomplete")
+	}
+}
+
+// ── the caveat has to reach the bundle too (review 3.9-12, second half) ──────
+
+// TestTACTopologyCarriesTheCoverageCaveat is the half of 3.9-12 the cap fix did
+// not close. ai.TopologyContext records what the adapter could NOT see in
+// Notes — the neighbour list was cut, the seam register could not be read — and
+// tacTopology built the bundle's topology section out of Neighbors/Seams/Paths
+// only. A TAC engineer therefore read a neighbour list that looked complete when
+// it was not, and a device with no seam line that may simply never have been
+// asked. A vendor cannot tell an absent neighbour from an unreported one.
+func TestTACTopologyCarriesTheCoverageCaveat(t *testing.T) {
+	ctxInfo := ai.TopologyContext{
+		DeviceID: "core1", DeviceName: "core1", Site: "lab", Role: "spine",
+		Neighbors: []ai.TopologyNeighbor{
+			{LocalPort: "Et49", PeerName: "leaf9", PeerPort: "Et1", Source: "lldp"},
+		},
+		Notes: []string{
+			aiNeighborCapNote,
+			"  ", // blank notes carry nothing and must not become an empty line
+			"the seam register could not be read — seam ownership is UNKNOWN for this answer",
+		},
+	}
+
+	got := tacTopologyNotes(ctxInfo)
+
+	var coverage []tac.TopologyNote
+	for _, n := range got {
+		if n.Kind == "coverage" {
+			coverage = append(coverage, n)
+		}
+	}
+	if len(coverage) != 2 {
+		t.Fatalf("the bundle carries %d coverage notes, want 2 — the caveats were dropped and the section reads as complete: %+v",
+			len(coverage), got)
+	}
+	if coverage[0].Detail != aiNeighborCapNote {
+		t.Errorf("the neighbour-cap caveat did not reach the bundle: %q", coverage[0].Detail)
+	}
+	if !strings.Contains(coverage[1].Detail, "seam register") {
+		t.Errorf("the seam-register caveat did not reach the bundle: %q", coverage[1].Detail)
+	}
+	// A caveat qualifies everything under it, so it is not filed after the data
+	// it is a caveat about.
+	if got[0].Kind != "coverage" || got[1].Kind != "coverage" {
+		t.Errorf("the caveats are not first, so they read as a footnote to a list that already looked complete: %+v", got)
+	}
+	// And the evidence itself is unchanged.
+	if got[2].Kind != "site" || got[3].Kind != "neighbor" || got[3].Ref != "leaf9" {
+		t.Errorf("the topology rows were disturbed: %+v", got)
+	}
+}
+
+// The guard against the caveat becoming noise: an answer that saw everything
+// carries no coverage note at all, so a "coverage" line in a bundle always means
+// something real was missing.
+func TestTACTopologyIsQuietWhenNothingWasMissed(t *testing.T) {
+	got := tacTopologyNotes(ai.TopologyContext{
+		DeviceID: "core1", Site: "lab", Role: "spine",
+		Neighbors: []ai.TopologyNeighbor{{LocalPort: "Et49", PeerName: "leaf9", PeerPort: "Et1", Source: "lldp"}},
+	})
+	for _, n := range got {
+		if n.Kind == "coverage" {
+			t.Fatalf("a complete answer invented a coverage caveat: %+v", n)
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d notes, want the site line and the one neighbour: %+v", len(got), got)
 	}
 }
