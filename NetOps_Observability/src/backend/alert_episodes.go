@@ -533,6 +533,68 @@ func decodeMaintenanceWindow(w http.ResponseWriter, r *http.Request) (maintenanc
 	return in, true
 }
 
+// visibleMaintenanceWindows reads the declared planned-work windows through the
+// SAME resolved rule the device registry and the declared sites are read
+// through, so the list and the `count` beside it can never disagree about what
+// the caller may see.
+//
+// A maintenance window is when a customer's network is deliberately down and who
+// is touching it: it names device ids, site slugs, rule names, a description and
+// a schedule. That is the same class of disclosure as the site list and the
+// fleet the owner already ruled is per-tenant, so a restricted tenant's windows
+// are not part of the platform operator's estate either.
+//
+// The count is computed HERE, over the filtered list, and that is enough — the
+// store returns whole rows with no bound of its own, so unlike the episode list
+// (whose total is computed inside the store, before its limit) there is no count
+// a handler-side filter could leave behind. Checked, not assumed:
+// maintenance.Store.List takes no limit and returns every row of the scope.
+func (s *server) visibleMaintenanceWindows(ctx context.Context, c jwtClaims) ([]maintenance.Window, error) {
+	v := s.tenantVisibilityFor(c)
+	if v.deny {
+		// The operator scoped INTO a restricted tenant: nothing, not an error.
+		return []maintenance.Window{}, nil
+	}
+	all, err := s.maintWindows.List(ctx, v.tenant, v.cross)
+	if err != nil {
+		return nil, err
+	}
+	if len(v.hiddenTenants) == 0 {
+		return all, nil
+	}
+	out := make([]maintenance.Window, 0, len(all))
+	for _, win := range all {
+		if v.hides(win.TenantID) {
+			continue
+		}
+		out = append(out, win)
+	}
+	return out, nil
+}
+
+// maintenanceWindowRestricted reports whether the operator-visibility
+// restriction hides the window with this id from the caller — the by-id gate for
+// every method, read and write alike.
+//
+// The WRITE half is deliberate and mirrors the episode store's `owns`: a window
+// platform staff may not read is not one they may overwrite or delete either,
+// and a 200 from PUT/DELETE on an id the GET refuses would confirm the id exists
+// just as loudly as a 403. The callers answer 404.
+//
+// It costs an extra store read ONLY when something is actually hidden from this
+// caller — every ordinary request (no restricted tenant, a tenant's own users,
+// an operator with nothing hidden) short-circuits on the empty set.
+func (s *server) maintenanceWindowRestricted(ctx context.Context, v tenantVisibility, id string) (bool, error) {
+	if len(v.hiddenTenants) == 0 {
+		return false, nil
+	}
+	win, found, err := s.maintWindows.Get(ctx, v.tenant, v.cross, id)
+	if err != nil {
+		return false, err
+	}
+	return found && v.hides(win.TenantID), nil
+}
+
 func (s *server) handleMaintenanceWindows(w http.ResponseWriter, r *http.Request) {
 	if s.maintWindows == nil {
 		writeError(w, http.StatusNotImplemented, errors.New("maintenance window store unavailable"))
@@ -544,8 +606,7 @@ func (s *server) handleMaintenanceWindows(w http.ResponseWriter, r *http.Request
 		if !ok {
 			return
 		}
-		tenant, cross := principalTenant(claims)
-		out, err := s.maintWindows.List(r.Context(), tenant, cross)
+		out, err := s.visibleMaintenanceWindows(r.Context(), claims)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -597,13 +658,21 @@ func (s *server) handleMaintenanceWindowByID(w http.ResponseWriter, r *http.Requ
 		if !ok {
 			return
 		}
-		tenant, cross := principalTenant(claims)
-		win, found, err := s.maintWindows.Get(r.Context(), tenant, cross, id)
+		v := s.tenantVisibilityFor(claims)
+		if v.deny {
+			http.NotFound(w, r) // scoped INTO a restricted tenant: nothing exists here
+			return
+		}
+		win, found, err := s.maintWindows.Get(r.Context(), v.tenant, v.cross, id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		if !found {
+		// The restriction is asked BEFORE the found/not-found answer is written,
+		// because the store's tenancy rule returns everything to a cross-tenant
+		// caller. A hidden window reads as absent — never 403, which would
+		// confirm the id.
+		if !found || v.hides(win.TenantID) {
 			http.NotFound(w, r) // cross-tenant id indistinguishable from absent
 			return
 		}
@@ -613,12 +682,27 @@ func (s *server) handleMaintenanceWindowByID(w http.ResponseWriter, r *http.Requ
 		if !ok {
 			return
 		}
+		v := s.tenantVisibilityFor(claims)
+		if v.deny {
+			http.NotFound(w, r)
+			return
+		}
 		in, ok := decodeMaintenanceWindow(w, r)
 		if !ok {
 			return
 		}
-		tenant, cross := principalTenant(claims)
-		out, found, err := s.maintWindows.Update(r.Context(), tenant, cross, id, in)
+		// §3a.1: a window platform staff may not read is not one they may
+		// overwrite. Checked BEFORE the write, so the refusal is not a rollback.
+		hidden, err := s.maintenanceWindowRestricted(r.Context(), v, id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if hidden {
+			http.NotFound(w, r)
+			return
+		}
+		out, found, err := s.maintWindows.Update(r.Context(), v.tenant, v.cross, id, in)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -633,8 +717,21 @@ func (s *server) handleMaintenanceWindowByID(w http.ResponseWriter, r *http.Requ
 		if !ok {
 			return
 		}
-		tenant, cross := principalTenant(claims)
-		found, err := s.maintWindows.Delete(r.Context(), tenant, cross, id)
+		v := s.tenantVisibilityFor(claims)
+		if v.deny {
+			http.NotFound(w, r)
+			return
+		}
+		hidden, err := s.maintenanceWindowRestricted(r.Context(), v, id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if hidden {
+			http.NotFound(w, r) // and the planned work stays declared
+			return
+		}
+		found, err := s.maintWindows.Delete(r.Context(), v.tenant, v.cross, id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return

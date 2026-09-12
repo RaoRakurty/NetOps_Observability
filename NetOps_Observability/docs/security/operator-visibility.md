@@ -86,6 +86,25 @@ applies to the platform operator, and is a no-op when no tenant is restricted.
   authorization and the recipient is the TENANT — the restriction hides a tenant
   from the platform, never from itself.
 
+✅ **Maintenance windows** (`tenantVisibility` at the handler, tenant_id based;
+  tracker 305). A declared window is when a customer's network is deliberately
+  down and who is touching it — device ids, site slugs, rule names, the
+  operator's description and the schedule.
+  - `GET /api/alerts/maintenance-windows` (rows AND the `count` beside them) and
+    `GET|PUT|DELETE /api/alerts/maintenance-windows/{id}` (**404**, never 403 —
+    a window platform staff may not read is not one they may overwrite or
+    delete either).
+  - The count is computed at the handler over the filtered list, which is
+    sufficient HERE because `maintenance.Store.List` takes no limit and returns
+    whole rows — unlike the episode list, whose `total` is computed inside the
+    store and therefore needed `alerts.EpisodeScope`.
+
+  **Deliberately NOT restricted**: window SUPPRESSION itself
+  (`alertNotifySuppressed`, `maintenanceCoveredIDs`, `Store.Covering`). A
+  restricted tenant's planned work still pauses that tenant's notifications and
+  still stamps its timeintel snapshots — this is a rule about operator reads,
+  never about what the platform collects or does on a tenant's behalf.
+
 ✅ **Raw OpenSearch Dashboards console** (`/search`) — can't be per-tenant filtered
   (security plugin off), so it is **denied entirely whenever any tenant is
   operator-restricted** (`?c=search` gate). The operator uses the in-app Logs view
