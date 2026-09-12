@@ -259,7 +259,7 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	// it. UpsertFederated — and therefore MergeFederated, and therefore any
 	// chance of a role or a source being rewritten — is not on this path at all.
 	if pol, isElev := s.elevationPolicy(txn.IdP); isElev {
-		s.completeElevationSSO(w, r, p, pol, username, role, txn.FEState, claims)
+		s.completeElevationSSO(w, r, p, pol, txn.IdP, username, role, txn.FEState, claims)
 		return
 	}
 	// THE REALM TRAVELS WITH THE SIGN-IN. Until now only the CONNECTION was
@@ -268,8 +268,10 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	// and be handed a session in that account's tenant (and rewrite its role and
 	// auth source on the way through). The store applies this beside the merge,
 	// which is where it has to be: the merge write is itself the damage.
-	// A generic (unbound, platform-realm) callback carries no constraint.
-	user, err := s.users.UpsertFederatedInRealm(username, claims.Email, firstNonEmpty(claims.Name, username), role, "oidc", s.ssoProvisionTenant(r, p), s.ssoCallbackRealm(r))
+	// The realm comes from ssoSignInRealm, never from the callback URL alone: a
+	// URL that names no realm falls back to the CONNECTION's own registration,
+	// so only a connection nobody bound to a tenant carries no constraint.
+	user, err := s.users.UpsertFederatedInRealm(username, claims.Email, firstNonEmpty(claims.Name, username), role, "oidc", s.ssoProvisionTenant(r, p), s.ssoSignInRealm(r, txn.IdP))
 	if err != nil {
 		// The account exists, in a realm this URL does not reach. Say only what
 		// a mis-registered provider is told — naming the real reason would be a
@@ -343,11 +345,14 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 // — an elevation IdP must not be the back door to platform ownership either),
 // mint the grant, and then open an ordinary session so the operator is simply
 // signed in with elevated access held beside their standing rights.
-func (s *server) completeElevationSSO(w http.ResponseWriter, r *http.Request, p *oidcProvider, pol elevation.Policy, username, mappedRole, feState string, claims jwks.Claims) {
-	// The realm the URL names, if this is a tenant-bound callback. An elevation
-	// provider registered by one tenant must not reach another tenant's account
-	// any more than a standing one may.
-	realm := s.ssoCallbackRealm(r)
+func (s *server) completeElevationSSO(w http.ResponseWriter, r *http.Request, p *oidcProvider, pol elevation.Policy, alias, username, mappedRole, feState string, claims jwks.Claims) {
+	// The realm this sign-in is confined to. An elevation provider registered by
+	// one tenant must not reach another tenant's account any more than a
+	// standing one may — and, like the standing path, the constraint is read
+	// from the CONNECTION when the callback URL names no realm, so a connection
+	// whose tenant the directory cannot resolve does not become unbound
+	// (ssoSignInRealm).
+	realm := s.ssoSignInRealm(r, alias)
 	bound := realm.Reaches != nil
 	user, ok := s.users.Get(username)
 	if !ok {

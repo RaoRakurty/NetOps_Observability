@@ -48,6 +48,7 @@ import (
 
 	"netops/backend/internal/jwks"
 	"netops/backend/internal/ssoidp"
+	"netops/backend/internal/tenant"
 )
 
 const realmKID = "realm-kid"
@@ -409,5 +410,84 @@ func TestPlatformRealmSSOStillSignsInEveryTenant(t *testing.T) {
 	}
 	if u, ok := h.f.s.users.Get("platformnew"); !ok || u.TenantID != TenantGlobal {
 		t.Fatalf("platform-realm provisioning = %+v (ok=%v), want the OIDC default tenant", u, ok)
+	}
+}
+
+// ---- 3. the realm must not evaporate when the URL stops naming one ---------
+
+// THE SECOND HALF OF C3. The account check above reads the realm out of the
+// CALLBACK URL, and ssoLoginRedirectURI normally guarantees a tenant-bound
+// connection is sent back to its own /t/{slug}/… callback. That guarantee ends
+// the moment the connection's tenant stops RESOLVING: tenantlocator.ResolveID
+// only resolves ACTIVE tenants, so a SUSPENDED tenant makes connectionLocator
+// fail, the flow falls back to the generic /api/auth/sso/callback, and
+// ssoCallbackRealm hands back an unconstrained users.Realm{}.
+//
+// Tenant B's own connection then signed in tenant A's `alice` and the merge
+// rewrote her role, e-mail, display name and auth source — the whole C3 attack,
+// through a door the first fix left open. Suspension must take privileges away,
+// never hand out a platform-wide skeleton key.
+func TestTenantSSOCannotSignInAnotherTenantsAccountWhenItsOwnLocatorStopsResolving(t *testing.T) {
+	h := newRealmHarness(t)
+	before := h.seedFederated(t, "alice", h.f.tenantA, RoleReadOnly, "ldap")
+	if _, err := h.f.s.tenants.SetStatus(h.f.tenantB, tenant.StatusSuspended); err != nil {
+		t.Fatalf("suspend tenant B: %v", err)
+	}
+	if _, ok := h.f.s.connectionLocator("globex-idp"); ok {
+		t.Fatal("precondition gone: tenant B's connection still resolves, so this test is not exercising the fallback")
+	}
+
+	frag := h.roundTrip(t, "/api/auth/sso/login?idp=globex-idp", "/api/auth/sso/callback", "alice", nil)
+	if frag.Get("token") != "" || frag.Get("refresh") != "" {
+		t.Fatalf("CROSS-TENANT SIGN-IN: tenant B's connection minted a session for %s of tenant %s", before.Username, before.TenantID)
+	}
+	after, ok := h.f.s.users.Get("alice")
+	if !ok {
+		t.Fatal("the victim's account disappeared")
+	}
+	// The merge write IS the damage: it rewrites role, e-mail, display name and
+	// auth source. Refusing the session is not enough; nothing may have been
+	// written.
+	if after.TenantID != before.TenantID || after.Role != before.Role || after.AuthSource != before.AuthSource ||
+		after.Email != before.Email || after.DisplayName != before.DisplayName {
+		t.Fatalf("A REFUSED SIGN-IN STILL REWROTE THE VICTIM: %+v, want %+v", after, before)
+	}
+}
+
+// The elevation door mints a session too, and it read the same realm. It is
+// closed by the same helper.
+func TestTenantElevationSSOCannotElevateAnotherTenantsAccountWhenItsLocatorStopsResolving(t *testing.T) {
+	h := newRealmHarness(t)
+	before := h.seedFederated(t, "alice", h.f.tenantA, RoleReadOnly, "ldap")
+	if _, err := h.f.s.tenants.SetStatus(h.f.tenantB, tenant.StatusSuspended); err != nil {
+		t.Fatalf("suspend tenant B: %v", err)
+	}
+
+	frag := h.roundTrip(t, "/api/auth/sso/login?idp=globex-elev", "/api/auth/sso/callback", "alice",
+		map[string]any{"access_expires_at": time.Now().Add(20 * time.Minute).Format(time.RFC3339), "change_ticket": "CHG-1"})
+	if frag.Get("token") != "" {
+		t.Fatalf("CROSS-TENANT ELEVATION: tenant B's elevation connection signed in %s of tenant %s", before.Username, before.TenantID)
+	}
+}
+
+// A platform-realm connection whose registration names no tenant is unaffected:
+// ssoConnectionRealm returns no constraint, so the generic front door still
+// signs in every tenant. This is the same regression guard as
+// TestPlatformRealmSSOStillSignsInEveryTenant, re-stated against the new helper
+// so a future edit cannot tighten it by accident.
+func TestConnectionRealmLeavesTheUnboundFrontDoorAlone(t *testing.T) {
+	h := newRealmHarness(t)
+	if rl := h.f.s.ssoConnectionRealm("shared-idp"); rl.Reaches != nil {
+		t.Fatal("the unbound connection grew a realm constraint; every pre-locator deployment signs in through it")
+	}
+	rl := h.f.s.ssoConnectionRealm("globex-idp")
+	if rl.Reaches == nil {
+		t.Fatal("a TENANT-BOUND connection must carry a realm constraint")
+	}
+	if !rl.Permits(h.f.tenantB) {
+		t.Error("tenant B's connection must still reach tenant B's own accounts")
+	}
+	if rl.Permits(h.f.tenantA) {
+		t.Error("tenant B's connection must not reach tenant A's accounts")
 	}
 }

@@ -871,12 +871,14 @@ func ssoBindingRefusalMessage(alias string, c tenantlocator.Candidate) string {
 	return "“" + alias + "” is not an identity provider for " + c.DisplayName + ". Ask your administrator for this organization's sign-in link."
 }
 
-// ssoCallbackRealm is the realm constraint a federated sign-in runs under.
+// ssoCallbackRealm is the realm the CALLBACK URL names. It is HALF the
+// constraint a federated sign-in runs under — call ssoSignInRealm, not this.
 //
-// ONLY a tenant-bound callback carries one. A platform-realm connection keeps
-// the generic /api/auth/sso/callback and legitimately signs in users of every
-// tenant, so the zero Realm — no constraint — is what those flows get, exactly
-// as before.
+// ONLY a tenant-bound callback carries a realm. The zero Realm this returns for
+// every other path means "this URL named no realm", NOT "this sign-in is
+// unconstrained": a tenant-bound connection can reach the generic callback when
+// its tenant stops resolving, and treating that as unconstrained is the second
+// half of review C3. ssoSignInRealm is where the fallback lives.
 func (s *server) ssoCallbackRealm(r *http.Request) users.Realm {
 	kind, ref, _, leaf, ok := tenantlocator.ParseCallbackPath(r.URL.Path)
 	if !ok || leaf != "callback" {
@@ -891,6 +893,68 @@ func (s *server) ssoCallbackRealm(r *http.Request) users.Realm {
 	}
 	return users.Realm{Reaches: func(accountTenant string) bool {
 		return s.realmReachesAccount(cand, accountTenant)
+	}}
+}
+
+// ssoSignInRealm is the realm a sign-in is confined to, and it is what the
+// account check must use — never ssoCallbackRealm on its own.
+//
+// WHY (review 2026-09-08, C3, second half). The realm was read from the CALLBACK
+// URL alone. That is correct whenever the URL names one, and ssoLoginRedirectURI
+// normally guarantees it does: a tenant-bound connection is always sent back to
+// its own /t/{slug}/… callback. It stops being guaranteed the moment
+// connectionLocator cannot resolve the connection's tenant — a SUSPENDED tenant
+// is the reachable case, because tenantlocator.ResolveID only resolves ACTIVE
+// tenants while providerRealm still answers with the tenant id. The flow then
+// falls back to the GENERIC callback, ssoCallbackRealm returns an unconstrained
+// users.Realm{}, and the connection becomes a platform-wide skeleton key: tenant
+// B's IdP signed in tenant A's `alice`, and the merge rewrote her role, e-mail,
+// display name and auth source on the way through. Proved end to end in
+// sso_realm_isolation_test.go.
+//
+// So the constraint now has a second source: the CONNECTION's own registration,
+// which does not depend on the URL, on the directory being able to resolve a
+// slug, or on the IdP enforcing redirect_uri for us (§3 — never trust an
+// upstream to hold a boundary we own). The URL realm still wins when there is
+// one, so /org/{id} keeps reaching every tenant its org owns.
+func (s *server) ssoSignInRealm(r *http.Request, alias string) users.Realm {
+	if rl := s.ssoCallbackRealm(r); rl.Reaches != nil {
+		return rl
+	}
+	return s.ssoConnectionRealm(alias)
+}
+
+// ssoConnectionRealm is the realm a CONNECTION may sign accounts in from,
+// derived from its stored registration rather than from the request path.
+//
+//	unbound (platform realm)   no constraint — the shared front door signs in
+//	                           every tenant, exactly as it did before per-tenant
+//	                           URLs existed. This is the regression guard.
+//	bound and resolvable       the same reach the URL form uses, so an org-owned
+//	                           tenant is still reachable.
+//	bound, NOT resolvable      the connection's own tenant and nothing else. A
+//	                           suspended tenant's own people are then stopped one
+//	                           gate later by federatedLoginBarrier, which is the
+//	                           gate that owns suspension; what must not happen is
+//	                           the constraint disappearing altogether.
+//	registration unreadable    fail closed.
+func (s *server) ssoConnectionRealm(alias string) users.Realm {
+	tid, _, ok := s.providerRealm(alias)
+	if !ok {
+		return users.Realm{Reaches: func(string) bool { return false }}
+	}
+	tid = strings.TrimSpace(tid)
+	if tid == "" {
+		return users.Realm{}
+	}
+	if c, resolved := s.connectionLocator(alias); resolved {
+		return users.Realm{Reaches: func(accountTenant string) bool {
+			return s.realmReachesAccount(c, accountTenant)
+		}}
+	}
+	want := strings.ToLower(tid)
+	return users.Realm{Reaches: func(accountTenant string) bool {
+		return strings.ToLower(strings.TrimSpace(accountTenant)) == want
 	}}
 }
 
