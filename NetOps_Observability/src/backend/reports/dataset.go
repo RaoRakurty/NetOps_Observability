@@ -28,10 +28,95 @@ import (
 type DataSource struct {
 	Devices    func(tenant string) []models.Device
 	Alerts     func(tenant string) []models.Alert
-	DeviceKeys func(tenant string) (keys []string, platform bool)
+	DeviceKeys func(tenant string) DeviceScope
 	CHQuery    func(sql string) []string
 	VMMap      func(query string) map[string]float64
 	StartedAt  time.Time
+}
+
+// DeviceScope is the device-key visibility ONE report run carries, resolved by
+// whoever wired the DataSource and handed to the builders below as DATA — this
+// package never sees a principal and never re-derives a visibility rule.
+//
+// It replaces the (keys []string, platform bool) pair the seam used to return,
+// which could not express the third state the operator-visibility rule needs. A
+// PLATFORM-owned report has no allow-list — it covers the whole fleet — and yet
+// must still leave OUT the devices of a tenant that platform staff may
+// administer but not read (Tenant.OperatorRestricted). Expressed as a pair,
+// "platform" meant "no clause", so the exclusion had nowhere to ride and a
+// scheduled platform report delivered a restricted tenant's devices, links,
+// findings and utilisation on a timer.
+type DeviceScope struct {
+	// Platform marks a platform-owned (global/unassigned) report: the whole
+	// fleet, minus Exclude.
+	Platform bool
+	// Keys is the allow-list for a TENANT-owned report — the ids and names of
+	// the devices it may reference. Default-closed: a tenant with no visible
+	// device gets an empty set and its renderers must emit the "no data" note
+	// without querying, never fall back to the platform-wide view.
+	Keys []string
+	// Exclude is the deny-list a PLATFORM-owned run carries: the ids and names
+	// of restricted tenants' devices. Never set for a tenant-owned run — the
+	// rule hides a tenant from the PLATFORM, never from itself.
+	Exclude []string
+}
+
+// readable reports whether this scope can return anything at all. A tenant-owned
+// report with no visible device short-circuits every telemetry read (the
+// default-closed contract); a platform report always reads.
+func (sc DeviceScope) readable() bool {
+	return sc.Platform || len(sc.Keys) > 0
+}
+
+// tunnelCond narrows netops.tunnels for this scope, as the complete leading
+// WHERE clause (empty when the scope needs none).
+//
+// A tunnel is an EDGE, not a row owned by one device, so the two forms are not
+// each other's negation: the tenant allow-list matches a row with EITHER
+// endpoint in the tenant (OR), while the platform deny-list drops a row with
+// EITHER endpoint restricted (NOT … AND NOT …). Same shape, and for the same
+// reason, as deviceTenantPairCondFor on the live API. Injection-safe via
+// sqlInList (inventory values, escaped regardless).
+func (sc DeviceScope) tunnelCond() string {
+	if sc.Platform {
+		if len(sc.Exclude) == 0 {
+			return ""
+		}
+		in := sqlInList(sc.Exclude)
+		return ` WHERE (local_device NOT IN (` + in + `) AND remote_device NOT IN (` + in + `))
+`
+	}
+	in := sqlInList(sc.Keys)
+	return ` WHERE (local_device IN (` + in + `) OR remote_device IN (` + in + `))
+`
+}
+
+// findingsCond is the netops.findings sibling, keyed on the single `device`
+// column, as a trailing AND fragment. A scoped report excludes device-less
+// platform findings (default-closed); a platform report keeps them — nothing
+// owns them — and drops only the restricted tenants' devices.
+func (sc DeviceScope) findingsCond() string {
+	if sc.Platform {
+		if len(sc.Exclude) == 0 {
+			return ""
+		}
+		return " AND device NOT IN (" + sqlInList(sc.Exclude) + ")"
+	}
+	return " AND device IN (" + sqlInList(sc.Keys) + ")"
+}
+
+// filterMap narrows a VictoriaMetrics device→value map to this scope: the
+// tenant's own devices for a scoped report, the fleet minus the restricted
+// tenants' devices for a platform one. Applied BEFORE the top-N ranking so a
+// hidden device can never crowd a visible one out of the table either.
+func (sc DeviceScope) filterMap(m map[string]float64) map[string]float64 {
+	if !sc.Platform {
+		return filterDeviceMap(m, sc.Keys)
+	}
+	if len(sc.Exclude) == 0 {
+		return m
+	}
+	return dropDeviceMap(m, sc.Exclude)
 }
 
 // firstNonEmpty and sqlInList are duplicated at the boundary per the
@@ -227,14 +312,14 @@ func (ds DataSource) DatasetHealth(now time.Time, tenant string) (string, []Sect
 }
 
 func (ds DataSource) DatasetWAN(tenant string) (string, []Section) {
-	keys, platform := ds.DeviceKeys(tenant)
+	sc := ds.DeviceKeys(tenant)
 	var rows []string
-	if platform || len(keys) > 0 {
+	if sc.readable() {
 		rows = ds.CHQuery(`
 SELECT local_device, remote_device, type, status,
        round(latency_ms,1), round(jitter_ms,1), round(loss_pct,2), round(qoe,1)
   FROM netops.tunnels
-` + tunnelReportCond(platform, keys) + ` ORDER BY ts DESC
+` + sc.tunnelCond() + ` ORDER BY ts DESC
  LIMIT 1 BY id
  FORMAT TSV`)
 	}
@@ -273,10 +358,10 @@ SELECT local_device, remote_device, type, status,
 }
 
 func (ds DataSource) DatasetSecurity(tenant string) (string, []Section) {
-	keys, platform := ds.DeviceKeys(tenant)
+	sc := ds.DeviceKeys(tenant)
 	var sev, recent []string
-	if platform || len(keys) > 0 {
-		cond := findingsReportCond(platform, keys)
+	if sc.readable() {
+		cond := sc.findingsCond()
 		sev = ds.CHQuery(`
 SELECT severity, count()
   FROM netops.findings
@@ -309,11 +394,11 @@ SELECT severity, device, summary
 	}
 	// Top affected devices (24h) — where to look first.
 	var byDev []string
-	if platform || len(keys) > 0 {
+	if sc.readable() {
 		byDev = ds.CHQuery(`
 SELECT device, count()
   FROM netops.findings
- WHERE ts >= now() - INTERVAL 24 HOUR AND device != ''` + findingsReportCond(platform, keys) + `
+ WHERE ts >= now() - INTERVAL 24 HOUR AND device != ''` + sc.findingsCond() + `
  GROUP BY device
  ORDER BY count() DESC
  LIMIT 10
@@ -351,14 +436,11 @@ SELECT device, count()
 
 func (ds DataSource) DatasetDeviceUtil(tenant string) (string, []Section) {
 	// Join CPU + memory per device into one ranked table (was two text blobs).
-	keys, platform := ds.DeviceKeys(tenant)
+	sc := ds.DeviceKeys(tenant)
 	var cpu, mem map[string]float64
-	if platform || len(keys) > 0 {
-		cpu = ds.VMMap(`device_cpu_percent`)
-		mem = ds.VMMap(`device_mem_percent`)
-		if !platform {
-			cpu, mem = filterDeviceMap(cpu, keys), filterDeviceMap(mem, keys)
-		}
+	if sc.readable() {
+		cpu = sc.filterMap(ds.VMMap(`device_cpu_percent`))
+		mem = sc.filterMap(ds.VMMap(`device_mem_percent`))
 	}
 	if len(cpu) == 0 && len(mem) == 0 {
 		return "no device utilisation metrics", []Section{{Title: "Device utilisation", Note: "No CPU/memory metrics reporting yet."}}
@@ -416,14 +498,14 @@ func (ds DataSource) DatasetDeviceUtil(tenant string) (string, []Section) {
 func (ds DataSource) DatasetLatency(tenant string) (string, []Section) {
 	// Per-link latency/jitter/loss as a real table + an availability SLA (was a
 	// single text blob).
-	keys, platform := ds.DeviceKeys(tenant)
+	sc := ds.DeviceKeys(tenant)
 	var rows []string
-	if platform || len(keys) > 0 {
+	if sc.readable() {
 		rows = ds.CHQuery(`
 SELECT local_device, remote_device, status,
        round(latency_ms,1), round(jitter_ms,1), round(loss_pct,2)
   FROM netops.tunnels
-` + tunnelReportCond(platform, keys) + ` ORDER BY ts DESC
+` + sc.tunnelCond() + ` ORDER BY ts DESC
  LIMIT 1 BY id
  FORMAT TSV`)
 	}
@@ -463,30 +545,21 @@ SELECT local_device, remote_device, status,
 	}
 }
 
-// tenantDevices returns the devices a report for the given tenant should cover:
-// a global/unassigned report sees the whole fleet, a tenant report only its own.
-// tunnelReportCond narrows netops.tunnels rows to tunnels terminating on one of
-// the report tenant's devices (either endpoint) — the same contract as
-// /api/tunnels. The tunnels row policy is hybrid (untagged rows shared), so
-// this app-layer clause is what keeps a tenant report from describing other
-// tenants' links. Injection-safe via sqlInList (inventory values, escaped
-// regardless).
-func tunnelReportCond(platform bool, keys []string) string {
-	if platform {
-		return ""
+// dropDeviceMap is filterDeviceMap's negation: it removes the metric entries
+// whose device label matches one of the EXCLUDED keys, for the platform report
+// that reads the whole fleet minus the restricted tenants. Pure.
+func dropDeviceMap(m map[string]float64, keys []string) map[string]float64 {
+	drop := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		drop[k] = true
 	}
-	in := sqlInList(keys)
-	return ` WHERE (local_device IN (` + in + `) OR remote_device IN (` + in + `))
-`
-}
-
-// findingsReportCond is the findings sibling, keyed on the device name column.
-// Scoped reports exclude device-less platform findings (default-closed).
-func findingsReportCond(platform bool, keys []string) string {
-	if platform {
-		return ""
+	out := make(map[string]float64, len(m))
+	for k, v := range m {
+		if !drop[k] {
+			out[k] = v
+		}
 	}
-	return " AND device IN (" + sqlInList(keys) + ")"
+	return out
 }
 
 // filterDeviceMap keeps only the metric entries whose device label matches one
@@ -599,14 +672,14 @@ func (ds DataSource) RenderHealth(now time.Time, tenant string) (string, string)
 // tunnels telemetry (status, loss, qoe) — the closest the stack has to circuit
 // utilisation until per-circuit bandwidth counters land.
 func (ds DataSource) RenderWANUtilization(tenant string) (string, string) {
-	keys, platform := ds.DeviceKeys(tenant)
+	sc := ds.DeviceKeys(tenant)
 	var rows []string
-	if platform || len(keys) > 0 {
+	if sc.readable() {
 		rows = ds.CHQuery(`
 SELECT local_device, remote_device, type, status,
        round(loss_pct,2), round(qoe,2)
   FROM netops.tunnels
-` + tunnelReportCond(platform, keys) + ` ORDER BY ts DESC
+` + sc.tunnelCond() + ` ORDER BY ts DESC
  LIMIT 1 BY id
  FORMAT TSV`)
 	}
@@ -639,10 +712,10 @@ SELECT local_device, remote_device, type, status,
 // recent items) and critical active alerts — the executive "are we under
 // threat" view.
 func (ds DataSource) RenderSecurityThreats(tenant string) (string, string) {
-	keys, platform := ds.DeviceKeys(tenant)
+	sc := ds.DeviceKeys(tenant)
 	var sev, recent []string
-	if platform || len(keys) > 0 {
-		cond := findingsReportCond(platform, keys)
+	if sc.readable() {
+		cond := sc.findingsCond()
 		sev = ds.CHQuery(`
 SELECT severity, count()
   FROM netops.findings
@@ -696,14 +769,11 @@ SELECT severity, device, summary
 // in-app so a tenant-owned report's top-N is computed over ITS devices only
 // (a server-side topk would rank platform-wide and then filter).
 func (ds DataSource) RenderDeviceUtilization(tenant string) (string, string) {
-	keys, platform := ds.DeviceKeys(tenant)
+	sc := ds.DeviceKeys(tenant)
 	var cpuMap, memMap map[string]float64
-	if platform || len(keys) > 0 {
-		cpuMap = ds.VMMap(`device_cpu_percent`)
-		memMap = ds.VMMap(`device_mem_percent`)
-		if !platform {
-			cpuMap, memMap = filterDeviceMap(cpuMap, keys), filterDeviceMap(memMap, keys)
-		}
+	if sc.readable() {
+		cpuMap = sc.filterMap(ds.VMMap(`device_cpu_percent`))
+		memMap = sc.filterMap(ds.VMMap(`device_mem_percent`))
 	}
 	cpu := topDeviceLines(cpuMap, 10, "%")
 	mem := topDeviceLines(memMap, 10, "%")
@@ -729,14 +799,14 @@ func (ds DataSource) RenderDeviceUtilization(tenant string) (string, string) {
 // renderLatencyJitterSLA reports per-link latency/jitter/loss and a simple SLA
 // (% of links currently up) from the tunnels telemetry.
 func (ds DataSource) RenderLatencyJitterSLA(tenant string) (string, string) {
-	keys, platform := ds.DeviceKeys(tenant)
+	sc := ds.DeviceKeys(tenant)
 	var rows []string
-	if platform || len(keys) > 0 {
+	if sc.readable() {
 		rows = ds.CHQuery(`
 SELECT local_device, remote_device, status,
        round(latency_ms,2), round(jitter_ms,2), round(loss_pct,2)
   FROM netops.tunnels
-` + tunnelReportCond(platform, keys) + ` ORDER BY ts DESC
+` + sc.tunnelCond() + ` ORDER BY ts DESC
  LIMIT 1 BY id
  FORMAT TSV`)
 	}
