@@ -87,3 +87,7 @@ src/backend/collectors/mibs/vendored/.fetched/
 # (src/backend/internal/licence/keys.go) and published in the runbook.
 data/licence-signer/
 !data/licence-signer/*.pub
+
+# vitest writes a cache under src/ when run from the repo root rather than
+# from src/frontend; it is a build artefact, never a dependency tree.
+src/node_modules/
