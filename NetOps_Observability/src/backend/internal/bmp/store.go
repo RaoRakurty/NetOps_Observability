@@ -94,7 +94,18 @@ type sessionState struct {
 // One BGP UPDATE fans out into one record per announced or withdrawn prefix,
 // because that is the granularity an operator searches by.
 type UpdateRecord struct {
-	Seq       uint64
+	// Seq is the PROCESS-WIDE arrival order. It is the internal merge key for a
+	// cross-tenant read and is NEVER published to a tenant-scoped caller: the
+	// gap between two of a tenant's own consecutive Seq values counts how many
+	// records every OTHER tenant wrote in between, which is exactly the
+	// fleet-volume fact handleStats refuses to answer.
+	Seq uint64
+	// TenantSeq is the arrival order WITHIN the owning tenant: 1, 2, 3, … across
+	// all of that tenant's sessions. It is what a tenant-scoped read publishes
+	// and pages by — dense, so it carries no evidence of anyone else's volume,
+	// and monotonic in the same direction as Seq, so newest-first ordering is
+	// identical under either key for a single tenant's rows.
+	TenantSeq uint64
 	At        time.Time
 	SessionID string
 	TenantID  string
@@ -163,10 +174,21 @@ func (r *updateRing) newestFirst(fn func(UpdateRecord) bool) {
 // Store holds every session's state. It is safe for concurrent use: the
 // listener writes from N connection goroutines while the HTTP handlers read.
 type Store struct {
-	mu        sync.Mutex
-	sessions  map[string]*sessionState
-	order     []string // insertion order, for deterministic eviction
-	seq       uint64
+	mu       sync.Mutex
+	sessions map[string]*sessionState
+	order    []string // insertion order, for deterministic eviction
+	seq      uint64
+	// tseq is the per-tenant arrival counter behind UpdateRecord.TenantSeq.
+	//
+	// BOUND: it is keyed by the tenants that have actually opened a BMP session,
+	// and a session is only opened for an address the INVENTORY resolved to a
+	// device (Deps.ResolveDevice), so the key set is bounded by the inventory's
+	// tenants — not by anything a peer on the wire can choose.
+	//
+	// It is deliberately NEVER pruned, not even when a tenant's last session
+	// record is evicted. Deleting an entry would rewind that tenant's sequence,
+	// and a rewound sequence makes a live keyset cursor skip or repeat rows.
+	tseq      map[string]uint64
 	maxRecs   int
 	ringDepth int
 	now       func() time.Time
@@ -187,6 +209,7 @@ func NewStore(now func() time.Time, maxRecords, ringDepth int) *Store {
 	}
 	return &Store{
 		sessions:  map[string]*sessionState{},
+		tseq:      map[string]uint64{},
 		maxRecs:   maxRecords,
 		ringDepth: ringDepth,
 		now:       now,
@@ -394,9 +417,14 @@ func (st *sessionState) applyUpdate(s *Store, msg *Message) Applied {
 
 	add := func(kind string, prefix netip.Prefix) {
 		s.seq++
+		if s.tseq == nil {
+			s.tseq = map[string]uint64{}
+		}
+		s.tseq[st.tenantID]++
 		before := st.ring.dropped
 		rec := UpdateRecord{
 			Seq:          s.seq,
+			TenantSeq:    s.tseq[st.tenantID],
 			At:           at,
 			SessionID:    st.id,
 			TenantID:     st.tenantID,
@@ -699,14 +727,37 @@ type UpdateFilter struct {
 	Peer string
 	// Session, when set, narrows to one session id.
 	Session string
-	// Before is the keyset cursor: only records with Seq < Before are returned.
-	// Zero means "from the newest".
+	// Before is the keyset cursor: only records whose PUBLISHED sequence is
+	// < Before are returned. Zero means "from the newest". The published
+	// sequence is the caller's own — see keyOf — so a cursor a tenant was handed
+	// means the same thing on the way back in as it did on the way out.
 	Before uint64
 	Limit  int
 }
 
+// keyOf is the sequence a given principal READS and PAGES BY.
+//
+// A cross-tenant principal merges rows from several tenants, so it needs the
+// process-wide key — and the fleet number is a fact it is already entitled to.
+// Everyone else gets the per-tenant key, which is dense within that tenant and
+// therefore says nothing about anyone else's message volume (§3a; the same
+// reasoning that keeps the process-wide counters out of StatsView).
+//
+// Substituting one key for the other never disturbs ORDERING for a scoped read:
+// both counters are incremented under the store lock on the same code path, so
+// for any two rows of ONE tenant, Seq and TenantSeq agree on which is newer.
+func keyOf(rec UpdateRecord, cross bool) uint64 {
+	if cross {
+		return rec.Seq
+	}
+	return rec.TenantSeq
+}
+
 // UpdateView is one update record in a response.
 type UpdateView struct {
+	// Seq is the caller's OWN sequence key (keyOf): the per-tenant one for a
+	// tenant-scoped read, the process-wide one for a cross-tenant read. It is
+	// the value the keyset cursor is built from.
 	Seq              uint64   `json:"seq"`
 	At               string   `json:"at"`
 	SessionID        string   `json:"session_id"`
@@ -728,9 +779,9 @@ type UpdateView struct {
 
 // Updates returns matching records newest-first, at most f.Limit of them.
 //
-// It merges the per-session rings by sequence number. Because each ring is
-// already newest-first, the merge only ever holds f.Limit records — a caller
-// cannot make the server materialize the whole feed.
+// It merges the per-session rings by the PRINCIPAL'S sequence key (keyOf).
+// Because each ring is already newest-first, the merge only ever holds f.Limit
+// records — a caller cannot make the server materialize the whole feed.
 func (s *Store) Updates(p Principal, f UpdateFilter) []UpdateView {
 	limit := f.Limit
 	if limit <= 0 {
@@ -748,21 +799,22 @@ func (s *Store) Updates(p Principal, f UpdateFilter) []UpdateView {
 			continue
 		}
 		st.ring.newestFirst(func(rec UpdateRecord) bool {
-			if f.Before != 0 && rec.Seq >= f.Before {
+			key := keyOf(rec, p.Cross)
+			if f.Before != 0 && key >= f.Before {
 				return true // newer than the cursor; keep walking back
 			}
 			if !matches(rec, f) {
 				return true
 			}
-			picked = insertDesc(picked, rec, limit)
+			picked = insertDesc(picked, rec, limit, p.Cross)
 			// Once the buffer is full and this session's records are all older
 			// than the weakest kept one, nothing further back can qualify.
-			return !(len(picked) == limit && rec.Seq <= picked[limit-1].Seq)
+			return !(len(picked) == limit && key <= keyOf(picked[limit-1], p.Cross))
 		})
 	}
 	out := make([]UpdateView, 0, len(picked))
 	for _, rec := range picked {
-		out = append(out, viewOf(rec))
+		out = append(out, viewOf(rec, p.Cross))
 	}
 	return out
 }
@@ -783,9 +835,12 @@ func matches(rec UpdateRecord, f UpdateFilter) bool {
 	return true
 }
 
-// insertDesc keeps `dst` sorted by Seq descending, capped at limit.
-func insertDesc(dst []UpdateRecord, rec UpdateRecord, limit int) []UpdateRecord {
-	pos := sort.Search(len(dst), func(i int) bool { return dst[i].Seq < rec.Seq })
+// insertDesc keeps `dst` sorted by the PRINCIPAL'S key descending, capped at
+// limit. It sorts by the same key the caller will be handed, so the order on
+// the page and the order the cursor resumes from cannot disagree.
+func insertDesc(dst []UpdateRecord, rec UpdateRecord, limit int, cross bool) []UpdateRecord {
+	key := keyOf(rec, cross)
+	pos := sort.Search(len(dst), func(i int) bool { return keyOf(dst[i], cross) < key })
 	if pos >= limit {
 		return dst
 	}
@@ -797,9 +852,9 @@ func insertDesc(dst []UpdateRecord, rec UpdateRecord, limit int) []UpdateRecord 
 	return dst
 }
 
-func viewOf(rec UpdateRecord) UpdateView {
+func viewOf(rec UpdateRecord, cross bool) UpdateView {
 	return UpdateView{
-		Seq:              rec.Seq,
+		Seq:              keyOf(rec, cross),
 		At:               rec.At.UTC().Format(time.RFC3339Nano),
 		SessionID:        rec.SessionID,
 		DeviceID:         rec.DeviceID,
@@ -823,17 +878,20 @@ func viewOf(rec UpdateRecord) UpdateView {
 // sessions ONLY — the process-wide metrics are deliberately NOT exposed here,
 // because "how many frames did the fleet send" is another tenant's volume.
 type StatsView struct {
-	Sessions        int               `json:"sessions"`
-	SessionsUp      int               `json:"sessions_up"`
-	Peers           int               `json:"peers"`
-	PeersUp         int               `json:"peers_up"`
-	Messages        map[string]uint64 `json:"messages"`
-	UpdatesHeld     uint64            `json:"updates_held"`
-	UpdatesDropped  uint64            `json:"updates_dropped"`
-	ParseErrors     uint64            `json:"parse_errors"`
-	Unsupported     uint64            `json:"unsupported_elements"`
-	OldestUpdateSeq uint64            `json:"oldest_update_seq"`
-	NewestUpdateSeq uint64            `json:"newest_update_seq"`
+	Sessions       int               `json:"sessions"`
+	SessionsUp     int               `json:"sessions_up"`
+	Peers          int               `json:"peers"`
+	PeersUp        int               `json:"peers_up"`
+	Messages       map[string]uint64 `json:"messages"`
+	UpdatesHeld    uint64            `json:"updates_held"`
+	UpdatesDropped uint64            `json:"updates_dropped"`
+	ParseErrors    uint64            `json:"parse_errors"`
+	Unsupported    uint64            `json:"unsupported_elements"`
+	// Oldest/NewestUpdateSeq are in the CALLER'S sequence space (keyOf): a
+	// tenant-scoped caller sees its own dense numbering, so the span between
+	// them counts its own records and nobody else's.
+	OldestUpdateSeq uint64 `json:"oldest_update_seq"`
+	NewestUpdateSeq uint64 `json:"newest_update_seq"`
 }
 
 // Stats aggregates the caller's own sessions.
@@ -863,11 +921,15 @@ func (s *Store) Stats(p Principal) StatsView {
 		out.ParseErrors += st.parseErrors
 		out.Unsupported += st.unsupported
 		st.ring.newestFirst(func(rec UpdateRecord) bool {
-			if rec.Seq > out.NewestUpdateSeq {
-				out.NewestUpdateSeq = rec.Seq
+			// The caller's OWN key, for the same reason the process-wide message
+			// counters are absent from this struct: the distance between two
+			// global sequence numbers is a measurement of other tenants' volume.
+			key := keyOf(rec, p.Cross)
+			if key > out.NewestUpdateSeq {
+				out.NewestUpdateSeq = key
 			}
-			if out.OldestUpdateSeq == 0 || rec.Seq < out.OldestUpdateSeq {
-				out.OldestUpdateSeq = rec.Seq
+			if out.OldestUpdateSeq == 0 || key < out.OldestUpdateSeq {
+				out.OldestUpdateSeq = key
 			}
 			return true
 		})
