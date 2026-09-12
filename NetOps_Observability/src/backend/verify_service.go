@@ -86,18 +86,34 @@ func (r verifyCaseRow) caseContext() verify.CaseContext {
 // verifyCaseLookup fetches the case from the corr_current hot projection under
 // the caller's scope. A case outside the scope simply does not exist (404 —
 // never reveal another tenant's id).
-func (s *server) verifyCaseLookup(ctx context.Context, scope, caseID string) (verifyCaseRow, bool) {
+//
+// It takes BOTH halves of the operator-visibility restriction, because
+// corr_current is correlation output and one half alone leaves a door open.
+// scope must come from s.chTenantScopeFor / s.chTenantScope — the one
+// derivation, which closes the as_tenant half by handing an operator that
+// scoped INTO a restricted tenant the read-nothing scope. exclude is the
+// Global half, s.tenantIDExcludeCondFor's tenant_id predicate, and it is a
+// REQUIRED argument rather than an optional extra for the reason the ticket
+// payload builder learned the hard way: an empty string at the call site is
+// indistinguishable from "nothing to exclude", so naming it forces every
+// caller to answer the question. Pass "" only from a caller that has already
+// established it reads cross-tenant on purpose.
+func (s *server) verifyCaseLookup(ctx context.Context, scope, exclude, caseID string) (verifyCaseRow, bool) {
 	if !isUUIDToken(caseID) {
 		return verifyCaseRow{}, false
+	}
+	cond := ""
+	if exclude != "" {
+		cond = " AND " + exclude
 	}
 	sql := fmt.Sprintf(`SELECT tenant_id, toString(state) AS state,
        toString(verdict_tier) AS verdict, affected,
        toString(owner) AS owner, top_hypothesis,
        %s AS window_start
   FROM netops.corr_current FINAL
- WHERE correlation_id = toUUID('%s')
+ WHERE correlation_id = toUUID('%s')%s
  LIMIT 1
-FORMAT JSONEachRow`, chschema.ISO("window_start"), caseID)
+FORMAT JSONEachRow`, chschema.ISO("window_start"), caseID, cond)
 	rows, err := s.chRowsScope(ctx, scope, sql, "verify_case_lookup")
 	if err != nil {
 		// The projection did not answer. That is NOT "this case does not exist":

@@ -78,7 +78,7 @@ func TestOpenSearchStageNotSeenIsDistinctFromNotObservable(t *testing.T) {
 
 func TestOpenSearchStageQueriesTheTenantScopedIndex(t *testing.T) {
 	f := newFakeBackend()
-	f.principal = Principal{Subject: "owner", Tenant: "t_own", Cross: false}
+	f.principal = Principal{Subject: "owner", Tenant: "t_own", Cross: false, CHScope: "t_own"}
 	api := New(f.deps())
 	stageOf(t, api, "/api/debug/stage/opensearch?marker="+testMarker)
 	if !strings.Contains(f.snap().osIndex, "netops-syslog-t_own-*") {
@@ -189,7 +189,7 @@ func TestVictoriaAndClickHouseAreHonestlyNotObservableForLogKinds(t *testing.T) 
 
 func TestCorrelationStageQueriesCorrEvidenceUnderTheCallersScopeAndChecksTheDLQ(t *testing.T) {
 	f := newFakeBackend()
-	f.principal = Principal{Subject: "a", Tenant: "t_own", Cross: false}
+	f.principal = Principal{Subject: "a", Tenant: "t_own", Cross: false, CHScope: "t_own"}
 	api := New(f.deps())
 	e := stageOf(t, api, "/api/debug/stage/correlation?marker="+testMarker)
 	if e.Verdict != VerdictNotSeen {

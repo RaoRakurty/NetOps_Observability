@@ -29,6 +29,21 @@ type Principal struct {
 	// Cross is true when the principal reads across tenants (platform owner not
 	// scoped into a tenant with the switcher).
 	Cross bool
+	// CHScope is the principal's ClickHouse tenant_scope, DERIVED BY THE CALLER
+	// at package backend's one chokepoint (s.chTenantScopeFor) and carried here
+	// so this package never re-derives it.
+	//
+	// It is a FIELD rather than a Deps hook on purpose. A hook taking a
+	// Principal can only see Tenant and Cross, so the only thing it could do is
+	// write the tenant/cross rule out again — and a local copy of that rule
+	// silently drops the operator-visibility restriction the chokepoint folds
+	// in, which is exactly the leak the manual ticket path shipped. Carrying the
+	// already-folded answer makes the hand-roll unwritable.
+	//
+	// Empty means the caller derived no scope, and every ClickHouse read in this
+	// package then reports NOT-OBSERVABLE rather than running unscoped (§3 fails
+	// closed — a missing scope must never mean "everything").
+	CHScope string
 }
 
 // PeekRequest is one bounded, read-only Kafka peek.
@@ -97,9 +112,6 @@ type Deps struct {
 	// CHSelect runs a bounded SELECT with the caller's tenant_scope injected, so
 	// the ClickHouse row policies enforce isolation under the handler's filter.
 	CHSelect func(ctx context.Context, scope, sql string, comment ...string) ([]map[string]any, error)
-	// CHScopeFor derives the ClickHouse tenant_scope for a principal
-	// (chTenantScopeFor in package backend).
-	CHScopeFor func(p Principal) string
 
 	// VictoriaExport runs GET /api/v1/export for a selector over a window.
 	VictoriaExport func(ctx context.Context, match string, start, end time.Time) ([]byte, error)

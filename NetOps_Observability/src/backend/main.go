@@ -5083,7 +5083,17 @@ func (s *server) debugAuthz(w http.ResponseWriter, r *http.Request) (pipedebug.P
 		return pipedebug.Principal{}, false
 	}
 	tenant, cross := principalTenant(claims)
-	return pipedebug.Principal{Subject: claims.Sub, Tenant: tenant, Cross: cross}, true
+	// The ClickHouse scope is derived HERE, at the one chokepoint, and carried on
+	// the principal. This closure used to be a Deps hook that wrote the
+	// tenant/cross rule out again from (Tenant, Cross) — which is the pure rule
+	// with no compliance overlay, so a platform admin who scoped INTO a tenant
+	// that switched the operator-visibility restriction on read that tenant's
+	// corr_evidence and flow rows anyway. s.chTenantScopeFor folds the
+	// restriction in; a hand-rolled copy of it cannot.
+	return pipedebug.Principal{
+		Subject: claims.Sub, Tenant: tenant, Cross: cross,
+		CHScope: s.chTenantScopeFor(claims),
+	}, true
 }
 
 // debugUIHost adapts *server to pipedebug.UIQueryHost — the seam stage 10 runs
@@ -5141,15 +5151,6 @@ func (s *server) debugDeps() pipedebug.Deps {
 		Search:         openSearch,
 		OSIndexPattern: oslog.TenantIndexPattern,
 		CHSelect:       chSelect,
-		CHScopeFor: func(p pipedebug.Principal) string {
-			if p.Cross {
-				return "__all__"
-			}
-			if p.Tenant == "" {
-				return "__none__"
-			}
-			return p.Tenant
-		},
 		VictoriaExport: pipedebug.NewVictoriaExport(client,
 			envOr("VICTORIA_URL", envOr("METRICS_URL", "http://victoria:8428"))),
 		KafkaPeek:    pipedebug.NewKafkaPeek(client, sidecar, token),

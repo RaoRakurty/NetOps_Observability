@@ -37,12 +37,18 @@ func (s *server) handleCorrelationVerify(w http.ResponseWriter, r *http.Request,
 		if !ok {
 			return
 		}
-		tenant, cross := principalTenant(claims)
-		scope := tenant
-		if cross {
-			scope = "__all__"
-		}
-		row, found := s.verifyCaseLookup(r.Context(), scope, id)
+		tenant, _ := principalTenant(claims)
+		// The scope comes from s.chTenantScopeFor, the ONE derivation, and not
+		// from the same rule written out again here. Hand-rolling it is how the
+		// manual ticket path missed the operator-visibility restriction (the
+		// c09aea52 class): the chokepoint hands an operator that scoped INTO a
+		// restricted tenant the read-nothing scope, and a local copy of the
+		// tenant/cross rule silently opts out of that. The exclusion is the
+		// Global half the scope cannot express — '__all__' means all, and the
+		// row-policy grammar has no "all except" — so it rides in the SQL as the
+		// same tenant_id predicate every other correlation read carries.
+		row, found := s.verifyCaseLookup(r.Context(), s.chTenantScopeFor(claims),
+			s.tenantIDExcludeCondFor(claims, "tenant_id"), id)
 		if !found {
 			http.NotFound(w, r) // out-of-tenant: never reveal the id exists
 			return
@@ -65,17 +71,19 @@ func (s *server) handleCorrelationVerify(w http.ResponseWriter, r *http.Request,
 		if !ok {
 			return
 		}
-		tenant, cross := principalTenant(claims)
-		scope := tenant
-		if cross {
-			scope = "__all__"
-		}
+		tenant, _ := principalTenant(claims)
+		// Same two halves as the GET above: the one derivation for the scope,
+		// the one producer for the Global-view exclusion. A restricted tenant's
+		// case must not be verifiable by the operator either — a verification run
+		// reaches that tenant's DEVICES over SSH.
+		scope := s.chTenantScopeFor(claims)
+		exclude := s.tenantIDExcludeCondFor(claims, "tenant_id")
 		// Rate limit keyed by the AUTHENTICATED tenant (never client IP).
 		if !s.verifyLimiter.AllowN("verify:"+tenant, envInt("VERIFY_RATE_PER_MIN", 6)) {
 			writeError(w, http.StatusTooManyRequests, errors.New("verification rate limit reached — try again shortly"))
 			return
 		}
-		row, found := s.verifyCaseLookup(r.Context(), scope, id)
+		row, found := s.verifyCaseLookup(r.Context(), scope, exclude, id)
 		if !found {
 			http.NotFound(w, r) // cross-tenant write refused as not-found (§3a)
 			return
