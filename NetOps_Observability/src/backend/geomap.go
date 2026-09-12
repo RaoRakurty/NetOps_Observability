@@ -143,15 +143,53 @@ func (s *server) geomapResolve(ctx context.Context, claims jwtClaims) (rows []ge
 	}
 	assign, _ := p.DeviceSites(ctx, tenant, cross) // best-effort: annotations are optional enrichment; error → none
 
+	// The operator-visibility restriction, applied to BOTH halves of the join. A
+	// site is the sharper disclosure of the two: a bubble carries a name and
+	// decimal coordinates, so it says WHERE a hidden tenant operates even with
+	// every one of its devices already filtered out of the count.
+	sites = s.visibleSoTSites(claims, sites)
+
 	// The map renders from EITHER intent source: declared sites and/or operator
 	// location annotations. Onboarding empty-state only when neither exists.
 	if len(sites) == 0 && s.deviceLocations.Empty() {
 		return nil, nil, 0, false, "sot", ""
 	}
 
-	devices := visibleDevices(s.discovery.Devices(), claims)
+	devices := s.visibleDevicesFor(claims)
 	rows, unplaced, deviceSite = buildGeomap(sites, devices, assign, s.deviceLocations.Lookup, time.Now())
 	return rows, deviceSite, unplaced, true, "", ""
+}
+
+// visibleSoTSites applies the operator-visibility restriction
+// (Tenant.OperatorRestricted) to the declared sites. The (tenant, cross)
+// arguments the provider already took isolate one tenant from another; this is
+// the other half of the rule — the platform operator's cross-tenant view must
+// EXCLUDE a restricted tenant, and an as_tenant into one must see nothing.
+//
+// The restriction comes from the shared resolver (operatorTelemetryRestriction),
+// so it is a no-op for non-operators, for a tenant reading its own sites, and
+// when no tenant is restricted.
+func (s *server) visibleSoTSites(claims jwtClaims, sites []SoTSite) []SoTSite {
+	tenant, cross := principalTenant(claims)
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
+	if deny {
+		return nil
+	}
+	if len(exclude) == 0 {
+		return sites
+	}
+	hidden := make(map[string]bool, len(exclude))
+	for _, id := range exclude {
+		hidden[strings.ToLower(strings.TrimSpace(id))] = true
+	}
+	out := make([]SoTSite, 0, len(sites))
+	for _, st := range sites {
+		if hidden[strings.ToLower(strings.TrimSpace(st.TenantID))] {
+			continue
+		}
+		out = append(out, st)
+	}
+	return out
 }
 
 // handleGeomap serves GET /api/geomap.

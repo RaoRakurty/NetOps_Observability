@@ -74,7 +74,8 @@ func (s Site) validate() error {
 // toSoT projects a stored site into the provider contract (Source = "internal").
 func (s Site) toSoT() SoTSite {
 	return SoTSite{
-		Slug: s.Slug, Name: s.Name, Status: s.Status,
+		TenantID: s.TenantID,
+		Slug:     s.Slug, Name: s.Name, Status: s.Status,
 		Lat: s.Lat, Lng: s.Lng, HasCoords: s.HasCoords, Owner: s.Owner, Source: "internal",
 	}
 }

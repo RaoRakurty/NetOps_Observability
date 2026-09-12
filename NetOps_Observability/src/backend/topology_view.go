@@ -50,6 +50,66 @@ func (s *server) gatherTopoLinks(ctx context.Context, devs []models.Device) []to
 	return topology.NormalizeLLDP(neighbors, ownedID, byName, byAddr, ifaddr)
 }
 
+// gatherTopoLinksFor is gatherTopoLinks plus the operator-visibility restriction
+// (Tenant.OperatorRestricted): the links it returns carry no endpoint belonging
+// to a tenant the caller may not read.
+//
+// FILTERING THE DEVICE SLICE IS NOT ENOUGH. The slice decides which half-links
+// are kept (a link is anchored on a device in it) and which neighbours RESOLVE
+// to a managed device — so dropping a restricted tenant's devices drops its
+// nodes, and demotes a link that used to join two tenants into an UNRESOLVED
+// one whose target is "ext:<its hostname>" with that hostname in target_name.
+// The node goes, the edge stays and still names the device. This is the edge
+// half of the rule: an adjacency that names a hidden device is the disclosure.
+func (s *server) gatherTopoLinksFor(ctx context.Context, claims jwtClaims, devs []models.Device) []topoLink {
+	return s.hideRestrictedLinkEndpoints(claims, s.gatherTopoLinks(ctx, devs))
+}
+
+// hideRestrictedLinkEndpoints drops every link with an endpoint that identifies a
+// restricted tenant's device — resolved (id/name) or unresolved ("ext:<sysname>",
+// target_name, a chassis-id that is a management address). The identifier sets
+// come from the shared device-keyed resolver (restrictedTelemetry), never from a
+// second copy of the rule, so this is a no-op for non-operators, for a tenant
+// reading its own fabric, and when no tenant is restricted.
+func (s *server) hideRestrictedLinkEndpoints(claims jwtClaims, links []topoLink) []topoLink {
+	rt := s.restrictedTelemetry(claims)
+	if rt.deny {
+		return nil // scoped into a restricted tenant: no adjacency of it at all
+	}
+	if len(rt.keys) == 0 && len(rt.addrs) == 0 {
+		return links
+	}
+	hidden := make(map[string]bool, len(rt.keys)+len(rt.addrs))
+	for _, k := range rt.keys {
+		hidden[strings.ToLower(strings.TrimSpace(k))] = true
+	}
+	for _, a := range rt.addrs {
+		hidden[strings.ToLower(strings.TrimSpace(a))] = true
+	}
+	out := make([]topoLink, 0, len(links))
+	for _, l := range links {
+		if linkNamesHiddenDevice(l, hidden) {
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
+// linkNamesHiddenDevice reports whether either end of a link identifies a hidden
+// device, by any of the identities a topology endpoint can carry: the device id
+// (resolved end), the display name, and the "ext:<sysname>" alias the normalizer
+// mints for a neighbour it could not resolve.
+func linkNamesHiddenDevice(l topoLink, hidden map[string]bool) bool {
+	for _, id := range []string{l.Source, l.Target, l.SourceName, l.TargetName} {
+		v := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(id, "ext:")))
+		if v != "" && hidden[v] {
+			return true
+		}
+	}
+	return false
+}
+
 // topoLinkMaps builds the id/name/address resolution maps for a device slice.
 // The SLICE defines the resolution universe: a neighbour only ever resolves to
 // a device in it. Callers must therefore pass an already-scoped slice — the
@@ -126,8 +186,11 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 	tenant, cross := principalTenant(claims) // "" for a platform-owner all-tenants view
 
 	// ── inventory + deduped, evidence-bearing links (same normalizer as /links) ──
-	devs := visibleDevices(s.discovery.Devices(), claims)
-	links := s.gatherTopoLinks(r.Context(), devs)
+	// visibleDevicesFor, not visibleDevices: the canvas draws a NODE per device,
+	// so a restricted tenant's fabric must leave the operator's Global view (and
+	// an as_tenant into it draws nothing). gatherTopoLinksFor closes the edge half.
+	devs := s.visibleDevicesFor(claims)
+	links := s.gatherTopoLinksFor(r.Context(), claims, devs)
 
 	// ── active alerts, scoped to devices the caller can see (same rule as /alerts) ──
 	alerts := s.alerts.Active()
