@@ -4430,6 +4430,12 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	if s.demMetrics != nil {
 		s.demMetrics.Write(w)
 	}
+	if s.demExperienceMetrics != nil {
+		// The experience module's own counters. They were incremented from the
+		// first day of the lane and rendered nowhere: nothing called Write, so
+		// a DEM ingest that started refusing every event was invisible here.
+		s.demExperienceMetrics.Write(w)
+	}
 	if s.secMetrics != nil {
 		s.secMetrics.Write(w)
 	}

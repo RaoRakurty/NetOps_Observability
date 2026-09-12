@@ -985,6 +985,17 @@ func (a *API) HandleJourneyItem(w http.ResponseWriter, r *http.Request) {
 		}
 		def, err := a.deps.Store.GetJourney(r.Context(), tenant, id)
 		if err != nil {
+			if !errors.Is(err, ErrNotFound) {
+				// A STORE OUTAGE IS NOT A DELETED JOURNEY. Collapsing the two
+				// told the operator their definition was gone while the
+				// database was simply unreachable (§10); both backends return
+				// ErrNotFound for a cross-tenant id, so the 404 answer §3a
+				// wants is unchanged.
+				a.deps.Counters.QueryErrors.Add(1)
+				a.deps.WriteError(w, http.StatusBadGateway,
+					errors.New("the journey definition could not be read"))
+				return
+			}
 			http.NotFound(w, r) // cross-tenant id is indistinguishable from absent
 			return
 		}

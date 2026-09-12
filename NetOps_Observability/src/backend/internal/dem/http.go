@@ -334,6 +334,17 @@ func (a *API) HandleTargetItem(w http.ResponseWriter, r *http.Request) {
 		}
 		t, err := a.deps.Targets.Get(r.Context(), tenant, id)
 		if err != nil {
+			if !errors.Is(err, ErrNotFound) {
+				// Same split the PUT and DELETE arms below already make: a
+				// catalogue failure is a 502 with a counter and a log, never a
+				// silent 404 that reads as "somebody deleted this target".
+				a.deps.Counters.QueryErrors.Add(1)
+				a.deps.LogWarn("an experience target could not be read from the catalogue",
+					map[string]any{"err": err.Error()})
+				a.deps.WriteError(w, http.StatusBadGateway,
+					errors.New("the experience target could not be read"))
+				return
+			}
 			http.NotFound(w, r) // cross-tenant id is indistinguishable from absent
 			return
 		}
@@ -514,12 +525,35 @@ func (a *API) HandleExperience(w http.ResponseWriter, r *http.Request) {
 	resp.ScoredCount = scored
 	resp.Measured = scored > 0
 	if scored == 0 {
+		// A CATALOGUE THAT IS ENTIRELY PAUSED IS NOT A BROKEN PROBER. Saying
+		// no_prober here sent the operator to debug a prober that was doing
+		// exactly what it was told; ReasonPaused already exists and is what
+		// every row says.
 		resp.Reason, resp.Note = ReasonNoProber, noProberNote
+		if allPaused(targets) {
+			resp.Reason = ReasonPaused
+			resp.Note = "Every experience target for this tenant is paused, so nothing was measured. " +
+				"This is a setting, not a fault."
+		}
 	}
 	resp.Sites = rollupBy(window, "site", targets, resp.Targets, func(t Target) string { return t.Site })
 	resp.Apps = rollupBy(window, "app", targets, resp.Targets, func(t Target) string { return t.App })
 	a.deps.Counters.ScoresServed.Add(1)
 	a.deps.WriteJSON(w, http.StatusOK, resp)
+}
+
+// allPaused reports whether every declared target is paused. An EMPTY
+// catalogue is not "all paused" — that case is answered earlier, by name.
+func allPaused(targets []Target) bool {
+	if len(targets) == 0 {
+		return false
+	}
+	for _, t := range targets {
+		if !t.Paused {
+			return false
+		}
+	}
+	return true
 }
 
 // fillNotMeasured populates one honest row per target so the page can render

@@ -81,6 +81,25 @@ var metricHelp = [][2]string{
 	{"dem_experience_incidents_derived_total", "Experience incidents derived from evidence"},
 	{"dem_experience_ai_packets_built_total", "AI investigator evidence packets built"},
 	{"dem_experience_ai_packets_rejected_total", "AI investigator answers rejected for citing evidence that was not supplied"},
+	// The ingest lane and the promotion path. They were counted but never
+	// RENDERED — metricHelp named 9 of the 15 counters, so an ingest refusal,
+	// a rejection or a promotion error could not reach any surface at all.
+	{"dem_experience_events_ingested_total", "Experience events accepted from the ingest lane"},
+	{"dem_experience_business_ingested_total", "Business events accepted from the ingest lane"},
+	{"dem_experience_ingest_refused_total", "Experience events refused as backpressure (the producer may retry these)"},
+	{"dem_experience_ingest_rejected_total", "Experience events rejected as malformed (these will never arrive)"},
+	{"dem_experience_incidents_promoted_total", "Experience incidents promoted into the platform incident record"},
+	{"dem_experience_promotion_errors_total", "Experience incidents whose promotion into the platform incident record failed"},
+}
+
+// helpedMetrics is the set metricHelp documents. Exported for the guard test
+// that keeps a new counter from shipping unrendered.
+func helpedMetrics() []string {
+	out := make([]string, 0, len(metricHelp))
+	for _, h := range metricHelp {
+		out = append(out, h[0])
+	}
+	return out
 }
 
 // Write renders the block in Prometheus exposition format.

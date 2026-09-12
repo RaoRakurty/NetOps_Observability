@@ -393,6 +393,7 @@ func (q *Queue) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			q.discardQueued()
 			return
 		case b := <-q.ch:
 			q.mu.Lock()
@@ -403,6 +404,35 @@ func (q *Queue) Run(ctx context.Context) {
 			q.mu.Unlock()
 			q.metrics.QueueDepth.Store(int64(len(q.ch)))
 			q.publish(ctx, b)
+		}
+	}
+}
+
+// discardQueued empties the queue on shutdown and says so. The batches cannot
+// be published — the context that would carry them is already cancelled — so
+// they are DROPPED LOUDLY, counted on the same EventsDropped counter and logged
+// with their size, exactly as an exhausted publish is. Returning without this
+// discarded a tenant's beacons with no counter and no line anywhere (§10).
+func (q *Queue) discardQueued() {
+	events := 0
+	batches := 0
+	for {
+		select {
+		case b := <-q.ch:
+			events += b.events
+			batches++
+		default:
+			q.mu.Lock()
+			q.queuedEvents = 0
+			q.mu.Unlock()
+			q.metrics.QueueDepth.Store(0)
+			if events == 0 {
+				return
+			}
+			q.metrics.EventsDropped.Add(int64(events))
+			q.logWarn("experience events were still queued when the bus shut down and were dropped — those users' evidence is gone, not delayed",
+				map[string]any{"events": events, "batches": batches, "topic": q.topic})
+			return
 		}
 	}
 }

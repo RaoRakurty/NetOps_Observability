@@ -19,6 +19,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"hash/fnv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -40,6 +42,31 @@ func NewPGStore(db DB) *PGStore { return &PGStore{db: db} }
 
 // pgTimeout bounds every statement (§9: all IO has a timeout).
 const pgTimeout = 10 * time.Second
+
+// demCatalogueLockClass namespaces this module's advisory locks so they cannot
+// collide with another module's key. pg_advisory_xact_lock's two-int form takes
+// a class and a key; the key is a hash of the tenant.
+const demCatalogueLockClass = 43 // migration 0043 owns this table
+
+// lockTenantCatalogue takes the transaction-scoped advisory lock that serialises
+// this tenant's catalogue writes. It is released when the transaction ends —
+// committed or rolled back — so no unlock path can be forgotten.
+func lockTenantCatalogue(ctx context.Context, tx pgx.Tx, tenant string) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1::int, $2::int)`,
+		int32(demCatalogueLockClass), tenantLockKey(tenant))
+	if err != nil {
+		return fmt.Errorf("dem: the tenant catalogue lock could not be taken: %w", err)
+	}
+	return nil
+}
+
+// tenantLockKey folds a tenant id into the int32 an advisory-lock key is. A
+// collision between two tenants costs only serialisation, never correctness.
+func tenantLockKey(tenant string) int32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(tenant)) // hash.Hash never reports an error
+	return int32(h.Sum32())        //nolint:gosec // an advisory-lock key is an opaque bit pattern, not a number
+}
 
 func (s *PGStore) List(ctx context.Context, tenant string) ([]Target, error) {
 	t, err := concreteTenant(tenant)
@@ -155,8 +182,17 @@ func (s *PGStore) Create(ctx context.Context, in Target) (Target, error) {
 	ctx, cancel := context.WithTimeout(ctx, pgTimeout)
 	defer cancel()
 	err = s.db.WithTenant(ctx, in.TenantID, false, func(tx pgx.Tx) error {
-		// The per-tenant cap is enforced INSIDE the transaction, so two
-		// concurrent creates cannot both see room for the last slot.
+		// The per-tenant cap is enforced inside the transaction AND BEHIND A
+		// LOCK. Being inside the transaction is not enough on its own: at READ
+		// COMMITTED a bare `SELECT count(*)` takes no lock and sees no other
+		// transaction's uncommitted insert, so two concurrent creates could
+		// both count the last free slot and both take it. The advisory lock is
+		// held to the end of THIS transaction and is scoped to this tenant, so
+		// creates for one tenant serialise and creates for different tenants do
+		// not block each other.
+		if lerr := lockTenantCatalogue(ctx, tx, in.TenantID); lerr != nil {
+			return lerr
+		}
 		var n int
 		if cerr := tx.QueryRow(ctx, `SELECT count(*) FROM dem_targets`).Scan(&n); cerr != nil {
 			return cerr
