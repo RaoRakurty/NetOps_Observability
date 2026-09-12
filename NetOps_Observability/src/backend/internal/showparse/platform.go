@@ -315,13 +315,7 @@ func parseJunosUptime(lines []string) Result {
 		}
 		if ph.Uptime == nil && hasFold(t, "load averages") {
 			if v, ok := valueAfter(t, " up "); ok {
-				head, _, _ := strings.Cut(v, " users")
-				head = trim(strings.TrimSuffix(trim(head), ","))
-				// Drop the trailing user count that precedes " users".
-				if fs := fields(head); len(fs) > 1 {
-					head = trim(strings.TrimSuffix(strings.Join(fs[:len(fs)-1], " "), ","))
-				}
-				if head != "" {
+				if head := junosUptimeClause(v); head != "" {
 					ph.Uptime = strPtr(head)
 					found = true
 				}
@@ -333,4 +327,39 @@ func parseJunosUptime(lines []string) Result {
 	}
 	res.Platform = ph
 	return res
+}
+
+// junosUptimeClause extracts the ELAPSED-time clause from the Junos header line,
+// given everything that follows " up ". Junos prints FreeBSD's `w` header:
+//
+//	10:00AM  up 10 days,  2:31, 1 user, load averages: 0.10, 0.15, 0.20
+//	10:00AM  up 10 days,  2:31, 4 users, load averages: 0.10, 0.15, 0.20
+//
+// Two clauses have to come off: the load averages, and the session count between
+// them. The session count is where this used to go wrong. FreeBSD prints the
+// SINGULAR "1 user" whenever exactly one session is open — which on a collected
+// device is very often the collector's own — and a parser that cut on " users"
+// found no match on those lines and fell back to dropping the LAST whitespace
+// field, leaving "10 days, 2:31, 1 user, load averages: 0.10" in Uptime. Both
+// spellings are recognized here, and the count must be a number, so a line that
+// carries no session clause at all keeps the uptime it does have rather than
+// losing its last field to a guess.
+func junosUptimeClause(v string) string {
+	head := v
+	if i := asciiFoldIndex(head, "load average"); i >= 0 {
+		head = head[:i]
+	}
+	head = trim(strings.TrimSuffix(trim(head), ","))
+	// The uptime itself is comma-separated ("10 days, 2:31"), so only a TRAILING
+	// "<n> user" / "<n> users" clause is dropped.
+	if parts := strings.Split(head, ","); len(parts) > 1 {
+		if fs := fields(parts[len(parts)-1]); len(fs) == 2 && (fs[1] == "user" || fs[1] == "users") {
+			if _, ok := atoiOK(fs[0]); ok {
+				head = strings.Join(parts[:len(parts)-1], ",")
+			}
+		}
+	}
+	// Field-join so the device's own column padding ("10 days,  2:31") does not
+	// become part of the recorded value.
+	return strings.Join(fields(head), " ")
 }
