@@ -188,7 +188,7 @@ func (s *server) resolveGQLField(f gqlparse.Field, claims jwtClaims, vars map[st
 			return nil, err
 		}
 		// Same rule as the REST twin, by calling the same RESOLVED object.
-		// The bare alertVisible underneath it is tenancy only: it answers true
+		// The bare alertVisibleTenantOnly underneath it is tenancy only: it answers true
 		// for everything on the cross-tenant path, so a platform owner reading
 		// this field got a restricted tenant's incidents (and the device names in
 		// their summaries) that GET /api/alerts hides, and an ?as_tenant into a

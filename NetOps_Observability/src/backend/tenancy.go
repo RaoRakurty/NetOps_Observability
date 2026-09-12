@@ -599,17 +599,28 @@ func (s *server) visibleSiteFor(c jwtClaims, slug string) (Site, bool) {
 	return Site{}, false
 }
 
-// alertVisible is THE alert visibility rule. Every surface that shows alerts
-// asks this one function, so a fix here cannot be applied to some paths and
-// missed on others.
+// alertVisibleTenantOnly is HALF the alert visibility rule: TENANCY, and nothing
+// else. It is not a surface's answer and no surface may call it — call
+// alertVisibility.visible (or .filter), which is this rule PLUS the per-tenant
+// operator-visibility restriction (Tenant.OperatorRestricted).
 //
-// The platform owner sees all. A scoped principal sees alerts on its own
-// devices. A DEVICE-LESS alert is platform-global ONLY when nothing owns it:
-// the Digital Experience rules aggregate by target rather than device and carry
-// no `device` label, but they DO have an owner, and their summary carries that
-// tenant's target hostname, site and app. Treating "no device" as "everybody's"
-// handed one tenant's target names to every other tenant.
-func alertVisible(a models.Alert, tenant string, cross bool, ids map[string]bool) bool {
+// The name carries the warning because the omission is invisible at the call
+// site. This function answers TRUE FOR EVERYTHING on the cross-tenant path — the
+// platform owner may see every tenant — so a surface that asks it looks correct,
+// tests green on ordinary tenant isolation, and silently serves the one class of
+// tenant that has asked not to be readable by platform staff. Four surfaces made
+// exactly that mistake before it was sealed here (tracker 297):
+// /api/graphql, /api/topology/view, /api/search/global and the scheduled
+// reports, which DELIVERED it. TestAlertTenancyRuleIsNotCalledOutsideTheChokepoint
+// fails the build on a new direct caller.
+//
+// The rule itself: the platform owner sees all. A scoped principal sees alerts
+// on its own devices. A DEVICE-LESS alert is platform-global ONLY when nothing
+// owns it: the Digital Experience rules aggregate by target rather than device
+// and carry no `device` label, but they DO have an owner, and their summary
+// carries that tenant's target hostname, site and app. Treating "no device" as
+// "everybody's" handed one tenant's target names to every other tenant.
+func alertVisibleTenantOnly(a models.Alert, tenant string, cross bool, ids map[string]bool) bool {
 	if cross {
 		return true
 	}
@@ -699,7 +710,7 @@ func (v alertVisibility) filter(all []models.Alert) []models.Alert {
 
 // visible reports whether this principal may see one alert. The restriction is
 // applied BEFORE the ordinary tenant rule, so a hidden alert stays hidden even on
-// the cross-tenant path where alertVisible answers true for everything.
+// the cross-tenant path where alertVisibleTenantOnly answers true for everything.
 func (v alertVisibility) visible(a models.Alert) bool {
 	if v.deny {
 		return false
@@ -714,7 +725,7 @@ func (v alertVisibility) visible(a models.Alert) bool {
 			}
 		}
 	}
-	return alertVisible(a, v.tenant, v.cross, v.ids)
+	return alertVisibleTenantOnly(a, v.tenant, v.cross, v.ids)
 }
 
 // alertVisibleTo applies the resolved rule to a principal's claims. Used by the

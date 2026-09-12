@@ -54,7 +54,7 @@ func (s *server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		// Active alerts — the RESOLVED alertVisibility, the same object
-		// handleAlerts and the WebSocket feed apply. The raw alertVisible
+		// handleAlerts and the WebSocket feed apply. The raw alertVisibleTenantOnly
 		// underneath it answers true for everything on the cross-tenant path, so
 		// asking it directly surfaced a restricted tenant's incidents (and the
 		// device names in their summaries) in the omnibox.

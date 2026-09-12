@@ -46,7 +46,7 @@ func (s *server) handleMetricTiles(w http.ResponseWriter, r *http.Request) {
 // only thing left to guess. So the alert tile counts through the SAME resolved
 // rule GET /api/alerts and the WebSocket feed apply — alertVisibility, which
 // carries the operator-visibility restriction — and not through the raw
-// alertVisible underneath it, which answers true for everything on the
+// alertVisibleTenantOnly underneath it, which answers true for everything on the
 // cross-tenant path.
 //
 // The Devices and Sites tiles count the same way, and for the same reason. The

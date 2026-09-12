@@ -193,7 +193,7 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 	links := s.gatherTopoLinksFor(r.Context(), claims, devs)
 
 	// ── active alerts, scoped to devices the caller can see (same rule as /alerts) ──
-	// alertVisibilityFor, not the bare alertVisible: the nodes already drop a
+	// alertVisibilityFor, not the bare alertVisibleTenantOnly: the nodes already drop a
 	// restricted tenant's devices (visibleDevicesFor above), but the ALERT overlay
 	// carries its own disclosure — the rule that fired and a summary naming the
 	// device — and tenancy alone lets all of it through on the cross-tenant path.
