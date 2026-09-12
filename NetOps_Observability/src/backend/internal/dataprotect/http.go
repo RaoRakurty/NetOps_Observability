@@ -101,27 +101,35 @@ func (s *Service) HandleConfig(w http.ResponseWriter, r *http.Request) {
 			s.writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		// The snapshot-schedule intent is NOT client-settable: carry it forward
-		// from the stored config so a backup-destination edit can never clear
-		// (or forge) the record of who stopped the snapshot schedule and why.
-		prev := s.config()
-		clean.SnapshotScheduleDisabledAt = prev.SnapshotScheduleDisabledAt
-		clean.SnapshotScheduleDisabledBy = prev.SnapshotScheduleDisabledBy
-		clean.SnapshotScheduleDisabledReason = prev.SnapshotScheduleDisabledReason
-		clean.SnapshotPolicyWrittenAt = prev.SnapshotPolicyWrittenAt
-		// An OMITTED retain_count means "leave the stored retention alone", not
-		// "clear it" — the same shape as the empty-secret PUT elsewhere in the
-		// platform. A client that predates the field (or one that only wants to
-		// change the destination) must not be able to silently drop an
-		// operator's retention decision and hand the host applier back its own
-		// fallback. Clearing is not an operation: 0 is a choice, and setting the
-		// fallback explicitly is how you ask for the fallback.
-		if clean.RetainCount == nil {
-			clean.RetainCount = prev.RetainCount
-		}
+		// Carry-forward and write are ONE atomic read-modify-write (§9
+		// idempotent/consistent durable state): reading the stored config here
+		// and writing it back separately let a second platform admin's edit be
+		// overwritten on disk by this one's stale copy.
 		clean.UpdatedBy = caller.Subject
 		clean.UpdatedAt = s.now().UTC()
-		putErr := s.putConfig(clean)
+		_, putErr := s.updateConfig(func(prev *Config) error {
+			// The snapshot-schedule intent is NOT client-settable: carry it
+			// forward from the stored config so a backup-destination edit can
+			// never clear (or forge) the record of who stopped the snapshot
+			// schedule and why.
+			clean.SnapshotScheduleDisabledAt = prev.SnapshotScheduleDisabledAt
+			clean.SnapshotScheduleDisabledBy = prev.SnapshotScheduleDisabledBy
+			clean.SnapshotScheduleDisabledReason = prev.SnapshotScheduleDisabledReason
+			clean.SnapshotPolicyWrittenAt = prev.SnapshotPolicyWrittenAt
+			// An OMITTED retain_count means "leave the stored retention alone",
+			// not "clear it" — the same shape as the empty-secret PUT elsewhere
+			// in the platform. A client that predates the field (or one that
+			// only wants to change the destination) must not be able to
+			// silently drop an operator's retention decision and hand the host
+			// applier back its own fallback. Clearing is not an operation: 0 is
+			// a choice, and setting the fallback explicitly is how you ask for
+			// the fallback.
+			if clean.RetainCount == nil {
+				clean.RetainCount = prev.RetainCount
+			}
+			*prev = clean
+			return nil
+		})
 		// Audit BOTH outcomes (mirrors the snapshot-policy PUT): a platform-global
 		// backup-posture change — enable/disable, destination, retention — must be
 		// attributable, and a failed write that was never recorded is

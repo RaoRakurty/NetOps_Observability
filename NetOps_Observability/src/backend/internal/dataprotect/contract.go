@@ -92,8 +92,12 @@ type SnapshotView struct {
 	SizeBytes  *int64 `json:"size_bytes"`
 	SizeDetail string `json:"size_detail"`
 	// RestorableVerified is the probe verdict: true = a restore of this snapshot
-	// was actually performed and doc counts matched; false = a probe ran and did
-	// not match; nil = never probed. "Never probed" is NOT "fine".
+	// was actually performed and doc counts matched; false = a probe RAN and did
+	// not match; nil = UNPROVEN — either never probed, or probed and the probe
+	// could not be run to a comparison (RestorableDetail says which, and a
+	// could-not-run is retried). "Unproven" is NOT "fine", and a probe that
+	// never ran is deliberately NOT reported as a failed verification: the two
+	// send an operator down completely different roads.
 	RestorableVerified   *bool  `json:"restorable_verified"`
 	RestorableVerifiedAt string `json:"restorable_verified_at,omitempty"` // RFC3339 UTC
 	RestorableDetail     string `json:"restorable_detail"`

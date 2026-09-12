@@ -131,9 +131,16 @@ func (nopLogger) Error(string, string, map[string]any) {}
 // ConfigStore persists the platform's data-protection INTENT (a single global
 // row). Get must be safe to call on an empty store and return the zero Config,
 // which reads as "no intent recorded" — the shipped state of a fresh install.
+//
+// The only WRITE is Update, and that is deliberate: this row is edited by
+// read-modify-write (carry the schedule-stop record forward, stamp the policy
+// write, keep a retention the caller did not mention), and a plain Put let two
+// concurrent platform admins lose one of those edits on disk. An implementation
+// MUST apply mutate and persist the result as ONE atomic step, serialised
+// against every other Update, and must return the config as it now stands.
 type ConfigStore interface {
 	Get() Config
-	Put(Config) error
+	Update(mutate func(*Config) error) (Config, error)
 }
 
 // DeviceConfigFacts is everything the coverage table needs to say about the

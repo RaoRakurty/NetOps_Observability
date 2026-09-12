@@ -471,6 +471,15 @@ func isSnapshotNotFound(err error) bool {
 	return errors.As(err, &e)
 }
 
+// isOSNotFound reports whether err is a 404 FROM THE CLUSTER. It is the
+// difference between "the thing is not there" and "the call did not work", and
+// the probe's cleanup has to make exactly that distinction: deleting an index
+// the restore never created is a no-op, not a leak.
+func isOSNotFound(err error) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.Status == http.StatusNotFound
+}
+
 var (
 	errBadSnapshotName  = jsonError("snapshot must match ^[a-z0-9][a-z0-9._:-]{0,127}$ — no slashes, no path segments, no wildcards")
 	errBadRestorePrefix = jsonError("rename_prefix must match ^restored-[a-z0-9-]{0,24}$ — restores are confined to the restored-* namespace")
@@ -480,11 +489,58 @@ var (
 // ── the persisted probe verdict ─────────────────────────────────────────────
 
 // snapshotVerdict is one probe outcome, keyed by snapshot name.
+//
+// THE DISTINCTION THIS TYPE HAS TO CARRY (and did not, until 2026-09-12): a
+// probe that RAN and did not verify is a durable NEGATIVE verdict — it is
+// evidence, it is the 2026-08-27 shape, and re-running it nightly buys nothing.
+// A probe that COULD NOT RUN (the inventory call timed out, the cluster was
+// restarting) is not evidence about anything. Recording the second as the first
+// told the coverage view a verify had failed that had never happened, stamped
+// the "verdict at" timestamp the vmalert rule reads as "the probe ran and the
+// restore FAILED", and — because ProbeTick skips any snapshot it already has a
+// record for — guaranteed the snapshot was never probed again.
 type snapshotVerdict struct {
 	Verified bool      `json:"verified"`
 	At       time.Time `json:"at"`
 	Detail   string    `json:"detail"`
+	// Inconclusive marks a record that is an ATTEMPT, not a verdict: the probe
+	// could not be run to a comparison. Absent in files written before this
+	// field existed, which decode as false — i.e. as the real verdicts they are.
+	Inconclusive bool `json:"inconclusive,omitempty"`
+	// Attempts is how many consecutive times the probe could not be run for
+	// this snapshot. It bounds the retry so a permanently broken repository
+	// cannot spin (§9 bounded everything).
+	Attempts int `json:"attempts,omitempty"`
 }
+
+// proven reports whether this record is evidence that the snapshot restores.
+// An inconclusive attempt is NEVER proven — default-closed.
+func (v snapshotVerdict) proven() bool { return v.Verified && !v.Inconclusive }
+
+// verdictAt is when the probe last produced an actual VERDICT, which is what
+// netops_opensearch_snapshot_restorable_verified_timestamp_seconds means and
+// what the OpenSearchSnapshotNotRestorable rule's description promises: a
+// non-zero value says the probe RAN and the restore failed. An attempt that
+// never ran must therefore leave it at zero.
+func (v snapshotVerdict) verdictAt() time.Time {
+	if v.Inconclusive {
+		return time.Time{}
+	}
+	return v.At
+}
+
+// maxProbeAttempts bounds the consecutive could-not-run retries for ONE
+// snapshot. Three is a deliberate compromise: enough to ride out a restart or a
+// rolling deploy on the 10-minute tick, few enough that a repository which
+// refuses every restore does not re-attempt one forever. When it is reached the
+// snapshot is left recorded as unproven-and-unprobeable, which is what the
+// metric already reports as 0 — the alert stays lit either way.
+const maxProbeAttempts = 3
+
+// probeActor is the Operation.Actor for a SCHEDULED probe. Deliberately not a
+// subject shape: an operation the worker started must never read in the
+// operations list as if a human asked for it.
+const probeActor = "system:snapshot-probe"
 
 // verdictStore persists probe verdicts next to the backup intent. It is a
 // VALUE field on *Service: zero value usable, no package-level state, and the
@@ -649,17 +705,27 @@ func (s *Service) RunRestorabilityProbe(ctx context.Context, snapshot string, pr
 	// is disposable by construction, but leaving one behind would grow the
 	// cluster silently, so the delete is unconditional and its failure is
 	// reported rather than dropped.
+	//
+	// A 404 is NOT a failure. It is the COMMONEST path through here: the restore
+	// failed (or never ran), so the temp index was never created and OpenSearch
+	// answers "index_not_found_exception". Reporting that as a leaked index
+	// tainted the verdict detail of every failed probe and logged an ERROR about
+	// a leak that does not exist — a false alarm on the exact surface whose
+	// whole job is to be believed. Nothing left behind is nothing to clean up;
+	// any OTHER failure stays loud.
 	defer func() {
-		if err := s.osDo(context.WithoutCancel(ctx), http.MethodDelete, "/"+temp,
-			nil, nil, 60*time.Second); err != nil {
+		err := s.osDo(context.WithoutCancel(ctx), http.MethodDelete, "/"+temp,
+			nil, nil, 60*time.Second)
+		switch {
+		case err == nil, isOSNotFound(err):
+			res.TempDeleted = true
+		default:
 			res.TempDeleted = false
 			res.Detail = strings.TrimSpace(res.Detail + " temp index " + temp +
 				" could NOT be deleted: " + err.Error())
 			s.deps.Log.Error("backup.probe", "restorability probe could not delete its temporary index",
 				map[string]any{"index": temp, "error": err.Error()})
-			return
 		}
-		res.TempDeleted = true
 	}()
 
 	// 3. Restore it renamed.
@@ -777,20 +843,29 @@ func (s *Service) smallestIndexBySnapshotSize(ctx context.Context, doc osSnapsho
 // halves matter: the file is what the LIST view reads, the cache is what
 // /metrics (and therefore the vmalert rule) reads.
 func (s *Service) recordProbeVerdict(res VerifyResult, runErr error) {
-	detail := res.Detail
-	if runErr != nil {
-		detail = strings.TrimSpace("probe failed: " + runErr.Error() + " " + detail)
-	}
-	verdict := snapshotVerdict{Verified: runErr == nil && res.Match, At: s.now().UTC(), Detail: detail}
 	name := res.Snapshot
 	if name == "" {
 		return // nothing to key on; the operation's own Error already carries the failure
+	}
+	verdict := snapshotVerdict{Verified: runErr == nil && res.Match, At: s.now().UTC(), Detail: res.Detail}
+	if runErr != nil {
+		// The probe did not reach a comparison, so this is an ATTEMPT, not a
+		// verdict: it is retried (bounded) and it must not render as a failed
+		// verify anywhere. Attempts accumulate across runs so the retry is
+		// bounded even though each run knows nothing about the last.
+		attempts := s.verdicts.all()[name].Attempts + 1
+		verdict = snapshotVerdict{
+			At: s.now().UTC(), Inconclusive: true, Attempts: attempts,
+			Detail: strings.TrimSpace("the restorability probe could NOT be run (attempt " +
+				strconv.Itoa(attempts) + " of " + strconv.Itoa(maxProbeAttempts) + "): " +
+				runErr.Error() + " " + res.Detail),
+		}
 	}
 	if err := s.verdicts.record(name, verdict); err != nil {
 		s.deps.Log.Error("backup.probe", "could not persist the restorability verdict — the next read will report never-probed",
 			map[string]any{"snapshot": name, "error": err.Error()})
 	}
-	s.metrics.setVerdict(verdict.Verified, verdict.At)
+	s.metrics.setVerdict(verdict.proven(), verdict.verdictAt())
 }
 
 // ── the nightly worker ──────────────────────────────────────────────────────
@@ -852,38 +927,107 @@ func (s *Service) ProbeTick(ctx context.Context, interval time.Duration, lastPro
 	// OLDER snapshot is not evidence about this one: the metric must fall back
 	// to 0 (not proven) the moment a new, unprobed snapshot becomes the newest.
 	verdicts := s.verdicts.all()
-	if ok {
-		if v, seen := verdicts[newest.Snapshot]; seen {
-			s.metrics.setVerdict(v.Verified, v.At)
-		} else {
-			s.metrics.setVerdict(false, time.Time{})
-		}
+	prev, seen := verdicts[newest.Snapshot]
+	if ok && seen {
+		s.metrics.setVerdict(prev.proven(), prev.verdictAt())
 	} else {
 		s.metrics.setVerdict(false, time.Time{})
 	}
 	if !s.deps.ProbeEnabled || !ok {
 		return
 	}
-	if _, seen := verdicts[newest.Snapshot]; seen {
-		return // already proven (or disproven) — probing it again nightly buys nothing
-	}
-	if !lastProbe.IsZero() && s.now().Sub(*lastProbe) < interval {
+	// WHAT MAY BE SKIPPED, and what may not. A real verdict — proven or
+	// disproven — is evidence, and re-running the probe against it nightly buys
+	// nothing. An INCONCLUSIVE record is not evidence: the probe could not run,
+	// so it is retried on the next tick (10 minutes, not the 24-hour interval —
+	// a transient failure must not cost a day of coverage) until the attempt
+	// budget is spent.
+	if seen && !prev.Inconclusive {
 		return
+	}
+	if seen && prev.Attempts >= maxProbeAttempts {
+		return // bounded: a repository that refuses every restore must not spin
+	}
+	// The interval gate spaces out FIRST attempts only; a retry of a probe that
+	// never ran is not a second probe of the same snapshot.
+	if !seen && !lastProbe.IsZero() && s.now().Sub(*lastProbe) < interval {
+		return
+	}
+	if !s.runScheduledProbe(ctx, newest.Snapshot) {
+		return // the operation slot is held by an operator action — skipped, not queued
 	}
 	*lastProbe = s.now()
+}
+
+// runScheduledProbe runs ONE scheduled probe THROUGH the single operation slot,
+// and reports whether it actually ran.
+//
+// It takes the slot for two reasons (2026-09-12). First, correctness: create,
+// restore, verify and delete serialise through that slot precisely so two
+// writers can never race the same repository, and a probe that called
+// RunRestorabilityProbe directly was the one writer exempt from that rule — a
+// nightly probe could collide with an operator's delete of the very snapshot it
+// was restoring. Second, honesty: an operation that does not appear in GET
+// /operations is a restore of a real index into a real cluster that nobody can
+// see, which is exactly the invisibility this module exists to end.
+//
+// A busy slot means an OPERATOR is doing something. The probe SKIPS the tick
+// and says so: it is a background nicety and must never queue behind, or delay,
+// a human action.
+func (s *Service) runScheduledProbe(ctx context.Context, snapshot string) bool {
+	op, conflict, ok := s.ops.begin(OpKindSnapshotVerify, probeActor, OperationTarget{Snapshot: snapshot})
+	if !ok {
+		s.deps.Log.Info("backup.probe", "scheduled restorability probe SKIPPED — another snapshot operation holds the single operation slot",
+			map[string]any{"snapshot": snapshot, "conflict_operation": conflict})
+		return false
+	}
 	pctx, cancel := context.WithTimeout(ctx, snapshotVerifyTimeout)
 	defer cancel()
-	res, probeErr := s.RunRestorabilityProbe(pctx, newest.Snapshot, func(string) {})
+	var (
+		res      VerifyResult
+		probeErr error
+	)
+	// The probe body is wrapped exactly the way runOperation wraps an
+	// operator-initiated one: a panic here must end the operation `failed` and
+	// RELEASE the slot, never wedge the surface (§10).
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				probeErr = fmt.Errorf("scheduled restorability probe panicked: %v", rec)
+				s.deps.Log.Error("backup.probe", "scheduled restorability probe panicked",
+					map[string]any{"operation": op.ID, "panic": fmt.Sprint(rec)})
+			}
+		}()
+		res, probeErr = s.RunRestorabilityProbe(pctx, snapshot, func(msg string) {
+			s.ops.update(op.ID, func(o *Operation) { o.Progress = msg })
+		})
+	}()
 	s.recordProbeVerdict(res, probeErr)
+	verdict := res
+	s.ops.finish(op.ID, func(o *Operation) {
+		o.Verify = &verdict
+		if o.Target.Snapshot == "" {
+			o.Target.Snapshot = res.Snapshot
+		}
+		switch {
+		case probeErr != nil:
+			o.State, o.Error = OpStateFailed, probeErr.Error()
+		case !res.Match:
+			o.State, o.Error = OpStateFailed, "restorability probe did NOT match: "+res.Detail
+		default:
+			o.State = OpStateSucceeded
+		}
+	})
 	if probeErr != nil {
-		s.deps.Log.Error("backup.probe", "scheduled restorability probe FAILED — the newest snapshot is not proven restorable",
-			map[string]any{"snapshot": newest.Snapshot, "error": probeErr.Error()})
-		return
+		s.deps.Log.Error("backup.probe", "scheduled restorability probe could not be run — the newest snapshot is not proven restorable, and it will be retried",
+			map[string]any{"snapshot": snapshot, "operation": op.ID, "error": probeErr.Error()})
+		return true
 	}
 	s.deps.Log.Info("backup.probe", "restorability probe completed", map[string]any{
-		"snapshot": res.Snapshot, "index": res.Index, "match": res.Match,
+		"snapshot": res.Snapshot, "operation": op.ID, "index": res.Index, "match": res.Match,
 		"source_docs": res.SourceDocs, "restored_docs": res.RestoredDocs,
 	})
+	return true
 }
 
 // snapshotProbeJitter is a few minutes of crypto/rand start delay. math/rand is
@@ -961,7 +1105,21 @@ func (s *Service) snapshotViewOf(ctx context.Context, d osSnapshotDoc, verdicts 
 			v.SizeDetail = "size unreadable: " + err.Error()
 		}
 	}
-	if rec, ok := verdicts[d.Snapshot]; ok {
+	switch rec, ok := verdicts[d.Snapshot]; {
+	case ok && rec.Inconclusive:
+		// The probe COULD NOT RUN. That is not a failed verify, and rendering it
+		// as one (restorable_verified=false) reported a verification that never
+		// happened. It stays NULL — unproven, exactly like never-probed, which
+		// is what it is — and the detail says what stopped it and when it was
+		// last attempted.
+		v.RestorableVerified = nil
+		v.RestorableDetail = rec.Detail
+		if v.RestorableDetail == "" {
+			v.RestorableDetail = "the restorability probe could not be run, and recorded no reason"
+		}
+		v.RestorableDetail += " — last attempted " + rec.At.UTC().Format(time.RFC3339) +
+			". This is NOT a failed verification: no restore was ever compared."
+	case ok:
 		verified := rec.Verified
 		v.RestorableVerified = &verified
 		v.RestorableVerifiedAt = rec.At.UTC().Format(time.RFC3339)
@@ -969,7 +1127,7 @@ func (s *Service) snapshotViewOf(ctx context.Context, d osSnapshotDoc, verdicts 
 		if v.RestorableDetail == "" {
 			v.RestorableDetail = "probe recorded no detail"
 		}
-	} else {
+	default:
 		v.RestorableDetail = SnapshotNeverProbedDetail
 	}
 	return v
