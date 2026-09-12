@@ -104,17 +104,11 @@ func WriteBundleTar(w io.Writer, dirs []string, limit int64) (string, error) {
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			// #nosec G304 -- dir came from ListSessions / a validated session id
-			// under the operator's own debug root; name is a directory entry
-			// this loop just read, never caller input.
-			data, err := os.ReadFile(filepath.Join(dir, name))
+			data, err := readMember(filepath.Join(dir, name), limit, total)
 			if err != nil {
 				return "", err
 			}
 			total += int64(len(data))
-			if limit > 0 && total > limit {
-				return "", ErrBundleTooLarge{Bytes: total, Limit: limit}
-			}
 			member := filepath.Join(base, name)
 			if err := writeTarBytes(tw, member, data); err != nil {
 				return "", err
@@ -129,6 +123,51 @@ func WriteBundleTar(w io.Writer, dirs []string, limit int64) (string, error) {
 		return "", err
 	}
 	return sums.String(), nil
+}
+
+// readMember reads ONE bundle member, refusing it on its own SIZE — taken from
+// the file's stat, before a single byte is allocated — when it would not fit in
+// what is left of the budget.
+//
+// The bound used to be checked AFTER os.ReadFile had already pulled the whole
+// member into memory, which meant the 32 MiB in-memory limit could not stop the
+// thing it exists to stop: one oversized file under the (host-mountable) debug
+// root was read in full into a 512 MiB api container and only then refused, so
+// the refusal arrived after the allocation that would have killed the process.
+// `used` is the total already accepted for this bundle; `limit` 0 means
+// unbounded (the CLI's on-disk path, which streams to a file it owns).
+func readMember(path string, limit, used int64) ([]byte, error) {
+	// #nosec G304 -- path is <session dir>/<dirent name>: the dir came from
+	// ListSessions / a validated session id under the operator's own debug
+	// root, and the name is a directory entry the caller just read, never
+	// caller input.
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }() // read-only handle; a close error tells us nothing actionable
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		return io.ReadAll(f)
+	}
+	remaining := limit - used
+	if info.Size() > remaining {
+		return nil, ErrBundleTooLarge{Bytes: used + info.Size(), Limit: limit}
+	}
+	// A session file can be APPENDED to between the stat and the read (a live
+	// session is still being written), so the read itself is bounded too:
+	// remaining+1 is enough to detect the overrun without honouring it.
+	data, err := io.ReadAll(io.LimitReader(f, remaining+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > remaining {
+		return nil, ErrBundleTooLarge{Bytes: used + int64(len(data)), Limit: limit}
+	}
+	return data, nil
 }
 
 func writeTarBytes(tw *tar.Writer, name string, data []byte) error {
