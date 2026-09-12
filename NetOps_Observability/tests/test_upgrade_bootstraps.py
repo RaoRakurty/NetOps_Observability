@@ -207,9 +207,22 @@ def api_read_patterns() -> set[str]:
     # broke this derivation once; a call like `return IndexBase(sig)` is not a
     # base and is deliberately excluded by requiring no opening paren.
     for const in set(re.findall(r'return (\w*IndexBase)(?!\s*\()\b', oslog)):
-        assert re.search(r'^const %s\s*=\s*"netops-' % re.escape(const),
-                         oslog, re.MULTILINE), \
-            f"IndexBase returns {const} but no const of that name declares a netops- base here"
+        decl = re.search(r'^const %s\s*=\s*"([^"]*)"' % re.escape(const),
+                         oslog, re.MULTILINE)
+        assert decl, \
+            f"IndexBase returns {const} but no const of that name is declared here"
+        # The catch-all is the one legitimate non-family answer: IndexBase
+        # returns it for a signal it does not recognise, and it is deliberately
+        # NOT a readable family — `netops` glob-expands onto every index this
+        # stack writes. It used to be a bare literal and was discarded above by
+        # value; H9 promoted it to a named constant so the log-search chokepoint
+        # could refuse by base, which is why it now arrives here instead.
+        # Excluded by VALUE, not by name, so a real family constant that simply
+        # forgets its hyphen still fails.
+        if decl.group(1) == "netops":
+            continue
+        assert decl.group(1).startswith("netops-"), \
+            f"IndexBase returns {const} = {decl.group(1)!r}, which is neither a netops- base nor the catch-all"
     prefix = re.search(r'quarantineIndexPrefix\s*=\s*"(netops-[a-z]+-)"',
                        QUARANTINE.read_text())
     assert prefix, "quarantineIndexPrefix not found — the derivation is stale"
