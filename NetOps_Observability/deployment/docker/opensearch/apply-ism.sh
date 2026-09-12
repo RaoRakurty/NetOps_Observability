@@ -42,6 +42,89 @@ echo "ism: waiting for OpenSearch at $OS_REDACTED ..."
 until curl -sf "$OS/_cluster/health" >/dev/null 2>&1; do sleep 5; done
 
 # ---------------------------------------------------------------------------
+# os_curl — every CAPTURED curl call in this file goes through this (H-3.8-09).
+#
+# `set -e` plus a BARE `VAR=$(curl ...)` is a trap. On a TRANSPORT fault
+# (connection refused, DNS failure, timeout — curl exits 6/7/28, not 0) the
+# assignment inherits curl's non-zero status and `set -e` ABORTS THE SCRIPT
+# right there. The `case "$VAR" in ... *) echo WARNING ...` block written
+# directly beneath each of those assignments IS the error handling, and it can
+# never run: the author wrote a fallback and `set -e` deleted it. Everything
+# after the first unreachable call — quarantine retention, the snapshot
+# repository, the SM policy, the coverage report — is skipped as well.
+#
+# This does NOT swallow the error (§16.1, the cardinal rule). The transport
+# failure is NAMED on stderr with curl's exit code and curl's own message, and
+# the caller is handed an EMPTY body, which is exactly what its existing
+# fallback arm is written to report. The URL is redacted the same way
+# OS_REDACTED is: OPENSEARCH_URL carries the bootstrap credential as userinfo.
+# ---------------------------------------------------------------------------
+os_curl() {  # os_curl <curl args...> — reply on stdout; never aborts the script
+  _oc_rc=0
+  _oc_out=$(curl "$@" 2>&1) || _oc_rc=$?
+  if [ "$_oc_rc" -ne 0 ]; then
+    _oc_what=$(printf '%s' "$*" | sed 's#//[^@/ ]*@#//<redacted>@#g')
+    echo "ism: ERROR curl exited $_oc_rc (transport failure, no reply) for: curl $_oc_what" >&2
+    if [ -n "$_oc_out" ]; then
+      echo "ism:       curl said: $(printf '%s' "$_oc_out" | tr '\n' ' ')" >&2
+    fi
+    echo "ism:       -> continuing so the remaining bootstrap steps still run; the step" >&2
+    echo "ism:       that made this call reports its own failure below." >&2
+    return 0
+  fi
+  printf '%s' "$_oc_out"
+}
+
+# norm_path — compare filesystem locations as PATHS, not as strings.
+# `/usr/share/opensearch/snapshots/` and `/usr/share/opensearch//snapshots`
+# name the SAME blob tree, and OpenSearch resolves them to the same tree, so a
+# plain string compare lets a second repository name in through a trailing
+# slash. Collapses repeated slashes and `/./`, drops trailing slashes.
+norm_path() {
+  _np=$(printf '%s' "${1:-}" | sed -e 's#/\./#/#g' -e 's#//*#/#g' -e 's#/*$##')
+  case "${1:-}" in
+    /*) [ -n "$_np" ] || _np=/ ;;
+  esac
+  printf '%s' "$_np"
+}
+
+# repos_at_location <all-repos-json> <location> <own-name>
+#
+# The repository NAMES in `GET _snapshot/_all` whose location resolves to the
+# SAME blob tree as <location>, excluding <own-name>. Two names over one tree
+# is the documented OpenSearch corruption hazard (two independent deleters,
+# one set of blobs), so this is the guard both registrations below consult.
+#
+# Locations are compared as normalised PATHS, never as raw strings: OpenSearch
+# resolves `/usr/share/opensearch/snapshots/` and `/usr/share/opensearch/
+# snapshots` to one tree, so a trailing slash walked straight past the old
+# exact-string compare and handed the snapshot store a second writer.
+#
+# No jq/python in this image (curlimages/curl): split the flat object into one
+# line per repository (`}},"` is the entry boundary in OpenSearch's compact
+# reply), then read name + location off each line.
+repos_at_location() {
+  _rl_want=$(norm_path "$2")
+  _rl_self="$3"
+  _rl_tab=$(printf '\t')
+  printf '%s' "${1:-}" |
+    sed -e 's/^{//' -e 's/}},"/}}\
+"/g' |
+    sed -n "s/^\"\([^\"]*\)\".*\"location\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1${_rl_tab}\2/p" |
+    # `|| [ -n ... ]`: OpenSearch's reply has no trailing newline, so the LAST
+    # repository arrives as a partial line that plain `read` reports as EOF —
+    # which silently dropped the very entry a conflict is most likely to be in.
+    while IFS="$_rl_tab" read -r _rl_name _rl_loc || [ -n "${_rl_name:-}" ]; do
+      if [ -z "$_rl_name" ] || [ "$_rl_name" = "$_rl_self" ]; then
+        continue
+      fi
+      if [ "$(norm_path "$_rl_loc")" = "$_rl_want" ]; then
+        printf '%s ' "$_rl_name"
+      fi
+    done
+}
+
+# ---------------------------------------------------------------------------
 # F-54: single-node shard hygiene, applied BEFORE the retention policy so the
 # history indices this very plugin creates are born with 0 replicas.
 #
@@ -78,7 +161,7 @@ curl -s -X PUT "$OS/_cluster/settings" -H 'Content-Type: application/json' -d '{
 # cluster for replicas is how F-53 happened (an UNASSIGNED replica that can
 # never be assigned, a permanently yellow cluster, and "yellow" destroyed as an
 # alarm signal). Refuse the impossible value LOUDLY instead of half-applying it.
-DATA_NODES=$(curl -s "$OS/_cluster/health" 2>/dev/null |
+DATA_NODES=$(os_curl -s "$OS/_cluster/health" |
   sed -n 's/.*"number_of_data_nodes"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
 DATA_NODES="${DATA_NODES:-1}"
 if [ "$REPLICAS" -gt 0 ] && [ "$REPLICAS" -ge "$DATA_NODES" ]; then
@@ -126,7 +209,7 @@ curl -sf -X PUT "$OS/security-auditlog-*/_settings" \
 # doesn't have to win a daily race against the roll. Checked, not swallowed:
 # if this PUT fails, every day re-yellows the cluster and yellow stops meaning
 # anything (F-54).
-TPL_RESP=$(curl -s -X PUT "$OS/_index_template/security-auditlog" \
+TPL_RESP=$(os_curl -s -X PUT "$OS/_index_template/security-auditlog" \
   -H 'Content-Type: application/json' -d @- <<JSON
 {
   "index_patterns": ["security-auditlog-*"],
@@ -148,9 +231,9 @@ echo "ism: installing retention policy (delete after ${DAYS}d) ..."
 # could stay stuck at 3 lanes while this file said 6 — the classic "the fix is
 # in the repo but not in the system" shape (cf. F-51). An UPDATE requires the
 # current seq_no/primary_term, so read them first and pass them through.
-SEQ=$(curl -s "$OS/_plugins/_ism/policies/netops-retention" 2>/dev/null |
+SEQ=$(os_curl -s "$OS/_plugins/_ism/policies/netops-retention" |
       sed -n 's/.*"_seq_no"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
-PTERM=$(curl -s "$OS/_plugins/_ism/policies/netops-retention" 2>/dev/null |
+PTERM=$(os_curl -s "$OS/_plugins/_ism/policies/netops-retention" |
       sed -n 's/.*"_primary_term"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
 if [ -n "${SEQ:-}" ] && [ -n "${PTERM:-}" ]; then
   PUT_URL="$OS/_plugins/_ism/policies/netops-retention?if_seq_no=${SEQ}&if_primary_term=${PTERM}"
@@ -159,7 +242,7 @@ else
   PUT_URL="$OS/_plugins/_ism/policies/netops-retention"
 fi
 
-POLICY_RESP=$(curl -s -X PUT "$PUT_URL" \
+POLICY_RESP=$(os_curl -s -X PUT "$PUT_URL" \
   -H 'Content-Type: application/json' -d @- <<JSON
 {
   "policy": {
@@ -195,9 +278,9 @@ echo "ism: retention policy applied — netops-* indices delete after ${DAYS}d."
 # a bare PUT on an existing policy 409s and silently keeps the OLD window.
 QDAYS="${QUARANTINE_RETENTION_DAYS:-30}"
 echo "ism: installing quarantine retention policy (delete after ${QDAYS}d) ..."
-QSEQ=$(curl -s "$OS/_plugins/_ism/policies/netops-quarantine-retention" 2>/dev/null |
+QSEQ=$(os_curl -s "$OS/_plugins/_ism/policies/netops-quarantine-retention" |
       sed -n 's/.*"_seq_no"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
-QPTERM=$(curl -s "$OS/_plugins/_ism/policies/netops-quarantine-retention" 2>/dev/null |
+QPTERM=$(os_curl -s "$OS/_plugins/_ism/policies/netops-quarantine-retention" |
       sed -n 's/.*"_primary_term"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
 if [ -n "${QSEQ:-}" ] && [ -n "${QPTERM:-}" ]; then
   QPUT_URL="$OS/_plugins/_ism/policies/netops-quarantine-retention?if_seq_no=${QSEQ}&if_primary_term=${QPTERM}"
@@ -205,7 +288,7 @@ if [ -n "${QSEQ:-}" ] && [ -n "${QPTERM:-}" ]; then
 else
   QPUT_URL="$OS/_plugins/_ism/policies/netops-quarantine-retention"
 fi
-QPOLICY_RESP=$(curl -s -X PUT "$QPUT_URL" \
+QPOLICY_RESP=$(os_curl -s -X PUT "$QPUT_URL" \
   -H 'Content-Type: application/json' -d @- <<JSON
 {
   "policy": {
@@ -271,7 +354,7 @@ if [ "${SNAP_KEEP:-14}" -gt 0 ]; then
   # one who has two writers quietly eating each other's blobs.
   # -------------------------------------------------------------------------
   REPO_GUARD_OK=1
-  ALL_REPOS=$(curl -s -m 10 "$OS/_snapshot/_all" 2>/dev/null)
+  ALL_REPOS=$(os_curl -s -m 10 "$OS/_snapshot/_all")
   if [ -z "${ALL_REPOS:-}" ]; then
     # §16.1: an unreadable guard is NOT a passed guard — name it. We still
     # register, because refusing on an unproven conflict would leave a fresh
@@ -280,15 +363,7 @@ if [ "${SNAP_KEEP:-14}" -gt 0 ]; then
     echo "ism:         Registering netops-fs anyway. If another repository name already points at" >&2
     echo "ism:         $REPO_LOCATION, the two will corrupt each other's blob tree." >&2
   else
-    # No jq/python in this image (curlimages/curl): split the flat object into
-    # one line per repository, keep the ones whose location is ours, drop our
-    # own name. `}},"` is the entry boundary in OpenSearch's compact reply.
-    REPO_CONFLICT=$(printf '%s' "$ALL_REPOS" |
-      sed -e 's/^{//' -e 's/}},"/}}\
-"/g' |
-      grep -E "\"location\"[[:space:]]*:[[:space:]]*\"$REPO_LOCATION\"" |
-      sed -n 's/^"\([^"]*\)".*/\1/p' |
-      grep -v '^netops-fs$' | tr '\n' ' ')
+    REPO_CONFLICT=$(repos_at_location "$ALL_REPOS" "$REPO_LOCATION" netops-fs)
     if [ -n "${REPO_CONFLICT% }" ]; then
       REPO_GUARD_OK=0
       echo "ism: REFUSING to register netops-fs — repository name(s) [ ${REPO_CONFLICT}] already point at" >&2
@@ -304,7 +379,7 @@ if [ "${SNAP_KEEP:-14}" -gt 0 ]; then
 
   if [ "$REPO_GUARD_OK" = 1 ]; then
   echo "ism: registering snapshot repository netops-fs ..."
-  REPO_RESP=$(curl -s -X PUT "$OS/_snapshot/netops-fs" \
+  REPO_RESP=$(os_curl -s -X PUT "$OS/_snapshot/netops-fs" \
     -H 'Content-Type: application/json' \
     -d "{\"type\":\"fs\",\"settings\":{\"location\":\"$REPO_LOCATION\",\"compress\":true}}")
   # WHERE THE "DO NOT DELETE" NOTICE LIVES, and why it is not written here.
@@ -368,14 +443,42 @@ if [ "${SNAP_KEEP:-14}" -gt 0 ]; then
     echo "ism:         OPENSEARCH_SNAPSHOT_REPO2_LOCATION is not — a repository cannot be" >&2
     echo "ism:         registered without a location. The second repository was NOT created," >&2
     echo "ism:         so every restore point still shares one disk." >&2
-  elif [ -n "$REPO2_NAME" ] && [ "$REPO2_LOCATION" = "$REPO_LOCATION" ]; then
-    echo "ism: REFUSING to register $REPO2_NAME — its location is the SAME path netops-fs" >&2
-    echo "ism:         uses ($REPO_LOCATION). Two repository names over one blob tree is the" >&2
-    echo "ism:         documented OpenSearch corruption hazard, and it is not off-host DR:" >&2
-    echo "ism:         point OPENSEARCH_SNAPSHOT_REPO2_LOCATION at a SEPARATELY MOUNTED path." >&2
   elif [ -n "$REPO2_NAME" ]; then
+    # SINGLE-WRITER GUARD, the same one netops-fs gets (H-3.8-11, 2026-09-12).
+    #
+    # This used to be ONE exact string compare against ONE hard-coded path
+    # ($REPO_LOCATION), which meant:
+    #   * a trailing slash (or a doubled one) defeated it outright — OpenSearch
+    #     resolves `/usr/share/opensearch/snapshots/` and the unslashed form to
+    #     ONE blob tree, so the compare said "different" about the same store;
+    #   * it never consulted the repository listing it had ALREADY FETCHED, so
+    #     a THIRD name (say a hand-registered `legacy-fs`) sitting on the very
+    #     path REPO2 is being pointed at sailed straight through.
+    # Either one gives the snapshot store two writers: two retention passes
+    # deleting each other's blobs, ending in snapshots whose shards are gone
+    # while the repository still reads healthy. That is data durability, so the
+    # guard now normalises the path and checks it against EVERY repository.
+    REPO2_CONFLICT=$(repos_at_location "${ALL_REPOS:-}" "$REPO2_LOCATION" "$REPO2_NAME")
+    # netops-fs may have been registered by the block just above and therefore
+    # be absent from the listing we read before it — compare it directly too.
+    if [ "$(norm_path "$REPO2_LOCATION")" = "$(norm_path "$REPO_LOCATION")" ]; then
+      REPO2_CONFLICT="netops-fs $REPO2_CONFLICT"
+    fi
+    if [ -n "${REPO2_CONFLICT% }" ]; then
+    echo "ism: REFUSING to register $REPO2_NAME — repository name(s) [ ${REPO2_CONFLICT}] already" >&2
+    echo "ism:         point at the same blob tree ($REPO2_LOCATION). Two repository names over one" >&2
+    echo "ism:         tree is the documented OpenSearch corruption hazard, and it is not off-host" >&2
+    echo "ism:         DR: point OPENSEARCH_SNAPSHOT_REPO2_LOCATION at a SEPARATELY MOUNTED path." >&2
+    echo "ism:         (Paths are compared as resolved paths, so a trailing slash is the same path.)" >&2
+    else
+    if [ -z "${ALL_REPOS:-}" ]; then
+      # §16.1: the listing could not be read, so only the netops-fs comparison
+      # above actually ran. Say which half of the guard did not.
+      echo "ism: WARNING GET _snapshot/_all was unreadable, so $REPO2_NAME was checked ONLY against" >&2
+      echo "ism:         netops-fs, not against every registered repository." >&2
+    fi
     echo "ism: registering second snapshot repository $REPO2_NAME at $REPO2_LOCATION ..."
-    REPO2_RESP=$(curl -s -m 30 -X PUT "$OS/_snapshot/$REPO2_NAME" \
+    REPO2_RESP=$(os_curl -s -m 30 -X PUT "$OS/_snapshot/$REPO2_NAME" \
       -H 'Content-Type: application/json' \
       -d "{\"type\":\"fs\",\"settings\":{\"location\":\"$REPO2_LOCATION\",\"compress\":true}}")
     case "$REPO2_RESP" in
@@ -395,6 +498,7 @@ if [ "${SNAP_KEEP:-14}" -gt 0 ]; then
         echo "ism:       in path.repo on the opensearch service and is writable by the container." >&2
         ;;
     esac
+    fi
   fi
 
   # Snapshot Management policy: one snapshot a day, keep SNAP_KEEP of them.
@@ -404,7 +508,7 @@ if [ "${SNAP_KEEP:-14}" -gt 0 ]; then
   # ONE read, three facts (_seq_no, _primary_term and — new, 2026-09-03 — the
   # live `enabled` flag). It used to be two separate GETs; a third would have
   # been a third chance for the two halves to disagree mid-flight.
-  SM_GET=$(curl -s -m 10 "$OS/_plugins/_sm/policies/netops-daily" 2>/dev/null)
+  SM_GET=$(os_curl -s -m 10 "$OS/_plugins/_sm/policies/netops-daily")
   SM_SEQ=$(printf '%s' "$SM_GET" |
         sed -n 's/.*"_seq_no"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
   SM_TERM=$(printf '%s' "$SM_GET" |
@@ -466,7 +570,7 @@ if [ "${SNAP_KEEP:-14}" -gt 0 ]; then
   if [ "$SM_SKIP" = 1 ]; then
     SM_RESP='(skipped: enabled flag unreadable — see the ERROR above)'
   else
-  SM_RESP=$(curl -s -X "$SM_METHOD" "$SM_URL" -H 'Content-Type: application/json' -d @- <<JSON
+  SM_RESP=$(os_curl -s -X "$SM_METHOD" "$SM_URL" -H 'Content-Type: application/json' -d @- <<JSON
 {
   "description": "Daily snapshot of netops-* to the netops-fs repository (F-59).",
   "enabled": ${SM_ENABLED},

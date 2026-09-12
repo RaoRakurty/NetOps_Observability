@@ -117,6 +117,16 @@ done
 # One record per call, single-line: a multi-line JSON body would otherwise
 # split into records the reader cannot reassemble.
 printf '%s\t%s\t%s\n' "$method" "$url" "$(printf '%s' "$stdin_body" | tr '\n' ' ')" >> "$CURL_LOG"
+# FAKE_DEAD_URL models a TRANSPORT fault (connection refused / DNS / timeout):
+# curl writes a message on stderr, prints NOTHING on stdout and exits non-zero.
+# That is the case the `case "$RESP" in *) WARNING` fallbacks are written for.
+if [ -n "${FAKE_DEAD_URL:-}" ]; then
+  case "$url" in
+    *"$FAKE_DEAD_URL"*)
+      echo "curl: (7) Failed to connect to opensearch port 9200 after 0 ms: Connection refused" >&2
+      exit 7 ;;
+  esac
+fi
 case "$url" in
   */_cluster/health*)  printf '{"status":"green","number_of_data_nodes":1}' ;;
   */_cluster/settings*) printf '{"acknowledged":true}' ;;
@@ -166,7 +176,8 @@ FOREIGN_OTHER_LOCATION = (
     '"offsite":{"type":"fs","settings":{"location":"/mnt/elsewhere"}}}')
 
 
-def _run_apply_ism(tmp_path: Path, sm_get: str, repos: str = ONLY_OURS):
+def _run_apply_ism(tmp_path: Path, sm_get: str, repos: str = ONLY_OURS,
+                   *, dead_url: str | None = None, extra_env: dict | None = None):
     bindir = tmp_path / "bin"
     bindir.mkdir(exist_ok=True)
     _write_exec(bindir / "curl", FAKE_CURL)
@@ -179,6 +190,9 @@ def _run_apply_ism(tmp_path: Path, sm_get: str, repos: str = ONLY_OURS):
     env["CURL_LOG"] = str(log)
     env["FAKE_SM_GET"] = sm_get
     env["FAKE_REPOS"] = repos
+    if dead_url is not None:
+        env["FAKE_DEAD_URL"] = dead_url
+    env.update(extra_env or {})
     r = subprocess.run(["sh", str(APPLY_ISM)], env=env,
                        capture_output=True, text=True, timeout=60)
     calls = []
@@ -282,6 +296,158 @@ def test_single_writer_guard_unreadable_is_named_not_assumed(tmp_path):
     r, calls = _run_apply_ism(tmp_path, _sm_get("true"), repos="")
     assert len(_repo_puts(calls)) == 1
     assert "single-writer check did NOT run" in r.stderr, r.stderr
+
+
+# ---------------------------------------------------------------------------
+# H-3.8-09 — `set -e` + a bare `VAR=$(curl ...)` deletes the fallback beneath it
+#
+# Every reply in this script is judged by a `case "$RESP" in ... *) WARNING`
+# arm written directly under its assignment. Under `set -eu` a BARE
+# `VAR=$(curl ...)` inherits curl's exit code, so a TRANSPORT fault (connection
+# refused, DNS, timeout — exit 7/6/28) aborts the whole bootstrap at that line
+# and the fallback the author wrote is unreachable code. Everything after it —
+# quarantine retention, the snapshot repository, the SM policy, the coverage
+# report — never runs either, and the abort carries no explanation of its own.
+# ---------------------------------------------------------------------------
+
+def test_a_transport_failure_does_not_abort_the_rest_of_the_bootstrap(tmp_path):
+    """`GET _snapshot/_all` dies at the transport layer. The single-writer
+    check cannot run — that must be NAMED (§16.1) — and every later step must
+    still be attempted, because retention and the SM policy do not depend on
+    the repository listing."""
+    r, calls = _run_apply_ism(tmp_path, _sm_get("true"),
+                              dead_url="/_snapshot/_all")
+    assert "single-writer check did NOT run" in r.stderr, r.stderr
+    assert "curl exited 7" in r.stderr, (
+        "the transport failure itself must be reported with curl's exit code, "
+        f"not swallowed: {r.stderr}")
+    assert _sm_writes(calls), (
+        "the SM policy write never happened — the script aborted at the first "
+        "unreachable call instead of running its own fallback")
+    assert "coverage check" in r.stdout, (
+        "the bootstrap did not reach its final step")
+
+
+def test_a_dead_policy_put_reports_its_own_fallback(tmp_path):
+    """The retention-policy PUT faults at the transport layer. Its `case` arm
+    says `WARNING policy PUT did not take` — that arm is the error handling and
+    it has to actually execute."""
+    r, _calls = _run_apply_ism(tmp_path, _sm_get("true"),
+                               dead_url="/_plugins/_ism/policies/netops-retention")
+    assert "WARNING policy PUT did not take" in r.stderr, r.stderr
+    assert "curl exited 7" in r.stderr, r.stderr
+    assert "quarantine retention applied" in r.stdout, (
+        "a failed retention PUT must not take the quarantine policy down with it")
+
+
+def test_a_dead_snapshot_repository_put_is_reported_not_fatal(tmp_path):
+    """The loudest of them all: `there is currently NO backup of the search
+    tier`. It lives in the fallback arm under a bare assignment."""
+    r, _calls = _run_apply_ism(tmp_path, _sm_get("true"),
+                               dead_url="/_snapshot/netops-fs")
+    assert "ERROR snapshot repository NOT registered" in r.stderr, r.stderr
+    assert "NO backup of the search tier" in r.stderr, r.stderr
+
+
+def test_no_captured_curl_call_is_left_as_a_bare_assignment():
+    """The mechanism, pinned. A new `VAR=$(curl ...)` re-introduces the defect
+    for the next step somebody adds, and the fallback under it would again be
+    dead code."""
+    src = APPLY_ISM.read_text(encoding="utf-8")
+    body = "\n".join(ln for ln in src.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    offenders = [ln.strip() for ln in body.splitlines()
+                 if re.search(r"^\s*[A-Za-z_][A-Za-z0-9_]*=\$\(curl\b", ln)
+                 and "||" not in ln]   # os_curl's own guarded capture
+    assert offenders == [], (
+        "a captured curl call bypasses os_curl(); under `set -e` a transport "
+        f"fault aborts the script and kills the fallback below it: {offenders}")
+
+
+# ---------------------------------------------------------------------------
+# H-3.8-11 — the SECOND repository's single-writer guard
+#
+# It was one exact string compare against one hard-coded path. A trailing slash
+# defeated it (OpenSearch resolves both forms to ONE blob tree), and it never
+# consulted the repository listing it had already fetched, so any OTHER name
+# already sitting on that path went unnoticed. Either way the snapshot store
+# ends up with two writers — two retention passes deleting each other's blobs.
+# ---------------------------------------------------------------------------
+
+REPO2_ENV = {"OPENSEARCH_SNAPSHOT_REPO2": "netops-fs-offhost",
+             "OPENSEARCH_SNAPSHOT_REPO2_LOCATION": "/mnt/offhost/snapshots"}
+
+THIRD_NAME_ON_REPO2_PATH = (
+    '{"netops-fs":{"type":"fs","settings":{"location":"/usr/share/opensearch/snapshots"}},'
+    '"legacy-offhost":{"type":"fs","settings":{"location":"/mnt/offhost/snapshots"}}}')
+
+
+def _repo2_puts(calls):
+    return [c for c in calls
+            if c[1].endswith("/_snapshot/netops-fs-offhost") and c[0] == "PUT"]
+
+
+def test_repo2_registers_when_its_location_is_genuinely_separate(tmp_path):
+    """The guard must not cry wolf: a real off-host mount has to register."""
+    r, calls = _run_apply_ism(tmp_path, _sm_get("true"), extra_env=REPO2_ENV)
+    assert len(_repo2_puts(calls)) == 1, r.stderr
+    assert "REFUSING to register netops-fs-offhost" not in r.stderr
+
+
+def test_repo2_is_refused_when_a_trailing_slash_hides_the_same_path(tmp_path):
+    """`/usr/share/opensearch/snapshots/` and `/usr/share/opensearch/snapshots`
+    are ONE blob tree. A string compare says they differ, and the store gets a
+    second writer."""
+    env = dict(REPO2_ENV,
+               OPENSEARCH_SNAPSHOT_REPO2_LOCATION="/usr/share/opensearch/snapshots/")
+    r, calls = _run_apply_ism(tmp_path, _sm_get("true"), extra_env=env)
+    assert _repo2_puts(calls) == [], (
+        "a trailing slash must not buy a second repository name on netops-fs's "
+        "own blob tree — that is the documented corruption hazard")
+    assert "REFUSING to register netops-fs-offhost" in r.stderr, r.stderr
+    assert "netops-fs" in r.stderr
+
+
+def test_repo2_is_refused_when_a_doubled_slash_hides_the_same_path(tmp_path):
+    env = dict(REPO2_ENV,
+               OPENSEARCH_SNAPSHOT_REPO2_LOCATION="/usr/share//opensearch/./snapshots")
+    r, calls = _run_apply_ism(tmp_path, _sm_get("true"), extra_env=env)
+    assert _repo2_puts(calls) == [], r.stderr
+    assert "REFUSING to register netops-fs-offhost" in r.stderr, r.stderr
+
+
+def test_repo2_consults_every_registered_repository_not_just_netops_fs(tmp_path):
+    """A THIRD name already sitting on the path REPO2 is aimed at is the same
+    hazard, and the listing that proves it was already fetched."""
+    r, calls = _run_apply_ism(tmp_path, _sm_get("true"),
+                              repos=THIRD_NAME_ON_REPO2_PATH,
+                              extra_env=REPO2_ENV)
+    assert _repo2_puts(calls) == [], (
+        "another repository name already writes to /mnt/offhost/snapshots")
+    assert "REFUSING to register netops-fs-offhost" in r.stderr, r.stderr
+    assert "legacy-offhost" in r.stderr, (
+        "the refusal must NAME the conflicting repository, or nobody can fix it")
+
+
+def test_netops_fs_guard_also_normalises_the_registered_path(tmp_path):
+    """The same defect on the FIRST repository: a foreign registration whose
+    location merely has a trailing slash is the same blob tree."""
+    repos = ('{"legacy-fs":{"type":"fs","settings":'
+             '{"location":"/usr/share/opensearch/snapshots/"}}}')
+    r, calls = _run_apply_ism(tmp_path, _sm_get("true"), repos=repos)
+    assert _repo_puts(calls) == [], (
+        "legacy-fs already owns this blob tree; the trailing slash does not "
+        "make it a different store")
+    assert "REFUSING to register netops-fs" in r.stderr and "legacy-fs" in r.stderr
+
+
+def test_repo2_guard_says_so_when_the_listing_was_unreadable(tmp_path):
+    """§16.1: half a guard is not a guard. If GET _snapshot/_all faulted, say
+    that REPO2 was compared against netops-fs only."""
+    r, calls = _run_apply_ism(tmp_path, _sm_get("true"),
+                              dead_url="/_snapshot/_all", extra_env=REPO2_ENV)
+    assert len(_repo2_puts(calls)) == 1, "it must still register — see the netops-fs precedent"
+    assert "checked ONLY against" in r.stderr, r.stderr
 
 
 def test_do_not_delete_notice_is_versioned_in_the_repo():
