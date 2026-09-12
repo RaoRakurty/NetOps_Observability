@@ -28,7 +28,11 @@ func (s *server) handleCompliance(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	merged := visibleDevices(s.discovery.Devices(), claims)
+	// Read the registry through the chokepoint (tenancy.go): a compliance
+	// finding names the device AND what is wrong with it, so a restricted
+	// tenant's rows must not reach the platform operator.
+	vis := s.deviceVisibilityFor(claims)
+	merged := vis.filter(s.discovery.Devices())
 	if len(merged) == 0 {
 		writeJSON(w, http.StatusOK, map[string]any{"compliance_enabled": false})
 		return
@@ -39,7 +43,11 @@ func (s *server) handleCompliance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw := visibleDevices(s.discovery.RawDevices(), claims)
+	// The RAW per-source records feed drift pairing; they are the same devices
+	// seen through each source, so they carry the same owner and take the same
+	// filter. Filtering `merged` alone would leave the restricted tenant's
+	// hostnames in the drift findings.
+	raw := vis.filter(s.discovery.RawDevices())
 	// Drift pairs against whichever SoT provider is active (internal | netbox | …),
 	// not a NetBox-specific flag. The provider names the Device.Source its declared
 	// records carry; "" means none exist → drift inactive.

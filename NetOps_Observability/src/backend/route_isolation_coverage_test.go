@@ -34,6 +34,11 @@ import (
 // isolation test AT THE TIME THIS GUARD LANDED (2026-07-23). Each is
 // isolation-enforced at the store/RLS layer (see routeIsolationLedger notes);
 // the dedicated HTTP isolation test is backlog. FROZEN — do not grow.
+//
+// Left the baseline since: /api/compliance (2026-09-12) — it now has a real
+// HTTP-path isolation test in inventory_lists_restriction_test.go, which drives
+// the route for a platform operator, an as_tenant walk and the tenant's own
+// user. The baseline only ever shrinks.
 var isolationCoverageBaseline = map[string]string{
 	"/api/ai/modules":                         "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/appid/fusion/status":                "store/RLS-scoped; dedicated HTTP isolation test is backlog",
@@ -42,7 +47,6 @@ var isolationCoverageBaseline = map[string]string{
 	"/api/cloud/business-services/":           "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/cloud/resource-mappings":            "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/cloud/resource-mappings/":           "store/RLS-scoped; dedicated HTTP isolation test is backlog",
-	"/api/compliance":                         "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/copilot/chat":                       "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/correlations/rca-reports":           "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/findings":                           "store/RLS-scoped; dedicated HTTP isolation test is backlog",

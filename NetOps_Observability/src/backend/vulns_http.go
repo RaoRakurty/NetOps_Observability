@@ -76,7 +76,11 @@ func (s *server) handleVulns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	devices := visibleDevices(s.discovery.Devices(), claims)
+	// Read the registry through the chokepoint (tenancy.go). A vuln finding
+	// names a device, its OS version and the CVEs it is exposed to — a
+	// restricted tenant's weaknesses are the sharpest thing the operator-
+	// visibility restriction exists to withhold.
+	devices := s.visibleDevicesFor(claims)
 	// Stable device order → stable `unassessed` order → an offset walk that
 	// reaches every row exactly once (the aggregator is map-backed).
 	sort.Slice(devices, func(i, j int) bool { return devices[i].ID < devices[j].ID })

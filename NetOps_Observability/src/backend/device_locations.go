@@ -223,7 +223,7 @@ func (s *server) handleDeviceLocation(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		resp := map[string]any{"set": false}
-		if slug := sotSiteFor(d, s.geoAssignments(tenant, cross)); slug != "" && s.geoSiteSlugs(tenant, cross)[slug] {
+		if slug := sotSiteFor(d, s.geoAssignments(tenant, cross)); slug != "" && s.geoSiteSlugs(claims)[slug] {
 			resp["sot_site"] = slug
 		}
 		if l, ok := s.deviceLocations.Lookup(tokens); ok {
@@ -278,7 +278,7 @@ func (s *server) handleDeviceLocations(w http.ResponseWriter, r *http.Request) {
 	}
 	tenant, cross := principalTenant(claims)
 	assign := s.geoAssignments(tenant, cross)
-	resolvable := s.geoSiteSlugs(tenant, cross)
+	resolvable := s.geoSiteSlugs(claims)
 	type row struct {
 		ID     string  `json:"id"`
 		Name   string  `json:"name"`
@@ -337,12 +337,15 @@ func (s *server) geoAssignments(tenant string, cross bool) map[string]string {
 // names a site that isn't declared (e.g. a label stamped by a discovery source)
 // is NOT SoT-placed — it must stay editable in the location layer or it could
 // never appear on the map.
-func (s *server) geoSiteSlugs(tenant string, cross bool) map[string]bool {
+func (s *server) geoSiteSlugs(claims jwtClaims) map[string]bool {
 	out := map[string]bool{}
 	if s.sites == nil {
 		return out
 	}
-	for _, st := range s.sites.All(tenant, cross) {
+	// Read through visibleSitesFor, not the store directly: a restricted
+	// tenant's declared sites are not part of the platform operator's estate,
+	// and this map decides which site slugs the operator is told are real.
+	for _, st := range s.visibleSitesFor(claims) {
 		if st.Slug != "" {
 			out[st.Slug] = true
 		}

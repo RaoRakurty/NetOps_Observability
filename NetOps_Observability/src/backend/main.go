@@ -3933,13 +3933,25 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		all := s.withCredActive(withDeviceType(visibleDevices(s.discovery.Devices(), claims)))
+		// ONE resolved visibility for the whole response: the tenant scope plus
+		// the operator-visibility restriction. This list is what the Devices tile
+		// is the headline number for, and the tile already counts through the
+		// same object (dashboard.go) — reading the registry through it here is
+		// what keeps the list and its count from disagreeing.
+		vis := s.deviceVisibilityFor(claims)
+		all := s.withCredActive(withDeviceType(vis.filter(s.discovery.Devices())))
 		// Wireless WLCs + APs are fleet citizens too (one LAN domain). The ones
 		// an enabled integration polls are already in `all` — the registry holds
 		// them (wireless.DeviceSource) so the licence counts them; this adds the
 		// REMAINDER, the inventory nothing is polling, marked not monitored with
 		// its reason rather than dropped from the fleet (tracker 256).
-		all = append(all, s.wirelessDeviceRows(r.Context(), claims, all)...)
+		//
+		// They carry their owning tenant (wireless.ControllerDevice/APDevice
+		// stamp TenantID), so the SAME filter applies: a restricted tenant's APs
+		// are inventory rows naming its access points and their addresses, and
+		// hiding the wired half while leaving the wireless half in the table
+		// would hide nothing at all.
+		all = append(all, vis.filter(s.wirelessDeviceRows(r.Context(), claims, all))...)
 		// Stable order: without one, paging over a map-backed aggregator can
 		// show the same device twice and never show another at all.
 		sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
@@ -5366,27 +5378,12 @@ func (s *server) securityRegistryDevices(r *http.Request) int {
 	if !ok || s.discovery == nil {
 		return 0
 	}
-	tenant, cross := principalTenant(claims)
-	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
-	if deny {
-		return 0
-	}
-	devices := visibleDevices(s.discovery.Devices(), claims)
-	if len(exclude) == 0 {
-		return len(devices)
-	}
-	hidden := make(map[string]bool, len(exclude))
-	for _, id := range exclude {
-		hidden[strings.ToLower(strings.TrimSpace(id))] = true
-	}
-	n := 0
-	for _, d := range devices {
-		if hidden[deviceTenant(d)] {
-			continue
-		}
-		n++
-	}
-	return n
+	// The rule is the registry chokepoint's, not a second copy of it here. This
+	// function used to re-derive the restriction by hand — resolve, lower-case,
+	// compare — and got the same answer, which is exactly how the codebase
+	// shipped its last leak: a hand-transcribed rule agrees with the chokepoint
+	// only until one of the two is changed.
+	return len(s.visibleDevicesFor(claims))
 }
 
 // securityAudit records an accepted security control-plane write (the
