@@ -52,6 +52,7 @@ import (
 	"fmt"
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -154,6 +155,12 @@ type BogonSet struct {
 	feedURL   string
 	feedErr   string
 	feedCount int
+	// feedTruncated / feedDropped record that the LAST successful refresh did
+	// not carry the whole list: the entry cap cut it, or rows would not parse.
+	// Without them a truncated table reported itself as a clean refresh and the
+	// gap stood for a whole TTL.
+	feedTruncated bool
+	feedDropped   int
 }
 
 // NewBogonSet compiles the embedded tables. It never fails at runtime: the
@@ -212,7 +219,15 @@ func (s *BogonSet) Lookup(p netip.Prefix) (BogonEntry, bool) {
 	}
 	// The architecture rule: IPv6 outside 2000::/3 is not delegated global
 	// unicast. Derived, so it cannot go stale like a snapshot table would.
-	if p.Addr().Is6() && !p.Addr().Is4In6() && !v6GlobalUnicast.Contains(p.Addr()) {
+	//
+	// It tests the whole PREFIX, not just its network address. A prefix shorter
+	// than /3 COVERS 2000::/3 rather than sitting outside it, and the doc above
+	// is explicit that covering a reserved block is not a bogon announcement —
+	// which is why 0.0.0.0/0 is not one. Testing the address alone made ::/0 a
+	// high-severity unallocated bogon for anyone watching a v6 default route,
+	// and left the two families disagreeing about the same thing.
+	if p.Addr().Is6() && !p.Addr().Is4In6() &&
+		p.Bits() >= v6GlobalUnicast.Bits() && !v6GlobalUnicast.Contains(p.Addr()) {
 		return BogonEntry{
 			Block:  p.String(),
 			Reason: ReasonUnallocated,
@@ -233,6 +248,12 @@ type FeedStatus struct {
 	// Note is set when the feed is off, so an empty full-bogon half reads as
 	// "not enabled" and never as "nothing is bogus".
 	Note string `json:"note,omitempty"`
+	// Truncated says the entry cap cut the fetched list; Dropped counts the rows
+	// that would not parse. A short table is not a clean one, and the next
+	// attempt is a whole TTL away, so both are stated rather than implied by a
+	// suspiciously round entry count.
+	Truncated bool `json:"truncated,omitempty"`
+	Dropped   int  `json:"dropped_rows,omitempty"`
 }
 
 // FeedStatus returns the current state of the fetched half.
@@ -244,12 +265,22 @@ func (s *BogonSet) FeedStatus(enabled bool) FeedStatus {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	st.URL, st.Entries, st.FetchedAt, st.Error = s.feedURL, s.feedCount, s.feedAt, s.feedErr
+	st.Truncated, st.Dropped = s.feedTruncated, s.feedDropped
+	if st.Truncated {
+		st.Note = "The fetched list hit the " + itoaBogon(FeedMaxEntries) +
+			"-entry cap, so it is SHORT: space beyond the cap is not being checked against the feed until the next refresh."
+	} else if st.Dropped > 0 {
+		st.Note = itoaBogon(st.Dropped) + " row(s) in the fetched list could not be read as a CIDR and were dropped, never guessed at."
+	}
 	if !enabled {
 		st.Note = "Only the embedded RFC/IANA special-purpose set is in force. Set " +
 			EnvBogonFeed + "=true to also fetch the Team Cymru full-bogons list (unallocated-by-RIR space, which changes daily)."
 	}
 	return st
 }
+
+// itoaBogon renders a count for an operator sentence.
+func itoaBogon(n int) string { return strconv.Itoa(n) }
 
 // Bogon feed bounds (§9 — nothing here is unbounded).
 const (
@@ -320,6 +351,12 @@ func (s *BogonSet) RefreshFeed(ctx context.Context, g FeedGetter, rawURL string,
 		}
 		s.mu.Lock()
 		s.feed, s.feedCount, s.feedAt, s.feedURL, s.feedErr = rules, kept, now(), rawURL, ""
+		// A refresh that hit the entry cap or dropped rows is NOT a clean
+		// refresh: the set is short by an unknown amount and the next attempt is
+		// a whole TTL away. Recorded so FeedStatus can say so instead of
+		// reporting "entries: 20000, error: (none)" over a truncated table.
+		s.feedTruncated = kept >= FeedMaxEntries
+		s.feedDropped = dropped
 		s.mu.Unlock()
 		return nil
 	}
