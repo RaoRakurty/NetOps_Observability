@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, AuthMethods, takeSessionEndMessage } from "../services/api";
 import { readAppearance, setAppearancePref } from "../theme/prefs";
-import { BRAND, BRAND_TAGLINE } from "../brand";
+import { BRAND } from "../brand";
+
+// Sentence case, deliberately not BRAND_TAGLINE: that constant is title-case
+// ("Network Observability") and feeds the document title and the installer
+// docs, where title case is right. Here it is a caption under a wordmark.
+const LOGIN_CAPTION = "Network observability";
 import Icon from "../components/Icon";
 import ChangePasswordCard from "../components/ChangePasswordCard";
 import eyeIris from "../assets/brand/eye-iris.webp";
-
-// Served from public/ under a stable URL so index.html can <link rel="preload">
-// it — the artwork starts downloading before the app bundle finishes parsing.
-const EYE_HERO_URL = "/brand/eye-hero.webp";
 
 type Method = "local" | "ldap" | "tacacs";
 
@@ -27,14 +28,17 @@ function EyeWordmark() {
   );
 }
 
-// Shared cinematic scene: brand stage on the left, glass form card on the
-// right. All three login views (sign-in, MFA, change password) render inside
-// it so the whole pre-auth experience is one continuous space. Two versions
-// exist — the deep-space "Dark" scene and the calm white "Light" scene.
-// The pick IS the app appearance (owner, 2026-07-10): both this pill and the
-// topbar knob read/write the shared theme pref, so signing in lands in the
-// look you chose here and vice versa. The old scene-only key remains as a
-// first-visit fallback, then converges onto the theme pref.
+// The pre-auth stage: brand and form in ONE centred column on a uniform
+// field. The oversized eye artwork and the pinprick starfield are gone — at
+// 3 a.m. during an incident the login should be the calmest screen in the
+// product, and a busy backdrop costs legibility on exactly the surface that
+// can least afford it. What survives is the wordmark (with its iris detail)
+// and a single pane of glass.
+//
+// The Dark/Light pick IS the app appearance (owner, 2026-07-10): both this
+// control and the topbar knob read/write the shared theme pref, so signing in
+// lands in the look chosen here and vice versa. The old scene-only key remains
+// as a first-visit fallback, then converges onto the theme pref.
 const SCENE_KEY = "netops.login.scene";
 type Scene = "dark" | "light";
 
@@ -50,21 +54,14 @@ function LoginScene({ children }: { children: React.ReactNode }) {
   };
   return (
     <div className={scene === "light" ? "login-scene login-light" : "login-scene"}>
-      {/* The eye artwork at full presence — the scene the glass card floats in. */}
-      <img className="login-bg-eye" src={EYE_HERO_URL} alt="" decoding="async" />
-      <div className="login-scene-toggle" role="group" aria-label="Background style">
+      <div className="login-scene-toggle" role="group" aria-label="Appearance">
         <button type="button" className={scene === "dark" ? "on" : ""} aria-pressed={scene === "dark"} onClick={() => pick("dark")}>Dark</button>
         <button type="button" className={scene === "light" ? "on" : ""} aria-pressed={scene === "light"} onClick={() => pick("light")}>Light</button>
       </div>
       <div className="login-stage">
         <header className="login-brandside">
-          <p className="login-eyebrow">{BRAND_TAGLINE}</p>
           <EyeWordmark />
-          <ul className="login-creed">
-            <li><em>See</em> everything</li>
-            <li><em>Correlate</em> everything</li>
-            <li><em>Resolve</em> anything</li>
-          </ul>
+          <p className="login-caption">{LOGIN_CAPTION}</p>
         </header>
         <div className="login-formside">{children}</div>
       </div>
@@ -90,6 +87,13 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   // MFA challenge: set after a password succeeds for an MFA-enabled account.
   const [mfaToken, setMfaToken] = useState<string | null>(null);
   const [mfaCode, setMfaCode] = useState("");
+  // Per-field errors. The button used to be disabled until both fields had
+  // content, which is quiet but tells a keyboard or screen-reader user nothing
+  // about WHY they cannot proceed. The button now submits and the form says
+  // what is missing, focusing the first offending field.
+  const [fieldErr, setFieldErr] = useState<{ user?: string; pw?: string }>({});
+  const userRef = useRef<HTMLInputElement>(null);
+  const pwRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     sessionStorage.removeItem("netops_sso_error");
@@ -113,6 +117,16 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (busy) return; // a second Enter while the request is in flight
+    const fe: { user?: string; pw?: string } = {};
+    if (!username.trim()) fe.user = "Enter your username.";
+    if (!password) fe.pw = "Enter your password.";
+    setFieldErr(fe);
+    if (fe.user || fe.pw) {
+      setError(null);
+      (fe.user ? userRef : pwRef).current?.focus();
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -201,7 +215,7 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   return (
     <LoginScene>
       <form onSubmit={submit} className="card login-card">
-        <h2 className="login-card-title">Sign in</h2>
+        <h2 className="login-card-title">Sign in to {BRAND}</h2>
         {/* Per-tenant sign-in URL (/t/{slug}, /org/{org_id}): name the realm the
             visitor landed on, so a wrong link is obvious before they type a
             password. The name comes from the SERVER's resolution of the URL —
@@ -234,15 +248,27 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
           )}
 
           <div className="form-field">
+            {/* "Username", not "Email": local, LDAP and TACACS all authenticate
+                a username. Nothing in the auth path accepts an address, so
+                calling it one would invite a value that always fails. */}
             <label className="form-label" htmlFor="login-user">Username</label>
             <input
               id="login-user"
+              ref={userRef}
               className="form-input"
               autoFocus
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              onChange={(e) => { setUsername(e.target.value); if (fieldErr.user) setFieldErr((f) => ({ ...f, user: undefined })); }}
               autoComplete="username"
+              aria-invalid={fieldErr.user ? true : undefined}
+              aria-describedby={fieldErr.user ? "login-user-err" : undefined}
             />
+            {fieldErr.user && (
+              <p className="login-field-err" id="login-user-err">
+                <Icon name="alert-triangle" size={14} aria-hidden="true" />
+                {fieldErr.user}
+              </p>
+            )}
           </div>
 
           <div className="form-field">
@@ -250,11 +276,14 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
             <div className="pw-input-wrap">
               <input
                 id="login-pw"
+                ref={pwRef}
                 className="pw-input"
                 type={showPw ? "text" : "password"}
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => { setPassword(e.target.value); if (fieldErr.pw) setFieldErr((f) => ({ ...f, pw: undefined })); }}
                 autoComplete="current-password"
+                aria-invalid={fieldErr.pw ? true : undefined}
+                aria-describedby={fieldErr.pw ? "login-pw-err" : undefined}
               />
               <button
                 type="button"
@@ -263,22 +292,43 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
                 aria-label={showPw ? "Hide password" : "Show password"}
                 aria-pressed={showPw}
               >
-                <Icon name={showPw ? "eye-off" : "eye"} size={16} />
+                <Icon name={showPw ? "eye-off" : "eye"} size={16} aria-hidden="true" />
               </button>
             </div>
+            {fieldErr.pw && (
+              <p className="login-field-err" id="login-pw-err">
+                <Icon name="alert-triangle" size={14} aria-hidden="true" />
+                {fieldErr.pw}
+              </p>
+            )}
           </div>
 
           {error && (
-            <p className="login-msg" role="alert" aria-live="polite">{error}</p>
+            <p className="login-msg" role="alert">
+              <Icon name="alert-triangle" size={14} aria-hidden="true" />
+              {error}
+            </p>
           )}
 
-          <button className="btn-accent" disabled={busy || !username || !password} type="submit" style={{ width: "100%" }}>
+          {/* Disabled only while the request is in flight — never as a stand-in
+              for validation, which now speaks for itself above. */}
+          <button className="btn-accent login-submit" disabled={busy} type="submit" aria-busy={busy || undefined}>
             {busy ? "Signing in…" : "Sign in"}
           </button>
+          {/* The live region is separate from the button so the label change is
+              announced without the button's accessible name churning. */}
+          <span className="sr-only" role="status" aria-live="polite">{busy ? "Signing in, please wait." : ""}</span>
 
-          <button type="button" className="login-link" onClick={() => setView("changepw")}>
-            Change password
-          </button>
+          {/* Wording verified against the flow it opens: ChangePasswordCard asks
+              for the CURRENT password, so it is a change, not a recovery. It is
+              not renamed "Forgot password?" — that would promise a reset this
+              product does not perform. Recovery is an administrator action. */}
+          <div className="login-help">
+            <button type="button" className="login-link" onClick={() => setView("changepw")}>
+              Change password
+            </button>
+            <p className="login-help-note">Locked out? Ask a Correlix administrator to reset your account.</p>
+          </div>
         </div>
 
         {standingProviders.length > 0 && (

@@ -3352,192 +3352,276 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 @media (max-width: 560px) { .form-grid { grid-template-columns: 1fr; } }
 
 /* ===== Login — through the lens =========================================== */
-/* Cinematic pre-auth gate: the cosmic eye artwork IS the scene — shown at
-   full vibrancy on a deep-space stage — and the sign-in card is a pane of
-   near-clear glass floating in front of it, so the eye stays visible THROUGH
-   the form. Its signature is an iridescent hairline sampled from the artwork
-   (iris cyan → lash violet → constellation amber). Scoped under .login-scene;
-   the semantic tokens are re-pointed at dark-glass values so the shared
-   primitives (.card, .form-*, .pw-*, .btn, .btn-accent) restyle themselves
-   without forking the app theme. No entrance animations: the page must feel
-   instantly there. */
+/* ===== Pre-auth gate =======================================================
+   One centred column — wordmark, caption, and a single pane of glass — on a
+   uniform field. The full-bleed eye artwork and the two-layer pinprick
+   starfield that used to sit behind this were removed deliberately: this is
+   the screen an operator reaches at 3 a.m. during an incident, and a busy
+   backdrop costs legibility on exactly the surface that can least afford it.
+   The brand survives in the wordmark's iris, which is where it reads best.
+
+   Scoped under .login-scene, which re-points the semantic tokens at glass
+   values so the shared primitives (.card, .form-*, .pw-*, .btn, .btn-accent)
+   restyle themselves without forking the app theme. No entrance animation:
+   the page must feel instantly there. */
 .login-scene {
-  /* The login is ALWAYS the deep-space scene — pin the full dark ramp here
-     so the page is immune to data-theme on <html> (light themes would
-     otherwise turn var(--fg) text dark-on-dark). */
-  --fg: #eef2fb;
-  --fg-muted: #9aa7c4;
-  --fg-subtle: #71809f;
-  --muted: #9aa7c4;
-  --good: #34d399; --warn: #fbbf24; --bad: #fb8199;
-  --panel: rgba(9, 14, 30, 0.46);
-  --panel-border: rgba(148, 183, 255, 0.22);
-  --hover: rgba(148, 183, 255, 0.10);
-  --accent: #7dd3fc;                       /* iris cyan, from the artwork */
-  --accent-soft: rgba(56, 189, 248, 0.16);
-  --accent-ring: rgba(125, 211, 252, 0.45);
+  /* Dark smoked glass. Pinned here so the gate is immune to data-theme on
+     <html> — otherwise a light app theme would put dark text on dark glass. */
+  --fg: #eef2f8;
+  --fg-muted: #b6c0d4;          /* 8.9:1 on the panel — captions and help text */
+  --fg-subtle: #9aa5ba;
+  --muted: #b6c0d4;
+  --good: #34d399; --warn: #fbbf24; --bad: #ff9aa9;   /* --bad: 8.2:1 on panel */
+  --panel: rgba(26, 30, 38, 0.78);
+  --panel-border: rgba(255, 255, 255, 0.12);
+  --hover: rgba(255, 255, 255, 0.06);
+  --accent: #67e8f9;            /* 11.3:1 on the panel — links and focus */
+  --accent-soft: rgba(103, 232, 249, 0.16);
+  --accent-ring: rgba(103, 232, 249, 0.55);
+
+  --login-panel-bg: rgba(26, 30, 38, 0.78);
+  --login-panel-bg-blur: rgba(26, 30, 38, 0.60);
+  --login-field-bg: rgba(13, 16, 21, 0.94);   /* inputs stay MORE opaque than the panel */
+  --login-field-border: #6b7280;              /* 3.4:1 on panel, 4.0:1 on the field */
+  --login-btn-bg: #22d3ee;
+  --login-btn-fg: #06121a;                    /* 10.5:1 on the cyan */
+  --login-r-panel: 14px;
+  --login-r-control: 8px;
   color-scheme: dark;
 
-  position: relative; min-height: 100vh; display: grid; place-items: center;
-  padding: 48px 24px; overflow: hidden;
-  background:
-    radial-gradient(1100px 700px at 16% 8%, rgba(99, 102, 241, 0.15), transparent 62%),
-    radial-gradient(900px 640px at 86% 92%, rgba(34, 211, 238, 0.10), transparent 60%),
-    radial-gradient(720px 520px at 80% 10%, rgba(168, 85, 247, 0.10), transparent 60%),
-    #04060f;
+  /* A flex column with `margin:auto` on the stage centres without clipping:
+     grid/flex centring hides overflow above the fold on short viewports, and
+     this screen must never put the password field out of reach. */
+  position: relative;
+  display: flex; flex-direction: column;
+  min-height: 100vh; min-height: 100dvh;
+  padding: 32px 20px; overflow-y: auto;
+  background: #14171c;                         /* uniform charcoal, no gradient */
   color: var(--fg);
 }
-/* Theme pattern — two offset pinprick grids read as a quiet starfield that
-   fades away near the artwork and breathes at the edges. */
-.login-scene::before {
-  content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 0;
-  background-image:
-    radial-gradient(rgba(220, 232, 255, 0.40) 1px, transparent 1.4px),
-    radial-gradient(rgba(160, 190, 255, 0.26) 1px, transparent 1.4px);
-  background-size: 34px 34px, 21px 21px;
-  background-position: 0 0, 9px 13px;
-  -webkit-mask-image: radial-gradient(85% 85% at 50% 50%, transparent 42%, #000 88%);
-  mask-image: radial-gradient(85% 85% at 50% 50%, transparent 42%, #000 88%);
-}
-/* The eye at full presence — the world the user is signing into. The glass
-   card floats in front of it without hiding it. */
-.login-bg-eye {
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-  width: min(100vmin, 940px); max-width: none; height: auto; z-index: 0;
-  opacity: 0.92; pointer-events: none; user-select: none; -webkit-user-drag: none;
-  filter: drop-shadow(0 0 90px rgba(59, 91, 219, 0.35));
-}
-/* Dark scene: push the eye to the BACK as a subdued background layer too, so
-   the glass card reads in front of it rather than against a dominant mark —
-   mirroring the Light scene's treatment (owner, 2026-08-25). Same mechanism as
-   `.login-light .login-bg-eye` below: drop the forward glow (filter: none) and
-   dim the artwork; the value is nudged up from Light's 0.42 so the eye stays
-   legible against the deep-space background. */
-.login-scene:not(.login-light) .login-bg-eye { opacity: 0.5; filter: none; }
 
 .login-stage {
-  position: relative; z-index: 1;
-  display: grid; grid-template-columns: minmax(0, 1fr) 400px;
-  gap: 72px; align-items: center; width: min(1320px, 100%);
+  margin: auto;                                /* the no-clip centring */
+  width: min(420px, 100%);
+  display: flex; flex-direction: column; gap: 24px;
 }
 
-/* --- Brand side --- */
-/* Soft dark halos keep the type serene and legible over the artwork. */
-.login-brandside { display: flex; flex-direction: column; gap: 24px; }
-.login-eyebrow {
-  margin: 0; font-family: var(--font-display);
-  font-size: var(--fs-micro); font-weight: 500; letter-spacing: 0.42em;
-  text-transform: uppercase; color: #93a3c8;
-  text-shadow: 0 0 14px rgba(4, 6, 15, 0.95);
-}
+/* --- Brand: wordmark + one caption, centred over the panel --- */
+.login-brandside { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
 .login-wordmark {
   margin: 0; display: flex; align-items: center; gap: 0.03em;
   font-family: var(--font-display);
-  font-size: clamp(44px, 5.6vw, 68px); font-weight: 600; line-height: 1; letter-spacing: 0.02em;
-  background: linear-gradient(168deg, #ffffff 12%, #dbe6ff 48%, #93a8dc 94%);
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-  filter: drop-shadow(0 2px 18px rgba(4, 6, 15, 0.85));
+  font-size: var(--fs-2xl); font-weight: 600; line-height: 1.1; letter-spacing: 0.01em;
+  color: var(--fg);
 }
 .login-wm-eye { position: relative; display: inline-flex; align-items: center; justify-content: center; margin: 0 0.03em; }
-.login-wm-eye img, .login-wm-eye svg {
-  width: 1.04em; height: 1.04em; display: block; border-radius: 50%;
-  filter: drop-shadow(0 2px 14px rgba(56, 189, 248, 0.45));
+.login-wm-eye img, .login-wm-eye svg { width: 1.04em; height: 1.04em; display: block; border-radius: 50%; }
+.login-caption {
+  margin: 0; font-size: 14px; font-weight: 400; letter-spacing: normal;
+  color: var(--fg-muted);
 }
-.login-creed {
-  list-style: none; margin: 0; padding: 20px 0 0;
-  display: flex; flex-direction: column; gap: 11px;
-  border-top: 1px solid rgba(148, 183, 255, 0.16);
-}
-.login-creed li {
-  font-family: var(--font-display);
-  font-size: 13px; font-weight: 500; letter-spacing: 0.32em; text-transform: uppercase;
-  color: #7f8db3; white-space: nowrap; text-shadow: 0 0 12px rgba(4, 6, 15, 0.95);
-}
-.login-creed li em { font-style: normal; color: #e9effd; }
-.login-creed li::after { content: "."; color: #fbbf24; }
 
-/* --- Form side: a pane of near-clear glass floating in front of the eye --- */
-/* Borderless by request: no hairline, no edge highlight — the pane reads
-   purely through its blur, tint and shadow. Transparency comes from the
-   low-alpha tint; legibility from the blur and the slight backdrop dim —
-   the iris ring and constellation glow stay visible through the pane. */
+/* --- The one pane of glass --- */
 .login-scene .card {
-  position: relative; border-radius: 20px; border: 0;
-  background: linear-gradient(158deg, rgba(15, 22, 46, 0.55), rgba(6, 10, 24, 0.40) 48%, rgba(13, 19, 40, 0.50));
-  backdrop-filter: blur(10px) saturate(1.25) brightness(0.88);
-  -webkit-backdrop-filter: blur(10px) saturate(1.25) brightness(0.88);
-  box-shadow: 0 32px 90px rgba(2, 5, 16, 0.60);
+  position: relative;
+  border-radius: var(--login-r-panel);
+  border: 1px solid var(--panel-border);
+  background: var(--login-panel-bg);           /* opaque fallback */
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
 }
-.login-card { width: 400px; max-width: 100%; padding: 32px 32px 28px; margin: 0; }
+/* Blur only where the browser actually does it, and only then trade opacity
+   for it — an unsupported backdrop-filter would otherwise leave the panel
+   thinner than its contrast was measured against. */
+@supports ((backdrop-filter: blur(8px)) or (-webkit-backdrop-filter: blur(8px))) {
+  .login-scene .card {
+    background: var(--login-panel-bg-blur);
+    backdrop-filter: blur(16px) saturate(1.1);
+    -webkit-backdrop-filter: blur(16px) saturate(1.1);
+  }
+}
+/* The fine top-edge highlight that makes glass read as glass. */
+.login-scene .card::before {
+  content: ""; position: absolute; left: 1px; right: 1px; top: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.28) 30%, rgba(255, 255, 255, 0.28) 70%, transparent);
+  border-radius: var(--login-r-panel) var(--login-r-panel) 0 0;
+  pointer-events: none;
+}
+.login-card { width: 100%; padding: 28px 28px 24px; margin: 0; }
 .login-card-title {
-  margin: 0 0 4px; font-family: var(--font-display);
-  font-size: 24px; font-weight: 500; letter-spacing: -0.01em;
-  background: linear-gradient(120deg, #ffffff 30%, #b9cdf7 90%);
-  -webkit-background-clip: text; background-clip: text; color: transparent;
+  margin: 0 0 2px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-lg); font-weight: 600; line-height: 1.25; letter-spacing: normal;
+  color: var(--fg);
 }
-.login-sub { margin: 0 0 4px; color: var(--muted); font-size: var(--fs-meta); }
-.login-form { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: 14px; }
-/* Label voice: tracked-out micro caps in the display face. */
+.login-sub { margin: 0 0 4px; color: var(--fg-muted); font-size: 14px; }
+.login-form { display: flex; flex-direction: column; gap: 18px; margin-top: 20px; }
+.login-form .form-field { display: flex; flex-direction: column; gap: 7px; }
+
+/* Sentence-case, normal tracking, readable size — the old 10.5px uppercase at
+   0.16em was styling at the cost of legibility on the one form that matters. */
 .login-scene .form-label, .login-scene .pw-label {
-  font-family: var(--font-display);
-  font-size: 10.5px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase;
-  color: #93a3c8;
+  font-family: var(--font-sans);
+  font-size: 14px; font-weight: 500; letter-spacing: normal; text-transform: none;
+  color: var(--fg);
 }
-/* Borderless fields — soft glass wells; focus is a glow, not a line. */
 .login-scene .form-input, .login-scene .form-select, .login-scene .pw-input {
-  height: 42px; border-radius: 10px; border: 0;
-  background: rgba(5, 9, 22, 0.50);
-  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
-  font-family: var(--font-sans); font-size: 14px;
+  height: 48px; border-radius: var(--login-r-control);
+  border: 1px solid var(--login-field-border);   /* a real boundary, ≥3:1 */
+  background: var(--login-field-bg);
+  font-family: var(--font-sans); font-size: 16px; letter-spacing: normal;
+  color: var(--fg);
 }
-.login-scene .form-input:focus, .login-scene .form-select:focus, .login-scene .pw-input:focus {
-  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.22), 0 0 26px rgba(56, 189, 248, 0.18);
+.login-scene .form-input::placeholder, .login-scene .pw-input::placeholder { color: var(--fg-subtle); }
+.login-scene .form-input:focus, .login-scene .form-select:focus, .login-scene .pw-input:focus,
+.login-scene .form-input:focus-visible, .login-scene .pw-input:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+  border-color: var(--accent);
+  box-shadow: none;
 }
+.login-scene [aria-invalid="true"] { border-color: var(--bad); }
+
 /* Autofill must not paint the glass white. */
 .login-scene input:-webkit-autofill,
 .login-scene input:-webkit-autofill:hover,
 .login-scene input:-webkit-autofill:focus {
-  -webkit-box-shadow: inset 0 0 0 1000px #0a1126;
-  -webkit-text-fill-color: #eef2fb; caret-color: #eef2fb;
+  -webkit-box-shadow: inset 0 0 0 1000px #0d1015;
+  -webkit-text-fill-color: #eef2f8; caret-color: #eef2f8;
 }
-/* The one luminous action — light from the iris, aimed at the door. */
+
+/* Password field: the toggle is a real 44x44 target inside the well, and the
+   input is padded so text never runs under it. */
+.login-scene .pw-input-wrap { position: relative; display: block; }
+.login-scene .pw-input { width: 100%; padding-right: 52px; }
+.login-scene .pw-eye {
+  position: absolute; top: 50%; right: 2px; transform: translateY(-50%);
+  width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center;
+  border: 0; background: transparent; color: var(--fg-muted); cursor: pointer;
+  border-radius: var(--login-r-control);
+}
+.login-scene .pw-eye:hover { color: var(--fg); }
+.login-scene .pw-eye:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; color: var(--fg); }
+
+/* The one strongest action: solid cyan, near-black label. */
 .login-scene .btn-accent {
-  height: 44px; border-radius: 10px; border: 0;
-  font-family: var(--font-display);
-  font-size: 14px; font-weight: 500; letter-spacing: 0.04em;
-  color: #05122a;
-  background: linear-gradient(135deg, #9be1ff, #60a5fa 55%, #818cf8);
-  box-shadow: 0 6px 26px rgba(56, 189, 248, 0.28);
-  transition: box-shadow .15s ease, filter .15s ease;
+  height: 48px; width: 100%; border-radius: var(--login-r-control); border: 0;
+  font-family: var(--font-sans);
+  font-size: 16px; font-weight: 600; letter-spacing: normal;
+  color: var(--login-btn-fg); background: var(--login-btn-bg);
+  box-shadow: none;
+  transition: background-color .12s ease, filter .12s ease;
 }
-.login-scene .btn-accent:hover:not(:disabled) {
-  filter: brightness(1.07);
-  box-shadow: 0 8px 34px rgba(56, 189, 248, 0.42);
-}
-.login-divider { display: flex; align-items: center; gap: 10px; margin: 18px 0 4px; color: var(--fg-subtle); font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.08em; }
+.login-scene .btn-accent:hover:not(:disabled) { filter: brightness(1.06); }
+.login-scene .btn-accent:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.login-scene .btn-accent:disabled { opacity: 0.72; cursor: progress; }
+.login-submit { margin-top: 2px; }
+
+.login-divider { display: flex; align-items: center; gap: 10px; margin: 20px 0 4px; color: var(--fg-muted); font-size: 13px; text-transform: none; letter-spacing: normal; }
 .login-divider::before, .login-divider::after { content: ""; flex: 1; height: 1px; background: var(--panel-border); }
 .login-sso { display: flex; flex-direction: column; gap: 8px; }
-.login-link { background: none; border: 0; color: var(--accent); font-size: var(--fs-meta); cursor: pointer;
-  padding: 2px 0; align-self: center; text-decoration: none; }
-.login-link:hover { text-decoration: underline; }
-.login-link:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; border-radius: 4px; }
-.login-msg { margin: 0; display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-meta); color: var(--bad); }
+.login-scene .login-sso .btn { min-height: 44px; border-radius: var(--login-r-control); font-size: 15px; }
 
-/* --- Scene toggle: Dark / Light, top-right, persisted per visitor --- */
+.login-help { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-top: 2px; }
+.login-link {
+  background: none; border: 0; color: var(--accent); font-size: 14px; cursor: pointer;
+  padding: 8px 4px; min-height: 44px; display: inline-flex; align-items: center;
+  align-self: center; text-decoration: underline; text-underline-offset: 3px;
+}
+.login-link:hover { text-decoration-thickness: 2px; }
+.login-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.login-help-note { margin: 0; text-align: center; font-size: 13px; color: var(--fg-muted); }
+
+/* Errors carry a glyph as well as a colour — colour alone fails WCAG 1.4.1. */
+.login-msg, .login-field-err {
+  margin: 0; display: flex; align-items: flex-start; gap: 6px;
+  font-size: 13px; line-height: 1.45; color: var(--bad);
+}
+.login-msg svg, .login-field-err svg { flex: none; margin-top: 1px; }
+.login-msg[role="status"] { color: var(--fg-muted); }
+
+/* --- Appearance toggle: 44px targets, top-right --- */
 .login-scene-toggle {
-  position: absolute; top: 20px; right: 24px; z-index: 2;
+  position: absolute; top: 16px; right: 16px; z-index: 2;
   display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px;
-  background: rgba(9, 14, 30, 0.45); border: 1px solid rgba(148, 183, 255, 0.18);
-  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  background: var(--login-panel-bg); border: 1px solid var(--panel-border);
 }
 .login-scene-toggle button {
-  border: 0; background: transparent; color: var(--fg-subtle); cursor: pointer;
-  font-family: var(--font-display);
-  font-size: 10.5px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase;
-  padding: 5px 12px; border-radius: 999px; transition: color .12s ease, background .12s ease;
+  border: 0; background: transparent; color: var(--fg-muted); cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 13px; font-weight: 500; letter-spacing: normal; text-transform: none;
+  min-width: 64px; min-height: 44px; padding: 0 16px; border-radius: 999px;
+  transition: color .12s ease, background-color .12s ease;
 }
-.login-scene-toggle button.on { background: rgba(148, 183, 255, 0.18); color: var(--fg); }
-.login-scene-toggle button:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+.login-scene-toggle button.on { background: var(--accent-soft); color: var(--fg); }
+.login-scene-toggle button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* --- Light frosted glass on a cool light gray ---------------------------- */
+.login-scene.login-light {
+  --fg: #171c24;
+  --fg-muted: #4d586b;          /* 7.4:1 on the panel */
+  --fg-subtle: #6b7686;
+  --muted: #4d586b;
+  --good: #047857; --warn: #b45309; --bad: #b42318;   /* --bad: 6.6:1 on panel */
+  --panel: rgba(255, 255, 255, 0.78);
+  --panel-border: rgba(23, 28, 36, 0.14);
+  --hover: rgba(23, 28, 36, 0.05);
+  --accent: #0e7490;            /* 5.4:1 on the panel — the LINK colour */
+  --accent-soft: rgba(14, 116, 144, 0.12);
+  --accent-ring: rgba(14, 116, 144, 0.45);
+
+  --login-panel-bg: rgba(255, 255, 255, 0.86);
+  --login-panel-bg-blur: rgba(255, 255, 255, 0.72);
+  --login-field-bg: #ffffff;                 /* more opaque than the panel */
+  --login-field-border: #6b7280;             /* 4.8:1 on white, 3.6:1 on panel */
+  /* The button keeps the SAME cyan in both themes — it is the product accent,
+     and near-black on it measures 10.5:1 either way. Only the link colour
+     changes, because a light cyan cannot carry text on white. */
+  --login-btn-bg: #22d3ee;
+  --login-btn-fg: #06121a;
+  color-scheme: light;
+  background: #eceef2;                        /* uniform cool light gray */
+}
+.login-scene.login-light .card { box-shadow: 0 16px 40px rgba(23, 28, 36, 0.12); }
+.login-scene.login-light .card::before {
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.9) 30%, rgba(255, 255, 255, 0.9) 70%, transparent);
+}
+.login-scene.login-light input:-webkit-autofill,
+.login-scene.login-light input:-webkit-autofill:hover,
+.login-scene.login-light input:-webkit-autofill:focus {
+  -webkit-box-shadow: inset 0 0 0 1000px #ffffff;
+  -webkit-text-fill-color: #171c24; caret-color: #171c24;
+}
+
+/* --- Narrow and short viewports ----------------------------------------- */
+@media (max-width: 560px) {
+  .login-scene { padding: 24px 16px; }         /* mobile gutters */
+  .login-stage { width: 100%; gap: 20px; }
+  .login-wordmark { font-size: var(--fs-xl); }
+  .login-card { padding: 22px 18px 20px; }
+  .login-scene-toggle { top: 10px; right: 10px; }
+}
+/* Short viewports (a laptop with devtools open, or a phone in landscape):
+   tighten the rhythm rather than letting the form fall below the fold. The
+   stage still scrolls if it must — `margin:auto` never clips it. */
+@media (max-height: 680px) {
+  .login-scene { padding: 16px 20px; }
+  .login-stage { gap: 14px; }
+  .login-wordmark { font-size: var(--fs-lg); }
+  .login-form { gap: 14px; margin-top: 14px; }
+  .login-card { padding: 20px 22px 18px; }
+}
+
+/* Motion: everything here is a 120ms colour change, and even that is dropped
+   for a visitor who asked for less. */
+@media (prefers-reduced-motion: reduce) {
+  .login-scene *, .login-scene *::before { transition: none !important; animation: none !important; }
+}
+
+/* Forced colours (Windows high contrast): let the OS palette through and keep
+   the boundaries the glass was providing. */
+@media (forced-colors: active) {
+  .login-scene .card, .login-scene .form-input, .login-scene .pw-input, .login-scene .form-select { border: 1px solid CanvasText; }
+  .login-scene .btn-accent { border: 1px solid ButtonText; }
+}
 
 /* Topbar appearance knob — the login pill's twin, sized for the chrome bar
    and coloured from the rail tokens so it sits on the glass in every theme. */
@@ -3558,75 +3642,6 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .mode-toggle button:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
 
-/* --- Light version — the calm white scene, selectable via the toggle. The
-   sign-in box stays transparent glass here too (no return to opaque white). */
-.login-scene.login-light {
-  --fg: #161d29; --fg-muted: #51607a; --fg-subtle: #8492a8; --muted: #51607a;
-  --good: #059669; --warn: #d97706; --bad: #dc2626;
-  --panel: rgba(255, 255, 255, 0.55);
-  --panel-border: rgba(23, 33, 60, 0.14);
-  --hover: rgba(23, 33, 60, 0.05);
-  --accent: #3a4460; --accent-soft: rgba(30, 40, 70, 0.10); --accent-ring: rgba(30, 40, 70, 0.24);
-  color-scheme: light;
-  background:
-    radial-gradient(1000px 640px at 14% 6%, rgba(99, 102, 241, 0.06), transparent 60%),
-    radial-gradient(900px 620px at 88% 94%, rgba(14, 165, 233, 0.05), transparent 60%),
-    #f7f8fc;
-}
-.login-scene.login-light::before {
-  background-image: radial-gradient(rgba(30, 40, 70, 0.10) 1px, transparent 1.5px);
-  background-size: 24px 24px; background-position: 0 0;
-}
-.login-scene.login-light .login-bg-eye { opacity: 0.42; filter: none; }
-.login-scene.login-light .login-eyebrow { color: #7d8699; text-shadow: 0 0 12px rgba(247, 248, 252, 0.95); }
-.login-scene.login-light .login-wordmark {
-  background: linear-gradient(168deg, #49536c 10%, #232a3c 52%, #12161f 92%);
-  -webkit-background-clip: text; background-clip: text;
-  filter: drop-shadow(0 1px 0 rgba(255, 255, 255, 0.65));
-}
-.login-scene.login-light .login-wm-eye img, .login-scene.login-light .login-wm-eye svg {
-  filter: drop-shadow(0 2px 12px rgba(30, 40, 70, 0.22));
-}
-.login-scene.login-light .login-creed { border-top-color: rgba(23, 33, 60, 0.10); }
-.login-scene.login-light .login-creed li { color: #8d96ab; text-shadow: 0 0 10px rgba(247, 248, 252, 0.9); }
-.login-scene.login-light .login-creed li em { color: #2b3245; }
-.login-scene.login-light .login-creed li::after { color: #d97706; }
-.login-scene.login-light .card {
-  background: linear-gradient(158deg, rgba(255, 255, 255, 0.44), rgba(255, 255, 255, 0.26) 48%, rgba(255, 255, 255, 0.38));
-  backdrop-filter: blur(10px) saturate(1.15); -webkit-backdrop-filter: blur(10px) saturate(1.15);
-  box-shadow: 0 24px 70px rgba(23, 33, 60, 0.16);
-}
-.login-scene.login-light .login-card-title {
-  background: linear-gradient(120deg, #1b2436 30%, #3d4a6b 90%);
-  -webkit-background-clip: text; background-clip: text;
-}
-.login-scene.login-light .form-label, .login-scene.login-light .pw-label { color: #5a6880; }
-.login-scene.login-light .form-input, .login-scene.login-light .form-select, .login-scene.login-light .pw-input {
-  background: rgba(255, 255, 255, 0.62);
-}
-.login-scene.login-light .form-input:focus, .login-scene.login-light .form-select:focus, .login-scene.login-light .pw-input:focus {
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.22), 0 0 22px rgba(59, 130, 246, 0.12);
-}
-.login-scene.login-light input:-webkit-autofill,
-.login-scene.login-light input:-webkit-autofill:hover,
-.login-scene.login-light input:-webkit-autofill:focus {
-  -webkit-box-shadow: inset 0 0 0 1000px #ffffff;
-  -webkit-text-fill-color: #161d29; caret-color: #161d29;
-}
-.login-scene.login-light .login-scene-toggle {
-  background: rgba(255, 255, 255, 0.55); border-color: rgba(23, 33, 60, 0.12);
-}
-.login-scene.login-light .login-scene-toggle button.on { background: rgba(30, 40, 70, 0.10); }
-
-@media (max-width: 920px) {
-  .login-scene { padding: 36px 20px; }
-  .login-stage { grid-template-columns: 1fr; gap: 36px; justify-items: center; width: min(440px, 100%); }
-  .login-brandside { align-items: center; text-align: center; gap: 16px; }
-  .login-bg-eye { width: min(150vmin, 760px); }
-  .login-wordmark { font-size: clamp(38px, 10vw, 52px); }
-  .login-creed { border-top: 0; padding-top: 4px; gap: 8px; align-items: center; }
-  .login-card { width: 100%; }
-}
 
 /* ===== Change-password card =============================================== */
 .pw-card { max-width: 460px; }
