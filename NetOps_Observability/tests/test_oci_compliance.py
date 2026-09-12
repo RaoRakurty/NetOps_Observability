@@ -214,6 +214,99 @@ def test_busybox_source_is_verified_against_a_retained_artifact(pins, tmp_path):
         "a verified artifact must satisfy a production release")
 
 
+# ── H-3.8-13: --require-archive must gate on EVERY artifact, not the first ───
+#
+# A component served by two artifacts (the upstream tarball plus the distro's
+# packaging recipe — both corresponding source) recorded `archive_status` from
+# `entries[0]` while `archive_statuses` recorded all of them. The gate reads
+# the singular field, so an unarchived SECONDARY passed a check whose entire
+# purpose is to prove Correlix holds the bytes it ships.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _busybox_two_artifact_pins(pins: dict, tmp_path, *,
+                               primary_git: str, packaging_git: str):
+    """A pins copy whose two busybox artifacts exist on disk (so they verify)
+    and carry the requested `retained_in_git` values."""
+    local = json.loads(json.dumps(pins))
+    for e in local["components"]:
+        if e["name"] != "busybox":
+            continue
+        primary = e.get("role", "corresponding-source") == "corresponding-source"
+        blob = b"pretend upstream tarball" if primary else b"pretend aports archive"
+        (tmp_path / e["file"]).write_bytes(blob)
+        e["sha256"] = hashlib.sha256(blob).hexdigest()
+        e["retained_in_git"] = primary_git if primary else packaging_git
+    return local
+
+
+def _evaluate_with_archive(sbom_path: str, pins: dict, archive: dict,
+                           *, source_dir: str):
+    raw, _meta, deps = oci.parse_sbom(sbom_path)
+    raw, _files = oci.split_file_entries(raw, deps)
+    layers = oci.load_base_layers(
+        os.path.join(FIXTURES, "base-layers-a321.txt"))
+    norm = [oci.normalize_component(c, image="test-image", image_digest=DIGEST,
+                                    base_layers=layers) for c in raw]
+    return oci.evaluate(norm, pins, source_dir=source_dir, archive=archive)
+
+
+EMPTY_ARCHIVE = {"schema_version": 1, "artifacts": [], "releases": []}
+
+
+def test_an_unarchived_secondary_artifact_fails_require_archive(pins, tmp_path):
+    """THE regression. The upstream tarball is retained in git; the packaging
+    recipe — which is corresponding source too — is held nowhere Correlix
+    controls. That must FAIL --require-archive."""
+    local = _busybox_two_artifact_pins(
+        pins, tmp_path,
+        primary_git="compliance/corresponding-sources/busybox-1.37.0.tar.bz2",
+        packaging_git="")
+    recs = _evaluate_with_archive(os.path.join(FIXTURES, "sbom-a321.cdx.json"),
+                                  local, EMPTY_ARCHIVE, source_dir=str(tmp_path))
+    bb = by_name(recs, "busybox")
+    assert bb["source_status"] == "verified", bb["source_detail"]
+    per_artifact = {a["file"]: a["status"] for a in bb["archive_statuses"]}
+    assert len(per_artifact) == 2 and oci.ARCHIVE_NOT_ARCHIVED in per_artifact.values(), \
+        per_artifact
+    assert bb["archive_status"] == oci.ARCHIVE_NOT_ARCHIVED, (
+        "archive_status was read off the PRIMARY artifact while a second "
+        f"corresponding-source artifact is held nowhere: {per_artifact}")
+    kinds = [v["kind"] for v in
+             oci.violations([bb], release=False, require_archive=True)]
+    assert kinds == ["source-not-archived"], (
+        "a compliance gate that passes on an unarchived artifact does not gate")
+
+
+def test_every_artifact_archived_still_passes_require_archive(pins, tmp_path):
+    """The guard must not cry wolf: both artifacts retained → clean."""
+    local = _busybox_two_artifact_pins(
+        pins, tmp_path,
+        primary_git="compliance/corresponding-sources/busybox-1.37.0.tar.bz2",
+        packaging_git="compliance/corresponding-sources/aports.tar.gz")
+    recs = _evaluate_with_archive(os.path.join(FIXTURES, "sbom-a321.cdx.json"),
+                                  local, EMPTY_ARCHIVE, source_dir=str(tmp_path))
+    bb = by_name(recs, "busybox")
+    assert bb["archive_status"] == oci.ARCHIVE_GIT_RETAINED
+    assert bb["archive_location"] == \
+        "compliance/corresponding-sources/busybox-1.37.0.tar.bz2", (
+            "on a tie the primary artifact's location is still what is reported")
+    assert oci.violations([bb], release=False, require_archive=True) == []
+
+
+def test_an_unarchived_primary_artifact_is_still_caught(pins, tmp_path):
+    """The other direction, so the aggregation cannot be a no-op."""
+    local = _busybox_two_artifact_pins(
+        pins, tmp_path, primary_git="",
+        packaging_git="compliance/corresponding-sources/aports.tar.gz")
+    recs = _evaluate_with_archive(os.path.join(FIXTURES, "sbom-a321.cdx.json"),
+                                  local, EMPTY_ARCHIVE, source_dir=str(tmp_path))
+    bb = by_name(recs, "busybox")
+    assert bb["archive_status"] == oci.ARCHIVE_NOT_ARCHIVED
+    assert [v["kind"] for v in
+            oci.violations([bb], release=False, require_archive=True)] == \
+        ["source-not-archived"]
+
+
 def test_missing_source_artifact_fails(pins, tmp_path):
     """No file on disk → `missing` → FAIL, in every mode."""
     recs = evaluate_sbom(os.path.join(FIXTURES, "sbom-a321.cdx.json"), pins,

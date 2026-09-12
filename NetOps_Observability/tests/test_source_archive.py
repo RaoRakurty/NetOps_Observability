@@ -1072,6 +1072,72 @@ def test_end_to_end_against_a_real_s3_implementation(tmp_path):
     assert hashlib.sha256((offer / "thing-1.0.tar.gz").read_bytes()).hexdigest() == SHA
 
 
+# ── H-3.8-12: the manifest may not claim a verification it did not perform ───
+#
+# `release_manifest` stamped `status: verified`, `method: git-retained+sha256`
+# and a `measured_sha256` taken verbatim off the PIN, on the strength of
+# `os.path.isfile` alone. `release_fetch` re-hashes the identical copy, which is
+# what makes the asymmetry a defect rather than a design choice: the tool knew
+# how to check and the manifest — the auditor's entry point — said it had.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_the_manifest_refuses_a_git_retained_copy_whose_bytes_are_wrong(
+        store, policy, tmp_path, monkeypatch):
+    """The file is present at the recorded path and is NOT the pinned source.
+    Presence was the whole of the old check, so this used to produce a manifest
+    stamped `verified` with a digest nobody measured."""
+    retained = tmp_path / "retained"
+    retained.mkdir()
+    (retained / "thing-1.0.tar.gz").write_bytes(b"not the source we pinned")
+    monkeypatch.setattr(sa, "ROOT", str(tmp_path))
+    entry = pin_entry(retained_in_git="retained/thing-1.0.tar.gz")
+
+    arch = archive(store, policy, tmp_path)
+    with pytest.raises(sa.ComplianceFailure) as exc:
+        arch.release_manifest("v1.0.0", [entry], upload=False)
+    text = str(exc.value)
+    assert "retained in git" in text and "hashes to" in text, text
+    assert SHA in text, "the failure must name the pin it was measured against"
+    assert arch.index.get("releases", []) == [], (
+        "a refused manifest must not leave a release recorded in the index")
+
+
+def test_the_manifest_records_a_digest_it_actually_measured(
+        store, policy, tmp_path, monkeypatch):
+    """And the good path: `verified` is only ever written after a real read."""
+    retained = tmp_path / "retained"
+    retained.mkdir()
+    (retained / "thing-1.0.tar.gz").write_bytes(BODY)
+    monkeypatch.setattr(sa, "ROOT", str(tmp_path))
+    entry = pin_entry(retained_in_git="retained/thing-1.0.tar.gz")
+
+    arch = archive(store, policy, tmp_path)
+    doc = arch.release_manifest("v1.0.0", [entry], upload=False)
+    ver = doc["artifacts"][0]["verification"]
+    assert ver["status"] == sa.STATUS_VERIFIED
+    assert ver["measured_sha256"] == SHA
+    assert "re-hashed" in ver["detail"]
+
+    # The proof that it is a MEASUREMENT and not a copy of the pin: change the
+    # bytes on disk and the same call must stop saying verified.
+    (retained / "thing-1.0.tar.gz").write_bytes(BODY + b"tampered")
+    with pytest.raises(sa.ComplianceFailure):
+        arch.release_manifest("v1.0.0", [entry], upload=False)
+
+
+def test_the_manifest_will_not_invent_a_verification_for_an_unverified_record(
+        store, policy, tmp_path):
+    """A record with no verification block and no retained copy has nothing to
+    measure. The old default stamped `verified` on it anyway."""
+    fetcher = RecordingFetcher(BODY)
+    arch = archive(store, policy, tmp_path, fetcher=fetcher)
+    arch.ingest([pin_entry()])
+    arch.index["artifacts"][0].pop("verification")
+    with pytest.raises(sa.ComplianceFailure) as exc:
+        arch.release_manifest("v1.0.0", [pin_entry()], upload=False)
+    assert "did not happen" in str(exc.value), str(exc.value)
+
+
 def test_a_release_of_only_git_retained_source_is_a_valid_record(
         store, policy, tmp_path, monkeypatch):
     """The two homes are recorded separately.

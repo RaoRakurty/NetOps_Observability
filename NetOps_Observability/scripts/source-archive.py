@@ -1621,6 +1621,42 @@ class SourceArchive:
                            "object_version_id": record.get("archive", {}).get("version_id", "")})
         return {"placed": placed, "dest": dest_dir}
 
+    @staticmethod
+    def _git_retained_verification(release: str, entry: dict,
+                                   local: str | None) -> dict:
+        """The verification block for an artifact whose home is git history.
+
+        It used to be SYNTHESIZED: `status: verified`, `method:
+        git-retained+sha256` and a `measured_sha256` copied verbatim off the
+        pin, on the strength of `os.path.isfile` alone — nothing ever hashed
+        the file. `release_fetch` re-hashes the identical copy before placing
+        it, so the manifest was claiming a verification the tool knew how to
+        do and had not done. A provenance record that lies is worse than no
+        record: it is the artifact an auditor is handed INSTEAD of looking.
+
+        So the bytes are measured here, for real, and a mismatch is a release
+        failure rather than a `verified` stamp over the wrong file.
+        """
+        if local is None:
+            raise ComplianceFailure(
+                f"release {release}: {entry['file']} has no recorded "
+                f"verification in the archive index and no retained copy to "
+                f"measure. The manifest will not stamp `verified` on a check "
+                f"that did not happen.")
+        measured = sha256_file(local)
+        if measured != entry["sha256"]:
+            raise ComplianceFailure(
+                f"release {release}: the copy of {entry['file']} retained in "
+                f"git ({entry['retained_in_git']}) hashes to {measured}, not "
+                f"the pinned {entry['sha256']}. Local provenance is not trusted "
+                f"provenance; refusing to record it as verified corresponding "
+                f"source.")
+        return {"status": STATUS_VERIFIED, "method": "git-retained+sha256",
+                "verified_at": _today(), "measured_sha256": measured,
+                "detail": f"retained at {entry['retained_in_git']} in this "
+                          f"repository's history and re-hashed when this "
+                          f"manifest was written"}
+
     def release_manifest(self, release: str, entries: list[dict], *,
                          image_digests: list[str] | None = None,
                          upload: bool = True) -> dict:
@@ -1629,7 +1665,8 @@ class SourceArchive:
         arts = []
         for entry in entries:
             record = self._record_for(entry["sha256"])
-            if record is None and not retained_copy(entry):
+            local = retained_copy(entry)
+            if record is None and local is None:
                 raise ComplianceFailure(
                     f"release {release}: {entry['file']} is neither archived nor "
                     f"retained in git; the manifest would claim a source Correlix "
@@ -1645,15 +1682,12 @@ class SourceArchive:
                 "license": entry["license"],
                 "correspondence": entry.get("correspondence", ""),
                 "upstream_url": entry["url"],
-                "location": ("git:" + entry["retained_in_git"]) if retained_copy(entry)
+                "location": ("git:" + entry["retained_in_git"]) if local
                             else (record or {}).get("archive", {}).get("uri", ""),
                 "object_key": (record or {}).get("object_key", ""),
                 "object_version_id": (record or {}).get("archive", {}).get("version_id", ""),
-                "verification": (record or {}).get(
-                    "verification",
-                    {"status": STATUS_VERIFIED, "method": "git-retained+sha256",
-                     "verified_at": _today(), "measured_sha256": entry["sha256"],
-                     "detail": "retained in this repository's history and re-hashed"}),
+                "verification": (record or {}).get("verification")
+                                or self._git_retained_verification(release, entry, local),
                 "retention": (record or {}).get(
                     "retention",
                     {"retain_until": "unbounded", "mode": "git-history",
