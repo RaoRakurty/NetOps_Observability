@@ -39,13 +39,26 @@ func (l *Lane) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	rows := l.StatusFor(p)
+	scope := "tenant"
+	if p.Cross {
+		scope = "platform"
+	}
 	l.deps.WriteJSON(w, http.StatusOK, map[string]any{
 		"enabled":                 true,
 		"interval_seconds":        int(l.interval / time.Second),
 		"max_findings_per_tenant": l.maxFindings,
 		"topic":                   secbus.TopicSecurityEvidence,
-		"metrics":                 l.metrics.Snapshot(),
-		"tenants":                 l.StatusFor(p),
+		// The counter block is scoped the same way the rows are. It used to be
+		// the RAW platform snapshot — platform-wide scan runs, per-class
+		// emission counts, dead-letter and lost totals — handed to any tenant
+		// admin: not a row leak, but an aggregate inference channel into every
+		// other tenant's activity, which §3a rule 1 answers the same way.
+		"metrics": l.metricsFor(p, rows),
+		// What those numbers COVER, said in the response rather than assumed by
+		// the page: a tenant admin's block is its own, not the platform's.
+		"metrics_scope": scope,
+		"tenants":       rows,
 	})
 }
 
@@ -89,4 +102,25 @@ func (l *Lane) HandleScan(w http.ResponseWriter, r *http.Request) {
 	l.deps.WriteJSON(w, http.StatusAccepted, map[string]any{
 		"queued": true, "tenant_seg": l.deps.TenantSeg(tenant),
 	})
+}
+
+// metricsFor scopes the counter block to the caller (§3a rule 1, default-closed).
+//
+// A cross-tenant platform admin reads the whole snapshot, which is what it has
+// always been. A tenant admin reads only what is attributable to the tenants it
+// may see — today its own scan-run count. The platform-wide totals (truncation,
+// publish failures, dead-letter, lost, per-class emission) are deliberately
+// ABSENT rather than zeroed: a missing counter is honest, and a zero would
+// claim that nothing was ever lost anywhere.
+func (l *Lane) metricsFor(p secapi.Principal, rows []ScanStatus) map[string]int64 {
+	if p.Cross {
+		return l.metrics.Snapshot()
+	}
+	var runs int64
+	for _, st := range rows {
+		for _, outcome := range []string{OutcomeOK, OutcomePartial, OutcomeError, OutcomeSkipped} {
+			runs += l.metrics.RunsFor(st.TenantSeg, outcome)
+		}
+	}
+	return map[string]int64{"scan_runs_total": runs}
 }
