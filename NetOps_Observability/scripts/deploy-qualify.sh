@@ -660,9 +660,15 @@ kafka_sweep_orphans() {  # $1 = id, for the log line
 # differently-named container which survives the CLI being killed. Starting the
 # service container detached and then `docker wait`-ing on it means the bound is
 # enforced on a container we can name, stop and report on.
+# The container id of the last one-shot run_oneshot started. A one-shot that
+# EXITS 0 has proved nothing on its own (that is this whole script's premise),
+# so the caller has to be able to read what it actually printed.
+ONESHOT_CID=""
+
 run_oneshot() {  # $1 = id, $2 = label, $3 = compose service, $4.. = TOP-LEVEL compose flags
   local id="$1" label="$2" service="$3"; shift 3
   local t out rc=0 cid wait_rc
+  ONESHOT_CID=""
   t="$(clamp "$BOOTSTRAP_TIMEOUT")"
   if [ "$t" -le 5 ]; then
     record SKIP REQUIRED "$id $label" \
@@ -680,6 +686,7 @@ run_oneshot() {  # $1 = id, $2 = label, $3 = compose service, $4.. = TOP-LEVEL c
     record FAIL REQUIRED "$id $label" "started the one-shot but could not resolve its container id"
     return 1
   fi
+  ONESHOT_CID="$cid"
   # `docker wait` prints the container's exit code on stdout and blocks until
   # it stops — the bound is what makes that safe.
   wait_rc="$(bound "$t" docker wait "$cid" 2>&1)" || rc=$?
@@ -853,8 +860,48 @@ else
     # own (it blocks in `until curl -sf .../_cluster/health`). Unlike B2 there is
     # no cheap "already applied?" read — the ISM/template/snapshot writes are
     # PUTs with no single queryable summary — so this one always runs, bounded.
-    # `|| true`: the FAIL verdict is already recorded inside run_oneshot.
-    run_oneshot "B3" "opensearch-init ISM" opensearch-init || true
+    #
+    # run_oneshot records a verdict on FAILURE only. B3 used to add nothing on
+    # success, so a bootstrap that RAN and one that never ran produced the same
+    # thing: no row. That is "docker compose up exited 0" one level up — the
+    # exact confidence this gate exists to refuse — and it is worse than a gap,
+    # because the summary counted B3 among the steps it had "no failures" for.
+    #
+    # There is still no queryable summary to read back, so the verdict comes
+    # from the bootstrap's OWN output, which is evidence it produced rather
+    # than a status it returned: apply-ism.sh prints one marker per step it
+    # completed, and the coverage line is printed only if it reached the end.
+    # A run that exits 0 having stopped halfway (an OpenSearch that 4xx'd every
+    # PUT, a curl that could not resolve the cluster) is caught here.
+    if run_oneshot "B3" "opensearch-init ISM" opensearch-init; then
+      b3_cid="$ONESHOT_CID"
+      b3_log="$(dkr logs --tail 400 "$b3_cid" 2>&1)" || b3_log=""
+      b3_missing=""
+      for b3_marker in "retention policy applied" \
+                       "quarantine retention applied" \
+                       "coverage check"; do
+        printf '%s\n' "$b3_log" | grep -qF "ism: $b3_marker" ||
+          b3_missing="$b3_missing '$b3_marker'"
+      done
+      b3_bad="$(printf '%s\n' "$b3_log" | grep -E 'ism: (WARNING|ERROR|REFUSING)' || true)"
+      if [ -z "$b3_log" ]; then
+        record FAIL REQUIRED "B3 opensearch-init ISM" \
+          "the one-shot exited 0 but its log ($b3_cid) could not be read — NOTHING proves the retention/snapshot policies were applied, and an unmanaged index grows until the disk fills"
+      elif [ -n "$b3_missing" ]; then
+        record FAIL REQUIRED "B3 opensearch-init ISM" \
+          "the one-shot exited 0 but apply-ism.sh never reported:$b3_missing — retention is NOT proven applied. It said: $(oneline "$b3_bad" 200)"
+      elif [ -n "$b3_bad" ]; then
+        # Every step completed, but apply-ism.sh named a problem of its own
+        # (an unregistered snapshot repository, a refused second writer, a
+        # policy PUT that did not take). Retention is applied, so this is not a
+        # REQUIRED failure — but it must never vanish into a bare PASS.
+        record ADVISORY ADVISORY "B3 opensearch-init ISM" \
+          "retention, quarantine retention and the coverage report all completed, but apply-ism.sh reported $(printf '%s\n' "$b3_bad" | grep -c .) problem(s): $(oneline "$b3_bad" 220)"
+      else
+        record PASS REQUIRED "B3 opensearch-init ISM" \
+          "apply-ism.sh ran to completion — retention policy, quarantine retention and the ISM coverage report all reported, with no warnings (verified from the bootstrap's own output, not from its exit code)"
+      fi
+    fi
   fi
 
   # ---- B4: every router sink lane is WRITABLE and has its template ---------

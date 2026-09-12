@@ -259,23 +259,39 @@ func (s *traceStore) start(a *API, marker string, kind Kind, device, tenant stri
 // follow polls every server-side stage until each has a settled verdict or the
 // context expires, updating the status as it goes so a poller sees progress.
 //
-// A stage SETTLES on `seen` or `not_observable`. `not_seen` is retried, because
-// early in a trace it only means "not yet" — reporting the first miss as the
-// answer is how a debugger tells you the pipeline is broken when it is merely
-// fast. On timeout the last `not_seen` stands, with the wait recorded.
+// A stage SETTLES on `seen` or on a STRUCTURAL `not_observable`. `not_seen` is
+// retried, because early in a trace it only means "not yet" — reporting the
+// first miss as the answer is how a debugger tells you the pipeline is broken
+// when it is merely fast. On timeout the last `not_seen` stands, with the wait
+// recorded.
+//
+// A TRANSIENT `not_observable` (Entry.Transient — the store refused the query,
+// the sidecar was unreachable, the body did not decode) is retried for the same
+// reason. It used to settle: one blip on the first poll froze that stage's
+// answer for the whole trace, so an OpenSearch that was restarting for two
+// seconds made the debugger say "could not look" for the next fifteen minutes
+// without ever looking again. A structural `not_observable` ("this kind never
+// reaches the search tier", "no client is wired into this build") still
+// settles, because polling it again cannot change it.
 func (a *API) follow(ctx context.Context, p Principal, marker string, kind Kind, tenant string) []Entry {
 	settled := map[Stage]Entry{}
 	started := a.deps.now()
 
+	// open reports whether a stage's current entry may still change on a later
+	// poll. It is the ONE place the retry rule lives.
+	open := func(e Entry) bool {
+		return e.Verdict == VerdictNotSeen || (e.Verdict == VerdictNotObservable && e.Transient)
+	}
+
 	poll := func() bool {
 		allSettled := true
 		for _, st := range ServerStages {
-			if e, ok := settled[st]; ok && e.Verdict != VerdictNotSeen {
+			if e, ok := settled[st]; ok && !open(e) {
 				continue
 			}
 			e := a.stageCtx(ctx, p, st, kind, marker, tenant)
 			settled[st] = e
-			if e.Verdict == VerdictNotSeen {
+			if open(e) {
 				allSettled = false
 			}
 		}

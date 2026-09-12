@@ -474,6 +474,18 @@ type Entry struct {
 	EvidenceRef string  `json:"evidence_ref,omitempty"`
 	Verdict     Verdict `json:"verdict"`
 	Reason      string  `json:"reason,omitempty"`
+	// Transient marks a `not_observable` whose CAUSE was a failed query — the
+	// store refused, the sidecar was unreachable, the body did not decode —
+	// rather than a structural fact about this stage ("this kind never reaches
+	// the search tier", "no client is wired into this build").
+	//
+	// The async follow settles a stage the moment it is not `not_seen`, so
+	// without this distinction one blip on the FIRST poll fixed that stage's
+	// answer for the whole trace: a store that was restarting for two seconds
+	// made the debugger report "could not look" for the next fifteen minutes
+	// and never looked again. A transient reason stays open to a retry; a
+	// structural one is settled, because polling it again cannot change it.
+	Transient bool `json:"transient,omitempty"`
 	// Query is the exact query/command used to look, verbatim, so a reader can
 	// re-run it by hand. Never elided.
 	Query string `json:"query,omitempty"`

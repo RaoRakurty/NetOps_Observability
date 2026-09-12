@@ -164,18 +164,18 @@ func (a *API) OpenSearchStage(ctx context.Context, p Principal, kind Kind, marke
 
 	resp, err := a.deps.Search(http.MethodPost, "/"+index+"/_search?ignore_unavailable=true", body)
 	if err != nil {
-		return notObservable(e, "OpenSearch query failed: "+err.Error())
+		return notObservableTransient(e, "OpenSearch query failed: "+err.Error())
 	}
 	defer func() { _ = resp.Body.Close() }() // response drained below; a close error tells us nothing actionable
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxStoreResponse))
 	if err != nil {
-		return notObservable(e, "reading the OpenSearch response failed: "+err.Error())
+		return notObservableTransient(e, "reading the OpenSearch response failed: "+err.Error())
 	}
 	if int64(len(raw)) >= maxStoreResponse {
-		return notObservable(e, "OpenSearch response exceeded the read cap — refusing a truncated body")
+		return notObservableTransient(e, "OpenSearch response exceeded the read cap — refusing a truncated body")
 	}
 	if resp.StatusCode/100 != 2 {
-		return notObservable(e, fmt.Sprintf("OpenSearch answered %d", resp.StatusCode))
+		return notObservableTransient(e, fmt.Sprintf("OpenSearch answered %d", resp.StatusCode))
 	}
 	var parsed struct {
 		Hits struct {
@@ -190,7 +190,7 @@ func (a *API) OpenSearchStage(ctx context.Context, p Principal, kind Kind, marke
 		} `json:"hits"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return notObservable(e, "OpenSearch response was not decodable JSON: "+err.Error())
+		return notObservableTransient(e, "OpenSearch response was not decodable JSON: "+err.Error())
 	}
 	if len(parsed.Hits.Hits) == 0 {
 		if why := osSampleReason(kind); why != "" {
@@ -243,7 +243,7 @@ func (a *API) KafkaStage(ctx context.Context, kind Kind, marker string) Entry {
 	}
 	res, err := a.deps.KafkaPeek(ctx, req)
 	if err != nil {
-		return notObservable(e, "Kafka peek unavailable: "+err.Error())
+		return notObservableTransient(e, "Kafka peek unavailable: "+err.Error())
 	}
 	matched := res.Records
 	if kind == KindFlow {
@@ -320,7 +320,7 @@ func (a *API) VictoriaStage(ctx context.Context, kind Kind, marker string) Entry
 	}
 	raw, err := a.deps.VictoriaExport(ctx, sel, now.Add(-stageWindow), now)
 	if err != nil {
-		return notObservable(e, "VictoriaMetrics export failed: "+err.Error())
+		return notObservableTransient(e, "VictoriaMetrics export failed: "+err.Error())
 	}
 	if len(strings.TrimSpace(string(raw))) == 0 {
 		e.Verdict = VerdictNotSeen
@@ -397,7 +397,7 @@ func (a *API) ClickHouseStage(ctx context.Context, p Principal, kind Kind, marke
 	e.Query = sql
 	rows, err := a.deps.CHSelect(ctx, p.CHScope, sql, "api:/api/debug/stage/clickhouse")
 	if err != nil {
-		return notObservable(e, "ClickHouse query failed: "+err.Error())
+		return notObservableTransient(e, "ClickHouse query failed: "+err.Error())
 	}
 	if len(rows) == 0 {
 		e.Verdict = VerdictNotSeen
@@ -459,7 +459,7 @@ func (a *API) CorrelationStage(ctx context.Context, p Principal, kind Kind, mark
 	e.Query = sql
 	rows, err := a.deps.CHSelect(ctx, p.CHScope, sql, "api:/api/debug/stage/correlation")
 	if err != nil {
-		return notObservable(e, "corr_evidence query failed: "+err.Error())
+		return notObservableTransient(e, "corr_evidence query failed: "+err.Error())
 	}
 	detail := map[string]any{"evidence_rows": len(rows)}
 	if dlq, derr := a.dlqSnapshot(ctx); derr != nil {
@@ -523,10 +523,24 @@ func (a *API) APIStage(marker string) Entry {
 	return e
 }
 
-// notObservable stamps the honest third verdict.
+// notObservable stamps the honest third verdict for a STRUCTURAL reason: this
+// stage cannot be observed for this kind, or in this build, at all. Polling it
+// again cannot change the answer, so the follow settles it.
 func notObservable(e Entry, reason string) Entry {
 	e.Verdict = VerdictNotObservable
 	e.Reason = reason
+	return e
+}
+
+// notObservableTransient stamps the same verdict for a reason that MIGHT not
+// hold on the next poll — a store that refused the query, a sidecar that was
+// unreachable, a body that did not decode. The verdict is identical and the
+// reason still names the failure; the difference is that the follow keeps
+// retrying it until the trace's TTL instead of freezing the first blip as the
+// stage's final answer.
+func notObservableTransient(e Entry, reason string) Entry {
+	e = notObservable(e, reason)
+	e.Transient = true
 	return e
 }
 

@@ -136,19 +136,48 @@ func (s *FileConfigStore) Get() Config {
 	return s.cfg
 }
 
-// Put replaces the stored intent.
-func (s *FileConfigStore) Put(c Config) error {
+// Update applies mutate to the stored intent and writes the result, with the
+// READ, the MUTATION and the FILE WRITE all under the one lock. It returns the
+// config as it now stands.
+//
+// THE DEFECT THIS CLOSES (2026-09-12). The old Put updated memory under the
+// lock and wrote the file OUTSIDE it, and every caller did an unsynchronised
+// get-then-put. Two concurrent platform-admin writes could therefore interleave
+// so that the LOSING writer's bytes landed on disk last: memory said one thing,
+// the file said another, and the file is what survives a restart. What is
+// stored here includes the deliberate snapshot-schedule STOP that the
+// opensearch-init bootstrap reads back at start-up to decide whether to
+// re-enable the nightly snapshot — so a lost update there silently restarts a
+// schedule an operator deliberately stopped, which is the 2026-09-03 defect the
+// field was added to close.
+//
+// The callback runs while the lock is held: it must not call back into this
+// store, and it must not block on IO.
+func (s *FileConfigStore) Update(mutate func(*Config) error) (Config, error) {
 	if s == nil {
-		return jsonError("no backup config store is configured on this server")
+		return Config{}, jsonError("no backup config store is configured on this server")
+	}
+	if mutate == nil {
+		return Config{}, jsonError("no mutation supplied to the backup config store")
 	}
 	s.mu.Lock()
-	s.cfg = c
-	s.mu.Unlock()
-	b, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return err
+	defer s.mu.Unlock()
+	next := s.cfg
+	if err := mutate(&next); err != nil {
+		return s.cfg, err
 	}
-	return platformdb.WriteFileAtomic(s.path, b, 0o600)
+	b, err := json.MarshalIndent(next, "", "  ")
+	if err != nil {
+		return s.cfg, err
+	}
+	// The in-memory state is advanced only once the bytes are on disk: a write
+	// that failed must not leave this process reporting an intent no restart
+	// would ever see again.
+	if err := platformdb.WriteFileAtomic(s.path, b, 0o600); err != nil {
+		return s.cfg, err
+	}
+	s.cfg = next
+	return next, nil
 }
 
 // config reads the stored intent through the injected store, nil-safe.
@@ -159,12 +188,14 @@ func (s *Service) config() Config {
 	return s.deps.Config.Get()
 }
 
-// putConfig writes the stored intent through the injected store, nil-safe.
-func (s *Service) putConfig(c Config) error {
+// updateConfig applies one atomic read-modify-write to the stored intent,
+// nil-safe. Every writer in this package goes through it: a get-then-put pair
+// is a lost update waiting for a second platform admin.
+func (s *Service) updateConfig(mutate func(*Config) error) (Config, error) {
 	if s.deps.Config == nil {
-		return jsonError("no backup config store is configured on this server")
+		return Config{}, jsonError("no backup config store is configured on this server")
 	}
-	return s.deps.Config.Put(c)
+	return s.deps.Config.Update(mutate)
 }
 
 // sanitizeConfig validates + normalizes. The remote is shape-checked (a known

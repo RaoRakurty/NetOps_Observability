@@ -105,6 +105,42 @@ type vendorOSParse struct {
 	products  []productRule // ascending rank
 }
 
+// checkCaptureFamilyClaims enforces that a CONFIG-CAPTURE FAMILY ID is claimed
+// exactly once across the whole document set.
+//
+// Vendor ids and sibling-dialect ids share ONE namespace: both are keys of the
+// capture-family index, and every consumer (the capture command, the volatile
+// rule set, the redaction rules) keys on that id alone. The check runs here,
+// ahead of the indexing loop, because it must be ORDER-INDEPENDENT: an
+// incremental check inside the loop can only see the documents already
+// indexed, so a dialect naming a vendor whose document sorts later — or a
+// vendor document whose id equals an earlier document's dialect id — would
+// slip through and SILENTLY overwrite that family's running-config command
+// (and union both families' volatile rules). Whichever document loaded second
+// would win, with no error at all.
+//
+// Every vendor id is reserved, participating in config capture or not: a
+// dialect that took a vendor's name would make ConfigCaptureFor(vendor) answer
+// with another family's command.
+func checkCaptureFamilyClaims(docs []vendorDoc) error {
+	claim := make(map[string]string, len(docs))
+	for _, doc := range docs {
+		// A duplicate VENDOR id is reported by build's own check, with its own
+		// message; reserving the name twice here is harmless.
+		claim[doc.Vendor] = fmt.Sprintf("vendor %q", doc.Vendor)
+	}
+	for _, doc := range docs {
+		for _, d := range doc.ConfigCapture.PlatformDialects {
+			mine := fmt.Sprintf("vendor %q's config_capture platform dialect %q", doc.Vendor, d.ID)
+			if other, dup := claim[d.ID]; dup {
+				return fmt.Errorf("vendorprofile: config_capture family id %q is claimed by both %s and %s; a capture family id may be claimed once", d.ID, other, mine)
+			}
+			claim[d.ID] = mine
+		}
+	}
+	return nil
+}
+
 // build indexes the decoded documents and enforces the cross-document
 // invariants. Any violation is an error — the registry never starts up half-valid.
 func build(docs []vendorDoc) (*Registry, error) {
@@ -127,6 +163,9 @@ func build(docs []vendorDoc) (*Registry, error) {
 		devTypeText: make(map[string][]string),
 		devTypeVend: make(map[string]string),
 		pcapFamily:  make(map[string]string),
+	}
+	if err := checkCaptureFamilyClaims(docs); err != nil {
+		return nil, err
 	}
 	seenDescrRank := make(map[int]string)
 	seenPlatRank := make(map[int]string)
@@ -200,10 +239,10 @@ func build(docs []vendorDoc) (*Registry, error) {
 			}
 		}
 		// ── config-capture SIBLING dialects (a second OS under one vendor) ───
+		// Family-id uniqueness (this dialect id against every vendor id and every
+		// other dialect id) is settled ahead of the loop by
+		// checkCaptureFamilyClaims — see there for why it cannot be done here.
 		for _, d := range doc.ConfigCapture.PlatformDialects {
-			if _, dup := r.configCap[d.ID]; dup {
-				return nil, fmt.Errorf("vendorprofile: config_capture dialect id %q collides with an existing capture family", d.ID)
-			}
 			if other, dup := seenConfigRank[d.PlatformRank]; dup {
 				return nil, fmt.Errorf("vendorprofile: config_capture platform_rank %d claimed by both %q and %q",
 					d.PlatformRank, other, d.ID)
@@ -259,6 +298,13 @@ func build(docs []vendorDoc) (*Registry, error) {
 			if err != nil {
 				return nil, fmt.Errorf("vendorprofile: vendor %q os_version_pattern: %w", doc.Vendor, err)
 			}
+			// Capture group 1 IS the version everywhere this regexp is read.
+			// The decoder already refuses a groupless pattern; build enforces
+			// the same invariant so the index is never populated with a regexp
+			// its readers cannot index (this is the state that panicked).
+			if re.NumSubexp() < 1 {
+				return nil, fmt.Errorf("vendorprofile: vendor %q os_version_pattern %q declares no capture group; the version is read from capture group 1", doc.Vendor, doc.Detection.OSVersionPattern)
+			}
 			osp.versionRe = re
 		}
 		seenOSRank := make(map[int]string)
@@ -293,9 +339,9 @@ func build(docs []vendorDoc) (*Registry, error) {
 				}
 				rendered := p.OSVersionProbe.Render(osProbeRoundTripToken)
 				m := osp.versionRe.FindStringSubmatch(rendered)
-				if m == nil || strings.TrimRight(m[1], ".,;:-") != osProbeRoundTripToken {
+				if len(m) < 2 || strings.TrimRight(m[1], ".,;:-") != osProbeRoundTripToken {
 					got := "no match"
-					if m != nil {
+					if len(m) > 1 {
 						got = strconv.Quote(m[1])
 					}
 					return nil, fmt.Errorf("vendorprofile: %s os_version_probe.version_render %q renders %q, which vendor %q's os_version_pattern reads back as %s, not %q",
@@ -658,10 +704,16 @@ func (r *Registry) ResolveOS(vendor, sysDescr string) (OSIdentity, bool) {
 		}
 	}
 	version := ""
-	if m := osp.versionRe.FindStringSubmatch(d); m != nil {
-		// Strip the trailing punctuation a capture drags along from a
-		// comma-separated sysDescr ("15.2(4)E10,").
-		version = strings.TrimRight(m[1], ".,;:-")
+	// len(m) > 1, not m != nil: a pattern with no capture group would index out
+	// of range here, and this runs on an SNMP-fed request path. The loader
+	// refuses such a pattern; this makes a future data change unable to turn a
+	// sysDescr into a process-killing panic.
+	if osp.versionRe != nil {
+		if m := osp.versionRe.FindStringSubmatch(d); len(m) > 1 {
+			// Strip the trailing punctuation a capture drags along from a
+			// comma-separated sysDescr ("15.2(4)E10,").
+			version = strings.TrimRight(m[1], ".,;:-")
+		}
 	}
 	return OSIdentity{Product: product, Version: version}, true
 }

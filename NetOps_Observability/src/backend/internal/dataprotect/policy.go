@@ -315,13 +315,17 @@ func (s *Service) SnapshotScheduleIntent() (enabled bool, reason string, at time
 }
 
 // recordSnapshotScheduleIntent stores (or clears) the deliberate-stop record.
+// Read-modify-write through Update, never get-then-put: this record is what the
+// bootstrap reads to decide whether to re-enable the nightly snapshot, so
+// losing it to a concurrent write restarts a schedule a human stopped.
 func (s *Service) recordSnapshotScheduleIntent(enabled bool, actor string, reason *string) error {
-	cfg := s.config()
-	if enabled {
-		cfg.SnapshotScheduleDisabledAt = time.Time{}
-		cfg.SnapshotScheduleDisabledBy = ""
-		cfg.SnapshotScheduleDisabledReason = ""
-	} else {
+	_, err := s.updateConfig(func(cfg *Config) error {
+		if enabled {
+			cfg.SnapshotScheduleDisabledAt = time.Time{}
+			cfg.SnapshotScheduleDisabledBy = ""
+			cfg.SnapshotScheduleDisabledReason = ""
+			return nil
+		}
 		cfg.SnapshotScheduleDisabledAt = s.now().UTC()
 		cfg.SnapshotScheduleDisabledBy = actor
 		cfg.SnapshotScheduleDisabledReason = "stopped from the Data Protection page"
@@ -330,8 +334,9 @@ func (s *Service) recordSnapshotScheduleIntent(enabled bool, actor string, reaso
 				cfg.SnapshotScheduleDisabledReason = r
 			}
 		}
-	}
-	return s.putConfig(cfg)
+		return nil
+	})
+	return err
 }
 
 // policyLastUpdated reads the SM document's own last_updated_time (epoch ms).
@@ -375,7 +380,10 @@ func snapshotPolicyManagedBy(lastUpdated, ourWrite time.Time) (string, string) {
 
 // recordSnapshotPolicyWrite stamps the intent store with this api's write.
 func (s *Service) recordSnapshotPolicyWrite() error {
-	cfg := s.config()
-	cfg.SnapshotPolicyWrittenAt = s.now().UTC()
-	return s.putConfig(cfg)
+	now := s.now().UTC()
+	_, err := s.updateConfig(func(cfg *Config) error {
+		cfg.SnapshotPolicyWrittenAt = now
+		return nil
+	})
+	return err
 }

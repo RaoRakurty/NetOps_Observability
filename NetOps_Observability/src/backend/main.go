@@ -4373,7 +4373,12 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	// divide. This call is ALSO what records the overage episode's start time,
 	// so the number on a dashboard and the `overage_since` on the Licence page
 	// come from one observation and cannot disagree.
-	s.entitlements.WriteUsageMetrics(w, s.licenceUsage(r.Context()), time.Now().UTC())
+	// licenceUsageScrape, NOT licenceUsage: the watched-prefix half is a pool
+	// read, and a scrape may not wait on it for longer than its own budget. A
+	// ceiling that misses the budget is emitted as not-measured (no usage
+	// series) and its overage_since is carried from the durable register — the
+	// heartbeat and liveness lines below keep flowing either way.
+	s.entitlements.WriteUsageMetrics(w, s.licenceUsageScrape(r.Context()), time.Now().UTC())
 	// LICENCE-END
 	// METERING-BEGIN — the usage-metering series. Rendered from atomics the
 	// hourly recorder already updated, so the scrape never blocks on a store,
@@ -5898,6 +5903,22 @@ func storageMeterPGSize(ctx context.Context) (int64, []storagemeter.Component, b
 				"the PostgreSQL backend is selected but no pool is open, so no size could be read",
 				nil
 		}
+		if errors.Is(err, platformdb.ErrBreakdownUnavailable) {
+			// The total is REAL — pg_database_size answered — and only the
+			// itemisation failed. storagemeter has exactly two renderings, a
+			// measured number WITH its breakdown or a not-measured sentence,
+			// and no third "partly measured" state; showing the total beside an
+			// empty component list would assert "these are all the relations",
+			// which is the precise falsehood this branch used to publish. So
+			// the total is reported in the sentence, where it can be qualified,
+			// rather than on the gauge, where it cannot.
+			logWarn("storage.measure", "the application database total was measured but the per-relation breakdown was not",
+				map[string]any{"total_bytes": total, "error": err.Error()})
+			return 0, nil, false, fmt.Sprintf(
+				"PostgreSQL reported the database at %d byte(s) in total, but the per-relation breakdown could not be read (%v), "+
+					"so this is shown as not measured rather than as a database with no relations",
+				total, err), nil
+		}
 		return 0, nil, false, "", err
 	}
 	comps := make([]storagemeter.Component, 0, len(rels))
@@ -6156,6 +6177,25 @@ func (a licenceAudit) Record(r *http.Request, ev licence.AuditRecord) {
 // not a tenant's view of it, and counting through the caller's tenant filter
 // would let a second tenant's devices escape the ceiling.
 func (s *server) licenceUsage(ctx context.Context) licence.Usage {
+	u := s.licenceUsageLocal()
+	if s.bgpWatch != nil {
+		if n, err := s.watchedPrefixCount(ctx, TenantGlobal, true); err == nil {
+			u[entitlement.CeilingWatchedPrefixes] = n
+		}
+		// On error the key is simply absent — "we could not measure this" and
+		// "there are none" are different facts and only one of them is
+		// reassuring. licence.Usage carries that distinction by construction
+		// (a key present is a number somebody took), and the overage register
+		// relies on it: an unmeasured ceiling must not close a live episode.
+	}
+	return u
+}
+
+// licenceUsageLocal is the half of the usage measurement that touches NO IO —
+// in-memory registry counters only. It is what the scrape falls back to when
+// the bounded half runs out of budget, so a stalled store costs the scrape one
+// ceiling rather than the whole reading.
+func (s *server) licenceUsageLocal() licence.Usage {
 	u := licence.Usage{}
 	if s.discovery != nil {
 		// MONITORED devices, deduplicated — the licensed unit (owner decision
@@ -6170,15 +6210,53 @@ func (s *server) licenceUsage(ctx context.Context) licence.Usage {
 		// licenceUsageNotes — nothing is hidden, and nothing is deleted.
 		u[entitlement.CeilingDevices] = s.discovery.MonitoredCount()
 	}
-	if s.bgpWatch != nil {
-		if n, err := s.watchedPrefixCount(ctx, TenantGlobal, true); err == nil {
-			u[entitlement.CeilingWatchedPrefixes] = n
-		}
-		// On error the key is simply absent — "we could not measure this" and
-		// "there are none" are different facts and only one of them is
-		// reassuring.
-	}
 	return u
+}
+
+// licenceScrapeBudget bounds the licence-usage measurement taken on the
+// /metrics path.
+//
+// WHY /metrics GETS ITS OWN CLOCK. The watched-prefix count is a database read,
+// and on the Postgres backend it goes through the pool: a pool-acquire stall
+// blocks for as long as the caller's context allows, and a scrape's context is
+// the request's — effectively unbounded. That would park the scrape that
+// carries the alert-delivery heartbeat and the engine-liveness counters, the
+// two signals CLAUDE.md's monitoring section says must keep working when
+// everything else is down. A licence usage bar is not allowed to cost us those.
+//
+// Two seconds because a scrape interval is 15 s and the rules alert on missing
+// series, not on slow ones: the budget has to be small enough that a stalled
+// store cannot eat the interval, and large enough that a healthy read on a busy
+// box never trips it.
+const licenceScrapeBudget = 2 * time.Second
+
+// licenceUsageScrape is licenceUsage under the scrape budget: whatever can be
+// measured in time is measured, and whatever cannot is reported as UNMEASURED
+// (its key absent) rather than as zero and rather than by hanging the scrape.
+//
+// The measurement runs on its own goroutine and is handed the budgeted context,
+// so a store that honours cancellation unwinds at the deadline; the select is
+// what guarantees the scrape answers even if one does not. Nothing is shared
+// with the abandoned goroutine — it fills a map this function never reads —
+// so an over-running read cannot corrupt the reading that was emitted.
+//
+// An unmeasured ceiling must NOT be read as an overage that ended: licence.Usage
+// says "not measured" by omitting the key, and licence.OverageTracker.Observe
+// keeps a live episode's `overage_since` for exactly the ceilings it was not
+// given a number for.
+func (s *server) licenceUsageScrape(ctx context.Context) licence.Usage {
+	ctx, cancel := context.WithTimeout(ctx, licenceScrapeBudget)
+	defer cancel()
+	done := make(chan licence.Usage, 1)
+	go func() { done <- s.licenceUsage(ctx) }()
+	select {
+	case u := <-done:
+		return u
+	case <-ctx.Done():
+		logWarn("licence", "the licence usage measurement exceeded the scrape budget; the ceilings it could not count are reported as not measured",
+			map[string]any{"budget": licenceScrapeBudget.String()})
+		return s.licenceUsageLocal()
+	}
 }
 
 // licenceTenantUsage measures the ceilings for ONE tenant — the numbers the

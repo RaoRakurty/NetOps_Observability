@@ -1341,13 +1341,25 @@ def evaluate(components: list[dict], pins: dict, *, source_dir: str | None,
             # obligation, on every run, whether or not it gates anything: an
             # artifact whose only long-term home is an upstream URL is a
             # compliance risk that must be visible before it is a failure.
-            arch_status, arch_where = archive_status_for(entries[0], archive)
+            arch_results = [archive_status_for(e, archive) for e in entries]
+            # The WORST status across every artifact, exactly like
+            # `source_status` above — not entries[0]'s. `--require-archive`
+            # gates on this one field, so reading it off the primary artifact
+            # alone meant an unarchived SECONDARY (a distro-packaging recipe,
+            # which is corresponding source too) passed a gate whose whole
+            # purpose is to prove Correlix holds the bytes it ships. A
+            # compliance gate that passes on an unarchived artifact does not
+            # gate. `max` keeps the first result on a tie, so the ordinary
+            # all-equal case still reports the primary artifact's location.
+            arch_order = [ARCHIVE_ARCHIVED, ARCHIVE_GIT_RETAINED,
+                          ARCHIVE_NOT_ARCHIVED, ARCHIVE_UNKNOWN]
+            arch_status, arch_where = max(
+                arch_results, key=lambda r: arch_order.index(r[0]))
             rec["archive_status"] = arch_status
             rec["archive_location"] = arch_where
             rec["archive_statuses"] = [
-                {"file": e["file"], **dict(zip(("status", "location"),
-                                               archive_status_for(e, archive)))}
-                for e in entries
+                {"file": e["file"], **dict(zip(("status", "location"), res))}
+                for e, res in zip(entries, arch_results)
             ]
             records.append(rec)
             continue

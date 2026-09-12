@@ -43,8 +43,12 @@ type osStub struct {
 	liveDocs map[string]int64
 	// probeCount is what /probe-<idx>/_count returns.
 	probeCount int64
-	// failDeleteTemp makes the probe's cleanup DELETE fail.
+	// failDeleteTemp makes the probe's cleanup DELETE fail with a 500.
 	failDeleteTemp bool
+	// deleteTempStatus, when non-zero, is the status the cleanup DELETE answers
+	// with. 404 is the real cluster's answer when the restore never created the
+	// index — the commonest path through the cleanup, not a leak.
+	deleteTempStatus int
 	// failRestore makes the _restore call fail.
 	failRestore bool
 	// blockRestore, when non-nil, holds the restore until it is closed (used to
@@ -160,6 +164,14 @@ func (st *osStub) lastPolicyPut() (string, []byte) {
 	return st.putURL, st.putBody
 }
 
+// setFailRestore flips the restore double's behaviour WHILE the harness is
+// running, so a test can model a transport that fails and then recovers.
+func (st *osStub) setFailRestore(v bool) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.failRestore = v
+}
+
 func (st *osStub) startStop() (int, int) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -223,7 +235,10 @@ func (st *osStub) server(t *testing.T) *httptest.Server {
 			if st.blockRestore != nil {
 				<-st.blockRestore
 			}
-			if st.failRestore {
+			st.mu.Lock()
+			failRestore := st.failRestore
+			st.mu.Unlock()
+			if failRestore {
 				http.Error(w, `{"error":"repository_missing_exception"}`, http.StatusInternalServerError)
 				return
 			}
@@ -239,7 +254,14 @@ func (st *osStub) server(t *testing.T) *httptest.Server {
 			_ = json.NewEncoder(w).Encode(map[string]any{"count": n})
 		// delete an index (the probe cleanup)
 		case r.Method == http.MethodDelete && strings.HasPrefix(p, "/probe-"):
-			if st.failDeleteTemp {
+			st.mu.Lock()
+			status, fail := st.deleteTempStatus, st.failDeleteTemp
+			st.mu.Unlock()
+			if status != 0 {
+				http.Error(w, `{"error":{"type":"index_not_found_exception"}}`, status)
+				return
+			}
+			if fail {
 				http.Error(w, `{"error":"cleanup refused"}`, http.StatusInternalServerError)
 				return
 			}
@@ -388,6 +410,53 @@ func (a *recordingAudit) all() []AuditRecord {
 	out := make([]AuditRecord, len(a.events))
 	copy(out, a.events)
 	return out
+}
+
+// recordingLog captures every structured log line, so a test can assert that a
+// failure was reported — and, just as importantly, that a NON-failure was not
+// reported as one (§10 no silent failures, and no invented ones either).
+type recordingLog struct {
+	mu    sync.Mutex
+	lines []logLine
+}
+
+type logLine struct {
+	level     string
+	component string
+	msg       string
+}
+
+func (l *recordingLog) add(level, component, msg string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, logLine{level: level, component: component, msg: msg})
+}
+
+func (l *recordingLog) Info(c, m string, _ map[string]any)  { l.add("info", c, m) }
+func (l *recordingLog) Warn(c, m string, _ map[string]any)  { l.add("warn", c, m) }
+func (l *recordingLog) Error(c, m string, _ map[string]any) { l.add("error", c, m) }
+
+// at returns every captured line at one level.
+func (l *recordingLog) at(level string) []logLine {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []logLine
+	for _, ln := range l.lines {
+		if ln.level == level {
+			out = append(out, ln)
+		}
+	}
+	return out
+}
+
+// says reports whether any line at the level contains substr.
+func (l *recordingLog) says(level, substr string) bool {
+	for _, ln := range l.at(level) {
+		if strings.Contains(ln.msg, substr) {
+			return true
+		}
+	}
+	return false
 }
 
 // stubDeviceConfigs reports the config-backup module's facts. off=true is the

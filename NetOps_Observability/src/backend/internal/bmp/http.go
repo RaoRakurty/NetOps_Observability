@@ -362,6 +362,13 @@ func isSessionID(s string) bool {
 // boundary stays an implementation detail a client cannot forge meaning into;
 // it is NOT a security boundary, which is why the tenant scope is re-applied on
 // every read regardless of what a cursor says.
+//
+// The value inside is whatever sequence the row was PUBLISHED with, which is
+// the caller's own key (Store.keyOf): the per-tenant counter for a scoped read,
+// the process-wide one for a cross-tenant read. Because the same principal
+// resolves the scope on the way back in, a cursor is always interpreted in the
+// space it was minted in — and a cursor minted by one tenant, replayed by
+// another, pages that other tenant's OWN rows and reveals nothing.
 func encodeCursor(seq uint64) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(cursorPrefix + strconv.FormatUint(seq, 10)))
 }

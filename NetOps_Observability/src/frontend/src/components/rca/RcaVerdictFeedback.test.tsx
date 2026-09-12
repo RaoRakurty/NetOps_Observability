@@ -164,3 +164,50 @@ describe("RcaVerdictFeedback — the control", () => {
     expect(container.firstChild).toMatchSnapshot();
   });
 });
+
+// ── errText: what a failure is ALLOWED to say ───────────────────────────────
+//
+// `api.request()` throws `Error("<status> <statusText>: <body>")` with the raw
+// response body attached. errText used to paste that body straight into
+// "Could not record the verdict: …", so a 502 from the proxy put the
+// correlation engine's own wrap chain — an internal hostname and a container
+// IP — on an operator's screen. The three status arms stay (they name THIS
+// action); everything else now goes through lib/errors.operatorError.
+describe("errText — the envelope never reaches the operator", () => {
+  const load = async () => (await import("./RcaVerdictFeedback")).errText;
+
+  it("drops the developer text from a 5xx body instead of printing it", async () => {
+    const errText = await load();
+    const out = errText(new Error(
+      '502 Bad Gateway: {"error":"Get http://victoriametrics:8428/api/v1/query: ' +
+      'dial tcp 172.18.0.9:8428: connect: connection refused"}',
+    ));
+    expect(out).not.toMatch(/victoriametrics/);
+    expect(out).not.toMatch(/172\.18\.0\.9/);
+    expect(out).not.toMatch(/dial tcp|connection refused|8428/);
+    expect(out).toBe("The service did not answer.");
+  });
+
+  it("leaks no internal address through a bare wrap chain either", async () => {
+    const errText = await load();
+    const out = errText(new Error("clickhouse: dial tcp 10.0.0.5:9000: connect: connection refused"));
+    expect(out).not.toMatch(/clickhouse|10\.0\.0\.5|dial tcp/);
+    expect(out).toBe("Could not record the verdict.");
+  });
+
+  it("still says WHICH action failed, in this control's own words", async () => {
+    const errText = await load();
+    expect(errText(new Error("403 Forbidden: alerts:write required")))
+      .toBe("You don't have permission to record a verdict on this case.");
+    expect(errText(new Error("401 Unauthorized: token expired")))
+      .toMatch(/sign in again to record a verdict/);
+    expect(errText(new Error("404 Not Found: no such correlation")))
+      .toBe("This case is no longer available.");
+  });
+
+  it("keeps a server sentence that WAS written for a person", async () => {
+    const errText = await load();
+    expect(errText(new Error('400 Bad Request: {"error":"A verdict needs the part that was wrong"}')))
+      .toBe("A verdict needs the part that was wrong.");
+  });
+});

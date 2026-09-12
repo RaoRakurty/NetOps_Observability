@@ -495,6 +495,39 @@ function MeterAmount({ row }: { row: UsageMeterRow }) {
  * because those are different facts and a chart that merged them would invent a
  * quiet day out of a missed one.
  */
+/**
+ * The `d` attribute for the sparkline: one moveto per RUN of measured days,
+ * a lineto for every day inside a run.
+ *
+ * Exported because it is the whole of the drawing, and the bug it replaces was
+ * invisible from the outside. The old predicate asked `d.endsWith(" ")`, and
+ * every segment it appended ended in a space — so it was true on every
+ * iteration and emitted "M x,y M x,y M x,y …": a string of movetos, which SVG
+ * paints as nothing at all, under an aria-label that still announced a peak.
+ *
+ * A day with no number ENDS the run rather than joining across it: a day the
+ * recorder did not run is not a dip to zero, and a line drawn through it would
+ * invent a quiet day out of a missed one.
+ */
+export function sparklinePath(points: Array<{ value: number | null }>, w: number, h: number, max: number): string {
+  const step = points.length > 1 ? w / (points.length - 1) : w;
+  let d = "";
+  let penDown = false;   // is the previous point part of THIS run?
+  points.forEach((p, i) => {
+    if (p.value === null) { penDown = false; return; }
+    const x = i * step;
+    const y = h - (p.value / max) * (h - 2) - 1;
+    d += `${penDown ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)} `;
+    penDown = true;
+  });
+  return d.trim();
+}
+
+/** True once the path contains a segment that will actually be stroked. */
+export function sparklineDraws(d: string): boolean {
+  return d.includes("L");
+}
+
 function MeterSparkline({ points, label }: { points: Array<{ day: string; value: number | null }>; label: string }) {
   const measuredPts = points.filter((p) => p.value !== null);
   if (measuredPts.length < 2) return null;
@@ -502,17 +535,14 @@ function MeterSparkline({ points, label }: { points: Array<{ day: string; value:
   const max = Math.max(...values, 1);
   const w = 160;
   const h = 28;
-  const step = points.length > 1 ? w / (points.length - 1) : w;
-  let d = "";
-  points.forEach((p, i) => {
-    if (p.value === null) { d += ""; return; }
-    const x = i * step;
-    const y = h - (p.value / max) * (h - 2) - 1;
-    d += `${d.endsWith(" ") || d === "" ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)} `;
-  });
+  const d = sparklinePath(points, w, h, max);
+  // Two measured days with a gap between them are two one-point runs: SVG
+  // strokes neither, and an <svg> that announces "peak N" while drawing nothing
+  // is a claim about data it is not showing. Render nothing instead.
+  if (!sparklineDraws(d)) return null;
   return (
     <svg className="lic-spark" viewBox={`0 0 ${w} ${h}`} role="img" aria-label={`${label} over the period, peak ${max}`}>
-      <path d={d.trim()} fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d={d} fill="none" stroke="currentColor" strokeWidth="1.5" />
     </svg>
   );
 }

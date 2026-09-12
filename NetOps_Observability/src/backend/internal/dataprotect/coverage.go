@@ -280,15 +280,26 @@ func (s *Service) coverageOpenSearch(ctx context.Context) EngineCoverage {
 	// "did a snapshot succeed".
 	row.LastVerified = nil
 	verdicts := s.verdicts.all()
+	// An INCONCLUSIVE record is an attempt that never reached a comparison. It
+	// is deliberately NOT rendered as result="fail": this row is read as
+	// evidence, and "the verify failed" and "the verify could not be run" send
+	// an operator down two completely different roads. It reads as unproven,
+	// with the reason.
+	var couldNotRun *snapshotVerdict
 	if len(docs) > 0 {
 		if success, ok := newestSuccessSnapshot(docs); ok {
 			if v, seen := verdicts[success.Snapshot]; seen {
-				result := "fail"
-				if v.Verified {
-					result = "pass"
-				}
-				row.LastVerified = &CoverageRun{
-					At: v.At.UTC().Format(time.RFC3339), Result: result, Detail: v.Detail,
+				if v.Inconclusive {
+					rec := v
+					couldNotRun = &rec
+				} else {
+					result := "fail"
+					if v.Verified {
+						result = "pass"
+					}
+					row.LastVerified = &CoverageRun{
+						At: v.At.UTC().Format(time.RFC3339), Result: result, Detail: v.Detail,
+					}
 				}
 			}
 		}
@@ -296,6 +307,10 @@ func (s *Service) coverageOpenSearch(ctx context.Context) EngineCoverage {
 	if row.LastVerified == nil {
 		row.Detail = SnapshotNeverProbedDetail + " — the newest SUCCESS snapshot has no recorded probe verdict; " +
 			"POST /api/system/backup/snapshots/verify runs one now"
+		if couldNotRun != nil {
+			row.Detail += ". " + couldNotRun.Detail + " (last attempted " +
+				couldNotRun.At.UTC().Format(time.RFC3339) + ")"
+		}
 		if !s.deps.ProbeEnabled {
 			row.Detail += " (the nightly probe worker is DISABLED via SNAPSHOT_PROBE_ENABLED)"
 		}

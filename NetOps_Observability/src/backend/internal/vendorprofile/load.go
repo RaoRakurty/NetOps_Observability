@@ -177,8 +177,16 @@ func validateVendorDetection(name string, d Detection) error {
 		return fmt.Errorf("vendorprofile: %s: sysdescr_rank set with no sysdescr_contains", name)
 	}
 	if d.OSVersionPattern != "" {
-		if _, err := regexp.Compile(d.OSVersionPattern); err != nil {
+		re, err := regexp.Compile(d.OSVersionPattern)
+		if err != nil {
 			return fmt.Errorf("vendorprofile: %s: os_version_pattern: %w", name, err)
+		}
+		// The pattern is read as "capture group 1 IS the version" by every
+		// consumer (Registry.ResolveOS, the os_version_probe round trip). A
+		// groupless pattern compiles and loads cleanly and then has nothing to
+		// hand back — so it is a schema error here, not a surprise later.
+		if re.NumSubexp() < 1 {
+			return fmt.Errorf("vendorprofile: %s: os_version_pattern %q declares no capture group; the version is read from capture group 1", name, d.OSVersionPattern)
 		}
 	}
 	return nil

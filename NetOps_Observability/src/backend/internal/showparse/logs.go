@@ -42,22 +42,15 @@ func parseCiscoSyslog(lines []string) Result {
 		if !ok {
 			continue
 		}
-		parts := strings.SplitN(tag, "-", 3)
-		if len(parts) != 3 {
-			continue
-		}
-		sev, sevOK := atoiOK(parts[1])
-		if !sevOK || sev < 0 || sev > 7 {
-			continue
-		}
-		if parts[0] == "" || parts[2] == "" {
+		facility, sev, mnemonic, tagOK := splitCiscoSyslogTag(trim(tag))
+		if !tagOK {
 			continue
 		}
 		entry := LogLine{
 			Raw:      ln,
-			Facility: strPtr(parts[0]),
+			Facility: strPtr(facility),
 			Severity: intPtr(int(sev)),
-			Mnemonic: strPtr(parts[2]),
+			Mnemonic: strPtr(mnemonic),
 			Message:  trim(msg),
 		}
 		if ts := trim(strings.TrimLeft(ln[:pct], "*")); ts != "" {
@@ -66,6 +59,44 @@ func parseCiscoSyslog(lines []string) Result {
 		res.Logs = append(res.Logs, entry)
 	}
 	return res
+}
+
+// splitCiscoSyslogTag splits the tag between the "%" and the ": " of a Cisco
+// syslog line. There are TWO shapes, and only one of them used to be read.
+//
+// IOS, IOS-XE, NX-OS and EOS stamp three parts —
+// "%FACILITY-SEVERITY-MNEMONIC", e.g. "%LINK-3-UPDOWN".
+//
+// IOS-XR stamps FOUR. Its documented message format is
+// "%<category>-<group>-<severity>-<message code>", so an XR log buffer reads
+// "%PKT_INFRA-LINK-3-UPDOWN : Interface ... changed state to Down" and
+// "%ROUTING-BGP-5-ADJCHANGE : neighbor 10.0.0.2 Down". A three-way split of that
+// puts "LINK" where the severity belongs; "LINK" is not a number, so EVERY line
+// in an XR log buffer was silently dropped — by a parser this file registers for
+// DialectCiscoIOSXR.
+//
+// The three-way split is still tried FIRST and still wins whenever its middle
+// token is a valid 0-7 severity, so a three-part tag whose MNEMONIC contains a
+// dash parses exactly as it always did; the four-way shape is only reached when
+// the three-way one does not yield a severity.
+//
+// The XR sub-group is KEPT, joined into Facility as "CATEGORY-GROUP"
+// ("PKT_INFRA-LINK"). Dropping it would make %PKT_INFRA-LINK-3-UPDOWN and
+// %PKT_INFRA-LINEPROTO-5-UPDOWN indistinguishable in Facility, and evidence that
+// cannot tell a link down from a line-protocol down is exactly the "close
+// enough" parse this file exists to refuse.
+func splitCiscoSyslogTag(tag string) (facility string, severity int64, mnemonic string, ok bool) {
+	if p := strings.SplitN(tag, "-", 3); len(p) == 3 {
+		if sev, sevOK := atoiOK(p[1]); sevOK && sev >= 0 && sev <= 7 && p[0] != "" && p[2] != "" {
+			return p[0], sev, p[2], true
+		}
+	}
+	if p := strings.SplitN(tag, "-", 4); len(p) == 4 {
+		if sev, sevOK := atoiOK(p[2]); sevOK && sev >= 0 && sev <= 7 && p[0] != "" && p[1] != "" && p[3] != "" {
+			return p[0] + "-" + p[1], sev, p[3], true
+		}
+	}
+	return "", 0, "", false
 }
 
 // parseJunosSyslog parses "<mon> <day> <time> <host> <process>[<pid>]: TAG: msg".

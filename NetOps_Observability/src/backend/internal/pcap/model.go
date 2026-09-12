@@ -112,6 +112,15 @@ var (
 	ErrNotReady = errors.New("this capture has no stored bytes")
 	// ErrDisabled is returned by a nil/dormant manager.
 	ErrDisabled = errors.New("packet capture is not enabled")
+	// ErrStore marks an INFRASTRUCTURE failure of the capture register — a
+	// database that refused the read or the write — as opposed to a guardrail
+	// refusal the operator can act on. The two must not share a status code or a
+	// message: a guardrail breach is a 400 naming the bound, while a store
+	// failure is a 500 whose cause is LOGGED (scrubbed) and never handed to the
+	// caller, because a driver string carries SQLSTATEs, server paths and column
+	// names. Every store error inside Start is wrapped in this sentinel so the
+	// HTTP layer can tell them apart with errors.Is rather than by guessing.
+	ErrStore = errors.New("the packet-capture store is unavailable")
 )
 
 // NormTenant is the canonical tenant-id spelling used by the store keys, the RLS

@@ -27,6 +27,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   api, type BgpBmpSessionsResp, type BgpIncident, type PromInstantResponse,
 } from "../../services/api";
+import { operatorError } from "../../lib/errors";
 import { Chip } from "../../components/noc";
 import {
   mergePeerRows, peerRowsFromMetrics, peerRowsFromSessions, peersState,
@@ -71,7 +72,7 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
       .catch(() => { if (alive) { setSessions(null); setBmpAvailable(false); } });
     api.metricsQuery(PEER_QUERY)
       .then((d) => { if (alive) setMetrics(d); })
-      .catch((e: Error) => { if (alive) setErr(e.message || "The device peer-state query failed."); })
+      .catch((e: unknown) => { if (alive) setErr(operatorError(e, "The peer state of your devices could not be read.")); })
       .finally(() => { if (alive) { setBusy(false); setAt(Date.now()); } });
     return () => { alive = false; };
   }, []);

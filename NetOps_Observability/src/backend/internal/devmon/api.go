@@ -225,18 +225,7 @@ func (a *API) set(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	after, err := a.d.Registry.SetMonitoring(d.ID, *req.Enabled, caller.Subject)
 	if err != nil {
-		a.audit(r, caller, http.StatusPaymentRequired, "deny", map[string]any{
-			"action": "device_monitoring_set", "device": d.ID,
-			"enabled": *req.Enabled, "reason": err.Error(),
-		})
-		if a.d.Refusal != nil && a.d.Refusal(w, err) {
-			return
-		}
-		if errors.Is(err, ErrUnknownDevice) {
-			http.NotFound(w, r)
-			return
-		}
-		a.d.WriteError(w, http.StatusConflict, err)
+		a.refuseSet(w, r, caller, d.ID, *req.Enabled, err)
 		return
 	}
 	a.audit(r, caller, http.StatusOK, "allow", map[string]any{
@@ -244,6 +233,51 @@ func (a *API) set(w http.ResponseWriter, r *http.Request, id string) {
 		"enabled": *req.Enabled, "monitored": after.Monitored,
 	})
 	a.d.WriteJSON(w, http.StatusOK, a.view(after))
+}
+
+// refuseSet answers a failed SetMonitoring and records WHAT ACTUALLY HAPPENED.
+//
+// THE DEFECT this replaces: every failure was audited as a 402 LICENCE DENIAL
+// before anything had classified it. A storage failure (PutMonitor could not
+// persist the decision) and a device deleted between the visibility check and
+// the write both went into the trail as ceiling refusals that never occurred —
+// and a storage failure was then answered 409, as though the operator had asked
+// for something the platform declined. An audit trail that records a fabricated
+// reason is worse than one that records nothing: it is evidence, and it was
+// wrong. Classify first, answer the truth, audit the truth.
+func (a *API) refuseSet(w http.ResponseWriter, r *http.Request, caller Principal, id string, enabled bool, err error) {
+	detail := map[string]any{
+		"action": "device_monitoring_set", "device": id,
+		"enabled": enabled, "reason": err.Error(),
+	}
+	switch {
+	case a.d.Refusal != nil && a.d.Refusal(w, err):
+		// The platform's licence renderer recognised this and wrote its 402.
+		// This is the ONLY case that may be recorded as a ceiling refusal.
+		detail["refusal"] = "licence_ceiling"
+		a.audit(r, caller, http.StatusPaymentRequired, "deny", detail)
+	case errors.Is(err, ErrUnknownDevice):
+		// The device was visible a moment ago and is not any more. 404 for the
+		// same reason resolve answers 404 — never a create, never a 402.
+		http.NotFound(w, r)
+		detail["refusal"] = "device_gone"
+		a.audit(r, caller, http.StatusNotFound, "deny", detail)
+	case a.d.Refusal != nil:
+		// A renderer IS wired and declined this error, so it is definitively
+		// not a ceiling: the write failed. That is the server's fault, not a
+		// refusal of the operator's request.
+		a.d.WriteError(w, http.StatusInternalServerError, err)
+		detail["refusal"] = "write_failed"
+		a.audit(r, caller, http.StatusInternalServerError, "error", detail)
+	default:
+		// No renderer at all (a build with no licence subsystem — the case the
+		// Refusal seam is optional for). This module cannot tell a ceiling from
+		// a failed write, so it keeps the documented 4xx and says exactly that
+		// rather than inventing a reason it does not know.
+		a.d.WriteError(w, http.StatusConflict, err)
+		detail["refusal"] = "unclassified"
+		a.audit(r, caller, http.StatusConflict, "deny", detail)
+	}
 }
 
 func (a *API) view(d models.Device) View {

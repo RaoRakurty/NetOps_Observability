@@ -395,7 +395,16 @@ os_fetch() {  # path (+query)
     return 1
   fi
   if [ "$TLS" = 1 ]; then
-    url="https://localhost:9200"
+    # The HOST must be a name the wire certificate actually carries. OpenSearch
+    # is issued the SAN set `DNS:opensearch` + its SPIFFE URI and NOTHING else
+    # — no localhost — so https://localhost:9200 fails hostname verification
+    # (curl exit 60) and BOTH search-tier collectors fail on every TLS install.
+    # `opensearch` resolves in-container via compose DNS and verifies against
+    # the same CA; this is the same fix stack-watchdog.sh carries, and the same
+    # shape the ClickHouse probe above already uses (https://clickhouse:8443).
+    # The fix is the correct NAME, never -k/--insecure: riding insecure here
+    # would turn a real MITM or a misissued cert into a silent pass (§16.1).
+    url="https://opensearch:9200"
     pw="$(env_get OS_API_PASSWORD || true)"
     if [ -z "$pw" ]; then
       printf 'TLS install but OS_API_PASSWORD is unreadable from %s\n' "$ENV_FILE" >&2

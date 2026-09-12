@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import { NavSection, routeFor } from "../nav";
 import { useShell } from "../context/shell";
 import { api, AuthUser, type ElevationStatus } from "../services/api";
+import { operatorError } from "../lib/errors";
 import Icon from "./Icon";
 import NavFlyout from "./NavFlyout";
 import { Modal } from "./ui";
@@ -56,9 +57,19 @@ export function countdown(expiresAt: string, now: Date = new Date()): string {
  * mount would keep showing access that ended ten minutes ago. Polling only
  * while the menu is open keeps that honest without a background timer running
  * for every session that never elevates.
+ *
+ * STEP-DOWN IS NOT OPTIMISTIC. `End` used to clear the row and close the menu
+ * from a `.finally()`, so a REFUSED `DELETE /api/auth/elevation` looked exactly
+ * like a successful one: the operator believed they had dropped back to their
+ * standing role while the grant was still live and no revocation had been
+ * audited. That is a lie about an authorization surface. The failure arm now
+ * keeps the row, says the access was NOT ended, and leaves the button ready to
+ * try again.
  */
 export function ElevatedAccessRow({ onStepDown }: { onStepDown?: () => void }) {
   const [state, setState] = useState<ElevationStatus | null>(null);
+  const [ending, setEnding] = useState(false);
+  const [endErr, setEndErr] = useState("");
   const [tick, setTick] = useState(0);
   useEffect(() => {
     let live = true;
@@ -70,16 +81,26 @@ export function ElevatedAccessRow({ onStepDown }: { onStepDown?: () => void }) {
   void tick;
   if (!state?.active) return null;
   const left = state.expires_at ? countdown(state.expires_at) : "";
+  const end = () => {
+    setEnding(true);
+    setEndErr("");
+    api.endElevation()
+      .then(() => { setState(null); onStepDown?.(); })
+      .catch((e: unknown) => { setEndErr(operatorError(e, "Elevated access was not ended — you still have it.")); })
+      .finally(() => { setEnding(false); });
+  };
   return (
     <div className="menu-head" data-testid="elevated-access">
       Elevated · {state.role}
       {left && <span style={{ color: "var(--muted)" }}> · {left}</span>}
-      <button
-        type="button"
-        onClick={() => { api.endElevation().catch(() => {}).finally(() => { setState(null); onStepDown?.(); }); }}
-      >
-        End
+      <button type="button" onClick={end} disabled={ending}>
+        {ending ? "Ending…" : endErr ? "Try again" : "End"}
       </button>
+      {endErr && (
+        <div role="alert" data-testid="elevated-end-error" style={{ color: "var(--bad)", fontWeight: 400 }}>
+          {endErr} You still have elevated access — try again, or sign out to drop it.
+        </div>
+      )}
     </div>
   );
 }

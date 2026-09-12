@@ -278,6 +278,21 @@ describe("alert policy — validation mirrors the server", () => {
     expect(dup["193.0.0.0/21.key"]).toMatch(/appears twice/);
   });
 
+  // AlertPolicyPanel reads the per-row error at errs[`${row.key.trim()}.key`].
+  // A validator that filed a blank key under the RAW string put the message at
+  // a key nothing renders, so the operator saw nothing while Save stayed
+  // blocked on a non-empty error map — the field stopped responding for ever.
+  it("files a blank key under the key the panel reads — raw or padded", () => {
+    const panelKey = (raw: string) => `${raw.trim()}.key`;
+    for (const raw of ["", " ", "   ", "\t", " \n "]) {
+      const errs = validatePolicy(form({ prefixes: [{ key: raw, cfg: { ...EMPTY_POLICY_CONFIG } }] }), limits);
+      expect(errs[panelKey(raw)], `key ${JSON.stringify(raw)} is invisible to the panel`)
+        .toMatch(/needs the prefix it applies to/);
+      // …and nowhere else, so there is no orphan entry blocking Save silently.
+      expect(Object.keys(errs)).toEqual([panelKey(raw)]);
+    }
+  });
+
   it("accepts the prefix shapes the server parses", () => {
     expect(isPrefixKey("193.0.0.0/21")).toBe(true);
     expect(isPrefixKey("2001:db8::/32")).toBe(true);

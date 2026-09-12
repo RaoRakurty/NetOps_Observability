@@ -23,6 +23,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { api, type BgpAsPathGraph, type BgpGraphNode } from "../../services/api";
+import { operatorError } from "../../lib/errors";
 import { Chip } from "../../components/noc";
 import { NODE_H, NODE_W, edgeWidth, layoutAsPathGraph, nodeLabel, nodeSubLabel, pathLengthHint } from "./bgpDepth.model";
 import { Section, SubBlock } from "./Section";
@@ -93,7 +94,7 @@ export function AsPathGraphPanel({ prefix, bare = false }: { prefix?: string; ba
     setBusy(true); setErr(""); setG(null);
     api.bgpAsPathGraph(prefix)
       .then((d) => { if (alive) { setG(d); setAt(Date.now()); } })
-      .catch((e: Error) => { if (alive) setErr(e.message || "AS-path graph unavailable"); })
+      .catch((e: unknown) => { if (alive) setErr(operatorError(e, "The AS-path graph for this prefix could not be read.")); })
       .finally(() => { if (alive) setBusy(false); });
     return () => { alive = false; };
   }, [prefix]);

@@ -640,7 +640,7 @@ const junosSystemUptime = `Current time: 2026-09-02 10:00:00 UTC
 System booted: 2026-08-23 07:29:00 UTC (1w2d 02:31 ago)
 Protocols started: 2026-08-23 07:30:00 UTC (1w2d 02:30 ago)
 Last configured: 2026-09-01 08:00:00 UTC (1d 02:00 ago) by admin
-10:00AM  up 10 days,  2:31, 1 users, load averages: 0.10, 0.15, 0.20
+10:00AM  up 10 days,  2:31, 1 user, load averages: 0.10, 0.15, 0.20
 `
 
 // ── logs ────────────────────────────────────────────────────────────────────

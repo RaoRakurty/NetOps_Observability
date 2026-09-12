@@ -135,6 +135,20 @@ describe("AlertPolicyPanel", () => {
     expect(setBgpAlertConfig).not.toHaveBeenCalled();
   });
 
+  // The panel reads each row's error at errs[`${row.key.trim()}.key`]. The
+  // validator used to file a BLANK key under the RAW string, so a key of pure
+  // whitespace produced an error at "   .key" that nothing rendered — while the
+  // non-empty error map still blocked Save. Nothing appeared, nothing saved,
+  // and nothing told the operator why: the field simply stopped responding.
+  it("says WHY a whitespace-only prefix will not save, instead of going silent", async () => {
+    render(<AlertPolicyPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add a rule for one prefix" }));
+    fireEvent.change(screen.getByLabelText("Prefix 1"), { target: { value: "   " } });
+    fireEvent.click(screen.getByRole("button", { name: "Save rules" }));
+    expect(await screen.findByText(/needs the prefix it applies to/)).toBeTruthy();
+    expect(setBgpAlertConfig).not.toHaveBeenCalled();
+  });
+
   it("adds and removes a per-prefix policy, and counts them against the server's cap", async () => {
     render(<AlertPolicyPanel />);
     fireEvent.click(await screen.findByRole("button", { name: "Add a rule for one prefix" }));

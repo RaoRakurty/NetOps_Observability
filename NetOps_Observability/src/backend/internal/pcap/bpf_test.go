@@ -150,3 +150,59 @@ func TestCaptureIDGrammar(t *testing.T) {
 		}
 	}
 }
+
+// TestBPFCanonicalRenderingIsBoundedAndIdempotent is the 3.5-10 regression.
+//
+// ValidateFilter bounds the RAW text but RETURNS the canonical rendering, and
+// tokenizeFilter makes each parenthesis its own space-separated token — so the
+// canonical form is LONGER than the input. Bounding only the input let a filter
+// through the request gate that the identical re-check in prepareRequest then
+// refused, deep inside the run body, quoting a length the operator never typed.
+// A validator at a trust boundary must be idempotent: what it accepts, it must
+// accept again.
+func TestBPFCanonicalRenderingIsBoundedAndIdempotent(t *testing.T) {
+	// 15 × "(broadcast)or" + "(broadcast)": 206 raw characters (inside the
+	// bound), 63 tokens (inside the 64-term bound), nesting depth 1 (inside the
+	// 8-level bound) — and 268 characters once rendered canonically.
+	dense := strings.Repeat("(broadcast)or", 15) + "(broadcast)"
+	if len(dense) > MaxFilterLen {
+		t.Fatalf("the fixture is %d raw characters — it must be <= %d or it proves nothing", len(dense), MaxFilterLen)
+	}
+	if got := len(strings.Join(tokenizeFilter(dense), " ")); got <= MaxFilterLen {
+		t.Fatalf("the fixture renders to %d characters — it must exceed %d or it proves nothing", got, MaxFilterLen)
+	}
+	got, err := ValidateFilter(dense)
+	if err == nil {
+		t.Fatalf("a filter whose canonical rendering is %d characters was ACCEPTED as %q — "+
+			"the bound is applied to the wrong string", len(got), got)
+	}
+	if got != "" {
+		t.Errorf("a refused filter must yield nothing, got %q", got)
+	}
+	if !strings.Contains(err.Error(), "normalised") {
+		t.Errorf("the refusal must name what was actually too long: %v", err)
+	}
+
+	// Idempotence: everything ValidateFilter accepts, it must accept again —
+	// unchanged. This is the property prepareRequest's re-validation depends on.
+	for _, in := range []string{
+		"host 10.1.2.3", "(tcp and port 80) or (udp and port 53)",
+		"not port 22", "src host 10.1.2.3 and dst port 443",
+		"((tcp or udp) and port 443) or (icmp and not broadcast)",
+		strings.Repeat("(broadcast)or", 10) + "(broadcast)",
+	} {
+		canon, err := ValidateFilter(in)
+		if err != nil {
+			t.Errorf("ValidateFilter(%q) = %v, want accepted", in, err)
+			continue
+		}
+		again, err := ValidateFilter(canon)
+		if err != nil {
+			t.Errorf("ValidateFilter is NOT idempotent: it accepted %q as %q, then refused that: %v", in, canon, err)
+			continue
+		}
+		if again != canon {
+			t.Errorf("ValidateFilter is NOT idempotent: %q -> %q -> %q", in, canon, again)
+		}
+	}
+}

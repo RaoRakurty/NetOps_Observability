@@ -22,6 +22,7 @@ import { Group } from "../components/board/panels";
 import { AwsLogo } from "../components/ConnectorLogos";
 import ConnectorGlyph from "../components/ConnectorGlyph";
 import { teamsErrors, snsErrors, hasErrors, FieldErrors } from "../lib/notifyValidation";
+import { operatorError } from "../lib/errors";
 import Icon from "../components/Icon";
 import { useAuth } from "../hooks/useAuth";
 import AskIris from "../components/AskIris";
@@ -1973,12 +1974,37 @@ const SCOPE_GROUPS: { kind: ScopeKind; title: string; blurb: string; topic?: str
 ];
 
 /**
+ * The scopes step is complete only when the operator has actually SEEN the
+ * authority they are about to mint.
+ *
+ * An empty option list means one of three things — the grid is still loading,
+ * the read of it failed, or this caller may mint nothing — and in none of them
+ * has the operator been shown what the key will carry. The step used to pass
+ * regardless (it only asked about the administrative confirmation), so a failed
+ * `api.permissions()` left the picker saying "Checking…" for ever while Next
+ * still advanced and the key was minted with the wizard's DEFAULT scope set.
+ * Nothing escalated — the server re-authorises every scope on mint — but the
+ * operator issued a credential whose authority was never on their screen.
+ *
+ * Exported so the gate is testable without driving the whole wizard.
+ */
+export function scopesStepValid(optionCount: number, scopes: string[], adminConfirmed: boolean): boolean {
+  if (optionCount === 0) return false;
+  return !scopes.some(isAdministrativeScope) || adminConfirmed;
+}
+
+/**
  * ScopePicker renders the scopes THIS caller may mint, grouped by the authority
  * they confer, with the administrative group behind an explicit confirmation.
  * Exported so the gating and the wording are testable on their own.
+ *
+ * `loadError` is the sentence for a grid that could not be READ, which is a
+ * different fact from one that is still arriving and from one that is genuinely
+ * empty. All three refuse to mint (see scopesStepValid); only this one is the
+ * operator's to retry.
  */
 export function ScopePicker({
-  options, selected, onToggle, platformAdmin, confirmed, onConfirm,
+  options, selected, onToggle, platformAdmin, confirmed, onConfirm, loadError, onRetry,
 }: {
   options: ScopeOption[];
   selected: string[];
@@ -1986,7 +2012,19 @@ export function ScopePicker({
   platformAdmin: boolean;
   confirmed: boolean;
   onConfirm: (v: boolean) => void;
+  /** Set when the caller's permission grid could not be read. */
+  loadError?: string | null;
+  /** Re-reads the grid. Offered beside the failure. */
+  onRetry?: () => void;
 }) {
+  if (loadError) {
+    return (
+      <div role="alert" className="adm-line">
+        <p>{loadError} Without it we cannot show you what this key would be allowed to do, so no key can be issued yet.</p>
+        {onRetry && <button className="dash-btn" onClick={onRetry}>Try again</button>}
+      </div>
+    );
+  }
   if (options.length === 0) {
     return <p className="adm-line">Checking which scopes your role may issue…</p>;
   }
@@ -2043,6 +2081,10 @@ export function ApiAccessAdmin() {
   // The caller's OWN permission grid: the wizard offers only scopes this
   // principal may actually mint (the server refuses the rest with 403).
   const [perms, setPerms] = useState<Record<string, number> | null>(null);
+  // …and whether that read FAILED, which is a different fact from "still
+  // arriving". Both leave the grid empty; only this one is retryable, and
+  // neither may be mistaken for "these are your scopes".
+  const [permsErr, setPermsErr] = useState<string | null>(null);
   const [adminConfirmed, setAdminConfirmed] = useState(false);
   const [rate, setRate] = useState("");
   const [secret, setSecret] = useState<string | null>(null);
@@ -2060,13 +2102,21 @@ export function ApiAccessAdmin() {
   // Which tile's modal is open (also driven by the flyout deep-link #/admin/api/<tile>).
   const [open, setOpen] = useState<ApiTile | null>(null);
 
+  const [permsNonce, setPermsNonce] = useState(0);
   useEffect(() => {
     let live = true;
+    setPermsErr(null);
     api.permissions()
-      .then((p) => { if (live) setPerms(p.permissions ?? {}); })
-      .catch(() => { if (live) setPerms({}); }); // default-closed: offer nothing
+      .then((p) => { if (live) { setPerms(p.permissions ?? {}); setPermsErr(null); } })
+      .catch((e: unknown) => {
+        // Default-closed: offer nothing. But SAY so — a silent empty grid let
+        // the wizard mint a key whose scopes the operator was never shown.
+        if (!live) return;
+        setPerms({});
+        setPermsErr(operatorError(e, "The scopes your role may issue could not be read."));
+      });
     return () => { live = false; };
-  }, []);
+  }, [permsNonce]);
 
   useEffect(() => {
     const read = () => {
@@ -2113,7 +2163,12 @@ export function ApiAccessAdmin() {
   };
   const revoke = async (k: ApiKey) => {
     setErr(null);
-    try { await api.revokeApiKey(k.id); reload(); } catch (e) { setErr((e as Error).message); }
+    // A refused revocation is a security-relevant failure and the operator must
+    // read it, not the api.ts envelope: the raw message put internal hostnames
+    // and container IPs on the API-keys card. (The list read on this same card
+    // still goes through the shared `useReload`, which has the same raw
+    // message — a file-wide pattern, out of this change's bounded context.)
+    try { await api.revokeApiKey(k.id); reload(); } catch (e) { setErr(operatorError(e, "That key was not revoked.")); }
   };
 
   const list = keys ?? [];
@@ -2225,7 +2280,11 @@ export function ApiAccessAdmin() {
                 id: "scopes", title: "Scopes & grant",
                 hint: "What the credential may do.",
                 // An administrative key needs the operator to say so explicitly.
-                isValid: () => !scopes.some(isAdministrativeScope) || adminConfirmed,
+                // …and the operator must have SEEN the authority they are
+                // minting: an unread grid refuses to advance (scopesStepValid).
+                isValid: () => scopesStepValid(
+                  allowedScopeOptions(perms, !!user?.platform_admin).length, scopes, adminConfirmed,
+                ),
                 render: () => (
                   <>
                     <ScopePicker
@@ -2235,6 +2294,8 @@ export function ApiAccessAdmin() {
                       platformAdmin={!!user?.platform_admin}
                       confirmed={adminConfirmed}
                       onConfirm={setAdminConfirmed}
+                      loadError={permsErr}
+                      onRetry={() => setPermsNonce((n) => n + 1)}
                     />
                     <h3 className="adm-grouphead adm-mt">Grant types</h3>
                     <p className="adm-line adm-mt">

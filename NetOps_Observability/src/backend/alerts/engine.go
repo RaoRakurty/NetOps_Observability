@@ -119,8 +119,21 @@ type Engine struct {
 	// hour. nil = in-memory only (the pre-existing behaviour), which is what
 	// every test that does not care about persistence gets.
 	notifyState *NotifyStateStore
-	healthy     bool
-	lastTick    time.Time
+	// notifyKey remembers, per active alert id, the TENANT its notified record
+	// was actually FILED under at fire time. The resolve leg used to re-derive
+	// the tenant from the alert's device, which is a DIFFERENT answer once the
+	// device has been deleted or moved to another tenant in between: Clear then
+	// targeted a key nothing was ever written to, the record survived, and every
+	// restart inside the 7-day age-out window restored it into `active` and
+	// re-emitted a resolve for an alert that ended long ago.
+	//
+	// It holds the fire-time derivation and nothing else — the tenant is still
+	// stamped from the principal's device by TenantOf, never from a payload
+	// (§3a rule 2). It is re-seeded from the durable records at boot, so the
+	// key survives the restart it exists to survive.
+	notifyKey map[string]string
+	healthy   bool
+	lastTick  time.Time
 
 	// ── Self-observability (§10: no silent failures) ────────────────────────
 	// The engine used to be structurally incapable of reporting its own
@@ -176,6 +189,7 @@ func NewEngine(rulesFile string, n *notify.Dispatcher) *Engine {
 		active:           make(map[string]models.Alert),
 		pending:          make(map[string]time.Time),
 		dispatched:       make(map[string]bool),
+		notifyKey:        make(map[string]string),
 		notifier:         n,
 		healthy:          true,
 		ruleEvalFailures: make(map[string]uint64),
@@ -218,6 +232,12 @@ func (e *Engine) SetNotifyState(s *NotifyStateStore) int {
 			}
 			e.active[a.ID] = a
 			e.dispatched[a.ID] = true
+			// The record's OWN tenant, as the fire that wrote it filed it —
+			// not a fresh derivation from inventory that may have changed
+			// while the process was down. Without this the resolve after a
+			// restart would clear the wrong key and the record would come
+			// back, and re-resolve, on every subsequent restart.
+			e.rememberNotifyKeyLocked(a.ID, rec.TenantID)
 			if !a.FiredAt.IsZero() {
 				// The condition demonstrably held since FiredAt, so the `for`
 				// gate is already satisfied; restarting the clock here would
@@ -237,6 +257,39 @@ func (e *Engine) tenantOf(a models.Alert) string {
 		return ""
 	}
 	return e.TenantOf(a)
+}
+
+// rememberNotifyKeyLocked records the tenant a notified record was filed under.
+// Caller holds e.mu.
+func (e *Engine) rememberNotifyKeyLocked(id, tenant string) {
+	if id == "" {
+		return
+	}
+	if e.notifyKey == nil {
+		e.notifyKey = make(map[string]string)
+	}
+	e.notifyKey[id] = tenant
+}
+
+// notifyKeyOf answers the tenant the notified record for this alert id was
+// FILED under, falling back to a fresh derivation when the engine has no record
+// of the fire (an alert notified before this map existed, or one whose fire was
+// suppressed and so never written).
+//
+// forget=true removes the remembered key, for the resolve leg that is about to
+// clear the record. The lookup and the delete are one critical section so two
+// ticks cannot both think they own the clear.
+func (e *Engine) notifyKeyOf(id string, a models.Alert, forget bool) string {
+	e.mu.Lock()
+	tenant, known := e.notifyKey[id]
+	if forget {
+		delete(e.notifyKey, id)
+	}
+	e.mu.Unlock()
+	if known {
+		return tenant
+	}
+	return e.tenantOf(a)
 }
 
 // AddRule appends a rule and is safe to call at runtime (e.g. from the API).
@@ -469,13 +522,19 @@ func (e *Engine) evaluateAll() {
 			e.notifier.Dispatch(a)
 		}
 		if !suppressed {
+			// The tenant is derived ONCE, here, from the FIRE-time principal's
+			// device (§3a rule 2 — never from the alert's own labels), and the
+			// key it produces is remembered so the resolve can clear exactly
+			// the record this fire wrote.
+			tenant := e.tenantOf(a)
 			e.mu.Lock()
 			e.dispatched[id] = true
+			e.rememberNotifyKeyLocked(id, tenant)
 			e.mu.Unlock()
 			// DURABLE half: survive the restart that used to re-page this.
 			// A SUPPRESSED firing is deliberately not recorded — nothing went
 			// out, so nothing must be suppressed after a restart either.
-			e.notifyState.MarkNotified(e.tenantOf(a), a)
+			e.notifyState.MarkNotified(tenant, a)
 		}
 		if e.OnFire != nil {
 			e.OnFire(a) // incident ingest is not a notification — never suppressed
@@ -487,7 +546,10 @@ func (e *Engine) evaluateAll() {
 	if e.notifyState != nil {
 		for id, a := range next {
 			if _, existed := prev[id]; existed {
-				e.notifyState.Touch(e.tenantOf(a), id)
+				// The key the fire wrote, for the same reason the resolve uses
+				// it: a re-tenanted device would otherwise stop refreshing its
+				// own record and let it age out into a duplicate page.
+				e.notifyState.Touch(e.notifyKeyOf(id, a, false), id)
 			}
 		}
 	}
@@ -512,7 +574,12 @@ func (e *Engine) evaluateAll() {
 		// The alert cleared: forget it, so its NEXT firing notifies again.
 		// Unconditional — a record with no live `dispatched` entry (restored,
 		// then resolved) must be cleared too, or it would suppress forever.
-		e.notifyState.Clear(e.tenantOf(a), id)
+		//
+		// Cleared under THE KEY THE FIRE WROTE, never a fresh derivation: the
+		// device may have been deleted or re-tenanted since, and Clear is
+		// strictly own-tenant, so re-deriving would delete nothing and leave a
+		// record that re-resolves on every restart for seven days.
+		e.notifyState.Clear(e.notifyKeyOf(id, a, true), id)
 	}
 	// ONE blob write per tick, not one per alert: the whole-collection write is
 	// O(N), so per-record flushing would be O(N²) under a storm (§9).

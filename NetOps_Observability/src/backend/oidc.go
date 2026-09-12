@@ -430,7 +430,12 @@ func (s *server) completeElevationSSO(w http.ResponseWriter, r *http.Request, p 
 	if feState != "" {
 		frag.Set("state", feState)
 	}
-	http.Redirect(w, r, p.PostLoginURL()+"#"+frag.Encode(), http.StatusFound)
+	// The SAME post-login path the standing success and every ssoFail take: a
+	// per-tenant elevation sign-in lands back on ITS OWN entry point, not on the
+	// generic one. Derived from the callback path (ssoPostLoginPath), never from
+	// anything the browser asked for, so this reuses the one helper rather than
+	// building a second redirect.
+	http.Redirect(w, r, s.ssoPostLoginPath(r, p)+"#"+frag.Encode(), http.StatusFound)
 }
 
 func (s *server) ssoFail(w http.ResponseWriter, r *http.Request, msg string) {
