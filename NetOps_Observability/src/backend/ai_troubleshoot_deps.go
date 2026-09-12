@@ -57,7 +57,6 @@ import (
 const (
 	aiTopoTimeout      = 6 * time.Second // adjacency/metric gather deadline (§9: all IO has a timeout)
 	aiTopoMaxNeighbors = 200             // adjacencies reported for ONE device (the SUBJECT's own edges, see aiDeviceNeighbors)
-	aiPathDefsScanned  = 200             // path definitions scanned before matching stops
 	aiFindingsMaxLimit = 50              // hard cap on findings handed to a prompt
 
 	// ── IRIS Phase A4 bounds ────────────────────────────────────────────────
@@ -545,7 +544,11 @@ func (s *server) aiTopologyContext(claims jwtClaims) func(context.Context, ai.Pr
 		if s.pathGraph == nil {
 			out.Notes = append(out.Notes, "path measurement is not enabled on this deployment — no measured path is available")
 		} else {
-			out.Paths = append(out.Paths, s.aiDevicePaths(tctx, tenant, cross, dev)...)
+			paths, pathsCapped := s.aiDevicePaths(tctx, tenant, cross, dev)
+			out.Paths = append(out.Paths, paths...)
+			if pathsCapped {
+				out.Notes = append(out.Notes, aiPathCapNote)
+			}
 		}
 		return out, nil
 	}
@@ -562,6 +565,15 @@ func (s *server) aiTopologyContext(claims jwtClaims) func(context.Context, ai.Pr
 // neighbour and the assistant would go on to reason about a device it had been
 // told was isolated. A total loss must never be reported as a partial one.
 const aiNeighborCapNote = "this device has more adjacencies than this answer can carry, so the neighbour list below is INCOMPLETE FOR THIS DEVICE — treat a missing neighbour as unknown, not as absent"
+
+// aiPathCapNote is the path list's equivalent, and it exists for the same
+// reason: a truncated list that does not SAY it was truncated is read as a
+// complete one. The path list used to be cut twice in silence — once at 200
+// scanned definitions, once at MaxTopologyPaths reported — and because both
+// stores order definitions by path id, the SAME paths were dropped on every
+// turn, so the assistant reasoned about a fixed partial fleet and said nothing
+// about it.
+const aiPathCapNote = "this device is measured by more paths than this answer can carry, so the path list below is INCOMPLETE FOR THIS DEVICE — treat a missing path as unknown, not as absent"
 
 // aiDeviceNeighbors selects the SUBJECT device's own edges out of the
 // fleet-wide link set and only then bounds them. capped reports that the
@@ -616,24 +628,34 @@ func aiSeamTouchesDevice(endpoints map[string]string, dev models.Device) bool {
 }
 
 // aiDevicePaths returns the measured live paths this device is the vantage or
-// source for, newest observation per path.
-func (s *server) aiDevicePaths(ctx context.Context, tenant string, cross bool, dev models.Device) []ai.TopologyPathRef {
+// source for, newest observation per path. capped reports that the SUBJECT's
+// own paths were cut, which is the only condition the caller may narrate.
+//
+// THE ORDER IS THE POINT, exactly as in aiDeviceNeighbors. The bound used to be
+// spent on the tenant-wide definition list BEFORE the subject's own paths were
+// selected out of it — and both stores order definitions by path id (MemStore
+// sorts on PathID, PGCHStore on `ORDER BY tenant_id, path_id`), so on an estate
+// with more than 200 definitions the same devices lost the same paths on every
+// single turn, deterministically and without a word to the reader. Selecting
+// first costs one pass over a slice that is already in memory; the store's own
+// read bound (the PG query's LIMIT) is what keeps that slice finite.
+func (s *server) aiDevicePaths(ctx context.Context, tenant string, cross bool, dev models.Device) (out []ai.TopologyPathRef, capped bool) {
 	defs, err := s.pathGraph.ListPathDefinitions(ctx, tenant, cross)
 	if err != nil {
 		logWarn("ai", "path definition list failed", map[string]any{"device_id": dev.ID, "error": err.Error()})
-		return nil
+		return nil, false
 	}
-	if len(defs) > aiPathDefsScanned {
-		defs = defs[:aiPathDefsScanned]
-	}
-	var out []ai.TopologyPathRef
+	mine := make([]pathgraph.PathDefinition, 0, ai.MaxTopologyPaths)
 	for _, d := range defs {
-		if len(out) >= ai.MaxTopologyPaths {
-			break
+		if aiPathTouchesDevice(d, dev) {
+			mine = append(mine, d)
 		}
-		if !aiPathTouchesDevice(d, dev) {
-			continue
-		}
+	}
+	if len(mine) > ai.MaxTopologyPaths {
+		mine = mine[:ai.MaxTopologyPaths]
+		capped = true
+	}
+	for _, d := range mine {
 		ref := ai.TopologyPathRef{ID: d.PathID, Label: aiPathLabel(d, dev)}
 		obs, _, _, found, oerr := s.pathGraph.LatestObservation(ctx, tenant, cross, pathgraph.ObservationFilter{
 			PathID: d.PathID, DataClasses: pathgraph.LiveOnly(), Limit: 1,
@@ -650,7 +672,7 @@ func (s *server) aiDevicePaths(ctx context.Context, tenant string, cross bool, d
 		}
 		out = append(out, ref)
 	}
-	return out
+	return out, capped
 }
 
 // aiPathTouchesDevice reports whether a path definition is measured FROM this
