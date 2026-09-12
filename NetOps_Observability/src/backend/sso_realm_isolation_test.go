@@ -359,6 +359,61 @@ func TestTenantSSOStillSignsInItsOwnAccounts(t *testing.T) {
 	}
 }
 
+// THE BARE SIGN-IN PAGE AND A TENANT-BOUND CONNECTION (review 3.7-06).
+//
+// The generic page used to list every configured connection, on the stated
+// grounds that it is the platform's front door and existing deployments depend
+// on it. That reasoning holds for PLATFORM-REALM connections and does not hold
+// for tenant-bound ones, which did not exist before locators and cannot work
+// from that page at all: the flow is handed the connection's own /t/{slug}
+// callback, and handleTenantSSO's third check refuses any callback whose
+// browser is not holding the matching locator cookie — which a browser on the
+// bare page is not. The customer was sent to their IdP, made to authenticate,
+// and refused on the way back.
+//
+// This test drives that refusal through the real flow, so the button list is
+// narrowed for a reason that is demonstrated rather than asserted.
+func TestGenericEntryCannotUseABoundConnection(t *testing.T) {
+	h := newRealmHarness(t)
+	h.seedFederated(t, "acmeuser", h.f.tenantA, RoleReadOnly, "ldap")
+
+	// The flow a bare-page button would start: no locator cookie anywhere.
+	frag := h.roundTrip(t, "/api/auth/sso/login?idp=acme-idp",
+		"/t/"+h.f.slugA+"/sso/acme-idp/callback", "acmeuser", nil)
+	if frag.Get("token") != "" {
+		t.Fatalf("a bound connection signed in from the generic entry — if this now WORKS, " +
+			"the button belongs back on the bare page and providerVisible should be reverted")
+	}
+	if frag.Get("sso_error") == "" {
+		t.Fatalf("no token and no error: %v", frag)
+	}
+	// The account is untouched by the refused round trip.
+	if u, _ := h.f.s.users.Get("acmeuser"); u.Role != RoleReadOnly || u.TenantID != h.f.tenantA {
+		t.Fatalf("the refused flow still rewrote the account: %+v", u)
+	}
+
+	// Which is why the bare page must not offer it. The SAME connection is
+	// still offered at its own locator, so nothing legitimate is lost.
+	if h.f.s.providerVisible(nil, "acme-idp") {
+		t.Errorf("acme-idp is offered on the bare sign-in page, where clicking it can only fail")
+	}
+	acme := locatorFor(t, h.f.srv, "/t/"+h.f.slugA)
+	if got := ssoButtons(t, h.f.srv, acme); len(got) == 0 {
+		t.Errorf("acme-idp must still be offered at Acme's own sign-in URL, got %v", got)
+	}
+
+	// An UNBOUND connection is the front door's own button and still works from
+	// the generic entry — the regression guard against over-narrowing.
+	if !h.f.s.providerVisible(nil, "shared-idp") {
+		t.Fatalf("the unbound platform-realm connection was hidden from the bare sign-in page")
+	}
+	h.seedFederated(t, "corpuser", h.f.tenantB, RoleReadOnly, "ldap")
+	frag = h.roundTrip(t, "/api/auth/sso/login?idp=shared-idp", "/api/auth/sso/callback", "corpuser", nil)
+	if frag.Get("token") == "" {
+		t.Fatalf("the platform-realm button stopped working from the bare page: %q", frag.Get("sso_error"))
+	}
+}
+
 // An /org/{id} locator is ONE realm over SEVERAL tenants. The check is Reaches,
 // never string equality, so an org URL still signs in every tenant its org owns
 // — including a sibling of the tenant the connection is bound to.

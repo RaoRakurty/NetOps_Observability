@@ -461,3 +461,33 @@ func TestSNMPRungTreatsAnUnreachableDeviceAsNoVersion(t *testing.T) {
 		t.Errorf("got (%q, %v), want an empty non-error answer", got, err)
 	}
 }
+
+// The rung's second gate is what makes it a CLOSED command source: the loader
+// validated the profile, and this refuses anything that reached here anyway.
+// The token list names CR and LF; its own doc says "control characters", and
+// the sweep is what makes that true (review 3.5-19).
+func TestCheckCommandRefusesAnythingItPromisesTo(t *testing.T) {
+	s := &SSHSource{}
+	for name, cmd := range map[string]string{
+		"empty":               "   ",
+		"a chained command":   "show version; reload",
+		"a redirection":       "show version > flash:x",
+		"an embedded newline": "show version\nreload",
+		"an escape sequence":  "show version\x1b[2J",
+		"a bell":              "show version\a",
+		"a delete byte":       "show version\x7f",
+		"a vertical tab":      "show version\v",
+	} {
+		if err := s.checkCommand(cmd); err == nil {
+			t.Errorf("%s: accepted %q immediately before it would go on a wire", name, cmd)
+		}
+	}
+	// ...and the shapes real profiles author are untouched, including the two
+	// that are not show/display verbs and Junos' display filter.
+	for _, ok := range []string{"show version", "get system status",
+		"/system resource print", "show version | no-more"} {
+		if err := s.checkCommand(ok); err != nil {
+			t.Errorf("a legitimate authored command was refused: %q -> %v", ok, err)
+		}
+	}
+}

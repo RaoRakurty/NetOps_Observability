@@ -1509,12 +1509,7 @@ func newServer() *server {
 	// ring under the record's marker AND in the structured application log, so
 	// it survives whether the reader is `correlix-debug` or `docker logs api`.
 	srv.debugParseFilter = parsetrace.Default()
-	srv.debugParseFilter.SetSink(func(marker, component, msg string, fields map[string]any) {
-		srv.debugRing.Append(marker, pipedebug.RingLine{
-			Level: "debug", Component: component, Msg: msg, Fields: fields,
-		})
-		applog.Debug(component, msg, fields)
-	})
+	srv.debugParseFilter.SetSink(srv.parseTraceSink)
 	srv.debugAPI = pipedebug.New(srv.debugDeps()) // handlers over injected seams (§5)
 	// DEBUG-ROUTES-END
 	srv.rcaRevisions = newRcaRevisionStore(rcaRevisionsPath())
@@ -5116,7 +5111,59 @@ func (s *server) debugAuthz(w http.ResponseWriter, r *http.Request) (pipedebug.P
 	return pipedebug.Principal{
 		Subject: claims.Sub, Tenant: tenant, Cross: cross,
 		CHScope: s.chTenantScopeFor(claims),
+		// The metric-store boundary comes from the SAME chokepoint every other
+		// VictoriaMetrics lane uses (metrics_query.go), folded once and carried
+		// whole. The passive gNMI stage reads by DEVICE NAME, so without this a
+		// restricted tenant's series — or another tenant's, for an operator
+		// scoped in with the switcher — came back to whoever could name the
+		// device (review 3.9-07).
+		Metrics: pipedebug.MetricsScope{Derived: true, Filters: s.metricsScopeFiltersFor(claims)},
 	}, true
+}
+
+// debugVictoriaExport is Deps.VictoriaExport: the export transport, refusing a
+// scoped read it cannot enforce.
+//
+// extra_filters[] is a VictoriaMetrics extension. Against a Prometheus upstream
+// it is IGNORED, which would turn a scoped debug read into an unscoped one with
+// no error anywhere — so a caller carrying a boundary is refused instead, the
+// same rule igpmonVMQuery and the forecast lane apply.
+func (s *server) debugVictoriaExport(client *http.Client) func(context.Context, string, []string, time.Time, time.Time) ([]byte, error) {
+	base := envOr("VICTORIA_URL", envOr("METRICS_URL", "http://victoria:8428"))
+	export := pipedebug.NewVictoriaExport(client, base)
+	return func(ctx context.Context, match string, filters []string, start, end time.Time) ([]byte, error) {
+		if len(filters) > 0 && !metricsUpstreamIsVictoria(base) {
+			return nil, errors.New("metrics scoping requires a VictoriaMetrics backend; refusing an unscopable read")
+		}
+		return export(ctx, match, filters, start, end)
+	}
+}
+
+// parseTraceSink is the collectors' parse-decision sink: one decision line into
+// the debug ring for the trace that owns it, and into the structured log so it
+// survives whether the reader is `correlix-debug` or `docker logs api`.
+//
+// TWO KINDS OF MARKER ARRIVE HERE, and only one of them is trustworthy. An
+// ARMED-FILTER match carries the operator's own needle, which is not
+// marker-shaped: arming is an authenticated act and those lines are kept. A
+// MARKER-shaped value came off the RECORD, and the records reaching the parse
+// hook include unauthenticated ones — a trap whose community does not match
+// loses device attribution but is still parsed — so a marker this process never
+// minted belongs to somebody else. Writing its lines would let whoever can
+// reach a collector port spend an operator's trace memory and fill the
+// application log during the incident the trace was opened for (review 3.3-13).
+// The ring refuses such a line on its own; this skips the log line too.
+//
+// What does NOT change is when a record is TRACED: a marked record still traces
+// with no arm, which is the design's reason 1.
+func (s *server) parseTraceSink(marker, component, msg string, fields map[string]any) {
+	if pipedebug.ValidMarker(marker) && !s.debugRing.Admitted(marker) {
+		return
+	}
+	s.debugRing.Append(marker, pipedebug.RingLine{
+		Level: "debug", Component: component, Msg: msg, Fields: fields,
+	})
+	applog.Debug(component, msg, fields)
 }
 
 // debugUIHost adapts *server to pipedebug.UIQueryHost — the seam stage 10 runs
@@ -5174,12 +5221,11 @@ func (s *server) debugDeps() pipedebug.Deps {
 		Search:         openSearch,
 		OSIndexPattern: oslog.TenantIndexPattern,
 		CHSelect:       chSelect,
-		VictoriaExport: pipedebug.NewVictoriaExport(client,
-			envOr("VICTORIA_URL", envOr("METRICS_URL", "http://victoria:8428"))),
-		KafkaPeek:    pipedebug.NewKafkaPeek(client, sidecar, token),
-		CorrLogLevel: pipedebug.NewCorrLogLevel(client, sidecar, token),
-		CorrHealth:   pipedebug.NewCorrHealth(client, strings.TrimRight(corrURL, "/")),
-		SetAPILevel:  s.debugAPILevel.Set,
+		VictoriaExport: s.debugVictoriaExport(client),
+		KafkaPeek:      pipedebug.NewKafkaPeek(client, sidecar, token),
+		CorrLogLevel:   pipedebug.NewCorrLogLevel(client, sidecar, token),
+		CorrHealth:     pipedebug.NewCorrHealth(client, strings.TrimRight(corrURL, "/")),
+		SetAPILevel:    s.debugAPILevel.Set,
 		// Vector is deliberately NOT wired: it reads VECTOR_LOG at process start
 		// and exposes no log-level mutation on its API, so there is nothing
 		// honest to call. The handler answers with pipedebug.VectorLevelReason,

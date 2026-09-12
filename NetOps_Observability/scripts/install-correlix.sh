@@ -184,7 +184,7 @@ check_ingest_ports() {
     warn "If a collector fails to start, check for another service on 514/5514, 2055/4739/6343, 162 or 11019."
     return 0
   fi
-  local listening busy="" entry port proto var
+  local listening busy="" entry port proto var move
   # -H no header, -l listening, -n numeric, -t tcp, -u udp. Fold every local
   # address down to "proto:port" so 0.0.0.0:514, [::]:514 and 127.0.0.1:514
   # all match. A non-zero ss here is a real failure, not noise.
@@ -200,8 +200,19 @@ check_ingest_ports() {
     entry="${entry%%:*}"
     port="${entry%%/*}"; proto="${entry##*/}"
     if printf '%s\n' "$listening" | grep -qx "$proto:$port"; then
+      # `move` is built with an `if`, not `$([ -n "$var" ] && printf ...)`: an
+      # assignment takes the status of its LAST command substitution, so the
+      # entries with no mover variable (514/tcp, 514/udp) made this assignment
+      # return 1 and `set -e` killed the installer here — before `die` printed
+      # the one diagnostic this check exists to give. It only ever survived
+      # because the sole call site nests it inside `if ! ( preflight )`, which
+      # suspends errexit; the report must not depend on that.
+      move=""
+      if [ -n "$var" ]; then
+        move=" (move it with $var=<port> in the environment)"
+      fi
       busy="$busy
-  $port/$proto — $(port_purpose "$port")$([ -n "$var" ] && printf ' (move it with %s=<port> in the environment)' "$var")"
+  $port/$proto — $(port_purpose "$port")$move"
     fi
   done
   [ -n "$busy" ] || return 0

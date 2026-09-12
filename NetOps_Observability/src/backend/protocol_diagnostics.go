@@ -914,11 +914,20 @@ func (s *server) tacLookupIncident(r *http.Request, tenant string, cross bool, i
 			out.WindowStart = inc.FirstSeenAt
 			out.WindowEnd = inc.LastSeenAt
 			out.Sources = append(out.Sources, "incident register")
-			if inc.SourceType == "correlation" && isUUIDToken(inc.SourceID) {
-				id = inc.SourceID
-			}
 		}
 	}
+	// THERE IS NO INCIDENT -> CORRELATION BRIDGE TO FOLLOW, and the code no
+	// longer pretends there is. A branch here followed `SourceType ==
+	// "correlation"` to the correlation id, but the store's source_type is a
+	// closed vocabulary (alert | log | anomaly | manual | experience;
+	// incident.normalizeSourceType collapses anything else to "manual" BEFORE
+	// the row is written), so no stored incident could ever satisfy it: the
+	// branch was dead from the day it was written, and the escalation went out
+	// with neither the correlation evidence nor any mention of its absence
+	// (review 3.1-19). incident.TestSourceTypeVocabularyIsClosedAndExcludes-
+	// Correlation goes red if that vocabulary ever grows the member this would
+	// need — which is the signal to build the bridge properly rather than
+	// restore a dead test of it.
 	if isUUIDToken(id) {
 		if obj, ok := s.tacCorrelationFacts(r, id); ok {
 			found = true
@@ -935,6 +944,12 @@ func (s *server) tacLookupIncident(r *http.Request, tenant string, cross bool, i
 		} else {
 			out.Missing = append(out.Missing, "correlation object (not readable for this id)")
 		}
+	} else if found {
+		// An incident-register id is not a correlation id, so there is nothing
+		// to read. Say so: Sources and Missing are rendered to the operator
+		// precisely so an escalation assembled without a store cannot look like
+		// one assembled with it.
+		out.Missing = append(out.Missing, "correlation object (this incident carries no correlation id)")
 	}
 	return out, found
 }

@@ -319,7 +319,7 @@ func (a *API) stageCtx(ctx context.Context, p Principal, stage Stage, kind Kind,
 	case StageOpenSearch:
 		return a.OpenSearchStage(ctx, p, kind, marker, tenant)
 	case StageVictoria:
-		return a.VictoriaStage(ctx, kind, marker)
+		return a.VictoriaStage(ctx, p, kind, marker)
 	case StageClickHouse:
 		return a.ClickHouseStage(ctx, p, kind, marker)
 	case StageCorrelation:

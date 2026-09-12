@@ -24,7 +24,13 @@ package protocoldiag
 // FAIL CLOSED. A line longer than maxRedactLineBytes cannot be held forever, so
 // it is flushed in pieces — but a piece is emitted only AFTER the rules have run
 // over it, and a PEM body is never emitted at all. An unterminated PEM block at
-// Close redacts through to the end, exactly as redactText does.
+// Close redacts through to the end, exactly as redactText does. Those pieces are
+// written BACK TO BACK: they are one device line, and the only reason they
+// arrived separately is this writer's own memory bound, so a separator between
+// them would be a break the device never printed (review 3.5-15). The one
+// difference that remains on such a line is that the per-line rules see each
+// piece separately, which is why the bound is far larger than any line a device
+// actually prints.
 
 import (
 	"bytes"
@@ -56,11 +62,16 @@ type RedactingWriter struct {
 
 	line       bytes.Buffer
 	inKeyBlock bool
-	// started reports whether any line has been emitted yet, so the newline
-	// separators land between lines and never before the first one — the same
-	// join semantics strings.Join gives redactText.
-	started bool
-	closed  bool
+	// pendingSep reports that the text written so far ENDS A LINE, so the next
+	// write needs the separator before it. It is false before the first line
+	// (nothing to separate) and, crucially, false after a PARTIAL flush of an
+	// over-long line: those pieces are one logical line and must be written
+	// back to back. A plain "have we written anything" flag put a newline
+	// between every 64 KiB piece, so a device line longer than the bound
+	// reached the bundle split at an arbitrary offset the device never printed
+	// (review 3.5-15). Same join semantics strings.Join gives redactText.
+	pendingSep bool
+	closed     bool
 	// n counts the REDACTED bytes actually written, which is what the caller
 	// records as the command's size.
 	n int64
@@ -137,29 +148,34 @@ func (rw *RedactingWriter) emit(line string, complete bool) error {
 	if rw.inKeyBlock {
 		if complete && rw.red.pemEnd.MatchString(line) {
 			rw.inKeyBlock = false
-			return rw.writeLine(line) // keep the END marker
+			return rw.writeLine(line, true) // keep the END marker
 		}
 		return nil // body line: dropped; the mark was emitted at BEGIN
 	}
 	if complete && rw.red.pemBegin.MatchString(line) && !rw.red.pemOneLine.MatchString(line) {
 		rw.inKeyBlock = true
-		if err := rw.writeLine(line); err != nil {
+		if err := rw.writeLine(line, true); err != nil {
 			return err
 		}
-		return rw.writeLine(redactionMark)
+		return rw.writeLine(redactionMark, true)
 	}
-	return rw.writeLine(rw.red.redactLine(line))
+	return rw.writeLine(rw.red.redactLine(line), complete)
 }
 
-// writeLine writes one redacted line with the separator semantics
+// writeLine writes one redacted piece with the separator semantics
 // strings.Join("\n") gives the buffered path.
-func (rw *RedactingWriter) writeLine(s string) error {
-	if rw.started {
+//
+// endsLine says this piece completes a logical line. A PARTIAL flush does not,
+// and the next piece is therefore written straight after it: the two are one
+// device line, and the only reason they arrived separately is this writer's own
+// memory bound.
+func (rw *RedactingWriter) writeLine(s string, endsLine bool) error {
+	if rw.pendingSep {
 		if err := rw.raw([]byte{'\n'}); err != nil {
 			return err
 		}
 	}
-	rw.started = true
+	rw.pendingSep = endsLine
 	return rw.raw([]byte(s))
 }
 

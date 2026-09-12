@@ -306,7 +306,7 @@ func verifyFlowRecords(marker string, recs []PeekRecord) []PeekRecord {
 // which move for every record and can never be attributed to one marker —
 // reporting a counter delta as "the marker was seen" would be a fabrication.
 // Kinds that DO mint a series (flow, gNMI — W2) run the export below.
-func (a *API) VictoriaStage(ctx context.Context, kind Kind, marker string) Entry {
+func (a *API) VictoriaStage(ctx context.Context, p Principal, kind Kind, marker string) Entry {
 	e := Entry{Stage: StageVictoria, Module: string(StageVictoria)}
 	sel := MarkerSeriesSelector(kind, marker)
 	if sel == "" {
@@ -315,10 +315,13 @@ func (a *API) VictoriaStage(ctx context.Context, kind Kind, marker string) Entry
 	}
 	now := a.deps.now()
 	e.Query = fmt.Sprintf("GET /api/v1/export?match[]=%s&start=%d&end=%d", sel, now.Add(-stageWindow).Unix(), now.Unix())
+	if !p.Metrics.Derived {
+		return notObservable(e, "no metrics boundary was derived for this caller, and an unscoped read of the metric store is refused")
+	}
 	if a.deps.VictoriaExport == nil {
 		return notObservable(e, "no VictoriaMetrics client is wired into this API build")
 	}
-	raw, err := a.deps.VictoriaExport(ctx, sel, now.Add(-stageWindow), now)
+	raw, err := a.deps.VictoriaExport(ctx, sel, p.Metrics.Filters, now.Add(-stageWindow), now)
 	if err != nil {
 		return notObservableTransient(e, "VictoriaMetrics export failed: "+err.Error())
 	}

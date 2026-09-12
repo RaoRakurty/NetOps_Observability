@@ -275,9 +275,13 @@ func ssoButtons(t *testing.T, srv *httptest.Server, cookies ...*http.Cookie) []s
 func TestSignInPageListsOnlyTheCandidateRealmsProviders(t *testing.T) {
 	f := newSigninFixture(t)
 
-	// No locator — today's behaviour: every configured button.
-	if got := ssoButtons(t, f.srv); len(got) != 3 {
-		t.Fatalf("generic sign-in should list every button, got %v", got)
+	// No locator — the bare sign-in page, which offers the PLATFORM realm only.
+	// A tenant-bound button cannot work from here (its callback demands a
+	// locator cookie this browser does not hold), so listing it published the
+	// customer's name and led every click into a refusal: see
+	// TestGenericEntryCannotUseABoundConnection.
+	if got := ssoButtons(t, f.srv); len(got) != 1 || got[0] != "shared-idp" {
+		t.Fatalf("generic sign-in = %v, want the unbound platform-realm button only", got)
 	}
 
 	acme := locatorFor(t, f.srv, "/t/"+f.slugA)
@@ -310,10 +314,11 @@ func TestSignInPageListsOnlyTheCandidateRealmsProviders(t *testing.T) {
 	}
 
 	// A forged / foreign cookie value resolves to nothing and must not widen the
-	// list into another tenant's — it falls back to the generic page.
+	// list into another tenant's — it falls back to the bare page, which is the
+	// platform realm and nothing else.
 	forged := &http.Cookie{Name: loginLocatorCookie, Value: "not.a.real.token"}
-	if got := ssoButtons(t, f.srv, forged); len(got) != 3 {
-		t.Errorf("an unverifiable candidate must fall back to the generic page, got %v", got)
+	if got := ssoButtons(t, f.srv, forged); len(got) != 1 || got[0] != "shared-idp" {
+		t.Errorf("an unverifiable candidate must fall back to the bare page, got %v", got)
 	}
 }
 

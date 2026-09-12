@@ -13556,14 +13556,54 @@ def _debug_configured() -> bool:
 
 def _debug_authorized(auth_header: str | None) -> bool:
     """Constant-time bearer check. An unconfigured token authorizes NOTHING —
-    the empty string is not a password."""
+    the empty string is not a password.
+
+    THE COMPARISON IS ON BYTES, NOT STR. `hmac.compare_digest` refuses two
+    `str`s the moment either carries a non-ASCII character, and http.server
+    decodes headers as latin-1 — so any byte >= 0x80 after "Bearer " used to
+    raise TypeError out of this function, past the response writer, and the
+    caller got a bare connection close instead of the 401 this function decides
+    (review 3.9-14). It always FAILED CLOSED, but an unanswered request is not
+    the refusal the code is written to give.
+
+    Encoding latin-1 recovers the exact bytes the client sent; encoding the
+    configured token the way os.environ decoded it recovers the exact bytes the
+    operator set. A presented value that is not latin-1 encodable cannot have
+    come off the wire at all, so it cannot be the token: it compares against b""
+    rather than being special-cased into an early return.
+    """
     if not CORR_DEBUG_TOKEN:
         return False
     value = (auth_header or "").strip()
     prefix = "bearer "
     if value[:len(prefix)].lower() != prefix:
         return False
-    return hmac.compare_digest(value[len(prefix):], CORR_DEBUG_TOKEN)
+    try:
+        presented = value[len(prefix):].encode("latin-1")
+    except UnicodeEncodeError:
+        presented = b""
+    return hmac.compare_digest(presented, CORR_DEBUG_TOKEN.encode("utf-8", "surrogateescape"))
+
+
+def _debug_body_length(header_value: str | None) -> int:
+    """The declared POST body length, or ValueError naming the problem.
+
+    `int(self.headers.get("Content-Length") or 0)` raised ValueError on any
+    non-numeric header, and that exception escaped past the response writer the
+    same way the bearer TypeError did: no status, just a closed connection
+    (review 3.9-14). A malformed header is a CLIENT error with an answer.
+
+    The size bound stays with the caller, because "that header is not a number"
+    (400) and "that body is too big" (413) are different answers.
+    """
+    raw = (header_value or "").strip() or "0"
+    try:
+        length = int(raw)
+    except ValueError:
+        raise ValueError("Content-Length is not a number") from None
+    if length < 0:
+        raise ValueError("Content-Length is negative")
+    return length
 
 
 def _valid_debug_marker(marker: str) -> bool:
@@ -13845,8 +13885,15 @@ def _start_health_sidecar() -> object | None:
             # health surface is the sidecar's reason to exist, and a debug
             # request must not be able to take it down.
             try:
-                length = int(self.headers.get("Content-Length") or 0)
-                if length < 0 or length > CORR_DEBUG_MAX_BODY:
+                try:
+                    length = _debug_body_length(self.headers.get("Content-Length"))
+                except ValueError as exc:
+                    status, ctype, body = 400, "application/json", json.dumps(
+                        {"detail": str(exc)}).encode()
+                    length = -1
+                if length < 0:
+                    pass                                   # already answered 400
+                elif length > CORR_DEBUG_MAX_BODY:
                     status, ctype, body = 413, "application/json", b'{"detail":"request body too large"}'
                 else:
                     raw = self.rfile.read(length) if length else b""

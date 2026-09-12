@@ -191,6 +191,12 @@ type hostJob struct {
 	push notify.NtfyPush
 	tier string
 	name string
+	// onFail runs after the LAST attempt has failed. It exists for content a
+	// failed push would otherwise destroy: the digest drains its accumulator to
+	// compose the message, and without this the window's warnings are gone even
+	// though nothing was delivered (review 3.9-09). Nil for every job whose
+	// content survives its own delivery.
+	onFail func()
 }
 
 // retryable reports whether this job may be re-sent on a transient failure.
@@ -457,7 +463,11 @@ func (r *receiver) deliverHost(j hostJob) {
 	r.log(level, "platform alert push to host monitoring FAILED", map[string]any{
 		"route": RouteHostMonitoring, "alertname": j.name, "tier": j.tier,
 		"error": err.Error(), "reason": reason, "retried": j.retryable(),
+		"content_kept": j.onFail != nil,
 	})
+	if j.onFail != nil {
+		j.onFail()
+	}
 }
 
 // sleep is the injected wait (Deps.Sleep), so the backoff is asserted in tests

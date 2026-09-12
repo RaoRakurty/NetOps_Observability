@@ -309,3 +309,92 @@ def test_get_sidecar_still_serves_only_health_and_metrics():
     assert main._sidecar_response("/healthz")[0] == 200
     status, _, _ = main._sidecar_response("/debug/kafka-peek")
     assert status == 404, "the debug routes must not be reachable by GET"
+
+
+# ── the two inputs that arrive before any validation ────────────────────────
+#
+# An Authorization header and a Content-Length are read by the handler ITSELF,
+# before the pure response function sees anything, so an exception in either one
+# escapes past the response writer: the blanket `except Exception` keeps the
+# thread alive and counts the failure, but the client gets a bare connection
+# close instead of the 401 or 413 the code is written to give (review 3.9-14).
+#
+# `hmac.compare_digest` on two `str`s raises TypeError the moment either carries
+# a non-ASCII character — and http.server decodes headers as latin-1, so ANY
+# byte >= 0x80 after "Bearer " produces exactly that.
+
+@pytest.mark.parametrize("presented", [
+    "ÿ",                       # one high byte, as latin-1 decoding yields it
+    "unit-test-tokené",        # the real token with a high byte appended
+    "Ã©Ã©",     # utf-8 bytes of "éé" as http.server hands them over
+])
+def test_a_non_ascii_bearer_is_refused_not_raised(presented):
+    assert main._debug_authorized("Bearer " + presented) is False
+
+
+def test_a_non_ascii_bearer_is_a_401_through_the_response_function():
+    status, _, body = main._sidecar_debug_response(
+        "/debug/kafka-peek", peek_body(), "Bearer ÿþ")
+    assert status == 401
+    assert b"bearer" in body.lower()
+
+
+def test_the_real_token_still_authorizes_after_the_encoding_fix():
+    assert main._debug_authorized("Bearer unit-test-token") is True
+    assert main._debug_authorized("bearer unit-test-token") is True
+    assert main._debug_authorized("Bearer unit-test-tokeX") is False
+
+
+def test_a_non_ascii_token_from_the_environment_still_matches(monkeypatch):
+    """An operator may set a token with high bytes, and the fix must not turn
+    the deployment's own credential into a permanent 401.
+
+    The header is built the way the WIRE builds it: the client sends the token's
+    utf-8 bytes and http.server decodes them latin-1, so the round trip is
+    encode(utf-8) -> decode(latin-1) here and the reverse inside the check.
+    """
+    monkeypatch.setattr(main, "CORR_DEBUG_TOKEN", "tøken")
+    on_the_wire = "tøken".encode().decode("latin-1")
+    assert on_the_wire != "tøken", "the fixture is not modelling the wire"
+    assert main._debug_authorized("Bearer " + on_the_wire) is True
+    assert main._debug_authorized("Bearer token") is False
+    assert main._debug_authorized("Bearer tøken") is False  # never sent this way
+
+
+@pytest.mark.parametrize("header,want", [
+    (None, 0),
+    ("", 0),
+    ("  ", 0),
+    ("0", 0),
+    ("64", 64),
+])
+def test_content_length_parses_the_well_formed_cases(header, want):
+    assert main._debug_body_length(header) == want
+
+
+@pytest.mark.parametrize("bad", ["abc", "12x", "1.5", "0x10", "+-1", "-5"])
+def test_a_malformed_content_length_is_an_answer_not_an_exception(bad):
+    """`int()` on the raw header raised ValueError straight past the response
+    writer, so the caller got a closed connection with no status at all."""
+    with pytest.raises(ValueError) as exc:
+        main._debug_body_length(bad)
+    assert str(exc.value)  # the refusal names its reason
+
+
+def test_an_oversized_content_length_is_still_reported_as_a_length():
+    """The bound itself stays where it was: the handler answers 413, which is a
+    different answer from "that header is not a number" (400)."""
+    assert main._debug_body_length(str(main.CORR_DEBUG_MAX_BODY + 1)) == main.CORR_DEBUG_MAX_BODY + 1
+
+
+def test_the_post_handler_parses_content_length_through_the_helper():
+    """The helper is only worth having if the handler uses it. `int()` on the
+    raw header inside do_POST is the defect itself, so the shape is pinned."""
+    src = inspect.getsource(main._start_health_sidecar)
+    post = src[src.index("def do_POST"):src.index("# DEBUG-ROUTES-END")]
+    assert "_debug_body_length(self.headers.get(\"Content-Length\"))" in post, \
+        "do_POST no longer parses Content-Length through the guarded helper"
+    assert "int(self.headers" not in post, \
+        "do_POST calls int() on a raw header again — that exception escapes the response writer"
+    # And both refusals are still distinguishable to the caller.
+    assert "400" in post and "413" in post

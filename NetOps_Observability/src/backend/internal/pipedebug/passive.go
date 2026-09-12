@@ -111,16 +111,27 @@ func PassiveSeriesSelector(device, path string) string {
 // PassiveVictoriaStage is the ONE stage a passive gNMI follow can prove
 // positively: did this device's subscribed paths actually land in the metric
 // store inside the window.
-func (a *API) PassiveVictoriaStage(ctx context.Context, spec PassiveSpec) Entry {
+//
+// IT IS SCOPED BY THE CALLER'S BOUNDARY (§3a rule 4). The selector names a
+// DEVICE, not a tenant, so nothing about it is self-limiting: a platform
+// operator who is currently restricted from a tenant's telemetry, or one who
+// scoped INTO a tenant with the switcher, would otherwise have read that
+// device's series by naming it. The boundary is Principal.Metrics — folded at
+// package backend's chokepoint, never re-derived here — and an UNDERIVED scope
+// is refused rather than treated as "no restriction".
+func (a *API) PassiveVictoriaStage(ctx context.Context, p Principal, spec PassiveSpec) Entry {
 	e := Entry{Stage: StageVictoria, Module: string(StageVictoria)}
 	sel := PassiveSeriesSelector(spec.Device, spec.Path)
 	now := a.deps.now()
 	start := now.Add(-ClampSince(spec.Since))
 	e.Query = fmt.Sprintf("GET /api/v1/export?match[]=%s&start=%d&end=%d", sel, start.Unix(), now.Unix())
+	if !p.Metrics.Derived {
+		return notObservable(e, "no metrics boundary was derived for this caller, and an unscoped read of the metric store is refused")
+	}
 	if a.deps.VictoriaExport == nil {
 		return notObservable(e, "no VictoriaMetrics client is wired into this API build")
 	}
-	raw, err := a.deps.VictoriaExport(ctx, sel, start, now)
+	raw, err := a.deps.VictoriaExport(ctx, sel, p.Metrics.Filters, start, now)
 	if err != nil {
 		return notObservable(e, "VictoriaMetrics export failed: "+err.Error())
 	}
@@ -189,7 +200,7 @@ func (a *API) passiveFollow(ctx context.Context, p Principal, spec PassiveSpec, 
 	return []Entry{
 		a.KafkaStage(ctx, spec.Kind, marker),
 		a.OpenSearchStage(ctx, p, spec.Kind, marker, ""),
-		a.PassiveVictoriaStage(ctx, spec),
+		a.PassiveVictoriaStage(ctx, p, spec),
 		a.ClickHouseStage(ctx, p, spec.Kind, marker),
 		a.CorrelationStage(ctx, p, spec.Kind, marker),
 		a.APIStage(marker),

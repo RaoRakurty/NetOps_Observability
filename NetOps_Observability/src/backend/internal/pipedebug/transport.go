@@ -194,8 +194,14 @@ func NewCorrHealth(client *http.Client, base string) func(context.Context) (map[
 }
 
 // NewVictoriaExport builds Deps.VictoriaExport over GET /api/v1/export.
-func NewVictoriaExport(client *http.Client, base string) func(context.Context, string, time.Time, time.Time) ([]byte, error) {
-	return func(ctx context.Context, match string, start, end time.Time) ([]byte, error) {
+//
+// The caller's boundary rides as extra_filters[], which VictoriaMetrics
+// AND-injects into the selector server-side (one arg per alternative, merged —
+// the shape metricsScopeFiltersFor renders). An empty filter list is the
+// unrestricted platform owner and is NOT the same thing as an underived scope:
+// that distinction is made before this function, at Principal.Metrics.Derived.
+func NewVictoriaExport(client *http.Client, base string) func(context.Context, string, []string, time.Time, time.Time) ([]byte, error) {
+	return func(ctx context.Context, match string, filters []string, start, end time.Time) ([]byte, error) {
 		if strings.TrimSpace(base) == "" {
 			return nil, errors.New("no VictoriaMetrics base URL configured")
 		}
@@ -204,6 +210,11 @@ func NewVictoriaExport(client *http.Client, base string) func(context.Context, s
 		}
 		q := url.Values{}
 		q.Set("match[]", match)
+		for _, f := range filters {
+			if strings.TrimSpace(f) != "" {
+				q.Add("extra_filters[]", f)
+			}
+		}
 		q.Set("start", strconv.FormatInt(start.Unix(), 10))
 		q.Set("end", strconv.FormatInt(end.Unix(), 10))
 		return getBounded(ctx, client, strings.TrimRight(base, "/")+"/api/v1/export?"+q.Encode(), maxVictoriaResponse)

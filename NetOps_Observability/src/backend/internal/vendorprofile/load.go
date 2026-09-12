@@ -292,6 +292,9 @@ func validateProfile(name string, p Profile) error {
 			return fmt.Errorf("vendorprofile: %s: capture.prompt_regex: %w", where, err)
 		}
 	}
+	if err := validateDeviceCommandBytes(where, "capture.show_version_cmd", p.Capture.ShowVersionCmd); err != nil {
+		return err
+	}
 	if err := validatePcapCapture(where, p.Capture); err != nil {
 		return err
 	}
@@ -430,10 +433,8 @@ func validateIdentityProbe(where string, p Profile) error {
 			return fmt.Errorf("vendorprofile: %s: identity_probe command %q declared twice", where, cmd)
 		}
 		seen[cmd] = true
-		for _, bad := range configCaptureForbiddenBytes {
-			if strings.Contains(cmd, bad) {
-				return fmt.Errorf("vendorprofile: %s: identity_probe command %q contains %q", where, cmd, bad)
-			}
+		if err := validateDeviceCommandBytes(where, "identity_probe command", cmd); err != nil {
+			return err
 		}
 		if len(c.SerialPatterns) == 0 && len(c.ModelPatterns) == 0 {
 			return fmt.Errorf("vendorprofile: %s: identity_probe command %q declares no pattern — it would run at a device and read nothing", where, cmd)
@@ -550,23 +551,45 @@ var captureCommandVerbs = []string{"show ", "display ", "admin display", "info "
 
 // validateCaptureCommand enforces the read-only + no-chaining contract on ONE
 // capture command string, wherever it is declared (vendor level or dialect).
+//
+// The READ-ONLY VERB half is specific to a config capture. It is NOT applied to
+// the other commands this product runs at a device: FortiOS reads its status
+// with `get system status` and RouterOS with `/system resource print`, both
+// already shipping, so the allowlist is a rule about capture commands rather
+// than a rule about device commands. Those families get the bytes half —
+// validateDeviceCommandBytes — plus, for identity commands, a read-verb check
+// on the shipped DATA (identity_probe_test.go).
 func validateCaptureCommand(name, field, cmd string) error {
+	if cmd == "" {
+		return nil
+	}
+	if err := validateDeviceCommandBytes(name, field, cmd); err != nil {
+		return err
+	}
+	lower := strings.ToLower(cmd)
+	for _, verb := range captureCommandVerbs {
+		if strings.HasPrefix(lower, verb) {
+			return nil
+		}
+	}
+	return fmt.Errorf("vendorprofile: %s: %s %q is not a read-only show/display command", name, field, cmd)
+}
+
+// validateDeviceCommandBytes is the BYTES half of the contract on every string
+// this product puts at a device prompt: trimmed, no chaining or redirection
+// token, no control character.
+//
+// It is shared rather than restated because it had been restated: the identity
+// probe applied the token list and not the control-character sweep its own doc
+// promised, and `capture.show_version_cmd` — run verbatim by the OS-version
+// rung and the inventory identity probe — was not checked at all, resting
+// entirely on osprobe's runtime second gate (review 3.5-19).
+func validateDeviceCommandBytes(name, field, cmd string) error {
 	if cmd == "" {
 		return nil
 	}
 	if strings.TrimSpace(cmd) != cmd {
 		return fmt.Errorf("vendorprofile: %s: %s %q must be trimmed", name, field, cmd)
-	}
-	lower := strings.ToLower(cmd)
-	ok := false
-	for _, verb := range captureCommandVerbs {
-		if strings.HasPrefix(lower, verb) {
-			ok = true
-			break
-		}
-	}
-	if !ok {
-		return fmt.Errorf("vendorprofile: %s: %s %q is not a read-only show/display command", name, field, cmd)
 	}
 	for _, tok := range configCaptureForbiddenBytes {
 		if strings.Contains(cmd, tok) {

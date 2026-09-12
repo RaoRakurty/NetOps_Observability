@@ -245,6 +245,9 @@ func TestCorrelationStageSeenRedactsTheRowsItReturns(t *testing.T) {
 
 func TestAPIStageServesTheInProcessRingNotTheApplogsIndex(t *testing.T) {
 	f := newFakeBackend()
+	// The ring keeps lines only for markers this process minted (ring.go); a
+	// test that seeds it directly stands in for the mint.
+	f.ring.Admit(testMarker)
 	f.ring.Append(testMarker, RingLine{Level: "debug", Component: "trace", Msg: "injected"})
 	api := New(f.deps())
 	e := stageOf(t, api, "/api/debug/stage/api?marker="+testMarker)

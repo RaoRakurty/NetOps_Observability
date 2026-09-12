@@ -44,6 +44,31 @@ type Principal struct {
 	// package then reports NOT-OBSERVABLE rather than running unscoped (§3 fails
 	// closed — a missing scope must never mean "everything").
 	CHScope string
+	// Metrics is the principal's VictoriaMetrics boundary — the caller's
+	// visible-device set AND the per-tenant operator-visibility restriction,
+	// already folded together — DERIVED BY THE CALLER at package backend's one
+	// chokepoint (s.metricsScopeFiltersFor) and carried here for exactly the
+	// reason CHScope is: this package must never write the rule out again.
+	//
+	// The metric store is the one store in this file that a passive gNMI follow
+	// reads by DEVICE NAME rather than by tenant, so without this the stage
+	// exported any named device's series — including a tenant whose telemetry
+	// the platform operator is currently restricted from (review 3.9-07).
+	Metrics MetricsScope
+}
+
+// MetricsScope is a caller's already-folded VictoriaMetrics boundary, rendered
+// as the extra_filters[] values every other metrics lane in this product puts
+// on the wire (metrics_query.go).
+//
+// Derived is a separate field rather than "len(Filters) > 0" because an EMPTY
+// filter list is a LEGITIMATE answer — an unrestricted platform owner reads
+// unfiltered — so emptiness cannot double as "nobody derived a scope" the way
+// an empty CHScope can. A stage handed an underived scope reports NOT
+// OBSERVABLE rather than reading the store unscoped (§3 fails closed).
+type MetricsScope struct {
+	Derived bool
+	Filters []string
 }
 
 // PeekRequest is one bounded, read-only Kafka peek.
@@ -113,8 +138,12 @@ type Deps struct {
 	// the ClickHouse row policies enforce isolation under the handler's filter.
 	CHSelect func(ctx context.Context, scope, sql string, comment ...string) ([]map[string]any, error)
 
-	// VictoriaExport runs GET /api/v1/export for a selector over a window.
-	VictoriaExport func(ctx context.Context, match string, start, end time.Time) ([]byte, error)
+	// VictoriaExport runs GET /api/v1/export for a selector over a window, with
+	// the caller's boundary (Principal.Metrics.Filters) on the wire as
+	// extra_filters[] — the same mechanism, and therefore the same semantics,
+	// as every other metrics lane. The implementation refuses a scoped read it
+	// cannot enforce (a non-VictoriaMetrics upstream ignores extra_filters[]).
+	VictoriaExport func(ctx context.Context, match string, filters []string, start, end time.Time) ([]byte, error)
 
 	// KafkaPeek proxies the bounded read-only peek to the correlation
 	// container's debug sidecar (Go has no Kafka client by design). Nil, or an
