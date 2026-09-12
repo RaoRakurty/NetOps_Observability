@@ -6,6 +6,7 @@ package backend
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"netops/backend/topology"
@@ -46,6 +47,13 @@ func (s *server) handleTopologyGraph(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// The operator-visibility restriction, BEFORE anything is projected or
+	// counted. The store isolates one tenant from another — the in-memory backend
+	// by tenant, the pg backend by FORCE-RLS — but the operator's cross-tenant
+	// door is "__all__", and neither a row policy nor FilterTenant has an "all
+	// except". Coverage is summarized from the filtered records too: a count is a
+	// disclosure.
+	snap = s.visibleGraphRecords(claims, snap)
 	view := snap.ToView(tenant, now)
 
 	// Live enrichment: overlay current health/util onto the structural spine, from
@@ -72,6 +80,59 @@ func (s *server) handleTopologyGraph(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, topologyGraphResponse{View: view, Coverage: snap.Summarize()})
+}
+
+// visibleGraphRecords applies the operator-visibility restriction
+// (Tenant.OperatorRestricted) to the PERSISTED graph.
+//
+// It needs BOTH forms of the rule, because the reconciler resolves adjacencies
+// PER TENANT: a link from a visible device to a restricted tenant's device is
+// stored under the VISIBLE tenant, with target "ext:<the hidden hostname>".
+// Dropping rows by tenant_id alone therefore leaves an edge that still names the
+// device whose node it just removed — the same edge half the live /links surface
+// has. Both identifier sets come from the shared resolvers, never from a second
+// copy of the rule.
+func (s *server) visibleGraphRecords(claims jwtClaims, g topology.GraphRecords) topology.GraphRecords {
+	tenant, cross := principalTenant(claims)
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
+	if deny {
+		return topology.GraphRecords{} // scoped into a restricted tenant: nothing
+	}
+	rt := s.restrictedTelemetry(claims)
+	if len(exclude) == 0 && len(rt.keys) == 0 && len(rt.addrs) == 0 {
+		return g
+	}
+	hiddenTenant := make(map[string]bool, len(exclude))
+	for _, id := range exclude {
+		hiddenTenant[strings.ToLower(strings.TrimSpace(id))] = true
+	}
+	hiddenDevice := make(map[string]bool, len(rt.keys)+len(rt.addrs))
+	for _, k := range append(append([]string{}, rt.keys...), rt.addrs...) {
+		hiddenDevice[strings.ToLower(strings.TrimSpace(k))] = true
+	}
+	names := func(vals ...string) bool {
+		for _, v := range vals {
+			v = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(v, "ext:")))
+			if v != "" && hiddenDevice[v] {
+				return true
+			}
+		}
+		return false
+	}
+	out := topology.GraphRecords{}
+	for _, n := range g.Nodes {
+		if hiddenTenant[strings.ToLower(strings.TrimSpace(n.TenantID))] || names(n.ID, n.Label, n.MgmtIP) {
+			continue
+		}
+		out.Nodes = append(out.Nodes, n)
+	}
+	for _, e := range g.Edges {
+		if hiddenTenant[strings.ToLower(strings.TrimSpace(e.TenantID))] || names(e.Source, e.Target) {
+			continue
+		}
+		out.Edges = append(out.Edges, e)
+	}
+	return out
 }
 
 // activeAlertsByDevice returns the caller's visible active alerts grouped by device

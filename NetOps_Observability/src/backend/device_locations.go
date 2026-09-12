@@ -214,7 +214,11 @@ func (s *server) handleDeviceLocation(w http.ResponseWriter, r *http.Request) {
 	}
 	tenant, cross := principalTenant(claims)
 	d, found := s.discovery.Get(id)
-	if !found || !canSeeDevice(d, tenant, cross) {
+	// deviceVisibility, not canSeeDevice: this route reads and writes the exact
+	// coordinates of ONE named device, so the operator-visibility restriction has
+	// to answer here as well — and it answers 404, the same answer another
+	// tenant's id gets, so the two cases stay indistinguishable (§3a rule 1).
+	if !found || !s.deviceVisibilityFor(claims).visible(d) {
 		http.NotFound(w, r)
 		return
 	}
@@ -288,7 +292,9 @@ func (s *server) handleDeviceLocations(w http.ResponseWriter, r *http.Request) {
 		Lng    float64 `json:"lng,omitempty"`
 		Source string  `json:"source"` // sot | manual | none
 	}
-	devices := visibleDevices(s.discovery.Devices(), claims)
+	// visibleDevicesFor: this editor lists every device WITH its coordinates, so a
+	// restricted tenant's rows must leave the platform operator's view entirely.
+	devices := s.visibleDevicesFor(claims)
 	rows := make([]row, 0, len(devices))
 	for _, d := range devices {
 		x := row{ID: d.ID, Name: d.Name, Vendor: d.Labels["vendor"], Source: "none"}

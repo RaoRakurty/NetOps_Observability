@@ -10,9 +10,13 @@ package backend
 //   · the RCA timeline's §7 spine (rcaPathBlock → stampSpineRoles).
 //
 // TENANT ISOLATION (§3a): every index here is built from the CALLER-VISIBLE
-// device set only (visibleDevices), so a role — or the existence of a device —
-// can never leak across tenants through a role stamp. The stamping functions
-// are pure over their inputs (unit-tested with mock facts).
+// device set only (visibleDevicesFor — the tenant rule AND the operator-
+// visibility restriction), so a role — or the existence of a device — can never
+// leak across tenants through a role stamp. A stamped role is an assertion that
+// the hop IS a managed device of ours, so stamping a restricted tenant's device
+// on an RCA spine confirms that tenant's fleet to an operator who may not read
+// it. The stamping functions are pure over their inputs (unit-tested with mock
+// facts).
 
 import (
 	"context"
@@ -75,11 +79,11 @@ func adjacencySummaries(links []topoLink, typeByID map[string]string) map[string
 // indexed (absence is honest). Best-effort: link facts may be empty (collectors
 // off) — identity-string signals still classify.
 func (s *server) deviceRoleIndex(ctx context.Context, claims jwtClaims) map[string]topology.RoleResult {
-	devs := visibleDevices(s.discovery.Devices(), claims)
+	devs := s.visibleDevicesFor(claims)
 	if len(devs) == 0 {
 		return map[string]topology.RoleResult{}
 	}
-	links := s.gatherTopoLinks(ctx, devs)
+	links := s.gatherTopoLinksFor(ctx, claims, devs)
 	idx := make(map[string]topology.RoleResult)
 	for _, f := range toDeviceFacts(devs, nil, nil, links) {
 		rr := topology.ClassifyDeviceRole(f)

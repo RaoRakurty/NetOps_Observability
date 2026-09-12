@@ -6,9 +6,7 @@ package backend
 import (
 	"errors"
 	"net/http"
-	"strings"
 
-	"netops/backend/collectors"
 	"netops/backend/topology"
 )
 
@@ -46,31 +44,16 @@ func (s *server) handleTopologyLinks(w http.ResponseWriter, r *http.Request) {
 
 	// Tenant-scoped device inventory → resolution maps (all keyed within the
 	// caller's own visible devices, so resolution can never reach another tenant).
-	devs := visibleDevices(s.discovery.Devices(), claims)
-	ownedID := make(map[string]string, len(devs)) // id → display name
-	byName := make(map[string]string, len(devs))  // lower(name) → id
-	byAddr := make(map[string]string, len(devs))  // address → id
-	for _, d := range devs {
-		ownedID[d.ID] = d.Name
-		if d.Name != "" {
-			byName[strings.ToLower(strings.TrimSpace(d.Name))] = d.ID
-		}
-		if d.Address != "" {
-			byAddr[strings.TrimSpace(d.Address)] = d.ID
-		}
-	}
+	// visibleDevicesFor also applies the operator-visibility restriction, so a
+	// restricted tenant's devices anchor no link and resolve no neighbour; the
+	// edge half — a neighbour that stays "ext:<its hostname>" — is closed by
+	// gatherTopoLinksFor, which is also the ONE place /view derives links.
+	devs := s.visibleDevicesFor(claims)
 
-	// Merged neighbour records from every discovery protocol (LLDP, CDP, …).
-	// Absent data (collectors off / Redis down) → empty set; the UI falls back to
-	// labelled tier-inference. Not an error condition.
-	neighbors, _ := collectors.FetchTopologyLinks(r.Context()) // best-effort: collector off/unreachable → empty map
-
-	// Interface-address map (deviceID → interface IP → ifName), published by the
-	// SNMP metrics collector. Lets BGP-LS links (whose descriptors identify
-	// interfaces by IP, not name) show real port names. Best-effort: empty when
-	// the collector is off / Redis is down — enrichment simply no-ops.
-	ifaddr, _ := collectors.FetchIfAddrMap(r.Context()) // best-effort: collector off/unreachable → empty map
-
-	links := topology.NormalizeLLDP(neighbors, ownedID, byName, byAddr, ifaddr)
+	// Merged neighbour records from every discovery protocol (LLDP, CDP, …) plus
+	// the interface-address map that gives BGP-LS links real port names. Absent
+	// data (collectors off) → empty set; the UI falls back to labelled
+	// tier-inference. Not an error condition.
+	links := s.gatherTopoLinksFor(r.Context(), claims, devs)
 	writeJSON(w, http.StatusOK, map[string]any{"links": links, "count": len(links), "source": topology.LinkSources(links)})
 }

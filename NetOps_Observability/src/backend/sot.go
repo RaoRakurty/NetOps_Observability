@@ -18,6 +18,12 @@ import "context"
 
 // SoTSite is a declared site with operator intent (placement) the wire can't give.
 type SoTSite struct {
+	// TenantID is the site's OWNER, carried through the projection because a site
+	// is tenant-owned data: its name and coordinates say where that tenant
+	// operates. The (tenant, cross) arguments isolate one tenant from another, but
+	// the operator-visibility restriction has to EXCLUDE a tenant from the
+	// cross-tenant view, and a row with no owner on it cannot be excluded.
+	TenantID  string
 	Slug      string
 	Name      string
 	Status    string
