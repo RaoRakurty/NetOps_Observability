@@ -476,6 +476,13 @@ func TestReportExecutionsHonourTheOperatorVisibilityRestriction(t *testing.T) {
 		t.Errorf("the restriction swallowed the platform's OWN artifact: %d %s", st, body)
 	}
 
+	// A blank entry in the hidden set must not hide the PLATFORM's own rows —
+	// the two halves of the rule (this one and the SQL exclusion) both skip
+	// blanks, and a platform row is owned by nobody, so nothing hides it.
+	if !(reports.ExecScope{Cross: true, Hidden: []string{""}}).Sees(reports.ExecutionRecord{TenantID: ""}) {
+		t.Errorf("a blank hidden id hid the platform's own execution")
+	}
+
 	// ── half 3: the restricted tenant's OWN view is unchanged. The switch hides
 	//    a tenant from the platform, never from itself. ──
 	bAfter, bAfterRaw := f.executions(f.b.token, "")

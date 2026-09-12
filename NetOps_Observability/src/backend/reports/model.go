@@ -255,7 +255,11 @@ func (sc ExecScope) Sees(rec ExecutionRecord) bool {
 		return false
 	}
 	for _, id := range sc.Hidden {
-		if normTenant(rec.TenantID) == normTenant(id) {
+		// A blank entry is skipped rather than matched: a blank owner is
+		// PLATFORM-owned, which the restriction never hides, and the SQL half
+		// (hiddenLower) drops blanks for the same reason — the two halves of
+		// one rule must not disagree.
+		if h := normTenant(id); h != "" && h == normTenant(rec.TenantID) {
 			return false
 		}
 	}
