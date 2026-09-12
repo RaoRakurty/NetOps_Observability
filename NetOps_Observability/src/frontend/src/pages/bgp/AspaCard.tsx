@@ -13,6 +13,7 @@
 
 import { useEffect, useState } from "react";
 import { api, type BgpAspaResp } from "../../services/api";
+import { operatorError } from "../../lib/errors";
 import { Chip } from "../../components/noc";
 import { Section } from "./Section";
 import AskIris from "../../components/AskIris";
@@ -28,7 +29,7 @@ export function AspaCard({ asn }: { asn?: string }) {
     setErr(""); setData(null);
     api.bgpAspa(asn)
       .then((d) => { if (alive) { setData(d); setAt(Date.now()); } })
-      .catch((e: Error) => { if (alive) setErr(e.message || "ASPA lookup failed"); })
+      .catch((e: unknown) => { if (alive) setErr(operatorError(e, "The ASPA records for this AS could not be read.")); })
       .finally(() => { /* no busy state: this card is never the slow one */ });
     return () => { alive = false; };
   }, [asn]);

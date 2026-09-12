@@ -26,6 +26,7 @@ import {
   isAdministrativeScope,
   isIngestOnlyKey,
   scopeAllowed,
+  scopesStepValid,
 } from "./admin";
 
 afterEach(cleanup);
@@ -205,5 +206,65 @@ describe("isIngestOnlyKey", () => {
     expect(isIngestOnlyKey([])).toBe(false);
     expect(isIngestOnlyKey(undefined)).toBe(false);
     expect(isIngestOnlyKey([" INGEST:experience "])).toBe(true);
+  });
+});
+
+// ── an unread grid must not mint a key ──────────────────────────────────────
+//
+// `api.permissions()` feeds the picker. A FAILED read used to be mapped to an
+// empty grid with no error at all, so the wizard said "Checking which scopes
+// your role may issue…" for ever — while its scopes step still reported itself
+// valid, Next still advanced, and the key was minted with the wizard's DEFAULT
+// scope set. The server re-authorises every scope on mint, so nothing
+// escalated; what the operator lost was any sight of the authority they were
+// issuing. Three facts leave the grid empty — still loading, could not be read,
+// and "you may mint nothing" — and none of them is a scope list.
+describe("minting is refused until the scope grid is KNOWN", () => {
+  it("holds the step closed while no option is on screen", () => {
+    // loading, failed, or genuinely empty — all the same to the operator's eye.
+    expect(scopesStepValid(0, ["read:metrics"], false)).toBe(false);
+    expect(scopesStepValid(0, [], false)).toBe(false);
+    expect(scopesStepValid(0, ["admin:*"], true)).toBe(false);
+  });
+
+  it("opens it once the caller can see what the key would carry", () => {
+    const n = allowedScopeOptions(SUPER_ADMIN, false).length;
+    expect(n).toBeGreaterThan(0);
+    expect(scopesStepValid(n, ["read:metrics"], false)).toBe(true);
+  });
+
+  it("still demands the administrative confirmation on a known grid", () => {
+    const n = allowedScopeOptions(SUPER_ADMIN, false).length;
+    expect(scopesStepValid(n, ["admin:*"], false)).toBe(false);
+    expect(scopesStepValid(n, ["admin:*"], true)).toBe(true);
+  });
+
+  it("says the grid could not be READ, rather than waiting for ever", () => {
+    render(
+      <ScopePicker
+        options={[]} selected={["read:metrics"]} onToggle={() => {}}
+        platformAdmin={false} confirmed={false} onConfirm={() => {}}
+        loadError="The scopes your role may issue could not be read."
+      />,
+    );
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toMatch(/could not be read/);
+    expect(alert.textContent).toMatch(/no key can be issued yet/);
+    // The "still loading" wording must NOT be what a failure shows.
+    expect(screen.queryByText(/Checking which scopes your role may issue/)).toBeNull();
+  });
+
+  it("offers the failed read back to the operator", () => {
+    const onRetry = vi.fn();
+    render(
+      <ScopePicker
+        options={[]} selected={[]} onToggle={() => {}}
+        platformAdmin={false} confirmed={false} onConfirm={() => {}}
+        loadError="The scopes your role may issue could not be read."
+        onRetry={onRetry}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 });

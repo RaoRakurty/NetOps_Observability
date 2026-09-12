@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from "react";
 import { api, type BgpGeofeedResp } from "../../services/api";
+import { operatorError } from "../../lib/errors";
 import { Chip } from "../../components/noc";
 import { geofeedCountries } from "./bgpDepth.model";
 import { Section, ShowAll, useCap } from "./Section";
@@ -34,7 +35,7 @@ export function GeofeedPanel({ resource }: { resource?: string }) {
     setBusy(true); setErr(""); setData(null);
     api.bgpGeofeed(resource)
       .then((d) => { if (alive) { setData(d); setAt(Date.now()); } })
-      .catch((e: Error) => { if (alive) setErr(e.message || "geofeed lookup failed"); })
+      .catch((e: unknown) => { if (alive) setErr(operatorError(e, "The geofeed for this resource could not be read.")); })
       .finally(() => { if (alive) setBusy(false); });
     return () => { alive = false; };
   }, [resource]);

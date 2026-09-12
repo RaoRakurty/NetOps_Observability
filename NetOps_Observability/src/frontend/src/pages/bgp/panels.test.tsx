@@ -111,7 +111,10 @@ describe("RpkiPanel", () => {
   it("surfaces a failed request instead of an empty 'all valid' panel", async () => {
     bgpRpki.mockImplementation(() => Promise.reject(new Error("network down")));
     render(<RpkiPanel />);
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("network down"));
+    // A message that already reads as prose is KEPT — operatorError only
+    // normalises its shape (sentence case, full stop). Nothing is invented and
+    // nothing is swallowed; what it drops is developer text, covered below.
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Network down."));
   });
 });
 
@@ -361,5 +364,58 @@ describe("section identity", () => {
     const graph = render(<AsPathGraphPanel bare />);
     expect(graph.container.querySelector("[data-section]")).toBeNull();
     expect(graph.container.querySelector(".bgp-sub")).toBeTruthy();
+  });
+});
+
+// ── what a failed lookup is ALLOWED to say ──────────────────────────────────
+//
+// `api.request()` throws `Error("<status> <statusText>: <body>")` with the raw
+// upstream body attached. These four panels used to render `e.message`, so a
+// 502 from the proxy printed the collector's own wrap chain — an internal
+// hostname AND a container IP — into the operator's screen. They now go
+// through lib/errors.operatorError, which drops developer text and keeps a
+// sentence about what WE were trying to do.
+const ENVELOPE = () => new Error(
+  '502 Bad Gateway: {"error":"Get http://victoriametrics:8428/api/v1/query: ' +
+  'dial tcp 172.18.0.9:8428: connect: connection refused"}',
+);
+/** Nothing on this screen may name an internal host, address or wire verb. */
+function expectNoInternals(text: string) {
+  expect(text).not.toMatch(/victoriametrics/);
+  expect(text).not.toMatch(/\b\d{1,3}(\.\d{1,3}){3}\b/);
+  expect(text).not.toMatch(/dial tcp|connection refused|Bad Gateway|8428/);
+}
+
+describe("a failed lookup leaks no internal address", () => {
+  it("RpkiPanel", async () => {
+    bgpRpki.mockRejectedValue(ENVELOPE());
+    const { container } = render(<RpkiPanel />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("The service did not answer.");
+    expectNoInternals(container.textContent ?? "");
+  });
+
+  it("AspaCard", async () => {
+    bgpAspa.mockRejectedValue(ENVELOPE());
+    const { container } = render(<AspaCard asn="AS64500" />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("The service did not answer.");
+    expectNoInternals(container.textContent ?? "");
+  });
+
+  it("GeofeedPanel", async () => {
+    bgpGeofeed.mockRejectedValue(ENVELOPE());
+    const { container } = render(<GeofeedPanel resource="193.0.0.0/21" />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("The service did not answer.");
+    expectNoInternals(container.textContent ?? "");
+  });
+
+  it("AsPathGraphPanel", async () => {
+    bgpAsPathGraph.mockRejectedValue(ENVELOPE());
+    const { container } = render(<AsPathGraphPanel prefix="193.0.0.0/21" />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("The service did not answer.");
+    expectNoInternals(container.textContent ?? "");
   });
 });

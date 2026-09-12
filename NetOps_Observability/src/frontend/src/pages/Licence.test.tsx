@@ -59,7 +59,7 @@ vi.mock("../services/api", () => ({ api: mockApi }));
 vi.mock("../hooks/useAuth", () => ({ useAuth: mockUseAuth }));
 vi.mock("../components/Icon", () => ({ default: () => <span /> }));
 
-import Licence from "./Licence";
+import Licence, { sparklinePath, sparklineDraws } from "./Licence";
 
 // ── fixtures (the wire shapes from internal/licence/api.go) ─────────────────
 
@@ -1072,5 +1072,63 @@ describe("recorded usage", () => {
     expect((await screen.findAllByText("The service did not answer.")).length).toBe(5);
     // …and the usage section still reports what was actually used.
     expect(screen.getByText("Entitlement meters")).toBeTruthy();
+  });
+});
+
+// ── the usage Trend column ──────────────────────────────────────────────────
+//
+// The sparkline is the only DRAWN claim on this page, and it was drawing
+// nothing: every point started a new subpath ("M x,y M x,y …") because the
+// moveto test — `d.endsWith(" ")` against a string whose every appended segment
+// ended in a space — was true on every iteration. SVG paints a lone moveto as
+// nothing, so the Trend column was blank while the <svg> still announced
+// "peak N" to a screen reader: a claim about data it was not showing.
+describe("usage sparkline — the path is a LINE, not a pile of movetos", () => {
+  const pts = (...v: Array<number | null>) => v.map((value) => ({ value }));
+  const cmds = (d: string) => (d.match(/[ML]/g) ?? []).join("");
+
+  it("starts once and draws a segment to every later day", () => {
+    const d = sparklinePath(pts(1, 2, 3, 4, 5), 160, 28, 5);
+    expect(cmds(d)).toBe("MLLLL");
+    expect((d.match(/M/g) ?? []).length).toBe(1);
+    expect((d.match(/L/g) ?? []).length).toBe(4);
+    expect(sparklineDraws(d)).toBe(true);
+  });
+
+  it("spans the full width, highest value at the top", () => {
+    const d = sparklinePath(pts(0, 10), 160, 28, 10);
+    // x runs 0 → w; y is inverted, so the larger value gets the SMALLER y.
+    expect(d).toBe("M0.0,27.0 L160.0,1.0");
+  });
+
+  it("breaks the line at a day nobody recorded, and starts a new run after it", () => {
+    // measured · measured · GAP · measured · measured
+    const d = sparklinePath(pts(1, 2, null, 3, 4), 160, 28, 4);
+    expect(cmds(d)).toBe("MLML");
+    expect(sparklineDraws(d)).toBe(true);
+  });
+
+  it("draws nothing — and says nothing — when every run is a single day", () => {
+    // Two measured days either side of a gap: two one-point runs, which SVG
+    // strokes as nothing. The component must not advertise a peak for that.
+    const d = sparklinePath(pts(4, null, 9), 160, 28, 9);
+    expect(cmds(d)).toBe("MM");
+    expect(sparklineDraws(d)).toBe(false);
+  });
+});
+
+describe("the rendered Trend column", () => {
+  it("paints a stroked line, not a row of invisible movetos", async () => {
+    setup();   // two recorded days, monitored_devices_peak 10 then 12
+    const { container } = render(<Licence />);
+    await screen.findByText("Entitlement meters");
+    const path = await waitFor(() => {
+      const p = container.querySelector("svg.lic-spark path");
+      expect(p, "no sparkline was drawn at all").toBeTruthy();
+      return p as SVGPathElement;
+    });
+    const d = path.getAttribute("d") ?? "";
+    expect(d, `the Trend column drew nothing: ${d}`).toMatch(/L/);
+    expect((d.match(/M/g) ?? []).length).toBe(1);
   });
 });

@@ -383,3 +383,39 @@ describe("section identity", () => {
     await waitFor(() => expect(bogons.container.querySelector('[data-section="bogons"]')).toBeTruthy());
   });
 });
+
+// ── what a failed lookup is ALLOWED to say ──────────────────────────────────
+//
+// `api.request()` throws `Error("<status> <statusText>: <body>")` with the raw
+// upstream body attached. Both panels used to render `e.message`, so a 502 from
+// the proxy printed the collector's own wrap chain — an internal hostname AND a
+// container IP — into the operator's screen. They now go through
+// lib/errors.operatorError.
+const ENVELOPE = () => new Error(
+  '502 Bad Gateway: {"error":"Get http://victoriametrics:8428/api/v1/query: ' +
+  'dial tcp 172.18.0.9:8428: connect: connection refused"}',
+);
+function expectNoInternals(text: string) {
+  expect(text).not.toMatch(/victoriametrics/);
+  expect(text).not.toMatch(/\b\d{1,3}(\.\d{1,3}){3}\b/);
+  expect(text).not.toMatch(/dial tcp|connection refused|Bad Gateway|8428/);
+}
+
+describe("a failed lookup leaks no internal address", () => {
+  it("PeersPanel", async () => {
+    bgpBmpSessions.mockRejectedValue(ENVELOPE());
+    metricsQuery.mockRejectedValue(ENVELOPE());
+    const { container } = render(<PeersPanel />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("Neighbour state could not be read: The service did not answer.");
+    expectNoInternals(container.textContent ?? "");
+  });
+
+  it("BogonsPanel", async () => {
+    bgpBogons.mockRejectedValue(ENVELOPE());
+    const { container } = render(<BogonsPanel />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("The service did not answer.");
+    expectNoInternals(container.textContent ?? "");
+  });
+});

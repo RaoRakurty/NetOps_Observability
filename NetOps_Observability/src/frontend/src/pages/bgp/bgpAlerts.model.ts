@@ -388,7 +388,12 @@ export function validatePolicy(form: PolicyForm, limits: PolicyLimits): PolicyFi
   for (const row of form.prefixes) {
     const key = row.key.trim();
     if (key === "") {
-      errs[`${row.key}.key`] = "A per-prefix policy needs the prefix it applies to.";
+      // Filed under the TRIMMED key, like every other branch below. The panel
+      // reads errs[`${row.key.trim()}.key`], so a whitespace-only key filed
+      // under the raw string ("   .key") would be an error the operator never
+      // sees while Save stays blocked on a non-empty map — the field would
+      // simply stop responding, for ever.
+      errs[`${key}.key`] = "A per-prefix policy needs the prefix it applies to.";
       continue;
     }
     if (!isPrefixKey(key)) {

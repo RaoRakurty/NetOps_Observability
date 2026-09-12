@@ -22,6 +22,7 @@
 
 import { useEffect, useState } from "react";
 import { api, type BgpBogonsResp } from "../../services/api";
+import { operatorError } from "../../lib/errors";
 import { Chip } from "../../components/noc";
 import { groupSightings } from "./bgpAlerts.model";
 import { Details, Section, ShowAll, SubBlock, useCap } from "./Section";
@@ -77,7 +78,7 @@ export function BogonsPanel() {
     setBusy(true); setErr("");
     api.bgpBogons()
       .then((d) => { if (alive) { setData(d); setAt(Date.now()); } })
-      .catch((e: Error) => { if (alive) setErr(e.message || "The bogon listing could not be read."); })
+      .catch((e: unknown) => { if (alive) setErr(operatorError(e, "The bogon listing could not be read.")); })
       .finally(() => { if (alive) setBusy(false); });
     return () => { alive = false; };
   }, []);

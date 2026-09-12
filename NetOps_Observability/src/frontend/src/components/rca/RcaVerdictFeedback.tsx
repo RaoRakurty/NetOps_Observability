@@ -19,6 +19,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, type RcaFeedback, type RcaVerdict, type RcaWrongPart } from "../../services/api";
+import { operatorError } from "../../lib/errors";
 import {
   RCA_MAX_REASON_CHARS, VERDICT_LABEL, WRONG_PART_LABEL, WRONG_PART_ORDER, rcaVerdictLine,
 } from "./labels";
@@ -33,14 +34,19 @@ const UID = "rw-fb";
 /**
  * errText — an HTTP failure in operator words. `request()` throws
  * `Error("<status> <statusText>: <body>")`, so the status is the message prefix.
+ *
+ * The three status arms below are kept because they name THIS action ("record a
+ * verdict"), which the generic sentences cannot. Everything else goes through
+ * `operatorError`: the old fallback pasted the response body in verbatim, so a
+ * 502 from the proxy put `dial tcp 172.18.0.9:8428: connect: connection refused`
+ * — an internal host and container IP — on an operator's screen.
  */
 export function errText(e: unknown): string {
   const msg = String((e as { message?: string } | null)?.message ?? e ?? "");
   if (/^403\b/.test(msg)) return "You don't have permission to record a verdict on this case.";
   if (/^401\b/.test(msg)) return "Your session expired — sign in again to record a verdict.";
   if (/^404\b/.test(msg)) return "This case is no longer available.";
-  const detail = msg.replace(/^\d{3}\s*[^:]*:\s*/, "").trim();
-  return detail ? `Could not record the verdict: ${detail}` : "Could not record the verdict.";
+  return operatorError(e, "Could not record the verdict.");
 }
 
 export default function RcaVerdictFeedback({ correlationId, correlationVersion }: {

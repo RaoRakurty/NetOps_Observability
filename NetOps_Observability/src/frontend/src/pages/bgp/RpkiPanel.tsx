@@ -17,6 +17,7 @@
 
 import { useEffect, useState } from "react";
 import { api, type BgpRpkiResp, type BgpRpkiState } from "../../services/api";
+import { operatorError } from "../../lib/errors";
 import { Chip } from "../../components/noc";
 import { rpkiStateTone, rpkiSummary } from "./bgpDepth.model";
 import { Section, ShowAll, useCap } from "./Section";
@@ -38,7 +39,7 @@ export function RpkiPanel({ resource }: { resource?: string }) {
     setBusy(true); setErr(""); setData(null);
     api.bgpRpki(resource)
       .then((d) => { if (alive) { setData(d); setAt(Date.now()); } })
-      .catch((e: Error) => { if (alive) setErr(e.message || "RPKI lookup failed"); })
+      .catch((e: unknown) => { if (alive) setErr(operatorError(e, "The RPKI validity of these prefixes could not be read.")); })
       .finally(() => { if (alive) setBusy(false); });
     return () => { alive = false; };
   }, [resource]);
