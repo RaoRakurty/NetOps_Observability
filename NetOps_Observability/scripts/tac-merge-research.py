@@ -1617,12 +1617,27 @@ def merge_vendor(path: str, classes_doc: dict, plans: dict, facts: dict) -> Repo
             continue
         for signature in issue.get("log_signatures") or []:
             text = str(signature).strip()
-            if not text or len(text) > 300:
+            # A refusal goes through Report.refuse like every other refusal in
+            # this file. A bare `continue` meant a detection signature the
+            # research pass wrote silently never existed, while the report
+            # printed zero refusals — the merge looked clean and the class could
+            # not match the log line it was given for.
+            if not text:
+                rep.refuse("an empty `log_signatures` entry carries no detection rule", issue_id)
+                continue
+            if len(text) > 300:
+                rep.refuse("a `log_signatures` entry is longer than the 300-character cap; "
+                           "shorten it to the distinctive part of the line", issue_id)
                 continue
             pattern = "(?i)" + re.escape(text)
             bucket = cls["detect"].setdefault("log_regex", [])
-            if pattern not in bucket and len(bucket) < 40:
-                bucket.append(pattern)
+            if pattern in bucket:
+                continue
+            if len(bucket) >= 40:
+                rep.refuse("class already holds the maximum of 40 `log_regex` detection rules; "
+                           "this signature was NOT added", class_id)
+                continue
+            bucket.append(pattern)
 
         handle_commands(issue.get("commands"), cls, what, issue_sources)
 
