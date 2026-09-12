@@ -1,0 +1,39 @@
+{
+  "name": "fx_osfp_thermal_h \u2014 high-power-module-thermal-throttle",
+  "signals": [
+    {
+      "kind": "dom_temperature_high",
+      "entity_type": "interface",
+      "entity_id": "spine1:Et40",
+      "observer_id": "snmp-spine1",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 4.0
+    },
+    {
+      "kind": "fec_corrected_rate_high",
+      "entity_type": "interface",
+      "entity_id": "spine1:Et40",
+      "observer_id": "snmp-spine1",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "thermal_margin_low",
+      "entity_type": "interface",
+      "entity_id": "spine1:Et40",
+      "observer_id": "snmp-spine1",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.high-power-module-thermal-throttle",
+    "tier": "suspected"
+  }
+}

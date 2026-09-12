@@ -1,0 +1,450 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { NavSection, routeFor } from "../nav";
+import { useShell } from "../context/shell";
+import { api, AuthUser, type ElevationStatus } from "../services/api";
+import { operatorError } from "../lib/errors";
+import Icon from "./Icon";
+import NavFlyout from "./NavFlyout";
+import { Modal } from "./ui";
+import AppearanceControls from "./AppearanceControls";
+import ScopeBadge from "./ScopeBadge";
+
+// Per-module accent hue (design spec §9.1 taxonomy), keyed by section id. This
+// only tints the active indicator + the flyout header; severity colours stay
+// separate and sacred. Falls back to periwinkle for any unmapped section.
+// Per-section hue — vivid, saturated tones at Alert-pink intensity so hovering
+// any item gives a clear contrast colour (the mild set read too flat on the
+// dark rail). Alerts (pink) and Copilot/ChatGPT (violet) are kept; the rest are
+// spread across the wheel: blue · cyan · green · teal · orange · amber · slate.
+const MOD_HUE: Record<string, string> = {
+  overview: "#3B82F6", // Overview — vivid blue (was Dashboards)
+  operations: "#EC4899", // Operations — pink (kept from Monitoring/Alerts)
+  investigate: "#F97316", // Investigate — vivid orange (the RCA heart)
+  infrastructure: "#22C55E", // Fleet — vivid leafy green
+  explore: "#0EA5E9", // Explore (raw telemetry planes) — vivid sky
+  security: "#EF4444", // Security — vivid red
+  analytics: "#EAB308", // Analytics — vivid amber/gold
+  copilot: "#8B5CF6", // Iris AI — violet (kept)
+  admin: "#94A3B8", // Admin — slate (utility)
+  platform: "#64748B", // Platform (provider-only) — deeper slate than Admin
+};
+const hueFor = (id: string) => MOD_HUE[id] ?? "#818CF8";
+
+// countdown renders the time left on an elevated grant as something an operator
+// reads at a glance. Under a minute it says so rather than showing "0m", and an
+// already-past expiry reads "ending" — the grant stops on the next request
+// regardless, so the menu must never claim time that is gone.
+export function countdown(expiresAt: string, now: Date = new Date()): string {
+  const end = new Date(expiresAt).getTime();
+  if (!isFinite(end)) return "";
+  const secs = Math.round((end - now.getTime()) / 1000);
+  if (secs <= 0) return "ending";
+  if (secs < 60) return "under a minute";
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m left`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}m left`;
+}
+
+/**
+ * ElevatedAccessRow — the account menu's line about elevated access.
+ *
+ * It polls its own state rather than taking it as a prop: the grant EXPIRES on
+ * its own, with no request and no logout involved, so a value handed down at
+ * mount would keep showing access that ended ten minutes ago. Polling only
+ * while the menu is open keeps that honest without a background timer running
+ * for every session that never elevates.
+ *
+ * STEP-DOWN IS NOT OPTIMISTIC. `End` used to clear the row and close the menu
+ * from a `.finally()`, so a REFUSED `DELETE /api/auth/elevation` looked exactly
+ * like a successful one: the operator believed they had dropped back to their
+ * standing role while the grant was still live and no revocation had been
+ * audited. That is a lie about an authorization surface. The failure arm now
+ * keeps the row, says the access was NOT ended, and leaves the button ready to
+ * try again.
+ */
+export function ElevatedAccessRow({ onStepDown }: { onStepDown?: () => void }) {
+  const [state, setState] = useState<ElevationStatus | null>(null);
+  const [ending, setEnding] = useState(false);
+  const [endErr, setEndErr] = useState("");
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    let live = true;
+    const load = () => { api.elevation().then((s) => { if (live) setState(s); }).catch(() => { if (live) setState(null); }); };
+    load();
+    const t = window.setInterval(() => { setTick((n) => n + 1); load(); }, 30_000);
+    return () => { live = false; window.clearInterval(t); };
+  }, []);
+  void tick;
+  if (!state?.active) return null;
+  const left = state.expires_at ? countdown(state.expires_at) : "";
+  const end = () => {
+    setEnding(true);
+    setEndErr("");
+    api.endElevation()
+      .then(() => { setState(null); onStepDown?.(); })
+      .catch((e: unknown) => { setEndErr(operatorError(e, "Elevated access was not ended — you still have it.")); })
+      .finally(() => { setEnding(false); });
+  };
+  return (
+    <div className="menu-head" data-testid="elevated-access">
+      Elevated · {state.role}
+      {left && <span style={{ color: "var(--muted)" }}> · {left}</span>}
+      <button type="button" onClick={end} disabled={ending}>
+        {ending ? "Ending…" : endErr ? "Try again" : "End"}
+      </button>
+      {endErr && (
+        <div role="alert" data-testid="elevated-end-error" style={{ color: "var(--bad)", fontWeight: 400 }}>
+          {endErr} You still have elevated access — try again, or sign out to drop it.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Segregated nav groups (presentation only — the nav data in nav.tsx is shared
+// with the v1 sidebar and stays untouched). Sections render under their group's
+// label with a thin divider between groups. Any section not listed falls into a
+// trailing "More" group so nothing is ever dropped.
+// Zones follow the operator journey of the 2026-08 owner tree: Monitor (where
+// do I start / what is happening) · Investigate (why — RCA plus the raw
+// evidence planes, kept adjacent because Explore IS the evidence drawer) ·
+// Manage (what I own + its security posture) · Analyze (trend/management
+// views) — with Governance (Administration) anchored at the foot as before.
+const GROUPS: { label: string; ids: string[] }[] = [
+  { label: "Monitor", ids: ["overview", "operations"] },
+  { label: "Investigate", ids: ["investigate", "explore"] },
+  { label: "Manage", ids: ["infrastructure", "security"] },
+  { label: "Analyze", ids: ["analytics"] },
+];
+// Governance zone anchored at the foot: Administration (tenant-level) and,
+// beneath it, Platform (provider-only — filteredNav drops the whole section for
+// a tenant/org admin, so this array simply yields one item for them). Above a
+// thin-line-separated Support/Help zone, then the account. Excluded from the
+// top groups; a section id missing from `nav` is filtered out below.
+const FOOT_ADMIN_IDS = ["admin", "platform"];
+
+type Props = {
+  nav: NavSection[];
+  activeSection: string;
+  activeLeaf?: string;
+  user: AuthUser;
+  onLogout: () => void;
+  // Opens the self-service change-password modal; undefined for federated
+  // accounts (they change it at the IdP) so the item is hidden.
+  onChangePassword?: () => void;
+  // Opens the self-service two-factor modal; undefined for federated accounts
+  // (their second factor lives at the IdP) so the item is hidden.
+  onTwoFactor?: () => void;
+  // Where the brand/Home button goes (the configured landing, else first section).
+  homeRoute?: string;
+};
+
+type OpenState = { id: string; top: number; focus?: boolean } | null;
+
+// Expanded-rail preference (2026-08 redesign): the v2 rail is icon-only by
+// default (44px, labels via flyout + title tooltips); the foot toggle expands
+// it to the labelled form. Persisted like the density preference — a plain
+// localStorage key, read once, written on toggle, never a hard requirement
+// (private-mode storage failures just mean the choice doesn't stick).
+const RAIL_EXPANDED_KEY = "netops.railExpanded";
+function readRailExpanded(): boolean {
+  try {
+    return localStorage.getItem(RAIL_EXPANDED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+// IconRail — the persistent section rail. Hovering or focusing a section opens
+// a flyout of its children to the right; the rail never reflows mid-hover (the
+// flyout is a fixed overlay). Click navigates. Collapsed (default) it is the
+// 44px icon pane with title tooltips; the foot toggle expands it to icon+label.
+// A utility cluster (Account · Support · Help) sits at the foot — replacing the
+// top-right user menu.
+export default function IconRail({ nav, activeSection, activeLeaf, user, onLogout, onChangePassword, onTwoFactor }: Props) {
+  const { navigate, setCopilotOpen, copilotOpen, setHelpOpen } = useShell();
+  const [open, setOpen] = useState<OpenState>(null);
+  const [expanded, setExpanded] = useState<boolean>(readRailExpanded);
+  // The rail's width is a shell grid track (--sidebar-w on .shell), which lives
+  // ABOVE this component — mirror the state onto the shell element, the same
+  // pattern ShellGridSizing uses for the inspector/drawer tracks.
+  useEffect(() => {
+    const el = document.querySelector(".shell.shell-v2");
+    if (!el) return;
+    el.classList.toggle("rail-expanded", expanded);
+    return () => el.classList.remove("rail-expanded");
+  }, [expanded]);
+  const toggleExpanded = useCallback(() => {
+    setExpanded((v) => {
+      try {
+        localStorage.setItem(RAIL_EXPANDED_KEY, v ? "0" : "1");
+      } catch {
+        /* preference just won't persist */
+      }
+      return !v;
+    });
+  }, []);
+  const [acctOpen, setAcctOpen] = useState(false);
+  const [supportOpen, setSupportOpen] = useState(false);
+  const openTimer = useRef<number | undefined>(undefined);
+  const closeTimer = useRef<number | undefined>(undefined);
+  const acctCloseTimer = useRef<number | undefined>(undefined);
+  const acctRef = useRef<HTMLDivElement | null>(null);
+  // The rail item that opened the current flyout — focus returns here on Escape.
+  const flyoutTrigger = useRef<HTMLElement | null>(null);
+
+  // Account/preferences opens on hover-intent like the rail items (flyout to the
+  // right), with a close grace so the diagonal path into it doesn't dismiss.
+  const openAcct = useCallback(() => {
+    window.clearTimeout(acctCloseTimer.current);
+    setOpen(null); // don't overlap with a nav flyout
+    setAcctOpen(true);
+  }, []);
+  const closeAcct = useCallback(() => {
+    acctCloseTimer.current = window.setTimeout(() => setAcctOpen(false), 200);
+  }, []);
+
+  // Hover-intent: open after 80ms, close after a 200ms grace so a diagonal
+  // cursor path into the flyout doesn't dismiss it ("safe triangle").
+  const scheduleOpen = useCallback((id: string, el: HTMLElement) => {
+    window.clearTimeout(closeTimer.current);
+    window.clearTimeout(openTimer.current);
+    flyoutTrigger.current = el;
+    const top = el.getBoundingClientRect().top;
+    openTimer.current = window.setTimeout(() => setOpen({ id, top }), 80);
+  }, []);
+  // Keyboard path (2.1.1): ArrowRight on a rail item opens its flyout at once
+  // and moves focus onto the first menu item.
+  const keyboardOpen = useCallback((id: string, el: HTMLElement) => {
+    window.clearTimeout(closeTimer.current);
+    window.clearTimeout(openTimer.current);
+    flyoutTrigger.current = el;
+    setOpen({ id, top: el.getBoundingClientRect().top, focus: true });
+  }, []);
+  const scheduleClose = useCallback(() => {
+    window.clearTimeout(openTimer.current);
+    closeTimer.current = window.setTimeout(() => setOpen(null), 200);
+  }, []);
+  const cancelClose = useCallback(() => window.clearTimeout(closeTimer.current), []);
+
+  // Close the account menu on outside click.
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      if (acctRef.current && !acctRef.current.contains(e.target as Node)) setAcctOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+
+  const railItem = (s: NavSection) => {
+    // Two INDEPENDENT questions, which this used to conflate:
+    //   · what does a CLICK do?      → act (Iris opens the slide-over) or route
+    //   · does it open a FLYOUT?     → does it have routed children
+    // Iris answers "act" to the first and, since it gained a Knowledge page,
+    // "yes" to the second. Gating the flyout on `!isCopilot` made every page
+    // under an acting section unreachable in rail mode.
+    const isCopilot = s.action === "copilot";
+    const hasFlyout = !!s.children?.length;
+    const active = isCopilot ? copilotOpen : s.id === activeSection;
+    const onActivate = () => (isCopilot ? setCopilotOpen(!copilotOpen) : navigate(routeFor(s)));
+    return (
+      <button
+        key={s.id}
+        type="button"
+        className={`rail-item${active ? " active" : ""}`}
+        style={{ ["--mod" as string]: hueFor(s.id) } as React.CSSProperties}
+        aria-current={active ? "page" : undefined}
+        aria-haspopup={hasFlyout ? "menu" : undefined}
+        aria-expanded={hasFlyout ? open?.id === s.id : undefined}
+        title={s.label}
+        onClick={onActivate}
+        onKeyDown={(e) => {
+          if (hasFlyout && e.key === "ArrowRight") {
+            e.preventDefault();
+            keyboardOpen(s.id, e.currentTarget);
+          }
+        }}
+        onMouseEnter={(e) => hasFlyout && scheduleOpen(s.id, e.currentTarget)}
+        onFocus={(e) => hasFlyout && scheduleOpen(s.id, e.currentTarget)}
+        onMouseLeave={scheduleClose}
+        onBlur={scheduleClose}
+      >
+        <span className="rail-icon">
+          <Icon name={s.icon} size={19} />
+        </span>
+        <span className="rail-label">{s.label}</span>
+      </button>
+    );
+  };
+
+  // Resolve groups against the (already permission-filtered) nav, preserving
+  // group order; collect any unlisted sections into a trailing group.
+  const byId = new Map(nav.map((s) => [s.id, s]));
+  const claimed = new Set<string>();
+  const groups = GROUPS.map((g) => {
+    const sections = g.ids.map((id) => byId.get(id)).filter(Boolean) as NavSection[];
+    sections.forEach((s) => claimed.add(s.id));
+    return { label: g.label, sections };
+  }).filter((g) => g.sections.length > 0);
+  const adminZone = FOOT_ADMIN_IDS.map((id) => byId.get(id)).filter(Boolean) as NavSection[];
+  adminZone.forEach((s) => claimed.add(s.id));
+  const leftover = nav.filter((s) => !claimed.has(s.id));
+  if (leftover.length) groups.push({ label: "More", sections: leftover });
+
+  const openSection = open ? nav.find((s) => s.id === open.id) ?? null : null;
+
+  return (
+    <aside className="rail">
+      {/* No brand head (owner 2026-07-21): the rail's standalone eye is
+          retired — the BLOGO5 wordmark in the topbar is the shell's one and
+          only brand mark. The nav groups start at the top of the pane. */}
+
+      {/* Segregated groups with thin dividers (Monitoring · Infra & Logs · Admin). */}
+      <nav className="rail-main" aria-label="Primary">
+        {groups.map((g) => (
+          <div className="rail-group" key={g.label}>
+            <div className="rail-group-label">{g.label}</div>
+            {g.sections.map(railItem)}
+          </div>
+        ))}
+      </nav>
+
+      {/* Foot cluster, thin-line separated zones:
+          (5) admin zone = Stack + Administration · (6) Support/Help · account. */}
+      <div className="rail-util">
+        <div className="rail-foot-zone">{adminZone.map(railItem)}</div>
+
+        <div className="rail-foot-zone">
+          <div className="rail-util-row">
+            <button className="rail-util-icon" type="button" title="Support" aria-label="Support" onClick={() => setSupportOpen(true)}>
+              <Icon name="support" size={16} />
+              <span>Support</span>
+            </button>
+            <button className="rail-util-icon" type="button" title="Documentation" aria-label="Documentation" onClick={() => setHelpOpen(true)}>
+              <Icon name="help" size={16} />
+              <span>Help</span>
+            </button>
+            <button
+              className={`rail-util-icon rail-expand-toggle${expanded ? " on" : ""}`}
+              type="button"
+              title={expanded ? "Collapse navigation" : "Expand navigation"}
+              aria-label={expanded ? "Collapse navigation" : "Expand navigation"}
+              aria-pressed={expanded}
+              onClick={toggleExpanded}
+            >
+              <Icon name="chevron" size={16} />
+              <span>{expanded ? "Collapse" : "Expand"}</span>
+            </button>
+          </div>
+        </div>
+
+        <div
+          className="rail-foot-zone rail-account"
+          ref={acctRef}
+          onMouseEnter={openAcct}
+          onMouseLeave={closeAcct}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && acctOpen) {
+              setAcctOpen(false);
+              (acctRef.current?.querySelector(".rail-account-btn") as HTMLElement | null)?.focus();
+            }
+          }}
+        >
+          <button
+            className="rail-util-item rail-account-btn"
+            type="button"
+            onClick={() => setAcctOpen((o) => !o)}
+            aria-haspopup="menu"
+            aria-expanded={acctOpen}
+          >
+            <span className="avatar">{user.username.slice(0, 1).toUpperCase()}</span>
+            <span className="rail-account-id">
+              <span className="rail-account-name">{user.username}</span>
+              <span className="rail-account-role">{user.role}</span>
+            </span>
+          </button>
+          {acctOpen && (
+            <div className="menu-pop rail-account-pop" role="menu">
+              <div className="menu-head">
+                {user.username}
+                <span style={{ color: "var(--muted)" }}> · {user.role}</span>
+                <ScopeBadge user={user} />
+              </div>
+              <ElevatedAccessRow onStepDown={() => setAcctOpen(false)} />
+              <AppearanceControls />
+              <button onClick={() => { setAcctOpen(false); navigate("admin/settings"); }}>Settings</button>
+              {onChangePassword && (
+                <button onClick={() => { setAcctOpen(false); onChangePassword(); }}>Change password</button>
+              )}
+              {onTwoFactor && (
+                <button onClick={() => { setAcctOpen(false); onTwoFactor(); }}>Two-factor authentication</button>
+              )}
+              {/* Third-party attribution must be REACHABLE from the running product,
+                  not just present in the image (2026-09-03 licence audit §2). The page
+                  is static, served by the SPA nginx at /licenses/, so it opens in a new
+                  tab rather than through the router. */}
+              <a
+                className="menu-link"
+                href="/licenses/"
+                target="_blank"
+                rel="noreferrer noopener"
+                onClick={() => setAcctOpen(false)}
+              >
+                Third-party licences
+              </a>
+              <button onClick={onLogout}>Sign out</button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {openSection && open && (
+        <NavFlyout
+          section={openSection}
+          top={open.top}
+          hue={hueFor(openSection.id)}
+          activeSection={activeSection}
+          activeLeaf={activeLeaf}
+          autoFocus={open.focus}
+          onEnter={cancelClose}
+          onLeave={scheduleClose}
+          onNavigate={navigate}
+          onClose={(restoreFocus) => {
+            setOpen(null);
+            if (restoreFocus) flyoutTrigger.current?.focus();
+          }}
+        />
+      )}
+      {/* PORTALED to <body>: the rail's backdrop-filter makes it the containing
+          block for fixed descendants, so an inline modal's full-screen scrim
+          would be squeezed into the 52px rail column (the same trap the docs
+          navbar hamburger fell into — see styles.css .rail comment). */}
+      {supportOpen &&
+        createPortal(
+          <Modal title="Support" onClose={() => setSupportOpen(false)}>
+            {/* Placeholder — the support portal isn't live yet. Keep it honest
+                and give the operator somewhere useful to go meanwhile. */}
+            <div className="support-placeholder">
+              <p><strong>The support portal is not open yet.</strong></p>
+              <p>
+                Until it opens, the documentation covers setup, operations and
+                troubleshooting for every part of the platform.
+              </p>
+              <button
+                className="dash-btn"
+                type="button"
+                onClick={() => { setSupportOpen(false); setHelpOpen(true); }}
+              >
+                Open documentation
+              </button>
+            </div>
+          </Modal>,
+          document.body,
+        )}
+    </aside>
+  );
+}

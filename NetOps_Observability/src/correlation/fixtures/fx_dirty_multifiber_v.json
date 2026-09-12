@@ -1,0 +1,39 @@
+{
+  "name": "fx_dirty_multifiber_v \u2014 mpo-dirty-multifiber",
+  "signals": [
+    {
+      "kind": "dom_rx_power_low",
+      "entity_type": "interface",
+      "entity_id": "leaf6:Et30",
+      "observer_id": "snmp-leaf6",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 4.0
+    },
+    {
+      "kind": "fec_corrected_rate_high",
+      "entity_type": "interface",
+      "entity_id": "leaf6:Et30",
+      "observer_id": "snmp-leaf6",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "multiple_lanes_marginal",
+      "entity_type": "interface",
+      "entity_id": "leaf6:Et30",
+      "observer_id": "snmp-leaf6",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.mpo-dirty-multifiber",
+    "tier": "suspected"
+  }
+}

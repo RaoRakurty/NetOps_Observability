@@ -1,0 +1,506 @@
+/* SPDX-License-Identifier: Apache-2.0
+   Copyright 2026 Correlix */
+
+/* RcaWorkspace.css — scoped light-theme RCA workspace.
+ *
+ * Every rule is namespaced under `.rca-ws` so this stylesheet is fully isolated
+ * from the app's (dark) theme and cannot leak the other way. Loaded as a real
+ * stylesheet ('self') — CSP-clean, no inline <style>. Print rules below isolate
+ * the workspace so a browser "Print" produces a clean RCA sheet; the Export PDF
+ * button uses the dedicated off-screen renderer (rcaExport.ts).
+ */
+.rca-ws {
+  --rw-bg: #f6f8fb; --rw-panel: #fff; --rw-panel2: #f9fafc; --rw-line: #dce3ee; --rw-soft: #edf2f8;
+  /* Foregrounds tuned for WCAG 2.2 AA (≥4.5:1 as small text on their paired
+     tinted backgrounds): muted2 8a94a6→5f6b7d, orange d66a00→b05600,
+     green 0f9f4f→0c7d40, red d92d20→c9271b, purple 6d5dfc→5847ee. */
+  --rw-text: #172033; --rw-muted: #6a7384; --rw-muted2: #5f6b7d;
+  --rw-blue: #2563eb; --rw-blue2: #eef4ff; --rw-orange: #b05600; --rw-orange2: #fff4e8;
+  --rw-green: #0c7d40; --rw-green2: #eafaf1; --rw-red: #c9271b; --rw-red2: #fff0ee;
+  --rw-purple: #5847ee; --rw-purple2: #f3f1ff;
+  --rw-shadow: 0 1px 2px rgba(20,30,50,.05), 0 8px 30px rgba(20,30,50,.06);
+  --rw-radius: 12px; --rw-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--rw-bg); color: var(--rw-text); font-size: 14px; line-height: 1.42;
+  border-radius: var(--rw-radius); padding: 4px 14px 22px; border: 1px solid var(--rw-line);
+}
+.rca-ws * { box-sizing: border-box; }
+
+/* Document theme lock — the RCA sheet is a PAPER DOCUMENT: it must render
+ * identically whichever app theme (Dark/Light) is active. Embedded slot cards
+ * (Iris AI, Network-Path topology, ticket/debug panels) are built from shared
+ * app components that consume the global theme tokens, so the dark themes'
+ * [data-theme] token overrides (styles.css) leaked black surfaces into the
+ * white sheet. Re-pin every theme-swapped token the embedded content consumes
+ * to the light/document palette. NOTE: :root ALIAS tokens (--panel/--muted/
+ * --good/--bad…) must be re-pinned too — a custom property resolves its var()
+ * references where it is DECLARED (on :root), so redefining only the base
+ * tokens would not reach the already-resolved inherited aliases. */
+.rca-ws {
+  color-scheme: light;
+  /* canvas + text */
+  --bg: var(--rw-bg); --fg: var(--rw-text); --hover: rgba(17, 24, 39, 0.05);
+  /* surfaces + borders (+ legacy aliases) */
+  --surface: var(--rw-panel); --surface-2: var(--rw-panel2); --overlay: var(--rw-panel);
+  --border: var(--rw-line); --border-strong: #cdd4e0;
+  --panel: var(--rw-panel); --panel-solid: var(--rw-panel); --panel-border: var(--rw-line);
+  /* text ramp (+ alias) */
+  --fg-muted: var(--rw-muted); --fg-subtle: var(--rw-muted2); --muted: var(--rw-muted);
+  /* status hues — light values (+ legacy aliases onto the document palette) */
+  --ok: #059669; --crit: #e11d48; --info: #2563eb; --ack: #6639ba;
+  --good: var(--rw-green); --warn: var(--rw-orange); --bad: var(--rw-red);
+  /* accent family — document indigo, not the dark themes' pale violet */
+  --accent: #4f46e5; --accent-bright: #6366f1; --accent-2: #8b5cf6;
+  --accent-grad: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  --accent-soft: rgba(99, 102, 241, 0.10); --accent-soft-2: rgba(139, 92, 246, 0.10);
+  --accent-ring: rgba(99, 102, 241, 0.35);
+  /* elevation + topology label ink (dark themes force #fff) */
+  --shadow-1: 0 1px 2px rgba(17, 24, 39, 0.05);
+  --shadow-2: 0 4px 14px rgba(17, 24, 39, 0.08);
+  --shadow-pop: 0 12px 32px rgba(17, 24, 39, 0.16);
+  --topo-node-fg: var(--rw-text);
+}
+
+/* topbar */
+.rca-ws .rw-topbar { display: flex; justify-content: space-between; gap: 16px; align-items: center;
+  border-bottom: 1px solid var(--rw-line); padding: 12px 4px; margin-bottom: 14px; flex-wrap: wrap; }
+.rca-ws .rw-brand { display: flex; align-items: center; gap: 11px; }
+.rca-ws .rw-logo { font-weight: 600; font-size: 20px; letter-spacing: .055em; line-height: 1;
+  font-family: "Inter", var(--rw-sans, ui-sans-serif), system-ui, sans-serif;
+  background: linear-gradient(120deg, #4f46e5 0%, #6d5dfc 45%, #0ea5e9 100%);
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent; }
+.rca-ws .rw-h1 { font-size: 16px; margin: 0; font-weight: 600; }
+.rca-ws .rw-sub { font-size: 13px; color: var(--rw-muted); margin-top: 1px; }
+.rca-ws .rw-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.rca-ws .rw-btn { border: 1px solid var(--rw-line); background: #fff; border-radius: 8px; padding: 7px 11px;
+  font-weight: 600; color: #334155; cursor: pointer; font-size: 13px; }
+.rca-ws .rw-btn:hover { filter: brightness(.98); }
+.rca-ws .rw-btn:disabled { opacity: .5; cursor: default; }
+.rca-ws .rw-btn.primary { background: #4f46e5; color: #fff; border-color: #4f46e5; }
+.rca-ws .rw-tabs { display: inline-flex; background: #e8eef7; border: 1px solid var(--rw-line); border-radius: 9px; padding: 2px; }
+.rca-ws .rw-tab { border: 0; background: transparent; border-radius: 7px; padding: 5px 11px; min-height: 24px; font-weight: 600; color: #566176; cursor: pointer; }
+.rca-ws .rw-tab.active { background: #fff; color: #1f2937; box-shadow: 0 1px 2px rgba(0,0,0,.07); }
+.rca-ws .rw-watermark { display: inline-flex; gap: 5px; align-items: center; color: var(--rw-muted2); font-size: 12px; }
+
+/* case title. Layout guardrails (owner 2026-07-18 "empty space / Decision
+   overlapped"): the aside column is CAPPED — long fact values must wrap inside
+   it instead of inflating the auto column until the Decision callout is crushed
+   against it; minmax(0,1fr) lets the left column actually shrink-wrap text. */
+.rca-ws .rw-case { display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 36%, 430px);
+  gap: 16px; align-items: start;
+  background: var(--rw-panel); border: 1px solid var(--rw-line); border-radius: var(--rw-radius);
+  padding: 16px 17px; box-shadow: var(--rw-shadow); margin-bottom: 12px; }
+.rca-ws .rw-case h2 { font-size: 18px; margin: 0 0 8px; font-weight: 600; letter-spacing: -.01em; }
+.rca-ws .rw-statusline { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.rca-ws .rw-note { color: var(--rw-muted); font-size: 13px; margin-top: 10px; }
+.rca-ws .rw-note b { color: var(--rw-text); font-family: var(--rw-mono); font-weight: 600; }
+/* sweep 5 (tracker 270): a STATED FACT on the RCA document surface — a
+   timestamp, a queued-action acknowledgement, an audit row. Same ink as
+   `.rw-note`, which it was renamed out of so the word-budget guard stops
+   reading a server-returned value as an explanatory note. */
+.rca-ws .fact-line { color: var(--rw-muted); font-size: 13px; margin-top: 10px; }
+.rca-ws .fact-line b { color: var(--rw-text); font-family: var(--rw-mono); font-weight: 600; }
+/* Right-side summary (owner P1 2026-07-19): ONE shared two-column grid for the
+   whole aside — every row was previously its own grid, so the label column
+   width varied per row and values started at different x positions (the
+   misalignment). display:contents lifts each row's cells into the shared
+   columns; labels stay one line, values are LEFT-aligned normal text that
+   wraps cleanly (right-aligned bold mono reads broken the moment a sentence
+   wraps). Mono is reserved for genuinely mono facts (ids, device pairs). */
+.rca-ws .rw-aside { min-width: 0; border-left: 1px solid var(--rw-line); padding-left: 16px; align-self: stretch;
+  display: grid; grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 14px; align-content: start; }
+.rca-ws .rw-metric { display: contents; }
+.rca-ws .rw-metric span { color: var(--rw-muted); font-size: 12.5px; white-space: nowrap; line-height: 1.45; }
+.rca-ws .rw-metric b { font-weight: 600; text-align: left; overflow-wrap: anywhere; min-width: 0;
+  font-size: 13px; line-height: 1.45; }
+.rca-ws .rw-metric b.mono { font-family: var(--rw-mono); font-weight: 600; }
+
+/* Evidence summary (owner 2026-07-18): verdict reason + per-symptom density
+   bars. Neutral ink only — observation volume is never a health color. Spans
+   the whole case card (grid-column 1/-1) so neither column above carries it. */
+.rca-ws .rw-evsum { grid-column: 1 / -1; margin-top: 2px; padding-top: 10px; border-top: 1px dashed var(--rw-line); }
+.rca-ws .rw-evsum-verdict { font-size: 12.5px; font-weight: 600; margin-bottom: 7px; }
+.rca-ws .rw-evsum-row { display: flex; align-items: center; gap: 10px; margin: 4px 0; font-size: 12px; }
+.rca-ws .rw-evsum-label { flex: 0 0 160px; color: var(--rw-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rca-ws .rw-evsum-bar { display: inline-flex; gap: 1px; flex: 1; max-width: 560px; }
+.rca-ws .rw-evsum-cell { flex: 1 1 0; height: 10px; border-radius: 1px; background: var(--rw-muted2, #64748b); }
+.rca-ws .rw-evsum-since { flex: 0 0 92px; text-align: right; color: var(--rw-muted2, #8a94a6); font-size: 10.5px; }
+.rca-ws .rw-evsum-row .badge { flex: 0 0 auto; font-size: 10px; }
+
+/* pills */
+.rca-ws .rw-pill { display: inline-flex; align-items: center; gap: 5px; border-radius: 7px; padding: 3px 8px;
+  font-weight: 600; font-size: 12px; letter-spacing: .01em; border: 1px solid transparent; }
+.rca-ws .rw-pill.green { background: var(--rw-green2); color: var(--rw-green); border-color: #bfeccf; }
+.rca-ws .rw-pill.orange { background: var(--rw-orange2); color: var(--rw-orange); border-color: #ffd3a9; }
+.rca-ws .rw-pill.blue { background: var(--rw-blue2); color: var(--rw-blue); border-color: #c9dbff; }
+.rca-ws .rw-pill.red { background: var(--rw-red2); color: var(--rw-red); border-color: #ffd0cc; }
+.rca-ws .rw-pill.gray { background: #eef1f6; color: #5d6678; border-color: #d8dee8; }
+.rca-ws .rw-pill.purple { background: var(--rw-purple2); color: var(--rw-purple); border-color: #ddd7ff; }
+
+/* callout */
+.rca-ws .rw-callout { border: 1px solid #f0be91; background: #fff8f0; border-radius: 9px; padding: 10px 12px;
+  margin-top: 12px; display: flex; gap: 9px; align-items: flex-start; }
+.rca-ws .rw-callout strong { color: #b45309; }
+.rca-ws .rw-callout.confirmed { border-color: #b9e5c7; background: #f2fbf6; }
+.rca-ws .rw-callout.confirmed strong { color: #078540; }
+.rca-ws .rw-callout.red { border-color: #ffb5ad; background: #fff5f4; }
+.rca-ws .rw-callout.red strong { color: #c12118; }
+
+/* layout. align-items:start — panels size to their own content (owner
+   2026-07-18): a short Ticket/Decision panel no longer stretches to its tall
+   neighbor's height and shows a slab of dead space under its last row. */
+.rca-ws .rw-grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 12px; align-items: start; }
+
+/* "How was this verified?" disclosure — audit detail out of the prose flow. */
+.rca-ws .rw-verify { margin-top: 12px; font-size: 12.5px; }
+.rca-ws .rw-verify summary { cursor: pointer; color: var(--rw-blue); font-weight: 600; }
+.rca-ws .rw-verify-body { margin-top: 6px; color: var(--rw-muted); border-left: 3px solid var(--rw-line);
+  padding-left: 11px; }
+.rca-ws .rw-verify-body ul { margin: 4px 0 0; padding-left: 18px; }
+.rca-ws .rw-verify-body li { margin: 2px 0; font-family: var(--rw-mono); font-size: 11.5px; }
+.rca-ws .rw-panel { background: var(--rw-panel); border: 1px solid var(--rw-line); border-radius: var(--rw-radius);
+  box-shadow: var(--rw-shadow); padding: 14px; }
+.rca-ws .rw-panel h3 { margin: 0 0 10px; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: #667085; }
+.rca-ws .rw-panel h4 { margin: 0 0 7px; font-size: 14px; }
+.rca-ws .rw-panel p { margin-top: 0; }
+.rca-ws .rw-section-title { font-size: 15px; font-weight: 600; margin: 16px 0 8px; }
+.rca-ws .rw-keyval { display: grid; grid-template-columns: 150px 1fr; gap: 7px 16px; margin-top: 7px; }
+.rca-ws .rw-key { color: #697386; }
+.rca-ws .rw-value { font-weight: 600; }
+.rca-ws .rw-value.mono { font-family: var(--rw-mono); }
+
+/* why */
+.rca-ws .rw-why { border-left: 3px solid var(--rw-orange); padding-left: 11px; margin: 12px 0 0; }
+.rca-ws .rw-why div { margin: 5px 0; }
+.rca-ws .rw-ruledout { border-left: 3px solid var(--rw-blue, #5b8def); padding-left: 11px; margin: 12px 0 0; font-size: 13px; }
+.rca-ws .rw-ruledout-note { color: var(--rw-muted, #6b7280); font-size: 11.5px; margin-top: 3px; }
+.rca-ws .rw-why .label { font-weight: 600; }
+.rca-ws .rw-why .label.blue { color: var(--rw-blue); }
+.rca-ws .rw-why .label.orange { color: var(--rw-orange); }
+.rca-ws .rw-why .label.green { color: var(--rw-green); }
+
+/* ladder */
+.rca-ws .rw-ladder-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; align-items: center; }
+.rca-ws .rw-ladder-step { position: relative; border: 1px solid var(--rw-line); background: #fff; border-radius: 10px;
+  padding: 9px 8px; text-align: center; font-weight: 600; color: #6b7280; }
+.rca-ws .rw-ladder-step.done { background: var(--rw-green2); border-color: #bde8cf; color: var(--rw-green); }
+.rca-ws .rw-ladder-step.active { background: var(--rw-orange2); border-color: #fac898; color: var(--rw-orange); }
+.rca-ws .rw-ladder-step.next { background: #f8fafc; color: #5b6675; } /* was #98a2b3 (2.5:1) */
+.rca-ws .rw-ladder-caption { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; margin-top: 7px; color: #6b7280; font-size: 12px; }
+.rca-ws .rw-ladder-caption div { padding: 0 4px; text-align: center; }
+/* The honest "why it stopped short" line under the ladder (A7 fidelity gap).
+   Amber = held back, not failed; it names rules to validate, not a fault. */
+.rca-ws .rw-ladder-note { margin-top: 10px; padding: 7px 10px; border-radius: 8px; font-size: 12px;
+  background: var(--rw-orange2); border: 1px solid #fac898; color: var(--rw-orange); }
+
+/* topology — flex chain */
+.rca-ws .rw-topo { display: flex; align-items: flex-start; gap: 0; overflow-x: auto;
+  background: radial-gradient(circle at 1px 1px,#dbe3f0 1px,transparent 0) 0 0/24px 24px, linear-gradient(180deg,#fff,#f5f8fd);
+  border: 1px solid var(--rw-line); border-radius: 12px; padding: 28px 18px; min-height: 150px; }
+.rca-ws .rw-node { text-align: center; flex: 0 0 auto; width: 96px; }
+.rca-ws .rw-node .circle { width: 56px; height: 56px; border-radius: 18px; border: 3px solid #cfd8e8; background: #fff;
+  display: grid; place-items: center; margin: 0 auto 6px; font-weight: 600; box-shadow: 0 10px 25px rgba(30,41,59,.13); }
+.rca-ws .rw-node.good .circle { border-color: #1aaf5d; background: #effcf4; color: #087c3d; }
+.rca-ws .rw-node.warn .circle { border-color: #f59e0b; background: #fff7ed; color: #c45a00; }
+.rca-ws .rw-node.bad .circle { border-color: #ef4444; background: #fff1f1; color: #c5221a; }
+.rca-ws .rw-node.info .circle { border-color: #3b82f6; background: #eff6ff; color: #2563eb; }
+.rca-ws .rw-node .name { font-weight: 600; font-size: 12px; word-break: break-all; }
+.rca-ws .rw-node .meta { font-size: 11px; color: #697386; }
+.rca-ws .rw-node .tag { margin-top: 4px; display: inline-block; }
+.rca-ws .rw-edge-wrap { flex: 1 1 70px; min-width: 70px; position: relative; align-self: center; margin-top: -28px; padding: 0 4px; }
+.rca-ws .rw-edge { height: 2px; background: #cad5e5; border-radius: 2px; }
+.rca-ws .rw-edge.warn { background: #f59e0b; height: 3px; box-shadow: 0 0 0 4px rgba(245,158,11,.08); }
+.rca-ws .rw-edge.bad { background: #ef4444; height: 3px; box-shadow: 0 0 0 4px rgba(239,68,68,.08); }
+.rca-ws .rw-edge.good { background: #22c55e; }
+.rca-ws .rw-edge-label { position: absolute; left: 50%; transform: translateX(-50%); top: -24px; white-space: nowrap;
+  border: 1px solid var(--rw-line); background: #fff; border-radius: 14px; padding: 3px 8px; font-weight: 600; font-size: 11.5px;
+  box-shadow: 0 2px 8px rgba(30,41,59,.08); }
+.rca-ws .rw-edge-label.warn { border-color: #f5bd7b; color: #b45309; background: #fff8ef; }
+.rca-ws .rw-edge-label.bad { border-color: #ffb5ad; color: #bd2b22; background: #fff6f5; }
+.rca-ws .rw-edge-label.side1 { top: auto; bottom: -24px; }
+
+/* evidence grid — exactly 4 equal rectangles filling the matrix width (one per
+   standard plane). grid-auto-rows:1fr equalises heights so the 4 boxes are
+   identical; the footer pins to the bottom (margin-top:auto). No min-height: the
+   row sizes to the tallest card's CONTENT, so sparse cases don't get padded with
+   dead vertical space. (→ 2-up on narrower widths.) */
+.rca-ws .rw-evidence-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px; grid-auto-rows: 1fr; align-items: stretch; }
+/* grid-area:auto + overflow reset is LOAD-BEARING: the variant class `main`
+   collides with the global app-shell rule `.main { grid-area: main; overflow:
+   auto }` (styles.css). Without this reset the "Main evidence" card inherits
+   grid-area:main, gets placed into a non-existent named area, and corrupts the
+   whole evidence grid into a broken narrow+wide layout. Reset defends every
+   variant against any global utility-class collision. */
+.rca-ws .rw-ecard { display: flex; flex-direction: column; gap: 3px; border: 1px solid var(--rw-line);
+  border-radius: 10px; background: #fff; padding: 10px 12px; grid-area: auto; overflow: visible; }
+.rca-ws .rw-ecard.main { border-left: 4px solid var(--rw-orange); }
+.rca-ws .rw-ecard.confirm { border-left: 4px solid var(--rw-green); }
+.rca-ws .rw-ecard.missing { border-left: 4px solid #98a2b3; }
+.rca-ws .rw-ecard.conflict { border-left: 4px solid var(--rw-red); }
+.rca-ws .rw-ehead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rca-ws .rw-etitle { font-weight: 600; display: inline-flex; align-items: center; }
+.rca-ws .rw-edesc { font-size: 12px; color: var(--rw-muted); margin: 0; }
+.rca-ws .rw-efinding { font-size: 13px; font-weight: 600; margin: 2px 0 0; line-height: 1.38; }
+.rca-ws .rw-efoot { margin-top: auto; padding-top: 4px; font-size: 11.5px; color: #667085; }
+/* Row attribution chips (seam · internet exposure · witnessing provider) and the
+   parser-rule fidelity grade. Both are optional per row — absent facts render
+   nothing at all, so a network-only card is byte-identical to before. */
+.rca-ws .rw-echips { display: flex; flex-wrap: wrap; gap: 4px; margin: 3px 0 1px; }
+.rca-ws .rw-echip { font-size: 10.5px; line-height: 1.5; padding: 1px 6px; border-radius: 999px;
+  border: 1px solid var(--rw-line); background: var(--surface-2, #f4f6fa); color: #4b5563; white-space: nowrap; }
+.rca-ws .rw-efid { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+.rca-ws .rw-efid-k { font-size: 10.5px; color: #6b7280; text-transform: uppercase; letter-spacing: .03em; }
+.rca-ws .rw-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+.rca-ws .rw-dot.orange { background: var(--rw-orange); }
+.rca-ws .rw-dot.green { background: var(--rw-green); }
+.rca-ws .rw-dot.blue { background: var(--rw-blue); }
+.rca-ws .rw-dot.red { background: var(--rw-red); }
+.rca-ws .rw-dot.gray { background: #98a2b3; }
+.rca-ws .rw-dot.purple { background: var(--rw-purple); }
+
+/* failure-propagation ladder (owner directive 2026-07-13) — token-based only */
+.rca-ws .rw-cascade { padding: 12px 12px 4px; }
+.rca-ws .rw-cascade-stage { display: flex; gap: 11px; }
+.rca-ws .rw-cascade-rail { display: flex; flex-direction: column; align-items: center; width: 14px; flex: 0 0 auto; }
+.rca-ws .rw-cascade-dot { width: 11px; height: 11px; border-radius: 50%; margin-top: 4px;
+  background: #fff; border: 2px solid #98a2b3; flex: 0 0 auto; }
+.rca-ws .rw-cascade-dot.orange { background: var(--rw-orange); border-color: var(--rw-orange); }
+.rca-ws .rw-cascade-dot.red { background: var(--rw-red); border-color: var(--rw-red); }
+.rca-ws .rw-cascade-line { width: 2px; flex: 1 1 auto; min-height: 14px; background: var(--rw-line); margin: 3px 0; }
+.rca-ws .rw-cascade-body { padding-bottom: 14px; min-width: 0; }
+.rca-ws .rw-cascade-stage:last-child .rw-cascade-body { padding-bottom: 4px; }
+.rca-ws .rw-cascade-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rca-ws .rw-cascade-label { font-weight: 600; color: var(--rw-muted); }
+.rca-ws .rw-cascade-stage.witnessed .rw-cascade-label { color: var(--rw-text); }
+
+/* cloud application & resources (#81 P3G 1c) — additive, token-based only */
+.rca-ws .rw-cloud { padding: 12px; }
+.rca-ws .rw-cloud-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.rca-ws .rw-cloud-app { font-size: 15px; font-weight: 600; color: var(--rw-text); }
+.rca-ws .rw-cloud-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 3px; font-size: 12.5px; color: var(--rw-muted); }
+.rca-ws .rw-cloud-block { margin-top: 12px; }
+.rca-ws .rw-cloud-block h4 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--rw-muted); text-transform: uppercase; letter-spacing: .03em; }
+.rca-ws .rw-cloud-res-grid { display: grid; gap: 6px; }
+.rca-ws .rw-cloud-res { display: grid; grid-template-columns: 1.4fr .9fr 1.3fr; gap: 12px; align-items: center;
+  padding: 7px 10px; background: var(--rw-panel2); border: 1px solid var(--rw-line); border-radius: 8px; font-size: 13px; }
+.rca-ws .rw-cloud-res .rw-res-name { font-weight: 500; color: var(--rw-text); font-family: var(--rw-mono); }
+.rca-ws .rw-cloud-res .rw-res-kind { color: var(--rw-muted); }
+.rca-ws .rw-cloud-res .rw-res-finding { color: var(--rw-text); font-family: var(--rw-mono); }
+.rca-ws .rw-cloud-changes { margin: 0; padding-left: 18px; font-size: 13px; color: var(--rw-text); }
+.rca-ws .rw-cloud-changes li { margin: 2px 0; }
+.rca-ws .rw-cloud-seam { margin-top: 12px; font-size: 13px; color: var(--rw-text); }
+.rca-ws .rw-cloud-note { margin-top: 8px; font-size: 12.5px; color: var(--rw-muted); border-left: 3px solid var(--rw-line); padding-left: 10px; }
+@media (max-width: 720px) { .rca-ws .rw-cloud-res { grid-template-columns: 1fr; gap: 3px; } }
+
+/* Application impact (#81 P5) — named apps + provenance, same panel language. */
+.rca-ws .rw-appimpact-grid { display: flex; flex-direction: column; gap: 8px; }
+.rca-ws .rw-appimpact-row { display: grid; grid-template-columns: minmax(160px, 1.2fr) auto 1.6fr;
+  align-items: center; gap: 10px; padding: 8px 10px; background: var(--rw-panel2);
+  border: 1px solid var(--rw-line); border-radius: 9px; }
+.rca-ws .rw-appimpact-name { display: inline-flex; align-items: center; gap: 7px; font-weight: 600;
+  font-family: var(--rw-mono); color: var(--rw-text); }
+.rca-ws .rw-appimpact-provider { font-family: "Inter", sans-serif; font-weight: 500; font-size: 12px;
+  color: var(--rw-muted2); }
+.rca-ws .rw-appimpact-srcs { font-size: 12px; color: var(--rw-muted); text-align: right; }
+@media (max-width: 720px) { .rca-ws .rw-appimpact-row { grid-template-columns: 1fr; gap: 4px; }
+  .rca-ws .rw-appimpact-srcs { text-align: left; } }
+
+/* timeline */
+.rca-ws .rw-timeline-wrap { overflow: auto; border: 1px solid var(--rw-line); border-radius: 12px; background: #fff; }
+.rca-ws .rw-timeline { min-width: 900px; }
+.rca-ws .rw-thead, .rca-ws .rw-trow { display: grid; grid-template-columns: 150px 1fr; min-height: 38px; }
+.rca-ws .rw-thead { color: #778197; font-size: 12px; }
+.rca-ws .rw-tlabel { padding: 8px 10px; border-right: 1px solid var(--rw-line); display: flex; align-items: center; gap: 6px; }
+.rca-ws .rw-ttrack { position: relative; border-bottom: 1px solid #e8edf5;
+  background: repeating-linear-gradient(to right,#e9eef6 0,#e9eef6 1px,transparent 1px,transparent 20%); }
+.rca-ws .rw-thead .rw-ttrack { display: grid; grid-template-columns: repeat(6,1fr); align-items: center; }
+.rca-ws .rw-thead .rw-ttrack span { padding-left: 4px; }
+.rca-ws .rw-marker { position: absolute; top: 7px; transform: translateX(-50%); border-radius: 14px; padding: 3px 8px;
+  min-height: 24px; /* 2.5.8 target size */
+  font-size: 11px; font-weight: 600; border: 1px solid; white-space: nowrap; cursor: pointer; box-shadow: 0 2px 6px rgba(15,23,42,.08); }
+.rca-ws .rw-marker.orange { background: #fff8ed; border-color: #f6b56f; color: #b45309; }
+.rca-ws .rw-marker.green { background: #ecfdf3; border-color: #a7e7bf; color: #087c3d; }
+.rca-ws .rw-marker.blue { background: #eef4ff; border-color: #bad0ff; color: #245bd6; }
+.rca-ws .rw-marker.red { background: #fff1f1; border-color: #ffb4b4; color: #be2a22; }
+.rca-ws .rw-marker.gray { background: #f3f5f8; border-color: #d4dae5; color: #667085; }
+.rca-ws .rw-marker.purple { background: var(--rw-purple2); border-color: #ddd7ff; color: var(--rw-purple); }
+.rca-ws .rw-marker.sel { outline: 2px solid #2563eb; outline-offset: 1px; }
+.rca-ws .rw-tdetail { border: 1px solid var(--rw-line); background: #fbfcff; border-radius: 10px; margin-top: 10px; padding: 10px 12px; color: #475467; }
+.rca-ws .rw-tdetail b { color: #111827; }
+
+/* tables / hypotheses / next actions */
+.rca-ws table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.rca-ws th, .rca-ws td { text-align: left; padding: 9px 10px; border-bottom: 1px solid #edf1f7; vertical-align: top; }
+.rca-ws th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #667085; background: #f8fafc; }
+.rca-ws tr:last-child td { border-bottom: 0; }
+.rca-ws .rw-rank { font-family: var(--rw-mono); font-weight: 600; color: #475467; }
+.rca-ws .rw-hypo { font-weight: 600; }
+.rca-ws .rw-small { font-size: 12px; color: #697386; }
+.rca-ws .rw-owner { font-weight: 600; }
+.rca-ws .rw-next { counter-reset: step; margin: 0; padding: 0; list-style: none; }
+.rca-ws .rw-next li { counter-increment: step; display: grid; grid-template-columns: 26px 100px 1fr; gap: 8px; align-items: start;
+  padding: 7px 0; border-bottom: 1px solid #edf1f7; }
+.rca-ws .rw-next li:last-child { border-bottom: 0; }
+.rca-ws .rw-next li::before { content: counter(step); font-family: var(--rw-mono); color: #667085; }
+.rca-ws .rw-action-badge { font-size: 11px; font-weight: 600; border-radius: 6px; padding: 3px 6px; text-align: center;
+  background: #eaf1ff; color: #1d55d7; border: 1px solid #b9cdfd; }
+.rca-ws .rw-action-badge.red { background: #fff0ee; color: #b42318; border-color: #f9c7c1; }
+.rca-ws .rw-action-badge.green { background: #ecfdf3; color: #067647; border-color: #abefc6; }
+
+/* assistant */
+.rca-ws .rw-assistant { border: 1px solid #b9d7ff; border-left: 4px solid #2f80ed; background: #f7fbff; }
+.rca-ws .rw-assistant-q { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 8px; }
+.rca-ws .rw-assistant-q input { width: 100%; border: 1px solid var(--rw-line); border-radius: 8px; padding: 9px 10px; font: inherit; }
+.rca-ws .rw-ask-suggest { border: 0; background: transparent; padding: 4px 0; margin: 0; text-align: left;
+  min-height: 24px; /* 2.5.8 target size */
+  font: inherit; font-size: 12px; color: #2f6fd0; cursor: pointer;
+  text-decoration: underline; } /* persistent affordance (1.4.1), not hover-only */
+.rca-ws .rw-ask-suggest:hover, .rca-ws .rw-ask-suggest:focus-visible { color: #245bd6; }
+
+/* debug */
+.rca-ws .rw-jsonbox { background: #0f172a; color: #d9e5ff; border-radius: 11px; padding: 13px; overflow: auto;
+  font-family: var(--rw-mono); font-size: 12px; line-height: 1.5; max-height: 420px; white-space: pre; }
+
+/* below ~1080px (incl. the Inspector drawer) the 4-up matrix drops to a clean
+   2-up — still even for 4 standard planes, never a ragged single-card row. */
+@media (max-width: 1080px) {
+  .rca-ws .rw-evidence-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 900px) {
+  .rca-ws .rw-grid { grid-template-columns: 1fr; }
+  .rca-ws .rw-case { grid-template-columns: 1fr; }
+  .rca-ws .rw-aside { border-left: 0; border-top: 1px solid var(--rw-line); padding-left: 0; padding-top: 10px; }
+  .rca-ws .rw-keyval { grid-template-columns: 120px 1fr; }
+}
+
+/* ----- RCA Time Intelligence — Time Impact card ----- */
+.rca-ws .ti-card { background: var(--rw-panel); border: 1px solid var(--rw-line); border-radius: 10px;
+  box-shadow: var(--rw-shadow); padding: 14px 16px; }
+.rca-ws .ti-card.ti-empty { color: var(--rw-muted); font-size: 13px; }
+.rca-ws .ti-head { display: flex; align-items: baseline; gap: 9px; margin-bottom: 10px; }
+.rca-ws .ti-title { font-weight: 600; font-size: 14px; color: var(--rw-text); }
+.rca-ws .ti-sub { font-size: 12px; color: var(--rw-muted); }
+/* time-loss driver headline — precise, never marketing */
+.rca-ws .ti-driver { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
+  padding: 8px 11px; border-radius: 8px; border: 1px solid var(--rw-line); background: var(--rw-soft); margin-bottom: 12px; }
+.rca-ws .ti-driver-tag { font-size: 10px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; color: var(--rw-muted2); }
+.rca-ws .ti-driver-name { font-weight: 600; font-size: 13px; color: var(--rw-text); }
+.rca-ws .ti-driver-expl { font-size: 12.5px; color: var(--rw-muted); }
+.rca-ws .ti-driver-provider_repair, .rca-ws .ti-driver-evidence_missing { background: var(--rw-orange2); border-color: #f6d9b8; }
+.rca-ws .ti-driver-provider_repair .ti-driver-name, .rca-ws .ti-driver-evidence_missing .ti-driver-name { color: var(--rw-orange); }
+/* phase rows */
+.rca-ws .ti-rows { display: grid; gap: 1px; background: var(--rw-line); border: 1px solid var(--rw-line);
+  border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
+.rca-ws .ti-row { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 7px 11px; background: var(--rw-panel); font-size: 13px; }
+.rca-ws .ti-row-star { background: var(--rw-purple2); }
+.rca-ws .ti-row-label { color: var(--rw-muted); }
+.rca-ws .ti-star { color: var(--rw-purple); font-size: 11px; margin-right: 5px; }
+.rca-ws .ti-row-star .ti-row-label { color: var(--rw-text); font-weight: 500; }
+.rca-ws .ti-row-val { font-weight: 600; color: var(--rw-text); font-variant-numeric: tabular-nums; font-family: var(--rw-mono); }
+.rca-ws .ti-row-na { color: var(--rw-muted2); font-weight: 500; }
+.rca-ws .ti-missing { font-weight: 500; font-style: italic; font-size: 11.5px; font-family: inherit; }
+.rca-ws .ti-conf { color: var(--rw-muted2); font-weight: 500; }
+.rca-ws .ti-src { font-size: 9.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px;
+  margin-left: 7px; padding: 1px 5px; border-radius: 4px; font-family: var(--rw-sans, inherit); }
+.rca-ws .ti-src-inferred { background: var(--rw-orange2); color: var(--rw-orange); }
+/* horizontal lifecycle timeline */
+.rca-ws .ti-timeline { display: flex; align-items: flex-start; gap: 0; overflow-x: auto; padding-top: 4px; }
+.rca-ws .ti-stage { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1 0 auto;
+  min-width: 62px; position: relative; }
+.rca-ws .ti-stage::before { content: ""; position: absolute; top: 5px; left: -50%; width: 100%; height: 2px;
+  background: var(--rw-line); z-index: 0; }
+.rca-ws .ti-stage:first-child::before { display: none; }
+.rca-ws .ti-stage.on ~ .ti-stage::before { background: var(--rw-line); }
+.rca-ws .ti-dot { width: 11px; height: 11px; border-radius: 50%; background: var(--rw-panel);
+  border: 2px solid var(--rw-line); z-index: 1; }
+.rca-ws .ti-stage.on .ti-dot { background: var(--rw-green); border-color: var(--rw-green); }
+.rca-ws .ti-stage-label { font-size: 10px; color: var(--rw-muted2); text-align: center; white-space: nowrap; }
+.rca-ws .ti-stage.on .ti-stage-label { color: var(--rw-text); font-weight: 500; }
+
+/* ----- Time Impact card v2 (current bottleneck + NOC refinements) ----- */
+.rca-ws .ti-tone-amber { background: var(--rw-orange2); border-color: #f6d9b8; }
+.rca-ws .ti-tone-amber .ti-driver-name { color: var(--rw-orange); }
+.rca-ws .ti-tone-slate { background: var(--rw-soft); border-color: var(--rw-line); }
+.rca-ws .ti-tone-slate .ti-driver-name { color: var(--rw-muted); }
+.rca-ws .ti-tone-good { background: var(--rw-green2); border-color: #bce8cf; }
+.rca-ws .ti-tone-good .ti-driver-name { color: var(--rw-green); }
+.rca-ws .ti-basis { font-size: 11px; color: var(--rw-muted2); margin: 0 0 6px; font-style: italic; }
+.rca-ws .ti-row-current { background: var(--rw-orange2); }
+.rca-ws .ti-row-current .ti-row-label { color: var(--rw-text); font-weight: 500; }
+.rca-ws .ti-row-ctx { display: block; font-size: 10.5px; font-weight: 500; color: var(--rw-muted); margin-top: 1px; }
+.rca-ws .ti-na-current { font-weight: 600; }
+.rca-ws .ti-pending { color: var(--rw-muted2); font-weight: 500; font-style: italic; font-size: 11.5px; font-family: inherit; }
+.rca-ws .ti-src-muted { color: var(--rw-muted2); font-weight: 500; font-size: 10px; text-transform: uppercase;
+  letter-spacing: .3px; font-family: var(--rw-sans, inherit); }
+.rca-ws .ti-stage.current .ti-dot { background: var(--rw-orange); border-color: var(--rw-orange); }
+.rca-ws .ti-stage.current .ti-stage-label { color: var(--rw-orange); font-weight: 600; }
+.rca-ws .ti-stage-hero .ti-stage-label { font-weight: 600; }
+.rca-ws .ti-stage-hero.on .ti-dot { box-shadow: 0 0 0 3px var(--rw-purple2); border-color: var(--rw-purple); background: var(--rw-purple); }
+
+/* ----- Time Impact card v3 (measurement-gap model + two zones) ----- */
+.rca-ws .ti-outcome { font-size: 12.5px; color: var(--rw-text); line-height: 1.55; margin: 0 0 10px;
+  padding: 9px 11px; border-radius: 8px; background: var(--rw-soft); border: 1px solid var(--rw-line); }
+.rca-ws .ti-zone-label { font-size: 10px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase;
+  color: var(--rw-muted2); margin: 12px 0 5px; padding-bottom: 3px; border-bottom: 1px solid var(--rw-line); }
+.rca-ws .ti-zone-wf { color: var(--rw-muted2); }
+.rca-ws .ti-onset-badge { display: inline-block; margin-left: 7px; font-size: 9.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .3px; color: var(--rw-orange); background: var(--rw-orange2);
+  padding: 1px 6px; border-radius: 4px; }
+.rca-ws .ti-cta { margin-top: 8px; font-size: 12px; color: var(--rw-muted); padding: 8px 11px;
+  border: 1px dashed var(--rw-line); border-radius: 8px; background: var(--rw-panel2, var(--rw-soft)); }
+/* not-measured rows are MUTED (gray), never amber — a measurement gap is not a failure */
+.rca-ws .ti-row-nm { background: var(--rw-panel); }
+.rca-ws .ti-row-nm .ti-row-label { color: var(--rw-muted2); }
+
+/* Event timeline (owner P1 2026-07-19) — chronological timestamped case events.
+ * List semantics + native <details> collapse (keyboard operable); AA contrast:
+ * times use --rw-muted2 (5f6b7d) on white, event text uses --rw-text. */
+.rca-ws .rw-events-summary { cursor: pointer; font-size: 12.5px; color: var(--rw-muted); font-weight: 500; }
+.rca-ws .rw-events-summary:focus-visible { outline: 2px solid var(--rw-blue); outline-offset: 2px; border-radius: 4px; }
+.rca-ws .rw-events-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 0; }
+.rca-ws .rw-event { display: flex; align-items: baseline; gap: 10px; padding: 4px 0; position: relative; }
+.rca-ws .rw-event + .rw-event { border-top: 1px dashed var(--rw-soft); }
+.rca-ws .rw-event-time { flex: none; min-width: 116px; text-align: right; font-family: var(--rw-mono);
+  font-size: 12px; color: var(--rw-muted2); font-variant-numeric: tabular-nums; }
+.rca-ws .rw-event-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; align-self: center; }
+.rca-ws .rw-event-dot.red { background: var(--rw-red); }
+.rca-ws .rw-event-dot.orange { background: var(--rw-orange); }
+.rca-ws .rw-event-dot.green { background: var(--rw-green); }
+.rca-ws .rw-event-dot.blue { background: var(--rw-blue); }
+.rca-ws .rw-event-dot.gray, .rca-ws .rw-event-dot.purple { background: var(--rw-muted2); }
+.rca-ws .rw-event-text { font-size: 13px; color: var(--rw-text); }
+.rca-ws .rw-event-detail { color: var(--rw-muted); font-size: 12px; }
+
+/* ----- Operator verdict feedback (Project 2 P7) -----------------------------
+ * "Was this verdict right?" — a compact full-width row under the case aside.
+ * Calm by default (this is a question, not an alarm); the chosen choice reads
+ * as a pressed button, the inline form only appears for wrong/partial. */
+.rca-ws .rw-fbrow { grid-column: 1 / -1; margin-top: 2px; padding-top: 10px; border-top: 1px dashed var(--rw-line); }
+.rca-ws .rw-fb-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.rca-ws .rw-fb-q { font-size: 12.5px; font-weight: 600; color: var(--rw-text); }
+.rca-ws .rw-fb-btns { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.rca-ws .rw-fb-btn { font-size: 12px; padding: 5px 12px; }
+.rca-ws .rw-fb-btn[aria-pressed="true"] { background: #4f46e5; color: #fff; border-color: #4f46e5; }
+.rca-ws .rw-fb-btn:focus-visible { outline: 2px solid var(--rw-blue); outline-offset: 2px; }
+.rca-ws .rw-fb-form { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--rw-line);
+  border-radius: 8px; background: var(--rw-soft); display: grid; gap: 10px; }
+.rca-ws .rw-fb-parts { border: 0; margin: 0; padding: 0; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+.rca-ws .rw-fb-parts legend { font-size: 11.5px; font-weight: 600; color: var(--rw-muted); padding: 0 0 4px; }
+.rca-ws .rw-fb-part { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--rw-text); }
+.rca-ws .rw-fb-reason { display: grid; gap: 4px; }
+.rca-ws .rw-fb-reason label { font-size: 11.5px; font-weight: 600; color: var(--rw-muted); }
+.rca-ws .rw-fb-reason textarea { width: 100%; resize: vertical; font: inherit; font-size: 12.5px;
+  color: var(--rw-text); background: #fff; border: 1px solid var(--rw-line); border-radius: 7px; padding: 7px 9px; }
+.rca-ws .rw-fb-count { font-size: 10.5px; color: var(--rw-muted2, #8a94a6); justify-self: end; font-variant-numeric: tabular-nums; }
+.rca-ws .rw-fb-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.rca-ws .rw-fb-status:empty { display: none; }
+.rca-ws .rw-fb-status { margin-top: 8px; font-size: 12px; }
+.rca-ws .rw-fb-ok { color: var(--rw-green); font-weight: 500; }
+.rca-ws .rw-fb-err { color: var(--rw-red); font-weight: 500; }
+.rca-ws .rw-fb-latest { margin-top: 8px; font-size: 12.5px; color: var(--rw-text); }
+.rca-ws .rw-fb-none { margin-top: 8px; font-size: 12px; color: var(--rw-muted2, #8a94a6); }
+.rca-ws .rw-fb-earlier { margin-top: 6px; font-size: 12px; color: var(--rw-muted); }
+.rca-ws .rw-fb-earlier summary { cursor: pointer; }
+.rca-ws .rw-fb-earlier ul { margin: 6px 0 0; padding-left: 18px; }

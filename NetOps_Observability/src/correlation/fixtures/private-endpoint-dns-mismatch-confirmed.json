@@ -1,0 +1,40 @@
+{
+  "name": "Private-endpoint name resolves public + private path probes fail: confirmed DNS mismatch",
+  "signals": [
+    {
+      "kind": "private_dns_missing",
+      "entity_type": "service",
+      "entity_id": "crm.internal.example",
+      "observer_id": "probe-agent-dc",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "probe_loss",
+      "entity_type": "path",
+      "entity_id": "dc->crm-private",
+      "observer_id": "probe-agent-branch",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 4.0
+    },
+    {
+      "kind": "cloud_change",
+      "entity_type": "service",
+      "entity_id": "private-dns-zone",
+      "observer_id": "cloud-api",
+      "observer_type": "cloud_api",
+      "modality": "control_plane",
+      "collection_path": "via_cloud_api",
+      "deviation": 0.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.cloud.private-endpoint-dns-mismatch",
+    "tier": "confirmed",
+    "owner": "netops"
+  }
+}

@@ -1,0 +1,386 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+// InvestigationLanes — the parallel evidence lanes of the Troubleshooting
+// surface, rendered inside its ONE "Show the evidence" disclosure. One card per
+// lane, each fed by an ALREADY-DEPLOYED API, each carrying its own honest empty
+// and not-connected states.
+//
+// A card has NO disclosure of its own (owner, 2026-09-06: "simplify these pages
+// and make it intuitive"). It is shown with its sentence and its rows, or the
+// page collapses it to one "Nothing from …" line. There is no third state.
+//
+// The lanes run in PARALLEL on purpose (design §c): the operator should not have
+// to open seven windows serially to find which layer the fault is on. Each card
+// names the API it read, so nothing on this page is unverifiable.
+//
+// HONESTY. A lane never renders a reassuring blank. investigationModel decides
+// its state (loading / error / not_connected / empty / ready) and the card
+// prints the state's own sentence. "Not connected" (the source was never wired)
+// and "empty" (the source is wired and was quiet) are different facts and are
+// never collapsed into one.
+//
+// SECURITY (§3 / §15). Every value below — device ids, event kinds, path
+// destinations, flow addresses — is remote-authored text rendered as an escaped
+// React text node. There is no innerHTML and no dangerouslySetInnerHTML here.
+//
+// WORDS (sweep 5, tracker 270). The trailing cell of a lane row is a STATED FACT
+// the server returned — an oper-status, a timestamp, "path changed", a byte
+// count — not an explanation of the protocol behind it. It wore `tsl-note` only
+// because that is the app's small-print convention; it is `fact-line` now (same
+// ink, same 12.5 px) so the note budget counts notes and not facts. The one real
+// note per card ("Proximity in time, never a causal claim.") keeps `mini-meta`.
+// What an established adjacency IS stays off the row — Iris answers that.
+
+import { useEffect, useState, type ReactNode } from "react";
+import { api, type FeedItem, type PathHealthItem, type ProbePath, type PromInstantSeries } from "../../services/api";
+import { operatorError } from "../../lib/errors";
+import {
+  LANE_SOURCE,
+  LANE_TITLE,
+  changeLabel,
+  classifyChangeLane,
+  classifyDemLane,
+  classifyEventsLane,
+  classifyFlowLane,
+  classifyMetricLane,
+  classifyPathLane,
+  healthQuery,
+  isConfigChangeKind,
+  laneError,
+  laneLoading,
+  laneSummary,
+  routingQuery,
+  UNSCOPED_LANE_NOTE,
+  type LaneId,
+  type LaneResult,
+  type LaneState,
+} from "./investigationModel";
+
+/** The entity an investigation is scoped to. All fields are optional: an
+ *  unscoped investigation reads the fleet-wide view of every lane.
+ *
+ *  EVERY lane that can filter by device does. The three feed-backed lanes pass
+ *  it as an entity filter, and the two metric lanes put it in the PromQL. A
+ *  fleet-wide read is what an unscoped case gets, and the page then tells the
+ *  ladder it is unscoped so nothing fleet-wide is named as this case's fault. */
+export interface LaneScope {
+  /** Device id / name taken from the case (never from a URL the user typed). */
+  device?: string;
+  /** Minutes of history — the shell's global range. */
+  minutes: number;
+  /** Correlation id, when a case drives the investigation. */
+  caseId?: string;
+}
+
+export type LaneStateReport = (id: LaneId, state: LaneState) => void;
+
+// ── the card shell ───────────────────────────────────────────────────────────
+
+function LaneCard({ id, result, children }: {
+  id: LaneId;
+  result: LaneResult<unknown>;
+  children?: ReactNode;
+}) {
+  const headingId = `lane-h-${id}`;
+  // NO per-card disclosure (owner, 2026-09-06: "Instead of show so many details,
+  // simplify these pages"). A lane is now one of two things and nothing in
+  // between: it is SHOWN, with its sentence and its rows, or the page collapses
+  // it to a single "Nothing from …" line. A "Details" button on top of a
+  // disclosure the page already owns was the third state that made this read as
+  // a wall.
+  const summary = laneSummary(id, result.state, result.rows.length);
+  return (
+    <section className="tsl-card card" role="region" aria-labelledby={headingId} data-lane={id} data-state={result.state}>
+      <div className="tsl-head">
+        <h3 id={headingId} className="tsl-title">{LANE_TITLE[id]}</h3>
+      </div>
+
+      {/* One plain sentence, always. For every state but "ready" the lane's own
+          honest note IS that sentence, so it is printed instead — never both. */}
+      {result.state === "loading" && <p className="tsl-sum" role="status">Checking…</p>}
+      {result.state === "error" && <p className="tsl-sum bad" role="alert">{result.note}</p>}
+      {result.state === "not_connected" && (
+        <p className="tsl-sum tsl-notwired" role="status">
+          <span className="badge">Nothing feeding this</span> {result.note}
+        </p>
+      )}
+      {result.state === "empty" && <p className="tsl-sum" role="status">{result.note}</p>}
+      {result.state === "ready" && <p className="tsl-sum">{summary}</p>}
+
+      <div className="tsl-detail">
+        {result.state === "ready" && children}
+        <div className="tsl-src">Read from <span className="tsl-api">{LANE_SOURCE[id]}</span></div>
+      </div>
+    </section>
+  );
+}
+
+/** useLane — one lane's fetch, with its state reported up to the ladder. */
+function useLane<T>(
+  id: LaneId,
+  load: () => Promise<LaneResult<T>>,
+  deps: unknown[],
+  report?: LaneStateReport,
+): LaneResult<T> {
+  const [res, setRes] = useState<LaneResult<T>>(laneLoading<T>);
+  useEffect(() => {
+    let alive = true;
+    setRes(laneLoading<T>());
+    report?.(id, "loading");
+    load()
+      .then((r) => { if (alive) { setRes(r); report?.(id, r.state); } })
+      .catch((e: unknown) => {
+        if (!alive) return;
+        const r = laneError<T>(`${LANE_TITLE[id]} — ${operatorError(e, "this lane could not be loaded.")}`);
+        setRes(r);
+        report?.(id, r.state);
+      });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return res;
+}
+
+// ── DEM / probes ─────────────────────────────────────────────────────────────
+
+export function DemLane({ scope, report }: { scope: LaneScope; report?: LaneStateReport }) {
+  const res = useLane<PathHealthItem>(
+    "dem",
+    async () => classifyDemLane((await api.pathsHealth())?.paths ?? []),
+    [scope.device, scope.minutes, scope.caseId],
+    report,
+  );
+  return (
+    <LaneCard id="dem" result={res}>
+      <ul className="tsl-list">
+        {res.rows.slice(0, 6).map((p) => (
+          <li key={p.path_id} className="tsl-row">
+            <span className={`tsl-dot ${p.health_state}`} aria-hidden="true" />
+            <span className="tsl-k">{p.agent} → {p.dst}</span>
+            <span className="tsl-v">{p.health_state} · confidence {p.confidence}</span>
+            <span className="fact-line">{p.reason}</span>
+          </li>
+        ))}
+      </ul>
+    </LaneCard>
+  );
+}
+
+// ── What changed ─────────────────────────────────────────────────────────────
+
+export function ChangedLane({ scope, report }: { scope: LaneScope; report?: LaneStateReport }) {
+  const res = useLane<FeedItem>(
+    "changed",
+    async () => {
+      const params: Record<string, string> = {
+        from: `${Math.max(1, Math.round(scope.minutes / 60))}h`,
+        class: "changes",
+        limit: "25",
+      };
+      if (scope.device) params.entity = scope.device;
+      return classifyChangeLane((await api.eventsFeed(params))?.items ?? []);
+    },
+    [scope.device, scope.minutes, scope.caseId],
+    report,
+  );
+  return (
+    <LaneCard id="changed" result={res}>
+      <ul className="tsl-list">
+        {res.rows.slice(0, 8).map((it) => (
+          <li key={it.signal_id} className="tsl-row">
+            <span className={`tsl-dot ${isConfigChangeKind(it.kind) ? "change" : "state"}`} aria-hidden="true" />
+            <span className="tsl-k">{changeLabel(it.kind)}</span>
+            <span className="tsl-v">{it.entity_id}</span>
+            <span className="fact-line">{it.ts}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="mini-meta tsl-foot">Proximity in time, never a causal claim.</p>
+    </LaneCard>
+  );
+}
+
+// ── Device / protocol health ─────────────────────────────────────────────────
+
+const HEALTH_METRICS = ["device_if_oper_status", "device_sysuptime", "device_resource_cpu_pct"];
+
+// No `protocolSlot` any more: the manual protocol-diagnostics bench was retired
+// on 2026-09-05 (TAC_ESCALATION_2026-09-05 §5) and nothing has supplied the slot
+// since, so the toggle that opened it was a control for a surface that no longer
+// exists. The escalation flow in the answer card replaces it.
+export function HealthLane({ scope, report }: {
+  scope: LaneScope; report?: LaneStateReport;
+}) {
+  const res = useLane<PromInstantSeries>(
+    "health",
+    async () => {
+      const [names, q] = await Promise.all([api.metricNames(), api.metricsQuery(healthQuery(scope.device ?? ""))]);
+      return classifyMetricLane(
+        names?.data ?? [],
+        HEALTH_METRICS,
+        q?.data?.result ?? [],
+        "No device metric has ever been scraped — the SNMP/gNMI collectors are not collecting from this fleet.",
+      );
+    },
+    [scope.device, scope.minutes, scope.caseId],
+    report,
+  );
+  return (
+    <LaneCard id="health" result={res}>
+      <ul className="tsl-list">
+        {res.rows.slice(0, 8).map((s, i) => (
+          <li key={`${s.metric.device}-${s.metric.ifName ?? s.metric.index ?? ""}-${i}`} className="tsl-row">
+            <span className="tsl-dot bad" aria-hidden="true" />
+            <span className="tsl-k">{s.metric.device ?? "unknown device"}</span>
+            <span className="tsl-v">{s.metric.ifName ?? s.metric.interface ?? s.metric.index ?? "interface"}</span>
+            <span className="fact-line">operationally down</span>
+          </li>
+        ))}
+      </ul>
+      {!scope.device && <p className="mini-meta tsl-foot">{UNSCOPED_LANE_NOTE}</p>}
+    </LaneCard>
+  );
+}
+
+// ── Path ─────────────────────────────────────────────────────────────────────
+
+export function PathLane({ scope, report }: { scope: LaneScope; report?: LaneStateReport }) {
+  const res = useLane<ProbePath>(
+    "path",
+    async () => classifyPathLane((await api.probePaths()) ?? []),
+    [scope.device, scope.minutes, scope.caseId],
+    report,
+  );
+  return (
+    <LaneCard id="path" result={res}>
+      <ul className="tsl-list">
+        {res.rows.slice(0, 5).map((p, i) => (
+          <li key={`${p.dst}-${p.method ?? ""}-${i}`} className="tsl-row">
+            <span className={`tsl-dot ${p.reached ? "good" : "bad"}`} aria-hidden="true" />
+            <span className="tsl-k">{p.dst}</span>
+            <span className="tsl-v">{p.hops?.length ?? 0} hops · {p.reached ? "reached" : "did not reach"}</span>
+            <span className="fact-line">{p.changed ? "path changed" : "path stable"}</span>
+          </li>
+        ))}
+      </ul>
+    </LaneCard>
+  );
+}
+
+// ── Routing / BGP ────────────────────────────────────────────────────────────
+
+const ROUTING_METRICS = ["device_bgp_peer_state", "device_ospf_nbr_state", "device_isis_adj_state"];
+
+export function RoutingLane({ scope, report }: { scope: LaneScope; report?: LaneStateReport }) {
+  const res = useLane<PromInstantSeries>(
+    "routing",
+    async () => {
+      const [names, q] = await Promise.all([api.metricNames(), api.metricsQuery(routingQuery(scope.device ?? ""))]);
+      return classifyMetricLane(
+        names?.data ?? [],
+        ROUTING_METRICS,
+        q?.data?.result ?? [],
+        "No routing-protocol metric has ever been scraped — BGP/OSPF/IS-IS collection is not enabled for this fleet.",
+      );
+    },
+    [scope.device, scope.minutes, scope.caseId],
+    report,
+  );
+  return (
+    <LaneCard id="routing" result={res}>
+      <ul className="tsl-list">
+        {res.rows.slice(0, 8).map((s, i) => (
+          <li key={`${s.metric.device}-${s.metric.peer ?? s.metric.neighbor ?? ""}-${i}`} className="tsl-row">
+            <span className="tsl-dot bad" aria-hidden="true" />
+            <span className="tsl-k">{s.metric.device ?? "unknown device"}</span>
+            <span className="tsl-v">{s.metric.peer ?? s.metric.neighbor ?? s.metric.isis_neighbor ?? "neighbor"}</span>
+            <span className="fact-line">not in the established state</span>
+          </li>
+        ))}
+      </ul>
+      {!scope.device && <p className="mini-meta tsl-foot">{UNSCOPED_LANE_NOTE}</p>}
+    </LaneCard>
+  );
+}
+
+// ── Flows ────────────────────────────────────────────────────────────────────
+
+type FlowRow = Record<string, unknown>;
+
+export function FlowsLane({ scope, report }: { scope: LaneScope; report?: LaneStateReport }) {
+  const res = useLane<FlowRow>(
+    "flows",
+    async () => {
+      const since = Math.max(60, scope.minutes * 60);
+      const [types, top] = await Promise.all([
+        api.flowsByType(since),
+        api.topTalkers(since, 8, "", scope.device ? { device: scope.device } : undefined),
+      ]);
+      return classifyFlowLane<FlowRow>((types?.data as never) ?? [], (top?.data as FlowRow[]) ?? []);
+    },
+    [scope.device, scope.minutes, scope.caseId],
+    report,
+  );
+  return (
+    <LaneCard id="flows" result={res}>
+      <ul className="tsl-list">
+        {res.rows.slice(0, 8).map((r, i) => (
+          <li key={i} className="tsl-row">
+            <span className="tsl-dot state" aria-hidden="true" />
+            <span className="tsl-k">{String(r.src_addr ?? r.src ?? "—")}</span>
+            <span className="tsl-v">→ {String(r.dst_addr ?? r.dst ?? "—")}</span>
+            <span className="fact-line">{String(r.bytes ?? r.total_bytes ?? "")}</span>
+          </li>
+        ))}
+      </ul>
+    </LaneCard>
+  );
+}
+
+// ── Correlated events ────────────────────────────────────────────────────────
+
+export function EventsLane({ scope, report }: { scope: LaneScope; report?: LaneStateReport }) {
+  const res = useLane<FeedItem>(
+    "events",
+    async () => {
+      const params: Record<string, string> = {
+        from: `${Math.max(1, Math.round(scope.minutes / 60))}h`,
+        limit: "25",
+      };
+      if (scope.device) params.entity = scope.device;
+      return classifyEventsLane((await api.eventsFeed(params))?.items ?? []);
+    },
+    [scope.device, scope.minutes, scope.caseId],
+    report,
+  );
+  return (
+    <LaneCard id="events" result={res}>
+      <ul className="tsl-list">
+        {res.rows.slice(0, 10).map((it) => (
+          <li key={it.signal_id} className="tsl-row">
+            <span className={`tsl-dot ${it.severity === "critical" ? "bad" : "state"}`} aria-hidden="true" />
+            <span className="tsl-k">{it.title || it.kind}</span>
+            <span className="tsl-v">{it.entity_id}</span>
+            <span className="fact-line">{it.ts}</span>
+          </li>
+        ))}
+      </ul>
+    </LaneCard>
+  );
+}
+
+// ── the registry the page renders from ───────────────────────────────────────
+
+export const LANE_COMPONENT: Record<
+  LaneId,
+  (p: { scope: LaneScope; report?: LaneStateReport }) => JSX.Element
+> = {
+  dem: DemLane,
+  changed: ChangedLane,
+  health: HealthLane,
+  path: PathLane,
+  routing: RoutingLane,
+  flows: FlowsLane,
+  events: EventsLane,
+};

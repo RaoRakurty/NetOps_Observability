@@ -1,0 +1,137 @@
+{
+  "info": {
+    "name": "NetOps Observability API",
+    "description": "Importable Postman collection for the NetOps/Netra API. Set the collection variables `base` (default http://localhost:8000), `username`, and `password`, then run **Auth › Login** first — its test script captures `{{token}}` and `{{refresh_token}}` for every other request. Folders mirror the product: Auth, Identity, Inventory, Alerts, Explore, Saved/Reports, API & ITSM.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base", "value": "http://localhost:8000" },
+    { "key": "username", "value": "admin" },
+    { "key": "password", "value": "" },
+    { "key": "token", "value": "" },
+    { "key": "refresh_token", "value": "" },
+    { "key": "api_key", "value": "" },
+    { "key": "key_id", "value": "" }
+  ],
+  "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{token}}", "type": "string" } ] },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "event": [ { "listen": "test", "script": { "exec": [
+            "const d = pm.response.json();",
+            "pm.test('200 + token', () => { pm.response.to.have.status(200); pm.expect(d.token).to.be.a('string'); });",
+            "pm.collectionVariables.set('token', d.token);",
+            "pm.collectionVariables.set('refresh_token', d.refresh_token);"
+          ], "type": "text/javascript" } } ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}" },
+            "url": { "raw": "{{base}}/api/auth/login", "host": ["{{base}}"], "path": ["api","auth","login"] }
+          }
+        },
+        {
+          "name": "Me",
+          "request": { "method": "GET", "url": { "raw": "{{base}}/api/auth/me", "host": ["{{base}}"], "path": ["api","auth","me"] } }
+        },
+        {
+          "name": "Permissions",
+          "request": { "method": "GET", "url": { "raw": "{{base}}/api/auth/permissions", "host": ["{{base}}"], "path": ["api","auth","permissions"] } }
+        },
+        {
+          "name": "Refresh (rotate)",
+          "event": [ { "listen": "test", "script": { "exec": [
+            "const d = pm.response.json();",
+            "pm.test('rotates', () => pm.expect(d.token).to.be.a('string'));",
+            "pm.collectionVariables.set('token', d.token);",
+            "pm.collectionVariables.set('refresh_token', d.refresh_token);"
+          ], "type": "text/javascript" } } ],
+          "request": {
+            "auth": { "type": "noauth" }, "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{ \"refresh_token\": \"{{refresh_token}}\" }" },
+            "url": { "raw": "{{base}}/api/auth/refresh", "host": ["{{base}}"], "path": ["api","auth","refresh"] }
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "auth": { "type": "noauth" }, "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{ \"refresh_token\": \"{{refresh_token}}\" }" },
+            "url": { "raw": "{{base}}/api/auth/logout", "host": ["{{base}}"], "path": ["api","auth","logout"] }
+          }
+        },
+        {
+          "name": "SSO config (OIDC/SAML/LDAP via Keycloak)",
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "url": { "raw": "{{base}}/api/auth/sso/config", "host": ["{{base}}"], "path": ["api","auth","sso","config"] } }
+        }
+      ]
+    },
+    {
+      "name": "Identity",
+      "item": [
+        { "name": "Users (admin)", "request": { "method": "GET", "url": { "raw": "{{base}}/api/users", "host": ["{{base}}"], "path": ["api","users"] } } },
+        { "name": "Roles (admin)", "request": { "method": "GET", "url": { "raw": "{{base}}/api/roles", "host": ["{{base}}"], "path": ["api","roles"] } } },
+        { "name": "Tenants (admin)", "request": { "method": "GET", "url": { "raw": "{{base}}/api/tenants", "host": ["{{base}}"], "path": ["api","tenants"] } } },
+        {
+          "name": "Mint API key (admin)",
+          "event": [ { "listen": "test", "script": { "exec": [
+            "const d = pm.response.json();",
+            "pm.test('201 + secret', () => { pm.response.to.have.status(201); pm.expect(d.secret).to.include('ntk_'); });",
+            "pm.collectionVariables.set('api_key', d.secret);",
+            "pm.collectionVariables.set('key_id', d.key.id);"
+          ], "type": "text/javascript" } } ],
+          "request": {
+            "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"label\": \"postman\",\n  \"scopes\": [\"read:metrics\"],\n  \"rate_limit_per_min\": 600\n}" },
+            "url": { "raw": "{{base}}/api/apikeys", "host": ["{{base}}"], "path": ["api","apikeys"] }
+          }
+        },
+        {
+          "name": "Use API key (X-API-Key)",
+          "request": {
+            "auth": { "type": "noauth" }, "method": "GET",
+            "header": [ { "key": "X-API-Key", "value": "{{api_key}}" } ],
+            "url": { "raw": "{{base}}/api/devices", "host": ["{{base}}"], "path": ["api","devices"] }
+          }
+        },
+        { "name": "Revoke API key", "request": { "method": "DELETE", "url": { "raw": "{{base}}/api/apikeys/{{key_id}}", "host": ["{{base}}"], "path": ["api","apikeys","{{key_id}}"] } } }
+      ]
+    },
+    {
+      "name": "Inventory & Alerts",
+      "item": [
+        { "name": "Devices", "request": { "method": "GET", "url": { "raw": "{{base}}/api/devices", "host": ["{{base}}"], "path": ["api","devices"] } } },
+        { "name": "Collectors", "request": { "method": "GET", "url": { "raw": "{{base}}/api/collectors", "host": ["{{base}}"], "path": ["api","collectors"] } } },
+        { "name": "Alerts", "request": { "method": "GET", "url": { "raw": "{{base}}/api/alerts", "host": ["{{base}}"], "path": ["api","alerts"] } } },
+        { "name": "Rules", "request": { "method": "GET", "url": { "raw": "{{base}}/api/rules", "host": ["{{base}}"], "path": ["api","rules"] } } },
+        { "name": "Findings", "request": { "method": "GET", "url": { "raw": "{{base}}/api/findings", "host": ["{{base}}"], "path": ["api","findings"] } } }
+      ]
+    },
+    {
+      "name": "Explore",
+      "item": [
+        { "name": "Logs search", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{ \"query\": \"*\", \"size\": 10 }" }, "url": { "raw": "{{base}}/api/logs/search", "host": ["{{base}}"], "path": ["api","logs","search"] } } },
+        { "name": "Metric query (PromQL)", "request": { "method": "GET", "url": { "raw": "{{base}}/api/metrics/query?query=avg(device_cpu_percent)", "host": ["{{base}}"], "path": ["api","metrics","query"], "query": [ { "key": "query", "value": "avg(device_cpu_percent)" } ] } } },
+        { "name": "Flows top talkers", "request": { "method": "GET", "url": { "raw": "{{base}}/api/flows/top?since=1h", "host": ["{{base}}"], "path": ["api","flows","top"], "query": [ { "key": "since", "value": "1h" } ] } } },
+        { "name": "Tunnels", "request": { "method": "GET", "url": { "raw": "{{base}}/api/tunnels", "host": ["{{base}}"], "path": ["api","tunnels"] } } }
+      ]
+    },
+    {
+      "name": "API & ITSM",
+      "item": [
+        { "name": "GraphQL", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{ \"query\": \"{ devices { id name } alerts { id severity } health }\" }" }, "url": { "raw": "{{base}}/api/graphql", "host": ["{{base}}"], "path": ["api","graphql"] } } },
+        { "name": "OpenAPI spec", "request": { "auth": { "type": "noauth" }, "method": "GET", "url": { "raw": "{{base}}/api/openapi.json", "host": ["{{base}}"], "path": ["api","openapi.json"] } } },
+        { "name": "ITSM ServiceNow status", "request": { "method": "GET", "url": { "raw": "{{base}}/api/itsm/servicenow", "host": ["{{base}}"], "path": ["api","itsm","servicenow"] } } },
+        { "name": "ITSM Jira status", "request": { "method": "GET", "url": { "raw": "{{base}}/api/itsm/jira", "host": ["{{base}}"], "path": ["api","itsm","jira"] } } },
+        { "name": "Saved objects", "request": { "method": "GET", "url": { "raw": "{{base}}/api/saved", "host": ["{{base}}"], "path": ["api","saved"] } } },
+        { "name": "Report runs", "request": { "method": "GET", "url": { "raw": "{{base}}/api/reports/runs", "host": ["{{base}}"], "path": ["api","reports","runs"] } } }
+      ]
+    }
+  ]
+}

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package collectors orchestrates per-protocol metric collectors.
 //
 // Each Collector implementation is a self-contained goroutine that reads
@@ -8,8 +11,11 @@ package collectors
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
+
+	"netops/backend/safego"
 )
 
 // Collector is the contract every protocol-specific collector implements.
@@ -49,11 +55,23 @@ func NewPool(targets TargetFunc) *Pool {
 		collectors: make(map[string]Collector),
 		enabled:    make(map[string]bool),
 	}
-	p.register(NewSNMP(targets))
+	p.register(NewSNMPv2c(targets))
+	p.register(NewSNMPv3(targets))
 	p.register(NewGNMI(targets))
 	p.register(NewNETCONF(targets))
 	p.register(NewTunnels(targets))
 	p.register(NewSNMPMetrics(targets))
+	p.register(NewTrapReceiver(targets))
+	p.register(NewSTAMPSender())
+	p.register(NewSTAMPReflector())
+	p.register(NewTraceroute())
+	p.register(NewSynthetics())
+	p.register(NewDEM())
+	p.register(NewWANEcho())
+	p.register(NewLLDP(targets))
+	p.register(NewCDP(targets))
+	p.register(NewBGPLS())
+	p.register(NewUniFi())
 	return p
 }
 
@@ -76,9 +94,16 @@ func (p *Pool) Start(ctx context.Context) {
 		if !p.enabled[name] {
 			continue
 		}
-		go func(c Collector) {
-			_ = c.Run(ctx)
-		}(c)
+		// Panic-guarded: every collector goroutine parses bytes off the network
+		// (SNMP, gNMI, syslog, flows). A panic in any one of them would otherwise
+		// take the whole API process with it, not just that collector.
+		safego.Go("collector:"+name, func() {
+			if err := c.Run(ctx); err != nil {
+				// A collector that exits with an error (failed bind, fatal
+				// config) is dead until restart — that must never be silent.
+				log.Printf("collector %s exited: %v", name, err)
+			}
+		})
 	}
 }
 

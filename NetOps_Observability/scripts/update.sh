@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 #
 # update.sh — safe in-place upgrade for an existing NetOps Observability
 # deployment.
@@ -138,8 +141,13 @@ EXPECTED = {
     "NETFLOW_PORT":              "2055",
     "IPFIX_PORT":                "4739",
     "SFLOW_PORT":                "6343",
-    "REDPANDA_KAFKA_PORT":       "19092",
-    "REDPANDA_PROXY_PORT":       "18082",
+    # event bus (Redpanda→Apache Kafka swap, #97)
+    "BROKER_URLS":               "kafka:9092",
+    "KAFKA_CLUSTER_ID":          "__KAFKA_UUID__",
+    "COMPOSE_PROFILES":          "embedded-bus,prober,osd,self-monitoring",
+    "GRAFANA_URL":               "http://grafana:3000",
+    "CORRELIX_UID":              "__UID__",
+    "CORRELIX_GID":              "__GID__",
     # expanded notifier (new in the alert-channels landing)
     "SMTP_USER":                 "",
     "SMTP_PASS":                 "",
@@ -155,16 +163,129 @@ EXPECTED = {
     "AWS_REGION":                "",
     "SNS_PHONE_NUMBERS":         "",
     "SNS_TOPIC_ARN":             "",
+    # optional modules (Project 3). Every value here is BYTE-IDENTICAL to the
+    # default docker-compose.yml interpolates, so materializing the key changes
+    # nothing — it only makes the knob discoverable in .env after an upgrade.
+    # DELIBERATELY ABSENT: CORR_EVIDENCE_TOPICS. For that one variable "unset"
+    # and "empty" are different contracts (unset = every registered evidence
+    # class; empty = subscribe to none), so appending it with an empty default
+    # would silently unsubscribe every evidence class on the next restart.
+    "FEATURE_SECURITY_LANE":         "false",
+    "SECURITY_SCAN_INTERVAL":        "15m",
+    "SECURITY_MAX_FINDINGS_PER_TENANT": "5000",
+    "FEATURE_CONFIG_BACKUP":         "false",
+    "CONFIG_BACKUP_INTERVAL":        "24h",
+    "CONFIG_BACKUP_KEEP_VERSIONS":   "30",
+    "CONFIG_BACKUP_SSH_USER":        "",
+    "CONFIG_BACKUP_SSH_PASSWORD":    "",
+    "CONFIG_BACKUP_SSH_KEY":         "",
+    "CONFIG_BACKUP_SSH_PORT":        "22",
+    "FEATURE_PACKET_CAPTURE":        "false",
+    "PCAP_KEEP":                     "20",
+    "PCAP_SSH_USER":                 "",
+    "PCAP_SSH_PASSWORD":             "",
+    "PCAP_SSH_KEY":                  "",
+    "PCAP_SSH_PORT":                 "22",
+    "FEATURE_PROTOCOL_DIAG_COLLECT": "false",
+    "PROTOCOL_DIAG_SSH_USER":        "",
+    "PROTOCOL_DIAG_SSH_PASSWORD":    "",
+    "PROTOCOL_DIAG_SSH_KEY":         "",
+    "PROTOCOL_DIAG_SSH_PORT":        "22",
+    # BMP receiver (the live BGP feed). Byte-identical to the docker-compose
+    # defaults, so materializing these keys changes nothing — it only makes the
+    # knob discoverable in .env after an upgrade. BMP_PORT is the HOST port the
+    # compose ports: mapping publishes; BMP_LISTEN is the in-container bind.
+    "FEATURE_BMP":                   "false",
+    "BMP_LISTEN":                    ":11019",
+    "BMP_PORT":                      "11019",
+    # BGP depth/alerting flags. Byte-identical to the docker-compose defaults,
+    # so materializing them changes nothing — it only makes the knobs
+    # discoverable in .env after an upgrade, which is the whole point: the
+    # three passthroughs were missing from compose entirely until 2026-09-03,
+    # so no .env value could turn any of them on.
+    "FEATURE_BGP_LIVE_FEED":         "false",
+    "FEATURE_BGP_ALERTS":            "false",
+    "FEATURE_BGP_BOGON_FEED":        "false",
+    # Byte-identical to the docker-compose default and to
+    # bgpdepth.DefaultFeedLookback.
+    "BGP_FEED_LOOKBACK":             "6h",
+    "PARSERCOV_MAX_LINES":           "200000",
+    "CORRELATION_REPLICA_URLS":      "",
+    "CORR_SYSLOG_TOPIC":             "netops.syslog",
+    "CORR_FIDELITY_WEIGHTING":       "0",
+    # vmalert alert DELIVERY (internal/alertwebhook). An upgraded install must
+    # get a REAL secret here, not the compose fallback: the compose default is
+    # empty, and empty means the api refuses to register the receiver
+    # (fail-closed) — i.e. the upgrade would keep delivering nothing, which is
+    # the whole defect. __URLSAFE__ (not __RANDOM__) kept for compatibility:
+    # since 2026-09-03 vmalert reads this value from a basicAuth.passwordFile
+    # (compose secret) rather than URL userinfo, but an installation that
+    # pins an older compose still embeds it in the notifier URL, where
+    # randpw's @ # % + = would break the url vmalert parses. Plaintext by design — vmalert has to send
+    # it, so it can never be vault-sealed (same as INGEST_TOKEN).
+    "VMALERT_WEBHOOK_TOKEN":         "__URLSAFE__",
+    # Byte-identical to the docker-compose default and to
+    # alertwebhook.DefaultCooldown.
+    "VMALERT_WEBHOOK_COOLDOWN":      "30m",
+    # Pipeline debugger (correlix-debug) sidecar secret. Like the vmalert
+    # token, the compose default is EMPTY and empty is fail-closed: the
+    # correlation sidecar's bounded bus peek and log-level switch answer 503,
+    # so an upgraded install would ship a debugger that goes blind at the bus —
+    # the one hop the 2026-09-02 outage turned on. Minted here instead, ONCE:
+    # this loop only fills keys the .env does not already have, so an
+    # operator-set value is never overwritten (overwriting would desynchronise
+    # the api from the correlation container, which must hold the SAME value).
+    # __URLSAFE__, not __RANDOM__: it travels as an Authorization: Bearer
+    # credential, so randpw's @ # % ^ & + = have no business in it.
+    "CORR_DEBUG_TOKEN":              "__URLSAFE__",
+    # Platform self-health alerts -> the HOST-MONITORING ntfy topic
+    # (internal/alertwebhook hostroute.go). EMPTY is the intended default and is
+    # byte-identical to compose: empty topic means "use WATCHDOG_NTFY_TOPIC",
+    # which an existing install already has. Materializing the keys only makes
+    # the split-topic knob discoverable after an upgrade.
+    "PLATFORM_ALERTS_NTFY_TOPIC":    "",
+    "PLATFORM_ALERTS_NTFY_SERVER":   "",
+    "PLATFORM_ALERTS_NTFY_TOKEN":    "",
+    # Alert-noise + rate-limit control (2026-09-03). Byte-identical to the
+    # docker-compose defaults and to alertwebhook's DefaultWarningDigestInterval
+    # / DefaultPushBudget / DefaultPageReserve. Materialized so an UPGRADED
+    # install can see and tune the knobs that stop a 429 storm — the digest
+    # window and the page-reserved push budget.
+    "PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL":  "30m",
+    "PLATFORM_ALERTS_PUSH_BUDGET":              "30",
+    "PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE": "10",
 }
 
 alphabet = string.ascii_letters + string.digits + "!@#%^&*-_=+"
 def randpw(n=24): return "".join(secrets.choice(alphabet) for _ in range(n))
 
+# Credentials that ride URL userinfo (http://user:pw@host) must not contain
+# @ # % ^ & + = — see install.py's _URLSAFE_PASSWORD_ALPHABET note. Mirrors
+# install.py's generate_token (secrets.token_urlsafe) alphabet.
+urlsafe_alphabet = string.ascii_letters + string.digits + "-_"
+def randtoken(n=43): return "".join(secrets.choice(urlsafe_alphabet) for _ in range(n))
+
+def kafka_uuid():
+    # kafka-storage random-uuid format: 22-char base64url uuid, no padding.
+    import base64, uuid
+    return base64.urlsafe_b64encode(uuid.uuid4().bytes).decode().rstrip("=")
+
 missing = []
 for k, default in EXPECTED.items():
     if k in existing:
         continue
-    v = randpw(20) if default == "__RANDOM__" else default
+    if default == "__RANDOM__":
+        v = randpw(20)
+    elif default == "__URLSAFE__":
+        v = randtoken(43)
+    elif default == "__KAFKA_UUID__":
+        v = kafka_uuid()
+    elif default == "__UID__":
+        v = str(os.getuid())
+    elif default == "__GID__":
+        v = str(os.getgid())
+    else:
+        v = default
     missing.append((k, v))
 
 if not missing:
@@ -224,16 +345,25 @@ step "recreating containers"
 
 if [[ -x "$ROOT/scripts/bootstrap-opensearch.sh" ]]; then
     step "applying OpenSearch index templates"
-    # Run via docker exec since OpenSearch isn't on the host network.
-    (cd "$COMPOSE_DIR" && docker compose exec -T opensearch bash -lc '
-        for i in $(seq 1 30); do
-            curl -sf http://localhost:9200/_cluster/health >/dev/null && break
-            sleep 2
-        done
-    ') || warn "OpenSearch not ready in time; re-run scripts/bootstrap-opensearch.sh later."
-    OPENSEARCH_URL=http://localhost:9200 bash "$ROOT/scripts/bootstrap-opensearch.sh" \
-        || warn "template apply failed; check manually."
+    # ONE owner (2026-09-03): bootstrap-opensearch.sh detects the variant from
+    # COMPOSE_FILE, waits for an AUTHENTICATED /_cluster/health, and applies
+    # every template in index-templates.json. The readiness loop and the
+    # `OPENSEARCH_URL=http://localhost:9200` override that used to live here
+    # were both plaintext-only, so on a TLS install this step probed a port
+    # that does not exist and then failed all nine templates — the exact
+    # blindness the script now owns and reports.
+    bash "$ROOT/scripts/bootstrap-opensearch.sh" \
+        || warn "template apply failed; see the APPLIED/FAILED lines above and re-run scripts/bootstrap-opensearch.sh"
 fi
+
+# ---- 8: reclaim superseded images --------------------------------------------
+# Every upgrade loads new image versions and the old ones stay on disk forever —
+# the ONE real docker-debris growth vector on an appliance (nothing builds
+# there). Dangling-only prune: the running stack's images are referenced and
+# untouchable; only layers no tag points at any more are removed.
+
+step "removing superseded image layers"
+docker image prune -f >/dev/null 2>&1 || warn "image prune failed (non-fatal)"
 
 # ---- done -------------------------------------------------------------------
 

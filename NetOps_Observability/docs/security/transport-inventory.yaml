@@ -1,0 +1,1724 @@
+{
+  "$schema_note": "SEC-001.1 as-built transport inventory. JSON-formatted (valid YAML 1.2) so the stdlib-only preflight gate can parse it. Companion prose: transport-inventory.md. Vocabulary aligned with docs/design/transport-encryption-2026-08-04.md \u00a74 (channel, transport values) and the HLD \u00a77 column set. 'current' = what the BASE compose ships on a fresh install; 'security_profile' = the state once the TLS override/profile is enabled (the lab runs this today); 'target' = the agreed v1 end state. 'port' = the base-compose port (the TLS-time endpoint lives in the mtls-edges.yaml contract row). Exception objects carry owner/accepted/reason/review_by; review_by must stay in the future or CI (test_transport_exceptions_carry_future_review_by) forces an owner re-review. Every claim carries evidence path:line (file must exist; line drift tolerated).",
+  "schema_version": 1,
+  "updated": "2026-08-14",
+  "external_peers": [
+    "browser",
+    "device",
+    "operator",
+    "remote-vantage"
+  ],
+  "edges": [
+    {
+      "id": "browser-nginx",
+      "source": "browser",
+      "destination": "nginx",
+      "channel": "api",
+      "protocol": "https",
+      "port": 443,
+      "current": {
+        "transport": "tls",
+        "authn": "jwt",
+        "authz": "rbac-pbac"
+      },
+      "security_profile": {
+        "transport": "tls",
+        "notes": "TLS 1.2+/HSTS via tls.conf override; enforce wave 2026-08-09: plaintext :8000 host publication REMOVED on the lab (ports !override, 443 only; watchdog probe moved to https+APP_CACERT). compose.tls.yml keeps 8000 until install.py messaging is TLS-aware — see the nginx NOTE there"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "jwt",
+        "authz": "rbac-pbac"
+      },
+      "trust_domain": "public",
+      "owning_epic": "SEC-004",
+      "priority": "P1",
+      "evidence": [
+        "deployment/docker/docker-compose.yml",
+        "deployment/docker/nginx/tls.conf.example",
+        "deployment/docker/nginx/default.conf"
+      ]
+    },
+    {
+      "id": "nginx-api",
+      "source": "nginx",
+      "destination": "api",
+      "channel": "api",
+      "protocol": "http",
+      "port": 8080,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "app-jwt-downstream"
+      },
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE on the lab 2026-08-04: default-mtls.conf variant + TLS_INTERNAL_CA; API requires the nginx SVID (URI allowlist)"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "san-allowlist"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-005",
+      "priority": "P0",
+      "evidence": [
+        "deployment/docker/nginx/default.conf:102",
+        "deployment/docker/nginx/default-mtls.conf",
+        "deployment/docker/nginx/api-mtls.conf.example",
+        "src/backend/tls_ca.go"
+      ]
+    },
+    {
+      "id": "api-host-published",
+      "source": "operator",
+      "destination": "api",
+      "channel": "api",
+      "protocol": "http",
+      "port": 8080,
+      "current": {
+        "transport": "plaintext",
+        "authn": "app-jwt",
+        "authz": "rbac-pbac",
+        "notes": "api port published to the HOST, bypassing nginx entirely on a fresh install"
+      },
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "mTLS listener refuses clients without an allowed SVID"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "san-allowlist",
+        "notes": "host publication should be dropped or bound to localhost with SEC-004.2"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-004",
+      "priority": "P0",
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ]
+    },
+    {
+      "id": "api-clickhouse",
+      "source": "api",
+      "destination": "clickhouse",
+      "channel": "store",
+      "protocol": "http",
+      "port": 8123,
+      "current": {
+        "transport": "plaintext",
+        "authn": "basic",
+        "authz": "row-policies",
+        "notes": "base-compose default: CLICKHOUSE_URL http://clickhouse:8123 with basic auth + tenant row-policies; the https:8443 + native-secure:9440 shape (incl. plaintext-8123 removal at the 2026-08-09 enforce wave) exists only under compose.tls.yml — see security_profile (restated 2026-08-14: current had claimed the TLS-variant state)"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "mtls+ch-user",
+        "authz": "row-policies-KEEP"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-009",
+      "priority": "P0",
+      "evidence": [
+        "deployment/docker/docker-compose.yml:974"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-05 (SEC-009.1): dual listener \u2014 https 8443 + native-secure 9440 (registry SVID via tls-entrypoint, uid-101 staging); all four clients over TLS (api chhttp/backendHTTPClient, router sinks via CLICKHOUSE_ENDPOINT+SSL_CERT_FILE, correlation httpx verify=mesh-CA, grafana native-secure) \u2014 tenant_scope row-policy plumbing verified intact; STORE-002 cleared (fatal 3->2). Plaintext 8123 REMOVED 2026-08-09 (enforce wave; tls.xml http_port remove, healthcheck moved to https 8443)."
+      }
+    },
+    {
+      "id": "api-opensearch",
+      "source": "api",
+      "destination": "opensearch",
+      "channel": "store",
+      "protocol": "http",
+      "port": 9200,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "DISABLE_SECURITY_PLUGIN=true \u2014 largest unauthenticated surface in the product"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "basic-per-identity",
+        "authz": "index-tenant-roles",
+        "notes": "restated 2026-08-11 (F-3): owner steer §0a (smallest sufficient mechanism) — SEC-008.2's acceptance criterion (every client authenticated, least-privilege) is met by HTTPS + per-service basic identities within TLS; the HLD's mTLS-mapped-to-OS-role ideal is NOT being built (the node cert keeps both EKUs for transport-layer mutual auth; the admin plane is cert-DN)"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-008",
+      "priority": "P0",
+      "evidence": [
+        "deployment/docker/docker-compose.yml:538"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-05 (SEC-008.1): security plugin ENABLED \u2014 HTTPS + 5 least-privilege identities (svc_api/svc_router write-only/svc_correlation read-only/svc_bootstrap/svc_dashboards), admin = cert DN only, demo certs REFUSED. Matrix proven: anon 401, valid 200, wrong-pw 401, write-only identity 403 on read. Zero-loss cutover (router parked, Kafka held the backlog; drain verified by DOC COUNTS +4406 syslog past the pre-flip baseline). STORE-001 cleared, fatal 2->1."
+      }
+    },
+    {
+      "id": "api-victoria",
+      "source": "api",
+      "destination": "victoria",
+      "channel": "store",
+      "protocol": "http",
+      "port": 8428,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "anonymous READ and WRITE \u2014 alert forgery/suppression possible"
+      },
+      "target": {
+        "transport": "tls-via-vmauth",
+        "authn": "mtls-or-token",
+        "authz": "route+tenant-scoping"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-010",
+      "priority": "P0",
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ],
+      "security_profile": {
+        "transport": "tls-via-vmauth",
+        "notes": "LIVE via vmauth 2026-08-04 (SEC-010): https + svc-api credential (URL-userinfo seam); STORE-003 cleared, boot fatal 5->4"
+      }
+    },
+    {
+      "id": "api-postgres",
+      "source": "api",
+      "destination": "postgres",
+      "channel": "store",
+      "protocol": "postgres",
+      "port": 5432,
+      "current": {
+        "transport": "plaintext",
+        "authn": "password",
+        "authz": "FORCE-RLS",
+        "notes": "sslmode=disable"
+      },
+      "security_profile": {
+        "transport": "tls-verify-full",
+        "notes": "LIVE on the lab 2026-08-04 (SEC-011.1): postgres serves TLSv1.3 with its registry SVID (tls-entrypoint.sh); api DATABASE_URL at verify-full vs the mesh CA; wrong-CA refused (tested); STORE-004 cleared, boot fatal 6->5. ENFORCED 2026-08-09 (F-4): the wrapper stages pg_hba with a hostssl network row and hands it over via -c hba_file, so plaintext TCP is refused before auth -- TLS here was client-side convention until then. (correlation holds no postgres DSN at all since SEC-011.2 evicted POSTGRES_DSN; earlier text claiming a correlation DSN was stale.)"
+      },
+      "target": {
+        "transport": "tls-verify-full",
+        "authn": "scram",
+        "authz": "per-service-roles+FORCE-RLS-KEEP"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-011",
+      "priority": "P0",
+      "evidence": [
+        "deployment/docker/docker-compose.yml:977"
+      ]
+    },
+    {
+      "id": "api-valkey",
+      "source": "api",
+      "destination": "redis",
+      "channel": "store",
+      "protocol": "resp",
+      "port": 6379,
+      "current": {
+        "transport": "plaintext",
+        "authn": "password",
+        "authz": "none",
+        "notes": "carries RCA EVIDENCE (paths/topology), not just cache; base-compose default: plaintext 6379 with requirepass (SEC-012.1 enforced auth and fixed the silent write-path fallback, redisPublish+counter); the TLS-6380-only shape (registry SVID, hostname-verified, REDIS_TLS seam, plaintext removed via --port 0 at the 2026-08-09 enforce wave) exists only under compose.tls.yml \u2014 see security_profile (restated 2026-08-14: current had claimed the TLS-variant state); key-prefix ACLs remain the target"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "acl-user",
+        "authz": "command+key-prefix-acl"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-012",
+      "priority": "P0",
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-06 (SEC-012.2), plaintext removed at the enforce wave 2026-08-09: TLS 6380 (registry SVID, hostname-verified, fail-closed REDIS_TLS seam with a no-insecure-knob source guard) is the ONLY listener (--port 0; healthcheck rides TLS). Password stays the authn (--tls-auth-clients no); matrix proven plaintext→reset, TLS+CA PONG. History: SEC-012.1 (2026-08-04) enforced requirepass and fixed the silent write-path fallback FIRST (all 8 evidence publishes surfaced via redisPublish counter). Key-prefix ACLs remain the open target half."
+      }
+    },
+    {
+      "id": "api-correlation",
+      "source": "api",
+      "destination": "correlation",
+      "channel": "api",
+      "protocol": "http",
+      "port": 8000,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "service authenticates no caller and is cross-tenant capable"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "peer-allowlist"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-013",
+      "priority": "P0",
+      "evidence": [
+        "deployment/docker/docker-compose.yml",
+        "src/correlation/tls_serve.py",
+        "src/correlation/tls_ident.py"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE 2026-08-05 (APP-001): correlation serves mTLS-ONLY :8443 (tls_serve.py, registry SVID, CERT_REQUIRED vs mesh CA \u2014 plaintext listener REMOVED, not kept beside) + SPIFFE peer authorization (tls_ident.py): api full access; victoria + own healthcheck scoped to /metrics+/healthz. Matrix proven: anon handshake refused, victoria SVID 403 on /findings + 200 on /metrics, api SVID 200. api dials https via backendHTTPClient presenting its services/api SVID (first-boot deferral added); scrape via vmscrape-mtls tls_config, up{job=correlation}=1. APP-001 cleared \u2014 boot validator fatal 1->0."
+      }
+    },
+    {
+      "id": "vector-router-api-sealing-keys",
+      "source": "vector-router",
+      "destination": "api",
+      "channel": "ingest",
+      "protocol": "http",
+      "port": 8080,
+      "current": {
+        "transport": "plaintext",
+        "authn": "token",
+        "authz": "route-gate",
+        "notes": "base-compose (plaintext baseline) keeps the INGEST_TOKEN gate on the edge-key route \u2014 after the wave narrowing this gate is INGEST_TOKEN's SOLE remaining role. The hop is DORMANT unless Sealed Fields is on (route 404s feature-off). TLS deployments are router-SVID-only \u2014 see security_profile"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid-dedicated",
+        "authz": "key-fetch-scope-only"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-018",
+      "priority": "P0",
+      "evidence": [
+        "deployment/docker/vector-router/cx-secret-backend.sh"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-06 (SEC-018.1): edge-key endpoint accepts ONLY the vector-router SVID over TLS (sealingEdgeCaller; router added to TLS_CLIENT_ALLOWED_URIS); script side is https\u21d2mTLS-required fail-closed (3 failure paths tested first); stolen-token-over-TLS refused (unit-proven); every fetch audited (tenant+peer, never keys). Proven live feature-ON 2026-08-09 (step-2 phase 11 matrix: router-SVID 200+audit / nginx-SVID 401 / stolen token 401 / no cert refused / feature-off 404) and again in the step-3 sealed-fields e2e re-run."
+      }
+    },
+    {
+      "id": "victoria-api-metrics-scrape",
+      "source": "victoria",
+      "destination": "api",
+      "channel": "store",
+      "protocol": "https",
+      "port": 8080,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "base vmscrape.yml scrapes http"
+      },
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE on the lab 2026-08-04: victoria client SVID + vmscrape-mtls.yml variant (#149)"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "san-allowlist"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-003",
+      "priority": "P1",
+      "evidence": [
+        "src/config/vmscrape.yml:22",
+        "src/config/vmscrape-mtls.yml",
+        "src/backend/tls_ca.go"
+      ]
+    },
+    {
+      "id": "vector-kafka",
+      "source": "vector-aggregator",
+      "destination": "kafka",
+      "channel": "bus",
+      "protocol": "kafka",
+      "port": 9092,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "base-compose default: ${BROKER_URLS:-kafka:9092} against the single PLAINTEXT:9092 client listener (KAFKA_LISTENERS in docker-compose.yml); the mTLS:9094 SVID + topic-ACL shape exists only under compose.tls.yml — see security_profile (restated 2026-08-14: current had claimed the TLS-variant state, but the 2026-08-09 enforce wave removed 9092 on the LAB variant only)"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "topic-acls"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-006",
+      "priority": "P0",
+      "evidence": [
+        "deployment/docker/docker-compose.yml:207"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE 2026-08-05 (SEC-006.1/.2 + SEC-007.1): dual secure listeners \u2014 MTLS:9094 (ssl.client.auth=required, PEM keystore from the kafka registry SVID via tls-entrypoint) + FLOWS:9095 (TLS, client.auth=none, goflow2 only per owner option-1). vector-aggregator (9 kafka sinks, SVID via env-driven tls blocks) authenticates as its full-DN SPIFFE principal on 9094; 49-entry ACL matrix applied in OBSERVE posture (allow.everyone=true, authorizer DEBUG = would-have-denied feed). Migration continuity proven vs banked offsets: zero deadletter growth, lag at baseline. ENFORCED 2026-08-09 (post-soak GO): allow.everyone=false (default-deny) + PLAINTEXT:9092 REMOVED (inter-broker on MTLS); ANONYMOUS retains only Write netops.flows via FLOWS:9095."
+      }
+    },
+    {
+      "id": "vector-router-kafka",
+      "source": "vector-router",
+      "destination": "kafka",
+      "channel": "bus",
+      "protocol": "kafka",
+      "port": 9092,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "base-compose default: ${BROKER_URLS:-kafka:9092} against the single PLAINTEXT:9092 client listener; the mTLS:9094 SVID + topic-ACL shape exists only under compose.tls.yml — see security_profile (restated 2026-08-14: current had claimed the TLS-variant state, but the 2026-08-09 enforce wave removed 9092 on the LAB variant only)"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "topic-acls"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-006",
+      "priority": "P0",
+      "evidence": [
+        "deployment/docker/docker-compose.yml:207"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE 2026-08-05 (SEC-006.1/.2 + SEC-007.1): dual secure listeners \u2014 MTLS:9094 (ssl.client.auth=required, PEM keystore from the kafka registry SVID via tls-entrypoint) + FLOWS:9095 (TLS, client.auth=none, goflow2 only per owner option-1). vector-router (7 kafka sources + deadletter sink) authenticates as its full-DN SPIFFE principal on 9094; 49-entry ACL matrix applied in OBSERVE posture (allow.everyone=true, authorizer DEBUG = would-have-denied feed). Migration continuity proven vs banked offsets: zero deadletter growth, lag at baseline. ENFORCED 2026-08-09 (post-soak GO): allow.everyone=false (default-deny) + PLAINTEXT:9092 REMOVED (inter-broker on MTLS); ANONYMOUS retains only Write netops.flows via FLOWS:9095."
+      }
+    },
+    {
+      "id": "goflow2-kafka",
+      "source": "goflow2",
+      "destination": "kafka",
+      "channel": "bus",
+      "protocol": "kafka",
+      "port": 9092,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "base-compose default: -transport.kafka.brokers ${BROKER_URLS:-kafka:9092}, plaintext against the single PLAINTEXT:9092 client listener; the FLOWS:9095 TLS-anon shape (owner option-1, ANONYMOUS ACL-bounded to Write netops.flows literal under default-deny) exists only under compose.tls.yml — see security_profile (restated 2026-08-14: current had claimed the TLS-variant state)"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "none",
+        "authz": "produce-netops.flows-only",
+        "notes": "restated 2026-08-11 (F-3): owner option-1 decision 2026-08-05 IS the target (U3 resolved — goflow2 v2.2.1 has no client-cert flags; SASL rejected per §0a): TLS-anon on the dedicated FLOWS:9095 listener, ANONYMOUS ACL-bounded to Write on the netops.flows literal, exclusive under default-deny since the 2026-08-09 flip. REOPEN to mtls/svid only if goflow2 grows client-certificate support"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-006",
+      "priority": "P1",
+      "evidence": [
+        "deployment/docker/docker-compose.yml:207"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-05 (SEC-006.2 client 5/5, owner option-1): goflow2 v2.2.1 has no client-cert flags and SASL is rejected (\u00a70a), so it produces on FLOWS:9095 \u2014 encrypted, server-verified via SSL_CERT_FILE (Go system pool), ANONYMOUS principal ACL-bounded to Write+Describe on netops.flows LITERAL (SEC-007.1). Bound becomes exclusive at the SEC-007.2 enforce flip."
+      }
+    },
+    {
+      "id": "api-kafka",
+      "source": "api",
+      "destination": "kafka",
+      "channel": "bus",
+      "protocol": "kafka",
+      "port": 9092,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "the api holds NO kafka client today — BROKER_URLS (base default kafka:9092, plaintext) feeds only the stack-health TCP liveness probe (firstBrokerAddr); compose.tls.yml repoints the probe at MTLS:9094 (a TCP dial, no TLS handshake, so no security_profile is claimed); bus writes go via the authenticated vector-aggregator bus lane"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "topic-acls"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-006",
+      "priority": "P0",
+      "evidence": [
+        "deployment/docker/docker-compose.yml:207"
+      ]
+    },
+    {
+      "id": "correlation-kafka-ch-pg",
+      "source": "correlation",
+      "destination": "kafka",
+      "channel": "bus",
+      "protocol": "mixed",
+      "current": {
+        "transport": "plaintext",
+        "authn": "partial",
+        "authz": "row-policies-on-ch",
+        "notes": "kafka consume plaintext/none; CH basic; PG password \u2014 see docker-compose.yml:972-977"
+      },
+      "target": {
+        "transport": "mtls-tls",
+        "authn": "svid+store-users",
+        "authz": "consume-only-acls+row-policies"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-006",
+      "priority": "P0",
+      "evidence": [
+        "deployment/docker/docker-compose.yml:972"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "KAFKA HOP LIVE 2026-08-05 (SEC-006.2): aiokafka consumer on MTLS:9094 via kafka_security_kwargs (KAFKA_SSL_* env, partial config refuses boot); consume-only ACLs on its 12 topics + group. CH/PG hops were already converted (SEC-009.1/SEC-011.1)."
+      }
+    },
+    {
+      "id": "collectors-vector-lanes",
+      "source": "api",
+      "destination": "vector-aggregator",
+      "channel": "ingest",
+      "protocol": "http",
+      "current": {
+        "transport": "plaintext",
+        "authn": "basic-per-lane",
+        "authz": "lane-token",
+        "notes": "base-compose default is plaintext (TLS is env-gated, see security_profile) but the token narrowing is a BASE fact: each of the four lanes verifies its OWN fail-closed token (${INGEST_TOKEN_<LANE>:?}, no shared fallback) and the shared INGEST_TOKEN opens no lane (enforce wave step 4, proven 4x200/4x401)"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid-per-collector",
+        "authz": "lane-scoped"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-013",
+      "priority": "P0",
+      "evidence": [
+        "deployment/docker/vector/vector.yaml:126",
+        "deployment/docker/compose.tls.yml"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE 2026-08-06 (SEC-013.1/.2): all four lanes (traps 8688 / probes 8689 / metrics 8690 / bus 8692) serve the vector-aggregator SVID and REQUIRE a mesh client certificate (verify_certificate on a Vector server = client-cert enforcement, proven empirically); identity is mTLS's job, lane authz is the per-lane token's. Clients: api+prober via the collectors/mesh_client seam presenting the api SVID, cloud-ingest, rca-canary via the bus lane. Narrowing proven live at the enforce wave 2026-08-09: per-lane 200 / shared-token 401 on every lane over correlation-SVID mTLS."
+      }
+    },
+    {
+      "id": "syslog-ng-vector",
+      "source": "syslog-ng",
+      "destination": "vector-aggregator",
+      "channel": "ingest",
+      "protocol": "tcp",
+      "port": 6601,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "cert",
+        "authz": "none"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-014",
+      "priority": "P1",
+      "evidence": [
+        "deployment/docker/vector/vector.yaml",
+        "deployment/docker/syslog-ng/syslog-ng-tls.conf",
+        "deployment/docker/compose.tls.yml"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE 2026-08-11 (F-1, SEC-014.1): env-gated on both ends, plaintext stays the base-compose default (current above records the base shape, api-opensearch precedent). TLS deployments (compose.tls.yml / lab override) set SYSLOG_TLS_ENABLED on the aggregator — its syslog source serves the vector-aggregator SVID and REQUIRES a mesh client certificate (verify_certificate) — and point syslog-ng at syslog-ng-tls.conf, which verifies the mesh CA (peer-verify required-trusted) and presents the syslog-ng SVID. No app-layer token exists on this hop; transport identity is the authentication. F-48 reliable disk-buffer retained in the variant (holds device syslog across handshake gaps/rotation). Certs load at start on the syslog-ng side: rotate-tls-services.sh restarts it in the weekly sweep; served cert watched via tlsprobe vector-aggregator:6601."
+      }
+    },
+    {
+      "id": "device-syslog-ng",
+      "source": "device",
+      "destination": "syslog-ng",
+      "channel": "syslog",
+      "protocol": "udp-tcp",
+      "port": 514,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "hostname-attribution-only"
+      },
+      "target": {
+        "transport": "tls-rfc5425-mtls",
+        "authn": "device-cert",
+        "authz": "tenant-from-cert",
+        "notes": "PHASE 2+ per owner steer; v1 ships the honest labelling only (SEC-014.3)"
+      },
+      "trust_domain": "device",
+      "owning_epic": "SEC-014",
+      "priority": "P0-deferred-phase2",
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ]
+    },
+    {
+      "id": "api-syslog-ng-debug",
+      "source": "api",
+      "destination": "syslog-ng",
+      "channel": "syslog",
+      "protocol": "udp",
+      "port": 514,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "platform-admin-at-the-api",
+        "notes": "DEBUG-ROUTES (docs/design/PIPELINE_DEBUGGER_2026-09-04.md \u00a72/\u00a75). The pipeline debugger's `trace` verb injects ONE marked synthetic syslog record into the stack's OWN ingress so the real path is exercised end to end; DEBUG_SYSLOG_TARGET (default syslog-ng:514) names it. It is the SAME wire as device-syslog-ng and inherits that lane's posture exactly \u2014 there is no second listener and no new exposure. Authorization happens at the api (requirePlatformAdmin + audit) before the datagram is built; the frame itself carries no credential and every record is tagged cx_synthetic=true so it is excluded from customer-facing views. Dormant unless an operator runs a trace."
+      },
+      "target": {
+        "transport": "tls-rfc5425-mtls",
+        "authn": "service-cert",
+        "authz": "platform-admin-at-the-api",
+        "notes": "Follows device-syslog-ng: whatever that lane becomes, this hop is the same socket"
+      },
+      "trust_domain": "internal",
+      "owning_epic": "SEC-014",
+      "priority": "P0-deferred-phase2",
+      "evidence": [
+        "deployment/docker/docker-compose.yml",
+        "src/backend/internal/pipedebug/inject.go",
+        "src/backend/internal/pipedebug/http.go"
+      ]
+    },
+    {
+      "id": "api-goflow2-debug",
+      "source": "api",
+      "destination": "goflow2",
+      "channel": "flow",
+      "protocol": "udp",
+      "port": 2055,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "platform-admin-at-the-api",
+        "notes": "DEBUG-ROUTES (docs/design/PIPELINE_DEBUGGER_2026-09-04.md \u00a72/\u00a75), W2 `--kind flow`. The pipeline debugger sends ONE 72-byte NetFlow v5 export into the stack's OWN goflow2 listener so the flow path is exercised end to end; DEBUG_FLOW_TARGET (default goflow2:2055) names it. SAME wire as device-goflow2 \u2014 no second listener, no new exposure, and it inherits that lane's posture exactly. Authorization happens at the api (requirePlatformAdmin + audit) before the datagram is built and the packet carries no credential. A flow record has no free-text field, so the probe is identified by a deterministic tuple in RFC 5737 documentation address space (src 192.0.2.0/24, dst 198.51.100.0/24, RFC 6996 private ASNs, 1 byte / 1 packet) \u2014 address space that carries no production traffic and counters that cannot move a ranking. Dormant unless an operator runs a trace. There is deliberately NO api\u2192device gNMI counterpart: gNMI is passive-only because the debugger never writes to a device."
+      },
+      "target": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "platform-admin-at-the-api",
+        "notes": "Follows device-goflow2: NetFlow/IPFIX/sFlow have no in-protocol transport security, so this hop is whatever that lane is"
+      },
+      "trust_domain": "internal",
+      "owning_epic": "SEC-014",
+      "priority": "P0-deferred-phase2",
+      "evidence": [
+        "deployment/docker/docker-compose.yml",
+        "src/backend/internal/pipedebug/flow.go",
+        "src/backend/internal/pipedebug/http.go"
+      ]
+    },
+    {
+      "id": "device-goflow2",
+      "source": "device",
+      "destination": "goflow2",
+      "channel": "flow",
+      "protocol": "udp",
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "NetFlow/IPFIX/sFlow cannot be encrypted \u2014 permanent declared-plaintext lane (transport-encryption P4)"
+      },
+      "target": {
+        "transport": "plaintext-DECLARED",
+        "authn": "exporter-allowlist",
+        "authz": "tenant-map",
+        "notes": "segmentation guidance + declaration in v1 (SEC-017.2); allowlist Phase 2+"
+      },
+      "exception": {
+        "owner": "platform-eng",
+        "accepted": "2026-08-04",
+        "review_by": "2027-02-04",
+        "reason": "NetFlow/IPFIX/sFlow ride UDP and cannot be encrypted by the protocol; mitigation is exporter-address allowlisting (Phase 2+) and network segmentation, declared per SEC-017.2"
+      },
+      "trust_domain": "device",
+      "owning_epic": "SEC-017",
+      "priority": "P1",
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ]
+    },
+    {
+      "id": "device-snmp-poll",
+      "source": "api",
+      "destination": "device",
+      "channel": "snmp",
+      "protocol": "udp",
+      "port": 161,
+      "current": {
+        "transport": "protocol_native",
+        "authn": "community-or-usm",
+        "authz": "per-device-creds",
+        "notes": "v2c cleartext / v3 authPriv per credential; collectors are Go in-process (src/backend/collectors/)"
+      },
+      "target": {
+        "transport": "protocol_native",
+        "authn": "usm-authPriv-min-level",
+        "authz": "per-device-creds",
+        "notes": "PHASE 2+ per owner steer (SEC-015)"
+      },
+      "trust_domain": "device",
+      "owning_epic": "SEC-015",
+      "priority": "P1-deferred-phase2",
+      "evidence": [
+        "src/backend/collectors/poller.go"
+      ]
+    },
+    {
+      "id": "device-snmp-trap",
+      "source": "device",
+      "destination": "api",
+      "channel": "snmptrap",
+      "protocol": "udp",
+      "port": 162,
+      "current": {
+        "transport": "protocol_native",
+        "authn": "partial-usm",
+        "authz": "per-source",
+        "notes": "v3 FAILS OPEN for unknown senders \u2014 the single most instructive fail-open in the inventory"
+      },
+      "target": {
+        "transport": "protocol_native",
+        "authn": "usm-required-unknown-rejected",
+        "authz": "per-source",
+        "notes": "PHASE 2+ per owner steer (SEC-015); fail-open closure is the core of it"
+      },
+      "trust_domain": "device",
+      "owning_epic": "SEC-015",
+      "priority": "P0-deferred-phase2",
+      "evidence": [
+        "src/backend/collectors/snmptrap.go"
+      ]
+    },
+    {
+      "id": "gnmic-device",
+      "source": "gnmic",
+      "destination": "device",
+      "channel": "gnmi",
+      "protocol": "grpc",
+      "current": {
+        "transport": "tls-unverified",
+        "authn": "user-pass",
+        "authz": "per-target",
+        "notes": "skip-verify:true globally \u2014 encryption without identity"
+      },
+      "target": {
+        "transport": "tls-verified",
+        "authn": "device-cert-or-pinned-ca",
+        "authz": "per-target",
+        "notes": "PHASE 2+ per owner steer (SEC-016); prod must refuse insecure/skip-verify"
+      },
+      "trust_domain": "device",
+      "owning_epic": "SEC-016",
+      "priority": "P1-deferred-phase2",
+      "evidence": [
+        "deployment/docker/gnmic/gnmic.yaml:13"
+      ]
+    },
+    {
+      "id": "gnmic-victoria",
+      "source": "gnmic",
+      "destination": "victoria",
+      "channel": "store",
+      "protocol": "http",
+      "port": 8428,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none"
+      },
+      "target": {
+        "transport": "tls-via-vmauth",
+        "authn": "identity",
+        "authz": "ingest-scope"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-010",
+      "priority": "P1",
+      "evidence": [
+        "deployment/docker/gnmic/gnmic.yaml"
+      ],
+      "security_profile": {
+        "transport": "tls-via-vmauth",
+        "notes": "LIVE via vmauth 2026-08-04 (SEC-010): svc-gnmic write-only; TLS trust via SSL_CERT_FILE (gnmic has no per-output tls schema); lane verified by SAMPLE COUNTS after a silent 5-min blackhole proved logs alone lie"
+      }
+    },
+    {
+      "id": "gnmic-kafka",
+      "source": "gnmic",
+      "destination": "kafka",
+      "channel": "bus",
+      "protocol": "kafka",
+      "port": 9092,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "OPT-IN AND OFF BY DEFAULT: the hop exists only when the operator selects the correlation overlay (GNMIC_CONFIG_FILE=gnmic-correlation.yaml); the stock deployment loads gnmic.yaml, which has no bus output at all. When enabled it is the same shape as vector-kafka/goflow2-kafka on the base compose — ${BROKER_URLS:-kafka:9092} against the single PLAINTEXT:9092 client listener — producing canonical MetricEvents onto netops.metrics beside the Go SNMP collector's Vector lane. gnmic 0.46.0 has no http output, so the authenticated Vector :8690 lane the Go collector uses is not reachable from gnmic (see gnmic-correlation.yaml)."
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "produce-netops.metrics-only",
+        "notes": "same shape as every other SEC-006.2 bus client: a gnmic SVID on MTLS:9094 plus a produce grant on netops.metrics in kafka/apply-acls.sh. Neither exists yet, which is exactly why the lane is pinned off under compose.tls.yml and why this row carries an exception instead of a security_profile."
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-006",
+      "priority": "P1",
+      "evidence": [
+        "deployment/docker/gnmic/gnmic-correlation.yaml",
+        "deployment/docker/docker-compose.yml"
+      ],
+      "security_profile": {
+        "transport": "plaintext",
+        "notes": "NO TLS SHAPE EXISTS. compose.tls.yml removed PLAINTEXT:9092 (SEC-006.3) and enforces ACLs (SEC-007.2) on netops.metrics, and gnmic has neither an SVID nor a grant — so the TLS profile PINS the lane off (ENABLE_GNMI_CORRELATION=false, GNMI_CORRELATION_BROKERS=kafka:9094 so a mistaken flip fails the handshake loudly instead of finding a plaintext port). The row is declared anyway so the edge is visible rather than silently excluded (F-5)."
+      },
+      "exception": {
+        "owner": "platform-eng",
+        "accepted": "2026-09-02",
+        "review_by": "2026-12-02",
+        "reason": "PENDING OWNER RATIFICATION BEFORE THIS LANE MAY BE ENABLED ANYWHERE. The exception covers a hop that is OFF in every shipped profile: default compose loads gnmic.yaml (no bus output) and compose.tls.yml pins the flag false. It is declared, not accepted for production — enabling it on the base compose puts canonical MetricEvents on the plaintext :9092 listener with no producer identity, the same posture as vector-kafka/goflow2-kafka there, and enabling it under mTLS is impossible until the SVID + netops.metrics produce grant land (the target row). Short review_by on purpose: this row must be closed by shipping the mTLS shape or by removing the lane, not renewed indefinitely."
+      }
+    },
+    {
+      "id": "prober-victoria",
+      "source": "prober",
+      "destination": "victoria",
+      "channel": "store",
+      "protocol": "http",
+      "port": 8428,
+      "current": {
+        "transport": "tls-via-vmauth",
+        "authn": "identity",
+        "authz": "ingest-scope"
+      },
+      "target": {
+        "transport": "tls-via-vmauth",
+        "authn": "identity",
+        "authz": "ingest-scope"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-010",
+      "priority": "P1",
+      "evidence": [
+        "src/backend/collectors/poller.go",
+        "src/config/vmauth.yml"
+      ],
+      "security_profile": {
+        "transport": "tls-via-vmauth",
+        "notes": "Cutover 2026-08-07 (pre-enforce-wave sweep): prober emitMetrics import/prometheus pushes found riding victoria:8428 plaintext UNDECLARED in any contract — svc-prober write-only vmauth user added, VICTORIA_URL/METRICS_URL moved to vmauth in override + compose.tls.yml; verified by collector_up freshness"
+      }
+    },
+    {
+      "id": "remote-vantage-api",
+      "source": "remote-vantage",
+      "destination": "api",
+      "channel": "ingest",
+      "protocol": "https",
+      "current": {
+        "transport": "tls-if-via-front",
+        "authn": "shared-api-key",
+        "authz": "infrastructure-write",
+        "notes": "shared key lets any holder publish as any vantage"
+      },
+      "target": {
+        "transport": "mtls-or-per-vantage-secret",
+        "authn": "per-vantage-identity",
+        "authz": "vantage-scoped"
+      },
+      "trust_domain": "device",
+      "owning_epic": "SEC-013",
+      "priority": "P1",
+      "evidence": [
+        "src/backend/probe_paths_ingest.go"
+      ]
+    },
+    {
+      "id": "operator-grafana-osd",
+      "source": "operator",
+      "destination": "grafana",
+      "channel": "api",
+      "protocol": "http",
+      "current": {
+        "transport": "plaintext-behind-nginx",
+        "authn": "platform-owner-gate",
+        "authz": "auth_request-gated"
+      },
+      "target": {
+        "transport": "unchanged-plus-osd-security",
+        "authn": "platform-owner-gate+native-roles",
+        "authz": "operator-scope"
+      },
+      "trust_domain": "operator",
+      "owning_epic": "SEC-008",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/nginx/default.conf"
+      ]
+    },
+    {
+      "id": "vmauth-victoria",
+      "source": "vmauth",
+      "destination": "victoria",
+      "channel": "store",
+      "protocol": "http",
+      "port": 8428,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "per-service-routes",
+        "notes": "SEC-010 proxy hop: vmauth terminates TLS+auth and forwards on the compose network; victoria's port stays unpublished. True same-network segmentation is SEC-017."
+      },
+      "target": {
+        "transport": "plaintext-DECLARED",
+        "authn": "none",
+        "authz": "per-service-routes"
+      },
+      "exception": {
+        "owner": "platform-eng",
+        "accepted": "2026-08-04",
+        "review_by": "2027-02-04",
+        "reason": "last hop of the SEC-010 vmauth proxy: TLS and per-service auth terminate at vmauth on the same compose network, victoria's port stays unpublished; direct-listener removal is programme-final and same-network segmentation is SEC-017"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-010",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/docker-compose.yml",
+        "src/config/vmauth.yml"
+      ]
+    },
+    {
+      "id": "vector-router-opensearch",
+      "source": "vector-router",
+      "destination": "opensearch",
+      "channel": "store",
+      "protocol": "http",
+      "port": 9200,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "every log lane's persistence hop (elasticsearch sinks)"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "basic-per-identity",
+        "authz": "index-roles",
+        "notes": "restated 2026-08-11 (F-3): same §0a decision as api-opensearch — svc_router is a write-only basic identity within TLS (read → 403)"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-008",
+      "priority": "P0",
+      "evidence": [
+        "deployment/docker/vector-router/vector.yaml"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-05 (SEC-008.1): security plugin ENABLED \u2014 HTTPS + 5 least-privilege identities (svc_api/svc_router write-only/svc_correlation read-only/svc_bootstrap/svc_dashboards), admin = cert DN only, demo certs REFUSED. Matrix proven: anon 401, valid 200, wrong-pw 401, write-only identity 403 on read. Zero-loss cutover (router parked, Kafka held the backlog; drain verified by DOC COUNTS +4406 syslog past the pre-flip baseline). STORE-001 cleared, fatal 2->1."
+      }
+    },
+    {
+      "id": "vector-router-clickhouse",
+      "source": "vector-router",
+      "destination": "clickhouse",
+      "channel": "store",
+      "protocol": "http",
+      "port": 8123,
+      "current": {
+        "transport": "plaintext",
+        "authn": "basic",
+        "authz": "row-policies",
+        "notes": "base-compose default: router sinks ride ${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123} with basic auth + tenant row-policies; the https:8443 shape (CLICKHOUSE_ENDPOINT + SSL_CERT_FILE) exists only under compose.tls.yml — see security_profile (restated 2026-08-14: current had claimed the TLS-variant state)"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "mtls+ch-user",
+        "authz": "row-policies-KEEP"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-009",
+      "priority": "P0",
+      "evidence": [
+        "deployment/docker/vector-router/vector.yaml"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-05 (SEC-009.1): dual listener \u2014 https 8443 + native-secure 9440 (registry SVID via tls-entrypoint, uid-101 staging); all four clients over TLS (api chhttp/backendHTTPClient, router sinks via CLICKHOUSE_ENDPOINT+SSL_CERT_FILE, correlation httpx verify=mesh-CA, grafana native-secure) \u2014 tenant_scope row-policy plumbing verified intact; STORE-002 cleared (fatal 3->2). Plaintext 8123 REMOVED 2026-08-09 (enforce wave; tls.xml http_port remove, healthcheck moved to https 8443)."
+      }
+    },
+    {
+      "id": "vector-aggregator-victoria",
+      "source": "vector-aggregator",
+      "destination": "victoria",
+      "channel": "store",
+      "protocol": "http",
+      "port": 8428,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "prometheus_remote_write sinks (cloud metrics)"
+      },
+      "target": {
+        "transport": "tls-via-vmauth",
+        "authn": "identity",
+        "authz": "ingest-scope"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-010",
+      "priority": "P0",
+      "evidence": [
+        "deployment/docker/vector/vector.yaml"
+      ],
+      "security_profile": {
+        "transport": "tls-via-vmauth",
+        "notes": "LIVE via vmauth 2026-08-04 (SEC-010): svc-vector write-only, always-present auth block (plaintext VM ignores it); F-17 series 3s fresh"
+      }
+    },
+    {
+      "id": "vector-aggregator-opensearch",
+      "source": "vector-aggregator",
+      "destination": "opensearch",
+      "channel": "store",
+      "protocol": "http",
+      "port": 9200,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "F-17 stats + cluster-health scrapes (http_client sources); edge MISSED by the SEC-001 audit, surfaced 2026-08-05 when the secured cluster refused it (OpenSearchStatsMissing fired)"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "basic-to-os-role",
+        "authz": "cluster-monitor-only"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-008",
+      "priority": "P1",
+      "evidence": [
+        "deployment/docker/vector/vector.yaml"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-05 (SEC-008.1 follow-up): svc_aggregator identity, netops_monitor role (cluster:monitor/health + nodes/stats only, zero index access); always-present auth blocks on both scrapers (plaintext OS ignores them); TLS trust via SSL_CERT_FILE"
+      }
+    },
+    {
+      "id": "mock-servicenow-lab-only",
+      "source": "api",
+      "destination": "mock-servicenow",
+      "channel": "api",
+      "protocol": "http",
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "LAB fixture with a published port; excluded from customer bundles"
+      },
+      "target": {
+        "transport": "plaintext-DECLARED",
+        "authn": "none",
+        "authz": "none",
+        "notes": "lab-only; never ships"
+      },
+      "exception": {
+        "owner": "platform-eng",
+        "accepted": "2026-08-04",
+        "review_by": "2027-02-04",
+        "reason": "lab test fixture excluded from customer bundles; the row exists so the coverage gate is honest"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P3",
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ]
+    },
+    {
+      "id": "mock-services-lab-only",
+      "source": "api",
+      "destination": "mock-nms",
+      "channel": "api",
+      "protocol": "http",
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "mock-nms + mock-servicenow are LAB fixtures with published ports; excluded from customer bundles \u2014 inventory row exists so the coverage gate is honest"
+      },
+      "target": {
+        "transport": "plaintext-DECLARED",
+        "authn": "none",
+        "authz": "none",
+        "notes": "lab-only; never ships"
+      },
+      "exception": {
+        "owner": "platform-eng",
+        "accepted": "2026-08-04",
+        "review_by": "2027-02-04",
+        "reason": "lab test fixture excluded from customer bundles; the row exists so the coverage gate is honest"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P3",
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ]
+    },
+    {
+      "id": "api-gotenberg",
+      "source": "api",
+      "destination": "gotenberg",
+      "channel": "api",
+      "protocol": "http",
+      "port": 3000,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "multipart POST of RENDERED TENANT RCA REPORT PDFs (REPORT_PDF_SIDECAR_URL, profile pdf) — tenant data on the wire; highest-value hop of the F-5 batch"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "none",
+        "authz": "none",
+        "notes": "restated 2026-08-14 (review): O10 decision 1 (2026-08-12) IS the target and is LIVE on the TLS profile the same day — gotenberg 8 native TLS (--api-tls-cert-file/--api-tls-key-file) serving the gotenberg registry SVID, clients verifying against the mesh CA: server-verified TLS, NOT mTLS (gotenberg performs no client-cert verification; the api presents its SVID regardless). REOPEN to mtls only if gotenberg grows client-certificate verification"
+      },
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-12 (O10 decision 1): gotenberg 8 native TLS (--api-tls-cert-file/--api-tls-key-file) serving the gotenberg registry SVID (cross-uid staged by the gotenberg-tls-init one-shot — image runs uid 1001, mint is uid 65532); api + rca clients verify against the mesh CA via backendHTTPClient (server-verified TLS — gotenberg does not verify client certs, so NOT mTLS; the api presents its SVID regardless). Silent-plaintext-return blocked by the secprofile rule on REPORT_PDF_SIDECAR_URL. Rotation: re-stage via the init one-shot in the weekly sweep."
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P1",
+      "evidence": [
+        "deployment/docker/docker-compose.yml:1640"
+      ]
+    },
+    {
+      "id": "api-keycloak",
+      "source": "api",
+      "destination": "keycloak",
+      "channel": "api",
+      "protocol": "http",
+      "port": 8080,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "OIDC discovery/JWKS + token exchange — bearer-token material when SSO is live. DORMANT today: profile sso + OIDC_ISSUER unset by default; SSO/SAML implementation itself is deferred until SaaS"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "none",
+        "authz": "none"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/docker-compose.yml:1496"
+      ]
+    },
+    {
+      "id": "keycloak-postgres",
+      "source": "keycloak",
+      "destination": "postgres",
+      "channel": "store",
+      "protocol": "postgres",
+      "port": 5432,
+      "current": {
+        "transport": "tls-unverified",
+        "authn": "password",
+        "authz": "db-grants",
+        "notes": "pgjdbc negotiates TLSv1.3 (server-forced since F-4 hostssl; observed live in pg_stat_ssl) but WITHOUT CA/hostname verification — encryption yes, server authentication no. Recorded here per the F-4 fix notes"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "password",
+        "authz": "db-grants",
+        "notes": "jdbc sslmode=verify-full with the mesh CA"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-011",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ]
+    },
+    {
+      "id": "api-netbox",
+      "source": "api",
+      "destination": "netbox",
+      "channel": "api",
+      "protocol": "http",
+      "port": 8080,
+      "current": {
+        "transport": "plaintext",
+        "authn": "token",
+        "authz": "netbox-rbac",
+        "notes": "device-inventory sync. DORMANT by default: NETBOX_URL unset; the var can equally point at an EXTERNAL NetBox (then transport is that deployment's concern and this row covers only the in-stack profile netbox case)"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "token",
+        "authz": "netbox-rbac"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P3",
+      "evidence": [
+        "deployment/docker/docker-compose.yml:1293"
+      ]
+    },
+    {
+      "id": "netbox-netbox-postgres",
+      "source": "netbox",
+      "destination": "netbox-postgres",
+      "channel": "store",
+      "protocol": "postgres",
+      "port": 5432,
+      "current": {
+        "transport": "plaintext",
+        "authn": "password",
+        "authz": "db-grants",
+        "notes": "dedicated single-purpose postgres, profile netbox, unpublished"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "password",
+        "authz": "db-grants"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P3",
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ]
+    },
+    {
+      "id": "netbox-valkey",
+      "source": "netbox",
+      "destination": "redis",
+      "channel": "store",
+      "protocol": "resp",
+      "port": 6379,
+      "current": {
+        "transport": "plaintext",
+        "authn": "password",
+        "authz": "none",
+        "notes": "netbox task queue/cache on valkey db 9/10 over the base-compose 6379 listener. KNOWN INCOMPATIBILITY: TLS deployments remove 6379 (--port 0) and netbox carries NO TLS stanza in compose.tls.yml yet — the netbox profile does not work on a TLS deployment until that ships (step-3 audit truth, 2026-08-07)"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "password",
+        "authz": "none",
+        "notes": "6380 with the mesh CA, like every other valkey client"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-012",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ]
+    },
+    {
+      "id": "nginx-frontend",
+      "source": "nginx",
+      "destination": "frontend",
+      "channel": "api",
+      "protocol": "http",
+      "port": 8080,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "ingress-terminated upstream hop (SPA + docs paths) inside the compose network; static assets only — auth rides the api hop"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "none",
+        "authz": "none",
+        "notes": "frontend holds a reserved server identity for later meshing"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P3",
+      "evidence": [
+        "deployment/docker/nginx/default.conf:42"
+      ]
+    },
+    {
+      "id": "nginx-grafana",
+      "source": "nginx",
+      "destination": "grafana",
+      "channel": "api",
+      "protocol": "http",
+      "port": 3000,
+      "current": {
+        "transport": "plaintext",
+        "authn": "header-sso",
+        "authz": "grafana-org-roles",
+        "notes": "auth_request-gated upstream (X-Grafana-User from the api session) — session identity crosses this hop in a header"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "header-sso",
+        "authz": "grafana-org-roles"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/nginx/default.conf:192"
+      ]
+    },
+    {
+      "id": "nginx-osd",
+      "source": "nginx",
+      "destination": "opensearch-dashboards",
+      "channel": "api",
+      "protocol": "http",
+      "port": 5601,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "ingress-terminated upstream hop, profile osd"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "none",
+        "authz": "none"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P3",
+      "evidence": [
+        "deployment/docker/nginx/default.conf:315"
+      ]
+    },
+    {
+      "id": "nginx-netbox",
+      "source": "nginx",
+      "destination": "netbox",
+      "channel": "api",
+      "protocol": "http",
+      "port": 8080,
+      "current": {
+        "transport": "plaintext",
+        "authn": "header-sso",
+        "authz": "netbox-rbac",
+        "notes": "auth_request-gated upstream (X-Netbox-User), profile netbox"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "header-sso",
+        "authz": "netbox-rbac"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P3",
+      "evidence": [
+        "deployment/docker/nginx/default.conf:254"
+      ]
+    },
+    {
+      "id": "nginx-keycloak",
+      "source": "nginx",
+      "destination": "keycloak",
+      "channel": "api",
+      "protocol": "http",
+      "port": 8080,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "browser-facing SSO paths proxied to keycloak (proxy-headers=xforwarded), profile sso — credentials transit this hop during login when SSO is live; dormant today"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "none",
+        "authz": "none"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/nginx/default.conf:381"
+      ]
+    },
+    {
+      "id": "osd-opensearch",
+      "source": "opensearch-dashboards",
+      "destination": "opensearch",
+      "channel": "store",
+      "protocol": "http",
+      "port": 9200,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "base-compose default (security plugin off): OPENSEARCH_HOSTS http"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "basic-per-identity",
+        "authz": "index-roles",
+        "notes": "same §0a shape as the other OpenSearch clients"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-008",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/compose.tls.yml:168"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-05 (SEC-008.1): https + svc_dashboards basic identity, CA-verified (OPENSEARCH_SSL_VERIFICATIONMODE=certificate, mesh CA mounted)"
+      }
+    },
+    {
+      "id": "grafana-victoria",
+      "source": "grafana",
+      "destination": "victoria",
+      "channel": "store",
+      "protocol": "http",
+      "port": 8428,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "base-compose datasources read victoria directly"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "basic-per-service",
+        "authz": "vmauth-route-scope"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-010",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/grafana/datasources-mtls.yaml",
+        "deployment/docker/compose.tls.yml:265"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-06 (SEC-010 slice C): datasources-mtls.yaml variant — https://vmauth:8427 as svc-grafana (read-only scoped routes), mesh CA pinned (tlsAuthWithCACert)"
+      }
+    },
+    {
+      "id": "grafana-clickhouse",
+      "source": "grafana",
+      "destination": "clickhouse",
+      "channel": "store",
+      "protocol": "clickhouse-native",
+      "port": 9440,
+      "current": {
+        "transport": "plaintext",
+        "authn": "password",
+        "authz": "ch-user-grants",
+        "notes": "base-compose datasource rides the plaintext native listener as the read-only grafana CH user"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "password",
+        "authz": "ch-user-grants"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-009",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/grafana/datasources-mtls.yaml",
+        "deployment/docker/compose.tls.yml:265"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-06 (SEC-009): native-secure 9440, secure:true with the mesh CA ($__file tlsCACert), read-only grafana user within TLS"
+      }
+    },
+    {
+      "id": "cloud-ingest-kafka",
+      "source": "cloud-ingest",
+      "destination": "kafka",
+      "channel": "bus",
+      "protocol": "kafka",
+      "port": 9092,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "base-compose default: direct kafka-python producer on the baseline listener (the client SEC-006.2's list MISSED — surfaced by lesson i when its first topic ACL denied it). kafka_security_kwargs env seam refuses partial TLS config"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "topic-acls"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-006",
+      "priority": "P1",
+      "evidence": [
+        "deployment/docker/compose.tls.yml:383"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE 2026-08-06 (task #9, interim-ANONYMOUS retired): MTLS:9094 with the cloud-ingest SVID (KAFKA_SSL_* kwargs mirror), full-DN principal named in the ACL matrix; exclusive under default-deny since the 2026-08-09 flip"
+      }
+    },
+    {
+      "id": "kafka-exporter-kafka",
+      "source": "kafka-exporter",
+      "destination": "kafka",
+      "channel": "bus",
+      "protocol": "kafka",
+      "port": 9092,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "base-compose default: ${BROKER_URLS:-kafka:9092}, profile self-monitoring"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "topic-acls"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-006",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/compose.tls.yml:511"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE 2026-08-06: --tls.enabled with the kafka-exporter SVID on MTLS:9094; its full-DN principal holds Describe-class ACLs; exclusive under default-deny since the flip"
+      }
+    },
+    {
+      "id": "kafka-init-kafka",
+      "source": "kafka-init",
+      "destination": "kafka",
+      "channel": "bus",
+      "protocol": "kafka",
+      "port": 9092,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "one-shot topic creator; base-compose default rides the baseline listener"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "topic-acls"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-006",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/compose.tls.yml:488"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE 2026-08-06 (kafka admin plane): stages the kafka SVID into a PEM keystore client config and creates topics over authenticated MTLS:9094 (bootstrap kafka:9094 — the SVID SAN is the compose DNS name, never localhost)"
+      }
+    },
+    {
+      "id": "opensearch-init-opensearch",
+      "source": "opensearch-init",
+      "destination": "opensearch",
+      "channel": "store",
+      "protocol": "http",
+      "port": 9200,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "one-shot template/ISM bootstrap; base-compose default OPENSEARCH_URL is http (security plugin off)"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "basic-per-identity",
+        "authz": "index-roles"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-008",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/compose.tls.yml:179"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-05 (SEC-008.1): https as svc_bootstrap with CURL_CA_BUNDLE = mesh CA"
+      }
+    },
+    {
+      "id": "opensearch-security-init-opensearch",
+      "source": "opensearch-security-init",
+      "destination": "opensearch",
+      "channel": "store",
+      "protocol": "http",
+      "port": 9200,
+      "current": {
+        "transport": "mtls",
+        "authn": "cert-dn",
+        "authz": "security-admin",
+        "notes": "profile security — this one-shot EXISTS only on security-enabled deployments and securityadmin always authenticates with the admin certificate DN; there is no plaintext mode for this hop"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "cert-dn",
+        "authz": "security-admin"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-008",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE 2026-08-05 (SEC-008.1): securityadmin over TLS with the opensearch-admin clientAuth certificate (admin identity = cert DN, not a registry row); seeds the full plugin config set"
+      }
+    },
+    {
+      "id": "vmalert-victoria",
+      "source": "vmalert",
+      "destination": "victoria",
+      "channel": "store",
+      "protocol": "http",
+      "port": 8428,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "base-compose default: rule evaluation datasource + remoteWrite direct to victoria"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "basic-per-service",
+        "authz": "vmauth-route-scope"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-010",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/compose.tls.yml:247"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-06 (SEC-010): datasource/remoteWrite/remoteRead all https://vmauth:8427 as svc-vmalert with the mesh CA (tlsCAFile flags)"
+      }
+    },
+    {
+      "id": "vmalert-api-alert-delivery",
+      "source": "vmalert",
+      "destination": "api",
+      "channel": "control",
+      "protocol": "https",
+      "port": 8080,
+      "current": {
+        "transport": "plaintext",
+        "authn": "token",
+        "authz": "route-gate",
+        "notes": "base-compose (plaintext baseline): vmalert's notifier POSTs evaluated alerts to the Alertmanager-v2 receiver at /api/internal/vmalert/api/v2/alerts, authenticated by the VMALERT_WEBHOOK_TOKEN shared secret, presented as Basic auth from a mounted compose secret (-notifier.basicAuth.username/passwordFile) and constant-time compared. It moved out of the url userinfo on 2026-09-03 (D-16): argv is disclosed verbatim by `docker inspect` to any account in the docker group. The route is NOT registered when that secret is unset (fail-closed). Added 2026-09-02 to close the alert-DELIVERY gap: vmalert previously ran -notifier.blackhole, so every rule it evaluated was delivered nowhere."
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid-dedicated",
+        "authz": "route-gate"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-010",
+      "priority": "P1",
+      "evidence": [
+        "deployment/docker/compose.tls.yml",
+        "src/backend/internal/alertwebhook/alertwebhook.go",
+        "docs/runbooks/engine-not-consuming.md"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "TLS variant (2026-09-02): https to api:8080 presenting the registry-minted vmalert client SVID (internal/workloadid {Service: vmalert, Client: true}; -notifier.tlsCertFile/tlsKeyFile/tlsCAFile), with spiffe://netops/ns/default/sa/vmalert added to the api's TLS_CLIENT_ALLOWED_URIS. TWO independent credentials by design: the SVID authenticates the connection, VMALERT_WEBHOOK_TOKEN authenticates the request. Allowlist mechanism verified live 2026-09-02 against the running api: vector-router SVID -> HTTP 200, vmalert SVID (valid, CA-signed, not yet allowlisted) -> TLS 'bad certificate', no client cert -> 'certificate required'."
+      }
+    },
+    {
+      "id": "victoria-cadvisor",
+      "source": "victoria",
+      "destination": "cadvisor",
+      "channel": "scrape",
+      "protocol": "http",
+      "port": 8080,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "container-metrics scrape, profile self-monitoring; metrics only, no tenant data"
+      },
+      "target": {
+        "transport": "plaintext-DECLARED",
+        "authn": "none",
+        "authz": "none",
+        "notes": "cadvisor has no native TLS listener — candidate for a declared exception at owner review (F-5)"
+      },
+      "exception": {
+        "owner": "product-owner",
+        "accepted": "2026-08-12",
+        "review_by": "2027-02-12",
+        "reason": "O10 metrics-only plaintext exception (owner decision 2026-08-12): valid ONLY while the endpoint carries operational metrics only, stays inside the compose-internal trust boundary (never host-published), and contains no credentials, tenant/customer content, logs, events, or configuration payloads. Any change in payload classification or network exposure invalidates the exception and requires TLS/mTLS review. Live payload verification recorded in the O10 acceptance evidence; the boundary conditions are pinned by test_metrics_scrape_exceptions_hold_their_boundary."
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P3",
+      "evidence": [
+        "src/config/vmscrape.yml:79"
+      ]
+    },
+    {
+      "id": "victoria-node-exporter",
+      "source": "victoria",
+      "destination": "node-exporter",
+      "channel": "scrape",
+      "protocol": "http",
+      "port": 9100,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "host-metrics scrape, profile self-monitoring; metrics only, no tenant data"
+      },
+      "target": {
+        "transport": "plaintext-DECLARED",
+        "authn": "none",
+        "authz": "none",
+        "notes": "node-exporter supports web-config TLS — convertible; or a declared exception at owner review (F-5)"
+      },
+      "exception": {
+        "owner": "product-owner",
+        "accepted": "2026-08-12",
+        "review_by": "2027-02-12",
+        "reason": "O10 metrics-only plaintext exception (owner decision 2026-08-12): valid ONLY while the endpoint carries operational metrics only, stays inside the compose-internal trust boundary (never host-published), and contains no credentials, tenant/customer content, logs, events, or configuration payloads. Any change in payload classification or network exposure invalidates the exception and requires TLS/mTLS review. Live payload verification recorded in the O10 acceptance evidence; the boundary conditions are pinned by test_metrics_scrape_exceptions_hold_their_boundary."
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P3",
+      "evidence": [
+        "src/config/vmscrape.yml:84"
+      ]
+    }
+  ]
+}

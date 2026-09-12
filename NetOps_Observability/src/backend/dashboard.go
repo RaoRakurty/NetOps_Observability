@@ -1,11 +1,17 @@
-package main
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+package backend
 
 import (
 	"context"
 	"fmt"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
+
+	"netops/backend/models"
 )
 
 // dashboard.go — endpoints that feed the live Dashboard tab.
@@ -20,30 +26,102 @@ type MetricTile struct {
 	Trend string `json:"trend,omitempty"`
 }
 
-func (s *server) handleMetricTiles(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.currentMetricTiles())
+func (s *server) handleMetricTiles(w http.ResponseWriter, r *http.Request) {
+	claims, _ := userFrom(r.Context())
+	writeJSON(w, http.StatusOK, s.currentMetricTiles(claims))
 }
 
-// currentMetricTiles snapshots the system state into the dashboard
-// tile shape. Add tiles by appending — the frontend simply renders
-// whatever the array contains.
-func (s *server) currentMetricTiles() []MetricTile {
-	devices := len(s.discovery.Devices())
-	alerts := len(s.alerts.Active())
-	rules := len(s.alerts.Rules())
+// currentMetricTiles snapshots the system state into the dashboard tile shape,
+// SCOPED to the caller's tenant. The headline KPIs are operations-first: fleet
+// size, what's DOWN right now, active security/critical threats, and site
+// coverage. Add tiles by appending — the frontend renders whatever the array
+// contains.
+//
+// Tenant isolation: a scoped principal's tiles reflect only its own devices and
+// alerts — the dashboard must not leak the global fleet's counts (the platform
+// owner, cross-tenant, still sees everything).
+//
+// A TILE IS A COUNT, AND A COUNT IS A DISCLOSURE. "Critical Threats: 3" over a
+// feed that lists one alert says the other two exist, and whose they are is the
+// only thing left to guess. So the alert tile counts through the SAME resolved
+// rule GET /api/alerts and the WebSocket feed apply — alertVisibility, which
+// carries the operator-visibility restriction — and not through the raw
+// alertVisibleTenantOnly underneath it, which answers true for everything on the
+// cross-tenant path.
+//
+// The Devices and Sites tiles count the same way, and for the same reason. The
+// owner has ruled that devices and sites are counted PER TENANT: a tenant that
+// has switched the operator-visibility restriction on is not part of the
+// platform operator's fleet, so its devices and its sites are not part of the
+// operator's counts. So both tiles read one resolved deviceVisibility, the
+// registry sibling of alertVisibility, and the Sites tile derives from the same
+// filtered device list the Devices tile counts. Neither tile can disagree with
+// the other, or with a list built from the same object.
+func (s *server) currentMetricTiles(claims jwtClaims) []MetricTile {
+	devs := s.visibleDevicesFor(claims)
+	devices := len(devs)
+	_, cross := principalTenant(claims)
 
-	collectorsOn := 0
-	for _, c := range s.collectors.Status() {
-		if c.Enabled {
-			collectorsOn++
+	// Devices down. Platform owner: unreachable targets summed across protocol
+	// collectors (collector stats are fleet-wide, not tenant-attributable). A
+	// scoped tenant instead proxies reachability with LastSeen staleness over its
+	// OWN devices, so the count never reflects another tenant's fleet.
+	down := 0
+	if cross {
+		if s.collectors != nil {
+			for _, c := range s.collectors.Status() {
+				if c.Kind != "" && c.Kind != "protocol" {
+					continue
+				}
+				if d := c.Targets - c.Reachable; d > 0 {
+					down += d
+				}
+			}
+		}
+	} else {
+		now := time.Now()
+		for _, d := range devs {
+			if !d.LastSeen.IsZero() && now.Sub(d.LastSeen) > 5*time.Minute {
+				down++
+			}
+		}
+	}
+
+	// Critical threats: active critical alerts the principal is allowed to see.
+	// alertVisibility is the same rule GET /api/alerts and the WebSocket feed
+	// ask, resolved once for this principal, so the headline count and the list
+	// under it can never disagree about what the caller may see.
+	threats := 0
+	if s.alerts != nil {
+		vis := s.alertVisibilityFor(claims)
+		for _, a := range s.alerts.Active() {
+			if !strings.EqualFold(strings.TrimSpace(a.Severity), "critical") {
+				continue
+			}
+			if !vis.visible(a) {
+				continue
+			}
+			threats++
+		}
+	}
+
+	// Sites: distinct site/location labels across the VISIBLE fleet.
+	siteSet := map[string]struct{}{}
+	for _, d := range devs {
+		site := d.Labels["site"]
+		if site == "" {
+			site = d.Labels["location"]
+		}
+		if site != "" {
+			siteSet[site] = struct{}{}
 		}
 	}
 
 	return []MetricTile{
-		{Title: "Devices",        Value: fmt.Sprintf("%d", devices),      Trend: trendForCount(devices)},
-		{Title: "Active Alerts",  Value: fmt.Sprintf("%d", alerts),       Trend: trendForAlerts(alerts)},
-		{Title: "Collectors",     Value: fmt.Sprintf("%d", collectorsOn), Trend: "live"},
-		{Title: "Alert Rules",    Value: fmt.Sprintf("%d", rules),        Trend: ""},
+		{Title: "Devices", Value: fmt.Sprintf("%d", devices), Trend: trendForCount(devices)},
+		{Title: "Devices Down", Value: fmt.Sprintf("%d", down), Trend: trendForBad(down, "all up")},
+		{Title: "Critical Threats", Value: fmt.Sprintf("%d", threats), Trend: trendForBad(threats, "clear")},
+		{Title: "Sites", Value: fmt.Sprintf("%d", len(siteSet)), Trend: ""},
 	}
 }
 
@@ -54,15 +132,13 @@ func trendForCount(n int) string {
 	return "+"
 }
 
-func trendForAlerts(n int) string {
-	switch {
-	case n == 0:
-		return "all clear"
-	case n > 0 && n < 5:
-		return "warning"
-	default:
-		return "critical"
+// trendForBad returns an "all good" label at zero, else "critical" so the
+// frontend tints the tile red (kpi-trend.t-crit).
+func trendForBad(n int, okLabel string) string {
+	if n == 0 {
+		return okLabel
 	}
+	return "critical"
 }
 
 // ----------------------------------------------------------------------------
@@ -79,7 +155,7 @@ func (s *server) startBroadcaster(stop <-chan struct{}) {
 	telemetryTicker := time.NewTicker(2 * time.Second)
 	defer telemetryTicker.Stop()
 
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	rng := rand.New(rand.NewSource(time.Now().UnixNano())) // #nosec G404 -- non-cryptographic: seeds synthetic dashboard telemetry, not security tokens
 
 	for {
 		select {
@@ -87,14 +163,18 @@ func (s *server) startBroadcaster(stop <-chan struct{}) {
 			return
 
 		case <-metricsTicker.C:
-			// Push the full tile list so the client doesn't have to
-			// reconcile partial updates. The receiver upserts by title.
-			for _, t := range s.currentMetricTiles() {
-				s.hub.Broadcast(map[string]any{
-					"type": "metric_update",
-					"data": t,
-				})
-			}
+			// Push the full tile list so the client doesn't have to reconcile
+			// partial updates. The receiver upserts by title. Tiles are computed
+			// PER CLIENT from its own tenant scope so the dashboard never leaks
+			// the global fleet's counts to a tenant-scoped user.
+			s.hub.BroadcastFiltered(func(claims jwtClaims) []map[string]any {
+				tiles := s.currentMetricTiles(claims)
+				msgs := make([]map[string]any, 0, len(tiles))
+				for _, t := range tiles {
+					msgs = append(msgs, map[string]any{"type": "metric_update", "data": t})
+				}
+				return msgs
+			})
 
 		case <-telemetryTicker.C:
 			// Placeholder telemetry value — replace with a real
@@ -126,16 +206,54 @@ func (s *server) watchAlertsForBroadcast(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			for _, a := range s.alerts.Active() {
+			active := s.alerts.Active()
+			// F-33: `seen` was keyed by alert fingerprint (rule|device|ifName|…)
+			// and NOTHING ever deleted from it. Every distinct series that ever
+			// fired stayed for the life of the process — on a fleet with churning
+			// interface/device labels that grows without bound, inside the API
+			// process, and the alert built to catch that growth was the one F-35
+			// had disabled.
+			//
+			// Pruning to the currently-active set also fixes a behavioural bug
+			// this loop's own comment promised and did not deliver ("each alert
+			// is sent exactly once per FIRING"): an alert that resolved and later
+			// re-fired kept its `seen` entry forever, so the re-fire was never
+			// broadcast and the dashboard silently missed it.
+			pruneSeenAlerts(seen, active)
+			for _, a := range active {
 				if seen[a.ID] {
 					continue
 				}
 				seen[a.ID] = true
-				s.hub.Broadcast(map[string]any{
-					"type": "alert",
-					"data": a,
+				alert := a // capture for the per-client closure
+				// Fan out only to clients whose tenant may see this alert (same
+				// rule as GET /api/alerts) so one tenant's alerts never surface
+				// on another's dashboard.
+				s.hub.BroadcastFiltered(func(claims jwtClaims) []map[string]any {
+					if !s.alertVisibleTo(alert, claims) {
+						return nil
+					}
+					return []map[string]any{{"type": "alert", "data": alert}}
 				})
 			}
+		}
+	}
+}
+
+// pruneSeenAlerts drops broadcast-dedup entries for alerts that are no longer
+// active (F-33). Extracted so the retention rule is directly testable — the
+// growth it prevents is invisible in any happy-path assertion.
+func pruneSeenAlerts(seen map[string]bool, active []models.Alert) {
+	if len(seen) == 0 {
+		return
+	}
+	live := make(map[string]bool, len(active))
+	for _, a := range active {
+		live[a.ID] = true
+	}
+	for id := range seen {
+		if !live[id] {
+			delete(seen, id)
 		}
 	}
 }

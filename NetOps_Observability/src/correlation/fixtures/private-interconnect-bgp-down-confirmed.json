@@ -1,0 +1,40 @@
+{
+  "name": "Interconnect BGP down + private-prefix probes fail: confirmed interconnect fault",
+  "signals": [
+    {
+      "kind": "bgp_state_anomaly",
+      "entity_type": "device",
+      "entity_id": "wan-dx1:169.254.0.1",
+      "observer_id": "syslog-wan-dx1",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 2.0
+    },
+    {
+      "kind": "probe_loss",
+      "entity_type": "service",
+      "entity_id": "cloud-private-app",
+      "observer_id": "probe-agent-dc",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 5.0
+    },
+    {
+      "kind": "cloud_health",
+      "entity_type": "service",
+      "entity_id": "dx-attachment-1",
+      "observer_id": "cloud-api",
+      "observer_type": "cloud_api",
+      "modality": "control_plane",
+      "collection_path": "via_cloud_api",
+      "deviation": 0.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.middle-mile.private-interconnect-bgp-down",
+    "tier": "confirmed",
+    "owner": "carrier"
+  }
+}

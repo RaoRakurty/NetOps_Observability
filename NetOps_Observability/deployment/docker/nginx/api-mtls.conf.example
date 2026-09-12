@@ -1,0 +1,26 @@
+# nginx → API mutual TLS (#18 / Security v1).
+#
+# Included from the /api/ and /admin/ locations when the internal CA is enabled
+# (TLS_INTERNAL_CA=true). The API then listens HTTPS with mTLS REQUIRED and
+# allowlists exactly one client identity:
+#
+#     TLS_CLIENT_ALLOWED_URIS=spiffe://netops/ns/default/sa/nginx
+#
+# so a valid certificate from the same CA but a DIFFERENT service is rejected —
+# authentication and authorization, not just encryption.
+#
+# The certificates are MINTED BY THE API at boot (tls_ca.go) into
+# TLS_NGINX_CERT_DIR and the bundle at TLS_CLIENT_CA_FILE; nginx mounts that
+# directory read-only. They rotate at TTL/2 (24h SVIDs), so nginx must be
+# reloaded — or the mount re-read — after a rotation; see
+# docs/runbooks/security/rotate-service-certificate.md.
+
+proxy_ssl_certificate         /etc/nginx/tls/nginx/nginx.crt;
+proxy_ssl_certificate_key     /etc/nginx/tls/nginx/nginx.key;
+proxy_ssl_trusted_certificate /etc/nginx/tls/ca.pem;
+proxy_ssl_verify              on;    # verify the API's server certificate
+proxy_ssl_verify_depth        2;
+proxy_ssl_name                api;   # must match a SAN on the API server SVID
+proxy_ssl_server_name         on;
+proxy_ssl_protocols           TLSv1.2 TLSv1.3;
+proxy_ssl_session_reuse       on;

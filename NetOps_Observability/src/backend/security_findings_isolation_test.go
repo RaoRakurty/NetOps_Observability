@@ -1,0 +1,2221 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+package backend
+
+// security_findings_isolation_test.go — the CLAUDE.md §3a rule 5 cross-org test
+// for the Project 3 Security (CTEM) read API. org_isolation_test.go /
+// rca_feedback_isolation_test.go are the templates.
+//
+// The OpenSearch stand-in RECORDS the index pattern and the query body of every
+// request, because the two halves of the §3a chokepoint are exactly those two
+// things: the pattern is the at-rest boundary (another tenant's indices are
+// never NAMED, so its documents are unreachable even if a filter were dropped)
+// and the body carries the per-doc tenant clause underneath it. A test that
+// only checked the response would pass against an implementation that queried
+// every tenant's index and filtered in Go.
+//
+// Proven here:
+//   - own-only list: the pattern is the caller's segment + untagged, never
+//     another tenant's, and the body carries the tenant clause;
+//   - a platform (cross-tenant) caller gets `netops-secfindings-*` and NO
+//     per-doc clause — the deliberate, and only, cross-tenant read;
+//   - cross-tenant GET by id → 404, indistinguishable from a missing id;
+//   - ?as_tenant= into another org is IGNORED for a non-owner on every route;
+//   - the PG/file control-plane state (rules + saved views) is own-only, and a
+//     cross-tenant view id → 404;
+//   - posture never mixes tenants: both of its queries carry the same pattern
+//     and clause, and `scope` counts only the caller's own devices;
+//   - filter validation answers 400 (never a silently empty result) and the
+//     limit cap is enforced;
+//   - every read increments netops_security_findings_queries_total{op}.
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"netops/backend/internal/discovery"
+	"netops/backend/models"
+	"netops/backend/secapi"
+)
+
+// secOSCall is one recorded OpenSearch request.
+type secOSCall struct {
+	Index string // the index pattern the API named (the at-rest boundary)
+	Body  string // the raw query DSL (the per-doc tenant clause lives here)
+}
+
+// secFakeOS stands in for OpenSearch. `docs` is keyed by the index pattern the
+// caller must have used to see them: a request that names a DIFFERENT pattern
+// gets zero hits, which is precisely how at-rest separation turns a
+// cross-tenant lookup into a 404 upstream.
+//
+// WHAT IT HONOURS, AND WHAT IT DOES NOT (read this before trusting a green).
+// A double that answers every question with the same canned rows cannot tell a
+// working filter from a broken one, so a test written against it proves only
+// that the handler returned 200. That is not a hypothetical: it is how H2
+// stayed invisible (a query asking for findings between 0001-01-01 and
+// 0001-01-01 read as a full result set) and how D-09 stayed invisible (a by-id
+// query on a field no document carries answered 200 in tests and 404 in
+// production). Tracker 283 is the fix.
+//
+// HONOURED — the double reads the emitted body and answers it:
+//   - the index pattern (as before): only `docs[pattern]` is visible;
+//   - `term` / `terms` on any _source field, including the dotted paths
+//     (attrs.status, attrs.standards) — so severity, status, seam type/id,
+//     framework and device/entity_tokens all NARROW;
+//   - `ids` (the by-id resolution, D-09) and `exists`;
+//   - `bool` with should / must / must_not / filter, so the nested tenant
+//     clause and the seam+device anyOf pairs are evaluated, not skipped;
+//   - `match_none` (the fail-closed branch) and `match_all`;
+//   - `simple_query_string` (the free-text `q`) — see secSQSMatches for the
+//     approximation it makes;
+//   - `sort`, read off the body, over the same _source paths;
+//   - `collapse`, as the cluster does it: the FIRST hit per group in sort
+//     order, i.e. the newest verdict per native_id;
+//   - `search_after` (keyset paging), `from` (offset paging) and `size`
+//     (`size: 0` returns no hits at all, as an aggregation-only read does);
+//   - `range` on `ts`, but ONLY when windowAware is set (see below).
+//
+// NOT HONOURED — a test that depends on any of these is still only reading a
+// canned answer, and must say so:
+//   - AGGREGATIONS. `aggs` is echoed back verbatim from the `aggs` field
+//     regardless of the query, so facets, the CTEM funnel, coverage, the trend
+//     histogram and the compliance fold are canned. Nothing here proves an
+//     aggregation narrows.
+//   - `track_total_hits`: `hits.total` is always the exact number of matched
+//     documents, never the 10k cap the cluster would apply without it.
+//   - Lucene analysis: `simple_query_string` is matched as lowercase substrings
+//     (see secSQSMatches), not tokenised text with wildcards, phrases or
+//     operators. `lenient` is implicit — an unmapped field simply contributes
+//     nothing.
+//   - `range` on anything but `ts`, scoring/relevance, `_source` includes
+//     projection, and index-time mapping behaviour of any kind.
+//
+// An emitted clause this double does NOT recognise fails the test rather than
+// being skipped: a new filter shipped in production without teaching the double
+// would otherwise quietly restore the false green this whole change exists to
+// remove.
+type secFakeOS struct {
+	mu    sync.Mutex
+	calls []secOSCall
+	docs  map[string]string // index pattern → canned `hits.hits` JSON array body
+	aggs  string            // canned `aggregations` object, or ""
+	// windowAware makes the double HONOUR the `ts` range clause in the request
+	// body: a canned document stamped outside the emitted window is dropped,
+	// exactly as the cluster would answer. Without it the double replies with
+	// the same canned hits to every query, so a query that matches NOTHING in
+	// production still reads as a full result set in a test — which is how H2
+	// (review 2026-09-08) stayed invisible: the assistant's read emitted `ts`
+	// between 0001-01-01 and 0001-01-01 and every test was green.
+	//
+	// It is the ONE clause that stayed OPT-IN, because the shared canned
+	// documents are stamped at a fixed instant (secDoc) that is far outside the
+	// 30-day default window every other test uses: honouring it by default
+	// would empty every fixture rather than sharpen it. Switch it on wherever
+	// the WINDOW is the thing under test, and stamp the fixture with secDocAt.
+	windowAware bool
+	// aggAware makes the double COMPUTE the aggregations out of the documents
+	// that matched, instead of echoing the canned `aggs` string back whatever
+	// was asked. It is what turns the facet counts, the CTEM funnel, the
+	// coverage cardinality, the trend histogram and the compliance fold from
+	// "the handler returned 200" into evidence about what the query actually
+	// folded.
+	//
+	// It stayed OPT-IN for the same reason windowAware did: the tests that came
+	// before it assert on hand-written aggregation fixtures (a truncated fold, a
+	// bucket shape the handler has to survive) which a computed answer would
+	// overwrite. Switch it on wherever the COUNT is the thing under test — a
+	// count is a disclosure, so an isolation test has to read the real one.
+	//
+	// The vocabulary is closed and small, because the bodies in this package
+	// emit exactly four kinds: `terms`, `cardinality`, `top_hits` and
+	// `date_histogram`, nested. An aggregation outside it FAILS the test rather
+	// than being skipped, on the same reasoning oneClause does.
+	aggAware bool
+	// t reports an emitted clause the double cannot evaluate. It is set by
+	// secStartFakeOS.
+	t *testing.T
+}
+
+// secHit is one canned document, decoded far enough to answer a query about it.
+type secHit struct {
+	raw json.RawMessage // the fixture's own hit object, returned verbatim
+	id  string          // `_id`
+	src map[string]any  // `_source`
+}
+
+// secDecodeHits parses a canned `hits.hits` array. A fixture the test author
+// cannot parse is a broken fixture, so a parse failure yields no hits rather
+// than a silently unfiltered set.
+func secDecodeHits(body string) []secHit {
+	var rows []json.RawMessage
+	if err := json.Unmarshal([]byte(body), &rows); err != nil {
+		return nil
+	}
+	out := make([]secHit, 0, len(rows))
+	for _, row := range rows {
+		var doc struct {
+			ID     string         `json:"_id"`
+			Source map[string]any `json:"_source"`
+		}
+		if err := json.Unmarshal(row, &doc); err != nil {
+			continue
+		}
+		out = append(out, secHit{raw: row, id: doc.ID, src: doc.Source})
+	}
+	return out
+}
+
+// secFieldRaw reads the value a document carries at a dotted _source path.
+// `attrs.status` walks into the object; a path that no document carries reads
+// as absent, which is what an unmapped field does in the cluster too.
+//
+// The one accommodation to the mapping: a trailing `.text` names the ANALYSED
+// sub-field of a keyword parent (attrs.status_detail.text), which is stored
+// under the parent's own name — so a miss retries the parent path.
+func secFieldRaw(src map[string]any, path string) (any, bool) {
+	lookup := func(p string) (any, bool) {
+		var cur any = src
+		for _, seg := range strings.Split(p, ".") {
+			m, ok := cur.(map[string]any)
+			if !ok {
+				return nil, false
+			}
+			cur, ok = m[seg]
+			if !ok {
+				return nil, false
+			}
+		}
+		return cur, true
+	}
+	if v, ok := lookup(path); ok {
+		return v, true
+	}
+	if parent, cut := strings.CutSuffix(path, ".text"); cut {
+		return lookup(parent)
+	}
+	return nil, false
+}
+
+// secFieldValues flattens the value at a path to the strings a `terms` clause
+// compares against — a scalar is one value, an array is each of its elements
+// (which is exactly how attrs.standards or entity_tokens match).
+func secFieldValues(src map[string]any, path string) []string {
+	v, ok := secFieldRaw(src, path)
+	if !ok {
+		return nil
+	}
+	switch t := v.(type) {
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, e := range t {
+			out = append(out, secScalarString(e))
+		}
+		return out
+	default:
+		return []string{secScalarString(v)}
+	}
+}
+
+// secScalarString renders one JSON scalar the way a keyword comparison sees it.
+func secScalarString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(t)
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(t)
+	}
+}
+
+// secMatches reports whether one document satisfies the whole query body. A
+// body with no `query` matches everything, as the cluster's default does.
+func (f *secFakeOS) secMatches(body map[string]any, h secHit) bool {
+	q, ok := body["query"].(map[string]any)
+	if !ok {
+		return true
+	}
+	return f.clauseMatches(q, h)
+}
+
+// clauseMatches evaluates ONE query clause against one document. Several keys
+// on one clause are ANDed, which is what the DSL means.
+func (f *secFakeOS) clauseMatches(clause map[string]any, h secHit) bool {
+	for key, val := range clause {
+		if !f.oneClause(key, val, h) {
+			return false
+		}
+	}
+	return true
+}
+
+// oneClause is the clause vocabulary this double speaks. An unknown key FAILS
+// the test: silently ignoring a clause is precisely the defect tracker 283 is
+// about, and a production filter added later must not be able to reintroduce it.
+func (f *secFakeOS) oneClause(key string, val any, h secHit) bool {
+	switch key {
+	case "match_all":
+		return true
+	case "match_none":
+		return false
+	case "term":
+		fields, _ := val.(map[string]any)
+		for field, want := range fields {
+			if !secContains(secFieldValues(h.src, field), secScalarString(want)) {
+				return false
+			}
+		}
+		return true
+	case "terms":
+		fields, _ := val.(map[string]any)
+		for field, want := range fields {
+			list, _ := want.([]any)
+			hit := false
+			for _, w := range list {
+				if secContains(secFieldValues(h.src, field), secScalarString(w)) {
+					hit = true
+					break
+				}
+			}
+			if !hit {
+				return false
+			}
+		}
+		return true
+	case "ids":
+		spec, _ := val.(map[string]any)
+		list, _ := spec["values"].([]any)
+		for _, v := range list {
+			if secScalarString(v) == h.id {
+				return true
+			}
+		}
+		return false
+	case "exists":
+		spec, _ := val.(map[string]any)
+		field := secScalarString(spec["field"])
+		return len(secFieldValues(h.src, field)) > 0
+	case "range":
+		return f.rangeMatches(val, h)
+	case "simple_query_string":
+		spec, _ := val.(map[string]any)
+		return secSQSMatches(spec, h)
+	case "bool":
+		return f.boolMatches(val, h)
+	default:
+		if f.t != nil {
+			f.t.Errorf("secFakeOS cannot evaluate the emitted clause %q — teach the double or a test asserting this filter narrows proves nothing", key)
+		}
+		return true
+	}
+}
+
+// boolMatches evaluates must / filter / must_not / should. minimum_should_match
+// is read off the clause; every body this API emits sets it to 1.
+func (f *secFakeOS) boolMatches(val any, h secHit) bool {
+	spec, _ := val.(map[string]any)
+	sub := func(key string) []map[string]any {
+		list, _ := spec[key].([]any)
+		out := make([]map[string]any, 0, len(list))
+		for _, c := range list {
+			if m, ok := c.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	for _, c := range append(sub("must"), sub("filter")...) {
+		if !f.clauseMatches(c, h) {
+			return false
+		}
+	}
+	for _, c := range sub("must_not") {
+		if f.clauseMatches(c, h) {
+			return false
+		}
+	}
+	should := sub("should")
+	if len(should) == 0 {
+		return true
+	}
+	need := 1
+	if n, ok := spec["minimum_should_match"].(float64); ok {
+		need = int(n)
+	}
+	got := 0
+	for _, c := range should {
+		if f.clauseMatches(c, h) {
+			got++
+		}
+	}
+	return got >= need
+}
+
+// rangeMatches honours the `ts` window, and ONLY when windowAware is set (see
+// the field's comment for why it stayed opt-in). A range on any other field is
+// not evaluated — nothing in this API emits one.
+func (f *secFakeOS) rangeMatches(val any, h secHit) bool {
+	fields, _ := val.(map[string]any)
+	for field, spec := range fields {
+		if field != secFieldTS {
+			continue
+		}
+		if !f.windowAware {
+			continue
+		}
+		bounds, _ := spec.(map[string]any)
+		lo, err := time.Parse(time.RFC3339, secScalarString(bounds["gte"]))
+		if err != nil {
+			return false
+		}
+		hi, err := time.Parse(time.RFC3339, secScalarString(bounds["lte"]))
+		if err != nil {
+			return false
+		}
+		raw, ok := secFieldRaw(h.src, field)
+		if !ok {
+			return false
+		}
+		ms, ok := raw.(float64)
+		if !ok {
+			return false
+		}
+		if int64(ms) < lo.UnixMilli() || int64(ms) > hi.UnixMilli() {
+			return false
+		}
+	}
+	return true
+}
+
+// secFieldTS is the one field name the double compares ranges on. It is
+// spelled out here rather than imported so the double stays readable next to
+// the fixtures it answers.
+const secFieldTS = "ts"
+
+// tsWindow reads the `ts` range clause out of an emitted body, in millis, for
+// the tests that assert on the WINDOW the API asked for rather than on the rows
+// that came back. ok is false when the body carries no such clause.
+func (f *secFakeOS) tsWindow(body string) (lo, hi int64, ok bool) {
+	var q struct {
+		Query struct {
+			Bool struct {
+				Filter []struct {
+					Range map[string]struct {
+						GTE string `json:"gte"`
+						LTE string `json:"lte"`
+					} `json:"range"`
+				} `json:"filter"`
+			} `json:"bool"`
+		} `json:"query"`
+	}
+	if err := json.Unmarshal([]byte(body), &q); err != nil {
+		return 0, 0, false
+	}
+	for _, clause := range q.Query.Bool.Filter {
+		r, has := clause.Range[secFieldTS]
+		if !has {
+			continue
+		}
+		start, errA := time.Parse(time.RFC3339, r.GTE)
+		end, errB := time.Parse(time.RFC3339, r.LTE)
+		if errA != nil || errB != nil {
+			return 0, 0, false
+		}
+		return start.UnixMilli(), end.UnixMilli(), true
+	}
+	return 0, 0, false
+}
+
+// secSQSMatches approximates simple_query_string with default_operator "and":
+// EVERY whitespace-separated term must appear, case-insensitively, somewhere in
+// the listed fields of this document.
+//
+// It is a SUBSTRING match, not Lucene analysis — no wildcards, phrases,
+// prefixes, +/- operators or stemming. That is enough to prove a `q` NARROWS
+// (the property a test can assert), and deliberately not enough to pretend the
+// double is a search engine.
+func secSQSMatches(spec map[string]any, h secHit) bool {
+	fields, _ := spec["fields"].([]any)
+	var hay strings.Builder
+	for _, f := range fields {
+		for _, v := range secFieldValues(h.src, secScalarString(f)) {
+			hay.WriteString(strings.ToLower(v))
+			hay.WriteString("\n")
+		}
+	}
+	text := hay.String()
+	for _, term := range strings.Fields(strings.ToLower(secScalarString(spec["query"]))) {
+		if !strings.Contains(text, term) {
+			return false
+		}
+	}
+	return true
+}
+
+func secContains(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+// secSortKey is one entry of the emitted `sort` array.
+type secSortKey struct {
+	field string
+	desc  bool
+}
+
+// secSortSpec reads the sort the body asked for. No sort means the fixture's
+// own order is kept.
+func secSortSpec(body map[string]any) []secSortKey {
+	list, _ := body["sort"].([]any)
+	out := make([]secSortKey, 0, len(list))
+	for _, entry := range list {
+		m, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		for field, spec := range m {
+			desc := true
+			if opts, ok := spec.(map[string]any); ok {
+				desc = secScalarString(opts["order"]) != "asc"
+			}
+			out = append(out, secSortKey{field: field, desc: desc})
+		}
+	}
+	return out
+}
+
+// secCmpScalar orders two sort values. Numbers compare numerically, everything
+// else lexically — the two kinds this API's sort keys actually carry (an epoch
+// millis and two keywords).
+func secCmpScalar(a, b any) int {
+	an, aNum := secAsFloat(a)
+	bn, bNum := secAsFloat(b)
+	if aNum && bNum {
+		switch {
+		case an < bn:
+			return -1
+		case an > bn:
+			return 1
+		default:
+			return 0
+		}
+	}
+	return strings.Compare(secScalarString(a), secScalarString(b))
+}
+
+func secAsFloat(v any) (float64, bool) {
+	switch t := v.(type) {
+	case float64:
+		return t, true
+	case int64:
+		return float64(t), true
+	case int:
+		return float64(t), true
+	}
+	return 0, false
+}
+
+// secSortValues is the document's sort tuple under the emitted sort spec — the
+// same tuple search_after is compared against.
+func secSortValues(h secHit, spec []secSortKey) []any {
+	out := make([]any, 0, len(spec))
+	for _, key := range spec {
+		v, ok := secFieldRaw(h.src, key.field)
+		if !ok {
+			v = nil
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// secCmpTuple orders two sort tuples the way the cluster's sort does, so that a
+// negative result means "sorts earlier in the answer".
+func secCmpTuple(a, b []any, spec []secSortKey) int {
+	for i := range spec {
+		var x, y any
+		if i < len(a) {
+			x = a[i]
+		}
+		if i < len(b) {
+			y = b[i]
+		}
+		c := secCmpScalar(x, y)
+		if c == 0 {
+			continue
+		}
+		if spec[i].desc {
+			return -c
+		}
+		return c
+	}
+	return 0
+}
+
+func (f *secFakeOS) record(c secOSCall) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, c)
+}
+
+func (f *secFakeOS) all() []secOSCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]secOSCall, len(f.calls))
+	copy(out, f.calls)
+	return out
+}
+
+// secAnswer is the whole of the double's query engine: match, sort, collapse,
+// page. It returns the hits to serve and the number of DOCUMENTS that matched
+// (which is what hits.total counts — collapse groups are counted by the
+// cardinality aggregation instead, and that one is canned).
+func (f *secFakeOS) secAnswer(raw string, hits []secHit) (served []secHit, total int, folded []secHit) {
+	var body map[string]any
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		if f.t != nil {
+			f.t.Errorf("the API sent a body OpenSearch could not parse: %v", err)
+		}
+		return nil, 0, nil
+	}
+	matched := make([]secHit, 0, len(hits))
+	for _, h := range hits {
+		if f.secMatches(body, h) {
+			matched = append(matched, h)
+		}
+	}
+	total = len(matched)
+	// The aggregation set is the WHOLE match, before sorting, collapsing or
+	// paging — as the cluster folds it.
+	folded = append([]secHit{}, matched...)
+
+	spec := secSortSpec(body)
+	if len(spec) > 0 {
+		sort.SliceStable(matched, func(i, j int) bool {
+			return secCmpTuple(secSortValues(matched[i], spec), secSortValues(matched[j], spec), spec) < 0
+		})
+	}
+
+	// collapse: the FIRST hit per group in sort order — with the listSort that
+	// is the newest verdict per native_id, which is what current=true means.
+	if collapse, ok := body["collapse"].(map[string]any); ok {
+		field := secScalarString(collapse["field"])
+		seen := map[string]bool{}
+		kept := matched[:0:0]
+		for _, h := range matched {
+			vals := secFieldValues(h.src, field)
+			key := ""
+			if len(vals) > 0 {
+				key = vals[0]
+			}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			kept = append(kept, h)
+		}
+		matched = kept
+	}
+
+	// search_after: keep what sorts strictly after the cursor's tuple.
+	if after, ok := body["search_after"].([]any); ok && len(after) > 0 {
+		cut := 0
+		for cut < len(matched) && secCmpTuple(secSortValues(matched[cut], spec), after, spec) <= 0 {
+			cut++
+		}
+		matched = matched[cut:]
+	}
+	// from: the collapsed list's offset paging.
+	if from, ok := body["from"].(float64); ok && int(from) > 0 {
+		if int(from) >= len(matched) {
+			matched = nil
+		} else {
+			matched = matched[int(from):]
+		}
+	}
+	// size: 0 is an aggregation-only read and returns no hits at all.
+	size := -1
+	if n, ok := body["size"].(float64); ok {
+		size = int(n)
+	}
+	if size >= 0 && len(matched) > size {
+		matched = matched[:size]
+	}
+	return matched, total, folded
+}
+
+// computedAggs folds the matched documents into the `aggregations` object the
+// emitted body asked for. It is the aggAware half of the double: without it the
+// facet counts, the CTEM funnel, coverage, the trend and the compliance
+// scorecards are canned, and a count that crossed a tenant boundary reads
+// exactly like one that did not.
+//
+// A body with no `aggs` folds nothing (the empty string), which is what a plain
+// list query gets.
+func (f *secFakeOS) computedAggs(raw string, docs []secHit) string {
+	var body struct {
+		Aggs map[string]any `json:"aggs"`
+	}
+	if err := json.Unmarshal([]byte(raw), &body); err != nil || len(body.Aggs) == 0 {
+		return ""
+	}
+	out, err := json.Marshal(f.secAggregate(body.Aggs, docs))
+	if err != nil {
+		f.t.Errorf("secFakeOS could not render the aggregations it computed: %v", err)
+		return ""
+	}
+	return string(out)
+}
+
+// secAggregate evaluates one level of the aggregation tree over `docs`. The
+// vocabulary is exactly the four kinds the bodies in this package emit; an
+// aggregation outside it FAILS the test, for the same reason oneClause fails on
+// an unknown clause — a fold this double silently skipped would answer a
+// leaking query and a fixed one identically.
+func (f *secFakeOS) secAggregate(spec map[string]any, docs []secHit) map[string]any {
+	out := map[string]any{}
+	for name, raw := range spec {
+		a, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		sub, _ := a["aggs"].(map[string]any)
+		switch {
+		case a["terms"] != nil:
+			out[name] = map[string]any{"buckets": f.secTermsAgg(a["terms"], sub, docs)}
+		case a["cardinality"] != nil:
+			out[name] = map[string]any{"value": secCardinality(a["cardinality"], docs)}
+		case a["top_hits"] != nil:
+			out[name] = map[string]any{"hits": map[string]any{"hits": secTopHits(a["top_hits"], docs)}}
+		case a["date_histogram"] != nil:
+			out[name] = map[string]any{"buckets": f.secDateHistogram(a["date_histogram"], sub, docs)}
+		default:
+			f.t.Errorf("secFakeOS cannot evaluate the emitted aggregation %q — teach the double or a test asserting this count narrows proves nothing", name)
+		}
+	}
+	return out
+}
+
+// secTermsAgg groups by every value the field carries (an array contributes each
+// of its elements, as attrs.standards does). Order is the emitted `order` when
+// it names _key, and doc_count descending otherwise — the cluster's default.
+func (f *secFakeOS) secTermsAgg(spec any, sub map[string]any, docs []secHit) []any {
+	opts, _ := spec.(map[string]any)
+	field := secScalarString(opts["field"])
+	keys := []string{}
+	groups := map[string][]secHit{}
+	for _, h := range docs {
+		for _, v := range secFieldValues(h.src, field) {
+			if v == "" {
+				continue
+			}
+			if _, seen := groups[v]; !seen {
+				keys = append(keys, v)
+			}
+			groups[v] = append(groups[v], h)
+		}
+	}
+	byKey := false
+	if order, ok := opts["order"].([]any); ok {
+		for _, e := range order {
+			if m, ok := e.(map[string]any); ok {
+				if _, has := m["_key"]; has {
+					byKey = true
+				}
+			}
+		}
+	}
+	sort.SliceStable(keys, func(i, j int) bool {
+		if byKey {
+			return keys[i] < keys[j]
+		}
+		if len(groups[keys[i]]) != len(groups[keys[j]]) {
+			return len(groups[keys[i]]) > len(groups[keys[j]])
+		}
+		return keys[i] < keys[j]
+	})
+	if n, ok := opts["size"].(float64); ok && int(n) >= 0 && len(keys) > int(n) {
+		keys = keys[:int(n)]
+	}
+	buckets := make([]any, 0, len(keys))
+	for _, k := range keys {
+		b := map[string]any{"key": k, "doc_count": len(groups[k])}
+		for name, v := range f.secAggregate(sub, groups[k]) {
+			b[name] = v
+		}
+		buckets = append(buckets, b)
+	}
+	return buckets
+}
+
+// secCardinality counts DISTINCT non-empty values of the field — exact here,
+// where the cluster's is approximate above its precision threshold.
+func secCardinality(spec any, docs []secHit) int {
+	opts, _ := spec.(map[string]any)
+	field := secScalarString(opts["field"])
+	seen := map[string]bool{}
+	for _, h := range docs {
+		for _, v := range secFieldValues(h.src, field) {
+			if v != "" {
+				seen[v] = true
+			}
+		}
+	}
+	return len(seen)
+}
+
+// secTopHits returns the first `size` documents under the emitted sort, verbatim.
+// The `_source` includes list is IGNORED: every reader in this package pulls
+// named fields out of the source, so a wider projection cannot change an answer.
+func secTopHits(spec any, docs []secHit) []any {
+	opts, _ := spec.(map[string]any)
+	sorted := append([]secHit{}, docs...)
+	sortSpec := secSortSpec(opts)
+	if len(sortSpec) > 0 {
+		sort.SliceStable(sorted, func(i, j int) bool {
+			return secCmpTuple(secSortValues(sorted[i], sortSpec), secSortValues(sorted[j], sortSpec), sortSpec) < 0
+		})
+	}
+	size := 1
+	if n, ok := opts["size"].(float64); ok {
+		size = int(n)
+	}
+	if len(sorted) > size {
+		sorted = sorted[:size]
+	}
+	out := make([]any, 0, len(sorted))
+	for _, h := range sorted {
+		out = append(out, h.raw)
+	}
+	return out
+}
+
+// secDateHistogram buckets by the fixed interval, keyed on the bucket floor.
+// `extended_bounds` / `min_doc_count: 0` are NOT honoured: the cluster would
+// emit empty buckets across the whole range, and an empty bucket carries no
+// information an isolation test can read. A bucket appears here only when a
+// document landed in it, which is exactly the fact under test.
+func (f *secFakeOS) secDateHistogram(spec any, sub map[string]any, docs []secHit) []any {
+	opts, _ := spec.(map[string]any)
+	field := secScalarString(opts["field"])
+	step := secInterval(secScalarString(opts["fixed_interval"]))
+	if step <= 0 {
+		f.t.Errorf("secFakeOS cannot read the emitted date_histogram interval %q", opts["fixed_interval"])
+		return nil
+	}
+	keys := []int64{}
+	groups := map[int64][]secHit{}
+	for _, h := range docs {
+		raw, ok := secFieldRaw(h.src, field)
+		if !ok {
+			continue
+		}
+		ms, ok := raw.(float64)
+		if !ok {
+			continue
+		}
+		k := (int64(ms) / step) * step
+		if _, seen := groups[k]; !seen {
+			keys = append(keys, k)
+		}
+		groups[k] = append(groups[k], h)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	buckets := make([]any, 0, len(keys))
+	for _, k := range keys {
+		b := map[string]any{
+			"key":           k,
+			"key_as_string": time.UnixMilli(k).UTC().Format(time.RFC3339),
+			"doc_count":     len(groups[k]),
+		}
+		for name, v := range f.secAggregate(sub, groups[k]) {
+			b[name] = v
+		}
+		buckets = append(buckets, b)
+	}
+	return buckets
+}
+
+// secInterval reads the fixed_interval vocabulary TrendBuckets emits (minutes,
+// hours, days) into milliseconds. Anything else reads as 0, which the caller
+// reports rather than guessing at.
+func secInterval(s string) int64 {
+	if len(s) < 2 {
+		return 0
+	}
+	n, err := strconv.Atoi(s[:len(s)-1])
+	if err != nil || n <= 0 {
+		return 0
+	}
+	switch s[len(s)-1] {
+	case 'm':
+		return int64(n) * 60 * 1000
+	case 'h':
+		return int64(n) * 60 * 60 * 1000
+	case 'd':
+		return int64(n) * 24 * 60 * 60 * 1000
+	}
+	return 0
+}
+
+// secStartFakeOS wires the stand-in into the env the real client reads.
+func secStartFakeOS(t *testing.T, fake *secFakeOS) {
+	t.Helper()
+	fake.t = t
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // test double: a short read is a failed assertion below
+		index := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), "/_search")
+		fake.record(secOSCall{Index: index, Body: string(body)})
+		canned := fake.docs[index]
+		if canned == "" {
+			canned = "[]"
+		}
+		served, total, folded := fake.secAnswer(string(body), secDecodeHits(canned))
+		rows := make([]string, 0, len(served))
+		for _, h := range served {
+			rows = append(rows, string(h.raw))
+		}
+		out := `{"took":1,"timed_out":false,"hits":{"total":{"value":` +
+			strconv.Itoa(total) + `,"relation":"eq"},"hits":[` + strings.Join(rows, ",") + `]}`
+		switch {
+		case fake.aggAware:
+			if aggs := fake.computedAggs(string(body), folded); aggs != "" {
+				out += `,"aggregations":` + aggs
+			}
+		case fake.aggs != "":
+			out += `,"aggregations":` + fake.aggs
+		}
+		out += "}"
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(out))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("OPENSEARCH_URL", srv.URL)
+}
+
+// secDoc renders one canned findings document for a tenant, stamped at the
+// shared fixed instant.
+func secDoc(id, tenant, severity, status, seam, device string) string {
+	return secDocAt(id, tenant, severity, status, seam, device, 1756684800000)
+}
+
+// secDocAt is secDoc with a caller-chosen `ts`, for the tests that assert on the
+// time WINDOW (which needs a document inside it).
+func secDocAt(id, tenant, severity, status, seam, device string, tsMillis int64) string {
+	ts := strconv.FormatInt(tsMillis, 10)
+	return `{"_index":"netops-secfindings-` + tenant + `-2026.09.01","_id":"` + id + `",` +
+		`"_source":{"tenant_id":"` + tenant + `","ts":` + ts + `,"severity":"` + severity + `",` +
+		`"entity_id":"` + device + `","native_id":"n-` + id + `","seam_type":"` + seam + `",` +
+		`"attrs":{"status":"` + status + `","scan_id":"scan-1","evidence_class":"posture",` +
+		`"control_id":"AC-17","standards":["CIS:1.2"]}},` +
+		// One sort value per listSort key (ts, native_id, attrs.scan_id) — the
+		// shape a real hit carries, and what cursorFromSort reads.
+		`"sort":[` + ts + `,"n-` + id + `","scan-1"]}`
+}
+
+// secTestServer builds the minimal server the security handlers need, with the
+// in-memory control-plane store and a two-tenant device registry.
+func secTestServer(t *testing.T) *server {
+	t.Helper()
+	roles, err := newRoleStore(t.TempDir() + "/roles.json")
+	if err != nil {
+		t.Fatalf("roleStore: %v", err)
+	}
+	d := discovery.NewDiscoveryAggregator()
+	d.Upsert(models.Device{ID: "acme-core", Name: "acme-core", Address: "10.1.0.1", TenantID: "acme"})
+	d.Upsert(models.Device{ID: "acme-edge", Name: "acme-edge", Address: "10.1.0.2", TenantID: "acme"})
+	d.Upsert(models.Device{ID: "globex-core", Name: "globex-core", Address: "10.2.0.1", TenantID: "globex"})
+	s := &server{roles: roles, discovery: d}
+	s.secStore = secapi.NewFileStore("") // in-memory
+	s.secFindMetrics = secapi.NewMetrics()
+	s.secAPI = secapi.New(s.securityAPIDeps())
+	return s
+}
+
+// secPatternFor is the index pattern a scoped tenant must name — and the ONLY
+// one it may name.
+func secPatternFor(tenant string) string {
+	return "netops-secfindings-" + tenant + "-*,netops-secfindings-untagged-*"
+}
+
+// ---- list -------------------------------------------------------------------
+
+func TestSecurityFindingsListIsOwnTenantOnly(t *testing.T) {
+	fake := &secFakeOS{docs: map[string]string{
+		secPatternFor("acme"):   "[" + secDoc("a1", "acme", "critical", "Fail", "ISP", "acme-core") + "]",
+		secPatternFor("globex"): "[" + secDoc("g1", "globex", "high", "Fail", "ISP", "globex-core") + "]",
+	}}
+	secStartFakeOS(t, fake)
+	s := secTestServer(t)
+
+	w := httptest.NewRecorder()
+	s.secAPI.HandleFindings(w, req(http.MethodGet, "/api/security/findings", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("list = %d (%s)", w.Code, w.Body.String())
+	}
+	calls := fake.all()
+	if len(calls) != 1 {
+		t.Fatalf("want exactly 1 OpenSearch query, got %d", len(calls))
+	}
+	if calls[0].Index != secPatternFor("acme") {
+		t.Fatalf("index pattern = %q, want %q", calls[0].Index, secPatternFor("acme"))
+	}
+	if strings.Contains(calls[0].Index, "globex") {
+		t.Fatal("TENANT LEAK: the query NAMED another tenant's index family")
+	}
+	if !strings.Contains(calls[0].Body, `{"term":{"tenant_id":"acme"}}`) {
+		t.Fatalf("the per-doc tenant clause is missing from the body: %s", calls[0].Body)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"id":"a1"`) {
+		t.Fatalf("acme's own finding missing: %s", body)
+	}
+	if strings.Contains(body, "g1") || strings.Contains(body, "globex") {
+		t.Fatalf("TENANT LEAK: acme's list carried globex data: %s", body)
+	}
+	var page struct {
+		Items      []map[string]any `json:"items"`
+		NextCursor *string          `json:"next_cursor"`
+		Total      int64            `json:"total"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if page.Total != 1 || len(page.Items) != 1 {
+		t.Fatalf("page = %+v, want 1 item / total 1", page)
+	}
+	if page.NextCursor != nil {
+		t.Fatalf("a short page must advertise next_cursor null, got %q", *page.NextCursor)
+	}
+	if n := s.secFindMetrics.Snapshot()["list"]; n != 1 {
+		t.Fatalf("netops_security_findings_queries_total{op=\"list\"} = %d, want 1", n)
+	}
+}
+
+// TestSecurityFindingsPlatformOwnerReadsEveryTenant is the other side of the
+// boundary: the cross-tenant platform view gets the wildcard pattern and NO
+// per-doc clause. That is the one deliberate cross-tenant read, and it must be
+// reachable only this way.
+func TestSecurityFindingsPlatformOwnerReadsEveryTenant(t *testing.T) {
+	fake := &secFakeOS{docs: map[string]string{
+		"netops-secfindings-*": "[" + secDoc("a1", "acme", "critical", "Fail", "ISP", "acme-core") +
+			"," + secDoc("g1", "globex", "high", "Fail", "ISP", "globex-core") + "]",
+	}}
+	secStartFakeOS(t, fake)
+	s := secTestServer(t)
+
+	w := httptest.NewRecorder()
+	s.secAPI.HandleFindings(w, req(http.MethodGet, "/api/security/findings", "", platformOwner()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("list = %d (%s)", w.Code, w.Body.String())
+	}
+	calls := fake.all()
+	if calls[0].Index != "netops-secfindings-*" {
+		t.Fatalf("platform pattern = %q, want netops-secfindings-*", calls[0].Index)
+	}
+	if strings.Contains(calls[0].Body, `"tenant_id"`) {
+		t.Fatalf("the platform view must carry no per-doc tenant clause: %s", calls[0].Body)
+	}
+	if body := w.Body.String(); !strings.Contains(body, "a1") || !strings.Contains(body, "g1") {
+		t.Fatalf("platform owner should see every tenant: %s", body)
+	}
+}
+
+// TestSecurityFindingCrossTenantGetIs404 — §3a rule 1. globex's finding id is
+// simply not in acme's index pattern, so the lookup returns nothing and the
+// handler answers 404: the same answer a nonexistent id gets, so existence is
+// never revealed.
+func TestSecurityFindingCrossTenantGetIs404(t *testing.T) {
+	fake := &secFakeOS{docs: map[string]string{
+		secPatternFor("globex"): "[" + secDoc("g1", "globex", "high", "Fail", "ISP", "globex-core") + "]",
+	}}
+	secStartFakeOS(t, fake)
+	s := secTestServer(t)
+
+	w := httptest.NewRecorder()
+	s.secAPI.HandleFindingByID(w, req(http.MethodGet, "/api/security/findings/g1", "", acme()))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant get = %d (%s), want 404", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "globex") {
+		t.Fatalf("the 404 revealed the other tenant: %s", w.Body.String())
+	}
+	// A genuinely missing id is answered identically.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindingByID(w, req(http.MethodGet, "/api/security/findings/nope", "", acme()))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("missing id = %d, want the same 404", w.Code)
+	}
+	// Its owner still reads it.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindingByID(w, req(http.MethodGet, "/api/security/findings/g1", "", globex()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("owner get = %d (%s), want 200", w.Code, w.Body.String())
+	}
+	for _, c := range fake.all() {
+		if strings.Contains(c.Index, "acme") && strings.Contains(c.Index, "globex") {
+			t.Fatalf("a single query named two tenants' indices: %q", c.Index)
+		}
+	}
+}
+
+// TestSecurityAsTenantIgnoredForNonOwner — §3a rule 5's third clause, on every
+// route. principalTenant NEVER trusts ActingTenant for a non-owner.
+func TestSecurityAsTenantIgnoredForNonOwner(t *testing.T) {
+	fake := &secFakeOS{docs: map[string]string{}}
+	secStartFakeOS(t, fake)
+	s := secTestServer(t)
+
+	spoofed := acme()
+	spoofed.ActingTenant = "globex"
+
+	routes := map[string]func(http.ResponseWriter, *http.Request){
+		"/api/security/findings":        s.secAPI.HandleFindings,
+		"/api/security/findings/facets": s.secAPI.HandleFacets,
+		"/api/security/findings/trend":  s.secAPI.HandleTrend,
+		"/api/security/posture":         s.secAPI.HandlePosture,
+	}
+	for path, h := range routes {
+		fake.mu.Lock()
+		fake.calls = nil
+		fake.mu.Unlock()
+		w := httptest.NewRecorder()
+		h(w, req(http.MethodGet, path+"?as_tenant=globex", "", spoofed))
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s = %d (%s)", path, w.Code, w.Body.String())
+		}
+		for _, c := range fake.all() {
+			if c.Index != secPatternFor("acme") {
+				t.Fatalf("%s: as_tenant WIDENED the scope — pattern %q", path, c.Index)
+			}
+			if !strings.Contains(c.Body, `{"term":{"tenant_id":"acme"}}`) {
+				t.Fatalf("%s: tenant clause lost under as_tenant: %s", path, c.Body)
+			}
+		}
+	}
+}
+
+// ---- facets / trend / posture ----------------------------------------------
+
+func TestSecurityFacetsAreTenantScopedAndKeepNonVerdicts(t *testing.T) {
+	fake := &secFakeOS{
+		docs: map[string]string{},
+		aggs: `{"severity":{"buckets":[{"key":"critical","doc_count":2}]},` +
+			`"status":{"buckets":[{"key":"Fail","doc_count":2},{"key":"NotApplicable","doc_count":5}]},` +
+			`"seam":{"buckets":[{"key":"ISP","doc_count":2}]},` +
+			`"framework":{"buckets":[{"key":"CIS:1.2","doc_count":2}]},` +
+			`"evidence_class":{"buckets":[{"key":"posture","doc_count":2}]}}`,
+	}
+	secStartFakeOS(t, fake)
+	s := secTestServer(t)
+
+	w := httptest.NewRecorder()
+	s.secAPI.HandleFacets(w, req(http.MethodGet, "/api/security/findings/facets", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("facets = %d (%s)", w.Code, w.Body.String())
+	}
+	if got := fake.all()[0].Index; got != secPatternFor("acme") {
+		t.Fatalf("facets pattern = %q", got)
+	}
+	var fs struct {
+		Severity map[string]int64 `json:"severity"`
+		Status   map[string]int64 `json:"status"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &fs); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if fs.Status["fail"] != 2 {
+		t.Errorf("fail = %d, want 2", fs.Status["fail"])
+	}
+	if fs.Status["not_applicable"] != 5 {
+		t.Errorf("NotApplicable must keep its OWN key (got %v) — folding it away would read as clear", fs.Status)
+	}
+	if _, present := fs.Status["pass"]; !present {
+		t.Error("pass must be present even at zero: an absent key and a zero mean different things")
+	}
+	if fs.Severity["critical"] != 2 {
+		t.Errorf("severity = %v", fs.Severity)
+	}
+}
+
+func TestSecurityTrendRejectsAnOverWideBucketing(t *testing.T) {
+	fake := &secFakeOS{}
+	secStartFakeOS(t, fake)
+	s := secTestServer(t)
+
+	w := httptest.NewRecorder()
+	s.secAPI.HandleTrend(w, req(http.MethodGet,
+		"/api/security/findings/trend?bucket=1h&since=2025-09-02T00:00:00Z&until=2026-09-01T00:00:00Z", "", acme()))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("a 365-day 1h trend = %d, want 400 (silently coarsening answers a different question)", w.Code)
+	}
+	if len(fake.all()) != 0 {
+		t.Fatal("the refused query still reached OpenSearch")
+	}
+	w = httptest.NewRecorder()
+	s.secAPI.HandleTrend(w, req(http.MethodGet, "/api/security/findings/trend?bucket=13m", "", acme()))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("an unknown bucket = %d, want 400", w.Code)
+	}
+}
+
+// TestSecurityPostureNeverMixesTenants — both posture queries carry the SAME
+// pattern and clause, and `scope` counts the caller's own registry only.
+func TestSecurityPostureNeverMixesTenants(t *testing.T) {
+	fake := &secFakeOS{
+		docs: map[string]string{},
+		aggs: `{"native_total":{"value":2},` +
+			`"by_native":{"buckets":[` +
+			`{"key":"n1","latest":{"hits":{"hits":[{"_source":{"severity":"critical","seam_type":"ISP","attrs":{"status":"Fail","evidence_class":"exposure","scan_id":"scan-1"},"entity_id":"acme-core","ts":1756684800000}}]}}},` +
+			`{"key":"n2","latest":{"hits":{"hits":[{"_source":{"severity":"low","attrs":{"status":"Pass","evidence_class":"posture","scan_id":"scan-1"},"entity_id":"acme-core","ts":1756684800000}}]}}}]},` +
+			`"assessed_devices":{"value":1},` +
+			`"last_scan":{"hits":{"hits":[{"_source":{"ts":1756684800000,"attrs":{"scan_id":"scan-1"}}}]}}}`,
+	}
+	secStartFakeOS(t, fake)
+	s := secTestServer(t)
+
+	w := httptest.NewRecorder()
+	s.secAPI.HandlePosture(w, req(http.MethodGet, "/api/security/posture", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("posture = %d (%s)", w.Code, w.Body.String())
+	}
+	calls := fake.all()
+	if len(calls) != 2 {
+		t.Fatalf("posture should issue exactly 2 bounded queries, got %d", len(calls))
+	}
+	for _, c := range calls {
+		if c.Index != secPatternFor("acme") {
+			t.Fatalf("posture query named %q", c.Index)
+		}
+		if !strings.Contains(c.Body, `{"term":{"tenant_id":"acme"}}`) {
+			t.Fatalf("posture query lost the tenant clause: %s", c.Body)
+		}
+	}
+	var out struct {
+		Funnel struct {
+			Scope      int `json:"scope"`
+			Discover   int `json:"discover"`
+			Prioritize int `json:"prioritize"`
+			Validate   int `json:"validate"`
+			Mobilize   int `json:"mobilize"`
+		} `json:"funnel"`
+		Coverage struct {
+			Assessed   int `json:"assessed_assets"`
+			Total      int `json:"total_assets"`
+			Unassessed int `json:"unassessed"`
+		} `json:"coverage"`
+		LastScan struct {
+			ScanID string `json:"scan_id"`
+			Time   string `json:"time"`
+		} `json:"last_scan"`
+		Notes map[string]string `json:"notes"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// acme owns 2 of the 3 registered devices; globex's must not be counted.
+	if out.Funnel.Scope != 2 || out.Coverage.Total != 2 {
+		t.Fatalf("scope = %d / total = %d, want acme's 2 devices only", out.Funnel.Scope, out.Coverage.Total)
+	}
+	if out.Funnel.Discover != 2 || out.Funnel.Prioritize != 1 || out.Funnel.Mobilize != 1 {
+		t.Fatalf("funnel = %+v, want discover 2 / prioritize 1 / mobilize 1", out.Funnel)
+	}
+	if out.Funnel.Validate != 0 || out.Notes["validate"] == "" {
+		t.Fatal("validate must be 0 AND carry the note saying the model has no validation marker")
+	}
+	if out.Coverage.Assessed != 1 || out.Coverage.Unassessed != 1 {
+		t.Fatalf("coverage = %+v, want 1 assessed / 1 unassessed", out.Coverage)
+	}
+	if out.Notes["coverage"] == "" {
+		t.Fatal("unassessed must never be presented without saying it is NOT a pass")
+	}
+	if out.LastScan.ScanID != "scan-1" || out.LastScan.Time == "" {
+		t.Fatalf("last_scan = %+v", out.LastScan)
+	}
+}
+
+// ---- control plane ----------------------------------------------------------
+
+func TestSecurityRulesAreOwnOnlyAndOwnerStamped(t *testing.T) {
+	fake := &secFakeOS{}
+	secStartFakeOS(t, fake)
+	s := secTestServer(t)
+	ruleID := secapi.Catalog()[0].RuleID
+
+	// globex disables a rule for itself.
+	w := httptest.NewRecorder()
+	s.secAPI.HandleRules(w, req(http.MethodPut, "/api/security/rules",
+		`[{"rule_id":"`+ruleID+`","enabled":false}]`, tAdmin("globex")))
+	if w.Code != http.StatusOK {
+		t.Fatalf("globex put = %d (%s)", w.Code, w.Body.String())
+	}
+
+	// acme must still see it ENABLED — a tenant's ruleset is its own.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleRules(w, req(http.MethodGet, "/api/security/rules", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("acme get = %d (%s)", w.Code, w.Body.String())
+	}
+	var rules []secapi.Rule
+	if err := json.Unmarshal(w.Body.Bytes(), &rules); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, r := range rules {
+		if r.RuleID == ruleID && !r.Enabled {
+			t.Fatal("TENANT LEAK: globex's rule override changed acme's catalog")
+		}
+	}
+	// …and globex sees its own override.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleRules(w, req(http.MethodGet, "/api/security/rules", "", tAdmin("globex")))
+	var theirs []secapi.Rule
+	if err := json.Unmarshal(w.Body.Bytes(), &theirs); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	off := false
+	for _, r := range theirs {
+		if r.RuleID == ruleID && !r.Enabled {
+			off = true
+		}
+	}
+	if !off {
+		t.Fatal("globex's own override was not applied to its own catalog")
+	}
+}
+
+func TestSecurityRulesWriteRefusesUnknownIDsAndTheGlobalView(t *testing.T) {
+	secStartFakeOS(t, &secFakeOS{})
+	s := secTestServer(t)
+
+	w := httptest.NewRecorder()
+	s.secAPI.HandleRules(w, req(http.MethodPut, "/api/security/rules",
+		`[{"rule_id":"not-a-rule","enabled":false}]`, tAdmin("acme")))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("unknown rule_id = %d, want 400", w.Code)
+	}
+	// A tenant in the BODY is refused outright (DisallowUnknownFields), so the
+	// owner can only ever come from the token (§3a rule 2).
+	w = httptest.NewRecorder()
+	s.secAPI.HandleRules(w, req(http.MethodPut, "/api/security/rules",
+		`[{"rule_id":"`+secapi.Catalog()[0].RuleID+`","enabled":false,"tenant_id":"globex"}]`, tAdmin("acme")))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("a tenant in the body = %d, want 400", w.Code)
+	}
+	// The platform owner's cross-tenant view has no single tenant to stamp.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleRules(w, req(http.MethodPut, "/api/security/rules",
+		`[{"rule_id":"`+secapi.Catalog()[0].RuleID+`","enabled":false}]`, platformOwner()))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("cross-tenant rule write = %d, want 400 (no tenant to own the row)", w.Code)
+	}
+}
+
+func TestSecurityViewsAreOwnOnlyAndCrossTenantDeleteIs404(t *testing.T) {
+	secStartFakeOS(t, &secFakeOS{})
+	s := secTestServer(t)
+
+	// globex saves a view.
+	w := httptest.NewRecorder()
+	s.secAPI.HandleViews(w, req(http.MethodPost, "/api/security/views",
+		`{"name":"their view","filters":{"severity":"high"}}`, globex()))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("globex post = %d (%s)", w.Code, w.Body.String())
+	}
+	var theirs secapi.SavedView
+	if err := json.Unmarshal(w.Body.Bytes(), &theirs); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if strings.Contains(w.Body.String(), "tenant") {
+		t.Fatalf("the owner tenant must never be serialized to a client: %s", w.Body.String())
+	}
+
+	// acme's list must be empty.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleViews(w, req(http.MethodGet, "/api/security/views", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("acme get = %d", w.Code)
+	}
+	if body := w.Body.String(); strings.Contains(body, theirs.ID) || strings.Contains(body, "their view") {
+		t.Fatalf("TENANT LEAK: acme's saved views carried globex's row: %s", body)
+	}
+
+	// acme cannot delete it, and is told 404 rather than 403 (§3a rule 1).
+	w = httptest.NewRecorder()
+	s.secAPI.HandleViews(w, req(http.MethodDelete, "/api/security/views/"+theirs.ID, "", acme()))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant delete = %d (%s), want 404", w.Code, w.Body.String())
+	}
+
+	// Its owner still can.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleViews(w, req(http.MethodDelete, "/api/security/views/"+theirs.ID, "", globex()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("owner delete = %d (%s), want 200", w.Code, w.Body.String())
+	}
+}
+
+// ---- validation + bounds ----------------------------------------------------
+
+func TestSecurityFindingsRejectsBadInputRatherThanAnsweringEmpty(t *testing.T) {
+	fake := &secFakeOS{}
+	secStartFakeOS(t, fake)
+	s := secTestServer(t)
+
+	for _, q := range []string{
+		"severity=hgih",
+		"status=broken",
+		"limit=501",
+		"limit=abc",
+		"current=maybe",
+		"page_size=10", // an unrecognised parameter must be NAMED, not swallowed
+		"offset=100",   // this API pages by cursor
+	} {
+		w := httptest.NewRecorder()
+		s.secAPI.HandleFindings(w, req(http.MethodGet, "/api/security/findings?"+q, "", acme()))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("?%s = %d, want 400 — a 200 with no rows reads as 'you have no findings'", q, w.Code)
+		}
+	}
+	if len(fake.all()) != 0 {
+		t.Fatalf("%d refused requests still reached OpenSearch", len(fake.all()))
+	}
+}
+
+func TestSecurityFindingsRequiresPermission(t *testing.T) {
+	secStartFakeOS(t, &secFakeOS{})
+	s := secTestServer(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/security/findings", nil) // no claims in context
+	s.secAPI.HandleFindings(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated = %d, want 401", w.Code)
+	}
+	// A read-only principal may READ but must not change the ruleset.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleRules(w, req(http.MethodPut, "/api/security/rules",
+		`[{"rule_id":"`+secapi.Catalog()[0].RuleID+`","enabled":false}]`, tViewer("acme")))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("read-only rule write = %d, want 403", w.Code)
+	}
+}
+
+// TestSecurityFindingsCursorRoundTripsThroughTheAPI proves the paging contract
+// end to end: a FULL page advertises a cursor, and feeding that cursor back
+// produces a search_after on the same (ts, doc id) keyset — the caller can
+// actually reach page 2, which is the other half of "don't hide".
+func TestSecurityFindingsCursorRoundTripsThroughTheAPI(t *testing.T) {
+	fake := &secFakeOS{docs: map[string]string{
+		secPatternFor("acme"): "[" + secDoc("a1", "acme", "critical", "Fail", "ISP", "acme-core") + "]",
+	}}
+	secStartFakeOS(t, fake)
+	s := secTestServer(t)
+
+	// limit=1 with one hit is a FULL page, so a cursor must be offered.
+	w := httptest.NewRecorder()
+	s.secAPI.HandleFindings(w, req(http.MethodGet, "/api/security/findings?limit=1", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("page 1 = %d (%s)", w.Code, w.Body.String())
+	}
+	var page struct {
+		NextCursor *string `json:"next_cursor"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if page.NextCursor == nil || *page.NextCursor == "" {
+		t.Fatal("a full page must advertise a cursor — otherwise the rest of the list is unreachable")
+	}
+	cur, ok := secapi.DecodeCursor(*page.NextCursor)
+	if !ok || cur.Collapsed || cur.Millis != 1756684800000 ||
+		cur.NativeID != "n-a1" || cur.ScanID != "scan-1" {
+		t.Fatalf("cursor decoded to %+v (ok=%v), want the last hit's sort values", cur, ok)
+	}
+
+	// Page 2 must carry search_after with exactly those values, still scoped.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindings(w, req(http.MethodGet,
+		"/api/security/findings?limit=1&cursor="+*page.NextCursor, "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("page 2 = %d (%s)", w.Code, w.Body.String())
+	}
+	last := fake.all()[len(fake.all())-1]
+	if !strings.Contains(last.Body, `"search_after":[1756684800000,"n-a1","scan-1"]`) {
+		t.Fatalf("page 2 did not carry the keyset: %s", last.Body)
+	}
+	if last.Index != secPatternFor("acme") {
+		t.Fatalf("page 2 left the caller's index pattern: %q", last.Index)
+	}
+
+	// A GARBAGE cursor serves page 1 rather than 500 — a stale cursor is a
+	// client-side artefact, not an outage.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindings(w, req(http.MethodGet, "/api/security/findings?cursor=not-a-cursor", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("garbage cursor = %d, want a 200 serving page 1", w.Code)
+	}
+	if strings.Contains(fake.all()[len(fake.all())-1].Body, "search_after") {
+		t.Fatal("a malformed cursor must not become a search_after")
+	}
+}
+
+// TestSecurityExposureStoriesEmptyIsNotAnError — a store that matched nothing
+// must answer an empty array, not an error: "no exposure stories" and "the
+// query failed" must not look the same to the page.
+//
+// The comment here used to say the list was legitimately empty because the
+// engine-side grounding (T2b) had not shipped. It HAD shipped, and the list was
+// empty for an entirely different reason — the engine stamped the nil UUID on
+// every edge-evidence row, so the signal-id join matched nothing (QA
+// 2026-09-03, D-01). Both halves are fixed; the SQL assertions below now cover
+// both branches of the predicate.
+func TestSecurityExposureStoriesEmptyIsNotAnError(t *testing.T) {
+	secStartFakeOS(t, &secFakeOS{})
+	sqls, scopes := corrFakeCH(t)
+	s := secTestServer(t)
+	s.governance = newTenantGovernanceStore(t.TempDir() + "/gov.json")
+
+	w := httptest.NewRecorder()
+	s.secAPI.HandleExposureStories(w, req(http.MethodGet, "/api/security/exposure-stories", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("exposure stories = %d (%s)", w.Code, w.Body.String())
+	}
+	if got := strings.TrimSpace(w.Body.String()); got != "[]" {
+		t.Fatalf("body = %s, want an empty array", got)
+	}
+	if len(*scopes) != 1 || (*scopes)[0] != "acme" {
+		t.Fatalf("tenant_scope = %v, want [acme] — the row policies enforce on it", *scopes)
+	}
+	sql := (*sqls)[0]
+	for _, want := range []string{
+		"netops.corr_evidence",
+		"netops.corr_signals",
+		"'security_posture'",
+		"'security_exposure'",
+		"'security_signal'",
+		// branch 2 (D-01): the exact node-key suffix over subject_id's halves,
+		// which is what reads the historical nil-UUID rows.
+		"splitByString('->', ev.subject_id)",
+		"endsWith(n, ':security_posture')",
+		"endsWith(n, ':security_exposure')",
+		"endsWith(n, ':security_signal')",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("the exposure-story predicate lost %q:\n%s", want, sql)
+		}
+	}
+	if !strings.Contains(sql, "netops.corr_current") {
+		t.Error("the list must reuse the correlations list SQL, not a second shape")
+	}
+}
+
+// TestSecurityFindingsCurrentStatePagesByOffset covers the path the byte-pinned
+// unit test cannot: end to end, current=true pages with `from` (OpenSearch 2.16
+// REFUSES collapse alongside search_after — verified live against the deployed
+// cluster), the cursor carries that offset opaquely, and the group total comes
+// from the cardinality aggregation rather than the document count.
+func TestSecurityFindingsCurrentStatePagesByOffset(t *testing.T) {
+	fake := &secFakeOS{
+		docs: map[string]string{
+			secPatternFor("acme"): "[" + secDoc("a1", "acme", "critical", "Fail", "ISP", "acme-core") + "]",
+		},
+		aggs: `{"current_total":{"value":42}}`,
+	}
+	secStartFakeOS(t, fake)
+	s := secTestServer(t)
+
+	w := httptest.NewRecorder()
+	s.secAPI.HandleFindings(w, req(http.MethodGet, "/api/security/findings?current=true&limit=1", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("current list = %d (%s)", w.Code, w.Body.String())
+	}
+	first := fake.all()[0]
+	if !strings.Contains(first.Body, `"collapse":{"field":"native_id"}`) {
+		t.Fatalf("current=true did not collapse on the verdict identity: %s", first.Body)
+	}
+	if strings.Contains(first.Body, "search_after") {
+		t.Fatalf("a collapsed body must never carry search_after — OpenSearch rejects the pair: %s", first.Body)
+	}
+	if first.Index != secPatternFor("acme") {
+		t.Fatalf("current list left the caller's pattern: %q", first.Index)
+	}
+
+	var page struct {
+		NextCursor *string `json:"next_cursor"`
+		Total      int64   `json:"total"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if page.Total != 42 {
+		t.Fatalf("total = %d, want the cardinality of native_id (42) — hits.total counts every historical verdict", page.Total)
+	}
+	if page.NextCursor == nil {
+		t.Fatal("a full collapsed page must advertise a cursor")
+	}
+	cur, ok := secapi.DecodeCursor(*page.NextCursor)
+	if !ok || !cur.Collapsed || cur.Offset != 1 {
+		t.Fatalf("cursor = %+v (ok=%v), want a collapsed offset of 1", cur, ok)
+	}
+
+	// Page 2 must carry `from`, and NOT a keyset.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindings(w, req(http.MethodGet,
+		"/api/security/findings?current=true&limit=1&cursor="+*page.NextCursor, "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("current page 2 = %d (%s)", w.Code, w.Body.String())
+	}
+	second := fake.all()[len(fake.all())-1]
+	if !strings.Contains(second.Body, `"from":1`) {
+		t.Fatalf("collapsed page 2 lost its offset: %s", second.Body)
+	}
+
+	// A KEYSET cursor replayed with current=true is the wrong kind: it is
+	// ignored (page 1), never turned into a nonsense position.
+	keyset := secapi.EncodeKeysetCursor(1756684800000, "n-a1", "scan-1")
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindings(w, req(http.MethodGet,
+		"/api/security/findings?current=true&limit=1&cursor="+keyset, "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("mismatched cursor kind = %d, want a 200 serving page 1", w.Code)
+	}
+	last := fake.all()[len(fake.all())-1]
+	if strings.Contains(last.Body, "search_after") || strings.Contains(last.Body, `"from"`) {
+		t.Fatalf("a cursor of the wrong kind must be IGNORED: %s", last.Body)
+	}
+
+	// Paging past the result window is REFUSED, not served short: a short page
+	// with a null cursor while total says 42 would read as "that is all there is".
+	deep := secapi.EncodeOffsetCursor(9999)
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindings(w, req(http.MethodGet,
+		"/api/security/findings?current=true&limit=100&cursor="+deep, "", acme()))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("paging past the result window = %d, want 400", w.Code)
+	}
+}
+
+// TestSecurityExposureStoryDetailIsTenantScoped covers
+// "/api/security/exposure-stories/{id}". The route is a DELEGATE: it rewrites
+// the path onto the correlation detail handler so an Exposure Story renders
+// identically to the RCA case it is, and — the reason the delegation exists —
+// inherits that handler's ownership pre-read verbatim. Re-implementing the
+// lookup here is exactly how the 2026-08-04 {id}/replay cross-tenant leak
+// happened: a second path to the same object that forgot the check.
+//
+// Asserted: another tenant's correlation id answers 404 (existence hidden), the
+// ClickHouse read carries the CALLER's tenant_scope (never __all__), as_tenant
+// into another org is ignored, and a malformed id is a 400 that reaches no store.
+func TestSecurityExposureStoryDetailIsTenantScoped(t *testing.T) {
+	const storyID = "11111111-2222-4333-8444-555555555555"
+	fbFakeCH(t, "acme") // corr_objects rows exist ONLY under the acme scope
+	s := secTestServer(t)
+	s.governance = newTenantGovernanceStore(t.TempDir() + "/gov.json")
+
+	// globex asking for acme's story: the scoped read returns no rows, so the
+	// correlation detail handler answers 404 — the same answer a nonexistent id
+	// gets, so acme's id is never confirmed to exist.
+	w := httptest.NewRecorder()
+	s.handleSecurityExposureStory(w, req(http.MethodGet, "/api/security/exposure-stories/"+storyID, "", globex()))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant exposure story = %d (%s), want 404", w.Code, w.Body.String())
+	}
+	if strings.Contains(strings.ToLower(w.Body.String()), "acme") {
+		t.Fatalf("the 404 revealed the owning tenant: %s", w.Body.String())
+	}
+
+	// ?as_tenant= into another org must not widen a non-owner's scope.
+	spoofed := globex()
+	spoofed.ActingTenant = "acme"
+	w = httptest.NewRecorder()
+	s.handleSecurityExposureStory(w, req(http.MethodGet,
+		"/api/security/exposure-stories/"+storyID+"?as_tenant=acme", "", spoofed))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("as_tenant WIDENED the scope: %d (%s)", w.Code, w.Body.String())
+	}
+
+	// A malformed id is refused by the delegate target before any store is read.
+	w = httptest.NewRecorder()
+	s.handleSecurityExposureStory(w, req(http.MethodGet, "/api/security/exposure-stories/not-a-uuid", "", acme()))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("malformed exposure story id = %d, want 400", w.Code)
+	}
+
+	// The delegation really does reach the correlation detail handler: the
+	// owner's request is NOT a 404 (the fake serves acme's corr_objects rows).
+	w = httptest.NewRecorder()
+	s.handleSecurityExposureStory(w, req(http.MethodGet, "/api/security/exposure-stories/"+storyID, "", acme()))
+	if w.Code == http.StatusNotFound {
+		t.Fatalf("the owner was denied its own exposure story — the delegation is not reaching the correlation detail handler (%s)", w.Body.String())
+	}
+}
+
+// ---- D-09: by-id resolution ------------------------------------------------
+
+// secIDAwareOS is a stand-in that, unlike secFakeOS, actually HONOURS the query:
+// it returns a document only when the request body selects it BY DOCUMENT ID
+// and the index pattern is one that may see it. That distinction is the whole
+// of D-09 — the previous by-id query filtered `term { cx_finding_id: … }`, a
+// field no indexed document carries (the router's `id_key: cx_finding_id` sink
+// lifts it into the `_id` and strips it from the body), so every real GET
+// answered 404 while a pattern-only test double answered 200.
+type secIDAwareOS struct {
+	mu   sync.Mutex
+	docs map[string]map[string]string // index pattern → doc id → _source JSON
+	last string                       // the last query body, for assertions
+}
+
+// selects reports whether an OpenSearch query body would match a document whose
+// `_id` is id. It walks query.bool.filter and looks for the id resolution
+// clause, exactly as the cluster would: an `ids` values entry naming the doc.
+func (f *secIDAwareOS) selects(body, id string) bool {
+	var q struct {
+		Query struct {
+			Bool struct {
+				Filter []json.RawMessage `json:"filter"`
+			} `json:"bool"`
+		} `json:"query"`
+	}
+	if err := json.Unmarshal([]byte(body), &q); err != nil {
+		return false
+	}
+	for _, clause := range q.Query.Bool.Filter {
+		var c struct {
+			IDs struct {
+				Values []string `json:"values"`
+			} `json:"ids"`
+			Bool struct {
+				Should []struct {
+					IDs struct {
+						Values []string `json:"values"`
+					} `json:"ids"`
+				} `json:"should"`
+			} `json:"bool"`
+		}
+		if err := json.Unmarshal(clause, &c); err != nil {
+			continue
+		}
+		for _, v := range c.IDs.Values {
+			if v == id {
+				return true
+			}
+		}
+		for _, s := range c.Bool.Should {
+			for _, v := range s.IDs.Values {
+				if v == id {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// lastBody returns the most recent query body under the lock, so a -race build
+// sees the same happens-before edge the handler wrote it behind.
+func (f *secIDAwareOS) lastBody() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.last
+}
+
+func secStartIDAwareOS(t *testing.T, fake *secIDAwareOS) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // test double: a short read fails the assertions below
+		body := string(raw)
+		index := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), "/_search")
+		fake.mu.Lock()
+		fake.last = body
+		hits := ""
+		for id, source := range fake.docs[index] {
+			if fake.selects(body, id) {
+				hits = `{"_index":"` + strings.SplitN(index, "-*", 2)[0] + `-2026.09.01","_id":"` + id +
+					`","_source":` + source + `,"sort":[1756684800000,"` + id + `"]}`
+				break
+			}
+		}
+		fake.mu.Unlock()
+		total := 0
+		if hits != "" {
+			total = 1
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"took":1,"timed_out":false,"hits":{"total":{"value":` +
+			strconv.Itoa(total) + `,"relation":"eq"},"hits":[` + hits + `]}}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("OPENSEARCH_URL", srv.URL)
+}
+
+// secLiveSource is the LIVE indexed shape: no cx_finding_id anywhere in
+// _source, because the router's sink consumed it into the `_id`.
+func secLiveSource(tenant, device string) string {
+	return `{"tenant_id":"` + tenant + `","ts":1756684800000,"severity":"high",` +
+		`"entity_id":"` + device + `","native_id":"security|security_posture|posture|AC-17|` + device + `|scan-1|",` +
+		`"attrs":{"status":"Fail","scan_id":"scan-1","evidence_class":"posture",` +
+		`"status_detail":"OS version not present in sysDescr"}}`
+}
+
+// TestSecurityFindingByIDResolvesTheDocumentID is D-09's regression test, at the
+// HTTP boundary and against a backend that answers the query rather than the
+// index pattern. The owner reads its own finding (200) and the neighbouring
+// tenant gets the same 404 a nonexistent id gets — the isolation half of §3a.5.
+func TestSecurityFindingByIDResolvesTheDocumentID(t *testing.T) {
+	const acmeDoc = "3f2a9c1e5b7d0a4f6e8c2b1d9a7f5e3c1b0d8a6f4e2c0b9d7a5f3e1c9b7d5a30"
+	const globexDoc = "9b7d5a301b0d8a6f4e2c0b9d3f2a9c1e5b7d0a4f6e8c2b1d7a5f3e1c9b7d5a31"
+	fake := &secIDAwareOS{docs: map[string]map[string]string{
+		secPatternFor("acme"):   {acmeDoc: secLiveSource("acme", "acme-core")},
+		secPatternFor("globex"): {globexDoc: secLiveSource("globex", "globex-core")},
+	}}
+	secStartIDAwareOS(t, fake)
+	s := secTestServer(t)
+
+	// Own finding, by the id the LIST hands out (the document `_id`) → 200.
+	w := httptest.NewRecorder()
+	s.secAPI.HandleFindingByID(w, req(http.MethodGet, "/api/security/findings/"+acmeDoc, "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("own finding by id = %d (%s), want 200 — D-09 REGRESSION", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"id":"`+acmeDoc+`"`) {
+		t.Fatalf("the detail response does not carry the id it was asked for: %s", w.Body.String())
+	}
+	// The reason survives the bus and the decoder (the D-06 field).
+	if !strings.Contains(w.Body.String(), "OS version not present in sysDescr") {
+		t.Errorf("attrs.status_detail did not reach the detail response: %s", w.Body.String())
+	}
+	if body := fake.lastBody(); !strings.Contains(body, `{"term":{"tenant_id":"acme"}}`) {
+		t.Fatalf("TENANT LEAK: the by-id query carried no isolation clause: %s", body)
+	}
+
+	// Another tenant's finding id → 404, indistinguishable from a missing one.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindingByID(w, req(http.MethodGet, "/api/security/findings/"+globexDoc, "", acme()))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant get = %d (%s), want 404", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "globex") || strings.Contains(w.Body.String(), globexDoc) {
+		t.Fatalf("the 404 revealed the other tenant's finding: %s", w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindingByID(w, req(http.MethodGet,
+		"/api/security/findings/0000000000000000000000000000000000000000000000000000000000000000", "", acme()))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("missing id = %d, want the same 404 as a cross-tenant id", w.Code)
+	}
+
+	// Its owner still reads it — so the 404 above was isolation, not breakage.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindingByID(w, req(http.MethodGet, "/api/security/findings/"+globexDoc, "", globex()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("owner get = %d (%s), want 200", w.Code, w.Body.String())
+	}
+
+	// ?as_tenant= into another org is ignored for a non-owner (§3a.5).
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindingByID(w, req(http.MethodGet,
+		"/api/security/findings/"+globexDoc+"?as_tenant=globex", "", acme()))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("as_tenant escape = %d (%s), want 404", w.Code, w.Body.String())
+	}
+
+	// A native_id is not a document id: refused at the boundary (§3 zero-trust),
+	// never passed into the query.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindingByID(w, req(http.MethodGet,
+		"/api/security/findings/security%7Csecurity_posture%7Cposture", "", acme()))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("native_id-shaped id = %d (%s), want 400", w.Code, w.Body.String())
+	}
+}
+
+// ---- L-01: current=true must actually supersede -----------------------------
+
+// secCollapseOS emulates the one OpenSearch behaviour `current=true` is built
+// on: `collapse: {field: native_id}` over a (ts desc) sort returns the NEWEST
+// document per group, and `current_total` is the number of GROUPS. Everything
+// else about it is a stub — this exists to prove the Go side asks for the
+// collapse and reports group counts, which no pattern-only double can show.
+type secCollapseOS struct {
+	docs []secCollapseDoc
+}
+
+type secCollapseDoc struct {
+	ID       string
+	NativeID string
+	TSMillis int64
+	Status   string
+	Device   string
+}
+
+func secStartCollapseOS(t *testing.T, fake *secCollapseOS) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // test double: a short read fails the assertions below
+		var q struct {
+			Collapse struct {
+				Field string `json:"field"`
+			} `json:"collapse"`
+		}
+		_ = json.Unmarshal(raw, &q)
+		keep := fake.docs
+		if q.Collapse.Field == "native_id" {
+			newest := map[string]secCollapseDoc{}
+			for _, d := range fake.docs {
+				if cur, ok := newest[d.NativeID]; !ok || d.TSMillis > cur.TSMillis {
+					newest[d.NativeID] = d
+				}
+			}
+			keep = keep[:0:0]
+			for _, d := range newest {
+				keep = append(keep, d)
+			}
+		}
+		sort.Slice(keep, func(i, j int) bool { return keep[i].TSMillis > keep[j].TSMillis })
+		hits := make([]string, 0, len(keep))
+		for _, d := range keep {
+			hits = append(hits, `{"_index":"netops-secfindings-acme-2026.09.03","_id":"`+d.ID+`",`+
+				`"_source":{"tenant_id":"acme","ts":`+strconv.FormatInt(d.TSMillis, 10)+`,"severity":"high",`+
+				`"entity_id":"`+d.Device+`","native_id":"`+d.NativeID+`",`+
+				`"attrs":{"status":"`+d.Status+`","scan_id":"scan-`+d.ID+`","evidence_class":"posture",`+
+				`"control_id":"AC-17","raw_rule_id":"telnet-vty-enabled"}},`+
+				`"sort":[`+strconv.FormatInt(d.TSMillis, 10)+`,"`+d.ID+`"]}`)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"took":1,"timed_out":false,"hits":{"total":{"value":` +
+			strconv.Itoa(len(fake.docs)) + `,"relation":"eq"},"hits":[` + strings.Join(hits, ",") + `]},` +
+			`"aggregations":{"current_total":{"value":` + strconv.Itoa(len(keep)) + `}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("OPENSEARCH_URL", srv.URL)
+}
+
+// TestSecurityFindingsCurrentSupersedesOlderScans is L-01 at the API boundary.
+//
+// Live symptom (2026-09-03): `current=true` returned 572 rows spanning nine
+// scans, 444 of them stale Unknowns, because native_id folded in the scan id and
+// every scan was therefore its own collapse group. secbus.nativeIDOf no longer
+// does; the two documents below are two scans of the SAME finding and share one
+// native_id (the shape TestNativeIDIsStableAcrossScans pins on the producer
+// side). The current view must return ONE row — the newest — and count groups,
+// not documents.
+func TestSecurityFindingsCurrentSupersedesOlderScans(t *testing.T) {
+	// The stable, scan-free identity: tenant, control, device, rule.
+	const native = "security|security_posture|posture|acme|AC-17|spine1|telnet-vty-enabled"
+	if strings.Contains(native, "scan-") {
+		t.Fatal("the fixture identity carries a scan id — that is the bug, not the fixture")
+	}
+	fake := &secCollapseOS{docs: []secCollapseDoc{
+		{ID: "older", NativeID: native, TSMillis: 1756684800000, Status: "Fail", Device: "spine1"},
+		{ID: "newest", NativeID: native, TSMillis: 1756873600000, Status: "NotApplicable", Device: "spine1"},
+	}}
+	secStartCollapseOS(t, fake)
+	s := secTestServer(t)
+
+	w := httptest.NewRecorder()
+	s.secAPI.HandleFindings(w, req(http.MethodGet, "/api/security/findings?current=true", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("current list = %d (%s)", w.Code, w.Body.String())
+	}
+	var page struct {
+		Items []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"items"`
+		Total int64 `json:"total"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode: %v (%s)", err, w.Body.String())
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("L-01 REGRESSION: current=true returned %d rows for ONE finding identity — "+
+			"the newer verdict never supersedes the older one: %s", len(page.Items), w.Body.String())
+	}
+	if page.Items[0].ID != "newest" || page.Items[0].Status != "NotApplicable" {
+		t.Errorf("the surviving row is %+v, want the NEWEST verdict (NotApplicable)", page.Items[0])
+	}
+	if page.Total != 1 {
+		t.Errorf("total = %d, want 1 — the current view counts finding identities, not documents", page.Total)
+	}
+
+	// The history is NOT destroyed: current=false still returns both retained
+	// verdicts, which is what the trend/drift views read.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindings(w, req(http.MethodGet, "/api/security/findings", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("history list = %d (%s)", w.Code, w.Body.String())
+	}
+	page.Items = nil
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("the retained verdict history was lost: %d rows, want 2 (%s)", len(page.Items), w.Body.String())
+	}
+}
+
+// ---- tracker 228: keyset paging over a total order --------------------------
+
+// secKeysetDoc is one document in the keyset stand-in's corpus.
+type secKeysetDoc struct {
+	ID       string
+	Tenant   string
+	TS       int64
+	NativeID string
+	ScanID   string
+}
+
+// secKeysetOS is a stand-in that HONOURS the paging half of the query: it sorts
+// its corpus exactly the way listSort tells OpenSearch to (ts desc, native_id
+// desc, attrs.scan_id desc), applies `search_after` as the cluster does (strict
+// tuple comparison against the sort keys, in order), and returns `size` hits
+// with the per-hit `sort` array the cursor is minted from.
+//
+// It exists because a fake that ignores the body cannot see the tracker-228
+// defect at all: with the old tie-break the sort was NOT a total order (it
+// named `cx_finding_id`, a field the router's `id_key` sink strips out of every
+// document), so real pages came back `[ts, null]`, no cursor was ever minted,
+// and the list ended at page one while `total` reported thousands more.
+type secKeysetOS struct {
+	mu     sync.Mutex
+	docs   []secKeysetDoc
+	bodies []string
+}
+
+// sortKeys is the hit's `sort` array: one value per listSort key, in order.
+func (d secKeysetDoc) sortKeys() []any { return []any{d.TS, d.NativeID, d.ScanID} }
+
+// afterCmp orders two keysets the way the cluster's descending sort does:
+// -1 when a sorts BEFORE b (i.e. a is "greater" on a desc sort), +1 after, 0
+// when the two are indistinguishable — the case that duplicates or skips rows
+// when the sort is not a total order.
+func secAfterCmp(a, b []any) int {
+	for i := range a {
+		var x, y string
+		switch v := a[i].(type) {
+		case int64:
+			x = fmt.Sprintf("%020d", v)
+		case string:
+			x = v
+		}
+		switch v := b[i].(type) {
+		case float64:
+			y = fmt.Sprintf("%020d", int64(v))
+		case int64:
+			y = fmt.Sprintf("%020d", v)
+		case string:
+			y = v
+		}
+		if x != y {
+			if x > y { // desc: the larger value comes first
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
+}
+
+func secStartKeysetOS(t *testing.T, fake *secKeysetOS) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			t.Errorf("read query body: %v", err)
+			http.Error(w, "read", http.StatusInternalServerError)
+			return
+		}
+		var q struct {
+			Size        int   `json:"size"`
+			SearchAfter []any `json:"search_after"`
+		}
+		if err := json.Unmarshal(raw, &q); err != nil {
+			t.Errorf("the API sent a body OpenSearch could not parse: %v", err)
+			http.Error(w, "bad body", http.StatusBadRequest)
+			return
+		}
+		index := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), "/_search")
+
+		fake.mu.Lock()
+		fake.bodies = append(fake.bodies, string(raw))
+		// Only the caller's own pattern sees the corpus — the at-rest half of
+		// §3a, kept honest here too.
+		var visible []secKeysetDoc
+		for _, d := range fake.docs {
+			if index == secPatternFor(d.Tenant) || index == "netops-secfindings-*" {
+				visible = append(visible, d)
+			}
+		}
+		fake.mu.Unlock()
+
+		sort.Slice(visible, func(i, j int) bool {
+			return secAfterCmp(visible[i].sortKeys(), visible[j].sortKeys()) < 0
+		})
+		total := len(visible)
+		if len(q.SearchAfter) > 0 {
+			cut := 0
+			// Keep only what sorts strictly AFTER the cursor's tuple.
+			for cut < len(visible) && secAfterCmp(visible[cut].sortKeys(), q.SearchAfter) <= 0 {
+				cut++
+			}
+			visible = visible[cut:]
+		}
+		if q.Size > 0 && len(visible) > q.Size {
+			visible = visible[:q.Size]
+		}
+
+		hits := make([]string, 0, len(visible))
+		for _, d := range visible {
+			hits = append(hits, `{"_index":"netops-secfindings-`+d.Tenant+`-2026.09.01","_id":"`+d.ID+`",`+
+				`"_source":{"tenant_id":"`+d.Tenant+`","ts":`+strconv.FormatInt(d.TS, 10)+`,`+
+				`"severity":"high","entity_id":"acme-core","native_id":"`+d.NativeID+`",`+
+				`"attrs":{"status":"Fail","scan_id":"`+d.ScanID+`","evidence_class":"posture"}},`+
+				`"sort":[`+strconv.FormatInt(d.TS, 10)+`,"`+d.NativeID+`","`+d.ScanID+`"]}`)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"took":1,"timed_out":false,"hits":{"total":{"value":` +
+			strconv.Itoa(total) + `,"relation":"eq"},"hits":[` + strings.Join(hits, ",") + `]}}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("OPENSEARCH_URL", srv.URL)
+}
+
+// TestSecurityFindingsKeysetPagesEveryFindingExactlyOnce is tracker 228's
+// regression test, and the reason the sort tie-breaks on the document's
+// documented unique key (native_id, attrs.scan_id) rather than on
+// `cx_finding_id`.
+//
+// Every document in the corpus carries the SAME timestamp — a whole scan is
+// stamped with one scan time, so equal timestamps are the NORMAL case here, not
+// a corner. With a tie-break that is not a total order, walking the list either
+// repeats rows or steps over them; with one that is, a full walk returns every
+// finding exactly once and then stops. The page size (3) deliberately does NOT
+// divide the two-verdict groups: a boundary that always fell between groups
+// would hide a tie-break that only distinguishes groups.
+func TestSecurityFindingsKeysetPagesEveryFindingExactlyOnce(t *testing.T) {
+	const sameTS int64 = 1756684800000
+	fake := &secKeysetOS{}
+	// Four verdict identities × two scan runs, EVERY document stamped with the
+	// same instant. Both halves of the tie-break are load-bearing here: without
+	// attrs.scan_id the pair sharing a native_id is indistinguishable, and the
+	// page boundary walking past it drops one of the two.
+	for _, scan := range []string{"scan-1", "scan-2"} {
+		for i := 0; i < 4; i++ {
+			fake.docs = append(fake.docs, secKeysetDoc{
+				ID:       "acme-doc-" + scan + "-" + strconv.Itoa(i),
+				Tenant:   "acme",
+				TS:       sameTS,
+				NativeID: "security|security_posture|posture|acme|AC-17|spine1|rule-" + strconv.Itoa(i),
+				ScanID:   scan,
+			})
+		}
+	}
+	// A neighbouring tenant's finding, at the same instant, must never appear.
+	fake.docs = append(fake.docs, secKeysetDoc{
+		ID: "globex-doc", Tenant: "globex", TS: sameTS,
+		NativeID: "security|security_posture|posture|globex|AC-17|edge1|rule-0", ScanID: "scan-1",
+	})
+	secStartKeysetOS(t, fake)
+	s := secTestServer(t)
+
+	seen := map[string]int{}
+	cursor := ""
+	for page := 1; ; page++ {
+		if page > 10 {
+			t.Fatal("paging did not terminate — the cursor is not advancing")
+		}
+		url := "/api/security/findings?limit=3"
+		if cursor != "" {
+			url += "&cursor=" + cursor
+		}
+		w := httptest.NewRecorder()
+		s.secAPI.HandleFindings(w, req(http.MethodGet, url, "", acme()))
+		if w.Code != http.StatusOK {
+			t.Fatalf("page %d = %d (%s)", page, w.Code, w.Body.String())
+		}
+		var body struct {
+			Items      []struct{ ID string } `json:"items"`
+			NextCursor *string               `json:"next_cursor"`
+			Total      int64                 `json:"total"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode page %d: %v", page, err)
+		}
+		if body.Total != 8 {
+			t.Fatalf("page %d reported total=%d, want the 8 verdicts acme owns", page, body.Total)
+		}
+		for _, it := range body.Items {
+			seen[it.ID]++
+		}
+		if body.NextCursor == nil {
+			break
+		}
+		cursor = *body.NextCursor
+	}
+
+	if len(seen) != 8 {
+		t.Fatalf("the walk returned %d distinct findings, want 8 — rows were SKIPPED: %v", len(seen), seen)
+	}
+	for id, n := range seen {
+		if n != 1 {
+			t.Errorf("finding %s was served %d times — the sort is not a total order", id, n)
+		}
+	}
+	if _, leaked := seen["globex-doc"]; leaked {
+		t.Fatal("TENANT LEAK: another tenant's finding was paged into acme's list")
+	}
+}
+
+// TestSecurityFindingsKeysetNeverSortsOnAFieldNoDocumentCarries is the cheap,
+// permanent guard under the test above: the list sort must not name
+// `cx_finding_id`. Vector's `id_key: cx_finding_id` sink lifts that key into the
+// bulk action's `_id` and REMOVES it from the document, so a sort on it ranks
+// every document by a missing value and the keyset degenerates.
+func TestSecurityFindingsKeysetNeverSortsOnAFieldNoDocumentCarries(t *testing.T) {
+	fake := &secKeysetOS{docs: []secKeysetDoc{{
+		ID: "a1", Tenant: "acme", TS: 1756684800000,
+		NativeID: "security|security_posture|posture|acme|AC-17|spine1|rule-0", ScanID: "scan-1",
+	}}}
+	secStartKeysetOS(t, fake)
+	s := secTestServer(t)
+
+	w := httptest.NewRecorder()
+	s.secAPI.HandleFindings(w, req(http.MethodGet, "/api/security/findings?limit=1", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("list = %d (%s)", w.Code, w.Body.String())
+	}
+	fake.mu.Lock()
+	body := fake.bodies[len(fake.bodies)-1]
+	fake.mu.Unlock()
+	sortIdx := strings.Index(body, `"sort":`)
+	if sortIdx < 0 {
+		t.Fatalf("the list body carries no sort at all: %s", body)
+	}
+	if strings.Contains(body[sortIdx:], "cx_finding_id") {
+		t.Fatalf("the list sorts on cx_finding_id, which no indexed document carries: %s", body[sortIdx:])
+	}
+	for _, want := range []string{`"ts"`, `"native_id"`, `"attrs.scan_id"`} {
+		if !strings.Contains(body[sortIdx:], want) {
+			t.Errorf("the list sort lost %s — the keyset is no longer a total order: %s", want, body[sortIdx:])
+		}
+	}
+}

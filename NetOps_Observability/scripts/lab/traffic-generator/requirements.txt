@@ -1,0 +1,3 @@
+# tgen core is stdlib-only (flow telemetry, raw packets, L7 sessions) — no pip
+# deps required. Optional extras for higher-fidelity L7:
+#   aioquic   # real QUIC handshakes (else UDP/443 datagram stand-in)

@@ -1,0 +1,158 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`RcaVerdictFeedback — the control > matches the control snapshot (form open) 1`] = `
+<div
+  class="rw-fb"
+>
+  <div
+    class="rw-fb-head"
+  >
+    <span
+      class="rw-fb-q"
+      id="rw-fb-q"
+    >
+      Was this verdict right?
+    </span>
+    <div
+      aria-labelledby="rw-fb-q"
+      class="rw-fb-btns"
+      role="group"
+    >
+      <button
+        aria-pressed="false"
+        class="rw-btn rw-fb-btn"
+        type="button"
+      >
+        Correct
+      </button>
+      <button
+        aria-pressed="false"
+        class="rw-btn rw-fb-btn"
+        type="button"
+      >
+        Partially
+      </button>
+      <button
+        aria-pressed="true"
+        class="rw-btn rw-fb-btn active"
+        type="button"
+      >
+        Wrong
+      </button>
+    </div>
+  </div>
+  <div
+    class="rw-fb-form"
+  >
+    <fieldset
+      class="rw-fb-parts"
+    >
+      <legend>
+        Which part was wrong?
+      </legend>
+      <label
+        class="rw-fb-part"
+      >
+        <input
+          name="rw-fb-part"
+          type="radio"
+          value="cause"
+        />
+        Cause
+      </label>
+      <label
+        class="rw-fb-part"
+      >
+        <input
+          name="rw-fb-part"
+          type="radio"
+          value="owner"
+        />
+        Owner
+      </label>
+      <label
+        class="rw-fb-part"
+      >
+        <input
+          name="rw-fb-part"
+          type="radio"
+          value="affected"
+        />
+        Affected
+      </label>
+      <label
+        class="rw-fb-part"
+      >
+        <input
+          name="rw-fb-part"
+          type="radio"
+          value="evidence"
+        />
+        Evidence
+      </label>
+      <label
+        class="rw-fb-part"
+      >
+        <input
+          name="rw-fb-part"
+          type="radio"
+          value="recovery"
+        />
+        Recovery
+      </label>
+    </fieldset>
+    <div
+      class="rw-fb-reason"
+    >
+      <label
+        for="rw-fb-reason"
+      >
+        What did it get wrong? (optional)
+      </label>
+      <textarea
+        aria-describedby="rw-fb-count"
+        id="rw-fb-reason"
+        maxlength="500"
+        placeholder="e.g. the ISP was not at fault — the break was on the LAN uplink"
+        rows="2"
+      />
+      <span
+        class="rw-fb-count"
+        id="rw-fb-count"
+      >
+        0
+        /
+        500
+         characters
+      </span>
+    </div>
+    <div
+      class="rw-fb-actions"
+    >
+      <button
+        class="rw-btn primary"
+        type="button"
+      >
+        Record verdict
+      </button>
+      <button
+        class="rw-btn"
+        type="button"
+      >
+        Cancel
+      </button>
+    </div>
+  </div>
+  <div
+    aria-busy="false"
+    aria-live="polite"
+    class="rw-fb-status"
+    role="status"
+  />
+  <div
+    class="rw-fb-none"
+  >
+    No operator verdict recorded on this case yet.
+  </div>
+</div>
+`;

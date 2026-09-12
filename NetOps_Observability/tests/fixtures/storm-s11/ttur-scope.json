@@ -1,0 +1,16 @@
+{
+ "arm": "ON",
+ "captured": "2026-09-01T22:42:07Z",
+ "excluded_agg_cid": "bb1e46d6-5462-54dc-8465-777c707b9329",
+ "leg": "storm-s11",
+ "profile": "t-storm-2.5k",
+ "scope": {
+  "burst_end": "2026-09-01 21:55:55",
+  "burst_seconds": 900.0,
+  "burst_start": "2026-09-01 21:40:55",
+  "converged": "2026-09-01 22:19:36",
+  "source": "report.json phases[burst].at - burst_seconds .. phases[correlation_completion].at"
+ },
+ "sql": "WITH inc AS (\n  SELECT correlation_id,\n         min(window_start) t0, min(created_at) t1, max(created_at) tlast, count() nv,\n         argMax(state, (created_at, version)) fstate,\n         argMax(verdict_tier, (created_at, version)) ftier,\n         max(signal_count) ms\n  FROM netops.corr_objects\n  WHERE created_at < '2026-09-01 22:19:36'\n    AND correlation_id != toUUID('bb1e46d6-5462-54dc-8465-777c707b9329')\n  GROUP BY correlation_id\n  HAVING t0 >= '2026-09-01 21:40:55' AND t0 < '2026-09-01 21:55:55')\nSELECT count() inc, sum(nv) versions, round(sum(nv)/count(),2) vpi, sum(ms) sigs,\n       round(quantile(0.5)(dateDiff('second',t0,t1)),0) t1p50,\n       round(quantile(0.95)(dateDiff('second',t0,t1)),0) t1p95,\n       round(quantile(0.99)(dateDiff('second',t0,t1)),0) t1p99,\n       max(dateDiff('second',t0,t1)) t1max,\n       round(quantile(0.95)(dateDiff('second',t0,tlast)),0) tlast95,\n       countIf(fstate='merged') merged, countIf(ftier='undetermined') undet,\n       countIf(ftier='confirmed') confirmed\nFROM inc\nSETTINGS tenant_scope='__all__'\nFORMAT TSVWithNames",
+ "tenant": "global"
+}

@@ -1,0 +1,39 @@
+{
+  "name": "fx_admin_q \u2014 mpo-row-flip",
+  "signals": [
+    {
+      "kind": "mpo_row_flip",
+      "entity_type": "interface",
+      "entity_id": "leaf6:Et11",
+      "observer_id": "snmp-leaf6",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "lane_group_dark",
+      "entity_type": "interface",
+      "entity_id": "leaf6:Et11",
+      "observer_id": "snmp-leaf6",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "parallel_lane_map_anomaly",
+      "entity_type": "interface",
+      "entity_id": "leaf6:Et11",
+      "observer_id": "snmp-leaf6",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.mpo-row-flip",
+    "tier": "suspected"
+  }
+}

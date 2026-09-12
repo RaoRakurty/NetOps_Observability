@@ -1,0 +1,10 @@
+{
+  "event_id": "gen-0001",
+  "event_type": "custom_alarm",
+  "severity": "warn",
+  "device_id": "edge-3",
+  "device_name": "edge-3.acme.net",
+  "site_id": "site-x",
+  "message": "Custom controller raised an alarm",
+  "event_time": "2026-07-03T12:00:00Z"
+}

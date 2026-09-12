@@ -1,0 +1,97 @@
+name: cla-check
+
+# CLA signature check — PRESENT AND DELIBERATELY DISABLED.
+#
+# enable when counsel-approved CLA.md lands
+#
+# WHY THIS FILE EXISTS AT ALL. CONTRIBUTING.md §1 states that every contribution
+# needs a signed Contributor License Agreement before it can be merged, and
+# CLA.md is a placeholder with no terms in it because the text is pending
+# counsel. Two of the three halves of the mechanism are counsel's and the
+# owner's (the text; the choice of signing process). The third — the enforcement
+# plumbing — is engineering's, is reviewable now, and is what is prepared here:
+# a real, well-known action, pinned by full commit SHA, with its inputs written
+# out so that turning it on is a reviewed one-line change instead of a new
+# third-party dependency introduced on ship day.
+#
+# WHY IT CANNOT RUN. Three independent reasons, any one of which is sufficient:
+#
+#   1. The only job carries `if: false`. GitHub evaluates that before any step,
+#      so no step — including `actions/checkout` — ever executes.
+#   2. The only trigger is `workflow_dispatch`. There is no `pull_request`, no
+#      `issue_comment`, no `push` and no `schedule`, so nothing in the normal
+#      life of the repository starts it; a human must ask, and the ask still
+#      hits (1).
+#   3. `secrets.CLA_SIGNATURES_TOKEN` and the signatures store it addresses do
+#      not exist yet. They are the owner's to create with the mechanism.
+#
+# It is therefore NOT a required status check (docs/runbooks/ci-branch-protection.md
+# §1 — the job name deliberately does not contain the word "blocking", so the
+# required-check consistency test does not demand a home for it in that runbook's
+# tables), and it must never be added to `release-gate.yml`.
+#
+# TO ENABLE (owner, after counsel): see the table at the end of CLA.md. In
+# short — put the approved text in CLA.md, record the mechanism in
+# CONTRIBUTING.md §1 (which removes the CLA-PROCESS-TBD release blocker),
+# create the signatures repository and its token, RE-REVIEW AND RE-PIN the
+# action SHA below against its then-current release, add a `pull_request_target`
+# / `issue_comment` trigger, and delete the `if: false`.
+
+on:
+  # Manual only, and inert even then — see reason (2) above. Present because a
+  # workflow needs an `on:` block to be a valid workflow at all.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cla-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cla:
+    name: CLA signature check (disabled — pending counsel)
+    runs-on: ubuntu-latest
+    # enable when counsel-approved CLA.md lands
+    #
+    # DO NOT REMOVE before then. While CLA.md is a placeholder there is nothing
+    # to sign, so a signature check could only ever record agreement to an empty
+    # document.
+    if: false
+    permissions:
+      # Scoped for what the action needs when it is enabled: it writes the
+      # signature file to a store repository, comments on the pull request and
+      # reports a commit status. Inert while `if: false` stands.
+      contents: write
+      pull-requests: write
+      statuses: write
+      actions: write
+    steps:
+      # contributor-assistant/github-action v2.6.1 — the commit that release
+      # points at, verified 2026-09-05 against
+      # https://api.github.com/repos/contributor-assistant/github-action/tags
+      # (v2.6.1 -> ca4a40a7d1004f18d9960b404b97e5f30a505a08, the latest release,
+      # published 2024-09-26). Pinned by full SHA like every other third-party
+      # action in this directory; Renovate's `helpers:pinGitHubActionDigests`
+      # keeps that shape.
+      #
+      # TODO(counsel): re-review this action and re-pin it to the then-current
+      # reviewed SHA before the `if: false` above is removed. A pin reviewed for
+      # a disabled job is not a pin reviewed for one that can comment on pull
+      # requests and write to a signature store.
+      - name: CLA assistant
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # TODO(owner): this secret does not exist. Create it with the
+          # signatures store when the mechanism is chosen (CLA.md, step 5).
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_SIGNATURES_TOKEN }}
+        with:
+          # TODO(counsel): every value below is provisional and must be settled
+          # with the approved text — in particular the wording a contributor is
+          # asked to type, which is part of the agreement, not of the plumbing.
+          path-to-document: https://github.com/RaoRakurty/NetOps_Observability/blob/main/CLA.md
+          path-to-signatures: signatures/version1/cla.json
+          branch: main
+          allowlist: dependabot[bot],renovate[bot]

@@ -1,0 +1,24 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildRcaCase — security evidence is its own independent source class > security evidence rows are stable (snapshot) 1`] = `
+[
+  {
+    "chips": [
+      "Seam: ISP (seam-7)",
+      "Internet-facing",
+      "Observed by vuln",
+    ],
+    "desc": "reachable service / advisory exposure on the asset",
+    "dot": "purple",
+    "fidelity": "doc_claimed",
+    "finding": "1 observation used.",
+    "foot": "Independent of the network classes — a rule verdict, not a wire measurement",
+    "pill": {
+      "text": "Used",
+      "tone": "green",
+    },
+    "title": "Exposure",
+    "variant": "confirm",
+  },
+]
+`;

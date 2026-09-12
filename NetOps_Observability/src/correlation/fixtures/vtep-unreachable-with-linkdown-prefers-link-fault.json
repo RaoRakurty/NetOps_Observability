@@ -1,0 +1,16 @@
+{
+  "name": "VTEP down WITH a coincident link-down on the source interface: a link fault dragging the VTEP — prefer local-link-fault",
+  "comment": "P3 discriminator: a VTEP going unreachable WITH a concurrent link_state_change is a symptom of the link fault. The vtep-unreachable discriminator fires (link_state_change present) and defers to sig.ent.access.local-link-fault, which fully covers (link + interface anomaly on the same port) and wins.",
+  "signals": [
+    {"kind": "vtep_state_change", "entity_type": "device", "entity_id": "leaf3",
+     "observer_id": "syslog-leaf3", "observer_type": "device",
+     "modality": "control_plane", "collection_path": "direct", "deviation": 0.0},
+    {"kind": "link_state_change", "entity_type": "interface", "entity_id": "leaf3:Ethernet1",
+     "observer_id": "syslog-leaf3", "observer_type": "device",
+     "modality": "control_plane", "collection_path": "direct", "deviation": 0.0},
+    {"kind": "if_metric_anomaly", "entity_type": "interface", "entity_id": "leaf3:Ethernet1",
+     "observer_id": "snmp-leaf3", "observer_type": "device",
+     "modality": "device_telemetry", "collection_path": "direct", "deviation": 5.0}
+  ],
+  "expect": {"top": "sig.ent.access.local-link-fault", "tier": "confirmed", "owner": "netops"}
+}

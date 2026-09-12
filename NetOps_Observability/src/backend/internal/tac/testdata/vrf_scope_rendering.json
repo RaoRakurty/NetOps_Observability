@@ -1,0 +1,544 @@
+{
+  "note": "REVIEWED golden: the rendering of every TAC plan command carrying {vrf-scope} or {vrf-name}, with a VRF and without one. Captured after tracker row 261 removed the doubled scoping keyword from the templates; the retired golden (testdata/vrf_scope_parity.json) pinned that defect, including four PAN-OS rows re-rendered by row 248. Re-capture ONLY with a reviewed data change: every scoped line here is a command that will be typed at someone's device.",
+  "rows": [
+    {
+      "dialect": "arista-eos",
+      "intent": "bgp.vrf.routes",
+      "template": "show ip bgp {vrf-scope}",
+      "scoped": "show ip bgp vrf CUST-A",
+      "unscoped": "show ip bgp"
+    },
+    {
+      "dialect": "arista-eos",
+      "intent": "ospf.database.summary",
+      "template": "show ip ospf {vrf-scope} {area} database database-summary",
+      "scoped": "show ip ospf vrf CUST-A 0 database database-summary",
+      "unscoped": "show ip ospf 0 database database-summary"
+    },
+    {
+      "dialect": "cisco-iosxe",
+      "intent": "bgp.vpnv4.prefix_in_vrf",
+      "template": "show ip bgp vpnv4 {vrf-scope} {prefix}",
+      "scoped": "show ip bgp vpnv4 vrf CUST-A 10.0.0.0/24",
+      "unscoped": "show ip bgp vpnv4 10.0.0.0/24"
+    },
+    {
+      "dialect": "cisco-iosxe",
+      "intent": "vrf.cef.label_stack",
+      "template": "show ip cef {vrf-scope} detail",
+      "scoped": "show ip cef vrf CUST-A detail",
+      "unscoped": "show ip cef detail"
+    },
+    {
+      "dialect": "cisco-iosxe",
+      "intent": "vrf.path",
+      "template": "traceroute {vrf-scope} {prefix}",
+      "scoped": "traceroute vrf CUST-A 10.0.0.0/24",
+      "unscoped": "traceroute 10.0.0.0/24"
+    },
+    {
+      "dialect": "cisco-iosxe",
+      "intent": "vrf.rd_and_route_targets",
+      "template": "show ip vrf detail {vrf-name}",
+      "scoped": "show ip vrf detail CUST-A",
+      "unscoped": "show ip vrf detail"
+    },
+    {
+      "dialect": "cisco-iosxe",
+      "intent": "vrf.reachability",
+      "template": "ping {vrf-scope} {prefix}",
+      "scoped": "ping vrf CUST-A 10.0.0.0/24",
+      "unscoped": "ping 10.0.0.0/24"
+    },
+    {
+      "dialect": "cisco-iosxe",
+      "intent": "vrf.rib.lookup",
+      "template": "show ip route {vrf-scope} {prefix}",
+      "scoped": "show ip route vrf CUST-A 10.0.0.0/24",
+      "unscoped": "show ip route 10.0.0.0/24"
+    },
+    {
+      "dialect": "cisco-iosxr",
+      "intent": "bgp.vrf.prefix.entry",
+      "template": "show bgp {vrf-scope} ipv4 unicast {prefix}",
+      "scoped": "show bgp vrf CUST-A ipv4 unicast 10.0.0.0/24",
+      "unscoped": "show bgp ipv4 unicast 10.0.0.0/24"
+    },
+    {
+      "dialect": "cisco-iosxr",
+      "intent": "bgp.vrf.table",
+      "template": "show bgp {vrf-scope} ipv4 unicast",
+      "scoped": "show bgp vrf CUST-A ipv4 unicast",
+      "unscoped": "show bgp ipv4 unicast"
+    },
+    {
+      "dialect": "cisco-iosxr",
+      "intent": "fib.vrf.lookup",
+      "template": "show cef {vrf-scope} ipv4 {prefix} detail",
+      "scoped": "show cef vrf CUST-A ipv4 10.0.0.0/24 detail",
+      "unscoped": "show cef ipv4 10.0.0.0/24 detail"
+    },
+    {
+      "dialect": "cisco-iosxr",
+      "intent": "mpls.vrf.forwarding",
+      "template": "show mpls forwarding {vrf-scope}",
+      "scoped": "show mpls forwarding vrf CUST-A",
+      "unscoped": "show mpls forwarding"
+    },
+    {
+      "dialect": "cisco-iosxr",
+      "intent": "rib.vrf.lookup",
+      "template": "show route {vrf-scope} ipv4 unicast {prefix}",
+      "scoped": "show route vrf CUST-A ipv4 unicast 10.0.0.0/24",
+      "unscoped": "show route ipv4 unicast 10.0.0.0/24"
+    },
+    {
+      "dialect": "cisco-nxos",
+      "intent": "bgp.summary.vrf",
+      "template": "show bgp all summary {vrf-scope}",
+      "scoped": "show bgp all summary vrf CUST-A",
+      "unscoped": "show bgp all summary"
+    },
+    {
+      "dialect": "cisco-nxos",
+      "intent": "bgp.vrf.table",
+      "template": "show bgp {vrf-scope} ipv4 unicast",
+      "scoped": "show bgp vrf CUST-A ipv4 unicast",
+      "unscoped": "show bgp ipv4 unicast"
+    },
+    {
+      "dialect": "cisco-nxos",
+      "intent": "eigrp.accounting",
+      "template": "show ip eigrp accounting {vrf-scope}",
+      "scoped": "show ip eigrp accounting vrf CUST-A",
+      "unscoped": "show ip eigrp accounting"
+    },
+    {
+      "dialect": "cisco-nxos",
+      "intent": "eigrp.traffic.counters",
+      "template": "show ip eigrp traffic {vrf-scope}",
+      "scoped": "show ip eigrp traffic vrf CUST-A",
+      "unscoped": "show ip eigrp traffic"
+    },
+    {
+      "dialect": "cisco-nxos",
+      "intent": "evpn.vtep.route",
+      "template": "show bgp l2vpn evpn {prefix} {vrf-scope}",
+      "scoped": "show bgp l2vpn evpn 10.0.0.0/24 vrf CUST-A",
+      "unscoped": "show bgp l2vpn evpn 10.0.0.0/24"
+    },
+    {
+      "dialect": "cisco-nxos",
+      "intent": "fib.inconsistency",
+      "template": "show forwarding ipv4 unicast inconsistency {vrf-scope} module all",
+      "scoped": "show forwarding ipv4 unicast inconsistency vrf CUST-A module all",
+      "unscoped": "show forwarding ipv4 unicast inconsistency module all"
+    },
+    {
+      "dialect": "cisco-nxos",
+      "intent": "ospf.process",
+      "template": "show ip ospf {vrf-scope}",
+      "scoped": "show ip ospf vrf CUST-A",
+      "unscoped": "show ip ospf"
+    },
+    {
+      "dialect": "cisco-nxos",
+      "intent": "pim.grouprange",
+      "template": "show ip pim group-range {vrf-scope}",
+      "scoped": "show ip pim group-range vrf CUST-A",
+      "unscoped": "show ip pim group-range"
+    },
+    {
+      "dialect": "cisco-nxos",
+      "intent": "rib.adjacency.detail",
+      "template": "show ip adjacency {prefix} detail {vrf-scope}",
+      "scoped": "show ip adjacency 10.0.0.0/24 detail vrf CUST-A",
+      "unscoped": "show ip adjacency 10.0.0.0/24 detail"
+    },
+    {
+      "dialect": "cisco-nxos",
+      "intent": "underlay.bgp.advertised",
+      "template": "show ip bgp {prefix} {vrf-scope}",
+      "scoped": "show ip bgp 10.0.0.0/24 vrf CUST-A",
+      "unscoped": "show ip bgp 10.0.0.0/24"
+    },
+    {
+      "dialect": "cisco-nxos",
+      "intent": "underlay.route.remote_vtep",
+      "template": "show ip route {prefix} {vrf-scope}",
+      "scoped": "show ip route 10.0.0.0/24 vrf CUST-A",
+      "unscoped": "show ip route 10.0.0.0/24"
+    },
+    {
+      "dialect": "huawei-vrp",
+      "intent": "bgp.route.vrf",
+      "template": "display bgp vpnv4 {vrf-scope} routing-table {prefix}",
+      "scoped": "display bgp vpnv4 vpn-instance CUST-A routing-table 10.0.0.0/24",
+      "unscoped": "display bgp vpnv4 routing-table 10.0.0.0/24"
+    },
+    {
+      "dialect": "huawei-vrp",
+      "intent": "config.vrf",
+      "template": "display current-configuration configuration {vrf-scope}",
+      "scoped": "display current-configuration configuration vpn-instance CUST-A",
+      "unscoped": "display current-configuration configuration"
+    },
+    {
+      "dialect": "huawei-vrp",
+      "intent": "evpn.routes.filtered",
+      "template": "display bgp instance {vrf-name} evpn all routing-table | include {prefix}",
+      "scoped": "display bgp instance CUST-A evpn all routing-table | include 10.0.0.0/24",
+      "unscoped": "display bgp instance evpn all routing-table | include 10.0.0.0/24"
+    },
+    {
+      "dialect": "huawei-vrp",
+      "intent": "route.prefix.vrf",
+      "template": "display ip routing-table {vrf-scope} {prefix}",
+      "scoped": "display ip routing-table vpn-instance CUST-A 10.0.0.0/24",
+      "unscoped": "display ip routing-table 10.0.0.0/24"
+    },
+    {
+      "dialect": "huawei-vrp",
+      "intent": "route.prefix.vrf.detail",
+      "template": "display ip routing-table {vrf-scope} {prefix} verbose",
+      "scoped": "display ip routing-table vpn-instance CUST-A 10.0.0.0/24 verbose",
+      "unscoped": "display ip routing-table 10.0.0.0/24 verbose"
+    },
+    {
+      "dialect": "huawei-vrp",
+      "intent": "route.table.vrf",
+      "template": "display ip routing-table {vrf-scope}",
+      "scoped": "display ip routing-table vpn-instance CUST-A",
+      "unscoped": "display ip routing-table"
+    },
+    {
+      "dialect": "juniper-junos",
+      "intent": "ospf.neighbors.instance",
+      "template": "show ospf neighbor {vrf-scope}",
+      "scoped": "show ospf neighbor instance CUST-A",
+      "unscoped": "show ospf neighbor"
+    },
+    {
+      "dialect": "juniper-junos",
+      "intent": "vrf.routes.extensive",
+      "template": "show route extensive table {vrf-name}",
+      "scoped": "show route extensive table CUST-A",
+      "unscoped": "show route extensive table"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "bgp.afi-safi.state",
+      "template": "info from state network-instance {vrf-scope} protocols bgp neighbor afi-safi",
+      "scoped": "info from state network-instance CUST-A protocols bgp neighbor afi-safi",
+      "unscoped": "info from state network-instance protocols bgp neighbor afi-safi"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "bgp.graceful-restart",
+      "template": "info from state network-instance {vrf-scope} protocols bgp graceful-restart",
+      "scoped": "info from state network-instance CUST-A protocols bgp graceful-restart",
+      "unscoped": "info from state network-instance protocols bgp graceful-restart"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "bgp.neighbor.advertised-routes",
+      "template": "show network-instance {vrf-scope} protocols bgp neighbor {peer} advertised-routes ipv4",
+      "scoped": "show network-instance CUST-A protocols bgp neighbor 10.1.1.1 advertised-routes ipv4",
+      "unscoped": "show network-instance protocols bgp neighbor 10.1.1.1 advertised-routes ipv4"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "bgp.neighbor.detail",
+      "template": "show network-instance {vrf-scope} protocols bgp neighbor {peer} detail",
+      "scoped": "show network-instance CUST-A protocols bgp neighbor 10.1.1.1 detail",
+      "unscoped": "show network-instance protocols bgp neighbor 10.1.1.1 detail"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "bgp.neighbor.received-routes",
+      "template": "show network-instance {vrf-scope} protocols bgp neighbor {peer} received-routes ipv4",
+      "scoped": "show network-instance CUST-A protocols bgp neighbor 10.1.1.1 received-routes ipv4",
+      "unscoped": "show network-instance protocols bgp neighbor 10.1.1.1 received-routes ipv4"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "bgp.neighbors",
+      "template": "show network-instance {vrf-scope} protocols bgp neighbor",
+      "scoped": "show network-instance CUST-A protocols bgp neighbor",
+      "unscoped": "show network-instance protocols bgp neighbor"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "bgp.rib.in-post",
+      "template": "info from state network-instance {vrf-scope} bgp-rib afi-safi ipv4-unicast ipv4-unicast rib-in-out rib-in-post route",
+      "scoped": "info from state network-instance CUST-A bgp-rib afi-safi ipv4-unicast ipv4-unicast rib-in-out rib-in-post route",
+      "unscoped": "info from state network-instance bgp-rib afi-safi ipv4-unicast ipv4-unicast rib-in-out rib-in-post route"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "bgp.rib.local",
+      "template": "info from state network-instance {vrf-scope} bgp-rib afi-safi ipv4-unicast ipv4-unicast local-rib route",
+      "scoped": "info from state network-instance CUST-A bgp-rib afi-safi ipv4-unicast ipv4-unicast local-rib route",
+      "unscoped": "info from state network-instance bgp-rib afi-safi ipv4-unicast ipv4-unicast local-rib route"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "bgp.routes.summary",
+      "template": "show network-instance {vrf-scope} protocols bgp routes ipv4 summary",
+      "scoped": "show network-instance CUST-A protocols bgp routes ipv4 summary",
+      "unscoped": "show network-instance protocols bgp routes ipv4 summary"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "bgp.statistics",
+      "template": "info from state network-instance {vrf-scope} protocols bgp statistics",
+      "scoped": "info from state network-instance CUST-A protocols bgp statistics",
+      "unscoped": "info from state network-instance protocols bgp statistics"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "bgp.summary",
+      "template": "show network-instance {vrf-scope} protocols bgp summary",
+      "scoped": "show network-instance CUST-A protocols bgp summary",
+      "unscoped": "show network-instance protocols bgp summary"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "evpn.neighbor.advertised",
+      "template": "show network-instance {vrf-scope} protocols bgp neighbor {peer} advertised-routes evpn",
+      "scoped": "show network-instance CUST-A protocols bgp neighbor 10.1.1.1 advertised-routes evpn",
+      "unscoped": "show network-instance protocols bgp neighbor 10.1.1.1 advertised-routes evpn"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "evpn.neighbor.received",
+      "template": "show network-instance {vrf-scope} protocols bgp neighbor {peer} received-routes evpn",
+      "scoped": "show network-instance CUST-A protocols bgp neighbor 10.1.1.1 received-routes evpn",
+      "unscoped": "show network-instance protocols bgp neighbor 10.1.1.1 received-routes evpn"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "evpn.route-type2.summary",
+      "template": "show network-instance {vrf-scope} protocols bgp routes evpn route-type 2 summary",
+      "scoped": "show network-instance CUST-A protocols bgp routes evpn route-type 2 summary",
+      "unscoped": "show network-instance protocols bgp routes evpn route-type 2 summary"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "evpn.route-type3.detail",
+      "template": "show network-instance {vrf-scope} protocols bgp routes evpn route-type 3 detail",
+      "scoped": "show network-instance CUST-A protocols bgp routes evpn route-type 3 detail",
+      "unscoped": "show network-instance protocols bgp routes evpn route-type 3 detail"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "evpn.route-type3.summary",
+      "template": "show network-instance {vrf-scope} protocols bgp routes evpn route-type 3 summary",
+      "scoped": "show network-instance CUST-A protocols bgp routes evpn route-type 3 summary",
+      "unscoped": "show network-instance protocols bgp routes evpn route-type 3 summary"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "evpn.route-type5.detail",
+      "template": "show network-instance {vrf-scope} protocols bgp routes evpn route-type 5 prefix {prefix} detail",
+      "scoped": "show network-instance CUST-A protocols bgp routes evpn route-type 5 prefix 10.0.0.0/24 detail",
+      "unscoped": "show network-instance protocols bgp routes evpn route-type 5 prefix 10.0.0.0/24 detail"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "evpn.route-type5.summary",
+      "template": "show network-instance {vrf-scope} protocols bgp routes evpn route-type 5 summary",
+      "scoped": "show network-instance CUST-A protocols bgp routes evpn route-type 5 summary",
+      "unscoped": "show network-instance protocols bgp routes evpn route-type 5 summary"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "evpn.routes.summary",
+      "template": "show network-instance {vrf-scope} protocols bgp routes evpn route-type summary",
+      "scoped": "show network-instance CUST-A protocols bgp routes evpn route-type summary",
+      "unscoped": "show network-instance protocols bgp routes evpn route-type summary"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "isis.adjacency",
+      "template": "show network-instance {vrf-scope} protocols isis adjacency",
+      "scoped": "show network-instance CUST-A protocols isis adjacency",
+      "unscoped": "show network-instance protocols isis adjacency"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "isis.database",
+      "template": "show network-instance {vrf-scope} protocols isis database",
+      "scoped": "show network-instance CUST-A protocols isis database",
+      "unscoped": "show network-instance protocols isis database"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "isis.instance.state",
+      "template": "info from state network-instance {vrf-scope} protocols isis instance",
+      "scoped": "info from state network-instance CUST-A protocols isis instance",
+      "unscoped": "info from state network-instance protocols isis instance"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "isis.interface.detail",
+      "template": "show network-instance {vrf-scope} protocols isis interface {if} detail",
+      "scoped": "show network-instance CUST-A protocols isis interface Ethernet1/1 detail",
+      "unscoped": "show network-instance protocols isis interface Ethernet1/1 detail"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "isis.interfaces",
+      "template": "show network-instance {vrf-scope} protocols isis interface",
+      "scoped": "show network-instance CUST-A protocols isis interface",
+      "unscoped": "show network-instance protocols isis interface"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "isis.summary",
+      "template": "show network-instance {vrf-scope} protocols isis summary",
+      "scoped": "show network-instance CUST-A protocols isis summary",
+      "unscoped": "show network-instance protocols isis summary"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "mpls.aft",
+      "template": "show mpls-aft network-instance {vrf-scope}",
+      "scoped": "show mpls-aft network-instance CUST-A",
+      "unscoped": "show mpls-aft network-instance"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "mpls.ldp.fec",
+      "template": "show network-instance {vrf-scope} protocols ldp ipv4 fec",
+      "scoped": "show network-instance CUST-A protocols ldp ipv4 fec",
+      "unscoped": "show network-instance protocols ldp ipv4 fec"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "mpls.ldp.neighbors",
+      "template": "show network-instance {vrf-scope} protocols ldp neighbor",
+      "scoped": "show network-instance CUST-A protocols ldp neighbor",
+      "unscoped": "show network-instance protocols ldp neighbor"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "mpls.ldp.sessions",
+      "template": "show network-instance {vrf-scope} protocols ldp session",
+      "scoped": "show network-instance CUST-A protocols ldp session",
+      "unscoped": "show network-instance protocols ldp session"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "mpls.route-table",
+      "template": "show network-instance {vrf-scope} route-table mpls",
+      "scoped": "show network-instance CUST-A route-table mpls",
+      "unscoped": "show network-instance route-table mpls"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "ospf.database",
+      "template": "show network-instance {vrf-scope} protocols ospf database",
+      "scoped": "show network-instance CUST-A protocols ospf database",
+      "unscoped": "show network-instance protocols ospf database"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "ospf.neighbors",
+      "template": "show network-instance {vrf-scope} protocols ospf neighbor",
+      "scoped": "show network-instance CUST-A protocols ospf neighbor",
+      "unscoped": "show network-instance protocols ospf neighbor"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "ospf.statistics",
+      "template": "show network-instance {vrf-scope} protocols ospf statistics",
+      "scoped": "show network-instance CUST-A protocols ospf statistics",
+      "unscoped": "show network-instance protocols ospf statistics"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "ospf.status",
+      "template": "show network-instance {vrf-scope} protocols ospf status",
+      "scoped": "show network-instance CUST-A protocols ospf status",
+      "unscoped": "show network-instance protocols ospf status"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "route.prefix",
+      "template": "show network-instance {vrf-scope} route-table ipv4-unicast prefix {prefix} detail",
+      "scoped": "show network-instance CUST-A route-table ipv4-unicast prefix 10.0.0.0/24 detail",
+      "unscoped": "show network-instance route-table ipv4-unicast prefix 10.0.0.0/24 detail"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "route.table",
+      "template": "show network-instance {vrf-scope} route-table",
+      "scoped": "show network-instance CUST-A route-table",
+      "unscoped": "show network-instance route-table"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "route.table.ipv4",
+      "template": "show network-instance {vrf-scope} ipv4 route",
+      "scoped": "show network-instance CUST-A ipv4 route",
+      "unscoped": "show network-instance ipv4 route"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "route.table.summary",
+      "template": "show network-instance {vrf-scope} route-table summary",
+      "scoped": "show network-instance CUST-A route-table summary",
+      "unscoped": "show network-instance route-table summary"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "tunnel.table",
+      "template": "show network-instance {vrf-scope} tunnel-table all",
+      "scoped": "show network-instance CUST-A tunnel-table all",
+      "unscoped": "show network-instance tunnel-table all"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "vrf.config",
+      "template": "info with-context network-instance {vrf-scope}",
+      "scoped": "info with-context network-instance CUST-A",
+      "unscoped": "info with-context network-instance"
+    },
+    {
+      "dialect": "nokia-srlinux",
+      "intent": "vrf.interfaces",
+      "template": "show network-instance {vrf-scope} interfaces",
+      "scoped": "show network-instance CUST-A interfaces",
+      "unscoped": "show network-instance interfaces"
+    },
+    {
+      "dialect": "paloalto-panos",
+      "intent": "bgp.peer.detail",
+      "template": "show advanced-routing bgp peer status peer-name {peer} logical-router {vrf-scope}",
+      "scoped": "show advanced-routing bgp peer status peer-name 10.1.1.1 logical-router CUST-A",
+      "unscoped": "show advanced-routing bgp peer status peer-name 10.1.1.1 logical-router"
+    },
+    {
+      "dialect": "paloalto-panos",
+      "intent": "bgp.summary",
+      "template": "show advanced-routing bgp summary logical-router {vrf-scope}",
+      "scoped": "show advanced-routing bgp summary logical-router CUST-A",
+      "unscoped": "show advanced-routing bgp summary logical-router"
+    },
+    {
+      "dialect": "paloalto-panos",
+      "intent": "route.fib.lookup",
+      "template": "show routing fib virtual-router {vrf-scope} | match {prefix}",
+      "scoped": "show routing fib virtual-router CUST-A | match 10.0.0.0/24",
+      "unscoped": "show routing fib virtual-router | match 10.0.0.0/24"
+    },
+    {
+      "dialect": "paloalto-panos",
+      "intent": "route.logicalrouter",
+      "template": "show advanced-routing logical-router {vrf-scope}",
+      "scoped": "show advanced-routing logical-router CUST-A",
+      "unscoped": "show advanced-routing logical-router"
+    }
+  ]
+}

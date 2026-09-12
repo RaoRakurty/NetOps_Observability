@@ -1,0 +1,7 @@
+{
+  "Cisco-IOS-XE-wireless-client-oper:common-oper-data": [
+    { "client-mac": "02:00:5e:00:53:01", "ap-name": "AP-Floor1-East", "co-state": "client-status-run" },
+    { "client-mac": "0a:11:22:33:44:55", "ap-name": "AP-Floor1-East", "co-state": "client-status-run" },
+    { "client-mac": "0a:11:22:33:44:66", "ap-name": "AP-Floor1-West", "co-state": "client-status-associating" }
+  ]
+}

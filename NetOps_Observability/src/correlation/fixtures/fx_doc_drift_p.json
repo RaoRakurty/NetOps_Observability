@@ -1,0 +1,39 @@
+{
+  "name": "fx_doc_drift_p \u2014 patchpanel-label-drift",
+  "signals": [
+    {
+      "kind": "label_record_conflict",
+      "entity_type": "device",
+      "entity_id": "spine1:Et9",
+      "observer_id": "syslog-spine1",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 2.0
+    },
+    {
+      "kind": "lldp_neighbor_mismatch",
+      "entity_type": "device",
+      "entity_id": "spine1:Et9",
+      "observer_id": "syslog-spine1",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 2.0
+    },
+    {
+      "kind": "circuit_id_conflict",
+      "entity_type": "device",
+      "entity_id": "spine1:Et9",
+      "observer_id": "syslog-spine1",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 2.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.patchpanel-label-drift",
+    "tier": "suspected"
+  }
+}

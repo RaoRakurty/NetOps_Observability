@@ -1,0 +1,40 @@
+{
+  "name": "Overlay SLA degradation corroborated by path probe: confirmed tunnel degradation",
+  "signals": [
+    {
+      "kind": "tunnel_degraded",
+      "entity_type": "path",
+      "entity_id": "br17-tun1",
+      "observer_id": "syslog-br17-edge",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "probe_rtt_anomaly",
+      "entity_type": "service",
+      "entity_id": "br17->dc",
+      "observer_id": "probe-agent-br17",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 4.0
+    },
+    {
+      "kind": "path_change",
+      "entity_type": "path",
+      "entity_id": "br17-tun1",
+      "observer_id": "syslog-br17-edge",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 0.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.wan-edge.sdwan-tunnel-degraded",
+    "tier": "confirmed",
+    "owner": "sdwan_vendor"
+  }
+}

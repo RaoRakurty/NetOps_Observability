@@ -1,0 +1,26 @@
+Correlix Enterprise License
+SPDX-License-Identifier: LicenseRef-Correlix-Enterprise
+
+THIS DIRECTORY IS NOT APACHE-2.0.
+
+Every file in src/backend/enterprise/dialects is a COMMERCIAL ADD-ON MODULE of
+Correlix. It implements the `security_dialects` entitlement — device-hardening
+dialects beyond the core one (Juniper Junos, Nokia SR OS, Arista EOS and Nokia
+SR Linux) — which the owner has placed in the Enterprise tier.
+
+The rest of Correlix is Apache-2.0. The hardening rule catalogue, the engine,
+the benchmark provenance, the seam-aware exposure evaluator and the CORE Cisco
+IOS-XE dialect are core (src/backend/internal/hardening) and are unaffected by
+this notice. With this directory deleted the engine still runs: it assesses
+the core dialect and reports every other platform as NotApplicable, never a
+false Pass.
+
+  Full terms      : LICENSES/Correlix-Enterprise.txt at the repository root
+  Directory map   : LICENSING.md
+  Which tier      : docs/design/TIERING_PLAN_2026-09-03.md
+  Why the split   : docs/design/LICENSING_MODEL_2026-09-04.md
+
+NOTE (2026-09-04): the Correlix Enterprise License text has not been drafted
+yet. Until it exists, the identifier above resolves to no terms, no licence is
+granted over this directory, and all rights are reserved to Correlix. The
+release gate refuses to ship in this state.

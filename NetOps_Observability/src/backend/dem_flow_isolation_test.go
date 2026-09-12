@@ -1,0 +1,308 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+package backend
+
+// Cross-tenant isolation for the DEM passive-flow lane (§3a.5, tracker 252).
+//
+// This path adds NO route: it is a read the existing /api/dem/overview and
+// /api/dem/data-health handlers make on the caller's behalf, so the ledger and
+// the OpenAPI document are unchanged and the thing that needs pinning is the
+// QUERY. It reads netops.flows, whose row policy is HYBRID — untagged rows are
+// shared into every tenant scope — so the app-layer address clause is the only
+// isolation untagged telemetry has, exactly as for /api/flows/apps.
+//
+// The contract these tests pin, in the order the code enforces it:
+//
+//	1. no principal on the context           → refused, no query at all
+//	2. the caller's scope ≠ the tenant asked  → refused, no query at all
+//	3. a scoped principal with no devices     → nothing, and no query
+//	4. a scoped principal                     → its OWN device addresses only,
+//	                                            plus its declared endpoints, at
+//	                                            its own tenant_scope
+//	5. attribution                            → a flow aggregate lands only on a
+//	                                            subject that declared it
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"netops/backend/internal/dem/experience"
+	"netops/backend/internal/discovery"
+	"netops/backend/models"
+)
+
+func demFlowSubjects() []experience.FlowSubject {
+	return []experience.FlowSubject{{
+		Subject: "checkout@dc1", App: "checkout", Site: "dc1",
+		Endpoints: []experience.FlowEndpoint{{Addr: "10.1.0.1", Port: 443}},
+	}}
+}
+
+func demFlowCtx(claims jwtClaims) context.Context {
+	return context.WithValue(context.Background(), userCtxKey, claims)
+}
+
+func TestDEMFlowQuerierRefusesAReadWithNoPrincipal(t *testing.T) {
+	queries := fakeCH(t)
+	q := demFlowQuerier{s: flowsTestServer(t)}
+	_, err := q.FlowStats(context.Background(), "acme", demFlowSubjects(),
+		time.Unix(1000, 0), time.Unix(2000, 0))
+	if err == nil {
+		t.Fatal("a read with no principal was allowed; it cannot be scoped, so it must be refused")
+	}
+	if len(*queries) != 0 {
+		t.Fatalf("an unscoped read still reached ClickHouse: %v", *queries)
+	}
+}
+
+func TestDEMFlowQuerierRefusesATenantItWasNotScopedTo(t *testing.T) {
+	queries := fakeCH(t)
+	q := demFlowQuerier{s: flowsTestServer(t)}
+	_, err := q.FlowStats(demFlowCtx(acme()), "globex", demFlowSubjects(),
+		time.Unix(1000, 0), time.Unix(2000, 0))
+	if err == nil {
+		t.Fatal("acme's principal read globex's wire")
+	}
+	if len(*queries) != 0 {
+		t.Fatalf("a mismatched read still reached ClickHouse: %v", *queries)
+	}
+}
+
+func TestDEMFlowQuerierIsDefaultClosedWithoutDevices(t *testing.T) {
+	queries := fakeCH(t)
+	// A tenant that owns no device sees no untagged flow, and asks nothing.
+	s := &server{discovery: discovery.NewDiscoveryAggregator()}
+	s.discovery.Upsert(models.Device{ID: "globex-core", Name: "globex-core", Address: "10.2.0.1", TenantID: "globex"})
+	q := demFlowQuerier{s: s}
+	got, err := q.FlowStats(demFlowCtx(acme()), "acme", demFlowSubjects(),
+		time.Unix(1000, 0), time.Unix(2000, 0))
+	if err != nil {
+		t.Fatalf("a deviceless tenant produced an error rather than an empty answer: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("a deviceless tenant saw flow aggregates: %+v", got)
+	}
+	if len(*queries) != 0 {
+		t.Fatalf("a deviceless tenant still reached ClickHouse: %v", *queries)
+	}
+}
+
+func TestDEMFlowQuerierScopesTheQueryToItsOwnAddresses(t *testing.T) {
+	queries := fakeCH(t)
+	q := demFlowQuerier{s: flowsTestServer(t)}
+	if _, err := q.FlowStats(demFlowCtx(acme()), "acme", demFlowSubjects(),
+		time.Unix(1000, 0), time.Unix(2000, 0)); err != nil {
+		t.Fatalf("FlowStats: %v", err)
+	}
+	if len(*queries) != 1 {
+		t.Fatalf("want exactly 1 ClickHouse query, got %d: %v", len(*queries), *queries)
+	}
+	sql := (*queries)[0]
+	for _, want := range []string{
+		"FROM netops.flows",
+		"'10.1.0.1'", // the declared endpoint
+		"AND (src_addr IN ('10.1.0.1') OR dst_addr IN ('10.1.0.1'))", // acme's own device
+		"toDateTime(1000)", "toDateTime(2000)",
+		"FORMAT JSON",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("the flow read is missing %q:\n%s", want, sql)
+		}
+	}
+	// Never another tenant's address, and never the untagged device's.
+	for _, forbidden := range []string{"10.2.0.1", "10.9.0.1"} {
+		if strings.Contains(sql, forbidden) {
+			t.Errorf("acme's flow read reached %s:\n%s", forbidden, sql)
+		}
+	}
+	// Aggregate counters only — no raw conversation ever leaves ClickHouse.
+	if strings.Contains(sql, "SELECT *") {
+		t.Errorf("the flow read is not an aggregate:\n%s", sql)
+	}
+	// THE SEAM BETWEEN THIS QUERY AND foldDEMFlowRows. The fold reads `ep_addr`
+	// and `ep_port` as two columns; TestFoldDEMFlowRowsFoldsIPv6Endpoints proves
+	// it folds IPv6 — but it does so over rows the test itself writes, so on its
+	// own it cannot tell a query that projects two columns from one that
+	// rebuilds the "addr:port" string the IPv6 bug came from. Assert the
+	// projection here, where the real statement is.
+	for _, want := range []string{"AS ep_addr", "AS ep_port", "GROUP BY ep_addr, ep_port"} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("the flow read does not project the endpoint as two columns (missing %q):\n%s", want, sql)
+		}
+	}
+	if strings.Contains(sql, "concat(") {
+		t.Errorf("the flow read rebuilds a composite endpoint key; an IPv6 address is full of colons "+
+			"and the split it forces is what dropped every IPv6 subject's evidence:\n%s", sql)
+	}
+}
+
+func TestDEMFlowQuerierAsksNothingWithNoSubjects(t *testing.T) {
+	queries := fakeCH(t)
+	q := demFlowQuerier{s: flowsTestServer(t)}
+	got, err := q.FlowStats(demFlowCtx(acme()), "acme", nil, time.Unix(1000, 0), time.Unix(2000, 0))
+	if err != nil || len(got) != 0 || len(*queries) != 0 {
+		t.Fatalf("a subjectless read did something: err=%v rows=%+v queries=%v", err, got, *queries)
+	}
+}
+
+// foldDEMFlowRows is the attribution step: a (server endpoint, exporter)
+// aggregate belongs to the subject that DECLARED that endpoint, and to no other.
+func TestFoldDEMFlowRowsAttributesOnlyDeclaredEndpoints(t *testing.T) {
+	subjects := []experience.FlowSubject{
+		{Subject: "checkout@dc1", App: "checkout", Site: "dc1",
+			Endpoints: []experience.FlowEndpoint{{Addr: "10.1.0.1", Port: 443}}},
+		{Subject: "dns@dc1", App: "dns", Site: "dc1",
+			Endpoints: []experience.FlowEndpoint{{Addr: "10.1.0.9"}}}, // any port
+	}
+	rows := []map[string]any{
+		{"ep_addr": "10.1.0.1", "ep_port": float64(443), "exporter": "10.0.0.7", "flows": float64(100), "tcp_flows": float64(90),
+			"flag_flows": float64(80), "reset_flows": float64(8), "bytes": "5000", "packets": "60",
+			"first_seen": float64(1000), "last_seen": float64(1900)},
+		{"ep_addr": "10.1.0.1", "ep_port": float64(443), "exporter": "10.0.0.8", "flows": float64(20), "tcp_flows": float64(20),
+			"flag_flows": float64(20), "reset_flows": float64(2), "bytes": "500", "packets": "6",
+			"first_seen": float64(900), "last_seen": float64(1800)},
+		// A different port on the same address: the checkout subject declared
+		// 443 and must NOT absorb it.
+		{"ep_addr": "10.1.0.1", "ep_port": float64(9200), "exporter": "10.0.0.7", "flows": float64(70), "tcp_flows": float64(70),
+			"flag_flows": float64(70), "reset_flows": float64(70), "bytes": "1", "packets": "1",
+			"first_seen": float64(1000), "last_seen": float64(1000)},
+		// The port-agnostic subject takes any port on its address.
+		{"ep_addr": "10.1.0.9", "ep_port": float64(53), "exporter": "10.0.0.7", "flows": float64(5), "tcp_flows": float64(0),
+			"flag_flows": float64(0), "reset_flows": float64(0), "bytes": "9", "packets": "5",
+			"first_seen": float64(1100), "last_seen": float64(1100)},
+		// Nobody declared this.
+		{"ep_addr": "10.9.9.9", "ep_port": float64(443), "exporter": "10.0.0.7", "flows": float64(999)},
+	}
+
+	got, unreadable := foldDEMFlowRows(subjects, rows)
+	if unreadable != 0 {
+		t.Fatalf("%d well-formed rows were counted unreadable", unreadable)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected the two declared subjects, got %d: %+v", len(got), got)
+	}
+	checkout := got[0]
+	if checkout.Subject != "checkout@dc1" {
+		t.Fatalf("results are not sorted by subject: %+v", got)
+	}
+	if checkout.Flows != 120 || checkout.TCPFlows != 110 || checkout.FlagBearingFlows != 100 || checkout.ResetFlows != 10 {
+		t.Fatalf("the declared (address, port) counters were not summed correctly: %+v", checkout)
+	}
+	if checkout.Bytes != 5500 || checkout.Packets != 66 {
+		t.Fatalf("string-typed 64-bit counters were not read: %+v", checkout)
+	}
+	if len(checkout.Exporters) != 2 || checkout.Exporters[0] != "10.0.0.7" {
+		t.Fatalf("the observers were not collected in order: %+v", checkout.Exporters)
+	}
+	if checkout.FirstSeen != time.Unix(900, 0).UTC() || checkout.LastSeen != time.Unix(1900, 0).UTC() {
+		t.Fatalf("the observed span is wrong: %v .. %v", checkout.FirstSeen, checkout.LastSeen)
+	}
+	if got[1].Subject != "dns@dc1" || got[1].Flows != 5 {
+		t.Fatalf("a port-agnostic subject did not take its address's traffic: %+v", got[1])
+	}
+	// And the whole point: an ungraded aggregate produces no evidence.
+	if r := got[1].ResetRatio(); r.Measured {
+		t.Fatalf("a subject with no TCP flows was graded: %+v", r)
+	}
+}
+
+// An IPv6 subject's flow evidence must be FOLDED, not dropped. The endpoint used
+// to be one "addr:port" string split on the FIRST colon, so every IPv6 address
+// failed the port parse and every IPv6 subject's evidence vanished with no
+// counter and no log. The passive-flow anchor then never fired for IPv6.
+func TestFoldDEMFlowRowsFoldsIPv6Endpoints(t *testing.T) {
+	subjects := []experience.FlowSubject{
+		{Subject: "api@dc1", App: "api", Site: "dc1",
+			Endpoints: []experience.FlowEndpoint{{Addr: "2001:db8::1", Port: 443}}},
+		{Subject: "dns6@dc1", App: "dns", Site: "dc1",
+			Endpoints: []experience.FlowEndpoint{{Addr: "2001:db8::53"}}}, // any port
+	}
+	rows := []map[string]any{
+		{"ep_addr": "2001:db8::1", "ep_port": float64(443), "exporter": "10.0.0.7",
+			"flows": float64(42), "tcp_flows": float64(40), "flag_flows": float64(40),
+			"reset_flows": float64(4), "bytes": "900", "packets": "30",
+			"first_seen": float64(1000), "last_seen": float64(1900)},
+		// The port-agnostic IPv6 subject, and a port that would have parsed as
+		// part of the address under the old composite key.
+		{"ep_addr": "2001:db8::53", "ep_port": float64(53), "exporter": "10.0.0.7", "flows": float64(9)},
+		// A declared IPv6 address on a port nobody declared.
+		{"ep_addr": "2001:db8::1", "ep_port": float64(9200), "exporter": "10.0.0.7", "flows": float64(999)},
+	}
+
+	got, unreadable := foldDEMFlowRows(subjects, rows)
+	if unreadable != 0 {
+		t.Fatalf("%d well-formed IPv6 rows were counted unreadable", unreadable)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected both IPv6 subjects, got %d: %+v", len(got), got)
+	}
+	if got[0].Subject != "api@dc1" || got[0].Flows != 42 || got[0].ResetFlows != 4 {
+		t.Fatalf("the IPv6 subject's evidence was not folded: %+v", got[0])
+	}
+	if got[1].Subject != "dns6@dc1" || got[1].Flows != 9 {
+		t.Fatalf("the port-agnostic IPv6 subject did not take its address's traffic: %+v", got[1])
+	}
+}
+
+// A row that names no endpoint at all is COUNTED, so the caller can report it.
+// A silently dropped row is missing evidence that reads exactly like a quiet
+// wire (§10).
+func TestFoldDEMFlowRowsCountsRowsItCannotRead(t *testing.T) {
+	subjects := []experience.FlowSubject{{
+		Subject: "checkout@dc1", App: "checkout", Site: "dc1",
+		Endpoints: []experience.FlowEndpoint{{Addr: "10.1.0.1", Port: 443}},
+	}}
+	rows := []map[string]any{
+		{"ep_addr": "10.1.0.1", "ep_port": float64(443), "exporter": "10.0.0.7", "flows": float64(10)},
+		{"exporter": "10.0.0.7", "flows": float64(999)},                                         // no address, no port
+		{"ep_addr": "", "ep_port": float64(443), "exporter": "10.0.0.7", "flows": float64(999)}, // empty address
+		{"ep_addr": "10.1.0.1", "ep_port": "not-a-port", "exporter": "10.0.0.7", "flows": float64(999)},
+		{"ep_addr": "10.1.0.1", "ep_port": float64(70000), "exporter": "10.0.0.7", "flows": float64(999)},
+	}
+
+	got, unreadable := foldDEMFlowRows(subjects, rows)
+	if unreadable != 4 {
+		t.Fatalf("unreadable rows counted %d, want 4", unreadable)
+	}
+	if len(got) != 1 || got[0].Flows != 10 {
+		t.Fatalf("an unreadable row leaked into a subject's counters: %+v", got)
+	}
+}
+
+// The statement must select the endpoint as TWO columns. One "addr:port" string
+// has to be split again in Go, and an IPv6 address is full of colons.
+func TestDEMFlowQuerySelectsAddressAndPortSeparately(t *testing.T) {
+	queries := fakeCH(t)
+	q := demFlowQuerier{s: flowsTestServer(t)}
+	if _, err := q.FlowStats(demFlowCtx(acme()), "acme", demFlowSubjects(),
+		time.Unix(1000, 0), time.Unix(2000, 0)); err != nil {
+		t.Fatalf("FlowStats: %v", err)
+	}
+	sql := (*queries)[0]
+	for _, want := range []string{"AS ep_addr", "AS ep_port", "GROUP BY ep_addr, ep_port, exporter"} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("the flow read is missing %q:\n%s", want, sql)
+		}
+	}
+	if strings.Contains(sql, "concat(dst_addr") || strings.Contains(sql, "concat(src_addr") {
+		t.Errorf("the flow read still builds a composite endpoint key:\n%s", sql)
+	}
+}
+
+// The route ledger is unchanged by this slice, and this test says so out loud so
+// a future reader does not go looking for a missing entry.
+func TestDEMFlowLaneAddsNoRoute(t *testing.T) {
+	for _, p := range []string{
+		experience.OverviewPath, experience.DataHealthPath,
+	} {
+		if !strings.HasPrefix(p, "/api/dem/") {
+			t.Fatalf("the flow lane is served under an unexpected path: %q", p)
+		}
+	}
+	// A compile-time reminder: demFlowQuerier is reached only through the
+	// experience surface's Deps, never registered on the mux itself.
+	var _ experience.FlowQuerier = demFlowQuerier{}
+}

@@ -1,0 +1,103 @@
+{
+  "uid": "netops-findings",
+  "title": "NetOps · Anomalies & Findings",
+  "tags": ["netops", "findings", "clickhouse"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "1m",
+  "time": { "from": "now-30d", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Findings over time by severity",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0, "custom": { "drawStyle": "bars", "stacking": { "mode": "normal" }, "fillOpacity": 70, "lineWidth": 0 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "critical" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] },
+          { "matcher": { "id": "byName", "options": "error" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } } ] },
+          { "matcher": { "id": "byName", "options": "warning" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } } ] },
+          { "matcher": { "id": "byName", "options": "info" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } } ] }
+        ]
+      },
+      "targets": [
+        { "refId": "A", "queryType": "sql", "format": 2, "rawSql": "SELECT $__timeInterval(ts) AS time, countIf(severity='critical') AS critical, countIf(severity='error') AS error, countIf(severity='warning') AS warning, countIf(severity IN ('info','notice')) AS info FROM netops.findings WHERE $__timeFilter(ts) GROUP BY time ORDER BY time" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "By severity",
+      "type": "piechart",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "critical" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] },
+          { "matcher": { "id": "byName", "options": "warning" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } } ] }
+        ]
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] }, "pieType": "donut" },
+      "targets": [
+        { "refId": "A", "queryType": "sql", "format": 1, "rawSql": "SELECT severity, count() AS findings FROM netops.findings WHERE $__timeFilter(ts) GROUP BY severity ORDER BY findings DESC" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "By kind",
+      "type": "barchart",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" } }, "overrides": [] },
+      "options": { "orientation": "horizontal", "xField": "kind" },
+      "targets": [
+        { "refId": "A", "queryType": "sql", "format": 1, "rawSql": "SELECT kind, count() AS findings FROM netops.findings WHERE $__timeFilter(ts) GROUP BY kind ORDER BY findings DESC" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Top devices by findings",
+      "type": "table",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "Findings" }, "properties": [ { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } } ] } ] },
+      "targets": [
+        { "refId": "A", "queryType": "sql", "format": 1, "rawSql": "SELECT device AS \"Device\", count() AS \"Findings\", countIf(severity IN ('critical','error')) AS \"Critical/Error\" FROM netops.findings WHERE $__timeFilter(ts) AND device != '' GROUP BY device ORDER BY \"Findings\" DESC LIMIT 20" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Critical / Error (window)",
+      "type": "stat",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 10 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "textMode": "value_and_name", "orientation": "vertical" },
+      "targets": [
+        { "refId": "A", "queryType": "sql", "format": 1, "rawSql": "SELECT countIf(severity='critical') AS \"Critical\", countIf(severity='error') AS \"Error\", countIf(severity='warning') AS \"Warning\" FROM netops.findings WHERE $__timeFilter(ts)" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Recent findings",
+      "type": "table",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 11, "w": 24, "x": 0, "y": 16 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Time" }, "properties": [ { "id": "unit", "value": "time:YYYY-MM-DD HH:mm:ss" } ] },
+          { "matcher": { "id": "byName", "options": "Score" }, "properties": [ { "id": "unit", "value": "short" }, { "id": "decimals", "value": 2 } ] }
+        ]
+      },
+      "options": { "sortBy": [ { "displayName": "Time", "desc": true } ] },
+      "targets": [
+        { "refId": "A", "queryType": "sql", "format": 1, "rawSql": "SELECT ts AS \"Time\", severity AS \"Severity\", kind AS \"Kind\", device AS \"Device\", component AS \"Component\", round(score, 2) AS \"Score\", summary AS \"Summary\" FROM netops.findings WHERE $__timeFilter(ts) ORDER BY ts DESC LIMIT 200" }
+      ]
+    }
+  ]
+}

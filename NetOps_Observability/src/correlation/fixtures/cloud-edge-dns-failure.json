@@ -1,0 +1,12 @@
+{
+  "name": "DNS failure on the app edge: NXDOMAIN/SERVFAIL for a dependent name + app degraded",
+  "signals": [
+    {"kind": "cloud_health", "entity_type": "app", "entity_id": "store-api",
+     "observer_id": "cloud:945714973156:us-west-2", "observer_type": "cloud_api",
+     "modality": "device_telemetry", "collection_path": "via_cloud_api", "deviation": 4.0},
+    {"kind": "cloud_dns_log", "entity_type": "cloud_resource", "entity_id": "zone/Z1PA6795/store.example.com",
+     "observer_id": "cloud:945714973156:us-west-2", "observer_type": "cloud_api",
+     "modality": "passive_flow", "collection_path": "via_cloud_api", "deviation": 5.0}
+  ],
+  "expect": {"top": "sig.ent.app.edge-dns-failure", "tier": "suspected", "owner": "netops"}
+}

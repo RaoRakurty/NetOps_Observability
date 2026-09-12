@@ -1,0 +1,1269 @@
+{
+ "harness": "scale-miniladder",
+ "runid": "090121382mk4",
+ "generated": "2026-09-01T22:36:57Z",
+ "overall": "PASS",
+ "parameters": {
+  "devices": 2500,
+  "burst_minutes": 15,
+  "eps": 1000,
+  "event_mix": "single",
+  "profile": "t-storm-2.5k",
+  "workload_class": "T_STORM_2K5",
+  "producer_key": "tenant",
+  "load_generator": "internal",
+  "linearity_floor": 0.6,
+  "drain_factor": 3.0,
+  "lag_epsilon": 100,
+  "mem_factor": 1.3,
+  "tls_variant": true,
+  "base_url": "http://localhost:8000"
+ },
+ "phases": [
+  {
+   "phase": "preflight",
+   "status": "PASS",
+   "notes": "26 services checked, consumers live, baselines captured",
+   "evidence": {
+    "services": [
+     {
+      "service": "correlation",
+      "status": "running",
+      "health": "healthy",
+      "exit_code": "0"
+     },
+     {
+      "service": "correlation",
+      "status": "running",
+      "health": "healthy",
+      "exit_code": "0"
+     },
+     {
+      "service": "api",
+      "status": "running",
+      "health": "",
+      "exit_code": "0"
+     },
+     {
+      "service": "clickhouse",
+      "status": "running",
+      "health": "healthy",
+      "exit_code": "0"
+     },
+     {
+      "service": "frontend",
+      "status": "running",
+      "health": "",
+      "exit_code": "0"
+     },
+     {
+      "service": "opensearch",
+      "status": "running",
+      "health": "healthy",
+      "exit_code": "0"
+     },
+     {
+      "service": "kafka",
+      "status": "running",
+      "health": "healthy",
+      "exit_code": "0"
+     },
+     {
+      "service": "vmalert",
+      "status": "running",
+      "health": "healthy",
+      "exit_code": "0"
+     },
+     {
+      "service": "goflow2",
+      "status": "running",
+      "health": "",
+      "exit_code": "0"
+     },
+     {
+      "service": "nginx",
+      "status": "running",
+      "health": "",
+      "exit_code": "0"
+     },
+     {
+      "service": "vector-router",
+      "status": "running",
+      "health": "healthy",
+      "exit_code": "0"
+     },
+     {
+      "service": "grafana",
+      "status": "running",
+      "health": "",
+      "exit_code": "0"
+     },
+     {
+      "service": "gnmic",
+      "status": "running",
+      "health": "",
+      "exit_code": "0"
+     },
+     {
+      "service": "opensearch-dashboards",
+      "status": "running",
+      "health": "",
+      "exit_code": "0"
+     },
+     {
+      "service": "syslog-ng",
+      "status": "running",
+      "health": "healthy",
+      "exit_code": "0"
+     },
+     {
+      "service": "prober",
+      "status": "running",
+      "health": "",
+      "exit_code": "0"
+     },
+     {
+      "service": "vector-aggregator",
+      "status": "running",
+      "health": "healthy",
+      "exit_code": "0"
+     },
+     {
+      "service": "postgres",
+      "status": "running",
+      "health": "healthy",
+      "exit_code": "0"
+     },
+     {
+      "service": "victoria",
+      "status": "running",
+      "health": "healthy",
+      "exit_code": "0"
+     },
+     {
+      "service": "redis",
+      "status": "running",
+      "health": "healthy",
+      "exit_code": "0"
+     },
+     {
+      "service": "kafka-exporter",
+      "status": "running",
+      "health": "",
+      "exit_code": "0"
+     },
+     {
+      "service": "keycloak",
+      "status": "running",
+      "health": "",
+      "exit_code": "0"
+     },
+     {
+      "service": "vmauth",
+      "status": "running",
+      "health": "",
+      "exit_code": "0"
+     },
+     {
+      "service": "secrets-seal",
+      "status": "running",
+      "health": "healthy",
+      "exit_code": "0"
+     },
+     {
+      "service": "cadvisor",
+      "status": "running",
+      "health": "healthy",
+      "exit_code": "0"
+     },
+     {
+      "service": "node-exporter",
+      "status": "running",
+      "health": "",
+      "exit_code": "0"
+     }
+    ],
+    "ingress_status": 200,
+    "api_login": "ok",
+    "namespace_residue_devices": 0,
+    "namespace_residue_by_run": [],
+    "namespace_residue_sample": [],
+    "corr_group": {
+     "netops.syslog": {
+      "current": 3289308,
+      "end": 89760824,
+      "lag": 7
+     },
+     "netops.controller_events": {
+      "current": 0,
+      "end": 0,
+      "lag": 0
+     },
+     "netops.cloud": {
+      "current": 8,
+      "end": 24,
+      "lag": 0
+     },
+     "netops.flows": {
+      "current": 0,
+      "end": 103157,
+      "lag": 0
+     },
+     "netops.app.edge": {
+      "current": 0,
+      "end": 0,
+      "lag": 0
+     },
+     "netops.app.identities.v1": {
+      "current": 0,
+      "end": 0,
+      "lag": 0
+     },
+     "netops.wireless_events": {
+      "current": 0,
+      "end": 0,
+      "lag": 0
+     },
+     "netops.probes": {
+      "current": 161,
+      "end": 722,
+      "lag": 0
+     },
+     "netops.wireless_sessions": {
+      "current": 0,
+      "end": 0,
+      "lag": 0
+     },
+     "netops.snmptrap": {
+      "current": 0,
+      "end": 8,
+      "lag": 0
+     },
+     "netops.metrics": {
+      "current": 171,
+      "end": 396,
+      "lag": 0
+     },
+     "netops.verification": {
+      "current": 0,
+      "end": 0,
+      "lag": 0
+     },
+     "_total": 7,
+     "_members": 48,
+     "_rows": 48,
+     "_uncommitted": 0,
+     "_max_current": 89760817
+    },
+    "router_syslog_group": {
+     "netops.syslog": {
+      "current": 3289308,
+      "end": 89760834,
+      "lag": 8
+     },
+     "_total": 8,
+     "_members": 4,
+     "_rows": 4,
+     "_uncommitted": 0,
+     "_max_current": 89760826
+    },
+    "consumer_settle_seconds": 180,
+    "baseline": {
+     "mem": {
+      "netops-correlation-7": 1093069176,
+      "netops-correlation-6": 89128960,
+      "netops-api-1": 94938071,
+      "netops-clickhouse-1": 1768452784,
+      "netops-frontend-1": 8949596,
+      "netops-opensearch-1": 2826088480,
+      "netops-kafka-1": 1001914368,
+      "netops-vmalert-1": 24389877,
+      "netops-goflow2-1": 12205424,
+      "netops-nginx-1": 13778288,
+      "netops-vector-router-1": 105486745,
+      "netops-grafana-1": 71103938,
+      "netops-gnmic-1": 34309406,
+      "netops-opensearch-dashboards-1": 156237824,
+      "netops-syslog-ng-1": 19482542,
+      "netops-prober-1": 12656312,
+      "netops-vector-aggregator-1": 50310676,
+      "netops-postgres-1": 45487226,
+      "netops-victoria-1": 257635123,
+      "netops-redis-1": 10527703,
+      "netops-kafka-exporter-1": 15193866,
+      "netops-keycloak-1": 317613670,
+      "netops-vmauth-1": 10653532,
+      "netops-secrets-seal-1": 8487174,
+      "netops-cadvisor-1": 30010245,
+      "netops-node-exporter-1": 14229176
+     },
+     "mem_anon": {
+      "netops-clickhouse-1": 580444160,
+      "netops-opensearch-1": 2499620864,
+      "netops-kafka-1": 701407232,
+      "netops-vector-router-1": 86351872,
+      "netops-vector-aggregator-1": 33316864,
+      "netops-victoria-1": 229658624
+     },
+     "ch_window_start": "2026-09-01 21:38:22",
+     "ch_max_part_count": 15.0,
+     "ch_mem_errors": 7761.0,
+     "kafka_syslog_end": 99851553,
+     "corr_lag_total": 7,
+     "router_lag_total": 8,
+     "ch_corr_signals": 187436,
+     "ch_flows": 50791,
+     "vm_active_series": 16705.0,
+     "vector_discards": 291300.0,
+     "vector_deadletter_sent": 0.0,
+     "quarantine_write_failures": 0,
+     "registry_identities": 0,
+     "corr_deadletters": 16041.0,
+     "corr_completion": {
+      "replicas": 2,
+      "readable": 2,
+      "unreadable": [],
+      "errors": [],
+      "pending_sum": 0.0,
+      "oldest_pending_age_max": 0.0,
+      "cohorts_sum": 25.0,
+      "per_replica": {
+       "e5cd469c9e6f": {
+        "started_at": "2026-09-01T19:31:12.471257472Z",
+        "name": "netops-correlation-7",
+        "rss": 1040606822,
+        "pending": 0.0,
+        "cohorts_total": 25.0,
+        "oldest_pending_age_s": 0.0,
+        "epochs_total": 174.0,
+        "window_signals": 29060.0,
+        "windows_rejected": 0.0,
+        "profiler_errors": 0.0,
+        "versions_persisted": 11048.0,
+        "versions_damped": 1113.0,
+        "signals_dropped_window_rejected": 0.0
+       },
+       "03e7111d6c71": {
+        "started_at": "2026-09-01T19:31:14.312408451Z",
+        "name": "netops-correlation-6",
+        "rss": 89160417,
+        "pending": 0.0,
+        "cohorts_total": 0.0,
+        "oldest_pending_age_s": 0.0,
+        "epochs_total": 255.0,
+        "window_signals": 0.0,
+        "windows_rejected": 0.0,
+        "profiler_errors": 0.0,
+        "versions_persisted": 0.0,
+        "versions_damped": 0.0,
+        "signals_dropped_window_rejected": 0.0
+       }
+      }
+     },
+     "os_run_docs": 0,
+     "bus_max_current_offset": 89760826,
+     "bus_verify_bound": 100000
+    }
+   },
+   "at": "2026-09-01T21:38:35Z"
+  },
+  {
+   "phase": "onboard",
+   "status": "PASS",
+   "notes": "create rate first 39.0/s -> last 29.1/s (ratio 0.75, floor 0.6) \u2014 linear enough [stop=none]",
+   "evidence": {
+    "devices_requested": 2500,
+    "devices_created": 2500,
+    "budget_s": 467.0,
+    "over_budget": false,
+    "onboard_stop_reason": "none",
+    "devices_absorbed_by_dedupe": 0,
+    "absorbed_mappings": {},
+    "absorbed_canonical_ids": [],
+    "absorbed_canonical_count": 0,
+    "absorbed_canonical_by_run": [],
+    "window": 100,
+    "total_wall_s": 89.31,
+    "failures": [],
+    "first_window_rate_per_s": 39.03,
+    "last_window_rate_per_s": 29.14,
+    "last_over_first": 0.747,
+    "floor": 0.6
+   },
+   "at": "2026-09-01T21:40:05Z"
+  },
+  {
+   "phase": "burst",
+   "status": "PASS",
+   "notes": "[T_STORM_2K5] injected fleet_injected=900000 of fleet_planned=900000 events in 900s (rate_achieved=1000/s; fleet=900000)",
+   "evidence": {
+    "registry_identities": {
+     "want_at_least": 2500,
+     "observed": 5000,
+     "missing_identities": 0,
+     "missing_sample": []
+    },
+    "producer_key_mode": "tenant",
+    "producer_key": "global",
+    "canary_signal_seen": true,
+    "ground_truth": {
+     "path": "/var/tmp/scale-runs/storm-s11-09012138/ground-truth.json",
+     "schema": "correlix.scale.ground-truth/1",
+     "scenario": "storm-2.5k",
+     "seed": 20260829,
+     "digest": "0e1a8d7b4e707c505ae1bc505464be69aa26231d040cfce0fe38c779786404d5",
+     "incidents": 345,
+     "templates": {
+      "upstream_link_failure": {
+       "instances_planned": 20,
+       "instances_built": 20,
+       "devices_per_instance": 25,
+       "devices": 500,
+       "truncated_by_device_budget": false
+      },
+      "local_link_fault": {
+       "instances_planned": 150,
+       "instances_built": 150,
+       "devices_per_instance": 1,
+       "devices": 150,
+       "truncated_by_device_budget": false
+      },
+      "bgp_peer_flap": {
+       "instances_planned": 100,
+       "instances_built": 100,
+       "devices_per_instance": 2,
+       "devices": 200,
+       "truncated_by_device_budget": false
+      },
+      "ospf_adjacency_flap": {
+       "instances_planned": 60,
+       "instances_built": 60,
+       "devices_per_instance": 1,
+       "devices": 60,
+       "truncated_by_device_budget": false
+      },
+      "enterprise_outage": {
+       "instances_planned": 15,
+       "instances_built": 15,
+       "devices_per_instance": 40,
+       "devices": 600,
+       "truncated_by_device_budget": false
+      }
+     },
+     "devices": {
+      "total": 2500,
+      "scenario": 1510,
+      "noise_pool": 990,
+      "budget_share": 0.65,
+      "allocation_rounds": 1
+     },
+     "counts": {
+      "scenario_events": 16060,
+      "incidents": 345,
+      "identities": 2658,
+      "unpromotable_events": 4989,
+      "promoted_events": 11071,
+      "chain_events_by_type": {
+       "bgp_maxprefix": 1090,
+       "bgp_notification": 15,
+       "bgp_route_churn": 4361,
+       "bgp_router_update_burst": 628,
+       "bgp_session_down": 86,
+       "bgp_session_up": 29,
+       "lineproto_down": 59,
+       "lineproto_up": 58,
+       "link_down": 129,
+       "link_up": 58,
+       "mac_move": 447,
+       "ospf_neighbor_down": 159,
+       "ospf_neighbor_up": 102,
+       "stp_port_block": 936,
+       "stp_port_forward": 186,
+       "stp_topology_change": 570
+      },
+      "state_transitions": 2024,
+      "recoveries": 1761,
+      "repeats_within_60s": 6500,
+      "identities_repeating_within_60s": 1377,
+      "multi_vantage_incidents": 135,
+      "max_vantages_on_one_cause": 25,
+      "contradictions": 40,
+      "blast_radius_expansions": 55,
+      "incidents_with_recovery": 194,
+      "flap_cycles_total": 494,
+      "scenario_devices": 1510,
+      "noise_devices": 990,
+      "silent_scenario_devices": 0,
+      "max_events_in_one_chunk": 833,
+      "events_per_s": 17.844,
+      "scenario_event_share_of_plan": 0.017844
+     },
+     "shape": {
+      "target": {
+       "name": "t-storm",
+       "storm_share_of_raw": 0.017844,
+       "repeat_factor": 3.5,
+       "repeat_distribution": "bounded",
+       "repeat_cap": 512,
+       "repeat_window_s": 60.0,
+       "vantages_per_cause": [
+        1,
+        25
+       ],
+       "recovery_ratio": 0.75,
+       "flap_cycles": [
+        2,
+        4
+       ],
+       "churn_density": 12.5,
+       "churn_duration_s": [
+        30.0,
+        45.0
+       ],
+       "churn_max_events": 380,
+       "contradiction_ratio": 0.08333333333333333,
+       "blast_radius_waves": [
+        0.5,
+        0.3,
+        0.2
+       ],
+       "incident_density": 1.0,
+       "reassert_density": 1.0,
+       "device_budget": 0.65,
+       "onset_span": 1.0
+      },
+      "target_digest": "ed42173992eaf9ec2e36b064231ea69beab5b283e769a97950dd99bee6ea9c7f",
+      "achieved": {
+       "raw_events": 900000,
+       "signals": 11071,
+       "unpromoted_events": 4989,
+       "promotion_pct": 1.2301,
+       "window_s": 900.0,
+       "unique": {
+        "K1": 2658,
+        "K2": 2703,
+        "K3": 5677,
+        "K4": 3844,
+        "K5": 4232
+       },
+       "reduction_pct": {
+        "K1": 75.991,
+        "K2": 75.585,
+        "K3": 48.722,
+        "K4": 65.279,
+        "K5": 61.774
+       },
+       "classes": {
+        "first": 2658,
+        "transition": 263,
+        "recovery": 1761,
+        "repeat": 6389
+       },
+       "class_share_pct": {
+        "first": 24.009,
+        "transition": 2.376,
+        "recovery": 15.906,
+        "repeat": 57.709
+       },
+       "per_kind": {
+        "bgp_adjacency_change": {
+         "raw": 3952,
+         "k3": 2001,
+         "repeat_factor": 1.975,
+         "first": 695,
+         "transition": 16,
+         "recovery": 709,
+         "repeat": 2532
+        },
+        "device_alarm": {
+         "raw": 1255,
+         "k3": 183,
+         "repeat_factor": 6.858,
+         "first": 165,
+         "transition": 0,
+         "recovery": 0,
+         "repeat": 1090
+        },
+        "link_state_change": {
+         "raw": 2688,
+         "k3": 1841,
+         "repeat_factor": 1.46,
+         "first": 680,
+         "transition": 69,
+         "recovery": 598,
+         "repeat": 1341
+        },
+        "lldp_neighbor_change": {
+         "raw": 150,
+         "k3": 150,
+         "repeat_factor": 1.0,
+         "first": 150,
+         "transition": 0,
+         "recovery": 0,
+         "repeat": 0
+        },
+        "mac_flap": {
+         "raw": 447,
+         "k3": 137,
+         "repeat_factor": 3.263,
+         "first": 106,
+         "transition": 0,
+         "recovery": 0,
+         "repeat": 341
+        },
+        "ospf_adjacency_change": {
+         "raw": 887,
+         "k3": 338,
+         "repeat_factor": 2.624,
+         "first": 90,
+         "transition": 178,
+         "recovery": 268,
+         "repeat": 351
+        },
+        "stp_topology_change": {
+         "raw": 1692,
+         "k3": 1027,
+         "repeat_factor": 1.648,
+         "first": 772,
+         "transition": 0,
+         "recovery": 186,
+         "repeat": 734
+        }
+       },
+       "repeats_per_identity": {
+        "identities": 2658,
+        "mean": 4.165,
+        "p50": 2.0,
+        "p95": 9.0,
+        "p99": 12.0,
+        "max": 77.0
+       },
+       "vantages_per_identity": {
+        "mean": 1.0,
+        "p95": 1.0,
+        "max": 1.0,
+        "multi_vantage_identities": 0,
+        "max_vantages_on_one_entity": 1
+       },
+       "rates": {
+        "raw_eps": 1000.0,
+        "signal_eps": 12.301,
+        "unique_semantic_eps_K3": 6.308,
+        "duplicates_eps": 7.099,
+        "state_changing_eps": 5.202,
+        "transitions_eps": 0.292,
+        "recoveries_eps": 1.957
+       },
+       "projection": {
+        "signals_today": 11071,
+        "signals_with_K3_aggregation": 7701,
+        "signals_removed": 3370,
+        "reduction_pct": 30.44,
+        "raw_to_engine_ratio_today": 81.293,
+        "raw_to_engine_ratio_aggregated": 116.868,
+        "ideal_k3_identities": 5677
+       },
+       "storm_share_of_raw": 0.017844,
+       "storm_share_error_pct": 0.002,
+       "incidents": 345,
+       "allocation_rounds": 1,
+       "scenario_devices": 1510,
+       "noise_devices": 990,
+       "incidents_with_recovery": 194,
+       "recovery_ratio": 0.5623,
+       "chunk_load": {
+        "chunks": 90,
+        "chunks_carrying_scenario": 87,
+        "peak": 833,
+        "mean": 178.44,
+        "peak_over_mean": 4.668
+       },
+       "scenario_events": 16060,
+       "scenario_promotion_pct": 68.9352,
+       "vantages_per_cause": {
+        "mean": 2.725,
+        "max": 25,
+        "multi_vantage_incidents": 135
+       },
+       "stream_projection": {
+        "raw_events": 900000,
+        "background_raw": 883940,
+        "background_signals": 43490,
+        "background_promotion_pct": 4.92,
+        "background_signals_with_K3_aggregation": 43490,
+        "scenario_signals": 11071,
+        "signals_today": 54561,
+        "signals_with_K3_aggregation": 51191,
+        "signals_removed": 3370,
+        "reduction_pct": 6.177,
+        "raw_to_engine_ratio_today": 16.495,
+        "raw_to_engine_ratio_aggregated": 17.581
+       }
+      },
+      "note": "TARGET is the declared StormShape; ACHIEVED is owner-memo \u00a75/\u00a76 measured on the PLAN (scenario plane only \u2014 the background is the production mix, whose promotion rate and zero-repeat structure are measured in docs/scale/P3_AGGREGATION_OPPORTUNITY_2026-08-29.md). `projection.signals_with_K3_aggregation` is the ideal 60 s-bucket collapse WITH every state transition and recovery still forwarded synchronously (memo \u00a717) \u2014 an upper bound on what an Aggregation Plane can remove."
+     },
+     "parser_coverage": {
+      "link_down": "promoted",
+      "link_up": "promoted",
+      "lineproto_down": "promoted",
+      "lineproto_up": "promoted",
+      "ospf_neighbor_down": "promoted",
+      "ospf_neighbor_up": "promoted",
+      "ospf_interface_flap": "promoted",
+      "bgp_session_down": "promoted",
+      "bgp_session_up": "promoted",
+      "bgp_route_churn": "not_promoted",
+      "bgp_router_update_burst": "not_promoted",
+      "bgp_maxprefix": "promoted",
+      "bgp_notification": "promoted",
+      "stp_topology_change": "promoted",
+      "stp_port_block": "promoted",
+      "stp_port_forward": "promoted",
+      "mac_move": "promoted"
+     },
+     "not_promoted": [
+      "bgp_route_churn",
+      "bgp_router_update_burst"
+     ],
+     "twin_ground_truth_path": "/var/tmp/scale-runs/storm-s11-09012138/ground_truth.jsonl",
+     "twin_state_path": "/var/tmp/scale-runs/storm-s11-09012138/state.json",
+     "twin_records": 345,
+     "twin_score_cmd": "python3 scripts/lab/twin/twin.py score --runid 090121382mk4 --run-root data/miniladder"
+    },
+    "workload_class": "T_STORM_2K5",
+    "target_events": 900000,
+    "fleet_planned": 900000,
+    "fleet_injected": 900000,
+    "fleet_shortfall": 0,
+    "rate_achieved": 1000.0,
+    "injected_total": 900001,
+    "burst_seconds": 900.0,
+    "window_s": 900,
+    "window_bound_s": 1350.0,
+    "window_extended": false,
+    "window_bound_exceeded": false,
+    "actual_eps": 1000.0,
+    "chunks": 90,
+    "chunks_planned": 90,
+    "lanes": {
+     "fleet": {
+      "devices": 990,
+      "mix": "production",
+      "sent": 900000
+     }
+    },
+    "produce_failures": [],
+    "scenario": {
+     "name": "storm-2.5k",
+     "seed": 20260829,
+     "digest": "0e1a8d7b4e707c505ae1bc505464be69aa26231d040cfce0fe38c779786404d5",
+     "planned": 16060,
+     "injected": 16060,
+     "shortfall": 0,
+     "background_injected": 883940,
+     "ground_truth_file": "ground-truth.json",
+     "twin_ground_truth_file": "ground_truth.jsonl",
+     "unpromotable_injected": 4989,
+     "shape_name": "t-storm",
+     "shape_digest": "ed42173992eaf9ec2e36b064231ea69beab5b283e769a97950dd99bee6ea9c7f",
+     "storm_share_target": 0.017844,
+     "storm_share_achieved": 0.017844,
+     "chunk_load": {
+      "chunks": 90,
+      "chunks_carrying_scenario": 87,
+      "peak": 833,
+      "mean": 178.44,
+      "peak_over_mean": 4.668
+     }
+    }
+   },
+   "at": "2026-09-01T21:55:55Z"
+  },
+  {
+   "phase": "drain",
+   "status": "PASS",
+   "notes": "KAFKA TRANSPORT lag drained to baseline+eps in 1320s (budget 2700s, peak 423155) \u2014 transport only; correlation evaluation is gated separately",
+   "evidence": {
+    "baseline_lag": 7,
+    "epsilon": 100,
+    "budget_s": 2700.0,
+    "drained_at_s": 1319.9,
+    "samples": 85,
+    "peak_lag": 423155,
+    "final_lag": 1,
+    "curve_file": "lag-curve.json",
+    "proves": "kafka_transport_drain_only"
+   },
+   "at": "2026-09-01T22:18:01Z"
+  },
+  {
+   "phase": "correlation_completion",
+   "status": "PASS",
+   "notes": "engine evaluated the workload in 95s (budget 2700s): pending 0 across 2 replica(s), cohorts +21, oldest pending age 0.0s, windows_rejected +0, profiler_errors +0, versions_persisted +10826",
+   "evidence": {
+    "budget_s": 2700.0,
+    "completed_at_s": 94.8,
+    "idle_age_threshold_s": 30.0,
+    "baseline": {
+     "pending_sum": 0.0,
+     "cohorts_sum": 25.0,
+     "replicas": 2,
+     "readable": 2
+    },
+    "baseline_per_replica": {
+     "e5cd469c9e6f": {
+      "started_at": "2026-09-01T19:31:12.471257472Z",
+      "name": "netops-correlation-7",
+      "rss": 1040606822,
+      "pending": 0.0,
+      "cohorts_total": 25.0,
+      "oldest_pending_age_s": 0.0,
+      "epochs_total": 174.0,
+      "window_signals": 29060.0,
+      "windows_rejected": 0.0,
+      "profiler_errors": 0.0,
+      "versions_persisted": 11048.0,
+      "versions_damped": 1113.0,
+      "signals_dropped_window_rejected": 0.0
+     },
+     "03e7111d6c71": {
+      "started_at": "2026-09-01T19:31:14.312408451Z",
+      "name": "netops-correlation-6",
+      "rss": 89160417,
+      "pending": 0.0,
+      "cohorts_total": 0.0,
+      "oldest_pending_age_s": 0.0,
+      "epochs_total": 255.0,
+      "window_signals": 0.0,
+      "windows_rejected": 0.0,
+      "profiler_errors": 0.0,
+      "versions_persisted": 0.0,
+      "versions_damped": 0.0,
+      "signals_dropped_window_rejected": 0.0
+     }
+    },
+    "final": {
+     "replicas": 2,
+     "readable": 2,
+     "unreadable": [],
+     "errors": [],
+     "pending_sum": 0.0,
+     "oldest_pending_age_max": 0.0,
+     "cohorts_sum": 46.0,
+     "per_replica": {
+      "e5cd469c9e6f": {
+       "started_at": "2026-09-01T19:31:12.471257472Z",
+       "name": "netops-correlation-7",
+       "rss": 1095216660,
+       "pending": 0.0,
+       "cohorts_total": 46.0,
+       "oldest_pending_age_s": 0.0,
+       "epochs_total": 198.0,
+       "window_signals": 28985.0,
+       "windows_rejected": 0.0,
+       "profiler_errors": 0.0,
+       "versions_persisted": 21874.0,
+       "versions_damped": 2169.0,
+       "signals_dropped_window_rejected": 0.0
+      },
+      "03e7111d6c71": {
+       "started_at": "2026-09-01T19:31:14.312408451Z",
+       "name": "netops-correlation-6",
+       "rss": 93616865,
+       "pending": 0.0,
+       "cohorts_total": 0.0,
+       "oldest_pending_age_s": 0.0,
+       "epochs_total": 337.0,
+       "window_signals": 0.0,
+       "windows_rejected": 0.0,
+       "profiler_errors": 0.0,
+       "versions_persisted": 0.0,
+       "versions_damped": 0.0,
+       "signals_dropped_window_rejected": 0.0
+      }
+     }
+    },
+    "cohorts_advanced": 21.0,
+    "samples": 7,
+    "curve_file": "correlation-completion.json",
+    "proves": "correlation_engine_evaluated_the_workload",
+    "memory_anchor": {
+     "netops-correlation-7": {
+      "container": "netops-correlation-7",
+      "samples": 7,
+      "pending_zero_resets": 0,
+      "pending_zero_t_s": 94.8,
+      "pending_zero_monotonic": 361086.441978555,
+      "rss_at_pending_zero": 1095216660,
+      "last_pending": 0.0,
+      "last_rss": 1095216660,
+      "last_t_s": 94.8,
+      "first_pending": 1975.0,
+      "first_rss": 1139240075
+     },
+     "netops-correlation-6": {
+      "container": "netops-correlation-6",
+      "samples": 7,
+      "pending_zero_resets": 0,
+      "pending_zero_t_s": 4.5,
+      "pending_zero_monotonic": 360996.167643985,
+      "rss_at_pending_zero": 90754252,
+      "last_pending": 0.0,
+      "last_rss": 93616865,
+      "last_t_s": 94.8,
+      "first_pending": 0.0,
+      "first_rss": 90754252
+     }
+    },
+    "counter_deltas": {
+     "03e7111d6c71": {
+      "windows_rejected": 0.0,
+      "profiler_errors": 0.0
+     },
+     "e5cd469c9e6f": {
+      "windows_rejected": 0.0,
+      "profiler_errors": 0.0,
+      "cohorts": 21.0,
+      "versions_persisted": 10826.0
+     }
+    },
+    "also_proves": "no_window_was_rejected_and_the_cohorts_that_drained_persisted_objects"
+   },
+   "at": "2026-09-01T22:19:36Z"
+  },
+  {
+   "phase": "accounting",
+   "status": "PASS",
+   "notes": "balanced exactly: 900001 injected == 900001 persisted + 0 DLQ + 0 counted rejections; 2500/2500 devices covered in corr_signals",
+   "evidence": {
+    "router_lag_at_settle": 4,
+    "dlq_run_reasons": {},
+    "injected_total": 900001,
+    "os_persisted_run_docs": 900001,
+    "dlq_run_lines": 0,
+    "vector_discards_delta_stackwide": 0.0,
+    "vector_deadletter_delta_stackwide": 0.0,
+    "quarantine_write_failures_delta": 0,
+    "ch_insert_failures": {},
+    "corr_signal_rows_run": 53965,
+    "corr_entities_covered": 2500,
+    "devices_expected": 2500,
+    "unexplained_missing": 0,
+    "tolerance_notes": "os count and dlq lines are exact+run-attributable; vector deltas are stack-wide (organic traffic may inflate them \u2014 they can only over-explain a deficit). corr_signals rows are NOT expected to equal injected events (episodic dedup by design); the invariant is per-device coverage."
+   },
+   "at": "2026-09-01T22:20:02Z"
+  },
+  {
+   "phase": "memflat",
+   "status": "PASS",
+   "notes": "all 9 key containers within x1.3 of the warm (end of burst) sample and under 85.0% of their caps | correlation netops-correlation-6 rss 84 MiB at input stop -> 87 MiB at pending 0 -> 89 MiB end (x1.033 vs pending-0 anchor, settle 214s, FLAT); netops-correlation-7 rss 985 MiB at input stop -> 1044 MiB at pending 0 -> 1056 MiB end (x1.011 vs pending-0 anchor, settle 123s, FLAT) | clickhouse anon 682 MiB (x0.694 vs anchor); MEMORY_LIMIT_EXCEEDED +82; p99 MemoryTracking 1322 MiB = 32.3% of cap 4096 MiB (peak 1757 MiB = 42.9%; merges 352 MiB INFORMATIONAL, no verdict); MaxPartCountForPartition 15 (preflight 15, envelope 23, delay at 1000) | 82 backfill-negotiation refusals exempted, pass completed (82x worker:timeintel-backfill; 3 completed pass(es) \u2014 'backfill pass complete' with pages > 0 in 1 api container log(s) over the last 2675s; full-delta exemption: sole producer verified (no foreign 241 in system.query_log, no errored part op in system.part_log))",
+   "evidence": {
+    "factor": 1.3,
+    "anchor": "warm (end of burst)",
+    "headroom_percent": 85.0,
+    "stateless_services": [
+     "api",
+     "correlation"
+    ],
+    "correlation_settle": {
+     "settle_s": 120.0,
+     "budget_s": 300.0,
+     "waited_s": 94.0,
+     "replicas_tracked": 2,
+     "replicas_at_pending_zero": 2
+    },
+    "containers": [
+     {
+      "container": "netops-api-1",
+      "service": "api",
+      "instrument": "docker_stats",
+      "cold_bytes": 94938071,
+      "warm_bytes": 126458265,
+      "end_bytes": 134532300,
+      "limit_bytes": 592445440,
+      "pct_of_limit": 22.7,
+      "ratio_vs_anchor": 1.064,
+      "ratio_cold_to_end": 1.417,
+      "docker_stats_end_bytes": 134532300,
+      "docker_stats_ratio_unjudged": null
+     },
+     {
+      "container": "netops-clickhouse-1",
+      "service": "clickhouse",
+      "instrument": "cgroup_anon",
+      "cold_bytes": 580444160,
+      "warm_bytes": 1030692864,
+      "end_bytes": 715161600,
+      "limit_bytes": 5584531226,
+      "pct_of_limit": 12.8,
+      "ratio_vs_anchor": 0.694,
+      "ratio_cold_to_end": 1.232,
+      "docker_stats_end_bytes": 2050846883,
+      "docker_stats_ratio_unjudged": 0.877
+     },
+     {
+      "container": "netops-correlation-6",
+      "service": "correlation",
+      "instrument": "docker_stats",
+      "anchor": "corr_engine_pending==0",
+      "cold_bytes": 89128960,
+      "warm_bytes": 88195727,
+      "end_bytes": 93774151,
+      "limit_bytes": 1342177280,
+      "pct_of_limit": 7.0,
+      "rss_at_input_stop": 88195727,
+      "rss_at_pending_zero": 90754252,
+      "rss_end": 93774151,
+      "pending_at_first_engine_sample": 0.0,
+      "pending_zero_t_s": 4.5,
+      "pending_zero_resets": 0,
+      "last_pending": 0.0,
+      "engine_samples": 7,
+      "seconds_from_pending_zero_to_end": 213.6,
+      "settle_required_s": 120.0,
+      "ratio_vs_anchor": 1.033,
+      "ratio_input_stop_to_end_unjudged": 1.063,
+      "ratio_cold_to_end": 1.052,
+      "verdict": "FLAT"
+     },
+     {
+      "container": "netops-correlation-7",
+      "service": "correlation",
+      "instrument": "docker_stats",
+      "anchor": "corr_engine_pending==0",
+      "cold_bytes": 1093069176,
+      "warm_bytes": 1033057075,
+      "end_bytes": 1107027820,
+      "limit_bytes": 1342177280,
+      "pct_of_limit": 82.5,
+      "rss_at_input_stop": 1033057075,
+      "rss_at_pending_zero": 1095216660,
+      "rss_end": 1107027820,
+      "pending_at_first_engine_sample": 1975.0,
+      "pending_zero_t_s": 94.8,
+      "pending_zero_resets": 0,
+      "last_pending": 0.0,
+      "engine_samples": 7,
+      "seconds_from_pending_zero_to_end": 123.3,
+      "settle_required_s": 120.0,
+      "ratio_vs_anchor": 1.011,
+      "ratio_input_stop_to_end_unjudged": 1.072,
+      "ratio_cold_to_end": 1.013,
+      "verdict": "FLAT"
+     },
+     {
+      "container": "netops-kafka-1",
+      "service": "kafka",
+      "instrument": "cgroup_anon",
+      "cold_bytes": 701407232,
+      "warm_bytes": 701358080,
+      "end_bytes": 701394944,
+      "limit_bytes": 1610612736,
+      "pct_of_limit": 43.5,
+      "ratio_vs_anchor": 1.0,
+      "ratio_cold_to_end": 1.0,
+      "docker_stats_end_bytes": 1047946854,
+      "docker_stats_ratio_unjudged": 1.065
+     },
+     {
+      "container": "netops-opensearch-1",
+      "service": "opensearch",
+      "instrument": "cgroup_anon",
+      "cold_bytes": 2499620864,
+      "warm_bytes": 2499452928,
+      "end_bytes": 2499461120,
+      "limit_bytes": 3957812363,
+      "pct_of_limit": 63.2,
+      "ratio_vs_anchor": 1.0,
+      "ratio_cold_to_end": 1.0,
+      "docker_stats_end_bytes": 2770253905,
+      "docker_stats_ratio_unjudged": 0.993
+     },
+     {
+      "container": "netops-vector-aggregator-1",
+      "service": "vector-aggregator",
+      "instrument": "cgroup_anon",
+      "cold_bytes": 33316864,
+      "warm_bytes": 32763904,
+      "end_bytes": 32399360,
+      "limit_bytes": 550502400,
+      "pct_of_limit": 5.9,
+      "ratio_vs_anchor": 0.989,
+      "ratio_cold_to_end": 0.972,
+      "docker_stats_end_bytes": 48664412,
+      "docker_stats_ratio_unjudged": 0.992
+     },
+     {
+      "container": "netops-vector-router-1",
+      "service": "vector-router",
+      "instrument": "cgroup_anon",
+      "cold_bytes": 86351872,
+      "warm_bytes": 118202368,
+      "end_bytes": 90984448,
+      "limit_bytes": 550502400,
+      "pct_of_limit": 16.5,
+      "ratio_vs_anchor": 0.77,
+      "ratio_cold_to_end": 1.054,
+      "docker_stats_end_bytes": 108737331,
+      "docker_stats_ratio_unjudged": 0.801
+     },
+     {
+      "container": "netops-victoria-1",
+      "service": "victoria",
+      "instrument": "cgroup_anon",
+      "cold_bytes": 229658624,
+      "warm_bytes": 228134912,
+      "end_bytes": 234905600,
+      "limit_bytes": 1679332212,
+      "pct_of_limit": 14.0,
+      "ratio_vs_anchor": 1.03,
+      "ratio_cold_to_end": 1.023,
+      "docker_stats_end_bytes": 260990566,
+      "docker_stats_ratio_unjudged": 1.024
+     }
+    ],
+    "clickhouse": {
+     "cap_bytes": 4294967296,
+     "cap_source": "server_settings.max_server_memory_usage",
+     "peak_source": "system.metric_log since 2026-09-01 21:38:22",
+     "peak_memory_tracking_bytes": 1842411147,
+     "p99_memory_tracking_bytes": 1386518707,
+     "peak_merges_memory_bytes": 368908826,
+     "merges_memory_verdict": "INFORMATIONAL \u2014 not bounded by the tracked total in ClickHouse 24.8",
+     "memory_limit_exceeded": {
+      "baseline": 7761,
+      "current": 7843,
+      "delta": 82,
+      "window_count": 82,
+      "window_source": "system.error_log over 2026-09-01 21:38:22 -> 2026-09-01 22:21:40",
+      "window_state": "ok",
+      "window_start": "2026-09-01 21:38:22",
+      "window_end": "2026-09-01 22:21:40",
+      "victims": "82x Select on netops.corr_objects",
+      "counted": 0,
+      "backfill_attributed": 82,
+      "backfill_tags": "82x worker:timeintel-backfill",
+      "backfill_attribution_source": "system.query_log log_comment/user starting 'worker:timeintel-backfill'",
+      "backfill_passes": 3,
+      "backfill_pass_source": "'backfill pass complete' with pages > 0 in 1 api container log(s) over the last 2675s",
+      "foreign_241": 0,
+      "foreign_241_producers": "",
+      "foreign_241_source": "system.query_log 241s not tagged 'worker:timeintel-backfill*' over the window",
+      "part_log_errored": 0,
+      "part_log_source": "system.part_log rows with error != 0 over the window",
+      "backfill_exempt": 82,
+      "exemption_note": "82 backfill-negotiation refusals exempted, pass completed (82x worker:timeintel-backfill; 3 completed pass(es) \u2014 'backfill pass complete' with pages > 0 in 1 api container log(s) over the last 2675s; full-delta exemption: sole producer verified (no foreign 241 in system.query_log, no errored part op in system.part_log))"
+     },
+     "sample_census": {
+      "window_start": "2026-09-01 21:38:22",
+      "metric_log_samples": 2594,
+      "metric_log": "2594 sample(s) in the window",
+      "metric_log_first_sample": "2026-09-01 21:38:22",
+      "metric_log_gap_s": 0.0,
+      "harness_samples": 3
+     },
+     "memory_tracking_max_pct": 85.0,
+     "memory_tracking_peak_warn_pct": 100.0,
+     "memory_tracking_pct": 42.9,
+     "p99_memory_tracking_pct": 32.3,
+     "degraded": false,
+     "parts": {
+      "baseline": 15,
+      "current": 15,
+      "envelope": 23,
+      "parts_to_delay_insert": 1000,
+      "settle_budget_s": 600.0,
+      "settle_waited_s": 0.2
+     },
+     "warnings": []
+    }
+   },
+   "at": "2026-09-01T22:21:43Z"
+  },
+  {
+   "phase": "stability",
+   "status": "PASS",
+   "notes": "clean across the full lifecycle (2803s, 2 replica(s)): 0 CommitFailed, 0 UnknownMember, 0 restarts, session timeout 60000ms read from 2 replica(s), worst loop stall 6649ms = 11.1% of the session timeout",
+   "evidence": {
+    "lag_at_settlement": 5,
+    "lag_unreadable_polls": 0,
+    "settled": true,
+    "commit_failed": 0,
+    "unknown_member": 0,
+    "consumer_restarts": 0,
+    "rebalances": 0,
+    "loop_stalls": 204,
+    "worst_loop_lag_ms": 6649,
+    "replicas_observed": 2,
+    "replicas_unreadable": 0,
+    "observation_window_s": 2803,
+    "grace_s": 180.0,
+    "session_timeout_ms": 60000,
+    "session_timeout_derivation": "session timeout 60000ms read from 2 replica(s)",
+    "session_timeout_override": null,
+    "session_timeout_per_replica": {
+     "e5cd469c9e6f": 60000.0,
+     "03e7111d6c71": 60000.0
+    },
+    "stall_budget_used_pct": 11.1
+   },
+   "at": "2026-09-01T22:25:59Z"
+  },
+  {
+   "phase": "cleanup",
+   "status": "PASS",
+   "notes": "2500 devices deleted+verified (0 mlx- devices of ANY run id remain), telemetry purged (CH+OS)",
+   "evidence": {
+    "consumer_lag_at_cleanup": 0,
+    "device_purge": {
+     "prefix": "mlx-090121382mk4-",
+     "budget_s": 4350.0,
+     "passes": 1,
+     "deleted": 2500,
+     "delete_failed": 0,
+     "first_delete_error": "",
+     "list_error": "",
+     "remaining": 0,
+     "verified_zero": true,
+     "out_of_budget": false
+    },
+    "devices_deleted": 2500,
+    "absorbed_shadow_ids_seeded": 0,
+    "namespace": {
+     "root_prefix": "mlx-",
+     "owns_run_lock": true,
+     "swept": false,
+     "own_remaining": 0,
+     "foreign_remaining": 0,
+     "foreign_by_run": [],
+     "foreign_sample": []
+    },
+    "devices_remaining": 0,
+    "pre_purge_lag": 8,
+    "ch_signals_left": 0,
+    "os_task": "2pQ0hD4aSfahAedbVwQ0lg:8743902",
+    "os_deleted": 900001,
+    "os_docs_left": 0,
+    "os_docs_before": 900001,
+    "os_purge_seconds": 212.7,
+    "os_purge_budget_s": 510.0,
+    "os_purge_budget_initial_s": 510.0,
+    "os_purge_budget_extended": false,
+    "os_purge_stalled": false,
+    "residuals_note": "corr_objects/evidence and correlation DLQ entries tagged with this run TTL/rotate out on their own; VictoriaMetrics holds no run series (devices were never polled successfully)",
+    "final_residue_devices": 0,
+    "final_namespace_devices": 0,
+    "tombstones": {
+     "reachable": true,
+     "reason": "api /data bind mount",
+     "path": "/home/rao/Projects/NetOps_Observability/NetOps_Observability/data/api/devices.json.d/suppressed",
+     "suppressed_entries": 9242,
+     "this_run": 2500,
+     "purge_api": "none \u2014 DevStore exposes no tombstone removal"
+    },
+    "http_transport_failures": 0
+   },
+   "at": "2026-09-01T22:36:57Z"
+  }
+ ]
+}

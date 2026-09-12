@@ -1,126 +1,208 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useEffect, useState } from "react";
+import { ExportPolicyForm, LANDING_OPTIONS } from "./admin";
 import { api } from "../services/api";
+import Icon from "../components/Icon";
+import { setTzMode, tzLabel } from "../lib/time";
+import { useAuth } from "../hooks/useAuth";
+import SystemNetworkCard from "../pages/SystemNetwork";
+import VerificationSettingsCard from "./VerificationSettingsCard";
+import { Modal } from "../components/ui";
 
-export default function Settings() {
-  const [creds, setCreds] = useState<Record<string, boolean>>({});
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-
-  // Change-password state
-  const [current, setCurrent] = useState("");
-  const [next, setNext] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [pwBusy, setPwBusy] = useState(false);
-  const [pwMsg, setPwMsg] = useState<string | null>(null);
+// Default landing page — the platform-wide page users land on after sign-in.
+// Stored on the global tenant (the platform default); individual tenants can
+// override it in Identity & Access → (org) → Tenants. Discoverable home: here.
+function DefaultLandingCard() {
+  const [current, setCurrent] = useState<string>("");
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(true);
 
   useEffect(() => {
-    (async () => setCreds((await api.credentials()) ?? {}))();
+    api.listTenants()
+      .then((ts) => setCurrent(ts.find((t) => t.id === "global")?.default_landing || ""))
+      .catch((e) => setErr((e as Error).message))
+      .finally(() => setBusy(false));
   }, []);
 
-  const refresh = async () => {
-    setBusy(true);
-    setMsg(null);
+  const onChange = async (route: string) => {
+    setErr(null); setSaved(false);
+    const prev = current;
+    setCurrent(route); // optimistic
     try {
-      await api.refreshDiscovery();
-      setMsg("Discovery refresh requested.");
+      await api.setTenantLanding("global", route);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setMsg((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const changePassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setPwMsg(null);
-    if (next !== confirm) {
-      setPwMsg("New password and confirmation do not match.");
-      return;
-    }
-    if (next.length < 8) {
-      setPwMsg("New password must be at least 8 characters.");
-      return;
-    }
-    setPwBusy(true);
-    try {
-      await api.changePassword(current, next);
-      setCurrent("");
-      setNext("");
-      setConfirm("");
-      setPwMsg("Password updated.");
-    } catch (e) {
-      setPwMsg((e as Error).message);
-    } finally {
-      setPwBusy(false);
+      setCurrent(prev);
+      setErr((e as Error).message);
     }
   };
 
   return (
+    <div className="card" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={{ width: 34, height: 34, borderRadius: 8, background: "var(--surface-2)", display: "grid", placeItems: "center" }}>
+        <Icon name="overview" size={20} />
+      </div>
+      <div style={{ flex: 1 }}>
+        <h3 style={{ fontWeight: 600, fontSize: "inherit", margin: 0 }}>Default landing page</h3>
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+          The page everyone lands on after sign-in. Tenants can override this in Identity &amp; Access.
+          {err && <span role="alert" style={{ color: "var(--crit)" }}> · {err}</span>}
+          <span role="status">{saved ? " · saved" : ""}</span>
+        </div>
+      </div>
+      <select
+        className="app-select"
+        value={current}
+        disabled={busy}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label="Default landing page"
+        style={{ minWidth: 200 }}
+      >
+        <option value="">Built-in (Dashboards · Home)</option>
+        {LANDING_OPTIONS.map((o) => <option key={o.route} value={o.route}>{o.label}</option>)}
+      </select>
+    </div>
+  );
+}
+
+// Time display — the Local/UTC rendering mode, moved here off the top bar
+// (owner 2026-07-17): a per-TENANT persisted, audited preference. Every user
+// of the tenant reads timestamps in the zone chosen here; storage stays UTC.
+// Applies immediately (setTzMode) — no reload, every rendered time re-labels.
+function TimeDisplayCard() {
+  const [mode, setMode] = useState<"local" | "utc">("local");
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(true);
+
+  useEffect(() => {
+    api.getDisplaySettings()
+      .then((r) => setMode(r.time_display === "utc" ? "utc" : "local"))
+      .catch((e) => setErr((e as Error).message))
+      .finally(() => setBusy(false));
+  }, []);
+
+  const onChange = async (next: "local" | "utc") => {
+    setErr(null); setSaved(false);
+    const prev = mode;
+    setMode(next); // optimistic
+    try {
+      await api.setDisplaySettings(next);
+      setTzMode(next); // re-render every timestamp now
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setMode(prev);
+      setErr((e as Error).message);
+    }
+  };
+
+  return (
+    <div className="card" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={{ width: 34, height: 34, borderRadius: 8, background: "var(--surface-2)", display: "grid", placeItems: "center" }}>
+        <Icon name="sliders" size={20} />
+      </div>
+      <div style={{ flex: 1 }}>
+        <h3 style={{ fontWeight: 600, fontSize: "inherit", margin: 0 }}>Time display</h3>
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+          How every timestamp renders for this tenant — your local zone ({tzLabel("local")}) or UTC.
+          Storage is always UTC; only display changes. Admin-set, applies to all of the tenant&apos;s users.
+          {err && <span role="alert" style={{ color: "var(--crit)" }}> · {err}</span>}
+          <span role="status">{saved ? " · saved" : ""}</span>
+        </div>
+      </div>
+      <select
+        className="app-select"
+        value={mode}
+        disabled={busy}
+        onChange={(e) => onChange(e.target.value as "local" | "utc")}
+        aria-label="Time display"
+        style={{ minWidth: 200 }}
+      >
+        <option value="local">Local — {tzLabel("local")}</option>
+        <option value="utc">UTC</option>
+      </select>
+    </div>
+  );
+}
+
+// Administration → Settings. Trimmed (C1/C2/C3):
+//   - the redundant per-integration credentials table is gone — each connector
+//     shows its own status under Integrations / Notifications;
+//   - discovery refresh moved to Automation → Source of Truth;
+//   - log-export limits are now a tile that opens a guided setup modal.
+export default function Settings() {
+  const [showExport, setShowExport] = useState(false);
+  const { user } = useAuth();
+  const platformAdmin = !!user?.platform_admin;
+
+  return (
     <>
       <div className="card">
-        <h2>Change password</h2>
-        <form onSubmit={changePassword} style={{ display: "grid", gap: 8, maxWidth: 400 }}>
-          <input
-            type="password"
-            placeholder="Current password"
-            value={current}
-            onChange={(e) => setCurrent(e.target.value)}
-            autoComplete="current-password"
-          />
-          <input
-            type="password"
-            placeholder="New password (min 8 chars)"
-            value={next}
-            onChange={(e) => setNext(e.target.value)}
-            autoComplete="new-password"
-          />
-          <input
-            type="password"
-            placeholder="Confirm new password"
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            autoComplete="new-password"
-          />
-          <button disabled={pwBusy} type="submit">
-            {pwBusy ? "Updating…" : "Update password"}
-          </button>
-          {pwMsg && (
-            <p style={{ marginTop: 8, color: pwMsg === "Password updated." ? "var(--good)" : "var(--bad)" }}>
-              {pwMsg}
-            </p>
-          )}
-        </form>
-      </div>
-
-      <div className="card">
-        <h2>Integrations</h2>
-        <p style={{ color: "var(--muted)", fontSize: 13 }}>
-          Configure credentials via <code>deployment/docker/.env</code> or your secret manager.
-          The API never echoes secrets back — only whether each integration is configured.
+        <h2 style={{ margin: 0 }}>Settings</h2>
+        <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 6 }}>
+          Platform configuration. Integration credentials live with their connectors
+          (Administration → Integrations and Notifications); discovery sources are under
+          Automation → Source of Truth; backup and recovery is Administration → Data Protection.
         </p>
-        <table>
-          <tbody>
-            {Object.entries(creds).map(([k, v]) => (
-              <tr key={k}>
-                <td>{k}</td>
-                <td>
-                  <span className={`badge ${v ? "good" : "warn"}`}>
-                    {v ? "configured" : "not configured"}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       </div>
 
-      <div className="card">
-        <h2>Discovery</h2>
-        <button disabled={busy} onClick={refresh}>
-          {busy ? "Refreshing…" : "Refresh now"}
+      {/* Default landing page — the platform-wide post-login page. */}
+      <DefaultLandingCard />
+
+      {/* Time display (Local/UTC) — per-tenant, persisted, audited. */}
+      <TimeDisplayCard />
+
+      {/* DNS + NTP — two boxes (Configure → popup), platform-owner only. */}
+      {platformAdmin && <SystemNetworkCard />}
+
+      {/* Active verification — the tenant opt-in plus the read-only device
+          sign-in it needs (GET/PUT /api/settings/verification, requireAdmin +
+          audited). Every sibling /api/settings/* had a panel and this one did
+          not, so the capability could only be turned on with a curl. */}
+      <VerificationSettingsCard />
+
+      {/* Log export limits — tile + guided setup (C3). */}
+      <div className="card" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div
+          style={{
+            width: 34,
+            height: 34,
+            borderRadius: 8,
+            background: "var(--surface-2)",
+            display: "grid",
+            placeItems: "center",
+          }}
+        >
+          <Icon name="external" size={20} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <h3 style={{ fontWeight: 600, fontSize: "inherit", margin: 0 }}>Log export limits</h3>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>
+            Anti-exfiltration guardrails for log exports — rate, row/size caps, runtime, link TTL.
+          </div>
+        </div>
+        <button className="btn" onClick={() => setShowExport(true)}>
+          Configure
         </button>
-        {msg && <p style={{ marginTop: 12, color: "var(--muted)" }}>{msg}</p>}
       </div>
+
+      {/* Shared Modal (a11y): role=dialog + aria-modal, Escape close, focus
+          moved in / restored and trapped — the hand-rolled overlay had none. */}
+      {showExport && (
+        <Modal title="Log export limits" onClose={() => setShowExport(false)}>
+          <ExportPolicyForm />
+          <div style={{ textAlign: "right", marginTop: 8 }}>
+            <button className="btn" onClick={() => setShowExport(false)}>
+              Close
+            </button>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }

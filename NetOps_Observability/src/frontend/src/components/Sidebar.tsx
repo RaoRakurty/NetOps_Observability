@@ -1,38 +1,127 @@
-import { NAV, NavSection, routeFor } from "../nav";
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+import { Fragment, useState } from "react";
+import { NavLeaf, NavSection, routeFor } from "../nav";
 import { useShell } from "../context/shell";
+import { BRAND } from "../brand";
 import Icon from "./Icon";
 
 type Props = {
+  nav: NavSection[];
   activeSection: string;
+  activeLeaf?: string;
   collapsed: boolean;
   onToggle: () => void;
+  homeRoute?: string; // brand/Home target (configured landing, else first section)
 };
 
-export default function Sidebar({ activeSection, collapsed, onToggle }: Props) {
+export default function Sidebar({ nav, activeSection, activeLeaf, collapsed, onToggle, homeRoute }: Props) {
   const { navigate, setCopilotOpen, copilotOpen } = useShell();
 
-  const main = NAV.filter((s) => !s.footer);
-  const footer = NAV.filter((s) => s.footer);
+  // Which grouped sections are expanded in the sidebar. A section defaults to
+  // expanded when it's the active one, so the current leaf is always visible.
+  const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+  const isOpen = (id: string) => overrides[id] ?? id === activeSection;
+  const toggle = (id: string) => setOverrides((m) => ({ ...m, [id]: !isOpen(id) }));
+
+  const main = nav.filter((s) => !s.footer);
+  const footer = nav.filter((s) => s.footer);
+
+  const leafItem = (s: NavSection, leaf: NavLeaf) => {
+    const active = s.id === activeSection && leaf.id === activeLeaf;
+    return (
+      <button
+        key={leaf.id}
+        className={`nav-sub${active ? " active" : ""}`}
+        aria-current={active ? "page" : undefined}
+        onClick={() => navigate(`${s.id}/${leaf.id}`)}
+      >
+        <span className="nav-label">{leaf.label}</span>
+      </button>
+    );
+  };
 
   const item = (s: NavSection) => {
     const isCopilot = s.action === "copilot";
     const active = isCopilot ? copilotOpen : s.id === activeSection;
+    // Children only nest in the sidebar when it's expanded; collapsed (icons
+    // only) mode falls back to the in-content SubNav for leaf switching.
+    const grouped = !!s.children && !collapsed;
+    const open = grouped && isOpen(s.id);
+
+    const onClick = () => {
+      // An ACTING section (Iris) still acts on click — that is the whole point
+      // of the pinned "Ask Iris" button and it is unchanged. What is new is
+      // that acting no longer means leafless: when such a section also carries
+      // routed children, the click reveals them too, so the pages under it are
+      // one more click away rather than unreachable.
+      if (isCopilot) {
+        setCopilotOpen(!copilotOpen);
+        if (grouped) setOverrides((m) => ({ ...m, [s.id]: true }));
+        return;
+      }
+      // Navigate into the section (active or first leaf) and reveal its
+      // children. The caret handles pure collapse without leaving the page.
+      navigate(routeFor(s));
+      if (grouped) setOverrides((m) => ({ ...m, [s.id]: true }));
+    };
+
     return (
-      <button
-        key={s.id}
-        className={`nav-item${active ? " active" : ""}`}
-        title={collapsed ? s.label : undefined}
-        onClick={() => (isCopilot ? setCopilotOpen(!copilotOpen) : navigate(routeFor(s)))}
-      >
-        <span className="nav-icon"><Icon name={s.icon} size={18} /></span>
-        {!collapsed && <span className="nav-label">{s.label}</span>}
-      </button>
+      <div key={s.id} className="nav-group">
+        <button
+          className={`nav-item${active ? " active" : ""}`}
+          title={collapsed ? s.label : undefined}
+          aria-current={!isCopilot && active ? "page" : undefined}
+          aria-expanded={grouped ? open : undefined}
+          onClick={onClick}
+        >
+          <span className="nav-icon"><Icon name={s.icon} size={18} /></span>
+          {!collapsed && <span className="nav-label">{s.label}</span>}
+          {grouped && (
+            // Mouse-only fine-grained collapse; a nested interactive control
+            // inside a <button> is invalid HTML and unreachable by keyboard, so
+            // the caret is decorative — the parent button carries aria-expanded.
+            <span
+              className="nav-caret"
+              aria-hidden="true"
+              onClick={(e) => { e.stopPropagation(); toggle(s.id); }}
+            >
+              <Icon name={open ? "chevron-down" : "chevron-right"} size={14} />
+            </span>
+          )}
+        </button>
+        {open && (
+          <div className="nav-children">
+            {(() => {
+              // Two-layer hierarchy: introduce each run of grouped leaves with
+              // its group label (same convention as the rail flyout).
+              let lastGroup: string | undefined;
+              return s.children!.map((leaf) => {
+                const header = leaf.group && leaf.group !== lastGroup ? leaf.group : null;
+                lastGroup = leaf.group;
+                return (
+                  <Fragment key={leaf.id}>
+                    {header && <div className="nav-sub-group">{header}</div>}
+                    {leafItem(s, leaf)}
+                  </Fragment>
+                );
+              });
+            })()}
+          </div>
+        )}
+      </div>
     );
   };
 
   return (
     <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
-      <nav className="nav-main">{main.map(item)}</nav>
+      {/* No eye glyph (owner 2026-07-21): the standalone eye is retired — the
+          BLOGO5 wordmark in the topbar is the shell's only brand mark. */}
+      <button className="rail-brand" onClick={() => navigate(homeRoute ?? routeFor(main[0]))} title={BRAND}>
+        {!collapsed && <span className="rail-brand-name">{BRAND}</span>}
+      </button>
+      <nav className="nav-main" aria-label="Primary">{main.map(item)}</nav>
       <div className="nav-footer">
         {footer.map(item)}
         <button className="nav-item nav-collapse" onClick={onToggle} title="Collapse sidebar">

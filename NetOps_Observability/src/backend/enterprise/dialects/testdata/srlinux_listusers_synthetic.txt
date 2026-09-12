@@ -1,0 +1,15 @@
+# SYNTHETIC FIXTURE — NOT a device capture. Hand-written to hold the account
+# shape the two real captures do not: SR Linux LIST users, the accounts an
+# operator adds (`user <name>`), beside the two built-in ones. No credential
+# here belongs to any device; every value is a placeholder.
+set / system aaa authentication idle-timeout 7200
+set / system aaa authentication authentication-method [ local ]
+set / system aaa authentication admin-user password $y$PLACEHOLDERHASH
+set / system aaa authentication admin-user ssh-key [ "ssh-ed25519 PLACEHOLDERPUBLICKEY" ]
+set / system aaa authentication linuxadmin-user password $6$PLACEHOLDERHASH
+set / system aaa authentication user noc-readonly password $y$PLACEHOLDERHASH
+set / system aaa authentication user field-tech password PlaintextPlaceholder1
+set / system aaa server-group local type local
+set / system logging remote-server 10.0.0.10 transport udp
+set / system ntp admin-state enable
+set / system ntp server 10.0.0.20

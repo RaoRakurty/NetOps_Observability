@@ -1,0 +1,510 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+package backend
+
+// package_growth_guard_test.go — a RATCHET on the flat `package main`.
+//
+// THE PROBLEM (2026-07-27 audit, item 9)
+// CLAUDE.md §2 mandates /cmd /internal /pkg /api /plugins /config and forbids
+// business logic in the entrypoint package. Reality: 296 non-test files and
+// ~98k lines of business logic sit in ONE `package main`, and none of those
+// directories exist (an empty, untracked cmd/ is the residue of an abandoned
+// move). In a single package the compiler cannot enforce ANY boundary — every
+// file can reach every other file's unexported state — so §13 "no cross-domain
+// imports" and §4 "plugins cannot import core system code" are not merely
+// unenforced, they are unenforceable.
+//
+// WHY IT IS NOT JUST STYLE
+// This is the substrate that made the guard-scope bug possible. Because "the
+// package" and "the whole product" were the same thing, a guard that scanned
+// only the root directory LOOKED like it scanned everything — and its
+// anti-vacuity floor passed comfortably on 296 files while 201 subpackage files
+// (alerts/, notify/, collectors/, nms/, ai/) went unguarded for months, hiding
+// three real defects. A flat package makes "scan everything" ambiguous.
+//
+// WHAT THIS GUARD IS, AND IS NOT
+// It is a RATCHET, not a fix: it fails when the root package GROWS, forcing
+// every new domain into a real subpackage from day one. It deliberately does
+// NOT attempt the decomposition — that is a multi-sprint program (leaf domains
+// first, one per PR, CI green at each step) and a half-migrated tree with
+// imports pointing both ways is worse than either endpoint.
+//
+// HONEST LIMITATIONS (do not mistake this for the §2 rule being satisfied):
+//   * existing root files can still grow without bound;
+//   * a new subpackage can still import half of package main's behaviour by
+//     having package main call INTO it, so coupling can still increase;
+//   * it measures files, not dependencies.
+// It buys time and stops the bleeding. The decomposition still has to happen.
+//
+// WORKFLOW WHEN THIS FAILS
+//   * Adding a NEW domain? Put it in its own subpackage. That is the point.
+//   * Genuinely extending an existing root file? Edit that file — the count is
+//     unchanged and this guard stays quiet.
+//   * MOVED files out of the root (the direction we want)? Lower the ceiling in
+//     the same commit. It only ever goes down.
+
+import (
+	"os"
+	"strings"
+	"testing"
+)
+
+// rootPackageCeiling is the number of non-test .go files in the backend root
+// package. THIS NUMBER MUST ONLY EVER DECREASE. Lowering it is the whole point;
+// raising it defeats the ratchet.
+//
+//	2026-07-27  296  pinned
+//	2026-07-27  290  internal/chschema extracted (6 ClickHouse schema/DDL files)
+//	2026-07-27  289  internal/openapi (spec builder) + internal/totp (2FA primitive)
+//	2026-07-27  284  internal/rca (5 pure analysis files: independence, observer registry,
+//	                  path attribution, recovery, report icons)
+//	2026-07-27  283  internal/vault (secret custody; storage+logging now INJECTED)
+//	2026-07-27  283  internal/vuln + internal/compliance (~900 LOC of evaluation
+//	                  moved; count unchanged because each left a thin *_http.go
+//	                  handler behind — the ratchet measures files, not LOC)
+//	2026-07-27  282  portintel gains the port store (pg plumbing INJECTED via
+//	                  portintel.DB); handlers + backend selection stayed
+//	2026-07-27  281  internal/ratelimit (the F-33 fixed-window limiter; callers
+//	                  now pass their budget — the env read left the package)
+//	2026-07-27  280  internal/metricval (the F-21 metric-value parse boundary;
+//	                  counter exposed read-only via NonFinite())
+//	2026-07-27  279  chISO folded into chschema.ISO (21 call sites qualified);
+//	                  the zone-less-toString guard now walks subpackages too
+//	2026-07-27  278  internal/noclabel (ai_labels.go + kindNoc — the NOC display-
+//	                  language mirror of the frontend label library; rca wave-2
+//	                  seam pre-step, ~15 consumers qualified)
+//	2026-07-27  276  internal/ticketing (model + pure policy decision + the
+//	                  CorrFacts type; the payload BUILDERS stayed — they read
+//	                  rcaPathView, a domain that has not moved)
+//	2026-07-27  263  rca wave 2: the 13-file report/analysis family (report
+//	                  builder, semantics, wording, html, coverage, accounting,
+//	                  consistency, actions, merge, postmortem, issue context,
+//	                  impact provenance) — moved as ONE commit because the
+//	                  family is one strongly-connected component. Six rca_*
+//	                  handler/store files stayed and consume the exported
+//	                  surface (rca.Report, rca.BuildReport, …).
+//	2026-07-27  262  internal/gqlparse (the F-72 GraphQL subset parser — zero
+//	                  external deps, one consumer; the handler and its RBAC
+//	                  gate stayed)
+//	2026-07-27  260  internal/verify (the Active Verification engine + its
+//	                  prebuilt modules — closed command tables, deterministic
+//	                  parsers, injected Dialers; the SSH runner, service,
+//	                  trigger and HTTP stayed)
+//	2026-07-27  259  internal/segclass (the ingest segment/device classifier
+//	                  mirror + its embedded provider-CIDR snapshot; zero Go
+//	                  consumers found — flagged in the plan for the owner)
+//	                  → RETIRED 2026-08-03 (owner decision, lightening audit
+//	                  #147/T5): still zero consumers a month later; deleted,
+//	                  recoverable from git history if ingest stamping revives
+//	2026-07-27  258  internal/seam (the canonical seam inventory: model,
+//	                  lifecycle, validation + pg store with seam.DB INJECTED
+//	                  via the portintel idiom; bootstrap rules, handlers and
+//	                  backend selection stayed)
+//	2026-07-28  257  internal/token (the auth-crypto boundary: Claims + HS256
+//	                  sign/verify; jwtClaims stays as a type alias for the 90+
+//	                  consumers; the actingTenant unmarshal-immunity is now the
+//	                  json:"-" tag, pinned by TestCraftedTokenCannotSetActingTenant)
+//	2026-07-28  256  internal/session (session lifecycle Store + rotating
+//	                  RefreshStore; kv + error-log INJECTED via session.KV /
+//	                  session.Errorf — the vault idiom, wired in
+//	                  session_wiring.go; the CONC-HIGH-1/F-70 white-box suites
+//	                  moved in and dropped the process-global backend swap)
+//	2026-07-28  255  internal/jwks (OIDC discovery + JWKS RS256 verification,
+//	                  pure stdlib; TTL now injected — the OIDC_JWKS_TTL_MIN env
+//	                  read moved to oidc.go; main's token exchange got its own
+//	                  http.Client instead of borrowing the cache's)
+//	2026-07-28  254  internal/apikey (scoped tenant-bound API keys: store,
+//	                  RFC 7591 validation, fixed-window limiter, multi-writer
+//	                  reload; kv INJECTED via the shared platformKV adapter,
+//	                  APIKEY_RATE_LIMIT_PER_MIN read + TenantGlobal default
+//	                  moved to the composition root; roleFromScopes stayed —
+//	                  it maps onto main's Role constants)
+//	2026-07-28  253  internal/tenant (the tenant model + store + isolation-mode
+//	                  router; cross-domain inputs INJECTED as tenant.Deps — kv,
+//	                  DefaultOrg, id-mint/slug rules, region validation; the
+//	                  75-file fan-in handled by tenant_wiring.go aliases, the
+//	                  jwtClaims technique; tenantkv.go deliberately stayed for
+//	                  its own step)
+//	2026-07-28  252  tenantkv.go → tenant.Collection[T] (the §3a default-closed
+//	                  per-tenant collection primitive joins internal/tenant; a
+//	                  generic alias + wrapper in tenant_wiring.go keeps the
+//	                  three consumers' call shape; Path() accessor added)
+//	2026-07-28  251  internal/snmpcred (SNMP credential profiles: model,
+//	                  validation, vault-enveloped store with kv INJECTED;
+//	                  slugify duplicated per the no-utils rule; four consumer
+//	                  files qualified directly — no alias needed)
+//	2026-07-28  250  copilot_tools.go → ai/toolwire.go (the per-provider LLM
+//	                  tool-calling wire codecs join the ai subpackage they were
+//	                  built around; transport INJECTED as ai.DoFunc so main
+//	                  keeps timeout/retry/redaction policy; the LLM04 output
+//	                  cap hoisted to ai.MaxOutputTokens — one definition)
+//	2026-07-28  249  wireless_store.go → wireless/store.go (the canonical
+//	                  inventory store joins its domain package; pg plumbing
+//	                  INJECTED via wireless.DB and the portintelPG adapter
+//	                  generalized to rlsPG — one adapter for every RLS seam)
+//	2026-07-28  248  nms_store.go → nms/store.go (integration config + runs +
+//	                  states store, mem + FORCE-RLS pg, vault-enveloped creds;
+//	                  DB seam injected via rlsPG; durability marker exported —
+//	                  ErrStorageNotDurable/NonDurableStore/StoreDurable)
+//	2026-07-28  247  ticketing_store.go → internal/ticketing/store.go (policies,
+//	                  links, leased outbox, ring-buffered audit; mem + FORCE-RLS
+//	                  pg via the DB seam; backend selection stayed in main.go;
+//	                  paging bounds + ErrPolicyConflict exported; orDefault
+//	                  stayed in main with its many consumers)
+//	2026-07-28  246  path_graph_store.go → pathgraph/store.go (endpoints/
+//	                  definitions registries + observation/hop streams; mem
+//	                  with per-tenant retention + pg/CH hybrid backend; DB via
+//	                  rlsPG and a NEW pathgraph.CH seam — InsertJSON/Select/
+//	                  Exec — adapted by main's chSeam; token validators +
+//	                  ScopeFor/CHTime exported for the ingest boundary)
+//	2026-07-28  245  password.go dissolved: the PBKDF2 hash/verify/rehash KDF
+//	                  joined internal/token (the auth-crypto boundary), the
+//	                  jwtClaims alias moved to auth.go; password POLICY
+//	                  (length rules, history) stayed in main
+//	2026-07-28  244  internal/users (the identity store: file + per-row RLS pg
+//	                  backends, last-super-admin floor, federated JIT, MFA/
+//	                  lifecycle fields; cross-domain inputs INJECTED as
+//	                  users.Deps — kv, Errorf, SR-025 GuardRole, IsSuperAdmin,
+//	                  account_policy's ApplyPasswordChange, DefaultTenant,
+//	                  MaxUsers; User/usersRepo aliased in users_wiring.go)
+//	2026-07-28  243  orgs.go → internal/tenant/org.go (the Org layer joins the
+//	                  tenant bounded context per §3a "org = its tenants";
+//	                  tenant.Deps extended with MintOrgID/NormalizeRegion/
+//	                  DefaultRegion; orgOf stays in tenancy.go)
+//	2026-07-28  241  cloud_store.go + cloud_store_pg.go → cloud/ (the inventory
+//	                  store pair: keyset pagination, §3a in-store isolation;
+//	                  DB seam via rlsPG; paging bounds + ErrBadCursor +
+//	                  FilterValues exported; selector stayed in main.go)
+//	2026-07-28  237  the four ITSM adapters (servicenow, jira, pagerduty,
+//	                  slack) → internal/ticketing/adapter_*.go with the shared
+//	                  Adapter/SystemConfig/Ref types, the #103 delivery-error
+//	                  taxonomy and DedupeKey; worker/sweeper/http/itsm-config
+//	                  stayed; WithClient constructors added for integrator
+//	                  tests; shared fixtures duplicated across the boundary
+//	2026-07-28  236  policy_store.go → policy/store.go (the #24 security-policy
+//	                  document store joins its engine package; kv + error sink
+//	                  INJECTED; main tests stayed as integration via wiring)
+//	2026-07-28  234  cloud_connectors_store.go + _pg.go → cloudconn/ (the
+//	                  connector-credential repo: mem + FORCE-RLS pg via the DB
+//	                  seam; id prefixes + ErrVersionConflict exported; the
+//	                  durable-storage-required selector stayed in main.go)
+//	2026-07-28  233  path_health.go → pathgraph/health.go (the pure Path
+//	                  Behavior Health scoring core: severity curves, blend,
+//	                  bands incl. the unknown-not-healthy rule, baseline
+//	                  cascade; VM fetcher + handler stayed in main)
+//	2026-07-28  232  business_service_store.go → cloud/bizsvc_store.go (the
+//	                  Business Service Observability pg store joins the cloud
+//	                  domain its mappings resolve against; DB seam via rlsPG;
+//	                  ErrNotFound/ErrConflict + MappingsByResource exported;
+//	                  the pg-only selector stayed in main.go)
+//	2026-07-28  231  login_throttle.go → internal/loginguard (the F-25 account
+//	                  lockout throttle: fail-closed saturation, spray-eviction,
+//	                  janitor; warn sink injected; counters exported as
+//	                  accessors so /metrics keeps reading them)
+//	2026-07-28  230  appid_store.go → appid/appstore.go (the Application
+//	                  catalog store, mem + FORCE-RLS pg via the DB seam;
+//	                  selector stayed in main.go)
+//	2026-07-29  202  rca_path_view.go → internal/rca/path_view.go (the 97%-pure
+//	                  evidence→path-overlay mapping: BuildPathView, annotations,
+//	                  narration, evidence summary; handler + aliases stayed in
+//	                  correlations.go; the *rcaAppImpact apps() method became
+//	                  rca.(*AppImpact).AppNames — a method cannot live on an
+//	                  aliased foreign type; pure fixture suite moved wholesale)
+//	2026-07-29  203  PHASE 2 WAVE 0a: the shared ClickHouse read path
+//	                  (chQuery/chQueryCtx, chRows/chRowsScope/chSelect,
+//	                  chTenantScope/proxyClickHouse/writeEmptyClickHouse,
+//	                  chWorkerExec/chWorkerQuery/jsonEachRow) consolidated
+//	                  into clickhouse_client.go — the designated chhttp
+//	                  adapter — so report_scheduler/correlations/flows stop
+//	                  hosting package-wide plumbing and become extractable;
+//	                  appid_fusion_store.go emptied and DELETED
+//	2026-07-29  204  audit_retention.go → internal/audit/retention.go (the
+//	                  F-57 opt-in pg retention sweeper joins the audit store
+//	                  it bounds; env read stays in main via ParseRetentionDays;
+//	                  TxRunner satisfied by platformdb DB.WithTenant directly)
+//	2026-07-29  205  timeintel_derive.go → timeintel/derive.go (the pure
+//	                  lifecycle derivation: CorrTimeFacts/ITSMTimeFacts →
+//	                  Lifecycle; the *server itsmTimeFacts method renamed
+//	                  itsmFactsFor to unshadow the exported type). Preceded
+//	                  by step 57: internal/applog (structured logger, a
+//	                  symbol extraction — count unchanged)
+//	2026-07-28  206  THE INFRASTRUCTURE FINALE part 1: db.go + pgstore.go +
+//	                  kvstore.go (+ migrations/) → internal/platformdb. The
+//	                  kv Backend contract, FileKV, the per-row RLS PGStore
+//	                  (rowSpec registry, legacy import) and the DB pool/
+//	                  migrations/WithTenant machinery are ONE package; main
+//	                  keeps initStoreBackend (env switch) + platformKV; the
+//	                  rlsPG adapter DIED — DB.WithTenant satisfies every
+//	                  extracted package's seam directly; loggers injected
+//	                  via SetLoggers; Swap/BeginForTest test hooks
+//	2026-07-28  209  clickhouse_policies.go DDL builders → chschema/policies.go
+//	                  (RowPolicyDDL + ConvergeStmts(extra...); the retry loop
+//	                  + env stayed; domain DDL composed by the integrator —
+//	                  count unchanged)
+//	2026-07-28  209  audit_pg.go + audit.go's store core → internal/audit
+//	                  (Event/Query/Repo, the bounded file ring + per-row RLS
+//	                  pg trail, F-73/F-57 contracts; kv/DB/errf injected; the
+//	                  withAudit chokepoint, org-scoped merge and handlers
+//	                  stayed; normTenant re-homed to main)
+//	2026-07-28  210  cloud_connectors_broker.go + metrics → cloudconn/ (the
+//	                  Identity Broker — the ONLY secret-decrypting component —
+//	                  with its scoped-token cache and exchange metrics; audit
+//	                  sink injected as a neutral AuditFn, main adapts onto
+//	                  AuditEvent; AdapterFor/SetAdapter/Metrics exported)
+//	2026-07-28  212  self_heal.go → internal/selfheal (the disk-pressure/
+//	                  read-only-block ingest healer; env + HTTP client + log
+//	                  sinks injected via Config; Run/CurrentSnapshot exported)
+//	2026-07-28  213  ticketing_worker.go → internal/ticketing/worker.go (the
+//	                  outbox worker: claim → resolve → dispatch with #103
+//	                  error classification, backoff+jitter, dead-letter,
+//	                  tenant-mismatch refusal; log sinks injected;
+//	                  Tick/RegisterAdapter/SetMaxRetries exported)
+//	2026-07-28  214  appid_fusion_store.go split: the observation/identity
+//	                  builders → appid/fusion_store.go behind the CHWorker
+//	                  seam; the worker-scope CH plumbing (chWorkerExec/Query,
+//	                  shared by 3 other workers) STAYED; count unchanged
+//	2026-07-28  214  ai_feedback_store.go → ai/feedback_store.go (copilot
+//	                  answer feedback: mem + FORCE-RLS pg; FeedbackDB seam;
+//	                  selector stayed in main.go; contract tests moved)
+//	2026-07-28  215  topology_store.go → topology/store.go (the graph-records
+//	                  store, mem + FORCE-RLS pg via the DB seam; selector
+//	                  stayed in main.go)
+//	2026-07-28  216  ai_evidence_language.go → ai/evidence_language.go (the
+//	                  ranking-blob → cited-evidence renderer + the top-
+//	                  hypothesis operator voice join the ai package whose
+//	                  EvidenceItem they produce; noclabel already a package)
+//	2026-07-28  217  saved.go + saved_pg.go → internal/saved (the saved-objects
+//	                  store: file + FORCE-RLS pg; kv/DB/errf INJECTED; backend
+//	                  selection stayed in main.go; randID re-homed to audit.go
+//	                  at its true 16-byte width)
+//	2026-07-28  219  device_persist.go → internal/discovery/devstore.go (the
+//	                  manual-device + F-69 tombstone store joins its aggregator;
+//	                  kv + errf INJECTED; Unreadable() exported — the
+//	                  three-state boot contract; DEVICES_STORE_PATH env read
+//	                  moved to main)
+//	2026-07-28  220  integration_repo_pg.go + config_pg.go + timeline.go →
+//	                  integration/ (the ITSM-sync repository: mappings +
+//	                  watermarks, vault-enveloped webhook secrets, merged
+//	                  timeline; DB seam via rlsPG; MappingEngineFor exported)
+//	2026-07-28  223  report_jobs_pg.go + report_executions_pg.go +
+//	                  report_deliveries_pg.go → reports/ (the durable queue
+//	                  with SKIP LOCKED leases, immutable executions and
+//	                  delivery records join the interfaces they implement;
+//	                  DB seam via rlsPG; ErrLeaseLost exported)
+//	2026-07-28  226  discovery.go → internal/discovery (the §4 plugin contract
+//	                  DiscoverySource + aggregator with F-69 suppression,
+//	                  identity merge/dedup, StaticSource YAML + NetboxSource;
+//	                  DeviceStore seam injected — nil-interface guard added
+//	                  where the old nil-pointer receiver was tolerated;
+//	                  NetboxConfig moved with direction doctrine aliased)
+//	2026-07-28  227  incidents.go + incidents_pg.go → internal/incident (model,
+//	                  lifecycle rules, dedup, FORCE-RLS pg repo; DB seam via
+//	                  rlsPG; lifecycle surface exported; aliases + selector
+//	                  hosted in incidents_http.go)
+//	2026-07-28  229  timeintel_store.go → timeintel/store.go (the incident
+//	                  timeline store, mem + FORCE-RLS pg via the DB seam;
+//	                  selector stayed in main.go)
+//	2026-07-31  201  +1: pipeline_processors.go SPLIT OUT of
+//	                  telemetry_enrichment.go. Not a new domain in the root —
+//	                  the Pipeline Processors DOMAIN (model, matcher/action
+//	                  registries, managed rules, compiler, simulator,
+//	                  versioning) already lives in the processors/ subpackage.
+//	                  This file is only the I/O boundary (handlers + the
+//	                  file-plane config writer + the store selector), which is
+//	                  precisely what the root package is for; it was living
+//	                  under telemetry_enrichment.go's device→tenant-CSV header,
+//	                  where nobody would find it. Net effect on §2: better.
+//	2026-08-25  202  +1: bgp_ops.go (BGP Operations, item 10). A pure I/O
+//	                  boundary — HTTP handlers on *server + a tenant watchlist
+//	                  store + an outbound RIPEstat/RDAP fetcher. Handlers need
+//	                  the *server receiver so they belong in main like every
+//	                  other handler; the reusable BGP domain (there is little —
+//	                  it is mostly remote-API glue) has no subpackage worth
+//	                  extracting yet. Revisit if a RIS Live consumer lands.
+//	2026-08-27  204  +2, unrecorded at the time (caught by this guard 2026-09-01):
+//	                  protocol_diagnostics.go (Troubleshooting item 7 — the HTTP
+//	                  boundary for the internal/protocoldiag domain, which went
+//	                  straight to its own subpackage; handlers need the *server
+//	                  receiver so the thin I/O boundary stays in the root, the
+//	                  pipeline_processors.go / bgp_ops.go shape) and
+//	                  clickhouse_repartition.go (a second free-standing chhttp
+//	                  transport adapter for chschema's corr repartition
+//	                  migration).
+//	2026-09-01  203  clickhouse_repartition.go folded into clickhouse_client.go —
+//	                  the 2026-07-29 (203) entry designates that file THE main-
+//	                  package chhttp adapter, and a standalone bridge was the
+//	                  same plumbing under a new name. protocol_diagnostics.go
+//	                  stays (see above), so the ratchet settles at 203: one
+//	                  justified +1 against the 2026-08-25 ceiling, same as the
+//	                  two precedented +1 entries before it.
+//	2026-09-02  204  +1: igpmon_deps.go (Project 4 D item 11 — the wiring for
+//	                  internal/igpmon, where the OSPF/IS-IS monitoring DOMAIN
+//	                  actually lives). The file holds no domain logic at all:
+//	                  it is the Deps assembly plus five adapter methods that
+//	                  need the *server receiver to reach requirePerm,
+//	                  chTenantScope, chRowsScope, visibleDeviceMetricLabels and
+//	                  vmInstantScoped. Those primitives are root-package
+//	                  identity/tenancy plumbing, so the adapter cannot move
+//	                  down without dragging them with it — the same shape as
+//	                  the pcap/configstore wiring that already lives here, and
+//	                  the deliberate alternative to re-deriving tenant scoping
+//	                  inside the subpackage. Net effect on §2: the ~700-line
+//	                  feature is in internal/igpmon; ~160 lines of adapter stay.
+//	2026-09-02  206  +2, the same Deps-wiring shape the 204 entry establishes:
+//	                  protocol_diag_gateway.go — the deploy-time integrator that
+//	                  supplies internal/protocoldiag's CommandRunner (the ONLY
+//	                  place the diagnostics feature acquires authority to reach a
+//	                  device); it needs the root's ssh gateway, host-key custody
+//	                  and vault primitives, exactly as configGateway()/
+//	                  pcapGateway() do. And ai_troubleshoot_deps.go — the
+//	                  server half of ai.TroubleshootDeps (IRIS Phase A): five
+//	                  read-only closures that need the *server receiver to reach
+//	                  principalTenant, canSeeDevice, s.discovery, s.roles.Allows,
+//	                  chTenantScopeFor, loadCorrSlice, gatherTopoLinks and
+//	                  s.secAPI. Those are root-package identity/tenancy plumbing;
+//	                  moving the adapter down would drag them with it, or worse,
+//	                  re-derive tenant scoping inside the ai package — the exact
+//	                  §3a.4 failure the single-derivation rule exists to prevent.
+//	                  Net effect on §2: the Phase-A DOMAIN (skills, selection,
+//	                  the tool set, ~1.8k lines) lives in netops/backend/ai; only
+//	                  the wiring stays in the root.
+//	2026-09-02  207  +1: ifgroup_deps.go (frontend-wave item 4 — the wiring for
+//	                  internal/ifgroup, where the interfaces-by-routing-instance
+//	                  DOMAIN actually lives). Same Deps-wiring shape as the 204
+//	                  igpmon entry and for the same reason: the file holds no
+//	                  domain logic, only the Deps assembly plus five adapter
+//	                  methods that need the *server receiver to reach
+//	                  requirePerm, principalTenant, s.discovery/deviceTenant,
+//	                  visibleDeviceMetricLabels/restrictedTelemetry and
+//	                  vmInstantScoped. Those primitives are root-package
+//	                  identity/tenancy plumbing, so the adapter cannot move down
+//	                  without dragging them with it — and re-deriving tenant
+//	                  scoping inside the subpackage is the §3a.4 failure the
+//	                  single-derivation rule exists to prevent. Net effect on §2:
+//	                  the whole feature (pure grouping model, coverage honesty,
+//	                  HTTP surface) is in internal/ifgroup; ~150 lines of adapter
+//	                  stay.
+//	2026-09-02  208  +1: bmp_deps.go (frontend-wave item 10, the live BGP feed —
+//	                  the wiring for internal/bmp, where the RFC 7854 receiver
+//	                  DOMAIN actually lives: the wire parser, the BGP UPDATE
+//	                  decoder, the bounded tenant-keyed store, the TCP listener
+//	                  and the read handlers, ~2.5k lines). Same Deps-wiring
+//	                  shape as the 204 igpmon and 207 ifgroup entries, for the
+//	                  same reason: the file holds no domain logic, only the Deps
+//	                  assembly plus three adapter members that need the *server
+//	                  receiver to reach requirePerm/principalTenant (the gate),
+//	                  s.discovery + deviceTenant (the ONE inventory→tenant rule
+//	                  a BMP session is attributed by) and s.workers.start (the
+//	                  shutdown drain group). Those are root-package
+//	                  identity/tenancy plumbing; moving the adapter down would
+//	                  drag them with it, or re-derive tenant attribution inside
+//	                  the subpackage — the §3a.4 failure the single-derivation
+//	                  rule exists to prevent. Net effect on §2: the whole
+//	                  receiver is in internal/bmp; ~110 lines of adapter stay.
+//	2026-09-02  209  +1: bgp_alerts.go (BGP ops tracker rows #1 bogons, #5
+//	                  leak/hijack incident classes, #10 alerting — the wiring
+//	                  for internal/bgpwatch, where the DOMAIN actually lives:
+//	                  the bogon set, the incident classifier, the per-tenant
+//	                  evaluator, the evidence producer, the policy store and the
+//	                  HTTP surface, ~2.4k lines). Same Deps-wiring shape as the
+//	                  204 igpmon, 207 ifgroup and 208 bmp entries, for the same
+//	                  reason: the file holds no domain logic, only the Deps
+//	                  assembly plus the adapter methods that need the *server
+//	                  receiver to reach requirePerm + principalTenant (the gate,
+//	                  incl. the TenantGlobal→scopeless mapping), s.bgpWatch (the
+//	                  FORCE-RLS watchlist store that is the ONLY source of what
+//	                  a tenant watches), s.bgpFetch (the cached RIPEstat/RDAP
+//	                  client with the corporate-CA and SSRF gates), s.notifier
+//	                  (the shared notify.Dispatcher every other evaluator fires
+//	                  through), s.bmpAPI/s.bgpFeed (the two tenant-scoped
+//	                  sighting sources) and produceJSON (the bus bridge). Those
+//	                  are root-package identity/tenancy/transport plumbing;
+//	                  moving the adapter down would drag them with it, or
+//	                  re-derive tenant scoping inside the subpackage — the
+//	                  §3a.4 failure the single-derivation rule exists to
+//	                  prevent. It also keeps internal/bgpwatch a LEAF: the
+//	                  package never sees models.Alert or a *server, which is
+//	                  what makes the whole evaluator unit-testable offline.
+//	                  Net effect on §2: the whole feature is in
+//	                  internal/bgpwatch; ~440 lines of adapter stay.
+//	2026-09-03  208  -4: the whole Data Protection domain EXTRACTED to
+//	                  internal/dataprotect. system_backup.go (the intent store,
+//	                  the netops-daily SM policy control plane, the live DR
+//	                  status), system_backup_ops.go (snapshot management, the
+//	                  restorability probe, the async operation ring),
+//	                  system_backup_coverage.go (the per-engine coverage table)
+//	                  and system_backup_contract.go (the frozen wire contract)
+//	                  all moved; ZERO system_backup*.go non-test files remain in
+//	                  the root package. The domain was extracted rather than
+//	                  parked as debt: the seam turned out to be narrow — an
+//	                  OpenSearch caller, a clock, an audit sink, a
+//	                  platform-admin gate, a logger and a config store, all
+//	                  injected through internal/dataprotect/deps.go — and every
+//	                  env switch it reads is now resolved ONCE in main.go and
+//	                  travels in Deps as a value, so the package reads no
+//	                  environment at all. Following internal/configstore, there
+//	                  is NO root wiring file: main.go keeps the typed field, the
+//	                  Deps assembly with its four small adapters
+//	                  (gate/audit/OpenSearch/logger), the route registrations,
+//	                  the probe worker and the /metrics delegation. The shared
+//	                  OpenSearch request path (osBase/osDo/osJSON) moved to
+//	                  backend_client.go, which is where this platform's
+//	                  internal-backend HTTP client already lives and which the
+//	                  quarantine restore loop also calls. Net effect on §2: the
+//	                  whole domain (~3.7k lines) is in internal/dataprotect;
+//	                  ~150 lines of adapter stay.
+//	2026-09-05  208  ±0: the pipeline debugger's UI-query stage (stage 10) was
+//	                  briefly a root file (pipedebug_uiquery.go, W2) and is now
+//	                  internal/pipedebug/uiprobe.go. The runner needs the api's
+//	                  OWN surfaces — logsScope (the tenant/visibility log
+//	                  chokepoint), the cx_synthetic must_not clause, the
+//	                  credentialed OpenSearch client and the real
+//	                  handleFlowsTopTalkers / handleMetricsQueryRange handlers —
+//	                  which is precisely why it must NOT re-implement them; it
+//	                  reaches them through the pipedebug.UIQueryHost interface,
+//	                  whose ~30-line adapter (debugUIHost) lives in main.go
+//	                  inside the DEBUG-ROUTES markers with the rest of the
+//	                  debugger's wiring. Net effect on §2: no new root file, the
+//	                  ~330-line stage is behind a compiler-enforced boundary,
+//	                  and the removal rule is unchanged (drop the markers and
+//	                  the package).
+const rootPackageCeiling = 208
+
+func TestFlatPackageMainDoesNotGrow(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read backend root: %v", err)
+	}
+	var files []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		files = append(files, name)
+	}
+
+	switch {
+	case len(files) > rootPackageCeiling:
+		t.Errorf("package main grew to %d non-test files (ceiling %d).\n"+
+			"CLAUDE.md §2 forbids business logic in the entrypoint package, and this "+
+			"package already holds ~98k lines of it. New code belongs in a SUBPACKAGE "+
+			"(a real boundary the compiler can enforce), not in the root.\n"+
+			"If you genuinely extended an existing file, this guard would not have "+
+			"fired — it counts files, so a new file here is a new domain in the wrong "+
+			"place. If you MOVED files out, lower rootPackageCeiling in the same commit.",
+			len(files), rootPackageCeiling)
+	case len(files) < rootPackageCeiling:
+		t.Errorf("package main shrank to %d non-test files (ceiling %d) — good, that is "+
+			"the direction the §2 decomposition goes. Lower rootPackageCeiling to %d in "+
+			"this commit so the ratchet holds at the new position.",
+			len(files), rootPackageCeiling, len(files))
+	}
+
+	// Anti-vacuity: if the scan stops seeing the package, the guard has broken
+	// rather than the decomposition having succeeded overnight.
+	if len(files) < 50 {
+		t.Fatalf("only %d root .go files seen — the guard is not reading the package", len(files))
+	}
+}

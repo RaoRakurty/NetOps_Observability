@@ -1,0 +1,754 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+package pcap
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// manager_test.go — the GUARDRAILS. Every bound the design calls
+// non-negotiable is asserted here, from both directions: the request is refused
+// with a reason, and nothing reached the device.
+
+func TestGuardrailsRefuseOutOfBoundRequests(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		req  StartRequest
+		want string
+	}{
+		{"duration over the cap", StartRequest{Interface: "Ethernet1/1", DurationSec: MaxDurationSeconds + 1}, "duration_s"},
+		{"duration far over the cap", StartRequest{Interface: "Ethernet1/1", DurationSec: 3600}, "duration_s"},
+		{"negative duration", StartRequest{Interface: "Ethernet1/1", DurationSec: -1}, "duration_s"},
+		{"packets over the cap", StartRequest{Interface: "Ethernet1/1", MaxPackets: MaxPackets + 1}, "max_packets"},
+		{"negative packets", StartRequest{Interface: "Ethernet1/1", MaxPackets: -5}, "max_packets"},
+		{"no interface", StartRequest{}, "interface"},
+		{"hostile interface", StartRequest{Interface: "eth0; reboot"}, "interface"},
+		{"hostile filter", StartRequest{Interface: "Ethernet1/1", Filter: "host 1.2.3.4; reload"}, "filter"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newFixture(t, nil)
+			_, err := fx.mgr.Start(context.Background(), fx.principal, fx.devices["acme-core"], tc.req, "a@acme")
+			if err == nil {
+				t.Fatalf("the guardrail did not refuse %+v", tc.req)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("refusal %q does not name the bound (%q) — the operator cannot act on it", err, tc.want)
+			}
+			if cmds := fx.gw.all(); len(cmds) != 0 {
+				t.Fatalf("a refused capture still reached the device: %v", cmds)
+			}
+			if got := fx.metrics.Snapshot()["runs_"+OutcomeRefused]; got != 1 {
+				t.Fatalf("refused runs = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestGuardrailsAcceptTheBoundaryValues(t *testing.T) {
+	fx := newFixture(t, nil)
+	b, err := CheckBounds(StartRequest{Interface: "Ethernet1/1", DurationSec: MaxDurationSeconds, MaxPackets: MaxPackets})
+	if err != nil {
+		t.Fatalf("the exact bound was refused: %v", err)
+	}
+	if b.DurationSec != MaxDurationSeconds || b.MaxPackets != MaxPackets || b.MaxBytes != MaxBytes {
+		t.Fatalf("bounds = %+v, want the caps", b)
+	}
+	// Unset fields take the small defaults the design asks for, not the caps.
+	b, err = CheckBounds(StartRequest{Interface: "Ethernet1/1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.DurationSec != DefaultDurationSeconds || b.MaxPackets != DefaultPackets {
+		t.Fatalf("defaults = %+v, want %d s / %d packets", b, DefaultDurationSeconds, DefaultPackets)
+	}
+	_ = fx
+}
+
+func TestByteCapRefusesAnOversizedCapture(t *testing.T) {
+	fx := newFixture(t, nil)
+	fx.gw.oversize = true
+	rec, err := fx.mgr.Start(context.Background(), fx.principal, fx.devices["acme-core"],
+		StartRequest{Interface: "Ethernet1/1", DurationSec: 1}, "a@acme")
+	if err != nil {
+		t.Fatalf("Start = %v", err)
+	}
+	stored, err := fx.store.Get(context.Background(), "acme", false, "acme-core", rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != StatusFailed {
+		t.Fatalf("status = %q, want %q — an oversized capture must NOT be stored truncated", stored.Status, StatusFailed)
+	}
+	if stored.BlobRef != "" {
+		t.Fatal("an oversized capture left a blob behind")
+	}
+	if !strings.Contains(stored.Error, "maximum capture size") {
+		t.Fatalf("the stored reason %q does not say the size cap was hit", stored.Error)
+	}
+}
+
+func TestOneCapturePerDeviceAtATime(t *testing.T) {
+	// A capture that is still RUNNING must make the next request a 409. The
+	// runner is made a no-op so the first capture stays in flight.
+	fx := newFixture(t, func(d *Deps) { d.Run = func(func()) {} })
+	first, err := fx.mgr.Start(context.Background(), fx.principal, fx.devices["acme-core"],
+		StartRequest{Interface: "Ethernet1/1", DurationSec: 5}, "a@acme")
+	if err != nil {
+		t.Fatalf("first Start = %v", err)
+	}
+	_, err = fx.mgr.Start(context.Background(), fx.principal, fx.devices["acme-core"],
+		StartRequest{Interface: "Ethernet1/2", DurationSec: 5}, "a@acme")
+	if !errors.Is(err, ErrInFlight) {
+		t.Fatalf("second Start = %v, want ErrInFlight", err)
+	}
+	if got := fx.metrics.Snapshot()["runs_"+OutcomeInFlight]; got != 1 {
+		t.Fatalf("in_flight runs = %d, want 1", got)
+	}
+	// A DIFFERENT device is unaffected — the gate is per-device, not global.
+	if _, err := fx.mgr.Start(context.Background(), fx.principal, fx.devices["acme-iosxe"],
+		StartRequest{Interface: "GigabitEthernet0/0/1", DurationSec: 5}, "a@acme"); err != nil {
+		t.Fatalf("a second DEVICE was refused: %v", err)
+	}
+	_ = first
+}
+
+func TestAnExpiredRunningRowDoesNotWedgeTheDeviceForever(t *testing.T) {
+	// The DURABLE half of the gate on its own: a running row left behind by a
+	// runtime that died must stop blocking the device once it has expired, or a
+	// crash would take that device permanently out of capture.
+	fx := newFixture(t, nil)
+	ctx := context.Background()
+	stale := Capture{
+		TenantID: "acme", DeviceID: "acme-core", ID: "00000000000000000000000000000001",
+		Interface: "Ethernet1/1", Status: StatusRunning,
+		StartedAt: fx.now.Add(-time.Hour), ExpiresAt: fx.now.Add(-time.Minute),
+	}
+	if err := fx.store.Put(ctx, "acme", false, stale); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.mgr.Start(ctx, fx.principal, fx.devices["acme-core"],
+		StartRequest{Interface: "Ethernet1/1", DurationSec: 1}, "a@acme"); err != nil {
+		t.Fatalf("an EXPIRED running row still blocked the device: %v", err)
+	}
+
+	// A row that has NOT expired still blocks it.
+	fx2 := newFixture(t, nil)
+	live := stale
+	live.ExpiresAt = fx2.now.Add(time.Minute)
+	if err := fx2.store.Put(ctx, "acme", false, live); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx2.mgr.Start(ctx, fx2.principal, fx2.devices["acme-core"],
+		StartRequest{Interface: "Ethernet1/1", DurationSec: 1}, "a@acme"); !errors.Is(err, ErrInFlight) {
+		t.Fatalf("a LIVE running row did not block the device: %v", err)
+	}
+}
+
+func TestOneCaptureAtATimeAt409OverHTTP(t *testing.T) {
+	fx := newFixture(t, func(d *Deps) { d.Run = func(func()) {} })
+	w := fx.do(http.MethodPost, "/api/devices/acme-core/pcap", `{"interface":"Ethernet1/1","duration_s":5}`)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("first POST = %d (%s)", w.Code, w.Body.String())
+	}
+	var accepted struct {
+		CaptureID string `json:"capture_id"`
+		Status    string `json:"status"`
+		ExpiresAt string `json:"expires_at"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	if accepted.Status != StatusRunning || !ValidateCaptureID(accepted.CaptureID) || accepted.ExpiresAt == "" {
+		t.Fatalf("202 body = %+v, want {capture_id, status running, expires_at}", accepted)
+	}
+	w = fx.do(http.MethodPost, "/api/devices/acme-core/pcap", `{"interface":"Ethernet1/1","duration_s":5}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("second POST = %d, want 409 (%s)", w.Code, w.Body.String())
+	}
+}
+
+func TestGuardrailBreachIsA400WithTheReason(t *testing.T) {
+	fx := newFixture(t, nil)
+	for _, body := range []string{
+		`{"interface":"Ethernet1/1","duration_s":600}`,
+		`{"interface":"Ethernet1/1","max_packets":999999}`,
+		`{"interface":"eth0; reboot"}`,
+		`{"interface":"Ethernet1/1","filter":"host 1.2.3.4; reload"}`,
+		`{"interface":"Ethernet1/1","tenant_id":"globex"}`, // unknown field, rejected not ignored
+	} {
+		w := fx.do(http.MethodPost, "/api/devices/acme-core/pcap", body)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("POST %s = %d, want 400 (%s)", body, w.Code, w.Body.String())
+		}
+		if strings.TrimSpace(w.Body.String()) == "" {
+			t.Errorf("POST %s returned a bare 400 with no reason", body)
+		}
+	}
+}
+
+func TestUnsupportedFilterAndPlatformAreHonestRefusals(t *testing.T) {
+	fx := newFixture(t, nil)
+	// IOS-XE cannot express a filter: refuse rather than capture wider than asked.
+	w := fx.do(http.MethodPost, "/api/devices/acme-iosxe/pcap", `{"interface":"GigabitEthernet0/0/1","filter":"host 10.1.2.3"}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "cannot apply a capture filter") {
+		t.Fatalf("filtered IOS-XE = %d (%s)", w.Code, w.Body.String())
+	}
+	// An unknown platform is refused, not guessed at.
+	w = fx.do(http.MethodPost, "/api/devices/acme-mystery/pcap", `{"interface":"eth0"}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "no packet-capture command set") {
+		t.Fatalf("unknown platform = %d (%s)", w.Code, w.Body.String())
+	}
+	if cmds := fx.gw.all(); len(cmds) != 0 {
+		t.Fatalf("a refused capture still reached a device: %v", cmds)
+	}
+}
+
+func TestSuccessfulCaptureIsSealedAtRestAndCleanedUp(t *testing.T) {
+	fx := newFixture(t, nil)
+	rec, err := fx.mgr.Start(context.Background(), fx.principal, fx.devices["acme-core"],
+		StartRequest{Interface: "Ethernet1/1", DurationSec: 1, Filter: "tcp and port 22"}, "a@acme")
+	if err != nil {
+		t.Fatalf("Start = %v", err)
+	}
+	stored, err := fx.store.Get(context.Background(), "acme", false, "acme-core", rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != StatusStored {
+		t.Fatalf("status = %q (%s), want stored", stored.Status, stored.Error)
+	}
+	if stored.Packets != 3 {
+		t.Fatalf("packets = %d, want 3 (counted from the pcap bytes)", stored.Packets)
+	}
+	if stored.Bytes != int64(len(fx.gw.payload)) {
+		t.Fatalf("bytes = %d, want %d", stored.Bytes, len(fx.gw.payload))
+	}
+
+	// NO PLAINTEXT AT REST. Walk every file under the blob root and assert none
+	// of them contains the capture's magic bytes or its payload.
+	found := 0
+	err = filepath.Walk(fx.blobs.Root(), func(p string, info os.FileInfo, werr error) error {
+		if werr != nil || info.IsDir() {
+			return werr
+		}
+		found++
+		if info.Mode().Perm() != 0o600 {
+			t.Errorf("sealed capture %s has mode %v, want 0600", p, info.Mode().Perm())
+		}
+		b, rerr := os.ReadFile(p) // #nosec G304 -- test-owned temp path
+		if rerr != nil {
+			return rerr
+		}
+		if !strings.HasPrefix(string(b), fakeMarker) {
+			t.Errorf("%s does not carry the sealer marker — it may not be sealed", p)
+		}
+		if strings.Contains(string(b), string(fx.gw.payload)) {
+			t.Errorf("PLAINTEXT AT REST: %s contains the raw capture bytes", p)
+		}
+		for _, magic := range pcapMagic {
+			if strings.Contains(string(b), string(magic)) {
+				t.Errorf("PLAINTEXT AT REST: %s contains a pcap magic number", p)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found == 0 {
+		t.Fatal("no blob was written — the at-rest scan would be vacuous")
+	}
+
+	// The capture point was torn down: cleanup ran.
+	cmds := strings.Join(fx.gw.all(), "\n")
+	if !strings.Contains(cmds, "delete ") {
+		t.Fatalf("no cleanup command ran — a capture file may remain on the device:\n%s", cmds)
+	}
+	// And Open round-trips through the seal.
+	raw, err := fx.mgr.Open(stored)
+	if err != nil {
+		t.Fatalf("Open = %v", err)
+	}
+	if string(raw) != string(fx.gw.payload) {
+		t.Fatal("the unsealed capture does not match what the device produced")
+	}
+}
+
+func TestSealedBlobIsBoundToItsTenantAndDevice(t *testing.T) {
+	fx := newFixture(t, nil)
+	rec, err := fx.mgr.Start(context.Background(), fx.principal, fx.devices["acme-core"],
+		StartRequest{Interface: "Ethernet1/1", DurationSec: 1}, "a@acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := fx.store.Get(context.Background(), "acme", false, "acme-core", rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A row whose tenant has been tampered with cannot open its own blob: the
+	// AAD binds the ciphertext to (tenant, device, capture), so a blob moved
+	// between tenants is unreadable rather than mis-served.
+	tampered := stored
+	tampered.TenantID = "globex"
+	if _, err := fx.mgr.Open(tampered); err == nil {
+		t.Fatal("a blob opened under ANOTHER tenant's key — the AAD binding is not enforced")
+	}
+	tampered = stored
+	tampered.DeviceID = "globex-core"
+	if _, err := fx.mgr.Open(tampered); err == nil {
+		t.Fatal("a blob opened under ANOTHER device's field id — the AAD binding is not enforced")
+	}
+}
+
+func TestManagerRefusesToRunWithADormantSealer(t *testing.T) {
+	// §8: rather than write packet payload in cleartext, the module refuses to
+	// exist. This is the fail-closed half of "encryption at rest".
+	dir := t.TempDir()
+	sealer := &fakeSealer{active: false}
+	blobs, err := NewFileBlobStore(dir, "fake1:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = New(Deps{
+		Now: time.Now, LookupDevice: func(string) (Device, bool) { return Device{}, false },
+		Gateway: &fakeGateway{}, Commands: NewProfileCommandTable(), Sealer: sealer,
+		Blobs: blobs, Store: NewFileStore(""),
+		Authz:      func(http.ResponseWriter, *http.Request, Gate) (Principal, bool) { return Principal{}, false },
+		WriteJSON:  testWriteJSON,
+		WriteError: testWriteError,
+		LogWarn:    func(string, map[string]any) {}, LogError: func(string, map[string]any) {},
+		Scrub: func(s string) string { return s },
+	})
+	if err == nil {
+		t.Fatal("the manager was built over a DORMANT sealer — captures would be written in cleartext")
+	}
+	if !strings.Contains(err.Error(), "cleartext") {
+		t.Fatalf("the refusal %q does not say why", err)
+	}
+}
+
+func TestNewRefusesIncompleteDeps(t *testing.T) {
+	if _, err := New(Deps{}); err == nil {
+		t.Fatal("New accepted an empty Deps — a silently non-capturing manager")
+	}
+}
+
+func TestRetentionPrunesOldestAndDeletesBlobs(t *testing.T) {
+	fx := newFixture(t, func(d *Deps) { d.Keep = 2 })
+	ctx := context.Background()
+	refs := []string{}
+	for i := 0; i < 4; i++ {
+		fx.now = fx.now.Add(time.Minute)
+		rec, err := fx.mgr.Start(ctx, fx.principal, fx.devices["acme-core"],
+			StartRequest{Interface: "Ethernet1/1", DurationSec: 1}, "a@acme")
+		if err != nil {
+			t.Fatalf("start %d: %v", i, err)
+		}
+		stored, err := fx.store.Get(ctx, "acme", false, "acme-core", rec.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		refs = append(refs, stored.BlobRef)
+	}
+	rows, err := fx.store.List(ctx, "acme", false, "acme-core", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("retention kept %d rows, want 2", len(rows))
+	}
+	// The pruned blobs are GONE, not merely unreferenced: an unreachable sealed
+	// payload on disk is still payload on disk.
+	for _, ref := range refs[:2] {
+		if _, err := fx.blobs.Get(ref); !errors.Is(err, ErrNotFound) {
+			t.Errorf("pruned blob %s still exists (%v)", ref, err)
+		}
+	}
+	if got := fx.metrics.Snapshot()["pruned_total"]; got != 2 {
+		t.Fatalf("pruned_total = %d, want 2", got)
+	}
+}
+
+func TestTheDeviceFetchIsAuditedSeparatelyFromTheStart(t *testing.T) {
+	// "A capture started" and "packet payload left the device" are different
+	// facts, and the audit trail has to be able to answer both.
+	var runtime []map[string]any
+	var tenants []string
+	fx := newFixture(t, func(d *Deps) {
+		d.AuditRuntime = func(tenant, device, action string, detail map[string]any) {
+			if action != "pcap_capture_fetched" {
+				return
+			}
+			tenants = append(tenants, tenant)
+			detail["device"] = device
+			runtime = append(runtime, detail)
+		}
+	})
+	if _, err := fx.mgr.Start(context.Background(), fx.principal, fx.devices["acme-core"],
+		StartRequest{Interface: "Ethernet1/1", DurationSec: 1, Filter: "tcp and port 22"}, "a@acme"); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime) != 1 {
+		t.Fatalf("fetch audits = %d, want 1", len(runtime))
+	}
+	if runtime[0]["sensitive"] != true {
+		t.Fatalf("the fetch audit is not tagged sensitive: %+v", runtime[0])
+	}
+	if tenants[0] != "acme" || runtime[0]["device"] != "acme-core" || runtime[0]["actor"] != "a@acme" {
+		t.Fatalf("the fetch audit does not identify whose payload moved: %v / %+v", tenants, runtime[0])
+	}
+	if runtime[0]["filter"] != "tcp and port 22" {
+		t.Fatalf("the fetch audit does not record how wide the capture was: %+v", runtime[0])
+	}
+
+	// A capture that FAILED never emits a fetch audit — no payload moved.
+	fx2 := newFixture(t, func(d *Deps) {
+		d.AuditRuntime = func(_, _, action string, _ map[string]any) {
+			if action == "pcap_capture_fetched" {
+				t.Errorf("a FAILED capture claimed payload had left the device")
+			}
+		}
+	})
+	fx2.gw.fetchErr = errors.New("device unreachable")
+	if _, err := fx2.mgr.Start(context.Background(), fx2.principal, fx2.devices["acme-core"],
+		StartRequest{Interface: "Ethernet1/1", DurationSec: 1}, "a@acme"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMetricsCoverTheDocumentedSeries(t *testing.T) {
+	fx := newFixture(t, nil)
+	if _, err := fx.mgr.Start(context.Background(), fx.principal, fx.devices["acme-core"],
+		StartRequest{Interface: "Ethernet1/1", DurationSec: 1}, "a@acme"); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	fx.metrics.Write(&b)
+	out := b.String()
+	for _, want := range []string{
+		`netops_pcap_captures_total{outcome="stored"} 1`,
+		`netops_pcap_captures_total{outcome="failed"} 0`,
+		"netops_pcap_bytes_sealed_total",
+		"netops_pcap_active 0",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("/metrics is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestCaptureOutageDoesNotDestroyStoredCaptures walks the configstore H7 outage
+// on this module's register. An operator chases a problem on a device that has
+// stopped answering: every attempt mints a NEW capture id, and every one of them
+// is written back as a `failed` row in the SAME register retention counts
+// against. Then the device recovers, one capture succeeds, and retention runs.
+//
+// If failure rows share the budget that protects stored captures, the budget is
+// full of them and every real capture is evicted with its sealed blob. The
+// outage would not merely fail to collect packets, it would delete the captures
+// the operator already had.
+func TestCaptureOutageDoesNotDestroyStoredCaptures(t *testing.T) {
+	// The budget holds all four real captures this test takes (three plus the
+	// recovery), so anything missing at the end was evicted by failure rows and
+	// not by honest retention.
+	fx := newFixture(t, func(d *Deps) { d.Keep = 4 })
+	ctx := context.Background()
+	dev := fx.devices["acme-core"]
+
+	// Three real captures, each with its own sealed blob on disk.
+	kept := []Capture{}
+	for i := 0; i < 3; i++ {
+		fx.now = fx.now.Add(time.Minute)
+		rec, err := fx.mgr.Start(ctx, fx.principal, dev,
+			StartRequest{Interface: "Ethernet1/1", DurationSec: 1}, "a@acme")
+		if err != nil {
+			t.Fatalf("capture %d: %v", i, err)
+		}
+		row, err := fx.store.Get(ctx, "acme", false, dev.ID, rec.ID)
+		if err != nil {
+			t.Fatalf("capture %d row: %v", i, err)
+		}
+		if row.Status != StatusStored || row.BlobRef == "" {
+			t.Fatalf("capture %d did not store: %+v", i, row)
+		}
+		kept = append(kept, row)
+	}
+
+	// The outage. The device stops answering, and the operator keeps trying.
+	fx.gw.execErr = errors.New("dial tcp 10.1.0.1:22: connect: connection refused")
+	for i := 0; i < 30; i++ {
+		fx.now = fx.now.Add(time.Minute)
+		rec, err := fx.mgr.Start(ctx, fx.principal, dev,
+			StartRequest{Interface: "Ethernet1/1", DurationSec: 1}, "a@acme")
+		if err != nil {
+			t.Fatalf("attempt %d was refused before it reached the device: %v", i, err)
+		}
+		row, err := fx.store.Get(ctx, "acme", false, dev.ID, rec.ID)
+		if err != nil {
+			// Retention may already have trimmed this row, which is fine; what
+			// matters is that a failed attempt is recorded at all.
+			continue
+		}
+		if row.Status != StatusFailed {
+			t.Fatalf("attempt %d was recorded as %q, want %q", i, row.Status, StatusFailed)
+		}
+	}
+
+	// The device comes back and one capture succeeds. Retention runs on it.
+	fx.gw.execErr = nil
+	fx.now = fx.now.Add(time.Minute)
+	rec, err := fx.mgr.Start(ctx, fx.principal, dev,
+		StartRequest{Interface: "Ethernet1/1", DurationSec: 1}, "a@acme")
+	if err != nil {
+		t.Fatalf("recovery capture: %v", err)
+	}
+	recovered, err := fx.store.Get(ctx, "acme", false, dev.ID, rec.ID)
+	if err != nil {
+		t.Fatalf("recovery row: %v", err)
+	}
+
+	for i, c := range append(append([]Capture{}, kept...), recovered) {
+		got, err := fx.store.Get(ctx, "acme", false, dev.ID, c.ID)
+		if err != nil {
+			t.Errorf("CAPTURE LOST: %d (%s) was evicted from the register by failure rows: %v", i, c.ID, err)
+		} else if got.Status != StatusStored {
+			t.Errorf("capture %d came back as %q", i, got.Status)
+		}
+		// The row surviving is not the whole property. What the operator opens
+		// in Wireshark is the sealed blob, so check the disk itself.
+		if _, err := os.Stat(filepath.Join(fx.blobs.Root(), filepath.FromSlash(c.BlobRef))); err != nil {
+			t.Errorf("SEALED BLOB LOST from disk: capture %d (%s): %v", i, c.ID, err)
+		}
+		if _, err := fx.mgr.Open(c); err != nil {
+			t.Errorf("capture %d can no longer be opened: %v", i, err)
+		}
+	}
+
+	// The other half of the rule: an outage must stay visible, and it must not
+	// grow the register without a bound either (§9).
+	rows, err := fx.store.List(ctx, "acme", false, dev.ID, MaxListLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := 0
+	for _, r := range rows {
+		if r.Status == StatusFailed {
+			failed++
+		}
+	}
+	if failed == 0 {
+		t.Error("the outage left no trace at all; a failed capture must stay visible")
+	}
+	if failed > maxFailedCaptures {
+		t.Errorf("register holds %d failure rows, budget is %d", failed, maxFailedCaptures)
+	}
+}
+
+// TestFailedCapturesArePrunedWhileTheDeviceIsStillDown: retention only runs on
+// the SUCCESS path, so without a prune on the failure path a device that never
+// answers grows its register by one row per attempt with nothing trimming it.
+func TestFailedCapturesArePrunedWhileTheDeviceIsStillDown(t *testing.T) {
+	fx := newFixture(t, func(d *Deps) { d.Keep = 3 })
+	ctx := context.Background()
+	fx.gw.execErr = errors.New("capture start refused")
+
+	for i := 0; i < 4*maxFailedCaptures; i++ {
+		fx.now = fx.now.Add(time.Minute)
+		if _, err := fx.mgr.Start(ctx, fx.principal, fx.devices["acme-core"],
+			StartRequest{Interface: "Ethernet1/1", DurationSec: 1}, "a@acme"); err != nil {
+			t.Fatalf("attempt %d: %v", i, err)
+		}
+	}
+	rows, err := fx.store.List(ctx, "acme", false, "acme-core", MaxListLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("the outage must still be visible in the register")
+	}
+	if len(rows) > maxFailedCaptures {
+		t.Fatalf("an outage with no capture in between grew the register to %d rows; budget is %d",
+			len(rows), maxFailedCaptures)
+	}
+}
+
+// ── the terminal-write guardrail (review 3.5-04) ────────────────────────────
+
+// ctxStore is a store that HONOURS THE CALLER'S CONTEXT, which is what makes it
+// evidence about production. FileStore ignores the context entirely, so the
+// default harness cannot see this class of defect at all; the Postgres backend
+// hands the context straight to pgx, and a cancelled one fails every statement
+// before it reaches the database.
+type ctxStore struct {
+	Store
+	mu      sync.Mutex
+	putCtxs []context.Context
+	// pruneLive records, AT CALL TIME, whether the context each retention sweep
+	// was handed was still alive. Reading Err() afterwards proves nothing: the
+	// terminal context is cancelled by its own defer as soon as the write path
+	// returns.
+	pruneLive []bool
+}
+
+func (c *ctxStore) Put(ctx context.Context, tenant string, cross bool, rec Capture) error {
+	c.mu.Lock()
+	c.putCtxs = append(c.putCtxs, ctx)
+	c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("capture store: %w", err)
+	}
+	return c.Store.Put(ctx, tenant, cross, rec)
+}
+
+func (c *ctxStore) Prune(ctx context.Context, tenant string, cross bool, deviceID string, keep int) ([]Capture, error) {
+	c.mu.Lock()
+	c.pruneLive = append(c.pruneLive, ctx.Err() == nil)
+	c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("capture retention: %w", err)
+	}
+	return c.Store.Prune(ctx, tenant, cross, deviceID, keep)
+}
+
+func (c *ctxStore) lastPut() context.Context {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.putCtxs) == 0 {
+		return nil
+	}
+	return c.putCtxs[len(c.putCtxs)-1]
+}
+
+// ctxGateway records the context the DEVICE WORK ran under, so a test can prove
+// the terminal metadata write did not reuse it.
+type ctxGateway struct {
+	*fakeGateway
+	mu  sync.Mutex
+	ctx context.Context
+}
+
+// Fetch is the recording point on purpose. The cleanup commands run through
+// Exec with their OWN short context (that is the pattern this defect should
+// have followed), so recording there would capture the wrong one.
+func (g *ctxGateway) Fetch(ctx context.Context, dev Device, remotePath string, maxBytes int64) ([]byte, error) {
+	g.mu.Lock()
+	g.ctx = ctx
+	g.mu.Unlock()
+	return g.fakeGateway.Fetch(ctx, dev, remotePath, maxBytes)
+}
+
+func (g *ctxGateway) deviceCtx() context.Context {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.ctx
+}
+
+// TestATimedOutCaptureStillReachesATerminalRow — REGRESSION (review 3.5-04).
+// The context the capture body builds is the bound on the DEVICE WORK: when a
+// device stops answering it fires, and the fetch fails, and the failure is
+// stamped on the row. Stamping it reused that same, now dead, context. On the
+// Postgres backend the write therefore failed too, and the row the operator sees
+// stayed `running` for ever: a capture that will never end, on a device that
+// cannot start another one, with nothing saying what happened.
+func TestATimedOutCaptureStillReachesATerminalRow(t *testing.T) {
+	cs := &ctxStore{}
+	f := newFixture(t, func(d *Deps) { cs.Store = d.Store; d.Store = cs })
+
+	dev := f.devices["acme-core"]
+	captureID, err := mintID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := Capture{
+		TenantID: "acme", DeviceID: dev.ID, ID: captureID,
+		Interface: "Ethernet1/1", DurationSec: 5, StartedAt: f.now,
+		ExpiresAt: f.now.Add(time.Minute), Status: StatusRunning, Actor: "a@acme",
+	}
+	if err := f.store.Put(context.Background(), "acme", false, rec); err != nil {
+		t.Fatalf("seed the running row: %v", err)
+	}
+
+	// Exactly the state the body is in when the device stopped answering: the
+	// capture's own context has already fired.
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+	f.mgr.fail(dead, Principal{Tenant: "acme"}, rec, errors.New("capture fetch failed: context deadline exceeded"))
+
+	got, err := f.store.Get(context.Background(), "acme", false, dev.ID, rec.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status == StatusRunning {
+		t.Fatal("a timed-out capture left the row RUNNING FOR EVER: the terminal write inherited the dead device context")
+	}
+	if got.Status != StatusFailed {
+		t.Fatalf("status = %q, want %q", got.Status, StatusFailed)
+	}
+	if got.EndedAt == nil || got.Error == "" {
+		t.Fatalf("the terminal row says nothing about what happened: %+v", got)
+	}
+	// The retention sweep the failure path deliberately runs must not be
+	// cancelled either, or an unreachable device grows a row per attempt.
+	cs.mu.Lock()
+	sweeps := append([]bool(nil), cs.pruneLive...)
+	cs.mu.Unlock()
+	if len(sweeps) != 1 || !sweeps[0] {
+		t.Fatalf("retention did not run on a live context: %v", sweeps)
+	}
+}
+
+// TestTheStoredCaptureWriteDoesNotInheritTheDeviceContext — REGRESSION
+// (review 3.5-04), success half. The sealed blob is already on disk by the time
+// the row is written, so a terminal write cancelled with the device work does
+// not merely lose metadata: the handler deletes the blob it cannot reference,
+// and the capture the operator waited for is gone.
+func TestTheStoredCaptureWriteDoesNotInheritTheDeviceContext(t *testing.T) {
+	cs := &ctxStore{}
+	gw := &ctxGateway{}
+	f := newFixture(t, func(d *Deps) {
+		cs.Store = d.Store
+		d.Store = cs
+		gw.fakeGateway = d.Gateway.(*fakeGateway)
+		d.Gateway = gw
+	})
+
+	rec, err := f.mgr.Start(context.Background(), f.principal, f.devices["acme-core"],
+		StartRequest{Interface: "Ethernet1/1", DurationSec: 1}, "a@acme")
+	if err != nil {
+		t.Fatalf("Start = %v", err)
+	}
+	stored, err := f.store.Get(context.Background(), "acme", false, "acme-core", rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != StatusStored || stored.BlobRef == "" {
+		t.Fatalf("the capture did not store: %+v", stored)
+	}
+
+	devCtx, putCtx := gw.deviceCtx(), cs.lastPut()
+	if devCtx == nil || putCtx == nil {
+		t.Fatal("the harness recorded no contexts")
+	}
+	if putCtx == devCtx {
+		t.Fatal("the terminal metadata write REUSED the context that bounds the device work: when that context fires, the row and the sealed blob are both lost")
+	}
+	// Not inherited is not the same as unbounded. §9: all IO has a timeout.
+	deadline, ok := putCtx.Deadline()
+	if !ok {
+		t.Fatal("the terminal write runs on an UNBOUNDED context")
+	}
+	if devDeadline, hadOne := devCtx.Deadline(); hadOne && deadline.Equal(devDeadline) {
+		t.Fatal("the terminal write is still bounded by the device work's own deadline")
+	}
+}

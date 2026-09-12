@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package notify
 
 import (
@@ -80,7 +83,8 @@ func (t *Twilio) Send(a models.Alert) error {
 			continue
 		}
 		if resp.StatusCode >= 300 {
-			b, _ := io.ReadAll(resp.Body)
+			// F-27 class: bounded error-body read (see sns.go).
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyMaxBytes)) // best-effort: diagnostic snippet; a read error just leaves it empty
 			resp.Body.Close()
 			if firstErr == nil {
 				firstErr = fmt.Errorf("twilio %d: %s", resp.StatusCode, string(b))

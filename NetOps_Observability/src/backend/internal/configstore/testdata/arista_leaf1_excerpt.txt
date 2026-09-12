@@ -1,0 +1,21 @@
+
+! Command: show running-config at line 2
+! device: leaf1 (cEOSLab, EOS-4.36.0.1F-47425148.43601F (engineering build))
+!
+no aaa root
+!
+username admin privilege 15 role network-admin secret sha512 $6$REDACTED
+!
+management api http-commands
+   no shutdown
+snmp-server contact lab-team
+snmp-server location lab-rack-DC
+snmp-server local-interface Management0
+snmp-server view ARISTA-VIEW iso included
+snmp-server community redacted-community ro
+snmp-server group ARISTA-GRP v3 priv read ARISTA-VIEW
+snmp-server user arista-monitor ARISTA-GRP v3 localized f5717f001c73ad882a00 auth sha REDACTEDAUTHKEY priv aes REDACTEDPRIVKEY
+snmp-server host 10.70.245.122 version 3 priv arista-monitor
+snmp-server host 10.70.245.122 version 2c redacted-community
+snmp-server enable traps
+!

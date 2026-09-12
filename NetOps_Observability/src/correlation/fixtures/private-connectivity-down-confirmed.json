@@ -1,0 +1,15 @@
+{
+  "name": "Direct Connect + IPSec tunnel down: app unreachable from corporate — private-connectivity verdict",
+  "signals": [
+    {"kind": "cloud_change", "entity_type": "cloud_resource", "entity_id": "dxcon-prod-941",
+     "observer_id": "aws-health-api", "observer_type": "cloud_api",
+     "modality": "control_plane", "collection_path": "via_cloud_api:acct1", "deviation": 0.0},
+    {"kind": "cloud_health", "entity_type": "app", "entity_id": "Workday",
+     "observer_id": "aws-health-api", "observer_type": "cloud_api",
+     "modality": "device_telemetry", "collection_path": "via_cloud_api:acct1", "deviation": 4.0},
+    {"kind": "probe_loss", "entity_type": "path", "entity_id": "corp-hq->Workday",
+     "observer_id": "corp-hq-agent", "observer_type": "vantage_agent",
+     "modality": "active_probe", "deviation": 5.0, "probe_scope": "customer_path"}
+  ],
+  "expect": {"top": "sig.ent.cloud.private-connectivity-down", "tier": "confirmed", "owner": "carrier"}
+}

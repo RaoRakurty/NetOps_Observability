@@ -1,0 +1,440 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+package backend
+
+// auth_config_test.go — unit + HTTP tests for the runtime-configurable native
+// LDAP/TACACS providers (auth_config.go): kv-backed config stores, write-only
+// secret handling (redaction on GET, preservation on PUT), input validation,
+// admin gating, and the public /api/auth/methods discovery endpoint.
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"netops/backend/internal/licence"
+	"netops/backend/internal/oidc"
+	"netops/backend/internal/session"
+	"netops/backend/internal/users"
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+// newAuthCfgServer builds a server wired with the identity stores plus the
+// LDAP/TACACS config stores and a (disabled) OIDC provider, exercised through
+// the real router + auth middleware.
+func newAuthCfgServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	dir := t.TempDir()
+	must := func(err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	us, err := users.NewFileStore(dir+"/users.json", userDeps())
+	must(err)
+	rs, err := newRoleStore(dir + "/roles.json")
+	must(err)
+	ts, err := newTenantStore(dir + "/tenants.json")
+	must(err)
+	rf, err := session.NewRefreshStore(dir+"/refresh.json", time.Hour, platformKV{})
+	must(err)
+	must(us.SeedAdmin("admin", "Passw0rd!2345"))
+	s := &server{
+		users:     us,
+		roles:     rs,
+		tenants:   ts,
+		refresh:   rf,
+		startedAt: time.Now().UTC(),
+		ldap:      newLDAPConfigStore(dir+"/ldap_config.json", nil),
+		tacacs:    newTACACSConfigStore(dir+"/tacacs_config.json", nil),
+		// LICENCE-BEGIN — licence-neutral, like the shared harness in
+		// auth_flow_test.go: LDAP CONFIGURATION is an Enterprise capability, and
+		// these tests are about the gate, the redaction and the validation, not
+		// about licensing. The licence gate on this route is proved in
+		// licence_routes_test.go against real signed documents.
+		entitlements: licence.NewUnlimitedService(),
+		// LICENCE-END
+	}
+	s.oidc.Store(oidc.NewProviderFromConfig(newOIDCConfigFromEnv(), jwksTTL())) // disabled (no env) -> ready()==false
+	s.oidcCfg = newOIDCConfigStore(dir+"/oidc_config.json", s)
+	mux := http.NewServeMux()
+	s.routes(mux)
+	srv := httptest.NewServer(s.withAuth(mux))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func adminToken(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	return login(t, srv, "admin", "Passw0rd!2345").Token
+}
+
+// ---------------------------------------------------------------------------
+// LDAP config store (pure unit)
+// ---------------------------------------------------------------------------
+
+func TestLDAPConfigStoreSetEffectiveAndReload(t *testing.T) {
+	path := t.TempDir() + "/ldap.json"
+	st := newLDAPConfigStore(path, nil)
+	// Nothing saved yet -> falls back to env defaults (disabled).
+	if st.effective().Enabled {
+		t.Fatal("expected disabled effective config before any save")
+	}
+	in := ldapConfig{
+		Enabled: true, Host: "ldap.example.com", BaseDN: "dc=example,dc=com",
+		UserFilter: "(uid=%s)", BindDN: "cn=svc", BindPassword: "s3cret",
+	}
+	out, err := st.set(in)
+	if err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if !out.Enabled || out.Host != "ldap.example.com" {
+		t.Fatalf("unexpected stored config: %+v", out)
+	}
+	// A fresh store over the same path must load the persisted config.
+	st2 := newLDAPConfigStore(path, nil)
+	if got := st2.effective(); !got.Enabled || got.BindPassword != "s3cret" {
+		t.Fatalf("reload lost data: %+v", got)
+	}
+}
+
+func TestLDAPConfigSecretPreservedOnUpdate(t *testing.T) {
+	st := newLDAPConfigStore(t.TempDir()+"/ldap.json", nil)
+	if _, err := st.set(ldapConfig{Enabled: true, Host: "h", BaseDN: "dc=x", UserFilter: "(uid=%s)", BindDN: "cn=svc", BindPassword: "orig"}); err != nil {
+		t.Fatal(err)
+	}
+	// Update with an empty password (the redacted form round-trip) -> keep "orig".
+	out, err := st.set(ldapConfig{Enabled: true, Host: "h2", BaseDN: "dc=x", UserFilter: "(uid=%s)", BindDN: "cn=svc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.BindPassword != "orig" {
+		t.Fatalf("password not preserved: %q", out.BindPassword)
+	}
+	if out.Host != "h2" {
+		t.Fatalf("host not updated: %q", out.Host)
+	}
+	// Update with a new password -> replace.
+	out, err = st.set(ldapConfig{Enabled: true, Host: "h2", BaseDN: "dc=x", UserFilter: "(uid=%s)", BindDN: "cn=svc", BindPassword: "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.BindPassword != "new" {
+		t.Fatalf("password not replaced: %q", out.BindPassword)
+	}
+}
+
+func TestLDAPConfigValidate(t *testing.T) {
+	cases := []struct {
+		name string
+		c    ldapConfig
+		ok   bool
+	}{
+		{"disabled is always valid", ldapConfig{Enabled: false}, true},
+		{"enabled needs host", ldapConfig{Enabled: true, BaseDN: "dc=x", UserFilter: "(uid=%s)"}, false},
+		{"enabled needs base_dn", ldapConfig{Enabled: true, Host: "h", UserFilter: "(uid=%s)"}, false},
+		{"filter needs %s", ldapConfig{Enabled: true, Host: "h", BaseDN: "dc=x", UserFilter: "(uid=joe)"}, false},
+		{"tls+starttls conflict", ldapConfig{Enabled: true, Host: "h", BaseDN: "dc=x", UserFilter: "(uid=%s)", UseTLS: true, StartTLS: true}, false},
+		{"port range", ldapConfig{Enabled: true, Host: "h", BaseDN: "dc=x", UserFilter: "(uid=%s)", Port: 70000}, false},
+		{"valid", ldapConfig{Enabled: true, Host: "h", BaseDN: "dc=x", UserFilter: "(uid=%s)"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := tc.c
+			c.Normalize()
+			err := c.Validate()
+			if tc.ok && err != nil {
+				t.Fatalf("want valid, got %v", err)
+			}
+			if !tc.ok && err == nil {
+				t.Fatal("want error, got nil")
+			}
+		})
+	}
+}
+
+func TestLDAPConfigNormalizeDefaults(t *testing.T) {
+	c := ldapConfig{Enabled: true, Host: "  h  ", BaseDN: " dc=x ", UserFilter: "  ",
+		RoleMappings: []ldapRoleMapping{{Group: "cn=a", Role: "operator"}, {Group: " ", Role: "x"}, {Group: "cn=b", Role: ""}}}
+	c.Normalize()
+	if c.Host != "h" || c.BaseDN != "dc=x" {
+		t.Fatalf("trim failed: %+v", c)
+	}
+	if c.UserFilter != "(uid=%s)" {
+		t.Fatalf("default filter not applied: %q", c.UserFilter)
+	}
+	if c.DefaultRole != RoleReadOnly || c.DefaultTenant != TenantGlobal {
+		t.Fatalf("defaults not applied: %+v", c)
+	}
+	if len(c.RoleMappings) != 1 || c.RoleMappings[0].Group != "cn=a" {
+		t.Fatalf("role mappings not cleaned: %+v", c.RoleMappings)
+	}
+}
+
+func TestLDAPPublicNeverLeaksPassword(t *testing.T) {
+	c := ldapConfig{Enabled: true, Host: "h", BindPassword: "topsecret"}
+	pub := c.Public()
+	if !pub.BindPasswordSet {
+		t.Fatal("BindPasswordSet should be true")
+	}
+	b, err := json.Marshal(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "topsecret") || strings.Contains(string(b), "bind_password\"") {
+		t.Fatalf("public view leaked the password: %s", b)
+	}
+}
+
+// Regression: a nil RoleMappings slice must serialise as [] not null, else the
+// admin UI crashes (white screen) calling .map on null.
+func TestLDAPPublicRoleMappingsNeverNil(t *testing.T) {
+	pub := ldapConfig{Enabled: true}.Public() // RoleMappings left nil
+	if pub.RoleMappings == nil {
+		t.Fatal("public().RoleMappings must be non-nil ([])")
+	}
+	b, _ := json.Marshal(pub)
+	if !strings.Contains(string(b), `"role_mappings":[]`) {
+		t.Fatalf("expected role_mappings:[] in JSON, got %s", b)
+	}
+}
+
+// Characterization of the unseal-failure ladder (#147 T4): when the stored
+// secret cannot be UNSEALED (e.g. the platform DEK changed), the store must
+// (a) keep the non-secret config usable with the secret cleared, (b) surface
+// loadErr, (c) REFUSE an empty-secret save (which would silently wipe the
+// stored secret), and (d) accept a save that re-enters the secret — the
+// successful save IS the repair.
+func TestLDAPConfigUnsealFailureRefusesSecretWipingSave(t *testing.T) {
+	path := t.TempDir() + "/ldap.json"
+	st := newLDAPConfigStore(path, newTestVault(t))
+	in := ldapConfig{Enabled: true, Host: "h", BaseDN: "dc=x", UserFilter: "(uid=%s)", BindDN: "cn=svc", BindPassword: "orig"}
+	if _, err := st.set(in); err != nil {
+		t.Fatal(err)
+	}
+	// Reopen under a DIFFERENT vault: the sealed bind password cannot decrypt.
+	st2 := newLDAPConfigStore(path, newTestVault(t))
+	if st2.loadErr == nil {
+		t.Fatal("expected loadErr when the stored secret cannot be unsealed")
+	}
+	eff := st2.effective()
+	if eff.Host != "h" || !eff.Enabled {
+		t.Fatalf("non-secret config must stay usable: %+v", eff)
+	}
+	if eff.BindPassword != "" {
+		t.Fatalf("sealed bytes must never be used as the password: %q", eff.BindPassword)
+	}
+	// Empty-secret save must be refused, not silently wipe the stored secret.
+	if _, err := st2.set(ldapConfig{Enabled: true, Host: "h2", BaseDN: "dc=x", UserFilter: "(uid=%s)", BindDN: "cn=svc"}); err == nil {
+		t.Fatal("empty-secret save under loadErr must be refused")
+	}
+	// Re-entering the secret repairs the store.
+	out, err := st2.set(ldapConfig{Enabled: true, Host: "h2", BaseDN: "dc=x", UserFilter: "(uid=%s)", BindDN: "cn=svc", BindPassword: "renewed"})
+	if err != nil {
+		t.Fatalf("re-entering the secret must repair: %v", err)
+	}
+	if out.BindPassword != "renewed" || st2.loadErr != nil {
+		t.Fatalf("repair failed: %+v loadErr=%v", out, st2.loadErr)
+	}
+}
+
+func TestTACACSConfigUnsealFailureRefusesSecretWipingSave(t *testing.T) {
+	path := t.TempDir() + "/tac.json"
+	st := newTACACSConfigStore(path, newTestVault(t))
+	if _, err := st.set(tacacsConfig{Enabled: true, Host: "h", Secret: "orig"}); err != nil {
+		t.Fatal(err)
+	}
+	st2 := newTACACSConfigStore(path, newTestVault(t))
+	if st2.loadErr == nil {
+		t.Fatal("expected loadErr when the stored secret cannot be unsealed")
+	}
+	if eff := st2.effective(); eff.Secret != "" || eff.Host != "h" {
+		t.Fatalf("expected cleared secret + usable config: %+v", eff)
+	}
+	if _, err := st2.set(tacacsConfig{Enabled: true, Host: "h2"}); err == nil {
+		t.Fatal("empty-secret save under loadErr must be refused")
+	}
+	out, err := st2.set(tacacsConfig{Enabled: true, Host: "h2", Secret: "renewed"})
+	if err != nil || out.Secret != "renewed" || st2.loadErr != nil {
+		t.Fatalf("repair failed: %+v err=%v loadErr=%v", out, err, st2.loadErr)
+	}
+}
+
+// Characterization: a corrupt stored blob is a HARD load error — env defaults
+// apply (three states, never two) and the constructor records loadErr.
+func TestAuthConfigCorruptBlobFallsBackToEnvDefaults(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"ldap.json", "tac.json"} {
+		if err := os.WriteFile(dir+"/"+name, []byte("{not json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lst := newLDAPConfigStore(dir+"/ldap.json", nil)
+	if lst.loadErr == nil || lst.effective().Enabled {
+		t.Fatalf("corrupt LDAP blob: loadErr=%v effective=%+v", lst.loadErr, lst.effective())
+	}
+	tst := newTACACSConfigStore(dir+"/tac.json", nil)
+	if tst.loadErr == nil || tst.effective().Enabled {
+		t.Fatalf("corrupt TACACS blob: loadErr=%v effective=%+v", tst.loadErr, tst.effective())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TACACS config (pure unit)
+// ---------------------------------------------------------------------------
+
+func TestTACACSConfigClientBuild(t *testing.T) {
+	c := tacacsConfig{Enabled: true, Host: "tac.example.com", Port: 49, Secret: "k", TimeoutSeconds: 3, DefaultRole: "operator"}
+	cl := c.client()
+	if !cl.Enabled() {
+		t.Fatal("client should be enabled")
+	}
+	if cl.Addr() != "tac.example.com:49" {
+		t.Fatalf("addr: %q", cl.Addr())
+	}
+	if cl.Timeout() != 3*time.Second {
+		t.Fatalf("timeout: %v", cl.Timeout())
+	}
+	// Disabled when host empty even if Enabled flag set.
+	if (tacacsConfig{Enabled: true, Host: ""}).client().Enabled() {
+		t.Fatal("empty host must yield disabled client")
+	}
+}
+
+func TestTACACSConfigSecretPreservedAndValidate(t *testing.T) {
+	st := newTACACSConfigStore(t.TempDir()+"/tac.json", nil)
+	if _, err := st.set(tacacsConfig{Enabled: true, Host: "h", Secret: "orig"}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := st.set(tacacsConfig{Enabled: true, Host: "h2"}) // no secret -> preserve
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Secret != "orig" || out.Host != "h2" {
+		t.Fatalf("preserve/update failed: %+v", out)
+	}
+	if out.Port != 49 || out.TimeoutSeconds != 5 {
+		t.Fatalf("normalize defaults not applied: %+v", out)
+	}
+	if _, err := st.set(tacacsConfig{Enabled: true, Host: ""}); err == nil {
+		t.Fatal("enabled without host should fail validation")
+	}
+}
+
+func TestTACACSPublicNeverLeaksSecret(t *testing.T) {
+	pub := tacacsConfig{Enabled: true, Host: "h", Secret: "sharedkey"}.Public()
+	if !pub.SecretSet {
+		t.Fatal("SecretSet should be true")
+	}
+	b, _ := json.Marshal(pub)
+	if strings.Contains(string(b), "sharedkey") {
+		t.Fatalf("public view leaked secret: %s", b)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HTTP handlers
+// ---------------------------------------------------------------------------
+
+func TestAuthMethodsPublic(t *testing.T) {
+	srv := newAuthCfgServer(t)
+	st, b := do(t, srv, "GET", "/api/auth/methods", "", nil) // no token: must be public
+	if st != 200 {
+		t.Fatalf("methods status %d: %s", st, b)
+	}
+	var m struct {
+		Local  bool                   `json:"local"`
+		LDAP   struct{ Enabled bool } `json:"ldap"`
+		TACACS struct{ Enabled bool } `json:"tacacs"`
+		SSO    struct{ Enabled bool } `json:"sso"`
+	}
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	if !m.Local || m.LDAP.Enabled || m.TACACS.Enabled || m.SSO.Enabled {
+		t.Fatalf("unexpected methods: %s", b)
+	}
+}
+
+func TestLDAPConfigAdminGatedAndRedacted(t *testing.T) {
+	srv := newAuthCfgServer(t)
+	// Unauthenticated -> 401.
+	if st, _ := do(t, srv, "GET", "/api/auth/ldap/config", "", nil); st != 401 {
+		t.Fatalf("unauth GET status %d, want 401", st)
+	}
+	tok := adminToken(t, srv)
+	// PUT a config with a secret.
+	put := map[string]any{
+		"enabled": true, "host": "ldap.example.com", "base_dn": "dc=example,dc=com",
+		"user_filter": "(uid=%s)", "bind_dn": "cn=svc", "bind_password": "supersecret",
+	}
+	st, b := do(t, srv, "PUT", "/api/auth/ldap/config", tok, put)
+	if st != 200 {
+		t.Fatalf("PUT status %d: %s", st, b)
+	}
+	if strings.Contains(string(b), "supersecret") {
+		t.Fatalf("PUT response leaked secret: %s", b)
+	}
+	// GET must redact the password to a boolean.
+	st, b = do(t, srv, "GET", "/api/auth/ldap/config", tok, nil)
+	if st != 200 {
+		t.Fatalf("GET status %d: %s", st, b)
+	}
+	if strings.Contains(string(b), "supersecret") {
+		t.Fatalf("GET leaked secret: %s", b)
+	}
+	if !strings.Contains(string(b), `"bind_password_set":true`) {
+		t.Fatalf("expected bind_password_set true: %s", b)
+	}
+	// /api/auth/methods should now report ldap enabled.
+	_, mb := do(t, srv, "GET", "/api/auth/methods", "", nil)
+	if !strings.Contains(string(mb), `"enabled":true`) {
+		t.Fatalf("methods should reflect ldap enabled: %s", mb)
+	}
+}
+
+func TestLDAPConfigRejectsInvalid(t *testing.T) {
+	srv := newAuthCfgServer(t)
+	tok := adminToken(t, srv)
+	// enabled but no host -> 400.
+	st, _ := do(t, srv, "PUT", "/api/auth/ldap/config", tok, map[string]any{"enabled": true, "base_dn": "dc=x", "user_filter": "(uid=%s)"})
+	if st != 400 {
+		t.Fatalf("invalid config status %d, want 400", st)
+	}
+}
+
+func TestTACACSConfigAdminGatedAndRedacted(t *testing.T) {
+	srv := newAuthCfgServer(t)
+	if st, _ := do(t, srv, "GET", "/api/auth/tacacs/config", "", nil); st != 401 {
+		t.Fatalf("unauth GET status %d, want 401", st)
+	}
+	tok := adminToken(t, srv)
+	st, b := do(t, srv, "PUT", "/api/auth/tacacs/config", tok, map[string]any{
+		"enabled": true, "host": "tac.example.com", "secret": "sharedkey", "default_role": "operator",
+	})
+	if st != 200 {
+		t.Fatalf("PUT status %d: %s", st, b)
+	}
+	st, b = do(t, srv, "GET", "/api/auth/tacacs/config", tok, nil)
+	if st != 200 || strings.Contains(string(b), "sharedkey") {
+		t.Fatalf("GET leaked or failed: %d %s", st, b)
+	}
+	if !strings.Contains(string(b), `"secret_set":true`) {
+		t.Fatalf("expected secret_set true: %s", b)
+	}
+}
+
+func TestLDAPLoginNotConfiguredReturns404(t *testing.T) {
+	srv := newAuthCfgServer(t)
+	st, _ := do(t, srv, "POST", "/api/auth/ldap/login", "", map[string]string{"username": "x", "password": "y"})
+	if st != 404 {
+		t.Fatalf("ldap login when disabled: status %d, want 404", st)
+	}
+	st, _ = do(t, srv, "POST", "/api/auth/tacacs/login", "", map[string]string{"username": "x", "password": "y"})
+	if st != 404 {
+		t.Fatalf("tacacs login when disabled: status %d, want 404", st)
+	}
+}

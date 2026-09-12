@@ -1,0 +1,8 @@
+{
+  "Cisco-IOS-XE-wireless-wlan-cfg:wlan-cfg-entries": {
+    "wlan-cfg-entry": [
+      { "profile-name": "corp-profile", "apf-vap-id-data": { "ssid": "corp", "wlan-status": true } },
+      { "profile-name": "guest-profile", "apf-vap-id-data": { "ssid": "guest", "wlan-status": false } }
+    ]
+  }
+}

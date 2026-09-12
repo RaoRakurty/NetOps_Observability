@@ -1,0 +1,38 @@
+set /  !!! ACL rules allowing incoming tcp/57411 for the eda-discovery grpc server
+set / acl acl-filter cpm type ipv4 statistics-per-entry true
+set / acl acl-filter cpm type ipv4 entry 10 description "Accept incoming ICMP unreachable messages"
+set / system management openconfig admin-state enable
+set / system control-plane-traffic input acl acl-filter cpm type ipv4
+set / system control-plane-traffic input acl acl-filter cpm type ipv6
+set / system json-rpc-server admin-state enable
+set / system json-rpc-server network-instance mgmt http admin-state enable
+set / system json-rpc-server network-instance mgmt https admin-state enable
+set / system json-rpc-server network-instance mgmt https tls-profile clab-profile
+set / system aaa authentication idle-timeout 7200
+set / system aaa authentication authentication-method [ local ]
+set / system aaa authentication admin-user ssh-key [ "ssh-ed25519 REDACTEDPUBLICKEYMATERIAL" ]
+set / system aaa authentication linuxadmin-user password $y$REDACTED
+set / system aaa authentication linuxadmin-user ssh-key [ "ssh-ed25519 REDACTEDPUBLICKEYMATERIAL" ]
+set / system aaa server-group local type local
+set / system snmp access-group SNMPv2-RO-Community security-level no-auth-no-priv
+set / system snmp access-group SNMPv2-RO-Community community-entry RO-Community community $aes1$REDACTED
+set / system snmp access-group SNMPv3-Group security-level auth-priv
+set / system snmp access-group SNMPv3-Group security-entry srl-monitor user srl-monitor
+set / system snmp access-group SNMPv3-Group security-entry srl-monitor authentication protocol hmac-sha1-96
+set / system snmp access-group SNMPv3-Group security-entry srl-monitor authentication password $aes1$REDACTED
+set / system snmp access-group SNMPv3-Group security-entry srl-monitor privacy protocol cfb128-aes-128
+set / system snmp access-group SNMPv3-Group security-entry srl-monitor privacy password $aes1$REDACTED
+set / system snmp network-instance mgmt admin-state enable
+set / system ssh-server mgmt admin-state enable
+set / system ssh-server mgmt network-instance mgmt
+set / system ssh-server mgmt use-credentialz true
+set / system ssh-server mgmt-netconf admin-state enable
+set / system ssh-server mgmt-netconf network-instance mgmt
+set / system tls profile clab-profile key $aes1$REDACTED
+set / system tls profile clab-profile certificate "-----BEGIN CERTIFICATE-----
+REDACTEDCERTIFICATEBODY
+-----END CERTIFICATE-----
+"
+set / system tls profile clab-profile authenticate-client false
+set / system grpc-server eda-discovery admin-state enable
+set / system grpc-server eda-discovery rate-limit 65535

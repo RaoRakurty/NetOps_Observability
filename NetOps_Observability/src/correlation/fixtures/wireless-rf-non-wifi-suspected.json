@@ -1,0 +1,31 @@
+{
+  "name": "High noise floor with low Wi-Fi airtime: non-Wi-Fi interferer",
+  "signals": [
+    {
+      "kind": "wireless_noise_high",
+      "entity_type": "radio",
+      "entity_id": "ap-def456:radio0",
+      "observer_id": "catalyst_9800:int-1",
+      "observer_type": "controller",
+      "modality": "management_plane",
+      "collection_path": "via_controller:wlc-1",
+      "deviation": 4.0
+    },
+    {
+      "kind": "wireless_interference",
+      "entity_type": "radio",
+      "entity_id": "ap-def456:radio0",
+      "observer_id": "catalyst_9800:int-1",
+      "observer_type": "controller",
+      "modality": "management_plane",
+      "collection_path": "via_controller:wlc-1",
+      "ts_offset_s": 15,
+      "deviation": 3.5
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.wireless.rf-non-wifi-interference",
+    "tier": "suspected",
+    "owner": "netops"
+  }
+}

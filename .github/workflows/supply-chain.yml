@@ -1,0 +1,324 @@
+name: supply-chain
+
+# Supply-chain security gates (SC-001 Trivy, SC-007 gitleaks). These complement
+# the per-language CI (govulncheck/pip-audit/npm audit) with whole-tree scanning:
+#   - Trivy fs: dependency CVEs + Dockerfile/IaC misconfig across every manifest.
+#   - gitleaks: full-history secret scan (a leaked secret in ANY past commit).
+# Both BLOCK. Actions are SHA-pinned (SC-002); scanners are version-pinned (SC-010).
+
+on:
+  workflow_dispatch:   # manual re-run on a branch head (e.g. after a fix that did not touch this workflow's paths)
+  push:
+  pull_request:
+  # Reusable-workflow trigger (release gate). `release-gate.yml` — called by
+  # publish-images.yml and release-bundle.yml — invokes this whole workflow on the
+  # tag's commit. `workflow_call` carries NO paths filter, so a release runs EVERY
+  # job here regardless of what the tag's diff touched: the `push` filter above
+  # stays honest for fast branch feedback without ever weakening the tag gate.
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  # `github.workflow` is the CALLER's workflow when this file runs as a reusable
+  # workflow, so a gate run invoked by release-gate.yml can never share (and so
+  # never cancel) a group with this workflow's own direct push/PR run.
+  group: supply-chain-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  trivy-fs:
+    name: Trivy filesystem scan (blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Trivy fs (vuln + secret + misconfig)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL,HIGH
+          trivyignores: .trivyignore.yaml
+          # Blocking on OUR layers; ignore-unfixed triages base/distro CVEs that
+          # have no fix available yet (SC-001) so they don't hard-block merges.
+          ignore-unfixed: true
+          exit-code: '1'
+        env:
+          # Pin the vuln/policy DBs to avoid an unbounded rate-limited pull.
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db
+          TRIVY_JAVA_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-java-db
+
+  gitleaks:
+    name: gitleaks secret scan (blocking, full history)
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: '8.30.1'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0 # full history — a secret in any past commit must surface
+      - name: Install gitleaks (pinned)
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o gitleaks.tgz
+          tar -xzf gitleaks.tgz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+      - name: gitleaks detect (full git history)
+        run: gitleaks detect --source . --redact --exit-code 1 --log-opts="--all"
+
+  cis-docker:
+    name: CIS-Docker policy gate (blocking)
+    runs-on: ubuntu-latest
+    # Pins the container posture WE control so it can't silently regress: owned
+    # Dockerfiles run non-root + digest-pinned; owned compose services declare
+    # no-new-privileges + cap_drop ALL, are never privileged, and cap_add only from
+    # a justified allowlist (prober: NET_RAW). Complements Trivy's generic misconfig
+    # scan with project-specific, ignore-proof invariants. Pure stdlib — no daemon.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: CIS-Docker gate (selftest + enforce)
+        run: python3 NetOps_Observability/scripts/audits/cis_docker.py --selftest
+
+  sbom:
+    name: SBOM (CycloneDX)
+    runs-on: ubuntu-latest
+    # SC-006 (SBOM half): emit a CycloneDX software bill of materials over the
+    # whole dependency tree (gomod/npm/pip) on every build, retained as an
+    # artifact for compliance/transparency. Build PROVENANCE (attest-build-
+    # provenance) is intentionally NOT here yet — it must attach to a pushed image
+    # digest, and this stack builds images on the deploy host with no registry
+    # publish. Add provenance once a CI build+push pipeline exists.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Generate CycloneDX SBOM (Trivy)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: cyclonedx
+          output: sbom.cdx.json
+        env:
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db
+          TRIVY_JAVA_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-java-db
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+          if-no-files-found: error
+
+  oci-compliance:
+    name: OCI image compliance (inherited layers, blocking)
+    runs-on: ubuntu-latest
+    # Tracker 238. Every gate above this one asks "what does Correlix DECLARE?".
+    # A shipped container is base image + package manager + our layers, so that
+    # question has a blind spot the size of a distribution: BusyBox (GPL-2.0-only)
+    # rides inside nginx:1.27-alpine into every netops-frontend and netops-nginx
+    # image we distribute, is named in no Dockerfile of ours, and was invisible to
+    # the licence inventory for months.
+    #
+    # This job asks "what does Correlix SHIP?" against a FINAL OCI IMAGE. The
+    # regression fixture is deliberately minimal — `FROM alpine:<digest>` plus one
+    # `COPY` — so a pass proves discovery of an INHERITED package rather than a
+    # declared one. It then verifies that the corresponding source Correlix
+    # retains for that package actually hashes to its pin.
+    #
+    # Syft is not a new scanner: publish-images.yml has generated a CycloneDX SBOM
+    # of every pushed digest since SC-006. What changed is that something reads it.
+    # Trivy stays where it is (filesystem CVEs/secrets/misconfig, above).
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # make-installer.sh versions the bundle from `git describe`.
+          fetch-depth: 0
+
+      - name: Build the inherited-layer regression image
+        id: regr
+        working-directory: NetOps_Observability/tests/fixtures/oci-regression
+        run: |
+          set -euo pipefail
+          # The Dockerfile pins its base by digest and installs nothing; the test
+          # suite asserts it never so much as mentions BusyBox.
+          docker build -f Dockerfile.inherited -t correlix-oci-regression:ci .
+          BASE="$(grep -oP '^FROM \K\S+' Dockerfile.inherited)"
+          docker pull -q "$BASE"
+          docker image inspect "$BASE" \
+            --format '{{range .RootFS.Layers}}{{println .}}{{end}}' \
+            | sed '/^$/d' > "$RUNNER_TEMP/base-layers.txt"
+          test -s "$RUNNER_TEMP/base-layers.txt"
+          {
+            echo "digest=$(docker image inspect correlix-oci-regression:ci --format '{{.Id}}')"
+            echo "layers=$RUNNER_TEMP/base-layers.txt"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Scan the FINAL image (Syft → CycloneDX)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: correlix-oci-regression:ci
+          format: cyclonedx-json
+          output-file: ${{ runner.temp }}/regression.cdx.json
+          upload-artifact: false
+          # Pinned like every other scanner in this file (SC-010). Immutable
+          # identity is this policy's spine, and it applies to the tool as much
+          # as to the image: WHICH entries a scan contains is a property of the
+          # scanner (v1.18.1 lists packages only; v1.42.3 also lists 82 files),
+          # so an unpinned Syft can change a gate's shape with no change of
+          # evidence. This is the version v0.24.0 defaults to today, frozen.
+          # The gate does NOT depend on it: oci-compliance.py excludes file
+          # entries whatever the scanner emits (`is_file_entry`), and
+          # tests/test_oci_compliance.py proves both shapes reach the same
+          # verdict. Cataloger selection is deliberately NOT used to make the
+          # policy pass.
+          syft-version: v1.42.3
+
+      # The RETAINED source, produced by the mechanism that already ships it in
+      # every release bundle (owner decision 2026-09-04, licence audit D2). No
+      # second source-archive architecture: BusyBox is one more entry in the same
+      # pin table, and this step needed no change to mirror it.
+      - name: Materialise the corresponding source (retained first, network last)
+        working-directory: NetOps_Observability
+        # PREFERENCE ORDER, and it is a gate property before it is a convenience:
+        #   1. the copy RETAINED in this repository (compliance/corresponding-sources)
+        #   2. a prepared mirror directory (CORRELIX_SOURCE_MIRROR_DIR)
+        #   3. the pinned upstream URL, then the alternate mirrors the pin table
+        #      lists for that component — each retried with backoff + jitter
+        # A component Correlix already retains NEVER touches the network here, and
+        # every path ends at the same mandatory sha256 gate ("local provenance is
+        # not trusted provenance", and neither is a mirror's).
+        #
+        # 2026-09-07: this job was red because the source offer was fetched from
+        # busybox.net on every run and that host stopped answering (curl 28, 20s
+        # timeout). Verifying what Correlix ships against a third-party host's
+        # uptime is the wrong dependency direction — a merge gate must depend on
+        # what WE retain and pin. gitlab.alpinelinux.org answering GitHub-hosted
+        # runners with HTTP 418 (2026-09-05) was the same lesson, once.
+        run: |
+          set -euo pipefail
+          python3 scripts/source-archive.py materialise --all \
+            --dest "$RUNNER_TEMP/source-mirror"
+
+      - name: Build the source offer from the materialised mirror
+        working-directory: NetOps_Observability
+        # The installer now finds every artifact locally and re-checksums each one
+        # against the pin table exactly as it would a fresh download. It reaches
+        # for no network at all: the acquisition happened, resiliently and once,
+        # in the step above.
+        env:
+          CORRELIX_SOURCE_MIRROR_DIR: ${{ runner.temp }}/source-mirror
+        run: |
+          set -euo pipefail
+          bash scripts/make-installer.sh --source-offer-only
+
+      - name: Evaluate the final image against the source-obligation policy
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          OFFER="$(ls -d dist/correlix-*/source-offer | head -1)"
+          test -d "$OFFER"
+          python3 scripts/oci-compliance.py \
+            --sbom "${{ runner.temp }}/regression.cdx.json" \
+            --image correlix-oci-regression \
+            --digest "${{ steps.regr.outputs.digest }}" \
+            --base-layers "${{ steps.regr.outputs.layers }}" \
+            --source-dir "$OFFER" \
+            --manifest "${{ runner.temp }}/regression.compliance.json"
+          # The point of the whole job, asserted rather than eyeballed in a log:
+          # BusyBox was DISCOVERED in an image that declares it nowhere, and the
+          # source Correlix retains for it verified against its pin.
+          python3 - "${{ runner.temp }}/regression.compliance.json" <<'PY'
+          import json, sys
+          m = json.load(open(sys.argv[1], encoding="utf-8"))
+          bb = [c for c in m["components"] if c["name"] == "busybox"]
+          if not bb:
+              sys.exit("busybox was not discovered in the final image — the "
+                       "inherited-layer scan found nothing it was built to find")
+          c = bb[0]
+          for field, want in (("license", "GPL-2.0-only"),
+                              ("origin", "inherited-base-layer"),
+                              ("source_status", "verified")):
+              if c[field] != want:
+                  sys.exit(f"busybox {field} is {c[field]!r}, expected {want!r}")
+          if not c["source_required"]:
+              sys.exit("busybox is GPL-2.0-only and must require corresponding source")
+          print(f"busybox {c['version']} {c['license']} {c['origin']} "
+                f"{c['source_status']} {c['correspondence']} "
+                f"-> {c['source_artifact']}")
+          PY
+
+      # What the licence review says, in the job log. Not a gate on its own —
+      # `--release` is the gate, and it fails on every unsigned review it relies
+      # on — but a reviewer should not have to open a JSON file to learn that two
+      # components are still unresolved.
+      - name: Licence review summary
+        working-directory: NetOps_Observability
+        run: python3 scripts/oci-compliance.py --reviews
+
+      # THE CORRELIX-CONTROLLED ARCHIVE (tracker 262). This job keeps taking the
+      # RETAINED copies first — that is unchanged and is the reason it passes
+      # today with no AWS account. What is added is the git-side half of the
+      # archive: the index must be schema-valid on every commit, because
+      # `release-fetch` reads WHERE THE BYTES ARE out of it and a release that
+      # cannot resolve a record fails closed rather than reaching for upstream.
+      #
+      # The read role itself is NOT used here. supply-chain runs on every push,
+      # including from forks, which cannot reach the `release` environment the
+      # role's trust policy is scoped to. Proving the archive's live contents is
+      # the release job's business (publish-images.yml) and source-ingest.yml's.
+      - name: Corresponding-source archive index (schema, blocking)
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          python3 scripts/oci-compliance.py --validate-archive
+          python3 scripts/source-archive.py --selftest
+          python3 scripts/source-archive.py retention show
+
+      - name: Regression suite (offline — fixtures, policy, fail-closed paths)
+        working-directory: NetOps_Observability
+        run: |
+          python3 scripts/oci-compliance.py --selftest
+          pip install --no-cache-dir "pytest==9.1.1"
+          # test_oci_digest_lock.py is the base-image lock: a `FROM …@sha256:`
+          # bump with no fresh compliance evaluation fails HERE, next to the
+          # evaluation it invalidates, rather than only in the whole-tests/ run.
+          # test_source_archive.py proves the release path survives every
+          # upstream URL being dead — with no AWS credential anywhere, because
+          # the object store and the upstream fetcher are both interfaces.
+          python3 -m pytest tests/test_oci_compliance.py tests/test_oci_digest_lock.py \
+                            tests/test_source_archive.py -v
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: oci-compliance-manifest
+          path: ${{ runner.temp }}/regression.compliance.json
+          if-no-files-found: warn
+
+  license-gate:
+    name: Third-party licence gate (blocking)
+    runs-on: ubuntu-latest
+    # Complements Trivy/gitleaks with the LEGAL side of supply chain: a new
+    # dependency whose licence nobody reviewed, or any strong-copyleft component
+    # linked into a Correlix artifact, fails the build. The audit is stdlib-only
+    # and fully offline — every discovery source (vendor/modules.txt, the npm
+    # lockfiles, requirements.txt, compose files, Dockerfiles) is checked in, so
+    # this needs no npm/pip install and no registry access.
+    # Findings and owner decisions: docs/security/LICENSE_AUDIT_2026-09-03.md
+    env:
+      # Pinned like every other scanner here (SC-010): an unpinned test runner
+      # can change collection behaviour and turn a blocking gate green.
+      PYTEST_VERSION: '9.1.1'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Install pytest (pinned)
+        run: pip install --no-cache-dir "pytest==${PYTEST_VERSION}"
+      - name: Licence inventory + gate
+        working-directory: NetOps_Observability
+        run: python3 -m pytest tests/test_license_audit.py -v
+      - name: Inventory summary (always shown)
+        if: always()
+        working-directory: NetOps_Observability
+        run: python3 scripts/license-audit.py --report

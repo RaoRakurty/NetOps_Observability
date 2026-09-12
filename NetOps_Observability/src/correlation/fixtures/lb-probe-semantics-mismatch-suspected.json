@@ -1,0 +1,40 @@
+{
+  "name": "Backend fine direct, probe host-header wrong: semantics mismatch",
+  "signals": [
+    {
+      "kind": "lb_probe_semantics_mismatch",
+      "entity_type": "service",
+      "entity_id": "shop-vip",
+      "observer_id": "cloud-api-lb",
+      "observer_type": "cloud_api",
+      "modality": "control_plane",
+      "collection_path": "via_cloud_api",
+      "deviation": 2.0
+    },
+    {
+      "kind": "lb_target_unhealthy",
+      "entity_type": "service",
+      "entity_id": "shop-vip",
+      "observer_id": "cloud-metrics",
+      "observer_type": "cloud_api",
+      "modality": "device_telemetry",
+      "collection_path": "via_cloud_api",
+      "deviation": 3.0
+    },
+    {
+      "kind": "config_change",
+      "entity_type": "service",
+      "entity_id": "shop-probe-def",
+      "observer_id": "cicd-platform",
+      "observer_type": "platform",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 0.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.cloud.lb-probe-semantics-mismatch",
+    "tier": "confirmed",
+    "owner": "app_team"
+  }
+}

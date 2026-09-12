@@ -1,0 +1,27 @@
+# Juniper vJunos-router (wan-r1, mgmt 172.40.40.31) — IPFIX inline-jflow export.
+# UNVERIFIED: wan-r1 is a vrnetlab VM; could not audit its running config from
+# the host. SSH to 172.40.40.31 with the device credentials and paste in
+# "configure" mode (set-style). Adjust the sampled interface(s) and source IP.
+#
+# Replace ge-0/0/0 with the actual WAN/data interface(s) to sample.
+
+set groups NETOPS-FLOW services flow-monitoring version-ipfix template IPV4-T flow-active-timeout 60
+set groups NETOPS-FLOW services flow-monitoring version-ipfix template IPV4-T flow-inactive-timeout 30
+set groups NETOPS-FLOW services flow-monitoring version-ipfix template IPV4-T template-refresh-rate seconds 30
+set groups NETOPS-FLOW services flow-monitoring version-ipfix template IPV4-T ipv4-template
+
+set groups NETOPS-FLOW forwarding-options sampling instance NETOPS input rate 1000
+set groups NETOPS-FLOW forwarding-options sampling instance NETOPS family inet output flow-server 172.40.40.122 port 4739
+set groups NETOPS-FLOW forwarding-options sampling instance NETOPS family inet output flow-server 172.40.40.122 version-ipfix template IPV4-T
+set groups NETOPS-FLOW forwarding-options sampling instance NETOPS family inet output inline-jflow source-address 172.40.40.31
+
+set apply-groups NETOPS-FLOW
+set chassis fpc 0 sampling-instance NETOPS
+
+# apply sampling on the data interface(s):
+set interfaces ge-0/0/0 unit 0 family inet sampling input
+set interfaces ge-0/0/0 unit 0 family inet sampling output
+
+# commit and confirm:
+#   commit
+#   show services accounting flow inline-jflow fpc-slot 0

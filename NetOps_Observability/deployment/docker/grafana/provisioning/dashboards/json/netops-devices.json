@@ -1,0 +1,106 @@
+{
+  "uid": "netops-devices",
+  "title": "NetOps · Device Telemetry",
+  "tags": ["netops", "devices"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "device",
+        "label": "Device",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+        "query": { "query": "label_values(device_cpu_percent, device)", "refId": "StandardVariableQuery" },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "CPU utilisation",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "avg by (device) (device_cpu_percent{device=~\"$device\"})", "legendFormat": "{{device}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Memory used",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "100 * device_mem_used_kb{device=~\"$device\"} / clamp_min(device_mem_total_kb{device=~\"$device\"}, 1)", "legendFormat": "{{device}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Interface throughput — In",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "bps", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (device) (rate(device_if_in_octets{device=~\"$device\"}[5m]) * 8)", "legendFormat": "{{device}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Interface throughput — Out",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "bps", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (device) (rate(device_if_out_octets{device=~\"$device\"}[5m]) * 8)", "legendFormat": "{{device}}" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Interface errors / s (in + out)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (device) (rate(device_if_in_errors{device=~\"$device\"}[5m]) + rate(device_if_out_errors{device=~\"$device\"}[5m]))", "legendFormat": "{{device}}" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Temperature",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 8, "x": 12, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "celsius" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "device_temp_celsius{device=~\"$device\"}", "legendFormat": "{{device}}" }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Devices reporting",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 4, "x": 20, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "targets": [
+        { "refId": "A", "expr": "count(group by (device) (device_cpu_percent{device=~\"$device\"}))", "legendFormat": "devices" }
+      ]
+    }
+  ]
+}

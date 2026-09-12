@@ -1,0 +1,15 @@
+{
+  "name": "Threat detection (security lane) + flow volume anomaly (passive flow) on ONE device: threat signal story confirmed",
+  "comment": "T2b. The detection family: a rules-as-code verdict corroborated by the flow plane that actually measured the traffic — two planes, two witnesses, so the story can confirm. A detection on its own stays suspected.",
+  "signals": [
+    {"kind": "security_signal", "entity_type": "device", "entity_id": "br-r7",
+     "observer_id": "security:threatlane", "observer_type": "platform",
+     "modality": "security", "collection_path": "via_aggregator",
+     "attrs": {"evidence_class": "security", "raw_rule_id": "threat.new-local-user"}},
+    {"kind": "flow_volume_anomaly", "entity_type": "device", "entity_id": "br-r7",
+     "observer_id": "flow-br-r7", "observer_type": "flow_exporter",
+     "modality": "passive_flow", "collection_path": "direct",
+     "deviation": 5.0, "ts_offset_s": 60}
+  ],
+  "expect": {"top": "sig.ent.security.threat-signal-story", "tier": "confirmed", "owner": "netops"}
+}

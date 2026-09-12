@@ -1,20 +1,39 @@
-# Generated at install time
-deployment/docker/.env
+# Generated at install time. `.env*` also covers the secret-bearing siblings
+# install.py writes next to it — .env.rotate.bak (secret rotation) and
+# .env.plan.bak (resource replan) — which were previously committable (M26).
+deployment/docker/.env*
 data/
+
+# Pre-cutover app-state snapshots (contain live secrets — never commit)
+backups/
 
 # Build artifacts
 src/frontend/dist/
 src/frontend/node_modules/
 src/frontend/tsconfig.tsbuildinfo
+scripts/lab/traffic-generator/webui/dist/
+scripts/lab/traffic-generator/webui/node_modules/
+scripts/lab/traffic-generator/webui/tsconfig.tsbuildinfo
 src/backend/api
 src/backend/*.test
 **/__pycache__/
 *.pyc
 
-# Watchdog private config + runtime state
+# Watchdog private config + runtime state (.stack-watchdog.* covers the
+# state/lock/rejects/restarts/udpdrops files the watchdog persists per-run)
 scripts/stack-watchdog.env
-scripts/.stack-watchdog.state
+scripts/.stack-watchdog.*
 scripts/stack-watchdog.log
+scripts/docker-hygiene.log
+scripts/rca-canary.log
+scripts/ch-query-budget-check.log
+scripts/ch-cold-export.log
+scripts/host-hygiene.log
+scripts/.host-hygiene.state
+scripts/.host-hygiene.heartbeat
+# OpenSearch probe reachability, so a broken probe pushes ONCE per transition
+# rather than every ten minutes (a 10-minute pager is a muted pager).
+scripts/.host-hygiene.osprobe.state
 
 # Editor / OS
 .idea/
@@ -22,3 +41,53 @@ scripts/stack-watchdog.log
 .DS_Store
 *.swp
 *~
+
+# Lab-local compose overrides (site config — never product defaults)
+deployment/docker/docker-compose.override.yml
+# Written by install.py --offline (per-host: rewrites the digest-pinned images
+# to the tags `docker load` actually restores). Generated, never authored.
+deployment/docker/compose.offline-images.yml
+# TLS certs/keys for the nginx front (gen-dev-cert.sh output or operator-mounted)
+deployment/docker/nginx/certs/
+dist/
+src/correlation/build/
+deployment/docker/resource-plan.json
+deployment/docker/resource-plan.txt
+deployment/docker/resource-plan.*.plan.bak
+# runtime output of the lab cloud-ingest poller (VPC flow logs etc.)
+deployment/docker/cloud-logs/
+deployment/docker/.env.plan.bak
+# secret-bearing .env safety copies (e.g. .env.bak-wave from the enforce wave)
+deployment/docker/.env.bak-*
+scripts/bundle-autoupdate.log
+scripts/bundle-autoupdate.build.log
+scripts/.stack-watchdog.restarts
+scripts/.stack-watchdog.rejects
+# demo_lab.py run manifests — local lab state, not source
+scripts/.demo-runs/
+src/frontend/public/brand-samples/
+# compiled binaries (never commit build artifacts)
+src/backend/backend
+deployment/docker/mock-servicenow/mock-servicenow
+scripts/.restore-drill.report.json
+scripts/rotate-tls.heartbeat
+scripts/rotate-tls.log
+scripts/rotate-tls.act.heartbeat
+scripts/.rotate-tls.loaded
+deployment/docker/compose.lab.yml
+# Build-time cache for vendor MIBs this repo does NOT redistribute (Arista's
+# enterprise modules carry no licence grant — licence audit 2026-09-03 D4).
+# gen_index.py fetches them here, pinned + sha256-verified; never commit them.
+src/backend/collectors/mibs/vendored/.fetched/
+
+# Licence SIGNING key material. `data/` above already covers this path; the
+# explicit rule is here so the ignore survives any future narrowing of that
+# line, and so a reader of this file can see that private signing keys are
+# never committed. Public keys ARE committed — they are embedded in the binary
+# (src/backend/internal/licence/keys.go) and published in the runbook.
+data/licence-signer/
+!data/licence-signer/*.pub
+
+# vitest writes a cache under src/ when run from the repo root rather than
+# from src/frontend; it is a build artefact, never a dependency tree.
+src/node_modules/

@@ -1,0 +1,30 @@
+{
+  "name": "Two actives for one VIP, subnet partitioned: suspected split-brain",
+  "signals": [
+    {
+      "kind": "fhrp_dual_active",
+      "entity_type": "device",
+      "entity_id": "gw-pair-v120",
+      "observer_id": "syslog-gw1",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 2.0
+    },
+    {
+      "kind": "probe_loss",
+      "entity_type": "path",
+      "entity_id": "v120-hosts->core",
+      "observer_id": "probe-agent-site",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 4.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.access.fhrp-split-brain",
+    "tier": "confirmed",
+    "owner": "netops"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "name": "Handoff oscillates + branch probes lose the site: confirmed last-mile flap",
+  "signals": [
+    {
+      "kind": "link_state_change",
+      "entity_type": "interface",
+      "entity_id": "br09-edge:Gi0/0/0",
+      "observer_id": "syslog-br09-edge",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 2.0
+    },
+    {
+      "kind": "probe_loss",
+      "entity_type": "path",
+      "entity_id": "hq->br09",
+      "observer_id": "probe-agent-hq",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 5.0
+    },
+    {
+      "kind": "if_errors",
+      "entity_type": "interface",
+      "entity_id": "br09-edge:Gi0/0/0",
+      "observer_id": "snmp-br09-edge",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.middle-mile.lastmile-circuit-flap",
+    "tier": "confirmed",
+    "owner": "carrier"
+  }
+}

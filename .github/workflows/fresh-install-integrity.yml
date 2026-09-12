@@ -1,0 +1,284 @@
+name: fresh-install-integrity
+
+# Guardrail for the "fresh install / restart would break" bug class (the vector
+# E651 landmine: a config the running stack tolerated in memory but that a clean
+# load rejects). Two layers, both must stay green to merge:
+#   1. preflight-install.py — STATIC: a clean install.py provisions every env var,
+#      config file, and data dir the compose stack requires (compose ↔ install.py).
+#   2. preflight-configs.sh — RUNTIME: every committed service config boots on a
+#      fresh load with its real binary (vector topology, nginx -t, promtool, syslog-ng).
+
+on:
+  workflow_dispatch:   # manual re-run on a branch head (e.g. after a fix that did not touch this workflow's paths)
+  push:
+    paths:
+      - 'NetOps_Observability/deployment/docker/**'
+      - 'NetOps_Observability/src/config/**'
+      - 'NetOps_Observability/src/backend/migrations/**'
+      - 'NetOps_Observability/scripts/*.py'
+      - 'NetOps_Observability/scripts/preflight*'
+      - 'NetOps_Observability/deployment/helm/**'
+      - 'NetOps_Observability/tests/test_helm_chart.py'
+      - '.github/workflows/fresh-install-integrity.yml'
+  # No paths filter on pull_request: a required check must report on EVERY PR to
+  # main (a path-skipped workflow leaves the check stuck "Expected").
+  pull_request:
+  # Reusable-workflow trigger (release gate). `release-gate.yml` — called by
+  # publish-images.yml and release-bundle.yml — invokes this whole workflow on the
+  # tag's commit. `workflow_call` carries NO paths filter, so a release runs EVERY
+  # job here regardless of what the tag's diff touched: the `push` filter above
+  # stays honest for fast branch feedback without ever weakening the tag gate.
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  # `github.workflow` is the CALLER's workflow when this file runs as a reusable
+  # workflow, so a gate run invoked by release-gate.yml can never share (and so
+  # never cancel) a group with this workflow's own direct push/PR run.
+  group: fresh-install-integrity-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Pinned for determinism, mirroring correlation-ci: an unpinned `pip install
+# ruff` lets a new ruff release turn a green branch red with no code change
+# (that is exactly what happened there on 2026-07-25). Bump deliberately, in a
+# commit that also fixes whatever the new rules find.
+env:
+  RUFF_VERSION: '0.16.0'
+  # Pinned by version AND by sha256, for the same reason RUFF_VERSION is
+  # pinned: a tool that moves under a green branch turns it red with no code
+  # change. Both checksums were verified against the publishers' own
+  # checksum files (get.helm.sh/*.sha256sum, the kubeconform release
+  # CHECKSUMS) before being written here.
+  HELM_VERSION: '3.16.4'
+  HELM_SHA256: 'fc307327959aa38ed8f9f7e66d45492bb022a66c3e5da6063958254b9767d179'
+  KUBECONFORM_VERSION: '0.6.7'
+  KUBECONFORM_SHA256: '95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73'
+  PYTEST_VERSION: '9.0.3'
+
+jobs:
+  scripts-lint:
+    name: ruff (scripts/*.py, blocking)
+    runs-on: ubuntu-latest
+    # The operational Python scripts (install.py, resource_planner.py,
+    # secret_rotation.py, …) run unattended on the host customer data flows
+    # through (CLAUDE.md §16) — they get the same lint gate the correlation
+    # service gets. Top-level scripts only: scripts/lab/ is operator-local
+    # tooling and deliberately out of scope.
+    steps:
+      - uses: actions/checkout@v4
+      - name: install ruff (pinned)
+        run: pip install "ruff==${RUFF_VERSION}"
+      - name: ruff check (top-level operational scripts)
+        working-directory: NetOps_Observability/scripts
+        run: ruff check *.py
+
+
+  integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Layer 1 — static, no docker. Fails if a clean install.py would miss something.
+      - name: install integrity (compose ↔ install.py)
+        run: python3 NetOps_Observability/scripts/preflight-install.py
+
+      # Layer 2 — real-runtime config load (docker is preinstalled on ubuntu-latest).
+      # Pulls the pinned service images and boots each committed config.
+      - name: config fresh-load (real runtime binaries)
+        run: bash NetOps_Observability/scripts/preflight-configs.sh
+
+  # Layer 3 — F-9 (TLS assurance run 2026-08-09): neither preflight EXECUTES
+  # install.py, so the one-question TLS delivery shape and the two-phase first
+  # boot (phase A: baseline stack boots plaintext while the api's internal CA
+  # mints every SVID; phase B: compose.tls.yml joins the chain and the stack
+  # recreates fail-closed) were validated only by hand on the lab. This job is
+  # the real thing on a scratch host: a full `install.py --tls=yes`, then
+  # explicit post-conditions — install.py exiting 0 is necessary but NOT
+  # sufficient (it cannot see a service that crash-loops after phase B).
+  tls-install-boot:
+    name: install.py --tls=yes two-phase boot (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # The full stack + the golang/node build layers need more than the ~14 GB
+      # the runner image leaves free on /.
+      - name: free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      # The frontend image COPYs pre-built web assets (src/frontend/dist and
+      # docs-portal/build) — they are build artifacts, not in git, so a fresh
+      # checkout must build them BEFORE compose builds images. This is the
+      # same invariant the deploy docs state for any tree: build the assets,
+      # then build the image. First run of this leg failed exactly here.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+      - name: build web assets the images bake in
+        run: |
+          set -euo pipefail
+          (cd NetOps_Observability/src/frontend && npm ci --no-audit --no-fund && npm run build)
+          (cd NetOps_Observability/docs-portal && npm ci --no-audit --no-fund && npm run build)
+
+      - name: install.py --tls=yes (phase A mint -> phase B fail-closed mesh)
+        working-directory: NetOps_Observability
+        env:
+          # Unbuffered so the log's line timing is real — the first failure of
+          # this leg flushed everything at exit and hid WHERE the time went.
+          PYTHONUNBUFFERED: "1"
+        # Unattended full path. Its own gates are load-bearing and loud:
+        # wait_for_minted_certs times out FATALLY if the mint stalls (the
+        # bootstrap-deadlock class), and the phase B compose_up fails on an
+        # invalid chain. sudo: ensure_data_dirs chowns the store data dirs to
+        # each image's fixed uid ONLY when root (documented; without it kafka/
+        # opensearch die on AccessDenied over their bind mounts — the second
+        # failure of this leg).
+        run: sudo -E python3 scripts/install.py --tls=yes
+
+      - name: failure diagnostics (compose state + logs + disk)
+        if: failure()
+        working-directory: NetOps_Observability/deployment/docker
+        run: |
+          echo "=== docker compose ps -a ==="; sudo docker compose ps -a || true
+          echo "=== api log (the mint owner) ==="; sudo docker compose logs api --tail 120 || true
+          echo "=== seal sidecar log ==="; sudo docker compose logs secrets-seal --tail 40 || true
+          echo "=== docker compose logs (tail) ==="; sudo docker compose logs --tail 60 || true
+          echo "=== docker system df ==="; docker system df || true
+          echo "=== df -h ==="; df -h / || true
+          echo "=== data dir ownership (the EACCES suspect) ==="
+          cd ../..
+          sudo stat -c '%n %a %u:%g' data data/api data/tls 2>&1 || true
+          sudo ls -lan data/api | head -12 || true
+          echo "=== can the api's RUNTIME uid (CORRELIX_UID) write the store? ==="
+          # The api runs user-mapped (`user: ${CORRELIX_UID}` with cap_drop:ALL,
+          # so no DAC override) — probe as THAT uid, via setuid (sudo -u '#uid'
+          # needs a passwd entry and fails 'unknown user' for container uids).
+          uid=$(sudo grep -oP '^CORRELIX_UID=\K.*' deployment/docker/.env || echo 65532)
+          gid=$(sudo grep -oP '^CORRELIX_GID=\K.*' deployment/docker/.env || echo 65532)
+          echo "api runtime uid: $uid:$gid"
+          sudo python3 -c "import os; os.setgid($gid); os.setuid($uid); open('data/api/.ci-write-probe','w').write('x'); os.remove('data/api/.ci-write-probe'); print('write OK')" 2>&1 || echo "write DENIED as $uid:$gid"
+
+      - name: assert the mesh stayed up (no crash-loops behind exit 0)
+        working-directory: NetOps_Observability/deployment/docker
+        run: |
+          set -euo pipefail
+          sleep 20   # give a would-be crash-looper time to show its state
+          ps_out=$(sudo docker compose ps -a --format '{{.Name}} {{.State}} {{.ExitCode}}')
+          echo "$ps_out"
+          # restarting = crash-loop; exited non-zero = a service died. One-shot
+          # init jobs legitimately show 'exited 0'.
+          bad=$(echo "$ps_out" | awk '$2 == "restarting" || ($2 == "exited" && $3 != "0")' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::services unhealthy after the two-phase TLS boot:"; echo "$bad"
+            sudo docker compose logs --tail 50 $(echo "$bad" | awk '{print $1}' | sed 's/^netops-//; s/-1$//') || true
+            exit 1
+          fi
+
+      - name: assert the SEC-007 Kafka ACL matrix is live (installer-owned)
+        working-directory: NetOps_Observability/deployment/docker
+        # P0 2026-08-16: the enforcing broker (allow.everyone.if.no.acl.found
+        # =false) boots a fresh install with an EMPTY KRaft ACL store —
+        # install.py now applies deployment/docker/kafka/apply-acls.sh after
+        # phase B and refuses success otherwise. install.py exiting 0 is
+        # necessary but NOT sufficient (this job's doctrine), so read the
+        # state back independently: a known principal/topic pair must exist.
+        run: |
+          set -euo pipefail
+          out=$(sudo docker compose exec -T kafka /opt/kafka/bin/kafka-acls.sh \
+            --bootstrap-server kafka:9094 \
+            --command-config /tmp/kafka-tls/admin.properties \
+            --list --topic netops.deadletter)
+          echo "$out"
+          echo "$out" | grep -q 'CN=spiffe://netops/ns/default/sa/vector-router' \
+            || { echo "::error::vector-router grant missing on netops.deadletter — the installer did not apply the SEC-007 ACL matrix (auth-dead bus)"; exit 1; }
+
+      - name: assert the TLS ingress SERVES (CA-verified, full mesh path)
+        working-directory: NetOps_Observability
+        # nginx :443 with the generated dev cert (SANs cover localhost), through
+        # nginx->api mTLS to the api and its TLS-wrapped stores — one probe
+        # exercising the mesh end to end. --cacert, never -k: an ingress serving
+        # the wrong certificate must fail here.
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent --max-time 30 --retry 6 --retry-delay 10 \
+            --cacert deployment/docker/nginx/certs/fullchain.pem \
+            https://localhost/admin/health
+          echo "TLS ingress healthy"
+
+      - name: assert the identity mint is complete
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          missing=0
+          # sudo: the minted keys are 0600 owned by the api uid (65532) — an
+          # unprivileged -s test on them is a false negative, not a check.
+          for svc in api nginx vector-aggregator vector-router syslog-ng kafka postgres clickhouse opensearch redis; do
+            for f in "$svc.crt" "$svc.key"; do
+              sudo test -s "data/tls/services/$svc/$f" || { echo "::error::missing SVID material: $svc/$f"; missing=1; }
+            done
+          done
+          sudo test -s data/tls/ca.pem || { echo "::error::mesh CA missing"; missing=1; }
+          exit "$missing"
+
+  # Layer 4 — the Kubernetes packaging (tracker 114). Same doctrine as the
+  # legs above: a chart that "looks fine" is not evidence. This renders it and
+  # validates every object against the real Kubernetes schemas, then asserts
+  # the properties a schema cannot see (digest pinning against the compose
+  # stack, resources and probes on every container, default-deny
+  # NetworkPolicy, restricted PodSecurity, no credential in the chart).
+  #
+  # It does NOT install to a cluster. RENDERED-AND-VALIDATED is the claim, and
+  # docs/audit/INVARIANTS.md says so — do not let this job's green be read as
+  # "the chart deploys".
+  helm-chart:
+    name: helm chart lint · template · kubeconform (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Downloaded and checksum-verified rather than taken from a marketplace
+      # action, so the bytes this job runs are the bytes named in `env:` above.
+      - name: install helm + kubeconform (pinned, sha256-verified)
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          curl -fsSL -o "$tmp/helm.tgz" \
+            "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  $tmp/helm.tgz" | sha256sum -c -
+          tar -xzf "$tmp/helm.tgz" -C "$tmp"
+          sudo install -m 0755 "$tmp/linux-amd64/helm" /usr/local/bin/helm
+
+          curl -fsSL -o "$tmp/kubeconform.tgz" \
+            "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  $tmp/kubeconform.tgz" | sha256sum -c -
+          tar -xzf "$tmp/kubeconform.tgz" -C "$tmp"
+          sudo install -m 0755 "$tmp/kubeconform" /usr/local/bin/kubeconform
+          rm -rf "$tmp"
+          helm version
+          kubeconform -v
+
+      - name: install pytest (pinned)
+        run: pip install --no-cache-dir "pytest==${PYTEST_VERSION}" "pyyaml==6.0.3"
+
+      # Belt and braces: the pytest suite runs `helm lint` itself, but a bare
+      # lint failure is easier to read here than inside a test report.
+      - name: helm lint (default + lab values)
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          helm lint deployment/helm/correlix
+          helm lint deployment/helm/correlix -f deployment/helm/correlix/values-lab.yaml
+
+      - name: pytest (chart gate)
+        working-directory: NetOps_Observability
+        # The suite SKIPS every tool-backed leg when the binaries are absent.
+        # -p no:randomly is not needed, but -rs is: a silent skip here would be
+        # a gate that stopped gating.
+        run: python3 -m pytest tests/test_helm_chart.py -v -rs

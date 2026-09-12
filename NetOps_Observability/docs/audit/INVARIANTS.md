@@ -1,0 +1,508 @@
+# Correlix — System Invariants Register
+
+> Companion to `FINDINGS-2026-07-21.md`. That register tracks *defects*; this
+> one tracks the *properties* the platform must hold, and — the part that
+> actually matters — whether each is **enforced by something that fails a
+> build**, or merely believed.
+>
+> Last measured: 2026-07-22. Every "enforced" claim below names the specific
+> test or gate. If a row says NOT ENFORCED, that is a real gap, not a to-do
+> someone forgot to tick.
+
+## Why this file exists
+
+The 2026-07-21 audit found 84 defects sharing one generator: *remediation was
+applied to the instance and not the class*. The deeper reason that was possible
+is that the platform's invariants lived in prose — in `CLAUDE.md`, in code
+comments, in reviewers' heads — where nothing could check them. 285 Go test
+files were green throughout, because every one of them tested the happy path.
+
+An invariant that no gate enforces is a preference.
+
+## Enforcement ladder
+
+| Level | Meaning |
+|---|---|
+| **BUILD** | A test fails if the property is violated. `go test` is merge-blocking, so this is the strongest tier available. |
+| **GATE** | A CI job outside the test suite blocks merge (lint, vuln, config preflight). |
+| **RUNTIME** | Enforced in production, but a violation is only visible after it happens (alert/metric). |
+| **PROSE** | Written down; nothing checks it. |
+| **NONE** | Not stated anywhere. |
+
+---
+
+## 1. Data durability
+
+> *No event is acknowledged until it is durably stored or safely recoverable.*
+
+| Aspect | Status | Enforced by |
+|---|---|---|
+| Ingest tier returns 2xx only after the sink accepts | ✅ | `acknowledgements: enabled` + disk buffers (F-04); **RUNTIME** |
+| Bus producer surfaces non-2xx / transport failure | ✅ | **BUILD** — `bus_producer_failure_test.go` (7 status codes, transport, timeout) |
+| Settings writes report a failed persist | ✅ | **BUILD** — `settings_persist_failure_test.go`, `TestNoVoidSaveLocked`, `TestSaveResultsAreChecked` |
+| Operator-created devices survive a restart | ✅ | **BUILD** — `device_persist_test.go` (restart simulated via a second aggregator over the same backend) |
+| ClickHouse writes check their status | ✅ | **BUILD** — `chhttp/chhttp_test.go` fires real failures (21 tests: the TOO_MANY_PARTS-vs-schema-bug 500 pair, 9-case taxonomy, transport, hang, mid-body reset, truncation). Structure held by `TestClickHouseAccessGoesThroughTheSeam` (AST) |
+| Dead-letter path captures the reason | ✅ | **GATE** — ingest-contract-ci + `scripts/vrl-harness.py` |
+| A licence ceiling can never stop discovery, delete inventory or silently disable monitoring | ✅ | **BUILD** — `TestLicenceDiscoveryIsNeverCharged` (500 discovered → 0 of 25, inventory intact), `TestLicenceSourceMonitoringWithheld` (over-ceiling devices enter the inventory, their COLLECTION is withheld and listed with a reason, and a freed slot is taken on the next poll), `TestLicenceDegradedListsOverCeilingDevices` (an estate already over the ceiling keeps running and is listed) |
+| A licence past its grace period removes CREATION only — existing data stays viewable and exportable | ✅ | **BUILD** — `TestLicencePostGraceReadsStayOpenWritesRefuse` drives EVERY feature-gated route with both a read verb and a write verb under a licence 10 days past grace: `/api/security/findings`(+`/facets`,`/trend`,`/{id}`) and `/api/auth/ldap/config` serve their GETs and refuse every other verb with `licence_state: post_grace`; `TestLicencePostGraceTenantAndOrgCreateRefuse` (second tenant/org refused, existing ones still listable); `TestLicenceInGraceChangesNothingAtTheChokepoints` (in grace every verb behaves as before). `internal/licence` proves the machine (`TestExpiryStateMachine` at every boundary, `TestPostGraceFallsBackButKeepsReads`, `TestZeroGraceIsStillZero`) |
+| No licence state — absent, live, in grace, past grace, expired trial — can move an authorization decision | ✅ | **BUILD** — structurally by `safety_invariant_test.go` (the safety paths cannot import the entitlement service), and behaviourally by `TestLicencePostGraceChangesNoAuthorizationDecision`, which compares every (principal × module × level) decision from `requirePerm`/`requireAdmin`/`requirePlatformAdmin` across all five licence states and fails if one differs |
+| A paid tier is never blocked at its monitored-device allowance, and Community always is at the 26th | ✅ | **BUILD** — `TestLicenceSoftOverageOnPaidTiers` (Team admits the 251st and records it; Community refuses the 26th; past grace the hard Community ceiling is back for NEW activations only and the existing fleet is untouched), `TestSoftCeilingIsMonitoredDevicesOnPaidTiersOnly` (the softness table IS the decision), `TestOverageTrackerRemembersSince` (`overage_since` survives a restart) and `TestOverageTrackerFailsSoft` (a register that cannot be written costs the start time and nothing else). **GATE** — `rules-tests/licence-ceilings.test.yaml` proves a Community deployment at 96 % of its allowance fires none of the 80/90/100 % rules |
+| A licence issued before a field existed still verifies | ✅ | **BUILD** — `TestNonTrialCanonicalisesExactlyAsBefore` (the `trial` field is `omitempty` in the canonical payload, so a non-trial document signs over the bytes it always did) and `TestTrialFlagIsSignatureCovered` (the flag can be neither added nor stripped). Confirmed live against the lab licence signed 2026-09-05 |
+| The monitored-device ceiling holds under concurrency | ✅ | **BUILD** — `TestMonitoringConcurrentActivationsCannotExceedTheCeiling` (20 goroutines race for the last slot; exactly one wins — the capacity question and the write share one hold of the registry's lock) |
+| Backup/restore actually produces a restorable artifact | ✅ | **SCRIPT+DRILL, live-proven 2026-09-05 (S4)** — `scripts/backup-drill.sh` restores a REAL bundle artifact per store into disposable containers: Postgres (whole-cluster compare against live), ClickHouse (schema + `FORMAT Native` replay, row counts vs live), VictoriaMetrics (snapshot mounted as a throwaway vmsingle, a series queried back out) and the sealed custody envelope (decrypt + `sha256sum -c` against its own manifest). The api publishes the verdict (`netops_backup_drill_pass`, `_last_timestamp_seconds`, `_leg{leg}`) and `GET /api/system/backup/coverage` fills each engine's `last_verified` from it — a skipped or absent leg stays null with its reason, never green |
+
+**What the first drill found**, which is the argument for having one: four components had been silently useless since they were written — the ClickHouse loop's `docker compose exec` ate the table list's stdin (1 of 26 tables ever dumped), the ClickHouse schema dump was TSV-escaped and unreplayable, the VictoriaMetrics snapshot was copied as a farm of dangling symlinks (20 KB, zero samples), and the OpenSearch call could not work at all against a security-plugin cluster. Every one of them produced a green MANIFEST line beforehand.
+
+## 2. No silent failures
+
+> *Every failure must become visible.*
+
+**The CLASS is now enforced, not just instances (2026-07-27).** Until this date
+every row below was a single *instance* of §10, and the general rule — CLAUDE.md
+§10 "No silent failures allowed / All errors must be observable" — sat at **no
+tier at all**. The 2026-07-27 audit found ~60 live instances of one defect: *an
+error routed to the same branch as a benign empty state*, so a failure rendered
+as "nothing wrong". The seed (`alerts/engine.go`) made a VictoriaMetrics outage
+indistinguishable from "no rules firing" and therefore **mass-resolved live
+alerts, closing pages during the outage**. Nothing caught it because the code is
+structurally perfect — the error *is* checked; the defect is which branch is
+taken — and every pre-existing guard asked a structural question. Two guards now
+move the class to BUILD tier, and the guard *scope* itself was the deeper bug:
+`goSources()` read only the root package, leaving **201 subpackage files
+(alerts/, notify/, collectors/, nms/, ai/ …) outside every structural guard in
+this repo**, while its anti-vacuity floor passed comfortably on the root package
+and thereby certified the blind scope as healthy.
+
+| Aspect | Status | Enforced by |
+|---|---|---|
+| Guards see the WHOLE module, not just the root package | ✅ | **BUILD** — `goSources()` now walks subpackages; floor raised to 400 so a regression to root-only (296) fails. Widening it immediately caught 3 real defects that had been invisible for months (two void persist funcs in `notify/`, an `Sscanf("%d")` in `collectors/`) |
+| Every background launch in main() is drained or explicitly listed | ✅ | **BUILD** — `TestEveryBackgroundLaunchIsTrackedOrDocumented` (AST over `func main()`): a new goroutine must either join `workerGroup` or be named in `cancelOnlyWorkers()`. Closes CONC-MED-3, where `drain()` reported success while collectors, discovery, the report pipeline and 30-minute backfills were still mid-write. Current honest state: **15 tracked, 30 cancel-only** (adoption backlog in TRACKER) |
+| gosec taint rules (G703/G704/G706) are excluded on a recorded basis | 🟡 | **PROSE** — the exclusion is not enforced by a gate. 35 findings triaged 2026-07-27 against pinned gosec v2.27.1: **zero reachable from untrusted HTTP input** (every sink is an env-configured URL/path, or is guarded by `isUUIDToken`/`indexBase`/`tenantSegRe`). Basis + reproduce command recorded in `src/backend/.golangci.yml`. Residual risk stated there: a genuinely tainted NEW sink would not be caught |
+| A guard cannot silently stop covering a file | ✅ | **BUILD** — AST guards parse RAW source and treat a parse failure as FATAL. `stripComments` truncates at the first `//`, so any file with a URL literal was unparseable and was being **skipped with `continue`** — 54 files invisible, 8 with live findings. The guard written to catch "an error treated as a benign state" contained that exact defect |
+| `package main` does not grow | 🟡 | **BUILD (ratchet, not a fix)** — `TestFlatPackageMainDoesNotGrow` pins the root package (originally 296 non-test files; **204 as of 2026-07-29** after the fifty-three Phase-1 extractions listed in docs/design/package-decomposition-plan.md); a new file fails the build and must go in a subpackage, and moving files out requires lowering the ceiling in the same commit. Proven to fire both directions. **This does NOT yet satisfy §2**: the 2026-07-29 four-reader audit measured **~23k LOC of business logic still in the root** (protocol clients, pure algorithm files, SQL builders, config stores, worker state machines) — the sized Phase-2 sequence is in the plan doc; see standing gap #8 |
+| An error is never conflated with a benign empty state | ✅ | **BUILD** — `TestErrorIsNotConflatedWithABenignState` (AST). Blocking for new code; 39-file frozen baseline, **shrink-only**, each entry to be triaged and fixed or moved to the reasoned allowlist |
+| A health flag can actually report unhealthy | ✅ | **BUILD** — `TestHealthFlagsCanBeFalsified`: a health bool assigned literal `true` and never falsified anywhere fails the build. Caught `alerts.Engine.healthy` (true at construction, never false, reported by `Health()` forever) |
+| A metric-based alerting engine exists at all | ✅ | vmalert (F-16); **RUNTIME** — was entirely absent before 2026-07-21 |
+| Unintentional ingest discards alert | ✅ | `VectorEventsDiscarded` (F-13/F-18); **RUNTIME** |
+| Per-document index rejections are visible | ✅ | `doc_status.4xx` scraped + alerted (F-17); **RUNTIME** |
+| `writeJSON` cannot emit an empty 200 | ✅ | **BUILD** — `TestWriteJSONMarshalsBeforeCommittingTheStatus` |
+| Alert delivery failures are counted, not logged and forgotten | ✅ | **BUILD** — `notify/delivery_test.go` |
+| Every alert rule names a metric that is actually produced | ✅ | **GATE** — ingest-contract-ci metric-name guard |
+| CI gates report *why* they failed | ✅ | `preflight-configs.sh` always emits a reason (2026-07-22) |
+| An unreadable audit trail cannot render as an empty one | ✅ | **BUILD** — `audit_failure_test.go` (F-73): a failing `auditRepo` must produce 503, never `200 {"events":[]}`. `Count` returns −1, never 0, for an unknown total |
+| A registry never falls back to an implicit ephemeral store | ✅ | **BUILD** (tracker 245) — `TestApplicationStoreNeverFallsBackToMemory`, `TestApplicationsRefuseOnUnsupportedBackend`: a configured persistent backend with no implementation for a registry yields a nil store and a 501 with `APPLICATION_REGISTRY_BACKEND_UNSUPPORTED`, never an in-memory store that acknowledges writes it loses on restart. Memory is reachable only by an explicit `STORE_BACKEND=memory`; an unknown value aborts the boot (`TestInitStoreBackendRejectsUnknownValue`) |
+| A store backend never fails over to another backend | ✅ | **BUILD** (tracker 245) — `TestApplicationsPostgresOutageDoesNotFailOverPG` (DATABASE_URL_TEST): with Postgres down the registry answers 503 `APPLICATIONS_STORAGE_UNAVAILABLE`, refuses the write, still reports `active_backend=postgres`, and after recovery holds exactly the pre-outage record. `TestUsePostgresFailureDoesNotSwitchBackends` pins the boot half |
+| Registry storage that cannot serve is distinguishable from an empty registry | ✅ | **BUILD** (tracker 245) — `TestRegistriesStatusReportsTheRealBackend` + the `storageBadge` / Registries UI tests: `GET /api/registries/status` reports configured vs active backend, persistence, availability and reason; the page renders "PostgreSQL · Persistent", "Memory · Ephemeral", "… · Unavailable" or "Unavailable · configured backend: File" from that answer, and shows no badge at all when the posture is unknown |
+| Applications survive an API restart | ✅ | **BUILD** (tracker 245) — `TestApplicationsSurviveAnAPIRestartPG`: two tenants' applications, the store closed and reopened, both records and their cross-tenant isolation intact |
+
+### 2a. Security producer (P3-EMIT, 2026-09-02)
+
+| Aspect | Status | Enforced by |
+|---|---|---|
+| Evidence the bus refuses is dead-lettered, never dropped | ✅ | **BUILD** — `TestProducerFailureDeadLettersOntoTheBusAndNeverCountsLost` |
+| `lost_total` moves ONLY when no sink kept a durable copy (the 189 contract) | ✅ | **BUILD** — `TestDeadLetterTopicFailureFallsBackToTheSpool` + `TestOnlyWhenEverySinkFailsDoesLostMove` |
+| An unassessable control is UNASSESSED, never a Pass (§5g) | ✅ | **BUILD** — `TestHardeningWithNoConfigCaptureYieldsUnassessedNotPass`, `TestAdvisoryUnassessableDeviceIsUnassessedNotClear` |
+| An unreadable rule-enablement set fails the run CLOSED | ✅ | **BUILD** — `TestRuleStateFailureFailsClosed` |
+| One lane's source outage does not silence the others | ✅ | **BUILD** — `TestThreatLaneLogSourceFailureDoesNotSuppressOtherLanes` |
+| The security PRODUCER stays removable (2 units + marked main.go blocks) | ✅ | **BUILD** — `security_lane_removability_test.go` (import allowlist + marker discipline; it imports nothing security-specific, so it survives its own recipe) |
+
+## 3. Bounded execution
+
+> *Every external operation has bounded execution time.*
+
+| Aspect | Status | Enforced by |
+|---|---|---|
+| HTTP clients carry timeouts | ✅ | Measured: 28/28 clients bounded |
+| ClickHouse reads carry execution guards + cancellation | ✅ | **BUILD** — `chhttp` applies `max_execution_time` + `cancel_http_readonly_queries_on_client_close` to EVERY call unconditionally; `TestRequestSettingsReachTheWire` proves they reach the wire |
+| No unbounded response-body reads | ✅ | **BUILD** — `TestNoUnboundedResponseBodyReads` (source scan) |
+| Pre-auth handlers cap their body | ✅ | **BUILD** — `TestPreAuthRoutesAreBodyCapped` |
+| Postgres `statement_timeout` / pool bound | ✅ | **CI** — `pg-integration` (backend-ci.yml, `33cb45f2`) runs `TestPGStatementTimeoutIsApplied` against a live postgres:16-alpine: `SHOW statement_timeout` = the F-60 pool param |
+| Bus produce is context-bounded | ✅ | **BUILD** — `TestProduceIsBoundedWhenTheBridgeHangs` |
+
+## 4. Idempotent processing
+
+> *Retries must not corrupt data.*
+
+| Aspect | Status | Enforced by |
+|---|---|---|
+| Ticket creation adopts an existing ticket | ✅ | outbox + `LookupByCorrelationID`; **BUILD** (ticketing tests) |
+| Inbound ITSM sync dedupes against the audit ledger | ✅ | **BUILD** — and it now LOGS if the ledger read is truncated rather than silently duplicating |
+| kv key migration is idempotent | ✅ | **BUILD** — `TestMigrateIsIdempotent` |
+| Consumer redelivery is safe | 🟡 | Deterministic `signal_id` makes it safe by construction; **PROSE** — no test forces a redelivery |
+
+## 5. Backpressure
+
+> *Slow downstream systems cannot crash upstream systems.*
+
+| Aspect | Status | Enforced by |
+|---|---|---|
+| Alert fan-out is a bounded queue + fixed worker pool | ✅ | **BUILD** — `TestFanOutIsBounded`, `TestQueueOverflowIsCountedNotSilent` |
+| Consumer lag is measurable | ✅ | kafka-exporter + `KafkaConsumerLag*` (F-46); **RUNTIME** |
+| Unbounded maps evict | ✅ | **BUILD** — dashboard `seen`, export rate-limit windows, mem ticketing audit |
+| Reads are paginated with a true total | ✅ | **BUILD** — `TestPaginatedReadsReportTheirTotal` |
+
+## 6. Tenant isolation
+
+> *Tenant A can never access tenant B data.*
+
+| Aspect | Status | Enforced by |
+|---|---|---|
+| DB-layer row policies exist and fail closed | ✅ | Verified live: `cloud_costs` 0 → 1 policy, 15 → 18 total (F-50) |
+| Every feature ships an isolation test | ✅ | **BUILD** — `TestEveryScopedRouteHasIsolationCoverage`: a new scoped route needs a real isolation test or fails the build (§3a rule 5). 82 pre-existing routes baselined, set shrinks only |
+| One tenant's failed write cannot destroy another's data | ✅ | **BUILD** — `TestAITenantConfigFailedSaveDoesNotDestroyOtherTenants` (F-64) |
+| GraphQL enforces the same RBAC as REST | ✅ | **BUILD** — `TestGraphQLEnforcesTheSameRBACGateAsREST` (was an auth bypass) |
+| Ingest ports authenticate the producer | ✅ | **BUILD** — `TestProduceCarriesIngestAuth`; fail-closed config (F-08) |
+| The security producer keys every bus record by the owning tenant | ✅ | **BUILD** — `internal/seclane`: `TestScanAllIteratesTenantsAndKeysEveryRecordByTenant` (partition key == event tenant, and a device never ships under another tenant's key), `TestScanNamesOnlyTheCallersOwnIndicesAndCHScope` |
+| One tenant's disabled detection cannot change another tenant's scan | ✅ | **BUILD** — `TestDisabledRuleIsPerTenant` (P3-EMIT, 2026-09-02) |
+| The monitored-device count and switch are per tenant | ✅ | **BUILD** — `TestMonitoringCrossOrgIsolation` (own-only usage, another tenant's device 404 on read AND write, a platform-owned device in nobody's projection, one tenant's change does not move another's number) |
+| Digital Experience is per tenant, derivation included | ✅ | **BUILD** — `TestDEMExperienceJourneysCrossOrgIsolation`, `TestDEMExperienceChangesCrossOrgIsolation`, `TestDEMExperienceDerivedViewsAreScopedAndHonest`, `TestDEMExperienceIncidentIDsAreNeverConfirmed` (own-only lists, foreign journey/change/incident id → 404, `as_tenant` narrows only, the platform owner in the Global view refused on every route, and an incident id derived under another tenant's scope never resolves — incident ids are a function of the tenant) |
+
+**Gap — the highest-value one in this file:** §3a rule 5 is mandatory and unenforced. A guard that fails when a new tenant-scoped route lacks an isolation test would close the class the way `TestNoVoidSaveLocked` closed its own.
+
+## 7. Recoverability
+
+> *Every failure has a recovery mechanism.*
+
+| Aspect | Status | Enforced by |
+|---|---|---|
+| A refused write rolls back in-memory state | ✅ | **BUILD** — `TestSettingsRollBackInMemoryStateOnFailedPersist` |
+| Orphaned store keys self-heal | ✅ | **BUILD** — `kv_legacy_migrate_test.go` (copy-not-move, never overwrites live data) |
+| A deleted device stays deleted | ✅ | **BUILD** — `TestDeletedDeviceStaysDeleted` (F-69 tombstones) |
+| A revoked session/token stays revoked | ✅ | **BUILD** — `logout_revocation_test.go` (F-70): revokes return `(killed, persistErr)`, and the tests inject a persist failure rather than trusting the in-memory map. A logged-out refresh token is proven unable to mint a new session |
+| A credential is never accepted into non-durable storage | ✅ | **BUILD** — `credential_durability_test.go` (F-76): the cloud-connector store returns nil off Postgres so the 501 guards are reachable; NMS refuses credential writes while still serving its catalog |
+| An inbound webhook that lost events asks the sender to redeliver | ✅ | **BUILD** — `integrations_inbound_test.go` (F-75): `received` counts durable events, and any failure is a 500 so the sender's retry — the only recovery path — fires |
+| A compliance record is written only for an action that persisted | ✅ | **BUILD** — `TestAdminSessionKillDoesNotReport204OnAFailedPersist`; `SESSION_REVOKED` is no longer emitted for a kill that did not stick |
+| Demo estates are removable | ✅ | `demo_lab.py teardown` — manifest-driven, never pattern-matched |
+| Restore from backup — the MECHANISM | ✅ | **SCRIPT+DRILL** — `scripts/restore-drill.sh` restores all THREE durable stores into empty scratch containers and asserts a canary (magic + exact timestamp) survived: Postgres (pg_dumpall), ClickHouse (schema + FORMAT Native data), OpenSearch (snapshot→delete→restore). Proven live: **17/17 assertions, RTO pg 21s / ch 9s / os 52s** |
+| Restore from backup — a REAL BUNDLE ARTIFACT | ✅ | **SCRIPT+DRILL, S4 2026-09-05** — `scripts/backup-drill.sh` opens the file an operator would actually hold and puts it back, per store, then deletes every temporary. Distinct from the row above on purpose: the canary drill proves the mechanism, this proves the artifact |
+| An off-host copy actually ARRIVED and is intact | ✅ | **LIVE-PROVEN once, 2026-09-05** — artifact + `.sig` + `SHA256SUMS` pushed over rsync-over-SSH to a separate host and **re-checksummed at the destination** (`sha256sum -c` OK). `BACKUP_REMOTE_VERIFY=1` is what turns "the push exited 0" into a proof; the run report records `remote.verified_at` and the Data Protection page reserves the word "proven" for it. **The schedule remains OFF by owner decision (2026-09-04, development lab)** — the mechanism is proven, the cadence is deliberately absent, and the page says both |
+| The sealed custody root is in a copy at all | ✅ | **BUILD+LIVE (S4)** — `scripts/backup.sh` ships `data/swtpm`, `data/tls` and the wrapped DEKs as a SEPARATELY encrypted member (`openssl enc -aes-256-cbc -pbkdf2`), **fail-closed**: no `BACKUP_SEALED_PASSPHRASE` FAILS the component rather than degrading to plaintext or silently omitting it. Proven live: the envelope decrypted and all 100 files verified against its sha256 manifest, `data/swtpm` included. Before this the custody root was in NO copy — a perfect data restore would have decrypted nothing. **Scope correction, 2026-09-08:** the S4 proof supplied `BACKUP_SEALED_PASSPHRASE` through the ENVIRONMENT, so it never exercised the DOCUMENTED `.env` path — on which the passphrase travelled inside the archive it unlocks (H11). Fixed `cc40f701`: `env.backup` is stripped of `ARCHIVE_SELF_PROTECTING_VARS`, the strip is re-checked and a survivor aborts the run, and `restore.sh` carries the restoring host's own value forward so a restore cannot silently disarm the next backup. The live proof above still stands for the mechanism; it did not cover this path |
+
+## 8. Schema / contract compatibility
+
+| Aspect | Status | Enforced by |
+|---|---|---|
+| Ingest field contract | ✅ | **GATE** — ingest-contract-ci; every stamped field must be declared |
+| Bus wire shape | ✅ | **BUILD** — `TestProduceWireShapeIsOneEnvelopePerRecord` |
+| ClickHouse TTLs converge on existing installs | ✅ | **BUILD** — every `TTL` in `init.sql` must have a converge entry (F-58) |
+| API response-shape stability | 🟡 | **PROSE** — `docs/design/sot-provider-model.md` pins some shapes; nothing checks them |
+
+## 9. Configuration safety
+
+> *Invalid configuration fails safely.*
+
+| Aspect | Status | Enforced by |
+|---|---|---|
+| Configs survive a fresh load | ✅ | **GATE** — `preflight-configs.sh` in fresh-install-integrity |
+| Store keys are absolute | ✅ | **BUILD** — `TestStoreKeysAreAbsolute` |
+| Bounded query params fail closed | ✅ | **BUILD** — `TestBoundedQueryParamsFailClosed`, `TestNoDiscardedIntParseInQueryHandling` |
+| Ingest auth is fail-closed | ✅ | `${INGEST_TOKEN:?}` — Vector refuses to start without it |
+| Documented switches actually work | ✅ | **BUILD** — `TestEveryDocumentedEnvSwitchIsConsumed` (gap #6, 2026-07-30): every env token the operator docs present in code spans must be consumed somewhere real (backend Go incl. test-gated vars, deployment configs, scripts, sibling services); exemptions need a reason. Proven to fire: first run caught `LOKI_RETENTION_PERIOD` documented in DEPLOY_LINUX.md with no Loki anywhere in the stack (row deleted). Scope stated in-file: it proves existence/consumption, not per-switch BEHAVIOUR — that stays with each feature's tests (the `BUS_BRIDGE_URL=""` behavioural lie class, pinned by bus_producer's own regression test since 2026-07-22) |
+| A security setting an operator enables is actually read | ✅ | **BUILD** — `TestEverySecuritySettingHasAReadSite` fails when any `SecuritySettings` field has no read site outside its own definition; `TestF68SettingsAreEnforced` pins the seven by name. Proven to fire (a field added with no reader fails the build) |
+| A persisted struct field has a SQL column | ✅ | **BUILD** — `TestPersistedStructFieldsHaveColumns` (F-77). Proven to fire. Caveat stated in-file: it proves the column NAME is in the list, not that the value is bound in the right position |
+| A persist function can report failure | ✅ | **BUILD** — `TestNoVoidPersistFuncs` (F-78) covers the whole `save`/`persist`/`flush` family, not just `saveLocked()`. Widening it **found 3 instances the 84-finding audit never listed** |
+| A tenant setting reaches the surface it is named for | ✅ | **BUILD** — `rca_window_test.go` (F-80): `tenantRcaSince` on all 3 RCA surfaces, explicit `?since=` fails closed |
+| …and enforced correctly, not merely read | ✅ | **BUILD** — `account_policy_test.go` (rules, pure) + `account_policy_http_test.go` (wired through the real login handler, incl. the rehash-must-not-reset-the-expiry-clock regression) |
+
+---
+
+## Standing gaps, ranked
+
+1. **Restore proven for all 3 stores (17/17); OpenSearch repo registered + snapshotting daily.** Off-host DR and disk-sizing are CODE-COMPLETE and 🏷️ **tagged for first-customer validation** — see `docs/runbooks/first-customer-acceptance.md` §9 (TAG:OFFHOST-DR, TAG:F55-DISK). They are deferred, not open: the lab has no off-host store or large disk to finish the proof against; a real customer environment does. Not code. (§1, §7, BACKUP-FAILURE-DOMAIN.md)
+2. ~~**§3a rule 5 is unenforced.**~~ **CLOSED 2026-07-23** — `TestEveryScopedRouteHasIsolationCoverage` fails the build when a NEW scoped route has neither a real HTTP isolation test nor a frozen-baseline entry. Proven to fire on an injected uncovered route. 82 pre-existing scoped routes (store/RLS-covered) are baselined; the set only shrinks as dedicated tests are written. (§6)
+3. ~~**The tenant-create rollback is compile-reviewed only.**~~ **CLOSED 2026-07-26** — the named fix was made: `s.tenants` is now the `tenantRepo` interface (tenants.go), and `failRestrictRepo` (rca_window_test.go) injects the exact mid-request failure the gap said was impossible — CREATE succeeds, only `SetOperatorRestricted` fails. `TestTenantCreateRollsBackWhenRestrictionFails` and `TestOnboardRollsBackWhenRestrictionFails` exercise both F-81 rollbacks end-to-end through the real router (500 + tenant removed; onboard also removes the org). Proven to fire: deleting the handler's rollback `Delete` makes the test fail with "tenant still exists". (§7)
+4. ~~**Postgres-dependent paths are compile-reviewed only.**~~ **CLOSED 2026-07-25** (`33cb45f2`) — the `pg-integration` job in `backend-ci.yml` runs the build-tagged Postgres tests against a pinned postgres:16-alpine every CI run: `statement_timeout`, the migration advisory lock, `pgAuditStore.Count/Offset`, `sweepAuditRetention`'s DELETE. (§3)
+5. **`go test -race` runs only in CI.** No local gate; the sandboxes used for this work had no cgo. **2026-08-12:** the #151 branch is many commits ahead of origin and its CI — `-race`, staticcheck, gosec, govulncheck, the pg-integration job, the new `tls-install-boot` leg — has NOT executed; first run awaits the owner's push. Stated in the assurance report the same way.
+6. ~~**Documented env switches are unverified as a class.**~~ **CLOSED 2026-07-30** — `TestEveryDocumentedEnvSwitchIsConsumed` guards the class mechanically (documented ⇒ consumed, exemptions carry reasons; fired on first run: the phantom `LOKI_RETENTION_PERIOD` row). Per-switch behaviour remains each feature's own tests — the honest limit, stated in the guard. (§9)
+7. ~~**API response-shape stability is prose.**~~ **CLOSED 2026-07-30** — the shape is now pinned by build-time tests (`internal/httppage/contract_test.go`: the five header LITERALS, all-five-stamped-on-every-write, the envelope's exact keys) and documented for integrators (`docs/API_ACCESS.md` § Pagination & totals contract). The header-blind-client hazard has a documented, tested escape hatch: `?envelope=1` carries the same numbers in the body. Renaming any of it fails the build. (§8)
+8. ~~**`package main` still holds substantial business logic, against the repo's
+   own §2.**~~ **CLOSED 2026-07-30** — the programme ran to its finale. Phase 1
+   (steps 18–59) extracted 53 domains; Phase 2 ran waves W0–W4, the RA re-audit
+   classified EVERY remaining root file (61 INTEGRATOR / 34 FAT-deferred / 22
+   FAT-CRITICAL — all 22 critical lifts shipped, RA.1–RA.16), and the **W5
+   `/cmd` split landed**: the root is now the importable `backend` package,
+   `cmd/api/main.go` is the sole `package main` (one line of wiring, §2
+   satisfied), build ldflags + the shutdown-drain AST guard repointed. What
+   remains in the root is inventoried WITH VERDICTS (plan doc § re-audit):
+   handlers/wiring by design plus 34 FAT-deferred files extractable
+   opportunistically. Security/correctness cores all live behind compiler
+   boundaries; **growth stays ratcheted** (ceiling 200, lowered with every
+   further extraction).
+
+### Closed
+
+- ~~**ClickHouse is the last un-fault-injected seam.**~~ **Closed 2026-07-22** by the `chhttp` package. All six seams — kv/settings, bus, notification, audit, credentials, ClickHouse — now have real fault injection. Building it found five things the source scan could not: 9 call sites still hand-rolling their own request, `chInsertJSON` accepting a `ctx` and discarding it, no execution ceiling on the rollup worker, the API proxy forwarding raw `DB::Exception` text to callers, and an unbounded `io.Copy` on that same path.
+
+## How to use this file
+
+## 8. Transport security (SEC-001.3, 2026-08-04)
+
+The invariant: **no unauthenticated or plaintext hop between Correlix-owned
+components exists in production.** As-built per-hop truth:
+`docs/security/transport-inventory.yaml`; programme: tracker #151 →
+`docs/security/CORRELIX_SECURITY_IMPLEMENTATION_BACKLOG.md`. The production
+security validator (`internal/secprofile`, 16 rules, boot-refusal in the prod
+profile — note its rule ids `SEC-00x` predate and do NOT correspond to the
+backlog's `SEC-xxx` epics) is what puts a hop at RUNTIME; hops it has no rule
+for sit at **NONE**, which is the honest reading of "nothing checks this".
+
+**Post-programme state (2026-08-12):** #151 steps 1–3 ran to completion — the
+enforce wave (2026-08-09), the 13-phase assurance run, and step-3 fixes
+F-1…F-12 incl. the F-11 seal-or-quarantine build. The proof ledger is
+`docs/security/TLS_ASSURANCE_REPORT_2026_08.md`; the inventory is now
+service-complete *mechanically*
+(`test_every_compose_service_appears_in_the_transport_inventory` — adding a
+compose service without a transport decision fails the contract suite), and
+its rows are pinned honest against shipped epics
+(`test_transport_inventory_rows_reflect_shipped_epics`). What was PROVEN vs
+merely built is per-row below. Gaps that REMAIN after the programme, stated
+plainly: **(a)** no secprofile rule covers the bus or ingest lanes — a prod
+boot with a plaintext bus would not be refused; **(b)** the CI legs `-race`,
+staticcheck, gosec, govulncheck have NOT executed on this branch (no local
+gcc; awaits the owner's push — extends standing gap 5); **(c)** the shipped
+`compose.tls.yml` still publishes plaintext `:8000` (removed on the lab only);
+**(d)** `api→gotenberg` (tenant PDFs) and two metrics-scrape hops remain
+declared plaintext pending an owner decision (F-5 rows).
+
+| Hop | Tier today | Raised by | Target tier |
+|---|---|---|---|
+| browser → nginx (ingress TLS; plaintext :8000 REMOVED on the lab 2026-08-09 — `ports: !override` 443-only; compose.tls.yml keeps :8000 until install.py messaging is TLS-aware) | PROSE | SEC-004 (promote profile; retire :8000 in the shipped variant with the installer work) | GATE + RUNTIME |
+| nginx → api | **RUNTIME + wire-proven** (TLS-001/002/003; step-2 phase 6: no-cert refused, wrong-but-valid identity refused AND counted via `netops_tls_identity_rejected_total`) | — (accept-set narrowing proven on the wire 2026-08-09) | RUNTIME + BUILD |
+| api → OpenSearch / ClickHouse / VictoriaMetrics / Postgres / Valkey | **RUNTIME + GATE** — the stores SERVE TLS (step-2 phase 5 wire identities; phase 6 negatives: OS anon 401 / write-only-read 403, valkey NOAUTH+plaintext refused); postgres additionally REFUSES plaintext TCP server-side (F-4 2026-08-10: `test_postgres_tls_entrypoint_requires_hostssl` + `TestPostgresRefusesPlaintextTCP`); per-edge contract rows with negatives pinned in `mtls-edges.yaml` (contract suite) | — (delivered by SEC-008…012 + F-4) | RUNTIME + BUILD |
+| api → correlation | **RUNTIME + wire-proven** (APP-001; correlation serves its SVID on :8443, peer scoping enforced — monitor SVID 403 on app paths; step-2 phases 5–6) | — | RUNTIME + BUILD |
+| victoria → api (metrics scrape) | RUNTIME (mTLS listener rejects certless scrape in prod) | SEC-003.3 registry formalizes the victoria SVID | RUNTIME + BUILD |
+| vector-router → api (per-tenant sealing keys) | **BUILD + wire-proven feature-ON** (SEC-018.1 gate matrix proven live twice — step-2 phase 11 and the step-3 e2e re-run 2026-08-11 after F-6/F-7: router-SVID 200/audited, wrong SVID 401, stolen token 401, no cert refused, feature-off 404; end-to-end seal→store→audited-unseal PASS) | — (feature remains OFF on the lab by owner state; the property is proven, not dormant-assumed) | RUNTIME + BUILD |
+| **every producer/consumer → Kafka** | **RUNTIME-adjacent** (ENFORCED live 2026-08-09: default-deny authorizer + PLAINTEXT:9092 removed, only MTLS:9094/FLOWS:9095/CONTROLLER:9093-SSL listen; tlsprobe probes all three + posture join; step-2 phase 6: ANONYMOUS sees 1/17 topics, Write netops.flows only, consume refused). No `secprofile` bus RULE yet — a prod boot with a plaintext bus would not be refused by the validator (GAP, remains) | SEC-006/007 remainder: a secprofile bus rule | RUNTIME + BUILD |
+| collectors/prober → Vector ingest lanes | **RUNTIME-adjacent** (SEC-013.1/.2 mTLS client-cert requirement + per-lane tokens; shared-token fallback REMOVED — narrowing matrix proven live 2026-08-09: 4× per-lane 200 / shared 401; class guard in test_ingest_contract.py). No `secprofile` lane rule (GAP, remains) | a secprofile lane rule | RUNTIME + BUILD |
+| syslog-ng → vector-aggregator | **GATE + RUNTIME** (F-1 fix 2026-08-11: mesh TLS with REQUIRED client cert — TLS-on never means server-only on this hop; pin `test_syslog_hop_serves_and_requires_mesh_tls`; proven live: no-cert refused, plaintext reset, marker landed over the TLS hop; tlsprobe + rotation sweep now cover :6601) | — (delivered by SEC-014.1/F-1) | RUNTIME |
+| gnmic → devices (`skip-verify: true`) | **RUNTIME** (DEV-001 refuses in prod) | SEC-016 (Phase 2+) | RUNTIME + BUILD |
+| device → syslog-ng (plaintext 514) | **RUNTIME** (DEV-002: lane must be *declared*) | SEC-014.2/.3 (Phase 2+ lane; v1 = declaration) | RUNTIME |
+| device → SNMP trap (v3 fail-open for unknown senders) | **NONE** | SEC-015 (Phase 2+) — the fail-open closure | BUILD |
+| device → goflow2 (protocol cannot encrypt) | PROSE | SEC-017.2: becomes a DECLARED plaintext risk acceptance | RUNTIME (declaration asserted) |
+| backup destination encryption | RUNTIME (BKP-001, operator-asserted) | #150 GUI surfaces it | RUNTIME |
+
+### 8a. Attribution + quarantine invariants (F-10/F-11, 2026-08-12)
+
+New properties from the step-3 fixes; proof = the named test or the F-11
+acceptance battery in the assurance report (F11.1–F11.12, run live on the lab
+with the full TLS mesh and sealing custody ON).
+
+| Invariant | Status | Enforced by |
+|---|---|---|
+| A device→tenant assignment takes effect on BOTH vector tiers without a restart (bound ≈ one export tick + content poll, ~75 s) | ✅ | **BUILD/GATE** — `TestWriteEnrichmentCSV_UnchangedContentDoesNotRewrite` + `test_vector_tiers_reload_enrichment_on_change` (F-10); live e2e measured **61 s** convergence (re-proven in the F-11 battery, INV-F11-11) |
+| **No durable telemetry payload is stored in plaintext because tenant attribution failed** — registry-MISS events are sealed wholesale into `netops-quarantine-*` under the dedicated `quarantine` key scope. BOUNDARY: holds when sealing custody is enabled (the feature's own boundary — custody off means no tenant sealing exists either, so there is no asymmetry; the claim may not be spoken for such a deployment) | ✅ | **GATE + RUNTIME** — generated-stage tests (`processors/quarantine.go`+test) + VRL-harness discriminator matrix; live F11.2 (sealed envelope, zero plaintext leak, absent from every syslog index). Fail-closed: missing key ⇒ Vector exit-78 refusal (live-demonstrated); runtime seal failure ⇒ drop_on_abort, NO deadletter reroute, `VectorQuarantineSealFailures` alert (promtool-tested) |
+| Authenticated producer stamps (`producer_stamped`) never downgrade to quarantine — Case-1 preserved | ✅ | **GATE** — VRL-harness matrix + live F11.1 (known tenant, unknown device → tenant index, zero quarantine docs) |
+| Quarantine isolation: no tenant-facing read path (scoped OS patterns incl. `_cat`, dashboards, correlation identities) can reach the quarantine index | ✅ | **BUILD** — `TestQuarantineIndexUnreachableFromTenantPaths` + OS role grants (writer/api only); live F11.8 (scoped search empty) + F11.9 (correlation refuses `identity_unattributable`, quarantined NOT persisted, no RCA/ticket path) |
+| Re-attribution is idempotent and crosses the key boundary through the real pipeline (quarantine-decrypt → authenticated bus → tenant rules under the tenant's key; tenant derived from live inventory, never the caller) | ✅ | **BUILD + RUNTIME-proven** — `TestQuarantineRoutesArePlatformOnly` + `TestQuarantineReattributeRequiresSensitiveDataAdmin` + `TestQuarantineReattributeHappyPathAndReplay`; live F11.3/F11.11: restore → replay → router restart ⇒ exactly ONE tenant doc (`id_key` on the five OS event sinks — a fix the battery itself forced). Residual: a re-restored FLOWS event re-inserts into ClickHouse (no upsert semantics there; report §8.5) |
+| Quarantine retention is bounded (default 30 d, `QUARANTINE_RETENTION_DAYS`) | 🟡 | ISM policy `netops-quarantine-retention` attached to the live index (F11.4) + contract-pinned deletion action; the 30-day wall-clock deletion has NOT been simulated — attachment proven, expiry asserted |
+
+## 10. Storm-time scale SLO (P4, ratified 2026-08-30)
+
+The invariant, **ratified by the owner on 2026-08-30** (`docs/scale/P4_PROGRAMME_WRITEUP_2026-08-29.md`
+§8, Option A) — quoted verbatim because this is the shipped contract:
+
+> *Under a 15-minute 1,000-eps storm on 2,500 devices, the platform MUST
+> evaluate the whole workload within 45 minutes of burst end, lose nothing
+> (injected == persisted, 0 DLQ), stay within memory caps, and keep RCA accuracy
+> ≥ 93 %. T1 p95 is measured and published every run but is not a pass/fail
+> gate.*
+
+Every clause is **PROVEN**, not believed: it is asserted by the `t-storm-2.5k`
+9-gate sweep in `scripts/scale-miniladder.py`.
+
+**Evidence base, refreshed 2026-09-01 (Project 1 close-out).** Three
+fresh-container 9/9 legs on this profile, the post-wave 8/9 leg, and the
+close-out cycle `storm-s08`/`storm-s09`, all against the same 345-incident
+labelled corpus:
+
+| leg | run | image / code | arm | result |
+|---|---|---|---|---|
+| `storm-s04` | `08300637l2bv` | `34d113a3a8bb` / `2852ad6f` | plane **OFF** | 9/9 — `docs/scale/STORM_S04_2P5K_VERDICT_2026-08-30.md` |
+| `storm-s05` | `08301919od1w` | `c3f627581082` / `0bfdce1c` | plane **OFF** (matched control) | 9/9 — `docs/scale/STORM_S05_S06_CLOSEOUT_2026-08-30.md` |
+| `storm-s06` | `08302033yg32` | `c3f627581082` / `0bfdce1c` | plane **ON** — **the shipping default** | 9/9 — same close-out |
+| `storm-s07` | `08310154mmk9` | code `de8ca5b1` (the engine wave) | plane **ON** | **8/9** — `memflat` FAIL, attributed to tracker 186 + a 7-minute-old api process, NOT to the wave: `docs/scale/PROJECT1_WAVE_VALIDATION_2026-08-31.md` §4 |
+| `storm-s08` | `09010312jpiu` | correlation `a9e99871e812` / `36036db5` | plane **ON** | **6/9** — found the api `MemMetricsStore` defect (memflat: api **100 % of cap**; fixed `eb29c87a`): `docs/scale/API_MEMSTORE_DEFECT_2026-09-01.md` |
+| **`storm-s09`** | `09010750fq0u` | correlation `a9e99871e812` / `36036db5` · api `eefcc527730a` / `eb29c87a` — every Project-1 fix deployed | plane **ON** | **8/9 — every SLO clause MET, `memflat` PASS (first ever at 2,500 devices); sole FAIL = the onboard ratio clause, a harness artifact (tracker 202). THE LEG OF RECORD: `docs/scale/PROJECT1_DONE_2026-09-01.md`** |
+
+**`storm-s09` (2026-09-01) is the SLO leg of record** — the shipped
+configuration with the whole Project-1 fix chain deployed, and the first leg on
+which all four clauses, memory caps included, pass together. `storm-s06`
+remains the reference for the default-ON decision; `storm-s05` is its matched
+OFF control on the same image in the same session.
+`storm-s07` is the **post-wave** leg: same profile and arm, code `de8ca5b1`.
+It carries the evidence for the three rows added at the foot of the table below,
+and its one failing clause is attributed away from the engine in §4 of the
+validation record. Where an SLO clause below cites s06, s07 re-confirms it —
+completion **94 s**, accounting **exact**, accuracy **345/345**, carrier memory
+**79.1 % of cap ×0.941** — except `memflat`, which did not pass on s07.
+
+**Honest tier note.** The sweep is a *rig* gate: it runs on the 4-core scale box
+against a live stack, not in CI, so no push can be blocked by it. Its clauses
+therefore sit at **RIG-GATE** — stronger than PROSE (a real assertion fails a
+real run and the run is the release evidence), weaker than GATE (nothing
+mechanical stops a regression from merging between sweeps). Read every ✅ below
+as "proven on the named run", not "cannot regress".
+
+| Aspect | Status | Enforced by |
+|---|---|---|
+| Whole workload evaluated within 45 min of burst end | ✅ | **RIG-GATE** — `correlation_completion`; **storm-s09 (leg of record) 93.7 s** — the whole workload evaluated 24 min 07 s after burst end, drain included; storm-s06 (ON, shipped default) 124 s and storm-s05 (OFF) 95 s against the 2,700 s budget (22× / 28× margin); storm-s04 144 s |
+| Lossless: injected == persisted, 0 DLQ | ✅ | **RIG-GATE** — `accounting`; **exact on every graded leg, s09 included**: 900,001 == 900,001 + 0 DLQ + 0 counted rejections, 2,500/2,500 devices covered, `unexplained_missing` 0 (s09: 53,981 `corr_signals` rows). The fault path was exercised unforced on storm-s04: 3 `netops.findings` transport failures, all retried under the dedup token and recovered, 0 rows lost |
+| Stays within memory caps | ✅ | **RIG-GATE** — `memflat`; carrier replica **storm-s06 1,059 MiB = 82.7 % of its 1,280 MiB cap, ×1.021 FLAT**; storm-s05 1,065 MiB = 83.2 %, ×1.023 FLAT; storm-s04 79.5 %, ×0.961. Zero capacity evictions of any kind on the ON leg (`corr_agg_evicted_total{capacity,ident_capacity,tenant_capacity}` all 0). **storm-s07 did NOT pass this clause** and the ✅ is therefore carried by s04/s05/s06, not by the latest leg: the correlation halves improved (carrier **1,013 MiB = 79.1 % of cap, ×0.941** — the first leg ever below ×1.0), but the gate failed on `netops-api-1` (169 → 275 MiB, ×1.63) and on 3 ClickHouse `MEMORY_LIMIT_EXCEEDED`. Both are attributed with evidence to a 7-minute-old api process sampled trough-vs-peak across the `timeintel-backfill` sawtooth, and to that same worker's unbounded query (**tracker 186** — 1.86 GiB / 35.4 GB read, failing on 12 of 41 passes since 2026-08-30 16:57, i.e. a pre-existing class): `docs/scale/PROJECT1_WAVE_VALIDATION_2026-08-31.md` §4. **The clause is attributed, not waived** — 186 had to land before the clause could pass on a cold api. **RESOLVED on the leg of record (2026-09-01): `storm-s09` passes `memflat` outright — the first 2,500-device leg ever to, on any profile** — after the 186 chain landed (watermark + splitter `9ed38cbb`, the 512 MiB query budget made effective by `cfd7ebdc`, irreducible-only skips `e86ec6aa`) and the api's `MemMetricsStore` was bounded (`eb29c87a`, found on `storm-s08` at 100 % of cap): all 9 key containers within ×1.3 and under 85 % of caps, carrier ×0.954 FLAT at 78.0 %, api 33.4 %, ClickHouse p99 37.5 % with all 558 MEMORY_LIMIT_EXCEEDED exempted as the backfill's own 512 MiB budget working as designed (sole producer verified). Trackers **186 and 199 are CLOSED** (rows deleted; closure records `docs/scale/PROJECT1_DONE_2026-09-01.md` §3/§4) |
+| RCA accuracy ≥ 93 % | ✅ | **RIG-GATE** — twin scorer **v2** against seeded ground truth; **storm-s06 345/345 = 100.00 %**, storm-s05 345/345, detection 100 % and specificity 100 % on both. v2 (`06450430`, tracker 191) evaluates `affected_includes` over the union of the objects touching the story and picks `best` deterministically; the v1 instrument decided that clause by a correlation-UUID coin flip and carried a 0.71 pp noise floor centred on this very threshold. **The named residual, tracker 187, is now CLOSED** (`de8ca5b1`, measured on storm-s07: shrinking terminal objects **526 → 0**, lost entity mentions **2,427 → 0**; accuracy stayed **345/345**, `affected_includes_with_missing` **0**) — see the monotone row below. 100.00 % still means the corrected clause passes, NOT that attribution is perfect. `storm-s08` and `storm-s09` both scored **345/345** on v2 — the corpus reads 100.00 % on eleven consecutive legs (4,278/4,278 labelled stories at or below the rate ceiling incl. the 483-story 3,500-device rung) |
+| T1 p95 is published every run and is NOT a gate | ✅ | **RIG-GATE (by construction)** — `scripts/scale-rca-latency.py` T0..T6 emits it; no clause consumes it. **storm-s09 (leg of record) 912 s**; storm-s06 816 s, storm-s05 866 s, storm-s04 832 s; storm-s08 **1,101 s** — the one excursion above the 816–912 s band, owned by the api `MemMetricsStore` defect (fixed `eb29c87a`), not the engine. Deliberate: the storm p95 is queueing time behind the burst on one shard (T3−T1 = 0 at max on every leg), not a decision cost |
+| The SLO holds under a genuinely overloading storm, not only the nominal one | ✅ | **RIG-GATE (single leg)** — P3 A/B 25 % storm rung: with `CORR_AGGREGATION_PLANE` **ON**, an arm that was **INCOMPLETE** (78,663 objects pending at the 2,700 s cap) **completed in 192 s**; 58.1 % of signals suppressed before the engine. `docs/scale/P3_AB_2P5K_VERDICT_2026-08-29.md`. **BOUNDARY (flipped 2026-08-30): the plane is now ON by default**, so this row is evidence about the *shipping* configuration rather than about an opt-in overlay. What it does NOT prove is the OFF path at 25 % storm share — that arm was INCOMPLETE, so `CORR_AGGREGATION_PLANE=0` in `.env` is a fallback with a measured cliff, not an equivalent configuration |
+| The aggregation plane costs nothing at the low (2 %) rung | ✅ | **RIG-GATE** — the neutrality guard of `RUN_PLAN_P3_AB_2026-08-29.md` §7, cleared on the matched fresh-container pair re-scored on scorer v2: T1 p95 **−7.98 %** vs the matched OFF leg and **−0.24 %** vs storm-s04, p50 0.00 %, p99 −1.30 %, T-last p95 −4.59 % — all inside ±10 % — and accuracy **Δ 0.00 pp** (100.00 % on both arms). Confirmed independently by the s05/s06 pair: T1 p95 −5.8 %, T-last p95 −8.9 %, accuracy equal. `docs/scale/P3_PAIR_2P5K_VERDICT_2026-08-30.md` §8 |
+| The plane's own accounting closes exactly | ✅ | **RIG-GATE** — storm-s06, leg-scoped on the carrier replica: `corr_agg_observed_total` **54,767** = Σ`forwarded{class}` **49,913** + `corr_agg_suppressed_total` **4,854** (8.86 %), and 54,767 is digit-identical to the syslog prefilter's `passed` count on BOTH arms. `corr_agg_beyond_lateness_total` 0. **BOUNDARY:** `contradiction`, `new_vantage` and `new_modality` have forwarded **0 on every leg ever run** — the harness gives each entity one observer and one modality, so those three classes are **unexercised**, not proven |
+| Storm-priority scheduling (`storm_mode`) keeps the consumer at wire speed when the engine saturates | 🟡 | **PROVEN AT UNIT LEVEL, DORMANT IN PRODUCTION** — tracker 172 (`eb609b45`, deployed since the Aug-24 build); storm mode no longer ENGAGES on any leg because the engine no longer saturates (P2/P3: completion 95–124 s on `storm-s05`/`storm-s06`), so the shipped path is unexercised at scale and the invariant rests on its unit tests |
+| A loop stall cannot cost the consumer its partitions | 🟡 | **RIG-GATE, and the stall is now bounded — but the gate's threshold is still stale.** Tracker 185 is CLOSED (`0bfdce1c`): `reconcile.find_continuation` no longer rescans the probe per candidate (fixture 13,787 ms → 46.8 ms, 294×), and live `corr_sync_stretch_max_ms` is **443.5 ms** (s05) / **401.1 ms** (s06) with **0** sync-budget overruns, the worst site having moved to `lifecycle.merge_index`. Worst in-window loop stall fell 29,974 ms (s04) → **4,122 / 4,450 ms**, with 0 CommitFailed / 0 UnknownMember / 0 restarts / 0 rebalances on both legs. **Both things that kept this amber were closed on storm-s07:** (a) the harness no longer judges against a hard-coded 30,000 ms — it reads the live 60,000 ms session timeout from both replicas (**tracker 190**, `0a4e57d2`; see the derivation row below); (b) the **~9–14 s loop block on the cleanup / re-key path** is bound and NAMED (**tracker 192**, `79e27efc`): worst `corr_sync_stretch_max_ms` **385.3 ms** at site `reconcile.continuation_index`, **0** sync-budget overruns, and process-lifetime `corr_loop_lag_max_ms` fell **13,881.1 → 4,278.3 ms**. **It stays amber for one honest reason:** 4,278 ms still exceeds any single instrumented span, so the residual is an **accumulation of attributed spans within one loop pass** — bounded, attributed, and far under the 60 s timeout, but not reduced to one named site |
+| An object's final `affected` is monotone over its own version history at CLOSE | ✅ | **RIG-GATE** — **storm-s07** (`08310154mmk9`, code `de8ca5b1`, tracker 187). Measured per `correlation_id` in ClickHouse: the terminal (`state in merged/closed`) `argMax`-version affected devices+interfaces vs `groupUniqArray` over ALL versions of the object — **0 shrinking terminal objects and 0 lost entity mentions** across 1,175 terminal objects, against **526 / 2,427** on storm-s06 and 544 / 3,122 on storm-s05. **BOUNDARY:** the guarantee is bounded by the history accumulator's cap. `corr_affected_history_entities_max` reached **16,622 of a declared 20,000 = 83.1 %** at 2,500 devices, with `corr_affected_history_truncated_total` **0**. Above that cap the property degrades to *monotone up to 20,000 entities*, so the 5k/10k rungs MUST re-check the gauge before they are graded |
+| An RCA verdict is only ranked if the evidence attests the topology its signature names | ✅ | **RIG-GATE** — **storm-s07** (tracker 157, `39eba8c0`). The structural role-grounding gate refused **35,940** templates (`corr_template_ungrounded_total`, 15.6 % of the 230,824 actually scored) whose signatures name role/tier/group structure the evidence does not attest; the counter is **disjoint** from `corr_template_scored_total`, i.e. this is suppression, not re-ranking. The named defect closed with it: `sig.ent.fabric.spine-leaf-path-degradation` — confidence 1.0 in a topology with no spine — fell from **589** top-hypothesis rows on storm-s06 (588 on s05) to **0**, redistributing to `sig.ent.access.local-link-fault` (**169 → 788**), while accuracy stayed **flat at 345/345**. **BOUNDARY:** proven against the twin's labelled corpus, whose topology is fully known and fully attested. A real fleet with partial topology will ground fewer templates; the ungrounded rate must be measured there, not assumed |
+| The stability gate's threshold is DERIVED from the live engine, not hard-coded | ✅ | **RIG-GATE** — **storm-s07** (tracker 190, `0a4e57d2`). `phases[stability]` records `session_timeout_ms` **60,000** with `session_timeout_derivation` = *"session timeout 60000ms read from 2 replica(s)"*, `session_timeout_per_replica` `{7dc16ef9cae1: 60000, ba674ca06a39: 60000}` and `session_timeout_override` `null`; the worst loop stall (3,623 ms) is reported as **6.0 % of the session timeout** rather than against the stale 30,000 ms constant that s05/s06 were judged by. **BOUNDARY:** the harness reads what the engine publishes. If a replica stopped publishing the timeout the gate would fall back to a default rather than fail loudly — so the derivation string is part of the evidence and must be READ on every leg, not assumed |
+
+**What is NOT claimed.** Option B (per-identity-class latency relative to burst
+end) was NOT adopted. Its first-occurrence/repeat classifier now ships — it lives
+inside the aggregation plane and the plane is on — but TTUR is still computed per
+*incident* from `min(window_start)`, so no per-class latency property is measured
+or gated today; B remains a refinement of C, not an invariant.
+
+**Option C (plane ON) IS adopted and IS the shipping default** as of 2026-08-30
+20:31Z (`a9d9a10c`, `deployment/docker/docker-compose.yml:1201` →
+`CORR_AGGREGATION_PLANE: ${CORR_AGGREGATION_PLANE:-1}`). The **image default
+remains OFF** (`src/correlation/main.py`) so the A/B overlay contract still
+holds, and `CORR_AGGREGATION_PLANE=0` in `deployment/docker/.env` is the
+documented fallback. What C's own statement proposed but was **not** taken: the
+per-tenant storm-share routing signal (unnecessary — the plane is on for every
+tenant, because the 2 % neutrality rung showed it costs nothing) and the tighter
+10-minute completion target (the SLO above is unchanged at 45 minutes; the
+plane's gains are recorded as margin, not as a tighter promise).
+
+### 10a. Post-Project-1 preservation invariants (owner directives, 2026-09-01)
+
+Filed at Project-1 close-out. These preserve what the scale programme proved —
+they are constraints on FUTURE change, so several sit at PROSE by nature: the
+"enforced by" column names the evidence that made the rule and the act that
+would violate it.
+
+| Aspect | Status | Enforced by |
+|---|---|---|
+| The aggregation-plane shipping default stays the conservative **2 %-share configuration** it was qualified on | ✅ | **PROSE (owner, 2026-09-01) over RIG-GATE evidence** — the shipped default (`a9d9a10c`, plane ON, qualified at the ~2 % / achieved 1.78 % storm share of `t-storm-2.5k`; `CORRELIX_REFERENCE_CAPACITY_V1.md` §7). **Moving it requires NEW qualification (a V2 profile + graded legs), not benchmark enthusiasm.** The `contradiction` / `new_vantage` / `new_modality` paths remain **UNPROVEN until measured** — forwarded 0 on every leg ever run (the §10 BOUNDARY above); no configuration change may lean on them |
+| The structural verdict gate (tracker 157 role-grounding) must **not be relaxed for throughput or latency** | ✅ | **PROSE (owner, 2026-09-01) over RIG-GATE evidence** — the gate itself is proven (storm-s07 row above: 35,940 ungrounded templates refused, accuracy flat). **Any ranking optimization must measure specificity, false-positive RCA rate, unsupported-causal-object rate, AND accuracy before acceptance** — a throughput win that moves any of those is a regression, not an optimization |
+| Overload philosophy: prefer **"still analyzing" over an unsupported root cause** — specificity holds, recall queues | ✅ | **RIG-GATE (measured shape) + PROSE (the rule)** — at 2× the ceiling accuracy degraded by RECALL ONLY: 644/690 with specificity **1.000**, zero false positives, all 46 misses being never-evaluated windows or starved-`undetermined` objects (`HOST_CEILING_2026-08-31.md` §3). The engine never guesses; no future change may trade that for tail latency |
+| **Rebalance correctness is a RELEASE REQUIREMENT**: one identity through the handoff, gapless versions, no duplicate versions, durable offsets/signals/evidence preserved, and the measured ≤ 652 ms handoff flush not to regress | ✅ | **RIG-GATE** — the tracker-155 four-run arc (`OWNERSHIP_155_VALIDATION_2026-08-31.md`): positive pass 1.00/1.00 on both disturbed arms, v1–v10 gapless across the handoff, 0 duplicate versions, flush 210–652 ms; plus the 199 shutdown-handoff flush (`36036db5`, `corr_ownership_handoff_unflushed_total` 0 on every replica). A release that regresses any clause does not ship |
+| The **three-plane architecture is the preserved model**: Aggregation → Decision → Evidence; raw observations stay durable; suppression reduces correlation-plane work, **never drops raw evidence** | ✅ | **RIG-GATE + PROSE** — the plane's exact accounting (observed == forwarded + suppressed, §10 row above) with ingestion lossless on every graded leg including the suppressing arms (900,001 == 900,001 + 0 DLQ). **No reversion to every-observation-full-graph-work** — a change that makes the decision plane re-process raw observations, or that lets suppression touch the durable raw record, violates this row |
+
+## 11. Digital Experience evidence discipline (S17, 2026-09-05)
+
+> *A verdict is a claim about EVIDENCE. Correlix never confirms what it did not
+> independently observe, and never renders an absence as health.*
+
+| Invariant | Status | Enforced by |
+|---|---|---|
+| CONFIRMED requires two DIFFERENT anchor-capable modality classes from two observers, with a concrete independent pair | ✅ | **BUILD** — `TestIndependenceCountsKindsNotCopies`, `TestIndependentVantagesRaiseConfidence`. Repeating one source, or adding a second vantage of the SAME modality, never satisfies the rule. The vocabulary is the correlation engine's own (`src/correlation/signals.py` `ModalityClass`) |
+| A change record can corroborate but never confirm | ✅ | **BUILD** — `TestChangeBeforeEffectSupportsButNeverConfirms`. `change_record` and `business` are support-only classes, so "it happened just before" cannot reach `confirmed` however much of it there is |
+| A change AFTER first impact is shown but never scored as a cause | ✅ | **BUILD** — `Window.Aligns` + `TestChangesAreRankedByCorrelationNotProximity` |
+| Missing telemetry lowers confidence, and a missing ANCHOR-capable source blocks CONFIRMED | ✅ | **BUILD** — `TestMissingTelemetryLowersConfidenceAndBlocksConfirmation`; an UNCONFIGURED source lowers without blocking, so a gap cannot make every incident permanently unconfirmable |
+| A decisive contradiction rejects a hypothesis regardless of its support, and rejected hypotheses are kept | ✅ | **BUILD** — `TestDecisiveContradictionRejects`, `TestRejectedHypothesesAreKeptAndRankedLast` |
+| No score is published below the evidence minimum — never 0, never 100 | ✅ | **BUILD** — `TestScoreIsDecomposableVersionedAndGated`; the weight of an unmeasured dimension is redistributed, and the policy VERSION travels with every score |
+| A flaky synthetic cannot raise a high-severity incident | ✅ | **BUILD** — `TestFlakySyntheticCannotRaiseAHighSeverityIncident`; the same failure with a trustworthy check IS critical |
+| UNKNOWN and NO DATA are never healthy; an absent source visibly costs confidence | ✅ | **BUILD** — `TestDataHealthNeverCallsAbsenceHealthyAndGatesConfirmation`; `Healthy()` admits exactly one state |
+| The AI never invents evidence and never confirms | ✅ | **BUILD** — `TestInvestigatorRejectsInventedEvidenceAndCannotConfirm`: an answer citing an id it was not given is REJECTED WHOLE, a model-claimed CONFIRMED is downgraded and the downgrade is recorded, and anything above `pseudonymous_user` is withheld with the redaction stated |
+| The derivation is pure and does not mutate its evidence | ✅ | **BUILD** — `TestDetectDoesNotMutateItsInput`, `TestIncidentDerivationIsDeterministic` |
+| The end-to-end acceptance scenario holds | ✅ | **BUILD** — `TestPhaseTAcceptanceScenario`: one incident, transit confirmed across three independent modality classes, the deployment rejected by the unaffected cohort, ownership on the seam, an action with a verification plan, recovery not satisfied by the action completing |
+
+| A second anchor-capable class exists, and CONFIRMED is reachable without RUM | ✅ **on fixtures**, ❌ **not live** | **BUILD** — `TestConfirmedIsReachableWithSyntheticAndFlow` (synthetic + flow reach `confirmed` on two anchor classes across two observers, with the SAME bundle minus the flow item failing to confirm as its control) and `TestFlowAloneCannotConfirm` (one class, however loud, stays short of the gate). `TestPassiveFlowIsAnchorCapableInBothGraders` reads `src/correlation/signals.py` and `verdicts.py` so the Go anchor set cannot become more confident than the engine |
+| Flow evidence is availability-shaped only, and says so | ✅ | **BUILD** — `TestFlowSourceHealthStatesAreFourDifferentSentences`: every Data Health state for the flow source states that responsiveness is not measured and names the columns `netops.flows` does not carry |
+| An exporter that reports no TCP flags is `not_supported`, never a healthy zero | ✅ | **BUILD** — `TestResetRatioBranches`: the reset ratio's denominator is flag-bearing flows only, and "0 of 1000 flows carried control bits" is reported as an exporter gap with the IPFIX field named |
+| The flow read is tenant-scoped three times over and default-closed | ✅ | **BUILD** — `dem_flow_isolation_test.go`: no principal → refused with no query; a scope that disagrees with the requested tenant → refused with no query; a tenant with no devices → nothing, with no query; a scoped read carries only its own device addresses and its own declared endpoints; aggregates only, never a raw conversation |
+
+**Standing gap — the honest one, updated 2026-09-05 (tracker 252).** Every row
+above is proven on FIXTURES. The second anchor-capable class shipped
+(`passive_flow`, `internal/dem/experience/flow.go`), so `can_confirm` **can** now
+be true and `confirmed` is reachable without RUM — but **it has not been proven
+live**, and two things stand between the fixture and the estate:
+
+1. **The lab has no flow evidence to produce.** Its exporters (172.40.40.51/.52)
+   emit OSPF hello flows only: over seven days, 53 002 rows, `tcp_flags = 0` on
+   every one, `proto = 0` on all but a single UDP record, `tenant_id = ''`
+   throughout, and **zero rows touching the DEM tenant's declared subjects**
+   (172.40.40.11/.12). The producer correctly reports `no_data` there, and
+   `can_confirm` correctly stays false. Live proof needs an exporter pointed at
+   real application traffic that populates `tcpControlBits`.
+2. **Flow cannot measure responsiveness at all.** `netops.flows` carries no
+   timing or retransmit column, so the class contributes availability-shaped
+   evidence only. That is stated on the Data Health row in every state rather
+   than left to be discovered.
+
+Until an exporter reporting control bits is pointed at the estate, a live tenant
+still reaches `suspected` and `GET /api/dem/data-health` still says so in
+`can_confirm` with its sentence. **The acceptance scenario must be re-proven
+LIVE before this row is marked ✅ without qualification.**
+
+### 10b. Parser programme invariants (2026-09-02)
+
+Filed with the parser programme (`61928aeb` W1b · `e9f198b1` A3/A8 · `a72f0dfb`
+W1a/A4 · `ecda0d1e` A4 engine side · `889ddc1c`/`bac46071`/`ea214148` A6 ·
+`34adf4f0`/`73c2c196` A7 · `6e8d66cc` A9). Every row is **PROSE** — these are
+constraints on future change, and the "enforced by" column names the test that
+fails when the constraint is broken. **None of them is live-attested:** the
+engine, router and aggregator images are unbuilt and nothing here has run on the
+stack.
+
+| Aspect | Status | Enforced by |
+|---|---|---|
+| **The admission rule has ONE source.** What the router admits is GENERATED from the engine's own screen (`producers`' `ALARM_SEVERITY_FLOOR` + screen literals) into `deployment/docker/vector/generated/syslog-admission.vrl` — never hand-written, never a second copy of the rule. A hand-edit or a drifted engine screen must fail a gate, not silently admit a different set | ✅ | **PROSE over a drift gate** — `scripts/gen-syslog-admission.py --check` (spliced copy pinned, `rules_hash 0538afc1b47c`, 61 literals) plus `tests/test_syslog_admission.py`: 35/35 cases agree with `syslog_promotable` on the same events. The same rule applies to the baked catalog: `telemetry-catalog/bake_rules.py --check` + `telemetry-catalog/test_bake_rules.py`, and `producers` refuses to import a hand-edited `parser_rules.py` |
+| **Every signal carries its provenance.** `{rule_id, parser_rev, rules_hash, fidelity}` ride in `attrs` on every emitted signal — so any verdict can name the rule that produced its evidence — and **never in the identity key**, so provenance can never change a signal's identity | ✅ | **PROSE** — `src/correlation/test_parser_provenance_w1b.py` (202 tests) + `test_parser_rule_info_export.py`; the tracker-198 identity pins are re-asserted in the same suite. Golden corpus of 1,115 pre-change parses replays with 0 mismatches |
+| **The wire digest is the qualification identity.** A scenario's identity is the bytes injected on the wire (`wire_digest`, 8 fields), NOT the derived ground-truth annotations (`expectation_digest` + `EXPECTATION_REV`). Improving the parser therefore changes what we EXPECT, never what we INJECTED — a parser promotion may not be reported as a V1 profile change, and a genuine workload change may not hide behind an annotation edit | ✅ | **PROSE over a pin** — `tests/test_storm_scenario_profile.py` (`DEFAULT_SCENARIO_WIRE_DIGEST` `93b614f8…`, measured bit-identical before and after the 184 promotions on the reverted tree; the pre-184 combined digest reproduces the old pin exactly). Recorded as the **V1 §3 erratum** in `docs/scale/CORRELIX_REFERENCE_CAPACITY_V1.md` |
+| **`doc_claimed` evidence never confirms.** A rule built from vendor documentation rather than capture may attach, satisfy clauses and drive coverage, but the independent pair that CONFIRMS a verdict must consist of validated fidelity (`code`, `lab_validated`, `live_validated`); otherwise the verdict is capped at `suspected` with the holding rule ids named. **Behind `CORR_FIDELITY_WEIGHTING`, default OFF** — with the flag off, blobs are byte-identical, so this is a rule the platform is ready to enforce, not one it enforces today | 🟡 | **PROSE, flag-gated** — `src/correlation/test_fidelity_weighting_a7.py` + the `confirmability.py` header rule; 114 fixtures + `FIXTURE_GOLDEN` prove flag-OFF byte identity. Flipping the default needs a graded leg (tracker 215) and re-versions open objects once |
+| **Shadow rules never emit.** A catalog row marked `shadow: true` is counted (`corr_parser_shadow_hits_total` / `SHADOW_HITS`) and produces **no signal** — the mechanism for measuring a candidate rule against the live firehose without letting it reach a verdict. The same principle governs A6's mining: a proposed draft row is `shadow: true`, `doc_claimed`, validated against the catalog schema, audited, and **applies nothing** | ✅ | **PROSE** — `src/correlation/test_parser_shadow_metrics_a3.py` + `test_parser_interpreter_a3.py`; the A6 propose path is tested against hostile template text and is not an existence oracle across tenants |
+| **A guard may test only an OID that resolves in the vendored MIB index** (anti-fabrication). A trap rule that names an OID nobody shipped is a fabricated capability; where no MIB exists the symptom stays generic `device_alarm` with the reason recorded, and a trap rule must emit the SAME kind/entity/state vocabulary as its syslog counterpart — only the observer differs | ✅ | **PROSE** — `src/correlation/test_trap_syslog_parity_a9.py`, `telemetry-catalog/test_trap_rules_a9.py`, and the generated `docs/design/telemetry-coverage-matrix.md` with `coverage_matrix.py --check` as the drift gate (25 typed symptoms, 7 carried by a typed trap rule, was 3) |
+| **An enrichment of a rule that already ships is ADDITIVE, or it is not shipped.** A field added to a live rule may not change what any already-stored event IS: `state`, `entity`, `native_id` and therefore `signal_id` stay put, and an OPTIONAL field the device did not send is an ABSENT key (`emit.omit_empty`), never an empty value — "not reported" and "reported empty" are different facts and must not read alike downstream | ✅ | **PROSE** — `src/correlation/test_link_status_enrichment_218.py`: the same link trap with and without its `ifAdminStatus`/`ifOperStatus` varbinds yields an identical `signal_id`, and the whole golden corpus replays byte-for-byte with no new baseline skip. The A9 audit had DEFERRED this enrichment on the claim that it would "re-identify every link trap already stored"; the claim was checked against the code and did not hold (`docs/design/telemetry-coverage-matrix.md`, "…and one the audit got wrong") |
+| **The parser cost gate is a measurement, not a draw.** The interpreter must stay within 1.5x of the frozen pre-A3 branch code over the corpus and on the syslog lane (2.0x on the emission-dominated trap lane) — and the harness that says so must be able to resolve that margin. A single `process_time` sample per side scattered +/-0.25 on a loaded box, wider than the difference it was gating, so it failed ~1 run in 10 on a healthy parser and would equally have passed a real regression | ✅ | **PROSE over a structural gate** — `src/correlation/test_parser_interpreter_a3.py` §6: min-of-N per side, both sides timed in every round, sides alternating, samples size-normalised to ≥ 50 ms of work, verdict = the median of the per-round ratios. `test_the_cost_harness_is_drift_cancelling_by_construction` records what the harness actually does and fails if any of those four properties is dropped; the measured scatter is PRINTED beside every ratio rather than asserted, because an assertion on measured noise is itself a flaky test. Tracker 234, closed with the emission lever taken (`producers._Emission`) rather than the budgets widened |
+
+## 12. Pipeline debugger — what is built vs what has RUN (tracker 241, 2026-09-06)
+
+The CLI (W1), the parser decision hook, flow + passive gNMI and the UI-query
+stage (W2) and the in-GUI trace viewer (W3, `fbfa4966`) are all shipped. What is
+NOT proven is a different claim, and it is recorded here rather than left in a
+closed tracker row where nobody would find it again.
+
+| Aspect | Status | Enforced by |
+|---|---|---|
+| A trace's ten hops are each `seen`, `not seen` or `not observable` **with a reason**, and a hop the api cannot observe is NEVER rendered as a miss | ✅ | **BUILD** — `internal/pipedebug/{pipedebug,stages,w2}_test.go` and `src/frontend/src/pages/platform/PipelineDebugger.test.tsx`; the four-state rule is unit-tested in `pipelineDebugger.model.ts` |
+| A saved run states its own PROVENANCE — who ran it, with which tool, against which api, and what redaction was applied — and a run whose `manifest.json` could not be read says so instead of rendering as clean | ✅ | **BUILD** — `sessionProvenance` / `sessionWarnings` (`pipelineDebugger.model.ts`) + the two saved-run provenance tests in `PipelineDebugger.test.tsx`. The api had always returned `manifest`; until 2026-09-06 the viewer dropped it, so a downloaded archive's accountability lived only in the tarball |
+| The W2 routes have RUN against a deployed api | ❌ **NOT PROVEN** | The lab api image predates them. `--kind flow` and passive gNMI are proven by unit tests plus a wire-level injection into the real goflow2 → flow-store path — **not** by a full `trace` run against a deployed stack. Closing this needs a lab deploy of a current api image, which is an owner-only leg |
+
+## 13. Kubernetes packaging — rendered-and-validated, NOT cluster-proven (tracker 114, 2026-09-06)
+
+`deployment/helm/correlix` packages the whole compose stack as a Helm chart.
+**The claim this row exists to bound is the difference between a manifest that
+validates and a deployment that works.** No Kubernetes cluster was available
+when the chart was written and none has run it: `helm lint` clean, `helm
+template` rendering, and 61/74 objects passing the Kubernetes 1.30 schemas is
+evidence about SYNTAX AND SHAPE, not about scheduling, volume binding, image
+pulls, or whether a single pod ever reached `Ready`. Read a green
+`fresh-install-integrity / helm-chart` job as "the chart is well-formed", never
+as "the chart deploys" — the same distinction `deploy-qualify.sh` exists to
+enforce for compose, where `docker compose up` exiting 0 was repeatedly mistaken
+for evidence.
+
+| Aspect | Status | Enforced by |
+|---|---|---|
+| The chart renders and every rendered object is a valid Kubernetes 1.30 object | ✅ | **GATE** — `tests/test_helm_chart.py` (`helm lint` on default + lab values; `helm template` both; `kubeconform -strict -kubernetes-version 1.30.0`, asserting `Skipped: 0` so an unknown kind cannot pass as validated). CI job `helm-chart` in `.github/workflows/fresh-install-integrity.yml`, helm 3.16.4 and kubeconform 0.6.7 pinned by sha256 |
+| Every third-party image is digest-pinned, to the SAME digest `docker-compose.yml` pins | ✅ | **BUILD** — `test_every_third_party_image_is_digest_pinned` parses the compose file and fails on drift in either direction; `test_first_party_images_are_exactly_the_documented_set` makes a new unpinned repository a reviewed decision |
+| Correlix's own five images cannot silently run from a mutable tag in production | ✅ | **BUILD** — `images.requireDigest=true` FAILS the render naming the offending service, proved by `test_require_digest_gate_is_real`. The flag defaults false because those images have no digest until a pipeline publishes them; `docs/DEPLOY_KUBERNETES.md` says to turn it on |
+| Every container declares CPU+memory requests AND limits, and readiness+liveness probes | ✅ | **BUILD** — `test_every_container_declares_requests_and_limits`, `test_every_container_has_probes_or_a_documented_exemption`. Exactly two containers are probeless (goflow2, gnmic) because as configured neither opens any TCP or HTTP listener; `test_probeless_containers_state_their_reason` fails if the rationale comment is dropped. An invented endpoint would be a probe that always passes |
+| Zero trust §3 at the network layer: default deny both directions, named allows at the RECEIVER | ✅ | **BUILD** — `test_default_deny_network_policy_is_present` (exactly one policy with an empty podSelector, both policyTypes, no rules) + `test_network_policy_can_be_turned_off_but_is_on_by_default`. **RUNTIME caveat that is not testable here: a NetworkPolicy is inert under a CNI that does not implement it (flannel).** The chart and the doc both say so; nothing in CI can |
+| PodSecurity `restricted`, with every exemption opt-in, default-off and annotated | ✅ | **BUILD** — `test_pods_are_pod_security_restricted` (pod `runAsNonRoot` + `RuntimeDefault` seccomp; per container `allowPrivilegeEscalation: false`, `drop: [ALL]`, and no added capability beyond `NET_BIND_SERVICE`). The two exemptions — prober (`CAP_NET_RAW`) and the host exporters (`privileged`) — are named in the test, annotated in the templates and default off |
+| The chart never generates a credential, and none is baked into it | ✅ | **BUILD** — `test_chart_creates_no_secret_object` (no `kind: Secret` in any render) and `test_no_credential_literal_in_values` (no credential-shaped literal in `values.yaml` / `values-lab.yaml`). `secrets.existingSecret` is `required` in the template AND `minLength: 1` in `values.schema.json`. A chart that mints secrets writes them into the release manifest, where `helm get manifest` hands them out |
+| The mounted configuration is the REAL configuration, not a stale copy | ✅ | **BUILD** — Helm cannot read outside the chart root, so `files/` is a checked-in mirror maintained by `deployment/helm/stage-configs.sh` (the same shape as `sync-docs-corpus.sh` + `docs_corpus_drift_test.go`). `test_staged_configs_match_canonical_sources` fails on any drift; `test_gateway_config_differs_from_compose_only_in_the_resolver` pins the ONE deliberate edit (Docker's `127.0.0.11` embedded DNS does not exist in a pod) so the gateway can never quietly serve a different routing table — including its `auth_request` gates |
+| The bus bootstrap creates exactly the topics compose creates | ✅ | **BUILD** — `test_kafka_init_creates_exactly_the_compose_topic_set` diffs the hook's topic list against the compose `kafka-init` entrypoint. Broker auto-create is off, so a topic missing from one side is a lane that fails loud at its first produce |
+| PostgreSQL is the default app-state backend (tracker 245) | ✅ | **BUILD** — `test_store_backend_defaults_to_postgres`; `values.schema.json` restricts the backend to the three the api accepts, so a typo aborts the render rather than the api's boot |
+| **The chart INSTALLS, schedules, binds volumes and reaches Ready** | ❌ **NOT PROVEN** | Nothing. No cluster. Closing this needs one real bring-up (kind/k3s is enough for the shape; a class with `ReadWriteMany` is needed for `sharedData`), followed by the four verification questions in `docs/DEPLOY_KUBERNETES.md` — in particular question 3, *is the engine actually consuming*, which is the one the 2026-09-02 outage proved a green pod cannot answer |
+| **`netops.applogs` is collected on Kubernetes** | ❌ **NOT SUPPORTED** | By construction. The aggregator's source is `docker_logs` and there is no Docker socket in a pod, so that one lane stays empty while every other lane works. Recorded in the chart template, `NOTES.txt` and `DEPLOY_KUBERNETES.md` §"What is not supported yet" rather than left to be discovered. The fix is a `kubernetes_logs` variant of `vector.yaml` and it is not written |
+
+When adding a feature, state its invariant and pick the tier you will enforce it
+at. If the answer is PROSE, say so out loud in the PR rather than leaving a
+future reader to assume a gate exists. When an audit finding is closed, add the
+guard that makes its *class* unrepeatable and record it here — that is the
+difference between fixing an instance and fixing a generator.

@@ -1,0 +1,293 @@
+name: release-bundle
+
+# #97 Phase 1 CI leg (docs/design/packaging-strategy.md §6): on a version tag,
+# build the offline client installer bundle, smoke-test it (checksums, archive
+# integrity, docker-load round-trip, extracted-tree install preflight), and
+# attach it to the GitHub Release. Manual dispatch runs the same build + smoke
+# and uploads a workflow artifact instead (no release).
+#
+# PROFILE: the FULL bundle — base appliance archive PLUS the optional add-on
+# packs (log-search-ui, self-monitoring). `25a6045a` dropped the `--core` flag
+# deliberately when the add-on-pack model landed; the design doc's §6 line
+# ("runs make-installer.sh --core") predates that and is stale. Everything that
+# NAMES the profile was still saying "core" until 2026-09-03 — the MANIFEST
+# line, the release notes, the workflow artifact — which is the drift this
+# comment exists to stop. To publish eval-sized bundles instead, add `--core`
+# HERE and change the three labels below together; the smoke step asserts the
+# MANIFEST agrees, so they cannot drift apart again silently.
+#
+# BUNDLE LOCKSTEP (#97, owner 2026-07-17): the customer package must track the
+# code automatically. Three legs, cheapest always-on:
+#   1. Local: scripts/bundle-staleness.sh warns on EVERY `git push` (pre-push
+#      hook) when the newest dist/ bundle lags shippable code; `make bundle`
+#      rebuilds in one command. (Dev happens on a feature branch and bundles
+#      are built/shipped from the dev host — this is the loop that matters.)
+#   2. This workflow also fires on every push to main — every merge to the
+#      default branch yields a verified, downloadable bundle artifact. (No
+#      paths filter: mixing paths with the tag trigger risks skipped tag
+#      runs, and main merges are infrequent ship-worthy events anyway.)
+#   3. Tag v*.*.* → customer release with attached assets (unchanged).
+# The smoke below asserts the bundle is stamped with the EXACT commit built
+# (git_sha lockstep) and contains no removed components (redpanda/redis/
+# prometheus).
+#
+# NOT here (documented limits, not oversights):
+#   - Full-stack boot smoke (`install.py --bundle` bringing 17 services up):
+#     the standard runner (2 vCPU / 7 GB on private repos) is below the 8 GB
+#     evaluation floor — the static preflight + image round-trip cover the
+#     bundle mechanics; boot coverage stays with fresh-install-integrity.
+#   - TODO(#97, owner-gated): GPG signing of SHA256SUMS — needs the product
+#     signing key (owner-held secret). Seam: sign right after the smoke step,
+#     upload SHA256SUMS.asc next to SHA256SUMS. Do NOT generate a key in CI.
+#
+# GitHub Releases cap assets at 2 GiB per file; any larger bundle member is
+# split into .partNN pieces (client: `cat <name>.part* > <name>`, then verify
+# against SHA256SUMS as usual — the sums cover the joined file).
+
+on:
+  push:
+    tags: ['v*.*.*']
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-bundle-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # FAIL-CLOSED RELEASE GATE (owner decision 2026-09-04). Until this landed, a
+  # `v*.*.*` tag built the customer bundle and attached it to the GitHub Release
+  # with **no test job gating it** — the bundle's own smoke test proves the
+  # ARCHIVE is well formed, not that the code inside it passes CI.
+  # `release-gate.yml` runs the full blocking gate — backend, frontend,
+  # correlation, supply-chain, ingest, telemetry catalogue and fresh-install —
+  # against the tag's exact commit, with no `paths:` filters to skip any of it.
+  # The bundle job `needs:` it, so no asset is ever uploaded (and no artifact
+  # published on a main push) unless all of it is green. See release-gate.yml for
+  # why this is a reusable-workflow call and not an API check-run poll.
+  #
+  # This also gates the `branches: [main]` leg: a merge to main now pays for the
+  # gate before it produces a downloadable bundle. Deliberate — a bundle artifact
+  # nobody can trust is worse than no artifact.
+  gate:
+    uses: ./.github/workflows/release-gate.yml
+    permissions:
+      contents: read
+
+  bundle:
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write # attach bundle assets to the release (tag runs only)
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0 # make-installer.sh versions the bundle via `git describe --tags`
+
+      # The image set + save/compress needs ~12 GB of scratch; the stock runner
+      # image ships ~25 GB of toolchains we never touch. Reclaim them first.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af
+          df -h /
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: NetOps_Observability/src/frontend/package-lock.json
+
+      - name: Install zstd
+        run: command -v zstd >/dev/null || sudo apt-get install -y --no-install-recommends zstd
+
+      # compose config/build require a provisioned .env (:?-guarded vars).
+      # --no-start generates env + data dirs exactly as a client install would,
+      # without bringing the stack up. Secrets are throwaway CI randoms and
+      # never enter the bundle (make-installer.sh archives HEAD, not the tree).
+      - name: Provision build env
+        run: python3 NetOps_Observability/scripts/install.py --no-start
+
+      - name: Build bundle (base + add-on packs)
+        id: build
+        run: |
+          bash NetOps_Observability/scripts/make-installer.sh
+          BUNDLE_DIR="$(ls -d NetOps_Observability/dist/correlix-*/ | head -1)"
+          echo "dir=${BUNDLE_DIR%/}" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-test bundle
+        working-directory: ${{ steps.build.outputs.dir }}
+        run: |
+          set -euo pipefail
+          sha256sum -c SHA256SUMS
+          zstd -t ./*.tar.zst
+
+          # Lockstep stamp (#97): the bundle must carry the EXACT commit this
+          # run built — a mismatch means the packaging script and checkout
+          # drifted apart, which is the failure this workflow exists to catch.
+          grep -q "^git_sha:  $(git rev-parse --short HEAD)\$" MANIFEST
+
+          # The bundle must SAY what it is. This build passes no --core, so the
+          # MANIFEST profile is "full" and the add-on packs must be present —
+          # the label and the contents are asserted together (2026-09-03: the
+          # MANIFEST said "core" unconditionally while packs shipped alongside).
+          grep -q '^profile:  full$' MANIFEST
+          ls correlix-addon-log-search-ui-*.tar.zst >/dev/null
+          ls correlix-addon-self-monitoring-*.tar.zst >/dev/null
+          # sso (Keycloak) became the third pack on 2026-09-06: it was a BASE
+          # image costing 235 MB in every bundle for a capability that
+          # docs/design/SSO_SAML_* records as deferred. Assert both halves —
+          # the pack ships, and Keycloak is NOT in the base image list.
+          ls correlix-addon-sso-*.tar.zst >/dev/null
+          grep -q '^addon sso (profile sso):$' MANIFEST
+          if sed -n '/^images:/,/^addon /p' MANIFEST | grep -qi keycloak; then
+            echo "FATAL: keycloak is in the BASE image list; it ships as the sso add-on pack" >&2
+            exit 1
+          fi
+
+          # Licensing/broker assertions (#97): the customer bundle ships
+          # Apache Kafka + Valkey and must not contain Redpanda anywhere a
+          # customer looks — manifest, compose, or the bundle-root docs.
+          # Redis (RSAL) and Prometheus are removed components and must never
+          # reappear in the image set either.
+          #
+          # NOT `! grep ...` (2026-09-04): under `set -e` a pipeline whose value
+          # is inverted with `!` NEVER exits the shell, so every one of these
+          # assertions was dead — a bundle carrying redpanda/redis/prometheus
+          # passed this smoke test silently. `refute` fails loudly instead.
+          refute() { # refute <label> <grep-args...>
+            local label="$1"; shift
+            if grep "$@" >/dev/null 2>&1; then
+              echo "BUNDLE ASSERTION FAILED: $label"; grep -n "$@" || true; exit 1
+            fi
+          }
+          grep -q '^  - apache/kafka:' MANIFEST
+          grep -q '^  - valkey/valkey:' MANIFEST
+          refute 'redpanda in MANIFEST'            -i  'redpanda' MANIFEST
+          refute 'redis/prometheus in MANIFEST'    -Ei 'redis|prometheus' MANIFEST
+          refute 'redpanda in bundle-root docs'    -i  'redpanda' README.md ADVANCED.md TROUBLESHOOTING.md
+          test -x install-correlix.sh
+
+          # GPL/LGPL corresponding source (licence audit D2, owner decision
+          # 2026-09-04). We discharge the source obligation by SHIPPING the
+          # source alongside the binaries (GPL-2.0 s3a), not by a three-year
+          # written offer — so a release without source-offer/ is out of
+          # compliance the moment it leaves this runner. make-installer.sh
+          # already fails closed on a fetch or checksum failure; this asserts
+          # the result actually arrived, is a real archive, and is covered by
+          # the checksums the customer verifies.
+          test -d source-offer
+          test -s source-offer/README
+          grep -q 'THIS DIRECTORY IS THAT SOURCE' source-offer/README
+          # EVERY component in the pin table, not just syslog-ng. Tracker 238
+          # generalised the mechanism: BusyBox — inherited from the Alpine base
+          # of the frontend and nginx images and named in no Dockerfile of ours
+          # — is now an entry in the same table. Asserting one component by name
+          # would let the next entry ship unmirrored and unnoticed, which is the
+          # invisibility this whole line of work exists to end.
+          python3 - <<'PINCHECK'
+          import hashlib, json, os, sys
+          pins = os.environ["GITHUB_WORKSPACE"] + "/NetOps_Observability/scripts/source-mirror.json"
+          with open(pins, encoding="utf-8") as fh:
+              comps = json.load(fh)["components"]
+          if not comps:
+              sys.exit("the source pin table declares no components")
+          sums = open("SHA256SUMS", encoding="utf-8").read()
+          bad = []
+          for c in comps:
+              path = os.path.join("source-offer", c["file"])
+              if not os.path.isfile(path) or os.path.getsize(path) == 0:
+                  bad.append(f"{c['name']} {c['version']}: {path} missing or empty")
+                  continue
+              h = hashlib.sha256()
+              with open(path, "rb") as fh:
+                  for chunk in iter(lambda: fh.read(1 << 20), b""):
+                      h.update(chunk)
+              if h.hexdigest() != c["sha256"]:
+                  bad.append(f"{c['name']} {c['version']}: sha256 mismatch in the bundle")
+              if f"source-offer/{c['file']}" not in sums:
+                  bad.append(f"{c['name']} {c['version']}: not covered by SHA256SUMS")
+          if bad:
+              sys.exit("corresponding source missing from the bundle:\n  " + "\n  ".join(bad))
+          print(f"source-offer/: {len(comps)} corresponding-source artifact(s) present, "
+                f"checksum-verified and covered by SHA256SUMS")
+          PINCHECK
+
+          # docker-load round-trip: exercises decompression + per-layer digest
+          # verification on the exact archive a client would load.
+           zstd -dc correlix-images-core-*.tar.zst | docker load
+          # Every image the MANIFEST promises must now be present.
+          sed -n 's/^  - //p' MANIFEST | while read -r img; do
+            docker image inspect "$img" >/dev/null || { echo "MISSING after load: $img"; exit 1; }
+          done
+          # Static install integrity on the tree the client actually receives —
+          # includes the [bus] guardrails (kafka pinned, no functional redpanda
+          # reference, BROKER_URLS/KAFKA_CLUSTER_ID provisioned).
+          SMOKE="$(mktemp -d)"
+          tar -xzf correlix-source-*.tar.gz -C "$SMOKE"
+          python3 "$SMOKE/NetOps_Observability/scripts/preflight-install.py"
+          # Belt-and-braces: no redpanda image/service in the shipped compose.
+          refute 'redpanda service in shipped compose' -Ei 'redpandadata|image:.*redpanda' \
+              "$SMOKE/NetOps_Observability/deployment/docker/docker-compose.yml"
+
+      # Release assets are capped at 2 GiB/file — split anything bigger.
+      - name: Prepare assets (split >1900 MiB)
+        id: assets
+        working-directory: ${{ steps.build.outputs.dir }}
+        run: |
+          set -euo pipefail
+          for f in *.tar.zst *.tar.gz; do
+            if [ "$(stat -c%s "$f")" -gt $((1900*1024*1024)) ]; then
+              echo "-- splitting $f"
+              split -b 1900m -d "$f" "$f.part"
+              rm "$f"
+              echo "Note: $f ships as .partNN pieces; ./install-correlix.sh rejoins them automatically." >> README.md
+              # README changed after SHA256SUMS was written — refresh its entry
+              # so the customer's `sha256sum -c` (and install-correlix.sh's
+              # verify) still pass.
+              sed -i "\|  \./README\.md\$|c\\$(sha256sum ./README.md)" SHA256SUMS
+            fi
+          done
+          sha256sum -c --ignore-missing SHA256SUMS   # self-check post-split
+          ls -lh
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: ${{ steps.build.outputs.dir }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --verify-tag --title "Correlix $TAG" \
+              --notes "Offline Correlix installer bundle (full profile: base appliance + optional add-on packs). Download all files into one directory and run \`./install-correlix.sh\` — it verifies checksums, rejoins split \`.partNN\` pieces, and installs. Add-on packs stay off until \`./install-correlix.sh enable <addon>\`. See README.md."
+          # `./*` globs the bundle ROOT only, and source-offer/ is a
+          # DIRECTORY — gh would skip or reject it, and the GPL source must
+          # reach the customer through the same channel as the binaries it
+          # belongs to. Enumerate real files one level deep instead. Release
+          # asset names are flat, so a source-offer member is published under
+          # its own basename; SHA256SUMS still records the source-offer/ path
+          # it occupies inside an extracted bundle, and README.md points there.
+          mapfile -t ASSETS < <(find . -maxdepth 2 -type f | sed 's|^\./||')
+          [ "${#ASSETS[@]}" -gt 0 ] || { echo "no release assets resolved"; exit 1; }
+          printf 'uploading %s\n' "${ASSETS[@]}"
+          gh release upload "$TAG" "${ASSETS[@]}" --clobber
+
+      # Dispatch runs (no tag) keep the bundle as a short-lived artifact so a
+      # branch build can be validated without publishing anything.
+      - name: Upload workflow artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          # Names the PROFILE built above (full = base + add-on packs). It read
+          # "core" until 2026-09-03 while the build had shipped packs since
+          # 25a6045a — the artifact must not lie about its own contents.
+          name: correlix-bundle-full
+          path: ${{ steps.build.outputs.dir }}
+          retention-days: 7
+          compression-level: 0 # members are already zstd/gzip-compressed

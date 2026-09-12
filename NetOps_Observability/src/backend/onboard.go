@@ -1,0 +1,134 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+package backend
+
+// onboard.go — operator-driven customer onboarding (the AWS Control-Tower /
+// Azure-CSP analog): create an org AND its first tenant (the data boundary) in one
+// audited, platform-owner-only step, so a customer is never left as a tenant-less
+// org (which would have nowhere for data to land — see docs/design/org-tenant-model.md).
+//
+//	POST /api/onboard  { org_name, org_slug?, home_region?, sso_connection?,
+//	                     tenant_name, tenant_slug?, isolation_mode?, operator_restricted? }
+//	→ 201 { org, tenant }   (both carry opaque ids + slugs)
+//
+// Provisioning is a privileged control-plane action (requirePlatformAdmin) — the
+// human operator onboards customers, never an unauthenticated/agentic actor. Org +
+// tenant ids are minted opaque server-side; supplied slugs are validated/unique.
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+)
+
+type onboardRequest struct {
+	OrgName       string `json:"org_name"`
+	OrgSlug       string `json:"org_slug"`
+	HomeRegion    string `json:"home_region"`
+	SSOConnection string `json:"sso_connection"`
+
+	TenantName         string `json:"tenant_name"`
+	TenantSlug         string `json:"tenant_slug"`
+	IsolationMode      string `json:"isolation_mode"`
+	OperatorRestricted bool   `json:"operator_restricted"`
+}
+
+type onboardResponse struct {
+	Org    Org    `json:"org"`
+	Tenant Tenant `json:"tenant"`
+}
+
+func (s *server) handleOnboard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	claims, ok := s.requirePlatformAdmin(w, r)
+	if !ok {
+		return
+	}
+	var req onboardRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.TenantName == "" {
+		writeError(w, http.StatusBadRequest, errors.New("tenant_name required (an org must be onboarded with its first tenant)"))
+		return
+	}
+
+	// LICENCE-BEGIN — onboarding is the SAME paid capability /api/orgs and
+	// /api/tenants are gated on, reached through one call instead of two. A
+	// gate on only one door is decoration, so this goes through the same
+	// helpers, under the same lock.
+	org, t, err := s.provisionOrgWithTenant(req)
+	if err != nil {
+		writeProvisionError(w, err)
+		return
+	}
+	// LICENCE-END
+	// F-81: the error was discarded here too, so onboarding a customer who
+	// requires operator-visibility restriction returned 201 with the switch OFF.
+	// The rollback below already exists for a failed tenant create; a failed
+	// PRIVACY control deserves exactly the same treatment.
+	if req.OperatorRestricted {
+		updated, e := s.tenants.SetOperatorRestricted(t.ID, true)
+		if e != nil {
+			logError("onboard", "operator_restricted could not be applied — rolling back",
+				map[string]any{"tenant_id": t.ID, "err": e.Error()})
+			if derr := s.tenants.Delete(t.ID); derr != nil {
+				logError("onboard", "ROLLBACK FAILED — tenant exists and is NOT operator-restricted",
+					map[string]any{"tenant_id": t.ID, "err": derr.Error()})
+			}
+			if derr := s.orgs.Delete(org.ID); derr != nil {
+				logError("onboard", "org rollback failed", map[string]any{"org_id": org.ID, "err": derr.Error()})
+			}
+			writeError(w, http.StatusInternalServerError,
+				errors.New("onboarding aborted: the operator-visibility restriction could not be applied"))
+			return
+		}
+		t = updated
+	}
+
+	logInfo("onboard", "customer onboarded", map[string]any{
+		"org_id": org.ID, "org_slug": org.Slug, "tenant_id": t.ID, "tenant_slug": t.Slug,
+	})
+	detail := auditOrgDetail(org)
+	for k, v := range auditTenantDetail(t) {
+		detail[k] = v
+	}
+	s.recordIdentityAudit(r, claims, "CUSTOMER_ONBOARDED", detail)
+
+	writeJSON(w, http.StatusCreated, onboardResponse{Org: org, Tenant: t})
+}
+
+// LICENCE-BEGIN
+// provisionOrgWithTenant creates the org and its first tenant under ONE hold of
+// provisionMu. Onboarding is a single decision — a customer is an org WITH a
+// tenant — so the fleet gate is asked once for the pair and nothing may create
+// in between. Splitting it into two independently-locked steps would put the
+// tenant count back into the check-then-act shape this helper exists to avoid.
+//
+// A failed tenant create rolls the org back, so a refused or failed onboard
+// never leaves a tenant-less shell behind.
+func (s *server) provisionOrgWithTenant(req onboardRequest) (Org, Tenant, error) {
+	s.provisionMu.Lock()
+	defer s.provisionMu.Unlock()
+	org, err := s.createOrgLocked(req.OrgName, req.OrgSlug, "", req.HomeRegion, req.SSOConnection)
+	if err != nil {
+		return Org{}, Tenant{}, err
+	}
+	t, err := s.createTenantLocked(req.TenantName, req.TenantSlug, "", req.IsolationMode, org.ID)
+	if err != nil {
+		if derr := s.orgs.Delete(org.ID); derr != nil {
+			logError("onboard", "org rollback failed — an empty org shell remains", map[string]any{
+				"org_id": org.ID, "err": derr.Error()})
+		}
+		return Org{}, Tenant{}, err
+	}
+	return org, t, nil
+}
+
+// LICENCE-END

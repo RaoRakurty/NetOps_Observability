@@ -1,0 +1,40 @@
+{
+  "name": "Private names fail, public work, ruleset link missing: forwarding gap",
+  "signals": [
+    {
+      "kind": "dns_forward_ruleset_gap",
+      "entity_type": "service",
+      "entity_id": "vnet-prod-resolver",
+      "observer_id": "cloud-api",
+      "observer_type": "cloud_api",
+      "modality": "control_plane",
+      "collection_path": "via_cloud_api",
+      "deviation": 2.0
+    },
+    {
+      "kind": "fqdn_probe_fail",
+      "entity_type": "service",
+      "entity_id": "crm.corp.internal",
+      "observer_id": "probe-agent-dc",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 4.0
+    },
+    {
+      "kind": "cloud_change",
+      "entity_type": "service",
+      "entity_id": "dns-ruleset",
+      "observer_id": "cloud-api",
+      "observer_type": "cloud_api",
+      "modality": "control_plane",
+      "collection_path": "via_cloud_api",
+      "deviation": 0.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.cloud.private-dns-ruleset-gap",
+    "tier": "confirmed",
+    "owner": "netops"
+  }
+}

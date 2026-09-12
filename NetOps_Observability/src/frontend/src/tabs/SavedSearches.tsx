@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+import { fmtDateTime } from "../lib/time";
 import { useEffect, useState } from "react";
 import { api, SavedObject } from "../services/api";
 import { useShell } from "../context/shell";
@@ -68,12 +72,12 @@ export default function SavedSearches() {
             {items.map((o) => (
               <tr key={o.id}>
                 <td>{o.name}</td>
-                <td style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
+                <td style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
                   {o.body?.query ?? "*"}
                 </td>
                 <td>{o.body?.signal || "all"}</td>
                 <td style={{ color: "var(--muted)", fontSize: 12 }}>
-                  {new Date(o.updated_at).toLocaleString()}
+                  {fmtDateTime(o.updated_at)}
                 </td>
                 <td style={{ textAlign: "right" }}>
                   <button onClick={() => open(o)}>Open</button>{" "}

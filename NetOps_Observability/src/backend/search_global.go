@@ -1,4 +1,7 @@
-package main
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+package backend
 
 import (
 	"encoding/json"
@@ -8,11 +11,11 @@ import (
 
 // Global omni-search — resolves a free-text query to jump targets across the
 // product (devices, active alerts, saved objects) plus a log-search handoff.
-// Powers the top-bar search dropdown so it behaves like Splunk/Datadog's
+// Powers the top-bar search dropdown so it behaves like Splunk's
 // global search rather than only running a log query.
 
 type globalResult struct {
-	Kind  string `json:"kind"`  // device | alert | saved | logs
+	Kind  string `json:"kind"` // device | alert | saved | logs
 	ID    string `json:"id"`
 	Title string `json:"title"`
 	Sub   string `json:"sub"`
@@ -24,6 +27,7 @@ const maxGlobalResults = 24
 func (s *server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 	results := []globalResult{}
+	claims, _ := userFrom(r.Context())
 
 	add := func(g globalResult) {
 		if len(results) < maxGlobalResults {
@@ -32,8 +36,12 @@ func (s *server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if q != "" {
-		// Devices (in-memory discovery aggregator).
-		for _, d := range s.discovery.Devices() {
+		// Devices (in-memory discovery aggregator) — tenant-scoped, and read
+		// through the registry chokepoint (s.visibleDevicesFor) so the operator-
+		// visibility restriction applies here too. Unified search already hid a
+		// restricted tenant's devices; this box did not, and it answers on a
+		// device NAME, which is the disclosure itself.
+		for _, d := range s.visibleDevicesFor(claims) {
 			m := toMap(d)
 			if blobContains(m, q) {
 				add(globalResult{
@@ -41,12 +49,20 @@ func (s *server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 					ID:    str(m["id"]),
 					Title: firstNonEmpty(str(m["name"]), str(m["id"])),
 					Sub:   firstNonEmpty(str(m["address"]), str(m["source"])),
-					Route: "datasets/devices",
+					Route: "infrastructure/devices",
 				})
 			}
 		}
-		// Active alerts.
+		// Active alerts — the RESOLVED alertVisibility, the same object
+		// handleAlerts and the WebSocket feed apply. The raw alertVisibleTenantOnly
+		// underneath it answers true for everything on the cross-tenant path, so
+		// asking it directly surfaced a restricted tenant's incidents (and the
+		// device names in their summaries) in the omnibox.
+		alertVis := s.alertVisibilityFor(claims)
 		for _, a := range s.alerts.Active() {
+			if !alertVis.visible(a) {
+				continue
+			}
 			m := toMap(a)
 			if blobContains(m, q) {
 				add(globalResult{
@@ -54,12 +70,13 @@ func (s *server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 					ID:    str(m["id"]),
 					Title: firstNonEmpty(str(m["summary"]), str(m["rule"]), "alert"),
 					Sub:   strings.TrimSpace(str(m["severity"]) + " " + str(m["device_id"])),
-					Route: "alerts/triggered",
+					Route: "alerts/active",
 				})
 			}
 		}
-		// Saved objects (name or body match).
-		for _, o := range s.saved.List("") {
+		// Saved objects (name or body match) — tenant-scoped.
+		sTenant, sCross := principalTenant(claims)
+		for _, o := range visibleSaved(s.saved.List("", sTenant, sCross), claims) {
 			if strings.Contains(strings.ToLower(o.Name), q) ||
 				strings.Contains(strings.ToLower(string(o.Body)), q) {
 				add(globalResult{
@@ -76,7 +93,7 @@ func (s *server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 			Kind:  "logs",
 			Title: "Search logs for \"" + r.URL.Query().Get("q") + "\"",
 			Sub:   "OpenSearch",
-			Route: "search/logs",
+			Route: "explore/logs",
 		})
 	}
 
@@ -86,11 +103,11 @@ func (s *server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 func routeForSaved(typ string) string {
 	switch typ {
 	case "dashboard":
-		return "dashboards/saved"
+		return "overview/dashboards"
 	case "report":
 		return "reports"
 	default:
-		return "search/saved"
+		return "explore/saved"
 	}
 }
 
@@ -102,7 +119,7 @@ func toMap(v any) map[string]any {
 		return nil
 	}
 	var m map[string]any
-	_ = json.Unmarshal(b, &m)
+	_ = json.Unmarshal(b, &m) // best-effort: engine-authored JSON; malformed decodes to zero value
 	return m
 }
 

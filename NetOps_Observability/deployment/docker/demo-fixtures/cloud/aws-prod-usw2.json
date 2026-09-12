@@ -1,0 +1,39 @@
+{
+  "provider": "aws",
+  "account_id": "123456789012",
+  "resources": [
+    {
+      "resource_id": "arn:aws:elasticloadbalancing:us-west-2:123456789012:loadbalancer/app/payments-api-alb/aaa111",
+      "resource_arn_or_uri": "arn:aws:elasticloadbalancing:us-west-2:123456789012:loadbalancer/app/payments-api-alb/aaa111",
+      "resource_type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "resource_name": "payments-api-alb",
+      "region": "us-west-2",
+      "private_ips": ["10.1.1.10"],
+      "network_interface_ids": ["eni-pay1"],
+      "tags": { "app": "payments-api", "owner": "payments", "env": "prod" }
+    },
+    {
+      "resource_id": "payments-api-fn",
+      "resource_arn_or_uri": "arn:aws:lambda:us-west-2:123456789012:function:payments-api-fn",
+      "resource_type": "AWS::Lambda::Function",
+      "resource_name": "payments-api-fn",
+      "region": "us-west-2",
+      "private_ips": ["10.1.3.40"],
+      "tags": { "app": "payments-api", "env": "prod" }
+    },
+    {
+      "resource_id": "nat-0produsw2",
+      "resource_type": "AWS::EC2::NatGateway",
+      "resource_name": "nat-prod-usw2",
+      "region": "us-west-2",
+      "private_ips": ["10.1.0.5"]
+    },
+    {
+      "resource_id": "i-0untagged-usw2",
+      "resource_type": "AWS::EC2::Instance",
+      "region": "us-west-2",
+      "private_ips": ["10.1.6.9"],
+      "network_interface_ids": ["eni-unk3"]
+    }
+  ]
+}

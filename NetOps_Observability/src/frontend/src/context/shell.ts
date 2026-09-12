@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { createContext, useContext } from "react";
 
 // Shell-wide state shared by the top bar, sidebar, and every section.
@@ -24,6 +27,13 @@ export type ShellState = {
   // Copilot slide-over.
   copilotOpen: boolean;
   setCopilotOpen: (b: boolean) => void;
+  // Documentation ("?") slide-over — embeds the /docs portal.
+  helpOpen: boolean;
+  setHelpOpen: (b: boolean) => void;
+  // Deep link inside the docs portal ("" = portal home). Set via openHelp.
+  helpPath: string;
+  // Open the Help drawer at a specific docs path (e.g. "/docs/send-data/syslog#step-1").
+  openHelp: (path?: string) => void;
   // Imperative navigation to a route id, e.g. "search/logs".
   navigate: (route: string) => void;
 };

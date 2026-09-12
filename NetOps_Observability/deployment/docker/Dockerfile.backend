@@ -4,13 +4,54 @@
 # distroless / scratch. Stage 2 ships only the binary, the CA bundle,
 # and a non-root user.
 
-FROM golang:1.22-alpine AS build
+# Pinned to a patched Go toolchain: govulncheck flagged a batch of stdlib CVEs
+# (crypto/tls, crypto/x509, net/http, html/template, …) present in go1.24 and
+# fixed by go1.25.13 (2026-08 net/http batch; previously go1.25.12 for GO-2026-5856). Keep this at or above the latest patched minor.
+# 2026-09-02: raised 1.25.13 -> 1.26.8 because x/crypto v0.56.0 (GO-2026-6354 /
+# GO-2026-6355, x/crypto/ssh DoS) declares `go 1.26.0` — the module no longer
+# compiles on a 1.25 toolchain. go.mod, CI pins and this image move together.
+FROM golang:1.26.8-alpine@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628 AS build
 WORKDIR /src
 COPY src/backend/ ./
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/api .
 
-FROM gcr.io/distroless/static-debian12:nonroot
+# BUILD PROVENANCE. Baked into the binary so the RUNNING process can state which
+# commit it is — the thing whose absence let F-08 sit built-but-undeployed for
+# weeks while looking complete, and let a 38-hour-old prober binary get
+# "restarted" repeatedly without ever gaining the fix it needed.
+#
+# Unknown is the honest default: a build that was not told its revision must not
+# claim one. Drift detection treats "unknown" as a failure, not a pass.
+ARG GIT_SHA=unknown
+ARG BUILD_TIME=unknown
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+      -ldflags="-s -w -X netops/backend.buildSHA=${GIT_SHA} -X netops/backend.buildTime=${BUILD_TIME}" \
+      -o /out/api ./cmd/api
+
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:d093aa3e30dbadd3efe1310db061a14da60299baff8450a17fe0ccc514a16639
+ARG GIT_SHA=unknown
+ARG BUILD_TIME=unknown
+# Standard OCI labels, so `docker image inspect` answers the same question the
+# running process does, without starting it.
+#
+# The licences label is an SPDX License EXPRESSION describing what this image
+# CONTAINS, and this image contains both licences: the build above copies the
+# whole src/backend tree and links src/backend/enterprise/** (dialects, sso/ldap
+# — LicenseRef-Correlix-Enterprise) into the single /api binary, because the
+# product ships one binary and gates tiers with data, not with separate builds.
+# A bare "Apache-2.0" here would understate what the customer receives. The
+# canonical expression lives in licensing-policy.json
+# (container_images.oci_licence_expressions.mixed); scripts/licensing-gate.py
+# check D and tests/test_licensing_consistency.py enforce the match, and the
+# test re-derives "mixed vs core-only" from what this file actually copies.
+LABEL org.opencontainers.image.revision="${GIT_SHA}" \
+      org.opencontainers.image.created="${BUILD_TIME}" \
+      org.opencontainers.image.title="correlix-backend" \
+      org.opencontainers.image.licenses="Apache-2.0 AND LicenseRef-Correlix-Enterprise"
 COPY --from=build /out/api /api
+# SEC-020.1: the declared-transport ledger rides with the binary so the posture
+# metrics and the transport-posture view read the same inventory the preflight
+# validated (TRANSPORT_INVENTORY_PATH overrides; internal/secobs reads it).
+COPY docs/security/transport-inventory.yaml /transport-inventory.yaml
 USER nonroot:nonroot
 EXPOSE 8080
 ENTRYPOINT ["/api"]

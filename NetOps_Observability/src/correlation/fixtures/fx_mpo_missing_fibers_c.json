@@ -1,0 +1,39 @@
+{
+  "name": "fx_mpo_missing_fibers_c \u2014 mpo-missing-fibers",
+  "signals": [
+    {
+      "kind": "mpo_missing_fibers",
+      "entity_type": "interface",
+      "entity_id": "leaf6:Et10",
+      "observer_id": "snmp-leaf6",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "lane_rx_absent_subset",
+      "entity_type": "interface",
+      "entity_id": "leaf6:Et10",
+      "observer_id": "snmp-leaf6",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "parallel_lane_map_anomaly",
+      "entity_type": "interface",
+      "entity_id": "leaf6:Et10",
+      "observer_id": "snmp-leaf6",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.mpo-missing-fibers",
+    "tier": "suspected"
+  }
+}

@@ -1,0 +1,559 @@
+{
+  "_README": [
+    "licensing-policy.json — THE machine-readable source of truth for which parts of",
+    "Correlix are Apache-2.0 core and which are commercial add-ons.",
+    "",
+    "Three consumers read this file and nothing else:",
+    "  1. scripts/gen-licensing-map.py  renders LICENSING.md at both repository roots.",
+    "  2. scripts/licensing-gate.py     enforces checks A-H (SPDX headers, notice files,",
+    "                                   the core->commercial import boundary, coverage).",
+    "  3. tests/test_licensing_consistency.py  fails the build on any drift between this",
+    "                                   file, the rendered map, and every place the",
+    "                                   product states its licence.",
+    "",
+    "Editing prose in LICENSING.md instead of editing this file changes nothing that is",
+    "enforced. Edit here, then run:  python3 scripts/gen-licensing-map.py --write",
+    "",
+    "FAIL-CLOSED: an unclassified top-level directory, an unknown SPDX identifier, or a",
+    "file marked commercial outside a commercial path is an ERROR, never a warning.",
+    "DEFAULT-OPEN: anything this policy does not name is Apache-2.0. Isolation, safety",
+    "and correctness properties are never commercial."
+  ],
+  "version": 1,
+  "decided": "2026-09-04, RATIFIED 2026-09-05",
+  "decided_by": "owner",
+  "design_of_record": "docs/design/LICENSING_MODEL_2026-09-04.md",
+  "tiering_plan": "docs/design/TIERING_PLAN_2026-09-03.md",
+  "canonical_sentence": "Correlix core is licensed under the Apache License, Version 2.0. Commercial add-on modules are licensed under the Correlix Enterprise License (LicenseRef-Correlix-Enterprise) — see LICENSING.md.",
+  "identifiers": {
+    "core": "Apache-2.0",
+    "commercial": "LicenseRef-Correlix-Enterprise"
+  },
+  "default_identifier": "Apache-2.0",
+  "licence_texts": {
+    "Apache-2.0": "LICENSES/Apache-2.0.txt",
+    "LicenseRef-Correlix-Enterprise": "LICENSES/Correlix-Enterprise.txt"
+  },
+  "locked_commercial_set": {
+    "_why": "The ONLY entitlements the owner has locked as commercial (2026-09-04). Everything else in the tiering plan is a proposal and is NOT gated. A capability may not be marked commercial here without appearing in this list.",
+    "Team": [
+      {
+        "id": "security_findings",
+        "what": "The security-findings lane: normalized findings, exposures, the findings API and its retention."
+      }
+    ],
+    "Enterprise": [
+      {
+        "id": "security_dialects",
+        "what": "Device-hardening dialects beyond the default set, and compliance frameworks beyond the default two."
+      },
+      {
+        "id": "siem_export",
+        "what": "Export of findings/evidence to an external SIEM."
+      },
+      {
+        "id": "msp_management",
+        "what": "MSP / org-hierarchy MANAGEMENT of many tenants. Explicitly NOT tenant isolation."
+      },
+      {
+        "id": "saml",
+        "what": "SAML single sign-on."
+      },
+      {
+        "id": "scim",
+        "what": "SCIM user/group provisioning."
+      },
+      {
+        "id": "ldap",
+        "what": "LDAP / Active Directory directory authentication."
+      }
+    ]
+  },
+  "core_is_never_commercial": {
+    "_why": "Stated positively so that a future change that tries to paywall one of these fails review on sight. These are safety and product-identity properties.",
+    "items": [
+      "Tenant and organisation ISOLATION, including the Postgres FORCE-RLS policies, chTenantScope, osTenantFilter and every per-tenant store filter. Isolation is a safety property, never a paywall.",
+      "Discovery, collection and multi-protocol telemetry ingestion.",
+      "The telemetry pipeline, event bus and storage bootstraps.",
+      "The correlation engine and RCA: verdicts, causality paths, seams, evidence classes.",
+      "The investigation and troubleshooting surface, including protocol diagnostics.",
+      "Topology, IGP/VRF/interface depth.",
+      "BGP public-data views (looking glass, RPKI, AS-path graph, geofeed).",
+      "Local authentication and OIDC single sign-on.",
+      "The licence mechanism itself and the community ceilings/limits enforcement, so a Community operator can read and verify exactly what limits them."
+    ]
+  },
+  "excluded_paths": {
+    "_why": "Directory names never classified and never scanned, anywhere in the tree. Each is generated, vendored, or local state — none of it is Correlix source whose licence we declare. The consistency test derives its exclusion list from THIS array, so adding a build directory means adding it here with a reason.",
+    "entries": [
+      {
+        "name": "data",
+        "why": "Runtime state written by the stack at install. Gitignored; never shipped as source."
+      },
+      {
+        "name": "dist",
+        "why": "Built customer bundles. Generated artifact, gitignored."
+      },
+      {
+        "name": "backups",
+        "why": "Pre-cutover app-state snapshots containing live secrets. Gitignored; never shipped."
+      },
+      {
+        "name": "node_modules",
+        "why": "npm dependency tree. Third-party code under its own licences (inventoried in NOTICE), not ours to declare."
+      },
+      {
+        "name": "vendor",
+        "why": "Vendored Go modules. Third-party code under its own licences; relicensing it would be false."
+      },
+      {
+        "name": "build",
+        "why": "docs-portal build output. Generated artifact, gitignored."
+      },
+      {
+        "name": ".git",
+        "why": "Version-control metadata, not source."
+      },
+      {
+        "name": "__pycache__",
+        "why": "Python bytecode cache. Generated."
+      },
+      {
+        "name": ".pytest_cache",
+        "why": "pytest cache. Generated."
+      },
+      {
+        "name": ".ruff_cache",
+        "why": "ruff cache. Generated."
+      },
+      {
+        "name": ".mypy_cache",
+        "why": "mypy cache. Generated."
+      },
+      {
+        "name": ".claude",
+        "why": "Local Claude Code configuration. Gitignored, per-developer, never shipped."
+      },
+      {
+        "name": "compliance",
+        "why": "Retained corresponding-source archives of third-party GPL/LGPL components we ship in images (tracker 238; owner: Correlix keeps its own copy). Third-party code under its own licences, pinned by sha256 in scripts/source-mirror.json and shipped in every bundle's source-offer/ — not Correlix source whose licence we declare."
+      },
+      {
+        "name": ".docusaurus",
+        "why": "Docusaurus build cache under docs-portal/ (gitignored, regenerated by every `npm run build`); generated JS/MJS artefacts, not source — the SPDX sweep walks the filesystem and must skip them (found 2026-09-07)"
+      }
+    ]
+  },
+  "project_top_level": {
+    "_why": "EVERY top-level directory of the project directory (NetOps_Observability/), exactly once, minus excluded_paths. A new top-level directory that nobody classified fails tests/test_licensing_consistency.py. That is the point of the test.",
+    "entries": [
+      {
+        "path": "LICENSES",
+        "licence": "Apache-2.0",
+        "state": "core",
+        "reason": "The two licence texts the SPDX identifiers resolve to. The directory itself is part of the open declaration and is readable by everyone."
+      },
+      {
+        "path": "deployment",
+        "licence": "Apache-2.0",
+        "state": "core",
+        "reason": "Compose stack, Dockerfiles, nginx/vector/storage configuration. Deployment machinery for the whole product; nothing tier-gated lives here."
+      },
+      {
+        "path": "docs",
+        "licence": "Apache-2.0",
+        "state": "core",
+        "reason": "Design records, runbooks, audits and the tracker. Documentation of the open product, including the design of the commercial split itself."
+      },
+      {
+        "path": "docs-portal",
+        "licence": "Apache-2.0",
+        "state": "core",
+        "reason": "Docusaurus customer documentation site. Ships in the frontend image; documents every tier."
+      },
+      {
+        "path": "scripts",
+        "licence": "Apache-2.0",
+        "state": "core",
+        "reason": "Installer, watchdog, preflight, release and audit tooling. Operators must be able to read, run and modify everything that touches their host."
+      },
+      {
+        "path": "src",
+        "licence": "Apache-2.0",
+        "state": "mixed",
+        "reason": "Backend, frontend, correlation engine and configuration. Apache-2.0 by default; the commercial add-ons listed under commercial_paths live inside this tree, under the physical src/backend/enterprise/ boundary, and are marked file by file.",
+        "mixed_note": "Commercial code inside src/ is marked file-by-file and directory-by-directory, and all of it lives under src/backend/enterprise/ (dialects, sso/ldap, frameworks). Nothing else in src/ mixes the two licences — see mixed_directories.core_by_evidence for the four packages that were examined and decided core."
+      },
+      {
+        "path": "telemetry-catalog",
+        "licence": "Apache-2.0",
+        "state": "core",
+        "reason": "The telemetry field catalogue and its fixtures. A data contract every tier depends on."
+      },
+      {
+        "path": "tests",
+        "licence": "Apache-2.0",
+        "state": "core",
+        "reason": "Repository-level pytest suites, including this licensing gate. Tests of commercial code stay Apache-2.0 so anyone can verify the product's claims."
+      }
+    ]
+  },
+  "repo_root_entries": {
+    "_why": "Top-level entries of the OUTER repository root that belong to this project. The outer root is a thin wrapper: it carries CI, the shared guardrails file and the licence declaration, and the project itself in a nested directory of the same name.",
+    "entries": [
+      {
+        "path": ".github",
+        "licence": "Apache-2.0",
+        "state": "core",
+        "reason": "CI workflows enforcing the §12 gate for the whole repository."
+      },
+      {
+        "path": "NetOps_Observability",
+        "licence": "Apache-2.0",
+        "state": "mixed",
+        "reason": "The project directory. Classified in full by project_top_level above."
+      },
+      {
+        "path": "CLAUDE.md",
+        "licence": "Apache-2.0",
+        "state": "core",
+        "reason": "Engineering guardrails that govern every change in the repository."
+      },
+      {
+        "path": "LICENSE",
+        "licence": "Apache-2.0",
+        "state": "core",
+        "reason": "The mixed-licence notice: which licence applies where."
+      },
+      {
+        "path": "LICENSES",
+        "licence": "Apache-2.0",
+        "state": "core",
+        "reason": "The two licence texts the identifiers resolve to."
+      },
+      {
+        "path": "LICENSING.md",
+        "licence": "Apache-2.0",
+        "state": "core",
+        "reason": "The generated directory-to-licence map."
+      },
+      {
+        "path": "CONTRIBUTING.md",
+        "licence": "Apache-2.0",
+        "state": "core",
+        "reason": "Contribution process and the CLA requirement open core depends on."
+      },
+      {
+        "path": "CLA.md",
+        "licence": "Apache-2.0",
+        "state": "core",
+        "reason": "Contributor-agreement placeholder: states that the CLA text is pending counsel and that nothing constitutes signing it. Carries no legal terms; the wording is Correlix's own documentation."
+      }
+    ],
+    "not_part_of_this_project": [
+      {
+        "path": "network-automation-mpls-l3vpn",
+        "why": "An unrelated project sharing the working directory. CLAUDE.md declares it out of scope; Correlix declares no licence over it."
+      },
+      {
+        "path": "Application",
+        "why": "A stray 58-byte text file from an unrelated macOS application. Not source; not ours to license."
+      }
+    ]
+  },
+  "commercial_paths": {
+    "_why": "Directories that are CLEANLY commercial: every file in them implements a locked commercial entitlement and nothing else. Each gets a LICENSE notice file and an SPDX header on every source file. They live under src/backend/enterprise/ — the PHYSICAL boundary the owner's 2026-09-04 spec requires — and core never imports them (check E); only the assembly layer does, inside ENTERPRISE-ASSEMBLY markers. A directory that merely CONTAINS some commercial code does not belong here — it belongs in mixed_directories.",
+    "entries": [
+      {
+        "path": "src/backend/enterprise/dialects",
+        "entitlement": "security_dialects",
+        "tier": "Enterprise",
+        "reason": "The device-hardening DIALECTS beyond the core one: Juniper Junos, Nokia SR OS, Arista EOS and Nokia SR Linux. Each is a DialectPack — rule id -> per-vendor detection + remediation — merged into the Apache-2.0 catalogue through hardening.DialectPack. The catalogue, the engine, the benchmark provenance, the exposure evaluator and the core Cisco IOS-XE dialect stay core in internal/hardening. Moved 2026-09-05 (tracker 240) out of internal/hardening (dialect_fabric.go + 34 non-core vendor bindings in catalog.go).",
+        "notice_file": "src/backend/enterprise/dialects/LICENSE",
+        "verified_clean": "2026-09-05"
+      },
+      {
+        "path": "src/backend/enterprise/sso/ldap",
+        "entitlement": "ldap",
+        "tier": "Enterprise",
+        "reason": "The whole package is LDAP/Active-Directory directory authentication: the bind and search client, its TLS posture and its configuration domain. Nothing in it serves local auth or OIDC, which stay core. Verified 2026-09-04: 4 files, no core caller other than the package-main wiring seam. Relocated 2026-09-05 from src/backend/internal/ldap to the physical enterprise/ boundary (tracker 240); sso/ is where SAML and SCIM land if they are ever built.",
+        "notice_file": "src/backend/enterprise/sso/ldap/LICENSE",
+        "verified_clean": "2026-09-05"
+      },
+      {
+        "path": "src/backend/enterprise/frameworks",
+        "entitlement": "security_dialects",
+        "tier": "Enterprise",
+        "reason": "The compliance-framework CROSSWALKS beyond the shipped default two: NIST CSF 2.0, the HIPAA §164.312 technical safeguards and PCI DSS v4.0.1 — the second half of the `security_dialects` entitlement's locked scope (\"dialects beyond the default set, AND compliance frameworks beyond the default two\"). Each is a FrameworkPack — framework id → crosswalk provider — merged into the Apache-2.0 registry through compliancemodel.FrameworkPack. The projection engine, the owned 800-53 control catalogue, the framework VOCABULARY (ids, descriptors, versions, the default set and the closed list an API write is validated against) and the two default frameworks (NIST SP 800-53 Rev5, CIS Controls v8.1) stay core in internal/compliancemodel. Moved 2026-09-06 (tracker 240) out of internal/compliancemodel/framework.go.",
+        "notice_file": "src/backend/enterprise/frameworks/LICENSE",
+        "verified_clean": "2026-09-06"
+      }
+    ]
+  },
+  "enterprise_removal_recipe": {
+    "_why": "Apache-2.0 core must be shippable ON ITS OWN. That is only true if somebody can actually do it, so the procedure is written down, kept next to the policy it derives from, and proved by building and testing a scratch copy with src/backend/enterprise deleted. The proof is also what RULED OUT extracting the org store: see internal/tenant under mixed_directories.",
+    "proved_on": "2026-09-06",
+    "steps": [
+      "1. rm -r src/backend/enterprise",
+      "2. In every file listed in import_boundary.assembly_allowances, delete each line between an ENTERPRISE-ASSEMBLY-BEGIN marker and its matching ENTERPRISE-ASSEMBLY-END (markers included). The blocks are self-contained; nothing else in those files refers to a commercial package.",
+      "3. security_dialects needs nothing further: the packs reach the engine only as seclane.Deps.Dialects, whose marked line went in step 2. The hardening engine then assesses the core Cisco IOS-XE dialect and reports every other platform NotApplicable — never a false Pass.",
+      "4. The framework half of security_dialects needs nothing further either: the crosswalk packs reach the compliance read API only as secapi.Deps.FrameworkCrosswalks, whose marked line — and the marked licensedFrameworkCrosswalks function behind it — went in step 2. All five frameworks stay in the catalogue and stay selectable, a stored selection stays valid, and an enabled framework beyond the default two then reports compliancemodel.NotLicensedCoverage: a NULL score and a sentence saying the crosswalk is not included — never an empty card that would read as a clean bill. No test surgery is needed either: the one wire assertion that needs a commercial crosswalk (TestSecurityComplianceScoresOnlyTheEnabledFrameworks in security_frameworks_isolation_test.go) detects the not-installed card and SKIPS itself with a stated reason, and TestSecurityComplianceCrosswalkGate — which asserts exactly that card — keeps running.",
+      "5. ldap is a FEATURE, not just a dependency: removing the module removes LDAP sign-in. Delete src/backend/ldap_wiring.go, ldap_env_test.go and ldap_live_test.go; the `LDAP config store` section of auth_config.go (from its banner comment to the `TACACS+ config store` banner); mapLDAP and fieldLDAPBindPass in secrets_config.go; the `ldap *ldapConfigStore` field, its newLDAPConfigStore construction and the three /api/auth/ldap/* routes in main.go; and make handleAuthMethods report ldap.enabled=false instead of reading s.ldap. Then drop the LDAP rows from route_isolation_test.go, platform_config_authz_test.go, licence_routes_test.go and resource_bounds_test.go, and the LDAP test functions from auth_config_test.go, secrets_config_test.go and federated_local_account_test.go. Local sign-in, OIDC and TACACS+ are untouched.",
+      "6. Lower rootPackageCeiling in package_growth_guard_test.go by one (ldap_wiring.go left the root package). The ratchet asserts equality in both directions on purpose.",
+      "7. Update this file: move each commercial_paths entry out, and re-run `python3 scripts/gen-licensing-map.py --write` and `python3 scripts/licensing-gate.py`."
+    ],
+    "guarantee": "After those steps `go build ./...`, `go vet ./...` and `go test ./...` are green, and every remaining file is Apache-2.0. Nothing about tenant or organisation isolation, RLS, authorization, integrity or core authentication changes — by construction, because none of it is in enterprise/."
+  },
+  "mixed_directories": {
+    "_why": "Directories that mix Apache-2.0 core code with code implementing a locked commercial entitlement. THE LIST IS EMPTY, and that is a finished state, not a pending one. Of the original seven, three were separated and now appear in commercial_paths (internal/hardening -> enterprise/dialects and internal/ldap -> enterprise/sso/ldap, 2026-09-05; the framework crosswalks of internal/compliancemodel -> enterprise/frameworks, 2026-09-06), and the remaining four were decided CORE ON EVIDENCE (2026-09-06) and are recorded in core_by_evidence below and in docs/design/LICENSING_MODEL_2026-09-04.md §10. A directory that mixes the two licences again belongs in entries, with what must move and where.",
+    "target_layout": "src/backend/enterprise/<module>/",
+    "decided": "2026-09-06",
+    "design_of_record": "docs/design/LICENSING_MODEL_2026-09-04.md",
+    "entries": [],
+    "core_by_evidence": {
+      "_why": "The four packages that were the last mixed_directories entries. Each was examined and each is CORE — not deferred, not 'too hard today'. They stay Apache-2.0 in full, and the commercial capability they touch is gated by the entitlement machinery at the call site instead of by a directory boundary. Nothing here is waiting on an extraction; a proposal to move one must first answer the evidence recorded against it.",
+      "entries": [
+        {
+          "path": "src/backend/secapi",
+          "licence": "Apache-2.0",
+          "was_gated_on": "security_findings",
+          "tier": "Team",
+          "why_core": "The Community/Team line runs THROUGH the files, not between them: http.go, rules.go and frameworks.go each carry both halves, and three core call sites (correlations.go, ai_troubleshoot_deps.go, internal/seclane) depend on the package for shared vocabulary (Gate, Principal, Filters, SecuritySignalKinds, ListFindings). The gate it needs already exists and is wired where it belongs — licenceFeature(FeatureSecurityFindings) at the mux, so secapi never learns about licensing. Re-verified 2026-09-06."
+        },
+        {
+          "path": "src/backend/internal/secfindings",
+          "licence": "Apache-2.0",
+          "was_gated_on": "security_findings",
+          "tier": "Team",
+          "why_core": "CORE BY DECISION, expected to be permanent. The package is the normalized finding model and nothing else — no HTTP, no bus, no engine, no entitlement awareness — with seventeen non-test importers on both sides of the boundary. It is the contract between a core producer and a commercial consumer, and a contract both sides depend on has to be readable by both."
+        },
+        {
+          "path": "src/backend/internal/seclane",
+          "licence": "Apache-2.0",
+          "was_gated_on": "security_findings",
+          "tier": "Team",
+          "why_core": "Already physically removable — the recipe in its package doc and security_lane_removability_test.go delete it wholesale — but its boundary is FEATURE-FLAG shaped, not entitlement shaped: it produces the Community hardening and exposure evidence in the same pass as the Team threat and advisory evidence, so moving it to enterprise/ would move Community's own entitlement with it."
+        },
+        {
+          "path": "src/backend/internal/tenant",
+          "licence": "Apache-2.0",
+          "was_gated_on": "msp_management",
+          "tier": "Enterprise",
+          "why_core": "ATTEMPTED 2026-09-05 and REVERTED on the evidence, and that finding stands. With enterprise/ deleted, 79 CORE tests fail: nearly every tenant and cross-org isolation test builds its fixture by POSTing two organisations, so the org store is load-bearing for the ISOLATION MODEL'S OWN TESTS — a core that cannot create a second organisation cannot prove it keeps two apart. governance.go is a second, independent reason: internal/rca (core) imports tenant.SeamOwnerClasses and tenant.SeamOwnerEntry as core RCA vocabulary. If org-hierarchy MANAGEMENT is commercial at all it is a CEILING (entitlement.CheckCeiling) in the Apache-2.0 licence machinery, not a separate package."
+        }
+      ]
+    }
+  },
+  "header_enforcement": {
+    "_why": "How checks A and C are scoped. Every first-party source file carries its own licence in its own first comment, so a file that leaves the repository — pasted into a bug report, copied onto a host, quoted in a review — still states what may be done with it. LICENSE, LICENSING.md and the per-directory notices make a file's licence determinable; the header makes it determinable from the FILE ALONE. scripts/spdx-headers.py writes and verifies it and this section is its only configuration; scripts/licensing-gate.py check A reads the scope through that module, so the gate and the tool that fixes a failure cannot disagree about which files are covered.",
+    "mode": "enforced",
+    "rules": [
+      "Every source file in the swept scope MUST carry the SPDX identifier its path maps to, plus the copyright line, as its first comment.",
+      "Every source file under a commercial_paths entry MUST carry the commercial SPDX identifier.",
+      "No file outside a commercial_paths entry may carry the commercial SPDX identifier.",
+      "Any file that carries an SPDX identifier at all MUST carry the one its path maps to.",
+      "Unknown SPDX identifiers anywhere are an error."
+    ],
+    "source_extensions": [
+      ".go",
+      ".py",
+      ".ts",
+      ".tsx",
+      ".mjs",
+      ".js",
+      ".sh",
+      ".css",
+      ".yaml",
+      ".yml"
+    ],
+    "copyright_line": "Copyright 2026 Correlix",
+    "sweep_roots": [
+      "src",
+      "scripts",
+      "deployment",
+      "tests",
+      "docs-portal",
+      "telemetry-catalog"
+    ],
+    "exempt": {
+      "_why": "Files inside the sweep roots that scripts/spdx-headers.py must NOT stamp, each with the reason it is not ours to mark. Two classes only: a file that is REGENERATED byte-for-byte from something else (stamping it makes the generator's own drift guard fail on the next run), and a fixture a test reads verbatim. Third-party and vendored trees are not listed here — they are skipped by NAME in excluded_paths, everywhere in the tree, so vendor/, node_modules/, compliance/ and every build/cache directory never reach this list. The list lives HERE and not in the sweep script on purpose: a sweeper carrying its own exemptions is a second source of truth, and adding one has to be a reviewed policy edit with a reason attached.",
+      "entries": [
+        {
+          "path": "src/correlation/parser_rules.py",
+          "why": "GENERATED by telemetry-catalog/bake_rules.py from events.yaml and compared BYTE FOR BYTE against a fresh bake by src/correlation/test_parser_interpreter_a3.py. A header the generator does not emit would fail that drift guard on every run."
+        },
+        {
+          "path": "deployment/docker/vector-router/processors-default.yaml",
+          "why": "GENERATED: the checked-in seed is pinned byte-for-byte to processors.GenerateRouterConfig(nil) by src/backend/processors/generate_test.go, and the api rewrites the same file at runtime whenever processors change."
+        },
+        {
+          "path": "deployment/helm/correlix/files/vector-router/processors-default.yaml",
+          "why": "The chart's byte mirror of the generated seed above, staged by deployment/helm/stage-configs.sh and drift-checked with cmp."
+        },
+        {
+          "path": "deployment/docker/vector/tests/syslog-admission.yaml",
+          "why": "GENERATED by scripts/gen-syslog-admission.py, which rewrites the whole file and fails --check on any byte it did not write."
+        },
+        {
+          "path": "*/testdata/*",
+          "why": "Go testdata. The go tool ignores these directories and the tests that read them compare bytes; a header would be part of the fixture rather than part of the source."
+        }
+      ]
+    },
+    "enforced_on": "2026-09-06"
+  },
+  "import_boundary": {
+    "_why": "Check E. Apache-2.0 core must never depend on commercially licensed code: a core-only build has to remain buildable and shippable, and an Apache-2.0 file that cannot compile without a commercial package is Apache-2.0 in name only.",
+    "rule": "No package outside commercial_paths may import a package inside commercial_paths, except the assembly-layer allowances below. Core must stay buildable, testable and shippable with src/backend/enterprise deleted.",
+    "assembly_allowances": [
+      {
+        "importer": "src/backend",
+        "why": "Package main is the assembly layer: it wires optional features together and is where a licence gate switches one on or off. Wiring is not a core dependency. Every import of an enterprise package in these files is bracketed by ENTERPRISE-ASSEMBLY-BEGIN / ENTERPRISE-ASSEMBLY-END markers, so the removal recipe is a mechanical delete.",
+        "files": [
+          "main.go",
+          "ldap_wiring.go",
+          "ldap_env_test.go",
+          "ldap_live_test.go"
+        ]
+      }
+    ]
+  },
+  "artifact_requirements": {
+    "_why": "Check H. A licence declaration that does not reach the customer is not a licence declaration. Every artifact Correlix ships must carry the notice files.",
+    "must_ship": [
+      {
+        "artifact": "installer bundle",
+        "produced_by": "scripts/make-installer.sh",
+        "requires": [
+          "LICENSE",
+          "LICENSES/Apache-2.0.txt",
+          "LICENSES/Correlix-Enterprise.txt",
+          "LICENSING.md",
+          "NOTICE"
+        ],
+        "footer_sentence_required_in": "LICENSES.md"
+      },
+      {
+        "artifact": "frontend image",
+        "produced_by": "deployment/docker/Dockerfile.frontend",
+        "requires": [
+          "/usr/share/nginx/html/licenses/index.html states the canonical sentence"
+        ]
+      },
+      {
+        "artifact": "every Correlix container image",
+        "produced_by": "deployment/docker/Dockerfile*",
+        "requires": [
+          "org.opencontainers.image.licenses label"
+        ]
+      }
+    ]
+  },
+  "container_images": {
+    "_why": "Check D. Dockerfiles that build a CORRELIX image must declare the licence in OCI metadata. Dockerfiles that only repackage a third-party image (adding no Correlix source) must NOT: labelling someone else's software with our licence would be a false claim. Every Dockerfile in the tree is classified here exactly once; a new one that nobody classified fails the test.",
+    "oci_licence_expressions": {
+      "_why": "The CANONICAL values of org.opencontainers.image.licenses. The OCI spec defines that label as an SPDX License Expression describing the software the image CONTAINS, so an image is labelled by its contents, not by the project's headline licence. Only these two expressions may appear on a Correlix image; the per-image `licence` fields below must each be one of them, and tests/test_licensing_consistency.py re-derives the right one from what each Dockerfile actually COPIES so the label cannot drift from the image.",
+      "core_only": "Apache-2.0",
+      "mixed": "Apache-2.0 AND LicenseRef-Correlix-Enterprise",
+      "rule": "An image whose build context ingests any commercial_paths directory carries `mixed`. Every other Correlix image carries `core_only`. Over-claiming `mixed` on an image that contains no commercial code would wrongly tell a recipient that Apache-2.0 software is restricted — the same false claim, in the open direction, that the third_party_repackage rule prevents in the other."
+    },
+    "ours": [
+      {
+        "path": "deployment/docker/Dockerfile.backend",
+        "licence": "Apache-2.0 AND LicenseRef-Correlix-Enterprise",
+        "why": "Builds the Go API from src/backend. `COPY src/backend/` takes the WHOLE backend tree, and main.go + ldap_wiring.go link the commercial packages src/backend/enterprise/dialects and src/backend/enterprise/sso/ldap into the one shipped binary (design of record §1: one repository, one binary, tiers are data). The image therefore contains software under both identifiers and its SPDX expression must say so; a bare Apache-2.0 label would understate what the customer receives."
+      },
+      {
+        "path": "deployment/docker/Dockerfile.correlation",
+        "licence": "Apache-2.0",
+        "why": "Builds the correlation engine from src/correlation."
+      },
+      {
+        "path": "deployment/docker/Dockerfile.frontend",
+        "licence": "Apache-2.0",
+        "why": "Bakes the built SPA and docs portal into nginx."
+      },
+      {
+        "path": "deployment/docker/Dockerfile.frontend.full",
+        "licence": "Apache-2.0",
+        "why": "Same image, building the SPA inside Docker."
+      },
+      {
+        "path": "deployment/docker/cloud-ingest/Dockerfile",
+        "licence": "Apache-2.0",
+        "why": "Copies the Correlix cloud poller modules."
+      },
+      {
+        "path": "deployment/docker/mock-nms/Dockerfile",
+        "licence": "Apache-2.0",
+        "why": "Builds the Correlix mock NMS from repository source."
+      },
+      {
+        "path": "deployment/docker/mock-servicenow/Dockerfile",
+        "licence": "Apache-2.0",
+        "why": "Builds the Correlix mock ServiceNow from repository source."
+      },
+      {
+        "path": "deployment/docker/swtpm-sidecar/Dockerfile",
+        "licence": "Apache-2.0",
+        "why": "Ships the Correlix sealing entrypoint and seal handler."
+      },
+      {
+        "path": "scripts/lab/traffic-generator/Dockerfile",
+        "licence": "Apache-2.0",
+        "why": "Builds the Correlix lab traffic generator from repository source."
+      }
+    ],
+    "third_party_repackage": [
+      {
+        "path": "deployment/docker/Dockerfile.nginx",
+        "why": "Prepares the stock nginx image to run non-root. Contains no Correlix source; the configuration is bind-mounted at runtime."
+      },
+      {
+        "path": "deployment/docker/opensearch/Dockerfile",
+        "why": "Trims and flattens the stock OpenSearch image. The content is OpenSearch, not Correlix."
+      },
+      {
+        "path": "deployment/docker/vector-router/Dockerfile",
+        "why": "Adds curl to the pinned stock Vector image. The content is Vector (MPL-2.0), not Correlix; labelling it Apache-2.0 would be false."
+      },
+      {
+        "path": "deployment/docker/vm-image-builder/Dockerfile",
+        "why": "An Ubuntu toolchain container used to build VM images. Contains no Correlix source and is never shipped."
+      },
+      {
+        "path": "scripts/lab/twin/docker/Dockerfile",
+        "why": "A stock python image with pip requirements for the lab twin. Contains no Correlix source and is never shipped."
+      },
+      {
+        "path": "tests/fixtures/oci-regression/Dockerfile.inherited",
+        "why": "Tracker 238 regression fixture: a pinned Alpine base plus one COPY, deliberately declaring nothing, so the OCI compliance scan can be proved to find INHERITED software (BusyBox) that no manifest of ours names. Contains no Correlix source, is never built for deployment and is never shipped."
+      },
+      {
+        "path": "tests/fixtures/oci-regression/Dockerfile.inherited-other-version",
+        "why": "The same fixture on Alpine 3.20, whose BusyBox is a different version from the one Correlix retains source for — it must FAIL the compliance gate. Contains no Correlix source and is never shipped."
+      }
+    ]
+  },
+  "release_blockers": {
+    "_why": "Conditions under which `scripts/licensing-gate.py --release` fails. These are things that must not reach a customer, as distinct from the everyday drift the default mode catches.",
+    "entries": [
+      {
+        "id": "enterprise-text-placeholder",
+        "what": "LICENSES/Correlix-Enterprise.txt still contains the marker CORRELIX-ENTERPRISE-TEXT-PLACEHOLDER.",
+        "why": "Files are marked LicenseRef-Correlix-Enterprise but the identifier resolves to no terms. Shipping code under a licence that does not exist grants nothing and is not honest.",
+        "owner_action": "Obtain the drafted Correlix Enterprise License from counsel and replace the placeholder.",
+        "marker": "CORRELIX-ENTERPRISE-TEXT-PLACEHOLDER",
+        "file": "LICENSES/Correlix-Enterprise.txt"
+      },
+      {
+        "id": "cla-process-undefined",
+        "what": "CONTRIBUTING.md states the CLA requirement but names no signing process.",
+        "why": "Open core depends on holding the rights to relicense contributed code into the commercial edition. A stated-but-unsigned CLA does not confer those rights, and inventing a process or a URL would be worse than saying it is undecided.",
+        "owner_action": "Choose the mechanism (CLA assistant on the repository, or a countersigned document) and record it in CONTRIBUTING.md.",
+        "marker": "CLA-PROCESS-TBD",
+        "file": "CONTRIBUTING.md"
+      }
+    ]
+  }
+}

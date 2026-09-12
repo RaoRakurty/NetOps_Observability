@@ -1,0 +1,20 @@
+{
+  "name": "SD-WAN controller reports tunnel down with NO corroborating telemetry: capped at suspected (controller-alone-cannot-confirm)",
+  "signals": [
+    {
+      "kind": "controller_tunnel_state",
+      "entity_type": "path",
+      "entity_id": "br20-tun1",
+      "observer_id": "vmanage:int-vm1",
+      "observer_type": "controller",
+      "modality": "management_plane",
+      "collection_path": "via_controller:vmanage-1",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.wan-edge.sdwan-tunnel-controller-corroborated",
+    "tier": "suspected",
+    "owner": "netops"
+  }
+}

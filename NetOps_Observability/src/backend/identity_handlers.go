@@ -1,0 +1,791 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+package backend
+
+// identity_handlers.go — admin CRUD for users, roles, tenants and API keys.
+// All routes here require the caller to hold administration:admin (super-admin
+// always qualifies). See docs/IDENTITY_ACCESS.md + docs/API_ACCESS.md.
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"netops/backend/internal/apikey"
+	// LICENCE-BEGIN
+	"netops/backend/internal/entitlement"
+	// LICENCE-END
+	"netops/backend/internal/rbac"
+	"strings"
+	"time"
+)
+
+// requirePerm gates a handler on a (module, level). Returns the caller's claims
+// on success; writes 401/403 and returns ok=false otherwise.
+func (s *server) requirePerm(w http.ResponseWriter, r *http.Request, module string, level int) (jwtClaims, bool) {
+	claims, ok := userFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+		return jwtClaims{}, false
+	}
+	if !s.roles.Allows(claims.Role, module, level) {
+		writeError(w, http.StatusForbidden, errors.New(module+" "+rbac.LevelName(level)+" permission required"))
+		return jwtClaims{}, false
+	}
+	return claims, true
+}
+
+// requireAdmin gates a handler on administration:admin.
+func (s *server) requireAdmin(w http.ResponseWriter, r *http.Request) (jwtClaims, bool) {
+	return s.requirePerm(w, r, "administration", LevelAdmin)
+}
+
+// requirePlatformAdmin gates an action to the cross-tenant PLATFORM OWNER
+// (a super-admin in the global tenant). Used for platform-wide resources a
+// tenant admin must never mutate: role definitions, the tenant registry,
+// platform SSO config, etc.
+func (s *server) requirePlatformAdmin(w http.ResponseWriter, r *http.Request) (jwtClaims, bool) {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
+		return claims, false
+	}
+	// Platform-wide capability is an IDENTITY question — is the caller the platform
+	// owner? Use isPlatformOwner, NOT principalTenant/can(): the latter honor the
+	// "view as tenant" override and would falsely deny the owner while scoped into
+	// a tenant (which broke the bundled NetBox config + platform admin pages).
+	if !isPlatformOwner(claims) {
+		writeError(w, http.StatusForbidden, errors.New("platform administrator required"))
+		return claims, false
+	}
+	return claims, true
+}
+
+// handlePermissions returns the caller's effective module→level grid so the
+// SPA can gate navigation. Available to any authenticated user.
+func (s *server) handlePermissions(w http.ResponseWriter, r *http.Request) {
+	claims, ok := userFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+		return
+	}
+	perms := map[string]int{}
+	for _, m := range rbac.Modules {
+		switch {
+		case isSuperAdminRole(claims.Role):
+			perms[m] = LevelAdmin
+		default:
+			if role, ok := s.roles.Get(claims.Role); ok {
+				perms[m] = role.Permissions[m]
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"role": claims.Role, "permissions": perms})
+}
+
+// ---- users -----------------------------------------------------------------
+
+type createUserRequest struct {
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	Role        string `json:"role"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+	TenantID    string `json:"tenant_id"`
+	Status      string `json:"status"`
+}
+
+func (s *server) handleUsers(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	switch r.Method {
+	case http.MethodGet:
+		// Strict isolation is enforced in the repo: List returns only the caller's
+		// tenant (RLS-scoped on the pg backend; the same sameTenant filter on file).
+		users := s.users.List(tenant, cross)
+		out := make([]publicUser, 0, len(users))
+		for _, u := range users {
+			out = append(out, toPublic(u))
+		}
+		writeJSON(w, http.StatusOK, out)
+	case http.MethodPost:
+		var req createUserRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		// A tenant admin may only create users inside its own tenant; only the
+		// platform owner may target an arbitrary tenant.
+		if !cross {
+			req.TenantID = tenant
+		}
+		role := req.Role
+		if role == "" {
+			role = RoleReadOnly
+		}
+		if _, ok := s.roles.Get(role); !ok {
+			writeError(w, http.StatusBadRequest, errors.New("unknown role"))
+			return
+		}
+		// Enforce the target scope's resolved password policy on admin-create — same
+		// rules the user's own change-password enforces, so an admin can't seed a
+		// weaker password than the policy allows. (Empty password = invited/passwordless
+		// account; CreateFull permits it and login simply never matches.)
+		if req.Password != "" {
+			rules := s.callerPasswordRules(jwtClaims{Sub: req.Username, Role: role, Tenant: req.TenantID})
+			if err := validatePasswordAgainstPolicy(req.Password, rules); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+		}
+		u, err := s.users.CreateFull(User{
+			Username: req.Username, Role: role, Email: req.Email,
+			DisplayName: req.DisplayName, TenantID: req.TenantID, Status: req.Status,
+		}, req.Password)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		s.logBindingSync(u, "user-create") // keep the role_binding mirror in sync (PBAC Phase A)
+		logInfo("identity", "user created", map[string]any{"user": u.Username, "role": u.Role})
+		writeJSON(w, http.StatusCreated, toPublic(u))
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+type updateUserRequest struct {
+	Role        string `json:"role"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+	TenantID    string `json:"tenant_id"`
+	Status      string `json:"status"`
+	Password    string `json:"password"` // optional admin reset
+}
+
+func (s *server) handleUserByID(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/users/")
+	if id == "" || strings.Contains(id, "/") {
+		writeError(w, http.StatusBadRequest, errors.New("invalid username"))
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	// Strict isolation: a tenant admin may only act on users inside its own
+	// tenant. Resolve the target first and 404 (not 403) when it is out of scope,
+	// so a tenant admin can neither see nor delete the platform admin / other
+	// tenants' users — and existence isn't leaked.
+	target, found := s.users.Get(id)
+	if !found || !sameTenant(target.TenantID, tenant, cross) {
+		writeError(w, http.StatusNotFound, errors.New("user not found"))
+		return
+	}
+	switch r.Method {
+	case http.MethodPatch, http.MethodPut:
+		var req updateUserRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if req.Role != "" {
+			if _, ok := s.roles.Get(req.Role); !ok {
+				writeError(w, http.StatusBadRequest, errors.New("unknown role"))
+				return
+			}
+		}
+		// #146b: the IdP owns a federated account's credential. Setting a local
+		// password here would stamp PasswordChangedAt/PasswordHistory onto a
+		// record whose lifecycle rules never evaluate them — dead, misleading
+		// state that login can never reach. Refused BEFORE the profile patch so
+		// a mixed request doesn't half-apply. (Self-service change-password
+		// already refuses federated accounts the same way.)
+		if req.Password != "" && !isLocalAccount(target.AuthSource) {
+			writeError(w, http.StatusBadRequest, errors.New("password is managed by the identity provider for this account"))
+			return
+		}
+		// A tenant admin cannot move a user out of its own tenant.
+		tid := req.TenantID
+		if !cross {
+			tid = target.TenantID
+		}
+		u, err := s.users.Update(id, User{
+			Role: req.Role, Email: req.Email, DisplayName: req.DisplayName,
+			TenantID: tid, Status: req.Status,
+		})
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if req.Password != "" {
+			if err := s.users.ResetPassword(id, req.Password); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+		}
+		s.logBindingSync(u, "user-update") // re-sync the role_binding mirror (PBAC Phase A)
+		writeJSON(w, http.StatusOK, toPublic(u))
+	case http.MethodDelete:
+		if err := s.users.Delete(id); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		s.removeUserBindings(id) // drop the deleted principal's bindings (PBAC Phase A)
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.Header().Set("Allow", "PATCH, PUT, DELETE")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// ---- roles -----------------------------------------------------------------
+
+func (s *server) handleRoles(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		// Role definitions are platform-wide; a tenant admin may read them (to
+		// assign to its own users) but not change them.
+		writeJSON(w, http.StatusOK, map[string]any{"modules": rbac.Modules, "roles": s.roles.List()})
+	case http.MethodPost:
+		if _, ok := s.requirePlatformAdmin(w, r); !ok {
+			return
+		}
+		var role Role
+		if err := json.NewDecoder(r.Body).Decode(&role); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		saved, err := s.roles.Upsert(role)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, saved)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) handleRoleByID(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/roles/")
+	if id == "" || strings.Contains(id, "/") {
+		writeError(w, http.StatusBadRequest, errors.New("invalid role id"))
+		return
+	}
+	switch r.Method {
+	case http.MethodPut:
+		var role Role
+		if err := json.NewDecoder(r.Body).Decode(&role); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		role.ID = id
+		saved, err := s.roles.Upsert(role)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, saved)
+	case http.MethodDelete:
+		if err := s.roles.Delete(id); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.Header().Set("Allow", "PUT, DELETE")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// ---- tenants ---------------------------------------------------------------
+
+type createTenantRequest struct {
+	Name string `json:"name"`
+	// Slug is the optional human URL handle. Blank → derived from Name. Validated
+	// + globally unique + immutable. The tenant's security key is the opaque id
+	// minted server-side, never this slug.
+	Slug          string `json:"slug"`
+	Note          string `json:"note"`
+	IsolationMode string `json:"isolation_mode"`
+	// OrgID is the Organization the new tenant belongs to (id OR slug — resolved
+	// server-side to the opaque org id). Blank → Global org.
+	OrgID string `json:"org_id"`
+	// Region assigns the tenant to a data-residency region. Blank → inherit org.
+	Region string `json:"region"`
+	// OperatorRestricted hides the tenant's data from the global/operator view from
+	// the moment it's created (data-privacy / compliance) — see Tenant.OperatorRestricted.
+	OperatorRestricted bool `json:"operator_restricted"`
+}
+
+func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	switch r.Method {
+	case http.MethodGet:
+		all := s.tenants.List()
+		if cross {
+			writeJSON(w, http.StatusOK, all)
+			return
+		}
+		// A tenant admin sees only its own tenant in the registry.
+		out := make([]Tenant, 0, 1)
+		for _, t := range all {
+			if strings.EqualFold(t.ID, tenant) {
+				out = append(out, t)
+			}
+		}
+		writeJSON(w, http.StatusOK, out)
+	case http.MethodPost:
+		if !cross {
+			writeError(w, http.StatusForbidden, errors.New("platform administrator required"))
+			return
+		}
+		var req createTenantRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		// Resolve the org reference (id OR slug — UNTRUSTED) to the canonical opaque
+		// org id before creating the tenant under it (zero-trust on input). Blank
+		// org → Global, which always exists.
+		if req.OrgID != "" {
+			o, ok := s.orgs.Resolve(req.OrgID)
+			if !ok {
+				writeError(w, http.StatusBadRequest, errors.New("unknown organization"))
+				return
+			}
+			req.OrgID = o.ID // store the opaque org id, never the slug
+		}
+		// LICENCE-BEGIN — the MSP / fleet gate and the create are ONE step
+		// (createTenantGated), because a gate that counts and then creates
+		// outside a lock lets two concurrent callers both take the last slot.
+		// /api/onboard is the other door onto the same gate and goes through
+		// the same helper.
+		t, err := s.createTenantGated(req.Name, req.Slug, req.Note, req.IsolationMode, req.OrgID)
+		if err != nil {
+			writeProvisionError(w, err)
+			return
+		}
+		// LICENCE-END
+		// Assign the data-residency region at creation time, if provided.
+		if req.Region != "" {
+			updated, e := s.tenants.SetRegion(t.ID, req.Region)
+			if e != nil {
+				writeError(w, http.StatusBadRequest, e)
+				return
+			}
+			t = updated
+		}
+		// Apply the "hide from global view" setting at creation time, if requested.
+		//
+		// F-81: the error used to be discarded (`if …; e == nil`), so a failed
+		// write returned 201 with operator_restricted:false. This is the
+		// data-privacy switch — the tenant's telemetry is visible to the global
+		// operator view from the moment it exists. Failing OPEN on a privacy
+		// control while reporting success is the worst available outcome, so a
+		// failure now removes the half-created tenant rather than leaving one
+		// that is exposed and believed to be restricted.
+		if req.OperatorRestricted {
+			updated, e := s.tenants.SetOperatorRestricted(t.ID, true)
+			if e != nil {
+				logError("tenants", "operator_restricted could not be applied — rolling back the tenant",
+					map[string]any{"tenant_id": t.ID, "err": e.Error()})
+				if derr := s.tenants.Delete(t.ID); derr != nil {
+					logError("tenants", "ROLLBACK FAILED — tenant exists and is NOT operator-restricted",
+						map[string]any{"tenant_id": t.ID, "err": derr.Error()})
+				}
+				writeError(w, http.StatusInternalServerError,
+					errors.New("tenant not created: the operator-visibility restriction could not be applied"))
+				return
+			}
+			t = updated
+		}
+		logInfo("tenants", "tenant created", map[string]any{"tenant_id": t.ID, "tenant_slug": t.Slug, "org_id": orgOf(t)})
+		s.recordIdentityAudit(r, claims, "TENANT_CREATED", auditTenantDetail(t))
+		writeJSON(w, http.StatusCreated, t)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requirePlatformAdmin(w, r)
+	if !ok {
+		return
+	}
+	ref := strings.TrimPrefix(r.URL.Path, "/api/tenants/")
+	if ref == "" || strings.Contains(ref, "/") {
+		writeError(w, http.StatusBadRequest, errors.New("invalid tenant id"))
+		return
+	}
+	// The path segment is UNTRUSTED (id or slug). Resolve to the canonical opaque
+	// tenant id before any mutation; fail closed if it doesn't resolve.
+	resolved, found := s.tenants.Resolve(ref)
+	if !found {
+		writeError(w, http.StatusNotFound, errors.New("tenant not found"))
+		return
+	}
+	id := resolved.ID
+	switch r.Method {
+	case http.MethodPatch:
+		// Update mutable tenant settings: operator-visibility (compliance) and/or
+		// data-residency region.
+		var req struct {
+			OperatorRestricted *bool   `json:"operator_restricted"`
+			Region             *string `json:"region"`
+			Status             *string `json:"status"`          // active | suspended (lifecycle)
+			DefaultLanding     *string `json:"default_landing"` // admin-configurable landing route
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if req.OperatorRestricted == nil && req.Region == nil && req.Status == nil && req.DefaultLanding == nil {
+			writeError(w, http.StatusBadRequest, errors.New("no updatable field provided"))
+			return
+		}
+		var t Tenant
+		var err error
+		if req.Status != nil {
+			if t, err = s.tenants.SetStatus(id, *req.Status); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			logWarn("tenants", "lifecycle status changed", map[string]any{"tenant_id": id, "status": *req.Status})
+		}
+		if req.Region != nil {
+			if t, err = s.tenants.SetRegion(id, *req.Region); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			logInfo("tenants", "region changed", map[string]any{"tenant_id": id, "region": *req.Region})
+		}
+		if req.OperatorRestricted != nil {
+			if t, err = s.tenants.SetOperatorRestricted(id, *req.OperatorRestricted); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			logInfo("tenants", "operator visibility changed", map[string]any{"tenant_id": id, "operator_restricted": *req.OperatorRestricted})
+		}
+		if req.DefaultLanding != nil {
+			if t, err = s.tenants.SetDefaultLanding(id, *req.DefaultLanding); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			logInfo("tenants", "default landing changed", map[string]any{"tenant_id": id, "default_landing": t.DefaultLanding})
+		}
+		s.recordIdentityAudit(r, claims, "TENANT_UPDATED", auditTenantDetail(t))
+		writeJSON(w, http.StatusOK, t)
+	case http.MethodDelete:
+		t := resolved
+		// Guard a high-impact, irreversible action (GitHub/AWS/GCP pattern), enforced
+		// server-side so the API can't be hit without the safeguards:
+		// 1) Type-to-confirm — the caller must echo the EXACT tenant name.
+		if !strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("confirm")), t.Name) {
+			writeError(w, http.StatusBadRequest, errors.New("deletion not confirmed — re-enter the exact tenant name"))
+			return
+		}
+		// 2) Refuse a populated tenant unless explicitly forced — deleting it orphans
+		//    its users/data. Surface the impact so removal is a deliberate decision.
+		force := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("force")), "true")
+		if n := len(s.users.List(id, false)); n > 0 && !force {
+			writeError(w, http.StatusConflict, fmt.Errorf("tenant still has %d user(s) — reassign or remove them first, or confirm a force delete", n))
+			return
+		}
+		if err := s.tenants.Delete(id); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		logWarn("tenants", "tenant deleted", map[string]any{"tenant_id": id, "name": t.Name, "forced": force})
+		detail := auditTenantDetail(t)
+		detail["forced"] = force
+		s.recordIdentityAudit(r, claims, "TENANT_DELETED", detail)
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.Header().Set("Allow", "PATCH, DELETE")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// ---- api keys --------------------------------------------------------------
+
+type createAPIKeyRequest struct {
+	Label           string     `json:"label"`
+	TenantID        string     `json:"tenant_id"`
+	Scopes          []string   `json:"scopes"`
+	RateLimitPerMin int        `json:"rate_limit_per_min"`
+	GrantTypes      []string   `json:"grant_types"`
+	ClientURI       string     `json:"client_uri"`
+	LogoURI         string     `json:"logo_uri"`
+	Contacts        []string   `json:"contacts"`
+	ContactPhone    string     `json:"contact_phone"`
+	SourceCIDRs     []string   `json:"source_cidrs"`
+	ClientExpiresAt *time.Time `json:"client_expires_at"`
+	SecretExpiresAt *time.Time `json:"secret_expires_at"`
+}
+
+// roleLevelFor resolves the permission LEVEL a role holds on a module, with the
+// super-admin shortcut the role store applies (a built-in super-admin is admin
+// everywhere and need not exist as a stored row).
+func (s *server) roleLevelFor(roleID, module string) int {
+	if isSuperAdminRole(roleID) {
+		return LevelAdmin
+	}
+	if role, ok := s.roles.Get(roleID); ok {
+		return role.Permissions[module]
+	}
+	return LevelNone
+}
+
+// authorizeKeyScopes refuses a mint whose scopes would give the KEY more
+// authority than the principal minting it — the escalation an API-key surface
+// invites (an operator-shaped admin minting `admin:*` for itself, a tenant admin
+// minting a platform-wide credential).
+//
+// Two rules, both derived from how the middleware actually reads a key
+// (roleFromScopes + principalTenant), so the check can never drift from the
+// authority the key really gets:
+//
+//  1. `admin:*` bound to the PLATFORM realm is a cross-tenant super-admin
+//     credential — platform-global plumbing, so platform admins only (§3a.3).
+//     The same scope bound to a tenant is a tenant-administrator key and is
+//     legitimately mintable by that tenant's admin.
+//  2. The role the key will act under may not out-rank the caller on ANY module.
+//     A caller who cannot write alerts cannot mint a key that can.
+func (s *server) authorizeKeyScopes(claims jwtClaims, scopes []string, keyTenant string) error {
+	derived := roleFromScopes(scopes)
+	if isSuperAdminRole(derived) && isPlatformRealm(keyTenant) && !isPlatformOwner(claims) {
+		return errors.New("an administrative key in the platform realm may be minted only by a platform administrator")
+	}
+	for _, module := range rbac.Modules {
+		need := s.roleLevelFor(derived, module)
+		if need > LevelNone && !s.roles.Allows(claims.Role, module, need) {
+			return fmt.Errorf("scope grants %s %s, which exceeds your own permissions", module, rbac.LevelName(need))
+		}
+	}
+	return nil
+}
+
+func (s *server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	switch r.Method {
+	case http.MethodGet:
+		all := s.apiKeys.List()
+		out := make([]apikey.Public, 0, len(all))
+		for _, k := range all {
+			if sameTenant(k.TenantID, tenant, cross) {
+				out = append(out, k)
+			}
+		}
+		writeJSON(w, http.StatusOK, out)
+	case http.MethodPost:
+		var req createAPIKeyRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		// Zero-trust the payload: normalize the requested scopes onto the CLOSED
+		// vocabulary first, then authorize that exact list, then store it — one
+		// parse, so what is checked is what is minted.
+		scopes, scopeErr := apikey.NormalizeScopes(req.Scopes)
+		if scopeErr != nil {
+			writeError(w, http.StatusBadRequest, scopeErr)
+			return
+		}
+		req.Scopes = scopes
+		// A tenant admin can only mint keys bound to its own tenant.
+		if !cross {
+			req.TenantID = tenant
+		}
+		// ...and only within its OWN authority: a key may never out-rank the
+		// principal that minted it (§3a.1/§3a.3 — the platform-admin scope is a
+		// platform-global capability, not a tenant-admin one).
+		if err := s.authorizeKeyScopes(claims, req.Scopes, req.TenantID); err != nil {
+			writeError(w, http.StatusForbidden, err)
+			return
+		}
+		rec, secret, err := s.apiKeys.Create(apikey.Input{
+			TenantID:        req.TenantID,
+			Label:           req.Label,
+			Scopes:          req.Scopes,
+			RateLimitPerMin: req.RateLimitPerMin,
+			GrantTypes:      req.GrantTypes,
+			ClientURI:       req.ClientURI,
+			LogoURI:         req.LogoURI,
+			Contacts:        req.Contacts,
+			ContactPhone:    req.ContactPhone,
+			SourceCIDRs:     req.SourceCIDRs,
+			ClientExpiresAt: req.ClientExpiresAt,
+			SecretExpiresAt: req.SecretExpiresAt,
+		}, claims.Sub)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		logInfo("identity", "api key created", map[string]any{"id": rec.ID, "by": claims.Sub})
+		// Minting a credential is a security event — record WHICH authority it
+		// carries (never the secret) so an administrative key is visible in the
+		// audit trail, not only in the key table.
+		s.recordIdentityAudit(r, claims, "API_KEY_CREATED", map[string]any{
+			"key_id": rec.ID, "label": rec.Label, "tenant_id": rec.TenantID,
+			"scopes": rec.Scopes, "derived_role": roleFromScopes(rec.Scopes),
+		})
+		// The plaintext secret is returned exactly once here.
+		writeJSON(w, http.StatusCreated, map[string]any{"key": rec, "secret": secret})
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) handleAPIKeyByID(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/apikeys/")
+	if id == "" || strings.Contains(id, "/") {
+		writeError(w, http.StatusBadRequest, errors.New("invalid key id"))
+		return
+	}
+	if r.Method != http.MethodDelete {
+		w.Header().Set("Allow", "DELETE")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Strict isolation: a tenant admin may only revoke keys bound to its own
+	// tenant. 404 when out of scope so other tenants' key ids aren't probeable.
+	tenant, cross := principalTenant(claims)
+	visible := false
+	for _, k := range s.apiKeys.List() {
+		if k.ID == id {
+			visible = sameTenant(k.TenantID, tenant, cross)
+			break
+		}
+	}
+	if !visible {
+		writeError(w, http.StatusNotFound, errors.New("key not found"))
+		return
+	}
+	if err := s.apiKeys.Revoke(id); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// LICENCE-BEGIN
+// countRealTenants counts tenants excluding the seeded Global root.
+//
+// Global is platform scaffolding that always exists — counting it would make
+// the FIRST tenant an operator creates look like the second and refuse a
+// perfectly ordinary single-tenant install.
+func countRealTenants(all []Tenant) int {
+	n := 0
+	for _, t := range all {
+		if t.ID != TenantGlobal {
+			n++
+		}
+	}
+	return n
+}
+
+// gateFleetTenantLocked is the MSP / fleet gate for admitting ONE MORE tenant.
+// The caller holds provisionMu, and must still hold it when it creates: the
+// count this reads is only true for as long as nothing else can create.
+//
+//	NOT gated — tenant ISOLATION itself, and normal SINGLE-tenant operation.
+//	Isolation is a safety property of every tier and is never an entitlement;
+//	the seeded Global tenant always exists and a deployment always has one
+//	working tenant.
+//
+//	GATED — running a FLEET of them from one platform, which is the MSP
+//	product. So the SECOND real tenant is the one that asks.
+//
+// The gate is semantic (Entitled(FeatureMSPManagement)), never a tier
+// comparison: a licence may grant fleet management at any tier, and the file
+// decides, not the label.
+func (s *server) gateFleetTenantLocked() error {
+	if entitlement.Entitled(s.entitlements, entitlement.FeatureMSPManagement) {
+		return nil
+	}
+	if countRealTenants(s.tenants.List()) >= 1 {
+		return entitlement.Require(s.entitlements, entitlement.FeatureMSPManagement)
+	}
+	return nil
+}
+
+// createTenantLocked gates and creates in one step. Caller holds provisionMu.
+func (s *server) createTenantLocked(name, slug, note, isolationMode, orgID string) (Tenant, error) {
+	if err := s.gateFleetTenantLocked(); err != nil {
+		return Tenant{}, err
+	}
+	return s.tenants.Create(name, slug, note, isolationMode, orgID)
+}
+
+// createTenantGated is createTenantLocked for a caller that creates ONE tenant
+// and nothing else. It takes provisionMu itself.
+func (s *server) createTenantGated(name, slug, note, isolationMode, orgID string) (Tenant, error) {
+	s.provisionMu.Lock()
+	defer s.provisionMu.Unlock()
+	return s.createTenantLocked(name, slug, note, isolationMode, orgID)
+}
+
+// createOrgLocked gates and creates an ORG. Caller holds provisionMu.
+//
+// An org is the MSP/fleet construct: orgs exist to group many tenants under one
+// operator, so creating one beyond the seeded Global org IS multi-tenant fleet
+// management (owner spec, 2026-09-04). The gate is unconditional, so there is
+// no count to take and no slot to race for; it runs under the same lock anyway
+// because /api/onboard creates an org AND a tenant as one decision.
+//
+// The seeded Global org always exists and is never gated: a single-tenant
+// deployment needs no entitlement to work normally, and isolation between
+// whatever orgs already exist is a safety property no licence state can touch.
+func (s *server) createOrgLocked(name, slug, note, homeRegion, ssoConnection string) (Org, error) {
+	if err := entitlement.Require(s.entitlements, entitlement.FeatureMSPManagement); err != nil {
+		return Org{}, err
+	}
+	return s.orgs.Create(name, slug, note, homeRegion, ssoConnection)
+}
+
+// createOrgGated is createOrgLocked for a caller that creates ONE org.
+func (s *server) createOrgGated(name, slug, note, homeRegion, ssoConnection string) (Org, error) {
+	s.provisionMu.Lock()
+	defer s.provisionMu.Unlock()
+	return s.createOrgLocked(name, slug, note, homeRegion, ssoConnection)
+}
+
+// writeProvisionError renders a provisioning failure. A licence refusal is the
+// structured 402 the SPA renders as an upgrade card; anything else is the
+// ordinary 400 a bad name or a duplicate slug earns.
+func writeProvisionError(w http.ResponseWriter, err error) {
+	if entitlement.WriteRefusal(w, err) {
+		return
+	}
+	writeError(w, http.StatusBadRequest, err)
+}
+
+// LICENCE-END

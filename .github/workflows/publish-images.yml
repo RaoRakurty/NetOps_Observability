@@ -1,0 +1,264 @@
+name: publish-images
+
+# SC-006 (provenance + SBOM): on a version tag, build the four app images, push
+# them to PRIVATE GHCR, and attach a verifiable SLSA build-provenance attestation
+# plus a CycloneDX SBOM to each pushed digest.
+#
+# This does NOT change the deploy path: install.py / docker compose still BUILD
+# images locally on the host (the offline-buildable ethos, CLAUDE.md). Publishing
+# here is purely for provenance/SBOM/distribution. Triggered on `v*.*.*` tags
+# (immutable releases) or manual dispatch — never per-push (4 image builds).
+#
+# Packages are private by default on first push; keep them private in GHCR
+# settings (the correlation image carries readable Python source).
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # FAIL-CLOSED RELEASE GATE (owner decision 2026-09-04). Until this landed, a
+  # `v*.*.*` tag pushed four images to GHCR with **no test job gating it**
+  # (RELEASE_CHECKLIST §4.4). `release-gate.yml` runs the full blocking gate —
+  # backend, frontend, correlation, supply-chain, ingest, telemetry catalogue and
+  # fresh-install — against the tag's exact commit, with no `paths:` filters to
+  # skip any of it. Every job below `needs:` it, so nothing reaches the registry
+  # (or a release page) unless all of it is green. See release-gate.yml for why
+  # this is a reusable-workflow call and not an API check-run poll.
+  gate:
+    uses: ./.github/workflows/release-gate.yml
+    permissions:
+      contents: read
+
+  publish:
+    needs: gate
+    runs-on: ubuntu-latest
+    # Write scopes confined to THIS job; every other workflow stays contents:read.
+    permissions:
+      contents: read
+      packages: write # push images to GHCR
+      id-token: write # OIDC for keyless attestation signing
+      attestations: write # write provenance/SBOM attestations
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            dockerfile: NetOps_Observability/deployment/docker/Dockerfile.backend
+          - name: correlation
+            dockerfile: NetOps_Observability/deployment/docker/Dockerfile.correlation
+          - name: nginx
+            dockerfile: NetOps_Observability/deployment/docker/Dockerfile.nginx
+          - name: frontend
+            dockerfile: NetOps_Observability/deployment/docker/Dockerfile.frontend
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # The frontend image copies a prebuilt SPA bundle (src/frontend/dist),
+      # which is gitignored — build it here, same as the host install does.
+      - if: matrix.name == 'frontend'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: NetOps_Observability/src/frontend/package-lock.json
+      - if: matrix.name == 'frontend'
+        working-directory: NetOps_Observability/src/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Compute (lowercase) image ref
+        id: img
+        run: echo "ref=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/netops-${{ matrix.name }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ${{ steps.img.outputs.ref }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: NetOps_Observability
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      # SLSA build provenance, attached to the image digest and verifiable with
+      # `gh attestation verify oci://<image>@<digest>`.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-name: ${{ steps.img.outputs.ref }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      # CycloneDX SBOM of the actual pushed image (uses the docker login creds).
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ steps.img.outputs.ref }}@${{ steps.build.outputs.digest }}
+          format: cyclonedx-json
+          output-file: sbom-${{ matrix.name }}.cdx.json
+          artifact-name: sbom-${{ matrix.name }}
+
+      # THE OCI SOURCE-COMPLIANCE GATE (tracker 238, owner decision 2026-09-05).
+      #
+      # Until this landed the SBOM above was generated, attested and then read by
+      # nobody. That is how BusyBox — GPL-2.0-only, inherited from the Alpine base
+      # of the frontend and nginx images, named in no Dockerfile of ours — could
+      # be inside every published image while the licence inventory, which models
+      # what we DECLARE, could not see it.
+      #
+      # The rule is general: IF CORRELIX SHIPS THE BINARY, CORRELIX RETAINS THE
+      # SOURCE, however the binary got into the image. Upstream availability is
+      # provenance, not compliance. `--release` therefore fails on a required
+      # source that is missing, on one whose checksum does not match, and on a
+      # merely RECORDED posture — a recorded posture keeps daily builds honest
+      # about a known gap, and must never let a customer artifact out the door.
+      #
+      # FAIL CLOSED. This step runs against the digest actually pushed, and a
+      # scanner failure, an unparsable SBOM or an SBOM with zero components is an
+      # error, never "zero affected packages". See
+      # docs/compliance/OCI_SOURCE_COMPLIANCE.md.
+      - name: Resolve the runtime base image's layers
+        id: base
+        run: |
+          set -euo pipefail
+          # The LAST FROM is the runtime stage; earlier ones are build stages
+          # whose contents never reach the published image.
+          BASE="$(grep -E '^FROM ' '${{ matrix.dockerfile }}' | tail -1 | awk '{print $2}')"
+          echo "base=$BASE"
+          if [ "$BASE" = "scratch" ]; then
+            # Nothing is inherited, so there is no base layer set to resolve.
+            # Reported as such rather than faked: origin will read `unknown`.
+            echo "layers=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          docker pull -q "$BASE"
+          docker image inspect "$BASE" \
+            --format '{{range .RootFS.Layers}}{{println .}}{{end}}' \
+            | sed '/^$/d' > "$RUNNER_TEMP/base-layers-${{ matrix.name }}.txt"
+          test -s "$RUNNER_TEMP/base-layers-${{ matrix.name }}.txt"
+          echo "layers=$RUNNER_TEMP/base-layers-${{ matrix.name }}.txt" >> "$GITHUB_OUTPUT"
+
+      # THE CORRELIX-CONTROLLED ARCHIVE (tracker 262). Read-only credentials,
+      # short-lived, from GitHub's OIDC token — there is no static AWS key in
+      # this repository. The step is a no-op until the company AWS account
+      # exists and the repository variables are set, so today's releases behave
+      # exactly as they did: retained copies first, pinned upstream after.
+      #
+      # `vars.*` are Actions VARIABLES, not secrets: a bucket name and a role
+      # ARN are useless without the trust relationship, which is scoped to this
+      # repository and the `release` environment.
+      - name: Assume the archive read role (OIDC, short-lived)
+        if: ${{ vars.AWS_SOURCE_ARCHIVE_READ_ROLE != '' }}
+        env:
+          ROLE_ARN: ${{ vars.AWS_SOURCE_ARCHIVE_READ_ROLE }}
+          AWS_REGION: ${{ vars.AWS_SOURCE_ARCHIVE_REGION }}
+        run: |
+          set -euo pipefail
+          token="$(curl -fsS --max-time 30 \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          [ -n "$token" ] || { echo "FATAL: GitHub returned no OIDC token" >&2; exit 1; }
+          echo "::add-mask::$token"
+          resp="$(curl -fsS --max-time 30 -H 'Accept: application/json' \
+            --data-urlencode "Action=AssumeRoleWithWebIdentity" \
+            --data-urlencode "Version=2011-06-15" \
+            --data-urlencode "RoleArn=${ROLE_ARN}" \
+            --data-urlencode "RoleSessionName=correlix-release-${GITHUB_RUN_ID}" \
+            --data-urlencode "DurationSeconds=3600" \
+            --data-urlencode "WebIdentityToken=${token}" \
+            "https://sts.${AWS_REGION}.amazonaws.com/")" \
+            || { echo "FATAL: STS refused the OIDC token; check the read role's trust policy." >&2; exit 1; }
+          python3 - "$resp" <<'PY' >> "$GITHUB_ENV"
+          import json, sys
+          creds = (json.loads(sys.argv[1])["AssumeRoleWithWebIdentityResponse"]
+                   ["AssumeRoleWithWebIdentityResult"]["Credentials"])
+          for gh, aws in (("AWS_ACCESS_KEY_ID", "AccessKeyId"),
+                          ("AWS_SECRET_ACCESS_KEY", "SecretAccessKey"),
+                          ("AWS_SESSION_TOKEN", "SessionToken")):
+              print(f"::add-mask::{creds[aws]}", file=sys.stderr)
+              print(f"{gh}={creds[aws]}")
+          PY
+          echo "read-only archive credentials assumed (expire in 1h)"
+
+      # The retained corresponding source, produced by the same mechanism that
+      # ships it in every release bundle. `--release` verifies the BYTES, so the
+      # artifacts have to exist here, not merely be pinned.
+      - name: Materialise the retained corresponding source
+        working-directory: NetOps_Observability
+        # RETAINED COPIES FIRST, exactly as supply-chain.yml does it. Everything
+        # in compliance/corresponding-sources/ is taken from the repository and
+        # re-checksummed against the pin table (local provenance is not trusted
+        # provenance); only what is not retained there is fetched from upstream.
+        # This is not an optimisation: eleven of the pinned artifacts are Alpine
+        # aports archives from gitlab.alpinelinux.org, which answers
+        # GitHub-hosted runners with HTTP 418 — a release must not depend on
+        # upstream reachability to prove it ships the source it says it does.
+        env:
+          CORRELIX_SOURCE_MIRROR_DIR: ${{ github.workspace }}/NetOps_Observability/compliance/corresponding-sources
+          # Tracker 262. With the archive configured this becomes ARCHIVE-ONLY:
+          # anything not retained in git is read from the Correlix-controlled S3
+          # store and a miss FAILS the release — no upstream fallback. Empty
+          # until the account exists, which keeps today's behaviour.
+          CORRELIX_SOURCE_RELEASE_MODE: ${{ vars.AWS_SOURCE_ARCHIVE_BUCKET != '' && '1' || '0' }}
+          CORRELIX_SOURCE_ARCHIVE_BUCKET: ${{ vars.AWS_SOURCE_ARCHIVE_BUCKET }}
+          CORRELIX_SOURCE_ARCHIVE_REGION: ${{ vars.AWS_SOURCE_ARCHIVE_REGION }}
+        run: |
+          set -euo pipefail
+          bash scripts/make-installer.sh --source-offer-only
+
+      - name: OCI source-compliance gate (release mode, blocking)
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          OFFER="$(ls -d dist/correlix-*/source-offer | head -1)"
+          test -d "$OFFER"
+          # An array, not a word-split string: a base-layer path with a space in
+          # it must not silently become two arguments and mark every component
+          # `unknown`.
+          base_args=()
+          if [ -n "${{ steps.base.outputs.layers }}" ]; then
+            base_args=(--base-layers "${{ steps.base.outputs.layers }}")
+          fi
+          # Tracker 262: once the archive exists, corresponding source that
+          # verifies against its pin but lives ONLY at an upstream URL also
+          # fails the release. Provenance is not retention.
+          archive_args=()
+          if [ -n "${{ vars.AWS_SOURCE_ARCHIVE_BUCKET }}" ]; then
+            archive_args=(--require-archive)
+          fi
+          python3 scripts/oci-compliance.py \
+            --sbom "$GITHUB_WORKSPACE/sbom-${{ matrix.name }}.cdx.json" \
+            --image "${{ steps.img.outputs.ref }}" \
+            --digest "${{ steps.build.outputs.digest }}" \
+            --source-dir "$OFFER" \
+            --manifest "$GITHUB_WORKSPACE/compliance-${{ matrix.name }}.json" \
+            --release "${base_args[@]}" "${archive_args[@]}"
+
+      - name: Upload the compliance manifest
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oci-compliance-${{ matrix.name }}
+          path: compliance-${{ matrix.name }}.json
+          if-no-files-found: warn

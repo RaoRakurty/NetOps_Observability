@@ -1,0 +1,30 @@
+{
+  "name": "Small probes pass, large transfers stall on campus path: PMTUD blackhole",
+  "signals": [
+    {
+      "kind": "size_dependent_loss",
+      "entity_type": "path",
+      "entity_id": "officeA->dc",
+      "observer_id": "probe-agent-officeA",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 4.0
+    },
+    {
+      "kind": "app_large_transfer_fail",
+      "entity_type": "service",
+      "entity_id": "fileshare",
+      "observer_id": "apm-platform",
+      "observer_type": "platform",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.access.pmtud-blackhole",
+    "tier": "confirmed",
+    "owner": "netops"
+  }
+}

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 #
 # bootstrap-ubuntu.sh — prepare a fresh Ubuntu / Debian host for the
 # NetOps Observability stack.

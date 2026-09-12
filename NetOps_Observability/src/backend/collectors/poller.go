@@ -1,14 +1,20 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package collectors
 
 import (
 	"context"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -25,9 +31,76 @@ import (
 
 // Target is one device the collectors poll.
 type Target struct {
-	ID       string
-	Address  string // host or host:port
-	Protocol string // preferred protocol: snmp|gnmi|netconf ("" => snmp)
+	ID string
+	// Name is the device's stored display name — for scan devices the RAW
+	// sysName the device reported (e.g. "core-sw#1"), where ID is the derived
+	// ScanDeviceID (sanitized, lowercased, address-hash-suffixed). The trap
+	// receiver's NAT-surviving sysName rescue compares the trap's sysName
+	// varbind against it: the derived id can never equal the on-wire sysName
+	// once folding/hashing applies, so id-only matching stranded every
+	// legitimately-authenticated scan-device trap as inventory_missing.
+	Name      string
+	Address   string // host or host:port
+	Protocol  string // preferred protocol: snmp|gnmi|netconf ("" => snmp)
+	Community string // resolved SNMP v2c community ("" => SNMP_COMMUNITY/"public")
+
+	// TenantID is the owning tenant from the device inventory ("" = global).
+	// Collectors that persist rows MUST stamp it so at-rest isolation holds at
+	// the storage layer (§3a.4). Added for audit F-56: the tunnel writer had no
+	// tenant at all, so every discovered tunnel landed untagged and was shared
+	// into every tenant's view by the row policy's untagged clause.
+	TenantID string
+
+	// SNMPv3 USM (set when the device's credential profile is v3; takes
+	// precedence over Community). See snmpCreds.
+	SNMPVersion int // 0/2 => v2c, 3 => v3
+	V3User      string
+	V3Level     string // noAuthNoPriv | authNoPriv | authPriv
+	V3AuthProto string
+	V3AuthKey   string
+	V3PrivProto string
+	V3PrivKey   string
+	V3Context   string
+
+	// GNMICapable marks a device that ALSO has gNMI telemetry (a gnmic subscription).
+	// The SNMP metrics collector uses it to WITHHOLD gNMI-owned metric families on
+	// these devices (single-contract: gNMI owns BGP/IS-IS where present; SNMP stays
+	// the universal floor for devices WITHOUT gNMI). Set from the device label
+	// `gnmi: "true"`.
+	GNMICapable bool
+}
+
+// hasTransport reports whether the device has the named non-SNMP transport, so the
+// SNMP collector can yield ownership of a family that transport owns. Today only
+// gNMI overrides SNMP; add cases here when another transport (e.g. NETCONF) gains
+// ownership of a family.
+func (t Target) hasTransport(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "gnmi":
+		return t.GNMICapable
+	default:
+		return false
+	}
+}
+
+// creds builds the engine credentials for this target (v3 if configured, else
+// v2c with the resolved community / global default).
+func (t Target) creds() snmpCreds {
+	if t.SNMPVersion == 3 {
+		return snmpCreds{
+			Version: 3, User: t.V3User, Level: t.V3Level,
+			AuthProto: t.V3AuthProto, AuthKey: t.V3AuthKey,
+			PrivProto: t.V3PrivProto, PrivKey: t.V3PrivKey, Context: t.V3Context,
+		}
+	}
+	community := t.Community
+	if community == "" {
+		community = os.Getenv("SNMP_COMMUNITY")
+	}
+	if community == "" {
+		community = "public"
+	}
+	return v2c(community)
 }
 
 // TargetFunc returns the current set of devices to poll.
@@ -56,8 +129,31 @@ func byProtocol(all TargetFunc, proto string) TargetFunc {
 	}
 }
 
-// probeFunc checks one target address; nil error means reachable/healthy.
-type probeFunc func(ctx context.Context, addr string) error
+// byProtocolVersion narrows byProtocol further to a single SNMP version class:
+// v3 == true keeps only USM v3 targets (SNMPVersion 3); v3 == false keeps the
+// community-string versions (SNMPVersion 0/1/2). This lets the v2c and v3 SNMP
+// collectors report independent target/reachable counts in the Collectors view.
+func byProtocolVersion(all TargetFunc, proto string, v3 bool) TargetFunc {
+	base := byProtocol(all, proto)
+	if base == nil {
+		return nil
+	}
+	return func() []Target {
+		var out []Target
+		for _, t := range base() {
+			isV3 := t.SNMPVersion == 3
+			if isV3 == v3 {
+				out = append(out, t)
+			}
+		}
+		return out
+	}
+}
+
+// probeFunc checks one target; nil error means reachable/healthy. The dialable
+// addr (host:port) is precomputed; the full Target carries per-device details
+// like the SNMP community.
+type probeFunc func(ctx context.Context, addr string, t Target) error
 
 type poller struct {
 	name     string
@@ -117,7 +213,7 @@ func (p *poller) pollOnce(ctx context.Context) {
 	for _, tg := range targets {
 		addr := withPort(tg.Address, p.port)
 		cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		err := p.probe(cctx, addr)
+		err := p.probe(cctx, addr, tg)
 		cancel()
 		up := 0
 		if err == nil {
@@ -131,26 +227,71 @@ func (p *poller) pollOnce(ctx context.Context) {
 	}
 
 	dur := time.Since(start)
+	healthy := cycleHealthy(len(targets), reachable)
 	lines = append(lines,
-		fmt.Sprintf(`collector_up{collector=%q} 1 %d`, p.name, now),
+		collectorUpLine(p.name, healthy, now),
 		fmt.Sprintf(`collector_targets{collector=%q} %d %d`, p.name, len(targets), now),
 		fmt.Sprintf(`collector_targets_reachable{collector=%q} %d %d`, p.name, reachable, now),
 		fmt.Sprintf(`collector_poll_duration_ms{collector=%q} %d %d`, p.name, dur.Milliseconds(), now),
 	)
-	emitMetrics(strings.Join(lines, "\n"))
+	emitMetrics(ctx, strings.Join(lines, "\n"))
 
 	p.mu.Lock()
 	p.status.LastTick = start.UTC()
 	p.status.Targets = len(targets)
 	p.status.Reachable = reachable
 	p.status.LastPollMillis = dur.Milliseconds()
-	p.status.Healthy = true // the collector loop itself is healthy/running
-	if reachable == 0 && len(targets) > 0 {
-		p.status.LastError = lastErr
-	} else {
-		p.status.LastError = ""
-	}
+	p.status.Healthy = healthy
+	p.status.LastError = cycleError(len(targets), reachable, lastErr)
 	p.mu.Unlock()
+}
+
+// ── collector self-observability (§10: no silent failures) ───────────────────
+
+// degradedReachFraction is the share of a collector's targets that must answer
+// for the cycle to count as healthy.
+//
+// The rule (a judgement call, so it is documented): a cycle is UNHEALTHY when
+// fewer than half of the targets answered, and LastError is populated whenever
+// ANY target failed. The audit found the opposite: Healthy was re-set to a
+// literal true every tick and LastError was cleared unless EVERY target failed,
+// so a 9-of-10 blackout reported "healthy" with a blank error. Half is the line
+// because below it the collector no longer produces a representative view of
+// the fleet and the operator must be told; above it the loss is per-device and
+// already visible as collector_target_up / collector_targets_reachable. A
+// collector with NO targets stays healthy-and-idle — nothing to reach is not a
+// failure to reach.
+const degradedReachFraction = 0.5
+
+// cycleHealthy is the health verdict for one poll cycle: answered is the number
+// of targets whose probe SUCCEEDED (not the number that had something to say —
+// a device with no LLDP neighbours answered fine).
+func cycleHealthy(targets, answered int) bool {
+	if targets <= 0 {
+		return true
+	}
+	return float64(answered) >= degradedReachFraction*float64(targets)
+}
+
+// cycleError is the LastError one cycle should report. It is non-empty whenever
+// any target failed — including the partial blackout that used to be silent —
+// and carries the last underlying error when there is one.
+func cycleError(targets, answered int, lastErr string) string {
+	if targets <= 0 || answered >= targets {
+		return ""
+	}
+	if strings.TrimSpace(lastErr) != "" {
+		return fmt.Sprintf("%d/%d targets did not answer (last error: %s)", targets-answered, targets, lastErr)
+	}
+	return fmt.Sprintf("%d/%d targets did not answer", targets-answered, targets)
+}
+
+// collectorUpLine renders the collector_up sample honestly. This metric is the
+// platform's own liveness signal and the shipped CollectorDown alert keys off
+// `collector_up == 0`; every collector emitted the literal constant 1, so that
+// alert could never fire no matter how blind the collector was.
+func collectorUpLine(name string, up bool, nowMs int64) string {
+	return fmt.Sprintf(`collector_up{collector=%q} %d %d`, name, b2i(up), nowMs)
 }
 
 // withPort returns addr unchanged if it already has a port, else appends def.
@@ -161,69 +302,156 @@ func withPort(addr string, def int) string {
 	return net.JoinHostPort(addr, strconv.Itoa(def))
 }
 
-// tcpProbe dials the address over TCP — proves the protocol port is open.
-func tcpProbe(ctx context.Context, addr string) error {
+// sshBannerProbe dials the NETCONF-over-SSH port and reads the server's SSH
+// identification string. Per RFC 4253 §4.2 an SSH server sends "SSH-2.0-<impl>"
+// (or "SSH-1.99-…") in cleartext immediately on connect, before any key exchange
+// or authentication — so we can confirm a real NETCONF/SSH transport is
+// answering without credentials. This is a materially stronger signal than a
+// bare TCP connect (which a firewall or half-open port would also satisfy) and
+// is exactly how credential-less monitors (Nagios/Zabbix) verify NETCONF/830.
+//
+// A genuine *active NETCONF session count* would need the authenticated
+// RFC 6022 ietf-netconf-monitoring /netconf-state/sessions <get> — that requires
+// a full SSH client (golang.org/x/crypto/ssh), which is outside the backend's
+// stdlib-only budget; the banner probe is the faithful stdlib-only layer.
+func sshBannerProbe(ctx context.Context, addr string, _ Target) error {
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return err
 	}
-	return c.Close()
+	defer c.Close()
+
+	if dl, ok := ctx.Deadline(); ok {
+		_ = c.SetReadDeadline(dl) // best-effort: a failed deadline set surfaces as a read/write error
+	} else {
+		_ = c.SetReadDeadline(time.Now().Add(3 * time.Second)) // best-effort: a failed deadline set surfaces as a read/write error
+	}
+
+	// The identification string is CRLF-terminated and capped at 255 bytes
+	// (RFC 4253). Read a bounded chunk and look for the "SSH-" prefix; servers
+	// may emit banner/comment lines first, so scan the lines we got.
+	buf := make([]byte, 512)
+	n, err := c.Read(buf)
+	if n == 0 && err != nil {
+		return err
+	}
+	for _, line := range strings.Split(string(buf[:n]), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "SSH-") {
+			return nil // a real SSH/NETCONF transport answered
+		}
+	}
+	return fmt.Errorf("no SSH identification banner from %s", addr)
 }
 
-// snmpProbe sends a real SNMP v2c GET for sysUpTimeInstance and waits for a
-// well-formed reply — a genuine SNMP poll, not just a UDP no-op.
-func snmpProbe(ctx context.Context, addr string) error {
-	community := os.Getenv("SNMP_COMMUNITY")
-	if community == "" {
-		community = "public"
+// snmpProbe does a real SNMP GET of sysUpTime to prove reachability, using the
+// device's resolved credentials — v2c community or full v3 USM. creds() supplies
+// the v2c community fallback (SNMP_COMMUNITY / "public").
+func snmpProbe(ctx context.Context, addr string, t Target) error {
+	_, err := snmpGet(ctx, addr, t.creds(), sysUpTimeOID)
+	return err
+}
+
+// ProbeSNMP is the exported credentialed reachability check — the exact probe
+// the SNMP collectors use (sysUpTime GET, v2c or v3 per the target's fields).
+// The credential sentinel uses it to verify which stored profile a device
+// actually answers. Bounded by ctx.
+func ProbeSNMP(ctx context.Context, t Target) error {
+	return snmpProbe(ctx, withPort(t.Address, 161), t)
+}
+
+// Metric-push accounting. emitMetrics used to swallow EVERYTHING — an unset
+// endpoint, a request-build error, a dead transport — and never looked at the
+// status code, so VictoriaMetrics could reject every sample from all 14 call
+// sites indefinitely with no counter, no log and no health effect. These are
+// the collectors' own "am I being heard?" signal.
+var (
+	metricsPushOK      atomic.Uint64
+	metricsPushFailed  atomic.Uint64
+	metricsPushDropped atomic.Uint64 // no metrics endpoint configured at all
+
+	metricsPushMu      sync.Mutex
+	metricsPushLastErr string
+	metricsPushLogged  time.Time
+	metricsPushNoURL   sync.Once
+)
+
+// pushErrLogEvery bounds push-failure logging: every collector tick calls
+// emitMetrics, so an unfiltered log of a down VictoriaMetrics would emit
+// hundreds of identical lines a minute. The counters carry the rate, the log
+// carries the cause.
+const pushErrLogEvery = time.Minute
+
+// MetricsPushStats reports the outcome of the collectors' own metric pushes:
+// successful pushes, failed ones (transport, request-build, or a non-2xx/3xx
+// reply), pushes dropped for want of a configured endpoint, and the most recent
+// failure text. Exported so the API can publish it on /metrics.
+func MetricsPushStats() (ok, failed, dropped uint64, lastErr string) {
+	metricsPushMu.Lock()
+	lastErr = metricsPushLastErr
+	metricsPushMu.Unlock()
+	return metricsPushOK.Load(), metricsPushFailed.Load(), metricsPushDropped.Load(), lastErr
+}
+
+func notePushFailure(reason string) {
+	metricsPushFailed.Add(1)
+	metricsPushMu.Lock()
+	metricsPushLastErr = reason
+	shouldLog := time.Since(metricsPushLogged) >= pushErrLogEvery
+	if shouldLog {
+		metricsPushLogged = time.Now()
 	}
-	pkt := buildSNMPGet(community, sysUpTimeOID, 1)
-	var d net.Dialer
-	c, err := d.DialContext(ctx, "udp", addr)
-	if err != nil {
-		return err
+	metricsPushMu.Unlock()
+	if shouldLog {
+		log.Printf("collectors: metric push FAILED: %s — collector telemetry (including collector_up, which the CollectorDown alert reads) is not reaching the metric store", reason)
 	}
-	defer c.Close()
-	if dl, ok := ctx.Deadline(); ok {
-		_ = c.SetDeadline(dl)
-	}
-	if _, err := c.Write(pkt); err != nil {
-		return err
-	}
-	buf := make([]byte, 2048)
-	n, err := c.Read(buf)
-	if err != nil {
-		return err
-	}
-	if n < 2 || buf[0] != 0x30 { // expect a SEQUENCE reply
-		return fmt.Errorf("malformed SNMP response")
-	}
-	return nil
 }
 
 // emitMetrics POSTs Prometheus-exposition samples to VictoriaMetrics so the
-// collectors' telemetry shows up in the Metrics Explorer. Best-effort.
-func emitMetrics(body string) {
+// collectors' telemetry shows up in the Metrics Explorer. Best-effort for the
+// caller — it never returns an error — but never SILENT: every outcome is
+// counted (MetricsPushStats) and failures are logged, rate-limited.
+func emitMetrics(ctx context.Context, body string) {
+	if strings.TrimSpace(body) == "" {
+		return // nothing to say this cycle; not a failure
+	}
 	base := os.Getenv("VICTORIA_URL")
 	if base == "" {
 		base = os.Getenv("METRICS_URL")
 	}
-	if base == "" || strings.TrimSpace(body) == "" {
+	if base == "" {
+		metricsPushDropped.Add(1)
+		// Configuration, not a transient fault: say it once, loudly.
+		metricsPushNoURL.Do(func() {
+			log.Print("collectors: neither VICTORIA_URL nor METRICS_URL is set — every collector sample, including collector_up, is being discarded")
+		})
 		return
 	}
 	url := strings.TrimRight(base, "/") + "/api/v1/import/prometheus"
-	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	// #nosec G704 -- url is the operator-configured VICTORIA_URL/METRICS_URL metrics backend, not user input
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
 	if err != nil {
+		notePushFailure("build request: " + err.Error())
 		return
 	}
 	req.Header.Set("Content-Type", "text/plain")
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := meshHTTPClient(5 * time.Second).Do(req)
 	if err != nil {
+		notePushFailure(err.Error())
 		return
 	}
-	_ = resp.Body.Close()
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		// A rejected import (bad line format, over quota, auth) answers 4xx/5xx
+		// and drops every sample in the batch — previously indistinguishable
+		// from success. Quote a bounded slice of the reply so the cause is in
+		// the log, not just the code.
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512)) // best-effort: diagnostic snippet; a read error just leaves it empty
+		notePushFailure(fmt.Sprintf("%s: HTTP %d %s", url, resp.StatusCode, strings.TrimSpace(string(snippet))))
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10)) // best-effort: drain for connection reuse
+	metricsPushOK.Add(1)
 }
 
 // ---- minimal BER encoding for the SNMP v2c GET ----------------------------

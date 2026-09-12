@@ -1,0 +1,19 @@
+-- Rollback for 0048_bgp_origin_baseline.sql.
+--
+-- NOTE for the operator: dropping this table removes every tenant's recorded
+-- origin baseline, including the ones an operator explicitly accepted. The
+-- watchlist evaluator keeps working, but on any prefix with no declared
+-- expected origin it falls back to re-deriving the baseline from each pass, and
+-- an origin change that has reached every vantage point classifies clean again.
+-- Worse, if the table is later recreated, the next measurement of each prefix
+-- is treated as a first observation and records whatever is being announced at
+-- that moment as the new baseline. Export the rows first if the intent is a
+-- version rollback rather than a feature removal.
+DROP TABLE IF EXISTS bgp_origin_baseline;
+
+-- The migrator is FORWARD-ONLY: db.go applies migrations/*.sql in lexical order
+-- and records each version in schema_migrations, and it never removes a row.
+-- Leaving the row behind is what makes a rollback silently unrecoverable — the
+-- migration is still recorded as applied, so it never re-applies, and the API
+-- boots HEALTHY against the schema this file just took away.
+DELETE FROM schema_migrations WHERE version = '0048_bgp_origin_baseline.sql';

@@ -1,0 +1,30 @@
+{
+  "name": "IP allocation failures + pending pods, subnet nearly full: pod IP exhaustion",
+  "signals": [
+    {
+      "kind": "k8s_ip_alloc_fail",
+      "entity_type": "service",
+      "entity_id": "prod-cluster/payments",
+      "observer_id": "k8s-api",
+      "observer_type": "cloud_api",
+      "modality": "control_plane",
+      "collection_path": "via_cloud_api",
+      "deviation": 3.0
+    },
+    {
+      "kind": "k8s_pod_pending",
+      "entity_type": "service",
+      "entity_id": "prod-cluster/payments",
+      "observer_id": "k8s-api",
+      "observer_type": "cloud_api",
+      "modality": "control_plane",
+      "collection_path": "via_cloud_api",
+      "deviation": 2.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.cloud.k8s-pod-ip-exhaustion",
+    "tier": "suspected",
+    "owner": "app_team"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "Salesforce synthetic HTTP 5xx + independent flow collapse: confirmed app-experience impact (non-Teams, proves generic)",
+  "signals": [
+    {
+      "kind": "synthetic_http_5xx",
+      "entity_type": "service",
+      "entity_id": "salesforce",
+      "observer_id": "syn-nyc",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "probe_authority": "high",
+      "deviation": 3.0
+    },
+    {
+      "kind": "flow_volume_anomaly",
+      "entity_type": "service",
+      "entity_id": "salesforce",
+      "observer_id": "flow-col-2",
+      "observer_type": "flow_exporter",
+      "modality": "passive_flow",
+      "collection_path": "direct",
+      "deviation": 4.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.app.saas-experience-degraded",
+    "tier": "confirmed",
+    "owner": "app_team"
+  }
+}

@@ -1,0 +1,137 @@
+[
+ {
+  "id": "C1",
+  "severity": "critical",
+  "subsystem": "2. short list",
+  "where": "internal/showparse/helpers.go:287",
+  "what": "Device output can kill the API process (`showparse`)",
+  "recommendation": "FIX NOW.",
+  "detail": "`internal/showparse/helpers.go:287`. `valueAfter` finds the marker offset in `strings.ToLower(line)` and then slices the **original** line with that offset. Go's `ToLower` is not length-preserving: U+023A and U+023E each grow from 2 bytes to 3, and an invalid UTF-8 byte becomes a 3-byte U+FFFD. Reproduced against the real parser: `Parse(CmdPlatformUptime, DialectCiscoIOS, \"Cisco IOS Software\\nR\\x81\\x81\\x81\\x81\\x81\\x81\\x81 uptime is 1w\\n\")` panics with `slice bounds out of range [33:21]`. Shorter shifts do not panic, they return the wrong substring silently (`\"R\u023a\u023a uptime is 4 days\"` yields `Uptime = \"days\"`). Nothing upstream sanitises: `splitLines` only caps length, `RedactOutput` preserves invalid bytes, and the SSH runner returns device bytes verbatim. `Parse` is called at `internal/protocoldiag/fanout.go:345` inside a bare worker goroutine, and there is no `recover()` anywhere in `protocoldiag` or `tac`. An unrecovered panic in a non-handler goroutine terminates the process, taking the API, the in-process correlation engine and alert delivery with it. A device that emits one of two code points in its hostname does this. Fix: every marker in the package is ASCII. Do a byte-wise ASCII case-insensitive scan over the original string, and add `if idx+len(marker) > len(line) { return \"\", false }`. Also give `iface.go:379` the `+ \" x\"` sentinel its twelve sibling call sites use. Extend the adversarial test battery past ASCII."
+ },
+ {
+  "id": "C2",
+  "severity": "critical",
+  "subsystem": "2. short list",
+  "where": "internal/ticketing/caseconn_registry.go:192",
+  "what": "One vendor connector instance serves every tenant, and it caches an OAuth bearer with no key",
+  "recommendation": "FIX NOW, or disable the two vendor connectors until it is keyed.",
+  "detail": "`internal/ticketing/caseconn_registry.go:192`, `caseconn_cisco.go:319`, `caseconn_juniper.go:237`. Six findings across two shards and both lenses converge on one root cause. `DefaultCaseConnectorRegistry()` builds exactly one `*CiscoSmartBondingConnector` and one `*JuniperConnector` for the process. It is called once at server start (`protocol_diagnostics.go:1323`, `main.go:3038`), and `TACOpenersFromRegistry` only swaps the per-tenant config resolver; the connector object itself is shared. Both connectors cache the minted bearer in a plain struct field with no key at all. `bearer()` and `auth()` return the cached token whenever it is unexpired, without ever looking at `cfg.Cisco.ClientID` / `cfg.Juniper.ClientID`. Credentials are explicitly per tenant (`caseconn_config.go` header: bring-your-own, per tenant, no shared Correlix identity is permitted by any vendor). Consequences, all reachable with two tenants that have completed vendor onboarding: * Tenant B's support case, device serial, problem description and evidence bundle are filed at Cisco or Juniper under tenant A's OAuth identity, spending A's quota. * `FetchCase` sends only that bearer plus a case number, so B polling a number reads A's case. * The Test button lies. `JuniperConnector.Probe` runs through the same cached token, so a tenant that saves a wrong `client_secret` gets `ProbeOK` with the message \"the vendor answered and accepted the stored credential\", on a credential that was never sent. Separately, `caseco"
+ },
+ {
+  "id": "C3",
+  "severity": "critical",
+  "subsystem": "2. short list",
+  "where": "oidc.go:265",
+  "what": "SSO callback signs you in to any tenant's account with a matching username",
+  "recommendation": "FIX NOW.",
+  "detail": "`oidc.go:265` (and the elevation branch at `:333`). Per-tenant SSO realms landed in this range. `handleTenantSSO` checks the callback URL realm, that the alias is bound to that realm, and that the signed candidate cookie names the same realm. All three checks are about the **connection**. The account is then resolved by bare username in a global namespace: `users.UpsertFederated(username, ...)` refuses only local accounts, and for an existing federated account it **ignores the tenant argument**, merges the incoming IdP's role mapping onto it, and returns the stored user with its original `TenantID`. `internal/users/federated_contract_test.go:79` pins exactly that behaviour. Attack: tenant B's own admin holds `administration:admin` in tenant B. That is enough to `PUT /api/auth/sso/tenant-idp/b-idp` with a discovery URL and client for an IdP they control (`handleTenantIdPPut` stamps `TenantID` from the token and registers it in Keycloak with `trustEmail: true`). They create a user in that IdP named `alice`, sign in at `/t/tenant-b/sso/b-idp/login`, and `mintSession` issues a JWT whose tenant is **tenant A**, because tenant A owns the federated account `alice`. Alice's role and `auth_source` are rewritten on the way through. `federatedLoginBarrier` checks suspension and account policy, not tenancy. `guardFederatedRole` blocks only platform-owner escalation in the global tenant. The cleanest exploit path is a victim provisioned through a non-Keycloak door (native LDAP/TACACS, or "
+ },
+ {
+  "id": "H1",
+  "severity": "high",
+  "subsystem": "2. short list",
+  "where": "internal/dem/experience/incident.go:319",
+  "what": "Every DEM experience incident id changes once per second, so the feature does not work",
+  "recommendation": "FIX NOW.",
+  "detail": "`internal/dem/experience/incident.go:319` and `:394`. `IncidentID` hashes `Window.Start`, and `Assemble` computes `Window.Start` as `Now() - duration` on every request, formatted to RFC3339 second precision. Production wires `Now` to live `time.Now()`. No truncation anywhere in the package. So the id the operator was shown a second ago no longer exists. `HandleIncidentItem` and `handlePromote` re-assemble and match by exact id, which means the incident detail, `/evidence`, `/timeline`, `/path` and `/promote` routes 404 for any real client. A promotion that does land inside the same second stores `ExperienceID` under an id that can never be re-derived, so `ApplyPromotions` never matches, the row stays `promoted: false` forever, and the next escalate raises a **second** platform incident because the dedup key moved. Every test freezes the clock, which is why the suite is green. Fix: truncate the identity window to a stable bucket before hashing. Add a test that derives at T and fetches at T+90s through a moving clock."
+ },
+ {
+  "id": "H2",
+  "severity": "high",
+  "subsystem": "2. short list",
+  "where": "internal/../secapi/list.go:39-54",
+  "what": "The assistant's security-findings tool can only ever answer \"no findings\"",
+  "recommendation": "FIX NOW.",
+  "detail": "`internal/../secapi/list.go:39-54` with `query.go:174`. `ListFindings` is the non-HTTP read path. It validates a caller-built `Filters` but never defaults `Since` / `Until`, while `BuildFilters` emits the `ts` range clause unconditionally. The only caller, `aiSecurityFindings`, builds `Filters{Current: q.Current}` because `ai.FindingsQuery` has no time fields at all. The rendered query is `ts` between `0001-01-01T00:00:00Z` and `0001-01-01T00:00:00Z`, which is a legal `strict_date_optional_time` point range that matches nothing. An operator asking Iris \"what security findings does this device have\" gets an empty list and a clean answer over a tenant with failing criticals. That is the false clear `ErrNoSearch` was written to prevent, arriving through the other door. Invisible to tests because the fake OpenSearch ignores the request body. Fix: default the window inside `ListFindings` exactly as `ParseFilters` does, and assert on the emitted body rather than on the fake's canned response."
+ },
+ {
+  "id": "H3",
+  "severity": "high",
+  "subsystem": "2. short list",
+  "where": "internal/bgpwatch/evaluate.go:443",
+  "what": "BGP watch closes a live hijack incident when the lookup merely fails",
+  "recommendation": "FIX NOW.",
+  "detail": "`internal/bgpwatch/evaluate.go:443`. `applyIncident` treats `ClassUnknown` (we could not measure) identically to `ClassNone` (we measured and it is fine). An RIPEstat 502 turns the next pass into `Measured: false`, which classifies `ClassUnknown`, which dispatches `Alert{Resolved: true, Summary: \"Cleared: 193.0.0.0/21 is no longer classified origin_change.\"}` on the same dedup id. PagerDuty closes the incident. The hijack is still live and nobody is looking. `resolveAlert` also deletes the cool-down stamp, so a flapping upstream produces fire, false clear, fire, false clear with the 60-minute floor bypassed: up to 288 alerts a day on one prefix. This directly contradicts the file's own header, which states that \"we could not look\" is never rendered as \"we looked and it is fine\". Fix: resolve only when `inc.Class == ClassNone`. On `ClassUnknown` keep the incident and its cool-down, and if anything is emitted at all, emit a distinct \"no longer being measured\" notice that is not `Resolved: true`."
+ },
+ {
+  "id": "H4",
+  "severity": "high",
+  "subsystem": "2. short list",
+  "where": "internal/bgpwatch/classify.go:319",
+  "what": "BGP origin baseline is re-learned every pass, so a full hijack classifies as clean",
+  "recommendation": "Honesty fix tonight, persistence work filed.",
+  "detail": "`internal/bgpwatch/classify.go:319`. With `expected_origins` undeclared, which is the shipped default, `Classify` derives the baseline from the **current** observation's dominant origin. `Classify` is pure and stateless, and nothing anywhere persists a learned origin: the only `SetPolicy` caller in the backend is the operator's PUT handler. So when a hijacker wins the majority of vantage points, their ASN becomes the baseline in the same pass, the tenant's own ASN falls below `MinVantages` and is filed as a shortfall, and the verdict is `ClassNone` with the summary \"Announced as expected; RPKI clean; visibility normal.\" No alert, no evidence record. Only RPKI-invalid remains as a net, and that is blind for space with no ROA. Meanwhile `GET /policy` tells the operator the baseline is \"LEARNED from the first observation\" and the UI renders a \"guessed baseline\" chip saying the same. Tonight: stop the claim. Change the API note and the UI tooltip so an operator knows that with no declared origin, detection is limited to minority-vantage divergence. Then file the real fix: persist the first-observation baseline per (tenant, prefix) and classify against it."
+ },
+ {
+  "id": "H5",
+  "severity": "high",
+  "subsystem": "2. short list",
+  "where": "internal/showparse/iface.go:66",
+  "what": "An unrecognised interface header merges one port's error counters onto another port",
+  "recommendation": "FIX NOW.",
+  "detail": "`internal/showparse/iface.go:66` and `:171`. `parseCiscoInterfaces` only resets the current record on a header whose state phrase is in the closed `ciscoStateWord` set. Arista's \"administratively down, line protocol is down (disabled)\" and NX-OS's \"down (Link not connected)\" are not in it, so those headers are treated as body text. The counter assignments below are unconditional, so the refused interface's `input errors` / `CRC` / `output errors` overwrite the **previous** interface's, and the refused interface disappears entirely. Reproduced: an EOS capture with Ethernet1 up and Ethernet2 admin-down yields one row, `Ethernet1 up/up` with `inErr=15000 crc=15000`. Those are Ethernet2's numbers. `if-state` is not wrapped in `requiring(\"{if}\")`, so the untargeted battery really does collect the multi-interface capture, and that row feeds protocol-diagnostics evidence and the TAC bundle. An RCA verdict and a vendor case can be opened against the wrong interface. This is the exact fabrication the package header says it exists to prevent. Fix: make the record boundary independent of the state vocabulary. An unindented line that splits on \" is \" with a single-token name flushes and clears the current record even when the phrase is unknown, so an unrecognised interface yields no row instead of poisoning its predecessor. Then also add the missing EOS and NX-OS phrases."
+ },
+ {
+  "id": "H6",
+  "severity": "high",
+  "subsystem": "2. short list",
+  "where": "internal/configstore/diff.go:284",
+  "what": "The config diff endpoint returns private keys that the version endpoint masks",
+  "recommendation": "FIX NOW.",
+  "detail": "`internal/configstore/diff.go:284`. `renderUnified` redacts each emitted line with `RedactLine`, which applies only the keyword-anchored single-line rules. The PEM begin/end state machine and `isHexBlobLine` live in `Redact()` and are never applied to a diff. Probed the rule set directly: no rule in `secretCommon`, `secretRules[Cisco]` or `secretRules[SRLinux]` matches a bare base64 PEM body line or a Cisco `crypto pki certificate chain` hex line. So a device that rotates its TLS or SSH key produces a diff whose `unified` field carries both key bodies verbatim to any same-tenant `infrastructure:read` caller, while the audit record for that read is stamped `\"redacted\": true`. The same bytes read through `GET /config/versions/{sha}` are masked. It gets worse on the degraded path: past `maxEditDistance` the differ emits `blockReplace`, dumping up to 4,000 lines of both configs. The package's own tests treat this as a leak (`dialect_test.go:205` \"SECRET LEAK: PEM body survived\"), and `redact.go:180` documents a previous published-PEM bug. Fix: factor the block state machine into a stateful line redactor and drive `renderUnified` through it. Note that redacting the finished unified body is not sufficient, because the `+`/`-` prefixes break `isHexBlobLine` and interleaved lines corrupt the `inPEM` state."
+ },
+ {
+  "id": "H7",
+  "severity": "high",
+  "subsystem": "2. short list",
+  "where": "internal/configstore/store.go:278",
+  "what": "A capture outage deletes the device's whole configuration history",
+  "recommendation": "FIX NOW.",
+  "detail": "`internal/configstore/store.go:278` with `manager.go:550` and `:471`. `recordFailure` writes a new version row per failed attempt, keyed by a time-derived synthetic SHA, so each attempt is a new row rather than an upsert. Every failure path returns before `m.prune`, so nothing is pruned during the outage. Both store backends count failure rows against the per-device `KeepVersions` budget. So: capture account expires, 15-minute sweeps run for a month, roughly 2,900 failure rows accumulate for one device. Credentials are fixed, one capture succeeds, and `prune` runs with `keep=30` over a newest-first ordering. The 30 rows kept are the new version plus 29 failure rows. All 30 previous good versions are returned in `removed`, and the manager deletes their sealed blobs. The diff and rollback artifact the module exists to produce is gone, and only a `pruned_total` counter moves. Fix: give failure rows their own small budget, skip them when counting against `keep`, and call `m.prune` on the failure path so a long outage cannot grow the register without limit."
+ },
+ {
+  "id": "H8",
+  "severity": "high",
+  "subsystem": "2. short list",
+  "where": "internal/metering/store.go:293",
+  "what": "A metering read concurrent with the hourly snapshot crashes the API",
+  "recommendation": "FIX NOW if any deployment runs `STORE_BACKEND=file`.",
+  "detail": "`internal/metering/store.go:293`. `collectRange` appends `r.Seal()`, which only nils `Open` on a struct copy. The `Meters` map header is still the store's live map, and `List` releases `s.mu` before the caller touches it. The `metering-snapshot` worker then takes the lock and writes into that same map through `Fold`. `GET /api/system/licence/usage` iterates and JSON-encodes those maps with the mutex released. The Go runtime detects it and calls `throw(\"concurrent map read and map write\")`, which is unrecoverable: the process dies, taking every collector and the alert receiver with it. The narrower interleaving instead serialises a torn row into an **ed25519-signed** usage report. `PGStore` is unaffected (it unmarshals a fresh record per row), so this is file-backend only. No metering test starts a goroutine, so `-race` never sees it. Fix: deep-copy the meters map in `collectRange` (or have `Fold` allocate a fresh map per call, which also removes the partial-mutation hazard). Add a `-race` test running `Record` and `List` concurrently."
+ },
+ {
+  "id": "H9",
+  "severity": "high",
+  "subsystem": "2. short list",
+  "where": "internal/oslog/oslog.go:35",
+  "what": "Security findings are readable through `/api/logs/search`, which has no permission gate",
+  "recommendation": "FIX NOW.",
+  "detail": "`internal/oslog/oslog.go:35`. `IndexBase` now maps the caller-supplied signals `secfindings` and `security` onto the `netops-secfindings-*` family. Before this hunk those signals fell to the default base and named indices that do not exist. `handleLogsSearch` calls `requirePerm` zero times. `logsScope` gates only the `applogs` signal on platform ownership. So `GET /api/logs/search?signal=security` returns the tenant's CTEM findings, severities and device names to any principal that authenticates, including a `RoleIngest` key from the first-party RUM snippet, which the code itself describes as a credential printed on a billboard, and whose permission grid is `LevelNone` everywhere. The dedicated door is gated twice: `infrastructure:read` plus `licenceFeature(FeatureSecurityFindings)`. The router indexes findings unconditionally, so on Community tier the paid surface answers 402 while this one answers 200. Scoping still holds (own tenant plus untagged), so this is a permission and licence bypass within the tenant, not a cross-tenant leak. Fix: refuse `secfindings` / `security` at the `logsScope` chokepoint. The comment added at `oslog.go:39` already says the family is deliberately not part of log search; the free-form `signal` parameter does not enforce it. Ship a test pinning the reachable signal set."
+ },
+ {
+  "id": "H10",
+  "severity": "high",
+  "subsystem": "2. short list",
+  "where": "alert_episodes.go:101",
+  "what": "Digital Experience alerts carry a tenant's target names to every tenant",
+  "recommendation": "FIX NOW while `FEATURE_DEM` is on in the lab.",
+  "detail": "`alert_episodes.go:101`. The new `noc-experience` rules aggregate by `(tenant, target, kind, site, app)` and deliberately carry no `device` label. The in-API engine loads the same rules file and evaluates them in process, so the alert is built with `DeviceID: \"\"` and a summary such as \"Experience target shop.acme.com (https) p95 is 812 ms, over its declared budget\". The S17 exception added in this range stamps the owning tenant on the episode. That does not isolate anything, because every consumer treats an empty device as platform-global and visible to everyone: `EpisodeStore.List` short-circuits on `ep.Resource == \"\"`, and the same `a.DeviceID == \"\"` escape appears in `main.go:4160`, `tenancy.go:347`, `dashboard.go:81`, `graphql.go:194`, `topology_view.go:138` and `report_scheduler.go:553`. The existing isolation test asserts device-less rows **must** stay visible, which confirms the stamp changes nothing. So a read-only user of tenant B sees tenant A's id, target hostname, site name, app name and latency numbers. Fix: make device-less mean platform-global only when the episode has no tenant owner, and change the shared alert visibility rule to consult `alertTenant(a)` rather than `DeviceID` alone. Ship the isolation test alongside it."
+ },
+ {
+  "id": "H11",
+  "severity": "high",
+  "subsystem": "2. short list",
+  "where": "scripts/backup.sh:1097",
+  "what": "`backup.sh` puts the custody passphrase inside the archive it protects",
+  "recommendation": "FIX NOW. One line.",
+  "detail": "`scripts/backup.sh:1097`. Line 181 reads `BACKUP_SEALED_PASSPHRASE` from `deployment/docker/.env`, and the fail-closed refusal at line 890 tells the operator to set it there. Under cron that is the only sensible place. Line 1097 builds `env.backup` with `grep -v '^BACKUP_SIGN_KEY=' .env`, which strips exactly one key. The resulting tarball therefore contains `./sealed/sealed-material.tar.gz.enc` (that is `data/swtpm`, which deterministically re-derives the root KEK), `./env.backup` holding the passphrase, and `./sealed/README` with the decrypt command written out. `BACKUP_REMOTE` then ships that one file off the host. Anyone holding it unseals every vault secret. This falsifies the invariant asserted in three places: the README in the archive, `restore.sh:275`, and `docs/runbooks/backup-restore.md` (\"the tarball plus the .env inside it still cannot unseal the vault\"). The existing regression at `tests/test_backup_ship.py:1172` passes vacuously, because the fixture only ever sets the passphrase in the child process environment, never in the fixture `.env`. Fix: `grep -v -E '^(BACKUP_SIGN_KEY|BACKUP_SEALED_PASSPHRASE)=' ...`. Give `BACKUP_PUSH` and `BACKUP_SSH` the same treatment, since they can carry an `sshpass -p` transport. Then make the fixture write the passphrase into `.env` so the test actually covers the cron path."
+ },
+ {
+  "id": "H12",
+  "severity": "high",
+  "subsystem": "2. short list",
+  "where": "",
+  "what": "The \"redacted\" support bundle carries the SMTP password and the Slack webhook",
+  "recommendation": "FIX NOW. One line, plus a design change worth doing.",
+  "detail": "`scripts/support-bundle.sh:482` and `:497`. Both redaction passes key off the same six substrings: `PASSWORD|PASSWD|SECRET|KEY|TOKEN|DSN`. `SMTP_PASS`, `SLACK_WEBHOOK_URL`, `SRL_GNMI_PASS`, `EOS_GNMI_PASS` and `TWILIO_ACCOUNT_SID` match none of them. Probed the actual sed: `SMTP_PASS: hunter2` and `SLACK_WEBHOOK_URL: https://hooks.slack.com/...` pass through untouched while `JWT_SECRET` is masked. Pass two cannot rescue them, because its `.env` value extraction uses the same six substrings, so those values never enter the literal list. `docker compose config` resolves all of them into `compose/config.redacted.yml`, which is shipped in a file the script's own header says leaves the host \"without ever carrying a secret\". Fix now: widen the pattern to `PASS(WORD|WD|PHRASE)?|SECRET|KEY|TOKEN|DSN|CRED|WEBHOOK_URL|_SID` in both places. Fix properly: make pass two do what its comment claims, and seed the literal list from **every** non-empty `.env` value of eight characters or more, minus an explicit allowlist of known-public keys (ports, image tags, profiles, limits). That is the only form that survives the next variable nobody anticipated."
+ }
+]

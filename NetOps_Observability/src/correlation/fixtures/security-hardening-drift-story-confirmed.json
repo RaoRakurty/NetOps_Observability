@@ -1,0 +1,15 @@
+{
+  "name": "Hardening control failed (security lane) + link state change (syslog) on ONE device: hardening drift story confirmed",
+  "comment": "T2b. The posture family: a benchmark/own-rule verdict against captured config, corroborated by a control-plane transition on the same box — the 'did the same change cause both?' story.",
+  "signals": [
+    {"kind": "security_posture", "entity_type": "device", "entity_id": "core-01",
+     "observer_id": "security:netrule", "observer_type": "platform",
+     "modality": "security", "collection_path": "via_aggregator",
+     "attrs": {"evidence_class": "security", "control_id": "CIS-IOS-1.1.4",
+               "status": "Fail"}},
+    {"kind": "link_state_change", "entity_type": "device", "entity_id": "core-01",
+     "observer_id": "syslog-core-01", "observer_type": "device",
+     "modality": "control_plane", "collection_path": "direct", "ts_offset_s": 45}
+  ],
+  "expect": {"top": "sig.ent.security.hardening-drift-story", "tier": "confirmed", "owner": "netops"}
+}

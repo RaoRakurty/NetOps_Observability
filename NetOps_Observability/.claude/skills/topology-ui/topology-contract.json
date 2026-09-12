@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Correlix Topology Contract",
+  "type": "object",
+  "required": ["view_id", "mode", "generated_at", "nodes", "edges"],
+  "properties": {
+    "view_id": { "type": "string" },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "explore",
+        "investigate",
+        "path_trace",
+        "change_review",
+        "capacity",
+        "dependency",
+        "executive_geo"
+      ]
+    },
+    "scope": { "type": "object" },
+    "layout_type": { "type": "string" },
+    "generated_at": { "type": "string" },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "kind"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "kind": { "type": "string" },
+          "role": { "type": "string" },
+          "vendor": { "type": "string" },
+          "model": { "type": "string" },
+          "site": { "type": "string" },
+          "rack": { "type": "string" },
+          "mgmt_ip": { "type": "string" },
+          "health": {
+            "type": "string",
+            "enum": ["ok", "warning", "critical", "unknown", "maintenance"]
+          },
+          "owner": { "type": "string" },
+          "confidence": { "type": "number" },
+          "first_seen": { "type": "string" },
+          "last_seen": { "type": "string" },
+          "change_state": { "type": "string" },
+          "metrics": { "type": "object" },
+          "evidence": { "type": "array" }
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "source", "target", "relationship"],
+        "properties": {
+          "id": { "type": "string" },
+          "source": { "type": "string" },
+          "target": { "type": "string" },
+          "source_port": { "type": "string" },
+          "target_port": { "type": "string" },
+          "relationship": { "type": "string" },
+          "protocol": { "type": "string" },
+          "status": { "type": "string" },
+          "utilization_pct": { "type": "number" },
+          "confidence": { "type": "number" },
+          "first_seen": { "type": "string" },
+          "last_seen": { "type": "string" },
+          "change_state": { "type": "string" },
+          "evidence": { "type": "array" }
+        }
+      }
+    },
+    "groups": { "type": "array" },
+    "overlays": { "type": "array" },
+    "legend": { "type": "object" }
+  }
+}

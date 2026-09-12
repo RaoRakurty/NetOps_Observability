@@ -1,0 +1,27 @@
+# Copy to terraform.tfvars and fill in. NOTHING here is a secret; AWS
+# credentials come from the environment or an SSO profile, never from a file in
+# this repository.
+#
+# The two admin ARNs are the ones this repository refuses to invent. They must
+# be two DIFFERENT real people with independent access — the whole point is that
+# no single employee's absence makes the compliance archive unmanageable.
+
+bucket_name = "correlix-corresponding-source-archive"
+aws_region  = "eu-west-1"
+
+github_org  = "REPLACE-ME"
+github_repo = "REPLACE-ME"
+
+admin_principal_arns = [
+  "arn:aws:iam::000000000000:role/REPLACE-ME-administrator-1",
+  "arn:aws:iam::000000000000:role/REPLACE-ME-administrator-2",
+]
+
+# GOVERNANCE while validating. Flip to COMPLIANCE only together with
+# scripts/source-retention-policy.json, and read the warning in both files
+# first: COMPLIANCE cannot be undone by anyone for the retention period.
+object_lock_mode        = "GOVERNANCE"
+default_retention_years = 10
+
+create_cloudtrail     = true
+cloudtrail_log_bucket = "REPLACE-ME-cloudtrail-logs"

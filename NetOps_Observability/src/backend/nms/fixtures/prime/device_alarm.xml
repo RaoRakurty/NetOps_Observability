@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<queryResponse type="Alarm" responseType="listEntityInstances">
+  <entity dtoType="alarmDTO" type="Alarm">
+    <alarmDTO>
+      <objectId>90210</objectId>
+      <severity>Critical</severity>
+      <category>Device</category>
+      <source>Router-WAN-7</source>
+      <deviceName>Router-WAN-7</deviceName>
+      <deviceIpAddress>10.20.30.40</deviceIpAddress>
+      <eventType>DEVICE_UNREACHABLE</eventType>
+      <message>Device Router-WAN-7 is unreachable</message>
+      <timeStamp>1751540360000</timeStamp>
+      <acknowledged>false</acknowledged>
+    </alarmDTO>
+  </entity>
+</queryResponse>

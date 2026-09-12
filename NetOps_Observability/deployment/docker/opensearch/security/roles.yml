@@ -1,0 +1,256 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+---
+# SEC-008.1 — MINIMAL role model (owner steer §0a: "one user per client
+# identity scoped to the index patterns it actually touches, and nothing
+# more"). Explicitly NOT per-tenant roles: tenant scoping is per-tenant
+# indices + osTenantFilter in the application, and it STAYS there (HLD §4
+# design law — workload identity is not a tenant boundary).
+#
+# Index-pattern discipline: every role names the concrete lanes its client
+# writes or reads. A new lane needs a deliberate edit here, which is the
+# point — an unlisted index is a 403, not a silent success.
+
+_meta:
+  type: "roles"
+  config_version: 2
+
+# The api: reads every netops lane (log search, RCA evidence, exports) and
+# writes the ones it owns (audit, saved objects, deadletter replays).
+netops_api:
+  reserved: false
+  cluster_permissions:
+    - "cluster_composite_ops"
+    - "cluster:monitor/health"
+    - "cluster:monitor/state"
+    # Repository DISK HEADROOM (2026-09-03). The Data Protection page reports how
+    # much room the snapshot repository actually has, because disk headroom is
+    # the failure class behind the 2026-08-27 incident: a filesystem repository
+    # sharing a disk with the data it protects, a 14-snapshot retention whose
+    # union spans ~28 days of indices, and an operator freeing space with `rm`.
+    # A page that cannot show the number cannot warn about it.
+    #
+    # The api cannot measure it directly — it does not mount
+    # data/opensearch-snapshots — so it asks OpenSearch, which does, via
+    # GET /_nodes/stats/fs. That call needs this one privilege. It is a READ of
+    # aggregate node statistics (filesystem totals, heap, thread pools); it
+    # exposes no index content, no document, no tenant data, and grants no
+    # write anywhere. Narrower than the alternative of mounting the repository
+    # path into the api container, which would hand the api the very tree it is
+    # meant to protect.
+    - "cluster:monitor/nodes/stats"
+    - "indices:data/read/scroll*"
+    # Backup & DR surface (#150, widened 2026-09-03): the api is the GUI's thin
+    # truthful view over the snapshot posture — read repo + snapshots (the DR
+    # status panel 403'd here from the day SEC-008 went live, misreporting a
+    # healthy repo as broken) and manage the netops-daily SM policy
+    # (enable/disable, schedule, retention).
+    #
+    # 2026-09-03 — THE OWNER REVERSED THE "policy CRUD only" RULE. The previous
+    # comment here said snapshot create/restore/delete stay OUT of this role and
+    # restore is runbook-only; snapshots must now be manageable from the GUI, so
+    # verify/create/delete/restore are granted below. What keeps that safe is
+    # NOT the cluster grant but the INDEX scoping:
+    #   * restore targets are confined to the restored-* and probe-* namespaces
+    #     (the index_permissions block further down), so a restore can never
+    #     overwrite a live netops-* index except through the explicitly
+    #     type-to-confirm'd in_place path;
+    #   * in_place is exactly why indices_all on netops-* is NOT granted —
+    #     instead the netops-* block gets the MINIMUM that path needs:
+    #     indices:admin/close, indices:admin/open, indices:admin/delete;
+    #   * the restorability probe restores into probe-* and deletes it again,
+    #     which is the only thing that can prove a snapshot is restorable
+    #     (2026-08-27: seven days of unrestorable restore points, and nothing
+    #     noticed because nothing ever tried a restore).
+    #
+    # THESE CHANGES TAKE EFFECT ONLY AFTER THE opensearch-security-init
+    # CONTAINER RE-RUNS securityadmin. Editing this file alone changes nothing
+    # in a running cluster — the api will keep 403ing until the security config
+    # is reloaded.
+    - "cluster:admin/repository/get"
+    - "cluster:admin/repository/verify"
+    - "cluster:admin/snapshot/get"
+    - "cluster:admin/snapshot/status"
+    - "cluster:admin/snapshot/create"
+    - "cluster:admin/snapshot/delete"
+    - "cluster:admin/snapshot/restore"
+    - "cluster:admin/opensearch/snapshot_management/policy/get"
+    - "cluster:admin/opensearch/snapshot_management/policy/write"
+    - "cluster:admin/opensearch/snapshot_management/policy/explain"
+    - "cluster:admin/opensearch/snapshot_management/policy/start"
+    - "cluster:admin/opensearch/snapshot_management/policy/stop"
+  index_permissions:
+    - index_patterns: ["netops-*"]
+      allowed_actions:
+        - "read"
+        - "search"
+        - "indices:admin/mappings/get"
+        - "indices:admin/get"
+        - "indices:monitor/settings/get"
+        # MEASURED bytes on disk (tracker 204, 2026-09-06). `_cat/indices` — the
+        # only per-index size source OpenSearch offers — needs this one action,
+        # and without it the api 403s: `no permissions for
+        # [indices:monitor/stats]`. That is not a hypothetical; it is what the
+        # live TLS install returned when the storage meter was first pointed at
+        # it, which is also why /api/logs/indices had nothing to enumerate.
+        #
+        # It is a READ of aggregate per-index STATISTICS (doc count, store size,
+        # segment counts) on indices this role can already read in full. It
+        # exposes no document, no field and no tenant data beyond what `read`
+        # already grants, and it is write-nothing. The narrower alternative —
+        # the node-level `indices.store.size_in_bytes` this role can already
+        # reach — yields a PLATFORM TOTAL with no per-tenant attribution, which
+        # is exactly the number tracker 204 says must not be presented as a
+        # tenant's storage. The api keeps that as an explicitly-labelled
+        # fallback for installations whose security config predates this line.
+        #
+        # THIS CHANGE TAKES EFFECT ONLY AFTER THE opensearch-security-init
+        # CONTAINER RE-RUNS securityadmin. Editing this file alone changes
+        # nothing in a running cluster.
+        - "indices:monitor/stats"
+        # The MINIMUM an in_place restore needs on the live lanes, and nothing
+        # more (2026-09-03). OpenSearch refuses to restore over an OPEN index,
+        # so the api closes the targets, restores, and reopens them; the delete
+        # is what a restore performs on the index it replaces. Deliberately NOT
+        # "indices_all": the api must never be able to write or reindex a live
+        # lane, only to close/open/replace one through the confirmed restore
+        # path.
+        - "indices:admin/close"
+        - "indices:admin/open"
+        - "indices:admin/delete"
+    - index_patterns: ["netops-audit-*", "netops-saved-*", "netops-deadletter-*"]
+      allowed_actions:
+        - "crud"
+        - "create_index"
+    # F-11: the quarantine workflow — list metadata (read comes with the
+    # netops-* block above), tombstone after re-attribution (delete). The api
+    # never writes quarantine docs; only the router's sink does.
+    - index_patterns: ["netops-quarantine-*"]
+      allowed_actions:
+        - "crud"
+    # Restore + probe namespaces (2026-09-03). A renamed restore lands under
+    # restored-*; the restorability probe restores into probe-* and deletes it
+    # again. Both are disposable namespaces that hold NO live telemetry, which
+    # is what makes indices_all acceptable here and unacceptable on netops-*.
+    # The api's own grammar refuses any rename prefix outside restored-*, so a
+    # request that tried to land elsewhere is a 400 before it is a 403.
+    - index_patterns: ["restored-*", "probe-*"]
+      allowed_actions:
+        - "indices_all"
+
+# vector-router: the log-ingest writer. Write-only on the lanes it sinks;
+# no read, no cluster admin. TELEMETRY-CRITICAL — a wrong credential here
+# stops ALL app-log and syslog indexing (assert on doc counts, never on
+# "no errors": the .label mapping-conflict incident proved logs stay quiet).
+netops_writer:
+  reserved: false
+  cluster_permissions:
+    - "cluster_composite_ops"
+    - "indices:data/write/bulk"
+  index_permissions:
+    - index_patterns:
+        - "netops-applogs-*"
+        - "netops-platformlogs-*"
+        - "netops-syslog-*"
+        - "netops-snmptrap-*"
+        - "netops-cloudlogs-*"
+        - "netops-flows-*"
+        # P3-L1 security findings (netops.security → opensearch_secfindings).
+        # Missing from this list until 2026-09-03, which made the whole lane
+        # WRITE-DEAD on every TLS install: the bulk request 403'd with
+        # `no permissions for [indices:admin/create]`, Vector classed it
+        # non-retriable and DROPPED the batch — no index, no error anyone
+        # looked at, and the CTEM funnel silently empty. Same three actions as
+        # every other lane: write + create the daily index + let the template's
+        # mapping be installed on first write.
+        - "netops-secfindings-*"
+        - "netops-deadletter-*"
+        # F-11: TENANT_UNATTRIBUTABLE envelopes (payload sealed under the
+        # quarantine key). Absent from this list, the sink 403s and
+        # quarantined events would be LOST silently — write-only like every
+        # other lane.
+        - "netops-quarantine-*"
+      allowed_actions:
+        - "write"
+        - "create_index"
+        - "indices:admin/mapping/put"
+
+# correlation: reads evidence lanes to build findings; writes none of them.
+netops_correlation:
+  reserved: false
+  cluster_permissions:
+    - "cluster_composite_ops_ro"
+  index_permissions:
+    - index_patterns: ["netops-syslog-*", "netops-snmptrap-*", "netops-applogs-*", "netops-flows-*"]
+      allowed_actions:
+        - "read"
+        - "search"
+
+# opensearch-init: templates, ISM policies, snapshot repo/policy, replica
+# settings — cluster-admin scoped to what the bootstrap actually does.
+netops_bootstrap:
+  reserved: false
+  cluster_permissions:
+    - "cluster_manage_index_templates"
+    - "cluster:admin/ism/*"
+    - "cluster:admin/opendistro/ism/*"
+    - "cluster:admin/repository/*"
+    - "cluster:admin/snapshot/*"
+    # Snapshot Management is its own action namespace — the daily DR policy
+    # (netops-daily) writes through it, and without this the bootstrap 403s
+    # while everything else succeeds: backups would silently stop being
+    # scheduled. Found by the loud failure this role model is designed to
+    # produce (2026-08-05).
+    - "cluster:admin/opensearch/snapshot_management/*"
+    # Cluster settings: the bootstrap pins ISM history shard/replica settings
+    # (F-07/F-53 — a replica that can never be assigned pins the cluster
+    # yellow forever, destroying yellow as an alarm signal).
+    - "cluster:admin/settings/update"
+    - "cluster:monitor/health"
+    - "cluster:monitor/state"
+    - "cluster_composite_ops"
+  index_permissions:
+    - index_patterns: ["netops-*", ".opendistro-ism-*", ".opensearch-sap*"]
+      allowed_actions:
+        - "indices_all"
+    # security-auditlog-*: the bootstrap pins its replica posture and attaches
+    # the retention policy (born-yellow + unbounded daily growth, 2026-08-05).
+    # Settings + ISM attach ONLY — the bootstrap can neither read nor delete
+    # audit evidence.
+    - index_patterns: ["security-auditlog-*"]
+      allowed_actions:
+        - "indices:admin/settings/update"
+        - "indices:monitor/settings/get"
+        - "indices:admin/opensearch/ism/managedindex"
+
+# vector-aggregator: the F-17 stats scraper. Polls _nodes/stats and
+# _cluster/health to turn OpenSearch's per-document rejection counters into
+# metrics (the "cluster looks healthy while dropping every doc" defense).
+# Cluster-monitor ONLY — no index data access at all: a leaked scraper
+# credential reads operational counters, never a log line.
+netops_monitor:
+  reserved: false
+  cluster_permissions:
+    - "cluster:monitor/health"
+    - "cluster:monitor/nodes/stats*"
+
+# OpenSearch Dashboards: operator-facing read of the lanes + its own
+# .kibana index (which it must own outright).
+netops_dashboards:
+  reserved: false
+  cluster_permissions:
+    - "cluster_composite_ops"
+    - "cluster:monitor/health"
+    - "cluster:monitor/state"
+    - "cluster:monitor/nodes/*"
+  index_permissions:
+    - index_patterns: ["netops-*"]
+      allowed_actions:
+        - "read"
+        - "search"
+        - "indices:admin/mappings/get"
+        - "indices:admin/get"
+    - index_patterns: [".kibana*", ".opensearch-dashboards*"]
+      allowed_actions:
+        - "indices_all"

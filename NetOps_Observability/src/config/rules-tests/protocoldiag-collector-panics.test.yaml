@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# promtool unit tests for ProtocolDiagCollectorPanics (tracker 284).
+#
+# The rule watches netops_protocoldiag_collector_panics_total, the counter the
+# parser-panic containment fix added. The counter was proven to reach /metrics
+# and to be scraped, and then nothing read it, so a device that panicked a
+# parser on every poll was contained, counted and unreported.
+#
+# What these cases pin, and why each one matters:
+#
+#   (a) a healthy install is SILENT. The counter is exported on every scrape
+#       as a zero, so a rule written as `> 0` on the raw counter instead of on
+#       its increase would fire on every installation forever. That is the
+#       mistake this file exists to catch.
+#   (b) panics happening now FIRE, after the `for` and not before.
+#   (c) panics that STOPPED clear on their own once the window has passed, so
+#       an old bug does not sit in the alert list after it was fixed.
+#   (d) an api RESTART does not fabricate an alert. The counter is per-process
+#       and resets to zero on a restart; increase() must read that as a reset,
+#       not as a jump.
+#
+# TIMEBASE. promtool's synthetic clock starts at Unix epoch 0, so eval_time T
+# is exactly T seconds.
+#
+# Paths are as mounted by the preflight docker run.
+rule_files:
+  - /etc/prometheus/rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # (a) THE HEALTHY-INSTALL GUARD. A flat zero is the normal state of every
+  #     installation. It must never fire.
+  - interval: 1m
+    input_series:
+      - series: 'netops_protocoldiag_collector_panics_total{job="netops-api",instance="api:8080"}'
+        values: "0x180"
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: ProtocolDiagCollectorPanics
+        exp_alerts: []
+
+  # (b) PANICKING NOW: one panic per minute, the shape of a device that fails a
+  #     parser on every poll. Silent at 3m because `for: 5m` has not elapsed,
+  #     firing at 10m.
+  - interval: 1m
+    input_series:
+      - series: 'netops_protocoldiag_collector_panics_total{job="netops-api",instance="api:8080"}'
+        values: "0+1x180"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ProtocolDiagCollectorPanics
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: ProtocolDiagCollectorPanics
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tier: warning
+              job: netops-api
+              instance: api:8080
+            exp_annotations:
+              summary: "a show-output parser panicked while collecting protocol diagnostics — the api survived and the device was marked failed, but that device returns no diagnostics until the parser is fixed"
+              description: "The collector recovers a panicking parser rather than letting it end the process, so this is contained, not an outage. It is still a bug: a parser met device output it could not handle. The api log carries the panic value and the stack under \"protocoldiag\", with the device and the command that produced it. Expect the affected device to read `failed` in a battery run, with a note saying why, while every other device in the run is unaffected."
+
+  # (c) STOPPED: three panics in the first three minutes and nothing after. It
+  #     fires while they are inside the 30m window and clears once they leave
+  #     it, so a fixed parser does not leave a permanent entry.
+  - interval: 1m
+    input_series:
+      - series: 'netops_protocoldiag_collector_panics_total{job="netops-api",instance="api:8080"}'
+        values: "0 1 2 3 3x180"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ProtocolDiagCollectorPanics
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tier: warning
+              job: netops-api
+              instance: api:8080
+            exp_annotations:
+              summary: "a show-output parser panicked while collecting protocol diagnostics — the api survived and the device was marked failed, but that device returns no diagnostics until the parser is fixed"
+              description: "The collector recovers a panicking parser rather than letting it end the process, so this is contained, not an outage. It is still a bug: a parser met device output it could not handle. The api log carries the panic value and the stack under \"protocoldiag\", with the device and the command that produced it. Expect the affected device to read `failed` in a battery run, with a note saying why, while every other device in the run is unaffected."
+      - eval_time: 1h30m
+        alertname: ProtocolDiagCollectorPanics
+        exp_alerts: []
+
+  # (d) A RESTART IS NOT A PANIC. The counter climbs to 5, the api restarts and
+  #     it returns to zero and stays there. increase() must read the drop as a
+  #     counter reset; anything else invents panics out of a restart. Evaluated
+  #     well past the window so the pre-restart panics are out of it too.
+  - interval: 1m
+    input_series:
+      - series: 'netops_protocoldiag_collector_panics_total{job="netops-api",instance="api:8080"}'
+        values: "0 1 2 3 4 5 0x180"
+    alert_rule_test:
+      - eval_time: 1h30m
+        alertname: ProtocolDiagCollectorPanics
+        exp_alerts: []

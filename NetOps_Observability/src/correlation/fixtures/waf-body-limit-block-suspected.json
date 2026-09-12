@@ -1,0 +1,30 @@
+{
+  "name": "Only large POSTs fail at the WAF size boundary: inspection limit",
+  "signals": [
+    {
+      "kind": "waf_body_limit_hit",
+      "entity_type": "service",
+      "entity_id": "api-gw",
+      "observer_id": "waf-logs",
+      "observer_type": "platform",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "synthetic_http_fail",
+      "entity_type": "service",
+      "entity_id": "api-upload",
+      "observer_id": "probe-agent-2",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.security.waf-body-limit-block",
+    "tier": "confirmed",
+    "owner": "app_team"
+  }
+}

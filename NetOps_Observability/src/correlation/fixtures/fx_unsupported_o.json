@@ -1,0 +1,39 @@
+{
+  "name": "fx_unsupported_o \u2014 osfp-incompatible-part",
+  "signals": [
+    {
+      "kind": "transceiver_unsupported",
+      "entity_type": "interface",
+      "entity_id": "leaf9:Et7",
+      "observer_id": "snmp-leaf9",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "link_flap_on_insert",
+      "entity_type": "interface",
+      "entity_id": "leaf9:Et7",
+      "observer_id": "snmp-leaf9",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "part_number_not_qualified",
+      "entity_type": "interface",
+      "entity_id": "leaf9:Et7",
+      "observer_id": "snmp-leaf9",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.osfp-incompatible-part",
+    "tier": "suspected"
+  }
+}

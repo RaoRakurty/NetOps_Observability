@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "vendor": "linux",
+  "display_name": "Linux",
+  "notes": "A Linux host has no vendor running-config, so capture is intentionally empty. The sysDescr text rank is the LAST rung on purpose: a BIG-IP sysDescr embeds 'Linux' and must resolve to f5 first.",
+  "detection": {
+    "sysdescr_contains": [
+      "linux"
+    ],
+    "sysdescr_rank": 150,
+    "os_version_pattern": "(?i)\\bLinux\\s+\\S+\\s+([0-9][0-9A-Za-z.+-]*)"
+  },
+  "dialect": {
+    "vrf_term": "VRF",
+    "vrf_term_keys": [
+      "linux"
+    ]
+  },
+  "profiles": [
+    {
+      "platform": "linux_kernel",
+      "display_name": "Linux kernel",
+      "device_class": [
+        "host"
+      ],
+      "fidelity": "doc_claimed",
+      "detection": {
+        "os_parse": {
+          "product": "linux_kernel",
+          "rank": 10,
+          "sysdescr_contains_any": []
+        }
+      },
+      "capture": {},
+      "advisory": {
+        "provider": "offline-feed",
+        "product_ids": [
+          "linux_kernel"
+        ]
+      },
+      "hardening": {},
+      "threat": {}
+    }
+  ]
+}

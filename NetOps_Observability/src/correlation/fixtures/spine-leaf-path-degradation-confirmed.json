@@ -1,0 +1,40 @@
+{
+  "name": "Fabric link CRC + rack-to-rack probe anomaly: confirmed fabric path degradation",
+  "signals": [
+    {
+      "kind": "if_crc",
+      "entity_type": "interface",
+      "entity_id": "spine1:Eth1/1",
+      "observer_id": "snmp-spine1",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 4.0
+    },
+    {
+      "kind": "probe_rtt_anomaly",
+      "entity_type": "path",
+      "entity_id": "rack1->rack4",
+      "observer_id": "probe-agent-dc",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 3.5
+    },
+    {
+      "kind": "ecmp_member_loss",
+      "entity_type": "device",
+      "entity_id": "leaf1",
+      "observer_id": "syslog-leaf1",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 0.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.fabric.spine-leaf-path-degradation",
+    "tier": "confirmed",
+    "owner": "netops"
+  }
+}

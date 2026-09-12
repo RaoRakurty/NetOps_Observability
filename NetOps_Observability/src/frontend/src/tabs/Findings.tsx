@@ -1,22 +1,60 @@
-import { useEffect, useState } from "react";
-import { api, Finding } from "../services/api";
-import { severityClass, severityRowClass } from "../theme/severity";
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
 
+import { fmtDateTime, parseTs } from "../lib/time";
+import { useEffect, useMemo, useState } from "react";
+import { api, Finding } from "../services/api";
+import { severityClass, severityColor, severityRank } from "../theme/severity";
+import DataTable, { Column } from "../components/DataTable";
+import { useWorkspace } from "../context/workspace";
+import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
+import Logs from "./Logs";
+import { operatorError } from "../lib/errors";
 // Findings are written by the Correlation/AI service into ClickHouse
 // table netops.findings. This tab is a triage queue — most-recent first.
+// Selecting a row opens its full context in the dockable Inspector (shell-v2,
+// #45 §11) with a "View logs" pivot into the bottom drawer; v1 falls back to an
+// inline detail card.
+
+const mono: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 12 };
 
 export default function Findings() {
   const [items, setItems] = useState<Finding[]>([]);
+  // A failed read used to CLEAR the queue to empty next to a pulsing Live chip —
+  // an active claim that the engine found nothing. Track it and say so instead.
+  const [err, setErr] = useState<string | null>(null);
   const [severity, setSeverity] = useState<string>("");
+  const [sel, setSel] = useState<string | null>(null);
+  const ws = useWorkspace();
+
+  const columns = useMemo<Column<Finding>[]>(() => [
+    { key: "ts", header: "Time", width: 168, sortable: true,
+      sortValue: (f) => parseTs(f.ts)?.getTime() || 0,
+      render: (f) => <span style={mono}>{fmtDateTime(f.ts)}</span> },
+    { key: "severity", header: "Severity", width: 92, sortable: true,
+      text: (f) => f.severity, sortValue: (f) => severityRank(f.severity),
+      render: (f) => <span className={`badge ${severityClass(f.severity)}`}>{f.severity}</span> },
+    { key: "kind", header: "Kind", width: 120, sortable: true, text: (f) => f.kind,
+      render: (f) => <span title={f.kind}>{f.kind}</span> },
+    { key: "device", header: "Device", width: 150, sortable: true, text: (f) => f.device ?? "",
+      render: (f) => <span style={mono} title={f.device || ""}>{f.device || "—"}</span> },
+    { key: "component", header: "Component", width: 120, text: (f) => f.component ?? "",
+      render: (f) => <span title={f.component || ""}>{f.component || "—"}</span> },
+    { key: "summary", header: "Summary", text: (f) => f.summary,
+      render: (f) => <span title={f.summary}>{f.summary}</span> },
+    { key: "score", header: "Score", width: 64, align: "right", sortable: true,
+      sortValue: (f) => Number(f.score) || 0, render: (f) => f.score?.toFixed(1) },
+  ], []);
 
   useEffect(() => {
     let alive = true;
     const tick = async () => {
       try {
         const r = await api.findings(200, severity || undefined);
-        if (alive) setItems(r?.data ?? []);
-      } catch {
-        if (alive) setItems([]);
+        if (alive) { setItems(r?.data ?? []); setErr(null); }
+      } catch (e) {
+        // Keep the last good rows on screen; report the failed refresh.
+        if (alive) setErr(operatorError(e, "Findings could not be loaded."));
       }
     };
     tick();
@@ -27,53 +65,128 @@ export default function Findings() {
     };
   }, [severity]);
 
+  // Row → Inspector (shell-v2) or inline card (v1). A finding tied to a device
+  // gets a "View logs" pivot that opens that device's logs in the bottom drawer.
+  const select = (f: Finding) => {
+    setSel(f.id);
+    if (ws.enabled) {
+      ws.openInspector(
+        <FindingDetailBody
+          finding={f}
+          onViewLogs={
+            f.device
+              ? () => ws.openDrawer(<Logs initialQuery={`host:"${f.device}"`} initialSignal="syslog" rangeMinutes={60} />, { title: `Logs · ${f.device}` })
+              : undefined
+          }
+        />,
+        { title: f.summary || f.kind, subtitle: `${f.severity}${f.device ? ` · ${f.device}` : ""}` },
+      );
+    }
+  };
+
+  const selected = !ws.enabled && sel ? items.find((f) => f.id === sel) : undefined;
+
+  const fCrit = items.filter((f) => f.severity === "critical").length;
+  const fWarn = items.filter((f) => f.severity === "warning").length;
+  const fInfo = items.filter((f) => f.severity === "info").length;
   return (
-    <div className="card">
-      <h2>Findings (correlation + anomaly detection)</h2>
-      <div style={{ marginBottom: 12 }}>
-        <select value={severity} onChange={(e) => setSeverity(e.target.value)}>
-          <option value="">All severities</option>
-          <option value="info">Info</option>
-          <option value="warning">Warning</option>
-          <option value="critical">Critical</option>
-        </select>
-      </div>
-      {items.length === 0 ? (
-        <div className="empty">
-          No findings yet. The correlation engine writes here as it spots anomalies and event
-          clusters.
+    <div className="dm-board cc-board">
+      <NocHeader
+        title="Detected Findings"
+        subtitle="Observations that deviate from baseline and may contribute to incidents or RCA candidates."
+        chips={<><Chip label={`${items.length} findings`} /><LiveChip detail="anomaly + correlation" /></>}
+      >
+        <NocKpis cols={4}>
+          <NocKpi n={items.length} label="Findings" interp="detected this window" />
+          <NocKpi n={fCrit} label="Critical" interp="severe deviation" tone={fCrit ? "var(--crit)" : undefined} />
+          <NocKpi n={fWarn} label="Warning" interp="above baseline" tone={fWarn ? "var(--warn)" : undefined} />
+          <NocKpi n={fInfo} label="Informational" interp="low-severity signal" />
+        </NocKpis>
+      </NocHeader>
+      <div className="cc-panel">
+        <div className="cc-panel-h">
+          <h3 className="cc-panel-t">Findings</h3>
+          <span className="cc-panel-meta">{items.length}</span>
         </div>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th style={{ width: 170 }}>Time</th>
-              <th style={{ width: 90 }}>Severity</th>
-              <th style={{ width: 110 }}>Kind</th>
-              <th style={{ width: 160 }}>Device</th>
-              <th style={{ width: 120 }}>Component</th>
-              <th>Summary</th>
-              <th style={{ width: 60 }}>Score</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((f) => (
-              <tr key={f.id} className={severityRowClass(f.severity)}>
-                <td style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
-                  {new Date(f.ts).toLocaleString()}
-                </td>
-                <td>
-                  <span className={`badge ${severityClass(f.severity)}`}>{f.severity}</span>
-                </td>
-                <td>{f.kind}</td>
-                <td style={{ fontFamily: "ui-monospace, monospace" }}>{f.device || "—"}</td>
-                <td>{f.component || "—"}</td>
-                <td>{f.summary}</td>
-                <td>{f.score?.toFixed(1)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div style={{ padding: "11px 13px" }}>
+          <div style={{ marginBottom: 10 }}>
+            <select value={severity} onChange={(e) => setSeverity(e.target.value)}>
+              <option value="">All severities</option>
+              <option value="info">Info</option>
+              <option value="warning">Warning</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+          {err && (
+            <div className="empty" role="alert" style={{ color: "var(--bad)" }}>
+              <strong>Findings could not be loaded.</strong>
+              <div style={{ marginTop: 4 }}>{err}</div>
+              <div style={{ marginTop: 4, color: "var(--muted)" }}>
+                This is not "no findings" — the queue is unknown{items.length > 0 ? "; rows below are the last successful read" : ""}.
+              </div>
+            </div>
+          )}
+          {items.length === 0 ? (
+            err ? null : (
+              <div className="empty">No findings in this window. The correlation engine writes here as it detects anomalies and event clusters.</div>
+            )
+          ) : (
+            <DataTable<Finding>
+              rows={items}
+              columns={columns}
+              rowKey={(f) => f.id}
+              height="58vh"
+              ariaLabel="Findings"
+              onRowClick={(f) => select(f)}
+              rowAccent={(f) => severityColor(f.severity)}
+              rowClassName={(f) => (sel === f.id ? "dtv-selected" : "")}
+              initialSort={{ key: "ts", dir: "desc" }}
+            />
+          )}
+          {selected && (
+            <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+              <FindingDetailBody finding={selected} />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// FindingDetailBody — read-only context for a single finding, rendered either in
+// the dockable Inspector or inline (v1). `onViewLogs` (when the finding names a
+// device) pivots into the device's logs in the bottom drawer.
+export function FindingDetailBody({ finding: f, onViewLogs }: { finding: Finding; onViewLogs?: () => void }) {
+  const row = (k: string, v: React.ReactNode) => (
+    <div style={{ display: "flex", gap: 8, fontSize: 12, padding: "2px 0" }}>
+      <span style={{ color: "var(--muted)", minWidth: 84 }}>{k}</span>
+      <span>{v}</span>
+    </div>
+  );
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <span className={`badge ${severityClass(f.severity)}`}>{f.severity}</span>
+        <span className="badge">{f.kind}</span>
+        {typeof f.score === "number" && (
+          <span style={{ fontSize: 12, color: "var(--muted)" }}>score {f.score.toFixed(1)}</span>
+        )}
+      </div>
+      <div style={{ fontSize: 13, fontWeight: 500 }}>{f.summary}</div>
+      {f.description && (
+        <p style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "pre-wrap", margin: 0 }}>{f.description}</p>
+      )}
+      <div>
+        {row("Time", <span style={mono}>{fmtDateTime(f.ts)}</span>)}
+        {row("Device", <span style={mono}>{f.device || "—"}</span>)}
+        {row("Component", f.component || "—")}
+        {row("ID", <span style={mono}>{f.id}</span>)}
+      </div>
+      {onViewLogs && f.device && (
+        <div>
+          <button className="btn" onClick={onViewLogs}>View logs</button>
+        </div>
       )}
     </div>
   );

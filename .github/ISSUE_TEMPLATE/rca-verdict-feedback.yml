@@ -1,0 +1,162 @@
+name: RCA verdict feedback
+description: Grade one RCA verdict — correct, wrong, or partially correct — after the truth is known.
+title: "[rca verdict] "
+labels: ["rca-verdict", "design-partner"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **This is the highest-value input a design partner produces.** It is not a bug
+        report: a wrong verdict is not a crash, it is the product being wrong about a
+        network, which is exactly what we need to see.
+
+        File one issue **per RCA you graded**, after you know what actually broke.
+
+        The fields below mirror the API's verdict-feedback contract exactly —
+        `correlation_id` · `verdict` (correct / wrong / partial) · `wrong_part`
+        (cause / owner / affected / evidence / recovery) · `reason`. Use this form when
+        the in-app control is not available on your build; the values map 1:1, so nothing
+        has to be re-collected later.
+
+        Backend endpoints: `POST` / `GET /api/correlations/{id}/feedback` and
+        `GET /api/correlations/feedback/summary?days=N` (the windowed false-positive rate
+        for your tenant).
+
+        **Do not paste secrets.** Redact hostnames and addresses you are not comfortable
+        sharing; the grade is still useful without them.
+
+  - type: input
+    id: correlation-id
+    attributes:
+      label: Correlation id
+      description: The "RCA ID" on the RCA header, or the id from the URL / `case.json`.
+      placeholder: "9f0537bd-0787"
+    validations:
+      required: true
+
+  - type: input
+    id: partner
+    attributes:
+      label: Pilot / partner
+      placeholder: "acme-w2"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: verdict
+    attributes:
+      label: Was the verdict correct?
+      options:
+        - "Correct — the cause, owner and scope matched what actually broke"
+        - "Wrong — it named a cause that was not the cause"
+        - "Partially correct — some of it was right, some was not"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: wrong-part
+    attributes:
+      label: Which part was wrong? (`wrong_part`)
+      description: |
+        The five canonical values the API accepts. Pick the single most important one.
+        Choose "Nothing" only for a `correct` verdict — the API refuses a `wrong_part` on
+        a correct verdict, because a correct case has no wrong part.
+
+        Over-claiming (confirmed when it should have held) and under-claiming (stayed
+        undetermined when the evidence supported a cause) are both **evidence** — say
+        which in the next field.
+      options:
+        - "Nothing — the verdict was correct"
+        - "cause — the named root cause was not the cause"
+        - "owner — the wrong party was named (ISP / carrier / cloud / app team / internal)"
+        - "affected — the blast radius was too wide, too narrow, or wrong"
+        - "evidence — the evidence cited did not support the conclusion (incl. over/under-claiming)"
+        - "recovery — it said recovering/recovered when it was not, or missed a recovery"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead? (`reason`)
+      description: |
+        What the verdict *should* have said. Be concrete — "the cause was the carrier's
+        DIA circuit at the Austin branch, not the branch router" beats "it was wrong".
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual-cause
+    attributes:
+      label: What actually broke (ground truth)
+      description: What the truth turned out to be, and how you established it.
+    validations:
+      required: true
+
+  - type: input
+    id: correlation-version
+    attributes:
+      label: Correlation object version you judged
+      description: |
+        Which rendering you actually read. Correlation objects are append-only and
+        re-version as evidence arrives, so a grade without a version is ambiguous. Leave
+        blank if you do not know — an honest blank beats a guess.
+      placeholder: "3"
+    validations:
+      required: false
+
+  - type: input
+    id: verdict-shown
+    attributes:
+      label: Verdict tier shown
+      description: The verdict pill on the header at the time you read it.
+      placeholder: "NOT CONFIRMED (Analysis: Suspected)"
+    validations:
+      required: false
+
+  - type: textarea
+    id: header-answers
+    attributes:
+      label: What the six-question header said
+      description: |
+        Copy the header rows as they read. This is what lets us separate "the engine was
+        wrong" from "the engine was right and the page said it badly".
+      value: |
+        - What broke (Root cause):
+        - Why (verdict + decision):
+        - Affected:
+        - Owner / Possible owner:
+        - Evidence (symptoms / independent sources / duration):
+        - Recovering (incident pill):
+    validations:
+      required: false
+
+  - type: dropdown
+    id: comprehension
+    attributes:
+      label: Could the operator answer all six questions from the header alone?
+      description: Answered by whoever read the RCA — ideally someone who did not build the system.
+      options:
+        - "Yes — all six, above the fold"
+        - "Mostly — one question needed scrolling or another page"
+        - "No — two or more questions were unanswerable from the header"
+    validations:
+      required: true
+
+  - type: input
+    id: time-to-read
+    attributes:
+      label: How long to reach a conclusion from the RCA page (minutes)
+      description: Approximate is fine. Blank if you did not time it.
+    validations:
+      required: false
+
+  - type: textarea
+    id: evidence-context
+    attributes:
+      label: Anything else about the incident
+      description: |
+        Which lanes were live, whether a device was known to be lossy, clock skew,
+        maintenance in progress — anything that changes how this grade should be read.
+    validations:
+      required: false

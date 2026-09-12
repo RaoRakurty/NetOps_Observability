@@ -1,0 +1,16 @@
+{
+  "events": [
+    {
+      "id": "vc-33110",
+      "tenant": "acme",
+      "site": "branch-12",
+      "type": "policyViolation",
+      "category": "security",
+      "severity": "high",
+      "policyName": "block-high-risk-apps",
+      "application": "TorGuard",
+      "eventTime": "2026-07-03T11:58:40Z",
+      "description": "Security policy block-high-risk-apps blocked application TorGuard"
+    }
+  ]
+}

@@ -1,0 +1,107 @@
+{
+  "provider": "aws",
+  "account_id": "945714973156",
+  "collection": {
+    "mode": "live_poller",
+    "collected_at": "2026-07-15T16:28:15.348291+00:00"
+  },
+  "resources": [
+    {
+      "region": "us-west-2",
+      "zone": "us-west-2a",
+      "resource_id": "i-0448c046139420a7f",
+      "resource_arn_or_uri": "arn:aws:ec2:us-west-2:945714973156:instance/i-0448c046139420a7f",
+      "resource_type": "ec2:instance",
+      "resource_name": "correlix-app-host-01",
+      "power_state": "running",
+      "instance_type": "t3.small",
+      "private_ips": [
+        "10.60.10.10"
+      ],
+      "public_ips": [],
+      "network_interface_ids": [
+        "eni-01830be2f44b23cb2"
+      ],
+      "tags": {
+        "auto_stop": "true",
+        "project": "demo-cloud",
+        "environment": "lab",
+        "managed_by": "terraform",
+        "app_id": "shared",
+        "Name": "correlix-app-host-01",
+        "cloud": "aws",
+        "owner": "rao",
+        "ttl_hours": "0"
+      },
+      "owner": "rao",
+      "env": "lab",
+      "source": "cloud_api",
+      "confidence": "strong"
+    },
+    {
+      "region": "us-west-2",
+      "zone": "us-west-2a",
+      "resource_id": "i-025bac7de4e6be0a6",
+      "resource_arn_or_uri": "arn:aws:ec2:us-west-2:945714973156:instance/i-025bac7de4e6be0a6",
+      "resource_type": "ec2:instance",
+      "resource_name": "correlix-data-host-01",
+      "power_state": "running",
+      "instance_type": "t3.small",
+      "private_ips": [
+        "10.60.30.10"
+      ],
+      "public_ips": [],
+      "network_interface_ids": [
+        "eni-0223af39e47ec924a"
+      ],
+      "tags": {
+        "app_id": "shared",
+        "ttl_hours": "0",
+        "project": "demo-cloud",
+        "Name": "correlix-data-host-01",
+        "cloud": "aws",
+        "owner": "rao",
+        "auto_stop": "true",
+        "managed_by": "terraform",
+        "environment": "lab"
+      },
+      "owner": "rao",
+      "env": "lab",
+      "source": "cloud_api",
+      "confidence": "strong"
+    },
+    {
+      "region": "us-west-2",
+      "zone": "us-west-2a",
+      "resource_id": "i-0e8acbf8493d037f9",
+      "resource_arn_or_uri": "arn:aws:ec2:us-west-2:945714973156:instance/i-0e8acbf8493d037f9",
+      "resource_type": "ec2:instance",
+      "resource_name": "correlix-vpn-nat-01",
+      "power_state": "running",
+      "instance_type": "t3.micro",
+      "private_ips": [
+        "10.60.1.10"
+      ],
+      "public_ips": [
+        "100.21.102.86"
+      ],
+      "network_interface_ids": [
+        "eni-007542c1d61f44947"
+      ],
+      "tags": {
+        "environment": "lab",
+        "managed_by": "terraform",
+        "project": "demo-cloud",
+        "ttl_hours": "0",
+        "Name": "correlix-vpn-nat-01",
+        "auto_stop": "false",
+        "owner": "rao",
+        "cloud": "aws"
+      },
+      "owner": "rao",
+      "env": "lab",
+      "source": "cloud_api",
+      "confidence": "strong"
+    }
+  ]
+}

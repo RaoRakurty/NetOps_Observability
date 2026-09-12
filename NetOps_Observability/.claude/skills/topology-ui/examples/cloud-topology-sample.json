@@ -1,0 +1,11 @@
+{
+  "view_id": "aws-prod-vpc-topology",
+  "mode": "dependency",
+  "layout_type": "cloud_compound",
+  "generated_at": "2026-06-18T00:00:00Z",
+  "nodes": [],
+  "edges": [],
+  "groups": [],
+  "overlays": ["health", "flow", "utilization"],
+  "legend": {}
+}

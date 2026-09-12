@@ -1,0 +1,207 @@
+NetOps_Observability
+=====================
+
+Copyright 2026 Correlix
+
+--------------------------------------------------------------------------------
+Project licence
+--------------------------------------------------------------------------------
+
+Correlix core is licensed under the Apache License, Version 2.0. Commercial add-on modules are licensed under the Correlix Enterprise License (LicenseRef-Correlix-Enterprise) — see LICENSING.md.
+
+Correlix is open core. The full Apache-2.0 text is in LICENSES/Apache-2.0.txt;
+the Correlix Enterprise License is in LICENSES/Correlix-Enterprise.txt.
+LICENSING.md maps every directory to one of the two, and a file may also declare
+its own with an `SPDX-License-Identifier:` header. A file with no header, in a
+directory with no Enterprise notice file, is Apache-2.0 — the default is open.
+
+Tenant and organisation isolation is Apache-2.0 core in every edition. It is a
+safety property, never a commercial add-on.
+
+The rest of this file concerns THIRD-PARTY software Correlix redistributes. Those
+components keep their own licences and their own obligations; the split above
+does not apply to them.
+
+--------------------------------------------------------------------------------
+SNMP vendor device-profiles
+--------------------------------------------------------------------------------
+
+The SNMP vendor device-profiles (src/backend/snmp_profiles_seed.go and
+src/config/snmp_profiles.json) are ORIGINAL to this project. Their OID/metric
+definitions are compiled directly from the vendors' published SNMP MIBs and the
+relevant IETF RFC MIBs (IF-MIB, HOST-RESOURCES-MIB, ENTITY-MIB, BGP4-MIB,
+OSPF-MIB, and per-vendor enterprise MIBs). OIDs are factual identifiers defined
+in those MIBs. No third-party profile catalog is bundled.
+
+--------------------------------------------------------------------------------
+Active Verification troubleshooting modules — knowledge mined from NetClaw
+--------------------------------------------------------------------------------
+
+The troubleshooting KNOWLEDGE behind the Active Verification modules
+(src/backend/internal/verify/modules.go — per-vendor read-only command selection
+and the fault indicators the deterministic parsers look for: CRC/input-error
+semantics, duplex-mismatch and interface-flap indicators, BGP session-reset /
+prefix-collapse diagnosis, and config-change-before-incident causality) is derived
+from the skill procedures of the NetClaw project:
+
+  Project : NetClaw, by John Capobianco
+  Source  : https://github.com/automateyournetwork/netclaw
+  License : Apache License 2.0
+  Pinned  : commit 49332542f43390955e758b69855a111b5ba0ff4c
+  Skills  : pyats-troubleshoot, pyats-health-check, pyats-routing,
+            pyats-junos-interfaces, pyats-junos-routing, junos-network
+
+No NetClaw code, agent runtime, or LLM component is bundled or executed — only
+the distilled troubleshooting procedures, re-expressed as this project's own
+closed command tables and deterministic parsers. The Arista EOS, Nokia SR OS
+and Huawei VRP command profiles are original to this project (NetClaw does not
+cover those CLIs).
+
+--------------------------------------------------------------------------------
+elkjs — Eclipse Public License 2.0
+--------------------------------------------------------------------------------
+
+The web UI bundles elkjs (https://github.com/kieler/elkjs) UNMODIFIED into its
+JavaScript assets for topology layout.
+
+  License : Eclipse Public License, Version 2.0
+  Source  : https://github.com/kieler/elkjs (tag v0.11.1)
+  Text    : shipped with the product at /licenses/elkjs/LICENSE-EPL-2.0.txt
+
+EPL-2.0 is file-level copyleft and governs elkjs's own files only; no Correlix
+source is placed under it. EPL-2.0 section 3.2 requires recipients of the
+Object Code be told the licence and how to obtain the Source — the pointer
+above, restated in /licenses/elkjs/SOURCE.txt and in
+docs/THIRD_PARTY_LICENSES.md, is that notice.
+
+--------------------------------------------------------------------------------
+Fonts — SIL Open Font License 1.1
+--------------------------------------------------------------------------------
+
+The web UI redistributes the following font families UNMODIFIED as .woff2 files,
+served from /fonts/. Each is licensed under the SIL Open Font License,
+Version 1.1, whose section 2 requires this notice and the licence to accompany
+the fonts; the full text for each ships BOTH beside the binaries, at
+/fonts/<family>/LICENSE, and at /licenses/fonts/.
+
+  Inter           Copyright 2016 The Inter Project Authors
+                  https://github.com/rsms/inter
+  JetBrains Mono  Copyright 2020 The JetBrains Mono Project Authors
+                  https://github.com/JetBrains/JetBrainsMono
+  Space Grotesk   Copyright 2020 The Space Grotesk Project Authors
+                  https://github.com/floriankarsten/space-grotesk
+
+"Unmodified" is verified, not asserted: the frontend build re-hashes every
+shipped .woff2 against its pinned upstream package on each run and fails if a
+byte differs (src/frontend/scripts/gen-licenses.mjs).
+
+Correlix does not sell these fonts on their own and does not reuse any Reserved
+Font Name in a modified version.
+
+--------------------------------------------------------------------------------
+Icon path data — Feather (MIT) and Lucide (ISC)
+--------------------------------------------------------------------------------
+
+Part of the Correlix icon set (src/frontend/src/components/Icon.tsx, minified
+into the shipped JavaScript) reproduces path data from the Feather and Lucide
+icon sets. Both licences require the notice be retained in redistributions.
+
+  Feather  Copyright (c) 2013-2023 Cole Bemis — MIT License
+           https://github.com/feathericons/feather
+  Lucide   Copyright (c) for portions held by Cole Bemis 2013-2022 as part of
+           Feather (MIT); all other copyright held by Lucide Contributors 2022
+           — ISC License
+           https://github.com/lucide-icons/lucide
+
+The full MIT and ISC texts ship at /licenses/icons/feather-lucide-NOTICE.txt and
+are repeated in the Icon.tsx header, which also records the per-icon provenance
+of the glyphs verified as verbatim.
+
+--------------------------------------------------------------------------------
+certifi — Mozilla Public License 2.0
+--------------------------------------------------------------------------------
+
+The correlation image installs certifi (https://github.com/certifi/python-certifi)
+UNMODIFIED into site-packages; it supplies the CA bundle used for outbound TLS.
+
+  License : Mozilla Public License, Version 2.0 — https://mozilla.org/MPL/2.0/
+  Source  : https://github.com/certifi/python-certifi
+  Text    : certifi's own LICENSE inside the image's site-packages, and
+            /app/licenses/THIRD_PARTY_LICENSES.md
+
+MPL-2.0 is file-level copyleft: Correlix modifies no MPL-covered file, so what
+is owed is this notice plus the source pointer (MPL sections 3.1/3.2). The same
+applies to Vector (MPL-2.0), which runs unmodified in its own container —
+vector.yaml and the VRL transforms are configuration (MPL 1.10/3.3 Larger
+Work), not modifications.
+
+--------------------------------------------------------------------------------
+syslog-ng OSE — GPL-2.0-or-later / LGPL-2.1-or-later (source SHIPPED)
+--------------------------------------------------------------------------------
+
+Correlix redistributes syslog-ng OSE 4.7.1 as the unmodified upstream container
+image `balabit/syslog-ng:4.7.1`. Its licensing is split, verified against
+COPYING at tag syslog-ng-4.7.1:
+
+  LGPL-2.1-or-later  lib/, libtest/, syslog-ng/, syslog-ng-ctl/,
+                     persist-tool/, tests/loggen/, docker/
+  GPL-2.0-or-later   modules/, scl/
+
+The stock image loads all modules, so the running combination is effectively
+GPL-2.0-or-later. There is NO OpenSSL linking exception in that COPYING.
+
+Correlix discharges the source obligation under GPL-2.0 section 3(a) — by
+SHIPPING the corresponding source, not by a written offer alone. Every offline
+installer bundle contains it:
+
+  source-offer/syslog-ng-4.7.1.tar.gz   (covered by the bundle's SHA256SUMS)
+  Upstream : https://github.com/syslog-ng/syslog-ng (tag syslog-ng-4.7.1)
+
+syslog-ng runs as its own separate, unmodified process. No Correlix code is
+linked into it and none of its code is linked into ours; our syslog-ng.conf is
+configuration. No Correlix source is placed under the GPL or LGPL.
+
+--------------------------------------------------------------------------------
+Grafana — GNU Affero General Public License 3.0 (OPTIONAL add-on, unmodified)
+--------------------------------------------------------------------------------
+
+Grafana 11.2.0 (AGPL-3.0-only) ships ONLY in the optional `self-monitoring`
+add-on pack, as the unmodified upstream image, on its own route. It is not part
+of the base appliance and is absent until an operator enables the add-on.
+
+  Licence : https://www.gnu.org/licenses/agpl-3.0.html
+  Source  : https://github.com/grafana/grafana (tag v11.2.0)
+
+Correlix does not modify Grafana — not the image, not its UI, not its branding.
+It is configured only through Grafana's own GF_* environment variables and its
+read-only provisioning directory. AGPL-3.0 section 13 binds the operator of a
+MODIFIED version; Correlix runs it unmodified as a separate process, so no
+Correlix source is subject to the AGPL.
+
+--------------------------------------------------------------------------------
+Keycloak — Apache-2.0 on a Red Hat Universal Base Image (UBI EULA accepted)
+--------------------------------------------------------------------------------
+
+Keycloak (`quay.io/keycloak/keycloak:25.0`) is Apache-2.0. Its base image is
+Red Hat's Universal Base Image 9 (ubi9-micro), which is governed by the Red Hat
+Universal Base Image End User Licence Agreement — not an open-source licence.
+
+  UBI EULA : https://www.redhat.com/licenses/EULA_Red_Hat_Universal_Base_Image_English_20190422.pdf
+
+Correlix has read and ACCEPTS that EULA and redistributes the image under it.
+The image ships exactly as published by the Keycloak project: a digest-pinned
+upstream reference with no Correlix rebuild and no Correlix layer on top. Red
+Hat provides no support or warranty for it, and nothing in Correlix's packaging
+implies a Red Hat endorsement, certification or support relationship. Recipients
+of a Correlix bundle with the `sso` profile receive this image and are likewise
+bound by the UBI EULA with respect to it.
+
+--------------------------------------------------------------------------------
+Complete inventory
+--------------------------------------------------------------------------------
+
+docs/THIRD_PARTY_LICENSES.md lists every third-party component Correlix
+distributes, grouped by the image or archive it ships in, together with the
+licence texts and the written offer of Corresponding Source. It is GENERATED by
+`python3 scripts/license-audit.py --notices` — edit scripts/license-data.json
+and regenerate rather than editing it by hand.

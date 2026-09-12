@@ -1,0 +1,30 @@
+{
+  "name": "TC churn + broadcast surge in one bridge domain: suspected loop/storm",
+  "signals": [
+    {
+      "kind": "stp_topology_change",
+      "entity_type": "device",
+      "entity_id": "sw-acc1",
+      "observer_id": "syslog-sw-acc1",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 2.0
+    },
+    {
+      "kind": "broadcast_storm",
+      "entity_type": "device",
+      "entity_id": "sw-acc1:vlan120",
+      "observer_id": "snmp-sw-acc1",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 6.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.access.stp-loop-broadcast-storm",
+    "tier": "suspected",
+    "owner": "netops"
+  }
+}

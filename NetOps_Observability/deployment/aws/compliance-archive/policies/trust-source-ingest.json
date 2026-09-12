@@ -1,0 +1,39 @@
+{
+  "_comment": [
+    "TRUST POLICY for the source-ingest role — GitHub Actions OIDC, no static keys.",
+    "",
+    "Ingest is the only path that WRITES to the archive, so its trust is narrower",
+    "than the read role's in two further ways:",
+    "",
+    "  1. It is pinned to its own GitHub Environment (`${ingest_environment}`),",
+    "     which carries required reviewers. A run that writes to the compliance",
+    "     archive waits for a human to approve it.",
+    "  2. It is pinned to ONE workflow file via the `job_workflow_ref` claim, so",
+    "     even inside that environment, only source-ingest.yml can assume it. A new",
+    "     workflow added to the repository cannot quietly acquire write access to",
+    "     the compliance archive.",
+    "",
+    "${oidc_provider_arn}, ${github_org}, ${github_repo}, ${ingest_environment} and",
+    "${ingest_workflow_ref} are substituted by Terraform (templatefile)."
+  ],
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "GitHubActionsOIDCIngestOnly",
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "${oidc_provider_arn}"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": "repo:${github_org}/${github_repo}:environment:${ingest_environment}"
+        },
+        "StringLike": {
+          "token.actions.githubusercontent.com:job_workflow_ref": "${ingest_workflow_ref}"
+        }
+      }
+    }
+  ]
+}

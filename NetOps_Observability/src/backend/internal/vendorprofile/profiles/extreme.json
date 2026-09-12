@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "vendor": "extreme",
+  "display_name": "Extreme Networks",
+  "detection": {
+    "sysobjectid_prefixes": [
+      "1.3.6.1.4.1.1916"
+    ]
+  },
+  "dialect": {},
+  "snmp_configgen": {
+    "v2c_template": "configure snmp add community readonly <<community>>\nenable snmp access",
+    "v3_template": "configure snmpv3 add user <<sec_name>> authentication sha auth-password <<auth_key>> privacy aes priv-password <<priv_key>>\nconfigure snmpv3 add group correlix-grp user <<sec_name>> sec-model usm\nconfigure snmpv3 add access correlix-grp sec-model usm sec-level priv read-view defaultAdminView\nenable snmp access snmp-v3"
+  },
+  "profiles": []
+}

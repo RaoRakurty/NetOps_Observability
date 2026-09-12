@@ -1,39 +1,55 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package collectors
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
-	"strings"
+
+	"netops/backend/internal/vendorprofile"
 )
 
 // vendor.go — authoritative vendor identification via SNMP, the way modern NMS
-// tools (LibreNMS, Observium, Datadog NDM) do it: read sysObjectID (the
+// tools (LibreNMS, Observium, leading NMS platforms) do it: read sysObjectID (the
 // vendor's own device identity) and map its enterprise number to a vendor;
 // fall back to parsing the sysDescr text. Reuses the GET/decoder in poller.go
 // and tunnels.go, so it stays stdlib-only.
 
 var sysObjectIDOID = []int{1, 3, 6, 1, 2, 1, 1, 2, 0} // SNMPv2-MIB::sysObjectID.0
 var sysDescrOID = []int{1, 3, 6, 1, 2, 1, 1, 1, 0}    // SNMPv2-MIB::sysDescr.0
+var sysNameOID = []int{1, 3, 6, 1, 2, 1, 1, 5, 0}     // SNMPv2-MIB::sysName.0
 
-// enterpriseVendor maps IANA Private Enterprise Numbers (the 7th arc of a
-// sysObjectID under 1.3.6.1.4.1.<ENT>) to a normalized vendor name. Extend as
-// new vendors are onboarded.
-var enterpriseVendor = map[int]string{
-	9:     "cisco",
-	2636:  "juniper",
-	30065: "arista",
-	12356: "fortinet",
-	25461: "paloalto",
-	6527:  "nokia",
-	2011:  "huawei",
-	14988: "mikrotik",
-	1916:  "extreme",
-	3375:  "f5",
-	674:   "dell",
-	11:    "hp",
-	2620:  "checkpoint",
-	8072:  "net-snmp",
+// ProbeIdentity is the subnet-discovery probe: one sysName GET decides whether
+// an address is an SNMP-speaking device (a UDP timeout or SNMP error means "not
+// ours" — discovery treats every host as untrusted until it answers), then
+// DetectVendor fills in vendor/sysDescr. ok is false when the host didn't
+// answer the initial GET; err carries the transport detail for diagnostics.
+func ProbeIdentity(ctx context.Context, addr, community string) (sysName, vendor, sysDescr string, ok bool) {
+	target := withPort(addr, 161)
+	v, err := snmpGet(ctx, target, v2c(community), sysNameOID)
+	if err != nil {
+		return "", "", "", false
+	}
+	// sysName becomes a device label / inventory key — label-class bound, tighter
+	// than the decoder's text-class bound (caps.go, audit PIPE-MED-11).
+	sysName = sanitizeLabel(v.str())
+	vendor, sysDescr = DetectVendor(ctx, addr, community)
+	return sysName, vendor, sysDescr, true
+}
+
+// vendorForEnterprise maps an IANA Private Enterprise Number (the 7th arc of a
+// sysObjectID under 1.3.6.1.4.1.<ENT>) to a normalized vendor name. T9: the
+// table it used to hold inline is now DECLARATIVE DATA — the
+// `sysobjectid_prefixes` field of the vendor profiles in
+// internal/vendorprofile. Onboarding a vendor's detection is "author one
+// profile", not "edit this map". "" means the enterprise is not claimed by any
+// profile (an honest unknown, never a guess).
+func vendorForEnterprise(ent int) string {
+	v, _ := vendorprofile.Default().VendorForEnterprise(ent)
+	return v
 }
 
 // DetectVendor SNMP-GETs sysObjectID (authoritative) then sysDescr (fallback)
@@ -42,12 +58,12 @@ var enterpriseVendor = map[int]string{
 // unrecognizable sysDescr).
 func DetectVendor(ctx context.Context, addr, community string) (vendor, sysDescr string) {
 	addr = withPort(addr, 161)
-	if v, err := snmpGet(ctx, addr, community, sysObjectIDOID); err == nil && v.tag == 0x06 {
+	if v, err := snmpGet(ctx, addr, v2c(community), sysObjectIDOID); err == nil && v.tag == 0x06 {
 		if ent, ok := enterpriseOf(decodeOID(v.raw)); ok {
-			vendor = enterpriseVendor[ent] // "" if enterprise not in the table
+			vendor = vendorForEnterprise(ent) // "" if no profile claims the enterprise
 		}
 	}
-	if d, err := snmpGet(ctx, addr, community, sysDescrOID); err == nil {
+	if d, err := snmpGet(ctx, addr, v2c(community), sysDescrOID); err == nil {
 		sysDescr = d.str()
 		if vendor == "" {
 			vendor = vendorFromDescr(sysDescr)
@@ -72,35 +88,22 @@ func enterpriseOf(arcs []int) (int, bool) {
 }
 
 // vendorFromDescr is the sysDescr text backstop when the enterprise number is
-// unknown — sysDescr usually names the vendor/OS in plain text.
+// unknown — sysDescr usually names the vendor/OS in plain text. T9: the ordered
+// substring table it used to hold as a switch is now the `sysdescr_contains` +
+// `sysdescr_rank` fields of the vendor profiles. The RANK is load-bearing and
+// is carried in the data: a BIG-IP sysDescr embeds "Linux 3.10…", so f5 ranks
+// above the generic linux backstop.
 func vendorFromDescr(d string) string {
-	s := strings.ToLower(d)
-	switch {
-	case strings.Contains(s, "cisco"):
-		return "cisco"
-	case strings.Contains(s, "junos"), strings.Contains(s, "juniper"):
-		return "juniper"
-	case strings.Contains(s, "arista"):
-		return "arista"
-	case strings.Contains(s, "fortinet"), strings.Contains(s, "fortigate"):
-		return "fortinet"
-	case strings.Contains(s, "palo alto"), strings.Contains(s, "pan-os"):
-		return "paloalto"
-	case strings.Contains(s, "nokia"), strings.Contains(s, "timos"), strings.Contains(s, "sr os"):
-		return "nokia"
-	case strings.Contains(s, "huawei"), strings.Contains(s, "vrp"):
-		return "huawei"
-	case strings.Contains(s, "mikrotik"), strings.Contains(s, "routeros"):
-		return "mikrotik"
-	case strings.Contains(s, "linux"):
-		return "linux"
-	}
-	return ""
+	v, _ := vendorprofile.Default().VendorForSysDescr(d)
+	return v
 }
 
-// snmpGet issues a single SNMP v2c GET and returns the first varbind's value.
-// Errors on transport failure or an SNMP exception value (noSuchObject etc.).
-func snmpGet(ctx context.Context, addr, community string, oid []int) (berVal, error) {
+// snmpGet issues a single SNMP GET (v2c or v3 per creds) and returns the first
+// varbind's value. Errors on transport failure or an SNMP exception value.
+func snmpGet(ctx context.Context, addr string, creds snmpCreds, oid []int) (berVal, error) {
+	if creds.isV3() {
+		return snmpGetV3(ctx, addr, creds, oid)
+	}
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "udp", addr)
 	if err != nil {
@@ -108,19 +111,30 @@ func snmpGet(ctx context.Context, addr, community string, oid []int) (berVal, er
 	}
 	defer c.Close()
 	if dl, ok := ctx.Deadline(); ok {
-		_ = c.SetDeadline(dl)
+		_ = c.SetDeadline(dl) // best-effort: a failed deadline set surfaces as a read/write error
 	}
-	if _, err := c.Write(buildSNMPGet(community, oid, 1)); err != nil {
+	const reqID = 1
+	if _, err := c.Write(buildSNMPGet(creds.Community, oid, reqID)); err != nil {
 		return berVal{}, err
 	}
 	buf := make([]byte, 4096)
-	n, err := c.Read(buf)
-	if err != nil {
-		return berVal{}, err
-	}
-	_, valTag, val, err := firstVarbind(buf[:n])
-	if err != nil {
-		return berVal{}, err
+	// Read past any stale retransmit until this request's own GetResponse (or the
+	// deadline). A stale/wrong-PDU reply is discarded, never read as a value.
+	var valTag byte
+	var val []byte
+	for stale := 0; ; stale++ {
+		n, rerr := c.Read(buf)
+		if rerr != nil {
+			return berVal{}, rerr
+		}
+		var err error
+		_, valTag, val, err = firstVarbind(buf[:n], reqID)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, errStaleResponse) || stale >= 8 {
+			return berVal{}, err
+		}
 	}
 	if valTag == tagNoSuchObject || valTag == tagNoSuchInstance || valTag == tagEndOfMibView {
 		return berVal{}, fmt.Errorf("snmp: no such object")

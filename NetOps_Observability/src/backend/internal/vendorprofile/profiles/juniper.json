@@ -1,0 +1,178 @@
+{
+  "schema_version": 1,
+  "vendor": "juniper",
+  "display_name": "Juniper Networks",
+  "notes": "Junos device logs use RFC5424 APP-NAME (process) rather than a Cisco-style mnemonic, so the threat lane's device-log rules are UNASSESSED here (empty threat binding) rather than claimed.",
+  "detection": {
+    "sysobjectid_prefixes": [
+      "1.3.6.1.4.1.2636"
+    ],
+    "sysdescr_contains": [
+      "junos",
+      "juniper"
+    ],
+    "sysdescr_rank": 20,
+    "os_version_pattern": "(?i)\\bJUNOS[ :]+([0-9][0-9A-Za-z.-]*)"
+  },
+  "dialect": {
+    "vrf_term": "routing-instance",
+    "vrf_term_keys": [
+      "juniper",
+      "junos",
+      "jnpr"
+    ],
+    "vrf_synonyms": [
+      "routing-instance"
+    ],
+    "vrf_scope_keyword": "instance"
+  },
+  "verify": {
+    "commands": {
+      "ssh_bgp_edge": "show bgp summary",
+      "ssh_config_change": "show system commit",
+      "ssh_iface_deep": "show interfaces extensive",
+      "ssh_interfaces": "show interfaces terse",
+      "ssh_routing": "show bgp summary"
+    }
+  },
+  "config_capture": {
+    "platform_contains": [
+      "junos",
+      "juniper"
+    ],
+    "platform_rank": 30,
+    "running_config_cmd": "show configuration | display set | no-more",
+    "volatile_rules": [
+      {
+        "name": "junos-last-commit",
+        "pattern": "(?i)^\\s*##\\s*last (commit|changed)\\s*:"
+      },
+      {
+        "name": "junos-version-cmt",
+        "pattern": "(?i)^\\s*##\\s*version\\s"
+      }
+    ]
+  },
+  "snmp_configgen": {
+    "v2c_template": "set snmp community <<community>> authorization read-only",
+    "v3_template": "set snmp v3 usm local-engine user <<sec_name>> authentication-sha authentication-key \"<<auth_key>>\"\nset snmp v3 usm local-engine user <<sec_name>> privacy-aes128 privacy-key \"<<priv_key>>\"\nset snmp v3 vacm security-to-group security-model usm security-name <<sec_name>> group correlix-grp\nset snmp v3 vacm access group correlix-grp default-context-prefix security-model usm security-level privacy read-view all\nset snmp view all oid .1 include"
+  },
+  "device_type": {
+    "text_hints": {
+      "firewall": [
+        "srx"
+      ],
+      "cloud-gw": [
+        "vmx cloud"
+      ],
+      "switch": [
+        "qfx",
+        " ex2",
+        " ex3",
+        " ex4"
+      ],
+      "router": [
+        " mx",
+        "ptx",
+        "vmx"
+      ]
+    }
+  },
+  "profiles": [
+    {
+      "platform": "junos",
+      "os_version_probe": {
+        "gnmi_paths": [
+          "/system/state/software-version"
+        ],
+        "gnmi_version_pattern": "(?i)^\\s*v?([0-9][0-9A-Za-z.-]*)",
+        "cli_version_pattern": "(?im)^Junos:\\s+([0-9][0-9A-Za-z.-]*)",
+        "version_render": "JUNOS {version}",
+        "notes": "OS-VERSION SOURCE LADDER (internal/osprobe). doc_claimed, matching this profile's fidelity: no Junos device exists in the reference lab. cli_version_pattern reads the `Junos: 21.4R3-S5.4` line of `show version`. The hyphen IS inside the captured class here, unlike the Arista and SR Linux patterns, because a Junos service-release version genuinely contains one (21.4R3-S5.4) — dropping it would report a device on a different software than it runs. version_render restores the JUNOS phrasing the vendor os_version_pattern is anchored on."
+      },
+      "identity_probe": {
+        "commands": [
+          {
+            "command": "show version",
+            "model_patterns": [
+              "(?m)^Model:[ \\t]*([A-Za-z0-9._/+-]{2,40})[ \\t\\r]*$"
+            ]
+          },
+          {
+            "command": "show chassis hardware",
+            "serial_patterns": [
+              "(?m)^Chassis[ \\t]{2,}([A-Za-z0-9._-]{4,25})[ \\t]{2,}\\S"
+            ]
+          }
+        ],
+        "notes": "HARDWARE IDENTITY PROBE (internal/deviceident). The `Model: mx204` line of `show version` is GROUNDED in the repo's own fixture (internal/osprobe/sources_test.go showVersionJunos). Junos `show version` does NOT print a chassis serial, so the serial is read from `show chassis hardware` — a command grounded in the shipped TAC plan (ai/tac/plans/juniper-junos.yaml) and the research corpus (intent inventory.hardware). Its `Hardware inventory:` table puts the chassis on a row that starts with the literal word `Chassis`, with the Version and Part number columns EMPTY for that row, so the serial is the first column-separated token after it and the description (the model) follows; the pattern requires the two-or-more-space column gap on both sides so a `Chassis` row that printed something else there cannot be read as a serial. Line shape doc_claimed."
+      },
+      "display_name": "Juniper Junos",
+      "device_class": [
+        "router",
+        "switch"
+      ],
+      "fidelity": "doc_claimed",
+      "detection": {
+        "os_parse": {
+          "product": "junos",
+          "rank": 10,
+          "sysdescr_contains_any": []
+        },
+        "platform_contains": [
+          "junos",
+          "juniper"
+        ],
+        "platform_rank": 20,
+        "syslog_appnames": [
+          "mgd",
+          "rpd",
+          "sshd",
+          "kernel",
+          "chassisd"
+        ]
+      },
+      "capture": {
+        "running_config_cmd": "show configuration | display set",
+        "show_version_cmd": "show version",
+        "pager_off_cmds": [
+          "set cli screen-length 0"
+        ],
+        "prompt_regex": "(?m)^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+[>#]\\s*$",
+        "pcap_start_cmd": [
+          "monitor traffic interface {iface} no-resolve brief count {count} write-file /var/tmp/{file}.pcap[ matching \"{filter}\"]"
+        ],
+        "pcap_cleanup_cmd": [
+          "file delete /var/tmp/{file}.pcap"
+        ],
+        "pcap_remote_path": "/var/tmp/{file}.pcap",
+        "pcap_supports_filter": true,
+        "pcap_family": "juniper_junos",
+        "pcap_platform_rules": [
+          {
+            "rank": 30,
+            "tokens": [
+              "junos",
+              "juniper"
+            ]
+          }
+        ]
+      },
+      "advisory": {
+        "provider": "offline-feed",
+        "product_ids": [
+          "junos"
+        ]
+      },
+      "hardening": {
+        "binding": "juniper",
+        "display": "Juniper Junos"
+      },
+      "cli": {
+        "dialect": "juniper",
+        "display": "Juniper Junos"
+      },
+      "threat": {}
+    }
+  ]
+}

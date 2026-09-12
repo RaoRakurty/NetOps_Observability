@@ -1,0 +1,24 @@
+{
+  "provider": "azure",
+  "account_id": "sub-8f2a1c00-prod",
+  "region": "eastus",
+  "vpcs": [
+    { "id": "vnet-prod-eus", "cidr": "10.20.0.0/16", "name": "prod-eastus" }
+  ],
+  "subnets": [
+    { "id": "snet-app-eus", "cidr": "10.20.1.0/24", "name": "app" },
+    { "id": "snet-data-eus", "cidr": "10.20.2.0/24", "name": "data" },
+    { "id": "snet-gw-eus", "cidr": "10.20.255.0/27", "name": "GatewaySubnet" }
+  ],
+  "nodes": [
+    { "id": "vgw-eus", "kind": "vpn_gateway", "name": "prod-vpn-gw", "subnet_id": "snet-gw-eus", "private_ip": "10.20.255.4" },
+    { "id": "nva-fw-eus", "kind": "nva", "name": "palo-fw-eus", "subnet_id": "snet-app-eus", "private_ip": "10.20.1.10" },
+    { "id": "pe-sql-eus", "kind": "vpc_endpoint", "name": "sql-private-endpoint", "subnet_id": "snet-data-eus", "private_ip": "10.20.2.40" }
+  ],
+  "edges": [
+    { "from_subnet": "snet-app-eus", "from_subnet_name": "app", "to": "nva-fw-eus", "to_kind": "nva", "destination": "0.0.0.0/0", "state": "active", "via_route_table": "udr-app-eus", "route_table_name": "app-egress" },
+    { "from_subnet": "snet-app-eus", "from_subnet_name": "app", "to": "vgw-eus", "to_kind": "vpn_gateway", "destination": "10.0.0.0/16", "state": "active", "via_route_table": "udr-app-eus", "route_table_name": "app-egress" },
+    { "from_subnet": "snet-data-eus", "from_subnet_name": "data", "to": "pe-sql-eus", "to_kind": "vpc_endpoint", "destination": "10.20.2.40/32", "state": "active", "via_route_table": "udr-data-eus", "route_table_name": "data" },
+    { "from_subnet": "snet-data-eus", "from_subnet_name": "data", "to": "vgw-eus", "to_kind": "vpn_gateway", "destination": "172.16.0.0/12", "state": "active", "via_route_table": "udr-data-eus", "route_table_name": "data" }
+  ]
+}

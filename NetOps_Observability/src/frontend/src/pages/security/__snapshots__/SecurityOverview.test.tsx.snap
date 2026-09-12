@@ -1,0 +1,1314 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Security Overview — snapshot > matches the rendered posture page for the fixture set 1`] = `
+<div
+  class="sec dm-board"
+>
+  <details
+    class="dm-group"
+    open=""
+  >
+    <summary
+      class="dm-group-head"
+      style="--g: #e11d48;"
+    >
+      <svg
+        aria-hidden="true"
+        class="dm-group-chevron"
+        fill="none"
+        height="14"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="1.75"
+        viewBox="0 0 24 24"
+        width="14"
+      >
+        <path
+          d="m9 6 6 6-6 6"
+        />
+      </svg>
+      <span>
+        Exposure pipeline
+      </span>
+    </summary>
+    <div
+      class="dm-group-body"
+    >
+      <div
+        class="sec-band"
+      >
+        <section
+          aria-label="Assessment coverage"
+          class="sec-card sec-coverage"
+        >
+          <div
+            class="sec-eyebrow"
+          >
+            Assessment coverage
+          </div>
+          <div
+            class="sec-cov-num"
+          >
+            75
+            <small>
+              %
+            </small>
+          </div>
+          <div
+            class="sec-cov-lbl"
+          >
+            1900 of 2547 assets assessed · 647 unassessed (unknown, not clear)
+          </div>
+          <div
+            class="sec-cov-bar"
+          >
+            <i
+              style="width: 75%;"
+            />
+          </div>
+          <p
+            class="sec-line"
+            style="margin: 8px 0px 0px;"
+          >
+            647
+             never assessed
+            <button
+              aria-label="Ask Iris about assessment coverage"
+              class="ask-iris"
+              data-topic="sec.coverage"
+              title="Ask Iris about assessment coverage"
+              type="button"
+            >
+              <svg
+                aria-hidden="true"
+                fill="none"
+                height="16"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="1.75"
+                viewBox="0 0 24 24"
+                width="16"
+              >
+                <circle
+                  cx="12"
+                  cy="12"
+                  r="10"
+                />
+                <line
+                  x1="12"
+                  x2="12"
+                  y1="16"
+                  y2="11"
+                />
+                <line
+                  x1="12"
+                  x2="12.01"
+                  y1="8"
+                  y2="8"
+                />
+              </svg>
+            </button>
+          </p>
+        </section>
+        <ol
+          aria-label="Continuous threat exposure management pipeline"
+          class="sec-funnel"
+        >
+          <li
+            class="sec-stage"
+          >
+            <span
+              class="k"
+            >
+              Scope
+            </span>
+            <span
+              class="v"
+            >
+              2,547
+            </span>
+            <span
+              class="d"
+            >
+              assets in scope
+            </span>
+            <span
+              class="r"
+            >
+              —
+            </span>
+          </li>
+          <li
+            class="sec-stage"
+          >
+            <span
+              class="k"
+            >
+              Discover
+            </span>
+            <span
+              class="v"
+            >
+              1,284
+            </span>
+            <span
+              class="d"
+            >
+              current findings
+            </span>
+            <span
+              class="r"
+            >
+              50% of previous stage
+            </span>
+          </li>
+          <li
+            class="sec-stage"
+          >
+            <span
+              class="k"
+            >
+              Prioritize
+            </span>
+            <span
+              class="v"
+            >
+              47
+            </span>
+            <span
+              class="d"
+            >
+              high or critical
+            </span>
+            <span
+              class="r"
+            >
+              4% of previous stage
+            </span>
+          </li>
+          <li
+            class="sec-stage is-validate"
+          >
+            <span
+              class="tag"
+            >
+              live
+            </span>
+            <span
+              class="k"
+            >
+              Validate
+            </span>
+            <span
+              class="v"
+            >
+              12
+            </span>
+            <span
+              class="d"
+            >
+              live-confirmed reachable
+            </span>
+            <span
+              class="r"
+            >
+              26% of previous stage
+            </span>
+          </li>
+          <li
+            class="sec-stage"
+          >
+            <span
+              class="k"
+            >
+              Mobilize
+            </span>
+            <span
+              class="v"
+            >
+              5
+            </span>
+            <span
+              class="d"
+            >
+              owner assigned
+            </span>
+            <span
+              class="r"
+            >
+              42% of previous stage
+            </span>
+          </li>
+        </ol>
+      </div>
+      <p
+        class="sec-line"
+        role="status"
+        style="margin: 0px;"
+      >
+        Last assessment 
+        Sep 01, 10:00:00 UTC
+         · scan 
+        scan-7
+      </p>
+      <div
+        class="panel"
+        style="min-width: 0;"
+      >
+        <div
+          class="panel-tools"
+        >
+          <h3
+            class="panel-zoomable"
+            title="Enlarge"
+          >
+            Security lane
+          </h3>
+          <button
+            aria-label="Enlarge Security lane"
+            class="panel-zoom-btn"
+            title="Enlarge"
+          >
+            ⤢
+          </button>
+        </div>
+        <div
+          class="empty"
+          role="status"
+        >
+          Reading the lane status…
+        </div>
+      </div>
+    </div>
+  </details>
+  <details
+    class="dm-group"
+    open=""
+  >
+    <summary
+      class="dm-group-head"
+      style="--g: #0ea5e9;"
+    >
+      <svg
+        aria-hidden="true"
+        class="dm-group-chevron"
+        fill="none"
+        height="14"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="1.75"
+        viewBox="0 0 24 24"
+        width="14"
+      >
+        <path
+          d="m9 6 6 6-6 6"
+        />
+      </svg>
+      <span>
+        Exposure story
+      </span>
+    </summary>
+    <div
+      class="dm-group-body"
+    >
+      <section
+        aria-labelledby="sec-hero-h"
+        class="sec-hero"
+      >
+        <div
+          class="sec-eyebrow"
+        >
+          Flagship story
+        </div>
+        <h3
+          id="sec-hero-h"
+        >
+          core-01's management plane is reachable from the ISP seam
+        </h3>
+        <p
+          class="sec-line"
+        >
+          14
+           observation
+          s
+           · 
+          3
+           entit
+          ies
+          <button
+            aria-label="Ask Iris about Exposure story"
+            class="ask-iris"
+            data-topic="story.one-narrative"
+            title="Ask Iris about Exposure story"
+            type="button"
+          >
+            <svg
+              aria-hidden="true"
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.75"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <circle
+                cx="12"
+                cy="12"
+                r="10"
+              />
+              <line
+                x1="12"
+                x2="12"
+                y1="16"
+                y2="11"
+              />
+              <line
+                x1="12"
+                x2="12.01"
+                y1="8"
+                y2="8"
+              />
+            </svg>
+          </button>
+        </p>
+        <div
+          class="sec-hero-grid"
+        >
+          <div
+            class="sec-hero-col sec-hero-chain"
+          >
+            <p
+              class="sec-line"
+              style="margin: 0px;"
+            >
+              Chronology not loaded.
+              <button
+                aria-label="Ask Iris about a missing chronology"
+                class="ask-iris"
+                data-topic="story.chronology-missing"
+                title="Ask Iris about a missing chronology"
+                type="button"
+              >
+                <svg
+                  aria-hidden="true"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.75"
+                  viewBox="0 0 24 24"
+                  width="16"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="10"
+                  />
+                  <line
+                    x1="12"
+                    x2="12"
+                    y1="16"
+                    y2="11"
+                  />
+                  <line
+                    x1="12"
+                    x2="12.01"
+                    y1="8"
+                    y2="8"
+                  />
+                </svg>
+              </button>
+            </p>
+          </div>
+          <div
+            class="sec-hero-col sec-hero-side"
+          >
+            <div
+              class="sec-owner"
+            >
+              <div
+                class="sec-eyebrow"
+              >
+                Ownership
+              </div>
+              <div
+                class="seam-name"
+              >
+                isp
+              </div>
+              <div
+                class="who"
+              >
+                Verdict 
+                suspected
+              </div>
+              <div
+                class="conf"
+              >
+                Confidence: 
+                72%
+                 · grounded on seam+topo
+              </div>
+              <div
+                class="sec-chips"
+              >
+                <span
+                  class="sec-chip"
+                >
+                  active
+                </span>
+                <span
+                  class="sec-chip k"
+                >
+                  seam+topo
+                </span>
+                <span
+                  class="sec-chip"
+                >
+                  3
+                   planes
+                </span>
+              </div>
+            </div>
+            <div
+              class="sec-hero-cta"
+            >
+              <button
+                class="btn accent"
+              >
+                Open the full story
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </details>
+  <details
+    class="dm-group"
+    open=""
+  >
+    <summary
+      class="dm-group-head"
+      style="--g: #8b5cf6;"
+    >
+      <svg
+        aria-hidden="true"
+        class="dm-group-chevron"
+        fill="none"
+        height="14"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="1.75"
+        viewBox="0 0 24 24"
+        width="14"
+      >
+        <path
+          d="m9 6 6 6-6 6"
+        />
+      </svg>
+      <span>
+        Evidence by class
+      </span>
+    </summary>
+    <div
+      class="dm-group-body"
+    >
+      <div
+        class="sec-lanes"
+      >
+        <section
+          aria-label="Hardening & posture"
+          class="sec-card"
+        >
+          <div
+            class="sec-lane-h"
+          >
+            <h3
+              class="t"
+              style="margin: 0px;"
+            >
+              Hardening & posture
+              <button
+                aria-label="Ask Iris about Hardening & posture"
+                class="ask-iris"
+                data-topic="sec.lane-no-producer"
+                title="Ask Iris about Hardening & posture"
+                type="button"
+              >
+                <svg
+                  aria-hidden="true"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.75"
+                  viewBox="0 0 24 24"
+                  width="16"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="10"
+                  />
+                  <line
+                    x1="12"
+                    x2="12"
+                    y1="16"
+                    y2="11"
+                  />
+                  <line
+                    x1="12"
+                    x2="12.01"
+                    y1="8"
+                    y2="8"
+                  />
+                </svg>
+              </button>
+            </h3>
+            <span
+              class="badge bad"
+            >
+              3 current
+            </span>
+          </div>
+          <button
+            class="sec-row"
+            type="button"
+          >
+            <span
+              aria-hidden="true"
+              class="sec-stripe t-bad"
+            />
+            <span
+              class="sec-main"
+            >
+              <b>
+                Non-TLS HTTP server
+              </b>
+              <span
+                class="sub"
+              >
+                edge-02 · Juniper Junos 22.4
+              </span>
+            </span>
+            <span
+              class="fix"
+            >
+              delete system services web-management http
+            </span>
+          </button>
+          <button
+            class="sec-row"
+            type="button"
+          >
+            <span
+              aria-hidden="true"
+              class="sec-stripe t-warn"
+            />
+            <span
+              class="sec-main"
+            >
+              <b>
+                SNMP v2c community
+              </b>
+              <span
+                class="sub"
+              >
+                spine-01 · Nokia SR Linux
+                 · seam ISP
+              </span>
+            </span>
+            <span
+              class="fix"
+            >
+              snmp v3 authPriv
+            </span>
+          </button>
+        </section>
+        <section
+          aria-label="Seam exposure"
+          class="sec-card"
+        >
+          <div
+            class="sec-lane-h"
+          >
+            <h3
+              class="t"
+              style="margin: 0px;"
+            >
+              Seam exposure
+              <button
+                aria-label="Ask Iris about Seam exposure"
+                class="ask-iris"
+                data-topic="sec.lane-no-producer"
+                title="Ask Iris about Seam exposure"
+                type="button"
+              >
+                <svg
+                  aria-hidden="true"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.75"
+                  viewBox="0 0 24 24"
+                  width="16"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="10"
+                  />
+                  <line
+                    x1="12"
+                    x2="12"
+                    y1="16"
+                    y2="11"
+                  />
+                  <line
+                    x1="12"
+                    x2="12.01"
+                    y1="8"
+                    y2="8"
+                  />
+                </svg>
+              </button>
+            </h3>
+            <span
+              class="badge bad"
+            >
+              1 current
+            </span>
+          </div>
+          <button
+            class="sec-row"
+            type="button"
+          >
+            <span
+              aria-hidden="true"
+              class="sec-stripe t-bad"
+            />
+            <span
+              class="sec-main"
+            >
+              <b>
+                Telnet on VTY — ISP seam
+              </b>
+              <span
+                class="sub"
+              >
+                core-01 · Cisco IOS-XE 17.9
+                 · seam ISP
+              </span>
+            </span>
+            <span
+              class="fix"
+            >
+              transport input ssh
+            </span>
+          </button>
+        </section>
+        <section
+          aria-label="Threat detections"
+          class="sec-card"
+        >
+          <div
+            class="sec-lane-h"
+          >
+            <h3
+              class="t"
+              style="margin: 0px;"
+            >
+              Threat detections
+              <button
+                aria-label="Ask Iris about Threat detections"
+                class="ask-iris"
+                data-topic="sec.lane-no-producer"
+                title="Ask Iris about Threat detections"
+                type="button"
+              >
+                <svg
+                  aria-hidden="true"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.75"
+                  viewBox="0 0 24 24"
+                  width="16"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="10"
+                  />
+                  <line
+                    x1="12"
+                    x2="12"
+                    y1="16"
+                    y2="11"
+                  />
+                  <line
+                    x1="12"
+                    x2="12.01"
+                    y1="8"
+                    y2="8"
+                  />
+                </svg>
+              </button>
+            </h3>
+            <span
+              class="badge bad"
+            >
+              1 current
+            </span>
+          </div>
+          <button
+            class="sec-row"
+            type="button"
+          >
+            <span
+              aria-hidden="true"
+              class="sec-stripe t-bad"
+            />
+            <span
+              class="sec-main"
+            >
+              <b>
+                Outbound beacon to a rare destination
+              </b>
+              <span
+                class="sub"
+              >
+                core-01
+                 · seam ISP
+              </span>
+            </span>
+            <span
+              class="fix"
+            >
+              transport input ssh
+            </span>
+          </button>
+        </section>
+        <section
+          aria-label="Standards coverage"
+          class="sec-card"
+        >
+          <div
+            class="sec-lane-h"
+          >
+            <h3
+              class="t"
+              style="margin: 0px;"
+            >
+              Standards coverage
+              <button
+                aria-label="Ask Iris about Standards coverage"
+                class="ask-iris"
+                data-topic="sec.standards-untagged"
+                title="Ask Iris about Standards coverage"
+                type="button"
+              >
+                <svg
+                  aria-hidden="true"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.75"
+                  viewBox="0 0 24 24"
+                  width="16"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="10"
+                  />
+                  <line
+                    x1="12"
+                    x2="12"
+                    y1="16"
+                    y2="11"
+                  />
+                  <line
+                    x1="12"
+                    x2="12.01"
+                    y1="8"
+                    y2="8"
+                  />
+                </svg>
+              </button>
+            </h3>
+            <span
+              class="badge "
+            >
+              3 tagged
+            </span>
+          </div>
+          <div>
+            <div
+              class="sec-row"
+              style="cursor: default;"
+            >
+              <span
+                aria-hidden="true"
+                class="sec-stripe"
+              />
+              <span
+                class="sec-main"
+              >
+                <b>
+                  CIS
+                </b>
+              </span>
+              <span
+                class="fix"
+              >
+                3
+              </span>
+            </div>
+            <div
+              class="sec-row"
+              style="cursor: default;"
+            >
+              <span
+                aria-hidden="true"
+                class="sec-stripe"
+              />
+              <span
+                class="sec-main"
+              >
+                <b>
+                  NIST-CSF
+                </b>
+              </span>
+              <span
+                class="fix"
+              >
+                1
+              </span>
+            </div>
+            <div
+              class="sec-row"
+              style="cursor: default;"
+            >
+              <span
+                aria-hidden="true"
+                class="sec-stripe"
+              />
+              <span
+                class="sec-main"
+              >
+                <b>
+                  PCI-DSS
+                </b>
+              </span>
+              <span
+                class="fix"
+              >
+                1
+              </span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </details>
+  <details
+    class="dm-group"
+    open=""
+  >
+    <summary
+      class="dm-group-head"
+      style="--g: #f59e0b;"
+    >
+      <svg
+        aria-hidden="true"
+        class="dm-group-chevron"
+        fill="none"
+        height="14"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="1.75"
+        viewBox="0 0 24 24"
+        width="14"
+      >
+        <path
+          d="m9 6 6 6-6 6"
+        />
+      </svg>
+      <span>
+        Exposure by seam
+      </span>
+    </summary>
+    <div
+      class="dm-group-body"
+    >
+      <div
+        class="sec-seams"
+      >
+        <div
+          class="sec-seam"
+        >
+          <span
+            aria-hidden="true"
+            class="edge t-bad"
+          />
+          <div
+            class="nm"
+          >
+            ISP
+          </div>
+          <div
+            class="ct"
+          >
+            2
+          </div>
+          <div
+            class="ow"
+          >
+            open findings · isp
+          </div>
+        </div>
+        <div
+          class="sec-seam"
+        >
+          <span
+            aria-hidden="true"
+            class="edge t-bad"
+          />
+          <div
+            class="nm"
+          >
+            Internet
+          </div>
+          <div
+            class="ct"
+          >
+            1
+          </div>
+          <div
+            class="ow"
+          >
+            open findings · enterprise
+          </div>
+        </div>
+        <div
+          class="sec-seam"
+        >
+          <span
+            aria-hidden="true"
+            class="edge "
+          />
+          <div
+            class="nm"
+          >
+            SaaS
+          </div>
+          <div
+            class="ct sec-unassessed"
+          >
+            —
+          </div>
+          <div
+            class="ow"
+          >
+            unassessed
+          </div>
+        </div>
+      </div>
+      <p
+        class="sec-line"
+        style="margin: 0px;"
+      >
+        Unassessed seams show 
+        <span
+          class="sec-unassessed"
+        >
+          —
+        </span>
+        <button
+          aria-label="Ask Iris about exposure by seam"
+          class="ask-iris"
+          data-topic="seam.exposure"
+          title="Ask Iris about exposure by seam"
+          type="button"
+        >
+          <svg
+            aria-hidden="true"
+            fill="none"
+            height="16"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="1.75"
+            viewBox="0 0 24 24"
+            width="16"
+          >
+            <circle
+              cx="12"
+              cy="12"
+              r="10"
+            />
+            <line
+              x1="12"
+              x2="12"
+              y1="16"
+              y2="11"
+            />
+            <line
+              x1="12"
+              x2="12.01"
+              y1="8"
+              y2="8"
+            />
+          </svg>
+        </button>
+      </p>
+      <div
+        class="panel"
+        style="min-width: 0;"
+      >
+        <div
+          class="panel-tools"
+        >
+          <h3
+            class="panel-zoomable"
+            title="Enlarge"
+          >
+            Seam groups
+          </h3>
+          <label>
+            <span
+              class="sr-only"
+            >
+              Filter seam groups by state
+            </span>
+            <select
+              aria-label="Filter seam groups by state"
+            >
+              <option
+                value=""
+              >
+                Every state
+              </option>
+              <option
+                value="suggested"
+              >
+                suggested
+              </option>
+              <option
+                value="confirmed"
+              >
+                confirmed
+              </option>
+              <option
+                value="active"
+              >
+                active
+              </option>
+              <option
+                value="rejected"
+              >
+                rejected
+              </option>
+              <option
+                value="retired"
+              >
+                retired
+              </option>
+            </select>
+          </label>
+          <button
+            aria-label="Enlarge Seam groups"
+            class="panel-zoom-btn"
+            title="Enlarge"
+          >
+            ⤢
+          </button>
+        </div>
+        <div
+          class="empty"
+          role="status"
+        >
+          Reading the seam groups…
+        </div>
+      </div>
+    </div>
+  </details>
+  <details
+    class="dm-group"
+    open=""
+  >
+    <summary
+      class="dm-group-head"
+      style="--g: #14b8a6;"
+    >
+      <svg
+        aria-hidden="true"
+        class="dm-group-chevron"
+        fill="none"
+        height="14"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="1.75"
+        viewBox="0 0 24 24"
+        width="14"
+      >
+        <path
+          d="m9 6 6 6-6 6"
+        />
+      </svg>
+      <span>
+        Verdict trend
+      </span>
+    </summary>
+    <div
+      class="dm-group-body"
+    >
+      <div
+        class="panel"
+        style="min-width: 0;"
+      >
+        <div
+          class="panel-tools"
+        >
+          <h3
+            class="panel-zoomable"
+            title="Enlarge"
+          >
+            Verdicts per day
+          </h3>
+          <button
+            aria-label="Enlarge Verdicts per day"
+            class="panel-zoom-btn"
+            title="Enlarge"
+          >
+            ⤢
+          </button>
+        </div>
+        <table
+          aria-label="Verdict trend by day"
+          class="ds-table"
+        >
+          <thead>
+            <tr>
+              <th
+                scope="col"
+              >
+                Day
+              </th>
+              <th
+                scope="col"
+              >
+                Fail
+              </th>
+              <th
+                scope="col"
+              >
+                Warning
+              </th>
+              <th
+                scope="col"
+              >
+                Pass
+              </th>
+              <th
+                scope="col"
+              >
+                Total
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th
+                scope="row"
+                style="font-weight: 500; text-align: left;"
+              >
+                2026-08-30
+              </th>
+              <td>
+                5
+              </td>
+              <td>
+                2
+              </td>
+              <td>
+                30
+              </td>
+              <td>
+                37
+              </td>
+            </tr>
+            <tr>
+              <th
+                scope="row"
+                style="font-weight: 500; text-align: left;"
+              >
+                2026-08-31
+              </th>
+              <td>
+                4
+              </td>
+              <td>
+                3
+              </td>
+              <td>
+                31
+              </td>
+              <td>
+                38
+              </td>
+            </tr>
+            <tr>
+              <th
+                scope="row"
+                style="font-weight: 500; text-align: left;"
+              >
+                2026-09-01
+              </th>
+              <td>
+                4
+              </td>
+              <td>
+                1
+              </td>
+              <td>
+                32
+              </td>
+              <td>
+                37
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p
+        class="sec-line"
+        style="margin: 0px;"
+      >
+        5
+         current findings across 
+        2
+         scored seams.
+      </p>
+    </div>
+  </details>
+</div>
+`;

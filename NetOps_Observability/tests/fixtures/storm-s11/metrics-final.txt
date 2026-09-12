@@ -1,0 +1,1290 @@
+# metrics-final for storm-s11 (t-storm-2.5k, arm ON) captured 2026-09-01T22:41:34Z
+# COUNTER SCOPE: the correlation containers were started 2026-09-01T19:31Z (fix-wave deploy) and were
+# NOT recreated between storm-s10 (09012025x578, environment-invalidated) and storm-s11 (090121382mk4),
+# so every *_total below is CUMULATIVE across BOTH legs since replica start — subtract a prior capture
+# to leg-scope a counter (no s10 metrics-final exists; treat *_total as cumulative, not leg-scoped).
+
+# ==== replica netops-correlation-7 (e5cd469c9e6f) ip 172.18.0.18 started_at 2026-09-01T19:31:12.471257472Z source mtls https://172.18.0.18:8443/metrics ====
+# HELP corr_ingest_events Correlation intake counters by lane (monotonic since process start).
+# TYPE corr_ingest_events counter
+corr_ingest_events{counter="probes_received"} 0
+corr_ingest_events{counter="syslog_received"} 1823112
+corr_ingest_events{counter="syslog_signals"} 109534
+corr_ingest_events{counter="metrics_received"} 0
+corr_ingest_events{counter="metrics_accepted"} 0
+corr_ingest_events{counter="metrics_dropped"} 0
+corr_ingest_events{counter="metrics_dropped_no_value"} 0
+corr_ingest_events{counter="metrics_dropped_no_identity"} 0
+corr_ingest_events{counter="metrics_dropped_stale_ts"} 0
+corr_ingest_events{counter="event_ts_invalid"} 0
+corr_ingest_events{counter="syslog_prefilter_passed"} 109534
+corr_ingest_events{counter="syslog_prefilter_rejected"} 1690468
+corr_ingest_events{counter="agg_observed"} 109534
+corr_ingest_events{counter="agg_forwarded"} 99838
+corr_ingest_events{counter="agg_suppressed"} 9696
+corr_ingest_events{counter="agg_keys"} 33345
+corr_ingest_events{counter="agg_evicted"} 66481
+corr_ingest_events{counter="event_ts_future_clamped"} 0
+corr_ingest_events{counter="event_ts_past_stale"} 0
+corr_ingest_events{counter="device_telemetry_signals"} 0
+corr_ingest_events{counter="traps_received"} 0
+corr_ingest_events{counter="traps_normalized"} 0
+corr_ingest_events{counter="traps_recanonicalized"} 0
+corr_ingest_events{counter="traps_dropped"} 0
+corr_ingest_events{counter="flows_received"} 853
+corr_ingest_events{counter="flows_dropped"} 853
+corr_ingest_events{counter="passive_flow_signals"} 0
+corr_ingest_events{counter="flow_entities_tracked"} 0
+corr_ingest_events{counter="flow_direction_pairs"} 0
+corr_ingest_events{counter="cloud_received"} 0
+corr_ingest_events{counter="cloud_signals"} 0
+corr_ingest_events{counter="cloud_dropped"} 0
+corr_ingest_events{counter="app_identity_received"} 0
+corr_ingest_events{counter="app_identity_signals"} 0
+corr_ingest_events{counter="app_identity_dropped"} 0
+corr_ingest_events{counter="app_edge_received"} 0
+corr_ingest_events{counter="app_edge_signals"} 0
+corr_ingest_events{counter="app_edge_dropped"} 0
+corr_ingest_events{counter="controller_events_received"} 0
+corr_ingest_events{counter="controller_events_signals"} 0
+corr_ingest_events{counter="controller_events_dropped"} 0
+corr_ingest_events{counter="verification_received"} 0
+corr_ingest_events{counter="verification_signals"} 0
+corr_ingest_events{counter="verification_dropped"} 0
+corr_ingest_events{counter="wireless_received"} 0
+corr_ingest_events{counter="wireless_signals"} 0
+corr_ingest_events{counter="wireless_dropped"} 0
+# TYPE corr_deadletters counter
+corr_deadletters 23963
+# TYPE corr_window_signals gauge
+corr_window_signals 28985
+# TYPE corr_open_objects gauge
+corr_open_objects 447
+# HELP corr_zscore_series_evicted_total Legacy z-score baselines evicted by the LRU cap.
+# TYPE corr_zscore_series_evicted_total counter
+corr_zscore_series_evicted_total 0
+# TYPE corr_zscore_series gauge
+corr_zscore_series{k="len"} 0
+corr_zscore_series{k="max"} 28672
+# TYPE corr_versions counter
+corr_versions{outcome="persisted"} 22582
+corr_versions{outcome="damped"} 2169
+corr_versions{outcome="heartbeat_touch"} 350
+# HELP corr_ingest_prefilter_total Raw syslog lines by ingest pre-filter verdict.
+# TYPE corr_ingest_prefilter_total counter
+corr_ingest_prefilter_total{outcome="passed"} 109534
+corr_ingest_prefilter_total{outcome="rejected"} 1690468
+# HELP corr_current_projection_write_failures_total corr_current projection writes lost (hot-read staleness risk).
+# TYPE corr_current_projection_write_failures_total counter
+corr_current_projection_write_failures_total 0
+# HELP corr_ch_insert_failures_total ClickHouse inserts that did not land, by table.
+# TYPE corr_ch_insert_failures_total counter
+# HELP corr_ch_rows_dlq_spooled_total Rows of a given-up insert preserved in the dead-letter file, by table.
+# TYPE corr_ch_rows_dlq_spooled_total counter
+# HELP corr_signal_batch Batched corr_signals write-path events.
+# TYPE corr_signal_batch counter
+corr_signal_batch{event="flushes"} 2336
+corr_signal_batch{event="rows_flushed"} 107959
+corr_signal_batch{event="rows_quarantined"} 0
+corr_signal_batch{event="rows_replay_deduped"} 0
+# HELP corr_consumer_revoke_commits_total Rebalance revoke-hook flush+commit outcomes.
+# TYPE corr_consumer_revoke_commits_total counter
+corr_consumer_revoke_commits_total{outcome="ok"} 1
+corr_consumer_revoke_commits_total{outcome="failed"} 0
+corr_consumer_revoke_commits_total{outcome="skipped"} 0
+# HELP corr_consumer_owned_partitions Partitions assigned to THIS replica.
+# TYPE corr_consumer_owned_partitions gauge
+corr_consumer_owned_partitions 24
+# HELP corr_consumer_zero_assignments_total Rebalances that assigned this replica no partitions.
+# TYPE corr_consumer_zero_assignments_total counter
+corr_consumer_zero_assignments_total 0
+# HELP corr_consumer_state Consumer state: pending|idle|cold_window|active.
+# TYPE corr_consumer_state gauge
+corr_consumer_state{state="pending"} 0
+corr_consumer_state{state="idle"} 0
+corr_consumer_state{state="cold_window"} 0
+corr_consumer_state{state="active"} 1
+# TYPE corr_consumer_cold_partitions gauge
+corr_consumer_cold_partitions 0
+# HELP corr_ownership_seed_runs_total Assignments that ran a continuation seed.
+# TYPE corr_ownership_seed_runs_total counter
+corr_ownership_seed_runs_total 1
+# HELP corr_ownership_seeded_objects_total Identity placeholders reconstructed from ClickHouse on assignment.
+# TYPE corr_ownership_seeded_objects_total counter
+corr_ownership_seeded_objects_total 114
+# HELP corr_ownership_adoptions_total Arriving evidence that continued a seeded identity.
+# TYPE corr_ownership_adoptions_total counter
+corr_ownership_adoptions_total 0
+# HELP corr_ownership_seed_failures_total Seeds that fell back to pre-155 behaviour.
+# TYPE corr_ownership_seed_failures_total counter
+corr_ownership_seed_failures_total 0
+# HELP corr_ownership_seed_skipped_total Open objects the seed did not register (cap / unreconstructable).
+# TYPE corr_ownership_seed_skipped_total counter
+corr_ownership_seed_skipped_total 0
+# HELP corr_ownership_seed_expired_total Placeholders dropped without ever being adopted.
+# TYPE corr_ownership_seed_expired_total counter
+corr_ownership_seed_expired_total 0
+# HELP corr_ownership_seed_revoked_total Placeholders discarded because their partition was revoked.
+# TYPE corr_ownership_seed_revoked_total counter
+corr_ownership_seed_revoked_total 114
+# HELP corr_ownership_seed_unowned_dropped_total Adopted seeds dropped before their first version because the partition was no longer owned.
+# TYPE corr_ownership_seed_unowned_dropped_total counter
+corr_ownership_seed_unowned_dropped_total 0
+# HELP corr_ownership_seed_verdict_carried_total Versions whose verdict tier was carried from the durable row while the window refilled.
+# TYPE corr_ownership_seed_verdict_carried_total counter
+corr_ownership_seed_verdict_carried_total 0
+# HELP corr_ownership_handoff_flushed_total Open objects given a final open version at revoke, for the acquiring replica to continue.
+# TYPE corr_ownership_handoff_flushed_total counter
+corr_ownership_handoff_flushed_total 0
+# HELP corr_ownership_handoff_unflushed_total Revoked-partition objects released without a handoff flush (budget exhausted or the write failed).
+# TYPE corr_ownership_handoff_unflushed_total counter
+corr_ownership_handoff_unflushed_total 0
+# HELP corr_ownership_handoff_released_total Registrations forgotten because the rebalance did not return their partition.
+# TYPE corr_ownership_handoff_released_total counter
+corr_ownership_handoff_released_total 0
+# HELP corr_ownership_unowned_persist_dropped_total Persists refused because the tenant's partition is not owned at write time.
+# TYPE corr_ownership_unowned_persist_dropped_total counter
+corr_ownership_unowned_persist_dropped_total 0
+# HELP corr_ownership_unowned_admission_dropped_total New objects refused because the tenant's partition is not owned.
+# TYPE corr_ownership_unowned_admission_dropped_total counter
+corr_ownership_unowned_admission_dropped_total 0
+# TYPE corr_signal_batch_pending gauge
+corr_signal_batch_pending 0
+# HELP corr_loop_lag_stalls_total Loop-lag samples over the warn threshold.
+# TYPE corr_loop_lag_stalls_total counter
+corr_loop_lag_stalls_total 571
+# TYPE corr_loop_lag_max_ms gauge
+corr_loop_lag_max_ms 6649.2
+# TYPE corr_loop_lag_ms gauge
+corr_loop_lag_ms 643.0
+# HELP corr_sync_stretch_max_ms Worst uninterrupted loop-thread block.
+# TYPE corr_sync_stretch_max_ms gauge
+corr_sync_stretch_max_ms 731.8
+# HELP corr_sync_overruns_total Loop-thread blocks over the sync budget.
+# TYPE corr_sync_overruns_total counter
+corr_sync_overruns_total 1
+# HELP corr_gc_collections_total Completed cycle collections, per generation.
+# TYPE corr_gc_collections_total counter
+corr_gc_collections_total{generation="0"} 5706
+corr_gc_collections_total{generation="1"} 111
+corr_gc_collections_total{generation="2"} 3
+# HELP corr_gc_pause_seconds_max Longest single cycle collection, this process.
+# TYPE corr_gc_pause_seconds_max gauge
+corr_gc_pause_seconds_max 1.600037
+# HELP corr_gc_pause_seconds_total Time spent in cycle collections.
+# TYPE corr_gc_pause_seconds_total counter
+corr_gc_pause_seconds_total 86.502539
+# HELP corr_gc_frozen_objects Objects moved to the permanent generation at startup.
+# TYPE corr_gc_frozen_objects gauge
+corr_gc_frozen_objects 82576
+# HELP corr_gc_tuned Whether the CORR_GC_TUNE policy was applied (1) or not (0).
+# TYPE corr_gc_tuned gauge
+corr_gc_tuned 1
+# TYPE corr_archive_rows_written counter
+corr_archive_rows_written 690686
+# TYPE corr_archive_slices_damped counter
+corr_archive_slices_damped 0
+# TYPE corr_archive_slice_rows_last gauge
+corr_archive_slice_rows_last 3
+# TYPE corr_archive_slice_rows_max gauge
+corr_archive_slice_rows_max 24427
+# TYPE corr_archive_slice_reverts_total counter
+corr_archive_slice_reverts_total 0
+# TYPE corr_ingest_priority_deferrals_total counter
+corr_ingest_priority_deferrals_total 0
+# TYPE corr_ingest_priority_active gauge
+corr_ingest_priority_active 0
+# TYPE corr_open_objects_force_closed_total counter
+corr_open_objects_force_closed_total 0
+# TYPE corr_affected_history_truncated_total counter
+corr_affected_history_truncated_total 0
+# TYPE corr_affected_history_entities_max gauge
+corr_affected_history_entities_max 16734
+# HELP corr_prune_calls_total Window-prune invocations.
+# TYPE corr_prune_calls_total counter
+corr_prune_calls_total 224
+# HELP corr_prune_evicted_total Signals evicted from the window by age.
+# TYPE corr_prune_evicted_total counter
+corr_prune_evicted_total 70831
+# HELP corr_prune_seconds_last Duration of the most recent prune.
+# TYPE corr_prune_seconds_last gauge
+corr_prune_seconds_last 0.013314
+# HELP corr_prune_seconds_max Worst prune duration this process (loop-blocking).
+# TYPE corr_prune_seconds_max gauge
+corr_prune_seconds_max 0.029792
+# HELP corr_prune_gap_max_s Widest wall gap observed between successive prune (maintenance) passes.
+# TYPE corr_prune_gap_max_s gauge
+corr_prune_gap_max_s 179.650
+# HELP corr_window_id_order_resyncs_total Window/id-index drift rebuilds.
+# TYPE corr_window_id_order_resyncs_total counter
+corr_window_id_order_resyncs_total 0
+# HELP corr_prune_yields_total Loop hand-backs during pruning (chunk boundaries).
+# TYPE corr_prune_yields_total counter
+corr_prune_yields_total 488
+# HELP corr_window_overflow_dropped_total Signals dropped because the window was full.
+# TYPE corr_window_overflow_dropped_total counter
+corr_window_overflow_dropped_total 0
+# HELP corr_window_overflow_in_horizon_total Capacity drops of signals still inside the RCA horizon.
+# TYPE corr_window_overflow_in_horizon_total counter
+corr_window_overflow_in_horizon_total 0
+# HELP corr_storm_mode_active 1 while the engine has DECLARED storm mode.
+# TYPE corr_storm_mode_active gauge
+corr_storm_mode_active 0
+# HELP corr_storm_deduped_total Signal instances collapsed by storm dedup (per-cycle work).
+# TYPE corr_storm_deduped_total counter
+corr_storm_deduped_total 0
+# HELP corr_storm_aggregated_total Low-value occurrences folded into storm aggregates + severity-aware sheds.
+# TYPE corr_storm_aggregated_total counter
+corr_storm_aggregated_total 0
+# HELP corr_storm_lowvalue_shed_total Severity-aware evictions of low-value signals under storm (raw kept in Kafka).
+# TYPE corr_storm_lowvalue_shed_total counter
+corr_storm_lowvalue_shed_total 0
+# HELP corr_storm_critical_spared_total Evictions that spared a higher-severity head for a low-value victim.
+# TYPE corr_storm_critical_spared_total counter
+corr_storm_critical_spared_total 0
+# HELP corr_window_span_seconds Time span currently held in the evidence window.
+# TYPE corr_window_span_seconds gauge
+corr_window_span_seconds 510.2
+# HELP corr_window_horizon_seconds Required retention horizon (derived: reach + lateness).
+# TYPE corr_window_horizon_seconds gauge
+corr_window_horizon_seconds 516.5
+# HELP corr_oldest_retained_stream_age_seconds Oldest retained signal's age against its own tenant's stream clock.
+# TYPE corr_oldest_retained_stream_age_seconds gauge
+corr_oldest_retained_stream_age_seconds 510.215
+# HELP corr_stream_time_evictions_total Signals expired by their tenant's stream clock.
+# TYPE corr_stream_time_evictions_total counter
+corr_stream_time_evictions_total 70831
+# HELP corr_idle_tenant_evictions_total Signals shed by the wall-clock idle backstop (resource control).
+# TYPE corr_idle_tenant_evictions_total counter
+corr_idle_tenant_evictions_total 0
+# HELP corr_watermark_regressions_total Out-of-order arrivals that did not move a tenant's stream clock.
+# TYPE corr_watermark_regressions_total counter
+corr_watermark_regressions_total 96244
+# HELP corr_tenants_tracked Tenants with a live stream watermark.
+# TYPE corr_tenants_tracked gauge
+corr_tenants_tracked 1
+# HELP corr_engine_reach_seconds Largest event-time gap the engine can still attach across.
+# TYPE corr_engine_reach_seconds gauge
+corr_engine_reach_seconds 396.527
+# HELP corr_retention_required_seconds Engine reach plus permitted lateness.
+# TYPE corr_retention_required_seconds gauge
+corr_retention_required_seconds 516.527
+# HELP corr_permitted_lateness_seconds Declared allowance for late-arriving evidence.
+# TYPE corr_permitted_lateness_seconds gauge
+corr_permitted_lateness_seconds 120.000
+# HELP corr_agg_enabled 1 when the Aggregation plane is collapsing repeats at ingest.
+# TYPE corr_agg_enabled gauge
+corr_agg_enabled 1
+# HELP corr_agg_observed_total Promoted signals offered to the Aggregation plane.
+# TYPE corr_agg_observed_total counter
+corr_agg_observed_total 109534
+# HELP corr_agg_forwarded_total Deltas forwarded to the engine window, by causal class.
+# TYPE corr_agg_forwarded_total counter
+corr_agg_forwarded_total{class="first"} 83877
+corr_agg_forwarded_total{class="state_transition"} 6448
+corr_agg_forwarded_total{class="recovery"} 9425
+corr_agg_forwarded_total{class="contradiction"} 0
+corr_agg_forwarded_total{class="new_vantage"} 0
+corr_agg_forwarded_total{class="new_modality"} 0
+corr_agg_forwarded_total{class="count_threshold"} 39
+corr_agg_forwarded_total{class="repeat"} 49
+# HELP corr_agg_suppressed_total Pure repeats absorbed into aggregation state (never dropped: the raw row is persisted).
+# TYPE corr_agg_suppressed_total counter
+corr_agg_suppressed_total 9696
+# HELP corr_agg_keys Live aggregation keys across all tenants.
+# TYPE corr_agg_keys gauge
+corr_agg_keys 33345
+# HELP corr_agg_identities Live per-identity transition states across all tenants.
+# TYPE corr_agg_identities gauge
+corr_agg_identities 54365
+# HELP corr_agg_evicted_total Aggregation state evicted, by reason (closed label set).
+# TYPE corr_agg_evicted_total counter
+corr_agg_evicted_total{reason="expired"} 66113
+corr_agg_evicted_total{reason="capacity"} 0
+corr_agg_evicted_total{reason="ident_expired"} 368
+corr_agg_evicted_total{reason="ident_capacity"} 0
+corr_agg_evicted_total{reason="tenant_capacity"} 0
+# HELP corr_agg_state_transitions_total Identity state transitions seen (always forwarded synchronously).
+# TYPE corr_agg_state_transitions_total counter
+corr_agg_state_transitions_total 15873
+# HELP corr_agg_recoveries_total Recovery transitions seen (always forwarded synchronously).
+# TYPE corr_agg_recoveries_total counter
+corr_agg_recoveries_total 9425
+# HELP corr_agg_late_forwarded_total Observations forwarded because the plane could not order them (never suppressed).
+# TYPE corr_agg_late_forwarded_total counter
+corr_agg_late_forwarded_total 49
+# HELP corr_agg_beyond_lateness_total Observations that arrived outside the declared permitted lateness.
+# TYPE corr_agg_beyond_lateness_total counter
+corr_agg_beyond_lateness_total 0
+# HELP corr_window_utilization Fraction of the evidence window's record cap in use.
+# TYPE corr_window_utilization gauge
+corr_window_utilization 0.1932
+# HELP corr_rca_evidence_degraded 1 when capacity is shedding still-attachable evidence.
+# TYPE corr_rca_evidence_degraded gauge
+corr_rca_evidence_degraded 0
+# HELP corr_rca_degradation_reason Why RCA context is short (closed label set).
+# TYPE corr_rca_degradation_reason gauge
+corr_rca_degradation_reason{reason="none"} 1
+corr_rca_degradation_reason{reason="resource_capacity"} 0
+corr_rca_degradation_reason{reason="partition_topology"} 0
+# HELP corr_copartition_ok 1 when this member owns one partition set across all topics.
+# TYPE corr_copartition_ok gauge
+corr_copartition_ok 1
+# HELP corr_copartition_violations_total Rebalances that broke the co-partitioning invariant.
+# TYPE corr_copartition_violations_total counter
+corr_copartition_violations_total 0
+# HELP corr_consumer_lag_total In-process backlog; the idle backstop may only run at 0.
+# TYPE corr_consumer_lag_total gauge
+corr_consumer_lag_total 0
+# HELP corr_session_timeout_ms Kafka session timeout this consumer runs with (group-membership contract).
+# TYPE corr_session_timeout_ms gauge
+corr_session_timeout_ms 60000
+# HELP corr_engine_cohort_size Max new signals admitted to one transaction.
+# TYPE corr_engine_cohort_size gauge
+corr_engine_cohort_size 5000
+# HELP corr_engine_cohorts_total Correlation transactions completed.
+# TYPE corr_engine_cohorts_total counter
+corr_engine_cohorts_total 46
+# HELP corr_engine_pending Signals retained but not yet correlated.
+# TYPE corr_engine_pending gauge
+corr_engine_pending 0
+# HELP corr_engine_pending_peak Highest pending depth observed.
+# TYPE corr_engine_pending_peak gauge
+corr_engine_pending_peak 3873
+# HELP corr_engine_oldest_pending_age_seconds Event-time age of the oldest unevaluated signal.
+# TYPE corr_engine_oldest_pending_age_seconds gauge
+corr_engine_oldest_pending_age_seconds 0.0
+# HELP corr_engine_epochs_total Snapshot/drain epochs begun.
+# TYPE corr_engine_epochs_total counter
+corr_engine_epochs_total 224
+# HELP corr_engine_preparations_total Per-tenant snapshot preparations (node metadata + candidate index).
+# TYPE corr_engine_preparations_total counter
+corr_engine_preparations_total 109
+# HELP corr_engine_prep_seconds_total Time spent preparing snapshots.
+# TYPE corr_engine_prep_seconds_total counter
+corr_engine_prep_seconds_total 199.791
+# HELP corr_engine_prep_seconds_max Slowest single epoch preparation.
+# TYPE corr_engine_prep_seconds_max gauge
+corr_engine_prep_seconds_max 6.200
+# HELP corr_engine_prep_nodes Nodes held by the last epoch's prepared state.
+# TYPE corr_engine_prep_nodes gauge
+corr_engine_prep_nodes 18177
+# HELP corr_engine_epoch_seconds_max Longest drain epoch (bounds how long retention is deferred).
+# TYPE corr_engine_epoch_seconds_max gauge
+corr_engine_epoch_seconds_max 149.510
+# HELP corr_engine_epoch_cohorts_max Most cohorts drained in one epoch.
+# TYPE corr_engine_epoch_cohorts_max gauge
+corr_engine_epoch_cohorts_max 1
+# HELP corr_engine_windows_rejected_total Tenant windows rejected on engine input error (their evidence is discarded).
+# TYPE corr_engine_windows_rejected_total counter
+corr_engine_windows_rejected_total 0
+# HELP corr_engine_profiler_errors_total Faults inside profiler/accounting code (isolated from correctness).
+# TYPE corr_engine_profiler_errors_total counter
+corr_engine_profiler_errors_total 0
+# HELP corr_signals_dropped_total Signals marked processed without being evaluated, by reason.
+# TYPE corr_signals_dropped_total counter
+corr_signals_dropped_total{reason="window_rejected"} 0
+# HELP corr_cohort_components_total Components considered per cohort (summed).
+# TYPE corr_cohort_components_total counter
+corr_cohort_components_total 65547
+# HELP corr_cohort_components_touched_total Components a cohort's new keys touched.
+# TYPE corr_cohort_components_touched_total counter
+corr_cohort_components_touched_total 20810
+# HELP corr_cohort_components_memo_hits_total Untouched components served from the intra-epoch memo.
+# TYPE corr_cohort_components_memo_hits_total counter
+corr_cohort_components_memo_hits_total 0
+# HELP corr_cohort_components_ranked_total Components actually ranked + materialized.
+# TYPE corr_cohort_components_ranked_total counter
+corr_cohort_components_ranked_total 65547
+# HELP corr_rank_memo Level-1 rank memo lookups by outcome.
+# TYPE corr_rank_memo counter
+corr_rank_memo{result="hit"} 46411
+corr_rank_memo{result="miss"} 19136
+corr_rank_memo{result="evicted"} 0
+corr_rank_memo{result="unkeyable"} 0
+# HELP corr_rank_memo_entries Level-1 rank memo entries held (bound: CORR_RANK_MEMO_MAX).
+# TYPE corr_rank_memo_entries gauge
+corr_rank_memo_entries 19136
+# HELP corr_rank_memo_bytes Estimated bytes held by the level-1 rank memo.
+# TYPE corr_rank_memo_bytes gauge
+corr_rank_memo_bytes 26737521
+# HELP corr_rank_memo_bytes_max Byte bound of the level-1 rank memo (CORR_RANK_MEMO_BYTES_MAX).
+# TYPE corr_rank_memo_bytes_max gauge
+corr_rank_memo_bytes_max 100663296
+# HELP corr_rank_memo_evicted_bytes_total Bytes evicted from the level-1 rank memo by either bound.
+# TYPE corr_rank_memo_evicted_bytes_total counter
+corr_rank_memo_evicted_bytes_total 0
+# HELP corr_template_scored_total Templates actually scored by rank() (survived the tracker-167 kind index).
+# TYPE corr_template_scored_total counter
+corr_template_scored_total 463129
+# HELP corr_template_candidates_total Enabled templates considered per rank() evaluation — what a pre-167 build would have scored. Selectivity = corr_template_scored_total / corr_template_candidates_total.
+# TYPE corr_template_candidates_total counter
+corr_template_candidates_total 1913600
+# HELP corr_template_ungrounded_total Templates refused by the tracker-157 structural gate — the evidence attests none of the role/tier/group structure the signature names, so it was excluded from ranking. Disjoint from corr_template_scored_total; counted only when the kind index would otherwise have scored the template.
+# TYPE corr_template_ungrounded_total counter
+corr_template_ungrounded_total 72130
+# HELP corr_decision_memo_level Decision-memo hits by completeness level.
+# TYPE corr_decision_memo_level counter
+corr_decision_memo_level{level="1"} 46411
+corr_decision_memo_level{level="2"} 0
+# HELP corr_snapshot_digest Snapshot digests computed vs served from the per-instance cache.
+# TYPE corr_snapshot_digest counter
+corr_snapshot_digest{kind="blob",result="cached"} 19771
+corr_snapshot_digest{kind="blob",result="computed"} 68358
+corr_snapshot_digest{kind="content",result="cached"} 22582
+corr_snapshot_digest{kind="content",result="computed"} 65547
+corr_snapshot_digest{kind="material",result="cached"} 0
+corr_snapshot_digest{kind="material",result="computed"} 22290
+# HELP corr_lifecycle_passes_total Merge/quiesce/cap passes run (epoch cadence).
+# TYPE corr_lifecycle_passes_total counter
+corr_lifecycle_passes_total 224
+# HELP corr_lifecycle_seen_window_cohorts Cohorts in the lifecycle seen window.
+# TYPE corr_lifecycle_seen_window_cohorts gauge
+corr_lifecycle_seen_window_cohorts 20
+# HELP corr_lifecycle_seen_window_ids Correlation ids in the last lifecycle pass's SURVIVOR set.
+# TYPE corr_lifecycle_seen_window_ids gauge
+corr_lifecycle_seen_window_ids 447
+# HELP corr_lifecycle_merge_survivors Merge TARGETS offered to the last lifecycle pass.
+# TYPE corr_lifecycle_merge_survivors gauge
+corr_lifecycle_merge_survivors 447
+# HELP corr_lifecycle_merge_candidates Merge CANDIDATES offered to the last lifecycle pass.
+# TYPE corr_lifecycle_merge_candidates gauge
+corr_lifecycle_merge_candidates 0
+# HELP corr_lifecycle_merge_chains_skipped_total Merge pairs refused to keep one merge per object per pass.
+# TYPE corr_lifecycle_merge_chains_skipped_total counter
+corr_lifecycle_merge_chains_skipped_total 0
+# HELP corr_lifecycle_merge_pairs_evaluated_total Survivor/candidate pairs the merge predicate examined.
+# TYPE corr_lifecycle_merge_pairs_evaluated_total counter
+corr_lifecycle_merge_pairs_evaluated_total 46338
+# HELP corr_lifecycle_merge_seconds_max Slowest merge computation (index build + predicate) this process.
+# TYPE corr_lifecycle_merge_seconds_max gauge
+corr_lifecycle_merge_seconds_max 2.913028
+# HELP corr_lifecycle_merge_offloads_total Merge passes handed to the executor instead of the loop thread.
+# TYPE corr_lifecycle_merge_offloads_total counter
+corr_lifecycle_merge_offloads_total 35
+# HELP corr_lifecycle_forgotten_skipped_total Lifecycle loop entries skipped because a rebalance forgot the object mid-pass (ultra #19).
+# TYPE corr_lifecycle_forgotten_skipped_total counter
+corr_lifecycle_forgotten_skipped_total 0
+# HELP corr_evidence_queue_depth Evidence items queued for materialization.
+# TYPE corr_evidence_queue_depth gauge
+corr_evidence_queue_depth 0
+# HELP corr_evidence_queue_bytes Estimated snapshot/slice bytes the queued items keep reachable.
+# TYPE corr_evidence_queue_bytes gauge
+corr_evidence_queue_bytes 0
+# HELP corr_evidence_queue_max_items Hard bound on queued Evidence items.
+# TYPE corr_evidence_queue_max_items gauge
+corr_evidence_queue_max_items 2000
+# HELP corr_evidence_queue_bytes_max Hard bound on the estimated bytes queued Evidence items keep reachable.
+# TYPE corr_evidence_queue_bytes_max gauge
+corr_evidence_queue_bytes_max 67108864
+# HELP corr_evidence_queue_est_bytes_mean Estimator's per-item mean over the queued items (0 when empty).
+# TYPE corr_evidence_queue_est_bytes_mean gauge
+corr_evidence_queue_est_bytes_mean 0.0
+# HELP corr_evidence_queue_oldest_age_seconds Age of the oldest queued Evidence item.
+# TYPE corr_evidence_queue_oldest_age_seconds gauge
+corr_evidence_queue_oldest_age_seconds 0.0
+# HELP corr_evidence_lag_seconds Materialization lag of the last Evidence item written.
+# TYPE corr_evidence_lag_seconds gauge
+corr_evidence_lag_seconds 1.484
+# HELP corr_evidence_queue_backpressure_total Puts that BLOCKED the Decision plane on a full queue.
+# TYPE corr_evidence_queue_backpressure_total counter
+corr_evidence_queue_backpressure_total 0
+# HELP corr_evidence_hold_seconds Age of the cohort hold currently open (0 = none).
+# TYPE corr_evidence_hold_seconds gauge
+corr_evidence_hold_seconds 0.0
+# HELP corr_evidence_hold_expired_total Cohort holds broken by CORR_EVIDENCE_HOLD_MAX_S.
+# TYPE corr_evidence_hold_expired_total counter
+corr_evidence_hold_expired_total 105
+# HELP corr_evidence_queue_depth_open Queued items whose cohort is still in its decision pass.
+# TYPE corr_evidence_queue_depth_open gauge
+corr_evidence_queue_depth_open 0
+# HELP corr_evidence_items_total Evidence items by terminal outcome.
+# TYPE corr_evidence_items_total counter
+corr_evidence_items_total{outcome="materialized"} 22582
+corr_evidence_items_total{outcome="failed"} 0
+corr_evidence_items_total{outcome="lost"} 0
+# HELP corr_evidence_consumer_revived_total Evidence consumer tasks restarted on their own loop after dying.
+# TYPE corr_evidence_consumer_revived_total counter
+corr_evidence_consumer_revived_total 0
+# HELP corr_evidence_batch_rows_abandoned_total Buffered batch rows counted lost when a dead loop's batcher was replaced.
+# TYPE corr_evidence_batch_rows_abandoned_total counter
+corr_evidence_batch_rows_abandoned_total 0
+# HELP corr_evidence_flushes_total Batched INSERT blocks issued, per table.
+# TYPE corr_evidence_flushes_total counter
+corr_evidence_flushes_total{table="netops.corr_edges"} 966
+corr_evidence_flushes_total{table="netops.corr_evidence"} 965
+corr_evidence_flushes_total{table="netops.corr_signals_archive"} 792
+# HELP corr_evidence_rows_per_flush Mean rows per batched INSERT block.
+# TYPE corr_evidence_rows_per_flush gauge
+corr_evidence_rows_per_flush 2827.16
+# HELP corr_evidence_batch_age_seconds_max Oldest row age at flush, worst seen.
+# TYPE corr_evidence_batch_age_seconds_max gauge
+corr_evidence_batch_age_seconds_max 8.65
+# HELP corr_evidence_batch_buffered_rows Rows sitting in a partial block right now.
+# TYPE corr_evidence_batch_buffered_rows gauge
+corr_evidence_batch_buffered_rows 0
+# HELP corr_evidence_batch_blocks_failed_total Batched blocks whose INSERT did not commit.
+# TYPE corr_evidence_batch_blocks_failed_total counter
+corr_evidence_batch_blocks_failed_total 0
+# HELP corr_engine_epoch_budget_exits_total Drain sweeps ended by CORR_ENGINE_EPOCH_BUDGET_S.
+# TYPE corr_engine_epoch_budget_exits_total counter
+corr_engine_epoch_budget_exits_total 0
+# HELP corr_open_objects_epoch_peak Highest open-object count observed inside an epoch (pre-lifecycle).
+# TYPE corr_open_objects_epoch_peak gauge
+corr_open_objects_epoch_peak 1750
+# HELP corr_cohort_open_objects Open objects after the last cohort.
+# TYPE corr_cohort_open_objects gauge
+corr_cohort_open_objects 447
+# HELP corr_cohort_touched Components the last cohort touched.
+# TYPE corr_cohort_touched gauge
+corr_cohort_touched 0
+# HELP corr_edge_cache_entries Settled edges carried for component formation (window-bounded).
+# TYPE corr_edge_cache_entries gauge
+corr_edge_cache_entries 132585
+# HELP corr_edge_cache_peak Highest carried-edge count observed.
+# TYPE corr_edge_cache_peak gauge
+corr_edge_cache_peak 132585
+# HELP corr_edge_cache_added_total Carried edges recorded.
+# TYPE corr_edge_cache_added_total counter
+corr_edge_cache_added_total 482304
+# HELP corr_edge_cache_dropped_total Carried edges released with their nodes.
+# TYPE corr_edge_cache_dropped_total counter
+corr_edge_cache_dropped_total 349719
+# HELP corr_edge_cache_est_bytes Estimated carried-edge memory.
+# TYPE corr_edge_cache_est_bytes gauge
+corr_edge_cache_est_bytes 42427200
+# HELP corr_processed_frontier Signal ids tracked as processed (window-bounded).
+# TYPE corr_processed_frontier gauge
+corr_processed_frontier 28985
+# HELP corr_entity_cache_entries Shared identity strings held (bounded).
+# TYPE corr_entity_cache_entries gauge
+corr_entity_cache_entries{kind="entity_id"} 50000
+corr_entity_cache_entries{kind="tokens"} 32474
+# HELP corr_entity_cache_evicted_total Shared-string cache evictions.
+# TYPE corr_entity_cache_evicted_total counter
+corr_entity_cache_evicted_total 11693
+# HELP corr_consumer_lag_unknown_partitions Assigned partitions never read here; backstop stays inert while non-zero.
+# TYPE corr_consumer_lag_unknown_partitions gauge
+corr_consumer_lag_unknown_partitions 22
+# HELP corr_consumer_lag_probe_failures_total Backlog probe unusable; backstop holds evidence.
+# TYPE corr_consumer_lag_probe_failures_total counter
+corr_consumer_lag_probe_failures_total 0
+# HELP corr_event_time_lag_seconds Wall clock minus the newest buffered event timestamp.
+# TYPE corr_event_time_lag_seconds gauge
+corr_event_time_lag_seconds 2749.860
+# HELP corr_offload_queue_depth Work submitted to the offload executor and not yet started.
+# TYPE corr_offload_queue_depth gauge
+corr_offload_queue_depth 0
+# HELP corr_offload_queue_depth_peak Highest offload queue depth observed.
+# TYPE corr_offload_queue_depth_peak gauge
+corr_offload_queue_depth_peak 4
+# HELP corr_offload_active_workers Offload calls currently executing.
+# TYPE corr_offload_active_workers gauge
+corr_offload_active_workers 0
+# HELP corr_offload_max_workers Executor thread ceiling.
+# TYPE corr_offload_max_workers gauge
+corr_offload_max_workers 4
+# HELP corr_offload_oldest_queued_age_seconds Age of the longest-waiting queued call.
+# TYPE corr_offload_oldest_queued_age_seconds gauge
+corr_offload_oldest_queued_age_seconds 0.000000
+# HELP corr_offload_submitted_total Calls handed to the offload executor.
+# TYPE corr_offload_submitted_total counter
+corr_offload_submitted_total 4849
+# HELP corr_offload_completed_total Offload calls that returned normally.
+# TYPE corr_offload_completed_total counter
+corr_offload_completed_total 4849
+# HELP corr_offload_failed_total Offload calls that raised.
+# TYPE corr_offload_failed_total counter
+corr_offload_failed_total 0
+# HELP corr_offload_rejected_total Offload submissions refused (always 0: a full plane makes the caller wait, it never drops).
+# TYPE corr_offload_rejected_total counter
+corr_offload_rejected_total 0
+# HELP corr_offload_admission_waits_total Offload calls that had to wait for a slot (backpressure engaged).
+# TYPE corr_offload_admission_waits_total counter
+corr_offload_admission_waits_total 0
+# HELP corr_offload_admission_wait_max_seconds Longest wait at the admission gate.
+# TYPE corr_offload_admission_wait_max_seconds gauge
+corr_offload_admission_wait_max_seconds 0.000000
+# HELP corr_offload_admission_waiting Callers blocked at the admission gate right now.
+# TYPE corr_offload_admission_waiting gauge
+corr_offload_admission_waiting 0
+# HELP corr_offload_admission_inflight Offload calls admitted (queued + executing).
+# TYPE corr_offload_admission_inflight gauge
+corr_offload_admission_inflight 0
+# HELP corr_offload_admission_limit Admitted-call ceiling (CORR_OFFLOAD_INFLIGHT_MAX).
+# TYPE corr_offload_admission_limit gauge
+corr_offload_admission_limit 8
+# HELP corr_offload_abandoned_total Calls still in flight when the plane was stopped.
+# TYPE corr_offload_abandoned_total counter
+corr_offload_abandoned_total 0
+# HELP corr_offload_wait_seconds Time between submission and start of execution.
+# TYPE corr_offload_wait_seconds summary
+corr_offload_wait_seconds{quantile="0.5"} 0.001452
+corr_offload_wait_seconds{quantile="0.95"} 0.018548
+corr_offload_wait_seconds{quantile="0.99"} 0.032020
+# HELP corr_offload_wait_max_seconds Worst offload queue wait observed.
+# TYPE corr_offload_wait_max_seconds gauge
+corr_offload_wait_max_seconds 0.120895
+# HELP corr_offload_exec_seconds Time spent executing an offloaded call.
+# TYPE corr_offload_exec_seconds summary
+corr_offload_exec_seconds{quantile="0.5"} 0.050573
+corr_offload_exec_seconds{quantile="0.95"} 5.735518
+corr_offload_exec_seconds{quantile="0.99"} 10.230557
+# HELP corr_offload_exec_max_seconds Worst offload execution time observed.
+# TYPE corr_offload_exec_max_seconds gauge
+corr_offload_exec_max_seconds 42.880327
+# HELP corr_handler_failures_total Events quarantined after a handler raised, by topic.
+# TYPE corr_handler_failures_total counter
+# TYPE corr_quarantined_events gauge
+corr_quarantined_events 200
+# HELP corr_tenant_claims_total Self-declared tenant_ids checked against the device registry.
+# TYPE corr_tenant_claims_total counter
+corr_tenant_claims_total{outcome="verified"} 0
+corr_tenant_claims_total{outcome="refused"} 23963
+# HELP corr_tenant_claims_refused_total Refused tenant claims by lane and reason.
+# TYPE corr_tenant_claims_refused_total counter
+corr_tenant_claims_refused_total{lane="flows",reason="identity_unattributable"} 853
+corr_tenant_claims_refused_total{lane="syslog",reason="identity_unattributable"} 23110
+# HELP corr_cross_tenant_inserts_total Inserts issued at tenant_scope=__all__, by table.
+# TYPE corr_cross_tenant_inserts_total counter
+
+
+# ==== replica netops-correlation-6 (03e7111d6c71) ip 172.18.0.19 started_at 2026-09-01T19:31:14.312408451Z source mtls https://172.18.0.19:8443/metrics ====
+# HELP corr_ingest_events Correlation intake counters by lane (monotonic since process start).
+# TYPE corr_ingest_events counter
+corr_ingest_events{counter="probes_received"} 0
+corr_ingest_events{counter="syslog_received"} 0
+corr_ingest_events{counter="syslog_signals"} 0
+corr_ingest_events{counter="metrics_received"} 0
+corr_ingest_events{counter="metrics_accepted"} 0
+corr_ingest_events{counter="metrics_dropped"} 0
+corr_ingest_events{counter="metrics_dropped_no_value"} 0
+corr_ingest_events{counter="metrics_dropped_no_identity"} 0
+corr_ingest_events{counter="metrics_dropped_stale_ts"} 0
+corr_ingest_events{counter="event_ts_invalid"} 0
+corr_ingest_events{counter="syslog_prefilter_passed"} 0
+corr_ingest_events{counter="syslog_prefilter_rejected"} 0
+corr_ingest_events{counter="agg_observed"} 0
+corr_ingest_events{counter="agg_forwarded"} 0
+corr_ingest_events{counter="agg_suppressed"} 0
+corr_ingest_events{counter="agg_keys"} 0
+corr_ingest_events{counter="agg_evicted"} 0
+corr_ingest_events{counter="event_ts_future_clamped"} 0
+corr_ingest_events{counter="event_ts_past_stale"} 0
+corr_ingest_events{counter="device_telemetry_signals"} 0
+corr_ingest_events{counter="traps_received"} 0
+corr_ingest_events{counter="traps_normalized"} 0
+corr_ingest_events{counter="traps_recanonicalized"} 0
+corr_ingest_events{counter="traps_dropped"} 0
+corr_ingest_events{counter="flows_received"} 0
+corr_ingest_events{counter="flows_dropped"} 0
+corr_ingest_events{counter="passive_flow_signals"} 0
+corr_ingest_events{counter="flow_entities_tracked"} 0
+corr_ingest_events{counter="flow_direction_pairs"} 0
+corr_ingest_events{counter="cloud_received"} 0
+corr_ingest_events{counter="cloud_signals"} 0
+corr_ingest_events{counter="cloud_dropped"} 0
+corr_ingest_events{counter="app_identity_received"} 0
+corr_ingest_events{counter="app_identity_signals"} 0
+corr_ingest_events{counter="app_identity_dropped"} 0
+corr_ingest_events{counter="app_edge_received"} 0
+corr_ingest_events{counter="app_edge_signals"} 0
+corr_ingest_events{counter="app_edge_dropped"} 0
+corr_ingest_events{counter="controller_events_received"} 0
+corr_ingest_events{counter="controller_events_signals"} 0
+corr_ingest_events{counter="controller_events_dropped"} 0
+corr_ingest_events{counter="verification_received"} 0
+corr_ingest_events{counter="verification_signals"} 0
+corr_ingest_events{counter="verification_dropped"} 0
+corr_ingest_events{counter="wireless_received"} 0
+corr_ingest_events{counter="wireless_signals"} 0
+corr_ingest_events{counter="wireless_dropped"} 0
+# TYPE corr_deadletters counter
+corr_deadletters 0
+# TYPE corr_window_signals gauge
+corr_window_signals 0
+# TYPE corr_open_objects gauge
+corr_open_objects 0
+# HELP corr_zscore_series_evicted_total Legacy z-score baselines evicted by the LRU cap.
+# TYPE corr_zscore_series_evicted_total counter
+corr_zscore_series_evicted_total 0
+# TYPE corr_zscore_series gauge
+corr_zscore_series{k="len"} 0
+corr_zscore_series{k="max"} 28672
+# TYPE corr_versions counter
+corr_versions{outcome="persisted"} 0
+corr_versions{outcome="damped"} 0
+corr_versions{outcome="heartbeat_touch"} 0
+# HELP corr_ingest_prefilter_total Raw syslog lines by ingest pre-filter verdict.
+# TYPE corr_ingest_prefilter_total counter
+corr_ingest_prefilter_total{outcome="passed"} 0
+corr_ingest_prefilter_total{outcome="rejected"} 0
+# HELP corr_current_projection_write_failures_total corr_current projection writes lost (hot-read staleness risk).
+# TYPE corr_current_projection_write_failures_total counter
+corr_current_projection_write_failures_total 0
+# HELP corr_ch_insert_failures_total ClickHouse inserts that did not land, by table.
+# TYPE corr_ch_insert_failures_total counter
+# HELP corr_ch_rows_dlq_spooled_total Rows of a given-up insert preserved in the dead-letter file, by table.
+# TYPE corr_ch_rows_dlq_spooled_total counter
+# HELP corr_signal_batch Batched corr_signals write-path events.
+# TYPE corr_signal_batch counter
+corr_signal_batch{event="flushes"} 0
+corr_signal_batch{event="rows_flushed"} 0
+corr_signal_batch{event="rows_quarantined"} 0
+corr_signal_batch{event="rows_replay_deduped"} 0
+# HELP corr_consumer_revoke_commits_total Rebalance revoke-hook flush+commit outcomes.
+# TYPE corr_consumer_revoke_commits_total counter
+corr_consumer_revoke_commits_total{outcome="ok"} 0
+corr_consumer_revoke_commits_total{outcome="failed"} 0
+corr_consumer_revoke_commits_total{outcome="skipped"} 0
+# HELP corr_consumer_owned_partitions Partitions assigned to THIS replica.
+# TYPE corr_consumer_owned_partitions gauge
+corr_consumer_owned_partitions 24
+# HELP corr_consumer_zero_assignments_total Rebalances that assigned this replica no partitions.
+# TYPE corr_consumer_zero_assignments_total counter
+corr_consumer_zero_assignments_total 0
+# HELP corr_consumer_state Consumer state: pending|idle|cold_window|active.
+# TYPE corr_consumer_state gauge
+corr_consumer_state{state="pending"} 0
+corr_consumer_state{state="idle"} 0
+corr_consumer_state{state="cold_window"} 0
+corr_consumer_state{state="active"} 1
+# TYPE corr_consumer_cold_partitions gauge
+corr_consumer_cold_partitions 0
+# HELP corr_ownership_seed_runs_total Assignments that ran a continuation seed.
+# TYPE corr_ownership_seed_runs_total counter
+corr_ownership_seed_runs_total 1
+# HELP corr_ownership_seeded_objects_total Identity placeholders reconstructed from ClickHouse on assignment.
+# TYPE corr_ownership_seeded_objects_total counter
+corr_ownership_seeded_objects_total 0
+# HELP corr_ownership_adoptions_total Arriving evidence that continued a seeded identity.
+# TYPE corr_ownership_adoptions_total counter
+corr_ownership_adoptions_total 0
+# HELP corr_ownership_seed_failures_total Seeds that fell back to pre-155 behaviour.
+# TYPE corr_ownership_seed_failures_total counter
+corr_ownership_seed_failures_total 0
+# HELP corr_ownership_seed_skipped_total Open objects the seed did not register (cap / unreconstructable).
+# TYPE corr_ownership_seed_skipped_total counter
+corr_ownership_seed_skipped_total 0
+# HELP corr_ownership_seed_expired_total Placeholders dropped without ever being adopted.
+# TYPE corr_ownership_seed_expired_total counter
+corr_ownership_seed_expired_total 0
+# HELP corr_ownership_seed_revoked_total Placeholders discarded because their partition was revoked.
+# TYPE corr_ownership_seed_revoked_total counter
+corr_ownership_seed_revoked_total 0
+# HELP corr_ownership_seed_unowned_dropped_total Adopted seeds dropped before their first version because the partition was no longer owned.
+# TYPE corr_ownership_seed_unowned_dropped_total counter
+corr_ownership_seed_unowned_dropped_total 0
+# HELP corr_ownership_seed_verdict_carried_total Versions whose verdict tier was carried from the durable row while the window refilled.
+# TYPE corr_ownership_seed_verdict_carried_total counter
+corr_ownership_seed_verdict_carried_total 0
+# HELP corr_ownership_handoff_flushed_total Open objects given a final open version at revoke, for the acquiring replica to continue.
+# TYPE corr_ownership_handoff_flushed_total counter
+corr_ownership_handoff_flushed_total 0
+# HELP corr_ownership_handoff_unflushed_total Revoked-partition objects released without a handoff flush (budget exhausted or the write failed).
+# TYPE corr_ownership_handoff_unflushed_total counter
+corr_ownership_handoff_unflushed_total 0
+# HELP corr_ownership_handoff_released_total Registrations forgotten because the rebalance did not return their partition.
+# TYPE corr_ownership_handoff_released_total counter
+corr_ownership_handoff_released_total 0
+# HELP corr_ownership_unowned_persist_dropped_total Persists refused because the tenant's partition is not owned at write time.
+# TYPE corr_ownership_unowned_persist_dropped_total counter
+corr_ownership_unowned_persist_dropped_total 0
+# HELP corr_ownership_unowned_admission_dropped_total New objects refused because the tenant's partition is not owned.
+# TYPE corr_ownership_unowned_admission_dropped_total counter
+corr_ownership_unowned_admission_dropped_total 0
+# TYPE corr_signal_batch_pending gauge
+corr_signal_batch_pending 0
+# HELP corr_loop_lag_stalls_total Loop-lag samples over the warn threshold.
+# TYPE corr_loop_lag_stalls_total counter
+corr_loop_lag_stalls_total 0
+# TYPE corr_loop_lag_max_ms gauge
+corr_loop_lag_max_ms 97.9
+# TYPE corr_loop_lag_ms gauge
+corr_loop_lag_ms 1.3
+# HELP corr_sync_stretch_max_ms Worst uninterrupted loop-thread block.
+# TYPE corr_sync_stretch_max_ms gauge
+corr_sync_stretch_max_ms 2.2
+# HELP corr_sync_overruns_total Loop-thread blocks over the sync budget.
+# TYPE corr_sync_overruns_total counter
+corr_sync_overruns_total 0
+# HELP corr_gc_collections_total Completed cycle collections, per generation.
+# TYPE corr_gc_collections_total counter
+corr_gc_collections_total{generation="0"} 0
+corr_gc_collections_total{generation="1"} 0
+corr_gc_collections_total{generation="2"} 1
+# HELP corr_gc_pause_seconds_max Longest single cycle collection, this process.
+# TYPE corr_gc_pause_seconds_max gauge
+corr_gc_pause_seconds_max 0.090339
+# HELP corr_gc_pause_seconds_total Time spent in cycle collections.
+# TYPE corr_gc_pause_seconds_total counter
+corr_gc_pause_seconds_total 0.090339
+# HELP corr_gc_frozen_objects Objects moved to the permanent generation at startup.
+# TYPE corr_gc_frozen_objects gauge
+corr_gc_frozen_objects 82576
+# HELP corr_gc_tuned Whether the CORR_GC_TUNE policy was applied (1) or not (0).
+# TYPE corr_gc_tuned gauge
+corr_gc_tuned 1
+# TYPE corr_archive_rows_written counter
+corr_archive_rows_written 0
+# TYPE corr_archive_slices_damped counter
+corr_archive_slices_damped 0
+# TYPE corr_archive_slice_rows_last gauge
+corr_archive_slice_rows_last 0
+# TYPE corr_archive_slice_rows_max gauge
+corr_archive_slice_rows_max 0
+# TYPE corr_archive_slice_reverts_total counter
+corr_archive_slice_reverts_total 0
+# TYPE corr_ingest_priority_deferrals_total counter
+corr_ingest_priority_deferrals_total 0
+# TYPE corr_ingest_priority_active gauge
+corr_ingest_priority_active 0
+# TYPE corr_open_objects_force_closed_total counter
+corr_open_objects_force_closed_total 0
+# TYPE corr_affected_history_truncated_total counter
+corr_affected_history_truncated_total 0
+# TYPE corr_affected_history_entities_max gauge
+corr_affected_history_entities_max 0
+# HELP corr_prune_calls_total Window-prune invocations.
+# TYPE corr_prune_calls_total counter
+corr_prune_calls_total 381
+# HELP corr_prune_evicted_total Signals evicted from the window by age.
+# TYPE corr_prune_evicted_total counter
+corr_prune_evicted_total 0
+# HELP corr_prune_seconds_last Duration of the most recent prune.
+# TYPE corr_prune_seconds_last gauge
+corr_prune_seconds_last 0.000000
+# HELP corr_prune_seconds_max Worst prune duration this process (loop-blocking).
+# TYPE corr_prune_seconds_max gauge
+corr_prune_seconds_max 0.000000
+# HELP corr_prune_gap_max_s Widest wall gap observed between successive prune (maintenance) passes.
+# TYPE corr_prune_gap_max_s gauge
+corr_prune_gap_max_s 30.019
+# HELP corr_window_id_order_resyncs_total Window/id-index drift rebuilds.
+# TYPE corr_window_id_order_resyncs_total counter
+corr_window_id_order_resyncs_total 0
+# HELP corr_prune_yields_total Loop hand-backs during pruning (chunk boundaries).
+# TYPE corr_prune_yields_total counter
+corr_prune_yields_total 0
+# HELP corr_window_overflow_dropped_total Signals dropped because the window was full.
+# TYPE corr_window_overflow_dropped_total counter
+corr_window_overflow_dropped_total 0
+# HELP corr_window_overflow_in_horizon_total Capacity drops of signals still inside the RCA horizon.
+# TYPE corr_window_overflow_in_horizon_total counter
+corr_window_overflow_in_horizon_total 0
+# HELP corr_storm_mode_active 1 while the engine has DECLARED storm mode.
+# TYPE corr_storm_mode_active gauge
+corr_storm_mode_active 0
+# HELP corr_storm_deduped_total Signal instances collapsed by storm dedup (per-cycle work).
+# TYPE corr_storm_deduped_total counter
+corr_storm_deduped_total 0
+# HELP corr_storm_aggregated_total Low-value occurrences folded into storm aggregates + severity-aware sheds.
+# TYPE corr_storm_aggregated_total counter
+corr_storm_aggregated_total 0
+# HELP corr_storm_lowvalue_shed_total Severity-aware evictions of low-value signals under storm (raw kept in Kafka).
+# TYPE corr_storm_lowvalue_shed_total counter
+corr_storm_lowvalue_shed_total 0
+# HELP corr_storm_critical_spared_total Evictions that spared a higher-severity head for a low-value victim.
+# TYPE corr_storm_critical_spared_total counter
+corr_storm_critical_spared_total 0
+# HELP corr_window_span_seconds Time span currently held in the evidence window.
+# TYPE corr_window_span_seconds gauge
+corr_window_span_seconds 0.0
+# HELP corr_window_horizon_seconds Required retention horizon (derived: reach + lateness).
+# TYPE corr_window_horizon_seconds gauge
+corr_window_horizon_seconds 516.5
+# HELP corr_oldest_retained_stream_age_seconds Oldest retained signal's age against its own tenant's stream clock.
+# TYPE corr_oldest_retained_stream_age_seconds gauge
+corr_oldest_retained_stream_age_seconds 0.000
+# HELP corr_stream_time_evictions_total Signals expired by their tenant's stream clock.
+# TYPE corr_stream_time_evictions_total counter
+corr_stream_time_evictions_total 0
+# HELP corr_idle_tenant_evictions_total Signals shed by the wall-clock idle backstop (resource control).
+# TYPE corr_idle_tenant_evictions_total counter
+corr_idle_tenant_evictions_total 0
+# HELP corr_watermark_regressions_total Out-of-order arrivals that did not move a tenant's stream clock.
+# TYPE corr_watermark_regressions_total counter
+corr_watermark_regressions_total 0
+# HELP corr_tenants_tracked Tenants with a live stream watermark.
+# TYPE corr_tenants_tracked gauge
+corr_tenants_tracked 0
+# HELP corr_engine_reach_seconds Largest event-time gap the engine can still attach across.
+# TYPE corr_engine_reach_seconds gauge
+corr_engine_reach_seconds 396.527
+# HELP corr_retention_required_seconds Engine reach plus permitted lateness.
+# TYPE corr_retention_required_seconds gauge
+corr_retention_required_seconds 516.527
+# HELP corr_permitted_lateness_seconds Declared allowance for late-arriving evidence.
+# TYPE corr_permitted_lateness_seconds gauge
+corr_permitted_lateness_seconds 120.000
+# HELP corr_agg_enabled 1 when the Aggregation plane is collapsing repeats at ingest.
+# TYPE corr_agg_enabled gauge
+corr_agg_enabled 1
+# HELP corr_agg_observed_total Promoted signals offered to the Aggregation plane.
+# TYPE corr_agg_observed_total counter
+corr_agg_observed_total 0
+# HELP corr_agg_forwarded_total Deltas forwarded to the engine window, by causal class.
+# TYPE corr_agg_forwarded_total counter
+corr_agg_forwarded_total{class="first"} 0
+corr_agg_forwarded_total{class="state_transition"} 0
+corr_agg_forwarded_total{class="recovery"} 0
+corr_agg_forwarded_total{class="contradiction"} 0
+corr_agg_forwarded_total{class="new_vantage"} 0
+corr_agg_forwarded_total{class="new_modality"} 0
+corr_agg_forwarded_total{class="count_threshold"} 0
+corr_agg_forwarded_total{class="repeat"} 0
+# HELP corr_agg_suppressed_total Pure repeats absorbed into aggregation state (never dropped: the raw row is persisted).
+# TYPE corr_agg_suppressed_total counter
+corr_agg_suppressed_total 0
+# HELP corr_agg_keys Live aggregation keys across all tenants.
+# TYPE corr_agg_keys gauge
+corr_agg_keys 0
+# HELP corr_agg_identities Live per-identity transition states across all tenants.
+# TYPE corr_agg_identities gauge
+corr_agg_identities 0
+# HELP corr_agg_evicted_total Aggregation state evicted, by reason (closed label set).
+# TYPE corr_agg_evicted_total counter
+corr_agg_evicted_total{reason="expired"} 0
+corr_agg_evicted_total{reason="capacity"} 0
+corr_agg_evicted_total{reason="ident_expired"} 0
+corr_agg_evicted_total{reason="ident_capacity"} 0
+corr_agg_evicted_total{reason="tenant_capacity"} 0
+# HELP corr_agg_state_transitions_total Identity state transitions seen (always forwarded synchronously).
+# TYPE corr_agg_state_transitions_total counter
+corr_agg_state_transitions_total 0
+# HELP corr_agg_recoveries_total Recovery transitions seen (always forwarded synchronously).
+# TYPE corr_agg_recoveries_total counter
+corr_agg_recoveries_total 0
+# HELP corr_agg_late_forwarded_total Observations forwarded because the plane could not order them (never suppressed).
+# TYPE corr_agg_late_forwarded_total counter
+corr_agg_late_forwarded_total 0
+# HELP corr_agg_beyond_lateness_total Observations that arrived outside the declared permitted lateness.
+# TYPE corr_agg_beyond_lateness_total counter
+corr_agg_beyond_lateness_total 0
+# HELP corr_window_utilization Fraction of the evidence window's record cap in use.
+# TYPE corr_window_utilization gauge
+corr_window_utilization 0.0000
+# HELP corr_rca_evidence_degraded 1 when capacity is shedding still-attachable evidence.
+# TYPE corr_rca_evidence_degraded gauge
+corr_rca_evidence_degraded 0
+# HELP corr_rca_degradation_reason Why RCA context is short (closed label set).
+# TYPE corr_rca_degradation_reason gauge
+corr_rca_degradation_reason{reason="none"} 1
+corr_rca_degradation_reason{reason="resource_capacity"} 0
+corr_rca_degradation_reason{reason="partition_topology"} 0
+# HELP corr_copartition_ok 1 when this member owns one partition set across all topics.
+# TYPE corr_copartition_ok gauge
+corr_copartition_ok 1
+# HELP corr_copartition_violations_total Rebalances that broke the co-partitioning invariant.
+# TYPE corr_copartition_violations_total counter
+corr_copartition_violations_total 0
+# HELP corr_consumer_lag_total In-process backlog; the idle backstop may only run at 0.
+# TYPE corr_consumer_lag_total gauge
+corr_consumer_lag_total -1
+# HELP corr_session_timeout_ms Kafka session timeout this consumer runs with (group-membership contract).
+# TYPE corr_session_timeout_ms gauge
+corr_session_timeout_ms 60000
+# HELP corr_engine_cohort_size Max new signals admitted to one transaction.
+# TYPE corr_engine_cohort_size gauge
+corr_engine_cohort_size 5000
+# HELP corr_engine_cohorts_total Correlation transactions completed.
+# TYPE corr_engine_cohorts_total counter
+corr_engine_cohorts_total 0
+# HELP corr_engine_pending Signals retained but not yet correlated.
+# TYPE corr_engine_pending gauge
+corr_engine_pending 0
+# HELP corr_engine_pending_peak Highest pending depth observed.
+# TYPE corr_engine_pending_peak gauge
+corr_engine_pending_peak 0
+# HELP corr_engine_oldest_pending_age_seconds Event-time age of the oldest unevaluated signal.
+# TYPE corr_engine_oldest_pending_age_seconds gauge
+corr_engine_oldest_pending_age_seconds 0.0
+# HELP corr_engine_epochs_total Snapshot/drain epochs begun.
+# TYPE corr_engine_epochs_total counter
+corr_engine_epochs_total 381
+# HELP corr_engine_preparations_total Per-tenant snapshot preparations (node metadata + candidate index).
+# TYPE corr_engine_preparations_total counter
+corr_engine_preparations_total 0
+# HELP corr_engine_prep_seconds_total Time spent preparing snapshots.
+# TYPE corr_engine_prep_seconds_total counter
+corr_engine_prep_seconds_total 0.005
+# HELP corr_engine_prep_seconds_max Slowest single epoch preparation.
+# TYPE corr_engine_prep_seconds_max gauge
+corr_engine_prep_seconds_max 0.000
+# HELP corr_engine_prep_nodes Nodes held by the last epoch's prepared state.
+# TYPE corr_engine_prep_nodes gauge
+corr_engine_prep_nodes 0
+# HELP corr_engine_epoch_seconds_max Longest drain epoch (bounds how long retention is deferred).
+# TYPE corr_engine_epoch_seconds_max gauge
+corr_engine_epoch_seconds_max 0.013
+# HELP corr_engine_epoch_cohorts_max Most cohorts drained in one epoch.
+# TYPE corr_engine_epoch_cohorts_max gauge
+corr_engine_epoch_cohorts_max 1
+# HELP corr_engine_windows_rejected_total Tenant windows rejected on engine input error (their evidence is discarded).
+# TYPE corr_engine_windows_rejected_total counter
+corr_engine_windows_rejected_total 0
+# HELP corr_engine_profiler_errors_total Faults inside profiler/accounting code (isolated from correctness).
+# TYPE corr_engine_profiler_errors_total counter
+corr_engine_profiler_errors_total 0
+# HELP corr_signals_dropped_total Signals marked processed without being evaluated, by reason.
+# TYPE corr_signals_dropped_total counter
+corr_signals_dropped_total{reason="window_rejected"} 0
+# HELP corr_cohort_components_total Components considered per cohort (summed).
+# TYPE corr_cohort_components_total counter
+corr_cohort_components_total 0
+# HELP corr_cohort_components_touched_total Components a cohort's new keys touched.
+# TYPE corr_cohort_components_touched_total counter
+corr_cohort_components_touched_total 0
+# HELP corr_cohort_components_memo_hits_total Untouched components served from the intra-epoch memo.
+# TYPE corr_cohort_components_memo_hits_total counter
+corr_cohort_components_memo_hits_total 0
+# HELP corr_cohort_components_ranked_total Components actually ranked + materialized.
+# TYPE corr_cohort_components_ranked_total counter
+corr_cohort_components_ranked_total 0
+# HELP corr_rank_memo Level-1 rank memo lookups by outcome.
+# TYPE corr_rank_memo counter
+corr_rank_memo{result="hit"} 0
+corr_rank_memo{result="miss"} 0
+corr_rank_memo{result="evicted"} 0
+corr_rank_memo{result="unkeyable"} 0
+# HELP corr_rank_memo_entries Level-1 rank memo entries held (bound: CORR_RANK_MEMO_MAX).
+# TYPE corr_rank_memo_entries gauge
+corr_rank_memo_entries 0
+# HELP corr_rank_memo_bytes Estimated bytes held by the level-1 rank memo.
+# TYPE corr_rank_memo_bytes gauge
+corr_rank_memo_bytes 0
+# HELP corr_rank_memo_bytes_max Byte bound of the level-1 rank memo (CORR_RANK_MEMO_BYTES_MAX).
+# TYPE corr_rank_memo_bytes_max gauge
+corr_rank_memo_bytes_max 100663296
+# HELP corr_rank_memo_evicted_bytes_total Bytes evicted from the level-1 rank memo by either bound.
+# TYPE corr_rank_memo_evicted_bytes_total counter
+corr_rank_memo_evicted_bytes_total 0
+# HELP corr_template_scored_total Templates actually scored by rank() (survived the tracker-167 kind index).
+# TYPE corr_template_scored_total counter
+corr_template_scored_total 0
+# HELP corr_template_candidates_total Enabled templates considered per rank() evaluation — what a pre-167 build would have scored. Selectivity = corr_template_scored_total / corr_template_candidates_total.
+# TYPE corr_template_candidates_total counter
+corr_template_candidates_total 0
+# HELP corr_template_ungrounded_total Templates refused by the tracker-157 structural gate — the evidence attests none of the role/tier/group structure the signature names, so it was excluded from ranking. Disjoint from corr_template_scored_total; counted only when the kind index would otherwise have scored the template.
+# TYPE corr_template_ungrounded_total counter
+corr_template_ungrounded_total 0
+# HELP corr_decision_memo_level Decision-memo hits by completeness level.
+# TYPE corr_decision_memo_level counter
+corr_decision_memo_level{level="1"} 0
+corr_decision_memo_level{level="2"} 0
+# HELP corr_snapshot_digest Snapshot digests computed vs served from the per-instance cache.
+# TYPE corr_snapshot_digest counter
+corr_snapshot_digest{kind="blob",result="cached"} 0
+corr_snapshot_digest{kind="blob",result="computed"} 0
+corr_snapshot_digest{kind="content",result="cached"} 0
+corr_snapshot_digest{kind="content",result="computed"} 0
+corr_snapshot_digest{kind="material",result="cached"} 0
+corr_snapshot_digest{kind="material",result="computed"} 0
+# HELP corr_lifecycle_passes_total Merge/quiesce/cap passes run (epoch cadence).
+# TYPE corr_lifecycle_passes_total counter
+corr_lifecycle_passes_total 381
+# HELP corr_lifecycle_seen_window_cohorts Cohorts in the lifecycle seen window.
+# TYPE corr_lifecycle_seen_window_cohorts gauge
+corr_lifecycle_seen_window_cohorts 20
+# HELP corr_lifecycle_seen_window_ids Correlation ids in the last lifecycle pass's SURVIVOR set.
+# TYPE corr_lifecycle_seen_window_ids gauge
+corr_lifecycle_seen_window_ids 0
+# HELP corr_lifecycle_merge_survivors Merge TARGETS offered to the last lifecycle pass.
+# TYPE corr_lifecycle_merge_survivors gauge
+corr_lifecycle_merge_survivors 0
+# HELP corr_lifecycle_merge_candidates Merge CANDIDATES offered to the last lifecycle pass.
+# TYPE corr_lifecycle_merge_candidates gauge
+corr_lifecycle_merge_candidates 0
+# HELP corr_lifecycle_merge_chains_skipped_total Merge pairs refused to keep one merge per object per pass.
+# TYPE corr_lifecycle_merge_chains_skipped_total counter
+corr_lifecycle_merge_chains_skipped_total 0
+# HELP corr_lifecycle_merge_pairs_evaluated_total Survivor/candidate pairs the merge predicate examined.
+# TYPE corr_lifecycle_merge_pairs_evaluated_total counter
+corr_lifecycle_merge_pairs_evaluated_total 0
+# HELP corr_lifecycle_merge_seconds_max Slowest merge computation (index build + predicate) this process.
+# TYPE corr_lifecycle_merge_seconds_max gauge
+corr_lifecycle_merge_seconds_max 0.000000
+# HELP corr_lifecycle_merge_offloads_total Merge passes handed to the executor instead of the loop thread.
+# TYPE corr_lifecycle_merge_offloads_total counter
+corr_lifecycle_merge_offloads_total 0
+# HELP corr_lifecycle_forgotten_skipped_total Lifecycle loop entries skipped because a rebalance forgot the object mid-pass (ultra #19).
+# TYPE corr_lifecycle_forgotten_skipped_total counter
+corr_lifecycle_forgotten_skipped_total 0
+# HELP corr_evidence_queue_depth Evidence items queued for materialization.
+# TYPE corr_evidence_queue_depth gauge
+corr_evidence_queue_depth 0
+# HELP corr_evidence_queue_bytes Estimated snapshot/slice bytes the queued items keep reachable.
+# TYPE corr_evidence_queue_bytes gauge
+corr_evidence_queue_bytes 0
+# HELP corr_evidence_queue_max_items Hard bound on queued Evidence items.
+# TYPE corr_evidence_queue_max_items gauge
+corr_evidence_queue_max_items 2000
+# HELP corr_evidence_queue_bytes_max Hard bound on the estimated bytes queued Evidence items keep reachable.
+# TYPE corr_evidence_queue_bytes_max gauge
+corr_evidence_queue_bytes_max 67108864
+# HELP corr_evidence_queue_est_bytes_mean Estimator's per-item mean over the queued items (0 when empty).
+# TYPE corr_evidence_queue_est_bytes_mean gauge
+corr_evidence_queue_est_bytes_mean 0.0
+# HELP corr_evidence_queue_oldest_age_seconds Age of the oldest queued Evidence item.
+# TYPE corr_evidence_queue_oldest_age_seconds gauge
+corr_evidence_queue_oldest_age_seconds 0.0
+# HELP corr_evidence_lag_seconds Materialization lag of the last Evidence item written.
+# TYPE corr_evidence_lag_seconds gauge
+corr_evidence_lag_seconds 0.0
+# HELP corr_evidence_queue_backpressure_total Puts that BLOCKED the Decision plane on a full queue.
+# TYPE corr_evidence_queue_backpressure_total counter
+corr_evidence_queue_backpressure_total 0
+# HELP corr_evidence_hold_seconds Age of the cohort hold currently open (0 = none).
+# TYPE corr_evidence_hold_seconds gauge
+corr_evidence_hold_seconds 0.0
+# HELP corr_evidence_hold_expired_total Cohort holds broken by CORR_EVIDENCE_HOLD_MAX_S.
+# TYPE corr_evidence_hold_expired_total counter
+corr_evidence_hold_expired_total 0
+# HELP corr_evidence_queue_depth_open Queued items whose cohort is still in its decision pass.
+# TYPE corr_evidence_queue_depth_open gauge
+corr_evidence_queue_depth_open 0
+# HELP corr_evidence_items_total Evidence items by terminal outcome.
+# TYPE corr_evidence_items_total counter
+corr_evidence_items_total{outcome="materialized"} 0
+corr_evidence_items_total{outcome="failed"} 0
+corr_evidence_items_total{outcome="lost"} 0
+# HELP corr_evidence_consumer_revived_total Evidence consumer tasks restarted on their own loop after dying.
+# TYPE corr_evidence_consumer_revived_total counter
+corr_evidence_consumer_revived_total 0
+# HELP corr_evidence_batch_rows_abandoned_total Buffered batch rows counted lost when a dead loop's batcher was replaced.
+# TYPE corr_evidence_batch_rows_abandoned_total counter
+corr_evidence_batch_rows_abandoned_total 0
+# HELP corr_evidence_flushes_total Batched INSERT blocks issued, per table.
+# TYPE corr_evidence_flushes_total counter
+# HELP corr_evidence_rows_per_flush Mean rows per batched INSERT block.
+# TYPE corr_evidence_rows_per_flush gauge
+corr_evidence_rows_per_flush 0.0
+# HELP corr_evidence_batch_age_seconds_max Oldest row age at flush, worst seen.
+# TYPE corr_evidence_batch_age_seconds_max gauge
+corr_evidence_batch_age_seconds_max 0.0
+# HELP corr_evidence_batch_buffered_rows Rows sitting in a partial block right now.
+# TYPE corr_evidence_batch_buffered_rows gauge
+corr_evidence_batch_buffered_rows 0
+# HELP corr_evidence_batch_blocks_failed_total Batched blocks whose INSERT did not commit.
+# TYPE corr_evidence_batch_blocks_failed_total counter
+corr_evidence_batch_blocks_failed_total 0
+# HELP corr_engine_epoch_budget_exits_total Drain sweeps ended by CORR_ENGINE_EPOCH_BUDGET_S.
+# TYPE corr_engine_epoch_budget_exits_total counter
+corr_engine_epoch_budget_exits_total 0
+# HELP corr_open_objects_epoch_peak Highest open-object count observed inside an epoch (pre-lifecycle).
+# TYPE corr_open_objects_epoch_peak gauge
+corr_open_objects_epoch_peak 0
+# HELP corr_cohort_open_objects Open objects after the last cohort.
+# TYPE corr_cohort_open_objects gauge
+corr_cohort_open_objects 0
+# HELP corr_cohort_touched Components the last cohort touched.
+# TYPE corr_cohort_touched gauge
+corr_cohort_touched 0
+# HELP corr_edge_cache_entries Settled edges carried for component formation (window-bounded).
+# TYPE corr_edge_cache_entries gauge
+corr_edge_cache_entries 0
+# HELP corr_edge_cache_peak Highest carried-edge count observed.
+# TYPE corr_edge_cache_peak gauge
+corr_edge_cache_peak 0
+# HELP corr_edge_cache_added_total Carried edges recorded.
+# TYPE corr_edge_cache_added_total counter
+corr_edge_cache_added_total 0
+# HELP corr_edge_cache_dropped_total Carried edges released with their nodes.
+# TYPE corr_edge_cache_dropped_total counter
+corr_edge_cache_dropped_total 0
+# HELP corr_edge_cache_est_bytes Estimated carried-edge memory.
+# TYPE corr_edge_cache_est_bytes gauge
+corr_edge_cache_est_bytes 0
+# HELP corr_processed_frontier Signal ids tracked as processed (window-bounded).
+# TYPE corr_processed_frontier gauge
+corr_processed_frontier 0
+# HELP corr_entity_cache_entries Shared identity strings held (bounded).
+# TYPE corr_entity_cache_entries gauge
+corr_entity_cache_entries{kind="entity_id"} 0
+corr_entity_cache_entries{kind="tokens"} 0
+# HELP corr_entity_cache_evicted_total Shared-string cache evictions.
+# TYPE corr_entity_cache_evicted_total counter
+corr_entity_cache_evicted_total 0
+# HELP corr_consumer_lag_unknown_partitions Assigned partitions never read here; backstop stays inert while non-zero.
+# TYPE corr_consumer_lag_unknown_partitions gauge
+corr_consumer_lag_unknown_partitions 0
+# HELP corr_consumer_lag_probe_failures_total Backlog probe unusable; backstop holds evidence.
+# TYPE corr_consumer_lag_probe_failures_total counter
+corr_consumer_lag_probe_failures_total 0
+# HELP corr_event_time_lag_seconds Wall clock minus the newest buffered event timestamp.
+# TYPE corr_event_time_lag_seconds gauge
+corr_event_time_lag_seconds 0.000
+# HELP corr_offload_queue_depth Work submitted to the offload executor and not yet started.
+# TYPE corr_offload_queue_depth gauge
+corr_offload_queue_depth 0
+# HELP corr_offload_queue_depth_peak Highest offload queue depth observed.
+# TYPE corr_offload_queue_depth_peak gauge
+corr_offload_queue_depth_peak 0
+# HELP corr_offload_active_workers Offload calls currently executing.
+# TYPE corr_offload_active_workers gauge
+corr_offload_active_workers 0
+# HELP corr_offload_max_workers Executor thread ceiling.
+# TYPE corr_offload_max_workers gauge
+corr_offload_max_workers 4
+# HELP corr_offload_oldest_queued_age_seconds Age of the longest-waiting queued call.
+# TYPE corr_offload_oldest_queued_age_seconds gauge
+corr_offload_oldest_queued_age_seconds 0.000000
+# HELP corr_offload_submitted_total Calls handed to the offload executor.
+# TYPE corr_offload_submitted_total counter
+corr_offload_submitted_total 0
+# HELP corr_offload_completed_total Offload calls that returned normally.
+# TYPE corr_offload_completed_total counter
+corr_offload_completed_total 0
+# HELP corr_offload_failed_total Offload calls that raised.
+# TYPE corr_offload_failed_total counter
+corr_offload_failed_total 0
+# HELP corr_offload_rejected_total Offload submissions refused (always 0: a full plane makes the caller wait, it never drops).
+# TYPE corr_offload_rejected_total counter
+corr_offload_rejected_total 0
+# HELP corr_offload_admission_waits_total Offload calls that had to wait for a slot (backpressure engaged).
+# TYPE corr_offload_admission_waits_total counter
+corr_offload_admission_waits_total 0
+# HELP corr_offload_admission_wait_max_seconds Longest wait at the admission gate.
+# TYPE corr_offload_admission_wait_max_seconds gauge
+corr_offload_admission_wait_max_seconds 0.000000
+# HELP corr_offload_admission_waiting Callers blocked at the admission gate right now.
+# TYPE corr_offload_admission_waiting gauge
+corr_offload_admission_waiting 0
+# HELP corr_offload_admission_inflight Offload calls admitted (queued + executing).
+# TYPE corr_offload_admission_inflight gauge
+corr_offload_admission_inflight 0
+# HELP corr_offload_admission_limit Admitted-call ceiling (CORR_OFFLOAD_INFLIGHT_MAX).
+# TYPE corr_offload_admission_limit gauge
+corr_offload_admission_limit 8
+# HELP corr_offload_abandoned_total Calls still in flight when the plane was stopped.
+# TYPE corr_offload_abandoned_total counter
+corr_offload_abandoned_total 0
+# HELP corr_offload_wait_seconds Time between submission and start of execution.
+# TYPE corr_offload_wait_seconds summary
+corr_offload_wait_seconds{quantile="0.5"} 0.000000
+corr_offload_wait_seconds{quantile="0.95"} 0.000000
+corr_offload_wait_seconds{quantile="0.99"} 0.000000
+# HELP corr_offload_wait_max_seconds Worst offload queue wait observed.
+# TYPE corr_offload_wait_max_seconds gauge
+corr_offload_wait_max_seconds 0.000000
+# HELP corr_offload_exec_seconds Time spent executing an offloaded call.
+# TYPE corr_offload_exec_seconds summary
+corr_offload_exec_seconds{quantile="0.5"} 0.000000
+corr_offload_exec_seconds{quantile="0.95"} 0.000000
+corr_offload_exec_seconds{quantile="0.99"} 0.000000
+# HELP corr_offload_exec_max_seconds Worst offload execution time observed.
+# TYPE corr_offload_exec_max_seconds gauge
+corr_offload_exec_max_seconds 0.000000
+# HELP corr_handler_failures_total Events quarantined after a handler raised, by topic.
+# TYPE corr_handler_failures_total counter
+# TYPE corr_quarantined_events gauge
+corr_quarantined_events 0
+# HELP corr_tenant_claims_total Self-declared tenant_ids checked against the device registry.
+# TYPE corr_tenant_claims_total counter
+corr_tenant_claims_total{outcome="verified"} 0
+corr_tenant_claims_total{outcome="refused"} 0
+# HELP corr_tenant_claims_refused_total Refused tenant claims by lane and reason.
+# TYPE corr_tenant_claims_refused_total counter
+# HELP corr_cross_tenant_inserts_total Inserts issued at tenant_scope=__all__, by table.
+# TYPE corr_cross_tenant_inserts_total counter
+

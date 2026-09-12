@@ -1,0 +1,30 @@
+{
+  "name": "Pool marked down while flow logs reject the probe ranges: probe-source block",
+  "signals": [
+    {
+      "kind": "lb_target_unhealthy",
+      "entity_type": "service",
+      "entity_id": "shop-vip",
+      "observer_id": "cloud-api-lb",
+      "observer_type": "cloud_api",
+      "modality": "device_telemetry",
+      "collection_path": "via_cloud_api",
+      "deviation": 3.0
+    },
+    {
+      "kind": "cloud_flow_reject",
+      "entity_type": "service",
+      "entity_id": "shop-backend-sg",
+      "observer_id": "flow-logs-vpc",
+      "observer_type": "flow_exporter",
+      "modality": "passive_flow",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.cloud.lb-probe-source-blocked",
+    "tier": "confirmed",
+    "owner": "netops"
+  }
+}

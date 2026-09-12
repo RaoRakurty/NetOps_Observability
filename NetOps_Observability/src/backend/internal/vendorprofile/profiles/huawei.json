@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "vendor": "huawei",
+  "display_name": "Huawei",
+  "notes": "VRP declares NO cli dialect: the protocol-diagnostics catalog ships no Huawei command bindings, so a Huawei device's dialect is honestly unknown there (the caller records the fallback it renders). The vendor-level verify.commands block IS established — the active-verification battery has authored VRP display-command rows. snmp_configgen.v3_template declares authentication-mode SHA (VRP's HMAC-SHA-1 keyword) because that is what snmpcred.BuildGeneratedCredential provisions on the credential it mints alongside the block (snmpcred.GeneratedAuthProtocol = \"SHA\"); it previously declared sha2-256, so an operator who pasted the generated config got a device the generated poller credential could not authenticate to. snmpcred.TestGeneratedV3TemplatesNameTheProtocolTheBuilderProvisions pins the two sides to that one constant.",
+  "detection": {
+    "sysobjectid_prefixes": [
+      "1.3.6.1.4.1.2011"
+    ],
+    "sysdescr_contains": [
+      "huawei",
+      "vrp"
+    ],
+    "sysdescr_rank": 70,
+    "os_version_pattern": "(?i)\\bVersion[ :]+([0-9][0-9A-Za-z.]*)"
+  },
+  "dialect": {
+    "vrf_term": "VPN instance",
+    "vrf_term_keys": [
+      "huawei",
+      "vrp"
+    ],
+    "vrf_synonyms": [
+      "vpn-instance"
+    ],
+    "vrf_scope_keyword": "vpn-instance"
+  },
+  "verify": {
+    "commands": {
+      "ssh_bgp_edge": "display bgp peer",
+      "ssh_config_change": "display configuration commit list",
+      "ssh_iface_deep": "display interface",
+      "ssh_interfaces": "display interface brief",
+      "ssh_routing": "display bgp peer"
+    }
+  },
+  "config_capture": {
+    "platform_contains": [
+      "huawei",
+      "vrp"
+    ],
+    "platform_rank": 40,
+    "running_config_cmd": "display current-configuration",
+    "volatile_rules": [
+      {
+        "name": "vrp-last-updated",
+        "pattern": "(?i)^\\s*!\\s*last configuration was (updated|saved)"
+      },
+      {
+        "name": "vrp-saved-by",
+        "pattern": "(?i)^\\s*#\\s*saved by\\s"
+      },
+      {
+        "name": "vrp-software",
+        "pattern": "(?i)^\\s*!\\s*software version"
+      }
+    ]
+  },
+  "snmp_configgen": {
+    "v2c_template": "snmp-agent\nsnmp-agent community read cipher <<community>>\nsnmp-agent sys-info version v2c",
+    "v3_template": "snmp-agent sys-info version v3\nsnmp-agent group v3 correlix-grp privacy read-view iso-view\nsnmp-agent mib-view included iso-view iso\nsnmp-agent usm-user v3 <<sec_name>> group correlix-grp\nsnmp-agent usm-user v3 <<sec_name>> authentication-mode sha cipher <<auth_key>>\nsnmp-agent usm-user v3 <<sec_name>> privacy-mode aes128 cipher <<priv_key>>"
+  },
+  "profiles": [
+    {
+      "platform": "vrp",
+      "display_name": "Huawei VRP",
+      "device_class": [
+        "router",
+        "switch"
+      ],
+      "fidelity": "doc_claimed",
+      "detection": {
+        "os_parse": {
+          "product": "vrp",
+          "rank": 10,
+          "sysdescr_contains_any": []
+        },
+        "platform_contains": [
+          "huawei",
+          "vrp"
+        ],
+        "platform_rank": 50
+      },
+      "capture": {
+        "running_config_cmd": "display current-configuration",
+        "show_version_cmd": "display version",
+        "pager_off_cmds": [
+          "screen-length 0 temporary"
+        ],
+        "prompt_regex": "(?m)^[<\\[][A-Za-z0-9._-]+[>\\]]\\s*$"
+      },
+      "advisory": {
+        "provider": "offline-feed",
+        "product_ids": [
+          "vrp"
+        ]
+      },
+      "hardening": {},
+      "threat": {}
+    }
+  ]
+}

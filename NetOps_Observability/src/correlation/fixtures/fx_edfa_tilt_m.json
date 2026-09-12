@@ -1,0 +1,39 @@
+{
+  "name": "fx_edfa_tilt_m \u2014 edfa-saturation-or-gain-tilt",
+  "signals": [
+    {
+      "kind": "edfa_gain_tilt",
+      "entity_type": "interface",
+      "entity_id": "wan-r2:Et5",
+      "observer_id": "snmp-wanr2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "coherent_osnr_low",
+      "entity_type": "interface",
+      "entity_id": "wan-r2:Et5",
+      "observer_id": "snmp-wanr2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "multi_channel_power_skew",
+      "entity_type": "interface",
+      "entity_id": "wan-r2:Et5",
+      "observer_id": "snmp-wanr2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.edfa-saturation-or-gain-tilt",
+    "tier": "suspected"
+  }
+}

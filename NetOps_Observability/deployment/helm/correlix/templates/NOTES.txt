@@ -1,0 +1,73 @@
+Correlix {{ .Chart.AppVersion }} — chart {{ .Chart.Version }} — release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+  `helm install` exiting 0 is not evidence the platform works. Read the
+  verification section below and run it.
+
+INGRESS
+{{- if .Values.ingress.enabled }}
+  https://{{ .Values.ingress.host }}{{ .Values.ingress.path }}   (via the `nginx` gateway Service)
+{{- else }}
+  ingress.enabled=false — nothing is published. Reach the UI with:
+    kubectl -n {{ .Release.Namespace }} port-forward svc/nginx 8000:8080
+{{- end }}
+
+APP-STATE BACKEND: {{ .Values.store.backend }}
+{{- if eq .Values.store.backend "memory" }}
+  *** memory is EPHEMERAL. Nothing survives a restart. Dev/test only. ***
+{{- else if eq .Values.store.backend "file" }}
+  file backend: the Applications, Service-catalog and Cloud-business-service
+  registries are UNAVAILABLE on this backend and answer 501 by design
+  (docs/DEPLOY_POSTGRES_APPSTATE.md). postgres is the default for new installs.
+{{- end }}
+
+{{- if not .Values.images.requireDigest }}
+
+IMAGE PINNING
+  images.requireDigest is false, so any image without an @sha256: digest is
+  running from a MUTABLE TAG. Publish your five first-party images, set their
+  `digest`, and turn requireDigest on before this is a production deployment.
+{{- end }}
+
+{{- if not .Values.networkPolicy.enabled }}
+
+NETWORK POLICY IS OFF
+  Every pod can reach every other pod and the whole cluster. Turn it on.
+{{- end }}
+{{- if and .Values.networkPolicy.enabled (not .Values.networkPolicy.deviceCIDRs) }}
+
+NO DEVICE CIDRs ARE ALLOWED IN
+  networkPolicy.deviceCIDRs is empty, so nothing off-cluster can send syslog,
+  NetFlow/IPFIX/sFlow or SNMP traps. That is the safe default AND a silent
+  black hole if you expected telemetry. List your estate's ranges.
+{{- end }}
+
+VERIFY (in this order — each answers a question the previous one cannot)
+
+  1. Did the bootstraps run?
+       kubectl -n {{ .Release.Namespace }} logs job/kafka-init
+       kubectl -n {{ .Release.Namespace }} logs job/opensearch-init
+
+  2. Is the platform serving?
+       kubectl -n {{ .Release.Namespace }} exec deploy/nginx -- \
+         wget -qO- http://api:8080/admin/health
+
+  3. IS THE ENGINE ACTUALLY CONSUMING? A green pod is not an answer to this.
+     Enable kafkaExporter and query VictoriaMetrics:
+       kafka_consumergroup_members{consumergroup="netops-correlation"} >= 1
+       kafka_consumergroup_lag_sum{consumergroup=~"netops-.*"}   (draining?)
+
+  4. Does an alert reach a human? The always-firing AlertingHeartbeat rule
+     stamps netops_alert_webhook_heartbeat_timestamp_seconds on arrival — a
+     stale stamp means alerts are firing and reaching nobody.
+
+WHAT THIS CHART DOES NOT DO
+  * It does not create secrets. secrets.existingSecret must already exist.
+  * netops.applogs is not collected: the aggregator's docker_logs source has no
+    Kubernetes equivalent. Every other lane works.
+  * The compose internal-TLS mesh (api-minted SVIDs sealed to a swtpm) is not
+    ported; use certManager.enabled or supply Secrets yourself.
+  * scripts/stack-watchdog.sh stays OUTSIDE the cluster. A watchdog that dies
+    with what it watches reports nothing.
+
+  Full detail, including upgrade and storage-class guidance:
+  docs/DEPLOY_KUBERNETES.md

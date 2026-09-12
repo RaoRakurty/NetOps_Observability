@@ -1,0 +1,16 @@
+{
+  "name": "Multi-vantage divergence into one region + cloud API anomaly: cloud provider verdict",
+  "signals": [
+    {"kind": "probe_latency_departure", "entity_type": "segment", "entity_id": "dallas->aws-use1",
+     "observer_id": "probe-agent-dallas", "observer_type": "vantage_agent",
+     "modality": "active_probe", "deviation": 4.0},
+    {"kind": "probe_latency_departure", "entity_type": "segment", "entity_id": "austin->aws-use1",
+     "observer_id": "probe-agent-austin", "observer_type": "vantage_agent",
+     "modality": "active_probe", "deviation": 3.8},
+    {"kind": "cloud_gw_anomaly", "entity_type": "segment", "entity_id": "tgw-use1",
+     "observer_id": "aws-health-api", "observer_type": "cloud_api",
+     "modality": "control_plane", "collection_path": "via_cloud_api:aws-acct1"}
+  ],
+  "expect": {"top": "sig.ent.cloud.region-degradation", "tier": "confirmed",
+             "owner": "cloud_provider"}
+}

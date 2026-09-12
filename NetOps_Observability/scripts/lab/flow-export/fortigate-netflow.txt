@@ -1,0 +1,24 @@
+# FortiGate 6.0 (dmz-fw, mgmt 172.40.40.41) — NetFlow export to the NetOps collector.
+# UNVERIFIED: vrnetlab VM; could not audit running config from the host.
+# SSH to 172.40.40.41 with device creds and paste. Replace "port2" with the
+# data interface(s) to sample; "port1" is assumed mgmt.
+
+config system netflow
+    set collector-ip 172.40.40.122
+    set collector-port 2055
+    set source-ip 172.40.40.41
+    set active-flow-timeout 60
+    set inactive-flow-timeout 15
+end
+
+# enable the sampler on data interface(s):
+config system interface
+    edit "port2"
+        set netflow-sampler both
+    next
+end
+
+# Verify:  diagnose test application netflow 1
+#
+# FortiGate also supports sFlow (config system sflow / set collector-ip ... port 6343)
+# if you'd rather send to the sFlow listener; NetFlow is used here for variety.

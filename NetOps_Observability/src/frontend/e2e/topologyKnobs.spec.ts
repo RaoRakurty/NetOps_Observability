@@ -1,0 +1,157 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+// Topology canvas KNOBS verification — every toolbar control must produce a
+// VISIBLE, design-matching change (the "Exec vs Operator showed the same" + greyed
+// dead-tab defects). Backend mocked with a fixture that has metrics + a trouble node
+// so the density ramp actually has something to express. Screenshots land in
+// test-results/ for eyeballing; the assertions are the regression gate.
+
+import { test, expect, type Page, type Route } from "@playwright/test";
+
+const ME = { username: "alice", role: "operator", tenant_id: "t_acme", platform_admin: false, accessible_tenants: ["t_acme"], all_tenants: false };
+
+// Two nodes: one calm (named only at operator+), one in trouble (named at every
+// density). Both carry CPU/MEM so the engineer metric strip has data.
+function node(id: string, label: string, health: string, issues?: { severity: string; summary: string; since?: string }[]) {
+  return {
+    id, label, kind: "router", health, confidence: 1, resolved: true,
+    metrics: { cpu_pct: 42, mem_pct: 61 },
+    evidence: [{ source: "lldp", confidence: 1 }],
+    ...(issues ? { issues } : {}),
+  };
+}
+
+const SICK_ISSUE = [{ severity: "critical", summary: "BGP peer 10.0.0.5 down (hold timer expired)", since: new Date().toISOString() }];
+
+function topoView(mode: string) {
+  const base = { view_id: "v", mode, scope: { tenant_id: "t_acme" }, layout_type: "spine_leaf", generated_at: new Date().toISOString(), groups: [] };
+  if (mode === "dependency") {
+    // No flow attribution → zero nodes. Must show an honest empty state, not a blank canvas.
+    return { ...base, layout_type: "dependency", nodes: [], edges: [], overlays: ["flow"] };
+  }
+  if (mode === "capacity") {
+    // A near-idle link (raw VM ratio) must render "<0.1%", never the 20-digit float.
+    return {
+      ...base,
+      nodes: [node("calm-sw", "calm-sw", "ok"), node("sick-rtr", "sick-rtr", "critical")],
+      edges: [{
+        id: "e1", source: "calm-sw", target: "sick-rtr", status: "up", confidence: 1,
+        utilization_pct: 0.00003984453955175126, source_port: "Gi0/1", target_port: "Eth1",
+        evidence: [{ source: "lldp", confidence: 1 }],
+      }],
+      overlays: ["health", "utilization"],
+    };
+  }
+  return {
+    ...base,
+    nodes: [node("calm-sw", "calm-sw", "ok"), node("sick-rtr", "sick-rtr", "critical", SICK_ISSUE)],
+    edges: [{ id: "e1", source: "calm-sw", target: "sick-rtr", status: "up", confidence: 1, evidence: [{ source: "lldp", confidence: 1 }] }],
+    overlays: ["health"],
+  };
+}
+
+async function openCanvas(page: Page) {
+  await page.addInitScript(() => localStorage.setItem("netops_token", "e2e-fake-token"));
+  await page.route(/^https?:\/\/[^/]+\/api\//, async (route: Route) => {
+    const url = new URL(route.request().url());
+    const json = (b: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(b) });
+    const p = url.pathname;
+    if (p.includes("/api/auth/me")) return json(ME);
+    if (p.includes("/api/scopes")) return json({ scopes: [{ tenant_id: "t_acme", tenant_name: "Acme", org_id: "o", org_name: "Acme", region: "us" }], all_tenants: false });
+    if (p.includes("/api/topology/view")) return json(topoView(url.searchParams.get("mode") || "explore"));
+    if (p.includes("/api/topology/graph")) return json({ ...topoView("explore"), stale: false });
+    return json({});
+  });
+  await page.goto("/#/investigate/topology");
+  // Scoped to the CANVAS node: the Devices rail lists the same names, so an
+  // unscoped locator matches twice and fails strict mode — which took every
+  // test in this file down at the shared entry point, not just the one that
+  // changed.
+  await expect(page.getByTestId("rf__node-sick-rtr")).toBeVisible(); // canvas rendered
+}
+
+// The name AS RENDERED ON THE CANVAS. Scoped to the React Flow node on purpose:
+// the Devices inventory rail lists the same names, so an unscoped locator can
+// match the rail entry instead — which never responds to density, making the
+// assertion silently test the wrong element (and, once the rail defaulted open,
+// fail strict-mode with two matches).
+const name = (page: Page, t: string) => page.getByTestId(`rf__node-${t}`).getByText(t, { exact: true });
+
+test("density is a visible ramp: Exec hides calm names, Operator names all, Engineer adds metrics", async ({ page }) => {
+  await openCanvas(page);
+
+  // Default = Operator: every node is named.
+  await expect(name(page, "calm-sw")).toBeVisible();
+  await page.screenshot({ path: "test-results/knob-density-operator.png" });
+
+  // Executive (wallboard): the calm node's name is suppressed; the troublemaker stays named.
+  await page.getByLabel("Density").selectOption("executive");
+  await expect(name(page, "calm-sw")).toBeHidden();
+  await expect(name(page, "sick-rtr")).toBeVisible();
+  await page.screenshot({ path: "test-results/knob-density-exec.png" });
+
+  // Engineer: calm node named AGAIN and the inline metric strip appears.
+  await page.getByLabel("Density").selectOption("engineer");
+  await expect(name(page, "calm-sw")).toBeVisible();
+  await expect(page.getByText(/CPU/i).first()).toBeVisible();
+  await page.screenshot({ path: "test-results/knob-density-engineer.png" });
+
+  // Incident: distinct again (calm dimmed, trouble lifted) — the troublemaker stays named.
+  await page.getByLabel("Density").selectOption("incident");
+  await expect(name(page, "sick-rtr")).toBeVisible();
+  await page.screenshot({ path: "test-results/knob-density-incident.png" });
+});
+
+test("no dead tabs: only implemented workflows are offered (no greyed do-nothing tabs)", async ({ page }) => {
+  await openCanvas(page);
+
+  // Scoped to the canvas' Workflow selector: since the 2026-08 nav redesign the
+  // RAIL also has buttons accessibly named "Explore"/"Investigate" (sections),
+  // so page-wide role queries are ambiguous (strict-mode violation). Scoping
+  // also makes the absence assertions honest — they check THIS selector.
+  const workflows = page.getByRole("group", { name: "Workflow" });
+  // Implemented modes are present and clickable.
+  for (const m of ["Explore", "Investigate", "Path Trace", "Capacity", "Dependency"]) {
+    await expect(workflows.getByRole("button", { name: m, exact: true })).toBeVisible();
+  }
+  // The placeholder modes are NOT rendered (they were greyed + did nothing).
+  await expect(workflows.getByRole("button", { name: "Change Review", exact: true })).toHaveCount(0);
+  await expect(workflows.getByRole("button", { name: "Executive / Geo", exact: true })).toHaveCount(0);
+});
+
+test("clicking a critical device shows WHY (active issues), not just a colour", async ({ page }) => {
+  await openCanvas(page);
+  await page.getByText("sick-rtr", { exact: true }).first().click();
+  // The inspector answers "why critical" with the actual alert, not just a colour.
+  await expect(page.getByText(/Active issues/i)).toBeVisible();
+  await expect(page.getByText("BGP peer 10.0.0.5 down (hold timer expired)")).toBeVisible();
+});
+
+test("overlay selector offers only applicable overlays — no permanently-dead greyed tabs", async ({ page }) => {
+  await openCanvas(page);
+  const bar = page.getByRole("group", { name: "Overlay" });
+  await expect(bar.getByRole("button", { name: "Health" })).toBeVisible();
+  // The placeholder overlays with no data source are never rendered (were greyed-dead).
+  for (const dead of ["Config drift", "Syslog", "Routing changes", "Golden-path delta"]) {
+    await expect(bar.getByRole("button", { name: dead, exact: true })).toHaveCount(0);
+  }
+});
+
+test("Capacity utilization is operator-readable (no 20-digit float)", async ({ page }) => {
+  await openCanvas(page);
+  await page.getByRole("button", { name: "Capacity", exact: true }).click();
+  // The near-idle link reads "<0.1%", never the raw 0.0000398… float.
+  await expect(page.getByText("<0.1%").first()).toBeVisible();
+  await expect(page.getByText(/0\.0000398/)).toHaveCount(0);
+});
+
+test("empty real view shows an honest empty state — never fabricated demo data", async ({ page }) => {
+  await openCanvas(page);
+  await page.getByRole("button", { name: "Dependency", exact: true }).click();
+  // The dependency projection returned zero nodes → we show the honest empty state,
+  // NOT the cloud demo mock (us-east-1 / vpc-prod / alb-checkout) as if it were live.
+  await expect(page.getByText("No service dependencies in this window")).toBeVisible();
+  await expect(page.getByText("us-east-1")).toHaveCount(0);
+  await expect(page.getByText("alb-checkout")).toHaveCount(0);
+});
