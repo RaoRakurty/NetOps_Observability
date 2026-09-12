@@ -392,8 +392,14 @@ func (c *BatteryCollector) reportPanic(recovered any, stack []byte) {
 // collectOne runs one device's battery under its own deadline. It never returns
 // an error: every failure is recorded on the returned state, which is what makes
 // one device's trouble invisible to the others.
-func (c *BatteryCollector) collectOne(ctx context.Context, dev Device, area Area, tgt Target) DeviceState {
-	st := DeviceState{
+//
+// The result is NAMED on purpose. The FinishedAt stamp is written by a defer, and
+// a defer can only reach the value a caller will see through the named result: on
+// an unnamed result `return st` copies the struct BEFORE the defer runs, so the
+// stamp would land on a dead local and EVERY collected device would carry a zero
+// FinishedAt while the never-ran path (notRun, which stamps inline) looked right.
+func (c *BatteryCollector) collectOne(ctx context.Context, dev Device, area Area, tgt Target) (st DeviceState) {
+	st = DeviceState{
 		TenantID: dev.TenantID, // §3a: owner from the resolved device, never a body
 		DeviceID: dev.ID, Hostname: dev.Hostname, Platform: dev.Platform,
 		Area: area, RulesetVersion: RulesetVersion, StartedAt: c.now().UTC(),
