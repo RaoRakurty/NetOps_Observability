@@ -1,0 +1,20 @@
+{
+  "name": "Internal app synthetic DNS failure, single vantage only: suspected (one modality can never confirm)",
+  "signals": [
+    {
+      "kind": "synthetic_dns_fail",
+      "entity_type": "service",
+      "entity_id": "acme_billing",
+      "observer_id": "syn-dc1",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "probe_authority": "high",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.app.saas-experience-degraded",
+    "tier": "suspected"
+  }
+}

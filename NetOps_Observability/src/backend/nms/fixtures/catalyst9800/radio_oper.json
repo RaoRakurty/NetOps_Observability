@@ -1,0 +1,6 @@
+{
+  "Cisco-IOS-XE-wireless-access-point-oper:radio-oper-data": [
+    { "wtp-mac": "a8:66:7f:04:00:01", "radio-slot-id": 0, "oper-state": "radio-up", "admin-state": "enabled", "radio-type": "radio-80211bg" },
+    { "wtp-mac": "a8:66:7f:04:00:01", "radio-slot-id": 1, "oper-state": "radio-down", "admin-state": "enabled", "radio-type": "radio-80211a" }
+  ]
+}

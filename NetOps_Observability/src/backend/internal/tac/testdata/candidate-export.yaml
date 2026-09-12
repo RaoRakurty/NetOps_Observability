@@ -1,0 +1,49 @@
+# TAC signature candidates — exported from Correlix, NOT yet knowledge.
+# Review every line, then merge with scripts/tac-merge-research.py.
+# Every command below is output-only and read-only: it passed the same
+# policy the collector applies at the wire (design §7).
+# generated: 2026-09-06T00:00:00Z
+vendor: 'cisco-iosxe'
+dialect: 'cisco-iosxe'
+schema_version: '1'
+sources:
+  - url: 'https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_bgp/configuration/xe-17/irg-xe-17-book.html'
+    title: 'Cisco BGP configuration guide'
+issues:
+  - id: 'bgp-graceful-restart-stall-graceful-restart-never-completes-after-a-super'
+    class: 'bgp-graceful-restart-stall'
+    proposed_class: 'true'
+    title: 'Graceful restart never completes after a supervisor switchover'
+    symptoms:
+      - 'Neighbor never reaches Established in show ip bgp summary'
+    log_signatures:
+      - '%BGP-5-ADJCHANGE: neighbor 10.0.0.2 Down Graceful Restart timer expired'
+    likely_causes:
+      - 'An inbound route-map references a prefix-list that does not exist'
+    commands:
+      - cmd: 'show ip bgp summary'
+        intent: 'bgp.summary'
+    tac_first_look: 'Read the notification subcode before anything else.'
+    sources:
+      - url: 'https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_bgp/configuration/xe-17/irg-xe-17-book.html'
+        title: 'Cisco BGP configuration guide'
+    notes: 'TAC answer: TAC confirmed the peer was refused by an empty prefix-list. · proposed from incident inc-77 · candidate only — not verified by Correlix on this platform'
+  - id: 'bgp-session-bgp-session-stuck-in-idle-after-a-policy-change'
+    class: 'bgp-session'
+    title: 'BGP session stuck in Idle after a policy change'
+    symptoms:
+      - 'Neighbor never reaches Established in show ip bgp summary'
+    log_signatures:
+      - '%BGP-5-ADJCHANGE: neighbor 10.0.0.2 Down BGP Notification sent'
+    likely_causes:
+      - 'An inbound route-map references a prefix-list that does not exist'
+    commands:
+      - cmd: 'show ip bgp summary'
+        intent: 'bgp.summary'
+      - cmd: 'show ip bgp neighbors'
+        intent: 'bgp.neighbor.detail'
+    tac_first_look: 'Read the notification subcode before anything else.'
+    sources:
+      - url: 'https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_bgp/configuration/xe-17/irg-xe-17-book.html'
+        title: 'Cisco BGP configuration guide'
+    notes: 'TAC answer: TAC confirmed the peer was refused by an empty prefix-list. · proposed from incident inc-77 · candidate only — not verified by Correlix on this platform'

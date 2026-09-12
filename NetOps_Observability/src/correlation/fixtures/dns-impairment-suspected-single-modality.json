@@ -1,0 +1,12 @@
+{
+  "name": "DNS impairment from two probe agents: fires but stays SUSPECTED (one modality class — honest)",
+  "signals": [
+    {"kind": "dns_latency_high", "entity_type": "site", "entity_id": "dallas",
+     "observer_id": "probe-agent-dallas", "observer_type": "vantage_agent",
+     "modality": "active_probe", "deviation": 4.1},
+    {"kind": "synthetic_http_fail", "entity_type": "site", "entity_id": "dallas",
+     "observer_id": "probe-agent-austin", "observer_type": "vantage_agent",
+     "modality": "active_probe"}
+  ],
+  "expect": {"top": "sig.ent.internet.dns-impairment", "tier": "suspected", "owner": "isp"}
+}

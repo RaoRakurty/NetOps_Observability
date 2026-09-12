@@ -1,0 +1,32 @@
+{
+    "name": "IPsec tunnel down (DPD teardown) + independent LAN-vantage probe loss: apps behind the tunnel unreachable, confirmed (dual-cloud fault lab drill C5)",
+    "comment": "The gap the C5 tunnel-kill drill exposed: a raw IKE/DPD tunnel death with NO cloud config change cannot ground onto private-connectivity-down (which requires a cloud_change). The VPN gateway's own tunnel-state control-plane signal (observer ipsec:<gw>, INDEPENDENT of the cloud API) + an independent customer-path probe are two witnesses -> confirmed.",
+    "signals": [
+        {
+            "kind": "ipsec_tunnel_status",
+            "entity_type": "cloud_resource",
+            "entity_id": "sm-aws-vpn",
+            "observer_id": "ipsec:lab-vpn-edge",
+            "observer_type": "controller",
+            "modality": "control_plane",
+            "collection_path": "direct",
+            "attrs": {"state": "down", "reason": "dpd_timeout"},
+            "deviation": 0.0
+        },
+        {
+            "kind": "probe_loss",
+            "entity_type": "segment",
+            "entity_id": "lan-vantage-1->store-api",
+            "observer_id": "lan-vantage-1",
+            "observer_type": "vantage_agent",
+            "modality": "active_probe",
+            "collection_path": "direct",
+            "deviation": 5.0
+        }
+    ],
+    "expect": {
+        "top": "sig.ent.cloud.ipsec-tunnel-down",
+        "tier": "confirmed",
+        "owner": "netops"
+    }
+}

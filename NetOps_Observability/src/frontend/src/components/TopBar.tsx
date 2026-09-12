@@ -1,43 +1,59 @@
-import { useEffect, useRef, useState } from "react";
-import { AuthUser, Health, api, GlobalResult, GlobalResultKind } from "../services/api";
-import { useShell, TIME_RANGES } from "../context/shell";
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AuthUser, Health } from "../services/api";
+import { omniSearch, groupHits, OmniHit, OmniKind, OMNI_KIND_ICON, OMNI_KIND_TAG, OMNI_KIND_LABEL } from "../lib/omniSearch";
+import { useShell } from "../context/shell";
+import { allRanges, addCustomPreset, rangeFromMinutes } from "../theme/timeprefs";
+import { BRAND } from "../brand";
 import Icon from "./Icon";
+import ScopeSelector from "./ScopeSelector";
+import AppearanceControls from "./AppearanceControls";
+import ScopeBadge from "./ScopeBadge";
 
 type Props = {
   health: Health | null;
   user: AuthUser;
   onLogout: () => void;
+  // Open the self-service change-password modal. Undefined for federated accounts
+  // (they change it at the IdP), which hides the menu item.
+  onChangePassword?: () => void;
+  // Opens the self-service two-factor modal. Gated the same way: a federated
+  // account's second factor lives at the IdP, so the item is hidden there.
+  onTwoFactor?: () => void;
+  // Shell v2 relocates the account/user menu into the left rail's utility
+  // cluster, so the top-right copy is suppressed to avoid duplication.
+  hideUserMenu?: boolean;
 };
 
-const KIND_ICON: Record<GlobalResultKind, string> = {
-  device: "datasets",
-  alert: "alerts",
-  saved: "dashboards",
-  logs: "search",
-};
-const KIND_LABEL: Record<GlobalResultKind, string> = {
-  device: "Device",
-  alert: "Alert",
-  saved: "Saved",
-  logs: "Logs",
-};
+// A dropdown row: a typed unified-search hit, or the raw log-search handoff.
+type TopHit = { kind: OmniKind | "logs"; id: string; label: string; sublabel?: string; href: string };
+
+const hitIcon = (k: TopHit["kind"]): string => (k === "logs" ? "search" : OMNI_KIND_ICON[k]);
+const hitTag = (k: TopHit["kind"]): string => (k === "logs" ? "Logs" : OMNI_KIND_TAG[k]);
 
 // Global top bar: brand · omni-search · time range · health · user menu.
 // The search box and time picker drive every section through ShellContext.
-// The omni-search shows a live results dropdown (devices, alerts, saved
-// objects) backed by /api/search/global, plus a raw log-search handoff —
-// so it behaves like Splunk/Datadog's global search, not just a log query.
-export default function TopBar({ health, user, onLogout }: Props) {
-  const { range, setRange, query, setQuery, navigate } = useShell();
-  const [draft, setDraft] = useState(query);
+// The omni-search shows a live, kind-grouped results dropdown (devices ·
+// resources · services · accounts · cases · alerts · saved) backed by the
+// tenant-scoped unified search (lib/omniSearch), plus a raw log-search
+// handoff — a true global search, not just a log query. Each row navigates
+// to the entity's permanent URL.
+export default function TopBar({ health, user, onLogout, onChangePassword, onTwoFactor, hideUserMenu }: Props) {
+  const { range, setRange, query, setQuery, navigate, setHelpOpen } = useShell();
+  // "*" is the match-all sentinel for the query; don't surface it literally in
+  // the search box (it reads as a stray asterisk). Empty submit re-applies "*".
+  const [draft, setDraft] = useState(query === "*" ? "" : query);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [results, setResults] = useState<GlobalResult[]>([]);
+  const [results, setResults] = useState<OmniHit[]>([]);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  const [ranges, setRanges] = useState(() => allRanges());
   const menuRef = useRef<HTMLDivElement | null>(null);
   const omniRef = useRef<HTMLFormElement | null>(null);
 
-  useEffect(() => setDraft(query), [query]);
+  useEffect(() => setDraft(query === "*" ? "" : query), [query]);
 
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
@@ -48,7 +64,7 @@ export default function TopBar({ health, user, onLogout }: Props) {
     return () => document.removeEventListener("mousedown", onDoc);
   }, []);
 
-  // Debounced live search against the global resolver.
+  // Debounced live search against the unified (tenant-scoped) resolver.
   useEffect(() => {
     const q = draft.trim();
     if (q.length < 2) {
@@ -57,11 +73,10 @@ export default function TopBar({ health, user, onLogout }: Props) {
     }
     let cancelled = false;
     const t = setTimeout(() => {
-      api
-        .globalSearch(q)
-        .then((r) => {
+      omniSearch(q)
+        .then((hits) => {
           if (cancelled) return;
-          setResults(r.results);
+          setResults(hits);
           setActive(-1); // nothing preselected: Enter runs the log search
           setOpen(true);
         })
@@ -75,20 +90,33 @@ export default function TopBar({ health, user, onLogout }: Props) {
     };
   }, [draft]);
 
+  // Flat display rows in group order: each group's first row carries the
+  // header label; a raw log-search handoff row closes the list.
+  const rows = useMemo<{ hit: TopHit; header?: string }[]>(() => {
+    const out: { hit: TopHit; header?: string }[] = [];
+    for (const group of groupHits(results)) {
+      group.hits.forEach((h, i) => out.push({ hit: h, header: i === 0 ? OMNI_KIND_LABEL[group.kind] : undefined }));
+    }
+    if (draft.trim().length >= 2) {
+      out.push({ hit: { kind: "logs", id: "logs", label: `Search logs for "${draft.trim()}"`, sublabel: "Log search", href: "" } });
+    }
+    return out;
+  }, [results, draft]);
+
   const ok = health?.status === "healthy";
 
   const runLogSearch = () => {
     setQuery(draft.trim() || "*");
-    navigate("search/logs");
+    navigate("explore/logs");
     setOpen(false);
   };
 
-  const choose = (g: GlobalResult) => {
-    if (g.kind === "logs") {
+  const choose = (h: TopHit) => {
+    if (h.kind === "logs") {
       runLogSearch();
       return;
     }
-    navigate(g.route);
+    navigate(h.href);
     setOpen(false);
   };
 
@@ -96,105 +124,188 @@ export default function TopBar({ health, user, onLogout }: Props) {
     e.preventDefault();
     // Enter runs the log search by default; only jump to a result the user
     // has explicitly highlighted with the arrow keys.
-    if (open && active >= 0 && results[active]) {
-      choose(results[active]);
+    if (open && active >= 0 && rows[active]) {
+      choose(rows[active].hit);
     } else {
       runLogSearch();
     }
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (!open || results.length === 0) return;
+    if (!open || rows.length === 0) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setActive((a) => (a + 1) % results.length);
+      setActive((a) => (a + 1) % rows.length);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setActive((a) => (a <= 0 ? results.length - 1 : a - 1));
+      setActive((a) => (a <= 0 ? rows.length - 1 : a - 1));
     } else if (e.key === "Escape") {
       setOpen(false);
     }
   };
 
+  // Close the account menu on Escape and return focus to its trigger.
+  const onMenuKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") {
+      setMenuOpen(false);
+      (menuRef.current?.querySelector(".user-btn") as HTMLElement | null)?.focus();
+    }
+  };
+
   return (
     <header className="topbar">
-      <div className="brand">
-        <span className="brand-mark"><Icon name="logo" size={20} /></span>
-        <span className="brand-name">NetOps</span>
-      </div>
-
-      <form className="omni" onSubmit={submitSearch} ref={omniRef}>
-        <span className="omni-icon"><Icon name="search" size={15} /></span>
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onFocus={() => results.length && setOpen(true)}
-          onKeyDown={onKeyDown}
-          placeholder="Search logs, devices, alerts, saved…"
-          spellCheck={false}
-        />
-        {open && results.length > 0 && (
-          <div className="omni-pop">
-            {results.map((g, i) => (
-              <button
-                type="button"
-                key={`${g.kind}:${g.id}:${i}`}
-                className={`omni-item${i === active ? " active" : ""}`}
-                onMouseEnter={() => setActive(i)}
-                onClick={() => choose(g)}
-              >
-                <span className={`omni-kind k-${g.kind}`}>
-                  <Icon name={KIND_ICON[g.kind]} size={13} />
-                </span>
-                <span className="omni-text">
-                  <span className="omni-title">{g.title}</span>
-                  {g.sub && <span className="omni-sub">{g.sub}</span>}
-                </span>
-                <span className="omni-tag">{KIND_LABEL[g.kind]}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </form>
-
+      {/* Brand (owner 2026-07-21, final): the BLOGO5 artwork itself — the
+          glowing network-eye as the O in CORRELIX — served from
+          public/brand/ (background-stripped + trimmed masters, 160px tall for
+          retina). The owner chose the exact artwork over the SVG recreation;
+          it is the ONLY brand mark in the shell (the rail's standalone eye is
+          gone by the same decision). Two theme variants of the same artwork:
+          navy/blue on light chrome, neon leafy green on dark — CSS shows
+          exactly one per [data-theme], so AT announces the brand once. */}
+      <img className="cx-brand-img cx-brand-light" src="/brand/blogo5.png" alt={BRAND} />
+      <img className="cx-brand-img cx-brand-dark" src="/brand/blogo5-dark.png" alt={BRAND} />
       <div className="topbar-right">
+        <form className="omni omni-compact" onSubmit={submitSearch} ref={omniRef}>
+          <span className="omni-icon" aria-hidden="true"><Icon name="search" size={14} /></span>
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onFocus={() => rows.length > 0 && setOpen(true)}
+            onKeyDown={onKeyDown}
+            placeholder="Search…"
+            spellCheck={false}
+            role="combobox"
+            aria-label="Search devices, resources, and logs"
+            aria-expanded={open && rows.length > 0}
+            aria-controls="omni-results"
+            aria-autocomplete="list"
+            aria-activedescendant={open && active >= 0 ? `omni-opt-${active}` : undefined}
+          />
+          <kbd className="omni-kbd" title="Command palette" aria-hidden="true">⌘K</kbd>
+          {open && rows.length > 0 && (
+            <div className="omni-pop" id="omni-results" role="listbox" aria-label="Search results">
+              {rows.map(({ hit: g, header }, i) => (
+                <div key={`${g.kind}:${g.id}:${i}`}>
+                  {header && <div className="omni-group" role="presentation">{header}</div>}
+                  <button
+                    type="button"
+                    id={`omni-opt-${i}`}
+                    role="option"
+                    aria-selected={i === active}
+                    tabIndex={-1}
+                    className={`omni-item${i === active ? " active" : ""}`}
+                    onMouseEnter={() => setActive(i)}
+                    onClick={() => choose(g)}
+                  >
+                    <span className={`omni-kind k-${g.kind}`}>
+                      <Icon name={hitIcon(g.kind)} size={13} />
+                    </span>
+                    <span className="omni-text">
+                      <span className="omni-title">{g.label}</span>
+                      {g.sublabel && <span className="omni-sub">{g.sublabel}</span>}
+                    </span>
+                    <span className="omni-tag">{hitTag(g.kind)}</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </form>
+        <ScopeSelector />
         <select
           className="range-picker"
           value={range.minutes}
-          onChange={(e) =>
-            setRange(TIME_RANGES.find((r) => r.minutes === Number(e.target.value)) ?? range)
-          }
-          title="Global time range"
+          onChange={(e) => {
+            if (e.target.value === "__add") {
+              const raw = window.prompt("New time-range preset — enter minutes (e.g. 30, 720, 4320):");
+              const mins = raw ? parseInt(raw, 10) : NaN;
+              if (mins && mins > 0) {
+                setRanges(addCustomPreset(mins));
+                setRange(rangeFromMinutes(mins));
+              }
+              return;
+            }
+            setRange(rangeFromMinutes(Number(e.target.value)));
+          }}
+          title="Time range (remembered per section)"
+          aria-label="Time range"
         >
-          {TIME_RANGES.map((r) => (
+          {/* If the current range isn't in the preset list (a one-off), show it. */}
+          {!ranges.some((r) => r.minutes === range.minutes) && (
+            <option value={range.minutes}>{range.label}</option>
+          )}
+          {ranges.map((r) => (
             <option key={r.minutes} value={r.minutes}>
               {r.label}
             </option>
           ))}
+          <option value="__add">＋ Add preset…</option>
         </select>
 
-        <span className={`health${ok ? "" : " bad"}`} title={ok ? `v${health?.version}` : "Disconnected"}>
-          <span className="dot" />
+        {/* Time display (Local/UTC) moved to Settings → a per-TENANT persisted
+            preference (owner 2026-07-17): every user of the tenant reads the
+            same zone; storage stays UTC (lib/time.ts still renders it). */}
+
+        {/* Appearance knob removed from the topbar (owner 2026-07-18): theme is
+            chosen on the login screen and carries over (shared netops.theme
+            pref); an explicit Theme control lives in the account menu's
+            Appearance settings (AppearanceControls). */}
+
+        <button
+          className="help-btn"
+          type="button"
+          onClick={() => setHelpOpen(true)}
+          title="Documentation"
+          aria-label="Open documentation"
+        >
+          <Icon name="help" size={16} />
+        </button>
+
+        <span className={`health${ok ? "" : " bad"}`} role="status" title={ok ? `v${health?.version}` : "Disconnected"}>
+          <span className="dot" aria-hidden="true" />
           {ok ? "Healthy" : "Disconnected"}
         </span>
 
-        <div className="user-menu" ref={menuRef}>
-          <button className="user-btn" onClick={() => setMenuOpen((o) => !o)}>
-            <span className="avatar">{user.username.slice(0, 1).toUpperCase()}</span>
+        {!hideUserMenu && (
+        <div className="user-menu" ref={menuRef} onKeyDown={onMenuKeyDown}>
+          <button className="user-btn" onClick={() => setMenuOpen((o) => !o)} aria-haspopup="menu" aria-expanded={menuOpen}>
+            <span className="avatar" aria-hidden="true">{user.username.slice(0, 1).toUpperCase()}</span>
             <span className="user-name">{user.username}</span>
-            <span style={{ opacity: 0.6, fontSize: 10 }}>▾</span>
+            <span style={{ opacity: 0.6, fontSize: 10 }} aria-hidden="true">▾</span>
           </button>
           {menuOpen && (
             <div className="menu-pop">
               <div className="menu-head">
                 {user.username}
                 <span style={{ color: "var(--muted)" }}> · {user.role}</span>
+                <ScopeBadge user={user} />
               </div>
-              <button onClick={() => { setMenuOpen(false); navigate("settings"); }}>Settings</button>
+              <AppearanceControls />
+              <button onClick={() => { setMenuOpen(false); navigate("admin/settings"); }}>Settings</button>
+              {onChangePassword && (
+                <button onClick={() => { setMenuOpen(false); onChangePassword(); }}>Change password</button>
+              )}
+              {onTwoFactor && (
+                <button onClick={() => { setMenuOpen(false); onTwoFactor(); }}>Two-factor authentication</button>
+              )}
+              {/* Third-party attribution must be REACHABLE from the running product,
+                  not just present in the image (2026-09-03 licence audit §2). The page
+                  is static, served by the SPA nginx at /licenses/, so it opens in a new
+                  tab rather than through the router. */}
+              <a
+                className="menu-link"
+                href="/licenses/"
+                target="_blank"
+                rel="noreferrer noopener"
+                onClick={() => setMenuOpen(false)}
+              >
+                Third-party licences
+              </a>
               <button onClick={onLogout}>Sign out</button>
             </div>
           )}
         </div>
+        )}
       </div>
     </header>
   );

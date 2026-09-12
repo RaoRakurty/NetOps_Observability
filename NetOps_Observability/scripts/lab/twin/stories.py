@@ -1,0 +1,1077 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+"""Steady-state + fault-story schedule engine (tracker 152, design §5).
+
+`build_run_plan(scenario, duration_s)` expands a validated scenario into a
+fully DETERMINISTIC emission plan: `(scenario, seed)` decides every event's
+content and relative timing (design §3.3 rule). Wall-clock timestamps are the
+ONLY thing added later, at emission time — the determinism unit test pins two
+builds of the same scenario byte-identical.
+
+Every event shape here is one the correlation producers PROVABLY recognize
+(design §4.0 signature inventory; `correlation_e2e.py` is the live-proven
+reference for the wire dicts). Nothing invented: stories may only claim
+signatures from that table.
+
+T1-CORE scope note: lanes are syslog (console-producer → netops.syslog),
+probes (netops.probes), cloud (netops.cloud) and metrics (netops.metrics) —
+all bus-direct. SNMP/snmpsim, traps-over-UDP, IPFIX and gNMI are a LATER wave;
+attribution rides the per-NAME registry rows (`hostname` fallback mode,
+design §3.4), which is why every hostname/target/device field carries the
+run-prefixed device name.
+"""
+from __future__ import annotations
+
+import os
+import random
+import sys
+from typing import Any
+
+from scenario import baseline_flow_fps, parse_offset_s
+
+# The ENTERPRISE OUTAGE chain's wire vocabulary and phase timeline are SHARED
+# with `scripts/scale-miniladder.py`'s `enterprise_outage` scenario template —
+# one fault story, one definition, so the accuracy harness and the scale
+# harness cannot drift into emitting different messages for the same symptom.
+# The module is stdlib-only and imports nothing from either harness. The path
+# insert is guarded and adds only `scripts/`, whose module names are disjoint
+# from the twin's flat ones.
+_SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+import enterprise_outage_chain as chain  # the shared chain (path set above)
+
+# Benign baseline chatter: mnemonics that match NO recognized control-plane
+# signature (they must never fabricate link/bgp evidence). warning/err lines
+# become generic `device_alarm` signals by design (producers.py severity
+# floor) — realistic noise the engine must not weld into stories.
+_CHATTER = [
+    ("SYS-5-CONFIG_I", "Configured from console by admin on vty0", "notice"),
+    ("SYS-6-LOGGINGHOST_STARTSTOP", "Logging to host 198.19.255.10 port 514 started", "info"),
+    ("SEC_LOGIN-5-LOGIN_SUCCESS", "Login Success [user: netops] at console", "notice"),
+    ("SYS-5-RESTART", "RP operational state notification", "notice"),
+    ("PLATFORM-4-ELEMENT_WARNING", "Committed memory utilization above minor threshold", "warning"),
+    ("SNMP-3-AUTHFAIL", "Authentication failure for SNMP req from host 198.19.255.20", "err"),
+]
+
+# severity → chatter lines by class, used with the scenario's severity_mix.
+_CHATTER_BY_SEV = {
+    "notice": [c for c in _CHATTER if c[2] in ("notice", "info")],
+    "warning": [c for c in _CHATTER if c[2] == "warning"],
+    "err": [c for c in _CHATTER if c[2] == "err"],
+}
+
+
+def _pick_severity(rng: random.Random, mix: dict[str, float]) -> str:
+    """Deterministic severity draw from the scenario's mix (defaults benign)."""
+    order = [(k, float(v)) for k, v in sorted(mix.items())] or [("notice", 1.0)]
+    total = sum(w for _, w in order) or 1.0
+    x = rng.random() * total
+    acc = 0.0
+    for sev, w in order:
+        acc += w
+        if x <= acc:
+            return sev
+    return order[-1][0]
+
+
+def _syslog(t: float, device: str, tenant: str, appname: str, message: str,
+            severity: str, story_id: str | None = None) -> dict:
+    return {"t": round(t, 3), "lane": "syslog", "tenant": tenant,
+            "device": device, "story_id": story_id,
+            "appname": appname, "message": message, "severity": severity}
+
+
+def _probe(t: float, target: str, tenant: str, prober: str, loss: float,
+           intent: str, vantage: str, story_id: str | None = None,
+           rtt: float = 12.0) -> dict:
+    return {"t": round(t, 3), "lane": "probes", "tenant": tenant,
+            "device": target, "story_id": story_id, "prober": prober,
+            "loss_pct": round(loss, 1), "rtt_ms": rtt,
+            "probe_intent": intent, "vantage_type": vantage}
+
+
+def _metric(t: float, device: str, tenant: str, value: float,
+            ts_off: float, story_id: str | None = None,
+            metric: str = "cpu") -> dict:
+    # ts_off: event-time offset (seconds, negative = past) applied at emission
+    # — the CUSUM baseline+step shape needs backdated sample times
+    # (correlation_e2e.cpu_stream, 26 baseline + 10 peak, 2 s spacing).
+    return {"t": round(t, 3), "lane": "metrics", "tenant": tenant,
+            "device": device, "story_id": story_id, "metric": metric,
+            "value": value, "ts_off": round(ts_off, 1),
+            "signal_family": "device_resource"}
+
+
+def _cloud(t: float, kind: str, tenant: str, resource_id: str, account: str,
+           region: str, severity: str, story_id: str | None = None,
+           value: float = 0.0, metric_name: str = "") -> dict:
+    return {"t": round(t, 3), "lane": "cloud", "tenant": tenant,
+            "device": resource_id, "story_id": story_id, "kind": kind,
+            "resource_id": resource_id, "account": account, "region": region,
+            "severity": severity, "value": value, "metric_name": metric_name}
+
+
+def _trap(t: float, device: str, tenant: str, trap: str,
+          story_id: str | None = None, ifindex: int | None = None,
+          ifname: str = "", ifdescr: str = "", peer_ip: str = "") -> dict:
+    """Fidelity-wave trap lane (design §4.4): `trap` is one of linkDown /
+    linkUp / coldStart / warmStart / bgpBackwardTransition / bgpEstablished —
+    exactly the §4.0 trap rows `producers.trap_control_signal` classifies.
+    The emitter adds the mandatory sysUpTime/snmpTrapOID bindings plus a
+    sysName.0 varbind (hostname-mode attribution rescue)."""
+    return {"t": round(t, 3), "lane": "trap", "tenant": tenant,
+            "device": device, "story_id": story_id, "trap": trap,
+            "ifindex": ifindex, "ifname": ifname, "ifdescr": ifdescr,
+            "peer_ip": peer_ip}
+
+
+def _gnmi(t: float, device: str, tenant: str, op: str,
+          story_id: str | None = None, ifname: str = "", peer_ip: str = "",
+          state: str = "") -> dict:
+    """gNMI-lane item (design §4.6). This lane is INVERTED with respect to
+    every other one: the twin does not push a gNMI event anywhere — the
+    platform's `gnmic` collector DIALS IN and streams state off the twin's
+    gNMI targets. So the item is a STATE OP applied to the target at time `t`
+    (`gnmi_server.DeviceTarget.apply`), and the telemetry the platform sees is
+    whatever gnmic's next sample / on-change notification carries.
+
+    `op` is one of if_down / if_up / counter_stall / counter_resume /
+    bgp_down / bgp_up / if_errors — the mutations that move the leaves
+    `deployment/docker/gnmic/gnmic.yaml` actually subscribes to.
+    """
+    return {"t": round(t, 3), "lane": "gnmi", "tenant": tenant,
+            "device": device, "story_id": story_id, "op": op,
+            "ifname": ifname, "peer_ip": peer_ip, "state": state}
+
+
+def _flow(t: float, device: str, tenant: str, count: int, flow_seed: str,
+          story_id: str | None = None) -> dict:
+    """One second's worth of flow records from `device`'s exporter (design
+    §4.5). `count` records are expanded at emission time deterministically
+    from `flow_seed` — the plan stays compact, the content stays a pure
+    function of (scenario, seed)."""
+    return {"t": round(t, 3), "lane": "flows", "tenant": tenant,
+            "device": device, "story_id": story_id, "count": int(count),
+            "flow_seed": flow_seed}
+
+
+def _dev(sc: dict, name: str) -> dict:
+    for d in sc["devices"]:
+        if d["name"] == name:
+            return d
+    raise KeyError(name)  # unreachable after validation
+
+
+def _external_bgp_peer(dev: dict) -> str:
+    """The device's external BGP peer IP (no peer_device = not an internal
+    session) — the peer a seam/WAN story flaps. Validation guarantees stories
+    that need one run on devices that have one; refuse loudly otherwise."""
+    for nb in dev.get("bgp_neighbors") or []:
+        if not nb.get("peer_device"):
+            return str(nb["peer_ip"])
+    raise ValueError(
+        f"device {dev['name']!r} has no external bgp_neighbor (one without "
+        f"peer_device) — required by this story template")
+
+
+def _first_interface(dev: dict) -> str:
+    return str(dev["interfaces"][0]["name"])
+
+
+# ── story template expanders ────────────────────────────────────────────────
+# Each returns a list of schedule items with t relative to the story's t0.
+
+def _tpl_dx_circuit_flap_cloud_withdrawal(story: dict, sc: dict,
+                                          rng: random.Random) -> list[dict]:
+    p = story.get("params") or {}
+    flaps = int(p.get("flap_count", 2))
+    hold = float(p.get("hold_s", 45))
+    final_down = str(p.get("final_state", "down")) == "down"
+    cloud = p.get("cloud") or {}
+    kinds = list(cloud.get("kinds") or ["cloud_bgp_session_down"])
+    account = str(cloud.get("account", "000000000000"))
+    region = str(cloud.get("region", "us-east-1"))
+    resource = str(cloud.get("resource_id", "seam-resource"))
+    loss = float(p.get("probe_loss_pct", 85))
+    sid = story["id"]
+    aff = story["affected"]
+    tenant = (aff.get("tenants") or [None])[0]
+    devices = aff.get("devices") or []
+
+    items: list[dict] = []
+    t = 0.0
+    for cycle in range(flaps):
+        for dn in devices:
+            dev = _dev(sc, dn)
+            peer = _external_bgp_peer(dev)
+            items.append(_syslog(
+                t, dn, dev["tenant"], "BGP-5-ADJCHANGE",
+                f"%BGP-5-ADJCHANGE: neighbor {peer} Down BGP Notification sent",
+                "notice", sid))
+        # provider side sees the session drop a few seconds later
+        if "cloud_bgp_session_down" in kinds:
+            items.append(_cloud(t + 4.0, "cloud_bgp_session_down", tenant,
+                                resource, account, region, "high", sid))
+        if cycle == 0 and "cloud_route_count_drop" in kinds:
+            items.append(_cloud(t + 9.0, "cloud_route_count_drop", tenant,
+                                resource, account, region, "high", sid,
+                                value=0.0, metric_name="advertised_routes"))
+        t += hold
+        if cycle < flaps - 1 or not final_down:
+            for dn in devices:
+                dev = _dev(sc, dn)
+                peer = _external_bgp_peer(dev)
+                items.append(_syslog(
+                    t, dn, dev["tenant"], "BGP-5-ADJCHANGE",
+                    f"%BGP-5-ADJCHANGE: neighbor {peer} Up", "notice", sid))
+            if "cloud_bgp_session_down" in kinds:
+                items.append(_cloud(t + 4.0, "cloud_bgp_session_up", tenant,
+                                    resource, account, region, "info", sid))
+            t += hold
+    # customer-path probe loss across the story window + a short tail
+    end = t + 60.0
+    pt = 2.0
+    while pt < end:
+        for dn in devices:
+            dev = _dev(sc, dn)
+            items.append(_probe(pt, dn, dev["tenant"], "vantage-1", loss,
+                                "customer_path", "public_cloud_agent", sid))
+        pt += 15.0
+    return items
+
+
+def _tpl_bgp_flap(story: dict, sc: dict, rng: random.Random) -> list[dict]:
+    p = story.get("params") or {}
+    flaps = int(p.get("flap_count", 3))
+    hold = float(p.get("hold_s", 30))
+    loss = float(p.get("probe_loss_pct", 40))
+    with_trap = bool(p.get("with_trap"))
+    sid = story["id"]
+    items: list[dict] = []
+    t = 0.0
+    for dn in story["affected"].get("devices") or []:
+        dev = _dev(sc, dn)
+        peer = _external_bgp_peer(dev)
+        for _cyc in range(flaps):
+            items.append(_syslog(
+                t, dn, dev["tenant"], "BGP-5-ADJCHANGE",
+                f"%BGP-5-ADJCHANGE: neighbor {peer} Down Hold timer expired",
+                "notice", sid))
+            if with_trap:
+                items.append(_trap(t + 0.5, dn, dev["tenant"],
+                                   "bgpBackwardTransition", sid,
+                                   peer_ip=peer))
+            t += hold
+            items.append(_syslog(
+                t, dn, dev["tenant"], "BGP-5-ADJCHANGE",
+                f"%BGP-5-ADJCHANGE: neighbor {peer} Up", "notice", sid))
+            if with_trap:
+                items.append(_trap(t + 0.5, dn, dev["tenant"],
+                                   "bgpEstablished", sid, peer_ip=peer))
+            t += hold
+        items.append(_probe(5.0, dn, dev["tenant"], "vantage-1", loss,
+                            "customer_path", "public_cloud_agent", sid))
+    return items
+
+
+def _tpl_device_restart(story: dict, sc: dict,
+                        rng: random.Random) -> list[dict]:
+    """§5.7: coldStart trap + reboot-window silence + interface-up storm on
+    return. Expect: device_restart-rooted single incident; forbid:
+    per-interface incident spray."""
+    p = story.get("params") or {}
+    reboot_s = float(p.get("reboot_s", 60))
+    sid = story["id"]
+    items: list[dict] = []
+    for dn in story["affected"].get("devices") or []:
+        dev = _dev(sc, dn)
+        items.append(_trap(0.0, dn, dev["tenant"], "coldStart", sid))
+        # (baseline chatter keeps flowing — the reboot "silence" is the story
+        # window itself; suppressing per-device baseline is not modeled in T1)
+        for i, itf in enumerate(dev["interfaces"], start=1):
+            up_t = reboot_s + i * 1.0
+            items.append(_syslog(
+                up_t, dn, dev["tenant"], "LINK-3-UPDOWN",
+                f"%LINK-3-UPDOWN: Interface {itf['name']}, changed state "
+                f"to up", "notice", sid))
+            items.append(_trap(up_t + 0.5, dn, dev["tenant"], "linkUp", sid,
+                               ifindex=i, ifname=str(itf["name"]),
+                               ifdescr=str(itf["name"])))
+    return items
+
+
+def _tpl_traffic_drop(story: dict, sc: dict,
+                      rng: random.Random) -> tuple[list[dict], list[dict]]:
+    """Fidelity wave: the affected exporters' flow volume collapses to
+    (100-drop_pct)% for `duration_s`. Returns (items, suppressions) — the
+    plan builder removes the devices' BASELINE flow items inside the window
+    and these residual-rate items stand in. Optional probe loss makes the
+    story §4.0-detectable (flows alone are evidence, not a signal)."""
+    p = story.get("params") or {}
+    drop_pct = float(p.get("drop_pct", 90))
+    dur = float(p.get("duration_s", 120))
+    loss = p.get("probe_loss_pct")
+    sid = story["id"]
+    fps_by_dev = baseline_flow_fps(sc)
+    items: list[dict] = []
+    suppressions: list[dict] = []
+    for dn in story["affected"].get("devices") or []:
+        dev = _dev(sc, dn)
+        base_fps = fps_by_dev.get(dn, 0.0)
+        residual = round(base_fps * (1.0 - drop_pct / 100.0))
+        suppressions.append({"lane": "flows", "device": dn,
+                             "from": 0.0, "to": dur})
+        sec = 0
+        while sec < dur:
+            if residual > 0:
+                items.append(_flow(float(sec), dn, dev["tenant"], residual,
+                                   f"{sid}:{dn}:{sec}", sid))
+            if loss is not None and sec % 20 == 0:
+                items.append(_probe(float(sec), dn, dev["tenant"],
+                                    "vantage-1", float(loss),
+                                    "customer_path", "public_cloud_agent",
+                                    sid))
+            sec += 1
+    return items, suppressions
+
+
+def _tpl_link_down_cascade(story: dict, sc: dict,
+                           rng: random.Random) -> list[dict]:
+    p = story.get("params") or {}
+    loss = float(p.get("probe_loss_pct", 85))
+    with_trap = bool(p.get("with_trap"))
+    # `with_gnmi` (design §4.6): the SAME fault also moves the device's gNMI
+    # state, so the story is corroborated across a fourth TRANSPORT (streamed
+    # telemetry) and the ENABLE_GNMI_COLLECTION path gets a labelled fault.
+    # Off ⇒ the plan is byte-identical to the pre-gNMI one.
+    with_gnmi = bool(p.get("with_gnmi"))
+    sid = story["id"]
+    # `interfaces` (optional) faults several ports per device — the uniform
+    # access-layer signature. Absent ⇒ interfaces[0] only, so an existing
+    # scenario's plan is unchanged byte-for-byte.
+    want_ifaces = p.get("interfaces")
+    items: list[dict] = []
+    manifests: list[dict] = []
+    for dn in story["affected"].get("devices") or []:
+        dev = _dev(sc, dn)
+        ifnames = ([str(x) for x in want_ifaces] if want_ifaces
+                   else [_first_interface(dev)])
+        for k, ifname in enumerate(ifnames):
+            items.append(_syslog(
+                0.0, dn, dev["tenant"], "LINK-3-UPDOWN",
+                f"%LINK-3-UPDOWN: Interface {ifname}, changed state to down",
+                "err", sid))
+            if with_trap:
+                # the device also pushes the standard linkDown notification with
+                # ifIndex/ifName/ifDescr varbinds (§4.0 trap row)
+                items.append(_trap(0.5, dn, dev["tenant"], "linkDown", sid,
+                                   ifindex=k + 1, ifname=ifname,
+                                   ifdescr=ifname))
+            items.append(_syslog(
+                1.0, dn, dev["tenant"], "LINEPROTO-5-UPDOWN",
+                f"%LINEPROTO-5-UPDOWN: Line protocol on Interface {ifname}, "
+                f"changed state to down", "notice", sid))
+            if with_gnmi:
+                # 0.2 s after the console line: the device's own operational
+                # state flips, which also STALLS that port's counters (a
+                # down interface forwards nothing). Both are observable —
+                # oper-status on gnmic's oc-interfaces subscription, the
+                # counter stall in the raw `gnmi_*` VictoriaMetrics lane.
+                items.append(_gnmi(0.2, dn, dev["tenant"], "if_down", sid,
+                                   ifname=ifname))
+                manifests.append({
+                    "device": dn, "transport": "gnmi",
+                    "path": f"/interfaces/interface[name={ifname}]"
+                            f"/state/oper-status",
+                    "from": "UP", "to": "DOWN", "at_offset_s": 0.2})
+                manifests.append({
+                    "device": dn, "transport": "gnmi",
+                    "path": f"/interfaces/interface[name={ifname}]"
+                            f"/state/counters/in-octets",
+                    "from": "advancing", "to": "stalled", "at_offset_s": 0.2})
+        # downstream BGP sessions riding the link drop too
+        for nb in dev.get("bgp_neighbors") or []:
+            items.append(_syslog(
+                3.0, dn, dev["tenant"], "BGP-5-ADJCHANGE",
+                f"%BGP-5-ADJCHANGE: neighbor {nb['peer_ip']} Down "
+                f"Interface flap", "notice", sid))
+            if with_gnmi:
+                # The session the console line just announced also drops in
+                # streamed state: ESTABLISHED -> IDLE on gnmic's ON-CHANGE
+                # oc-bgp subscription. This one survives the canonical lane
+                # (BGP is gNMI-OWNED there) as device_bgp_peer_state 6 -> 1.
+                items.append(_gnmi(3.2, dn, dev["tenant"], "bgp_down", sid,
+                                   peer_ip=str(nb["peer_ip"]), state="IDLE"))
+                manifests.append({
+                    "device": dn, "transport": "gnmi",
+                    "path": f"/network-instances/network-instance[name=default]"
+                            f"/protocols/protocol[identifier=BGP][name=BGP]/bgp"
+                            f"/neighbors/neighbor[neighbor-address="
+                            f"{nb['peer_ip']}]/state/session-state",
+                    "from": "ESTABLISHED", "to": "IDLE", "at_offset_s": 3.2,
+                    "canonical_series": "device_bgp_peer_state",
+                    "canonical_from": 6, "canonical_to": 1})
+        items.append(_probe(6.0, dn, dev["tenant"], "vantage-1", loss,
+                            "customer_path", "public_cloud_agent", sid))
+    if not manifests:
+        return items
+    # Labelled form: the gNMI manifestation table rides into the run's
+    # ground_truth.jsonl so the streamed-telemetry half of this fault is
+    # ATTRIBUTABLE (device, path, before/after) without being re-derived.
+    return {"items": items, "labels": {"gnmi_manifestations": manifests}}
+
+
+def _tpl_isp_brownout_multi_tenant(story: dict, sc: dict,
+                                   rng: random.Random) -> list[dict]:
+    p = story.get("params") or {}
+    loss = float(p.get("probe_loss_pct", 35))
+    dur = float(p.get("duration_s", 120))
+    sid = story["id"]
+    items: list[dict] = []
+    t = 0.0
+    while t < dur:
+        for dn in story["affected"].get("devices") or []:
+            dev = _dev(sc, dn)
+            items.append(_probe(t, dn, dev["tenant"], "vantage-1",
+                                loss + rng.random() * 10.0,
+                                "customer_path", "public_cloud_agent", sid))
+        t += 20.0
+    return items
+
+
+def _cpu_stream(dn: str, tenant: str, sid: str, peak: float,
+                n_base: int = 26, n_peak: int = 10) -> list[dict]:
+    """The proven CUSUM shape (correlation_e2e.cpu_stream): ≥20 baseline
+    samples then a sustained step, event times backdated 2 s apart."""
+    items: list[dict] = []
+    for i in range(n_base):
+        items.append(_metric(0.0, dn, tenant, 12.0 + (i % 3),
+                             ts_off=-(n_base + n_peak - i) * 2.0,
+                             story_id=sid))
+    for i in range(n_peak):
+        items.append(_metric(0.0, dn, tenant, peak,
+                             ts_off=-(n_peak - i) * 2.0, story_id=sid))
+    return items
+
+
+def _tpl_cpu_exhaustion(story: dict, sc: dict,
+                        rng: random.Random) -> list[dict]:
+    p = story.get("params") or {}
+    dn = str(p.get("cpu_device") or (story["affected"].get("devices") or [""])[0])
+    dev = _dev(sc, dn)
+    peak = float(p.get("peak_pct", 98.0))
+    items = _cpu_stream(dn, dev["tenant"], story["id"], peak)
+    if p.get("with_impact"):
+        items.append(_syslog(
+            5.0, dn, dev["tenant"], "SYS-2-MALLOCFAIL",
+            "%SYS-2-MALLOCFAIL: Memory allocation of 65536 bytes failed from "
+            "Process BGP Router", "crit", story["id"]))
+    return items
+
+
+def _tpl_optics_degradation(story: dict, sc: dict,
+                            rng: random.Random) -> list[dict]:
+    sid = story["id"]
+    items: list[dict] = []
+    for dn in story["affected"].get("devices") or []:
+        dev = _dev(sc, dn)
+        ifname = str((story.get("params") or {}).get("interface")
+                     or _first_interface(dev))
+        ramp = [
+            (0.0, "SFF8472-3-THRESHOLD_VIOLATION",
+             f"Rx power low warning; Port {ifname}: RX_POWER_LOW", "warning"),
+            (20.0, "PHY-4-FEC_UNCORRECTABLE",
+             (f"Interface {ifname}: FEC uncorrectable codeword errors "
+              f"detected, pre-FEC BER 1.2e-4"), "warning"),
+            (40.0, "PCS-3-LOCAL_FAULT",
+             f"Interface {ifname}: LOCAL_FAULT detected", "err"),
+            (60.0, "LINK-3-UPDOWN",
+             f"%LINK-3-UPDOWN: Interface {ifname}, changed state to down",
+             "err"),
+        ]
+        for t, app, msg, sev in ramp:
+            items.append(_syslog(t, dn, dev["tenant"], app, msg, sev, sid))
+    return items
+
+
+def _tpl_vpn_tunnel_down(story: dict, sc: dict,
+                         rng: random.Random) -> list[dict]:
+    p = story.get("params") or {}
+    cloud = p.get("cloud") or {}
+    account = str(cloud.get("account", "000000000000"))
+    region = str(cloud.get("region", "us-east-1"))
+    resource = str(cloud.get("resource_id", "vpn-tunnel"))
+    loss = float(p.get("probe_loss_pct", 90))
+    sid = story["id"]
+    aff = story["affected"]
+    tenant = (aff.get("tenants") or [None])[0]
+    items: list[dict] = [
+        _cloud(0.0, "cloud_vpn_tunnel_down", tenant, resource, account,
+               region, "high", sid),
+        _cloud(6.0, "cloud_vpn_packet_drop", tenant, resource, account,
+               region, "warning", sid, value=100.0, metric_name="packet_drop"),
+    ]
+    for dn in aff.get("devices") or []:
+        dev = _dev(sc, dn)
+        peer = _external_bgp_peer(dev)
+        items.append(_syslog(
+            2.0, dn, dev["tenant"], "BGP-5-ADJCHANGE",
+            f"%BGP-5-ADJCHANGE: neighbor {peer} Down BGP Notification sent",
+            "notice", sid))
+        items.append(_probe(8.0, dn, dev["tenant"], "vantage-1", loss,
+                            "customer_path", "public_cloud_agent", sid))
+    return items
+
+
+def _ospf_router_id(sc: dict, name: str, offset: int = 0) -> str:
+    """A stable OSPF neighbour id for a declared device.
+
+    Devices in the DSL declare BGP neighbours but no OSPF ones, and the chain
+    needs adjacency identities that are (a) deterministic, (b) unique per
+    device+role, and (c) unmistakably synthetic. RFC 5737 TEST-NET-1
+    (192.0.2.0/24) is documentation space: unroutable, and disjoint from both
+    the twin's `198.19.0.0/16` device aliases and the mini-ladder's
+    `198.18.x.y`, so an OSPF peer token can never alias a real address.
+    """
+    names = [d["name"] for d in sc["devices"]]
+    idx = names.index(name)
+    return f"192.0.2.{1 + (idx * 4 + offset) % 250}"
+
+
+def _jit(rng: random.Random, band: tuple) -> float:
+    """A seeded draw from `band`, jittered by ±chain.JITTER_FRACTION. Phase
+    ORDER is never left to the draw — the caller clamps monotonically."""
+    lo, hi = float(band[0]), float(band[1])
+    v = rng.uniform(lo, hi) if hi > lo else lo
+    return round(v * rng.uniform(1.0 - chain.JITTER_FRACTION,
+                                 1.0 + chain.JITTER_FRACTION), 2)
+
+
+def _tpl_enterprise_outage(story: dict, sc: dict,
+                           rng: random.Random) -> dict:
+    """§5.12 — a whole enterprise SITE degrading as ONE causally ordered chain.
+
+    The site's core uplink fails and everything downstream follows FROM it, in
+    this order (bands and vocabulary from `scripts/enterprise_outage_chain.py`,
+    shared with the mini-ladder's `enterprise_outage` scenario template):
+
+      t0         %LINK / %LINEPROTO down on the core's uplink   ← THE CAUSE
+      +1–3 s     %OSPF-5-ADJCHG FULL→DOWN toward the upstream neighbour
+      +2–10 s    a SECOND core port flaps `flap_cycles` ×, the adjacency to the
+                 distribution router logged from BOTH ends (two independent
+                 vantages on one cause)
+      +5–15 s    the eBGP session to transit flaps Down → Up → Down
+      +10–60 s   route churn at `churn_eps` for `churn_duration_s`, plus a
+                 dense router-update burst and a %BGP-3-NOTIFICATION
+      +20–90 s   the access layer: a TCN on EVERY switch in the STP domain, a
+                 real port transition on `stp_share` of them, MAC moves on
+                 `mac_share` as hosts re-home
+      +150–300 s recovery (unless `recover: false` — a hard outage)
+
+    DECLARING A SHAPE (P3, 2026-08-29). `params.shape` is a
+    `chain.StormShape` knob set — the SAME object the mini-ladder's storm
+    profiles carry — so an accuracy run and a scale run can be given the
+    identical repetition/dynamics instead of two hand-tuned approximations.
+    Declaring it turns on the knobs a DECLARED TOPOLOGY can express:
+
+      repeat_factor / repeat_distribution / repeat_window_s
+                          re-reports of a symptom inside the window (memo §18
+                          "repeated confirmation" — the mass an Aggregation
+                          Plane may collapse). WITHOUT `shape` the story emits
+                          NO repeats, exactly as before, so every existing
+                          scenario file and golden fixture is unchanged.
+      flap_cycles         drawn per story instead of the fixed `flap_cycles`
+      churn_density / churn_duration_s / churn_max_events   the route-churn phase
+      recovery_ratio      the chance this site recovers at all
+      contradiction_ratio a contradictory HEALTHY observation on the flapping
+                          core port while the fault is still open (memo §17)
+
+    An explicit legacy param (`flap_cycles`, `churn_eps`, `churn_duration_s`,
+    `recover`) still WINS over the shape, so a file can pin one phase and
+    shape the rest. Fleet-allocation knobs (`storm_share_of_raw`,
+    `incident_density`, `device_budget`, `onset_span`, `blast_radius_waves`,
+    `vantages_per_cause`) have nothing to act on in a declared topology and are
+    REFUSED by `chain.shape_from_params(..., chain.TOPOLOGY_SHAPE_KNOBS)`
+    rather than silently ignored.
+
+    Corroboration across MODALITIES, not just devices: with `with_trap` the
+    core also pushes the standard linkDown/linkUp and BGP4-MIB
+    backward/established notifications for the same two faults (§4.0 trap
+    rows), and the customer-path probe reports loss for the outage window. That
+    is the multi-vantage structure the owner memo asks for, expressed in lanes
+    the emitters already implement.
+
+    WHAT THE ENGINE CANNOT SEE. The route-churn phase is built from the
+    vendor-standard `%BGP-5-NBR_RESET`, which `producers.syslog_control_signal`
+    PROVABLY drops, and `%BGP-4-MAXPFX`, which promotes only through the
+    generic device-alarm net. Substituting a message that classifies would make
+    the story detectable for a reason no real router provides, so the outcome
+    is recorded per event type in the story's ground-truth `labels`
+    (`parser_coverage`) instead — a scorer must never charge the engine with a
+    symptom it was never given.
+
+    Returns the `{"items", "labels"}` form so the ground-truth record carries
+    the cause entity, the per-phase timeline and the coverage table.
+    """
+    p = story.get("params") or {}
+    sid = story["id"]
+    devices = list(story["affected"].get("devices") or [])
+    if len(devices) < 2:
+        raise ValueError(
+            f"story {sid!r}: enterprise_outage needs at least 2 affected "
+            f"devices (a core and a distribution router); got {len(devices)}")
+    core = str(p.get("core_device") or devices[0])
+    dist = str(p.get("dist_device") or devices[1])
+    if dist == core:
+        raise ValueError(
+            f"story {sid!r}: core_device and dist_device are both {core!r} — "
+            f"the chain's second vantage would be the first one again")
+    access = [d for d in devices if d not in (core, dist)]
+    core_dev, dist_dev = _dev(sc, core), _dev(sc, dist)
+    core_ifs = [str(i["name"]) for i in core_dev["interfaces"]]
+    upif = str(p.get("uplink_interface") or core_ifs[0])
+    flapif = str(p.get("flap_interface")
+                 or (core_ifs[1] if len(core_ifs) > 1 else core_ifs[0]))
+    peer_transit = _external_bgp_peer(core_dev)
+    peer_ospf = _ospf_router_id(sc, core, 0)     # across the dead uplink
+    peer_dist = _ospf_router_id(sc, dist, 1)     # the dist router, from core
+    peer_core = _ospf_router_id(sc, core, 2)     # the core router, from dist
+    vlan = int(p.get("vlan", 200))
+    # The declared SHAPE, or None for "behave exactly as this template always
+    # has". Validation (unknown knob, wrong type, out of range) already ran in
+    # `scenario.py`; it runs again here so the template is safe to call
+    # directly from a test (§3: never trust an upstream caller).
+    shape = (chain.shape_from_params(p["shape"], chain.TOPOLOGY_SHAPE_KNOBS,
+                                     where=f"story {sid!r} params.shape")
+             if p.get("shape") is not None else None)
+    if "flap_cycles" in p:
+        cycles = int(p["flap_cycles"])
+    elif shape is not None:
+        cycles = rng.randint(*shape.flap_cycle_range())
+    else:
+        cycles = 3
+    if "churn_eps" in p:
+        churn_eps = float(p["churn_eps"])
+    elif shape is not None:
+        churn_eps = round(rng.uniform(*shape.churn_eps_range()), 3)
+    else:
+        churn_eps = 10.0
+    if "churn_duration_s" in p:
+        churn_dur = float(p["churn_duration_s"])
+    elif shape is not None:
+        churn_dur = round(rng.uniform(*shape.churn_duration_range()), 2)
+    else:
+        churn_dur = 30.0
+    stp_share = float(p.get("stp_share", 0.5))
+    mac_share = float(p.get("mac_share", 0.25))
+    with_trap = bool(p.get("with_trap"))
+    loss = float(p.get("probe_loss_pct", 85))
+    if "recover" in p:
+        recover = bool(p["recover"])
+    elif shape is not None:
+        recover = rng.random() >= shape.no_recovery_share()
+    else:
+        recover = True
+    recover_after = float(p.get("recovery_after_s", 180.0))
+
+    ct, dt = core_dev["tenant"], dist_dev["tenant"]
+    items: list[dict] = []
+
+    def line(t: float, dn: str, tenant: str, ln: tuple) -> None:
+        items.append(_syslog(t, dn, tenant, ln[0], ln[1], ln[2], sid))
+
+    def repeats(t: float, dn: str, tenant: str, ln: tuple) -> int:
+        """Re-report a symptom `shape.repeat_factor` times on average, spread
+        inside `shape.repeat_window_s` so every copy still counts as a repeat
+        of the same identity in the same event-time bucket.
+
+        No shape ⇒ no repeats: the template's original behaviour.
+        """
+        if shape is None:
+            return 0
+        n = shape.draw_repeats(rng, chain.REPEAT_RANGE)
+        if n <= 0:
+            return 0
+        # Two thirds of the window, so the last copy is still comfortably
+        # inside it once the emitter's own scheduling jitter is added.
+        span = float(shape.repeat_window_s) * (2.0 / 3.0)
+        step = span / n
+        for k in range(n):
+            line(t + 3.0 + step * k, dn, tenant, ln)
+        return n
+
+    # ── the phase clock: seeded, jittered, monotonically causal ───────────
+    t_ospf = _jit(rng, chain.PHASE_BAND["ospf_neighbor_down"])
+    t_flap = max(t_ospf + 0.5,
+                 _jit(rng, chain.PHASE_BAND["ospf_interface_flap"]))
+    t_bgp = max(t_flap + 0.5, _jit(rng, chain.PHASE_BAND["bgp_session_flap"]))
+
+    # phase 1 — the cause
+    line(0.0, core, ct, chain.link(upif, "down"))
+    line(1.0, core, ct, chain.lineproto(upif, "down"))
+    n_repeats = repeats(0.0, core, ct, chain.link(upif, "down"))
+    if with_trap:
+        items.append(_trap(0.5, core, ct, "linkDown", sid,
+                           ifindex=core_ifs.index(upif) + 1, ifname=upif,
+                           ifdescr=upif))
+
+    # phase 2 — the IGP notices
+    line(t_ospf, core, ct, chain.ospf_adj(peer_ospf, upif, "down"))
+    n_repeats += repeats(t_ospf, core, ct,
+                         chain.ospf_adj(peer_ospf, upif, "down"))
+
+    # phase 3 — a second core port flaps, logged from BOTH ends
+    tc = t_flap
+    cycle_log: list[dict] = []
+    for _c in range(max(1, cycles)):
+        line(tc, core, ct, chain.link(flapif, "down"))
+        line(tc + 0.5, core, ct, chain.lineproto(flapif, "down"))
+        line(tc + 1.0, core, ct, chain.ospf_adj(peer_dist, flapif, "down"))
+        line(tc + 1.4, dist, dt, chain.ospf_adj(peer_core, flapif, "down"))
+        up = tc + _jit(rng, (4.0, 12.0))
+        line(up, core, ct, chain.link(flapif, "up"))
+        line(up + 0.5, core, ct, chain.lineproto(flapif, "up"))
+        line(up + 1.0, core, ct, chain.ospf_adj(peer_dist, flapif, "up"))
+        line(up + 1.4, dist, dt, chain.ospf_adj(peer_core, flapif, "up"))
+        cycle_log.append({"down_at": round(tc, 1), "up_at": round(up + 1.4, 1)})
+        tc = up + _jit(rng, (6.0, 18.0))
+
+    # phase 4 — the transit session flaps Down → Up → Down
+    line(t_bgp, core, ct, chain.bgp_adj(peer_transit, "down"))
+    n_repeats += repeats(t_bgp, core, ct, chain.bgp_adj(peer_transit, "down"))
+    if with_trap:
+        items.append(_trap(t_bgp + 0.5, core, ct, "bgpBackwardTransition",
+                           sid, peer_ip=peer_transit))
+    b_up = t_bgp + _jit(rng, (8.0, 20.0))
+    line(b_up, core, ct, chain.bgp_adj(peer_transit, "up"))
+    if with_trap:
+        items.append(_trap(b_up + 0.5, core, ct, "bgpEstablished", sid,
+                           peer_ip=peer_transit))
+    b_down2 = b_up + _jit(rng, (6.0, 18.0))
+    line(b_down2, core, ct, chain.bgp_adj(peer_transit, "down"))
+    if with_trap:
+        items.append(_trap(b_down2 + 0.5, core, ct, "bgpBackwardTransition",
+                           sid, peer_ip=peer_transit))
+
+    # phase 5 — route churn + the router-update burst
+    t_churn = max(b_down2 + 0.5, _jit(rng, chain.PHASE_BAND["route_churn"]))
+    n_churn = max(1, round(churn_eps * churn_dur))
+    n_churn_planned = n_churn
+    if shape is not None and shape.churn_max_events > 0:
+        # The same throughput budget the mini-ladder applies: the phase keeps
+        # its RATE and stops early when the budget is spent, and BOTH numbers
+        # ride into the labels so a truncated phase is never silent.
+        n_churn = min(n_churn, int(shape.churn_max_events))
+    step = churn_dur / max(1, n_churn_planned)
+    for k in range(n_churn):
+        at = t_churn + k * step
+        if k % 5 == 4:
+            line(at, core, ct, chain.bgp_maxpfx(peer_transit, 12000 + k * 7))
+        else:
+            line(at, core, ct, chain.bgp_nbr_reset(peer_transit))
+    burst_at = t_churn + churn_dur * 0.55
+    burst_n = max(3, round(churn_eps * 3.0))
+    for k in range(burst_n):
+        line(burst_at + k * (3.0 / burst_n), core, ct,
+             chain.bgp_nbr_reset(peer_transit))
+    line(burst_at + 3.0, core, ct, chain.bgp_notification(peer_transit))
+
+    # phase 6 — the access layer reconverges
+    t_acc = max(t_churn + 0.5, _jit(rng, chain.PHASE_BAND["access_layer"]))
+    order = list(access)
+    rng.shuffle(order)
+    n_stp = min(len(order), max(1, round(stp_share * len(order)))) \
+        if order else 0
+    n_mac = min(len(order), max(1, round(mac_share * len(order)))) \
+        if order else 0
+    stp_ifs: dict[str, str] = {}
+    for j, dn in enumerate(order):
+        # the TCN floods the whole STP domain — every switch logs it
+        line(t_acc + 0.2 * j, dn, _dev(sc, dn)["tenant"], chain.stp_tcn())
+    for j, dn in enumerate(order[:n_stp]):
+        d = _dev(sc, dn)
+        pif = str(d["interfaces"][j % len(d["interfaces"])]["name"])
+        stp_ifs[dn] = pif
+        line(t_acc + 1.0 + 0.3 * j, dn, d["tenant"],
+             chain.stp_port(pif, "down"))
+        n_repeats += repeats(t_acc + 1.0 + 0.3 * j, dn, d["tenant"],
+                             chain.stp_port(pif, "down"))
+    for j, dn in enumerate(order[:n_mac]):
+        d = _dev(sc, dn)
+        ifs = [str(i["name"]) for i in d["interfaces"]]
+        pa = ifs[j % len(ifs)]
+        pb = ifs[(j + 1) % len(ifs)]
+        # Unique per (story, device): the bare MAC is a GLOBAL entity token by
+        # design, so a reused address would weld two stories into one object.
+        # The story-id checksum (NOT `hash()`, which is PYTHONHASHSEED-salted
+        # and would break the §3.3 determinism rule) keeps it stable.
+        mac = chain.mac_address((sum(ord(c) for c in sid) % 1000) * 4096 + j)
+        line(t_acc + 2.0 + 0.3 * j, dn, d["tenant"],
+             chain.mac_flap(mac, vlan, pa, pb))
+
+    # a CONTRADICTORY healthy observation while the fault is still open
+    # (memo §17/§18): the flapping core port reports up, then down again.
+    contradictions: list[dict] = []
+    if shape is not None and shape.contradiction_devices(len(order) + 2) > 0:
+        ct_at = round(t_acc + 4.0, 2)
+        line(ct_at, core, ct, chain.link(flapif, "up"))
+        line(ct_at + 5.0, core, ct, chain.link(flapif, "down"))
+        contradictions.append({"device": core, "at": ct_at,
+                               "entity_id": f"{core}:{flapif}"})
+
+    # phase 7 — recovery, or a hard outage
+    last_fault = max(it["t"] for it in items)
+    recovery: float | None = None
+    if recover:
+        recovery = round(max(recover_after, last_fault + 5.0), 1)
+        line(recovery, core, ct, chain.link(upif, "up"))
+        line(recovery + 1.0, core, ct, chain.lineproto(upif, "up"))
+        if with_trap:
+            items.append(_trap(recovery + 0.5, core, ct, "linkUp", sid,
+                               ifindex=core_ifs.index(upif) + 1,
+                               ifname=upif, ifdescr=upif))
+        line(recovery + 2.0, core, ct, chain.ospf_adj(peer_ospf, upif, "up"))
+        line(recovery + 3.0, core, ct, chain.bgp_adj(peer_transit, "up"))
+        if with_trap:
+            items.append(_trap(recovery + 3.5, core, ct, "bgpEstablished",
+                               sid, peer_ip=peer_transit))
+        for j, dn in enumerate(order[:n_stp]):
+            line(recovery + 4.0 + 0.3 * j, dn, _dev(sc, dn)["tenant"],
+                 chain.stp_port(stp_ifs[dn], "up"))
+
+    # the customer path is lossy for the whole outage window
+    end = (recovery if recovery is not None else last_fault) + 20.0
+    pt = 6.0
+    while pt < end:
+        items.append(_probe(pt, core, ct, "vantage-1", loss, "customer_path",
+                            "public_cloud_agent", sid))
+        pt += 20.0
+
+    timeline = [
+        {"phase": "uplink_down", "offset_s": 0.0},
+        {"phase": "ospf_neighbor_down", "offset_s": round(t_ospf, 1)},
+        {"phase": "ospf_interface_flap", "offset_s": round(t_flap, 1),
+         "cycles": cycle_log},
+        {"phase": "bgp_session_flap", "offset_s": round(t_bgp, 1),
+         "transitions": [{"at": round(t_bgp, 1), "state": "down"},
+                         {"at": round(b_up, 1), "state": "up"},
+                         {"at": round(b_down2, 1), "state": "down"}]},
+        {"phase": "route_churn", "offset_s": round(t_churn, 1),
+         "rate_eps": churn_eps, "duration_s": churn_dur,
+         "events_planned": n_churn_planned + burst_n + 1,
+         "events": n_churn + burst_n + 1,
+         "truncated_by_throughput_budget": n_churn < n_churn_planned,
+         "update_burst_at": round(burst_at, 1),
+         "update_burst_events": burst_n},
+        {"phase": "access_layer", "offset_s": round(t_acc, 1),
+         "tcn_devices": len(order), "stp_port_devices": n_stp,
+         "mac_move_devices": n_mac},
+    ]
+    if recovery is not None:
+        timeline.append({"phase": "recovery", "offset_s": recovery})
+    labels = {
+        "source": "twin",
+        "chain": "enterprise_outage",
+        "cause_entity": {"entity_type": "interface", "device": core,
+                         "interface": upif, "entity_id": f"{core}:{upif}",
+                         "peer": peer_transit},
+        "onset_offset_s": 0.0,
+        "recovery_offset_s": recovery,
+        "hard_outage": recovery is None,
+        "blast_radius": sorted(devices),
+        # The devices that observed the CAUSE (the core its own port, the
+        # distribution router the adjacency it lost). The access layer observed
+        # CONSEQUENCES — a blast radius, not a vantage.
+        "vantages": sorted({core, dist}),
+        "site": {"core": core, "distribution": dist,
+                 "access_devices": len(access),
+                 "stp_port_devices": sorted(order[:n_stp]),
+                 "mac_move_devices": sorted(order[:n_mac])},
+        "timeline": timeline,
+        "contradictions": contradictions,
+        # WHAT THIS STORY WAS ASKED FOR (P3). `null` means no shape was
+        # declared and the template ran its historical defaults; otherwise the
+        # full knob set plus its content digest, so an accuracy run and a
+        # mini-ladder rung can be compared on the shape they share.
+        "shape": None if shape is None else shape.as_dict(),
+        "shape_digest": None if shape is None else shape.digest(),
+        "repeat_events": n_repeats,
+        "parser_coverage": chain.parser_coverage(),
+        "not_promoted": list(chain.not_promoted_types()),
+    }
+    return {"items": items, "labels": labels}
+
+
+def _tpl_negative_debug_probe(story: dict, sc: dict,
+                              rng: random.Random) -> list[dict]:
+    p = story.get("params") or {}
+    loss = float(p.get("probe_loss_pct", 90))
+    count = int(p.get("count", 5))
+    sid = story["id"]
+    items: list[dict] = []
+    for i in range(count):
+        for dn in story["affected"].get("devices") or []:
+            dev = _dev(sc, dn)
+            items.append(_probe(i * 10.0, dn, dev["tenant"], "labgen", loss,
+                                "lab_test", "local_container", sid))
+    return items
+
+
+def _tpl_negative_unrelated_concurrency(story: dict, sc: dict,
+                                        rng: random.Random) -> list[dict]:
+    p = story.get("params") or {}
+    sid = story["id"]
+    items: list[dict] = []
+    cpu_dn = str(p["cpu_device"])
+    items += _cpu_stream(cpu_dn, _dev(sc, cpu_dn)["tenant"], sid, 97.0)
+    bgp_dn = str(p["bgp_device"])
+    bgp_dev = _dev(sc, bgp_dn)
+    peer = _external_bgp_peer(bgp_dev)
+    items.append(_syslog(
+        2.0, bgp_dn, bgp_dev["tenant"], "BGP-5-ADJCHANGE",
+        f"%BGP-5-ADJCHANGE: neighbor {peer} Down", "notice", sid))
+    probe_dn = str(p["probe_device"])
+    items.append(_probe(4.0, probe_dn, _dev(sc, probe_dn)["tenant"],
+                        "vantage-1", 70.0, "customer_path",
+                        "public_cloud_agent", sid))
+    return items
+
+
+_TEMPLATE_FNS = {
+    "link_down_cascade": _tpl_link_down_cascade,
+    "bgp_flap": _tpl_bgp_flap,
+    "dx_circuit_flap_cloud_withdrawal": _tpl_dx_circuit_flap_cloud_withdrawal,
+    "isp_brownout_multi_tenant": _tpl_isp_brownout_multi_tenant,
+    "cpu_exhaustion": _tpl_cpu_exhaustion,
+    "optics_degradation": _tpl_optics_degradation,
+    "vpn_tunnel_down": _tpl_vpn_tunnel_down,
+    "negative_debug_probe": _tpl_negative_debug_probe,
+    "negative_unrelated_concurrency": _tpl_negative_unrelated_concurrency,
+    "device_restart": _tpl_device_restart,       # fidelity wave (trap lane)
+    "traffic_drop": _tpl_traffic_drop,           # fidelity wave (flows lane)
+    # §5.12 — the whole-site causal chain, shared with the mini-ladder
+    "enterprise_outage": _tpl_enterprise_outage,
+}
+
+
+# ── plan builder ────────────────────────────────────────────────────────────
+
+def build_run_plan(sc: dict, duration_s: float) -> dict[str, Any]:
+    """Expand (scenario, seed, duration) → the deterministic emission plan.
+
+    Returns {"baseline": [items sorted by t], "stories": [
+        {"id", "template", "t0", "items" (t relative to run start, offset
+         applied), "affected", "expect", "labels"} ...]}.
+
+    A template expander may return any of three shapes:
+      * `list[items]`                        — the original form;
+      * `(items, suppressions)`              — the traffic_drop form;
+      * `{"items", "suppressions"?, "labels"?}` — the labelled form, whose
+        `labels` ride into the run's `ground_truth.jsonl` record so a story can
+        publish its cause entity, per-phase timeline and parser-coverage table
+        without any of that being re-derived downstream. The scorer ignores
+        `labels`; nothing about existing stories changes (they carry `{}`).
+    """
+    seed = int(sc["meta"]["seed"])
+    rng = random.Random(seed)
+
+    baseline: list[dict] = []
+    base = sc.get("baseline") or {}
+    syslog_cfg = base.get("syslog") or {}
+    per_dev = float(syslog_cfg.get("per_device_eps") or 0.0)
+    mix = syslog_cfg.get("severity_mix") or {"notice": 1.0}
+    if per_dev > 0:
+        interval = 1.0 / per_dev
+        for d in sc["devices"]:
+            # deterministic per-device phase so chatter interleaves
+            t = rng.random() * interval
+            seq = 0
+            while t < duration_s:
+                sev = _pick_severity(rng, mix)
+                app, msg, line_sev = rng.choice(_CHATTER_BY_SEV.get(
+                    sev, _CHATTER_BY_SEV["notice"]))
+                baseline.append(_syslog(
+                    t, d["name"], d["tenant"], app,
+                    f"{msg} [seq {seq}]", line_sev))
+                seq += 1
+                t += interval
+    for pr in base.get("probes") or []:
+        iv = float(pr.get("interval_s") or 30.0)
+        target = str(pr["target"])
+        dev = _dev(sc, target)
+        t = rng.random() * iv
+        while t < duration_s:
+            baseline.append(_probe(
+                t, target, dev["tenant"], str(pr.get("prober") or "vantage-1"),
+                0.0, str(pr.get("intent") or "customer_path"),
+                str(pr.get("vantage") or "public_cloud_agent"), rtt=11.0))
+            t += iv
+    # Fidelity wave: baseline `flows` now EMITS (design §4.5) — one compact
+    # per-device-per-second item carrying the record count + a deterministic
+    # flow_seed. (`baseline.metrics: snmp_poll: passive` stays passive on
+    # purpose: those metrics come from the REAL Go pollers hitting the twin's
+    # snmpsim agents, never from bus injection.)
+    for dn, fps in sorted(baseline_flow_fps(sc).items()):
+        dev = _dev(sc, dn)
+        count = max(1, round(fps))
+        sec = 0
+        while sec < int(duration_s):
+            baseline.append(_flow(float(sec) + 0.5, dn, dev["tenant"], count,
+                                  f"base:{seed}:{dn}:{sec}"))
+            sec += 1
+    baseline.sort(key=lambda e: (e["t"], e["lane"], e["device"]))
+
+    stories_out: list[dict] = []
+    suppressions: list[dict] = []
+    for st in sc.get("stories") or []:
+        t0 = parse_offset_s(st["trigger"]["at"], f"story {st['id']} trigger")
+        fn = _TEMPLATE_FNS[st["template"]]
+        # str seeds hash via SHA-512 in random.seed(version=2) — deterministic
+        # across processes (a tuple/str __hash__ would NOT be, PYTHONHASHSEED).
+        expanded = fn(st, sc, random.Random(f"{seed}:{st['id']}"))
+        labels: dict = {}
+        sup: list[dict] = []
+        if isinstance(expanded, dict):
+            items = expanded["items"]
+            sup = list(expanded.get("suppressions") or [])
+            labels = dict(expanded.get("labels") or {})
+        elif isinstance(expanded, tuple):
+            items, sup = expanded
+        else:
+            items = expanded
+        for s in sup:
+            suppressions.append({**s, "from": round(s["from"] + t0, 3),
+                                 "to": round(s["to"] + t0, 3)})
+        for it in items:
+            it["t"] = round(it["t"] + t0, 3)
+        items.sort(key=lambda e: (e["t"], e["lane"], e["device"]))
+        stories_out.append({
+            "id": st["id"],
+            "template": st["template"],
+            "t0": t0,
+            "items": items,
+            "affected": st["affected"],
+            "expect": st["expect"],
+            "labels": labels,
+        })
+    if suppressions:
+        def _suppressed(it: dict) -> bool:
+            return any(s["lane"] == it["lane"] and s["device"] == it["device"]
+                       and s["from"] <= it["t"] < s["to"]
+                       for s in suppressions)
+        baseline = [it for it in baseline if not _suppressed(it)]
+    return {"baseline": baseline, "stories": stories_out}
+
+
+def plan_end_s(plan: dict) -> float:
+    """Last scheduled emission second in the plan."""
+    last = 0.0
+    for it in plan["baseline"]:
+        last = max(last, it["t"])
+    for stx in plan["stories"]:
+        for it in stx["items"]:
+            last = max(last, it["t"])
+    return last

@@ -24,15 +24,15 @@ installer refuses to run with the legacy `docker-compose` binary.
 |-----------------|---------------------------------------------------------|
 | Edge ingestion  | syslog-ng · Telegraf · goflow2                          |
 | Aggregation     | Vector (parse, normalize, enrich, buffer)               |
-| Event bus       | Redpanda (Kafka-API)                                    |
+| Event bus       | Apache Kafka (KRaft)                                    |
 | Routing         | Vector router (Kafka → storage fan-out)                 |
 | Hot search      | OpenSearch + OpenSearch Dashboards                      |
-| Time-series     | VictoriaMetrics (+ Prometheus for rules)                |
+| Time-series     | VictoriaMetrics (store + self-metrics scrape + rules)   |
 | OLAP            | ClickHouse (flow analytics, findings, capacity planning) |
 | Correlation/AI  | Python + FastAPI service (anomaly detection, RCA)       |
 | API             | Go REST + GraphQL stub + LLM copilot proxy              |
 | App state       | PostgreSQL + Redis                                      |
-| Observability of itself | Grafana (Prometheus + Victoria + ClickHouse datasources) |
+| Observability of itself | VM self-scrape; Grafana add-on (Victoria + ClickHouse datasources) |
 | UI              | React + ECharts + Tailwind-compatible styles            |
 | Entrypoint      | nginx (single port :8000)                               |
 
@@ -43,13 +43,14 @@ NetOps_Observability/
 ├── README.md
 ├── docs/
 │   ├── ARCHITECTURE.md      — full topology and design rationale
-│   ├── STREAMING.md         — Redpanda topics and replay
+│   ├── STREAMING.md         — Kafka topics and replay
 │   ├── ANALYTICS.md         — ClickHouse schema and queries
 │   ├── COPILOT.md           — LLM integration details
 │   ├── INGESTION.md         — device-side syslog / SNMP / NetFlow config
 │   └── QUICK_REFERENCE.md   — common operations
 ├── scripts/
-│   ├── install.py           — idempotent installer (--reset-env rotates secrets)
+│   ├── install.py           — idempotent installer (+ gated secret rotation)
+│   ├── secret_rotation.py   — what --reset-env may rotate, and how
 │   └── bootstrap-opensearch.sh
 ├── src/
 │   ├── backend/             — Go API (REST + GraphQL stub + Copilot proxy)
@@ -61,10 +62,11 @@ NetOps_Observability/
 └── data/                    — generated at install time (gitignored)
 ```
 
-## Tabs in the dashboard
+## Navigation
 
-Dashboard · Devices · Topology · Collectors · Alerts · Rules · Findings ·
-Logs · Flows · Copilot · Prometheus · Grafana · OpenSearch Dashboards · Settings
+Dashboards · Monitoring · Incident Response · Automation (Source of Truth) ·
+Infrastructure · Data · Stack (Stack Health · Self-Monitoring · OpenSearch) ·
+Correlix AI · Administration
 
 ## Security defaults
 
@@ -91,8 +93,9 @@ cd deployment/docker && docker compose restart api
 # Stop everything (keep data)
 cd deployment/docker && docker compose down
 
-# Rotate all secrets
-python3 scripts/install.py --reset-env
+# Rotate secrets (safe on a running stack; see docs/runbooks/secret-rotation.md)
+python3 scripts/install.py --rotate-app-secrets
+cd deployment/docker && docker compose up -d --force-recreate
 
 # Apply OpenSearch index templates (first time only)
 OPENSEARCH_URL=http://localhost:9200 scripts/bootstrap-opensearch.sh
@@ -125,10 +128,18 @@ $EDITOR scripts/stack-watchdog.env        # set NTFY_TOPIC, HC_PING_URL
 # 2. Confirm phone delivery (subscribe to the topic in the ntfy app first)
 scripts/stack-watchdog.sh --test
 
-# 3. Schedule it
+# 3. Schedule it (the log lives under data/, which is already gitignored;
+#    every line is timestamped, so `tail data/stack-watchdog.log` is readable)
+mkdir -p data
 ( crontab -l 2>/dev/null; \
-  echo "* * * * * $PWD/scripts/stack-watchdog.sh >> $PWD/scripts/stack-watchdog.log 2>&1" ) | crontab -
+  echo "* * * * * $PWD/scripts/stack-watchdog.sh >> $PWD/data/stack-watchdog.log 2>&1" ) | crontab -
 ```
+
+The log grows forever by design (it is the record that survives the stack
+dying); rotate it with logrotate, or truncate it when it gets large —
+`: > data/stack-watchdog.log`. Packaged installs get this for free:
+`scripts/install-watchdog.sh` writes `/var/log/correlix-watchdog.log` **with a
+logrotate stanza**.
 
 For the off-host dead-man's-switch, create a check at
 https://healthchecks.io (period 1m, grace ~3m), point its integration at
@@ -136,4 +147,25 @@ ntfy, and paste its ping URL into `HC_PING_URL`.
 
 ## License
 
-Internal project — license not specified.
+Correlix core is licensed under the Apache License, Version 2.0. Commercial add-on modules are licensed under the Correlix Enterprise License (LicenseRef-Correlix-Enterprise) — see LICENSING.md.
+
+Correlix is **open core**. The engine, the telemetry pipeline, the correlation
+and RCA layer, the investigation surface and the tenant/organisation isolation
+model are Apache-2.0: use them, modify them, run them in production. A named,
+locked set of commercial add-ons — LDAP, SAML and SCIM, MSP fleet management,
+security dialects and SIEM export, and the security-findings lane — is
+source-available under the Correlix Enterprise License.
+
+Isolation is never a paywall. Every tier gets the same default-closed tenant
+scoping, the same FORCE-RLS policies and the same per-store filters, because a
+cross-tenant leak is a defect in every edition.
+
+| | |
+|---|---|
+| Which directory is which | [`LICENSING.md`](LICENSING.md) (generated from `licensing-policy.json`) |
+| Apache-2.0 text | [`LICENSES/Apache-2.0.txt`](LICENSES/Apache-2.0.txt) |
+| Correlix Enterprise License | [`LICENSES/Correlix-Enterprise.txt`](LICENSES/Correlix-Enterprise.txt) — **text not yet drafted; see the file** |
+| What each tier gets | [`docs/design/TIERING_PLAN_2026-09-03.md`](docs/design/TIERING_PLAN_2026-09-03.md) |
+| Third-party components | [`NOTICE`](NOTICE), [`docs/THIRD_PARTY_LICENSES.md`](docs/THIRD_PARTY_LICENSES.md) |
+| Contributing (CLA required) | [`CONTRIBUTING.md`](../CONTRIBUTING.md) |
+| Contributor License Agreement | [`CLA.md`](../CLA.md) — **text not yet drafted; a placeholder, not an agreement.** No contribution can be merged until it lands |

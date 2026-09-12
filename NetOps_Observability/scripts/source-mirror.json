@@ -1,0 +1,1804 @@
+{
+  "_comment": [
+    "GPL/LGPL SOURCE-OFFER MIRROR — the reviewed pin table for corresponding source.",
+    "",
+    "WHY THIS FILE EXISTS. Correlix redistributes copyleft-licensed binaries — as",
+    "unmodified upstream container images, and inside the images we build ourselves.",
+    "GPL-2.0 s3 lets a distributor discharge the source obligation two ways: (a) ship",
+    "the corresponding source ALONGSIDE the binary, or (b) ship a written offer good",
+    "for three years. Owner decision 2026-09-04 (licence audit D2,",
+    "docs/security/LICENSE_AUDIT_2026-09-03.md s4 D2) chose (a) for syslog-ng, and",
+    "owner decision 2026-09-05 (tracker 238) generalised it: IF CORRELIX SHIPS THE",
+    "BINARY, CORRELIX RETAINS THE SOURCE — however the binary got into the image,",
+    "including when it was inherited from an upstream base image and named nowhere in",
+    "our Dockerfiles. Upstream availability may be recorded as provenance or used as",
+    "the retrieval source, but it is NOT by itself compliance.",
+    "",
+    "TWO SECTIONS.",
+    "  components[]  Retained corresponding-source artifacts. Each is fetched,",
+    "                checksum-verified and written into every release bundle's",
+    "                source-offer/ by scripts/make-installer.sh write_source_offer().",
+    "                `provides` says which normalized component identities the",
+    "                artifact satisfies — (package_type, source_package,",
+    "                upstream_version) — so ONE tarball covers every distro",
+    "                subpackage built from the same origin, and a different version",
+    "                matches nothing.",
+    "  deferred[]    Components with a real source obligation for which Correlix has",
+    "                NOT yet produced a retained artifact. Explicitly recorded,",
+    "                version-pinned, dated and REVIEWED. scripts/oci-compliance.py",
+    "                prints them on every run and FAILS `--release` on them. A",
+    "                component in NEITHER section fails every mode: silence is never a",
+    "                pass, and a base-image bump changes the versions so the records",
+    "                stop matching and a human has to look again.",
+    "  deferred_source_coordinates{}",
+    "                For each undischarged Debian obligation, the EXACT source package,",
+    "                version, URL and Debian-attested sha256 of every file that would",
+    "                discharge it. Mirroring is then mechanical; the reason it has not",
+    "                happened is recorded in docs/TRACKER.md, not implied by silence.",
+    "verifies its sha256 against the pin below, and writes it to the bundle at",
+    "source-offer/<file>. A missing pin, a failed download or a checksum mismatch is",
+    "a HARD BUILD FAILURE (scripts/CLAUDE.md s16.1) — an unverified tarball is never",
+    "shipped, and 'the network was down' never silently produces a bundle whose",
+    "source offer is a lie. scripts/oci-compliance.py reads the same file to decide",
+    "whether every copyleft component discovered in a FINAL OCI IMAGE has a retained,",
+    "checksum-verified artifact behind it.",
+    "",
+    "ON 'upstream's published sum'. Each entry's `verified_against` states whether",
+    "the sha256 is an UPSTREAM-PUBLISHED digest we checked against, or OUR OWN",
+    "measurement recorded once and then enforced forever (trust-on-first-use). Those",
+    "are different strengths of evidence and the difference is written down rather",
+    "than implied, so nobody later mistakes a self-measured pin for a vendor",
+    "signature. syslog-ng publishes no checksum at all; busybox does.",
+    "",
+    "ON EXACT CORRESPONDENCE. An upstream release tarball at a matching version is",
+    "NOT automatically the source a distribution built: distributions carry patches",
+    "and build configuration. `role` and `correspondence` keep that honest — a",
+    "`distro-packaging` artifact pinned to the SAME build reference the image's own",
+    "package database records (Alpine writes the aports commit into /lib/apk/db) is",
+    "what upgrades a component from `upstream-release` to `distro-exact`. Claiming",
+    "more than the evidence supports is worse than claiming less.",
+    "",
+    "UPDATING. When a pinned image version changes in deployment/docker, this file",
+    "MUST change with it — tests/test_source_offer.py fails the build otherwise.",
+    "",
+    "THE LICENCE REVIEW. scripts/source-review.json holds the per-component licence",
+    "determination for every component an image scan could NOT resolve mechanically",
+    "(a Debian copyright file is an unordered LIST of licences, not an expression).",
+    "Each review names its evidence by path and sha256, states the licences governing",
+    "the SHIPPED BINARY, and answers one question: does a corresponding-source",
+    "obligation apply? A review that says no turns the component into `not-required`",
+    "WITH THE REVIEW AS EVIDENCE; one that says `unclear` stays in manual review; one",
+    "that says yes leaves the row in `deferred` below. Every review a `--release` run",
+    "relies on must carry `owner_signoff: true` — the owner grants that by editing",
+    "that file. A review can never overrule a RESOLVED copyleft expression: that is a",
+    "conflict and it aborts the evaluation."
+  ],
+  "_source_review": "scripts/source-review.json — the per-component licence review that decides which of these obligations are real. Read by scripts/oci-compliance.py; a review that says `source_required: false` turns a manual-review component into `not-required` with the review as evidence, an `unclear` one stays in manual review, and every review relied on by a --release run must carry `owner_signoff: true`.",
+  "components": [
+    {
+      "name": "syslog-ng",
+      "version": "4.7.1",
+      "image": "balabit/syslog-ng",
+      "compose_pin_source": "deployment/docker/docker-compose.yml",
+      "file": "syslog-ng-4.7.1.tar.gz",
+      "url": "https://github.com/syslog-ng/syslog-ng/releases/download/syslog-ng-4.7.1/syslog-ng-4.7.1.tar.gz",
+      "sha256": "5477189a2d12325aa4faebfcf59f5bdd9084234732f0c3ec16dd253847dacf1c",
+      "size_bytes": 6877191,
+      "verified_against": "self-measured 2026-09-04 from the canonical GitHub release asset; upstream publishes no checksum, signature or release-asset digest for this file",
+      "license": "LGPL-2.1-or-later (core: lib/, libtest/, syslog-ng/, syslog-ng-ctl/, persist-tool/, tests/loggen/, docker/) AND GPL-2.0-or-later (modules/, scl/) — verified against COPYING at tag syslog-ng-4.7.1",
+      "notes": "No OpenSSL linking exception exists in this COPYING. The stock balabit/syslog-ng image loads all modules, so the running combination is effectively GPL-2.0-or-later. This tarball IS the corresponding source for that image's syslog-ng.",
+      "component": "syslog-ng",
+      "role": "corresponding-source",
+      "origin": "separate-container-image",
+      "correspondence": "upstream-release",
+      "provides": [
+        {
+          "package_type": "image",
+          "name": "balabit/syslog-ng",
+          "upstream_version": "4.7.1"
+        }
+      ],
+      "images": [
+        "balabit/syslog-ng:4.7.1 (separate container, redistributed unmodified)"
+      ],
+      "retained_in_git": ""
+    },
+    {
+      "name": "busybox",
+      "component": "busybox",
+      "version": "1.37.0",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "busybox-1.37.0.tar.bz2",
+      "url": "https://busybox.net/downloads/busybox-1.37.0.tar.bz2",
+      "mirrors": [
+        {
+          "url": "https://distfiles.alpinelinux.org/distfiles/v3.21/busybox-1.37.0.tar.bz2",
+          "why": "Alpine's own distfiles mirror — the exact tarball Alpine builds the busybox apk from, which is the package that actually rides into our images. Fetched 2026-09-07 and it hashes to the pin below byte-for-byte."
+        }
+      ],
+      "mirrors_note": "busybox.net refused connections for 20s from both the lab and GitHub-hosted runners on 2026-09-07 and failed the supply-chain workflow. A mirror is a RETRIEVAL host, never an authority: whichever host answers, the bytes are accepted only if they hash to `sha256` below.",
+      "sha256": "3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4",
+      "size_bytes": 2565764,
+      "verified_against": "upstream-published sha256 at https://busybox.net/downloads/busybox-1.37.0.tar.bz2.sha256 — fetched and matched byte-for-byte on 2026-09-05. Unlike syslog-ng this is a real upstream attestation, not a self-measurement.",
+      "license": "GPL-2.0-only — BusyBox is explicit that version 2 is the ONLY version; there is no 'or later' option. Verified against LICENSE in the tarball and against the L: field Alpine records in /lib/apk/db/installed.",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "busybox",
+          "upstream_version": "1.37.0"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ],
+      "notes": "BusyBox is named in NO Correlix Dockerfile. It arrives inside the Alpine layers of nginx:1.27-alpine and is present in every netops-frontend and netops-nginx image we distribute, as the apk packages busybox, busybox-binsh and ssl_client — all three built from this one origin package, so this one tarball is the corresponding source for all three. That invisibility is tracker 238: the licence audit models image REFERENCES and this is a base LAYER. It is found now because scripts/oci-compliance.py scans the FINAL image, not the Dockerfile.",
+      "retained_in_git": ""
+    },
+    {
+      "name": "busybox",
+      "component": "busybox",
+      "version": "1.37.0-r12",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "busybox-1.37.0-r12-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/9c49608930ef6a9936750e9e39edec56b3db9cd5/aports-9c49608930ef6a9936750e9e39edec56b3db9cd5.tar.gz?path=main/busybox",
+      "sha256": "b384f0b478515b67ff407a431c89218cf34145fbacc798b0822e05a1f8a4737a",
+      "size_bytes": 69075,
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit Alpine records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever. If a future GitLab archive-format change breaks it, the build FAILS rather than shipping unverified bytes — re-measure deliberately, or serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR.",
+      "license": "GPL-2.0-only — the packaging is distributed under the package's own licence",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "busybox",
+        "package_version": "1.37.0-r12",
+        "build_ref": "9c49608930ef6a9936750e9e39edec56b3db9cd5",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/busybox"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "busybox",
+          "upstream_version": "1.37.0"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ],
+      "notes": "The upstream tarball alone is not the source Alpine built. This archive is Alpine's complete packaging for busybox at the exact commit the shipped image records: the APKBUILD (which states the build configuration and the sha512 of every input), all 37 distribution patches, and busyboxconfig. Upstream tarball + this archive together are the corresponding source for the binary in the image, which is what lets scripts/oci-compliance.py report correspondence `distro-exact` instead of merely `upstream-release`.",
+      "retained_in_git": "compliance/corresponding-sources/busybox-1.37.0-r12-alpine-aports.tar.gz"
+    },
+    {
+      "name": "alpine-baselayout",
+      "component": "alpine-baselayout",
+      "version": "3.6.8-r1",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "alpine-baselayout-3.6.8-r1-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/5f0cd7890349e7fe11128478ac506c709805224d/aports-5f0cd7890349e7fe11128478ac506c709805224d.tar.gz?path=main/alpine-baselayout",
+      "sha256": "fa84ea4f0187a196c82dd6410933de488e0ae03956301986b1cf4410d67acb9e",
+      "size_bytes": 7768,
+      "retained_in_git": "compliance/corresponding-sources/alpine-baselayout-3.6.8-r1-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "GPL-2.0-only",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "alpine-baselayout",
+        "package_version": "3.6.8-r1",
+        "build_ref": "5f0cd7890349e7fe11128478ac506c709805224d",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/alpine-baselayout"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "alpine-baselayout",
+          "upstream_version": "3.6.8"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ],
+      "notes": "alpine-baselayout has NO separate upstream release: the aports tree IS the complete work (init scripts, /etc skeleton files and the APKBUILD that installs them). This one archive is therefore the whole corresponding source for both alpine-baselayout and alpine-baselayout-data. Two data files it names (protocols-6.4, services-6.4) are fetched by the recipe from Debian's netbase v6.4 tag; netbase 6.4's own source is retained separately in this same table."
+    },
+    {
+      "name": "apk-tools",
+      "component": "apk-tools",
+      "version": "2.14.6",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "apk-tools-v2.14.6.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/apk-tools/-/archive/v2.14.6/apk-tools-v2.14.6.tar.gz",
+      "sha256": "f2926026f2010130df929cb4a1c35b94879ba59aa9cb7465a6f686d4dfd8c7bf",
+      "size_bytes": 199574,
+      "retained_in_git": "compliance/corresponding-sources/apk-tools-v2.14.6.tar.gz",
+      "verified_against": "Alpine's own `sha512sums` in the APKBUILD at aports commit 41847d6ccff08940b5bf1ba0d6005e95897039f9 — fetched from upstream and matched byte-for-byte on 2026-09-05. The sha256 recorded here is Correlix's measurement of those same distribution-attested bytes.",
+      "license": "GPL-2.0-only",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "apk-tools",
+          "upstream_version": "2.14.6"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "apk-tools",
+      "component": "apk-tools",
+      "version": "2.14.6-r3",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "apk-tools-2.14.6-r3-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/41847d6ccff08940b5bf1ba0d6005e95897039f9/aports-41847d6ccff08940b5bf1ba0d6005e95897039f9.tar.gz?path=main/apk-tools",
+      "sha256": "186c28132c7d3632c470d0d74f6ba4a77815908398cca032706ca554aac65379",
+      "size_bytes": 6858,
+      "retained_in_git": "compliance/corresponding-sources/apk-tools-2.14.6-r3-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "GPL-2.0-only",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "apk-tools",
+        "package_version": "2.14.6-r3",
+        "build_ref": "41847d6ccff08940b5bf1ba0d6005e95897039f9",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/apk-tools"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "apk-tools",
+          "upstream_version": "2.14.6"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "geoip",
+      "component": "geoip",
+      "version": "1.6.12",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "GeoIP-1.6.12.tar.gz",
+      "url": "https://github.com/maxmind/geoip-api-c/releases/download/v1.6.12/GeoIP-1.6.12.tar.gz",
+      "sha256": "1dfb748003c5e4b7fd56ba8c4cd786633d5d6f409547584f6910398389636f80",
+      "size_bytes": 473914,
+      "retained_in_git": "compliance/corresponding-sources/GeoIP-1.6.12.tar.gz",
+      "verified_against": "Alpine's own `sha512sums` in the APKBUILD at aports commit fc95c59998285564fbcb0bfb2443898c62e10171 — fetched from upstream and matched byte-for-byte on 2026-09-05. The sha256 recorded here is Correlix's measurement of those same distribution-attested bytes.",
+      "license": "LGPL-2.1-or-later",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "geoip",
+          "upstream_version": "1.6.12"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "geoip",
+      "component": "geoip",
+      "version": "1.6.12-r5",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "geoip-1.6.12-r5-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/fc95c59998285564fbcb0bfb2443898c62e10171/aports-fc95c59998285564fbcb0bfb2443898c62e10171.tar.gz?path=main/geoip",
+      "sha256": "5f298d1d9c88452da91db223d4b563fa237cfba60a097f9f14288aeeba7c6a06",
+      "size_bytes": 865,
+      "retained_in_git": "compliance/corresponding-sources/geoip-1.6.12-r5-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "LGPL-2.1-or-later",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "geoip",
+        "package_version": "1.6.12-r5",
+        "build_ref": "fc95c59998285564fbcb0bfb2443898c62e10171",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/geoip"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "geoip",
+          "upstream_version": "1.6.12"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "gettext",
+      "component": "gettext",
+      "version": "0.22.5",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "gettext-0.22.5.tar.xz",
+      "url": "https://ftp.gnu.org/gnu/gettext/gettext-0.22.5.tar.xz",
+      "sha256": "fe10c37353213d78a5b83d48af231e005c4da84db5ce88037d88355938259640",
+      "size_bytes": 10270724,
+      "retained_in_git": "",
+      "verified_against": "Alpine's own `sha512sums` in the APKBUILD at aports commit c49ded5d54b708768165f7a99589464cd5c5eeee — fetched from upstream and matched byte-for-byte on 2026-09-05. The sha256 recorded here is Correlix's measurement of those same distribution-attested bytes.",
+      "license": "GPL-3.0-or-later AND LGPL-2.1-or-later AND MIT",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "gettext",
+          "upstream_version": "0.22.5"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ],
+      "notes": "Serves BOTH apk packages built from this origin and shipped in the image: gettext-envsubst (GPL-3.0-or-later AND LGPL-2.1-or-later AND MIT) and libintl (LGPL-2.1-or-later)."
+    },
+    {
+      "name": "gettext",
+      "component": "gettext",
+      "version": "0.22.5-r0",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "gettext-0.22.5-r0-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/c49ded5d54b708768165f7a99589464cd5c5eeee/aports-c49ded5d54b708768165f7a99589464cd5c5eeee.tar.gz?path=main/gettext",
+      "sha256": "7ab0ab994deed51666cee4f00a0605a1db7b6614e6dd19309d7af7b93cd1e33d",
+      "size_bytes": 2757,
+      "retained_in_git": "compliance/corresponding-sources/gettext-0.22.5-r0-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "GPL-3.0-or-later AND LGPL-2.1-or-later AND MIT",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "gettext",
+        "package_version": "0.22.5-r0",
+        "build_ref": "c49ded5d54b708768165f7a99589464cd5c5eeee",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/gettext"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "gettext",
+          "upstream_version": "0.22.5"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "libgcrypt",
+      "component": "libgcrypt",
+      "version": "1.10.3",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "libgcrypt-1.10.3.tar.bz2",
+      "url": "https://www.gnupg.org/ftp/gcrypt/libgcrypt/libgcrypt-1.10.3.tar.bz2",
+      "sha256": "8b0870897ac5ac67ded568dcfadf45969cfa8a6beb0fd60af2a9eadc2a3272aa",
+      "size_bytes": 3783827,
+      "retained_in_git": "",
+      "verified_against": "Alpine's own `sha512sums` in the APKBUILD at aports commit 40176cc16c5dfa243d502fa9e1f7b9e68ebcad0b — fetched from upstream and matched byte-for-byte on 2026-09-05. The sha256 recorded here is Correlix's measurement of those same distribution-attested bytes.",
+      "license": "LGPL-2.1-or-later AND GPL-2.0-or-later",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "libgcrypt",
+          "upstream_version": "1.10.3"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "libgcrypt",
+      "component": "libgcrypt",
+      "version": "1.10.3-r1",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "libgcrypt-1.10.3-r1-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/40176cc16c5dfa243d502fa9e1f7b9e68ebcad0b/aports-40176cc16c5dfa243d502fa9e1f7b9e68ebcad0b.tar.gz?path=main/libgcrypt",
+      "sha256": "df50134f1deeb41c9d920ef0bf5be9c3ff47f771fb40657f80f052768633fa37",
+      "size_bytes": 2097,
+      "retained_in_git": "compliance/corresponding-sources/libgcrypt-1.10.3-r1-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "LGPL-2.1-or-later AND GPL-2.0-or-later",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "libgcrypt",
+        "package_version": "1.10.3-r1",
+        "build_ref": "40176cc16c5dfa243d502fa9e1f7b9e68ebcad0b",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/libgcrypt"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "libgcrypt",
+          "upstream_version": "1.10.3"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "libgpg-error",
+      "component": "libgpg-error",
+      "version": "1.51",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "libgpg-error-1.51.tar.bz2",
+      "url": "https://gnupg.org/ftp/gcrypt/libgpg-error/libgpg-error-1.51.tar.bz2",
+      "sha256": "be0f1b2db6b93eed55369cdf79f19f72750c8c7c39fc20b577e724545427e6b2",
+      "size_bytes": 1085510,
+      "retained_in_git": "",
+      "verified_against": "Alpine's own `sha512sums` in the APKBUILD at aports commit 59a563eec99ff1e59c5cb42ecf7a482be3684a1c — fetched from upstream and matched byte-for-byte on 2026-09-05. The sha256 recorded here is Correlix's measurement of those same distribution-attested bytes.",
+      "license": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "libgpg-error",
+          "upstream_version": "1.51"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "libgpg-error",
+      "component": "libgpg-error",
+      "version": "1.51-r0",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "libgpg-error-1.51-r0-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/59a563eec99ff1e59c5cb42ecf7a482be3684a1c/aports-59a563eec99ff1e59c5cb42ecf7a482be3684a1c.tar.gz?path=main/libgpg-error",
+      "sha256": "3f19cdb41d593bc524c1b526b68e88f1265f23e79f3268a341fd4f4d03b411a8",
+      "size_bytes": 971,
+      "retained_in_git": "compliance/corresponding-sources/libgpg-error-1.51-r0-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "libgpg-error",
+        "package_version": "1.51-r0",
+        "build_ref": "59a563eec99ff1e59c5cb42ecf7a482be3684a1c",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/libgpg-error"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "libgpg-error",
+          "upstream_version": "1.51"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "libidn2",
+      "component": "libidn2",
+      "version": "2.3.7",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "libidn2-2.3.7.tar.gz",
+      "url": "https://ftp.gnu.org/gnu/libidn/libidn2-2.3.7.tar.gz",
+      "sha256": "4c21a791b610b9519b9d0e12b8097bf2f359b12f8dd92647611a929e6bfd7d64",
+      "size_bytes": 2155214,
+      "retained_in_git": "",
+      "verified_against": "Alpine's own `sha512sums` in the APKBUILD at aports commit 1cdcdd0eccbee1f60078417a7aaf83f92f6e6754 — fetched from upstream and matched byte-for-byte on 2026-09-05. The sha256 recorded here is Correlix's measurement of those same distribution-attested bytes.",
+      "license": "GPL-2.0-or-later OR LGPL-3.0-or-later",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "libidn2",
+          "upstream_version": "2.3.7"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ],
+      "notes": "Dual-licensed. Correlix retains the corresponding source regardless of which branch a recipient takes, because BOTH branches of this disjunction are copyleft."
+    },
+    {
+      "name": "libidn2",
+      "component": "libidn2",
+      "version": "2.3.7-r0",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "libidn2-2.3.7-r0-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/1cdcdd0eccbee1f60078417a7aaf83f92f6e6754/aports-1cdcdd0eccbee1f60078417a7aaf83f92f6e6754.tar.gz?path=main/libidn2",
+      "sha256": "f99da70f080e3ed287aa35724ab805bb424c2f4099c606afa04c6d4a90e8c4e8",
+      "size_bytes": 948,
+      "retained_in_git": "compliance/corresponding-sources/libidn2-2.3.7-r0-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "GPL-2.0-or-later OR LGPL-3.0-or-later",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "libidn2",
+        "package_version": "2.3.7-r0",
+        "build_ref": "1cdcdd0eccbee1f60078417a7aaf83f92f6e6754",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/libidn2"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "libidn2",
+          "upstream_version": "2.3.7"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "libunistring",
+      "component": "libunistring",
+      "version": "1.2",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "libunistring-1.2.tar.xz",
+      "url": "https://ftp.gnu.org/gnu/libunistring/libunistring-1.2.tar.xz",
+      "sha256": "632bd65ed74a881ca8a0309a1001c428bd1cbd5cd7ddbf8cedcd2e65f4dcdc44",
+      "size_bytes": 2502196,
+      "retained_in_git": "",
+      "verified_against": "Alpine's own `sha512sums` in the APKBUILD at aports commit c4c67852adc5bc15e278054876bc3c70c321948e — fetched from upstream and matched byte-for-byte on 2026-09-05. The sha256 recorded here is Correlix's measurement of those same distribution-attested bytes.",
+      "license": "GPL-2.0-or-later OR LGPL-3.0-or-later",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "libunistring",
+          "upstream_version": "1.2"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "libunistring",
+      "component": "libunistring",
+      "version": "1.2-r0",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "libunistring-1.2-r0-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/c4c67852adc5bc15e278054876bc3c70c321948e/aports-c4c67852adc5bc15e278054876bc3c70c321948e.tar.gz?path=main/libunistring",
+      "sha256": "e35dc7754c60b18a22814937fd944913e2241526c882a768931b64bce9484b0a",
+      "size_bytes": 841,
+      "retained_in_git": "compliance/corresponding-sources/libunistring-1.2-r0-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "GPL-2.0-or-later OR LGPL-3.0-or-later",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "libunistring",
+        "package_version": "1.2-r0",
+        "build_ref": "c4c67852adc5bc15e278054876bc3c70c321948e",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/libunistring"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "libunistring",
+          "upstream_version": "1.2"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "musl",
+      "component": "musl",
+      "version": "1.2.5",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "musl-1.2.5.tar.gz",
+      "url": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "mirrors": [
+        {
+          "url": "https://distfiles.alpinelinux.org/distfiles/v3.20/musl-1.2.5.tar.gz",
+          "why": "Alpine's own distfiles mirror — the exact tarball Alpine builds the musl apk from. Fetched 2026-09-07 and it hashes to the pin below byte-for-byte."
+        }
+      ],
+      "mirrors_note": "musl.libc.org answered on 2026-09-07, but it is one small host serving the C library of every Alpine image Correlix ships; it gets the same alternate as busybox for the same reason. The pinned sha256 below decides, whichever host answers.",
+      "sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "size_bytes": 1080786,
+      "retained_in_git": "",
+      "verified_against": "Alpine's own `sha512sums` in the APKBUILD at aports commit efd4d5df7be0ea48d98512671f676fc5ceb14899 — fetched from upstream and matched byte-for-byte on 2026-09-05. The sha256 recorded here is Correlix's measurement of those same distribution-attested bytes.",
+      "license": "MIT AND BSD-2-Clause AND GPL-2.0-or-later",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "musl",
+          "upstream_version": "1.2.5"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ],
+      "notes": "musl itself is MIT and carries no corresponding-source obligation. The obligation belongs to the musl-utils SUBPACKAGE, whose getent/getconf/iconv/ldconfig are built from sources that live in the aports tree, not in the musl tarball — so the packaging archive beside this entry is the part that actually discharges it, and both are retained."
+    },
+    {
+      "name": "musl",
+      "component": "musl",
+      "version": "1.2.5-r9",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "musl-1.2.5-r9-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/efd4d5df7be0ea48d98512671f676fc5ceb14899/aports-efd4d5df7be0ea48d98512671f676fc5ceb14899.tar.gz?path=main/musl",
+      "sha256": "9efdd30d79cf42ae2c336f44ca536a77353af41e0d567f865813ab361e3dfcaf",
+      "size_bytes": 16369,
+      "retained_in_git": "compliance/corresponding-sources/musl-1.2.5-r9-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "MIT AND BSD-2-Clause AND GPL-2.0-or-later",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "musl",
+        "package_version": "1.2.5-r9",
+        "build_ref": "efd4d5df7be0ea48d98512671f676fc5ceb14899",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/musl"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "musl",
+          "upstream_version": "1.2.5"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "pax-utils",
+      "component": "pax-utils",
+      "version": "1.3.8",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "pax-utils-1.3.8.tar.xz",
+      "url": "https://dev.gentoo.org/~sam/distfiles/app-misc/pax-utils/pax-utils-1.3.8.tar.xz",
+      "sha256": "12a168d1aeae2626efdbde3979da88a60ca80bb38e1db565e95ee441ff1d5a0c",
+      "size_bytes": 123556,
+      "retained_in_git": "compliance/corresponding-sources/pax-utils-1.3.8.tar.xz",
+      "verified_against": "Alpine's own `sha512sums` in the APKBUILD at aports commit 398a5aee3025ec8a4d0d761e448dc86ac777fa09 — fetched from upstream and matched byte-for-byte on 2026-09-05. The sha256 recorded here is Correlix's measurement of those same distribution-attested bytes.",
+      "license": "GPL-2.0-only",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "pax-utils",
+          "upstream_version": "1.3.8"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ],
+      "notes": "Shipped in the image as the `scanelf` subpackage (apk originPackage pax-utils)."
+    },
+    {
+      "name": "pax-utils",
+      "component": "pax-utils",
+      "version": "1.3.8-r1",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "pax-utils-1.3.8-r1-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/398a5aee3025ec8a4d0d761e448dc86ac777fa09/aports-398a5aee3025ec8a4d0d761e448dc86ac777fa09.tar.gz?path=main/pax-utils",
+      "sha256": "6bdcfe679449291d7d6737e1a14eaf0eb1f0f305ee3ed2a7664452c6912f4426",
+      "size_bytes": 1157,
+      "retained_in_git": "compliance/corresponding-sources/pax-utils-1.3.8-r1-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "GPL-2.0-only",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "pax-utils",
+        "package_version": "1.3.8-r1",
+        "build_ref": "398a5aee3025ec8a4d0d761e448dc86ac777fa09",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/pax-utils"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "pax-utils",
+          "upstream_version": "1.3.8"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "hostname",
+      "component": "hostname",
+      "version": "3.25",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "python:3.12-slim (base of netops-correlation)",
+      "compose_pin_source": "deployment/docker/Dockerfile.correlation",
+      "file": "hostname_3.25.tar.xz",
+      "url": "https://deb.debian.org/debian/pool/main/h/hostname/hostname_3.25.tar.xz",
+      "sha256": "5bb5d1be011158090157c9e7587ae5606c262a5020ecdc5caac6686b9910592e",
+      "size_bytes": 12804,
+      "retained_in_git": "compliance/corresponding-sources/hostname_3.25.tar.xz",
+      "verified_against": "the sha256 Debian's own archive index declares for this file (dists/trixie/main/source/Sources.xz, whose sha256 is in turn declared by the OpenPGP-signed dists/trixie/InRelease) — fetched and matched byte-for-byte on 2026-09-05. This is a real distribution attestation, not a self-measurement.",
+      "license": "GPL-2.0-only",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "hostname",
+          "upstream_version": "3.25"
+        }
+      ],
+      "images": [
+        "netops-correlation (deployment/docker/Dockerfile.correlation)"
+      ],
+      "notes": "A Debian NATIVE source package: there is no separate upstream tarball, so hostname_3.25.tar.xz is the complete corresponding source and the .dsc is the signed manifest that names it."
+    },
+    {
+      "name": "hostname",
+      "component": "hostname",
+      "version": "3.25",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "image": "python:3.12-slim (base of netops-correlation)",
+      "compose_pin_source": "deployment/docker/Dockerfile.correlation",
+      "file": "hostname_3.25.dsc",
+      "url": "https://deb.debian.org/debian/pool/main/h/hostname/hostname_3.25.dsc",
+      "sha256": "80aadf116c3423044be69a4cef8ba2766f412bd4d46a500aacb61f303c19c4ef",
+      "size_bytes": 1519,
+      "retained_in_git": "compliance/corresponding-sources/hostname_3.25.dsc",
+      "verified_against": "the sha256 Debian's own archive index declares for this file (dists/trixie/main/source/Sources.xz, whose sha256 is in turn declared by the OpenPGP-signed dists/trixie/InRelease) — fetched and matched byte-for-byte on 2026-09-05. This is a real distribution attestation, not a self-measurement.",
+      "license": "GPL-2.0-only",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "hostname",
+          "upstream_version": "3.25"
+        }
+      ],
+      "images": [
+        "netops-correlation (deployment/docker/Dockerfile.correlation)"
+      ],
+      "distro_package": {
+        "distro": "debian",
+        "distro_version": "13",
+        "suite": "trixie",
+        "package": "hostname",
+        "package_version": "3.25",
+        "build_ref": "3.25",
+        "build_ref_source": "the SOURCE-package version the image's own /var/lib/dpkg records (dpkg `Source:`/`Version:`; Syft carries it through as syft:metadata:sourceVersion, falling back to the binary version when Debian states none because they are equal). For Debian that name+version pair IS the exact build reference: it names one immutable source package in the archive.",
+        "repository": "https://deb.debian.org/debian",
+        "path": "pool/main/h/hostname"
+      }
+    },
+    {
+      "name": "libseccomp",
+      "component": "libseccomp",
+      "version": "2.6.0",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "python:3.12-slim (base of netops-correlation)",
+      "compose_pin_source": "deployment/docker/Dockerfile.correlation",
+      "file": "libseccomp_2.6.0.orig.tar.gz",
+      "url": "https://deb.debian.org/debian/pool/main/libs/libseccomp/libseccomp_2.6.0.orig.tar.gz",
+      "sha256": "83b6085232d1588c379dc9b9cae47bb37407cf262e6e74993c61ba72d2a784dc",
+      "size_bytes": 685655,
+      "retained_in_git": "",
+      "verified_against": "the sha256 Debian's own archive index declares for this file (dists/trixie/main/source/Sources.xz, whose sha256 is in turn declared by the OpenPGP-signed dists/trixie/InRelease) — fetched and matched byte-for-byte on 2026-09-05. This is a real distribution attestation, not a self-measurement.",
+      "license": "LGPL-2.1-only",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "libseccomp",
+          "upstream_version": "2.6.0"
+        }
+      ],
+      "images": [
+        "netops-correlation (deployment/docker/Dockerfile.correlation)"
+      ],
+      "notes": "Upstream release + Debian's packaging (patches, rules, control) + the signed .dsc that binds them; together these are the exact source Debian built libseccomp2 2.6.0-2 from. The 670 KB orig tarball is fetched per release from its pinned URL rather than retained in git; the two small packaging artifacts are retained."
+    },
+    {
+      "name": "libseccomp",
+      "component": "libseccomp",
+      "version": "2.6.0-2",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "image": "python:3.12-slim (base of netops-correlation)",
+      "compose_pin_source": "deployment/docker/Dockerfile.correlation",
+      "file": "libseccomp_2.6.0-2.debian.tar.xz",
+      "url": "https://deb.debian.org/debian/pool/main/libs/libseccomp/libseccomp_2.6.0-2.debian.tar.xz",
+      "sha256": "ed705ec85719403e77d004c99c0b06b795f090c66fcae265c4bcf37ffea9cc27",
+      "size_bytes": 20800,
+      "retained_in_git": "compliance/corresponding-sources/libseccomp_2.6.0-2.debian.tar.xz",
+      "verified_against": "the sha256 Debian's own archive index declares for this file (dists/trixie/main/source/Sources.xz, whose sha256 is in turn declared by the OpenPGP-signed dists/trixie/InRelease) — fetched and matched byte-for-byte on 2026-09-05. This is a real distribution attestation, not a self-measurement.",
+      "license": "LGPL-2.1-only",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "libseccomp",
+          "upstream_version": "2.6.0"
+        }
+      ],
+      "images": [
+        "netops-correlation (deployment/docker/Dockerfile.correlation)"
+      ],
+      "distro_package": {
+        "distro": "debian",
+        "distro_version": "13",
+        "suite": "trixie",
+        "package": "libseccomp",
+        "package_version": "2.6.0-2",
+        "build_ref": "2.6.0-2",
+        "build_ref_source": "the SOURCE-package version the image's own /var/lib/dpkg records (dpkg `Source:`/`Version:`; Syft carries it through as syft:metadata:sourceVersion, falling back to the binary version when Debian states none because they are equal). For Debian that name+version pair IS the exact build reference: it names one immutable source package in the archive.",
+        "repository": "https://deb.debian.org/debian",
+        "path": "pool/main/libs/libseccomp"
+      }
+    },
+    {
+      "name": "libseccomp",
+      "component": "libseccomp",
+      "version": "2.6.0-2",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "image": "python:3.12-slim (base of netops-correlation)",
+      "compose_pin_source": "deployment/docker/Dockerfile.correlation",
+      "file": "libseccomp_2.6.0-2.dsc",
+      "url": "https://deb.debian.org/debian/pool/main/libs/libseccomp/libseccomp_2.6.0-2.dsc",
+      "sha256": "d05f94536558d34fa339326c6f958a3357b51efac8234470b5d97b69472db765",
+      "size_bytes": 2622,
+      "retained_in_git": "compliance/corresponding-sources/libseccomp_2.6.0-2.dsc",
+      "verified_against": "the sha256 Debian's own archive index declares for this file (dists/trixie/main/source/Sources.xz, whose sha256 is in turn declared by the OpenPGP-signed dists/trixie/InRelease) — fetched and matched byte-for-byte on 2026-09-05. This is a real distribution attestation, not a self-measurement.",
+      "license": "LGPL-2.1-only",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "libseccomp",
+          "upstream_version": "2.6.0"
+        }
+      ],
+      "images": [
+        "netops-correlation (deployment/docker/Dockerfile.correlation)"
+      ],
+      "distro_package": {
+        "distro": "debian",
+        "distro_version": "13",
+        "suite": "trixie",
+        "package": "libseccomp",
+        "package_version": "2.6.0-2",
+        "build_ref": "2.6.0-2",
+        "build_ref_source": "the SOURCE-package version the image's own /var/lib/dpkg records (dpkg `Source:`/`Version:`; Syft carries it through as syft:metadata:sourceVersion, falling back to the binary version when Debian states none because they are equal). For Debian that name+version pair IS the exact build reference: it names one immutable source package in the archive.",
+        "repository": "https://deb.debian.org/debian",
+        "path": "pool/main/libs/libseccomp"
+      }
+    },
+    {
+      "name": "netbase",
+      "component": "netbase",
+      "version": "6.4",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "gcr.io/distroless/static-debian12:nonroot (base of netops-api)",
+      "compose_pin_source": "deployment/docker/Dockerfile.backend",
+      "file": "netbase_6.4.tar.xz",
+      "url": "https://deb.debian.org/debian/pool/main/n/netbase/netbase_6.4.tar.xz",
+      "sha256": "fa6621826ff1150e581bd90bc3c8a4ecafe5df90404f207db6dcdf2c75f26ad7",
+      "size_bytes": 32712,
+      "retained_in_git": "compliance/corresponding-sources/netbase_6.4.tar.xz",
+      "verified_against": "the sha256 Debian's own archive index declares for this file (dists/bookworm/main/source/Sources.xz, whose sha256 is in turn declared by the OpenPGP-signed dists/bookworm/InRelease) — fetched and matched byte-for-byte on 2026-09-05. This is a real distribution attestation, not a self-measurement.",
+      "license": "GPL-2.0-only",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "netbase",
+          "upstream_version": "6.4"
+        }
+      ],
+      "images": [
+        "netops-api (deployment/docker/Dockerfile.backend)"
+      ],
+      "notes": "Debian NATIVE package. netops-api is built FROM gcr.io/distroless/static-debian12, which is Debian 12 (bookworm) — hence 6.4 here and 6.5 for the Debian 13 correlation image; they are two different works and get two different retained artifacts."
+    },
+    {
+      "name": "netbase",
+      "component": "netbase",
+      "version": "6.4",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "image": "gcr.io/distroless/static-debian12:nonroot (base of netops-api)",
+      "compose_pin_source": "deployment/docker/Dockerfile.backend",
+      "file": "netbase_6.4.dsc",
+      "url": "https://deb.debian.org/debian/pool/main/n/netbase/netbase_6.4.dsc",
+      "sha256": "dc26cfcaa49fd874cc27c65216b2f8b6d3ad62845b78da4bdf0aea55592af756",
+      "size_bytes": 898,
+      "retained_in_git": "compliance/corresponding-sources/netbase_6.4.dsc",
+      "verified_against": "the sha256 Debian's own archive index declares for this file (dists/bookworm/main/source/Sources.xz, whose sha256 is in turn declared by the OpenPGP-signed dists/bookworm/InRelease) — fetched and matched byte-for-byte on 2026-09-05. This is a real distribution attestation, not a self-measurement.",
+      "license": "GPL-2.0-only",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "netbase",
+          "upstream_version": "6.4"
+        }
+      ],
+      "images": [
+        "netops-api (deployment/docker/Dockerfile.backend)"
+      ],
+      "distro_package": {
+        "distro": "debian",
+        "distro_version": "12",
+        "suite": "bookworm",
+        "package": "netbase",
+        "package_version": "6.4",
+        "build_ref": "6.4",
+        "build_ref_source": "the SOURCE-package version the image's own /var/lib/dpkg records (dpkg `Source:`/`Version:`; Syft carries it through as syft:metadata:sourceVersion, falling back to the binary version when Debian states none because they are equal). For Debian that name+version pair IS the exact build reference: it names one immutable source package in the archive.",
+        "repository": "https://deb.debian.org/debian",
+        "path": "pool/main/n/netbase"
+      }
+    },
+    {
+      "name": "netbase",
+      "component": "netbase",
+      "version": "6.5",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "python:3.12-slim (base of netops-correlation)",
+      "compose_pin_source": "deployment/docker/Dockerfile.correlation",
+      "file": "netbase_6.5.tar.xz",
+      "url": "https://deb.debian.org/debian/pool/main/n/netbase/netbase_6.5.tar.xz",
+      "sha256": "9116047aebbaa1698934052d01c6e09b4c3aed643e93df63d2ddcbec243c26d1",
+      "size_bytes": 32544,
+      "retained_in_git": "compliance/corresponding-sources/netbase_6.5.tar.xz",
+      "verified_against": "the sha256 Debian's own archive index declares for this file (dists/trixie/main/source/Sources.xz, whose sha256 is in turn declared by the OpenPGP-signed dists/trixie/InRelease) — fetched and matched byte-for-byte on 2026-09-05. This is a real distribution attestation, not a self-measurement.",
+      "license": "GPL-2.0-only",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "netbase",
+          "upstream_version": "6.5"
+        }
+      ],
+      "images": [
+        "netops-correlation (deployment/docker/Dockerfile.correlation)"
+      ],
+      "notes": "Debian NATIVE package, Debian 13 (trixie) copy shipped in netops-correlation."
+    },
+    {
+      "name": "netbase",
+      "component": "netbase",
+      "version": "6.5",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "image": "python:3.12-slim (base of netops-correlation)",
+      "compose_pin_source": "deployment/docker/Dockerfile.correlation",
+      "file": "netbase_6.5.dsc",
+      "url": "https://deb.debian.org/debian/pool/main/n/netbase/netbase_6.5.dsc",
+      "sha256": "e8691899f57c06fcc383b0f2214b662137df539227d9d7811dc8223f32ebe4c7",
+      "size_bytes": 899,
+      "retained_in_git": "compliance/corresponding-sources/netbase_6.5.dsc",
+      "verified_against": "the sha256 Debian's own archive index declares for this file (dists/trixie/main/source/Sources.xz, whose sha256 is in turn declared by the OpenPGP-signed dists/trixie/InRelease) — fetched and matched byte-for-byte on 2026-09-05. This is a real distribution attestation, not a self-measurement.",
+      "license": "GPL-2.0-only",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "netbase",
+          "upstream_version": "6.5"
+        }
+      ],
+      "images": [
+        "netops-correlation (deployment/docker/Dockerfile.correlation)"
+      ],
+      "distro_package": {
+        "distro": "debian",
+        "distro_version": "13",
+        "suite": "trixie",
+        "package": "netbase",
+        "package_version": "6.5",
+        "build_ref": "6.5",
+        "build_ref_source": "the SOURCE-package version the image's own /var/lib/dpkg records (dpkg `Source:`/`Version:`; Syft carries it through as syft:metadata:sourceVersion, falling back to the binary version when Debian states none because they are equal). For Debian that name+version pair IS the exact build reference: it names one immutable source package in the archive.",
+        "repository": "https://deb.debian.org/debian",
+        "path": "pool/main/n/netbase"
+      }
+    },
+    {
+      "name": "base-files",
+      "component": "base-files",
+      "version": "12.4+deb12u14",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "gcr.io/distroless/static-debian12:nonroot (base of netops-api)",
+      "compose_pin_source": "deployment/docker/Dockerfile.backend",
+      "file": "base-files_12.4+deb12u14.tar.xz",
+      "url": "https://snapshot.debian.org/archive/debian/20260511T024057Z/pool/main/b/base-files/base-files_12.4%2Bdeb12u14.tar.xz",
+      "sha256": "f5ecbd6e274642ad7f19c9828d89b4eec42ee434c08d17c3e7afb00128ff2821",
+      "size_bytes": 66240,
+      "retained_in_git": "compliance/corresponding-sources/base-files_12.4+deb12u14.tar.xz",
+      "verified_against": "snapshot.debian.org serves this file content-addressed and declares its sha1 (5e78ac2253214ef34621a41f712e9538bf7c517c), which matched on fetch (2026-09-05); the .dsc is OpenPGP-signed by the Debian maintainer and declares the sha256 of the tarball, which also matched. The exact source for the version this image ships is NO LONGER in the live Debian pool (now 12.4+deb12u15 / 13.8+deb13u6), which is why Correlix retains its own copy.",
+      "license": "GPL-2.0-or-later",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "base-files",
+          "upstream_version": "12.4+deb12u14"
+        }
+      ],
+      "images": [
+        "netops-api (deployment/docker/Dockerfile.backend)"
+      ],
+      "notes": "base-files is a Debian NATIVE package (no upstream tarball) and is reviewed GPL-2.0-or-later in scripts/source-review.json. netops-api is Debian 12 (distroless/static-debian12) and netops-correlation is Debian 13, so the two images ship two different works and each gets its own retained artifact."
+    },
+    {
+      "name": "base-files",
+      "component": "base-files",
+      "version": "12.4+deb12u14",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "image": "gcr.io/distroless/static-debian12:nonroot (base of netops-api)",
+      "compose_pin_source": "deployment/docker/Dockerfile.backend",
+      "file": "base-files_12.4+deb12u14.dsc",
+      "url": "https://snapshot.debian.org/archive/debian/20260511T024057Z/pool/main/b/base-files/base-files_12.4%2Bdeb12u14.dsc",
+      "sha256": "c5aae887732c6ede9293645ab2f9268ec5a06fc43e75d417340f36ad794222c7",
+      "size_bytes": 1137,
+      "retained_in_git": "compliance/corresponding-sources/base-files_12.4+deb12u14.dsc",
+      "verified_against": "snapshot.debian.org serves this file content-addressed and declares its sha1 (eb43e5d53a1bd7256aa8f57f37be747821cf92ce), which matched on fetch (2026-09-05); the .dsc is OpenPGP-signed by the Debian maintainer and declares the sha256 of the tarball, which also matched. The exact source for the version this image ships is NO LONGER in the live Debian pool (now 12.4+deb12u15 / 13.8+deb13u6), which is why Correlix retains its own copy.",
+      "license": "GPL-2.0-or-later",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "base-files",
+          "upstream_version": "12.4+deb12u14"
+        }
+      ],
+      "images": [
+        "netops-api (deployment/docker/Dockerfile.backend)"
+      ],
+      "distro_package": {
+        "distro": "debian",
+        "distro_version": "12",
+        "suite": "bookworm",
+        "package": "base-files",
+        "package_version": "12.4+deb12u14",
+        "build_ref": "12.4+deb12u14",
+        "build_ref_source": "the SOURCE-package version the image's own dpkg database records; for base-files Debian states no separate Source: field, so the binary version IS the source version.",
+        "repository": "https://snapshot.debian.org/archive/debian/20260511T024057Z",
+        "path": "pool/main/b/base-files"
+      }
+    },
+    {
+      "name": "base-files",
+      "component": "base-files",
+      "version": "13.8+deb13u5",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "python:3.12-slim (base of netops-correlation)",
+      "compose_pin_source": "deployment/docker/Dockerfile.correlation",
+      "file": "base-files_13.8+deb13u5.tar.xz",
+      "url": "https://snapshot.debian.org/archive/debian/20260511T024057Z/pool/main/b/base-files/base-files_13.8%2Bdeb13u5.tar.xz",
+      "sha256": "04430fef0d1ef6cdd20e0acb4a9dc5569612d851fd8d2e0e48a849aa80e16efa",
+      "size_bytes": 68708,
+      "retained_in_git": "compliance/corresponding-sources/base-files_13.8+deb13u5.tar.xz",
+      "verified_against": "snapshot.debian.org serves this file content-addressed and declares its sha1 (55252fd59896d7488bae5e5f34a40218f8d7b5d4), which matched on fetch (2026-09-05); the .dsc is OpenPGP-signed by the Debian maintainer and declares the sha256 of the tarball, which also matched. The exact source for the version this image ships is NO LONGER in the live Debian pool (now 12.4+deb12u15 / 13.8+deb13u6), which is why Correlix retains its own copy.",
+      "license": "GPL-2.0-or-later",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "base-files",
+          "upstream_version": "13.8+deb13u5"
+        }
+      ],
+      "images": [
+        "netops-correlation (deployment/docker/Dockerfile.correlation)"
+      ],
+      "notes": "base-files is a Debian NATIVE package (no upstream tarball) and is reviewed GPL-2.0-or-later in scripts/source-review.json. netops-api is Debian 12 (distroless/static-debian12) and netops-correlation is Debian 13, so the two images ship two different works and each gets its own retained artifact."
+    },
+    {
+      "name": "base-files",
+      "component": "base-files",
+      "version": "13.8+deb13u5",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "image": "python:3.12-slim (base of netops-correlation)",
+      "compose_pin_source": "deployment/docker/Dockerfile.correlation",
+      "file": "base-files_13.8+deb13u5.dsc",
+      "url": "https://snapshot.debian.org/archive/debian/20260511T024057Z/pool/main/b/base-files/base-files_13.8%2Bdeb13u5.dsc",
+      "sha256": "f0f228ab7759d3d59ef70548700fa9bcacfb0a33732569cd293d23bdc042ba33",
+      "size_bytes": 1247,
+      "retained_in_git": "compliance/corresponding-sources/base-files_13.8+deb13u5.dsc",
+      "verified_against": "snapshot.debian.org serves this file content-addressed and declares its sha1 (6aa13dab613e4f45e5e15dce21f5168bdd732a84), which matched on fetch (2026-09-05); the .dsc is OpenPGP-signed by the Debian maintainer and declares the sha256 of the tarball, which also matched. The exact source for the version this image ships is NO LONGER in the live Debian pool (now 12.4+deb12u15 / 13.8+deb13u6), which is why Correlix retains its own copy.",
+      "license": "GPL-2.0-or-later",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "base-files",
+          "upstream_version": "13.8+deb13u5"
+        }
+      ],
+      "images": [
+        "netops-correlation (deployment/docker/Dockerfile.correlation)"
+      ],
+      "distro_package": {
+        "distro": "debian",
+        "distro_version": "13",
+        "suite": "trixie",
+        "package": "base-files",
+        "package_version": "13.8+deb13u5",
+        "build_ref": "13.8+deb13u5",
+        "build_ref_source": "the SOURCE-package version the image's own dpkg database records; for base-files Debian states no separate Source: field, so the binary version IS the source version.",
+        "repository": "https://snapshot.debian.org/archive/debian/20260511T024057Z",
+        "path": "pool/main/b/base-files"
+      }
+    }
+  ],
+  "deferred_posture": "Correlix has NOT yet produced a retained corresponding-source artifact for this component. Its licence is either an SPDX expression the scan RESOLVED to real copyleft, or a shape only a person could settle and whose review (scripts/source-review.json) concluded that the obligation is real (`source_required: true`) or could not be resolved without a human (`unclear`). Owner decision 2026-09-05 (tracker 238) says upstream availability alone is NOT compliance, so every entry below is a real, open obligation: scripts/oci-compliance.py prints them on every run and FAILS `--release` on them. Clearing one means adding a `components` entry with the upstream source (and, for a distribution package, its packaging archive at the exact build reference) the way busybox and the sixteen 2026-09-05 components were cleared; `deferred_source_coordinates` already names the exact files and their distribution-attested checksums. Removing the component from the image clears it too, which is how the 58 Debian rows of 2026-09-05 were cleared (tracker 263).",
+  "_deferred_comment": [
+    "THE REGISTER OF UNDISCHARGED SOURCE OBLIGATIONS.",
+    "",
+    "GENERATED by `scripts/oci-compliance.py --record-deferred` against the four",
+    "images publish-images.yml builds, then reviewed and checked in. It is DATA, not",
+    "a decision: recording an obligation here does not discharge it.",
+    "",
+    "WHY VERSION-PINNED. Each row names the exact package version found in the image.",
+    "A base-image bump changes those versions, the rows stop matching, and the gate",
+    "fails until somebody looks again. A blanket rule ('all Alpine packages are fine')",
+    "would hide precisely the class of defect that produced tracker 238 — software",
+    "shipped by Correlix that no Correlix inventory could see.",
+    "",
+    "2026-09-06 — THE DEBIAN RESIDUE IS GONE, BY DELETION (tracker 263). This register",
+    "held 58 Debian rows on 2026-09-05, every one of them a package `python:3.12-slim`",
+    "dragged into netops-correlation and none of them executed by the correlation",
+    "engine. Retaining their source was ~228 MB across 38 source packages, in every",
+    "release bundle, forever. The service moved to `python:3.12-alpine`, the packages",
+    "left the image, and the obligation left with them — the cheapest way to discharge",
+    "an obligation is to stop distributing the work. What Alpine brings in its place is",
+    "the 12 apk rows below (10 origin packages), recorded the same way and pinned the",
+    "same way. The Debian coordinates were deleted with their rows: they described",
+    "bytes Correlix no longer ships, and a register that describes something else is",
+    "the tracker-238 defect one step downstream. `git show` recovers them if a past",
+    "release ever has to be re-audited.",
+    "",
+    "WHAT WAS `license-list` OR `unknown-license`. A distro copyright file lists every",
+    "licence appearing anywhere in a source package with no stated relationship between",
+    "them, so a scanner cannot tell 'MIT AND GPL-2.0' from 'MIT OR GPL-2.0'. The policy",
+    "refuses to guess in either direction; those components are REVIEWED one by one",
+    "against the copyright file (or APKBUILD) the image itself carries, and the answers",
+    "are in scripts/source-review.json. Every row below instead carries a licence the",
+    "scan RESOLVED — an SPDX expression naming real copyleft — except the two `Simple",
+    "Launcher` rows, which stay `unclear` with needs_human set.",
+    "",
+    "SOURCE AVAILABILITY DECAYS. base-files was reviewed GPL-2.0-or-later and mirrored",
+    "immediately rather than recorded, because the exact versions the images shipped",
+    "had ALREADY left the live Debian pool and had to be recovered from",
+    "snapshot.debian.org. A recorded obligation is not a safe one.",
+    "",
+    "SOURCE COORDINATES. Every Alpine row carries `source_coordinates_ref` into the",
+    "top-level `deferred_source_coordinates`, which names the aports packaging archive",
+    "at the EXACT commit the shipped image records for that package (`c:` in",
+    "/lib/apk/db/installed, self-measured sha256 — GitLab publishes no digest of its",
+    "own, so the archive was fetched twice on 2026-09-06 and required to be",
+    "byte-identical) plus every upstream release file with the sha512 ALPINE's own",
+    "APKBUILD declares at that commit. Mirroring is therefore mechanical; the reason it",
+    "has not happened is recorded in docs/TRACKER.md rows 238, 260 and 261 rather than",
+    "implied by silence."
+  ],
+  "deferred": [
+    {
+      "component": "alpine-baselayout",
+      "version": "3.7.2-r1",
+      "package_type": "apk",
+      "license": "GPL-2.0-only",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 263,
+      "recorded": "2026-09-06",
+      "source_coordinates_ref": "alpine/alpine-baselayout_3.7.2-r1"
+    },
+    {
+      "component": "alpine-baselayout-data",
+      "version": "3.7.2-r1",
+      "package_type": "apk",
+      "license": "GPL-2.0-only",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 263,
+      "recorded": "2026-09-06",
+      "source_coordinates_ref": "alpine/alpine-baselayout_3.7.2-r1",
+      "notes": "subpackage of the alpine-baselayout origin package; same corresponding source"
+    },
+    {
+      "component": "apk-tools",
+      "version": "3.0.6-r0",
+      "package_type": "apk",
+      "license": "GPL-2.0-only",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 263,
+      "recorded": "2026-09-06",
+      "source_coordinates_ref": "alpine/apk-tools_3.0.6-r0"
+    },
+    {
+      "component": "libapk",
+      "version": "3.0.6-r0",
+      "package_type": "apk",
+      "license": "GPL-2.0-only",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 263,
+      "recorded": "2026-09-06",
+      "source_coordinates_ref": "alpine/apk-tools_3.0.6-r0",
+      "notes": "subpackage of the apk-tools origin package; same corresponding source"
+    },
+    {
+      "component": "gdbm",
+      "version": "1.26-r0",
+      "package_type": "apk",
+      "license": "GPL-3.0-or-later",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 263,
+      "recorded": "2026-09-06",
+      "source_coordinates_ref": "alpine/gdbm_1.26-r0"
+    },
+    {
+      "component": "keyutils-libs",
+      "version": "1.6.3-r4",
+      "package_type": "apk",
+      "license": "GPL-2.0-or-later AND LGPL-2.0-or-later",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 263,
+      "recorded": "2026-09-06",
+      "source_coordinates_ref": "alpine/keyutils_1.6.3-r4",
+      "notes": "subpackage of the keyutils origin package; same corresponding source"
+    },
+    {
+      "component": "libcom_err",
+      "version": "1.47.4-r0",
+      "package_type": "apk",
+      "license": "GPL-2.0-or-later AND LGPL-2.0-or-later AND BSD-3-Clause AND MIT",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 263,
+      "recorded": "2026-09-06",
+      "source_coordinates_ref": "alpine/e2fsprogs_1.47.4-r0",
+      "notes": "subpackage of the e2fsprogs origin package; same corresponding source"
+    },
+    {
+      "component": "libintl",
+      "version": "1.0-r0",
+      "package_type": "apk",
+      "license": "LGPL-2.1-or-later",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 263,
+      "recorded": "2026-09-06",
+      "source_coordinates_ref": "alpine/gettext_1.0-r0",
+      "notes": "subpackage of the gettext origin package; same corresponding source"
+    },
+    {
+      "component": "libnsl",
+      "version": "2.0.1-r2",
+      "package_type": "apk",
+      "license": "LGPL-2.0-or-later",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 263,
+      "recorded": "2026-09-06",
+      "source_coordinates_ref": "alpine/libnsl_2.0.1-r2"
+    },
+    {
+      "component": "musl-utils",
+      "version": "1.2.6-r2",
+      "package_type": "apk",
+      "license": "MIT AND BSD-2-Clause AND GPL-2.0-or-later",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 263,
+      "recorded": "2026-09-06",
+      "source_coordinates_ref": "alpine/musl_1.2.6-r2",
+      "notes": "subpackage of the musl origin package; the getent/getconf/iconv/ldconfig sources live in the aports tree, so the packaging archive is the part that discharges it"
+    },
+    {
+      "component": "readline",
+      "version": "8.3.3-r1",
+      "package_type": "apk",
+      "license": "GPL-3.0-or-later",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 263,
+      "recorded": "2026-09-06",
+      "source_coordinates_ref": "alpine/readline_8.3.3-r1"
+    },
+    {
+      "component": "scanelf",
+      "version": "1.3.9-r1",
+      "package_type": "apk",
+      "license": "GPL-2.0-only",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 263,
+      "recorded": "2026-09-06",
+      "source_coordinates_ref": "alpine/pax-utils_1.3.9-r1",
+      "notes": "subpackage of the pax-utils origin package; same corresponding source"
+    },
+    {
+      "component": "Simple Launcher",
+      "version": "1.1.0.14",
+      "package_type": "nuget",
+      "license": "UNDETERMINED",
+      "license_confidence": "no-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": "unclear",
+        "needs_human": true,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "note": "recorded under both package types Syft can report for the same six vendored Windows PE launcher stubs — see scripts/source-review.json"
+    },
+    {
+      "component": "Simple Launcher",
+      "version": "1.1.0.14",
+      "package_type": "binary",
+      "license": "UNDETERMINED",
+      "license_confidence": "no-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": "unclear",
+        "needs_human": true,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "note": "recorded under both package types Syft can report for the same six vendored Windows PE launcher stubs — see scripts/source-review.json"
+    }
+  ],
+  "deferred_source_coordinates": {
+    "alpine/alpine-baselayout_3.7.2-r1": {
+      "distro": "alpine",
+      "release": "3.24.1",
+      "source_package": "alpine-baselayout",
+      "package_version": "3.7.2-r1",
+      "aports_repository": "https://gitlab.alpinelinux.org/alpine/aports",
+      "aports_path": "main/alpine-baselayout",
+      "aports_ref": "60a7585bbab2fa0f762504eb617dbca90216e31f",
+      "aports_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+      "apkbuild_license": "GPL-2.0-only",
+      "files": [
+        {
+          "file": "aports-60a7585bbab2fa0f762504eb617dbca90216e31f.tar.gz?path=main/alpine-baselayout",
+          "role": "distro-packaging (the aports tree for this package at its build commit)",
+          "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/60a7585bbab2fa0f762504eb617dbca90216e31f/aports-60a7585bbab2fa0f762504eb617dbca90216e31f.tar.gz?path=main/alpine-baselayout",
+          "sha256": "511c70b4c1115fb9c2f7880c49eb84f4519bbd85222eb09ad36af98e98284d2c",
+          "size_bytes": 10775
+        },
+        {
+          "file": "protocols-6.4",
+          "role": "upstream-release",
+          "url": "https://salsa.debian.org/md/netbase/-/raw/v6.4/etc/protocols",
+          "sha512": "3a00083bcdf5a9e884c9d07877d52311e3d99e79cbee656e236ba06e08ba0dddb7ba76494fdc9dd1a826c48e197a790a69e6bb458e9df64832d6b5e904e9fd15"
+        },
+        {
+          "file": "services-6.4",
+          "role": "upstream-release",
+          "url": "https://salsa.debian.org/md/netbase/-/raw/v6.4/etc/services",
+          "sha512": "47b0f3ee73af2d259bd206a026204be0ea25531a895a0b035a904b38fe5407bc3dd2beab7f8fcb3d760587e6159702ebdb9cbc4f508942befdf7f10c10c87888"
+        }
+      ],
+      "attestation": "the packaging archive's sha256 is Correlix's own measurement of the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package (fetched twice on 2026-09-06 and byte-identical; GitLab publishes no digest for a generated archive). Every upstream sha512 is the one Alpine's own APKBUILD declares at that same commit. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "alpine/apk-tools_3.0.6-r0": {
+      "distro": "alpine",
+      "release": "3.24.1",
+      "source_package": "apk-tools",
+      "package_version": "3.0.6-r0",
+      "aports_repository": "https://gitlab.alpinelinux.org/alpine/aports",
+      "aports_path": "main/apk-tools",
+      "aports_ref": "1403ea7a8ae3fb8e5a11207ddb1ff536eb8de912",
+      "aports_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+      "apkbuild_license": "GPL-2.0-only",
+      "files": [
+        {
+          "file": "aports-1403ea7a8ae3fb8e5a11207ddb1ff536eb8de912.tar.gz?path=main/apk-tools",
+          "role": "distro-packaging (the aports tree for this package at its build commit)",
+          "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/1403ea7a8ae3fb8e5a11207ddb1ff536eb8de912/aports-1403ea7a8ae3fb8e5a11207ddb1ff536eb8de912.tar.gz?path=main/apk-tools",
+          "sha256": "47e958b0ecd8b00bbe6255a005728286d99fcbf964dfc3a7b0cb738abedda273",
+          "size_bytes": 8132
+        },
+        {
+          "file": "apk-tools-v3.0.6.tar.gz",
+          "role": "upstream-release",
+          "url": "https://gitlab.alpinelinux.org/alpine/apk-tools/-/archive/v3.0.6/apk-tools-v3.0.6.tar.gz",
+          "sha512": "86c6ba9aad517d7a39d204373b37a28c143afe1438fa5090df90845f205c7f01e8aaee00ed0b6f7b27206ff745e0f1db160e3b919d17b37639fb19ae78bd13e6"
+        }
+      ],
+      "attestation": "the packaging archive's sha256 is Correlix's own measurement of the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package (fetched twice on 2026-09-06 and byte-identical; GitLab publishes no digest for a generated archive). Every upstream sha512 is the one Alpine's own APKBUILD declares at that same commit. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "alpine/gdbm_1.26-r0": {
+      "distro": "alpine",
+      "release": "3.24.1",
+      "source_package": "gdbm",
+      "package_version": "1.26-r0",
+      "aports_repository": "https://gitlab.alpinelinux.org/alpine/aports",
+      "aports_path": "main/gdbm",
+      "aports_ref": "1ea03990396db618edfcc8a9a0bc6b72662bac8f",
+      "aports_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+      "apkbuild_license": "GPL-3.0-or-later",
+      "files": [
+        {
+          "file": "aports-1ea03990396db618edfcc8a9a0bc6b72662bac8f.tar.gz?path=main/gdbm",
+          "role": "distro-packaging (the aports tree for this package at its build commit)",
+          "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/1ea03990396db618edfcc8a9a0bc6b72662bac8f/aports-1ea03990396db618edfcc8a9a0bc6b72662bac8f.tar.gz?path=main/gdbm",
+          "sha256": "506b0ace47279e395d1d99183faff93549c3a88e627a61617d8906fe8f6a7a2a",
+          "size_bytes": 918
+        },
+        {
+          "file": "gdbm-1.26.tar.gz",
+          "role": "upstream-release",
+          "url": "https://ftp.gnu.org/gnu/gdbm/gdbm-1.26.tar.gz",
+          "sha512": "44aafe254f0950a8f5215d8f1337674f07b19f2a375f6eb19a7e39690028c80c3774b705c2b76b470ae74042b21f2ca77d02f6f57aa2ee50296db801220a3352"
+        }
+      ],
+      "attestation": "the packaging archive's sha256 is Correlix's own measurement of the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package (fetched twice on 2026-09-06 and byte-identical; GitLab publishes no digest for a generated archive). Every upstream sha512 is the one Alpine's own APKBUILD declares at that same commit. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "alpine/keyutils_1.6.3-r4": {
+      "distro": "alpine",
+      "release": "3.24.1",
+      "source_package": "keyutils",
+      "package_version": "1.6.3-r4",
+      "aports_repository": "https://gitlab.alpinelinux.org/alpine/aports",
+      "aports_path": "main/keyutils",
+      "aports_ref": "8bac74716d06c84627ab02d101fd9d2bafd0a34c",
+      "aports_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+      "apkbuild_license": "GPL-2.0-or-later AND LGPL-2.0-or-later",
+      "files": [
+        {
+          "file": "aports-8bac74716d06c84627ab02d101fd9d2bafd0a34c.tar.gz?path=main/keyutils",
+          "role": "distro-packaging (the aports tree for this package at its build commit)",
+          "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/8bac74716d06c84627ab02d101fd9d2bafd0a34c/aports-8bac74716d06c84627ab02d101fd9d2bafd0a34c.tar.gz?path=main/keyutils",
+          "sha256": "0de2f5ad1863eb86b794dc77743b0750a69a635349099ba7d9c90c90b8a7dc9c",
+          "size_bytes": 1213
+        },
+        {
+          "file": "keyutils-1.6.3.tar.gz",
+          "role": "upstream-release",
+          "url": "https://git.kernel.org/pub/scm/linux/kernel/git/dhowells/keyutils.git/snapshot/keyutils-1.6.3.tar.gz",
+          "sha512": "f65965b8566037078b8eeffa66c6fdbe121c8c2bea7fa5bce04cf7ba5ccc50d5b48e51f4a67ca91e4d5d9a12469e7e3eb3036c920ab25e3feba6e93b4c149cf9"
+        }
+      ],
+      "attestation": "the packaging archive's sha256 is Correlix's own measurement of the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package (fetched twice on 2026-09-06 and byte-identical; GitLab publishes no digest for a generated archive). Every upstream sha512 is the one Alpine's own APKBUILD declares at that same commit. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "alpine/e2fsprogs_1.47.4-r0": {
+      "distro": "alpine",
+      "release": "3.24.1",
+      "source_package": "e2fsprogs",
+      "package_version": "1.47.4-r0",
+      "aports_repository": "https://gitlab.alpinelinux.org/alpine/aports",
+      "aports_path": "main/e2fsprogs",
+      "aports_ref": "8683a6972cb245fbbdb535dad6435a9930bb9374",
+      "aports_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+      "apkbuild_license": "GPL-2.0-or-later AND LGPL-2.0-or-later AND BSD-3-Clause AND MIT",
+      "files": [
+        {
+          "file": "aports-8683a6972cb245fbbdb535dad6435a9930bb9374.tar.gz?path=main/e2fsprogs",
+          "role": "distro-packaging (the aports tree for this package at its build commit)",
+          "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/8683a6972cb245fbbdb535dad6435a9930bb9374/aports-8683a6972cb245fbbdb535dad6435a9930bb9374.tar.gz?path=main/e2fsprogs",
+          "sha256": "6d3dd41abb4f1bcde8893b42354d8aac90164f40a64363fe820f71a717651e57",
+          "size_bytes": 1482
+        },
+        {
+          "file": "e2fsprogs-1.47.4.tar.gz",
+          "role": "upstream-release",
+          "url": "https://github.com/tytso/e2fsprogs/archive/v1.47.4.tar.gz",
+          "sha512": "923c1ba52cf48557e190ee936be47ff3e43e4798950499e3c663f0f077470caefbb69ee845ebe1f969b3e7c1bb0c22e507188f1daca24649c54c5843c835b2f9"
+        }
+      ],
+      "attestation": "the packaging archive's sha256 is Correlix's own measurement of the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package (fetched twice on 2026-09-06 and byte-identical; GitLab publishes no digest for a generated archive). Every upstream sha512 is the one Alpine's own APKBUILD declares at that same commit. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "alpine/gettext_1.0-r0": {
+      "distro": "alpine",
+      "release": "3.24.1",
+      "source_package": "gettext",
+      "package_version": "1.0-r0",
+      "aports_repository": "https://gitlab.alpinelinux.org/alpine/aports",
+      "aports_path": "main/gettext",
+      "aports_ref": "a0b12dbf67fb047e79a1b76c6dfe6f2904d0d391",
+      "aports_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+      "apkbuild_license": "GPL-3.0-or-later AND LGPL-2.1-or-later AND MIT",
+      "files": [
+        {
+          "file": "aports-a0b12dbf67fb047e79a1b76c6dfe6f2904d0d391.tar.gz?path=main/gettext",
+          "role": "distro-packaging (the aports tree for this package at its build commit)",
+          "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/a0b12dbf67fb047e79a1b76c6dfe6f2904d0d391/aports-a0b12dbf67fb047e79a1b76c6dfe6f2904d0d391.tar.gz?path=main/gettext",
+          "sha256": "b2f39e9e937de5790de74ab3bf5a6ae4672d7336fcae6c550793a207b9310998",
+          "size_bytes": 3658
+        },
+        {
+          "file": "gettext-1.0.tar.xz",
+          "role": "upstream-release",
+          "url": "https://ftp.gnu.org/gnu/gettext/gettext-1.0.tar.xz",
+          "sha512": "fa657faf5685dae7121a9b0293d3308a3910a72b90943a7a493b88cf88e95f29c5758e1573320169fe9beac6f101ef76f4165a279a7f3294155d7a773e2fa09f"
+        }
+      ],
+      "attestation": "the packaging archive's sha256 is Correlix's own measurement of the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package (fetched twice on 2026-09-06 and byte-identical; GitLab publishes no digest for a generated archive). Every upstream sha512 is the one Alpine's own APKBUILD declares at that same commit. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "alpine/libnsl_2.0.1-r2": {
+      "distro": "alpine",
+      "release": "3.24.1",
+      "source_package": "libnsl",
+      "package_version": "2.0.1-r2",
+      "aports_repository": "https://gitlab.alpinelinux.org/alpine/aports",
+      "aports_path": "community/libnsl",
+      "aports_ref": "a9e2a2dc46f377eb25884f7fea9834492de7f518",
+      "aports_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+      "apkbuild_license": "LGPL-2.0-or-later",
+      "files": [
+        {
+          "file": "aports-a9e2a2dc46f377eb25884f7fea9834492de7f518.tar.gz?path=community/libnsl",
+          "role": "distro-packaging (the aports tree for this package at its build commit)",
+          "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/a9e2a2dc46f377eb25884f7fea9834492de7f518/aports-a9e2a2dc46f377eb25884f7fea9834492de7f518.tar.gz?path=community/libnsl",
+          "sha256": "f8bb9152937acbd9333cf21cb616d188ddf6a98f748fe454987e28b1c18caf66",
+          "size_bytes": 870
+        },
+        {
+          "file": "libnsl-2.0.1.tar.xz",
+          "role": "upstream-release",
+          "url": "https://github.com/thkukuk/libnsl/releases/download/v2.0.1/libnsl-2.0.1.tar.xz",
+          "sha512": "0ffdf15b4380fc89bf11f4f64b74ed999099c0ab3ee39cafd52f933a5000f9b1ed3987c8c13533a7cd92474aadd4cc9909a2e1eabc9143f0cb11746385e5fc57"
+        }
+      ],
+      "attestation": "the packaging archive's sha256 is Correlix's own measurement of the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package (fetched twice on 2026-09-06 and byte-identical; GitLab publishes no digest for a generated archive). Every upstream sha512 is the one Alpine's own APKBUILD declares at that same commit. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "alpine/musl_1.2.6-r2": {
+      "distro": "alpine",
+      "release": "3.24.1",
+      "source_package": "musl",
+      "package_version": "1.2.6-r2",
+      "aports_repository": "https://gitlab.alpinelinux.org/alpine/aports",
+      "aports_path": "main/musl",
+      "aports_ref": "f5640d3a10f664c9119720c60515265d3d6f6d01",
+      "aports_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+      "apkbuild_license": "MIT",
+      "files": [
+        {
+          "file": "aports-f5640d3a10f664c9119720c60515265d3d6f6d01.tar.gz?path=main/musl",
+          "role": "distro-packaging (the aports tree for this package at its build commit)",
+          "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/f5640d3a10f664c9119720c60515265d3d6f6d01/aports-f5640d3a10f664c9119720c60515265d3d6f6d01.tar.gz?path=main/musl",
+          "sha256": "79ac6b07f4943f572207f2bde328438a3f8ceab114fae14afb5d207520f87ba6",
+          "size_bytes": 16920
+        },
+        {
+          "file": "musl-1.2.6.tar.gz",
+          "role": "upstream-release",
+          "url": "https://musl.libc.org/releases/musl-1.2.6.tar.gz",
+          "sha512": "1adad96eddb3a2eb0cacb3e363b0046568925fcdd75cf8b0503f2139df1f693d64730779ca0ce8131b7624ab2d37f4247bb1d3393c523de6e30d2b1d7732555c"
+        }
+      ],
+      "attestation": "the packaging archive's sha256 is Correlix's own measurement of the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package (fetched twice on 2026-09-06 and byte-identical; GitLab publishes no digest for a generated archive). Every upstream sha512 is the one Alpine's own APKBUILD declares at that same commit. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "alpine/readline_8.3.3-r1": {
+      "distro": "alpine",
+      "release": "3.24.1",
+      "source_package": "readline",
+      "package_version": "8.3.3-r1",
+      "aports_repository": "https://gitlab.alpinelinux.org/alpine/aports",
+      "aports_path": "main/readline",
+      "aports_ref": "a854c03acdac188901fb012f7acbee70a36e8041",
+      "aports_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+      "apkbuild_license": "GPL-3.0-or-later",
+      "files": [
+        {
+          "file": "aports-a854c03acdac188901fb012f7acbee70a36e8041.tar.gz?path=main/readline",
+          "role": "distro-packaging (the aports tree for this package at its build commit)",
+          "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/a854c03acdac188901fb012f7acbee70a36e8041/aports-a854c03acdac188901fb012f7acbee70a36e8041.tar.gz?path=main/readline",
+          "sha256": "2fdfef88d2f1d71a4602759e77c92317ad560b24ec1909d9d89a058c168b433c",
+          "size_bytes": 2528
+        },
+        {
+          "file": "readline-8.3.tar.gz",
+          "role": "upstream-release",
+          "url": "https://ftp.gnu.org/gnu/readline/readline-8.3.tar.gz",
+          "sha512": "513002753dcf5db9213dbbb61d51217245f6a40d33b1dd45238e8062dfa8eef0c890b87a5548e11db959e842724fb572c4d3d7fb433773762a63c30efe808344"
+        },
+        {
+          "file": "readline83-001.patch",
+          "role": "upstream-release",
+          "url": "https://ftp.gnu.org/gnu/readline/readline-8.3-patches/readline83-001",
+          "sha512": "ced50af353ed527f6ec0eac5f65261f2ed208825ec72fe2acf5f0217f34f84f33dcbf01b895325f6b33664b5a426bac99506193e2ddb6eea8c79ccad37364b89"
+        },
+        {
+          "file": "readline83-002.patch",
+          "role": "upstream-release",
+          "url": "https://ftp.gnu.org/gnu/readline/readline-8.3-patches/readline83-002",
+          "sha512": "e45ad6443bd4e271ec8e8ab883de561b6420aec362b0b7f0256086cb5a023d946df55994ed99c76ceb191e8a25e8059ae9b553ef1d546626d671b80af292f04d"
+        },
+        {
+          "file": "readline83-003.patch",
+          "role": "upstream-release",
+          "url": "https://ftp.gnu.org/gnu/readline/readline-8.3-patches/readline83-003",
+          "sha512": "6b3ebffe994d0cd4d3466b15e3aee9a73613109283a4442f3bf10e28edcd1204df824c71356d66d01ac21014a806023a101fedf94526a19f6f590d9ffdc864cd"
+        }
+      ],
+      "attestation": "the packaging archive's sha256 is Correlix's own measurement of the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package (fetched twice on 2026-09-06 and byte-identical; GitLab publishes no digest for a generated archive). Every upstream sha512 is the one Alpine's own APKBUILD declares at that same commit. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "alpine/pax-utils_1.3.9-r1": {
+      "distro": "alpine",
+      "release": "3.24.1",
+      "source_package": "pax-utils",
+      "package_version": "1.3.9-r1",
+      "aports_repository": "https://gitlab.alpinelinux.org/alpine/aports",
+      "aports_path": "main/pax-utils",
+      "aports_ref": "c61801eeacb3ffcd9c2025b09e402153bb93fb39",
+      "aports_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+      "apkbuild_license": "GPL-2.0-only",
+      "files": [
+        {
+          "file": "aports-c61801eeacb3ffcd9c2025b09e402153bb93fb39.tar.gz?path=main/pax-utils",
+          "role": "distro-packaging (the aports tree for this package at its build commit)",
+          "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/c61801eeacb3ffcd9c2025b09e402153bb93fb39/aports-c61801eeacb3ffcd9c2025b09e402153bb93fb39.tar.gz?path=main/pax-utils",
+          "sha256": "088acb7dcf101e5ee21e05fea89a21f14868d0efa84aafc0bb252bad38d63f93",
+          "size_bytes": 1155
+        },
+        {
+          "file": "pax-utils-1.3.9.tar.xz",
+          "role": "upstream-release",
+          "url": "https://dev.gentoo.org/~sam/distfiles/app-misc/pax-utils/pax-utils-1.3.9.tar.xz",
+          "sha512": "96caf7f2087bedc7949db828d966835f7d691e29ef8177dee00605c10d433d4c5b5770a3d7f2e25e3c0218f5b9a6c6967669a3dea18cf138d6f0111d2bb5288b"
+        }
+      ],
+      "attestation": "the packaging archive's sha256 is Correlix's own measurement of the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package (fetched twice on 2026-09-06 and byte-identical; GitLab publishes no digest for a generated archive). Every upstream sha512 is the one Alpine's own APKBUILD declares at that same commit. Correlix has NOT yet fetched and retained these bytes."
+    }
+  }
+}

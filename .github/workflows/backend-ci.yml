@@ -1,0 +1,286 @@
+name: backend-ci
+
+# Security + correctness gate for the Go API (CLAUDE.md §12). Blocking jobs must
+# stay green to merge. The crypto/trust code (tlsconfig, internalca) is held to a
+# stricter bar than the rest of the tree: staticcheck + gosec are MERGE-BLOCKING
+# for those packages, and run repo-wide as non-blocking triage until the existing
+# backlog is burned down (then flip `full-lint` to blocking).
+#
+# Go is pinned to a patched toolchain (go1.26.8): govulncheck flagged a batch of
+# stdlib CVEs (crypto/tls, crypto/x509, net/http, …) present in go1.24. The same
+# bump is applied to deployment/docker/Dockerfile.backend so prod ships patched.
+# Raised 1.25.13 -> 1.26.8 on 2026-09-02: x/crypto v0.56.0 (GO-2026-6354 /
+# GO-2026-6355, x/crypto/ssh DoS) declares `go 1.26.0`, so the module no longer
+# builds on 1.25. The scanner pins below moved with it — a scanner binary built
+# with an older Go refuses to load a go1.26 module.
+
+on:
+  workflow_dispatch:   # manual re-run on a branch head (e.g. after a fix that did not touch this workflow's paths)
+  push:
+    paths:
+      - 'NetOps_Observability/src/backend/**'
+      - 'NetOps_Observability/deployment/docker/Dockerfile.backend'
+      - '.github/workflows/backend-ci.yml'
+  # No paths filter on pull_request: required status checks must report on EVERY
+  # PR to main, else a path-skipped workflow leaves the check stuck "Expected".
+  # (push stays path-filtered above for fast feedback on feature branches.)
+  pull_request:
+  # Reusable-workflow trigger (release gate). `release-gate.yml` — called by
+  # publish-images.yml and release-bundle.yml — invokes this whole workflow on the
+  # tag's commit. `workflow_call` carries NO paths filter, so a release runs EVERY
+  # job here regardless of what the tag's diff touched: the `push` filter above
+  # stays honest for fast branch feedback without ever weakening the tag gate.
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  # `github.workflow` is the CALLER's workflow when this file runs as a reusable
+  # workflow, so a gate run invoked by release-gate.yml can never share (and so
+  # never cancel) a group with this workflow's own direct push/PR run.
+  group: backend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.26.8'
+  # All scanners pinned for reproducible, supply-chain-sound builds (SC-010): an
+  # unpinned @latest would let a compromised/regressed release run in CI. Bump
+  # deliberately (Dependabot watches these too).
+  STATICCHECK_VERSION: '2026.2.1'
+  GOVULNCHECK_VERSION: 'v1.7.0'
+  GOSEC_VERSION: 'v2.29.0'
+  # v2.x config format. The pin must be a release whose published binary is
+  # built with a Go >= the module's `go` directive, or it refuses to load the
+  # module: the v2.12.2 linux-amd64 release is built with go1.26.2, so it still
+  # loads the go 1.26.0 module after the 1.25.13 -> 1.26.8 toolchain raise.
+  GOLANGCI_VERSION: 'v2.12.2'
+
+defaults:
+  run:
+    working-directory: NetOps_Observability/src/backend
+
+jobs:
+  test:
+    name: build · vet · test · race
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+      - name: gofmt (blocking, both Go modules)
+        # Canonical formatting is a merge gate like vet/staticcheck: `gofmt -l`
+        # must print nothing for src/backend AND the installer-gui module. The
+        # fix is always mechanical (`gofmt -w <file>`), so there is no reason a
+        # violation should ever reach main.
+        working-directory: NetOps_Observability
+        run: |
+          unformatted="$(gofmt -l src/backend scripts/installer-gui)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt violations — run 'gofmt -w' on:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+      - name: go build
+        run: go build ./...
+      - name: go vet
+        run: go vet ./...
+      - name: go vet -tags=pgintegration
+        # F-12: the build-tagged pg suite is invisible to the default build, so
+        # it rotted uncompiled for two weeks while the ONLY job that builds it
+        # (pg-integration) needed a live service to even reach the compile.
+        # Vetting the tag here makes tagged build rot fail the cheap lane.
+        run: go vet -tags=pgintegration ./...
+      - name: go test
+        # Also runs every Fuzz* target against its SEED corpus deterministically
+        # (FuzzParseSpiffeID/seed#N, FuzzParseFederationBundles/seed#N), so the
+        # parsers' regression coverage is here — no flaky live fuzzing needed.
+        run: go test -timeout 20m ./...
+      - name: go test -race
+        # The data-race detector needs cgo (gcc is present on ubuntu-latest).
+        # The main package suite runs ~6m plain; the race detector multiplies
+        # that well past go test's 10m default timeout on 2-core runners.
+        env:
+          CGO_ENABLED: '1'
+        run: go test -race -timeout 40m ./...
+      # NOTE: live fuzzing (`-fuzz -fuzztime`) is intentionally NOT a blocking
+      # per-PR gate — its worker-coordination times out flakily on 2-core runners
+      # ("context deadline exceeded"), and 30s finds little. Run it in a scheduled
+      # job (see fuzz-nightly.yml) for real exploration; seeds cover regression.
+
+  offline-build:
+    name: offline vendor build (blocking)
+    runs-on: ubuntu-latest
+    # CLAUDE.md §6 gate 2 — "offline-buildable" — enforced instead of asserted.
+    # The whole reason this tree vendors its 9 modules is that `go build` must
+    # work in a clean, network-less environment; until now nothing proved it, and
+    # `vendor/` could silently drift out of step with go.mod (a `go get` without a
+    # follow-up `go mod vendor` leaves a tree that builds fine ON THIS RUNNER,
+    # because the module cache papers over the gap, and fails on a customer's
+    # air-gapped host).
+    #
+    # This is also the backstop for the patch train: Renovate regenerates
+    # `vendor/` itself after a Go bump, and this job is what fails the PR if that
+    # regeneration ever silently does not happen.
+    #
+    # GOFLAGS=-mod=vendor  -> resolve every import from vendor/, never the cache.
+    # GOPROXY=off          -> any attempt to reach the network is a hard error.
+    #
+    # -mod=vendor also makes the toolchain cross-check vendor/modules.txt against
+    # go.mod before it compiles anything; a bump that edits go.mod without
+    # re-running `go mod vendor` fails here as "inconsistent vendoring", which is
+    # precisely the drift this job exists to catch. Note we do NOT run
+    # `go mod vendor` to check that: regenerating the tree needs the module cache
+    # and would have to reach the proxy, which would defeat the point of the job.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          # No module cache: a warm cache is exactly what this job must not have,
+          # because it would paper over a package missing from vendor/.
+          cache: false
+      - name: go build (vendor only, no network)
+        env:
+          GOFLAGS: -mod=vendor
+          GOPROXY: off
+        run: go build ./...
+      - name: go vet (vendor only, no network)
+        env:
+          GOFLAGS: -mod=vendor
+          GOPROXY: off
+        run: go vet ./...
+      - name: go test -run=XXX (compile every test package offline)
+        # Compiles the test binaries without running them: a test-only import that
+        # is missing from vendor/ is still a broken air-gapped build.
+        env:
+          GOFLAGS: -mod=vendor
+          GOPROXY: off
+        run: go test -run='^$' -count=1 ./...
+
+  pg-integration:
+    name: Postgres integration (blocking)
+    runs-on: ubuntu-latest
+    # INVARIANTS standing gap #4: statement_timeout, the migration advisory lock,
+    # pgAuditStore Count/Offset and sweepAuditRetention's DELETE were
+    # compile-reviewed only — never executed against a live database. These are
+    # build-tagged `pgintegration` so the default `go test ./...` stays hermetic;
+    # this job is the only place they run.
+    services:
+      postgres:
+        # Pinned by digest to the same 16-alpine the test header documents.
+        image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
+        env:
+          POSTGRES_USER: netops
+          POSTGRES_PASSWORD: pgpw
+          POSTGRES_DB: netops
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U netops -d netops"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+      - name: create the non-superuser app role
+        # newPgDB fails CLOSED when its role would bypass RLS (assertRLSCapable):
+        # a superuser ignores even FORCE ROW LEVEL SECURITY, which would silently
+        # disable tenant isolation. POSTGRES_USER is a superuser, so the tests
+        # MUST connect as a separate NOBYPASSRLS role — that is also the shape
+        # production runs in, so the tenant_iso policies are genuinely exercised.
+        env:
+          PGPASSWORD: pgpw
+        run: |
+          psql -h localhost -U netops -d netops -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE netops_app LOGIN PASSWORD 'apppw' NOBYPASSRLS;
+          GRANT CONNECT, CREATE ON DATABASE netops TO netops_app;
+          GRANT USAGE, CREATE ON SCHEMA public TO netops_app;
+          SQL
+      - name: go test -tags=pgintegration (incl. the DATABASE_URL_TEST RLS/isolation corpus)
+        env:
+          PG_TEST_DSN: postgres://netops_app:apppw@localhost:5432/netops
+          # The DATABASE_URL_TEST corpus (~50 RLS/isolation/conformance tests
+          # across ~25 files: TestPgStore*, *RLSIsolation, TestVault*, the
+          # backend-conformance suite, …) needs the SUPERUSER DSN: each test
+          # provisions its own NOBYPASSRLS app role (provisionAppRole, which
+          # needs CREATE ROLE / DROP SCHEMA rights) and then connects as it —
+          # the POSTGRES_USER service superuser is exactly that DSN.
+          DATABASE_URL_TEST: postgres://netops:pgpw@localhost:5432/netops
+        # No -run filter (H8): the env-gated corpus carries heterogeneous names
+        # (TestPgStore*, TestIncidentDedupAndRLS, TestVault*, TestBackendConformance_*…)
+        # that the old case-sensitive `-run TestPG` never matched — and the env
+        # var was never exported — so the ENTIRE database-enforced isolation
+        # suite silently never ran in CI. env_gate_guard_test.go now pins the
+        # export; running unfiltered pins the names.
+        # -p 1 serializes packages: the DB tests share one database and
+        # provisionAppRole drops/recreates the public schema, so packages
+        # running in parallel would destroy each other's tables mid-run.
+        # -count=1 so a cached PASS can never stand in for a real run.
+        run: go test -tags=pgintegration -count=1 -p 1 -timeout 30m ./...
+
+  vuln:
+    name: govulncheck (blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+      - name: install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }}
+      - name: govulncheck
+        run: govulncheck ./...
+
+  security-lint:
+    name: staticcheck + gosec (crypto/trust packages, blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+      - name: install linters
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@${{ env.STATICCHECK_VERSION }}
+          go install github.com/securego/gosec/v2/cmd/gosec@${{ env.GOSEC_VERSION }}
+      - name: staticcheck (tlsconfig, internalca, sealing)
+        run: staticcheck ./tlsconfig/... ./internalca/... ./sealing/...
+      - name: gosec (tlsconfig, internalca, sealing)
+        run: gosec -quiet ./tlsconfig/... ./internalca/... ./sealing/...
+      - name: golangci-lint (tlsconfig, internalca, sealing)
+        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
+        with:
+          version: ${{ env.GOLANGCI_VERSION }}
+          working-directory: NetOps_Observability/src/backend
+          args: ./tlsconfig/... ./internalca/... ./sealing/...
+
+  full-lint:
+    name: golangci-lint (repo-wide, blocking)
+    runs-on: ubuntu-latest
+    # Now BLOCKING: the repo-wide backlog was burned down to zero (2026-06-04), so
+    # this enforces "no new lint findings" across the tree (protocol-mandated or
+    # false-positive cases carry inline // #nosec / //nolint with a cited reason).
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+      # golangci-lint bundles staticcheck + gosec (+ errcheck/noctx/errorlint/…),
+      # so one repo-wide run covers the triage set. Suppressions use golangci's
+      # native directives (// #nosec, //nolint) consistently across the tree.
+      - name: golangci-lint (repo-wide)
+        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
+        with:
+          version: ${{ env.GOLANGCI_VERSION }}
+          working-directory: NetOps_Observability/src/backend
+          args: ./...

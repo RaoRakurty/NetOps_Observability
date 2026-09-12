@@ -1,0 +1,18 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Design-partner pilot playbook
+    url: https://github.com/RaoRakurty/NetOps_Observability/blob/main/NetOps_Observability/docs/runbooks/pilot-playbook.md
+    about: >-
+      Running a pilot? Start here — scope, prerequisites, the week-by-week plan, the ten
+      success metrics with their instruments, what to send back, and how to escalate.
+  - name: What reaches correlation (before filing "no incidents formed")
+    url: https://github.com/RaoRakurty/NetOps_Observability/blob/main/NetOps_Observability/docs/INGESTION.md
+    about: >-
+      Everything is indexed and searchable; only warning-or-worse lines, or lines carrying
+      a known typed symptom marker, become correlation evidence. Check the admission rule
+      before filing a bug.
+  - name: Security, credentials, or tenant-isolation concerns
+    url: https://github.com/RaoRakurty/NetOps_Observability/blob/main/NetOps_Observability/docs/runbooks/security/revoke-compromised-identity.md
+    about: >-
+      Do NOT open a public issue. Contact your pilot engineer directly, the same day, and
+      follow the credential-revocation runbook.

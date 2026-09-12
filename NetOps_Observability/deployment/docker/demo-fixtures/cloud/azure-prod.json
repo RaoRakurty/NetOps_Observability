@@ -1,0 +1,32 @@
+{
+  "provider": "azure",
+  "account_id": "sub-aaaa-bbbb-cccc",
+  "resources": [
+    {
+      "resource_id": "/subscriptions/sub-aaaa-bbbb-cccc/resourceGroups/reports-rg/providers/Microsoft.Web/sites/reports-web",
+      "resource_arn_or_uri": "/subscriptions/sub-aaaa-bbbb-cccc/resourceGroups/reports-rg/providers/Microsoft.Web/sites/reports-web",
+      "resource_type": "Microsoft.Web/sites",
+      "resource_name": "reports-web",
+      "region": "eastus",
+      "private_ips": ["10.2.1.10"],
+      "network_interface_ids": ["nic-rep1"],
+      "tags": { "app": "reports", "owner": "data", "env": "prod" }
+    },
+    {
+      "resource_id": "/subscriptions/sub-aaaa-bbbb-cccc/resourceGroups/reports-rg/providers/Microsoft.Sql/servers/reports-sql/databases/reports-db",
+      "resource_arn_or_uri": "/subscriptions/sub-aaaa-bbbb-cccc/resourceGroups/reports-rg/providers/Microsoft.Sql/servers/reports-sql/databases/reports-db",
+      "resource_type": "Microsoft.Sql/databases",
+      "resource_name": "reports-db",
+      "region": "eastus",
+      "private_ips": ["10.2.4.20"],
+      "tags": { "app": "reports", "owner": "data", "env": "prod" }
+    },
+    {
+      "resource_id": "/subscriptions/sub-aaaa-bbbb-cccc/resourceGroups/misc-rg/providers/Microsoft.Compute/virtualMachines/vm-untagged",
+      "resource_type": "Microsoft.Compute/virtualMachines",
+      "region": "eastus",
+      "private_ips": ["10.2.6.30"],
+      "network_interface_ids": ["nic-unk1"]
+    }
+  ]
+}

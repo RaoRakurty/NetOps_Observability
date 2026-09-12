@@ -1,0 +1,201 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import "./Security.css";
+import {
+  api, SecCompliance, SecFinding, SecFrameworkCatalog, SecFrameworkToggle,
+} from "../../services/api";
+import ComplianceMonitoring from "../ComplianceMonitoring";
+import { Group, Panel } from "../../components/board/panels";
+import { Segmented } from "../../components/ui";
+import ComplianceFrameworks from "./ComplianceFrameworks";
+import { unassessedReasons } from "./model";
+import { operatorError } from "../../lib/errors";
+import AskIris from "../../components/AskIris";
+// Compliance — two sub-views:
+//
+//  · Frameworks — WHICH frameworks this tenant is assessed against, and the
+//    score for each. Compliance is scoped per customer (owner, 2026-09-03):
+//    the tenant runs the NIST 800-53 base plus CIS Controls by default and adds
+//    NIST CSF / HIPAA / PCI DSS deliberately. Scores are computed server-side by
+//    projecting a finding's canonical 800-53 control onto each enabled
+//    framework's requirements — a framework is never a TAG on a finding, which
+//    is why HIPAA can report at all and why the page no longer lists invented
+//    CIS benchmark sections as frameworks. Beneath it, the §5g panel naming WHY
+//    each unassessed control reached no verdict.
+//  · Drift & baselines — the existing Compliance Monitoring board (source-of-
+//    truth drift + management-plane baselines), reused as a sub-view.
+//
+// THE TWO LOADS ARE INDEPENDENT ON PURPOSE. A failure to fetch the unassessed
+// reasons must never blank the scorecards, and must never render as "nothing
+// was unassessed" — that empty state is a false clear.
+//
+// Tenant isolation (§3a): every call is server-scoped by the token; the client
+// never names a tenant.
+
+type SubView = "frameworks" | "drift";
+
+/** The statuses that mean "no verdict": Unknown, NotApplicable, Error. */
+const UNASSESSED_STATUSES = "unknown,not_applicable,error";
+// The server's own ceiling (secapi.MaxListLimit). Asking for it does not make
+// the read complete — it makes the shortfall small, and the shortfall is
+// DECLARED either way.
+const UNASSESSED_PAGE = 500;
+
+export default function SecurityCompliance() {
+  const [tab, setTab] = useState<SubView>("frameworks");
+  const [catalog, setCatalog] = useState<SecFrameworkCatalog | null>(null);
+  const [compliance, setCompliance] = useState<SecCompliance | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [saveNote, setSaveNote] = useState<string | null>(null);
+  // The selection write is admin-gated server-side. The picker stays editable
+  // and a refusal is reported as an honest message rather than a silently
+  // reverted toggle — the operator must know the change did not take.
+  const [canEdit, setCanEdit] = useState(true);
+
+  const [unassessed, setUnassessed] = useState<SecFinding[] | null>(null);
+  const [unassessedErr, setUnassessedErr] = useState<string | null>(null);
+  // How many unassessed controls the SERVER says there are, which is not the
+  // same as how many this page counted: the read is one page deep.
+  const [unassessedTotal, setUnassessedTotal] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    Promise.all([api.securityFrameworks(), api.securityCompliance()])
+      .then(([cat, cmp]) => {
+        if (!alive) return;
+        setCatalog(cat);
+        setCompliance(cmp);
+        setErr(null);
+      })
+      .catch((e: unknown) => {
+        if (alive) setErr(operatorError(e, "Compliance status could not be loaded."));
+      })
+      .finally(() => { if (alive) setLoaded(true); });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    // The grouped counts below are built from the ROWS, so ask for as many as
+    // the API will give (MaxListLimit = 500). Without a limit the server
+    // answered its default 100 and a 1,400-control credential outage rendered
+    // as "100 controls" with nothing saying the number was a page.
+    api.securityFindings({ current: true, status: UNASSESSED_STATUSES, limit: UNASSESSED_PAGE })
+      .then((page) => {
+        if (!alive) return;
+        const items = Array.isArray(page?.items) ? page.items : [];
+        setUnassessed(items);
+        setUnassessedTotal(typeof page?.total === "number" ? page.total : items.length);
+        setUnassessedErr(null);
+      })
+      .catch((e: unknown) => {
+        if (!alive) return;
+        // Never fall back to the empty state: "we could not ask" and "nothing
+        // was unassessed" are opposite facts.
+        setUnassessed(null);
+        setUnassessedErr(operatorError(e, "The unassessed controls could not be loaded."));
+      });
+    return () => { alive = false; };
+  }, []);
+
+  const reasons = useMemo(() => unassessedReasons(unassessed ?? []), [unassessed]);
+
+  const save = useCallback(async (updates: SecFrameworkToggle[]) => {
+    if (updates.length === 0) return;
+    setSaving(true); setSaveErr(null); setSaveNote(null);
+    try {
+      const cat = await api.securityFrameworksUpdate(updates);
+      setCatalog(cat);
+      setCompliance(await api.securityCompliance());
+      setSaveNote(`${updates.length} framework${updates.length === 1 ? "" : "s"} updated.`);
+    } catch (e) {
+      setSaveErr(operatorError(e, "The framework selection was not saved."));
+      const status = (e as { status?: number })?.status;
+      if (status === 401 || status === 403) setCanEdit(false);
+    } finally {
+      setSaving(false);
+    }
+  }, []);
+
+  return (
+    <div className="sec dm-board">
+      <div className="sec-toolbar">
+        <Segmented
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: "frameworks" as SubView, label: "Frameworks" },
+            { value: "drift" as SubView, label: "Drift & baselines" },
+          ]}
+          ariaLabel="Compliance view"
+        />
+      </div>
+
+      {tab === "drift" ? (
+        <ComplianceMonitoring />
+      ) : err ? (
+        <div className="empty" role="alert" style={{ color: "var(--bad)" }}>{err}</div>
+      ) : !loaded ? (
+        <div className="empty" role="status">Loading…</div>
+      ) : (
+        <>
+          <ComplianceFrameworks
+            catalog={catalog}
+            compliance={compliance}
+            onSave={canEdit ? save : undefined}
+            saving={saving}
+            saveError={saveErr}
+            saveNote={saveNote}
+          />
+
+          <Group title="Unassessed controls" hue="#8b5cf6">
+            <Panel title="Why no verdict">
+              {unassessedErr ? (
+                <div className="empty" role="alert" style={{ color: "var(--bad)" }}>{unassessedErr}</div>
+              ) : reasons.length === 0 ? (
+                <div className="empty" role="status">
+                  Every control reached a verdict.
+                </div>
+              ) : (
+                <>
+                  <ul
+                    aria-label="Unassessed controls by reason"
+                    style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8 }}
+                  >
+                    {reasons.map((r) => (
+                      <li key={r.reason} className="sec-row" style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                        <span className={`sec-stripe ${r.recorded ? "" : "t-warn"}`} aria-hidden="true" />
+                        <div className="sec-main">
+                          <b>{r.reason}</b>
+                          <div className="sub">
+                            {r.count.toLocaleString()} control{r.count === 1 ? "" : "s"}
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  {unassessedTotal > (unassessed?.length ?? 0) && (
+                    <p className="sec-line" style={{ marginBottom: 0 }} role="status">
+                      Counted from the first {(unassessed?.length ?? 0).toLocaleString()} of{" "}
+                      {unassessedTotal.toLocaleString()} unassessed controls — the reasons below are
+                      a sample, not the whole estate.
+                    </p>
+                  )}
+                  <p className="sec-line" style={{ marginBottom: 0 }} role="status">
+                    Counted in no passing share.
+                    <AskIris topic="compliance.unassessed-control" label="an unassessed control" />
+                  </p>
+                </>
+              )}
+            </Panel>
+          </Group>
+        </>
+      )}
+    </div>
+  );
+}

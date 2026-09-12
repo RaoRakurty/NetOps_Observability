@@ -1,0 +1,330 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+"""Episode detection — pipeline stage [2] of Correlation Engine v2 (#67).
+
+Replaces "every z-crossing is a finding" with bounded **anomaly episodes**
+(docs/design/correlation-engine.md §4.1):
+
+  * onset: two-sided CUSUM over the signed z-deviation crosses H (default 4σ
+    cumulative, slack K=0.5σ). The onset timestamp is the START of the
+    accumulation run — not the crossing time, and never the alert firing time
+    (those systematically lie about causal order).
+  * onset uncertainty: ± one observed sampling interval, plus the source's
+    clock-quality budget (owner: per-source timing budget — research C2: a
+    60 s timing error collapses localization, so uncertainty is carried, not
+    assumed away). One full interval, not half: the CUSUM run-start estimator
+    can include up to one noise sample as a prefix (a noise sample that opened
+    the accumulator run just before the real change), so ±interval/2 was
+    empirically optimistic — the truth fell outside the band in testing.
+  * clear: |z| back inside CLEAR_SIGMA for CLEAR_HOLD consecutive samples.
+  * baseline freeze: mean/σ stop updating while an episode is open, so the
+    anomaly cannot normalize itself away.
+
+Detection constants are part of the future engine config hash — deterministic
+first, calibrated at P4 (replay-driven calibration), never silently tuned.
+"""
+
+from __future__ import annotations
+
+from collections import OrderedDict, deque
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+
+from series_budget import derive_max_series
+
+# --- Detection constants (config-hash members; P4 calibration re-fits them) ---
+WINDOW_SIZE = 200          # rolling baseline samples
+MIN_SAMPLES = 20           # no scoring before this many baseline samples
+CUSUM_H = 4.0              # cumulative σ to open an episode
+CUSUM_K = 0.5              # slack per sample (σ) — absorbs drift
+CLEAR_SIGMA = 1.0          # |z| considered "back to normal"
+CLEAR_HOLD = 3             # consecutive normal samples to close
+DEFAULT_INTERVAL_S = 60.0  # assumed sampling interval until observed
+# Bound on distinct (tenant, entity, metric) series held in memory (§9: all
+# queues bounded); it exists so entity-id churn cannot become an OOM. Derived
+# from the container memory budget (series_budget.py) — the old flat 200k
+# default measured ~2.9 GiB at cap across this store + main.SERIES, so the
+# 768 MiB container OOM'd long before the cap engaged and the bound never
+# bounded. CORR_MAX_SERIES still overrides verbatim.
+MAX_SERIES = derive_max_series()
+
+# Owner: source-specific timing budget. Clock quality widens onset uncertainty
+# beyond the sampling-interval term (seconds).
+CLOCK_BUDGET_S = {
+    "ptp": 0.0,
+    "ntp": 0.1,
+    "unknown": 2.0,
+    "free_running": 10.0,
+}
+
+# O(1) rolling-stats drift guard (perf: mean()/std() used to walk the full
+# 200-sample deque on EVERY call — ~6 full passes per metric sample across
+# episodes + the legacy z-score, saturating a core near 2-5k samples/s). The
+# baseline now carries shifted running sums (Σ(v−shift), Σ(v−shift)²) updated
+# O(1) per push; floating-point drift from the incremental eviction subtraction
+# is bounded by an EXACT O(window) recompute every this-many pushes (amortized
+# ≪ 1 op/sample) plus a clamp-and-recompute whenever variance goes negative.
+# Determinism is unchanged: the same ordered (ts, value) stream still yields
+# the same events (the aggregates are a pure function of the pushed values).
+STATS_RECOMPUTE_EVERY = 1024
+
+
+@dataclass(frozen=True)
+class EpisodeEvent:
+    """Emitted at onset and clear. The engine turns these into corr_signals
+    rows; later stages attach them to objects."""
+
+    phase: str                 # 'onset' | 'clear'
+    key: tuple[str, str, str]  # (tenant_id, entity_id, metric)
+    onset_ts: datetime
+    onset_uncertainty_s: float
+    value: float               # sample value at emission
+    baseline: float            # frozen baseline mean at onset
+    deviation: float           # signed z at emission
+    peak_deviation: float      # max |z| so far / overall
+    integral: float            # Σ|z|·dt (σ·seconds) — magnitude × duration
+    clear_ts: datetime | None = None
+
+
+@dataclass
+class _SeriesState:
+    values: deque[float] = field(default_factory=lambda: deque(maxlen=WINDOW_SIZE))
+    # CUSUM accumulators (two-sided, in σ units). Each side tracks its OWN run
+    # start: alternating noise ping-pongs between sides, and a shared run-start
+    # would pin onset to stale noise instead of the real anomaly's first sample.
+    s_pos: float = 0.0
+    s_neg: float = 0.0
+    run_start_pos: datetime | None = None
+    run_start_neg: datetime | None = None
+    run_interval_pos: float = DEFAULT_INTERVAL_S
+    run_interval_neg: float = DEFAULT_INTERVAL_S
+    # open-episode state
+    open: bool = False
+    onset_ts: datetime | None = None
+    onset_uncertainty_s: float = 0.0
+    frozen_mean: float = 0.0
+    frozen_std: float = 0.0
+    peak: float = 0.0
+    integral: float = 0.0
+    clear_run: int = 0
+    # sampling-interval EWMA
+    last_ts: datetime | None = None
+    interval_s: float = DEFAULT_INTERVAL_S
+    clock_quality: str = "unknown"
+    # Shifted running aggregates over `values` (see STATS_RECOMPUTE_EVERY):
+    # _sum/_sumsq accumulate (v − _shift) so a large baseline mean with a small
+    # variance does not cancel catastrophically; the shift re-pivots to the
+    # current mean at every exact recompute. Maintained ONLY through push() —
+    # never append to `values` directly.
+    _sum: float = 0.0
+    _sumsq: float = 0.0
+    _shift: float = 0.0
+    _pushes: int = 0
+
+    def _recompute(self) -> None:
+        """Exact O(window) rebuild of the aggregates — the float-drift guard."""
+        n = len(self.values)
+        self._shift = (sum(self.values) / n) if n else 0.0
+        self._sum = sum(v - self._shift for v in self.values)
+        self._sumsq = sum((v - self._shift) ** 2 for v in self.values)
+
+    def push(self, v: float) -> None:
+        """Append one baseline sample, updating the rolling aggregates O(1)."""
+        if not self.values:
+            # Pivot on the first sample: a 1e9-baseline series must not
+            # accumulate (v − 0)² terms before the first periodic re-pivot.
+            self._shift, self._sum, self._sumsq = v, 0.0, 0.0
+        elif len(self.values) == self.values.maxlen:
+            old = self.values[0] - self._shift
+            self._sum -= old
+            self._sumsq -= old * old
+        self.values.append(v)
+        d = v - self._shift
+        self._sum += d
+        self._sumsq += d * d
+        self._pushes += 1
+        if self._pushes % STATS_RECOMPUTE_EVERY == 0:
+            self._recompute()
+
+    def mean(self) -> float:
+        n = len(self.values)
+        return (self._shift + self._sum / n) if n else 0.0
+
+    def std(self) -> float:
+        n = len(self.values)
+        if n < 2:
+            return 0.0
+        var = (self._sumsq - self._sum * self._sum / n) / (n - 1)
+        if var < 0.0:
+            # Cancellation artifact — rebuild exactly, then re-derive.
+            self._recompute()
+            var = max(0.0, (self._sumsq - self._sum * self._sum / n) / (n - 1))
+        return var ** 0.5
+
+
+class EpisodeDetector:
+    """Per-(tenant, entity, metric) CUSUM episode state machine.
+
+    Deterministic: same ordered (ts, value) stream ⇒ same events. No wall-clock
+    reads — event time only (replay contract).
+    """
+
+    def __init__(self, max_series: int | None = None) -> None:
+        # Bounded, LRU by last observation. The key is
+        # (tenant, entity, metric) and NOTHING evicted it: a tenant whose
+        # entity_ids are ephemeral cloud resource ids (the realistic churn
+        # shape) grows this map without limit until the container OOMs. At the
+        # cap the least-recently-observed series is dropped — it loses its
+        # baseline (it re-warms over MIN_SAMPLES), which is strictly better
+        # than losing the process. An OPEN episode is never the LRU victim
+        # unless every series is open.
+        self._max_series = max_series if max_series is not None else MAX_SERIES
+        self._state: OrderedDict[tuple[str, str, str], _SeriesState] = OrderedDict()
+        self.evicted = 0
+
+    def _evict_if_needed(self) -> None:
+        while len(self._state) > self._max_series:
+            for key, st in self._state.items():
+                if not st.open:
+                    self._state.pop(key)
+                    break
+            else:
+                self._state.popitem(last=False)   # all open: drop the oldest
+            self.evicted += 1
+
+    def observe(
+        self,
+        tenant_id: str,
+        entity_id: str,
+        metric: str,
+        ts: datetime,
+        value: float,
+        clock_quality: str = "unknown",
+    ) -> EpisodeEvent | None:
+        """Feed one sample; returns an EpisodeEvent on onset/clear, else None."""
+        key = (tenant_id, entity_id, metric)
+        st = self._state.get(key)
+        if st is None:
+            st = _SeriesState()
+            self._state[key] = st
+            self._evict_if_needed()
+        else:
+            self._state.move_to_end(key)          # LRU touch
+        st.clock_quality = clock_quality
+
+        # Sampling-interval EWMA (event-time): the uncertainty budget's first term.
+        if st.last_ts is not None:
+            dt = (ts - st.last_ts).total_seconds()
+            if 0 < dt < 24 * 3600:
+                st.interval_s = 0.8 * st.interval_s + 0.2 * dt
+        st.last_ts = ts
+
+        # Baseline warm-up: collect only.
+        if len(st.values) < MIN_SAMPLES:
+            st.push(value)
+            return None
+
+        mean = st.frozen_mean if st.open else st.mean()
+        std = st.frozen_std if st.open else st.std()
+        if std <= 0.0:
+            if not st.open:
+                st.push(value)
+            return None
+        z = (value - mean) / std
+
+        if st.open:
+            return self._while_open(st, key, ts, value, z)
+        return self._while_closed(st, key, ts, value, z)
+
+    # -- closed: accumulate CUSUM toward onset --------------------------------
+
+    def _while_closed(
+        self, st: _SeriesState, key: tuple[str, str, str],
+        ts: datetime, value: float, z: float,
+    ) -> EpisodeEvent | None:
+        pos_was = st.s_pos > 0.0
+        neg_was = st.s_neg > 0.0
+        st.s_pos = max(0.0, st.s_pos + z - CUSUM_K)
+        st.s_neg = max(0.0, st.s_neg - z - CUSUM_K)
+
+        if st.s_pos > 0.0 and not pos_was:
+            st.run_start_pos = ts          # this sample started the upward run
+            st.run_interval_pos = st.interval_s
+        elif st.s_pos == 0.0:
+            st.run_start_pos = None
+        if st.s_neg > 0.0 and not neg_was:
+            st.run_start_neg = ts
+            st.run_interval_neg = st.interval_s
+        elif st.s_neg == 0.0:
+            st.run_start_neg = None
+
+        if max(st.s_pos, st.s_neg) >= CUSUM_H:
+            # Onset = first sample of the CROSSING side's run.
+            if st.s_pos >= st.s_neg:
+                onset = st.run_start_pos or ts
+                run_interval = st.run_interval_pos
+            else:
+                onset = st.run_start_neg or ts
+                run_interval = st.run_interval_neg
+            # Owner timing budget: ± one sampling interval (run-start estimator
+            # ambiguity, see module docstring) + clock-quality term.
+            clock = CLOCK_BUDGET_S.get(st.clock_quality, CLOCK_BUDGET_S["unknown"])
+            uncertainty = run_interval + clock
+            st.open = True
+            st.onset_ts = onset
+            st.onset_uncertainty_s = uncertainty
+            st.frozen_mean = st.mean()
+            st.frozen_std = st.std()
+            st.peak = abs(z)
+            st.integral = abs(z) * st.interval_s
+            st.clear_run = 0
+            st.s_pos = st.s_neg = 0.0
+            st.run_start_pos = st.run_start_neg = None
+            return EpisodeEvent(
+                phase="onset", key=key, onset_ts=onset,
+                onset_uncertainty_s=uncertainty, value=value,
+                baseline=st.frozen_mean, deviation=z,
+                peak_deviation=st.peak, integral=st.integral,
+            )
+
+        st.push(value)  # below threshold: sample joins the baseline
+        return None
+
+    # -- open: track peak/integral, watch for clear ---------------------------
+
+    def _while_open(
+        self, st: _SeriesState, key: tuple[str, str, str],
+        ts: datetime, value: float, z: float,
+    ) -> EpisodeEvent | None:
+        st.peak = max(st.peak, abs(z))
+        st.integral += abs(z) * st.interval_s
+
+        if abs(z) < CLEAR_SIGMA:
+            st.clear_run += 1
+        else:
+            st.clear_run = 0
+
+        if st.clear_run >= CLEAR_HOLD:
+            # clear_ts = first sample of the hold run (the actual recovery point).
+            clear_ts = ts - timedelta(seconds=st.interval_s * (CLEAR_HOLD - 1))
+            ev = EpisodeEvent(
+                phase="clear", key=key,
+                onset_ts=st.onset_ts or ts,
+                onset_uncertainty_s=st.onset_uncertainty_s,
+                value=value, baseline=st.frozen_mean, deviation=z,
+                peak_deviation=st.peak, integral=st.integral,
+                clear_ts=clear_ts,
+            )
+            # Reset for the next episode; recovered samples re-seed the baseline.
+            st.open = False
+            st.onset_ts = None
+            st.peak = 0.0
+            st.integral = 0.0
+            st.clear_run = 0
+            st.push(value)
+            return ev
+        return None
+
+    def open_episodes(self) -> int:
+        return sum(1 for st in self._state.values() if st.open)

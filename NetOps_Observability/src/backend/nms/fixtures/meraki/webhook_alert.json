@@ -1,0 +1,18 @@
+{
+  "version": "0.1",
+  "sharedSecret": "REDACTED",
+  "sentAt": "2026-07-03T12:00:05Z",
+  "organizationId": "2930418",
+  "organizationName": "Acme Corp",
+  "networkId": "N_24329156",
+  "networkName": "Main Office",
+  "deviceSerial": "Q234-ABCD-5678",
+  "deviceName": "MX-Branch-1",
+  "deviceModel": "MX68",
+  "alertId": "1234567890",
+  "alertType": "WAN 1 connectivity lost",
+  "alertTypeId": "wan_1_down",
+  "occurredAt": "2026-07-03T11:59:30Z",
+  "alertLevel": "critical",
+  "alertData": { "uplink": "wan1" }
+}

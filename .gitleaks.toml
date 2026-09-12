@@ -1,0 +1,67 @@
+# gitleaks config (SC-007). Keep ALL default rules; allowlist only the obvious
+# non-secrets so the blocking history scan doesn't trip on test fixtures.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures and the public dev fallback secret — not real credentials"
+regexTarget = "match"
+regexes = [
+  # Dummy credential convention used in *_test.go (e.g. auth-secret-123,
+  # priv-secret-456) — fabricated values, never real keys.
+  '''(auth|priv)-secret-\d+''',
+  # The publicly-known dev signing fallback (SR-017) — intentionally in source.
+  '''dev-only-do-not-use-in-production''',
+  # tests/test_store_backend_defaults.py: the fabricated app-role password the
+  # installer role-provisioning tests pass to a FakeRunner — never a real credential.
+  '''pw123456789012345678''',
+  # RFC 6238 published TOTP test seed (base32 of "12345678901234567890"), used in
+  # totp_test.go to pin our implementation against the spec — not a real secret.
+  '''GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ''',
+  # RFC 6455 §1.3 published WebSocket handshake sample nonce ("the sample nonce"),
+  # used verbatim in device_ssh_ticket_test.go / auth_flow_test.go to build a valid
+  # WS upgrade request — a spec constant, not a credential.
+  '''dGhlIHNhbXBsZSBub25jZQ==''',
+  # Fabricated HMAC key constant in tests/test_backup_ship.py (SIGN_KEY) used to
+  # sign/verify backup artifacts in the round-trip tests — not a real credential.
+  '''test-sign-key-[0-9]+''',
+  # The env-var NAME in a vault WARN log message (secrets.go), flagged by the
+  # generic-api-key heuristic because it follows the word "secrets" — a log
+  # string / flag name, never a secret value.
+  '''VAULT_MIGRATE_LEGACY_WRAPPED''',
+  # docs placeholder for the API-key examples (docs-portal + its ai/docs_corpus mirror)
+  '''ntk_YOUR_KEY''',
+  # ── reviewed 2026-09-05, commit 6d94f363 (internal/dataprotect extraction) ──
+  # The fabricated operation id in the "unknown id ⇒ 404" table shared by
+  # data_protection_routes_test.go and internal/dataprotect/ops_test.go. It sits
+  # in a slice next to "../../etc/passwd" (the path-traversal probe), which is
+  # what makes the generic-api-key heuristic read the pair as key=value. It is a
+  # well-formed-but-nonexistent id, matched only against a 404 — never a
+  # credential, and it must NOT be an OID/token that exists.
+  '''op-00112233445566778899''',
+  # The planted credential in the backup remote-destination URL fixture
+  # (internal/dataprotect/coverage_test.go): the assertion is that
+  # GET /api/system/backup REDACTS it, so the test cannot exist without a
+  # credential-shaped string in it. Fabricated throughout — RFC 2606
+  # `nas.example.net`, `backupuser:sup3rs3cret`, and this ascending-hex token.
+  '''token=abcdef123456''',
+]
+# Test fixtures that DELIBERATELY look like secrets — reviewed 2026-09-04:
+#   ErrorBoundary.test.tsx: a synthetic error string carrying a fake token/api_key
+#     to prove the boundary REDACTS it (the assertion is that it never renders);
+#   pcap/bpf_test.go: an opaque hex token in the closed-BPF-grammar rejection table;
+#   configdrift/fixture_test.go: canarySecret — the planted enable secret the drift
+#     redaction test must mask;
+#   configstore/dialect_test.go: a fixture RSA private key + cert blob that the
+#     dialect redactor must strip from captured configs.
+paths = [
+  # internal/protocoldiag/redactstream_test.go: the streaming TAC redactor's
+  # fixture — fake PEM blocks (the base64 body decodes to "string with no
+  # secret in it at all just base64") fed in so the test proves they are
+  # masked before storage. Fabricated, never a real key.
+  '''NetOps_Observability/src/backend/internal/protocoldiag/redactstream_test\.go''',
+  '''NetOps_Observability/src/frontend/src/components/ErrorBoundary\.test\.tsx''',
+  '''NetOps_Observability/src/backend/internal/pcap/bpf_test\.go''',
+  '''NetOps_Observability/src/backend/internal/configdrift/fixture_test\.go''',
+  '''NetOps_Observability/src/backend/internal/configstore/dialect_test\.go''',
+]

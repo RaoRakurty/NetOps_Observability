@@ -1,0 +1,46 @@
+Correlix — licensing
+====================
+
+Correlix core is licensed under the Apache License, Version 2.0. Commercial add-on modules are licensed under the Correlix Enterprise License (LicenseRef-Correlix-Enterprise) — see LICENSING.md.
+
+Copyright 2026 Correlix
+
+The two licence texts
+---------------------
+
+    Apache-2.0                      LICENSES/Apache-2.0.txt
+    LicenseRef-Correlix-Enterprise  LICENSES/Correlix-Enterprise.txt
+
+Which files are under which licence
+-----------------------------------
+
+    LICENSING.md          the directory -> licence map. GENERATED from
+                          licensing-policy.json; do not hand-edit.
+    licensing-policy.json the machine-readable policy the map, the SPDX
+                          headers and the CI boundary gate all read.
+
+A file declares its own licence with an SPDX header:
+
+    SPDX-License-Identifier: Apache-2.0
+    SPDX-License-Identifier: LicenseRef-Correlix-Enterprise
+
+A directory under the Correlix Enterprise License also carries its own
+LICENSE notice file naming that identifier.
+
+DEFAULT: a file with no SPDX header, in a directory with no Enterprise
+notice file, is Apache-2.0. The default is open, never commercial.
+
+Third-party components
+----------------------
+
+Correlix redistributes third-party software under its own licences. Those
+obligations are inventoried separately and are not affected by the split
+above:
+
+    NOTICE                        attribution and source offers
+    docs/THIRD_PARTY_LICENSES.md  generated component inventory
+
+Applying the Apache licence to your own contributions is described in the
+appendix of LICENSES/Apache-2.0.txt. Contributions to this repository
+additionally require a signed Contributor License Agreement — see
+CONTRIBUTING.md.

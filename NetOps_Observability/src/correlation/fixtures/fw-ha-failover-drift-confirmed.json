@@ -1,0 +1,40 @@
+{
+  "name": "FW HA role change + service probe failures + NAT change: confirmed state drift",
+  "signals": [
+    {
+      "kind": "fw_ha_state_change",
+      "entity_type": "device",
+      "entity_id": "fw-pair1",
+      "observer_id": "syslog-fw1",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 2.0
+    },
+    {
+      "kind": "synthetic_http_fail",
+      "entity_type": "service",
+      "entity_id": "portal.example",
+      "observer_id": "probe-agent-1",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "nat_translation_change",
+      "entity_type": "device",
+      "entity_id": "fw-pair1",
+      "observer_id": "syslog-fw1",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 0.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.security.fw-ha-failover-drift",
+    "tier": "confirmed",
+    "owner": "netops"
+  }
+}

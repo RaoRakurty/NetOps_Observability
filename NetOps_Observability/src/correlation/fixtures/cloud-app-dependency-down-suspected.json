@@ -1,0 +1,12 @@
+{
+  "name": "Cloud app dependency down: database stopped behind the app tier — the tunnel is fine (dual-cloud fault lab drill 001)",
+  "signals": [
+    {"kind": "cloud_health", "entity_type": "app", "entity_id": "store-api",
+     "observer_id": "cloud:945714973156:us-west-2", "observer_type": "cloud_api",
+     "modality": "device_telemetry", "collection_path": "via_cloud_api", "deviation": 4.0},
+    {"kind": "cloud_health", "entity_type": "app", "entity_id": "journey",
+     "observer_id": "cloud:945714973156:us-west-2", "observer_type": "cloud_api",
+     "modality": "device_telemetry", "collection_path": "via_cloud_api", "deviation": 5.0}
+  ],
+  "expect": {"top": "sig.ent.cloud.app-dependency-down", "tier": "suspected", "owner": "app_team"}
+}

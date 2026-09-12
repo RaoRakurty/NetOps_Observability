@@ -1,0 +1,165 @@
+{
+  "uid": "netops-streaming",
+  "title": "NetOps · Streaming Telemetry (gNMI)",
+  "tags": ["netops", "gnmi", "streaming"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "source",
+        "label": "Source",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+        "query": { "query": "label_values({__name__=~\"gnmi_.+_in_octets\"}, source)", "refId": "StandardVariableQuery" },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 100,
+      "title": "OpenConfig — Arista leaves",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 1,
+      "title": "Interface throughput — In",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "bps", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (source) (rate(gnmi_interfaces_interface_state_counters_in_octets{source=~\"$source\"}[5m]) * 8)", "legendFormat": "{{source}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Interface throughput — Out",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "bps", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (source) (rate(gnmi_interfaces_interface_state_counters_out_octets{source=~\"$source\"}[5m]) * 8)", "legendFormat": "{{source}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Out errors / s (top interfaces)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "topk(10, rate(gnmi_interfaces_interface_state_counters_out_errors{source=~\"$source\"}[5m]))", "legendFormat": "{{source}} · {{interface_name}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Packet rate (in + out)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "pps", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (source) (rate(gnmi_interfaces_interface_state_counters_in_pkts{source=~\"$source\"}[5m]) + rate(gnmi_interfaces_interface_state_counters_out_pkts{source=~\"$source\"}[5m]))", "legendFormat": "{{source}}" }
+      ]
+    },
+    {
+      "id": 200,
+      "title": "Nokia SRL — spines",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 5,
+      "title": "SRL interface throughput — In",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "fieldConfig": { "defaults": { "unit": "bps", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (source) (rate(gnmi_srl_nokia_interfaces_interface_statistics_in_octets{source=~\"$source\"}[5m]) * 8)", "legendFormat": "{{source}}" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "SRL interface throughput — Out",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "fieldConfig": { "defaults": { "unit": "bps", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (source) (rate(gnmi_srl_nokia_interfaces_interface_statistics_out_octets{source=~\"$source\"}[5m]) * 8)", "legendFormat": "{{source}}" }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "SRL errors + discards / s (top interfaces)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "topk(10, rate(gnmi_srl_nokia_interfaces_interface_statistics_in_error_packets{source=~\"$source\"}[5m]) + rate(gnmi_srl_nokia_interfaces_interface_statistics_out_error_packets{source=~\"$source\"}[5m]) + rate(gnmi_srl_nokia_interfaces_interface_statistics_in_discarded_packets{source=~\"$source\"}[5m]) + rate(gnmi_srl_nokia_interfaces_interface_statistics_out_discarded_packets{source=~\"$source\"}[5m]))", "legendFormat": "{{source}} · {{interface_name}}" }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "SRL link / carrier transitions / s",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (source) (rate(gnmi_srl_nokia_interfaces_interface_statistics_carrier_transitions{source=~\"$source\"}[5m]))", "legendFormat": "{{source}}" }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "SRL control-plane CPU",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 34 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "gnmi_srl_nokia_platform_platform_srl_nokia_platform_control_control_srl_nokia_platform_cpu_cpu_total_instant{source=~\"$source\"}", "legendFormat": "{{source}} · slot {{control_slot}}" }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "SRL memory utilization",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 34 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "gnmi_srl_nokia_platform_platform_srl_nokia_platform_control_control_srl_nokia_platform_memory_memory_utilization{source=~\"$source\"}", "legendFormat": "{{source}} · slot {{control_slot}}" }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "SRL control temperature",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 34 },
+      "fieldConfig": { "defaults": { "unit": "celsius" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "gnmi_srl_nokia_platform_platform_srl_nokia_platform_control_control_temperature_instant{source=~\"$source\"}", "legendFormat": "{{source}} · slot {{control_slot}}" }
+      ]
+    }
+  ]
+}

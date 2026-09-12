@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """End-to-end smoke test for the NetOps Observability stack.
 
 Probes every tier and the API surface and prints a PASS/WARN/FAIL line for
@@ -6,8 +9,8 @@ each, with a summary. Designed to answer one question: "is every module
 actually working?"
 
 Tiers checked (internal ones via `docker compose exec`):
-  nginx · API · OpenSearch · VictoriaMetrics · Prometheus · Grafana ·
-  ClickHouse · Redpanda · correlation
+  nginx · API · OpenSearch · VictoriaMetrics (store + self-scrape) · Grafana ·
+  ClickHouse · Kafka · correlation
 API endpoints checked through nginx (:8000). Endpoints behind auth are
 verified live either way: with a token we expect 200; without, a 401 still
 proves the route is wired (reported as WARN, not FAIL).
@@ -55,7 +58,7 @@ def dexec(service, *cmd, timeout=20):
     try:
         p = subprocess.run(
             ["docker", "compose", "exec", "-T", service, *cmd],
-            cwd=compose_dir(), capture_output=True, timeout=timeout,
+            cwd=compose_dir(), capture_output=True, timeout=timeout, check=False,
         )
         return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
     except subprocess.TimeoutExpired:
@@ -113,7 +116,7 @@ def dexec_ps():
     try:
         p = subprocess.run(
             ["docker", "compose", "ps", "--format", "{{.Service}} {{.State}}"],
-            cwd=compose_dir(), capture_output=True, timeout=20,
+            cwd=compose_dir(), capture_output=True, timeout=20, check=False,
         )
         return p.returncode, p.stdout.decode(), p.stderr.decode()
     except Exception as e:  # noqa: BLE001
@@ -175,24 +178,35 @@ def check_victoria():
         record(FAIL, "VictoriaMetrics", f"health HTTP {code}")
 
 
-def check_prometheus():
-    code, out = probe("http://prometheus:9090/api/v1/targets?state=active")
+def check_scrapes():
+    # VictoriaMetrics scrapes the self-metrics (Prometheus removed, #97).
+    # Optional add-on targets (cadvisor/node/grafana) read down while the
+    # self-monitoring add-on is disabled — report them, don't fail on them.
+    code, out = probe("http://victoria:8428/api/v1/targets?state=active")
     if code != 200:
-        record(FAIL, "Prometheus", f"targets HTTP {code}")
+        record(FAIL, "Self-metrics scrape (VM)", f"targets HTTP {code}")
         return
     try:
         tg = json.loads(out)["data"]["activeTargets"]
+        core = {"netops-api", "victoria", "clickhouse", "vector"}
         up = sum(1 for t in tg if t.get("health") == "up")
-        down = [t["labels"].get("job") for t in tg if t.get("health") != "up"]
-        if down:
-            record(WARN, "Prometheus", f"{up}/{len(tg)} targets up; down: {', '.join(down)}")
+        down_core = [t["labels"].get("job") for t in tg
+                     if t.get("health") != "up" and t["labels"].get("job") in core]
+        if down_core:
+            record(FAIL, "Self-metrics scrape (VM)", f"core targets down: {', '.join(down_core)}")
         else:
-            record(PASS, "Prometheus", f"{up}/{len(tg)} targets up")
+            record(PASS, "Self-metrics scrape (VM)", f"{up}/{len(tg)} targets up (core all up)")
     except (json.JSONDecodeError, KeyError):
-        record(WARN, "Prometheus", "targets unparseable")
+        record(WARN, "Self-metrics scrape (VM)", "targets unparseable")
 
 
 def check_grafana():
+    # Grafana rides the optional self-monitoring add-on; absence is a state,
+    # not a failure.
+    rc, psout, _ = dexec_ps()
+    if rc == 0 and "grafana" not in psout:
+        record(WARN, "Grafana", "self-monitoring add-on not enabled (skipped)")
+        return
     code, out = probe("http://grafana:3000/api/health")
     if code == 200 and out:
         try:
@@ -205,8 +219,12 @@ def check_grafana():
 
 
 def check_clickhouse():
+    # tenant_scope: the RLS row policies call getSetting('tenant_scope'), which
+    # ERRORS (not "empty") when the session never defines it — define the
+    # platform scope explicitly, same as correlation_e2e.py does.
     rc, out, err = dexec("clickhouse", "clickhouse-client", "-q",
-                         "SELECT (SELECT count() FROM netops.flows), (SELECT count() FROM netops.findings)")
+                         "SELECT (SELECT count() FROM netops.flows), (SELECT count() FROM netops.findings) "
+                         "SETTINGS tenant_scope='__all__'")
     if rc == 0 and out.strip():
         parts = out.split()
         flows = parts[0] if parts else "?"
@@ -216,18 +234,19 @@ def check_clickhouse():
         record(FAIL, "ClickHouse", (err.strip()[:100] or "query failed"))
 
 
-def check_redpanda():
-    rc, out, _ = dexec("redpanda", "rpk", "topic", "list")
+def check_kafka():
+    rc, out, _ = dexec("kafka", "/opt/kafka/bin/kafka-topics.sh",
+                       "--bootstrap-server", "localhost:9092", "--list")
     if rc == 0:
-        topics = [l.split()[0] for l in out.splitlines()[1:] if l.strip()]
+        topics = [l.strip() for l in out.splitlines() if l.strip()]
         want = {"netops.applogs", "netops.flows", "netops.metrics", "netops.syslog"}
         missing = want - set(topics)
         if missing:
-            record(WARN, "Redpanda", f"topics present={len(topics)}, missing: {', '.join(missing)}")
+            record(WARN, "Kafka", f"topics present={len(topics)}, missing: {', '.join(missing)}")
         else:
-            record(PASS, "Redpanda", f"all 4 netops topics present")
+            record(PASS, "Kafka", "all 4 core netops topics present")
     else:
-        record(FAIL, "Redpanda", "topic list failed")
+        record(FAIL, "Kafka", "topic list failed")
 
 
 def check_correlation():
@@ -325,18 +344,18 @@ def main():
     print(f"\n{B}Storage & ingest tiers{X}")
     check_opensearch()
     check_victoria()
-    check_prometheus()
+    check_scrapes()
     check_grafana()
     check_clickhouse()
-    check_redpanda()
+    check_kafka()
     check_correlation()
 
     print(f"\n{B}API surface{X}")
     token = get_token(base)
     if token:
-        print(f"  (authenticated — verifying 200-level responses)")
+        print("  (authenticated — verifying 200-level responses)")
     else:
-        print(f"  (no token — auth'd routes reported as WARN; set NETOPS_TOKEN or NETOPS_USER/NETOPS_PASSWORD)")
+        print("  (no token — auth'd routes reported as WARN; set NETOPS_TOKEN or NETOPS_USER/NETOPS_PASSWORD)")
     check_api_endpoints(base, token)
 
     # Summary

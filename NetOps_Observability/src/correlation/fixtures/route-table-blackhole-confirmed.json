@@ -1,0 +1,30 @@
+{
+  "name": "Route table blackhole + probes fail into the affected domain: confirmed",
+  "signals": [
+    {
+      "kind": "route_table_blackhole",
+      "entity_type": "service",
+      "entity_id": "vpc-b-rtb",
+      "observer_id": "cloud-api",
+      "observer_type": "cloud_api",
+      "modality": "control_plane",
+      "collection_path": "via_cloud_api",
+      "deviation": 2.0
+    },
+    {
+      "kind": "probe_loss",
+      "entity_type": "path",
+      "entity_id": "dc->vpc-b",
+      "observer_id": "probe-agent-dc",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 5.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.cloud.route-table-blackhole",
+    "tier": "confirmed",
+    "owner": "netops"
+  }
+}

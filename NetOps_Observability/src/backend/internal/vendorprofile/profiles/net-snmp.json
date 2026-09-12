@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "vendor": "net-snmp",
+  "display_name": "Net-SNMP",
+  "notes": "Net-SNMP is a DISTINCT detection identity (its own enterprise number) that reports the same linux_kernel product as the linux vendor. The duplication is deliberate: collapsing them would change what DetectVendor returns.",
+  "detection": {
+    "sysobjectid_prefixes": [
+      "1.3.6.1.4.1.8072"
+    ],
+    "os_version_pattern": "(?i)\\bLinux\\s+\\S+\\s+([0-9][0-9A-Za-z.+-]*)"
+  },
+  "dialect": {
+    "vrf_term": "VRF",
+    "vrf_term_keys": [
+      "net-snmp"
+    ]
+  },
+  "profiles": [
+    {
+      "platform": "linux_kernel",
+      "display_name": "Linux kernel (Net-SNMP agent)",
+      "device_class": [
+        "host"
+      ],
+      "fidelity": "doc_claimed",
+      "detection": {
+        "os_parse": {
+          "product": "linux_kernel",
+          "rank": 10,
+          "sysdescr_contains_any": []
+        }
+      },
+      "capture": {},
+      "advisory": {
+        "provider": "offline-feed",
+        "product_ids": [
+          "linux_kernel"
+        ]
+      },
+      "hardening": {},
+      "threat": {}
+    }
+  ]
+}

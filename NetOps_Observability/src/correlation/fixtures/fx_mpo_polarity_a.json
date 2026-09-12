@@ -1,0 +1,39 @@
+{
+  "name": "fx_mpo_polarity_a \u2014 mpo-polarity-mismatch",
+  "signals": [
+    {
+      "kind": "mpo_polarity_mismatch",
+      "entity_type": "interface",
+      "entity_id": "leaf5:Et49",
+      "observer_id": "snmp-leaf5",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "link_down_no_light",
+      "entity_type": "interface",
+      "entity_id": "leaf5:Et49",
+      "observer_id": "snmp-leaf5",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "tx_present_rx_absent",
+      "entity_type": "interface",
+      "entity_id": "leaf5:Et49",
+      "observer_id": "snmp-leaf5",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.mpo-polarity-mismatch",
+    "tier": "suspected"
+  }
+}

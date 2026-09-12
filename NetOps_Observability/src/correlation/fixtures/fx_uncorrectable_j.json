@@ -1,0 +1,39 @@
+{
+  "name": "fx_uncorrectable_j \u2014 pcs-lane-deskew-failure",
+  "signals": [
+    {
+      "kind": "pcs_deskew_fault",
+      "entity_type": "interface",
+      "entity_id": "leaf8:Et2",
+      "observer_id": "snmp-leaf8",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "pcs_local_fault",
+      "entity_type": "interface",
+      "entity_id": "leaf8:Et2",
+      "observer_id": "snmp-leaf8",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "hi_ber_indication",
+      "entity_type": "interface",
+      "entity_id": "leaf8:Et2",
+      "observer_id": "snmp-leaf8",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.pcs-lane-deskew-failure",
+    "tier": "suspected"
+  }
+}

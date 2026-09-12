@@ -1,0 +1,43 @@
+{
+    "name": "Underlay path to the VPN peer dead: gateway's off-tunnel check + tunnel-down + independent probe loss -> underlay is the root, tunnel is the symptom (owner directive 2026-07-13, W2 drill shape)",
+    "comment": "The W2 outer-path blackhole shape: the gateway's own off-tunnel reachability check to the peer's public address fails (ipsec_underlay_status, ACTIVE measurement riding the default route), the tunnel/IKE dies as a downstream symptom, and an independent customer-path probe sees the apps dark. The underlay template must win ownership (isp) and the IKE-flavored ipsec-tunnel-down must be contradicted by the underlay witness — a NOC chasing IKE config here would be chasing the wrong layer.",
+    "signals": [
+        {
+            "kind": "ipsec_underlay_status",
+            "entity_type": "cloud_resource",
+            "entity_id": "sm-aws-vpn",
+            "observer_id": "ipsec:lab-vpn-edge",
+            "observer_type": "controller",
+            "modality": "active_probe",
+            "collection_path": "direct",
+            "attrs": {"state": "down", "peer_outer": "100.21.102.86"},
+            "deviation": 0.0
+        },
+        {
+            "kind": "ipsec_tunnel_status",
+            "entity_type": "cloud_resource",
+            "entity_id": "sm-aws-vpn",
+            "observer_id": "ipsec:lab-vpn-edge",
+            "observer_type": "controller",
+            "modality": "control_plane",
+            "collection_path": "direct",
+            "attrs": {"state": "down", "reason": "peer_unreachable"},
+            "deviation": 0.0
+        },
+        {
+            "kind": "probe_loss",
+            "entity_type": "segment",
+            "entity_id": "lan-vantage-1->store-api",
+            "observer_id": "lan-vantage-1",
+            "observer_type": "vantage_agent",
+            "modality": "active_probe",
+            "collection_path": "direct",
+            "deviation": 5.0
+        }
+    ],
+    "expect": {
+        "top": "sig.ent.middle-mile.ipsec-underlay-down",
+        "tier": "confirmed",
+        "owner": "isp"
+    }
+}

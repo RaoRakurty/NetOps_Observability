@@ -1,0 +1,33 @@
+{
+  "name": "Raw synthetic DNS failure to Salesforce (fail_class from the Go httptrace classifier) \u2014 generic app path, no Teams logic",
+  "tenant": "acme",
+  "events": [
+    {
+      "lane": "probe",
+      "event": {
+        "kind": "http",
+        "prober": "syn-dallas",
+        "target": "https://login.salesforce.com",
+        "ok": false,
+        "rtt_ms": 0,
+        "loss_pct": 100,
+        "ts": "2026-07-09T09:00:00.000000Z",
+        "site_id": "dallas",
+        "fail_class": "dns",
+        "method": "GET",
+        "path": "/",
+        "probe_intent": "customer_path",
+        "vantage_type": "enterprise_agent",
+        "execution_id": "ex-golden-synthetic_dns_fail_salesforce-0"
+      }
+    }
+  ],
+  "expect": {
+    "semantic_kind": "synthetic_dns_fail",
+    "reason": "dns_failure",
+    "raw_kind": "http",
+    "app": "salesforce",
+    "top": "sig.ent.app.saas-experience-degraded",
+    "confirmed": false
+  }
+}

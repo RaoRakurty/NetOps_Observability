@@ -1,0 +1,30 @@
+{
+  "name": "Outbound failures concentrated on one member: SNAT hot-spot",
+  "signals": [
+    {
+      "kind": "snat_member_hotspot",
+      "entity_type": "service",
+      "entity_id": "pool-web/member-a",
+      "observer_id": "cloud-metrics",
+      "observer_type": "cloud_api",
+      "modality": "control_plane",
+      "collection_path": "via_cloud_api",
+      "deviation": 4.0
+    },
+    {
+      "kind": "app_conn_fail",
+      "entity_type": "service",
+      "entity_id": "pool-web/member-a",
+      "observer_id": "apm-platform",
+      "observer_type": "platform",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.cloud.lb-snat-hotspot-imbalance",
+    "tier": "suspected",
+    "owner": "app_team"
+  }
+}

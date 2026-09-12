@@ -1,0 +1,12 @@
+{
+  "name": "SG/NACL reject on the app edge: boundary REJECTs + app degraded, NO connectivity change in the window (discriminator stays inactive)",
+  "signals": [
+    {"kind": "cloud_health", "entity_type": "app", "entity_id": "store-api",
+     "observer_id": "cloud:945714973156:us-west-2", "observer_type": "cloud_api",
+     "modality": "device_telemetry", "collection_path": "via_cloud_api", "deviation": 4.0},
+    {"kind": "cloud_flow_log", "entity_type": "cloud_resource", "entity_id": "eni-0a1b2c3d4e5f6",
+     "observer_id": "cloud:945714973156:us-west-2", "observer_type": "cloud_api",
+     "modality": "passive_flow", "collection_path": "via_cloud_api", "deviation": 5.0}
+  ],
+  "expect": {"top": "sig.ent.app.edge-firewall-reject", "tier": "suspected", "owner": "netops"}
+}

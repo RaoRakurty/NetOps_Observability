@@ -1,0 +1,19 @@
+elkjs 0.11.1 — Eclipse Public License 2.0
+================================================================================
+
+Correlix bundles elkjs UNMODIFIED into the web UI's JavaScript assets
+(assets/elk.bundled-*.js). elkjs is licensed under the Eclipse Public License,
+Version 2.0; the full licence text is in LICENSE-EPL-2.0.txt beside this file.
+
+EPL-2.0 is FILE-LEVEL copyleft and applies to elkjs's own files only. Correlix
+does not modify elkjs, so no Correlix source is placed under the EPL.
+
+HOW TO OBTAIN THE SOURCE CODE (EPL-2.0 section 3.2)
+  Upstream project : https://github.com/kieler/elkjs
+  Exact version    : v0.11.1  (https://github.com/kieler/elkjs/tree/v0.11.1)
+  npm package       : https://registry.npmjs.org/elkjs/-/elkjs-0.11.1.tgz
+  Layout engine     : https://github.com/eclipse/elk (Eclipse Layout Kernel)
+
+Correlix will also provide the corresponding source for the exact version
+shipped, on written request, for three years from the date of distribution.
+See THIRD_PARTY_LICENSES.md ("Written offer for Corresponding Source").

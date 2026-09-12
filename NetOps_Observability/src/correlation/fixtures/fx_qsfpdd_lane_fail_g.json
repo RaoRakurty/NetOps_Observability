@@ -1,0 +1,39 @@
+{
+  "name": "fx_qsfpdd_lane_fail_g \u2014 qsfpdd-single-lane-failure",
+  "signals": [
+    {
+      "kind": "single_lane_rx_absent",
+      "entity_type": "interface",
+      "entity_id": "leaf7:Et20",
+      "observer_id": "snmp-leaf7",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "lane_group_others_normal",
+      "entity_type": "interface",
+      "entity_id": "leaf7:Et20",
+      "observer_id": "snmp-leaf7",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "dom_lane_bias_anomaly",
+      "entity_type": "interface",
+      "entity_id": "leaf7:Et20",
+      "observer_id": "snmp-leaf7",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.qsfpdd-single-lane-failure",
+    "tier": "suspected"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "Interface errors + clean utilization: physical degradation, carrier ticket",
+  "signals": [
+    {"kind": "if_errors", "entity_type": "interface", "entity_id": "dallas-edge:Gi0/2",
+     "observer_id": "dallas-edge", "observer_type": "device", "modality": "device_telemetry",
+     "deviation": 4.0, "collection_path": "via_aggregator"},
+    {"kind": "probe_loss", "entity_type": "segment", "entity_id": "dallas->equinix-pop",
+     "observer_id": "probe-agent-dallas", "observer_type": "vantage_agent",
+     "modality": "active_probe", "deviation": 3.5}
+  ],
+  "expect": {"top": "sig.ent.middle-mile.physical-degradation", "tier": "confirmed",
+             "owner": "carrier"}
+}

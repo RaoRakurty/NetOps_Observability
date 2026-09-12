@@ -1,0 +1,123 @@
+name: renovate
+
+# Self-hosted Renovate — the patch train (see
+# NetOps_Observability/docs/design/PATCH_AUTOMATION_PLAN_2026-09-03.md and
+# NetOps_Observability/docs/runbooks/patch-train.md).
+#
+# WHY SELF-HOSTED AND NOT THE MEND RENOVATE APP: the hosted App is a third-party
+# service with write access to this repository. CLAUDE.md §3 (zero trust: no
+# implicit trust between services) and §6 (minimal, reviewed dependency surface)
+# both point the same way — run the bot ourselves, from a SHA-pinned action, on
+# our own runner, against config we can read in the diff. Nothing outside the
+# repo gains a write credential.
+#
+# WHY A PAT/APP TOKEN AND NOT `GITHUB_TOKEN`: a PR opened with the default
+# GITHUB_TOKEN does NOT trigger other workflows. backend-ci / frontend-ci /
+# correlation-ci / supply-chain would never run on a Renovate PR, every required
+# check would sit "Expected", and automerge could never fire. The whole gate
+# would be silently inert — the exact failure class §16.1 exists to prevent. So
+# the token is a hard requirement and its absence FAILS this workflow loudly
+# rather than skipping.
+
+on:
+  schedule:
+    # Weekly patch train: Mondays 03:17 UTC. Off the hour on purpose — the top of
+    # the hour is when GitHub's scheduled-workflow queue is most congested.
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (full|extract|lookup) — no PRs are created'
+        required: false
+        default: ''
+        type: string
+      log_level:
+        description: 'Renovate LOG_LEVEL'
+        required: false
+        default: 'info'
+        type: string
+  # Validate the config itself on any PR that touches it. A malformed
+  # renovate.json would otherwise only be discovered on the next Monday, from a
+  # run nobody is watching.
+  pull_request:
+    paths:
+      - '.github/renovate.json'
+      - '.github/workflows/renovate.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: renovate
+  cancel-in-progress: false
+
+env:
+  # Pinned like every other scanner in this repo (SC-010). An unpinned bot is an
+  # unreviewed bot with write access.
+  RENOVATE_VERSION: '44.59.3'
+
+jobs:
+  validate:
+    name: renovate-config-validator (blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+      - name: validate .github/renovate.json
+        # Auto-discovers the repo config. Exits non-zero on any invalid option,
+        # so a typo in a packageRule cannot reach main and quietly disable a rule.
+        run: npx --yes --package "renovate@${RENOVATE_VERSION}" renovate-config-validator
+
+  renovate:
+    name: renovate (patch train)
+    runs-on: ubuntu-latest
+    # Never run the bot from a pull_request event — that would let a PR author
+    # change the bot's behaviour and have it execute in the same run.
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: require the Renovate token (fail loudly, never skip)
+        # §16.1: a maintenance job that cannot do its job must be as visible as
+        # the condition it maintains against. A missing secret here means ZERO
+        # dependency automation; that must be a red run, not a green no-op.
+        env:
+          RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RENOVATE_TOKEN:-}" ]; then
+            echo "::error::secrets.RENOVATE_TOKEN is not set. Renovate cannot run." >&2
+            echo "Create a fine-grained PAT (or GitHub App installation token) with" >&2
+            echo "Contents: read+write, Pull requests: read+write, Workflows: read+write" >&2
+            echo "on RaoRakurty/NetOps_Observability and store it as RENOVATE_TOKEN." >&2
+            echo "See NetOps_Observability/docs/runbooks/patch-train.md -> Setup." >&2
+            exit 1
+          fi
+          echo "RENOVATE_TOKEN present."
+
+      - name: renovate
+        uses: renovatebot/github-action@39b914146caeff8cd512e61c8992f1d5913af85c # v46.2.5
+        with:
+          renovate-version: ${{ env.RENOVATE_VERSION }}
+          token: ${{ secrets.RENOVATE_TOKEN }}
+          configurationFile: .github/renovate.json
+        env:
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
+          RENOVATE_PLATFORM: github
+          # `install` lets Renovate provision the language toolchains it needs to
+          # regenerate lock artifacts: `go mod tidy` + `go mod vendor` for the
+          # vendored backend, `npm install` for the two lockfiles, and
+          # `pip-compile --generate-hashes` for the hash-locked correlation lock.
+          # Without it those updates arrive as a bare manifest edit with a stale
+          # lock — which the offline-build check in backend-ci.yml would catch for
+          # Go, but nothing would catch for npm/pip.
+          RENOVATE_BINARY_SOURCE: install
+          # Honour the `constraints` block in renovate.json rather than whatever
+          # toolchain the container happens to ship.
+          RENOVATE_CONSTRAINTS_FILTERING: strict
+          LOG_LEVEL: ${{ inputs.log_level || 'info' }}
+          RENOVATE_DRY_RUN: ${{ inputs.dry_run || '' }}
+          # GitHub advisory data for `vulnerabilityAlerts`. Same token.
+          GITHUB_COM_TOKEN: ${{ secrets.RENOVATE_TOKEN }}

@@ -1,0 +1,31 @@
+{
+  "name": "AP down with its uplink switch port down: power/cable, confirmed by two independent witnesses",
+  "signals": [
+    {
+      "kind": "wireless_ap_down",
+      "entity_type": "access_point",
+      "entity_id": "ap-abc123",
+      "observer_id": "catalyst_9800:int-1",
+      "observer_type": "controller",
+      "modality": "management_plane",
+      "collection_path": "via_controller:wlc-1",
+      "deviation": 1.0
+    },
+    {
+      "kind": "link_state_change",
+      "entity_type": "interface",
+      "entity_id": "sw-access-3:Gi1/0/12",
+      "observer_id": "syslog-sw-access-3",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "ts_offset_s": 5,
+      "deviation": 1.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.wireless.ap-down-power",
+    "tier": "confirmed",
+    "owner": "netops"
+  }
+}

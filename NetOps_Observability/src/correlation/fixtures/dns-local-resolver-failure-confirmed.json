@@ -1,0 +1,30 @@
+{
+  "name": "FQDN probes fail, resolver SERVFAIL spikes, IP paths clean: confirmed local DNS",
+  "signals": [
+    {
+      "kind": "dns_failure_rate",
+      "entity_type": "device",
+      "entity_id": "dns-1",
+      "observer_id": "syslog-dns1",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 4.0
+    },
+    {
+      "kind": "fqdn_probe_fail",
+      "entity_type": "service",
+      "entity_id": "portal.example",
+      "observer_id": "probe-agent-1",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 4.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.access.dns-local-resolver-failure",
+    "tier": "confirmed",
+    "owner": "netops"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "Customer-path probe loss + independent BGP flap on the DIA egress: confirmed across two planes",
+  "comment": "The trusted customer-path active probe corroborates the control-plane BGP flap on the same DIA seam. A probe alone never confirms; here the independent control_plane witness (a different observer, different modality) lifts it to confirmed. This is the multi-plane sibling of dia-egress-latency (probe only) and bgp-peer-flap (control-plane only) — it wins when BOTH planes corroborate.",
+  "signals": [
+    {"kind": "probe_loss", "entity_type": "path", "entity_id": "prober->aws-use1",
+     "observer_id": "probe-agent-prober", "observer_type": "vantage_agent",
+     "modality": "active_probe", "collection_path": "direct", "deviation": 6.0},
+    {"kind": "bgp_adjacency_change", "entity_type": "device", "entity_id": "wan-r2:192.168.100.5",
+     "observer_id": "syslog-wan-r2", "observer_type": "device",
+     "modality": "control_plane", "collection_path": "direct", "deviation": 0.0}
+  ],
+  "expect": {"top": "sig.ent.middle-mile.dia-egress-corroborated", "tier": "confirmed", "owner": "isp"}
+}

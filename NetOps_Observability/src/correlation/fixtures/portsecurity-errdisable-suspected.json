@@ -1,0 +1,30 @@
+{
+  "name": "Port errdisabled by BPDU guard, single-port outage: suspected protection shutdown",
+  "signals": [
+    {
+      "kind": "errdisable_event",
+      "entity_type": "interface",
+      "entity_id": "sw-acc3:Gi1/0/12",
+      "observer_id": "syslog-sw-acc3",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 2.0
+    },
+    {
+      "kind": "lldp_neighbor_change",
+      "entity_type": "interface",
+      "entity_id": "sw-acc3:Gi1/0/12",
+      "observer_id": "poller-sw-acc3",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 0.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.access.portsecurity-errdisable",
+    "tier": "suspected",
+    "owner": "netops"
+  }
+}

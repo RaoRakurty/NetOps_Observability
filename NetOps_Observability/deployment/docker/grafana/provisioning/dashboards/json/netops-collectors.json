@@ -1,0 +1,107 @@
+{
+  "uid": "netops-collectors",
+  "title": "NetOps · Collector Health",
+  "tags": ["netops", "collectors"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "collector",
+        "label": "Collector",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+        "query": { "query": "label_values(collector_up, collector)", "refId": "StandardVariableQuery" },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Collectors up",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "textMode": "value_and_name" },
+      "targets": [
+        { "refId": "A", "expr": "sum(collector_up{collector=~\"$collector\"})", "legendFormat": "up" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Targets reachable",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 1 }, { "color": "green", "value": 2 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
+      "targets": [
+        { "refId": "A", "expr": "sum(collector_target_up{collector=~\"$collector\"})", "legendFormat": "reachable" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Collector up (per collector)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "collector_up{collector=~\"$collector\"}", "legendFormat": "{{collector}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Target reachability (per device · collector)",
+      "type": "state-timeline",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 6 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] },
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "down", "color": "red" }, "1": { "text": "up", "color": "green" } } }
+          ]
+        },
+        "overrides": []
+      },
+      "options": { "showValue": "never", "mergeValues": true, "rowHeight": 0.85, "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } },
+      "targets": [
+        { "refId": "A", "expr": "collector_target_up{collector=~\"$collector\"}", "legendFormat": "{{device}} · {{collector}}" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Poll duration",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "collector_poll_duration_ms{collector=~\"$collector\"}", "legendFormat": "{{collector}}" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Samples ingested / s",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "fieldConfig": { "defaults": { "unit": "cps", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (collector) (rate(collector_samples{collector=~\"$collector\"}[5m]))", "legendFormat": "{{collector}}" }
+      ]
+    }
+  ]
+}

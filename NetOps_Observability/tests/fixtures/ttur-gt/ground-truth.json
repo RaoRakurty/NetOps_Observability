@@ -1,0 +1,290 @@
+{
+ "chunk_secs": 10,
+ "contract": "Scoring contract: scripts/scale-rca-latency.py, section 'GROUND TRUTH (t-storm profiles)'. Match a persisted incident to a ground-truth incident by cause entity + onset; expected_owner_class / expected_seam_class are scenario labels, informational until the harness provisions seams. The SAME incidents are also written in the network digital twin's record shape to ground_truth.jsonl (+ state.json), so `scripts/lab/twin/twin.py score --runid <id> --run-root data/miniladder` scores this run with no second scorer.",
+ "description": "TRIMMED test fixture: 3 of storm-s11's 345 incidents (one per cause entity_type), fields the tracker-205 clauses read. NOT a scoring corpus.",
+ "devices": {
+  "allocation_rounds": 1,
+  "budget_share": 0.65,
+  "noise_pool": 990,
+  "scenario": 1510,
+  "total": 2500
+ },
+ "digest": "0e1a8d7b4e707c505ae1bc505464be69aa26231d040cfce0fe38c779786404d5",
+ "incidents": [
+  {
+   "blast_radius": [
+    "mlx-090121382mk4-00023",
+    "mlx-090121382mk4-00048",
+    "mlx-090121382mk4-00088",
+    "mlx-090121382mk4-00118",
+    "mlx-090121382mk4-00131",
+    "mlx-090121382mk4-00146",
+    "mlx-090121382mk4-00323",
+    "mlx-090121382mk4-00385",
+    "mlx-090121382mk4-00501",
+    "mlx-090121382mk4-00650",
+    "mlx-090121382mk4-01060",
+    "mlx-090121382mk4-01241",
+    "mlx-090121382mk4-01265",
+    "mlx-090121382mk4-01289",
+    "mlx-090121382mk4-01518",
+    "mlx-090121382mk4-01762",
+    "mlx-090121382mk4-01783",
+    "mlx-090121382mk4-01790",
+    "mlx-090121382mk4-01829",
+    "mlx-090121382mk4-01843",
+    "mlx-090121382mk4-02148",
+    "mlx-090121382mk4-02149",
+    "mlx-090121382mk4-02240",
+    "mlx-090121382mk4-02288",
+    "mlx-090121382mk4-02465"
+   ],
+   "blast_radius_waves": [
+    {
+     "at": 125.6,
+     "devices": [
+      "mlx-090121382mk4-00023",
+      "mlx-090121382mk4-00048",
+      "mlx-090121382mk4-00088",
+      "mlx-090121382mk4-00118",
+      "mlx-090121382mk4-00131",
+      "mlx-090121382mk4-00323",
+      "mlx-090121382mk4-01289",
+      "mlx-090121382mk4-01762",
+      "mlx-090121382mk4-01783",
+      "mlx-090121382mk4-01829",
+      "mlx-090121382mk4-01843",
+      "mlx-090121382mk4-02288"
+     ]
+    },
+    {
+     "at": 185.6,
+     "devices": [
+      "mlx-090121382mk4-00146",
+      "mlx-090121382mk4-00650",
+      "mlx-090121382mk4-01241",
+      "mlx-090121382mk4-01518",
+      "mlx-090121382mk4-01790",
+      "mlx-090121382mk4-02149",
+      "mlx-090121382mk4-02240"
+     ]
+    },
+    {
+     "at": 245.6,
+     "devices": [
+      "mlx-090121382mk4-00385",
+      "mlx-090121382mk4-00501",
+      "mlx-090121382mk4-01265",
+      "mlx-090121382mk4-02148",
+      "mlx-090121382mk4-02465"
+     ]
+    }
+   ],
+   "cause_entity": {
+    "device": "mlx-090121382mk4-01060",
+    "entity_id": "mlx-090121382mk4-01060:GigabitEthernet0/49",
+    "entity_type": "interface",
+    "interface": "GigabitEthernet0/49",
+    "peer": "10.1.0.200"
+   },
+   "cause_kind": "upstream_link_failure",
+   "contradictions": [
+    {
+     "at": 150.6,
+     "device": "mlx-090121382mk4-00023",
+     "entity_id": "mlx-090121382mk4-00023:GigabitEthernet0/50"
+    },
+    {
+     "at": 151.1,
+     "device": "mlx-090121382mk4-00088",
+     "entity_id": "mlx-090121382mk4-00088:GigabitEthernet0/51"
+    }
+   ],
+   "expected_owner_class": "upstream_transport",
+   "expected_seam_class": "wan_transport",
+   "flap_cycles": 1,
+   "incident_id": "I0001",
+   "onset_ts": 125.6,
+   "recovery_ts": 348.9,
+   "symptom_kinds": [
+    "bgp_adjacency_change",
+    "link_state_change"
+   ],
+   "vantages": [
+    "mlx-090121382mk4-00023",
+    "mlx-090121382mk4-00048",
+    "mlx-090121382mk4-00088",
+    "mlx-090121382mk4-00118",
+    "mlx-090121382mk4-00131",
+    "mlx-090121382mk4-00146",
+    "mlx-090121382mk4-00323",
+    "mlx-090121382mk4-00385",
+    "mlx-090121382mk4-00501",
+    "mlx-090121382mk4-00650",
+    "mlx-090121382mk4-01060",
+    "mlx-090121382mk4-01241",
+    "mlx-090121382mk4-01265",
+    "mlx-090121382mk4-01289",
+    "mlx-090121382mk4-01518",
+    "mlx-090121382mk4-01762",
+    "mlx-090121382mk4-01783",
+    "mlx-090121382mk4-01790",
+    "mlx-090121382mk4-01829",
+    "mlx-090121382mk4-01843",
+    "mlx-090121382mk4-02148",
+    "mlx-090121382mk4-02149",
+    "mlx-090121382mk4-02240",
+    "mlx-090121382mk4-02288",
+    "mlx-090121382mk4-02465"
+   ]
+  },
+  {
+   "blast_radius": [
+    "mlx-090121382mk4-00157",
+    "mlx-090121382mk4-02116"
+   ],
+   "blast_radius_waves": [
+    {
+     "at": 645.1,
+     "devices": [
+      "mlx-090121382mk4-00157",
+      "mlx-090121382mk4-02116"
+     ]
+    }
+   ],
+   "cause_entity": {
+    "device": "mlx-090121382mk4-00157",
+    "entity_id": "10.171.0.200",
+    "entity_type": "peer",
+    "interface": null,
+    "peer": "10.171.0.200"
+   },
+   "cause_kind": "bgp_peer_flap",
+   "contradictions": [],
+   "expected_owner_class": "peer_transit",
+   "expected_seam_class": "wan_transport",
+   "flap_cycles": 1,
+   "incident_id": "I0171",
+   "onset_ts": 645.1,
+   "recovery_ts": 692.6,
+   "symptom_kinds": [
+    "bgp_adjacency_change"
+   ],
+   "vantages": [
+    "mlx-090121382mk4-00157",
+    "mlx-090121382mk4-02116"
+   ]
+  },
+  {
+   "blast_radius": [
+    "mlx-090121382mk4-00847"
+   ],
+   "blast_radius_waves": [
+    {
+     "at": 469.1,
+     "devices": [
+      "mlx-090121382mk4-00847"
+     ]
+    }
+   ],
+   "cause_entity": {
+    "device": "mlx-090121382mk4-00847",
+    "entity_id": "mlx-090121382mk4-00847",
+    "entity_type": "device",
+    "interface": "GigabitEthernet0/79",
+    "peer": "10.20.1.200"
+   },
+   "cause_kind": "ospf_adjacency_flap",
+   "contradictions": [],
+   "cycles": [
+    {
+     "down_at": 469.1,
+     "up_at": 507.8
+    },
+    {
+     "down_at": 559.1,
+     "up_at": 602.4
+    },
+    {
+     "down_at": 649.1,
+     "up_at": 677.4
+    }
+   ],
+   "expected_owner_class": "igp_internal",
+   "expected_seam_class": "lan_core",
+   "flap_cycles": 3,
+   "incident_id": "I0271",
+   "onset_ts": 469.1,
+   "recovery_ts": 677.4,
+   "symptom_kinds": [
+    "ospf_adjacency_change"
+   ],
+   "vantages": [
+    "mlx-090121382mk4-00847"
+   ]
+  }
+ ],
+ "parser_coverage": {
+  "bgp_maxprefix": "promoted",
+  "bgp_notification": "promoted",
+  "bgp_route_churn": "not_promoted",
+  "bgp_router_update_burst": "not_promoted",
+  "bgp_session_down": "promoted",
+  "bgp_session_up": "promoted",
+  "lineproto_down": "promoted",
+  "lineproto_up": "promoted",
+  "link_down": "promoted",
+  "link_up": "promoted",
+  "mac_move": "promoted",
+  "ospf_interface_flap": "promoted",
+  "ospf_neighbor_down": "promoted",
+  "ospf_neighbor_up": "promoted",
+  "stp_port_block": "promoted",
+  "stp_port_forward": "promoted",
+  "stp_topology_change": "promoted"
+ },
+ "planned_total_events": 900000,
+ "profile": "t-storm-2.5k",
+ "runid": "090121382mk4",
+ "scenario": "storm-2.5k",
+ "schema": "correlix.scale.ground-truth/1",
+ "seed": 20260829,
+ "templates": {
+  "bgp_peer_flap": {
+   "devices": 200,
+   "devices_per_instance": 2,
+   "instances_built": 100,
+   "instances_planned": 100,
+   "truncated_by_device_budget": false
+  },
+  "enterprise_outage": {
+   "devices": 600,
+   "devices_per_instance": 40,
+   "instances_built": 15,
+   "instances_planned": 15,
+   "truncated_by_device_budget": false
+  },
+  "local_link_fault": {
+   "devices": 150,
+   "devices_per_instance": 1,
+   "instances_built": 150,
+   "instances_planned": 150,
+   "truncated_by_device_budget": false
+  },
+  "ospf_adjacency_flap": {
+   "devices": 60,
+   "devices_per_instance": 1,
+   "instances_built": 60,
+   "instances_planned": 60,
+   "truncated_by_device_budget": false
+  },
+  "upstream_link_failure": {
+   "devices": 500,
+   "devices_per_instance": 25,
+   "instances_built": 20,
+   "instances_planned": 20,
+   "truncated_by_device_budget": false
+  }
+ },
+ "window_s": 900.0
+}

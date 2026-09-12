@@ -1,0 +1,13 @@
+{
+  "name": "STP topology change (syslog) + interface util anomaly (broadcast storm, SNMP): L2 loop confirmed",
+  "comment": "C5: stp_topology_change is already emitted by syslog_control_signal (%SPANTREE-...). The broadcast storm shows as an interface metric anomaly — the independent device_telemetry witness that confirms a loop, not a one-off reconvergence. No coincident link_state_change, so the link-fault discriminator does not fire.",
+  "signals": [
+    {"kind": "stp_topology_change", "entity_type": "interface", "entity_id": "acc-sw1:Gi1/0/24",
+     "observer_id": "syslog-acc-sw1", "observer_type": "device",
+     "modality": "control_plane", "collection_path": "direct", "deviation": 0.0},
+    {"kind": "if_metric_anomaly", "entity_type": "interface", "entity_id": "acc-sw1:Gi1/0/24",
+     "observer_id": "snmp-acc-sw1", "observer_type": "device",
+     "modality": "device_telemetry", "collection_path": "direct", "deviation": 6.0}
+  ],
+  "expect": {"top": "sig.ent.access.stp-topology-change", "tier": "confirmed", "owner": "netops"}
+}

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package notify fans alert events out to one or more channels.
 //
 // Channels are kept tiny and self-contained so adding a new destination is
@@ -5,7 +8,7 @@
 package notify
 
 import (
-	"log"
+	"strings"
 	"sync"
 
 	"netops/backend/models"
@@ -17,13 +20,60 @@ type Channel interface {
 	Send(a models.Alert) error
 }
 
+// ResolveSender is an optional Channel extension for destinations with
+// resolution semantics (e.g. PagerDuty closes the incident it opened for the
+// same dedup key). Channels without it simply never learn about resolutions.
+type ResolveSender interface {
+	SendResolve(a models.Alert) error
+}
+
+// PageClassifier is an optional Channel extension: it declares which alerts
+// this destination treats as a PAGE — the ones a human is expected to be woken
+// by. The delivery layer consults it for its rate-limit retry policy, and the
+// ntfy channel uses the same answer to decide whether an alert may spend the
+// shared push budget's page reserve (pushbudget.go). A channel that does not
+// implement it pages for nothing, which is the safe default: the reserve and
+// the extra retry are both scarce resources.
+type PageClassifier interface {
+	Pages(a models.Alert) bool
+}
+
+// channelPages asks a channel whether this alert is a page, seeing through the
+// wrappers (SeverityGate, PlatformScopeFilter) that decorate it.
+func channelPages(c Channel, a models.Alert) bool {
+	if pc, ok := c.(PageClassifier); ok {
+		return pc.Pages(a)
+	}
+	return false
+}
+
 // Dispatcher holds the registered channels and forwards alerts to each.
+//
+// Delivery itself is owned by the bounded worker pool in delivery.go (F-22):
+// Dispatch/DispatchTo/DispatchResolve ENQUEUE, they no longer spawn a goroutine
+// per channel per alert. DispatchToResults stays synchronous — its callers want
+// per-channel receipts and already run off the request path.
 type Dispatcher struct {
 	mu       sync.RWMutex
 	channels []Channel
+	delivery *delivery
+
+	// budgets is the process's shared per-push-server token-bucket registry
+	// (pushbudget.go), held here only so WriteMetrics can publish its gauges
+	// next to the delivery counters. Injected, never a package global.
+	budgets *PushBudgets
 }
 
-func NewDispatcher() *Dispatcher { return &Dispatcher{} }
+// SetPushBudgets installs the shared push-budget registry for the metrics
+// surface. The buckets themselves are handed to the senders at wiring time;
+// this is the read side.
+func (d *Dispatcher) SetPushBudgets(b *PushBudgets) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.budgets = b
+}
+
+func NewDispatcher() *Dispatcher { return &Dispatcher{delivery: newDelivery()} }
 
 func (d *Dispatcher) Register(c Channel) {
 	if c == nil {
@@ -34,20 +84,149 @@ func (d *Dispatcher) Register(c Channel) {
 	d.channels = append(d.channels, c)
 }
 
-// Dispatch sends the alert to all registered channels concurrently.
-// Channel errors are logged but never returned — alert delivery should
-// never block the evaluation loop.
+// Replace swaps the channel sharing the same Name() (or appends it if absent),
+// so a channel can be reconfigured at runtime from the admin UI without a
+// restart. Pair with Remove to disable a channel.
+func (d *Dispatcher) Replace(c Channel) {
+	if c == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i, ex := range d.channels {
+		if ex.Name() == c.Name() {
+			d.channels[i] = c
+			return
+		}
+	}
+	d.channels = append(d.channels, c)
+}
+
+// Remove deletes the channel with the given name (no-op if absent).
+func (d *Dispatcher) Remove(name string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := d.channels[:0]
+	for _, c := range d.channels {
+		if c.Name() != name {
+			out = append(out, c)
+		}
+	}
+	d.channels = out
+}
+
+// Dispatch queues the alert for delivery to every registered channel. It never
+// blocks the alert evaluation loop and never spawns an unbounded goroutine per
+// channel (F-22): sends run on the fixed worker pool, with retries and
+// per-channel counters.
 func (d *Dispatcher) Dispatch(a models.Alert) {
+	for _, c := range d.snapshot() {
+		d.delivery.enqueue(sendJob{ch: c, alert: a})
+	}
+}
+
+// snapshot copies the channel list under the read lock, so delivery never runs
+// with the registry lock held.
+func (d *Dispatcher) snapshot() []Channel {
 	d.mu.RLock()
-	channels := make([]Channel, len(d.channels))
-	copy(channels, d.channels)
-	d.mu.RUnlock()
+	defer d.mu.RUnlock()
+	out := make([]Channel, len(d.channels))
+	copy(out, d.channels)
+	return out
+}
+
+// DispatchResolve tells every resolution-capable channel that an alert
+// cleared, so destinations like PagerDuty close the incident they opened
+// (same dedup key) instead of accumulating stale open incidents forever.
+// Channels without ResolveSender are skipped; errors are logged, never block.
+func (d *Dispatcher) DispatchResolve(a models.Alert) {
+	channels := d.snapshot()
 
 	for _, c := range channels {
-		go func(c Channel) {
-			if err := c.Send(a); err != nil {
-				log.Printf("notify %s: %v", c.Name(), err)
-			}
-		}(c)
+		if _, ok := c.(ResolveSender); !ok {
+			continue
+		}
+		d.delivery.enqueue(sendJob{ch: c, alert: a, resolve: true})
 	}
+}
+
+// Names returns the names of all registered channels — lets the UI present the
+// delivery destinations actually configured (so "Send now" only offers real
+// channels rather than a hard-coded list).
+func (d *Dispatcher) Names() []string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := make([]string, 0, len(d.channels))
+	for _, c := range d.channels {
+		out = append(out, c.Name())
+	}
+	return out
+}
+
+// DispatchTo sends the alert only to the named channels (case-insensitive match
+// on Channel.Name). An empty/nil selection falls back to Dispatch (all
+// channels). Returns the number of channels the alert was dispatched to, so
+// callers (e.g. "Send now") can report "delivered to N destination(s)".
+func (d *Dispatcher) DispatchTo(a models.Alert, names []string) int {
+	if len(names) == 0 {
+		d.Dispatch(a)
+		return len(d.Names())
+	}
+	want := make(map[string]bool, len(names))
+	for _, n := range names {
+		want[strings.ToLower(strings.TrimSpace(n))] = true
+	}
+	channels := d.snapshot()
+
+	sent := 0
+	for _, c := range channels {
+		if !want[strings.ToLower(c.Name())] {
+			continue
+		}
+		sent++
+		// An explicit DispatchTo (e.g. a scheduled report) is an intentional
+		// send, so bypass any severity gate wrapping the channel — a low-severity
+		// report must still reach an email channel gated to "critical" for alerts.
+		target := c
+		if g, ok := c.(interface{ Unguarded() Channel }); ok {
+			target = g.Unguarded()
+		}
+		d.delivery.enqueue(sendJob{ch: target, alert: a})
+	}
+	return sent
+}
+
+// SendResult is the per-channel outcome of a DispatchToResults call.
+type SendResult struct {
+	Channel string
+	Err     error
+}
+
+// DispatchToResults sends the alert to the named channels SYNCHRONOUSLY and
+// returns a per-channel result, so a caller that needs delivery receipts (the
+// report pipeline, recording per-channel DeliveryStatus) knows which channels
+// succeeded. An empty/nil selection targets all channels. The intentional-send
+// severity-gate bypass matches DispatchTo. Unlike Dispatch/DispatchTo, this
+// blocks until every send returns — callers run it off the request path.
+func (d *Dispatcher) DispatchToResults(a models.Alert, names []string) []SendResult {
+	want := make(map[string]bool, len(names))
+	for _, n := range names {
+		want[strings.ToLower(strings.TrimSpace(n))] = true
+	}
+	all := len(names) == 0
+
+	channels := d.snapshot()
+
+	var results []SendResult
+	for _, c := range channels {
+		if !all && !want[strings.ToLower(c.Name())] {
+			continue
+		}
+		target := c
+		if g, ok := c.(interface{ Unguarded() Channel }); ok {
+			target = g.Unguarded()
+		}
+		results = append(results, SendResult{Channel: c.Name(), Err: target.Send(a)})
+	}
+	return results
 }

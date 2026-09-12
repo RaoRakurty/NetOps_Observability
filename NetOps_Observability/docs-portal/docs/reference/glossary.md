@@ -1,0 +1,58 @@
+---
+title: Glossary
+sidebar_label: Glossary
+sidebar_position: 50
+description: The Correlix vocabulary, alphabetized, with the value each term takes in the product and the page that uses it.
+page_type: reference
+---
+
+# Glossary
+
+One word per concept. Where a term has a closed set of values, the set is given
+in full, because a value outside it is not something Correlix produces.
+
+| Term | Definition | Where it is used |
+|---|---|---|
+| **Acting tenant** | The one tenant a cross-tenant principal has opened. It is selected with the `X-Acting-Tenant` header or the `?as_tenant=` query parameter, and it can only narrow the caller's scope, never widen it. A value a non-owner cannot reach is ignored. | [Watch a prefix or an ASN](/bgp/watchlist) |
+| **Adj-RIB-In** | The routes a BGP speaker learned from a peer, before or after its inbound policy. BMP records carry `adj-rib-in-pre-policy` or `adj-rib-in-post-policy`, decided by the per-peer flag on the wire. Adj-RIB-Out is a different table and is not presented as this one. | [Point a router at the BMP receiver](/bgp/bmp) |
+| **Admission stamp** | The field the ingest pipeline writes on every syslog line to record whether the correlation engine would admit it, `cx_admission.by` with a value of `severity`, `marker` or `unscreenable`. A line without the stamp is unrecognized. The trap lane publishes no such verdict, and the endpoint says so rather than guessing. | [What an empty result means](/reference/honest-states) |
+| **Aggregation plane** | The stage that folds repeated observations that carry no new causal information into one keyed state, keyed by tenant, entity, kind, severity and a 60-second bucket. Every observation that does carry causal information is forwarded immediately, annotated with the state it collapsed. | [Root-cause analysis explained](/investigate/rca-explained) |
+| **Alert** | One rule firing, with a fired time and a resolved time. A *notification* is its delivery to a channel; the two are not the same thing. | [Monitoring and alerting](/monitoring/overview) |
+| **ASPA** | Autonomous System Provider Authorization: a signed object naming the providers a customer AS authorizes to propagate its routes. No public per-ASN ASPA API exists, so Correlix answers an honest "not configured" unless `BGP_ASPA_PROVIDER_URL` names your own validator. | [BGP operations](/bgp/overview) |
+| **BMP** | BGP Monitoring Protocol, RFC 7854. A router opens a TCP session to Correlix and pushes a copy of its Adj-RIB-In. The receiver is read-only toward the network and configures nothing. | [Point a router at the BMP receiver](/bgp/bmp) |
+| **Bogon** | An address block that must never appear in the global routing table: RFC-reserved or special-purpose space, and space IANA has not delegated to any registry. | [Review bogon sightings](/bgp/bogons) |
+| **Collector** | The component that gathers telemetry for one protocol or source, such as `snmpmetrics`, `lldp` or `gnmi`. Each reports its own target count, reachable count and last error. | [Monitoring and alerting](/monitoring/overview) |
+| **Correlation object** | The engine's output unit: one window of observations resolved against the signature catalog and the seam inventory, carrying its hypotheses, verdict tier, affected entities and grounding. | [Root-cause analysis explained](/investigate/rca-explained) |
+| **Dead-man's switch** | The external watchdog that pings an off-host heartbeat service every minute while the stack is healthy. When the host or its network dies, the pings stop and the off-host service raises the alarm. It runs outside the stack on purpose, because a stack cannot report its own death. | [Monitoring and alerting](/monitoring/overview) |
+| **Drift** | The per-device verdict comparing a captured configuration against its history: `in_sync`, `changed` (differs from the previous capture), `drifted` (differs from the golden baseline), or `unknown` (never captured, or the last capture failed). | [Security and compliance](/security/overview) |
+| **Episode** | Repeated firings of the same tenant, resource, rule and state folded into one row with a first seen, a last seen and a count. Its lifecycle is `active`, `cleared`, then `closed`. Muting or snoozing suppresses notifications only; the row stays visible. | [Monitoring and alerting](/monitoring/overview) |
+| **Evidence class** | In correlation, the wire lane a verdict arrived on: a registered topic, kind set and modality that the engine grounds generically. Security was added as the fourth evidence class with no security-specific engine code, and BGP is registered the same way. Within security findings the classes are `posture`, `exposure` and `signal`. | [Security and compliance](/security/overview) |
+| **Exposure** | A finding about seam-aware reachability: a service that answers where the seam says it should not. Exposure findings carry the seam context that makes them contextual rather than a generic open-port flag. | [Security and compliance](/security/overview) |
+| **Fidelity** | The parser-evidence grade on a rule or a row, strongest first: `live_validated`, `lab_validated`, `doc_claimed`, then `code`, which displays as "unverified". When rules are fused the weakest grade wins, and a group where nothing declared a grade carries no badge at all. | [Protocol diagnostics](/investigate/protocol-diagnostics) |
+| **Finding** | One security verdict about one subject under one rule, normalized to OCSF. Its status is Pass, Warning, Fail, Not applicable or Error, so a control that could not be evaluated is never recorded as a pass. | [Security and compliance](/security/overview) |
+| **Geofeed** | An RFC 8805 CSV a holder publishes describing where its own address space is used, discovered from the registry object per RFC 9092. Malformed rows are dropped and counted, never repaired. | [Find a published geofeed](/bgp/geofeed) |
+| **Golden configuration** | The captured configuration version an operator marked as the intended baseline for a device. Drift is measured against it. | [Security and compliance](/security/overview) |
+| **Incident** | The operational unit of trouble: one grouped, root-caused problem with a lifecycle an operator drives, rather than a page per symptom. In BGP operations the word also names one prefix's current routing verdict with its history. | [Root-cause analysis explained](/investigate/rca-explained) |
+| **Lane** | Two things wear this name. A *producer lane* is a bounded per-tenant background runtime that publishes evidence onto a bus topic. An *investigation lane* is one evidence plane's column in the workspace timeline, rendered even when empty so the operator sees what is missing. | [Root-cause analysis explained](/investigate/rca-explained) |
+| **Modality class** | The measurement plane an observation came from: `active_probe`, `passive_flow`, `control_plane`, `device_telemetry`, `management_plane`, `active_verification`, and `security`, which is the verdict plane. A management-plane or verdict-plane source corroborates, and can never confirm on its own. Confirmation needs two independent planes. | [Root-cause analysis explained](/investigate/rca-explained) |
+| **Monitor** | One tenant-authored rule plus its last evaluation outcome. Its mode is `threshold` or `anomaly`, and its state is `never_evaluated`, `ok`, `firing`, `no_data`, `error` or `disabled`. | [Monitoring and alerting](/monitoring/overview) |
+| **Observation** | One raw collected row: a metric sample, a log line, a trap, a probe result. The operator-facing unit above it is a symptom. The engine's own term for the same row is `signal`; it does not appear in the console. | [Root-cause analysis explained](/investigate/rca-explained) |
+| **Organization** | A set of tenants. Organization isolation is derived from tenant isolation: an organization is expanded into its tenant ids, and reach is decided per tenant. | [Administration](/administration/overview) |
+| **Page tier** | Which of three deliveries a host-monitoring alert gets: `page`, `warning` or `resolved`. Promotion to `page` is by an explicit label on the rule, never by severity, so only the few page-worthy conditions wake anyone. | [Monitoring and alerting](/monitoring/overview) |
+| **Posture** | A finding class covering hardening, compliance and configuration-audit state, evaluated against a captured configuration. With no capture the control is reported as not assessed, never as a pass. | [Security and compliance](/security/overview) |
+| **RCA case** | The operator-facing view of one correlation object: the verdict, the confidence ladder, the evidence lanes and the seam-owned handoff. | [Root-cause analysis explained](/investigate/rca-explained) |
+| **ROA** | Route Origin Authorization: the signed RPKI object saying which AS may originate a prefix, and up to what length. It is what makes an invalid announcement droppable. | [Check RPKI origin validation](/bgp/rpki) |
+| **Seam** | An ownership transition in packet-forwarding responsibility. The five canonical types are final: `DX`, `VPN`, `SDWAN`, `DIA` and `CLOUD_BACKBONE`. `DIA` is displayed as "ISP", because that is what operators call the handoff, and WAN is the umbrella over the enterprise handoffs. "Boundary" is a different word, reserved for zones of the path spine; wireless and wired are both LAN. | [Root-cause analysis explained](/investigate/rca-explained) |
+| **Sensor** | A device-reported physical measurement point read over ENTITY-SENSOR-MIB, RFC 3433: transceiver optical power, temperature, voltage and fan readings. | [Monitoring and alerting](/monitoring/overview) |
+| **Shadow rule** | A candidate parser rule that is evaluated like any other and has its hits counted, then emits nothing. It is how a grammar earns promotion: you measure how often it would have fired on real traffic before it is allowed to produce evidence. A shadow rule contributes nothing to the ingest screen. | [What an empty result means](/reference/honest-states) |
+| **Storm mode** | A declared engine state with an entry and an exit band, reached when the buffer fills or when the oldest unevaluated observation ages past its bound. In storm mode cohorts shrink and low-value singletons fold into a noise aggregate. Nothing is dropped from the durable bus. | [Root-cause analysis explained](/investigate/rca-explained) |
+| **Tenant** | The isolation unit. Every stored row is stamped with the tenant of the token that wrote it, and every read is filtered by the caller's tenant. A resource id belonging to another tenant answers `404`. | [Administration](/administration/overview) |
+| **TOFU** | Trust on first use, the SSH host-key policy. The first host key seen for an address is recorded, and a later mismatch is refused as a possible interception. A changed key is never accepted blindly. | [Protocol diagnostics](/investigate/protocol-diagnostics) |
+| **Vantage point** | One independent observer position a routing fact was seen from, such as a route-collector peer or a BMP peer. Counting them is what makes "two sources agree" a measurable statement, and path-derived verdicts require at least two. | [Configure BGP alerting](/bgp/alerting) |
+| **Verdict** | What the evidence supports about a case, on the ladder `confirmed`, `suspected`, `undetermined`, `contradicted`, `recovered`. `contradicted` means the leading cause was ruled out by discriminating evidence; `recovered` means the incident cleared. | [Root-cause analysis explained](/investigate/rca-explained) |
+
+## Related
+
+- [What an empty result means](/reference/honest-states)
+- [BGP operations](/bgp/overview)
+- [The API reference](/reference/api)

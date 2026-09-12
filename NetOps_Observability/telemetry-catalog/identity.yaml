@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# Shared identity model — the canonical entity keys that metrics, events, flows,
+# and config all normalize to, so a metric and an event about the same BGP peer
+# (or interface, tunnel, …) join on the same identity.
+#
+# `aliases` are the raw label/tag names (per vendor/transport) that reconcile to
+# the canonical key. The normalization engine renames any alias it sees to the
+# canonical key.
+version: 1
+
+entities:
+  device:
+    canonical_key: device
+    aliases: [source, hostname, system-name, system_name]
+    reconcile: "gNMI target name / SNMP sysName. mgmt-IP and serial are secondary identities (see NetBox dedup IP->serial->name)."
+
+    # gnmic tag names vary by where the interface key sits in the path:
+    #   interface_name (OC interface list), interface_interface-name (SRL native
+    #   isis/.../interface[interface-name=*]).
+  interface:
+    canonical_key: ifName
+    secondary_keys: [ifIndex]
+    aliases: [interface_name, "interface_name", "interface_interface-name", name]
+    reconcile: "ifName is the stable human key. ifIndex kept for joinability but is NOT a cross-epoch key (RFC 2863: reassigned on agent re-init)."
+
+  vrf:
+    canonical_key: vrf
+    aliases: ["network-instance_name", network_instance, "network-instance"]
+    reconcile: "OpenConfig network-instance name; 'default' = global routing table."
+
+  bgp_peer:
+    canonical_key: peer
+    parent: device
+    aliases: ["neighbor_neighbor-address", "neighbor_peer-address", neighbor_address, peer_address]
+    reconcile: "BGP neighbor remote address. (device, vrf, peer) is the unique session identity."
+
+  isis_neighbor:
+    canonical_key: isis_neighbor
+    parent: device
+    aliases: ["adjacency_neighbor-system-id", neighbor_system_id, isis_adj_neighbor]
+    reconcile: "IS-IS neighbor system-id (e.g. 0100.0000.0011). The (device, isis_neighbor) pair is the unique adjacency identity."
+
+  isis_level:
+    canonical_key: isis_level
+    aliases: ["adjacency_adjacency-level", isis_adj_level, level]
+    reconcile: "IS-IS level (L1/L2) — a path list-key, becomes a label."
+
+  lsp:
+    canonical_key: lsp
+    parent: device
+    aliases: [tunnel_name, lsp_name, "name"]
+    reconcile: "MPLS TE LSP / tunnel name (mplsTunnelName / OC lsp name)."
+
+  afi_safi:
+    canonical_key: afi_safi
+    aliases: ["afi-safi_afi-safi-name", afi_safi_name, address_family]
+    reconcile: >-
+      BGP address family, the OpenConfig COMBINED afi-safi-name (IPV4_UNICAST /
+      IPV6_UNICAST / L2VPN_EVPN). Live capture corrected the original spec, which
+      (from the SNMP BGP4V2-MIB) assumed separate afi+safi. One label matches the
+      device model; SNMP BGP4V2 composes afi_safi from its numeric AFI/SAFI at
+      collection time. Carries the multi-AFI coverage that BGP4-MIB (v4-only) lacks.
+
+  # ---- declared now, populated in later phases (Phase 3+) ----
+  circuit:        {canonical_key: circuit,  reconcile: "operator circuit-id / ifAlias / SD-WAN TLOC color (Phase 3+)"}
+  tunnel:         {canonical_key: tunnel,   reconcile: "IPsec/GRE/overlay tunnel id; endpoints src/dst (Phase 3+)"}
+  site:           {canonical_key: site,     reconcile: "topology/SoT site grouping (Phase 3+)"}
+  app:            {canonical_key: app,      reconcile: "service/app label from flow attribution or service catalog (Phase 3+)"}
+  cloud_resource: {canonical_key: cloud_resource, reconcile: "TGW/VGW/DX/VPC/ENI ARN-or-id (Phase 3+, ties to seam model)"}

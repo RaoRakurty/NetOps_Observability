@@ -1,0 +1,115 @@
+# CORRELIX Network Digital Twin — fidelity-wave demo scenario (tracker 152,
+# docs/design/network-digital-twin.md §4.3–§4.5).
+#
+# A compact 3-tenant / 4-device topology exercising the wave's new lanes:
+# linkDown TRAP evidence on a cascade story, a coldStart device_restart story,
+# and a NetFlow traffic_drop story over a steady NetFlow v5 baseline. Runs on
+# T1 in both fidelity modes; `--fidelity source_ip` additionally attributes
+# flows by sampler_address and traps by source IP. Trap stories require
+# FEATURE_SNMP_TRAPS=true on the stack (twin.py refuses otherwise).
+
+twin: 1
+
+meta:
+  name: twin-fidelity-demo
+  description: >
+    Trap + NetFlow lane demo: link-down cascade with linkDown trap, coldStart
+    restart, and an exporter traffic drop, across three tenants for partition
+    coverage.
+  seed: 20260817
+
+tenants:
+  - alias: acme
+    org: acme-corp
+  - alias: bluesky
+    org: bluesky-ltd
+  - alias: coyote
+    org: coyote-inc
+
+sites:
+  - { id: dal, name: "Dallas DC" }
+  - { id: aus, name: "Austin branch" }
+
+devices:
+  - name: edge-f1
+    tenant: acme
+    site: dal
+    role: edge
+    interfaces:
+      - { name: Ethernet1, speed_mbps: 10000, description: "WAN handoff" }
+      - { name: Ethernet2, speed_mbps: 10000, description: "core uplink", peer: "core-f1:Ethernet1" }
+    bgp_neighbors:
+      - { peer_ip: 169.254.10.2, asn: 7224, description: "external peer" }
+    snmp: { version: v2c, community: public }
+  - name: core-f1
+    tenant: acme
+    site: dal
+    role: core
+    interfaces:
+      - { name: Ethernet1, speed_mbps: 10000, peer: "edge-f1:Ethernet2" }
+      - { name: Ethernet2, speed_mbps: 25000, description: "fabric" }
+    snmp: { version: v2c, community: public }
+  - name: br-f1
+    tenant: bluesky
+    site: aus
+    role: edge
+    interfaces:
+      - { name: GigabitEthernet0/0, speed_mbps: 1000, description: "DIA handoff" }
+    bgp_neighbors:
+      - { peer_ip: 203.0.113.9, asn: 64512, description: "ISP eBGP" }
+    snmp: { version: v3, usm: { user: twin-sim, auth: sha, priv: aes128 } }
+  - name: rtr-f1
+    tenant: coyote
+    site: aus
+    role: wan
+    interfaces:
+      - { name: Ethernet1, speed_mbps: 1000 }
+    snmp: { version: v2c, community: public }
+
+links:
+  - { a: "edge-f1:Ethernet2", b: "core-f1:Ethernet1" }
+
+baseline:
+  syslog:  { per_device_eps: 0.2, severity_mix: { notice: 0.8, warning: 0.2 } }
+  flows:   { per_edge_device_fps: 4, protocol: netflow5 }   # → goflow2 :2055
+  metrics: { snmp_poll: passive }   # answered by the snmpsim agents
+  probes:
+    - { prober: twin-vantage-1, target: edge-f1, interval_s: 30,
+        intent: customer_path, vantage: public_cloud_agent }
+
+stories:
+  # §5.1 with the fidelity wave's trap corroboration
+  - id: ld-trap-1
+    template: link_down_cascade
+    trigger: { at: "+60s" }
+    affected: { devices: [edge-f1], tenants: [acme] }
+    params: { with_trap: true, probe_loss_pct: 85 }
+    expect:
+      rca:
+        verdict_tier_at_least: suspected
+        affected_includes: [edge-f1]
+        single_incident: true
+      forbid:
+        cross_tenant_merge: true
+
+  # §5.6 exporter volume collapse (NetFlow lane; probe loss makes it visible)
+  - id: drop-1
+    template: traffic_drop
+    trigger: { at: "+90s" }
+    affected: { devices: [br-f1], tenants: [bluesky] }
+    params: { drop_pct: 90, duration_s: 60, probe_loss_pct: 30 }
+    expect:
+      forbid:
+        cross_tenant_merge: true
+
+  # §5.7 coldStart + interface-up storm on return
+  - id: restart-1
+    template: device_restart
+    trigger: { at: "+120s" }
+    affected: { devices: [core-f1], tenants: [acme] }
+    params: { reboot_s: 45 }
+    expect:
+      rca:
+        affected_includes: [core-f1]
+      forbid:
+        cross_tenant_merge: true

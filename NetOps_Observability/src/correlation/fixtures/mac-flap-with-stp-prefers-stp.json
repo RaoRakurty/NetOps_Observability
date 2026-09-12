@@ -1,0 +1,16 @@
+{
+  "name": "MAC flap WITH a coincident STP topology change: the MAC moves are a symptom of L2 reconvergence — prefer the STP signature",
+  "comment": "C5 discriminator: a MAC flap concurrent with an STP topology change is downstream of the topology churn. The mac-flap discriminator fires (stp_topology_change present) and defers to sig.ent.access.stp-topology-change, which also absorbs the mac_flap as its optional storm witness and wins.",
+  "signals": [
+    {"kind": "mac_flap", "entity_type": "device", "entity_id": "acc-sw2",
+     "observer_id": "syslog-acc-sw2", "observer_type": "device",
+     "modality": "control_plane", "collection_path": "direct", "deviation": 0.0},
+    {"kind": "stp_topology_change", "entity_type": "interface", "entity_id": "acc-sw2:Gi1/0/24",
+     "observer_id": "syslog-acc-sw2", "observer_type": "device",
+     "modality": "control_plane", "collection_path": "direct", "deviation": 0.0},
+    {"kind": "if_metric_anomaly", "entity_type": "interface", "entity_id": "acc-sw2:Gi1/0/24",
+     "observer_id": "snmp-acc-sw2", "observer_type": "device",
+     "modality": "device_telemetry", "collection_path": "direct", "deviation": 6.0}
+  ],
+  "expect": {"top": "sig.ent.access.stp-topology-change", "tier": "confirmed", "owner": "netops"}
+}

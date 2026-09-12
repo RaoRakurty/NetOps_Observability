@@ -1,7 +1,7 @@
 # Architecture
 
 The platform follows the reference NOC/SOC architecture: dedicated edge
-collectors, a Vector aggregation layer, a Redpanda streaming bus, fan-
+collectors, a Vector aggregation layer, an Apache Kafka streaming bus, fan-
 out to OpenSearch (hot search) + VictoriaMetrics (TS) + ClickHouse
 (OLAP), a Python correlation/AI engine, a Go API + GraphQL gateway, and
 a React UI with ECharts and an LLM-backed copilot.
@@ -11,14 +11,15 @@ a React UI with ECharts and an LLM-backed copilot.
        │             │             │
     Syslog        SNMP          Flow (NetFlow/IPFIX/sFlow)
        ▼             ▼             ▼
-   syslog-ng     Telegraf       goflow2
+   syslog-ng   Go collectors    goflow2
+               (in the api)
        │             │             │
        └─────────────┼─────────────┘
                      ▼
        VECTOR AGGREGATOR  (parse, normalize, enrich, buffer)
                      │
                      ▼
-       REDPANDA / KAFKA  ─ topics: netops.{syslog, metrics, flows, applogs}
+       APACHE KAFKA (KRaft) ─ topics: netops.{syslog, metrics, flows, applogs}
                      │
                      ▼
               VECTOR ROUTER
@@ -53,9 +54,11 @@ deliberately not asked to do anything else.
 * **syslog-ng** listens on UDP/TCP 514, parses RFC3164 and RFC5424, and
   forwards to vector-aggregator over TCP/6601 with `syslog-protocol`
   framing. Config: `deployment/docker/syslog-ng/syslog-ng.conf`.
-* **Telegraf** polls SNMP on the configured device list, emits InfluxDB
-  line protocol over TCP/9094 to vector-aggregator's `socket` source.
-  Config: `deployment/docker/telegraf/telegraf.conf`.
+* **SNMP polling is native Go, in-process in the api** —
+  `src/backend/collectors/` (`poller.go`, `snmpmetrics.go`, `snmpv3.go`)
+  polls the device list and produces `netops.metrics` to the bus directly.
+  Telegraf is **legacy and does not run** (`profiles: [legacy]` in compose,
+  kept only for archaeology); do not point an incident investigation at it.
 * **goflow2** decodes NetFlow v5/v9, IPFIX, sFlow and emits one JSON
   record per flow to stdout. Vector picks them up via `docker_logs`.
   Config: `deployment/docker/goflow2/goflow2.yaml`.
@@ -68,24 +71,27 @@ behind a Layer-4 load balancer without affecting syslog or SNMP paths.
 
 `deployment/docker/vector/vector.yaml`. Receives from the three edges,
 parses (JSON unpacking on app logs), normalizes (uniform `signal`
-field), enriches (device labels), buffers, and produces to four Redpanda
+field), enriches (device labels), buffers, and produces to four Kafka
 topics:
 
 | Topic              | Source             | Sink (router)                    |
 |--------------------|--------------------|----------------------------------|
 | `netops.applogs`   | docker_logs        | OpenSearch `netops-applogs-*`    |
 | `netops.syslog`    | syslog-ng          | OpenSearch `netops-syslog-*`     |
-| `netops.metrics`   | Telegraf           | VictoriaMetrics remote_write     |
-| `netops.flows`     | goflow2 (stdout)   | OpenSearch + ClickHouse          |
+| `netops.metrics`   | Go collectors (api) | VictoriaMetrics remote_write     |
+| `netops.flows`     | vector-router re-key of `netops.flows.raw` (goflow2 kafka://) | OpenSearch + ClickHouse |
 
-### Redpanda
+### Apache Kafka
 
-Single-node Kafka-API-compatible broker. Provides the decoupling
-benefits of a streaming bus (replay, multi-consumer fan-out, ingestion
-absorption during storage outages) without a Zookeeper dependency or
-JVM tuning. The external Kafka port (host 19092 by default) is exposed
-so future producers — a SIEM, a data-lake exporter, a custom analytics
-job — can subscribe without touching the aggregator.
+Single-node broker in KRaft mode. Provides the decoupling benefits of
+a streaming bus (replay, multi-consumer fan-out, ingestion absorption
+during storage outages) without a Zookeeper dependency. The broker is
+internal to the compose network (`kafka:9092`, no host ports); every
+client resolves it via `BROKER_URLS` in `.env`, and a one-shot
+`kafka-init` service pre-creates the netops.* topics. Future producers
+— a SIEM, a data-lake exporter, a custom analytics job — attach by
+pointing the stack at an external Kafka-compatible cluster
+(`install-correlix.sh --external-kafka --broker-urls ...`).
 
 ### Vector router
 
@@ -109,7 +115,9 @@ consumer-group offset, not from scratch — replay is free.
 * **OpenSearch Dashboards** — power-user UI for ad-hoc exploration,
   served under `/search/`.
 * **VictoriaMetrics** — long-term time-series for SNMP + telemetry.
-  Scraped by Prometheus on the side for rule evaluation.
+  Self-metrics are scraped by VictoriaMetrics itself (vmscrape.yml — the
+  Prometheus service was removed; VM serves the same PromQL API the alert
+  engine evaluates rules.yaml against).
 * **ClickHouse** — OLAP. Tables: `netops.flows` (raw flow records, TTL
   90 days), `netops.flows_hourly` (materialized rollup for top-talker
   dashboards), `netops.findings` (correlation engine output). Init SQL
@@ -130,6 +138,14 @@ the netops.* topics, runs:
 
 Writes findings to `clickhouse.netops.findings`; the Findings tab in the
 UI renders them as a ranked triage queue.
+
+**Horizontal scale (scale P0):** the engine scales by tenant-keyed
+co-partitioning — every bus producer keys records by tenant (Java murmur2),
+every `netops.*` topic carries `BUS_PARTITIONS` partitions, and the
+consumer's range assignor gives `docker compose up --scale correlation=N`
+instance k partition k of every topic: a complete, disjoint slice of tenants
+with worker-local state. Full design, producer/keying matrix, scale-up drain
+procedure and multi-replica endpoint semantics: `docs/scale-correlation.md`.
 
 ### API + query layer
 
@@ -169,9 +185,8 @@ Tabs:
 | Findings   | `/api/findings` (ClickHouse)         |
 | Logs       | `/api/logs/search` (OpenSearch DSL)  |
 | Flows      | `/api/flows/*` (ClickHouse + ECharts) |
-| Copilot    | `/api/copilot/chat` (LLM)            |
-| Prometheus | iframe                               |
-| Grafana    | iframe (Prometheus + Victoria + ClickHouse datasources) |
+| Iris AI | `/api/copilot/chat` (LLM)           |
+| Self-Monitoring | iframe (Grafana, self-monitoring add-on; Victoria + ClickHouse datasources) |
 | OS Dashboards | iframe (`/search/`)               |
 | Settings   | integration status + manual refresh  |
 

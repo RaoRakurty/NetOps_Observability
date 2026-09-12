@@ -1,0 +1,13 @@
+{
+  "name": "VTEP BFD down (NX-OS %NVE) + NVE source-interface metric anomaly (SNMP): VTEP unreachable confirmed",
+  "comment": "P2/P3 overlay: vtep_state_change emitted from %NVE-5-BFD_CC_STATE_CHANGE. The independent device_telemetry witness on the source interface confirms a real overlay blackhole. No coincident link-down, so the link-fault discriminator does not fire.",
+  "signals": [
+    {"kind": "vtep_state_change", "entity_type": "device", "entity_id": "leaf3",
+     "observer_id": "syslog-leaf3", "observer_type": "device",
+     "modality": "control_plane", "collection_path": "direct", "deviation": 0.0},
+    {"kind": "if_metric_anomaly", "entity_type": "interface", "entity_id": "leaf3:Loopback1",
+     "observer_id": "snmp-leaf3", "observer_type": "device",
+     "modality": "device_telemetry", "collection_path": "direct", "deviation": 5.0}
+  ],
+  "expect": {"top": "sig.ent.fabric.vtep-unreachable", "tier": "confirmed", "owner": "netops"}
+}

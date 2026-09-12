@@ -1,0 +1,11 @@
+{
+  "view_id": "incident-rca-link-degradation",
+  "mode": "investigate",
+  "layout_type": "rca_path",
+  "generated_at": "2026-06-18T00:00:00Z",
+  "nodes": [],
+  "edges": [],
+  "groups": [],
+  "overlays": ["health", "rca_evidence", "syslog"],
+  "legend": {}
+}

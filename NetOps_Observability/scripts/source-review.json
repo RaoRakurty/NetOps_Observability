@@ -1,0 +1,743 @@
+{
+  "_comment": [
+    "PER-COMPONENT LICENCE REVIEW — the human answer an image scan cannot give.",
+    "",
+    "WHY THIS FILE EXISTS. scripts/oci-compliance.py determines a corresponding-source",
+    "obligation from the LICENCE a component's own metadata records. For Alpine that",
+    "metadata is an SPDX expression and the answer is mechanical. For Debian it is a",
+    "copyright file: an unordered LIST of every licence appearing anywhere in the",
+    "SOURCE package, with no stated relationship between the members and no statement",
+    "of which of them govern the BINARY package actually installed in the image. A",
+    "scanner cannot tell 'MIT AND GPL-2.0' from 'MIT OR GPL-2.0', so the policy",
+    "refuses to guess and lands those components in `manual-review`, failing closed.",
+    "",
+    "THIS FILE IS THAT MANUAL REVIEW, written down. One entry per (component,",
+    "version): what the evidence was, what it says, and what follows.",
+    "",
+    "HOW A REVIEW IS MADE. `evidence` names a file the IMAGE ITSELF carries — the",
+    "dpkg copyright file at /usr/share/doc/<pkg>/copyright, the Alpine APKBUILD at the",
+    "exact aports commit the apk database records, or the apk database record itself —",
+    "with its sha256, so the determination can be re-checked against the same bytes.",
+    "`governing_licences` are the licences that govern the SHIPPED BINARY, not every",
+    "licence in the source tree: where a copyright file's catch-all `Files: *` stanza",
+    "is permissive but copyleft stanzas exist, the review says which FILES those cover",
+    "and whether this binary package ships them (checked against the package's own",
+    "file list in the image).",
+    "",
+    "HOW IT IS CONSUMED. `source_required: false` turns a manual-review component into",
+    "`not-required`, with this review recorded in the compliance manifest as the",
+    "evidence. `\"unclear\"` keeps it in manual review. `true` leaves the obligation",
+    "standing and the component stays in scripts/source-mirror.json `deferred`.",
+    "",
+    "A REVIEW CANNOT OVERRULE A RESOLVED EXPRESSION. If the scan already resolved a",
+    "definite copyleft licence and a review says `source_required: false`, that is a",
+    "CONFLICT and the evaluation aborts (exit 2). The review answers questions the",
+    "scan could not; it never argues with an answer the scan did reach.",
+    "",
+    "OWNER SIGN-OFF. Every review is `owner_signoff: false` until the owner sets it to",
+    "true by editing this file. `scripts/oci-compliance.py --release` refuses to pass",
+    "while a review it relied on is unsigned, so an automated first pass can never",
+    "clear a production release on its own. `--reviews` prints the counts and every",
+    "entry whose `needs_human` is set.",
+    "",
+    "WHAT `reviewer` MEANS. \"Claude Fable 5.1 — automated first pass\" is exactly that:",
+    "a first pass over the evidence, recorded so a human reviews a written argument",
+    "WHAT `reviewer` MEANS. \"Claude Fable 5.1 — automated first pass\" is exactly that:\na first pass over the evidence, recorded so a human reviews a written argument\ninstead of a hundred copyright files. It is not a legal opinion.",
+    "",
+    "2026-09-06 (tracker 263). netops-correlation moved from python:3.12-slim to\npython:3.12-alpine, so the 81 Debian reviews written for that image on 2026-09-05\ndescribe packages no longer shipped and were DELETED with the packages — a review\nof bytes nobody distributes is the same rot the register guards against, and\n`git show` recovers them if a past release ever has to be re-audited. The two\nnetops-api Debian reviews and the nine netops-frontend/netops-nginx Alpine reviews\nare untouched. Four entries were written in their place: the CPython interpreter at\nits new 3.12.14 version (same licence text, byte for byte), and the three Alpine\npackages whose licence metadata the scan could not resolve on its own."
+  ],
+  "schema_version": 1,
+  "reviewed": "2026-09-06",
+  "tracker": "238, 263",
+  "reviews": [
+    {
+      "component": "aom-libs",
+      "version": "3.11.0-r0",
+      "package_type": "apk",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-frontend",
+        "path": "aports main/aom/APKBUILD @ 566a03ffbe0922833d0cc76ee4f93a44df5dfb93",
+        "sha256": "81b66c7d315024956ff011bef245702827ea866cc5b6cb689b2e23dd5b0120d2"
+      },
+      "governing_licences": [
+        "BSD-2-Clause",
+        "AOM-Patent-License-1.0"
+      ],
+      "source_required": false,
+      "needs_human": false,
+      "rationale": "Alpine's APKBUILD at the aports commit this image records states license=\"BSD-2-Clause AND custom\"; the custom term is the Alliance for Open Media Patent License 1.0, a patent grant. Neither is copyleft.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-05",
+      "owner_signoff": false
+    },
+    {
+      "component": "base-files",
+      "version": "12.4+deb12u14",
+      "package_type": "deb",
+      "images": [
+        "netops-api"
+      ],
+      "evidence": {
+        "kind": "dpkg-copyright",
+        "image": "netops-api",
+        "path": "/usr/share/doc/base-files/copyright",
+        "sha256": "fd7e4aae7e7b05f217bcf2d02322825c360e66c52c4c2f1b28d784d6297a1c23"
+      },
+      "governing_licences": [
+        "GPL-2.0-or-later"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "base-files ships no machine-readable copyright; its free-text copyright states the package is distributed under the GNU GPL 'version 2 of the License, or (at your option) any later version'.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-05",
+      "owner_signoff": false
+    },
+    {
+      "component": "libjpeg-turbo",
+      "version": "3.0.4-r0",
+      "package_type": "apk",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-frontend",
+        "path": "aports main/libjpeg-turbo/APKBUILD @ 30b4b4d47dba66db916d78a58ea7a4639447a04f",
+        "sha256": "67e6385d61b64922d6c69037c7995ddc143742e74eb09aaf6cf0b25ead75ef46"
+      },
+      "governing_licences": [
+        "BSD-3-Clause",
+        "IJG",
+        "Zlib"
+      ],
+      "source_required": false,
+      "needs_human": false,
+      "rationale": "Alpine's APKBUILD states license=\"BSD-3-Clause AND IJG AND Zlib\" — three notice-only licences.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-05",
+      "owner_signoff": false
+    },
+    {
+      "component": "libmd",
+      "version": "1.1.0-r0",
+      "package_type": "apk",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-frontend",
+        "path": "aports main/libmd/APKBUILD @ 73e716067b9edc32c4cc7818cb7d206e57fdde15",
+        "sha256": "83078a3887ff126b1a816783d77b630c95cd9d35b02301519c07ff02532bb625"
+      },
+      "governing_licences": [
+        "BSD-3-Clause",
+        "BSD-2-Clause",
+        "ISC",
+        "Beerware",
+        "public-domain"
+      ],
+      "source_required": false,
+      "needs_human": false,
+      "rationale": "Alpine's APKBUILD states license=\"BSD-3-Clause AND BSD-2-Clause AND ISC AND Beerware AND Public Domain\" — no copyleft term.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-05",
+      "owner_signoff": false
+    },
+    {
+      "component": "media-types",
+      "version": "10.0.0",
+      "package_type": "deb",
+      "images": [
+        "netops-api"
+      ],
+      "evidence": {
+        "kind": "dpkg-copyright",
+        "image": "netops-api",
+        "path": "/usr/share/doc/media-types/copyright",
+        "sha256": "5ded7c53199b6a1d089b0b7e231d77e5c84081c7156b372b3f11ad9c1c2c5cc7"
+      },
+      "governing_licences": [
+        "public-domain"
+      ],
+      "source_required": false,
+      "needs_human": false,
+      "rationale": "The whole copyright file is four lines: `Files: *  Copyright: public-domain  License: ad-hoc  This package contains public information compiled from around the 'net and many people.` — no copyleft, no source obligation.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-05",
+      "owner_signoff": false
+    },
+    {
+      "component": "nginx",
+      "version": "1.27.5-r1",
+      "package_type": "apk",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "evidence": {
+        "kind": "apk-installed-db-record",
+        "image": "netops-frontend",
+        "path": "/lib/apk/db/installed",
+        "record": "P:nginx\nV:1.27.5-r1\nU:https://nginx.org/\nL:2-clause BSD-like license\no:nginx\nm:NGINX Packaging <nginx-packaging@f5.com>\nc:",
+        "sha256": "5b68c6efd6f662022f5d5318f6548ba1598d2860efb9ba71cd1a10748b5598d8"
+      },
+      "governing_licences": [
+        "BSD-2-Clause"
+      ],
+      "source_required": false,
+      "needs_human": false,
+      "rationale": "This package is built and signed by NGINX, not by Alpine: the image's apk database records m:NGINX Packaging <nginx-packaging@f5.com> and an EMPTY aports commit. Its recorded licence is the free-text '2-clause BSD-like license', i.e. the two-clause BSD licence nginx and njs are released under — notice only. The audit could not resolve it because Syft split that phrase into the tokens '2-clause', 'BSD-like' and 'license'.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-05",
+      "owner_signoff": false
+    },
+    {
+      "component": "nginx-module-geoip",
+      "version": "1.27.5-r1",
+      "package_type": "apk",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "evidence": {
+        "kind": "apk-installed-db-record",
+        "image": "netops-frontend",
+        "path": "/lib/apk/db/installed",
+        "record": "P:nginx-module-geoip\nV:1.27.5-r1\nU:https://nginx.org/\nL:2-clause BSD-like license\no:nginx-module-geoip\nm:NGINX Packaging <nginx-packaging@f5.com>\nc:",
+        "sha256": "2b9c7cef45028f6931779f844e09b155b97f42d590f8c3de7a9de2a8393633c0"
+      },
+      "governing_licences": [
+        "BSD-2-Clause"
+      ],
+      "source_required": false,
+      "needs_human": false,
+      "rationale": "This package is built and signed by NGINX, not by Alpine: the image's apk database records m:NGINX Packaging <nginx-packaging@f5.com> and an EMPTY aports commit. Its recorded licence is the free-text '2-clause BSD-like license', i.e. the two-clause BSD licence nginx and njs are released under — notice only. The audit could not resolve it because Syft split that phrase into the tokens '2-clause', 'BSD-like' and 'license'.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-05",
+      "owner_signoff": false
+    },
+    {
+      "component": "nginx-module-image-filter",
+      "version": "1.27.5-r1",
+      "package_type": "apk",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "evidence": {
+        "kind": "apk-installed-db-record",
+        "image": "netops-frontend",
+        "path": "/lib/apk/db/installed",
+        "record": "P:nginx-module-image-filter\nV:1.27.5-r1\nU:https://nginx.org/\nL:2-clause BSD-like license\no:nginx-module-image-filter\nm:NGINX Packaging <nginx-packaging@f5.com>\nc:",
+        "sha256": "cad5a678d0fabb515963b711fc37a53a897cb204caa4319573c93dc8ad2322cb"
+      },
+      "governing_licences": [
+        "BSD-2-Clause"
+      ],
+      "source_required": false,
+      "needs_human": false,
+      "rationale": "This package is built and signed by NGINX, not by Alpine: the image's apk database records m:NGINX Packaging <nginx-packaging@f5.com> and an EMPTY aports commit. Its recorded licence is the free-text '2-clause BSD-like license', i.e. the two-clause BSD licence nginx and njs are released under — notice only. The audit could not resolve it because Syft split that phrase into the tokens '2-clause', 'BSD-like' and 'license'.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-05",
+      "owner_signoff": false
+    },
+    {
+      "component": "nginx-module-njs",
+      "version": "1.27.5.0.8.10-r1",
+      "package_type": "apk",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "evidence": {
+        "kind": "apk-installed-db-record",
+        "image": "netops-frontend",
+        "path": "/lib/apk/db/installed",
+        "record": "P:nginx-module-njs\nV:1.27.5.0.8.10-r1\nU:https://nginx.org/\nL:2-clause BSD-like license\no:nginx-module-njs\nm:NGINX Packaging <nginx-packaging@f5.com>\nc:",
+        "sha256": "d6ca9d7ceb46a80273135adb6bbc339f142e8cd7d086151f57688171bca2c61a"
+      },
+      "governing_licences": [
+        "BSD-2-Clause"
+      ],
+      "source_required": false,
+      "needs_human": false,
+      "rationale": "This package is built and signed by NGINX, not by Alpine: the image's apk database records m:NGINX Packaging <nginx-packaging@f5.com> and an EMPTY aports commit. Its recorded licence is the free-text '2-clause BSD-like license', i.e. the two-clause BSD licence nginx and njs are released under — notice only. The audit could not resolve it because Syft split that phrase into the tokens '2-clause', 'BSD-like' and 'license'.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-05",
+      "owner_signoff": false
+    },
+    {
+      "component": "nginx-module-xslt",
+      "version": "1.27.5-r1",
+      "package_type": "apk",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "evidence": {
+        "kind": "apk-installed-db-record",
+        "image": "netops-frontend",
+        "path": "/lib/apk/db/installed",
+        "record": "P:nginx-module-xslt\nV:1.27.5-r1\nU:https://nginx.org/\nL:2-clause BSD-like license\no:nginx-module-xslt\nm:NGINX Packaging <nginx-packaging@f5.com>\nc:",
+        "sha256": "13f7654e46332ece6c2a345abc84c44deded2fbcb8f86be117259a351e335fee"
+      },
+      "governing_licences": [
+        "BSD-2-Clause"
+      ],
+      "source_required": false,
+      "needs_human": false,
+      "rationale": "This package is built and signed by NGINX, not by Alpine: the image's apk database records m:NGINX Packaging <nginx-packaging@f5.com> and an EMPTY aports commit. Its recorded licence is the free-text '2-clause BSD-like license', i.e. the two-clause BSD licence nginx and njs are released under — notice only. The audit could not resolve it because Syft split that phrase into the tokens '2-clause', 'BSD-like' and 'license'.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-05",
+      "owner_signoff": false
+    },
+    {
+      "component": "Simple Launcher",
+      "version": "1.1.0.14",
+      "package_type": "nuget",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "no-licence-evidence-in-image",
+        "image": "netops-correlation",
+        "path": "/usr/local/lib/python3.12/site-packages/pip/_vendor/distlib/*.exe",
+        "sha256": ""
+      },
+      "governing_licences": [],
+      "source_required": "unclear",
+      "needs_human": true,
+      "rationale": "Syft's pe-binary-package-cataloger identifies six WINDOWS PE executables vendored inside pip (/usr/local/lib/python3.12/site-packages/pip/_vendor/distlib/{t32,t64,t64-arm,w32,w64,w64-arm}.exe) as 'Simple Launcher 1.1.0.14'. They cannot execute in this Linux image and nothing links them, but the image ships NO licence text beside them: pip 25.0.1's own LICENSE.txt covers pip, and pip's _vendor/vendor.txt names 'distlib==0.3.9' without stating distlib's or the launcher stubs' licence. Correlix will not assert a licence it cannot read out of the artifact it ships. The package TYPE this entry is keyed by is a property of the SCANNER, not of the image: Syft's pe-binary-package-cataloger reports these stubs as package type `binary` with no purl, while a run whose dotnet cataloger names them first reports type `nuget` with `pkg:nuget/Simple%20Launcher@1.1.0.14` (the shape the 2026-09-05 inventory was first recorded with). Both spellings describe the same six files, so BOTH are recorded — a scanner-shape difference must never silently drop an undischarged obligation.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-05",
+      "owner_signoff": false
+    },
+    {
+      "component": "Simple Launcher",
+      "version": "1.1.0.14",
+      "package_type": "binary",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "no-licence-evidence-in-image",
+        "image": "netops-correlation",
+        "path": "/usr/local/lib/python3.12/site-packages/pip/_vendor/distlib/*.exe",
+        "sha256": ""
+      },
+      "governing_licences": [],
+      "source_required": "unclear",
+      "needs_human": true,
+      "rationale": "Syft's pe-binary-package-cataloger identifies six WINDOWS PE executables vendored inside pip (/usr/local/lib/python3.12/site-packages/pip/_vendor/distlib/{t32,t64,t64-arm,w32,w64,w64-arm}.exe) as 'Simple Launcher 1.1.0.14'. They cannot execute in this Linux image and nothing links them, but the image ships NO licence text beside them: pip 25.0.1's own LICENSE.txt covers pip, and pip's _vendor/vendor.txt names 'distlib==0.3.9' without stating distlib's or the launcher stubs' licence. Correlix will not assert a licence it cannot read out of the artifact it ships. The package TYPE this entry is keyed by is a property of the SCANNER, not of the image: Syft's pe-binary-package-cataloger reports these stubs as package type `binary` with no purl, while a run whose dotnet cataloger names them first reports type `nuget` with `pkg:nuget/Simple%20Launcher@1.1.0.14` (the shape the 2026-09-05 inventory was first recorded with). Both spellings describe the same six files, so BOTH are recorded — a scanner-shape difference must never silently drop an undischarged obligation.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-05",
+      "owner_signoff": false
+    },
+    {
+      "component": "xz-libs",
+      "version": "5.6.3-r1",
+      "package_type": "apk",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-frontend",
+        "path": "aports main/xz/APKBUILD @ 0e019d9722d6d8e51ef4658074b2bc736f60b4dc",
+        "sha256": "6fdbe408e8db564a99bc99691a14a3df49c8d1579f6503b43c8e669dd196596e"
+      },
+      "governing_licences": [
+        "0BSD"
+      ],
+      "source_required": false,
+      "needs_human": false,
+      "rationale": "Alpine records ONE licence for the whole xz source package, but the xz-libs subpackage ships only liblzma.so.5 (verified against the image's apk database file list) and liblzma is 0BSD upstream — Debian reaches the same determination independently for the same library (liblzma5 copyright, `Files: *` -> 0BSD). The GPL-2.0-or-later term covers the xz shell scripts and the GNU build system, which this subpackage does not ship.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-05",
+      "owner_signoff": false
+    },
+    {
+      "component": "python",
+      "version": "3.12.14",
+      "package_type": "generic",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "in-image-licence-file",
+        "image": "netops-correlation",
+        "path": "/usr/local/lib/python3.12/LICENSE.txt",
+        "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
+      },
+      "governing_licences": [
+        "PSF-2.0"
+      ],
+      "source_required": false,
+      "needs_human": false,
+      "rationale": "Syft's binary classifier matched /usr/local/bin/python3.12 and /usr/local/lib/libpython3.12.so.1.0 and recorded no licence. The image carries CPython's own licence text at /usr/local/lib/python3.12/LICENSE.txt, which is the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2 — permissive, notice only. This supersedes the 3.12.13 review of 2026-09-05: the base moved from python:3.12-slim to python:3.12-alpine (tracker 263) and the interpreter version moved with it. The licence text is byte-identical across the two images (same sha256), which is the evidence that only the version changed.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": ".python-rundeps",
+      "version": "20260901.001029",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apk-db-record",
+        "image": "netops-correlation",
+        "path": "/lib/apk/db/installed (the P:.python-rundeps record)",
+        "sha256": "a756b795087d987ff7294ea0fcb7552de0079557fb883553c8b3db49d1c3b242"
+      },
+      "governing_licences": [],
+      "source_required": false,
+      "needs_human": false,
+      "rationale": "Not a work at all. The apk database record the image carries reads T:'virtual meta package', S:0, I:0, L: empty, and carries NO F:/R: lines — the package installs zero files. It is the `apk add --virtual .python-rundeps` marker the upstream python:3.12-alpine build uses to pin the shared libraries CPython links (its D: line lists so:libbz2, so:libssl, so:libsqlite3 …), each of which is inventoried and evaluated in its own right. A package that distributes no bytes can carry no corresponding-source obligation; the obligation, where there is one, belongs to the packages it depends on.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "sqlite-libs",
+      "version": "3.53.4-r0",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/sqlite/APKBUILD @ a9c3ba8b9129ec0f294d0a9bf538c2f1632bb016",
+        "sha256": "8e0cdc5e9d36fa52760c2b89b538e0125552ee0b53451a0712c33b7dcdd609dd"
+      },
+      "governing_licences": [
+        "blessing"
+      ],
+      "source_required": false,
+      "needs_human": false,
+      "rationale": "Alpine's APKBUILD at the aports commit this image records states license=\"blessing\" — the SQLite Blessing, SPDX id `blessing`, which is SQLite's public-domain dedication ('may you do good and not evil'). It is not on this policy's permissive list only because the id is unusual, not because it is unresolved: it grants unlimited use with no reciprocal obligation and no source requirement. The shipped binary is libsqlite3.so.0, built from that same public-domain amalgamation.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "xz-libs",
+      "version": "5.8.3-r0",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/xz/APKBUILD @ ce9944f1daadb681dd6f0f81a06e9cce97127377",
+        "sha256": "2edc494eb48c9bab6864dc20d9ed51bbc336dc20b4fa04cc543a7b7fc132d6f6"
+      },
+      "governing_licences": [
+        "0BSD",
+        "Public-Domain"
+      ],
+      "source_required": false,
+      "needs_human": false,
+      "rationale": "The origin package's licence field is a LIST covering the whole xz source tree — 'GPL-2.0-or-later AND 0BSD AND Public-Domain AND LGPL-2.1-or-later' — which is exactly the shape this policy refuses to guess at. The question is what governs the SHIPPED BINARY, and the package's own file list in the image answers it: xz-libs installs R:liblzma.so.5 and R:liblzma.so.5.8.3 and nothing else. Upstream xz states that liblzma is public domain / 0BSD; the GPL-2.0-or-later components are the xz, xzdec and lzmainfo command-line tools and the build scripts, and the LGPL-2.1-or-later component is GNU getopt_long, none of which is in this subpackage. No copyleft work is distributed by xz-libs.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "alpine-baselayout",
+      "version": "3.7.2-r1",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/alpine-baselayout/APKBUILD @ 60a7585bbab2fa0f762504eb617dbca90216e31f",
+        "sha256": "aef255516b71e39109860b92eb027a0986d90197427fb93ec91ebcd04bf59763"
+      },
+      "governing_licences": [
+        "GPL-2.0-only"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: the Alpine base directory structure and its init scripts are GPL-2.0-only, and Correlix distributes them inside every netops-correlation image.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "alpine-baselayout-data",
+      "version": "3.7.2-r1",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/alpine-baselayout/APKBUILD @ 60a7585bbab2fa0f762504eb617dbca90216e31f",
+        "sha256": "aef255516b71e39109860b92eb027a0986d90197427fb93ec91ebcd04bf59763"
+      },
+      "governing_licences": [
+        "GPL-2.0-only"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: a subpackage of the alpine-baselayout origin package (the /etc data files), under the same GPL-2.0-only terms; one corresponding-source artifact discharges both.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "apk-tools",
+      "version": "3.0.6-r0",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/apk-tools/APKBUILD @ 1403ea7a8ae3fb8e5a11207ddb1ff536eb8de912",
+        "sha256": "5fa1b3168b587ae9a95c3106accfaaa2f738934d66f4bb0b52ddb51f3962af63"
+      },
+      "governing_licences": [
+        "GPL-2.0-only"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: the apk package manager itself is GPL-2.0-only. It is not used at run time — the runtime stage of Dockerfile.correlation installs nothing — but it is PRESENT in the image, and presence is what creates the obligation.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "libapk",
+      "version": "3.0.6-r0",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/apk-tools/APKBUILD @ 1403ea7a8ae3fb8e5a11207ddb1ff536eb8de912",
+        "sha256": "5fa1b3168b587ae9a95c3106accfaaa2f738934d66f4bb0b52ddb51f3962af63"
+      },
+      "governing_licences": [
+        "GPL-2.0-only"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: a subpackage of the apk-tools origin package (the shared library apk links), under the same GPL-2.0-only terms; one artifact discharges both.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "gdbm",
+      "version": "1.26-r0",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/gdbm/APKBUILD @ 1ea03990396db618edfcc8a9a0bc6b72662bac8f",
+        "sha256": "862f63ae6868bb40b80a3da3c97d6e603af549e05c3051ceadcfa4ad7b135f1b"
+      },
+      "governing_licences": [
+        "GPL-3.0-or-later"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: GNU dbm is GPL-3.0-or-later. It is in the image because CPython's `dbm.gnu` stdlib module links it (the .python-rundeps virtual package pins so:libgdbm.so.6); the correlation engine does not import it, but the library ships either way.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "keyutils-libs",
+      "version": "1.6.3-r4",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/keyutils/APKBUILD @ 8bac74716d06c84627ab02d101fd9d2bafd0a34c",
+        "sha256": "6b0c294e67f58f31ced1ed2b9f849a855395d6f8ae5942669b5fbb3f529daa7b"
+      },
+      "governing_licences": [
+        "GPL-2.0-or-later",
+        "LGPL-2.0-or-later"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: keyutils' library is LGPL-2.0-or-later with GPL-2.0-or-later components; it arrives as a dependency of krb5-libs, which CPython's ssl/socket surface pulls in.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "libcom_err",
+      "version": "1.47.4-r0",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/e2fsprogs/APKBUILD @ 8683a6972cb245fbbdb535dad6435a9930bb9374",
+        "sha256": "fdeebc52e727e071462ef6616e1d24064fb94a9ed4df88e0b16a3e77d1baa5f3"
+      },
+      "governing_licences": [
+        "GPL-2.0-or-later",
+        "LGPL-2.0-or-later",
+        "BSD-3-Clause",
+        "MIT"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: the com_err error-table library is a subpackage of e2fsprogs, whose recorded expression includes GPL-2.0-or-later. A narrower reading (upstream describes com_err itself as MIT) would be a review ARGUING WITH A RESOLVED EXPRESSION, which this policy forbids — so the obligation stands as recorded until the source is retained or the package leaves the image.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "libintl",
+      "version": "1.0-r0",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/gettext/APKBUILD @ a0b12dbf67fb047e79a1b76c6dfe6f2904d0d391",
+        "sha256": "e22f0eecaf4e5f1f5febe725f47ee019481ded75cdcf76d3c9dd5e7a9e590d13"
+      },
+      "governing_licences": [
+        "LGPL-2.1-or-later"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: the gettext runtime library is LGPL-2.1-or-later; Alpine's own apk metadata records exactly that for this subpackage, so the obligation is definite.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "libnsl",
+      "version": "2.0.1-r2",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports community/libnsl/APKBUILD @ a9e2a2dc46f377eb25884f7fea9834492de7f518",
+        "sha256": "08617ed63fa2fcbd890f5437b8b61a3adad2e4b3a5600c0ba4853c8ea1c94f86"
+      },
+      "governing_licences": [
+        "LGPL-2.0-or-later"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: the NIS/RPC client library is LGPL-2.0-or-later. Like gdbm it is present because the upstream python:3.12-alpine build pins it for CPython's optional modules, not because the engine calls it.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "musl-utils",
+      "version": "1.2.6-r2",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/musl/APKBUILD @ f5640d3a10f664c9119720c60515265d3d6f6d01",
+        "sha256": "db4e568cdf2b256815fdfdb55704cd2efdffdc0e8ecd0cb935fdc3e89e2140f4"
+      },
+      "governing_licences": [
+        "MIT",
+        "BSD-2-Clause",
+        "GPL-2.0-or-later"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: musl itself is MIT, but this SUBPACKAGE (getent/getconf/iconv/ldconfig) carries the GPL-2.0-or-later component of the recorded expression, and its sources live in the aports tree rather than the musl tarball — which is why the packaging archive is the part that actually discharges it. The same distinction is already recorded for musl 1.2.5-r9 in netops-frontend/netops-nginx.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "readline",
+      "version": "8.3.3-r1",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/readline/APKBUILD @ a854c03acdac188901fb012f7acbee70a36e8041",
+        "sha256": "d6ea7771ae1475b0f0843ed543664beba1beea893a99000dbb34ef20878cf4e9"
+      },
+      "governing_licences": [
+        "GPL-3.0-or-later"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: GNU readline is GPL-3.0-or-later. It is in the image because CPython links it for the interactive interpreter; the service runs uvicorn non-interactively and never uses it, but it ships.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "scanelf",
+      "version": "1.3.9-r1",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/pax-utils/APKBUILD @ c61801eeacb3ffcd9c2025b09e402153bb93fb39",
+        "sha256": "f33df75f467601dcd73038b4e15029de60338a5f3f7d9a37574475a723b07c20"
+      },
+      "governing_licences": [
+        "GPL-2.0-only"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: scanelf is a subpackage of pax-utils, GPL-2.0-only. The upstream python:3.12-alpine build uses it to derive the .python-rundeps dependency list and leaves the binary in the image.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    }
+  ]
+}

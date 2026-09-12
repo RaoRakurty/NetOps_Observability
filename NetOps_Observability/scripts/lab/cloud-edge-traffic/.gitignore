@@ -1,0 +1,3 @@
+# The operator's filled endpoints (post-apply, per-deploy) — never commit.
+endpoints.conf
+__pycache__/

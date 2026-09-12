@@ -1,0 +1,114 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+package experience
+
+// metrics.go — the module's self-observability counters (Phase Q).
+//
+// They answer "is the experience layer itself doing its job", which the 2026-09-02
+// outage taught is a different question from "is the container healthy". They
+// are exposed on the platform's /metrics endpoint through the same Write hook
+// internal/dem's counters use, so a DEM lane that stops serving is visible in
+// the same place every other engine's liveness is.
+
+import (
+	"fmt"
+	"io"
+	"sync/atomic"
+)
+
+// Counters is the module's metric block. Every field is a monotonic counter;
+// nothing here resets, so a scrape gap is a gap in the rate, not a reset.
+type Counters struct {
+	ViewsServed      atomic.Int64
+	QueryErrors      atomic.Int64
+	JourneysCreated  atomic.Int64
+	JourneysUpdated  atomic.Int64
+	JourneysDeleted  atomic.Int64
+	ChangesRecorded  atomic.Int64
+	IncidentsDerived atomic.Int64
+	PacketsBuilt     atomic.Int64
+	PacketsRejected  atomic.Int64
+	// The experience-event ingest lane (tracker 254). Refused and rejected are
+	// counted SEPARATELY: refused is backpressure the producer can retry
+	// through, rejected is data that will never arrive because it was
+	// malformed, and treating them as one number hides which is happening.
+	EventsIngested         atomic.Int64
+	BusinessEventsIngested atomic.Int64
+	IngestRefused          atomic.Int64
+	IngestRejected         atomic.Int64
+	// Promotion into the platform incident record (tracker 255).
+	IncidentsPromoted atomic.Int64
+	PromotionErrors   atomic.Int64
+}
+
+// NewCounters builds an empty block.
+func NewCounters() *Counters { return &Counters{} }
+
+// Snapshot returns the current values, for tests and for a debug endpoint.
+func (c *Counters) Snapshot() map[string]int64 {
+	if c == nil {
+		return map[string]int64{}
+	}
+	return map[string]int64{
+		"dem_experience_views_served_total":        c.ViewsServed.Load(),
+		"dem_experience_query_errors_total":        c.QueryErrors.Load(),
+		"dem_experience_journeys_created_total":    c.JourneysCreated.Load(),
+		"dem_experience_journeys_updated_total":    c.JourneysUpdated.Load(),
+		"dem_experience_journeys_deleted_total":    c.JourneysDeleted.Load(),
+		"dem_experience_changes_recorded_total":    c.ChangesRecorded.Load(),
+		"dem_experience_incidents_derived_total":   c.IncidentsDerived.Load(),
+		"dem_experience_ai_packets_built_total":    c.PacketsBuilt.Load(),
+		"dem_experience_ai_packets_rejected_total": c.PacketsRejected.Load(),
+		"dem_experience_events_ingested_total":     c.EventsIngested.Load(),
+		"dem_experience_business_ingested_total":   c.BusinessEventsIngested.Load(),
+		"dem_experience_ingest_refused_total":      c.IngestRefused.Load(),
+		"dem_experience_ingest_rejected_total":     c.IngestRejected.Load(),
+		"dem_experience_incidents_promoted_total":  c.IncidentsPromoted.Load(),
+		"dem_experience_promotion_errors_total":    c.PromotionErrors.Load(),
+	}
+}
+
+// metricHelp is the HELP line for each counter, kept beside the counter so a
+// new one cannot ship undocumented.
+var metricHelp = [][2]string{
+	{"dem_experience_views_served_total", "Digital Experience aggregation views assembled and served"},
+	{"dem_experience_query_errors_total", "Digital Experience views whose metrics query failed (the view then reports not-measured, never a zero)"},
+	{"dem_experience_journeys_created_total", "Journey definitions created"},
+	{"dem_experience_journeys_updated_total", "Journey definitions updated"},
+	{"dem_experience_journeys_deleted_total", "Journey definitions deleted"},
+	{"dem_experience_changes_recorded_total", "Change events recorded through the DEM change feed"},
+	{"dem_experience_incidents_derived_total", "Experience incidents derived from evidence"},
+	{"dem_experience_ai_packets_built_total", "AI investigator evidence packets built"},
+	{"dem_experience_ai_packets_rejected_total", "AI investigator answers rejected for citing evidence that was not supplied"},
+	// The ingest lane and the promotion path. They were counted but never
+	// RENDERED — metricHelp named 9 of the 15 counters, so an ingest refusal,
+	// a rejection or a promotion error could not reach any surface at all.
+	{"dem_experience_events_ingested_total", "Experience events accepted from the ingest lane"},
+	{"dem_experience_business_ingested_total", "Business events accepted from the ingest lane"},
+	{"dem_experience_ingest_refused_total", "Experience events refused as backpressure (the producer may retry these)"},
+	{"dem_experience_ingest_rejected_total", "Experience events rejected as malformed (these will never arrive)"},
+	{"dem_experience_incidents_promoted_total", "Experience incidents promoted into the platform incident record"},
+	{"dem_experience_promotion_errors_total", "Experience incidents whose promotion into the platform incident record failed"},
+}
+
+// helpedMetrics is the set metricHelp documents. Exported for the guard test
+// that keeps a new counter from shipping unrendered.
+func helpedMetrics() []string {
+	out := make([]string, 0, len(metricHelp))
+	for _, h := range metricHelp {
+		out = append(out, h[0])
+	}
+	return out
+}
+
+// Write renders the block in Prometheus exposition format.
+func (c *Counters) Write(w io.Writer) {
+	if c == nil {
+		return
+	}
+	snap := c.Snapshot()
+	for _, h := range metricHelp {
+		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s counter\n%s %d\n", h[0], h[1], h[0], h[0], snap[h[0]])
+	}
+}

@@ -1,0 +1,398 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+package rca
+
+import (
+	"strings"
+	"testing"
+)
+
+// fixtures mimic what loadCorrSlice + mergeTimelineEvidence produce: signal maps
+// with an authoritative `attached` flag and the raw fields BuildPathView reads.
+
+func pvSig(m map[string]any) map[string]any {
+	if _, ok := m["attached"]; !ok {
+		m["attached"] = true
+	}
+	if _, ok := m["modality_class"]; !ok {
+		m["modality_class"] = "control_plane"
+	}
+	if _, ok := m["observer_id"]; !ok {
+		m["observer_id"] = "obs1"
+	}
+	return m
+}
+
+// golden-like suspected local link fault: link + BGP + probe loss, all grounded
+// on e2e-edge1 → Suspected.
+func goldenInputs() (map[string]any, []map[string]any, []map[string]any) {
+	meta := map[string]any{"verdict_tier": "suspected", "top_confidence": 0.5, "trigger_signal": "t3", "evidence_missing": "[]"}
+	sigs := []map[string]any{
+		pvSig(map[string]any{"signal_id": "t1", "entity_type": "interface", "entity_id": "e2e-edge1:GigabitEthernet0/1", "kind": "link_state_change"}),
+		pvSig(map[string]any{"signal_id": "t2", "entity_type": "device", "entity_id": "e2e-edge1", "kind": "bgp_adjacency_change", "attrs": `{"peer":"10.99.0.2","state":"down"}`}),
+		pvSig(map[string]any{"signal_id": "t3", "entity_type": "path", "entity_id": "vantage-e2e->e2e-edge1", "kind": "probe_loss", "modality_class": "active_probe", "observer_id": "obs2", "is_trigger": true, "probe_authority": "high", "probe_scope": "customer_path"}),
+	}
+	edges := []map[string]any{
+		{"from_node": "device:e2e-edge1:bgp_adjacency_change", "to_node": "path:vantage-e2e->e2e-edge1:probe_loss", "grounding_kind": "topo", "grounding_ref": "shared:e2e-edge1", "weight": 1.0, "direction_basis": "none"},
+		{"from_node": "interface:e2e-edge1:GigabitEthernet0/1:link_state_change", "to_node": "path:vantage-e2e->e2e-edge1:probe_loss", "grounding_kind": "topo", "grounding_ref": "shared:e2e-edge1", "weight": 1.0, "direction_basis": "none"},
+	}
+	return meta, sigs, edges
+}
+
+func findAnn(v PathView, tt, tid string) *Annotation {
+	for i := range v.Annotations {
+		if v.Annotations[i].TargetType == tt && v.Annotations[i].TargetID == tid {
+			return &v.Annotations[i]
+		}
+	}
+	return nil
+}
+
+// #7 link_state_change → exact interface edge annotation.
+func TestRcaPathView_LinkToEdge(t *testing.T) {
+	meta, sigs, edges := goldenInputs()
+	v := BuildPathView("obj", meta, sigs, edges)
+	a := findAnn(v, "edge", "e2e-edge1:GigabitEthernet0/1")
+	if a == nil {
+		t.Fatalf("no edge annotation for the interface; got %+v", v.Annotations)
+	}
+	if a.Status != "suspected_down" {
+		t.Fatalf("link edge status = %q, want suspected_down", a.Status)
+	}
+}
+
+// #8 BGP adjacency → BGP session edge (device->peer).
+func TestRcaPathView_BgpToSession(t *testing.T) {
+	meta, sigs, edges := goldenInputs()
+	v := BuildPathView("obj", meta, sigs, edges)
+	a := findAnn(v, "edge", "e2e-edge1->10.99.0.2")
+	if a == nil {
+		t.Fatalf("no BGP session annotation; got %+v", v.Annotations)
+	}
+	if a.Status != "suspected_down" {
+		t.Fatalf("bgp edge status = %q, want suspected_down", a.Status)
+	}
+}
+
+// #9 probe loss → path_segment when the locus is known.
+func TestRcaPathView_ProbeToSegment(t *testing.T) {
+	meta, sigs, edges := goldenInputs()
+	v := BuildPathView("obj", meta, sigs, edges)
+	a := findAnn(v, "path_segment", "e2e-edge1")
+	if a == nil {
+		t.Fatalf("no path_segment annotation; got %+v", v.Annotations)
+	}
+	if a.Status != "degraded" {
+		t.Fatalf("probe segment status = %q, want degraded", a.Status)
+	}
+	if v.Title != "Where evidence points — not confirmed" {
+		t.Fatalf("title = %q", v.Title)
+	}
+}
+
+// #10 probe loss → whole path with uncertainty when no locus/hops are known.
+func TestRcaPathView_ProbeToWholePath(t *testing.T) {
+	meta := map[string]any{"verdict_tier": "undetermined", "top_confidence": 0.2, "trigger_signal": "p1", "evidence_missing": "[]"}
+	sigs := []map[string]any{
+		pvSig(map[string]any{"signal_id": "p1", "entity_type": "path", "entity_id": "vantage-x->cloud-y", "kind": "probe_loss", "modality_class": "active_probe", "observer_id": "o1", "probe_authority": "high", "probe_scope": "customer_path", "is_trigger": true}),
+	}
+	v := BuildPathView("obj", meta, sigs, nil) // no edges → no locus
+	a := findAnn(v, "path", "vantage-x->cloud-y")
+	if a == nil {
+		t.Fatalf("expected whole-path annotation; got %+v", v.Annotations)
+	}
+	if a.Status != "degraded" || a.Reason == "" {
+		t.Fatalf("whole-path annotation = %+v", a)
+	}
+}
+
+// #11 internal/debug probes must NOT create customer RCA overlays.
+func TestRcaPathView_InternalExcluded(t *testing.T) {
+	meta := map[string]any{"verdict_tier": "suspected", "top_confidence": 0.5, "trigger_signal": "d1", "evidence_missing": "[]"}
+	sigs := []map[string]any{
+		pvSig(map[string]any{"signal_id": "d1", "entity_type": "path", "entity_id": "prober->clickhouse", "kind": "probe_loss", "modality_class": "active_probe", "observer_id": "o1", "probe_authority": "debug_only", "probe_scope": "internal_self_probe", "is_trigger": true}),
+	}
+	v := BuildPathView("obj", meta, sigs, nil)
+	if !v.Internal {
+		t.Fatal("debug-only probe object should be flagged internal")
+	}
+	if v.Title != "Internal monitoring path" {
+		t.Fatalf("internal title = %q", v.Title)
+	}
+	for _, a := range v.Annotations {
+		if a.Status != "internal_only" {
+			t.Fatalf("internal object annotation must be internal_only, got %q", a.Status)
+		}
+	}
+}
+
+// C4: the engine's layer_coverage column passes through onto the view verbatim
+// (the API never re-derives a layer — engine owns the taxonomy).
+func TestRcaPathView_LayerCoveragePassthrough(t *testing.T) {
+	meta, sigs, edges := goldenInputs()
+	meta["layer_coverage"] = `{"layers":[` +
+		`{"layer":"link","osi":"L2","observed":true,"kinds":["link_state_change"],"entities":["e2e-edge1:Gi0/1"],"peak_severity":"crit"},` +
+		`{"layer":"network","osi":"L3","observed":false,"kinds":[],"entities":[],"peak_severity":""},` +
+		`{"layer":"transport","osi":"L4","observed":true,"kinds":["probe_loss"],"entities":["vantage->e2e-edge1"],"peak_severity":"high"}],` +
+		`"root_layer":"link","impact_layer":"transport","unmapped_kinds":[]}`
+	v := BuildPathView("obj", meta, sigs, edges)
+	if v.LayerCoverage == nil {
+		t.Fatal("layer_coverage present in meta but not on the view")
+	}
+	if v.LayerCoverage.RootLayer != "link" || v.LayerCoverage.ImpactLayer != "transport" {
+		t.Fatalf("root/impact = %q/%q", v.LayerCoverage.RootLayer, v.LayerCoverage.ImpactLayer)
+	}
+	if len(v.LayerCoverage.Layers) != 3 || v.LayerCoverage.Layers[1].Observed {
+		t.Fatalf("expected the L3 gap unobserved; got %+v", v.LayerCoverage.Layers)
+	}
+}
+
+// C4: absent / empty / malformed coverage → nil (panel hidden), never a crash.
+func TestRcaPathView_LayerCoverageAbsentOrMalformed(t *testing.T) {
+	for _, val := range []any{nil, "", "{}", "not json", `{"layers":[]}`} {
+		meta, sigs, edges := goldenInputs()
+		if val != nil {
+			meta["layer_coverage"] = val
+		}
+		if v := BuildPathView("obj", meta, sigs, edges); v.LayerCoverage != nil {
+			t.Fatalf("layer_coverage=%v (%T) should yield nil, got %+v", val, val, v.LayerCoverage)
+		}
+	}
+}
+
+// #12 the overlay never mutates the base inputs (edges/signals unchanged).
+func TestRcaPathView_NoBaseMutation(t *testing.T) {
+	meta, sigs, edges := goldenInputs()
+	edgeCount := len(edges)
+	firstEdgeRef := edges[0]["grounding_ref"]
+	sigKind := sigs[0]["kind"]
+	_ = BuildPathView("obj", meta, sigs, edges)
+	if len(edges) != edgeCount || edges[0]["grounding_ref"] != firstEdgeRef {
+		t.Fatal("BuildPathView mutated the base topology edges")
+	}
+	if sigs[0]["kind"] != sigKind {
+		t.Fatal("BuildPathView mutated the base signals")
+	}
+}
+
+// #81 P3G: cloud projection — a cloud symptom + an independent network probe
+// project the application + its cloud resources beyond the path, joined by a
+// provider boundary (the seam). Additive node/edge types, app-team owned.
+func TestRcaPathView_CloudProjection(t *testing.T) {
+	meta := map[string]any{"verdict_tier": "suspected", "top_confidence": 0.5, "trigger_signal": "c1", "evidence_missing": "[]"}
+	sigs := []map[string]any{
+		pvSig(map[string]any{"signal_id": "c1", "source": "cloud", "entity_type": "app", "entity_id": "billing", "kind": "cloud_health", "modality_class": "device_telemetry", "observer_id": "cloud:123:us-east-1", "attrs": `{"app":"billing","account":"123","region":"us-east-1"}`}),
+		pvSig(map[string]any{"signal_id": "c2", "source": "cloud", "entity_type": "cloud_resource", "entity_id": "billing-db", "kind": "database_metric", "modality_class": "device_telemetry", "observer_id": "cloud:123:us-east-1"}),
+		pvSig(map[string]any{"signal_id": "c3", "entity_type": "path", "entity_id": "branch->edge1", "kind": "probe_loss", "modality_class": "active_probe", "observer_id": "vantage", "probe_authority": "high", "probe_scope": "customer_path", "is_trigger": true}),
+	}
+	v := BuildPathView("obj", meta, sigs, nil)
+
+	// the app node exists and reads as a cloud-typed affected endpoint.
+	var appNode, resNode *PathNode
+	for i := range v.Path.Nodes {
+		switch v.Path.Nodes[i].ID {
+		case "billing":
+			appNode = &v.Path.Nodes[i]
+		case "billing-db":
+			resNode = &v.Path.Nodes[i]
+		}
+	}
+	if appNode == nil || appNode.Type != "cloud" {
+		t.Fatalf("expected a cloud app node 'billing'; got nodes %+v", v.Path.Nodes)
+	}
+	if resNode == nil || resNode.Type != "cloud" {
+		t.Fatalf("expected a cloud resource node 'billing-db'; got %+v", v.Path.Nodes)
+	}
+	// the seam: a provider_boundary edge into the application.
+	boundary := false
+	for _, e := range v.Path.Edges {
+		if e.Type == "provider_boundary" && e.Target == "billing" {
+			boundary = true
+		}
+	}
+	if !boundary {
+		t.Fatalf("expected a provider_boundary (cloud seam) edge into the app; got %+v", v.Path.Edges)
+	}
+	// app annotation is app-team owned, the resource is grounded as a candidate fault.
+	if a := findAnn(v, "node", "billing"); a == nil || a.Owner != "app_team" {
+		t.Fatalf("expected an app_team-owned app annotation; got %+v", a)
+	}
+	if a := findAnn(v, "node", "billing-db"); a == nil || a.Status != "suspected_down" {
+		t.Fatalf("expected suspected_down resource annotation; got %+v", a)
+	}
+}
+
+// #81 P3G: when the probe destination IS the app, the endpoint is upgraded to a
+// cloud node in place — no duplicate billing node, no extra boundary edge.
+func TestRcaPathView_CloudAppIsProbeDestination(t *testing.T) {
+	meta := map[string]any{"verdict_tier": "suspected", "top_confidence": 0.5, "trigger_signal": "c3", "evidence_missing": "[]"}
+	sigs := []map[string]any{
+		pvSig(map[string]any{"signal_id": "c1", "source": "cloud", "entity_type": "app", "entity_id": "billing", "kind": "cloud_health", "modality_class": "device_telemetry", "observer_id": "cloud:1:r"}),
+		pvSig(map[string]any{"signal_id": "c3", "entity_type": "path", "entity_id": "branch->billing", "kind": "probe_loss", "modality_class": "active_probe", "observer_id": "vantage", "probe_authority": "high", "probe_scope": "customer_path", "is_trigger": true}),
+	}
+	v := BuildPathView("obj", meta, sigs, nil)
+	count, cloudTyped := 0, false
+	for _, n := range v.Path.Nodes {
+		if n.ID == "billing" {
+			count++
+			cloudTyped = n.Type == "cloud"
+		}
+	}
+	if count != 1 || !cloudTyped {
+		t.Fatalf("expected exactly one cloud-typed 'billing' node; got count=%d nodes=%+v", count, v.Path.Nodes)
+	}
+}
+
+// #81 P3G: cloud-ONLY object (app + resource, no network path) → the projection
+// stands the app up as the affected head with its resource hanging off it, and
+// adds NO provider_boundary (there is no upstream network node to bridge from).
+func TestRcaPathView_CloudOnlyProjection(t *testing.T) {
+	meta := map[string]any{"verdict_tier": "suspected", "top_confidence": 0.4, "trigger_signal": "c1", "evidence_missing": "[]"}
+	sigs := []map[string]any{
+		pvSig(map[string]any{"signal_id": "c1", "source": "cloud", "entity_type": "app", "entity_id": "billing", "kind": "cloud_health", "modality_class": "device_telemetry", "observer_id": "cloud:1:r"}),
+		pvSig(map[string]any{"signal_id": "c2", "source": "cloud", "entity_type": "cloud_resource", "entity_id": "billing-db", "kind": "database_metric", "modality_class": "device_telemetry", "observer_id": "cloud:1:r"}),
+	}
+	v := BuildPathView("obj", meta, sigs, nil)
+	var app, res bool
+	for _, n := range v.Path.Nodes {
+		if n.ID == "billing" && n.Type == "cloud" {
+			app = true
+		}
+		if n.ID == "billing-db" && n.Type == "cloud" {
+			res = true
+		}
+	}
+	if !app || !res {
+		t.Fatalf("expected cloud app + resource nodes; got %+v", v.Path.Nodes)
+	}
+	for _, e := range v.Path.Edges {
+		if e.Type == "provider_boundary" {
+			t.Fatalf("cloud-only object should have no provider_boundary (no upstream net node); got %+v", e)
+		}
+	}
+	// the resource hangs off the app.
+	dep := false
+	for _, e := range v.Path.Edges {
+		if e.Source == "billing" && e.Target == "billing-db" {
+			dep = true
+		}
+	}
+	if !dep {
+		t.Fatalf("expected an app→resource dependency edge; got %+v", v.Path.Edges)
+	}
+}
+
+// #81 P3G: no app/cloud_resource entities → the cloud projection is a no-op
+// (network RCA path is byte-identical to before).
+func TestRcaPathView_NoCloudProjectionForNetworkObject(t *testing.T) {
+	meta, sigs, edges := goldenInputs()
+	v := BuildPathView("obj", meta, sigs, edges)
+	for _, n := range v.Path.Nodes {
+		if n.Type == "cloud" {
+			t.Fatalf("network-only object grew a cloud node: %+v", n)
+		}
+	}
+	for _, e := range v.Path.Edges {
+		if e.Type == "provider_boundary" {
+			t.Fatalf("network-only object grew a provider_boundary edge: %+v", e)
+		}
+	}
+}
+
+// confirmed verdict → confirmed_down + "Likely fault location".
+func TestRcaPathView_ConfirmedTitleAndState(t *testing.T) {
+	meta, sigs, edges := goldenInputs()
+	meta["verdict_tier"] = "confirmed"
+	v := BuildPathView("obj", meta, sigs, edges)
+	if v.Title != "Likely fault location" {
+		t.Fatalf("confirmed title = %q", v.Title)
+	}
+	if a := findAnn(v, "edge", "e2e-edge1:GigabitEthernet0/1"); a == nil || a.Status != "confirmed_down" {
+		t.Fatalf("confirmed link edge = %+v", a)
+	}
+}
+
+// suspected → missing "independent observer".
+func TestRcaPathView_MissingIndependentObserver(t *testing.T) {
+	meta, sigs, edges := goldenInputs()
+	v := BuildPathView("obj", meta, sigs, edges)
+	found := false
+	for _, m := range v.MissingEvidenceSummary {
+		if strings.Contains(m, "independent observer") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an independent-observer missing-evidence note; got %v", v.MissingEvidenceSummary)
+	}
+}
+
+// #81 P5: the app_impact projection surfaces in the RCA detail payload.
+func TestRcaPathView_AppImpactSurfaced(t *testing.T) {
+	meta := map[string]any{
+		"verdict_tier": "suspected", "top_confidence": 0.5, "trigger_signal": "t3",
+		"evidence_missing": "[]",
+		"app_impact": `{"apps":[{"app":"Microsoft Teams","band":"authoritative","state":"fused",` +
+			`"sources":["ngfw_app_id","ip_catalog"],"evidence_score":92,"provider":"Microsoft"}]}`,
+	}
+	sigs := []map[string]any{
+		pvSig(map[string]any{"signal_id": "t3", "entity_type": "device", "entity_id": "edge1", "kind": "device_cpu_high"}),
+	}
+	v := BuildPathView("obj", meta, sigs, nil)
+	if v.AppImpact == nil || len(v.AppImpact.Apps) != 1 {
+		t.Fatalf("expected 1 impacted app, got %+v", v.AppImpact)
+	}
+	a := v.AppImpact.Apps[0]
+	if a.App != "Microsoft Teams" || a.Band != "authoritative" || a.EvidenceScore != 92 {
+		t.Errorf("app impact mismapped: %+v", a)
+	}
+	if len(a.Sources) != 2 || a.Sources[0] != "ngfw_app_id" {
+		t.Errorf("sources mismapped: %v", a.Sources)
+	}
+}
+
+func TestParseAppImpact_HidesEmptyAndMalformed(t *testing.T) {
+	for _, s := range []string{"", "{}", `{"apps":[]}`, "not-json", `{"apps":[],"evidence_missing":[]}`} {
+		if got := parseAppImpact(map[string]any{"app_impact": s}); got != nil {
+			t.Errorf("app_impact %q should yield nil, got %+v", s, got)
+		}
+	}
+	// evidence_missing alone (no apps) still renders — honest unknown.
+	got := parseAppImpact(map[string]any{"app_impact": `{"apps":[],"evidence_missing":["app unknown for prefix:10.0.0.0/8"]}`})
+	if got == nil || len(got.EvidenceMissing) != 1 {
+		t.Errorf("evidence_missing-only should surface, got %+v", got)
+	}
+}
+
+// §11 (truthfulness epic): the validation fact — set only when EVERY attached
+// signal declares a non-production purpose; one production signal keeps the
+// case production (a real fault is never suppressed by co-attached test traffic).
+func TestRcaPathView_ValidationScenario(t *testing.T) {
+	meta := map[string]any{"verdict_tier": "confirmed", "top_confidence": 0.9}
+	valSig := func(kind, lane string) map[string]any {
+		return map[string]any{
+			"kind": kind, "modality_class": lane, "attached": true,
+			"entity_type": "app", "entity_id": "rca_canary_app", "severity": "high",
+			"attrs": `{"signal_purpose":"validation"}`,
+		}
+	}
+	prodSig := map[string]any{
+		"kind": "lb_5xx", "modality_class": "device_telemetry", "attached": true,
+		"entity_type": "app", "entity_id": "rca_canary_app", "severity": "high",
+		"attrs": `{}`,
+	}
+
+	allVal := BuildPathView("obj", meta, []map[string]any{
+		valSig("synthetic_http_5xx", "active_probe"), valSig("lb_5xx", "device_telemetry"),
+	}, nil)
+	if !allVal.Validation {
+		t.Fatal("all-validation case must set Validation")
+	}
+	mixed := BuildPathView("obj", meta, []map[string]any{
+		valSig("synthetic_http_5xx", "active_probe"), prodSig,
+	}, nil)
+	if mixed.Validation {
+		t.Fatal("one production signal must keep the case production")
+	}
+}

@@ -1,0 +1,106 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+// canvasUrlState.test.ts — #133a. The canvas's shareable state lived in `useState`
+// only: an investigation could not be sent to a colleague and did not survive F5.
+// These pin the round-trip AND the zero-trust rule — the hash is an input, and a
+// value that is not in its closed set must be IGNORED, never applied.
+
+import { describe, it, expect, beforeEach } from "vitest";
+import {
+  readCanvasUrlState,
+  canvasUrlQuery,
+  writeCanvasUrlState,
+  hashPath,
+  hashQuery,
+  CANVAS_URL_DEFAULTS,
+} from "./canvasUrlState";
+
+const ROUTE = "#/observability/topology";
+
+describe("canvasUrlState — parsing a route", () => {
+  it("reads every serialized control", () => {
+    const s = readCanvasUrlState(`${ROUTE}?mode=investigate&overlay=utilization&domain=dc&group=vendor&arrange=ring`);
+    expect(s).toEqual({
+      mode: "investigate",
+      overlay: "utilization",
+      domain: "dc",
+      groupBy: "vendor",
+      arrange: "ring",
+    });
+  });
+
+  it("ignores a value outside its closed set instead of applying it", () => {
+    const s = readCanvasUrlState(`${ROUTE}?mode=rm+-rf&overlay=nope&domain=mars&group=zzz&arrange=irregular`);
+    expect(s).toEqual({});
+  });
+
+  it("keeps the good half of a partly-bad link", () => {
+    const s = readCanvasUrlState(`${ROUTE}?mode=capacity&overlay=not-a-thing`);
+    expect(s.mode).toBe("capacity");
+    expect(s.overlay).toBeUndefined();
+  });
+
+  it("a route with no query yields nothing to apply", () => {
+    expect(readCanvasUrlState(ROUTE)).toEqual({});
+    expect(readCanvasUrlState("")).toEqual({});
+  });
+
+  it("carries a single selection, node winning over edge winning over group", () => {
+    expect(readCanvasUrlState(`${ROUTE}?node=dev-1`).nodeId).toBe("dev-1");
+    expect(readCanvasUrlState(`${ROUTE}?edge=e-1`).edgeId).toBe("e-1");
+    expect(readCanvasUrlState(`${ROUTE}?group_id=site-a`).groupId).toBe("site-a");
+    const both = readCanvasUrlState(`${ROUTE}?node=dev-1&edge=e-1&group_id=site-a`);
+    expect(both).toEqual({ nodeId: "dev-1" });
+  });
+
+  it("bounds a selection id — an unbounded or control-char id is dropped", () => {
+    expect(readCanvasUrlState(`${ROUTE}?node=${"x".repeat(300)}`).nodeId).toBeUndefined();
+    expect(readCanvasUrlState(`${ROUTE}?node=${encodeURIComponent("a\0b")}`).nodeId).toBeUndefined();
+  });
+});
+
+describe("canvasUrlState — formatting", () => {
+  it("omits every value that is still at its default (a default canvas keeps a clean URL)", () => {
+    expect(canvasUrlQuery(CANVAS_URL_DEFAULTS)).toBe("");
+  });
+
+  it("orders keys deterministically so two operators comparing links see no noise", () => {
+    const a = canvasUrlQuery({ arrange: "ring", overlay: "flow", mode: "capacity", domain: "dc", groupBy: "role" });
+    const b = canvasUrlQuery({ mode: "capacity", overlay: "flow", domain: "dc", groupBy: "role", arrange: "ring" });
+    expect(a).toBe(b);
+    expect(a).toBe("mode=capacity&overlay=flow&domain=dc&group=role&arrange=ring");
+  });
+
+  it("round-trips: format → parse gives the same non-default state back", () => {
+    const state = { mode: "path_trace", overlay: "syslog", domain: "sdwan", groupBy: "owner", arrange: "star", nodeId: "core-1" } as const;
+    const parsed = readCanvasUrlState(`${ROUTE}?${canvasUrlQuery(state)}`);
+    expect(parsed).toEqual(state);
+  });
+});
+
+describe("canvasUrlState — writing the route", () => {
+  beforeEach(() => {
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("replaces the query on the current hash path", () => {
+    const next = writeCanvasUrlState({ mode: "capacity" }, `${ROUTE}?mode=explore`);
+    expect(hashPath(next)).toBe(ROUTE);
+    expect(hashQuery(next)).toBe("mode=capacity");
+  });
+
+  it("drops the query entirely when everything is back at its default", () => {
+    expect(writeCanvasUrlState(CANVAS_URL_DEFAULTS, `${ROUTE}?mode=capacity`)).toBe(ROUTE);
+  });
+
+  it("preserves query keys the canvas does not own", () => {
+    const next = writeCanvasUrlState({ mode: "capacity" }, `${ROUTE}?tab=alerts&mode=explore`);
+    expect(hashQuery(next).split("&").sort()).toEqual(["mode=capacity", "tab=alerts"]);
+  });
+
+  it("is a no-op when the route already says exactly this", () => {
+    const hash = `${ROUTE}?mode=capacity`;
+    expect(writeCanvasUrlState({ mode: "capacity" }, hash)).toBe(hash);
+  });
+});

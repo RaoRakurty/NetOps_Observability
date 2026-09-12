@@ -1,0 +1,210 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# Normalization catalog — raw telemetry → canonical single-contract.
+#
+# This is the SOURCE OF TRUTH for how any transport's raw signal becomes a
+# canonical `device_*` series. It is DATA; normalize.py applies it and
+# test_conformance.py proves it against real captured fixtures. The gnmic YAML
+# processor chain is a *derived runtime applier* that must agree with this file
+# (checked by the contract audit) — normalization logic lives here + in tested
+# code, NOT buried in collector config.
+#
+# Each family declares: how to recognize its raw paths (match), its kind/unit,
+# the enum mapping (canonical int <- raw token, case-insensitive), the canonical
+# label set, the OWNER transport (collision safety — one transport per
+# (device,family)), and the dedup key.
+version: 1
+
+families:
+  # ---- Interfaces (SNMP-owned; gNMI is a gated subset) -------------------
+  device_if_oper_status:
+    match:
+      - ".*interfaces/interface/state/oper-status$"   # Arista OpenConfig
+      - ".*interface/oper-state$"                      # Nokia SRL native
+    kind: state_enum
+    unit: enum
+    labels: [device, vendor, ifName, transport]
+    enum:               # IF-MIB ifOperStatus numbering
+      "1": [up]
+      "2": [down]
+      "3": [testing]
+      "4": [unknown]
+      "5": [dormant]
+      "6": [not_present, "not-present"]
+      "7": [lower_layer_down, "lower-layer-down"]
+    owner:
+      transport: snmp
+      reason: "SNMP IF-MIB has the broadest device support for interface state; gNMI interface coverage is a strict subset and is withheld by the ownership gate until per-device parity is proven."
+    dedup_key: [device, ifName]
+
+  device_if_admin_status:
+    match:
+      - ".*interfaces/interface/state/admin-status$"
+      - ".*interface/admin-state$"
+    kind: state_enum
+    unit: enum
+    labels: [device, vendor, ifName, transport]
+    enum:               # IF-MIB ifAdminStatus (Nokia spells enable/disable)
+      "1": [up, enable]
+      "2": [down, disable]
+      "3": [testing]
+    owner:
+      transport: snmp
+      reason: "Mirror of oper-status ownership."
+    dedup_key: [device, ifName]
+
+  # ---- Resources (Nokia SRL memory: gNMI-owned, no SNMP source) ----------
+  device_mem_percent:
+    match:
+      - ".*memory/utilization$"
+    kind: gauge
+    unit: percent
+    labels: [device, vendor, transport]
+    owner:
+      transport: gnmi
+      reason: "Nokia SR Linux exposes NO SNMP memory source; gNMI owns it from day one. (Juniper DOES have an SNMP source for the same canonical name — so ownership is per-device, not per-name.)"
+    dedup_key: [device]
+
+  # ---- BGP control plane (gNMI-owned, on-change-preferred) ---------------
+  device_bgp_peer_state:
+    match:
+      - ".*bgp/neighbors/neighbor/state/session-state$"   # Arista OpenConfig
+      - ".*bgp/neighbor/session-state$"                    # Nokia SRL native
+    kind: state_enum
+    unit: enum
+    labels: [device, vendor, peer, vrf, transport]
+    enum:               # BGP4-MIB bgpPeerState numbering (alert: state < 6 = not-established)
+      "1": [idle]
+      "2": [connect]
+      "3": [active]
+      "4": [opensent, "open-sent"]
+      "5": [openconfirm, "open-confirm"]
+      "6": [established]
+    owner:
+      transport: gnmi
+      reason: "BGP4-MIB is IPv4-only AND weakly implemented on cEOS/SRL (device_bgp_peer_state has zero SNMP series on this fabric). gNMI owns BGP state; SNMP bgpPeerState kept only as a fallback for agentless/older gear."
+    dedup_key: [device, vrf, peer]
+
+  # ===================== Phase 3 candidate families =====================
+  # Canonical SPECS derived from verified standards (telemetry-coverage-reference
+  # §A). The mapping is authoritative; whether a given vendor/platform actually
+  # streams it is tracked separately in collection.yaml as fidelity_status:
+  # doc_claimed (NOT validated) until a fixture proves it.
+
+  # OSPF neighbor adjacency state (resolves the events.yaml forward-ref).
+  device_ospf_nbr_state:
+    match:
+      - ".*ospf/.*neighbor.*/state/adjacency-state$"   # OpenConfig
+      - ".*ospfNbrState$"                               # OSPF-MIB (SNMP)
+    kind: state_enum
+    unit: enum
+    labels: [device, vendor, peer, vrf, transport]
+    enum:                # OSPF-MIB ospfNbrState (alert: < 8 = not full)
+      "1": [down]
+      "2": [attempt]
+      "3": [init]
+      "4": [two_way, twoway, "two-way"]
+      "5": [exchange_start, exchangestart, "exchange-start"]
+      "6": [exchange]
+      "7": [loading]
+      "8": [full]
+    owner: {transport: gnmi, reason: "Adjacency flaps are root-cause events; on-change preferred. SNMP OSPF-MIB is the fallback."}
+    dedup_key: [device, vrf, peer]
+
+  # IS-IS adjacency state (the IGP running on the clos fabric — live on SRL).
+  device_isis_adj_state:
+    match:
+      - ".*isis/instance/interface/adjacency/state$"    # Nokia SRL native
+      - ".*isis/interfaces/interface/levels/level/adjacencies/adjacency/state/adjacency-state$"  # OpenConfig
+      - ".*isisISAdjState$"                              # ISIS-MIB (RFC 4444)
+    kind: state_enum
+    unit: enum
+    labels: [device, vendor, isis_neighbor, ifName, isis_level, transport]
+    enum:                # ISIS-MIB isisISAdjState
+      "1": [down]
+      "2": [initializing, init]
+      "3": [up]
+      "4": [failed]
+    owner: {transport: gnmi, reason: "IGP adjacency flaps are root-cause events; on-change preferred. SRL streams fresh-timestamped adjacency state. ISIS-MIB is the fallback."}
+    dedup_key: [device, isis_neighbor]
+
+  # MPLS TE / LSP operational state (RFC 3812 mplsTunnelOperStatus).
+  device_mpls_lsp_state:
+    match:
+      - ".*mpls.*lsp.*/state/oper-status$"             # OpenConfig-ish
+      - ".*mplsTunnelOperStatus$"                      # MPLS-TE-STD-MIB
+    kind: state_enum
+    unit: enum
+    labels: [device, vendor, lsp, transport]
+    enum:                # mplsTunnelOperStatus (same numbering as ifOperStatus)
+      "1": [up]
+      "2": [down]
+      "3": [testing]
+      "4": [unknown]
+      "5": [dormant]
+      "6": [not_present, "not-present"]
+      "7": [lower_layer_down, "lower-layer-down"]
+    owner: {transport: gnmi, reason: "LSP up/down is a service-plane root-cause event; on-change preferred. MPLS-TE-STD-MIB fallback."}
+    dedup_key: [device, lsp]
+
+  # LDP session state (RFC 3815 mplsLdpSessionState).
+  device_ldp_session_state:
+    match:
+      - ".*mplsLdpSessionState$"
+    kind: state_enum
+    unit: enum
+    labels: [device, vendor, peer, transport]
+    enum:                # mplsLdpSessionState
+      "1": [nonexistent]
+      "2": [initialized]
+      "3": [openrec]
+      "4": [opensent]
+      "5": [operational]
+    owner: {transport: snmp, reason: "MPLS-LDP-STD-MIB is the standard source; gNMI LDP path coverage is vendor-uneven (validate before flipping)."}
+    dedup_key: [device, peer]
+
+  # BGP FSM established-transition counter (flap counter; BGP4-MIB / BGP4V2-MIB).
+  device_bgp_fsm_transitions:
+    match:
+      - ".*bgp/neighbors/neighbor/state/established-transitions$"   # OpenConfig
+      - ".*bgpPeerFsmEstablishedTransitions$"                        # BGP4-MIB
+    kind: counter
+    unit: count
+    labels: [device, vendor, peer, vrf, transport]
+    owner: {transport: gnmi, reason: "Pairs with device_bgp_peer_state; counts flaps between samples."}
+    dedup_key: [device, vrf, peer]
+
+  # BGP prefixes received per AFI/SAFI (BGP4V2-MIB — fixes the v4-only blind spot).
+  device_bgp_pfx_in:
+    match:
+      - ".*bgp/neighbors/neighbor/.*/state/prefixes/received$"      # OpenConfig per-AFI
+      - ".*bgp4V2PrefixInPrefixes$"                                  # BGP4V2-MIB
+    kind: gauge
+    unit: count
+    labels: [device, vendor, peer, vrf, afi_safi, transport]
+    owner: {transport: gnmi, reason: "Per-AFI prefix counts; BGP4-MIB cannot represent v6/VPNv4, BGP4V2-MIB or gNMI required."}
+    dedup_key: [device, vrf, peer, afi_safi]
+
+  # Firewall active-session count (the headline NGFW load/health gauge; the metric
+  # the FortiOS/PAN/Versa traffic+threat EVENT families correlate against).
+  device_session_count:
+    match:
+      - ".*fgSysSesCount$"                # FORTINET-FORTIGATE-MIB
+      - ".*panSessionActive$"             # PAN-COMMON-MIB
+      - ".*cfwConnectionStatCount$"       # CISCO-UNIFIED-FIREWALL-MIB
+    kind: gauge
+    unit: count
+    labels: [device, vendor, transport]
+    owner: {transport: snmp, reason: "Total active sessions through the firewall — the NGFW load/health signal. Vendor firewall MIB via SNMP (live on dmz-fw)."}
+    dedup_key: [device]
+
+# Plumbing tag names that must never reach a canonical label set (dropped after
+# reconciliation). gnmic names some with hyphens (invalid Prometheus labels).
+drop_tags:
+  - "subscription-name"
+  - "subscription_name"
+  - "control_slot"
+  - "cpu_index"
+  - "protocol_identifier"
+  - "protocol_name"

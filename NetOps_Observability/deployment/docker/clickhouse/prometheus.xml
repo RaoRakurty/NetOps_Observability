@@ -1,0 +1,12 @@
+<clickhouse>
+    <!-- Native Prometheus endpoint for stack self-monitoring (scraped by the
+         prometheus service at clickhouse:9363). Internal-only; not host-published. -->
+    <prometheus>
+        <endpoint>/metrics</endpoint>
+        <port>9363</port>
+        <metrics>true</metrics>
+        <events>true</events>
+        <asynchronous_metrics>true</asynchronous_metrics>
+        <errors>true</errors>
+    </prometheus>
+</clickhouse>

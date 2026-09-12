@@ -1,0 +1,434 @@
+/* SPDX-License-Identifier: Apache-2.0
+   Copyright 2026 Correlix */
+
+/* investigation.css — styles for the Troubleshooting investigation surface.
+ *
+ * The page is THREE BLOCKS (owner, 2026-09-06: "There are two sections which
+ * look similar … simplify these pages and make it intuitive"):
+ *
+ *   1. What's wrong?  — one list of open cases + one box to describe a new one
+ *   2. The answer     — one card: cause, layer, blast radius, onset, actions
+ *   3. The evidence   — one collapsed disclosure over the lanes
+ *
+ * The rules below exist to make that read at a glance, on one grid, with equal
+ * gutters, in both themes. What went with the old layout: the numbered step
+ * frame, the "how this page works" list, the two-tab entry picker with its
+ * search box, the symptom grid, the four-rung ladder and the quiet-lane toggle.
+ *
+ * TYPOGRAPHY FLOOR (owner: "fonts are too small"). Body copy is >= 14px, block
+ * headings are >= 16px, and NOTHING on this surface is below 12.5px. Any new
+ * rule here must hold that line.
+ *
+ * Deliberately small otherwise: the page reuses the app's shared primitives
+ * (.card, .chip, .badge, .empty, .dm-grid, .btn-accent, .chip-btn, .fact-line)
+ * and adds only what has no existing equivalent. Everything is scoped under
+ * .ts-inv (and .tsl-card / .ts-iris, which the lanes render) so nothing leaks
+ * into another page. Colours come from the theme tokens, so light and dark both
+ * work with no second palette.
+ */
+.ts-inv { display: flex; flex-direction: column; gap: 16px; font-size: 14px; }
+.ts-inv .card { margin-bottom: 0; }
+.ts-inv .empty { font-size: 14px; }
+
+/* ── the block frame ─────────────────────────────────────────────────────── */
+.ts-block { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
+.ts-block-h {
+  margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em;
+  display: flex; align-items: center; gap: 4px;
+}
+.ts-bad { margin: 0; font-size: 14px; line-height: 1.5; color: var(--bad, #ef4444); }
+
+/* ── 1 · the one list, then the one box ──────────────────────────────────── */
+.ts-cases {
+  list-style: none; margin: 0; padding: 0; display: grid; gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+.ts-case {
+  width: 100%; height: 100%; text-align: left; cursor: pointer;
+  display: grid; gap: 3px 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 10px 12px; border-radius: 9px;
+  border: 1px solid var(--border); background: transparent; color: var(--fg);
+}
+.ts-case:hover { border-color: var(--accent); }
+.ts-case.on { border-color: var(--accent); background: var(--accent-soft); }
+.ts-case:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ts-case-l { grid-column: 1; font-weight: 600; font-size: 14px; line-height: 1.4; }
+.ts-case-f { grid-column: 1; }
+.ts-case-chip {
+  grid-column: 2; grid-row: 1 / span 2; align-self: center;
+  font-size: 12.5px; white-space: nowrap;
+}
+
+.ts-describe { display: flex; flex-direction: column; gap: 6px; }
+.ts-describe-l { font-size: 14px; font-weight: 500; color: var(--fg); }
+.ts-describe-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.ts-describe-row input {
+  flex: 1 1 320px; min-width: 0; padding: 9px 12px; border-radius: 8px; font-size: 14px;
+  border: 1px solid var(--border); background: var(--bg-2, var(--bg)); color: var(--fg);
+}
+.ts-describe-row input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ts-describe-row button { font-size: 14px; }
+
+/* ── 2 · the answer card ─────────────────────────────────────────────────── */
+.ts-answer {
+  border: 1px solid var(--border); border-left: 3px solid var(--border);
+  border-radius: 9px; padding: 12px 14px; display: flex; flex-direction: column;
+  align-items: flex-start; gap: 5px;
+}
+.ts-answer[data-answer="confirmed"] { border-left-color: var(--bad, #ef4444); }
+.ts-answer[data-answer="likely"] { border-left-color: var(--warn, #d97706); }
+.ts-answer[data-answer="recovered"] { border-left-color: var(--good, #16a34a); }
+.ts-answer-h { margin: 0; font-size: 18px; font-weight: 600; line-height: 1.35; letter-spacing: -0.01em; }
+.ts-answer-f { margin: 0; font-size: 14px; line-height: 1.5; color: var(--muted); }
+.ts-answer-f b { color: var(--fg); font-weight: 500; }
+.ts-answer-chip { margin-top: 3px; font-size: 12.5px; }
+.ts-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.ts-actions button { font-size: 14px; }
+
+/* ── 3 · the one evidence disclosure ─────────────────────────────────────── */
+.ts-inv .ts-ev-toggle { align-self: flex-start; font-size: 14px; }
+.ts-ev-body { display: flex; flex-direction: column; gap: 14px; }
+.ts-ev-body[hidden] { display: none; }
+.ts-lanes { align-items: stretch; }
+.ts-lane-slot { display: flex; min-width: 0; }
+/* `[hidden]` and a class have equal specificity, so an author `display:flex`
+   would beat the UA's `[hidden]{display:none}` and a "hidden" quiet lane would
+   still be painted. State it explicitly. */
+.ts-lane-slot[hidden] { display: none; }
+.ts-lane-slot > .tsl-card { flex: 1 1 auto; }
+.ts-quiet { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+
+.tsl-card { display: flex; flex-direction: column; gap: 8px; margin-bottom: 0; }
+.tsl-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.tsl-head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.tsl-title { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.tsl-sum { margin: 0; font-size: 14px; line-height: 1.5; color: var(--fg); }
+.tsl-sum.bad { color: var(--bad, #ef4444); }
+.tsl-notwired { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--muted); }
+.tsl-notwired .badge { font-size: 12.5px; background: var(--surface-2, var(--hover)); color: var(--muted); }
+.tsl-detail { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
+.tsl-disclose {
+  align-self: flex-start; cursor: pointer; padding: 3px 0;
+  background: transparent; border: 0; border-bottom: 1px dotted var(--border);
+  color: var(--accent); font-size: 13px; font-weight: 500;
+}
+.tsl-disclose:hover { border-bottom-color: var(--accent); }
+.tsl-disclose:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tsl-src { font-size: 12.5px; color: var(--muted); }
+.tsl-api { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12.5px; }
+.tsl-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.tsl-row {
+  display: grid; grid-template-columns: 10px minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 9px; align-items: baseline; font-size: 13px;
+}
+.tsl-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tsl-k { font-weight: 600; }
+.tsl-v { color: var(--fg); }
+.tsl-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); align-self: center; }
+.tsl-dot.good, .tsl-dot.healthy { background: var(--good, #22c55e); }
+.tsl-dot.bad, .tsl-dot.severe { background: var(--bad, #ef4444); }
+.tsl-dot.watch, .tsl-dot.degraded, .tsl-dot.change { background: var(--warn, #f59e0b); }
+.tsl-dot.state { background: var(--accent); }
+.tsl-foot { margin: 0; font-size: 12.5px; color: var(--muted); }
+
+/* ── the Iris assistant panel (opened by the answer card's Ask Iris) ────── */
+.ts-iris {
+  display: flex; flex-direction: column; gap: 8px;
+  border: 1px solid var(--accent); border-radius: 9px; padding: 12px 14px;
+  background: var(--accent-soft);
+}
+.ts-iris .tsl-title { font-size: 16px; }
+.tsl-iris-text { font-size: 14px; line-height: 1.6; white-space: pre-wrap; margin: 6px 0 8px; }
+.tsl-prov { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.tsl-cites { display: flex; flex-wrap: wrap; gap: 6px; }
+.tsl-cite { display: inline-flex; align-items: center; gap: 4px; }
+.ts-iris .badge, .ts-iris .chip { font-size: 12.5px; }
+
+/* ── TAC escalation panel (TacEscalationPanel) + Iris → Knowledge ──────────
+   One prefix, `tac-`, for both surfaces: the escalation panel and the coverage
+   page render the same vocabulary (a step, an intent, a command, how sure we
+   are of it), so they share one set of rules rather than drifting apart. */
+.tac-panel { display: flex; flex-direction: column; gap: 14px; margin: 10px 0; font-size: 14px; }
+.tac-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.tac-h { margin: 0; font-size: 16px; font-weight: 600; }
+.tac-ver { font-family: var(--font-mono, ui-monospace, monospace); }
+.tac-start { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.tac-step { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--border); }
+.tac-step-h { margin: 0; font-size: 16px; font-weight: 600; }
+.tac-section { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.tac-section-h { margin: 6px 0 0; font-size: 12.5px; font-weight: 600; color: var(--muted); text-transform: none; letter-spacing: 0; }
+.tac-note { margin: 0; font-size: 13px; line-height: 1.5; }
+.tac-bad { margin: 0; color: var(--bad, #ef4444); font-size: 13px; line-height: 1.5; }
+.tac-id, .tac-cmd { font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; }
+.tac-cmd { color: var(--fg); }
+.tac-id { color: var(--muted); }
+.tac-kind { text-transform: uppercase; font-size: 12.5px; letter-spacing: .04em; color: var(--muted); }
+.tac-unsure { border-color: var(--warn, #f59e0b); color: var(--warn, #f59e0b); }
+
+/* class + why */
+.tac-class-title { margin: 0; font-size: 14px; }
+.tac-why, .tac-alts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
+.tac-why li { font-family: var(--font-mono, ui-monospace, monospace); color: var(--muted); }
+.tac-alt-t { font-weight: 500; font-size: 12.5px; }
+
+/* forms */
+.tac-form, .tac-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.tac-field { display: flex; flex-direction: column; gap: 3px; font-size: 13px; min-width: 190px; flex: 1 1 190px; }
+.tac-field > span { color: var(--muted); }
+.tac-field.req > span { color: var(--warn, #f59e0b); font-weight: 500; }
+.tac-field input, .tac-field select, .tac-field textarea {
+  padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--fg); font-size: 14px; width: 100%;
+}
+.tac-check { display: flex; align-items: center; gap: 6px; font-size: 13px; flex: 1 1 100%; }
+.tac-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+
+/* ── the command plan: ONE TABLE ──────────────────────────────────────────
+   Owner, 2026-09-06: "It gives bunch of links and looks ridiculous. This page
+   is unusable." Every plan step used to render the dialect's whole citation
+   list inline (8,418 links on one Nokia SR Linux plan), its intent id, a badge
+   and a repeated caveat sentence. The plan is now a table with four readable
+   columns and one chip; the machine ids live in the row's tooltip, the chip
+   meanings in ONE legend line under the table, and a row links at most its
+   first reference. Nothing here goes below the 12.5px floor. */
+.tac-plan { display: flex; flex-direction: column; gap: 8px; }
+.tac-plan-head { margin: 0; font-size: 14px; font-weight: 500; line-height: 1.45; color: var(--fg); }
+/* Wide content scrolls INSIDE its own box; the panel never scrolls sideways. */
+.tac-plan-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+.tac-plan-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.tac-plan-table th {
+  text-align: left; font-size: 12.5px; font-weight: 600; color: var(--muted);
+  text-transform: none; letter-spacing: 0;
+  padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.tac-plan-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: baseline; }
+.tac-plan-table tr:last-child td { border-bottom: 0; }
+.tac-col-n { width: 1%; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tac-col-what { min-width: 180px; }
+.tac-col-cmd code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; color: var(--fg); white-space: nowrap; }
+.tac-col-status, .tac-col-ref { width: 1%; white-space: nowrap; }
+.tac-ref { text-decoration: none; font-size: 14px; color: var(--accent); padding: 0 2px; }
+.tac-ref:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Header cell label for assistive tech only; the column shows an icon link. */
+.tac-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.tac-chip {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 500; line-height: 1.5;
+  border: 1px solid var(--border); color: var(--muted); background: transparent;
+}
+.tac-chip-verified { border-color: var(--good, #16a34a); color: var(--good, #16a34a); }
+.tac-chip-vendor-docs { border-color: var(--warn, #d97706); color: var(--warn, #d97706); }
+.tac-chip-unverified { border-color: var(--border); color: var(--muted); }
+/* Connector state (owner, 2026-09-06). One chip per row, four states.
+   "Unavailable" is an ERROR — the stored configuration could not be read —
+   so it takes the bad colour; "Not configured" is only a state and stays
+   neutral, with the link to where credentials are brought beside it. */
+.tac-chip-ready { border-color: var(--good, #16a34a); color: var(--good, #16a34a); }
+.tac-chip-attach-only { border-color: var(--warn, #d97706); color: var(--warn, #d97706); }
+.tac-chip-not-configured { border-color: var(--border); color: var(--muted); }
+.tac-chip-unavailable { border-color: var(--bad, #ef4444); color: var(--bad, #ef4444); }
+/* MANUAL (owner, 2026-09-08). A vendor with no case API can never be Ready, so
+   it never takes the ready colour. Unconfigured is neutral like "Not
+   configured"; configured is a real, usable route and reads as one — but as an
+   ACCENT rather than the green an API path earns, because a human still has to
+   press submit in the vendor's own portal. */
+.tac-chip-manual { border-color: var(--border); color: var(--muted); }
+.tac-chip-manual-configured { border-color: var(--accent); color: var(--accent); }
+
+/* The "Send to vendor" chooser: the one decision, not the catalogue. */
+.tac-chooser { margin: 8px 0 4px; }
+.tac-plan-legend { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+
+/* One line, with the long list behind it. */
+.tac-fold { font-size: 13px; }
+.tac-fold > summary { cursor: pointer; color: var(--fg); padding: 3px 0; }
+.tac-fold > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tac-fold-list {
+  list-style: none; margin: 6px 0 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 2px 16px;
+  font-size: 13px; color: var(--muted);
+}
+.tac-fold-list li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tac-fold-text { margin: 6px 0 0; font-size: 13px; line-height: 1.55; color: var(--muted); }
+
+.tac-steps, .tac-topo, .tac-bundles, .tac-connectors, .tac-dialects, .tac-unplanned, .tac-classes,
+.tac-policy-families {
+  list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px;
+}
+.tac-step-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; padding: 3px 0; border-bottom: 1px dashed var(--border); }
+.tac-step-t { font-weight: 500; }
+.tac-v-doc_claimed { border-color: var(--warn, #f59e0b); color: var(--warn, #f59e0b); }
+
+/* collection progress + captured output */
+.tac-job { display: flex; flex-direction: column; gap: 4px; }
+.tac-progress { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.tac-prog { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; flex-wrap: wrap; }
+.tac-prog-i { font-family: var(--font-mono, ui-monospace, monospace); color: var(--muted); }
+.tac-prog-p { font-weight: 500; }
+.tac-prog.error .tac-prog-p { color: var(--bad, #ef4444); }
+.tac-prog.done .tac-prog-p { color: var(--good, #22c55e); }
+.tac-out { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+.tac-pre { margin: 6px 0 0; padding: 8px; border-radius: 6px; background: var(--panel, rgba(0,0,0,.15)); overflow: auto; max-height: 320px; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; }
+.tac-paste { display: flex; flex-direction: column; gap: 8px; }
+.tac-paste-item { display: flex; flex-direction: column; gap: 3px; }
+.tac-paste textarea, .tac-paste-item textarea, .tac-portal {
+  width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--fg); font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px;
+}
+
+/* connectors + case form */
+.tac-conn { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; padding: 5px 0; border-bottom: 1px dashed var(--border); }
+.tac-conn.off { opacity: .55; }
+/* The ceiling is a small suffix and only appears when the bundle exceeds it. */
+.tac-over { color: var(--warn, #d97706); }
+.tac-conn-link { color: var(--accent); text-decoration: none; }
+.tac-conn-link:hover, .tac-conn-link:focus-visible { text-decoration: underline; }
+/* Empty states: a fact, not an explanation. Same 12.5px floor as .mini-meta. */
+.tac-empty { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.tac-case { display: flex; flex-direction: column; gap: 8px; }
+
+/* Iris → Knowledge */
+.tac-know { display: flex; flex-direction: column; gap: 14px; }
+.tac-know-head { display: flex; flex-direction: column; gap: 4px; }
+.tac-dialect { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
+.tac-dialect-head {
+  width: 100%; text-align: left; cursor: pointer; background: transparent; color: var(--fg);
+  border: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; padding: 2px 0;
+}
+.tac-dialect-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tac-dialect-t { font-weight: 600; font-size: 13px; }
+.tac-dialect-body { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; border-top: 1px solid var(--border); padding-top: 6px; }
+.tac-classes li.partial { border-left: 2px solid var(--warn, #f59e0b); padding-left: 6px; }
+/* The output-only command policy: the three families, stated as counts only. */
+.tac-policy-families li { border-left: 2px solid var(--border); padding-left: 6px; }
+.tac-intent-head, .tac-intent {
+  display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.4fr) minmax(0, 1.6fr) minmax(0, .8fr);
+  gap: 8px; align-items: center; font-size: 12.5px;
+}
+/* Sweep 6 (tracker 270): sentence case, not SHOUTED — the Meraki reading the
+   other sweeps applied. Knowledge.tsx is the only user of these three. */
+.tac-intent-head { color: var(--muted); font-size: 12.5px; text-transform: none; letter-spacing: 0; padding-bottom: 2px; }
+.tac-intent > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tac-intents { max-height: 320px; border: 1px solid var(--border); border-radius: 6px; }
+
+/* ── CAPTURES (docs/design/TAC_CAPTURES_2026-09-06.md) ──────────────────────
+   A capture is a named list of commands. The row is a name, a count and a
+   coloured status; the commands are hidden until the chevron is used, and only
+   the commands that FAILED are ever listed under it. Nothing here goes below
+   the 12.5px floor, and the row wraps rather than scrolling the panel sideways.
+   Colours come from the same tokens the rest of the panel uses, so the bar
+   reads the same in both themes. */
+.tac-captures { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.tac-capture-row { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
+.tac-capture-row.on { border-color: var(--accent); }
+.tac-capture-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 14px; }
+.tac-capture-toggle {
+  border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  font-size: 14px; line-height: 1; padding: 2px 4px; border-radius: 4px;
+}
+.tac-capture-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tac-capture-pick { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; min-width: 0; }
+.tac-capture-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+.tac-capture-status { display: inline-flex; gap: 8px; align-items: center; margin-left: auto; }
+/* The bar is a TRACK plus a fill: the track carries the state colour, the fill
+   carries how far the collection got. A queued row is a full grey bar rather
+   than an empty one — an empty bar reads as a failure, and queued is not one. */
+.tac-capture-track {
+  display: inline-block; width: 84px; height: 6px; border-radius: 999px;
+  background: var(--border); overflow: hidden;
+}
+.tac-capture-bar { display: block; height: 100%; background: currentColor; }
+/* Queued shows the bare track: there is nothing to report yet, and a filled
+   bar would claim progress that has not happened. */
+.tac-capture-queued { color: var(--border); }
+.tac-capture-running { color: var(--accent, #3b82f6); }
+.tac-capture-done { color: var(--good, #16a34a); }
+.tac-capture-partial { color: var(--warn, #d97706); }
+.tac-capture-failed { color: var(--bad, #ef4444); }
+.tac-chip-queued { border-color: var(--border); color: var(--muted); }
+.tac-chip-running { border-color: var(--accent, #3b82f6); color: var(--accent, #3b82f6); }
+.tac-chip-done { border-color: var(--good, #16a34a); color: var(--good, #16a34a); }
+.tac-chip-partial { border-color: var(--warn, #d97706); color: var(--warn, #d97706); }
+.tac-chip-failed { border-color: var(--bad, #ef4444); color: var(--bad, #ef4444); }
+.tac-capture-cmds {
+  list-style: decimal; margin: 6px 0 0; padding-left: 24px;
+  font-size: 12.5px; color: var(--muted); max-height: 260px; overflow: auto;
+}
+/* The failures, in the error colour, each with its plain reason. */
+.tac-capture-fails { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.tac-capture-fail { font-size: 12.5px; line-height: 1.5; color: var(--bad, #ef4444); }
+/* A refused upload: one line per refused line of the file. */
+.tac-refusals { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.tac-refusals li { font-size: 12.5px; line-height: 1.5; color: var(--bad, #ef4444); }
+
+/* The ONE "what is happening behind the scene" control. Its body is mounted
+   only while open, so this is presentation for the control alone. */
+.tac-behind-toggle {
+  align-self: flex-start; border: 0; background: transparent; color: var(--fg);
+  font-size: 13px; font-weight: 500; cursor: pointer; padding: 2px 0;
+}
+.tac-behind-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tac-behind-body { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+
+/* Command review + per-vendor templates (tracker 250). The list is an editable
+   command set; a refused line is marked with the policy family that refused it,
+   so the operator reads WHY rather than "invalid". */
+.tac-review-list { list-style: decimal; margin: 8px 0; padding-left: 22px; font-size: 13px; }
+.tac-review-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+.tac-review-row.bad { border-left: 2px solid var(--danger, #ef4444); padding-left: 6px; }
+.tac-review-cmd { flex: 1 1 320px; min-width: 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; }
+.tac-review-actions { display: inline-flex; gap: 4px; flex: 0 0 auto; }
+.tac-verdict { flex: 1 1 100%; }
+.tac-family { background: var(--danger, #ef4444); color: #fff; text-transform: none; letter-spacing: 0; }
+.tac-family::first-letter { text-transform: uppercase; }
+.tac-tpl-row { align-items: flex-end; gap: 12px; }
+.tac-tpl-save { margin-top: 10px; }
+.tac-tpl-save > summary { cursor: pointer; font-weight: 500; }
+.btn.tiny { padding: 1px 6px; font-size: 12.5px; line-height: 1.4; }
+
+/* ── the learning backlog (tracker 243) ──────────────────────────────────────
+   What a collection produced that the parsers could not read, and the signature
+   candidates an operator writes from a TAC answer. The excerpt is deliberately
+   monospaced and scroll-bounded: it is device output, and it must look like
+   device output rather than like something Correlix concluded. */
+.tac-gap-counts { margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.tac-gap-n { font-size: 15px; font-weight: 600; }
+.tac-learn-meta { color: var(--muted); font-size: 12.5px; }
+.tac-gaps, .tac-cands { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.tac-gap { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.tac-gap-why { margin: 4px 0; font-size: 12.5px; line-height: 1.45; }
+.tac-gap-out {
+  margin: 0 0 6px; max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 12.5px; line-height: 1.45;
+}
+.tac-cand-empty { margin: 4px 0 0; color: var(--muted); font-size: 12.5px; }
+.tac-cand-actions { display: inline-flex; gap: 6px; margin-top: 6px; }
+.tac-cand-form { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.tac-cand-form label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.tac-cand-form input, .tac-cand-form textarea {
+  font: inherit; font-size: 12.5px; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 6px; padding: 5px 7px;
+}
+
+/* ── the ONE confirmation screen (internal/tac/escalate.go) ──────────────────
+   Exactly what will be sent, and nothing has been sent. The blockers are a
+   refusal BY NAME with a link to where each value is set; the warnings are
+   things an operator should see without being stopped. */
+.tac-confirm { display: flex; flex-direction: column; gap: 8px; }
+.tac-warnings, .tac-blockers { margin: 4px 0; padding-left: 18px; font-size: 12.5px; }
+.tac-warnings > li { color: var(--warn, #d97706); }
+.tac-blockers > li { color: var(--bad, #ef4444); }
+.tac-blockers .tac-conn-link { color: var(--accent); text-decoration: underline; }
+
+/* The dry run's report. The outcome is the answer; the call sequence is
+   collapsed, and a field table is what one row opens into. */
+.tac-dryrun { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.tac-dryrun-calls { list-style: none; margin: 0; padding: 0; }
+.tac-dryrun-fields { border-collapse: collapse; font-size: 12.5px; margin: 4px 0; width: 100%; }
+.tac-dryrun-fields th, .tac-dryrun-fields td {
+  text-align: left; padding: 3px 8px 3px 0; border-bottom: 1px dashed var(--border);
+  vertical-align: top; word-break: break-word;
+}

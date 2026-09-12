@@ -1,0 +1,35 @@
+{
+  "provider": "aws",
+  "account_id": "123456789012",
+  "region": "us-east-1",
+  "vpcs": [
+    { "id": "vpc-prod-use1", "cidr": "10.0.0.0/16", "name": "prod-use1" },
+    { "id": "vpc-shared-use1", "cidr": "10.4.0.0/16", "name": "shared-services" }
+  ],
+  "subnets": [
+    { "id": "subnet-prod-app-a", "cidr": "10.0.1.0/24", "name": "prod-app-1a" },
+    { "id": "subnet-prod-app-b", "cidr": "10.0.2.0/24", "name": "prod-app-1b" },
+    { "id": "subnet-prod-db-a", "cidr": "10.0.10.0/24", "name": "prod-db-1a" },
+    { "id": "subnet-prod-public", "cidr": "10.0.0.0/24", "name": "prod-public-1a" },
+    { "id": "subnet-shared-svc", "cidr": "10.4.1.0/24", "name": "shared-svc-1a" }
+  ],
+  "nodes": [
+    { "id": "igw-use1", "kind": "internet_gateway", "name": "prod-igw", "subnet_id": "" },
+    { "id": "nat-use1-a", "kind": "nat_gateway", "name": "prod-nat-1a", "subnet_id": "subnet-prod-public", "private_ip": "10.0.0.20" },
+    { "id": "tgw-attach-prod-use1", "kind": "nva", "name": "tgw-attachment-prod", "subnet_id": "subnet-prod-app-a", "private_ip": "10.0.1.250" },
+    { "id": "tgw-attach-shared-use1", "kind": "nva", "name": "tgw-attachment-shared", "subnet_id": "subnet-shared-svc", "private_ip": "10.4.1.250" },
+    { "id": "vpce-s3-use1", "kind": "vpc_endpoint", "name": "s3-gateway-endpoint", "subnet_id": "subnet-prod-app-b" },
+    { "id": "dxgw-use1", "kind": "vpn_gateway", "name": "prod-dx-gateway", "subnet_id": "" }
+  ],
+  "edges": [
+    { "from_subnet": "subnet-prod-public", "from_subnet_name": "prod-public-1a", "to": "igw-use1", "to_kind": "internet_gateway", "destination": "0.0.0.0/0", "state": "active", "via_route_table": "rtb-public-use1", "route_table_name": "prod-public" },
+    { "from_subnet": "subnet-prod-app-a", "from_subnet_name": "prod-app-1a", "to": "nat-use1-a", "to_kind": "nat_gateway", "destination": "0.0.0.0/0", "state": "active", "via_route_table": "rtb-app-use1", "route_table_name": "prod-app" },
+    { "from_subnet": "subnet-prod-app-b", "from_subnet_name": "prod-app-1b", "to": "nat-use1-a", "to_kind": "nat_gateway", "destination": "0.0.0.0/0", "state": "active", "via_route_table": "rtb-app-use1", "route_table_name": "prod-app" },
+    { "from_subnet": "subnet-prod-app-b", "from_subnet_name": "prod-app-1b", "to": "vpce-s3-use1", "to_kind": "vpc_endpoint", "destination": "pl-s3-use1", "state": "active", "via_route_table": "rtb-app-use1", "route_table_name": "prod-app" },
+    { "from_subnet": "subnet-prod-app-a", "from_subnet_name": "prod-app-1a", "to": "tgw-attach-prod-use1", "to_kind": "nva", "destination": "10.4.0.0/16", "state": "active", "via_route_table": "rtb-app-use1", "route_table_name": "prod-app" },
+    { "from_subnet": "subnet-prod-app-a", "from_subnet_name": "prod-app-1a", "to": "tgw-attach-prod-use1", "to_kind": "nva", "destination": "10.8.0.0/16", "state": "active", "via_route_table": "rtb-app-use1", "route_table_name": "prod-app" },
+    { "from_subnet": "subnet-shared-svc", "from_subnet_name": "shared-svc-1a", "to": "tgw-attach-shared-use1", "to_kind": "nva", "destination": "10.0.0.0/16", "state": "active", "via_route_table": "rtb-shared-use1", "route_table_name": "shared" },
+    { "from_subnet": "subnet-prod-db-a", "from_subnet_name": "prod-db-1a", "to": "dxgw-use1", "to_kind": "vpn_gateway", "destination": "172.16.0.0/12", "state": "active", "via_route_table": "rtb-db-use1", "route_table_name": "prod-db" },
+    { "from_subnet": "subnet-prod-db-a", "from_subnet_name": "prod-db-1a", "to": "nat-use1-a", "to_kind": "nat_gateway", "destination": "0.0.0.0/0", "state": "blackhole", "via_route_table": "rtb-db-use1", "route_table_name": "prod-db" }
+  ]
+}

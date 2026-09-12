@@ -1,0 +1,33 @@
+Correlix Enterprise License
+SPDX-License-Identifier: LicenseRef-Correlix-Enterprise
+
+THIS DIRECTORY IS NOT APACHE-2.0.
+
+Every file in src/backend/enterprise/frameworks is a COMMERCIAL ADD-ON MODULE
+of Correlix. It implements the `security_dialects` entitlement — whose locked
+scope is device-hardening dialects beyond the default set AND compliance
+frameworks beyond the default two — which the owner has placed in the
+Enterprise tier. What lives here is the CROSSWALK content for NIST CSF 2.0,
+the HIPAA §164.312 technical safeguards and PCI DSS v4.0.1.
+
+The rest of Correlix is Apache-2.0. The projection engine, the owned 800-53
+control catalogue, the framework VOCABULARY (ids, descriptors, versions, the
+default set and the closed list an API write is validated against) and the two
+default frameworks — NIST SP 800-53 Rev5 and CIS Controls v8.1 — are core
+(src/backend/internal/compliancemodel) and are unaffected by this notice.
+
+With this directory deleted the product still runs: all five frameworks stay in
+the catalogue and stay selectable, a stored selection is still valid, and an
+enabled framework whose crosswalk is gone reports a NULL score with a sentence
+saying the crosswalk is not included in this deployment — never an empty
+scorecard that would read as a clean bill.
+
+  Full terms      : LICENSES/Correlix-Enterprise.txt at the repository root
+  Directory map   : LICENSING.md
+  Which tier      : docs/design/TIERING_PLAN_2026-09-03.md
+  Why the split   : docs/design/LICENSING_MODEL_2026-09-04.md
+
+NOTE (2026-09-04): the Correlix Enterprise License text has not been drafted
+yet. Until it exists, the identifier above resolves to no terms, no licence is
+granted over this directory, and all rights are reserved to Correlix. The
+release gate refuses to ship in this state.

@@ -1,0 +1,20 @@
+{
+  "name": "Clients fail onboarding at 802.1X across a WLAN: the AAA path is the suspect",
+  "signals": [
+    {
+      "kind": "wireless_onboarding_auth_failure",
+      "entity_type": "wireless_session",
+      "entity_id": "wcl-c77:sess42",
+      "observer_id": "catalyst_9800:int-1",
+      "observer_type": "controller",
+      "modality": "management_plane",
+      "collection_path": "via_controller:wlc-1",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.wireless.onboarding-auth-radius",
+    "tier": "suspected",
+    "owner": "netops"
+  }
+}

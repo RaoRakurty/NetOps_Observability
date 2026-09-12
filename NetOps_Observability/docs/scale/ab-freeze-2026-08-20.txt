@@ -1,0 +1,17 @@
+=== FROZEN BUILD FOR THE A/B MEMORY EXPERIMENT ===
+git_sha=11a616e58cbfe6f80769ef27d28d91c81ce31948
+git_describe=11a616e5 docs(scale): memory forensics — 98% of RSS is allocator residency, not live objects
+correlation_image=sha256:05a5e9e107f306b8151ebdca850b0d6c5edba0076e906337a16e821923246c9b
+api_image=sha256:2cd4bebe49a872a99567b634d52607215152db8b8d3298f8da482843d1e2dc77
+clickhouse_image=sha256:b002e56ed5c16e224c312527f6fcba7e77216fec5d7a88a7828f59efc614feb5
+kafka_image=sha256:0bc1bb2478f45b6cea78864df86acdc11e8df2c5172477819a4d12942cbe5d40
+opensearch_image=sha256:9acc4bef971d2a9624159f28f15638a556d83cc1bf1c558414a3b4f8be1f9037
+correlation_containers=netops-correlation-1:5e0d1129866c netops-correlation-2:5ed6c1b990cf 
+correlation_replicas=2
+BUS_PARTITIONS=4
+syslog_partitions=PartitionCount: 4
+correlation_mem_limit_bytes=827326464
+CORR_WINDOW_BUFFER=50000
+workload=1000 devices, 5-minute burst, target 2000 eps, 600001 events
+diagnostics=CORR_DIAG_MEMORY=true (heavy analysis off-loop, frames=4, heavy only at RSS crossings)
+utc=2026-08-20T11:47:15Z

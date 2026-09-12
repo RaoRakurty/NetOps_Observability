@@ -1,0 +1,13 @@
+{
+  "name": "IS-IS adjacency change (syslog) + interface metric anomaly (gNMI/SNMP) on a fabric spine: IS-IS adjacency flap confirmed",
+  "comment": "C5: isis_adjacency_change is already emitted by syslog_control_signal (SR Linux isisAdjacencyChange / %CLNS-5-ADJCHANGE). Control-plane syslog + an independent device_telemetry witness confirm the fabric IGP flap.",
+  "signals": [
+    {"kind": "isis_adjacency_change", "entity_type": "device", "entity_id": "spine1",
+     "observer_id": "syslog-spine1", "observer_type": "device",
+     "modality": "control_plane", "collection_path": "direct", "deviation": 0.0},
+    {"kind": "if_metric_anomaly", "entity_type": "interface", "entity_id": "spine1:ethernet-1/1",
+     "observer_id": "snmp-spine1", "observer_type": "device",
+     "modality": "device_telemetry", "collection_path": "direct", "deviation": 4.0}
+  ],
+  "expect": {"top": "sig.ent.fabric.isis-adjacency-flap", "tier": "confirmed", "owner": "netops"}
+}

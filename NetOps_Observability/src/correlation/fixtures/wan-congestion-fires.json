@@ -1,0 +1,16 @@
+{
+  "name": "WAN congestion fires: util + independent probe loss + qos drops",
+  "signals": [
+    {"kind": "if_util_high", "entity_type": "interface", "entity_id": "dallas-edge:Gi0/1",
+     "observer_id": "dallas-edge", "observer_type": "device", "modality": "device_telemetry",
+     "deviation": 4.5, "collection_path": "via_aggregator"},
+    {"kind": "probe_loss", "entity_type": "segment", "entity_id": "dallas->equinix-pop",
+     "observer_id": "probe-agent-dallas", "observer_type": "vantage_agent",
+     "modality": "active_probe", "deviation": 4.2},
+    {"kind": "qos_drops", "entity_type": "interface", "entity_id": "dallas-edge:Gi0/1",
+     "observer_id": "dallas-edge", "observer_type": "device", "modality": "device_telemetry",
+     "deviation": 3.1, "collection_path": "via_aggregator"}
+  ],
+  "expect": {"top": "sig.ent.wan-edge.congestion", "tier": "confirmed",
+             "min_confidence": 0.9, "owner": "netops"}
+}

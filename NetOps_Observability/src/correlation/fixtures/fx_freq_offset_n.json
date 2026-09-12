@@ -1,0 +1,39 @@
+{
+  "name": "fx_freq_offset_n \u2014 channel-frequency-misalignment",
+  "signals": [
+    {
+      "kind": "carrier_freq_offset_high",
+      "entity_type": "interface",
+      "entity_id": "wan-r2:Et6",
+      "observer_id": "snmp-wanr2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "coherent_osnr_low",
+      "entity_type": "interface",
+      "entity_id": "wan-r2:Et6",
+      "observer_id": "snmp-wanr2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "optical_frequency_mismatch",
+      "entity_type": "interface",
+      "entity_id": "wan-r2:Et6",
+      "observer_id": "snmp-wanr2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.channel-frequency-misalignment",
+    "tier": "suspected"
+  }
+}

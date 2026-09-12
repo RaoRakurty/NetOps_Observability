@@ -1,0 +1,833 @@
+{
+  "view_id": "cloud-network",
+  "mode": "explore",
+  "scope": {
+    "tenant_id": "global"
+  },
+  "layout_type": "cloud_grouped",
+  "generated_at": "2026-08-02T06:21:09Z",
+  "nodes": [
+    {
+      "id": "subnet-0651f2da157e5b5d3",
+      "label": "Subnet · correlix-data-a · 10.60.30.0/24",
+      "kind": "cloud",
+      "role": "subnet",
+      "site": "aws",
+      "health": "unknown",
+      "confidence": 0.9,
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.9,
+          "detail": "subnet subnet-0651f2da157e5b5d3"
+        }
+      ],
+      "resolved": true,
+      "group_id": "vpc-04bea9c06ff23abd9",
+      "tags": {
+        "cidr": "10.60.30.0/24",
+        "provider": "aws",
+        "role": "subnet"
+      }
+    },
+    {
+      "id": "subnet-0dc195a7472b46f17",
+      "label": "Subnet · subnet-0dc195a7472b46f17 · 172.31.48.0/20",
+      "kind": "cloud",
+      "role": "subnet",
+      "site": "aws",
+      "health": "unknown",
+      "confidence": 0.9,
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.9,
+          "detail": "subnet subnet-0dc195a7472b46f17"
+        }
+      ],
+      "resolved": true,
+      "group_id": "vpc-067f878070db7c05a",
+      "tags": {
+        "cidr": "172.31.48.0/20",
+        "provider": "aws",
+        "role": "subnet"
+      }
+    },
+    {
+      "id": "subnet-0f10f603845b9c617",
+      "label": "Subnet · subnet-0f10f603845b9c617 · 172.31.32.0/20",
+      "kind": "cloud",
+      "role": "subnet",
+      "site": "aws",
+      "health": "unknown",
+      "confidence": 0.9,
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.9,
+          "detail": "subnet subnet-0f10f603845b9c617"
+        }
+      ],
+      "resolved": true,
+      "group_id": "vpc-067f878070db7c05a",
+      "tags": {
+        "cidr": "172.31.32.0/20",
+        "provider": "aws",
+        "role": "subnet"
+      }
+    },
+    {
+      "id": "subnet-0dacf6578cc3c4f09",
+      "label": "Subnet · subnet-0dacf6578cc3c4f09 · 172.31.0.0/20",
+      "kind": "cloud",
+      "role": "subnet",
+      "site": "aws",
+      "health": "unknown",
+      "confidence": 0.9,
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.9,
+          "detail": "subnet subnet-0dacf6578cc3c4f09"
+        }
+      ],
+      "resolved": true,
+      "group_id": "vpc-067f878070db7c05a",
+      "tags": {
+        "cidr": "172.31.0.0/20",
+        "provider": "aws",
+        "role": "subnet"
+      }
+    },
+    {
+      "id": "subnet-043e7c67c239c83be",
+      "label": "Subnet · subnet-043e7c67c239c83be · 172.31.16.0/20",
+      "kind": "cloud",
+      "role": "subnet",
+      "site": "aws",
+      "health": "unknown",
+      "confidence": 0.9,
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.9,
+          "detail": "subnet subnet-043e7c67c239c83be"
+        }
+      ],
+      "resolved": true,
+      "group_id": "vpc-067f878070db7c05a",
+      "tags": {
+        "cidr": "172.31.16.0/20",
+        "provider": "aws",
+        "role": "subnet"
+      }
+    },
+    {
+      "id": "subnet-0f546d11625f4baa3",
+      "label": "Subnet · correlix-public-a · 10.60.1.0/27",
+      "kind": "cloud",
+      "role": "subnet",
+      "site": "aws",
+      "health": "unknown",
+      "confidence": 0.9,
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.9,
+          "detail": "subnet subnet-0f546d11625f4baa3"
+        }
+      ],
+      "resolved": true,
+      "group_id": "vpc-04bea9c06ff23abd9",
+      "tags": {
+        "cidr": "10.60.1.0/27",
+        "provider": "aws",
+        "role": "subnet"
+      }
+    },
+    {
+      "id": "subnet-01f8d07890ee79e9c",
+      "label": "Subnet · correlix-app-a · 10.60.10.0/24",
+      "kind": "cloud",
+      "role": "subnet",
+      "site": "aws",
+      "health": "unknown",
+      "confidence": 0.9,
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.9,
+          "detail": "subnet subnet-01f8d07890ee79e9c"
+        }
+      ],
+      "resolved": true,
+      "group_id": "vpc-04bea9c06ff23abd9",
+      "tags": {
+        "cidr": "10.60.10.0/24",
+        "provider": "aws",
+        "role": "subnet"
+      }
+    },
+    {
+      "id": "i-0e8acbf8493d037f9",
+      "label": "NVA · correlix-vpn-nat-01",
+      "kind": "cloud",
+      "role": "nva",
+      "site": "aws",
+      "health": "unknown",
+      "confidence": 0.9,
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.9,
+          "detail": "nva i-0e8acbf8493d037f9"
+        }
+      ],
+      "resolved": true,
+      "group_id": "vpc-04bea9c06ff23abd9",
+      "tags": {
+        "provider": "aws",
+        "role": "nva"
+      }
+    },
+    {
+      "id": "igw-015c28717e1ac8cfd",
+      "label": "IGW · igw-015c28717e1ac8cfd",
+      "kind": "cloud",
+      "role": "internet_gateway",
+      "site": "aws",
+      "health": "unknown",
+      "confidence": 0.9,
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.9,
+          "detail": "internet_gateway igw-015c28717e1ac8cfd"
+        }
+      ],
+      "resolved": true,
+      "group_id": "vpc-067f878070db7c05a",
+      "tags": {
+        "provider": "aws",
+        "role": "internet_gateway"
+      }
+    },
+    {
+      "id": "igw-0f9a0365a92d4b32f",
+      "label": "IGW · correlix-igw",
+      "kind": "cloud",
+      "role": "internet_gateway",
+      "site": "aws",
+      "health": "unknown",
+      "confidence": 0.9,
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.9,
+          "detail": "internet_gateway igw-0f9a0365a92d4b32f"
+        }
+      ],
+      "resolved": true,
+      "group_id": "vpc-04bea9c06ff23abd9",
+      "tags": {
+        "provider": "aws",
+        "role": "internet_gateway"
+      }
+    },
+    {
+      "id": "vpce-07461b8e31b854def",
+      "label": "Endpoint · vpce-07461b8e31b854def",
+      "kind": "cloud",
+      "role": "vpc_endpoint",
+      "site": "aws",
+      "health": "unknown",
+      "confidence": 0.9,
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.9,
+          "detail": "vpc_endpoint vpce-07461b8e31b854def"
+        }
+      ],
+      "resolved": true,
+      "group_id": "vpc-04bea9c06ff23abd9",
+      "tags": {
+        "provider": "aws",
+        "role": "vpc_endpoint"
+      }
+    },
+    {
+      "id": "data-a",
+      "label": "Subnet · data-a · 10.61.30.0/24",
+      "kind": "cloud",
+      "role": "subnet",
+      "site": "azure",
+      "health": "unknown",
+      "confidence": 0.9,
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.9,
+          "detail": "subnet data-a"
+        }
+      ],
+      "resolved": true,
+      "group_id": "correlix-vnet",
+      "tags": {
+        "cidr": "10.61.30.0/24",
+        "provider": "azure",
+        "role": "subnet"
+      }
+    },
+    {
+      "id": "nva",
+      "label": "Subnet · nva · 10.61.2.0/27",
+      "kind": "cloud",
+      "role": "subnet",
+      "site": "azure",
+      "health": "unknown",
+      "confidence": 0.9,
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.9,
+          "detail": "subnet nva"
+        }
+      ],
+      "resolved": true,
+      "group_id": "correlix-vnet",
+      "tags": {
+        "cidr": "10.61.2.0/27",
+        "provider": "azure",
+        "role": "subnet"
+      }
+    },
+    {
+      "id": "app-a",
+      "label": "Subnet · app-a · 10.61.10.0/24",
+      "kind": "cloud",
+      "role": "subnet",
+      "site": "azure",
+      "health": "unknown",
+      "confidence": 0.9,
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.9,
+          "detail": "subnet app-a"
+        }
+      ],
+      "resolved": true,
+      "group_id": "correlix-vnet",
+      "tags": {
+        "cidr": "10.61.10.0/24",
+        "provider": "azure",
+        "role": "subnet"
+      }
+    },
+    {
+      "id": "10.61.2.10",
+      "label": "NVA · 10.61.2.10",
+      "kind": "cloud",
+      "role": "nva",
+      "site": "azure",
+      "health": "unknown",
+      "confidence": 0.9,
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.9,
+          "detail": "nva 10.61.2.10"
+        }
+      ],
+      "resolved": true,
+      "group_id": "correlix-vnet",
+      "tags": {
+        "provider": "azure",
+        "role": "nva"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "route-subnet-01f8d07890ee79e9c-i-0e8acbf8493d037f9-172_40_40_0_24",
+      "source": "subnet-01f8d07890ee79e9c",
+      "target": "i-0e8acbf8493d037f9",
+      "source_port": "172.40.40.0/24",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table correlix-rt-app: 172.40.40.0/24 → i-0e8acbf8493d037f9",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    },
+    {
+      "id": "route-subnet-01f8d07890ee79e9c-i-0e8acbf8493d037f9-10_70_245_0_24",
+      "source": "subnet-01f8d07890ee79e9c",
+      "target": "i-0e8acbf8493d037f9",
+      "source_port": "10.70.245.0/24",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table correlix-rt-app: 10.70.245.0/24 → i-0e8acbf8493d037f9",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    },
+    {
+      "id": "route-subnet-01f8d07890ee79e9c-i-0e8acbf8493d037f9-0_0_0_0_0",
+      "source": "subnet-01f8d07890ee79e9c",
+      "target": "i-0e8acbf8493d037f9",
+      "source_port": "0.0.0.0/0",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table correlix-rt-app: 0.0.0.0/0 → i-0e8acbf8493d037f9",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    },
+    {
+      "id": "route-subnet-01f8d07890ee79e9c-vpce-07461b8e31b854def-pl-68a54001",
+      "source": "subnet-01f8d07890ee79e9c",
+      "target": "vpce-07461b8e31b854def",
+      "source_port": "pl-68a54001",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table correlix-rt-app: pl-68a54001 → vpce-07461b8e31b854def",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    },
+    {
+      "id": "route-subnet-0651f2da157e5b5d3-i-0e8acbf8493d037f9-172_40_40_0_24",
+      "source": "subnet-0651f2da157e5b5d3",
+      "target": "i-0e8acbf8493d037f9",
+      "source_port": "172.40.40.0/24",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table correlix-rt-data: 172.40.40.0/24 → i-0e8acbf8493d037f9",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    },
+    {
+      "id": "route-subnet-0651f2da157e5b5d3-i-0e8acbf8493d037f9-10_70_245_0_24",
+      "source": "subnet-0651f2da157e5b5d3",
+      "target": "i-0e8acbf8493d037f9",
+      "source_port": "10.70.245.0/24",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table correlix-rt-data: 10.70.245.0/24 → i-0e8acbf8493d037f9",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    },
+    {
+      "id": "route-subnet-0651f2da157e5b5d3-i-0e8acbf8493d037f9-0_0_0_0_0",
+      "source": "subnet-0651f2da157e5b5d3",
+      "target": "i-0e8acbf8493d037f9",
+      "source_port": "0.0.0.0/0",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table correlix-rt-data: 0.0.0.0/0 → i-0e8acbf8493d037f9",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    },
+    {
+      "id": "route-subnet-0651f2da157e5b5d3-vpce-07461b8e31b854def-pl-68a54001",
+      "source": "subnet-0651f2da157e5b5d3",
+      "target": "vpce-07461b8e31b854def",
+      "source_port": "pl-68a54001",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table correlix-rt-data: pl-68a54001 → vpce-07461b8e31b854def",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    },
+    {
+      "id": "route-subnet-0f546d11625f4baa3-igw-0f9a0365a92d4b32f-0_0_0_0_0",
+      "source": "subnet-0f546d11625f4baa3",
+      "target": "igw-0f9a0365a92d4b32f",
+      "source_port": "0.0.0.0/0",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table correlix-rt-public: 0.0.0.0/0 → igw-0f9a0365a92d4b32f",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    },
+    {
+      "id": "route-subnet-043e7c67c239c83be-igw-015c28717e1ac8cfd-0_0_0_0_0",
+      "source": "subnet-043e7c67c239c83be",
+      "target": "igw-015c28717e1ac8cfd",
+      "source_port": "0.0.0.0/0",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table rtb-09e41b051eb045185: 0.0.0.0/0 → igw-015c28717e1ac8cfd",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    },
+    {
+      "id": "route-subnet-0dacf6578cc3c4f09-igw-015c28717e1ac8cfd-0_0_0_0_0",
+      "source": "subnet-0dacf6578cc3c4f09",
+      "target": "igw-015c28717e1ac8cfd",
+      "source_port": "0.0.0.0/0",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table rtb-09e41b051eb045185: 0.0.0.0/0 → igw-015c28717e1ac8cfd",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    },
+    {
+      "id": "route-subnet-0dc195a7472b46f17-igw-015c28717e1ac8cfd-0_0_0_0_0",
+      "source": "subnet-0dc195a7472b46f17",
+      "target": "igw-015c28717e1ac8cfd",
+      "source_port": "0.0.0.0/0",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table rtb-09e41b051eb045185: 0.0.0.0/0 → igw-015c28717e1ac8cfd",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    },
+    {
+      "id": "route-subnet-0f10f603845b9c617-igw-015c28717e1ac8cfd-0_0_0_0_0",
+      "source": "subnet-0f10f603845b9c617",
+      "target": "igw-015c28717e1ac8cfd",
+      "source_port": "0.0.0.0/0",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table rtb-09e41b051eb045185: 0.0.0.0/0 → igw-015c28717e1ac8cfd",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    },
+    {
+      "id": "route-app-a-10_61_2_10-0_0_0_0_0",
+      "source": "app-a",
+      "target": "10.61.2.10",
+      "source_port": "0.0.0.0/0",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table correlix-rt-app: 0.0.0.0/0 → 10.61.2.10",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    },
+    {
+      "id": "route-app-a-10_61_2_10-10_70_245_0_24",
+      "source": "app-a",
+      "target": "10.61.2.10",
+      "source_port": "10.70.245.0/24",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table correlix-rt-app: 10.70.245.0/24 → 10.61.2.10",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    },
+    {
+      "id": "route-app-a-10_61_2_10-172_40_40_0_24",
+      "source": "app-a",
+      "target": "10.61.2.10",
+      "source_port": "172.40.40.0/24",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table correlix-rt-app: 172.40.40.0/24 → 10.61.2.10",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    },
+    {
+      "id": "route-data-a-10_61_2_10-0_0_0_0_0",
+      "source": "data-a",
+      "target": "10.61.2.10",
+      "source_port": "0.0.0.0/0",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table correlix-rt-data: 0.0.0.0/0 → 10.61.2.10",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    },
+    {
+      "id": "route-data-a-10_61_2_10-10_70_245_0_24",
+      "source": "data-a",
+      "target": "10.61.2.10",
+      "source_port": "10.70.245.0/24",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table correlix-rt-data: 10.70.245.0/24 → 10.61.2.10",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    },
+    {
+      "id": "route-data-a-10_61_2_10-172_40_40_0_24",
+      "source": "data-a",
+      "target": "10.61.2.10",
+      "source_port": "172.40.40.0/24",
+      "relationship": "routed_adjacency",
+      "protocol": "cloud_api",
+      "status": "up",
+      "confidence": 0.7,
+      "first_seen": "2026-08-02T06:21:09Z",
+      "last_seen": "2026-08-02T06:21:09Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "cloud_api",
+          "confidence": 0.7,
+          "detail": "route table correlix-rt-data: 172.40.40.0/24 → 10.61.2.10",
+          "observed_at": "2026-08-02T06:21:09Z"
+        }
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "id": "region:aws:us-west-2",
+      "label": "aws · us-west-2",
+      "group_type": "region",
+      "children": null,
+      "health": "unknown",
+      "collapsed": false
+    },
+    {
+      "id": "vpc-04bea9c06ff23abd9",
+      "label": "VPC · vpc-04bea9c06ff23abd9 · 10.60.0.0/16",
+      "group_type": "vpc",
+      "parent_id": "region:aws:us-west-2",
+      "children": [
+        "subnet-0651f2da157e5b5d3",
+        "subnet-0f546d11625f4baa3",
+        "subnet-01f8d07890ee79e9c",
+        "i-0e8acbf8493d037f9",
+        "igw-0f9a0365a92d4b32f",
+        "vpce-07461b8e31b854def"
+      ],
+      "health": "unknown",
+      "collapsed": false
+    },
+    {
+      "id": "vpc-067f878070db7c05a",
+      "label": "VPC · vpc-067f878070db7c05a · 172.31.0.0/16",
+      "group_type": "vpc",
+      "parent_id": "region:aws:us-west-2",
+      "children": [
+        "subnet-0dc195a7472b46f17",
+        "subnet-0f10f603845b9c617",
+        "subnet-0dacf6578cc3c4f09",
+        "subnet-043e7c67c239c83be",
+        "igw-015c28717e1ac8cfd"
+      ],
+      "health": "unknown",
+      "collapsed": false
+    },
+    {
+      "id": "region:azure:westus2",
+      "label": "azure · westus2",
+      "group_type": "region",
+      "children": null,
+      "health": "unknown",
+      "collapsed": false
+    },
+    {
+      "id": "correlix-vnet",
+      "label": "VNet · correlix-vnet · 10.61.0.0/16",
+      "group_type": "vpc",
+      "parent_id": "region:azure:westus2",
+      "children": [
+        "data-a",
+        "nva",
+        "app-a",
+        "10.61.2.10"
+      ],
+      "health": "unknown",
+      "collapsed": false
+    }
+  ],
+  "overlays": [
+    "health"
+  ]
+}

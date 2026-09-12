@@ -1,0 +1,30 @@
+{
+  "name": "A/A session-owner mismatch: one direction drops on the second member",
+  "signals": [
+    {
+      "kind": "fw_session_owner_mismatch",
+      "entity_type": "device",
+      "entity_id": "fw-aa-pair",
+      "observer_id": "syslog-fw-a",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 2.0
+    },
+    {
+      "kind": "flow_asymmetry",
+      "entity_type": "device",
+      "entity_id": "fw-aa-pair",
+      "observer_id": "flow-collector",
+      "observer_type": "flow_exporter",
+      "modality": "passive_flow",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.security.fw-aa-session-owner-mismatch",
+    "tier": "confirmed",
+    "owner": "netops"
+  }
+}

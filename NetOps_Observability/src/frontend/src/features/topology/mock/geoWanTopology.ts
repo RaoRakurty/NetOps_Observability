@@ -1,0 +1,319 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+// geoWanTopology.ts — sample TopologyView for the "executive_geo" / wan_geo mode.
+//
+// ~6 site nodes pinned to REAL geographic coordinates { x: longitude, y: latitude }
+// (decimal WGS-84), connected by WAN circuit edges (manual/snmp). The Phase-5 geo
+// renderer (GeoTopologyMap, ECharts world basemap) plots x/y straight onto the geo
+// coordinate system.
+//
+// This is the sample dataset the executive_geo mode falls back to until the backend
+// projects site-level geo from the Source of Truth (every not-yet-real mode shows
+// its matching mock — see topologyApi.fetchTopologyView). The renderer itself is
+// real; only the data is sample.
+//
+// FLAT canonical contract (api/topologyTypes.ts).
+
+import type { TopologyView } from "../api/topologyTypes";
+
+export const geoWanTopology: TopologyView = {
+  view_id: "view-geo-wan-001",
+  topology_id: "topo-geo-wan",
+  mode: "executive_geo",
+  scope: { tenant_id: "tenant-acme" },
+  generated_at: "2026-06-18T01:25:00Z",
+  time_range: { from: "2026-06-18T00:25:00Z", to: "2026-06-18T01:25:00Z" },
+  layout_type: "wan_geo",
+  nodes: [
+    {
+      id: "geo-nyc",
+      label: "New York (DC East)",
+      kind: "site",
+      role: "datacenter",
+      site: "dc-east-1",
+      health: "ok",
+      confidence: 0.95,
+      resolved: true,
+      // longitude, latitude (decimal WGS-84) — New York.
+      coordinates: { x: -74.0, y: 40.71 },
+      first_seen: "2026-01-01T00:00:00Z",
+      last_seen: "2026-06-18T01:00:00Z",
+      change_state: "unchanged",
+      metrics: { cpu_pct: 0, mem_pct: 0, link_count: 3, alert_count: 0, devices: 42 },
+      evidence: [
+        {
+          source: "manual",
+          confidence: 0.95,
+          detail: "Operator-pinned geo for DC East (New York)",
+          observed_at: "2026-06-18T01:00:00Z",
+          raw_ref: "manual:geo:nyc",
+          summary: "Operator-pinned geo location for DC East (New York)",
+        },
+      ],
+      tags: { city: "New York", country: "US" },
+    },
+    {
+      id: "geo-sfo",
+      label: "San Francisco (DC West)",
+      kind: "site",
+      role: "datacenter",
+      site: "dc-west-1",
+      health: "ok",
+      confidence: 0.95,
+      resolved: true,
+      coordinates: { x: -122.42, y: 37.77 }, // San Francisco
+      first_seen: "2026-01-01T00:00:00Z",
+      last_seen: "2026-06-18T01:00:00Z",
+      change_state: "unchanged",
+      metrics: { cpu_pct: 0, mem_pct: 0, link_count: 1, alert_count: 0, devices: 38 },
+      evidence: [
+        {
+          source: "manual",
+          confidence: 0.95,
+          detail: "Operator-pinned geo for DC West (San Francisco)",
+          observed_at: "2026-06-18T01:00:00Z",
+          raw_ref: "manual:geo:sfo",
+          summary: "Operator-pinned geo location for DC West (San Francisco)",
+        },
+      ],
+      tags: { city: "San Francisco", country: "US" },
+    },
+    {
+      id: "geo-chi",
+      label: "Chicago (HQ Campus)",
+      kind: "site",
+      role: "campus",
+      site: "hq",
+      health: "warning",
+      confidence: 0.93,
+      resolved: true,
+      coordinates: { x: -87.63, y: 41.88 }, // Chicago
+      first_seen: "2026-01-01T00:00:00Z",
+      last_seen: "2026-06-18T01:00:00Z",
+      change_state: "unchanged",
+      metrics: { cpu_pct: 0, mem_pct: 0, link_count: 1, alert_count: 1, devices: 120 },
+      evidence: [
+        {
+          source: "manual",
+          confidence: 0.93,
+          detail: "Operator-pinned geo for HQ Campus (Chicago)",
+          observed_at: "2026-06-18T01:00:00Z",
+          raw_ref: "manual:geo:chi",
+          summary: "Operator-pinned geo location for HQ Campus (Chicago)",
+        },
+      ],
+      tags: { city: "Chicago", country: "US" },
+    },
+    {
+      id: "geo-lon",
+      label: "London (Branch)",
+      kind: "site",
+      role: "branch",
+      site: "branch-lon",
+      health: "ok",
+      confidence: 0.9,
+      resolved: true,
+      coordinates: { x: -0.13, y: 51.51 }, // London
+      first_seen: "2026-02-01T00:00:00Z",
+      last_seen: "2026-06-18T01:00:00Z",
+      change_state: "unchanged",
+      metrics: { cpu_pct: 0, mem_pct: 0, link_count: 2, alert_count: 0, devices: 5 },
+      evidence: [
+        {
+          source: "manual",
+          confidence: 0.9,
+          detail: "Operator-pinned geo for Branch London",
+          observed_at: "2026-06-18T01:00:00Z",
+          raw_ref: "manual:geo:lon",
+          summary: "Operator-pinned geo location for Branch London",
+        },
+      ],
+      tags: { city: "London", country: "GB" },
+    },
+    {
+      id: "geo-fra",
+      label: "Frankfurt (Edge POP)",
+      kind: "site",
+      role: "edge",
+      site: "edge-fra",
+      health: "ok",
+      confidence: 0.9,
+      resolved: true,
+      coordinates: { x: 8.68, y: 50.11 }, // Frankfurt
+      first_seen: "2026-03-01T00:00:00Z",
+      last_seen: "2026-06-18T01:00:00Z",
+      change_state: "unchanged",
+      metrics: { cpu_pct: 0, mem_pct: 0, link_count: 2, alert_count: 0, devices: 4 },
+      evidence: [
+        {
+          source: "snmp",
+          confidence: 0.9,
+          detail: "SNMP sysLocation geo-tag",
+          observed_at: "2026-06-18T01:00:00Z",
+          raw_ref: "snmp:geo:fra:sysLocation",
+          summary: "SNMP sysLocation geo-tag for Frankfurt Edge POP",
+        },
+      ],
+      tags: { city: "Frankfurt", country: "DE" },
+    },
+    {
+      id: "geo-sin",
+      label: "Singapore (Edge POP)",
+      kind: "site",
+      role: "edge",
+      site: "edge-sin",
+      health: "ok",
+      confidence: 0.89,
+      resolved: true,
+      coordinates: { x: 103.82, y: 1.35 }, // Singapore
+      first_seen: "2026-03-01T00:00:00Z",
+      last_seen: "2026-06-18T01:00:00Z",
+      change_state: "unchanged",
+      metrics: { cpu_pct: 0, mem_pct: 0, link_count: 1, alert_count: 0, devices: 4 },
+      evidence: [
+        {
+          source: "snmp",
+          confidence: 0.89,
+          detail: "SNMP sysLocation geo-tag",
+          observed_at: "2026-06-18T01:00:00Z",
+          raw_ref: "snmp:geo:sin:sysLocation",
+          summary: "SNMP sysLocation geo-tag for Singapore Edge POP",
+        },
+      ],
+      tags: { city: "Singapore", country: "SG" },
+    },
+  ],
+  edges: [
+    {
+      id: "wan-nyc-sfo",
+      source: "geo-nyc",
+      target: "geo-sfo",
+      relationship: "routed_adjacency",
+      protocol: "snmp",
+      status: "up",
+      confidence: 0.85,
+      direction: "bi",
+      utilization_pct: 47,
+      errors: 0,
+      first_seen: "2026-01-01T00:00:00Z",
+      last_seen: "2026-06-18T01:00:00Z",
+      change_state: "unchanged",
+      evidence: [
+        {
+          source: "snmp",
+          confidence: 0.85,
+          detail: "SNMP ifHCOctets",
+          observed_at: "2026-06-18T01:00:00Z",
+          raw_ref: "snmp:wan:nyc<->sfo",
+          summary: "WAN circuit NYC ↔ SFO (transcontinental backbone), SNMP ifHCOctets",
+        },
+      ],
+    },
+    {
+      id: "wan-nyc-chi",
+      source: "geo-nyc",
+      target: "geo-chi",
+      relationship: "routed_adjacency",
+      protocol: "snmp",
+      status: "up",
+      confidence: 0.84,
+      direction: "bi",
+      utilization_pct: 33,
+      errors: 0,
+      first_seen: "2026-01-01T00:00:00Z",
+      last_seen: "2026-06-18T01:00:00Z",
+      change_state: "unchanged",
+      evidence: [
+        {
+          source: "snmp",
+          confidence: 0.84,
+          detail: "SNMP ifHCOctets",
+          observed_at: "2026-06-18T01:00:00Z",
+          raw_ref: "snmp:wan:nyc<->chi",
+          summary: "WAN circuit NYC ↔ Chicago, SNMP ifHCOctets",
+        },
+      ],
+    },
+    {
+      id: "wan-nyc-lon",
+      source: "geo-nyc",
+      target: "geo-lon",
+      relationship: "routed_adjacency",
+      protocol: "manual",
+      status: "up",
+      confidence: 0.8,
+      direction: "bi",
+      utilization_pct: 41,
+      errors: 0,
+      first_seen: "2026-02-01T00:00:00Z",
+      last_seen: "2026-06-18T01:00:00Z",
+      change_state: "unchanged",
+      evidence: [
+        {
+          source: "manual",
+          confidence: 0.8,
+          detail: "operator-declared transatlantic circuit",
+          observed_at: "2026-06-18T01:00:00Z",
+          raw_ref: "manual:wan:nyc<->lon",
+          summary: "WAN circuit NYC ↔ London (transatlantic), operator-declared circuit",
+        },
+      ],
+    },
+    {
+      id: "wan-lon-fra",
+      source: "geo-lon",
+      target: "geo-fra",
+      relationship: "routed_adjacency",
+      protocol: "snmp",
+      status: "up",
+      confidence: 0.83,
+      direction: "bi",
+      utilization_pct: 29,
+      errors: 0,
+      first_seen: "2026-03-01T00:00:00Z",
+      last_seen: "2026-06-18T01:00:00Z",
+      change_state: "unchanged",
+      evidence: [
+        {
+          source: "snmp",
+          confidence: 0.83,
+          detail: "SNMP ifHCOctets",
+          observed_at: "2026-06-18T01:00:00Z",
+          raw_ref: "snmp:wan:lon<->fra",
+          summary: "WAN circuit London ↔ Frankfurt, SNMP ifHCOctets",
+        },
+      ],
+    },
+    {
+      id: "wan-fra-sin",
+      source: "geo-fra",
+      target: "geo-sin",
+      relationship: "routed_adjacency",
+      protocol: "manual",
+      status: "up",
+      confidence: 0.78,
+      direction: "bi",
+      utilization_pct: 36,
+      errors: 0,
+      first_seen: "2026-03-01T00:00:00Z",
+      last_seen: "2026-06-18T01:00:00Z",
+      change_state: "unchanged",
+      evidence: [
+        {
+          source: "manual",
+          confidence: 0.78,
+          detail: "operator-declared EU-APAC circuit",
+          observed_at: "2026-06-18T01:00:00Z",
+          raw_ref: "manual:wan:fra<->sin",
+          summary: "WAN circuit Frankfurt ↔ Singapore (EU-APAC), operator-declared circuit",
+        },
+      ],
+    },
+  ],
+  groups: [],
+  overlays: ["health", "utilization"],
+  legend: {},
+  // The geo renderer (ECharts world map) plots the pinned lon/lat directly.
+  renderer_hints: { preferred: "deck_geo", max_detail_level: 1 },
+};

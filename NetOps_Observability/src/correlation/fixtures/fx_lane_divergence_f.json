@@ -1,0 +1,39 @@
+{
+  "name": "fx_lane_divergence_f \u2014 pam4-lane-ber-divergence",
+  "signals": [
+    {
+      "kind": "pam4_lane_ber_divergence",
+      "entity_type": "interface",
+      "entity_id": "spine2:Et13",
+      "observer_id": "snmp-spine2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "fec_corrected_rate_high",
+      "entity_type": "interface",
+      "entity_id": "spine2:Et13",
+      "observer_id": "snmp-spine2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "lane_divergence_high",
+      "entity_type": "interface",
+      "entity_id": "spine2:Et13",
+      "observer_id": "snmp-spine2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.pam4-lane-ber-divergence",
+    "tier": "suspected"
+  }
+}

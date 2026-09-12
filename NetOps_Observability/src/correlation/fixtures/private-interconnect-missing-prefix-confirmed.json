@@ -1,0 +1,40 @@
+{
+  "name": "BGP up but cloud prefix missing + probes fail only to that prefix: confirmed",
+  "signals": [
+    {
+      "kind": "route_prefix_missing",
+      "entity_type": "device",
+      "entity_id": "wan-dx1:10.20.0.0/16",
+      "observer_id": "route-collector",
+      "observer_type": "platform",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 2.0
+    },
+    {
+      "kind": "probe_loss",
+      "entity_type": "path",
+      "entity_id": "dc->vpc-a",
+      "observer_id": "probe-agent-dc",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 5.0
+    },
+    {
+      "kind": "route_advertisement_change",
+      "entity_type": "service",
+      "entity_id": "vpc-a-rtb",
+      "observer_id": "cloud-api",
+      "observer_type": "cloud_api",
+      "modality": "control_plane",
+      "collection_path": "via_cloud_api",
+      "deviation": 0.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.middle-mile.private-interconnect-missing-prefix",
+    "tier": "confirmed",
+    "owner": "netops"
+  }
+}

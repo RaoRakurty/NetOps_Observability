@@ -1,0 +1,30 @@
+{
+  "name": "BGP up, large flows stall across the interconnect: jumbo/MTU mismatch",
+  "signals": [
+    {
+      "kind": "size_dependent_loss",
+      "entity_type": "path",
+      "entity_id": "dc->vpc-a",
+      "observer_id": "probe-agent-dc",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 4.0
+    },
+    {
+      "kind": "probe_loss",
+      "entity_type": "path",
+      "entity_id": "dc->vpc-a-large",
+      "observer_id": "probe-agent-branch",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 4.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.middle-mile.interconnect-jumbo-mtu-mismatch",
+    "tier": "suspected",
+    "owner": "netops"
+  }
+}

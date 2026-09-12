@@ -1,0 +1,37 @@
+{
+  "name": "directed leaf→spine fabric pair (tracker 178 direction-drift golden)",
+  "why": [
+    "The minimal object that asserts a DIRECTION: two device signals whose onset",
+    "order (leaf1 then spine1) agrees with a netflow-measured topology up/down",
+    "vote, so _direction claims 2-of-3 and emits onset_order+topo_updown / 0.8.",
+    "Replayed WITH the embedded orientations it reproduces exactly; replayed",
+    "without them the oracle abstains and the same edge recomputes ('none', 0.0)",
+    "— the drift the v2 edge-comparison schema exists to report.",
+    "Lives in fixtures/golden_replay/ (a subdirectory) on purpose: the catalog",
+    "gate in test_fixtures.py sweeps fixtures/*.json top-level only, and this is",
+    "a replay fixture, not a signature scenario."
+  ],
+  "signals": [
+    {"kind": "bgp_adjacency_change", "observer_id": "leaf1", "entity_id": "leaf1",
+     "entity_type": "device", "modality": "control_plane", "severity": "high",
+     "ts_offset_s": 0, "entity_tokens": ["leaf1"],
+     "attrs": {"onset_uncertainty_s": 1.0}},
+    {"kind": "bgp_adjacency_change", "observer_id": "spine1", "entity_id": "spine1",
+     "entity_type": "device", "modality": "control_plane", "severity": "high",
+     "ts_offset_s": 20, "entity_tokens": ["spine1"],
+     "attrs": {"onset_uncertainty_s": 1.0}}
+  ],
+  "adjacency": [{"a": "leaf1", "b": "spine1"}],
+  "netflow_bytes": [
+    {"from": "leaf1", "to": "spine1", "bytes": 1000.0},
+    {"from": "spine1", "to": "leaf1", "bytes": 50.0}
+  ],
+  "expect": {
+    "objects": 1,
+    "edges": 1,
+    "direction_basis": "onset_order+topo_updown",
+    "direction_conf": 0.8,
+    "undirected_basis": "none",
+    "undirected_conf": 0.0
+  }
+}

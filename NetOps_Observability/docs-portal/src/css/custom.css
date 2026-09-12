@@ -1,0 +1,405 @@
+/* SPDX-License-Identifier: Apache-2.0
+   Copyright 2026 Correlix */
+
+/**
+ * Correlix documentation theme.
+ *
+ * Design brief: read like a vendor administration guide, not like a product
+ * landing page. Dense, calm, high contrast, printable. The reader is usually
+ * mid-incident with the console open beside this page, so nothing here may
+ * compete with the text: no gradients on type, no frosted glass, no glow, no
+ * cards that lift on hover, no oversized radii.
+ *
+ * One accent colour, used for links, the active sidebar item and the active
+ * table-of-contents entry, and nowhere else.
+ *
+ * Dark is the default because this portal is also served inside the product's
+ * Help drawer, which is dark. `respectPrefersColorScheme` lets a reader's own
+ * setting win.
+ */
+
+/* ─────────────────────────────  Design tokens  ──────────────────────────── */
+:root {
+  /* Accent: a single restrained blue. */
+  --ifm-color-primary: #1d4ed8;
+  --ifm-color-primary-dark: #1a46c2;
+  --ifm-color-primary-darker: #1842b7;
+  --ifm-color-primary-darkest: #143697;
+  --ifm-color-primary-light: #2456ee;
+  --ifm-color-primary-lighter: #3663f0;
+  --ifm-color-primary-lightest: #5c81f3;
+
+  --ifm-font-family-base: system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --ifm-font-family-monospace: ui-monospace, 'SFMono-Regular', Menlo, Consolas,
+    'Liberation Mono', monospace;
+
+  --ifm-font-size-base: 16px;
+  --ifm-line-height-base: 1.65;
+  --ifm-code-font-size: 88%;
+  --ifm-heading-font-weight: 600;
+  --ifm-h1-font-size: 1.95rem;
+  --ifm-h2-font-size: 1.4rem;
+  --ifm-h3-font-size: 1.12rem;
+  --ifm-global-radius: 4px;
+  --ifm-navbar-height: 3.25rem;
+  --ifm-navbar-shadow: none;
+  --ifm-spacing-horizontal: 1.5rem;
+
+  /* Content measure. Wide enough for a five-column reference table. */
+  --ifm-container-width-xl: 1400px;
+
+  --cx-border: #e2e5ea;
+  --cx-border-strong: #c8cdd6;
+  --cx-surface: #ffffff;
+  --cx-surface-2: #f4f6f8;
+  --cx-text-dim: #5b6472;
+
+  --ifm-background-color: #ffffff;
+  --ifm-background-surface-color: #ffffff;
+  --ifm-toc-border-color: var(--cx-border);
+  --docusaurus-highlighted-code-line-bg: #eef2ff;
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #8fb0ff;
+  --ifm-color-primary-dark: #6f99ff;
+  --ifm-color-primary-darker: #5f8dff;
+  --ifm-color-primary-darkest: #3068ff;
+  --ifm-color-primary-light: #afc7ff;
+  --ifm-color-primary-lighter: #bfd3ff;
+  --ifm-color-primary-lightest: #dfe8ff;
+
+  --cx-border: #232a35;
+  --cx-border-strong: #354052;
+  --cx-surface: #12161d;
+  --cx-surface-2: #171c25;
+  --cx-text-dim: #98a2b3;
+
+  --ifm-background-color: #0d1117;
+  --ifm-background-surface-color: #12161d;
+  --ifm-heading-color: #e8ecf2;
+  --ifm-font-color-base: #c3cad6;
+  --ifm-toc-border-color: var(--cx-border);
+  --docusaurus-highlighted-code-line-bg: #1c2433;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ───────────────────────────────  Navbar  ───────────────────────────────── */
+.navbar {
+  background: var(--ifm-background-surface-color);
+  border-bottom: 1px solid var(--cx-border);
+}
+.navbar__title {
+  font-weight: 600;
+  font-size: 1.02rem;
+  letter-spacing: -0.01em;
+}
+.navbar__link {
+  font-weight: 400;
+  font-size: 0.9rem;
+  color: var(--cx-text-dim);
+}
+.navbar__link:hover,
+.navbar__link--active {
+  color: var(--ifm-font-color-base);
+}
+.navbar__link--active {
+  box-shadow: inset 0 -2px 0 var(--ifm-color-primary);
+}
+
+/* ───────────────────────────────  Sidebar  ──────────────────────────────── */
+.menu {
+  font-size: 0.875rem;
+  padding: 0.75rem 0.5rem !important;
+}
+.menu__link,
+.menu__list-item-collapsible {
+  border-radius: 3px;
+}
+.menu__link {
+  font-weight: 400;
+  color: var(--cx-text-dim);
+  line-height: 1.35;
+  padding: 0.34rem 0.6rem;
+}
+.menu__link:hover,
+.menu__list-item-collapsible:hover {
+  background: var(--cx-surface-2);
+  color: var(--ifm-font-color-base);
+}
+.menu__link--active:not(.menu__link--sublist) {
+  background: var(--cx-surface-2);
+  color: var(--ifm-color-primary);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--ifm-color-primary);
+}
+/* Section headings in the sidebar read as labels, not as links. */
+.theme-doc-sidebar-item-category-level-1 > .menu__list-item-collapsible > .menu__link {
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ifm-font-color-base);
+}
+.menu__list .menu__list {
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--cx-border);
+  margin-left: 0.6rem;
+}
+
+/* ───────────────────────────────  Content  ──────────────────────────────── */
+.markdown {
+  line-height: 1.65;
+}
+.markdown h1 {
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+  margin-bottom: 0.9rem;
+}
+.markdown h2 {
+  margin-top: 2.25rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.35rem;
+  font-weight: 600;
+  border-bottom: 1px solid var(--cx-border);
+}
+.markdown h3 {
+  margin-top: 1.6rem;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+.markdown h4 {
+  font-weight: 600;
+  color: var(--cx-text-dim);
+}
+
+.markdown a {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--cx-border-strong);
+}
+.markdown a:hover {
+  text-decoration-color: currentColor;
+}
+
+/* Procedures. Numbered steps get room to breathe; nested content stays tight. */
+.markdown ol {
+  padding-left: 1.35rem;
+}
+.markdown ol > li {
+  margin-bottom: 0.5rem;
+}
+.markdown ul > li {
+  margin-bottom: 0.28rem;
+}
+.markdown li > p {
+  margin-bottom: 0.4rem;
+}
+
+.markdown blockquote {
+  border-left: 3px solid var(--cx-border-strong);
+  background: transparent;
+  padding-left: 1rem;
+  color: var(--cx-text-dim);
+  font-style: normal;
+}
+
+/* ───────────────────────────────  Tables  ───────────────────────────────── */
+/* Reference tables are the backbone of this portal, so they are dense and they
+   scroll inside their own box rather than pushing the page sideways. */
+.markdown table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  margin-bottom: 1.4rem;
+}
+.markdown table th,
+.markdown table td {
+  border: 1px solid var(--cx-border);
+  padding: 0.42rem 0.7rem;
+  vertical-align: top;
+}
+.markdown table thead th {
+  background: var(--cx-surface-2);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+.markdown table tbody tr {
+  background: transparent;
+  border-top: 0;
+}
+.markdown table tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--cx-surface-2) 55%, transparent);
+}
+
+/* ────────────────────────────────  Code  ────────────────────────────────── */
+.markdown :not(pre) > code {
+  background: var(--cx-surface-2);
+  border: 1px solid var(--cx-border);
+  border-radius: 3px;
+  padding: 0.08em 0.34em;
+  font-size: 0.86em;
+  word-break: break-word;
+}
+.theme-code-block,
+div[class^='codeBlockContainer'] {
+  border-radius: 4px !important;
+  border: 1px solid var(--cx-border);
+  box-shadow: none !important;
+  margin-bottom: 1.3rem !important;
+}
+.prism-code {
+  font-size: 0.845rem;
+  line-height: 1.55;
+}
+
+/* Console paths: Administration → Data Collection → SNMP Profiles */
+.markdown kbd {
+  font-family: var(--ifm-font-family-base);
+  font-size: 0.86em;
+  font-weight: 500;
+  padding: 1px 6px;
+  border: 1px solid var(--cx-border-strong);
+  border-radius: 3px;
+  background: var(--cx-surface-2);
+  box-shadow: none;
+  color: inherit;
+}
+
+/* ──────────────────────────────  Admonitions  ───────────────────────────── */
+.theme-admonition {
+  border-radius: 4px;
+  border: 1px solid var(--cx-border);
+  border-left-width: 4px;
+  background: var(--cx-surface-2);
+  box-shadow: none;
+  font-size: 0.94rem;
+}
+.theme-admonition .admonitionHeading_node_modules-\@docusaurus-theme-classic-lib-theme-Admonition-Layout-styles-module,
+.theme-admonition h5 {
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+}
+
+/* ─────────────────────────  Table of contents, nav  ─────────────────────── */
+.table-of-contents {
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.table-of-contents__link--active {
+  color: var(--ifm-color-primary);
+  font-weight: 600;
+}
+.table-of-contents__left-border {
+  border-left-color: var(--cx-border);
+}
+.breadcrumbs__link {
+  border-radius: 3px;
+  font-size: 0.82rem;
+}
+.breadcrumbs__item--active .breadcrumbs__link {
+  background: var(--cx-surface-2);
+  color: var(--ifm-font-color-base);
+}
+
+.pagination-nav__link {
+  border: 1px solid var(--cx-border);
+  border-radius: 4px;
+  background: transparent;
+  padding: 0.85rem 1rem;
+}
+.pagination-nav__link:hover {
+  border-color: var(--cx-border-strong);
+  background: var(--cx-surface-2);
+}
+.pagination-nav__sublabel {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--cx-text-dim);
+}
+.pagination-nav__label {
+  font-weight: 500;
+  font-size: 0.95rem;
+}
+
+/* Last-updated line: useful, quiet. */
+.theme-last-updated {
+  font-size: 0.8rem;
+  color: var(--cx-text-dim);
+  font-style: normal;
+}
+
+/* ──────────────────────────────  Scrollbars  ────────────────────────────── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--cx-border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--cx-border-strong);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+/* ────────────────────────────────  Print  ───────────────────────────────── */
+/* Administration guides get printed and attached to change tickets. */
+@media print {
+  .navbar,
+  .theme-doc-sidebar-container,
+  .table-of-contents,
+  .pagination-nav,
+  .breadcrumbs,
+  .theme-doc-footer,
+  footer {
+    display: none !important;
+  }
+  .main-wrapper {
+    max-width: none;
+  }
+  .markdown a {
+    text-decoration: none;
+  }
+  .markdown table {
+    display: table;
+    overflow: visible;
+  }
+  .theme-code-block,
+  div[class^='codeBlockContainer'] {
+    break-inside: avoid;
+  }
+}
+
+/* Navbar wordmark: the product's own mark, sized to the bar rather than to the
+   asset. The light and dark variants are separate files, so only the height is
+   set here and the aspect ratio does the rest. */
+.navbar__logo,
+.navbar__logo img {
+  height: 1.05rem;
+  width: auto;
+}
+.navbar__brand {
+  gap: 0.55rem;
+}
+.navbar__title {
+  color: var(--cx-text-dim);
+  font-weight: 500;
+  border-left: 1px solid var(--cx-border);
+  padding-left: 0.55rem;
+}

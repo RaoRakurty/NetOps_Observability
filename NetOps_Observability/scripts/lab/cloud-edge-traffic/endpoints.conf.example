@@ -1,0 +1,28 @@
+# cloud-edge-traffic endpoints — FILL AFTER `terraform apply` (owner-gated).
+#
+# Copy to endpoints.conf (gitignored) on the lab client and paste the public
+# entry point for each cloud you brought up. Source of each value is the
+# edge-demo `terraform output` in correlix-faultlab-iac/environments/edge-demo:
+#
+#   AWS   : `terraform output -raw aws_alb_dns_name`         (DNS off, default)
+#           `terraform output -raw aws_app_fqdn`             (if enable_public_dns=true)
+#   Azure : `terraform output -raw azure_frontdoor_hostname` (DNS off, default)
+#           `terraform output -raw azure_app_fqdn`           (if enable_public_dns=true)
+#   GCP   : `terraform output -raw gcp_lb_ip`                (DNS off, default)
+#           `terraform output -raw gcp_app_fqdn`             (if enable_public_dns=true)
+#
+# All three edge planes serve PLAIN HTTP on :80 (demo, no cert). Give a bare
+# host / FQDN / IP; port 80 is assumed. A lane left as FILL_ME / blank / a
+# <placeholder> is skipped, so a partial (one-cloud) demo just needs one line.
+#
+# RATE = requests/second/provider. HARD-CAPPED to 5.0 in the generator
+# (bounded-rollup law, program §7). Demo band is 1-5; 2 is a good default.
+
+AWS_ENDPOINT=FILL_ME     # e.g. correlix-edge-alb-123456789.us-west-2.elb.amazonaws.com
+AWS_RATE=2
+
+AZURE_ENDPOINT=FILL_ME   # e.g. correlix-edge-abcd1234.z01.azurefd.net
+AZURE_RATE=2
+
+GCP_ENDPOINT=FILL_ME     # e.g. 34.120.0.10   (global LB IP)
+GCP_RATE=2

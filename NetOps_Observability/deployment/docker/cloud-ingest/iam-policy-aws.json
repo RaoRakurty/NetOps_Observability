@@ -1,0 +1,62 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CorrelixTelemetryInventory",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeVpcs",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeRouteTables",
+        "ec2:DescribeInternetGateways",
+        "ec2:DescribeNatGateways",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeInstances",
+        "ec2:DescribeVpnConnections",
+        "ec2:DescribeTransitGateways",
+        "directconnect:DescribeConnections",
+        "directconnect:DescribeVirtualInterfaces",
+        "sts:GetCallerIdentity"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CorrelixTelemetryMetrics",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:GetMetricData",
+        "cloudwatch:ListMetrics"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CorrelixTelemetryChangeAudit",
+      "Effect": "Allow",
+      "Action": [
+        "cloudtrail:LookupEvents"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CorrelixTelemetryFlowLogsCloudWatch",
+      "Effect": "Allow",
+      "Action": [
+        "logs:GetLogEvents",
+        "logs:DescribeLogStreams"
+      ],
+      "Resource": "arn:aws:logs:*:*:log-group:*flow*"
+    },
+    {
+      "Sid": "CorrelixTelemetryFlowLogsS3",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::YOUR-FLOWLOG-BUCKET*",
+        "arn:aws:s3:::YOUR-FLOWLOG-BUCKET*/*"
+      ]
+    }
+  ]
+}

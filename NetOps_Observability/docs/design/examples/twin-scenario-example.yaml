@@ -1,0 +1,226 @@
+# CORRELIX Network Digital Twin — example scenario (tracker 152 design, §3.3/§8.2
+# of docs/design/network-digital-twin.md).
+#
+# Three tenants across two sites, one DX seam and one DIA seam, a modest
+# baseline, one labeled fault story (DX circuit flap with cloud withdrawal) and
+# one negative control. Runs unmodified on T1 (single host) and T2 (rig) —
+# no deployment parameters live in this file.
+
+twin: 1
+
+meta:
+  name: acme-dx-demo
+  description: >
+    3-tenant / 11-device topology exercising DX seam attribution, partition
+    coverage on a BUS_PARTITIONS=4 bus, and the no-cross-tenant-merge guardrail.
+  seed: 20260816
+
+tenants:
+  # `twin verify` computes murmur2(alias-resolved tenant key) mod P and fails
+  # unless the set covers all partitions; partition_pin documents the intent.
+  - alias: acme        # manufacturing customer; owns the DX seam
+    org: acme-corp
+  - alias: bluesky     # SaaS-heavy branch customer on the DIA seam
+    org: bluesky-ltd
+  - alias: coyote      # control tenant for the negative story
+    org: coyote-inc
+
+sites:
+  - { id: dal, name: "Dallas DC" }
+  - { id: aus, name: "Austin branch" }
+
+devices:
+  # ── acme: Dallas DC edge pair + core, DX to us-east-1 ──────────────────────
+  - name: edge-a1
+    tenant: acme
+    site: dal
+    role: edge
+    interfaces:
+      - { name: Ethernet1,          speed_mbps: 10000, description: "DX circuit dal-dx-1 (VIF 100)" }
+      - { name: Ethernet2,          speed_mbps: 10000, description: "core uplink", peer: "core-a1:Ethernet1" }
+      - { name: Management0,        speed_mbps: 1000,  description: "mgmt" }
+    bgp_neighbors:
+      - { peer_ip: 169.254.100.2, asn: 7224,  description: "AWS DX peer (VIF 100)" }
+      - { peer_ip: 10.20.0.2,     asn: 65010, peer_device: core-a1, description: "core iBGP" }
+    snmp: { version: v3, usm: { user: twin-sim, auth: sha, priv: aes128 } }
+    seams:
+      - { seam_id: dal-dx-1, role: primary }
+  - name: edge-a2
+    tenant: acme
+    site: dal
+    role: edge
+    interfaces:
+      - { name: Ethernet1, speed_mbps: 10000, description: "VPN fallback underlay" }
+      - { name: Ethernet2, speed_mbps: 10000, description: "core uplink", peer: "core-a1:Ethernet2" }
+    bgp_neighbors:
+      - { peer_ip: 10.20.0.2, asn: 65010, peer_device: core-a1, description: "core iBGP" }
+    snmp: { version: v3, usm: { user: twin-sim, auth: sha, priv: aes128 } }
+    seams:
+      - { seam_id: dal-dx-1, role: fallback }
+  - name: core-a1
+    tenant: acme
+    site: dal
+    role: core
+    interfaces:
+      - { name: Ethernet1, speed_mbps: 10000, peer: "edge-a1:Ethernet2" }
+      - { name: Ethernet2, speed_mbps: 10000, peer: "edge-a2:Ethernet2" }
+      - { name: Ethernet3, speed_mbps: 25000, description: "fabric" }
+    bgp_neighbors:
+      - { peer_ip: 10.20.0.1, asn: 65010, peer_device: edge-a1 }
+      - { peer_ip: 10.20.0.3, asn: 65010, peer_device: edge-a2 }
+    snmp: { version: v2c, community: twin-public }
+  - name: spine-a1
+    tenant: acme
+    site: dal
+    role: spine
+    interfaces:
+      - { name: Ethernet1, speed_mbps: 25000, peer: "core-a1:Ethernet3" }
+    snmp: { version: v2c, community: twin-public }
+
+  # ── bluesky: Austin branch, DIA breakout to SaaS ───────────────────────────
+  - name: br-b1
+    tenant: bluesky
+    site: aus
+    role: edge
+    interfaces:
+      - { name: GigabitEthernet0/0, speed_mbps: 1000, description: "DIA / ISP handoff" }
+      - { name: GigabitEthernet0/1, speed_mbps: 1000, description: "branch LAN" }
+    bgp_neighbors:
+      - { peer_ip: 203.0.113.1, asn: 64512, description: "ISP eBGP" }
+    snmp: { version: v3, usm: { user: twin-sim, auth: sha, priv: aes128 } }
+    seams:
+      - { seam_id: aus-dia-1, role: primary }
+  - name: br-b2
+    tenant: bluesky
+    site: aus
+    role: edge
+    interfaces:
+      - { name: GigabitEthernet0/0, speed_mbps: 1000, description: "DIA secondary" }
+    snmp: { version: v2c, community: twin-public }
+    seams:
+      - { seam_id: aus-dia-1, role: fallback }
+  - name: sw-b1
+    tenant: bluesky
+    site: aus
+    role: leaf
+    interfaces:
+      - { name: Ethernet1, speed_mbps: 1000, peer: "br-b1:GigabitEthernet0/1" }
+    snmp: { version: v2c, community: twin-public }
+
+  # ── coyote: control tenant (negative story lives here) ─────────────────────
+  - name: rtr-c1
+    tenant: coyote
+    site: dal
+    role: wan
+    interfaces:
+      - { name: Ethernet1, speed_mbps: 1000 }
+    bgp_neighbors:
+      - { peer_ip: 192.0.2.9, asn: 65099 }
+    snmp: { version: v2c, community: twin-public }
+  - name: rtr-c2
+    tenant: coyote
+    site: dal
+    role: wan
+    interfaces:
+      - { name: Ethernet1, speed_mbps: 1000 }
+    snmp: { version: v2c, community: twin-public }
+  - name: rtr-c3
+    tenant: coyote
+    site: aus
+    role: edge
+    interfaces:
+      - { name: Ethernet1, speed_mbps: 1000 }
+    snmp: { version: v2c, community: twin-public }
+  - name: rtr-c4
+    tenant: coyote
+    site: aus
+    role: edge
+    interfaces:
+      - { name: Ethernet1, speed_mbps: 1000 }
+    snmp: { version: v2c, community: twin-public }
+
+links:
+  - { a: "edge-a1:Ethernet2", b: "core-a1:Ethernet1" }
+  - { a: "edge-a2:Ethernet2", b: "core-a1:Ethernet2" }
+  - { a: "core-a1:Ethernet3", b: "spine-a1:Ethernet1" }
+  - { a: "br-b1:GigabitEthernet0/1", b: "sw-b1:Ethernet1" }
+
+seams:
+  # Unified seam objects (docs/design/cloud-ingestion.md §4 shapes). Five FINAL
+  # seam_types only: DX | VPN | SDWAN | DIA | CLOUD_BACKBONE (DIA displays "ISP").
+  - seam_id: dal-dx-1
+    seam_type: DX
+    tenant: acme
+    description: "Dallas ↔ AWS us-east-1 Direct Connect (colo-mediated)"
+    provider: { cloud: aws, region: us-east-1, circuit: "dxcon-twin0001", vif: 100 }
+    members:
+      - { member_id: edge-a1, role: primary }
+      - { member_id: edge-a2, role: fallback }
+  - seam_id: aus-dia-1
+    seam_type: DIA
+    tenant: bluesky
+    description: "Austin branch direct internet breakout → SaaS"
+    members:
+      - { member_id: br-b1, role: primary }
+      - { member_id: br-b2, role: fallback }
+
+baseline:
+  # Steady-state emission, equal per tenant by construction (§6 balance math).
+  # T1 budget check: 11 devices × the rates below ≪ 200 EPS aggregate.
+  syslog:  { per_device_eps: 0.2, severity_mix: { notice: 0.7, warning: 0.25, err: 0.05 } }
+  flows:   { per_edge_device_fps: 5, protocol: ipfix }     # → goflow2 :4739
+  metrics: { snmp_poll: passive }   # answered by snmpsim; the REAL Go collector polls every 30s
+  probes:
+    - { prober: twin-vantage-1, target: edge-a1, interval_s: 30,
+        intent: customer_path, vantage: public_cloud_agent }
+    - { prober: twin-vantage-1, target: br-b1, interval_s: 30,
+        intent: customer_path, vantage: public_cloud_agent }
+
+stories:
+  # ── §5.3 template: DX circuit flap with cloud-side withdrawal ──────────────
+  - id: dx-flap-1
+    template: dx_circuit_flap_cloud_withdrawal
+    trigger: { at: "+300s" }
+    affected:
+      seam: dal-dx-1
+      devices: [edge-a1]
+      tenants: [acme]
+    params:
+      flap_count: 2          # down→up cycles before terminal down
+      hold_s: 45             # dwell in each state
+      final_state: down
+      cloud:                  # provider-side kinds emitted on netops.cloud
+        kinds: [cloud_bgp_session_down, cloud_route_count_drop]
+        account: "123456789012"
+        region: us-east-1
+        resource_id: "dxcon-twin0001/vif-100"
+      probe_loss_pct: 85
+    expect:
+      rca:
+        verdict_tier_at_least: suspected
+        hypothesis_matches: "private-interconnect|interconnect-bgp|wan-handoff"
+        affected_includes: [edge-a1]
+        single_incident: true          # BGP down + withdrawal + probe loss fold to ONE object
+      seam:
+        seam_id: dal-dx-1
+        seam_type: DX
+        owner: carrier                 # seam-level ownership; never generic "NOC"
+      forbid:
+        cross_tenant_merge: true
+
+  # ── §5.10 template: negative control — unrelated concurrency across tenants ─
+  - id: no-merge-1
+    template: negative_unrelated_concurrency
+    trigger: { at: "+330s" }           # deliberately inside dx-flap-1's window
+    affected:
+      devices: [rtr-c1, rtr-c3, br-b2]
+      tenants: [coyote, bluesky]
+    params:
+      cpu_device: rtr-c3               # device_resource CUSUM shape (26 baseline + 10 peak)
+      bgp_device: rtr-c1               # single %BGP-5-ADJCHANGE Down, peer 192.0.2.9
+      probe_device: br-b2              # one-off 70% loss, customer_path vantage
+    expect:
+      rca: {}                          # no positive claim
+      forbid:
+        cross_tenant_merge: true       # nothing here may join dx-flap-1 or each other
+        confirmed: true                # none of these may reach "confirmed" alone

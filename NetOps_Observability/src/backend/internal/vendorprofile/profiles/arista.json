@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "vendor": "arista",
+  "display_name": "Arista Networks",
+  "notes": "The telemetry catalog names this platform 'ceos' (the containerized EOS in the lab); 'ceos' is a platform ALIAS of the eos profile, not a second product. The CLI binding is deliberately cisco-iosxe: EOS speaks the Cisco IOS-XE show-command grammar, which is why the protocol-diagnostics catalog renders EOS devices in that dialect. That is a SHOW-GRAMMAR claim only and is a separate axis from the hardening binding, which is its OWN dialect (`arista`): EOS shares IOS' show grammar but not its configuration grammar (no `line vty`, no `service password-encryption`, an eAPI/gNMI management plane IOS has no analogue for), so borrowing the cisco-iosxe hardening bindings would have produced confident verdicts against lines EOS never writes. config_capture LIVE-VERIFIED 2026-09-02 on lab leaf1 (172.40.40.21, cEOSLab 4.36.0.1F): `show running-config` over one non-interactive SSH exec returns the whole configuration with no pager engaged, and two consecutive captures were byte-identical; the two header lines it stamps (`! Command: ...`, `! device: ...`) are exactly what the eos-command and eos-device-banner volatile rules strip. NOTE the privilege prerequisite, which is a DEPLOYMENT fact and not a profile one: EOS answers `show running-config` only at privilege 15, so the capture account must be authorized into privileged exec (`aaa authorization exec default local` with a privilege-15 role); a level-1 account is answered with `% Invalid input (privileged mode required)` and internal/configstore refuses that capture rather than storing the banner as a config version.",
+  "detection": {
+    "sysobjectid_prefixes": [
+      "1.3.6.1.4.1.30065"
+    ],
+    "sysdescr_contains": [
+      "arista"
+    ],
+    "sysdescr_rank": 30,
+    "os_version_pattern": "(?i)\\bversion[ :]+([0-9][0-9A-Za-z.-]*)"
+  },
+  "dialect": {
+    "vrf_term": "VRF",
+    "vrf_term_keys": [
+      "arista",
+      "eos"
+    ],
+    "vrf_synonyms": [
+      "vrf"
+    ],
+    "vrf_scope_keyword": "vrf"
+  },
+  "verify": {
+    "commands": {
+      "ssh_bgp_edge": "show ip bgp summary vrf all",
+      "ssh_config_change": "show running-config diffs",
+      "ssh_iface_deep": "show interfaces",
+      "ssh_interfaces": "show interfaces status",
+      "ssh_routing": "show ip bgp summary"
+    }
+  },
+  "config_capture": {
+    "platform_contains": [
+      "arista",
+      "eos"
+    ],
+    "platform_rank": 10,
+    "running_config_cmd": "show running-config",
+    "volatile_rules": [
+      {
+        "name": "eos-time",
+        "pattern": "(?i)^\\s*!\\s*time\\s*:"
+      },
+      {
+        "name": "eos-device-banner",
+        "pattern": "(?i)^\\s*!\\s*device\\s*:"
+      },
+      {
+        "name": "eos-command",
+        "pattern": "(?i)^\\s*!\\s*command:\\s"
+      }
+    ]
+  },
+  "snmp_configgen": {
+    "v2c_template": "snmp-server community <<community>> ro",
+    "v3_template": "snmp-server group CORRELIX v3 priv\nsnmp-server user <<sec_name>> CORRELIX v3 auth sha <<auth_key>> priv aes <<priv_key>>"
+  },
+  "device_type": {
+    "text_hints": {
+      "switch": [
+        "arista",
+        " eos",
+        "dcs-"
+      ]
+    }
+  },
+  "profiles": [
+    {
+      "platform": "eos",
+      "os_version_probe": {
+        "gnmi_paths": [
+          "/system/state/software-version",
+          "/components/component[name=Chassis]/state/software-version"
+        ],
+        "gnmi_version_pattern": "(?i)^\\s*v?([0-9][0-9A-Za-z.]*)",
+        "cli_version_pattern": "(?im)^Software image version:\\s+([0-9][0-9A-Za-z.]*)",
+        "version_render": "version {version}",
+        "notes": "OS-VERSION SOURCE LADDER (internal/osprobe). The lab's cEOS leaves stream OpenConfig over gNMI, which is why the OpenConfig system path leads and the component path is the fallback for a chassis that publishes the version per-component. doc_claimed all the same: the change that authored this block did not Get either path or run `show version` on a leaf, and says so rather than inheriting this profile's live_validated fidelity, which was earned by its telemetry paths, not by these. cli_version_pattern reads the `Software image version: 4.32.0F` line and deliberately not `Internal build version: 4.32.0F-36993274.4320F`, which is a build id; the captured class therefore excludes the hyphen so a build suffix can never reach a CVE range comparison."
+      },
+      "identity_probe": {
+        "commands": [
+          {
+            "command": "show version",
+            "serial_patterns": [
+              "(?m)^[ \\t]*Serial number:[ \\t]*([A-Za-z0-9._-]{3,40})[ \\t\\r]*$"
+            ],
+            "model_patterns": [
+              "(?m)^[ \\t]*Arista[ \\t]+([A-Za-z0-9._/+-]{3,40})[ \\t\\r]*$"
+            ]
+          }
+        ],
+        "notes": "HARDWARE IDENTITY PROBE (internal/deviceident). GROUNDED in the repo's own show-version fixture (internal/osprobe/sources_test.go showVersionEOS): EOS prints the bare model as the FIRST line, `Arista DCS-7050SX3-48YC8-F`, and the chassis serial as `Serial number: JPE19141ABC`. `show inventory` is deliberately NOT bound: its EOS form is a fixed-width COLUMN table, and reading a serial out of column positions we have not seen output for would be a guess — `show version` already carries both fields."
+      },
+      "display_name": "Arista EOS",
+      "device_class": [
+        "switch",
+        "router"
+      ],
+      "fidelity": "live_validated",
+      "detection": {
+        "os_parse": {
+          "product": "eos",
+          "rank": 10,
+          "sysdescr_contains_any": []
+        },
+        "platform_contains": [
+          "arista",
+          "eos",
+          "ceos"
+        ],
+        "platform_rank": 40,
+        "syslog_facilities": [
+          "SYS"
+        ]
+      },
+      "capture": {
+        "running_config_cmd": "show running-config",
+        "show_version_cmd": "show version",
+        "pager_off_cmds": [
+          "terminal length 0"
+        ],
+        "prompt_regex": "(?m)^[A-Za-z0-9._-]+[>#]\\s*$",
+        "pcap_start_cmd": [
+          "bash timeout {secs} tcpdump -i {iface} -c {count} -s 0 -U -w /mnt/flash/{file}.pcap[ '{filter}']"
+        ],
+        "pcap_cleanup_cmd": [
+          "bash rm -f /mnt/flash/{file}.pcap"
+        ],
+        "pcap_remote_path": "/mnt/flash/{file}.pcap",
+        "pcap_supports_filter": true,
+        "pcap_family": "arista_eos",
+        "pcap_platform_rules": [
+          {
+            "rank": 40,
+            "tokens": [
+              "eos",
+              "arista"
+            ]
+          }
+        ]
+      },
+      "advisory": {
+        "provider": "offline-feed",
+        "product_ids": [
+          "eos"
+        ]
+      },
+      "hardening": {
+        "binding": "arista",
+        "display": "Arista EOS"
+      },
+      "cli": {
+        "dialect": "cisco-iosxe",
+        "display": "Cisco IOS-XE"
+      },
+      "threat": {
+        "log_rule_ids": [
+          "log-logging-disabled",
+          "log-buffer-cleared",
+          "log-offhours-config-change",
+          "log-new-local-user",
+          "log-privilege-escalation",
+          "log-gre-tunnel",
+          "log-aaa-tampering",
+          "log-boot-image-change"
+        ],
+        "mnemonic_prefixes": [
+          "SYS"
+        ]
+      },
+      "platform_aliases": [
+        "ceos"
+      ]
+    }
+  ]
+}

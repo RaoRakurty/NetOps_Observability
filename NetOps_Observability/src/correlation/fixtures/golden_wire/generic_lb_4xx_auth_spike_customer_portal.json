@@ -1,0 +1,31 @@
+{
+  "name": "LB 4xx/auth spike for the customer portal — an auth/config/client indicator that must NEVER confirm a provider outage (lb_4xx_high is consumed by no outage signature)",
+  "tenant": "acme",
+  "events": [
+    {
+      "lane": "app_edge",
+      "event": {
+        "source": "lb",
+        "vendor": "generic",
+        "product": "reverse_proxy",
+        "tenant_id": "acme",
+        "ts": "2026-07-09T09:00:00Z",
+        "app_name": "customer_portal",
+        "host": "portal.acme.example",
+        "path": "/login",
+        "status_code": 401,
+        "request_count": 900,
+        "error_count": 720,
+        "error_rate": 0.8,
+        "lb_name": "edge-lb-01",
+        "reason": "http_4xx_high",
+        "anomaly": true
+      }
+    }
+  ],
+  "expect": {
+    "lb_kind": "lb_4xx_high",
+    "lb_reason": "http_4xx_high",
+    "confirmed": false
+  }
+}

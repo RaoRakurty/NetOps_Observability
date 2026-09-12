@@ -1,0 +1,239 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+package integration
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"netops/backend/internal/vault"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"crypto/rand"
+	"encoding/hex"
+)
+
+// integration_repo_pg.go — Postgres persistence for the Integration Platform
+// (migration 0006): the external<->internal correlation index + ordering
+// watermark (integration_mappings) and the 3-level-idempotent event ledger
+// (integration_events). Additive; wired by the inbound worker in P2. Modeled on
+// incidents_pg.go (withTenant binds app.tenant_id; system writes run at
+// platform scope '*' and stamp tenant_id, which RLS WITH CHECK permits).
+
+type Store struct {
+	db    DB
+	vault *vault.Vault // secret-custody envelope for webhook_secret at rest (nil/dormant = plaintext)
+}
+
+// DB is the injected relational seam (the portintel.DB idiom).
+type DB interface {
+	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
+}
+
+// NewStore builds the FORCE-RLS integration repository over the injected seam.
+func NewStore(db DB, v *vault.Vault) *Store {
+	return &Store{db: db, vault: v}
+}
+
+// randHex mirrors the integrator's id minting (duplicated per the no-utils rule).
+func randHex(nBytes int) string {
+	b := make([]byte, nBytes)
+	_, _ = rand.Read(b) // crypto/rand.Read cannot fail (Go 1.24+ aborts instead)
+	return hex.EncodeToString(b)
+}
+
+// Mapping is one external incident's correlation + watermark row.
+type Mapping struct {
+	Tenant     string
+	Provider   string
+	ExternalID string
+	IncidentID string
+	State      string
+	Applied    Watermark // Seq + At — the ordering high-water mark (§4a)
+}
+
+// GetMapping returns the mapping for (provider, externalID), tenant-scoped.
+func (s *Store) GetMapping(ctx context.Context, tenant string, cross bool, provider, externalID string) (Mapping, bool, error) {
+	var m Mapping
+	var found bool
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+		var appliedAt *time.Time
+		row := tx.QueryRow(ctx, `
+SELECT tenant_id, provider, external_id, internal_incident_id, state, applied_seq, applied_at
+  FROM integration_mappings WHERE provider=$1 AND external_id=$2`, provider, externalID)
+		if err := row.Scan(&m.Tenant, &m.Provider, &m.ExternalID, &m.IncidentID, &m.State, &m.Applied.Seq, &appliedAt); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		if appliedAt != nil {
+			m.Applied.At = *appliedAt
+		}
+		found = true
+		return nil
+	})
+	return m, found, err
+}
+
+// UpsertMapping inserts or advances a mapping. System write → platform scope; the
+// row's tenant_id is stamped from m.Tenant. Advances the watermark + state.
+func (s *Store) UpsertMapping(ctx context.Context, m Mapping) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
+		var at any
+		if !m.Applied.At.IsZero() {
+			at = m.Applied.At
+		}
+		_, err := tx.Exec(ctx, `
+INSERT INTO integration_mappings
+   (tenant_id, provider, external_id, internal_incident_id, state, applied_seq, applied_at, last_synced_at, updated_at)
+ VALUES ($1,$2,$3,$4,$5,$6,$7, now(), now())
+ ON CONFLICT (tenant_id, provider, external_id) DO UPDATE SET
+   internal_incident_id = EXCLUDED.internal_incident_id,
+   state                = EXCLUDED.state,
+   applied_seq          = EXCLUDED.applied_seq,
+   applied_at           = EXCLUDED.applied_at,
+   last_synced_at       = now(),
+   updated_at           = now()
+ WHERE EXCLUDED.applied_seq > integration_mappings.applied_seq
+    OR (EXCLUDED.applied_seq = integration_mappings.applied_seq
+        AND EXCLUDED.applied_at > integration_mappings.applied_at)`,
+			m.Tenant, m.Provider, m.ExternalID, m.IncidentID, m.State, m.Applied.Seq, at)
+		return err
+	})
+}
+
+// ListOpenMappings returns a tenant's non-terminal mappings for a provider — the
+// drift-reconciler candidates — stalest first, bounded by limit.
+func (s *Store) ListOpenMappings(ctx context.Context, tenant, provider string, limit int) ([]Mapping, error) {
+	var out []Mapping
+	err := s.db.WithTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+SELECT tenant_id, provider, external_id, internal_incident_id, state, applied_seq, applied_at
+  FROM integration_mappings
+ WHERE provider=$1 AND state NOT IN ('resolved','closed')
+ ORDER BY last_synced_at ASC NULLS FIRST
+ LIMIT $2`, provider, limit)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var m Mapping
+			var appliedAt *time.Time
+			if err := rows.Scan(&m.Tenant, &m.Provider, &m.ExternalID, &m.IncidentID, &m.State, &m.Applied.Seq, &appliedAt); err != nil {
+				return err
+			}
+			if appliedAt != nil {
+				m.Applied.At = *appliedAt
+			}
+			out = append(out, m)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// TouchMapping bumps last_synced_at so a polled mapping rotates to the back of the
+// reconciler's stalest-first queue (whether or not drift was found).
+func (s *Store) TouchMapping(ctx context.Context, tenant, provider, externalID string) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE integration_mappings SET last_synced_at=now()
+			WHERE tenant_id=$1 AND provider=$2 AND external_id=$3`, tenant, provider, externalID)
+		return err
+	})
+}
+
+// InboundRecord identifies one ledger row as RecordInbound left it. On a
+// redelivery (inserted=false) every field describes the EXISTING row — its id,
+// its correlation id, its current verdict and its created_at — which is what
+// lets the webhook handler recover a recorded-but-never-enqueued event (M14)
+// instead of holding a freshly-minted id that matches nothing in the ledger.
+type InboundRecord struct {
+	ID            string
+	CorrelationID string
+	// Status is the row's ledger verdict (received | applied | dropped | …).
+	// "received" on a redelivery means no apply has landed yet.
+	Status string
+	// RecordedAt is the row's created_at — stable across redeliveries, so it
+	// serves as the apply job's deterministic FireTime (idempotent enqueue).
+	RecordedAt time.Time
+}
+
+// RecordInbound persists a normalized inbound event (level-1 raw dedup via the
+// partial unique on provider_evt_id). Returns inserted=false when the event was
+// a redelivery — then rec describes the already-stored row (M14: the caller
+// needs its identity to re-enqueue a lost apply, not a discarded fresh id).
+//
+// The correlation id is the single id threaded end-to-end (§9): minted here per
+// recorded event and carried through enqueue → worker apply → incident
+// transition (and any resulting outbound re-push), so one grep spans the chain.
+func (s *Store) RecordInbound(ctx context.Context, ev IntegrationEvent) (rec InboundRecord, inserted bool, err error) {
+	id := randHex(8)
+	correlationID := "ic-" + randHex(8)
+	payload, _ := json.Marshal(ev) // discard: marshalling an in-memory value cannot fail
+	var occurred any
+	if !ev.OccurredAt.IsZero() {
+		occurred = ev.OccurredAt
+	}
+	err = s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
+		// The no-op DO UPDATE turns the old DO NOTHING into an upsert whose
+		// RETURNING always yields a row — the EXISTING one on conflict, with
+		// (xmax = 0) discriminating fresh insert from redelivery (the same
+		// trick upsertIncidentSQL uses). updated_at records the redelivery.
+		var isInsert bool
+		qerr := tx.QueryRow(ctx, `
+INSERT INTO integration_events
+   (id, tenant_id, provider, direction, type, provider_evt_id, external_id, external_seq, alert_id, status, payload, occurred_at, correlation_id)
+ VALUES ($1,$2,$3,'inbound',$4,$5,$6,$7,$8,'received',$9,$10,$11)
+ ON CONFLICT (tenant_id, provider, provider_evt_id) WHERE provider_evt_id <> ''
+ DO UPDATE SET updated_at = now()
+ RETURNING id, correlation_id, status, created_at, (xmax = 0) AS inserted`,
+			id, ev.Tenant, ev.Provider, string(ev.Type), ev.ProviderEvtID, ev.ExternalID, ev.ExternalSeq, ev.AlertID, payload, occurred, correlationID)
+		if scanErr := qerr.Scan(&rec.ID, &rec.CorrelationID, &rec.Status, &rec.RecordedAt, &isInsert); scanErr != nil {
+			return scanErr
+		}
+		inserted = isInsert
+		return nil
+	})
+	if err != nil {
+		return InboundRecord{}, false, err
+	}
+	return rec, inserted, nil
+}
+
+// GetInboundEvent reconstructs a recorded inbound event from its ledger row (the
+// canonical IntegrationEvent was stored as the payload). Used by the async apply
+// worker. Platform scope (the worker resolves tenant from the event).
+func (s *Store) GetInboundEvent(ctx context.Context, id string) (IntegrationEvent, bool, error) {
+	var ev IntegrationEvent
+	var found bool
+	err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
+		var payload []byte
+		e := tx.QueryRow(ctx, `SELECT payload FROM integration_events WHERE id=$1`, id).Scan(&payload)
+		if errors.Is(e, pgx.ErrNoRows) {
+			return nil
+		}
+		if e != nil {
+			return e
+		}
+		if uerr := json.Unmarshal(payload, &ev); uerr != nil {
+			return uerr
+		}
+		found = true
+		return nil
+	})
+	return ev, found, err
+}
+
+// MarkEvent records the reconciler's verdict (status + reason) for a ledger row.
+func (s *Store) MarkEvent(ctx context.Context, id, status, reason string) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+UPDATE integration_events SET status=$2, reason=$3, updated_at=now() WHERE id=$1`, id, status, reason)
+		return err
+	})
+}

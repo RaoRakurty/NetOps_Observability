@@ -1,4 +1,7 @@
-package main
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+package backend
 
 import (
 	"context"
@@ -7,9 +10,13 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"netops/backend/internal/discovery"
+	"netops/backend/internal/platformdb"
+	"netops/backend/internal/saved"
 	"os"
 	"path/filepath"
-	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +24,7 @@ import (
 	"netops/backend/alerts"
 	"netops/backend/models"
 	"netops/backend/notify"
+	"netops/backend/reports"
 )
 
 // handleReportRuns: GET /api/reports/runs — run-state map keyed by report id,
@@ -28,7 +36,33 @@ func (s *server) handleReportRuns(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.reports.Runs())
+	// Both backends require the same permission and scope by the caller's
+	// tenant (H7): run details carry report names/summaries/channel names, so
+	// an unscoped map is a cross-tenant leak on the file backend.
+	claims, ok := s.requirePerm(w, r, "reports", LevelRead)
+	if !ok {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	// Under the async backend, derive last/next/status from the execution history
+	// (scoped to the caller's tenant); the file backend uses the in-memory map.
+	if s.reportPipeline != nil {
+		writeJSON(w, http.StatusOK, s.reportPipeline.runsFromExecutions(r.Context(), tenant, cross))
+		return
+	}
+	// File backend: keep only runs whose owning saved report the caller may
+	// see (mirrors the PG branch). A run for a deleted report has no owner to
+	// authorize against, so a scoped caller doesn't get it either
+	// (default-closed; gc reaps those entries anyway).
+	runs := s.reports.Runs()
+	if !cross {
+		for id := range runs {
+			if o, ok := s.saved.Get(id); !ok || !canSeeSaved(o, tenant, cross) {
+				delete(runs, id)
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, runs)
 }
 
 // handleReportRunNow: POST /api/reports/run {"id":"..."} — deliver a report
@@ -39,14 +73,65 @@ func (s *server) handleReportRunNow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	claims, ok := s.requirePerm(w, r, "reports", LevelWrite)
+	if !ok {
+		return
+	}
+	tenant, cross := principalTenant(claims)
 	var req struct {
-		ID string `json:"id"`
+		ID       string   `json:"id"`
+		Channels []string `json:"channels,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.ID) == "" {
 		writeError(w, http.StatusBadRequest, errors.New("id required"))
 		return
 	}
-	run, err := s.reports.RunNow(strings.TrimSpace(req.ID))
+	id := strings.TrimSpace(req.ID)
+	// Named notify channels are PLATFORM-GLOBAL resources (M15): a tenant
+	// principal must not be able to point a run at an arbitrary operator
+	// channel (Slack/PagerDuty/... it doesn't own). Only the cross-tenant
+	// platform owner may bind them; default-closed, matching §3a.3.
+	if len(req.Channels) > 0 && !cross {
+		writeError(w, http.StatusForbidden, errors.New("named notify channels are platform-global; contact points are the tenant delivery model"))
+		return
+	}
+
+	// Async path (Postgres): enqueue a job and return immediately — no blocking
+	// render/SMTP in the request. The worker pool delivers and records the
+	// execution; the client polls /api/reports/executions/{id} for progress.
+	if s.reportPipeline != nil {
+		o, ok := s.saved.Get(id)
+		// Tenant isolation (SR-002): the saved store Get is unscoped, and EnqueueNow
+		// runs the job — and delivers to its channels — under the report's OWN tenant.
+		// Without this ownership check a tenant holding reports:write could trigger
+		// another tenant's report and have it exfiltrated to that tenant's channels
+		// (or, with link-delivery, obtain the capability URL). 404 (not 403) so the
+		// id's existence in another tenant isn't revealed.
+		if !ok || o.Type != "report" || !canSeeSaved(o, tenant, cross) {
+			writeError(w, http.StatusNotFound, errors.New("report not found"))
+			return
+		}
+		execID, err := s.reportPipeline.EnqueueNow(r.Context(), o)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"execution_id": execID,
+			"status":       "queued",
+			// "run" keeps the legacy shape so the existing UI still updates.
+			"run": reportRun{Status: "queued", Detail: "queued for async delivery"},
+		})
+		return
+	}
+
+	// Synchronous fallback (file backend). Same tenant-ownership gate as the async
+	// path (SR-002) before running/delivering the report.
+	if o, ok := s.saved.Get(id); !ok || o.Type != "report" || !canSeeSaved(o, tenant, cross) {
+		writeError(w, http.StatusNotFound, errors.New("report not found"))
+		return
+	}
+	run, err := s.reports.RunNow(id, req.Channels)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
@@ -54,9 +139,28 @@ func (s *server) handleReportRunNow(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, run)
 }
 
+// handleReportChannels: GET /api/reports/channels — the notify channels actually
+// configured, so the "Send now" UI offers only real delivery destinations.
+func (s *server) handleReportChannels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// The channel names enumerate the operator's notification integrations,
+	// which are PLATFORM-GLOBAL resources (§3a.3): a tenant admin must not be
+	// able to enumerate operator channel names. Gate as the notify_config.go
+	// siblings do and as RunNow's channel-binding cross gate does — platform
+	// admin only, default-closed (M15; was under-gated at reports:read).
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, s.notifier.Names())
+}
+
 // Report scheduler — the server-side half of Phase 5.
 //
-// A report is a SavedObject of type "report" whose opaque body the frontend
+// A report is a saved.Object of type "report" whose opaque body the frontend
 // owns; the scheduler only reads the few fields it needs (reportSpec). On a
 // cadence it renders a point-in-time summary from in-memory state (active
 // alerts, device inventory, stack health) and delivers it through the same
@@ -70,12 +174,43 @@ func (s *server) handleReportRunNow(w http.ResponseWriter, r *http.Request) {
 // reportSpec is the slice of a report's JSON body the scheduler reads. The
 // frontend may carry additional fields freely; unknown keys are ignored.
 type reportSpec struct {
-	Kind            string `json:"kind"`             // alerts_summary | device_inventory | health_summary
+	// Kind selects the renderer. Operational: alerts_summary | device_inventory |
+	// health_summary. Executive (added for the exec reporting backlog, modelled
+	// on Zabbix scheduled reports): wan_utilization | security_threats |
+	// device_utilization | latency_jitter_sla.
+	Kind            string `json:"kind"`
 	IntervalMinutes int    `json:"interval_minutes"` // cadence; <=0 disables scheduling
 	Severity        string `json:"severity"`         // severity stamped on the delivered message
 	Enabled         bool   `json:"enabled"`
 	Description     string `json:"description"`
+	// Channels optionally restricts delivery to named notify channels (email,
+	// slack, pagerduty, sns, twilio…). Empty => contact points only (M15 —
+	// never a broadcast to all channels), and only platform-owned reports may
+	// name channels at all (they are platform-global resources). Used by
+	// scheduled runs and as the default for "Send now".
+	Channels []string `json:"channels,omitempty"`
+	// ContactPoints lists reusable contact-point ids (contactpoints.go) this
+	// report is delivered to — the modern recipient model. Email-type points are
+	// resolved to addresses and emailed directly (in the report's tenant scope);
+	// independent of Channels (which still drives slack/pagerduty/etc.).
+	ContactPoints []string `json:"contact_points,omitempty"`
+	// DeliveryMode selects how contact-point delivery carries the report:
+	// "body" (default) emails the rendered report; "link" emails a secure link
+	// (Phase 3). Unknown/empty => body.
+	DeliveryMode string `json:"delivery_mode,omitempty"`
+	// Schedule is the calendar+timezone recurrence used by the async pipeline
+	// (PG backend). When set and valid it supersedes IntervalMinutes; when absent
+	// the pipeline falls back to IntervalMinutes (rolling cadence) for back-compat.
+	Schedule *reports.Recurrence `json:"schedule,omitempty"`
+	// Formats lists the output formats to render (html, xlsx, pdf). Empty => html.
+	// HTML is always produced (the email body); extras are stored + attached.
+	Formats []string `json:"formats,omitempty"`
 }
+
+const (
+	deliverBody = "body"
+	deliverLink = "link"
+)
 
 // reportRun records the scheduler's per-report state.
 type reportRun struct {
@@ -86,15 +221,21 @@ type reportRun struct {
 }
 
 type reportScheduler struct {
-	saved     *savedStore
+	srv       *server // for lazily-constructed deps (notifyCfg, contactPoints)
+	saved     saved.Repo
 	notifier  *notify.Dispatcher
-	discovery *DiscoveryAggregator
+	discovery *discovery.DiscoveryAggregator
 	alerts    *alerts.Engine
 	startedAt time.Time
 
 	mu   sync.Mutex
 	runs map[string]reportRun
 	path string
+
+	// ds is the reports.DataSource seam the extracted dataset/renderer
+	// builders read through (Phase-2 W2.1) — tenant scoping lives in the
+	// closures below, not in the reports package.
+	ds reports.DataSource
 }
 
 func newReportScheduler(s *server, path string) *reportScheduler {
@@ -102,6 +243,7 @@ func newReportScheduler(s *server, path string) *reportScheduler {
 		path = "/data/report_runs.json"
 	}
 	rs := &reportScheduler{
+		srv:       s,
 		saved:     s.saved,
 		notifier:  s.notifier,
 		discovery: s.discovery,
@@ -110,8 +252,24 @@ func newReportScheduler(s *server, path string) *reportScheduler {
 		runs:      make(map[string]reportRun),
 		path:      path,
 	}
+	rs.ds = rs.dataSource()
 	rs.load()
 	return rs
+}
+
+// dataSource wires the reports.DataSource seam over this scheduler's
+// tenant-scoped reads. Split from the constructor so test fixtures that build
+// the scheduler as a struct literal can wire it too (a zero DataSource panics
+// on first use — better here than a nil-tolerant seam that hides miswiring).
+func (rs *reportScheduler) dataSource() reports.DataSource {
+	return reports.DataSource{
+		Devices:    rs.tenantDevices,
+		Alerts:     rs.tenantAlerts,
+		DeviceKeys: rs.reportDeviceKeys,
+		CHQuery:    chQuery,
+		VMMap:      vmQueryMap,
+		StartedAt:  rs.startedAt,
+	}
 }
 
 // Start ticks the scheduler once a minute until ctx is cancelled.
@@ -134,7 +292,7 @@ func (rs *reportScheduler) Start(ctx context.Context) {
 // tick fires every report whose NextRun has arrived.
 func (rs *reportScheduler) tick() {
 	now := time.Now().UTC()
-	for _, o := range rs.saved.List("report") {
+	for _, o := range rs.saved.List("report", "", true) {
 		spec, err := parseReportSpec(o.Body)
 		if err != nil || !spec.Enabled || spec.IntervalMinutes <= 0 {
 			continue
@@ -146,7 +304,9 @@ func (rs *reportScheduler) tick() {
 			// rather than firing immediately on every restart.
 			run.NextRun = now.Add(time.Duration(spec.IntervalMinutes) * time.Minute)
 			rs.runs[o.ID] = run
-			rs.flushLocked()
+			if err := rs.flushLocked(); err != nil {
+				logError("reports", "run history persist failed", map[string]any{"err": err.Error()})
+			}
 			rs.mu.Unlock()
 			continue
 		}
@@ -160,8 +320,11 @@ func (rs *reportScheduler) tick() {
 }
 
 // RunNow delivers a report immediately, ignoring its schedule, and reschedules
-// the next automatic delivery from now. Powers the UI's "Send now".
-func (rs *reportScheduler) RunNow(id string) (reportRun, error) {
+// the next automatic delivery from now. Powers the UI's "Send now". channels
+// optionally overrides the report's configured notify channels for this one
+// send (nil/empty => the report's configured channels; an empty result means
+// contact points only — deliver never falls back to broadcasting, see M15).
+func (rs *reportScheduler) RunNow(id string, channels []string) (reportRun, error) {
 	o, ok := rs.saved.Get(id)
 	if !ok || o.Type != "report" {
 		return reportRun{}, errors.New("report not found")
@@ -170,15 +333,44 @@ func (rs *reportScheduler) RunNow(id string) (reportRun, error) {
 	if err != nil {
 		return reportRun{}, fmt.Errorf("invalid report body: %w", err)
 	}
+	if len(channels) > 0 {
+		spec.Channels = channels // one-off override for this manual send
+	}
 	rs.deliver(o, spec, time.Now().UTC())
 	return rs.Run(id), nil
 }
 
 // deliver renders and dispatches a report, then records the outcome.
-func (rs *reportScheduler) deliver(o SavedObject, spec reportSpec, now time.Time) {
+//
+// Named-channel semantics (M15, aligned with the async pipeline's Phase-1
+// contract in report_delivery.go): an EMPTY spec.Channels means "contact
+// points only" — it must NOT fan out to every configured channel (DispatchTo's
+// nil fallback), which broadcast a tenant's report to each platform channel.
+// And because notify channels are platform-global resources, only a
+// platform-owned (global/unassigned) report may name them at all; a
+// tenant-owned report's channel list is skipped, default-closed.
+func (rs *reportScheduler) deliver(o saved.Object, spec reportSpec, now time.Time) {
 	msg := rs.render(o, spec, now)
-	rs.notifier.Dispatch(msg)
-	log.Printf("report %q (%s) delivered", o.Name, o.ID)
+	t := normTenant(o.TenantID)
+	platformOwned := t == "" || t == TenantGlobal
+	sent := 0
+	var chNote string
+	switch {
+	case len(spec.Channels) == 0:
+		// contact points only — never broadcast
+	case !platformOwned:
+		chNote = "named channels skipped (platform-owned reports only)"
+	default:
+		sent = rs.notifier.DispatchTo(msg, spec.Channels)
+	}
+
+	// Contact-point delivery (the modern recipient model). Resolve the report's
+	// email-type contact points in the report's own tenant scope, then email the
+	// report to those addresses directly via the configured SMTP transport —
+	// independent of the named-channel routing above.
+	cpRecipients, cpNote := rs.deliverToContactPoints(msg, o, spec)
+	log.Printf("report %q (%s) delivered to %d channel(s), %d contact-point recipient(s)",
+		o.Name, o.ID, sent, cpRecipients)
 
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -188,26 +380,87 @@ func (rs *reportScheduler) deliver(o SavedObject, spec reportSpec, now time.Time
 		run.NextRun = now.Add(time.Duration(spec.IntervalMinutes) * time.Minute)
 	}
 	run.Status = "ok"
-	run.Detail = msg.Summary
+	detail := fmt.Sprintf("%s — sent to %d channel(s)", msg.Summary, sent)
+	if sent > 0 {
+		detail += ": " + strings.Join(spec.Channels, ", ")
+	}
+	if chNote != "" {
+		detail += "; " + chNote
+	}
+	if cpNote != "" {
+		detail += "; " + cpNote
+	}
+	run.Detail = detail
 	rs.runs[o.ID] = run
-	rs.flushLocked()
+	if err := rs.flushLocked(); err != nil {
+		logError("reports", "run history persist failed", map[string]any{"err": err.Error()})
+	}
+}
+
+// deliverToContactPoints resolves the report's email contact points (tenant-
+// scoped) and emails the report to them. Returns the recipient count and a short
+// status note for the run detail. No-op (0, "") when the report has no contact
+// points.
+//
+// "link" delivery (signed report-view URL) is served by the ASYNC pipeline
+// (`reportDelivery.Deliver`, Postgres backend) — that path stores an execution +
+// artifact and emails a `reportViewLink` to it. This legacy synchronous
+// file-backend scheduler has no execution/artifact store to anchor a token to,
+// so it cannot mint a secure link; rather than email the report body (and leak
+// tenant data in what the operator asked to be link-only), it records that link
+// mode needs the async pipeline. Switch STORE_BACKEND=postgres to use it.
+func (rs *reportScheduler) deliverToContactPoints(msg models.Alert, o saved.Object, spec reportSpec) (int, string) {
+	if len(spec.ContactPoints) == 0 || rs.srv == nil || rs.srv.contactPoints == nil || rs.srv.notifyCfg == nil {
+		return 0, ""
+	}
+	t := normTenant(o.TenantID)
+	cross := t == "" || t == TenantGlobal
+	recipients := rs.srv.contactPoints.ResolveEmailRecipients(spec.ContactPoints, t, cross)
+	if len(recipients) == 0 {
+		return 0, "contact points resolved to no email recipients"
+	}
+	if strings.EqualFold(spec.DeliveryMode, deliverLink) {
+		// Secure-link delivery requires the async (Postgres) report pipeline,
+		// which stores the artifact the link serves. Don't email the body here.
+		return 0, fmt.Sprintf("secure-link delivery to %d recipient(s) needs the async report pipeline (STORE_BACKEND=postgres)", len(recipients))
+	}
+	sender, ok := rs.srv.notifyCfg.emailSenderTo(recipients)
+	if !ok {
+		return 0, "SMTP not configured — contact-point email skipped"
+	}
+	if err := sender.Send(msg); err != nil {
+		log.Printf("report %q contact-point email: %v", o.Name, err)
+		return 0, fmt.Sprintf("contact-point email failed: %v", err)
+	}
+	return len(recipients), fmt.Sprintf("emailed to %d contact-point recipient(s)", len(recipients))
 }
 
 // render builds the models.Alert carrying the report content. Reusing the
 // alert shape lets every existing notify channel format it unchanged.
-func (rs *reportScheduler) render(o SavedObject, spec reportSpec, now time.Time) models.Alert {
+func (rs *reportScheduler) render(o saved.Object, spec reportSpec, now time.Time) models.Alert {
 	sev := strings.ToLower(strings.TrimSpace(spec.Severity))
 	if sev == "" {
 		sev = "info"
 	}
+	// Per-tenant reports: a report owned by a tenant reflects only that tenant's
+	// devices/alerts; a global/unassigned report is platform-wide.
+	tenant := o.TenantID
 	var summary, body string
 	switch spec.Kind {
 	case "device_inventory":
-		summary, body = rs.renderDevices()
+		summary, body = rs.ds.RenderDevices(tenant)
 	case "health_summary":
-		summary, body = rs.renderHealth(now)
+		summary, body = rs.ds.RenderHealth(now, tenant)
+	case "wan_utilization":
+		summary, body = rs.ds.RenderWANUtilization(tenant)
+	case "security_threats":
+		summary, body = rs.ds.RenderSecurityThreats(tenant)
+	case "device_utilization":
+		summary, body = rs.ds.RenderDeviceUtilization(tenant)
+	case "latency_jitter_sla":
+		summary, body = rs.ds.RenderLatencyJitterSLA(tenant)
 	default: // alerts_summary
-		summary, body = rs.renderAlerts()
+		summary, body = rs.ds.RenderAlerts(tenant)
 	}
 	header := "Report: " + o.Name
 	if spec.Description != "" {
@@ -224,62 +477,173 @@ func (rs *reportScheduler) render(o SavedObject, spec reportSpec, now time.Time)
 	}
 }
 
-func (rs *reportScheduler) renderAlerts() (string, string) {
-	active := rs.alerts.Active()
-	bySev := map[string]int{}
-	for _, a := range active {
-		bySev[strings.ToLower(a.Severity)]++
+// buildViewModel is the "Build Dataset" stage: it gathers a report's data once
+// into a render-neutral, structured reports.ViewModel that every renderer (HTML,
+// Excel, PDF) consumes. Tabular kinds populate Section.Header+Rows (real tables,
+// so Excel exports cells, not a text blob); narrative kinds fall back to a Note.
+func (rs *reportScheduler) buildViewModel(o saved.Object, spec reportSpec, now time.Time) reports.ViewModel {
+	sev := strings.ToLower(strings.TrimSpace(spec.Severity))
+	if sev == "" {
+		sev = "info"
 	}
-	summary := fmt.Sprintf("%d active alert(s)", len(active))
-	var b strings.Builder
-	if len(active) == 0 {
-		b.WriteString("No active alerts. ✅\n")
-	} else {
-		for _, sev := range []string{"critical", "error", "warning", "notice", "info"} {
-			if n := bySev[sev]; n > 0 {
-				fmt.Fprintf(&b, "%s: %d\n", sev, n)
-			}
-		}
-		b.WriteString("\nMost recent:\n")
-		// Newest first, cap the list so notifications stay readable.
-		sort.Slice(active, func(i, j int) bool { return active[i].FiredAt.After(active[j].FiredAt) })
-		for i, a := range active {
-			if i >= 10 {
-				fmt.Fprintf(&b, "…and %d more\n", len(active)-10)
-				break
-			}
-			fmt.Fprintf(&b, "• [%s] %s\n", a.Severity, a.Summary)
-		}
+	tenant := o.TenantID
+	var summary string
+	var sections []reports.Section
+	switch spec.Kind {
+	case "device_inventory":
+		summary, sections = rs.ds.DatasetDevices(tenant)
+	case "health_summary":
+		summary, sections = rs.ds.DatasetHealth(now, tenant)
+	case "wan_utilization":
+		summary, sections = rs.ds.DatasetWAN(tenant)
+	case "security_threats":
+		summary, sections = rs.ds.DatasetSecurity(tenant)
+	case "device_utilization":
+		summary, sections = rs.ds.DatasetDeviceUtil(tenant)
+	case "latency_jitter_sla":
+		summary, sections = rs.ds.DatasetLatency(tenant)
+	default:
+		summary, sections = rs.ds.DatasetAlerts(tenant)
 	}
-	return summary, b.String()
+	return reports.ViewModel{
+		ReportID:    o.ID,
+		ReportName:  o.Name,
+		Kind:        firstNonEmpty(spec.Kind, "alerts_summary"),
+		TenantID:    tenant,
+		GeneratedAt: now,
+		Severity:    sev,
+		Description: spec.Description,
+		Summary:     summary,
+		Sections:    sections,
+	}
 }
 
-func (rs *reportScheduler) renderDevices() (string, string) {
-	devs := rs.discovery.Devices()
-	summary := fmt.Sprintf("%d device(s) discovered", len(devs))
-	var b strings.Builder
-	for i, d := range devs {
-		m := toMap(d)
-		if i >= 25 {
-			fmt.Fprintf(&b, "…and %d more\n", len(devs)-25)
-			break
+// alertFromViewModel renders the structured ViewModel down to the models.Alert
+// shape the notify channels (slack/pagerduty/...) consume, so named-channel
+// delivery keeps working from the same dataset.
+func (rs *reportScheduler) tenantDevices(tenant string) []models.Device {
+	all := rs.discovery.Devices()
+	t := strings.ToLower(strings.TrimSpace(tenant))
+	if t == "" || t == TenantGlobal {
+		return all
+	}
+	out := make([]models.Device, 0, len(all))
+	for _, d := range all {
+		if canSeeDevice(d, t, false) {
+			out = append(out, d)
 		}
-		name := firstNonEmpty(str(m["name"]), str(m["id"]))
-		fmt.Fprintf(&b, "• %s  %s\n", name, str(m["address"]))
 	}
-	if len(devs) == 0 {
-		b.WriteString("No devices discovered.\n")
-	}
-	return summary, b.String()
+	return out
 }
 
-func (rs *reportScheduler) renderHealth(now time.Time) (string, string) {
-	uptime := now.Sub(rs.startedAt).Round(time.Second)
-	devs := len(rs.discovery.Devices())
-	active := len(rs.alerts.Active())
-	summary := fmt.Sprintf("uptime %s · %d devices · %d active alerts", uptime, devs, active)
-	b := fmt.Sprintf("API uptime: %s\nDevices discovered: %d\nActive alerts: %d\n", uptime, devs, active)
-	return summary, b
+// tenantAlerts returns the active alerts visible to the report's tenant (alerts
+// on its devices, plus device-less stack alerts), filtered through the SAME
+// resolved alertVisibility object GET /api/alerts and the WebSocket feed use.
+func (rs *reportScheduler) tenantAlerts(tenant string) []models.Alert {
+	return rs.alertVisibility(tenant).filter(rs.alerts.Active())
+}
+
+// alertVisibility resolves the alert rule ONCE for one scheduled run.
+//
+// WHOSE VISIBILITY A SCHEDULED REPORT CARRIES. A report is rendered and
+// DELIVERED by a timer with no live caller, so there is no principal to resolve
+// from. The scope it does have is the report's OWN tenant (saved.Object.TenantID,
+// stamped from the creator's token and never from the request body), and that is
+// the scope its recipients were chosen under: deliver() lets only a
+// platform-owned report name the platform-global notify channels, and
+// deliverToContactPoints resolves a tenant-owned report's contact points inside
+// that tenant. So:
+//
+//   - A TENANT-OWNED report is that tenant's own view of its own incidents. The
+//     operator-visibility switch hides a tenant from the PLATFORM, never from
+//     itself, so nothing is hidden here — a restricted tenant keeps receiving its
+//     own scheduled reports, unchanged.
+//   - A PLATFORM-OWNED report (blank or "global" TenantID) goes to the platform's
+//     channels and to cross-tenant contact points, which is the operator's Global
+//     view — so the operator-visibility restriction applies, and a restricted
+//     tenant's alerts must not be rendered into it.
+//
+// Break-glass is deliberately NOT consulted. It is a live, time-boxed session an
+// operator opens for itself; a timer holds none, and a report that silently
+// carried one operator's momentary elevation to every channel — after the session
+// expired — would be exactly the disclosure the session is bounded to prevent.
+func (rs *reportScheduler) alertVisibility(tenant string) alertVisibility {
+	t := normTenant(tenant)
+	if t == "" || t == TenantGlobal {
+		return rs.srv.alertVisibilityForScope(TenantGlobal, true, nil, rs.restrictedTenantIDs())
+	}
+	ids := map[string]bool{}
+	for _, d := range rs.tenantDevices(t) {
+		ids[d.ID] = true
+	}
+	return rs.srv.alertVisibilityForScope(t, false, ids, nil)
+}
+
+// restrictedTenantIDs is the hidden set a scheduled PLATFORM-OWNED run filters
+// by: every OperatorRestricted tenant, with no break-glass subtraction (see
+// alertVisibility). Empty when there is no tenant store to ask — which is a
+// scheduler with no server wired, i.e. a test fixture, never a running stack:
+// newReportScheduler always sets srv.
+func (rs *reportScheduler) restrictedTenantIDs() []string {
+	if rs.srv == nil || rs.srv.tenants == nil {
+		return nil
+	}
+	return rs.srv.tenants.RestrictedIDs()
+}
+
+// reportDeviceKeys returns the device ids/names a tenant-owned report may
+// reference (the visibleDeviceKeys key set, derived from the report's owner
+// instead of request claims). platform=true means the report is global or
+// unassigned and stays platform-wide — the contract renderDevices/renderAlerts
+// already follow. Default-closed: a scoped tenant with no visible devices gets
+// an empty key set, and renderers must emit their "no data" note without
+// querying rather than fall back to unscoped telemetry.
+func (rs *reportScheduler) reportDeviceKeys(tenant string) (keys []string, platform bool) {
+	t := strings.ToLower(strings.TrimSpace(tenant))
+	if t == "" || t == TenantGlobal {
+		return nil, true
+	}
+	seen := map[string]bool{}
+	for _, d := range rs.tenantDevices(t) {
+		for _, k := range []string{d.ID, d.Name} {
+			if k != "" && !seen[k] {
+				seen[k] = true
+				keys = append(keys, k)
+			}
+		}
+	}
+	return keys, false
+}
+
+func vmQueryMap(query string) map[string]float64 {
+	base := envOr("VICTORIA_URL", envOr("METRICS_URL", "http://victoria:8428"))
+	endpoint := strings.TrimRight(base, "/") + "/api/v1/query?query=" + url.QueryEscape(query)
+	resp, err := backendHTTPClient(6 * time.Second).Get(endpoint)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Data struct {
+			Result []struct {
+				Metric map[string]string `json:"metric"`
+				Value  [2]any            `json:"value"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+		return nil
+	}
+	m := make(map[string]float64, len(out.Data.Result))
+	for _, r := range out.Data.Result {
+		name := firstNonEmpty(r.Metric["device"], r.Metric["instance"], r.Metric["host"], "device")
+		if s, ok := r.Value[1].(string); ok {
+			if f, err := strconv.ParseFloat(s, 64); err == nil {
+				m[name] = f
+			}
+		}
+	}
+	return m
 }
 
 // Run returns the recorded run-state for a report (zero value if none yet).
@@ -303,7 +667,7 @@ func (rs *reportScheduler) Runs() map[string]reportRun {
 // gc drops run-state for reports that no longer exist.
 func (rs *reportScheduler) gc() {
 	live := map[string]bool{}
-	for _, o := range rs.saved.List("report") {
+	for _, o := range rs.saved.List("report", "", true) {
 		live[o.ID] = true
 	}
 	rs.mu.Lock()
@@ -316,7 +680,9 @@ func (rs *reportScheduler) gc() {
 		}
 	}
 	if changed {
-		rs.flushLocked()
+		if err := rs.flushLocked(); err != nil {
+			logError("reports", "run history persist failed", map[string]any{"err": err.Error()})
+		}
 	}
 }
 
@@ -341,21 +707,21 @@ func (rs *reportScheduler) load() {
 }
 
 // flushLocked persists run-state; callers must hold rs.mu.
-func (rs *reportScheduler) flushLocked() {
+// flushLocked persists the run history, returning any failure (F-78 class:
+// found by the widened TestNoVoidPersistFuncs guard, not by the audit).
+func (rs *reportScheduler) flushLocked() error {
 	if err := os.MkdirAll(filepath.Dir(rs.path), 0o755); err != nil {
 		log.Printf("report runs mkdir: %v", err)
-		return
+		return err
 	}
 	b, err := json.MarshalIndent(rs.runs, "", "  ")
 	if err != nil {
-		return
+		log.Printf("report runs marshal: %v", err)
+		return err
 	}
-	tmp := rs.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	if err := platformdb.WriteFileAtomic(rs.path, b, 0o600); err != nil {
 		log.Printf("report runs write: %v", err)
-		return
+		return err
 	}
-	if err := os.Rename(tmp, rs.path); err != nil {
-		log.Printf("report runs rename: %v", err)
-	}
+	return nil
 }

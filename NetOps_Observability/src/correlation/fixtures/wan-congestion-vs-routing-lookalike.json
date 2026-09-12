@@ -1,0 +1,14 @@
+{
+  "name": "BGP path change within window: routing instability must beat congestion",
+  "signals": [
+    {"kind": "if_util_high", "entity_type": "interface", "entity_id": "dallas-edge:Gi0/1",
+     "observer_id": "dallas-edge", "observer_type": "device", "modality": "device_telemetry",
+     "deviation": 4.5, "collection_path": "via_aggregator"},
+    {"kind": "probe_loss", "entity_type": "segment", "entity_id": "dallas->equinix-pop",
+     "observer_id": "probe-agent-dallas", "observer_type": "vantage_agent",
+     "modality": "active_probe", "deviation": 4.2},
+    {"kind": "bgp_path_change", "entity_type": "device", "entity_id": "dallas-edge",
+     "observer_id": "bgp-collector", "observer_type": "platform", "modality": "control_plane"}
+  ],
+  "expect": {"top": "sig.ent.wan-edge.routing-instability", "tier": "suspected"}
+}

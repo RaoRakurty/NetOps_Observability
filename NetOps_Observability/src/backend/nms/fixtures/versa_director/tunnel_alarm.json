@@ -1,0 +1,19 @@
+{
+  "alarms": [
+    {
+      "id": "va-77812",
+      "type": "sdwanTunnelDown",
+      "severity": "major",
+      "organization": "acme-sdwan",
+      "applianceName": "branch-fw-12",
+      "siteName": "Branch 12 - Dallas",
+      "localSite": "branch-12",
+      "remoteSite": "hub-dc1",
+      "tunnelName": "vpn-branch12-hub1",
+      "transport": "INET-1",
+      "slaViolation": true,
+      "eventTime": "2026-07-03T11:59:50Z",
+      "description": "SD-WAN tunnel vpn-branch12-hub1 down (INET-1) — SLA violated"
+    }
+  ]
+}

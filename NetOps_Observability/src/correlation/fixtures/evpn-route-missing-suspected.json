@@ -1,0 +1,30 @@
+{
+  "name": "EVPN route absent for one VNI, underlay clean: suspected control-plane gap",
+  "signals": [
+    {
+      "kind": "evpn_route_missing",
+      "entity_type": "device",
+      "entity_id": "leaf3:vni10120",
+      "observer_id": "evpn-collector",
+      "observer_type": "platform",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 2.0
+    },
+    {
+      "kind": "bgp_adjacency_change",
+      "entity_type": "device",
+      "entity_id": "leaf3",
+      "observer_id": "syslog-leaf3",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 0.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.fabric.evpn-route-missing",
+    "tier": "suspected",
+    "owner": "netops"
+  }
+}

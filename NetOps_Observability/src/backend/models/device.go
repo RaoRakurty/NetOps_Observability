@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package models holds the shared data types exchanged between subsystems
 // and over the public HTTP API. Keep this package free of behaviour so it
 // can be imported anywhere without creating dependency cycles.
@@ -7,17 +10,118 @@ import "time"
 
 // Device is the canonical representation of a managed network element.
 type Device struct {
-	ID                string            `json:"id"`
-	Name              string            `json:"name"`
-	Address           string            `json:"address"`
-	Vendor            string            `json:"vendor,omitempty"`
-	Model             string            `json:"model,omitempty"`
-	OS                string            `json:"os,omitempty"`
-	PreferredProtocol string            `json:"preferred_protocol,omitempty"`
-	CredentialRef     string            `json:"credential_ref,omitempty"`
-	Labels            map[string]string `json:"labels,omitempty"`
-	Source            string            `json:"source"`
-	LastSeen          time.Time         `json:"last_seen"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Address string `json:"address"`
+	Vendor  string `json:"vendor,omitempty"`
+	// Model is the chassis model / product id. Any source may write it — a
+	// NetBox device_type, an SNMP inference, an operator — and, since the
+	// hardware-identity probe, the DEVICE ITSELF: a probe fills it when the row
+	// has none, and refreshes it only alongside a serial its own method already
+	// owns, so a value an inventory supplied is never displaced by a guess.
+	Model string `json:"model,omitempty"`
+	OS    string `json:"os,omitempty"`
+	// OSVersion is the device's software identity as the DEVICE reports it —
+	// the description line the device serves ("SRLinux-v26.3.2-426-g2b38957bbca
+	// 7220 IXR-D3L …") or the version string it prints. It exists because OS
+	// alone is not enough on a
+	// device whose row was authored by hand or by an importer: an operator
+	// writes `os: "SR Linux"`, which names the PRODUCT and carries no version,
+	// and advisory assessment needs a version or it must report the device
+	// UNASSESSED (tracker 231).
+	//
+	// It is a SECOND source, never a replacement: collectors.ResolveDeviceOS
+	// reads OS first and consults this only when OS yields no version, so a
+	// live sysDescr always wins over a hand-written string. It is parsed by the
+	// SAME vendor pattern, never trusted as a number: a value the vendor profile
+	// cannot match leaves the device UNASSESSED rather than inventing a version
+	// nobody read off a device. Any source may
+	// write it — the inventory file's `os_version:` key, the devices API, an
+	// importer, or a collector that reached the device over a transport SNMP
+	// could not (gNMI, SSH) — which is the point: the row carries the version
+	// however it was learned.
+	OSVersion string `json:"os_version,omitempty"`
+	// OSVersionSource is HOW OSVersion was learned — "snmp" (the sysDescr),
+	// "gnmi" (the platform's software-version leaf), "ssh" (a read-only
+	// `show version` through the gateway) or "manual" (an operator, an
+	// inventory file or an importer). It is the provenance half of the
+	// OS-VERSION SOURCE LADDER (internal/osprobe): a version with no stated
+	// source is a number nobody can audit, and the ladder's overwrite rule is
+	// expressed in terms of this field (a probe never displaces an operator's
+	// value; only the SAME source refreshes its own reading).
+	//
+	// An EMPTY value on a row that carries a version means the provenance
+	// predates this field — it is treated as "manual", never as "probed".
+	OSVersionSource string `json:"os_version_source,omitempty"`
+	// OSVersionAt is when OSVersion was last learned. It is stamped by whoever
+	// wrote the version, so a stale reading is visible as stale rather than
+	// looking as fresh as the row it sits in.
+	// omitzero (not omitempty, which never omits a struct): a device with no
+	// probed version must not serve a 0001-01-01 timestamp that reads as a
+	// reading taken two thousand years ago.
+	OSVersionAt time.Time `json:"os_version_at,omitzero"`
+	// SerialNumber is the chassis SERIAL as the DEVICE printed it — the value
+	// read out of its own `show version` / `show inventory` /
+	// `show chassis hardware` output by internal/deviceident, or supplied by an
+	// operator or an importer.
+	//
+	// WHY IT IS A FIELD and not just labels["serial"]. The label is the
+	// IMPORTER's serial: NetBox writes it, the SoT import matches on it and
+	// discovery's identity resolution unions records that share it. This field
+	// is the DEVICE's own answer, and the two are different claims — an asset
+	// register can be wrong about a chassis that was swapped, the chassis
+	// cannot. Keeping them apart is what lets the platform say "the row says X,
+	// the device says Y" instead of silently overwriting one with the other.
+	// The label stays exactly what it was; nothing here writes to it.
+	SerialNumber string `json:"serial_number,omitempty"`
+	// SerialSource is HOW SerialNumber was learned — "ssh" (a read-only show
+	// command through the gateway), "snmp", "gnmi", or "manual" (an operator,
+	// an inventory file or an importer). It is the provenance half of the same
+	// ladder os_version_source belongs to (internal/osprobe), and the overwrite
+	// rule is expressed in terms of it: a probe never displaces a serial a
+	// person supplied, and only the SAME source refreshes its own reading.
+	//
+	// An EMPTY value on a row that carries a serial means the provenance
+	// predates this field — treated as "manual", never as "probed".
+	SerialSource string `json:"serial_source,omitempty"`
+	// SerialAt is when SerialNumber was last learned. omitzero for the same
+	// reason OSVersionAt is: a device with no read serial must not serve a
+	// 0001-01-01 timestamp that reads as a reading taken two thousand years ago.
+	SerialAt time.Time `json:"serial_at,omitzero"`
+	// Type — router|switch|firewall|load-balancer|ap|wlc|cloud-gw|generic.
+	// SNMP-inferred from vendor/model/sysDescr (InferDeviceType), operator-overridable
+	// via labels["device_type"]. Populated on-read by the devices API.
+	Type              string `json:"type,omitempty"`
+	PreferredProtocol string `json:"preferred_protocol,omitempty"`
+	CredentialRef     string `json:"credential_ref,omitempty"`
+	// CredentialActive — the profile actually answering (credential sentinel's
+	// learned override); "" means the bound CredentialRef is in use. Populated
+	// on-read by the devices API, never persisted.
+	CredentialActive string            `json:"credential_active,omitempty"`
+	TenantID         string            `json:"tenant_id,omitempty"` // owning tenant ("" = global/shared)
+	Labels           map[string]string `json:"labels,omitempty"`
+	Source           string            `json:"source"`
+	LastSeen         time.Time         `json:"last_seen"`
+
+	// Monitored — Correlix is CONFIGURED to collect telemetry from this device.
+	// It is the licensed unit (entitlement.CeilingDevices counts monitored
+	// devices, not inventory rows) and the collector pool polls only devices
+	// that carry it.
+	//
+	// SERVER-STAMPED, NEVER PERSISTED and never read from a request body: the
+	// device registry computes it from the operator's monitoring decision (or,
+	// absent one, the device's provenance) on every read — the same
+	// infer-on-read contract Type and CredentialActive follow. A client that
+	// sends it is ignored.
+	Monitored bool `json:"monitored"`
+	// MonitorReason says WHY Monitored has the value it has, in one operator
+	// sentence. Never silent: a device that is not collected from always says
+	// what would change that.
+	MonitorReason string `json:"monitor_reason,omitempty"`
+	// MonitorMethods lists the per-device telemetry the device is configured
+	// for (e.g. "snmp", "gnmi"). It is DISPLAY, not the count: several methods
+	// on one device are still one monitored device.
+	MonitorMethods []string `json:"monitor_methods,omitempty"`
 }
 
 // Metric is a single time-series sample emitted by a collector.

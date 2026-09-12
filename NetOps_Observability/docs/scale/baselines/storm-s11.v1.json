@@ -1,0 +1,251 @@
+{
+ "accuracy": {
+  "accuracy": 1.0,
+  "detection_rate": 1.0,
+  "scorer_version": 2,
+  "specificity": 1.0,
+  "stories_passed": 345,
+  "stories_total": 345
+ },
+ "aggregation": {
+  "exact": true,
+  "forwarded_total": 99838.0,
+  "observed": 109534.0,
+  "per_leg_observed_expected": 54767,
+  "per_replica": {
+   "03e7111d6c71": {
+    "enabled": 1.0,
+    "forwarded_by_class": {
+     "contradiction": 0.0,
+     "count_threshold": 0.0,
+     "first": 0.0,
+     "new_modality": 0.0,
+     "new_vantage": 0.0,
+     "recovery": 0.0,
+     "repeat": 0.0,
+     "state_transition": 0.0
+    },
+    "forwarded_total": 0.0,
+    "observed": 0.0,
+    "suppressed": 0.0
+   },
+   "e5cd469c9e6f": {
+    "enabled": 1.0,
+    "forwarded_by_class": {
+     "contradiction": 0.0,
+     "count_threshold": 39.0,
+     "first": 83877.0,
+     "new_modality": 0.0,
+     "new_vantage": 0.0,
+     "recovery": 9425.0,
+     "repeat": 49.0,
+     "state_transition": 6448.0
+    },
+    "forwarded_total": 99838.0,
+    "observed": 109534.0,
+    "suppressed": 9696.0
+   }
+  },
+  "scope": "cumulative_s10_s11",
+  "scope_note": "storm-s11's correlation containers were started 2026-09-01T19:31Z and were NOT recreated between storm-s10 (environment-invalidated) and storm-s11, so these *_total values are CUMULATIVE across both legs (metrics-final.txt carries the same note). They are recorded for DISPLAY only; a candidate leg is graded on its own PRE/POST delta, which is what release-qualify.py captures.",
+  "suppressed": 9696.0,
+  "suppressed_share_pct": 8.85
+ },
+ "extractor": "scripts/release-qualify.py --extract-baseline",
+ "generated_from": "docs/scale/CORRELIX_REFERENCE_CAPACITY_V1.md sections 3-9",
+ "harness": {
+  "cleanup": {
+   "ch_signals_left": 0,
+   "devices_deleted": 2500,
+   "devices_remaining": 0,
+   "final_residue_devices": 0,
+   "os_deleted": 900001,
+   "os_docs_left": 0
+  },
+  "clickhouse": {
+   "cap_bytes": 4294967296,
+   "p99_memory_tracking_bytes": 1386518707,
+   "peak_memory_tracking_bytes": 1842411147
+  },
+  "completion_budget_s": 2700.0,
+  "completion_s": 94.8,
+  "corr_entities_covered": 2500,
+  "corr_signal_rows_run": 53965,
+  "devices_expected": 2500,
+  "dlq_run_lines": 0,
+  "injected_total": 900001,
+  "memory": {
+   "netops-api-1": {
+    "end_bytes": 134532300,
+    "instrument": "docker_stats",
+    "limit_bytes": 592445440,
+    "pct_of_limit": 22.7,
+    "ratio_vs_anchor": 1.064,
+    "service": "api",
+    "verdict": null,
+    "warm_bytes": 126458265
+   },
+   "netops-clickhouse-1": {
+    "end_bytes": 715161600,
+    "instrument": "cgroup_anon",
+    "limit_bytes": 5584531226,
+    "pct_of_limit": 12.8,
+    "ratio_vs_anchor": 0.694,
+    "service": "clickhouse",
+    "verdict": null,
+    "warm_bytes": 1030692864
+   },
+   "netops-correlation-6": {
+    "end_bytes": 93774151,
+    "instrument": "docker_stats",
+    "limit_bytes": 1342177280,
+    "pct_of_limit": 7.0,
+    "ratio_vs_anchor": 1.033,
+    "service": "correlation",
+    "verdict": "FLAT",
+    "warm_bytes": 88195727
+   },
+   "netops-correlation-7": {
+    "end_bytes": 1107027820,
+    "instrument": "docker_stats",
+    "limit_bytes": 1342177280,
+    "pct_of_limit": 82.5,
+    "ratio_vs_anchor": 1.011,
+    "service": "correlation",
+    "verdict": "FLAT",
+    "warm_bytes": 1033057075
+   },
+   "netops-kafka-1": {
+    "end_bytes": 701394944,
+    "instrument": "cgroup_anon",
+    "limit_bytes": 1610612736,
+    "pct_of_limit": 43.5,
+    "ratio_vs_anchor": 1.0,
+    "service": "kafka",
+    "verdict": null,
+    "warm_bytes": 701358080
+   },
+   "netops-opensearch-1": {
+    "end_bytes": 2499461120,
+    "instrument": "cgroup_anon",
+    "limit_bytes": 3957812363,
+    "pct_of_limit": 63.2,
+    "ratio_vs_anchor": 1.0,
+    "service": "opensearch",
+    "verdict": null,
+    "warm_bytes": 2499452928
+   },
+   "netops-vector-aggregator-1": {
+    "end_bytes": 32399360,
+    "instrument": "cgroup_anon",
+    "limit_bytes": 550502400,
+    "pct_of_limit": 5.9,
+    "ratio_vs_anchor": 0.989,
+    "service": "vector-aggregator",
+    "verdict": null,
+    "warm_bytes": 32763904
+   },
+   "netops-vector-router-1": {
+    "end_bytes": 90984448,
+    "instrument": "cgroup_anon",
+    "limit_bytes": 550502400,
+    "pct_of_limit": 16.5,
+    "ratio_vs_anchor": 0.77,
+    "service": "vector-router",
+    "verdict": null,
+    "warm_bytes": 118202368
+   },
+   "netops-victoria-1": {
+    "end_bytes": 234905600,
+    "instrument": "cgroup_anon",
+    "limit_bytes": 1679332212,
+    "pct_of_limit": 14.0,
+    "ratio_vs_anchor": 1.03,
+    "service": "victoria",
+    "verdict": null,
+    "warm_bytes": 228134912
+   }
+  },
+  "os_persisted_run_docs": 900001,
+  "stability": {
+   "commit_failed": 0,
+   "consumer_restarts": 0,
+   "observation_window_s": 2803,
+   "rebalances": 0,
+   "session_timeout_ms": 60000,
+   "unknown_member": 0,
+   "worst_loop_lag_ms": 6649
+  },
+  "unexplained_missing": 0
+ },
+ "images": {
+  "api": {
+   "image": null,
+   "note": "not recorded in the run dir by any harness \u2014 see V1 section 9 for the leg-of-record's api image; a qualification run records the candidate's own api image in candidate.json"
+  },
+  "correlation": [
+   {
+    "container": "03e7111d6c71",
+    "error": "",
+    "image": "23dc2b88e966",
+    "name": "netops-correlation-6",
+    "started_at": "2026-09-01T19:31:14.312408451Z"
+   },
+   {
+    "container": "e5cd469c9e6f",
+    "error": "",
+    "image": "23dc2b88e966",
+    "name": "netops-correlation-7",
+    "started_at": "2026-09-01T19:31:12.471257472Z"
+   }
+  ],
+  "source": "docker inspect of the container ids recorded in metrics-final.txt; null when the container is no longer present (no harness records image ids in the run dir)"
+ },
+ "leg": "storm-s11",
+ "overall": "PASS",
+ "phases": {
+  "accounting": "PASS",
+  "burst": "PASS",
+  "cleanup": "PASS",
+  "correlation_completion": "PASS",
+  "drain": "PASS",
+  "memflat": "PASS",
+  "onboard": "PASS",
+  "preflight": "PASS",
+  "stability": "PASS"
+ },
+ "profile_version": "CORRELIX_REFERENCE_CAPACITY_V1",
+ "run_dir": "/var/tmp/scale-runs/storm-s11-09012138",
+ "run_dir_basename": "storm-s11-09012138",
+ "runid": "090121382mk4",
+ "schema": "correlix.release-qualify.baseline/1",
+ "t1": {
+  "incidents": "1624",
+  "max_s": "1734",
+  "note": "T1 = time to first correlated version (V1 section 8(b)); PUBLISHED, NEVER GATED. Not TTUR proper (tracker 205).",
+  "p50_s": "80",
+  "p95_s": "876",
+  "p99_s": "1363",
+  "signals": "80853",
+  "tlast_p95_s": "2020",
+  "versions": "10371"
+ },
+ "workload": {
+  "background_injected": 883940,
+  "burst_minutes": 15,
+  "devices": 2500,
+  "eps": 1000,
+  "incidents": 345,
+  "producer_key": "tenant",
+  "profile": "t-storm-2.5k",
+  "scenario": "storm-2.5k",
+  "scenario_digest": "0e1a8d7b4e707c505ae1bc505464be69aa26231d040cfce0fe38c779786404d5",
+  "scenario_events_injected": 16060,
+  "scenario_events_planned": 16060,
+  "seed": 20260829,
+  "shape_digest": "ed42173992eaf9ec2e36b064231ea69beab5b283e769a97950dd99bee6ea9c7f",
+  "storm_share_achieved": 0.017844,
+  "storm_share_target": 0.017844,
+  "workload_class": "T_STORM_2K5"
+ }
+}

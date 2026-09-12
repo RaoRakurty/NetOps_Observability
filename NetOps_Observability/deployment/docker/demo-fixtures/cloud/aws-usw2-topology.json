@@ -1,0 +1,22 @@
+{
+  "provider": "aws",
+  "account_id": "123456789012",
+  "region": "us-west-2",
+  "vpcs": [
+    { "id": "vpc-dr-usw2", "cidr": "10.8.0.0/16", "name": "dr-usw2" }
+  ],
+  "subnets": [
+    { "id": "subnet-dr-app-a", "cidr": "10.8.1.0/24", "name": "dr-app-2a" },
+    { "id": "subnet-dr-public", "cidr": "10.8.0.0/24", "name": "dr-public-2a" }
+  ],
+  "nodes": [
+    { "id": "igw-usw2", "kind": "internet_gateway", "name": "dr-igw", "subnet_id": "" },
+    { "id": "nat-usw2-a", "kind": "nat_gateway", "name": "dr-nat-2a", "subnet_id": "subnet-dr-public", "private_ip": "10.8.0.20" },
+    { "id": "tgw-attach-dr-usw2", "kind": "nva", "name": "tgw-attachment-dr", "subnet_id": "subnet-dr-app-a", "private_ip": "10.8.1.250" }
+  ],
+  "edges": [
+    { "from_subnet": "subnet-dr-public", "from_subnet_name": "dr-public-2a", "to": "igw-usw2", "to_kind": "internet_gateway", "destination": "0.0.0.0/0", "state": "active", "via_route_table": "rtb-public-usw2", "route_table_name": "dr-public" },
+    { "from_subnet": "subnet-dr-app-a", "from_subnet_name": "dr-app-2a", "to": "nat-usw2-a", "to_kind": "nat_gateway", "destination": "0.0.0.0/0", "state": "active", "via_route_table": "rtb-app-usw2", "route_table_name": "dr-app" },
+    { "from_subnet": "subnet-dr-app-a", "from_subnet_name": "dr-app-2a", "to": "tgw-attach-dr-usw2", "to_kind": "nva", "destination": "10.0.0.0/16", "state": "active", "via_route_table": "rtb-app-usw2", "route_table_name": "dr-app" }
+  ]
+}

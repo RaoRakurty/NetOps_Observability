@@ -1,137 +1,157 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useState } from "react";
-import { PANELS, PANEL_ORDER, PanelDef } from "./panels";
+import { fmtTime } from "../lib/time";
+import { PANELS, useBoardHealth } from "./panels";
+import { useShell } from "../context/shell";
+import Icon from "../components/Icon";
+import { Modal } from "../components/ui";
+import AskIris from "../components/AskIris";
 
-// Operations Overview — a modular, Datadog/Zabbix-style board. The layout is a
-// list of panels the user composes themselves: add from the panel library,
-// resize (column span), and remove. Layout persists in localStorage so it
-// survives reloads. Each panel (see panels.tsx) fetches its own live data.
+// My Dashboard — a fixed, dense, demo-ready operations board (rebuilt fresh).
+// Not a build-your-own canvas: a curated single-screen story over the signals THIS
+// tool collects (fleet health → resources → traffic/flows → WAN/sites → events &
+// incidents → topology), every panel wired to its live source via the panel
+// registry (panels.tsx). The "twist" is ours: numbered section eyebrows with an
+// accent rule, a tight 12-col grid, and per-section hues from the Correlix palette.
 
-type Item = { key: string; type: string; span: number };
+type Cell = [type: string, span: number];
+// `topic` replaced the section caption in the 2026-09-06 word sweep: the board
+// says what a section IS in its label, and what it is FOR is one click away on
+// the `(i)` (ai/skills/explain/board.*.md).
+type Section = { id: string; label: string; topic: string; hue: string; cells: Cell[] };
 
-const LS_KEY = "netops.overview.layout.v2";
-
-// A rich, communicative default — mirrors what NOC overviews ship with:
-// KPIs, resource gauges, a severity-coded alert row, traffic, top hosts,
-// availability/health, active alerts, and the topology.
-const DEFAULT_LAYOUT: Item[] = [
-  { key: "d-kpis", type: "kpis", span: 12 },
-  { key: "d-cpu", type: "gauge-cpu", span: 3 },
-  { key: "d-mem", type: "gauge-mem", span: 3 },
-  { key: "d-sto", type: "gauge-storage", span: 3 },
-  { key: "d-net", type: "gauge-network", span: 3 },
-  { key: "d-sev", type: "alerts-severity", span: 12 },
-  { key: "d-traffic", type: "traffic", span: 8 },
-  { key: "d-tophosts", type: "top-hosts", span: 4 },
-  { key: "d-avail", type: "site-availability", span: 4 },
-  { key: "d-perf", type: "stack-performance", span: 8 },
-  { key: "d-alerts", type: "active-alerts", span: 12 },
-  { key: "d-topo", type: "topology", span: 12 },
+// Curated layout. Each cell.type MUST exist in PANELS (registry = the wiring); a
+// missing type is skipped so the board never renders a dead panel.
+// Section order follows a NOC ops blueprint (FCAPS for ordering, USE for the
+// per-resource panels, RED for active measurement): fleet health → saturation →
+// traffic/flows → interfaces → errors → routing → path quality → events →
+// topology. Every cell is a wired registry panel; a missing type is skipped.
+const SECTIONS: Section[] = [
+  { id: "health", label: "Service health", topic: "board.service-health", hue: "#3b82f6",
+    cells: [["kpis", 12]] },
+  { id: "resources", label: "Resource saturation", topic: "board.resource-saturation", hue: "#8b5cf6",
+    cells: [["sat-cpu", 3], ["sat-mem", 3], ["sat-storage", 3], ["sat-temp", 3]] },
+  { id: "traffic", label: "Traffic & flows", topic: "board.traffic-flows", hue: "#06b6d4",
+    cells: [["traffic", 8], ["top-hosts", 4], ["flows-proto", 4], ["tunnels-health", 4], ["devices-vendor", 4]] },
+  { id: "wan", label: "WAN & interfaces", topic: "board.wan-interfaces", hue: "#14b8a6",
+    cells: [["wan-interfaces", 6], ["if-util-topn", 6]] },
+  { id: "errors", label: "Errors & quality", topic: "board.errors-quality", hue: "#f97316",
+    cells: [["if-errors-topn", 6], ["if-discards-topn", 6]] },
+  { id: "routing", label: "Control-plane", topic: "board.control-plane", hue: "#0ea5e9",
+    cells: [["bgp-peers", 6], ["ospf-nbrs", 6]] },
+  { id: "path", label: "Path quality", topic: "board.path-quality", hue: "#a855f7",
+    cells: [["probe-rtt", 4], ["probe-jitter", 4], ["probe-loss", 4]] },
+  { id: "events", label: "Events & incidents", topic: "board.events-incidents", hue: "#ec4899",
+    cells: [["alerts-severity", 12], ["active-alerts", 6], ["incidents", 6]] },
+  { id: "topology", label: "Topology", topic: "board.topology", hue: "#22c55e",
+    cells: [["topology", 12]] },
 ];
 
-const SPANS = [3, 4, 6, 8, 12];
-
-function loadLayout(): Item[] {
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Item[];
-      // Drop any panel types that no longer exist in the registry.
-      const valid = parsed.filter((i) => PANELS[i.type]);
-      if (valid.length) return valid;
-    }
-  } catch {
-    /* fall through to default */
-  }
-  return DEFAULT_LAYOUT;
-}
-
-function uid(): string {
-  return "p" + Date.now().toString(36) + Math.floor(Math.random() * 1e5).toString(36);
-}
-
 export default function Dashboard() {
-  const [items, setItems] = useState<Item[]>(loadLayout);
-  const [picking, setPicking] = useState(false);
+  const { navigate } = useShell();
+  const [zoom, setZoom] = useState<string | null>(null);
+  // Liveness is DERIVED FROM REAL FETCHES, never from a wall clock. The old
+  // header ran a local setInterval and printed "as of HH:MM" beside a pulsing
+  // dot — a freshness claim decoupled from the network by construction, so a
+  // total backend outage still read as a live board. Panels report every poll
+  // outcome into the board-health signal; this header states what it says.
+  const { lastOk, failing, feeds } = useBoardHealth();
+  const degraded = failing > 0;
+  const connecting = lastOk === null && !degraded;
 
-  const persist = (next: Item[]) => {
-    setItems(next);
-    try {
-      localStorage.setItem(LS_KEY, JSON.stringify(next));
-    } catch {
-      /* ignore quota errors */
-    }
-  };
-
-  const add = (type: string) => {
-    const def = PANELS[type];
-    persist([...items, { key: uid(), type, span: def.defaultSpan }]);
-    setPicking(false);
-  };
-  const remove = (key: string) => persist(items.filter((i) => i.key !== key));
-  const resize = (key: string) =>
-    persist(
-      items.map((i) =>
-        i.key === key ? { ...i, span: SPANS[(SPANS.indexOf(i.span) + 1) % SPANS.length] } : i,
-      ),
-    );
-  const reset = () => {
-    try {
-      localStorage.removeItem(LS_KEY);
-    } catch {
-      /* ignore */
-    }
-    setItems(DEFAULT_LAYOUT);
-  };
-
+  let n = 0;
   return (
-    <div className="ov">
-      <div className="ov-head">
-        <h1 className="ov-title">
-          Operations Overview <span>real-time NOC</span>
-        </h1>
-        <div className="ov-actions">
-          <button className="dash-btn accent" onClick={() => setPicking((p) => !p)}>
-            + Add panel
-          </button>
-          <button className="dash-btn" onClick={reset} title="Restore the default layout">
-            Reset
-          </button>
+    <div className="mydash">
+      <div className="mydash-head">
+        <div>
+          <div className="mydash-eyebrow">Operations</div>
+          <h1 className="mydash-title">Dashboard</h1>
+        </div>
+        <div className="mydash-head-meta" role="status" aria-live="polite">
+          {degraded ? (
+            <>
+              <span className="mydash-live" style={{ color: "var(--bad)" }}>
+                <span className="mydash-live-dot" style={{ background: "var(--bad)", animation: "none" }} /> Disconnected
+              </span>
+              <span className="mydash-asof">
+                {failing} of {feeds} feed{feeds === 1 ? "" : "s"} failing
+                {lastOk === null ? " · no data loaded" : ` · last data ${fmtTime(new Date(lastOk))}`}
+              </span>
+            </>
+          ) : connecting ? (
+            <>
+              <span className="mydash-live" style={{ color: "var(--muted)" }}>
+                <span className="mydash-live-dot" style={{ background: "var(--muted)", animation: "none" }} /> Connecting
+              </span>
+              <span className="mydash-asof">no data loaded yet</span>
+            </>
+          ) : (
+            <>
+              <span className="mydash-live"><span className="mydash-live-dot" /> Live</span>
+              <span className="mydash-asof">as of {fmtTime(new Date(lastOk!))}</span>
+            </>
+          )}
         </div>
       </div>
 
-      {picking && (
-        <div className="panel-picker">
-          {PANEL_ORDER.map((type) => (
-            <button key={type} onClick={() => add(type)}>
-              + {(PANELS[type] as PanelDef).title}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className="ov-grid">
-        {items.length === 0 && (
-          <div className="panel col-12 panel-empty">
-            No panels — click “+ Add panel” to build your overview.
-          </div>
-        )}
-        {items.map((item) => {
-          const def = PANELS[item.type];
-          if (!def) return null;
-          return (
-            <div className={`panel col-${item.span}`} key={item.key}>
-              <div className="panel-tools">
-                <h3>{def.title}</h3>
-                <div className="panel-tools-btns">
-                  <button onClick={() => resize(item.key)} title="Resize">⤢</button>
-                  <button onClick={() => remove(item.key)} title="Remove">✕</button>
-                </div>
-              </div>
-              {def.render()}
+      {SECTIONS.map((s) => {
+        const cells = s.cells.filter(([type]) => PANELS[type]);
+        if (cells.length === 0) return null;
+        n += 1;
+        const idx = String(n).padStart(2, "0");
+        return (
+          <section className="mydash-sec" key={s.id} style={{ ["--sec" as string]: s.hue } as React.CSSProperties}>
+            <div className="mydash-sec-h">
+              <span className="mydash-sec-n">{idx}</span>
+              <h2 className="mydash-sec-t">{s.label}</h2>
+              <AskIris topic={s.topic} label={s.label} />
+              <span className="mydash-sec-rule" />
             </div>
-          );
-        })}
-      </div>
+            <div className="ov-grid mydash-grid">
+              {cells.map(([type, span], i) => {
+                const def = PANELS[type];
+                return (
+                  <div className={`panel col-${span}`} key={`${type}-${i}`}>
+                    <div className="panel-tools">
+                      {/* Drill affordance is a real button INSIDE the heading —
+                          a clickable <h3> is neither focusable nor keyboard
+                          operable (2.1.1/4.1.2). */}
+                      <h3>
+                        {def.drill ? (
+                          <button
+                            type="button"
+                            className="panel-title-link"
+                            onClick={() => navigate(def.drill!)}
+                            title="Open detail view"
+                            aria-label={`${def.title} — open detail view`}
+                          >
+                            {def.title}
+                            <Icon name="arrow-up-right" size={13} className="panel-drill-icon" />
+                          </button>
+                        ) : (
+                          def.title
+                        )}
+                      </h3>
+                      <div className="panel-tools-btns">
+                        <button onClick={() => setZoom(type)} title="Enlarge" aria-label="Enlarge panel">⤢</button>
+                      </div>
+                    </div>
+                    {def.render()}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
+
+      {zoom && PANELS[zoom] && (
+        <Modal title={PANELS[zoom].title} wide onClose={() => setZoom(null)}>
+          <div className="panel-zoom-body">{PANELS[zoom].render()}</div>
+        </Modal>
+      )}
     </div>
   );
 }

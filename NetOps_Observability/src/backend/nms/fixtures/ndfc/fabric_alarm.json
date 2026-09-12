@@ -1,0 +1,20 @@
+{
+  "alarms": [
+    {
+      "id": "alm-55021",
+      "fabricName": "DC1-VXLAN-Fabric",
+      "sourceName": "leaf-101",
+      "switchSerial": "FDO12345ABC",
+      "moduleName": "Ethernet1/5",
+      "vrf": "PROD",
+      "tenant": "acme",
+      "severity": "critical",
+      "category": "LINK",
+      "ackStatus": "not-acknowledged",
+      "policyChange": false,
+      "message": "Interface Ethernet1/5 down on leaf-101 (fabric DC1-VXLAN-Fabric)",
+      "eventType": "LINK_DOWN",
+      "createdTime": 1751540380000
+    }
+  ]
+}

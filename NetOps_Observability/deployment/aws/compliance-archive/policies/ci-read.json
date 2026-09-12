@@ -1,0 +1,82 @@
+{
+  "_comment": [
+    "CI READ ROLE — the ONLY AWS permissions a Correlix release build holds.",
+    "",
+    "A release READS corresponding source out of the archive and places it in the",
+    "bundle. It never writes, never deletes, never adjusts a retention date and",
+    "never bypasses one. That is not a convention in a script; it is the absence of",
+    "the permission. If publish-images.yml were compromised tomorrow, the archive",
+    "would still be intact, because this document grants nothing that could damage",
+    "it.",
+    "",
+    "DELIBERATELY ABSENT, and asserted absent by tests/test_source_archive.py:",
+    "  s3:PutObject, s3:DeleteObject, s3:DeleteObjectVersion,",
+    "  s3:PutObjectRetention, s3:PutObjectLegalHold,",
+    "  s3:BypassGovernanceRetention, s3:PutBucketVersioning,",
+    "  s3:PutBucketObjectLockConfiguration, s3:PutLifecycleConfiguration,",
+    "  s3:DeleteBucket, s3:PutBucketPolicy, and every non-S3 action.",
+    "",
+    "ListBucket is scoped by prefix condition rather than granted bucket-wide: the",
+    "release needs to resolve keys under sources/, components/ and releases/, and",
+    "nothing else in the account's namespace.",
+    "",
+    "${bucket_arn} is substituted by Terraform (templatefile). Tests read this file",
+    "as data and assert what it does NOT allow."
+  ],
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadArchivedCorrespondingSource",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:GetObjectAttributes",
+        "s3:GetObjectVersionAttributes"
+      ],
+      "Resource": [
+        "${bucket_arn}/sources/*",
+        "${bucket_arn}/components/*",
+        "${bucket_arn}/releases/*"
+      ]
+    },
+    {
+      "Sid": "ListOnlyTheArchivePrefixes",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:ListBucketVersions"],
+      "Resource": "${bucket_arn}",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": ["sources/*", "components/*", "releases/*"]
+        }
+      }
+    },
+    {
+      "Sid": "DenyEveryMutation",
+      "_why": [
+        "Belt and braces. The Allow statements above already grant no write, but an",
+        "explicit Deny cannot be undone by a later Allow attached to the same role,",
+        "by a permissions boundary change, or by a resource policy. A read role that",
+        "can be silently promoted to a write role by an unrelated policy edit is not",
+        "a read role."
+      ],
+      "Effect": "Deny",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectAcl",
+        "s3:PutObjectRetention",
+        "s3:PutObjectLegalHold",
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:BypassGovernanceRetention",
+        "s3:PutBucketVersioning",
+        "s3:PutBucketObjectLockConfiguration",
+        "s3:PutLifecycleConfiguration",
+        "s3:PutBucketPolicy",
+        "s3:DeleteBucketPolicy",
+        "s3:DeleteBucket"
+      ],
+      "Resource": ["${bucket_arn}", "${bucket_arn}/*"]
+    }
+  ]
+}

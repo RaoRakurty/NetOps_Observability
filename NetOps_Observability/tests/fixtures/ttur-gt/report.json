@@ -1,0 +1,19 @@
+{
+ "generated": "2026-09-01T22:36:57Z",
+ "harness": "scale-miniladder",
+ "phases": [
+  {
+   "at": "2026-09-01T21:55:55Z",
+   "evidence": {
+    "burst_seconds": 900.0
+   },
+   "phase": "burst"
+  },
+  {
+   "at": "2026-09-01T22:19:36Z",
+   "evidence": {},
+   "phase": "correlation_completion"
+  }
+ ],
+ "runid": "090121382mk4"
+}

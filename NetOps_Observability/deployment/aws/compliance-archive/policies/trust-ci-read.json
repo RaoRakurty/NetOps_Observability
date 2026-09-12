@@ -1,0 +1,38 @@
+{
+  "_comment": [
+    "TRUST POLICY for the CI read role — GitHub Actions OIDC, no static keys.",
+    "",
+    "GitHub hands the workflow a short-lived OIDC token; AWS STS exchanges it for",
+    "credentials that expire in an hour. Nothing long-lived exists to leak, to",
+    "rotate, or to find in a repository secret five years from now.",
+    "",
+    "The `sub` condition is the whole security of this arrangement, so it is",
+    "pinned narrowly and NEVER written as `repo:${github_org}/*`: any workflow in",
+    "any repository of the org would otherwise be able to assume this role. It is",
+    "scoped to one repository AND one GitHub Environment, so a pull request from a",
+    "fork — which cannot reach a protected environment — gets nothing.",
+    "",
+    "aud is checked as well; a token minted for a different audience is not a token",
+    "for us.",
+    "",
+    "${oidc_provider_arn}, ${github_org}, ${github_repo} and ${ci_environment} are",
+    "substituted by Terraform (templatefile)."
+  ],
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "GitHubActionsOIDCReadOnly",
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "${oidc_provider_arn}"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": "repo:${github_org}/${github_repo}:environment:${ci_environment}"
+        }
+      }
+    }
+  ]
+}

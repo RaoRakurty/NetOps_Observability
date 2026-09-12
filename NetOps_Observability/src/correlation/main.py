@@ -1,58 +1,658 @@
-"""NetOps Observability — Correlation + AI Engine.
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
 
-A FastAPI service that:
+"""Correlation service — the impure shell around the pure engine core.
 
-  * Consumes the netops.syslog, netops.flows, netops.metrics Redpanda
-    topics (Kafka-compatible).
-  * Runs lightweight stream processing — rolling z-score anomaly
-    detection over per-device metric series, severity-weighted event
-    correlation, and a stub for RCA.
-  * Writes findings into ClickHouse (netops.findings table) so the UI
-    can render them as ranked incident cards.
-  * Exposes a REST API for the Go layer to query findings and trigger
-    on-demand analyses.
+FastAPI + aiokafka. engine.py owns determinism (pure ``run_window``, replayable
+forever); this module owns everything that touches the world:
 
-The implementation is intentionally minimal — replace the algorithms
-with sklearn / Prophet / a real CEP engine as the workload demands. The
-service contract (consume from Kafka, emit findings to ClickHouse,
-serve /findings) stays stable.
+  * Consume the 12 ``LANE_TOPICS`` lanes (syslog / flows / metrics / probes /
+    snmptrap / cloud / app identities / controller events / app edge /
+    verification / wireless sessions + events) PLUS the generic evidence-class
+    topics (``CORR_EVIDENCE_TOPICS``) under a supervised consumer — offsets
+    commit only after the ClickHouse flush succeeds, so a crash replays instead
+    of losing signals. The subscription is PARTITIONED into REQUIRED lanes
+    (fail-loud) and OPTIONAL evidence lanes (dropped + re-probed, never a
+    startup gate) — see REQUIRED_TOPICS/OPTIONAL_TOPICS.
+
+    Two lane knobs, both DEFAULT-UNCHANGED and both a per-deployment override
+    rather than a shipped behaviour change:
+      - ``CORR_EVIDENCE_TOPICS`` selects the evidence-class lanes (T2b). Empty
+        subscribes to none, which is the run-time half of the removable-module
+        constraint.
+      - ``CORR_SYSLOG_TOPIC`` (A4) swaps the raw syslog lane for the
+        vector-PRE-SCREENED feed (``netops.syslog.control``) on ONE deployment.
+        Pointing it there changes WHICH lines the engine ever sees, so it is a
+        qualification-gated switch: it MUST NOT become the default until a
+        release-qualify leg has graded the pre-screened feed against the raw
+        one (accuracy + accounting), and the correlation principal holds a Read
+        ACL on whatever topic it names.
+  * Normalize every event into canonical Signals (producers + the cloud /
+    app-identity / wireless intakes), tenant-scoped end to end — a signal
+    never crosses its tenant.
+  * Assemble per-tenant windows and run engine v3 on the dedicated, BOUNDED
+    offload plane (`_offload`): storm-window CPU must never starve the
+    consumer heartbeat or /healthz (inputs are snapshotted tuples, so purity
+    survives the offload), and admission is bounded so a caller that outruns
+    the workers is pushed back on rather than queued invisibly.
+  * Persist snapshots + signals through CHBatcher (bounded, size/time-flushed
+    batches), with verdict / attribution fields flattened for the UI.
+  * Serve the read API: /findings, /correlations (incl. /{id}/replay, which
+    re-runs the stored snapshot byte-identically), /metrics, /healthz, and
+    POST /analyze.
+
+The dividing line is load-bearing: anything deterministic belongs in
+engine.py; anything with IO, clocks, or retries belongs here.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import csv
+import functools
+import gc
+import glob
+import hashlib
+import hmac
 import json
 import logging
+import math
 import os
+import re
+import threading
 import time
 import uuid
-from collections import deque
+from collections import Counter, OrderedDict, deque
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Deque, Dict, Iterable
+from dataclasses import replace as dc_replace
+from datetime import datetime, timezone
 
 import httpx
-from aiokafka import AIOKafkaConsumer
+from aiokafka import AIOKafkaConsumer, TopicPartition
+from aiokafka.abc import ConsumerRebalanceListener
+from aiokafka.coordinator.assignors.range import RangePartitionAssignor
+from aiokafka.partitioner import murmur2
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
+import diagnostics
+import signals
+from aggregation import AGG_EVICT_REASONS, AggPlane, DeltaClass
+from app_producers import app_identity_from_event
+from catalog import builtin_catalog
+from cloud_dependency import build_from_records, merge_path_views
+from cloud_log_parsers import (
+    cloud_log_event,
+    dns_error_rollup,
+    parse_aws_waf_log,
+    parse_r53_dns_log,
+    parse_vpc_flow_log,
+    vpc_accept_rollup,
+    vpc_flow_signal,
+    vpc_pair_rollup,
+    waf_block_rollup,
+)
+from cloud_producers import cloud_signal_from_event
+from controller_events import controller_event_to_signal
+from directed_topology import DirectedTopology
+from engine import (
+    _SEV_RANK,
+    CORR_CANDIDATE_CEILING,
+    CORR_TOKEN_HUB_CAP,
+    AffectedHistory,
+    ComponentMemo,
+    ContinuationIndex,
+    EngineConfig,
+    Node,
+    ObjectSnapshot,
+    SeamView,
+    TopologyAdjacency,
+    WindowPrep,
+    _ch_dt,
+    blob_cycle_begin,
+    blob_cycle_end,
+    bound_hypotheses_blob,
+    cycle_hypotheses_blob,
+    digest_cache_stats,
+    engine_temporal_reach_s,
+    find_continuation,
+    find_merges,
+    hypotheses_cap_bytes,
+    prepare_run_window,
+    required_retention_s,
+    run_window,
+)
+from entity_resolver import EntityResolver
+from episodes import EpisodeDetector
+from evidence_plane import (
+    EVIDENCE_CLASS_DECISION,
+    EVIDENCE_CLASS_HEARTBEAT,
+    EVIDENCE_CLASS_TERMINAL,
+    EvidenceItem,
+    EvidencePutAborted,
+    EvidenceQueue,
+    RowBatcher,
+    estimate_bytes,
+)
+from flow_app_attribution import AppIdentityIndex, resolve_flow_app
+from flow_direction import flow_direction_sample, netflow_direction_source
+from lb_normalize import normalize_lb_event
+from path_assembly import (
+    AssembledPath,
+    DiscoveredEdge,
+    DiscoverySources,
+    DnsHead,
+    PathAssembler,
+    flow_edges_from_pairs,
+    inventory_edges_from_topology,
+    measured_run_from_observation,
+)
+from path_direction import resolve_path_order, traceroute_direction_source
+from path_graph import PathGraphView
+from proactive import (
+    ProactiveEvent,
+    ProactiveMonitor,
+    proactive_signal,
+    proactive_stats,
+)
+from producers import (
+    clock_skew_signal,
+    episode_signal,
+    flow_sample,
+    parse_event_ts,
+    parser_stats,
+    port_event_signal,
+    prefilter_counts,
+    probe_signals,
+    syslog_control_signal,
+    syslog_promotable,
+    trap_control_signal,
+    ts_invalid_count,
+)
+from rank_memo import RankMemo
+from replay import replay_object
+from routing_direction import forwarding_pairs, routing_direction_source
+from scoring import (
+    RankingResult,
+    fidelity_weighting_metric_lines,
+    fidelity_weighting_stats,
+    template_scoring_metric_lines,
+)
+from series_budget import derive_max_series
+from signals import (
+    EVIDENCE_CLASSES,
+    EVIDENCE_TOPICS,
+    DeadLetter,
+    EntityType,
+    ModalityClass,
+    Observer,
+    ObserverType,
+    ProbeAuthority,
+    ProbeIntent,
+    ProbeScope,
+    Severity,
+    Signal,
+    Source,
+    VantageType,
+    derive_probe_authority,
+    derive_probe_scope,
+    evidence_signal_from_event,
+)
+from synthetic_normalize import synthetic_app_signal
+from tls_ident import PeerIdentityMiddleware
+from verdicts import VerdictTier
+from verification_producer import verification_signal_from_event
+from wireless_onboarding import (
+    assemble_episode as assemble_wireless_episode,
+)
+from wireless_onboarding import (
+    client_identity as wo_client_identity,
+)
+from wireless_onboarding import (
+    episode_signal as wireless_episode_signal,
+)
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
 LOG_LEVEL        = os.environ.get("LOG_LEVEL", "info").upper()
-KAFKA_BOOTSTRAP  = os.environ.get("KAFKA_BOOTSTRAP", "redpanda:9092")
+KAFKA_BOOTSTRAP  = os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")
+
+
+def kafka_security_kwargs(env=os.environ) -> dict:
+    """mTLS to the bus (SEC-006.2): when the three cert paths are set, the
+    consumer dials the broker's authenticated listener presenting the
+    correlation SVID; unset, the plaintext baseline is bit-for-bit unchanged.
+    A PARTIAL config refuses to start rather than silently falling back to
+    plaintext — a downgrade that looks exactly like "the bus is quiet"."""
+    ca = env.get("KAFKA_SSL_CA", "")
+    cert = env.get("KAFKA_SSL_CERT", "")
+    key = env.get("KAFKA_SSL_KEY", "")
+    if not (ca or cert or key):
+        return {}
+    if not (ca and cert and key):
+        raise RuntimeError(
+            "KAFKA_SSL_CA, KAFKA_SSL_CERT and KAFKA_SSL_KEY must be set together "
+            f"(got ca={bool(ca)} cert={bool(cert)} key={bool(key)}) — refusing a "
+            "partial TLS config instead of silently downgrading to plaintext")
+    import ssl as _ssl
+    ctx = _ssl.create_default_context(purpose=_ssl.Purpose.SERVER_AUTH, cafile=ca)
+    ctx.load_cert_chain(cert, key)
+    return {"security_protocol": "SSL", "ssl_context": ctx}
+
+
+# Built once at import: a broken TLS config fails the BOOT, loudly, not the
+# Nth reconnect attempt at 3am.
+KAFKA_SECURITY = kafka_security_kwargs()
 CLICKHOUSE_URL   = os.environ.get("CLICKHOUSE_URL", "http://clickhouse:8123")
 CLICKHOUSE_USER  = os.environ.get("CLICKHOUSE_USER", "netops")
 CLICKHOUSE_PASS  = os.environ.get("CLICKHOUSE_PASSWORD", "")
 
-TOPICS = ["netops.syslog", "netops.flows", "netops.metrics"]
+LANE_TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes", "netops.snmptrap", "netops.cloud", "netops.app.identities.v1", "netops.controller_events", "netops.app.edge", "netops.verification",
+               # #128 Q7: DEDICATED wireless topics — session records and onboarding
+               # observations must not starve SD-WAN/fabric controller events on a
+               # shared partition set (wireless is the highest-volume producer).
+               "netops.wireless_sessions", "netops.wireless_events"]
+
+
+# T2b — the GENERIC evidence-class bus (signals.EVIDENCE_CLASSES). These topics
+# carry records that are ALREADY canonical (entity + seam + ts + evidence refs),
+# so they need no lane parser and get no lane handler: one generic intake maps
+# the envelope onto a Signal by field name. The default is every registered
+# class's topic; `CORR_EVIDENCE_TOPICS` overrides it (a comma list, or empty to
+# subscribe to none) — which is what makes an evidence class REMOVABLE at run
+# time as well as at build time, with nothing else in the engine to change.
+#
+# OPERATIONAL PRECONDITION: the correlation principal needs a Kafka Read ACL on
+# every topic listed here (deployment/docker/kafka/apply-acls.sh), and the topic
+# has to exist. NEITHER IS A STARTUP GATE ANY MORE (2026-09-02): a topic that is
+# absent or ungranted is DROPPED from the subscription with a named error line,
+# a /healthz field and a `corr_evidence_topic_dropped` gauge, and re-probed
+# until it appears — see REQUIRED_TOPICS / OPTIONAL_TOPICS below for the outage
+# that made an ungranted evidence lane fail the WHOLE subscription for 3 hours.
+# `CORR_EVIDENCE_TOPICS=""` remains the way to unsubscribe a class outright.
+
+
+def evidence_topics_from_env(raw: str | None) -> tuple[str, ...]:
+    """`CORR_EVIDENCE_TOPICS` → the evidence topics to subscribe to.
+
+    None (unset) = every registered class's topic. A comma list overrides it;
+    the EMPTY string subscribes to none, which is the run-time half of the
+    removable-module constraint — the engine then consumes exactly the network
+    lanes it consumed before any evidence class existed. Pure, so the contract
+    is testable without reimporting this module."""
+    if raw is None:
+        raw = ",".join(EVIDENCE_TOPICS)
+    return tuple(t.strip() for t in raw.split(",") if t.strip())
+
+
+CORR_EVIDENCE_TOPICS: tuple[str, ...] = evidence_topics_from_env(
+    os.environ.get("CORR_EVIDENCE_TOPICS"))
+EVIDENCE_TOPIC_SET: frozenset[str] = frozenset(CORR_EVIDENCE_TOPICS)
+
+TOPICS = LANE_TOPICS + [t for t in CORR_EVIDENCE_TOPICS if t not in LANE_TOPICS]
+
+
+def apply_syslog_topic(topics: list[str], syslog_topic: str) -> list[str]:
+    """Swap the raw syslog lane for `syslog_topic`, leaving every other entry
+    byte-identical (A4). Pure, so the switch is testable without reimporting
+    this module — and so "exactly one entry moves" is an assertion, not a
+    reading of the code."""
+    return [syslog_topic if t == "netops.syslog" else t for t in topics]
+
+
+# A4 — the pre-screened syslog lane, as a per-deployment SWITCH.
+#
+# The syslog lane can be pointed at the vector-PRE-SCREENED `netops.syslog.control`
+# feed instead of the raw `netops.syslog` one. DEFAULT UNCHANGED: absent the env
+# var this resolves to "netops.syslog" and `TOPICS` is byte-identical to what it
+# was, so nothing about the shipped configuration moves.
+#
+# WHY IT IS NOT A DEFAULT. Pointing it at the pre-screened feed changes WHICH
+# LINES THE ENGINE EVER SEES — it is an accuracy and an accounting change, not a
+# transport change (a line the screen drops can never become evidence, and
+# injected == persisted is measured against the lane the engine consumed). It
+# therefore requires a RELEASE-QUALIFY LEG grading the pre-screened feed against
+# the raw one before it may become the default (INVARIANTS §10: the SLO's
+# lossless and accuracy clauses are proven per-configuration, never inherited).
+# The correlation principal also needs a Read ACL on whatever topic it names
+# (deployment/docker/kafka/apply-acls.sh).
+CORR_SYSLOG_TOPIC = os.environ.get("CORR_SYSLOG_TOPIC", "netops.syslog")
+TOPICS = apply_syslog_topic(TOPICS, CORR_SYSLOG_TOPIC)
+
+# ── REQUIRED vs OPTIONAL lanes (availability defect, 2026-09-02) ─────────────
+#
+# THE MEASURED FAILURE. The engine subscribed to all 13 topics as ONE
+# indivisible set. `netops.security` (an OPTIONAL evidence lane — the security
+# module was off and broker auto-create disabled) did not exist, so aiokafka's
+# `consumer.start()` -> `_wait_topics()` -> `_wait_on_metadata()` raised
+# UnknownTopicOrPartitionError (and, on 2026-08-16 with the Read ACL missing,
+# TopicAuthorizationFailedError). The supervisor caught it, backed off and
+# restarted every 60s: ONE absent optional topic starved ALL TWELVE required
+# lanes for ~3h while /healthz stayed green.
+#
+# THE PARTITION. `_wait_topics` is all-or-nothing, so the fix is to stop asking
+# it about lanes whose absence is a legitimate deployment state:
+#
+#   REQUIRED_TOPICS — the core lanes. Their absence is a MISCONFIGURATION (the
+#     kafka-init job did not run, or the principal was never granted Read), so
+#     they keep today's fail-loud behaviour: start() raises, the supervisor
+#     backs off and retries, and the operator gets a restart loop. What changes
+#     is only that the log line now NAMES the topic and the reason — the old
+#     traceback named the error class and, for an authorization failure, not
+#     even the topic.
+#   OPTIONAL_TOPICS — the flag-gated evidence lanes (`CORR_EVIDENCE_TOPICS`,
+#     T2b). An evidence class is REMOVABLE by construction, so "its topic is
+#     not on the broker yet" is a normal state, not a fault. These are resolved
+#     against cluster metadata AFTER start() and any that is absent or
+#     unauthorized is DROPPED from the subscription (one structured error line
+#     per drop, a /healthz field and a `corr_evidence_topic_dropped` gauge),
+#     then re-probed on a bounded jittered interval so a later-enabled lane
+#     starts grounding WITHOUT a restart.
+#
+# The syslog lane belongs to REQUIRED whichever topic CORR_SYSLOG_TOPIC names:
+# pointing it at a topic that does not exist is a misconfiguration of a core
+# lane, and silently degrading it would hide exactly the accounting change the
+# A4 switch is qualification-gated for.
+REQUIRED_TOPICS: list[str] = apply_syslog_topic(list(LANE_TOPICS), CORR_SYSLOG_TOPIC)
+OPTIONAL_TOPICS: tuple[str, ...] = tuple(t for t in TOPICS if t not in REQUIRED_TOPICS)
+
+# #81 P3B runtime source — a file-based cloud-log tailer (dev/demo + on-host log
+# drops). Reads *.alb / *.vpc files from CLOUD_LOGS_DIR, parses them with the P3B
+# parsers, and feeds the SAME cloud lane as the bus (handle_cloud). Default-CLOSED:
+# disabled unless BOTH a dir AND an explicit tenant are set (cloud logs carry no
+# tenant — it is assigned at the source, never guessed). The production source is an
+# S3/Kinesis poller that produces to netops.cloud; this is the offline-safe sibling.
+CLOUD_LOGS_DIR = os.environ.get("CLOUD_LOGS_DIR", "")
+CLOUD_LOGS_TENANT = os.environ.get("CLOUD_LOGS_TENANT", "")
+CLOUD_LOGS_REFRESH_S = float(os.environ.get("CLOUD_LOGS_REFRESH_S", "30"))
+# Bound for the peer-pair volume rollup (cloud-platform-backlog #9): at most this
+# many (src,dst) ACCEPT pairs per scan cycle (largest bytes win). Shared knob name
+# across the AWS/Azure/GCP flow lanes.
+CLOUD_FLOW_PAIR_TOP_K = int(os.environ.get("CLOUD_FLOW_PAIR_TOP_K", "20"))
+_cloud_log_offsets: dict[str, int] = {}  # path → bytes consumed (tail-style; in-memory)
+
+# Cloud inventory topology snapshots (deployment/docker/cloud-fixtures/*-topology.json)
+# mounted read-only into the correlation container. Feeds the path-causality P1
+# INVENTORY discovery source (inventory_edges_from_topology) so a cloud incident gets a
+# discovered SRC→DST path WITHOUT a traceroute (cloud hides hops). Default-CLOSED and
+# tenant-gated exactly like the cloud-log tailer: a topology fixture carries no tenant,
+# so its edges are stamped with CLOUD_LOGS_TENANT and contribute to NO other tenant's
+# path (§3a). Off unless a dir is set AND CLOUD_LOGS_TENANT names the owning tenant.
+CLOUD_TOPOLOGY_DIR = os.environ.get("CLOUD_TOPOLOGY_DIR", "")
+# Runtime layer (static-fixture/runtime split): the live poller's snapshots
+# land under gitignored data/; a runtime file SHADOWS the tracked fixture of
+# the same name — live data wins, fresh installs fall back to fixtures.
+CLOUD_TOPOLOGY_RUNTIME_DIR = os.environ.get("CLOUD_TOPOLOGY_RUNTIME_DIR", "")
+_cloud_topo_cache: dict[str, dict] = {}          # filename → parsed topology dict
+_cloud_topo_mtimes: dict[str, float] = {}        # filename → last-seen mtime
+
+# Device→tenant map exported by the Go API (#20 multi-tenant telemetry). We stamp
+# tenant_id onto each finding so it carries the same tenant discriminator as the
+# flows/logs the Vector aggregator tags. The file is re-read when its mtime
+# changes; an absent file or unmatched device yields "" (global/platform).
+TENANT_ENRICHMENT_FILE = os.environ.get("TENANT_ENRICHMENT_FILE", "/data/enrichment/device_tenant.csv")
+_tenant_map: dict[str, str] = {}
+_tenant_mtime: float = -1.0
+# How often the device->tenant registry file may be re-stat'ed (tracker 156).
+# The exporter rewrites it every 60s; 1s keeps pickup effectively immediate
+# while taking the syscall off the per-event path.
+TENANT_STAT_EVERY_S = float(os.environ.get("CORR_TENANT_STAT_EVERY_S", "1.0"))
+_tenant_stat_at: float = -1e9
+
+
+def canon_tenant(t: str) -> str:
+    """Canonical spelling of the platform-global tenant (#113 slice 3 root cause).
+
+    The platform has TWO historical spellings of the same principal: "" (this
+    engine's old convention) and "global" (the Go side's canonicalCorrTenant,
+    the path-observation exporter, the ClickHouse row policies). The mixed
+    spelling split corr objects across two tenants AND broke every per-tenant
+    join — most visibly path-attribution discovery, where tenant-"" incidents
+    could never match the "global"-stamped path observations, so NO live object
+    ever got a causality path. One spelling everywhere: "global". Never
+    collapses two real tenant ids (opaque t_… ids pass through untouched)."""
+    return "global" if t in ("", "global") else t
+
+
+def _tenant_registry() -> dict[str, str]:
+    """The TRUSTED identity→tenant registry (device_tenant.csv, written by the Go
+    API from the device inventory — src/backend/telemetry_enrichment.go).
+
+    This file is the ONLY authority on which tenant owns a piece of telemetry.
+    It is produced by the platform from its own inventory, one row per distinct
+    device NAME and per distinct management ADDRESS, and an identity that maps
+    to more than one tenant is OMITTED by the exporter (fail-safe) — so a hit
+    here is unambiguous by construction.
+
+    Cheap: re-reads the CSV only when its mtime changes."""
+    global _tenant_map, _tenant_mtime, _tenant_stat_at
+    # Tracker 156: this ran os.path.getmtime on EVERY event — one syscall per
+    # syslog line, 40,000 in a 40,000-event profile. The writer refreshes the
+    # CSV every 60s, so restatting more often than TENANT_STAT_EVERY_S buys
+    # nothing. The mtime comparison below is unchanged; only how often we ask
+    # the filesystem is.
+    nowm = time.monotonic()
+    # Only throttle once a map has actually been loaded: a first call, or a
+    # caller that reset _tenant_mtime to force a reload, must still stat
+    # immediately. Otherwise the throttle would delay the FIRST registry read,
+    # which is exactly when events are most likely to be refused as
+    # unattributable (tracker 159's registry-propagation edge).
+    loaded = isinstance(_tenant_mtime, (int, float)) and _tenant_mtime >= 0
+    if loaded and nowm - _tenant_stat_at < TENANT_STAT_EVERY_S:
+        return _tenant_map
+    _tenant_stat_at = nowm
+    try:
+        mt = os.path.getmtime(TENANT_ENRICHMENT_FILE)
+    except OSError:
+        return _tenant_map
+    if mt != _tenant_mtime:
+        _tenant_mtime = mt  # retry on the next mtime change (writer refreshes every 60s)
+        fresh: dict[str, str] = {}
+        try:
+            with open(TENANT_ENRICHMENT_FILE, newline="") as f:
+                reader = csv.reader(f)
+                next(reader, None)  # header: identity,tenant_id
+                for row in reader:
+                    if len(row) >= 2 and row[0]:
+                        fresh[row[0]] = row[1]
+            _tenant_map = fresh
+        except OSError as exc:
+            # An unreadable map means every signal falls back to untagged
+            # (platform-only). Fail-closed but NOT silent — this exact failure
+            # (0600 perms across uids) once disabled tenancy stamping unnoticed.
+            log.warning("tenant enrichment file unreadable, tenant map stale/empty: %s", exc)
+    return _tenant_map
+
+
+def tenant_lookup(identity: str) -> str | None:
+    """Registry lookup for one observed identity.
+
+    Returns the registry's tenant for `identity` (which may legitimately be ""
+    = platform-owned), or **None when the registry does not know the identity
+    at all**. That distinction is the whole point: `tenant_for` collapses both
+    cases to "global", which makes it a FALLBACK-FOR-ABSENCE and useless as a
+    CHECK-ON-PRESENCE (TENANT-HIGH-3). `verified_tenant` needs to tell "the
+    registry says platform" apart from "the registry has never heard of this"."""
+    if not identity:
+        return None
+    return _tenant_registry().get(identity)
+
+
+def tenant_for(device: str) -> str:
+    """Resolve a device name/id to its canonical tenant id ("global" = the
+    platform-global tenant — see canon_tenant). Cheap: re-reads the CSV only
+    when its mtime changes.
+
+    NOTE: this answers "what does the registry say about this device", NOT "is
+    the tenant this event claims legitimate". Anything that consumes a
+    SELF-DECLARED tenant_id off the bus must go through `verified_tenant`."""
+    if not device:
+        return canon_tenant("")
+    return canon_tenant(tenant_lookup(device) or "")
 
 logging.basicConfig(
     level=LOG_LEVEL,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 log = logging.getLogger("correlation")
+
+
+# ---------------------------------------------------------------------------
+# TENANT CLAIM VERIFICATION (TENANT-HIGH-3/4 — CLAUDE.md §3a, default-closed)
+#
+# THE DEFECT THIS FIXES: tenant identity used to be ASSERTED by the sender and
+# never VERIFIED by anyone. Every lane did
+#
+#     tenant = str(ev.get("tenant_id") or "") or tenant_for(<device>)
+#
+# i.e. the device→tenant registry was consulted ONLY when the payload carried
+# no tenant. A payload that DID carry one — including one written by anything
+# that can reach the bus, or (before this change) one re-derived from the
+# attacker-controlled `devname=` field inside a FortiGate log BODY — was taken
+# verbatim and persisted into that tenant's corr_signals. An empty tenant was
+# dropped (good); a FORGED non-empty tenant was honoured (the hole).
+#
+# THE TRUST MODEL NOW:
+#   • TRUSTED: device_tenant.csv, written by the Go API from its own inventory.
+#     Nothing on the wire can change it.
+#   • UNTRUSTED: every field of every bus event, `tenant_id` included. It is a
+#     CLAIM, and a claim is only ever accepted when it REPRODUCES what the
+#     registry says for an identity the event itself carries (syslog hostname,
+#     flow sampler_address, metric/trap device, probe target, wireless
+#     observer). The value we persist is always the REGISTRY's, never the
+#     claim's — a verified claim and the registry agree, so there is nothing to
+#     choose between.
+#   • On disagreement we take NEITHER value: the event is refused, counted,
+#     logged with a `SECURITY:` prefix and quarantined through the existing
+#     durable dead-letter path. Same shape as the reference implementation in
+#     src/backend/ticketing_worker.go:96-103.
+#
+# `registry_anchored=True` marks the lanes whose tenant is stamped by Vector
+# SOLELY from this same registry (syslog, flows) — for those, a non-empty claim
+# the registry cannot reproduce is by definition not something the pipeline
+# produced, so an UNKNOWN identity is refused too (requirement (c): an
+# unresolvable tenant fails closed). The remaining lanes carry tenants that
+# genuinely have no device to resolve from (cloud accounts, app identities);
+# there the registry can only ever CONTRADICT a claim, so it is used for
+# exactly that and an unknown identity leaves the authenticated producer's
+# claim standing.
+#
+# What this does NOT fix, stated plainly: an attacker who can reach the
+# unauthenticated syslog port AND knows a victim's real device hostname still
+# lands in that tenant's lane, because the registry genuinely maps that
+# hostname to that tenant. Closing that needs transport authentication
+# (RFC5425 TLS / per-source ACLs), not an app-layer check — see
+# deployment/docker/syslog-ng/syslog-ng.conf.
+# ---------------------------------------------------------------------------
+
+TENANT_CLAIMS_VERIFIED = 0            # non-empty claims that matched the registry
+TENANT_CLAIMS_REFUSED = 0             # events refused because the claim did not
+TENANT_REFUSALS: dict[str, int] = {}  # "lane:reason" -> count
+_TENANT_REFUSE_LOG_LAST: dict[str, float] = {}
+# A hostile or misconfigured producer can refuse at full consume rate; the
+# COUNTERS stay exact, the log line is rate-limited per (lane, reason).
+TENANT_REFUSE_LOG_EVERY_S = float(os.environ.get("CORR_TENANT_REFUSE_LOG_EVERY_S", "30"))
+
+
+class TenantClaimRefused(DeadLetter):
+    """An event's SELF-DECLARED tenant_id could not be verified against the
+    trusted device→tenant registry.
+
+    A DeadLetter subclass on purpose: every lane already routes DeadLetter into
+    the durable quarantine (keep_deadletter_payload → CORR_DLQ_DIR), so a
+    refused event keeps its payload for forensics instead of vanishing. It is
+    NEVER downgraded to "use the registry value anyway" — the two sources
+    disagree about who owns the data, and guessing is the defect.
+
+    EXCEPTION (F-11, INV-F11-10): the `identity_unattributable` class keeps NO
+    payload — the ROUTER seals that very event under the quarantine key, and a
+    plaintext copy here (ring + NDJSON) would be the durable confidentiality
+    downgrade the owner invariant forbids. _quarantine_record keys on the
+    `reason` attribute below to store metadata + identity hash only."""
+
+    # Structured refusal facts, stamped by _tenant_refusal. Class defaults keep
+    # older pickled/hand-built instances harmless.
+    lane: str = ""
+    reason: str = ""
+    identity: str = ""
+
+
+def _tenant_refusal(lane: str, reason: str, identity: str,
+                    claimed: str, resolved: str) -> TenantClaimRefused:
+    """Count + (rate-limited) log one refusal and build the exception to raise."""
+    global TENANT_CLAIMS_REFUSED
+    TENANT_CLAIMS_REFUSED += 1
+    key = f"{lane}:{reason}"
+    TENANT_REFUSALS[key] = TENANT_REFUSALS.get(key, 0) + 1
+    now = time.monotonic()
+    if (now - _TENANT_REFUSE_LOG_LAST.get(key, -1e9)) >= TENANT_REFUSE_LOG_EVERY_S:
+        _TENANT_REFUSE_LOG_LAST[key] = now
+        log.warning(
+            "SECURITY: tenant claim refused — event quarantined, NOT persisted "
+            "lane=%s reason=%s identity=%s claimed_tenant=%s registry_tenant=%s "
+            "refused_total=%d",
+            lane, reason, identity or "-", claimed or "-", resolved or "-",
+            TENANT_REFUSALS[key])
+    exc = TenantClaimRefused(
+        f"tenant claim refused ({reason}): lane={lane} identity={identity or '-'} "
+        f"claimed={claimed or '-'} registry={resolved or '-'}")
+    exc.lane, exc.reason, exc.identity = lane, reason, identity
+    return exc
+
+
+def verified_tenant(claimed: str, identity: str, lane: str, *,
+                    registry_anchored: bool = False) -> str:
+    """Return the tenant this event may be persisted under, or raise.
+
+    claimed  — the event's self-declared tenant_id (UNTRUSTED).
+    identity — the observed device identity the event carries (syslog hostname,
+               flow sampler_address, metric/trap device, probe target …).
+    lane     — counter/log label.
+
+    Contract:
+      • no claim            → the registry decides; an identity the registry
+                              does not know is the PLATFORM tenant ("global",
+                              which the strict ClickHouse row policy keeps
+                              platform-only), never another tenant's and never
+                              a permissive wildcard.
+      • claim == registry   → accepted (the registry's value is returned).
+      • claim != registry   → REFUSED (raises), both lane kinds.
+      • registry has no such identity:
+          registry_anchored → REFUSED (the claim is unverifiable and this lane's
+                              tenants only ever come from the registry).
+          otherwise         → the authenticated producer's claim stands; the
+                              registry had nothing to say about it.
+    """
+    global TENANT_CLAIMS_VERIFIED
+    claim = str(claimed or "").strip()
+    resolved = tenant_lookup(identity)
+    if not claim:
+        # F-11 (INV-F11-10): on a registry-ANCHORED lane an identity the
+        # registry has never heard of is TENANT_UNATTRIBUTABLE — it must not
+        # be processed as the platform tenant (that path reaches RCA and the
+        # global tenant's ticketing/notification destinations). It joins the
+        # same durable quarantine the contradicted-claim path uses. A registry
+        # hit that maps a KNOWN platform device to "" still becomes "global":
+        # platform self-monitoring is load-bearing and unchanged.
+        if registry_anchored and resolved is None:
+            raise _tenant_refusal(lane, "identity_unattributable", identity, "", "")
+        return canon_tenant(resolved or "")
+    if resolved is not None:
+        if canon_tenant(resolved) == canon_tenant(claim):
+            TENANT_CLAIMS_VERIFIED += 1
+            return canon_tenant(resolved)
+        raise _tenant_refusal(lane, "claim_mismatch", identity,
+                              canon_tenant(claim), canon_tenant(resolved))
+    if registry_anchored:
+        raise _tenant_refusal(lane, "identity_unknown", identity,
+                              canon_tenant(claim), "")
+    return canon_tenant(claim)
 
 
 # ---------------------------------------------------------------------------
@@ -66,32 +666,7483 @@ log = logging.getLogger("correlation")
 WINDOW_SIZE = 200
 Z_THRESHOLD = 3.0
 
+# O(1) rolling-stats drift guard (perf defect #4): mean/stddev are maintained as
+# shifted running sums (sum, sum-of-squares around a pivot) instead of a full
+# O(window) pass per query — ~6 full 200-deque passes per metric sample saturated
+# a core near 2-5k samples/s. Floating-point drift from incremental subtraction
+# is bounded by an EXACT recompute every this-many pushes (amortized O(window/N)
+# ≪ 1 op/sample) plus a clamp-and-recompute whenever variance goes negative.
+STATS_RECOMPUTE_EVERY = 1024
+
 
 @dataclass
 class Series:
-    values: Deque[float] = field(default_factory=lambda: deque(maxlen=WINDOW_SIZE))
+    values: deque[float] = field(default_factory=lambda: deque(maxlen=WINDOW_SIZE))
+    # Shifted running aggregates: _sum/_sumsq accumulate (v - _shift) so a large
+    # baseline mean with a small variance does not cancel catastrophically. The
+    # shift re-pivots to the current mean at every exact recompute.
+    _sum: float = 0.0
+    _sumsq: float = 0.0
+    _shift: float = 0.0
+    _pushes: int = 0
+
+    def _recompute(self) -> None:
+        """Exact O(window) rebuild of the aggregates — the float-drift guard."""
+        n = len(self.values)
+        self._shift = (sum(self.values) / n) if n else 0.0
+        self._sum = sum(v - self._shift for v in self.values)
+        self._sumsq = sum((v - self._shift) ** 2 for v in self.values)
 
     def mean(self) -> float:
-        return sum(self.values) / len(self.values) if self.values else 0.0
+        n = len(self.values)
+        return (self._shift + self._sum / n) if n else 0.0
 
     def stddev(self) -> float:
         n = len(self.values)
         if n < 2:
             return 0.0
-        m = self.mean()
-        return (sum((v - m) ** 2 for v in self.values) / (n - 1)) ** 0.5
+        var = (self._sumsq - self._sum * self._sum / n) / (n - 1)
+        if var < 0.0:
+            # Cancellation artifact — rebuild exactly, then re-derive.
+            self._recompute()
+            var = max(0.0, (self._sumsq - self._sum * self._sum / n) / (n - 1))
+        return var ** 0.5
 
     def push(self, v: float) -> None:
+        if not self.values:
+            # Pivot on the first sample: a 1e9-baseline series must not
+            # accumulate (v − 0)² terms before the first periodic re-pivot.
+            self._shift, self._sum, self._sumsq = v, 0.0, 0.0
+        elif len(self.values) == self.values.maxlen:
+            old = self.values[0] - self._shift
+            self._sum -= old
+            self._sumsq -= old * old
         self.values.append(v)
+        d = v - self._shift
+        self._sum += d
+        self._sumsq += d * d
+        self._pushes += 1
+        if self._pushes % STATS_RECOMPUTE_EVERY == 0:
+            self._recompute()
 
 
-SERIES: Dict[tuple[str, str], Series] = {}
+# Legacy z-score series, bounded + LRU. Unbounded before: keyed by
+# (device, metric) with no eviction, so cardinality churn (ephemeral cloud
+# resource ids arriving as `device`) grew it until the container hit its memory
+# limit. Dropping the least-recently-scored series only costs it its warm-up.
+# The cap is DERIVED from the container memory budget (series_budget.py): the
+# old flat 200k default measured ~2.9 GiB at cap across this store + the
+# episode detector's — the 768 MiB container OOM'd long before the cap engaged.
+# CORR_MAX_SERIES still overrides verbatim.
+# M29b: keyed by (tenant, entity, metric) — two tenants can legitimately own
+# the same device name + metric (overlapping RFC1918 inventories), and a
+# tenant-blind key averaged their baselines into one series: cross-tenant
+# value leakage into the z-score AND wrong anomaly math for both.
+SERIES: OrderedDict[tuple[str, str, str], Series] = OrderedDict()
+SERIES_MAX = derive_max_series()
+# M29a: LRU evictions were silent (§10) — a cardinality storm quietly ate every
+# warm baseline and the only symptom was findings going quiet. Counted here,
+# exposed on /healthz + /metrics, WARNed rate-limited below.
+SERIES_EVICTED = 0
+_SERIES_EVICT_LOG_LAST = -1e9
+SERIES_EVICT_LOG_EVERY_S = 60.0
+
+# ---------------------------------------------------------------------------
+# Correlation Engine v2 — build ②: episode model (stages [1]+[2] of the
+# canonical pipeline). Episodes are written to netops.corr_signals (the frozen
+# spine); the legacy z-score→findings path above stays untouched (compat,
+# §9 P1). Default-on; CORR_SIGNALS_ENABLED=false disables spine writes only.
+# ---------------------------------------------------------------------------
+
+CORR_SIGNALS_ENABLED = os.environ.get("CORR_SIGNALS_ENABLED", "true").lower() != "false"
+DETECTOR = EpisodeDetector()
+# A4 proactive-check plane (proactive.py) — the heartbeat conditions the engine
+# flagged only as TRANSITIONS: a peer stuck below ESTABLISHED, an adjacency that
+# dropped and never re-formed, a device pinned at its CPU/memory ceiling. Module
+# state like DETECTOR and for the same reason (dwell timers are per-process,
+# bounded, and deliberately not persisted across a restart — see
+# ProactiveMonitor.reset). EVERY check ships shadow, so this observes and counts
+# and emits nothing until a check is promoted.
+PROACTIVE = ProactiveMonitor()
+PROACTIVE_SIGNALS = 0    # signals a PROMOTED check emitted (0 while all shadow)
+DEADLETTER_COUNT = 0  # exposed via /healthz; provenance is never guessed
+
+# Metric-lane observability counters (exposed via /healthz). The netops.metrics
+# lane was historically empty; these prove it is fed and where events are lost.
+METRICS_RECEIVED = 0           # consumed from netops.metrics
+METRICS_ACCEPTED = 0           # passed schema/identity/timestamp validation
+METRICS_DROPPED = 0            # rejected — the SUM of the three causes below
+# One "dropped" number cannot be acted on: a device whose clock is an hour off
+# loses 100% of its telemetry and looks exactly like a producer emitting rows
+# with no value. The cause has to be in the counter, not only in a log line.
+METRICS_DROPPED_NO_VALUE = 0     # no metric name / no numeric value
+METRICS_DROPPED_NO_IDENTITY = 0  # no canonical entity (device/if/peer missing)
+METRICS_DROPPED_STALE_TS = 0     # event timestamp outside the skew/age window
+# The syslog lane is TOPICS[0] and the source of link_down / BGP-state / optics
+# evidence — the highest-value RCA evidence class — and had NO intake counter at
+# all, so a broken Vector syslog route was indistinguishable from a quiet night.
+SYSLOG_RECEIVED = 0            # consumed from netops.syslog
+SYSLOG_SIGNALS = 0             # control-plane / port / clock-skew signals emitted
+DEVICE_TELEMETRY_SIGNALS = 0   # device_telemetry signals written to corr_signals
+TRAPS_RECEIVED = 0             # consumed from netops.snmptrap (Commit 3)
+TRAPS_NORMALIZED = 0           # classified into a control_plane signal
+TRAPS_RECANON = 0              # C8: re-attributed to a device via the C7.1 EntityResolver
+TRAPS_DROPPED = 0              # unclassified — kept searchable, no RCA signal
+CLOUD_RECEIVED = 0             # consumed from netops.cloud (#81 P3G ingestion lane)
+CLOUD_SIGNALS = 0             # source=cloud signals written to corr_signals + buffered
+CLOUD_DROPPED = 0             # dropped: no tenant (default-closed) / malformed (dead-letter)
+APP_ID_RECEIVED = 0           # consumed from netops.app.identities.v1 (#81 P5 fusion lane)
+APP_ID_SIGNALS = 0            # source=app_identity enrichment signals written + buffered
+CONTROLLER_EVENTS_RECEIVED = 0  # consumed from netops.controller_events (#95 NMS lane)
+CONTROLLER_EVENTS_SIGNALS = 0   # source=controller signals written to corr_signals + buffered
+CONTROLLER_EVENTS_DROPPED = 0   # dropped: no tenant/kind identity (default-closed)
+VERIFICATION_RECEIVED = 0       # consumed from netops.verification (RCA spec item 8 lane)
+VERIFICATION_SIGNALS = 0        # source=verification signals written to corr_signals + buffered
+VERIFICATION_DROPPED = 0        # dropped: no tenant/device identity or skipped (default-closed)
+WIRELESS_RECEIVED = 0           # #128: wireless session/event records received
+WIRELESS_SIGNALS = 0            # #128: onboarding-failure signals emitted
+WIRELESS_DROPPED = 0            # #128: dropped — no tenant/identity (default-closed)
+APP_ID_DROPPED = 0            # dropped: no tenant (default-closed) / malformed (dead-letter)
+PROBES_RECEIVED = 0           # consumed from netops.probes (the 24/7 heartbeat lane — R6 flatline alert)
+APP_EDGE_RECEIVED = 0         # consumed from netops.app.edge (#98 P5 LB/proxy/ingress lane)
+APP_EDGE_SIGNALS = 0          # canonical app-edge signals written + buffered
+APP_EDGE_DROPPED = 0          # dropped: no tenant (default-closed) / unclassifiable
+CLOCK_SKEW_SIGNALS = 0        # clock_skew meta-findings written (S5 — never buffered)
+
+# T2b generic evidence-class bus intake (handle_evidence_event). One counter set
+# for EVERY class — the class is a metric LABEL, never a counter name, so adding
+# or removing an evidence class adds no counter and needs no exposure change.
+EVIDENCE_EVENTS_RECEIVED = 0  # records consumed from the evidence-class topics
+EVIDENCE_EVENTS_SIGNALS = 0   # canonical signals written to corr_signals + buffered
+EVIDENCE_EVENTS_DROPPED = 0   # dropped: refused tenant claim / malformed (dead-lettered)
+# (class, outcome) -> count, rendered as corr_evidence_events_total{class,outcome}.
+# BOUNDED BY CONSTRUCTION (§9): the key space is the registered class names (plus
+# the fixed "unknown" bucket for a record whose kind names no class) x the three
+# outcomes below — no untrusted string ever becomes a key, so this map cannot
+# grow with traffic. Keyed "class|outcome" so it is JSON-shaped for /healthz.
+#
+#   grounded — a signal was built AND its entity is one the tenant registry
+#              knows, so it can co-locate with that device's telemetry
+#   orphan   — a signal was built and persisted, but the registry knows no such
+#              entity: it is kept (never silently dropped) and counted, because
+#              "the security lane is grounding onto devices we do not have" is a
+#              coverage fact an operator must be able to SEE
+#   invalid  — refused: bad envelope (dead-lettered) or a contradicted tenant
+#              claim (quarantined). Never guessed, never persisted.
+EVIDENCE_EVENT_OUTCOMES: tuple[str, ...] = ("grounded", "orphan", "invalid")
+EVIDENCE_EVENTS_TOTAL: dict[str, int] = {
+    f"{cls}|{outcome}": 0
+    for cls in list(EVIDENCE_CLASSES) + ["unknown"]
+    for outcome in ("grounded", "orphan", "invalid")
+}
 
 
-def score(device: str, metric: str, value: float) -> float | None:
-    """Return a |z-score| if the value is anomalous, else None."""
-    key = (device, metric)
-    s = SERIES.setdefault(key, Series())
+def _count_evidence_event(evidence_class: str, outcome: str) -> None:
+    """Tally one evidence-bus record. Pre-seeded keys only — an unregistered
+    class falls into the fixed "unknown" bucket rather than minting a key."""
+    key = f"{evidence_class}|{outcome}"
+    if key not in EVIDENCE_EVENTS_TOTAL:
+        key = f"unknown|{outcome}"
+    EVIDENCE_EVENTS_TOTAL[key] = EVIDENCE_EVENTS_TOTAL.get(key, 0) + 1
+
+# Clock-skew finding cooldown (log-time standard S5): one clock_skew signal per
+# (tenant, entity) per window — a device with a wrong clock logs continuously,
+# and the finding must not become a firehose. Bounded map (see _clock_skew_due).
+CLOCK_SKEW_COOLDOWN_S = float(os.environ.get("CLOCK_SKEW_COOLDOWN_S", "900"))
+_CLOCK_SKEW_LAST: dict[tuple, float] = {}
+_CLOCK_SKEW_LAST_CAP = 4096
+
+
+def _clock_skew_due(tenant: str, entity_id: str) -> bool:
+    """True when no clock_skew signal was emitted for (tenant, entity) within
+    the cooldown. Bounded: at cap, the oldest entries are dropped (worst case a
+    repeat finding — never unbounded growth, §9 bounded queues)."""
+    now = time.monotonic()
+    key = (tenant, entity_id)
+    last = _CLOCK_SKEW_LAST.get(key)
+    if last is not None and (now - last) < CLOCK_SKEW_COOLDOWN_S:
+        return False
+    if len(_CLOCK_SKEW_LAST) >= _CLOCK_SKEW_LAST_CAP:
+        for old_key, _ in sorted(_CLOCK_SKEW_LAST.items(), key=lambda kv: kv[1])[:_CLOCK_SKEW_LAST_CAP // 4]:
+            _CLOCK_SKEW_LAST.pop(old_key, None)
+    _CLOCK_SKEW_LAST[key] = now
+    return True
+
+# Maximum clock skew (seconds) tolerated on a metric event timestamp. A future
+# stamp beyond this, or a stamp older than the correlation window, is dropped
+# (Layer-1F): event time must be trustworthy or the onset budget is a lie.
+METRIC_FUTURE_SKEW_S = 120.0
+METRIC_MAX_AGE_S = 3600.0
+
+# ---------------------------------------------------------------------------
+# Correlation Engine v2 — build ⑥: object persistence + replay (stages [3]–[8]).
+# The deterministic core lives in engine.py (pure); this block owns the IO:
+# an in-memory evidence window, the seam grounding context (exported by the Go
+# API into the shared enrichment dir — same plane as device_tenant.csv), the
+# periodic evaluation loop that persists versioned snapshots + the archive
+# slice (replay-forever guarantee), and the /replay surface.
+# ---------------------------------------------------------------------------
+
+CORR_ENGINE_ENABLED = os.environ.get("CORR_ENGINE_ENABLED", "true").lower() != "false"
+CORR_ENGINE_INTERVAL_S = float(os.environ.get("CORR_ENGINE_INTERVAL_S", "30"))
+CORR_QUIESCE_S = float(os.environ.get("CORR_QUIESCE_S", "900"))
+# Resilience (loop-lag root cause — production loop-lag watchdog: worst stall
+# 130,561 ms). The per-snapshot reconciliation loop yields PER TENANT only, so
+# an S1 storm concentrated on ONE tenant fires that yield once and then grinds
+# thousands of snapshots on the DAMPED/unchanged path (find_continuation +
+# inline content_hash, no I/O await) with no heartbeat → aiokafka session
+# expiry → consumer ejection → "lag never drains" livelock. The loop now yields
+# cooperatively whenever it has held the event-loop thread longer than this
+# budget (well under the 1000 ms loop-lag warn and the configured Kafka session
+# timeout — CORR_SESSION_TIMEOUT_MS), so aiokafka's heartbeat/commit coroutines
+# run mid-cycle. Purely a
+# scheduling interleave: it changes WHEN the loop yields, never which objects
+# are processed, their order, OPEN_OBJECTS mutation, the persist decision, or
+# any cohort output — replay/determinism are byte-for-byte unchanged.
+CORR_LOOP_YIELD_MS = float(os.environ.get("CORR_LOOP_YIELD_MS", "50"))
+# #100 write-side damping: a persisting incident whose window merely refreshes
+# (new instances of the SAME evidence) re-persisted a full snapshot + archive
+# slice every cycle — 2 versions/min/object for as long as a storm lasted. A new
+# version is now written only when the snapshot's material_hash moves (evidence
+# kinds / entities / verdict / structure) or this heartbeat elapses (bounds how
+# stale signal_count/window_end may look while an incident persists unchanged).
+# 0 disables damping (legacy: persist on every content_hash change).
+# -- P3 change B: EARLY REJECTION on the syslog ingest path -------------------
+#
+# MEASURED (docs/scale/P3_AGGREGATION_OPPORTUNITY_2026-08-29 SS1/SS6): 95.1 % of
+# raw syslog lines on the ratified workload are fully parsed and then NOT
+# promoted -- 900,001 lines in, 44,280 signals out, `handle.syslog` 789 s. The
+# lines are all distinct and from distinct devices, so no aggregation key can
+# touch them; only an early reject can.
+#
+# `producers.syslog_promotable` is a NECESSARY condition for promotion by the
+# control-plane classifier or the port-event classifier, derived from those
+# classifiers' own gates (see its contract). It runs AFTER the tenant claim is
+# verified -- a forged tenant must still be refused and quarantined -- and it
+# gates ONLY those two classifiers. Everything else on the lane is untouched:
+#   * SYSLOG_RECEIVED still counts every arrival ("arrived from the bus");
+#   * `verified_tenant` still refuses + deadletters a forged claim;
+#   * `clock_skew_signal` still runs (its trigger is the `clock_skew_s` field,
+#     not the message text, and it already short-circuits in ~0.3 us);
+#   * the severity-weighted BURST detector below still sees every line, so
+#     `syslog burst` findings are bit-for-bit what they were.
+# A rejected line is therefore exactly as durable, as searchable and as
+# accounted-for as it is today -- it simply is not parsed twice to prove it
+# classifies as nothing.
+CORR_INGEST_PREFILTER = os.environ.get(
+    "CORR_INGEST_PREFILTER", "1").lower() in ("1", "true", "yes")
+CORR_VERSION_HEARTBEAT_S = float(os.environ.get("CORR_VERSION_HEARTBEAT_S", "900"))
+# -- P3 change A: HEARTBEAT TOUCH-ONLY (docs/scale/P2_STEP5_2P5K_VERDICT SS3/SS5) --
+#
+# MEASURED. On run p2-s05, `persist.decision` was 2,426 s of ~3,900 s of engine
+# time for 40,321 persisted versions, and the version anatomy of 39,388 of them
+# is: first 32 %, terminal (close/merge) 32 %, evidence growth 17 %, verdict
+# change 7 %, and 15 % UNCHANGED HEARTBEAT re-versions -- an open object
+# re-persisted whole every CORR_VERSION_HEARTBEAT_S with a material_hash that
+# did not move.
+#
+# WHAT A HEARTBEAT VERSION IS FOR (established from its consumers, not assumed):
+#   * CORR_VERSION_HEARTBEAT_S's own contract, stated just above: "bounds how
+#     stale signal_count/window_end may look while an incident persists
+#     unchanged" -- i.e. FRESHNESS of the hot projection Command Center reads.
+#   * The Go orphan-close sweep (internal/chschema/corr_reconcile.go,
+#     CorrOrphanClosePickSQL) picks `corr_current FINAL WHERE state='open' AND
+#     created_at < now() - CORR_ORPHAN_OPEN_CLOSE_HOURS` and force-closes it.
+#     Its own comment names this heartbeat as the liveness proof. That consumer
+#     reads corr_current.created_at ONLY -- drop the touch and every live
+#     incident auto-closes after 24 h.
+#   * The Command Center list, its "Updated" column and default sort, the health
+#     strip, unified search, the ticketing sweeper, verify, cloud overview --
+#     all read corr_current. None reads the version SERIES: there is no
+#     /versions route and every Go history read is ORDER BY version DESC LIMIT 1.
+#   * Replay is NOT pinned by a heartbeat. replay._select_slice and the Go
+#     timeline both resolve to the newest archive slice with
+#     `archived_version <= requested`, and a heartbeat carries -- by the
+#     definition of material_hash -- the same material content as the version
+#     before it, so there is nothing distinct to replay.
+# The operator-visible product of a heartbeat is therefore ONE fresh corr_current
+# row; the corr_objects/edges/evidence/archive half is re-derivation of content
+# whose material identity did not move.
+#
+# WHAT STILL REQUIRES A FULL VERSION (the reason KEEPALIVE exists below):
+#   * corr_objects / corr_edges / corr_evidence TTL on their OWN created_at
+#     (internal/chschema/corr_retention.go) and corr_signals_archive on the
+#     signal ts. Nothing in those TTLs consults `state`, so an open object that
+#     never re-persists eventually has NO history at all.
+#   * correlations.go's list decorate joins corr_objects for `app_impact` under a
+#     24 h created_at window, and the drift reconciler's scan has a 7-day
+#     corr_objects lookback.
+# So a heartbeat writes only corr_current, but a FULL version is still forced
+# once per CORR_VERSION_KEEPALIVE_S, which sits inside every one of those
+# horizons. On a 15-minute benchmark the keepalive never fires; on a real
+# long-open incident it turns 96 versions/day into 4.
+#
+# THE VERSION NUMBER DOES NOT MOVE on a touch. correlations.go and
+# health_score.go join corr_edges/corr_objects ON (correlation_id, version)
+# picked FROM corr_current; a projection version with no history row would
+# render edge_count=0 / grounding='none' on a live incident. Same version, fresh
+# created_at: every join stays resolvable, and the drift reconciler
+# (created_at-based, corr_reconcile.go CorrDriftSelect) stays quiet.
+CORR_HEARTBEAT_TOUCH_ONLY = os.environ.get(
+    "CORR_HEARTBEAT_TOUCH_ONLY", "1").lower() in ("1", "true", "yes")
+# The full-version floor for an object that never moves materially. Must stay
+# BELOW the shortest horizon that reads corr_objects.created_at -- the 24 h
+# app_impact decorate window in correlations.go is the binding one, then the
+# 7-day drift lookback, then the retention profile's History days.
+CORR_VERSION_KEEPALIVE_S = float(os.environ.get("CORR_VERSION_KEEPALIVE_S", "21600"))
+VERSIONS_PERSISTED = 0   # object versions written to ClickHouse (monotonic)
+VERSIONS_DAMPED = 0      # persists suppressed by the material-hash gate (monotonic)
+# P3 change A: heartbeats served by a corr_current-only touch (no corr_objects
+# version, no Evidence item, no archive slice). Disjoint from both counters
+# above -- persisted + damped + heartbeat_touch is the complete outcome set for
+# an object whose content_hash moved.
+VERSIONS_HEARTBEAT_TOUCHED = 0
+# #101: corr_current is the HOT-read source of truth (Command Center serves
+# from it), so a lost projection dual-write means a STALE incident list — that
+# must be alertable, not WARN-only. Monotonic; exposed on /metrics + /healthz,
+# alerted by CorrCurrentProjectionFailing (src/config/rules.yaml), repaired by
+# the Go corr_current reconciler.
+PROJECTION_WRITE_FAILURES = 0
+
+# --- #101 chaos/storm fixtures -------------------------------------------
+# CORR_CHAOS_FIXTURES names INTENTIONAL storm sources: "name=match[,name=match]"
+# e.g. "lab_probe_storm_fixture_120=192.0.2.120". A persisted object whose
+# affected entities contain a match is tagged with the fixture name in
+# corr_current.chaos_fixture: Command Center badges it, the ticketing sweeper
+# skips it, and NOC dashboards can tell "known chaos" from a real incident —
+# while the storm still exercises damping + bounded IO end to end (that is the
+# fixture's job).
+
+
+def _parse_chaos_fixtures(raw: str) -> dict[str, str]:
+    """'name=match,...' → {match_substring: fixture_name}. Malformed pairs are
+    dropped loudly (observable, §10) — a silent typo would untag a storm."""
+    out: dict[str, str] = {}
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        name, sep, match = pair.partition("=")
+        if not sep or not name.strip() or not match.strip():
+            log.warning("CORR_CHAOS_FIXTURES: ignoring malformed pair %r", pair)
+            continue
+        out[match.strip()] = name.strip()
+    return out
+
+
+CHAOS_FIXTURES = _parse_chaos_fixtures(os.environ.get("CORR_CHAOS_FIXTURES", ""))
+
+
+def _chaos_fixture_for(snap: ObjectSnapshot) -> str:
+    """Fixture name when any affected entity matches a registered chaos source
+    ('' = real incident). Substring match: probe entities carry the target in
+    path/entity ids (e.g. 'path:prober->192.0.2.120')."""
+    if not CHAOS_FIXTURES:
+        return ""
+    for entities in snap.affected().values():
+        for ent in entities:
+            for match, name in CHAOS_FIXTURES.items():
+                if match in ent:
+                    return name
+    return ""
+
+
+# --- #101 per-tenant write-amplification accounting ------------------------
+# Bounded-cardinality storm attribution: per-tenant raw/persisted/damped counts
+# accumulate in-process and flush every CORR_WA_FLUSH_S seconds as ONE row per
+# (tenant, window) into netops.corr_tenant_write_amp (30-day TTL). Prometheus
+# exposure is capped at the top-K noisiest tenants of the LAST window — never
+# one series per tenant (metric-cardinality rule; the full per-tenant truth
+# lives in the rollup table, see docs/runbooks/correlation-storm.md).
+CORR_WA_FLUSH_S = float(os.environ.get("CORR_WA_FLUSH_S", "300"))
+CORR_WA_TOPK = int(os.environ.get("CORR_WA_TOPK", "5"))
+_WA_ENTITY_CAP = 1000  # bounded per-tenant entity Counter under a storm (§9)
+TENANT_WA: dict[str, dict] = {}   # tenant -> raw/persisted/damped + kind/entity Counters
+TENANT_WA_LAST: list[dict] = []   # last flushed window rows, sorted, top-K (for /metrics)
+_WA_WINDOW_START: datetime | None = None
+
+
+def _wa_slot(tenant: str) -> dict:
+    slot = TENANT_WA.get(tenant)
+    if slot is None:
+        slot = {"raw_seen": 0, "persisted": 0, "damped": 0,
+                # P3 change A: heartbeats served by a corr_current-only touch.
+                # They suppressed a corr_objects version exactly as `damped`
+                # does, so they count into the ratio below — but they are kept
+                # as their OWN key because they DID write (a projection row),
+                # and "damped" has always meant "wrote nothing".
+                "heartbeat_touch": 0,
+                "kinds": Counter(), "entities": Counter()}
+        TENANT_WA[tenant] = slot
+    return slot
+
+
+def _wa_note_raw(sig: Signal) -> None:
+    slot = _wa_slot(sig.tenant_id)
+    slot["raw_seen"] += 1
+    slot["kinds"][sig.kind] += 1
+    # Entity Counter is capped: past the cap only already-seen entities count,
+    # so the top-entity answer stays useful (a storm hammers few entities) and
+    # memory stays bounded under an adversarial entity spray.
+    if sig.entity_id in slot["entities"] or len(slot["entities"]) < _WA_ENTITY_CAP:
+        slot["entities"][sig.entity_id] += 1
+
+
+def _wa_note_outcome(tenant: str, outcome: str) -> None:
+    _wa_slot(tenant)[outcome] += 1
+
+
+async def _flush_tenant_write_amp(now: datetime) -> None:
+    """Flush the accumulated per-tenant window to ClickHouse + refresh the
+    top-K exposition. Failure is observable and non-fatal; the window resets
+    either way (the flush is a TIMER — it must never backpressure the engine).
+
+    Tracker 189: "non-fatal" used to mean the whole window was DROPPED — one
+    insert carries every tenant's raw/persisted/damped accounting for those
+    300 s, nothing redelivers a timer, and the only trace was `lost_total++`.
+    The rows are now durably spooled by `ch_insert`'s give-up path
+    (corr_tenant_write_amp is in CH_DLQ_ON_LOSS_TABLES) and retried under a
+    stable `natural_key_token` first, so what stays best-effort is the
+    SCHEDULING, not the data. The `except` below is the last resort for a
+    caller-side failure (row building, an unexpected sink error) — by the time
+    it runs, `_ch_give_up` has already made the durable copy or counted the
+    loss."""
+    global TENANT_WA, TENANT_WA_LAST, _WA_WINDOW_START
+    if _WA_WINDOW_START is None:
+        _WA_WINDOW_START = now
+        return
+    elapsed = (now - _WA_WINDOW_START).total_seconds()
+    if elapsed < CORR_WA_FLUSH_S:
+        return
+    window_start, TENANT_WA_ROWS, TENANT_WA = _WA_WINDOW_START, TENANT_WA, {}
+    _WA_WINDOW_START = now
+    if not TENANT_WA_ROWS:
+        TENANT_WA_LAST = []
+        return
+    ages: dict[str, float] = {}
+    for reg in OPEN_OBJECTS.values():
+        t = reg["snapshot"].tenant_id
+        age = (now - reg.get("opened_at", now)).total_seconds()
+        ages[t] = max(ages.get(t, 0.0), age)
+    open_counts: dict[str, int] = {}
+    for reg in OPEN_OBJECTS.values():
+        t = reg["snapshot"].tenant_id
+        open_counts[t] = open_counts.get(t, 0) + 1
+    rows = []
+    for tenant, wa in TENANT_WA_ROWS.items():
+        suppressed = wa["damped"] + wa.get("heartbeat_touch", 0)
+        total = wa["persisted"] + suppressed
+        top_kind = wa["kinds"].most_common(1)
+        top_entity = wa["entities"].most_common(1)
+        rows.append({
+            "tenant_id": tenant,
+            # Epoch-ms scaled-integer insert (S4/R1) — never server-TZ dependent.
+            "window_start": int(window_start.timestamp()) * 1000 + window_start.microsecond // 1000,
+            "window_s": int(elapsed),
+            "raw_seen": wa["raw_seen"],
+            "persisted": wa["persisted"],
+            "damped": suppressed,
+            "damping_ratio": round(suppressed / total, 4) if total else 0.0,
+            "top_signal_kind": top_kind[0][0] if top_kind else "",
+            "top_entity": top_entity[0][0] if top_entity else "",
+            "open_objects": open_counts.get(tenant, 0),
+            "max_incident_age_s": int(ages.get(tenant, 0)),
+        })
+    if ch is not None:
+        try:
+            await ch_insert("netops.corr_tenant_write_amp", rows)
+        # Blanket on purpose, and no longer blind (§10): the traceback is kept
+        # at DEBUG below, which is why the BLE001 suppression this line used to
+        # carry is gone rather than merely moved.
+        except Exception as exc:
+            log.warning("tenant write-amp flush failed (rows=%d; durable copy "
+                        "and accounting handled by the ch_insert give-up path, "
+                        "window still exposed in metrics): %s",
+                        len(rows), type(exc).__name__)
+            log.debug("tenant write-amp flush failure detail", exc_info=exc)
+    TENANT_WA_LAST = sorted(
+        rows, key=lambda r: (r["persisted"] + r["damped"], r["raw_seen"]), reverse=True,
+    )[:CORR_WA_TOPK]
+# §8 degradation. Topology is stale when the Go exporter stopped refreshing the
+# seam/links files (mtime older than ~2-3 export intervals; export runs every 60s).
+CORR_TOPO_STALE_S = float(os.environ.get("CORR_TOPO_STALE_S", "180"))
+STORM_BUFFER_FRACTION = float(os.environ.get("CORR_STORM_FRACTION", "0.9"))
+# Storm-mode EXIT threshold (gate spec §7a, 2026-08-22): every formal alarm
+# standard defines storms with HYSTERESIS (ISA-18.2: flood enters >10/10min,
+# exits <5/10min — a 2:1 band). A single threshold flaps the declaration at
+# the boundary, and the declaration is a per-snapshot honesty stamp — it must
+# describe a STATE, not the last sample. Enter at STORM_BUFFER_FRACTION, exit
+# only below CORR_STORM_EXIT_FRACTION (default half the entry, mirroring the
+# standards' band).
+STORM_EXIT_FRACTION = float(os.environ.get("CORR_STORM_EXIT_FRACTION", "0.45"))
+# Explicit storm mode (design 2026-08-28) — the BACKLOG-AGE arm of detection. The
+# 2.5k failure (SCALE_2P5K_POSTFIX_VERDICT) survived losslessly but oldest_pending
+# reached 310s: the buffer-fraction arm can be BELOW its threshold while the engine
+# is still current-limited (the backlog is event-time old, not count-full). So storm
+# is ALSO declared when the oldest unevaluated signal's event-time age exceeds this.
+# Event-time (pure function of window content + processed set) → no wall-clock, so
+# the recorded storm_mode flag stays deterministic/replay-safe. <=0 disables the arm.
+CORR_STORM_BACKLOG_AGE_S = float(os.environ.get("CORR_STORM_BACKLOG_AGE_S", "120"))
+# §3 aggregation floor: severity BELOW which a would-be-skipped singleton episode is
+# folded into the per-tenant storm-noise aggregate. Empty ⇒ the engine defaults it to
+# severity_open_floor (aggregate exactly the below-open-floor episodes). Never applied
+# above the open floor — aggregation only touches what never opens a real object (§5).
+CORR_STORM_AGG_FLOOR = os.environ.get("CORR_STORM_AGG_FLOOR", "").strip()
+# §4 severity-aware eviction: when the window is FULL under a declared storm, the
+# victim is the lowest-severity signal among the oldest CORR_STORM_EVICT_SCAN — so a
+# critical is never shed while a low-value signal sits in that scan window (raw always
+# stays in Kafka regardless). Bounded (O(scan)) so it can never reintroduce the
+# tracker-156 prune stall; the guarantee is "no critical dropped while a low-value is
+# within the scan bound", which the overload path can hold at wire speed.
+CORR_STORM_EVICT_SCAN = max(1, int(os.environ.get("CORR_STORM_EVICT_SCAN", "512")))
+_STORM_ACTIVE = False
+
+
+def _storm_state(buffered: int, maxlen: int, oldest_pending_age_s: float = 0.0) -> bool:
+    """Hysteretic storm-mode state machine; called once per epoch.
+
+    Two arms, OR'd into one declared state (design §"Detection tuning"): the
+    hysteretic buffer-fraction arm (ISA-18.2 entry/exit band, unchanged) and the
+    backlog-age arm (oldest unevaluated signal older than CORR_STORM_BACKLOG_AGE_S).
+    Both are pure functions of window state; the default oldest_pending_age_s=0.0
+    keeps every existing caller/test on the buffer arm alone."""
+    global _STORM_ACTIVE
+    frac = buffered / (maxlen or 1)
+    backlog_arm = (CORR_STORM_BACKLOG_AGE_S > 0.0
+                   and oldest_pending_age_s >= CORR_STORM_BACKLOG_AGE_S)
+    if _STORM_ACTIVE:
+        buffer_arm = frac > STORM_EXIT_FRACTION
+    else:
+        buffer_arm = frac >= STORM_BUFFER_FRACTION
+    _STORM_ACTIVE = buffer_arm or backlog_arm
+    return _STORM_ACTIVE
+# Path-causality RCA P2 (design §2.4): assemble the tenant's typed causal paths from
+# the LIVE measured path observations and hand them to run_window for the on-path
+# attribution enrichment. Additive + killable; a pure no-op when no path is observed.
+CORR_PATH_ATTRIBUTION = os.environ.get("CORR_PATH_ATTRIBUTION", "true").lower() not in ("0", "false", "no", "off")
+CORR_MAX_DISCOVERY_PATHS = int(os.environ.get("CORR_MAX_DISCOVERY_PATHS", "32"))
+_PATH_ASSEMBLER = PathAssembler()
+# C6 passive_flow: aggregate flow volume per exporting interface, flush each engine
+# cycle through CUSUM → passive_flow episodes. Flows are a firehose — accumulation is
+# O(1) per flow and the flush is bounded by (samplers × interfaces).
+FLOW_CORRELATION_ENABLED = os.environ.get("ENABLE_FLOW_CORRELATION", "true") == "true"
+_FLOW_AGG: dict[tuple, dict] = {}   # (tenant, entity_id) -> {bytes, sampler}
+# #98 Phase 4 — per-application flow volume, populated ONLY for records with a
+# confirming attribution (explicit / appid-fusion / operator prefix map). The
+# interface aggregation above is untouched: one flow can feed BOTH groundings.
+_FLOW_APP_AGG: dict[tuple, dict] = {}   # (tenant, app_slug) -> {bytes, sampler, source, confidence}
+_APPID_INDEX = AppIdentityIndex()       # tenant-scoped dst_ip → fused app identity
+FLOWS_RECEIVED = 0
+FLOWS_DROPPED = 0   # records flow_sample() could not attribute/measure (F-42)
+PASSIVE_FLOW_SIGNALS = 0
+_FLOW_DROP_LOG_LAST = -1e9
+FLOW_DROP_LOG_EVERY_S = float(os.environ.get("CORR_FLOW_DROP_LOG_EVERY_S", "60"))
+
+
+def _log_flow_drop(ev: dict) -> None:
+    """One sample line per interval naming the fields that were missing — flows
+    are a firehose, so the counter is exact and the LOG is rate-limited."""
+    global _FLOW_DROP_LOG_LAST
+    now = time.monotonic()
+    if (now - _FLOW_DROP_LOG_LAST) < FLOW_DROP_LOG_EVERY_S:
+        return
+    _FLOW_DROP_LOG_LAST = now
+    log.warning("flow record dropped: unparseable/unattributable (dropped_total=%d) fields=%s",
+                FLOWS_DROPPED, sorted(ev)[:20])
+# C7.3 NetFlow direction: directed per-pair volume, tenant → {(src_dev,dst_dev): bytes}.
+# Accumulated CONTINUOUSLY (no reset) — the dominant direction is the structural
+# forwarding direction (the causal prior: A normally upstream of B), stable under a
+# fault that breaks but doesn't reverse it; a ratio is steady under steady traffic.
+# Bounded by communicating device-pairs. Feeds the oracle's NetFlow source each cycle.
+# (Rolling/decay window for faster reversal detection = a documented future refinement.)
+_FLOW_DIR: dict[str, dict[tuple, float]] = {}
+FLOW_DIR_MAX_PAIRS = int(os.environ.get("CORR_MAX_FLOW_DIR_PAIRS", "100000"))
+FLOW_DIRECTION_DOMINANCE = float(os.environ.get("CORR_FLOW_DOMINANCE", "0.6"))
+FLOW_DIRECTION_PAIRS = 0  # observability: distinct directed device-pairs seen
+SEAM_ENRICHMENT_FILE = os.environ.get("SEAM_ENRICHMENT_FILE", "/data/enrichment/seams.json")
+# L2/L3 adjacency (LLDP/CDP/BGP-LS links) exported by the Go API — the grounding
+# input for the §4.2 "L2/L3 adjacent device" rung (G1). Absent file = no adjacency
+# (gate falls back to seam/containment, identical to before — honest, never relaxed).
+TOPO_LINKS_FILE = os.environ.get("TOPO_LINKS_FILE", "/data/enrichment/topology_links.json")
+# Service Path Graph (docs/design/service-path-graph-contract.md §2/§7): the EXPLICIT
+# relationship inventory — endpoints (address↔entity bindings with a network context
+# and a validity window), immutable path observations with ORDERED hops, application→
+# endpoint bindings, NAT sessions and (inferred) cloud routes — exported by the Go API
+# the same way seams.json is. This is what replaces token overlap as the basis of edge
+# admission (§3). Absent file = empty view: the engine still grounds on identity /
+# seam / adjacency, and token overlap still forms a CANDIDATE (never authoritative)
+# edge — honest degradation, never a relaxed gate.
+PATH_GRAPH_FILE = os.environ.get("PATH_GRAPH_FILE", "/data/enrichment/path_graph.json")
+# Cloud service dependency map (Wave 3 #9, cloud_dependency.py): per-service
+# end-user→DNS→WAF→LB→firewall→app tier chains + volume-weighted flow edges,
+# exported as enrichment JSON ({"services": [...], "flows": [...]}). Built into
+# path-graph objects (Endpoints / ServiceBindings / inferred RouteRelations /
+# flow-observed PathObservations) and MERGED into the Service Path Graph view the
+# grounding gate reads — this is what welds an edge-device fault (LB 5xx / WAF
+# block / SG-NACL reject / DNS failure) and the app's cloud_health symptom into
+# ONE object so the sig.ent.app.edge-* signatures can NAME the tier. Absent file
+# = empty view: no cloud dependency records ⇒ no edges, never fabricated.
+CLOUD_DEPENDENCY_FILE = os.environ.get(
+    "CLOUD_DEPENDENCY_FILE", "/data/enrichment/cloud_dependency.json")
+# corr_edges v2 (typed edges + evidence columns) is a ClickHouse migration owned by the
+# backend. Until it lands the typed rows are computed and embedded in the snapshot
+# (hypotheses.grounding_context.path_graph) but not written to their own table.
+CORR_EDGES_V2 = os.environ.get("CORR_EDGES_V2", "false").lower() == "true"
+CORR_PATH_EDGES_TABLE = os.environ.get("CORR_PATH_EDGES_TABLE", "netops.corr_path_edges")
+# C7.1 EntityResolver inputs (IP→device, interface IP→ifName, (device,ifIndex)→ifName)
+# exported by the Go API. The keystone the directed-topology direction sources
+# (C7.3–C7.5) + G2 canonicalizer resolve raw IPs/ifIndexes through. Absent → resolver
+# abstains (UNKNOWN), never guesses.
+ENTITY_RESOLVER_FILE = os.environ.get("ENTITY_RESOLVER_FILE", "/data/enrichment/entity_resolver.json")
+# C7.4 measured forwarding paths (traceroute hop order) for the active-path-trace
+# direction source — the highest-precedence direction signal. Absent → source abstains.
+PROBE_PATHS_FILE = os.environ.get("PROBE_PATHS_ENRICH_FILE", "/data/enrichment/probe_paths.json")
+# C7.5 computed forwarding direction (BGP-LS/IGP SPF nexthops) for the routing source —
+# the lowest-precedence direction signal. Producer (SPF export) deferred until the
+# BGP-LS LSDB yields data; absent → source abstains (the engine directs via flow/trace).
+ROUTING_DIRECTION_FILE = os.environ.get("ROUTING_DIRECTION_FILE", "/data/enrichment/routing_direction.json")
+
+ENGINE_CFG = EngineConfig()
+CATALOG = builtin_catalog()
+
+# Evidence window: every canonical Signal written to the spine also lands here
+# (bounded by event-time age, pruned each cycle — §9 queues bounded).
+# #102: bound from the resource plan (CORR_WINDOW_BUFFER, floor 50k = the
+# audited constant) so the window scales with the container's memory budget.
+WINDOW_BUFFER: deque[Signal] = deque(
+    maxlen=max(50_000, int(os.environ.get("CORR_WINDOW_BUFFER", "50000"))))
+# Kafka delivery is at-least-once (auto-commit ~5s): a consumer restart
+# re-delivers recent messages, and a duplicated signal_id in the window
+# inflates snapshots and churns versions (found by basic testing — stored
+# signal_count 14 vs 10 unique). The buffer therefore dedupes by signal id;
+# the set is pruned alongside the buffer so memory stays bounded.
+_BUFFERED_IDS: set[str] = set()
+# The SAME ids, in window order, so eviction never recomputes one.
+#
+# TRACKER 156 (2026-08-20). `_prune_buffer` and the maxlen-eviction branch of
+# `buffer_signal` both did `str(WINDOW_BUFFER[0].signal_id)` — a uuid5, i.e. a
+# SHA-1 — for EVERY signal they evicted, inline on the event loop. buffer_signal
+# had already computed that exact id at insert time to key the dedup set, so the
+# work was pure recomputation, and it is unbounded: a 50,000-signal window aging
+# out in one prune is 50,000 SHA-1s with no await in between. Captured live on
+# 2026-08-20 as the top frame of a 30,989 ms stall — past the 30 s Kafka session
+# timeout — while the container had ~800 MB of FREE memory, so it is a stall
+# source entirely independent of memory pressure.
+#
+# Holding a second reference to a string that already lives in _BUFFERED_IDS
+# costs a pointer per entry, not a string: ~400 KB at the 50k floor.
+_BUFFERED_ID_ORDER: deque[str] = deque(
+    maxlen=max(50_000, int(os.environ.get("CORR_WINDOW_BUFFER", "50000"))))
+# Times the id deque had to be rebuilt because it drifted from the window.
+# Should be 0 in production; non-zero means something mutated one without the
+# other, which the self-heal makes SLOW and VISIBLE rather than WRONG.
+WINDOW_ID_ORDER_RESYNCS = 0
+
+# Housekeeping observability (tracker 156 architecture review, 2026-08-20).
+# The 30,989 ms prune stall was findable ONLY because a bespoke forensic build
+# captured stacks; the service itself exposed nothing about its own maintenance
+# work. These are the minimum that make a prune regression visible in
+# production: how often it runs, how much it evicts, and how long it holds the
+# loop. Deliberately low-cardinality — no per-tenant labels.
+PRUNE_CALLS = 0             # prune invocations (monotonic)
+PRUNE_EVICTED = 0           # signals evicted by age (monotonic)
+PRUNE_SECONDS_LAST = 0.0    # duration of the most recent prune (gauge)
+PRUNE_SECONDS_MAX = 0.0     # worst prune this process has done (gauge)
+# TRACKER 171 (residual, 2026-08-30). CORR_ENGINE_EPOCH_BUDGET_S bounds a drain
+# epoch only BETWEEN cohorts, so the honest worst-case maintenance starvation is
+# `budget + one cohort` — a claim nothing in the process measured. Maintenance
+# (retention prune) runs exactly ONCE per epoch, at its head (_begin_epoch), so
+# the wall gap between two successive prune passes IS the maintenance interval,
+# and its running maximum is the observed worst starvation. Monotonic clock, so
+# an NTP step cannot manufacture one. OBSERVATION ONLY: nothing schedules on it.
+PRUNE_GAP_MAX_S = 0.0       # widest gap ever left between prune passes (gauge)
+PRUNE_LAST_MONO: float | None = None   # None until the first pass; never a 0.0 sentinel
+
+# H14: event timestamps entering the LIVE window are bounded (see
+# buffer_signal). Clamped-future / stale-past counts, exposed on /healthz —
+# a device with a broken clock must be visible, never a silent re-stamp (§10).
+EVENT_TS_FUTURE_CLAMPED = 0
+EVENT_TS_PAST_STALE = 0
+_TS_BOUND_LOG_LAST = -1e9      # rate-limits the WARN (one broken clock ≠ log storm)
+TS_BOUND_LOG_EVERY_S = 60.0
+
+# Open-object registry: correlation_id → persistence state. CH stays append-
+# only; this is the engine's working memory (PG corr_active wiring follows
+# with the ops lifecycle build).
+#
+# TRACKER 155, and read this before assuming it is empty at start-up: it is
+# per-process working memory with no STATE rehydration, but its IDENTITIES are
+# now reconstructed when a partition is acquired. `_run_ownership_seed` loads
+# the still-open objects of the acquired tenants and registers an identity
+# PLACEHOLDER for each (`seed_only`) so arriving evidence continues the incident
+# under its original correlation_id instead of minting a fragment. A placeholder
+# holds identity ONLY — no verdict, no edges, no signals — and is never
+# persisted; see `_seed_only`.
+OPEN_OBJECTS: dict[str, dict] = {}
+LAST_GAP_HINTS = 0
+
+_seam_cache: tuple[SeamView, ...] = ()
+_seam_mtime: float = -1.0
+_path_graph_cache: PathGraphView = PathGraphView()
+_path_graph_mtime: float = -1.0
+_cloud_dep_cache: PathGraphView = PathGraphView()
+_cloud_dep_mtime: float = -1.0
+_adj_cache: dict[str, list[dict]] = {}
+_adj_mtime: float = -1.0
+
+
+def topology_links_by_tenant() -> dict[str, list[dict]]:
+    """L2/L3 device adjacency for the grounding gate (G1), exported by the Go API
+    from LLDP/CDP/BGP-LS, grouped by tenant ("" = global). mtime-cached; absent/
+    unreadable file = empty (gate uses only seam/containment — backward compatible).
+    Tenant-scoped at use (a tenant grounds on its own links ∪ global), mirroring
+    seam_inventory's tenant filter — adjacency never crosses tenants."""
+    global _adj_cache, _adj_mtime
+    try:
+        mt = os.path.getmtime(TOPO_LINKS_FILE)
+    except OSError:
+        # File gone: keep serving the last-known adjacency (dropping it would
+        # collapse grounding mid-incident) — but this view is now FROZEN, and
+        # _topology_stale ages it into staleness so nothing scored under it is
+        # declared fresh.
+        return _adj_cache
+    if mt != _adj_mtime:
+        _adj_mtime = mt
+        try:
+            with open(TOPO_LINKS_FILE) as f:
+                raw = json.load(f)
+            links = raw if isinstance(raw, list) else raw.get("links", [])
+            grouped: dict[str, list[dict]] = {}
+            for link in links:
+                grouped.setdefault(str(link.get("tenant_id") or ""), []).append(link)
+            _adj_cache = grouped
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            log.warning("topology links unreadable (%s); keeping previous adjacency", exc)
+    return _adj_cache
+
+
+_er_raw: dict[str, dict[str, list]] = {"devices": {}, "interface_ips": {}, "ifindex": {}}
+_er_mtime: float = -1.0
+
+
+def _entity_resolver_raw() -> dict[str, dict[str, list]]:
+    """Parse entity_resolver.json into section → tenant → rows, mtime-cached. Absent/
+    unreadable file = empty (resolver abstains — UNKNOWN, never a guess). Tenant-scoped
+    at use (a tenant's rows ∪ global), mirroring seam/adjacency — never cross-tenant."""
+    global _er_raw, _er_mtime
+    try:
+        mt = os.path.getmtime(ENTITY_RESOLVER_FILE)
+    except OSError:
+        return _er_raw
+    if mt != _er_mtime:
+        _er_mtime = mt
+        try:
+            with open(ENTITY_RESOLVER_FILE) as f:
+                raw = json.load(f)
+            grouped: dict[str, dict[str, list]] = {"devices": {}, "interface_ips": {}, "ifindex": {}}
+            for section, by_tenant in grouped.items():
+                for row in raw.get(section) or []:
+                    by_tenant.setdefault(str(row.get("tenant_id") or ""), []).append(row)
+            _er_raw = grouped
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            log.warning("entity resolver unreadable (%s); keeping previous", exc)
+    return _er_raw
+
+
+def entity_resolver_for(tenant: str) -> EntityResolver:
+    """A resolver scoped to one tenant: its rows ∪ global ("") — never cross-tenant.
+    Cheap to build (dict comprehensions); the engine builds one per tenant per cycle."""
+    raw = _entity_resolver_raw()
+
+    def slice_(section: str) -> list:
+        return raw[section].get(tenant, []) + raw[section].get("", [])
+
+    return EntityResolver.from_rows(slice_("devices"), slice_("interface_ips"), slice_("ifindex"))
+
+
+_resolver_cache: dict[str, EntityResolver] = {}
+_resolver_cache_mtime: float = -1.0
+_ALL_RESOLVER_KEY = "\x00all"   # cache key for the cross-tenant ingest resolver (can't be a tenant id)
+
+
+def cached_entity_resolver_all() -> EntityResolver:
+    """A resolver over ALL devices (every tenant ∪ global), for INGEST ATTRIBUTION
+    only — IP→device id, after which the device's tenant is derived via tenant_for().
+    This mirrors G2a's all-device source-IP matching and tenant_for's global view; the
+    result is routed to its rightful tenant, so it is not a cross-tenant data leak.
+    Never used to SERVE tenant-scoped data (that always goes through the per-tenant
+    resolver)."""
+    global _resolver_cache, _resolver_cache_mtime
+    _entity_resolver_raw()
+    if _er_mtime != _resolver_cache_mtime:
+        _resolver_cache = {}
+        _resolver_cache_mtime = _er_mtime
+    r = _resolver_cache.get(_ALL_RESOLVER_KEY)
+    if r is None:
+        raw = _entity_resolver_raw()
+
+        def rows(section: str) -> list:
+            return [row for per in raw[section].values() for row in per]
+
+        r = EntityResolver.from_rows(rows("devices"), rows("interface_ips"), rows("ifindex"))
+        _resolver_cache[_ALL_RESOLVER_KEY] = r
+    return r
+
+
+def cached_entity_resolver_for(tenant: str) -> EntityResolver:
+    """entity_resolver_for, memoized per (tenant, file mtime) — handle_flow is a
+    firehose, so the resolver is built only when entity_resolver.json changes, not
+    per flow."""
+    global _resolver_cache, _resolver_cache_mtime
+    _entity_resolver_raw()  # refresh the underlying mtime cache
+    if _er_mtime != _resolver_cache_mtime:
+        _resolver_cache = {}
+        _resolver_cache_mtime = _er_mtime
+    r = _resolver_cache.get(tenant)
+    if r is None:
+        r = entity_resolver_for(tenant)
+        _resolver_cache[tenant] = r
+    return r
+
+
+_probe_paths: list[dict] = []
+_probe_paths_mtime: float = -1.0
+
+
+def probe_paths() -> list[dict]:
+    """Measured forwarding paths ([{hops:[ip,...]}]) for the C7.4 direction source,
+    mtime-cached. Absent/unreadable = empty (source abstains). NOT tenant-scoped here —
+    hop IPs are resolved per-tenant downstream, so a tenant orients only its own
+    devices (a foreign hop won't resolve → that pair abstains): zero-leak."""
+    global _probe_paths, _probe_paths_mtime
+    try:
+        mt = os.path.getmtime(PROBE_PATHS_FILE)
+    except OSError:
+        return _probe_paths
+    if mt != _probe_paths_mtime:
+        _probe_paths_mtime = mt
+        try:
+            with open(PROBE_PATHS_FILE) as f:
+                raw = json.load(f)
+            _probe_paths = raw if isinstance(raw, list) else []
+        except (OSError, ValueError, TypeError) as exc:
+            log.warning("probe paths unreadable (%s); keeping previous", exc)
+    return _probe_paths
+
+
+_routing_dir: list[dict] = []
+_routing_dir_mtime: float = -1.0
+
+
+def routing_direction() -> list[dict]:
+    """Computed forwarding pairs ([{from,to}]) for the C7.5 routing source, mtime-
+    cached. Absent/unreadable = empty (source abstains — its SPF producer is deferred
+    until the BGP-LS LSDB has data). Resolved entities are device ids already, so the
+    per-tenant oracle only orients pairs whose devices are in this tenant's component."""
+    global _routing_dir, _routing_dir_mtime
+    try:
+        mt = os.path.getmtime(ROUTING_DIRECTION_FILE)
+    except OSError:
+        return _routing_dir
+    if mt != _routing_dir_mtime:
+        _routing_dir_mtime = mt
+        try:
+            with open(ROUTING_DIRECTION_FILE) as f:
+                raw = json.load(f)
+            _routing_dir = raw if isinstance(raw, list) else []
+        except (OSError, ValueError, TypeError) as exc:
+            log.warning("routing direction unreadable (%s); keeping previous", exc)
+    return _routing_dir
+
+
+def seam_inventory() -> tuple[SeamView, ...]:
+    """Active seam inventory for the grounding gate, exported by the Go API
+    (suggest→confirm→active happens there; only ACTIVE instances ground).
+    mtime-cached like tenant_for; absent file = empty inventory (the gate then
+    admits only explicit-topology edges — honest, never relaxed)."""
+    global _seam_cache, _seam_mtime
+    try:
+        mt = os.path.getmtime(SEAM_ENRICHMENT_FILE)
+    except OSError:
+        return _seam_cache
+    if mt != _seam_mtime:
+        _seam_mtime = mt
+        try:
+            with open(SEAM_ENRICHMENT_FILE) as f:
+                raw = json.load(f)
+            _seam_cache = tuple(SeamView.from_dict(d) for d in raw)
+        except (OSError, ValueError, KeyError) as exc:
+            log.warning("seam inventory unreadable (%s); keeping previous view", exc)
+    return _seam_cache
+
+
+def cloud_dependency_inventory() -> PathGraphView:
+    """The cloud service dependency view (cloud_dependency.py) built from the
+    enrichment export at CLOUD_DEPENDENCY_FILE. mtime-cached like seam_inventory();
+    absent file = the empty view (no cloud dependency records ⇒ no edges — the
+    builder fails closed and fabricates nothing), unreadable file = the last good
+    view (never a silently emptied one mid-incident). Tenancy rides each emitted
+    object (build_from_records drops tenant-less records), so run_window's
+    for_tenant() scoping applies to these edges exactly as to the Go-exported ones."""
+    global _cloud_dep_cache, _cloud_dep_mtime
+    try:
+        mt = os.path.getmtime(CLOUD_DEPENDENCY_FILE)
+    except OSError:
+        return _cloud_dep_cache
+    if mt != _cloud_dep_mtime:
+        _cloud_dep_mtime = mt
+        try:
+            with open(CLOUD_DEPENDENCY_FILE) as f:
+                raw = json.load(f)
+            _cloud_dep_cache = build_from_records(raw if isinstance(raw, dict) else {})
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            log.warning("cloud dependency map unreadable (%s); keeping previous view", exc)
+    return _cloud_dep_cache
+
+
+def path_graph_inventory() -> PathGraphView:
+    """The Service Path Graph view for the grounding gate (contract §2): the
+    Go-exported inventory MERGED with the cloud service dependency view
+    (cloud_dependency_inventory() above) — one graph, so an app's edge devices
+    (DNS/WAF/LB/firewall) ground into the app's object. mtime-cached like
+    seam_inventory(); absent/unreadable file = the last good view (never a
+    silently emptied one mid-incident). Tenant scoping happens in run_window(),
+    which calls PathGraphView.for_tenant() before ANY lookup — a path object with
+    no tenant_id is reachable by nobody (fail-closed: unlike seams, there are no
+    platform-scoped path relationships)."""
+    global _path_graph_cache, _path_graph_mtime
+    try:
+        mt = os.path.getmtime(PATH_GRAPH_FILE)
+    except OSError:
+        pass
+    else:
+        if mt != _path_graph_mtime:
+            _path_graph_mtime = mt
+            try:
+                with open(PATH_GRAPH_FILE) as f:
+                    raw = json.load(f)
+                _path_graph_cache = PathGraphView.from_dict(raw if isinstance(raw, dict) else {})
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                log.warning("path graph unreadable (%s); keeping previous view", exc)
+    dep = cloud_dependency_inventory()
+    if not (dep.endpoints or dep.observations or dep.service_bindings or dep.routes):
+        # No cloud dependency records ⇒ the Go view unchanged (an empty merge must
+        # not touch the base view's freshness budget).
+        return _path_graph_cache
+    return merge_path_views(_path_graph_cache, dep)
+
+
+def cloud_topology_snapshots() -> dict[str, dict]:
+    """The cloud inventory topology snapshots for the INVENTORY discovery source,
+    read from CLOUD_TOPOLOGY_DIR (deployment/docker/cloud-fixtures/*-topology.json,
+    mounted read-only). mtime-cached per file like the other enrichment loaders; an
+    unreadable/absent dir yields the last-good snapshots (never a silently emptied one
+    mid-incident). Returns {filename: topology_dict}. Tenancy is applied by the CALLER
+    (stamped with CLOUD_LOGS_TENANT) — a fixture carries no tenant of its own."""
+    if not CLOUD_TOPOLOGY_DIR and not CLOUD_TOPOLOGY_RUNTIME_DIR:
+        return {}
+    try:
+        # Fixture layer first, then the runtime layer: a live-poller snapshot
+        # shadows the tracked fixture of the same basename (runtime split).
+        present: dict[str, str] = {}
+        for d in (CLOUD_TOPOLOGY_DIR, CLOUD_TOPOLOGY_RUNTIME_DIR):
+            if not d:
+                continue
+            for p in glob.glob(os.path.join(d, "*-topology.json")):
+                present[os.path.basename(p)] = p
+    except OSError as exc:
+        log.warning("cloud topology dir unreadable (%s); keeping previous snapshots", exc)
+        return _cloud_topo_cache
+    # drop snapshots whose file has disappeared (never serve a stale, removed topology).
+    for gone in [n for n in _cloud_topo_cache if n not in present]:
+        _cloud_topo_cache.pop(gone, None)
+        _cloud_topo_mtimes.pop(gone, None)
+    for name, path in present.items():
+        try:
+            mt = os.path.getmtime(path)
+        except OSError:
+            continue
+        if _cloud_topo_mtimes.get(name) == mt:
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                _cloud_topo_cache[name] = raw
+                _cloud_topo_mtimes[name] = mt
+        except (OSError, ValueError, TypeError) as exc:
+            log.warning("cloud topology %s unreadable (%s); keeping previous", name, exc)
+    return _cloud_topo_cache
+
+
+def _flow_discovery_edges(tenant: str) -> tuple[DiscoveredEdge, ...]:
+    """FLOW discovery source (precedence 2): this tenant's directed NetFlow per-pair
+    volume (_FLOW_DIR[tenant], the C7.3 lane) → directed DiscoveredEdges via the P1
+    adapter. STRICTLY this tenant's own map (never the "" global) — a path that seeds
+    attribution must never carry another tenant's / untagged flow (§3a default-closed)."""
+    vol = _FLOW_DIR.get(tenant, {})
+    pairs = [(a, b) for (a, b), nbytes in vol.items() if nbytes > 0]
+    if not pairs:
+        return ()
+    return flow_edges_from_pairs(tenant, pairs, f"netflow:{tenant}")
+
+
+def _inventory_discovery_edges(tenant: str) -> tuple[DiscoveredEdge, ...]:
+    """INVENTORY discovery source (precedence 3): the cloud topology snapshots →
+    inventory edges via the P1 adapter. Default-CLOSED and tenant-gated: contributes
+    ONLY for the single CLOUD_LOGS_TENANT that owns the demo cloud data (a fixture has
+    no tenant of its own, exactly as the cloud-log tailer stamps it), so no other
+    tenant's path can ever include a cloud-inventory edge (§3a)."""
+    if not CLOUD_TOPOLOGY_DIR or not CLOUD_LOGS_TENANT or tenant != CLOUD_LOGS_TENANT:
+        return ()
+    out: list[DiscoveredEdge] = []
+    for name, topo in sorted(cloud_topology_snapshots().items()):
+        out.extend(inventory_edges_from_topology(tenant, topo, f"cloud-topo:{name}"))
+    return tuple(out)
+
+
+def _dns_heads_from_window(tenant: str, window) -> dict[str, DnsHead]:
+    """DNS discovery source: the tenant's cloud_dns_log signals in THIS window → path
+    HEADs (the resolved frontend the app depends on). entity_id is the resolved NAME;
+    a failed resolution carries no answer, so resolved_address stays empty (honest —
+    never a fabricated address). Keyed by resolved_address when known else query_name,
+    so a scope whose endpoint is that frontend can attach its head. Tenant-filtered."""
+    heads: dict[str, DnsHead] = {}
+    for s in window:
+        if s.tenant_id != tenant or s.kind != "cloud_dns_log":
+            continue
+        name = str(s.entity_id or "").strip()
+        if not name:
+            continue
+        attrs = s.attrs if isinstance(s.attrs, dict) else {}
+        resolved = str(attrs.get("resolved_address") or attrs.get("answer") or "").strip()
+        key = resolved or name
+        heads.setdefault(key, DnsHead(
+            tenant_id=tenant, query_name=name, resolved_address=resolved,
+            evidence_ref=f"dns:{name}"))
+    return heads
+
+
+def _edge_discovery_scopes(edges: tuple[DiscoveredEdge, ...], limit: int
+                           ) -> list[tuple[str, str]]:
+    """Derive candidate (src→dst) scopes from a directed edge graph: each path SOURCE
+    (a node with out-edges but no in-edge) to each path SINK (in-edge, no out-edge).
+    This scopes discovery to the AFFECTED src→dst path, never the whole VPC. Bounded by
+    `limit`. Falls back to any-out→any-in when the graph is a cycle with no clean end."""
+    has_in: set[str] = set()
+    has_out: set[str] = set()
+    for e in edges:
+        a, b = e.upstream.address, e.downstream.address
+        if not a or not b or a == b:
+            continue
+        has_out.add(a)
+        has_in.add(b)
+    srcs = sorted(has_out - has_in) or sorted(has_out)
+    dsts = sorted(has_in - has_out) or sorted(has_in)
+    scopes: list[tuple[str, str]] = []
+    for s in srcs:
+        for d in dsts:
+            if s != d:
+                scopes.append((s, d))
+                if len(scopes) >= limit:
+                    return scopes
+    return scopes
+
+
+def _head_for_scope(heads: dict[str, DnsHead], src: str, dst: str) -> DnsHead | None:
+    """Attach a DNS head to a scope ONLY when the name it resolved points at the scope's
+    frontend endpoint (dst, else src) — never force a head onto an unrelated path."""
+    for key in (dst, src):
+        if key and key in heads:
+            return heads[key]
+    return None
+
+
+def discovery_paths_for(tenant: str, view: PathGraphView,
+                        window: list | tuple = ()) -> tuple[AssembledPath, ...]:
+    """Build this tenant's P1 typed causal paths for the on-path attribution pass
+    (path-causality RCA P2 / step 4), FUSING all four discovery sources so a cloud
+    incident gets a discovered SRC→DST path even WITHOUT a traceroute (cloud hides hops):
+
+      * MEASURED  — the LIVE path observations the engine already loads (traceroute /
+        STAMP / transaction runs, exported by the Go API into the Service Path Graph)
+        via measured_run_from_observation. Precedence 1 — the spine when present.
+      * FLOW      — this tenant's directed NetFlow per-pair volume (_FLOW_DIR) via
+        flow_edges_from_pairs. Precedence 2.
+      * INVENTORY — the cloud topology snapshots (cloud-fixtures/*-topology.json) via
+        inventory_edges_from_topology. Precedence 3 — the cloud-without-traceroute path.
+      * DNS       — this window's cloud_dns_log resolutions as the path HEAD (the
+        resolved frontend the app depends on).
+
+    All four fold into the SAME DiscoverySources; P1's precedence (measured > flow >
+    inventory > route) fuses them. Scoped per (src→dst): measured endpoints ∪ the edge
+    graph's source→sink endpoints, so a path is the AFFECTED path, not the whole VPC.
+
+    Tenant-scoped (§3a): every feed is filtered/stamped to THIS tenant before assembly
+    (PathAssembler also drops any cross-tenant run/edge/head structurally). Additive +
+    honest: a feed with no data contributes nothing; when NONE of the four yield
+    anything the result is () — byte-identical to the pre-fusion no-op. Bounded
+    (CORR_MAX_DISCOVERY_PATHS scopes; assembler caps hops) and exception-safe — EACH
+    feed degrades to empty on failure and the whole build returns () on any error, so
+    attribution simply doesn't fire and the engine cycle is never broken (§9/§10)."""
+    if not CORR_PATH_ATTRIBUTION:
+        return ()
+    try:
+        # -- feed 1: MEASURED (the live source; groups by observed endpoints) --------
+        measured_groups: dict[tuple[str, str], list] = {}
+        try:
+            for o in (o for o in view.observations if canon_tenant(o.tenant_id) == canon_tenant(tenant) and o.hops):
+                run = measured_run_from_observation(o)
+                responding = [h.address for h in run.hops if h.responding]
+                if len(responding) < 2:
+                    continue  # a single-endpoint run is not a path — nothing to walk
+                measured_groups.setdefault((responding[0], responding[-1]), []).append(run)
+        except Exception as exc:  # noqa: BLE001 — one feed failing degrades to empty
+            log.warning("path-discovery measured feed failed tenant=%s: %s", tenant, exc)
+            measured_groups = {}
+
+        # -- feeds 2-4: FLOW / INVENTORY / DNS (each independently exception-safe) ----
+        try:
+            flow_edges = _flow_discovery_edges(tenant)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("path-discovery flow feed failed tenant=%s: %s", tenant, exc)
+            flow_edges = ()
+        try:
+            inv_edges = _inventory_discovery_edges(tenant)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("path-discovery inventory feed failed tenant=%s: %s", tenant, exc)
+            inv_edges = ()
+        try:
+            dns_heads = _dns_heads_from_window(tenant, window)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("path-discovery dns feed failed tenant=%s: %s", tenant, exc)
+            dns_heads = {}
+
+        # Inventory FIRST so its authoritative device role hints (to_kind: lb/nva/…)
+        # seed a node's identity before a hint-less flow edge for the same address does
+        # (the edge-spine takes the first HopNode seen per address). Source PRECEDENCE
+        # for ordering/direction is by rank inside the assembler, unaffected by list order.
+        edges = tuple(inv_edges) + tuple(flow_edges)
+
+        # NONE of the four sources yielded anything → () (byte-identical no-op).
+        if not measured_groups and not edges and not dns_heads:
+            return ()
+
+        # -- SCOPES: measured endpoints ∪ edge-graph source→sink endpoints -----------
+        scopes: list[tuple[str, str]] = list(measured_groups.keys())
+        if edges:
+            for scope in _edge_discovery_scopes(edges, CORR_MAX_DISCOVERY_PATHS):
+                if scope not in measured_groups:
+                    scopes.append(scope)
+        scopes = sorted(dict.fromkeys(scopes))[:CORR_MAX_DISCOVERY_PATHS]
+
+        paths: list[AssembledPath] = []
+        for (src, dst) in scopes:
+            runs = tuple(measured_groups.get((src, dst), ()))
+            bundle = DiscoverySources(
+                measured=runs, edges=edges,
+                dns_head=_head_for_scope(dns_heads, src, dst))
+            paths.append(_PATH_ASSEMBLER.assemble(tenant, src, dst, bundle))
+        return tuple(paths)
+    except Exception as exc:  # noqa: BLE001 — enrichment must never break the cycle
+        log.warning("path-attribution discovery build failed tenant=%s: %s", tenant, exc)
+        return ()
+
+
+def buffer_signal(sig: Signal) -> None:
+    # Decision #76 + verdicts.py Decision #1: a debug_only / platform-self-check probe
+    # (e.g. prober->nginx, api->netbox) stays SEARCHABLE — it's already in corr_signals —
+    # but must NEVER open or attach to a correlation object. RCA is the CUSTOMER's
+    # network, not the platform's own stack. Enforced here, at the single window-entry
+    # chokepoint, so run_window stays pure and replay is untouched (the archive is sliced
+    # from the window, so excluded signals simply never reach object formation).
+    if sig.attrs.get("probe_authority") == ProbeAuthority.DEBUG_ONLY.value:
+        return
+    # Decision #76 (engine-side): platform self-monitoring — a LOW-authority
+    # internal_self_probe (PLATFORM_SELF_CHECK / INTERNAL_COLLECTOR vantage, e.g.
+    # prober->clickhouse, api->netbox) is the platform's OWN stack, not the customer
+    # network. Like debug_only it stays SEARCHABLE in corr_signals but must never open
+    # or attach to a customer RCA object, so the customer-facing RCA list, coverage
+    # counts and Network Health Index reflect the monitored network only. (Stack
+    # Health watches the platform separately and does not read corr_objects.)
+    if sig.attrs.get("probe_scope") == ProbeScope.INTERNAL_SELF_PROBE.value:
+        return
+    # Canonical global-tenant spelling at the SINGLE live window-entry chokepoint
+    # (#113): ""-stamped signals become "global" so objects, write-amp buckets and
+    # every per-tenant join (path discovery above all) agree with the Go side and
+    # the path-observation exporter. Replay is untouched — it reconstructs archived
+    # signals directly into run_window, never through here, so per-object replay
+    # of pre-fix objects stays bit-perfect (#101 contract).
+    if sig.tenant_id != canon_tenant(sig.tenant_id):
+        sig = dc_replace(sig, tenant_id=canon_tenant(sig.tenant_id))
+    # H14: bound the DEVICE-supplied event timestamp at the same chokepoint.
+    # _prune_buffer pops from the LEFT of this arrival-ordered deque while
+    # ts < horizon — so ONE far-future head signal (a device clock years ahead)
+    # stopped pruning for EVERY tenant until restart. The metric lane already
+    # bounds its clock (handle_metric, METRIC_FUTURE_SKEW_S/METRIC_MAX_AGE_S);
+    # the syslog/trap/probe lanes trusted the device verbatim. A future ts past
+    # the same skew is clamped to arrival time (the honest estimate — the event
+    # DID just arrive; the device clock is the thing that's broken), preserving
+    # the signal's stored identity so window dedup, the archive slice and
+    # replay keep comparing the id the corr_signals row was written under. A
+    # ts too far in the PAST is deliberately NOT re-stamped — fabricating
+    # freshness would corrupt cause/effect order, and the arrival-ordered deque
+    # ages a stale head out on the very next prune — but it is counted, so a
+    # device stuck in the past is visible instead of silently never
+    # correlating. Both counts surface on /healthz + /metrics.
+    global EVENT_TS_FUTURE_CLAMPED, EVENT_TS_PAST_STALE, _TS_BOUND_LOG_LAST
+    arrival = datetime.now(timezone.utc)
+    age_s = (arrival - sig.ts).total_seconds()
+    if age_s < -METRIC_FUTURE_SKEW_S or age_s > METRIC_MAX_AGE_S:
+        mono = time.monotonic()
+        if (mono - _TS_BOUND_LOG_LAST) >= TS_BOUND_LOG_EVERY_S:
+            _TS_BOUND_LOG_LAST = mono
+            log.warning(
+                "event ts out of bounds (age=%.0fs, %s) tenant=%s entity=%s kind=%s — "
+                "future is clamped to arrival, past ages out of the window",
+                age_s, "future" if age_s < 0 else "past",
+                sig.tenant_id, sig.entity_id, sig.kind)
+        if age_s < 0:
+            EVENT_TS_FUTURE_CLAMPED += 1
+            sig = dc_replace(sig, ts=arrival, stored_signal_id=str(sig.signal_id))
+        else:
+            EVENT_TS_PAST_STALE += 1
+    # tracker 165 phase 6: share the two IMMUTABLE identity fields across the
+    # retained set. Done HERE, at the single window-entry chokepoint, so only
+    # signals that are actually retained pay for it and the transient ones do
+    # not. Both fields are immutable by type (str, tuple-of-str), so a shared
+    # reference cannot be written through and `to_ch_row()` stays byte-identical
+    # — equal strings serialise the same whatever their identity.
+    # `attrs` is NOT shared: it is a mutable dict and the probe path stamps into
+    # it after construction, so sharing it would let one signal's enrichment
+    # rewrite another's evidence.
+    shared_id = signals.shared_entity_id(sig.entity_id)
+    shared_toks = signals.shared_entity_tokens(sig.entity_tokens)
+    if shared_id is not sig.entity_id or shared_toks is not sig.entity_tokens:
+        sig = dc_replace(sig, entity_id=shared_id, entity_tokens=shared_toks)
+    sid = str(sig.signal_id)
+    if sid in _BUFFERED_IDS:
+        return  # at-least-once redelivery — the window already holds it
+    # The deque is maxlen-bounded (§9): once full, append() silently evicts the
+    # OLDEST signal. Drop that signal's id from the dedup set in lockstep — else the
+    # set leaks unboundedly under a flood AND a later redelivery of an evicted signal
+    # would be wrongly deduped (dropped) because its stale id lingers in the set.
+    _sync_buffered_id_order()
+    if len(WINDOW_BUFFER) == WINDOW_BUFFER.maxlen:
+        # The window is FULL and about to drop a signal to make room. Not data loss
+        # — the signal is already in corr_signals AND stays in Kafka at bus retention
+        # (design §4: storm mode NEVER drops from the durable bus) — but it IS a
+        # silent narrowing of the correlation horizon, which the 2026-08-20 review
+        # flagged as the one place state is shed with no counter.
+        global WINDOW_OVERFLOW_DROPPED, WINDOW_OVERFLOW_IN_HORIZON
+        global WINDOW_OVERFLOW_AGE_MIN_S, WINDOW_OVERFLOW_AGE_MAX_S
+        global STORM_SHED_LOWVALUE, STORM_SHED_CRITICAL_SPARED, STORM_AGGREGATED_TOTAL
+        # §4 severity-aware eviction: the plain deque sheds its OLDEST (head) — which
+        # is severity-BLIND and can drop a critical while low-value noise sits behind
+        # it. Under a DECLARED storm, choose the victim by lowest severity among the
+        # oldest CORR_STORM_EVICT_SCAN instead, so a critical is spared while any
+        # lower-value signal is within that (bounded, O(scan)) window. Non-storm and
+        # a scan of all-equal severity fall through to head eviction — byte-identical
+        # to before. Deterministic (a pure function of the buffer's severities).
+        victim_idx = 0
+        if _STORM_ACTIVE and len(WINDOW_BUFFER) > 1:
+            scan = min(CORR_STORM_EVICT_SCAN, len(WINDOW_BUFFER))
+            head_rank = _SEV_RANK[WINDOW_BUFFER[0].severity]
+            best_rank = head_rank
+            for i in range(1, scan):
+                r = _SEV_RANK[WINDOW_BUFFER[i].severity]
+                if r < best_rank:            # strictly lower ⇒ prefer the OLDEST such
+                    best_rank = r
+                    victim_idx = i
+            if victim_idx != 0 and head_rank > best_rank:
+                STORM_SHED_CRITICAL_SPARED += 1  # we spared a higher-severity head
+        victim = WINDOW_BUFFER[victim_idx]
+        victim_id = _BUFFERED_ID_ORDER[victim_idx]
+        WINDOW_OVERFLOW_DROPPED += 1
+        if _STORM_ACTIVE:
+            STORM_SHED_LOWVALUE += 1
+            STORM_AGGREGATED_TOTAL += 1  # counted, not a silent drop (§4/§10)
+        # How old was the signal we are shedding, measured against the newest evidence
+        # (the incoming signal)? Younger than ENGINE_REACH_S ⇒ it was still eligible.
+        victim_age = (sig.ts - victim.ts).total_seconds()
+        if victim_age < ENGINE_REACH_S:
+            WINDOW_OVERFLOW_IN_HORIZON += 1
+        if WINDOW_OVERFLOW_AGE_MIN_S == 0.0 or victim_age < WINDOW_OVERFLOW_AGE_MIN_S:
+            WINDOW_OVERFLOW_AGE_MIN_S = victim_age
+        WINDOW_OVERFLOW_AGE_MAX_S = max(WINDOW_OVERFLOW_AGE_MAX_S, victim_age)
+        _PROCESSED_IDS.discard(victim_id)
+        _BUFFERED_IDS.discard(victim_id)
+        if victim_idx != 0:
+            # Remove the chosen non-head victim from BOTH deques in lockstep (rotate
+            # the victim to the front, popleft, rotate back) so the append below does
+            # NOT also evict the head. O(scan)-bounded — never a full-window walk.
+            WINDOW_BUFFER.rotate(-victim_idx)
+            _BUFFERED_ID_ORDER.rotate(-victim_idx)
+            WINDOW_BUFFER.popleft()
+            _BUFFERED_ID_ORDER.popleft()
+            WINDOW_BUFFER.rotate(victim_idx)
+            _BUFFERED_ID_ORDER.rotate(victim_idx)
+        # else: the deque is still full and the append below evicts the head (victim),
+        # exactly as before — both deques drop their head in lockstep.
+    _BUFFERED_IDS.add(sid)
+    # Appended in lockstep, and both deques carry the SAME maxlen, so a full
+    # deque drops its head from both at once and the two stay aligned.
+    WINDOW_BUFFER.append(sig)
+    _BUFFERED_ID_ORDER.append(sid)
+    # tracker 165: this is the ONE place the stream clock advances, and it is
+    # the same chokepoint that already canonicalises the tenant and bounds the
+    # device clock — so the watermark can never be advanced by a signal the
+    # window rejected, nor by a tenant spelling the engine will not use.
+    _advance_watermark(sig, time.monotonic())
+    # #101 write-amp accounting: raw lane pressure per tenant (post-dedup, so a
+    # redelivered signal never double-counts).
+    _wa_note_raw(sig)
+
+
+def _window_span_s() -> float:
+    """Seconds of history the evidence window currently holds.
+
+    O(1) — the deque is arrival-ordered, so the ends are the extremes. Compared
+    against RETENTION_REQUIRED_S this says whether the COUNT bound or the TIME
+    bound is the one actually deciding what the engine gets to correlate over.
+    """
+    if len(WINDOW_BUFFER) < 2:
+        return 0.0
+    return (WINDOW_BUFFER[-1].ts - WINDOW_BUFFER[0].ts).total_seconds()
+
+
+# ── tracker 165: the retention contract, derived from engine semantics ────────
+#
+# `ENGINE_CFG.window_s` (900 s) was never an RCA contract. It entered in the
+# first engine commit (c5de198c, 2026-06-12) with the comment "evidence window
+# the caller buffers", was never changed, has no env override, and no doc, test,
+# API schema or customer surface references a 15-minute horizon. It is a
+# buffering constant, and a count cap (CORR_WINDOW_BUFFER) silently overrode it
+# anyway: on the 1K rig the window held 54.5 s of evidence while full.
+#
+# The authority is the SCORING rule, so the requirement is derived from it:
+#
+#     required_retention = engine_temporal_reach + permitted_lateness
+#
+# engine_temporal_reach comes from engine.py and moves automatically if anyone
+# retunes tau_s / attach_threshold / the grounding weights.
+#
+# permitted_lateness is a DEPLOYMENT fact and is therefore not guessed here. Its
+# floor is one engine evaluation interval: a signal that survives to the horizon
+# but not through the next cycle is never actually scored against, so retaining
+# less than one cycle beyond the reach cannot preserve the semantics. Anything
+# above that floor must come from the MEASURED event-time lag of the deployment
+# (see corr_event_time_lag_seconds), not from a chosen number. The intake layer
+# separately tolerates event ages up to METRIC_MAX_AGE_S (3600 s) before
+# counting a signal stale, which bounds how late evidence can legitimately be.
+# The floor has TWO terms, and the second was missing until the tracker 165
+# clock-skew review (phase 5):
+#
+#   * one engine evaluation interval — evidence that survives to the horizon but
+#     not through the next cycle is never actually scored against.
+#   * the permitted FUTURE clock skew. H14 accepts a device timestamp up to
+#     METRIC_FUTURE_SKEW_S ahead of arrival without clamping it, and that
+#     timestamp advances the tenant watermark. So a device running 120 s fast
+#     drags the whole tenant's expiry cutoff 120 s into the future. Evidence
+#     then expires at (true_stream_time + skew) - retention, i.e. the effective
+#     horizon is retention - skew. For the full reach to survive a legitimately
+#     skewed device, retention must be at least reach + skew.
+#
+# With a 30 s lateness the old margin was 90 s SHORT of the skew the intake
+# layer already permits: a two-minute-fast device could silently expire
+# still-attachable evidence. The floor now covers it.
+CORR_PERMITTED_LATENESS_FLOOR_S = max(CORR_ENGINE_INTERVAL_S, METRIC_FUTURE_SKEW_S)
+CORR_PERMITTED_LATENESS_S = max(
+    CORR_PERMITTED_LATENESS_FLOOR_S,
+    float(os.environ.get("CORR_PERMITTED_LATENESS_S",
+                         str(CORR_PERMITTED_LATENESS_FLOOR_S))))
+
+# The largest event-time gap ANY admissible pair can span under ENGINE_CFG.
+# Evidence older than this, relative to the newest signal, can no longer edge to
+# anything — so this is the floor for retention, and the yardstick for deciding
+# whether a capacity eviction shed still-usable evidence.
+ENGINE_REACH_S = engine_temporal_reach_s(ENGINE_CFG)
+RETENTION_REQUIRED_S = required_retention_s(
+    ENGINE_CFG, permitted_lateness_s=CORR_PERMITTED_LATENESS_S)
+
+# ── P3 AGGREGATION PLANE (design AGGREGATION_PLANE_P3_2026-08-29 §3/§7 step 2) ─
+#
+# DEFAULT OFF. The plane is a deliberately NEW versioned representation (delta
+# signals carrying agg_* fields), so objects built from deltas will not be
+# byte-identical to objects built from raw repeats — §5 of the design says the
+# flag stays off until the equivalence suite (step 3) passes. With the flag off
+# the ingest path is byte-identical to today: `agg_admit` returns its argument
+# unchanged and nothing is allocated, classified or counted.
+#
+# WHERE IT SITS. After the tenant claim is verified and after the ingest
+# pre-filter, and AFTER the raw `corr_signals` row has been batched — but BEFORE
+# `buffer_signal`. That order is what keeps the accounting gate EXACT: every raw
+# promoted line is still persisted and still counted in SYSLOG_RECEIVED /
+# SYSLOG_SIGNALS whether the plane forwards it or absorbs it; only the ENGINE
+# WINDOW sees fewer signals. (Verified against handle_syslog / handle_probe /
+# _emit_episode_signal: each builds `to_ch_row()` and awaits `batch_signal`
+# before it calls `buffer_signal`, and `to_ch_row` serialises attrs to a JSON
+# string at that moment — so the annotation the plane stamps afterwards cannot
+# reach the raw row.)
+CORR_AGGREGATION_PLANE = os.environ.get(
+    "CORR_AGGREGATION_PLANE", "0").lower() in ("1", "true", "yes")
+# Bounded, per tenant, expiring on the window's OWN horizon and tolerating the
+# window's OWN declared lateness — both injected rather than re-derived, so the
+# plane can never age state on a different clock than the window it feeds.
+AGG_PLANE = AggPlane(horizon_s=RETENTION_REQUIRED_S,
+                     lateness_s=CORR_PERMITTED_LATENESS_S)
+# Parsed form of the consumer's dedup coordinate ("topic:partition:offset"),
+# cached so the parse happens once per Kafka message rather than once per signal
+# it produces. Memo §16's "raw Kafka offset range" is not on the Signal (checked:
+# no offset field, no producer stamps one into attrs), so the ingest boundary is
+# the only place that knows it.
+_AGG_COORD_SRC = ""
+_AGG_COORD: tuple[int, int] | None = None
+
+
+def _agg_coord() -> tuple[int, int] | None:
+    """`(partition, offset)` of the message in flight, or None off the consumer
+    path (tests, replay, the verification producer). Never raises: a coordinate
+    is provenance, and provenance must not be able to fail an ingest."""
+    global _AGG_COORD_SRC, _AGG_COORD
+    coord = _dedup_coord
+    if coord == _AGG_COORD_SRC:
+        return _AGG_COORD
+    _AGG_COORD_SRC = coord
+    parsed: tuple[int, int] | None = None
+    if coord:
+        parts = coord.rsplit(":", 2)
+        if len(parts) == 3:
+            try:
+                parsed = (int(parts[1]), int(parts[2]))
+            except ValueError:
+                parsed = None
+    _AGG_COORD = parsed
+    return parsed
+
+
+def agg_admit(sig: Signal) -> Signal | None:
+    """The ingest boundary's aggregation gate.
+
+    Returns the signal the engine window should see — the argument itself when
+    the plane is off (byte-identical ingest), the annotated delta when the plane
+    forwards it, or None when the plane absorbed it as a pure repeat.
+    """
+    if not CORR_AGGREGATION_PLANE:
+        return sig
+    with stage("ingest.aggregate"):
+        return AGG_PLANE.observe(sig, _agg_coord())
+
+
+def agg_stats() -> dict:
+    """The plane's counters + ratios (memo §5). Always answerable, even with the
+    flag off — "off" must be readable as zeros, not as a missing section."""
+    out = AGG_PLANE.stats()
+    out["enabled"] = CORR_AGGREGATION_PLANE
+    return out
+
+
+# ── tracker 165 phase 3/4: retention runs on STREAM time, not wall clock ─────
+#
+# Pruning used to age EVENT timestamps against wall-clock `now()`, which made the
+# retained event-time span `window_s - processing_lag`. A backlog therefore
+# destroyed evidence the engine was still entitled to use: proven with A at
+# 12:00 and B at 12:05 (300 s apart, inside the 396.5 s reach) — processed
+# promptly the edge forms, processed 15 minutes late the CAUSE is evicted and
+# the edge is gone. Nothing about the story changed; only when it was processed.
+#
+# The clock is now the stream's own progress: each tenant's watermark is the
+# newest EVENT timestamp seen for that tenant, and its evidence expires relative
+# to that. Backlog no longer shortens the horizon — replaying an hour-old burst
+# retains exactly the same evidence it would have retained live.
+#
+# WHY PER TENANT, and why a single global watermark would be WRONG.
+# The co-partitioning contract (test_scale_copartition.py) is: every producer
+# keys by tenant with the Java-compatible murmur2 partitioner, so a tenant hashes
+# to the same partition NUMBER on all 12 topics; the RANGE assignor then keeps
+# partition k of every topic on one member. A tenant therefore lives entirely on
+# one instance, across every lane. The engine partitions the window by tenant and
+# `run_window` REFUSES a mixed-tenant window, so no edge can ever span tenants.
+# Consequences:
+#   * a fast tenant's stream time must never expire a slow tenant's evidence —
+#     a global watermark would do exactly that, silently;
+#   * a slow partition can never hold evidence a fast partition needs, because
+#     the two carry different tenants and cross-tenant edges do not exist;
+#   * per-tenant is therefore both the safe scope AND the tightest one.
+# This stays compatible with tracker 155: watermarks are per-process state with
+# no rehydration path, like the window itself, so a partition acquired at a
+# rebalance starts with a cold watermark and refills. (OPEN_OBJECTS is no longer
+# in that list for IDENTITY — see the ownership seed — but it still is for
+# STATE: the reconstructed placeholder carries no evidence.)
+#
+# BACKSTOP. A tenant that goes silent freezes its watermark, so its evidence
+# would never expire. That is semantically defensible (more evidence may still
+# arrive) but it is a memory leak across tenant churn, so a wall-clock backstop
+# evicts a tenant whose stream has not advanced in CORR_TENANT_IDLE_EVICT_S.
+# That is a RESOURCE control, deliberately far above any plausible lag, and it
+# is counted separately so it can never be mistaken for semantic expiry.
+CORR_TENANT_IDLE_EVICT_S = float(
+    os.environ.get("CORR_TENANT_IDLE_EVICT_S", "3600"))
+# Bound the map itself (§9): tenants are evicted with their last signal, but a
+# hard ceiling means tenant churn cannot grow it without limit either.
+CORR_TENANT_WATERMARK_MAX = int(
+    os.environ.get("CORR_TENANT_WATERMARK_MAX", "10000"))
+
+# ── tracker 165 phase 2: the co-partitioning invariant is now SAFETY-CRITICAL ─
+#
+# The per-tenant watermark is only sound because a tenant lives entirely on one
+# member: tenant-keyed murmur2 puts it on the same partition NUMBER of every
+# correlation topic, and the RANGE assignor keeps that number on one member.
+#
+# If topic partition counts diverge, that breaks — and it breaks WORSE than it
+# used to. Before tracker 165 a split tenant meant each member correlated over
+# its own half (degraded RCA, no data destroyed). Now each member also runs its
+# own watermark over its own half of the stream, and each will EXPIRE evidence
+# based on a stream it can only partly see. That is silent evidence destruction,
+# not merely thin context.
+#
+# So the check is no longer a log line. When the invariant is violated the
+# watermark stops being trusted for expiry: stream-time eviction is SUSPENDED
+# and evidence is retained instead, bounded by the record cap and the idle
+# backstop. Retaining too much is recoverable; deleting evidence on a wrong
+# clock is not. The condition is counted, exposed and alertable.
+COPARTITION_OK = True                 # last assignment satisfied the invariant
+COPARTITION_VIOLATIONS = 0            # rebalances that did not
+COPARTITION_LAST_DETAIL = ""          # bounded, operator-facing
+
+
+def copartition_healthy() -> bool:
+    """Is per-tenant watermark expiry safe to apply right now?"""
+    return COPARTITION_OK
+
+
+# tenant -> (newest event ts seen, monotonic when that advanced)
+TENANT_WATERMARK: dict[str, tuple[float, float]] = {}
+WATERMARK_REGRESSIONS = 0     # out-of-order arrivals (normal; watermark holds)
+IDLE_TENANT_EVICTIONS = 0     # signals shed by the wall-clock backstop
+STREAM_TIME_EVICTIONS = 0     # signals expired by their tenant's stream time
+
+
+def _advance_watermark(sig: Signal, now_mono: float) -> None:
+    """Advance the tenant's stream clock. Watermarks are MONOTONIC: an
+    out-of-order arrival is counted, never allowed to move the clock backwards
+    (that would resurrect an already-expired horizon and make eviction
+    non-deterministic)."""
+    global WATERMARK_REGRESSIONS
+    ts = sig.ts.timestamp()
+    cur = TENANT_WATERMARK.get(sig.tenant_id)
+    if cur is None:
+        if len(TENANT_WATERMARK) >= CORR_TENANT_WATERMARK_MAX:
+            # Drop the least recently advanced tenant rather than grow forever.
+            stale = min(TENANT_WATERMARK.items(), key=lambda kv: kv[1][1])[0]
+            TENANT_WATERMARK.pop(stale, None)
+        TENANT_WATERMARK[sig.tenant_id] = (ts, now_mono)
+        return
+    if ts > cur[0]:
+        TENANT_WATERMARK[sig.tenant_id] = (ts, now_mono)
+    else:
+        WATERMARK_REGRESSIONS += 1
+
+
+def _tenant_horizon(tenant: str) -> float | None:
+    """The event-time cutoff for `tenant`: evidence older than this can no
+    longer attach to anything this tenant will produce. None when the tenant has
+    no watermark yet (nothing is expired by a clock that has not started)."""
+    wm = TENANT_WATERMARK.get(tenant)
+    if wm is None:
+        return None
+    return wm[0] - RETENTION_REQUIRED_S
+
+
+# In-process consumer backlog, sampled from the consume loop (see
+# _note_consumed / consumer_lag_total). The idle backstop needs it, and the
+# broker-side kafka-exporter figure is not available in-process.
+CORR_LAG_SAMPLE_S = float(os.environ.get("CORR_LAG_SAMPLE_S", "5"))
+CORR_LAG_FRESH_S = float(os.environ.get("CORR_LAG_FRESH_S", "30"))
+_LAST_OFFSET: dict[tuple[str, int], int] = {}
+CONSUMER_LAG_TOTAL: int | None = None   # None = never measured
+CONSUMER_LAG_AT = 0.0                   # monotonic of the last measurement
+CONSUMER_LAG_PROBE_FAILURES = 0         # consumer lacked assignment()/highwater()
+_LAG_SAMPLED_AT = 0.0
+
+# ── TRACKER 196: proving levelness on partitions this process has NOT read ──
+#
+# THE MEASURED DEFECT. `_consumer_caught_up` vetoed itself whenever ANY assigned
+# partition had never been read here (`CONSUMER_LAG_UNKNOWN_PARTITIONS > 0`). On
+# the lab that count is 17 and 18 on the two correlation replicas — quiet topics
+# this member owns but never fetches a record from — so the veto was PERMANENT,
+# `_tenant_idle` could never return True, and the memory backstop was inert:
+# `idle_tenant_evictions == 0` on both replicas, with 155c objects still `open`
+# 2 h 15 m after their last signal (ownership-155c-08311027).
+#
+# THE INVARIANT THE VETO PROTECTS — UNCHANGED. Evidence may only be shed when
+# "this tenant is silent" is PROVEN, never assumed. A partition we are merely
+# BEHIND on can still hold records that would advance the tenant's clock, so it
+# must keep vetoing. What was wrong is treating "never read" as a synonym for
+# "behind": a partition that holds nothing we have not already got is not
+# backlog, it is emptiness, and emptiness is provable.
+#
+# CAUGHT-UP THEREFORE MEANS: no KNOWN lag on any partition that HAS unread data.
+# A never-read partition is resolved, not assumed:
+#
+#   * end offset 0                  -> the partition has never held a record
+#   * end offset == our position    -> everything it holds is already consumed
+#                                      (by this group; nothing is waiting here)
+#   * end offset >  our position    -> REAL backlog: it vetoes, exactly as before
+#   * end offset / position unknown -> UNRESOLVED: it vetoes, exactly as before,
+#                                      and says so on /metrics + in the log
+#
+# The resolution costs one BOUNDED, CACHED broker round trip per partition
+# (`_probe_unread_partitions`), scheduled off the consume path, refreshed on a
+# TTL and invalidated on every rebalance. Nothing here can make the backstop
+# fire EARLIER than the proof allows; it can only stop it being inert forever.
+#
+# STRICTLY ADDITIVE TO THE 172 STORM PATH. `CONSUMER_LAG_TOTAL`, `CONSUMER_LAG_AT`
+# and `CONSUMER_LAG_UNKNOWN_PARTITIONS` keep EXACTLY their pre-196 values and
+# meanings, because `_ingest_priority_decision` (tracker 172, fail-OPEN) reads
+# them and its behaviour on the 2,500-device leg must not move. The resolution
+# lives in its own variables and is consulted ONLY by the fail-SAFE side.
+CORR_LAG_PROBE_TTL_S = float(os.environ.get("CORR_LAG_PROBE_TTL_S", "60"))
+CORR_LAG_PROBE_TIMEOUT_S = float(os.environ.get("CORR_LAG_PROBE_TIMEOUT_S", "5"))
+# §9 bounded: one probe pass asks about at most this many partitions.
+CORR_LAG_PROBE_MAX_PARTITIONS = int(
+    os.environ.get("CORR_LAG_PROBE_MAX_PARTITIONS", "64"))
+# (topic, partition) -> (end_offset, position, sampled_at_mono)
+_UNREAD_PROBE: dict[tuple[str, int], tuple[int, int, float]] = {}
+_UNREAD_PROBE_TASK: asyncio.Task | None = None
+CONSUMER_UNREAD_PROBE_ATTEMPTS = 0       # counter: probe passes started
+CONSUMER_UNREAD_PROBE_FAILURES = 0       # counter: probe passes that could not answer
+CONSUMER_LAG_UNRESOLVED_PARTITIONS = 0   # gauge: never-read AND unproven -> veto
+CONSUMER_LAG_PROVEN_PARTITIONS = 0       # gauge: never-read but PROVEN to hold nothing
+CONSUMER_LAG_UNREAD_TOTAL = 0            # gauge: proven backlog on never-read partitions
+
+# The closed reason set behind `corr_consumer_caught_up{reason=...}`. Low
+# cardinality, safe as a label, and the whole point of tracker 196: an inert
+# backstop must be able to say WHY it is inert.
+CAUGHT_UP_LEVEL = "level"                 # provably level with the broker
+CAUGHT_UP_NEVER_MEASURED = "lag-never-measured"
+CAUGHT_UP_STALE = "lag-stale"
+CAUGHT_UP_UNRESOLVED = "partitions-unresolved"
+CAUGHT_UP_BEHIND = "behind"
+CAUGHT_UP_REASONS = (CAUGHT_UP_LEVEL, CAUGHT_UP_NEVER_MEASURED, CAUGHT_UP_STALE,
+                     CAUGHT_UP_UNRESOLVED, CAUGHT_UP_BEHIND)
+
+
+def _unread_partition_lag(topic: str, partition: int, highwater: int | None,
+                          now_mono: float) -> int | None:
+    """Backlog on a partition THIS PROCESS has never read, or None if unproven.
+
+    `highwater` is the consumer's local view (populated by any fetch response,
+    `None` before the first one). The probe cache supplies both the end offset
+    and our position when the local view is not enough. Fail-SAFE: every path
+    that cannot PROVE the answer returns None, which vetoes eviction.
+    """
+    entry = _UNREAD_PROBE.get((topic, partition))
+    fresh = entry is not None and (now_mono - entry[2]) <= CORR_LAG_PROBE_TTL_S
+    if not fresh:
+        entry = None                 # a stale proof is not a proof
+    end = highwater if highwater is not None else (entry[0] if entry else None)
+    if end == 0:
+        # Never held a record. Nothing can be waiting on it — provable without
+        # any notion of where we are, and true for as long as end stays 0.
+        return 0
+    if end is None or entry is None:
+        return None
+    return max(0, end - entry[1])
+
+
+async def _probe_pass(consumer, tps: tuple) -> None:
+    """The probe's body: end offsets for the batch, then our position on each.
+
+    Split out so ONE `wait_for` bounds the whole pass (see the caller). Raises
+    on anything the caller must count — it never swallows.
+    """
+    ends = await consumer.end_offsets(list(tps))
+    now = time.monotonic()
+    for tp in tps:
+        end = ends.get(tp)
+        if end is None:
+            continue
+        pos = await consumer.position(tp)
+        if pos is None:
+            continue
+        _UNREAD_PROBE[(tp.topic, tp.partition)] = (int(end), int(pos), now)
+
+
+async def _probe_unread_partitions(consumer, tps: tuple) -> None:
+    """One BOUNDED round trip that resolves never-read partitions.
+
+    Runs off the consume path (scheduled, never awaited by it), asks for at most
+    CORR_LAG_PROBE_MAX_PARTITIONS partitions, and is bounded end-to-end by
+    CORR_LAG_PROBE_TIMEOUT_S (§9: all IO has a timeout). A failure is COUNTED
+    and LOGGED and leaves the partitions UNRESOLVED — i.e. still vetoing — which
+    is the fail-safe direction (§10: never a silent fallthrough).
+    """
+    global CONSUMER_UNREAD_PROBE_ATTEMPTS, CONSUMER_UNREAD_PROBE_FAILURES
+    CONSUMER_UNREAD_PROBE_ATTEMPTS += 1
+    try:
+        # asyncio.wait_for, not asyncio.timeout: the correlation service is
+        # pinned to a 3.12 runtime but the suite also runs on 3.10 runners, and
+        # `asyncio.timeout` is 3.11+. Same bound, one deadline for the whole
+        # pass so a slow coordinator cannot be paid once per partition.
+        await asyncio.wait_for(_probe_pass(consumer, tps), CORR_LAG_PROBE_TIMEOUT_S)
+    except Exception as exc:  # noqa: BLE001 — observable, never fatal (§10)
+        CONSUMER_UNREAD_PROBE_FAILURES += 1
+        log.warning("unread-partition watermark probe failed (%s): %d partition(s) "
+                    "stay UNRESOLVED, so the idle backstop keeps holding evidence "
+                    "(corr_consumer_caught_up{reason=\"%s\"})",
+                    type(exc).__name__, len(tps), CAUGHT_UP_UNRESOLVED)
+
+
+def _schedule_unread_probe(consumer, tps: tuple) -> None:
+    """Kick a probe for the unresolved partitions and return IMMEDIATELY.
+
+    Single-flight: a pass already running owns the cache refresh, so the
+    per-message sampler can never stack round trips. No running loop (a direct
+    unit invocation) means no probe — the caller's fail-safe answer stands.
+    """
+    global _UNREAD_PROBE_TASK
+    if not tps:
+        return
+    prev = _UNREAD_PROBE_TASK
+    if prev is not None and not prev.done():
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:                       # no loop (direct/unit invocation)
+        return
+    _UNREAD_PROBE_TASK = loop.create_task(
+        _probe_unread_partitions(consumer, tps[:CORR_LAG_PROBE_MAX_PARTITIONS]))
+
+
+def _note_consumed(topic: str, partition: int, offset: int) -> None:
+    """Record the newest offset this process has actually handled."""
+    _LAST_OFFSET[(topic, partition)] = offset
+
+
+def _refresh_consumer_lag(consumer, now_mono: float) -> None:
+    """Sample how far behind the broker this process is, cheaply.
+
+    `highwater()` is a local read of what the last fetch reported, so this
+    costs nothing on the wire. Rate-limited to CORR_LAG_SAMPLE_S because it is
+    called from the per-message path.
+    """
+    global CONSUMER_LAG_TOTAL, CONSUMER_LAG_AT, _LAG_SAMPLED_AT
+    global CONSUMER_LAG_PROBE_FAILURES
+    if (now_mono - _LAG_SAMPLED_AT) < CORR_LAG_SAMPLE_S:
+        return
+    _LAG_SAMPLED_AT = now_mono
+    total = 0
+    seen_any = False
+    unknown = 0
+    # Tracker 196, all three strictly ADDITIVE to the counters above.
+    unresolved = 0
+    proven = 0
+    unread_total = 0
+    pending: list = []
+    try:
+        for tp in consumer.assignment():
+            hw = consumer.highwater(tp)
+            last = _LAST_OFFSET.get((tp.topic, tp.partition))
+            if last is None:
+                # We have consumed nothing from this partition THIS process, so
+                # we do not know where the committed position is. The first
+                # version treated that as "consumed through 0" and charged the
+                # partition's ENTIRE history as backlog — which on a lab stack
+                # with old topics reported ~2,806 records of permanent lag that
+                # did not exist, and (because the idle backstop requires lag 0)
+                # left the backstop inert forever. Silent inertness in a memory
+                # control is exactly the kind of thing that looks fine until it
+                # matters, so count it as UNKNOWN and say so.
+                #
+                # UNKNOWN keeps its pre-196 meaning EXACTLY ("assigned, never
+                # read here") because tracker 172's fail-open sweep decision
+                # reads it and its behaviour must not move. Tracker 196 then
+                # asks the separate, fail-SAFE question the idle backstop needs:
+                # does this partition actually hold anything we have not got?
+                unknown += 1
+                resolved = _unread_partition_lag(tp.topic, tp.partition, hw, now_mono)
+                if resolved is None:
+                    unresolved += 1
+                    pending.append(tp)
+                elif resolved:
+                    unread_total += resolved
+                else:
+                    proven += 1
+                continue
+            if hw is None:
+                # Read here, but no fetch response has carried a watermark yet.
+                # Pre-196 this fell through silently and vetoed NOTHING; it is
+                # now counted as unresolved (fail-SAFE for the backstop) while
+                # still staying out of `unknown` (fail-OPEN for the 172 sweep).
+                unresolved += 1
+                pending.append(tp)
+                continue
+            seen_any = True
+            total += max(0, hw - (last + 1))
+    except Exception as exc:  # noqa: BLE001 — observable, never fatal (§10)
+        # A consumer without assignment()/highwater() (a stand-in, a driver
+        # change) must degrade to "lag unknown", which _consumer_caught_up
+        # already treats as "assume backlog" — i.e. retain. It must NEVER
+        # interrupt consumption or be mistaken for a bad payload.
+        CONSUMER_LAG_PROBE_FAILURES += 1
+        if CONSUMER_LAG_PROBE_FAILURES == 1:
+            log.warning("consumer lag probe unavailable (%s) — the idle "
+                        "backstop will hold evidence rather than shed it",
+                        type(exc).__name__)
+        return
+    global CONSUMER_LAG_UNKNOWN_PARTITIONS
+    global CONSUMER_LAG_UNRESOLVED_PARTITIONS, CONSUMER_LAG_PROVEN_PARTITIONS
+    global CONSUMER_LAG_UNREAD_TOTAL
+    CONSUMER_LAG_UNKNOWN_PARTITIONS = unknown
+    CONSUMER_LAG_UNRESOLVED_PARTITIONS = unresolved
+    CONSUMER_LAG_PROVEN_PARTITIONS = proven
+    CONSUMER_LAG_UNREAD_TOTAL = unread_total
+    if seen_any:
+        CONSUMER_LAG_TOTAL = total
+        CONSUMER_LAG_AT = now_mono
+    _schedule_unread_probe(consumer, tuple(pending))
+
+
+CONSUMER_LAG_UNKNOWN_PARTITIONS = 0   # assigned but never read by this process
+
+
+def caught_up_reason(now_mono: float) -> str:
+    """WHY this process is (not) level with the broker — one of CAUGHT_UP_REASONS.
+
+    THE INVARIANT (tracker 165, preserved verbatim by tracker 196): the backstop
+    may shed evidence only when no unprocessed record can still advance a
+    tenant's clock. Every branch that cannot PROVE that returns a non-level
+    reason, so the fail-SAFE polarity is unchanged — what tracker 196 changed is
+    that "assigned but never read" is now RESOLVED (empty / already-consumed /
+    genuinely behind) instead of being assumed behind forever.
+
+    Exported as `corr_consumer_caught_up{reason=...}` so an inert backstop can
+    never again be a silent state (§10).
+    """
+    if CONSUMER_LAG_TOTAL is None:
+        # Nothing has ever been read on any assigned partition. A process that
+        # has consumed nothing has proven nothing.
+        return CAUGHT_UP_NEVER_MEASURED
+    if (now_mono - CONSUMER_LAG_AT) > CORR_LAG_FRESH_S:
+        return CAUGHT_UP_STALE
+    # NO separate freshness clause for the resolution counters: they are
+    # published by the SAME completed walk that stamps CONSUMER_LAG_AT, and on a
+    # walk where nothing was read they are published while CONSUMER_LAG_AT is
+    # NOT — so they are always at least as fresh as the lag figure, and the
+    # staleness check above already covers both. The per-partition proofs behind
+    # them carry their OWN TTL (CORR_LAG_PROBE_TTL_S, see
+    # `_unread_partition_lag`) and are dropped wholesale on every rebalance.
+    if CONSUMER_LAG_UNRESOLVED_PARTITIONS:
+        return CAUGHT_UP_UNRESOLVED
+    if CONSUMER_LAG_TOTAL != 0 or CONSUMER_LAG_UNREAD_TOTAL != 0:
+        return CAUGHT_UP_BEHIND
+    return CAUGHT_UP_LEVEL
+
+
+def _consumer_caught_up(now_mono: float) -> bool:
+    """Is this process demonstrably level with the broker RIGHT NOW?
+
+    Fail-SAFE: unknown or stale ⇒ False (assume there is backlog), because the
+    only caller uses this to decide whether it may DELETE evidence. See
+    `caught_up_reason` for the closed set of answers and why each one is safe.
+    """
+    return caught_up_reason(now_mono) == CAUGHT_UP_LEVEL
+
+
+def _tenant_idle(tenant: str, now_mono: float) -> bool:
+    """May the wall-clock resource backstop shed this tenant's evidence?
+
+    TWO conditions, and the second one was missing in the first implementation
+    of this backstop — a defect that quietly recreated the very bug tracker 165
+    exists to remove:
+
+      1. the tenant's stream clock has not advanced for CORR_TENANT_IDLE_EVICT_S
+         of WALL time, and
+      2. this process is level with the broker.
+
+    Condition 1 alone conflates two very different situations. During a backlog,
+    "the watermark has not advanced" does NOT mean "no more events are coming"
+    — it means "we have not reached them yet". Evidence A at T would be shed an
+    hour later while B at T+300 sat unprocessed in the log, and B would then
+    arrive with nothing left to correlate against: wall-clock delay destroying
+    event-time-valid evidence, which is exactly the original defect wearing a
+    different hat.
+
+    Condition 2 is what makes idleness PROVABLE rather than assumed: if the
+    consumer has consumed every offset the broker has, then no unprocessed
+    record exists anywhere, so nothing can still advance this tenant's clock.
+
+    Deliberately GLOBAL rather than per-partition. It is strictly more
+    conservative (one busy tenant defers the backstop for all of them), it is
+    provable from one number, and the backstop is a last-resort memory control
+    — being slow to reclaim is the safe direction to be wrong in.
+    """
+    wm = TENANT_WATERMARK.get(tenant)
+    if wm is None or (now_mono - wm[1]) < CORR_TENANT_IDLE_EVICT_S:
+        return False
+    return _consumer_caught_up(now_mono)
+
+
+def rca_evidence_degraded() -> bool:
+    """Is Correlix currently unable to hold the evidence its own scoring rule
+    says is still usable?
+
+    TRUE when the retained event-time span has fallen below the engine's reach
+    while the window is at its capacity bound — i.e. the record cap, not age, is
+    deciding the RCA horizon. That is the condition tracker 165 exists to stop
+    being silent: RCA still produces objects, but from a materially shorter
+    history than the engine was configured to reason over, and the output must
+    not be presented as if full context was available.
+
+    A window that is simply not full yet (a quiet tenant, a cold start) is NOT
+    degraded — there is no evidence being shed, there is just less of it.
+    """
+    return rca_degradation_reason() != DEGRADED_NONE
+
+
+# Reasons are a CLOSED set, low-cardinality, safe as a metric label.
+DEGRADED_NONE = "none"
+DEGRADED_RESOURCE_CAPACITY = "resource_capacity"
+# The watermark's safety precondition is broken: this member cannot see a whole
+# tenant's stream, so expiry is suspended and RCA context is not trustworthy.
+# Ranked ABOVE resource_capacity — a wrong clock is worse than a full buffer.
+DEGRADED_PARTITION_TOPOLOGY = "partition_topology"
+
+
+def rca_degradation_reason() -> str:
+    """WHY RCA context is short, not just that it is.
+
+    Since tracker 165 there is exactly one way still-usable evidence can be
+    lost: a RESOURCE ceiling binding before the semantic horizon is reached.
+    Age-based expiry can no longer cause it — evidence now expires against its
+    own tenant's stream clock at the horizon the engine's scoring rule implies,
+    so anything expired is by construction beyond what could attach.
+
+    `resource_capacity` therefore means: the record cap is full AND the window
+    holds less event-time history than the engine can still use. RCA keeps
+    emitting objects, but from a materially shorter history than it was
+    configured to reason over, and that must never be presented as full context.
+
+    A window that is simply not full yet (a quiet tenant, a cold start) is NOT
+    degraded — nothing is being shed, there is just less of it.
+    """
+    if not copartition_healthy():
+        return DEGRADED_PARTITION_TOPOLOGY
+    if WINDOW_BUFFER.maxlen is None or len(WINDOW_BUFFER) < WINDOW_BUFFER.maxlen:
+        return DEGRADED_NONE
+    if _window_span_s() < ENGINE_REACH_S:
+        return DEGRADED_RESOURCE_CAPACITY
+    return DEGRADED_NONE
+
+
+def retention_state() -> dict[str, object]:
+    """The operator-facing answer to 'how much RCA history do I actually have,
+    and is it enough?' — reported together so the two numbers can never drift
+    apart in a dashboard."""
+    span = _window_span_s()
+    maxlen = WINDOW_BUFFER.maxlen or 0
+    return {
+        "effective_horizon_s": round(span, 3),
+        "required_horizon_s": round(RETENTION_REQUIRED_S, 3),
+        "engine_reach_s": round(ENGINE_REACH_S, 3),
+        "permitted_lateness_s": round(CORR_PERMITTED_LATENESS_S, 3),
+        "horizon_satisfied": span >= ENGINE_REACH_S or len(WINDOW_BUFFER) < maxlen,
+        "window_utilization": round(len(WINDOW_BUFFER) / maxlen, 4) if maxlen else 0.0,
+        "capacity_dropped_total": WINDOW_OVERFLOW_DROPPED,
+        "capacity_dropped_still_eligible": WINDOW_OVERFLOW_IN_HORIZON,
+        "capacity_dropped_already_stale": max(
+            0, WINDOW_OVERFLOW_DROPPED - WINDOW_OVERFLOW_IN_HORIZON),
+        "rca_evidence_degraded": rca_evidence_degraded(),
+        "rca_degradation_reason": rca_degradation_reason(),
+        # Stream-time facts (tracker 165 phase 3): retention no longer depends
+        # on the wall clock, so these are what an operator reads to see whether
+        # the clock is actually advancing.
+        "tenants_tracked": len(TENANT_WATERMARK),
+        "copartition_ok": COPARTITION_OK,
+        "copartition_violations": COPARTITION_VIOLATIONS,
+        "copartition_detail": COPARTITION_LAST_DETAIL,
+        "stream_expiry_suspended": not COPARTITION_OK,
+        "consumer_lag_total": CONSUMER_LAG_TOTAL,
+        "consumer_caught_up": _consumer_caught_up(time.monotonic()),
+        # Tracker 196: the BOOLEAN alone could not explain an inert backstop.
+        "consumer_caught_up_reason": caught_up_reason(time.monotonic()),
+        "consumer_lag_unresolved_partitions": CONSUMER_LAG_UNRESOLVED_PARTITIONS,
+        "consumer_lag_proven_partitions": CONSUMER_LAG_PROVEN_PARTITIONS,
+        "consumer_lag_unread_total": CONSUMER_LAG_UNREAD_TOTAL,
+        # Non-zero means the backlog probe is unusable, so the idle backstop is
+        # holding evidence it might otherwise reclaim — a memory risk, and a
+        # silent one until it is on /healthz.
+        "consumer_lag_probe_failures": CONSUMER_LAG_PROBE_FAILURES,
+        # Tracker 196: a probe that cannot answer leaves partitions unresolved,
+        # so the backstop keeps holding evidence — the same memory risk as the
+        # line above, and just as invisible until it is on /healthz.
+        "consumer_unread_probe_failures": CONSUMER_UNREAD_PROBE_FAILURES,
+        "consumer_unread_probe_attempts": CONSUMER_UNREAD_PROBE_ATTEMPTS,
+        "consumer_lag_unknown_partitions": CONSUMER_LAG_UNKNOWN_PARTITIONS,
+        # tracker 165 phase 7: the sharing cache must not become "every unique
+        # network value, forever". Population + evictions, always visible.
+        "entity_cache": signals.entity_cache_stats(),
+        "stage_profile": stage_profile(),
+        "scheduler": scheduler_state(),
+        "epoch": epoch_state(),
+        "edge_cache": edge_cache_state(),
+        "cycle_work": cycle_work_profile(),
+        "stream_time_evictions": STREAM_TIME_EVICTIONS,
+        "idle_tenant_evictions": IDLE_TENANT_EVICTIONS,
+        "watermark_regressions": WATERMARK_REGRESSIONS,
+        "oldest_retained_age_vs_stream_s": round(_oldest_retained_stream_age_s(), 3),
+    }
+
+
+def _oldest_retained_stream_age_s() -> float:
+    """How far behind its own tenant's stream clock the oldest retained signal
+    is. This — not wall-clock age — is the number that must stay under
+    RETENTION_REQUIRED_S, and it answers the operator's real question: how much
+    useful event-time history does this replica hold right now?"""
+    worst = 0.0
+    for sig in WINDOW_BUFFER:
+        wm = TENANT_WATERMARK.get(sig.tenant_id)
+        if wm is None:
+            continue
+        worst = max(worst, wm[0] - sig.ts.timestamp())
+    return worst
+
+
+def _event_time_lag_s() -> float:
+    """How far the newest EVENT in the window is behind the wall clock.
+
+    tracker 165 phase 9 — one of three distinct lags that were previously
+    reported as a single "lag" number:
+
+      * Kafka backlog lag   — records not yet consumed (broker-side, exported by
+        kafka-exporter and surfaced as corr_consumer_lag).
+      * processing lag      — how far behind the consumer is in wall-clock time.
+      * event-time lag      — THIS: the age of the freshest thing the engine can
+        currently see.
+
+    It matters here because pruning ages EVENT timestamps against WALL-CLOCK
+    now, so the retained event-time span is (window_s - event_time_lag). At an
+    event-time lag above window_s the window cannot retain anything at all.
+    """
+    if not WINDOW_BUFFER:
+        return 0.0
+    return max(0.0, (datetime.now(timezone.utc) - WINDOW_BUFFER[-1].ts).total_seconds())
+
+
+def _sync_buffered_id_order() -> None:
+    """Rebuild the id deque if it has drifted from the window.
+
+    Drift is impossible on the production paths — both deques are appended and
+    popped together in this module — but a test that clears one and not the
+    other, or a future edit that touches only one, must degrade to
+    CORRECT-and-slow rather than to silently wrong. The rebuild is the old
+    expensive behaviour, done once and counted, instead of the old expensive
+    behaviour done forever and unnoticed.
+    """
+    global WINDOW_ID_ORDER_RESYNCS
+    if len(_BUFFERED_ID_ORDER) == len(WINDOW_BUFFER):
+        return
+    WINDOW_ID_ORDER_RESYNCS += 1
+    _BUFFERED_ID_ORDER.clear()
+    _BUFFERED_ID_ORDER.extend(str(sig.signal_id) for sig in WINDOW_BUFFER)
+
+
+# Maximum signals evicted between yields. The ARCHITECTURAL INVARIANT this
+# serves (2026-08-20 review): no maintenance operation may perform unbounded
+# synchronous work on the correlation event loop.
+#
+# The prune still completes fully in one call — partial pruning would leave
+# expired signals in the window that `by_tenant` then feeds to run_window,
+# silently changing RCA semantics. What is bounded is the CONTIGUOUS block: the
+# work is the same, the loop gets it back every chunk. This is the same shape as
+# Flink's incremental state cleanup — bound the slice, not the job.
+#
+# 5,000 measured at ~6 ms per chunk (60.3 ms for a full 50k eviction), so a
+# worst-case full-window prune yields ten times and never holds the loop for
+# more than single-digit milliseconds.
+CORR_PRUNE_CHUNK = int(os.environ.get("CORR_PRUNE_CHUNK", "5000"))
+PRUNE_YIELDS = 0            # loop hand-backs during pruning (monotonic)
+# Signals dropped because the window was FULL, not because they aged out. The
+# name ends in _DROPPED so the counter-exposure contract discovers it
+# automatically and fails if it is ever left off /healthz.
+WINDOW_OVERFLOW_DROPPED = 0
+# THE CORRECTNESS QUESTION, made measurable (2026-08-20). The window is bounded
+# by COUNT (50,000) but the RCA horizon is a TIME (RETENTION_REQUIRED_S).
+# A count bound cannot express a time horizon: the window holds
+# 50,000 / signal_rate seconds of history, so any sustained rate above
+# 50,000/900 = ~55.6 signals/s makes it physically unable to hold the configured
+# horizon, regardless of how fast anything drains.
+#
+# When that happens the victim is evicted while STILL INSIDE the horizon the
+# engine is about to correlate over — that is RCA evidence degradation, not
+# ordinary pruning, and the two were indistinguishable until now.
+WINDOW_OVERFLOW_IN_HORIZON = 0   # overflow drops still inside the engine's reach
+WINDOW_OVERFLOW_AGE_MIN_S = 0.0  # youngest signal ever shed by capacity
+WINDOW_OVERFLOW_AGE_MAX_S = 0.0  # oldest signal shed by capacity
+# ── explicit storm mode (design 2026-08-28) observability (§10, no silent failure) ──
+# Counters that count storm ACTIVITY (per-cycle work / per-event sheds), monotonic —
+# the same semantic as corr_window_overflow_dropped_total. deduped/aggregated are
+# summed from each cycle's snapshots in the persist loop; shed is per eviction.
+STORM_DEDUPED_TOTAL = 0      # signal instances collapsed by §1 dedup (per-cycle work)
+STORM_AGGREGATED_TOTAL = 0   # occurrences folded into §3 aggregates + §4 sheds
+STORM_SHED_LOWVALUE = 0      # §4 severity-aware evictions (low-value shed, never silent)
+STORM_SHED_CRITICAL_SPARED = 0  # times eviction chose a low-value over an older critical
+
+
+async def _prune_buffer(now: datetime) -> None:
+    """Expire evidence on STREAM time, per tenant (tracker 165).
+
+    A signal leaves the window when its own tenant's stream has moved more than
+    `RETENTION_REQUIRED_S` past it — not when the wall clock has. Processing
+    backlog therefore cannot shorten the RCA horizon any more.
+
+    `now` is still taken (wall clock) because the IDLE BACKSTOP needs it: a
+    tenant whose stream stopped advancing has a frozen watermark and would
+    otherwise retain forever. That path is a resource control and is counted
+    separately from stream-time expiry, so the two can never be confused.
+
+    Implementation note: the deque is ARRIVAL-ordered, and with per-tenant
+    horizons the head is no longer guaranteed to be the first thing to expire —
+    a stalled tenant's old signal can sit in front of newer, already-expired
+    signals from a faster tenant. Left-popping would therefore under-evict
+    behind a head-of-line block and quietly hand the job back to the capacity
+    cap, which is the defect this wave exists to remove. So survivors are
+    rebuilt in chunks, with the same yield discipline the pop loop had.
+    """
+    global PRUNE_CALLS, PRUNE_EVICTED, PRUNE_SECONDS_LAST, PRUNE_SECONDS_MAX
+    global PRUNE_YIELDS, STREAM_TIME_EVICTIONS, IDLE_TENANT_EVICTIONS
+    global PRUNE_GAP_MAX_S, PRUNE_LAST_MONO
+    # Tracker 171 residual: the starvation gauge. Taken FIRST — before the
+    # empty-window early return — because a pass that finds nothing to evict is
+    # still a maintenance pass, and an epoch that starves them all is exactly
+    # what this must show. The first pass sets the mark and reports no gap:
+    # there is no earlier pass to measure from, and inventing one from process
+    # start would report a startup interval as starvation.
+    _pass_started = time.monotonic()
+    if PRUNE_LAST_MONO is not None:
+        PRUNE_GAP_MAX_S = max(PRUNE_GAP_MAX_S, _pass_started - PRUNE_LAST_MONO)
+    PRUNE_LAST_MONO = _pass_started
+    _sync_buffered_id_order()
+    if not WINDOW_BUFFER:
+        PRUNE_CALLS += 1
+        PRUNE_SECONDS_LAST = 0.0
+        return
+    now_mono = time.monotonic()
+    horizons: dict[str, float | None] = {}
+    idle: dict[str, bool] = {}
+    wall_cut = now.timestamp() - CORR_TENANT_IDLE_EVICT_S
+    # Broken co-partitioning ⇒ this member sees only part of some tenant's
+    # stream, so its watermark is not a sound expiry clock. Retain instead
+    # (the record cap and the idle backstop still bound memory).
+    stream_expiry_ok = copartition_healthy()
+
+    keep_sig: deque[Signal] = deque(maxlen=WINDOW_BUFFER.maxlen)
+    keep_id: deque[str] = deque(maxlen=_BUFFERED_ID_ORDER.maxlen)
+    evicted = stream_evicted = idle_evicted = 0
+    worst_block = 0.0
+    src_sig = list(WINDOW_BUFFER)
+    src_id = list(_BUFFERED_ID_ORDER)
+
+    for start in range(0, len(src_sig), CORR_PRUNE_CHUNK):
+        block_started = time.monotonic()
+        for sig, sid in zip(src_sig[start:start + CORR_PRUNE_CHUNK],
+                            src_id[start:start + CORR_PRUNE_CHUNK]):
+            tenant = sig.tenant_id
+            # Membership, not a sentinel VALUE: `None` is a meaningful horizon
+            # ("this tenant has no watermark yet, so nothing is expired"), so a
+            # sentinel object would have to share the variable's type with a
+            # float and defeat the type checker for no benefit.
+            if tenant not in horizons:
+                horizons[tenant] = _tenant_horizon(tenant)
+                idle[tenant] = _tenant_idle(tenant, now_mono)
+            cut = horizons[tenant]
+            ts = sig.ts.timestamp()
+            if cut is not None and stream_expiry_ok and ts < cut:
+                stream_evicted += 1
+            elif idle[tenant] and ts < wall_cut:
+                # Resource backstop, NOT semantic expiry.
+                idle_evicted += 1
+            else:
+                keep_sig.append(sig)
+                keep_id.append(sid)
+                continue
+            _BUFFERED_IDS.discard(sid)
+            # tracker 166: the processed frontier is a property of the window,
+            # so it is released with the signal. Without this the id set grows
+            # for the life of the process while the window it describes turns
+            # over — an unbounded structure hiding inside a bounded one.
+            _PROCESSED_IDS.discard(sid)
+            evicted += 1
+        worst_block = max(worst_block, time.monotonic() - block_started)
+        if start + CORR_PRUNE_CHUNK < len(src_sig):
+            PRUNE_YIELDS += 1
+            await asyncio.sleep(0)   # hand the loop back: heartbeat, fetch, commit
+
+    if evicted:
+        WINDOW_BUFFER.clear()
+        WINDOW_BUFFER.extend(keep_sig)
+        _BUFFERED_ID_ORDER.clear()
+        _BUFFERED_ID_ORDER.extend(keep_id)
+    PRUNE_CALLS += 1
+    PRUNE_EVICTED += evicted
+    STREAM_TIME_EVICTIONS += stream_evicted
+    IDLE_TENANT_EVICTIONS += idle_evicted
+    # The gauge reports the worst CONTIGUOUS block, not total elapsed — blocking
+    # is what threatens Kafka membership, and total elapsed across yields does
+    # not.
+    PRUNE_SECONDS_LAST = worst_block
+    PRUNE_SECONDS_MAX = max(PRUNE_SECONDS_MAX, worst_block)
+
+
+# Column subset of to_object_row that feeds the HOT current-state projection
+# (netops.corr_current, #100 hardening). Deliberately NO wide blobs — the
+# projection exists so Command Center list reads never touch hypotheses/
+# layer_coverage/app_impact except keyed by a picked page.
+CORR_CURRENT_FIELDS = (
+    "tenant_id", "correlation_id", "version", "state", "window_start",
+    "window_end", "top_hypothesis", "top_confidence", "verdict_tier",
+    "evidence_missing", "affected", "signal_count", "node_count",
+    "engine_version", "catalog_version", "merged_into",
+)
+
+
+def _current_row_fields(snap: ObjectSnapshot, version: int, state: str) -> dict:
+    """The CORR_CURRENT_FIELDS subset of `to_object_row`, built WITHOUT the row.
+
+    P3 change A. `_persist_snapshot` derives the projection row by slicing the
+    full `to_object_row(...)`, which builds the ~5.7 KB-MB `hypotheses` blob plus
+    `layer_coverage` / `app_impact` / `attribution` -- none of which corr_current
+    carries. A heartbeat touch needs only the narrow columns, so it builds only
+    those.
+
+    BYTE-IDENTICAL BY CONSTRUCTION: every expression below is copied from the
+    corresponding key of `ObjectSnapshot.to_object_row` (engine.py). That is not
+    a claim, it is a pinned test -- test_heartbeat_touch_p3.py asserts this dict
+    equals `{k: snap.to_object_row(v, s)[k] for k in CORR_CURRENT_FIELDS}` over
+    every golden snapshot fixture, so a drift in either builder is RED.
+
+    `merged_into` is deliberately absent: `to_object_row` sets it only on a
+    terminal 'merged' snapshot, and a terminal transition always takes the full
+    `_persist_snapshot` path.
+    """
+    r = snap.ranking
+    return {
+        "tenant_id": snap.tenant_id,
+        "correlation_id": snap.correlation_id,
+        "version": version,
+        "state": state,
+        "window_start": _ch_dt(snap.window_start),
+        "window_end": _ch_dt(snap.window_end),
+        "top_hypothesis": r.top_hypothesis,
+        "top_confidence": round(snap.top_confidence(), 4),
+        "verdict_tier": r.verdict_tier.value,
+        "evidence_missing": json.dumps(list(r.evidence_missing), separators=(",", ":")),
+        "affected": json.dumps(snap.affected(), separators=(",", ":"), sort_keys=True),
+        "signal_count": snap.signal_count(),
+        "node_count": len(snap.nodes),
+        "engine_version": snap.engine_ver,
+        "catalog_version": r.catalog_version,
+    }
+
+
+def _snapshot_seam_type(snap: ObjectSnapshot) -> str:
+    """The corr_current `seam_type` projection value for one snapshot (197).
+
+    EXACTLY what `JSONExtractString(hypotheses,'grounding_context','seams',1,
+    'seam_type')` returned to the reader, computed from the source instead of
+    the rendering: `ObjectSnapshot.hypotheses_blob` writes
+    `grounding_context.seams` as `[s.to_dict() for s in sorted(self.seams, key=
+    seam_id)]`, so element 1 of that array (ClickHouse arrays are 1-based) is
+    the seam_id-lowest embedded seam. No seams embedded -> '' , which is the
+    same answer JSONExtractString gives for an absent key and means UNGROUNDED,
+    never "unknown seam".
+    """
+    if not snap.seams:
+        return ""
+    return str(min(snap.seams, key=lambda s: s.seam_id).seam_type or "")
+
+
+def _current_badges_from_snapshot(snap: ObjectSnapshot) -> dict:
+    """`_current_badges` computed off the snapshot instead of off the JSON.
+
+    P3 change A. `_current_badges` json.loads the whole hypotheses blob to read
+    four scalars off `ranking.hypotheses[0].verdict`; that blob is exactly what a
+    heartbeat touch exists to avoid building. The four scalars are plain
+    attributes of the same objects the blob is serialized FROM
+    (scoring.HypothesisScore.to_dict's "verdict" key = owner + first_steps +
+    verdict_gate.to_dict(), and verdicts.EvidenceCoverage.to_dict), so this reads
+    the source rather than the rendering:
+
+        owner          <- h.owner                        (== verdict["owner"])
+        plane_count    <- len(cov.modality_classes)      (== len(sorted(...)))
+        debug_excluded <- bool(cov.excluded_debug)       (== list(...) truthy)
+        low_authority  <- bool(cov.low_authority_probe_scopes)
+        seam_type      <- _snapshot_seam_type(snap)      (grounding_context.seams)
+
+    `modality_coverage` is `sorted(m.value for m in modality_classes)` over a
+    frozenset, so its length is that set's cardinality -- the counts cannot
+    differ. Pinned against `_current_badges(snap.hypotheses_blob())` for every
+    golden fixture in test_heartbeat_touch_p3.py; the empty-ranking case degrades
+    to the same all-default dict `_current_badges` returns for a blob it cannot
+    parse.
+
+    seam_type (197) is NOT a ranking scalar -- it hangs off grounding_context --
+    so it is derived independently of `hyps` and is present even on the
+    empty-ranking degrade path, exactly as the blob extraction was.
+    """
+    seam_type = _snapshot_seam_type(snap)
+    hyps = snap.ranking.hypotheses
+    if not hyps:
+        return {"owner": "", "plane_count": 0, "debug_excluded": 0,
+                "low_authority": 0, "seam_type": seam_type}
+    top = hyps[0]
+    cov = top.verdict_gate.coverage
+    return {
+        "owner": str(top.owner or ""),
+        "plane_count": len(cov.modality_classes),
+        "debug_excluded": 1 if cov.excluded_debug else 0,
+        "low_authority": 1 if cov.low_authority_probe_scopes else 0,
+        "seam_type": seam_type,
+    }
+
+
+def _current_badges(hypotheses_blob: str) -> dict:
+    """Narrow triage-badge columns for corr_current, derived from the SAME
+    hypotheses JSON the history row persists — semantically identical to the
+    read-time JSONExtracts they replace, computed once per (damped) persist so
+    the hot list path never reads the ~5.7KB blob column (#100 completion:
+    that read alone was ~1.3 GiB of blob granules per page at storm size).
+
+    `seam_type` (197) joins them for the same reason and from the same blob:
+    it is the LAST of the twelve values the time-intelligence fold needs, and
+    with it on the projection that fold stops reading corr_objects at all."""
+    # Parsed ONCE, then read in two independent blocks: `ranking` and
+    # `grounding_context` are siblings, so a malformation in one must not cost
+    # the other its value -- JSONExtractString would still have found the seam.
+    try:
+        doc = json.loads(hypotheses_blob)
+    except ValueError:
+        doc = {}
+    if not isinstance(doc, dict):
+        doc = {}
+    try:
+        ranked = doc.get("ranking", {}).get("hypotheses") or [{}]
+        verdict = ranked[0].get("verdict") or {}
+    except (AttributeError, IndexError, TypeError):
+        verdict = {}
+    try:
+        # grounding_context.seams[1] in ClickHouse's 1-based JSON path.
+        seams = (doc.get("grounding_context") or {}).get("seams") or [{}]
+        seam_type = str(seams[0].get("seam_type") or "")
+    except (AttributeError, IndexError, TypeError):
+        seam_type = ""
+    return {
+        "owner": str(verdict.get("owner") or ""),
+        "plane_count": len(verdict.get("modality_coverage") or []),
+        "debug_excluded": 1 if verdict.get("excluded_debug_probes") else 0,
+        "low_authority": 1 if verdict.get("low_authority_probe_scopes") else 0,
+        "seam_type": seam_type,
+    }
+
+
+# ── Stage [8] archive sizing (perf defect #3: archive amplification) ─────────
+# Every persisted version used to archive the ENTIRE tenant window (50k floor)
+# — N spray-minted objects per cycle × full window = ~1M rows/30s at N=20, each
+# batch serialized as one multi-MB NDJSON string on the event loop. The slice is
+# now BOUNDED and NODE-COMPLETE (see _archive_slice) and re-archiving an
+# UNCHANGED slice for the same object is skipped (readers — replay._select_slice
+# and the Go timeline query — already fall back to the newest archived_version
+# ≤ the requested one, exactly as close-versions have always relied on).
+CORR_ARCHIVE_CHUNK_ROWS = int(os.environ.get("CORR_ARCHIVE_CHUNK_ROWS", "10000"))
+
+
+# ── P1 regression (1000-device scale, 2026-08-17): bound event-loop blocking ──
+#
+# MEASURED ROOT CAUSE. The mini-ladder's 1000-device fleet emits one uniform
+# signature, so the whole access layer folds into a FEW ENORMOUS objects —
+# live evidence from netops-correlation-2:
+#
+#   03:34:47Z  corr-object 859c45d9 v4 open: ... nodes=750 edges=48375
+#
+# Object COUNT stayed small (5–15 per cycle, verified in netops.corr_objects),
+# but every per-object step is a SINGLE MONOLITHIC synchronous call whose cost
+# scales with the graph, measured on the real 750-node/48,375-edge shape:
+#
+#   content_hash()          1.60s     to_object_row()        0.66s
+#   material_hash()         0.13s     to_typed_edge_rows()   0.40s
+#   to_evidence_rows()      0.31s     to_edge_rows()         0.16s
+#   CH.insert body build    0.68s     batcher token hash     0.93s
+#   → ~7.5s of UNINTERRUPTIBLE loop time per object per cycle
+#   → 10–15 objects = 75–110s frozen, which is exactly the 84s / 193s / 421s
+#     stalls in the container log
+#
+# Consequence: aiokafka's BACKGROUND heartbeat task cannot run, so the broker
+# expires the session (30s) → "Heartbeat session expired" → UnknownMemberIdError
+# → the commit fails (CommitFailedError, poll gap past max_poll_interval) → the
+# batch replays → repeat. Cooperative `await asyncio.sleep(0)` yields (the
+# earlier P1 fix) CANNOT help here: no single one of these calls is
+# interruptible, so there is no point at which a yield could run.
+#
+# THE FIX, bounded BY DESIGN rather than by tuning: every size-unbounded
+# pure-CPU step goes through `_offload` below. Measured on the same object:
+# inline froze the loop for 2.40s; via the executor the worst loop latency was
+# 0.39s — the loop (and the heartbeat) keeps running no matter how large the
+# object gets, because the blocking call no longer owns the loop thread.
+# Threshold: payloads below CORR_OFFLOAD_MIN_ELEMENTS keep today's exact inline
+# path (a thread hand-off costs more than the work), and 2000 elements measures
+# at ~0.1s — 30x under the 3s heartbeat interval, so the inline branch is
+# provably bounded too.
+CORR_OFFLOAD_MIN_ELEMENTS = int(os.environ.get("CORR_OFFLOAD_MIN_ELEMENTS", "2000"))
+
+
+# ── P0 boundedness pass (docs/scale/ENGINE_DECISION_2026-08-28.md #1/#2) ──────
+#
+# Even OFFLOADED, building a storm object's child rows (typed/untyped edges +
+# evidence) as ONE list and issuing ONE insert made a single synchronous work
+# unit whose C serialize tracked the whole object — an object's EDGE count can
+# reach ~180k, and the C json encoder holds the GIL through long stretches, so
+# the executor thread frees the loop thread yet the heartbeat still starves for
+# a slice proportional to the call. That is the residual hot-shard stall (the
+# 17.7s / 6.2s-class number in the profiling doc). content_hash/material_hash
+# (the replay pin) were already made GIL-yielding via _streaming_json_digest16
+# (Lever 3) and are NOT touched here — this bounds only ROW EMISSION.
+#
+# The child rows now emit in BOUNDED PAGES (_emit_child_rows): each page builds
+# at most CORR_ROW_PAGE_SIZE rows (offloaded for a big object → no page's
+# C-serialize holds the GIL long), the loop is yielded between pages, and pages
+# accumulate into DB batches of at least CORR_ROW_BATCH_ROWS so ClickHouse still
+# receives healthy multi-thousand-row inserts (constraint: never tiny per-row
+# writes; batch >= 1000). "Bounded synchronous serialize" and "efficient DB
+# batch" are DELIBERATELY separate knobs — pages feed the batch, they do not
+# replace it. The parent row (corr_objects) already carries only the bounded
+# decision/summary/counts + the top-K representative hypotheses; the full
+# evidence/edges live in these paged child rows, keyed exactly as the parent by
+# (tenant_id, correlation_id, version) — tenant scope (§3a) is unchanged.
+CORR_ROW_PAGE_SIZE = max(1, int(os.environ.get("CORR_ROW_PAGE_SIZE", "2000")))
+# DB batch floor: pages accumulate up to this before a flush, so the writer
+# still batches (>= the 1000-row floor, default 20k → ~0.3s offloaded body, well
+# under the 500ms work-unit target and inside the "ideally 10k-100k" band).
+# Clamped to be >= the page size so a batch is always at least one whole page.
+CORR_ROW_BATCH_ROWS = max(
+    CORR_ROW_PAGE_SIZE, int(os.environ.get("CORR_ROW_BATCH_ROWS", "20000")))
+
+
+# ── tracker 166: bounded correlation transactions ────────────────────────────
+#
+# THE DEFECT. The engine loop is already single-flight — `await engine_cycle();
+# await sleep(interval)` — so cycles can neither overlap nor queue. But that
+# makes the effective period `cycle_duration + interval`, and the next
+# transaction admits everything that arrived during it. A slow transaction
+# therefore SIZES the next one: an 84 s cycle plus a 30 s sleep at 400 eps
+# accumulates ~45,600 new signals, whose pairing is quadratic, which makes the
+# next cycle slower again.
+#
+# THE FIX. Bound the NEW WORK admitted per transaction. What is explicitly NOT
+# bounded is the retained history: tracker 165's ~516.5 s horizon is a
+# correctness contract, and every cohort is still scored against the whole of it
+# (`new x old`). Total pair work is unchanged by this — verified arithmetically,
+# N(N-1)/2 either way — so this buys bounded latency and overload control, not
+# throughput. Throughput is tracker 167.
+CORR_ENGINE_COHORT_SIZE = max(1, int(os.environ.get("CORR_ENGINE_COHORT_SIZE", "5000")))
+# Upper bound on cohorts drained back-to-back before the loop yields to its
+# normal interval. Stops a large backlog from monopolising the process while
+# still letting it drain far faster than one cohort per interval.
+CORR_ENGINE_DRAIN_COHORTS = max(1, int(os.environ.get("CORR_ENGINE_DRAIN_COHORTS", "20")))
+
+# ── P1: cohort-touch gate + epoch-cadence lifecycle ──────────────────────────
+# docs/design/COHORT_TOUCH_GATE_P1_2026-08-28.md. One sweep freezes an epoch once
+# and drains up to CORR_ENGINE_DRAIN_COHORTS cohorts against it, but every cohort
+# still re-formed, re-ranked, re-materialized and re-hashed EVERY open incident —
+# though only the components a cohort's keys touch can have changed. Two knobs,
+# both DEFAULT ON, read once at startup like every other CORR_* knob:
+#   CORR_COHORT_TOUCH_GATE=0        -> memo=None everywhere: exact pre-P1 work.
+#   CORR_LIFECYCLE_EPOCH_CADENCE=0  -> merge/quiesce/cap after EVERY cohort again.
+# They exist so the owner's A/B (the same storm, OLD vs NEW) runs on ONE image —
+# not as a runtime/load-driven decision. Nothing here is wall-clock derived.
+CORR_COHORT_TOUCH_GATE = os.environ.get(
+    "CORR_COHORT_TOUCH_GATE", "1").lower() in ("1", "true", "yes")
+CORR_LIFECYCLE_EPOCH_CADENCE = os.environ.get(
+    "CORR_LIFECYCLE_EPOCH_CADENCE", "1").lower() in ("1", "true", "yes")
+
+# ── P2 step 1: the EPOCH BUDGET ──────────────────────────────────────────────
+# docs/design/DECISION_EVIDENCE_SPLIT_P2_2026-08-28.md §4 "Epoch budget", §9.1.
+#
+# WHY. CORR_ENGINE_DRAIN_COHORTS bounds a sweep in COHORTS, and a cohort's cost
+# is not bounded. Measured on the live 2,500-device leg p1-on-08281911: one epoch
+# = 20 cohorts x ~190 s = **65 minutes**. Everything that only happens at an
+# epoch BOUNDARY waits that long — retention prune, the merge/quiesce/cap
+# lifecycle pass, the 163 cap, and the operator-visible "settled" state — and
+# `oldest_pending_age` sat at 710 s (past the 516 s retention horizon) for the
+# whole of it. The sweep was not stuck; it was simply never finishing.
+#
+# WHAT IT DOES. End the drain sweep when the epoch's wall time exceeds the
+# budget, checked BETWEEN cohorts only. The lifecycle pass still runs at epoch
+# end, exactly as it does when the cohort bound is hit or the epoch runs dry —
+# an early exit is the SAME exit, it just happens sooner.
+#
+# WHAT IT DOES NOT DO. It never interrupts a cohort, so no object's outputs
+# change: cohort formation is arrival-ordered and per-object replay is pinned by
+# the version's archive slice, so this changes only HOW MANY cohorts one epoch
+# drains — never what any one of them computes. Signals not drained stay pending
+# for the next epoch, which is already the behaviour when the cohort bound is
+# hit. This is a SCHEDULING knob (memo §21: runtime conditions may decide WHEN
+# work happens, never WHAT it contains).
+#
+# 0 = unbounded (the pre-P2 behaviour, for the A/B on ONE image). Read once at
+# startup like every other CORR_* knob; wall time is read only to decide
+# scheduling, never as an input to a hash, a verdict or an ordering.
+CORR_ENGINE_EPOCH_BUDGET_S = max(0.0, float(
+    os.environ.get("CORR_ENGINE_EPOCH_BUDGET_S", "300")))
+
+# ── P2 step 2: the LEVEL-1 cross-epoch rank memo ─────────────────────────────
+# docs/design/DECISION_EVIDENCE_SPLIT_P2_2026-08-28.md §3, §9 item 2. The P1
+# memo (level 2) is intra-epoch and keyed on the node-key set, so every
+# component's FIRST sighting in an epoch pays a full rank() over the catalog —
+# 61 % of the load epoch's component evaluations, and rank is 31.8 % of cohort
+# wall. Level 1 is keyed on the evidence PROJECTION rank actually reads
+# (rank_memo.py enumerates it with file:line refs) and therefore survives the
+# epoch, the prune and the catalog reload.
+#
+# Two knobs, read once at startup like every other CORR_* knob so an A/B runs on
+# ONE image:
+#   CORR_RANK_MEMO=0        -> rank_memo=None: every component ranks in full.
+#   CORR_RANK_MEMO_MAX=N    -> LRU bound (default 50,000 RankingResults; no
+#                              snapshot/window reference — tracker 156).
+# CORR_COHORT_TOUCH_GATE=0 disables BOTH levels (spec §3 last bullet).
+CORR_RANK_MEMO = os.environ.get("CORR_RANK_MEMO", "1").lower() in ("1", "true", "yes")
+CORR_RANK_MEMO_MAX = max(1, int(os.environ.get("CORR_RANK_MEMO_MAX", "50000")))
+# Process-lifetime by construction: it is NOT on _EngineEpoch and _close_epoch
+# never touches it — that is the whole difference from level 2.
+RANK_MEMO: RankMemo | None = (
+    RankMemo(CORR_RANK_MEMO_MAX)
+    if (CORR_COHORT_TOUCH_GATE and CORR_RANK_MEMO) else None)
+
+# ── P2 step 4: the ASYNC EVIDENCE PLANE ──────────────────────────────────────
+# docs/design/DECISION_EVIDENCE_SPLIT_P2_2026-08-28.md §1/§4, §9 item 4;
+# measured brief docs/scale/P2_STEPS012_2P5K_VERDICT_2026-08-29.md §4.3.
+#
+# WHY. Steps 0-2 removed the compute bottleneck (`run_window` is 104 s TOTAL
+# over the live 2.5K run's 33 cohorts, p50 34 ms) and the remaining ~4,800 s of
+# engine wall is the per-version PERSIST path: ~7,500 versions per cohort x
+# (corr_objects + corr_current + edges pages + evidence pages + archive slice),
+# each an awaited ClickHouse insert of ~7 ms plus its row building — 149,590
+# inserts / 1,840 s in the measured window. The operator's verdict (the
+# corr_objects + corr_current rows) EXISTS at the start of that ~1,000 s and is
+# written behind the Evidence rows of every earlier object in the cohort.
+#
+# WHAT IT DOES. _persist_snapshot splits in two. The DECISION write (object row
+# + current row, byte-for-byte today's rows, tokens and order) stays synchronous.
+# The EVIDENCE write (edges, typed edges, evidence, archive slice — the same
+# functions, the same dedup tokens, the same bytes) becomes an EvidenceItem on a
+# bounded, priority-ordered queue drained by one in-process consumer task.
+#
+# WHAT IT DOES NOT DO. It moves no byte and no token: an item is a pure function
+# of a frozen snapshot that already exists, and the archive-slice damping
+# decision is made SYNCHRONOUSLY in version order (see _persist_snapshot) so the
+# drain order cannot decide which slices exist. Nothing is ever dropped: a full
+# queue BLOCKS the Decision plane (counted as backpressure), which is the
+# lossless half of owner memo §22.
+#
+# Knobs read once at import like every other CORR_* flag, so the A/B runs on ONE
+# image. CORR_EVIDENCE_ASYNC=0 => the Evidence write happens inline, exactly
+# where and when it happens today.
+CORR_EVIDENCE_ASYNC = os.environ.get(
+    "CORR_EVIDENCE_ASYNC", "1").lower() in ("1", "true", "yes")
+# The two bounds, both MEASURED (docs/scale/P2_MEMFLAT_EVIDENCE_QUEUE_2026-08-29.md
+# §6a — the offline walk of a pinned queue at the same item shape the live 2.5K
+# leg produced, 21.9 vs 21.2 KiB/item, 6 % apart).
+#
+# WHY 2,000 ITEMS, down from the spec's 5,000. A pinned 5,000-item queue was
+# walked at 142.3 MiB STANDALONE (29.9 KiB/item) — 2.2x a 64 MiB budget on the
+# 1.25 GiB (mem_limit: 1280m) container, and half of ALL post-input owner growth
+# on the leg that failed `memflat` at x1.45. 2,000 items were DIRECTLY MEASURED
+# (not extrapolated) at 55.2 MiB standalone / 9.65 MiB marginal: 4.3 % of the
+# container worst case, ~0.8 % typical.
+#
+# WHY IT IS SIZED AGAINST THE **STANDALONE** NUMBER and not the 7.9 KiB/item
+# marginal. Whether a queued item's snapshot is ALSO held by a live OPEN_OBJECTS
+# entry is a runtime condition, and it goes to ZERO exactly when the bound has
+# to hold: input stops, the objects quiesce and close, the queue becomes their
+# only holder — which is precisely the window `memflat` measures. The same 5,000
+# items measured 37.7 MiB marginal and 142.2 MiB once those objects closed. A
+# bound denominated in the marginal would be correct right up to the moment it
+# mattered.
+#
+# WHY 64 MiB, down from 512 MiB. The old byte bound was INERT: 512 MiB at the
+# old estimator's 22.5 KiB/item is ~23,900 items, so it could never bind before
+# the item bound — confirmed live (5,000 items / ~101 MiB, the byte bound never
+# approached). At the measured ~29 KiB/item, 64 MiB binds at ~2,200 items: the
+# two bounds now agree by design and either can hold the line. `est_bytes` is a
+# calibrated STANDALONE figure (evidence_plane.estimate_bytes, 1.03-1.15x of two
+# independent references), so the number means what it says.
+#
+# NAMED TRADE-OFF: a tighter bound converts memory pressure into Decision-plane
+# latency through blocking backpressure. With a healthy consumer the queue never
+# sits at the bound — it is a backstop, not a working depth. Watch
+# corr_evidence_queue_backpressure_total and corr_evidence_lag_seconds.
+CORR_EVIDENCE_QUEUE_MAX = max(1, int(os.environ.get("CORR_EVIDENCE_QUEUE_MAX", "2000")))
+CORR_EVIDENCE_QUEUE_BYTES_MAX = max(1, int(
+    os.environ.get("CORR_EVIDENCE_QUEUE_BYTES_MAX", str(64 * 1024 * 1024))))
+# Shutdown: how long the queue may keep draining after the producers stop.
+# Whatever is still queued when it expires is LOGGED PER ITEM and counted as
+# corr_evidence_items_total{outcome="lost"} — an Evidence row that never landed
+# must be a fact on the way out, never a silence.
+CORR_EVIDENCE_DRAIN_ON_STOP_S = max(0.0, float(
+    os.environ.get("CORR_EVIDENCE_DRAIN_ON_STOP_S", "60")))
+# The cohort hold is an ORDERING PREFERENCE with a deadline. A hold that outlives
+# this stops being honoured: the consumer drains the open generation anyway and
+# `corr_evidence_hold_expired_total` records it. A hold that leaked would starve
+# the Evidence plane in total silence — which is the failure mode run
+# `p2-s04-08290653` was diagnosed for — and it is cheaper to make that
+# self-healing AND counted than to prove no path can ever leak one. 0 = no
+# deadline (the hold is honoured until released).
+CORR_EVIDENCE_HOLD_MAX_S = max(0.0, float(
+    os.environ.get("CORR_EVIDENCE_HOLD_MAX_S", "5")))
+# Ultra #15: how often a put PARKED on a full queue re-checks that the consumer
+# meant to make room is still alive. Under a healthy consumer this changes
+# nothing observable — the put still blocks, lossless, until room appears
+# (owner memo §22); it is purely the bound on how long the Decision plane can
+# stay parked against a consumer that no longer exists (the death callback
+# wakes waiters immediately; this is the belt for a lost wake-up).
+CORR_EVIDENCE_PUT_RECHECK_S = max(0.05, float(
+    os.environ.get("CORR_EVIDENCE_PUT_RECHECK_S", "1.0")))
+
+# ── P2 step 4c: CROSS-VERSION EVIDENCE BATCHING ──────────────────────────────
+# Measured brief: docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md §3(a).
+#
+# THE DEFECT IT FIXES. `_emit_child_rows` batches only WITHIN one object
+# version, so run `p2-s04b-08290858` issued 63,701 Evidence-table INSERTs in 75
+# minutes at 16.9 / 16.9 / 4.8 rows each. Each is a level-0 part; folding that
+# trickle into the accumulated part re-wrote the same bytes over and over —
+# **1.40 GiB inserted against 337.6 GiB merged (≈241x write amplification)**,
+# with merge memory peaking at 3,978 MiB = 83 % of `max_server_memory_usage`
+# and total server memory at 95.2 % of it. Neither is an engine cost; both are
+# a direct function of how many INSERT STATEMENTS the engine issues.
+#
+# WHAT IT DOES. The Evidence CONSUMER accumulates rows PER TABLE across items
+# and flushes on the first of: 200 members, 8 MiB of estimated row bytes, or
+# 2,000 ms since the oldest buffered row. At the measured drain rate of 11.6
+# versions/s the 2 s clause binds first (~23 versions per flush), which the
+# brief projects as 63,701 -> ~5,900 Evidence inserts (≈11x fewer parts).
+#
+# WHAT IT DOES NOT DO. It moves no ROW: the rows, their bytes and their order
+# within a table are exactly what the unbatched path writes — only the grouping
+# into INSERT statements changes. The BLOCK carries one content-derived dedup
+# token (evidence_plane.batch_token), which is what keeps `ch_insert`'s retry
+# contract: a retry re-sends the identical list under the identical token.
+# ClickHouse's server-side asynchronous insert mode is deliberately NOT used —
+# see evidence_plane's §4c header for why the token forbids it.
+#
+# Batching applies ONLY on the consumer path. An inline Evidence write
+# (CORR_EVIDENCE_ASYNC=0, a dead consumer, a foreign loop) has no flusher task
+# to age a partial block out, so it keeps writing exactly as it does today.
+#
+# SPEC §1 IS UNAFFECTED, and it is worth saying why: a block may be flushed
+# while a LATER cohort is in its decision pass, but everything in that block was
+# drained BEFORE that cohort's hold opened (the hold is generational — items put
+# during it land in `_open` and the consumer never touches them). So a cohort's
+# Decision rows still precede every Evidence row OF THAT COHORT; what changed is
+# only that earlier cohorts' rows now arrive in ~11x fewer statements.
+CORR_EVIDENCE_BATCH = os.environ.get(
+    "CORR_EVIDENCE_BATCH", "1").lower() in ("1", "true", "yes")
+CORR_EVIDENCE_BATCH_ITEMS = max(1, int(
+    os.environ.get("CORR_EVIDENCE_BATCH_ITEMS", "200")))
+CORR_EVIDENCE_BATCH_BYTES = max(1, int(
+    os.environ.get("CORR_EVIDENCE_BATCH_BYTES", str(8 * 1024 * 1024))))
+CORR_EVIDENCE_BATCH_MS = max(1.0, float(
+    os.environ.get("CORR_EVIDENCE_BATCH_MS", "2000")))
+# The FOURTH bound, and the only one a single producer cannot overshoot
+# (2026-08-29 storm regression — see `_snap_cost` for the run).
+#
+# Members, bytes and age are all checked AFTER the append, so ONE `add` of a
+# 10,000-row archive chunk landed whole in a block that could already be at its
+# byte bound. The block ClickHouse then had to swallow was tens of MB in one
+# statement, and every per-block step that walks it once — `insert_scope`, the
+# NDJSON encode, the HTTP body, ClickHouse's own part build — was sized by the
+# biggest MEMBER rather than by any bound the engine had declared. A storm
+# aggregate's 50k-signal slice is exactly that member.
+#
+# With the cap, a chunk is SPLIT across consecutive blocks (RowBatcher.add):
+# the rows, their bytes and their order do not move, only the statement they
+# travel in — the same contract batching itself keeps. 20,000 rows is
+# CORR_ROW_BATCH_ROWS, i.e. the biggest block the UNBATCHED path ever issued,
+# so the cap can never make a flush bigger than what already ran in production.
+CORR_EVIDENCE_BATCH_ROWS = max(0, int(
+    os.environ.get("CORR_EVIDENCE_BATCH_ROWS", "20000")))
+# How many blocks of ONE table may be taken out and not yet written.
+#
+# The INSERT no longer runs under the batcher lock (RowBatcher._TableGate), so a
+# flush no longer blocks its producer — which means nothing else does either,
+# and a table whose INSERTs are retrying would let the consumer build blocks
+# until the rows of every one of them exhausted the container. This is the
+# bound that stops it: at the limit, the producers OF THAT TABLE wait, and no
+# other table is affected. 4 x 20,000 rows is the worst-case resident set of one
+# stalled table — the same order as the queue's own byte bound.
+CORR_EVIDENCE_BATCH_INFLIGHT = max(1, int(
+    os.environ.get("CORR_EVIDENCE_BATCH_INFLIGHT", "4")))
+
+# ── The DECISION plane's own batching — DEFAULT OFF, and it stays off ────────
+# `corr_objects` + `corr_current` are 95,793 of the run's 162,087 corr_* inserts
+# (59 %) and `corr_objects` alone is 86 % of the uncompressed bytes, so batching
+# them is the BIGGER storage prize: ~12x and ~3x fewer parts respectively.
+#
+# It is off because it trades the thing this whole step exists to protect. Those
+# two rows ARE the operator's verdict (spec §1), and buffering them delays it by
+# up to the flush age — directly against the T1 TTUR SLO. The Evidence rows have
+# no such reader on the TTUR path, which is why they batch by default and these
+# do not. Turn it on only with a TTUR budget that shows headroom, and read
+# corr_evidence_batch_age_seconds_max next to T1 when you do.
+#
+# Token semantics are UNCHANGED by construction: each member contributes its own
+# `obj:<cid>:v<n>:<state>:<hash16>:objects|current` key and the block token is
+# the ordered hash of those keys, so a retry of the identical block dedups
+# exactly as the single-row insert does today.
+CORR_DECISION_BATCH = os.environ.get(
+    "CORR_DECISION_BATCH", "0").lower() in ("1", "true", "yes")
+CORR_DECISION_BATCH_MS = max(1.0, float(
+    os.environ.get("CORR_DECISION_BATCH_MS", "1000")))
+# corr_current is what Command Center reads, so it keeps a tighter flush than
+# corr_objects (history, nothing reads it on the TTUR path).
+CORR_DECISION_CURRENT_BATCH_MS = max(1.0, float(
+    os.environ.get("CORR_DECISION_CURRENT_BATCH_MS", "250")))
+
+# ── P2 step 4d: OFFLOAD the rest of the Decision write ───────────────────────
+# Measured brief: docs/scale/P2_STEP4B_2P5K_VERDICT_2026-08-29.md §3/§4 —
+# `persist.decision` recorded max 64 s (and a 21 s neighbour) on single calls,
+# "a storm object whose blob/rows are built on the loop thread".
+#
+# MEASURED, on a 20-node / 50,000-edge storm-shaped snapshot (the shape §4
+# names), with everything step 4 already offloads accounted for:
+#
+#   cycle_hypotheses_blob   680 ms   ALREADY offloaded (_snap_call)
+#   content_hash          1,520 ms   ALREADY offloaded (_snap_call)
+#   to_object_row             0.3ms  ALREADY offloaded (_snap_call)
+#   _current_badges         489 ms   ON THE LOOP  <- json.loads of the whole blob
+#   estimate_bytes          317 ms   ON THE LOOP  <- the queue's byte walk
+#   _archive_slice        1,267 ms   ON THE LOOP  <- first object of a cycle,
+#                                    which pays _window_index over a 50k window
+#
+# So ~2.1 s of a ~3.0 s Decision write was still an uninterruptible loop-thread
+# stretch, in three pieces, every one of them a PURE function of frozen inputs —
+# exactly what `_offload` is for, and exactly the treatment §12.10(b) gave the
+# archive chunk. The rest of the 64 s span is NOT loop-thread blocking: the span
+# is wall-clock and encloses the awaits above, so on a saturated 4-core executor
+# it is dominated by offload QUEUE WAIT (read `corr_offload_wait_max_seconds`
+# beside it), which is a scheduling question, not a serialization one.
+#
+# Byte-neutral by construction: all three are deterministic pure functions, so
+# the badges dict, the slice membership, its id-hash and the byte estimate are
+# identical whichever thread computed them.
+CORR_DECISION_OFFLOAD = os.environ.get(
+    "CORR_DECISION_OFFLOAD", "1").lower() in ("1", "true", "yes")
+
+# ── P2 step 4a: the LIFECYCLE COHORT WINDOW ──────────────────────────────────
+# docs/scale/P2_STEPS012_2P5K_VERDICT_2026-08-29.md §4.2 — the measured
+# regression this fixes. P1 change H hoisted merge/quiesce/cap to EPOCH cadence
+# over the epoch's UNION of seen ids, which found 378 predicate-valid merges.
+# P2 step 1's epoch budget then made every epoch exactly ONE cohort (a cohort
+# costs ~1,000 s against a 300 s budget), so the union collapsed back to a
+# single cohort's seen set — the per-cohort lifecycle P1 replaced — and merges
+# fell to 11, i.e. back to OLD.
+#
+# The fix decouples the MERGE candidate space from the epoch: the pass still
+# runs at epoch end, but `find_merges` sees the union of the last K cohorts'
+# seen sets, kept in a module-level deque ACROSS epochs. K = 20 =
+# CORR_ENGINE_DRAIN_COHORTS, the pre-budget drain bound, so the candidate space
+# is exactly the one P1 measured.
+#
+# SCOPE, and it is deliberately narrow: the window widens ONLY the survivor /
+# stale partition `find_merges` is given. QUIESCE and the 163 count cap keep the
+# EPOCH's seen set. Widening those too would be a real regression rather than a
+# fix — `seen` is how quiesce says "this object materialized, don't age it", and
+# a cohort can be ~1,000 s wide at 2.5K, so K cohorts of history would hold
+# objects open far past CORR_QUIESCE_S and push the population onto the 163 cap
+# instead of closing it. The measured regression (§4.2) is a MERGE regression;
+# this fixes that and nothing else.
+#
+# 0 = the P1 shape (epoch union for everything).
+CORR_LIFECYCLE_COHORT_WINDOW = max(0, int(
+    os.environ.get("CORR_LIFECYCLE_COHORT_WINDOW",
+                   str(CORR_ENGINE_DRAIN_COHORTS))))
+
+# ── the lifecycle merge pass must never own the loop thread ──────────────────
+# LIVE EVIDENCE (run storm-s02, 2026-08-29 20:01:09→20:01:44Z, replica-4): a
+# 35,690 ms event-loop stall — past the 30 s Kafka session timeout, so the
+# consumer was ejected twice (106 UnknownMemberId, 2 CommitFailed). The stage
+# profile had NO span covering it: `engine.run_window` and `persist.*` are
+# executor/wall-clock, and `handle.syslog` max 34.5 s was the consumer STARVED
+# by the stall, not its cause. The stall began right after a cohort's
+# reconciliation lines — i.e. at the END of an epoch, in `_epoch_lifecycle`.
+#
+# The cause was `find_merges`'s survivor index degenerating into the full
+# O(survivors × candidates) cross-product in a seam-dense estate (the whole
+# derivation and the measured 50 s worst case are in ContinuationIndex's
+# docstring). That is fixed at the root in engine.py. These two bounds are the
+# BELT for the braces: whatever a future population does to the pair count, the
+# pass is handed to the executor and chunked so the loop thread keeps its
+# heartbeat.
+#
+# OFFLOAD_PAIRS: when survivors × candidates exceeds this, the (pure) merge
+# computation runs via `_offload` instead of on the loop. 250,000 pairs is
+# ~65 ms of predicate at the measured ~2.6 µs/pair — an order of magnitude
+# under the 500 ms bound, so the inline path is only ever taken by work that
+# provably cannot breach it.
+CORR_LIFECYCLE_MERGE_OFFLOAD_PAIRS = max(0, int(
+    os.environ.get("CORR_LIFECYCLE_MERGE_OFFLOAD_PAIRS", "250000")))
+# CHUNK: candidates per `find_merges` call. Splitting the candidate list is
+# output-identical BY CONSTRUCTION — each candidate independently selects its
+# own best survivor over the SAME survivor set, and the result is re-sorted —
+# so chunking only creates await points between groups. 0 disables chunking.
+CORR_LIFECYCLE_MERGE_CHUNK = max(0, int(
+    os.environ.get("CORR_LIFECYCLE_MERGE_CHUNK", "500")))
+# The continuation index is the same shape on the reconciliation path: one
+# build per cohort over every open object. Offload it past this many objects.
+CORR_CONTINUATION_INDEX_OFFLOAD = max(0, int(
+    os.environ.get("CORR_CONTINUATION_INDEX_OFFLOAD", "2000")))
+
+
+def rank_memo_stats() -> dict[str, int]:
+    """§10 observable for the level-1 memo. Zeros (not an absent key) when the
+    memo is off, so a dashboard never has to distinguish 'off' from 'missing'."""
+    if RANK_MEMO is None:
+        # The key SET must not depend on the flag — a dashboard that has to
+        # distinguish "off" from "missing" is a dashboard that will read a
+        # missing key as a zero on the day it matters. `bytes`/`bytes_max`/
+        # `evicted_bytes` are the memflat byte bound (rank_memo.py, 2026-08-29).
+        return {"entries": 0, "max_entries": 0, "hits": 0, "misses": 0,
+                "evicted": 0, "unkeyable": 0,
+                "bytes": 0, "bytes_max": 0, "evicted_bytes": 0}
+    return RANK_MEMO.stats()
+
+# ── Tracker 172: ingest-priority scheduling (gate spec §4.3 subset contract) ─
+#
+# THE MEASURED DEFECT (S1 design storm, run 082220005r1a): the engine's
+# storm-sized cycles produced event-loop stalls up to 49.3 s — past the 30 s
+# Kafka session timeout — so the broker EJECTED the consumer mid-stall
+# (8 restarts, 117 UnknownMember), collapsing ingest to ~150-250 eps while
+# 3.2 M events sat in the broker. Losing group membership is strictly worse
+# than deferring evaluation: the ratified degradation contract is "evaluate
+# less during a storm, DECLARED" — it is never "stop ingesting".
+#
+# THE RULE: when the consumer is measurably behind (fresh lag above
+# CORR_INGEST_PRIORITY_LAG), the engine DEFERS its sweep so the consumer keeps
+# wire speed — bounded by CORR_INGEST_PRIORITY_MAX_DEFER_S, after which one
+# sweep runs REGARDLESS (deferral, never starvation: the alarm-management
+# literature's deadline-override, and it also bounds how long retention
+# maintenance can be deferred, tracker 171's cadence concern). While storm
+# mode is declared, admitted sweeps also use the smaller
+# CORR_STORM_COHORT_SIZE so each GIL-heavy stretch is shorter.
+CORR_INGEST_PRIORITY_LAG = max(0, int(os.environ.get("CORR_INGEST_PRIORITY_LAG", "10000")))
+CORR_INGEST_PRIORITY_MAX_DEFER_S = float(os.environ.get("CORR_INGEST_PRIORITY_MAX_DEFER_S", "300"))
+CORR_STORM_COHORT_SIZE = max(1, int(os.environ.get("CORR_STORM_COHORT_SIZE", "1000")))
+
+# ── Tracker 163: OPEN_OBJECTS count cap ─────────────────────────────────────
+# Every other major structure is bounded by count or LRU; OPEN_OBJECTS was
+# bounded only by TIME (quiesce), i.e. by the network's behaviour. The
+# deferral premise ("0-8 observed") died when tracker 168 corrected the
+# identity model: the live population is ~1,500 at 1K stress and a broad
+# storm makes it a function of blast radius. Behaviour AT the bound is
+# DEFINED, never silent: the least-recently-seen objects are FORCE-CLOSED to
+# a terminal persisted version (exactly the quiesce path — append-only,
+# replayable via the newest-<=-v archive fallback), counted, and logged —
+# exceeding the cap degrades RCA breadth VISIBLY instead of exhausting RAM.
+# <=0 disables the cap (not recommended; documented for lab characterization).
+CORR_OPEN_OBJECTS_MAX = int(os.environ.get("CORR_OPEN_OBJECTS_MAX", "5000"))
+OPEN_OBJECTS_FORCE_CLOSED = 0     # objects closed by the cap (monotonic)
+_FORCE_CLOSE_LOG_LAST = 0.0
+
+# ── Tracker 187: the monotone blast radius ──────────────────────────────────
+# An object's FINAL `affected` may not shrink below its own version history: the
+# terminal version is the object's last word, and it was publishing the LIVE
+# window's projection — which has already lost the cause device whose evidence
+# aged out before quiesce fired (measured: 3-5 `bgp_peer_flap` stories per
+# 1,005-story leg, same ids on both arms of the 2.5K P3 pair). Each open object
+# carries an `AffectedHistory` — the union of every version it PERSISTED — and
+# every terminal persist (quiesce close, 163 cap close, lifecycle merge)
+# publishes that union. Non-terminal versions are untouched.
+#
+# The accumulator is bounded by the object's own lifetime entity population
+# (see AffectedHistory's contract); this makes that number DECLARED rather than
+# inherited, and behaviour at the bound is defined and counted, never silent:
+# the accumulator stops growing and the terminal version still unions in the
+# live projection, so only genuinely-aged-out history can be lost. <=0 disables
+# the cap (documented for lab characterization). The default is deliberately
+# generous — 20,000 distinct entities is far above any object measured to date
+# (the largest storm aggregate carried 922 nodes) — because the cap exists to
+# stop an unmeasured shape from growing without limit, not to trim a real one.
+CORR_AFFECTED_HISTORY_MAX = int(os.environ.get("CORR_AFFECTED_HISTORY_MAX", "20000"))
+# TRACKER 195: versions whose persisted `hypotheses` blob had to be bounded.
+# A non-zero value is not an error — it is the write-side cap doing its job on
+# the pathological tail — but it must never be invisible, because an object
+# whose ranking was shortened is an object a reader must not over-read.
+HYPOTHESES_TRUNCATED = 0          # versions truncated (monotonic)
+HYPOTHESES_TRUNCATED_BYTES = 0    # original bytes those versions carried
+AFFECTED_HISTORY_TRUNCATED = 0    # entities the cap refused (monotonic)
+AFFECTED_HISTORY_ENTITIES_MAX = 0  # gauge: largest accumulator seen this process
+INGEST_PRIORITY_DEFERRALS = 0     # sweeps deferred to protect ingest (monotonic)
+INGEST_PRIORITY_ACTIVE = False    # gauge: is the engine currently deferring?
+ENGINE_LAST_SWEEP_MONO = 0.0      # when the last non-deferred sweep STARTED
+
+
+def _ingest_priority_decision(now_mono: float) -> tuple[bool, str]:
+    """Should this sweep be DEFERRED to keep the consumer at wire speed?
+
+    Pure decision over module state; returns (defer, reason). Fail-OPEN in
+    every uncertain case: deferral is an optimisation, so unknown/stale lag
+    runs the sweep normally — the opposite polarity from _consumer_caught_up,
+    whose caller deletes evidence and must fail SAFE. A deferral chain is
+    always broken by the deadline, so a stuck lag probe can cost at most
+    CORR_INGEST_PRIORITY_MAX_DEFER_S of extra latency, never a stalled engine.
+    """
+    if (now_mono - ENGINE_LAST_SWEEP_MONO) >= CORR_INGEST_PRIORITY_MAX_DEFER_S:
+        return False, "deadline"          # bounded deferral — run regardless
+    if CONSUMER_LAG_TOTAL is None:
+        return False, "lag-never-measured"
+    if (now_mono - CONSUMER_LAG_AT) > CORR_LAG_FRESH_S:
+        return False, "lag-stale"
+    if CONSUMER_LAG_UNKNOWN_PARTITIONS:
+        return False, "lag-partitions-unknown"
+    if CONSUMER_LAG_TOTAL > CORR_INGEST_PRIORITY_LAG:
+        return True, "ingest-behind"
+    return False, "caught-up"
+
+# The PROCESSED FRONTIER. Membership means: this signal has been through a
+# correlation transaction that completed its persistence boundary. It is a set
+# of signal ids rather than a timestamp because arrival is not monotonic in
+# event time — out-of-order and replayed signals are ordinary here, and a
+# timestamp frontier would silently skip anything landing behind it.
+#
+# Bounded by construction: ids are added only for signals in the window and
+# discarded in lockstep with `_BUFFERED_IDS` when the window releases them, so
+# it can never outgrow the window it describes.
+_PROCESSED_IDS: set[str] = set()
+COHORTS_PROCESSED = 0
+COHORT_SIGNALS_TOTAL = 0
+PENDING_PEAK = 0
+
+# ── OBSERVABILITY MUST NOT BE ABLE TO REJECT A WINDOW (2026-08-29) ───────────
+#
+# THE DEFECT THESE EXIST TO MAKE IMPOSSIBLE (run p2-s012-08290116). With the
+# opt-in stage profiler on, `_record_cycle_work` summed the engine's work sink
+# with int(v). #168 had added two NON-numeric fields to that sink
+# (candidate_ceiling_dimension: str, candidate_ceiling_hit: bool), so every
+# cycle raised ValueError from a BOOKKEEPING line that sat inside the cohort
+# loop's `except ValueError: continue`. Every tenant's snapshots were discarded,
+# `_mark_processed` still advanced the frontier, pending went to 0, and the
+# scale harness called the run COMPLETE in 14 s with zero incidents produced.
+#
+# Three rules follow, and these counters are how each is observable:
+#   1. accounting/profiler code is wrapped and COUNTED (PROFILER_ERRORS_TOTAL),
+#      never able to reject a window;
+#   2. a genuine engine input error still rejects that tenant's window, but it
+#      is COUNTED (ENGINE_WINDOWS_REJECTED_TOTAL) and logged with a traceback,
+#      never a one-line log that scrolls past;
+#   3. evidence that is marked processed without being evaluated is COUNTED
+#      (SIGNALS_DROPPED_TOTAL) — a silent drop is the thing that made a 14 s
+#      "PASS" look like a fast run instead of an empty one.
+ENGINE_WINDOWS_REJECTED_TOTAL = 0   # tenant-windows a real ValueError rejected
+PROFILER_ERRORS_TOTAL = 0           # faults inside accounting/profiling code
+# Signals that were marked processed WITHOUT being evaluated, by reason. Seeded
+# with the reason the engine can produce so the series is always readable: an
+# absent counter and a zero counter must never look alike to the harness.
+SIGNALS_DROPPED_TOTAL: dict[str, int] = {"window_rejected": 0}
+_PROFILER_ERROR_LOGGED = False
+
+
+def _note_profiler_error(where: str, exc: BaseException | None = None) -> None:
+    """Count a fault raised by observability code, and log the FIRST one with
+    its traceback.
+
+    Deliberately swallowing: this is the fallback for code whose entire job is
+    to DESCRIBE the run. It must never be able to end one. The counter is the
+    alertable signal (/metrics corr_engine_profiler_errors_total) — the run is
+    not silently fine, it is loudly instrumented-and-degraded."""
+    global PROFILER_ERRORS_TOTAL, _PROFILER_ERROR_LOGGED
+    PROFILER_ERRORS_TOTAL += 1
+    if not _PROFILER_ERROR_LOGGED:
+        _PROFILER_ERROR_LOGGED = True
+        log.error("profiler/accounting fault in %s — the engine continues and "
+                  "corr_engine_profiler_errors_total now carries this "
+                  "(further occurrences are counted, not logged)",
+                  where, exc_info=exc)
+
+
+def _record_signals_dropped(reason: str, n: int) -> None:
+    """Account evidence that will be marked processed without being evaluated."""
+    if n > 0:
+        SIGNALS_DROPPED_TOTAL[reason] = SIGNALS_DROPPED_TOTAL.get(reason, 0) + n
+
+
+# Per-tenant cache of edges this process has already admitted, so a bounded
+# transaction can build components from the whole settled edge set rather than
+# only from the pairs it just scored. Without it, objects would fragment every
+# time a cohort boundary fell inside one.
+#
+# BOUNDED BY THE WINDOW, not by time: entries whose endpoints are no longer
+# present are dropped on every read, so the cache can never retain evidence the
+# tracker 165 horizon has already released. That direction matters — a stale
+# edge resurrecting an expired node would quietly undo retention.
+_TENANT_EDGES: dict[str, dict[tuple[str, str], object]] = {}
+EDGE_CACHE_DROPPED = 0      # edges released because an endpoint left the window
+EDGE_CACHE_ADDED = 0        # edges recorded from completed transactions
+EDGE_CACHE_PEAK = 0         # high-water mark across all tenants
+# Rough per-entry cost for the bytes estimate: the dict entry plus the tuple key
+# plus the Edge's own slots. Deliberately an ESTIMATE and labelled as one — a
+# real sizeof walk per entry would cost more than the number is worth.
+EDGE_CACHE_BYTES_PER_ENTRY = 320
+# tracker 192: the per-tenant staleness filter is epoch-scoped. `_TENANT_EDGE_
+# FILTERED` is the epoch serial whose `live` set this tenant's cache has already
+# been tested against in full; `_TENANT_EDGE_ADDED` is the keys `_remember_edges`
+# has recorded since that test, i.e. the only ones whose verdict is unknown.
+# Both are derived state: dropping either only costs a redundant full scan, so a
+# leaked entry can never change a result (the serial is strictly increasing, so
+# a stale one can never be mistaken for a live one).
+_TENANT_EDGE_FILTERED: dict[str, int | None] = {}
+_TENANT_EDGE_ADDED: dict[str, set[tuple[str, str]]] = {}
+
+
+def live_node_keys(window: Iterable[Signal]) -> set[str]:
+    """The node keys a window still contains. Pure function of the snapshot, so
+    a drain epoch computes it once and every cohort reuses it."""
+    return {f"{s.entity_type.value}:{s.entity_id}:{s.kind}" for s in window}
+
+
+def _carried_edges_for(tenant: str, live: set[str], epoch: int | None = None) -> tuple:
+    """This tenant's settled edges, filtered to nodes still in the window.
+
+    tracker 166: `live` — the O(window) key set — is a pure function of the
+    frozen snapshot and is computed ONCE per epoch. The O(edges) cache filter
+    below was then paid per COHORT, i.e. O(cohorts x |edge cache|) per epoch.
+
+    TRACKER 192. That is the term a mass device deletion drives, and it is the
+    one loop-thread stretch on the cleanup path that had neither a `sync_span`
+    nor a `loop_yield`: retiring 2,500 devices retires every node key at once,
+    so `live` collapses, EVERY entry of a 132,528-entry cache tests stale, and
+    the whole scan-plus-delete runs uninterrupted — once per cohort, K times
+    over one epoch, re-testing keys whose verdict cannot have changed.
+
+    THE BOUND, and it is algebraic rather than a yield. `live` is the epoch's
+    `live_keys[tenant]`: FROZEN for the epoch (built in `_begin_epoch`, read by
+    every cohort). So for a fixed epoch:
+
+      * a key that survived an earlier cohort's test against this same `live`
+        survives every later test against it — re-testing it is pure
+        re-derivation;
+      * the only keys whose verdict is unknown are the ones ADDED since the last
+        test, and `_remember_edges` is the sole writer, so it records them.
+
+    Therefore, within one epoch, cohort 1 pays the full O(|cache|) scan and
+    cohorts 2..K pay O(|added since|). Per epoch: O(|cache| + |added|) instead
+    of O(K x |cache|). The surviving set, the returned tuple and
+    `EDGE_CACHE_DROPPED` are all bit-identical — each key is still tested
+    against the same `live`, exactly once, and dropped at the first cohort that
+    sees it stale (pinned by the oracle in test_carried_edges_bound_192.py).
+
+    `epoch=None` (every caller outside a drain epoch: tests, tooling) keeps the
+    exact pre-192 behaviour — a full scan, every call — because nothing then
+    guarantees `live` is the same set twice.
+    """
+    global EDGE_CACHE_DROPPED
+    cache = _TENANT_EDGES.get(tenant)
+    if not cache:
+        _TENANT_EDGE_FILTERED.pop(tenant, None)
+        _TENANT_EDGE_ADDED.pop(tenant, None)
+        return ()
+    # SYNC span: scan + delete + snapshot, no await anywhere in it. It is the
+    # stretch tracker 192 found dark, so it is named whether or not it is
+    # bounded (see `sync_record`).
+    with sync_span("reconcile.carry_edges"):
+        if epoch is not None and _TENANT_EDGE_FILTERED.get(tenant) == epoch:
+            # Same epoch, same `live`: only the keys added since the last test
+            # have an unknown verdict.
+            probe: Iterable = [k for k in _TENANT_EDGE_ADDED.get(tenant, ()) if k in cache]
+        else:
+            probe = cache
+        stale = [k for k in probe if k[0] not in live or k[1] not in live]
+        for k in stale:
+            del cache[k]
+        EDGE_CACHE_DROPPED += len(stale)
+        _TENANT_EDGE_FILTERED[tenant] = epoch
+        _TENANT_EDGE_ADDED.pop(tenant, None)
+        if not cache:
+            _TENANT_EDGES.pop(tenant, None)
+            _TENANT_EDGE_FILTERED.pop(tenant, None)
+            return ()
+        return tuple(cache.values())
+
+
+def _remember_edges(tenant: str, snapshots: list) -> None:
+    """Record the edges this transaction produced, for the next one's
+    component formation.
+
+    tracker 192: it also records WHICH keys are new, because those are the only
+    ones the next cohort's `_carried_edges_for` has to re-test (see there). The
+    set is bounded by the edges one cohort emitted, never by the cache."""
+    global EDGE_CACHE_ADDED, EDGE_CACHE_PEAK
+    cache = _TENANT_EDGES.setdefault(tenant, {})
+    # SYNC span: O(edges emitted) with no await — the other half of the
+    # per-tenant transaction body tracker 192 found unattributed.
+    with sync_span("reconcile.remember_edges"):
+        added = _TENANT_EDGE_ADDED.setdefault(tenant, set())
+        for snap in snapshots:
+            for e in snap.edges:
+                key = (e.from_node, e.to_node)
+                if key not in cache:
+                    EDGE_CACHE_ADDED += 1
+                    added.add(key)
+                cache[key] = e
+        if not added:
+            _TENANT_EDGE_ADDED.pop(tenant, None)
+        EDGE_CACHE_PEAK = max(EDGE_CACHE_PEAK,
+                              sum(len(v) for v in _TENANT_EDGES.values()))
+
+
+def edge_cache_state() -> dict[str, int]:
+    """166A: the cache must PLATEAU once the retained node set does. It is
+    bounded by distinct (entity_type, entity_id, kind) keys — the estate — not
+    by signal count, so `edges` rising while `window_signals` is flat is the
+    failure shape to watch for."""
+    edges = sum(len(v) for v in _TENANT_EDGES.values())
+    return {
+        "tenants": len(_TENANT_EDGES),
+        "edges": edges,
+        "peak": EDGE_CACHE_PEAK,
+        "added_total": EDGE_CACHE_ADDED,
+        "dropped_total": EDGE_CACHE_DROPPED,
+        "est_bytes": edges * EDGE_CACHE_BYTES_PER_ENTRY,
+    }
+
+
+def pending_signals(source: Iterable[Signal] | None = None) -> list[Signal]:
+    """Retained signals that have not yet been through a completed transaction.
+
+    tracker 166: a drain epoch passes its FROZEN snapshot here. Reading the live
+    buffer inside an epoch would let a cohort admit a signal the epoch never
+    prepared a node for — it would be silently absent from the prepared node set
+    and then marked processed by `_mark_processed`, i.e. never-evaluated
+    evidence. The default (live buffer) is for metrics and for callers outside
+    an epoch."""
+    src = WINDOW_BUFFER if source is None else source
+    return [s for s in src if str(s.signal_id) not in _PROCESSED_IDS]
+
+
+# ── tracker 166 Phase 2: the SNAPSHOT / DRAIN EPOCH ──────────────────────────
+#
+# THE DEFECT the epoch exists for. Bounding the cohort bounded pair EMISSION but
+# not the per-transaction FIXED cost: run_window re-sorted the window, rebuilt
+# every node, re-derived toks/refs/seam+path memberships for ALL n retained
+# nodes and rebuilt the candidate inverted index — on EVERY cohort. Pre-166 that
+# was paid once per cycle; splitting a cycle into ~8 cohorts paid it ~8x.
+# Measured offline: 5.99 s per transaction at 50,000 retained nodes, ~48 s
+# across 8 cohorts. Live, the engine cycle stayed ~150 s even with a
+# 5,000-signal cohort and pending grew monotonically to 37,292.
+#
+# THE LIFECYCLE, and it is deliberately short:
+#
+#   one immutable snapshot -> one prepared state -> many bounded cohorts -> discard
+#
+# The epoch is a LOCAL owned by one drain sweep, never a module-level cache. It
+# holds a reference to the whole retained node set, so an epoch outliving its
+# snapshot would pin evidence the 165 horizon has already released.
+#
+# WHAT IS FROZEN and what is not (docs/scale/SNAPSHOT_EPOCH_166.md §Phase 3):
+#   frozen  — the retained signals, the per-tenant windows, nodes, node
+#             metadata, candidate index, seams, adjacency, path graph,
+#             discovery paths, topology-stale and storm declarations
+#   NOT frozen — carried edges and the processed frontier. Both advance WITH the
+#             cohorts by design: cohort n must see the edges cohort n-1 settled.
+#
+# Signals that arrive while an epoch runs stay pending and are admitted by the
+# NEXT epoch. That is exactly the pre-166 behaviour for arrivals (they waited
+# for the next cycle) and it is what makes the snapshot immutable.
+EPOCHS_TOTAL = 0
+EPOCH_PREPARATIONS = 0          # tenant preparations built (the once-per-epoch proof)
+EPOCH_PREP_SECONDS_TOTAL = 0.0
+EPOCH_PREP_SECONDS_LAST = 0.0
+EPOCH_PREP_SECONDS_MAX = 0.0
+EPOCH_SECONDS_LAST = 0.0
+EPOCH_SECONDS_MAX = 0.0
+EPOCH_COHORTS_LAST = 0
+EPOCH_COHORTS_MAX = 0
+EPOCH_PREP_NODES = 0            # nodes held by the last epoch's prepared state
+# #168 Stage-2 Lever 1 (correlation quality + robustness). Monotonic counters,
+# exposed on /metrics + /healthz via epoch_state(), so an operator can SEE the
+# rank-7 hub-token cap working and tune CORR_TOKEN_HUB_CAP — and is alerted if
+# the general candidate-ceiling backstop ever fires (a pathological AUTHORITATIVE
+# group, which the hub cap does not touch). Accumulated once per epoch from the
+# prepared index, which is a pure function of the snapshot.
+CORR_HUB_TOKENS_CAPPED_TOTAL = 0       # rank-7 hub tokens dropped (Σ over epochs)
+CORR_CANDIDATE_PAIRS_SKIPPED_TOTAL = 0  # all-pairs candidates the hub cap kept out
+CORR_CANDIDATE_CEILING_HITS_TOTAL = 0   # epochs whose potential candidates > ceiling
+CORR_CANDIDATE_CEILING_LAST_DIM = ""    # the offending dimension the last hit named
+# ── P1 (cohort-touch gate) accounting — the proof is these numbers, not a
+# feeling (spec §5). Monotonic per replica; the last two are last-cohort gauges.
+# Derived ratios (touch ratio, eval-waste ratio) are computed by the report /
+# bench harness FROM these — never in the engine.
+COHORT_COMPONENTS_TOTAL = 0          # components considered, summed over cohorts
+COHORT_COMPONENTS_TOUCHED_TOTAL = 0  # of those, ones a cohort key touched
+COHORT_MEMO_HITS_TOTAL = 0           # served from the intra-epoch memo
+COHORT_COMPONENTS_RANKED_TOTAL = 0   # actually ranked + materialized ("built")
+COHORT_OPEN_OBJECTS_LAST = 0         # gauge: open objects after the last cohort
+COHORT_TOUCHED_LAST = 0              # gauge: components touched by the last cohort
+LIFECYCLE_PASSES_TOTAL = 0           # merge/quiesce/cap passes actually run
+# The 163 cap is enforced once per EPOCH now, so the population may transiently
+# exceed it WITHIN an epoch by the objects that epoch opened. That overshoot is a
+# declared, measured fact — this is its high-water mark (§10, never silent).
+OPEN_OBJECTS_EPOCH_PEAK = 0
+# ── P2 step 1: drain sweeps ended by the epoch wall-clock budget (spec §4
+# "Epoch budget"). Monotonic per replica. A number that stays at 0 while
+# `epoch_seconds_max` climbs means the budget is not in effect; a number that
+# tracks `epochs` means every sweep is budget-bound and CORR_ENGINE_DRAIN_COHORTS
+# is no longer the binding constraint.
+EPOCH_BUDGET_EXITS_TOTAL = 0
+
+
+_EPOCH_SERIAL = 0     # tracker 192: monotonic epoch identity (never id())
+
+
+class _EngineEpoch:
+    """One immutable retained snapshot plus everything derived purely from it."""
+
+    __slots__ = (
+        "by_tenant",
+        "cohorts",
+        "ctx",
+        "cycle_max_ts",
+        "live_keys",
+        "memos",
+        "now",
+        "prep_seconds",
+        "preps",
+        "seen",
+        "serial",
+        "snapshot",
+        "started",
+        "storm",
+        "topo_stale",
+    )
+
+    def __init__(self, now: datetime) -> None:
+        global _EPOCH_SERIAL
+        # tracker 192: a STRICTLY INCREASING identity for the epoch, so the
+        # carried-edge staleness filter can tell "already tested against THIS
+        # epoch's frozen `live`" from "a different epoch". Deliberately not
+        # id(self): ids are recycled, and a recycled id would silently skip a
+        # scan that must run.
+        _EPOCH_SERIAL += 1
+        self.serial = _EPOCH_SERIAL
+        self.now = now
+        self.snapshot: tuple = ()
+        self.by_tenant: dict[str, tuple] = {}
+        self.cycle_max_ts: float | None = None
+        self.topo_stale = False
+        self.storm = False
+        # tenant -> (seams, adjacency, directed, pgv, discovery)
+        self.ctx: dict[str, tuple] = {}
+        self.preps: dict[str, WindowPrep | None] = {}
+        # tenant -> node keys still in the snapshot (for the carried-edge filter)
+        self.live_keys: dict[str, set[str]] = {}
+        # P1 change G: tenant -> intra-epoch ComponentMemo. Per TENANT (§3a: node
+        # keys are not tenant-qualified, so one shared memo would collide), and
+        # per EPOCH — _close_epoch drops it, because after a prune the nodes are
+        # rebuilt and the key would no longer describe the same evidence.
+        self.memos: dict[str, ComponentMemo] = {}
+        # P1 change H: the UNION of every cohort's seen_this_cycle. The
+        # merge/quiesce/cap passes run once per epoch against this set; the
+        # per-cohort set stays the `exclude=` for find_continuation.
+        self.seen: set[str] = set()
+        self.cohorts = 0
+        self.prep_seconds = 0.0
+        self.started = time.monotonic()
+
+    def pending(self) -> list[Signal]:
+        """Pending within THIS epoch — from the frozen snapshot, never the live
+        buffer (see pending_signals)."""
+        return pending_signals(self.snapshot)
+
+
+def _account_candidate_generation(tenant: str, prep: WindowPrep) -> None:
+    """#168 Stage-2 Lever 1 — the always-on candidate-generation accounting (§10).
+
+    Reads the prepared candidate index (a pure function of the snapshot) once per
+    tenant per epoch: it advances the rank-7 hub-cap counters, and — the general
+    robustness backstop — checks whether ANY dimension's full-window all-pairs
+    potential would exceed CORR_CANDIDATE_CEILING. The hub cap already removed the
+    weak-token quadratic, so this can only trip on a pathological AUTHORITATIVE
+    group (identity/seam/observation/route), which is NEVER dropped. When it does,
+    we WARN LOUDLY naming the offending dimension/group and count it (§16.1 /
+    §9 bounded — the engine's emission is clamped in build_edges, never stalled),
+    so a pathological shape is SEEN, not silent. Off the hot pair loop entirely."""
+    global CORR_HUB_TOKENS_CAPPED_TOTAL, CORR_CANDIDATE_PAIRS_SKIPPED_TOTAL
+    global CORR_CANDIDATE_CEILING_HITS_TOTAL, CORR_CANDIDATE_CEILING_LAST_DIM
+    idx = prep.index
+    CORR_HUB_TOKENS_CAPPED_TOTAL += len(idx.hub_tokens)
+    CORR_CANDIDATE_PAIRS_SKIPPED_TOTAL += idx.hub_pairs_skipped
+    if idx.potential_pairs > CORR_CANDIDATE_CEILING:
+        CORR_CANDIDATE_CEILING_HITS_TOTAL += 1
+        CORR_CANDIDATE_CEILING_LAST_DIM = idx.largest_dim
+        log.warning(
+            "correlation candidate ceiling exceeded (tenant=%s dimension=%s "
+            "largest_group=%d potential_pairs=%d ceiling=%d hub_cap=%d): candidate "
+            "generation is bounded this cycle — a non-token dimension formed a "
+            "pathological all-pairs group; investigate the shape",
+            tenant, idx.largest_dim, idx.largest_size, idx.potential_pairs,
+            CORR_CANDIDATE_CEILING, CORR_TOKEN_HUB_CAP)
+
+
+async def _begin_epoch(now: datetime) -> _EngineEpoch:
+    """Prune, freeze, and prepare. Everything a cohort would otherwise re-derive.
+
+    Preparation is real CPU (seconds on a large window) and is therefore
+    OFFLOADED, exactly like run_window: doing it on the loop would hand back the
+    stall that tracker 164 removed."""
+    global EPOCHS_TOTAL, EPOCH_PREPARATIONS, EPOCH_PREP_NODES
+    global EPOCH_PREP_SECONDS_TOTAL, EPOCH_PREP_SECONDS_LAST, EPOCH_PREP_SECONDS_MAX
+    ep = _EngineEpoch(now)
+    # The ONLY mutation point in the epoch: retention runs at the boundary, so
+    # no signal can expire out from under a cohort mid-drain.
+    with stage("engine.prune"):
+        await _prune_buffer(now)
+    # C6: flush this cycle's accumulated flow volume → passive_flow episodes BEFORE
+    # partitioning, so the new flow signals join the same window they were measured in.
+    await _flush_flow_aggregator(now)
+    # §8 degradation, declared on every snapshot scored under it (never silent).
+    # Evaluated ONCE per epoch: every cohort in the epoch is scored against the
+    # same inputs, so declaring the same verdict on all of them is the honest
+    # reading, not a staleness.
+    ep.topo_stale = _topology_stale(now)
+    # SYNC span (tracker 192): from here to the end of the freeze there is no
+    # await, and every line of it is O(window) — four full passes over a buffer
+    # that holds 150,000 signals in a storm. It had no span of its own, so a
+    # block here could only ever surface as un-attributed loop lag.
+    with sync_span("epoch.freeze"):
+        # Backlog-age arm (design §"Detection tuning"): the event-time age of the oldest
+        # still-unevaluated signal, measured against the newest retained event — pure
+        # event-time, no wall-clock, so the recorded storm flag stays replay-deterministic.
+        _pend = pending_signals()
+        _oldest_pending_age_s = 0.0
+        if _pend and WINDOW_BUFFER:
+            _newest_ts = max(s.ts.timestamp() for s in WINDOW_BUFFER)
+            _oldest_pending_age_s = max(0.0, _newest_ts - min(s.ts.timestamp() for s in _pend))
+        ep.storm = _storm_state(len(WINDOW_BUFFER), WINDOW_BUFFER.maxlen or 1,
+                                _oldest_pending_age_s)
+        if ep.topo_stale or ep.storm:
+            log.warning("engine degradation: topology_stale=%s storm_mode=%s (buffer=%d/%s)",
+                        ep.topo_stale, ep.storm, len(WINDOW_BUFFER), WINDOW_BUFFER.maxlen)
+        # FREEZE. From here the epoch reads its own tuple, never WINDOW_BUFFER.
+        ep.snapshot = tuple(WINDOW_BUFFER)
+        grouped: dict[str, list[Signal]] = {}
+        with stage("engine.partition_by_tenant"):
+            for s in ep.snapshot:
+                grouped.setdefault(s.tenant_id, []).append(s)
+        # Tuples, and the SAME tuple object every cohort: the prep's reuse guard is
+        # object identity, so handing run_window a fresh tuple per cohort would
+        # invalidate the prep on every transaction and reinstate the defect.
+        ep.by_tenant = {t: tuple(v) for t, v in grouped.items()}
+        # Marker for the NEXT epoch's work accounting: the newest event this epoch
+        # can see. Captured before the per-tenant work so a long epoch does not
+        # mis-attribute signals that arrived while it ran.
+        ep.cycle_max_ts = max((s.ts.timestamp() for s in ep.snapshot), default=None)
+    # SYNC span (tracker 192): the mtime-triggered enrichment reload. These are
+    # memoised on the exporter's file mtime, so they cost NOTHING until the API
+    # rewrites the export — and a mass device delete rewrites it. That makes
+    # this a stretch whose cost is zero on every cycle a test or a steady run
+    # ever measures, and O(inventory) on exactly the cycles tracker 192 is
+    # about. It is named so the next run cannot hide it again.
+    with sync_span("epoch.enrichment"):
+        adj_by_tenant = topology_links_by_tenant()  # L2/L3 links for the adjacency rung (G1)
+        pgv = path_graph_inventory()
+    t0 = time.monotonic()
+    with stage("engine.epoch_prepare"):
+        for tenant in sorted(ep.by_tenant):
+            window = ep.by_tenant[tenant]
+            # SYNC span (tracker 192): the whole per-tenant context build runs
+            # on the loop thread between two awaits — the seam filter, the
+            # adjacency build, the resolver, the four direction sources and
+            # `discovery_paths_for` / `live_node_keys`, both O(this tenant's
+            # window). `engine.epoch_prepare` is WALL clock around the offload
+            # as well, so it could never say how much of it was loop-thread time.
+            with sync_span("epoch.tenant_context"):
+                seams = tuple(s for s in seam_inventory() if s.tenant_id in (tenant, ""))
+                # Tenant-scoped adjacency: this tenant's links ∪ global — never cross-tenant.
+                adjacency = TopologyAdjacency.from_links(
+                    adj_by_tenant.get(tenant, []) + adj_by_tenant.get("", []))
+                # The directed-topology oracle for this tenant, sources in PRECEDENCE order
+                # (measured > observed > computed): C7.4 active-path-trace FIRST, then C7.3
+                # NetFlow volume, then C7.5 routing (BGP-LS/IGP SPF). Each resolves through
+                # this tenant's resolver / device entities → zero-leak. None when none covers
+                # → vote #2 abstains (no-op).
+                tenant_resolver = cached_entity_resolver_for(tenant)
+                before = resolve_path_order(probe_paths(), tenant_resolver)
+                vol = {**_FLOW_DIR.get("", {}), **_FLOW_DIR.get(tenant, {})}
+                forward = forwarding_pairs(routing_direction())
+                sources = []
+                if before:
+                    sources.append(("traceroute", traceroute_direction_source(before)))
+                if vol:
+                    sources.append(("netflow", netflow_direction_source(vol, FLOW_DIRECTION_DOMINANCE)))
+                if forward:
+                    sources.append(("routing", routing_direction_source(forward)))
+                directed = DirectedTopology(sources=tuple(sources)) if sources else None
+                # Path-causality RCA P2: the tenant's typed causal paths for the on-path
+                # attribution enrichment, fusing measured + flow + inventory + DNS discovery
+                # (window carries this tenant's cloud_dns_log heads). Empty ⇒ no-op, objects
+                # byte-identical to pre-P2.
+                discovery = discovery_paths_for(tenant, pgv, list(window))
+                ep.ctx[tenant] = (seams, adjacency, directed, pgv, discovery)
+                ep.live_keys[tenant] = live_node_keys(window)
+            try:
+                prep = await _offload(prepare_run_window, window, seams, ENGINE_CFG,
+                                      adjacency, pgv, discovery)
+            except ValueError as exc:
+                # A mixed-tenant window is a partitioning bug, not a data error;
+                # it is observable (§10) and costs this tenant the epoch, not the
+                # process. Cohorts skip a tenant with no prep.
+                log.error("engine epoch rejected tenant window: %s", exc)
+                prep = None
+            ep.preps[tenant] = prep
+            if prep is not None:
+                EPOCH_PREPARATIONS += 1
+                _account_candidate_generation(tenant, prep)
+    ep.prep_seconds = time.monotonic() - t0
+    EPOCHS_TOTAL += 1
+    EPOCH_PREP_SECONDS_TOTAL += ep.prep_seconds
+    EPOCH_PREP_SECONDS_LAST = ep.prep_seconds
+    EPOCH_PREP_SECONDS_MAX = max(EPOCH_PREP_SECONDS_MAX, ep.prep_seconds)
+    EPOCH_PREP_NODES = sum(len(p.nodes) for p in ep.preps.values() if p is not None)
+    return ep
+
+
+def _close_epoch(ep: _EngineEpoch) -> None:
+    """Discard the prepared state. Called on every path, including failure —
+    prepared state must never outlive the snapshot it describes."""
+    global EPOCH_SECONDS_LAST, EPOCH_SECONDS_MAX, EPOCH_COHORTS_LAST, EPOCH_COHORTS_MAX
+    EPOCH_SECONDS_LAST = time.monotonic() - ep.started
+    EPOCH_SECONDS_MAX = max(EPOCH_SECONDS_MAX, EPOCH_SECONDS_LAST)
+    EPOCH_COHORTS_LAST = ep.cohorts
+    EPOCH_COHORTS_MAX = max(EPOCH_COHORTS_MAX, ep.cohorts)
+    ep.preps.clear()
+    ep.ctx.clear()
+    ep.live_keys.clear()
+    # P1: the component memo and the epoch's seen-set die WITH the epoch. The
+    # memo holds materialized ObjectSnapshots (nodes, edges, evidence) — keeping
+    # it past the snapshot it describes would pin evidence the 165 horizon has
+    # already released, exactly what the prepared state must not do.
+    ep.memos.clear()
+    ep.seen.clear()
+    ep.by_tenant = {}
+    ep.snapshot = ()
+
+
+def epoch_state() -> dict[str, object]:
+    """Phase 8 observability. THE invariant this exists to expose: for K cohorts
+    over one unchanged snapshot, `preparations` advances by the tenant count
+    ONCE, not K times. `preparations / epochs` must stay at the tenant count."""
+    return {
+        "epochs": EPOCHS_TOTAL,
+        "preparations": EPOCH_PREPARATIONS,
+        "prep_seconds_last": round(EPOCH_PREP_SECONDS_LAST, 3),
+        "prep_seconds_max": round(EPOCH_PREP_SECONDS_MAX, 3),
+        "prep_seconds_total": round(EPOCH_PREP_SECONDS_TOTAL, 3),
+        "prep_nodes": EPOCH_PREP_NODES,
+        "epoch_seconds_last": round(EPOCH_SECONDS_LAST, 3),
+        "epoch_seconds_max": round(EPOCH_SECONDS_MAX, 3),
+        "cohorts_last": EPOCH_COHORTS_LAST,
+        "cohorts_max": EPOCH_COHORTS_MAX,
+        # #168 Stage-2 Lever 1: rank-7 hub-token cap activity + the general
+        # candidate-ceiling backstop (§10 observable).
+        "hub_tokens_capped_total": CORR_HUB_TOKENS_CAPPED_TOTAL,
+        "candidate_pairs_skipped_total": CORR_CANDIDATE_PAIRS_SKIPPED_TOTAL,
+        "candidate_ceiling_hits_total": CORR_CANDIDATE_CEILING_HITS_TOTAL,
+        "candidate_ceiling_last_dimension": CORR_CANDIDATE_CEILING_LAST_DIM,
+        "token_hub_cap": CORR_TOKEN_HUB_CAP,
+        "candidate_ceiling": CORR_CANDIDATE_CEILING,
+        # ── P1 cohort-touch gate (spec §5). THE invariant these expose: on
+        # cohorts >= 2 of one epoch, memo_hits ~= (1 - touch_ratio) x components.
+        # components == ranked with the gate off; components == ranked while the
+        # gate is on means the memo is never hitting and the P1 saving is absent.
+        # Ratios are derived by the report/harness, never here.
+        "cohort_touch_gate": CORR_COHORT_TOUCH_GATE,
+        "lifecycle_epoch_cadence": CORR_LIFECYCLE_EPOCH_CADENCE,
+        "cohort_components_total": COHORT_COMPONENTS_TOTAL,
+        "cohort_components_touched_total": COHORT_COMPONENTS_TOUCHED_TOTAL,
+        "cohort_components_memo_hits_total": COHORT_MEMO_HITS_TOTAL,
+        "cohort_components_ranked_total": COHORT_COMPONENTS_RANKED_TOTAL,
+        "cohort_open_objects": COHORT_OPEN_OBJECTS_LAST,
+        "cohort_touched": COHORT_TOUCHED_LAST,
+        "lifecycle_passes_total": LIFECYCLE_PASSES_TOTAL,
+        "open_objects_epoch_peak": OPEN_OBJECTS_EPOCH_PEAK,
+        # ── P2 step 4a: the lifecycle candidate space. THE invariant: with a
+        # 300 s epoch budget `cohorts_last` is often 1, and
+        # `lifecycle_seen_window_cohorts` is what keeps the merge candidate
+        # space at the K cohorts P1 measured instead of collapsing with it.
+        "lifecycle_cohort_window": CORR_LIFECYCLE_COHORT_WINDOW,
+        "lifecycle_seen_window_cohorts": LIFECYCLE_SEEN_WINDOW_COHORTS,
+        "lifecycle_seen_window_ids": LIFECYCLE_SEEN_WINDOW_IDS,
+        # THE pair to read together: `candidates` 0 while `open_objects` is
+        # large means the merge pass is being handed nothing to test.
+        "lifecycle_merge_survivors": LIFECYCLE_MERGE_SURVIVORS_LAST,
+        "lifecycle_merge_candidates": LIFECYCLE_MERGE_CANDIDATES_LAST,
+        "lifecycle_merge_chains_skipped_total": LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL,
+        "lifecycle_merge_pairs_evaluated_total": LIFECYCLE_MERGE_PAIRS_EVALUATED_TOTAL,
+        "lifecycle_merge_seconds_max": round(LIFECYCLE_MERGE_SECONDS_MAX, 6),
+        "lifecycle_merge_offloads_total": LIFECYCLE_MERGE_OFFLOADS_TOTAL,
+        # The loop-thread bound (storm-s03): SYNC time, next to the
+        # wall-clock lifecycle numbers above so the two can never be confused
+        # again. See `sync_record`.
+        "sync": sync_profile(),
+        # ── P2 step 4: the Evidence plane. THE invariant: `depth` returns to 0
+        # between storms (spec §2's T8) and `lag_seconds` is the operator's
+        # T7 — the time from a verdict to its materialized graph. `failed_total`
+        # and `lost_total` must both stay 0.
+        "evidence": evidence_stats(),
+        # ── P2 step 1: the epoch budget (spec §4). `budget_exits` counts sweeps
+        # that ended on wall time rather than on the cohort bound or an empty
+        # epoch; 0 with a large epoch_seconds_max means the budget is off.
+        "epoch_budget_s": CORR_ENGINE_EPOCH_BUDGET_S,
+        "epoch_budget_exits_total": EPOCH_BUDGET_EXITS_TOTAL,
+        # ── P2 step 2: the level-1 rank memo (spec §3). THE invariant: level-1
+        # hits keep accruing ACROSS epochs (a process-lifetime cache), where
+        # level-2 hits reset with every epoch. `unkeyable` must stay ~0 — a
+        # rising count means producers are stamping colliding signal_ids.
+        "rank_memo_enabled": CORR_RANK_MEMO and CORR_COHORT_TOUCH_GATE,
+        "rank_memo": rank_memo_stats(),
+        # Hits by memo LEVEL, the two-level picture in one place: level 1 skips
+        # rank only, level 2 skips the whole snapshot.
+        "decision_memo_level1_hits_total": rank_memo_stats()["hits"],
+        "decision_memo_level2_hits_total": COHORT_MEMO_HITS_TOTAL,
+        "snapshot_digest": digest_cache_stats(),
+        # ── 2026-08-29: the two counters that must both stay 0, and the
+        # evidence ledger that says what a non-zero one cost. A rejected window
+        # discards a whole tenant's snapshots for that cohort while the frontier
+        # still advances, so `signals_dropped_total` is the honest measure of
+        # what a "completed" run never actually evaluated.
+        "windows_rejected_total": ENGINE_WINDOWS_REJECTED_TOTAL,
+        "profiler_errors_total": PROFILER_ERRORS_TOTAL,
+        "signals_dropped_total": dict(SIGNALS_DROPPED_TOTAL),
+        # ── P3 step 2: the Aggregation plane (memo §5's event/aggregation
+        # metrics). THE pair to read together: `suppressed_ratio` is the share
+        # of promoted signals the engine never had to see, and
+        # `state_transitions` + `recoveries` are what must NEVER be suppressed —
+        # a rising suppressed_ratio with those two flat is the plane working; a
+        # rising suppressed_ratio that moves them is a defect.
+        "aggregation": agg_stats(),
+    }
+
+
+def _select_cohort(pending: list[Signal], limit: int) -> list[Signal]:
+    """Bounded, tenant-fair admission.
+
+    Round-robin across tenants in arrival order so a hot tenant cannot consume
+    the whole cohort while a quiet one waits indefinitely. Within a tenant,
+    arrival order is preserved — the engine's identity and continuation rules
+    depend on onset ordering, and reordering inside a tenant would change which
+    node seeds an object.
+    """
+    if len(pending) <= limit:
+        return list(pending)
+    by_tenant: dict[str, list[Signal]] = {}
+    for s in pending:
+        by_tenant.setdefault(s.tenant_id, []).append(s)
+    cohort: list[Signal] = []
+    queues = [iter(v) for _k, v in sorted(by_tenant.items())]
+    exhausted = 0
+    while len(cohort) < limit and exhausted < len(queues):
+        exhausted = 0
+        for q in queues:
+            if len(cohort) >= limit:
+                break
+            nxt = next(q, None)
+            if nxt is None:
+                exhausted += 1
+            else:
+                cohort.append(nxt)
+    # Restore arrival order across the selected set: the round-robin is an
+    # ADMISSION policy, not a reordering of the stream.
+    order = {id(s): i for i, s in enumerate(pending)}
+    cohort.sort(key=lambda s: order[id(s)])
+    return cohort
+
+
+def _mark_processed(cohort: list[Signal]) -> None:
+    """Advance the frontier. Called ONLY after the transaction's persistence
+    boundary has completed — a failed transaction leaves its cohort pending and
+    fully replayable, which is what tracker 160's durability contract expects."""
+    for s in cohort:
+        _PROCESSED_IDS.add(str(s.signal_id))
+
+
+def scheduler_state() -> dict[str, object]:
+    pending = pending_signals()
+    oldest = 0.0
+    if pending:
+        newest = max(s.ts.timestamp() for s in WINDOW_BUFFER)
+        oldest = round(newest - min(s.ts.timestamp() for s in pending), 3)
+    per_tenant: dict[str, int] = {}
+    for s in pending:
+        per_tenant[s.tenant_id] = per_tenant.get(s.tenant_id, 0) + 1
+    return {
+        "cohort_size": CORR_ENGINE_COHORT_SIZE,
+        "cohorts_processed": COHORTS_PROCESSED,
+        "cohort_signals_total": COHORT_SIGNALS_TOTAL,
+        "pending": len(pending),
+        "pending_peak": PENDING_PEAK,
+        "processed_tracked": len(_PROCESSED_IDS),
+        # Event-time age of the oldest thing still waiting, against the newest
+        # thing retained. This is the number that says whether the scheduler is
+        # about to let evidence expire before it was ever evaluated (phase 7).
+        "oldest_pending_event_age_s": oldest,
+        "oldest_pending_horizon_fraction": (
+            round(oldest / RETENTION_REQUIRED_S, 4) if RETENTION_REQUIRED_S else 0.0),
+        "pending_tenants": len(per_tenant),
+        "pending_max_tenant": max(per_tenant.values(), default=0),
+    }
+
+
+# ── tracker 166 phase 2: how much of each cycle is re-derivation? ────────────
+#
+# The incremental design turns on one number: what fraction of the candidate
+# pairs a cycle grounds and scores involve only signals that were already
+# present, and unchanged, last cycle. Those are pure recomputation — the same
+# inputs producing the same edge. `new x old` pairs are NOT waste: a new signal
+# may legitimately attach to retained evidence anywhere inside the engine's
+# temporal reach, and tracker 165 exists to keep that evidence available.
+#
+# LAST_CYCLE_MAX_TS is the newest EVENT timestamp the previous cycle saw, so
+# "new" means "arrived since the last evaluation" in the same event-time frame
+# the engine reasons in — not wall clock, which after tracker 165 is not a
+# retention concept at all.
+LAST_CYCLE_MAX_TS: float | None = None
+CYCLE_WORK: dict[str, int] = {}
+# Non-numeric fields of the work sink (e.g. #168's candidate_ceiling_dimension,
+# which names WHICH grouping hit the candidate ceiling). A sum is meaningless
+# for them, so the LAST value is kept — and, critically, keeping them here is
+# what stops a new descriptive field from turning `int(v)` into a ValueError
+# that rejects the window (see ENGINE_WINDOWS_REJECTED_TOTAL above).
+CYCLE_WORK_LABELS: dict[str, str] = {}
+CYCLE_WORK_CYCLES = 0
+
+
+def _record_cycle_work(tenant: str, work: dict) -> None:
+    """Accumulate one tenant-cycle's work accounting.
+
+    CONTRACT: this never raises on a value. Numeric fields (int/float/bool) sum;
+    anything else — including a non-finite float, which int() rejects — is kept
+    as a LABEL. The engine is free to add a descriptive field to its work sink
+    without that being able to break a correlation cycle.
+    """
+    global CYCLE_WORK_CYCLES
+    CYCLE_WORK_CYCLES += 1
+    for k, v in work.items():
+        if isinstance(v, bool):
+            CYCLE_WORK[k] = CYCLE_WORK.get(k, 0) + int(v)
+        elif isinstance(v, int):
+            CYCLE_WORK[k] = CYCLE_WORK.get(k, 0) + v
+        elif isinstance(v, float) and math.isfinite(v):
+            CYCLE_WORK[k] = CYCLE_WORK.get(k, 0) + int(v)
+        else:
+            CYCLE_WORK_LABELS[k] = str(v)[:120]
+
+
+def cycle_work_profile() -> dict[str, object]:
+    """Totals plus the ratios tracker 166 is judged on."""
+    cand = CYCLE_WORK.get("pairs_candidate", 0)
+    nodes = CYCLE_WORK.get("nodes", 0)
+    out: dict[str, object] = {"cycles": CYCLE_WORK_CYCLES, **CYCLE_WORK,
+                              **CYCLE_WORK_LABELS}
+    if cand:
+        out["redundant_pair_fraction"] = round(CYCLE_WORK.get("pairs_old_old", 0) / cand, 4)
+        out["required_pair_fraction"] = round(
+            (CYCLE_WORK.get("pairs_new_old", 0) + CYCLE_WORK.get("pairs_new_new", 0)) / cand, 4)
+    if nodes:
+        out["new_node_fraction"] = round(CYCLE_WORK.get("nodes_new", 0) / nodes, 4)
+    return out
+
+
+# ── tracker 165 Part B: stage profiling (OPT-IN, off by default) ──────────────
+#
+# Previous profiler work proved the instrument can destroy the measurement: a
+# tracemalloc.statistics() call on the event loop turned into six stalls of
+# 5-96 s and the whole run had to be discarded as CONTAMINATED. So this is
+# deliberately the cheapest thing that can answer "where does the time go":
+#
+#   * two perf_counter() reads and a dict update per stage — no stack walking,
+#     no allocation profiling, no object-graph traversal, nothing that scales
+#     with heap size;
+#   * gated on a module-level bool so the cost when disabled is one attribute
+#     load and a branch;
+#   * accumulators only — percentiles are computed from a bounded reservoir at
+#     SCRAPE time, off the hot path.
+#
+# It is opt-in via CORR_PROFILE_STAGES because an always-on profiler is a
+# permanent tax on the thing it measures, and because a contaminated/clean
+# comparison is only possible if it can be turned off.
+CORR_PROFILE_STAGES = os.environ.get("CORR_PROFILE_STAGES", "").lower() in ("1", "true", "yes")
+CORR_PROFILE_SAMPLES = max(64, int(os.environ.get("CORR_PROFILE_SAMPLES", "512")))
+
+_STAGE_LOCK = threading.Lock()
+# stage -> [count, total_s, max_s]
+_STAGE_STATS: dict[str, list] = {}
+_STAGE_SAMPLES: dict[str, deque] = {}
+
+
+def stage_record(stage: str, elapsed: float) -> None:
+    """Accumulate one stage timing. Cheap enough for the per-event path.
+
+    Isolated from the correctness path (2026-08-29): `stage(...)` wraps
+    `run_window` itself, so a fault in the timer's own bookkeeping would
+    propagate out of the engine call it is only supposed to be measuring. A
+    zero-exception `try` costs nothing on the hot path and a counted profiler
+    fault costs a metric, not a cohort."""
+    try:
+        with _STAGE_LOCK:
+            row = _STAGE_STATS.get(stage)
+            if row is None:
+                _STAGE_STATS[stage] = [1, elapsed, elapsed]
+                _STAGE_SAMPLES[stage] = deque([elapsed], maxlen=CORR_PROFILE_SAMPLES)
+                return
+            row[0] += 1
+            row[1] += elapsed
+            row[2] = max(row[2], elapsed)
+            _STAGE_SAMPLES[stage].append(elapsed)
+    except Exception as exc:  # noqa: BLE001 — a profiler may not raise into the engine
+        _note_profiler_error(f"stage_record({stage})", exc)
+
+
+class stage:
+    """Context manager timing one stage. A no-op when profiling is disabled.
+
+    Written as a class rather than @contextmanager because the generator-based
+    form allocates a generator per use, which on a per-event path is exactly
+    the kind of overhead that makes a profiler measure itself.
+    """
+
+    __slots__ = ("_name", "_t0")
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self._t0 = 0.0
+
+    def __enter__(self):
+        if CORR_PROFILE_STAGES:
+            self._t0 = time.perf_counter()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if CORR_PROFILE_STAGES and self._t0:
+            stage_record(self._name, time.perf_counter() - self._t0)
+        return False
+
+
+def _pct(vals: list[float], q: float) -> float:
+    if not vals:
+        return 0.0
+    idx = min(len(vals) - 1, max(0, math.ceil(q * len(vals)) - 1))
+    return vals[idx]
+
+
+def stage_profile() -> dict[str, object]:
+    """Snapshot of every recorded stage, with percentiles computed here rather
+    than on the hot path."""
+    with _STAGE_LOCK:
+        rows = {k: list(v) for k, v in _STAGE_STATS.items()}
+        samples = {k: sorted(v) for k, v in _STAGE_SAMPLES.items()}
+    total = sum(r[1] for r in rows.values()) or 1.0
+    out = {}
+    for name, (count, tot, mx) in sorted(rows.items(), key=lambda kv: -kv[1][1]):
+        s = samples.get(name, [])
+        out[name] = {
+            "calls": count,
+            "total_s": round(tot, 6),
+            "share": round(tot / total, 4),
+            "mean_ms": round(1000 * tot / count, 4) if count else 0.0,
+            "p50_ms": round(1000 * _pct(s, 0.50), 4),
+            "p95_ms": round(1000 * _pct(s, 0.95), 4),
+            "p99_ms": round(1000 * _pct(s, 0.99), 4),
+            "max_ms": round(1000 * mx, 4),
+        }
+    return {"enabled": CORR_PROFILE_STAGES, "stages": out}
+
+
+# ── SYNCHRONOUS-only spans: loop-thread occupancy, not wall clock ────────────
+#
+# WHY THIS EXISTS (run storm-s03, 2026-08-28/29, replica-3). The stage profile
+# reported `lifecycle.quiesce` max 26,024 ms next to two ~26 s consumer
+# ejections and the two numbers were read as the same event. They are not
+# comparable: every span above is WALL CLOCK and encloses awaits — a quiesce
+# pass that closes 400 objects and awaits a ClickHouse insert for each of them
+# is a 26-second PASS, not a 26-second stall, and the profile could not tell an
+# operator which one it was looking at. Measured offline on the storm shape
+# (1,400 open objects, 400 simultaneous closes, ~15k-signal window): the pass
+# takes 26 s of wall clock in that population and the WORST single synchronous
+# stretch inside it is ~70 ms.
+#
+# A sync span is the complement: it wraps a block with NO await in it, so its
+# duration is time the event-loop thread could not run anything else —
+# aiokafka's heartbeat included. `sync_record` is what the next investigation
+# reads to answer "was the loop held, or was the pass merely long", and
+# `corr_sync_stretch_max_ms` / `corr_sync_overruns_total` make an over-budget
+# stretch an alertable fact instead of an inference from a wall-clock span.
+#
+# The budget is the SAME 500 ms the merge pass is already held to
+# (test_lifecycle_merge_storm_p1): an order of magnitude under the loop-lag
+# warn threshold and two orders under the session timeout, so a breach is a
+# defect long before it is an ejection.
+CORR_SYNC_BUDGET_MS = float(os.environ.get("CORR_SYNC_BUDGET_MS", "500"))
+# The rate-projected offload (see `_snap_call`). 0 disables it, restoring the
+# pure element-threshold gate — the A/B knob for the change.
+CORR_SYNC_OFFLOAD = os.environ.get(
+    "CORR_SYNC_OFFLOAD", "1").lower() in ("1", "true", "yes")
+SYNC_STRETCH_MAX_MS = 0.0        # worst uninterrupted loop-thread block (gauge)
+SYNC_STRETCH_MAX_SITE = ""       # which site owned it
+SYNC_OVERRUNS_TOTAL = 0          # blocks that exceeded CORR_SYNC_BUDGET_MS
+SYNC_OVERRUN_LAST_SITE = ""
+_SYNC_OVERRUN_LOG_LAST = -1e9
+# builder -> the last N measured INLINE seconds-per-element. The projection
+# takes the MAX of the window (never an average): the bound has to hold for the
+# worst object the process has recently seen, not the typical one.
+#
+# A WINDOW, not a running maximum, and the first sample of each builder is
+# DISCARDED — both for the same measured reason. The first inline call of a
+# builder in a process is a cold one (module imports, first-touch caches, a
+# JSON encoder that has never run) and reads far above the steady state:
+# `estimate_bytes` measured 2.6 ms/element cold against ~0.01 ms/element warm,
+# a 260x over-read. A running maximum would have promoted that one anomaly into
+# a permanent "offload everything over 190 elements" rule for the life of the
+# process — the projection would then be describing the cold start rather than
+# the work, and the executor would carry traffic the loop could have run in
+# microseconds.
+#
+# The window is also TIME-BOUNDED, and that is not belt-and-braces either: once
+# the projection sends a builder to the executor it stops producing inline
+# samples, so a window that could only age out by being refilled would stay
+# exactly as it was at the moment it fired — permanently. A rate older than
+# _SYNC_RATE_TTL_S is therefore dropped, the next call is measured inline
+# again, and a builder whose cost has come back down comes back with it. The
+# cost of being wrong is bounded by the TTL, not by the process lifetime.
+_SYNC_RATE_WINDOW = 16
+_SYNC_RATE_TTL_S = float(os.environ.get("CORR_SYNC_RATE_TTL_S", "60"))
+# …and the projection is only ever consulted for an object big enough for the
+# answer to be about the OBJECT. Below this many elements a builder cannot
+# plausibly cost half a second: a rate that says otherwise is measuring
+# something the element count does not describe (a GC pause or executor
+# contention that landed inside the call), and acting on it would send work to
+# the executor that the loop runs in microseconds — pure overhead, and enough
+# of it to change the scheduling of everything else. The element threshold
+# (CORR_OFFLOAD_MIN_ELEMENTS, 2,000) still bounds the top; this bounds the
+# bottom, so the projection governs exactly the band between them.
+_SYNC_RATE_MIN_COST = 200
+# site name per builder, interned once: this is a per-object path and
+# `"builder." + name` on every call is an allocation that buys nothing.
+_SYNC_SITE: dict[str, str] = {}
+# builder -> deque of (monotonic, seconds-per-element)
+_SYNC_RATE: dict[str, deque] = {}
+# Below this, a measurement is timer noise rather than a rate: a 0.2 ms call on
+# a 3-element object would project 60 ms/1000 elements out of nothing.
+_SYNC_RATE_FLOOR_S = 0.001
+
+
+def sync_record(site: str, elapsed: float) -> None:
+    """Record ONE uninterrupted loop-thread block (a block with no await).
+
+    Always on, unlike `stage_record`: the max and the overrun counter are the
+    §10 safety observable for the loop-thread bound, and a safety observable
+    that is only collected when a profiler flag happens to be set is not one.
+    The per-site percentile reservoir still rides on the stage profiler, so the
+    detailed breakdown stays opt-in and free when CORR_PROFILE_STAGES is off.
+    """
+    global SYNC_STRETCH_MAX_MS, SYNC_STRETCH_MAX_SITE
+    global SYNC_OVERRUNS_TOTAL, SYNC_OVERRUN_LAST_SITE, _SYNC_OVERRUN_LOG_LAST
+    try:
+        ms = elapsed * 1000.0
+        if ms > SYNC_STRETCH_MAX_MS:
+            SYNC_STRETCH_MAX_MS = ms
+            SYNC_STRETCH_MAX_SITE = site
+        if ms >= CORR_SYNC_BUDGET_MS:
+            SYNC_OVERRUNS_TOTAL += 1
+            SYNC_OVERRUN_LAST_SITE = site
+            mono = time.monotonic()
+            if (mono - _SYNC_OVERRUN_LOG_LAST) >= 30.0:
+                _SYNC_OVERRUN_LOG_LAST = mono
+                log.warning(
+                    "loop-thread block %s held the event loop %.0f ms "
+                    "(budget %.0f ms, overruns=%d, worst=%.0f ms at %s) — this "
+                    "is SYNCHRONOUS time, no heartbeat can run inside it",
+                    site, ms, CORR_SYNC_BUDGET_MS, SYNC_OVERRUNS_TOTAL,
+                    SYNC_STRETCH_MAX_MS, SYNC_STRETCH_MAX_SITE)
+        if CORR_PROFILE_STAGES:
+            stage_record("sync." + site, elapsed)
+    except Exception as exc:  # noqa: BLE001 — a profiler may not raise into the engine
+        _note_profiler_error(f"sync_record({site})", exc)
+
+
+def _sync_projected_ms(name: str, cost: int) -> float:
+    """What running `name` INLINE on an object of this cost is expected to hold
+    the loop for, from the worst rate in this builder's recent window."""
+    if cost < _SYNC_RATE_MIN_COST:
+        return 0.0
+    window = _SYNC_RATE.get(name)
+    if not window:
+        return 0.0
+    cutoff = time.monotonic() - _SYNC_RATE_TTL_S
+    while window and window[0][0] < cutoff:   # appended in time order
+        window.popleft()
+    if not window:
+        return 0.0
+    return max(r for _, r in window) * max(cost, 0) * 1000.0
+
+
+def _sync_note_inline(name: str, cost: int, elapsed: float) -> None:
+    """One inline builder call: record the block and update its rate window."""
+    if cost > 0 and elapsed >= _SYNC_RATE_FLOOR_S:
+        window = _SYNC_RATE.get(name)
+        if window is None:
+            # First sample of this builder: cold, and therefore recorded as
+            # "seen" without being usable as a rate. See _SYNC_RATE.
+            _SYNC_RATE[name] = deque(maxlen=_SYNC_RATE_WINDOW)
+        else:
+            window.append((time.monotonic(), elapsed / cost))
+    site = _SYNC_SITE.get(name)
+    if site is None:
+        site = _SYNC_SITE[name] = "builder." + name
+    sync_record(site, elapsed)
+
+
+def sync_profile() -> dict[str, object]:
+    """The loop-thread bound, as numbers an operator can alert on."""
+    return {
+        "budget_ms": CORR_SYNC_BUDGET_MS,
+        "rate_offload": CORR_SYNC_OFFLOAD,
+        "stretch_max_ms": round(SYNC_STRETCH_MAX_MS, 3),
+        "stretch_max_site": SYNC_STRETCH_MAX_SITE,
+        "overruns_total": SYNC_OVERRUNS_TOTAL,
+        "overrun_last_site": SYNC_OVERRUN_LAST_SITE,
+        "rates_ms_per_element": {
+            k: round(max(r for _, r in v) * 1000.0, 6)
+            for k, v in sorted(_SYNC_RATE.items()) if v},
+    }
+
+
+class sync_span:
+    """Context manager for a block that contains NO await. Always on.
+
+    Written as a class for the same reason `stage` is: no generator allocation
+    on a per-object path.
+    """
+
+    __slots__ = ("_name", "_t0")
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self._t0 = 0.0
+
+    def __enter__(self):
+        self._t0 = time.perf_counter()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        sync_record(self._name, time.perf_counter() - self._t0)
+        return False
+
+
+# ── tracker 164: the BOUNDED offload plane ───────────────────────────────────
+#
+# WHAT THIS REPLACED. `_offload` used to hand work to asyncio's DEFAULT
+# executor (`run_in_executor(None, …)`). Its WORKER count was bounded
+# (`min(32, cpu+4)` — 8 on the 4-core box) but its work QUEUE is an unbounded
+# `SimpleQueue`: submission never blocked and never failed, so a producer that
+# outran the workers built an invisible backlog whose only symptom was latency
+# somewhere else, and admission was instrumentation-only. §9 requires a bounded
+# queue with real backpressure. The first wave of this tracker added the
+# measurement; this is the bound the measurement justified.
+#
+# THE PLANE, in three parts:
+#
+#   1. A DEDICATED executor (CORR_OFFLOAD_WORKERS, default 4). The default
+#      executor is shared with everything else in the process that reaches for
+#      a thread — `asyncio.to_thread` for the diagnostics snapshots and the
+#      cloud-log tailer's blocking reads — so "the offload queue" was never
+#      actually the offload queue, and its size was somebody else's decision.
+#      It is ours now; `to_thread` keeps the default pool to itself.
+#
+#      WHY 4. Everything routed here is pure-CPU Python holding the GIL
+#      (`run_window`, the snapshot hashers, `_ndjson_body`'s C encoder), so
+#      threads past the first buy INTERLEAVING, not parallelism — the ceiling
+#      is one core-equivalent however many run. What the count must cover is
+#      the number of INDEPENDENT async lineages that can legitimately be inside
+#      an `await _offload(...)` at the same instant, because a lineage that
+#      finds no free worker waits on work it has nothing to do with. There are
+#      five, of which three are concurrently hot:
+#        * `engine_loop` — `prepare_run_window`, `run_window`, the continuation
+#          indices, `find_merges`, and every `_snap_call` / `_decision_offload`
+#          on the Decision path (all strictly serial inside the cycle);
+#        * `_evidence_consumer` — `_archive_chunk` and the child-row pages;
+#        * `_evidence_flusher` — `_batch_token` / `_ndjson_body` for the
+#          Evidence batcher;
+#        * `batch_flush_loop` — the same two for SIGNAL_BATCH;
+#        * `consume` — `SIGNAL_BATCH.flush()` at its commit points (in practice
+#          alternating with batch_flush_loop; both drain the one batcher).
+#      4 covers the three hot lineages with a slot to spare and matches the
+#      box's core count (the single-box TTUR goal) rather than the default
+#      executor's incidental cpu+4. Env-tunable, floored at 1.
+#
+#   2. A BOUNDED, STRICTLY FIFO ADMISSION GATE (CORR_OFFLOAD_INFLIGHT_MAX,
+#      default 2x workers). In-flight = queued + executing. When the plane is
+#      full the caller AWAITS: nothing is dropped, nothing is rejected, nothing
+#      queues without limit. The bound is a SAFETY bound rather than a
+#      throttle — with five lineages it does not bind in steady state, and the
+#      day a caller fans out with `gather` it turns an unbounded backlog into a
+#      visible, measured wait (`corr_offload_admission_waits_total`).
+#
+#   3. DEADLOCK AUDIT — must stay true. A gate held across an await deadlocks
+#      the moment offloaded work needs the gate itself. It cannot here:
+#      everything submitted is a SYNCHRONOUS pure function running on an
+#      executor thread, and `_offload` is a coroutine, so an offloaded callable
+#      has no way to re-enter it. None of them (engine `run_window` /
+#      `prepare_run_window` / `ContinuationIndex` / `find_merges`, the
+#      ObjectSnapshot hashers and row builders, `_archive_chunk`,
+#      `_ndjson_body`, `_batch_token`) touches an executor, an event loop, or a
+#      lock this module holds. Every call site awaits its offload to completion
+#      before starting another, so no lineage holds a slot while waiting on a
+#      second. IF a future change ever offloads something that itself schedules
+#      an offload, this gate must grow a reservation for the nested call — or
+#      the plane will wedge. `test_offload_instrumentation_164.py` pins the
+#      audit as an assertion over the call sites, not as a comment.
+#
+# Worker callbacks run on executor threads, so every counter below is updated
+# under one lock: `x += 1` is load/add/store and would lose counts across
+# workers, and instrumentation that undercounts is worse than none.
+CORR_OFFLOAD_SAMPLES = max(64, int(os.environ.get("CORR_OFFLOAD_SAMPLES", "1024")))
+# Floored at 1: a zero-worker plane would hang forever, so a config typo must
+# degrade to serial execution, never to a stall.
+CORR_OFFLOAD_WORKERS = max(1, int(os.environ.get("CORR_OFFLOAD_WORKERS", "4")))
+# Queued + executing ceiling. Never below the worker count — a limit under it
+# would leave workers idle behind the gate, which is a throughput bug dressed
+# as a safety bound.
+CORR_OFFLOAD_INFLIGHT_MAX = max(
+    CORR_OFFLOAD_WORKERS,
+    int(os.environ.get("CORR_OFFLOAD_INFLIGHT_MAX",
+                       str(2 * CORR_OFFLOAD_WORKERS))))
+# How long `offload_stop` gives in-flight calls before it abandons them (and
+# says so). Queued-but-unstarted calls are cancelled immediately: they have not
+# begun, so nothing half-done is left behind.
+CORR_OFFLOAD_DRAIN_S = max(0.0, float(os.environ.get("CORR_OFFLOAD_DRAIN_S", "5")))
+
+_OFFLOAD_LOCK = threading.Lock()
+_OFFLOAD_SEQ = 0
+_OFFLOAD_PENDING: dict[int, float] = {}    # seq -> enqueue monotonic, while QUEUED
+_OFFLOAD_RUNNING: dict[int, float] = {}    # seq -> start monotonic, while EXECUTING
+_OFFLOAD_WAIT_S: deque[float] = deque(maxlen=CORR_OFFLOAD_SAMPLES)
+_OFFLOAD_EXEC_S: deque[float] = deque(maxlen=CORR_OFFLOAD_SAMPLES)
+OFFLOAD_SUBMITTED = 0
+OFFLOAD_STARTED = 0
+OFFLOAD_COMPLETED = 0
+OFFLOAD_FAILED = 0
+OFFLOAD_DEPTH_PEAK = 0
+OFFLOAD_ACTIVE_PEAK = 0
+OFFLOAD_WAIT_MAX_S = 0.0
+OFFLOAD_EXEC_MAX_S = 0.0
+OFFLOAD_ADMISSION_WAITS = 0        # calls that had to wait for a slot
+OFFLOAD_ADMISSION_WAIT_MAX_S = 0.0
+OFFLOAD_ABANDONED = 0              # in-flight calls left behind by offload_stop
+
+
+class _OffloadGate:
+    """Bounded admission for the offload plane. Strictly FIFO, never refuses.
+
+    `asyncio.Semaphore` would do the counting, but on 3.10 `acquire()` re-checks
+    the counter before an already-woken waiter is rescheduled, so a newly
+    arriving caller can barge past one that is already queued — under sustained
+    submission that is starvation, and a bound that starves is worse than no
+    bound. Admission order here is arrival order, always: a caller that finds
+    anyone waiting joins the back of the line rather than taking a free slot.
+
+    A slot covers QUEUED + EXECUTING time; it is released when the offloaded
+    call returns (or raises, or its awaiter is cancelled), never before.
+    """
+
+    def __init__(self, limit: int) -> None:
+        self._limit = max(1, int(limit))
+        self._inflight = 0
+        self._waiters: deque[asyncio.Future[None]] = deque()
+
+    @property
+    def limit(self) -> int:
+        return self._limit
+
+    @property
+    def inflight(self) -> int:
+        return self._inflight
+
+    @property
+    def waiting(self) -> int:
+        return len(self._waiters)
+
+    async def acquire(self) -> float:
+        """Reserve one slot, awaiting one if the plane is full. Returns the
+        seconds spent waiting — 0.0 on the uncontended path, which is the
+        steady state and must stay free of a clock read that means nothing."""
+        if self._inflight < self._limit and not self._waiters:
+            self._inflight += 1
+            return 0.0
+        fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._waiters.append(fut)
+        t0 = time.monotonic()
+        try:
+            await fut
+        except asyncio.CancelledError:
+            # Two cases, and neither may leak a slot: still in line (drop out),
+            # or already granted the slot by `release` but cancelled before
+            # resuming (hand it straight to the next in line).
+            try:
+                self._waiters.remove(fut)
+            except ValueError:
+                self.release()
+            raise
+        return time.monotonic() - t0
+
+    def release(self) -> None:
+        """Give the slot up. It goes to the longest-waiting caller if there is
+        one — `_inflight` stays put in that case, because the slot never became
+        free."""
+        while self._waiters:
+            fut = self._waiters.popleft()
+            if not fut.done():
+                fut.set_result(None)
+                return
+        self._inflight -= 1
+
+
+_OFFLOAD_STATE_LOCK = threading.Lock()
+_OFFLOAD_EXECUTOR: ThreadPoolExecutor | None = None
+_OFFLOAD_GATE: _OffloadGate | None = None
+_OFFLOAD_GATE_LOOP: asyncio.AbstractEventLoop | None = None
+
+
+def _offload_plane(loop: asyncio.AbstractEventLoop) -> tuple[ThreadPoolExecutor,
+                                                             _OffloadGate]:
+    """The executor + admission gate for `loop`, built on first use.
+
+    The EXECUTOR is process-wide: threads are not loop-bound, and rebuilding a
+    pool per loop would churn threads for nothing.
+
+    The GATE is per-loop and rebuilt when the loop changes. Its waiters are
+    futures, and a future belongs to the loop that created it; a gate carried
+    across loops would either hand a slot to a future nobody will ever await
+    (tests run every coroutine under its own `asyncio.run`) or carry an
+    `_inflight` count from a loop that no longer exists. Same rule, and the same
+    reason, as `_EVIDENCE_LOOP`.
+    """
+    global _OFFLOAD_EXECUTOR, _OFFLOAD_GATE, _OFFLOAD_GATE_LOOP
+    with _OFFLOAD_STATE_LOCK:
+        if _OFFLOAD_EXECUTOR is None:
+            _OFFLOAD_EXECUTOR = ThreadPoolExecutor(
+                max_workers=CORR_OFFLOAD_WORKERS,
+                thread_name_prefix="corr-offload")
+        if _OFFLOAD_GATE is None or _OFFLOAD_GATE_LOOP is not loop:
+            _OFFLOAD_GATE = _OffloadGate(CORR_OFFLOAD_INFLIGHT_MAX)
+            _OFFLOAD_GATE_LOOP = loop
+        return _OFFLOAD_EXECUTOR, _OFFLOAD_GATE
+
+
+def _offload_max_workers() -> tuple[int, str]:
+    """The offload executor's thread ceiling, and where that number came from.
+
+    Reads OUR executor, never the loop. The first version of this metric asked
+    `asyncio.get_running_loop()._default_executor`, which uvloop — what actually
+    runs in the container — does not have; /metrics and /healthz raised
+    AttributeError on startup and the container never went healthy. A dedicated
+    executor removes the question entirely: this function touches no loop, so it
+    is safe from the health sidecar's thread as well as from the loop.
+    """
+    with _OFFLOAD_STATE_LOCK:
+        ex = _OFFLOAD_EXECUTOR
+    workers = getattr(ex, "_max_workers", None)
+    if isinstance(workers, int) and workers > 0:
+        return workers, "executor"
+    # Nothing has been offloaded yet, so the pool does not exist. Report the
+    # configured value and SAY it is configuration, not a measurement.
+    return CORR_OFFLOAD_WORKERS, "config"
+
+
+def _quantile(sorted_vals: list[float], q: float) -> float:
+    """Nearest-rank quantile over an already-sorted list; 0.0 when empty."""
+    if not sorted_vals:
+        return 0.0
+    idx = min(len(sorted_vals) - 1, max(0, math.ceil(q * len(sorted_vals)) - 1))
+    return sorted_vals[idx]
+
+
+def offload_stats() -> dict[str, object]:
+    """A consistent snapshot of the offload plane. Read-only, loop-free (the
+    health sidecar calls it from its own thread)."""
+    now = time.monotonic()
+    with _OFFLOAD_LOCK:
+        pending = list(_OFFLOAD_PENDING.values())
+        running = len(_OFFLOAD_RUNNING)
+        waits = sorted(_OFFLOAD_WAIT_S)
+        execs = sorted(_OFFLOAD_EXEC_S)
+        submitted, started = OFFLOAD_SUBMITTED, OFFLOAD_STARTED
+        completed, failed = OFFLOAD_COMPLETED, OFFLOAD_FAILED
+        depth_peak, active_peak = OFFLOAD_DEPTH_PEAK, OFFLOAD_ACTIVE_PEAK
+        wait_max, exec_max = OFFLOAD_WAIT_MAX_S, OFFLOAD_EXEC_MAX_S
+        adm_waits, adm_wait_max = OFFLOAD_ADMISSION_WAITS, OFFLOAD_ADMISSION_WAIT_MAX_S
+        abandoned = OFFLOAD_ABANDONED
+    workers, workers_src = _offload_max_workers()
+    with _OFFLOAD_STATE_LOCK:
+        gate = _OFFLOAD_GATE
+    return {
+        "queue_depth": len(pending),
+        "queue_depth_peak": depth_peak,
+        "active_workers": running,
+        "active_workers_peak": active_peak,
+        "max_workers": workers,
+        "max_workers_source": workers_src,
+        # Nothing is ever refused — a full plane makes the caller WAIT (see
+        # `_OffloadGate`). Reported as a constant 0 so "no drops" stays an
+        # explicit, scrapeable fact rather than a missing metric.
+        "rejected": 0,
+        "queue_bounded": True,
+        "admission_limit": gate.limit if gate is not None else CORR_OFFLOAD_INFLIGHT_MAX,
+        "admission_inflight": gate.inflight if gate is not None else 0,
+        "admission_waiting": gate.waiting if gate is not None else 0,
+        "admission_waits_total": adm_waits,
+        "admission_wait_max_s": round(adm_wait_max, 6),
+        "abandoned_total": abandoned,
+        "oldest_queued_age_s": round(now - min(pending), 6) if pending else 0.0,
+        "submitted_total": submitted,
+        "started_total": started,
+        "completed_total": completed,
+        "failed_total": failed,
+        "wait_p50_s": round(_quantile(waits, 0.50), 6),
+        "wait_p95_s": round(_quantile(waits, 0.95), 6),
+        "wait_p99_s": round(_quantile(waits, 0.99), 6),
+        "wait_max_s": round(wait_max, 6),
+        "exec_p50_s": round(_quantile(execs, 0.50), 6),
+        "exec_p95_s": round(_quantile(execs, 0.95), 6),
+        "exec_p99_s": round(_quantile(execs, 0.99), 6),
+        "exec_max_s": round(exec_max, 6),
+        "samples": len(waits),
+    }
+
+
+async def _offload(fn, /, *args, **kwargs):
+    """Run a size-unbounded PURE-CPU call off the event loop.
+
+    The dedicated offload executor: the call still holds the GIL, but it no
+    longer owns the LOOP THREAD, so the loop's own tasks — critically
+    aiokafka's heartbeat and fetch coroutines — are scheduled at the
+    interpreter's switch interval instead of waiting out the whole call.
+    Only for PURE functions (no shared mutable state, no IO): everything
+    routed here is a serializer/hasher/ranker over an immutable snapshot.
+
+    ADMISSION IS BOUNDED (tracker 164). Queued + executing may not exceed
+    CORR_OFFLOAD_INFLIGHT_MAX; a caller that arrives at a full plane AWAITS its
+    turn. Nothing is dropped and nothing is refused — the change is WHERE the
+    work waits (in the caller, visibly, with backpressure to whoever is feeding
+    it) and not WHAT runs. Results, exceptions and ordering are exactly what
+    the default executor produced.
+    """
+    global _OFFLOAD_SEQ, OFFLOAD_SUBMITTED, OFFLOAD_DEPTH_PEAK
+    global OFFLOAD_ADMISSION_WAITS, OFFLOAD_ADMISSION_WAIT_MAX_S
+    loop = asyncio.get_running_loop()
+    executor, gate = _offload_plane(loop)
+    waited = await gate.acquire()
+    try:
+        if waited > 0.0:
+            with _OFFLOAD_LOCK:
+                OFFLOAD_ADMISSION_WAITS += 1
+                OFFLOAD_ADMISSION_WAIT_MAX_S = max(OFFLOAD_ADMISSION_WAIT_MAX_S,
+                                                   waited)
+        # Taken AFTER admission on purpose: `corr_offload_wait_seconds` keeps
+        # its pre-164 meaning (time queued in the executor), and the time spent
+        # at the gate is its own metric. Folding them together would have made
+        # the two waves' numbers incomparable.
+        enqueued = time.monotonic()
+        with _OFFLOAD_LOCK:
+            _OFFLOAD_SEQ += 1
+            seq = _OFFLOAD_SEQ
+            _OFFLOAD_PENDING[seq] = enqueued
+            OFFLOAD_SUBMITTED += 1
+            OFFLOAD_DEPTH_PEAK = max(OFFLOAD_DEPTH_PEAK, len(_OFFLOAD_PENDING))
+        call = functools.partial(fn, *args, **kwargs)
+
+        def _timed():
+            # Runs on an executor thread: the gap between `enqueued` and here IS
+            # the queue wait, which is the whole point of the exercise.
+            global OFFLOAD_STARTED, OFFLOAD_ACTIVE_PEAK, OFFLOAD_WAIT_MAX_S
+            global OFFLOAD_COMPLETED, OFFLOAD_FAILED, OFFLOAD_EXEC_MAX_S
+            started = time.monotonic()
+            wait = started - enqueued
+            with _OFFLOAD_LOCK:
+                _OFFLOAD_PENDING.pop(seq, None)
+                _OFFLOAD_RUNNING[seq] = started
+                OFFLOAD_STARTED += 1
+                OFFLOAD_ACTIVE_PEAK = max(OFFLOAD_ACTIVE_PEAK, len(_OFFLOAD_RUNNING))
+                _OFFLOAD_WAIT_S.append(wait)
+                OFFLOAD_WAIT_MAX_S = max(OFFLOAD_WAIT_MAX_S, wait)
+            ok = False
+            try:
+                result = call()
+                ok = True
+                return result
+            finally:
+                elapsed = time.monotonic() - started
+                with _OFFLOAD_LOCK:
+                    _OFFLOAD_RUNNING.pop(seq, None)
+                    _OFFLOAD_EXEC_S.append(elapsed)
+                    OFFLOAD_EXEC_MAX_S = max(OFFLOAD_EXEC_MAX_S, elapsed)
+                    if ok:
+                        OFFLOAD_COMPLETED += 1
+                    else:
+                        OFFLOAD_FAILED += 1
+
+        try:
+            return await loop.run_in_executor(executor, _timed)
+        except asyncio.CancelledError:
+            # Cancelled while still QUEUED: `_timed` will never run, so nothing
+            # else will ever clear this seq and the depth gauge — now a bound,
+            # not just a number — would drift up forever. A no-op once the call
+            # has started; `_timed`'s own finally owns it from there.
+            with _OFFLOAD_LOCK:
+                _OFFLOAD_PENDING.pop(seq, None)
+            raise
+    finally:
+        gate.release()
+
+
+async def offload_stop(*, drain_s: float | None = None) -> dict[str, int]:
+    """Shut the offload plane down: drain what is running, cancel what is only
+    queued, release the threads. Idempotent; safe to call with no plane.
+
+    Called from `lifespan` AFTER the loop tasks are cancelled and the Evidence
+    and signal batchers have had their shutdown flush — those flushes offload,
+    so tearing the plane down first would strand exactly the rows the drain
+    exists to save.
+
+    The drain awaits (it never blocks the loop thread) and is bounded by
+    CORR_OFFLOAD_DRAIN_S. Anything still executing at the deadline is COUNTED
+    and LOGGED rather than waited on forever: a `run_window` mid-storm can
+    outlast any deadline worth having, and a shutdown that hangs is a worse
+    failure than one that reports what it left. The worker threads are
+    non-daemon and joined by the interpreter's own atexit hook, so nothing
+    outlives the process either way.
+    """
+    global _OFFLOAD_EXECUTOR, _OFFLOAD_GATE, _OFFLOAD_GATE_LOOP, OFFLOAD_ABANDONED
+    with _OFFLOAD_STATE_LOCK:
+        ex, _OFFLOAD_EXECUTOR = _OFFLOAD_EXECUTOR, None
+        _OFFLOAD_GATE = None
+        _OFFLOAD_GATE_LOOP = None
+    if ex is None:
+        return {"drained": 0, "abandoned": 0}
+    budget = CORR_OFFLOAD_DRAIN_S if drain_s is None else max(0.0, drain_s)
+    deadline = time.monotonic() + budget
+    with _OFFLOAD_LOCK:
+        finished_at_entry = OFFLOAD_COMPLETED + OFFLOAD_FAILED
+    while True:
+        with _OFFLOAD_LOCK:
+            left = len(_OFFLOAD_PENDING) + len(_OFFLOAD_RUNNING)
+        if left == 0 or time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(0.01)
+    with _OFFLOAD_LOCK:
+        abandoned = len(_OFFLOAD_PENDING) + len(_OFFLOAD_RUNNING)
+        OFFLOAD_ABANDONED += abandoned
+        # What THIS drain saved, not a lifetime total: the calls that were still
+        # in flight when the stop began and finished before the deadline. A
+        # process-lifetime figure here would read as success on a shutdown that
+        # actually abandoned everything.
+        drained = OFFLOAD_COMPLETED + OFFLOAD_FAILED - finished_at_entry
+    # cancel_futures drops the never-started ones; wait=False so a single long
+    # in-flight call cannot hold the shutdown path hostage past the deadline we
+    # already honoured above.
+    ex.shutdown(wait=False, cancel_futures=True)
+    if abandoned:
+        log.warning("offload plane stopped with %d call(s) still in flight "
+                    "after %.1fs", abandoned, budget)
+    return {"drained": drained, "abandoned": abandoned}
+
+
+def _snap_elements(snap: ObjectSnapshot) -> int:
+    """GRAPH size — the right sizer for the per-EDGE row builders, and only
+    those (`_emit_child_rows`, the corr_current badge parse)."""
+    return len(snap.nodes) + len(snap.edges)
+
+
+def _snap_cost(snap: ObjectSnapshot) -> int:
+    """What a per-object SERIALIZE or WALK actually costs, in elements.
+
+    THE DEFECT THIS FIXES (live regression, t-storm-2.5k 2026-08-29 17:17 UTC,
+    replica netops-correlation-4: `corr_loop_lag_max_ms` 114,848 with
+    `persist.decision` max 23,655 ms, immediately after the storm aggregate
+    `bb1e46d6` was persisted as v9 with 922 nodes).
+
+    `_snap_elements` is `len(nodes) + len(edges)`. Every size gate on the
+    persist path was keyed on it, and for the object that costs the most in the
+    whole process it reads almost ZERO:
+
+      * a storm-noise aggregate is built with `edges=()` (engine.py:3040) and
+        one node per folded below-floor entity — 922 of them on the live run;
+      * its cost is not in the graph, it is in the SIGNALS those nodes hold.
+        `content_hash` sorts one `str(signal_id)` per signal
+        (engine.py:2132-2133), `material_hash` builds a set of one f-string per
+        signal (engine.py:2178-2180), `to_object_row` walks them through
+        `signal_count`/`affected`/`layer_coverage_blob`/`app_impact_blob`, and
+        `estimate_bytes` DEEP-WALKS every signal and its attrs dict.
+
+    So `_snap_elements(aggregate)` = 922 < CORR_OFFLOAD_MIN_ELEMENTS (2,000) and
+    every one of those ran INLINE, on the event-loop thread, over tens of
+    thousands of signals — the largest object in the process was the only one
+    the offload threshold never protected.
+
+    This counts the signals too. It is O(nodes), not O(signals) — `signal_count`
+    sums the per-node tuple lengths — so it is cheap enough to ask on every
+    persist of every object. Nothing about a row moves: `_offload` changes which
+    THREAD a pure function runs on and nothing else.
+    """
+    return len(snap.nodes) + len(snap.edges) + snap.signal_count()
+
+
+async def _snap_call(snap: ObjectSnapshot, fn, /, *args, **kwargs):
+    """One per-object pure call, offloaded only when the object is big enough
+    for the sync cost to threaten the heartbeat (see CORR_OFFLOAD_MIN_ELEMENTS).
+
+    Sized by `_snap_cost`, NOT by the graph: everything routed here
+    (`cycle_hypotheses_blob`, `to_object_row`, `content_hash`, `material_hash`)
+    walks the node signals, and a storm aggregate is all signals and no edges.
+
+    TWO gates now, and the second is the one that makes the loop-thread bound
+    hold for a shape nobody has measured yet:
+
+      1. ELEMENTS — `_snap_cost` past CORR_OFFLOAD_MIN_ELEMENTS. A count, so it
+         is free, and it is what protects the objects whose cost is visible in
+         their size.
+      2. PROJECTED MILLISECONDS — the worst inline seconds-per-element this
+         process has actually measured for THIS builder, times this object's
+         cost. Elements are a proxy for time only while the per-element cost is
+         stable, and it is not: a signal carrying a 4 KB `attrs` blob costs many
+         times what a bare one does, so an object can sit under the element
+         threshold and still own the loop. The projection closes that gap
+         self-calibratingly — the first object that costs more than the budget
+         raises the rate, and every later object of that size is offloaded.
+
+    BYTE-NEUTRAL, like every other offload on this path: `_offload` changes
+    which THREAD a pure function of frozen inputs runs on and nothing else. The
+    rate table therefore affects SCHEDULING only — pinned by the identity tests
+    in test_sync_stretch_bound_p1.py.
+    """
+    cost = _snap_cost(snap)
+    name = getattr(fn, "__name__", "snap_call")
+    if (cost >= CORR_OFFLOAD_MIN_ELEMENTS
+            or (CORR_SYNC_OFFLOAD
+                and _sync_projected_ms(name, cost) >= CORR_SYNC_BUDGET_MS)):
+        return await _offload(fn, *args, **kwargs)
+    _t0 = time.perf_counter()
+    result = fn(*args, **kwargs)
+    _sync_note_inline(name, cost, time.perf_counter() - _t0)
+    return result
+
+
+async def _decision_offload(size: int, fn, /, *args, **kwargs):
+    """`_snap_call` for a Decision-path call whose cost is NOT the object's size.
+
+    Same rule, same threshold, one difference: the caller states the size that
+    actually drives the work. `_archive_slice`'s cost is dominated by the WINDOW
+    (a 50k-signal window costs 1,267 ms through `_window_index`, and the first
+    object of a cycle pays all of it even when that object is tiny), so keying
+    its offload decision on `_snap_elements` would leave exactly the worst case
+    inline. Gated on CORR_DECISION_OFFLOAD so the A/B runs on one image.
+
+    Carries `_snap_call`'s second gate too — the projected-milliseconds rule —
+    for the same reason: `_current_badges` is sized by `_snap_elements`, and a
+    storm aggregate reads ~950 elements while its hypotheses blob is built from
+    tens of thousands of signals.
+    """
+    name = getattr(fn, "__name__", "decision_call")
+    if CORR_DECISION_OFFLOAD and (
+            size >= CORR_OFFLOAD_MIN_ELEMENTS
+            or (CORR_SYNC_OFFLOAD
+                and _sync_projected_ms(name, size) >= CORR_SYNC_BUDGET_MS)):
+        return await _offload(fn, *args, **kwargs)
+    _t0 = time.perf_counter()
+    result = fn(*args, **kwargs)
+    _sync_note_inline(name, size, time.perf_counter() - _t0)
+    return result
+
+
+ARCHIVE_ROWS_WRITTEN = 0     # archive rows actually inserted (monotonic)
+ARCHIVE_SLICES_DAMPED = 0    # re-persists whose slice membership was unchanged
+# Ultra #16: optimistic damping records reverted because their slice never
+# landed (failed OR lost). Every occurrence names, loudly, the gap that used to
+# be silent: a later unchanged-membership version damped against a slice that
+# does not exist.
+ARCHIVE_SLICE_REVERTS = 0
+# Tracker 156 v2 observability: rows per archived slice. Settles the open
+# 8.5k-vs-38k measurement question from the redesign doc §1, and is the
+# write-amplification regression signal — component-sized slices must track
+# component size, never window size.
+ARCHIVE_SLICE_ROWS_LAST = 0
+ARCHIVE_SLICE_ROWS_MAX = 0
+_ARCHIVE_SLICE_HASH: dict[str, str] = {}  # cid → last successfully archived slice id-hash
+
+
+def _archive_slice_revert(item: EvidenceItem, why: str) -> None:
+    """Ultra #16: revert the OPTIMISTIC damping record for a slice that will
+    never land.
+
+    The membership hash is recorded on the Decision path BEFORE the rows land
+    (`_persist_snapshot` — it has to be: the next version's damping decision
+    cannot wait for a deferred write). The original design reverted it only on
+    the FAILED paths; every LOST path (consumer cancelled or killed mid-write,
+    stranded-queue replacement, shutdown loss) left the record standing, so
+    every later unchanged-membership version was silently damped against a
+    slice that never existed and replay resolved to an older slice — or none —
+    until the membership changed. ALL loss/failure paths now come through here.
+
+    Guarded twice:
+      * `slice_sigs` — only an item that actually CARRIED the slice write may
+        revert; a damped / no-slice item's hash names an earlier, landed slice.
+      * identity — a later version's successful record is never clobbered by an
+        earlier version's failure draining out of order (spec §12.1, unchanged).
+
+    Deliberately NO startup/periodic assertion behind this: each revert runs
+    synchronously inside the same frame that accounts the failure or loss, on
+    the loop the damping decisions run on, so after it returns a recorded hash
+    always refers to a slice that is landed, queued or in flight — and the
+    queued/in-flight ones either land or come back through here. A sweeper
+    could not tell "in flight" from "lost without revert" without a second
+    landed-state ledger per object, whose own failure modes are a bigger
+    surface than the gap it would guard; the counter + warning ARE the
+    detection, and the damage window they bound is the same one the FAILED
+    paths always had — the next persist of the object re-writes the slice.
+    """
+    global ARCHIVE_SLICE_REVERTS
+    if not item.slice_sigs or not item.slice_hash:
+        return
+    if _ARCHIVE_SLICE_HASH.get(item.correlation_id) != item.slice_hash:
+        return
+    _ARCHIVE_SLICE_HASH.pop(item.correlation_id, None)
+    ARCHIVE_SLICE_REVERTS += 1
+    log.warning(
+        "archive slice damping record REVERTED (%s) corr_id=%s version=%d — "
+        "the slice never landed; later unchanged-membership versions will "
+        "re-archive instead of damping against a slice that does not exist "
+        "(archive_slice_reverts_total=%d)",
+        why, item.correlation_id, item.version, ARCHIVE_SLICE_REVERTS)
+
+
+@dataclass(frozen=True)
+class _WindowIndex:
+    """The window grouping every object version of one cycle shares.
+
+    TRACKER 156. `_archive_slice` used to rebuild this per OBJECT: it walked the
+    whole tenant window, bucketed every signal by node key, and recomputed each
+    bucket's min/max ts — so the work was O(objects x window) and, as the tracker
+    put it, "sized by the whole 50k-floor WINDOW rather than by the object". The
+    grouping depends only on the window, so it is built ONCE per cycle here and
+    the per-object step is reduced to the overlap test that actually varies.
+
+    `nodes` is pre-sorted by key so `keep` is assembled in the same order the
+    per-object build produced; the final sort is unchanged. Slices therefore stay
+    byte-identical — pinned by test_replay_archive_slice.py.
+    """
+    # (node key, its signals, earliest ts, latest ts). The two timestamps were
+    # typed `object`, which cost the overlap test below its type checking.
+    nodes: tuple[tuple[str, list[Signal], datetime, datetime], ...]
+    loose: tuple[tuple[Signal, str], ...]
+    # id(signal) -> str(signal_id), and signal_id -> position in the window's
+    # canonical (ts, signal_id) order. Both are computed ONCE per cycle here
+    # instead of once per object: stringifying a UUID and re-sorting the slice
+    # were 1.08M calls and 120 full sorts in one profiled cycle.
+    #
+    # `ordinal` is keyed by the signal's OWN identity (its UUID `signal_id`),
+    # never by id(). An ADDRESS is not an identity: it is unique only among LIVE
+    # objects, and `_archive_slice`'s final sort — `order[id(s)]` — raised a bare
+    # `KeyError: 140474486492560` at random, 4 different test_archive_slice.py
+    # tests over 5 runs. Mechanism: this index is cached under `id(window)`
+    # (see `_window_index`), the index does NOT retain the window LIST, so once
+    # a window list is collected CPython reissues its address to the next one;
+    # with a colliding length the guard passed and a PREVIOUS window's index was
+    # served, whose ordinals belong to objects the caller has never seen. In
+    # production, where the cache is cleared per cycle, that surfaces as a
+    # sweeper KeyError = a failed engine cycle.
+    #
+    # Both halves of that are fixed: `owner` below makes serving a foreign index
+    # impossible, and a signal_id key stays correct even if it ever did. UUID,
+    # not str(UUID): `Signal.signal_id` is memoised (CORR_SIGNAL_ID_CACHE) while
+    # `signal_id_str` re-stringifies on every access — measured over a
+    # 50-signal slice, sorting on the UUID costs 23 us against 12.8 us for the
+    # address, where the string costs 146 us.
+    #
+    # `sid` stays id()-keyed: it is a pure MEMO for a value every Signal can
+    # recompute (`_sid_of` falls back to `sig.signal_id_str` on a miss), and
+    # keying a signal_id -> signal_id map by signal_id would be vacuous. It is
+    # sound now for the same reason — `owner` pins it to one window.
+    sid: dict[int, str]
+    ordinal: dict[uuid.UUID, int]
+    # The exact window list this index was built from. Two jobs: it makes the
+    # `_window_index` cache hit an IDENTITY test rather than an address-plus-
+    # length guess, and, by holding the list alive for as long as the cache
+    # entry, it stops `id(window)` from ever being reissued while that entry
+    # lives. Defaulted so the field is additive for constructors that pass only
+    # the four data fields.
+    owner: object = None
+
+
+_WINDOW_INDEX_CACHE: dict[int, tuple[int, _WindowIndex]] = {}
+
+# Per-CYCLE archive row cache, keyed by signal id (tracker 156). The archive
+# converts the same window signal to a row once per OPEN OBJECT — 360,000
+# to_ch_row calls in one profiled cycle, each re-running json.dumps over attrs.
+# Caching on the Signal itself was measured and rejected: a Signal lives in
+# WINDOW_BUFFER, so a memo there is retained for the whole window lifetime and
+# costs RSS, which is the resource correlation actually runs out of. This cache
+# is cleared at the top of every engine_cycle, so it is transient by
+# construction — it exists only while the cycle that populated it is running.
+_CYCLE_ROW_CACHE: dict[int, dict] = {}
+
+
+def _sid_of(window: Sequence[Signal], sig: Signal) -> str:
+    """This cycle's cached str(signal_id), falling back to computing it."""
+    got = _window_index(window).sid.get(id(sig))
+    return got if got is not None else sig.signal_id_str
+
+
+def _archive_row(sig: Signal, corr_id: str, version: int, *,
+                 cache: bool = True) -> dict:
+    """One archive row, reusing this cycle's base row for `sig` if we built one.
+
+    Always returns a FRESH dict (and a fresh entity_tokens list), because the
+    caller stamps archived_for/archived_version onto it and every object needs
+    its own stamps.
+
+    `cache=False` (P2 step 4) skips `_CYCLE_ROW_CACHE` entirely. That cache is
+    keyed by `id(sig)` and its whole safety argument is that every signal it
+    holds belongs to the ONE window the current cycle is keeping alive. The
+    Evidence consumer runs between cycles, over items drawn from several of
+    them, so a Signal freed with one item could have its id recycled by a later
+    item's — the cache would then serve the WRONG row. The deferred path
+    therefore builds fresh; `to_ch_row` is deterministic, so the bytes are
+    identical either way.
+
+    P3 step 3 (verified, not assumed — test_p3_equivalence
+    .test_archive_row_preserves_every_agg_attr runs THIS function): the
+    Aggregation plane's `agg_*` annotations live in `sig.attrs`, and `to_ch_row`
+    serialises `attrs` whole into the row's JSON string, so an archived DELTA
+    carries its key, policy, class, count, first/last event time and Kafka
+    offset range verbatim. Nothing here needs to know about them, and nothing
+    here may strip them: `replay` re-derives the object's aggregation
+    provenance from exactly these rows and reports any loss as drift.
+    """
+    key = id(sig)
+    base = _CYCLE_ROW_CACHE.get(key) if cache else None
+    if base is None:
+        base = sig.to_ch_row()
+        if cache:
+            _CYCLE_ROW_CACHE[key] = base
+    row = dict(base)
+    row["entity_tokens"] = list(base["entity_tokens"])
+    row["archived_for"] = corr_id
+    row["archived_version"] = version
+    return row
+
+
+def _archive_chunk(sigs: Sequence[Signal], corr_id: str, version: int) -> list[dict]:
+    """One archive INSERT's worth of rows, built with no per-cycle cache.
+
+    Extracted so the build can be handed to `_offload` whole (see
+    `_write_evidence_inner`): a comprehension inlined at the call site cannot be
+    offloaded without shipping a closure to the executor thread."""
+    return [_archive_row(sig, corr_id, version, cache=False) for sig in sigs]
+
+
+def _window_index(window: Sequence[Signal]) -> _WindowIndex:
+    """Build (or reuse) the per-cycle index for `window`.
+
+    Bucketed by id() and confirmed by IDENTITY: engine_cycle hands the same list
+    object to every object version of one tenant within a cycle, and the list is
+    rebuilt each cycle.
+
+    The hit test used to be `id(window)` plus a length guard, and that is not
+    sound: the index does not retain the window LIST, so once a window is
+    collected CPython reissues its address, and any next window of the same
+    length claimed the previous one's index — foreign nodes, foreign loose
+    tuples, foreign ordinals (see _WindowIndex.ordinal for the KeyError this
+    produced). `idx.owner is window` is exact instead of probable, and holding
+    the list in the cached value means the address cannot be reissued while the
+    entry lives, so a false hit is now impossible rather than unlikely. The
+    length is still stored — it is the cache-entry shape callers assert on, and
+    a mismatch still forces a rebuild.
+    """
+    key = id(window)
+    hit = _WINDOW_INDEX_CACHE.get(key)
+    if hit is not None and hit[0] == len(window) and hit[1].owner is window:
+        return hit[1]
+    sid = {id(s): s.signal_id_str for s in window}
+    # Keyed by the signal's own UUID, NOT by id(): see _WindowIndex.ordinal. The
+    # id() lookups into `sid` here are safe — they never outlive this
+    # expression, and `window` holds every signal alive for its whole duration.
+    ordinal = {s.signal_id: i for i, s in enumerate(
+        sorted(window, key=lambda s: (s.ts, sid[id(s)])))}
+    by_node: dict[str, list[Signal]] = {}
+    loose: list[tuple[Signal, str]] = []
+    for s in window:
+        if s.kind.endswith("_clear") or s.source is Source.APP_IDENTITY:
+            loose.append((s, sid[id(s)]))
+            continue
+        by_node.setdefault(f"{s.entity_type.value}:{s.entity_id}:{s.kind}", []).append(s)
+    nodes = []
+    for k in sorted(by_node):
+        sigs = by_node[k]
+        nodes.append((k, sigs, min(s.ts for s in sigs), max(s.ts for s in sigs)))
+    idx = _WindowIndex(nodes=tuple(nodes), loose=tuple(loose), sid=sid,
+                       ordinal=ordinal, owner=window)
+    _WINDOW_INDEX_CACHE[key] = (len(window), idx)
+    return idx
+
+
+def _archive_slice(snap: ObjectSnapshot, window: Sequence[Signal]) -> list[Signal]:
+    """The COMPONENT-SIZED, replay-exact archive slice for one object version.
+
+    Contents (tracker 156 v2 — see docs/scale/ARCHIVE_REDESIGN_156_2026-08-22.md):
+      * every signal of every COMPONENT node (snap.nodes) — node-complete,
+        nodes are never CLIPPED, so each archived node is byte-identical to its
+        live twin. This is the membership change: the old rule included every
+        window node whose activity interval merely OVERLAPPED the object's
+        span, which under estate-wide activity approached the whole retained
+        window (~the 98.6%-of-persistence-time defect, run `082201589waa`);
+      * every non-node signal (kind *_clear, source=app_identity — both excluded
+        from build_nodes) inside the object's bounds, plus the identity signals
+        this object actually matched (snap.identity_signals), so the app-impact
+        enrichment reproduces. (Ambient window context for the Inspector
+        timeline is re-sourced from corr_signals at display time — owner
+        decision 2026-08-22, design §5 option (a) — not from this slice.)
+
+    Replay exactness argument (pinned by test_archive_slice.py, corpus-gated by
+    test_archive_corpus_replay_156.py): edge admission is PAIR-LOCAL
+    (resolve_grounding reads only the two nodes + the embedded seams/adjacency/
+    paths context), so a node-complete subset that contains the whole component
+    reproduces the SAME component — included nodes carry all their signals
+    (identical tokens/onset/intervals ⇒ identical pair verdicts), and an
+    excluded node could only have joined through an edge the live run would
+    also have admitted — contradiction with it not being in the component.
+    Ranking/verdict/confidence are component-local. Two adversarial reviews
+    (2026-08-22) confirmed the ambient-context rows the old rule archived are
+    not load-bearing for this argument, and the pinned replay diff proves it
+    empirically. What legitimately differs on replay: the window-global
+    gap-hint COUNT (not diffed, not part of the stored row set).
+    """
+    # Terminal persists (merged/closed) pass window=[]: nothing to archive, and
+    # the ordinal lookup below has no entries — same [] the old rule returned.
+    if not window:
+        return []
+    idx = _window_index(window)
+    ws, we = snap.window_start, snap.window_end
+    matched_identities = {s.signal_id_str for s in snap.identity_signals}
+    order = idx.ordinal
+    keep: list[Signal] = []
+    for s, sid in idx.loose:
+        if (ws <= s.ts <= we) or sid in matched_identities:
+            keep.append(s)
+    # COMPONENT nodes only — every signal of every node this object is made of.
+    # snap.nodes are built from this same window's signals (build_nodes over the
+    # epoch's frozen tuple), so the ordinal lookup is total; a missing SIGNAL_ID
+    # would mean the snapshot and window genuinely diverged, which must fail
+    # LOUDLY (KeyError -> engine cycle failed, observable) rather than shrink a
+    # replay slice silently.
+    for node in snap.nodes:
+        keep.extend(node.signals)
+    # Same order as sorting by (ts, signal_id) — the ordinal IS that order,
+    # computed once per cycle rather than once per object. Keyed by the signal's
+    # own UUID, never by id(s): an address is unique only among LIVE objects, so
+    # a reissued one made this line raise a bare KeyError at random (see
+    # _WindowIndex.ordinal, and test_archive_slice.py's regression tests).
+    keep.sort(key=lambda s: order[s.signal_id])
+    return keep
+
+
+def _archive_slice_cost(snap: ObjectSnapshot, window: Sequence[Signal]) -> int:
+    """The size that drives THIS `_archive_slice_and_hash` call (P2 step 4d).
+
+    `_archive_slice` has two cost regimes and they differ by three orders of
+    magnitude, so one size would be wrong for one of them:
+
+      * the FIRST object of a cycle also builds `_window_index` — O(window log
+        window), MEASURED at 1,267 ms over a 50,000-signal window. That must go
+        to the executor whatever the object's own size is, which is why a
+        snapshot-sized threshold (`_snap_call`) would have left exactly the worst
+        case inline;
+      * every LATER object of the same cycle reads the memoized index and does
+        O(loose + its own node signals) work — 0.4 ms on the same fixture. That
+        must stay inline, or the step pays ~1,000 executor hops per cycle to
+        protect a stretch that does not exist. Measured on the offline bench:
+        offloading it unconditionally cost 9 % of sweep wall for no loop-thread
+        benefit at all.
+
+    So the decision is made on the call's ACTUAL cost: the window when the index
+    still has to be built, the object when it does not.
+    """
+    if not window:
+        return 0
+    hit = _WINDOW_INDEX_CACHE.get(id(window))
+    cached = hit is not None and hit[0] == len(window)
+    # `_snap_cost`, not `_snap_elements`: the per-object half of this walk is
+    # `keep.extend(node.signals)` over every node, so it is sized by the
+    # SIGNALS — which is the whole of a storm aggregate and none of its graph.
+    return max(_snap_cost(snap), 0 if cached else len(window))
+
+
+def _archive_slice_and_hash(snap: ObjectSnapshot,
+                            window: Sequence[Signal]) -> tuple[list[Signal], str]:
+    """The archive slice AND its membership id-hash, as ONE pure call.
+
+    Extracted so both can be handed to `_offload` together (P2 step 4d): a
+    comprehension inlined at the call site cannot be offloaded without shipping
+    a closure to the executor thread, and splitting them would pay two hops for
+    two halves of the same walk. The DAMPING DECISION stays at the call site, on
+    the Decision path, in version order — this returns the facts, never the
+    verdict (spec §1).
+
+    Thread-safety of the one global it touches: `_window_index` may build and
+    memoize this cycle's `_WINDOW_INDEX_CACHE` entry from an executor thread.
+    The build is a pure function of `window`, so two concurrent misses produce
+    equal indexes and either may win the dict slot; a `dict.__setitem__` is
+    atomic under the GIL, so no reader can observe a half-built entry.
+    """
+    keep = _archive_slice(snap, window)
+    if not keep:
+        return [], ""
+    return keep, hashlib.sha256(
+        "|".join(_sid_of(window, s) for s in keep).encode()).hexdigest()[:16]
+
+
+async def _noop_yield() -> None:
+    """Default loop-yield for _persist_snapshot callers outside engine_cycle's
+    per-cycle budget (e.g. tests). engine_cycle passes its real `_loop_yield`."""
+    return
+
+
+async def _ch_emit(table: str, rows: list, dedup_token: str, ctx: dict) -> bool:
+    """The DEFAULT row sink: one `ch_insert`, exactly as before.
+
+    Every Evidence write goes through a sink with this signature so the batched
+    path can substitute one that buffers instead (P2 step 4c) WITHOUT the write
+    body knowing which it has — which is what keeps `_write_evidence_inner` the
+    single implementation both legs run, and therefore what makes the
+    byte-identity tests meaningful.
+
+    The archive tally lives here rather than at the call site because "the rows
+    landed" is a property of the INSERT, and under batching the insert happens
+    later, in a different call, on behalf of several versions at once.
+    """
+    global ARCHIVE_ROWS_WRITTEN
+    # tracker 189: an archive chunk carries no dedup token of its own, so the
+    # UNBATCHED sink now sends the same content-derived `member_key` the batched
+    # sink has always used — `<snapshot tok>:archive:<chunk>`, i.e.
+    # correlation_id + version + content hash + chunk number. It is stable
+    # across every retry of this insert AND across a replay of this version, and
+    # unique per chunk. It is LOAD-BEARING since the tracker 189 residual
+    # (2026-09-02): corr_signals_archive now carries
+    # non_replicated_deduplication_window = 1000, so this token is what the
+    # server matches a re-sent chunk against and what puts the table in
+    # CH_DEDUP_SAFE_TABLES. Drop it and an archive insert falls back to no
+    # token, which `ch_insert` correctly treats as NOT retryable on a
+    # transport-unknown outcome. Only the archive: the other Evidence tables
+    # mint their own tokens at the call site.
+    if not dedup_token and table == "netops.corr_signals_archive":
+        dedup_token = str(ctx.get("member_key", ""))
+    ok = await ch_insert(table, rows, dedup_token=dedup_token, **ctx)
+    if ok is not False and table == "netops.corr_signals_archive":
+        ARCHIVE_ROWS_WRITTEN += len(rows)
+    return ok
+
+
+async def _emit_child_rows(table: str, snap: ObjectSnapshot, build_page,
+                           total_rows: int, version: int, token: str,
+                           loop_yield=_noop_yield, emit=None) -> None:
+    """Emit a size-unbounded child-row stream (edges / typed edges / evidence) in
+    BOUNDED pages (P0 boundedness pass — ENGINE_DECISION_2026-08-28 #1/#2).
+
+    `build_page(version, start, stop) -> list[dict]` returns the [start:stop) page
+    in the object's canonical order; concatenating every page reproduces the old
+    monolithic to_*_rows() output byte-for-byte (pinned by test_bounded_object_
+    paging). Each page is built OFF the event loop for a big object (so no page's
+    C serialize holds the GIL across the whole storm), the loop is yielded between
+    pages, and pages accumulate into DB batches of >= CORR_ROW_BATCH_ROWS so
+    ClickHouse keeps receiving healthy multi-thousand-row inserts rather than tiny
+    per-row writes. Every batch carries its OWN dedup token (…:<seq>) so a retry
+    cannot duplicate a row and ClickHouse's per-token dedup never collapses two
+    distinct batches into one (§H13 idempotency, extended to the paged path — the
+    seq is deterministic in page order, hence stable across a replay of the same
+    (cid, version, state, content)). Tenant scope (§3a) is unchanged: every row
+    is stamped from `snap` by the builder, exactly as the parent row is."""
+    if total_rows <= 0:
+        return
+    emit = _ch_emit if emit is None else emit
+    # Sized by what THIS stream builds: `total_rows`. The graph size is the
+    # right proxy for the edge/typed-edge streams and a poor one for evidence
+    # (edges + identity signals), and neither is right when a caller pages a
+    # stream that is bigger than the graph. `max` keeps the old decision
+    # wherever it was already the larger of the two.
+    big = max(_snap_elements(snap), total_rows) >= CORR_OFFLOAD_MIN_ELEMENTS
+    batch: list[dict] = []
+    seq = 0
+    start = 0
+
+    async def _flush() -> None:
+        nonlocal batch, seq
+        await emit(table, batch, f"{token}:{seq}",
+                   {"corr_id": snap.correlation_id, "version": version,
+                    "tenant": snap.tenant_id, "row_count": len(batch)})
+        seq += 1
+        batch = []
+
+    while start < total_rows:
+        stop = min(start + CORR_ROW_PAGE_SIZE, total_rows)
+        # Bounded synchronous serialize: one page's worth of rows, offloaded for a
+        # big object so the C encoder's GIL hold is a page, never the whole object.
+        page = (await _offload(build_page, version, start, stop)
+                if big else build_page(version, start, stop))
+        batch.extend(page)
+        start = stop
+        if len(batch) >= CORR_ROW_BATCH_ROWS:
+            await _flush()
+        await loop_yield()
+    if batch:
+        await _flush()
+
+
+async def _touch_current(snap: ObjectSnapshot, version: int, state: str,
+                         content_hash: str) -> None:
+    """P3 change A: the HEARTBEAT write -- the corr_current row and nothing else.
+
+    A heartbeat is, by definition, a re-persist whose `material_hash` did not
+    move: same nodes, same evidence kinds+severities per node, same edge
+    structure, same ranking labels, same owner, same verdict tier
+    (ObjectSnapshot._material_hash_uncached). What DID move is the window and its
+    instance counts -- window_start / window_end / signal_count, and
+    top_confidence within its unchanged confidence bucket. Every one of those is
+    a corr_current column, and corr_current is what every freshness consumer
+    reads (see CORR_HEARTBEAT_TOUCH_ONLY for the enumeration). So the heartbeat
+    writes exactly that row.
+
+    NOT WRITTEN, and why each is sound to omit:
+      * a corr_objects version -- its material content is unchanged and no reader
+        walks the version series (every Go history read is ORDER BY version DESC
+        LIMIT 1). The version NUMBER does not move either, so the list/health
+        joins on (correlation_id, version) still resolve to the last full
+        version's rows.
+      * corr_edges / corr_evidence -- keyed by (correlation_id, version); the
+        rows for THIS version already exist.
+      * the archive slice -- replay resolves the newest slice with
+        archived_version <= requested, and a touch mints no new version to
+        resolve.
+      * an EvidenceItem -- nothing downstream of the Decision plane is owed work.
+
+    The dedup token carries `content_hash` exactly as `_persist_snapshot`'s does,
+    so a retried touch of identical content dedups while a moved window mints a
+    fresh token. `created_at` is the server's now64(3) DEFAULT -- what
+    ReplacingMergeTree(created_at) folds on, and what the orphan-close sweep and
+    the drift reconciler read.
+
+    Failure is counted on the SAME #101 counter as the dual-write it replaces: a
+    lost touch is a stale Command Center row, self-healed by the next write and
+    force-repaired by the Go corr_current reconciler.
+    """
+    assert ch is not None
+    global PROJECTION_WRITE_FAILURES
+    _t0 = time.perf_counter() if CORR_PROFILE_STAGES else 0.0
+    # Tracker 155b D3. A heartbeat touch writes corr_current and nothing else —
+    # which is EXACTLY the row an operator reads — so a seed-descended object
+    # could be demoted here without a corr_objects version ever recording it.
+    # No-op (identical object) for every other object. The dedup token keeps the
+    # caller's content hash: it is derived from the real recomputed content, and
+    # a touch only ever runs when that content has moved.
+    snap = _seed_verdict_floor(snap)
+    tok = f"obj:{snap.correlation_id}:v{version}:{state}:{content_hash[:16]}"
+    failure: tuple[str, bool] | None = None
+    try:
+        current_row = _current_row_fields(snap, version, state)
+        # Same offload rule as the Decision write's badge build (P2 step 4d):
+        # inline for a small object, off the loop thread for a storm object.
+        current_row.update(await _decision_offload(
+            _snap_elements(snap), _current_badges_from_snapshot, snap))
+        current_row["chaos_fixture"] = _chaos_fixture_for(snap)
+        _dec_batcher = _active_decision_batcher()
+        if _dec_batcher is not None:
+            await _dec_batcher.add(
+                "netops.corr_current", [current_row],
+                member=_DecisionMember(tok=tok, correlation_id=snap.correlation_id,
+                                       version=version, tenant_id=snap.tenant_id),
+                dedup_token=f"{tok}:current")
+        elif not await ch_insert("netops.corr_current", [current_row],
+                                 dedup_token=f"{tok}:current"):
+            failure = ("clickhouse rejected insert (see preceding error log)", True)
+    except Exception as exc:  # noqa: BLE001 -- observable, non-fatal (SS10)
+        retryable = isinstance(exc, (httpx.TransportError, httpx.TimeoutException))
+        failure = (f"{type(exc).__name__}: {exc}", retryable)
+    if failure is not None:
+        PROJECTION_WRITE_FAILURES += 1
+        err, retryable = failure
+        log.warning(
+            "corr_current heartbeat touch FAILED tenant_id=%s corr_id=%s "
+            "version_id=%d retryable=%s error=%s",
+            snap.tenant_id, snap.correlation_id, version, retryable, err,
+        )
+    if CORR_PROFILE_STAGES and _t0:
+        stage_record("persist.heartbeat_touch", time.perf_counter() - _t0)
+    log.debug("corr-object %s v%d %s: heartbeat touch (material unchanged)",
+              snap.correlation_id[:8], version, state)
+
+
+# ── Tracker 187: the two halves of the monotone blast radius ────────────────
+# `_affected_note` runs on the PERSIST paths only (a damped cycle and a
+# heartbeat touch write no version, so they contribute no history); the
+# terminal paths call `_affected_final` for the union they publish.
+#
+# The accumulator lives on the REGISTRATION dict, which is what makes it
+# survive the continuation re-key: `find_continuation` re-keys the SNAPSHOT
+# (`dc_replace(snap, correlation_id=cont)`) and then reuses
+# `OPEN_OBJECTS[cont]` — the same dict object, so the adopted identity keeps
+# the history it accumulated under its own id. A registration that predates
+# this change (or one a test built by hand) simply has no accumulator: both
+# helpers then degrade to exactly today's behaviour rather than raising.
+
+async def _affected_note(reg: dict, snap: ObjectSnapshot) -> None:
+    """Fold ONE persisted version's blast radius into the object's history."""
+    global AFFECTED_HISTORY_TRUNCATED, AFFECTED_HISTORY_ENTITIES_MAX
+    hist = reg.get("affected_hist")
+    if hist is None:
+        return
+    before = hist.truncated
+    # Same offload rule as every other per-object projection on the persist
+    # path: `affected()` walks the nodes and the fused identities, which on a
+    # storm aggregate is all signals and no edges (see `_snap_cost`).
+    hist.note(await _snap_call(snap, snap.affected))
+    AFFECTED_HISTORY_TRUNCATED += hist.truncated - before
+    AFFECTED_HISTORY_ENTITIES_MAX = max(AFFECTED_HISTORY_ENTITIES_MAX,
+                                        hist.entity_count())
+
+
+async def _affected_final(reg: dict, snap: ObjectSnapshot) -> dict | None:
+    """The TERMINAL version's blast radius: this object's persisted history
+    unioned with the terminal snapshot's own projection.
+
+    Returns None when there is no history to add — the caller then passes no
+    override and `to_object_row` renders `snap.affected()` exactly as before.
+    """
+    hist = reg.get("affected_hist")
+    if hist is None:
+        return None
+    return hist.merged_with(await _snap_call(snap, snap.affected))
+
+
+async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
+                            window: Sequence[Signal], merged_into: str = "",
+                            loop_yield=_noop_yield,
+                            priority_class: int = EVIDENCE_CLASS_DECISION,
+                            affected: dict | None = None) -> None:
+    """The Decision write, then the Evidence write (inline or deferred).
+
+    P2 step 4 (spec §1/§4): everything up to and including the `corr_current`
+    projection is the DECISION plane — the operator's verdict, unchanged in
+    bytes, tokens and order. Everything after it is the EVIDENCE plane, handed
+    to `_write_evidence` either inline (CORR_EVIDENCE_ASYNC=0) or through the
+    bounded priority queue.
+
+    `priority_class` is the caller's content-derived statement of what this
+    version IS (new incident / material change, terminal, unchanged re-persist);
+    see evidence_plane's module docstring. It affects the Evidence DRAIN ORDER
+    only — never a byte, never a token, never a verdict.
+
+    `affected` (tracker 187) overrides the blast-radius column with the object's
+    monotone history union. It is passed by the TERMINAL persists only — quiesce
+    close, the 163 cap close and the lifecycle merge — and never by an open
+    version, a heartbeat re-persist or a direct call from outside the engine.
+    """
+    assert ch is not None
+    # Tracker 155b D3, and deliberately the FIRST statement of the write: every
+    # persisted version — open, heartbeat, terminal — goes through here, so the
+    # verdict floor is applied in exactly one place and cannot be forgotten on a
+    # path. Returns `snap` itself for every object that is not seed-descended
+    # (or whose recomputation is already at least as strong, or whose floor has
+    # expired), so the overwhelmingly common persist is byte-for-byte unchanged.
+    snap = _seed_verdict_floor(snap)
+    # P2 step 4 observability: the profiler must show the SPLIT, so the two
+    # halves are timed separately — `persist.decision` is what the operator's
+    # verdict costs, `persist.evidence` (in _write_evidence) is what the graph
+    # costs. Read together they are today's single persist figure.
+    _t_decision = time.perf_counter() if CORR_PROFILE_STAGES else 0.0
+    # P1 (1000-device scale): every serializer below is offloaded for a large
+    # graph — see _offload. On the live 48,375-edge object these four calls plus
+    # the token hash were ~3.2s of frozen loop; the heartbeat task died in them.
+    # P1 §3: build the hypotheses blob ONCE and hand it to the row builder. It is
+    # the single most expensive serialize on a storm object and one persist used
+    # to build it 3-4x (row + content_hash, each re-serializing). It is
+    # deliberately NOT cached on the snapshot — 15-25K open objects x 5.7 KB-MBs
+    # is the RSS tracker 156 fought for — so the saving is scoped to this call.
+    # P2 step 0a: served from the cycle cache when the reconciliation loop's
+    # content_hash already built this snapshot's blob a few statements ago —
+    # the SAME string, so the row bytes are unchanged; only the second
+    # serialize is gone. Outside a cycle (a lifecycle merge/close run at epoch
+    # cadence) there is no cache and this is the plain build it always was.
+    hypotheses = await _snap_call(snap, cycle_hypotheses_blob, snap)
+    # TRACKER 195: bound the PERSISTED blob. Applied HERE and nowhere else, so
+    # `content_hash` — which builds its own blob from the frozen snapshot — and
+    # therefore object identity, version numbering and every replay pin are
+    # untouched: the cap changes what lands in the column, never what the engine
+    # decided. Under the cap this is a length check and the same string object
+    # (99.95 % of versions, byte-for-byte identical rows); over it, the ladder
+    # in `bound_hypotheses_blob` runs on the same offload the blob build uses.
+    # The GUARD is a bare `len()` on a string we already hold, so the 99.95 %
+    # path adds no await, no offload decision and no scheduling point — the
+    # persist sequence the storm SLO measures is byte- and schedule-identical.
+    # Only an over-cap blob pays the reduction, and it pays it on the same
+    # offload every other per-object serializer uses.
+    _hyp_cap = hypotheses_cap_bytes()
+    _hyp_cut: dict | None = None
+    if 0 < _hyp_cap < len(hypotheses):
+        hypotheses, _hyp_cut = await _snap_call(snap, bound_hypotheses_blob, hypotheses)
+    if _hyp_cut is not None:
+        global HYPOTHESES_TRUNCATED, HYPOTHESES_TRUNCATED_BYTES
+        HYPOTHESES_TRUNCATED += 1
+        HYPOTHESES_TRUNCATED_BYTES += int(_hyp_cut.get("original_bytes", 0))
+        # WARN, with the correlation_id, because a shortened ranking is a
+        # material fact about that object — never a debug line (§10).
+        log.warning(
+            "hypotheses blob bounded: correlation_id=%s tenant=%s version=%d "
+            "original_bytes=%d cap_bytes=%d dropped_relations=%d "
+            "dropped_hypotheses=%d dropped_blocks=%s applied=%s",
+            snap.correlation_id, snap.tenant_id, version,
+            _hyp_cut.get("original_bytes", 0), _hyp_cut.get("cap_bytes", 0),
+            _hyp_cut.get("dropped_relations", 0),
+            _hyp_cut.get("dropped_hypotheses", 0),
+            _hyp_cut.get("dropped_blocks", []), _hyp_cut.get("applied", False))
+    # Tracker 187: `affected` is set ONLY by a terminal persist and is the
+    # monotone union of this object's own persisted history (`_affected_final`).
+    # None on every other path -> the row is byte-for-byte what it always was.
+    obj_row = await _snap_call(snap, snap.to_object_row, version, state, merged_into,
+                               hypotheses=hypotheses, affected=affected)
+    # The callers' cooperative gate, consulted INSIDE the object as well as
+    # between objects (storm-s03). Quiesce, the count cap and the reconcile loop
+    # all yield per OBJECT, which bounds the batch — but one object's Decision
+    # half is four builders plus a byte walk, and when every one of them takes
+    # the inline path (a snapshot under the offload threshold) that whole
+    # sequence is a single uninterrupted stretch. A consult here caps it at one
+    # builder, whatever the population does. No-op for a caller that passes no
+    # yield (`_noop_yield`), and a scheduling interleave only — never a byte.
+    await loop_yield()
+    # H13: these engine-cycle writes run OUTSIDE any consumer message, so they
+    # must not draw tokens from the consumer's Kafka coordinate (a redelivery
+    # resets that seq, colliding a NEW object version's token with a spent one
+    # → ClickHouse silently drops the new version). The object version itself
+    # is the idempotency key: a retry of the SAME (cid, version, state,
+    # content) dedups, any new version/state/content mints a fresh token. The
+    # content-hash suffix guards the restart edge where OPEN_OBJECTS resets
+    # and version numbering restarts at 1 with different content.
+    tok = (f"obj:{snap.correlation_id}:v{version}:{state}:"
+           f"{(await _snap_call(snap, snap.content_hash))[:16]}")
+    # P2 step 4c, DEFAULT OFF (CORR_DECISION_BATCH): the verdict rows may also
+    # be accumulated across versions — 12x/3x fewer level-0 parts on the two
+    # tables that carry 59 % of the inserts and 86 % of the uncompressed bytes.
+    # It is off because buffering the verdict trades T1 TTUR directly, and
+    # because `corr_objects`' rejection stops raising out of the cohort. The
+    # dedup TOKEN semantics are unchanged either way: `tok` is content-derived,
+    # so a block's token is the ordered hash of content-derived member keys and
+    # a retry of the identical block dedups exactly as the single row does.
+    _dec_batcher = _active_decision_batcher()
+    _dec_member = _DecisionMember(tok=tok, correlation_id=snap.correlation_id,
+                                  version=version, tenant_id=snap.tenant_id)
+    if _dec_batcher is not None:
+        await _dec_batcher.add("netops.corr_objects", [obj_row],
+                               member=_dec_member, dedup_token=f"{tok}:objects")
+    else:
+        await ch_insert("netops.corr_objects", [obj_row],
+                        dedup_token=f"{tok}:objects",
+                        corr_id=snap.correlation_id, version=version,
+                        tenant=snap.tenant_id)
+    # Dual-write the narrow current-state row (app-level, NOT an MV — row
+    # policies break MV inserts). ReplacingMergeTree(created_at) keeps the
+    # latest write per (tenant, correlation_id). Projection failure must never
+    # block the history write (truth) — but it MUST be counted and alertable
+    # (#101): corr_current is what Command Center reads, so a lost dual-write
+    # is a stale incident list. It self-heals on the next material persist and
+    # is force-repaired by the Go corr_current reconciler.
+    global PROJECTION_WRITE_FAILURES
+    failure: tuple[str, bool] | None = None  # (error, retryable)
+    try:
+        current_row = {k: obj_row[k] for k in CORR_CURRENT_FIELDS if k in obj_row}
+        # P2 step 4d: `_current_badges` json.loads the WHOLE hypotheses blob to
+        # read four fields off `ranking.hypotheses[0].verdict` — measured at
+        # 489 ms on a 20-node/50k-edge storm object, the single largest
+        # remaining on-loop stretch of the Decision write. Same offload rule as
+        # every other per-object serializer; the dict is identical either way.
+        await loop_yield()      # see the consult above: one builder per stretch
+        current_row.update(await _decision_offload(
+            _snap_elements(snap), _current_badges, obj_row.get("hypotheses", "")))
+        current_row["chaos_fixture"] = _chaos_fixture_for(snap)
+        if _dec_batcher is not None:
+            # A buffered projection row cannot report its own outcome here; a
+            # failed block counts PROJECTION_WRITE_FAILURES per member instead
+            # (`_ev_block_done`), which is the same counter #101 alerts on.
+            await _dec_batcher.add("netops.corr_current", [current_row],
+                                   member=_dec_member,
+                                   dedup_token=f"{tok}:current")
+        elif not await ch_insert("netops.corr_current", [current_row],
+                                 dedup_token=f"{tok}:current"):
+            failure = ("clickhouse rejected insert (see preceding error log)", True)
+    except Exception as exc:  # noqa: BLE001 — observable, non-fatal (§10)
+        # Network/timeout errors are retryable; anything else (serialization,
+        # schema shape) will not fix itself by retrying.
+        retryable = isinstance(exc, (httpx.TransportError, httpx.TimeoutException))
+        failure = (f"{type(exc).__name__}: {exc}", retryable)
+    if failure is not None:
+        PROJECTION_WRITE_FAILURES += 1
+        err, retryable = failure
+        log.warning(
+            "corr_current projection write FAILED tenant_id=%s corr_id=%s "
+            "version_id=%d material_hash=%s retryable=%s error=%s",
+            snap.tenant_id, snap.correlation_id, version,
+            await _snap_call(snap, snap.material_hash), retryable, err,
+        )
+    # ── P2 step 4: the Decision plane ends HERE ──────────────────────────────
+    # Everything above is the operator's verdict — the corr_objects row and the
+    # corr_current projection, byte-for-byte the rows, tokens and order they
+    # have always been. Everything below is the EVIDENCE plane: the same
+    # functions, the same dedup tokens, the same bytes, either written inline
+    # (CORR_EVIDENCE_ASYNC=0) or deferred onto the bounded priority queue.
+    #
+    # Stage [8] archive: a BOUNDED, node-complete slice of the tenant window
+    # (see _archive_slice — replay-exact for THIS object, no longer the whole
+    # 50k-floor tenant window per object version). Slices stay version-scoped:
+    # replay re-runs exactly the window slice THIS version was computed from.
+    #
+    # The slice MEMBERSHIP and its DAMPING DECISION are computed here, on the
+    # Decision path, for two independent reasons:
+    #   1. `_archive_slice` needs the epoch's `window` and this cycle's window
+    #      index, and both are dropped (`_close_epoch`, `_WINDOW_INDEX_CACHE`)
+    #      long before a deferred item could drain.
+    #   2. Determinism (spec §1): the damping rule is "same membership as the
+    #      LAST ARCHIVED version of this object". Evaluated in the consumer it
+    #      would be decided by the drain ORDER — a runtime condition deciding
+    #      WHAT is written, which §1 forbids. Evaluated here it is decided in
+    #      version order, exactly as today.
+    global ARCHIVE_SLICES_DAMPED
+    global ARCHIVE_SLICE_ROWS_LAST, ARCHIVE_SLICE_ROWS_MAX
+    # P2 step 4d: sized on what this CALL will actually cost — the window when
+    # the cycle's index still has to be built (1,267 ms over a 50k window, paid
+    # by the first object of the cycle however small it is), the object when the
+    # index is already memoized. See `_archive_slice_cost`.
+    await loop_yield()          # see the consult above: one builder per stretch
+    slice_sigs, slice_hash = await _decision_offload(
+        _archive_slice_cost(snap, window), _archive_slice_and_hash, snap, window)
+    if slice_sigs:
+        ARCHIVE_SLICE_ROWS_LAST = len(slice_sigs)
+        ARCHIVE_SLICE_ROWS_MAX = max(ARCHIVE_SLICE_ROWS_MAX, len(slice_sigs))
+        if _ARCHIVE_SLICE_HASH.get(snap.correlation_id) == slice_hash:
+            # Same membership as the last archived version of this object —
+            # skip the re-write. Readers (replay._select_slice, the Go timeline
+            # archived_version fallback) resolve to the newest slice ≤ version.
+            ARCHIVE_SLICES_DAMPED += 1
+            slice_sigs = []
+        else:
+            # Recorded OPTIMISTICALLY, before the rows land, because the write
+            # may now be deferred: the next version must not re-archive an
+            # identical membership just because this one has not drained yet.
+            # A FAILED evidence write reverts it (see _write_evidence), so the
+            # next version re-writes the slice exactly as it does today.
+            _ARCHIVE_SLICE_HASH[snap.correlation_id] = slice_hash
+    # The queue is resolved BEFORE the item is built because `est_bytes` is the
+    # queue's currency and nothing else reads it: the estimate is a walk of the
+    # snapshot's value graph (~0.24-0.38 ms/item, against a persist path
+    # measured at ~7 ms/version), and the inline path — CORR_EVIDENCE_ASYNC=0,
+    # a dead consumer, a foreign loop — must not pay for a bound it does not
+    # have. It is charged to `persist.decision`, where it happens, exactly as
+    # the flat-constant estimate was.
+    queue = _active_evidence_queue()
+    item = EvidenceItem(
+        correlation_id=snap.correlation_id, tenant_id=snap.tenant_id,
+        version=version, state=state, tok=tok, snap=snap,
+        priority_class=priority_class,
+        window_start_ts=snap.window_start.timestamp(),
+        slice_sigs=list(slice_sigs) if slice_sigs else None,
+        slice_hash=slice_hash,
+        est_bytes=0,
+    )
+    if queue is not None:
+        # P2 step 4d: the byte estimate is an id-`seen` deep walk of the
+        # snapshot's value graph — 317 ms on the 20-node/50k-edge storm shape,
+        # on the loop thread, in one uninterruptible stretch. Deterministic, so
+        # the bound it feeds is unchanged; only the thread moved.
+        # Sized by BOTH halves of the walk: the snapshot's own value graph
+        # (`_snap_cost` — signals included, see its docstring) and the archive
+        # slice hanging off the item, which on a storm aggregate is 50k+
+        # signals the snapshot itself does not account for.
+        item.est_bytes = await _decision_offload(
+            max(_snap_cost(snap), len(slice_sigs) if slice_sigs else 0),
+            estimate_bytes, snap, slice_sigs)
+    if CORR_PROFILE_STAGES and _t_decision:
+        stage_record("persist.decision", time.perf_counter() - _t_decision)
+    if queue is not None:
+        # Bounded, blocking, never dropping (owner memo §22). A full queue slows
+        # the Decision plane down; it never loses an Evidence row.
+        #
+        # Timed as its OWN stage, deliberately OUTSIDE `persist.decision` (which
+        # was already closed above) and outside `persist.evidence`: a Decision
+        # write that took 200 ms and then waited 20 s for queue room is not a
+        # 20-second Decision write, and reading it as one would send the next
+        # investigation at the wrong function. `persist.backpressure_wait` is
+        # the Evidence plane's back-pressure on the Decision plane, named.
+        with stage("persist.backpressure_wait"):
+            await _evidence_put(queue, item, loop_yield)
+    else:
+        await _write_evidence(item, loop_yield)
+    log.info("corr-object %s v%d %s: top=%s tier=%s nodes=%d edges=%d",
+             snap.correlation_id[:8], version, state, snap.ranking.top_hypothesis,
+             snap.ranking.verdict_tier.value, len(snap.nodes), len(snap.edges))
+
+
+async def _write_evidence(item: EvidenceItem, loop_yield=_noop_yield,
+                          emit=None) -> bool:
+    """Materialize ONE EvidenceItem: edges -> typed edges -> evidence -> archive.
+
+    This is `_persist_snapshot`'s second half, moved verbatim — the same
+    functions, the same page sizes, the same dedup tokens, the same order. The
+    only thing that changed is WHEN it runs (spec §1). Called inline when
+    CORR_EVIDENCE_ASYNC=0 and from the Evidence consumer otherwise; both paths
+    run this one body, which is what makes the byte-identity tests meaningful.
+
+    Returns False when the archive slice did not land whole (the bool contract
+    `corr_signals_archive` has always had — it is not an RCA-critical table, so
+    `ch_insert` reports rather than raises). The RCA-critical child tables still
+    RAISE `CHInsertRejected`: inline that reaches the cohort exactly as it does
+    today; from the consumer it is caught, counted and logged there.
+    """
+    _t0 = time.perf_counter() if CORR_PROFILE_STAGES else 0.0
+    try:
+        return await _write_evidence_inner(item, loop_yield, emit or _ch_emit)
+    finally:
+        if CORR_PROFILE_STAGES and _t0:
+            stage_record("persist.evidence", time.perf_counter() - _t0)
+
+
+async def _write_evidence_inner(item: EvidenceItem, loop_yield, emit) -> bool:
+    snap, version, tok = item.snap, item.version, item.tok
+    # P0 boundedness pass: the edge/evidence child rows scale with the storm's
+    # edge count (~180k worst case), so they are emitted in bounded pages (see
+    # _emit_child_rows) — no single synchronous serialize+insert step tracks the
+    # whole object, and the loop is yielded between pages.
+    await _emit_child_rows("netops.corr_edges", snap, snap.edge_row_page,
+                           len(snap.edges), version, f"{tok}:edges", loop_yield,
+                           emit)
+    # Contract §5: the typed edge + its evidence block (edge_type, method, rank,
+    # evidence_class, evidence_ref, observation_method, confidence, observed_at,
+    # data_class). corr_edges' frozen Enum8 grounding_kind cannot express these and
+    # grounding_ref is NOT overloaded to smuggle them — they go to their own table
+    # once the backend migration lands (CORR_EDGES_V2). Until then they are still
+    # emitted: embedded in the snapshot's grounding context (replay-safe) and served
+    # from there.
+    if CORR_EDGES_V2:
+        await _emit_child_rows(CORR_PATH_EDGES_TABLE, snap, snap.typed_edge_row_page,
+                               len(snap.edges), version, f"{tok}:typed_edges",
+                               loop_yield, emit)
+    await _emit_child_rows("netops.corr_evidence", snap, snap.evidence_row_page,
+                           snap.evidence_row_count(), version, f"{tok}:evidence",
+                           loop_yield, emit)
+    slice_sigs = item.slice_sigs
+    if not slice_sigs:
+        return True
+    # Chunked, and BUILT per chunk (tracker 156). Chunking only the INSERT still
+    # materialised the whole slice as row dicts first, so peak transient memory
+    # was slice_size x ~1 KB — tens of MB per object version, per cycle, in the
+    # container that runs closest to its cgroup cap. Building inside the loop
+    # bounds that peak to CORR_ARCHIVE_CHUNK_ROWS rows regardless of slice size,
+    # while the insert bodies and the loop yields are unchanged.
+    all_ok = True
+    for start in range(0, len(slice_sigs), CORR_ARCHIVE_CHUNK_ROWS):
+        # cache=False: `_archive_row`'s per-cycle base-row cache is keyed by
+        # id(sig), and its safety argument is that every archived signal belongs
+        # to the ONE window the cycle is holding open. The Evidence consumer
+        # runs BETWEEN cycles over signals from several of them, where a freed
+        # Signal's id can be recycled by a later item's — so the deferred path
+        # builds its rows fresh. Byte-identical (`to_ch_row` is deterministic);
+        # what it costs is the cross-object row reuse, measured in the bench.
+        part = slice_sigs[start:start + CORR_ARCHIVE_CHUNK_ROWS]
+        # OFFLOADED for a big chunk (P2 step 4 follow-up, run p2-s04-08290653).
+        # `cache=False` above costs 15x what the per-cycle base-row cache cost
+        # (measured: a 10,000-row chunk is 410 ms fresh vs 27 ms cached), and
+        # CORR_ARCHIVE_CHUNK_ROWS is 10,000 — so on the loop thread this was a
+        # single uninterruptible ~0.4 s stretch per chunk, competing with the
+        # executor's run_window for the GIL. It is a PURE function of immutable
+        # signals, which is exactly what `_offload` is for; the rows are
+        # identical either way.
+        chunk = (await _offload(_archive_chunk, part, snap.correlation_id, version)
+                 if len(part) >= CORR_ROW_PAGE_SIZE
+                 else _archive_chunk(part, snap.correlation_id, version))
+        # No dedup token minted HERE (corr_signals_archive is not RCA-critical,
+        # so there is no Kafka coordinate to mint from): `emit` gets "" and both
+        # sinks derive the deterministic member key below instead — the batched
+        # one as its block member name, the unbatched one as the insert's own
+        # token (tracker 189). The row tally moved into the sink (`_ch_emit`) —
+        # under batching the insert happens later, on behalf of several versions
+        # at once, and only the sink knows when it landed.
+        # `member_key`: a content-derived, chunk-numbered key for a write that
+        # carries no dedup token of its own. Read by the batched sink as its
+        # block member name and, since tracker 189, by the unbatched sink as
+        # the insert's dedup token (the BODY and settings are unchanged either
+        # way). Without it the batcher fell back to a key scoped to
+        # the BUFFER, so two consecutive solo blocks of the same item both
+        # keyed `<tok>:<table>:0` and hashed to the SAME block token — a silent
+        # server-side drop of the second block now that corr_signals_archive
+        # carries `non_replicated_deduplication_window = 1000` (tracker 189
+        # residual, init.sql + the chschema boot converge).
+        ok = await emit("netops.corr_signals_archive", chunk, "",
+                        {"corr_id": snap.correlation_id, "version": version,
+                         "row_count": len(chunk),
+                         "member_key": f"{tok}:archive:{start // CORR_ARCHIVE_CHUNK_ROWS}"})
+        if ok is False:
+            all_ok = False
+        await loop_yield()
+    # The slice did not land WHOLE, so it must be retried whole on the next
+    # persist of this object. Today that is expressed by not recording the
+    # membership hash; the record is now made optimistically on the Decision path
+    # (it has to be — the next version's damping decision cannot wait for this
+    # write), so the same rule is expressed as a REVERT — through the one shared
+    # helper (ultra #16) so failed and lost slices are reverted, counted and
+    # logged identically, with the identity guard stated there.
+    if not all_ok:
+        _archive_slice_revert(item, "archive write failed")
+    return all_ok
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# P2 step 4 — the Evidence plane's consumer, queue and lifecycle
+# docs/design/DECISION_EVIDENCE_SPLIT_P2_2026-08-28.md §1, §4, §9 item 4.
+#
+# ONE in-process task drains ONE bounded priority queue (evidence_plane.py) and
+# writes each item with `_write_evidence` — the same functions, tokens and bytes
+# the inline path uses. It exists so a cohort's verdict rows are not queued
+# behind that cohort's own Evidence rows (measured: ~1,000 s per cohort, of
+# which the verdict is the first ~100 ms — P2_STEPS012_2P5K_VERDICT §4.3).
+#
+# DURABILITY, stated plainly because it is a real change:
+#   * An Evidence write that FAILS after `ch_insert`'s bounded retries is
+#     counted (corr_evidence_items_total{outcome="failed"}) and logged with a
+#     traceback. Inline, a rejected RCA-critical child write raised out of the
+#     cohort and the whole cohort was retried; from the consumer there is no
+#     cohort to retry, so the item is lost and LOUD instead of silently
+#     replayed. The Decision row for that version stands (it landed first), so
+#     the incident is never invisible — only its graph is, until the next
+#     version of the object re-emits it.
+#   * Items still queued when the process stops are drained for at most
+#     CORR_EVIDENCE_DRAIN_ON_STOP_S, then logged ONE LINE EACH and counted as
+#     outcome="lost". Spec §2's VVR (`evidence_state`) is where this becomes
+#     detectable AFTER a restart; this step adds NO schema, so the shutdown log
+#     and the counter are the whole detection surface.
+# ═══════════════════════════════════════════════════════════════════════════
+_EVIDENCE_QUEUE: EvidenceQueue | None = None
+_EVIDENCE_TASK: asyncio.Task | None = None
+_EVIDENCE_LOOP: asyncio.AbstractEventLoop | None = None
+_EVIDENCE_BATCHER: RowBatcher | None = None
+_EVIDENCE_FLUSHER: asyncio.Task | None = None
+EVIDENCE_ITEMS_MATERIALIZED = 0
+EVIDENCE_ITEMS_FAILED = 0
+EVIDENCE_ITEMS_LOST = 0
+# Ultra #15: consumer tasks restarted on the SAME loop and queue after dying.
+# A death is a DEFECT (its traceback is logged by the done-callback); revival
+# is the containment that keeps the backlog serviceable and the engine unparked.
+EVIDENCE_CONSUMER_REVIVED = 0
+# Ultra #17: rows a dead loop's batcher had buffered but never flushed, counted
+# when the plane is replaced — the loss that used to vanish in a `.clear()`.
+EVIDENCE_BATCH_ROWS_ABANDONED = 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# P2 step 4c — cross-version batching: WHO SETTLES AN ITEM, AND WHEN
+#
+# Unbatched, an item's outcome is known when `_write_evidence` returns: its
+# inserts have all been awaited. Batched, its rows are spread over one to four
+# BLOCKS that flush later, possibly on behalf of a producer that has nothing to
+# do with this item. So the outcome moves to the last block:
+#
+#   * `_ev_join(table, item)`  — the item joined a table's buffer: one more
+#     block it is waiting on. Called BEFORE the append can trigger a flush.
+#   * `_ev_block_done(...)`    — a block flushed: every member loses one
+#     outstanding block, and a FAILED block marks the table on every member.
+#   * `_ev_finished(item, ok)` — `_write_evidence` returned; nothing more will
+#     be buffered for this item.
+#
+# The item is counted exactly once, when it is finished AND owes no blocks —
+# `outcome="materialized"` if no block it was in failed, `outcome="failed"`
+# otherwise, with the member's own dedup tokens in the log so the operator can
+# find the rows that did not land. That is the same counting the unbatched
+# consumer does; only the moment moved.
+# ═══════════════════════════════════════════════════════════════════════════
+_ARCHIVE_TABLE = "netops.corr_signals_archive"
+
+
+@dataclass(slots=True)
+class _EvidencePending:
+    """One item's outstanding-block bookkeeping (batched path only)."""
+    item: EvidenceItem
+    blocks: int = 0
+    finished: bool = False
+    body_ok: bool = True
+    failed_tables: set = field(default_factory=set)
+    keys: list = field(default_factory=list)
+
+
+_EVIDENCE_PENDING: dict[int, _EvidencePending] = {}
+
+
+@dataclass(slots=True)
+class _DecisionMember:
+    """A Decision-plane block member (CORR_DECISION_BATCH only).
+
+    The Decision write has no `EvidenceItem` — its rows are built and issued
+    before one exists — so it contributes this instead: just enough identity to
+    mint the member key and to name the rows in a failure log.
+    """
+    tok: str
+    correlation_id: str
+    version: int
+    tenant_id: str
+
+
+def _ev_join(table: str, member: object) -> None:
+    """One more block this item is waiting on."""
+    pend = _EVIDENCE_PENDING.get(id(member))
+    if pend is not None:
+        pend.blocks += 1
+
+
+def _ev_finished(item: EvidenceItem, body_ok: bool) -> None:
+    """`_write_evidence` returned: nothing more will be buffered for this item."""
+    pend = _EVIDENCE_PENDING.get(id(item))
+    if pend is None:
+        return
+    pend.finished = True
+    pend.body_ok = pend.body_ok and body_ok
+    if pend.blocks <= 0:
+        _ev_settle(pend)
+
+
+def _ev_settle(pend: _EvidencePending) -> None:
+    """Count ONE item, exactly once, now that every block it was in has landed.
+
+    Same outcome rule the unbatched consumer applies — a failed archive block
+    also REVERTS the optimistic slice-membership hash, guarded on identity so a
+    later version's successful record is never clobbered by an earlier
+    version's failure flushing out of order (spec §12.1, unchanged).
+    """
+    global EVIDENCE_ITEMS_MATERIALIZED, EVIDENCE_ITEMS_FAILED
+    item = pend.item
+    _EVIDENCE_PENDING.pop(id(item), None)
+    if _ARCHIVE_TABLE in pend.failed_tables:
+        _archive_slice_revert(item, "batched archive block failed")
+    queue = _EVIDENCE_QUEUE
+    if queue is not None:
+        # T7 is "verdict -> materialized graph", so it is measured when the rows
+        # actually landed, not when the consumer handed them to a buffer.
+        queue.note_written(item, time.monotonic())
+    if pend.body_ok and not pend.failed_tables:
+        EVIDENCE_ITEMS_MATERIALIZED += 1
+        return
+    EVIDENCE_ITEMS_FAILED += 1
+    log.error(
+        "evidence item FAILED (batched) corr_id=%s version=%d state=%s "
+        "tenant_id=%s tables=%s — the Decision row for this version already "
+        "landed; its graph will not be retried until the next version of this "
+        "object (evidence_items_failed_total=%d)",
+        item.correlation_id, item.version, item.state, item.tenant_id,
+        ",".join(sorted(pend.failed_tables)) or "-", EVIDENCE_ITEMS_FAILED)
+
+
+def _ev_block_done(table: str, rows: list, keys: list, members: list,
+                   ok: bool, exc: BaseException | None) -> None:
+    """One flushed block, accounted to every member it carried.
+
+    Called with the batcher's lock held, so it must stay synchronous and cheap:
+    counters, a log line, and the per-member bookkeeping above.
+    """
+    global ARCHIVE_ROWS_WRITTEN, PROJECTION_WRITE_FAILURES
+    if ok:
+        if table == _ARCHIVE_TABLE:
+            ARCHIVE_ROWS_WRITTEN += len(rows)
+    else:
+        # The member TOKENS, not just a count: they are the only way to find
+        # which versions' rows are missing from the table (§10, no silence).
+        log.error(
+            "evidence batch block FAILED table=%s rows=%d members=%d "
+            "error=%s member_tokens=%s",
+            table, len(rows), len(members),
+            f"{type(exc).__name__}: {exc}" if exc is not None else
+            "clickhouse rejected insert (see preceding error log)",
+            " ".join(keys))
+    for member in members:
+        pend = _EVIDENCE_PENDING.get(id(member))
+        if pend is None:
+            # #101: a lost corr_current dual-write is a stale Command Center
+            # and has always been counted. corr_objects is history and has no
+            # counter of its own — the block log above names it.
+            if (not ok and table == "netops.corr_current"
+                    and isinstance(member, _DecisionMember)):
+                PROJECTION_WRITE_FAILURES += 1
+            continue
+        pend.blocks -= 1
+        if not ok:
+            pend.failed_tables.add(table)
+        if pend.finished and pend.blocks <= 0:
+            _ev_settle(pend)
+
+
+async def _ch_insert_block(table: str, rows: list, dedup_token: str,
+                           ctx: dict) -> bool:
+    """The batcher's sink: one `ch_insert` per BLOCK, one token per block.
+
+    Deliberately NOT `_ch_emit` — the archive row tally belongs to the block
+    result (`_ev_block_done`), and routing it through both would count every
+    archived row twice.
+
+    Timed as its OWN stage. Batching moves the INSERT out of `persist.evidence`
+    (which now measures row BUILDING plus a buffer append) and into a flush that
+    may be triggered by a different item entirely, so without this span the
+    profiler would simply lose the seconds — the same mistake §12.10(b) made
+    with the backpressure wait, which is why nothing in that profile explained
+    the pinned queue.
+    """
+    with stage("persist.batch_flush"):
+        return await ch_insert(table, rows, dedup_token=dedup_token, **ctx)
+
+
+def _make_row_batcher() -> RowBatcher:
+    """The one accumulator both planes share (the Decision tables only when
+    CORR_DECISION_BATCH is on). One instance means one flusher task and one set
+    of counters; the per-table limits are what separate the two planes."""
+    ms = CORR_EVIDENCE_BATCH_MS / 1000.0
+    return RowBatcher(
+        insert=_ch_insert_block, on_flush=_ev_block_done, on_join=_ev_join,
+        max_rows=CORR_EVIDENCE_BATCH_ROWS,
+        max_inflight=CORR_EVIDENCE_BATCH_INFLIGHT,
+        default=(CORR_EVIDENCE_BATCH_ITEMS, CORR_EVIDENCE_BATCH_BYTES, ms),
+        limits={
+            "netops.corr_objects": (CORR_EVIDENCE_BATCH_ITEMS,
+                                    CORR_EVIDENCE_BATCH_BYTES,
+                                    CORR_DECISION_BATCH_MS / 1000.0),
+            "netops.corr_current": (CORR_EVIDENCE_BATCH_ITEMS,
+                                    CORR_EVIDENCE_BATCH_BYTES,
+                                    CORR_DECISION_CURRENT_BATCH_MS / 1000.0),
+        })
+
+
+def _active_row_batcher() -> RowBatcher | None:
+    """The batcher, but ONLY where a flusher can age a partial block out.
+
+    The flusher task is started with the Evidence consumer, so this carries the
+    same three conditions `_active_evidence_queue` does. Anything else writes
+    unbatched, which is always correct: a block that nothing will ever flush is
+    the one way batching could lose a row.
+    """
+    if not CORR_EVIDENCE_BATCH or _EVIDENCE_BATCHER is None:
+        return None
+    if _EVIDENCE_FLUSHER is None or _EVIDENCE_FLUSHER.done():
+        return None
+    try:
+        if asyncio.get_running_loop() is not _EVIDENCE_LOOP:
+            return None
+    except RuntimeError:
+        return None
+    return _EVIDENCE_BATCHER
+
+
+def _active_decision_batcher() -> RowBatcher | None:
+    """The Decision tables' batcher — DEFAULT OFF (CORR_DECISION_BATCH).
+
+    Off because it buffers the operator's verdict and therefore trades T1 TTUR
+    directly; see the flag's comment. It also changes the failure path for
+    `corr_objects`: unbatched, a rejected verdict row raises out of the cohort
+    and the cohort is retried, while a batched block fails later, with no cohort
+    left to retry — the same durability trade step 4 already made for the
+    Evidence rows, now applied to a row the operator reads.
+    """
+    if not CORR_DECISION_BATCH:
+        return None
+    return _active_row_batcher()
+
+
+def _evidence_emitter(batcher: RowBatcher, item: EvidenceItem):
+    """The row sink that buffers instead of inserting, bound to ONE item."""
+    async def emit(table: str, rows: list, dedup_token: str, ctx: dict) -> bool:
+        # `ctx` is the per-version failure context of the UNBATCHED sink; a block
+        # spans versions, so the batcher builds its own (see RowBatcher.add).
+        # The one thing taken from it is `member_key`: the caller's
+        # content-derived name for a chunk written WITHOUT a dedup token (the
+        # archive), which is what stops two blocks presenting the same key list.
+        await batcher.add(table, rows, member=item,
+                          dedup_token=dedup_token or str(ctx.get("member_key", "")))
+        return True
+    return emit
+
+
+async def _evidence_flusher(batcher: RowBatcher) -> None:
+    """Age partial blocks out. The trigger that makes a TRICKLE bounded.
+
+    Sleeps until the nearest age deadline rather than on a fixed tick. With
+    nothing buffered there is no deadline to sleep to, so it polls at a quarter
+    of the configured age bound (capped at 250 ms) — enough that the FIRST block
+    of a burst is still aged out on time, without a permanent high-frequency
+    timer in a process whose whole problem is loop-thread scheduling.
+    """
+    idle = min(0.25, max(0.01, CORR_EVIDENCE_BATCH_MS / 4000.0))
+    while True:
+        due = batcher.due_in_s()
+        await asyncio.sleep(idle if due == float("inf")
+                            else min(0.25, max(0.002, due)))
+        try:
+            await batcher.flush_due()
+        except asyncio.CancelledError:
+            raise
+        except Exception:       # counted + traced (§10), never silent
+            log.exception("evidence batch flusher raised — blocks stay buffered "
+                          "and will be retried on the next tick")
+
+
+def _active_evidence_queue() -> EvidenceQueue | None:
+    """The Evidence queue, but ONLY if it can actually drain right now.
+
+    Three conditions, all load-bearing: the plane is enabled, its consumer task
+    is alive, and the caller is on the SAME event loop that consumer runs on.
+    The last one is not paranoia — a process runs many loops over its life (every
+    `asyncio.run` is one), and enqueueing onto a queue whose consumer belongs to
+    a dead loop would silently swallow the Evidence rows of every caller that
+    followed. Anything that fails these writes its Evidence INLINE, which is
+    always correct and never lossy.
+    """
+    if not CORR_EVIDENCE_ASYNC or _EVIDENCE_QUEUE is None:
+        return None
+    if _EVIDENCE_TASK is None or _EVIDENCE_TASK.done():
+        return None
+    try:
+        if asyncio.get_running_loop() is not _EVIDENCE_LOOP:
+            return None
+    except RuntimeError:
+        return None
+    return _EVIDENCE_QUEUE
+
+
+def _evidence_consumer_gone() -> bool:
+    """Ultra #15: the liveness predicate a parked put re-checks. True the
+    moment the consumer task cannot make room any more, however it ended."""
+    return _EVIDENCE_TASK is None or _EVIDENCE_TASK.done()
+
+
+def _evidence_task_done(task: asyncio.Task) -> None:
+    """Ultra #15(a): the consumer task's done-callback — ANY termination wakes
+    the queue's waiters, so a Decision-plane put parked on a full queue
+    re-checks liveness NOW instead of never (the engine coroutine that would
+    have called `_evidence_ensure_consumer` is exactly the one parked).
+
+    Revival itself happens on the put path / next `engine_cycle`, NOT here: at
+    shutdown `_evidence_stop` cancels this task, and a callback that restarted
+    the consumer would fight the teardown that is awaiting it. Waking waiters
+    is always safe; starting tasks is not.
+    """
+    if task is not _EVIDENCE_TASK:
+        return                      # a replaced plane's stale callback
+    if task.cancelled():
+        # Normal at shutdown/replacement; the cancel initiator does its own
+        # accounting. INFO, not a defect.
+        log.info("evidence consumer task cancelled")
+    else:
+        exc = task.exception()
+        if exc is not None:
+            log.error(
+                "evidence consumer task DIED: %r — queue waiters are being "
+                "woken and the next persist/cycle revives it "
+                "(corr_evidence_consumer_revived_total)", exc, exc_info=exc)
+        else:
+            log.error("evidence consumer task RETURNED — unreachable by "
+                      "design (its loop is `while True`); treating as death, "
+                      "waiters woken, next persist revives it")
+    queue = _EVIDENCE_QUEUE
+    if queue is not None:
+        # The loop may already be closing (asyncio.run teardown). Nothing is
+        # lost if the wake cannot be scheduled: every parked put also re-checks
+        # liveness on CORR_EVIDENCE_PUT_RECHECK_S, and a closing loop has no
+        # parked put to wake.
+        with contextlib.suppress(RuntimeError):
+            task.get_loop().create_task(queue.wake())
+
+
+async def _evidence_put(queue: EvidenceQueue, item: EvidenceItem,
+                        loop_yield=_noop_yield) -> None:
+    """Ultra #15(b): the Decision plane's put — backpressure-faithful under a
+    healthy consumer, never parked past a dead one.
+
+    THE WAKE MECHANISM, end to end: the consumer task carries a done-callback
+    (`_evidence_task_done`) that fires on ANY termination — cancellation,
+    Exception, MemoryError-class BaseException — and wakes every waiter on the
+    queue's condition. A put parked inside `queue.put` re-checks the
+    `_evidence_consumer_gone` predicate on every wake AND on a
+    CORR_EVIDENCE_PUT_RECHECK_S timeout (the belt for a lost wake-up), and
+    escapes with `EvidencePutAborted` instead of waiting on a consumer that no
+    longer exists. This wrapper then revives the plane
+    (`_evidence_ensure_consumer` — same loop ⇒ same queue, same backlog,
+    nothing stranded) and retries the put against whatever queue is now live;
+    if the plane cannot come back on this loop, the item is written INLINE,
+    which is always correct and never lossy.
+
+    Under a healthy consumer nothing observable changes: the put blocks,
+    lossless, until the consumer makes room — exactly the owner-memo §22
+    contract — and `backpressure_total` still counts one per put that waited.
+    """
+    while True:
+        try:
+            await queue.put(item, abort=_evidence_consumer_gone,
+                            recheck_s=CORR_EVIDENCE_PUT_RECHECK_S)
+            return
+        except EvidencePutAborted:
+            _evidence_ensure_consumer()
+            live = _active_evidence_queue()
+            if live is None:
+                # The plane cannot come back here (flag flipped off, or no
+                # revivable loop): inline is the documented always-correct path.
+                await _write_evidence(item, loop_yield)
+                return
+            queue = live
+
+
+def _evidence_ensure_consumer() -> EvidenceQueue | None:
+    """Start (or adopt) the Evidence consumer for the RUNNING loop.
+
+    Called from `engine_cycle` and from `lifespan`, never from `_persist_snapshot`
+    itself: a direct `_persist_snapshot` call outside the engine (tests, the
+    replay tools) must keep writing its Evidence inline, because nothing there
+    would ever drain a queue.
+
+    The loop identity is checked because a process can run several loops over
+    its life (every `asyncio.run` in the test suite is one). A queue bound to a
+    dead loop can never drain, so its contents are counted as lost and reported
+    rather than carried silently into the new one.
+    """
+    global _EVIDENCE_QUEUE, _EVIDENCE_TASK, _EVIDENCE_LOOP, EVIDENCE_ITEMS_LOST
+    global _EVIDENCE_BATCHER, _EVIDENCE_FLUSHER, EVIDENCE_CONSUMER_REVIVED
+    global EVIDENCE_BATCH_ROWS_ABANDONED
+    if not CORR_EVIDENCE_ASYNC:
+        return None
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:            # no loop: an inline caller, nothing to start
+        return None
+    if (_EVIDENCE_TASK is not None and _EVIDENCE_LOOP is loop
+            and not _EVIDENCE_TASK.done()):
+        return _EVIDENCE_QUEUE
+    if (_EVIDENCE_QUEUE is not None and _EVIDENCE_LOOP is loop
+            and _EVIDENCE_TASK is not None and _EVIDENCE_TASK.done()):
+        # ── REVIVAL (ultra #15). The LOOP is alive, so the queue, the batcher
+        # and every queued item are still serviceable — only the consumer TASK
+        # died (a defect; its done-callback logged the traceback). Replacing
+        # the plane here would strand the whole backlog as "lost"; a new task
+        # on the SAME queue loses nothing. Counted, because a revival happening
+        # at all means a defect fired in production.
+        EVIDENCE_CONSUMER_REVIVED += 1
+        log.error(
+            "evidence consumer REVIVED on its own loop (queue kept: depth=%d, "
+            "nothing stranded) — a consumer that died is a DEFECT, read the "
+            "traceback above (consumer_revived_total=%d)",
+            _EVIDENCE_QUEUE.qsize(), EVIDENCE_CONSUMER_REVIVED)
+        _EVIDENCE_TASK = loop.create_task(_evidence_consumer(_EVIDENCE_QUEUE))
+        _EVIDENCE_TASK.add_done_callback(_evidence_task_done)
+        if _EVIDENCE_BATCHER is not None and (
+                _EVIDENCE_FLUSHER is None or _EVIDENCE_FLUSHER.done()):
+            # The flusher can die the same way; a buffered block with no
+            # flusher would never age out (ultra #17's "flush if safe" is this
+            # branch — same loop, so the buffers stay and keep flushing).
+            _EVIDENCE_FLUSHER = loop.create_task(
+                _evidence_flusher(_EVIDENCE_BATCHER))
+        return _EVIDENCE_QUEUE
+    # ── REPLACEMENT: first start, or the previous plane's event loop is gone
+    # (every `asyncio.run` is its own loop). Nothing bound to a dead loop can
+    # drain, flush or settle, so everything it still held is accounted as LOST
+    # — items in the queue, items begun but never settled, and rows buffered in
+    # the batcher — before any of it is dropped. Never silent (§10).
+    if _EVIDENCE_QUEUE is not None and _EVIDENCE_QUEUE.qsize():
+        stranded = _EVIDENCE_QUEUE.pending()
+        EVIDENCE_ITEMS_LOST += len(stranded)
+        why = ("its consumer task ENDED"
+               if (_EVIDENCE_TASK is not None and _EVIDENCE_TASK.done())
+               else "its event loop is gone")
+        log.warning("evidence queue abandoned with %d item(s) — %s; counted as "
+                    "lost (outcome=lost) and replaced. A consumer that ended on "
+                    "its own is a DEFECT: read the traceback above it.",
+                    len(stranded), why)
+        for it in stranded:
+            log.info("evidence LOST (stranded queue) corr_id=%s version=%d state=%s",
+                     it.correlation_id, it.version, it.state)
+            # Ultra #16: a stranded item's slice will never land; without the
+            # revert the next unchanged-membership version damps against it.
+            _archive_slice_revert(it, "stranded queue")
+    for pend in list(_EVIDENCE_PENDING.values()):
+        # Ultra #17: an item the dead loop's consumer had begun but whose
+        # blocks never settled. Its outcome would otherwise be counted nowhere.
+        EVIDENCE_ITEMS_LOST += 1
+        log.info("evidence LOST (unsettled on a dead loop) corr_id=%s "
+                 "version=%d state=%s", pend.item.correlation_id,
+                 pend.item.version, pend.item.state)
+        _archive_slice_revert(pend.item, "unsettled on a dead loop")
+    if _EVIDENCE_BATCHER is not None:
+        # Ultra #17: the old batcher's unflushed buffers. They CANNOT be
+        # flushed from here — this function is synchronous and the batcher's
+        # lock, flusher and write tasks all belong to the dead loop — so the
+        # loss is counted per table with the member tokens that name the rows,
+        # instead of vanishing in the rebuild.
+        for _tbl, _rows, _keys, _members in _EVIDENCE_BATCHER.abandon():
+            EVIDENCE_BATCH_ROWS_ABANDONED += len(_rows)
+            log.warning(
+                "evidence batch buffer ABANDONED table=%s rows=%d members=%d "
+                "— its flusher's event loop is gone and the rows never "
+                "reached ClickHouse (batch_rows_abandoned_total=%d) "
+                "member_tokens=%s",
+                _tbl, len(_rows), len(_members),
+                EVIDENCE_BATCH_ROWS_ABANDONED, " ".join(_keys))
+    if _EVIDENCE_FLUSHER is not None and not _EVIDENCE_FLUSHER.done():
+        # Belongs to the loop we are replacing; it can never flush again.
+        with contextlib.suppress(Exception):
+            _EVIDENCE_FLUSHER.cancel()
+    _EVIDENCE_QUEUE = EvidenceQueue(CORR_EVIDENCE_QUEUE_MAX,
+                                    CORR_EVIDENCE_QUEUE_BYTES_MAX,
+                                    hold_max_s=CORR_EVIDENCE_HOLD_MAX_S)
+    _EVIDENCE_LOOP = loop
+    _EVIDENCE_TASK = loop.create_task(_evidence_consumer(_EVIDENCE_QUEUE))
+    _EVIDENCE_TASK.add_done_callback(_evidence_task_done)
+    # The batcher and its flusher are bound to the SAME loop for the same
+    # reason the queue is: a partial block whose flusher belongs to a dead loop
+    # would never be written. Rebuilt with the consumer, never carried over.
+    _EVIDENCE_PENDING.clear()
+    _EVIDENCE_BATCHER = _make_row_batcher()
+    _EVIDENCE_FLUSHER = loop.create_task(_evidence_flusher(_EVIDENCE_BATCHER))
+    log.info("evidence plane ASYNC: bound=%d items / %d bytes, drain-on-stop=%.0fs; "
+             "batching=%s (%d items / %d bytes / %d rows / %.0f ms), "
+             "decision batching=%s",
+             CORR_EVIDENCE_QUEUE_MAX, CORR_EVIDENCE_QUEUE_BYTES_MAX,
+             CORR_EVIDENCE_DRAIN_ON_STOP_S, CORR_EVIDENCE_BATCH,
+             CORR_EVIDENCE_BATCH_ITEMS, CORR_EVIDENCE_BATCH_BYTES,
+             CORR_EVIDENCE_BATCH_ROWS, CORR_EVIDENCE_BATCH_MS,
+             CORR_DECISION_BATCH)
+    return _EVIDENCE_QUEUE
+
+
+async def _evidence_consumer(queue: EvidenceQueue) -> None:
+    """Drain the Evidence queue forever, one item at a time.
+
+    Cooperative exactly like `_emit_child_rows`: the per-item write is handed
+    the same `_make_loop_yield()` gate the cohort uses, and the consumer yields
+    between items, so a 2,000-item backlog cannot hold the loop thread past the
+    Kafka session timeout (pinned by the loop-lag tests).
+    """
+    global EVIDENCE_ITEMS_MATERIALIZED, EVIDENCE_ITEMS_FAILED, EVIDENCE_ITEMS_LOST
+    loop_yield, reset_yield = _make_loop_yield()
+    while True:
+        item = await queue.get()
+        queue.begin()
+        reset_yield()
+        # P2 step 4c: with a batcher the item's rows go into per-table buffers
+        # shared with other versions, so its OUTCOME is settled by the last
+        # block it was in (`_ev_settle`), not here.
+        batcher = _active_row_batcher()
+        emit = None
+        if batcher is not None:
+            _EVIDENCE_PENDING[id(item)] = _EvidencePending(item=item)
+            emit = _evidence_emitter(batcher, item)
+        try:
+            ok = await _write_evidence(item, loop_yield, emit)
+        except asyncio.CancelledError:
+            EVIDENCE_ITEMS_LOST += 1
+            # Whatever this item had already buffered stays in its block and
+            # will still be written; the ITEM is lost because its write did not
+            # complete, and it must not also be settled by that block.
+            _EVIDENCE_PENDING.pop(id(item), None)
+            # Ultra #16: a slice interrupted mid-write is at best PARTIAL and
+            # must be retried whole by the next persist of this object.
+            _archive_slice_revert(item, "consumer cancelled mid-write")
+            log.info("evidence LOST (consumer cancelled mid-write) corr_id=%s "
+                     "version=%d state=%s", item.correlation_id, item.version,
+                     item.state)
+            queue.done()
+            raise
+        except Exception:           # counted + traced (§10), never silent
+            ok = False
+            log.exception(
+                "evidence write FAILED corr_id=%s version=%d state=%s tenant_id=%s "
+                "— the Decision row for this version already landed; its graph "
+                "will not be retried until the next version of this object "
+                "(evidence_items_failed_total=%d)",
+                item.correlation_id, item.version, item.state, item.tenant_id,
+                EVIDENCE_ITEMS_FAILED + 1)
+        except BaseException:
+            # Ultra #15: a non-Exception escape (a MemoryError raised inside
+            # the handler above, KeyboardInterrupt, any future BaseException)
+            # kills this task. Revival is the done-callback's + put path's job;
+            # THIS handler's job is the item in hand — counted lost, its
+            # damping record reverted (ultra #16), the queue's inflight
+            # balanced so `evidence_drain`/`idle()` stay truthful for the
+            # revived consumer. Then re-raise: a dying task must die loudly.
+            EVIDENCE_ITEMS_LOST += 1
+            _EVIDENCE_PENDING.pop(id(item), None)
+            _archive_slice_revert(item, "consumer died mid-write")
+            log.error("evidence LOST (consumer DIED mid-write) corr_id=%s "
+                      "version=%d state=%s — the consumer task is ending; the "
+                      "next persist/cycle revives it", item.correlation_id,
+                      item.version, item.state)
+            queue.done()
+            raise
+        if batcher is not None:
+            _ev_finished(item, ok)
+            queue.done()
+        else:
+            queue.note_written(item, time.monotonic())
+            queue.done()
+            if ok:
+                EVIDENCE_ITEMS_MATERIALIZED += 1
+            else:
+                EVIDENCE_ITEMS_FAILED += 1
+        # The consumer is a task on the SAME loop as the reconciliation pass; a
+        # queue that never yields would starve it exactly as an unyielding
+        # cohort does.
+        await asyncio.sleep(0)
+
+
+@contextlib.asynccontextmanager
+async def _evidence_cohort_hold():
+    """Hold the Evidence consumer for the duration of a cohort's decision pass.
+
+    Spec §1: the Decision plane emits "before any Evidence write of the same
+    cohort". Without the hold the consumer interleaves its (4-5x more numerous)
+    inserts with the verdict rows and the cohort's verdicts land no sooner than
+    they do today. The hold is lifted automatically while the queue is at a
+    bound, so a cohort larger than the queue can never deadlock against its own
+    backpressure (evidence_plane.EvidenceQueue.get)."""
+    queue = _active_evidence_queue()
+    if queue is None:
+        yield None
+        return
+    queue.hold()
+    try:
+        yield queue
+    finally:
+        await queue.release()
+
+
+async def evidence_drain(timeout: float | None = None) -> int:
+    """Block until the Evidence queue is idle, or the timeout expires.
+
+    Returns the number of items STILL queued. Must be called outside a cohort
+    hold (the consumer is parked there by design). Used by the shutdown path and
+    by every test that asserts on Evidence rows.
+    """
+    queue = _EVIDENCE_QUEUE
+    if queue is None:
+        return 0
+    deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
+    await queue.wake()
+    while not queue.idle():
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(0.002)
+    # P2 step 4c: an idle queue is not a WRITTEN queue — a partial block is
+    # still buffered, waiting for its age trigger. Flush here so "drained" keeps
+    # meaning "the rows are in ClickHouse", which is what every caller (the
+    # shutdown path, engine_cycle's one-shot finally, every test that asserts on
+    # Evidence rows) already reads it as.
+    batcher = _EVIDENCE_BATCHER
+    if batcher is not None:
+        await batcher.flush_all()
+    return queue.qsize()
+
+
+async def _evidence_stop() -> None:
+    """Shutdown: drain on a bounded deadline, then account for what was left.
+
+    An Evidence row that never landed is a FACT on the way out, never a silence
+    (§10) — one INFO line per item plus corr_evidence_items_total{outcome=lost}.
+    """
+    global _EVIDENCE_QUEUE, _EVIDENCE_TASK, _EVIDENCE_LOOP, EVIDENCE_ITEMS_LOST
+    global _EVIDENCE_BATCHER, _EVIDENCE_FLUSHER
+    queue, task = _EVIDENCE_QUEUE, _EVIDENCE_TASK
+    batcher, flusher = _EVIDENCE_BATCHER, _EVIDENCE_FLUSHER
+    if queue is None:
+        return
+    left = await evidence_drain(CORR_EVIDENCE_DRAIN_ON_STOP_S)
+    if left:
+        log.warning(
+            "evidence queue did NOT drain within %.0fs: %d item(s) left "
+            "(bound=%d, oldest=%.1fs) — each is logged and counted as lost",
+            CORR_EVIDENCE_DRAIN_ON_STOP_S, left, queue.max_items,
+            queue.oldest_age_s())
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+    if batcher is not None:
+        # The cancelled consumer may have left rows in a partial block. They are
+        # already built and already counted against their items; leaving them
+        # buffered would be the one silent loss in this design.
+        with contextlib.suppress(Exception):
+            await batcher.flush_all()
+    if flusher is not None:
+        flusher.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await flusher
+    for item in queue.pending():
+        EVIDENCE_ITEMS_LOST += 1
+        # Ultra #16: matters beyond this process's last breath — an in-process
+        # restart (every test, tools that stop and re-start the plane) keeps
+        # the module-level damping map alive across `_evidence_stop`.
+        _archive_slice_revert(item, "lost at shutdown")
+        log.info("evidence LOST at shutdown corr_id=%s version=%d state=%s "
+                 "tenant_id=%s queued_for=%.1fs",
+                 item.correlation_id, item.version, item.state, item.tenant_id,
+                 time.monotonic() - item.enqueued_mono)
+    _EVIDENCE_QUEUE = None
+    _EVIDENCE_TASK = None
+    _EVIDENCE_LOOP = None
+    _EVIDENCE_BATCHER = None
+    _EVIDENCE_FLUSHER = None
+    _EVIDENCE_PENDING.clear()
+
+
+def evidence_stats() -> dict[str, object]:
+    """§10 observable for the Evidence plane. Zeros (not absent keys) when the
+    plane is inline, so a dashboard never distinguishes 'off' from 'missing'."""
+    queue = _EVIDENCE_QUEUE
+    base: dict[str, object] = {
+        "enabled": CORR_EVIDENCE_ASYNC,
+        "depth": 0, "bytes": 0, "est_bytes_mean": 0.0,
+        "oldest_age_seconds": 0.0, "lag_seconds": 0.0,
+        "backpressure_total": 0,
+        "max_items": CORR_EVIDENCE_QUEUE_MAX,
+        "max_bytes": CORR_EVIDENCE_QUEUE_BYTES_MAX,
+        "held": False, "held_since_seconds": 0.0, "hold_expired_total": 0,
+        "hold_max_s": CORR_EVIDENCE_HOLD_MAX_S,
+        "depth_ready": 0, "depth_open": 0, "inflight": 0,
+        "materialized_total": EVIDENCE_ITEMS_MATERIALIZED,
+        "failed_total": EVIDENCE_ITEMS_FAILED,
+        "lost_total": EVIDENCE_ITEMS_LOST,
+        # Ultra #15/#17. Both must stay 0: a revival means the consumer died (a
+        # defect, contained), an abandoned row means a dead loop's batcher held
+        # rows nothing could ever flush (counted, never silent).
+        "consumer_revived_total": EVIDENCE_CONSUMER_REVIVED,
+        "batch_rows_abandoned_total": EVIDENCE_BATCH_ROWS_ABANDONED,
+        "drain_on_stop_s": CORR_EVIDENCE_DRAIN_ON_STOP_S,
+        # P2 step 4c. Zeros (never absent keys) when batching is off, for the
+        # same reason as everything above it: a key that appears and disappears
+        # with a flag reads as a zero on the day it matters.
+        "batch_enabled": CORR_EVIDENCE_BATCH,
+        "batch_items_max": CORR_EVIDENCE_BATCH_ITEMS,
+        "batch_bytes_max": CORR_EVIDENCE_BATCH_BYTES,
+        "batch_rows_max": CORR_EVIDENCE_BATCH_ROWS,
+        "batch_inflight_max": CORR_EVIDENCE_BATCH_INFLIGHT,
+        "batch_age_max_ms": CORR_EVIDENCE_BATCH_MS,
+        "decision_batch_enabled": CORR_DECISION_BATCH,
+        "flushes_total": {}, "rows_flushed_total": {}, "flushes": 0,
+        "rows_per_flush_mean": 0.0, "batch_age_seconds_max": 0.0,
+        "buffered_rows": 0, "buffered_tables": 0, "blocks_failed_total": 0,
+        "block_rows_max": 0, "blocks_inflight": 0, "blocks_inflight_max": 0,
+        "blocks_inflight_peak": 0, "writer_waits_total": 0,
+        "pending_items": len(_EVIDENCE_PENDING),
+    }
+    if queue is not None:
+        base.update(queue.stats())
+    if _EVIDENCE_BATCHER is not None:
+        base.update(_EVIDENCE_BATCHER.stats())
+    return base
+
+
+# Wall-clock of the last time ANY topology enrichment file was readable. A
+# DELETED file used to age into freshness instead of staleness: getmtime raised,
+# the loaders returned their cache "silently forever", newest stayed -1 and this
+# function returned False = NOT stale. So the exporter dying (or the enrichment
+# volume unmounting) left the engine grounding causal edges on a frozen topology
+# while stamping topology_stale=false on every snapshot it emitted — the one
+# state where the declaration is a lie rather than a caveat.
+_TOPO_LAST_SEEN_WALL: float | None = None
+_TOPO_ABSENT_LOG_LAST = -1e9
+
+
+def _topology_stale(now: datetime) -> bool:
+    """§8: the topology/seam view is STALE when the Go exporter has stopped
+    refreshing it (newest of seams.json / topology_links.json older than
+    CORR_TOPO_STALE_S). Grounding then resolves against the last-known view with
+    w_topo capped, and every snapshot scored under it is declared.
+
+    A file that DISAPPEARS ages exactly like a frozen one: staleness is measured
+    from the last moment the view was known-good, so a deleted export can never
+    read as fresh. Files that were never present get the same single staleness
+    grace period from process start — after it, the cached (empty) view the
+    loaders keep serving is honestly declared stale.
+    """
+    global _TOPO_LAST_SEEN_WALL
+    newest = -1.0
+    for path in (SEAM_ENRICHMENT_FILE, TOPO_LINKS_FILE):
+        try:
+            newest = max(newest, os.path.getmtime(path))
+        except OSError:
+            continue
+    wall = now.timestamp()
+    if newest >= 0:
+        _TOPO_LAST_SEEN_WALL = wall
+        return (wall - newest) > CORR_TOPO_STALE_S
+    if _TOPO_LAST_SEEN_WALL is None:
+        _TOPO_LAST_SEEN_WALL = wall
+    stale = (wall - _TOPO_LAST_SEEN_WALL) > CORR_TOPO_STALE_S
+    if stale:
+        global _TOPO_ABSENT_LOG_LAST
+        mono = time.monotonic()
+        if (mono - _TOPO_ABSENT_LOG_LAST) >= CORR_TOPO_STALE_S:
+            _TOPO_ABSENT_LOG_LAST = mono
+            log.warning("topology enrichment files ABSENT for %.0fs (%s, %s) — "
+                        "grounding on the last-known view, declared stale",
+                        wall - _TOPO_LAST_SEEN_WALL, SEAM_ENRICHMENT_FILE, TOPO_LINKS_FILE)
+    return stale
+
+
+# P2 step 4a: the last K cohorts' `seen` sets, kept ACROSS epochs. See
+# CORR_LIFECYCLE_COHORT_WINDOW for the measured regression this exists to fix
+# (P2_STEPS012_2P5K_VERDICT §4.2: a 300 s budget yields ONE cohort per epoch, so
+# the epoch union collapsed to a single cohort's set and merges fell 378 -> 11).
+# maxlen is fixed at import, like every other bound in this file.
+_LIFECYCLE_SEEN_WINDOW: deque[set[str]] = deque(
+    maxlen=CORR_LIFECYCLE_COHORT_WINDOW or 1)
+LIFECYCLE_SEEN_WINDOW_COHORTS = 0    # cohorts currently in the window (gauge)
+LIFECYCLE_SEEN_WINDOW_IDS = 0        # ids in the union at the last pass (gauge)
+# The two sides of the merge pass, measured SEPARATELY. Reading only the window
+# size is what let run p2-s04-08290653 ship with an empty candidate list: the
+# window gauge looked healthy (2,312) precisely because it had swallowed every
+# open object. `candidates` at 0 with a non-zero open population is the alarm.
+LIFECYCLE_MERGE_SURVIVORS_LAST = 0
+LIFECYCLE_MERGE_CANDIDATES_LAST = 0
+LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL = 0
+# Ultra #19: lifecycle loop entries skipped because a rebalance callback
+# (`_forget_object`) released the object during one of the pass's awaits. A
+# skip is the CORRECT outcome (the object is gone, there is nothing to close);
+# what this counts is how often the race actually fires.
+LIFECYCLE_FORGOTTEN_SKIPPED_TOTAL = 0
+# The two numbers that would have NAMED the storm-s02 stall on the first read:
+# how many (survivor, candidate) pairs the exact predicate was actually handed,
+# and how long the merge computation took. A pair count that tracks
+# survivors × candidates is the index having degenerated (see
+# ContinuationIndex) — the failure mode this pass has already had once.
+LIFECYCLE_MERGE_PAIRS_EVALUATED_TOTAL = 0
+LIFECYCLE_MERGE_SECONDS_MAX = 0.0
+LIFECYCLE_MERGE_OFFLOADS_TOTAL = 0
+
+
+async def _lifecycle_find_merges(survivors: list, candidates: list,
+                                 loop_yield) -> list[tuple[str, str]]:
+    """`find_merges` with a hard ceiling on how long it can own the loop thread.
+
+    THREE bounds, in order of how much they buy:
+      1. The survivor index is built ONCE and reused across chunks, so probing
+         is sub-linear (engine.ContinuationIndex carries the superset proof and
+         the measured degeneration this replaced).
+      2. Past CORR_LIFECYCLE_MERGE_OFFLOAD_PAIRS the index build AND every
+         chunk go to the executor via `_offload`. `find_merges` is a pure
+         function of two immutable snapshot lists, which is precisely what
+         `_offload` is for; the APPLY step (tombstones, OPEN_OBJECTS mutation,
+         persistence) stays on the loop in the caller, untouched.
+      3. Chunks are awaited one at a time with a `loop_yield` between, so even
+         the inline path has await points inside the pass.
+
+    OUTPUT-IDENTICAL, by construction rather than by hope: `find_merges` picks,
+    for each candidate independently, the survivor maximising a total order on
+    (jac desc, window_start asc, cid asc) over the SAME survivor set — no
+    candidate's result depends on any other candidate, and the final `sorted()`
+    restores the exact ordering a single call returns. Chunking and offloading
+    therefore change scheduling only. Serial awaits mean the shared
+    entity cache is never touched by two threads at once.
+    """
+    global LIFECYCLE_MERGE_PAIRS_EVALUATED_TOTAL, LIFECYCLE_MERGE_SECONDS_MAX
+    global LIFECYCLE_MERGE_OFFLOADS_TOTAL
+    if not survivors or not candidates:
+        return []
+    t0 = time.perf_counter()
+    big = (CORR_LIFECYCLE_MERGE_OFFLOAD_PAIRS > 0
+           and len(survivors) * len(candidates) >= CORR_LIFECYCLE_MERGE_OFFLOAD_PAIRS)
+    if big:
+        LIFECYCLE_MERGE_OFFLOADS_TOTAL += 1
+        index = await _offload(ContinuationIndex, survivors)
+    else:
+        # SYNC span, not a stage: this build has no await in it, so its duration
+        # is time the heartbeat could not run (see `sync_record`).
+        with sync_span("lifecycle.merge_index"):
+            index = ContinuationIndex(survivors)
+    chunk = CORR_LIFECYCLE_MERGE_CHUNK or len(candidates)
+    entity_cache: dict = {}
+    pairs: list[tuple[str, str]] = []
+    for i in range(0, len(candidates), chunk):
+        part = candidates[i:i + chunk]
+        if big:
+            pairs += await _offload(find_merges, survivors, part,
+                                    index=index, entity_cache=entity_cache)
+        else:
+            with sync_span("lifecycle.merge_chunk"):
+                pairs += find_merges(survivors, part,
+                                     index=index, entity_cache=entity_cache)
+        await loop_yield()
+    LIFECYCLE_MERGE_PAIRS_EVALUATED_TOTAL += index.candidates_returned
+    LIFECYCLE_MERGE_SECONDS_MAX = max(LIFECYCLE_MERGE_SECONDS_MAX,
+                                      time.perf_counter() - t0)
+    return sorted(pairs)
+
+
+def _lifecycle_merge_seen(epoch: _EngineEpoch) -> set[str]:
+    """The MERGE candidate space for ONE lifecycle pass (P2 step 4a).
+
+    P1 used `epoch.seen` — the union of the cohorts of THIS epoch — for all
+    three passes. That is correct only while an epoch holds many cohorts; with
+    the P2 epoch budget an epoch is often ONE cohort, which silently restored
+    the per-cohort candidate space P1 had replaced (merges 378 -> 11,
+    P2_STEPS012_2P5K_VERDICT §4.2). K = CORR_LIFECYCLE_COHORT_WINDOW cohorts of
+    history restores it independently of where the epoch boundaries fall.
+
+    Used ONLY for the survivor / stale partition handed to `find_merges` — see
+    CORR_LIFECYCLE_COHORT_WINDOW for why quiesce and the count cap keep the
+    epoch's own set.
+
+    The epoch's own set is always included: a cohort that raised never appended
+    to the window, but its earlier siblings' persisted versions stand and their
+    ids are legitimately 'seen'.
+    """
+    if not CORR_LIFECYCLE_COHORT_WINDOW:
+        return epoch.seen
+    out: set[str] = set(epoch.seen)
+    for s in _LIFECYCLE_SEEN_WINDOW:
+        out |= s
+    return out
+
+
+async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
+                           seen: set[str] | None = None) -> None:
+    """Merge, quiesce and the 163 count cap — ONE pass per drain epoch.
+
+    P1 change H (docs/design/COHORT_TOUCH_GATE_P1_2026-08-28.md §4). These three
+    passes are O(survivors x stale), O(open) and O(open log open); they used to
+    run after EVERY cohort. Their inputs at cohort cadence are OPEN_OBJECTS, the
+    seen set, and `now` — and `now` is already the EPOCH's timestamp, so nothing
+    they decide depends on WHICH cohort runs them. Hoisting them to epoch cadence
+    therefore changes when the work happens, not what it decides, with two
+    DOCUMENTED and flag-revertible deltas:
+      1. CORR_OPEN_OBJECTS_MAX is enforced once per epoch, so the population may
+         transiently exceed the cap WITHIN an epoch by the objects that epoch
+         opened (measured: OPEN_OBJECTS_EPOCH_PEAK).
+      2. An object that cohort k would have quiesce-closed and cohort k+1 would
+         have continued now survives to be continued — one incident instead of a
+         close followed by a new object. That is the correct direction.
+
+    Called on the SUCCESS path only: a cohort that raises means no lifecycle pass
+    this epoch (today a failing cohort also skipped its own pass, and an earlier
+    cohort's pass is re-derivable on the next epoch). `seen` defaults to the
+    epoch's UNION of every cohort's seen ids; the per-cohort form
+    (CORR_LIFECYCLE_EPOCH_CADENCE=0) passes that cohort's set instead, which is
+    exact pre-P1 behaviour.
+    """
+    global LIFECYCLE_PASSES_TOTAL, VERSIONS_PERSISTED
+    global LIFECYCLE_SEEN_WINDOW_COHORTS, LIFECYCLE_SEEN_WINDOW_IDS
+    global LIFECYCLE_FORGOTTEN_SKIPPED_TOTAL
+    LIFECYCLE_PASSES_TOTAL += 1
+    now = epoch.now
+    # `seen` — what quiesce and the 163 cap read — is the EPOCH's set, exactly
+    # as P1 left it. `merge_seen` is P2 step 4a's wider MERGE candidate space:
+    # the last K cohorts, so a budget-bounded one-cohort epoch still offers
+    # find_merges the population P1 measured. A caller that passes `seen`
+    # explicitly (the CORR_LIFECYCLE_EPOCH_CADENCE=0 A/B path) gets the exact
+    # pre-P1 shape for both.
+    # SYNC span: the candidate-space union is O(K cohorts x cohort ids) and the
+    # two partitions below are O(open objects), all on the loop thread with no
+    # await between them — one block, so it is measured as one (see
+    # `sync_record`: a wall-clock stage cannot say whether the loop was held).
+    with sync_span("lifecycle.partition"):
+        merge_seen = _lifecycle_merge_seen(epoch) if seen is None else seen
+        seen = epoch.seen if seen is None else seen
+    LIFECYCLE_SEEN_WINDOW_COHORTS = len(_LIFECYCLE_SEEN_WINDOW)
+    LIFECYCLE_SEEN_WINDOW_IDS = len(merge_seen)
+    # Merge (§4.4): de-split a cross-cycle identity drift. A stale open object that
+    # overlaps a live one this cycle (entity-set + window) is the same incident
+    # re-identified after its earliest signal aged out of the window — tombstone it
+    # into the survivor (terminal state='merged' + merged_into) so the queue shows
+    # ONE incident, not two. Replay-safe: only a lifecycle state + backlink, no
+    # re-key/re-rank. Done BEFORE quiesce so a merged object never also quiesce-closes.
+    # P2 step 4a, CORRECTED after run p2-s04-08290653 (equivalence report §4).
+    # THE DEFECT: both lists used to derive from `merge_seen`, so widening it
+    # widened the survivors AND — by the same set difference — EMPTIED the
+    # candidates. The live gauges proved it exactly:
+    # `corr_lifecycle_seen_window_ids 2312 == corr_open_objects 2312`, i.e. every
+    # open object was a survivor, `find_merges` was handed `candidates=[]` on
+    # every pass, and merges went 378 (P1) -> 0. That is not "no pairs
+    # qualified"; the pass was given nothing to test. It is systematic, not
+    # incidental: K=20 cohorts covered ~60 % of the whole run, and anything
+    # older has already been closed by quiesce or the 163 cap.
+    #
+    # THE RULE: widen ONLY the survivor (merge TARGET) side. Candidates stay
+    # `OPEN_OBJECTS \ seen` on the EPOCH's own set — exactly pre-4a, and
+    # exactly what quiesce and the cap already use.
+    with sync_span("lifecycle.partition"):
+        survivors = [OPEN_OBJECTS[c]["snapshot"]
+                     for c in merge_seen if c in OPEN_OBJECTS]
+        stale_snaps = [OPEN_OBJECTS[c]["snapshot"] for c in OPEN_OBJECTS
+                       if c not in seen]
+    global LIFECYCLE_MERGE_CANDIDATES_LAST, LIFECYCLE_MERGE_SURVIVORS_LAST
+    LIFECYCLE_MERGE_CANDIDATES_LAST = len(stale_snaps)
+    LIFECYCLE_MERGE_SURVIVORS_LAST = len(survivors)
+    # RESOLVED 2026-08-29 (the storm-s02 35,690 ms stall). The note that used to
+    # stand here — "find_merges is a synchronous cross-product with no internal
+    # yield point and can be a blocker on its own; cutting its cost is out of
+    # scope" — described the exact defect that then took the loop past the Kafka
+    # session timeout in production. `_lifecycle_find_merges` now bounds it:
+    # sub-linear survivor index (root fix in engine.ContinuationIndex), executor
+    # offload past a pair threshold, and chunked awaits. The RESULT loop below is
+    # unchanged and still applies every merge on the loop thread.
+    # Widening the survivor side alone makes the two lists OVERLAP for the first
+    # time: an object seen in an earlier cohort of the window but not in this
+    # epoch is both a target and a candidate. `find_merges` guards self-merges,
+    # but it can now return BOTH (A,B) and (B,A) for a mutually-overlapping
+    # pair — and applying both would tombstone A into B, then B into a
+    # correlation_id that no longer exists, losing the incident entirely.
+    # So one merge per object per pass, in the sorted order find_merges already
+    # guarantees: a cid that has been merged away can no longer be a target, and
+    # a cid that has received a merge can no longer be merged away. Pre-4a this
+    # is an exact no-op — the two lists were disjoint by construction, so
+    # neither condition could ever fire.
+    global LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL
+    _merged_away: set[str] = set()
+    _adopted: set[str] = set()
+    with stage("lifecycle.merge"):
+        _merge_pairs = await _lifecycle_find_merges(survivors, stale_snaps,
+                                                    loop_yield)
+    for merged_cid, survivor_cid in _merge_pairs:
+        await loop_yield()
+        if merged_cid in _adopted or survivor_cid in _merged_away:
+            LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL += 1
+            continue
+        reg = OPEN_OBJECTS.get(merged_cid)
+        if reg is None:
+            continue
+        if _seed_only(reg):
+            # Tracker 155: an UNADOPTED placeholder may not be tombstoned —
+            # state='merged' would publish a placeholder's empty content as this
+            # id's last durable word. Drop it: the survivor carries the incident
+            # forward and the row the previous owner wrote still stands.
+            _seed_expire(merged_cid, "merged-away")
+            continue
+        # TRACKER 155: same rule on the terminal paths — no object writes a
+        # version (and here, a TERMINAL one) onto a partition this replica no
+        # longer owns. A tombstone written from the wrong replica is the worst
+        # of the class: it is this id's last durable word.
+        if not _ownership_persist_guard(merged_cid, reg):
+            continue
+        reg["version"] += 1
+        VERSIONS_PERSISTED += 1
+        _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
+        # TERMINAL PATH 1 of 3 (tracker 187). A merged-away object's tombstone is
+        # its last word too — the survivor carries the incident forward, but THIS
+        # id's row is what a reader resolving the backlink lands on. Union over
+        # its OWN history only: a merge does not pool two objects' blast radii.
+        await _persist_snapshot(reg["snapshot"], reg["version"], "merged", [],
+                                merged_into=survivor_cid, loop_yield=loop_yield,
+                                priority_class=EVIDENCE_CLASS_TERMINAL,
+                                affected=await _affected_final(reg, reg["snapshot"]))
+        log.info("corr-object %s merged into %s (split-brain de-duplicated)",
+                 merged_cid[:8], survivor_cid[:8])
+        _merged_away.add(merged_cid)
+        _adopted.add(survivor_cid)
+        # `.pop`, not `del`: this loop already tolerates a concurrent forget at
+        # its head (`.get` above), but the persist it just awaited is the same
+        # window ultra #19 closes in the quiesce/cap loops — a forgotten cid
+        # here must not KeyError the rest of the merge pass.
+        OPEN_OBJECTS.pop(merged_cid, None)
+        _ARCHIVE_SLICE_HASH.pop(merged_cid, None)
+
+    # Quiesce: an object whose component no longer materializes (episodes aged
+    # out / cleared) closes after CORR_QUIESCE_S — terminal version, append-only.
+    # Timed as its own stage: every loop-thread stretch of this pass now has a
+    # span, so the profile can never again show a 35 s stall with nothing under
+    # it (storm-s02). Wall clock, like every other span here — a stage that
+    # awaits a persist is not claiming to have owned the loop for its duration.
+    #
+    # NOT CHUNKED ACROSS CYCLES, deliberately (2026-08-29). Deferring part of a
+    # close batch to the next pass was considered as a second bound and
+    # rejected on measurement: with the per-object yield consulted below, 400
+    # simultaneous closes hold the loop for ~52 ms at a time (worst measured
+    # single stretch; the pass itself is ~800 ms of WALL clock), so there is no
+    # stretch left for chunking to cut. What it would cost is real — a
+    # deferred close is a terminal version an operator does not see this cycle,
+    # against the T1 TTUR SLO, and a second place where "which objects closed"
+    # depends on where a boundary fell. If a future population ever does breach
+    # the budget here, `corr_sync_overruns_total` names it first.
+    _t_quiesce = time.perf_counter() if CORR_PROFILE_STAGES else 0.0
+    for cid in list(OPEN_OBJECTS):
+        await loop_yield()  # this loop is O(open objects) — bound the grind
+        reg = OPEN_OBJECTS.get(cid)
+        if reg is None:
+            # Ultra #19: a rebalance callback (`_forget_object`) released this
+            # object during an await of this pass (the yield above, or an
+            # earlier iteration's persist). Indexing would KeyError and abort
+            # the WHOLE pass — every remaining close this epoch — so skip it
+            # exactly as the merge loop's `.get` already does. Counted, and the
+            # skip is correct: the object is gone, there is nothing to close.
+            LIFECYCLE_FORGOTTEN_SKIPPED_TOTAL += 1
+            continue
+        if cid in seen:
+            continue
+        if (now - reg["last_seen"]).total_seconds() >= CORR_QUIESCE_S:
+            if _seed_only(reg):
+                # Tracker 155: a seeded identity nothing ever adopted. It is
+                # subject to the quiesce clock exactly like any other open
+                # object (its `last_seen` is derived from its own durable
+                # timestamps), so it is never frozen open — but it closes by
+                # being DROPPED, not by persisting a verdict this replica never
+                # computed. See `_seed_only`.
+                _seed_expire(cid, "quiesce")
+                continue
+            # TRACKER 155 — see `_ownership_persist_guard`.
+            if not _ownership_persist_guard(cid, reg):
+                continue
+            reg["version"] += 1
+            VERSIONS_PERSISTED += 1
+            _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
+            # TERMINAL PATH 2 of 3 (tracker 187), and the one the defect was
+            # MEASURED on: an object quiesces precisely because its evidence
+            # stopped arriving, so by the time it closes the window has aged out
+            # the very node that named the cause. The union republishes it.
+            await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [],
+                                    loop_yield=loop_yield,
+                                    priority_class=EVIDENCE_CLASS_TERMINAL,
+                                    affected=await _affected_final(reg, reg["snapshot"]))
+            # `.pop`, not `del`: a rebalance may have forgotten the object
+            # while the persist awaited (ultra #19).
+            OPEN_OBJECTS.pop(cid, None)
+            _ARCHIVE_SLICE_HASH.pop(cid, None)
+    if CORR_PROFILE_STAGES and _t_quiesce:
+        stage_record("lifecycle.quiesce", time.perf_counter() - _t_quiesce)
+
+    # Tracker 163: the count cap. Runs AFTER quiesce (time-based closes may
+    # already have brought us under). Eviction order is least-recently-SEEN,
+    # tie-broken by correlation_id for determinism — the same staleness order
+    # quiesce uses, applied by count instead of age. Force-closed objects get
+    # the SAME terminal persisted version as a quiesce close: append-only,
+    # replayable, visible in the UI as closed — never a silent drop. An
+    # object seen THIS cycle can still be evicted when the cap demands it (a
+    # bound that yields to activity is not a bound); the counter and warning
+    # make that breadth loss an operator-visible fact.
+    global OPEN_OBJECTS_FORCE_CLOSED, _FORCE_CLOSE_LOG_LAST
+    _t_cap = time.perf_counter() if CORR_PROFILE_STAGES else 0.0
+    if CORR_OPEN_OBJECTS_MAX > 0 and len(OPEN_OBJECTS) > CORR_OPEN_OBJECTS_MAX:
+        excess = len(OPEN_OBJECTS) - CORR_OPEN_OBJECTS_MAX
+        # SYNC span: an O(open log open) sort with no await in it.
+        with sync_span("lifecycle.cap_sort"):
+            victims = sorted(
+                OPEN_OBJECTS,
+                key=lambda c: (OPEN_OBJECTS[c]["last_seen"], c))[:excess]
+        for cid in victims:
+            await loop_yield()  # eviction can span thousands under a storm
+            reg = OPEN_OBJECTS.get(cid)
+            if reg is None:
+                # Ultra #19 — same race, same rule as the quiesce loop above:
+                # `victims` was snapshotted before this loop's awaits, so a
+                # concurrently forgotten object must be skipped, not indexed.
+                LIFECYCLE_FORGOTTEN_SKIPPED_TOTAL += 1
+                continue
+            if _seed_only(reg):
+                # Tracker 155: same rule as quiesce. The cap's bound is still
+                # honoured (the entry leaves OPEN_OBJECTS), but a dropped
+                # placeholder is NOT a force-closed object and is not counted as
+                # one — it is counted as an expired seed.
+                _seed_expire(cid, "cap")
+                continue
+            # TRACKER 155 — see `_ownership_persist_guard`. Dropped here is not
+            # a force-close and is not counted as one (the cap's bound is still
+            # honoured: the entry leaves OPEN_OBJECTS either way).
+            if not _ownership_persist_guard(cid, reg):
+                continue
+            reg["version"] += 1
+            VERSIONS_PERSISTED += 1
+            OPEN_OBJECTS_FORCE_CLOSED += 1
+            _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
+            # TERMINAL PATH 3 of 3 (tracker 187). The cap evicts the
+            # least-recently-SEEN objects — the same staleness order quiesce
+            # uses — so it closes on the same shrunken window and needs the
+            # same union. Breadth loss at the cap stays what 163 declared it
+            # to be (fewer OBJECTS), never a quietly narrower blast radius.
+            await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [],
+                                    loop_yield=loop_yield,
+                                    priority_class=EVIDENCE_CLASS_TERMINAL,
+                                    affected=await _affected_final(reg, reg["snapshot"]))
+            # `.pop`, not `del` — ultra #19, same reason as the quiesce loop.
+            OPEN_OBJECTS.pop(cid, None)
+            _ARCHIVE_SLICE_HASH.pop(cid, None)
+        mono = time.monotonic()
+        if (mono - _FORCE_CLOSE_LOG_LAST) >= 30.0:
+            _FORCE_CLOSE_LOG_LAST = mono
+            log.warning(
+                "OPEN_OBJECTS cap enforced (tracker 163): force-closed %d "
+                "least-recently-seen objects to hold the %d bound "
+                "(force_closed_total=%d) — RCA breadth is degraded and "
+                "DECLARED, not silent",
+                excess, CORR_OPEN_OBJECTS_MAX, OPEN_OBJECTS_FORCE_CLOSED)
+    if CORR_PROFILE_STAGES and _t_cap:
+        stage_record("lifecycle.cap", time.perf_counter() - _t_cap)
+
+
+def _make_loop_yield():
+    """The cooperative loop-yield gate, as a factory.
+
+    Loop-lag resilience (worst production stall 130,561 ms). The per-object
+    stretches it guards (the damped/unchanged snapshot path, the find_merges
+    result loop, quiesce, the count cap) all scale with a SINGLE tenant's open
+    object count and take no I/O await on their hot path, so a concentrated storm
+    can hold the event-loop thread past the Kafka session timeout. The returned
+    yield is a no-op until the caller has held the thread longer than
+    CORR_LOOP_YIELD_MS, then `await asyncio.sleep(0)` reschedules the loop
+    (aiokafka's heartbeat/commit coroutines run) and the budget resets. It only
+    interleaves SCHEDULING — never a computation, order, or result — so it is
+    determinism-/replay-safe.
+
+    Factored out of _engine_cycle_inner for P1 change H: the merge/quiesce/cap
+    passes now run at EPOCH cadence, outside any cohort, and must keep exactly
+    the same bounded-grind protection they had inside one.
+    """
+    budget = CORR_LOOP_YIELD_MS / 1000.0
+    deadline = time.monotonic() + budget
+
+    async def _loop_yield() -> None:
+        nonlocal deadline
+        if time.monotonic() >= deadline:
+            await asyncio.sleep(0)
+            deadline = time.monotonic() + budget
+
+    def _reset() -> None:
+        nonlocal deadline
+        deadline = time.monotonic() + budget
+
+    return _loop_yield, _reset
+
+
+async def engine_cycle(epoch: _EngineEpoch | None = None) -> None:
+    """One evaluation, with the per-cycle caches guaranteed to die with it.
+
+    Tracker 156: `_WINDOW_INDEX_CACHE` and `_CYCLE_ROW_CACHE` make one cycle's
+    repeated work cheap, and both are scoped to THIS cycle. They are cleared on
+    the way IN (so no early return or exception can leave a previous cycle's
+    window retained) and again on the way OUT (so nothing is held while the
+    engine is idle between cycles — holding a 50k-row base-row cache between
+    cycles would trade the on-loop win for exactly the RSS this tracker exists
+    to reduce).
+
+    P2 step 0a adds the hypotheses-blob cache to that same discipline
+    (engine.blob_cycle_begin/end): a version's blob is built once and reused by
+    `content_hash` and the corr_objects row, and the cache dies with the cycle
+    in the `finally` below — a blob held past its cycle is the tracker-156 RSS
+    shape, which is why it is NOT cached on the snapshot.
+    """
+    _WINDOW_INDEX_CACHE.clear()
+    _CYCLE_ROW_CACHE.clear()
+    blob_cycle_begin()
+    own_epoch = epoch is None
+    try:
+        if own_epoch and ch is not None:
+            # A caller outside a drain sweep (tests, a single manual cycle) gets
+            # an epoch of its own. There is exactly ONE code path inside the
+            # cycle: the epoch is never optional there. `ch is None` stays
+            # _engine_cycle_inner's own guard, which returns before it reads the
+            # epoch at all.
+            epoch = await _begin_epoch(datetime.now(timezone.utc))
+        # P2 step 4: the Evidence consumer belongs to the ENGINE, not to
+        # `_persist_snapshot` — a direct persist call outside the engine (tests,
+        # replay tooling) must keep writing its Evidence inline because nothing
+        # there would drain a queue. Started here, held for the duration of this
+        # cohort's decision pass so the cohort's verdict rows are not interleaved
+        # with its own Evidence inserts (spec §1).
+        _evidence_ensure_consumer()
+        async with _evidence_cohort_hold():
+            await _engine_cycle_inner(epoch)
+        # P1 change H: this caller OWNS its epoch, so the epoch ends here — run
+        # the merge/quiesce/cap pass on the way out, on the SUCCESS path only
+        # (an _engine_cycle_inner that raised never reaches this line, exactly
+        # as a raising cohort skipped its own pass before P1). A caller that was
+        # handed an epoch is one cohort of a drain sweep: the sweep runs the
+        # pass once, after the last cohort.
+        if own_epoch and epoch is not None and CORR_LIFECYCLE_EPOCH_CADENCE:
+            await _epoch_lifecycle(epoch, _make_loop_yield()[0])
+    finally:
+        if own_epoch:
+            # P2 step 4: a caller that OWNS its epoch is a one-shot cycle — a
+            # test, a manual sweep, a tool — with no surrounding drain loop and
+            # (in the `asyncio.run` case) no loop left alive after this returns.
+            # Leaving its Evidence queued would strand it, so the cycle is
+            # closed end-to-end here. The engine's own drain sweep passes an
+            # epoch in and is NOT drained here: keeping the queue across cohorts
+            # is the entire point of the step.
+            await evidence_drain(CORR_EVIDENCE_DRAIN_ON_STOP_S)
+        if own_epoch and epoch is not None:
+            _close_epoch(epoch)
+        _WINDOW_INDEX_CACHE.clear()
+        _CYCLE_ROW_CACHE.clear()
+        blob_cycle_end()
+
+
+async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
+    """One COHORT over an already-prepared epoch: admit a bounded cohort, run
+    the pure core against the epoch's frozen snapshot, persist version
+    increments, close quiesced objects.
+
+    tracker 166: everything that is a pure function of the snapshot — pruning,
+    partitioning, node construction, per-node metadata, the candidate index —
+    now happens in `_begin_epoch`, ONCE, however many cohorts drain against it.
+    """
+    global LAST_GAP_HINTS, VERSIONS_PERSISTED, VERSIONS_DAMPED
+    global VERSIONS_HEARTBEAT_TOUCHED
+    global LAST_CYCLE_MAX_TS
+    global ENGINE_WINDOWS_REJECTED_TOTAL
+    # `epoch is None` happens only when the caller had no ClickHouse to prepare
+    # against — the two conditions are the same condition, stated explicitly so
+    # the invariant is checked rather than assumed.
+    if ch is None or epoch is None:
+        return
+    now = epoch.now
+    topo_stale = epoch.topo_stale
+    storm = epoch.storm
+    by_tenant = epoch.by_tenant
+    _cycle_max_ts = epoch.cycle_max_ts
+    # tracker 166: bound the NEW work this transaction admits. Retained history
+    # is untouched — every cohort is still scored against the whole window.
+    global COHORTS_PROCESSED, COHORT_SIGNALS_TOTAL, PENDING_PEAK
+    # From the epoch's FROZEN snapshot: a cohort must never admit a signal the
+    # epoch has no prepared node for (it would be dropped from the cohort index
+    # and then marked processed — never-evaluated evidence).
+    # SYNC span (tracker 192): admission is TWO full O(window) scans — the
+    # epoch's frozen snapshot and the live buffer — each stringifying a uuid per
+    # signal, plus the round-robin selection, with no await between them. Paid
+    # once per COHORT, so it scales with both the window and the drain depth,
+    # and it had no span.
+    with sync_span("cohort.admit"):
+        _pending = epoch.pending()
+        PENDING_PEAK = max(PENDING_PEAK, len(pending_signals()))
+        # Tracker 172: while storm mode is DECLARED, admit smaller cohorts so each
+        # GIL-heavy stretch is shorter and the consumer keeps breathing between
+        # transactions. Retained history is still scored whole (166's contract);
+        # only the per-transaction admission shrinks.
+        _size = CORR_STORM_COHORT_SIZE if epoch.storm else CORR_ENGINE_COHORT_SIZE
+        _cohort = _select_cohort(_pending, _size)
+    # A node is NEW to this transaction when ANY of its signals is in the cohort:
+    # its activity interval changed, so its pairs must be re-scored. Grouped by
+    # tenant up front — the first version rebuilt this per tenant with a nested
+    # scan over the whole window, which is O(cohort x window) and would itself
+    # have become a cost worth measuring.
+    _cohort_keys: dict[str, set[str]] = {}
+    for s in _cohort:
+        _cohort_keys.setdefault(s.tenant_id, set()).add(
+            f"{s.entity_type.value}:{s.entity_id}:{s.kind}")
+    # P1 max-poll thrash: the prune + partition pass above is pure sync over a
+    # buffer that can hold 50k signals in a storm — hand the loop back to the
+    # consumer/heartbeat tasks before the per-tenant work starts.
+    await asyncio.sleep(0)
+
+    gap_hints = 0
+    evaluated: list[tuple[str, tuple, list[ObjectSnapshot]]] = []
+    for tenant in sorted(by_tenant):
+        window = by_tenant[tenant]
+        # tracker 166: the tenant's static context and its prepared snapshot were
+        # built ONCE for this epoch. Rebuilding them here is the defect. The
+        # SAME objects must be handed to run_window every cohort — the prep's
+        # reuse guard is object identity, so a freshly-built equal-valued seam
+        # tuple would silently invalidate it and reinstate the per-cohort cost.
+        prep = epoch.preps.get(tenant)
+        if prep is None:
+            continue     # a tenant whose window the epoch could not prepare
+        seams, adjacency, directed, pgv, discovery = epoch.ctx[tenant]
+        try:
+            # Perf defect #1c: run_window is pure CPU work (seconds-to-minutes on a
+            # storm window) and used to run SYNCHRONOUSLY on the loop hosting the
+            # Kafka consumer and /healthz — a broad fault blocked heartbeats until
+            # the group rebalanced the consumer out and the healthcheck flapped.
+            # It now runs in the default thread-pool executor. The ENGINE stays
+            # pure/deterministic (no IO/clock/randomness inside run_window); the
+            # executor is strictly a main.py call-site concern, and the inputs are
+            # snapshotted (tuple) so concurrent buffer appends can never leak in.
+            # tracker 164 coverage gap, closed: this used to call
+            # run_in_executor(None, ...) DIRECTLY, so the single largest CPU
+            # consumer in the process was invisible to the offload metrics that
+            # were being used to argue the executor was not saturated. Same
+            # default executor, same semantics, now counted — the queue-depth
+            # and wait figures finally describe the whole pool rather than one
+            # caller.
+            # tracker 166 phase 2: ask the engine how much of this cycle is
+            # re-derivation. Only when profiling is on — `work_sink=None` makes
+            # the accounting a single branch inside build_edges.
+            work: dict | None = {} if CORR_PROFILE_STAGES else None
+            # Nodes of THIS tenant that the cohort touches, plus the edges this
+            # tenant settled in earlier transactions so component formation is
+            # still whole. Empty cohort ⇒ nothing new for this tenant ⇒ skip.
+            # A tenant with nothing new is NOT skipped. Its correlation state is
+            # unchanged, so re-running it with an empty cohort and its carried
+            # edges reproduces exactly the same objects — which is what keeps
+            # continuation, version bumps and the object lifecycle intact. The
+            # first version skipped such tenants and a victim tenant under a
+            # neighbour storm silently stopped producing objects.
+            t_keys = frozenset(_cohort_keys.get(tenant, ()))
+            # Carried edges are deliberately NOT part of the epoch: cohort n
+            # must see the edges cohort n-1 settled, so this is re-read per
+            # transaction (docs/scale/SNAPSHOT_EPOCH_166.md §Phase 3).
+            # tracker 192: the epoch serial makes the staleness filter
+            # epoch-scoped — full scan on this epoch's FIRST cohort, then only
+            # the keys the previous cohort added (see _carried_edges_for).
+            carried = _carried_edges_for(tenant, epoch.live_keys[tenant],
+                                         epoch.serial)
+            # P1 change G: the tenant's intra-epoch component memo. A component
+            # this cohort's keys do not touch cannot have changed within the
+            # epoch (ComponentMemo carries the proof), so it is served from here
+            # instead of being re-ranked and re-materialized. Per TENANT (§3a);
+            # dropped with the epoch. CORR_COHORT_TOUCH_GATE=0 ⇒ None ⇒ pre-P1.
+            #
+            # P2 step 2 adds the LEVEL-1 memo alongside it: RANK_MEMO is
+            # process-lifetime and content-keyed, so a component this epoch is
+            # seeing for the FIRST time — the 61 % the level-2 memo cannot
+            # help — still skips rank() if an earlier epoch already scored the
+            # same evidence projection. It is passed, not looked up per tenant:
+            # the tenant is inside the key (§3a).
+            memo = (epoch.memos.setdefault(tenant, ComponentMemo())
+                    if CORR_COHORT_TOUCH_GATE else None)
+            _memo_before = ((memo.components, memo.touched, memo.hits, memo.misses)
+                            if memo is not None else None)
+            with stage("engine.run_window"):
+                snapshots = await _offload(
+                    run_window, window, CATALOG, seams, ENGINE_CFG,
+                    adjacency=adjacency, topology_stale=topo_stale, storm_mode=storm,
+                    storm_agg_floor=(CORR_STORM_AGG_FLOOR or None),
+                    directed=directed, paths=pgv, discovery=discovery,
+                    since_ts=LAST_CYCLE_MAX_TS, work_sink=work,
+                    cohort_keys=t_keys, carried_edges=carried, prep=prep,
+                    memo=memo, rank_memo=RANK_MEMO)
+            if memo is not None and _memo_before is not None:
+                # Deltas, not totals: the memo counts for the whole epoch, these
+                # counters are monotonic per replica (spec §5).
+                global COHORT_COMPONENTS_TOTAL, COHORT_COMPONENTS_TOUCHED_TOTAL
+                global COHORT_MEMO_HITS_TOTAL, COHORT_COMPONENTS_RANKED_TOTAL
+                global COHORT_TOUCHED_LAST
+                COHORT_COMPONENTS_TOTAL += memo.components - _memo_before[0]
+                COHORT_COMPONENTS_TOUCHED_TOTAL += memo.touched - _memo_before[1]
+                COHORT_MEMO_HITS_TOTAL += memo.hits - _memo_before[2]
+                COHORT_COMPONENTS_RANKED_TOTAL += memo.misses - _memo_before[3]
+                COHORT_TOUCHED_LAST = memo.touched - _memo_before[1]
+            _remember_edges(tenant, snapshots)
+        except ValueError:
+            # A GENUINE engine input error for this tenant. Still a rejection —
+            # but now a loud, counted, traceable one.
+            #
+            # DECISION (2026-08-29), stated because it costs evidence: the
+            # rejected tenant's cohort signals ARE still marked processed at the
+            # end of this cycle. The frontier is per-COHORT, not per-tenant, and
+            # a deterministic input error is a poison pill: leaving those
+            # signals pending would replay the same failing window every epoch
+            # forever, so the tenant would never progress AND every other
+            # tenant's drain would be dragged behind a permanently non-empty
+            # backlog. We take the drop — and make it impossible to take it
+            # silently: the signals are counted into
+            # corr_signals_dropped_total{reason="window_rejected"}, the
+            # rejection into corr_engine_windows_rejected_total, and the log
+            # line carries the tenant, the count and the traceback. The scale
+            # harness FAILS any run in which either counter moved, so a run can
+            # no longer be called complete on evidence it threw away.
+            ENGINE_WINDOWS_REJECTED_TOTAL += 1
+            lost = sum(1 for s in _cohort if s.tenant_id == tenant)
+            _record_signals_dropped("window_rejected", lost)
+            # log.exception, not log.error: the traceback is the point. The
+            # one-line "engine window rejected: %s" it replaces gave no way to
+            # tell an engine input error from a bookkeeping bug in the caller.
+            log.exception(
+                "engine window REJECTED for tenant=%s — %d cohort signal(s) "
+                "will be marked processed and never evaluated "
+                "(windows_rejected_total=%d, signals_dropped_total"
+                "{reason=window_rejected}=%d)",
+                tenant, lost, ENGINE_WINDOWS_REJECTED_TOTAL,
+                SIGNALS_DROPPED_TOTAL["window_rejected"])
+            continue
+        # The snapshots are safe FIRST. Work accounting used to run inside the
+        # try above and BEFORE this line, so a bookkeeping fault discarded a
+        # whole tenant's evaluated snapshots (run p2-s012-08290116). Order and
+        # isolation are both load-bearing: the list is appended before any
+        # observability runs, and the observability cannot raise past itself.
+        evaluated.append((tenant, window, snapshots))
+        if work:
+            try:
+                _record_cycle_work(tenant, work)
+            except Exception as exc:  # noqa: BLE001 — accounting may not reject a window
+                _note_profiler_error("_record_cycle_work", exc)
+
+    # #111 churn fix — know every id that MATERIALIZED this cycle before deciding
+    # whether an unknown id is a genuinely new incident or an ongoing one re-keyed
+    # by windowing (correlation_id derives from the earliest node + onset, so when
+    # an incident's first signal ages out of the sliding window the same condition
+    # returns under a new id every sweep). Pre-fix that minted a new object and
+    # tombstoned the old one into it (create-then-merge: ~13/min of state='merged'
+    # tombstones, ~20M archive rows/day on one sustained signature). Now the new
+    # snapshot ADOPTS the open object's identity (find_continuation: same
+    # entity-overlap + window-overlap criterion as find_merges, tenant-guarded)
+    # and versions it — one object with version bumps, no tombstone. Only an open
+    # object whose own id did NOT materialize may be adopted, and at most once per
+    # cycle — two live components can never collapse into one identity.
+    # SYNC span (tracker 192). This is the stretch tracker 192 named as its
+    # prime suspect — the O(open objects) bucket build immediately upstream of
+    # the adoption burst, with no span and no yield. Instrumented so the
+    # suspicion is now MEASURED rather than argued: on the live population it is
+    # a dict walk with a dict-lookup constant (463 open objects live, 1,385
+    # epoch peak) and it is not where 9-14 s can hide. The span is what makes
+    # that statement checkable on the next run instead of re-litigable.
+    #
+    # Per-cycle continuation index (tracker 162): open objects bucketed by
+    # tenant, built ONCE, with a shared entity-set cache. `materialized` is
+    # fixed for the cycle so it is filtered here; `seen_this_cycle` grows as we
+    # go, so it is passed through as an exclusion instead.
+    # Tracker 162 (completed): the tenant bucket is now a ContinuationIndex —
+    # entity + seam-bridge inverted maps built ONCE per cycle, so each new
+    # snapshot examines only its PROVEN candidate superset instead of every
+    # open object (O(new x open) -> O(new x matched)). Selection is untouched:
+    # find_continuation runs its exact predicate over the candidates, and the
+    # index docstring carries the superset proof; equivalence is pinned by
+    # test_continuation_index_162.py's oracle.
+    _cont_buckets: dict[str, list] = {}
+    with sync_span("reconcile.cont_buckets"):
+        materialized = {s.correlation_id for _, _, snaps in evaluated for s in snaps}
+        for _cid, _reg in OPEN_OBJECTS.items():
+            if _cid in materialized:
+                continue
+            _snap = _reg["snapshot"]
+            _cont_buckets.setdefault(_snap.tenant_id, []).append(_snap)
+    seen_this_cycle: set[str] = set()
+    # The index BUILD is O(open objects) on the loop thread, once per cohort —
+    # the same shape as the lifecycle merge pass, and it had no span either
+    # (storm-s02). It gets both: a span, and the executor once the population
+    # is big enough for the build to matter. Building it there is safe for the
+    # same reason find_merges is: ContinuationIndex is a pure function of an
+    # immutable snapshot list. Buckets are built one at a time, so the awaits
+    # interleave scheduling only — `cont_index` is complete before any probe.
+    with stage("reconcile.continuation_index"):
+        cont_index: dict[str, ContinuationIndex] = {}
+        for _t, _v in _cont_buckets.items():
+            if (CORR_CONTINUATION_INDEX_OFFLOAD > 0
+                    and len(_v) >= CORR_CONTINUATION_INDEX_OFFLOAD):
+                cont_index[_t] = await _offload(ContinuationIndex, _v)
+            else:
+                # SYNC span: the inline build owns the loop thread for its
+                # whole duration (see `sync_record`).
+                with sync_span("reconcile.continuation_index"):
+                    cont_index[_t] = ContinuationIndex(_v)
+    cont_entities: dict[str, frozenset] = {}
+
+    # Loop-lag resilience: see _make_loop_yield (same gate, same budget — it moved
+    # to module level for P1 change H so the epoch-cadence lifecycle pass, which
+    # runs outside any cohort, is bounded by exactly the same rule).
+    _loop_yield, _reset_loop_yield = _make_loop_yield()
+
+    # The per-cohort snapshot loop, timed as one stage. It is the other
+    # loop-thread stretch that scales with the open population (continuation
+    # probes, content/material hashing, the damped path) and it had no span of
+    # its own — the storm-s02 stall could have lived here just as easily.
+    _t_reconcile = time.perf_counter() if CORR_PROFILE_STAGES else 0.0
+    for tenant, window, snapshots in evaluated:
+        # P1 max-poll thrash: a damped-heavy cycle walks every snapshot with
+        # no awaits (content_hash is sync CPU) — yield per tenant so the
+        # consumer's poll cadence survives a storm cycle. The per-snapshot
+        # `_loop_yield()` below bounds the concentrated case this per-tenant
+        # yield cannot (one tenant, thousands of snapshots).
+        await asyncio.sleep(0)
+        _reset_loop_yield()
+        # §2 prioritize: under a DECLARED storm, persist objects severity-DESCENDING
+        # (peak node severity), tie-broken by correlation_id for determinism, so
+        # critical/major RCA is built and persisted FIRST and can never be deferred
+        # behind low-severity work when the per-cycle budget bites. The storm-noise
+        # aggregate (undetermined, no nodes above the floor) naturally sorts LAST.
+        # Gated: non-storm order is the engine's original emission order, byte-for-byte.
+        if storm:
+            # SYNC span (tracker 192): O(snapshots log snapshots) with an
+            # O(nodes) key — it walks every node of every snapshot this tenant
+            # emitted, on the loop thread, with no await and no yield, and it
+            # runs only under a DECLARED storm, i.e. only on the runs that
+            # stall. It had no span.
+            with sync_span("reconcile.storm_sort"):
+                snapshots = sorted(
+                    snapshots,
+                    key=lambda s: (-max((_SEV_RANK[n.peak_severity] for n in s.nodes),
+                                        default=0),
+                                   s.correlation_id))
+                global STORM_DEDUPED_TOTAL, STORM_AGGREGATED_TOTAL
+                for _s in snapshots:
+                    if _s.storm_aggregate:
+                        STORM_AGGREGATED_TOTAL += _s.storm_occurrences
+                    elif _s.storm_occurrences:
+                        STORM_DEDUPED_TOTAL += _s.storm_occurrences
+        for snap in snapshots:
+            gap_hints += snap.gap_hints
+            reg = OPEN_OBJECTS.get(snap.correlation_id)
+            if reg is None:
+                # TRACKER 162. This used to rebuild the whole candidate list
+                # inside the loop — O(open_objects) per snapshot, so
+                # O(snapshots x open_objects) of pure list-building per cycle,
+                # on the event loop, before find_continuation even started
+                # recomputing every candidate's entity set.
+                #
+                # The tenant bucket is an EXACT index, not a heuristic: the very
+                # first thing find_continuation does is skip any candidate whose
+                # tenant differs (§3a, default-closed), so a cross-tenant object
+                # could never have won. Excluding it earlier removes work the
+                # contract already forbade using.
+                _ci = cont_index.get(snap.tenant_id)
+                # SYNC span: candidate probe + the exact predicate, no await.
+                with sync_span("reconcile.find_continuation"):
+                    cont = find_continuation(
+                        snap, _ci.candidates(snap) if _ci is not None else (),
+                        exclude=seen_this_cycle, entity_cache=cont_entities)
+                if cont:
+                    snap = dc_replace(snap, correlation_id=cont)
+                    reg = OPEN_OBJECTS[cont]
+                    log.info("corr-object %s continued under re-keyed window (identity adopted, no tombstone)",
+                             cont[:8])
+            seen_this_cycle.add(snap.correlation_id)
+            # P1 (1000-device scale): content_hash on the live 48,375-edge
+            # object is a 1.6s uninterruptible json.dumps+sha256 — offloaded.
+            chash = await _snap_call(snap, snap.content_hash)
+            if reg is None:
+                # TRACKER 155 race: the seed task runs on this loop and may have
+                # registered this EXACT identity while the offloaded hash above
+                # was in flight. Re-read rather than overwrite — a placeholder
+                # carries the object's real version and its pre-handoff blast
+                # radius, and clobbering it with a fresh v1 would silently
+                # reinstate the fragmentation this cycle just avoided.
+                reg = OPEN_OBJECTS.get(snap.correlation_id)
+            if reg is not None and _seed_only(reg):
+                # TRACKER 155. Evidence has reached an identity this replica
+                # reconstructed from ClickHouse when it acquired the partition —
+                # either because the refilled window re-derived the SAME id (the
+                # direct `OPEN_OBJECTS.get` above) or through find_continuation.
+                # Either way the incident now continues under its ORIGINAL
+                # correlation_id instead of minting a fragment, and the
+                # registration stops being a placeholder: from here it is an
+                # ordinary open object on every path, with its AffectedHistory
+                # already carrying the pre-handoff blast radius (tracker 187).
+                _seed_adopted(reg, snap.correlation_id, now)
+            # TRACKER 155. STATE FOLLOWS PARTITION OWNERSHIP, asked at the
+            # moment of the write and of EVERY object: an existing registration
+            # whose tenant's partition has moved away may not persist a version
+            # or even a corr_current touch (both are latest-write-wins
+            # overwrites of the true owner's row — 155c F2 wrote a duplicate v7
+            # this way, every 30 s for six minutes). It is dropped instead,
+            # counted and logged, and the durable row stands.
+            if reg is not None and not _ownership_persist_guard(snap.correlation_id, reg):
+                continue
+            # ...and the same question for an object that does not exist yet
+            # (155c F1: an in-flight cycle minted a fresh object 13 s after the
+            # revoke). This is where objects ENTER OPEN_OBJECTS, so this is
+            # where the admission guard belongs.
+            if reg is None and not _ownership_admission_guard(snap.tenant_id):
+                continue
+            if reg is None:
+                OPEN_OBJECTS[snap.correlation_id] = {
+                    "version": 1, "hash": chash,
+                    # Tracker 187: the monotone blast radius, per OBJECT. Created
+                    # with the registration and carried by the registration dict,
+                    # so a continuation adoption (which reuses OPEN_OBJECTS[cont])
+                    # keeps the history it accumulated under its own id.
+                    "affected_hist": AffectedHistory(CORR_AFFECTED_HISTORY_MAX),
+                    "material": await _snap_call(snap, snap.material_hash),
+                    "last_seen": now, "last_persist": now, "snapshot": snap,
+                    "opened_at": now,  # #101: max_incident_age in the write-amp rollup
+                    # P3 change A: last time a FULL corr_objects version landed.
+                    # `last_persist` paces the heartbeat (touch or version);
+                    # this paces the KEEPALIVE, which is what keeps an open
+                    # object inside the history horizons (TTL, the 24 h
+                    # app_impact decorate, the 7-day drift lookback).
+                    "last_version": now,
+                }
+                # A brand-new incident: the highest-value Evidence there is.
+                await _persist_snapshot(snap, 1, "open", window,
+                                        loop_yield=_loop_yield,
+                                        priority_class=EVIDENCE_CLASS_DECISION)
+                await _affected_note(OPEN_OBJECTS[snap.correlation_id], snap)
+                VERSIONS_PERSISTED += 1
+                _wa_note_outcome(tenant, "persisted")
+            elif reg["hash"] != chash:
+                # #100 damping: content moved (it always does while an incident
+                # persists — instance ids rotate through the window), but only a
+                # MATERIAL move, an elapsed heartbeat, or damping-off warrants a
+                # persisted version. The in-memory registry still tracks the
+                # freshest snapshot so merge/close always persist current truth.
+                mhash = await _snap_call(snap, snap.material_hash)
+                elapsed = (now - reg.get("last_persist", now)).total_seconds()
+                material_moved = mhash != reg.get("material")
+                heartbeat_due = (CORR_VERSION_HEARTBEAT_S <= 0
+                                 or elapsed >= CORR_VERSION_HEARTBEAT_S)
+                # P3 change A: a heartbeat that is ONLY a heartbeat — material
+                # unchanged, damping on — writes the freshness row and no
+                # version. `keepalive_due` is the escape hatch that keeps a
+                # never-moving open object inside the corr_objects horizons; see
+                # CORR_HEARTBEAT_TOUCH_ONLY for the enumerated consumers.
+                keepalive_due = (
+                    (now - reg.get("last_version", reg.get("last_persist", now))
+                     ).total_seconds() >= CORR_VERSION_KEEPALIVE_S)
+                touch_only = (CORR_HEARTBEAT_TOUCH_ONLY and heartbeat_due
+                              and not material_moved
+                              and CORR_VERSION_HEARTBEAT_S > 0
+                              and not keepalive_due)
+                if touch_only:
+                    reg["last_persist"] = now
+                    # The version number does NOT move: the list/health joins
+                    # pick (correlation_id, version) from corr_current and look
+                    # the edges up in corr_edges, so the projection must keep
+                    # pointing at a version that HAS rows.
+                    await _touch_current(snap, reg["version"], "open", chash)
+                    VERSIONS_HEARTBEAT_TOUCHED += 1
+                    _wa_note_outcome(tenant, "heartbeat_touch")
+                elif material_moved or heartbeat_due:
+                    reg["version"] += 1
+                    reg["last_persist"] = now
+                    reg["last_version"] = now
+                    # P2 step 4: the Evidence priority class is derived from the
+                    # CONTENT of the version — did the material verdict move? —
+                    # not from which timer fired. A heartbeat re-persist of an
+                    # unchanged verdict is the lowest-value Evidence in the
+                    # queue and drains last.
+                    _pclass = (EVIDENCE_CLASS_DECISION
+                               if material_moved
+                               else EVIDENCE_CLASS_HEARTBEAT)
+                    await _persist_snapshot(snap, reg["version"], "open", window,
+                                            loop_yield=_loop_yield,
+                                            priority_class=_pclass)
+                    # A seed-descended object has now written a version of its
+                    # own: the D2b first-persist guard is spent (155b).
+                    _seed_first_persist_done(reg)
+                    await _affected_note(reg, snap)
+                    VERSIONS_PERSISTED += 1
+                    _wa_note_outcome(tenant, "persisted")
+                else:
+                    VERSIONS_DAMPED += 1
+                    _wa_note_outcome(tenant, "damped")
+                reg["hash"] = chash
+                reg["material"] = mhash
+                reg["last_seen"] = now
+                reg["snapshot"] = snap
+            else:
+                reg["last_seen"] = now
+            # Bound the concentrated single-tenant grind: the damped/unchanged
+            # branches above take no I/O await, so without this a storm on one
+            # tenant would hold the loop for thousands of snapshots.
+            await _loop_yield()
+    if CORR_PROFILE_STAGES and _t_reconcile:
+        stage_record("reconcile.loop", time.perf_counter() - _t_reconcile)
+
+    # P1 change H: the epoch accumulates every cohort's seen ids — the
+    # merge/quiesce/cap passes run ONCE per epoch against the union (see
+    # _epoch_lifecycle). `seen_this_cycle` stays per cohort: it is still the
+    # `exclude=` find_continuation needs, and `materialized` is per cohort too.
+    epoch.seen |= seen_this_cycle
+    # P2 step 4a: and the CROSS-EPOCH window of the last K cohorts, which is what
+    # the lifecycle pass's candidate space is built from (see _lifecycle_seen).
+    # Appended here — after the cohort has committed its versions — so a cohort
+    # that raised never widens a later pass with ids it did not persist.
+    if CORR_LIFECYCLE_COHORT_WINDOW:
+        _LIFECYCLE_SEEN_WINDOW.append(set(seen_this_cycle))
+    global COHORT_OPEN_OBJECTS_LAST, OPEN_OBJECTS_EPOCH_PEAK
+    COHORT_OPEN_OBJECTS_LAST = len(OPEN_OBJECTS)
+    # The transient overshoot the once-per-epoch cap allows, measured rather
+    # than assumed (spec §4 delta 1). Sampled here — before any lifecycle pass —
+    # so it is the true within-epoch peak.
+    OPEN_OBJECTS_EPOCH_PEAK = max(OPEN_OBJECTS_EPOCH_PEAK, len(OPEN_OBJECTS))
+    if not CORR_LIFECYCLE_EPOCH_CADENCE:
+        # A/B knob: the pre-P1 shape — merge/quiesce/cap after EVERY cohort,
+        # against THIS cohort's seen set.
+        await _epoch_lifecycle(epoch, _loop_yield, seen=seen_this_cycle)
+
+    LAST_GAP_HINTS = gap_hints
+    # tracker 166: advance the "new since last cycle" marker only after the
+    # cycle actually completed, so a cycle that raised does not cause the next
+    # one to treat its unprocessed signals as already-seen.
+    if _cycle_max_ts is not None:
+        LAST_CYCLE_MAX_TS = _cycle_max_ts
+    # tracker 166 phase 1: the frontier advances HERE and nowhere else — after
+    # every tenant's snapshots have been through _persist_snapshot, i.e. past
+    # the tracker 160 durability boundary. A transaction that raised never
+    # reaches this line, so its cohort stays pending and is retried whole.
+    if _cohort:
+        _mark_processed(_cohort)
+        COHORTS_PROCESSED += 1
+        COHORT_SIGNALS_TOTAL += len(_cohort)
+    # #101: flush the per-tenant write-amplification window (no-op until
+    # CORR_WA_FLUSH_S has elapsed; resets even when the insert fails).
+    await _flush_tenant_write_amp(now)
+
+
+async def _drain_epoch_sweep() -> int:
+    """ONE drain sweep: freeze an epoch, drain bounded cohorts against it, run
+    the epoch's lifecycle pass, discard it. Returns the cohorts drained.
+
+    tracker 166 phase 3: WORK-CONSERVING DRAIN.
+
+    The old shape was `cycle(); sleep(interval)` unconditionally, which meant a
+    backlog could only ever drain one cohort per interval — and since the cohort
+    was unbounded, the way it "kept up" was by making each transaction bigger.
+    Now that transactions are bounded, waiting a full interval between them
+    would cap throughput at cohort_size/interval for no reason.
+
+    So: keep taking cohorts while work remains, up to a bound, yielding between
+    each so the consumer, heartbeat, persistence and health tasks all get
+    scheduled. The bound stops a large backlog from monopolising the process
+    indefinitely — the loop still returns to its normal interval, and pending
+    depth (not transaction size) is what grows under genuine overload.
+
+    tracker 166 Phase 2: ONE epoch per sweep. Prune + freeze + prepare once,
+    then drain bounded cohorts against that prepared state, then discard it.
+    Preparation used to be paid per cohort — ~6 s at 50k retained nodes, ~48 s
+    across 8 cohorts of pure re-derivation.
+
+    Signals arriving mid-sweep stay pending for the NEXT epoch. That is the
+    pre-166 behaviour for arrivals and it is what lets the snapshot be immutable
+    for the whole sweep.
+
+    P2 step 1 adds the SECOND bound — CORR_ENGINE_EPOCH_BUDGET_S — for the
+    reason recorded at that constant: 20 cohorts x ~190 s made a 65-minute epoch
+    at 2.5K, and everything that only happens at an epoch boundary (prune,
+    lifecycle, the 163 cap, `oldest_pending_age`) waited for it. Extracted from
+    engine_loop so the sweep — and therefore the budget — is directly testable.
+    """
+    global EPOCH_BUDGET_EXITS_TOTAL
+    drained = 0
+    epoch = None
+    if ch is not None:
+        epoch = await _begin_epoch(datetime.now(timezone.utc))
+    try:
+        while drained < CORR_ENGINE_DRAIN_COHORTS:
+            await engine_cycle(epoch)
+            drained += 1
+            if epoch is not None:
+                epoch.cohorts = drained
+            await asyncio.sleep(0)      # fairness point, not a delay
+            # Pending WITHIN the epoch: a sweep drains the snapshot it
+            # froze, never signals it has no prepared node for. Computed ONCE
+            # per cohort — it walks the frozen snapshot, so the budget check
+            # below reuses this list rather than re-deriving it.
+            if epoch is None:
+                break
+            pending = epoch.pending()
+            if not pending:
+                break
+            # P2 step 1: the epoch budget, checked BETWEEN cohorts and nowhere
+            # else — a cohort that has started always runs to completion, so an
+            # object's outputs never depend on how much wall time was left. The
+            # sweep then falls through to the SAME lifecycle pass and the SAME
+            # epoch close as any other exit; the undrained cohorts stay pending
+            # for the next epoch, exactly as they do when the cohort bound is
+            # hit. epoch.started is monotonic (never the wall clock).
+            if (CORR_ENGINE_EPOCH_BUDGET_S > 0
+                    and time.monotonic() - epoch.started >= CORR_ENGINE_EPOCH_BUDGET_S):
+                EPOCH_BUDGET_EXITS_TOTAL += 1
+                log.info(
+                    "engine epoch ended on its %.0fs budget after %d/%d cohorts "
+                    "(%.1fs elapsed): prune, lifecycle and oldest_pending_age "
+                    "recover on a bounded cadence; %d signals stay pending for "
+                    "the next epoch",
+                    CORR_ENGINE_EPOCH_BUDGET_S, drained, CORR_ENGINE_DRAIN_COHORTS,
+                    time.monotonic() - epoch.started, len(pending))
+                break
+        # P1 change H: the epoch's ONE merge/quiesce/cap pass, after the
+        # drain loop exits NORMALLY and before the epoch is closed. A
+        # cohort that raised skips it (the exception propagates past this
+        # line to the sweep's handler) — earlier cohorts' lifecycle
+        # decisions are re-derivable on the next epoch, and their
+        # persisted versions stand. A budget exit is a NORMAL exit: the pass
+        # runs, which is the whole point of bounding the epoch.
+        if epoch is not None and CORR_LIFECYCLE_EPOCH_CADENCE:
+            await _epoch_lifecycle(epoch, _make_loop_yield()[0])
+    finally:
+        if epoch is not None:
+            _close_epoch(epoch)
+    return drained
+
+
+async def engine_loop() -> None:
+    if not (CORR_SIGNALS_ENABLED and CORR_ENGINE_ENABLED):
+        log.info("engine v2 object loop disabled")
+        return
+    log.info("engine v2 object loop: interval=%.0fs retention=%.1fs "
+             "(reach %.1fs + lateness %.0fs, STREAM time) quiesce=%.0fs",
+             CORR_ENGINE_INTERVAL_S, RETENTION_REQUIRED_S, ENGINE_REACH_S,
+             CORR_PERMITTED_LATENESS_S, CORR_QUIESCE_S)
+    global ENGINE_LAST_SWEEP_MONO
+    ENGINE_LAST_SWEEP_MONO = time.monotonic()
+    while True:
+        # Tracker 172: ingest priority. A sweep is skipped while the consumer
+        # is measurably behind — bounded by the deadline inside the decision —
+        # so storm backlogs are drained by the CONSUMER first and evaluated
+        # (declared, subset contract) at a reduced cadence, instead of the
+        # engine's cycles stalling the loop past the Kafka session timeout and
+        # ejecting the member (the S1 failure mechanism).
+        global INGEST_PRIORITY_DEFERRALS, INGEST_PRIORITY_ACTIVE
+        defer, reason = _ingest_priority_decision(time.monotonic())
+        if defer:
+            INGEST_PRIORITY_DEFERRALS += 1
+            if not INGEST_PRIORITY_ACTIVE:
+                log.warning(
+                    "engine sweep DEFERRED for ingest priority (tracker 172): "
+                    "consumer lag %s > %d — correlation continues at the bounded "
+                    "%.0fs cadence; deferrals are counted and declared",
+                    CONSUMER_LAG_TOTAL, CORR_INGEST_PRIORITY_LAG,
+                    CORR_INGEST_PRIORITY_MAX_DEFER_S)
+            INGEST_PRIORITY_ACTIVE = True
+            await asyncio.sleep(CORR_ENGINE_INTERVAL_S)
+            continue
+        if INGEST_PRIORITY_ACTIVE:
+            log.info("engine sweep resumed (ingest priority released: %s)", reason)
+        INGEST_PRIORITY_ACTIVE = False
+        ENGINE_LAST_SWEEP_MONO = time.monotonic()
+        try:
+            await _drain_epoch_sweep()
+        except Exception:
+            log.exception("engine cycle failed (observable, §10; loop continues)")
+        # A4 heartbeat sweep. Without it the syslog/trap-driven checks would
+        # never fire at all: a device logs "adjacency down" ONCE, so nothing
+        # else would ever come back and ask whether it is still down. Runs
+        # AFTER the object sweep and in its own try — a dwell timer must never
+        # be the reason correlation stops.
+        try:
+            await _emit_proactive(PROACTIVE.sweep(datetime.now(timezone.utc)))
+        except Exception:
+            log.exception("proactive sweep failed (observable, §10; loop continues)")
+        # Idle (or drain-bounded): fall back to the normal interval. It still
+        # drives low-volume flush, expiry and finalisation.
+        await asyncio.sleep(CORR_ENGINE_INTERVAL_S)
+
+
+async def _emit_proactive(events: tuple[ProactiveEvent, ...]) -> None:
+    """Persist + buffer the signals a PROMOTED proactive check produced.
+
+    While every check is shadow this is called with an empty tuple on every
+    path, which is the point: the wiring is live and exercised, and promotion
+    is the one-line flag flip `proactive.PROMOTION` describes rather than a
+    second change to main.py under time pressure. Tested against a
+    deliberately-promoted check in test_proactive_checks_a4.py.
+
+    Same lane discipline as every other producer here: batched to
+    corr_signals, then admitted to the window through `agg_admit` /
+    `buffer_signal` so storm aggregation and the window-entry chokepoint apply
+    unchanged. A malformed event dead-letters like any other provenance
+    failure — it is never dropped silently (§10).
+    """
+    global PROACTIVE_SIGNALS, DEADLETTER_COUNT
+    if not events or not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    for ev in events:
+        try:
+            sig = proactive_signal(ev)
+        except DeadLetter as exc:
+            DEADLETTER_COUNT += 1
+            keep_deadletter_payload("proactive", {"check_id": ev.check_id,
+                                                  "entity_id": ev.entity_id}, exc)
+            log.warning("dead-letter (proactive): %s", exc)
+            continue
+        await batch_signal(sig.to_ch_row())
+        PROACTIVE_SIGNALS += 1
+        fwd = agg_admit(sig)
+        if fwd is not None:
+            buffer_signal(fwd)
+        log.info("proactive %s %s: %s held=%.0fs", ev.phase, ev.check_id,
+                 ev.entity_id, ev.held_s)
+
+
+async def feed_episode_detector(
+    tenant: str,
+    entity_id: str,
+    metric: str,
+    value: float,
+    event_ts: datetime,
+    *,
+    observer_id: str,
+    collection_path: str,
+    entity_type: EntityType,
+    kind_prefix: str,
+    entity_tokens: tuple[str, ...] = (),
+    source: Source = Source.METRIC,
+    modality: ModalityClass = ModalityClass.DEVICE_TELEMETRY,
+    observer_type: ObserverType = ObserverType.DEVICE,
+    extra_attrs: dict | None = None,
+) -> bool:
+    """Stage [1]+[2]: run CUSUM over the canonical (entity, metric) series and
+    persist episode signals. Identity is the canonical entity_id (device:ifName
+    for interfaces, device:peer for BGP) so per-interface/per-peer series do not
+    collide on a shared metric name. Provenance is threaded from the event —
+    parameterized so a passive_flow volume series carries flow-exporter provenance
+    (C6) instead of device telemetry, exactly as probe episodes carry vantage-agent."""
+    global DEADLETTER_COUNT, DEVICE_TELEMETRY_SIGNALS
+    if not CORR_SIGNALS_ENABLED or ch is None:
+        return False
+    ev = DETECTOR.observe(tenant, entity_id, metric, event_ts, value, clock_quality="unknown")
+    if ev is None:
+        return False  # still baselining / within hysteresis — no episode this sample
+    try:
+        observer = Observer(
+            observer_id=observer_id,
+            observer_type=observer_type,
+            collection_path=collection_path,
+            clock_quality="unknown",
+        )
+        sig = episode_signal(
+            ev, observer,
+            source=source,
+            modality=modality,
+            entity_type=entity_type,
+            kind_prefix=kind_prefix,
+            entity_tokens=entity_tokens,
+            extra_attrs=extra_attrs,
+        )
+        row = sig.to_ch_row()
+    except DeadLetter as exc:
+        DEADLETTER_COUNT += 1
+        keep_deadletter_payload("provenance", ev, exc)
+        log.warning("dead-letter (provenance): %s", exc)
+        return False
+    await batch_signal(row)  # batched: lane=metrics (perf defect #2)
+    if modality is ModalityClass.DEVICE_TELEMETRY:
+        DEVICE_TELEMETRY_SIGNALS += 1
+    # Build ⑥: every spine signal also feeds the engine's evidence window.
+    ep_fwd = agg_admit(sig)
+    if ep_fwd is not None:
+        buffer_signal(ep_fwd)
+    log.info("episode %s: %s/%s peak=%.1fσ ±%.0fs", ev.phase, ev.key[1],
+             ev.key[2], ev.peak_deviation, ev.onset_uncertainty_s)
+    return True  # an episode signal was emitted this sample
+
+
+def score(tenant: str, device: str, metric: str, value: float) -> float | None:
+    """Return a |z-score| if the value is anomalous, else None. Keyed by the
+    VERIFIED tenant (M29b) so same-named devices in different tenants never
+    share a baseline."""
+    global SERIES_EVICTED, _SERIES_EVICT_LOG_LAST
+    key = (tenant, device, metric)
+    s = SERIES.get(key)
+    if s is None:
+        s = Series()
+        SERIES[key] = s
+        while len(SERIES) > SERIES_MAX:
+            SERIES.popitem(last=False)
+            # M29a: eviction is legitimate LRU behaviour but never silent —
+            # sustained evictions mean cardinality churn is eating warm
+            # baselines and the z-score lane is quietly degrading.
+            SERIES_EVICTED += 1
+            mono = time.monotonic()
+            if (mono - _SERIES_EVICT_LOG_LAST) >= SERIES_EVICT_LOG_EVERY_S:
+                _SERIES_EVICT_LOG_LAST = mono
+                log.warning("z-score series LRU eviction (cap=%d, evicted_total=%d) — "
+                            "cardinality churn is recycling baselines", SERIES_MAX, SERIES_EVICTED)
+    else:
+        SERIES.move_to_end(key)
     if len(s.values) < 20:
         s.push(value)
         return None
@@ -110,28 +8161,508 @@ def score(device: str, metric: str, value: float) -> float | None:
 # ClickHouse helpers (HTTP interface).
 # ---------------------------------------------------------------------------
 
+# Inserts that legitimately span more than one tenant, by table. A rollup that
+# summarises EVERY tenant's window in one batch (corr_tenant_write_amp) cannot
+# be written at a single tenant's scope; anything else showing up here means a
+# lane started smuggling mixed-tenant batches and wants investigating.
+CH_CROSS_TENANT_INSERTS: dict[str, int] = {}
+
+
+def _ndjson_body(rows: list[dict]) -> str:
+    """The ClickHouse JSONEachRow body for `rows`. Split out so the large-batch
+    case can run through `_offload` (P1: a 48k-row body is 0.68s of otherwise
+    uninterruptible event-loop time). PURE — safe in a worker thread."""
+    return "\n".join(json.dumps(r) for r in rows)
+
+
+def _batch_token(rows: list[dict]) -> str:
+    """Content-hash dedup token for a retained batch (see CHBatcher._insert_batch).
+    Split out for the same reason as _ndjson_body — measured 0.93s at 48k rows."""
+    return "batch:" + hashlib.sha256(
+        "\n".join(json.dumps(r, sort_keys=True, default=str)
+                  for r in rows).encode()).hexdigest()[:32]
+
+
+def insert_scope(rows: list[dict]) -> str:
+    """The `tenant_scope` custom setting one INSERT is issued under.
+
+    Derived from the ROWS, never from a caller-supplied default — mirroring
+    src/backend/chhttp's rule that Scope is REQUIRED because every default is
+    wrong ("__all__" defeats isolation, "__none__" silently returns nothing).
+
+    HONEST SCOPE NOTE: ClickHouse row policies are `FOR SELECT` only, so this
+    setting does NOT reject a mis-tenanted INSERT on its own. What it does buy:
+    (a) the insert is executed in the row's OWN tenant context, so any policy
+    re-evaluated during the write (a materialized view selecting from a
+    policy-protected table — the exact failure that forced flows_hourly to be
+    dropped, see src/backend/clickhouse_policies.go:16-19) sees the row's scope
+    instead of an unset setting or a wildcard; (b) a cross-tenant batch has to
+    announce itself and is counted. The control that actually stops a forged
+    tenant reaching a row is `verified_tenant` at intake.
+    """
+    scopes = {str(r.get("tenant_id", "")) for r in rows if "tenant_id" in r}
+    if len(scopes) == 1 and len(rows) == len([r for r in rows if "tenant_id" in r]):
+        return scopes.pop()
+    # Mixed tenants (the per-tenant write-amp rollup) or a table with no tenant
+    # column: the only honest scope is the explicit cross-tenant one. Counted
+    # per table so it can never grow quietly.
+    return "__all__"
+
+
+@dataclass(frozen=True)
+class InsertOutcome:
+    """What actually happened to one ClickHouse insert (tracker 160).
+
+    `committed` is the only thing most callers need. The rest exists so the
+    batcher can tell a TRANSIENT failure (retry it) from a PERMANENT one
+    (quarantine immediately — retrying a schema error just delays the same
+    loss while the backlog grows), and so the dead-letter record can say WHY
+    rather than being an unclassifiable blob.
+    """
+    committed: bool
+    kind: str = ""            # committed | rejected | transport | empty
+    status: int = 0
+    ch_code: int = 0
+    query_id: str = ""
+    error: str = ""
+    rows: int = 0
+    nbytes: int = 0
+
+    def as_evidence(self) -> dict:
+        return {"kind": self.kind, "status": self.status, "ch_code": self.ch_code,
+                "query_id": self.query_id, "error": self.error,
+                "rows": self.rows, "bytes": self.nbytes}
+
+
+# ClickHouse exception codes worth retrying: the server was momentarily unable,
+# not permanently unwilling. Deliberately a SMALL allowlist — anything not named
+# here is treated as permanent and quarantined at once, because retrying a
+# schema or parse error cannot succeed and only delays the loss.
+#   241 MEMORY_LIMIT_EXCEEDED        — the one observed live on 2026-08-19
+#   202 TOO_MANY_SIMULTANEOUS_QUERIES
+#   203 NO_FREE_CONNECTION
+#   209 SOCKET_TIMEOUT / 210 NETWORK_ERROR
+#   252 TOO_MANY_PARTS               — merge backlog; drains on its own
+#   159 TIMEOUT_EXCEEDED
+#   173 CANNOT_ALLOCATE_MEMORY
+CH_RETRYABLE_CODES = frozenset({241, 202, 203, 209, 210, 252, 159, 173})
+
+# At least one ATTEMPT is always made — 0 would mean "never insert", not
+# "never retry", and would leave both this and the batcher's retry loop with
+# no outcome to act on (the `assert` that documents that invariant is stripped
+# under `python -O`, so the guarantee has to live here, not there).
+CORR_CH_RETRY_ATTEMPTS = max(1, int(os.environ.get("CORR_CH_RETRY_ATTEMPTS", "4")))
+CORR_CH_RETRY_BASE_S = float(os.environ.get("CORR_CH_RETRY_BASE_S", "0.5"))
+CORR_CH_RETRY_MAX_S = float(os.environ.get("CORR_CH_RETRY_MAX_S", "8.0"))
+CH_RETRIES_ATTEMPTED = 0
+CH_RETRIES_RECOVERED = 0
+CH_RETRIES_EXHAUSTED = 0
+
+# The HTTP client timeout for every ClickHouse call. This was a hard-coded 10.0s
+# while a MEASURED archive insert on the 1000-device workload took 14,395 ms
+# server-side (docs/scale/ARCHIVE_PERSISTENCE_BOTTLENECK_2026-08-22.md), i.e. the
+# client hung up on inserts ClickHouse was still committing. A read timeout is
+# indistinguishable from a rejection at that point, so the write was counted lost
+# and — on an RCA-critical table — raised CHInsertRejected out of the engine
+# cycle, discarding a whole cohort's frontier advance. Waiting for a slow commit
+# is strictly better than abandoning it: the await does not block the loop.
+CORR_CH_TIMEOUT_S = float(os.environ.get("CORR_CH_TIMEOUT_S", "30.0"))
+
+# Tables where re-sending an insert after an UNKNOWN outcome cannot duplicate a
+# row, so a retry is safe. Every entry is justified by its DDL in
+# deployment/docker/clickhouse/init.sql — this set is not a guess, and a table
+# must not be added to it without the corresponding DDL guarantee:
+#   corr_objects/corr_edges/corr_evidence — non_replicated_deduplication_window
+#       = 1000, so a re-sent block carrying a token the server already saw is
+#       dropped server-side.
+#   corr_current — ReplacingMergeTree(created_at) keyed by
+#       (tenant, correlation_id), so a duplicate collapses on merge by design.
+#   findings — non_replicated_deduplication_window = 1000 (on the CREATE in
+#       init.sql for fresh installs, converged on every boot by the
+#       ConvergeStmts ALTER for existing ones), and EVERY findings insert
+#       carries `finding_dedup_token(row)` — the source message coordinate plus
+#       a hash of the row's content — so a re-sent block is dropped server-side.
+#       Added 2026-08-29 after storm-s03 (replica-3, 22:17:43Z) lost one row to
+#       a bare `ReadError`: the table was outside this set, so an AMBIGUOUS
+#       transport outcome (the server may well have committed) was counted lost
+#       instead of retried, and the ladder's accounting phase failed on it.
+#   wireless_sessions / wireless_onboarding_episodes / wireless_roams /
+#       wireless_mlo_links — ReplacingMergeTree(ingest_ts) keyed by the row's
+#       stable natural id ((tenant_id, session_id), (tenant_id, episode_id),
+#       (tenant_id, roam_id), (tenant_id, session_ref, link_id) —
+#       init.sql:1004-1110), so a re-sent row COLLAPSES on merge BY DDL with no
+#       schema change. Exactly the corr_current justification, and every insert
+#       now carries `natural_key_token(...)` so the token half of the proof
+#       holds too. Joined 2026-09-02 (tracker 189): all four were outside the
+#       retry contract, so a transient ClickHouse rejection dropped a wireless
+#       session/roam/episode outright — `ch_insert`'s bool return is ignored at
+#       those four call sites, which made `lost_total++` the entire trace.
+#   corr_signals_archive — non_replicated_deduplication_window = 1000, added
+#       2026-09-02 by the tracker 189 RESIDUAL (init.sql CREATE for fresh
+#       installs, an idempotent MODIFY SETTING in chschema.CorrSchemaDDL for
+#       existing ones). It is deliberately NOT a ReplacingMergeTree: the same
+#       signal is legitimately archived AGAIN under a different
+#       (archived_for, archived_version), and neither column is in ORDER BY
+#       (tenant_id, ts, signal_id) — a key collapse would eat a real second
+#       archival. The identity of an archive INSERT is its content-derived
+#       `member_key` (`<snapshot tok>:archive:<chunk>` = correlation_id +
+#       version + content hash + chunk number), which BOTH sinks already send as
+#       the insert_deduplication_token; the window is what that token is matched
+#       against. Note the token is supplied by the CALLER here — an archive
+#       insert made with no token stays non-idempotent by the `bool(token)` half
+#       of the test below, which is the safe default.
+#   corr_tenant_write_amp — same window, same change, and the re-send carries
+#       `natural_key_token` (ORDER BY (tenant_id, window_start) plus every other
+#       value in the row). One insert holds an ENTIRE per-tenant accounting
+#       window and the flush is a TIMER, so nothing upstream redelivers it: not
+#       retrying an UNKNOWN outcome dropped the window whole.
+#
+# Deliberately ABSENT, and WHY — the previous version of this note said
+# "corr_signals and corr_signals_archive are plain MergeTree with no dedup
+# window", which was true of only one of them (tracker 189 audit, corrected
+# 2026-09-02) and is now true of neither:
+#   corr_signals — DOES carry non_replicated_deduplication_window = 1000: the
+#       ALTER in src/backend/internal/chschema/corr_schema.go converges it on
+#       every boot. The real reason it stays out is TOKEN STABILITY, not the
+#       DDL: the batcher's token is a content hash of the batch MEMBERSHIP, and
+#       a redelivery re-forms the batch differently, so the token moves and
+#       server-side dedup cannot fire. `CHBatcher._insert_batch` therefore
+#       retries the batch itself, parked with its membership (and token) frozen.
+#   corr_path_edges — dormant behind CORR_EDGES_V2=false and outside the
+#       delivery contract entirely (tracker 189 states this explicitly); it has
+#       no window and must not be retried on a transport-unknown outcome.
+#
+# A DEFINITE rejection is still retried on EVERY table, dedup-safe or not —
+# single-block inserts are atomic, so nothing committed (see `_retry_safe`).
+
+# ReplacingMergeTree tables: a duplicate row collapses on merge BY DDL, which is
+# what makes a re-send after an unknown outcome safe without a dedup window.
+# Named as a set so the guard test can assert the claim structurally instead of
+# re-listing table names (test_persist_retry_166).
+CH_REPLACING_TABLES = frozenset({
+    "netops.corr_current",
+    "netops.wireless_sessions",
+    "netops.wireless_onboarding_episodes",
+    "netops.wireless_roams",
+    "netops.wireless_mlo_links",
+})
+
+CH_DEDUP_SAFE_TABLES = frozenset({
+    "netops.corr_objects",
+    "netops.corr_edges",
+    "netops.corr_evidence",
+    "netops.findings",
+    # Joined 2026-09-02 (tracker 189 residual) on the WINDOW half of the claim,
+    # not the ReplacingMergeTree half — hence here and not in
+    # CH_REPLACING_TABLES. The DDL landed in the same change
+    # (deployment/docker/clickhouse/init.sql + the boot-converge MODIFY SETTING
+    # in internal/chschema/corr_schema.go), and test_persist_contract_189 reads
+    # that DDL so a revert of it turns this claim red.
+    "netops.corr_signals_archive",
+    "netops.corr_tenant_write_amp",
+}) | CH_REPLACING_TABLES
+
+# ── tracker 189: natural-key dedup tokens ───────────────────────────────────
+#
+# `_next_dedup_token` mints a token from the KAFKA COORDINATE, which only the
+# RCA-critical tables use, and the batcher mints one from batch membership.
+# Neither fits a table written straight out of a handler (the four wireless
+# tables) or out of a timer (corr_tenant_write_amp): those have no batch, and
+# the consumer coordinate is the wrong identity for a row whose own natural key
+# is already stable across a redelivery.
+#
+# So the token is derived from the ROW: its natural-key columns (named here,
+# each one the table's ORDER BY in init.sql) plus every other value it carries.
+# Both halves matter:
+#   * the natural key is what makes the token STABLE — a Kafka redelivery
+#     rebuilds a byte-identical row from the same message, so attempt 2 and a
+#     redelivered attempt 1 send the same token;
+#   * the remaining values are what keep it UNIQUE per LOGICAL insert. A
+#     ReplacingMergeTree row is legitimately rewritten in place (a session gains
+#     `assoc_end` when it closes); a key-only token would make that update look
+#     like a duplicate of the original and — the moment one of these tables
+#     gains a deduplication window — drop it server-side, silently. That is the
+#     exact failure class this row exists to remove, so it is not reintroduced
+#     by the fix for it.
+CH_NATURAL_KEY_COLUMNS: dict[str, tuple[str, ...]] = {
+    "netops.wireless_sessions": ("tenant_id", "session_id"),
+    "netops.wireless_onboarding_episodes": ("tenant_id", "episode_id"),
+    "netops.wireless_roams": ("tenant_id", "roam_id"),
+    "netops.wireless_mlo_links": ("tenant_id", "session_ref", "link_id"),
+    "netops.corr_tenant_write_amp": ("tenant_id", "window_start"),
+}
+
+
+def natural_key_token(table: str, rows: list) -> str:
+    """Stable, per-logical-insert dedup token for a natural-keyed table.
+
+    Empty for any table not in CH_NATURAL_KEY_COLUMNS (leaving dedup off,
+    exactly as before) and for an empty row list. Pure and deterministic: the
+    same rows always produce the same token, which is the whole property a
+    retry depends on.
+
+    Deliberately NOT `corr_signals_archive`: its chunks run to
+    CORR_ARCHIVE_CHUNK_ROWS (10,000) rows and hashing every value of every row
+    on the loop thread is precisely the kind of synchronous stretch the P1 pass
+    removed. It carries its `member_key` instead — content-derived
+    (correlation_id + version + content hash + chunk number), already built,
+    already stable across a replay of the same version.
+    """
+    cols = CH_NATURAL_KEY_COLUMNS.get(table)
+    if not cols or not rows:
+        return ""
+    h = hashlib.sha256()
+    for r in rows:
+        for c in cols:
+            h.update(str(r.get(c, "")).encode("utf-8", "replace"))
+            h.update(b"\x1f")
+        # sorted(): a row is a dict built by our own code, but a token that
+        # depends on key INSERTION order is a token that can move for a reason
+        # nobody would think to look for.
+        for k in sorted(r):
+            h.update(str(r[k]).encode("utf-8", "replace"))
+            h.update(b"\x1e")
+        h.update(b"\x1d")
+    return f"nk:{table.rpartition('.')[2]}:{h.hexdigest()[:32]}"
+
+# Tables whose rows are DURABLY SPOOLED to the dead-letter file when an insert
+# is finally given up on (permanent rejection, or retries exhausted).
+#
+# `netops.findings` is the founding member because it sits in the one gap the
+# durability contract had left open: it is NOT an RCA-critical table, so nothing
+# raises CHInsertRejected and the consumer never quarantines the source event —
+# and it is NOT reconstructable either, because the state that produced the row
+# (the rolling z-score baseline sample, the syslog burst bucket, which `emit`
+# resets) is gone by the time the insert fails. Without a durable copy the row
+# is simply gone, which is the accept-and-ignore defect (F-38) the rest of this
+# module exists to prevent.
+#
+# A row preserved on disk is NOT a lost write: it is counted under
+# CH_ROWS_DLQ_SPOOLED and `lost_total` (CH_INSERT_FAILURES — what the ladder's
+# accounting phase gates on) stays reserved for the genuinely unrecoverable
+# case: no CORR_DLQ_DIR configured, or the dead-letter write itself failed.
+#
+# TRACKER 189 (2026-09-02) extends it to every OTHER correlation-written table
+# that shares findings' predicament — nothing upstream raises for it, and
+# nothing upstream replays it:
+#   * corr_signals_archive — the row's first LIVE evidence. On the 10k
+#     documentation rung (`ladder-s10k-08311849`, 2026-08-31) 12 archive
+#     batches, ~357 rows, were LOST inside the accounting window: every one a
+#     `transport`/ReadError against a ClickHouse raising MEMORY_LIMIT_EXCEEDED
+#     906x in the same span, rising to lost_total 16 post-window including one
+#     10,000-row / 12.7 MB batch. Its sibling tables retried without loss; the
+#     archive was the only fire-and-forget path. The slice IS re-written whole
+#     on the next persist (`_archive_slice_revert`), but that recovery needs a
+#     next version of the same object to exist — recovery by luck, not by
+#     contract, and it says nothing about the rows that never got one.
+#   * corr_tenant_write_amp — one insert carries an ENTIRE per-tenant
+#     accounting window; the flush is a timer, so nothing redelivers it and a
+#     failure dropped the window whole (`raw_seen/persisted/damped` for every
+#     tenant in those 300 s), leaving the storm-attribution runbook query with
+#     a hole no counter named.
+#   * wireless_sessions / wireless_roams / wireless_mlo_links /
+#     wireless_onboarding_episodes — the bool return is ignored at all four
+#     call sites, so a rejected insert was a dropped session/roam/episode with
+#     `lost_total++` as the only trace. They now retry first (they are
+#     dedup-safe by DDL, see CH_REPLACING_TABLES) and spool second.
+#
+# WHAT IS DELIBERATELY NOT HERE: the five CH_CRITICAL_TABLES. They raise
+# CHInsertRejected instead, which the consumer turns into a durable quarantine
+# of the SOURCE MESSAGE — a stronger guarantee than spooling the rows, because
+# the message replays through the whole handler rather than being re-inserted
+# as-is. Adding them here would keep a second, redundant plaintext copy of the
+# same payload.
+CH_DLQ_ON_LOSS_TABLES = frozenset({
+    "netops.findings",
+    "netops.corr_signals_archive",
+    "netops.corr_tenant_write_amp",
+    "netops.wireless_sessions",
+    "netops.wireless_onboarding_episodes",
+    "netops.wireless_roams",
+    "netops.wireless_mlo_links",
+})
+CH_ROWS_DLQ_SPOOLED: dict[str, int] = {}
+
+# Per-table, per-outcome write accounting (tracker 189). CH_INSERT_FAILURES
+# answers "what was lost"; this answers "what happened", which is the question
+# an operator actually has when the archive lane goes quiet: rows that landed,
+# attempts that were retried, rows that ended in the dead-letter file, rows
+# with no durable home at all. Cardinality is bounded by construction — the
+# table names are module constants, the outcomes are the four below — so this
+# is not a per-tenant series in disguise.
+CH_OUTCOMES = ("flushed", "retried", "deadlettered", "lost")
+CH_TABLE_OUTCOMES: dict[str, dict[str, int]] = {}
+
+
+def _note_table_outcome(table: str, outcome: str, n: int = 1) -> None:
+    """Count one write outcome for one table. Never raises, never logs — the
+    log lines belong to the paths that decide the outcome."""
+    slot = CH_TABLE_OUTCOMES.get(table)
+    if slot is None:
+        slot = CH_TABLE_OUTCOMES[table] = {}
+    slot[outcome] = slot.get(outcome, 0) + n
+
+
+async def _insert_with_outcome(table: str, rows: list, token: str) -> InsertOutcome:
+    """`ch.insert_detailed` when the sink offers it, else a bool-only fallback.
+
+    A sink that can only answer true/false (every test double, and any future
+    alternative implementation) yields an outcome with no ClickHouse code, which
+    `ch_retryable` treats as PERMANENT. That is the safe default: we retry only
+    when something told us the failure was transient, never on an unexplained
+    one.
+    """
+    assert ch is not None
+    detailed = getattr(ch, "insert_detailed", None)
+    if detailed is not None:
+        return await detailed(table, rows, dedup_token=token)
+    ok = await ch.insert(table, rows, dedup_token=token)
+    if ok is False:
+        return InsertOutcome(committed=False, kind="rejected", rows=len(rows))
+    return InsertOutcome(committed=True, kind="committed", rows=len(rows))
+
+
+def ch_retryable(outcome: InsertOutcome) -> bool:
+    """Transport failures and a named set of server-busy codes are retryable."""
+    if outcome.committed:
+        return False
+    if outcome.kind == "transport":
+        return True
+    return outcome.ch_code in CH_RETRYABLE_CODES
+
+
+def ch_retry_delay(attempt: int, rnd=None) -> float:
+    """Exponential backoff with full jitter, capped. attempt is 1-based.
+
+    Full jitter (uniform in [0, backoff]) rather than fixed backoff: every
+    correlation replica retries the same rejected batch shape at the same
+    moment otherwise, which is how a memory-limit rejection turns into a
+    synchronised retry storm against the server that just said it was short of
+    memory.
+    """
+    import random as _random
+    backoff = min(CORR_CH_RETRY_BASE_S * (2 ** (attempt - 1)), CORR_CH_RETRY_MAX_S)
+    return (rnd or _random.random)() * backoff
+
 
 class CH:
     def __init__(self, base_url: str, user: str, password: str) -> None:
         self.base = base_url.rstrip("/")
         self.auth = (user, password)
-        self.client = httpx.AsyncClient(timeout=10.0)
+        # SEC-009: when CLICKHOUSE_URL is https, verify against the mesh CA
+        # (CORRELATION_CA_FILE) — never the system pool, never verify=False.
+        # Plain http keeps the default (verify is irrelevant there), so the
+        # fresh-install baseline is byte-identical.
+        verify = os.environ.get("CORRELATION_CA_FILE") or True
+        self.client = httpx.AsyncClient(timeout=CORR_CH_TIMEOUT_S, verify=verify)
 
-    async def insert(self, table: str, rows: Iterable[dict]) -> None:
-        body = "\n".join(json.dumps(r) for r in rows)
+    async def insert(self, table: str, rows: Iterable[dict],
+                     dedup_token: str = "") -> bool:
+        """True on a POSITIVELY COMMITTED insert, False otherwise.
+
+        Thin bool wrapper over `insert_detailed` so the 20 call sites that only
+        care whether it landed are unchanged. Anything that must DECIDE what to
+        do about a failure — retry or quarantine — needs the outcome, because
+        "false" cannot distinguish a transient memory-limit rejection from a
+        schema error that will fail identically forever (tracker 160).
+        """
+        return (await self.insert_detailed(table, rows, dedup_token)).committed
+
+    async def insert_detailed(self, table: str, rows: Iterable[dict],
+                              dedup_token: str = "") -> InsertOutcome:
+        """The insert, with the verdict DETAIL the caller needs to act on.
+
+        Ports the wire-level correctness the Go chhttp package proved against the
+        pinned ClickHouse 24.8.14.39 (see src/backend/chhttp). A status check
+        alone is NOT sufficient, for reasons measured there:
+
+          - ClickHouse can return HTTP 200 with the DB::Exception in the BODY
+            (wait_end_of_query=0, failure after the first buffer flush). A
+            status-only check calls that success and drops the write. We send
+            wait_end_of_query=1, inspect X-ClickHouse-Exception-Code, and
+            backstop with a body-tail scan.
+          - The error body may quote the offending ROW, which for this platform
+            is customer telemetry. It must NEVER reach the log (constraint:
+            no PII in logs). We log status + exception code + query id, never
+            r.text.
+
+        dedup_token (Phase 3): when set, sent as insert_deduplication_token so a
+        retried insert of the SAME block is dropped by ClickHouse rather than
+        duplicated. The RCA-critical tables are plain MergeTree (no content
+        dedup), so this is what makes a retry-after-Unknown safe on them. The
+        table's non_replicated_deduplication_window (init.sql) bounds the memory
+        of tokens; immediate retries are always inside it.
+        """
+        rows = list(rows)
+        nbytes = 0
+        # P1 (1000-device scale): a 48,375-edge insert serializes a 22.5 MiB
+        # NDJSON body in ONE synchronous comprehension — measured 0.68s of
+        # frozen event loop, inside which aiokafka's heartbeat cannot run.
+        # Offloaded above the threshold; small inserts keep the inline path.
+        if len(rows) >= CORR_OFFLOAD_MIN_ELEMENTS:
+            body = await _offload(_ndjson_body, rows)
+        else:
+            body = _ndjson_body(rows)
+        nbytes = len(body.encode()) if isinstance(body, str) else len(body)
         if not body:
-            return
-        params = {"query": f"INSERT INTO {table} FORMAT JSONEachRow"}
-        r = await self.client.post(
-            self.base, params=params, content=body, auth=self.auth,
-            headers={"Content-Type": "application/x-ndjson"},
-        )
-        if r.status_code >= 300:
-            log.error("clickhouse insert failed: %s %s", r.status_code, r.text)
+            return InsertOutcome(committed=True, kind="empty", rows=0, nbytes=0)
+        # #20 Phase 2 / TENANT-HIGH-4: state the tenant this batch is written on
+        # behalf of instead of leaving the setting unset (or wildcarding it on
+        # the read side and hoping). See insert_scope().
+        scope = insert_scope(rows)
+        if scope == "__all__":
+            CH_CROSS_TENANT_INSERTS[table] = CH_CROSS_TENANT_INSERTS.get(table, 0) + 1
+        params = {
+            "tenant_scope": scope,
+            "query": f"INSERT INTO {table} FORMAT JSONEachRow",
+            # Server-side buffering so a post-flush failure arrives as a real
+            # error status + header rather than a 200 with the exception buried.
+            "wait_end_of_query": "1",
+            # Insert tolerance (F-56): an unknown field is dropped, not fatal to
+            # the batch. Row errors are NOT tolerated (see the Go note) — a bad
+            # row must fail loudly, never be silently discarded.
+            "input_format_skip_unknown_fields": "1",
+            "date_time_input_format": "best_effort",
+        }
+        if dedup_token:
+            params["insert_deduplication_token"] = dedup_token
+        try:
+            r = await self.client.post(
+                self.base, params=params, content=body, auth=self.auth,
+                headers={"Content-Type": "application/x-ndjson"},
+            )
+        except httpx.HTTPError as exc:
+            # Transport failure before any verdict: the caller must treat this as
+            # NOT committed and quarantine the payload. Type name only — never
+            # the exception detail, which can echo the request body.
+            log.error("clickhouse insert transport failure table=%s err=%s",
+                      table, type(exc).__name__)
+            return InsertOutcome(committed=False, kind="transport",
+                                 error=type(exc).__name__,
+                                 rows=len(rows), nbytes=nbytes)
+        code = r.headers.get("X-ClickHouse-Exception-Code")
+        qid = r.headers.get("X-ClickHouse-Query-Id", "")
+        # A 200 can still be a failure: the exception header, or the exception
+        # marker in the body tail (the measured wait_end_of_query race backstop).
+        embedded = ("DB::Exception" in r.text[-4096:]) if r.status_code < 300 else False
+        if r.status_code >= 300 or code or embedded:
+            # r.text deliberately absent — it can contain customer rows.
+            log.error("clickhouse insert failed table=%s status=%s ch_code=%s query_id=%s",
+                      table, r.status_code, code or "-", qid or "-")
+            return InsertOutcome(committed=False, kind="rejected",
+                                 status=r.status_code,
+                                 ch_code=int(code) if (code or "").lstrip("-").isdigit() else 0,
+                                 query_id=qid, rows=len(rows), nbytes=nbytes)
+        return InsertOutcome(committed=True, kind="committed", status=r.status_code,
+                             query_id=qid, rows=len(rows), nbytes=nbytes)
 
     async def query(self, sql: str) -> list[dict]:
+        # #20 Phase 2: trusted internal reader — pass tenant_scope=__all__ so the
+        # findings row policy doesn't reject the query (ClickHouse errors on an
+        # unset custom setting once a policy references getSetting('tenant_scope')).
         r = await self.client.post(
-            self.base, params={"default_format": "JSON"}, content=sql, auth=self.auth,
+            self.base, params={"default_format": "JSON", "tenant_scope": "__all__"},
+            content=sql, auth=self.auth,
         )
         if r.status_code >= 300:
             raise HTTPException(status_code=502, detail=r.text)
@@ -143,91 +8674,4549 @@ class CH:
 
 ch: CH | None = None
 
+# Per-table count of ClickHouse inserts that did NOT land. `CH.insert` returns
+# False on a 4xx/5xx, and 19 of the 20 call sites used to discard that boolean:
+# a schema drift affecting only netops.corr_signals_archive would keep live RCA
+# looking perfect (the signal still enters WINDOW_BUFFER, which happens AFTER
+# the insert) while the replay source silently grew holes — so "replay this
+# incident" months later answers differently than the incident did at the time,
+# with no counter having moved. Every write now goes through ch_insert(), which
+# cannot forget to check.
+CH_INSERT_FAILURES: dict[str, int] = {}
+_CH_FAIL_LOG_LAST: dict[str, float] = {}
+CH_FAIL_LOG_EVERY_S = float(os.environ.get("CORR_CH_FAIL_LOG_EVERY_S", "30"))
+
+
+def _note_ch_failure(table: str, reason: str, ctx: dict) -> None:
+    """Count + log one lost ClickHouse write. Logging is rate-limited per table
+    (a ClickHouse outage fails every write; 10k identical lines bury the one
+    that explains it) — the COUNTER is always exact."""
+    CH_INSERT_FAILURES[table] = CH_INSERT_FAILURES.get(table, 0) + 1
+    now = time.monotonic()
+    if (now - _CH_FAIL_LOG_LAST.get(table, -1e9)) < CH_FAIL_LOG_EVERY_S:
+        return
+    _CH_FAIL_LOG_LAST[table] = now
+    detail = " ".join(f"{k}={v}" for k, v in ctx.items() if v not in (None, ""))
+    log.warning("clickhouse write LOST table=%s reason=%s lost_total=%d %s",
+                table, reason, CH_INSERT_FAILURES[table], detail)
+
+
+def _ch_give_up(table: str, rows: list, outcome: InsertOutcome | None,
+                origin: str, error: str, ctx: dict,
+                reason: str = "") -> bool:
+    """THE one give-up path for an insert that will not be attempted again.
+
+    Tracker 189. Before this, four different places decided what a dead write
+    meant, and three of them decided "count it and move on" — so `lost_total`
+    could rise with the rows existing nowhere and nothing but a rate-limited
+    WARN to say so. Now every give-up runs this, and the ORDER is the contract:
+
+        spool durably FIRST, count a loss only if that failed.
+
+    `lost_total` (CH_INSERT_FAILURES / corr_ch_insert_failures_total) is
+    therefore no longer reachable from a path that keeps nothing. It fires for
+    exactly two situations, both of which also log:
+      * the table is in CH_DLQ_ON_LOSS_TABLES and the durable copy could NOT be
+        made — CORR_DLQ_DIR unset (memory-only ring, gone at restart) or the
+        dead-letter write itself failed. `_dlq_spool_rows` detects both and
+        says so by returning False; this is the genuinely-unrecoverable case
+        the counter is reserved for.
+      * the table is outside CH_DLQ_ON_LOSS_TABLES because something upstream
+        holds the payload instead — the RCA-critical tables, whose caller
+        raises CHInsertRejected into the consumer's quarantine.
+
+    Returns True when a durable copy actually landed on disk.
+    """
+    kind = reason or (outcome.kind if outcome is not None else "") or "rejected"
+    spooled = table in CH_DLQ_ON_LOSS_TABLES and _dlq_spool_rows(
+        f"{origin}:{table}", table, rows, outcome, error)
+    if spooled:
+        _note_table_outcome(table, "deadlettered", len(rows))
+        # Rate-limited on the same clock as _note_ch_failure: a ClickHouse
+        # outage fails every write, and 10k identical lines bury the one that
+        # explains it. The COUNTERS are always exact.
+        now = time.monotonic()
+        if (now - _CH_FAIL_LOG_LAST.get("dlq:" + table, -1e9)) >= CH_FAIL_LOG_EVERY_S:
+            _CH_FAIL_LOG_LAST["dlq:" + table] = now
+            log.warning("clickhouse write SPOOLED to DLQ table=%s reason=%s "
+                        "rows=%d spooled_total=%d ch_code=%s query_id=%s",
+                        table, kind, len(rows),
+                        CH_ROWS_DLQ_SPOOLED.get(table, 0),
+                        (outcome.ch_code if outcome is not None else None) or "-",
+                        (outcome.query_id if outcome is not None else "") or "-")
+        return True
+    _note_table_outcome(table, "lost", len(rows))
+    _note_ch_failure(table, kind,
+                     {**ctx, **(outcome.as_evidence() if outcome is not None else {})})
+    return False
+
+
+# RCA-critical tables: a rejected write here corrupts causality, so it must
+# never advance the Kafka offset silently. These raise CHInsertRejected on a
+# rejected insert, which the consumer's per-event handler turns into a durable
+# quarantine — closing the gap where the ~19 callers that ignored the bool let a
+# rejected write look like success. Reconstructable/best-effort tables keep the
+# bool contract (their source of truth is replayable).
+CH_CRITICAL_TABLES = frozenset({
+    "netops.corr_signals",
+    "netops.corr_objects",
+    "netops.corr_current",
+    "netops.corr_edges",
+    "netops.corr_evidence",
+})
+
+
+class CHInsertRejected(Exception):
+    """A ClickHouse insert to an RCA-critical table was positively rejected.
+
+    Raised (not returned) so it enters the consumer's quarantine path: the
+    payload is preserved durably and the offset is NOT advanced past it. This is
+    the constraint — never acknowledge a source message for a write that neither
+    committed nor was durably kept.
+    """
+
+
+# ── Phase 3 idempotency: per-message dedup coordinate ──────────────────────
+#
+# The RCA-critical tables are plain MergeTree (no content dedup), so a retry of
+# an insert after an UNKNOWN outcome would DUPLICATE causal rows. ClickHouse
+# insert_deduplication_token drops a re-inserted block carrying a token it has
+# seen within the table's non_replicated_deduplication_window (set in init.sql).
+#
+# The token must be STABLE across a retry/redelivery of the same message and
+# UNIQUE per logical insert. The consumer processes messages sequentially
+# (`async for msg: await handle(...)`), so a module-level coordinate set before
+# each handle() is safe without contextvars — there is no interleaving. The
+# per-message sequence disambiguates multiple inserts (same or different tables)
+# from one message; a deterministic handler re-runs them in the same order on
+# redelivery, so the tokens match and ClickHouse dedups.
+_dedup_coord = ""      # "topic:partition:offset" for the message in flight
+_dedup_seq = 0         # monotonic per-message insert counter
+
+
+def set_dedup_coord(topic: str, partition: int, offset: int) -> None:
+    """Called by the consumer before handle(); establishes this message's token base."""
+    global _dedup_coord, _dedup_seq
+    _dedup_coord = f"{topic}:{partition}:{offset}"
+    _dedup_seq = 0
+
+
+def _next_dedup_token(table: str) -> str:
+    """Stable, unique token for the next insert of this message. Empty when there
+    is no coordinate (e.g. a non-consumer write path), leaving dedup off."""
+    global _dedup_seq
+    if not _dedup_coord:
+        return ""
+    tok = f"{_dedup_coord}:{table}:{_dedup_seq}"
+    _dedup_seq += 1
+    return tok
+
+
+async def ch_insert(table: str, rows, *, dedup_token: str | None = None, **ctx) -> bool:
+    """`ch.insert` with the failure actually surfaced (log + counter).
+
+    Transport exceptions are counted and RE-RAISED (the consumer quarantines the
+    event). A REJECTED insert (HTTP 4xx/5xx or an embedded exception) is counted
+    here, and for an RCA-critical table it is RAISED as CHInsertRejected so it
+    too reaches the durable quarantine — a rejected causal write that silently
+    returned False was the F-38 hole on the Python side.
+
+    Phase 3: critical-table inserts carry an insert_deduplication_token derived
+    from the Kafka coordinate, so a retry/redelivery cannot duplicate the row.
+    H13: a caller that is NOT driven by a consumer message (the engine cycle's
+    _persist_snapshot) passes its own naturally-idempotent dedup_token instead —
+    borrowing the consumer coordinate meant a redelivery reset the per-message
+    seq and a NEW object version minted during replay reused an already-seen
+    token, which ClickHouse then silently dropped.
+
+    Tracker 189: a caller that supplies NO token for a natural-keyed table
+    (the four wireless tables, corr_tenant_write_amp) gets `natural_key_token`
+    minted here rather than writing untokened. That is what lets those tables
+    join CH_DEDUP_SAFE_TABLES — for the wireless four the DDL half of the retry
+    proof was already true (ReplacingMergeTree) and only the stable-token half
+    was missing; corr_tenant_write_amp (and corr_signals_archive, which carries
+    its caller-supplied `member_key` instead) got the DDL half in the tracker
+    189 RESIDUAL, a non_replicated_deduplication_window in init.sql plus the
+    idempotent boot-converge ALTER in chschema.CorrSchemaDDL.
+    """
+    assert ch is not None
+    rows = list(rows)
+    if dedup_token:
+        token = dedup_token
+    elif table in CH_CRITICAL_TABLES:
+        # `dedup_token=""` stays an explicit "no token" on the critical tables:
+        # test_persist_retry_166's no-token-means-no-retry guard depends on it,
+        # and the coordinate is only meaningful when a consumer message drives
+        # the write.
+        token = _next_dedup_token(table) if dedup_token is None else ""
+    else:
+        token = natural_key_token(table, rows)
+    # A retry may only be attempted where re-sending cannot duplicate. Two
+    # independent proofs exist, one per failure class:
+    #   * UNKNOWN outcome (kind="transport" — timeout mid-flight, the server
+    #     may have committed): needs a server-side dedup guarantee AND a
+    #     stable token to resend under (CH_DEDUP_SAFE_TABLES). Without both,
+    #     one unknown outcome could turn into two rows. `bool(token)` is the
+    #     half that keeps corr_signals_archive honest: the table is dedup-safe
+    #     by DDL since the tracker 189 residual, but its token is supplied by
+    #     the CALLER (the chunk's member_key), so an untokened archive insert is
+    #     still not retried on an unknown outcome.
+    #   * DEFINITE rejection (kind="rejected" WITH a ClickHouse error code —
+    #     the server answered and refused; our batches are single-block, and
+    #     single-block inserts are atomic, so nothing committed): a re-send
+    #     cannot duplicate on ANY table, dedup-safe or not. Added 2026-08-24
+    #     after a live one-off: a 7-row corr_signals_archive slice lost to a
+    #     transient code-241 memory rejection that one retry would have
+    #     recovered — the table's transport-retry exclusion had been wrongly
+    #     covering definite rejections too, red-gating a green run.
+    idempotent = bool(token) and table in CH_DEDUP_SAFE_TABLES
+
+    def _retry_safe(o: InsertOutcome) -> bool:
+        if o.kind == "rejected" and o.ch_code is not None:
+            return True
+        return idempotent
+    global CH_RETRIES_ATTEMPTED, CH_RETRIES_RECOVERED, CH_RETRIES_EXHAUSTED
+    # At least one ATTEMPT, always: a budget of 0 would mean "never insert",
+    # not "never retry", and would leave `outcome` unset. Clamped HERE and not
+    # only at the env read, so the invariant survives any path that sets the
+    # module global — the `assert` below documents it but is stripped under
+    # `python -O`.
+    attempts = max(1, CORR_CH_RETRY_ATTEMPTS)
+    outcome: InsertOutcome | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            outcome = await _insert_with_outcome(table, rows, token)
+        except Exception as exc:  # blanket on purpose: counted, then re-raised
+            # Tracker 189: the sink raising is still an insert that will not be
+            # attempted again, so it takes the SAME give-up path — durable copy
+            # first, `lost_total` only if that failed. The re-raise is
+            # unchanged: a consumer-driven write also gets its source message
+            # quarantined, and the two copies are not redundant (the DLQ row is
+            # replayable as a row; the message is replayable through the whole
+            # handler). Only reachable on an UNEXPECTED sink failure —
+            # `insert_detailed` turns every httpx.HTTPError into a `transport`
+            # OUTCOME rather than an exception.
+            _ch_give_up(table, rows,
+                        InsertOutcome(committed=False, kind="transport",
+                                      error=type(exc).__name__, rows=len(rows)),
+                        "chinsert",
+                        f"clickhouse sink raised {type(exc).__name__}",
+                        ctx, reason=type(exc).__name__)
+            raise
+        if outcome.committed:
+            _note_table_outcome(table, "flushed", len(rows))
+            if attempt > 1:
+                CH_RETRIES_RECOVERED += 1
+                log.warning("clickhouse insert RECOVERED table=%s attempt=%d rows=%d",
+                            table, attempt, len(rows))
+            break
+        if attempt >= attempts or not _retry_safe(outcome) or not ch_retryable(outcome):
+            break
+        CH_RETRIES_ATTEMPTED += 1
+        _note_table_outcome(table, "retried")
+        delay = ch_retry_delay(attempt)
+        log.warning("clickhouse insert retry table=%s attempt=%d/%d ch_code=%s "
+                    "kind=%s rows=%d backoff=%.2fs",
+                    table, attempt, attempts, outcome.ch_code or "-",
+                    outcome.kind, len(rows), delay)
+        await asyncio.sleep(delay)
+    assert outcome is not None
+    if not outcome.committed:
+        if _retry_safe(outcome) and ch_retryable(outcome):
+            CH_RETRIES_EXHAUSTED += 1
+        # The KIND, not a hard-coded "rejected". A read timeout on an insert
+        # ClickHouse was still committing is an UNKNOWN outcome, not a refusal,
+        # and the two want different operator responses.
+        #
+        # A row this path can no longer retry is either DURABLY KEPT or LOST —
+        # never both, never neither. `_ch_give_up` is where that is decided, for
+        # every give-up path in the module (tracker 189): it spools first and
+        # counts a loss only when nothing was kept.
+        _ch_give_up(table, rows, outcome, "chinsert",
+                    "clickhouse did not commit the insert", ctx)
+        if table in CH_CRITICAL_TABLES:
+            raise CHInsertRejected(
+                f"{table} insert did not commit (kind={outcome.kind or 'rejected'})")
+    # `is False` exactly: CH.insert's contract is a bool, and a test double that
+    # returns None must not be miscounted as a lost write — _insert_with_outcome
+    # preserves that by treating only an explicit False as uncommitted.
+    return outcome.committed
+
+
+# ---------------------------------------------------------------------------
+# Consume-loop ClickHouse batching (perf defect #2).
+#
+# Every consumed event used to await 1–3 SINGLE-ROW corr_signals inserts with
+# wait_end_of_query=1 — a full ClickHouse round-trip per row in the sequential
+# consume loop capped ALL topics at a few hundred events/s and exploded
+# MergeTree parts (TOO_MANY_PARTS → valid signals quarantined). Rows now
+# accumulate per table and flush as ONE insert when a batch reaches
+# CORR_BATCH_MAX_ROWS, ages past CORR_BATCH_MAX_S (background flusher), the
+# total buffered rows hit CORR_BATCH_QUEUE_MAX (bounded queue — the sequential
+# consume loop awaits the flush, which IS the backpressure), on shutdown, and —
+# the at-least-once anchor — ALWAYS before a Kafka offset commit (_commit
+# flushes first; a failed flush aborts the commit, so the supervisor replays
+# from the last committed offset and no acknowledged row can be lost).
+#
+# Failure semantics mirror the per-row path at batch granularity:
+#   * transport failure (outcome UNKNOWN): counted, rows RETAINED for retry,
+#     re-raised — the current event is quarantined (payload kept) and a run of
+#     failures hands the stream back to the supervisor's backoff, exactly as
+#     single-row transport failures did.
+#   * positive rejection: counted, every row of the batch preserved in the
+#     durable dead-letter file (never acknowledge a write that neither
+#     committed nor was durably kept), batch dropped, consumption continues.
+# The dedup token is a content hash of the batch, so a retry of an UNCHANGED
+# retained batch after an unknown outcome dedups instead of duplicating.
+# ---------------------------------------------------------------------------
+
+CORR_BATCH_MAX_ROWS = int(os.environ.get("CORR_BATCH_MAX_ROWS", "500"))
+CORR_BATCH_MAX_S = float(os.environ.get("CORR_BATCH_MAX_S", "2.0"))
+CORR_BATCH_QUEUE_MAX = int(os.environ.get("CORR_BATCH_QUEUE_MAX", "5000"))
+BATCH_FLUSHES = 0            # committed batch inserts (monotonic)
+BATCH_ROWS_FLUSHED = 0       # rows landed through the batcher (monotonic)
+BATCH_ROWS_QUARANTINED = 0   # rows a rejected batch preserved in the DLQ
+BATCH_ROWS_REPLAY_DEDUPED = 0  # redelivered rows dropped by the commit guard
+# tracker 198: rows dropped because an identical identity was ALREADY in the
+# live/parked batch. Usually a true redelivery (correct, idempotent) — but it
+# is also where a signal_id collision between two genuinely DISTINCT events
+# discards evidence, and that used to happen with no trace at all. Counted,
+# never WARNed per row: the honest reading is a RATE, not an incident.
+BATCH_ROWS_IDENTITY_COLLAPSED = 0
+# P1 thrash fix: identities of rows that FLUSHED but whose Kafka offsets have
+# not yet committed. A member ejection between flush and commit redelivers the
+# messages; their handlers re-add the same rows to a FRESH batch whose
+# content-hash token differs from the one that landed — so ClickHouse could
+# not dedup and corr_signals (plain MergeTree) got duplicate causal rows. The
+# guard makes the replayed add a no-op within this process (the dominant
+# thrash case: the supervisor rebuilds the CONSUMER, not the process). Bounded
+# per §9; a successful offset commit clears it (nothing left to replay).
+CORR_BATCH_COMMIT_GUARD_MAX = int(os.environ.get("CORR_BATCH_COMMIT_GUARD_MAX", "100000"))
+
+
+class _TableBatch:
+    __slots__ = ("first_mono", "ids", "rows")
+
+    def __init__(self) -> None:
+        self.rows: list[dict] = []
+        # H12: per-row identities of everything pending for this table. A flush
+        # transport failure RETAINS the rows for retry, then escapes to the
+        # supervisor → consumer restart → Kafka redelivers the uncommitted
+        # messages → their handlers re-add the SAME rows to the still-retained
+        # batch, and the next flush landed both copies (the doubled membership
+        # also changed the content-hash token, so ClickHouse could not dedup).
+        # Keying pending rows by their stable identity (signal_id — Kafka
+        # redelivery regenerates the same deterministic id) makes the replayed
+        # add a no-op: membership is unchanged, so the retry token stays the
+        # one the failed attempt used and server-side dedup still covers the
+        # attempt-actually-landed case.
+        self.ids: set[str] = set()
+        self.first_mono = time.monotonic()
+
+
+class CHBatcher:
+    """Bounded per-table row accumulator for the consume-loop write path."""
+
+    def __init__(self) -> None:
+        self._batches: dict[str, _TableBatch] = {}
+        # H12: a batch whose insert TRANSPORT-failed (outcome unknown) is parked
+        # here and retried with its membership — and therefore its content-hash
+        # token — UNCHANGED. Merging it back into the live batch (the old
+        # front-merge) let rows added while the insert was in flight (the engine
+        # task runs concurrently) change the token, so a first attempt that had
+        # actually landed server-side was re-inserted under a fresh token and
+        # duplicated. At most one parked batch per table: flush retries it
+        # before touching the live batch, and only a successful retry frees the
+        # slot for a newly-failed live batch.
+        self._retry: dict[str, _TableBatch] = {}
+        # Flushed-but-uncommitted row identities per table (see
+        # CORR_BATCH_COMMIT_GUARD_MAX above). OrderedDict as a bounded
+        # insertion-ordered set: oldest identities evict first.
+        self._flushed_uncommitted: dict[str, OrderedDict] = {}
+        self._lock = asyncio.Lock()
+
+    @staticmethod
+    def _row_identity(row: dict) -> str:
+        """Stable per-row identity for replay dedup (H12): the deterministic
+        signal_id when present, else the row content itself — identical
+        replayed content collapses either way, distinct rows never do."""
+        rid = row.get("signal_id")
+        if rid:
+            return str(rid)
+        return hashlib.sha256(
+            json.dumps(row, sort_keys=True, default=str).encode()).hexdigest()
+
+    def pending(self) -> int:
+        return (sum(len(b.rows) for b in self._batches.values())
+                + sum(len(b.rows) for b in self._retry.values()))
+
+    def drop_pending(self) -> int:
+        """Discard buffered rows WITHOUT writing them. Test-hermeticity hook
+        (conftest resets the batcher between tests so one test's unflushed rows
+        can never surface in another test's fake ClickHouse) — production code
+        never drops; it flushes."""
+        n = self.pending()
+        self._batches.clear()
+        self._retry.clear()
+        self._flushed_uncommitted.clear()
+        return n
+
+    def note_committed(self) -> None:
+        """The Kafka offsets covering every flushed row have COMMITTED — no
+        redelivery of them is possible, so the replay guard can forget them.
+        Called by the consumer after each successful offset commit."""
+        self._flushed_uncommitted.clear()
+
+    def due(self, now: float | None = None) -> bool:
+        now = time.monotonic() if now is None else now
+        if self._retry:
+            return True  # a parked batch is always due — its rows are only aging
+        return any(len(b.rows) >= CORR_BATCH_MAX_ROWS
+                   or (now - b.first_mono) >= CORR_BATCH_MAX_S
+                   for b in self._batches.values())
+
+    async def add(self, table: str, row: dict) -> None:
+        global BATCH_ROWS_REPLAY_DEDUPED, BATCH_ROWS_IDENTITY_COLLAPSED
+        b = self._batches.get(table)
+        if b is None:
+            b = self._batches[table] = _TableBatch()
+        rid = self._row_identity(row)
+        parked = self._retry.get(table)
+        if rid in b.ids or (parked is not None and rid in parked.ids):
+            # H12: redelivered row already pending — replay, not new data.
+            # tracker 198: this drop is CORRECT for a redelivery and WRONG for a
+            # native_id collision between two distinct events, and add() cannot
+            # tell the two apart from here. So it is counted rather than judged:
+            # DEBUG plus corr_signal_batch{event="rows_identity_collapsed"}. A
+            # per-row WARN would fire on every ordinary redelivery and train the
+            # operator to ignore the one line that matters.
+            BATCH_ROWS_IDENTITY_COLLAPSED += 1
+            log.debug("batch identity collapse: table=%s identity=%s", table, rid)
+            return
+        if rid in self._flushed_uncommitted.get(table, ()):
+            # Post-flush redelivery (member ejected between flush and commit):
+            # the row already LANDED; re-adding it would re-insert it under a
+            # different batch token and duplicate it (plain MergeTree).
+            BATCH_ROWS_REPLAY_DEDUPED += 1
+            return
+        b.ids.add(rid)
+        b.rows.append(row)
+        if len(b.rows) >= CORR_BATCH_MAX_ROWS or self.pending() >= CORR_BATCH_QUEUE_MAX:
+            await self.flush()
+
+    async def flush(self) -> None:
+        """Flush every pending table batch — a parked retry batch first, and
+        SEPARATELY from the live one, so its content-hash token is byte-stable
+        across the retry (H12). Raises on a transport failure (rows retained);
+        a positive rejection quarantines the rows durably."""
+        async with self._lock:
+            if ch is None:
+                return  # startup/shutdown edge: nothing to write to yet; rows stay
+            for table in sorted(set(self._batches) | set(self._retry)):
+                parked = self._retry.pop(table, None)
+                if parked is not None and parked.rows:
+                    try:
+                        await self._insert_batch(table, parked)
+                    except Exception:  # re-park UNCHANGED → same token next try
+                        self._retry[table] = parked
+                        raise
+                b = self._batches.pop(table, None)
+                if b is None or not b.rows:
+                    continue
+                try:
+                    await self._insert_batch(table, b)
+                except Exception:
+                    # Park with membership (and token) frozen. Rows added while
+                    # this insert was in flight live in the fresh live batch
+                    # add() creates and flush on a later pass — NEVER merged
+                    # into the batch being retried (that changed the token).
+                    self._retry[table] = b
+                    raise
+
+    async def _insert_batch(self, table: str, b: _TableBatch) -> None:
+        """One batch → one insert. Counts every outcome; raises on transport
+        failure (the caller decides where the retained batch lives)."""
+        global BATCH_FLUSHES, BATCH_ROWS_FLUSHED, BATCH_ROWS_QUARANTINED
+        assert ch is not None
+        # Content-hash token: a retry of the SAME retained batch after an
+        # unknown outcome dedups server-side instead of duplicating.
+        # P1: offloaded for a large batch (0.93s at 48k rows) — byte-identical
+        # token either way, so server-side dedup across a retry is unchanged.
+        if len(b.rows) >= CORR_OFFLOAD_MIN_ELEMENTS:
+            token = await _offload(_batch_token, b.rows)
+        else:
+            token = _batch_token(b.rows)
+        global CH_RETRIES_ATTEMPTED, CH_RETRIES_RECOVERED, CH_RETRIES_EXHAUSTED
+        # TRACKER 160 — the delivery contract for one batch:
+        #   committed  -> offsets may advance
+        #   retryable  -> bounded retries with exponential backoff + full jitter,
+        #                 re-sent under the SAME content-hash token so a retry
+        #                 after an unknown outcome dedups server-side instead of
+        #                 duplicating
+        #   permanent, or retries exhausted
+        #              -> every row durably spooled to the dead-letter file WITH
+        #                 the reason, ClickHouse code and query id, and only then
+        #                 may offsets advance
+        #
+        # Before this, a positively-rejected batch was quarantined and the method
+        # RETURNED, so flush() succeeded and the consumer committed. There was no
+        # retry of any kind, and CH.insert folded transport failures into the
+        # same `False`, so a momentary ClickHouse blip permanently removed rows
+        # from corr_signals. Code 241 (MEMORY_LIMIT_EXCEEDED) — the one measured
+        # live on 2026-08-19 — is exactly the transient case that should have
+        # been retried.
+        outcome = None
+        for attempt in range(1, CORR_CH_RETRY_ATTEMPTS + 1):
+            try:
+                outcome = await _insert_with_outcome(table, b.rows, token)
+            except Exception as exc:  # counted, retained by the caller, re-raised
+                _note_ch_failure(table, type(exc).__name__,
+                                 {"batched_rows": len(b.rows)})
+                raise
+            if outcome.committed:
+                if attempt > 1:
+                    CH_RETRIES_RECOVERED += 1
+                    log.warning(
+                        "clickhouse insert RECOVERED table=%s attempt=%d rows=%d",
+                        table, attempt, len(b.rows))
+                break
+            if attempt >= CORR_CH_RETRY_ATTEMPTS or not ch_retryable(outcome):
+                break
+            CH_RETRIES_ATTEMPTED += 1
+            delay = ch_retry_delay(attempt)
+            log.warning("clickhouse insert retry table=%s attempt=%d/%d "
+                        "ch_code=%s kind=%s rows=%d backoff=%.2fs",
+                        table, attempt, CORR_CH_RETRY_ATTEMPTS,
+                        outcome.ch_code or "-", outcome.kind, len(b.rows), delay)
+            await asyncio.sleep(delay)
+        if outcome is not None and not outcome.committed:
+            if ch_retryable(outcome):
+                CH_RETRIES_EXHAUSTED += 1
+            # Spool FIRST, count second — the tracker-189 ordering, so the
+            # per-table outcome series can never say "lost" about rows that are
+            # sitting in the dead-letter file. `_note_ch_failure` stays
+            # unconditional HERE and only here: on this path `lost_total` has
+            # always meant "one batch was given up on", it is what the ladder's
+            # accounting phase gates on for corr_signals, and it is not silent —
+            # `_quarantine_rows` runs on every one of them. (`ch_insert`'s
+            # unbatched path reserves `lost_total` for rows kept NOWHERE; the
+            # two readings are documented at CH_DLQ_ON_LOSS_TABLES.)
+            kept = self._quarantine_rows(table, b.rows, outcome)
+            _note_table_outcome(table, "deadlettered" if kept else "lost",
+                                len(b.rows))
+            _note_ch_failure(table, "rejected", {"batched_rows": len(b.rows),
+                                                 **outcome.as_evidence()})
+            BATCH_ROWS_QUARANTINED += len(b.rows)
+            return
+        BATCH_FLUSHES += 1
+        BATCH_ROWS_FLUSHED += len(b.rows)
+        _note_table_outcome(table, "flushed", len(b.rows))
+        # Remember what landed until its offsets commit (replay guard, §9-bounded).
+        guard = self._flushed_uncommitted.setdefault(table, OrderedDict())
+        for rid in b.ids:
+            guard[rid] = None
+        while len(guard) > CORR_BATCH_COMMIT_GUARD_MAX:
+            guard.popitem(last=False)
+
+    @staticmethod
+    def _quarantine_rows(table: str, rows: list[dict],
+                         outcome: InsertOutcome | None = None) -> bool:
+        """Durably preserve every row of a rejected batch.
+
+        One implementation, shared with the unbatched `ch_insert` give-up path
+        (`_dlq_spool_rows`) — the record shape IS the contract the accounting
+        gate reads, so the two paths must not be able to drift apart.
+
+        Returns whether a copy actually landed ON DISK (tracker 189). The
+        verdict used to be discarded here, which meant the batch path could not
+        tell "spooled" from "spooled nowhere, CORR_DLQ_DIR is unset" and its
+        per-table outcome would have been a guess.
+        """
+        return _dlq_spool_rows(f"chbatch:{table}", table, rows, outcome,
+                               "clickhouse rejected the batched insert")
+
+
+SIGNAL_BATCH = CHBatcher()
+
+
+async def batch_signal(row: dict) -> None:
+    """Enqueue one corr_signals row on the consume-loop batcher (see CHBatcher)."""
+    await SIGNAL_BATCH.add("netops.corr_signals", row)
+
+
+# ── event-loop stall watchdog (P1: make the NEXT blocker self-reporting) ─────
+#
+# The 2026-08-17 regression cost hours of forensics because the platform could
+# not say "the event loop was frozen for 84s" — it had to be inferred from gaps
+# between log lines. aiokafka's heartbeat starving is invisible until the broker
+# ejects the member, by which point the cause is gone. This task samples the
+# loop's own scheduling delay: it sleeps a known interval and measures the
+# overshoot, which IS the time the loop was blocked by something else. Any
+# sample over the threshold is logged (with the size of the stall) and counted,
+# and the counters are on /healthz + /metrics per the GA counter-exposure
+# contract, so a stall becomes an alertable fact instead of an archaeology
+# exercise. Cost: one timer wakeup every CORR_LOOP_LAG_SAMPLE_S.
+# ═══════════════════════════════════════════════════════════════════════════
+# CYCLE-COLLECTOR POLICY (CORR_GC_TUNE, default ON)
+#
+# THE MEASUREMENT that put this here. Chasing the 2026-08-29 storm regression
+# (`corr_loop_lag_max_ms` 114,848) the sizing fix took the storm aggregate's
+# signal-sized serializes off the loop thread, and a residual multi-second
+# stall stayed. It is the CYCLE COLLECTOR, and no `_offload` can move it: a
+# gen-2 collection runs on whichever thread trips the allocation threshold,
+# holds the GIL for the whole sweep, and is sized by the PROCESS heap.
+#
+# Measured on the live-shaped aggregate fixture (950 nodes, 0 edges, 95k
+# signals — test_p2_evidence_batching.storm_aggregate), worst loop-lag sample
+# for one persist+drain:
+#     clean heap, collector on ............................  319 ms
+#     + 3,000,000 retained objects, collector on .......... 1,773 ms
+#     + 3,000,000 retained objects, collector OFF .........   185 ms
+# The engine's own work did not change between those three; the heap did.
+#
+# WHAT THIS DOES, and what it deliberately does not.
+#   * `gc.freeze()` ONCE after startup. Everything alive at that moment — the
+#     catalog, the templates, the config, the module and class objects, the
+#     import graph — is long-lived by construction and moved to the PERMANENT
+#     generation, which no collection scans again. That is the bulk of what a
+#     gen-2 sweep was walking, removed from every future sweep.
+#   * RAISE the thresholds so a full sweep is rare. gen-0 stays frequent and
+#     cheap (young garbage is exactly what reference counting misses least);
+#     the gen-1/gen-2 multipliers are what decide how often the whole heap is
+#     walked. CPython's defaults (700, 10, 10) put a full sweep every ~100
+#     gen-0 cycles, which under a storm building 50k+ row dicts per version is
+#     continuous.
+#   * It NEVER disables the collector. The engine holds real reference cycles
+#     (snapshots ↔ nodes ↔ signals, tasks, exception tracebacks); disabling
+#     collection would trade a bounded pause for an unbounded leak, which is
+#     the resource this process actually runs out of.
+#   * It is OBSERVABLE (§10). `corr_gc_pause_seconds_max` is what makes the
+#     next stall attributable instead of a mystery: a loop-lag spike with a
+#     matching gc pause is the collector, one without is our code.
+CORR_GC_TUNE = os.environ.get("CORR_GC_TUNE", "1").lower() in ("1", "true", "yes")
+# (gen0 allocations, gen1 multiplier, gen2 multiplier). gen-0 at 20,000 net
+# allocations rather than 700: a row-building storm allocates that in
+# milliseconds and each gen-0 sweep is bounded by the young set, not the heap.
+# 50 x 50 means a FULL sweep every 2,500 gen-0 cycles instead of every 100.
+CORR_GC_GEN0 = max(700, int(os.environ.get("CORR_GC_GEN0", "20000")))
+CORR_GC_GEN1 = max(1, int(os.environ.get("CORR_GC_GEN1", "50")))
+CORR_GC_GEN2 = max(1, int(os.environ.get("CORR_GC_GEN2", "50")))
+GC_COLLECTIONS = [0, 0, 0]     # completed collections per generation
+GC_PAUSE_MAX_S = 0.0           # worst single collection, this process
+GC_PAUSE_TOTAL_S = 0.0
+GC_FROZEN_OBJECTS = 0          # what `gc.freeze()` took out of the scan
+_GC_STARTED: dict[int, float] = {}
+_GC_TUNED = False
+
+
+def _gc_probe(phase: str, info: dict) -> None:
+    """Time one collection. Runs INSIDE the collector, on whatever thread
+    tripped it, so it does exactly two dict operations and an arithmetic
+    update — nothing that can allocate much, block, or raise.
+
+    Deliberately NOT locked. A lock taken inside a gc callback is a real
+    deadlock surface (the collecting thread holds the GIL while every other
+    thread is stopped at a bytecode boundary, possibly owning that lock), and
+    a counter that can drop one increment to a thread switch is the cheaper
+    wrong. Read these as "how much, roughly" — the MAX, which is what
+    attributes a stall, is a max of independent writes and cannot be corrupted
+    into a smaller number by a lost update.
+    """
+    global GC_PAUSE_MAX_S, GC_PAUSE_TOTAL_S
+    gen = info.get("generation", 0)
+    if phase == "start":
+        _GC_STARTED[gen] = time.perf_counter()
+        return
+    t0 = _GC_STARTED.pop(gen, None)
+    if t0 is None:
+        return
+    elapsed = time.perf_counter() - t0
+    if 0 <= gen < 3:
+        GC_COLLECTIONS[gen] += 1
+    GC_PAUSE_MAX_S = max(GC_PAUSE_MAX_S, elapsed)
+    GC_PAUSE_TOTAL_S += elapsed
+
+
+def gc_install_probe() -> None:
+    """Register the pause timer. Independent of the tuning: the measurement is
+    worth having even where the policy is off, because 'is the collector the
+    stall?' is the question, and a flag that hides the answer when it is off
+    would make the A/B unreadable."""
+    if _gc_probe not in gc.callbacks:
+        gc.callbacks.append(_gc_probe)
+
+
+def gc_tune_startup() -> None:
+    """Apply the policy ONCE, after warm-up. Idempotent and never fatal.
+
+    Called from `lifespan` after the catalog, config and long-lived state
+    exist — freezing before them would freeze nothing worth freezing, and
+    freezing twice would only re-walk what is already permanent.
+    """
+    global _GC_TUNED, GC_FROZEN_OBJECTS
+    gc_install_probe()
+    if not CORR_GC_TUNE or _GC_TUNED:
+        return
+    _GC_TUNED = True
+    try:
+        # Collect first: everything the boot path built and dropped goes now,
+        # so `freeze` promotes only what is actually still alive.
+        gc.collect()
+        gc.freeze()
+        GC_FROZEN_OBJECTS = gc.get_freeze_count()
+        gc.set_threshold(CORR_GC_GEN0, CORR_GC_GEN1, CORR_GC_GEN2)
+    except Exception:       # never fatal, always observable (§10)
+        log.exception("gc tuning failed — the collector keeps its defaults")
+        return
+    log.info("gc tuned: frozen=%d objects, thresholds=%s (was (700, 10, 10)); "
+             "collector stays ENABLED — see corr_gc_pause_seconds_max",
+             GC_FROZEN_OBJECTS, gc.get_threshold())
+
+
+def gc_stats() -> dict[str, object]:
+    """§10 observable. Zeros, never absent keys, when the policy is off."""
+    return {
+        "tuned": _GC_TUNED,
+        "enabled": gc.isenabled(),
+        "thresholds": list(gc.get_threshold()),
+        "frozen_objects": GC_FROZEN_OBJECTS,
+        "collections": list(GC_COLLECTIONS),
+        "pause_seconds_max": round(GC_PAUSE_MAX_S, 6),
+        "pause_seconds_total": round(GC_PAUSE_TOTAL_S, 6),
+    }
+
+
+CORR_LOOP_LAG_SAMPLE_S = float(os.environ.get("CORR_LOOP_LAG_SAMPLE_S", "0.5"))
+# Default 1s: well under aiokafka's heartbeat_interval_ms (CORR_HEARTBEAT_
+# INTERVAL_MS, 5s) so a stall is reported long before it can threaten the
+# session. The session figure is NOT written here — the warning below quotes
+# CORR_SESSION_TIMEOUT_MS, so raising the knob can never leave the operator
+# reading a stale number in the line that tells them what is at risk.
+CORR_LOOP_LAG_WARN_MS = float(os.environ.get("CORR_LOOP_LAG_WARN_MS", "1000"))
+LOOP_LAG_STALLS = 0        # samples whose lag exceeded the warn threshold
+LOOP_LAG_MAX_MS = 0.0      # worst lag seen this process (gauge)
+LOOP_LAG_LAST_MS = 0.0     # most recent sample (gauge)
+
+
+async def loop_lag_watchdog() -> None:
+    """Measure and report event-loop scheduling delay (see comment above)."""
+    global LOOP_LAG_STALLS, LOOP_LAG_MAX_MS, LOOP_LAG_LAST_MS
+    while True:
+        t0 = time.monotonic()
+        await asyncio.sleep(CORR_LOOP_LAG_SAMPLE_S)
+        lag_ms = (time.monotonic() - t0 - CORR_LOOP_LAG_SAMPLE_S) * 1000.0
+        if lag_ms < 0:
+            lag_ms = 0.0
+        LOOP_LAG_LAST_MS = lag_ms
+        LOOP_LAG_MAX_MS = max(LOOP_LAG_MAX_MS, lag_ms)
+        # Diagnostic heartbeat (no-op unless CORR_DIAG_MEMORY). The stall
+        # detector runs on a plain thread and watches this value: a task cannot
+        # observe the stall that is stopping it from being scheduled.
+        diagnostics.heartbeat()
+        if lag_ms >= CORR_LOOP_LAG_WARN_MS:
+            LOOP_LAG_STALLS += 1
+            log.warning(
+                "event loop STALLED %.0fms (threshold %.0fms, stalls=%d, "
+                "worst=%.0fms) — something synchronous is blocking the loop; "
+                "aiokafka's heartbeat cannot run inside a stall and the broker "
+                "expires the session at %dms",
+                lag_ms, CORR_LOOP_LAG_WARN_MS, LOOP_LAG_STALLS,
+                LOOP_LAG_MAX_MS, CORR_SESSION_TIMEOUT_MS)
+
+
+def diag_app_state() -> dict:
+    """The application-side half of a memory snapshot: what correlation is
+    actually holding, so retained bytes can be attributed to a structure rather
+    than guessed at."""
+    return {
+        "open_objects": len(OPEN_OBJECTS),
+        "window_signals": len(WINDOW_BUFFER),
+        "window_maxlen": WINDOW_BUFFER.maxlen,
+        "retention": retention_state(),
+        "offload": offload_stats(),
+        "event_time_lag_s": round(_event_time_lag_s(), 3),
+        "buffered_ids": len(_BUFFERED_IDS),
+        "pending_batch_rows": SIGNAL_BATCH.pending(),
+        "archive_slice_hashes": len(_ARCHIVE_SLICE_HASH),
+        "series": len(SERIES),
+        "quarantine_ring": len(QUARANTINE),
+        "flow_agg": len(_FLOW_AGG),
+        "syslog_buckets": len(SYSLOG_BUCKET),
+        "observer_cache": len(signals._OBSERVER_CACHE),
+        "cycle_row_cache": len(_CYCLE_ROW_CACHE),
+        "asyncio_tasks": len(asyncio.all_tasks()),
+        "consumer_state": consumer_state(),
+        "assigned_partitions": sum(len(v) for v in CONSUMER_ASSIGNMENT.values()),
+        "loop_lag_last_ms": round(LOOP_LAG_LAST_MS, 1),
+        "loop_lag_max_ms": round(LOOP_LAG_MAX_MS, 1),
+        "loop_lag_stalls": LOOP_LAG_STALLS,
+        "sync": sync_profile(),
+    }
+
+
+async def diag_snapshot_loop() -> None:
+    """Periodic synchronized snapshots, plus threshold-triggered ones as RSS
+    climbs toward the cgroup cap — the interesting samples are the crossings,
+    not the round-numbered intervals.
+
+    Only scheduled when diagnostics are enabled.
+    """
+    every = float(os.environ.get("CORR_DIAG_SNAPSHOT_EVERY_S", "30"))
+    crossed: set[int] = set()
+    cap = _cgroup_mem_max()
+    await asyncio.to_thread(diagnostics.snapshot, "pre-load-baseline",
+                            diag_app_state(), True)
+    while True:
+        await asyncio.sleep(every)
+        state = diag_app_state()
+        label, heavy = "periodic", False
+        if cap:
+            rss = diagnostics._proc_memory().get("rss_bytes", 0)
+            pct = int(rss * 100 / cap) if cap else 0
+            for mark in (85, 90, 95, 99):
+                if pct >= mark and mark not in crossed:
+                    crossed.add(mark)
+                    label, heavy = f"rss-crossed-{mark}pct", True
+                    break
+            state["rss_pct_of_cap"] = pct
+            state["cgroup_max_bytes"] = cap
+        # OFF THE LOOP, always. Even the light path touches /proc and the GC;
+        # the heavy path walks every tracemalloc traceback and was measured at
+        # 39-96s, which is what made the profiler itself the stall in the first
+        # forensic run. Heavy analysis is reserved for threshold crossings.
+        await asyncio.to_thread(diagnostics.snapshot, label, state, heavy)
+
+
+def _cgroup_mem_max() -> int:
+    """The container's memory ceiling, or 0 when it cannot be read."""
+    for path in ("/sys/fs/cgroup/memory.max",
+                 "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            with open(path) as fh:
+                raw = fh.read().strip()
+            return 0 if raw == "max" else int(raw)
+        except (OSError, ValueError):
+            continue
+    return 0
+
+
+async def batch_flush_loop() -> None:
+    """Bounds batch latency to ≤ CORR_BATCH_MAX_S when the bus goes quiet —
+    the consume loop only flushes on traffic/commit, and a trailing burst must
+    not sit buffered until the next event arrives."""
+    while True:
+        await asyncio.sleep(max(CORR_BATCH_MAX_S / 2, 0.25))
+        try:
+            if SIGNAL_BATCH.due():
+                await SIGNAL_BATCH.flush()
+        except Exception as exc:  # noqa: BLE001 — supervisor loop must survive any flush error
+            # Rows are retained; the next tick (or the pre-commit flush) retries.
+            log.debug("batch flush tick failed; retrying next tick: %s", exc)
+            continue
+
 
 # ---------------------------------------------------------------------------
 # Kafka consumer loop.
 # ---------------------------------------------------------------------------
 
 
-async def consume() -> None:
+def _read_from_offset(path: str, off: int) -> tuple[str, int]:
+    """Blocking read of everything after `off`; runs via asyncio.to_thread so a
+    slow/large log file never stalls the event loop (ASYNC230)."""
+    with open(path) as f:
+        f.seek(off)
+        return f.read(), f.tell()
+
+
+async def _scan_cloud_logs() -> int:
+    """Tail every *.alb/*.vpc file in CLOUD_LOGS_DIR from its last byte offset,
+    parse new lines, stamp the configured tenant, and feed the cloud lane. Returns
+    the number of signals fed. Offset-tracked so a re-scan never re-ingests a line;
+    a truncated/rotated file (size < offset) restarts from 0."""
+    fed = 0
+    for path in sorted(glob.glob(os.path.join(CLOUD_LOGS_DIR, "*"))):
+        if not path.endswith((".alb", ".vpc", ".waf", ".dns")):
+            continue
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        off = _cloud_log_offsets.get(path, 0)
+        if size < off:
+            off = 0
+        if size == off:
+            continue
+        try:
+            data, new_off = await asyncio.to_thread(_read_from_offset, path, off)
+            _cloud_log_offsets[path] = new_off
+        except OSError as exc:
+            log.warning("cloud-log read failed %s: %s", path, exc)
+            continue
+        fname = os.path.basename(path)
+        accept_recs: list[dict] = []
+        waf_recs: list[dict] = []
+        dns_recs: list[dict] = []
+        for line in data.splitlines():
+            if fname.endswith(".vpc"):
+                rec = parse_vpc_flow_log(line)
+                if rec is None:
+                    continue
+                if str(rec.get("action") or "").upper() == "ACCEPT":
+                    accept_recs.append(rec)  # volume lane: aggregated below
+                    continue
+                ev = vpc_flow_signal(rec)
+            elif fname.endswith(".waf"):
+                rec = parse_aws_waf_log(line)
+                if rec is not None:
+                    waf_recs.append(rec)  # aggregated below, never per-request
+                continue
+            elif fname.endswith(".dns"):
+                rec = parse_r53_dns_log(line)
+                if rec is not None:
+                    dns_recs.append(rec)  # aggregated below, errors only
+                continue
+            else:
+                ev = cloud_log_event(fname, line)
+            if ev is None:
+                continue
+            ev["tenant_id"] = CLOUD_LOGS_TENANT
+            await handle_cloud(ev)
+            fed += 1
+        # Batch rollups — one signal per aggregation key per scan, never a
+        # per-record firehose (audit P1-6 discipline, applied to every lane):
+        # ACCEPT flows → per-ENI volume + top-K (src,dst) pairs (#9 talks_to
+        # edges); WAF BLOCKs → per (ACL, rule); DNS errors → per (name, rcode).
+        for ev in (vpc_accept_rollup(accept_recs)
+                   + vpc_pair_rollup(accept_recs, CLOUD_FLOW_PAIR_TOP_K)
+                   + waf_block_rollup(waf_recs)
+                   + dns_error_rollup(dns_recs)):
+            ev["tenant_id"] = CLOUD_LOGS_TENANT
+            await handle_cloud(ev)
+            fed += 1
+    return fed
+
+
+async def cloud_log_tailer() -> None:
+    """Supervised P3B file source (§10 — never a silent task death). Disabled unless
+    CLOUD_LOGS_DIR and CLOUD_LOGS_TENANT are both set (default-closed isolation)."""
+    if not CLOUD_LOGS_DIR:
+        return
+    if not CLOUD_LOGS_TENANT:
+        log.warning("CLOUD_LOGS_DIR set but CLOUD_LOGS_TENANT empty — cloud-log ingestion DISABLED (default-closed)")
+        return
+    log.info("cloud-log tailer watching %s (tenant=%s, every %.0fs)", CLOUD_LOGS_DIR, CLOUD_LOGS_TENANT, CLOUD_LOGS_REFRESH_S)
+    skipped_logged = False
+    while True:
+        try:
+            # Scale P0: the tailer is a SINGLETON side-input (files, not the
+            # bus). With --scale correlation=N every replica sees the same
+            # files, so only the replica that owns CLOUD_LOGS_TENANT's
+            # partition may feed them — the same instance whose engine holds
+            # that tenant's state. owns_tenant() fails open before the first
+            # rebalance (single-replica / broker-less dev behavior unchanged).
+            if not owns_tenant(CLOUD_LOGS_TENANT):
+                if not skipped_logged:
+                    skipped_logged = True
+                    log.info("cloud-log tailer idle: tenant %s owned by another "
+                             "replica (co-partitioned scale-out)", CLOUD_LOGS_TENANT)
+                await asyncio.sleep(max(CLOUD_LOGS_REFRESH_S, 5.0))
+                continue
+            skipped_logged = False
+            n = await _scan_cloud_logs()
+            if n:
+                log.info("cloud-log tailer fed %d signal(s)", n)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("cloud-log scan failed; retrying")
+        await asyncio.sleep(max(CLOUD_LOGS_REFRESH_S, 5.0))
+
+
+# Bounds for the consumer supervisor (env-tunable; tests use tiny values).
+# stop() and start() are awaited against a BROKER — when the broker is mid
+# crash-loop either call can hang forever, and an unbounded await turns the
+# "restarting in 1s" promise into a silent permanent wedge (live incident
+# 2026-07-14 19:18Z: handler raised, finally awaited consumer.stop(), stop
+# hung on the churning coordinator, engine consumed NOTHING for 5.5h while
+# the process looked healthy).
+CONSUMER_STOP_TIMEOUT_S = float(os.environ.get("CONSUMER_STOP_TIMEOUT_S", "30"))
+CONSUMER_START_TIMEOUT_S = float(os.environ.get("CONSUMER_START_TIMEOUT_S", "90"))
+# Tracker #126: manual-commit batching. Replay-after-crash is bounded to at
+# most N already-HANDLED messages (dedup tokens absorb the redelivery); an
+# unhandled offset is never committed.
+CORR_COMMIT_EVERY_N = int(os.environ.get("CORR_COMMIT_EVERY_N", "100"))
+CORR_COMMIT_EVERY_S = float(os.environ.get("CORR_COMMIT_EVERY_S", "5"))
+
+# ── Group-membership tuning (P1 max-poll rebalance thrash, 2026-08-16) ──────
+#
+# The G2 mini-ladder measured the failure live: a 24k-event backlog put the
+# consumer in a session-expiry rebalance loop (78x UnknownMemberIdError, 9x
+# CommitFailedError, drain collapsed 1k/s -> ~40/s, lag never drained). The
+# container logs show 17-second event-loop stalls (19:15:34,257 -> 19:15:51,342
+# with ZERO lines between) — longer than aiokafka's 10s session_timeout_ms
+# default, so the broker ejected the member, the next commit raised
+# CommitFailedError, the uncommitted batch replayed, and the loop repeated.
+#
+# The stalls themselves are fixed structurally (run_window in an executor,
+# batched CH writes, the explicit yield cadence below). These values make the
+# session contract honest on top of that fix, with the arithmetic:
+#
+#   * session_timeout 60s / heartbeat 5s (RAISED 2026-08-29 from 30s/3s — run
+#     storm-s03, replica-3): two stalls of 26.0s and 26.8s ejected the member
+#     under the 30s session, i.e. the EFFECTIVE budget was already under the
+#     nominal one — a heartbeat has to survive the round trip as well as the
+#     stall, and a member that is merely SLOW (a 26s quiesce pass is 400 closes
+#     x ~65ms of wall clock, not one 26s block — see `sync_record`) was being
+#     treated as a member that is DEAD. 60s doubles the margin over the worst
+#     measured pass; 5s = session/12, still inside Kafka's <= 1/3 guidance, and
+#     a shorter interval than 3s would only add requests to a loop that is
+#     already saturated when this matters.
+#
+#     THIS CHANGES WHEN A SLOW MEMBER IS EJECTED — NOTHING ELSE. Not one byte,
+#     token, row, version or ordering decision depends on it: the group
+#     contract is transport, the engine's outputs are pure functions of the
+#     frozen snapshot. It buys the engine time; it does not excuse a stall, and
+#     `corr_sync_overruns_total` / `corr_loop_lag_stalls_total` remain the
+#     things that must stay at zero.
+#   * max_poll_interval 300s (explicit, was implicit default): the worst
+#     legitimate gap between polls is one loop iteration = handle() with up to
+#     ~5 direct CH inserts x 10s httpx timeout (wireless lane) + a commit
+#     (flush <= 10s/table + 30s commit bound) ~= 90s << 300s. A gap beyond
+#     that is a real wedge and SHOULD trigger leave + supervisor restart.
+#   * rebalance_timeout 60s: the revoke hook flushes + commits before
+#     partitions move (see _AssignmentLogger); its bound is one batch flush
+#     (<= 10s) + one commit (<= 30s), so 60s covers it with margin.
+CORR_SESSION_TIMEOUT_MS = int(os.environ.get("CORR_SESSION_TIMEOUT_MS", "60000"))
+CORR_HEARTBEAT_INTERVAL_MS = int(os.environ.get("CORR_HEARTBEAT_INTERVAL_MS", "5000"))
+CORR_MAX_POLL_INTERVAL_MS = int(os.environ.get("CORR_MAX_POLL_INTERVAL_MS", "300000"))
+CORR_REBALANCE_TIMEOUT_MS = int(os.environ.get("CORR_REBALANCE_TIMEOUT_MS", "60000"))
+# Budget for the revoke-time flush AND, separately, the revoke-time commit.
+# The revoke callback runs INSIDE the rejoin: time spent there is time the group
+# is not re-forming, so it must be a small fraction of rebalance_timeout (60s),
+# not equal to it. 5s each => worst added rejoin latency ~10s (and a 2x backstop
+# in on_partitions_revoked), i.e. <= 1/6 of the rebalance timeout. Exceeding the
+# flush budget SKIPS the commit rather than extending the callback — F-38 is
+# preserved by not committing, never by waiting longer.
+CORR_REVOKE_BUDGET_S = float(os.environ.get("CORR_REVOKE_BUDGET_S", "5"))
+# Cooperative poll cadence: aiokafka's fetcher returns already-buffered records
+# WITHOUT yielding to the event loop (fetcher.next_record's fast path), and a
+# handler whose awaits all complete synchronously (CH batcher below its flush
+# thresholds) never yields either — so under a backlog the consume task could
+# monopolize the loop between commit-triggered flushes and starve the heartbeat
+# task. Force a loop yield every N messages: N=20 x <=10ms/event worst-case
+# sync handler CPU = <=200ms between yields << heartbeat 3s << session 30s.
+CORR_CONSUME_YIELD_EVERY_N = int(os.environ.get("CORR_CONSUME_YIELD_EVERY_N", "20"))
+
+
+async def _stop_bounded(consumer) -> None:
+    """Stop a consumer without letting a hung broker wedge the supervisor.
+    On timeout the old consumer is ABANDONED (its group member times out
+    broker-side); a fresh consumer replaces it. Never raises."""
+    try:
+        await asyncio.wait_for(consumer.stop(), timeout=CONSUMER_STOP_TIMEOUT_S)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.exception("consumer stop failed/timed out — abandoning old consumer")
+
+
+# ── poison-event quarantine (the per-EVENT half of the supervisor) ───────────
+#
+# The supervisor below survives a poison BATCH, but until an unexpected
+# exception in one handler (a TypeError on an unforeseen field shape, a
+# ClickHouse transport error) tore down the consumer for ALL ten topics: the
+# batch in flight was lost, the offending payload was never recorded, and the
+# only evidence was a stack trace. A single malformed producer could therefore
+# stop every evidence lane in the engine.
+#
+# Now one event's failure costs exactly that event: it is counted per topic,
+# logged (rate-limited), and its PAYLOAD is preserved so the defect can be
+# reproduced — in a bounded in-memory ring always, and appended to a
+# dead-letter NDJSON file when CORR_DLQ_DIR is configured.
+CORR_QUARANTINE_MAX = int(os.environ.get("CORR_QUARANTINE_MAX", "200"))
+CORR_QUARANTINE_PAYLOAD_CHARS = int(os.environ.get("CORR_QUARANTINE_PAYLOAD_CHARS", "4000"))
+CORR_DLQ_DIR = os.environ.get("CORR_DLQ_DIR", "")
+CORR_DLQ_MAX_BYTES = int(os.environ.get("CORR_DLQ_MAX_BYTES", str(32 * 1024 * 1024)))
+QUARANTINE: deque[dict] = deque(maxlen=CORR_QUARANTINE_MAX)
+HANDLER_FAILURES: dict[str, int] = {}   # topic -> events lost to a handler error
+QUARANTINE_WRITE_FAILURES = 0
+QUARANTINE_ROTATIONS = 0
+_DLQ_UNSET_WARNED = False
+_QUARANTINE_LOG_LAST: dict[str, float] = {}
+QUARANTINE_LOG_EVERY_S = float(os.environ.get("CORR_QUARANTINE_LOG_EVERY_S", "30"))
+# Consecutive handler failures that mean "the dependency is down", not "one
+# poison event" — the consumer then restarts through the supervisor's backoff
+# instead of quarantining the whole stream at full consume rate.
+CORR_QUARANTINE_BURST_MAX = int(os.environ.get("CORR_QUARANTINE_BURST_MAX", "100"))
+
+
+def dlq_startup_check() -> None:
+    """Fail fast at BOOT when CORR_DLQ_DIR is configured but not writable.
+
+    The runtime write path (`_dlq_append`) deliberately never raises — the
+    quarantine must not kill the consumer over one bad write. But that policy
+    made a *permanently* unwritable DLQ invisible: the 2026-08 scale test lost
+    238k dead-lettered payloads because the bind-mount source was owned by the
+    wrong uid (root-created), every append failed, and the service kept
+    starting and advancing offsets anyway. Durability that is configured but
+    cannot work is a misconfiguration, and misconfigurations refuse to boot
+    (same posture as the partial-TLS check above): probe the exact runtime
+    write path once at startup and raise with the precise remedy.
+
+    Unset CORR_DLQ_DIR is untouched — memory-only quarantine remains a legal
+    (warned-about) posture; see `_dlq_append`.
+    """
+    if not CORR_DLQ_DIR:
+        return
+    path = os.path.join(CORR_DLQ_DIR, "corr-deadletter.ndjson")
+    try:
+        os.makedirs(CORR_DLQ_DIR, exist_ok=True)
+        # Open the real dead-letter file for append — the exact operation
+        # every quarantined payload needs — and fsync so a lying filesystem
+        # (full/read-only remount) fails here, not at the first drop.
+        with open(path, "a", encoding="utf-8") as f:
+            f.flush()
+            os.fsync(f.fileno())
+    except OSError as exc:
+        raise RuntimeError(
+            f"CORR_DLQ_DIR={CORR_DLQ_DIR!r} is configured but NOT writable by "
+            f"this process (uid={os.getuid()} gid={os.getgid()}): "
+            f"{type(exc).__name__}: {exc}. Refusing to start: every "
+            "dead-lettered payload would be silently lost while offsets "
+            "advance. Fix the ownership of the HOST directory bind-mounted at "
+            f"{CORR_DLQ_DIR} (compose default: data/correlation/deadletter) "
+            f"and restart:\n"
+            f"    sudo chown -R {os.getuid()}:{os.getgid()} "
+            "data/correlation/deadletter\n"
+            "or rerun scripts/install.py, which repairs data/ ownership."
+        ) from exc
+    log.info("CORR_DLQ_DIR=%s verified writable at startup", CORR_DLQ_DIR)
+
+
+# DLQ WRITE PATH — measured during the 2026-08-17 P1 investigation and
+# DELIBERATELY LEFT SYNCHRONOUS. On the live volume the per-record syscall
+# pattern (makedirs + getsize + open/append/close) costs p50 102us / p99 429us
+# / max 7.1ms, i.e. a ~7.5k records/s ceiling; at the ladder's 1784/s
+# mass-refusal rate that is ~18% of the event loop, with multi-ms hitches. It
+# is real, but it is O(1) PER RECORD — bounded independently of backlog, fleet
+# size and object size — so it cannot produce the 30-400s stalls that caused
+# the rebalance loop (those were the per-object graph serializations above).
+#
+# Batching it behind an off-loop flush was prototyped and rejected for now: it
+# trades the immediate-durability property that seven durability tests and the
+# 238k-lost-payload incident (dlq_startup_check) are built on for a saving that
+# is not on the critical path. If corr_loop_lag_stalls_total ever implicates
+# this path, the loop-lag watchdog will say so with a number, and THEN it is
+# worth its own change. See docs/scale-correlation.md.
+def _dlq_append(record: dict) -> None:
+    """Append one quarantined event to the on-disk dead-letter file.
+
+    Bounded by CORR_DLQ_MAX_BYTES so a poison producer can never fill the volume.
+    At the cap the file ROTATES (one .1 kept) rather than silently dropping — the
+    previous version just `return`ed with no counter, which is the accept-and-
+    ignore defect (F-38) reappearing inside the safety net that exists to catch
+    it. A dropped dead-letter is a lost payload with nothing to say so.
+
+    A write failure is counted (QUARANTINE_WRITE_FAILURES, a scraped metric),
+    never raised: quarantine must not itself become the failure that kills the
+    consumer.
+    """
+    global QUARANTINE_WRITE_FAILURES, QUARANTINE_ROTATIONS
+    if not CORR_DLQ_DIR:
+        # Memory-only quarantine (ring buffer) is NOT durable across a restart.
+        # In a deployment that means an RCA-critical payload can be lost when the
+        # offset has already auto-committed. Surface it once so the operational
+        # posture is visible rather than assumed. See the compose default.
+        global _DLQ_UNSET_WARNED
+        if not _DLQ_UNSET_WARNED:
+            _DLQ_UNSET_WARNED = True
+            log.warning("CORR_DLQ_DIR unset — quarantine is in-memory only and "
+                        "does NOT survive a restart; set it to a durable volume")
+        return
+    path = os.path.join(CORR_DLQ_DIR, "corr-deadletter.ndjson")
+    try:
+        os.makedirs(CORR_DLQ_DIR, exist_ok=True)
+        try:
+            if os.path.getsize(path) >= CORR_DLQ_MAX_BYTES:
+                # Rotate: keep exactly one prior generation. Retains the most
+                # recent 2×CAP of evidence instead of freezing at CAP and
+                # dropping everything after — silently.
+                os.replace(path, path + ".1")
+                QUARANTINE_ROTATIONS += 1
+                log.warning("dead-letter file hit %d bytes — rotated to .1 "
+                            "(rotations=%d)", CORR_DLQ_MAX_BYTES, QUARANTINE_ROTATIONS)
+        except OSError:
+            pass
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+    except (OSError, TypeError, ValueError) as exc:
+        QUARANTINE_WRITE_FAILURES += 1
+        log.error("dead-letter write failed (total=%d): %s",
+                  QUARANTINE_WRITE_FAILURES, type(exc).__name__)
+
+
+def _dlq_spool_rows(topic: str, table: str, rows: list[dict],
+                    outcome: InsertOutcome | None, error: str) -> bool:
+    """Durably preserve every row of an insert that will not be attempted again.
+
+    ONE DLQ record per row (each independently replayable) plus ONE ring summary
+    — the 200-slot ring must not be wiped by a single 500-row batch.
+
+    Each record carries a `reason` and the ClickHouse verdict (tracker 160).
+    Without a reason these records were unclassifiable: the mini-ladder
+    accounting gate could only lump them in with benign tenant refusals, so 95
+    genuinely lost signals read as background noise. `payload_truncated` is
+    stated explicitly rather than left to be discovered — a silently truncated
+    payload is not replayable, and a record that claims recoverability it does
+    not have is worse than one that admits the gap.
+
+    Returns True only when a copy actually landed ON DISK: `_dlq_append` never
+    raises (quarantine must not become the failure that kills the consumer), so
+    the two ways it can quietly keep nothing — CORR_DLQ_DIR unset (memory-only
+    ring, gone at restart) and a write failure — are detected here and reported
+    to the caller, which then counts the rows as genuinely LOST instead. A
+    "durably kept" claim that is not true is exactly the 238k-lost-payload
+    incident dlq_startup_check exists for.
+    """
+    ts = datetime.now(timezone.utc).isoformat()
+    ev = outcome.as_evidence() if outcome is not None else {}
+    reason = ("ch_insert_rejected" if (outcome is None or outcome.kind == "rejected")
+              else f"ch_insert_{outcome.kind}")
+    before = QUARANTINE_WRITE_FAILURES
+    for r in rows:
+        full = json.dumps(r, default=str)
+        payload = full[:CORR_QUARANTINE_PAYLOAD_CHARS]
+        _dlq_append({
+            "ts": ts,
+            "topic": topic,
+            "reason": reason,
+            "table": table,
+            "ch": ev,
+            "retries_exhausted": bool(outcome is not None and ch_retryable(outcome)),
+            "payload_truncated": len(full) > CORR_QUARANTINE_PAYLOAD_CHARS,
+            "error": error,
+            "payload": payload,
+        })
+    QUARANTINE.append({
+        "ts": ts,
+        "topic": topic,
+        "error": f"{error} — {len(rows)} rows preserved in the durable "
+                 f"dead-letter file",
+        "payload": "",
+    })
+    durable = bool(CORR_DLQ_DIR) and QUARANTINE_WRITE_FAILURES == before
+    if durable:
+        CH_ROWS_DLQ_SPOOLED[table] = CH_ROWS_DLQ_SPOOLED.get(table, 0) + len(rows)
+    return durable
+
+
+def _quarantine_record(topic: str, event: object, exc: BaseException) -> dict:
+    """Build + store one quarantine record (ring + optional on-disk NDJSON)."""
+    if isinstance(exc, TenantClaimRefused) and exc.reason == "identity_unattributable":
+        # F-11 (INV-F11-10): a registry-MISS event is sealed by the ROUTER's
+        # quarantine stage. Keeping its body here — in the /deadletters ring
+        # AND the durable corr-deadletter.ndjson — would be a second, PLAINTEXT
+        # durable copy of what the router just encrypted: the exact
+        # confidentiality downgrade the owner invariant forbids. Store metadata
+        # plus the identity's sha256 only (the SAME digest the router envelope
+        # carries as identity_sha, so an operator can join the two records and
+        # feed /api/quarantine/reattribute). Never the event body, and never
+        # the plaintext identity (D2: hostname deliberately not kept). Every
+        # other dead-letter class keeps its payload for forensics, unchanged.
+        record = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "topic": topic,
+            "lane": exc.lane,
+            "reason": exc.reason,
+            "identity_sha": hashlib.sha256(
+                exc.identity.encode("utf-8", "replace")).hexdigest(),
+            "error": "TenantClaimRefused: identity_unattributable "
+                     "(payload withheld — the router's sealed quarantine holds it; F-11)",
+        }
+        QUARANTINE.append(record)
+        _dlq_append(record)
+        return record
+    if isinstance(event, (bytes, bytearray)):
+        # Raw wire bytes — a payload that failed to DECODE. Keep them as text
+        # (errors="replace": a mangled byte becomes U+FFFD, nothing is dropped)
+        # rather than a b'...' repr, so the poison record stays greppable and
+        # can be replayed from the dead-letter file.
+        payload = bytes(event).decode("utf-8", "replace")[:CORR_QUARANTINE_PAYLOAD_CHARS]
+    else:
+        try:
+            payload = json.dumps(event, default=str)[:CORR_QUARANTINE_PAYLOAD_CHARS]
+        except (TypeError, ValueError):
+            payload = repr(event)[:CORR_QUARANTINE_PAYLOAD_CHARS]
+    record = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "topic": topic,
+        "error": f"{type(exc).__name__}: {exc}"[:500],
+        "payload": payload,
+    }
+    QUARANTINE.append(record)
+    _dlq_append(record)
+    return record
+
+
+def keep_deadletter_payload(lane: str, event: object, exc: BaseException) -> None:
+    """Preserve a dead-lettered payload for inspection.
+
+    DeadLetter is caught at 8 sites; each counted it and logged the exception
+    MESSAGE, then dropped the event — so the record that provoked it could never
+    be looked at, and "why did this device's traps stop becoming signals" was
+    unanswerable. Counting stays with DEADLETTER_COUNT at the call site; this
+    only keeps the evidence.
+    """
+    _quarantine_record(f"deadletter:{lane}", event, exc)
+
+
+def quarantine_event(topic: str, event: object, exc: BaseException) -> None:
+    """Record one event whose handler raised: count it, keep the payload, log."""
+    HANDLER_FAILURES[topic] = HANDLER_FAILURES.get(topic, 0) + 1
+    _quarantine_record(topic, event, exc)
+    now = time.monotonic()
+    if (now - _QUARANTINE_LOG_LAST.get(topic, -1e9)) >= QUARANTINE_LOG_EVERY_S:
+        _QUARANTINE_LOG_LAST[topic] = now
+        log.exception("event QUARANTINED topic=%s lost_total=%d (payload kept, "
+                      "consumer continues)", topic, HANDLER_FAILURES[topic],
+                      exc_info=exc)
+
+
+# ── horizontal scale: tenant-keyed co-partitioning (scale P0) ────────────────
+#
+# THE CONTRACT: every producer onto the consumed topics (the 12 lane topics
+# plus whatever CORR_EVIDENCE_TOPICS subscribes to) keys each record by
+# the tenant the engine will attribute it to (fallback "global"), using the
+# Java-compatible murmur2 partitioner (Vector sinks: librdkafka
+# `murmur2_random`; cloud-ingest: kafka-python's default murmur2; flows are
+# re-keyed by vector-router — goflow2 itself cannot key by tenant). With every
+# topic created at the SAME partition count (kafka-init `BUS_PARTITIONS`) and
+# the RANGE assignor below, instance k of `docker compose up --scale
+# correlation=N` owns partition k of EVERY topic — a complete, disjoint slice
+# of tenants with worker-local state (Kafka-Streams-style co-partitioned
+# tasks). The engine core is tenant-partitioned (run_window refuses a
+# mixed-tenant window), so N slices produce the union a single instance would,
+# below the capacity caps (WINDOW_BUFFER / series LRU budgets are per-process
+# — see docs/scale-correlation.md).
+#
+# aiokafka's DEFAULT assignor is RoundRobin, which spreads TopicPartitions
+# round-robin over members — partition k of topic A and partition k of topic B
+# can land on DIFFERENT members, silently breaking tenant stickiness. Range
+# assigns each topic's partition list contiguously over the same sorted member
+# list, so equal partition counts ⇒ member i owns partition set i of every
+# topic. Pinned here and by test_scale_copartition.py.
+
+CONSUMER_ASSIGNMENT: dict[str, list[int]] = {}   # topic -> owned partitions (last rebalance)
+CONSUMER_PARTITION_TOTALS: dict[str, int] = {}   # topic -> total partitions (broker metadata)
+CONSUMER_REBALANCES = 0                          # monotonic; /healthz + logs
+CONSUMER_REVOKE_COMMITS = 0                      # revoke-hook flush+commit landed
+CONSUMER_REVOKE_COMMIT_FAILURES = 0              # revoke-hook could not commit (replay-safe)
+# Rebalances that assigned this instance ZERO partitions. Distinct from "no
+# rebalance yet": a member that JOINED and got nothing is a misconfiguration
+# (more replicas than BUS_PARTITIONS — the range assignor leaves the surplus
+# empty) and contributes no throughput forever. Before this counter both states
+# serialized to `{}` on /healthz and the idle replica looked healthy.
+CONSUMER_ZERO_ASSIGNMENTS = 0
+# Has an assignment callback ever run? The state machine below must NOT infer
+# this from `CONSUMER_REBALANCES > 0` — that is racy (the counter is bumped
+# inside the callback) and cannot express the cold-window state at all.
+CONSUMER_ASSIGNMENT_SEEN = False
+# "topic:partition" -> monotonic clock when THIS replica first acquired it.
+# Retained partitions keep their original timestamp across a rebalance; released
+# ones are dropped. Feeds the cold-window state (see consumer_state).
+CONSUMER_PARTITION_ACQUIRED_AT: dict[str, float] = {}
+# Revokes where the pre-hand-off flush did NOT finish inside its budget, so the
+# hook returned WITHOUT committing (F-38: an uncommitted offset is replayed and
+# dedup absorbs it). Rising = rebalances are landing on a slow ClickHouse.
+CONSUMER_REVOKE_SKIPPED = 0
+
+# ── subscription liveness + optional-lane resolution (2026-09-02) ────────────
+#
+# `CONSUMER_RUNNING` is the ONE fact /healthz was missing during the 3h outage:
+# the process was up, the loop was looping, the payload said "ok", and nothing
+# in it distinguished "consuming" from "failing start() every 60s". It is set
+# only between a SUCCESSFUL start() and the end of that supervision round.
+CONSUMER_RUNNING = False
+CONSUMER_STARTS = 0                 # successful consumer.start() calls
+CONSUMER_START_FAILURES = 0         # start() raised (bad broker, missing REQUIRED topic)
+CONSUMER_RESTARTS = 0               # supervision rounds that ended in a failure
+CONSUMER_LAST_ERROR = ""            # "<ExcType>: <topic-or-detail>", never a payload
+# What the LIVE consumer actually holds — REQUIRED_TOPICS plus whichever
+# optional lanes resolved. Distinct from TOPICS (what is DECLARED): the gap
+# between the two is the thing that has to be visible.
+SUBSCRIBED_TOPICS: list[str] = list(TOPICS)
+# topic -> "absent" | "unauthorized" | "unreachable". A GA-contract dict
+# counter (name ends in _DROPPED): it is surfaced on /healthz and as the
+# `corr_evidence_topic_dropped` gauge, so a lane that is NOT grounded can never
+# be a silence.
+EVIDENCE_TOPICS_DROPPED: dict[str, str] = {}
+EVIDENCE_TOPIC_REPROBES = 0         # bounded re-probe passes over the dropped set
+EVIDENCE_TOPIC_RESUBSCRIBES = 0     # re-probes that recovered a lane (no restart)
+
+# Bounds for the metadata probe and its retry cadence (§9: all IO has a
+# timeout; all retries are backed off + jittered).
+CORR_TOPIC_PROBE_TIMEOUT_S = float(os.environ.get("CORR_TOPIC_PROBE_TIMEOUT_S", "15"))
+CORR_EVIDENCE_REPROBE_S = float(os.environ.get("CORR_EVIDENCE_REPROBE_S", "90"))
+# +/- fraction applied to the re-probe period. Jittered so N replicas do not
+# hit the coordinator's metadata path in lockstep every period.
+CORR_EVIDENCE_REPROBE_JITTER = 0.25
+
+
+def classify_topic_metadata(topics: Iterable[str], known: Iterable[str],
+                            unauthorized: Iterable[str]) -> dict[str, str]:
+    """PURE: `topic -> reason` for every topic that CANNOT be subscribed.
+
+    A topic that is present and authorized is simply absent from the result.
+    `unauthorized` wins over `absent` because a broker that denies Describe
+    also reports no partitions — calling that "absent" would send an operator
+    to `kafka-topics --create` for an ACL problem (the 2026-08-16 shape).
+    Pure, so the reason mapping is testable with no broker at all."""
+    unauth = set(unauthorized)
+    have = set(known)
+    out: dict[str, str] = {}
+    for topic in topics:
+        if topic in unauth:
+            out[topic] = "unauthorized"
+        elif topic not in have:
+            out[topic] = "absent"
+    return out
+
+
+async def probe_topics(consumer: AIOKafkaConsumer, topics: Sequence[str], *,
+                       timeout: float) -> dict[str, str]:
+    """Resolve `topics` against CLUSTER METADATA; return the un-subscribable
+    ones as `topic -> reason` (see classify_topic_metadata).
+
+    This is deliberately the same metadata that `consumer.start()` consults —
+    `AIOKafkaClient.cluster.partitions_for_topic` / `.unauthorized_topics`,
+    which `_wait_on_metadata` raises from — so the verdict here and the verdict
+    start() would have reached can never disagree. It costs ONE metadata round
+    trip for the whole set, instead of `_wait_on_metadata`'s per-topic
+    request-timeout wait on an absent topic.
+
+    Bounded by `timeout` (§9). Raises only if the metadata refresh itself
+    fails; the caller decides what an unreachable broker means."""
+    if not topics:
+        return {}
+    client = consumer._client  # the consumer's own client, same object start() uses
+    # add_topic() puts each name in the tracked set so the NEXT metadata
+    # request asks the broker about it BY NAME — which is what makes an
+    # unauthorized topic reportable at all (a "give me everything" request
+    # simply omits topics the principal cannot Describe).
+    pending = [client.add_topic(topic) for topic in topics]
+    await asyncio.wait_for(
+        asyncio.gather(*pending, client.force_metadata_update()), timeout=timeout)
+    cluster = client.cluster
+    known = [t for t in topics if cluster.partitions_for_topic(t)]
+    return classify_topic_metadata(topics, known, set(cluster.unauthorized_topics))
+
+
+def _topic_failure_reason(exc: BaseException) -> str:
+    """Map a start()-time failure onto the same vocabulary the probe uses, so
+    the REQUIRED fail-loud line and the OPTIONAL drop line read alike."""
+    name = type(exc).__name__
+    if name == "TopicAuthorizationFailedError":
+        return "unauthorized"
+    if name == "UnknownTopicOrPartitionError":
+        return "absent"
+    return "unreachable"
+
+
+async def _log_required_topic_failure(consumer: AIOKafkaConsumer,
+                                      exc: BaseException) -> None:
+    """Name WHICH required topic failed and WHY, then let the caller re-raise.
+
+    aiokafka's `_wait_on_metadata` raises `UnknownTopicOrPartitionError()` with
+    no arguments at all, and `TopicAuthorizationFailedError(topic)` whose repr
+    the supervisor's traceback did not surface — so the 3h outage's logs said
+    only that A topic was missing. We re-resolve the required set (bounded,
+    best-effort) so the line names the topic and the remedy. NEVER raises: a
+    diagnostic must not replace the failure it is diagnosing."""
+    reason = _topic_failure_reason(exc)
+    named: dict[str, str] = {}
+    try:
+        named = await probe_topics(consumer, tuple(REQUIRED_TOPICS),
+                                   timeout=CORR_TOPIC_PROBE_TIMEOUT_S)
+    except asyncio.CancelledError:
+        raise
+    except Exception as probe_exc:  # noqa: BLE001 — diagnosis is best-effort
+        log.warning("could not resolve WHICH required topic failed (%s); the "
+                    "start() error is reported unqualified below",
+                    type(probe_exc).__name__)
+    if named:
+        for topic, why in sorted(named.items()):
+            log.error(
+                "REQUIRED lane unavailable: topic=%s reason=%s lane=required "
+                "— the engine consumes NOTHING until this is fixed. absent: "
+                "run the kafka-init job (BUS_PARTITIONS) or create the topic; "
+                "unauthorized: grant the correlation principal Read "
+                "(deployment/docker/kafka/apply-acls.sh)", topic, why)
+    else:
+        log.error("consumer.start() failed with %s (reason=%s) but every "
+                  "required topic resolves — treating it as a broker/transport "
+                  "fault: %s", type(exc).__name__, reason, exc)
+
+
+def _record_start_failure(exc: BaseException) -> None:
+    """One place that stamps the supervisor's failure state for /healthz."""
+    global CONSUMER_START_FAILURES, CONSUMER_LAST_ERROR
+    CONSUMER_START_FAILURES += 1
+    CONSUMER_LAST_ERROR = f"{type(exc).__name__}: {_topic_failure_reason(exc)}"
+
+
+async def resolve_optional_lanes(consumer: AIOKafkaConsumer,
+                                 listener: ConsumerRebalanceListener | None,
+                                 ) -> list[str]:
+    """Resolve the OPTIONAL lanes against the broker and subscribe to the ones
+    that are grounded. Returns the topic list the consumer now holds.
+
+    Called AFTER a successful start() on the REQUIRED set, which is the whole
+    point: whatever this finds, the required lanes are already consuming. A
+    metadata refresh that itself fails degrades to "drop them all this round" —
+    the re-probe loop picks them back up — because the alternative is the
+    defect being fixed here (an optional lane deciding whether the engine runs).
+    """
+    global EVIDENCE_TOPIC_RESUBSCRIBES
+    dropped: dict[str, str] = {}
+    if OPTIONAL_TOPICS:
+        try:
+            dropped = await probe_topics(consumer, OPTIONAL_TOPICS,
+                                         timeout=CORR_TOPIC_PROBE_TIMEOUT_S)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — never fatal to the required lanes
+            dropped = {t: "unreachable" for t in OPTIONAL_TOPICS}
+            log.warning("optional-lane metadata probe failed (%s) — every "
+                        "optional lane is dropped for this round and re-probed "
+                        "in ~%.0fs", type(exc).__name__, CORR_EVIDENCE_REPROBE_S)
+    _note_dropped_lanes(dropped)
+    subscribed = list(REQUIRED_TOPICS) + [t for t in OPTIONAL_TOPICS if t not in dropped]
+    SUBSCRIBED_TOPICS[:] = subscribed
+    if len(subscribed) > len(REQUIRED_TOPICS):
+        # Only re-subscribe when there is something to ADD: with every optional
+        # lane dropped the required-only subscription start() already
+        # established is exactly right, and a needless subscribe() would cost
+        # the group a rebalance at every restart.
+        consumer.subscribe(topics=subscribed, listener=listener)
+        EVIDENCE_TOPIC_RESUBSCRIBES += 1
+    return subscribed
+
+
+def _note_dropped_lanes(dropped: Mapping[str, str]) -> None:
+    """Publish the drop set: ONE structured error line per newly dropped topic,
+    plus the /healthz + /metrics state. Re-logging an ALREADY-dropped topic on
+    every re-probe would turn a standing condition into log spam, so a topic is
+    announced when it is dropped and again only if its REASON changes."""
+    for topic, reason in sorted(dropped.items()):
+        if EVIDENCE_TOPICS_DROPPED.get(topic) == reason:
+            continue
+        log.error(
+            "optional lane DROPPED from the subscription: topic=%s reason=%s "
+            "lane=evidence — evidence lane NOT grounded (nothing on this topic "
+            "reaches correlation). The required lanes are UNAFFECTED and "
+            "consuming; the topic is re-probed every ~%.0fs and subscribed "
+            "without a restart the moment it appears. absent: the lane's "
+            "producer is off or the topic was never created; unauthorized: "
+            "grant the correlation principal Read "
+            "(deployment/docker/kafka/apply-acls.sh)",
+            topic, reason, CORR_EVIDENCE_REPROBE_S)
+    for topic in [t for t in EVIDENCE_TOPICS_DROPPED if t not in dropped]:
+        log.info("optional lane RECOVERED: topic=%s — re-subscribed without a "
+                 "restart; the evidence lane is grounded again", topic)
+        del EVIDENCE_TOPICS_DROPPED[topic]
+    EVIDENCE_TOPICS_DROPPED.update(dropped)
+
+
+def _reprobe_delay(rnd=None) -> float:
+    """The jittered re-probe period (§9). Injectable RNG so the cadence is
+    assertable, exactly like `ch_retry_delay`."""
+    import random as _random
+    jitter = CORR_EVIDENCE_REPROBE_JITTER
+    draw = (rnd or _random.random)()
+    return max(1.0, CORR_EVIDENCE_REPROBE_S * (1.0 + (2.0 * draw - 1.0) * jitter))
+
+
+async def evidence_reprobe_loop(consumer: AIOKafkaConsumer,
+                                listener: ConsumerRebalanceListener | None,
+                                ) -> None:
+    """Bounded, jittered re-probe of the DROPPED optional lanes.
+
+    The half that makes the drop recoverable: a security lane enabled at 14:00
+    must start grounding at ~14:01, not at the next restart of a service that
+    has no reason to restart. Never raises into the supervisor — a failed probe
+    is logged and retried on the next tick (§10)."""
+    global EVIDENCE_TOPIC_REPROBES, EVIDENCE_TOPIC_RESUBSCRIBES
+    while True:
+        await asyncio.sleep(_reprobe_delay())
+        pending = tuple(sorted(EVIDENCE_TOPICS_DROPPED))
+        if not pending:
+            continue
+        EVIDENCE_TOPIC_REPROBES += 1
+        try:
+            still = await probe_topics(consumer, pending,
+                                       timeout=CORR_TOPIC_PROBE_TIMEOUT_S)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — the consumer must not die for this
+            log.warning("optional-lane re-probe failed (%s); retrying in ~%.0fs",
+                        type(exc).__name__, CORR_EVIDENCE_REPROBE_S)
+            continue
+        if still == {t: EVIDENCE_TOPICS_DROPPED[t] for t in pending}:
+            continue                              # nothing moved
+        _note_dropped_lanes(still)
+        subscribed = list(REQUIRED_TOPICS) + [
+            t for t in OPTIONAL_TOPICS if t not in EVIDENCE_TOPICS_DROPPED]
+        if subscribed == SUBSCRIBED_TOPICS:
+            continue
+        SUBSCRIBED_TOPICS[:] = subscribed
+        EVIDENCE_TOPIC_RESUBSCRIBES += 1
+        log.info("re-subscribing after an optional-lane change: topics=%s "
+                 "(dropped=%s)", subscribed, dict(sorted(EVIDENCE_TOPICS_DROPPED.items())))
+        consumer.subscribe(topics=subscribed, listener=listener)
+
+
+def tenant_partition(tenant: str, num_partitions: int) -> int:
+    """The partition a tenant's records land on — mirrors every producer's
+    keying (Java murmur2 on the UTF-8 tenant key, positive-masked, mod N).
+    The single source of truth for 'which instance owns tenant T'."""
+    key = (tenant or "global").encode("utf-8")
+    return (murmur2(key) & 0x7FFFFFFF) % max(1, int(num_partitions))
+
+# ── Tracker 155: DURABLE CONTINUATION SEEDING ON PARTITION ASSIGNMENT ────────
+#
+# THE MEASURED FAILURE (run ownership-155a-08302235, 2026-08-30; three move
+# arms: restart, restart-keep, exit/join). Across an ordinary rebalance
+# NOTHING DURABLE IS LOST — 0 offset rewinds, 0 duplicate signals, evidence
+# conserved. What breaks is IDENTITY. `correlation_id` is
+# `uuid5(tenant, earliest-node.key, onset_ms)`, derived from the ACQUIRING
+# replica's in-memory window, and that window starts empty for a partition it
+# just acquired. So the same in-flight incident re-keys under a NEW id: one
+# incident becomes N+1 fragments and the pre-move object freezes at its last
+# version, orphaned. Detection and specificity stayed 1.00 on every arm while
+# the positive-story pass rate went 1.00 -> 0.00: the RCA is right, the object
+# it lands on is a stranger.
+#
+# THE FIX — RECONSTRUCT IDENTITY, NOT STATE. On assignment the acquiring
+# replica loads the still-OPEN objects of the tenants whose partitions it just
+# acquired and registers an IDENTITY PLACEHOLDER for each: correlation_id,
+# tenant, window, version and blast radius, and nothing else. Arriving evidence
+# then ADOPTS that identity through the SAME machinery an in-process re-key
+# uses — a direct `OPEN_OBJECTS` hit when the refilled window re-derives the
+# same id, or `find_continuation` when it does not — and the object continues
+# under its ORIGINAL id with new versions.
+#
+# WHAT A PLACEHOLDER IS NOT. It carries no verdict, no hypotheses, no edges and
+# no signals, because this replica never saw them. It is therefore NEVER
+# persisted: see `_seed_only`. Until evidence adopts it, it is an entry in the
+# continuation index and nothing more.
+#
+# WHY THIS IS SAFE TO RUN OFF THE REBALANCE CALLBACK. `on_partitions_assigned`
+# executes INSIDE the rejoin, so time spent there is time the group is not
+# re-forming — the same budget `on_partitions_revoked` is already tightly bound
+# by (CORR_REVOKE_BUDGET_S). The seed therefore does ZERO work in the callback:
+# it schedules a task and returns. The task's deadline is the COLD WINDOW
+# (RETENTION_REQUIRED_S, the same constant `consumer_state` reports on), because
+# until the sliding window refills there is no evidence for a seeded identity to
+# be adopted by; finishing anywhere inside that window is as good as finishing
+# instantly.
+#
+# FAIL-OPEN, ALWAYS. ClickHouse unreachable, slow, or answering nonsense at
+# assignment time is counted (`corr_ownership_seed_failures_total`) and logged,
+# and the replica proceeds EXACTLY as it does today: new ids for in-flight
+# incidents. Fragmentation, never an outage.
+#
+# ── WHAT THE LIVE VALIDATION FOUND (run ownership-155b-08310318, 2026-08-31) ──
+#
+# The mechanism above ran exactly as designed and the incident STILL fragmented.
+# Every acquiring replica seeded (5/5/9/13 placeholders, 75-96 ms, 0 failures, 0
+# fabricated rows), and the positive-story pass rate stayed 0.00 on both
+# disturbed arms. Three defects, all measured, all fixed here:
+#
+#   D1 PLACEHOLDER WINDOW FROZEN. The placeholder's match window was the durable
+#      row's `[window_start, window_end]`, but that end is only the last WRITTEN
+#      evidence time of a still-OPEN incident — the acquiring replica's own
+#      snapshots begin AFTER it (measured gaps 10.1 / 18.0 / 35.4 s), so
+#      `_windows_overlap` never admitted the placeholder: 1 adoption in 32, and
+#      that one only because a window_start exactly EQUALLED a window_end.
+#      Fixed by `ObjectSnapshot.match_slack_s` + CORR_OWNERSHIP_SEED_SLACK_S.
+#
+#   D2 TRANSIENT/REVOKED OWNER WRITES. In the restart arm c4 held the partitions
+#      ~5 s during the bounce, adopted a placeholder, and persisted a thin 3-node
+#      `suspected` v7 NINETEEN SECONDS AFTER revoking them; corr_current's
+#      latest-write-wins then demoted a confirmed 9-node v6. Fixed in both
+#      halves: `_seed_discard_revoked` (revoke drops unadopted placeholders) and
+#      the ownership guard, which at that point covered only D2b — an adopted
+#      seed's FIRST version required the partition to still be owned. See the
+#      155-completion block below for why that scoping was not enough and what
+#      `_ownership_persist_guard` asks now.
+#
+#   D3 VERDICT DEMOTION DURING REFILL. Even on the CORRECT owner, the first
+#      post-adoption persist recomputes from a partially-refilled window and can
+#      publish a weaker tier than the durable row it continues (confirmed ->
+#      suspected). Fixed by `_seed_verdict_floor`: an expiring, seed-scoped
+#      FLOOR at the durable tier, with the recomputation declared in the
+#      version's own bytes.
+#
+# All three are scoped to seed-DESCENDED objects and all three EXPIRE. Nothing
+# about an ordinary object's matching, ownership or verdict changes.
+
+# Master switch. On by default: the failure it repairs is live in every
+# multi-replica deployment (the lab runs 2) and the fallback is today's
+# behaviour, so there is nothing to stage behind a flag.
+CORR_OWNERSHIP_SEED = os.environ.get(
+    "CORR_OWNERSHIP_SEED", "1").strip().lower() not in ("0", "false", "no", "off")
+# HOW MANY objects one assignment may seed. Justified from the live population,
+# not chosen: the storm rig measured 463 open objects live with a 1,385 epoch
+# PEAK on one replica, and the 155a arms saw 479 open at the moment of the move.
+# 2,000 is ~1.4x the measured whole-replica peak — and a replica only seeds the
+# tenants of the partitions it JUST acquired, which is a subset of a replica's
+# population except in the one case that matters most (the last surviving
+# replica taking everything). It sits below CORR_OPEN_OBJECTS_MAX (5,000) so a
+# seed can never by itself present the 163 cap with a population it must
+# immediately shed.
+CORR_OWNERSHIP_SEED_MAX = int(os.environ.get("CORR_OWNERSHIP_SEED_MAX", "2000"))
+# HOW FAR BACK to look, derived from the code's own lifecycle constants rather
+# than picked: an object still OPEN in a live replica has been seen within
+# CORR_QUIESCE_S (else quiesce closed it), and the durable write that proves it
+# trails that by at most one engine window (RETENTION_REQUIRED_S — the engine's
+# own statement of how far back evidence can still attach). Anything older is an
+# object the previous owner would itself have closed.
+CORR_OWNERSHIP_SEED_HORIZON_S = float(os.environ.get(
+    "CORR_OWNERSHIP_SEED_HORIZON_S", str(CORR_QUIESCE_S + RETENTION_REQUIRED_S)))
+# ── Tracker 155b (D1 + D3): THE COLD-WINDOW BRIDGE ───────────────────────────
+#
+# One constant, two uses, because they are the SAME interval measured from the
+# same statement: RETENTION_REQUIRED_S is the engine's own answer to "how far
+# back can evidence still attach to this window", i.e. exactly how long the
+# acquiring replica needs before its window is refilled.
+#
+#   (D1) MATCHING. `corr_current.window_end` is the last WRITTEN evidence time
+#        of a still-OPEN incident, not the incident's end — but `_seed_register`
+#        froze the placeholder there, and the acquiring replica's first snapshot
+#        necessarily begins AFTER it (the cold window is spent refilling). So
+#        `_windows_overlap` never admitted the placeholder as a continuation
+#        candidate: run ownership-155b-08310318 measured gaps of 10.1 / 18.0 /
+#        35.4 s and 1 adoption in 32 placeholders, that one only via an
+#        inclusive-boundary touch. A placeholder's MATCH window (never its
+#        persisted window — a placeholder is never persisted) is therefore
+#        extended by this slack; live-object matching is untouched.
+#
+#   (D3) VERDICT FLOOR HORIZON. The first post-adoption persist recomputes from
+#        the same partially-refilled window, so it can publish a WEAKER tier
+#        than the durable row it continues (155b measured confirmed -> suspected
+#        demoting the current row). The floor holds for exactly this interval
+#        after adoption and then expires — after it, recomputation rules
+#        unconditionally, because a genuine recovery must be able to downgrade.
+#
+# Derived from RETENTION_REQUIRED_S rather than chosen, so an operator who
+# re-times the engine window re-times the bridge with it and cannot leave a gap.
+CORR_OWNERSHIP_SEED_SLACK_S = max(0.0, float(os.environ.get(
+    "CORR_OWNERSHIP_SEED_SLACK_S", str(RETENTION_REQUIRED_S))))
+# Per-QUERY bound (§9: all IO has a timeout). Two attempts with jittered
+# backoff, then give up and fail open — the seed is best-effort by contract.
+CORR_OWNERSHIP_SEED_TIMEOUT_S = float(
+    os.environ.get("CORR_OWNERSHIP_SEED_TIMEOUT_S", "10"))
+CORR_OWNERSHIP_SEED_ATTEMPTS = max(
+    1, int(os.environ.get("CORR_OWNERSHIP_SEED_ATTEMPTS", "2")))
+# Bound on the tenant-discovery probe. Tenant IDs only — never rows.
+CORR_OWNERSHIP_SEED_TENANTS_MAX = int(
+    os.environ.get("CORR_OWNERSHIP_SEED_TENANTS_MAX", "512"))
+# An object whose blast radius exceeds this is SKIPPED, not truncated. A
+# truncated entity set would feed `find_continuation` a Jaccard computed on a
+# mangled identity, which can only produce a WRONG adoption; skipping produces
+# today's behaviour. In practice this only excludes the per-tenant storm-noise
+# aggregate (922 entities on the live run), whose identity is re-derived every
+# cycle anyway. It is also what bounds the seed's memory: at most
+# CORR_OWNERSHIP_SEED_MAX x this many entity strings.
+CORR_OWNERSHIP_SEED_ENTITIES_MAX = int(
+    os.environ.get("CORR_OWNERSHIP_SEED_ENTITIES_MAX", "1000"))
+
+OWNERSHIP_SEED_RUNS_TOTAL = 0        # assignments that ran a seed
+OWNERSHIP_SEEDED_OBJECTS_TOTAL = 0   # identity placeholders registered
+OWNERSHIP_ADOPTIONS_TOTAL = 0        # arriving evidence that adopted one
+OWNERSHIP_SEED_FAILURES_TOTAL = 0    # seeds that fell back to today's behaviour
+OWNERSHIP_SEED_SKIPPED_TOTAL = 0     # open objects the seed did NOT register
+OWNERSHIP_SEED_EXPIRED_TOTAL = 0     # placeholders dropped unadopted
+# Tracker 155b D2a: placeholders discarded because their partition was REVOKED.
+OWNERSHIP_SEED_REVOKED_TOTAL = 0
+# Tracker 155b D2b: adopted seeds dropped BEFORE their first version because the
+# tenant's partition was no longer owned at persist time.
+OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL = 0
+# Tracker 155b D3: published versions whose verdict tier was carried from the
+# durable row across the handoff (the recomputation was weaker, window not yet
+# refilled).
+OWNERSHIP_SEED_VERDICT_CARRIED_TOTAL = 0
+_OWNERSHIP_SEED_TASK: asyncio.Task | None = None
+
+# ── Tracker 155 (COMPLETION): STATE FOLLOWS PARTITION OWNERSHIP ──────────────
+#
+# 931efffb reconstructed IDENTITY on the acquiring side and 557dbef7 stopped a
+# transient owner's FIRST post-adoption version. Run ownership-155c-08311027
+# then measured the half neither covered: THE OLD OWNER STILL WRITING FOR
+# PARTITIONS IT HAD LOST. Two mechanisms, both from the same root — a
+# registration outlives the partition its tenant lives on:
+#
+#   F1 (restart arm). c5 held the partitions ~10 s during the bounce and MINTED
+#      A FRESH OBJECT (3eec17dd) for the story's entities 13 s AFTER revoking
+#      them: the consume/reconcile cycle that was already in flight when the
+#      revoke landed simply ran to completion and registered a new object for a
+#      tenant that had moved. The story then had two objects (3eec17dd v1 and
+#      the true owner's 9cd24b21) and `single_incident` failed.
+#
+#   F2 (exit/join arm). c5 had ADOPTED a placeholder and persisted v6, which
+#      disarms `seed_pending_first_persist` — so 557dbef7's D2b guard, scoped to
+#      the FIRST version, no longer applied, and D2a discards only UNADOPTED
+#      placeholders. c5 therefore kept the live object and continued it every
+#      30 s for six minutes on a partition it no longer owned, writing a
+#      DUPLICATE (correlation_id, version) = (b0f0fd7f, 7) whose content
+#      differed from the true owner's v7. corr_current is
+#      ReplacingMergeTree(created_at) latest-write-wins, so the ORPHAN became
+#      the current row: `seam_owner` wrong, durability assertion 8 failed.
+#
+# THE RULE, and it is now general rather than seed-scoped: A REGISTRATION MAY
+# ONLY LIVE, AND MAY ONLY WRITE, WHILE THIS REPLICA OWNS THE PARTITION ITS
+# TENANT HASHES ONTO. Three mechanisms enforce it, in the order they fire:
+#
+#   1. FLUSH-AND-RELEASE (`_handoff_flush` at revoke, `_release_lost_partitions`
+#      at assignment). The departing owner persists a final OPEN version of each
+#      affected object's current snapshot — a HANDOFF, not a close — and then
+#      forgets the registration if the partition does not come back.
+#   2. PERSIST-TIME OWNERSHIP GUARD (`_ownership_persist_guard`), on EVERY
+#      object and EVERY persist, open or terminal. This is what catches an
+#      in-flight cycle that completes after the move (F2's mechanism, and F1's
+#      13 s window for an object that already existed).
+#   3. NEW-OBJECT ADMISSION GUARD (`_ownership_admission_guard`), where objects
+#      enter OPEN_OBJECTS. This is what catches F1's fresh mint.
+#
+# Objects flushed at revoke (a final open version, freshest state to the new
+# owner).
+OWNERSHIP_HANDOFF_FLUSHED_TOTAL = 0
+# Objects on a revoked partition that could NOT be flushed inside
+# CORR_REVOKE_BUDGET_S (or with no ClickHouse to flush to). They are released
+# anyway — see `_handoff_flush` for the residue bound that costs.
+OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL = 0
+# Registrations forgotten because the assignment did not give the partition
+# back.
+OWNERSHIP_HANDOFF_RELEASED_TOTAL = 0
+# Persists refused (and the registration dropped) because the tenant's partition
+# is not owned at persist time. The general form of D2b; 155b's
+# seed-first-version counter above is now the labelled subset of this one.
+OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL = 0
+# New objects a cycle tried to REGISTER for a tenant whose partition is not
+# owned — F1's fresh mint.
+OWNERSHIP_UNOWNED_ADMISSION_DROPPED_TOTAL = 0
+# Partitions revoked but not yet resolved: the assignment callback releases the
+# ones it did not get back. Mutated in place (never rebound) so both callbacks
+# see the same object.
+_OWNERSHIP_PENDING_RELEASE: set[int] = set()
+# Rate limit for the admission guard's INFO line: buffered evidence for a
+# departed tenant keeps producing snapshots until it ages out of the window
+# (RETENTION_REQUIRED_S), so the guard fires repeatedly by design and must not
+# flood the log. The COUNTER is exact; only the line is throttled.
+_OWNERSHIP_ADMISSION_LOG_LAST = 0.0
+
+# The `kind` a placeholder's reconstructed nodes carry. Distinct on purpose: it
+# is never a real signal kind, so a placeholder node can never be mistaken for
+# one the engine built, in a log line or in a dump.
+_SEED_NODE_KIND = "ownership_seed"
+# Buckets of `ObjectSnapshot.affected()` -> the EntityType that produced them.
+# The EXACT inverse of the `bucket` map in engine.ObjectSnapshot.affected; a
+# type that map skips (it skips unmapped ones deliberately) is not
+# reconstructable here either, and such an object is skipped rather than seeded
+# with a partial identity.
+_SEED_BUCKET_TYPE: dict[str, EntityType] = {
+    "devices": EntityType.DEVICE,
+    "interfaces": EntityType.INTERFACE,
+    "sites": EntityType.SITE,
+    "paths": EntityType.PATH,
+    "segments": EntityType.SEGMENT,
+    "services": EntityType.SERVICE,
+    "prefixes": EntityType.PREFIX,
+    "apps": EntityType.APP,
+    "cloud_resources": EntityType.CLOUD_RESOURCE,
+}
+# A placeholder asserts NO verdict. `undetermined` is a first-class result in
+# this engine, and it is the only honest one for an object whose reasoning this
+# replica never performed. Never rendered (a placeholder is never persisted);
+# present because ObjectSnapshot requires a ranking.
+_SEED_RANKING = RankingResult(
+    top_hypothesis="undetermined", verdict_tier=VerdictTier.UNDETERMINED,
+    hypotheses=(), evidence_missing=(), catalog_version="")
+# Tracker 155b D3: the tier ORDER, spelled once. It mirrors the ClickHouse
+# Enum8 in init.sql ('undetermined'=0,'suspected'=1,'confirmed'=2), which is
+# what makes "weaker than the durable row" the same statement in the engine and
+# in the store. `.get(..., 0)` everywhere, so an unknown tier is the weakest and
+# can never be used to floor anything up.
+_VERDICT_RANK: dict[VerdictTier, int] = {
+    VerdictTier.UNDETERMINED: 0,
+    VerdictTier.SUSPECTED: 1,
+    VerdictTier.CONFIRMED: 2,
+}
+# Tenant ids are opaque platform ids (`t_…`, or the canonical "global"). They
+# are interpolated into SQL, so they are validated against an explicit charset
+# first — `ch.query` posts raw SQL and ClickHouse honours backslash escapes, so
+# quote-stripping alone would not be safe (the same reasoning as /findings).
+_TENANT_SAFE_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
+
+
+def _seed_safe_tenant(t: str) -> bool:
+    """Is this tenant id safe to interpolate into the seed's SQL? Empty is
+    allowed (the legacy platform-global spelling; `canon_tenant` maps it to
+    "global" for the partition computation) and carries no metacharacters."""
+    return len(t) <= 128 and set(t) <= _TENANT_SAFE_CHARS
+
+
+def _seed_int(v: object, default: int = 0) -> int:
+    """ClickHouse's JSON format quotes 64-bit integers, so a column can arrive
+    as `int` or as `str` depending on its width. Never trust either (§3)."""
+    if isinstance(v, bool):        # bool is an int; a flag is not a count
+        return default
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str):
+        try:
+            return int(v)
+        except ValueError:
+            return default
+    return default
+
+
+def _seed_dt(ms: object) -> datetime | None:
+    """A DateTime64(3) column read as epoch milliseconds -> aware UTC."""
+    v = _seed_int(ms, -1)
+    if v < 0:
+        return None
+    try:
+        return datetime.fromtimestamp(v / 1000.0, timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _seed_snapshot(tenant: str, cid: str, window_start: datetime,
+                   window_end: datetime,
+                   affected: Mapping[str, object]) -> ObjectSnapshot | None:
+    """The IDENTITY-ONLY snapshot a placeholder stands on.
+
+    It reconstructs exactly what the continuation predicate reads and nothing
+    else: tenant (the §3a guard), the [window_start, window_end] interval
+    (`_windows_overlap`) and the node ENTITY SET (`_entity_ids`, the Jaccard).
+    Edges and seams are empty, so `grounded_seam_ids()` is empty and the
+    seam-bridge clause of the admission algebra is inert for a placeholder — a
+    placeholder can be adopted on entity overlap alone, never on a bridge it
+    has no grounded edge to justify.
+
+    The entity set is recovered from `corr_objects.affected`, which IS the
+    per-bucket projection of node identity (engine.ObjectSnapshot.affected).
+    One documented imprecision: `affected()` also names apps fused in from
+    `app_impact()` that were never graph nodes, so the reconstructed set can be
+    a strict SUPERSET of the real node set. A superset only ever LOWERS the
+    Jaccard against an arriving snapshot, so the error direction is
+    "occasionally fails to adopt" — today's behaviour — never a false adoption.
+
+    Returns None when no entity is reconstructable (an object built entirely
+    from entity types `affected()` does not bucket) or when the radius exceeds
+    CORR_OWNERSHIP_SEED_ENTITIES_MAX: both are skipped rather than seeded with a
+    partial identity that would be scored as if it were whole.
+    """
+    nodes: list[Node] = []
+    for bucket, etype in _SEED_BUCKET_TYPE.items():
+        members = affected.get(bucket)
+        if not isinstance(members, list):
+            continue
+        for raw in members:
+            if not isinstance(raw, str) or not raw:
+                continue
+            if len(nodes) >= CORR_OWNERSHIP_SEED_ENTITIES_MAX:
+                return None
+            nodes.append(Node(
+                key=f"{etype.value}:{raw}:{_SEED_NODE_KIND}", entity_type=etype,
+                entity_id=raw, kind=_SEED_NODE_KIND, signals=(),
+                onset=window_start, onset_uncertainty_s=0.0,
+                peak_severity=Severity.INFO))
+    if not nodes:
+        return None
+    nodes.sort(key=lambda n: n.key)
+    return ObjectSnapshot(
+        correlation_id=cid, tenant_id=tenant, window_start=window_start,
+        window_end=window_end, trigger_signal="", nodes=tuple(nodes), edges=(),
+        ranking=_SEED_RANKING, seams=(), engine_ver="", topology_version="",
+        gap_hints=0,
+        # Tracker 155b D1. `window_end` stays the DURABLE value — this is an
+        # identity reconstruction and it may not misreport the row it was built
+        # from. What is extended is only what `_windows_overlap` matches
+        # against, and only for this placeholder: see
+        # CORR_OWNERSHIP_SEED_SLACK_S and engine._match_window_end.
+        match_slack_s=CORR_OWNERSHIP_SEED_SLACK_S)
+
+
+def _seed_only(reg: dict) -> bool:
+    """Is this registration a seeded identity placeholder no evidence has
+    adopted yet?
+
+    Such a registration holds an object's IDENTITY and nothing else, so it must
+    never be PERSISTED: a terminal version rendered from a placeholder would
+    publish an empty verdict over the real one the previous owner left behind —
+    strictly worse than the fragmentation this change exists to remove. The
+    three terminal paths (lifecycle merge, quiesce, the 163 cap) therefore DROP
+    an unadopted placeholder instead of closing it, counted
+    (`corr_ownership_seed_expired_total`) and never silent. Its durable row is
+    left exactly as the previous owner wrote it.
+
+    This is also the whole of the tracker-187 interaction: a placeholder takes
+    none of the three terminal paths, so it contributes no `_affected_final`
+    union and cannot weaken the monotone invariant. Once ADOPTED the flag is
+    gone and the object is an ordinary open object on every path — with its
+    AffectedHistory pre-seeded from the pre-handoff radius, which is what makes
+    187's union span the handoff instead of restarting at it.
+    """
+    return bool(reg.get("seed_only"))
+
+
+def _forget_object(cid: str) -> None:
+    """Remove ONE correlation_id from every structure this process keys by it.
+
+    THE ENUMERATION, read off the code rather than remembered — every per-object
+    structure in this module, and for each one either the removal or the proof
+    that it needs none:
+
+      * `OPEN_OBJECTS`                 — the registration itself. REMOVED here.
+      * `_ARCHIVE_SLICE_HASH`          — cid -> last archived slice id-hash, a
+                                         process-lifetime dict. REMOVED here
+                                         (leaving it would also leak, one entry
+                                         per object, forever).
+      * `_LIFECYCLE_SEEN_WINDOW`       — P2 step 4a's cross-epoch deque of the
+                                         last K cohorts' `seen` sets. DISCARDED
+                                         here. It is already inert by
+                                         construction (`_epoch_lifecycle` builds
+                                         survivors as
+                                         `[OPEN_OBJECTS[c] ... if c in
+                                         OPEN_OBJECTS]`), but discarding costs
+                                         O(K) set operations and removes the
+                                         class of reasoning entirely: a released
+                                         id can never again be offered to
+                                         `find_merges` as a merge TARGET.
+      * `_EngineEpoch.seen`            — the epoch's union of cohort `seen` sets
+                                         (P1 change H). NOT reachable from here
+                                         (the epoch is a local of
+                                         `_drain_epoch_sweep`/`engine_cycle`) and
+                                         NOT needed: quiesce and the 163 cap
+                                         iterate OPEN_OBJECTS and consult `seen`
+                                         only as a skip set, and the merge pass
+                                         filters through OPEN_OBJECTS as above.
+                                         A stale id in it is a no-op.
+      * `_cont_buckets` / `cont_index` — the tracker-162 continuation index.
+                                         REBUILT from OPEN_OBJECTS at the top of
+                                         every cohort, so removal from
+                                         OPEN_OBJECTS IS the removal from it.
+      * tracker 192's epoch structures — `_EngineEpoch.serial`,
+                                         `.live_keys`, `.memos`, and the carried
+                                         edge cache `_TENANT_EDGES` are keyed by
+                                         TENANT and NODE KEY, never by
+                                         correlation_id, so an object's removal
+                                         has nothing to remove there. (A whole
+                                         tenant leaving is a different question,
+                                         deliberately out of scope: the edge
+                                         cache is bounded and ages out by its own
+                                         staleness filter.)
+      * `AffectedHistory` (tracker 187)— lives INSIDE the registration dict, so
+                                         it is released with it.
+      * `WINDOW_BUFFER` / `_BUFFERED_*`— keyed by SIGNAL, not by object. Left
+                                         alone on purpose: the buffered evidence
+                                         of a departed tenant ages out of the
+                                         window on its own, and the admission
+                                         guard is what stops it re-minting an
+                                         object in the meantime.
+    """
+    OPEN_OBJECTS.pop(cid, None)
+    _ARCHIVE_SLICE_HASH.pop(cid, None)
+    for _seen in _LIFECYCLE_SEEN_WINDOW:
+        _seen.discard(cid)
+
+
+def _seed_expire(cid: str, why: str) -> None:
+    """Drop an unadopted placeholder. Counted, never a persisted version."""
+    global OWNERSHIP_SEED_EXPIRED_TOTAL
+    OWNERSHIP_SEED_EXPIRED_TOTAL += 1
+    _forget_object(cid)
+    log.debug("ownership seed %s expired unadopted (%s) — durable row untouched",
+              cid[:8], why)
+
+
+def _seed_adopted(reg: dict, cid: str, now: datetime) -> None:
+    """Arriving evidence has adopted a seeded identity: this is the whole point
+    of the change, so it is INFO, not debug.
+
+    Adoption also arms the two tracker-155b guards, both of which are scoped to
+    seed-DESCENDED objects and both of which expire:
+
+      * `seed_pending_first_persist` — this object has adopted a durable
+        identity but has not yet written a version of its own. Until it does,
+        `_ownership_persist_guard` refuses to let it persist on a partition this
+        replica no longer owns (155b D2b: a transient owner wrote a thin v7
+        NINETEEN SECONDS after revoking the partition and, by corr_current
+        latest-write-wins, demoted the confirmed v6 it continued).
+      * `verdict_floor` — the durable row's tier + top hypothesis, held as a
+        FLOOR until the window has refilled (155b D3). See
+        `_seed_verdict_floor`.
+    """
+    global OWNERSHIP_ADOPTIONS_TOTAL
+    tier = reg.pop("seed_tier", None)
+    hypothesis = reg.pop("seed_hypothesis", "")
+    if not reg.pop("seed_only", False):
+        return
+    OWNERSHIP_ADOPTIONS_TOTAL += 1
+    reg["seed_pending_first_persist"] = True
+    # UNDETERMINED is the bottom tier — flooring with it can never change a
+    # published row, so it is not armed at all (no state, no expiry to reason
+    # about).
+    if isinstance(tier, VerdictTier) and tier is not VerdictTier.UNDETERMINED:
+        reg["verdict_floor"] = tier
+        reg["verdict_floor_hypothesis"] = hypothesis
+        # Epoch SECONDS, not a datetime: the module's `datetime` is a patch
+        # point (the tests substitute a fixed clock), so an `isinstance`
+        # narrowing against it would silently disarm the floor under a
+        # subclassed clock. A float has no such ambiguity.
+        reg["verdict_floor_until"] = now.timestamp() + CORR_OWNERSHIP_SEED_SLACK_S
+    log.info("corr-object %s identity ADOPTED across partition handoff "
+             "(tracker 155: continues at v%d under its original id, no fragment)",
+             cid[:8], reg["version"] + 1)
+
+
+def _seed_partition_total(default: int = 0) -> int:
+    """How many partitions the bus topics carry, as this replica last saw them.
+
+    The same derivation `_seed_owned_tenants` uses — the maximum across the
+    topics it holds a total for — so "which partition does tenant T live on" is
+    answered identically wherever it is asked.
+    """
+    return max((n for t in TOPICS
+                if (n := CONSUMER_PARTITION_TOTALS.get(t)) is not None),
+               default=default)
+
+
+def _seed_tenant_owned(tenant: str) -> bool:
+    """Does this replica still own the partition `tenant`'s records land on?
+
+    Reuses `tenant_partition` — the single source of truth for "which instance
+    owns tenant T", the same function the seed itself scopes its query with —
+    against the assignment the last rebalance callback recorded.
+
+    DEFAULT-OPEN ONLY WHERE THERE IS NO KNOWLEDGE TO BE DEFAULT-CLOSED ABOUT: a
+    process that has never had an assignment callback (single-process dev, a
+    direct unit invocation, a broker-less run) has no partitions to lose and no
+    rebalance can have taken any away, so it answers True and behaves exactly as
+    HEAD does. Once an assignment HAS been seen, the answer is the assignment.
+    """
+    if not CONSUMER_ASSIGNMENT_SEEN:
+        return True
+    total = _seed_partition_total()
+    if total <= 0:
+        return True
+    part = tenant_partition(canon_tenant(tenant), total)
+    return any(part in parts for parts in CONSUMER_ASSIGNMENT.values())
+
+
+def _seed_discard_revoked(revoked_partitions: frozenset[int]) -> int:
+    """Tracker 155b D2a: drop the identity placeholders of REVOKED partitions.
+
+    A placeholder is a promise to continue an incident THIS replica owns. The
+    moment its partition moves away, the promise belongs to another replica —
+    and keeping it is not neutral: 155b measured a replica that held partitions
+    for ~5 s during a bounce, adopted a placeholder it had seeded, and persisted
+    a thin 3-node `suspected` version 19 s AFTER revoking the partition, which
+    corr_current's latest-write-wins then made the current row over a confirmed
+    9-node version. Discarding here removes the adoption path entirely; the
+    complementary guard (`_ownership_persist_guard`) catches an object that was
+    already
+    adopted when the revoke landed.
+
+    Only UNADOPTED placeholders are touched. An ordinary open object is left
+    exactly as HEAD leaves it — the pre-existing orphan half of tracker 155 is
+    not this change's business, and dropping live state would lose evidence.
+    """
+    global OWNERSHIP_SEED_REVOKED_TOTAL
+    if not revoked_partitions:
+        return 0
+    total = _seed_partition_total()
+    if total <= 0:
+        return 0
+    victims = [cid for cid, reg in OPEN_OBJECTS.items()
+               if _seed_only(reg)
+               and tenant_partition(canon_tenant(reg["snapshot"].tenant_id),
+                                    total) in revoked_partitions]
+    for cid in victims:
+        _forget_object(cid)
+        OWNERSHIP_SEED_REVOKED_TOTAL += 1
+    if victims:
+        log.info("ownership seed: discarded %d unadopted identity "
+                 "placeholder(s) for revoked partition(s) %s — their incidents "
+                 "belong to the acquiring replica now (revoked_total=%d)",
+                 len(victims), sorted(revoked_partitions),
+                 OWNERSHIP_SEED_REVOKED_TOTAL)
+    return len(victims)
+
+
+def _ownership_persist_guard(cid: str, reg: dict) -> bool:
+    """Tracker 155 (completion): may this registration persist AT ALL?
+
+    THE GENERALIZATION OF 155b's D2b, and the reason it had to be generalized:
+    D2b asked the ownership question only for a seed-descended registration that
+    had not yet written a version of its own, and it DISARMED the moment such an
+    object persisted once (`_seed_first_persist_done`). Run
+    ownership-155c-08311027's exit/join arm walked straight through that hole —
+    c5 adopted a placeholder, persisted v6 (disarming the guard), and then
+    continued the object every 30 s for SIX MINUTES on a partition it no longer
+    owned, writing a duplicate (correlation_id, version) whose content differed
+    from the true owner's and which latest-write-wins made current.
+
+    So the question is now asked of EVERY object on EVERY persist — open,
+    heartbeat touch or terminal, seed-descended or ordinary — at the moment of
+    the write:
+
+        does this replica still own the partition this tenant's records land on?
+
+    Ownership is asked through `_seed_tenant_owned`, i.e. through
+    `tenant_partition` against the recorded assignment: the single source of
+    truth the seed scopes its own query with. It is DEFAULT-OPEN exactly where
+    there is no knowledge to be default-closed about (no assignment callback has
+    ever run — single-process dev, a unit invocation, a broker-less run), so a
+    single-replica deployment behaves precisely as it always has.
+
+    Unowned -> the registration is DROPPED WITHOUT PERSISTING. The durable row
+    the true owner holds stands untouched, and this replica stops carrying state
+    it has no right to write. This is not a fault, it is the correct outcome of
+    a partition move, so it is counted and logged at INFO rather than warned.
+
+    WHY DROPPING IS SAFE, not a loss: by the time this fires the object's
+    partition belongs to another replica, which seeds its identity from the
+    durable row (931efffb) and continues it. Anything this replica has that the
+    durable row does not is exactly the residue `_handoff_flush` exists to hand
+    over first, and its bound is stated there.
+
+    COST, measured rather than asserted: one `_seed_tenant_owned` call per
+    persist — `canon_tenant` + a murmur2 over a short tenant string plus an
+    `any()` over at most `len(TOPICS)` small lists — is 13.0 us on this box
+    (200k calls, 12 topics), against a persist that is MILLISECONDS of
+    serialization plus a ClickHouse round trip. Two to three orders of magnitude
+    below the thing it guards, and it is paid once per version, never per node,
+    edge or signal. Pinned by
+    `test_the_ownership_check_is_negligible_per_persist`.
+
+    Counted twice, on purpose: `corr_ownership_unowned_persist_dropped_total`
+    for every drop, and 155b's `corr_ownership_seed_unowned_dropped_total` for
+    the seed-first-version SUBSET, so that counter keeps the exact meaning it
+    was commissioned with.
+    """
+    global OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL
+    global OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL
+    snap = reg.get("snapshot")
+    tenant = snap.tenant_id if snap is not None else ""
+    if _seed_tenant_owned(tenant):
+        return True
+    OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL += 1
+    seed_first = bool(reg.get("seed_pending_first_persist"))
+    if seed_first:
+        OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL += 1
+    _forget_object(cid)
+    log.info("corr-object %s belongs to a tenant whose partition this replica "
+             "no longer owns — dropped WITHOUT persisting, so the durable row "
+             "the owning replica holds still stands (tracker 155, "
+             "seed_first_version=%s, persist_dropped_total=%d)",
+             cid[:8], seed_first, OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL)
+    return False
+
+
+def _ownership_admission_guard(tenant: str) -> bool:
+    """Tracker 155 (completion): may a cycle REGISTER a new object for `tenant`?
+
+    F1, measured (ownership-155c-08311027, restart arm): the old owner c5 held
+    the partitions ~10 s during the bounce and minted a FRESH object
+    (3eec17dd) for the story's entities THIRTEEN SECONDS after revoking them.
+    Nothing was wrong with the evidence or the derivation — the consume/reconcile
+    cycle that was already in flight when the revoke landed simply ran to
+    completion, and `_ownership_persist_guard` cannot help because there is no
+    registration yet to guard. So the check belongs where objects ENTER
+    OPEN_OBJECTS.
+
+    THIS CANNOT FIRE ON HEALTHY OWNERSHIP. Every producer keys by tenant
+    (`tenant_partition`), so evidence for a tenant can only arrive on that
+    tenant's partition; if this replica is consuming it, it owns it. The only
+    way to reach a snapshot for an unowned tenant is the post-revoke race: the
+    evidence is already in `WINDOW_BUFFER` from before the move, and the engine
+    keeps re-deriving objects from it until it ages out of the window
+    (RETENTION_REQUIRED_S). That is also why the log line is rate-limited while
+    the counter is exact.
+    """
+    global OWNERSHIP_UNOWNED_ADMISSION_DROPPED_TOTAL
+    global _OWNERSHIP_ADMISSION_LOG_LAST
+    if _seed_tenant_owned(tenant):
+        return True
+    OWNERSHIP_UNOWNED_ADMISSION_DROPPED_TOTAL += 1
+    mono = time.monotonic()
+    if (mono - _OWNERSHIP_ADMISSION_LOG_LAST) >= 30.0:
+        _OWNERSHIP_ADMISSION_LOG_LAST = mono
+        log.info("declined to open a NEW corr-object for tenant %s: this "
+                 "replica no longer owns its partition (buffered pre-move "
+                 "evidence re-deriving; it ages out with the window). The "
+                 "owning replica keeps the incident whole — tracker 155, "
+                 "admission_dropped_total=%d",
+                 tenant, OWNERSHIP_UNOWNED_ADMISSION_DROPPED_TOTAL)
+    return False
+
+
+def _handoff_candidates(partitions: frozenset[int], *,
+                        placeholders: bool) -> list[str]:
+    """The registrations whose tenant hashes onto one of `partitions`,
+    MOST-RECENTLY-UPDATED FIRST.
+
+    The order is the flush order and it is a choice with a reason: under budget
+    pressure the objects that get flushed are the ones whose in-memory state has
+    moved most recently, which are (a) the in-flight incidents an operator is
+    watching right now, (b) the ones furthest ahead of their durable row, and
+    (c) the ones most likely to receive further evidence on the acquiring
+    replica, i.e. the ones where handing over the freshest state buys the most.
+    Ties break on correlation_id so the order is total and deterministic.
+    """
+    total = _seed_partition_total()
+    if total <= 0 or not partitions:
+        return []
+    rows = [(reg["last_seen"], cid) for cid, reg in OPEN_OBJECTS.items()
+            if (placeholders or not _seed_only(reg))
+            and tenant_partition(canon_tenant(reg["snapshot"].tenant_id),
+                                 total) in partitions]
+    rows.sort(key=lambda r: (-r[0].timestamp(), r[1]))
+    return [cid for _, cid in rows]
+
+
+async def _handoff_flush(partitions: frozenset[int]) -> tuple[int, int]:
+    """FLUSH the open objects of REVOKED partitions — the first half of
+    flush-and-release. Returns (flushed, unflushed).
+
+    WHAT IS WRITTEN: one more version of the object's CURRENT snapshot, state
+    `open`. This is a HANDOFF, not a close — the incident is not over, it has
+    changed owner, and the acquiring replica's seed (931efffb) continues it from
+    exactly this row: identity, version (numbering resumes above it), blast
+    radius and durable verdict. Writing `closed` here would be a lie about the
+    incident and would make the new owner resurrect a closed object.
+
+    HONESTY — NOTHING IS RECOMPUTED HERE. The row carries `reg["snapshot"]`
+    exactly as the last engine cycle left it. That field is only ever assigned
+    an `ObjectSnapshot` that `run_window` emitted and `_reconcile` fully
+    evaluated (see the reconcile loop: `reg["snapshot"] = snap` is the LAST
+    statement of the content-moved branch, after the persist decision), so there
+    is no such thing as a half-built snapshot to catch here — it is always the
+    last CONSISTENT, fully-evaluated state, which may be newer than the last
+    version that was persisted because damping suppressed the write. No verdict,
+    hypothesis, edge or count is re-derived in this hook: a rebalance may not
+    manufacture reasoning, and the whole point of the flush is to hand over what
+    was already computed.
+
+    The blast radius column IS the object's monotone union (tracker 187), for
+    the same reason the three terminal paths pass it: this is this owner's LAST
+    word for the object, so the row must carry the whole radius it accumulated,
+    not just the current window's projection. That is also what makes the
+    acquiring replica's `AffectedHistory` re-seed lossless.
+
+    BOUNDED by the existing revoke discipline. This callback runs INSIDE the
+    rejoin, so the flush gets ONE `CORR_REVOKE_BUDGET_S` (5 s), checked before
+    every object AND applied to each individual persist so no single slow write
+    can overrun the wall. Worst added rejoin latency is therefore
+    CORR_REVOKE_BUDGET_S on top of the flush/commit hook's own 2x backstop —
+    15 s against a 60 s rebalance timeout, still under a third of it.
+
+    WHAT IT COSTS TO RUN OUT OF BUDGET — the residue bound, stated rather than
+    hoped. An object that is not flushed is still RELEASED (state must follow
+    ownership; keeping it is what F2 measured). The new owner then seeds from
+    the object's LAST DURABLE VERSION instead of its last in-memory snapshot, so
+    what is lost is exactly the un-persisted window residue:
+      * window growth and signal/instance churn since that version — damped
+        away by design (#100), never material;
+      * at most one MATERIAL move, and only if it arrived inside the last
+        CORR_VERSION_HEARTBEAT_S (900 s) — beyond that the heartbeat had already
+        forced a version;
+      * entities that entered AND left the blast radius inside that same
+        interval, which the durable `affected` column therefore never recorded.
+    Identity, version monotonicity and the durable verdict are NOT at risk: they
+    come from the durable row, which exists by construction (an object in
+    OPEN_OBJECTS on a partition being revoked was either seeded from a durable
+    row or persisted v1 when it opened).
+    """
+    global OWNERSHIP_HANDOFF_FLUSHED_TOTAL, OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL
+    global VERSIONS_PERSISTED
+    order = _handoff_candidates(partitions, placeholders=False)
+    if not order:
+        return (0, 0)
+    started = time.monotonic()
+    deadline = started + CORR_REVOKE_BUDGET_S
+    flushed = 0
+    unflushed = 0
+    for cid in order:
+        reg = OPEN_OBJECTS.get(cid)
+        if reg is None:
+            continue                      # closed by a concurrent cycle
+        left = deadline - time.monotonic()
+        if ch is None or left <= 0.0:
+            unflushed += 1
+            continue
+        snap = reg["snapshot"]
+        try:
+            # Fold this snapshot into the object's own history FIRST, so the
+            # column below is the true union including what we are writing.
+            await _affected_note(reg, snap)
+            hist = reg.get("affected_hist")
+            reg["version"] += 1
+            await asyncio.wait_for(
+                _persist_snapshot(
+                    snap, reg["version"], "open", [],
+                    # A handoff checkpoint is the highest-value Evidence there
+                    # is for the acquiring replica: it is the row its seed will
+                    # read. Never the heartbeat class.
+                    priority_class=EVIDENCE_CLASS_DECISION,
+                    affected=hist.merged_with({}) if hist is not None else None),
+                timeout=left)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — observable, never fatal (§10)
+            # §16.1: a failed flush is COUNTED as unflushed, never swallowed.
+            # The version number it consumed is spent exactly as it is on every
+            # other failed persist in this file, and the dedup token is
+            # content-derived, so nothing is duplicated.
+            unflushed += 1
+            log.warning("ownership handoff flush FAILED for corr-object %s "
+                        "(%s: %s) — releasing on its last durable version",
+                        cid[:8], type(exc).__name__, exc)
+            continue
+        now = datetime.now(timezone.utc)
+        reg["last_persist"] = now
+        reg["last_version"] = now
+        VERSIONS_PERSISTED += 1
+        _wa_note_outcome(snap.tenant_id, "persisted")
+        # This object has written a version of its own; 155b's first-version
+        # guard is spent whether or not it was seed-descended.
+        _seed_first_persist_done(reg)
+        flushed += 1
+    OWNERSHIP_HANDOFF_FLUSHED_TOTAL += flushed
+    OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL += unflushed
+    log.info("ownership handoff: flushed %d open object(s) and could not flush "
+             "%d for revoked partition(s) %s in %.0f ms (budget %.1fs) — the "
+             "acquiring replica seeds from these rows "
+             "(flushed_total=%d, unflushed_total=%d)",
+             flushed, unflushed, sorted(partitions),
+             (time.monotonic() - started) * 1000, CORR_REVOKE_BUDGET_S,
+             OWNERSHIP_HANDOFF_FLUSHED_TOTAL, OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL)
+    return (flushed, unflushed)
+
+
+def _release_lost_partitions(held: frozenset[int]) -> int:
+    """RELEASE — the second half of flush-and-release, run from the ASSIGNMENT
+    callback. Returns the registrations forgotten.
+
+    WHY THE RELEASE IS HERE AND NOT IN THE REVOKE CALLBACK, measured rather than
+    assumed: aiokafka rebalances EAGERLY. `_on_join_prepare` passes
+    `revoked = previous_assignment.tps` — the ENTIRE previous assignment — to
+    `on_partitions_revoked` on EVERY rebalance, including the overwhelmingly
+    common one where this replica gets the same partitions straight back. So
+    "release everything that was revoked" would, on every rebalance, throw away
+    live in-memory state for partitions that never moved and force it to be
+    rebuilt from ClickHouse — which would make a FAIL-OPEN read (the seed is
+    best-effort by contract) a correctness dependency for a no-op rebalance.
+    That is strictly worse than the defect being fixed.
+
+    The revoke callback therefore does the two things that CANNOT wait — the
+    flush, which must land before the new owner seeds, and the placeholder
+    discard — and records the revoked partitions. This function, one callback
+    later, knows what was actually lost and forgets exactly that.
+
+    Ownership itself needs no such deferral: `CONSUMER_ASSIGNMENT` is rewritten
+    by the assignment callback before this runs, so from here on both guards
+    answer against the new assignment. The residual window is the rejoin itself
+    (revoke -> assign), during which the previous assignment stands and a write
+    is absorbed exactly as HEAD absorbs it. That window is bounded by the
+    rebalance, and both measured defects (13 s, 6 minutes) are far outside it.
+    """
+    global OWNERSHIP_HANDOFF_RELEASED_TOTAL
+    lost = frozenset(_OWNERSHIP_PENDING_RELEASE) - held
+    _OWNERSHIP_PENDING_RELEASE.clear()
+    if not lost:
+        return 0
+    victims = _handoff_candidates(lost, placeholders=True)
+    for cid in victims:
+        _forget_object(cid)
+    OWNERSHIP_HANDOFF_RELEASED_TOTAL += len(victims)
+    if victims:
+        log.info("ownership handoff: released %d registration(s) for "
+                 "partition(s) %s this replica did not get back — their "
+                 "incidents belong to the acquiring replica now "
+                 "(released_total=%d)",
+                 len(victims), sorted(lost), OWNERSHIP_HANDOFF_RELEASED_TOTAL)
+    return len(victims)
+
+
+async def _shutdown_handoff_flush() -> tuple[int, int]:
+    """TRACKER 199: flush-and-release on the GRACEFUL-SHUTDOWN path, which no
+    rebalance callback ever reaches. Returns (flushed, unflushed).
+
+    THE MEASURED GAP. `_handoff_flush` is wired to `on_partitions_revoked`, and
+    that hook fires when the GROUP rebalances — never when THIS member leaves.
+    On a planned stop (`docker stop` / `docker restart`, i.e. every rolling
+    restart and every deploy) SIGTERM reaches uvicorn, uvicorn runs the lifespan
+    shutdown, `consume()`'s cancellation handler calls `consumer.stop()` and
+    aiokafka issues LeaveGroup — with `on_partitions_revoked` never invoked
+    once. Measured in 155d on netops-correlation-6: "Shutting down"
+    16:35:14.198Z -> "LeaveGroup request succeeded" 16:35:14.318Z (120 ms) with
+    14 open objects in memory and ZERO flush lines anywhere in its log. Every
+    flush that run observed came from the SURVIVING replica's eager revoke, none
+    from the departing one. Nothing durable was lost — the acquirer seeds from
+    the last ORDINARY version — but the residue bound `_handoff_flush` exists to
+    remove was simply not applied on the most common ownership change there is.
+
+    THE FULL ASSIGNMENT, not a subset. A revoke hands over the partitions that
+    moved; a shutdown hands over ALL of them. This replica is leaving, so every
+    open object it holds is about to be somebody else's incident, and every one
+    of them gets its final open version.
+
+    SAME DISCIPLINE AS THE REVOKE PATH, deliberately: one `CORR_REVOKE_BUDGET_S`
+    for the whole flush, the same counters, and the same released-anyway policy
+    — an object that could not be flushed is still released and the acquirer
+    seeds it from its last durable row (the residue bound is stated in
+    `_handoff_flush`). The exit is never blocked on ClickHouse: what does not
+    fit in the budget is COUNTED (`unflushed`), never waited for.
+
+    THE RELEASE IS BOOKKEEPING HERE — the process is exiting, so forgetting the
+    registrations frees nothing that matters. It runs anyway because
+    `corr_ownership_handoff_*` conservation (seeded == adoptions + expired +
+    revoked + unowned_dropped + pending, released counted beside it) is an
+    invariant the 155d harness checks, and a shutdown that flushed N objects
+    without releasing them would be the one path on which it does not hold.
+
+    WHAT THIS DOES NOT COVER, stated rather than implied: the CRASH path. SIGKILL
+    (the docker stop grace period expiring), an OOM kill or a host loss runs no
+    teardown at all, so no flush happens and the acquiring replica seeds from the
+    last durable ORDINARY version — exactly today's behaviour, which 155d showed
+    is correct and merely staler. That is the accepted residual; only the PLANNED
+    stop is fixed here, because only the planned stop can be.
+    """
+    owned = frozenset(p for parts in CONSUMER_ASSIGNMENT.values() for p in parts)
+    if not owned:
+        # Never joined a group, or joined and was assigned nothing (the idle
+        # replica beyond BUS_PARTITIONS). Nothing is being handed off.
+        return (0, 0)
+    open_before = len(OPEN_OBJECTS)
+    flushed = 0
+    unflushed = 0
+    try:
+        flushed, unflushed = await _handoff_flush(owned)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # §16.1: observable, never fatal to the exit
+        log.exception("ownership handoff flush raised on shutdown — the open "
+                      "objects are released on their last durable version "
+                      "(tracker 199)")
+    # RELEASE, through the ordinary path so the counter and its log line are the
+    # same ones every other handoff writes: everything this replica still holds
+    # is "lost" now, so seed the pending set with the whole assignment and hold
+    # back nothing.
+    _OWNERSHIP_PENDING_RELEASE.update(owned)
+    released = _release_lost_partitions(frozenset())
+    log.info("ownership handoff (graceful shutdown): flushed %d of %d open "
+             "object(s) on partition(s) %s BEFORE LeaveGroup, released %d "
+             "registration(s) — the acquiring replica seeds from these rows "
+             "(unflushed=%d, tracker 199)",
+             flushed, open_before, sorted(owned), released, unflushed)
+    return (flushed, unflushed)
+
+
+def _seed_first_persist_done(reg: dict) -> None:
+    """A seed-descended object has written a version of its own: disarm D2b."""
+    reg.pop("seed_pending_first_persist", None)
+
+
+def _seed_verdict_floor(snap: ObjectSnapshot) -> ObjectSnapshot:
+    """Tracker 155b D3: hold a seed-descended object's PUBLISHED verdict at the
+    tier its durable row already earned, until this replica's window refills.
+
+    THE DEFECT, measured on the correct owner in run ownership-155b-08310318:
+    the first persist after an adoption recomputes from a window that has only
+    partially refilled, so it can publish a strictly weaker tier than the row it
+    continues (confirmed -> suspected) — and `corr_current` is
+    latest-write-wins, so the incident an operator is looking at appears to
+    WEAKEN merely because its owner changed. The durable evidence that earned
+    `confirmed` did not evaporate; this replica just cannot see it yet.
+
+    THE RULE, deliberately small:
+      * scoped to objects DESCENDED FROM A SEED (an armed `verdict_floor`);
+        nothing else in the engine is touched;
+      * it is a FLOOR, never a lift: the published tier is
+        max(recomputed, durable), so it can never exceed the durable row's tier
+        and a STRONGER recomputation publishes immediately;
+      * it EXPIRES at adoption + CORR_OWNERSHIP_SEED_SLACK_S — the same
+        refill horizon D1 bridges — after which recomputation rules
+        unconditionally, because a genuine recovery must be able to downgrade;
+      * it is HONEST. The row's verdict columns carry the floor; the version's
+        internals carry what this replica actually computed
+        (`ownership_handoff` in the hypotheses blob, present-only), and no
+        count, no confidence and no evidence list is fabricated — signal_count,
+        node_count, hypotheses and evidence_missing stay this replica's own.
+
+    Returns `snap` unchanged on every path that does not floor, so an ordinary
+    persist is byte-for-byte what it always was.
+    """
+    global OWNERSHIP_SEED_VERDICT_CARRIED_TOTAL
+    reg = OPEN_OBJECTS.get(snap.correlation_id)
+    if reg is None:
+        return snap
+    floor = reg.get("verdict_floor")
+    if not isinstance(floor, VerdictTier):
+        return snap
+    until = reg.get("verdict_floor_until")
+    if (not isinstance(until, (int, float))
+            or datetime.now(timezone.utc).timestamp() >= until):
+        # Expired (or never dated): disarm and never look again.
+        reg.pop("verdict_floor", None)
+        reg.pop("verdict_floor_until", None)
+        reg.pop("verdict_floor_hypothesis", None)
+        return snap
+    ranking = snap.ranking
+    if _VERDICT_RANK.get(ranking.verdict_tier, 0) >= _VERDICT_RANK.get(floor, 0):
+        return snap
+    OWNERSHIP_SEED_VERDICT_CARRIED_TOTAL += 1
+    carried_hypothesis = reg.get("verdict_floor_hypothesis") or ""
+    return dc_replace(
+        snap,
+        ranking=dc_replace(
+            ranking, verdict_tier=floor,
+            top_hypothesis=carried_hypothesis or ranking.top_hypothesis),
+        carried_verdict_tier=ranking.verdict_tier.value,
+        carried_top_hypothesis=ranking.top_hypothesis)
+
+
+async def _seed_ch_query(sql: str) -> list[dict]:
+    """One bounded, retried ClickHouse read for the seed (§9).
+
+    Every attempt has its own timeout; the retry is jittered so a fleet-wide
+    rebalance does not turn into a synchronized burst against one ClickHouse.
+    Raises the last error — the caller counts it and falls back."""
+    assert ch is not None
+    last: Exception = RuntimeError("no attempt made")
+    for attempt in range(CORR_OWNERSHIP_SEED_ATTEMPTS):
+        try:
+            return await asyncio.wait_for(
+                ch.query(sql), timeout=CORR_OWNERSHIP_SEED_TIMEOUT_S)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — best-effort by contract
+            last = exc
+            if attempt + 1 < CORR_OWNERSHIP_SEED_ATTEMPTS:
+                # The same full-jitter backoff the insert path uses, and for the
+                # same reason: a fleet-wide rebalance must not turn every
+                # replica's seed into one synchronized burst against ClickHouse.
+                await asyncio.sleep(ch_retry_delay(attempt + 1))
+    raise last
+
+
+async def _seed_owned_tenants(partitions: frozenset[int]) -> tuple[str, ...]:
+    """Which tenants' objects belong to the partitions this replica just
+    acquired.
+
+    §3a. There is no in-process tenant registry to consult — the whole problem
+    is that this replica has never seen these tenants — so the universe is
+    discovered from ClickHouse. The discovery probe returns tenant IDs ONLY, no
+    tenant data, and its result is narrowed to the acquired partitions BEFORE a
+    single row is read; the row query below is then explicitly scoped to that
+    narrowed list, so an object belonging to a tenant this replica does not own
+    is never fetched, let alone registered.
+    """
+    total = max((n for t in TOPICS
+                 if (n := CONSUMER_PARTITION_TOTALS.get(t)) is not None), default=0)
+    if total <= 0:
+        return ()
+    sql = (
+        "SELECT DISTINCT tenant_id FROM netops.corr_current "  # nosec B608 — constants
+        # only: a float()-formatted and an int()-cast module constant below;
+        # no request or event data reaches this string.
+        "WHERE state = 'open' "
+        f"AND created_at >= now64(3) - toIntervalSecond({CORR_OWNERSHIP_SEED_HORIZON_S:.3f}) "
+        f"LIMIT {int(CORR_OWNERSHIP_SEED_TENANTS_MAX)} FORMAT JSON"
+    )
+    owned: list[str] = []
+    for row in await _seed_ch_query(sql):
+        tenant = row.get("tenant_id")
+        if not isinstance(tenant, str) or not _seed_safe_tenant(tenant):
+            continue
+        if tenant_partition(canon_tenant(tenant), total) in partitions:
+            owned.append(tenant)
+    return tuple(sorted(set(owned)))
+
+
+def _seed_sql(tenants: tuple[str, ...]) -> str:
+    """The seed's row query — latest version per object, open only, horizoned,
+    tenant-scoped, capped.
+
+    `corr_current FINAL` is the source rather than a GROUP BY over
+    `corr_objects`, and that is a correctness choice before it is a cost one:
+    corr_current holds exactly ONE row per (tenant, correlation_id) — the
+    "latest version per correlation_id" this seed is defined in terms of — and
+    it is a ReplacingMergeTree, so FINAL is the read pattern init.sql designed
+    it for (its partition key is tenant ALONE precisely so FINAL can collapse
+    re-persists). Without FINAL a superseded `open` row could outlive the
+    `closed` row that replaced it and the seed would resurrect a closed object.
+    It is also the cheap side: narrow columns, one partition per tenant, no
+    blobs — versus a scan of a day's worth of `corr_objects` versions
+    (10,960 in one 155a arm alone).
+
+    `count() OVER ()` is evaluated over the full filtered result before LIMIT
+    applies, so the over-cap overflow is EXACT rather than "at least one".
+    """
+    tlist = ", ".join(f"'{t}'" for t in tenants)
+    return f"""
+      SELECT tenant_id,
+             toString(correlation_id)              AS correlation_id,
+             version,
+             toUnixTimestamp64Milli(window_start)  AS window_start_ms,
+             toUnixTimestamp64Milli(window_end)    AS window_end_ms,
+             affected,
+             top_hypothesis,
+             verdict_tier,
+             toUnixTimestamp64Milli(created_at)    AS created_at_ms,
+             count() OVER ()                       AS open_total
+        FROM netops.corr_current FINAL
+       WHERE tenant_id IN ({tlist})
+         AND state = 'open'
+         AND created_at >= now64(3) - toIntervalSecond({CORR_OWNERSHIP_SEED_HORIZON_S:.3f})
+       ORDER BY created_at DESC, correlation_id
+       LIMIT {int(CORR_OWNERSHIP_SEED_MAX)}
+      FORMAT JSON
+    """  # nosec B608 — tenant ids are charset-validated (_seed_safe_tenant); every
+    # other interpolation is an int()/float() cast of a module constant.
+
+
+def _seed_register(row: Mapping[str, object], now: datetime,
+                   owned: frozenset[str]) -> bool:
+    """Turn ONE durable row into an identity placeholder in OPEN_OBJECTS.
+
+    IDEMPOTENT BY CORRELATION_ID, which is what makes a second rebalance inside
+    the cold window (or a re-run of a cancelled seed) a no-op: a correlation_id
+    already in OPEN_OBJECTS is left completely alone. That rule also protects
+    the live case — an object this replica opened itself, or one the cycle
+    running concurrently with this task has already created, is never clobbered
+    by a placeholder built from an older durable row.
+
+    VERSION NUMBERING. `reg["version"]` is seeded with the loaded version, so
+    the first version this replica persists for the object is loaded+1 —
+    strictly above the durable maximum, which is what makes the continuation
+    monotone across the handoff for the first time. corr_current.version IS the
+    last version number `_persist_snapshot`/`_touch_current` wrote for the
+    object, so the only way corr_objects can hold a version >= the loaded one is
+    a corr_current dual-write that failed while the corr_objects write landed —
+    a condition that is already counted (PROJECTION_WRITE_FAILURES), already
+    self-heals on the next material persist, and is force-repaired by the Go
+    corr_current reconciler. In that window the seed re-uses a version number —
+    which is EXACTLY what HEAD does on every single handoff today, where
+    numbering restarts at 1 with different content, and it is absorbed by the
+    same two guards HEAD already relies on there: the content-hash suffix on the
+    insert dedup token (`obj:<cid>:v<n>:<state>:<hash16>`), and
+    corr_current's ReplacingMergeTree(created_at) latest-write-wins. So seeding
+    cannot make version numbering worse than HEAD, and in every other case it
+    makes it strictly better.
+
+    LATE FINAL VERSION FROM THE OLD OWNER (155a saw revoke-hook commits land
+    after the move). The previous owner still holds this object in ITS
+    OPEN_OBJECTS — 155's orphan half is unchanged by this design — and may
+    persist one more version, terminal or not, while this replica seeds. That
+    row carries its own content-derived dedup token, so it is never dropped and
+    never duplicated; if it is terminal, corr_current flips to closed and this
+    replica's next adopted version (later created_at) flips it back to open,
+    which is the truth. Nothing here reads corr_current again, so a late write
+    cannot corrupt the seeded state either.
+
+    QUIESCE CLOCK. `last_seen` comes from the object's own durable timestamps,
+    so a placeholder is subject to exactly the same CORR_QUIESCE_S rule as an
+    in-process object and can never be frozen open forever. It is clamped so
+    that a placeholder always gets at least one COLD WINDOW
+    (RETENTION_REQUIRED_S) before quiesce may drop it: the window has not
+    refilled before then, so closing it sooner would be judging the object on
+    evidence this replica structurally could not yet have seen.
+
+    MATCH WINDOW (tracker 155b D1). The registration stores the durable
+    `[window_start, window_end]` unchanged — this is an identity reconstruction
+    and it may not misreport the row it came from — but the SNAPSHOT it stands
+    on carries `match_slack_s`, so `_windows_overlap` admits it for
+    CORR_OWNERSHIP_SEED_SLACK_S past that end. The durable end is only the last
+    WRITTEN evidence time of a still-open incident; freezing the match there
+    guaranteed a miss of exactly the cold-window duration (155b: 1 adoption in
+    32, on an inclusive-boundary touch).
+
+    DURABLE VERDICT (tracker 155b D3). The row's tier and top hypothesis ride
+    along on the registration for `_seed_adopted` to turn into the refill-window
+    verdict floor. They are never PUBLISHED by a placeholder — an unadopted
+    placeholder publishes nothing at all.
+    """
+    global OWNERSHIP_SEED_SKIPPED_TOTAL
+    tenant = row.get("tenant_id")
+    cid = row.get("correlation_id")
+    if not isinstance(tenant, str) or not isinstance(cid, str) or not cid:
+        OWNERSHIP_SEED_SKIPPED_TOTAL += 1
+        return False
+    # §3a, belt AND braces: the query is already tenant-scoped, and a row that
+    # came back outside the scope is refused here rather than trusted.
+    if tenant not in owned:
+        OWNERSHIP_SEED_SKIPPED_TOTAL += 1
+        log.warning("ownership seed refused an out-of-scope tenant row "
+                    "(tenant=%s) — the query scope and the result disagree", tenant)
+        return False
+    if cid in OPEN_OBJECTS:
+        return False                      # idempotent: live state always wins
+    window_start = _seed_dt(row.get("window_start_ms"))
+    window_end = _seed_dt(row.get("window_end_ms"))
+    written = _seed_dt(row.get("created_at_ms"))
+    if window_start is None or window_end is None or written is None:
+        OWNERSHIP_SEED_SKIPPED_TOTAL += 1
+        return False
+    raw_affected = row.get("affected")
+    affected: dict = {}
+    if isinstance(raw_affected, str) and raw_affected:
+        try:
+            parsed = json.loads(raw_affected)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            affected = parsed
+    snap = _seed_snapshot(tenant, cid, window_start, window_end, affected)
+    if snap is None:
+        OWNERSHIP_SEED_SKIPPED_TOTAL += 1
+        return False
+    # The placeholder may not be quiesced before it has had one cold window to
+    # be adopted in (see the docstring).
+    floor = now.timestamp() - CORR_QUIESCE_S + RETENTION_REQUIRED_S
+    last_seen = max(written, datetime.fromtimestamp(floor, timezone.utc))
+    hist = AffectedHistory(CORR_AFFECTED_HISTORY_MAX)
+    # Tracker 187 spans the handoff: the accumulator starts from the blast
+    # radius the object had accumulated BEFORE the move, so the final union this
+    # replica publishes at close is over the object's whole life, not just the
+    # part this process witnessed.
+    hist.note({k: v for k, v in affected.items()
+               if isinstance(v, list) and all(isinstance(x, str) for x in v)})
+    # Tracker 155b D3: the durable row's own verdict, carried on the
+    # registration so an ADOPTED object can floor its first recomputations with
+    # it. Validated (§3, never trust the store): an unknown tier reads as
+    # `undetermined`, which floors nothing.
+    raw_tier = row.get("verdict_tier")
+    try:
+        seed_tier = VerdictTier(raw_tier) if isinstance(raw_tier, str) else \
+            VerdictTier.UNDETERMINED
+    except ValueError:
+        seed_tier = VerdictTier.UNDETERMINED
+    raw_hyp = row.get("top_hypothesis")
+    seed_hyp = raw_hyp[:256] if isinstance(raw_hyp, str) else ""
+    OPEN_OBJECTS[cid] = {
+        "version": max(0, _seed_int(row.get("version"), 0)),
+        # Sentinel hashes no content_hash/material_hash can ever equal (both are
+        # sha256 hex), so the FIRST arriving snapshot always takes the
+        # material-moved persist branch: a placeholder can never damp away the
+        # version that proves the identity was adopted.
+        "hash": "", "material": "",
+        "affected_hist": hist,
+        "last_seen": last_seen, "last_persist": written, "last_version": written,
+        "snapshot": snap, "opened_at": window_start,
+        "seed_only": True,
+        # Consumed by `_seed_adopted` — an UNADOPTED placeholder never publishes
+        # anything, so these are inert until evidence arrives.
+        "seed_tier": seed_tier, "seed_hypothesis": seed_hyp,
+    }
+    return True
+
+
+async def _run_ownership_seed(partitions: frozenset[int]) -> None:
+    """Load the acquired partitions' still-open objects and seed their
+    identities. Fail-open on every error path."""
+    global OWNERSHIP_SEED_RUNS_TOTAL, OWNERSHIP_SEEDED_OBJECTS_TOTAL
+    global OWNERSHIP_SEED_FAILURES_TOTAL, OWNERSHIP_SEED_SKIPPED_TOTAL
+    OWNERSHIP_SEED_RUNS_TOTAL += 1
+    started = time.monotonic()
+    try:
+        tenants = await _seed_owned_tenants(partitions)
+        if not tenants:
+            log.info("ownership seed: no open objects for the %d newly acquired "
+                     "partition(s) — nothing to reconstruct", len(partitions))
+            return
+        rows = await _seed_ch_query(_seed_sql(tenants))
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — fail-open is the contract (§9/§10)
+        OWNERSHIP_SEED_FAILURES_TOTAL += 1
+        log.warning(
+            "ownership seed FAILED for partitions %s (%s: %s) — falling back to "
+            "today's behaviour: in-flight incidents on these partitions will be "
+            "re-keyed under new correlation_ids (tracker 155 fragmentation, not "
+            "an outage). failures_total=%d",
+            sorted(partitions), type(exc).__name__, exc,
+            OWNERSHIP_SEED_FAILURES_TOTAL)
+        return
+    owned = frozenset(tenants)
+    now = datetime.now(timezone.utc)
+    rows = [r for r in rows if isinstance(r, dict)]
+    # Over-cap overflow, EXACT: `open_total` is `count() OVER ()`, evaluated
+    # before the LIMIT. The rows come back newest-durable-write FIRST, so the
+    # cap keeps the freshest objects and skips the OLDEST — the same staleness
+    # order the 163 cap evicts in, and the right one here for a second reason:
+    # an old object is the one least likely to receive further evidence (it is
+    # closest to quiesce), so seeding its identity buys the least, while a
+    # freshly-written object is precisely the in-flight incident the handoff
+    # would otherwise fragment.
+    over = max(0, _seed_int(rows[0].get("open_total"), 0) - len(rows)) if rows else 0
+    if over:
+        OWNERSHIP_SEED_SKIPPED_TOTAL += over
+        log.warning(
+            "ownership seed cap: %d open object(s) beyond "
+            "CORR_OWNERSHIP_SEED_MAX=%d were NOT seeded (oldest durable write "
+            "first) — those incidents may fragment across this handoff. "
+            "skipped_total=%d",
+            over, CORR_OWNERSHIP_SEED_MAX, OWNERSHIP_SEED_SKIPPED_TOTAL)
+    seeded = 0
+    for i, row in enumerate(rows):
+        if _seed_register(row, now, owned):
+            seeded += 1
+        # The registration loop is O(rows) with a per-object node build; yield
+        # so a 2,000-object seed cannot become the loop stall this codebase has
+        # spent three trackers removing.
+        if (i & 0x3F) == 0x3F:
+            await asyncio.sleep(0)
+    OWNERSHIP_SEEDED_OBJECTS_TOTAL += seeded
+    log.info(
+        "ownership seed: %d identity placeholder(s) reconstructed for %d "
+        "tenant(s) across %d newly acquired partition(s) in %.0f ms "
+        "(seeded_total=%d, horizon=%.0fs, cap=%d)",
+        seeded, len(tenants), len(partitions), (time.monotonic() - started) * 1000,
+        OWNERSHIP_SEEDED_OBJECTS_TOTAL, CORR_OWNERSHIP_SEED_HORIZON_S,
+        CORR_OWNERSHIP_SEED_MAX)
+
+
+def _ownership_seed_done(task: asyncio.Task) -> None:
+    """Never let a seed die unobserved (§10)."""
+    global OWNERSHIP_SEED_FAILURES_TOTAL
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is None:
+        return
+    OWNERSHIP_SEED_FAILURES_TOTAL += 1
+    log.warning("ownership seed task raised %s — falling back to today's "
+                "behaviour (fragmentation, not an outage). failures_total=%d",
+                type(exc).__name__, OWNERSHIP_SEED_FAILURES_TOTAL)
+
+
+def _schedule_ownership_seed(partitions: frozenset[int]) -> None:
+    """Kick the seed for JUST-ACQUIRED partitions and return IMMEDIATELY.
+
+    Not one byte of ClickHouse work happens on this call: `on_partitions_
+    assigned` runs inside the rejoin, and this must never become a second
+    `CORR_REVOKE_BUDGET_S`-class hold on group re-formation. Retained partitions
+    are excluded because their objects are already in this process's memory —
+    re-seeding them would be pure waste (the registration is idempotent, so it
+    would also be harmless).
+    """
+    global _OWNERSHIP_SEED_TASK
+    if not (CORR_OWNERSHIP_SEED and partitions) or ch is None:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:                       # no loop (direct/unit invocation)
+        return
+    prev = _OWNERSHIP_SEED_TASK
+    if prev is not None and not prev.done():
+        # A second rebalance inside the cold window supersedes the first: the
+        # newest assignment is the authoritative one. Cancelling a partial seed
+        # is SAFE precisely because registration is idempotent per
+        # correlation_id — nothing is half-written and nothing is double-seeded.
+        prev.cancel()
+    _OWNERSHIP_SEED_TASK = loop.create_task(_run_ownership_seed(partitions))
+    _OWNERSHIP_SEED_TASK.add_done_callback(_ownership_seed_done)
+
+
+class _AssignmentLogger(ConsumerRebalanceListener):
+    """Records + logs partition ownership at every rebalance, and verifies the
+    co-partitioning invariant: with the range assignor and equal partition
+    counts, this member's partition SET must be identical across all 12
+    topics. A mismatch means the topics' partition counts diverged (e.g. a
+    failed `kafka-topics --alter` after raising BUS_PARTITIONS) — tenants
+    would be split across instances, so it is an ERROR, not a debug line."""
+
+    def __init__(self, consumer: AIOKafkaConsumer) -> None:
+        self._consumer = consumer
+        # P1 thrash fix: consume() installs its flush-then-commit closure here
+        # so work that is already durably persisted is acknowledged BEFORE the
+        # partitions move to another member (aiokafka keeps the member's
+        # heartbeat alive during this callback precisely so it can commit).
+        # None until consume() wires it — a bare listener stays log-only.
+        self.revoke_hook: Callable[[], Awaitable[None]] | None = None
+
+    async def on_partitions_revoked(self, revoked) -> None:
+        log.info("rebalance: %d partition(s) revoked", len(revoked))
+        # TRACKER 155b D2a, BEFORE the flush/commit hook and unconditional on
+        # whether one is wired: an identity placeholder for a partition that is
+        # leaving is a promise this replica can no longer keep. Pure in-memory
+        # dict work over the open population — no I/O, nothing that could add to
+        # the rejoin budget this callback is tightly bound by.
+        _revoked_parts = frozenset(tp.partition for tp in revoked)
+        _seed_discard_revoked(_revoked_parts)
+        # TRACKER 155 (completion): FLUSH-AND-RELEASE. The flush half runs HERE
+        # because it is the only moment at which it is useful — the acquiring
+        # replica seeds from `corr_current` as soon as it is assigned, so a
+        # handoff version written after that point would race the new owner's
+        # own writes instead of informing them. Bounded by ONE
+        # CORR_REVOKE_BUDGET_S (see `_handoff_flush`), and it never raises into
+        # the rejoin. The RELEASE half is completed by the assignment callback,
+        # which is the first moment that knows which partitions actually left
+        # (aiokafka revokes the whole assignment on every rebalance) — see
+        # `_release_lost_partitions`.
+        if _revoked_parts:
+            _OWNERSHIP_PENDING_RELEASE.update(_revoked_parts)
+            try:
+                await _handoff_flush(_revoked_parts)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # a raise here would kill the rejoin
+                log.exception("ownership handoff flush raised — the affected "
+                              "objects are released on their last durable "
+                              "version (tracker 155)")
+        if self.revoke_hook is None or not revoked:
+            return
+        global CONSUMER_REVOKE_COMMITS, CONSUMER_REVOKE_COMMIT_FAILURES
+        try:
+            # TIGHTLY bounded (§9) — this callback runs INSIDE the rejoin, so
+            # every second spent here is a second the group is not re-forming.
+            # The first version capped the whole hook at rebalance_timeout (60s),
+            # which let one slow ClickHouse flush add up to a full rebalance
+            # timeout of latency PER REVOKE and risked turning the thrash loop
+            # self-sustaining (starve -> revoke -> 60s of flush -> re-revoke).
+            # Live counters from the thrash window support that reading:
+            # correlation-1 logged 20 rebalances against 17 hook runs, 6 of them
+            # FAILED (i.e. hit the old bound). The budget is now
+            # 2x CORR_REVOKE_BUDGET_S as a pure backstop; the hook bounds its
+            # own flush and commit individually (see _revoke_commit).
+            await asyncio.wait_for(
+                self.revoke_hook(), timeout=2 * CORR_REVOKE_BUDGET_S)
+            CONSUMER_REVOKE_COMMITS += 1
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — a raise here would kill the rejoin
+            # Replay-safe by design: an uncommitted offset is redelivered and
+            # the dedup machinery (per-message tokens + the batcher's commit
+            # guard) absorbs it. Counted + logged, never silent (§10).
+            CONSUMER_REVOKE_COMMIT_FAILURES += 1
+            log.warning("revoke-time flush/commit failed (replay-safe, dedup "
+                        "absorbs the redelivery): %s", type(exc).__name__)
+
+    async def on_partitions_assigned(self, assigned) -> None:
+        global CONSUMER_REBALANCES
+        CONSUMER_REBALANCES += 1
+        owned: dict[str, list[int]] = {t: [] for t in TOPICS}
+        for tp in assigned:
+            owned.setdefault(tp.topic, []).append(tp.partition)
+        for parts in owned.values():
+            parts.sort()
+        CONSUMER_ASSIGNMENT.clear()
+        CONSUMER_ASSIGNMENT.update(owned)
+        # Tracker 196: every cached end-offset/position proof belongs to the
+        # PREVIOUS assignment. Positions move when partitions do, so the cache
+        # is dropped wholesale and re-earned — a stale proof would be the one
+        # way this mechanism could shed evidence it should have kept. Pure
+        # in-memory dict work, so the hook stays I/O-free (pinned by
+        # test_the_rebalance_callback_does_no_io).
+        _UNREAD_PROBE.clear()
+        # Cold-window bookkeeping (see consumer_state): RETAINED partitions keep
+        # their original acquisition time, NEWLY acquired ones start their window
+        # now, released ones are forgotten. Recorded here — never inferred from
+        # the rebalance counter, which cannot express "cold".
+        global CONSUMER_ASSIGNMENT_SEEN
+        CONSUMER_ASSIGNMENT_SEEN = True
+        now_mono = time.monotonic()
+        held = {f"{t}:{p}" for t, parts in owned.items() for p in parts}
+        # Tracker 155: the partitions acquired BY THIS CALLBACK — computed
+        # before the setdefault below makes every held key look retained. These,
+        # and only these, carry tenants whose in-flight objects live in another
+        # replica's memory and therefore need their identity reconstructed.
+        acquired = {int(k.rsplit(":", 1)[1])
+                    for k in held - set(CONSUMER_PARTITION_ACQUIRED_AT)}
+        for key in list(CONSUMER_PARTITION_ACQUIRED_AT):
+            if key not in held:
+                del CONSUMER_PARTITION_ACQUIRED_AT[key]
+        for key in held:
+            CONSUMER_PARTITION_ACQUIRED_AT.setdefault(key, now_mono)
+        for topic in TOPICS:
+            total = self._consumer.partitions_for_topic(topic)
+            if total:
+                CONSUMER_PARTITION_TOTALS[topic] = len(total)
+        log.info("rebalance #%d: assignment=%s totals=%s", CONSUMER_REBALANCES,
+                 {t: p for t, p in owned.items() if p}, dict(CONSUMER_PARTITION_TOTALS))
+        if not assigned:
+            # Joined the group and got NOTHING. Silent-failure class: this
+            # replica will never consume, but every health signal looks normal.
+            # Name the cause AND the remedy — the range assignor gives the
+            # surplus replicas beyond BUS_PARTITIONS an empty set by design.
+            global CONSUMER_ZERO_ASSIGNMENTS
+            CONSUMER_ZERO_ASSIGNMENTS += 1
+            log.warning(
+                "rebalance #%d assigned 0 partitions — THIS REPLICA IS IDLE and "
+                "will consume nothing (zero_assignments=%d). Instances beyond "
+                "BUS_PARTITIONS are idle by design with the range assignor: "
+                "raise BUS_PARTITIONS (and re-run kafka-init) or reduce the "
+                "replica count. Partition totals seen: %s",
+                CONSUMER_REBALANCES, CONSUMER_ZERO_ASSIGNMENTS,
+                dict(CONSUMER_PARTITION_TOTALS))
+        distinct = {tuple(p) for p in owned.values()}
+        global COPARTITION_OK, COPARTITION_VIOLATIONS, COPARTITION_LAST_DETAIL
+        # Only judge topics this member actually holds: with the range assignor
+        # a member legitimately owns nothing on a topic it was not given, and
+        # an empty assignment (handled above) is a different condition.
+        held_sets = {t: tuple(p) for t, p in owned.items() if p}
+        COPARTITION_OK = len(set(held_sets.values())) <= 1
+        if not COPARTITION_OK:
+            COPARTITION_VIOLATIONS += 1
+            COPARTITION_LAST_DETAIL = "; ".join(
+                f"{t}={list(p)}" for t, p in sorted(held_sets.items()))[:400]
+        if len(distinct) > 1:
+            log.error("CO-PARTITIONING BROKEN: this member owns different "
+                      "partition sets per topic (%s) — topic partition counts "
+                      "have diverged; re-run kafka-init with BUS_PARTITIONS "
+                      "and check `kafka-topics --describe`",
+                      {t: p for t, p in owned.items()})
+        # Tracker 155 (completion): RELEASE. `CONSUMER_ASSIGNMENT` above is now
+        # the new assignment, so this is the first moment that can tell a
+        # partition that LEFT from one the eager rebalance revoked and handed
+        # straight back. Pure in-memory dict work — the durable half already
+        # happened in the revoke callback's flush, so this hook stays I/O-free
+        # (pinned by test_the_rebalance_callback_does_no_io).
+        _release_lost_partitions(
+            frozenset(p for parts in owned.values() for p in parts))
+        # Tracker 155, LAST statement of the callback and deliberately so: it
+        # schedules a task and returns, doing no I/O here. Every millisecond
+        # spent in this hook is a millisecond the group is not re-forming.
+        _schedule_ownership_seed(frozenset(acquired))
+
+
+def consumer_state(now_mono: float | None = None) -> str:
+    """This replica's consumer state — FOUR distinguishable values, not two.
+
+      "pending"      no assignment callback has run yet. Says nothing about
+                     health; single-replica/broker-less dev sits here briefly.
+      "idle"         joined the group and holds ZERO partitions. A
+                     MISCONFIGURATION: with the range assignor the replicas
+                     beyond BUS_PARTITIONS get an empty set and consume nothing
+                     forever. Before this state existed it serialized to `{}`,
+                     byte-identical to "pending", and looked healthy.
+      "cold_window"  holds partitions, but at least one was acquired less than
+                     one engine window ago, so its tenants' sliding window has
+                     not had time to refill. RCA output for those tenants is
+                     temporarily DEGRADED (thin window) rather than wrong.
+      "active"       holds partitions, all held for at least one engine window.
+
+    HONEST LIMITATION (tracker 155), NARROWED but not removed. "cold_window" is
+    a TIME-BASED PROXY, not a measurement of carried-over state. `WINDOW_BUFFER`
+    is per-process with NO rehydration path, so a partition acquired at a
+    rebalance still starts with none of its tenants' EVIDENCE — that evidence is
+    stranded in whichever replica held the partition before, and no elapsed time
+    recovers it; the window can only refill from what arrives next. This field
+    therefore reports "the window has not had time to refill yet".
+
+    What it no longer hides is the IDENTITY half. The acquiring replica now
+    reconstructs the still-open objects' identities from ClickHouse at
+    assignment (`_run_ownership_seed`), so an in-flight incident continues under
+    its ORIGINAL correlation_id rather than fragmenting into a new one — which
+    is the loss the 155a run measured (positive-story pass rate 1.00 -> 0.00
+    with detection and specificity both still 1.00). Read the cold window as
+    "thin evidence for these tenants, right identities"; still do not read
+    "active" as "nothing was lost at the last rebalance".
+
+    What it also no longer hides is the DEPARTING side (tracker 155
+    completion): a replica that loses a partition now flushes a final open
+    version of each affected object and forgets the registration, and both the
+    persist and the new-object admission paths refuse to write for a tenant
+    whose partition it does not own. So "the previous owner is still writing"
+    — measured twice in run ownership-155c-08311027 — is no longer one of the
+    things this field is quietly not telling you about.
+    """
+    if not CONSUMER_ASSIGNMENT_SEEN:
+        return "pending"
+    if not any(CONSUMER_ASSIGNMENT.values()):
+        return "idle"
+    now_mono = time.monotonic() if now_mono is None else now_mono
+    if any((now_mono - t) < RETENTION_REQUIRED_S
+           for t in CONSUMER_PARTITION_ACQUIRED_AT.values()):
+        return "cold_window"
+    return "active"
+
+
+def cold_partitions(now_mono: float | None = None) -> list[str]:
+    """The owned partitions still inside their first engine window (see
+    consumer_state). Named explicitly so an operator can see WHICH tenants'
+    RCA is thin, not just that some are."""
+    now_mono = time.monotonic() if now_mono is None else now_mono
+    return sorted(k for k, t in CONSUMER_PARTITION_ACQUIRED_AT.items()
+                  if (now_mono - t) < RETENTION_REQUIRED_S)
+
+
+def subscription_health() -> tuple[str, list[str]]:
+    """(`status`, `reasons`) for /healthz — "ok" ONLY while the REQUIRED
+    subscription is live.
+
+    THE DEFECT THIS CLOSES. `status` was the literal "ok". Through the
+    2026-09-02 outage the consumer failed `start()` and restarted every 60s for
+    three hours; /healthz answered `{"status": "ok", ...}` the whole time, so
+    nothing that reads health — a human, the watchdog, an alert rule — could
+    tell a consuming engine from a starving one.
+
+    WHAT DEGRADES IT. Exactly one condition: the supervisor has tried and is
+    not currently consuming (`start()` failed, or a round ended and the next
+    has not come up). That is the honest reading of "the required subscription
+    is live" and it is the state a restart loop produces.
+
+    WHAT DOES NOT. (a) A DROPPED OPTIONAL LANE. Reporting an off-by-design
+    evidence lane as unhealthy would re-create the defect from the other side —
+    the drop is a named field, a log line and the `corr_evidence_topic_dropped`
+    gauge, which is where a "should this be on?" question belongs. (b) A
+    process that has NEVER started a consumer (`consume()` not running: unit
+    tests, and the window before lifespan starts the task) — the sidecar
+    already answers 503 "starting" until the first snapshot exists, and
+    inventing a degraded state for a consumer nobody asked for would make every
+    health assertion in the suite a lie in the other direction.
+
+    ALSO NOT A DOCKER-HEALTH SIGNAL — tracker 174 stands. The sidecar keeps
+    answering HTTP 200 and the compose healthcheck keeps testing only for 200,
+    so nothing here can flap a container. Degradation is carried in the BODY
+    and in /metrics, for vmalert and for whoever is reading."""
+    reasons: list[str] = []
+    attempted = CONSUMER_STARTS or CONSUMER_START_FAILURES or CONSUMER_RESTARTS
+    if attempted and not CONSUMER_RUNNING:
+        reasons.append("consumer_not_running")
+    return ("degraded" if reasons else "ok"), reasons
+
+
+def owns_tenant(tenant: str, *, topic: str = "netops.cloud") -> bool:
+    """Does THIS instance own `tenant`'s partition of `topic`?
+
+    Used to elect exactly one replica for singleton side-inputs (the cloud-log
+    tailer). Fail-OPEN before the first rebalance (no assignment recorded yet
+    — single-replica/offline behavior unchanged); fail-closed once an
+    assignment exists and excludes the tenant's partition."""
+    total = CONSUMER_PARTITION_TOTALS.get(topic)
+    if not total or not CONSUMER_ASSIGNMENT:
+        return True
+    return tenant_partition(tenant, total) in CONSUMER_ASSIGNMENT.get(topic, [])
+
+
+def build_consumer(topics: Sequence[str] | None = None) -> AIOKafkaConsumer:
+    """Construct (but do not start) the co-partitioned group consumer.
+
+    A factory so tests can pin the wiring: range assignor (co-partitioning),
+    manual commit, no deserializer, subscription with the rebalance listener.
+
+    `topics` defaults to the full DECLARED set (unchanged); `consume()` passes
+    `REQUIRED_TOPICS` so that start()'s all-or-nothing `_wait_topics` can only
+    ever be blocked by a lane whose absence really is a misconfiguration — the
+    optional evidence lanes are resolved and added afterwards."""
     consumer = AIOKafkaConsumer(
-        *TOPICS,
         bootstrap_servers=KAFKA_BOOTSTRAP,
         group_id="netops-correlation",
         auto_offset_reset="latest",
-        value_deserializer=lambda v: json.loads(v.decode("utf-8")) if v else None,
-        enable_auto_commit=True,
+        # Co-partitioning: see the scale-P0 comment above. Round-robin (the
+        # aiokafka default) breaks tenant stickiness across topics.
+        partition_assignment_strategy=(RangePartitionAssignor,),
+        # P1 max-poll thrash: explicit group-membership contract — the
+        # arithmetic behind these values lives at CORR_SESSION_TIMEOUT_MS.
+        session_timeout_ms=CORR_SESSION_TIMEOUT_MS,
+        heartbeat_interval_ms=CORR_HEARTBEAT_INTERVAL_MS,
+        max_poll_interval_ms=CORR_MAX_POLL_INTERVAL_MS,
+        rebalance_timeout_ms=CORR_REBALANCE_TIMEOUT_MS,
+        # SEC-006.2: {} on the plaintext baseline; SSL + the correlation
+        # SVID when the KAFKA_SSL_* env is present (kafka_security_kwargs).
+        **KAFKA_SECURITY,
+        # NO value_deserializer, deliberately. aiokafka runs the deserializer
+        # inside its fetcher (_consumer_record) BEFORE it advances
+        # next_fetch_offset — so a malformed payload raised OUTSIDE the
+        # per-event try below, escaped to the supervisor, and (with manual
+        # commit) the offset never moved: the restart re-read the same poison
+        # bytes forever and every one of the topics starved, with no counter
+        # moving to say so. Decoding moved INSIDE the per-event try, where
+        # the existing quarantine path preserves the payload and the offset
+        # advances past it. Keep the raw bytes here.
+        # Tracker #126 (write-integrity criterion 8): offsets advance ONLY
+        # after the handler returned — never on a timer that runs ahead of
+        # the outcome. Auto-commit could commit an offset whose handler then
+        # crashed BEFORE the durable-DLQ append, losing the event silently.
+        # A quarantined event counts as handled (its payload is preserved);
+        # redelivery after a crash is safe because every critical insert
+        # carries the Phase-3 dedup token (set_dedup_coord below).
+        enable_auto_commit=False,
     )
-    await consumer.start()
-    log.info("consuming topics=%s bootstrap=%s", TOPICS, KAFKA_BOOTSTRAP)
-    try:
-        async for msg in consumer:
-            await handle(msg.topic, msg.value)
-    finally:
-        await consumer.stop()
+    # Topics via subscribe() (not the constructor) so the rebalance listener
+    # sees every assignment — the ownership log/check above.
+    listener = _AssignmentLogger(consumer)
+    consumer.subscribe(topics=list(TOPICS if topics is None else topics),
+                       listener=listener)
+    # Same-module wiring point for consume()'s revoke hook (the closure over
+    # the commit ledger cannot exist before the consumer does).
+    consumer._corr_listener = listener  # our own consumer instance, same module
+    return consumer
+
+
+async def consume() -> None:
+    """Supervised consumer: a poison batch / codec error / broker hiccup is
+    logged and retried with backoff, NEVER a silent task death (§10 — the
+    pre-build-⑥ consumer died unobserved on a snappy-compressed batch and
+    starved the whole engine; this loop is the guarantee that can't recur).
+    Every broker-facing await is BOUNDED so the guarantee holds even when the
+    broker itself is wedged (see CONSUMER_*_TIMEOUT_S above).
+
+    The subscription is PARTITIONED (see REQUIRED_TOPICS / OPTIONAL_TOPICS):
+    start() is asked only about the required lanes, so an absent or ungranted
+    OPTIONAL evidence topic can no longer hold the whole engine in a restart
+    loop — the exact 2026-09-02 (and 2026-08-16) outage."""
+    global CONSUMER_RUNNING, CONSUMER_STARTS, CONSUMER_RESTARTS, CONSUMER_LAST_ERROR
+    backoff = 1.0
+    while True:
+        # REQUIRED lanes only: `consumer.start()` -> `_wait_topics()` is
+        # all-or-nothing over the subscription, so this is what keeps one
+        # optional lane from deciding whether the other twelve run.
+        consumer = build_consumer(REQUIRED_TOPICS)
+        reprobe_task: asyncio.Task | None = None
+        # Batched manual commit: per-message commits would round-trip the broker
+        # on every event. Committing every N/T bounds replay after a crash to at
+        # most N already-handled messages — which dedup absorbs.
+        uncommitted = 0
+        last_commit = time.monotonic()
+        # F-38 ledger: next-commit offset per partition, advanced ONLY after a
+        # message was handled (or durably quarantined — that counts as handled).
+        # The revoke hook commits exactly this dict, so a rebalance that fires
+        # MID-handle can never acknowledge the in-flight message.
+        handled_offsets: dict[TopicPartition, int] = {}
+        since_yield = 0
+
+        async def _commit(force: bool = False, consumer: AIOKafkaConsumer = consumer) -> None:
+            # `consumer` bound at definition time (B023): the enclosing while-loop
+            # rebinds it each supervision round, and this closure must always
+            # commit on the consumer of ITS round, never a later one.
+            nonlocal uncommitted, last_commit
+            if uncommitted == 0:
+                return
+            if not force and uncommitted < CORR_COMMIT_EVERY_N \
+                    and (time.monotonic() - last_commit) < CORR_COMMIT_EVERY_S:
+                return
+            # At-least-once anchor for the batched writes: never acknowledge an
+            # offset whose corr_signals rows are still buffered. A flush failure
+            # (transport/unknown) raises HERE, the commit is skipped, and the
+            # supervisor replays from the last committed offset; a positive
+            # rejection preserved the rows durably inside flush(), which counts
+            # as handled — exactly the per-row discipline, at batch granularity.
+            await SIGNAL_BATCH.flush()
+            await asyncio.wait_for(consumer.commit(), timeout=CONSUMER_STOP_TIMEOUT_S)
+            # Every flushed row's offset is now committed — the batcher's
+            # replay guard has nothing left to absorb (P1 thrash fix).
+            SIGNAL_BATCH.note_committed()
+            uncommitted = 0
+            last_commit = time.monotonic()
+
+        async def _revoke_commit(consumer: AIOKafkaConsumer = consumer,
+                                 handled_offsets: dict = handled_offsets) -> None:
+            # Rebalance listener hook (P1 max-poll thrash): before this
+            # member's partitions move, land what is already safely persisted
+            # so the successor (or this member's own rejoin) does not replay
+            # the whole uncommitted batch. Flush FIRST (never acknowledge an
+            # offset whose rows are still buffered — the F-38 anchor), then
+            # commit ONLY the handled ledger: the in-flight message's offset
+            # is not in it, so a revoke mid-handle cannot advance past
+            # unpersisted work. The batcher's replay guard is deliberately
+            # NOT cleared here — the hook's flush may include rows of the
+            # in-flight message, whose offset stays uncommitted.
+            nonlocal uncommitted, last_commit
+            global CONSUMER_REVOKE_SKIPPED
+            # Each leg gets its OWN small budget (CORR_REVOKE_BUDGET_S): this
+            # runs inside the rejoin, so a slow ClickHouse must cost the group a
+            # few seconds, never a full rebalance timeout. If the flush does not
+            # finish in budget we SKIP the commit and return — F-38 holds
+            # because nothing is acknowledged, and the redelivery is absorbed by
+            # the per-message dedup tokens plus the batcher's commit guard.
+            try:
+                await asyncio.wait_for(SIGNAL_BATCH.flush(),
+                                       timeout=CORR_REVOKE_BUDGET_S)
+            except asyncio.TimeoutError:
+                CONSUMER_REVOKE_SKIPPED += 1
+                log.warning(
+                    "revoke-time flush exceeded %.0fs — NOT committing (offsets "
+                    "stay unacknowledged; the successor replays and dedup "
+                    "absorbs it). skipped_total=%d",
+                    CORR_REVOKE_BUDGET_S, CONSUMER_REVOKE_SKIPPED)
+                return
+            if handled_offsets:
+                await asyncio.wait_for(
+                    consumer.commit(dict(handled_offsets)),
+                    timeout=CORR_REVOKE_BUDGET_S)
+                uncommitted = 0
+                last_commit = time.monotonic()
+
+        listener = getattr(consumer, "_corr_listener", None)
+        if listener is not None:
+            listener.revoke_hook = _revoke_commit
+
+        try:
+            try:
+                await asyncio.wait_for(consumer.start(),
+                                       timeout=CONSUMER_START_TIMEOUT_S)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # FAIL-LOUD, but NAMED. Unchanged behaviour (re-raised to the
+                # supervisor, backoff, retry); what is new is that the log line
+                # says WHICH required topic and WHY — the 3h outage's traceback
+                # named neither.
+                _record_start_failure(exc)
+                await _log_required_topic_failure(consumer, exc)
+                raise
+            CONSUMER_STARTS += 1
+            CONSUMER_RUNNING = True
+            CONSUMER_LAST_ERROR = ""
+            # The required lanes are already live at this point — whatever the
+            # optional resolution decides, the engine consumes.
+            subscribed = await resolve_optional_lanes(consumer, listener)
+            reprobe_task = asyncio.create_task(
+                evidence_reprobe_loop(consumer, listener))
+            log.info("consuming topics=%s (required=%d optional_subscribed=%d "
+                     "optional_dropped=%s) bootstrap=%s (manual commit, N=%d/T=%.0fs)",
+                     subscribed, len(REQUIRED_TOPICS),
+                     len(subscribed) - len(REQUIRED_TOPICS),
+                     dict(sorted(EVIDENCE_TOPICS_DROPPED.items())),
+                     KAFKA_BOOTSTRAP, CORR_COMMIT_EVERY_N, CORR_COMMIT_EVERY_S)
+            backoff = 1.0
+            consecutive_failures = 0
+            async for msg in consumer:
+                # Per-EVENT isolation: one bad record must cost one record, not
+                # the whole ten-topic consumer (see quarantine_event above).
+                event = None
+                # tracker 165 phase 3: the idle backstop may only shed evidence
+                # when this process is level with the broker, so it needs to know
+                # what we have actually consumed. Deliberately OUTSIDE the payload
+                # try-block below: the first version ran inside it, and when the
+                # lag probe raised, the EVENT was quarantined as if its payload
+                # were poison. Bookkeeping must never be able to blame the data.
+                _note_consumed(msg.topic, msg.partition, msg.offset)
+                _refresh_consumer_lag(consumer, time.monotonic())
+                try:
+                    # Phase 3: establish this message's dedup coordinate so every
+                    # critical-table insert it drives carries a stable token — a
+                    # retry/redelivery of THIS offset dedups instead of duplicating.
+                    set_dedup_coord(msg.topic, msg.partition, msg.offset)
+                    # Decode HERE, not in the consumer: a JSONDecodeError or
+                    # UnicodeDecodeError is then just another one-event failure.
+                    # Empty/tombstone values stay None (handle() no-ops on falsy).
+                    event = json.loads(msg.value.decode("utf-8")) if msg.value else None
+                    await handle(msg.topic, event)
+                    consecutive_failures = 0
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    # `event` is still None when the DECODE itself failed —
+                    # quarantine the RAW bytes then, so the poison payload that
+                    # has to be reproduced is the one that gets kept.
+                    quarantine_event(msg.topic, msg.value if event is None else event, exc)
+                    consecutive_failures += 1
+                    # A RUN of failures is not a poison event, it is a broken
+                    # dependency (ClickHouse down). Tolerating those at full
+                    # consume rate would quarantine the entire stream; hand it
+                    # back to the supervisor so its backoff applies pressure.
+                    # The quarantined message itself IS handled (payload kept)
+                    # — commit through it so restart resumes AFTER it instead
+                    # of replaying the poison forever.
+                    if consecutive_failures >= CORR_QUARANTINE_BURST_MAX:
+                        handled_offsets[TopicPartition(msg.topic, msg.partition)] = msg.offset + 1
+                        uncommitted += 1
+                        await _commit(force=True)
+                        raise
+                # Handled (or quarantined — payload durably kept): the ledger
+                # may now advance past this message.
+                handled_offsets[TopicPartition(msg.topic, msg.partition)] = msg.offset + 1
+                uncommitted += 1
+                await _commit()
+                # Cooperative poll cadence (P1 max-poll thrash): aiokafka's
+                # buffered fast path and an all-sync handler never yield, so
+                # under a backlog this task could monopolize the event loop
+                # between commit-triggered flushes and starve the heartbeat
+                # task into a session-timeout ejection. Hand the loop back
+                # every CORR_CONSUME_YIELD_EVERY_N messages (arithmetic at the
+                # constant).
+                since_yield += 1
+                if since_yield >= CORR_CONSUME_YIELD_EVERY_N:
+                    since_yield = 0
+                    await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            with contextlib.suppress(Exception):
+                await _commit(force=True)  # clean shutdown: nothing replays
+            await _stop_bounded(consumer)
+            raise
+        except Exception as exc:
+            CONSUMER_RESTARTS += 1
+            CONSUMER_LAST_ERROR = f"{type(exc).__name__}: {_topic_failure_reason(exc)}"
+            log.exception("consumer failed; restarting in %.0fs", backoff)
+            # NO commit here beyond what _commit already advanced: an offset
+            # whose handler did not return stays unacknowledged, by design.
+        finally:
+            # The round is over however it ended: /healthz must stop claiming a
+            # live subscription BEFORE the backoff sleep, not after the next
+            # successful start (that gap is what let three hours of restarts
+            # render as "ok").
+            CONSUMER_RUNNING = False
+            if reprobe_task is not None:
+                reprobe_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await reprobe_task
+        await _stop_bounded(consumer)
+        await asyncio.sleep(backoff)
+        backoff = min(backoff * 2, 60.0)
 
 
 async def handle(topic: str, event: dict | None) -> None:
     if not event or ch is None:
         return
+    # Per-LANE timing rather than per-stage-within-lane: the lanes are the
+    # coarse split that actually distinguishes cost (syslog parsing vs metric
+    # identity vs flow aggregation), and one timer per event is affordable where
+    # a dozen would start measuring the profiler. Finer breakdown is added
+    # inside whichever lane this run shows to dominate.
+    with stage(f"handle.{topic.rsplit('.', 1)[-1]}"):
+        await _handle_lane(topic, event)
 
+
+async def _handle_lane(topic: str, event: dict) -> None:
     if topic == "netops.metrics":
         await handle_metric(event)
-    elif topic == "netops.syslog":
+    elif topic == CORR_SYSLOG_TOPIC:
+        # A4: the syslog lane is whichever topic CORR_SYSLOG_TOPIC names —
+        # `netops.syslog` by default. Compared against the resolved constant
+        # rather than a literal so the switch cannot silently route the lane's
+        # traffic to no handler at all (which is what a TOPICS-only swap would
+        # have done: subscribed, consumed, and dropped every line).
         await handle_syslog(event)
     elif topic == "netops.flows":
         await handle_flow(event)
+    elif topic == "netops.probes":
+        await handle_probe(event)
+    elif topic == "netops.snmptrap":
+        await handle_snmptrap(event)
+    elif topic == "netops.cloud":
+        await handle_cloud(event)
+    elif topic == "netops.app.identities.v1":
+        await handle_app_identity(event)
+    elif topic == "netops.controller_events":
+        await handle_controller_event(event)
+    elif topic == "netops.app.edge":
+        await handle_app_edge(event)
+    elif topic == "netops.verification":
+        await handle_verification(event)
+    elif topic == "netops.wireless_sessions":
+        await handle_wireless_session(event)
+    elif topic == "netops.wireless_events":
+        await handle_wireless_event(event)
+    elif topic in EVIDENCE_TOPIC_SET:
+        # ONE branch for every evidence class, present and future: the class is
+        # selected by the envelope's own `kind`, inside the generic adapter.
+        # Nothing here names a class, so this tail is O(1) and unchanged when a
+        # class is added or removed (INVARIANTS §10: no per-class branching in
+        # the hot loop).
+        await handle_evidence_event(event)
+
+
+def metric_identity(ev: dict) -> tuple[str, EntityType, str, tuple[str, ...]] | None:
+    """Resolve the canonical entity from a MetricEvent's signal_family + identity.
+    Returns (entity_id, entity_type, kind_prefix, entity_tokens) or None when the
+    required identity is missing (caller drops + counts). Per-interface/per-peer
+    entity_ids keep CUSUM series distinct on a shared metric name."""
+    device = str(ev.get("device") or "")
+    if not device:
+        return None
+    family = str(ev.get("signal_family") or "")
+    if family == "interface":
+        iface = str(ev.get("if_name") or ev.get("index") or "")
+        if not iface:
+            return None
+        # tracker 168: the bare interface name is device-LOCAL and must not be a
+        # global grounding subject — entity_id is already `device:iface`, from
+        # which Node.tokens() derives both the full id and the device part.
+        return f"{device}:{iface}", EntityType.INTERFACE, "if_metric_anomaly", (device,)
+    if family == "bgp":
+        peer = str(ev.get("peer") or ev.get("index") or "")
+        if not peer:
+            return None
+        # BGP4-MIB has no VRF column; default network-instance is implicit.
+        return f"{device}:{peer}", EntityType.DEVICE, "bgp_state_anomaly", (device, peer)
+    if family == "igp":
+        # tracker 222: OSPF/IS-IS adjacency state. Identity is (device,
+        # neighbour) — an ospfNbrTable row index (the neighbour's IP) or an
+        # IS-IS system-id, normalised onto `neighbor` by both producers.
+        nbr = str(ev.get("neighbor") or ev.get("index") or "")
+        if not nbr:
+            return None
+        # The neighbour is deliberately NOT a grounding token, unlike `bgp`'s
+        # peer address. Same reasoning as tracker 168 for the bare interface
+        # name: an IS-IS system-id is a fabric-internal label no other lane can
+        # resolve to an entity, so grounding on it would invent joins. It stays
+        # in the entity_id, from which Node.tokens() derives the device part.
+        return f"{device}:{nbr}", EntityType.DEVICE, "igp_state_anomaly", (device,)
+    if family == "device_resource":
+        return device, EntityType.DEVICE, "device_resource_anomaly", (device,)
+    if family == "cloud_resource":
+        # Provider-reported health/utilization for a cloud instance (CloudWatch /
+        # Azure Monitor). The resource id is carried in `index`; tokens include it
+        # AND the app-host private IPs so a cloud-metric anomaly co-grounds with
+        # the probes and app signals that name the same host (cloud RCA needs an
+        # INDEPENDENT provider observer to reach confirmed).
+        rid = str(ev.get("index") or "")
+        tokens = tuple(t for t in (device, rid, *(str(ev.get("private_ip") or "").split(","))) if t)
+        return device, EntityType.DEVICE, "cloud_resource_anomaly", tokens
+    return None
 
 
 async def handle_metric(ev: dict) -> None:
-    """Score numeric metric samples for anomalies."""
-    device = str(ev.get("hostname") or ev.get("agent_host") or "unknown")
-    name = str(ev.get("name") or ev.get("metric") or "")
-    if not name:
+    """Canonical MetricEvent (netops.metrics) → device_telemetry signal.
+
+    Wire contract with collectors/metric_events.go: device, metric, value,
+    signal_family, if_name/peer/neighbor/index, collection_path, ts, vendor. Legacy
+    Telegraf-shaped events (hostname/name/first-numeric) are still tolerated for
+    back-compat but carry no canonical identity."""
+    global METRICS_RECEIVED, METRICS_ACCEPTED, METRICS_DROPPED
+    global METRICS_DROPPED_NO_VALUE, METRICS_DROPPED_NO_IDENTITY, METRICS_DROPPED_STALE_TS
+    METRICS_RECEIVED += 1
+
+    metric = str(ev.get("metric") or ev.get("name") or "")
+    raw_value = ev.get("value")
+    if raw_value is None:
+        # Legacy fallback: first numeric field.
+        for k, v in ev.items():
+            if isinstance(v, (int, float)) and k not in {"timestamp", "time", "value"}:
+                raw_value = v
+                break
+    if not metric or not isinstance(raw_value, (int, float)) or isinstance(raw_value, bool):
+        METRICS_DROPPED += 1
+        METRICS_DROPPED_NO_VALUE += 1
         return
-    # Find the first numeric field value.
-    value = None
-    for k, v in ev.items():
-        if isinstance(v, (int, float)) and k not in {"timestamp", "time"}:
-            value = float(v); name = name or k; break
-    if value is None:
+    value = float(raw_value)
+
+    ident = metric_identity(ev)
+    if ident is None:
+        # No canonical identity → cannot ground a signal. Drop, don't guess.
+        METRICS_DROPPED += 1
+        METRICS_DROPPED_NO_IDENTITY += 1
         return
-    z = score(device, name, value)
+    entity_id, entity_type, kind_prefix, tokens = ident
+
+    # Timestamp validation (Layer-1F): trust the event clock only within skew.
+    now = datetime.now(timezone.utc)
+    event_ts = parse_event_ts(ev.get("ts")) or now
+    age = (now - event_ts).total_seconds()
+    if age < -METRIC_FUTURE_SKEW_S or age > METRIC_MAX_AGE_S:
+        METRICS_DROPPED += 1
+        METRICS_DROPPED_STALE_TS += 1
+        log.warning("metric dropped: timestamp out of bounds (age=%.0fs) %s/%s", age, entity_id, metric)
+        return
+
+    # The claim is checked against the registry entry for the device the sample
+    # names. Not registry-anchored: a canonical MetricEvent can legitimately
+    # describe an entity the exporter has no inventory row for (a fresh device,
+    # a cloud resource), so the registry is used to CONTRADICT a claim, never to
+    # require one. A contradiction is refused + quarantined, never averaged.
+    try:
+        tenant = verified_tenant(str(ev.get("tenant_id") or ""),
+                                 str(ev.get("device") or ""), "metrics")
+    except TenantClaimRefused as exc:
+        METRICS_DROPPED += 1
+        keep_deadletter_payload("metrics", ev, exc)
+        return
+    collection_path = str(ev.get("collection_path") or "snmp_poll")
+    METRICS_ACCEPTED += 1
+
+    # Engine v2 stage [1]+[2]: every sample feeds the episode detector (CUSUM
+    # needs the full stream, not just crossings) — the canonical corr_signals path.
+    await feed_episode_detector(
+        tenant, entity_id, metric, value, event_ts,
+        observer_id=str(ev.get("device") or ""),
+        collection_path=collection_path,
+        entity_type=entity_type,
+        kind_prefix=kind_prefix,
+        entity_tokens=tokens,
+    )
+
+    # A4 heartbeat plane. The episode detector above answers "did this move?";
+    # these checks answer "is it STILL bad, and for how long?" — the question a
+    # CUSUM baseline structurally cannot, because a box that has been at 97 %
+    # CPU all week has 97 % as its baseline. Cheap on the hot path: one dict
+    # lookup on the metric name, and every metric that is not one of the three
+    # the plane watches returns immediately.
+    await _emit_proactive(PROACTIVE.observe_metric(
+        tenant=tenant, entity_id=entity_id, metric=metric, value=value,
+        ts=event_ts, observer_id=str(ev.get("device") or ""), tokens=tokens,
+        peer=str(ev.get("peer") or ""),
+    ))
+
+    # Legacy rolling z-score finding (back-compat, netops.findings). Keyed on the
+    # canonical entity_id so per-interface/per-peer series don't collide on a
+    # shared metric name, and on the VERIFIED tenant (M29b) so same-named
+    # entities in different tenants never share a baseline. Superseded by the
+    # episode detector above; kept until the findings surface retires.
+    z = score(tenant, entity_id, metric, value)
     if z is None:
         return
     await emit(
         kind="anomaly",
         severity="warning" if z < 5 else "critical",
-        device=device,
-        component=name,
-        summary=f"{name} on {device} z={z:.1f}",
-        description=f"Rolling z-score over last {WINDOW_SIZE} samples exceeded threshold.",
+        device=str(ev.get("device") or ""),
+        component=metric,
+        summary=f"{metric} on {entity_id} z={z:.1f}",
+        description="Rolling z-score over the baseline window exceeded threshold.",
         score=float(z),
-        labels={"metric": name, "device": device},
+        labels={"metric": metric, "entity": entity_id},
+        # M29b: the finding carries the tenant this event was VERIFIED under,
+        # not a second registry lookup that can disagree with it.
+        tenant_id=tenant,
     )
 
 
 # Severity weights for syslog correlation. A burst of high-severity
 # events from one device within a short window is itself a finding.
-SEVERITY_WEIGHT = {"emerg": 8, "alert": 7, "crit": 6, "err": 5, "warning": 3, "notice": 2, "info": 1, "debug": 0}
-SYSLOG_BUCKET: Dict[str, list[tuple[float, int]]] = {}
+# BOTH spellings are keyed: the RFC 3164 short keywords (Cisco et al.) AND the
+# long-form levels vendors like FortiOS emit (Vector's syslog_normalized passes
+# kv.level through verbatim — 'critical'/'error'/'emergency'). Before the
+# long forms were added, 50 FortiGate level=critical lines in 60s scored weight
+# 0 and the burst finding silently never fired while identical Cisco 'crit'
+# traffic did (vendor blind spot, journal PRI-0/F-severity finding). 'panic' and
+# 'emerg' parity mirrors the aggregator's severity reconcile map.
+SEVERITY_WEIGHT = {
+    "emerg": 8, "panic": 8, "emergency": 8,
+    "alert": 7,
+    "crit": 6, "critical": 6,
+    "err": 5, "error": 5,
+    "warning": 3, "warn": 3,
+    "notice": 2,
+    "info": 1, "information": 1, "informational": 1,
+    "debug": 0,
+}
+# Keyed by (tenant, hostname) — NOT hostname alone. Two tenants can each own a
+# device named "core-sw1" (or hit the "unknown" fallback); a shared bucket let
+# tenant A's log volume fire a burst finding stamped with tenant B (§3a
+# cross-tenant leak), and made burst output depend on which tenants share an
+# instance (scale P0 tenant-slice equivalence).
+SYSLOG_BUCKET: dict[tuple[str, str], list[tuple[float, int]]] = {}
 SYSLOG_WINDOW = 60.0   # seconds
 SYSLOG_THRESHOLD = 30  # cumulative weight
+# Cap on distinct syslog hostnames tracked for burst detection. The key comes
+# from the device — it is attacker-controllable — so it needs a hard bound, not
+# just per-key pruning.
+SYSLOG_BUCKET_MAX = int(os.environ.get("CORR_MAX_SYSLOG_HOSTS", "50000"))
+_SYSLOG_SWEEP_LAST = 0.0
+SYSLOG_SWEEP_EVERY_S = 30.0
+
+
+def _sweep_syslog_buckets(now: float) -> None:
+    """Drop hosts whose window has emptied; hard-cap the key set as a backstop."""
+    global _SYSLOG_SWEEP_LAST
+    if (now - _SYSLOG_SWEEP_LAST) < SYSLOG_SWEEP_EVERY_S and len(SYSLOG_BUCKET) < SYSLOG_BUCKET_MAX:
+        return
+    _SYSLOG_SWEEP_LAST = now
+    cutoff = now - SYSLOG_WINDOW
+    for host in [h for h, b in SYSLOG_BUCKET.items() if not b or b[-1][0] < cutoff]:
+        SYSLOG_BUCKET.pop(host, None)
+    if len(SYSLOG_BUCKET) > SYSLOG_BUCKET_MAX:
+        # Still over: evict the least-recently-active hosts.
+        for host, _ in sorted(SYSLOG_BUCKET.items(),
+                              key=lambda kv: kv[1][-1][0] if kv[1] else 0.0,
+                              )[:len(SYSLOG_BUCKET) - SYSLOG_BUCKET_MAX]:
+            SYSLOG_BUCKET.pop(host, None)
+        log.warning("syslog burst tracker at cap (%d hosts) — evicting oldest; "
+                    "check for spoofed/rotating syslog hostnames", SYSLOG_BUCKET_MAX)
+
+
+# Probe-authority classification config (Step 3). Registry-sourced fields on the
+# event win; otherwise we infer + FAIL CLOSED. See docs/design/probe-authority-model.md.
+#
+# Active-measurement vantages (e.g. the STAMP prober). Their probes to a CUSTOMER
+# target are customer_path evidence (shown as supporting on the affected device);
+# their probes to a platform service are internal (target check wins, below).
+_MEASUREMENT_PROBE_OBSERVERS = {
+    o.strip().lower() for o in os.getenv(
+        # back-compat: the old var named the same observers.
+        "CORR_MEASUREMENT_PROBE_OBSERVERS", os.getenv("CORR_SYNTHETIC_PROBE_OBSERVERS", "api,prober"),
+    ).split(",") if o.strip()
+}
+# Measurement observers the operator has DECLARED trustworthy. Their customer-path
+# probes may anchor a CONFIRMED verdict — still only alongside an independent
+# witness of another modality (a probe alone never confirms; verdicts.py enforces
+# this). Default EMPTY = conservative: probes SUPPORT (→ suspected), never confirm.
+_TRUSTED_PROBE_OBSERVERS = {
+    o.strip().lower() for o in os.getenv("CORR_TRUSTED_PROBE_OBSERVERS", "").split(",") if o.strip()
+}
+# The (confirm-capable, real) vantage a trusted observer maps to. A self-hosted
+# STAMP runner reads as the customer's private location.
+try:
+    _TRUSTED_PROBE_VANTAGE = VantageType(os.getenv("CORR_TRUSTED_PROBE_VANTAGE", "private_location"))
+except ValueError:
+    _TRUSTED_PROBE_VANTAGE = VantageType.PRIVATE_LOCATION
+# The platform's OWN stack services. A probe whose destination is one of these is
+# self-monitoring, not customer observability — it must never anchor a customer
+# incident (decision #76). Explicit default (was empty) so the classification is
+# robust regardless of which agent issued the probe; override via env per deploy.
+_INTERNAL_PROBE_TARGETS = {
+    t.strip().lower() for t in os.getenv(
+        "CORR_INTERNAL_PROBE_TARGETS",
+        "nginx,api,frontend,clickhouse,redis,postgres,netbox,grafana,keycloak,"
+        "opensearch,victoriametrics,prometheus,kafka,redpanda,vector,loki,"
+        "promtail,correlation,prober",
+    ).split(",") if t.strip()
+}
+_SERVICE_DEP_TARGETS = {
+    t.strip().lower() for t in os.getenv("CORR_SERVICE_DEP_TARGETS", "").split(",") if t.strip()
+}
+
+
+# Signal purposes that are NOT production traffic (§11): their evidence must
+# never confirm production customer impact — forced to LAB_TEST intent, which
+# derives DEBUG_ONLY authority (excluded from verdicts and marked internal).
+_NON_PRODUCTION_PURPOSES = frozenset({
+    "validation", "lab", "fault_injection", "debug", "demo", "staging",
+})
+
+
+def classify_probe(ev: dict, sig: Signal) -> None:
+    """Enrich an active_probe signal IN PLACE with its derived authority/scope +
+    fate fingerprint. Registry fields (`probe_intent`/`vantage_type` on the event)
+    are authoritative; otherwise infer and fail closed to UNKNOWN→LOW."""
+    # Lineage + environment (§2/§11) — stamped on EVERY probe-derived signal so
+    # rows from one execution are joinable and validation traffic is marked.
+    if ev.get("execution_id"):
+        sig.attrs["execution_id"] = str(ev["execution_id"])
+    purpose = str(ev.get("signal_purpose") or "production").strip().lower() or "production"
+    sig.attrs["signal_purpose"] = purpose
+    sig.attrs["environment"] = (
+        str(ev.get("environment") or "").strip().lower()
+        or ("prod" if purpose == "production" else purpose)
+    )
+    intent = str(ev.get("probe_intent") or "")
+    vantage = str(ev.get("vantage_type") or "")
+    src = "registry"
+    if purpose in _NON_PRODUCTION_PURPOSES:
+        # A declared non-production purpose overrides everything, including a
+        # declared customer-path intent: validation/lab/fault-injection traffic
+        # is DEBUG_ONLY evidence, full stop (§11).
+        pi, vt, src = ProbeIntent.LAB_TEST, VantageType.LOCAL_CONTAINER, "declared-purpose"
+    elif intent and vantage:
+        try:
+            pi, vt = ProbeIntent(intent), VantageType(vantage)
+        except ValueError:
+            pi, vt, src = ProbeIntent.UNKNOWN, VantageType.UNKNOWN, "unknown"
+    else:
+        obs = (sig.observer.observer_id or "").lower()
+        target = sig.entity_id.split("->", 1)[1].strip().lower() if "->" in sig.entity_id else ""
+        # TARGET wins first: probing a platform service is self-monitoring no matter
+        # who issued it (decision #76), so it can never leak into a customer incident.
+        if target in _INTERNAL_PROBE_TARGETS:
+            pi, vt, src = ProbeIntent.PLATFORM_SELF_CHECK, VantageType.INTERNAL_COLLECTOR, "inferred"
+        elif target in _SERVICE_DEP_TARGETS:
+            pi, vt, src = ProbeIntent.SERVICE_DEPENDENCY, VantageType.PUBLIC_CLOUD_AGENT, "inferred"
+        elif obs in _MEASUREMENT_PROBE_OBSERVERS:
+            # An active-measurement vantage probing a CUSTOMER path. Scope =
+            # customer_path → shown as supporting evidence on the affected device.
+            # Authority follows the vantage's DECLARED trust: trusted observers get a
+            # confirm-capable vantage; untrusted (default) stay LOW — SUPPORT, never
+            # CONFIRM. UNKNOWN with customer_path resolves to LOW (not debug), so the
+            # probe is visible, unlike the old LOCAL_CONTAINER→debug_only default.
+            if obs in _TRUSTED_PROBE_OBSERVERS:
+                pi, vt, src = ProbeIntent.CUSTOMER_PATH, _TRUSTED_PROBE_VANTAGE, "inferred-trusted"
+            else:
+                pi, vt, src = ProbeIntent.CUSTOMER_PATH, VantageType.UNKNOWN, "inferred"
+        else:
+            pi, vt, src = ProbeIntent.UNKNOWN, VantageType.UNKNOWN, "unknown"
+    sig.attrs["probe_intent"] = pi.value
+    sig.attrs["vantage_type"] = vt.value
+    sig.attrs["probe_authority"] = derive_probe_authority(pi, vt).value
+    sig.attrs["probe_scope"] = derive_probe_scope(pi, vt).value
+    sig.attrs["classification_source"] = src
+    sig.attrs["agent_host"] = str(ev.get("agent_host") or ev.get("source") or sig.observer.observer_id)
+    egress = str(ev.get("source_egress") or ev.get("egress_ip") or "")
+    if egress:
+        sig.attrs["source_egress"] = egress
+    if ev.get("seam_id"):
+        sig.attrs["seam_id"] = str(ev["seam_id"])
+    if ev.get("schedule_id"):
+        sig.attrs["schedule_id"] = str(ev["schedule_id"])
+
+
+async def handle_probe(ev: dict) -> None:
+    """Active-measurement events (STAMP / ICMP / TCP / HTTP) from the Go
+    collectors via netops.probes → active_probe signals on the spine
+    (#67 build ⑦). The probe path is the evidence class device telemetry
+    cannot supply — gray failures are invisible to counters. Each signal is
+    classified for probe authority + fate (Step 3) before it enters the spine."""
+    global DEADLETTER_COUNT, PROBES_RECEIVED
+    PROBES_RECEIVED += 1
+    if not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    host = str(ev.get("target") or "")
+    # Most probe targets are external hosts the registry has never heard of, so
+    # this lane is not registry-anchored — but when the target IS an inventory
+    # device, a probe claiming a DIFFERENT tenant than that device's owner is a
+    # cross-tenant write and is refused.
+    #
+    # S17: a Digital Experience probe carries the owning tenant of the CATALOGUE
+    # TARGET as `tenant`. Vector's probe_normalized remap sets `.tenant_id` from
+    # the device_tenant enrichment table, which knows nothing about synthetic
+    # targets, so for a DEM measurement that field is empty and the prober's
+    # claim is the only owner information there is. It is still a CLAIM: it goes
+    # through verified_tenant like every other one, so a claim that contradicts
+    # the registry deadletters instead of being trusted.
+    claimed = str(ev.get("tenant_id") or "") or str(ev.get("tenant") or "")
+    try:
+        tenant = verified_tenant(claimed, host, "probes")
+    except TenantClaimRefused as exc:
+        DEADLETTER_COUNT += 1
+        keep_deadletter_payload("probe", ev, exc)
+        return
+    now = datetime.now(timezone.utc)
+    try:
+        sigs = probe_signals(ev, DETECTOR, tenant, now)
+    except DeadLetter as exc:
+        DEADLETTER_COUNT += 1
+        keep_deadletter_payload("probe", ev, exc)
+        log.warning("dead-letter (probe): %s", exc)
+        return
+    for sig in sigs:
+        classify_probe(ev, sig)
+        await batch_signal(sig.to_ch_row())  # batched: lane=probes
+        fwd = agg_admit(sig)
+        if fwd is not None:
+            buffer_signal(fwd)
+        log.info("probe signal %s: %s sev=%s value=%.1f scope=%s auth=%s",
+                 sig.kind, sig.entity_id, sig.severity.value, sig.value,
+                 sig.attrs.get("probe_scope"), sig.attrs.get("probe_authority"))
+
+    # Semantic application-experience lane (external Digital-Experience, NOT APM):
+    # an HTTP/TCP/ICMP synthetic FAILURE also emits a semantic app-experience
+    # signal (synthetic_http_fail / synthetic_tls_fail / …) the sig.ent.app.*
+    # templates match. Additive — the generic probe signals above are unchanged.
+    # Classified through the SAME fail-closed path as the generic lane: both
+    # rows carry the event's execution_id/purpose, and a validation canary can
+    # never arrive as a trusted customer-path witness (epic §2/§11).
+    app_sig = synthetic_app_signal(ev, tenant, now)
+    if app_sig is not None:
+        classify_probe(ev, app_sig)
+        await batch_signal(app_sig.to_ch_row())  # batched: lane=probes
+        app_fwd = agg_admit(app_sig)
+        if app_fwd is not None:
+            buffer_signal(app_fwd)
+        log.info("synthetic app-experience signal %s: %s reason=%s app=%s",
+                 app_sig.kind, app_sig.entity_id, app_sig.attrs.get("reason"),
+                 app_sig.attrs.get("app_name"))
+
+
+async def handle_snmptrap(ev: dict) -> None:
+    """Normalized SNMP trap (netops.snmptrap) → control_plane signal for the
+    high-value families only. Unclassified traps stay searchable in OpenSearch
+    and create NO RCA signal (the anti-noise guardrail). The OpenSearch path is
+    untouched — this is an ADDITIONAL evidence lane, not a replacement."""
+    global DEADLETTER_COUNT, TRAPS_RECEIVED, TRAPS_NORMALIZED, TRAPS_DROPPED, TRAPS_RECANON
+    TRAPS_RECEIVED += 1
+    if not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    # G2/C8: the Go receiver (G2a) attributes the trap to an inventory device via
+    # source-IP / sysName / agent-addr. When that leaves it UNATTRIBUTED, try the
+    # richer C7.1 EntityResolver on the trap's own source address — it also knows
+    # INTERFACE IPs, so a trap sourced from a device's interface (not its mgmt IP)
+    # still resolves. A NAT-collapsed shared source is ambiguous → stays unresolved
+    # (the producer then keeps it searchable but emits no phantom-device RCA signal).
+    device = str(ev.get("device") or "")
+    if not device:
+        recovered = cached_entity_resolver_all().device_for_ip(str(ev.get("host") or ""))
+        if recovered:
+            ev = {**ev, "device": recovered}
+            device = recovered
+            TRAPS_RECANON += 1
+    # F-11 (D1/D4, INV-F11-10): registry-ANCHORED like syslog and flows — the
+    # aggregator stamps the trap tenant SOLELY from the device→tenant registry,
+    # and the router's generated quarantine stage seals snmptrap misses. A
+    # no-claim trap whose identity the registry never heard of is therefore
+    # TENANT_UNATTRIBUTABLE and joins the durable quarantine; it must NOT
+    # process as 'global' into corr_signals/RCA/ticketing while the router
+    # seals the same event. The old NAT-ambiguity concern is answered by D1:
+    # ambiguous identities are deliberately OMITTED from the registry, so they
+    # are misses that must quarantine (recoverable), not process. The identity
+    # mirrors the router's quarantine stage: device, falling back to the
+    # transport source address — the two tiers must agree on what is
+    # attributable, or a router-restored trap would be re-refused here.
+    try:
+        tenant = verified_tenant(str(ev.get("tenant_id") or ""),
+                                 device or str(ev.get("host") or ""),
+                                 "snmptrap", registry_anchored=True)
+    except TenantClaimRefused as exc:
+        DEADLETTER_COUNT += 1
+        TRAPS_DROPPED += 1
+        keep_deadletter_payload("trap", ev, exc)
+        return
+    try:
+        sig = trap_control_signal(ev, tenant, datetime.now(timezone.utc))
+    except DeadLetter as exc:
+        DEADLETTER_COUNT += 1
+        keep_deadletter_payload("trap", ev, exc)
+        log.warning("dead-letter (trap): %s", exc)
+        return
+    if sig is None:
+        TRAPS_DROPPED += 1   # unclassified — no RCA signal, kept searchable
+        return
+    await batch_signal(sig.to_ch_row())  # batched: lane=snmptrap
+    TRAPS_NORMALIZED += 1
+    buffer_signal(sig)
+    # A4: the trap adjacency lane feeds the same heartbeat plane as syslog —
+    # the trap rules normalize `state` onto the same {down, up} vocabulary, so
+    # an estate that traps and an estate that logs get the same check.
+    await _emit_proactive(PROACTIVE.observe_signal(
+        tenant=tenant, entity_id=sig.entity_id, kind=sig.kind,
+        state=str(sig.attrs.get("state") or ""),
+        ts=sig.ts, observer_id=sig.observer.observer_id,
+        tokens=sig.entity_tokens, peer=str(sig.attrs.get("peer") or ""),
+    ))
+    log.info("trap signal %s: %s %s", sig.kind, sig.entity_id, sig.attrs.get("state", ""))
+
+
+async def handle_controller_event(ev: dict) -> None:
+    """Normalized controller_event (netops.controller_events, the Go nms poll
+    runtime #95) → management-plane signal on the SAME spine. Vendor-neutral:
+    the producer already normalized kinds, so Meraki == Versa == vManage here.
+    A controller is ONE modality (Source.CONTROLLER + MANAGEMENT_PLANE): the
+    independence gate caps controller-alone pictures at suspected — confirmation
+    always needs corroborating direct telemetry (the 3-tier evidence hierarchy)."""
+    global CONTROLLER_EVENTS_RECEIVED, CONTROLLER_EVENTS_SIGNALS, CONTROLLER_EVENTS_DROPPED
+    CONTROLLER_EVENTS_RECEIVED += 1
+    if not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    sig = controller_event_to_signal(ev, datetime.now(timezone.utc))
+    if sig is None:
+        CONTROLLER_EVENTS_DROPPED += 1  # no tenant/kind identity — default-closed
+        return
+    await batch_signal(sig.to_ch_row())  # batched: lane=controller_events
+    CONTROLLER_EVENTS_SIGNALS += 1
+    buffer_signal(sig)
+    log.info("controller signal %s: %s", sig.kind, sig.entity_id)
+
+
+async def handle_verification(ev: dict) -> None:
+    """Active-verification check results (netops.verification, the Go verify
+    engine — RCA spec item 8) → active_verification-modality signals on the
+    SAME spine. A failing check corroborates (attrs.corroborates_kinds feeds
+    scoring's clause matching); a healthy battery REFUTES
+    (attrs.refutes_kinds → scoring's contradiction path). Because
+    active_verification is its own modality class, the independence gate can
+    count a device answer as a second source — while the device-as-observer
+    identity blocks it from corroborating the same device's passive telemetry.
+    Fail-closed: an untenanted, unbindable or skipped result is dropped."""
+    global VERIFICATION_RECEIVED, VERIFICATION_SIGNALS, VERIFICATION_DROPPED
+    VERIFICATION_RECEIVED += 1
+    if not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    sig = verification_signal_from_event(ev, datetime.now(timezone.utc))
+    if sig is None:
+        VERIFICATION_DROPPED += 1  # no tenant/device identity or skipped — default-closed
+        return
+    await batch_signal(sig.to_ch_row())  # batched: lane=verification
+    VERIFICATION_SIGNALS += 1
+    buffer_signal(sig)
+    log.info("verification signal %s %s: %s", sig.kind, sig.attrs.get("check", ""), sig.entity_id)
+
+
+async def handle_wireless_session(ev: dict) -> None:
+    """Wireless client-session record (netops.wireless_sessions, #128 Phase 4)
+    → netops.wireless_sessions CH row (+ MLO link rows). PURELY the per-client
+    event tier: session records are troubleshooting data and NEVER become
+    engine signals (the §20 volume rule — onboarding FAILURES are the signal
+    lane, handle_wireless_event). Tenancy explicit, default-closed. A non-MLO
+    client is an MLO client with one link (report §10): a session with no
+    links list still writes one implicit link row so every query works
+    against wireless_mlo_links from day one."""
+    global WIRELESS_RECEIVED, WIRELESS_DROPPED
+    WIRELESS_RECEIVED += 1
+    if ch is None:
+        return
+    tenant = str(ev.get("tenant_id") or "")
+    session_id = str(ev.get("session_id") or "")
+    client_mac = str(ev.get("client_mac") or "")
+    bssid = str(ev.get("bssid") or "")
+    if not tenant or not session_id or not client_mac or not bssid:
+        WIRELESS_DROPPED += 1
+        log.warning("wireless session dropped: missing identity (tenant=%r session=%r)",
+                    tenant, session_id)
+        return
+    # The claim is cross-checked against the registry entry for the OBSERVER
+    # (controller / AP) that reported the session. Wireless client data is
+    # per-tenant PII, so a session claiming a tenant the reporting observer does
+    # not belong to is refused, not stored.
+    try:
+        tenant = verified_tenant(tenant, str(ev.get("observer_id") or ""), "wireless")
+    except TenantClaimRefused as exc:
+        WIRELESS_DROPPED += 1
+        keep_deadletter_payload("wireless", ev, exc)
+        return
+    cid, confidence, method = wo_client_identity(
+        tenant, client_mac,
+        eap_cn=str(ev.get("eap_cn") or ""), username=str(ev.get("username") or ""),
+        dhcp_client_id=str(ev.get("dhcp_client_id") or ""), session_seed=session_id)
+    links = ev.get("links") or []
+    row = {
+        "tenant_id": tenant, "session_id": session_id,
+        "client_mac": client_mac.lower(),
+        "mld_mac": str(ev.get("mld_mac") or client_mac).lower(),
+        "client_id": cid, "identity_confidence": confidence, "identity_method": method,
+        "bssid": bssid.lower(), "ap_ref": str(ev.get("ap_ref") or ""),
+        "radio_ref": str(ev.get("radio_ref") or ""),
+        "wlan_ref": str(ev.get("wlan_ref") or ""),
+        "ssid_name": str(ev.get("ssid_name") or ""),
+        "username": str(ev.get("username") or ""),
+        "ip_v4": str(ev.get("ip_v4") or ""), "ip_v6": str(ev.get("ip_v6") or ""),
+        "is_mlo": bool(ev.get("is_mlo") or len(links) > 1),
+        "link_count": max(1, len(links)),
+        "assoc_start": int(ev.get("assoc_start_ms") or 0),
+        "assoc_end": int(ev["assoc_end_ms"]) if ev.get("assoc_end_ms") else None,
+        "end_reason": str(ev.get("end_reason") or ""),
+        "observer_id": str(ev.get("observer_id") or ""),
+        "collection_path": str(ev.get("collection_path") or "via_controller"),
+        "data_class": str(ev.get("data_class") or "live"),
+    }
+    await ch_insert("netops.wireless_sessions", [row], lane="wireless")
+    link_rows = []
+    for i, ln in enumerate(links if links else [{}]):
+        link_rows.append({
+            "tenant_id": tenant,
+            "link_id": f"{session_id}|{i}",
+            "session_ref": session_id, "link_index": i,
+            "band": str(ln.get("band") or ""),
+            "radio_ref": str(ln.get("radio_ref") or ev.get("radio_ref") or ""),
+            "bssid_ref": str(ln.get("bssid") or bssid).lower(),
+            "link_state": str(ln.get("link_state") or "active"),
+            "rssi_dbm": float(ln.get("rssi_dbm") or 0),
+            "snr_db": float(ln.get("snr_db") or 0),
+            "mcs": int(ln.get("mcs") or 0), "nss": int(ln.get("nss") or 0),
+            "channel": int(ln.get("channel") or 0),
+            "channel_width_mhz": int(ln.get("channel_width_mhz") or 0),
+            "valid_from": int(ev.get("assoc_start_ms") or 0),
+            "data_class": str(ev.get("data_class") or "live"),
+        })
+    await ch_insert("netops.wireless_mlo_links", link_rows, lane="wireless")
+
+
+async def handle_wireless_event(ev: dict) -> None:
+    """Wireless onboarding/roam observations (netops.wireless_events, #128
+    Phase 4). `type=onboarding` events assemble an applicability-aware episode
+    (wireless_onboarding.py): the EPISODE always lands in ClickHouse; only a
+    terminal failure/degraded emits ONE engine signal at the terminal phase's
+    kind (§20 — successes never enter the window). `type=roam` events write
+    the deduped roam row (both APs may report one roam; the deterministic
+    roam_id collapses them)."""
+    global WIRELESS_RECEIVED, WIRELESS_SIGNALS, WIRELESS_DROPPED
+    WIRELESS_RECEIVED += 1
+    if ch is None:
+        return
+    tenant = str(ev.get("tenant_id") or "")
+    if not tenant:
+        WIRELESS_DROPPED += 1
+        return
+    # Same observer cross-check as handle_wireless_session.
+    try:
+        tenant = verified_tenant(tenant, str(ev.get("observer_id") or ""), "wireless")
+    except TenantClaimRefused as exc:
+        WIRELESS_DROPPED += 1
+        keep_deadletter_payload("wireless", ev, exc)
+        return
+    etype = str(ev.get("type") or "")
+    if etype == "onboarding":
+        client_mac = str(ev.get("client_mac") or "")
+        bssid = str(ev.get("bssid") or "")
+        start_ms = int(ev.get("attempt_start_ms") or 0)
+        if not client_mac or not bssid or not start_ms:
+            WIRELESS_DROPPED += 1
+            return
+        ep = assemble_wireless_episode(
+            tenant, client_mac, bssid, str(ev.get("ap_ref") or ""),
+            dict(ev.get("wlan") or {}), dict(ev.get("observations") or {}),
+            datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc),
+            str(ev.get("observer_id") or ""),
+            wlan_ref=str(ev.get("wlan_ref") or ""),
+            data_class=str(ev.get("data_class") or "live"))
+        await ch_insert("netops.wireless_onboarding_episodes", [ep.to_ch_row()],
+                        lane="wireless")
+        sig = wireless_episode_signal(ep)
+        if sig is not None and CORR_SIGNALS_ENABLED:
+            await batch_signal(sig.to_ch_row())  # batched: lane=wireless
+            WIRELESS_SIGNALS += 1
+            buffer_signal(sig)
+            log.info("wireless onboarding signal %s: %s", sig.kind, sig.entity_id)
+    elif etype == "roam":
+        client_mac = str(ev.get("client_mac") or "").lower()
+        to_bssid = str(ev.get("to_bssid") or "").lower()
+        ts_ms = int(ev.get("ts_ms") or 0)
+        if not client_mac or not to_bssid or not ts_ms:
+            WIRELESS_DROPPED += 1
+            return
+        # Deterministic roam id: both the old and new AP may report this roam;
+        # bucketing ts to the report-uncertainty window collapses the pair.
+        bucket = ts_ms // 5000
+        roam_id = f"{client_mac}|{to_bssid}|{bucket}"
+        await ch_insert("netops.wireless_roams", [{
+            "tenant_id": tenant, "roam_id": roam_id, "client_mac": client_mac,
+            "session_ref": str(ev.get("session_ref") or ""),
+            "from_bssid": str(ev.get("from_bssid") or "").lower(),
+            "to_bssid": to_bssid,
+            "from_ap_ref": str(ev.get("from_ap_ref") or ""),
+            "to_ap_ref": str(ev.get("to_ap_ref") or ""),
+            "roam_type": str(ev.get("roam_type") or "unknown"),
+            "duration_ms": int(ev.get("duration_ms") or 0),
+            "ts": ts_ms,
+            "observer_id": str(ev.get("observer_id") or ""),
+            "collection_path": str(ev.get("collection_path") or "via_controller"),
+            "data_class": str(ev.get("data_class") or "live"),
+        }], lane="wireless")
+    else:
+        WIRELESS_DROPPED += 1
+
+
+async def handle_cloud(ev: dict) -> None:
+    """Cloud App Observability events (netops.cloud) → canonical cloud signals on
+    the SAME spine (#81 P3G). Additive evidence lane: the existing engine grounds,
+    correlates and verdicts them with no cloud-specific code path. A cloud-only
+    picture is suspected-at-best (one vantage); confirmation needs an independent
+    observer (probe / underlay / firewall). Tenancy is EXPLICIT — a cloud event
+    carries its own tenant_id (there is no device to infer it from); an untenanted
+    event is DROPPED, never guessed (default-closed isolation, §3a)."""
+    global DEADLETTER_COUNT, CLOUD_RECEIVED, CLOUD_SIGNALS, CLOUD_DROPPED
+    CLOUD_RECEIVED += 1
+    if not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    # NOT run through verified_tenant (unlike syslog/flows/metrics/traps/probes/
+    # wireless), and deliberately so: a cloud account, an app identity and an LB
+    # host have NO device identity in device_tenant.csv to check a claim against,
+    # and inventing one would mean matching a raw IP — which collides across
+    # tenants in overlapping RFC1918 space and would refuse legitimate data. The
+    # controls that DO apply here are the authenticated bus producer (F-08
+    # ingest auth) and the default-closed empty-tenant drop below. Same for
+    # handle_app_identity and handle_app_edge. If the registry ever grows cloud
+    # resource identities, these three lanes get the same gate.
+    tenant = str(ev.get("tenant_id") or "")
+    if not tenant:
+        CLOUD_DROPPED += 1
+        log.warning("cloud event dropped: no tenant_id (kind=%s)", ev.get("kind"))
+        return
+    try:
+        sig = cloud_signal_from_event(ev, tenant, datetime.now(timezone.utc))
+    except DeadLetter as exc:
+        DEADLETTER_COUNT += 1
+        CLOUD_DROPPED += 1
+        keep_deadletter_payload("cloud", ev, exc)
+        log.warning("dead-letter (cloud): %s", exc)
+        return
+    if sig.kind == "clock_skew":
+        # META finding (S5): recorded for operators, never engine-buffered (it
+        # must not lend a modality plane to a fault) and cooldown-guarded here
+        # too — defense in depth against a chatty poller.
+        global CLOCK_SKEW_SIGNALS
+        if _clock_skew_due(tenant, sig.entity_id):
+            await batch_signal(sig.to_ch_row())  # batched: lane=cloud
+            CLOCK_SKEW_SIGNALS += 1
+            log.info("clock-skew signal (cloud lane): %s skew=%.0fs",
+                     sig.entity_id, float(sig.value))
+        return
+    await batch_signal(sig.to_ch_row())  # batched: lane=cloud
+    CLOUD_SIGNALS += 1
+    buffer_signal(sig)
+    log.info("cloud signal %s: %s sev=%s acct=%s region=%s",
+             sig.kind, sig.entity_id, sig.severity.value,
+             sig.attrs.get("account", ""), sig.attrs.get("region", ""))
+
+
+async def handle_app_identity(ev: dict) -> None:
+    """Fused application-identity events (netops.app.identities.v1) → canonical
+    enrichment signals on the SAME spine (#81 P5). Identity is ENRICHMENT, not a
+    fault (AD-5): an INFO signal that attaches to objects the engine ALREADY formed
+    from real faults, naming the app they affect — it can never seed an object or
+    self-confirm a verdict (one platform vantage). Additive lane: the existing
+    engine grounds it with no identity-specific code path.
+
+    Tenancy is EXPLICIT — an identity event carries its own tenant_id (there is no
+    device to infer it from); an untenanted event is DROPPED, never guessed
+    (default-closed isolation, §3a). A malformed event dead-letters (counted)."""
+    global DEADLETTER_COUNT, APP_ID_RECEIVED, APP_ID_SIGNALS, APP_ID_DROPPED
+    APP_ID_RECEIVED += 1
+    if not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    tenant = str(ev.get("tenant_id") or "")
+    if not tenant:
+        APP_ID_DROPPED += 1
+        log.warning("app-identity event dropped: no tenant_id (app=%s)", ev.get("app"))
+        return
+    try:
+        sig = app_identity_from_event(ev, tenant, datetime.now(timezone.utc))
+    except DeadLetter as exc:
+        DEADLETTER_COUNT += 1
+        APP_ID_DROPPED += 1
+        keep_deadletter_payload("app_identity", ev, exc)
+        log.warning("dead-letter (app-identity): %s", exc)
+        return
+    await batch_signal(sig.to_ch_row())  # batched: lane=app_identity
+    APP_ID_SIGNALS += 1
+    buffer_signal(sig)
+    # #98 Phase 4 — feed the tenant-scoped dst_ip→app index the flow lane joins
+    # against (attribution level 2). TTL'd + bounded in the index itself.
+    _APPID_INDEX.observe(tenant, str(ev.get("dst_ip") or ""), sig.entity_id,
+                         str(sig.attrs.get("band", "")), sig.ts)
+    log.info("app-identity signal %s: app=%s band=%s state=%s",
+             sig.kind, sig.entity_id,
+             sig.attrs.get("band", ""), sig.attrs.get("state", ""))
+
+
+async def handle_app_edge(ev: dict) -> None:
+    """LB / proxy / ingress telemetry (netops.app.edge, #98 P5) → one canonical
+    app-edge signal (lb_5xx / lb_target_unhealthy / app_error_rate_high /
+    app_latency_high / lb_4xx_high) via the vendor-neutral contract
+    (lb_normalize.py, docs/lb-proxy-ingress-telemetry-contract.md).
+
+    Tenancy is EXPLICIT and default-closed, same policy as app identity: an
+    app-edge event carries its own tenant_id (there is no device to infer it
+    from); an untenanted event is DROPPED, never guessed (§3a). A healthy /
+    unclassifiable / ungroundable event emits nothing (anti-noise)."""
+    global APP_EDGE_RECEIVED, APP_EDGE_SIGNALS, APP_EDGE_DROPPED
+    APP_EDGE_RECEIVED += 1
+    if not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    tenant = str(ev.get("tenant_id") or "")
+    if not tenant:
+        APP_EDGE_DROPPED += 1
+        log.warning("app-edge event dropped: no tenant_id (app=%s host=%s)",
+                    ev.get("app_name"), ev.get("host"))
+        return
+    sig = normalize_lb_event(ev, tenant, datetime.now(timezone.utc))
+    if sig is None:
+        APP_EDGE_DROPPED += 1
+        return
+    await batch_signal(sig.to_ch_row())  # batched: lane=app_edge
+    APP_EDGE_SIGNALS += 1
+    buffer_signal(sig)
+    log.info("app-edge signal %s: %s reason=%s lb=%s",
+             sig.kind, sig.entity_id, sig.attrs.get("reason"),
+             sig.observer.observer_id)
+
+
+async def handle_evidence_event(ev: dict) -> None:
+    """GENERIC evidence-class intake (T2b) — the ONE handler for every topic in
+    `CORR_EVIDENCE_TOPICS`, whatever evidence class publishes there.
+
+    THE CONTRACT (SECURITY_OBSERVABILITY_HLD 2026-08-25, "security is a REMOVABLE
+    module"): a lane that already speaks the canonical evidence shape — entity +
+    seam + timestamp + evidence refs — is grounded by the engine with ZERO
+    lane-specific code. This function reads the envelope's `kind`, looks up the
+    `EvidenceClassSpec` it belongs to, and hands both to a pure adapter. It
+    names no class, imports no class's module, and branches on nothing about the
+    class; every class-specific fact is a row of data in signals.EVIDENCE_CLASSES.
+    Deleting a producing module (or dropping its topic from CORR_EVIDENCE_TOPICS)
+    leaves this handler, and every other lane, unchanged.
+
+    TENANCY (§3a), verified exactly like syslog rather than trusted like the
+    cloud lane: an evidence verdict names a DEVICE, so its self-declared tenant
+    can be checked against the device registry. A claim that CONTRADICTS the
+    registry is refused and quarantined before anything is persisted — a verdict
+    about tenant A's device can never be filed under tenant B. It is not
+    registry-ANCHORED, because a legitimate subject (a host, a container) may not
+    be in the device registry at all; for those the authenticated producer's
+    claim stands, and an unclaimed unknown subject falls to the platform tenant,
+    never to another customer's.
+
+    A malformed envelope dead-letters (counted, payload kept) exactly as every
+    other lane's malformed input does — provenance is never invented.
+    """
+    global EVIDENCE_EVENTS_RECEIVED, EVIDENCE_EVENTS_SIGNALS, EVIDENCE_EVENTS_DROPPED
+    global DEADLETTER_COUNT
+    EVIDENCE_EVENTS_RECEIVED += 1
+    if not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    # The class label for the metric, resolved from the envelope's own kind. A
+    # kind naming no registered class lands in the fixed "unknown" bucket — the
+    # counter can never be widened by an untrusted string.
+    spec = signals.EVIDENCE_CLASS_BY_KIND.get(str(ev.get("kind") or "").strip())
+    label = spec.name if spec is not None else "unknown"
+    entity_id = str(ev.get("entity_id") or "").strip()
+    try:
+        tenant = verified_tenant(str(ev.get("tenant_id") or ""), entity_id,
+                                 "evidence")
+    except TenantClaimRefused as exc:
+        DEADLETTER_COUNT += 1
+        EVIDENCE_EVENTS_DROPPED += 1
+        _count_evidence_event(label, "invalid")
+        keep_deadletter_payload("evidence", ev, exc)
+        return
+    try:
+        sig = evidence_signal_from_event(ev, tenant)
+    except DeadLetter as exc:
+        DEADLETTER_COUNT += 1
+        EVIDENCE_EVENTS_DROPPED += 1
+        _count_evidence_event(label, "invalid")
+        keep_deadletter_payload("evidence", ev, exc)
+        log.warning("dead-letter (evidence): %s", exc)
+        return
+    await batch_signal(sig.to_ch_row())  # batched: lane=evidence
+    EVIDENCE_EVENTS_SIGNALS += 1
+    buffer_signal(sig)
+    # Grounded vs orphan is an OBSERVATION about coverage, not a gate: the signal
+    # is written and buffered either way. An orphan can still co-locate with any
+    # later signal that carries the same token — it just has no registry-known
+    # device to co-locate WITH today, which is the honest thing to report.
+    _count_evidence_event(
+        label, "grounded" if tenant_lookup(sig.entity_id) is not None else "orphan")
+    log.info("evidence signal %s: class=%s entity=%s sev=%s seam=%s",
+             sig.kind, label, sig.entity_id, sig.severity.value,
+             sig.attrs.get("seam_id", ""))
 
 
 async def handle_syslog(ev: dict) -> None:
+    # Control-plane extraction first (#67 build ⑦): adjacency / link-state
+    # events become control_plane signals on the spine regardless of burst
+    # behavior — one BGP-down is evidence even when nothing else is on fire.
+    global DEADLETTER_COUNT, SYSLOG_RECEIVED, SYSLOG_SIGNALS
+    # Intake is counted BEFORE any filtering: `syslog_received` must mean
+    # "arrived from the bus", so a flat-line means the lane died, not that the
+    # traffic happened to be unclassifiable.
+    SYSLOG_RECEIVED += 1
+    # TENANT-HIGH-3: syslog reaches this process from an UNAUTHENTICATED UDP/TCP
+    # 514 listener via syslog-ng → Vector, and Vector derives .tenant_id purely
+    # from the device→tenant registry keyed on .hostname. So a tenant_id here is
+    # only legitimate if it REPRODUCES the registry's answer for the hostname
+    # this very event carries. Anything else — a made-up hostname with a real
+    # tenant, a real hostname with someone else's tenant — is refused and
+    # quarantined BEFORE any lane can persist it. Registry-anchored, so an
+    # unknown hostname with a non-empty claim fails closed too.
+    try:
+        cp_tenant = verified_tenant(str(ev.get("tenant_id") or ""),
+                                    str(ev.get("hostname") or ""),
+                                    "syslog", registry_anchored=True)
+    except TenantClaimRefused as exc:
+        DEADLETTER_COUNT += 1
+        keep_deadletter_payload("syslog", ev, exc)
+        return
+    if CORR_SIGNALS_ENABLED and ch is not None:
+        # One clock read per event (tracker 156): datetime.now was called five
+        # times per syslog line, and both producers want the SAME receive time
+        # anyway — two reads could straddle a second boundary and stamp two
+        # signals from one line with different receive clocks.
+        recv_now = datetime.now(timezone.utc)
+        # P3 change B. `syslog_promotable` is a necessary condition for BOTH
+        # classifiers below; when it is False neither can return a Signal, so
+        # neither is called. It cannot change what promotes (soundness is
+        # structural + property-tested over the ratified generator mix) and it
+        # cannot change the DeadLetter accounting either: DeadLetter is raised
+        # only from `Signal.__post_init__`, which a non-promoting line never
+        # reaches. Clock-skew and the burst detector are deliberately outside
+        # the gate.
+        promotable = (not CORR_INGEST_PREFILTER) or syslog_promotable(ev)
+        if promotable:
+            try:
+                cp_sig = syslog_control_signal(ev, cp_tenant, recv_now)
+            except DeadLetter as exc:
+                DEADLETTER_COUNT += 1
+                keep_deadletter_payload("syslog", ev, exc)
+                log.warning("dead-letter (syslog): %s", exc)
+                cp_sig = None
+            if cp_sig is not None:
+                await batch_signal(cp_sig.to_ch_row())  # batched: lane=syslog
+                SYSLOG_SIGNALS += 1
+                # P3 step 2: the raw row is already batched and SYSLOG_SIGNALS
+                # is already advanced, so a signal the plane absorbs is exactly
+                # as persisted and as counted as one it forwards.
+                cp_fwd = agg_admit(cp_sig)
+                if cp_fwd is not None:
+                    buffer_signal(cp_fwd)
+                # DEBUG, not INFO (tracker 156). This fired once per accepted
+                # signal — two lines per syslog event, ~4,000 lines/s at the GA
+                # burst rate — and every one was formatted, written to stdout, and
+                # then shipped through Vector into OpenSearch. The rate it was
+                # reporting is already exposed as SYSLOG_SIGNALS / corr metrics, so
+                # nothing observable is lost; the per-signal detail is still there
+                # at debug level when someone is actually chasing one event.
+                log.debug("control-plane signal %s: %s %s",
+                          cp_sig.kind, cp_sig.entity_id, cp_sig.attrs.get("state", ""))
+                # A4: the adjacency lane feeds the heartbeat plane. An
+                # adjacency-change line says a transition HAPPENED; the dwell
+                # timer decides whether it stayed. Kinds this plane does not
+                # watch return an empty tuple on the first dict lookup.
+                await _emit_proactive(PROACTIVE.observe_signal(
+                    tenant=cp_tenant, entity_id=cp_sig.entity_id,
+                    kind=cp_sig.kind,
+                    state=str(cp_sig.attrs.get("state") or ""),
+                    ts=cp_sig.ts, observer_id=cp_sig.observer.observer_id,
+                    tokens=cp_sig.entity_tokens,
+                    peer=str(cp_sig.attrs.get("peer") or ""),
+                ))
+            # Port Intelligence physical-layer event (#94 P3b): transceiver/optics/
+            # DOM/FEC syslog → sig.ent.spdc evidence kinds. Independent of the
+            # control-plane classifier (a line can be one or the other, rarely both).
+            try:
+                pe_sig = port_event_signal(ev, cp_tenant, recv_now)
+            except DeadLetter as exc:
+                DEADLETTER_COUNT += 1
+                keep_deadletter_payload("port_event", ev, exc)
+                log.warning("dead-letter (port-event): %s", exc)
+                pe_sig = None
+            if pe_sig is not None:
+                await batch_signal(pe_sig.to_ch_row())  # batched: lane=syslog
+                SYSLOG_SIGNALS += 1
+                pe_fwd = agg_admit(pe_sig)
+                if pe_fwd is not None:
+                    buffer_signal(pe_fwd)
+                log.debug("port-event signal %s: %s", pe_sig.kind, pe_sig.entity_id)
+        # Clock-skew meta-finding (log-time standard S5/R5): Vector stamps
+        # clock_skew_s on the event when the origin timestamp disagrees with the
+        # receive clock beyond tolerance; here it becomes a per-device signal.
+        # META evidence: persisted for operators (events feed / evidence store)
+        # but NEVER buffer_signal()ed — a wrong clock must not lend an extra
+        # modality plane to a real fault. Cooldown-guarded per (tenant, device)
+        # so a misconfigured device logging at volume yields one finding per
+        # window, not a firehose.
+        try:
+            skew_sig = clock_skew_signal(ev, cp_tenant, datetime.now(timezone.utc))
+        except DeadLetter as exc:
+            DEADLETTER_COUNT += 1
+            keep_deadletter_payload("clock_skew", ev, exc)
+            log.warning("dead-letter (clock-skew): %s", exc)
+            skew_sig = None
+        if skew_sig is not None and _clock_skew_due(cp_tenant, skew_sig.entity_id):
+            global CLOCK_SKEW_SIGNALS
+            await batch_signal(skew_sig.to_ch_row())  # batched: lane=syslog
+            CLOCK_SKEW_SIGNALS += 1
+            SYSLOG_SIGNALS += 1
+            log.info("clock-skew signal: %s skew=%.0fs", skew_sig.entity_id,
+                     float(skew_sig.value))
+
     host = str(ev.get("hostname") or "unknown")
     sev  = str(ev.get("severity") or "info").lower()
     weight = SEVERITY_WEIGHT.get(sev, 0)
     if weight == 0:
         return
     now = time.time()
-    bucket = SYSLOG_BUCKET.setdefault(host, [])
+    # Tenant-scoped bucket key: cp_tenant is the VERIFIED tenant from the top
+    # of this handler (a refused claim returned before reaching here), so two
+    # tenants sharing a hostname can never pool weight into one finding — and
+    # a finding's burst math is identical whether the tenant's slice runs
+    # alone or alongside every other tenant (scale P0 equivalence).
+    bkey = (cp_tenant, host)
+    bucket = SYSLOG_BUCKET.setdefault(bkey, [])
     bucket.append((now, weight))
     # Drop expired entries.
     cutoff = now - SYSLOG_WINDOW
-    SYSLOG_BUCKET[host] = [(t, w) for t, w in bucket if t >= cutoff]
-    total = sum(w for _, w in SYSLOG_BUCKET[host])
+    SYSLOG_BUCKET[bkey] = [(t, w) for t, w in bucket if t >= cutoff]
+    # The per-host LISTS were pruned but the KEY SET never was — and the key is
+    # the device-supplied, spoofable syslog hostname, so a single misbehaving or
+    # hostile sender could grow this map without limit. Sweep empty buckets, and
+    # hard-cap the key set as the backstop.
+    _sweep_syslog_buckets(now)
+    total = sum(w for _, w in SYSLOG_BUCKET[bkey])
     if total >= SYSLOG_THRESHOLD:
         await emit(
             kind="correlation",
@@ -238,30 +13227,187 @@ async def handle_syslog(ev: dict) -> None:
             description=f"≥{SYSLOG_THRESHOLD} severity-points within {int(SYSLOG_WINDOW)}s window.",
             score=float(total),
             labels={"host": host},
+            tenant_id=cp_tenant,
         )
-        SYSLOG_BUCKET[host] = []   # reset so we don't spam
+        SYSLOG_BUCKET[bkey] = []   # reset so we don't spam
 
 
-async def handle_flow(_ev: dict) -> None:
-    # Placeholder: NetFlow correlation (DDoS detection, top-talker
-    # sudden shift, port-scan signatures) goes here.
-    return
+async def handle_flow(ev: dict) -> None:
+    """Accumulate per-(tenant, exporting-interface) flow VOLUME (C6). Cheap by
+    design — flows are a firehose, so we aggregate O(1) here and never emit a signal
+    per flow; _flush_flow_aggregator turns each per-interface total into one CUSUM
+    sample per engine cycle. This is the passive_flow modality lane — the 4th
+    independent witness class for the verdict gate (DDoS / top-talker-shift /
+    port-scan SIGNATURES are future catalog growth on top of this volume series)."""
+    global DEADLETTER_COUNT, FLOWS_RECEIVED, FLOWS_DROPPED
+    if not (CORR_SIGNALS_ENABLED and FLOW_CORRELATION_ENABLED) or ch is None:
+        return
+    sample = flow_sample(ev)
+    if sample is None:
+        # Unattributable/unmeasurable record. `flows_received` counts ACCEPTED
+        # flows (it is incremented after the parse), so without this counter a
+        # goflow2 field-name change that fails 100% of parses reads exactly like
+        # a quiet network. Logged rate-limited: flows are a firehose.
+        FLOWS_DROPPED += 1
+        _log_flow_drop(ev)
+        return
+    FLOWS_RECEIVED += 1
+    sampler, entity, bytes_est = sample
+    # TENANT-HIGH-4: flows arrive from goflow2 on an unauthenticated collector
+    # port and their tenancy is keyed on sampler_address — harder to forge than
+    # a hostname, but still unauthenticated, and nothing stops a bus writer from
+    # attaching a tenant_id of its choosing. Registry-anchored: the claim must
+    # reproduce the registry's answer for THIS exporter, or the flow is refused.
+    try:
+        tenant = verified_tenant(str(ev.get("tenant_id") or ""), sampler,
+                                 "flows", registry_anchored=True)
+    except TenantClaimRefused as exc:
+        DEADLETTER_COUNT += 1
+        FLOWS_DROPPED += 1
+        keep_deadletter_payload("flows", ev, exc)
+        return
+    agg = _FLOW_AGG.setdefault((tenant, entity), {"bytes": 0.0, "sampler": sampler})
+    agg["bytes"] += bytes_est
+    # #98 Phase 4 — SECOND grounding: when a confirming attribution source names
+    # the application this flow serves, also accumulate a per-app volume series.
+    # No attribution → nothing here; the flow stays infrastructure-grounded.
+    att = resolve_flow_app(ev, tenant, _APPID_INDEX, datetime.now(timezone.utc))
+    if att is not None and att.confirming:
+        aagg = _FLOW_APP_AGG.setdefault(
+            (tenant, att.app),
+            {"bytes": 0.0, "sampler": sampler, "source": att.source,
+             "confidence": att.confidence})
+        aagg["bytes"] += bytes_est
+    # C7.3: directed per-pair volume. Resolve src/dst → devices (best-effort; abstains
+    # when an endpoint is unknown) and accumulate a directed byte total → the oracle's
+    # NetFlow direction source.
+    global FLOW_DIRECTION_PAIRS
+    dsample = flow_direction_sample(ev, cached_entity_resolver_for(tenant))
+    if dsample is not None:
+        sd, dd, dbytes = dsample
+        dirmap = _FLOW_DIR.setdefault(tenant, {})
+        if (sd, dd) not in dirmap:
+            # Accumulated CONTINUOUSLY (never reset) and keyed by resolved
+            # device pair: bounded in a stable fleet, unbounded under entity
+            # churn. At the cap the smallest-volume pairs go first — they are
+            # the ones the dominance ratio never depends on.
+            if len(dirmap) >= FLOW_DIR_MAX_PAIRS:
+                for pair, _ in sorted(dirmap.items(), key=lambda kv: kv[1])[:FLOW_DIR_MAX_PAIRS // 4]:
+                    dirmap.pop(pair, None)
+            FLOW_DIRECTION_PAIRS += 1
+        dirmap[(sd, dd)] = dirmap.get((sd, dd), 0.0) + dbytes
+
+
+async def _flush_flow_aggregator(now: datetime) -> None:
+    """Feed each accumulated per-interface byte total through CUSUM as ONE
+    passive_flow sample this cycle, then reset. The detection interval is the engine
+    cycle interval — regular sampling, exactly like a metric poll — so the existing
+    episode machinery baselines and fires flow_volume_anomaly episodes."""
+    global PASSIVE_FLOW_SIGNALS
+    if not _FLOW_AGG and not _FLOW_APP_AGG:
+        return
+    snapshot = dict(_FLOW_AGG)
+    _FLOW_AGG.clear()
+    interval = max(CORR_ENGINE_INTERVAL_S, 1.0)
+    for (tenant, entity), a in sorted(snapshot.items()):
+        emitted = await feed_episode_detector(
+            tenant, entity, "flow_bytes_rate", a["bytes"] / interval, now,
+            observer_id=a["sampler"], collection_path="flow_export",
+            entity_type=EntityType.INTERFACE, kind_prefix="flow_volume_anomaly",
+            entity_tokens=(a["sampler"],),
+            source=Source.FLOW, modality=ModalityClass.PASSIVE_FLOW,
+            observer_type=ObserverType.FLOW_EXPORTER,
+        )
+        if emitted:
+            PASSIVE_FLOW_SIGNALS += 1  # count ACTUAL passive_flow signals, not flushes
+    # #98 Phase 4 — the app-grounded series (same canonical kind, app entity).
+    # Tokens mirror the synthetic lane's grounding vocabulary (bare slug +
+    # app:<slug>) so an app-attributed flow anomaly co-locates with the
+    # synthetic app-experience signal on ONE application-impact object;
+    # attribution provenance rides the signal (attribution_source/confidence).
+    app_snapshot = dict(_FLOW_APP_AGG)
+    _FLOW_APP_AGG.clear()
+    for (tenant, app), a in sorted(app_snapshot.items()):
+        emitted = await feed_episode_detector(
+            tenant, app, "flow_bytes_rate", a["bytes"] / interval, now,
+            observer_id=a["sampler"], collection_path="flow_export",
+            entity_type=EntityType.APP, kind_prefix="flow_volume_anomaly",
+            entity_tokens=(app, f"app:{app}", a["sampler"]),
+            source=Source.FLOW, modality=ModalityClass.PASSIVE_FLOW,
+            observer_type=ObserverType.FLOW_EXPORTER,
+            extra_attrs={"attribution_source": a["source"],
+                         "attribution_confidence": a["confidence"]},
+        )
+        if emitted:
+            PASSIVE_FLOW_SIGNALS += 1
+
+
+# Fixed namespace for the derived finding id (uuid5). A CONSTANT, never a
+# per-run value: the id has to be reproducible across processes and restarts,
+# which is the whole point of deriving it.
+FINDING_ID_NS = uuid.UUID("6b1a5a1e-1f6e-4c0a-9f3b-2f0d9c1a7e41")
+
+
+def finding_dedup_token(row: dict) -> str:
+    """The insert_deduplication_token for ONE netops.findings row.
+
+    netops.findings has no natural key COLUMN — `id` was a fresh uuid4 per emit
+    and `ts` is a server-side DEFAULT now64(3) — so the row's identity has to be
+    derived. It is built from the two things that together name the finding
+    exactly once:
+
+      * the SOURCE COORDINATE (`topic:partition:offset:table:seq`, the same
+        per-message coordinate the RCA-critical tables use). Stable across a
+        Kafka redelivery of the same message, distinct for every other message,
+        and — via the per-message sequence — distinct for a second finding
+        emitted from the same message.
+      * a SHA-256 of the row CONTENT (id excluded, since the id is derived from
+        this token). Two findings that differ in any field get different tokens
+        even if the coordinate machinery is ever wrong.
+
+    Both halves are needed. Content alone would silently DROP a legitimately
+    repeated finding (the same z-score summary on the same device an hour
+    later) as a "duplicate"; a coordinate alone would not distinguish two rows
+    from one message.
+
+    Outside a consumer message there is no coordinate and no redelivery to be
+    idempotent against, so a per-call nonce takes its place: the token is still
+    computed ONCE per emit and reused by every retry of that insert (which is
+    what makes the retry safe), and it can never collide with another finding.
+    """
+    body = json.dumps({k: v for k, v in row.items() if k != "id"},
+                      sort_keys=True, default=str)
+    coord = _next_dedup_token("netops.findings") or f"local:{uuid.uuid4().hex}"
+    return "finding:" + coord + ":" + hashlib.sha256(body.encode()).hexdigest()[:32]
 
 
 async def emit(**kwargs) -> None:
+    device = kwargs.get("device", "")
     row = {
-        "id":          str(uuid.uuid4()),
         "kind":        kwargs["kind"],
         "severity":    kwargs["severity"],
         "score":       kwargs["score"],
-        "device":      kwargs.get("device", ""),
+        "device":      device,
         "component":   kwargs.get("component", ""),
         "summary":     kwargs.get("summary", ""),
         "description": kwargs.get("description", ""),
         "labels":      kwargs.get("labels", {}),
+        # M29b: a caller that VERIFIED the event's tenant (handle_metric via
+        # verified_tenant) stamps it; only tenant-less callers fall back to the
+        # registry lookup (#20: same tenant discriminator as flows/logs).
+        "tenant_id":   kwargs.get("tenant_id") or tenant_for(device),
     }
+    token = finding_dedup_token(row)
+    # The id is DERIVED from that token rather than a fresh uuid4. Server-side
+    # dedup already drops the re-sent block, but a redelivered message used to
+    # mint a DIFFERENT id for the same logical finding — so the two copies were
+    # not even recognisable as one, and the UI keys its rows on `id`
+    # (Findings.tsx rowKey) while the reports count them. Derived, one finding
+    # has one id no matter how many times it is written.
+    row = {"id": str(uuid.uuid5(FINDING_ID_NS, token)), **row}
     assert ch is not None
-    await ch.insert("netops.findings", [row])
+    await ch_insert("netops.findings", [row], dedup_token=token,
+                    kind=row["kind"], device=device)
     log.info("finding: %s %s %s", row["severity"], row["kind"], row["summary"])
 
 
@@ -270,21 +13416,616 @@ async def emit(**kwargs) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ── Tracker 174: loop-independent health/metrics sidecar ────────────────────
+#
+# THE MEASURED DEFECT (S1 run 082220005r1a): /healthz and /metrics are served
+# by the same event loop as the consumer and the engine; under storm-sized
+# stalls (worst 49.3s) the 4s probes timed out — Docker health flapped on a
+# HEALTHY process and the completion gate read a replica as unreadable. In an
+# orchestrator that ACTS on liveness, that is a self-inflicted restart in the
+# middle of a storm.
+#
+# THE FIX SHAPE: saturation may degrade FRESHNESS, never REACHABILITY. A
+# publisher task ON the main loop snapshots both bodies every
+# CORR_HEALTH_SNAPSHOT_S; a plain daemon-THREAD HTTP server serves the latest
+# snapshot on CORR_HEALTH_SIDECAR_PORT, stamping its age — so under a stalled
+# loop the sidecar keeps answering with an honestly-aged snapshot, and the
+# AGE ITSELF becomes the storm signal (corr_health_snapshot_age_s). The
+# in-app routes are unchanged; probes migrate to the sidecar at deploy time.
+# TLS: reuses the service SVID when the env provides it, else plaintext —
+# matching the main server's deployment split. Port 0 disables the sidecar.
+CORR_HEALTH_SIDECAR_PORT = int(os.environ.get("CORR_HEALTH_SIDECAR_PORT", "8094"))
+CORR_HEALTH_SNAPSHOT_S = float(os.environ.get("CORR_HEALTH_SNAPSHOT_S", "2.0"))
+CORR_HEALTH_STALE_AFTER_S = float(os.environ.get("CORR_HEALTH_STALE_AFTER_S", "10.0"))
+_HEALTH_SNAPSHOT: dict | None = None    # {"health": dict, "metrics": str, "built_mono": float}
+HEALTH_SNAPSHOTS_BUILT = 0
+HEALTH_SIDECAR_ERRORS = 0
+
+
+def _publish_health_snapshot() -> None:
+    """Build both bodies ON the main loop (cheap, race-free reads of module
+    state) and swap the whole holder atomically (GIL object swap).
+
+    The health payload is built ONCE and handed to `_metrics_text`: the two
+    bodies are two renderings of the same numbers, and `_metrics_text` used to
+    call `_health_payload()` itself, so every snapshot tick walked the whole
+    health surface twice (ultra-review #43, tracker 208b). Passing it also makes
+    the two bodies in one snapshot EXACTLY consistent — they can no longer be
+    rendered from two reads of module state taken microseconds apart."""
+    global _HEALTH_SNAPSHOT, HEALTH_SNAPSHOTS_BUILT
+    health = _health_payload()
+    _HEALTH_SNAPSHOT = {
+        "health": health,
+        "metrics": _metrics_text(health),
+        "built_mono": time.monotonic(),
+    }
+    HEALTH_SNAPSHOTS_BUILT += 1
+
+
+async def health_snapshot_loop() -> None:
+    while True:
+        try:
+            _publish_health_snapshot()
+        except Exception:            # §10: observable, loop continues
+            log.exception("health snapshot build failed (sidecar serves the previous one)")
+        await asyncio.sleep(CORR_HEALTH_SNAPSHOT_S)
+
+
+def _sidecar_response(path: str) -> tuple[int, str, bytes]:
+    """(status, content_type, body) for one sidecar request — PURE over the
+    current snapshot, so it is directly testable with no server at all."""
+    snap = _HEALTH_SNAPSHOT
+    if snap is None:
+        return 503, "application/json", b'{"status":"starting","detail":"no health snapshot built yet"}'
+    age = time.monotonic() - snap["built_mono"]
+    stale = age > CORR_HEALTH_STALE_AFTER_S
+    if path == "/healthz":
+        body = dict(snap["health"])
+        body["snapshot_age_s"] = round(age, 3)
+        # Reachability is preserved BY DESIGN under a stalled loop; the age is
+        # the honest signal. status stays "ok" — a starving loop is a storm
+        # symptom the STALE flag names, not a dead process.
+        body["snapshot_stale"] = stale
+        return 200, "application/json", json.dumps(body).encode()
+    if path == "/metrics":
+        text = (snap["metrics"]
+                + "# TYPE corr_health_snapshot_age_s gauge\n"
+                + f"corr_health_snapshot_age_s {age:.3f}\n"
+                + "# TYPE corr_health_snapshot_stale gauge\n"
+                + f"corr_health_snapshot_stale {int(stale)}\n")
+        return 200, "text/plain; version=0.0.4", text.encode()
+    return 404, "application/json", b'{"detail":"sidecar serves /healthz and /metrics only"}'
+
+
+# DEBUG-ROUTES-BEGIN
+# ── Pipeline debugger: the correlation container's bounded debug endpoints ──
+#
+# docs/design/PIPELINE_DEBUGGER_2026-09-04.md §2/§4. TWO routes, both POST, both
+# on the loop-INDEPENDENT health sidecar:
+#
+#   POST /debug/kafka-peek  — stage 3 of a trace. Go has no Kafka client BY
+#       DESIGN (CLAUDE.md §6), so the API cannot look at the bus itself; this
+#       container already speaks aiokafka, so the peek lives here and the API
+#       proxies it with the service identity.
+#   POST /debug/loglevel    — raise THIS service to debug for a bounded window
+#       with an auto-revert armed HERE, so the level comes back down even if the
+#       caller is killed.
+#
+# DEFAULT-CLOSED (§3, zero trust). Both routes require a bearer token equal to
+# CORR_DEBUG_TOKEN, compared in constant time. With the variable unset — the
+# shipped default — they answer 503 and explain that they are not configured.
+# They are NEVER open: the sidecar port is unpublished, but "it is only on the
+# internal network" is exactly the implicit trust §3 forbids.
+#
+# BOUNDED IN EVERY DIMENSION (§9). The peek runs an EPHEMERAL consumer with no
+# group id (it can neither join the engine's group nor move its offsets), reads
+# for at most CORR_DEBUG_PEEK_MAX_S seconds, returns at most 20 records, and
+# truncates every payload excerpt. It seeks to a bounded lookback, never to the
+# beginning of a topic.
+
+CORR_DEBUG_TOKEN = os.environ.get("CORR_DEBUG_TOKEN", "")
+CORR_DEBUG_PEEK_MAX_S = float(os.environ.get("CORR_DEBUG_PEEK_MAX_S", "10"))
+CORR_DEBUG_MAX_RECORDS = 20
+CORR_DEBUG_MAX_EXCERPT = 4096
+CORR_DEBUG_MAX_LOOKBACK_S = 3600
+CORR_DEBUG_MAX_BODY = 8192
+CORR_DEBUG_MARKER_LEN = 26
+# Crockford base32, lower case — the shape internal/pipedebug mints and
+# validates. Kept as an explicit set so the two implementations can be diffed.
+CORR_DEBUG_MARKER_CHARS = frozenset("0123456789abcdefghjkmnpqrstvwxyz")
+_DEBUG_TOPIC_RE = re.compile(r"^[A-Za-z0-9._-]{1,200}$")
+# The flow probe's alternative needle, as a CLOSED grammar: 192.0.2.1 through
+# 192.0.2.254 in canonical form, and nothing else.
+#
+# A NetFlow record has no free-text field, so the marker cannot ride inside it
+# and the API sends the probe's RFC 5737 source address as a second needle
+# (internal/pipedebug/flow.go, ValidProbeSrc). A needle is a substring this
+# process scans the bus for, so it is re-validated HERE rather than trusted:
+# the API is a peer, not an authority (§3, zero trust). 254 values of
+# documentation address space cannot be steered into a content search.
+_DEBUG_PROBE_SRC_RE = re.compile(r"^192\.0\.2\.(?:[1-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-4])$")
+
+DEBUG_LEVEL_REVERT_TIMER: threading.Timer | None = None
+DEBUG_PEEKS_TOTAL = 0
+DEBUG_PEEK_ERRORS = 0
+
+
+def _debug_configured() -> bool:
+    return bool(CORR_DEBUG_TOKEN)
+
+
+def _debug_authorized(auth_header: str | None) -> bool:
+    """Constant-time bearer check. An unconfigured token authorizes NOTHING —
+    the empty string is not a password."""
+    if not CORR_DEBUG_TOKEN:
+        return False
+    value = (auth_header or "").strip()
+    prefix = "bearer "
+    if value[:len(prefix)].lower() != prefix:
+        return False
+    return hmac.compare_digest(value[len(prefix):], CORR_DEBUG_TOKEN)
+
+
+def _valid_debug_marker(marker: str) -> bool:
+    return (len(marker) == CORR_DEBUG_MARKER_LEN
+            and all(c in CORR_DEBUG_MARKER_CHARS for c in marker))
+
+
+def _debug_peek_params(body: bytes) -> dict:
+    """Validate + CLAMP an untrusted peek request. Raises ValueError with an
+    operator-readable reason; never returns an unbounded value.
+
+    ValueError is the CONTRACT, not an accident: the sidecar handler catches
+    exactly it and answers 400 with the reason. A malformed request body is a
+    bad REQUEST, not a Python type error in our own code, and raising TypeError
+    here (what TRY004 suggests) would slip past that `except ValueError` and
+    surface to an operator as an unhandled 500 — the opposite of the honest,
+    named refusal this validator exists to give.
+    """
+    if len(body) > CORR_DEBUG_MAX_BODY:
+        raise ValueError("request body too large")
+    try:
+        req = json.loads(body or b"{}")
+    except Exception as exc:                       # noqa: BLE001 — untrusted input
+        raise ValueError(f"body is not JSON: {exc}") from None
+    if not isinstance(req, dict):
+        raise ValueError("body must be a JSON object")  # noqa: TRY004 — see the docstring: ValueError is the 400 channel
+
+    topic = str(req.get("topic", "")).strip()
+    if not _DEBUG_TOPIC_RE.match(topic):
+        raise ValueError("topic must match [A-Za-z0-9._-]{1,200}")
+    marker = str(req.get("marker", "")).strip().lower()
+    if not _valid_debug_marker(marker):
+        raise ValueError(f"marker must be {CORR_DEBUG_MARKER_LEN} Crockford base32 characters")
+
+    # probe_src is OPTIONAL and REFUSED when malformed — never ignored. An
+    # empty value is the ABSENCE of the second needle, not a blank one: an
+    # empty needle is a substring of every payload, so accepting "" as a needle
+    # would return the whole topic. Anything else outside the grammar is a
+    # caller trying to make this process scan the bus for its own string, and
+    # it gets a named 400 rather than a best-effort scan.
+    probe_src = str(req.get("probe_src", "")).strip()
+    if probe_src and not _DEBUG_PROBE_SRC_RE.match(probe_src):
+        raise ValueError("probe_src must be an RFC 5737 documentation address 192.0.2.1-192.0.2.254")
+
+    def _clamp(name: str, default: float, lo: float, hi: float) -> float:
+        raw = req.get(name, default)
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} must be a number") from None
+        return max(lo, min(hi, val))
+
+    return {
+        "topic": topic,
+        "marker": marker,
+        "probe_src": probe_src,
+        "max_seconds": _clamp("max_seconds", CORR_DEBUG_PEEK_MAX_S, 1.0, CORR_DEBUG_PEEK_MAX_S),
+        "max_records": int(_clamp("max_records", 5, 1, CORR_DEBUG_MAX_RECORDS)),
+        "lookback_seconds": int(_clamp("lookback_seconds", 900, 1, CORR_DEBUG_MAX_LOOKBACK_S)),
+    }
+
+
+def _debug_peek_needles(params: dict) -> list[bytes]:
+    """The byte needles a record may match, in the order they are tried.
+
+    The text marker is always one. For a kind whose record cannot carry text —
+    flow — the caller also supplies probe_src, and a record matching EITHER is
+    returned. The needle is deliberately LOOSE; the API re-verifies every
+    returned record against the probe's full flow fingerprint before it
+    believes one, so a loose bus scan cannot promote another trace's record.
+
+    An empty probe_src adds NO needle: b"" is in every payload.
+    """
+    needles = [("cx_debug=" + params["marker"]).encode()]
+    probe_src = params.get("probe_src") or ""
+    if probe_src:
+        needles.append(probe_src.encode())
+    return needles
+
+
+async def _debug_kafka_peek(params: dict) -> dict:
+    """Read-only, group-less, time-bounded scan of one topic for one marker.
+
+    NO group_id: the consumer never joins netops-correlation, never triggers a
+    rebalance and cannot commit an offset — a debug read must not be able to
+    perturb the engine it is debugging.
+    """
+    started = time.monotonic()
+    deadline = started + params["max_seconds"]
+    needles = _debug_peek_needles(params)
+    consumer = AIOKafkaConsumer(
+        bootstrap_servers=KAFKA_BOOTSTRAP,
+        enable_auto_commit=False,
+        auto_offset_reset="latest",
+        **KAFKA_SECURITY,
+    )
+    records: list[dict] = []
+    scanned = 0
+    truncated = False
+    await consumer.start()
+    try:
+        parts = consumer.partitions_for_topic(params["topic"])
+        if not parts:
+            return {"records": [], "scanned": 0,
+                    "elapsed_s": round(time.monotonic() - started, 3),
+                    "truncated": False,
+                    "detail": f"topic {params['topic']} has no partitions visible to this principal"}
+        tps = [TopicPartition(params["topic"], p) for p in sorted(parts)]
+        consumer.assign(tps)
+        # Seek by TIME, not to the beginning: a debug peek must never replay a
+        # retention window's worth of a production topic.
+        since_ms = int((time.time() - params["lookback_seconds"]) * 1000)
+        offsets = await consumer.offsets_for_times({tp: since_ms for tp in tps})
+        for tp in tps:
+            found = offsets.get(tp)
+            if found is None:
+                await consumer.seek_to_end(tp)
+            else:
+                consumer.seek(tp, found.offset)
+        while time.monotonic() < deadline and len(records) < params["max_records"]:
+            batch = await consumer.getmany(
+                timeout_ms=int(max(0.0, deadline - time.monotonic()) * 1000))
+            if not batch:
+                break
+            for msgs in batch.values():
+                for msg in msgs:
+                    scanned += 1
+                    payload = msg.value or b""
+                    if not any(n in payload for n in needles):
+                        continue
+                    excerpt = payload[:CORR_DEBUG_MAX_EXCERPT]
+                    if len(payload) > CORR_DEBUG_MAX_EXCERPT:
+                        truncated = True
+                    records.append({
+                        "topic": msg.topic,
+                        "partition": msg.partition,
+                        "offset": msg.offset,
+                        "timestamp_ms": msg.timestamp,
+                        "excerpt": excerpt.decode("utf-8", "replace"),
+                    })
+                    if len(records) >= params["max_records"]:
+                        break
+                if len(records) >= params["max_records"]:
+                    break
+    finally:
+        await consumer.stop()
+    return {"records": records, "scanned": scanned,
+            "elapsed_s": round(time.monotonic() - started, 3),
+            "truncated": truncated}
+
+
+def _debug_level_params(body: bytes) -> dict:
+    """Validate an untrusted log-level request. Same ValueError contract as
+    _debug_peek_params above, for the same reason: the handler's
+    `except ValueError` is what turns a bad body into a 400 with a reason."""
+    if len(body) > CORR_DEBUG_MAX_BODY:
+        raise ValueError("request body too large")
+    try:
+        req = json.loads(body or b"{}")
+    except Exception as exc:                       # noqa: BLE001 — untrusted input
+        raise ValueError(f"body is not JSON: {exc}") from None
+    if not isinstance(req, dict):
+        raise ValueError("body must be a JSON object")  # noqa: TRY004 — see the docstring: ValueError is the 400 channel
+    level = str(req.get("level", "")).strip().lower()
+    if level not in ("debug", "info"):
+        raise ValueError("level must be debug or info")
+    try:
+        window = float(req.get("for_seconds", 300))
+    except (TypeError, ValueError):
+        raise ValueError("for_seconds must be a number") from None
+    # 30 minutes is the hard cap the design sets for ANY debug window.
+    window = max(1.0, min(1800.0, window))
+    return {"level": level, "for_seconds": window}
+
+
+def _debug_set_level(level: str, for_seconds: float) -> dict:
+    """Move the root logger and arm the auto-revert HERE.
+
+    The revert timer lives in this process on purpose: a caller that dies — the
+    CLI killed, the API restarted, the operator's laptop closed — must not be
+    able to leave this service at debug (design §5)."""
+    global DEBUG_LEVEL_REVERT_TIMER
+    previous = logging.getLevelName(logging.getLogger().level).lower()
+    if DEBUG_LEVEL_REVERT_TIMER is not None:
+        DEBUG_LEVEL_REVERT_TIMER.cancel()
+        DEBUG_LEVEL_REVERT_TIMER = None
+    logging.getLogger().setLevel(level.upper())
+    log.setLevel(level.upper())
+    revert_at = None
+    if level == "debug":
+
+        def _revert() -> None:
+            global DEBUG_LEVEL_REVERT_TIMER
+            logging.getLogger().setLevel(LOG_LEVEL)
+            log.setLevel(LOG_LEVEL)
+            DEBUG_LEVEL_REVERT_TIMER = None
+            log.warning("debug log level auto-reverted to %s after its window", LOG_LEVEL)
+
+        timer = threading.Timer(for_seconds, _revert)
+        timer.daemon = True
+        timer.start()
+        DEBUG_LEVEL_REVERT_TIMER = timer
+        revert_at = time.time() + for_seconds
+    return {"module": "correlation", "applied": True, "level": level,
+            "previous": previous, "revert_at_unix": revert_at,
+            "reason": "auto-reverts in this process even if the caller dies"}
+
+
+def _sidecar_debug_response(path: str, body: bytes, auth_header: str | None,
+                            peek_runner=None) -> tuple[int, str, bytes]:
+    """(status, content_type, body) for one POST — PURE except for the runner it
+    is handed, so every branch is testable with no broker and no server."""
+    global DEBUG_PEEKS_TOTAL, DEBUG_PEEK_ERRORS
+    if not _debug_configured():
+        return 503, "application/json", json.dumps({
+            "detail": "the correlation debug endpoints are not configured on this "
+                      "deployment: set CORR_DEBUG_TOKEN to enable them"}).encode()
+    if not _debug_authorized(auth_header):
+        return 401, "application/json", b'{"detail":"bearer token required"}'
+    if path == "/debug/kafka-peek":
+        try:
+            params = _debug_peek_params(body)
+        except ValueError as exc:
+            return 400, "application/json", json.dumps({"detail": str(exc)}).encode()
+        runner = peek_runner or (lambda p: asyncio.run(_debug_kafka_peek(p)))
+        DEBUG_PEEKS_TOTAL += 1
+        try:
+            result = runner(params)
+        except Exception as exc:                   # noqa: BLE001 — a broker fault
+            # must be REPORTED, never rendered as "the marker was not on the bus"
+            # (that inversion is the whole defect class this feature exists for).
+            DEBUG_PEEK_ERRORS += 1
+            log.warning("debug kafka peek failed (%s): %s", type(exc).__name__, exc)
+            return 502, "application/json", json.dumps({
+                "detail": f"kafka peek failed: {type(exc).__name__}: {exc}"}).encode()
+        return 200, "application/json", json.dumps(result).encode()
+    if path == "/debug/loglevel":
+        try:
+            params = _debug_level_params(body)
+        except ValueError as exc:
+            return 400, "application/json", json.dumps({"detail": str(exc)}).encode()
+        return 200, "application/json", json.dumps(
+            _debug_set_level(params["level"], params["for_seconds"])).encode()
+    return 404, "application/json", b'{"detail":"sidecar POST serves /debug/kafka-peek and /debug/loglevel only"}'
+
+
+# DEBUG-ROUTES-END
+
+
+def _start_health_sidecar() -> object | None:
+    """Start the daemon-thread server; returns it (tests) or None (disabled)."""
+    if CORR_HEALTH_SIDECAR_PORT <= 0:
+        return None
+    import http.server
+    import ssl as _ssl
+    import threading
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            try:
+                status, ctype, body = _sidecar_response(self.path.split("?")[0])
+                self.send_response(status)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:  # noqa: BLE001 — a probe handler must
+                # never kill the sidecar thread (reachability IS the feature);
+                # counted + logged so failures are observable (§10), never silent.
+                global HEALTH_SIDECAR_ERRORS
+                HEALTH_SIDECAR_ERRORS += 1
+                log.warning("health sidecar request failed (%s): %s — total=%d",
+                            type(exc).__name__, exc, HEALTH_SIDECAR_ERRORS)
+
+        # DEBUG-ROUTES-BEGIN
+        def do_POST(self):
+            # The pipeline debugger's two bounded, token-gated routes. Same
+            # never-kill-the-thread contract as do_GET: reachability of the
+            # health surface is the sidecar's reason to exist, and a debug
+            # request must not be able to take it down.
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if length < 0 or length > CORR_DEBUG_MAX_BODY:
+                    status, ctype, body = 413, "application/json", b'{"detail":"request body too large"}'
+                else:
+                    raw = self.rfile.read(length) if length else b""
+                    status, ctype, body = _sidecar_debug_response(
+                        self.path.split("?")[0], raw, self.headers.get("Authorization"))
+                self.send_response(status)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:  # noqa: BLE001 — see do_GET
+                global HEALTH_SIDECAR_ERRORS
+                HEALTH_SIDECAR_ERRORS += 1
+                log.warning("health sidecar POST failed (%s): %s — total=%d",
+                            type(exc).__name__, exc, HEALTH_SIDECAR_ERRORS)
+
+        # DEBUG-ROUTES-END
+
+        def log_message(self, *_a):                        # probes are not access-log noise
+            return
+
+    # Bind-all inside the container netns is the deploy convention for the
+    # health sidecar (reachability IS the feature); exposure is governed by
+    # the compose network — the port is not published on the host.
+    srv = http.server.ThreadingHTTPServer(
+        ("0.0.0.0", CORR_HEALTH_SIDECAR_PORT), _Handler)  # nosec B104 — see above
+    # Deploy-convention fix (2026-08-24, caught in pre-deploy review): the
+    # stack sets CORR_TLS_CERT/CORR_TLS_KEY (compose.tls.yml, same pair
+    # tls_serve.py uses); the original CORRELATION_TLS_CRT names matched
+    # nothing and would have served the sidecar PLAINTEXT in production.
+    # Old names kept as fallback for any standalone harness that used them.
+    crt = os.environ.get("CORR_TLS_CERT", "") or os.environ.get("CORRELATION_TLS_CRT", "")
+    key = os.environ.get("CORR_TLS_KEY", "") or os.environ.get("CORRELATION_TLS_KEY", "")
+    if crt and key:
+        ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(crt, key)
+        srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+    t = threading.Thread(target=srv.serve_forever, name="health-sidecar", daemon=True)
+    t.start()
+    log.info("health sidecar serving /healthz + /metrics on :%d (%s) — tracker 174",
+             CORR_HEALTH_SIDECAR_PORT, "tls" if crt and key else "plaintext")
+    return srv
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     global ch
+    # Boot gate: a configured-but-unwritable dead-letter dir refuses startup
+    # (raising here aborts uvicorn's lifespan startup → non-zero exit → the
+    # container restarts loudly instead of silently losing evidence).
+    dlq_startup_check()
+    # Opt-in forensics (CORR_DIAG_MEMORY). Dormant by default: returns before
+    # starting tracemalloc, creating a thread, or touching the filesystem.
+    diagnostics.start()
+    # After the boot path has built everything long-lived (catalog, config,
+    # templates) and before the first storm allocates against it — see
+    # CORR_GC_TUNE for the measurement that put this here.
+    gc_tune_startup()
     ch = CH(CLICKHOUSE_URL, CLICKHOUSE_USER, CLICKHOUSE_PASS)
-    task = asyncio.create_task(consume())
+    # Tracker 174: the loop-INDEPENDENT health server (daemon thread). Found
+    # unwired at first deploy (2026-08-24): the snapshot feed task below ran
+    # but nothing ever served :8094, so the new Docker healthcheck failed on
+    # connection-refused. Started before the loop tasks so /healthz answers
+    # (503 "starting") from the first moment of life.
+    _start_health_sidecar()
+    # P2 step 4: the Evidence consumer. Started before the producers so the very
+    # first cohort's Evidence is deferred rather than written inline, and NOT
+    # put in `tasks` — it must outlive them by the shutdown drain (below).
+    _evidence_ensure_consumer()
+    # Tracker 199: the consume task is held BY NAME because the teardown below
+    # must sequence it LAST of the loop tasks — cancelling it is what runs
+    # `consumer.stop()` and therefore what issues LeaveGroup, and the ownership
+    # handoff flush has to land before that.
+    consume_task = asyncio.create_task(consume())
+    tasks = [
+        consume_task,
+        asyncio.create_task(engine_loop()),
+        asyncio.create_task(cloud_log_tailer()),  # #81 P3B file source (opt-in)
+        asyncio.create_task(batch_flush_loop()),  # ≤2s latency bound for batched writes
+        asyncio.create_task(loop_lag_watchdog()),  # P1: names the next blocker itself
+        asyncio.create_task(health_snapshot_loop()),  # tracker 174 sidecar feed
+    ]
+    if diagnostics.enabled():
+        tasks.append(asyncio.create_task(diag_snapshot_loop()))
     try:
         yield
     finally:
-        task.cancel()
-        try: await task
-        except asyncio.CancelledError: pass
+        # Tracker 155: the ownership seed is not in `tasks` (it is created by a
+        # rebalance callback, not here) but it must not outlive the loop either
+        # — an un-awaited pending task at teardown is exactly the kind of
+        # unobserved death §10 forbids. Cancelling a partial seed is safe:
+        # registration is idempotent per correlation_id.
+        seed_task = _OWNERSHIP_SEED_TASK
+        if seed_task is not None and not seed_task.done():
+            seed_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await seed_task
+        # TRACKER 199 — THE ORDER BELOW IS THE FIX, in three steps.
+        #
+        # 1. QUIESCE THE ENGINE FIRST. `engine_loop` is the only writer of
+        #    OPEN_OBJECTS (the reconcile loop registers, merges and closes;
+        #    `consume` only buffers signals), so stopping it first makes the
+        #    handoff flush this owner's genuine LAST word — no cycle can
+        #    re-number a version underneath it, and no post-release cycle can
+        #    re-mint an object from evidence still in the window (155c F1: the
+        #    admission guard cannot catch that one here, because on shutdown
+        #    CONSUMER_ASSIGNMENT still says we own the partition).
+        engine_tasks = [t for t in tasks if t is not consume_task]
+        for task in engine_tasks:
+            task.cancel()
+        for task in engine_tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        # 2. FLUSH-AND-RELEASE, BEFORE LeaveGroup. `on_partitions_revoked` is
+        #    never called when THIS member leaves the group, so without this the
+        #    departing replica hands over nothing (155d measured 14 open objects
+        #    and 0 flush lines in a 120 ms exit). Three ordering constraints,
+        #    all satisfied here:
+        #      (a) it PERSISTS via ClickHouse -> it must run while `ch` is up;
+        #          `ch.close()` is the last statement of this block.
+        #      (b) `_persist_snapshot` OFFLOADS its serializers (`_snap_call`)
+        #          and defers its Evidence half to the evidence plane -> it must
+        #          run BEFORE `offload_stop()` and BEFORE `_evidence_stop()`, so
+        #          the rows it produces are drained by the two drains that
+        #          follow rather than stranded behind them. It is first here for
+        #          exactly that reason, and because the docker stop grace period
+        #          is the real wall: the highest-value write of the shutdown
+        #          takes the front of that budget, not what is left of it.
+        #      (c) it lands BEFORE `consume`'s final commit. That is safe in
+        #          both directions and deliberately not load-bearing: the flush
+        #          writes DURABLE VERSIONS while offsets govern only
+        #          REDELIVERY, and every version carries a content-derived
+        #          dedup token (`obj:<cid>:v<n>:<state>:<hash>`), so a replayed
+        #          message that re-derives the same version dedups instead of
+        #          duplicating. Flushing first is the strictly better half of
+        #          the choice anyway: were the commit to go first and the flush
+        #          then miss its budget, the residue would be lost with no
+        #          replay left to reconstruct it.
+        with contextlib.suppress(Exception):
+            await _shutdown_handoff_flush()
+        # 3. NOW the consumer leaves the group (final commit + LeaveGroup, both
+        #    bounded by CONSUMER_STOP_TIMEOUT_S inside `consume`).
+        consume_task.cancel()
+        try:
+            await consume_task
+        except asyncio.CancelledError:
+            pass
+        # P2 step 4: the producers are stopped; give the Evidence plane a bounded
+        # deadline to land what it still holds, then LOG AND COUNT whatever is
+        # left (CORR_EVIDENCE_DRAIN_ON_STOP_S). An Evidence row that never landed
+        # is a fact on the way out, never a silence.
+        with contextlib.suppress(Exception):
+            await _evidence_stop()
+        # Shutdown flush: rows still buffered (e.g. engine-cycle episode signals
+        # with no Kafka offset to hold them) must not die with the process. A
+        # failure here was already counted by _note_ch_failure inside flush.
+        with contextlib.suppress(Exception):
+            await SIGNAL_BATCH.flush()
+        # tracker 164: the offload plane goes LAST of the compute teardown —
+        # both flushes above offload their body/token builds, so stopping it
+        # first would strand exactly the rows the drain exists to save.
+        with contextlib.suppress(Exception):
+            await offload_stop()
         await ch.close()
 
 
 app = FastAPI(title="netops-correlation", version="0.1.0", lifespan=lifespan)
+
+# APP-001: workload-identity authorization for the mTLS deployment. Dormant on
+# the plaintext baseline (no CORR_TLS_ALLOWED_URIS -> enforcement off); under
+# tls_serve.py the handshake has already limited callers to mesh-CA client
+# certificates, and this narrows them to named SPIFFE identities — the Go api
+# in full, the metric scraper and the container's own healthcheck on
+# /metrics + /healthz only. Registered LAST so it runs FIRST (outermost) —
+# only this add_middleware call's position matters for ordering; the import
+# lives at the top of the file (E402).
+app.add_middleware(PeerIdentityMiddleware)
 
 
 class Finding(BaseModel):
@@ -299,27 +14040,1475 @@ class Finding(BaseModel):
     description: str
 
 
+@app.get("/deadletters")
+async def deadletters(limit: int = 50) -> dict:
+    """The quarantined events (newest first) WITH their payloads — the point of
+    the quarantine is that a poison event stays reproducible instead of costing
+    a stack trace and a lost record. Internal surface (the Go API fronts it with
+    authz), bounded by CORR_QUARANTINE_MAX."""
+    n = max(1, min(int(limit), CORR_QUARANTINE_MAX))
+    return {
+        "count": len(QUARANTINE),
+        "failures_by_topic": dict(sorted(HANDLER_FAILURES.items())),
+        "write_failures": QUARANTINE_WRITE_FAILURES,
+        "events": list(QUARANTINE)[-n:][::-1],
+    }
+
+
+@app.get("/metrics")
+async def metrics_exposition():
+    """Prometheus text exposition of the intake/drop counters (#99 R6) — the
+    same numbers /healthz reports, scrapeable by VictoriaMetrics so silent
+    ingestion failures (received flat-lined, dropped rising, dead-letters)
+    become alerts instead of archaeology."""
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(_metrics_text())
+
+
+def _prom_label(value: str) -> str:
+    """Escape one Prometheus LABEL VALUE (exposition format: backslash, double
+    quote and newline). Every label rendered below comes from a fixed,
+    import-time corpus today, so this changes nothing about the output — it is
+    here so that a future value which is NOT from a fixed corpus cannot break
+    the exposition (or inject a series) by carrying a quote. Cheap, total, and
+    idempotent on already-safe values."""
+    return (str(value).replace("\\", "\\\\")
+            .replace('"', '\\"').replace("\n", "\\n"))
+
+
+def _metrics_text(health: dict | None = None) -> str:
+    """The /metrics body, extracted SYNC (tracker 174) — served by both the
+    route and the loop-independent sidecar; see _health_payload.
+
+    `health` is an ALREADY-BUILT `_health_payload()`. The snapshot publisher
+    passes the one it just built so a tick walks the health surface once instead
+    of twice (ultra-review #43, tracker 208b); every other caller omits it and
+    gets the previous behaviour — a payload built here, on demand."""
+    h = _health_payload() if health is None else health
+    # P2 step 4: read the Evidence-plane figures ONCE — the queue's oldest-age
+    # scan is O(depth) and must not be paid per exposition line.
+    _ev = evidence_stats()
+    # Narrowed once, here, rather than at the exposition line: `evidence_stats`
+    # is a dict[str, object] by design (it carries bools, floats and this map).
+    _ev_flushes = _ev["flushes_total"]
+    _ev_flushes = _ev_flushes if isinstance(_ev_flushes, dict) else {}
+    # Same rule for the level-1 memo: one call, several series. `stats()` walks
+    # the LRU for its byte figure, so paying it per line would make /metrics
+    # O(series x entries).
+    _rm = rank_memo_stats()
+    # Tracker 196: one evaluation for the whole reason label set — the state is
+    # a single instantaneous answer, not five independent ones.
+    _caught_up_reason_now = caught_up_reason(time.monotonic())
+    lines = [
+        "# HELP corr_ingest_events Correlation intake counters by lane (monotonic since process start).",
+        "# TYPE corr_ingest_events counter",
+    ]
+    for key, val in h["ingest"].items():
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            lines.append(f'corr_ingest_events{{counter="{key}"}} {val}')
+    eng = h["engine_v2"]
+    ing = h["ingest"]
+    _parser = h["parser"]
+    lines += [
+        "# TYPE corr_deadletters counter",
+        f"corr_deadletters {eng['deadletter_count']}",
+        "# TYPE corr_window_signals gauge",
+        f"corr_window_signals {eng['window_signals']}",
+        "# TYPE corr_open_objects gauge",
+        f"corr_open_objects {eng['open_objects']}",
+        # M29a: z-score series budget — evictions must be alertable, not silent.
+        "# HELP corr_zscore_series_evicted_total Legacy z-score baselines evicted by the LRU cap.",
+        "# TYPE corr_zscore_series_evicted_total counter",
+        f"corr_zscore_series_evicted_total {eng['series_evicted']}",
+        "# TYPE corr_zscore_series gauge",
+        f'corr_zscore_series{{k="len"}} {eng["series_len"]}',
+        f'corr_zscore_series{{k="max"}} {eng["series_max"]}',
+        # #100 damping: persisted vs suppressed object versions. A damped:persisted
+        # ratio collapsing to 0 under a storm means the material gate stopped working.
+        "# TYPE corr_versions counter",
+        f'corr_versions{{outcome="persisted"}} {eng["versions_persisted"]}',
+        f'corr_versions{{outcome="damped"}} {eng["versions_damped"]}',
+        # P3 change A: a heartbeat whose material_hash did not move writes the
+        # corr_current freshness row and NO corr_objects version. Disjoint from
+        # both series above; persisted+damped+heartbeat_touch is the full set of
+        # reconciliation outcomes for an object whose content_hash moved.
+        f'corr_versions{{outcome="heartbeat_touch"}} {eng["versions_heartbeat_touched"]}',
+        # P3 change B: the syslog ingest pre-filter's verdict split. A rejected
+        # share collapsing to 0 means the screen stopped screening (or the
+        # workload turned all-control-plane); a rejected share near 100 % with a
+        # flat corr_signals rate means the screen is rejecting too much.
+        "# HELP corr_ingest_prefilter_total Raw syslog lines by ingest pre-filter verdict.",
+        "# TYPE corr_ingest_prefilter_total counter",
+        f'corr_ingest_prefilter_total{{outcome="passed"}} {ing["syslog_prefilter_passed"]}',
+        f'corr_ingest_prefilter_total{{outcome="rejected"}} {ing["syslog_prefilter_rejected"]}',
+        # W1b parser provenance. `corr_parser_rule_hits_total` is labelled by
+        # `rule_id`, whose value set is `producers.RULES` — fixed at import, so
+        # the series count is bounded and no untrusted device string reaches a
+        # label. A rule that stops firing shows as a FLAT series, not a missing
+        # one (every id is pre-seeded at zero), which is what makes a silently
+        # dead branch visible.
+        # T2b evidence-class bus intake. DISTINCT from corr_evidence_items_total
+        # (the Evidence PLANE's materialization queue): this counts INBOUND
+        # records off the generic evidence topics. Label cardinality is the
+        # registered class set x 3 outcomes — fixed at import, no untrusted
+        # string reaches a label, and every series is pre-seeded at zero so a
+        # lane that stops producing shows as FLAT, not as a missing series.
+        "# HELP corr_evidence_events_total Evidence-class bus records consumed, by class and grounding outcome.",
+        "# TYPE corr_evidence_events_total counter",]
+    for _key, _n in sorted(ing["evidence_by_class"].items()):
+        _cls, _, _outcome = _key.partition("|")
+        lines.append(
+            f'corr_evidence_events_total{{class="{_cls}",outcome="{_outcome}"}} {_n}')
+    lines += [
+        "# HELP corr_parser_rule_hits_total Signals emitted, by the parser rule that classified them.",
+        "# TYPE corr_parser_rule_hits_total counter",]
+    for _rid, _hits in sorted(_parser["rule_hits"].items()):
+        lines.append(f'corr_parser_rule_hits_total{{rule_id="{_rid}"}} {_hits}')
+    lines += [
+        # The corpus itself, one 1-valued info series per rule: what the rule IS
+        # (lane, emitted kind, the catalog's fidelity claim for its grammar,
+        # whether it is a shadow row that emits nothing) so a scrape can JOIN
+        # the hit counters above to that metadata — which is what the parser-
+        # coverage page renders. Cardinality is len(RULES), fixed at import, the
+        # same bound the hit series carries; label values are escaped anyway
+        # (`_prom_label`) so the exposition cannot be broken by a rule id, and a
+        # `fidelity` here that reads `doc_claimed` is exactly the row the A7
+        # weighting rule refuses to confirm on.
+        "# HELP corr_parser_rule_info The parser rule corpus, one series per rule (always 1).",
+        "# TYPE corr_parser_rule_info gauge",]
+    for _meta in _parser["rules_meta"]:
+        lines.append(
+            f'corr_parser_rule_info{{rule_id="{_prom_label(_meta["rule_id"])}",'
+            f'lane="{_prom_label(_meta["lane"])}",'
+            f'kind="{_prom_label(_meta["kind"])}",'
+            f'fidelity="{_prom_label(_meta["fidelity"])}",'
+            f'shadow="{"true" if _meta["shadow"] else "false"}"}} 1')
+    lines += [
+        # A3 shadow rules: a branch that MATCHED but deliberately emitted no
+        # signal. Disjoint from corr_parser_rule_hits_total by construction —
+        # a hit is a signal, a shadow hit is a match the parser chose not to
+        # promote — so the pair is the honest "what the estate sends vs what
+        # the engine acts on" split, and a shadow rate climbing against a flat
+        # hit rate is the signal that a shadow branch is ready to graduate.
+        # Same bounded label set: `rule_id` comes from the fixed rule corpus.
+        "# HELP corr_parser_shadow_hits_total Shadow-rule matches that emitted NO signal, by rule.",
+        "# TYPE corr_parser_shadow_hits_total counter",]
+    for _rid, _hits in sorted(_parser["shadow_hits"].items()):
+        lines.append(f'corr_parser_shadow_hits_total{{rule_id="{_rid}"}} {_hits}')
+    _proactive = proactive_stats()
+    lines += [
+        # A4 proactive checks. The SAME split as the parser's shadow series and
+        # for the same reason: a shadow check is a condition the engine
+        # recognised and deliberately did not act on, so the rate is the
+        # evidence that decides promotion. Bounded label set — `check_id` comes
+        # from the fixed `proactive.CHECKS` table, never from the wire.
+        "# HELP corr_proactive_shadow_hits_total Proactive checks that fired but emitted NO signal (shadow), by check.",
+        "# TYPE corr_proactive_shadow_hits_total counter",]
+    for _cid, _hits in sorted(_proactive["shadow_hits"].items()):
+        lines.append(f'corr_proactive_shadow_hits_total{{check_id="{_cid}"}} {_hits}')
+    lines += [
+        "# HELP corr_proactive_hits_total Proactive checks that fired AND emitted a signal (promoted), by check.",
+        "# TYPE corr_proactive_hits_total counter",]
+    for _cid, _hits in sorted(_proactive["live_hits"].items()):
+        lines.append(f'corr_proactive_hits_total{{check_id="{_cid}"}} {_hits}')
+    lines += [
+        # The size of the "something is still wrong" set: watches currently
+        # holding a bad state, whether or not their dwell has expired. A gauge,
+        # because it is a level and not a rate.
+        "# HELP corr_proactive_open_watches Proactive-check watches currently holding a bad state.",
+        "# TYPE corr_proactive_open_watches gauge",
+        f"corr_proactive_open_watches {PROACTIVE.open_watches()}",
+        "# HELP corr_proactive_watches Proactive-check watches held in memory (bounded by CORR_PROACTIVE_MAX_WATCHES).",
+        "# TYPE corr_proactive_watches gauge",
+        f"corr_proactive_watches {len(PROACTIVE)}",
+        "# HELP corr_proactive_watch_evictions_total Watches dropped at the cardinality cap.",
+        "# TYPE corr_proactive_watch_evictions_total counter",
+        f"corr_proactive_watch_evictions_total {PROACTIVE.evicted}",
+    ]
+    lines += [
+        # The unclassified safety nets (#80 §4). Rising against a flat typed
+        # rate = the estate started emitting something the parser cannot read.
+        "# HELP corr_parser_generic_fallback_total Signals that fell through to the generic device_alarm net, by lane.",
+        "# TYPE corr_parser_generic_fallback_total counter",]
+    for _src, _n in sorted(_parser["generic_fallbacks"].items()):
+        lines.append(f'corr_parser_generic_fallback_total{{source="{_src}"}} {_n}')
+    lines += [
+        # typed / (typed + generic) over a ROLLING WINDOW of the last
+        # `promotion_window` (10,000) ADMITTED lines — lines that produced a
+        # signal at all. Lines that classify as nothing are deliberately NOT in
+        # the denominator: they are the pre-filter's business, and counting them
+        # would make this a measure of the noise mix rather than of parser
+        # coverage. 1.0 with an empty window (no claim), never 0.0.
+        "# HELP corr_semantic_promotion_rate Share of admitted lines classified by a typed rule, over the last 10000 admitted lines.",
+        "# TYPE corr_semantic_promotion_rate gauge",
+        f'corr_semantic_promotion_rate {_parser["semantic_promotion_rate"]}',
+        # The rule corpus that produced the counters above: the hand-bumped
+        # revision and the computed hash of the ordered table. Exported as a
+        # 1-valued info series so a scrape can join signals to their parser.
+        "# HELP corr_parser_info The parser rule corpus in force (always 1).",
+        "# TYPE corr_parser_info gauge",
+        (f'corr_parser_info{{parser_rev="{_parser["parser_rev"]}",'
+         f'rules_hash="{_parser["rules_hash"]}",rules="{_parser["rules"]}"}} 1'),
+        # #101: lost corr_current dual-writes = stale Command Center. Alerted
+        # by CorrCurrentProjectionFailing; repaired by the Go reconciler.
+        "# HELP corr_current_projection_write_failures_total corr_current projection writes lost (hot-read staleness risk).",
+        "# TYPE corr_current_projection_write_failures_total counter",
+        f"corr_current_projection_write_failures_total {PROJECTION_WRITE_FAILURES}",
+        # F-38: any lost ClickHouse write, by table. corr_signals_archive
+        # rising = the replay source is growing holes while live RCA looks fine.
+        "# HELP corr_ch_insert_failures_total ClickHouse inserts that did not land, by table.",
+        "# TYPE corr_ch_insert_failures_total counter",
+    ]
+    for table, n in sorted(CH_INSERT_FAILURES.items()):
+        lines.append(f'corr_ch_insert_failures_total{{table="{table}"}} {n}')
+    # The other half of the same accounting: a write that could not be retried
+    # any further but WAS kept on disk. It is not counted above (it is not
+    # lost), and it must not be invisible either — a rising series here means
+    # rows are living in the dead-letter file waiting to be replayed.
+    lines += [
+        "# HELP corr_ch_rows_dlq_spooled_total Rows of a given-up insert preserved in the dead-letter file, by table.",
+        "# TYPE corr_ch_rows_dlq_spooled_total counter",
+    ]
+    for table, n in sorted(CH_ROWS_DLQ_SPOOLED.items()):
+        lines.append(f'corr_ch_rows_dlq_spooled_total{{table="{table}"}} {n}')
+    # tracker 189: the whole outcome split per table, not just the bad half.
+    # "flushed" landing while "deadlettered" climbs is a ClickHouse that is
+    # refusing SOME batches; "lost" above zero means rows exist nowhere at all
+    # (CORR_DLQ_DIR unset or unwritable) and is the one series that is an
+    # incident on its own. Cardinality is bounded: module-constant table names
+    # x the four CH_OUTCOMES.
+    lines += [
+        "# HELP corr_ch_table_writes_total ClickHouse write outcomes in rows, by table and outcome.",
+        "# TYPE corr_ch_table_writes_total counter",
+    ]
+    for table, outcomes in sorted(CH_TABLE_OUTCOMES.items()):
+        for outcome in CH_OUTCOMES:
+            if outcome in outcomes:
+                lines.append(
+                    f'corr_ch_table_writes_total{{table="{table}",'
+                    f'outcome="{outcome}"}} {outcomes[outcome]}')
+    lines += [
+        # Perf defect #2/#3: batched write path + bounded archive slices.
+        "# HELP corr_signal_batch Batched corr_signals write-path events.",
+        "# TYPE corr_signal_batch counter",
+        f'corr_signal_batch{{event="flushes"}} {BATCH_FLUSHES}',
+        f'corr_signal_batch{{event="rows_flushed"}} {BATCH_ROWS_FLUSHED}',
+        f'corr_signal_batch{{event="rows_quarantined"}} {BATCH_ROWS_QUARANTINED}',
+        f'corr_signal_batch{{event="rows_replay_deduped"}} {BATCH_ROWS_REPLAY_DEDUPED}',
+        # tracker 198: in-batch drops on an identity already pending. Expected to
+        # track redelivery; a rise with no rebalance means distinct events are
+        # sharing a native_id and evidence is being discarded.
+        f'corr_signal_batch{{event="rows_identity_collapsed"}} {BATCH_ROWS_IDENTITY_COLLAPSED}',
+        # P1 max-poll thrash: revoke-hook flush+commit outcomes. "failed" is
+        # replay-safe (dedup absorbs) but rising = rebalances are landing on a
+        # broken flush path.
+        "# HELP corr_consumer_revoke_commits_total Rebalance revoke-hook flush+commit outcomes.",
+        "# TYPE corr_consumer_revoke_commits_total counter",
+        f'corr_consumer_revoke_commits_total{{outcome="ok"}} {CONSUMER_REVOKE_COMMITS}',
+        f'corr_consumer_revoke_commits_total{{outcome="failed"}} {CONSUMER_REVOKE_COMMIT_FAILURES}',
+        f'corr_consumer_revoke_commits_total{{outcome="skipped"}} {CONSUMER_REVOKE_SKIPPED}',
+        # An IDLE replica (joined the group, assigned nothing — more replicas
+        # than BUS_PARTITIONS) consumes forever at zero rate while looking
+        # healthy. owned_partitions==0 with rebalances>0 is that state; alert on
+        # it rather than discovering it from a lag graph that never drains.
+        "# HELP corr_consumer_owned_partitions Partitions assigned to THIS replica.",
+        "# TYPE corr_consumer_owned_partitions gauge",
+        f"corr_consumer_owned_partitions {sum(len(p) for p in CONSUMER_ASSIGNMENT.values())}",
+        "# HELP corr_consumer_zero_assignments_total Rebalances that assigned this replica no partitions.",
+        "# TYPE corr_consumer_zero_assignments_total counter",
+        f"corr_consumer_zero_assignments_total {CONSUMER_ZERO_ASSIGNMENTS}",
+        # Four-state gauge (1 = the replica is in that state). cold_window =
+        # holds partitions acquired less than one engine window ago, so their
+        # tenants' RCA is thin — degraded, not wrong. See consumer_state() for
+        # the honest limitation (tracker 155).
+        "# HELP corr_consumer_state Consumer state: pending|idle|cold_window|active.",
+        "# TYPE corr_consumer_state gauge",
+        *(f'corr_consumer_state{{state="{s}"}} {1 if consumer_state() == s else 0}'
+          for s in ("pending", "idle", "cold_window", "active")),
+        "# TYPE corr_consumer_cold_partitions gauge",
+        f"corr_consumer_cold_partitions {len(cold_partitions())}",
+        # ── subscription liveness + optional-lane drops (2026-09-02) ────────
+        # `corr_consumer_running` 0 while `corr_consumer_start_failures_total`
+        # or `corr_consumer_restarts_total` climbs IS the restart loop that hid
+        # behind a green /healthz for three hours. Alert on it.
+        "# HELP corr_consumer_running 1 while the REQUIRED subscription is live and consuming.",
+        "# TYPE corr_consumer_running gauge",
+        f"corr_consumer_running {int(CONSUMER_RUNNING)}",
+        "# HELP corr_consumer_starts_total Successful consumer.start() calls.",
+        "# TYPE corr_consumer_starts_total counter",
+        f"corr_consumer_starts_total {CONSUMER_STARTS}",
+        "# HELP corr_consumer_start_failures_total consumer.start() failures (missing/ungranted REQUIRED topic, broker down).",
+        "# TYPE corr_consumer_start_failures_total counter",
+        f"corr_consumer_start_failures_total {CONSUMER_START_FAILURES}",
+        "# HELP corr_consumer_restarts_total Supervision rounds that ended in a failure.",
+        "# TYPE corr_consumer_restarts_total counter",
+        f"corr_consumer_restarts_total {CONSUMER_RESTARTS}",
+        "# HELP corr_health_degraded 1 when /healthz status is not ok (see health_reasons).",
+        "# TYPE corr_health_degraded gauge",
+        f"corr_health_degraded {int(h['status'] != 'ok')}",
+        # One series per DROPPED optional evidence lane. Present only while a
+        # lane is dropped, so `corr_evidence_topic_dropped > 0` means exactly
+        # "this evidence lane is NOT grounded" — bounded cardinality (at most
+        # one series per CORR_EVIDENCE_TOPICS entry).
+        "# HELP corr_evidence_topic_dropped An OPTIONAL evidence lane dropped from the subscription (NOT grounded).",
+        "# TYPE corr_evidence_topic_dropped gauge",
+        *(f'corr_evidence_topic_dropped{{topic="{_prom_label(t)}",'
+          f'reason="{_prom_label(r)}"}} 1'
+          for t, r in sorted(EVIDENCE_TOPICS_DROPPED.items())),
+        "# HELP corr_evidence_topic_reprobes_total Bounded re-probe passes over the dropped optional lanes.",
+        "# TYPE corr_evidence_topic_reprobes_total counter",
+        f"corr_evidence_topic_reprobes_total {EVIDENCE_TOPIC_REPROBES}",
+        "# HELP corr_evidence_topic_resubscribes_total Subscription changes applied without a restart.",
+        "# TYPE corr_evidence_topic_resubscribes_total counter",
+        f"corr_evidence_topic_resubscribes_total {EVIDENCE_TOPIC_RESUBSCRIBES}",
+        # Tracker 155 — durable continuation seeding across a partition handoff.
+        # READ THEM TOGETHER: `seeded_objects` is how many identities this
+        # replica reconstructed on assignment, `adoptions` how many of them
+        # arriving evidence actually continued (the repair, measured), `expired`
+        # how many were dropped unadopted, and `failures` how many assignments
+        # fell back to HEAD's behaviour (a new correlation_id per in-flight
+        # incident — fragmentation, not an outage). `skipped` counts open
+        # objects the seed did NOT register: beyond CORR_OWNERSHIP_SEED_MAX
+        # (oldest durable write first) or with no reconstructable entity
+        # identity. adoptions/seeded_objects is the ratio the ownership arm
+        # judges; failures > 0 with adoptions flat means ClickHouse, not logic.
+        "# HELP corr_ownership_seed_runs_total Assignments that ran a continuation seed.",
+        "# TYPE corr_ownership_seed_runs_total counter",
+        f"corr_ownership_seed_runs_total {OWNERSHIP_SEED_RUNS_TOTAL}",
+        "# HELP corr_ownership_seeded_objects_total Identity placeholders reconstructed from ClickHouse on assignment.",
+        "# TYPE corr_ownership_seeded_objects_total counter",
+        f"corr_ownership_seeded_objects_total {OWNERSHIP_SEEDED_OBJECTS_TOTAL}",
+        "# HELP corr_ownership_adoptions_total Arriving evidence that continued a seeded identity.",
+        "# TYPE corr_ownership_adoptions_total counter",
+        f"corr_ownership_adoptions_total {OWNERSHIP_ADOPTIONS_TOTAL}",
+        "# HELP corr_ownership_seed_failures_total Seeds that fell back to pre-155 behaviour.",
+        "# TYPE corr_ownership_seed_failures_total counter",
+        f"corr_ownership_seed_failures_total {OWNERSHIP_SEED_FAILURES_TOTAL}",
+        "# HELP corr_ownership_seed_skipped_total Open objects the seed did not register (cap / unreconstructable).",
+        "# TYPE corr_ownership_seed_skipped_total counter",
+        f"corr_ownership_seed_skipped_total {OWNERSHIP_SEED_SKIPPED_TOTAL}",
+        "# HELP corr_ownership_seed_expired_total Placeholders dropped without ever being adopted.",
+        "# TYPE corr_ownership_seed_expired_total counter",
+        f"corr_ownership_seed_expired_total {OWNERSHIP_SEED_EXPIRED_TOTAL}",
+        "# HELP corr_ownership_seed_revoked_total Placeholders discarded because their partition was revoked.",
+        "# TYPE corr_ownership_seed_revoked_total counter",
+        f"corr_ownership_seed_revoked_total {OWNERSHIP_SEED_REVOKED_TOTAL}",
+        "# HELP corr_ownership_seed_unowned_dropped_total Adopted seeds dropped before their first version because the partition was no longer owned.",
+        "# TYPE corr_ownership_seed_unowned_dropped_total counter",
+        f"corr_ownership_seed_unowned_dropped_total {OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL}",
+        "# HELP corr_ownership_seed_verdict_carried_total Versions whose verdict tier was carried from the durable row while the window refilled.",
+        "# TYPE corr_ownership_seed_verdict_carried_total counter",
+        f"corr_ownership_seed_verdict_carried_total {OWNERSHIP_SEED_VERDICT_CARRIED_TOTAL}",
+        "# HELP corr_ownership_handoff_flushed_total Open objects given a final open version at revoke, for the acquiring replica to continue.",
+        "# TYPE corr_ownership_handoff_flushed_total counter",
+        f"corr_ownership_handoff_flushed_total {OWNERSHIP_HANDOFF_FLUSHED_TOTAL}",
+        "# HELP corr_ownership_handoff_unflushed_total Revoked-partition objects released without a handoff flush (budget exhausted or the write failed).",
+        "# TYPE corr_ownership_handoff_unflushed_total counter",
+        f"corr_ownership_handoff_unflushed_total {OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL}",
+        "# HELP corr_ownership_handoff_released_total Registrations forgotten because the rebalance did not return their partition.",
+        "# TYPE corr_ownership_handoff_released_total counter",
+        f"corr_ownership_handoff_released_total {OWNERSHIP_HANDOFF_RELEASED_TOTAL}",
+        "# HELP corr_ownership_unowned_persist_dropped_total Persists refused because the tenant's partition is not owned at write time.",
+        "# TYPE corr_ownership_unowned_persist_dropped_total counter",
+        f"corr_ownership_unowned_persist_dropped_total {OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL}",
+        "# HELP corr_ownership_unowned_admission_dropped_total New objects refused because the tenant's partition is not owned.",
+        "# TYPE corr_ownership_unowned_admission_dropped_total counter",
+        f"corr_ownership_unowned_admission_dropped_total {OWNERSHIP_UNOWNED_ADMISSION_DROPPED_TOTAL}",
+        "# TYPE corr_signal_batch_pending gauge",
+        f"corr_signal_batch_pending {SIGNAL_BATCH.pending()}",
+        # P1: event-loop stall watchdog. corr_loop_lag_stalls_total rising means
+        # something synchronous is blocking the loop — the exact condition that
+        # starves aiokafka's heartbeat into a rebalance loop.
+        "# HELP corr_loop_lag_stalls_total Loop-lag samples over the warn threshold.",
+        "# TYPE corr_loop_lag_stalls_total counter",
+        f"corr_loop_lag_stalls_total {LOOP_LAG_STALLS}",
+        "# TYPE corr_loop_lag_max_ms gauge",
+        f"corr_loop_lag_max_ms {LOOP_LAG_MAX_MS:.1f}",
+        "# TYPE corr_loop_lag_ms gauge",
+        f"corr_loop_lag_ms {LOOP_LAG_LAST_MS:.1f}",
+        # The loop-thread bound, SEPARATE from every wall-clock stage span: a
+        # stretch counted here is time nothing else on the loop could run.
+        # storm-s03 read a 26 s `lifecycle.quiesce` WALL span as a 26 s stall;
+        # these two say which it was. (see `sync_record`)
+        "# HELP corr_sync_stretch_max_ms Worst uninterrupted loop-thread block.",
+        "# TYPE corr_sync_stretch_max_ms gauge",
+        f"corr_sync_stretch_max_ms {SYNC_STRETCH_MAX_MS:.1f}",
+        "# HELP corr_sync_overruns_total Loop-thread blocks over the sync budget.",
+        "# TYPE corr_sync_overruns_total counter",
+        f"corr_sync_overruns_total {SYNC_OVERRUNS_TOTAL}",
+        # The collector, next to the stall gauge it explains: a loop-lag spike
+        # with a matching gc pause is the heap, one without is our code. See
+        # CORR_GC_TUNE.
+        "# HELP corr_gc_collections_total Completed cycle collections, per generation.",
+        "# TYPE corr_gc_collections_total counter",
+        *(f'corr_gc_collections_total{{generation="{g}"}} {GC_COLLECTIONS[g]}'
+          for g in (0, 1, 2)),
+        "# HELP corr_gc_pause_seconds_max Longest single cycle collection, this process.",
+        "# TYPE corr_gc_pause_seconds_max gauge",
+        f"corr_gc_pause_seconds_max {GC_PAUSE_MAX_S:.6f}",
+        "# HELP corr_gc_pause_seconds_total Time spent in cycle collections.",
+        "# TYPE corr_gc_pause_seconds_total counter",
+        f"corr_gc_pause_seconds_total {GC_PAUSE_TOTAL_S:.6f}",
+        "# HELP corr_gc_frozen_objects Objects moved to the permanent generation at startup.",
+        "# TYPE corr_gc_frozen_objects gauge",
+        f"corr_gc_frozen_objects {GC_FROZEN_OBJECTS}",
+        "# HELP corr_gc_tuned Whether the CORR_GC_TUNE policy was applied (1) or not (0).",
+        "# TYPE corr_gc_tuned gauge",
+        f"corr_gc_tuned {1 if _GC_TUNED else 0}",
+        "# TYPE corr_archive_rows_written counter",
+        f"corr_archive_rows_written {ARCHIVE_ROWS_WRITTEN}",
+        "# TYPE corr_archive_slices_damped counter",
+        f"corr_archive_slices_damped {ARCHIVE_SLICES_DAMPED}",
+        "# TYPE corr_archive_slice_rows_last gauge",
+        f"corr_archive_slice_rows_last {ARCHIVE_SLICE_ROWS_LAST}",
+        "# TYPE corr_archive_slice_rows_max gauge",
+        f"corr_archive_slice_rows_max {ARCHIVE_SLICE_ROWS_MAX}",
+        # Ultra #16: damping records reverted because their slice never landed
+        # (failed OR lost). Every increment is a replay pin that WOULD have
+        # broken silently; the paired WARNING names the object and the reason.
+        "# TYPE corr_archive_slice_reverts_total counter",
+        f"corr_archive_slice_reverts_total {ARCHIVE_SLICE_REVERTS}",
+        "# TYPE corr_ingest_priority_deferrals_total counter",
+        f"corr_ingest_priority_deferrals_total {INGEST_PRIORITY_DEFERRALS}",
+        "# TYPE corr_ingest_priority_active gauge",
+        f"corr_ingest_priority_active {int(INGEST_PRIORITY_ACTIVE)}",
+        "# TYPE corr_open_objects_force_closed_total counter",
+        f"corr_open_objects_force_closed_total {OPEN_OBJECTS_FORCE_CLOSED}",
+        # Tracker 187: the monotone blast radius. `_truncated_total` must stay 0
+        # on any measured shape — a non-zero value says an object's history hit
+        # CORR_AFFECTED_HISTORY_MAX and its FINAL affected may be missing
+        # aged-out entities (never live ones). `_entities_max` is the largest
+        # accumulator this process ever held, i.e. the bound, measured.
+        "# TYPE corr_affected_history_truncated_total counter",
+        f"corr_affected_history_truncated_total {AFFECTED_HISTORY_TRUNCATED}",
+        "# TYPE corr_affected_history_entities_max gauge",
+        f"corr_affected_history_entities_max {AFFECTED_HISTORY_ENTITIES_MAX}",
+        # Housekeeping: the window-prune path. The 2026-08-20 review found the
+        # service exposed NOTHING about its own maintenance work, so a 30,989 ms
+        # prune stall was only findable with a bespoke forensic build. Low
+        # cardinality on purpose — counts and durations, no per-tenant labels.
+        "# HELP corr_prune_calls_total Window-prune invocations.",
+        "# TYPE corr_prune_calls_total counter",
+        f"corr_prune_calls_total {PRUNE_CALLS}",
+        "# HELP corr_prune_evicted_total Signals evicted from the window by age.",
+        "# TYPE corr_prune_evicted_total counter",
+        f"corr_prune_evicted_total {PRUNE_EVICTED}",
+        "# HELP corr_prune_seconds_last Duration of the most recent prune.",
+        "# TYPE corr_prune_seconds_last gauge",
+        f"corr_prune_seconds_last {PRUNE_SECONDS_LAST:.6f}",
+        # The alertable one: a prune is synchronous, so this IS event-loop
+        # blocking time. Rising toward the session timeout means membership is
+        # at risk.
+        "# HELP corr_prune_seconds_max Worst prune duration this process (loop-blocking).",
+        "# TYPE corr_prune_seconds_max gauge",
+        f"corr_prune_seconds_max {PRUNE_SECONDS_MAX:.6f}",
+        # Tracker 171 residual: makes "starvation <= epoch budget + one cohort"
+        # a measured statement instead of an argued one. Prune runs once per
+        # epoch, so this is the worst epoch-to-epoch maintenance interval.
+        "# HELP corr_prune_gap_max_s Widest wall gap observed between successive prune (maintenance) passes.",
+        "# TYPE corr_prune_gap_max_s gauge",
+        f"corr_prune_gap_max_s {PRUNE_GAP_MAX_S:.3f}",
+        # Non-zero means the window and its id index drifted and had to be
+        # rebuilt — correct but slow, and it should never happen in production.
+        "# HELP corr_window_id_order_resyncs_total Window/id-index drift rebuilds.",
+        "# TYPE corr_window_id_order_resyncs_total counter",
+        f"corr_window_id_order_resyncs_total {WINDOW_ID_ORDER_RESYNCS}",
+        "# HELP corr_prune_yields_total Loop hand-backs during pruning (chunk boundaries).",
+        "# TYPE corr_prune_yields_total counter",
+        f"corr_prune_yields_total {PRUNE_YIELDS}",
+        # Rising means the evidence window is FULL and shedding its oldest
+        # signals to make room — RCA is getting thinner, which used to be
+        # invisible.
+        "# HELP corr_window_overflow_dropped_total Signals dropped because the window was full.",
+        "# TYPE corr_window_overflow_dropped_total counter",
+        f"corr_window_overflow_dropped_total {WINDOW_OVERFLOW_DROPPED}",
+        # The one that separates degradation from housekeeping: a signal shed by
+        # CAPACITY while still inside the RCA horizon was eligible evidence.
+        "# HELP corr_window_overflow_in_horizon_total Capacity drops of signals still inside the RCA horizon.",
+        "# TYPE corr_window_overflow_in_horizon_total counter",
+        f"corr_window_overflow_in_horizon_total {WINDOW_OVERFLOW_IN_HORIZON}",
+        # ── explicit storm mode (design 2026-08-28) — §10 no silent failure ──────
+        "# HELP corr_storm_mode_active 1 while the engine has DECLARED storm mode.",
+        "# TYPE corr_storm_mode_active gauge",
+        f"corr_storm_mode_active {1 if _STORM_ACTIVE else 0}",
+        "# HELP corr_storm_deduped_total Signal instances collapsed by storm dedup (per-cycle work).",
+        "# TYPE corr_storm_deduped_total counter",
+        f"corr_storm_deduped_total {STORM_DEDUPED_TOTAL}",
+        "# HELP corr_storm_aggregated_total Low-value occurrences folded into storm aggregates + severity-aware sheds.",
+        "# TYPE corr_storm_aggregated_total counter",
+        f"corr_storm_aggregated_total {STORM_AGGREGATED_TOTAL}",
+        "# HELP corr_storm_lowvalue_shed_total Severity-aware evictions of low-value signals under storm (raw kept in Kafka).",
+        "# TYPE corr_storm_lowvalue_shed_total counter",
+        f"corr_storm_lowvalue_shed_total {STORM_SHED_LOWVALUE}",
+        "# HELP corr_storm_critical_spared_total Evictions that spared a higher-severity head for a low-value victim.",
+        "# TYPE corr_storm_critical_spared_total counter",
+        f"corr_storm_critical_spared_total {STORM_SHED_CRITICAL_SPARED}",
+        # Time actually represented by the window. Below window_horizon_s means
+        # the count bound, not the time bound, is deciding what the engine sees.
+        "# HELP corr_window_span_seconds Time span currently held in the evidence window.",
+        "# TYPE corr_window_span_seconds gauge",
+        f"corr_window_span_seconds {_window_span_s():.1f}",
+        # Kept under its original name so existing dashboards/alerts keep
+        # resolving, but it now reports the DERIVED retention horizon rather
+        # than the removed window_s constant (tracker 165).
+        "# HELP corr_window_horizon_seconds Required retention horizon (derived: reach + lateness).",
+        "# TYPE corr_window_horizon_seconds gauge",
+        f"corr_window_horizon_seconds {RETENTION_REQUIRED_S:.1f}",
+        "# HELP corr_oldest_retained_stream_age_seconds Oldest retained signal's age against its own tenant's stream clock.",
+        "# TYPE corr_oldest_retained_stream_age_seconds gauge",
+        f"corr_oldest_retained_stream_age_seconds {_oldest_retained_stream_age_s():.3f}",
+        "# HELP corr_stream_time_evictions_total Signals expired by their tenant's stream clock.",
+        "# TYPE corr_stream_time_evictions_total counter",
+        f"corr_stream_time_evictions_total {STREAM_TIME_EVICTIONS}",
+        "# HELP corr_idle_tenant_evictions_total Signals shed by the wall-clock idle backstop (resource control).",
+        "# TYPE corr_idle_tenant_evictions_total counter",
+        f"corr_idle_tenant_evictions_total {IDLE_TENANT_EVICTIONS}",
+        "# HELP corr_watermark_regressions_total Out-of-order arrivals that did not move a tenant's stream clock.",
+        "# TYPE corr_watermark_regressions_total counter",
+        f"corr_watermark_regressions_total {WATERMARK_REGRESSIONS}",
+        "# HELP corr_tenants_tracked Tenants with a live stream watermark.",
+        "# TYPE corr_tenants_tracked gauge",
+        f"corr_tenants_tracked {len(TENANT_WATERMARK)}",
+        # tracker 165: the horizon that actually matters, derived from the
+        # scoring rule (exp(-gap/tau_s) * w_topo * w_r >= attach_threshold), and
+        # the retention it implies. If reach > span while the window is full,
+        # the record cap is deciding RCA semantics.
+        "# HELP corr_engine_reach_seconds Largest event-time gap the engine can still attach across.",
+        "# TYPE corr_engine_reach_seconds gauge",
+        f"corr_engine_reach_seconds {ENGINE_REACH_S:.3f}",
+        "# HELP corr_retention_required_seconds Engine reach plus permitted lateness.",
+        "# TYPE corr_retention_required_seconds gauge",
+        f"corr_retention_required_seconds {RETENTION_REQUIRED_S:.3f}",
+        "# HELP corr_permitted_lateness_seconds Declared allowance for late-arriving evidence.",
+        "# TYPE corr_permitted_lateness_seconds gauge",
+        f"corr_permitted_lateness_seconds {CORR_PERMITTED_LATENESS_S:.3f}",
+        # ── P3 Aggregation plane (design §7 step 2 / memo §5). The counters are
+        # raw; every ratio an operator wants is derivable from them in PromQL,
+        # so none is precomputed into a second series.
+        "# HELP corr_agg_enabled 1 when the Aggregation plane is collapsing repeats at ingest.",
+        "# TYPE corr_agg_enabled gauge",
+        f"corr_agg_enabled {1 if CORR_AGGREGATION_PLANE else 0}",
+        "# HELP corr_agg_observed_total Promoted signals offered to the Aggregation plane.",
+        "# TYPE corr_agg_observed_total counter",
+        f"corr_agg_observed_total {AGG_PLANE.observed}",
+        "# HELP corr_agg_forwarded_total Deltas forwarded to the engine window, by causal class.",
+        "# TYPE corr_agg_forwarded_total counter",
+        *(f'corr_agg_forwarded_total{{class="{c.value}"}} '
+          f'{AGG_PLANE.forwarded_by_class.get(c.value, 0)}'
+          for c in DeltaClass),
+        "# HELP corr_agg_suppressed_total Pure repeats absorbed into aggregation state (never dropped: the raw row is persisted).",
+        "# TYPE corr_agg_suppressed_total counter",
+        f"corr_agg_suppressed_total {AGG_PLANE.suppressed}",
+        "# HELP corr_agg_keys Live aggregation keys across all tenants.",
+        "# TYPE corr_agg_keys gauge",
+        f"corr_agg_keys {AGG_PLANE.key_count()}",
+        "# HELP corr_agg_identities Live per-identity transition states across all tenants.",
+        "# TYPE corr_agg_identities gauge",
+        f"corr_agg_identities {AGG_PLANE.ident_count()}",
+        "# HELP corr_agg_evicted_total Aggregation state evicted, by reason (closed label set).",
+        "# TYPE corr_agg_evicted_total counter",
+        *(f'corr_agg_evicted_total{{reason="{r}"}} {AGG_PLANE.evicted.get(r, 0)}'
+          for r in AGG_EVICT_REASONS),
+        "# HELP corr_agg_state_transitions_total Identity state transitions seen (always forwarded synchronously).",
+        "# TYPE corr_agg_state_transitions_total counter",
+        f"corr_agg_state_transitions_total {AGG_PLANE.state_transitions}",
+        "# HELP corr_agg_recoveries_total Recovery transitions seen (always forwarded synchronously).",
+        "# TYPE corr_agg_recoveries_total counter",
+        f"corr_agg_recoveries_total {AGG_PLANE.recoveries}",
+        "# HELP corr_agg_late_forwarded_total Observations forwarded because the plane could not order them (never suppressed).",
+        "# TYPE corr_agg_late_forwarded_total counter",
+        f"corr_agg_late_forwarded_total {AGG_PLANE.late_forwarded}",
+        "# HELP corr_agg_beyond_lateness_total Observations that arrived outside the declared permitted lateness.",
+        "# TYPE corr_agg_beyond_lateness_total counter",
+        f"corr_agg_beyond_lateness_total {AGG_PLANE.beyond_lateness}",
+        "# HELP corr_window_utilization Fraction of the evidence window's record cap in use.",
+        "# TYPE corr_window_utilization gauge",
+        f"corr_window_utilization {(len(WINDOW_BUFFER) / WINDOW_BUFFER.maxlen) if WINDOW_BUFFER.maxlen else 0.0:.4f}",
+        # The state an operator alerts on: RCA is still emitting objects, but
+        # from less history than the engine can use. Not per-signal — a level.
+        "# HELP corr_rca_evidence_degraded 1 when capacity is shedding still-attachable evidence.",
+        "# TYPE corr_rca_evidence_degraded gauge",
+        f"corr_rca_evidence_degraded {1 if rca_evidence_degraded() else 0}",
+        # The reason, as a CLOSED low-cardinality label set — an operator must
+        # be able to tell a resource ceiling from ordinary event-time expiry
+        # without reading two other metrics and inferring it.
+        "# HELP corr_rca_degradation_reason Why RCA context is short (closed label set).",
+        "# TYPE corr_rca_degradation_reason gauge",
+        *(f'corr_rca_degradation_reason{{reason="{r}"}} '
+          f'{1 if rca_degradation_reason() == r else 0}'
+          for r in (DEGRADED_NONE, DEGRADED_RESOURCE_CAPACITY,
+                    DEGRADED_PARTITION_TOPOLOGY)),
+        # The watermark's safety precondition, as its own alertable series.
+        "# HELP corr_copartition_ok 1 when this member owns one partition set across all topics.",
+        "# TYPE corr_copartition_ok gauge",
+        f"corr_copartition_ok {1 if COPARTITION_OK else 0}",
+        "# HELP corr_copartition_violations_total Rebalances that broke the co-partitioning invariant.",
+        "# TYPE corr_copartition_violations_total counter",
+        f"corr_copartition_violations_total {COPARTITION_VIOLATIONS}",
+        "# HELP corr_consumer_lag_total In-process backlog; the idle backstop may only run at 0.",
+        "# TYPE corr_consumer_lag_total gauge",
+        f"corr_consumer_lag_total {CONSUMER_LAG_TOTAL if CONSUMER_LAG_TOTAL is not None else -1}",
+        # TRACKER 190. The scale harness's stability gate asks one question —
+        # "did the worst event-loop stall reach the point where the broker can
+        # eject this member?" — and answered it against a HARD-CODED 30000 ms
+        # while the engine ran 60000. The gate was not measuring the engine's
+        # contract; it was measuring a copy of it that had drifted. The contract
+        # is the engine's to publish, so it publishes it: one gauge, the live
+        # value of CORR_SESSION_TIMEOUT_MS, read straight off /metrics.
+        "# HELP corr_session_timeout_ms Kafka session timeout this consumer runs with (group-membership contract).",
+        "# TYPE corr_session_timeout_ms gauge",
+        f"corr_session_timeout_ms {CORR_SESSION_TIMEOUT_MS}",
+        # tracker 166 scheduler: pending depth may grow under overload; the
+        # TRANSACTION must not. Both are exported so the distinction is visible.
+        "# HELP corr_engine_cohort_size Max new signals admitted to one transaction.",
+        "# TYPE corr_engine_cohort_size gauge",
+        f"corr_engine_cohort_size {CORR_ENGINE_COHORT_SIZE}",
+        "# HELP corr_engine_cohorts_total Correlation transactions completed.",
+        "# TYPE corr_engine_cohorts_total counter",
+        f"corr_engine_cohorts_total {COHORTS_PROCESSED}",
+        "# HELP corr_engine_pending Signals retained but not yet correlated.",
+        "# TYPE corr_engine_pending gauge",
+        f"corr_engine_pending {len(pending_signals())}",
+        "# HELP corr_engine_pending_peak Highest pending depth observed.",
+        "# TYPE corr_engine_pending_peak gauge",
+        f"corr_engine_pending_peak {PENDING_PEAK}",
+        "# HELP corr_engine_oldest_pending_age_seconds Event-time age of the oldest unevaluated signal.",
+        "# TYPE corr_engine_oldest_pending_age_seconds gauge",
+        f"corr_engine_oldest_pending_age_seconds {scheduler_state()['oldest_pending_event_age_s']}",
+        # tracker 166 Phase 8: the once-per-epoch invariant, exposed.
+        # corr_engine_preparations_total must advance by the TENANT COUNT per
+        # epoch — never by tenants x cohorts. A ratio that tracks
+        # corr_engine_cohorts_total instead of corr_engine_epochs_total means
+        # the prepared state is being rebuilt per transaction, which is the
+        # exact defect that failed the first live 1K qualification.
+        "# HELP corr_engine_epochs_total Snapshot/drain epochs begun.",
+        "# TYPE corr_engine_epochs_total counter",
+        f"corr_engine_epochs_total {EPOCHS_TOTAL}",
+        "# HELP corr_engine_preparations_total Per-tenant snapshot preparations (node metadata + candidate index).",
+        "# TYPE corr_engine_preparations_total counter",
+        f"corr_engine_preparations_total {EPOCH_PREPARATIONS}",
+        "# HELP corr_engine_prep_seconds_total Time spent preparing snapshots.",
+        "# TYPE corr_engine_prep_seconds_total counter",
+        f"corr_engine_prep_seconds_total {EPOCH_PREP_SECONDS_TOTAL:.3f}",
+        "# HELP corr_engine_prep_seconds_max Slowest single epoch preparation.",
+        "# TYPE corr_engine_prep_seconds_max gauge",
+        f"corr_engine_prep_seconds_max {EPOCH_PREP_SECONDS_MAX:.3f}",
+        "# HELP corr_engine_prep_nodes Nodes held by the last epoch's prepared state.",
+        "# TYPE corr_engine_prep_nodes gauge",
+        f"corr_engine_prep_nodes {EPOCH_PREP_NODES}",
+        "# HELP corr_engine_epoch_seconds_max Longest drain epoch (bounds how long retention is deferred).",
+        "# TYPE corr_engine_epoch_seconds_max gauge",
+        f"corr_engine_epoch_seconds_max {EPOCH_SECONDS_MAX:.3f}",
+        "# HELP corr_engine_epoch_cohorts_max Most cohorts drained in one epoch.",
+        "# TYPE corr_engine_epoch_cohorts_max gauge",
+        f"corr_engine_epoch_cohorts_max {EPOCH_COHORTS_MAX}",
+        # ── 2026-08-29 (run p2-s012-08290116). A window rejection drops a whole
+        # tenant's snapshots for that cohort while the frontier still advances:
+        # cohorts climb, pending falls, and NOTHING is persisted. Any completion
+        # claim made while this counter moved is a hollow one — the scale
+        # harness gates on exactly that.
+        "# HELP corr_engine_windows_rejected_total Tenant windows rejected on engine input error (their evidence is discarded).",
+        "# TYPE corr_engine_windows_rejected_total counter",
+        f"corr_engine_windows_rejected_total {ENGINE_WINDOWS_REJECTED_TOTAL}",
+        # Faults inside profiling/accounting code, which is now isolated from
+        # the correctness path. Non-zero means the numbers below are incomplete
+        # — it must never again mean a cycle was lost.
+        "# HELP corr_engine_profiler_errors_total Faults inside profiler/accounting code (isolated from correctness).",
+        "# TYPE corr_engine_profiler_errors_total counter",
+        f"corr_engine_profiler_errors_total {PROFILER_ERRORS_TOTAL}",
+        "# HELP corr_signals_dropped_total Signals marked processed without being evaluated, by reason.",
+        "# TYPE corr_signals_dropped_total counter",
+        *(f'corr_signals_dropped_total{{reason="{r}"}} {n}'
+          for r, n in sorted(SIGNALS_DROPPED_TOTAL.items())),
+        # ── P1 cohort-touch gate (docs/design/COHORT_TOUCH_GATE_P1_2026-08-28.md
+        # §5). The gate's whole claim is "only the components a cohort touched can
+        # have changed" — these are how an operator sees it holding: on cohorts
+        # >= 2, memo_hits should be (components - touched). ranked == components
+        # while the gate is on means the memo is never hitting.
+        "# HELP corr_cohort_components_total Components considered per cohort (summed).",
+        "# TYPE corr_cohort_components_total counter",
+        f"corr_cohort_components_total {COHORT_COMPONENTS_TOTAL}",
+        "# HELP corr_cohort_components_touched_total Components a cohort's new keys touched.",
+        "# TYPE corr_cohort_components_touched_total counter",
+        f"corr_cohort_components_touched_total {COHORT_COMPONENTS_TOUCHED_TOTAL}",
+        "# HELP corr_cohort_components_memo_hits_total Untouched components served from the intra-epoch memo.",
+        "# TYPE corr_cohort_components_memo_hits_total counter",
+        f"corr_cohort_components_memo_hits_total {COHORT_MEMO_HITS_TOTAL}",
+        "# HELP corr_cohort_components_ranked_total Components actually ranked + materialized.",
+        "# TYPE corr_cohort_components_ranked_total counter",
+        f"corr_cohort_components_ranked_total {COHORT_COMPONENTS_RANKED_TOTAL}",
+        # ── P2 step 2: the level-1 cross-epoch rank memo (spec §3). hit+miss is
+        # the population that reached the memo; `evicted` climbing means
+        # CORR_RANK_MEMO_MAX is smaller than the live component population, and
+        # `unkeyable` above 0 means some producer stamps colliding signal_ids
+        # (the memo fails closed there and ranks in full — never silently).
+        "# HELP corr_rank_memo Level-1 rank memo lookups by outcome.",
+        "# TYPE corr_rank_memo counter",
+        *(f'corr_rank_memo{{result="{r}"}} {_rm[k]}'
+          for r, k in (("hit", "hits"), ("miss", "misses"),
+                       ("evicted", "evicted"), ("unkeyable", "unkeyable"))),
+        "# HELP corr_rank_memo_entries Level-1 rank memo entries held (bound: CORR_RANK_MEMO_MAX).",
+        "# TYPE corr_rank_memo_entries gauge",
+        f"corr_rank_memo_entries {_rm['entries']}",
+        # The memflat byte bound (2026-08-29): an entry costs ~10-13 KiB, so the
+        # ENTRY bound alone licensed ~500-650 MiB at CORR_RANK_MEMO_MAX=50,000 —
+        # which is what the live run's post-input RSS growth was. Read `bytes`
+        # against `bytes_max`; `evicted_bytes_total` climbing is the byte bound
+        # doing its job and the exact price it charges in hit rate.
+        "# HELP corr_rank_memo_bytes Estimated bytes held by the level-1 rank memo.",
+        "# TYPE corr_rank_memo_bytes gauge",
+        f"corr_rank_memo_bytes {_rm['bytes']}",
+        "# HELP corr_rank_memo_bytes_max Byte bound of the level-1 rank memo (CORR_RANK_MEMO_BYTES_MAX).",
+        "# TYPE corr_rank_memo_bytes_max gauge",
+        f"corr_rank_memo_bytes_max {_rm['bytes_max']}",
+        "# HELP corr_rank_memo_evicted_bytes_total Bytes evicted from the level-1 rank memo by either bound.",
+        "# TYPE corr_rank_memo_evicted_bytes_total counter",
+        f"corr_rank_memo_evicted_bytes_total {_rm['evicted_bytes']}",
+        # tracker 167: what the kind index actually buys, next to the memo it
+        # sits behind. scored/candidates IS the selectivity ratio; the metric
+        # NAMES are owned by scoring.py so they cannot drift from the counters.
+        *template_scoring_metric_lines(),
+        # A7 parser-fidelity weighting (flag CORR_FIDELITY_WEIGHTING). Declared
+        # whether or not the flag is on: the pair (enabled gauge, capped
+        # counter) is only readable together — a 0 counter means nothing until
+        # you know whether the rule was in force.
+        *fidelity_weighting_metric_lines(),
+        # The two-level decision memo in one series: level 1 skips rank(), level
+        # 2 skips the whole snapshot. Level 2 resets every epoch; level 1 does not.
+        "# HELP corr_decision_memo_level Decision-memo hits by completeness level.",
+        "# TYPE corr_decision_memo_level counter",
+        f'corr_decision_memo_level{{level="1"}} {_rm["hits"]}',
+        f'corr_decision_memo_level{{level="2"}} {COHORT_MEMO_HITS_TOTAL}',
+        "# HELP corr_snapshot_digest Snapshot digests computed vs served from the per-instance cache.",
+        "# TYPE corr_snapshot_digest counter",
+        # ONE call, four series: the keys are exactly <kind>_<result>.
+        *(f'corr_snapshot_digest{{kind="{k.split("_")[0]}",'
+          f'result="{k.split("_", 1)[1]}"}} {v}'
+          for k, v in sorted(digest_cache_stats().items())),
+        # P1 change H: merge/quiesce/cap now run once per EPOCH, not per cohort.
+        # passes/epochs must stay at 1 — tracking cohorts instead means the hoist
+        # is not in effect.
+        "# HELP corr_lifecycle_passes_total Merge/quiesce/cap passes run (epoch cadence).",
+        "# TYPE corr_lifecycle_passes_total counter",
+        f"corr_lifecycle_passes_total {LIFECYCLE_PASSES_TOTAL}",
+        # P2 step 4a: the lifecycle's candidate space, decoupled from the epoch.
+        # Read against corr_engine_epoch_cohorts_last: a budget-bounded epoch of
+        # ONE cohort with a window of K still offers K cohorts of merge
+        # candidates. 1 here with a K > 1 knob means the window is not filling.
+        "# HELP corr_lifecycle_seen_window_cohorts Cohorts in the lifecycle seen window.",
+        "# TYPE corr_lifecycle_seen_window_cohorts gauge",
+        f"corr_lifecycle_seen_window_cohorts {LIFECYCLE_SEEN_WINDOW_COHORTS}",
+        "# HELP corr_lifecycle_seen_window_ids Correlation ids in the last lifecycle pass's SURVIVOR set.",
+        "# TYPE corr_lifecycle_seen_window_ids gauge",
+        f"corr_lifecycle_seen_window_ids {LIFECYCLE_SEEN_WINDOW_IDS}",
+        # Read these two TOGETHER, and against corr_open_objects. Run
+        # p2-s04-08290653 shipped with survivors == open_objects == 2312 and
+        # candidates == 0: find_merges was handed an empty candidate list on
+        # every pass and merges went to 0. A healthy pass has BOTH sides
+        # non-empty whenever objects have gone quiet.
+        "# HELP corr_lifecycle_merge_survivors Merge TARGETS offered to the last lifecycle pass.",
+        "# TYPE corr_lifecycle_merge_survivors gauge",
+        f"corr_lifecycle_merge_survivors {LIFECYCLE_MERGE_SURVIVORS_LAST}",
+        "# HELP corr_lifecycle_merge_candidates Merge CANDIDATES offered to the last lifecycle pass.",
+        "# TYPE corr_lifecycle_merge_candidates gauge",
+        f"corr_lifecycle_merge_candidates {LIFECYCLE_MERGE_CANDIDATES_LAST}",
+        "# HELP corr_lifecycle_merge_chains_skipped_total Merge pairs refused to keep one merge per object per pass.",
+        "# TYPE corr_lifecycle_merge_chains_skipped_total counter",
+        f"corr_lifecycle_merge_chains_skipped_total {LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL}",
+        # The degeneration alarm. This counts (survivor, candidate) pairs the
+        # EXACT predicate was handed, i.e. what the index let through. If it
+        # ever tracks survivors x candidates, the index has collapsed into the
+        # cross-product again and a loop stall is coming (storm-s02, 35,690 ms).
+        "# HELP corr_lifecycle_merge_pairs_evaluated_total Survivor/candidate pairs the merge predicate examined.",
+        "# TYPE corr_lifecycle_merge_pairs_evaluated_total counter",
+        f"corr_lifecycle_merge_pairs_evaluated_total {LIFECYCLE_MERGE_PAIRS_EVALUATED_TOTAL}",
+        "# HELP corr_lifecycle_merge_seconds_max Slowest merge computation (index build + predicate) this process.",
+        "# TYPE corr_lifecycle_merge_seconds_max gauge",
+        f"corr_lifecycle_merge_seconds_max {LIFECYCLE_MERGE_SECONDS_MAX:.6f}",
+        "# HELP corr_lifecycle_merge_offloads_total Merge passes handed to the executor instead of the loop thread.",
+        "# TYPE corr_lifecycle_merge_offloads_total counter",
+        f"corr_lifecycle_merge_offloads_total {LIFECYCLE_MERGE_OFFLOADS_TOTAL}",
+        "# HELP corr_lifecycle_forgotten_skipped_total Lifecycle loop entries skipped because a rebalance forgot the object mid-pass (ultra #19).",
+        "# TYPE corr_lifecycle_forgotten_skipped_total counter",
+        f"corr_lifecycle_forgotten_skipped_total {LIFECYCLE_FORGOTTEN_SKIPPED_TOTAL}",
+        # ── P2 step 4: the Evidence plane (spec §1/§4). depth/bytes/oldest are
+        # the queue; lag is T7 (verdict -> materialized graph); backpressure is
+        # how often the Decision plane was slowed to keep the queue bounded —
+        # the LOSSLESS half of "never drop". failed and lost must stay 0.
+        "# HELP corr_evidence_queue_depth Evidence items queued for materialization.",
+        "# TYPE corr_evidence_queue_depth gauge",
+        f"corr_evidence_queue_depth {_ev['depth']}",
+        "# HELP corr_evidence_queue_bytes Estimated snapshot/slice bytes the queued items keep reachable.",
+        "# TYPE corr_evidence_queue_bytes gauge",
+        f"corr_evidence_queue_bytes {_ev['bytes']}",
+        # The two BOUNDS, exported so a scrape can compute headroom without
+        # knowing the defaults, and the estimator's live per-item mean beside
+        # them. Both bounds are measured numbers (see CORR_EVIDENCE_QUEUE_MAX):
+        # `est_bytes_mean` far from the ~29.9 KiB/item the sizing was done
+        # against is the readout that says re-measure — it is the only view of
+        # the estimator that exists outside the bench.
+        "# HELP corr_evidence_queue_max_items Hard bound on queued Evidence items.",
+        "# TYPE corr_evidence_queue_max_items gauge",
+        f"corr_evidence_queue_max_items {_ev['max_items']}",
+        "# HELP corr_evidence_queue_bytes_max Hard bound on the estimated bytes queued Evidence items keep reachable.",
+        "# TYPE corr_evidence_queue_bytes_max gauge",
+        f"corr_evidence_queue_bytes_max {_ev['max_bytes']}",
+        "# HELP corr_evidence_queue_est_bytes_mean Estimator's per-item mean over the queued items (0 when empty).",
+        "# TYPE corr_evidence_queue_est_bytes_mean gauge",
+        f"corr_evidence_queue_est_bytes_mean {_ev['est_bytes_mean']}",
+        "# HELP corr_evidence_queue_oldest_age_seconds Age of the oldest queued Evidence item.",
+        "# TYPE corr_evidence_queue_oldest_age_seconds gauge",
+        f"corr_evidence_queue_oldest_age_seconds {_ev['oldest_age_seconds']}",
+        "# HELP corr_evidence_lag_seconds Materialization lag of the last Evidence item written.",
+        "# TYPE corr_evidence_lag_seconds gauge",
+        f"corr_evidence_lag_seconds {_ev['lag_seconds']}",
+        "# HELP corr_evidence_queue_backpressure_total Puts that BLOCKED the Decision plane on a full queue.",
+        "# TYPE corr_evidence_queue_backpressure_total counter",
+        f"corr_evidence_queue_backpressure_total {_ev['backpressure_total']}",
+        # The hold is an ORDERING PREFERENCE, not a lock: `held` alone is a bare
+        # bool a scrape can legitimately catch True inside a cohort's decision
+        # pass. `held_seconds` is what distinguishes that from a leak, and
+        # `hold_expired_total` above 0 means the deadline had to break one —
+        # a defect, loudly.
+        "# HELP corr_evidence_hold_seconds Age of the cohort hold currently open (0 = none).",
+        "# TYPE corr_evidence_hold_seconds gauge",
+        f"corr_evidence_hold_seconds {_ev['held_since_seconds']}",
+        "# HELP corr_evidence_hold_expired_total Cohort holds broken by CORR_EVIDENCE_HOLD_MAX_S.",
+        "# TYPE corr_evidence_hold_expired_total counter",
+        f"corr_evidence_hold_expired_total {_ev['hold_expired_total']}",
+        "# HELP corr_evidence_queue_depth_open Queued items whose cohort is still in its decision pass.",
+        "# TYPE corr_evidence_queue_depth_open gauge",
+        f"corr_evidence_queue_depth_open {_ev['depth_open']}",
+        "# HELP corr_evidence_items_total Evidence items by terminal outcome.",
+        "# TYPE corr_evidence_items_total counter",
+        f'corr_evidence_items_total{{outcome="materialized"}} {_ev["materialized_total"]}',
+        f'corr_evidence_items_total{{outcome="failed"}} {_ev["failed_total"]}',
+        f'corr_evidence_items_total{{outcome="lost"}} {_ev["lost_total"]}',
+        # Ultra #15/#17: both must stay 0 in a healthy process. A revival means
+        # the consumer task DIED (defect, contained on the same queue with
+        # nothing stranded); an abandoned row means a dead loop's batcher held
+        # rows nothing could ever flush.
+        "# HELP corr_evidence_consumer_revived_total Evidence consumer tasks restarted on their own loop after dying.",
+        "# TYPE corr_evidence_consumer_revived_total counter",
+        f"corr_evidence_consumer_revived_total {_ev['consumer_revived_total']}",
+        "# HELP corr_evidence_batch_rows_abandoned_total Buffered batch rows counted lost when a dead loop's batcher was replaced.",
+        "# TYPE corr_evidence_batch_rows_abandoned_total counter",
+        f"corr_evidence_batch_rows_abandoned_total {_ev['batch_rows_abandoned_total']}",
+        # ── P2 step 4c: cross-version batching. The number to read is
+        # rows_per_flush: it IS the part-count divisor, and the whole point of
+        # the step is that ClickHouse receives ~11x fewer level-0 parts for the
+        # same rows. batch_age_seconds_max says which trigger is actually
+        # binding — at or near CORR_EVIDENCE_BATCH_MS means the time clause
+        # (a trickle), well under it means size (a burst).
+        "# HELP corr_evidence_flushes_total Batched INSERT blocks issued, per table.",
+        "# TYPE corr_evidence_flushes_total counter",
+        *(f'corr_evidence_flushes_total{{table="{_t}"}} {_n}'
+          for _t, _n in sorted(_ev_flushes.items())),
+        "# HELP corr_evidence_rows_per_flush Mean rows per batched INSERT block.",
+        "# TYPE corr_evidence_rows_per_flush gauge",
+        f"corr_evidence_rows_per_flush {_ev['rows_per_flush_mean']}",
+        "# HELP corr_evidence_batch_age_seconds_max Oldest row age at flush, worst seen.",
+        "# TYPE corr_evidence_batch_age_seconds_max gauge",
+        f"corr_evidence_batch_age_seconds_max {_ev['batch_age_seconds_max']}",
+        "# HELP corr_evidence_batch_buffered_rows Rows sitting in a partial block right now.",
+        "# TYPE corr_evidence_batch_buffered_rows gauge",
+        f"corr_evidence_batch_buffered_rows {_ev['buffered_rows']}",
+        "# HELP corr_evidence_batch_blocks_failed_total Batched blocks whose INSERT did not commit.",
+        "# TYPE corr_evidence_batch_blocks_failed_total counter",
+        f"corr_evidence_batch_blocks_failed_total {_ev['blocks_failed_total']}",
+        # P2 step 1: sweeps that ended on the epoch wall-clock budget rather
+        # than on the cohort bound or an empty epoch. Read it against
+        # corr_engine_epoch_seconds_max: 0 exits with a large max means the
+        # 65-minute epoch is back.
+        "# HELP corr_engine_epoch_budget_exits_total Drain sweeps ended by CORR_ENGINE_EPOCH_BUDGET_S.",
+        "# TYPE corr_engine_epoch_budget_exits_total counter",
+        f"corr_engine_epoch_budget_exits_total {EPOCH_BUDGET_EXITS_TOTAL}",
+        # The declared cost of enforcing the 163 cap once per epoch: the
+        # population may transiently exceed it within an epoch. Measured, not
+        # assumed — if this runs far above CORR_OPEN_OBJECTS_MAX, the epoch is
+        # opening more objects than the cap allows and the cadence needs review.
+        "# HELP corr_open_objects_epoch_peak Highest open-object count observed inside an epoch (pre-lifecycle).",
+        "# TYPE corr_open_objects_epoch_peak gauge",
+        f"corr_open_objects_epoch_peak {OPEN_OBJECTS_EPOCH_PEAK}",
+        "# HELP corr_cohort_open_objects Open objects after the last cohort.",
+        "# TYPE corr_cohort_open_objects gauge",
+        f"corr_cohort_open_objects {COHORT_OPEN_OBJECTS_LAST}",
+        "# HELP corr_cohort_touched Components the last cohort touched.",
+        "# TYPE corr_cohort_touched gauge",
+        f"corr_cohort_touched {COHORT_TOUCHED_LAST}",
+        # 166A: carried-edge state is NEW memory that did not exist when the
+        # 1.25 GiB envelope was qualified. Growth while the window is flat is
+        # the failure shape.
+        "# HELP corr_edge_cache_entries Settled edges carried for component formation (window-bounded).",
+        "# TYPE corr_edge_cache_entries gauge",
+        f"corr_edge_cache_entries {edge_cache_state()['edges']}",
+        "# HELP corr_edge_cache_peak Highest carried-edge count observed.",
+        "# TYPE corr_edge_cache_peak gauge",
+        f"corr_edge_cache_peak {EDGE_CACHE_PEAK}",
+        "# HELP corr_edge_cache_added_total Carried edges recorded.",
+        "# TYPE corr_edge_cache_added_total counter",
+        f"corr_edge_cache_added_total {EDGE_CACHE_ADDED}",
+        "# HELP corr_edge_cache_dropped_total Carried edges released with their nodes.",
+        "# TYPE corr_edge_cache_dropped_total counter",
+        f"corr_edge_cache_dropped_total {EDGE_CACHE_DROPPED}",
+        "# HELP corr_edge_cache_est_bytes Estimated carried-edge memory.",
+        "# TYPE corr_edge_cache_est_bytes gauge",
+        f"corr_edge_cache_est_bytes {edge_cache_state()['est_bytes']}",
+        "# HELP corr_processed_frontier Signal ids tracked as processed (window-bounded).",
+        "# TYPE corr_processed_frontier gauge",
+        f"corr_processed_frontier {len(_PROCESSED_IDS)}",
+        "# HELP corr_entity_cache_entries Shared identity strings held (bounded).",
+        "# TYPE corr_entity_cache_entries gauge",
+        f'corr_entity_cache_entries{{kind="entity_id"}} {len(signals._ENTITY_ID_CACHE)}',
+        f'corr_entity_cache_entries{{kind="tokens"}} {len(signals._ENTITY_TOKENS_CACHE)}',
+        "# HELP corr_entity_cache_evicted_total Shared-string cache evictions.",
+        "# TYPE corr_entity_cache_evicted_total counter",
+        f"corr_entity_cache_evicted_total {signals.ENTITY_CACHE_EVICTED}",
+        "# HELP corr_consumer_lag_unknown_partitions Assigned partitions never read here; backstop stays inert while non-zero.",
+        "# TYPE corr_consumer_lag_unknown_partitions gauge",
+        f"corr_consumer_lag_unknown_partitions {CONSUMER_LAG_UNKNOWN_PARTITIONS}",
+        "# HELP corr_consumer_lag_probe_failures_total Backlog probe unusable; backstop holds evidence.",
+        "# TYPE corr_consumer_lag_probe_failures_total counter",
+        f"corr_consumer_lag_probe_failures_total {CONSUMER_LAG_PROBE_FAILURES}",
+        # TRACKER 196. The idle backstop was INERT for months because a
+        # never-read partition vetoed it and nothing said so. These five series
+        # make the state answerable from /metrics alone: the reason label says
+        # what is blocking, and the gauges say how much of it there is.
+        # TRACKER 195: the write-side blob bound. Rising means the pathological
+        # tail is being clipped instead of poisoning its granule neighbours.
+        "# HELP corr_hypotheses_truncated_total Persisted hypotheses blobs bounded by CORR_HYPOTHESES_MAX_BYTES.",
+        "# TYPE corr_hypotheses_truncated_total counter",
+        f"corr_hypotheses_truncated_total {HYPOTHESES_TRUNCATED}",
+        "# HELP corr_hypotheses_truncated_bytes_total Original bytes carried by the blobs that were bounded.",
+        "# TYPE corr_hypotheses_truncated_bytes_total counter",
+        f"corr_hypotheses_truncated_bytes_total {HYPOTHESES_TRUNCATED_BYTES}",
+        "# HELP corr_hypotheses_max_bytes Effective persist-side cap on the hypotheses column.",
+        "# TYPE corr_hypotheses_max_bytes gauge",
+        f"corr_hypotheses_max_bytes {hypotheses_cap_bytes()}",
+        "# HELP corr_consumer_caught_up Provable levelness with the broker, by reason (closed label set).",
+        "# TYPE corr_consumer_caught_up gauge",
+        *(f'corr_consumer_caught_up{{reason="{r}"}} '
+          f'{1 if _caught_up_reason_now == r else 0}'
+          for r in CAUGHT_UP_REASONS),
+        "# HELP corr_consumer_lag_unresolved_partitions Assigned partitions whose levelness is UNPROVEN; each one vetoes idle eviction.",
+        "# TYPE corr_consumer_lag_unresolved_partitions gauge",
+        f"corr_consumer_lag_unresolved_partitions {CONSUMER_LAG_UNRESOLVED_PARTITIONS}",
+        "# HELP corr_consumer_lag_proven_partitions Never-read partitions PROVEN to hold nothing unread.",
+        "# TYPE corr_consumer_lag_proven_partitions gauge",
+        f"corr_consumer_lag_proven_partitions {CONSUMER_LAG_PROVEN_PARTITIONS}",
+        "# HELP corr_consumer_lag_unread_total Proven backlog sitting on partitions this process has never read.",
+        "# TYPE corr_consumer_lag_unread_total gauge",
+        f"corr_consumer_lag_unread_total {CONSUMER_LAG_UNREAD_TOTAL}",
+        "# HELP corr_consumer_unread_probe_total Bounded end-offset probes started for never-read partitions.",
+        "# TYPE corr_consumer_unread_probe_total counter",
+        f"corr_consumer_unread_probe_total {CONSUMER_UNREAD_PROBE_ATTEMPTS}",
+        "# HELP corr_consumer_unread_probe_failures_total Probe passes that could not answer; partitions stay unresolved.",
+        "# TYPE corr_consumer_unread_probe_failures_total counter",
+        f"corr_consumer_unread_probe_failures_total {CONSUMER_UNREAD_PROBE_FAILURES}",
+        # tracker 165 phase 9: three different lags, reported separately.
+        # Event-time lag is how far the newest EVENT in the window is behind the
+        # wall clock — the quantity that shortens the retained span, because
+        # pruning ages event timestamps against wall-clock now.
+        "# HELP corr_event_time_lag_seconds Wall clock minus the newest buffered event timestamp.",
+        "# TYPE corr_event_time_lag_seconds gauge",
+        f"corr_event_time_lag_seconds {_event_time_lag_s():.3f}",
+    ]
+    off = offload_stats()
+    lines += [
+        # tracker 164 — the BOUNDED offload plane. Read these three together:
+        # `queue_depth` is work sitting in the executor, `admission_waiting` is
+        # callers held at the gate because the plane is full, and
+        # `admission_waits_total` climbing is backpressure actually engaging —
+        # the signal that the offload plane, not the loop, is the bottleneck.
+        "# HELP corr_offload_queue_depth Work submitted to the offload executor and not yet started.",
+        "# TYPE corr_offload_queue_depth gauge",
+        f"corr_offload_queue_depth {off['queue_depth']}",
+        "# HELP corr_offload_queue_depth_peak Highest offload queue depth observed.",
+        "# TYPE corr_offload_queue_depth_peak gauge",
+        f"corr_offload_queue_depth_peak {off['queue_depth_peak']}",
+        "# HELP corr_offload_active_workers Offload calls currently executing.",
+        "# TYPE corr_offload_active_workers gauge",
+        f"corr_offload_active_workers {off['active_workers']}",
+        "# HELP corr_offload_max_workers Executor thread ceiling.",
+        "# TYPE corr_offload_max_workers gauge",
+        f"corr_offload_max_workers {off['max_workers']}",
+        "# HELP corr_offload_oldest_queued_age_seconds Age of the longest-waiting queued call.",
+        "# TYPE corr_offload_oldest_queued_age_seconds gauge",
+        f"corr_offload_oldest_queued_age_seconds {off['oldest_queued_age_s']:.6f}",
+        "# HELP corr_offload_submitted_total Calls handed to the offload executor.",
+        "# TYPE corr_offload_submitted_total counter",
+        f"corr_offload_submitted_total {off['submitted_total']}",
+        "# HELP corr_offload_completed_total Offload calls that returned normally.",
+        "# TYPE corr_offload_completed_total counter",
+        f"corr_offload_completed_total {off['completed_total']}",
+        "# HELP corr_offload_failed_total Offload calls that raised.",
+        "# TYPE corr_offload_failed_total counter",
+        f"corr_offload_failed_total {off['failed_total']}",
+        "# HELP corr_offload_rejected_total Offload submissions refused (always 0: a full plane makes the caller wait, it never drops).",
+        "# TYPE corr_offload_rejected_total counter",
+        f"corr_offload_rejected_total {off['rejected']}",
+        "# HELP corr_offload_admission_waits_total Offload calls that had to wait for a slot (backpressure engaged).",
+        "# TYPE corr_offload_admission_waits_total counter",
+        f"corr_offload_admission_waits_total {off['admission_waits_total']}",
+        "# HELP corr_offload_admission_wait_max_seconds Longest wait at the admission gate.",
+        "# TYPE corr_offload_admission_wait_max_seconds gauge",
+        f"corr_offload_admission_wait_max_seconds {off['admission_wait_max_s']:.6f}",
+        "# HELP corr_offload_admission_waiting Callers blocked at the admission gate right now.",
+        "# TYPE corr_offload_admission_waiting gauge",
+        f"corr_offload_admission_waiting {off['admission_waiting']}",
+        "# HELP corr_offload_admission_inflight Offload calls admitted (queued + executing).",
+        "# TYPE corr_offload_admission_inflight gauge",
+        f"corr_offload_admission_inflight {off['admission_inflight']}",
+        "# HELP corr_offload_admission_limit Admitted-call ceiling (CORR_OFFLOAD_INFLIGHT_MAX).",
+        "# TYPE corr_offload_admission_limit gauge",
+        f"corr_offload_admission_limit {off['admission_limit']}",
+        "# HELP corr_offload_abandoned_total Calls still in flight when the plane was stopped.",
+        "# TYPE corr_offload_abandoned_total counter",
+        f"corr_offload_abandoned_total {off['abandoned_total']}",
+        "# HELP corr_offload_wait_seconds Time between submission and start of execution.",
+        "# TYPE corr_offload_wait_seconds summary",
+        f'corr_offload_wait_seconds{{quantile="0.5"}} {off["wait_p50_s"]:.6f}',
+        f'corr_offload_wait_seconds{{quantile="0.95"}} {off["wait_p95_s"]:.6f}',
+        f'corr_offload_wait_seconds{{quantile="0.99"}} {off["wait_p99_s"]:.6f}',
+        "# HELP corr_offload_wait_max_seconds Worst offload queue wait observed.",
+        "# TYPE corr_offload_wait_max_seconds gauge",
+        f"corr_offload_wait_max_seconds {off['wait_max_s']:.6f}",
+        "# HELP corr_offload_exec_seconds Time spent executing an offloaded call.",
+        "# TYPE corr_offload_exec_seconds summary",
+        f'corr_offload_exec_seconds{{quantile="0.5"}} {off["exec_p50_s"]:.6f}',
+        f'corr_offload_exec_seconds{{quantile="0.95"}} {off["exec_p95_s"]:.6f}',
+        f'corr_offload_exec_seconds{{quantile="0.99"}} {off["exec_p99_s"]:.6f}',
+        "# HELP corr_offload_exec_max_seconds Worst offload execution time observed.",
+        "# TYPE corr_offload_exec_max_seconds gauge",
+        f"corr_offload_exec_max_seconds {off['exec_max_s']:.6f}",
+    ]
+    lines += [
+        # F-40: events lost to a handler exception. Non-zero means a producer is
+        # emitting a shape the engine cannot process — the payloads are in
+        # /deadletters (and CORR_DLQ_DIR when configured).
+        "# HELP corr_handler_failures_total Events quarantined after a handler raised, by topic.",
+        "# TYPE corr_handler_failures_total counter",
+    ]
+    for topic, n in sorted(HANDLER_FAILURES.items()):
+        lines.append(f'corr_handler_failures_total{{topic="{topic}"}} {n}')
+    lines += [
+        "# TYPE corr_quarantined_events gauge",
+        f"corr_quarantined_events {len(QUARANTINE)}",
+        # TENANT-HIGH-3/4: a forged/contradicted tenant claim must be an ALERT,
+        # not a log line nobody reads. Bounded cardinality: lane:reason pairs.
+        "# HELP corr_tenant_claims_total Self-declared tenant_ids checked against the device registry.",
+        "# TYPE corr_tenant_claims_total counter",
+        f'corr_tenant_claims_total{{outcome="verified"}} {TENANT_CLAIMS_VERIFIED}',
+        f'corr_tenant_claims_total{{outcome="refused"}} {TENANT_CLAIMS_REFUSED}',
+        "# HELP corr_tenant_claims_refused_total Refused tenant claims by lane and reason.",
+        "# TYPE corr_tenant_claims_refused_total counter",
+    ]
+    for key, n in sorted(TENANT_REFUSALS.items()):
+        lane, _, reason = key.partition(":")
+        lines.append(f'corr_tenant_claims_refused_total{{lane="{lane}",reason="{reason}"}} {n}')
+    lines += [
+        "# HELP corr_cross_tenant_inserts_total Inserts issued at tenant_scope=__all__, by table.",
+        "# TYPE corr_cross_tenant_inserts_total counter",
+    ]
+    for table, n in sorted(CH_CROSS_TENANT_INSERTS.items()):
+        lines.append(f'corr_cross_tenant_inserts_total{{table="{table}"}} {n}')
+    # #101 tenant write-amp, BOUNDED cardinality: only the top-K noisiest
+    # tenants of the last flushed window get series (K=CORR_WA_TOPK); the full
+    # per-tenant history lives in netops.corr_tenant_write_amp (SQL, 30d TTL).
+    if TENANT_WA_LAST:
+        lines += [
+            "# HELP corr_tenant_writes_window Last write-amp window counts, top-K noisiest tenants only.",
+            "# TYPE corr_tenant_writes_window gauge",
+        ]
+        for row in TENANT_WA_LAST:
+            t = row["tenant_id"] or "platform"
+            for outcome in ("raw_seen", "persisted", "damped"):
+                lines.append(
+                    f'corr_tenant_writes_window{{tenant_id="{t}",outcome="{outcome}"}} {row[outcome]}')
+    return "\n".join(lines) + "\n"
+
+
 @app.get("/healthz")
 async def health() -> dict:
-    return {"status": "ok"}
+    return _health_payload()
+
+
+def _health_payload() -> dict:
+    """The /healthz body, extracted SYNC (tracker 174) so the loop-independent
+    sidecar can serve a snapshot of it while the event loop is saturated —
+    the S1 storm showed probes timing out against a GIL-starved loop, which
+    in an orchestrator that acts on health is a self-inflicted restart. The
+    route above and the snapshot publisher both call THIS, so the two
+    surfaces can never drift."""
+    status, health_reasons = subscription_health()
+    return {
+        # NOT a constant any more. "ok" requires the REQUIRED subscription to
+        # be LIVE: during the 2026-09-02 outage this field read "ok" for three
+        # hours while the consumer failed start() every 60s and the engine
+        # consumed nothing. See subscription_health() for what degrades it —
+        # and, deliberately, for what does NOT (a dropped OPTIONAL lane is a
+        # named, gauged fact, not an unhealthy engine).
+        "status": status,
+        # Empty exactly when status is "ok". Named causes, so an operator
+        # reading the body does not have to diff the consumer block to find out
+        # which of them fired.
+        "health_reasons": health_reasons,
+        # Scale P0: per-instance partition ownership (co-partitioned tenant
+        # slices). PER-INSTANCE diagnostics by design — with --scale
+        # correlation=N, Docker DNS round-robins correlation:8000, so this
+        # names WHICH slice answered; rebalances counts group churn.
+        "consumer": {
+            "assignment": {t: p for t, p in CONSUMER_ASSIGNMENT.items() if p},
+            "partition_totals": dict(CONSUMER_PARTITION_TOTALS),
+            "rebalances": CONSUMER_REBALANCES,
+            # The `assignment` map above is filtered for readability, which made
+            # "no rebalance yet" and "rebalanced and got NOTHING" both render as
+            # {} — the second is a misconfiguration (replicas beyond
+            # BUS_PARTITIONS are idle by design) that looked healthy forever.
+            # These three fields state it explicitly instead.
+            "owned_partition_count": sum(
+                len(p) for p in CONSUMER_ASSIGNMENT.values()),
+            # FOUR states — pending | idle | cold_window | active. See
+            # consumer_state() for what each means and, importantly, for the
+            # honest limitation of "cold_window" (tracker 155: there is no
+            # rehydration path, so "active" does NOT mean no state was lost).
+            "state": consumer_state(),
+            "cold_partitions": cold_partitions(),
+            "zero_assignments": CONSUMER_ZERO_ASSIGNMENTS,
+            # P1 max-poll thrash: revoke-hook outcomes. "failures" rising =
+            # rebalances landing on a broken flush path (replay-safe, but
+            # every one of them re-processes the uncommitted batch).
+            "revoke_commits": CONSUMER_REVOKE_COMMITS,
+            "revoke_commit_failures": CONSUMER_REVOKE_COMMIT_FAILURES,
+            # Revokes that returned WITHOUT committing because the pre-hand-off
+            # flush exceeded CORR_REVOKE_BUDGET_S. Replay-safe, but rising means
+            # rebalances are landing on a slow ClickHouse.
+            "revoke_skipped": CONSUMER_REVOKE_SKIPPED,
+            # The subscription itself (2026-09-02). `running` is the fact the
+            # payload was missing: up + looping + "ok" said nothing about
+            # whether start() had ever succeeded. `required` vs
+            # `optional_subscribed` / `optional_dropped` is the partition that
+            # keeps one absent evidence topic from starving twelve core lanes.
+            "subscription": {
+                "running": CONSUMER_RUNNING,
+                "starts": CONSUMER_STARTS,
+                "start_failures": CONSUMER_START_FAILURES,
+                "restarts": CONSUMER_RESTARTS,
+                "last_error": CONSUMER_LAST_ERROR,
+                "required": list(REQUIRED_TOPICS),
+                "declared": list(TOPICS),
+                "subscribed": list(SUBSCRIBED_TOPICS),
+                "optional_declared": list(OPTIONAL_TOPICS),
+                "optional_dropped": dict(sorted(EVIDENCE_TOPICS_DROPPED.items())),
+                "reprobes": EVIDENCE_TOPIC_REPROBES,
+                "resubscribes": EVIDENCE_TOPIC_RESUBSCRIBES,
+                "reprobe_interval_s": CORR_EVIDENCE_REPROBE_S,
+            },
+            # Tracker 155: what the last assignments reconstructed. Named on
+            # /healthz as well as /metrics because the ownership arm reads this
+            # endpoint directly at the moment of the move.
+            "ownership_seed": {
+                "enabled": CORR_OWNERSHIP_SEED,
+                "runs": OWNERSHIP_SEED_RUNS_TOTAL,
+                "seeded_objects": OWNERSHIP_SEEDED_OBJECTS_TOTAL,
+                "adoptions": OWNERSHIP_ADOPTIONS_TOTAL,
+                "failures": OWNERSHIP_SEED_FAILURES_TOTAL,
+                "skipped": OWNERSHIP_SEED_SKIPPED_TOTAL,
+                "expired": OWNERSHIP_SEED_EXPIRED_TOTAL,
+                "pending": sum(1 for r in OPEN_OBJECTS.values() if _seed_only(r)),
+                "horizon_s": round(CORR_OWNERSHIP_SEED_HORIZON_S, 3),
+                "cap": CORR_OWNERSHIP_SEED_MAX,
+            },
+            # Tracker 155 (completion): the DEPARTING side. `unflushed` rising
+            # means revokes are landing on a slow ClickHouse and the acquiring
+            # replica is seeding from older rows (residue bound: _handoff_flush).
+            # `persist_dropped` / `admission_dropped` rising after a rebalance is
+            # the guard doing its job — an old owner's in-flight work being
+            # refused, not an error.
+            "ownership_handoff": {
+                "flushed": OWNERSHIP_HANDOFF_FLUSHED_TOTAL,
+                "unflushed": OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL,
+                "released": OWNERSHIP_HANDOFF_RELEASED_TOTAL,
+                "persist_dropped": OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL,
+                "admission_dropped": OWNERSHIP_UNOWNED_ADMISSION_DROPPED_TOTAL,
+                "pending_release": sorted(_OWNERSHIP_PENDING_RELEASE),
+                "budget_s": CORR_REVOKE_BUDGET_S,
+            },
+        },
+        "engine_v2": {
+            "corr_signals_enabled": CORR_SIGNALS_ENABLED,
+            "open_episodes": DETECTOR.open_episodes(),
+            "deadletter_count": DEADLETTER_COUNT,
+            "engine_enabled": CORR_ENGINE_ENABLED,
+            "open_objects": len(OPEN_OBJECTS),
+            "versions_persisted": VERSIONS_PERSISTED,
+            "versions_damped": VERSIONS_DAMPED,
+            # Tracker 187: the monotone blast radius' bound, measured + declared.
+            "affected_history_truncated": AFFECTED_HISTORY_TRUNCATED,
+            "affected_history_entities_max": AFFECTED_HISTORY_ENTITIES_MAX,
+            "affected_history_max": CORR_AFFECTED_HISTORY_MAX,
+            # P3 change A: heartbeats served by a corr_current-only touch.
+            "versions_heartbeat_touched": VERSIONS_HEARTBEAT_TOUCHED,
+            # #101: projection health + intentional-storm registry + top-K
+            # write-amp of the last flushed window (bounded; full per-tenant
+            # truth in netops.corr_tenant_write_amp).
+            "projection_write_failures": PROJECTION_WRITE_FAILURES,
+            "chaos_fixtures": sorted(CHAOS_FIXTURES.values()),
+            "tenant_write_amp_topk": TENANT_WA_LAST,
+            "window_signals": len(WINDOW_BUFFER),
+            # tracker 165: the retention CONTRACT and whether this replica is
+            # currently honouring it. On /healthz, not only /metrics — the
+            # question "how much useful event-time history do I actually hold?"
+            # is a health question, and a scrape gap must not be the only way to
+            # notice that RCA context has narrowed.
+            "retention": retention_state(),
+            "event_time_lag_s": round(_event_time_lag_s(), 3),
+            # tracker 164 (passive): the offload queue, so saturation is a fact
+            # rather than an architectural suspicion.
+            "offload": offload_stats(),
+            # Housekeeping visibility (tracker 156 review): a prune that starts
+            # holding the loop must be observable from /healthz, not only from a
+            # forensic build.
+            "prune_calls": PRUNE_CALLS,
+            "prune_evicted": PRUNE_EVICTED,
+            "prune_seconds_last": round(PRUNE_SECONDS_LAST, 4),
+            "prune_seconds_max": round(PRUNE_SECONDS_MAX, 4),
+            "prune_gap_max_s": round(PRUNE_GAP_MAX_S, 3),
+            "window_id_order_resyncs": WINDOW_ID_ORDER_RESYNCS,
+            "prune_yields": PRUNE_YIELDS,
+            "window_overflow_dropped": WINDOW_OVERFLOW_DROPPED,
+            "window_overflow_in_horizon": WINDOW_OVERFLOW_IN_HORIZON,
+            "window_overflow_age_min_s": round(WINDOW_OVERFLOW_AGE_MIN_S, 1),
+            "window_overflow_age_max_s": round(WINDOW_OVERFLOW_AGE_MAX_S, 1),
+            "window_span_s": round(_window_span_s(), 1),
+            "window_horizon_s": round(RETENTION_REQUIRED_S, 1),
+            # M29a: legacy z-score series budget — evicted rising means
+            # cardinality churn is recycling warm baselines (never silent).
+            "series_len": len(SERIES),
+            "series_max": SERIES_MAX,
+            "series_evicted": SERIES_EVICTED,
+            "seam_inventory": len(seam_inventory()),
+            "topology_gap_hints": LAST_GAP_HINTS,
+            # C7.1 EntityResolver coverage (global slice) — proves the IP/ifIndex→entity
+            # bridge is populated; the directed-topology sources resolve through it.
+            "entity_resolver": entity_resolver_for("").coverage(),
+            "probe_paths": len(probe_paths()),          # C7.4 measured paths available
+            "routing_direction_pairs": len(routing_direction()),  # C7.5 computed fwd pairs
+        },
+        # Durability: writes and events that did NOT land. All-zero is the only
+        # healthy state; anything else is data the platform silently does not
+        # have (F-38 ClickHouse writes, F-40 quarantined events).
+        # TENANT-HIGH-3/4: tenant claims checked against the trusted device→
+        # tenant registry. `refused` non-zero means something on the bus is
+        # asserting a tenant the registry contradicts — the payloads are in
+        # /deadletters. `cross_tenant_inserts` should only ever name
+        # netops.corr_tenant_write_amp (the per-tenant rollup).
+        "tenant_verification": {
+            "claims_verified": TENANT_CLAIMS_VERIFIED,
+            "claims_refused": TENANT_CLAIMS_REFUSED,
+            "refusals": dict(sorted(TENANT_REFUSALS.items())),
+            # _tenant_registry(), not the raw global: the map loads lazily on
+            # the first lookup, so an idle replica (no events on its partitions
+            # yet) would report 0 for a perfectly healthy registry file. The
+            # refresh is a single stat() unless the file changed. Proven live
+            # 2026-08-16: a 2-replica deployment's idle member reported
+            # registry_identities=0 and failed the mini-ladder propagation gate
+            # while the CSV held 201 rows.
+            "registry_identities": len(_tenant_registry()),
+            "cross_tenant_inserts": dict(sorted(CH_CROSS_TENANT_INSERTS.items())),
+        },
+        "durability": {
+            "ch_insert_failures": dict(sorted(CH_INSERT_FAILURES.items())),
+            "ch_rows_dlq_spooled": dict(sorted(CH_ROWS_DLQ_SPOOLED.items())),
+            # tracker 189: per-table flushed/retried/deadlettered/lost.
+            "ch_table_writes": {t: dict(sorted(o.items()))
+                                for t, o in sorted(CH_TABLE_OUTCOMES.items())},
+            "handler_failures": dict(sorted(HANDLER_FAILURES.items())),
+            "quarantined_events": len(QUARANTINE),
+            "quarantine_write_failures": QUARANTINE_WRITE_FAILURES,
+            # GA counter-exposure contract (test_ga_failure_accounting): every
+            # module-level failure/drop counter MUST surface here. A rotation
+            # is a capped-DLQ eviction of the oldest .1 file — old payloads
+            # aging out is a (bounded, intended) loss and must be visible.
+            "quarantine_rotations": QUARANTINE_ROTATIONS,
+            # P1: the loop-lag watchdog. stalls>0 means the event loop was
+            # blocked long enough to threaten the group heartbeat.
+            "loop_lag_stalls": LOOP_LAG_STALLS,
+            "sync_stretch_max_ms": round(SYNC_STRETCH_MAX_MS, 1),
+            "sync_stretch_max_site": SYNC_STRETCH_MAX_SITE,
+            "sync_overruns_total": SYNC_OVERRUNS_TOTAL,
+            "loop_lag_max_ms": round(LOOP_LAG_MAX_MS, 1),
+            "loop_lag_ms": round(LOOP_LAG_LAST_MS, 1),
+            "topology_stale": _topology_stale(datetime.now(timezone.utc)),
+            # Perf defect #2: the batched corr_signals write path. pending>0 is
+            # normal (≤2s of traffic); rows_quarantined>0 means a rejected batch
+            # parked rows in the durable DLQ.
+            "signal_batch_pending": SIGNAL_BATCH.pending(),
+            "signal_batch_flushes": BATCH_FLUSHES,
+            "signal_batch_rows_flushed": BATCH_ROWS_FLUSHED,
+            "signal_batch_rows_quarantined": BATCH_ROWS_QUARANTINED,
+            # Perf defect #3: bounded archive slices — damped = re-persists whose
+            # slice membership had not moved (no re-write; readers fall back).
+            "archive_rows_written": ARCHIVE_ROWS_WRITTEN,
+            "archive_slices_damped": ARCHIVE_SLICES_DAMPED,
+            "archive_slice_reverts": ARCHIVE_SLICE_REVERTS,
+        },
+        # Metric/trap lane observability — proves netops.metrics is fed and where
+        # events are accepted vs dropped (the lane was historically empty).
+        "ingest": {
+            "probes_received": PROBES_RECEIVED,
+            "syslog_received": SYSLOG_RECEIVED,
+            "syslog_signals": SYSLOG_SIGNALS,
+            "metrics_received": METRICS_RECEIVED,
+            "metrics_accepted": METRICS_ACCEPTED,
+            "metrics_dropped": METRICS_DROPPED,
+            # F-44: the SAME total, split by cause — "which device/producer is
+            # losing data, and why" is not answerable from the total alone.
+            "metrics_dropped_no_value": METRICS_DROPPED_NO_VALUE,
+            "metrics_dropped_no_identity": METRICS_DROPPED_NO_IDENTITY,
+            "metrics_dropped_stale_ts": METRICS_DROPPED_STALE_TS,
+            # Event timestamps that fell back to ingest time (producers.py).
+            "event_ts_invalid": ts_invalid_count(),
+            # P3 change B: raw syslog lines the ingest pre-filter proved cannot
+            # promote (rejected) vs handed to the full classifiers (passed).
+            # passed + rejected == the lines that reached the classifier gate;
+            # it is BELOW syslog_received, which also counts lines dropped by a
+            # refused tenant claim or a disabled signal lane.
+            "syslog_prefilter_passed": prefilter_counts()[0],
+            "syslog_prefilter_rejected": prefilter_counts()[1],
+            # P3 step 2: promoted signals the Aggregation plane absorbed as pure
+            # repeats (never reached the engine window) vs forwarded as deltas.
+            # BELOW the raw counters by design — every raw line is still
+            # persisted and still counted above.
+            "agg_observed": AGG_PLANE.observed,
+            "agg_forwarded": AGG_PLANE.forwarded,
+            "agg_suppressed": AGG_PLANE.suppressed,
+            "agg_keys": AGG_PLANE.key_count(),
+            "agg_evicted": AGG_PLANE.evicted_total(),
+            # H14: device event clocks out of bounds at the window chokepoint —
+            # future clamped to arrival (a far-future head froze pruning for
+            # every tenant), past counted and left to age out (see buffer_signal).
+            "event_ts_future_clamped": EVENT_TS_FUTURE_CLAMPED,
+            "event_ts_past_stale": EVENT_TS_PAST_STALE,
+            "device_telemetry_signals": DEVICE_TELEMETRY_SIGNALS,
+            "traps_received": TRAPS_RECEIVED,
+            "traps_normalized": TRAPS_NORMALIZED,
+            "traps_recanonicalized": TRAPS_RECANON,  # C8: device recovered via EntityResolver
+            "traps_dropped": TRAPS_DROPPED,
+            "flows_received": FLOWS_RECEIVED,
+            "flows_dropped": FLOWS_DROPPED,
+            "passive_flow_signals": PASSIVE_FLOW_SIGNALS,
+            "flow_entities_tracked": len(_FLOW_AGG),
+            # C7.3 NetFlow direction: distinct directed device-pairs observed.
+            "flow_direction_pairs": FLOW_DIRECTION_PAIRS,
+            # #81 P3G cloud lane: proves netops.cloud is consumed + where events are lost.
+            "cloud_received": CLOUD_RECEIVED,
+            "cloud_signals": CLOUD_SIGNALS,
+            "cloud_dropped": CLOUD_DROPPED,
+            # #81 P5 fusion identity lane: proves netops.app.identities.v1 is consumed.
+            "app_identity_received": APP_ID_RECEIVED,
+            "app_identity_signals": APP_ID_SIGNALS,
+            "app_identity_dropped": APP_ID_DROPPED,
+            "app_edge_received": APP_EDGE_RECEIVED,
+            "app_edge_signals": APP_EDGE_SIGNALS,
+            "app_edge_dropped": APP_EDGE_DROPPED,
+            # #95 NMS controller lane: proves netops.controller_events is consumed.
+            "controller_events_received": CONTROLLER_EVENTS_RECEIVED,
+            "controller_events_signals": CONTROLLER_EVENTS_SIGNALS,
+            "controller_events_dropped": CONTROLLER_EVENTS_DROPPED,
+            # RCA spec item 8: proves netops.verification is consumed.
+            "verification_received": VERIFICATION_RECEIVED,
+            "verification_signals": VERIFICATION_SIGNALS,
+            "verification_dropped": VERIFICATION_DROPPED,
+            # #128 wireless lane — was the one ingest lane with counters but no
+            # exposure (found by the GA counter-exposure contract test): a
+            # default-closed drop nobody can see is a silent loss.
+            "wireless_received": WIRELESS_RECEIVED,
+            "wireless_signals": WIRELESS_SIGNALS,
+            "wireless_dropped": WIRELESS_DROPPED,
+            # T2b generic evidence-class bus: proves the subscribed evidence
+            # topics are consumed, and where records are refused. `by_class` is
+            # the (class, outcome) split — the same numbers /metrics labels.
+            "evidence_topics": list(CORR_EVIDENCE_TOPICS),
+            # WHICH of those are actually grounded (2026-09-02). Additive
+            # beside the DECLARED list above rather than a reshape of it: the
+            # declared set is a configuration fact and the T2b removability
+            # contract reads it, while this is a runtime fact about the broker.
+            # `dropped` non-empty means those lanes contribute NO evidence —
+            # the same map as consumer.subscription.optional_dropped and the
+            # `corr_evidence_topic_dropped` gauge.
+            "evidence_subscription": {
+                "declared": list(OPTIONAL_TOPICS),
+                "subscribed": [t for t in OPTIONAL_TOPICS
+                               if t not in EVIDENCE_TOPICS_DROPPED],
+                "dropped": dict(sorted(EVIDENCE_TOPICS_DROPPED.items())),
+            },
+            "evidence_received": EVIDENCE_EVENTS_RECEIVED,
+            "evidence_signals": EVIDENCE_EVENTS_SIGNALS,
+            "evidence_dropped": EVIDENCE_EVENTS_DROPPED,
+            "evidence_by_class": dict(sorted(EVIDENCE_EVENTS_TOTAL.items())),
+        },
+        # W1b parser provenance + coverage. `rule_hits` is keyed by the FIXED
+        # `producers.RULES` id set (bounded cardinality — no device string can
+        # widen it), `generic_fallbacks` counts the two unclassified safety
+        # nets, and `semantic_promotion_rate` is typed / (typed + generic) over
+        # the last `promotion_window` ADMITTED lines. `parser_rev` +
+        # `rules_hash` say WHICH rule corpus produced the signals in flight.
+        "parser": parser_stats(),
+        # A4 heartbeat plane: the check table (what each check IS, and whether
+        # it is still shadow) beside its counters, so the shadow rate can be
+        # read against the check that produced it without a second lookup.
+        "proactive": {
+            **proactive_stats(),
+            "open_watches": PROACTIVE.open_watches(),
+            "watches": len(PROACTIVE),
+            "watch_evictions": PROACTIVE.evicted,
+            "signals": PROACTIVE_SIGNALS,
+        },
+        # A7: is the fidelity weighting rule in force, and what has it done?
+        # `capped_objects` counts RCA objects whose verdict the rule held at
+        # `suspected` because their confirming pair rested on doc_claimed
+        # (unvalidated) parser rules — see the confirmability.py header.
+        "fidelity_weighting": fidelity_weighting_stats(),
+    }
+
+
+@app.get("/correlations/{correlation_id}/replay")
+async def correlation_replay(correlation_id: str, version: int | None = None) -> dict:
+    """Re-run the engine over the object's archived window and report drift
+    (design §5: internal surface; the Go API fronts it with authz)."""
+    assert ch is not None
+    try:
+        report = await replay_object(ch, correlation_id, version)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return report.to_dict()
 
 
 @app.get("/findings", response_model=list[Finding])
 async def findings(limit: int = 100, severity: str | None = None) -> list[dict]:
     assert ch is not None
     where = ""
-    if severity:
-        sev = severity.replace("'", "")
-        where = f"WHERE severity = '{sev}'"
+    # Severities are simple enum words (warning/critical/info/...). Restrict
+    # to letters so the value cannot carry SQL metacharacters — quote-
+    # stripping alone is unsafe because ch.query sends raw SQL and ClickHouse
+    # honors backslash escapes. An out-of-shape value is ignored (no filter).
+    if severity and severity.isalpha():
+        where = f"WHERE severity = '{severity.lower()}'"
+    # RFC 3339 UTC on the wire (log-time standard S3/R1): zone-less
+    # toString(DateTime64) strings parse as browser-local in JS consumers.
     sql = f"""
-      SELECT toString(ts) AS ts, id, kind, severity, score, device,
+      SELECT concat(replaceOne(toString(ts, 'UTC'), ' ', 'T'), 'Z') AS ts,
+             id, kind, severity, score, device,
              component, summary, description
         FROM netops.findings
         {where}
        ORDER BY ts DESC
        LIMIT {int(limit)}
        FORMAT JSON
-    """
+    """  # nosec B608 -- `where` is alpha-validated, `limit` is int()-cast; no injection vector
     return await ch.query(sql)
 
 

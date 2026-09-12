@@ -1,0 +1,209 @@
+<?xml version="1.0"?>
+<!--
+  #102 resource sizing: assert server-wide memory behavior instead of riding
+  stock-image defaults. CH 24.8 reads the cgroup-v2 limit; the ratio below
+  bounds the server at CH_MEM_RATIO x cgroup memory (vendor-recommended 0.9 —
+  headroom for allocator overhead and untracked native memory). The values
+  come from the resource plan (scripts/resource_planner.py) via the compose
+  environment; compose supplies defaults equal to today's behavior, so an
+  unset plan changes nothing.
+
+  ==========================================================================
+  P2 MERGE-MEMORY BUDGET (docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md,
+  run p2-s04b-08290858). MEASURED, on the 2.5K leg:
+
+    * cgroup limit (CLICKHOUSE_MEM_LIMIT=5326m) ...... 5,584,715,776 B = 5,326 MiB
+      (CH agrees: asynchronous_metrics CGroupMemoryTotal = 5,584,715,776)
+    * max_server_memory_usage = 0.9 x cgroup ......... 5,026,244,198 B = 4,794 MiB
+    * peak CurrentMetric_MemoryTracking .............. 4,566 MiB = 95.2 % of that cap
+    * peak MergesMutationsMemoryTracking ............. 3,978 MiB (merges ALONE)
+    * merge write amplification ...................... ~241x (1.40 GiB inserted
+      -> 337.6 GiB merged in 75 min, 69,201 merges)
+
+  The server was running at 95 % of its own ceiling with 83 % of it held by
+  background merges. Nothing here changes what the engine writes; it bounds
+  what ClickHouse is allowed to spend re-merging it. The per-table half of the
+  fix (max_bytes_to_merge_at_max_space_in_pool, min_age_to_force_merge_seconds)
+  lives in init.sql + chschema/corr_merge_budget.go.
+
+  RESOLUTION SEMANTICS (CH 24.8, Server.cpp): for BOTH max_server_memory_usage
+  and merges_mutations_memory_usage_soft_limit, 0 means "derive from the ratio"
+  and a non-zero value is LOWERED to the ratio-derived value if it exceeds it —
+  i.e. the effective limit is min(explicit, ratio x cgroup). So the explicit
+  bytes below are a measured ABSOLUTE cap and the ratios stay live as the
+  relative safety net on a smaller box. Setting CH_MAX_SERVER_MEMORY=0 /
+  CH_MERGES_MEM=0 restores the pre-P2 ratio-only behavior exactly.
+  ==========================================================================
+-->
+<clickhouse>
+    <!-- ARITHMETIC (see the measured block above):
+           cgroup limit ............................ 5,326 MiB
+           - page-cache / slab / untracked headroom  1,230 MiB (23.1 %)
+           = max_server_memory_usage ............... 4,096 MiB = 4,294,967,296 B
+
+         Why 1,230 MiB of headroom and not the 532 MiB the 0.9 ratio left:
+         the cgroup holds reclaimable kernel memory the server does not
+         account for — measured at the s04b peak, active_file 1,516 MiB +
+         slab_reclaimable 621 MiB = 2,137 MiB, against anon 984 MiB. Held at
+         0.9 the server may reserve 4,794 MiB and leave the kernel 532 MiB to
+         cache a store that reads/writes ~50 GiB per run. Reserving >= 1 GiB
+         and rounding DOWN to the 4,096 MiB power of two gives 1,230 MiB.
+         MemoryTracking and RSS also couple loosely (peak 4,566 MiB tracked
+         vs 984 MiB anon), so the cap is a reservation ceiling, not an RSS
+         prediction — which is exactly why the memflat gate must read anon,
+         not `docker stats` (brief section (c)).
+
+         Cross-check against the proposed memflat clause: the OOM assertion is
+         peak MemoryTracking < 85 % of this cap = 3,482 MiB (s04b measured
+         4,566 -> would FAIL, which is the finding worth gating on). -->
+    <max_server_memory_usage from_env="CH_MAX_SERVER_MEMORY"/>
+    <max_server_memory_usage_to_ram_ratio from_env="CH_MEM_RATIO"/>
+
+    <!-- MEASURED: merges alone peaked at 3,978 MiB. Left at 0 the soft limit
+         is derived as merges_mutations_memory_usage_to_ram_ratio (0.5) x
+         cgroup = 2,792,357,888 B = 2,663 MiB — which the run BLEW THROUGH by
+         49 %, because the limit is checked when a merge is SCHEDULED, not
+         while it runs: 32 already-running merges (background_pool_size 16 x
+         concurrency ratio 2) overshoot it together. So this value is one half
+         of the fix and background_pool_size below is the other.
+         1.5 GiB = 1,610,612,736 B = 37.5 % of the 4,096 MiB server cap, under
+         the memflat clause's proposed "merges < 50 % of the cap" assertion
+         (s04b: 3,978 / 4,794 = 83 % -> FAIL). -->
+    <merges_mutations_memory_usage_soft_limit from_env="CH_MERGES_MEM"/>
+
+    <!-- MEASURED: 32 concurrent merge tasks (16 x 2) on a box limited to
+         3 CPUs (CLICKHOUSE_CPU_LIMIT, host has 4 cores) is what let
+         MergesMutationsMemoryTracking reach 3,978 MiB — each concurrent merge
+         holds its own read/write buffers for a 26.9 KiB/row table. 6 x 2 = 12
+         concurrent merges: still 4x the CPU allowance, so merges are never
+         starved, but the memory a merge storm can hold is cut ~2.7x.
+         The concurrency ratio is pinned at its default so "12" is a contract
+         and not an inherited number.
+         NOTE: system.server_settings reports background_pool_size as
+         changeable_without_restart = IncreaseOnly — a DECREASE (16 -> 6) needs
+         a server restart, i.e. the next stack redeploy. -->
+    <background_pool_size>6</background_pool_size>
+    <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
+
+    <!-- ===================================================================
+         SHRINKING THE POOL IS NOT A ONE-LINE CHANGE. READ THIS FIRST.
+
+         WHICH CHECK FIRES: MergeTreeSettings::sanityCheck(background_pool_tasks)
+         in src/Storages/MergeTree/MergeTreeSettings.cpp, called as every
+         MergeTree table is ATTACHED at startup. background_pool_tasks =
+         background_pool_size x background_merges_mutations_concurrency_ratio
+         = 6 x 2 = 12. It throws BAD_ARGUMENTS — the server never finishes
+         loading and crash-loops. THIS HAPPENED: 2026-08-29, exit 36, on the
+         first deploy of the P2 budget, because the pool went 16 -> 6 while the
+         thresholds below kept their stock values.
+
+         In v24.8 sanityCheck guards EXACTLY THREE of these (verified against
+         the 24.8 source; there is no fourth in MergeTreeSettings.h), each as
+         `if (threshold > background_pool_tasks) throw`:
+
+           setting                                    stock  here
+           number_of_free_entries_in_pool_to_lower_max_size_of_merge      8    4
+           number_of_free_entries_in_pool_to_execute_mutation            20    6
+           number_of_free_entries_in_pool_to_execute_optimize_entire_partition
+                                                                         25    8
+
+         The stock values were sized for the default 16 x 2 = 32 pool, so 20 and
+         25 both exceed a 12-slot pool. (8 did not — but it is scaled here too,
+         because leaving it alone would silently change its MEANING relative to
+         the pool.) The operator is `>`, so a threshold exactly equal to 12
+         would be legal; the contract test asserts STRICTLY below 12 anyway, to
+         keep a slot of margin and to stay correct if a future version tightens
+         the comparison.
+
+         SEMANTICS: each is a floor on FREE pool entries — "when fewer than N
+         entries are free, do NOT do X". So a HIGHER number is MORE conservative
+         (X is refused sooner as the pool fills), and the three must stay in
+         ascending order: shrink merge sizes first, then stop mutations, then
+         stop whole-partition optimizes.
+
+         WHY 4 / 6 / 8 on a 12-slot pool (stock proportions on 32 would scale to
+         3 / 7.5 / 9.4):
+
+         * lower_max_size_of_merge = 4 (33 % free) — one notch MORE conservative
+           than stock (25 % free): merges start shrinking once the pool is 2/3
+           busy. That is the direction this whole change exists to push, and it
+           is the second line of defence behind
+           max_bytes_to_merge_at_max_space_in_pool.
+         * execute_mutation = 6 (50 % free) — one notch MORE permissive than
+           stock (62.5 %). Mutations are RARE on this platform by design: the
+           retention contract is metadata-only (materialize_ttl_after_modify=0)
+           and expiry is part drops (ttl_only_drop_parts=1), so essentially the
+           only mutation is an operator-initiated one — e.g. the documented
+           `MATERIALIZE INDEX idx_archived_for` on corr_signals_archive. Those
+           must not be starved by a pool this small.
+         * execute_optimize_entire_partition = 8 (67 % free) — LOAD-BEARING for
+           the per-table half of this change, not incidental. Its own 24.8
+           description says the merge it gates "is created when set
+           min_age_to_force_merge_seconds > 0 and
+           min_age_to_force_merge_on_partition_only = true" — which is exactly
+           what init.sql now sets on all eight corr_* tables. Scaled strictly
+           from stock this would be 9; 8 is deliberately one notch lower so the
+           idle-consolidation pass can actually get a slot once a burst drains.
+           Set it too high and the small parts the merge cap leaves behind never
+           get folded at all.
+
+         Pinned by tests/test_clickhouse_merge_budget.py, which recomputes
+         pool x ratio from THIS file and re-checks every threshold — including
+         the ones left at their ClickHouse default. That test is the one that
+         would have caught the crash-loop.
+         =================================================================== -->
+    <merge_tree>
+        <number_of_free_entries_in_pool_to_lower_max_size_of_merge>4</number_of_free_entries_in_pool_to_lower_max_size_of_merge>
+        <number_of_free_entries_in_pool_to_execute_mutation>6</number_of_free_entries_in_pool_to_execute_mutation>
+        <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>8</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>
+    </merge_tree>
+
+    <!-- MEASURED: the stock mark cache ceiling is 5,368,709,120 B = 5,120 MiB
+         — larger than the ENTIRE 5,326 MiB container and 107 % of the old
+         server cap. Actual use during the run: MarkCacheBytes 2.01 MiB. A
+         ceiling that can never be honoured is not a cache policy, it is a
+         latent OOM. 512 MiB = 536,870,912 B is 250x the measured working set
+         and 12.5 % of the server cap. -->
+    <mark_cache_size>536870912</mark_cache_size>
+
+    <!-- MEASURED: UncompressedCacheBytes 0 B — the cache is OFF
+         (use_uncompressed_cache = 0, the ClickHouse default, and nothing here
+         turns it on), yet the image reserves 8,589,934,592 B = 8,192 MiB for
+         it. Zero the reservation so it cannot become live by accident.
+         Together with the mark cache this cuts the reservable cache ceiling
+         from 13,312 MiB to 512 MiB. -->
+    <uncompressed_cache_size>0</uncompressed_cache_size>
+
+    <!-- ===================================================================
+         SERVER-WIDE MEMORY PROFILER (P2/s06,
+         docs/scale/P2_CLICKHOUSE_PEAK_S06_2026-08-29.md section 0 and 6(d)).
+
+         Both values below are the ClickHouse 24.8 stock config.xml values.
+         They are pinned here, not changed, because the s06 investigation found
+         them "set" while producing NOTHING: system.trace_log did not exist, so
+         the profiler had no sink and ~2.4-2.9 GiB of the 4,406 MiB peak had to
+         be attributed by arithmetic instead of by a stack trace. trace_log is
+         now enabled with a 1-day TTL in system-logs.xml; these two settings are
+         the other half of that contract and must not drift silently.
+
+         total_memory_profiler_step = 4 MiB — MemoryTracker::allocImpl sends a
+         stack trace (trace_type = 'Memory', empty query_id) every time the
+         GLOBAL tracker grows past the next 4 MiB step, background merge threads
+         included. Cost is bounded BY CONSTRUCTION: one row per 4 MiB of growth,
+         so s06's 96 -> 3,895 MiB ramp is ~950 rows. This is what names the
+         allocator behind a merge-memory transient.
+
+         total_memory_tracker_sample_probability = 0 — DELIBERATELY OFF. Unlike
+         the step profiler this is a probability per allocation/free
+         (trace_type = 'MemorySample'), i.e. its row count scales with
+         allocation churn, not with memory growth: unbounded in principle. The
+         step profiler already answers the question. Raise it (and the
+         per-profile memory_profiler_sample_probability, users.d) to ~0.01 for a
+         single diagnostic run if a per-callsite histogram is needed, then put
+         it back.
+         =================================================================== -->
+    <total_memory_profiler_step>4194304</total_memory_profiler_step>
+    <total_memory_tracker_sample_probability>0</total_memory_tracker_sample_probability>
+
+    <max_concurrent_queries from_env="CH_MAX_CONCURRENT_QUERIES"/>
+</clickhouse>

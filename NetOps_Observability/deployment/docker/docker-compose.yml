@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # NetOps Observability — full stack.
 # Compose v2 schema (no top-level `version:` key per Compose spec).
 #
@@ -11,7 +14,7 @@
 #                       \         |         /
 #   Aggregation  :          vector-aggregator
 #                                  |
-#   Event bus    :              redpanda
+#   Event bus    :              kafka (Apache Kafka, KRaft single-node; profile embedded-bus)
 #                                  |
 #   Routing      :           vector-router
 #                          /        |        \
@@ -24,8 +27,43 @@
 name: netops
 
 # ---- shared anchors ---------------------------------------------------------
+#
+# ⚠️ RESOURCE LIMITS ARE LAB-SIZED PLACEHOLDERS. The mem_limit/cpus values below
+# are tuned for the ~4-core/15 GiB lab host purely to put the *mechanism* in
+# place (runaway containment, OOM isolation, the cAdvisor/node-exporter alerts
+# that key off them). They are NOT production sizing. Every value is
+# env-overridable (${X_MEM_LIMIT}/${X_CPU_LIMIT}); PROD must re-tune them to the
+# real hardware (or, on Kubernetes, replace them with pod requests/limits + HPA/
+# VPA). Tracked as a go-live task — see docs/TRACKER.md "prod resource sizing".
 
 x-restart: &restart unless-stopped
+
+# Bounded container logs. goflow2/vector/telegraf stream high-volume JSON to
+# stdout; without a cap a single json log grew to 3+ GB and filled the disk,
+# tripping OpenSearch's read-only flood watermark. Cap EVERY service to
+# 150 MB (3×50 MB) of rotated logs. (For a host-wide default, also set
+# /etc/docker/daemon.json log-opts max-size/max-file.)
+#
+# 2026-09-03: this anchor is now mandatory on every service, not just the noisy
+# ones — the host hit 94% disk with a 1.1 GB opensearch json log and a 200 MB
+# opensearch-dashboards one, both of which were uncapped. OpenSearch's
+# flood-stage watermark is 95%, so uncapped container logs are one bad night
+# away from turning the search tier read-only.
+# tests/test_compose_logging_bounded.py enforces the invariant.
+#
+# ⚠️  APPLIES ON CONTAINER RECREATE ONLY. Docker fixes a container's log driver
+# and its options at CREATE time; editing this anchor (or adding it to a
+# service) changes nothing for containers that are already running. Run
+# `docker compose up -d` (which recreates on config change) — a plain
+# `docker restart` or `compose restart` keeps the old, unbounded log file. The
+# pre-existing oversized json logs are only reclaimed by that recreate, or by
+# truncating them by hand; see
+# docs/runbooks/storage-and-volume-operations.md section 2.2.
+x-logging: &deflog
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
 
 services:
 
@@ -34,11 +72,28 @@ services:
   # =========================================================================
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
+    mem_limit: ${POSTGRES_MEM_LIMIT:-1g}
+    cpus: ${POSTGRES_CPU_LIMIT:-2}
+    logging: *deflog
     environment:
       POSTGRES_USER: ${DB_USER:?DB_USER required}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD required}
       POSTGRES_DB: ${DB_NAME:-netops}
+    # #102: server tuning owned by the resource plan; every default equals the
+    # stock image value, so an unset plan changes nothing.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-128MB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-4GB}
+      - -c
+      - work_mem=${PG_WORK_MEM:-4MB}
+      - -c
+      - maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-64MB}
+      - -c
+      - max_connections=${PG_MAX_CONNECTIONS:-100}
     volumes:
       - ../../data/postgres:/var/lib/postgresql/data
     healthcheck:
@@ -50,12 +105,31 @@ services:
     restart: *restart
 
   redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--save", "60", "1"]
+    # Valkey (BSD-3), not Redis: redis:7-alpine resolves to 7.4.9 = RSALv2/SSPL,
+    # which blocks external redistribution of the offline bundle (#97 licensing
+    # gate, docs/design/packaging-strategy.md §4). Valkey 8 is protocol- and
+    # CLI-compatible (ships redis-* symlinks, same uid 999); service name stays
+    # `redis` so REDIS_HOST consumers are untouched. NOTE: Valkey cannot load
+    # RDB v12 dumps written by Redis 7.4 — on upgrade of an existing install,
+    # remove data/redis/dump.rdb (contents are TTL'd collector caches only).
+    image: valkey/valkey:8-alpine@sha256:cfe71288f087704b06be45e270afa7a2abbf820093d6b11a23762081f5ff321d
+    # maxmemory stays BELOW the cgroup cap so Valkey returns clean OOM errors
+    # (noeviction default — this is app STATE, never silently evict) instead of
+    # the kernel killing it. Measured use is ~8 MiB; 96mb is 12× headroom.
+    mem_limit: ${REDIS_MEM_LIMIT:-128m}
+    logging: *deflog
+    # SEC-012.1: authentication. Empty password = auth off (pre-existing
+    # installs whose .env predates the secret are unchanged); the installer
+    # ALWAYS generates REDIS_PASSWORD, so fresh installs are authenticated.
+    command: ["valkey-server", "--save", "60", "1", "--maxmemory", "${REDIS_MAXMEMORY:-96mb}", "--requirepass", "${REDIS_PASSWORD:-}"]
+    environment:
+      # valkey-cli honors REDISCLI_AUTH — the healthcheck stays authenticated
+      # without a password on the process cmdline.
+      REDISCLI_AUTH: ${REDIS_PASSWORD:-}
     volumes:
       - ../../data/redis:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -63,40 +137,215 @@ services:
     restart: *restart
 
   # =========================================================================
+  # IDENTITY BROKER (optional — Single Sign-On)
+  # =========================================================================
+  #
+  # Keycloak is the AUTHENTICATION plane: it speaks OIDC, SAML 2.0 and LDAP/AD
+  # and brokers external IdPs (Okta, Azure AD, Google), while the Go API stays
+  # stdlib-only and only validates the resulting tokens (see
+  # docs/IDENTITY_ACCESS.md). It is opt-in so the default stack stays lean:
+  #
+  #   # 1. the database must exist FIRST — Keycloak does not create it, and
+  #   #    without it the container dies with a bare
+  #   #    `FATAL: database "keycloak" does not exist`.
+  #   docker compose exec postgres createdb -U "$DB_USER" keycloak
+  #   # 2. then start it
+  #   docker compose --profile sso up -d keycloak
+  #
+  # Then create a realm + an OIDC client for NetOps and set OIDC_ENABLED=true
+  # and the OIDC_* vars in .env (the api service reads them).
+  #
+  # NOTE: those OIDC_* vars are the FALLBACK, not an override. A configuration
+  # saved from Administration → Authentication is persisted in the kv store and
+  # wins over the environment; the env applies only while nothing real has been
+  # saved (see oidcConfigStore.load / Config.NeverConfigured).
+  #
+  # Step 1 was previously only mentioned in the generated .env, so anyone
+  # following THESE instructions hit the crash (2026-08-03, first real SSO
+  # bring-up). See docs/runbooks/okta-sso-setup.md.
+  #
+  # AUTOMATED (#144): with "sso" in COMPOSE_PROFILES, re-running
+  # scripts/install.py performs step 1 itself (idempotent SELECT-then-CREATE
+  # via bootstrap_keycloak_db) and starts the service. The manual steps above
+  # remain valid for operators who enable the profile by hand.
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2
+    profiles: ["sso"]
+    mem_limit: ${KEYCLOAK_MEM_LIMIT:-1g}
+    cpus: ${KEYCLOAK_CPU_LIMIT:-2}
+    logging: *deflog
+    command: ["start", "--http-enabled=true", "--hostname-strict=false", "--proxy-headers=xforwarded"]
+    environment:
+      # BOOTSTRAP ADMIN — both spellings, on purpose.
+      #
+      # `KC_BOOTSTRAP_ADMIN_*` is the Keycloak **26+** name; `KEYCLOAK_ADMIN*` is
+      # the **25** name. This image is pinned to 25.0, which IGNORES the KC_ names
+      # entirely — so the initial admin was never created and the admin API
+      # answered `user_not_found` for every login. SSO could not be configured at
+      # all, which is why this went unnoticed: the profile is opt-in and had never
+      # been brought up (2026-08-02).
+      #
+      # Setting both means the pin can move to 26 without this breaking again.
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      # SC-009: hard-required (`:?`), not a weak baked-in default. install.py
+      # always generates a random KEYCLOAK_ADMIN_PASSWORD, and `docker compose up`
+      # already requires .env anyway (DB_PASSWORD:?), so this never silently boots
+      # Keycloak with a known password.
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD required (install.py generates it)}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD required (install.py generates it)}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${KEYCLOAK_DB_NAME:-keycloak}
+      KC_DB_USERNAME: ${DB_USER}
+      KC_DB_PASSWORD: ${DB_PASSWORD}
+      KC_HEALTH_ENABLED: "true"
+      KC_HTTP_RELATIVE_PATH: /auth
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [netops]
+    restart: *restart
+
+  # =========================================================================
   # CORE EVENT BUS
   # =========================================================================
 
-  redpanda:
-    image: redpandadata/redpanda:v24.2.4
-    # YAML folded-string form so docker compose shell-splits the flags.
-    # The previous list form treated each "--flag value" pair as one
-    # argv, which redpanda's CLI rejected on startup → restart loop.
-    command: >
-      redpanda start
-      --smp 1
-      --memory 512M
-      --reserve-memory 0M
-      --overprovisioned
-      --node-id 0
-      --check=false
-      --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
-      --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
-      --pandaproxy-addr 0.0.0.0:8082
-      --schema-registry-addr 0.0.0.0:8081
-      --rpc-addr 0.0.0.0:33145
-      --advertise-rpc-addr redpanda:33145
-    ports:
-      - "${REDPANDA_KAFKA_PORT:-19092}:19092"
-      - "${REDPANDA_PROXY_PORT:-18082}:8082"
+  # Apache Kafka (Apache-2.0), single-node KRaft — the embedded event bus of
+  # the default install. Replaces Redpanda (BSL: not redistributable in
+  # customer bundles — #97 licensing gate). The bus is deliberately boring
+  # Kafka-API plumbing (#75): every client resolves the broker via BROKER_URLS,
+  # so an external Kafka-compatible cluster can take this service's place —
+  # drop `embedded-bus` from COMPOSE_PROFILES and point BROKER_URLS at it
+  # (install-correlix.sh --external-kafka does both).
+  kafka:
+    image: apache/kafka:4.1.1@sha256:0bc1bb2478f45b6cea78864df86acdc11e8df2c5172477819a4d12942cbe5d40
+    profiles: ["embedded-bus"]
+    mem_limit: ${KAFKA_MEM_LIMIT:-1g}
+    cpus: ${KAFKA_CPU_LIMIT:-2}
+    logging: *deflog
+    environment:
+      # Single-node KRaft: one process is both broker and controller. No
+      # ZooKeeper. The cluster id is generated once per install (install.py,
+      # like every other secret) so container recreation over a formatted data
+      # dir never trips the meta.properties id check.
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:?KAFKA_CLUSTER_ID required (generated by install.py)}
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      # Internal-only listener: services reach kafka:9092 on the compose
+      # network; nothing is published to the host (the old Redpanda 19092/8082
+      # host ports are gone on purpose — appliance installs expose only :8000).
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      # Single node → all internal topics at replication factor 1.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      # Scale P0: aligned with kafka-init's BUS_PARTITIONS so a topic created
+      # outside kafka-init (auto-create is OFF; admin tooling only) defaults
+      # to the same count co-partitioning expects.
+      KAFKA_NUM_PARTITIONS: ${BUS_PARTITIONS:-1}
+      # SEC-006.1: OFF. An authenticated bus with auto-create is still an
+      # injection surface — anything that can reach the broker could mint
+      # topics. Every canonical topic is created explicitly by kafka-init
+      # below (the wireless topics were relying on auto-creation — the exact
+      # silent-loss vector the epic warns about; test_ingest_contract.py
+      # pins pipeline-topics ⊆ kafka-init). A producer to a missing topic
+      # now fails LOUD instead of minting a lane nobody retains or consumes.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      # The bus is a transit lane, not a store (#96e): retention is bounded
+      # cluster-wide — the durable copies live in ClickHouse / OpenSearch /
+      # VictoriaMetrics. Same values the old redpanda-init applied.
+      KAFKA_LOG_RETENTION_MS: ${BUS_RETENTION_MS:-259200000}
+      KAFKA_LOG_RETENTION_BYTES: ${BUS_RETENTION_BYTES:-536870912}
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+      # JVM heap bounded BELOW the cgroup cap so the kernel never OOM-kills it.
+      KAFKA_HEAP_OPTS: "-Xmx${KAFKA_HEAP:-512m} -Xms${KAFKA_HEAP_MIN:-256m}"
     volumes:
-      - ../../data/redpanda:/var/lib/redpanda/data
+      - ../../data/kafka:/var/lib/kafka/data
     healthcheck:
-      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true'"]
-      interval: 15s
+      # TCP accept on the client listener. Kafka only opens 9092 after KRaft
+      # init + log recovery, so this is a real readiness signal without
+      # spawning a JVM per probe. kafka-init below is the functional gate.
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 9092"]
+      interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 12
+      start_period: 30s
     networks: [netops]
     restart: *restart
+
+  # One-shot: pre-creates the canonical netops.* topics once the broker is
+  # healthy, then exits — consumers never race topic auto-creation on a fresh
+  # install. Retention rides the cluster-wide bounds set on the broker above.
+  # cloudlogs/cloudcosts were missing from this list and relied on broker
+  # auto-creation; deadletter is new with F-03. A topic that exists only by
+  # auto-creation races its first consumer on a fresh install — the same
+  # "works until it doesn't, silently" shape as the rest of this audit.
+  #
+  # netops.bgp is the BGP watchlist evaluator's evidence lane (bgpwatch,
+  # FEATURE_BGP_ALERTS). It is created here for the same reason as the others —
+  # never left to auto-creation — and it carries the same partition count, so
+  # tenant-keyed records land on the partition that tenant already owns.
+  # CONSUMED since 2026-09-02: the engine grounds it as the `bgp` evidence class
+  # (signals.EVIDENCE_CLASSES), it is in the default CORR_EVIDENCE_TOPICS
+  # derivation as an OPTIONAL lane, and the correlation principal holds
+  # Read+Describe on it (kafka/apply-acls.sh). Optional means an absent topic is
+  # dropped-and-re-probed, never a startup gate — but pre-creating it here is
+  # what makes the lane ground on the first pass instead of the next re-probe.
+  #
+  # netops.syslog.control (A4 Phase 1) is the PRE-SCREENED syslog lane the
+  # aggregator publishes alongside netops.syslog. It is created here — not left
+  # to auto-creation — for the co-partitioning reason above: it must carry the
+  # SAME BUS_PARTITIONS count as netops.syslog, or an engine switched onto it
+  # would land a tenant on a different partition than the one that owns it.
+  # Nothing consumes it yet (see docs/INGESTION.md).
+  kafka-init:
+    image: apache/kafka:4.1.1@sha256:0bc1bb2478f45b6cea78864df86acdc11e8df2c5172477819a4d12942cbe5d40
+    logging: *deflog
+    profiles: ["embedded-bus"]
+    restart: "no"
+    environment:
+      # Scale P0: partition count for EVERY netops.* topic. All topics must
+      # share ONE count — correlation instances rely on co-partitioning
+      # (partition k of every topic on instance k), which equal counts + the
+      # range assignor guarantee. Raise it together with
+      # `--scale correlation=N` (see the correlation service + docs/
+      # scale-correlation.md); an existing topic with fewer partitions is
+      # ALTERed up (increase-only — Kafka cannot shrink). Keyed records
+      # produced BEFORE the increase stay in the old partitions: scale up in
+      # a quiet window (or drain: stop producers, let correlation catch up,
+      # then raise) — see the docs drain note.
+      BUS_PARTITIONS: ${BUS_PARTITIONS:-1}
+    entrypoint:
+      - bash
+      - -c
+      - >-
+        p="$${BUS_PARTITIONS:-1}";
+        for t in netops.applogs netops.syslog netops.syslog.control
+        netops.flows netops.flows.raw
+        netops.snmptrap
+        netops.probes netops.metrics netops.cloud netops.app.identities.v1
+        netops.controller_events netops.app.edge netops.verification
+        netops.cloudlogs netops.cloudcosts netops.deadletter
+        netops.wireless_sessions netops.wireless_events
+        netops.security netops.bgp netops.experience; do
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092
+        --create --if-not-exists --topic "$$t"
+        --partitions "$$p" --replication-factor 1 || exit 1;
+        cur="$$(/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092
+        --describe --topic "$$t"
+        | sed -n 's/.*PartitionCount: \([0-9]*\).*/\1/p' | head -1)";
+        if [ -z "$$cur" ]; then echo "kafka-init: describe $$t failed" >&2; exit 1; fi;
+        if [ "$$cur" -lt "$$p" ]; then
+        echo "kafka-init: $$t partitions $$cur -> $$p" >&2;
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092
+        --alter --topic "$$t" --partitions "$$p" || exit 1; fi; done
+    depends_on:
+      kafka: { condition: service_healthy }
+    networks: [netops]
 
   # =========================================================================
   # EDGE INGESTION TIER (per reference architecture)
@@ -105,21 +354,88 @@ services:
   # syslog-ng — edge ingestion for Syslog. Listens on 514 (UDP+TCP) and
   # forwards to vector-aggregator's syslog source.
   syslog-ng:
-    image: balabit/syslog-ng:4.7.1
-    command: ["-F", "-edv"]
+    image: balabit/syslog-ng:4.7.1@sha256:d37d9895256fa840bc8e70077a6c74afa27015e27703c3fbb89d5ae3cb956dd9
+    mem_limit: ${SYSLOGNG_MEM_LIMIT:-256m}
+    cpus: ${SYSLOGNG_CPU_LIMIT:-1}
+    logging: *deflog
+    # F-51: DIRECTORY mount (see vector-aggregator). /etc/syslog-ng itself cannot
+    # be shadowed — the image keeps scl.conf and the scl/ tree there and the
+    # config @includes them — so the repo dir mounts alongside as conf.d/ and -f
+    # names the file inside it.
+    command: ["-F", "-e", "-f", "/etc/syslog-ng/conf.d/syslog-ng.conf"]
     volumes:
-      - ./syslog-ng/syslog-ng.conf:/etc/syslog-ng/syslog-ng.conf:ro
+      - ./syslog-ng:/etc/syslog-ng/conf.d:ro
+      # F-48: persistent disk-buffer spool for d_vector. Without this the output
+      # queue is memory-only and a vector-aggregator restart silently DROPS
+      # device syslog — the highest-value RCA evidence class — with the counter
+      # switched off. Must be writable, so no :ro.
+      - ../../data/syslog-ng:/var/lib/syslog-ng
     ports:
+      # Published on 5514 (non-privileged, the documented lab port) AND the
+      # standard syslog 514, so devices configured with the default `logging
+      # host <nms> 514` reach the collector without per-device reconfig. Both
+      # host ports map to the same container :514.
       - "${SYSLOG_PORT:-5514}:514/udp"
       - "${SYSLOG_PORT:-5514}:514/tcp"
+      - "514:514/udp"
+      - "514:514/tcp"
+    # G3 (2026-09-02): SOCKET-LEVEL health, replacing the image's baked-in
+    # `syslog-ng-ctl healthcheck --timeout 5`.
+    #
+    # WHY. syslog-ng is the ingest EDGE: if it is marked unhealthy the watchdog
+    # pages and an operator starts restarting the thing devices are logging to.
+    # The image's probe fork/execs the vendor CLI, which then round-trips the
+    # control socket — a chain that can fail for reasons that have nothing to do
+    # with whether syslog is being received. That is not theoretical here: this
+    # stack has already had a container sit at pids.max, unable to fork
+    # ANYTHING, reading "unhealthy" while serving every request perfectly (the
+    # 2026-08-15 ClickHouse incident that `check_pid_capacity` in
+    # scripts/stack-watchdog.sh exists to name). A probe that spawns processes
+    # inherits every one of those failure modes.
+    #
+    # WHAT THIS DOES INSTEAD — it tests the two things that ARE the job:
+    #   1. `exec 3<>/dev/tcp/...` — a real TCP connect to the :514 listener,
+    #      performed by a bash BUILTIN. No second binary is fork/exec'd.
+    #   2. `/proc/net/udp` — confirms the UDP socket is still BOUND. UDP is the
+    #      lane most devices actually use and it cannot be connect-tested, so
+    #      the bound-socket check is the strongest probe available without
+    #      injecting synthetic traffic into the real ingest path. `0202` is hex
+    #      514; udp6 is checked too so an IPv6-only bind still passes.
+    #
+    # `CMD`, NOT `CMD-SHELL`: CMD-SHELL runs `/bin/sh -c`, and /bin/sh in this
+    # image is **dash**, which has no /dev/tcp (verified — it fails with
+    # "Directory nonexistent"). bash 5.2 is present at /usr/bin/bash and does.
+    # Both halves were verified against the running container on 2026-09-02,
+    # including negative controls: an unlistened TCP port and an unbound UDP
+    # port each fail the probe as they must.
+    healthcheck:
+      test: ["CMD", "bash", "-c",
+             "exec 3<>/dev/tcp/127.0.0.1/514 && exec 3>&- && grep -qi ':0202 ' /proc/net/udp /proc/net/udp6"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     depends_on: [vector-aggregator]
     networks: [netops]
     restart: *restart
 
-  # Telegraf — edge SNMP poller. Reads device list from config, polls
-  # SNMP, emits InfluxDB line protocol over TCP to vector-aggregator.
+  # Telegraf — DEPRECATED / LEGACY PLACEHOLDER. Not started by default.
+  #
+  # SNMP metrics are owned by the Go collector (src/backend/collectors/), which
+  # polls the fabric with per-device SNMPv3 and emits the canonical device_*
+  # contract to VictoriaMetrics AND the filtered correlation lane (netops.metrics
+  # via Vector :8690). Telegraf's bundled config is a stub (polls 10.0.0.1/2 with
+  # community "public") that only ever timed out; running it would imply a second,
+  # non-canonical SNMP metric path that does not exist. Gated behind the `legacy`
+  # profile so it never starts unless explicitly requested. Do NOT make Telegraf
+  # a producer to netops.metrics — see docs/design/internal-topology.md and the
+  # architecture-contract tests (tests/test_architecture_contract.py).
   telegraf:
-    image: telegraf:1.31-alpine
+    image: telegraf:1.31-alpine@sha256:bf274ea9fbf49a62ed19478ea0badb0f040ee9db09725a94175fa5ffecd8b7ab
+    profiles: [legacy]
+    mem_limit: ${TELEGRAF_MEM_LIMIT:-512m}
+    cpus: ${TELEGRAF_CPU_LIMIT:-1}
+    logging: *deflog
     command: ["--config", "/etc/telegraf/telegraf.conf"]
     volumes:
       - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
@@ -127,20 +443,110 @@ services:
     networks: [netops]
     restart: *restart
 
+  # gnmic — gNMI dial-in telemetry collector. Subscribes to the multivendor
+  # fabric (Arista OpenConfig, Nokia SR Linux native) and remote-writes the
+  # streamed samples to VictoriaMetrics. Device gNMI passwords are env-injected
+  # (lab defaults below; override in .env). Config: ./gnmic/gnmic.yaml.
+  gnmic:
+    image: ghcr.io/openconfig/gnmic:0.46.0@sha256:9538f93a9a85e996d0ad5f7c523835e874557be84b8d279c2a51d2f092b24c7e
+    mem_limit: ${GNMIC_MEM_LIMIT:-512m}
+    cpus: ${GNMIC_CPU_LIMIT:-1}
+    logging: *deflog
+    # F-51: DIRECTORY mount (see vector-aggregator).
+    #
+    # ENABLE_GNMI_CORRELATION (default OFF): gnmic takes exactly ONE --config
+    # and YAML has no include, so the correlation lane ships as a SECOND FULL
+    # config (gnmic/gnmic-correlation.yaml = this file's config plus the
+    # `correlation` kafka output + its `corr-rca-shape` processor) selected here
+    # by GNMIC_CONFIG_FILE. Unset → gnmic.yaml → the two VictoriaMetrics lanes
+    # only, i.e. the default deployment is byte-for-byte what it was.
+    # Turning the lane ON is one .env line: GNMIC_CONFIG_FILE=gnmic-correlation.yaml.
+    # Supported ONLY at BUS_PARTITIONS=1 and NOT under compose.tls.yml — see the
+    # gaps documented in gnmic/gnmic-correlation.yaml and docs/INGESTION.md.
+    command: ["subscribe", "--config", "/app/conf/${GNMIC_CONFIG_FILE:-gnmic.yaml}"]
+    environment:
+      # SEC-013 narrowing note: gnmic held the shared INGEST_TOKEN from the
+      # F-08 era, but it has posted to no vector-aggregator lane since SEC-010
+      # moved its metric writes to vmauth (gnmic.yaml carries zero INGEST
+      # refs) — the credential was a dead grant and is dropped, shrinking the
+      # shared token's holder set.
+      # SC-009: these are the bundled containerlab fabric's DEVICE login passwords
+      # (creds the collector uses to reach lab nodes), not platform secrets — they
+      # match the lab's device config and install.py can't generate them. For a
+      # REAL fabric, override SRL_GNMI_PASS/EOS_GNMI_PASS in .env with your device
+      # credentials. Left as lab defaults so the bundled lab works zero-config.
+      SRL_GNMI_PASS: ${SRL_GNMI_PASS:-NokiaSrl1!}
+      EOS_GNMI_PASS: ${EOS_GNMI_PASS:-admin}
+      # SEC-010: the write endpoint gnmic.yaml expands (${VICTORIA_WRITE_URL}).
+      # Declared HERE (the consumer) — it sat under the api service until the
+      # 2026-08-09 enforce wave, where the api never reads it (dead env); TLS
+      # deployments point it at vmauth via the override/compose.tls.yml.
+      VICTORIA_WRITE_URL: ${VICTORIA_WRITE_URL:-http://victoria:8428/api/v1/write}
+      # Correlation lane (gnmic-correlation.yaml only — the default config
+      # expands neither). Declared unconditionally so a flipped
+      # GNMIC_CONFIG_FILE never boots against an unexpanded ${...} placeholder;
+      # inert while the base config is loaded. Bus endpoint + topic ONLY: this
+      # lane carries no credential (the broker is reached over the same
+      # PLAINTEXT listener every non-TLS bus client uses), so there is no token
+      # to leak into the rendered config.
+      ENABLE_GNMI_CORRELATION: ${ENABLE_GNMI_CORRELATION:-false}
+      GNMI_CORRELATION_BROKERS: ${BROKER_URLS:-kafka:9092}
+      GNMI_CORRELATION_TOPIC: ${GNMI_CORRELATION_TOPIC:-netops.metrics}
+    volumes:
+      - ./gnmic:/app/conf:ro
+    depends_on: [victoria]
+    networks: [netops]
+    restart: *restart
+
   # goflow2 — edge collector for NetFlow v5/v9, IPFIX, sFlow. Decodes
   # binary protocols into JSON, writes to stdout. vector-aggregator
   # picks them up via docker_logs.
   goflow2:
-    image: netsampler/goflow2:v2.2.1
+    image: netsampler/goflow2:v2.2.1@sha256:bc7aafd6d724cd0a21b17b3c67f22d514c431021c3531914d964bef8cdd79dbb
+    mem_limit: ${GOFLOW2_MEM_LIMIT:-512m}
+    cpus: ${GOFLOW2_CPU_LIMIT:-1}
+    logging: *deflog
+    environment:
+      GOMEMLIMIT: ${GOFLOW2_GOMEMLIMIT:-460MiB}   # #102
+    # F-49: NATIVE kafka:// transport, not container stdout.
+    #
+    # THE DEFECT THIS FIXES: flows used to be written to stdout, read back by
+    # Vector's docker_logs source, and separated from application logs by
+    # `contains(.container_name, "goflow2")`. Two silent failure modes:
+    #   * the json-file driver caps at 3x50 MB, so a Vector that falls behind
+    #     during a rotation loses those flow records with nothing counting it;
+    #   * a rename (goflow2 -> flowcollector, a vendor swap, a compose
+    #     refactor) makes the substring stop matching and EVERY flow record
+    #     silently becomes an app log in netops-applogs-*.
+    # goflow2 has had a kafka transport all along — goflow2/goflow2.yaml has
+    # carried a "switch to kafka:// when wiring Kafka later" comment since the
+    # start, and the bus has been Kafka since #97.
+    #
+    # Tenant attribution moved with it: vector-router now loads the same
+    # device_tenant enrichment table and stamps .tenant_id from
+    # sampler_address (it already owned .tenant_seg for this lane).
+    #
+    # snappy matches every other producer on the bus (the correlation consumer
+    # pins cramjam for exactly this codec — see #67 build ⑥).
     command:
       - "-listen"
       - "netflow://:2055,sflow://:6343,netflow://:4739"
       - "-format"
       - "json"
       - "-transport"
-      - "file"
-      - "-transport.file"
-      - "/dev/stdout"
+      - "kafka"
+      - "-transport.kafka.brokers"
+      - "${BROKER_URLS:-kafka:9092}"
+      # Scale P0: goflow2 produces the RAW topic; vector-router re-keys it by
+      # tenant onto netops.flows (see vector-router/vector.yaml
+      # kafka_flows_raw). goflow2 cannot do the keying itself: it has no
+      # device→tenant registry, and sarama's hash partitioner (FNV-1a) is
+      # incompatible with the Java-murmur2 partitioning the co-partitioned
+      # correlation scale-out requires on every keyed topic.
+      - "-transport.kafka.topic"
+      - "netops.flows.raw"
+      - "-transport.kafka.compression"
+      - "snappy"
     ports:
       - "${NETFLOW_PORT:-2055}:2055/udp"
       - "${IPFIX_PORT:-4739}:4739/udp"
@@ -154,30 +560,149 @@ services:
 
   # Aggregator: collects from syslog-ng, Telegraf, goflow2, and docker
   # container stdout. Parses, normalizes, enriches with device metadata,
-  # buffers, ships to Redpanda topics.
+  # buffers, ships to the Kafka netops.* topics.
   vector-aggregator:
-    image: timberio/vector:0.40.0-alpine
-    command: ["--config", "/etc/vector/vector.yaml"]
+    image: timberio/vector:0.40.0-alpine@sha256:7a81fdd62e056321055a9e4bdec4073d752ecf68f4c192e676b85001721523c2
+    mem_limit: ${VECTOR_MEM_LIMIT:-512m}
+    cpus: ${VECTOR_CPU_LIMIT:-2}
+    logging: *deflog
+    # F-51: DIRECTORY mount, not a single file. A single-file bind mount resolves
+    # to an INODE at container start. Every editor that writes-then-renames (vim,
+    # VS Code, sed -i, python's atomic write — i.e. almost all of them) creates a
+    # NEW inode, and the mount stays pinned to the old one FOREVER: `docker
+    # compose restart` re-runs the container against the stale file, the operator
+    # sees the fix in the repo, and the container never had it. That is exactly
+    # what happened to vector-router on 2026-07-21 (host inode 268641 vs
+    # container 291584 — the DEF-6 fix was "deployed" for hours and absent).
+    # Mounting the DIRECTORY makes the path resolve per-open, so a rename is
+    # picked up by a plain restart. Do not revert this to a file mount.
+    #
+    # F-10: boot through the enrichment-reload wrapper — vector reads
+    # device_tenant.csv ONCE per (re)load, so without this a device→tenant
+    # assignment took effect only at the next restart (untagged telemetry
+    # until then). The wrapper rides the existing ./vector directory mount
+    # (F-51: no file mounts); compose `command` arrives as its "$@". An
+    # entrypoint override DROPS the image CMD (lesson e) — keep `command`
+    # explicit here.
+    entrypoint: ["/bin/sh", "/etc/vector/conf/cx-enrichment-reload.sh"]
+    command: ["--config", "/etc/vector/conf/vector.yaml"]
+    environment:
+      # Kafka sink bootstrap servers (vector.yaml interpolates it; the in-file
+      # default keeps preflight fresh-loads working without a full env).
+      BROKER_URLS: ${BROKER_URLS:-kafka:9092}
+      # F-08/SEC-013.1 NARROWED (enforce wave step 4): one credential per lane,
+      # no shared fallback. Vector refuses to start without every lane token
+      # (${INGEST_TOKEN_<LANE>:?} in vector.yaml) — a deliberate fail-CLOSED:
+      # an ingest tier that silently reverts to unauthenticated is the defect,
+      # not the mitigation. install.py seeds distinct per-lane tokens on fresh
+      # installs AND into an existing .env on upgrade (the migration loop);
+      # the shared INGEST_TOKEN no longer opens any lane and is not passed here.
+      INGEST_USER: ${INGEST_USER:-netops-ingest}
+      INGEST_TOKEN_TRAPS: ${INGEST_TOKEN_TRAPS:?INGEST_TOKEN_TRAPS required — run scripts/install.py (its migration seeds per-lane tokens; SEC-013 narrowing removed the shared fallback)}
+      INGEST_TOKEN_PROBES: ${INGEST_TOKEN_PROBES:?INGEST_TOKEN_PROBES required — run scripts/install.py (its migration seeds per-lane tokens; SEC-013 narrowing removed the shared fallback)}
+      INGEST_TOKEN_METRICS: ${INGEST_TOKEN_METRICS:?INGEST_TOKEN_METRICS required — run scripts/install.py (its migration seeds per-lane tokens; SEC-013 narrowing removed the shared fallback)}
+      INGEST_TOKEN_BUS: ${INGEST_TOKEN_BUS:?INGEST_TOKEN_BUS required — run scripts/install.py (its migration seeds per-lane tokens; SEC-013 narrowing removed the shared fallback)}
     volumes:
-      - ./vector/vector.yaml:/etc/vector/vector.yaml:ro
+      - ./vector:/etc/vector/conf:ro
+      # F-04: disk-buffer spool (data_dir in vector.yaml). Host-mounted so the
+      # spool — the whole point of which is surviving a restart — is not thrown
+      # away with the container's writable layer on every recreate.
+      - ../../data/vector-aggregator:/var/lib/vector
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    depends_on:
-      redpanda: { condition: service_healthy }
+      # #20: device→tenant enrichment CSV exported by the api (read-only). Loaded
+      # by the device_tenant enrichment table to stamp tenant_id onto telemetry.
+      - ../../data/api/enrichment:/etc/vector/enrichment:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8686/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    # No depends_on on the broker: in external-broker mode the embedded kafka
+    # service isn't started at all, and Vector's kafka sink retries with
+    # backoff until the bus is reachable either way.
     networks: [netops]
     restart: *restart
 
   # Router: reads Kafka topics back out and fans into the storage tier.
   vector-router:
-    image: timberio/vector:0.40.0-alpine
-    command: ["--config", "/etc/vector/vector.yaml"]
+    # Derived image = stock pin + curl, which the Sealed Fields secret backend
+    # needs for its mTLS key fetch (F-7 — BusyBox wget cannot present a client
+    # certificate). See vector-router/Dockerfile; the FROM carries the digest
+    # that used to sit on this line.
+    build:
+      context: ./vector-router
+      dockerfile: Dockerfile
+      args:
+        # The image adds a static curl via apk. On egress that INTERCEPTS TLS
+        # (this lab: HTTPS re-signed by the SASE gateway) the apk fetch fails
+        # certificate verification, and the Dockerfile's documented workaround
+        # (--build-arg APK_REPO_SCHEME=http; apk still verifies SIGNED indexes)
+        # is unreachable through `docker compose build` — which is what
+        # scripts/make-installer.sh runs, so the customer bundle could not be
+        # cut on such a host at all. Passing it through here keeps the default
+        # EXACTLY as it was (https) and makes the escape hatch reachable:
+        #   APK_REPO_SCHEME=http docker compose build vector-router
+        # Same shape as Dockerfile.correlation's pip --trusted-host relaxation
+        # for the identical network condition.
+        APK_REPO_SCHEME: ${APK_REPO_SCHEME:-https}
+    image: netops-vector-router:0.40.0-curl
+    mem_limit: ${VECTOR_MEM_LIMIT:-512m}
+    cpus: ${VECTOR_CPU_LIMIT:-2}
+    logging: *deflog
+    # F-51: DIRECTORY mount — see the note on vector-aggregator above. This is
+    # the service the stale-inode trap was caught on.
+    #
+    # Item 121: the second --config is the GENERATED per-tenant processor hook
+    # file (api writes it into data/api/processors/router; install.py seeds a
+    # no-op default so a cold start never boots against a missing component).
+    # --watch-config hot-applies rule changes; Vector validates a reload and
+    # keeps the old topology on error, so a bad generate can't take the lane
+    # down. (--watch-config watches CONFIG files only — the earlier claim here
+    # that it also covered enrichment reload was WRONG; enrichment tables are
+    # read once per (re)load, which is F-10.)
+    #
+    # F-10: boot through the enrichment-reload wrapper (shared script from
+    # ./vector, mounted below as a DIRECTORY per F-51). compose `command`
+    # arrives as the wrapper's "$@"; an entrypoint override DROPS the image
+    # CMD (lesson e) — keep `command` explicit.
+    entrypoint: ["/bin/sh", "/etc/vector/shared/cx-enrichment-reload.sh"]
+    command: ["--config", "/etc/vector/conf/vector.yaml", "--config", "/etc/vector/processors/processors.yaml", "--watch-config"]
     environment:
       # ClickHouse credentials are interpolated into vector.yaml at startup.
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-netops}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD required}
+      BROKER_URLS: ${BROKER_URLS:-kafka:9092}
+      # Sealed Fields (#129): the `exec` secret backend fetches per-tenant seal
+      # keys from the api over the stack-internal credential. Unset INGEST_TOKEN
+      # makes the backend refuse rather than fetch keys unauthenticated.
+      SEALING_API_URL: ${SEALING_API_URL:-http://api:8080}
+      INGEST_USER: ${INGEST_USER:-netops-ingest}
+      INGEST_TOKEN: ${INGEST_TOKEN:-}
     volumes:
-      - ./vector-router/vector.yaml:/etc/vector/vector.yaml:ro
+      - ./vector-router:/etc/vector/conf:ro
+      # F-10: the shared enrichment-reload wrapper lives in ./vector — mounted
+      # as a DIRECTORY (F-51: file mounts pin inodes across edits).
+      - ./vector:/etc/vector/shared:ro
+      # F-49: the device→tenant enrichment CSV, same read-only mount the
+      # aggregator has. Flows reach the bus straight from goflow2 now, so this
+      # tier is where their tenant stamp is applied.
+      - ../../data/api/enrichment:/etc/vector/enrichment:ro
+      # Item 121: generated processor hooks (DIRECTORY mount per F-51 — the
+      # api's write-then-rename must be visible to --watch-config).
+      - ../../data/api/processors/router:/etc/vector/processors:ro
+    # Liveness: Vector's API /health (process-level). A WEDGED SINK keeps the
+    # API healthy, so this only catches a fully-hung process — the sink-wedge
+    # case (input advancing, output stale) is handled by pipeline-watchdog.sh.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8686/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    # Broker dependency intentionally absent (external-broker mode; sources
+    # reconnect with backoff).
     depends_on:
-      redpanda:    { condition: service_healthy }
       opensearch:  { condition: service_started }
       clickhouse:  { condition: service_started }
       victoria:    { condition: service_started }
@@ -189,24 +714,159 @@ services:
   # =========================================================================
 
   opensearch:
-    image: opensearchproject/opensearch:2.16.0
+    # Slim build over the pinned stock image: ~560 MB of unused plugins removed
+    # (ml/knn/sql/PA/security-analytics/…, security KEPT for the prod flip) —
+    # see opensearch/Dockerfile for the full list + rationale. The FROM pin is
+    # the digest that used to sit on this line.
+    build:
+      context: ./opensearch
+    image: netops-opensearch:2.16.0-slim
+    # mem_limit caps the heaviest service so it can't OOM the host. Heap is kept
+    # well under the limit (rest is page cache). Sized for a 15 GiB host; bump
+    # OS_MEM_LIMIT/OPENSEARCH_HEAP in .env when the host grows.
+    mem_limit: ${OS_MEM_LIMIT:-3g}
+    cpus: ${OS_CPU_LIMIT:-3}
+    logging: *deflog
     environment:
       cluster.name: netops-search
       node.name: opensearch
       discovery.type: single-node
       bootstrap.memory_lock: "true"
-      OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+      OPENSEARCH_JAVA_OPTS: "-Xms${OPENSEARCH_HEAP:-1g} -Xmx${OPENSEARCH_HEAP:-1g}"
       DISABLE_SECURITY_PLUGIN: "true"    # dev default; flip for prod and add certs
+      # F-59: a snapshot repository cannot be registered at all unless the
+      # allowed path is declared here FIRST — `GET _snapshot` returned {} on
+      # the live stack, i.e. there was no backup of any search index, ever.
+      # Combined with number_of_replicas: 0 (F-07) that left the search tier
+      # with no redundancy at either layer: one corrupt shard was permanent
+      # loss. opensearch-init registers the repo + a daily snapshot policy.
+      path.repo: "/usr/share/opensearch/snapshots"
     ulimits:
       memlock: { soft: -1, hard: -1 }
       nofile:  { soft: 65536, hard: 65536 }
     volumes:
       - ../../data/opensearch:/usr/share/opensearch/data
+      # F-59: snapshot destination. A separate directory from data/opensearch
+      # on purpose — a snapshot living inside the thing it backs up is not a
+      # backup. Copy/rsync data/opensearch-snapshots off-host to make it one.
+      - ../../data/opensearch-snapshots:/usr/share/opensearch/snapshots
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
     networks: [netops]
     restart: *restart
 
+  # One-shot: installs the ISM retention policy (deletes netops-* log/flow indices
+  # after OPENSEARCH_LOG_RETENTION_DAYS) once OpenSearch is healthy, then exits.
+  # The #1 disk-fill protection for a multi-day run.
+  # SEC-008: one-shot security-config bootstrap. Reuses the opensearch image
+  # (the only place securityadmin.sh + hash.sh live), applies users/roles/
+  # mappings REMOTELY (-h opensearch), then exits. Profile-gated: a fresh
+  # install keeps the documented plaintext baseline until TLS enablement.
+  opensearch-security-init:
+    image: netops-opensearch:2.16.0-slim
+    logging: *deflog
+    profiles: [security]
+    restart: "no"
+    entrypoint: ["/security/apply-security.sh"]
+    environment:
+      OS_HOST: opensearch
+      OS_PORT: "9200"
+      SEC_CONF_SRC: /security
+      OS_ADMIN_CA: /certs/ca.pem
+      OS_ADMIN_CERT: /certs/admin/admin.crt
+      OS_ADMIN_KEY: /certs/admin/admin.key
+      OS_API_PASSWORD: ${OS_API_PASSWORD:-}
+      OS_ROUTER_PASSWORD: ${OS_ROUTER_PASSWORD:-}
+      OS_CORRELATION_PASSWORD: ${OS_CORRELATION_PASSWORD:-}
+      OS_BOOTSTRAP_PASSWORD: ${OS_BOOTSTRAP_PASSWORD:-}
+      OS_DASHBOARDS_PASSWORD: ${OS_DASHBOARDS_PASSWORD:-}
+      OS_AGGREGATOR_PASSWORD: ${OS_AGGREGATOR_PASSWORD:-}
+    volumes:
+      - ./opensearch/security:/security:ro
+      - ../../data/tls:/certs:ro
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    networks: [netops]
+
+  # SEC-010: authenticating TLS front for VictoriaMetrics — one scoped basic
+  # credential per service identity (src/config/vmauth.yml), serving HTTPS
+  # with its registry SVID (SEC-003.3). Profile-gated: a fresh install keeps
+  # the documented plaintext baseline (clients dial victoria:8428 directly);
+  # the TLS enablement activates the profile and repoints clients via their
+  # existing VICTORIA_URL/METRICS_URL seams. Anonymous WRITE to the metrics
+  # store (alert forgery/suppression, STORE-003) dies when the cutover lands.
+  vmauth:
+    image: victoriametrics/vmauth:v1.101.0@sha256:2b56af142a4a5549a333a3882b10cfb01de7807979ffec46f081152ad238d666
+    profiles: [vmauth]
+    mem_limit: 128m
+    cpus: 0.5
+    logging: *deflog
+    restart: unless-stopped
+    command:
+      - "-auth.config=/etc/vmauth/config/vmauth.yml"
+      - "-tls"
+      - "-tlsCertFile=/tls/vmauth.crt"
+      - "-tlsKeyFile=/tls/vmauth.key"
+      - "-httpListenAddr=:8427"
+    environment:
+      VMAUTH_API_PASSWORD: ${VMAUTH_API_PASSWORD:-}
+      VMAUTH_GNMIC_PASSWORD: ${VMAUTH_GNMIC_PASSWORD:-}
+      VMAUTH_VECTOR_PASSWORD: ${VMAUTH_VECTOR_PASSWORD:-}
+      VMAUTH_VMALERT_PASSWORD: ${VMAUTH_VMALERT_PASSWORD:-}
+      VMAUTH_GRAFANA_PASSWORD: ${VMAUTH_GRAFANA_PASSWORD:-}
+      VMAUTH_PROBER_PASSWORD: ${VMAUTH_PROBER_PASSWORD:-}
+    volumes:
+      # F-51: DIRECTORY mount (same src/config dir the api/victoria mount).
+      - ../../src/config:/etc/vmauth/config:ro
+      - ../../data/tls/services/vmauth:/tls:ro
+    networks: [netops]
+    depends_on:
+      victoria:
+        condition: service_started
+
+  opensearch-init:
+    image: curlimages/curl:8.10.1@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b
+    logging: *deflog
+    restart: "no"
+    environment:
+      OPENSEARCH_URL: http://opensearch:9200
+      OPENSEARCH_LOG_RETENTION_DAYS: ${OPENSEARCH_LOG_RETENTION_DAYS:-14}
+      # F-11: quarantined (unattributable) envelopes keep their own bounded
+      # window — re-attribution may need longer than the log default, but
+      # retention is never unbounded (INV-F11-09).
+      QUARANTINE_RETENTION_DAYS: ${QUARANTINE_RETENTION_DAYS:-30}
+      # F-07: replica posture. 0 on the single-node appliance (a replica can
+      # never be assigned there and pins the cluster yellow forever — F-53's
+      # root cause); >= 1 on any real multi-node cluster, where 0 replicas plus
+      # no snapshots means one corrupt shard is unrecoverable.
+      OPENSEARCH_REPLICAS: ${OPENSEARCH_REPLICAS:-0}
+      # F-59: how many daily snapshots to keep, and whether to register the
+      # repository at all. 0 disables (documented escape hatch for an operator
+      # who backs up at the volume layer instead).
+      OPENSEARCH_SNAPSHOT_KEEP: ${OPENSEARCH_SNAPSHOT_KEEP:-14}
+    # F-51: DIRECTORY mount (see vector-aggregator).
+    entrypoint: ["sh", "/opensearch-init/apply-ism.sh"]
+    volumes:
+      - ./opensearch:/opensearch-init:ro
+    depends_on:
+      opensearch: { condition: service_healthy }
+    networks: [netops]
+
   opensearch-dashboards:
-    image: opensearchproject/opensearch-dashboards:2.16.0
+    image: opensearchproject/opensearch-dashboards:2.16.0@sha256:14fd4d7882d1adf71fcb01142e38b571add4d7e65dedcd8beffc444520b22a8b
+    profiles: ["osd"]
+    # Power-user log/index forensics UI (served under /search). Always-on so its
+    # index patterns and Discover are available out of the box. ~0.7 GiB; cap via
+    # OSD_MEM_LIMIT. To run leaner, comment this service out and use the in-app
+    # Logs view + Grafana instead.
+    mem_limit: ${OSD_MEM_LIMIT:-768m}
+    cpus: ${OSD_CPU_LIMIT:-2}
+    logging: *deflog
     environment:
       OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
       DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
@@ -221,48 +881,348 @@ services:
   # =========================================================================
 
   victoria:
-    image: victoriametrics/victoria-metrics:v1.101.0
+    image: victoriametrics/victoria-metrics:v1.101.0@sha256:91d0456cc064e195869175074ced2a6849d72531613b320492698e5fe935d10a
+    mem_limit: ${VICTORIA_MEM_LIMIT:-1536m}
+    cpus: ${VICTORIA_CPU_LIMIT:-2}
+    logging: *deflog
     command:
       - "--retentionPeriod=${VICTORIA_RETENTION:-30d}"
       - "--storageDataPath=/victoria"
+      # Keep one sample per series per 30s window — every producer runs at
+      # >=30s cadence (SNMP 30-60s, gNMI sample-interval 30s, STAMP_INTERVAL
+      # 30s, Prometheus scrape 30s), so this only drops duplicates, never
+      # signal. Standard VM pairing with the scrape interval (#96).
+      - "--dedup.minScrapeInterval=${VICTORIA_DEDUP:-30s}"
+      # #102: assert the cache budget (VM default 60% of cgroup) explicitly so
+      # the resource plan owns it; container limit remains the hard backstop.
+      - "--memory.allowedPercent=${VICTORIA_MEM_ALLOWED_PERCENT:-60}"
+      # VM scrapes the stack's self-metrics itself (Prometheus removed, #97
+      # footprint pass). suppressScrapeErrors: optional add-on targets
+      # (cadvisor/node/grafana) are silent no-ops while their add-on is off.
+      # F-51: DIRECTORY mount (see vector-aggregator) — src/config is the same
+      # dir the api already mounts at /config, so this follows existing shape.
+      - "--promscrape.config=/etc/victoria/config/vmscrape.yml"
+      - "--promscrape.suppressScrapeErrors"
+      # Reload the scrape config when the file changes instead of requiring a
+      # restart — with a directory mount the new inode is now actually visible.
+      - "--promscrape.configCheckInterval=60s"
     volumes:
       - ../../data/victoria:/victoria
+      - ../../src/config:/etc/victoria/config:ro
+    healthcheck:
+      # 127.0.0.1, not localhost: busybox wget tries ::1 first and the server
+      # only listens on IPv4 → false "unhealthy" while the service is fine.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8428/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
     networks: [netops]
     restart: *restart
 
-  prometheus:
-    image: prom/prometheus:v2.54.1
+  # Prometheus was REMOVED (#97 footprint pass): VictoriaMetrics scrapes the
+  # stack's self-metrics itself (vmscrape.yml above) and the alert engine
+  # already evaluated rules.yaml against VM — one store, one query API.
+  # vmalert below is VictoriaMetrics' OWN rule evaluator — NOT Prometheus, and
+  # not a second metrics store. Do not reintroduce Prometheus.
+
+  # =========================================================================
+  # ALERT EVALUATION — vmalert  (F-16)
+  # =========================================================================
+  #
+  # Before this service existed the platform had NO standing metric-based
+  # alerting: no vmalert, no Alertmanager, Grafana's provisioned alert-rules
+  # list was literally `[]`, and src/config/rules.yaml — a carefully written,
+  # 860-line, ~33-rule file — was evaluated by NOTHING. It was documentation
+  # wearing the costume of a control. Every "add an alert" remediation in the
+  # audit had nowhere to land.
+  #
+  # Why this in ADDITION to the in-API engine (src/backend/alerts/engine.go):
+  # that engine runs INSIDE the api process. It therefore cannot alert on the
+  # api being down, wedged, OOM-killed or crash-looping — the failure modes an
+  # observability platform is most embarrassed to miss. vmalert is an external
+  # evaluator with its own process, its own lifecycle and its own container
+  # limits. The two read the SAME rules.yaml, so there is one source of truth.
+  #
+  # Notification path: the api's OWN Alertmanager-v2 receiver, by default.
+  #
+  # This used to be `-notifier.blackhole`, justified by "the firing state is
+  # remote-written back into VictoriaMetrics as the ALERTS / ALERTS_FOR_STATE
+  # series, so it is queryable". Queryable is not delivered. On 2026-09-02 a
+  # three-hour correlation-engine outage passed unnoticed with THIRTEEN alerts
+  # standing firing the whole time, because nothing was watching the query and
+  # no rule had ever reached a human. `-remoteWrite.url` below still writes
+  # those series (Grafana, the in-app boards and scripts/stack-watchdog.sh all
+  # read them) — but the series is now the RECORD, not the delivery mechanism.
+  #
+  # vmalert's `-notifier.url` is an Alertmanager BASE url: the notifier appends
+  # `/api/v2/alerts` itself, so the flag below produces
+  # `POST /api/internal/vmalert/api/v2/alerts` against the api on :8080. The
+  # receiver (src/backend/internal/alertwebhook) authenticates the shared
+  # secret, refuses anything carrying a tenant label, and fans the rest into the
+  # notify.Dispatcher channels the operator has already configured.
+  #
+  # The credential is Basic auth (any username), and it is handed to vmalert as
+  # a FILE, never on the command line — QA defect D-16, 2026-09-03: it used to
+  # ride the `-notifier.url` userinfo, which put it verbatim in the container's
+  # `Config.Cmd`, so `docker inspect netops-vmalert-1` disclosed it to every
+  # account in the `docker` group without touching .env. §8 says no hardcoded
+  # credentials, and container argv is as readable as a file.
+  #
+  # The compose `secrets:` block at the foot of this file sources the value from
+  # the VMALERT_WEBHOOK_TOKEN environment variable and materialises it inside
+  # the container at /run/secrets/<name>. Verified 2026-09-03: the value appears
+  # nowhere in `docker inspect` (not Config.Cmd, not Config.Env, not Mounts) and
+  # arrives byte-exact with no trailing newline. It stays a PLAINTEXT value in
+  # .env on purpose: this container must be able to present it, so it cannot be
+  # vault-sealed (exactly like INGEST_TOKEN).
+  #
+  # VMALERT_WEBHOOK_TOKEN must now be SET for vmalert to start — compose refuses
+  # to materialise a secret from an unset variable and says which one. That is
+  # deliberate (§10, no silent failures): the previous behaviour was to start
+  # and POST an empty credential, which the api refuses anyway, so the alerts
+  # were evaluated and delivered nowhere with nothing naming the cause.
+  # install.py mints the variable on every install and migrates older .env files.
+  #
+  # No `depends_on: api`. It would not create a cycle (the api depends on the
+  # storage tier only), but it would transitively block the alert EVALUATOR
+  # behind postgres/redis healthchecks — down for exactly the window it should
+  # be watching. Delivery is idempotent and repeated: an active alert is
+  # re-posted every evaluation interval, so a POST that lands while the api is
+  # still booting is retried 30s later at no cost.
+  #
+  # Explicit opt-outs, both still supported:
+  #   VMALERT_NOTIFIER_FLAG=-notifier.blackhole            (deliver nothing)
+  #   VMALERT_NOTIFIER_FLAG=-notifier.url=http://alertmanager:9093
+  # The notifier flags are mutually exclusive in vmalert, which is why this is
+  # ONE overridable slot rather than a list.
+  vmalert:
+    image: victoriametrics/vmalert:v1.101.0@sha256:83137300d1451461884093697fbbeea56529cc8201d3b31cdce3b530e8d5af6f
+    mem_limit: ${VMALERT_MEM_LIMIT:-256m}
+    cpus: ${VMALERT_CPU_LIMIT:-1}
+    logging: *deflog
     command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-      - "--web.external-url=http://localhost:8000/prometheus/"
-      - "--web.route-prefix=/"
+      # F-51: rules come from a DIRECTORY mount, so editing rules.yaml and
+      # restarting actually reloads the edited file.
+      - "-rule=/etc/vmalert/config/rules.yaml"
+      # Scale-SLO rules (GA readiness): vmalert-only — the in-API engine keeps
+      # reading rules.yaml alone. Runbooks: docs/ops/OBSERVABILITY_AUDIT.md.
+      - "-rule=/etc/vmalert/config/rules-scale-slo.yaml"
+      - "-datasource.url=http://victoria:8428"
+      - "-remoteWrite.url=http://victoria:8428"
+      - "-remoteRead.url=http://victoria:8428"
+      # Survive a vmalert restart without re-firing every active alert from
+      # scratch (restores `for:` state from the ALERTS_FOR_STATE series).
+      - "-evaluationInterval=${VMALERT_EVAL_INTERVAL:-30s}"
+      # Hot-reload rules.yaml without a restart.
+      - "-configCheckInterval=60s"
+      - "-external.label=stack=${COMPOSE_PROJECT_NAME:-netops}"
+      # D-16: the shared secret is read from the mounted secret file, NOT from
+      # the url userinfo. The username is arbitrary (the receiver compares the
+      # PASSWORD in constant time and accepts any user).
+      - "-notifier.basicAuth.username=vmalert"
+      - "-notifier.basicAuth.passwordFile=/run/secrets/vmalert_notifier_password"
+      - "${VMALERT_NOTIFIER_FLAG:--notifier.url=http://api:8080/api/internal/vmalert}"
+    secrets:
+      - vmalert_notifier_password
     volumes:
-      - ../../src/config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ../../src/config/rules.yaml:/etc/prometheus/rules.yaml:ro
-      - ../../data/prometheus:/prometheus
+      - ../../src/config:/etc/vmalert/config:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8880/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      victoria: { condition: service_started }
+    networks: [netops]
+    restart: *restart
+
+  # =========================================================================
+  # KAFKA CONSUMER-LAG EXPORTER  (F-46)
+  # =========================================================================
+  #
+  # The bus had NO lag metric of any kind: `vmscrape.yml` had no kafka job and
+  # a repo-wide grep for "lag" found nothing. That matters because every
+  # flat-line alert in rules.yaml requires `increase(...) == 0` EXACTLY, so the
+  # realistic degradation shape — a consumer running 10x slow because
+  # ClickHouse or OpenSearch is struggling — tripped absolutely nothing. Lag is
+  # also the ONLY signal that distinguishes "the bus is quiet because the
+  # network is quiet" from "the bus is quiet because the consumer is dead":
+  # producer rate and consumer rate both read zero in each case, but lag only
+  # grows in the second.
+  #
+  # The broker exposes JMX only, which is why a native scrape was previously
+  # judged not worth it — this is a 15 MB sidecar that speaks the Kafka admin
+  # protocol instead, so no JMX agent and no broker restart is required.
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.7.0@sha256:e90b7ba06d97717224d67774fc7f208c26d1c4dafd4c8011185b0d45b5b38ace
+    profiles: ["self-monitoring"]
+    mem_limit: ${KAFKA_EXPORTER_MEM_LIMIT:-128m}
+    cpus: ${KAFKA_EXPORTER_CPU_LIMIT:-0.5}
+    logging: *deflog
+    command:
+      - "--kafka.server=${BROKER_URLS:-kafka:9092}"
+      - "--topic.filter=^netops\\..*"
+      - "--group.filter=^netops-.*"
+    networks: [netops]
+    restart: *restart
+
+  # cAdvisor — per-container CPU/memory/network/restart/OOM metrics for EVERY
+  # service (reads the docker runtime). The backbone of stack self-monitoring:
+  # one scrape gives VM resource + restart data for all containers, so the
+  # resource-exhaustion / restart-loop alerts work without per-service
+  # instrumentation. Read-only host mounts. `self-monitoring` add-on.
+  cadvisor:
+    # v0.52.1: v0.49 could not see containers once the docker daemon switched to
+    # the containerd image store (storage driver "overlayfs") — every
+    # container_* series vanished and ContainerDown false-fired via absent().
+    image: gcr.io/cadvisor/cadvisor:v0.52.1@sha256:f40e65878e25c2e78ea037f73a449527a0fb994e303dc3e34cb6b187b4b91435
+    profiles: ["self-monitoring"]
+    mem_limit: ${CADVISOR_MEM_LIMIT:-256m}
+    cpus: ${CADVISOR_CPU_LIMIT:-1}
+    logging: *deflog
+    # 30s housekeeping halves cadvisor's steady sampling cost; container-level
+    # trends/alerts don't need 15s resolution (#96d).
+    # enable_metrics without `disk`: the per-container rw-layer (layerdb) lookup
+    # behind disk-usage stats doesn't exist under docker's containerd image
+    # store and made the docker handler fail per-container. cpu/memory/network/
+    # oom/restart cover every container-level alert; host disk is node-exporter's.
+    #
+    # F-35 (2026-07-21) — WHY THE CONTAINERD HANDLER, NOT THE DOCKER HANDLER:
+    #
+    # Every container-level alert in rules.yaml (ContainerDown, restart-loop,
+    # OOMKilled, memory-near-limit, CPU-saturated) matched ZERO series. The
+    # cause was not the alert expressions; it was that cAdvisor emitted no
+    # per-container series AT ALL. Live proof before the fix:
+    #     /api/v1/series?match[]=container_last_seen  ->  exactly ONE series,
+    #     {job="cadvisor", id="/"}   (the root cgroup, nothing else)
+    # and the log repeating, once per container, forever:
+    #     "Failed to create existing container: /system.slice/docker-<id>.scope:
+    #      failed to identify the read-write layer ID ... open /rootfs/var/lib/
+    #      docker/image/overlayfs/layerdb/mounts/<id>/mount-id: no such file"
+    #
+    # Under docker's containerd image store (storage driver "overlayfs") there
+    # is no image/<driver>/layerdb tree, so cAdvisor's DOCKER handler fails at
+    # container-creation time for every container. It still CLAIMS each
+    # docker-*.scope cgroup ahead of the raw handler, so nothing else picks
+    # them up and there is no fallback — dropping --docker_only does not help.
+    # Verified empirically: a side-by-side cAdvisor without --docker_only still
+    # produced 0 docker-scope series.
+    #
+    # The fix is to take the docker handler out of the running: point --docker
+    # at a socket that does not exist (registration then fails cleanly at boot)
+    # and hand cAdvisor the containerd socket for docker's own "moby" namespace.
+    # Measured after this change: 28 per-container series with real
+    # container_spec_memory_limit_bytes values, vs 1 before.
+    #
+    # NOTE FOR THE RULES: the containerd handler labels series id/name/image,
+    # where `name` is the container ID hash, NOT "netops-api-1". The old
+    # {name=~"netops-.+"} selector can therefore never match on this host — the
+    # rules now select {name!=""}, which is what actually separates a container
+    # from a cgroup slice and is independent of the cgroup driver.
+    command: ["--housekeeping_interval=30s", "--store_container_labels=false",
+              "--enable_metrics=cpu,memory,network,oom_event",
+              "--docker=unix:///var/run/docker-handler-disabled.sock",
+              "--containerd=/run/containerd/containerd.sock",
+              "--containerd-namespace=moby"]
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
+    devices:
+      - /dev/kmsg
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks: [netops]
+    restart: *restart
+
+  # node-exporter — host CPU/memory/disk/load/filesystem metrics.
+  node-exporter:
+    image: prom/node-exporter:v1.8.2@sha256:065914c03336590ebed517e7df38520f0efb44465fde4123c3f6b7328f5a9396
+    profiles: ["self-monitoring"]
+    mem_limit: ${NODE_EXPORTER_MEM_LIMIT:-128m}
+    cpus: ${NODE_EXPORTER_CPU_LIMIT:-0.5}
+    logging: *deflog
+    command:
+      - "--path.rootfs=/host"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
     networks: [netops]
     restart: *restart
 
   grafana:
-    image: grafana/grafana:11.2.0
+    image: grafana/grafana:11.2.0@sha256:408afb9726de5122b00a2576763a8a57a3c86d5b0eff5305bc994ceb3eb96c3f
+    profiles: ["self-monitoring"]
+    # Same bind-mount ownership rule as the api: run as the installing user so
+    # data/grafana (created unprivileged) is writable. Default = image's 472.
+    user: "${CORRELIX_UID:-472}:${CORRELIX_GID:-472}"
+    mem_limit: ${GRAFANA_MEM_LIMIT:-512m}
+    cpus: ${GRAFANA_CPU_LIMIT:-1.5}
+    logging: *deflog
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD required}
       GF_SERVER_ROOT_URL: "http://localhost:8000/grafana/"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      # Seamless SSO — auth-proxy: the app's osd-gate authenticates the platform
+      # owner and nginx forwards their username as X-WEBAUTH-USER on /grafana, so
+      # Grafana auto-signs-in AS that user (no "not signed in" / no Grafana login
+      # screen). Grafana trusts the header only from nginx (it overwrites any
+      # client copy); whitelist left open on the internal bridge — set
+      # GF_AUTH_PROXY_WHITELIST to the nginx IP/CIDR in prod.
+      GF_AUTH_PROXY_ENABLED: "true"
+      GF_AUTH_PROXY_HEADER_NAME: "X-WEBAUTH-USER"
+      GF_AUTH_PROXY_HEADER_PROPERTY: "username"
+      GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
+      GF_AUTH_PROXY_SYNC_TTL: "60"
+      GF_AUTH_PROXY_HEADERS_ENCODED: "false"
+      GF_USERS_AUTO_ASSIGN_ORG: "true"
+      GF_USERS_AUTO_ASSIGN_ORG_ROLE: "Admin"
+      # Anonymous kept as a fallback so embedded panels still render if a request
+      # ever arrives without the proxy header (auth-proxy takes precedence when
+      # the header is present, which nginx always sets for /grafana).
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+      GF_AUTH_ANONYMOUS_ORG_NAME: "Main Org."
+      # Auth-proxy hygiene, NOT branding (licence audit D1, 2026-09-04): with
+      # X-WEBAUTH-USER auto-sign-in on, Grafana's own login form and sign-out
+      # menu are dead ends that would sign the operator out of a session nginx
+      # immediately re-establishes. These are Grafana's OWN configuration knobs.
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_DISABLE_SIGNOUT_MENU: "true"
+      # Correlix is a light-canvas product — Grafana's own theme setting makes
+      # the embed match. This is the ONLY visual alignment applied: the nginx
+      # /grafana/ route no longer rewrites Grafana's HTML (AGPL-3.0 "unmodified"
+      # posture — see deployment/docker/nginx/default.conf).
+      GF_USERS_DEFAULT_THEME: "light"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
       # Allow the dashboard to embed Grafana in an <iframe>. Without this
       # Grafana sends X-Frame-Options: deny and the UI shows "refused to
       # connect". Served same-origin under /grafana/ via nginx.
       GF_SECURITY_ALLOW_EMBEDDING: "true"
       # Default empty so Grafana boots on networks that block plugin
-      # downloads (corporate TLS interception). Set
-      # GRAFANA_PLUGINS=grafana-clickhouse-datasource in .env to enable.
+      # downloads (corporate TLS interception). scripts/install.py installs
+      # grafana-clickhouse-datasource into the bind-mounted plugins dir with an
+      # insecure fallback for intercepted networks; on clean networks you can
+      # instead set GRAFANA_PLUGINS=grafana-clickhouse-datasource in .env.
       GF_INSTALL_PLUGINS: ${GRAFANA_PLUGINS:-}
+      # Read-only ClickHouse user the provisioned ClickHouse datasource binds to
+      # (tenant_scope='' → platform/infra rows only). Created by install.py.
+      GRAFANA_CH_PASSWORD: ${GRAFANA_CH_PASSWORD:-}
     volumes:
       - ../../data/grafana:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
-    depends_on: [prometheus, victoria]
+    depends_on: [victoria, clickhouse]
     networks: [netops]
     restart: *restart
 
@@ -271,17 +1231,82 @@ services:
   # =========================================================================
 
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8-alpine
+    image: clickhouse/clickhouse-server:24.8-alpine@sha256:b002e56ed5c16e224c312527f6fcba7e77216fec5d7a88a7828f59efc614feb5
+    # PID-1 REAPING (incident 2026-08-19). This container's PID 1 is
+    # clickhouse-server, which is an application, not an init — it never reaps
+    # orphaned children. The TLS-wave healthcheck (`wget https://...`, added
+    # 2026-08-09) makes BusyBox wget fork an `ssl_client` helper for the
+    # handshake; wget exits first, so ssl_client is orphaned onto PID 1 and
+    # becomes a zombie that nothing reaps. Each zombie still holds a PID charge
+    # against the cgroup, so the container accumulated ONE leaked PID EVERY 10
+    # SECONDS and hit systemd's DefaultTasksMax=19046 after ~52h — at which
+    # point NOTHING in the container could fork, including the healthcheck
+    # itself ("procReady not received"). `init: true` puts tini at PID 1, which
+    # reaps orphans. Do not remove this in favour of raising the PID ceiling:
+    # a ceiling only changes how long the leak takes to kill the service.
+    init: true
+    # Server memory = CH_MEM_RATIO x the cgroup limit, ASSERTED in
+    # clickhouse/memory.xml (#102) — no longer riding the stock-image default.
+    # Re-tuned 2560m→4g (host had ~8.7Gi headroom): high-fps flow ingest (lab
+    # traffic generator, ~16M rows/h) made Top-talkers/Fanout GROUP BYs exceed
+    # the old cap (MEMORY_LIMIT_EXCEEDED → empty panels).
+    mem_limit: ${CLICKHOUSE_MEM_LIMIT:-4g}
+    cpus: ${CLICKHOUSE_CPU_LIMIT:-3}
+    logging: *deflog
     environment:
       CLICKHOUSE_DB: netops
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-netops}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD required}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+      # #102: internal limits owned by the resource plan; defaults preserve
+      # today's exact values (stock ratio 0.9 / 1g hot_ui / 2g bg / 1.5g spill
+      # / stock 100 concurrent).
+      CH_MEM_RATIO: ${CH_MEM_RATIO:-0.9}
+      # P2 merge-memory budget (docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md).
+      # ABSOLUTE caps measured against this container's cgroup; ClickHouse takes
+      # min(explicit, ratio x cgroup), so they stay safe on a smaller box and 0
+      # restores the ratio-only behavior. Arithmetic in clickhouse/memory.xml.
+      #   4 GiB  = 5,326 MiB cgroup - 1,230 MiB page-cache/slab headroom
+      #   1.5 GiB merge budget = 37.5 % of that (peak measured: 3,978 MiB)
+      CH_MAX_SERVER_MEMORY: ${CH_MAX_SERVER_MEMORY:-4294967296}
+      CH_MERGES_MEM: ${CH_MERGES_MEM:-1610612736}
+      CH_HOT_UI_MEM: ${CH_HOT_UI_MEM:-1073741824}
+      CH_BG_MEM: ${CH_BG_MEM:-2147483648}
+      CH_SPILL_BYTES: ${CH_SPILL_BYTES:-1610612736}
+      CH_MAX_CONCURRENT_QUERIES: ${CH_MAX_CONCURRENT_QUERIES:-100}
     volumes:
       - ../../data/clickhouse:/var/lib/clickhouse
       - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # #20 Phase 2: declare the `tenant_` custom-setting prefix so row policies
+      # can enforce per-tenant isolation via getSetting('tenant_scope').
+      - ./clickhouse/custom-settings.xml:/etc/clickhouse-server/config.d/custom-settings.xml:ro
+      # Native Prometheus endpoint on :9363 for stack self-monitoring.
+      - ./clickhouse/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
+      # #102: assert server-memory ratio + concurrency from the resource plan.
+      - ./clickhouse/memory.xml:/etc/clickhouse-server/config.d/memory.xml:ro
+      # #96a: disable heavyweight system.* introspection logs + TTL the kept ones
+      # (measured 5.8 GiB of self-logging vs 0.45 GiB of data without this).
+      - ./clickhouse/system-logs.xml:/etc/clickhouse-server/config.d/system-logs.xml:ro
+      # 2026-09-03: bound the SERVER log. /var/log/clickhouse-server is NOT a
+      # mount, so its 1.8 GiB sat in the container's writable layer where
+      # neither `du data/` nor the x-logging stdout cap can see it. logger.xml
+      # drops the stock trace/1000M/10 defaults to information/100M/3.
+      - ./clickhouse/logger.xml:/etc/clickhouse-server/config.d/logger.xml:ro
+      # Spill heavy GROUP BY/ORDER BY to disk instead of OOMing the lab memory cap.
+      - ./clickhouse/query-spill.xml:/etc/clickhouse-server/users.d/query-spill.xml:ro
+      # #101 workload fairness: named settings profiles (hot_ui/background) the
+      # API selects per query via ch_workload.go — hot UI reads fail small and
+      # alone; background workers yield to interactive load.
+      - ./clickhouse/workload-profiles.xml:/etc/clickhouse-server/users.d/workload-profiles.xml:ro
     ulimits:
       nofile: { soft: 262144, hard: 262144 }
+    healthcheck:
+      # 127.0.0.1, not localhost — same IPv6-loopback false-unhealthy gotcha.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8123/ping || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     networks: [netops]
     restart: *restart
 
@@ -289,20 +1314,189 @@ services:
   # CORRELATION + AI ENGINE — Python/FastAPI
   # =========================================================================
 
+  # HORIZONTAL SCALE (scale P0 — docs/scale-correlation.md):
+  #   BUS_PARTITIONS=N python3 scripts/install.py   (or set BUS_PARTITIONS in
+  #   .env and re-run kafka-init), then:
+  #   docker compose up -d --scale correlation=N
+  # Every bus producer keys records by tenant (Java murmur2), every topic has
+  # BUS_PARTITIONS partitions, and the consumer's RANGE assignor gives
+  # instance k partition k of EVERY topic — a complete, disjoint tenant slice
+  # per instance with worker-local state. No container_name / host ports here
+  # ON PURPOSE: both would collide under --scale.
+  # Multi-replica notes:
+  #   * /healthz /metrics /deadletters are PER-INSTANCE diagnostics; Docker
+  #     DNS round-robins correlation:8000, /findings + /correlations/{id}/
+  #     replay are ClickHouse-backed and replica-safe (vmscrape uses dns_sd
+  #     to scrape every replica).
+  #   * all replicas share the CORR_DLQ_DIR volume below (append-only NDJSON;
+  #     per-line appends — acceptable; rotation may interleave under N>1).
+  #   * replicas > partitions sit idle (range assignor leaves them empty).
   correlation:
+    # SC-008: runs as non-root appuser (see Dockerfile); lock down escalation+caps.
+    # Same PID-1 reaping class as clickhouse (incident 2026-08-19): PID 1 here
+    # is the correlation app, and 12 orphaned `python` zombies had accumulated
+    # in 22.7h. Far below the ceiling, but the same defect — fix the class.
+    init: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
     build:
       context: ../..
       dockerfile: deployment/docker/Dockerfile.correlation
+      args:
+        # Tracker 263 moved this image to python:3.12-alpine, and its BUILD
+        # stage installs gcc/musl-dev via apk (aiokafka publishes no musllinux
+        # wheel at any version, so its C extension is compiled from the
+        # hash-locked sdist). On egress that INTERCEPTS TLS — this lab: HTTPS
+        # re-signed by the SASE gateway — that apk fetch fails certificate
+        # verification, and the Dockerfile's escape hatch would be unreachable
+        # through `docker compose build`, which is what scripts/make-installer.sh
+        # runs. Same shape, same reason and the same default (https) as the
+        # vector-router service above:
+        #   APK_REPO_SCHEME=http docker compose build correlation
+        # apk still verifies SIGNED package indexes over http, so nothing the
+        # signature guarantees is lost. The runtime stage installs no packages.
+        APK_REPO_SCHEME: ${APK_REPO_SCHEME:-https}
+    # 1280m = 1.25 GiB, the tracker-165 QUALIFIED limit (2026-08-21). This is
+    # only the fallback for when the planner has not written .env; the planner
+    # floor in scripts/resource_planner.py is the source of truth and the two
+    # are pinned together by scripts/tests/test_resource_planner.py.
+    mem_limit: ${CORRELATION_MEM_LIMIT:-1280m}
+    cpus: ${CORRELATION_CPU_LIMIT:-2}
+    logging: *deflog
     environment:
-      KAFKA_BOOTSTRAP: "redpanda:9092"
+      # F-38/durability: RCA-critical evidence whose ClickHouse write is
+      # rejected is preserved here across restarts (constraint: never advance
+      # an offset past a payload that is neither committed nor durably kept).
+      CORR_DLQ_DIR: ${CORR_DLQ_DIR:-/data/deadletter}
+      KAFKA_BOOTSTRAP: ${BROKER_URLS:-kafka:9092}
       OPENSEARCH_URL: "http://opensearch:9200"
       CLICKHOUSE_URL: "http://clickhouse:8123"
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-netops}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
-      POSTGRES_DSN: "postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-netops}"
+      # SEC-011: overridable so a TLS deployment can supply
+      # ?sslmode=verify-full&sslrootcert=... without editing this file (the
+      # base default stays the documented plaintext baseline).
+      # SEC-011.2 (2026-08-06): POSTGRES_DSN REMOVED — correlation's code
+      # references it nowhere (verified against source and the running
+      # container), so the env var was an unused copy of the BOOTSTRAP
+      # SUPERUSER credential sitting in this container's environment: pure
+      # blast radius with zero function. If correlation ever needs Postgres,
+      # it gets its own least-privilege role (netops_correlation), never a
+      # shared or super credential.
       LOG_LEVEL: ${CORRELATION_LOG_LEVEL:-info}
+      # Flow-lane correlation (netops.flows → signals). ON by default; =false
+      # stops the engine deriving signals from flows, e.g. when goflow2 volume
+      # is the dominant cost and only the metric/syslog lanes are wanted.
+      ENABLE_FLOW_CORRELATION: ${ENABLE_FLOW_CORRELATION:-true}
+      # P3 ingest-boundary aggregation plane. DEFAULT ON since 2026-08-30 per
+      # the A/B decision rule (RUN_PLAN_P3_AB_2026-08-29.md §7; verdicts
+      # P3_AB_2P5K_VERDICT_2026-08-29.md + P3_PAIR_2P5K_VERDICT_2026-08-30.md,
+      # re-scored on twin scorer v2): −41 % engine signals / T1 p95 −28 % at
+      # 10 % storm share, INCOMPLETE→PASS at 25 %, neutral on the 2 % guard.
+      # Set =0 in .env to fall back. The IMAGE default stays OFF (main.py) so
+      # the A/B overlay contract (tests/test_compose_agg_overlay.py) holds.
+      CORR_AGGREGATION_PLANE: ${CORR_AGGREGATION_PLANE:-1}
+      CORR_WINDOW_BUFFER: ${CORR_WINDOW_BUFFER:-50000}   # #102
+      # #20: device→tenant map (exported by api) to stamp tenant_id on findings.
+      TENANT_ENRICHMENT_FILE: /data/enrichment/device_tenant.csv
+      # Active-measurement vantage trust (default empty=conservative). Declaring a
+      # trusted observer in .env (e.g. CORR_TRUSTED_PROBE_OBSERVERS=prober) lets its
+      # customer-path probe loss corroborate a control-plane fault → confirmed
+      # (still requires the independent BGP signal — no overclaim).
+      CORR_TRUSTED_PROBE_OBSERVERS: ${CORR_TRUSTED_PROBE_OBSERVERS:-}
+      # Which observers are measurement vantages at all (default api,prober).
+      # An enrolled client vantage (e.g. lan-vantage-1) must be listed here AND
+      # in CORR_TRUSTED_PROBE_OBSERVERS to anchor confirmed verdicts — since the
+      # truthfulness epic removed the app-lane trust hardcode, registry or
+      # declared intent×vantage are the ONLY paths to confirm-capable authority.
+      CORR_MEASUREMENT_PROBE_OBSERVERS: ${CORR_MEASUREMENT_PROBE_OBSERVERS:-api,prober}
+      # #81 P3B cloud-log file source (dev/demo + on-host drops). Reads *.alb/*.vpc
+      # from CLOUD_LOGS_DIR → P3B parsers → the cloud lane. Default-CLOSED: off unless
+      # CLOUD_LOGS_TENANT is also set (cloud logs carry no tenant; never guessed).
+      CLOUD_LOGS_DIR: ${CLOUD_LOGS_DIR:-/data/cloud-logs}
+      CLOUD_LOGS_TENANT: ${CLOUD_LOGS_TENANT:-}
+      CLOUD_LOGS_REFRESH_S: ${CLOUD_LOGS_REFRESH_S:-30}
+      # Cloud inventory topology snapshots (cloud-fixtures/*-topology.json) for the
+      # path-causality P1 INVENTORY discovery source — a cloud incident gets a
+      # discovered SRC→DST path WITHOUT a traceroute. Tenant-gated by CLOUD_LOGS_TENANT
+      # (a fixture carries no tenant), so it is inert until the cloud demo tenant is set.
+      CLOUD_TOPOLOGY_DIR: ${CLOUD_TOPOLOGY_DIR:-/data/cloud-topology}
+      # Runtime layer of the topology snapshots (static-fixture/runtime split):
+      # the live poller writes *-topology.json under data/, mounted below; a
+      # runtime file shadows the tracked fixture of the same name.
+      CLOUD_TOPOLOGY_RUNTIME_DIR: ${CLOUD_TOPOLOGY_RUNTIME_DIR:-/data/cloud-topology-runtime}
+      # #101 chaos-fixture registry: name=match pairs (comma-separated) tagging
+      # INTENTIONAL storm sources (e.g. a lab target kept dead on purpose) so
+      # Command Center badges them and auto-ticketing skips them, while the
+      # storm still exercises damping + bounded IO end to end.
+      CORR_CHAOS_FIXTURES: ${CORR_CHAOS_FIXTURES:-}
+      # #101 tenant write-amplification rollup cadence + top-K exposition size.
+      CORR_WA_FLUSH_S: ${CORR_WA_FLUSH_S:-300}
+      CORR_WA_TOPK: ${CORR_WA_TOPK:-5}
+      # A4: point the syslog lane at a PRE-SCREENED topic instead of the raw
+      # one. Exactly one entry of the subscription moves; every other lane is
+      # byte-identical. Default = the raw lane (unchanged behaviour).
+      CORR_SYSLOG_TOPIC: ${CORR_SYSLOG_TOPIC:-netops.syslog}
+      # A7: weigh evidence by parser/source fidelity tier. Default OFF — the
+      # engine scores exactly as it does today until this is turned on.
+      CORR_FIDELITY_WEIGHTING: ${CORR_FIDELITY_WEIGHTING:-0}
+      # T2b: which evidence-CLASS topics the generic intake subscribes to.
+      # DELIBERATELY a bare pass-through, NOT ${VAR:-default}: for this one
+      # variable "unset" and "empty" are different contracts — unset means
+      # every registered class's topic (the shipped default, enumerated in
+      # correlation/main.py so the list cannot drift), while the EMPTY string
+      # means subscribe to NONE (the run-time half of the removable-module
+      # constraint, and the fallback when a broker has not yet granted the
+      # correlation principal Read on a class topic). Interpolating a default
+      # here would turn "unset" into "" and silently unsubscribe every
+      # evidence class. Compose omits the variable entirely when it is absent
+      # from .env and the environment.
+      CORR_EVIDENCE_TOPICS:
+      # DEBUG-ROUTES-BEGIN
+      # Pipeline debugger (docs/design/PIPELINE_DEBUGGER_2026-09-04.md §2/§4).
+      # The correlation container is the only place in the stack that speaks
+      # Kafka from a language we ship a client for (Go has none, by CLAUDE.md
+      # §6), so the bounded read-only bus PEEK and this service's runtime
+      # log-level control live on its health sidecar and the api proxies them.
+      #
+      # DEFAULT-CLOSED AND EMPTY ON PURPOSE: with no shared secret the two debug
+      # routes answer 503 and say they are not configured, and the api's trace
+      # reports the bus stage as "not observable" WITH that reason. Set
+      # CORR_DEBUG_TOKEN in .env (same value on the api service below) to turn
+      # them on. "The port is only on the internal network" is exactly the
+      # implicit trust §3 forbids, so there is no unauthenticated mode.
+      CORR_DEBUG_TOKEN: ${CORR_DEBUG_TOKEN:-}
+      # DEBUG-ROUTES-END
+    volumes:
+      - ../../data/correlation/deadletter:/data/deadletter
+      - ../../data/api/enrichment:/data/enrichment:ro
+      - ../../data/cloud-logs:/data/cloud-logs:ro
+      # Cloud inventory topology fixtures (read-only) for the P1 INVENTORY source.
+      - ./cloud-fixtures:/data/cloud-topology:ro
+      # Runtime layer (live-poller snapshots under gitignored data/) — shadows
+      # the tracked fixtures per file (static-fixture/runtime split).
+      - ../../data/api/cloud-runtime:/data/cloud-topology-runtime:ro
+    # F-47: the correlation service had NO healthcheck, so a dead or wedged
+    # consumer was indistinguishable from a healthy one — `docker compose ps`
+    # said "Up", the watchdog's per-service check passed, and findings simply
+    # stopped being produced. REVERSED by tracker 174 (2026-08-24): probing
+    # the loop-served /metrics meant a BUSY loop read as a DEAD service — S1
+    # measured 49s engine stalls making health flap, and an orchestrator
+    # acting on that restarts a replica mid-storm (self-inflicted outage at
+    # peak load). The sidecar on :8094 is served from a daemon thread: it
+    # dies with the PROCESS (the condition a restart actually fixes) and
+    # stays up through loop stalls, which it reports as snapshot_age_s for
+    # alerting instead of restarting. Loop-wedge detection now belongs to
+    # vmalert (CorrProbeLaneFlatlined / staleness rules), not Docker health.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8094/healthz', timeout=4).status==200 else 1)\""]
+      interval: 30s
+      timeout: 8s
+      retries: 5
+      start_period: 45s
+    # Broker dependency intentionally absent (external-broker mode; the
+    # aiokafka consumer runs in a reconnect/backoff loop).
     depends_on:
-      redpanda:   { condition: service_healthy }
       opensearch: { condition: service_started }
       clickhouse: { condition: service_started }
       postgres:   { condition: service_healthy }
@@ -314,10 +1508,37 @@ services:
   # =========================================================================
 
   api:
+    # SC-008: distroless-nonroot already; lock down escalation + caps (pure Go
+    # binary on :8080 needs none).
+    # user: run as the INSTALLING user's uid (install.py writes CORRELIX_UID/
+    # GID into .env) so the bind-mounted /data — created by that user — is
+    # writable without sudo chown. Fifth virgin-host finding (2026-07-04): the
+    # image default uid 65532 cannot write a customer-created data/api and the
+    # api crash-loops on its user store. Default = image's nonroot uid.
+    user: "${CORRELIX_UID:-65532}:${CORRELIX_GID:-65532}"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    # Admit every gid to datagram-ICMP (echo only, this netns only) so the
+    # unprivileged synthetics ICMP check works without CAP_NET_RAW. Raw
+    # sockets stay impossible here — that's the prober sidecar's job.
+    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"
     build:
       context: ../..
       dockerfile: deployment/docker/Dockerfile.backend
+      # Build provenance: the running binary reports these at /admin/version,
+      # so drift between deployed image and source is DETECTABLE. Supplied by
+      # install.py / deploy tooling; "unknown" if a build bypasses them.
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    mem_limit: ${API_MEM_LIMIT:-512m}
+    cpus: ${API_CPU_LIMIT:-2}
+    logging: *deflog
     environment:
+      # #102: GC target 90% of the cgroup limit — without this the Go runtime
+      # sizes its heap against HOST RAM and the kernel OOM-kills the container.
+      GOMEMLIMIT: ${API_GOMEMLIMIT:-460MiB}
       LISTEN_ADDR: ":8080"
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -325,8 +1546,60 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME:-netops}
       REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       REDIS_PORT: "6379"
+      # Event bus: BROKER_URLS feeds the stack-health TCP probe; BUS_BRIDGE_URL
+      # is the Vector HTTP ingress the api produces bus events through (the
+      # backend is stdlib-only — no Kafka client; replaces the old pandaproxy).
+      BROKER_URLS: ${BROKER_URLS:-kafka:9092}
+      BUS_BRIDGE_URL: "http://vector-aggregator:8692"
+      # F-08 completion: the api is the ONLY bus producer, and collectors/
+      # ingest_auth.go stamps Basic auth from THIS container's environment.
+      # vector-aggregator was given the credential and the producer was not, so
+      # enabling the aggregator's auth would have rejected every event the API
+      # sends. Both halves must come from the same .env value or the pair
+      # disagrees — which is the failure ingest_auth.go's error hint describes.
+      #
+      # Default-empty (NOT :?) on purpose: an api that cannot resolve a lane
+      # token sends NO header rather than an empty password, which is the
+      # documented upgrade window. Vector is the fail-closed half of the pair.
+      INGEST_USER: ${INGEST_USER:-netops-ingest}
+      # INGEST_TOKEN here is NOT a lane credential anymore (SEC-013 narrowing):
+      # it remains ONLY the stack-internal edge-keys gate the api VERIFIES
+      # (internalStackCaller / sealingEdgeCaller) against what vector-router
+      # presents. Lane POSTs use the per-lane tokens below exclusively.
+      INGEST_TOKEN: ${INGEST_TOKEN:-}
+      # SEC-013.1 NARROWED: per-lane credentials, no shared fallback — a lane
+      # var absent from .env means that lane sends no header and 401s loudly
+      # (collector_ingest_rejected), never that the shared token rides instead.
+      INGEST_TOKEN_TRAPS: ${INGEST_TOKEN_TRAPS:-}
+      INGEST_TOKEN_PROBES: ${INGEST_TOKEN_PROBES:-}
+      INGEST_TOKEN_METRICS: ${INGEST_TOKEN_METRICS:-}
+      INGEST_TOKEN_BUS: ${INGEST_TOKEN_BUS:-}
+      # vmalert alert DELIVERY (internal/alertwebhook). vmalert's notifier
+      # POSTs Alertmanager-v2 alerts to /api/internal/vmalert/api/v2/alerts and
+      # authenticates with this shared secret (Bearer, or Basic with the token
+      # as the password — which is what lets the compose default carry it in
+      # the notifier URL's userinfo).
+      #
+      # PLAINTEXT in .env on purpose, NOT vault-sealed: the vmalert container
+      # has to be able to SEND this value, so it must exist in cleartext where
+      # compose can interpolate it — exactly like INGEST_TOKEN. Sealing it
+      # would leave vmalert with nothing to present and put alert delivery
+      # back where it started.
+      #
+      # Empty is FAIL-CLOSED: the api does not register the route at all and
+      # logs a loud warning naming the variable (never an unauthenticated
+      # alert fan-out). install.py mints it; update.sh backfills it.
+      VMALERT_WEBHOOK_TOKEN: ${VMALERT_WEBHOOK_TOKEN:-}
+      # Suppression window for a repeat of an identical alert. MUST match
+      # alertwebhook.DefaultCooldown — a compose default that drifts from the
+      # code default is a lie told to whoever reads either one.
+      VMALERT_WEBHOOK_COOLDOWN: ${VMALERT_WEBHOOK_COOLDOWN:-30m}
       VICTORIA_URL: "http://victoria:8428"
+      # Set (by install tooling) only when the self-monitoring add-on is
+      # enabled — gates the Grafana stack-health probe.
+      GRAFANA_URL: ${GRAFANA_URL:-}
       # Native Metrics Explorer + alert evaluator query this Prometheus-API
       # endpoint. Point it at VictoriaMetrics (drop-in /api/v1/query) so the
       # SNMP/device telemetry Telegraf remote_writes there is visible — see
@@ -336,16 +1609,272 @@ services:
       CLICKHOUSE_URL: "http://clickhouse:8123"
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-netops}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      # #101 correlation retention contract (corr_retention.go): hot horizons
+      # per environment profile (lab/demo/production/extended), individually
+      # overridable. Cold Parquet export: scripts/ch-cold-export.sh.
+      CORR_RETENTION_PROFILE: ${CORR_RETENTION_PROFILE:-production}
+      CORR_RETENTION_HISTORY_DAYS: ${CORR_RETENTION_HISTORY_DAYS:-}
+      CORR_RETENTION_ARCHIVE_DAYS: ${CORR_RETENTION_ARCHIVE_DAYS:-}
+      CORR_RETENTION_CLOSED_DAYS: ${CORR_RETENTION_CLOSED_DAYS:-}
+      # #101 corr_current projection drift repair cadence (0 = off).
+      CORR_CURRENT_RECONCILE_INTERVAL: ${CORR_CURRENT_RECONCILE_INTERVAL:-1h}
+      # corr_* partition-key migration knobs (chschema/corr_repartition.go; the
+      # runbook is docs/runbooks/correlation-retention-cold-archive.md,
+      # "Re-partitioning an existing deployment"). Mapped here so the runbook's
+      # "set CORR_REPARTITION=auto|force in .env" actually reaches the api —
+      # an unmapped var never crosses the container boundary. Defaults are
+      # byte-equal to the code's own (check = report-only; empty string reads
+      # as unset), so behaviour is unchanged until an operator sets .env.
+      CORR_REPARTITION: ${CORR_REPARTITION:-check}
+      CORR_REPARTITION_MAX_GIB: ${CORR_REPARTITION_MAX_GIB:-}
+      CORR_REPARTITION_BATCH_ROWS: ${CORR_REPARTITION_BATCH_ROWS:-}
+      CORR_REPARTITION_CATCHUP_PASSES: ${CORR_REPARTITION_CATCHUP_PASSES:-}
+      CORR_REPARTITION_DROP_OLD: ${CORR_REPARTITION_DROP_OLD:-}
+      # tracker 206 escape hatch: DROP every corr_*__daily shadow before an
+      # auto/force run. Ignored (loudly) in check mode. Default unset — the
+      # shadow is normally a resumable, partially finished copy worth hours,
+      # and every pass reconciles it against the source anyway.
+      CORR_REPARTITION_RESET_SHADOW: ${CORR_REPARTITION_RESET_SHADOW:-}
+      # #101 workload fairness profiles (ch_workload.go; "off" = kill-switch).
+      CH_WORKLOAD_PROFILES: ${CH_WORKLOAD_PROFILES:-}
+      # #101 first-customer alert-delivery gate: seed the ntfy critical-push
+      # channel from .env on first run (then admin-UI-editable). Critical
+      # alerts must LEAVE the app — in-app visibility alone fails acceptance.
+      # WATCHDOG_NTFY_TOPIC (optional) lets the API REFUSE the watchdog's
+      # topic for product alerts (watchdog independence is intentional).
+      FEATURE_NTFY_NOTIFICATIONS: ${FEATURE_NTFY_NOTIFICATIONS:-}
+      NTFY_ALERT_TOPIC: ${NTFY_ALERT_TOPIC:-}
+      NTFY_ALERT_SERVER: ${NTFY_ALERT_SERVER:-}
+      NTFY_ALERT_TOKEN: ${NTFY_ALERT_TOKEN:-}
+      WATCHDOG_NTFY_TOPIC: ${WATCHDOG_NTFY_TOPIC:-}
+      # PLATFORM self-health alerts (vmalert -> internal/alertwebhook) are pushed
+      # to the HOST-MONITORING channel — the same phone topic the external
+      # watchdog uses — because that route must work on an install where nobody
+      # has configured a product notification channel yet: it is how the stack
+      # reports on ITSELF. Empty topic ⇒ falls back to WATCHDOG_NTFY_TOPIC above;
+      # empty server/token ⇒ fall back to NTFY_ALERT_SERVER / NTFY_ALERT_TOKEN,
+      # then to https://ntfy.sh. The watchdog-topic REFUSAL still stands for the
+      # PRODUCT ntfy channel (notify_config.go) — that is a tenant-facing surface.
+      PLATFORM_ALERTS_NTFY_TOPIC: ${PLATFORM_ALERTS_NTFY_TOPIC:-}
+      PLATFORM_ALERTS_NTFY_SERVER: ${PLATFORM_ALERTS_NTFY_SERVER:-}
+      PLATFORM_ALERTS_NTFY_TOKEN: ${PLATFORM_ALERTS_NTFY_TOKEN:-}
+      # Alert-noise + rate-limit control (2026-09-03). ntfy.sh's free public
+      # server rate-limits per topic/IP and answered 429 on this route while
+      # chronic WARNINGS were pushing one message each; a real page can be
+      # refused behind them. The warning tier is therefore summarized into ONE
+      # digest per window, and the outbound budget reserves capacity that only a
+      # page may spend. Defaults here are byte-identical to the code's
+      # (alertwebhook DefaultWarningDigestInterval / DefaultPushBudget /
+      # DefaultPageReserve). PLATFORM_ALERTS_PUSH_BUDGET=-1 disables the guard
+      # for a self-hosted ntfy with no limits of its own.
+      PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL: ${PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL:-30m}
+      PLATFORM_ALERTS_PUSH_BUDGET: ${PLATFORM_ALERTS_PUSH_BUDGET:-30}
+      PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE: ${PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE:-10}
       CORRELATION_URL: "http://correlation:8000"
-      STATIC_DEVICES_PATH: /config/devices.yaml
+      # DEBUG-ROUTES-BEGIN
+      # Pipeline debugger (docs/design/PIPELINE_DEBUGGER_2026-09-04.md §4). The
+      # api proxies the bounded Kafka peek and the correlation log-level change
+      # to the correlation container's health sidecar; this is the shared secret
+      # for that hop. EMPTY BY DEFAULT = the bus stage reports "not observable"
+      # with the reason, and the correlation log level reports "not switchable"
+      # with the reason — never a silent degradation and never an
+      # unauthenticated internal call (§3). Set the SAME value here and on the
+      # correlation service to enable it.
+      #
+      # CORR_DEBUG_SIDECAR_URL is only needed when the sidecar is not reachable
+      # at CORRELATION_URL's host on CORR_HEALTH_SIDECAR_PORT (8094), which is
+      # the derivation the api uses when this is unset.
+      CORR_DEBUG_TOKEN: ${CORR_DEBUG_TOKEN:-}
+      CORR_DEBUG_SIDECAR_URL: ${CORR_DEBUG_SIDECAR_URL:-}
+      CORR_HEALTH_SIDECAR_PORT: ${CORR_HEALTH_SIDECAR_PORT:-8094}
+      # Where a trace injects its ONE marked synthetic record. All three are the
+      # STACK's own ingress, never a device (design §5): the syslog collector,
+      # this container's own SNMP trap receiver, and the flow collector.
+      #
+      # There is deliberately no gNMI entry. A gNMI update originates on the
+      # DEVICE, so the only way to mint one would be to write a leaf on a live
+      # router — which this tool never does. `--kind gnmi` is passive-only, and
+      # the absence of a target here is what makes that a property of the
+      # deployment rather than a convention someone could drift away from.
+      DEBUG_SYSLOG_TARGET: ${DEBUG_SYSLOG_TARGET:-syslog-ng:514}
+      DEBUG_TRAP_TARGET: ${DEBUG_TRAP_TARGET:-127.0.0.1:1162}
+      DEBUG_FLOW_TARGET: ${DEBUG_FLOW_TARGET:-goflow2:2055}
+      # DEBUG-ROUTES-END
+      # #20: export the device→tenant map (under the api's /data volume) so the
+      # Vector aggregator + correlation can stamp tenant_id onto telemetry.
+      TENANT_ENRICHMENT_DIR: /data/enrichment
+      # Item 121: per-tenant processor rules → generated router config. The
+      # writer emits $PROCESSORS_DIR/router/processors.yaml; vector-router
+      # mounts that subdir read-only and hot-reloads it (--watch-config).
+      PROCESSORS_DIR: /data/processors
+      FEATURE_PROCESSORS: ${FEATURE_PROCESSORS:-true}
+      STATIC_DEVICES_PATH: ${STATIC_DEVICES_PATH:-/config/devices.yaml}
       RULES_FILE: /config/rules.yaml
+      # #81 P1: Application Identification IP→app catalog. Opt-in snapshot dir of
+      # vendor IP-range feeds (aws/azure/gcp/m365.json — populate via
+      # scripts/fetch-appid-feeds.sh). Absent/empty ⇒ resolver returns honest
+      # "unknown"; never required for the stack to run.
+      APPID_FEEDS_DIR: ${APPID_FEEDS_DIR:-/data/appid-feeds}
+      # #81 P3A: Cloud App Observability inventory fixtures (opt-in demo). A dir of
+      # provider inventory JSON (cloud.FixtureProvider) loaded into the inventory store
+      # at boot. Empty/absent ⇒ no cloud inventory (honest); real per-tenant SDK
+      # connectors replace the fixture loader later.
+      CLOUD_FIXTURES_DIR: ${CLOUD_FIXTURES_DIR:-/data/cloud-fixtures}
+      # Live-poller inventory/topology snapshots (the static-fixture/runtime
+      # split): the cloud-ingest poller writes here (a gitignored data/ mount,
+      # under the api's /data volume), and a runtime file SHADOWS the tracked
+      # fixture of the same name — live data wins, fresh installs fall back to
+      # fixtures. Empty ⇒ fixtures only (unchanged behavior).
+      CLOUD_RUNTIME_DIR: ${CLOUD_RUNTIME_DIR:-/data/cloud-runtime}
+      # Bundled (internal) NetBox: when present, the API auto-wires to it (managed
+      # mode) so the UI needs no URL/token. Set by install.py with the netbox
+      # profile; NETBOX_URL/NETBOX_TOKEN remain for pointing at an EXTERNAL NetBox.
+      NETBOX_INTERNAL_URL: ${NETBOX_INTERNAL_URL:-}
       NETBOX_URL: ${NETBOX_URL:-}
       NETBOX_TOKEN: ${NETBOX_TOKEN:-}
+      # Superuser the embedded Source of Truth auto-logs-in as (must match the
+      # NetBox SUPERUSER_NAME below). The osd-gate handler returns it so nginx can
+      # forward it as NetBox's REMOTE_AUTH header for seamless SSO.
+      NETBOX_SUPERUSER: ${NETBOX_SUPERUSER:-admin}
       ENABLE_SNMP_DISCOVERY: ${ENABLE_SNMP_DISCOVERY:-true}
       SNMP_CIDR_RANGES: ${SNMP_CIDR_RANGES:-10.0.0.0/8}
       ENABLE_SNMP_COLLECTION: ${ENABLE_SNMP_COLLECTION:-true}
+      # Profile-driven multivendor stats poller — emits device_cpu_percent etc.
+      ENABLE_SNMP_METRICS: ${ENABLE_SNMP_METRICS:-true}
       ENABLE_GNMI_COLLECTION: ${ENABLE_GNMI_COLLECTION:-false}
       ENABLE_NETCONF_COLLECTION: ${ENABLE_NETCONF_COLLECTION:-false}
+      # Background loop that fills in the vendor of inventory devices whose
+      # sysObjectID was never resolved (extra SNMP walks). Opt-in.
+      ENABLE_VENDOR_DETECTION: ${ENABLE_VENDOR_DETECTION:-false}
+      # Ubiquiti UniFi controller connector — device health via the controller
+      # API (client count, state, cpu/mem, satisfaction). Opt-in; needs URL+creds.
+      FEATURE_UNIFI: ${FEATURE_UNIFI:-false}
+      UNIFI_URL: ${UNIFI_URL:-}
+      UNIFI_SITE: ${UNIFI_SITE:-default}
+      UNIFI_USER: ${UNIFI_USER:-}
+      UNIFI_PASSWORD: ${UNIFI_PASSWORD:-}
+      UNIFI_OS: ${UNIFI_OS:-false}
+      # #128 Phase 8 wireless remediation (RRM nudge / AP restart / client
+      # deauth). DORMANT unless FEATURE_WIRELESS_ACTIONS=true — it WRITES to
+      # controllers; the whole surface 404s otherwise. Enable deliberately, and
+      # note the action still has to clear its five per-request gates.
+      FEATURE_WIRELESS_ACTIONS: ${FEATURE_WIRELESS_ACTIONS:-false}
+      # Port Intelligence #94 P3: DOM/DDM optics via ENTITY-SENSOR-MIB (rx/tx
+      # power, temp, voltage, bias per port → port_optics_* VM series). Opt-in;
+      # best-effort (devices without ENTITY-SENSOR yield nothing).
+      FEATURE_PORT_DOM: ${FEATURE_PORT_DOM:-false}
+      # LLDP neighbour discovery (real L1 topology links via SNMP LLDP-MIB) →
+      # netops:topology:lldp → /api/topology/links → Device Topology real edges.
+      ENABLE_LLDP_DISCOVERY: ${ENABLE_LLDP_DISCOVERY:-false}
+      # CDP neighbour discovery (Cisco-native; CISCO-CDP-MIB) — merges with LLDP.
+      ENABLE_CDP_DISCOVERY: ${ENABLE_CDP_DISCOVERY:-false}
+      # BGP-LS topology discovery (receive-only stdlib BGP speaker → IGP LSDB
+      # IS-IS/OSPF) → netops:topology:bgpls → Device Topology "Logical" sub-object.
+      # Peers = host[:port][@peerAS] CSV of BGP-LS exporters (RR or any L2 router).
+      ENABLE_BGPLS_DISCOVERY: ${ENABLE_BGPLS_DISCOVERY:-false}
+      BGPLS_PEERS: ${BGPLS_PEERS:-}
+      BGPLS_LOCAL_AS: ${BGPLS_LOCAL_AS:-65000}
+      BGPLS_ROUTER_ID: ${BGPLS_ROUTER_ID:-}
+      BGPLS_HOLD_TIME: ${BGPLS_HOLD_TIME:-90}
+      # Vendor-neutral tunnel discovery (standard IF-MIB + TUNNEL-MIB walks over
+      # the SNMP inventory) → netops.tunnels → Tunnels view + Device Monitoring.
+      ENABLE_TUNNEL_DISCOVERY: ${ENABLE_TUNNEL_DISCOVERY:-true}
+      # #13 Vulnerability Management: operator-prepared advisory feed (run
+      # scripts/vuln-feed-prepare.py → data/vuln/, mounted read-only below).
+      # Lazy + mtime hot-reload; /api/vulns answers vuln_enabled:false until
+      # the file exists.
+      VULN_FEED_PATH: ${VULN_FEED_PATH:-/data/vuln/advisories.csv}
+      # Digital Experience Monitoring (S17). On the api side the flag turns on
+      # the CATALOGUE's projector — the worker that hands the prober its work
+      # queue — and makes the experience score say "measured" instead of
+      # "the feature is off". The catalogue itself is always readable/writable
+      # so an operator can declare targets before switching collection on.
+      # docs/design/DEM_2026-09-05.md · docs/runbooks/digital-experience.md
+      FEATURE_DEM: ${FEATURE_DEM:-false}
+      DEM_TARGETS_FILE: ${DEM_TARGETS_FILE:-/data/dem_targets.json}
+      DEM_PROJECT_INTERVAL: ${DEM_PROJECT_INTERVAL:-60s}
+      # The causality layer above the catalogue (internal/dem/experience):
+      # journeys, the normalized change feed, derived experience incidents and
+      # the published score. DEM_EXPERIENCE_FILE is the file backend's store
+      # (ignored when the app-state backend is Postgres, where migration 0044's
+      # RLS tables hold it). DEM_SCORE_POLICY_FILE optionally REPLACES the
+      # shipped, versioned score policy; a policy that does not parse is refused
+      # loudly and the shipped one stays in force.
+      DEM_EXPERIENCE_FILE: ${DEM_EXPERIENCE_FILE:-/data/dem_experience.json}
+      DEM_SCORE_POLICY_FILE: ${DEM_SCORE_POLICY_FILE:-}
+      # The AI investigator explains evidence Correlix has ALREADY gathered; it
+      # never gathers its own and can never mark a cause confirmed. It needs the
+      # platform copilot AND this switch, because a feature that can send
+      # evidence to a model gets its own. Off leaves the panel visible and
+      # disabled with the reason, never hidden.
+      FEATURE_DEM_AI_INVESTIGATOR: ${FEATURE_DEM_AI_INVESTIGATOR:-false}
+      # Service-level synthetic checks (HTTP/ICMP/TCP, collectors/synthetics.go).
+      # HTTP + TCP need no privileges so they can run right here in the API;
+      # ICMP works when the kernel's ping_group_range admits the container user
+      # (otherwise run the prober sidecar, which has NET_RAW). Dormant unless
+      # FEATURE_SYNTHETICS=true + at least one target list.
+      FEATURE_SYNTHETICS: ${FEATURE_SYNTHETICS:-false}
+      SYNTHETIC_HTTP_TARGETS: ${SYNTHETIC_HTTP_TARGETS:-}
+      SYNTHETIC_ICMP_TARGETS: ${SYNTHETIC_ICMP_TARGETS:-}
+      SYNTHETIC_TCP_TARGETS: ${SYNTHETIC_TCP_TARGETS:-}
+      SYNTHETIC_INTERVAL: ${SYNTHETIC_INTERVAL:-60s}
+      # WAN circuit SLA (#wan-path-metrics): the API projects the circuit mesh and
+      # publishes it to Redis for the prober (which has NET_RAW for ICMP echo).
+      # Enabling it here also runs the API's own TCP-fallback echo. Dormant by default.
+      FEATURE_WAN_ECHO: ${FEATURE_WAN_ECHO:-false}
+      WAN_ECHO_TARGETS: ${WAN_ECHO_TARGETS:-}
+      WAN_ECHO_TCP_PORT: ${WAN_ECHO_TCP_PORT:-443}
+      WAN_ECHO_INTERVAL: ${WAN_ECHO_INTERVAL:-30s}
+      # Service Path Graph (docs/design/service-path-graph-contract.md): prober
+      # traceroutes → immutable PathObservations/PathHops resolved through the §3
+      # ranked resolver, exported to /data/enrichment/path_graph.json for the
+      # correlation engine's edge-admission gate, served at /api/rca/{id}/path.
+      # DORMANT unless FEATURE_PATH_GRAPH=true. PATH_GRAPH_TENANT must be a real
+      # tenant (the engine drops empty-tenant objects, fail-closed). The address
+      # maps use "=" as the separator (IPv6-safe): vantage=addr / cidr=name.
+      FEATURE_PATH_GRAPH: ${FEATURE_PATH_GRAPH:-false}
+      PATH_GRAPH_TENANT: ${PATH_GRAPH_TENANT:-}
+      PATH_GRAPH_DATA_CLASS: ${PATH_GRAPH_DATA_CLASS:-live}
+      PATH_GRAPH_ENVIRONMENT: ${PATH_GRAPH_ENVIRONMENT:-prod}
+      PATH_GRAPH_VANTAGE_ADDRESSES: ${PATH_GRAPH_VANTAGE_ADDRESSES:-}
+      PATH_GRAPH_LOCAL_CONTEXTS: ${PATH_GRAPH_LOCAL_CONTEXTS:-}
+      # Background precompute workers behind the path/service cascade. Both are
+      # opt-in and both need CLICKHOUSE_URL (the rollup additionally needs the
+      # postgres store); they log and stay down when a prerequisite is missing.
+      #  - svc flow rollup: per-minute service flow attribution without an MV
+      #    over the policy-protected flows table (svc_rollup_worker.go).
+      #  - path baselines: the hour-of-week tier of the path-health cascade
+      #    ("is 40 ms normal for a Tuesday 9am?", path_health_baselines.go).
+      FEATURE_SVC_FLOW_ROLLUP: ${FEATURE_SVC_FLOW_ROLLUP:-false}
+      FEATURE_PATH_BASELINES: ${FEATURE_PATH_BASELINES:-false}
+      # Seam inventory bootstrap: periodic suggestion loop that seeds the seam
+      # inventory (a P1-required input to grounding). Postgres-only and ON by
+      # default; set =false to stop the loop.
+      ENABLE_SEAM_BOOTSTRAP: ${ENABLE_SEAM_BOOTSTRAP:-true}
+      # Probe-event bus lane (#67 build ⑦): each STAMP/synthetics observation is
+      # POSTed to Vector → netops.probes → correlation engine (active_probe
+      # evidence). PROBER_ID is the observer identity for independence analysis.
+      PROBE_EVENT_SINK_URL: ${PROBE_EVENT_SINK_URL:-http://vector-aggregator:8689/}
+      PROBER_ID: api
+      # SNMP trap receiver (UDP/162 → log bus → netops-snmptrap-* → Explore→Logs
+      # "SNMP traps"). DORMANT unless FEATURE_SNMP_TRAPS=true. Binds the
+      # unprivileged 1162 in-container; the host 162/udp maps to it (see ports).
+      # Decoded traps are POSTed to the Vector aggregator's HTTP source.
+      FEATURE_SNMP_TRAPS: ${FEATURE_SNMP_TRAPS:-false}
+      SNMP_TRAP_LISTEN: ${SNMP_TRAP_LISTEN:-:1162}
+      SNMP_TRAP_SINK_URL: ${SNMP_TRAP_SINK_URL:-http://vector-aggregator:8688/}
+      # ITSM inbound (bidirectional) sync: webhooks are verified+recorded always,
+      # but only drive incident state when this is true (#43 P2b). Default off.
+      FEATURE_ITSM_INBOUND: ${FEATURE_ITSM_INBOUND:-false}
+      # ITSM drift reconciler: periodically polls each open ticket and re-drives
+      # any divergence through the inbound pipeline (safety net for missed/dup/
+      # out-of-order webhooks). Makes outbound API calls; default off.
+      FEATURE_ITSM_RECONCILE: ${FEATURE_ITSM_RECONCILE:-false}
+      ITSM_RECONCILE_INTERVAL: ${ITSM_RECONCILE_INTERVAL:-5m}
+      # Legacy per-ALERT ITSM path (pre-#78), superseded by the per-RCA
+      # auto-ticketing below. Kept for existing deployments; default off so a
+      # single outage cannot fan out into one ticket per raw alert.
+      FEATURE_LEGACY_ALERT_ITSM: ${FEATURE_LEGACY_ALERT_ITSM:-false}
       # Notification channels
       FEATURE_SLACK_NOTIFICATIONS: ${FEATURE_SLACK_NOTIFICATIONS:-false}
       SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
@@ -368,20 +1897,394 @@ services:
       AWS_REGION: ${AWS_REGION:-}
       SNS_PHONE_NUMBERS: ${SNS_PHONE_NUMBERS:-}
       SNS_TOPIC_ARN: ${SNS_TOPIC_ARN:-}
-      # AI Copilot
-      FEATURE_COPILOT: ${FEATURE_COPILOT:-false}
-      COPILOT_PROVIDER: ${COPILOT_PROVIDER:-anthropic}
+      # ITSM — ServiceNow auto-ticketing (open on alert, auto-resolve on clear)
+      FEATURE_SERVICENOW_NOTIFICATIONS: ${FEATURE_SERVICENOW_NOTIFICATIONS:-false}
+      SERVICENOW_INSTANCE_URL: ${SERVICENOW_INSTANCE_URL:-}
+      SERVICENOW_USER: ${SERVICENOW_USER:-}
+      SERVICENOW_PASSWORD: ${SERVICENOW_PASSWORD:-}
+      SERVICENOW_MIN_SEVERITY: ${SERVICENOW_MIN_SEVERITY:-critical}
+      SERVICENOW_ASSIGNMENT_GROUP: ${SERVICENOW_ASSIGNMENT_GROUP:-}
+      SERVICENOW_STATE_FILE: /data/servicenow_tickets.json
+      # ITSM — Jira auto-ticketing (open on alert, transition to Done on clear)
+      FEATURE_JIRA_NOTIFICATIONS: ${FEATURE_JIRA_NOTIFICATIONS:-false}
+      JIRA_BASE_URL: ${JIRA_BASE_URL:-}
+      JIRA_EMAIL: ${JIRA_EMAIL:-}
+      JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
+      JIRA_PROJECT_KEY: ${JIRA_PROJECT_KEY:-}
+      JIRA_ISSUE_TYPE: ${JIRA_ISSUE_TYPE:-Task}
+      JIRA_MIN_SEVERITY: ${JIRA_MIN_SEVERITY:-critical}
+      JIRA_RESOLVE_TRANSITION: ${JIRA_RESOLVE_TRANSITION:-}
+      JIRA_STATE_FILE: /data/jira_tickets.json
+      # RCA-driven auto-ticketing (#78): the policy sweeper + outbox worker that
+      # open ONE ServiceNow incident per RCA correlation object (not per raw
+      # alert). DORMANT unless FEATURE_RCA_TICKETING=true; the connection is the
+      # per-tenant ServiceNow configured in Incident Response → Integrations.
+      FEATURE_RCA_TICKETING: ${FEATURE_RCA_TICKETING:-false}
+      # Security evidence PRODUCER lane (Project 3, P3-EMIT — internal/seclane):
+      # per-tenant hardening + vendor-advisory + threat detections →
+      # secbus.FromFinding → the netops.security topic, which vector-router
+      # already persists into netops-secfindings-<seg>-* (P3-L1). DORMANT unless
+      # FEATURE_SECURITY_LANE=true; with the flag off no worker starts, no route
+      # is registered and no metric series exists. The scan is bounded: one
+      # jittered pass per interval, at most SECURITY_MAX_FINDINGS_PER_TENANT
+      # findings per tenant per run (the excess is counted, not silently
+      # dropped), and a batch the bus refuses is dead-lettered onto
+      # netops.deadletter, then to SECURITY_DEADLETTER_FILE, before anything is
+      # ever counted as lost.
+      FEATURE_SECURITY_LANE: ${FEATURE_SECURITY_LANE:-false}
+      SECURITY_SCAN_INTERVAL: ${SECURITY_SCAN_INTERVAL:-15m}
+      SECURITY_MAX_FINDINGS_PER_TENANT: ${SECURITY_MAX_FINDINGS_PER_TENANT:-5000}
+      SECURITY_DEADLETTER_FILE: /data/security_deadletter.jsonl
+      # Config Backup & Drift (Project 3, P3-CFG — internal/configstore): a
+      # scheduled, READ-ONLY SSH capture of each device's running-config →
+      # sealed, content-addressed version store → drift verdict → ConfigDrift
+      # finding onto netops.security. DORMANT unless FEATURE_CONFIG_BACKUP=true;
+      # with the flag off nothing is constructed, scheduled or routed and the
+      # /api/devices/{id}/config/* subtree 404s. TWO runtime preconditions, both
+      # fail LOUD rather than degrade: a sealing provider must be active
+      # (SEAL_PROVIDER — the manager REFUSES to store configs in cleartext), and
+      # a capture credential must be set below.
+      FEATURE_CONFIG_BACKUP: ${FEATURE_CONFIG_BACKUP:-false}
+      CONFIG_BACKUP_INTERVAL: ${CONFIG_BACKUP_INTERVAL:-24h}
+      CONFIG_BACKUP_KEEP_VERSIONS: ${CONFIG_BACKUP_KEEP_VERSIONS:-30}
+      # Sealed-blob directory. PINNED to the container path of the 0700 bind
+      # mount below (same reasoning as SECURITY_DEADLETTER_FILE above): an
+      # operator override here would point the store at an unmounted path
+      # inside the container, and every captured version would die with it.
+      CONFIG_BACKUP_DIR: /data/config-backups
+      # Least-privilege, read-only capture account. Empty = inert: a capture
+      # without a credential fails loudly, it is never guessed. The password/key
+      # may be supplied as vault ciphertext (sealed at rest like every other
+      # reversible secret) or plaintext; neither ever reaches a log, a response
+      # or an audit detail. The capture rides the SAME SSH client and the SAME
+      # pinned host-key (TOFU) custody as the operator terminal, so a device
+      # whose key changed is refused identically on both paths.
+      CONFIG_BACKUP_SSH_USER: ${CONFIG_BACKUP_SSH_USER:-}
+      CONFIG_BACKUP_SSH_PASSWORD: ${CONFIG_BACKUP_SSH_PASSWORD:-}
+      CONFIG_BACKUP_SSH_KEY: ${CONFIG_BACKUP_SSH_KEY:-}
+      CONFIG_BACKUP_SSH_PORT: ${CONFIG_BACKUP_SSH_PORT:-22}
+      # On-demand packet capture (internal/pcap): a bounded, operator-triggered
+      # tcpdump over the SAME read-only SSH gateway, sealed at rest. DORMANT
+      # unless FEATURE_PACKET_CAPTURE=true. The duration/size ceilings are HARD
+      # CAPS in code and deliberately NOT env knobs — a config that can raise
+      # "max capture duration" to an hour is the unbounded capture the design
+      # forbids, wearing a config file. Only retention and identity are tunable.
+      FEATURE_PACKET_CAPTURE: ${FEATURE_PACKET_CAPTURE:-false}
+      PCAP_KEEP: ${PCAP_KEEP:-20}
+      # Sealed capture blobs + the file-backend metadata register. PINNED to
+      # mounted container paths for the same reason as CONFIG_BACKUP_DIR: an
+      # override would write captures to the container filesystem, where they
+      # die on the next recreate.
+      PCAP_DIR: /data/pcap
+      PCAP_METADATA_FILE: /data/pcap-metadata.json
+      # Least-privilege capture identity (empty = inert; never guessed).
+      PCAP_SSH_USER: ${PCAP_SSH_USER:-}
+      PCAP_SSH_PASSWORD: ${PCAP_SSH_PASSWORD:-}
+      PCAP_SSH_KEY: ${PCAP_SSH_KEY:-}
+      PCAP_SSH_PORT: ${PCAP_SSH_PORT:-22}
+      # Protocol diagnostics — LIVE collect (internal/protocoldiag): the
+      # operator-triggered BGP/OSPF/IS-IS `show` bundle run over the SAME
+      # read-only SSH gateway and the SAME pinned host-key (TOFU) custody as the
+      # operator terminal and config capture. DORMANT unless
+      # FEATURE_PROTOCOL_DIAG_COLLECT=true — with the flag off the collect
+      # endpoint answers an honest 503 and no transport is constructed. The
+      # catalog and the paste-your-own-output Analyze surface work regardless;
+      # neither touches a device. Timeouts, the per-command output cap and the
+      # closed per-vendor command table are HARD limits in code, not knobs.
+      FEATURE_PROTOCOL_DIAG_COLLECT: ${FEATURE_PROTOCOL_DIAG_COLLECT:-false}
+      # Dedicated least-privilege, READ-ONLY diagnostics identity. Empty = the
+      # module falls back to the CONFIG_BACKUP_SSH_* capture account (already a
+      # read-only account on the same devices); a PARTIALLY set identity (user
+      # with no secret) is a hard error, never a silent fallback. The
+      # password/key may be vault ciphertext or plaintext; neither ever reaches
+      # a log, a response or an audit detail.
+      PROTOCOL_DIAG_SSH_USER: ${PROTOCOL_DIAG_SSH_USER:-}
+      PROTOCOL_DIAG_SSH_PASSWORD: ${PROTOCOL_DIAG_SSH_PASSWORD:-}
+      PROTOCOL_DIAG_SSH_KEY: ${PROTOCOL_DIAG_SSH_KEY:-}
+      PROTOCOL_DIAG_SSH_PORT: ${PROTOCOL_DIAG_SSH_PORT:-22}
+      # BMP receiver (internal/bmp) — the live BGP feed. A router is configured
+      # (by a human, on the router) to PUSH its Adj-RIB-In to us over TCP; this
+      # stack configures NOTHING on any device and the whole surface is
+      # read-only. DORMANT unless FEATURE_BMP=true: with the flag off no port is
+      # bound inside the container, no goroutine starts and the three read
+      # routes answer 404.
+      #
+      # A session's tenant is stamped from the INVENTORY device its source
+      # address resolves to; a source that resolves to no device is refused and
+      # disconnected, so a router must be in inventory BEFORE its feed is
+      # accepted. Message size, connection count, per-session update depth and
+      # both read deadlines are HARD caps in code, not env knobs — a config
+      # that can raise "max message size" is the unbounded read the design
+      # forbids, wearing a config file.
+      FEATURE_BMP: ${FEATURE_BMP:-false}
+      # BGP depth/alerting flags (item 10, 2026-09-03): default OFF; .env turns them on.
+      # LIVE_FEED = bounded RIPEstat poller ring; ALERTS = the watchlist evaluator
+      # (transition alerts + evidence on netops.bgp); BOGON_FEED = optional Team
+      # Cymru full-bogons overlay on the embedded IANA set.
+      FEATURE_BGP_LIVE_FEED: ${FEATURE_BGP_LIVE_FEED:-false}
+      FEATURE_BGP_ALERTS: ${FEATURE_BGP_ALERTS:-false}
+      FEATURE_BGP_BOGON_FEED: ${FEATURE_BGP_BOGON_FEED:-false}
+      # The near-live feed polls a public ARCHIVE, not a stream, and that archive
+      # has been measured hours behind real time. A window shorter than the lag
+      # buffers nothing forever with no error anywhere (2026-09-03), so the
+      # default covers the measured lag; the code clamps this to 1m..24h.
+      BGP_FEED_LOOKBACK: ${BGP_FEED_LOOKBACK:-6h}
+      BMP_LISTEN: ${BMP_LISTEN:-:11019}
+      # Parser-coverage mining (parsercov): ONE mining run scans at most this
+      # many OpenSearch documents — the bound that keeps a coverage query off
+      # the ingest tier's back (a partial scan is REPORTED as partial, never
+      # presented as a complete count).
+      PARSERCOV_MAX_LINES: ${PARSERCOV_MAX_LINES:-200000}
+      # Parser counters are PER correlation PROCESS: with `--scale correlation=N`
+      # the service name round-robins and one scrape samples one replica. Naming
+      # the replicas explicitly (comma-separated base URLs) is the only way to
+      # sum them, and it is configuration rather than discovery because the
+      # replicas are TLS-verified BY NAME. Empty is correct for the default
+      # single-replica stack: the list falls back to CORRELATION_URL.
+      CORRELATION_REPLICA_URLS: ${CORRELATION_REPLICA_URLS:-}
+      # Cloud signal notifications (#12 slice 1): page the owning tenant when a
+      # CLOUD correlation object opens, through that tenant's OWN RCA Slack/
+      # PagerDuty lanes. Opt-in; a tenant with no lane configured is a no-op.
+      FEATURE_CLOUD_SIGNAL_NOTIFICATIONS: ${FEATURE_CLOUD_SIGNAL_NOTIFICATIONS:-false}
+      # NMS vendor-controller integrations (#95): poll 3rd-party controllers
+      # (Meraki / Catalyst Center / vManage / NDFC / Versa / Prime / generic)
+      # as normalized RCA evidence. ON by default (read-only, inert until a
+      # controller is connected); set =false to hide the integrations page.
+      FEATURE_NMS_INTEGRATIONS: ${FEATURE_NMS_INTEGRATIONS:-true}
+      # Active Verification (RCA spec #8): read-only SSH interrogation of devices
+      # to gather an independent second source of evidence. DORMANT by default —
+      # requires this global gate PLUS per-tenant opt-in (GET/PUT
+      # /api/settings/verification) AND a registered read-only SSH credential.
+      FEATURE_ACTIVE_VERIFICATION: ${FEATURE_ACTIVE_VERIFICATION:-false}
+      # SSRF allowlist for outbound integrations (ITSM/webhooks). The outbound
+      # guard (safehttp) refuses private/internal targets by default; add a
+      # self-hosted/lab ServiceNow or the bundled mock-servicenow fixture here
+      # (comma-separated hostnames/IPs/CIDRs) so the RCA-ticketing worker can
+      # reach it. Empty ⇒ public targets only. e.g. SSRF_ALLOWED_HOSTS=mock-servicenow
+      SSRF_ALLOWED_HOSTS: ${SSRF_ALLOWED_HOSTS:-}
+      SSRF_ALLOW_PRIVATE: ${SSRF_ALLOW_PRIVATE:-false}
+      # SSO — OIDC/SAML/LDAP brokered by Keycloak (the API only verifies tokens).
+      # Bring Keycloak up with: docker compose --profile sso up -d keycloak
+      # These OIDC_* values are a first-boot SEED / fallback only: a config
+      # saved from Administration → Authentication lives in the kv store and
+      # WINS over the environment (see the keycloak block's NOTE above).
+      #
+      # TLS-readiness (#145): if the OIDC issuer is https behind a SELF-SIGNED /
+      # private-CA cert (nginx/tls.conf.example + gen-dev-cert.sh), the api's
+      # back-channel (discovery/JWKS/token) must trust that CA. In a compose
+      # override, mount the cert into its own dir and set SSL_CERT_DIR:
+      #   environment: { SSL_CERT_DIR: /etc/ssl/dev-ca }
+      #   volumes: [ "./nginx/certs/fullchain.pem:/etc/ssl/dev-ca/dev-ca.pem:ro" ]
+      # Go consults SSL_CERT_DIR IN ADDITION to the image's default CA bundle —
+      # do NOT use SSL_CERT_FILE for this: it REPLACES the root store and would
+      # break every other outbound TLS call. Real cert chains need nothing.
+      OIDC_ENABLED: ${OIDC_ENABLED:-false}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-netops}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_REDIRECT_URL: ${OIDC_REDIRECT_URL:-}
+      OIDC_POST_LOGIN_URL: ${OIDC_POST_LOGIN_URL:-/}
+      OIDC_PROVIDERS: ${OIDC_PROVIDERS:-}
+      OIDC_ADMIN_ROLES: ${OIDC_ADMIN_ROLES:-super-admin,admin,netops-admin}
+      OIDC_OPERATOR_ROLES: ${OIDC_OPERATOR_ROLES:-operator,netops-operator}
+      OIDC_DEFAULT_ROLE: ${OIDC_DEFAULT_ROLE:-read-only}
+      # Keycloak ADMIN automation (GUI-configurable SSO): the api drives the
+      # Keycloak admin REST API server-side (realm/client/IdP/mapper reconcile
+      # from Administration → Authentication), so operators never touch the
+      # Keycloak console. Same credentials install.py seeds for the keycloak
+      # service; used only by requirePlatformAdmin-gated handlers, never logged.
+      KEYCLOAK_INTERNAL_URL: ${KEYCLOAK_INTERNAL_URL:-http://keycloak:8080/auth}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-correlix}
+      ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-1h}
+      REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-168h}
+      # Registry / app-state store backend: postgres (normalized rows +
+      # Row-Level Security, the default a NEW install is generated with), file
+      # (explicit compatibility / PostgreSQL-less mode, JSON on the data volume)
+      # or memory (development only, ephemeral). Registries with no
+      # implementation on the configured backend report themselves unavailable —
+      # they never fall back to an ephemeral store (tracker 245).
+      #
+      # The `:-file` fallback here is NOT the product default: install.py writes
+      # STORE_BACKEND explicitly into .env for both fresh and upgraded installs.
+      # It is the safety net for a .env that predates the explicit key — those
+      # installs' registries live in JSON on the data volume, and defaulting them
+      # to postgres would point every registry at an empty database.
+      #
+      # When postgres, DATABASE_URL must be a NON-superuser role — superusers
+      # bypass RLS, so startup refuses one (override:
+      # STORE_PG_ALLOW_RLS_BYPASS=true for a deliberate single-tenant deploy).
+      # See docs/DEPLOY_POSTGRES_APPSTATE.md.
+      STORE_BACKEND: ${STORE_BACKEND:-file}
+      DATABASE_URL: ${DATABASE_URL:-}
+      STORE_PG_ALLOW_RLS_BYPASS: ${STORE_PG_ALLOW_RLS_BYPASS:-}
+      # Multi-replica cache coherence for the cached-by-design stores (API keys +
+      # SNMP creds). Dormant (0) for a single API instance. Set to e.g. 30 only
+      # when running >1 API replica against a shared backend, so a revoke/rotate
+      # on one replica converges across the others within this many seconds.
+      CRED_CACHE_RELOAD_SEC: ${CRED_CACHE_RELOAD_SEC:-0}
+      # One-time file→Postgres import on cutover (idempotent: fills empty tables
+      # only). Point at the mounted /data dir; safe to leave set after migrating.
+      IMPORT_FILE_STATE_DIR: ${IMPORT_FILE_STATE_DIR:-}
+      # Default per-API-key rate limit (requests/minute; 0 = unlimited)
+      APIKEY_RATE_LIMIT_PER_MIN: ${APIKEY_RATE_LIMIT_PER_MIN:-600}
+      # Max local user accounts (0/unset = unlimited; a cap aids abuse/licensing)
+      MAX_USERS: ${MAX_USERS:-0}
+      # AI assistant. ON by default (key-free grounded mode = no external calls);
+      # =false disables it. The product default provider is
+      # Gemini (free tier — owner decision 2026-07-02); switch to anthropic or
+      # openai in the assistant settings UI or via COPILOT_PROVIDER. The model
+      # default tracks the provider in the backend unless COPILOT_MODEL is set.
+      # FEATURE_AI is the current name of that gate and WINS over FEATURE_COPILOT
+      # when set. Defaulted to EMPTY on purpose, not to true: an empty value is
+      # "not set" to aiEnabled(), so the legacy FEATURE_COPILOT below keeps
+      # deciding exactly as it does today. Set FEATURE_AI=false in .env to turn
+      # the assistant off, or =true to force it on regardless of FEATURE_COPILOT.
+      FEATURE_AI: ${FEATURE_AI:-}
+      FEATURE_COPILOT: ${FEATURE_COPILOT:-true}
+      COPILOT_PROVIDER: ${COPILOT_PROVIDER:-gemini}
       COPILOT_API_KEY: ${COPILOT_API_KEY:-}
-      COPILOT_MODEL: ${COPILOT_MODEL:-claude-sonnet-4-5}
+      COPILOT_MODEL: ${COPILOT_MODEL:-}
+      # AI agent loop ("Investigations"): the model may run governed read-only
+      # lookups before answering. DORMANT unless FEATURE_AI_TOOLS=true; per-tenant
+      # entitlement decides which workspaces get it (assistant settings →
+      # Workspace access). AI_TOOLS_ALL_TENANTS=true is the global override.
+      FEATURE_AI_TOOLS: ${FEATURE_AI_TOOLS:-false}
+      AI_TOOLS_ALL_TENANTS: ${AI_TOOLS_ALL_TENANTS:-false}
+      AI_TOOLS_MAX_CALLS: ${AI_TOOLS_MAX_CALLS:-4}
+      AI_TOOLS_DAILY_TOKENS: ${AI_TOOLS_DAILY_TOKENS:-250000}
+      # Device SSH gateway: in-browser SSH to devices from Infrastructure →
+      # Devices. DORMANT unless FEATURE_DEVICE_SSH=true — it opens an
+      # authenticated, audited shell to devices (operator supplies their own
+      # credentials per session; nothing stored). Enable deliberately.
+      FEATURE_DEVICE_SSH: ${FEATURE_DEVICE_SSH:-false}
+      DEVICE_SSH_DIAL_TIMEOUT_SEC: ${DEVICE_SSH_DIAL_TIMEOUT_SEC:-10}
+      DEVICE_SSH_IDLE_TIMEOUT_SEC: ${DEVICE_SSH_IDLE_TIMEOUT_SEC:-900}
+      DEVICE_SSH_MAX_SESSION_SEC: ${DEVICE_SSH_MAX_SESSION_SEC:-3600}
+      # Secret-custody Vault (#17): envelope-encrypt reversible secrets at rest
+      # under per-tenant keys. DORMANT unless SEAL_PROVIDER is set (default: empty
+      # = plaintext passthrough, unchanged behavior). Activate by bringing up the
+      # sealing sidecar and pointing the api at its socket:
+      #   docker compose --profile seal up -d secrets-seal
+      #   SEAL_PROVIDER=swtpm docker compose up -d api
+      # SECRETS_RESEAL=true runs a one-time boot pass that encrypts any still-
+      # plaintext secret (idempotent). See docs/design/secret-custody.md.
+      SEAL_PROVIDER: ${SEAL_PROVIDER:-}
+      SEAL_SOCKET: ${SEAL_SOCKET:-/run/secrets-seal/seal.sock}
+      SECRETS_RESEAL: ${SECRETS_RESEAL:-}
+      # Transport security (#18). DORMANT by default — unset means the API serves
+      # plaintext on its internal port and nginx terminates ingress TLS. Set both
+      # cert+key to serve HTTPS directly; add a client-CA bundle for mTLS (require
+      # + verify peer certs, least-privilege identity allowlist). Fail-closed.
+      TLS_CERT_FILE: ${TLS_CERT_FILE:-}
+      TLS_KEY_FILE: ${TLS_KEY_FILE:-}
+      TLS_CLIENT_CA_FILE: ${TLS_CLIENT_CA_FILE:-}
+      TLS_CLIENT_ALLOWED_DNS: ${TLS_CLIENT_ALLOWED_DNS:-}
+      TLS_CLIENT_ALLOWED_URIS: ${TLS_CLIENT_ALLOWED_URIS:-}
+      TLS_RELOAD_INTERVAL: ${TLS_RELOAD_INTERVAL:-30s}
+      # Internal CA self-bootstrap (#18 phase 2) + outbound backend TLS (phase 3).
+      TLS_INTERNAL_CA: ${TLS_INTERNAL_CA:-}
+      TLS_TRUST_DOMAIN: ${TLS_TRUST_DOMAIN:-netops}
+      TLS_SVID_TTL: ${TLS_SVID_TTL:-24h}
+      TLS_NGINX_CERT_DIR: ${TLS_NGINX_CERT_DIR:-}
+      # File mode for the nginx client SVID key (nginx's uid 101 cannot read a
+      # 0600 key owned by the CA's uid). Dormant when unset (0600 default).
+      TLS_NGINX_KEY_MODE: ${TLS_NGINX_KEY_MODE:-}
+      TLS_VICTORIA_CERT_DIR: ${TLS_VICTORIA_CERT_DIR:-}
+      # SEC-003.3 workload identity registry: when set, the CA mints an SVID
+      # for EVERY registered service under <root>/<service>/ at boot (rotated
+      # at TTL/2). Additive — nothing consumes a cert until that service's
+      # own epic mounts it. Registry + guards: src/backend/svid_registry.go.
+      TLS_SERVICE_CERT_ROOT: ${TLS_SERVICE_CERT_ROOT:-}
+      # Registry-wide SVID key mode for cross-uid stores, and the SEC-008
+      # securityadmin credential dir (not a workload identity). Both dormant
+      # when unset.
+      TLS_SERVICE_KEY_MODE: ${TLS_SERVICE_KEY_MODE:-}
+      TLS_OS_ADMIN_CERT_DIR: ${TLS_OS_ADMIN_CERT_DIR:-}
+      # Multi-region SPIFFE federation (#18 phase 5): "domA=/a.pem,domB=/b.pem"
+      # binds each peer trust DOMAIN to the CA root that anchored its chain.
+      # Was parsed+enforced in Go but unreachable from compose (SEC-003.2) —
+      # a malformed value or missing bundle file fails the boot, by design.
+      TLS_FEDERATED_BUNDLES: ${TLS_FEDERATED_BUNDLES:-}
+      # Outbound TLS to internal backends (OpenSearch/ClickHouse/VictoriaMetrics/
+      # correlation): verify their https certs against THIS explicit CA (not the
+      # system pool); optional client SVID for backend mTLS. Defaults to the mesh
+      # CA bundle. Dormant when unset (plaintext http, unchanged).
+      TLS_BACKEND_CA_FILE: ${TLS_BACKEND_CA_FILE:-}
+      TLS_BACKEND_CERT_FILE: ${TLS_BACKEND_CERT_FILE:-}
+      TLS_BACKEND_KEY_FILE: ${TLS_BACKEND_KEY_FILE:-}
+      # When STORE_BACKEND=postgres over TLS, set DATABASE_URL with
+      # sslmode=verify-full&sslrootcert=/path/ca.pem (pgx honors it). See the
+      # tls-mtls runbook §Postgres. NOT optional on a TLS deployment: since F-4
+      # the server's pg_hba network row is `hostssl`, so a DSN without TLS is
+      # refused with "no pg_hba.conf entry ... no encryption".
       # App secrets and bootstrap admin
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET required}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY required}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:-}
+      # Break-glass admin password recovery on boot (unset after use). See main.go.
+      ADMIN_RESET_PASSWORD: ${ADMIN_RESET_PASSWORD:-}
       USERS_FILE: /data/users.json
+      # Reporting pipeline (active on the postgres backend). PDF output is rendered
+      # by the optional gotenberg sidecar — start it with:
+      #   docker compose --profile pdf up -d gotenberg
+      # When the sidecar is down, pdf-format reports gracefully skip the PDF.
+      # ON by default; =false stops the scheduler (queue+workers on postgres,
+      # in-process scheduler on the file backend) so no scheduled report runs.
+      ENABLE_REPORT_SCHEDULER: ${ENABLE_REPORT_SCHEDULER:-true}
+      REPORT_WORKERS: ${REPORT_WORKERS:-4}
+      REPORT_PDF_SIDECAR_URL: ${REPORT_PDF_SIDECAR_URL:-http://gotenberg:3000/forms/chromium/convert/html}
+      REPORT_MAX_CATCHUP_RUNS: ${REPORT_MAX_CATCHUP_RUNS:-50}
+      REPORT_MAX_CATCHUP_AGE: ${REPORT_MAX_CATCHUP_AGE:-168h}
+      # Secure-link delivery: public base URL for emailed report links + signing
+      # secret (falls back to JWT_SECRET when unset).
+      REPORT_PUBLIC_BASE_URL: ${REPORT_PUBLIC_BASE_URL:-}
+      REPORT_LINK_SECRET: ${REPORT_LINK_SECRET:-}
+      # Microsoft Teams notifications (incoming webhook)
+      FEATURE_TEAMS_NOTIFICATIONS: ${FEATURE_TEAMS_NOTIFICATIONS:-false}
+      TEAMS_WEBHOOK_URL: ${TEAMS_WEBHOOK_URL:-}
     volumes:
       - ../../src/config:/config:ro
       - ../../data/api:/data
+      # #13: operator-owned advisory feed, read-only — the service can read
+      # but never alter its own vulnerability data (nested over /data).
+      - ../../data/vuln:/data/vuln:ro
+      # Shared dir for the sealing sidecar's Unix socket (empty/unused when the
+      # 'seal' profile isn't up — the Vault stays dormant, see SEAL_PROVIDER).
+      - ../../data/secrets-seal:/run/secrets-seal
+      # Mint target for the internal CA (SEC-003 pattern): when TLS_INTERNAL_CA
+      # is on, the api writes the mesh trust bundle + per-service SVIDs here
+      # and the TLS variant (compose.tls.yml) mounts them into each service.
+      # Dormant/empty on plaintext installs — nothing writes or reads it.
+      - ../../data/tls:/data/tls
+      # Sealed device-configuration blobs (FEATURE_CONFIG_BACKUP). Its own
+      # bind mount rather than a subdir of /data so the operator can size,
+      # snapshot and back it up independently — the blobs are the only copy
+      # of a captured running-config. Pre-created 0700 and owned by the api's
+      # runtime uid by install.py/fix-permissions.sh: Docker would otherwise
+      # auto-create the bind source as ROOT and the api (cap_drop:ALL) could
+      # never write into it. Empty and inert with the flag off.
+      - ../../data/config-backups:/data/config-backups
+      # Sealed packet-capture blobs (FEATURE_PACKET_CAPTURE). Same contract as
+      # the config blobs above: own bind mount, 0700, api-owned, pre-created by
+      # install.py. Captures can carry payload bytes — keep the directory
+      # private and size it deliberately (PCAP_KEEP x 25 MiB x devices worst
+      # case).
+      - ../../data/pcap:/data/pcap
+    # SNMP traps arrive on host UDP 162 and forward to the in-container
+    # receiver on 1162 (unprivileged). Active only when FEATURE_SNMP_TRAPS=true;
+    # the mapping is harmless otherwise (nothing binds 1162 inside). Override the
+    # host port with SNMP_TRAP_PORT if 162 is taken.
+    ports:
+      - "${SNMP_TRAP_PORT:-162}:1162/udp"
+      # BMP sessions arrive on host TCP 11019 (the IANA `bmp` port) and forward
+      # to the in-container receiver. Active only when FEATURE_BMP=true; the
+      # mapping is harmless otherwise (nothing binds 11019 inside). Override the
+      # host port with BMP_PORT if 11019 is taken — and point the routers' `bmp
+      # server` stanzas at whatever you chose (docs/INGESTION.md).
+      - "${BMP_PORT:-11019}:11019/tcp"
     depends_on:
       postgres:    { condition: service_healthy }
       redis:       { condition: service_healthy }
@@ -390,7 +2293,242 @@ services:
     networks: [netops]
     restart: *restart
 
+  # Network diagnostics prober (ADR 0001) — the ONLY service granted elevated
+  # network capabilities. Runs the active-measurement collectors (STAMP /
+  # traceroute) and nothing else (PROBER_ONLY: same image, no HTTP/DB/auth). It
+  # publishes traceroute topology to Redis (api reads it) and pushes metrics to
+  # VictoriaMetrics. Opt-in + dormant by default:
+  #   docker compose --profile prober up -d prober
+  # then set FEATURE_TRACEROUTE / FEATURE_ACTIVE_PROBE + targets. This keeps the
+  # API container unprivileged; the prober is the first member of the future
+  # network-diagnostics plane.
+  prober:
+    profiles: ["prober"]
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile.backend
+      # Build provenance: the running binary reports these at /admin/version,
+      # so drift between deployed image and source is DETECTABLE. Supplied by
+      # install.py / deploy tooling; "unknown" if a build bypasses them.
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    mem_limit: ${PROBER_MEM_LIMIT:-128m}
+    logging: *deflog
+    # Least privilege: drop everything, add only the one capability raw sockets
+    # need. no-new-privileges blocks setuid escalation.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [NET_RAW]
+    # Raw sockets REQUIRE this to be the root user: cap_add grants NET_RAW to the
+    # container's bounding set, but a non-root process starts with empty effective
+    # capabilities and the static binary carries no file caps (a setcap build stage
+    # would break the offline-build mandate, and Linux ping sockets — the
+    # unprivileged fallback — never surface intermediate TTL-exceeded hops, so
+    # they cannot power a traceroute). Root here is confined by the cap_drop ALL +
+    # single-capability + no-new-privileges envelope above; the prober holds no
+    # secrets and mounts nothing.
+    user: "0:0"
+    environment:
+      # F-08: this container posts directly to a vector-aggregator http_server
+      # source, so it needs the SAME ingest credential the aggregator enforces.
+      # Missing here, its events are rejected 401 and silently dropped.
+      # SEC-013.1 NARROWED: the prober's only lane is probes; the shared
+      # INGEST_TOKEN is no longer a lane credential and is not passed here.
+      INGEST_USER: ${INGEST_USER:-netops-ingest}
+      INGEST_TOKEN_PROBES: ${INGEST_TOKEN_PROBES:-}
+      GOMEMLIMIT: ${PROBER_GOMEMLIMIT:-115MiB}   # #102
+      PROBER_ONLY: "true"
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_PORT: "6379"
+      VICTORIA_URL: "http://victoria:8428"
+      METRICS_URL: ${METRICS_URL:-http://victoria:8428}
+      # Active measurement — all OFF by default (ADR 0001: privileged features
+      # disabled by default). Enable + set targets to turn the plane on.
+      FEATURE_TRACEROUTE: ${FEATURE_TRACEROUTE:-false}
+      TRACEROUTE_TARGETS: ${TRACEROUTE_TARGETS:-}
+      TRACEROUTE_METHOD: ${TRACEROUTE_METHOD:-icmp}
+      TRACEROUTE_TCP_PORT: ${TRACEROUTE_TCP_PORT:-443}
+      FEATURE_ACTIVE_PROBE: ${FEATURE_ACTIVE_PROBE:-false}
+      STAMP_TARGETS: ${STAMP_TARGETS:-}
+      FEATURE_STAMP_REFLECTOR: ${FEATURE_STAMP_REFLECTOR:-false}
+      STAMP_REFLECTOR_PORT: ${STAMP_REFLECTOR_PORT:-8620}
+      # Digital Experience Monitoring (S17). Unlike the env-driven synthetics
+      # below, the DEM runner takes its targets from the per-tenant catalogue
+      # the api publishes to the shared key-value channel (netops:dem:targets,
+      # short TTL), so there is no target list here: an env list has no owning
+      # tenant and its results could never be scoped to anyone. Off by default
+      # like every other active-measurement plane (ADR 0001); with the flag on
+      # and no published queue it measures nothing and reports 0 targets.
+      FEATURE_DEM: ${FEATURE_DEM:-false}
+      DEM_TIMEOUT: ${DEM_TIMEOUT:-10s}
+      # Service-level synthetics (HTTP/ICMP/TCP). In the prober the ICMP check
+      # can use the raw-socket fallback (NET_RAW above).
+      FEATURE_SYNTHETICS: ${FEATURE_SYNTHETICS:-false}
+      SYNTHETIC_HTTP_TARGETS: ${SYNTHETIC_HTTP_TARGETS:-}
+      SYNTHETIC_ICMP_TARGETS: ${SYNTHETIC_ICMP_TARGETS:-}
+      SYNTHETIC_TCP_TARGETS: ${SYNTHETIC_TCP_TARGETS:-}
+      SYNTHETIC_INTERVAL: ${SYNTHETIC_INTERVAL:-60s}
+      # WAN circuit SLA — SD-WAN/BFD-style source-bound echo (#2). Targets are the
+      # circuits the API publishes to Redis; WAN_ECHO_TARGETS is the standalone
+      # fallback. ICMP uses the NET_RAW above; TCP-SYN fallback for filtered paths.
+      FEATURE_WAN_ECHO: ${FEATURE_WAN_ECHO:-false}
+      WAN_ECHO_TARGETS: ${WAN_ECHO_TARGETS:-}
+      WAN_ECHO_TCP_PORT: ${WAN_ECHO_TCP_PORT:-443}
+      WAN_ECHO_INTERVAL: ${WAN_ECHO_INTERVAL:-30s}
+      # Probe-event bus lane (#67 build ⑦) — distinct observer id from the api
+      # collector so the independence gate never merges the two vantage points.
+      PROBE_EVENT_SINK_URL: ${PROBE_EVENT_SINK_URL:-http://vector-aggregator:8689/}
+      PROBER_ID: prober
+    depends_on:
+      redis: { condition: service_healthy }
+    networks: [netops]
+    restart: *restart
+
+  # Mock ServiceNow (#78) — a stdlib-only stand-in for the ServiceNow incident
+  # Table API, used to exercise the RCA auto-ticketing CREATE leg end-to-end with
+  # NO real ServiceNow instance. TEST FIXTURE, off by default:
+  #   docker compose --profile mock-snow up -d --build mock-servicenow
+  # Then point a tenant's Incident-Response → Integrations connection at
+  #   http://mock-servicenow:8090  (user/pass = MOCK_SNOW_USER/MOCK_SNOW_PASSWORD)
+  # and allow the api to reach this private host:
+  #   SSRF_ALLOWED_HOSTS=mock-servicenow  + FEATURE_RCA_TICKETING=true
+  # Watch incidents land:  curl -u $MOCK_SNOW_USER:$MOCK_SNOW_PASSWORD \
+  #   http://localhost:8099/inspect  (host port below). See README for the full run.
+  mock-servicenow:
+    profiles: ["mock-snow"]
+    build:
+      context: ../..
+      dockerfile: deployment/docker/mock-servicenow/Dockerfile
+    mem_limit: ${MOCK_SNOW_MEM_LIMIT:-64m}
+    logging: *deflog
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    environment:
+      MOCK_SNOW_ADDR: ":8090"
+      MOCK_SNOW_USER: ${MOCK_SNOW_USER:-correlix}
+      MOCK_SNOW_PASSWORD: ${MOCK_SNOW_PASSWORD:-correlix-mock-secret}
+      # Optional Bearer token (token-auth connections); empty ⇒ Basic only.
+      MOCK_SNOW_TOKEN: ${MOCK_SNOW_TOKEN:-}
+    # Host port for /inspect convenience (NOT used by the api, which reaches it
+    # in-network on :8090). Off the public surface — bind localhost only.
+    ports:
+      - "127.0.0.1:${MOCK_SNOW_HOST_PORT:-8099}:8090"
+    networks: [netops]
+    restart: *restart
+
+  # Cloud ingestion (P3B) — AWS/Azure/GCP pollers producing MetricEvents onto
+  # the aggregator's metrics lane and cloud events onto the bus lanes.
+  # Promoted from the lab override (SEC-013, 2026-08-06): it is a product
+  # ingestion plane, and workload identity (SEC-003.3 registry) can only be
+  # issued to services the base compose owns. Profile-gated — enabled where
+  # cloud credentials exist; every credential and bucket name arrives via env
+  # (the deployment's override/.env), never from this file.
+  cloud-ingest:
+    profiles: ["cloud-ingest"]
+    build:
+      context: ./cloud-ingest
+    image: netops-cloud-ingest
+    command: ["python", "-u", "/poller.py"]
+    user: poller
+    logging: *deflog
+    environment:
+      BROKER_URLS: ${BROKER_URLS:-kafka:9092}
+      INGEST_USER: ${INGEST_USER:-netops-ingest}
+      # SEC-013.1 NARROWED: cloud-ingest's only ingest lane is metrics; the
+      # shared INGEST_TOKEN opens no lane and is not passed. Hard-required —
+      # this is the service's sole credential and the 2026-07-22 401 blackhole
+      # is the failure mode a silent default would recreate.
+      INGEST_TOKEN_METRICS: ${INGEST_TOKEN_METRICS:?INGEST_TOKEN_METRICS required — run scripts/install.py (its migration seeds per-lane tokens; SEC-013 narrowing removed the shared fallback)}
+    networks: [netops]
+    restart: *restart
+
+  # Mock NMS controller (#95) — a stdlib-only vManage (Catalyst SD-WAN Manager)
+  # API stand-in, used to exercise the NMS controller-intelligence cycle
+  # end-to-end with NO real controller. TEST FIXTURE, off by default:
+  #   docker compose --profile mock-nms up -d --build mock-nms
+  # Then connect a vManage integration in Infrastructure → NMS Integrations at
+  #   http://mock-nms:8091  (user/pass = MOCK_NMS_USER/MOCK_NMS_PASSWORD)
+  # with FEATURE_NMS_INTEGRATIONS=true on the api. It serves a flapping BFD
+  # session (events + state flaps) and jittering approute metrics whose loss
+  # follows the BFD phase. Watch:  curl -s http://localhost:8098/inspect
+  mock-nms:
+    profiles: ["mock-nms"]
+    build:
+      context: ../..
+      dockerfile: deployment/docker/mock-nms/Dockerfile
+    mem_limit: ${MOCK_NMS_MEM_LIMIT:-64m}
+    logging: *deflog
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    environment:
+      MOCK_NMS_ADDR: ":8091"
+      MOCK_NMS_USER: ${MOCK_NMS_USER:-correlix}
+      MOCK_NMS_PASSWORD: ${MOCK_NMS_PASSWORD:-correlix-mock-secret}
+    # Host port for /inspect convenience (NOT used by the api, which reaches it
+    # in-network on :8091). Off the public surface — bind localhost only.
+    ports:
+      - "127.0.0.1:${MOCK_NMS_HOST_PORT:-8098}:8091"
+    networks: [netops]
+    restart: *restart
+
+  # Headless-Chromium PDF renderer for reports (optional). The Go API stays
+  # stdlib-only; PDF generation lives here and is reached over HTTP. Opt-in:
+  #   docker compose --profile pdf up -d gotenberg
+  gotenberg:
+    image: gotenberg/gotenberg:8@sha256:bddd8ea9d076e2d08b6ddaa6efae6403185202c6dab65a6488ed0a6923d6d8e8
+    profiles: ["pdf"]
+    command:
+      - gotenberg
+      - --chromium-disable-javascript=true
+      - --api-timeout=30s
+    mem_limit: ${GOTENBERG_MEM_LIMIT:-768m}
+    cpus: ${GOTENBERG_CPU_LIMIT:-3}
+    logging: *deflog
+    networks: [netops]
+    restart: *restart
+
+  # Secret-custody sealing sidecar (#17): a software TPM (swtpm) + tpm2-tools that
+  # seal/unseal ONLY the 32-byte root KEK over a local Unix socket. Tenant secrets
+  # never cross it — the Go Vault does the AES-256-GCM in-process. Opt-in:
+  #   docker compose --profile seal up -d secrets-seal
+  # then set SEAL_PROVIDER=swtpm on the api. swtpm is a SOFTWARE emulator (correct
+  # for lab/dev + building the integration); production needs a real TPM/HSM/KMS
+  # behind the same SealingProvider interface. See docs/design/secret-custody.md.
+  secrets-seal:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/swtpm-sidecar/Dockerfile
+    profiles: ["seal"]
+    mem_limit: ${SEAL_MEM_LIMIT:-128m}
+    logging: *deflog
+    environment:
+      SEAL_SOCKET: /run/secrets-seal/seal.sock
+      TPMDIR: /tpmstate
+    volumes:
+      - ../../data/secrets-seal:/run/secrets-seal
+      - ../../data/swtpm:/tpmstate
+    networks: [netops]
+    restart: *restart
+    # Healthy = the seal socket EXISTS. This is what makes first-boot ordering
+    # expressible: the api's TLS_INTERNAL_CA seal gate refuses to boot without
+    # custody, so on a cold `install.py --tls` the api must not race the
+    # sidecar's socket creation (compose.tls.yml adds the depends_on; found by
+    # the CI tls-boot leg's mint timeout, 2026-08-12).
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /run/secrets-seal/seal.sock"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
   frontend:
+    # SC-008: nginx-unprivileged (non-root, :8080); lock down escalation+caps.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    mem_limit: ${FRONTEND_MEM_LIMIT:-128m}
+    logging: *deflog
     build:
       context: ../..
       dockerfile: deployment/docker/Dockerfile.frontend
@@ -398,21 +2536,147 @@ services:
     restart: *restart
 
   nginx:
-    image: nginx:1.27-alpine
+    # SC-008: non-root reverse proxy (uid 101, :8080) built from stock nginx;
+    # lock down escalation + caps.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    mem_limit: ${NGINX_MEM_LIMIT:-128m}
+    logging: *deflog
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile.nginx
     ports:
-      - "${BASE_PORT:-8000}:80"
+      - "${BASE_PORT:-8000}:8080"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    # TLS front (#145) is OPT-IN via a compose override — never enabled here,
+    # because mounting tls.conf without certs would stop nginx from booting on
+    # a fresh install. To enable, create docker-compose.override.yml with, under
+    # nginx: ports ["8443:8443"] and volumes for
+    #   ./nginx/tls.conf.example -> /etc/nginx/conf.d/tls.conf:ro
+    #   ./nginx/certs            -> /etc/nginx/certs:ro
+    # (certs from scripts/gen-dev-cert.sh or a real issuer; privkey readable by
+    # uid 101). Full walk-through: nginx/tls.conf.example.
+    # nginx→API mTLS (Security v1, #18) is likewise OPT-IN via the same
+    # override — the base default.conf keeps plaintext inner hops because a
+    # fresh install has no CA and a plaintext API. To enable, mount under nginx:
+    #   ./nginx/default-mtls.conf     -> /etc/nginx/conf.d/default.conf:ro
+    #   ./nginx/api-mtls.conf.example -> /etc/nginx/conf.d/api-mtls.conf:ro
+    #   ../../data/tls                -> /etc/nginx/tls:ro
+    # and set TLS_INTERNAL_CA=true (+ seal provider) on the api service.
+    # Full recipe: docs/runbooks/tls-mtls.md; variant header: default-mtls.conf.
+    # opensearch-dashboards ("osd") and grafana ("self-monitoring") are
+    # profile-gated add-ons; nginx proxies /search and /grafana to them only
+    # when started, so they're intentionally not dependencies. Prometheus is
+    # gone entirely (#97 — VM scrapes the self-metrics).
     depends_on:
       - api
       - frontend
-      - prometheus
-      - grafana
-      - opensearch-dashboards
+    networks: [netops]
+    restart: *restart
+
+  # =========================================================================
+  # SOURCE OF TRUTH (optional — bundled NetBox, profile "netbox")
+  # =========================================================================
+  #
+  # NetBox runs INSIDE the stack so the platform is its own source of truth —
+  # no external instance or hand-pasted token. install.py seeds NETBOX_SECRET_KEY
+  # + NETBOX_TOKEN (a 40-char API token, also seeded as NetBox's superuser token)
+  # and points the API at it via NETBOX_INTERNAL_URL. Heavy (its own Postgres +
+  # shares Redis on dedicated DBs), hence profile-gated:
+  #
+  #   docker compose --profile netbox up -d
+  netbox-postgres:
+    image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
+    logging: *deflog
+    profiles: ["netbox"]
+    environment:
+      POSTGRES_DB: netbox
+      POSTGRES_USER: netbox
+      POSTGRES_PASSWORD: ${NETBOX_DB_PASSWORD:?NETBOX_DB_PASSWORD required (install.py generates it)}
+    volumes:
+      - ../../data/netbox-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U netbox"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [netops]
+    restart: *restart
+
+  netbox:
+    image: netboxcommunity/netbox:v4.1-3.0.2@sha256:d1260201d775b3f1d0b19e425bd19facc1e907e7153a8247d04d996037969e53
+    profiles: ["netbox"]
+    mem_limit: ${NETBOX_MEM_LIMIT:-1g}
+    cpus: ${NETBOX_CPU_LIMIT:-2}
+    logging: *deflog
+    depends_on:
+      netbox-postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      DB_HOST: netbox-postgres
+      DB_NAME: netbox
+      DB_USER: netbox
+      DB_PASSWORD: ${NETBOX_DB_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DATABASE: "9"
+      REDIS_CACHE_HOST: redis
+      REDIS_CACHE_PORT: "6379"
+      REDIS_CACHE_PASSWORD: ""
+      REDIS_CACHE_DATABASE: "10"
+      SECRET_KEY: ${NETBOX_SECRET_KEY:?NETBOX_SECRET_KEY required (install.py generates it)}
+      SKIP_SUPERUSER: "false"
+      SUPERUSER_NAME: ${NETBOX_SUPERUSER:-admin}
+      SUPERUSER_EMAIL: admin@local
+      SUPERUSER_PASSWORD: ${NETBOX_SUPERUSER_PASSWORD:?NETBOX_SUPERUSER_PASSWORD required (install.py generates it)}
+      SUPERUSER_API_TOKEN: ${NETBOX_TOKEN:?NETBOX_TOKEN required (install.py generates it)}
+      ALLOWED_HOSTS: "*"
+      # Seamless SSO for the embedded Source of Truth. nginx authenticates the
+      # platform owner, then forwards the superuser name as X-Remote-User; NetBox
+      # logs that request straight in (no NetBox login screen). REMOTE_AUTH only
+      # ever sees nginx-set headers — the netbox port is internal-only and the
+      # proxy overwrites any client-supplied X-Remote-User. Auto-create is on as a
+      # safety net, but the forwarded name matches the existing superuser.
+      REMOTE_AUTH_ENABLED: "true"
+      REMOTE_AUTH_BACKEND: netbox.authentication.RemoteUserBackend
+      REMOTE_AUTH_HEADER: HTTP_X_REMOTE_USER
+      REMOTE_AUTH_AUTO_CREATE_USER: "true"
+      # Served behind nginx at /netbox/ (platform-owner-gated) so operators can
+      # CREATE inventory in NetBox's UI. BASE_PATH makes NetBox emit correct
+      # subpath URLs; CSRF_TRUSTED_ORIGINS must list the origin you browse from
+      # (set NETBOX_CSRF_ORIGINS in .env to e.g. http://<host>:8000 for POST/edit).
+      BASE_PATH: netbox
+      CSRF_TRUSTED_ORIGINS: ${NETBOX_CSRF_ORIGINS:-http://localhost:8000}
+    volumes:
+      - ../../data/netbox-media:/opt/netbox/netbox/media
+      # Wire BASE_PATH (netbox-docker's configuration.py ignores the env var) so
+      # NetBox serves under /netbox/ behind nginx.
+      - ./netbox/extra.py:/etc/netbox/config/extra.py:ro
     networks: [netops]
     restart: *restart
 
 networks:
   netops:
     driver: bridge
+
+# =========================================================================
+# SECRETS  (D-16, 2026-09-03)
+# =========================================================================
+#
+# Credentials that a service must PRESENT (so they cannot be vault-sealed) are
+# handed over as files rather than as command-line flags or environment
+# variables. Both of those are readable with `docker inspect`, which needs only
+# membership of the `docker` group — no access to .env at all.
+#
+# `environment:` sources the value from the named variable at `compose up`
+# time; compose materialises it inside the container at /run/secrets/<name> and
+# it appears in NO field of `docker inspect` (verified 2026-09-03: Config.Cmd,
+# Config.Env and Mounts are all clean). The variable must be set — compose
+# fails loudly, naming it, rather than starting with an empty credential.
+secrets:
+  # vmalert -> api Alertmanager-v2 receiver (internal/alertwebhook).
+  vmalert_notifier_password:
+    environment: VMALERT_WEBHOOK_TOKEN

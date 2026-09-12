@@ -1,0 +1,4 @@
+#!/bin/sh
+# A stand-in for a Correlix binary. Its contents are irrelevant: the point is
+# that the child image adds ONLY this, and BusyBox still has to be found.
+echo correlix-oci-regression

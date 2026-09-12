@@ -1,0 +1,39 @@
+{
+  "name": "fx_mux_loss_k \u2014 dwdm-mux-demux-attenuation",
+  "signals": [
+    {
+      "kind": "dom_rx_power_low",
+      "entity_type": "interface",
+      "entity_id": "wan-r2:Et3",
+      "observer_id": "snmp-wanr2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 4.0
+    },
+    {
+      "kind": "mux_demux_insertion_loss_high",
+      "entity_type": "interface",
+      "entity_id": "wan-r2:Et3",
+      "observer_id": "snmp-wanr2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "fiber_path_budget_exceeded",
+      "entity_type": "interface",
+      "entity_id": "wan-r2:Et3",
+      "observer_id": "snmp-wanr2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.dwdm-mux-demux-attenuation",
+    "tier": "suspected"
+  }
+}

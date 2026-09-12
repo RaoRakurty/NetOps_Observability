@@ -1,0 +1,367 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+// pipelineDebugger.model.ts — the pure half of the pipeline debugger screen.
+//
+// Everything here is a function of data the api returned: the stage order, the
+// operator-facing name of each hop, which hops this screen can see at all, the
+// latency arithmetic, and the exact command line that does the same thing from
+// a terminal. No fetching, no React — so the honesty rules the table depends on
+// are unit-testable on their own.
+//
+// THE ONE RULE THIS FILE EXISTS TO HOLD: a hop the api cannot observe is never
+// rendered as a miss. There are four states on this screen, not two — seen, not
+// seen, not observable (with the reason), and still waiting — and the third and
+// fourth are the ones that keep an operator from chasing a hop that was fine.
+
+import type { DebugKind, DebugStageEntry, DebugVerdict, SessionDetail, SessionSummary } from "../../services/api.debug";
+
+/** The pipeline, in order. The value is also the module log file's base name. */
+export const STAGE_ORDER = [
+  "ingress",
+  "parser",
+  "kafka",
+  "router",
+  "opensearch",
+  "victoria",
+  "clickhouse",
+  "correlation",
+  "api",
+  "ui",
+] as const;
+
+export type StageName = (typeof STAGE_ORDER)[number];
+
+/** The stages the api itself gathers evidence for (internal/pipedebug). */
+export const SERVER_STAGES: readonly string[] = ["kafka", "opensearch", "victoria", "clickhouse", "correlation", "api"];
+
+/** Answered by the api on demand, not by the follow that runs in the background. */
+export const ON_DEMAND_STAGES: readonly string[] = ["parser", "ui"];
+
+/**
+ * What each hop is called on screen. The names are the OPERATOR's words for
+ * what happens there — a hop is a step in getting a record onto a screen, not a
+ * product a store vendor sells.
+ */
+const STAGE_LABELS: Record<string, string> = {
+  ingress: "Ingest edge",
+  parser: "Parsing",
+  kafka: "Event bus",
+  router: "Routing lanes",
+  opensearch: "Log search",
+  victoria: "Metrics store",
+  clickhouse: "Flow and event store",
+  correlation: "Correlation",
+  api: "Product API",
+  ui: "Screen query",
+};
+
+export function stageLabel(stage: string): string {
+  return STAGE_LABELS[stage] ?? stage;
+}
+
+/**
+ * Why a hop cannot be answered from this screen, and what does answer it. Two
+ * hops are collected on the host by the command-line tool (a live subscription
+ * to the routing tier, and the ingest edge's own container output), and saying
+ * so — with the command that collects them — is the difference between an
+ * honest gap and a screen that looks like the record vanished.
+ */
+export function hostSideNote(stage: string): string {
+  if (stage === "ingress") {
+    return "Collected on the host, not here: the ingest edge's own lines come from its container output. Run correlix-debug trace on the host for this hop.";
+  }
+  if (stage === "router") {
+    return "Collected on the host, not here: the routing lane is watched with a live per-event subscription the api does not hold. Run correlix-debug trace on the host for this hop.";
+  }
+  return "";
+}
+
+export type RowState = DebugVerdict | "waiting";
+
+export type StageRow = {
+  stage: string;
+  label: string;
+  index: number;
+  state: RowState;
+  reason?: string;
+  query?: string;
+  detail?: Record<string, unknown>;
+  firstSeen?: string;
+  /** Milliseconds from the previous hop that was SEEN. Null when there is none. */
+  latencyMs: number | null;
+  /** Whether this screen can ask the api for this hop's evidence again. */
+  readableHere: boolean;
+  /** Whether the hop is answered only when asked for (parsing and the screen query). */
+  onDemand: boolean;
+};
+
+/**
+ * Build the full ten-row table from whatever entries have arrived.
+ *
+ * `running` is what separates "waiting" from "not reported": while the follow
+ * is still going, a hop with no entry yet has not answered — it has not failed.
+ * Once the follow is done, a server hop that never reported says so plainly.
+ */
+export function buildStageRows(entries: DebugStageEntry[], running: boolean): StageRow[] {
+  const byStage = new Map<string, DebugStageEntry>();
+  for (const e of entries) byStage.set(e.stage, e);
+
+  const rows: StageRow[] = [];
+  let prevSeen: number | null = null;
+  STAGE_ORDER.forEach((stage, i) => {
+    const e = byStage.get(stage);
+    const readableHere = SERVER_STAGES.includes(stage) || ON_DEMAND_STAGES.includes(stage);
+    const row: StageRow = {
+      stage,
+      label: stageLabel(stage),
+      index: i + 1,
+      state: "waiting",
+      latencyMs: null,
+      readableHere,
+      onDemand: ON_DEMAND_STAGES.includes(stage),
+    };
+    if (e) {
+      row.state = e.verdict;
+      row.reason = e.reason;
+      row.query = e.query;
+      row.detail = e.detail;
+      row.firstSeen = e.t_first_seen;
+    } else if (!readableHere) {
+      row.state = "not_observable";
+      row.reason = hostSideNote(stage);
+    } else if (!running) {
+      row.state = "not_observable";
+      row.reason = row.onDemand
+        ? "Answered when asked for — read this hop to run its query now."
+        : "This hop did not report before the run ended.";
+    }
+    // Latency is measured between hops that were SEEN, and is absent when there
+    // is no earlier seen hop to measure from. A zero would read as "instant".
+    if (row.state === "seen" && row.firstSeen) {
+      const t = Date.parse(row.firstSeen);
+      if (!Number.isNaN(t)) {
+        if (prevSeen !== null) row.latencyMs = t - prevSeen;
+        prevSeen = t;
+      }
+    }
+    rows.push(row);
+  });
+  return rows;
+}
+
+/** The word for a row's state, and the tone it is drawn in. */
+export function stateLabel(state: RowState): string {
+  switch (state) {
+    case "seen":
+      return "Seen";
+    case "not_seen":
+      return "Not seen";
+    case "not_observable":
+      return "Not observable";
+    default:
+      return "Waiting";
+  }
+}
+
+export type Tone = "good" | "warn" | "bad" | "muted";
+
+export function stateTone(state: RowState): Tone {
+  switch (state) {
+    case "seen":
+      return "good";
+    case "not_seen":
+      return "bad";
+    case "not_observable":
+      return "muted";
+    default:
+      return "warn";
+  }
+}
+
+/** A short, honest duration. */
+export function formatLatency(ms: number | null): string {
+  if (ms === null) return "—";
+  if (Math.abs(ms) < 1000) return `${ms} ms`;
+  return `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)} s`;
+}
+
+export function formatBytes(n: number): string {
+  if (!n) return "0 B";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function formatWhen(iso?: string): string {
+  if (!iso) return "—";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "—";
+  return new Date(t).toISOString().replace("T", " ").replace(/\.\d+Z$/, "Z");
+}
+
+/** Seconds until a stamped time, floored at zero. */
+export function secondsUntil(iso: string | undefined, now: number): number {
+  if (!iso) return 0;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return 0;
+  return Math.max(0, Math.round((t - now) / 1000));
+}
+
+/**
+ * A needle is a fragment of somebody's real log line, so the screen shows
+ * enough to recognise it and nothing more. The length is stated because "how
+ * specific is what I armed" is the question an operator actually has.
+ */
+export function maskNeedle(needle?: string): string {
+  const s = (needle ?? "").trim();
+  if (!s) return "";
+  const head = s.slice(0, 4);
+  return `${head}… (${s.length} characters)`;
+}
+
+/** The verdict tally, as one sentence. */
+export function sessionTally(s: SessionSummary): string {
+  return `${s.seen} seen · ${s.not_seen} not seen · ${s.not_observable} not observable`;
+}
+
+// ── who made this file, and what was taken out of it ────────────────────────
+//
+// A saved run is an artifact that leaves the building: it is downloaded and
+// handed to somebody who was not there. Reading the hops without reading the
+// manifest tells an operator what the run FOUND and nothing about whether it
+// can be trusted or shared — which tool wrote it, against which api, who ran
+// it, and which redaction was applied to every line in it. The api has always
+// returned `manifest`; showing it is what makes the download an accountable
+// artifact instead of an anonymous one.
+
+export type ProvenanceRow = { label: string; value: string };
+
+/**
+ * The manifest as an operator reads it.
+ *
+ * An ABSENT manifest is a fact, not an empty list: a session directory whose
+ * manifest could not be read is a partial session, and the api says so in
+ * `session.incomplete` / `reason`. Returning [] there would render a run of
+ * unknown provenance identically to one with none — the exact confusion this
+ * screen's four-state rule exists to prevent.
+ */
+export function sessionProvenance(detail: SessionDetail): ProvenanceRow[] {
+  const man = detail.manifest;
+  if (!man) {
+    return [{ label: "Provenance", value: detail.session.incomplete || detail.reason || "Not recorded in this run." }];
+  }
+  const rows: ProvenanceRow[] = [
+    { label: "Ran by", value: man.actor?.trim() || "Not recorded" },
+    { label: "Written by", value: man.tool?.trim() || "Not recorded" },
+    { label: "Redaction", value: man.redaction?.trim() || "None recorded" },
+  ];
+  if (man.api_base) rows.push({ label: "Against", value: man.api_base });
+  if (man.finished) rows.push({ label: "Finished", value: formatWhen(man.finished) });
+  const flags = Object.entries(man.flags ?? {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${k}=${v}`);
+  if (flags.length) rows.push({ label: "Flags", value: flags.join(" ") });
+  return rows;
+}
+
+/**
+ * Everything that degraded the run without failing it — the manifest's own
+ * warnings plus a manifest that could not be read at all. A partial session
+ * that reads as a whole one is the silent-failure shape this screen refuses.
+ */
+export function sessionWarnings(detail: SessionDetail): string[] {
+  const out: string[] = [];
+  if (detail.session.incomplete) out.push(detail.session.incomplete);
+  for (const w of detail.manifest?.warnings ?? detail.session.warnings ?? []) {
+    if (w.trim() && !out.includes(w)) out.push(w);
+  }
+  return out;
+}
+
+// ── the command line that does the same thing ───────────────────────────────
+//
+// Shown next to every action on purpose: an operator who learns the verb here
+// can run it from a terminal during an incident, when the screen may be the
+// thing that is down.
+
+//
+// WHAT A DEVICE NAME IS ALLOWED TO CONTAIN HERE, AND WHY IT IS A REFUSAL.
+//
+// A discovered device names ITSELF: the name on this screen can come straight
+// from the device's own sysName, and nothing between the wire and this line
+// checks its characters. The string below is not run by us — it is offered to a
+// person to paste into a terminal — so a name like `core1; curl x|sh` would be
+// the product handing an operator someone else's command to run.
+//
+// We REFUSE rather than quote. Quoting would have to be correct for the shell
+// the operator happens to be in, and POSIX single quotes are not the escape a
+// Windows command prompt reads, so a quoted line cannot be proven safe for a
+// destination we do not control. A device name is an identifier; no real one
+// needs a character a shell reads as syntax. So the safe set is an allow list,
+// anything outside it stops the whole line, and the screen says why instead of
+// printing a command that is one paste away from running.
+//
+// The same rule covers the tenant and the path filter: every value that reaches
+// this line is checked, not just the one we know a device controls.
+
+/** Characters a name may carry here: letters, digits, and the punctuation that
+ *  appears in real host names, tenant ids and gNMI paths (a gNMI key selector
+ *  is `[name=eth0]`, so the brackets, the equals and the comma are in the set).
+ *  No whitespace, no quote, and no character any shell reads as syntax. */
+const SHELL_SAFE_ARG = /^[A-Za-z0-9._:@/+=,[\]-]+$/;
+
+/** Is this value safe to place on a command line unquoted, in any shell? */
+export function isShellSafeArg(v: string): boolean {
+  return SHELL_SAFE_ARG.test(v);
+}
+
+/** What the screen shows instead of a command line, when a value cannot go on
+ *  one. Names the field that is wrong and what to do about it. */
+export function traceCommandRefusal(field: string): string {
+  return `No command line is shown here. The ${field} carries characters a terminal would read as instructions rather than as a name. Start the run with the button above instead.`;
+}
+
+/** The command line, or a refusal. Exactly one of the two is ever set, so a
+ *  caller cannot paint a refusal as a command by accident. */
+export type TraceCommand = { command: string; refused: "" } | { command: ""; refused: string };
+
+/** The placeholder for a run the operator has not named a device for yet. It is
+ *  OURS, not a value off the wire, so it never goes through the safety check. */
+const DEVICE_PLACEHOLDER = "<device>";
+
+export function traceCommand(o: { kind: DebugKind; device: string; tenant?: string; ttlSeconds?: number; passive?: boolean; sinceSeconds?: number; path?: string }): TraceCommand {
+  const device = (o.device ?? "").trim();
+  const tenant = (o.tenant ?? "").trim();
+  const path = o.passive ? (o.path ?? "").trim() : "";
+  const checked: [string, string][] = [["device name", device], ["tenant", tenant], ["path filter", path]];
+  for (const [field, v] of checked) {
+    if (v !== "" && !isShellSafeArg(v)) return { command: "", refused: traceCommandRefusal(field) };
+  }
+  const parts = ["correlix-debug trace", `--kind ${o.kind}`];
+  if (o.passive) parts.push("--passive");
+  parts.push(`--device ${device || DEVICE_PLACEHOLDER}`);
+  if (tenant) parts.push(`--tenant ${tenant}`);
+  if (o.passive && o.sinceSeconds) parts.push(`--since ${o.sinceSeconds}s`);
+  if (path) parts.push(`--path ${path}`);
+  if (!o.passive && o.ttlSeconds) parts.push(`--ttl ${o.ttlSeconds}s`);
+  return { command: parts.join(" "), refused: "" };
+}
+
+export function logsCommand(modules: string[], forSeconds: number): string {
+  const list = modules.length ? modules.join(",") : "api";
+  return `correlix-debug logs --modules ${list} --for ${forSeconds}s`;
+}
+
+export function bundleCommand(sessionId?: string): string {
+  return sessionId ? `correlix-debug bundle --session data/debug/${sessionId}` : "correlix-debug bundle --last 1";
+}
+
+/**
+ * The parser filter has no command-line verb: an injected record carries its
+ * own marker and is traced without arming anything, so the switch exists only
+ * for a REAL record. The request is shown instead of inventing a verb.
+ */
+export function parseMarkerCommand(forSeconds: number): string {
+  return `PUT /api/debug/parsemarker {"marker":"<needle>","for_seconds":${forSeconds}}`;
+}

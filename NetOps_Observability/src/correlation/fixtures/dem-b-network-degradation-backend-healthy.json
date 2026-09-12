@@ -1,0 +1,34 @@
+{
+  "name": "DEM scenario B — the overlay tunnel on the path to the app is degraded while the backend stays healthy: the network/path signature wins and confirms",
+  "comment": "Owner Phase O scenario B (docs/design/research/DEM_OWNER_DESIGN_2026-09-05.md). A synthetic vantage (active_probe) and the branch edge's own control plane (control_plane) are different modality classes with different observers, so the independence gate confirms. tunnel-mtu-blackhole out-ranks the app-experience signature at equal confidence because it explains two clauses (tunnel fault + app symptom) instead of one. No lb/app/cloud telemetry is present at all — 'backend healthy' is expressed by absence, and no application-tier hypothesis confirms.",
+  "signals": [
+    {
+      "kind": "tunnel_degraded",
+      "entity_type": "path",
+      "entity_id": "frisco-edge->portal.acme.example",
+      "observer_id": "syslog-frisco-edge",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "ts_offset_s": 0,
+      "deviation": 3.0
+    },
+    {
+      "kind": "synthetic_http_fail",
+      "entity_type": "service",
+      "entity_id": "portal.acme.example",
+      "observer_id": "syn-frisco",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "probe_authority": "high",
+      "ts_offset_s": 20,
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.wan-edge.tunnel-mtu-blackhole",
+    "tier": "confirmed",
+    "owner": "netops"
+  }
+}

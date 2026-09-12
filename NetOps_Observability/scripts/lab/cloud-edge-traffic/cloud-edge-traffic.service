@@ -1,0 +1,28 @@
+[Unit]
+# Correlix cloud demo — end-to-end HTTP traffic generator (the END-USER hop).
+# Runs on a lab client VM behind a clos leaf so requests traverse the real
+# fabric -> edge (.122) -> Internet -> each cloud's DNS/WAF/LB/firewall/app.
+# See README.md. Continuous low-rate stream (1-5 req/s/provider).
+Description=Correlix cloud edge-demo traffic generator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Installed layout (see deploy.sh): script + config under /opt/cloud-edge-traffic.
+WorkingDirectory=/opt/cloud-edge-traffic
+Environment=CLOUD_EDGE_TRAFFIC_CONFIG=/opt/cloud-edge-traffic/endpoints.conf
+Environment=LOG_LEVEL=INFO
+ExecStart=/usr/bin/python3 /opt/cloud-edge-traffic/cloud_edge_traffic.py run
+Restart=always
+RestartSec=5
+# Least privilege: this only makes outbound TCP:80, needs no elevated caps.
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadOnlyPaths=/opt/cloud-edge-traffic
+
+[Install]
+WantedBy=multi-user.target

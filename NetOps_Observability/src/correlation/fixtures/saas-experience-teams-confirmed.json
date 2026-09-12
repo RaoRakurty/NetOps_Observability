@@ -1,0 +1,31 @@
+{
+  "name": "Microsoft Teams synthetic TLS failure + independent flow collapse: confirmed app-experience impact (representative)",
+  "signals": [
+    {
+      "kind": "synthetic_tls_fail",
+      "entity_type": "app",
+      "entity_id": "microsoft_teams",
+      "observer_id": "syn-frisco",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "probe_authority": "high",
+      "deviation": 3.0
+    },
+    {
+      "kind": "flow_volume_anomaly",
+      "entity_type": "app",
+      "entity_id": "microsoft_teams",
+      "observer_id": "flow-col-1",
+      "observer_type": "flow_exporter",
+      "modality": "passive_flow",
+      "collection_path": "direct",
+      "deviation": 4.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.app.saas-experience-degraded",
+    "tier": "confirmed",
+    "owner": "app_team"
+  }
+}

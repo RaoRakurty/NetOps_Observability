@@ -1,0 +1,84 @@
+# gitleaks fingerprint triage (SC-007). Each entry is one REVIEWED finding in
+# git history, pinned by exact fingerprint (commit:path:rule:line) so the scan
+# stays blocking for everything else. Justify every line.
+#
+# netbox_sync.go — false positive: the flagged line passes a variable named
+# after the credential concept into s.ensure() next to a quoted API path; the
+# rule matched identifier-adjacent-to-string. No secret material.
+fcef72db33ed9a4d19d0e02fb0bdc46b1e7d1ac2:NetOps_Observability/src/backend/netbox_sync.go:generic-api-key:148
+#
+# iam_audit.py — false positives: "victim-pass-123" is the synthetic test
+# credential the IAM audit harness uses to create-and-attack its own victim
+# account (lifecycle module). Deliberately fake, never a live secret.
+c8038969561f70012514b8ae08f3806379c48ec7:NetOps_Observability/scripts/iam_audit.py:generic-api-key:289
+c8038969561f70012514b8ae08f3806379c48ec7:NetOps_Observability/scripts/iam_audit.py:generic-api-key:313
+#
+# snmp_creds_vault_test.go — false positive: "auth-secret-123"/"priv-secret-456"
+# are synthetic fixtures in the vault round-trip unit test (the test asserts
+# they do NOT appear in the encrypted file). Flagged by gitleaks 8.30.1's
+# generic-api-key rule; never live credentials.
+d1901eec32335027f08f5dbd384b806d494deba5:NetOps_Observability/src/backend/snmp_creds_vault_test.go:generic-api-key:30
+#
+# this file itself, as first committed — false positive: the original triage
+# comment for the netbox_sync finding quoted the matching code verbatim, so
+# the rule fired on the comment. Reworded since; the historical commit is
+# immutable, hence its own fingerprint.
+05ff3a049c625feea97e4fb3ae6abbde0e7c2406:.gitleaksignore:generic-api-key:6
+
+# gitleaks 8.30.x new curl-auth rules — documentation examples, not credentials.
+# api-access.md shows operators the Authorization header shape with a placeholder
+# token (both the AI docs corpus copy and the docs-portal copy); the
+# mock-servicenow README documents the bundled TEST FIXTURE's published default
+# login. Nothing here is a real secret.
+d608591bfe492ef64a161e3c40a6f1a816ab7dbb:NetOps_Observability/src/backend/ai/docs_corpus/administration/api-access.md:curl-auth-header:37
+d608591bfe492ef64a161e3c40a6f1a816ab7dbb:NetOps_Observability/src/backend/ai/docs_corpus/administration/api-access.md:curl-auth-header:39
+d608591bfe492ef64a161e3c40a6f1a816ab7dbb:NetOps_Observability/src/backend/ai/docs_corpus/administration/api-access.md:curl-auth-header:82
+4535a7588651b7666def75c7a1090780a43635e1:NetOps_Observability/docs-portal/docs/administration/api-access.md:curl-auth-header:37
+4535a7588651b7666def75c7a1090780a43635e1:NetOps_Observability/docs-portal/docs/administration/api-access.md:curl-auth-header:39
+4535a7588651b7666def75c7a1090780a43635e1:NetOps_Observability/docs-portal/docs/administration/api-access.md:curl-auth-header:82
+f861d29ae5a0e16c4864708a1bbc03b281feb3cd:NetOps_Observability/deployment/docker/mock-servicenow/README.md:curl-auth-user:58
+#
+# cloudconn/testdata/sigv4/* — false positives: these are the OFFICIAL AWS
+# SigV4 test-vector files (AWS's published signing test suite), carrying the
+# documented example credentials (AKIDEXAMPLE / the public example secret and
+# session token). Public by definition; never live credentials.
+346f24b799779f89418a20fd9973d93eb9152285:NetOps_Observability/src/backend/cloudconn/testdata/sigv4/get-vanilla-with-session-token/header-canonical-request.txt:generic-api-key:6
+346f24b799779f89418a20fd9973d93eb9152285:NetOps_Observability/src/backend/cloudconn/testdata/sigv4/get-vanilla-with-session-token/context.json:generic-api-key:5
+346f24b799779f89418a20fd9973d93eb9152285:NetOps_Observability/src/backend/cloudconn/testdata/sigv4/get-vanilla-with-session-token/header-signed-request.txt:generic-api-key:3
+346f24b799779f89418a20fd9973d93eb9152285:NetOps_Observability/src/backend/cloudconn/testdata/sigv4/get-vanilla-with-session-token/header-signed-request.txt:generic-api-key:5
+346f24b799779f89418a20fd9973d93eb9152285:NetOps_Observability/src/backend/cloudconn/testdata/sigv4/post-sts-header-before/header-signed-request.txt:generic-api-key:5
+#
+# exchange_azure_cert_test.go — false positive: the flagged "secret" is the
+# literal PEM header string "-----BEGIN PRIVATE KEY-----" used as a splice
+# marker in the key/cert-mismatch test case; all key material in that test is
+# generated at runtime. No secret.
+584bd19fcc2d5403c4d6e3795042c540325a1a27:NetOps_Observability/src/backend/cloudconn/exchange_azure_cert_test.go:private-key:199
+#
+# ai/redact_test.go — false positives re-minted by the P2 W3.5/decomposition
+# MOVE of the DLP redactor's test suite into ai/ (new blob path = new
+# fingerprints; the same synthetic fixtures were already triaged at their old
+# main-package path). The fixtures are a hand-assembled JWT (sub=admin), a
+# truncated fake RSA key block and hunter2-class tokens — inputs that exist
+# precisely to prove the redactor strips them. Never live credentials.
+9e811744a5d0d819f04d6c1b69678c48ddb6d7ec:NetOps_Observability/src/backend/ai/redact_test.go:jwt:55
+9e811744a5d0d819f04d6c1b69678c48ddb6d7ec:NetOps_Observability/src/backend/ai/redact_test.go:private-key:83
+9e811744a5d0d819f04d6c1b69678c48ddb6d7ec:NetOps_Observability/src/backend/ai/redact_test.go:generic-api-key:207
+# 2026-08-13 watchdog-handover tests (commit 0d6eb324): FAKE fixture bearer
+# tokens (e.g. "nt_secret=1234") tripping generic-api-key; replaced with
+# low-entropy "test-*-000..." values in the follow-up commit — these pins
+# cover the one historical commit only. No real credential was ever present.
+0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/scripts/installer-gui/watchdog_test.go:generic-api-key:86
+0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/scripts/installer-gui/watchdog_test.go:generic-api-key:163
+0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/scripts/installer-gui/watchdog_test.go:generic-api-key:165
+0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/scripts/installer-gui/watchdog_test.go:generic-api-key:170
+0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/scripts/installer-gui/watchdog_test.go:generic-api-key:174
+0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/scripts/installer-gui/watchdog_test.go:generic-api-key:187
+0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/tests/test_watchdog_ship.py:generic-api-key:112
+0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/tests/test_watchdog_ship.py:generic-api-key:114
+#
+# protocoldiag/redact_test.go — false positive: the multi-line PEM blocks are
+# SYNTHETIC fixtures ("...linea111", "...openssh444") inside the redaction
+# tests themselves — the suite that PROVES real PEM bodies get redacted from
+# TAC exports. Deliberately fake, never key material; flagged by the
+# private-key rule on the BEGIN/END markers the tests must contain.
+e63e3021ee136c513fa797aeccb086d9161c0ed2:NetOps_Observability/src/backend/internal/protocoldiag/redact_test.go:private-key:105

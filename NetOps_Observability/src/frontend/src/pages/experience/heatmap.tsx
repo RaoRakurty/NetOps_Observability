@@ -1,0 +1,158 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+// heatmap.tsx — the site × application experience heatmap.
+//
+// One cell per (site, application) pair that something actually measures.
+// Colour is the BAND, never a continuous ramp: the bands are the published
+// vocabulary and a gradient would invent precision the score does not have.
+// Size is the subject count — how many checks stand behind the cell — so a
+// cell built from one check cannot look as solid as one built from twelve.
+//
+// HONESTY. A pair with checks but no measurement in the window is hatched and
+// says why on hover; it is never green and never 0. A pair nothing measures at
+// all has no cell — an absent pair and a failing pair must not look alike.
+//
+// PERFORMANCE. The budget is 200 sites × 50 applications. Rendering 10 000 DOM
+// cells is both slow and unreadable, so the grid is CAPPED (worst sites first,
+// busiest applications first) and the cap is stated on screen with the totals —
+// a silently truncated grid would be a lie about coverage.
+
+import { useMemo } from "react";
+
+import type { DemBand } from "../../services/api";
+import { BandChip } from "./honest";
+import AskIris from "../../components/AskIris";
+
+export interface HeatCell {
+  site: string;
+  app: string;
+  band: DemBand;
+  measured: boolean;
+  /** 0..100 when measured. */
+  score?: number;
+  /** How many checks stand behind this cell. */
+  subjects: number;
+  /** The component verdicts behind the cell, for the hover text. */
+  components?: string[];
+  /** Which handoff owns the failing part, when one is known. */
+  seam?: string;
+  /** Why the cell is not measured. Rendered on hover, never as a number. */
+  reason?: string;
+}
+
+const MAX_ROWS = 40;
+const MAX_COLS = 30;
+
+/** Worst first: poor, then fair, then not measured, then good — an operator
+ *  opens this to find what is broken, not to admire what is not. */
+const BAND_RANK: Record<DemBand, number> = { poor: 0, fair: 1, not_measured: 2, good: 3 };
+
+export function ExperienceHeatmap({ cells, caption }: {
+  cells: HeatCell[];
+  caption?: string;
+}) {
+  const model = useMemo(() => {
+    const byKey = new Map<string, HeatCell>();
+    for (const c of cells) byKey.set(`${c.site}\0${c.app}`, c);
+
+    const siteRank = new Map<string, number>();
+    const appCount = new Map<string, number>();
+    for (const c of cells) {
+      const rank = BAND_RANK[c.band] ?? 2;
+      siteRank.set(c.site, Math.min(siteRank.get(c.site) ?? 9, rank));
+      appCount.set(c.app, (appCount.get(c.app) ?? 0) + c.subjects);
+    }
+    const allSites = [...siteRank.keys()].sort(
+      (a, b) => (siteRank.get(a)! - siteRank.get(b)!) || a.localeCompare(b),
+    );
+    const allApps = [...appCount.keys()].sort(
+      (a, b) => (appCount.get(b)! - appCount.get(a)!) || a.localeCompare(b),
+    );
+    return {
+      sites: allSites.slice(0, MAX_ROWS), apps: allApps.slice(0, MAX_COLS),
+      totalSites: allSites.length, totalApps: allApps.length, byKey,
+    };
+  }, [cells]);
+
+  if (cells.length === 0) {
+    return (
+      <p className="dx-note">
+        Nothing measured in this window.<AskIris topic="dem.absence-not-health" label="an empty grid" />
+      </p>
+    );
+  }
+
+  const capped = model.totalSites > MAX_ROWS || model.totalApps > MAX_COLS;
+
+  return (
+    <div className="dx-heat">
+      <div className="dx-scroll">
+        <table className="dx-heat-grid">
+          <caption className="dx-cap" style={{ captionSide: "bottom", textAlign: "left" }}>
+            {caption ?? "Experience band per site and application."}
+            {capped && ` Showing the ${model.sites.length} worst sites of ${model.totalSites} and the ${model.apps.length} busiest applications of ${model.totalApps}; the grid is capped so it stays readable.`}
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Site</th>
+              {model.apps.map((a) => <th key={a} scope="col">{a}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {model.sites.map((s) => (
+              <tr key={s}>
+                <th scope="row">{s}</th>
+                {model.apps.map((a) => {
+                  const c = model.byKey.get(`${s}\0${a}`);
+                  if (!c) {
+                    return (
+                      <td key={a} className="dx-heat-cell dx-heat-cell--empty"
+                        title={`${s} · ${a} — nothing measures this pair.`}>
+                        <span className="sr-only">{s}, {a}: nothing measures this pair</span>
+                      </td>
+                    );
+                  }
+                  const title = cellTitle(c);
+                  // 8..22px mark, so subject count is legible without a legend.
+                  const px = Math.max(8, Math.min(22, 8 + c.subjects * 3));
+                  return (
+                    <td key={a} className={`dx-heat-cell dx-heat-cell--${c.band}`}
+                      title={title} aria-label={title} tabIndex={0}>
+                      <span className="dx-heat-mark" style={{ width: px, height: px }} aria-hidden="true" />
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="dx-heat-legend">
+        <span className="dx-heat-key"><span className="dx-heat-swatch dx-heat-cell--good" /> Good ≥ 70</span>
+        <span className="dx-heat-key"><span className="dx-heat-swatch dx-heat-cell--fair" /> Fair 31–69</span>
+        <span className="dx-heat-key"><span className="dx-heat-swatch dx-heat-cell--poor" /> Poor ≤ 30</span>
+        <span className="dx-heat-key"><span className="dx-heat-swatch dx-heat-cell--not_measured" /> Not measured</span>
+        <span className="dx-heat-key"><span className="dx-heat-swatch dx-heat-cell--empty" /> Nothing measures this pair</span>
+        <span className="dx-heat-key">Mark size = checks behind the cell</span>
+      </div>
+    </div>
+  );
+}
+
+function cellTitle(c: HeatCell): string {
+  const head = `${c.site} · ${c.app}`;
+  const value = c.measured && c.score !== undefined
+    ? `${c.score.toFixed(1)} (${c.band})`
+    : `not measured — ${c.reason || "no measurement was recorded in this window"}`;
+  const parts = [`${head}: ${value}`, `${c.subjects} check${c.subjects === 1 ? "" : "s"}`];
+  if (c.components && c.components.length > 0) parts.push(c.components.join(" · "));
+  if (c.seam) parts.push(`handoff: ${c.seam}`);
+  return parts.join("\n");
+}
+
+/** The band chip that labels a heatmap row or a hotspot, so colour is never the
+ *  only carrier of the verdict. */
+export function HeatBand({ band }: { band?: string }) {
+  return <BandChip band={band} />;
+}

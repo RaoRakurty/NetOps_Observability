@@ -1,0 +1,563 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Incident Assessment — Application / service experience change — crm-portal</title>
+<style>
+  @page { size: A4; margin: 14mm 12mm; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+   
+  html { color-scheme: light; background: #fff; }
+  body { font: 12.5px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #172033; margin: 0; background: #fff; }
+  .doc { max-width: 760px; margin: 0 auto; padding: 4px 0 24px; }
+  header.rpt { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #172033; padding-bottom:9px; margin-bottom:14px; }
+  header.rpt .brand { font-weight:800; letter-spacing:.5px; font-size:13px; color:#334155; }
+  header.rpt .doctype { font-size:11px; text-transform:uppercase; letter-spacing:1px; color:#64748b; text-align:right; }
+  h1 { font-size:20px; margin:0 0 8px; break-after: avoid; page-break-after: avoid; }
+  h2 { font-size:11px; text-transform:uppercase; letter-spacing:.7px; color:#64748b; margin:0 0 6px; border-bottom:1px solid #e2e8f0; padding-bottom:3px; break-after: avoid; page-break-after: avoid; }
+   
+  table + h2, div + h2, p + h2, ol + h2 { margin-top: 16px; }
+   
+  .pmh { margin:24px 0 6px; padding:6px 10px; background:#172033; color:#fff; font-size:11px; font-weight:800; letter-spacing:1.2px; text-transform:uppercase; border-radius:4px; break-after: avoid; page-break-after: avoid; }
+   
+  section { margin: 14px 0; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; page-break-inside: avoid; }
+  svg { break-inside: avoid; page-break-inside: avoid; }
+  .badges { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px; }
+  .pill { font-size:10.5px; font-weight:800; padding:3px 9px; border-radius:7px; border:1px solid; white-space:nowrap; }
+  .pill.green { color:#0f7a3d; background:#eafaf1; border-color:#bfeccf; }
+  .pill.amber { color:#b45309; background:#fff4e8; border-color:#ffd3a9; }
+  .pill.red   { color:#b42318; background:#fff0ee; border-color:#ffd0cc; }
+  .pill.blue  { color:#1d4ed8; background:#eef4ff; border-color:#c9dbff; }
+  .pill.gray  { color:#475467; background:#eef1f6; border-color:#d8dee8; }
+  .meta { font-size:11px; color:#64748b; margin-bottom:10px; }
+  .meta b { color:#172033; font-family: ui-monospace, monospace; }
+  .mgmt { border:1px solid #e2e8f0; border-left:3px solid #2563eb; border-radius:6px; padding:10px 13px; background:#f8fafc; break-inside: avoid; page-break-inside: avoid; }
+  .decision { border:1px solid #fed7aa; border-left:3px solid #b45309; border-radius:6px; padding:9px 12px; background:#fff7ed; margin-bottom:6px; break-inside: avoid; page-break-inside: avoid; }
+  .decision.green { border-color:#bfeccf; border-left-color:#0f7a3d; background:#f2fbf6; }
+  .decision.red   { border-color:#ffd0cc; border-left-color:#b42318; background:#fff5f4; }
+  table { width:100%; border-collapse:collapse; font-size:11.5px; table-layout:fixed; }
+  th, td { text-align:left; padding:5px 8px; border-bottom:1px solid #e2e8f0; vertical-align:top; overflow-wrap:break-word; word-break:break-word; }
+  th { color:#64748b; font-weight:700; font-size:10px; text-transform:uppercase; letter-spacing:.5px; background:#f8fafc; }
+   
+  .kv { display:grid; grid-template-columns: 190px 1fr; gap:2px 12px; }
+  .kv .k { color:#64748b; }
+  .kv .v { color:#172033; font-weight:600; }
+  .note { font-size:11px; color:#64748b; margin-top:4px; }
+  ol.actions { margin:4px 0; padding-left:20px; } ol.actions li { margin:5px 0; break-inside: avoid; page-break-inside: avoid; }
+  .divider { display:flex; align-items:center; gap:12px; margin:26px 0 4px; color:#94a3b8; font-size:9.5px; font-weight:800; letter-spacing:1.4px; text-transform:uppercase; break-after: avoid; page-break-after: avoid; }
+  .divider::before, .divider::after { content:""; flex:1; border-top:1px solid #d5dce6; }
+  .why b { font-size:11.5px; }
+  footer.doc-end { margin-top:18px; border-top:1px solid #e2e8f0; padding-top:7px; font-size:10px; color:#94a3b8; display:flex; justify-content:space-between; }
+</style></head><body><div class="doc">
+
+
+<header class="rpt">
+  <span class="brand">CORRELIX</span>
+  <span class="doctype">Incident Assessment<br><span style="letter-spacing:0">P-3335CF</span></span>
+</header>
+
+<h1>Application / service experience change — crm-portal</h1>
+<div class="badges">
+  
+  <span class="pill blue">Artifact class: Operational incident assessment</span>
+  <span class="pill red">Incident: Active</span>
+  <span class="pill gray">Recovery: Not observed</span>
+  <span class="pill blue">Fault domain: Not localized</span>
+  <span class="pill blue">Root cause: Under investigation</span>
+  <span class="pill blue">Confidence: Low</span>
+  <span class="pill red">Impact: Detected</span>
+  <span class="pill amber">Ticket: Held</span>
+  <span class="pill amber">Severity: WARN</span>
+</div>
+<div class="meta">Report <b>rr-3335cfaa1111-v3</b> · Case <b>P-3335CF</b> · Generated <b>2026-07-12 20:00:00 UTC</b> · Leading hypothesis; see analysis state for certainty</div>
+<div class="note">Withheld for this artifact class (Operational incident assessment): lessons learned. unpromoted candidate — an operational assessment may exist while the incident is active; suspected/undetermined findings are allowed and lessons-learned editing is not</div>
+
+
+
+
+<div class="pmh">1 · Executive summary</div>
+
+
+<section>
+  <h2>Incident at a glance</h2>
+  <div class="kv">
+    <span class="k">Where it happened</span><span class="v">Not localized — the evidence does not support a single location</span>
+    <span class="k">What possibly happened</span><span class="v">No cause hypothesis has supporting evidence yet — the anomaly is recorded without a claimed cause.</span>
+    <span class="k">Possible owner(s)</span><span class="v">Application team</span>
+    <span class="k">Why</span><span class="v" style="font-weight:400">named by the &#34;Application / service experience change&#34; hypothesis (suspected)</span>
+  </div>
+  
+  <div class="note"></div>
+  
+</section>
+
+<section>
+  <h2>Management summary</h2>
+  <div class="mgmt">At 2026-07-12 18:12:00 UTC, One automated check detected a condition of “application / service experience change” affecting crm-portal. The condition is ongoing (1h 48m elapsed). Synthetic path impact is confirmed; actual real-user impact was not confirmed because relevant real-traffic telemetry was insufficient. The cause remains unconfirmed because independent evidence classes did not corroborate the observations. Decision: Investigate — Evidence is aligned but not independently confirmed. Validate the missing evidence before opening a customer incident. Escalation follows the policy thresholds stated in the decision section.</div>
+  <div class="note">Confidence basis: evidence rests on One evidence class from one observer. Incident severity: WARN — complete synthetic path loss; single uncorroborated evidence stream (severity capped). <span style="color:#94a3b8">(evidence-peak severity: peak of the attached evidence, carried by synthetic http failure (3 high of 3 anomalous observations))</span></div>
+</section>
+
+<section>
+  <h2>Key facts</h2>
+  <div class="kv">
+    <span class="k">First observed</span><span class="v">2026-07-12 18:12:00 UTC</span>
+    
+    
+    <span class="k">Duration</span><span class="v">1h 48m (elapsed — still active)</span>
+    
+    
+    
+    <span class="k">Root cause</span><span class="v">Not identified — no cause hypothesis has supporting evidence yet</span>
+  </div>
+</section>
+
+
+<div class="pmh">2 · Impact</div>
+<section>
+  <p style="margin:4px 0 8px;font-weight:600">Synthetic-transaction impact confirmed: the configured checks failed from their vantages. Real-user impact is a separate axis (not observable) and is never derived from synthetic failures.</p>
+  <div class="kv">
+    <span class="k">Synthetic-transaction axis</span><span class="v">Confirmed</span>
+    <span class="k">Real-user axis</span><span class="v">Not observable</span>
+    <span class="k">Determination source</span><span class="v" style="font-weight:400">customer-path synthetic check failures (impact provenance block)</span>
+  </div>
+  <h2>Quantified impact — every value with provenance</h2>
+  <table><thead><tr><th style="width:21%">Measure</th><th style="width:17%">Value</th><th style="width:13%">Basis</th><th>Provenance</th></tr></thead><tbody>
+  <tr>
+    <td><b>Affected applications</b></td>
+    <td><b>Not measured</b></td>
+    <td>—</td>
+    <td>Not measured — no evidence source for this measure took part in the case.</td>
+  </tr><tr>
+    <td><b>Affected sites</b></td>
+    <td><b>Not measured</b></td>
+    <td>—</td>
+    <td>Not measured — no evidence source for this measure took part in the case.</td>
+  </tr><tr>
+    <td><b>Active users affected</b></td>
+    <td><b>Not measured</b></td>
+    <td>—</td>
+    <td>No identity or transaction mapping exists for this case; this value is not measured. It is never derived from synthetic failures, flow deltas or network events.</td>
+  </tr><tr>
+    <td><b>Sessions affected</b></td>
+    <td><b>Not measured</b></td>
+    <td>—</td>
+    <td>No identity or transaction mapping exists for this case; this value is not measured. It is never derived from synthetic failures, flow deltas or network events.</td>
+  </tr><tr>
+    <td><b>Transactions affected</b></td>
+    <td><b>Not measured</b></td>
+    <td>—</td>
+    <td>No identity or transaction mapping exists for this case; this value is not measured. It is never derived from synthetic failures, flow deltas or network events.</td>
+  </tr><tr>
+    <td><b>User-minutes lost</b></td>
+    <td><b>Not measured</b></td>
+    <td>—</td>
+    <td>No identity or transaction mapping exists for this case; this value is not measured. It is never derived from synthetic failures, flow deltas or network events.</td>
+  </tr><tr>
+    <td><b>Site-minutes lost</b></td>
+    <td><b>Not measured</b></td>
+    <td>—</td>
+    <td>No identity or transaction mapping exists for this case; this value is not measured. It is never derived from synthetic failures, flow deltas or network events.</td>
+  </tr><tr>
+    <td><b>Transaction failures (real users)</b></td>
+    <td><b>Not measured</b></td>
+    <td>—</td>
+    <td>No identity or transaction mapping exists for this case; this value is not measured. It is never derived from synthetic failures, flow deltas or network events.</td>
+  </tr><tr>
+    <td><b>Synthetic failure rate</b><div class="note">the configured synthetic checks that took part in this case</div></td>
+    <td><b>100%</b><div class="note">of 3 synthetic check observations in the window</div></td>
+    <td>Measured<div class="note">confidence: High</div></td>
+    <td>active-probe observers (customer-path checks)<div class="note">coverage: the configured check targets and vantages only — a synthetic failure proves the configured transaction failed from that vantage, nothing more</div><div class="note">3 of 3 synthetic check observations failed (directly measured).</div></td>
+  </tr><tr>
+    <td><b>Flow-volume change</b></td>
+    <td><b>Not measured</b></td>
+    <td>—</td>
+    <td>Not measured — no evidence source for this measure took part in the case.</td>
+  </tr><tr>
+    <td><b>Voice impairment</b></td>
+    <td><b>Not measured</b></td>
+    <td>—</td>
+    <td>No voice-quality telemetry (MOS/jitter/loss scoring) is attached to this case.</td>
+  </tr><tr>
+    <td><b>SLO / error-budget consumption</b></td>
+    <td><b>Not measured</b></td>
+    <td>—</td>
+    <td>No SLO is linked to this incident; error-budget consumption is not measured.</td>
+  </tr>
+  </tbody></table>
+  <div class="note">Impact values carry provenance and are never derived across evidence classes: synthetic failures, flow-volume changes and network events are never converted into affected-user counts without a valid identity or transaction mapping. A missing measure is stated as not measured — never zero.</div>
+</section>
+
+
+<div class="pmh">3 · What happened</div>
+
+<section>
+  <h2>Incident phases</h2>
+  <table><thead><tr><th style="width:22%">Phase</th><th style="width:30%">When</th><th>What happened</th></tr></thead><tbody>
+  <tr>
+    <td><b>Detection</b></td>
+    <td>2026-07-12 18:12:00 UTC</td>
+    <td>First anomalous evidence observed.</td>
+  </tr><tr>
+    <td><b>Degradation</b></td>
+    <td>2026-07-12 18:12:00 UTC → 2026-07-12 18:16:00 UTC</td>
+    <td>Anomalous evidence persisted across the participating evidence classes.</td>
+  </tr>
+  </tbody></table>
+  <div class="note">Component recovery and service recovery are tracked separately; a component coming back never closes a service that is still failing.</div>
+</section>
+
+
+<section>
+  <h2>How the failure propagated</h2>
+  
+  <div class="note">No causal sequence is proposed for this case — the engine has not matched a propagation pattern, and none is invented.</div>
+  
+  
+  <div class="note">No alternative hypothesis carries evidence in this window.</div>
+</section>
+
+
+<div class="pmh">4 · Trigger</div>
+<section>
+  <p style="margin:4px 0 8px">Not determined. The engine does not distinguish the incident trigger (the event or change that set the failure off) from the earliest observed symptom, and no trigger has been causally established.</p>
+  
+  
+</section>
+
+
+<div class="pmh">5 · Root cause and contributing factors</div>
+<section class="why">
+  <h2>Analysis reasoning</h2>
+  <p><b style="color:#b45309">Why suspected:</b> One active-check source reported degradation to the same target during an overlapping time window.</p>
+  <p><b style="color:#475467">Why not confirmed:</b> Only active path measurement saw this — a second independent source is needed to confirm.</p>
+  <p><b style="color:#1d4ed8">Required confirmation:</b> Identify whether the checks failed during DNS, TCP, TLS, or HTTP; validate vantage independence; and compare the incident window against real-user traffic, load-balancer health, application errors, and network telemetry.</p>
+</section>
+
+<section>
+  <h2>Fault localization</h2>
+  <p>The fault has not been localized to a specific domain or object.</p>
+  
+</section>
+
+<section>
+  <h2>Root cause</h2>
+  <p>Root cause has not been identified.</p>
+  
+  <h2>Contributing factors</h2>
+  <div class="note">Not determined. The engine does not yet separate contributing factors from alternative hypotheses; alternatives are listed under hypotheses and are never relabeled as contributing factors.</div>
+</section>
+
+<section>
+  <h2>Current hypothesis</h2>
+  
+  <table><thead><tr><th style="width:4%">#</th><th style="width:32%">Hypothesis</th><th style="width:13%">Confidence</th><th style="width:27%">Supporting</th><th>Missing / to confirm</th></tr></thead><tbody>
+  <tr>
+    <td style="font-family:ui-monospace,monospace;font-weight:800">1</td>
+    <td><b>Application / service experience change</b> <span class="pill gray" style="font-size:9px">symptom classification</span>
+        
+        <div class="note">condition: observed · causal role: symptom</div>
+        <div class="note">candidate owner: Application team</div></td>
+    <td>Suspected</td>
+    <td>Synthetic http failure (2 observations); Packet loss (one observation)</td>
+    <td>observe Traffic volume change</td>
+  </tr>
+  </tbody></table>
+  
+</section>
+
+
+<div class="pmh">6 · Detection and response</div>
+<section>
+  <h2>Detection milestones</h2>
+  
+  <table><thead><tr><th style="width:28%">Milestone</th><th style="width:24%">When</th><th>Source of this timestamp</th></tr></thead><tbody>
+  <tr>
+    <td><b>First credible failure</b></td>
+    <td style="font-family:ui-monospace,monospace">2026-07-12 18:12:00 UTC</td>
+    <td>earliest attached anomalous observation in the correlation window (observed)</td>
+  </tr>
+  </tbody></table>
+  
+  <div class="note">Not recorded: First service impact · First Correlix detection · First alert · First acknowledgement · First user/help-desk report · First mitigation · Service restoration · Recovery validation — a milestone without a sourced timestamp is stated as absent, never estimated.</div>
+  
+</section>
+
+<section>
+  <h2>Decision</h2>
+  <div class="decision ">
+    <b>Investigate</b> — Evidence is aligned but not independently confirmed. Validate the missing evidence before opening a customer incident.
+  </div>
+  <div class="kv">
+    <span class="k">Policy</span><span class="v">Default ServiceNow incident policy (platform default — no tenant policy configured)</span>
+    <span class="k">Ticket-open threshold</span><span class="v">verdict ≥ suspected, customer-facing evidence required, suspected additionally requires critical severity</span>
+    <span class="k">Monitoring window</span><span class="v">30m 00s after recovery</span>
+    <span class="k">Auto-close</span><span class="v">no recurrence and no NEW customer-impact evidence arising within the monitoring window (impact already recorded for this incident stays recorded and does not block a clean close)</span>
+    <span class="k">Reopen</span><span class="v">the same condition recurs within 30m 00s (flap suppression)</span>
+    <span class="k">Escalation</span><span class="v">armed — triggers when customer impact is confirmed, or a second independent evidence class corroborates the fault</span>
+    <span class="k">Ticket recommendation</span><span class="v">Hold — single active-probe plane — awaiting independent corroboration</span>
+    
+  
+  </div>
+</section>
+
+<section>
+  <h2>Ownership</h2>
+  <div class="kv">
+    <span class="k">Triage owner</span><span class="v">NOC</span>
+    <span class="k">Why</span><span class="v" style="font-weight:400">Default triage owner until the failure stage and fault domain are identified.</span>
+    <span class="k">Suspected fault domain</span><span class="v">Undetermined</span>
+    
+    
+    <span class="k">Escalation owner</span><span class="v">Pending</span>
+    <span class="k">Why</span><span class="v" style="font-weight:400">Escalation owner is assigned when the analysis reaches probable/confirmed with a supported fault domain.</span>
+  </div>
+  
+  <table style="margin-top:6px"><thead><tr><th>Candidate team</th><th>Basis</th></tr></thead><tbody>
+  <tr><td>Application team</td><td>named by the &#34;Application / service experience change&#34; hypothesis (suspected)</td></tr>
+  </tbody></table>
+</section>
+
+
+<div class="pmh">7 · Mitigation and service recovery</div>
+<section>
+  <div class="kv">
+    <span class="k">Recovery</span><span class="v">Not observed</span>
+    <span class="k">Why</span><span class="v" style="font-weight:400">No recovery evidence was captured.</span>
+    <span class="k">Component recovery</span><span class="v">Not applicable</span>
+    <span class="k">Why</span><span class="v" style="font-weight:400">No component-scope evidence participated in this incident.</span>
+    <span class="k">Service recovery</span><span class="v">Not observed</span>
+    <span class="k">Why</span><span class="v" style="font-weight:400">No service-level recovery evidence was captured.</span>
+    <span class="k">Monitoring</span><span class="v">Not started</span>
+  </div>
+  <div class="note">Component recovery and service recovery are assessed separately. Mitigation steps appear in the detection milestones only when an operator or ITSM lifecycle stamp records them — they are never assumed.</div>
+</section>
+
+
+<div class="pmh">8 · Corrective actions</div>
+<section>
+  <h2>Immediate next actions</h2>
+  <ol class="actions">
+  <li><span class="pill red" style="font-size:9px">P1</span> <b>Inspect the most recent failed check transaction</b> — owner: NOC<div class="note">Expected output: DNS result, resolved IP, TCP status, TLS status, HTTP status, response time, and the failure stage</div></li>
+  <li><span class="pill blue" style="font-size:9px">P2</span> <b>Compare real traffic, load-balancer target health and application errors during the incident window</b> — owner: NOC<div class="note">Expected output: request volume, completion rate, load-balancer target health, application error rate</div><div class="note">Escalate when: real-user impact, flow loss, or application errors corroborate the checks</div></li>
+  <li><span class="pill blue" style="font-size:9px">P2</span> <b>Continue monitoring under the active policy</b> — owner: NOC<div class="note">Expected output: auto-close after the stability window, reopen on recurrence</div><div class="note">Escalate when: customer impact is confirmed, or a second independent evidence class corroborates the fault</div></li>
+  <li><span class="pill blue" style="font-size:9px">P2</span> <b>Run the same check from an independent vantage (only prober-fra has reported this)</b> — owner: NOC<div class="note">Expected output: the same target&#39;s result from a second vantage — fails there too (target side) or only here (local side)</div></li>
+  
+  </ol>
+  <div class="note">Durable corrective-action commitments (accountable owner, due date, success criteria, verification) are managed in the case's action register; a printed document is a status snapshot as of generation time.</div>
+</section>
+
+
+<div class="pmh">9 · Lessons learned</div>
+<section>
+  
+  <div class="note">Lessons learned belong to the promoted postmortem workflow (preliminary/interim/final) — not editable on a operational assessment.</div>
+  
+</section>
+
+
+<div class="pmh">10 · Detailed timeline</div>
+<section>
+  
+  <table><thead><tr><th style="width:22%">When</th><th style="width:46%">Event</th><th>Source of this entry</th></tr></thead><tbody>
+  <tr>
+    <td style="font-family:ui-monospace,monospace">2026-07-12 18:12:00 UTC</td>
+    <td>First credible failure</td>
+    <td>earliest attached anomalous observation in the correlation window (observed)</td>
+  </tr><tr>
+    <td style="font-family:ui-monospace,monospace">2026-07-12 18:12:00 UTC</td>
+    <td>Phase begins: degradation — Anomalous evidence persisted across the participating evidence classes.</td>
+    <td>derived from the observed evidence timeline (recovery reconciliation)</td>
+  </tr><tr>
+    <td style="font-family:ui-monospace,monospace">2026-07-12 18:12:00 UTC</td>
+    <td>Phase begins: detection — First anomalous evidence observed.</td>
+    <td>derived from the observed evidence timeline (recovery reconciliation)</td>
+  </tr><tr>
+    <td style="font-family:ui-monospace,monospace">2026-07-12 18:16:00 UTC</td>
+    <td>Phase ends: degradation</td>
+    <td>derived from the observed evidence timeline (recovery reconciliation)</td>
+  </tr>
+  </tbody></table>
+  
+  <div class="note">Every row names the source of its timestamp; an event lacking either is not listed — never estimated.</div>
+</section>
+
+
+<div class="divider">11 · Evidence appendix — measurements &amp; coverage</div>
+
+<section>
+  <h2>NOC quick read</h2>
+  <div class="kv">
+    <span class="k">Incident</span><span class="v">active</span>
+    <span class="k">Recovery</span><span class="v">not observed</span>
+    <span class="k">Service recovery</span><span class="v">not observed</span>
+    <span class="k">Analysis</span><span class="v">suspected</span>
+    <span class="k">Impact</span><span class="v">detected</span>
+    <span class="k">Synthetic impact</span><span class="v">confirmed</span>
+    <span class="k">Real-user impact</span><span class="v">not observable</span>
+    <span class="k">Ticket</span><span class="v">held</span>
+    <span class="k">First observed</span><span class="v">2026-07-12 18:12:00 UTC</span>
+    <span class="k">Last anomalous</span><span class="v">2026-07-12 18:16:00 UTC</span>
+    <span class="k">Duration</span><span class="v">1h 48m (elapsed, still active)</span>
+    <span class="k">Affected targets</span><span class="v">crm-portal</span>
+    <span class="k">Checks failing</span><span class="v">3 of 3 observations</span>
+    <span class="k">Reporting sources</span><span class="v">prober-fra</span>
+    <span class="k">Failure stages</span><span class="v">HTTP</span>
+    <span class="k">Failure symptoms</span><span class="v">Packet loss</span>
+    <span class="k">Peak severity</span><span class="v">high</span>
+    <span class="k">Evidence present</span><span class="v">Active checks</span>
+    <span class="k">Evidence missing</span><span class="v">Device health, Routing &amp; link events, Traffic flow</span>
+    <span class="k">Triage owner</span><span class="v">NOC</span>
+    <span class="k">Next action</span><span class="v">[P1] Inspect the most recent failed check transaction</span>
+    
+  </div>
+</section>
+
+<section>
+  <h2>Evidence summary</h2>
+  
+  <div style="display:flex;gap:26px;align-items:baseline;margin:2px 0 8px">
+    <span style="font-size:17px;font-weight:800">2 <span style="font-size:10.5px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px">distinct symptoms</span></span>
+    <span style="font-size:17px;font-weight:800">0 <span style="font-size:10.5px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px">independent sources</span></span>
+    <span style="font-size:17px;font-weight:800">1h 48m <span style="font-size:10.5px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px">ongoing</span></span>
+  </div>
+  <div class="note" style="color:#172033;font-weight:600;margin-bottom:6px">Suspected — only active checks saw this; a second independent source is needed to confirm.</div>
+  
+  <table><thead><tr><th style="width:24%">Symptom</th><th style="width:20%">Seen by</th><th style="width:12%">First</th><th style="width:13%">Latest</th><th>Recurrence over the window</th></tr></thead><tbody>
+  <tr>
+    <td><b>Synthetic http failure</b></td>
+    <td>Active checks</td>
+    <td style="font-family:ui-monospace,monospace">18:12 UTC</td>
+    <td>1h 44m ago</td>
+    <td><span style="display:inline-flex;gap:1px;vertical-align:middle" role="img" aria-label="observation recurrence over the incident window"><span style="width:6px;height:10px;border-radius:1px;background:#334155"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#334155"></span></span></td>
+  </tr><tr>
+    <td><b>Packet loss</b></td>
+    <td>Active checks</td>
+    <td style="font-family:ui-monospace,monospace">18:13 UTC</td>
+    <td>1h 46m ago</td>
+    <td><span style="display:inline-flex;gap:1px;vertical-align:middle" role="img" aria-label="observation recurrence over the incident window"><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#334155"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span><span style="width:6px;height:10px;border-radius:1px;background:#e9edf3"></span></span></td>
+  </tr>
+  </tbody></table>
+  
+  <div class="kv" style="margin-top:6px">
+    
+    <span class="k">Check observations</span><span class="v">3 failed of 3</span>
+    <span class="k">Reporting sources</span><span class="v">prober-fra</span>
+    
+    <span class="k">Failure stages / symptoms</span><span class="v">HTTP, Packet loss</span>
+    
+    
+    <span class="k">First failed sample</span><span class="v">2026-07-12 18:12:00 UTC</span>
+    <span class="k">Last failed sample</span><span class="v">2026-07-12 18:16:00 UTC</span>
+    
+    
+  </div>
+  <div class="note">Only measured values are shown; an absent metric was not observed — it is not zero.</div>
+  <div class="note" style="color:#94a3b8">3 raw observations collected · last 1h 44m ago · repetition shows persistence, not additional evidence</div>
+</section>
+
+<section>
+  <h2>Evidence accounting</h2>
+  <div class="kv">
+    <span class="k">Evidence groups</span><span class="v">2 <span style="font-weight:400;color:#64748b">— distinct measurement source × entity; many observations from one source count once</span></span>
+    <span class="k">Logical vantages</span><span class="v">none classified</span>
+    <span class="k">Control-plane sources</span><span class="v">none</span>
+    
+    <span class="k">Unclassified sources</span><span class="v">prober-fra <span style="font-weight:400;color:#64748b">— kind not established; never counted as a vantage</span></span>
+    <span class="k">Independent confirming sources</span><span class="v">0</span>
+    <span class="k">Configured tests</span><span class="v">Unavailable — configured-test inventory not stored for this case (predates the accounting model; the prober schedule registry is current-state only)</span>
+    <span class="k">Test executions</span><span class="v">Unavailable — per-execution lineage not joined at the report layer for this case (derived anomaly observations carry no execution_id; counts are not fabricated)</span>
+  </div>
+  <div class="note">Reconciliation (operator detail) — each layer is a subset of the one above; the verdict rests on the bottom rows.</div>
+  <table><thead><tr><th style="width:58%">Layer</th><th>Count</th></tr></thead><tbody>
+  <tr><td>Window observations (all lanes)</td><td>3</td></tr><tr><td>Case-linked observations</td><td>3</td></tr><tr><td>Anomalous observations</td><td>3</td></tr><tr><td>Deduplicated evidence groups</td><td>2</td></tr><tr><td>Distinct anomaly observers</td><td>1</td></tr><tr><td>Independence groups (fate-deduped)</td><td>1</td></tr><tr><td>Independent confirming sources</td><td>0</td></tr><tr><td>Confidence-eligible evidence classes</td><td>1</td></tr><tr><td>Impact-eligible evidence classes</td><td>1</td></tr><tr><td>Recovery observations</td><td>0</td></tr>
+  </tbody></table>
+</section>
+
+<section>
+  <h2>Evidence coverage</h2>
+  <table><thead><tr><th style="width:15%">Evidence class</th><th style="width:12%">Quality</th><th style="width:15%">State</th><th style="width:10%">Obs.</th><th>Coverage &amp; gaps</th><th style="width:15%">Contributes</th></tr></thead><tbody>
+  <tr>
+    <td><b>Device health</b><div class="note">continuous</div></td>
+    <td>Unavailable</td>
+    <td><span class="pill gray" style="font-size:10px">No data</span></td>
+    <td>—</td>
+    <td>No telemetry from this evidence class reached the platform in this window — unavailable or not configured. This absence is not evidence of health.
+      
+      
+      </td>
+    <td><div class="note">confidence: <b style="color:#b45309">no</b></div>
+      <div class="note">impact: <b style="color:#b45309">no</b></div>
+      <div class="note">scope: unknown</div>
+      </td>
+  </tr><tr>
+    <td><b>Routing &amp; link events</b><div class="note">event based</div></td>
+    <td>Unavailable</td>
+    <td><span class="pill gray" style="font-size:10px">No data</span></td>
+    <td>—</td>
+    <td>No telemetry from this evidence class reached the platform in this window — unavailable or not configured. This absence is not evidence of health.
+      
+      
+      </td>
+    <td><div class="note">confidence: <b style="color:#b45309">no</b></div>
+      <div class="note">impact: <b style="color:#b45309">no</b></div>
+      <div class="note">scope: unknown</div>
+      </td>
+  </tr><tr>
+    <td><b>Traffic flow</b><div class="note">continuous</div></td>
+    <td>Unavailable</td>
+    <td><span class="pill gray" style="font-size:10px">No data</span></td>
+    <td>—</td>
+    <td>No telemetry from this evidence class reached the platform in this window — unavailable or not configured. This absence is not evidence of health.
+      
+      
+      </td>
+    <td><div class="note">confidence: <b style="color:#b45309">no</b></div>
+      <div class="note">impact: <b style="color:#b45309">no</b></div>
+      <div class="note">scope: unknown</div>
+      </td>
+  </tr><tr>
+    <td><b>Active checks</b><div class="note">continuous</div></td>
+    <td>Complete<div class="note">100% covered</div></td>
+    <td><span class="pill red" style="font-size:10px">Anomalous</span></td>
+    <td>3<div class="note">3 anomalous</div></td>
+    <td>3 of 3 observations in this window are anomalous and tied to this case.
+      <div class="note">observed 2026-07-12 18:12:00 UTC → 2026-07-12 18:16:00 UTC</div>
+      
+      </td>
+    <td><div class="note">confidence: <b style="color:#0f7a3d">yes</b></div>
+      <div class="note">impact: <b style="color:#0f7a3d">yes</b></div>
+      <div class="note">scope: unknown</div>
+      <div class="note">counts toward confidence</div></td>
+  </tr>
+  </tbody></table>
+  <div class="note">“No data” is a coverage gap, not evidence of health. A lane reads full/Normal only when its covered intervals span the incident at the expected cadence; a point-in-time control-plane event is never scored as continuous coverage. Missing telemetry never supports or contradicts a hypothesis.</div>
+</section>
+
+<section>
+  <h2>Network path &amp; causality (measured)</h2>
+  
+  <div class="note"></div>
+  
+</section>
+
+
+
+
+<div class="pmh">12 · Glossary</div>
+<section>
+  
+  <div style="margin:5px 0"><b>Observed</b> — Directly measured by an attached telemetry source inside this incident&#39;s window. An observed statement is a fact about what a source recorded — not an interpretation.</div>
+  <div style="margin:5px 0"><b>Confirmed</b> — Established by independent, agreeing evidence sources — never by one source repeating, and never by timing alone.</div>
+  <div style="margin:5px 0"><b>Suspected</b> — Supported by some evidence but not independently confirmed; alternative explanations remain open.</div>
+  <div style="margin:5px 0"><b>Independent evidence</b> — Evidence from measurement systems with no shared failure mode (for example an active check, a routing-plane event and a traffic measurement). Their agreement is information; one system repeating is not.</div>
+  <div style="margin:5px 0"><b>Synthetic check</b> — A scripted test transaction run from a monitoring vantage. A failed synthetic check proves the configured transaction failed from that vantage — it is never converted into a count of affected real users.</div>
+  <div style="margin:5px 0"><b>Real-user impact</b> — Effect on actual user traffic, shown only by evidence from real sessions or the serving infrastructure itself. It is a separate question from synthetic-check failures and is never derived from them.</div>
+  <div style="margin:5px 0"><b>Not measured</b> — No telemetry with valid provenance quantifies this value for this case. Not measured is stated as such — it is never rendered as zero, and it is not evidence of no impact.</div>
+  <div style="margin:5px 0"><b>Coverage gap</b> — An interval where a telemetry class produced no data. A gap is absence of measurement, not evidence of health — nothing is concluded from it.</div>
+  
+  
+  <div class="note">The glossary is dynamic: it defines only the terms this report instance actually uses, as they are meant in this document.</div>
+</section>
+
+
+
+</div></body></html>

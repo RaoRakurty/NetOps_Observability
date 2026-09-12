@@ -1,0 +1,39 @@
+{
+  "name": "fx_lane_swap_w \u2014 parallel-optic-lane-swap",
+  "signals": [
+    {
+      "kind": "lane_map_swapped",
+      "entity_type": "interface",
+      "entity_id": "spine2:Et22",
+      "observer_id": "snmp-spine2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 4.0
+    },
+    {
+      "kind": "pcs_deskew_fault",
+      "entity_type": "interface",
+      "entity_id": "spine2:Et22",
+      "observer_id": "snmp-spine2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "parallel_lane_map_anomaly",
+      "entity_type": "interface",
+      "entity_id": "spine2:Et22",
+      "observer_id": "snmp-spine2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.parallel-optic-lane-swap",
+    "tier": "suspected"
+  }
+}

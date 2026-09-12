@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<!--
+  #20 Phase 2 — SERVER config: declare the `tenant_` custom-setting prefix so
+  `tenant_scope` is an accepted per-query setting. Row policies on
+  netops.flows/findings/tunnels filter via getSetting('tenant_scope'); the Go API
+  injects it on every telemetry query (proxyClickHouse). The profile DEFAULT for
+  tenant_scope lives in users.d/tenant-scope.xml (users config), not here.
+  See docs/design/multitenant-telemetry-isolation.md §Phase 2.
+-->
+<clickhouse>
+    <custom_settings_prefixes>tenant_</custom_settings_prefixes>
+    <!-- Log-time standard (docs/design/log-time-standard.md): the platform's
+         DateTime64 columns carry UTC instants, and several writers (vector
+         clickhouse sink, correlation service) insert ZONE-LESS datetime
+         strings, which ClickHouse interprets in the SERVER timezone. The
+         container default happens to be UTC today; pin it so a base-image or
+         host change can never silently shift every stored timestamp. -->
+    <timezone>UTC</timezone>
+</clickhouse>

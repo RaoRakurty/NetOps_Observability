@@ -1,0 +1,13 @@
+{
+  "name": "OSPF adjacency change (syslog) + interface metric anomaly (SNMP): OSPF adjacency flap confirmed",
+  "comment": "C5: ospf_adjacency_change is already emitted by syslog_control_signal (%OSPF-5-ADJCHG). Two independent planes (control_plane syslog vs device_telemetry SNMP) confirm.",
+  "signals": [
+    {"kind": "ospf_adjacency_change", "entity_type": "device", "entity_id": "core-rtr1",
+     "observer_id": "syslog-core-rtr1", "observer_type": "device",
+     "modality": "control_plane", "collection_path": "direct", "deviation": 0.0},
+    {"kind": "if_metric_anomaly", "entity_type": "interface", "entity_id": "core-rtr1:Gi0/1",
+     "observer_id": "snmp-core-rtr1", "observer_type": "device",
+     "modality": "device_telemetry", "collection_path": "direct", "deviation": 5.0}
+  ],
+  "expect": {"top": "sig.ent.access.ospf-adjacency-flap", "tier": "confirmed", "owner": "netops"}
+}
