@@ -487,9 +487,23 @@ func (s *server) handleTACACSTest(w http.ResponseWriter, r *http.Request) {
 // LOCATOR-AWARE (design §6.1, tracker 276): when the caller arrived through a
 // per-tenant sign-in URL, the signed candidate cookie names the realm and the
 // SSO button list is filtered to the connections that realm reaches — a tenant
-// never sees another tenant's identity providers. With no locator the answer is
-// unchanged (every configured button), because the bare sign-in page is the
-// platform's own front door and every existing deployment depends on it.
+// never sees another tenant's identity providers.
+//
+// With NO locator this is the bare sign-in page, the platform's own front door,
+// and it lists the PLATFORM-REALM connections only: the unbound ones and every
+// env-configured OIDC_PROVIDERS button, which is exactly what a deployment from
+// before locators existed has, so nothing such a deployment depends on changes.
+// A TENANT-BOUND connection is not listed there, and that is a repair rather
+// than a tightening (review 3.7-06): such a button could not work from this
+// page. It is handed its connection's own /t/{slug} callback
+// (ssoLoginRedirectURI), and that callback requires the browser to be holding
+// the matching locator cookie (handleTenantSSO step 3) — which a browser that
+// reached the bare page by definition is not, or this very list would have been
+// filtered. Offering it therefore sent the customer out to their IdP, had them
+// authenticate, and refused them on the way back with "this sign-in did not
+// start at <tenant>". Hiding it also stops the bare page enumerating every
+// customer's connection alias and display label to an unauthenticated caller.
+// Both halves are proved in TestGenericEntryCannotUseABoundConnection.
 func (s *server) handleAuthMethods(w http.ResponseWriter, r *http.Request) {
 	ldap := s.ldap.effective()
 	tac := s.tacacs.effective()
@@ -550,15 +564,19 @@ func (s *server) providerRealm(alias string) (tenantID, orgID string, ok bool) {
 }
 
 // providerVisible answers whether a sign-in button is offered at a candidate.
-// A nil candidate is the generic sign-in page — unchanged behaviour, every
-// configured button.
+//
+// A nil candidate is the bare sign-in page: only the PLATFORM realm (a blank
+// tenant — an unbound connection, or a button with no stored connection at all)
+// is offered there. A tenant-bound button on that page is a dead end, because
+// its callback demands a locator cookie the caller does not hold; the contract
+// note on handleAuthMethods has the whole reasoning.
 func (s *server) providerVisible(c *tenantlocator.Candidate, alias string) bool {
 	tid, org, ok := s.providerRealm(alias)
 	if !ok {
 		return false
 	}
 	if c == nil {
-		return true
+		return tid == ""
 	}
 	return c.Reaches(tid, org)
 }
