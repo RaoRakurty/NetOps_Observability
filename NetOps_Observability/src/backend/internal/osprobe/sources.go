@@ -373,6 +373,16 @@ func (s *SSHSource) checkCommand(command string) error {
 			return fmt.Errorf("osprobe: refusing command %q: contains %q", command, bad)
 		}
 	}
+	// The token list above names the two control characters that matter for
+	// chaining (CR and LF) and stops there, while the list's own doc says
+	// "control characters". This sweep is what makes that true: an ESC or a BEL
+	// authored into a profile would otherwise reach a device prompt (review
+	// 3.5-19). The loader refuses these too; this is the second gate.
+	for i := 0; i < len(command); i++ {
+		if b := command[i]; b < 0x20 || b == 0x7f {
+			return fmt.Errorf("osprobe: refusing command %q: contains a control character", command)
+		}
+	}
 	return nil
 }
 
