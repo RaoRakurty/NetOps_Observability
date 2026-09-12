@@ -11,6 +11,7 @@ package alerts
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -272,5 +273,62 @@ func TestEpisodeRetentionNeverEvictsFiring(t *testing.T) {
 	_ = eps
 	if total > episodeMaxPerTenant+1 { // +1 slack for the just-inserted trigger row
 		t.Fatalf("per-tenant retention cap not enforced: %d episodes", total)
+	}
+}
+
+// TestEpisodeListDeviceLessRowsAreGlobalOnlyWhenUnowned is the STORE half of the
+// device-less alert isolation rule (review 2026-09-08, H10).
+//
+// The Digital Experience rules aggregate by target rather than device, so their
+// episodes have an empty Resource but a real owning tenant, and their summary
+// carries that tenant's target hostname, site and app. List used to
+// short-circuit on `ep.Resource == ""` alone, which handed one tenant's targets
+// to every other tenant.
+//
+// The rule is in the store because §3a rule 4 puts it there: every reader asks
+// List, so a caller cannot forget it. Until this test the rule was covered only
+// end-to-end through the HTTP surfaces — reverting `episodeVisible` to the old
+// `ep.Resource == ""` left every test in this package green.
+func TestEpisodeListDeviceLessRowsAreGlobalOnlyWhenUnowned(t *testing.T) {
+	s, _ := newEpisodeStore(t)
+	const target = "Experience target shop.acme.example (https) p95 is over budget"
+	s.Observe("acme", "", "ExperienceLatencyOverBudget", "critical", target, true)
+	s.Observe("", "", "StackDiskLow", "critical", "platform disk is nearly full", true)
+	s.Observe("acme", "dev-a", "HighCPU", "critical", "dev-a cpu high", true)
+
+	signals := func(tenant string, cross bool) map[string]bool {
+		t.Helper()
+		eps, _, _ := s.List(tenant, cross, EpisodeQuery{Status: "all", Limit: episodeMaxQueryLimit})
+		out := map[string]bool{}
+		for _, ep := range eps {
+			out[ep.Signal] = true
+			if tenant == "globex" && strings.Contains(ep.Summary, "shop.acme.example") {
+				t.Errorf("TENANT LEAK: globex was served %q", ep.Summary)
+			}
+		}
+		return out
+	}
+
+	other := signals("globex", false)
+	if other["ExperienceLatencyOverBudget"] {
+		t.Error("a device-less episode OWNED by acme was listed for globex")
+	}
+	if !other["StackDiskLow"] {
+		t.Error("a device-less episode nobody owns must stay visible to every tenant")
+	}
+	if other["HighCPU"] {
+		t.Error("acme's device episode was listed for globex")
+	}
+
+	own := signals("acme", false)
+	for _, want := range []string{"ExperienceLatencyOverBudget", "StackDiskLow", "HighCPU"} {
+		if !own[want] {
+			t.Errorf("the owning tenant lost sight of its own %q episode", want)
+		}
+	}
+
+	all := signals("", true)
+	if len(all) != 3 {
+		t.Errorf("the platform owner sees %d signals, want 3", len(all))
 	}
 }

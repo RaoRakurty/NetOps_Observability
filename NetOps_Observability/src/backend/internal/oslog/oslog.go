@@ -49,9 +49,18 @@ func IndexBase(signal string) string {
 		// so secapi, which owns the gated read, can name the pattern.
 		return SecFindingsIndexBase
 	default:
-		return "netops"
+		return CatchAllIndexBase
 	}
 }
+
+// CatchAllIndexBase is what IndexBase answers for a signal it does not
+// recognise. It is NOT a readable family: `netops-*` glob-matches EVERY index
+// this stack writes, the security-findings and quarantine families included,
+// so TenantIndexPattern never turns it into a pattern (review 2026-09-08, H9 —
+// the named-signal refusal closed `signal=security`, and `signal=anything-else`
+// still resolved a wildcard that reached the same documents for a cross-tenant
+// caller, with no licence check).
+const CatchAllIndexBase = "netops"
 
 // IsSecFindingsSignal reports whether a caller-supplied log-search `signal`
 // names the security-findings family, whatever its spelling.
@@ -107,7 +116,14 @@ func TenantIndexPattern(signal, tenant string, cross bool) string {
 	// the platform's own internal container/API logs — they must NEVER appear in an
 	// "all" search; they're reachable ONLY via signal="applogs", gated to the
 	// platform owner in the handler.
-	if s := strings.ToLower(strings.TrimSpace(signal)); s == "" || s == "all" {
+	base := IndexBase(signal)
+	// "", "all" and every UNRECOGNISED signal resolve here. An unrecognised one
+	// used to take the branch below with base "netops", which for a cross-tenant
+	// caller renders the bare wildcard `netops-*` — a pattern that glob-matches
+	// netops-secfindings-<tenant>-<date> and netops-quarantine-<date> as
+	// happily as it matches a log index. Log search reads LOG indices, so a
+	// signal that names no log family reads the log families, never everything.
+	if base == CatchAllIndexBase {
 		bases := []string{"netops-syslog", "netops-snmptrap"}
 		parts := make([]string, 0, len(bases)*2)
 		for _, b := range bases {
@@ -119,7 +135,6 @@ func TenantIndexPattern(signal, tenant string, cross bool) string {
 		}
 		return strings.Join(parts, ",")
 	}
-	base := IndexBase(signal)
 	if cross {
 		return base + "-*"
 	}

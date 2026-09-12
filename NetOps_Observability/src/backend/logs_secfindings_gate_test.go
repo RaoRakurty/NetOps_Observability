@@ -109,6 +109,54 @@ func TestLogsScopeNeverResolvesTheSecFindingsIndexForAnySignal(t *testing.T) {
 	}
 }
 
+// TestLogsScopeResolvesNoPatternThatGlobMatchesTheFindingsFamily is the same
+// pin as the test above, done the way OpenSearch actually reads an index
+// pattern: by GLOB, not by substring.
+//
+// The substring form could not see the hole it was written to close. IndexBase
+// answers "netops" for any signal it does not recognise, and for a cross-tenant
+// caller TenantIndexPattern rendered that as the bare wildcard `netops-*`.
+// `strings.Contains("netops-*", "netops-secfindings")` is false, so the test
+// above passed — while OpenSearch expanded that very pattern onto
+// netops-secfindings-acme-2026.09.12 and served the tenant's CTEM verdicts
+// through log search, with the licence feature never consulted. The named
+// signals were refused; `signal=junk` was not.
+//
+// This asserts on concrete index NAMES, which is what the wildcard is resolved
+// against, so a pattern that reaches the family by expansion fails here.
+func TestLogsScopeResolvesNoPatternThatGlobMatchesTheFindingsFamily(t *testing.T) {
+	s := logsTestServer(t)
+	// Real index names, exactly as the security router writes them.
+	findings := []string{
+		"netops-secfindings-acme-2026.09.12",
+		"netops-secfindings-globex-2026.09.12",
+		"netops-secfindings-untagged-2026.09.12",
+	}
+	signals := []string{
+		"", "all", "applogs", "app", "syslog", "snmptrap", "trap", "traps",
+		"flows", "netflow", "flow", "cloud", "cloudlogs", "cloudlog",
+		"security", "secfindings", "SECURITY", " security ",
+		"netops-secfindings", "netops-secfindings-*", "../secfindings",
+		"junk", "*", "netops", "-", "all-signals",
+	}
+	for _, claims := range []jwtClaims{acme(), globex(), superA(), ingestKey()} {
+		for _, signal := range signals {
+			index, _, _, _, forbidden := s.logsScope(req(http.MethodGet, "/api/logs/search", "", claims), signal)
+			if forbidden {
+				continue
+			}
+			for _, part := range strings.Split(index, ",") {
+				for _, name := range findings {
+					if globMatch(part, name) {
+						t.Errorf("caller %q, signal %q resolved %q; part %q expands onto %q — log search reaches the findings family",
+							claims.Sub, signal, index, part, name)
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestLogSearchRefusesTheSecurityFindingsSignal(t *testing.T) {
 	for _, signal := range secSignalSpellings {
 		t.Run(strings.TrimSpace(signal), func(t *testing.T) {

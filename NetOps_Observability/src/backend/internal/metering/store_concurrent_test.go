@@ -12,9 +12,14 @@ package metering
 // runtime killed the process with "concurrent map read and map write". The
 // api dies, and every collector and the alert receiver die with it.
 //
-// The detachment test below fails WITHOUT the race detector, deterministically,
+// The detachment tests below fail WITHOUT the race detector, deterministically,
 // because a shared map is observable in one goroutine. The concurrency test is
 // what CI's `-race` run aims at the same defect.
+//
+// There are two detachment tests and they are not redundant: the first snapshots
+// again between the read and the write, so it is Fold's purity it actually
+// measures; the second does not, and is the only one that can fail when
+// collectRange stops cloning.
 
 import (
 	"context"
@@ -62,6 +67,53 @@ func TestFileStoreListHandsOutDetachedRows(t *testing.T) {
 	}
 	if got := meterValue(t, again[0], MeterMonitoredDevicesPeak); got != 9 {
 		t.Fatalf("the store's row reads %v after a caller edited its own copy, want 9", got)
+	}
+}
+
+// TestFileStoreListCopiesTheStoresOwnMap pins collectRange's Clone SPECIFICALLY.
+//
+// Why this exists as well as the detachment test above: that test snapshots
+// again between the List and the scribble, and the second snapshot replaces the
+// store's row with a fresh map (Fold is pure). The map the reader is holding is
+// an orphan by then, so scribbling on it proves nothing about collectRange —
+// deleting the `.Clone()` in collectRange leaves that test GREEN. Verified by
+// deleting it: every metering test still passed. A guard that cannot fail on the
+// line it guards is not a guard.
+//
+// So: no fold in between. The map List hands back is the one the store is
+// holding at this instant, and writing through it must not reach the register.
+func TestFileStoreListCopiesTheStoresOwnMap(t *testing.T) {
+	s := NewFileStore("")
+	ctx := context.Background()
+	snapshot(t, s, day("2026-09-05T01:00:00Z"), map[string][]Reading{
+		"acme": {Measured(MeterMonitoredDevicesPeak, "acme", 2)},
+	})
+
+	rows, err := s.List(ctx, "acme", false, "2026-09-05", "2026-09-05")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("list returned %d rows, want 1", len(rows))
+	}
+
+	// A caller writing into the row it was handed — which is what an encoder,
+	// a roll-up or a report renderer is entitled to do with a value it owns.
+	scribble := 4242.0
+	rows[0].Meters[MeterMonitoredDevicesPeak] = MeterValue{
+		Meter: MeterMonitoredDevicesPeak, Value: &scribble, Samples: 1,
+	}
+	rows[0].Meters["not-a-meter"] = MeterValue{Meter: "not-a-meter"}
+
+	again, err := s.List(ctx, "acme", false, "2026-09-05", "2026-09-05")
+	if err != nil {
+		t.Fatalf("list again: %v", err)
+	}
+	if got := meterValue(t, again[0], MeterMonitoredDevicesPeak); got != 2 {
+		t.Fatalf("the store's row reads %v after a caller edited the row List gave it, want 2 — List is handing out the store's live Meters map", got)
+	}
+	if _, ok := again[0].Meters["not-a-meter"]; ok {
+		t.Fatal("a key a caller added to its own row appeared in the store's row — List is handing out the store's live Meters map")
 	}
 }
 
