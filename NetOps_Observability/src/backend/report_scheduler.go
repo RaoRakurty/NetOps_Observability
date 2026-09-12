@@ -482,10 +482,7 @@ func (rs *reportScheduler) render(o saved.Object, spec reportSpec, now time.Time
 // Excel, PDF) consumes. Tabular kinds populate Section.Header+Rows (real tables,
 // so Excel exports cells, not a text blob); narrative kinds fall back to a Note.
 func (rs *reportScheduler) buildViewModel(o saved.Object, spec reportSpec, now time.Time) reports.ViewModel {
-	sev := strings.ToLower(strings.TrimSpace(spec.Severity))
-	if sev == "" {
-		sev = "info"
-	}
+	vm := reportViewModelShell(o, spec, now)
 	tenant := o.TenantID
 	var summary string
 	var sections []reports.Section
@@ -505,17 +502,43 @@ func (rs *reportScheduler) buildViewModel(o saved.Object, spec reportSpec, now t
 	default:
 		summary, sections = rs.ds.DatasetAlerts(tenant)
 	}
+	vm.Summary, vm.Sections = summary, sections
+	return vm
+}
+
+// reportViewModelShell is a report's IDENTITY with none of its content: the id,
+// name, kind, owner, severity and description, and no dataset at all.
+//
+// buildViewModel fills it in. It is also what a caller that MUST NOT READ
+// renders — the report-preview handler, when the operator has scoped into a
+// tenant it may administer but not read (report_preview_http.go). That caller
+// needs a real, valid report with nothing in it, and it needs it WITHOUT
+// gathering the dataset: it must not issue the reads, not merely discard them.
+func reportViewModelShell(o saved.Object, spec reportSpec, now time.Time) reports.ViewModel {
+	sev := strings.ToLower(strings.TrimSpace(spec.Severity))
+	if sev == "" {
+		sev = "info"
+	}
 	return reports.ViewModel{
 		ReportID:    o.ID,
 		ReportName:  o.Name,
 		Kind:        firstNonEmpty(spec.Kind, "alerts_summary"),
-		TenantID:    tenant,
+		TenantID:    o.TenantID,
 		GeneratedAt: now,
 		Severity:    sev,
 		Description: spec.Description,
-		Summary:     summary,
-		Sections:    sections,
 	}
+}
+
+// emptyReportViewModel is the shell plus the ordinary "no data" note every
+// renderer already knows how to draw, so a denied preview is indistinguishable
+// from a report whose backends returned nothing — no error page, no status that
+// confirms the tenant exists, nothing for the operator to read.
+func emptyReportViewModel(o saved.Object, spec reportSpec, now time.Time) reports.ViewModel {
+	vm := reportViewModelShell(o, spec, now)
+	vm.Summary = "no data"
+	vm.Sections = []reports.Section{{Title: "No data", Note: "No data available for this report."}}
+	return vm
 }
 
 // tenantDevices returns the devices one scheduled run may cover, filtered

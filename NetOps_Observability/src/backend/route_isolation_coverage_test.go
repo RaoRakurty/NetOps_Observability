@@ -41,7 +41,10 @@ import (
 // user. /api/logs/search, /api/logs/export and /api/logs/retention (2026-09-12)
 // — logs_secfindings_gate_test.go drives all three across the tenant boundary,
 // which the guard had been reporting for a while with nobody removing the rows.
-// The baseline only ever shrinks.
+// /api/reports/preview (2026-09-12) — report_preview_restriction_test.go drives
+// the route for the platform operator's Global view, an ?as_tenant walk into a
+// restricted and an unrestricted tenant, and the tenant's own admin, in both
+// output formats. The baseline only ever shrinks.
 var isolationCoverageBaseline = map[string]string{
 	"/api/ai/modules":                         "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/appid/fusion/status":                "store/RLS-scoped; dedicated HTTP isolation test is backlog",
@@ -75,7 +78,6 @@ var isolationCoverageBaseline = map[string]string{
 	"/api/reliability/trends":                 "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/reports/executions":                 "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/reports/executions/":                "store/RLS-scoped; dedicated HTTP isolation test is backlog",
-	"/api/reports/preview":                    "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/seams":                              "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/seams/":                             "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/seams/groups":                       "store/RLS-scoped; dedicated HTTP isolation test is backlog",
