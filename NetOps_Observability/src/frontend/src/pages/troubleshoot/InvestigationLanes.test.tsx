@@ -308,7 +308,11 @@ describe("the investigation scope is passed to the source", () => {
     // promote this case's rung to "Problem found here".
     render(<HealthLane scope={scoped} />);
     await waitFor(() => expect(mocks.metricsQuery).toHaveBeenCalled());
-    expect(mocks.metricsQuery).toHaveBeenCalledWith('device_if_oper_status{device="wan-r1"} == 0');
+    expect(mocks.metricsQuery).toHaveBeenCalledWith(
+      '(device_if_oper_status{device="wan-r1"} == 2'
+      + ' and device_if_admin_status{device="wan-r1"} == 1)'
+      + ' or device_if_oper_status{device="wan-r1"} == 7',
+    );
   });
 
   it("the routing lane pins every protocol family to the case's device", async () => {
@@ -324,7 +328,10 @@ describe("the investigation scope is passed to the source", () => {
   it("a case with no device reads the fleet and SAYS the rows are fleet-wide", async () => {
     render(<HealthLane scope={scope} />);
     await waitFor(() => expect(mocks.metricsQuery).toHaveBeenCalled());
-    expect(mocks.metricsQuery).toHaveBeenCalledWith("device_if_oper_status == 0");
+    expect(mocks.metricsQuery).toHaveBeenCalledWith(
+      "(device_if_oper_status == 2 and device_if_admin_status == 1)"
+      + " or device_if_oper_status == 7",
+    );
     expect(within(card("health")).getByText(/every device we watch/)).toBeInTheDocument();
   });
 

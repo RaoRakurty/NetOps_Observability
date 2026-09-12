@@ -122,6 +122,21 @@ func TestDEMFlowQuerierScopesTheQueryToItsOwnAddresses(t *testing.T) {
 	if strings.Contains(sql, "SELECT *") {
 		t.Errorf("the flow read is not an aggregate:\n%s", sql)
 	}
+	// THE SEAM BETWEEN THIS QUERY AND foldDEMFlowRows. The fold reads `ep_addr`
+	// and `ep_port` as two columns; TestFoldDEMFlowRowsFoldsIPv6Endpoints proves
+	// it folds IPv6 — but it does so over rows the test itself writes, so on its
+	// own it cannot tell a query that projects two columns from one that
+	// rebuilds the "addr:port" string the IPv6 bug came from. Assert the
+	// projection here, where the real statement is.
+	for _, want := range []string{"AS ep_addr", "AS ep_port", "GROUP BY ep_addr, ep_port"} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("the flow read does not project the endpoint as two columns (missing %q):\n%s", want, sql)
+		}
+	}
+	if strings.Contains(sql, "concat(") {
+		t.Errorf("the flow read rebuilds a composite endpoint key; an IPv6 address is full of colons "+
+			"and the split it forces is what dropped every IPv6 subject's evidence:\n%s", sql)
+	}
 }
 
 func TestDEMFlowQuerierAsksNothingWithNoSubjects(t *testing.T) {
