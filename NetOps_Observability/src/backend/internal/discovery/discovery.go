@@ -314,9 +314,16 @@ func (a *DiscoveryAggregator) pollOnce(ctx context.Context, src DiscoverySource)
 	// once, then incremented as devices are admitted to monitoring, so the
 	// ceiling question below is asked against a number that moves within the
 	// poll instead of every device seeing the same stale total.
+	//
+	// monIdentities is the identity-token set of the devices behind that count.
+	// The count is over DEDUPED canonical devices while the gate below is asked
+	// about a RAW record, so without it one physical device reported by two
+	// sources is charged twice (see monitoredIdentityIndexLocked). Both come
+	// from one dedupe pass.
 	monCount := 0
+	var monIdentities map[string]bool
 	if a.monitorGate != nil {
-		monCount = a.monitoredCountLocked()
+		monCount, monIdentities = a.monitoredIdentityIndexLocked()
 	}
 	for _, d := range devices {
 		// An operator deleted this device: honour that instead of resurrecting
@@ -361,11 +368,31 @@ func (a *DiscoveryAggregator) pollOnce(ctx context.Context, src DiscoverySource)
 		// ceiling resumes collection with no operator action; monCount is the
 		// running total for this poll so admitting one is reflected in the next
 		// question instead of every device seeing the same stale number.
+		//
+		// ONE PHYSICAL DEVICE, ONE ENTITLEMENT (owner decision C4). The gate is
+		// asked about the RAW cache id, but the count it is measured against is
+		// over the DEDUPED device, so a second source reporting a box the
+		// platform is already collecting from would otherwise be charged again —
+		// and at a full ceiling the refusal is folded into the whole owner group
+		// by monitorViewLocked, switching that already-collected device OFF with
+		// a licence reason that is not true. A record that shares an identity
+		// token with an already-monitored device is therefore admitted WITHOUT
+		// charging, and any stale withholding against it is cleared.
 		if a.monitorGate != nil {
 			_, already := a.cache[d.ID]
 			if (!already || a.withheld[d.ID] != "") && a.wouldMonitorLocked(d) {
-				if a.admitMonitoringLocked(d, monCount) {
+				toks := identityTokens(d)
+				switch {
+				case sharesMonitoredIdentity(monIdentities, toks):
+					// Already counted as part of this physical device.
+					delete(a.withheld, d.ID)
+				case a.admitMonitoringLocked(d, monCount):
 					monCount++
+					// A third source reporting the same box later in this poll
+					// must not be charged either.
+					for _, tok := range toks {
+						monIdentities[tok] = true
+					}
 				}
 			}
 		}

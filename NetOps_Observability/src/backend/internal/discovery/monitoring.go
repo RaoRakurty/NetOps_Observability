@@ -185,6 +185,68 @@ func (a *DiscoveryAggregator) monitoredCountLocked() int {
 	return n
 }
 
+// monitoredIdentityIndexLocked answers, from ONE dedupe pass, the two questions
+// the poll loop's ceiling gate needs:
+//
+//   - how many DISTINCT devices are monitored right now (the number the ceiling
+//     is measured against), and
+//   - which IDENTITY TOKENS those devices carry.
+//
+// The second exists because the gate is asked about a RAW cache record while the
+// count is over the DEDUPED canonical device. Without it, a second source
+// reporting a device the platform is already collecting from (the NetBox entry
+// for a box the SNMP scan found) is charged a SECOND entitlement for ONE
+// physical device — and at a full ceiling the refusal is then folded into the
+// whole owner group by monitorViewLocked, switching a device that was already
+// being collected from OFF with a false "licence ceiling full" reason.
+//
+// The tokens are taken from the RAW records of every monitored group, not from
+// the merged record: the merge fills gaps and keeps one value per field, so a
+// member's address or serial can be absent from the merged row while still
+// being the token an arriving record would union on.
+//
+// Only groups that are actually ON contribute. A group that is off consumes no
+// entitlement, so a source reporting one of its members is asking to START
+// collecting and must be charged.
+//
+// Caller holds a.mu.
+func (a *DiscoveryAggregator) monitoredIdentityIndexLocked() (int, map[string]bool) {
+	_, state, owners := a.monitorViewLocked()
+	count := 0
+	for _, st := range state {
+		if st.on {
+			count++
+		}
+	}
+	tokens := make(map[string]bool, len(owners)*2)
+	for rawID, ownerID := range owners {
+		if !state[ownerID].on {
+			continue
+		}
+		d, ok := a.cache[rawID]
+		if !ok {
+			continue
+		}
+		for _, tok := range identityTokens(d) {
+			tokens[tok] = true
+		}
+	}
+	return count, tokens
+}
+
+// sharesMonitoredIdentity reports whether any of `toks` already belongs to a
+// monitored device. Tokens are TENANT-PARTITIONED (identityTokens), so this can
+// never match across a tenant boundary: two tenants running the same management
+// address or hostname stay two devices and are charged twice, as they must be.
+func sharesMonitoredIdentity(index map[string]bool, toks []string) bool {
+	for _, tok := range toks {
+		if index[tok] {
+			return true
+		}
+	}
+	return false
+}
+
 // MonitoredCount is the platform-wide count of monitored devices — the number
 // the licence ceiling is measured against.
 func (a *DiscoveryAggregator) MonitoredCount() int {
