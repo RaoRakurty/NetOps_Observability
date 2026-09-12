@@ -100,7 +100,20 @@ func (s *wanPolicyStore) Get(tenant string, cross bool) WanMeasurementPolicy {
 	if s == nil || s.kv == nil {
 		return wan.MeasurementPolicy{TenantID: tenant}.WithDefaults()
 	}
-	if p, ok := s.kv.Get(tenant, cross, "policy"); ok {
+	// EVERY tenant's row carries the same id ("policy"), because this collection
+	// is one row per tenant. A cross-tenant read therefore misses on the platform
+	// key and falls through to Collection.Get's "the id may live under any tenant"
+	// scan, which returns whichever tenant's row the map happened to yield first:
+	// a nondeterministic answer that hands the platform operator another tenant's
+	// WAN pattern and its configured ISP next-hops (keyed by that tenant's device
+	// and interface names) — a restricted tenant's included. The Global view reads
+	// the PLATFORM's own row or the baseline; a tenant's policy is only ever read
+	// inside that tenant's scope.
+	lookup := tenant
+	if cross {
+		lookup = TenantGlobal
+	}
+	if p, ok := s.kv.Get(lookup, false, "policy"); ok {
 		return p.WithDefaults()
 	}
 	return wan.MeasurementPolicy{TenantID: tenant}.WithDefaults()
@@ -116,13 +129,49 @@ func (s *wanPolicyStore) Put(p WanMeasurementPolicy) error {
 	return s.kv.Upsert(p)
 }
 
+// wanPolicyFor is the READ side of the measurement policy, resolved for a
+// principal: the tenant scope plus the per-tenant operator-visibility
+// restriction. A policy is not telemetry, but it is still the tenant's: its
+// next-hop overrides are keyed by that tenant's device and interface names and
+// valued with its ISP addresses. So an operator scoped INTO a restricted tenant
+// gets the measurement BASELINE — the same answer an unconfigured tenant gets,
+// which discloses nothing — rather than that tenant's row. The tenant's own
+// users are never affected, and this is a no-op when no tenant is restricted.
+func (s *server) wanPolicyFor(claims jwtClaims) WanMeasurementPolicy {
+	tenant, cross := principalTenant(claims)
+	if _, deny := s.operatorTelemetryRestriction(claims, tenant, cross); deny {
+		return wan.MeasurementPolicy{TenantID: tenant}.WithDefaults()
+	}
+	return s.wanPolicy.Get(tenant, cross)
+}
+
 // ---- projector: interface-IP table × neighbors × policy → endpoints + targets ----
 
 // wanProject builds the WAN endpoint set (every WAN interface + every interface
 // directly connected to a WAN device) with each interface's derived measurement
-// target, plus the 1:1 interface→target links. Tenant-scoped: a principal only
-// ever sees its own devices' interfaces (the isolation guarantee).
-func (s *server) wanProject(ctx context.Context, tenant string, cross bool) ([]WanEndpoint, []WanCircuit) {
+// target, plus the 1:1 interface→target links.
+//
+// vis is the RESOLVED device-registry visibility for the caller (tenancy.go): the
+// ordinary tenant rule AND the per-tenant operator-visibility restriction. It is
+// taken as a parameter rather than re-derived here because this projection is
+// also driven by platform infrastructure (the wan-echo publisher), which measures
+// on every tenant's behalf and must NOT be narrowed — see startWANCircuitPublish.
+//
+// WHY THE WHOLE PROJECTION HANGS OFF THE DEVICE SLICE: `visible` and `nameToID`
+// are the resolution universe for the neighbour index, and wan.NeighborIndex
+// drops any link whose local device is not in `visible` or whose remote sysName
+// does not resolve through `nameToID`. So a device removed here cannot come back
+// as a peer's NAME, its interface IP, or a "Directly-connected peer <name>"
+// target label — the interface facing it falls through to the reachability
+// anchor instead, which names nothing. That is the half a device filter alone
+// does not obviously buy you, and TestWanCircuitsHonour… asserts it on the wire.
+func (s *server) wanProject(ctx context.Context, vis deviceVisibility) ([]WanEndpoint, []WanCircuit) {
+	if vis.deny {
+		// The operator scoped INTO a restricted tenant: no devices, and no read of
+		// that tenant's measurement policy either.
+		return nil, nil
+	}
+	tenant, cross := vis.tenant, vis.cross
 	pol := s.wanPolicy.Get(tenant, cross)
 	pat := regexp.MustCompile("(?i)" + pol.WanPattern)
 
@@ -130,11 +179,8 @@ func (s *server) wanProject(ctx context.Context, tenant string, cross bool) ([]W
 	visible := map[string]models.Device{}
 	nameToID := map[string]string{}
 	wanDev := map[string]bool{} // device id → is a WAN-pattern device
-	for _, d := range s.discovery.Devices() {
+	for _, d := range vis.filter(s.discovery.Devices()) {
 		if d.ID == "" {
-			continue
-		}
-		if !cross && deviceTenant(d) != tenant {
 			continue
 		}
 		visible[d.ID] = d
@@ -277,7 +323,13 @@ func (s *server) startWANCircuitPublish(ctx context.Context) {
 	}
 	interval := envDuration("WAN_ECHO_PUBLISH_INTERVAL", 60*time.Second)
 	publish := func() {
-		_, circuits := s.wanProject(ctx, TenantGlobal, true)
+		// PLATFORM INFRASTRUCTURE, not an operator read: the prober measures on
+		// every tenant's behalf and each target carries its tenant label, so the
+		// restricted tenant's own users keep getting their own measurements. The
+		// operator-visibility rule governs operator READS (the request handlers
+		// below); narrowing the prober here would take a restricted tenant's
+		// measurements away from the tenant itself.
+		_, circuits := s.wanProject(ctx, platformInfraDeviceVisibility())
 		targets := make([]collectors.EchoTarget, 0, len(circuits))
 		for _, c := range circuits {
 			if !c.Enabled || c.Remote.Measurable == "" {
@@ -463,8 +515,8 @@ func (s *server) vmQueryRangeByIf(ctx context.Context, query string, start, end,
 // device+ifName NAME, so an unscoped read surfaces another tenant's link load,
 // speed and oper-state whenever a device name collides across tenants — the
 // defect topology_view.go:86-91 documents.
-func (s *server) wanInterfaceRows(ctx context.Context, tenant string, cross bool, f []string) []WanInterfaceRow {
-	endpoints, circuits := s.wanProject(ctx, tenant, cross)
+func (s *server) wanInterfaceRows(ctx context.Context, vis deviceVisibility, f []string) []WanInterfaceRow {
+	endpoints, circuits := s.wanProject(ctx, vis)
 	if len(endpoints) == 0 {
 		return nil
 	}
@@ -579,8 +631,7 @@ func (s *server) handleWanInterfaces(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	tenant, cross := principalTenant(claims)
-	writeJSON(w, http.StatusOK, map[string]any{"interfaces": s.wanInterfaceRows(r.Context(), tenant, cross, s.metricsScopeFiltersFor(claims))})
+	writeJSON(w, http.StatusOK, map[string]any{"interfaces": s.wanInterfaceRows(r.Context(), s.deviceVisibilityFor(claims), s.metricsScopeFiltersFor(claims))})
 }
 
 // handleWanEndpoints: GET /api/wan/endpoints — the derived WAN endpoint registry.
@@ -589,8 +640,7 @@ func (s *server) handleWanEndpoints(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	tenant, cross := principalTenant(claims)
-	eps, _ := s.wanProject(r.Context(), tenant, cross)
+	eps, _ := s.wanProject(r.Context(), s.deviceVisibilityFor(claims))
 	writeJSON(w, http.StatusOK, map[string]any{"endpoints": eps})
 }
 
@@ -600,8 +650,7 @@ func (s *server) handleWanCircuits(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	tenant, cross := principalTenant(claims)
-	_, circuits := s.wanProject(r.Context(), tenant, cross)
+	_, circuits := s.wanProject(r.Context(), s.deviceVisibilityFor(claims))
 	writeJSON(w, http.StatusOK, map[string]any{"circuits": circuits})
 }
 
@@ -613,8 +662,7 @@ func (s *server) handleWanPolicy(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		tenant, cross := principalTenant(claims)
-		writeJSON(w, http.StatusOK, s.wanPolicy.Get(tenant, cross))
+		writeJSON(w, http.StatusOK, s.wanPolicyFor(claims))
 	case http.MethodPut:
 		claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
 		if !ok {
