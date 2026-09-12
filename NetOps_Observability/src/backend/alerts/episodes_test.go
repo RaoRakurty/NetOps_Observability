@@ -332,3 +332,57 @@ func TestEpisodeListDeviceLessRowsAreGlobalOnlyWhenUnowned(t *testing.T) {
 		t.Errorf("the platform owner sees %d signals, want 3", len(all))
 	}
 }
+
+// TestEpisodeListOrderIsATotalOrderNotJustAKeyOrder pins the tie-break.
+//
+// sort.Slice is not stable, so before this the order of two episodes sharing a
+// LastSeen was arbitrary per call — and since List truncates at the limit AFTER
+// sorting, which row survived a tie was arbitrary too. A caller could see a row
+// appear, vanish, or land on two pages with no data change. This asserts the
+// order is a function of the data alone, and that the tie-break reaches the
+// truncation boundary rather than only the full list.
+func TestEpisodeListOrderIsATotalOrderNotJustAKeyOrder(t *testing.T) {
+	same := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
+	s := NewEpisodeStore(filepath.Join(t.TempDir(), "episodes.json"), 15*time.Minute, 4, 10*time.Minute)
+	s.SetNowForTest(func() time.Time { return same.Add(time.Hour) })
+	// Insert in an order that is NOT the sorted order, so a no-op sort fails.
+	for _, id := range []string{"ep-c", "ep-a", "ep-d", "ep-b"} {
+		s.mu.Lock()
+		s.episodes[id] = &Episode{ID: id, TenantID: "t1", LastSeen: same, Status: "active"}
+		s.mu.Unlock()
+	}
+	sc := EpisodeScope{Tenant: "t1"}
+
+	var first []string
+	for i := 0; i < 12; i++ {
+		eps, total, _ := s.List(sc, EpisodeQuery{})
+		got := make([]string, len(eps))
+		for j, e := range eps {
+			got[j] = e.ID
+		}
+		if total != 4 {
+			t.Fatalf("total = %d, want 4", total)
+		}
+		if i == 0 {
+			first = got
+			if want := []string{"ep-a", "ep-b", "ep-c", "ep-d"}; strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Fatalf("tied LastSeen must fall back to id ascending: got %v, want %v", got, want)
+			}
+			continue
+		}
+		if strings.Join(got, ",") != strings.Join(first, ",") {
+			t.Fatalf("call %d returned a different order for identical data: %v then %v", i, first, got)
+		}
+	}
+
+	// The tie-break must survive truncation: the same two rows every time.
+	for i := 0; i < 12; i++ {
+		eps, _, truncated := s.List(sc, EpisodeQuery{Limit: 2})
+		if !truncated || len(eps) != 2 {
+			t.Fatalf("limit 2: got %d rows truncated=%v", len(eps), truncated)
+		}
+		if eps[0].ID != "ep-a" || eps[1].ID != "ep-b" {
+			t.Fatalf("truncation picked an arbitrary pair on call %d: %s,%s", i, eps[0].ID, eps[1].ID)
+		}
+	}
+}

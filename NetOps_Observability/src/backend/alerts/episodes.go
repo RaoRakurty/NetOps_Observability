@@ -526,7 +526,20 @@ func (s *EpisodeStore) List(sc EpisodeScope, q EpisodeQuery) (eps []Episode, tot
 		out = append(out, *ep)
 	}
 	s.mu.Unlock()
-	sort.Slice(out, func(i, j int) bool { return out[i].LastSeen.After(out[j].LastSeen) })
+	// A TOTAL order, not just a key order. sort.Slice is not stable, so ties on
+	// LastSeen came back in an arbitrary order on each call — and because the
+	// slice is then truncated at the limit below, which row survived a tie was
+	// arbitrary too: a row could appear on one call and vanish on the next with
+	// no data change. Same class as the keyset-pagination defect 3.9-02, and it
+	// is what made TestAlertEpisodesHonourTheOperatorVisibilityRestriction flake
+	// on CI while passing locally. The id breaks the tie, so the order is now a
+	// function of the data alone.
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].LastSeen.Equal(out[j].LastSeen) {
+			return out[i].LastSeen.After(out[j].LastSeen)
+		}
+		return out[i].ID < out[j].ID
+	})
 	total = len(out)
 	limit := q.Limit
 	if limit <= 0 {
