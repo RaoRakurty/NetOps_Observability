@@ -517,7 +517,7 @@ func (v deviceVisibility) filter(all []models.Device) []models.Device {
 // collection rule — a restricted tenant is still discovered, still measured and
 // still billed. Anything that answers a REQUEST must use deviceVisibilityFor.
 func platformInfraDeviceVisibility() deviceVisibility {
-	return deviceVisibility{tenant: TenantGlobal, cross: true}
+	return deviceVisibility{tenantVisibility: tenantVisibility{tenant: TenantGlobal, cross: true}}
 }
 
 // visibleDevicesFor is visibleDevices plus the operator-visibility restriction,
