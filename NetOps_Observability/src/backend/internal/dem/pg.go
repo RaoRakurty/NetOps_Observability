@@ -65,7 +65,9 @@ func lockTenantCatalogue(ctx context.Context, tx pgx.Tx, tenant string) error {
 func tenantLockKey(tenant string) int32 {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(tenant)) // hash.Hash never reports an error
-	return int32(h.Sum32())        //nolint:gosec // an advisory-lock key is an opaque bit pattern, not a number
+	// The wrap to a negative int32 is intended: an advisory-lock key is an
+	// opaque bit pattern, not a number, and Postgres takes the full int4 range.
+	return int32(h.Sum32())
 }
 
 func (s *PGStore) List(ctx context.Context, tenant string) ([]Target, error) {

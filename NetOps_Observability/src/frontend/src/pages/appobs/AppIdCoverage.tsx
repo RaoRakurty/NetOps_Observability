@@ -206,7 +206,7 @@ export function AppIdOverridesCard() {
         entry here wins outright. Rows belong to this tenant: they are stamped from your sign-in, and
         no other tenant can read or remove them. Creating and removing an override is recorded in the
         platform audit log; the row itself carries no separate history.
-        {(err || readErr) && <span style={{ color: "var(--crit)" }}> · {err || readErr}</span>}
+        {err && <span style={{ color: "var(--crit)" }}> · {err}</span>}
       </p>
 
       {open && (
