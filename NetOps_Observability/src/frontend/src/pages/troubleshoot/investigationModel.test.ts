@@ -440,7 +440,11 @@ describe("buildPlainLadder", () => {
 
 describe("the metric lanes ask about the case's own device", () => {
   it("pins the health query to the device the case named", () => {
-    expect(healthQuery("wan-r2")).toBe('device_if_oper_status{device="wan-r2"} == 0');
+    expect(healthQuery("wan-r2")).toBe(
+      '(device_if_oper_status{device="wan-r2"} == 2'
+      + ' and device_if_admin_status{device="wan-r2"} == 1)'
+      + ' or device_if_oper_status{device="wan-r2"} == 7',
+    );
   });
 
   it("pins EVERY routing family to the device the case named", () => {
@@ -454,10 +458,32 @@ describe("the metric lanes ask about the case's own device", () => {
   it("reads the whole fleet only when the case named no device", () => {
     expect(deviceSelector("")).toBe("");
     expect(deviceSelector("   ")).toBe("");
-    expect(healthQuery("")).toBe("device_if_oper_status == 0");
+    expect(healthQuery("")).toBe(
+      "(device_if_oper_status == 2 and device_if_admin_status == 1)"
+      + " or device_if_oper_status == 7",
+    );
     expect(routingQuery("")).toBe(
       "device_bgp_peer_state != 6 or device_ospf_nbr_state != 8 or device_isis_adj_state != 3",
     );
+  });
+
+  // The scoping half of 3.11-01 was fixed and this half was not: the lane kept
+  // asking `device_if_oper_status == 0`. ifOperStatus is an IF-MIB enum whose
+  // values are 1..7 — ZERO IS NOT ONE OF THEM — so the one lane that exists to
+  // name a dead link matched nothing on any fleet, through any outage, and the
+  // ladder never promoted the physical rung. This test is the guard.
+  it("asks for a value ifOperStatus can actually hold, not a boolean", () => {
+    for (const q of [healthQuery(""), healthQuery("wan-r2")]) {
+      // Not anchored to the metric name: a label selector carries its own "="
+      // and would break the distance, which is how a guard like this passes
+      // vacuously. Nothing in this query may be compared to zero at all.
+      expect(q).not.toMatch(/==\s*0\b/);
+      expect(q).toContain("== 2");
+      expect(q).toContain("== 7");
+      // Admin-down is an operator's decision, not a fault: the down case is
+      // qualified by admin-up exactly as the shipped InterfaceDown rule is.
+      expect(q).toContain("device_if_admin_status");
+    }
   });
 
   it("trims the device id rather than sending a selector that matches nothing", () => {

@@ -398,9 +398,28 @@ export function deviceSelector(device: string): string {
   return d ? `{device="${promLabelValue(d)}"}` : "";
 }
 
-/** The Devices & links query: interfaces that are operationally down. */
+/**
+ * The Devices & links query: interfaces that are operationally down.
+ *
+ * THE PREDICATE IS THE IF-MIB ENUM, NOT A BOOLEAN. `device_if_oper_status` is
+ * ifOperStatus (1.3.6.1.2.1.2.2.1.8) carried through verbatim, so its values are
+ * up(1), down(2), testing(3), unknown(4), dormant(5), notPresent(6),
+ * lowerLayerDown(7). ZERO IS NOT ONE OF THEM. This lane asked `== 0` and so
+ * matched nothing on any fleet, ever — the one lane whose whole job is to name a
+ * dead link reported "nothing here" through a real outage, and the investigation
+ * ladder never promoted the physical rung (review 3.11-01).
+ *
+ * The two conditions below are the platform's own shipped vmalert rules
+ * (src/config/rules.yaml `InterfaceDown` and `InterfaceLowerLayerDown`) word for
+ * word, so the lane and the alert that pages cannot disagree about what "down"
+ * means. `and` binds tighter than `or` in PromQL, and the parentheses say so out
+ * loud: an interface is reported when it is down WHILE ADMIN-UP (an operator who
+ * shut it did not break it), or when its lower layer is gone.
+ */
 export function healthQuery(device: string): string {
-  return `device_if_oper_status${deviceSelector(device)} == 0`;
+  const s = deviceSelector(device);
+  return `(device_if_oper_status${s} == 2 and device_if_admin_status${s} == 1)`
+    + ` or device_if_oper_status${s} == 7`;
 }
 
 /** The Routing query: neighbours that are not in the established state. */

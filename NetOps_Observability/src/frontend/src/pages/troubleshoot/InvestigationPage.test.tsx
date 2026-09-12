@@ -329,14 +329,29 @@ describe("block 2 — the answer", () => {
 
   /** A stand-in metrics store that answers the query it was actually asked.
    *  One interface is down, on `down`, and nowhere else. */
+  // THE FAKE HONOURS THE PREDICATE, not just the metric name.
+  //
+  // It used to answer a down interface to any query starting with
+  // `device_if_oper_status`, whatever it compared against. The lane asked
+  // `device_if_oper_status == 0` for months — ifOperStatus is an IF-MIB enum
+  // whose values are 1..7, so zero matches nothing on any real fleet — and this
+  // fake said "down" to it just the same. A fake that answers every predicate
+  // identically cannot tell a working lane from a dead one (review 3.11-01).
+  //
+  // So: the port is reported down only when the query asks for a state the
+  // metric can actually be in, and the sample carries down(2), the value the
+  // device would really publish.
   const vmWithDownPortOn = (down: string) => (q: string) => {
     const asked = /\{device="([^"]*)"\}/.exec(q)?.[1] ?? "";   // "" = a fleet-wide read
-    const hit = q.startsWith("device_if_oper_status") && (asked === "" || asked === down);
+    // A label selector carries its own "=", so the predicate is read off the
+    // comparison operators rather than off the distance from the metric name.
+    const asksForADownState = /==\s*(2|7)\b/.test(q);
+    const hit = q.includes("device_if_oper_status") && asksForADownState && (asked === "" || asked === down);
     return Promise.resolve({
       status: "success",
       data: {
         resultType: "vector",
-        result: hit ? [{ metric: { device: down, ifName: "Gi0/2" }, value: [0, "0"] }] : [],
+        result: hit ? [{ metric: { device: down, ifName: "Gi0/2" }, value: [0, "2"] }] : [],
       },
     });
   };
@@ -364,7 +379,11 @@ describe("block 2 — the answer", () => {
     await show(<InvestigationPage initialCaseId={CASE_ID} />);
     await waitFor(() => expect(answer()).toHaveTextContent("Breaking at: Physical link"));
     const asked = mocks.metricsQuery.mock.calls.map(([q]) => String(q));
-    expect(asked).toContain('device_if_oper_status{device="wan-r2"} == 0');
+    expect(asked).toContain(
+      '(device_if_oper_status{device="wan-r2"} == 2'
+      + ' and device_if_admin_status{device="wan-r2"} == 1)'
+      + ' or device_if_oper_status{device="wan-r2"} == 7',
+    );
     for (const q of asked) {
       for (const m of q.matchAll(/\{device="([^"]*)"\}/g)) expect(m[1]).toBe("wan-r2");
     }
