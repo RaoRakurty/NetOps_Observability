@@ -87,28 +87,33 @@ func TestReportDeviceKeysScoping(t *testing.T) {
 	rs := isoReportScheduler(t)
 
 	// Global / unassigned reports stay platform-wide (pre-existing contract).
+	// With no restricted tenant there is nothing to exclude either.
 	for _, tenant := range []string{"", TenantGlobal} {
-		if keys, platform := rs.reportDeviceKeys(tenant); !platform || keys != nil {
-			t.Errorf("reportDeviceKeys(%q) = (%v, %v), want platform-wide", tenant, keys, platform)
+		sc := rs.reportDeviceKeys(tenant)
+		if !sc.Platform || sc.Keys != nil || sc.Exclude != nil {
+			t.Errorf("reportDeviceKeys(%q) = %+v, want platform-wide with nothing excluded", tenant, sc)
 		}
 	}
 
 	// A scoped tenant gets its own device keys only.
-	keys, platform := rs.reportDeviceKeys("t-a")
-	if platform {
+	sc := rs.reportDeviceKeys("t-a")
+	if sc.Platform {
 		t.Fatal("tenant-owned report must not be platform-wide")
 	}
-	joined := strings.Join(keys, ",")
+	joined := strings.Join(sc.Keys, ",")
 	if !strings.Contains(joined, "leaf-a") || !strings.Contains(joined, "dev-a") {
-		t.Errorf("keys must carry the tenant's device name+id, got %v", keys)
+		t.Errorf("keys must carry the tenant's device name+id, got %v", sc.Keys)
 	}
 	if strings.Contains(joined, "leaf-b") || strings.Contains(joined, "dev-b") {
-		t.Errorf("CROSS-TENANT LEAK: t-a report keys include t-b's device: %v", keys)
+		t.Errorf("CROSS-TENANT LEAK: t-a report keys include t-b's device: %v", sc.Keys)
+	}
+	if len(sc.Exclude) != 0 {
+		t.Errorf("a tenant-owned report carries no deny-list — the restriction hides a tenant from the platform, never from itself: %v", sc.Exclude)
 	}
 
 	// Default-closed: a tenant with no devices gets an empty set, not platform.
-	if keys, platform := rs.reportDeviceKeys("t-none"); platform || len(keys) != 0 {
-		t.Errorf("deviceless tenant must be (empty, scoped), got (%v, %v)", keys, platform)
+	if sc := rs.reportDeviceKeys("t-none"); sc.Platform || len(sc.Keys) != 0 {
+		t.Errorf("deviceless tenant must be (empty, scoped), got %+v", sc)
 	}
 }
 

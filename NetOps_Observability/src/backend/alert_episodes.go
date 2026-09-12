@@ -153,6 +153,22 @@ func (s *server) alertNotifySuppressed(a models.Alert) bool {
 	return s.alertEpisodes.Suppressed(s.alertTenant(a), a.DeviceID, a.Rule, alertEpisodeState(a.Severity))
 }
 
+// episodeScope resolves WHO is reading the episode store, ONCE per request: the
+// ordinary tenant scope PLUS the per-tenant operator-visibility restriction
+// (Tenant.OperatorRestricted), both taken from the shared tenantVisibility
+// chokepoint rather than re-derived here.
+//
+// The restriction has to reach the STORE rather than stop at this handler,
+// because the store computes the episode `total` over the visible set before
+// limiting. A handler-side filter would drop the rows and leave the count — and
+// "this tenant has 47 open episodes" is exactly the fact the restriction exists
+// to withhold. tenant_id is the right key: an episode's owner is derived from
+// its device when the transition folds and is stored on the row.
+func (s *server) episodeScope(c jwtClaims) alerts.EpisodeScope {
+	v := s.tenantVisibilityFor(c)
+	return alerts.EpisodeScope{Tenant: v.tenant, Cross: v.cross, Deny: v.deny, Hidden: v.hiddenTenantIDs()}
+}
+
 // ── HTTP ──────────────────────────────────────────────────────────────────────
 
 // handleAlertEpisodes serves GET /api/alerts/episodes — the tenant-scoped
@@ -169,7 +185,6 @@ func (s *server) handleAlertEpisodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims, _ := userFrom(r.Context())
-	tenant, cross := principalTenant(claims)
 	q := episodeQuery{Status: strings.TrimSpace(r.URL.Query().Get("status"))}
 	switch q.Status {
 	case "", "all", "open", episodeStatusActive, episodeStatusCleared, episodeStatusClosed:
@@ -185,7 +200,7 @@ func (s *server) handleAlertEpisodes(w http.ResponseWriter, r *http.Request) {
 		}
 		q.Limit = n
 	}
-	eps, total, truncated := s.alertEpisodes.List(tenant, cross, q)
+	eps, total, truncated := s.alertEpisodes.List(s.episodeScope(claims), q)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"episodes":             eps,
 		"total":                total,
@@ -224,7 +239,7 @@ func (s *server) handleAlertEpisodeAction(w http.ResponseWriter, r *http.Request
 		http.NotFound(w, r)
 		return
 	}
-	tenant, cross := principalTenant(claims)
+	scope := s.episodeScope(claims)
 	actor := claims.Sub
 	now := s.alertEpisodes.Now().UTC()
 
@@ -233,7 +248,7 @@ func (s *server) handleAlertEpisodeAction(w http.ResponseWriter, r *http.Request
 	// the 7-day cap) receives a 400 that confirms the id exists, instead of the
 	// 404 that hides it. The 404 must win over the 400. Triage re-checks under
 	// its own lock, so this is a fast-fail gate, not the authority.
-	if !s.alertEpisodes.Reachable(id, tenant, cross) {
+	if !s.alertEpisodes.Reachable(id, scope) {
 		http.NotFound(w, r)
 		return
 	}
@@ -346,7 +361,7 @@ func (s *server) handleAlertEpisodeAction(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	ep, err := s.alertEpisodes.Triage(id, tenant, cross, apply)
+	ep, err := s.alertEpisodes.Triage(id, scope, apply)
 	if errors.Is(err, errEpisodeNotFound) {
 		http.NotFound(w, r) // never reveal another tenant's episode ids
 		return

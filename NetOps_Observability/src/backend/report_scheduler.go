@@ -482,10 +482,7 @@ func (rs *reportScheduler) render(o saved.Object, spec reportSpec, now time.Time
 // Excel, PDF) consumes. Tabular kinds populate Section.Header+Rows (real tables,
 // so Excel exports cells, not a text blob); narrative kinds fall back to a Note.
 func (rs *reportScheduler) buildViewModel(o saved.Object, spec reportSpec, now time.Time) reports.ViewModel {
-	sev := strings.ToLower(strings.TrimSpace(spec.Severity))
-	if sev == "" {
-		sev = "info"
-	}
+	vm := reportViewModelShell(o, spec, now)
 	tenant := o.TenantID
 	var summary string
 	var sections []reports.Section
@@ -505,35 +502,72 @@ func (rs *reportScheduler) buildViewModel(o saved.Object, spec reportSpec, now t
 	default:
 		summary, sections = rs.ds.DatasetAlerts(tenant)
 	}
+	vm.Summary, vm.Sections = summary, sections
+	return vm
+}
+
+// reportViewModelShell is a report's IDENTITY with none of its content: the id,
+// name, kind, owner, severity and description, and no dataset at all.
+//
+// buildViewModel fills it in. It is also what a caller that MUST NOT READ
+// renders — the report-preview handler, when the operator has scoped into a
+// tenant it may administer but not read (report_preview_http.go). That caller
+// needs a real, valid report with nothing in it, and it needs it WITHOUT
+// gathering the dataset: it must not issue the reads, not merely discard them.
+func reportViewModelShell(o saved.Object, spec reportSpec, now time.Time) reports.ViewModel {
+	sev := strings.ToLower(strings.TrimSpace(spec.Severity))
+	if sev == "" {
+		sev = "info"
+	}
 	return reports.ViewModel{
 		ReportID:    o.ID,
 		ReportName:  o.Name,
 		Kind:        firstNonEmpty(spec.Kind, "alerts_summary"),
-		TenantID:    tenant,
+		TenantID:    o.TenantID,
 		GeneratedAt: now,
 		Severity:    sev,
 		Description: spec.Description,
-		Summary:     summary,
-		Sections:    sections,
 	}
 }
 
-// alertFromViewModel renders the structured ViewModel down to the models.Alert
-// shape the notify channels (slack/pagerduty/...) consume, so named-channel
-// delivery keeps working from the same dataset.
+// emptyReportViewModel is the shell plus the ordinary "no data" note every
+// renderer already knows how to draw, so a denied preview is indistinguishable
+// from a report whose backends returned nothing — no error page, no status that
+// confirms the tenant exists, nothing for the operator to read.
+func emptyReportViewModel(o saved.Object, spec reportSpec, now time.Time) reports.ViewModel {
+	vm := reportViewModelShell(o, spec, now)
+	vm.Summary = "no data"
+	vm.Sections = []reports.Section{{Title: "No data", Note: "No data available for this report."}}
+	return vm
+}
+
+// tenantDevices returns the devices one scheduled run may cover, filtered
+// through the SAME resolved deviceVisibility object /api/devices and the
+// inventory tiles are filtered through.
+//
+// A platform-owned report used to take rs.discovery.Devices() whole. That is
+// the INVENTORY half of the leak the alert half closed: the device_inventory
+// report printed a restricted tenant's device name, management address, vendor
+// and last-seen time into a message delivered off the box on a timer, and the
+// health/utilisation reports counted it.
 func (rs *reportScheduler) tenantDevices(tenant string) []models.Device {
-	all := rs.discovery.Devices()
-	t := strings.ToLower(strings.TrimSpace(tenant))
+	return rs.deviceVisibility(tenant).filter(rs.discovery.Devices())
+}
+
+// deviceVisibility resolves the device-REGISTRY rule ONCE for one scheduled run,
+// from the report's OWN tenant — the same scope, chosen for the same reason, as
+// reportScheduler.alertVisibility (see its comment for whose visibility a timer
+// carries, and why break-glass is deliberately not consulted).
+//
+// A TENANT-owned report is that tenant's own view of its own estate: nothing is
+// hidden from it. A PLATFORM-owned report is the operator's Global view, so the
+// restricted tenants' devices come out of it.
+func (rs *reportScheduler) deviceVisibility(tenant string) deviceVisibility {
+	t := normTenant(tenant)
 	if t == "" || t == TenantGlobal {
-		return all
+		return deviceVisibility{tenantVisibility: tenantVisibilityForScope(TenantGlobal, true, rs.restrictedTenantIDs())}
 	}
-	out := make([]models.Device, 0, len(all))
-	for _, d := range all {
-		if canSeeDevice(d, t, false) {
-			out = append(out, d)
-		}
-	}
-	return out
+	return deviceVisibility{tenantVisibility: tenantVisibilityForScope(t, false, nil)}
 }
 
 // tenantAlerts returns the active alerts visible to the report's tenant (alerts
@@ -591,19 +625,29 @@ func (rs *reportScheduler) restrictedTenantIDs() []string {
 	return rs.srv.tenants.RestrictedIDs()
 }
 
-// reportDeviceKeys returns the device ids/names a tenant-owned report may
-// reference (the visibleDeviceKeys key set, derived from the report's owner
-// instead of request claims). platform=true means the report is global or
-// unassigned and stays platform-wide — the contract renderDevices/renderAlerts
-// already follow. Default-closed: a scoped tenant with no visible devices gets
-// an empty key set, and renderers must emit their "no data" note without
-// querying rather than fall back to unscoped telemetry.
-func (rs *reportScheduler) reportDeviceKeys(tenant string) (keys []string, platform bool) {
-	t := strings.ToLower(strings.TrimSpace(tenant))
+// reportDeviceKeys resolves the device-key scope one scheduled run's
+// ClickHouse and VictoriaMetrics reads are narrowed by — the telemetry half of
+// the same decision tenantDevices makes for the registry.
+//
+// A TENANT-owned report carries an ALLOW-list: the ids and names of its own
+// devices (the visibleDeviceKeys key set, derived from the report's owner
+// instead of request claims). Default-closed — a tenant with no visible device
+// gets an empty set and the renderers emit their "no data" note without
+// querying, rather than falling back to unscoped telemetry.
+//
+// A PLATFORM-owned report stays platform-wide but carries a DENY-list: the ids
+// and names of the restricted tenants' devices, from the shared device-keyed
+// resolver (telemetryRestrictionFor) rather than a second copy of the rule.
+// Platform-wide used to mean "no clause at all", which is how a scheduled
+// platform report came to describe a restricted tenant's tunnels, findings and
+// CPU on a timer.
+func (rs *reportScheduler) reportDeviceKeys(tenant string) reports.DeviceScope {
+	t := normTenant(tenant)
 	if t == "" || t == TenantGlobal {
-		return nil, true
+		return reports.DeviceScope{Platform: true, Exclude: rs.restrictedDeviceKeys()}
 	}
 	seen := map[string]bool{}
+	var keys []string
 	for _, d := range rs.tenantDevices(t) {
 		for _, k := range []string{d.ID, d.Name} {
 			if k != "" && !seen[k] {
@@ -612,7 +656,19 @@ func (rs *reportScheduler) reportDeviceKeys(tenant string) (keys []string, platf
 			}
 		}
 	}
-	return keys, false
+	return reports.DeviceScope{Keys: keys}
+}
+
+// restrictedDeviceKeys is the device-keyed form of the hidden set a PLATFORM-
+// owned run excludes: every identifier (id and name) of every device owned by a
+// restricted tenant. Same resolver the live telemetry surfaces use, so the
+// report and /api/flows can never disagree about which devices are hidden.
+func (rs *reportScheduler) restrictedDeviceKeys() []string {
+	restricted := rs.restrictedTenantIDs()
+	if len(restricted) == 0 || rs.srv == nil {
+		return nil
+	}
+	return rs.srv.telemetryRestrictionFor(TenantGlobal, true, restricted).keys
 }
 
 func vmQueryMap(query string) map[string]float64 {

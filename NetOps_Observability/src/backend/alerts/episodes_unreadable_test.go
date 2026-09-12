@@ -68,7 +68,7 @@ func TestEpisodeFileUnreadableIsNotEmptyAndIsNeverOverwritten(t *testing.T) {
 	// alerts from being evaluated. What must not happen is the file being
 	// replaced by what this process holds.
 	s.Observe("acme", "dev-2", "BGPPeerDown", "critical", "peer down", true)
-	if eps, _, _ := s.List("acme", false, EpisodeQuery{}); len(eps) != 1 {
+	if eps, _, _ := s.List(EpisodeScopeFor("acme", false), EpisodeQuery{}); len(eps) != 1 {
 		t.Fatalf("folding stopped when the file could not be read: %+v", eps)
 	}
 
@@ -77,7 +77,7 @@ func TestEpisodeFileUnreadableIsNotEmptyAndIsNeverOverwritten(t *testing.T) {
 	if reopened.LoadErr() != nil {
 		t.Fatalf("the repaired file no longer loads: %v", reopened.LoadErr())
 	}
-	eps, _, _ := reopened.List("acme", false, EpisodeQuery{})
+	eps, _, _ := reopened.List(EpisodeScopeFor("acme", false), EpisodeQuery{})
 	if len(eps) != 1 || eps[0].Resource != "dev-1" {
 		t.Fatalf("the seeded episode did not survive: %+v", eps)
 	}

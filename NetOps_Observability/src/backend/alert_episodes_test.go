@@ -34,7 +34,7 @@ func (c *fakeEpisodeClock) now() time.Time { return c.t }
 
 func listAll(t *testing.T, s *alertEpisodeStore) []AlertEpisode {
 	t.Helper()
-	eps, _, _ := s.List("", true, episodeQuery{Status: "all"})
+	eps, _, _ := s.List(alerts.EpisodeScopeFor("", true), episodeQuery{Status: "all"})
 	return eps
 }
 
@@ -67,7 +67,7 @@ func TestObserveAlertTransitionDerivesTenantFromDevice(t *testing.T) {
 	}
 	// Suppression adapter resolves the same key.
 	ep := eps[0]
-	if _, err := store.Triage(ep.ID, "", true, func(e *AlertEpisode) error { e.Muted = true; return nil }); err != nil {
+	if _, err := store.Triage(ep.ID, alerts.EpisodeScopeFor("", true), func(e *AlertEpisode) error { e.Muted = true; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	a := models.Alert{Rule: ep.Signal, Severity: ep.State, DeviceID: ep.Resource}

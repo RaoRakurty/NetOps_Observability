@@ -463,8 +463,26 @@ type tenantVisibility struct {
 // own estate, and when no tenant is restricted.
 func (s *server) tenantVisibilityFor(c jwtClaims) tenantVisibility {
 	tenant, cross := principalTenant(c)
+	return tenantVisibilityForScope(tenant, cross, s.principalRestrictedIDs(c))
+}
+
+// tenantVisibilityForScope resolves the SAME rule from an ALREADY-RESOLVED
+// scope: the (tenant, cross) pair and the tenant ids hidden from it.
+// tenantVisibilityFor is this function plus the principal lookup.
+//
+// It is the tenant_id twin of alertVisibilityForScope and exists for the same
+// reader: the report scheduler renders and DELIVERS on a timer, long after
+// whoever created the schedule has gone, so it has no principal to resolve. That
+// run still has a scope — the report's own tenant — and its INVENTORY reads
+// (the device list a device_inventory report prints, the device key set every
+// ClickHouse/VictoriaMetrics read is narrowed by) must be filtered by the same
+// object the HTTP surfaces filter by, not by a hand-written copy of the rule.
+//
+// A plain function, not a method: it needs no server, so a caller holding only a
+// scope cannot be tempted to reach for claims it does not have.
+func tenantVisibilityForScope(tenant string, cross bool, restricted []string) tenantVisibility {
 	v := tenantVisibility{tenant: tenant, cross: cross}
-	exclude, deny := s.operatorTelemetryRestriction(c, tenant, cross)
+	exclude, deny := tenantTelemetryRestrictionFor(tenant, cross, restricted)
 	v.deny = deny
 	if len(exclude) > 0 {
 		v.hiddenTenants = make(map[string]bool, len(exclude))
@@ -473,6 +491,21 @@ func (s *server) tenantVisibilityFor(c jwtClaims) tenantVisibility {
 		}
 	}
 	return v
+}
+
+// hiddenTenantIDs renders the restriction half of this rule as a sorted slice,
+// for a store API that takes the hidden set as data (the alert-episode store).
+// Sorted so the value is stable across calls; empty when nothing is hidden.
+func (v tenantVisibility) hiddenTenantIDs() []string {
+	if len(v.hiddenTenants) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(v.hiddenTenants))
+	for id := range v.hiddenTenants {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // hides reports whether a row owned by tenantID is hidden from this principal by
