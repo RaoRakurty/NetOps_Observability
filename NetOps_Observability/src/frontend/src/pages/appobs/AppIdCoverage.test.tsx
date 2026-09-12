@@ -222,3 +222,19 @@ describe("AppIdOverridesCard", () => {
     expect(await screen.findByText(/declared no overrides/)).toBeTruthy();
   });
 });
+
+// Review finding 3.11-09.
+describe("AppIdOverridesCard — a failed read is not an empty tenant", () => {
+  it("does not print the definitive empty state when the list could not be read", async () => {
+    mock.appIdOverrides.mockRejectedValueOnce(new Error("502 Bad Gateway: {}"));
+    const { container } = render(<AppIdOverridesCard />);
+    await waitFor(() => expect(container.textContent).toMatch(/not a statement that there are none/));
+    expect(screen.queryByText(/has declared no overrides/)).toBeNull();
+  });
+
+  it("still says so plainly when the tenant really has none", async () => {
+    mock.appIdOverrides.mockResolvedValueOnce({ entries: [], count: 0 });
+    render(<AppIdOverridesCard />);
+    expect(await screen.findByText(/has declared no overrides/)).toBeTruthy();
+  });
+});

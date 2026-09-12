@@ -1750,6 +1750,11 @@ function BundlePolicyForm({ panel, onReload, canEdit }: {
     try {
       const r = await api.setBackupConfig(cfg);
       setCfg(r.config);
+      // Re-read the panel, the way the snapshot form does. Without this the
+      // retention hint went on quoting the value loaded at MOUNT, so after a
+      // save it could tell the operator "Saving keeps 7" while the platform
+      // was already keeping 14.
+      onReload();
       setMsg({ tone: "good", text: "Saved. The host applier picks it up on its next run." });
     } catch (e: unknown) {
       setMsg({ tone: "bad", text: operatorError(e, "The change could not be saved.") });

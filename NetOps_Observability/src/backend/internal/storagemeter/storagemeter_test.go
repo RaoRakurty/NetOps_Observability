@@ -649,3 +649,28 @@ func TestNilMeterIsSafeEverywhere(t *testing.T) {
 	var sb strings.Builder
 	m.Metrics().Write(&sb)
 }
+
+// 3.3-06 — WHEN EVERY MATCHED INDEX IS SIZELESS, THE ZERO SAYS SO.
+//
+// The mixed case carries the `sizeless` caveat; the all-sizeless case fell into
+// the empty-bucket branch and returned a MEASURED zero whose detail said "the
+// pattern matched no index" — the opposite of what happened. The cluster listed
+// the indices and reported no size for any of them, which is the one shape
+// where the zero is NOT the measurement.
+func TestOpenSearchSaysWhenEveryMatchedIndexReportedNoSize(t *testing.T) {
+	d := fakeDeps()
+	d.OpenSearch = osRows([]catIndexRow{
+		{Index: "netops-syslog-acme-2026.09.06", Store: "", Docs: ""},
+		{Index: "netops-syslog-acme-2026.09.05", Store: "", Docs: ""},
+	})
+	r := find(t, New(d).Probe(context.Background(), Principal{CrossTenant: true}), StoreOpenSearch, ScopePlatform)
+	if strings.Contains(r.Detail, "matched no index") {
+		t.Fatalf("the reading claims the pattern matched nothing, when two indices matched and neither reported a size: %q", r.Detail)
+	}
+	if !strings.Contains(r.Detail, "reported NO size") {
+		t.Fatalf("the dropped caveat is still missing: %q", r.Detail)
+	}
+	if r.BytesOnDisk == nil || *r.BytesOnDisk != 0 {
+		t.Fatalf("bytes = %v, want a zero that is explained", r.BytesOnDisk)
+	}
+}

@@ -38,6 +38,10 @@ type SubView = "frameworks" | "drift";
 
 /** The statuses that mean "no verdict": Unknown, NotApplicable, Error. */
 const UNASSESSED_STATUSES = "unknown,not_applicable,error";
+// The server's own ceiling (secapi.MaxListLimit). Asking for it does not make
+// the read complete — it makes the shortfall small, and the shortfall is
+// DECLARED either way.
+const UNASSESSED_PAGE = 500;
 
 export default function SecurityCompliance() {
   const [tab, setTab] = useState<SubView>("frameworks");
@@ -55,6 +59,9 @@ export default function SecurityCompliance() {
 
   const [unassessed, setUnassessed] = useState<SecFinding[] | null>(null);
   const [unassessedErr, setUnassessedErr] = useState<string | null>(null);
+  // How many unassessed controls the SERVER says there are, which is not the
+  // same as how many this page counted: the read is one page deep.
+  const [unassessedTotal, setUnassessedTotal] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -74,10 +81,16 @@ export default function SecurityCompliance() {
 
   useEffect(() => {
     let alive = true;
-    api.securityFindings({ current: true, status: UNASSESSED_STATUSES })
+    // The grouped counts below are built from the ROWS, so ask for as many as
+    // the API will give (MaxListLimit = 500). Without a limit the server
+    // answered its default 100 and a 1,400-control credential outage rendered
+    // as "100 controls" with nothing saying the number was a page.
+    api.securityFindings({ current: true, status: UNASSESSED_STATUSES, limit: UNASSESSED_PAGE })
       .then((page) => {
         if (!alive) return;
-        setUnassessed(Array.isArray(page?.items) ? page.items : []);
+        const items = Array.isArray(page?.items) ? page.items : [];
+        setUnassessed(items);
+        setUnassessedTotal(typeof page?.total === "number" ? page.total : items.length);
         setUnassessedErr(null);
       })
       .catch((e: unknown) => {
@@ -166,6 +179,13 @@ export default function SecurityCompliance() {
                       </li>
                     ))}
                   </ul>
+                  {unassessedTotal > (unassessed?.length ?? 0) && (
+                    <p className="sec-line" style={{ marginBottom: 0 }} role="status">
+                      Counted from the first {(unassessed?.length ?? 0).toLocaleString()} of{" "}
+                      {unassessedTotal.toLocaleString()} unassessed controls — the reasons below are
+                      a sample, not the whole estate.
+                    </p>
+                  )}
                   <p className="sec-line" style={{ marginBottom: 0 }} role="status">
                     Counted in no passing share.
                     <AskIris topic="compliance.unassessed-control" label="an unassessed control" />

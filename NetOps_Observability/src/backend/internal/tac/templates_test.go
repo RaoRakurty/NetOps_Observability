@@ -393,7 +393,10 @@ func TestReviewRegistryOpensAndClosesWithTheCollection(t *testing.T) {
 	if g.Allows(dev, custom) {
 		t.Fatal("a custom command is allowed with no review registered")
 	}
-	reg.Register(dev.ID, []string{custom})
+	tok := reg.Register(dev.ID, []string{custom})
+	if tok == 0 {
+		t.Fatal("Register refused to open an allow set for an idle device")
+	}
 	if !g.Allows(dev, custom) {
 		t.Fatal("a registered, re-validated custom command is refused at the gate")
 	}
@@ -405,13 +408,14 @@ func TestReviewRegistryOpensAndClosesWithTheCollection(t *testing.T) {
 	}
 	// A forbidden command can NEVER be admitted, even if it somehow got into
 	// the registry — the policy is re-applied at the wire.
-	reg.Register(dev.ID, []string{"configure terminal", "reload"})
+	reg.Release(dev.ID, tok)
+	tok2 := reg.Register(dev.ID, []string{"configure terminal", "reload"})
 	for _, bad := range []string{"configure terminal", "reload"} {
 		if g.Allows(dev, bad) {
 			t.Fatalf("%q was admitted through the review registry — the policy must still refuse it", bad)
 		}
 	}
-	reg.Release(dev.ID)
+	reg.Release(dev.ID, tok2)
 	if reg.Size() != 0 {
 		t.Fatal("Release did not release")
 	}

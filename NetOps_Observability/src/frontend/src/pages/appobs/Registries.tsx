@@ -308,6 +308,11 @@ function ServiceRegistryPanel({ onOpen, storage }:
   const [archived, setArchived] = useState(false);
   const [unavailable, setUnavailable] = useState("");
   const [err, setErr] = useState("");
+  // The READ failure is its own state. `err` also carries what an ACTION
+  // (archive, create) reported, and those must not turn the table into an
+  // empty state — but a failed read must not leave the definitive
+  // "No services defined yet" standing either.
+  const [readErr, setReadErr] = useState("");
   const [draft, setDraft] = useState<ServiceDraft>(EMPTY_SERVICE);
   const [open, setOpen] = useState(false);
   const [formErr, setFormErr] = useState("");
@@ -316,14 +321,14 @@ function ServiceRegistryPanel({ onOpen, storage }:
 
   useEffect(() => {
     let live = true;
-    setUnavailable(""); setErr("");
+    setUnavailable(""); setErr(""); setReadErr("");
     api.catalogServices(archived)
       .then((r) => { if (live) setRows(r ?? []); })
       .catch((e) => {
         if (!live) return;
         setRows([]);
         const sentence = operatorError(e, "The service catalog could not be read.");
-        if (isStoreUnavailable(e)) setUnavailable(sentence); else setErr(sentence);
+        if (isStoreUnavailable(e)) setUnavailable(sentence); else setReadErr(sentence);
       });
     return () => { live = false; };
   }, [archived, nonce]);
@@ -403,6 +408,12 @@ function ServiceRegistryPanel({ onOpen, storage }:
           )}
           {rows === null ? (
             <div className="ao-muted" style={{ fontSize: 12.5 }}>Loading…</div>
+          ) : unavailable ? (
+            <EmptyState title="Service catalog unavailable" hint={unavailable} />
+          ) : readErr ? (
+            // A failed read is not an empty catalog. Setting rows to [] and
+            // falling through told the operator no service was ever defined.
+            <EmptyState title="The service catalog could not be read" hint={readErr} />
           ) : list.length === 0 ? (
             <EmptyState title="No services defined yet" hint="a service groups the traffic you operate as one unit" />
           ) : (
@@ -456,6 +467,9 @@ function ApplicationRegistryPanel({ storage }: { storage?: RegistryStorageStatus
   const [archived, setArchived] = useState(false);
   const [unavailable, setUnavailable] = useState("");
   const [err, setErr] = useState("");
+  // See the service panel: a failed READ is not a failed action, and neither is
+  // an empty registry.
+  const [readErr, setReadErr] = useState("");
   const [draft, setDraft] = useState<AppDraft>(EMPTY_APP);
   const [open, setOpen] = useState(false);
   const [formErr, setFormErr] = useState("");
@@ -464,7 +478,7 @@ function ApplicationRegistryPanel({ storage }: { storage?: RegistryStorageStatus
 
   useEffect(() => {
     let live = true;
-    setUnavailable(""); setErr("");
+    setUnavailable(""); setErr(""); setReadErr("");
     api.applications(archived)
       .then((r) => { if (live) setRows(r ?? []); })
       .catch((e) => {
@@ -474,7 +488,7 @@ function ApplicationRegistryPanel({ storage }: { storage?: RegistryStorageStatus
         // down) are DEPLOYMENT facts carrying the API's own sentence — they must
         // never render as "no applications registered yet" (tracker 245).
         const sentence = operatorError(e, "The application registry could not be read.");
-        if (isStoreUnavailable(e)) setUnavailable(sentence); else setErr(sentence);
+        if (isStoreUnavailable(e)) setUnavailable(sentence); else setReadErr(sentence);
       });
     return () => { live = false; };
   }, [archived, nonce]);
@@ -562,6 +576,11 @@ function ApplicationRegistryPanel({ storage }: { storage?: RegistryStorageStatus
         <div className="ao-muted" style={{ fontSize: 12.5 }}>Loading…</div>
       ) : unavailable ? (
         <EmptyState title="Application registry unavailable" hint={unavailable} />
+      ) : readErr ? (
+        // Same split for every other read failure: 501/503 are deployment facts
+        // with their own sentence, and anything else is still not "nothing is
+        // registered here".
+        <EmptyState title="The application registry could not be read" hint={readErr} />
       ) : list.length === 0 ? (
         <EmptyState title="No applications registered yet" hint="register one so ownership has a name here" />
       ) : (

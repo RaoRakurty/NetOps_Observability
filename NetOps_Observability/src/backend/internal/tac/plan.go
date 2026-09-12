@@ -339,11 +339,12 @@ func (c *Catalog) Plan(classID string, dev Device, opt PlanOptions) (*Plan, erro
 		// probe is meaningless anyway. It is reported as unbound, with the
 		// reason, which is the honest outcome.
 		if protocoldiag.IsProbeCommand(cmd) && protocoldiag.ValidateBoundedProbe(cmd) != nil {
-			if !seen[intent] {
-				seen[intent] = true
-				p.Unbound = append(p.Unbound, c.unboundStep(intent, sec,
-					"this dialect binds a reachability probe for it, but the incident supplied no address to probe"))
-			}
+			// `seen[intent]` was already claimed at the top of this closure, so
+			// this file is UNCONDITIONAL: guarding it on !seen made it dead and
+			// the intent vanished from Steps AND Unbound, letting the plan's
+			// coverage sentence claim every command was authored.
+			p.Unbound = append(p.Unbound, c.unboundStep(intent, sec,
+				"this dialect binds a reachability probe for it, but the incident supplied no address to probe"))
 			return
 		}
 		p.Steps = append(p.Steps, Step{

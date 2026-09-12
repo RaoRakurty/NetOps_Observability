@@ -304,7 +304,13 @@ func (s *FileStore) RuleStates(_ context.Context, p Principal) (map[string]bool,
 			continue
 		}
 		for id, r := range byRule {
-			out[id] = r.Enabled
+			// UNION, explicitly — the same fold FrameworkStates does and says it
+			// does. A cross-tenant (platform) view spans several owners, and
+			// assigning here made the answer last-writer-wins over an UNORDERED
+			// map: with two tenants disagreeing about one rule, the platform
+			// view flipped between refreshes. For a scoped caller only one
+			// owner is visible, so this is identity.
+			out[id] = out[id] || r.Enabled
 		}
 	}
 	return out, nil
@@ -463,7 +469,9 @@ func (p *pgStore) RuleStates(ctx context.Context, pr Principal) (map[string]bool
 			if err := rows.Scan(&id, &enabled); err != nil {
 				return err
 			}
-			out[id] = enabled
+			// The same explicit union the file backend applies: an unordered
+			// SQL read must not decide a platform answer by which row came last.
+			out[id] = out[id] || enabled
 		}
 		return rows.Err()
 	})
@@ -569,6 +577,14 @@ func (p *pgStore) AddView(ctx context.Context, tenant string, cross bool, v Save
 }
 
 func (p *pgStore) DeleteView(ctx context.Context, tenant string, cross bool, id string) (bool, error) {
+	// A view id is a UUID this store minted (AddView), so an id that is not one
+	// cannot name a row. Checking the shape HERE rather than letting `$1::uuid`
+	// reject it at the database is what keeps the two backends answering the
+	// same thing: the cast raised SQLSTATE 22P02, which the handler rendered as
+	// a 502 carrying Postgres's own text, while the file backend answered 404.
+	if !looksLikeUUID(id) {
+		return false, nil
+	}
 	found := false
 	err := p.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `DELETE FROM security_saved_views WHERE id = $1::uuid`, id)
@@ -582,6 +598,27 @@ func (p *pgStore) DeleteView(ctx context.Context, tenant string, cross bool, id 
 		return false, err
 	}
 	return found, nil
+}
+
+// looksLikeUUID reports whether s has the canonical 8-4-4-4-12 hex shape. It is
+// a SHAPE check at the boundary, not a validity claim about the row.
+func looksLikeUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, r := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if r != '-' {
+				return false
+			}
+		default:
+			if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 var _ Store = (*FileStore)(nil)

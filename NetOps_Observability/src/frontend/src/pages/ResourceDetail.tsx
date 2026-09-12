@@ -373,8 +373,12 @@ function ServiceTab({ r }: { r: CloudResourceRow }) {
             <Row k="Attribution" v={`${r.source} · ${r.confidence}`} />
           </tbody>
         </table>
+        {/* The label names where the link GOES. The nav split moved this href
+            to Infrastructure → Applications → Catalog and left "Open in Cloud"
+            behind, so the operator was promised the Cloud section and landed in
+            the application catalog. */}
         <a className="ao-console-link" href="#/infrastructure/applications/catalog">
-          Open in Cloud
+          Open in the application catalog
         </a>
       </div>
     </div>

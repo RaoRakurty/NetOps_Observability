@@ -17,7 +17,7 @@ import AskIris from "../../components/AskIris";
 import LaneHealth from "./LaneHealth";
 import SeamGroups from "./SeamGroups";
 import {
-  coverageOf, facetTotal, funnelStages, isThreatLane,
+  coverageOf, facetKeys, facetTotal, funnelStages, isThreatLane,
   mapFacetRows, seamCards, storyConfidence, storyList, topExposures, trendPoints,
 } from "./model";
 
@@ -190,6 +190,11 @@ export default function SecurityOverview() {
   );
   const frameworks = useMemo(() => mapFacetRows(facets?.framework), [facets]);
 
+  // One lane's server-side count. "threat" and "signal" are the same lane on
+  // the server, which is why the fallback exists.
+  const laneCount = (key: string): number =>
+    facets?.evidence_class?.[key] ?? (key === "threat" ? facets?.evidence_class?.signal : undefined) ?? 0;
+
   const openStory = (id: string) => { window.location.hash = `#/security/stories/${encodeURIComponent(id)}`; };
 
   if (err) {
@@ -243,10 +248,16 @@ export default function SecurityOverview() {
             <EvidenceLane
               key={l.key}
               title={l.title}
-              count={`${(facets?.evidence_class?.[l.key] ?? (l.key === "threat" ? facets?.evidence_class?.signal : undefined) ?? 0).toLocaleString()} current`}
+              count={`${laneCount(l.key).toLocaleString()} current`}
               tone={l.rows.length > 0 ? "bad" : ""}
               topic="sec.lane-no-producer"
-              empty="No verdicts yet."
+              // The badge comes from the SERVER-SIDE facet and the rows are
+              // filtered client-side out of the first page of findings, so a
+              // lane with a real count can legitimately have no row here. The
+              // card used to read "12 current" above "No verdicts yet.".
+              empty={laneCount(l.key) > 0
+                ? "None in the newest findings on this page — open the lane to see them."
+                : "No verdicts yet."}
             >
               {l.rows.length > 0
                 ? l.rows.map((f) => <FindingRow key={f.id} finding={f} />)
@@ -312,7 +323,7 @@ export default function SecurityOverview() {
           )}
         </Panel>
         <p className="sec-line" style={{ margin: 0 }}>
-          {facetTotal(facets?.severity)} current findings across {facetTotal(facets?.seam) || 0} scored seams.
+          {facetTotal(facets?.severity)} current findings across {facetKeys(facets?.seam)} scored seams.
         </p>
       </Group>
     </div>

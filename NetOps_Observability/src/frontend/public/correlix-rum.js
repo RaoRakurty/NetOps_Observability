@@ -99,15 +99,29 @@
   // route() strips the query string and any path segment that looks like an
   // identifier, so "/orders/1f9c/pay" becomes "/orders/:id/pay". A route that
   // carried an order number would be both a cardinality explosion and a
-  // customer-data leak into a label.
+  // customer-data leak into a label, and the backend clips the label but never
+  // scrubs it — this is the only place it can be done.
+  //
+  // The old rule redacted all-digit segments and hex runs of EIGHT OR MORE
+  // characters, so it let through exactly the example above ("1f9c" is four)
+  // along with every short token, id fragment and "user@host" segment. The rule
+  // is now default-closed: a segment is KEPT only when it reads as a route
+  // word, and anything else becomes :id.
+  //
+  // Known limit, stated rather than implied: a segment of pure letters is kept,
+  // so "/users/jsmith" keeps the name. Shape cannot tell a username from a page
+  // name; put ids in the segments this function redacts.
   function route(pathname) {
     return String(pathname || "/")
       .split("?")[0]
+      .split("#")[0]
       .split("/")
       .map(function (seg) {
         if (!seg) return seg;
-        if (/^[0-9]+$/.test(seg)) return ":id";
-        if (/^[0-9a-f-]{8,}$/i.test(seg)) return ":id";
+        if (/^v[0-9]+$/i.test(seg)) return seg;          // an API version is a route word
+        if (/[0-9]/.test(seg)) return ":id";             // ANY digit: ids, dates, order numbers
+        if (seg.length > 24) return ":id";               // a long opaque token
+        if (!/^[A-Za-z][A-Za-z._~-]*$/.test(seg)) return ":id"; // anything that is not a plain word
         return seg;
       })
       .join("/");

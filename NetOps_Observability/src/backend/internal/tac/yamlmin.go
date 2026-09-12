@@ -273,18 +273,27 @@ func parseValue(rest string, lines []yline, indent, num, depth int) (*ynode, []y
 
 // parseBlockScalar consumes an indented literal (`|`) or folded (`>`) body.
 func parseBlockScalar(marker string, lines []yline, indent, num int) (*ynode, []yline, error) {
-	var body []string
+	// The body is collected FIRST and its indent floor taken from the whole
+	// block, not from its first line. Fixing the base on line one and never
+	// re-flooring it made a later, less-indented line compute a NEGATIVE pad,
+	// and strings.Repeat panics on a negative count — reachable from the
+	// customer capture-upload route, where every other malformed document is
+	// refused rather than crashing the connection.
+	var raw []yline
 	base := -1
 	for len(lines) > 0 && lines[0].indent > indent {
-		if base < 0 {
+		if base < 0 || lines[0].indent < base {
 			base = lines[0].indent
 		}
-		pad := strings.Repeat(" ", lines[0].indent-base)
-		body = append(body, pad+lines[0].text)
+		raw = append(raw, lines[0])
 		lines = lines[1:]
 	}
-	if len(body) == 0 {
+	if len(raw) == 0 {
 		return &ynode{kind: 's', str: "", line: num}, lines, nil
+	}
+	body := make([]string, 0, len(raw))
+	for _, ln := range raw {
+		body = append(body, strings.Repeat(" ", ln.indent-base)+ln.text)
 	}
 	sep := "\n"
 	if strings.HasPrefix(marker, ">") {

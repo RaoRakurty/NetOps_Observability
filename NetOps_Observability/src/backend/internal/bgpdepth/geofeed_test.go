@@ -213,3 +213,43 @@ func mustJSON(s string) string {
 	}
 	return string(b)
 }
+
+// 3.4-10 — A GEOFEED ROW MUST BE INSIDE THE RESOURCE, NOT MERELY TOUCH IT.
+//
+// prefixWithinAny used netip.Prefix.Overlaps, which is SYMMETRIC, so a row that
+// merely COVERED the queried resource was kept: a third-party feed discovered
+// from whois could publish `0.0.0.0/0,KP` and have it rendered as the location
+// of somebody else's prefix. The function's own name, its callers and this
+// file's trust posture all promise containment.
+func TestGeofeedRowsMustBeContainedNotMerelyOverlapping(t *testing.T) {
+	scope := []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}
+	in := "0.0.0.0/0,KP,,Pyongyang,\n" + // a supernet: covers the scope, is not in it
+		"203.0.113.0/25,US,US-GA,Atlanta,\n" + // inside: kept
+		"203.0.113.0/24,US,US-GA,Atlanta,\n" + // equal: kept
+		"198.51.100.0/24,US,US-NY,New York,\n" // elsewhere: not ours
+	got, _, _, _ := ParseGeofeedCSV(strings.NewReader(in), scope, 0)
+
+	for _, e := range got {
+		if e.Prefix == "0.0.0.0/0" {
+			t.Fatalf("a supernet row published by a third-party feed was kept for a /24 resource: %+v", e)
+		}
+		if e.Prefix == "198.51.100.0/24" {
+			t.Fatalf("an unrelated prefix was kept: %+v", e)
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("kept %d rows, want the equal and the more-specific one: %+v", len(got), got)
+	}
+}
+
+// IPv6 behaves the same way, and an unmasked bound still contains correctly.
+func TestGeofeedContainmentIsFamilyAwareAndMaskSafe(t *testing.T) {
+	scope := []netip.Prefix{netip.MustParsePrefix("2001:db8:1::/48")}
+	in := "::/0,KP,,Pyongyang,\n" +
+		"2001:db8:1:2::/64,DE,,Berlin,\n" +
+		"203.0.113.0/24,US,,Atlanta,\n"
+	got, _, _, _ := ParseGeofeedCSV(strings.NewReader(in), scope, 0)
+	if len(got) != 1 || got[0].Prefix != "2001:db8:1:2::/64" {
+		t.Fatalf("kept %+v, want only the contained v6 row", got)
+	}
+}

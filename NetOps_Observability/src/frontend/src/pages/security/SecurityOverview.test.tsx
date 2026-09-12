@@ -93,6 +93,36 @@ beforeEach(() => {
   seams.mockResolvedValue(SEAMS);
 });
 
+// Review findings 3.3-10 and 3.3-11.
+describe("Security Overview — what the counts actually count", () => {
+  it('"N scored seams" counts SEAMS, not the findings they hold', async () => {
+    render(<SecurityOverview />);
+    await screen.findByRole("list", { name: /exposure management pipeline/i });
+    // FACETS.seam is { ISP: 2, internet: 1 }: two seams holding three findings.
+    const line = screen.getByText(/scored seams\./).closest("p")!;
+    expect(line.textContent).toMatch(/across\s*2\s*scored seams/);
+    expect(line.textContent).not.toMatch(/across\s*3\s*scored seams/);
+  });
+
+  it("a lane with a server-side count does not claim it has no verdicts", async () => {
+    // The badge comes from the server-side facet; the rows are filtered out of
+    // the first page of findings. A page that does not happen to contain a
+    // threat row must not make the card say there are none.
+    securityFindings.mockResolvedValue({
+      items: FINDINGS.filter((f) => f.evidence_class !== "threat" && f.evidence_class !== "signal"),
+      next_cursor: null,
+      total: 40,
+    });
+    render(<SecurityOverview />);
+    await screen.findByRole("list", { name: /exposure management pipeline/i });
+
+    const card = screen.getByRole("region", { name: "Threat detections" });
+    expect(within(card).getByText(/1 current/)).toBeTruthy();
+    expect(within(card).queryByText("No verdicts yet.")).toBeNull();
+    expect(within(card).getByText(/None in the newest findings/)).toBeTruthy();
+  });
+});
+
 describe("Security Overview — CTEM funnel", () => {
   it("renders the five pipeline stages with their counts", async () => {
     render(<SecurityOverview />);

@@ -161,6 +161,12 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
   }, []);
 
   const corrId = picked?.kind === "correlation" ? picked.id : "";
+  // The reset below is keyed on the PICKED INVESTIGATION, not on corrId. A
+  // described investigation has no correlation id, so keying on corrId left
+  // every described case sharing one key of "": switching between two of them
+  // kept the previous case's TAC chip and Iris answer on screen, and the chip's
+  // Refresh then posted against the NEW incident's id.
+  const pickedKey = picked ? `${picked.kind}:${picked.id}` : "";
 
   // Load the chosen correlation case. Everything is best-effort except the
   // object itself: a missing timeline means no engine header, not a broken page.
@@ -174,10 +180,14 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
     // no silent failure, and never a reassuring blank).
     const fail = (e: unknown) => { if (alive) setCaseErr((prev) => prev || operatorError(e, "This case could not be loaded.")); };
     api.correlationDetail(corrId).then((r) => { if (alive) setObj(r.object); }).catch(fail);
-    api.correlationTimeline(corrId).then((t) => { if (alive) setTimeline(t); }).catch(fail);
+    // The timeline is NOT fatal — the comment above has always said so. Sharing
+    // the object read's handler painted "This case could not be loaded." above a
+    // fully populated answer card whenever only the timeline read failed.
+    api.correlationTimeline(corrId).then((t) => { if (alive) setTimeline(t); })
+      .catch(() => { /* no engine header, not a broken page */ });
     api.correlationTickets(corrId).then((t) => { if (alive) setTicket(t?.status ?? null); }).catch(() => { /* ticketing optional */ });
     return () => { alive = false; };
-  }, [corrId]);
+  }, [pickedKey, corrId]);
 
   // The matched signature's playbook — the same derivation the RCA inspector uses.
   const { recommendedSteps, recommendedOwner } = useMemo(() => {

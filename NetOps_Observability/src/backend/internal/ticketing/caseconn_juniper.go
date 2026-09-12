@@ -243,8 +243,12 @@ func (c *JuniperConnector) AddNote(context.Context, TACConnectorConfig, CaseRef,
 // network call would serialize every tenant behind the slowest one, and the
 // worst a concurrent mint costs is one extra token.
 func (c *JuniperConnector) auth(ctx context.Context, cfg TACConnectorConfig) (juniper.Auth, error) {
+	// The invocation budget is Juniper's, and Juniper publishes it PER
+	// CUSTOMER, so every call carries the customer it is made for. Without it
+	// one tenant's traffic spends every other tenant's ceiling on this process.
+	account := juniperBudgetAccount(cfg.Juniper)
 	if strings.EqualFold(strings.TrimSpace(cfg.Juniper.AuthMode), "apikey") {
-		return juniper.Auth{APIKey: cfg.Juniper.APIKey}, nil
+		return juniper.Auth{APIKey: cfg.Juniper.APIKey, Account: account}, nil
 	}
 	// The token endpoint is on the pinned host by construction; assert it.
 	if err := validatePinnedURL("https://"+juniper.APIHost+juniper.TokenPath, juniperHostAllowlist()); err != nil {
@@ -252,14 +256,22 @@ func (c *JuniperConnector) auth(ctx context.Context, cfg TACConnectorConfig) (ju
 	}
 	key := juniperTokenCacheKey(cfg.Juniper)
 	if tok, ok := c.tokens.lookup(key); ok {
-		return juniper.Auth{Bearer: tok}, nil
+		return juniper.Auth{Bearer: tok, Account: account}, nil
 	}
 	tok, ttl, err := c.client.Token(ctx, cfg.Juniper.ClientID, cfg.Juniper.ClientSecret)
 	if err != nil {
 		return juniper.Auth{}, translateJuniperError(err)
 	}
 	c.tokens.store(key, tok, ttl)
-	return juniper.Auth{Bearer: tok}, nil
+	return juniper.Auth{Bearer: tok, Account: account}, nil
+}
+
+// juniperBudgetAccount names ONE Juniper customer: the appId and the
+// customerSourceID their onboarding issued, which is the unit the published
+// 1000-invocations-per-hour ceiling is written against. It is an identifier,
+// never a credential — no secret goes into it.
+func juniperBudgetAccount(cfg JuniperConnectorConfig) string {
+	return strings.TrimSpace(cfg.AppID) + "\x00" + strings.TrimSpace(cfg.CustomerSourceID)
 }
 
 // juniperTokenCacheKey identifies one Juniper Service Case API credential:

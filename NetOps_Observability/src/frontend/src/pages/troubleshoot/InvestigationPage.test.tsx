@@ -439,6 +439,37 @@ describe("block 2 — the answer", () => {
     expect(screen.queryByTestId("ts-case-loading")).toBeNull();
   });
 
+  // Review finding 3.11-02.
+  it("a TIMELINE-only failure is not a broken case", async () => {
+    mocks.correlationTimeline.mockRejectedValue(new Error("504 Gateway Timeout"));
+    await show(<InvestigationPage initialCaseId={CASE_ID} />);
+    // The answer card is there, populated from the object read that succeeded.
+    await waitFor(() => expect(screen.getByTestId("ts-answer")).toBeInTheDocument());
+    // The timeline is best-effort — the comment on the effect has always said
+    // so — but it shared the object read's fatal handler, so a timeline-only
+    // failure painted "This case could not be loaded." above a full answer.
+    expect(screen.queryByTestId("ts-case-error")).toBeNull();
+  });
+
+  // Review finding 3.1-10.
+  it("switching between two DESCRIBED investigations resets the per-case state", async () => {
+    const a = investigation({ id: "inc-77", title: "Branch users cannot reach the CRM" });
+    const b = investigation({ id: "inc-88", title: "Store 12 card readers time out" });
+    mocks.listIncidents.mockResolvedValue([a, b]);
+    await show(<InvestigationPage />);
+
+    await click(/Branch users cannot reach the CRM/);
+    await click("Ask Iris");
+    expect(await screen.findByRole("button", { name: "Close Iris" })).toBeInTheDocument();
+
+    // Both described cases carry NO correlation id, so the per-case reset used
+    // to be keyed on "" for both of them: switching left the previous case's
+    // Iris answer (and its TAC chip) on screen under the new incident's id.
+    await click(/Store 12 card readers time out/);
+    expect(screen.queryByRole("button", { name: "Close Iris" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Ask Iris" })).toBeInTheDocument();
+  });
+
   it("fetches the case, its timeline and its ticket state", async () => {
     await show(<InvestigationPage initialCaseId={CASE_ID} />);
     expect(mocks.correlationDetail).toHaveBeenCalledWith(CASE_ID);

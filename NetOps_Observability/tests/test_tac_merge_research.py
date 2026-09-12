@@ -458,3 +458,24 @@ def test_a_candidate_export_is_idempotent(sandbox, mod):
     first = open(sandbox / "classes.yaml", encoding="utf-8").read()
     run(mod)
     assert open(sandbox / "classes.yaml", encoding="utf-8").read() == first
+
+
+def test_an_over_long_log_signature_is_refused_not_dropped(sandbox, mod, capsys):
+    """Review finding 3.1-20.
+
+    An over-long (or empty) `log_signatures` entry was dropped with a bare
+    `continue`, so a detection regex the research pass wrote silently never
+    existed while the report printed zero refusals. Every other rejection in
+    this file goes through Report.refuse; this one does too now.
+    """
+    long_line = "x" * 301
+    write_research(sandbox, "cisco", GOOD.replace(
+        '      - "%OSPF-5-ADJCHG: from EXSTART to DOWN"',
+        '      - "%s"' % long_line))
+    run(mod)
+    out = capsys.readouterr().out
+    assert "refused" in out, out
+    assert "300-character cap" in out, out
+    # And the pattern really is absent, which is the fact the refusal reports.
+    classes = (sandbox / "classes.yaml").read_text()
+    assert long_line not in classes

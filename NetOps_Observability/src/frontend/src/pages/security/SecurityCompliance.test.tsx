@@ -152,6 +152,29 @@ describe("Compliance — unassessed controls and why", () => {
     expect(q.status).toBe("unknown,not_applicable,error");
   });
 
+  // Review finding 3.3-04.
+  it("asks for a whole page of unassessed controls, and declares the shortfall when there is one", async () => {
+    securityFindings.mockResolvedValue({ ...UNASSESSED_PAGE, total: 1400 });
+    render(<SecurityCompliance />);
+    await screen.findByRole("list", { name: /unassessed controls by reason/i });
+
+    // Without an explicit limit the server answers its DEFAULT 100, so a
+    // 1,400-control outage rendered as at most 100 with nothing saying so.
+    const q = securityFindings.mock.calls[0][0];
+    expect(q.limit).toBeGreaterThan(100);
+
+    // And the shortfall is stated rather than implied by a suspiciously round
+    // number: the grouped reasons are a sample of 1,400, and say so.
+    expect(await screen.findByText(/1,400 unassessed controls/)).toBeTruthy();
+    expect(screen.getByText(/a sample, not the whole estate/)).toBeTruthy();
+  });
+
+  it("says nothing about a shortfall when the page holds the whole set", async () => {
+    render(<SecurityCompliance />);
+    await screen.findByRole("list", { name: /unassessed controls by reason/i });
+    expect(screen.queryByText(/a sample, not the whole estate/)).toBeNull();
+  });
+
   it("a failure to load the reasons is stated, never rendered as 'none unassessed'", async () => {
     // A developer-shaped failure: operatorError substitutes the caller's own
     // description rather than showing the wrap chain.

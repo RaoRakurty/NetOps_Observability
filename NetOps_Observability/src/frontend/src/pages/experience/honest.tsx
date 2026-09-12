@@ -56,6 +56,10 @@ const REASON_TEXT: Record<string, string> = {
   // Set when a figure EXISTS but cannot be summed (more than one currency).
   // Distinct from "nobody declared one", which the caller's own detail says.
   not_totalled: "The figures exist but cannot be added up.",
+  // Money() renders this reason; without the entry the raw token
+  // "not_declared" was printed to the operator in the slot this file reserves
+  // for a sentence.
+  not_declared: "Nobody has declared this value, so it cannot be shown. An undeclared value is absent, not zero.",
 };
 
 /** The operator sentence for a server reason token. Unknown tokens survive. */

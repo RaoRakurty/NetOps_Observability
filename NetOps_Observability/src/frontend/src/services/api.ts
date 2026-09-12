@@ -9423,6 +9423,10 @@ export type SecLaneStatus = {
   max_findings_per_tenant: number;
   topic: string;
   metrics: Record<string, number>;
+  /** What the counter block covers. A tenant admin reads only what is
+   *  attributable to its own tenant, so the platform-wide counters are ABSENT
+   *  from its block rather than zeroed — absent is honest, zero is a claim. */
+  metrics_scope?: "tenant" | "platform";
   tenants: SecLaneScanStatus[];
 };
 export type SecScanQueued = { queued: boolean; tenant_seg: string };

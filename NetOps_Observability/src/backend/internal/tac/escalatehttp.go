@@ -451,7 +451,11 @@ func (a *EscalateAPI) recordCase(r *http.Request, subj Subject, res CaseResult, 
 		link.Pollable = info.Can(CapPollStatus) || (info.NumberLookup && res.CaseID == "")
 	}
 	link = a.deps.Tracker.Record(subj.Tenant, subj.IncidentID, link)
-	a.deps.PersistCase(r.Context(), subj.Tenant, subj.IncidentID, link)
+	// context.WithoutCancel: the VENDOR CASE ALREADY EXISTS. If the operator's
+	// browser goes away between the vendor's answer and this write, the durable
+	// link to a real case is what would be lost — the same hazard fileLearning
+	// detaches for, and the one thing that cannot be reconstructed from here.
+	a.deps.PersistCase(context.WithoutCancel(r.Context()), subj.Tenant, subj.IncidentID, link)
 	return link
 }
 
@@ -489,7 +493,10 @@ func (a *EscalateAPI) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := a.deps.Poller.Poll(r.Context(), subj.Tenant, subj.IncidentID, link)
-	a.deps.PersistCase(r.Context(), subj.Tenant, subj.IncidentID, out)
+	// Detached for the same reason recordCase detaches: the vendor read has
+	// already been spent (it counted against this case's refresh budget), so a
+	// disconnect must not throw away the status it cost.
+	a.deps.PersistCase(context.WithoutCancel(r.Context()), subj.Tenant, subj.IncidentID, out)
 	a.deps.Audit(r, subj.Tenant, "tac.case.refresh", map[string]any{
 		"incident_id": subj.IncidentID, "case_id": out.CaseID, "status": out.Status,
 	})

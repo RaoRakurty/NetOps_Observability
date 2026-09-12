@@ -166,6 +166,10 @@ const (
 	// coverage entry then reads "no check has succeeded recently", which is the
 	// honest answer, not a stale `solid` from last week.
 	RunRetention = 6 * time.Hour
+	// MaxClockSkew is how far ahead of this api a run may claim to have started
+	// before it is refused. It is generous enough for an unsynchronised prober
+	// and far short of anything that could outlive RunRetention.
+	MaxClockSkew = 5 * time.Minute
 	// MaxRunsPerIntake bounds one drain. A malformed or hostile payload cannot
 	// make the api walk an unbounded list.
 	MaxRunsPerIntake = 20000
@@ -219,8 +223,18 @@ func (s *RunStore) Record(runs []WireRun) RunIntakeResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked()
+	horizon := s.now().Add(MaxClockSkew)
 	for _, r := range runs {
 		if err := r.Validate(); err != nil {
+			res.Rejected++
+			continue
+		}
+		// A FAR-FUTURE started_at is not a measurement. Validate bounds the
+		// record's shape but has no clock; pruning is decided from the newest
+		// run in a ring, so one record dated past the horizon would pin its ring
+		// forever and permanently consume one of the MaxTrackedDefinitions
+		// slots. Rejected here, where the injected clock lives.
+		if r.StartedAt.After(horizon) {
 			res.Rejected++
 			continue
 		}

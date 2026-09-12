@@ -289,18 +289,28 @@ export default function LaneHealth({ pollMs = 4000, maxPolls = 15 }: { pollMs?: 
         </thead>
         <tbody>
           {COUNTERS.map((c) => {
-            const v = st.metrics?.[c.key] ?? 0;
+            // A counter the server did NOT send is not a zero. The platform
+            // totals are absent from a tenant admin's block by design, and
+            // printing 0 for "No durable copy" would assert that nothing was
+            // ever lost — a claim this page cannot make.
+            const v = st.metrics?.[c.key];
             return (
               <tr key={c.key}>
                 <th scope="row" style={{ fontWeight: 500, textAlign: "left" }}>{c.label}</th>
-                <td style={c.bad && v > 0 ? { color: "var(--bad)" } : undefined}>{v.toLocaleString()}</td>
+                {v === undefined ? (
+                  <td className="mini-meta" title="This counter is platform-wide; it is not shown for a single tenant.">not shown</td>
+                ) : (
+                  <td style={c.bad && v > 0 ? { color: "var(--bad)" } : undefined}>{v.toLocaleString()}</td>
+                )}
               </tr>
             );
           })}
         </tbody>
       </table>
       <p className="mini-meta" style={{ marginBottom: 0 }}>
-        Totals since this process started, not the last run.
+        {st.metrics_scope === "platform"
+          ? "Totals since this process started, not the last run — across every tenant."
+          : "Totals since this process started, not the last run — for your tenant only. Platform-wide counters are not shown here."}
         <AskIris topic="lane.counters" label="the lane counters" />
       </p>
     </Panel>

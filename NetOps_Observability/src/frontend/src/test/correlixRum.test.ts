@@ -171,3 +171,42 @@ describe("correlix-rum delivery health", () => {
     expect(error).not.toHaveBeenCalled();
   });
 });
+
+// ── route redaction (review finding 3.11-10) ─────────────────────────────────
+//
+// route() redacted all-digit segments and hex runs of EIGHT OR MORE characters
+// only, so it let through exactly the example in its own docstring —
+// "/orders/1f9c/pay" — along with every short id and every "name@host" segment.
+// The stored `route` label is clipped by the backend and never scrubbed, so
+// this function is the only place customer data can be kept out of it.
+describe("correlix-rum route redaction", () => {
+  async function routeFor(pathname: string): Promise<string> {
+    window.history.replaceState({}, "", pathname);
+    const { rum, calls } = loadRum(() => ok(200));
+    rum.track({ type: "interaction", action: "click" });
+    rum.flush();
+    await settle();
+    const body = calls[0].body as { events: { route: string }[] };
+    return body.events[0].route;
+  }
+
+  it("redacts SHORT ids, not just long hex runs", async () => {
+    expect(await routeFor("/orders/1f9c/pay")).toBe("/orders/:id/pay");
+    expect(await routeFor("/orders/42/pay")).toBe("/orders/:id/pay");
+    expect(await routeFor("/t/ab12/x")).toBe("/t/:id/x");
+  });
+
+  it("redacts an address-shaped or otherwise non-word segment", async () => {
+    expect(await routeFor("/profile/jane.doe@example.com")).toBe("/profile/:id");
+    expect(await routeFor("/files/a%2Fb")).toBe("/files/:id");
+  });
+
+  it("keeps the words that make a route readable", async () => {
+    expect(await routeFor("/api/v2/orders/checkout")).toBe("/api/v2/orders/checkout");
+    expect(await routeFor("/settings/data-protection")).toBe("/settings/data-protection");
+  });
+
+  it("still redacts the long tokens it always did", async () => {
+    expect(await routeFor("/s/2f1c9b8e7d6a5432/edit")).toBe("/s/:id/edit");
+  });
+});

@@ -25,7 +25,7 @@
 // from scroll offset to index exact, and it is what the callers' rows already
 // are. A variable-height list is deliberately out of scope.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 
 export interface WindowedListProps<T> {
   items: T[];
@@ -56,7 +56,15 @@ export default function WindowedList<T>({
   role,
   ariaLabel,
 }: WindowedListProps<T>) {
-  const scrollRef = useRef<HTMLDivElement>(null);
+  // A CALLBACK REF, not a ref object, because the scroller is not always the
+  // element that renders: the empty branch below renders a different div. With
+  // a ref object and an empty dependency list, a list that MOUNTED EMPTY
+  // measured nothing (the ref was null), never re-ran when the rows arrived,
+  // and then rendered only its overscan against a viewport of 0 — which is
+  // exactly what the device inventory does on a fresh install. A callback ref
+  // makes the element itself the dependency, so the measurement happens when
+  // the scroller appears, however late that is.
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewport, setViewport] = useState(0);
 
@@ -64,26 +72,24 @@ export default function WindowedList<T>({
   // first measurement lands, `viewport` is 0 and only the overscan renders —
   // which is correct for one frame and settles immediately.
   useLayoutEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const measure = () => setViewport(el.clientHeight);
+    if (!scrollEl) return;
+    const measure = () => setViewport(scrollEl.clientHeight);
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(measure);
-    ro.observe(el);
+    ro.observe(scrollEl);
     return () => ro.disconnect();
-  }, []);
+  }, [scrollEl]);
 
   // A shorter list must not leave the scroller parked past its own end (which
   // would render an empty window after a filter narrows the list).
   const total = items.length * rowHeight;
   useEffect(() => {
-    const el = scrollRef.current;
-    if (el && el.scrollTop > total) {
-      el.scrollTop = 0;
+    if (scrollEl && scrollEl.scrollTop > total) {
+      scrollEl.scrollTop = 0;
       setScrollTop(0);
     }
-  }, [total]);
+  }, [total, scrollEl]);
 
   const first = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
   const last = Math.min(items.length, Math.ceil((scrollTop + viewport) / rowHeight) + overscan);
@@ -99,7 +105,7 @@ export default function WindowedList<T>({
 
   return (
     <div
-      ref={scrollRef}
+      ref={setScrollEl}
       className={className}
       role={role}
       aria-label={ariaLabel}

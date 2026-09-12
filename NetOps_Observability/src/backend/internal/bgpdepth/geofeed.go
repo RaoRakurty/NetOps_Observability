@@ -223,12 +223,18 @@ func sanitizeGeoText(s string) string {
 	}, s)
 }
 
+// prefixWithinAny reports whether p is CONTAINED IN one of the bounds — equal
+// to it or more specific. Overlaps() is symmetric, so it also admitted a row
+// that merely COVERS the queried resource: a discovered third-party feed could
+// publish `0.0.0.0/0,KP` and have it kept and rendered as the geolocation of
+// somebody else's prefix. Containment is what this function's name, its callers
+// and the file's trust posture all promise.
 func prefixWithinAny(p netip.Prefix, within []netip.Prefix) bool {
 	if len(within) == 0 {
 		return true
 	}
 	for _, w := range within {
-		if w.Overlaps(p) {
+		if w.Bits() <= p.Bits() && w.Contains(p.Masked().Addr()) {
 			return true
 		}
 	}

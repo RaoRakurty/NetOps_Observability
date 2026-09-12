@@ -134,9 +134,16 @@ func (m *Meter) openSearchReadings(rows []catIndexRow, p Principal, at time.Time
 		byScope[scope] = append(byScope[scope], comp)
 	}
 	if len(byScope) == 0 {
+		detail := "measured: the pattern this caller may enumerate matched no index, so zero bytes is the MEASUREMENT, not a missing value"
+		if sizeless > 0 {
+			// The mixed case carries this caveat and the empty case dropped it,
+			// which is the one shape where the zero is NOT the measurement: the
+			// cluster listed indices and reported no size for any of them.
+			detail = "measured: every index in this caller's pattern (" + itoa(sizeless) + ") reported NO size" +
+				" (closed or relocating), so this zero is what could be READ, not what is stored"
+		}
 		return []Reading{measured(StoreOpenSearch, scopeOf(p), 0,
-			"GET /_cat/indices/"+pattern+"?bytes=b → store.size",
-			"measured: the pattern this caller may enumerate matched no index, so zero bytes is the MEASUREMENT, not a missing value", at, nil)}
+			"GET /_cat/indices/"+pattern+"?bytes=b → store.size", detail, at, nil)}
 	}
 	out := make([]Reading, 0, len(byScope))
 	for scope, comps := range byScope {

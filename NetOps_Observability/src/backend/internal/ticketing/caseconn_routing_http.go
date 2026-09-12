@@ -138,6 +138,14 @@ func (a *TACRoutingAPI) HandleRouting(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		cfg, found, err := store.Get(p.Tenant, p.Cross, target)
 		if err != nil {
+			if !errors.Is(err, ErrTenantNotFound) {
+				// A STORE failure is not "not yours". Collapsing the two made a
+				// broken read look like a row that was never there (§10).
+				a.audit(p, "routing.read", "failed", err.Error())
+				a.deps.WriteError(w, http.StatusBadGateway,
+					errors.New("the TAC routing record could not be read"))
+				return
+			}
 			http.NotFound(w, r) // another tenant's row is never confirmed to exist
 			return
 		}
@@ -167,7 +175,17 @@ func (a *TACRoutingAPI) HandleRouting(w http.ResponseWriter, r *http.Request) {
 		a.deps.WriteJSON(w, http.StatusOK, RoutingView{Routing: saved, Configured: !saved.IsEmpty()})
 	case http.MethodDelete:
 		if err := store.Delete(p.Tenant, p.Cross, target); err != nil {
-			http.NotFound(w, r)
+			if !errors.Is(err, ErrTenantNotFound) {
+				// A FAILED WRITE is not "already gone". Mapping every store
+				// error to 404 told the operator the record had been removed
+				// while it was still there, with no audit row and no log — the
+				// PUT arm three lines up has always split these correctly.
+				a.audit(p, "routing.delete", "failed", err.Error())
+				a.deps.WriteError(w, http.StatusBadGateway,
+					errors.New("the TAC routing record could not be removed"))
+				return
+			}
+			http.NotFound(w, r) // never yours, or never there
 			return
 		}
 		a.audit(p, "routing.delete", "ok", "")
