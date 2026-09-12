@@ -488,6 +488,12 @@ func (s *Service) StartCollect(tenant, incident string, supplied []SuppliedOutpu
 		})
 	}
 	st.Capture = nil
+	// The prepared case named the capture that is being replaced — its device,
+	// its bundle, its problem statement. Leaving it behind let Confirm open a
+	// vendor case against a proposal whose evidence no longer exists (and, with
+	// no capture, one naming no device at all). A new collection means the
+	// confirmation screen must be prepared again from what it produces.
+	st.Proposal = nil
 	st.UpdatedAt = job.StartedAt
 	key := tenant + "\x00" + incident
 	ctx, cancel := context.WithTimeout(context.Background(), collectionDeadline(plan))
@@ -498,9 +504,9 @@ func (s *Service) StartCollect(tenant, incident string, supplied []SuppliedOutpu
 	// from a request body — and closes in runCollect's defer. Between those two
 	// points, and only for this device, a custom command the operator approved
 	// may reach the wire; outside them the authored table is the whole world.
-	s.reviews.Register(planDeviceKey(plan), commandsOf(plan))
+	reviewToken := s.reviews.Register(planDeviceKey(plan), commandsOf(plan))
 
-	go s.runCollect(ctx, cancel, key, tenant, incident, plan, supplied, job)
+	go s.runCollect(ctx, cancel, key, tenant, incident, plan, supplied, job, reviewToken)
 	return job, nil
 }
 
@@ -543,11 +549,12 @@ func collectionDeadline(p *Plan) time.Duration {
 }
 
 func (s *Service) runCollect(ctx context.Context, cancel context.CancelFunc, key, tenant, incident string,
-	plan *Plan, supplied []SuppliedOutput, job *Job) {
+	plan *Plan, supplied []SuppliedOutput, job *Job, reviewToken uint64) {
 	defer cancel()
 	// From a defer, so a panic or an early return cannot leave a reviewed
-	// command allowed after its collection has ended.
-	defer s.reviews.Release(planDeviceKey(plan))
+	// command allowed after its collection has ended. The TOKEN is what stops a
+	// collection that was refused as busy releasing the running one's set.
+	defer s.reviews.Release(planDeviceKey(plan), reviewToken)
 	defer func() {
 		s.mu.Lock()
 		delete(s.cancel, key)

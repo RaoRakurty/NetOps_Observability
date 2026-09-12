@@ -696,20 +696,38 @@ func sameOrder(a, b []string) bool {
 // injects (§5: no package globals, no hidden singletons).
 type ReviewRegistry struct {
 	mu   sync.Mutex
-	rows map[string]map[string]bool // device key → normalised command → true
+	rows map[string]reviewRow // device key → the owning collection's allow set
+	seq  uint64
+}
+
+// reviewRow is one device's allow set plus the TOKEN of the collection that
+// opened it. The token is what makes Register/Release safe when two escalations
+// name the same device: the second Register cannot overwrite a live set, and its
+// Release cannot delete a set it does not own.
+type reviewRow struct {
+	set   map[string]bool
+	token uint64
 }
 
 // NewReviewRegistry builds an empty registry.
 func NewReviewRegistry() *ReviewRegistry {
-	return &ReviewRegistry{rows: map[string]map[string]bool{}}
+	return &ReviewRegistry{rows: map[string]reviewRow{}}
 }
 
-// Register replaces the allow set for one device. The caller passes commands the
-// SERVER validated; passing anything else is the one way to break this feature's
-// safety property, which is why the only caller is Service.StartCollect.
-func (r *ReviewRegistry) Register(deviceKey string, commands []string) {
+// Register opens the allow set for one device and returns the token that owns
+// it. The caller passes commands the SERVER validated; passing anything else is
+// the one way to break this feature's safety property, which is why the only
+// caller is Service.StartCollect.
+//
+// A device that ALREADY holds a live set is not overwritten: one collection per
+// device is the rule the collector enforces, so a second escalation on the same
+// device is about to be refused as busy. It gets token 0, which owns nothing and
+// releases nothing. Without that, the second Register replaced the running
+// collection's reviewed commands (refusing them mid-collection) and its own
+// ErrCollectBusy defer then deleted the set out from under it.
+func (r *ReviewRegistry) Register(deviceKey string, commands []string) uint64 {
 	if r == nil || deviceKey == "" {
-		return
+		return 0
 	}
 	set := make(map[string]bool, len(commands))
 	for _, c := range commands {
@@ -719,18 +737,26 @@ func (r *ReviewRegistry) Register(deviceKey string, commands []string) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.rows[deviceKey] = set
+	if _, live := r.rows[deviceKey]; live {
+		return 0
+	}
+	r.seq++
+	r.rows[deviceKey] = reviewRow{set: set, token: r.seq}
+	return r.seq
 }
 
-// Release drops one device's allow set. It runs from a defer, so a panic or an
-// early return cannot leave a command allowed after its collection ended.
-func (r *ReviewRegistry) Release(deviceKey string) {
-	if r == nil {
+// Release drops one device's allow set, and only when token owns it. It runs
+// from a defer, so a panic or an early return cannot leave a command allowed
+// after its collection ended.
+func (r *ReviewRegistry) Release(deviceKey string, token uint64) {
+	if r == nil || token == 0 {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.rows, deviceKey)
+	if row, ok := r.rows[deviceKey]; ok && row.token == token {
+		delete(r.rows, deviceKey)
+	}
 }
 
 // allows reports whether this device currently has command in its reviewed set.
@@ -740,7 +766,7 @@ func (r *ReviewRegistry) allows(deviceKey, command string) bool {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.rows[deviceKey][normCommandKey(command)]
+	return r.rows[deviceKey].set[normCommandKey(command)]
 }
 
 // Size reports how many devices currently hold an allow set (observability, and

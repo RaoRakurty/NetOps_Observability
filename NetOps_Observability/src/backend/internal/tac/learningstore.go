@@ -231,14 +231,22 @@ func (s *FileLearningStore) PutRecord(_ context.Context, rec LearningRecord) err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b := s.bucketLocked(t)
-	before := b.Records
 	rec.TenantID = t
-	b.Records = append(b.Records, rec)
-	sortRecords(b.Records)
-	if len(b.Records) > MaxRecordsPerTenant {
+	// The next log is built in ITS OWN array. Saving the live slice HEADER and
+	// putting it back on a failed flush restored a mutated array under the old
+	// length — `append` writes into spare capacity and sortRecords permutes in
+	// place — so the refused record stayed in the log and the oldest kept one
+	// fell out of it, and the next successful flush made both durable (§10).
+	next := make([]LearningRecord, 0, len(b.Records)+1)
+	next = append(next, b.Records...)
+	next = append(next, rec)
+	sortRecords(next)
+	if len(next) > MaxRecordsPerTenant {
 		// Newest-first ordering means the tail is the oldest.
-		b.Records = b.Records[:MaxRecordsPerTenant]
+		next = next[:MaxRecordsPerTenant]
 	}
+	before := b.Records
+	b.Records = next
 	if ferr := s.flushLocked(); ferr != nil {
 		b.Records = before
 		return ferr
