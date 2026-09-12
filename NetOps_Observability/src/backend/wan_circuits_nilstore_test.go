@@ -49,17 +49,17 @@ func TestWanProjectionWithoutAPolicyStoreServesTheSameView(t *testing.T) {
 	s := newWanTestServer(t, ifaddr, nil)
 	s.discovery.Upsert(models.Device{ID: "wan-a", Name: "wan-a", Address: "10.0.0.254", TenantID: "acme"})
 	ctx := context.Background()
-	want, _ := s.wanProject(ctx, "acme", false)
+	want, _ := s.wanProject(ctx, wanVis(s, "acme"))
 	if len(want) == 0 {
 		t.Fatal("the harness projects nothing, so the comparison would prove nothing")
 	}
 
 	s.wanPolicy = nil
-	got, _ := s.wanProject(ctx, "acme", false)
+	got, _ := s.wanProject(ctx, wanVis(s, "acme"))
 	if len(got) != len(want) {
 		t.Fatalf("with no policy store the projection has %d endpoints, want the baseline %d", len(got), len(want))
 	}
-	if rows := s.wanInterfaceRows(ctx, "acme", false, nil); len(rows) != len(want) {
+	if rows := s.wanInterfaceRows(ctx, wanVis(s, "acme"), nil); len(rows) != len(want) {
 		t.Fatalf("with no policy store /api/wan/interfaces has %d rows, want %d", len(rows), len(want))
 	}
 }

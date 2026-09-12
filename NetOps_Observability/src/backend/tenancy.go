@@ -504,6 +504,22 @@ func (v deviceVisibility) filter(all []models.Device) []models.Device {
 	return out
 }
 
+// platformInfraDeviceVisibility is the UNRESTRICTED platform scope, for the
+// background workers that act on behalf of EVERY tenant rather than reading on
+// behalf of a principal — today the wan-echo target publisher, which hands the
+// prober the addresses it must measure so that each tenant (restricted or not)
+// keeps receiving its own path measurements.
+//
+// It is deliberately NOT derivable from claims: a synthetic platform-owner token
+// would pick up the operator-visibility restriction and silently stop measuring
+// a restricted tenant, taking that tenant's own data away from itself. The
+// restriction is a rule about what the OPERATOR may READ, never an accounting or
+// collection rule — a restricted tenant is still discovered, still measured and
+// still billed. Anything that answers a REQUEST must use deviceVisibilityFor.
+func platformInfraDeviceVisibility() deviceVisibility {
+	return deviceVisibility{tenant: TenantGlobal, cross: true}
+}
+
 // visibleDevicesFor is visibleDevices plus the operator-visibility restriction,
 // read straight from the registry. Callers that must not show a restricted
 // tenant's inventory ask this instead of visibleDevices.
