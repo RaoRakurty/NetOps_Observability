@@ -178,11 +178,32 @@ type telemetryRestriction struct {
 // is the tenant_id form used for the OpenSearch logs path).
 func (s *server) restrictedTelemetry(c jwtClaims) telemetryRestriction {
 	tenant, cross := principalTenant(c)
+	return s.telemetryRestrictionFor(tenant, cross, s.principalRestrictedIDs(c))
+}
+
+// principalRestrictedIDs answers "which tenants are hidden from THIS principal
+// right now": the OperatorRestricted tenants MINUS any it holds a live
+// break-glass session into. It is empty for everyone the restriction cannot
+// apply to — every tenant's own users — which is what makes the resolvers below
+// a no-op for them.
+//
+// It is the ONLY place that question is answered FROM CLAIMS. The resolvers take
+// the answer as data, so a run with NO live caller (the report scheduler's timer)
+// can supply its own hidden set without a synthetic principal, and without a
+// second copy of the rule it filters by.
+func (s *server) principalRestrictedIDs(c jwtClaims) []string {
 	if !isPlatformOwner(c) || s.tenants == nil {
-		return telemetryRestriction{}
+		return nil
 	}
 	// Break-glass (Phase C): a live session un-hides that tenant for its window.
-	restricted := s.effectiveRestrictedIDs(c.Sub)
+	return s.effectiveRestrictedIDs(c.Sub)
+}
+
+// telemetryRestrictionFor is restrictedTelemetry's body over an ALREADY-RESOLVED
+// scope: the (tenant, cross) pair and the hidden set. Split out so a caller that
+// resolves its scope some other way reuses this derivation rather than retyping
+// it.
+func (s *server) telemetryRestrictionFor(tenant string, cross bool, restricted []string) telemetryRestriction {
 	if len(restricted) == 0 {
 		return telemetryRestriction{}
 	}
@@ -235,12 +256,12 @@ func (s *server) restrictedTelemetry(c jwtClaims) telemetryRestriction {
 // their own data, so this is a no-op for them. It is also a no-op when no tenant
 // is marked restricted (the default), so normal deployments are unaffected.
 func (s *server) operatorTelemetryRestriction(c jwtClaims, tenant string, cross bool) (exclude []string, deny bool) {
-	if !isPlatformOwner(c) || s.tenants == nil {
-		return nil, false
-	}
-	// Break-glass (Phase C): exclude restricted tenants the operator does NOT
-	// currently hold a live session into; a session un-hides its tenant.
-	restricted := s.effectiveRestrictedIDs(c.Sub)
+	return tenantTelemetryRestrictionFor(tenant, cross, s.principalRestrictedIDs(c))
+}
+
+// tenantTelemetryRestrictionFor is operatorTelemetryRestriction's body over an
+// ALREADY-RESOLVED scope, for the same reason telemetryRestrictionFor exists.
+func tenantTelemetryRestrictionFor(tenant string, cross bool, restricted []string) (exclude []string, deny bool) {
 	if len(restricted) == 0 {
 		return nil, false
 	}
@@ -594,17 +615,28 @@ func (s *server) visibleSiteFor(c jwtClaims, slug string) (Site, bool) {
 	return Site{}, false
 }
 
-// alertVisible is THE alert visibility rule. Every surface that shows alerts
-// asks this one function, so a fix here cannot be applied to some paths and
-// missed on others.
+// alertVisibleTenantOnly is HALF the alert visibility rule: TENANCY, and nothing
+// else. It is not a surface's answer and no surface may call it — call
+// alertVisibility.visible (or .filter), which is this rule PLUS the per-tenant
+// operator-visibility restriction (Tenant.OperatorRestricted).
 //
-// The platform owner sees all. A scoped principal sees alerts on its own
-// devices. A DEVICE-LESS alert is platform-global ONLY when nothing owns it:
-// the Digital Experience rules aggregate by target rather than device and carry
-// no `device` label, but they DO have an owner, and their summary carries that
-// tenant's target hostname, site and app. Treating "no device" as "everybody's"
-// handed one tenant's target names to every other tenant.
-func alertVisible(a models.Alert, tenant string, cross bool, ids map[string]bool) bool {
+// The name carries the warning because the omission is invisible at the call
+// site. This function answers TRUE FOR EVERYTHING on the cross-tenant path — the
+// platform owner may see every tenant — so a surface that asks it looks correct,
+// tests green on ordinary tenant isolation, and silently serves the one class of
+// tenant that has asked not to be readable by platform staff. Four surfaces made
+// exactly that mistake before it was sealed here (tracker 297):
+// /api/graphql, /api/topology/view, /api/search/global and the scheduled
+// reports, which DELIVERED it. TestAlertTenancyRuleIsNotCalledOutsideTheChokepoint
+// fails the build on a new direct caller.
+//
+// The rule itself: the platform owner sees all. A scoped principal sees alerts
+// on its own devices. A DEVICE-LESS alert is platform-global ONLY when nothing
+// owns it: the Digital Experience rules aggregate by target rather than device
+// and carry no `device` label, but they DO have an owner, and their summary
+// carries that tenant's target hostname, site and app. Treating "no device" as
+// "everybody's" handed one tenant's target names to every other tenant.
+func alertVisibleTenantOnly(a models.Alert, tenant string, cross bool, ids map[string]bool) bool {
 	if cross {
 		return true
 	}
@@ -652,9 +684,22 @@ type alertVisibility struct {
 func (s *server) alertVisibilityFor(c jwtClaims) alertVisibility {
 	ids, cross := s.visibleDeviceIDs(c)
 	tenant, _ := principalTenant(c)
+	return s.alertVisibilityForScope(tenant, cross, ids, s.principalRestrictedIDs(c))
+}
+
+// alertVisibilityForScope resolves the SAME rule from an already-resolved scope:
+// the (tenant, cross) pair, the device ids that scope may see, and the tenant ids
+// hidden from it. alertVisibilityFor is this function plus the principal lookup.
+//
+// It exists for the one alert reader that has NO principal to look up: the report
+// scheduler renders and DELIVERS on a timer, long after whoever created the
+// schedule has gone. That run still has a scope — the report's own tenant — and
+// it must be filtered by the same object the HTTP surfaces filter by, not by a
+// hand-written copy of the rule that would drift away from it.
+func (s *server) alertVisibilityForScope(tenant string, cross bool, ids map[string]bool, restricted []string) alertVisibility {
 	v := alertVisibility{tenant: tenant, cross: cross, ids: ids}
 
-	rt := s.restrictedTelemetry(c)
+	rt := s.telemetryRestrictionFor(tenant, cross, restricted)
 	v.deny = rt.deny
 	if len(rt.keys) > 0 {
 		v.hiddenDevices = make(map[string]bool, len(rt.keys))
@@ -662,13 +707,26 @@ func (s *server) alertVisibilityFor(c jwtClaims) alertVisibility {
 			v.hiddenDevices[k] = true
 		}
 	}
-	v.hiddenTenants, _ = s.operatorTelemetryRestriction(c, tenant, cross)
+	v.hiddenTenants, _ = tenantTelemetryRestrictionFor(tenant, cross, restricted)
 	return v
+}
+
+// filter applies the resolved rule to an alert list, preserving order. The alert
+// twin of deviceVisibility.filter: every surface that shows a LIST of alerts runs
+// it through this, so no caller has to remember to resolve the rule per row.
+func (v alertVisibility) filter(all []models.Alert) []models.Alert {
+	out := make([]models.Alert, 0, len(all))
+	for _, a := range all {
+		if v.visible(a) {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // visible reports whether this principal may see one alert. The restriction is
 // applied BEFORE the ordinary tenant rule, so a hidden alert stays hidden even on
-// the cross-tenant path where alertVisible answers true for everything.
+// the cross-tenant path where alertVisibleTenantOnly answers true for everything.
 func (v alertVisibility) visible(a models.Alert) bool {
 	if v.deny {
 		return false
@@ -683,7 +741,7 @@ func (v alertVisibility) visible(a models.Alert) bool {
 			}
 		}
 	}
-	return alertVisible(a, v.tenant, v.cross, v.ids)
+	return alertVisibleTenantOnly(a, v.tenant, v.cross, v.ids)
 }
 
 // alertVisibleTo applies the resolved rule to a principal's claims. Used by the

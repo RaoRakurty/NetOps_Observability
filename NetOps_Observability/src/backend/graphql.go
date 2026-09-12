@@ -187,18 +187,14 @@ func (s *server) resolveGQLField(f gqlparse.Field, claims jwtClaims, vars map[st
 		if err != nil {
 			return nil, err
 		}
-		active := s.alerts.Active()
-		if ids, crossDev := s.visibleDeviceIDs(claims); !crossDev {
-			// Same rule as the REST twin, by calling the same function.
-			tenant, _ := principalTenant(claims)
-			filtered := active[:0:0]
-			for _, a := range active {
-				if alertVisible(a, tenant, crossDev, ids) {
-					filtered = append(filtered, a)
-				}
-			}
-			active = filtered
-		}
+		// Same rule as the REST twin, by calling the same RESOLVED object.
+		// The bare alertVisibleTenantOnly underneath it is tenancy only: it answers true
+		// for everything on the cross-tenant path, so a platform owner reading
+		// this field got a restricted tenant's incidents (and the device names in
+		// their summaries) that GET /api/alerts hides, and an ?as_tenant into a
+		// restricted tenant read it outright. alertVisibility is that rule PLUS
+		// the operator-visibility restriction, resolved once for the request.
+		active := s.alertVisibilityFor(claims).filter(s.alerts.Active())
 		sort.Slice(active, func(i, j int) bool { return active[i].ID < active[j].ID })
 		return projectList(httppage.SliceOf(active, page), f.Sel, "Alert")
 

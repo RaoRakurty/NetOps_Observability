@@ -136,20 +136,26 @@ func (s *server) visibleGraphRecords(claims jwtClaims, g topology.GraphRecords) 
 }
 
 // activeAlertsByDevice returns the caller's visible active alerts grouped by device
-// id (the input EnrichLive needs). Scoped exactly like /api/alerts and /view: a
-// non-cross caller sees only its tenant's devices' alerts.
+// id (the input EnrichLive needs). Scoped exactly like /api/alerts and /view, by
+// asking the same RESOLVED object they ask: alertVisibility is tenancy PLUS the
+// operator-visibility restriction.
+//
+// The tenancy half alone was not a live leak here — EnrichLive only writes onto
+// nodes, and visibleGraphRecords has already removed a restricted tenant's nodes
+// from the view these facts decorate. It was a trap waiting for the next caller:
+// this is a named seam returning alert SUMMARIES keyed by device, and nothing
+// about it says the set has not been restricted.
 func (s *server) activeAlertsByDevice(claims jwtClaims) map[string][]topology.AlertFact {
 	out := map[string][]topology.AlertFact{}
 	if s.alerts == nil {
 		return out
 	}
-	alerts := s.alerts.Active()
-	ids, cross := s.visibleDeviceIDs(claims)
-	for _, a := range alerts {
+	vis := s.alertVisibilityFor(claims)
+	for _, a := range s.alerts.Active() {
 		if a.DeviceID == "" {
 			continue // device-less (stack-level) alerts don't bind to a node
 		}
-		if !cross && !ids[a.DeviceID] {
+		if !vis.visible(a) {
 			continue
 		}
 		out[a.DeviceID] = append(out[a.DeviceID], topology.AlertFact{

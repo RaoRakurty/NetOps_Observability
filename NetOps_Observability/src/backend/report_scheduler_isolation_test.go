@@ -58,7 +58,11 @@ func isoReportScheduler(t *testing.T) *reportScheduler {
 		{ID: "dev-a", Name: "leaf-a", Address: "10.0.0.1", TenantID: "t-a"},
 		{ID: "dev-b", Name: "leaf-b", Address: "10.0.0.2", TenantID: "t-b"},
 	}})
+	// srv is wired even though this fixture has no tenant store: the scheduler
+	// resolves the operator-visibility restriction through it, and a nil server
+	// would make that resolution work only by never dereferencing one.
 	rs := &reportScheduler{
+		srv:       &server{discovery: agg},
 		discovery: agg,
 		alerts:    alerts.NewEngine("", nil),
 		runs:      map[string]reportRun{},

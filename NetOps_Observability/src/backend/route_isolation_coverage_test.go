@@ -38,7 +38,10 @@ import (
 // Left the baseline since: /api/compliance (2026-09-12) — it now has a real
 // HTTP-path isolation test in inventory_lists_restriction_test.go, which drives
 // the route for a platform operator, an as_tenant walk and the tenant's own
-// user. The baseline only ever shrinks.
+// user. /api/logs/search, /api/logs/export and /api/logs/retention (2026-09-12)
+// — logs_secfindings_gate_test.go drives all three across the tenant boundary,
+// which the guard had been reporting for a while with nobody removing the rows.
+// The baseline only ever shrinks.
 var isolationCoverageBaseline = map[string]string{
 	"/api/ai/modules":                         "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/appid/fusion/status":                "store/RLS-scoped; dedicated HTTP isolation test is backlog",

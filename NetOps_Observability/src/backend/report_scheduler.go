@@ -537,26 +537,58 @@ func (rs *reportScheduler) tenantDevices(tenant string) []models.Device {
 }
 
 // tenantAlerts returns the active alerts visible to the report's tenant (alerts
-// on its devices, plus device-less stack alerts).
+// on its devices, plus device-less stack alerts), filtered through the SAME
+// resolved alertVisibility object GET /api/alerts and the WebSocket feed use.
 func (rs *reportScheduler) tenantAlerts(tenant string) []models.Alert {
-	active := rs.alerts.Active()
-	t := strings.ToLower(strings.TrimSpace(tenant))
+	return rs.alertVisibility(tenant).filter(rs.alerts.Active())
+}
+
+// alertVisibility resolves the alert rule ONCE for one scheduled run.
+//
+// WHOSE VISIBILITY A SCHEDULED REPORT CARRIES. A report is rendered and
+// DELIVERED by a timer with no live caller, so there is no principal to resolve
+// from. The scope it does have is the report's OWN tenant (saved.Object.TenantID,
+// stamped from the creator's token and never from the request body), and that is
+// the scope its recipients were chosen under: deliver() lets only a
+// platform-owned report name the platform-global notify channels, and
+// deliverToContactPoints resolves a tenant-owned report's contact points inside
+// that tenant. So:
+//
+//   - A TENANT-OWNED report is that tenant's own view of its own incidents. The
+//     operator-visibility switch hides a tenant from the PLATFORM, never from
+//     itself, so nothing is hidden here — a restricted tenant keeps receiving its
+//     own scheduled reports, unchanged.
+//   - A PLATFORM-OWNED report (blank or "global" TenantID) goes to the platform's
+//     channels and to cross-tenant contact points, which is the operator's Global
+//     view — so the operator-visibility restriction applies, and a restricted
+//     tenant's alerts must not be rendered into it.
+//
+// Break-glass is deliberately NOT consulted. It is a live, time-boxed session an
+// operator opens for itself; a timer holds none, and a report that silently
+// carried one operator's momentary elevation to every channel — after the session
+// expired — would be exactly the disclosure the session is bounded to prevent.
+func (rs *reportScheduler) alertVisibility(tenant string) alertVisibility {
+	t := normTenant(tenant)
 	if t == "" || t == TenantGlobal {
-		return active
+		return rs.srv.alertVisibilityForScope(TenantGlobal, true, nil, rs.restrictedTenantIDs())
 	}
 	ids := map[string]bool{}
 	for _, d := range rs.tenantDevices(t) {
 		ids[d.ID] = true
 	}
-	out := make([]models.Alert, 0, len(active))
-	for _, a := range active {
-		// alertVisible, the same rule the HTTP surfaces apply: a rendered
-		// report must not carry another tenant's device-less alerts either.
-		if alertVisible(a, t, false, ids) {
-			out = append(out, a)
-		}
+	return rs.srv.alertVisibilityForScope(t, false, ids, nil)
+}
+
+// restrictedTenantIDs is the hidden set a scheduled PLATFORM-OWNED run filters
+// by: every OperatorRestricted tenant, with no break-glass subtraction (see
+// alertVisibility). Empty when there is no tenant store to ask — which is a
+// scheduler with no server wired, i.e. a test fixture, never a running stack:
+// newReportScheduler always sets srv.
+func (rs *reportScheduler) restrictedTenantIDs() []string {
+	if rs.srv == nil || rs.srv.tenants == nil {
+		return nil
 	}
-	return out
+	return rs.srv.tenants.RestrictedIDs()
 }
 
 // reportDeviceKeys returns the device ids/names a tenant-owned report may

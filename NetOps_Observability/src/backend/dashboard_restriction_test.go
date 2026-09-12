@@ -9,7 +9,7 @@ package backend
 //
 // The alert lane itself was closed by folding the restriction into
 // alertVisibility. The tile counted through the older, restriction-blind
-// alertVisible, so the alerts themselves were gone from the operator's feed
+// alertVisibleTenantOnly, so the alerts themselves were gone from the operator's feed
 // while the headline still said how many of them there were.
 //
 // A COUNT IS A DISCLOSURE. The security plane proved it when
