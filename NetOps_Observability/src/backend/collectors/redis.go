@@ -139,8 +139,26 @@ func encodeRESP(args ...string) []byte {
 // is still in sync and the next command is still meaningful.
 var errRedisTransport = errors.New("redis: connection failed")
 
+// redisCmdTimeout bounds ONE request/response exchange.
+//
+// It is deliberately per-command and not per-connection. redisDial sets a
+// connection-wide deadline for the handshake, and a drain that walks up to 1024
+// vantage keys down one connection would spend that single budget across the
+// whole loop: a perfectly healthy but slow drain hits the deadline part-way
+// through and every remaining key fails. §9 asks for bounded IO, which means
+// each exchange is bounded — not that the session is guillotined mid-loop.
+const redisCmdTimeout = 5 * time.Second
+
+// redisRefreshDeadline gives the next exchange its own budget. A connection that
+// cannot take a deadline surfaces the failure on the read or write that follows,
+// which is where it is reportable, so the set is best-effort here on purpose.
+func redisRefreshDeadline(c net.Conn) {
+	_ = c.SetDeadline(time.Now().Add(redisCmdTimeout))
+}
+
 // redisCmd sends one command and reads a single reply line / bulk string.
 func redisCmd(c net.Conn, args ...string) (string, error) {
+	redisRefreshDeadline(c)
 	if _, err := c.Write(encodeRESP(args...)); err != nil {
 		return "", fmt.Errorf("%w: %w", errRedisTransport, err)
 	}
@@ -300,6 +318,7 @@ func redisRegisterVantage(ctx context.Context, vantage string) error {
 // replies; enumerating vantages needs an array, so this parses one — still stdlib,
 // still ~20 lines, and it keeps us off KEYS/SCAN in production.
 func redisMembers(c net.Conn, key string) ([]string, error) {
+	redisRefreshDeadline(c)
 	if _, err := c.Write(encodeRESP("SMEMBERS", key)); err != nil {
 		return nil, err
 	}
@@ -387,10 +406,18 @@ func FetchProbePathsAll(ctx context.Context) ([]PathResult, error) {
 			seen[k] = p
 		}
 	}
-	for _, v := range vantages {
+	for i, v := range vantages {
 		raw, err := redisCmd(c, "GET", probePathsKeyFor(v))
-		if err != nil {
-			continue // a dead vantage's key has expired — not an error
+		switch {
+		case errors.Is(err, errRedisTransport):
+			// SAME RULE AS FetchDEMRuns (review 3.2-18): the channel is gone, so
+			// every remaining vantage is UNREAD, not expired. Returning what we
+			// have with a nil error tells the path lane "those probers measured
+			// nothing", which is a different and false statement.
+			return nil, fmt.Errorf("probe paths: the path channel failed while reading vantage %s (%d of %d vantages were not read): %w",
+				v, len(vantages)-i, len(vantages), err)
+		case err != nil:
+			continue // a per-key refusal from a live server: that vantage only
 		}
 		add(raw, v)
 	}
