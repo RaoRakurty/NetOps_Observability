@@ -313,6 +313,138 @@ def test_q6_knobs_are_documented_in_usage() -> None:
         assert knob in usage, f"{knob} is not documented in --help"
 
 
+# ---------------------------------------------------------------------------
+# H-3.8-14 — B3 recorded NO verdict on success
+#
+# `run_oneshot` records a ledger row on FAILURE only, and B3 had no follow-up
+# `record`. A SUCCESSFUL opensearch-init bootstrap therefore produced nothing:
+# a passing B3 was indistinguishable from a B3 that never ran, and the summary
+# counted it among the steps with "no failures". This script exists precisely
+# because `docker compose up` exiting 0 is not evidence of anything; a step
+# that proves nothing on success is the same defect one level up.
+# ---------------------------------------------------------------------------
+
+def _b3_block() -> str:
+    src = _script()
+    start = src.index("# ---- B3: OpenSearch ISM retention + snapshot policy")
+    end = src.index("# ---- B4:", start)
+    return src[start:end]
+
+
+ISM_LOG_OK = """\
+ism: waiting for OpenSearch at http://opensearch:9200 ...
+ism: security-auditlog replica template installed.
+ism: installing retention policy (delete after 14d) ...
+ism: policy written.
+ism: retention policy applied — netops-* indices delete after 14d.
+ism: quarantine retention applied — netops-quarantine-* deletes after 30d.
+ism: snapshot repository ready.
+ism: snapshot policy netops-daily installed (daily 01:30 UTC, keep 14, enabled=true).
+ism: coverage check —
+  ism: 9/9 netops indices managed
+"""
+
+ISM_LOG_HALF = """\
+ism: waiting for OpenSearch at http://opensearch:9200 ...
+ism: installing retention policy (delete after 14d) ...
+ism: WARNING policy PUT did not take:
+"""
+
+ISM_LOG_WARN = ISM_LOG_OK + "ism: ERROR snapshot repository NOT registered: {}\n"
+
+
+def _run_b3(oneshot_rc: int, ism_log: str) -> list[str]:
+    """Execute the REAL B3 block with its collaborators stubbed.
+
+    `record`, `run_oneshot`, `dkr`, `have_time` and `oneline` are replaced so
+    the block runs offline; everything the block itself does — including which
+    verdicts it records — is the shipped code.
+    """
+    import os
+    import subprocess
+    stub = (
+        "set -euo pipefail\n"
+        'OPENSEARCH_CID="cid-opensearch"\n'
+        'PROJECT="netops"\n'
+        'ONESHOT_CID=""\n'
+        'have_time() { return 0; }\n'
+        'deadline_skip() { printf "SKIP\\tREQUIRED\\t%s\\n" "$1"; }\n'
+        'record() { printf "%s\\t%s\\t%s\\t%s\\n" "$1" "$2" "$3" "$4"; }\n'
+        'oneline() { printf "%s" "$1" | tr "\\n" " " | cut -c1-"${2:-220}"; }\n'
+        'run_oneshot() { ONESHOT_CID="cid-oneshot"; return "$ONESHOT_RC"; }\n'
+        'dkr() { if [ "$1" = "logs" ]; then printf "%s" "$ISM_LOG"; return 0; fi; return 0; }\n'
+    )
+    r = subprocess.run(["bash", "-c", stub + _b3_block()],
+                       capture_output=True, text=True, timeout=30, check=False,
+                       env={**os.environ, "ONESHOT_RC": str(oneshot_rc),
+                            "ISM_LOG": ism_log})
+    assert r.returncode == 0, f"B3 block aborted: {r.stderr}"
+    return [ln for ln in (r.stdout + r.stderr).splitlines() if "\t" in ln]
+
+
+def test_b3_records_a_verdict_when_the_bootstrap_succeeds() -> None:
+    """The regression. A successful ISM bootstrap must leave a PASS row."""
+    rows = _run_b3(0, ISM_LOG_OK)
+    assert rows, (
+        "a SUCCESSFUL opensearch-init bootstrap recorded no verdict at all — "
+        "a passing B3 is indistinguishable from one that never ran")
+    verdict, cls, label, detail = rows[0].split("\t", 3)
+    assert verdict == "PASS" and cls == "REQUIRED", rows
+    assert label.startswith("B3"), rows
+    assert "retention" in detail and "exit code" in detail, (
+        "the verdict must say what it verified, and that it was not the exit "
+        f"code: {detail}")
+
+
+def test_b3_fails_when_the_bootstrap_exits_zero_halfway_through() -> None:
+    """Exit 0 is not the verdict: apply-ism.sh stopping after the first PUT
+    leaves indices with no retention policy, which is the disk-fill path."""
+    rows = _run_b3(0, ISM_LOG_HALF)
+    assert rows, "no verdict recorded"
+    verdict, cls, _label, detail = rows[0].split("\t", 3)
+    assert verdict == "FAIL" and cls == "REQUIRED", rows
+    assert "quarantine retention applied" in detail and "coverage check" in detail, (
+        f"the FAIL must name the steps that never reported: {detail}")
+
+
+def test_b3_fails_when_the_log_cannot_be_read() -> None:
+    """§16.1: an unreadable check is not a passed check."""
+    rows = _run_b3(0, "")
+    verdict, cls, _label, detail = rows[0].split("\t", 3)
+    assert verdict == "FAIL" and cls == "REQUIRED", rows
+    assert "could not be read" in detail, detail
+
+
+def test_b3_downgrades_to_advisory_when_apply_ism_reported_a_problem() -> None:
+    """Every step completed, but the bootstrap named a problem of its own (no
+    snapshot repository). Retention IS applied, so this is not a required
+    failure — but it must not vanish into a bare PASS either."""
+    rows = _run_b3(0, ISM_LOG_WARN)
+    verdict, cls, _label, detail = rows[0].split("\t", 3)
+    assert verdict == "ADVISORY" and cls == "ADVISORY", rows
+    assert "snapshot repository NOT registered" in detail, detail
+
+
+def test_b3_leaves_the_failure_verdict_to_run_oneshot() -> None:
+    """When the one-shot itself fails, run_oneshot has already recorded the
+    FAIL; B3 must not double-report."""
+    assert _run_b3(1, "") == [], (
+        "B3 recorded a second row for a failure run_oneshot already recorded")
+
+
+def test_b3_reads_the_one_shot_container_it_actually_started() -> None:
+    """The verdict has to come from THIS run's output. run_oneshot publishes
+    the container id for exactly that reason."""
+    src = _script()
+    assert "ONESHOT_CID" in src
+    m = re.search(r"run_oneshot\(\)\s*\{(.*?)\n\}", src, re.S)
+    assert m and 'ONESHOT_CID="$cid"' in m.group(1), (
+        "run_oneshot no longer publishes the container id it started")
+    assert 'ONESHOT_CID=""' in m.group(1), (
+        "it must be cleared on entry, or a later step could judge an earlier "
+        "one-shot's log")
+
+
 # --- behavioural: run the real helpers out of the real script ---------------
 
 def _source_helpers(extra: str = "") -> str:

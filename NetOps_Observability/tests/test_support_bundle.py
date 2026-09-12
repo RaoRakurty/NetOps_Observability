@@ -78,6 +78,15 @@ ACME_MAGIC_STRING={CANARY_UNCLASSIFIED}
 KEYCLOAK_DB_NAME={LOOKALIKE_KEEP}
 """
 
+# The TLS variant of the same install. COMPOSE_FILE is how every script in this
+# repo detects it, and OS_API_PASSWORD is the credential the search-tier probe
+# needs once OpenSearch speaks https with auth on 9200.
+CANARY_OS_API_PW = "canary-os-api-password-2b6d10"
+STACK_ENV_TLS = STACK_ENV + f"""\
+COMPOSE_FILE=docker-compose.yml:compose.tls.yml
+OS_API_PASSWORD={CANARY_OS_API_PW}
+"""
+
 WATCHDOG_ENV = f"""\
 # stack-watchdog.sh config (fake)
 NTFY_TOPIC={CANARY_NTFY_TOPIC}
@@ -161,6 +170,22 @@ YAML
         echo '{"status":"success","data":{"result":[]}}' ;;
       *--config*)
         cfg=$(cat)
+        if [ -n "${EXEC_CFG_LOG:-}" ]; then printf '%s\n----\n' "$cfg" >> "$EXEC_CFG_LOG"; fi
+        # Model curl's HOSTNAME VERIFICATION. This stack issues OpenSearch the
+        # SAN set `DNS:opensearch` (+ a SPIFFE URI) and ClickHouse `DNS:
+        # clickhouse`, and nothing else -- no localhost. A CA-verified https
+        # call to any other name therefore dies with curl exit 60, which is
+        # what blinded the search tier on every TLS install.
+        case "$cfg" in
+          *cacert*)
+            host=$(printf '%s' "$cfg" | sed -n 's#^url = "https://\([^:/]*\).*#\1#p' | head -1)
+            case "$host" in
+              opensearch|clickhouse) : ;;
+              *)
+                echo "curl: (60) SSL: no alternative certificate subject name matches target host name '$host'" >&2
+                exit 60 ;;
+            esac ;;
+        esac
         case "$cfg" in
           *system.parts*)
             printf 'database\ttable\trows\tsize\tparts\n'
@@ -228,14 +253,13 @@ def _sandboxed_copy(src: Path, dest: Path, bindir: Path) -> None:
     dest.chmod(0o755)
 
 
-@pytest.fixture
-def sandbox(tmp_path: Path):
+def _make_sandbox(tmp_path: Path, env_text: str):
     """A throwaway install tree + fake docker/curl, ready to run."""
     root = tmp_path / "opt" / "correlix"
     (root / "scripts").mkdir(parents=True)
     (root / "deployment" / "docker").mkdir(parents=True)
     (root / "deployment" / "docker" / "docker-compose.yml").write_text("services: {}\n")
-    (root / "deployment" / "docker" / ".env").write_text(STACK_ENV)
+    (root / "deployment" / "docker" / ".env").write_text(env_text)
 
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -258,12 +282,24 @@ def sandbox(tmp_path: Path):
             "script": root / "scripts" / "support-bundle.sh", "tmp": tmp_path}
 
 
+@pytest.fixture
+def sandbox(tmp_path: Path):
+    return _make_sandbox(tmp_path, STACK_ENV)
+
+
+@pytest.fixture
+def tls_sandbox(tmp_path: Path):
+    """The same install, but the TLS variant: https + auth on every hop."""
+    return _make_sandbox(tmp_path, STACK_ENV_TLS)
+
+
 def run_bundle(sandbox, *args, **knobs) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env.update({"WATCHDOG_LOG_FILE": str(sandbox["tmp"] / "no-such-watchdog.log"),
                 "DOCKER_ARGV_LOG": str(sandbox["tmp"] / "docker.argv"),
                 "KAFKA_ARGV_LOG": str(sandbox["tmp"] / "kafka.argv"),
-                "CURL_LOG": str(sandbox["tmp"] / "curl.log")})
+                "CURL_LOG": str(sandbox["tmp"] / "curl.log"),
+                "EXEC_CFG_LOG": str(sandbox["tmp"] / "exec-cfg.log")})
     env.update({k: str(v) for k, v in knobs.items()})
     return subprocess.run(["bash", str(sandbox["script"]),
                            "--out", str(sandbox["out"]), *args],
@@ -682,6 +718,63 @@ def test_wrapper_help_and_dispatch_list_mention_support_bundle():
         "support-bundle must be an accepted subcommand"
     assert "./install-correlix.sh support-bundle" in src, \
         "support-bundle must be documented in the header/--help text"
+
+
+# ── TLS variant: the probe must dial a name the certificate carries ──────────
+#
+# H-3.8-08 (2026-09-12). The OpenSearch collectors dialled https://localhost:9200
+# and CA-verified. This stack issues OpenSearch the SAN set `DNS:opensearch`
+# plus a SPIFFE URI and NOTHING else, so hostname verification fails (curl exit
+# 60) and BOTH search-tier collectors failed on EVERY TLS install — the same
+# defect stack-watchdog.sh fixed in its own probe, on a stack where the
+# ClickHouse probe in this very file already dialled the service name.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _exec_configs(sandbox) -> list[str]:
+    """Every curl config the script handed to `docker exec -i ... curl --config -`."""
+    log = sandbox["tmp"] / "exec-cfg.log"
+    return [c for c in log.read_text().split("----\n") if c.strip()] \
+        if log.exists() else []
+
+
+def test_tls_search_tier_collectors_succeed_against_the_issued_san(
+        tls_sandbox, tmp_path):
+    """The regression, stated as behaviour: on the TLS variant the OpenSearch
+    collectors must actually come back with data. The fake curl enforces the
+    SAN set this stack really issues, so a probe aimed at any other name fails
+    exit 60 exactly as it does on a real install."""
+    r = run_bundle(tls_sandbox)
+    assert r.returncode == 0, r.stdout + r.stderr
+    bundle = extract(tls_sandbox, tmp_path)
+    rows = {rel: (status, note) for status, rel, note in manifest_rows(bundle)}
+    for rel in ("store/opensearch-cluster-health.json",
+                "store/opensearch-indices.txt"):
+        assert rows[rel][0] == "ok", (
+            f"{rel} did not collect on the TLS variant: {rows[rel]} — the "
+            f"search tier is BLIND in a bundle that reads as complete")
+    assert '"status":"green"' in (
+        bundle / "store/opensearch-cluster-health.json").read_text()
+
+
+def test_tls_opensearch_probe_uses_a_hostname_the_certificate_carries(tls_sandbox):
+    """And pin the mechanism, so the behaviour above cannot be restored by
+    disabling verification. `localhost` is not in the issued SAN set; -k/
+    --insecure would turn a real MITM into a silent pass (§16.1)."""
+    assert run_bundle(tls_sandbox).returncode == 0
+    os_cfgs = [c for c in _exec_configs(tls_sandbox) if "9200" in c]
+    assert os_cfgs, "no OpenSearch probe was issued at all on the TLS variant"
+    for cfg in os_cfgs:
+        assert 'url = "https://opensearch:9200' in cfg, cfg
+        assert "localhost" not in cfg, (
+            "the OpenSearch SVID carries DNS:opensearch and no localhost")
+        assert "cacert" in cfg and "insecure" not in cfg, cfg
+
+
+def test_plaintext_variant_still_probes_opensearch_over_localhost(sandbox, tmp_path):
+    """The non-TLS path is unchanged: no certificate, no name constraint."""
+    assert run_bundle(sandbox).returncode == 0
+    os_cfgs = [c for c in _exec_configs(sandbox) if "9200" in c]
+    assert os_cfgs and all('url = "http://localhost:9200' in c for c in os_cfgs)
 
 
 # ── §16.3 merge bar ──────────────────────────────────────────────────────────
