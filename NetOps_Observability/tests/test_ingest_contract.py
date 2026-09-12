@@ -1287,3 +1287,112 @@ def test_port_check_is_wired_into_preflight_and_is_fresh_install_only():
         "the port check must be skipped when this host already has an install"
     # Never a silent skip when `ss` is missing (§16.1).
     assert "command -v ss" in src and "cannot verify the device-facing ports" in src
+
+
+# --- behavioural: the busy-port report must survive errexit ------------------
+#
+# The report is built by appending to `busy` inside a command substitution. A
+# construct of the shape `busy="...$([ -n "$var" ] && printf ...)"` takes the
+# exit status of its LAST command substitution, so the two entries with no
+# mover variable (514/tcp, 514/udp) made the whole assignment return 1. Under
+# the script's `set -euo pipefail` that aborts the shell BEFORE `die` prints
+# anything: a host rsyslog on 514 would kill a fresh install with no
+# diagnostic, which is the exact case this check exists to report.
+#
+# Today the shipped call site (`if ! ( preflight ); then`) suspends errexit for
+# the whole nested call, which HIDES the defect — so the static shape of that
+# one line is all that stands between the customer and a silent abort, and a
+# comment at that call site says the subshell exists only for the stage marker
+# and that behaviour is "unchanged from the direct call". This test runs the
+# REAL function in the hostile shape (a bare call, errexit live) so the report
+# is proven to survive on its own merits rather than by luck of the call site.
+
+def _ingest_port_helpers() -> str:
+    """The shipped STACK_INGEST_PORTS registry + check_ingest_ports + port_purpose."""
+    with open(os.path.join(ROOT, "scripts", "install-correlix.sh"), encoding="utf-8") as fh:
+        src = fh.read()
+    return src[src.index('STACK_INGEST_PORTS="'):src.index("preflight() {")]
+
+
+def test_busy_ingest_port_is_reported_even_with_errexit_live(tmp_path):
+    import subprocess
+
+    # A host rsyslog holding 514 on both protocols: the two registry entries
+    # that carry NO mover variable, i.e. the ones that made the assignment
+    # return 1.
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    ss = fake_bin / "ss"
+    ss.write_text(
+        "#!/bin/sh\n"
+        "printf 'tcp LISTEN 0 25 0.0.0.0:514 0.0.0.0:*\\n'\n"
+        "printf 'udp UNCONN 0 0 0.0.0.0:514 0.0.0.0:*\\n'\n")
+    ss.chmod(0o755)
+
+    body = (
+        "set -euo pipefail\n"
+        'warn() { printf "WARN: %s\\n" "$*"; }\n'
+        'die()  { printf "DIE: %s\\n" "$1"; exit 1; }\n'
+        + _ingest_port_helpers()
+        + "\ncheck_ingest_ports\n"
+    )
+    env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}")
+    res = subprocess.run(["bash", "-c", body], capture_output=True, text=True, env=env)
+
+    assert res.returncode == 1, (
+        "check_ingest_ports must exit 1 through die() when a published port is "
+        f"taken; got rc={res.returncode} out={res.stdout!r}")
+    assert "Another service already listens" in res.stdout, (
+        "the busy-port report never reached the customer — the shell aborted "
+        "inside the report-building assignment, which is the silent-abort "
+        f"defect this guard exists for. stdout={res.stdout!r}")
+    for expected in ("514/tcp", "514/udp"):
+        assert expected in res.stdout, f"{expected} missing from the report: {res.stdout!r}"
+
+
+def test_busy_port_with_a_mover_variable_names_it(tmp_path):
+    """The other half: an entry that HAS a mover variable still prints it."""
+    import subprocess
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    ss = fake_bin / "ss"
+    ss.write_text("#!/bin/sh\nprintf 'udp UNCONN 0 0 0.0.0.0:2055 0.0.0.0:*\\n'\n")
+    ss.chmod(0o755)
+
+    body = (
+        "set -euo pipefail\n"
+        'warn() { printf "WARN: %s\\n" "$*"; }\n'
+        'die()  { printf "DIE: %s\\n" "$1"; exit 1; }\n'
+        + _ingest_port_helpers()
+        + "\ncheck_ingest_ports\n"
+    )
+    env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}")
+    res = subprocess.run(["bash", "-c", body], capture_output=True, text=True, env=env)
+
+    assert res.returncode == 1, f"rc={res.returncode} out={res.stdout!r}"
+    assert "2055/udp" in res.stdout and "NETFLOW_PORT=<port>" in res.stdout, (
+        "an entry with a mover variable must still name it: " + repr(res.stdout))
+
+
+def test_free_ingest_ports_pass_cleanly(tmp_path):
+    """Nothing listening: the check returns 0 and says nothing."""
+    import subprocess
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    ss = fake_bin / "ss"
+    ss.write_text("#!/bin/sh\nexit 0\n")
+    ss.chmod(0o755)
+
+    body = (
+        "set -euo pipefail\n"
+        'warn() { printf "WARN: %s\\n" "$*"; }\n'
+        'die()  { printf "DIE: %s\\n" "$1"; exit 1; }\n'
+        + _ingest_port_helpers()
+        + "\ncheck_ingest_ports\necho CLEAN\n"
+    )
+    env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}")
+    res = subprocess.run(["bash", "-c", body], capture_output=True, text=True, env=env)
+    assert res.returncode == 0 and "CLEAN" in res.stdout, (
+        f"rc={res.returncode} out={res.stdout!r} err={res.stderr!r}")
