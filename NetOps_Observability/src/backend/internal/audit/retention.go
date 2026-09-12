@@ -6,6 +6,7 @@ package audit
 import (
 	"context"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -75,18 +76,56 @@ func ParseRetentionDays(raw string) int {
 // CHANGE row — the same class the file backend's retained trail protects
 // (platformtrail.go), expressed over the stored JSONB.
 //
-// It is fully PARAMETERIZED: the method list and the path prefixes are bound as
-// arrays, never spliced into the statement, so the closed list in
-// platformtrail.go cannot become SQL. The prefixes carry no LIKE metacharacter
-// (pinned by TestPlatformPrefixesAreLiteralForLIKE), so `LIKE prefix || '%'` is
-// an exact prefix test.
-const platformFloorSQL = `(data->>'method' = ANY($3) AND data->>'path' LIKE ANY($4))`
+// It is fully PARAMETERIZED: the method list, the path prefixes and the
+// EXCLUSIONS are bound as arrays, never spliced into the statement, so the
+// closed lists in platformtrail.go cannot become SQL. The prefixes carry no
+// LIKE metacharacter (pinned by TestPlatformPrefixesAreLiteralForLIKE and, for
+// the exclusions, TestPlatformExclusionsAreLiteralForLIKE), so
+// `LIKE prefix || '%'` is an exact prefix test.
+//
+// THE EXCLUSIONS ARE NOT OPTIONAL. IsPlatformPath checks them FIRST, so
+// /api/auth/login, /api/auth/refresh, /api/copilot/chat and the inbound
+// webhooks are NOT platform config changes on the in-memory/file path. A floor
+// that omitted them kept exactly those rows — authentication and LLM traffic,
+// the highest-volume POSTs on the platform — for the PLATFORM horizon instead
+// of the retention the operator configured. That is over-retention of
+// authentication and LLM audit rows, and it made the two backends disagree
+// about what "retained for 30 days" means.
+//
+// `NOT (path LIKE ANY($6))` and never `path NOT LIKE ANY($6)`: the latter is
+// "there EXISTS a pattern this path does not match", which is true for every
+// path with more than one exclusion in the list and would disable the floor
+// entirely.
+//
+// coalesce, because SQL three-valued logic is not Go's: a row whose JSONB
+// carries no `path` (or no `method`) evaluated the whole predicate to NULL, so
+// `NOT floor` was NULL too and the row was deleted by NEITHER branch — retained
+// forever, silently. IsPlatformChange answers a plain false for the same event,
+// and an empty path matches no prefix, so the two now agree.
+const platformFloorSQL = `(coalesce(data->>'method', '') = ANY($3)
+			    AND coalesce(data->>'path', '') LIKE ANY($4)
+			    AND NOT (coalesce(data->>'path', '') LIKE ANY($6)))`
 
 // platformLikePatterns renders the closed prefix list as LIKE patterns.
-func platformLikePatterns() []string {
-	out := make([]string, 0, len(platformPathPrefixes))
-	for _, p := range platformPathPrefixes {
+func platformLikePatterns() []string { return likePatterns(platformPathPrefixes) }
+
+// platformExclusionLikePatterns renders the closed EXCLUSION list the same way,
+// through the same helper — one rendering, so the two lists cannot drift into
+// two different notions of "prefix".
+func platformExclusionLikePatterns() []string { return likePatterns(platformPathExclusions) }
+
+// likePatterns renders a prefix list as LIKE patterns with matchesPrefix's
+// semantics: `prefix%` covers the subtree, and a prefix written with a trailing
+// "/" also matches the BARE route ("/api/notify/" matches "/api/notify"), which
+// is how the route table spells a subtree. Without the second form the SQL and
+// matchesPrefix would disagree on exactly the bare routes.
+func likePatterns(prefixes []string) []string {
+	out := make([]string, 0, len(prefixes)+4)
+	for _, p := range prefixes {
 		out = append(out, p+"%")
+		if bare := strings.TrimSuffix(p, "/"); bare != p && bare != "" {
+			out = append(out, bare)
+		}
 	}
 	return out
 }
@@ -126,7 +165,8 @@ func SweepRetention(ctx context.Context, db TxRunner, days, platformDays int) (i
 				 WHERE (ts < $1 AND NOT `+platformFloorSQL+`)
 				    OR (ts < $5 AND `+platformFloorSQL+`)
 				 ORDER BY ts LIMIT $2)`,
-			cutoff, sweepBatch, mutatingMethods, platformLikePatterns(), platformCutoff)
+			cutoff, sweepBatch, mutatingMethods, platformLikePatterns(), platformCutoff,
+			platformExclusionLikePatterns())
 		if err != nil {
 			return err
 		}
