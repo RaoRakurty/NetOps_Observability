@@ -18,6 +18,8 @@ is a latent flake, because the size was measured on ONE machine:
 
     test_loop_yield_resilience  — "the yield budget did not materially reduce
         the stall: 467 ms (off) vs 150 ms (on)" (needs 4x, got 3.1x)
+        [this caller was retired from the sizer on 2026-09-12 — see the growth
+        axis section below for why calibration could never have fixed it]
     test_p2_evidence_batching   — "the mutant must reproduce the defect
         (worst lag 466 ms) — assert >= 500.0"
 
@@ -67,9 +69,23 @@ grow the MUTANT's stall without moving the shape the defect lives in:
     `CORR_OFFLOAD_MIN_ELEMENTS` or the mutant sizer starts offloading and the
     defect evaporates — measured, at 2,375 nodes the "mutant" stall fell from
     2,418 ms to 339 ms because it was no longer a mutant at all.
-  * `test_loop_yield_resilience` grows DEVICES at a fixed 1 s spacing, with the
-    retention horizon lifted off the fixture, so one device still folds to the
-    same objects.
+  * `test_loop_yield_resilience` USED to grow DEVICES at a fixed 1 s spacing.
+    It no longer uses this module at all, and the reason is the sharpest lesson
+    here (2026-09-12): **the axis saturated, so no amount of calibration could
+    ever reach the floor.** `CORR_OPEN_OBJECTS_MAX` (5,000) force-closes the
+    excess, so past ~5,000 objects the cohort — and therefore the mutant's
+    grind — stops growing. Measured on the lab box: 700 devices → 2.05 s, 2,690
+    → 3.35 s, 5,705 → 3.94 s, 12,342 → 3.31 s, i.e. it goes DOWN. A hosted
+    runner walked the same wall (0.885 s, 1.603 s, 1.572 s, 1.546 s against a
+    1.7 s floor) and this module reported "this machine outran the size cap"
+    when nothing of the sort had happened. Worse, that caller's FIXED leg also
+    scaled with the cohort (144 ms at 700 devices, 358 ms at 2,690), so it
+    appeared on BOTH sides of the ratio and growing the fixture actively hurt.
+    Its resilience invariant is now a machine-independent COUNT of objects
+    processed between event-loop handoffs, with no clock in the assertion.
+    BEFORE ADDING A CALLER, CHECK ITS AXIS: "bigger fixture => bigger number"
+    must hold, and the quantity being grown must not appear in the fixed leg
+    too.
   * `test_sync_stretch_bound_p1` grows the CLOSE COUNT, never the signals per
     object (its own module docstring's rule: signals per object would grow the
     bounded leg's single-builder block toward the budget).
