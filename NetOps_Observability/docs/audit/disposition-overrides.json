@@ -1,0 +1,945 @@
+{
+ "3.1-01": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.1-02": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.1-03": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.1-04": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.1-05": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Triage agreed and confirmed: the shared vendor client is copied per call, not mutated. Re-proved by restoring the shared-client write \u2014 5 of the production tenant's 20 polls then went to the other tenant's staging host.",
+  "source": "triage re-check 2026-09-12",
+  "triage_overturned": false,
+  "was_partial": false
+ },
+ "3.1-06": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.1-07": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.1-08": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.1-09": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.1-10": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.1-11": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.1-12": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.1-13": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.1-14": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.1-15": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.1-16": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.1-17": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.1-18": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.1-19": {
+  "disposition": "CONFIRMED_FIX_REQUIRED",
+  "rationale": "PARTLY OVERTURNED. The deferred branch is confirmed dead, but the dead code and the silent gap beside it were fixed rather than left.",
+  "source": "triage re-check 2026-09-12",
+  "triage_overturned": true,
+  "was_partial": false
+ },
+ "3.1-20": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.10-01": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.11-01": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "PARTIALLY_FIXED and closed. Device scoping had been fixed; the PREDICATE had not. The lane shipped device_if_oper_status == 0 against IF-MIB ifOperStatus, whose legal values are 1-7 \u2014 zero is not one of them, so the query matched nothing on any fleet through any outage. Two tests were hiding it: a metrics fake answering 'one interface is down' to any query beginning with that metric name, and a unit test pinning the broken query as its expected value. Both replaced.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": true
+ },
+ "3.11-02": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.11-03": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.11-04": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.11-05": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.11-06": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.11-07": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.11-08": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.11-09": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.11-10": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.11-11": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.11-12": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.11-13": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.2-01": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "ALREADY_FIXED, and correctly so. RecordChange already builds the next slice in its own array and persists BEFORE adopting; the existing comment names the exact defect the finding describes \u2014 the other order puts a saved slice header back on failure, restoring MUTATED data because append can reuse the backing array.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.2-02": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Triage agreed and confirmed: an ungraded journey entity leaves the flaky-synthetic cap ARMED rather than bypassing it. Re-proved by reinstating the inverted clause, which graded an ungraded check critical.",
+  "source": "triage re-check 2026-09-12",
+  "triage_overturned": false,
+  "was_partial": false
+ },
+ "3.2-03": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.2-04": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.2-05": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.2-06": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.2-07": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.2-08": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.2-09": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.2-10": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.2-11": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.2-12": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.2-13": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.2-14": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.2-15": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.2-16": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.2-17": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.2-18": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "PARTIALLY_FIXED and closed. The filed function was fixed; the identical transport-error-as-expired-key fold one screen above it in the same file was not, and the deadline half was untouched \u2014 one 5 s budget set at dial and spent across up to 1024 keys, so correctly REPORTING the error turned a slow drain into a hard error every cycle. The first fix made the second half worse.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": true
+ },
+ "3.3-01": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.3-02": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.3-03": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.3-04": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.3-05": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the covering test was run and perturbed to confirm it can fail.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.3-06": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.3-07": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.3-08": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.3-09": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.3-10": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.3-11": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.3-12": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.3-13": {
+  "disposition": "CONFIRMED_FIX_REQUIRED",
+  "rationale": "OVERTURNED. Input validation at a trust boundary, which is not deferrable: an unauthenticated trap mints a marker and evicts an operator's trace from a 1000-line ring.",
+  "source": "triage re-check 2026-09-12",
+  "triage_overturned": true,
+  "was_partial": false
+ },
+ "3.4-01": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.4-02": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.4-03": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.4-04": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.4-05": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.4-06": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.4-07": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.4-08": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.4-09": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.4-10": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time and fixed in this pass, with a test watched failing first.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.4-11": {
+  "disposition": "DEFERRED_HARDENING",
+  "rationale": "DEFERRED_HARDENING. Store.Stats walks ~1M records under the mutex the BMP receive goroutines need; the ~22 ms figure was confirmed real. Deferred because there is no correctness defect and NO TEST THAT CAN FAIL on the current code \u2014 it is purely a lock-hold property. Blast radius: the ring is per-session and drop-oldest, so the pause costs something only if a peer bursts >4096 updates inside a <=22 ms window, and that case is COUNTED (UpdatesDropped), not silent. The numbers need a large BMP deployment; the single-box target runs one or two sessions where the walk is microseconds. The one place a correctness bug could hide \u2014 the OldestUpdateSeq==0 sentinel \u2014 was checked and is safe, since s.seq++ precedes Seq: s.seq so no record carries sequence 0. The O(1) fix is obvious, but applying an unprovable optimisation to the hot lock path of a receive loop is the change not to make blind.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.4-12": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.4-13": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.4-14": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.5-01": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.5-02": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.5-03": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.5-04": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.5-05": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.5-06": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.5-07": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.5-08": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.5-09": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.5-10": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.5-11": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.5-12": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.5-13": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.5-14": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.5-15": {
+  "disposition": "CONFIRMED_FIX_REQUIRED",
+  "rationale": "OVERTURNED. Deferred as unreachable; reachable on any chunked write \u2014 only io.Copy from a strings.Reader hides it, which is precisely what the test used. The bundle got newlines the device never printed.",
+  "source": "triage re-check 2026-09-12",
+  "triage_overturned": true,
+  "was_partial": false
+ },
+ "3.5-16": {
+  "disposition": "CONFIRMED_FIX_REQUIRED",
+  "rationale": "OVERTURNED. A known race left in place for no stated reason; a generation counter makes it deterministic.",
+  "source": "triage re-check 2026-09-12",
+  "triage_overturned": true,
+  "was_partial": false
+ },
+ "3.5-17": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.5-18": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.5-19": {
+  "disposition": "CONFIRMED_FIX_REQUIRED",
+  "rationale": "PARTLY OVERTURNED. The exploit half is genuinely deferrable; the DOC CLAIMS were false \u2014 validateIdentityProbe promised a control-character sweep it never performed, and one field had no validation at all. No written deferral rationale existed anywhere.",
+  "source": "triage re-check 2026-09-12",
+  "triage_overturned": true,
+  "was_partial": false
+ },
+ "3.5-20": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.5-21": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.6-01": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.6-02": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.6-03": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "STALE, not wrong: triage deferred it and the code was already fixed the day AFTER triage read it, so the verdict was correct when made. Counted separately from the nine overturned verdicts. Its concurrency test could not fail \u2014 green with the mutex deleted at 8 callers and at 64 \u2014 so a structural guard replaced it.",
+  "source": "triage re-check 2026-09-12",
+  "triage_overturned": false,
+  "was_partial": false
+ },
+ "3.6-04": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.6-05": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.7-01": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.7-02": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.7-03": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.7-04": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.7-05": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.7-06": {
+  "disposition": "CONFIRMED_FIX_REQUIRED",
+  "rationale": "OVERTURNED. Triage called it INTENTIONAL and the intent WAS written down \u2014 on a false premise. The stated reason, that every existing deployment depends on it, is not true for tenant-bound connections: the tenant callback refuses any browser holding no locator cookie, which a bare-page browser by construction does not. The test was written expecting success and failed.",
+  "source": "triage re-check 2026-09-12",
+  "triage_overturned": true,
+  "was_partial": false
+ },
+ "3.7-07": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.8-01": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.8-02": {
+  "disposition": "NOT_REPRODUCIBLE",
+  "rationale": "Triage agreed on the SHIPPED path, with the mechanism isolated rather than assumed: the busy=\"...$(...)\" assignment trips errexit, the bare [ ] && x statement does not, so the preflight report prints and the installer stops.",
+  "source": "triage re-check 2026-09-12",
+  "triage_overturned": false,
+  "was_partial": false
+ },
+ "3.8-03": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.8-04": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.8-05": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.8-06": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.8-07": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.8-08": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.8-09": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.8-10": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.8-11": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.8-12": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.8-13": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.8-14": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.9-01": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.9-02": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.9-03": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.9-04": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.9-05": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.9-06": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.9-07": {
+  "disposition": "CONFIRMED_FIX_REQUIRED",
+  "rationale": "OVERTURNED. Tenant isolation. The deferral reasoned platform-owner-only, which ignores both the tenant switcher and the operator-visibility restriction \u2014 the same defect class debugAuthz's own comment says was closed for ClickHouse.",
+  "source": "triage re-check 2026-09-12",
+  "triage_overturned": true,
+  "was_partial": false
+ },
+ "3.9-08": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.9-09": {
+  "disposition": "CONFIRMED_FIX_REQUIRED",
+  "rationale": "OVERTURNED. The written justification \u2014 a digest is re-sent next window \u2014 is false for a warning that cleared inside the failed window.",
+  "source": "triage re-check 2026-09-12",
+  "triage_overturned": true,
+  "was_partial": false
+ },
+ "3.9-10": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the guarded code was perturbed and the covering test watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.9-11": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.9-12": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "PARTIALLY_FIXED and closed. The cap was fixed. The half the finding also named was not: ai.TopologyContext.Notes records what the adapter could NOT see, and tacTopology discarded all of it \u2014 so a TAC bundle shipped to a vendor could carry a truncated neighbour list reading as complete, and a device whose seam may never have been asked about.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": true
+ },
+ "3.9-13": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Still REAL at verification time \u2014 not closed by adjacent work \u2014 and fixed in this pass with a test watched failing first. Zero of this batch were already fixed.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "3.9-14": {
+  "disposition": "CONFIRMED_FIX_REQUIRED",
+  "rationale": "OVERTURNED. Input validation at a trust boundary: the 401 and 413 the code decides never reach the caller.",
+  "source": "triage re-check 2026-09-12",
+  "triage_overturned": true,
+  "was_partial": false
+ },
+ "C1": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the finding's own reproduction was re-run and no longer reproduces, and the guard was perturbed and watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "C2": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the finding's own reproduction was re-run and no longer reproduces, and the guard was perturbed and watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "C3": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "PARTIALLY_FIXED and closed. The full cross-tenant sign-in still REPRODUCED against HEAD: a session minted in tenant A by tenant B's connection, with the victim's role, e-mail, display name and auth source rewritten. The filed path was closed; the realm SOURCE was not. Suspending a tenant makes the locator fail, routing login to the generic callback, which returned an unconstrained realm \u2014 so suspension issued a platform-wide skeleton key, on the standing and elevation doors alike. Identity namespacing remains open (tracker 300).",
+  "source": "verification pass 2026-09-12",
+  "was_partial": true
+ },
+ "H1": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the finding's own reproduction was re-run and no longer reproduces, and the guard was perturbed and watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "H10": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands, with the full field inventory checked for the redaction items rather than only the fields the finding named.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "H11": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands, with the full field inventory checked for the redaction items rather than only the fields the finding named.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "H12": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands, with the full field inventory checked for the redaction items rather than only the fields the finding named.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "H2": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the finding's own reproduction was re-run and no longer reproduces, and the guard was perturbed and watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "H3": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the finding's own reproduction was re-run and no longer reproduces, and the guard was perturbed and watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "H4": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the finding's own reproduction was re-run and no longer reproduces, and the guard was perturbed and watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "H5": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands; the finding's own reproduction was re-run and no longer reproduces, and the guard was perturbed and watched go red.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "H6": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands, with the full field inventory checked for the redaction items rather than only the fields the finding named.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "H7": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands, with the full field inventory checked for the redaction items rather than only the fields the finding named.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "H8": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "Verified against the code as it stands, with the full field inventory checked for the redaction items rather than only the fields the finding named.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": false
+ },
+ "H9": {
+  "disposition": "ALREADY_FIXED",
+  "rationale": "PARTIALLY_FIXED and closed. Every NAMED signal was refused; the catch-all was not. An unrecognised signal resolved to the bare wildcard netops-*, which OpenSearch expands onto netops-secfindings-* as happily as onto a log index, so signal=junk as platform owner still served CTEM verdicts through a handler that calls requirePerm zero times. The guard could not fail: it asserted Contains(index,'netops-secfindings'), false for 'netops-*', and its own signal list already held the vulnerable input.",
+  "source": "verification pass 2026-09-12",
+  "was_partial": true
+ }
+}
