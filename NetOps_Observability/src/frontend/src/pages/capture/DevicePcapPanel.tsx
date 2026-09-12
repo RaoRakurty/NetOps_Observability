@@ -190,9 +190,12 @@ export default function DevicePcapPanel({ device }: { device: Device }) {
         })
         .catch((e) => {
           if (!alive.current) return;
-          // A poll failure is not a reason to hammer: mark the row failed so the
-          // effect stops re-arming, and say why.
-          setItems((prev) => prev.map((r) => (r.capture_id === id ? { ...r, status: "failed" } : r)));
+          // A poll failure is not a reason to hammer, and it is NOT a fact about
+          // the capture. Rewriting the row to `failed` to stop the effect
+          // re-arming made one 502 show a running capture as Failed for good and
+          // hid the download for the file that did complete. Polling stops on
+          // its own here: this effect only re-arms when `running` changes, and
+          // leaving the rows alone is exactly what keeps it from changing.
           setNotice({ tone: "bad", text: pcapErrorMessage(e) });
         });
     }, POLL_INTERVAL_MS);

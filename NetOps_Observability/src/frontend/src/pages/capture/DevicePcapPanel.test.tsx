@@ -364,6 +364,28 @@ describe("polling — bounded, and it stops", () => {
     expect(pcapCapture).toHaveBeenCalledTimes(1);
   });
 
+  // Review finding 3.11-07.
+  it("a poll that FAILS does not rewrite the capture's status to Failed", async () => {
+    vi.useFakeTimers();
+    ok([RUNNING]);
+    pcapCapture.mockRejectedValue(new Error("502 Bad Gateway: {}"));
+    render(<DevicePcapPanel device={DEVICE} />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    await tick(2000);
+    expect(pcapCapture).toHaveBeenCalledTimes(1);
+
+    // The row still says what the DEVICE last said. Rewriting it to `failed`
+    // to stop the effect re-arming made one 502 show a running capture as
+    // Failed for good and hid the download for the file that did complete.
+    expect(screen.getByText("Running")).toBeTruthy();
+    expect(screen.queryByText("Failed")).toBeNull();
+
+    // And the polling still stops — the effect is not re-armed.
+    await tick(30000);
+    expect(pcapCapture).toHaveBeenCalledTimes(1);
+  });
+
   it("never polls at all when no capture is running", async () => {
     vi.useFakeTimers();
     ok([DONE, FAILED]);

@@ -149,4 +149,17 @@ describe("ResourceDetail", () => {
     fireEvent.click(screen.getByRole("button", { name: "Service" }));
     expect(await screen.findByText("Not attributed to a service")).toBeInTheDocument();
   });
+
+  // Review finding 3.11-04: the nav split moved this link's destination to the
+  // application catalog and left the label saying "Open in Cloud", so the
+  // operator was promised one section and landed in another.
+  it("the service link's label names where it actually goes", async () => {
+    cloudResource.mockResolvedValue(detail());
+    render(<ResourceDetail kind="cloud" id="i-0abc123" />);
+    await screen.findByRole("heading", { name: "checkout-web-1" });
+    fireEvent.click(screen.getByRole("button", { name: "Service" }));
+    const link = screen.getByRole("link", { name: /application catalog/i });
+    expect(link.getAttribute("href")).toBe("#/infrastructure/applications/catalog");
+    expect(screen.queryByRole("link", { name: "Open in Cloud" })).toBeNull();
+  });
 });

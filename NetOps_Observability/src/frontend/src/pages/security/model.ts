@@ -229,6 +229,12 @@ export function mapFacetRows(
 export const facetTotal = (m: Record<string, number> | undefined | null): number =>
   Object.values(m ?? {}).reduce((s, n) => s + num(n), 0);
 
+/** How many KEYS a facet map has — how many seams were scored, not how many
+ *  findings they hold. The overview printed facetTotal for both, so "N scored
+ *  seams" was the sum of the per-seam finding counts. */
+export const facetKeys = (m: Record<string, number> | undefined | null): number =>
+  Object.keys(m ?? {}).length;
+
 // ── compliance: per-tenant framework SELECTION and its scorecards ───────────
 //
 // Owner direction, 2026-09-03: "we shouldn\'t be checking all compliances by

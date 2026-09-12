@@ -1116,6 +1116,34 @@ describe("the off-host editor", () => {
     expect(within(dlg).getByText("Clearing is not a change. Saving keeps 21.")).toBeTruthy();
   });
 
+  // Review finding 3.11-03.
+  it("re-reads the panel after a save, so the hint stops quoting the mount-time value", async () => {
+    const dlg = await openOffHost({
+      config: { remote_url: "rsync://nas/", schedule_enabled: true, retain_count: 7 }, status: {},
+    });
+    // The save succeeds and the platform now keeps 14.
+    mockApi.setBackupConfig.mockResolvedValue({
+      config: { remote_url: "rsync://nas/", schedule_enabled: true, retain_count: 14 },
+    });
+    mockApi.backupConfig.mockResolvedValue({
+      config: { remote_url: "rsync://nas/", schedule_enabled: true, retain_count: 14 }, status: {},
+    });
+    const before = mockApi.backupConfig.mock.calls.length;
+
+    const field = within(dlg).getByLabelText("Off-host copies kept") as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "14" } });
+    fireEvent.click(within(dlg).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mockApi.setBackupConfig).toHaveBeenCalled());
+
+    // Without the reload the STORED half of the hint is whatever was loaded at
+    // mount, so clearing the box would say "Saving keeps 7" while the platform
+    // keeps 14. The snapshot form beside this one has always reloaded.
+    await waitFor(() => expect(mockApi.backupConfig.mock.calls.length).toBeGreaterThan(before));
+    fireEvent.change(field, { target: { value: "" } });
+    await waitFor(() =>
+      expect(within(dlg).getByText("Clearing is not a change. Saving keeps 14.")).toBeTruthy());
+  });
+
   it("refuses a retention the server would reject rather than sending it", async () => {
     const dlg = await openOffHost({
       config: { remote_url: "rsync://nas/", schedule_enabled: true, retain_count: 7 }, status: {},

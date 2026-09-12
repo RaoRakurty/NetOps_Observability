@@ -139,15 +139,18 @@ export function AppIdOverridesCard() {
   const [busy, setBusy] = useState(true);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // The READ failure is its own state: `err` also carries what a REMOVE
+  // reported, and that must not turn the table into an empty state.
+  const [readErr, setReadErr] = useState<string | null>(null);
   const [formErr, setFormErr] = useState("");
   const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
     let live = true;
-    setErr(null);
+    setErr(null); setReadErr(null);
     api.appIdOverrides()
       .then((r) => { if (live) setEntries(r.entries ?? []); })
-      .catch((e) => { if (live) { setEntries([]); setErr(operatorError(e, "The override list could not be read.")); } })
+      .catch((e) => { if (live) { setEntries([]); setReadErr(operatorError(e, "The override list could not be read.")); } })
       .finally(() => { if (live) setBusy(false); });
     return () => { live = false; };
   }, [nonce]);
@@ -203,7 +206,7 @@ export function AppIdOverridesCard() {
         entry here wins outright. Rows belong to this tenant: they are stamped from your sign-in, and
         no other tenant can read or remove them. Creating and removing an override is recorded in the
         platform audit log; the row itself carries no separate history.
-        {err && <span style={{ color: "var(--crit)" }}> · {err}</span>}
+        {(err || readErr) && <span style={{ color: "var(--crit)" }}> · {err || readErr}</span>}
       </p>
 
       {open && (
@@ -238,6 +241,11 @@ export function AppIdOverridesCard() {
 
       {busy ? (
         <div className="ao-muted" style={{ fontSize: 12 }}>Loading…</div>
+      ) : readErr ? (
+        // "We could not ask" and "there is nothing" are opposite facts. The
+        // read failure set the list to [] and fell through to the definitive
+        // empty state, so the screen asserted both at once.
+        <div className="ao-muted" style={{ fontSize: 12 }}>{readErr} This is not a statement that there are none.</div>
       ) : rows.length === 0 ? (
         <div className="ao-muted" style={{ fontSize: 12 }}>
           This tenant has declared no overrides — identification falls to the sources listed above.

@@ -124,3 +124,24 @@ describe("WindowedList — edges", () => {
     expect(screen.getByRole("listbox", { name: "Devices" })).toBeInTheDocument();
   });
 });
+
+// Review finding 3.11-08.
+//
+// The measuring layout effect held a ref OBJECT and an empty dependency list,
+// and the empty-state branch renders a DIFFERENT div that carried no ref. A
+// list that mounted EMPTY therefore measured nothing, never re-ran when the
+// rows arrived, and rendered only its overscan against a viewport of 0 — which
+// is exactly what the topology device inventory does on a fresh install.
+describe("WindowedList — a list that fills in after it mounted empty", () => {
+  it("measures the viewport when the scroller finally appears", () => {
+    const { rerender } = render(<List n={0} />);
+    expect(screen.getByText("No devices.")).toBeInTheDocument();
+
+    rerender(<List n={1000} />);
+    const buttons = screen.getAllByRole("button");
+    // 320 / 32 = 10 visible plus the 8-row overscan. Without the measurement
+    // the window is overscan-only (8 or 9 rows) and the panel looks half empty.
+    expect(buttons.length).toBeGreaterThan(10);
+    expect(buttons.length).toBeLessThanOrEqual(10 + 8 * 2);
+  });
+});

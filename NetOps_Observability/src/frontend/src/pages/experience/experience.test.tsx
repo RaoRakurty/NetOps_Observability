@@ -64,6 +64,7 @@ vi.mock("../../services/api", () => ({
 }));
 
 import ExperiencePage from "./ExperiencePage";
+import { reasonText } from "./honest";
 
 // ── fixtures (the wire shapes from internal/dem/experience) ─────────────────
 
@@ -883,5 +884,37 @@ describe("copy guards on the Digital Experience sources", () => {
     const hits = files.flatMap((f) =>
       scanForEngineVocabulary(readFileSync(join(here, f), "utf-8"), `pages/experience/${f}`));
     expect(hits, hits.join("\n")).toEqual([]);
+  });
+});
+
+// ── the reason token → operator sentence map (review finding 3.11-06) ───────
+//
+// `not_declared` was the one reason Money() renders that REASON_TEXT did not
+// carry, so reasonText fell through to its "unknown tokens survive" branch and
+// printed the raw token to the operator in the slot the file reserves for a
+// sentence. This guards the map against the next one, by reading the tokens out
+// of the sources that actually pass them.
+describe("every reason token this surface renders has an operator sentence", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const files = readdirSync(here).filter((f) => /\.tsx?$/.test(f) && !f.includes(".test."));
+
+  it("names not_declared", () => {
+    expect(reasonText("not_declared")).not.toBe("not_declared");
+    expect(reasonText("not_declared")).toMatch(/declared/i);
+  });
+
+  it("names every reason literal passed to NotMeasured on this surface", () => {
+    const tokens = new Set<string>();
+    for (const f of files) {
+      const src = readFileSync(join(here, f), "utf-8");
+      for (const m of src.matchAll(/reason=(?:\{)?"([a-z_]+)"/g)) tokens.add(m[1]);
+      for (const m of src.matchAll(/reason=\{[^}]*\?\s*"([a-z_]+)"\s*:\s*"([a-z_]+)"/g)) {
+        tokens.add(m[1]);
+        tokens.add(m[2]);
+      }
+    }
+    expect(tokens.size).toBeGreaterThan(0);
+    const raw = [...tokens].filter((t) => reasonText(t) === t);
+    expect(raw, `these tokens are printed to the operator verbatim: ${raw.join(", ")}`).toEqual([]);
   });
 });

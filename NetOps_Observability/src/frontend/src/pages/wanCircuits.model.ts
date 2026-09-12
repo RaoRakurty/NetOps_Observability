@@ -400,7 +400,7 @@ export function isDirty(form: PolicyForm, stored: WanMeasurementPolicy | null | 
   return (
     a.wan_pattern !== b.wan_pattern ||
     a.include_connected !== b.include_connected ||
-    (a.anchors ?? []).join(" ") !== (b.anchors ?? []).join(" ") ||
+    (a.anchors ?? []).join("\0") !== (b.anchors ?? []).join("\0") ||
     stableMap(a.next_hops) !== stableMap(b.next_hops)
   );
 }
@@ -409,5 +409,5 @@ function stableMap(m: Record<string, string> | undefined): string {
   return Object.entries(m ?? {})
     .sort((x, y) => x[0].localeCompare(y[0]))
     .map(([k, v]) => `${k}${v}`)
-    .join(" ");
+    .join("\0");
 }

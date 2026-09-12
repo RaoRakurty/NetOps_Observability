@@ -434,7 +434,7 @@ export function buildHeatCells(data: DemExperienceResponse): {
   let unplaced = 0;
   for (const t of data.targets ?? []) {
     if (!t.site || !t.app) { unplaced++; continue; }
-    const key = `${t.site} ${t.app}`;
+    const key = `${t.site}\0${t.app}`;
     const cur = acc.get(key) ?? {
       site: t.site, app: t.app, sum: 0, scored: 0, subjects: 0,
       components: new Set<string>(), reason: undefined as string | undefined,
