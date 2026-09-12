@@ -108,6 +108,11 @@ func (t *OverageTracker) Path() string {
 // actually changed — an episode starting, a new peak, an episode ending — so a
 // scrape every 15 seconds does not rewrite a file every 15 seconds.
 //
+// u IS THE MEASURED SET. A ceiling whose key is absent from u was not measured
+// this round, and an episode recorded for it is kept untouched rather than
+// closed: see the forget loop below for why that distinction is the whole
+// point of the file.
+//
 // Nil-safe: a nil tracker still returns the state's own overages, without a
 // `since`. That is the honest degradation for a build with no register wired,
 // and it keeps the Licence page working rather than blanking a panel over a
@@ -150,11 +155,28 @@ func (t *OverageTracker) Observe(st State, u Usage, now time.Time) []Overage {
 	// "since when are you over", and a closed episode is not an answer to it;
 	// keeping a history here would be a metering store, which is tracker 258's
 	// job and a different data contract.
+	//
+	// "ENDED" MEANS MEASURED AND WITHIN LIMIT — never merely absent from the
+	// overage list. State.Overages omits a ceiling for two different reasons:
+	// it was counted and is under its limit, or nobody could count it at all.
+	// Treating the second as the first would delete `since` — the one fact this
+	// file exists to keep, and the one no restart can recover — on the strength
+	// of a single failed read, and restart the clock at `now` on the next
+	// successful one. Usage already carries measured-ness and needs no on-disk
+	// change to say so: a key present is a number somebody actually took, a key
+	// absent is "not measured" (see the Usage doc comment in state.go). So an
+	// unmeasured ceiling's record is LEFT ALONE, at the cost of a record that
+	// outlives a ceiling nothing measures any more — the right direction to
+	// fail for durable state.
 	for name := range t.recs {
-		if !live[name] {
-			delete(t.recs, name)
-			t.dirty = true
+		if live[name] {
+			continue
 		}
+		if _, measured := u[name]; !measured {
+			continue
+		}
+		delete(t.recs, name)
+		t.dirty = true
 	}
 	t.flushLocked()
 	return over

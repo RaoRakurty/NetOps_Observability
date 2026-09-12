@@ -331,6 +331,16 @@ func (s *Service) WriteUsageMetrics(w io.Writer, u Usage, now time.Time) {
 		since := int64(0)
 		if o, ok := byCeiling[n]; ok && !o.Since.IsZero() {
 			since = o.Since.Unix()
+		} else if _, measured := u[n]; !measured {
+			// NOT MEASURED this scrape (a store that would not answer inside
+			// the scrape budget, say). The episode did not end — nobody looked
+			// — so the durable register still knows when it began, and this
+			// series must keep saying so. Emitting 0 here would announce "the
+			// overage is over" every time a read timed out, which is the same
+			// false all-clear the register itself was fixed not to write.
+			if at, ok := s.overage.Since(n); ok {
+				since = at.Unix()
+			}
 		}
 		fmt.Fprintf(w, "%s{ceiling=%q} %d\n", MetricOverageSince, n, since)
 	}
