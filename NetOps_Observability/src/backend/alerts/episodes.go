@@ -436,23 +436,80 @@ type EpisodeQuery struct {
 	Limit  int
 }
 
-// List returns the episodes visible to the (tenant, cross) principal, most
-// recently seen first, capped with disclosure. Visibility mirrors /api/alerts:
-// cross sees all; a scoped principal sees its own tenant's episodes plus the
-// device-less ones NOTHING OWNS.
+// EpisodeScope is WHO is reading, resolved by the caller and handed to the store
+// as data. Every read below takes one; none of them takes a bare (tenant, cross)
+// pair any more.
+//
+// The pair was not enough, and a filter at the caller could not make up the
+// difference. List computes `total` INSIDE the store, over the visible set,
+// BEFORE limiting — so a handler that dropped hidden rows from the returned page
+// would still hand back a count of how many episodes the hidden tenant has. A
+// count is a disclosure: "acme has 47 open episodes" is the fact the restriction
+// exists to withhold, and it does not become less of one for arriving as an
+// integer. The filter and the count have to be the same loop, and that loop is
+// here.
+//
+// Hidden is the operator-visibility restriction (Tenant.OperatorRestricted) in
+// its tenant_id form, which is the exact form for an episode: an episode's owner
+// is derived from its device at fold time and stored on the row. Deny is the
+// operator scoped INTO a restricted tenant — it reads nothing at all, not even
+// the platform's own device-less episodes, because a scope that may read nothing
+// of a tenant has no business being served the rest of the platform's under that
+// tenant's name.
+//
+// The zero value is a CLOSED scope (tenant "", not cross), which sees only the
+// platform's own unowned episodes — the right default for a caller that forgot
+// to say who it is.
+type EpisodeScope struct {
+	Tenant string
+	Cross  bool
+	Deny   bool
+	Hidden []string
+}
+
+// EpisodeScopeFor builds the ordinary scope, for the callers that have no
+// restriction to apply (the engine's own bookkeeping, tests).
+func EpisodeScopeFor(tenant string, cross bool) EpisodeScope {
+	return EpisodeScope{Tenant: tenant, Cross: cross}
+}
+
+// sees reports whether this scope may read one episode: the restriction first,
+// then the ordinary tenancy rule — in that order, because the tenancy rule
+// answers TRUE FOR EVERYTHING on the cross-tenant path and would otherwise
+// hand a hidden row straight back.
+func (sc EpisodeScope) sees(ep Episode) bool {
+	if sc.Deny {
+		return false
+	}
+	for _, id := range sc.Hidden {
+		if sameTenant(ep.TenantID, id) {
+			return false
+		}
+	}
+	return sc.Cross || episodeVisible(ep, sc.Tenant)
+}
+
+// List returns the episodes visible to the scope, most recently seen first,
+// capped with disclosure. Visibility mirrors /api/alerts: cross sees all; a
+// scoped principal sees its own tenant's episodes plus the device-less ones
+// NOTHING OWNS; and a restricted tenant is not readable by platform staff.
+//
+// `total` is the size of the VISIBLE set — counted after the scope's filter and
+// before the limit, in the one loop, so the count can never describe rows the
+// caller was not shown.
 //
 // The ownership half is load-bearing. A device-less episode used to be treated
 // as platform-global on the strength of its empty Resource alone, but the
 // Digital Experience rules fold with no resource AND a real owner, and their
 // summary carries that tenant's target hostname. Every other tenant was reading
 // it.
-func (s *EpisodeStore) List(tenant string, cross bool, q EpisodeQuery) (eps []Episode, total int, truncated bool) {
+func (s *EpisodeStore) List(sc EpisodeScope, q EpisodeQuery) (eps []Episode, total int, truncated bool) {
 	now := s.now().UTC()
 	s.mu.Lock()
 	s.sweepLocked(now)
 	out := make([]Episode, 0, len(s.episodes))
 	for _, ep := range s.episodes {
-		if !cross && !episodeVisible(*ep, tenant) {
+		if !sc.sees(*ep) {
 			continue
 		}
 		switch q.Status {
@@ -484,25 +541,42 @@ func (s *EpisodeStore) List(tenant string, cross bool, q EpisodeQuery) (eps []Ep
 	return out, total, truncated
 }
 
-// Reachable reports whether id exists AND the principal may see it. Used to gate
+// Reachable reports whether id exists AND the scope may mutate it. Used to gate
 // input validation behind the 404, so a cross-tenant probe can never learn an
 // id exists by receiving a 400 (input rejected) instead of a 404 (id hidden) —
 // CLAUDE.md §3a. Same scoping rule as Triage, so the two cannot disagree.
-func (s *EpisodeStore) Reachable(id, tenant string, cross bool) bool {
+func (s *EpisodeStore) Reachable(id string, sc EpisodeScope) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ep, ok := s.episodes[id]
-	return ok && (cross || sameTenant(ep.TenantID, tenant))
+	return ok && sc.owns(*ep)
+}
+
+// owns is the WRITE half of the scope: an episode the principal may mutate. It
+// is stricter than sees — a scoped caller never triages the platform's own
+// device-less episodes — and it applies the same restriction first, so an
+// episode the operator may not read is not one it may ack, assign, mute or
+// annotate either.
+func (sc EpisodeScope) owns(ep Episode) bool {
+	if sc.Deny {
+		return false
+	}
+	for _, id := range sc.Hidden {
+		if sameTenant(ep.TenantID, id) {
+			return false
+		}
+	}
+	return sc.Cross || sameTenant(ep.TenantID, sc.Tenant)
 }
 
 // Triage applies a mutation to an episode the principal OWNS. Default-closed:
 // a cross-tenant id (including a platform episode for a scoped caller) returns
 // ErrEpisodeNotFound so existence is never revealed.
-func (s *EpisodeStore) Triage(id, tenant string, cross bool, apply func(*Episode) error) (Episode, error) {
+func (s *EpisodeStore) Triage(id string, sc EpisodeScope, apply func(*Episode) error) (Episode, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ep, ok := s.episodes[id]
-	if !ok || !(cross || sameTenant(ep.TenantID, tenant)) {
+	if !ok || !sc.owns(*ep) {
 		return Episode{}, ErrEpisodeNotFound
 	}
 	if err := apply(ep); err != nil {

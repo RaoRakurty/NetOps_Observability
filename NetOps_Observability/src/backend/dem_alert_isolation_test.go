@@ -231,7 +231,7 @@ func TestDigitalExperienceEpisodeStaysWithItsTenant(t *testing.T) {
 	store.Observe("tenant-a", "", "ExperienceLatencyOverBudget", "critical", "Experience target "+demTarget+" p95 is 812 ms", true)
 	store.Observe("", "", "StackDiskLow", "critical", "platform disk is nearly full", true)
 
-	eps, _, _ := store.List("tenant-b", false, alerts.EpisodeQuery{})
+	eps, _, _ := store.List(alerts.EpisodeScopeFor("tenant-b", false), alerts.EpisodeQuery{})
 	for _, ep := range eps {
 		if strings.Contains(ep.Summary, demTarget) {
 			t.Errorf("TENANT LEAK: tenant-b listed tenant-a's device-less experience episode: %+v", ep)
@@ -240,7 +240,7 @@ func TestDigitalExperienceEpisodeStaysWithItsTenant(t *testing.T) {
 	if len(eps) != 1 || !strings.Contains(eps[0].Summary, "platform disk") {
 		t.Errorf("tenant-b must still see the UNOWNED stack episode and only that: %+v", eps)
 	}
-	own, _, _ := store.List("tenant-a", false, alerts.EpisodeQuery{})
+	own, _, _ := store.List(alerts.EpisodeScopeFor("tenant-a", false), alerts.EpisodeQuery{})
 	found := false
 	for _, ep := range own {
 		if strings.Contains(ep.Summary, demTarget) {

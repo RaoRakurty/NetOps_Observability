@@ -32,7 +32,7 @@ func (c *fakeEpisodeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
 func listAll(t *testing.T, s *EpisodeStore) []Episode {
 	t.Helper()
-	eps, _, _ := s.List("", true, EpisodeQuery{Status: "all"})
+	eps, _, _ := s.List(EpisodeScopeFor("", true), EpisodeQuery{Status: "all"})
 	return eps
 }
 
@@ -105,7 +105,7 @@ func TestEpisodeStillFiringNeverCloses(t *testing.T) {
 	s, clock := newEpisodeStore(t)
 	s.Observe("acme", "leaf1", "HighCPU", "critical", "CPU 95%", true)
 	clock.advance(10 * s.CloseWindow()) // continuously firing — no clear ever observed
-	eps, _, _ := s.List("", true, EpisodeQuery{})
+	eps, _, _ := s.List(EpisodeScopeFor("", true), EpisodeQuery{})
 	if len(eps) != 1 || eps[0].Status != EpisodeStatusActive {
 		t.Fatalf("an actively-firing episode must never age out, got %+v", eps)
 	}
@@ -171,7 +171,7 @@ func TestEpisodeSuppressionRules(t *testing.T) {
 		t.Fatal("a fresh episode must not be suppressed")
 	}
 	// Mute → suppressed.
-	if _, err := s.Triage(ep.ID, "acme", false, func(e *Episode) error { e.Muted, e.MutedBy = true, "op"; return nil }); err != nil {
+	if _, err := s.Triage(ep.ID, EpisodeScopeFor("acme", false), func(e *Episode) error { e.Muted, e.MutedBy = true, "op"; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if !s.Suppressed("acme", "leaf1", "HighCPU", "critical") {
@@ -179,7 +179,7 @@ func TestEpisodeSuppressionRules(t *testing.T) {
 	}
 	// Unmute + snooze into the future → suppressed until it lapses.
 	until := clock.now().Add(30 * time.Minute)
-	if _, err := s.Triage(ep.ID, "acme", false, func(e *Episode) error {
+	if _, err := s.Triage(ep.ID, EpisodeScopeFor("acme", false), func(e *Episode) error {
 		e.Muted, e.MutedBy = false, ""
 		e.SnoozedUntil, e.SnoozedBy = &until, "op"
 		return nil
@@ -211,7 +211,7 @@ func TestEpisodePersistenceRoundTrip(t *testing.T) {
 	s.SetNowForTest(clock.now)
 	s.Observe("acme", "leaf1", "HighCPU", "critical", "CPU 95%", true)
 	ep := listAll(t, s)[0]
-	if _, err := s.Triage(ep.ID, "acme", false, func(e *Episode) error {
+	if _, err := s.Triage(ep.ID, EpisodeScopeFor("acme", false), func(e *Episode) error {
 		e.Notes = append(e.Notes, EpisodeNote{At: clock.now(), By: "op", Text: "checking"})
 		return nil
 	}); err != nil {
@@ -237,11 +237,11 @@ func TestEpisodeListBoundsAndDisclosure(t *testing.T) {
 	for i := 0; i < 25; i++ {
 		s.Observe("acme", fmt.Sprintf("dev-%02d", i), "HighCPU", "critical", "x", true)
 	}
-	eps, total, truncated := s.List("", true, EpisodeQuery{Limit: 10})
+	eps, total, truncated := s.List(EpisodeScopeFor("", true), EpisodeQuery{Limit: 10})
 	if len(eps) != 10 || total != 25 || !truncated {
 		t.Fatalf("bounded list must disclose truncation: len=%d total=%d truncated=%v", len(eps), total, truncated)
 	}
-	eps, total, truncated = s.List("", true, EpisodeQuery{})
+	eps, total, truncated = s.List(EpisodeScopeFor("", true), EpisodeQuery{})
 	if len(eps) != 25 || total != 25 || truncated {
 		t.Fatalf("default limit covers 25 rows: len=%d total=%d truncated=%v", len(eps), total, truncated)
 	}
@@ -260,7 +260,7 @@ func TestEpisodeRetentionNeverEvictsFiring(t *testing.T) {
 	clock.advance(16 * time.Minute)
 	s.Observe("acme", "sweep-trigger", "Other", "warning", "", true)
 	found := false
-	active, _, _ := s.List("", true, EpisodeQuery{Status: EpisodeStatusActive, Limit: episodeMaxQueryLimit})
+	active, _, _ := s.List(EpisodeScopeFor("", true), EpisodeQuery{Status: EpisodeStatusActive, Limit: episodeMaxQueryLimit})
 	for _, ep := range active {
 		if ep.Resource == "keeper" {
 			found = true
@@ -269,7 +269,7 @@ func TestEpisodeRetentionNeverEvictsFiring(t *testing.T) {
 	if !found {
 		t.Fatal("retention eviction must never drop an actively-firing episode")
 	}
-	eps, total, _ := s.List("acme", false, EpisodeQuery{Status: "all", Limit: episodeMaxQueryLimit})
+	eps, total, _ := s.List(EpisodeScopeFor("acme", false), EpisodeQuery{Status: "all", Limit: episodeMaxQueryLimit})
 	_ = eps
 	if total > episodeMaxPerTenant+1 { // +1 slack for the just-inserted trigger row
 		t.Fatalf("per-tenant retention cap not enforced: %d episodes", total)
@@ -298,7 +298,7 @@ func TestEpisodeListDeviceLessRowsAreGlobalOnlyWhenUnowned(t *testing.T) {
 
 	signals := func(tenant string, cross bool) map[string]bool {
 		t.Helper()
-		eps, _, _ := s.List(tenant, cross, EpisodeQuery{Status: "all", Limit: episodeMaxQueryLimit})
+		eps, _, _ := s.List(EpisodeScopeFor(tenant, cross), EpisodeQuery{Status: "all", Limit: episodeMaxQueryLimit})
 		out := map[string]bool{}
 		for _, ep := range eps {
 			out[ep.Signal] = true
