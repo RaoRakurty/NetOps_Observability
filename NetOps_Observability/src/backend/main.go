@@ -1509,12 +1509,7 @@ func newServer() *server {
 	// ring under the record's marker AND in the structured application log, so
 	// it survives whether the reader is `correlix-debug` or `docker logs api`.
 	srv.debugParseFilter = parsetrace.Default()
-	srv.debugParseFilter.SetSink(func(marker, component, msg string, fields map[string]any) {
-		srv.debugRing.Append(marker, pipedebug.RingLine{
-			Level: "debug", Component: component, Msg: msg, Fields: fields,
-		})
-		applog.Debug(component, msg, fields)
-	})
+	srv.debugParseFilter.SetSink(srv.parseTraceSink)
 	srv.debugAPI = pipedebug.New(srv.debugDeps()) // handlers over injected seams (§5)
 	// DEBUG-ROUTES-END
 	srv.rcaRevisions = newRcaRevisionStore(rcaRevisionsPath())
@@ -5142,6 +5137,33 @@ func (s *server) debugVictoriaExport(client *http.Client) func(context.Context, 
 		}
 		return export(ctx, match, filters, start, end)
 	}
+}
+
+// parseTraceSink is the collectors' parse-decision sink: one decision line into
+// the debug ring for the trace that owns it, and into the structured log so it
+// survives whether the reader is `correlix-debug` or `docker logs api`.
+//
+// TWO KINDS OF MARKER ARRIVE HERE, and only one of them is trustworthy. An
+// ARMED-FILTER match carries the operator's own needle, which is not
+// marker-shaped: arming is an authenticated act and those lines are kept. A
+// MARKER-shaped value came off the RECORD, and the records reaching the parse
+// hook include unauthenticated ones — a trap whose community does not match
+// loses device attribution but is still parsed — so a marker this process never
+// minted belongs to somebody else. Writing its lines would let whoever can
+// reach a collector port spend an operator's trace memory and fill the
+// application log during the incident the trace was opened for (review 3.3-13).
+// The ring refuses such a line on its own; this skips the log line too.
+//
+// What does NOT change is when a record is TRACED: a marked record still traces
+// with no arm, which is the design's reason 1.
+func (s *server) parseTraceSink(marker, component, msg string, fields map[string]any) {
+	if pipedebug.ValidMarker(marker) && !s.debugRing.Admitted(marker) {
+		return
+	}
+	s.debugRing.Append(marker, pipedebug.RingLine{
+		Level: "debug", Component: component, Msg: msg, Fields: fields,
+	})
+	applog.Debug(component, msg, fields)
 }
 
 // debugUIHost adapts *server to pipedebug.UIQueryHost — the seam stage 10 runs

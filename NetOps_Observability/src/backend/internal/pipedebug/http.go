@@ -153,6 +153,10 @@ func (a *API) HandleTrace(w http.ResponseWriter, r *http.Request) {
 
 	now := a.deps.now()
 	marker := NewMarker(now)
+	// The ring keeps lines only for markers THIS PROCESS minted (ring.go, the
+	// admission note). Admit before anything writes, including this handler's
+	// own receipt line.
+	a.deps.Ring.Admit(marker)
 
 	receipt := traceReceipt{
 		Marker: marker, Kind: kind, Device: device, Tenant: tenant,

@@ -203,3 +203,86 @@ func TestPrefilterAgreesWithTheUnfilteredRules(t *testing.T) {
 		}
 	}
 }
+
+// AN OVER-LONG LINE MUST NOT ACQUIRE NEWLINES THE DEVICE NEVER PRINTED
+// (review 3.5-15).
+//
+// A logical line past maxRedactLineBytes is flushed in pieces so the writer
+// cannot grow without bound — that part is right. Each piece then went out
+// through writeLine, which prepends the separator that belongs BETWEEN lines,
+// so the bundle handed to a vendor's TAC showed one device line split into
+// several at an arbitrary 64 KiB boundary. The file's own header promises the
+// stream is byte-identical to the buffered pass, and a fabricated newline is
+// not a difference the engineer reading the evidence can tell is ours.
+//
+// The writes are CHUNKED on purpose: io.Copy from a strings.Reader uses WriteTo
+// and hands the whole input over in one call, which finds the newline and never
+// reaches the flush path at all. A real collection reads a network stream in
+// 32 KiB pieces, which is what this reproduces.
+func chunkedWrite(t *testing.T, rw *RedactingWriter, s string, chunk int) {
+	t.Helper()
+	for len(s) > 0 {
+		n := chunk
+		if n > len(s) {
+			n = len(s)
+		}
+		if _, err := rw.Write([]byte(s[:n])); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		s = s[n:]
+	}
+}
+
+func TestAnOverLongLineIsNotSplitByFabricatedNewlines(t *testing.T) {
+	long := strings.Repeat("a", maxRedactLineBytes*2+123)
+	input := "first line\n" + long + "\nlast line"
+
+	var buf bytes.Buffer
+	rw := NewRedactingWriter(&buf)
+	chunkedWrite(t, rw, input, 32<<10)
+	if err := rw.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	lines := strings.Split(buf.String(), "\n")
+	if len(lines) != 3 {
+		lens := make([]int, len(lines))
+		for i, l := range lines {
+			lens[i] = len(l)
+		}
+		t.Fatalf("the stream emitted %d lines %v, want 3 — an over-long device line was split at "+
+			"the flush boundary, so the bundle shows breaks the device never printed", len(lines), lens)
+	}
+	if lines[0] != "first line" || lines[2] != "last line" {
+		t.Fatalf("the surrounding lines were disturbed: %q / %q", lines[0], lines[2])
+	}
+	if len(lines[1]) != len(long) {
+		t.Fatalf("the long line came out %d bytes, want %d", len(lines[1]), len(long))
+	}
+
+	// ...and the buffered pass agrees, which is the promise in the header.
+	if want := RedactOutput(input); buf.String() != want {
+		t.Fatal("the stream and the buffered pass disagree on an over-long line")
+	}
+}
+
+// The bound still does its job: the writer must not be holding the whole line.
+func TestAnOverLongLineIsStillFlushedInPieces(t *testing.T) {
+	long := strings.Repeat("b", maxRedactLineBytes*2)
+	var buf bytes.Buffer
+	rw := NewRedactingWriter(&buf)
+	chunkedWrite(t, rw, long, 32<<10)
+	if buf.Len() == 0 {
+		t.Fatal("nothing was flushed: the writer is holding an unbounded line in memory")
+	}
+	if got := rw.line.Len(); got >= maxRedactLineBytes {
+		t.Fatalf("the writer still holds %d buffered bytes, cap %d", got, maxRedactLineBytes)
+	}
+	if err := rw.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if buf.String() != long {
+		t.Fatalf("the flushed pieces did not reassemble into the original line (got %d bytes, want %d)",
+			buf.Len(), len(long))
+	}
+}

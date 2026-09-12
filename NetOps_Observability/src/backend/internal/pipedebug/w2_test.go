@@ -393,6 +393,7 @@ func TestUIStageReportsTheAnswerInWords(t *testing.T) {
 
 func TestParserStageServesGoCollectorDecisions(t *testing.T) {
 	f := newFakeBackend()
+	f.ring.Admit(testMarker) // stands in for the mint: the ring admits only its own markers
 	f.ring.Append(testMarker, RingLine{Component: "parse:snmptrap", Msg: "trap decoded",
 		Fields: map[string]any{"matched_trap_name": "linkDown"}})
 	f.ring.Append(testMarker, RingLine{Component: "trace", Msg: "synthetic record injected"})

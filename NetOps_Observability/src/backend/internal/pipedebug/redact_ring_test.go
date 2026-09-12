@@ -127,6 +127,7 @@ func TestMarkerIsFoundInTheMessageOrAField(t *testing.T) {
 func TestRingIsBoundedGloballyAndPerMarker(t *testing.T) {
 	r := NewRing()
 	m := "01j9abcdefghjkmnpqrstvwxyz"
+	r.Admit(m)
 	for i := 0; i < ringPerMarker*3; i++ {
 		r.Append(m, RingLine{Msg: "line"})
 	}
@@ -144,6 +145,7 @@ func TestRingBoundsTheNumberOfMarkersAndKeepsAcceptingNewOnes(t *testing.T) {
 	var last string
 	for i := 0; i < ringMaxMarkers*2; i++ {
 		last = NewMarker(base.Add(time.Duration(i) * time.Millisecond))
+		r.Admit(last) // the ring keeps only markers this process minted
 		r.Append(last, RingLine{Msg: "x"})
 	}
 	if len(r.Lines(last)) == 0 {
@@ -157,6 +159,7 @@ func TestRingBoundsTheNumberOfMarkersAndKeepsAcceptingNewOnes(t *testing.T) {
 func TestRingRedactsOnTheWayIn(t *testing.T) {
 	r := NewRing()
 	m := "01j9abcdefghjkmnpqrstvwxyz"
+	r.Admit(m)
 	r.Append(m, RingLine{Msg: "snmp-server community ringLeak RO",
 		Fields: map[string]any{"auth": "Authorization: Bearer ringTok"}})
 	lines := r.Lines(m)

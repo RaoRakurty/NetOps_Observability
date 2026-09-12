@@ -91,6 +91,13 @@ type Filter struct {
 	until   time.Time
 	pending stopper
 	sink    Sink
+	// gen identifies the CURRENT arm. Stop() reports false for a timer that has
+	// already fired, and that callback is then waiting on mu for whoever is
+	// replacing it: without a generation to check, it disarmed the window that
+	// replaced it while the API had already answered "armed" (review 3.5-16).
+	// Every state change bumps it, so a callback from an older generation is a
+	// no-op rather than a silent disarm.
+	gen uint64
 
 	now       func() time.Time
 	afterFunc func(time.Duration, func()) stopper
@@ -137,16 +144,38 @@ func (f *Filter) Arm(needle string, window time.Duration) (time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cancelPendingLocked()
+	f.gen++
+	gen := f.gen
 	f.needle = needle
 	f.until = f.now().Add(w)
-	f.pending = f.afterFunc(w, f.Disarm)
+	f.pending = f.afterFunc(w, func() { f.expire(gen) })
 	return f.until, nil
+}
+
+// expire is an armed window's own auto-disarm. It disarms ONLY the arm that
+// scheduled it: a timer that had already fired when Arm called Stop() arrives
+// here holding an older generation, and must leave the live window alone.
+func (f *Filter) expire(gen uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.gen != gen {
+		return
+	}
+	f.disarmLocked()
 }
 
 // Disarm turns the filter off immediately and cancels any pending timer.
 func (f *Filter) Disarm() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// Bump the generation here too: an explicit Disarm is a state change, and a
+	// timer already past Stop() must not be able to act on the arm that comes
+	// after it either.
+	f.gen++
+	f.disarmLocked()
+}
+
+func (f *Filter) disarmLocked() {
 	f.cancelPendingLocked()
 	f.needle = ""
 	f.until = time.Time{}

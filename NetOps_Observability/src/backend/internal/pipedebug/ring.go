@@ -48,12 +48,88 @@ type Ring struct {
 	mu    sync.Mutex
 	order []ringEntry // insertion order, oldest first — the global bound
 	byMk  map[string][]RingLine
+	// admitted is the set of markers THIS PROCESS minted, oldest first.
+	//
+	// WHY ADMISSION EXISTS (review 3.3-13). A record is traced unconditionally
+	// when it carries a `cx_debug=<ulid>` token, and that stays true: requiring
+	// an arm first would make a trace's parser stage depend on a second call
+	// and produce an empty parser.log that reads as "the parser never saw it".
+	// But the records reaching the parse hook include UNAUTHENTICATED ones — a
+	// trap whose community does not match only loses device attribution, it is
+	// still parsed — so the marker on a record is attacker-supplied. Without
+	// admission, anyone who could reach a collector port could mint markers and
+	// push an operator's in-flight trace out of a ring bounded at
+	// RingCapacity, during the incident the trace was opened for. Tracing is
+	// unchanged; what a stranger can no longer do is spend the memory a trace
+	// depends on.
+	admitted   map[string]struct{}
+	admitOrder []string
+	rejected   uint64
 }
 
 type ringEntry struct{ marker string }
 
 // NewRing builds an empty ring.
-func NewRing() *Ring { return &Ring{byMk: map[string][]RingLine{}} }
+func NewRing() *Ring {
+	return &Ring{byMk: map[string][]RingLine{}, admitted: map[string]struct{}{}}
+}
+
+// Admit records a marker this process minted, so lines carrying it are kept.
+//
+// Bounded like everything else here (§9): past ringMaxMarkers the OLDEST
+// admission ages out, which is the same eviction order the line store uses.
+func (r *Ring) Admit(marker string) {
+	if r == nil {
+		return
+	}
+	m, err := NormalizeMarker(marker)
+	if err != nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.admitted == nil {
+		r.admitted = map[string]struct{}{}
+	}
+	if _, dup := r.admitted[m]; dup {
+		return
+	}
+	r.admitted[m] = struct{}{}
+	r.admitOrder = append(r.admitOrder, m)
+	for len(r.admitOrder) > ringMaxMarkers {
+		delete(r.admitted, r.admitOrder[0])
+		r.admitOrder = r.admitOrder[1:]
+	}
+}
+
+// Admitted reports whether a marker was minted here. Callers outside the ring
+// use it to decide whether a marker-carrying record is trace evidence at all —
+// see the parse sink in package backend.
+func (r *Ring) Admitted(marker string) bool {
+	if r == nil {
+		return false
+	}
+	m, err := NormalizeMarker(marker)
+	if err != nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.admitted[m]
+	return ok
+}
+
+// Rejected counts lines refused because their marker was never minted here. A
+// non-zero value means something on the wire is carrying trace markers (§10: a
+// refusal nobody can see is a silent failure).
+func (r *Ring) Rejected() uint64 {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.rejected
+}
 
 // MarkerIn extracts a marker from a log event: an explicit `marker` field wins,
 // otherwise the `cx_debug=<ulid>` token is looked for in the message and in any
@@ -119,6 +195,12 @@ func (r *Ring) Append(marker string, ln RingLine) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if _, ok := r.admitted[m]; !ok {
+		// Not a marker this process minted: the line came from a record
+		// somebody else marked. Counted, never retained.
+		r.rejected++
+		return
+	}
 	if _, known := r.byMk[m]; !known && len(r.byMk) >= ringMaxMarkers {
 		r.evictOldestMarkerLocked()
 	}

@@ -161,6 +161,80 @@ func TestRearmCancelsThePreviousTimer(t *testing.T) {
 	}
 }
 
+// A TIMER THAT HAS ALREADY FIRED MUST NOT DISARM THE ARM THAT REPLACED IT
+// (review 3.5-16).
+//
+// time.Timer.Stop() reports FALSE when the timer already fired, and that
+// callback is then sitting on f.mu waiting for the Arm that is replacing it to
+// let go. cancelPendingLocked discarded Stop()'s answer, so the stale callback
+// ran f.Disarm on the NEW window: the API had already told the operator the
+// filter was armed, and it was not. The trace then records nothing and there is
+// no error anywhere to explain it.
+//
+// lateStopper is exactly that condition, deterministically: Stop() says "too
+// late", and the test releases the stale callback afterwards the way the
+// scheduler would.
+type lateStopper struct{}
+
+func (lateStopper) Stop() bool { return false }
+
+func TestAnAlreadyFiredTimerDoesNotDisarmTheArmThatReplacedIt(t *testing.T) {
+	f := New(nil)
+	var callbacks []func()
+	f.afterFunc = func(_ time.Duration, fn func()) stopper {
+		callbacks = append(callbacks, fn)
+		return lateStopper{}
+	}
+	if _, err := f.Arm("first", time.Minute); err != nil {
+		t.Fatalf("Arm: %v", err)
+	}
+	if _, err := f.Arm("second", time.Minute); err != nil {
+		t.Fatalf("re-Arm: %v", err)
+	}
+	if len(callbacks) != 2 {
+		t.Fatalf("expected one timer per arm, got %d", len(callbacks))
+	}
+
+	callbacks[0]() // the first window's expiry, landing after the re-arm
+
+	needle, _, on := f.Active()
+	if !on || needle != "second" {
+		t.Fatalf("the previous window's timer disarmed the arm that replaced it "+
+			"(needle=%q on=%v) — the API reported this filter armed", needle, on)
+	}
+	if _, ok := f.Match("a line containing second"); !ok {
+		t.Fatal("the filter that Active() reports armed does not match")
+	}
+
+	// The CURRENT window's timer still disarms, or the window would never end.
+	callbacks[1]()
+	if _, _, on := f.Active(); on {
+		t.Fatal("the live window's timer no longer disarms")
+	}
+}
+
+// An explicit Disarm must also invalidate a timer that is already past Stop():
+// otherwise the stale callback is harmless only by luck of what ran next.
+func TestAnAlreadyFiredTimerCannotUndoADisarmAndRearm(t *testing.T) {
+	f := New(nil)
+	var callbacks []func()
+	f.afterFunc = func(_ time.Duration, fn func()) stopper {
+		callbacks = append(callbacks, fn)
+		return lateStopper{}
+	}
+	if _, err := f.Arm("first", time.Minute); err != nil {
+		t.Fatalf("Arm: %v", err)
+	}
+	f.Disarm()
+	if _, err := f.Arm("second", time.Minute); err != nil {
+		t.Fatalf("re-Arm: %v", err)
+	}
+	callbacks[0]() // the first window's expiry, two state changes late
+	if needle, _, on := f.Active(); !on || needle != "second" {
+		t.Fatalf("a stale timer disarmed a filter armed after an explicit Disarm (needle=%q on=%v)", needle, on)
+	}
+}
+
 func TestArmRejectsEmptyAndOverlongNeedles(t *testing.T) {
 	f := New(nil)
 	if _, err := f.Arm("   ", time.Minute); err == nil {
