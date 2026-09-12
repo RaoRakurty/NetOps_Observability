@@ -41,6 +41,7 @@ import (
 	"testing"
 	"time"
 
+	"netops/backend/alerts"
 	"netops/backend/reports"
 )
 
@@ -331,6 +332,13 @@ func (f *rxFixture) artifact(token, id, format, asTenant string) (int, []byte) {
 	return do(f.t, f.srv, "GET", withAsTenant(path, asTenant), token, nil)
 }
 
+// runNow drives POST /api/reports/run — the "Send now" trigger. Its synchronous
+// (file-backend) branch answers with the run it just produced, Detail and all.
+func (f *rxFixture) runNow(token, id, asTenant string) (int, []byte) {
+	f.t.Helper()
+	return do(f.t, f.srv, "POST", withAsTenant("/api/reports/run", asTenant), token, map[string]any{"id": id})
+}
+
 func (f *rxFixture) execByID(token, id, asTenant string) (int, []byte) {
 	f.t.Helper()
 	return do(f.t, f.srv, "GET", withAsTenant("/api/reports/executions/"+id, asTenant), token, nil)
@@ -434,6 +442,15 @@ func TestReportExecutionsHonourTheOperatorVisibilityRestriction(t *testing.T) {
 		}
 	}
 
+	// "Send now" on a restricted tenant's report is refused the same way. The
+	// async branch answers "queued", but the file-backend branch below answers
+	// with the run it produced — Detail and all — so both are gated.
+	for _, asTenant := range []string{"", f.b.tenantID} {
+		if st, body := f.runNow(f.adm, f.bSched, asTenant); st != http.StatusNotFound {
+			t.Errorf("owner POST /api/reports/run on tenant B's report (as_tenant=%q) = %d, want 404: %s", asTenant, st, body)
+		}
+	}
+
 	// ── half 2: ?as_tenant into the restricted tenant reads nothing. Not even
 	//    the platform's own execution — a scope that may read none of a tenant
 	//    is not served the rest of the platform under that tenant's name. ──
@@ -496,13 +513,17 @@ func TestReportRunsFileBackendHonoursTheOperatorVisibilityRestriction(t *testing
 	// File backend: no async pipeline, the scheduler's own map instead.
 	f.s.reportPipeline = nil
 	f.s.reports = &reportScheduler{
-		srv: f.s, saved: f.s.saved,
+		srv: f.s, saved: f.s.saved, discovery: f.s.discovery, alerts: alerts.NewEngine("", nil),
 		runs: map[string]reportRun{
 			f.aSched:   {Status: "ok", Detail: rxASummary, LastRun: time.Date(2026, 9, 12, 6, 0, 0, 0, time.UTC)},
 			f.bSched:   {Status: "ok", Detail: rxBSummary, LastRun: time.Date(2026, 9, 12, 6, 0, 0, 0, time.UTC)},
 			"orphaned": {Status: "error", Detail: "the report was deleted"},
 		},
 	}
+	// The seam the synchronous branch renders through, wired the way the live
+	// scheduler wires it — without it "Send now" cannot be exercised at all and
+	// the 404s below would prove nothing.
+	f.s.reports.ds = f.s.reports.dataSource()
 
 	base, baseRaw := f.runs(f.adm, "")
 	if base[f.bSched].Detail != rxBSummary {
@@ -531,6 +552,18 @@ func TestReportRunsFileBackendHonoursTheOperatorVisibilityRestriction(t *testing
 	}
 	if into, raw := f.runs(f.adm, f.b.tenantID); len(into) != 0 {
 		t.Errorf("RESTRICTION LEAK: owner→tenantB file-backend runs returned %d entries: %s", len(into), raw)
+	}
+	// "Send now" answers with the run it just produced on this branch — the same
+	// Detail the list stopped serving — so it is refused, 404 not 403.
+	for _, asTenant := range []string{"", f.b.tenantID} {
+		if st, body := f.runNow(f.adm, f.bSched, asTenant); st != http.StatusNotFound {
+			t.Errorf("RESTRICTION LEAK: owner \"Send now\" on tenant B's report (as_tenant=%q) = %d, want 404: %s",
+				asTenant, st, body)
+		}
+	}
+	// Tenant A's report is still triggerable by the owner.
+	if st, body := f.runNow(f.adm, f.aSched, ""); st != http.StatusOK && st != http.StatusAccepted {
+		t.Errorf("restricting tenant B broke the owner's Send-now on tenant A's report: %d %s", st, body)
 	}
 	// The restricted tenant's own view is untouched, and still excludes the
 	// platform's orphan (it never saw it).

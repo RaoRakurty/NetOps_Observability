@@ -78,6 +78,9 @@ applies to the platform operator, and is a no-op when no tenant is restricted.
     file backend; `run.Detail` is the rendered summary in both.
   - `GET /api/exports/{id}`, which carries an export's size and a signed
     download link for the stored rows.
+  - `POST /api/reports/run` ("Send now") — the synchronous (file-backend) branch
+    answers with the run it just produced, `Detail` and all, so a report platform
+    staff may not read is not one they may fire on demand either (**404**).
 
   **Deliberately NOT restricted on this path**: the scheduler's own
   de-duplication probe (`anchorFor`), which must see a restricted tenant's last

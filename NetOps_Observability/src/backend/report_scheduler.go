@@ -93,7 +93,13 @@ func (s *server) handleReportRunNow(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	tenant, cross := principalTenant(claims)
+	// The RESOLVED rule, not a bare (tenant, cross) pair: the synchronous branch
+	// answers with the run it just produced, and a reportRun carries Detail —
+	// the rendered summary of that tenant's report, the same string
+	// /api/reports/runs stopped serving. A report platform staff may not read is
+	// not one they may fire on demand either.
+	v := s.tenantVisibilityFor(claims)
+	tenant, cross := v.tenant, v.cross
 	var req struct {
 		ID       string   `json:"id"`
 		Channels []string `json:"channels,omitempty"`
@@ -123,7 +129,9 @@ func (s *server) handleReportRunNow(w http.ResponseWriter, r *http.Request) {
 		// another tenant's report and have it exfiltrated to that tenant's channels
 		// (or, with link-delivery, obtain the capability URL). 404 (not 403) so the
 		// id's existence in another tenant isn't revealed.
-		if !ok || o.Type != "report" || !canSeeSaved(o, tenant, cross) {
+		// The restriction is asked FIRST: canSeeSaved answers true for everything
+		// on the cross-tenant path. 404, never 403.
+		if !ok || o.Type != "report" || v.hides(savedTenant(o)) || !canSeeSaved(o, tenant, cross) {
 			writeError(w, http.StatusNotFound, errors.New("report not found"))
 			return
 		}
@@ -143,7 +151,7 @@ func (s *server) handleReportRunNow(w http.ResponseWriter, r *http.Request) {
 
 	// Synchronous fallback (file backend). Same tenant-ownership gate as the async
 	// path (SR-002) before running/delivering the report.
-	if o, ok := s.saved.Get(id); !ok || o.Type != "report" || !canSeeSaved(o, tenant, cross) {
+	if o, ok := s.saved.Get(id); !ok || o.Type != "report" || v.hides(savedTenant(o)) || !canSeeSaved(o, tenant, cross) {
 		writeError(w, http.StatusNotFound, errors.New("report not found"))
 		return
 	}
