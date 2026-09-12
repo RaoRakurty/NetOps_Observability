@@ -155,15 +155,15 @@ func TestVerifyCaseLookupFailureIsNotAMissingCase(t *testing.T) {
 	id := "0192f1a2-3b4c-7d5e-8f60-112233445566"
 
 	answeringCH(t, []map[string]any{{"tenant_id": "t-1", "state": "open", "verdict": "suspected"}})
-	if _, found := s.verifyCaseLookup(context.Background(), "t-1", id); !found {
+	if _, found := s.verifyCaseLookup(context.Background(), "t-1", "", id); !found {
 		t.Fatal("a case the projection returns must be found")
 	}
 	answeringCH(t, []map[string]any{})
-	if _, found := s.verifyCaseLookup(context.Background(), "t-1", id); found {
+	if _, found := s.verifyCaseLookup(context.Background(), "t-1", "", id); found {
 		t.Fatal("an empty answer means the case does not exist in this scope")
 	}
 	failingCH(t)
-	if _, found := s.verifyCaseLookup(context.Background(), "t-1", id); found {
+	if _, found := s.verifyCaseLookup(context.Background(), "t-1", "", id); found {
 		t.Fatal("a failed read must not fabricate a case")
 	}
 }

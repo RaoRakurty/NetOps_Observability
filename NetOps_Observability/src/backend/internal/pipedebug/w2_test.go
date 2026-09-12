@@ -47,7 +47,7 @@ func TestFlowTraceInjectsANetFlowV5Packet(t *testing.T) {
 // The flow stage evidence is ClickHouse, and the tenant scope is injected.
 func TestFlowClickHouseStageIsScopedAndExact(t *testing.T) {
 	f := newFakeBackend()
-	f.principal = Principal{Subject: "op", Tenant: "t_own"}
+	f.principal = Principal{Subject: "op", Tenant: "t_own", CHScope: "t_own"}
 	f.chRows = []map[string]any{{"ts": "2026-09-04 11:05:07.100", "src_addr": "192.0.2.9"}}
 	api := New(f.deps())
 	e := stageOf(t, api, "/api/debug/stage/clickhouse?marker="+testMarker+"&kind=flow")

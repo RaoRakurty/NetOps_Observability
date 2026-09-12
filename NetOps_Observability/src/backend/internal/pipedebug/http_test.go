@@ -72,7 +72,7 @@ type fakeBackend struct {
 
 func newFakeBackend() *fakeBackend {
 	return &fakeBackend{
-		principal: Principal{Subject: "owner", Cross: true},
+		principal: Principal{Subject: "owner", Cross: true, CHScope: "__all__"},
 		authOK:    true,
 		osStatus:  200,
 		osBody:    `{"hits":{"total":{"value":0},"hits":[]}}`,
@@ -152,12 +152,6 @@ func (f *fakeBackend) deps() Deps {
 			defer f.mu.Unlock()
 			f.chSeen = append(f.chSeen, scope+"|"+sql)
 			return f.chRows, f.chErr
-		},
-		CHScopeFor: func(p Principal) string {
-			if p.Cross {
-				return "__all__"
-			}
-			return p.Tenant
 		},
 		KafkaPeek: func(context.Context, PeekRequest) (PeekResult, error) {
 			f.mu.Lock()

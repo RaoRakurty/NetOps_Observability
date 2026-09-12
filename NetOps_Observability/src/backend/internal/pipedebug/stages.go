@@ -379,8 +379,12 @@ func (a *API) ClickHouseStage(ctx context.Context, p Principal, kind Kind, marke
 		return notObservable(e, fmt.Sprintf(
 			"a %s record has no ClickHouse raw row (ClickHouse holds flows and correlation output; the correlation stage covers the latter)", kind))
 	}
-	if a.deps.CHSelect == nil || a.deps.CHScopeFor == nil {
+	if a.deps.CHSelect == nil {
 		return notObservable(e, "no ClickHouse client is wired into this API build")
+	}
+	if p.CHScope == "" {
+		// Fail CLOSED: an unscoped read would be a cross-tenant one.
+		return notObservable(e, "no ClickHouse tenant scope was derived for this caller")
 	}
 	// The predicate is built from the marker's derived fingerprint (flow.go):
 	// one address string from a fixed RFC 5737 prefix and five integers, none
@@ -391,7 +395,7 @@ func (a *API) ClickHouseStage(ctx context.Context, p Principal, kind Kind, marke
 			"FROM %s WHERE %s AND ts >= now() - INTERVAL 30 MINUTE ORDER BY ts ASC LIMIT 5 FORMAT JSON",
 		table, FlowMarkerCH(marker))
 	e.Query = sql
-	rows, err := a.deps.CHSelect(ctx, a.deps.CHScopeFor(p), sql, "api:/api/debug/stage/clickhouse")
+	rows, err := a.deps.CHSelect(ctx, p.CHScope, sql, "api:/api/debug/stage/clickhouse")
 	if err != nil {
 		return notObservable(e, "ClickHouse query failed: "+err.Error())
 	}
@@ -440,8 +444,12 @@ func (a *API) CorrelationStage(ctx context.Context, p Principal, kind Kind, mark
 		return notObservable(e, fmt.Sprintf(
 			"a %s record carries no free-text field, so no corr_evidence note can cite the marker. The %s lane reaches correlation as derived SIGNALS, not as a per-record citation — grounding for this kind is proved by the signal counters in the engine's health snapshot, not by a marker lookup", kind, kind))
 	}
-	if a.deps.CHSelect == nil || a.deps.CHScopeFor == nil {
+	if a.deps.CHSelect == nil {
 		return notObservable(e, "no ClickHouse client is wired into this API build")
+	}
+	if p.CHScope == "" {
+		// Fail CLOSED: an unscoped read would be a cross-tenant one.
+		return notObservable(e, "no ClickHouse tenant scope was derived for this caller")
 	}
 	sql := fmt.Sprintf(
 		"SELECT tenant_id, toString(correlation_id) AS correlation_id, subject_kind, subject_id, role, note, created_at "+
@@ -449,7 +457,7 @@ func (a *API) CorrelationStage(ctx context.Context, p Principal, kind Kind, mark
 			"AND created_at >= now() - INTERVAL 30 MINUTE LIMIT 5 FORMAT JSON",
 		MarkerTag(marker))
 	e.Query = sql
-	rows, err := a.deps.CHSelect(ctx, a.deps.CHScopeFor(p), sql, "api:/api/debug/stage/correlation")
+	rows, err := a.deps.CHSelect(ctx, p.CHScope, sql, "api:/api/debug/stage/correlation")
 	if err != nil {
 		return notObservable(e, "corr_evidence query failed: "+err.Error())
 	}
