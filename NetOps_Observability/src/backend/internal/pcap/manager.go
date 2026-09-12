@@ -330,12 +330,23 @@ func (m *Manager) Start(ctx context.Context, p Principal, dev Device, req StartR
 	}
 
 	owner := NormTenant(dev.TenantID)
-	// Durable half of the one-at-a-time gate.
-	if running, found, aerr := m.deps.Store.ActiveFor(ctx, p.Tenant, p.Cross, dev.ID); aerr == nil && found {
-		if running.ExpiresAt.After(m.deps.Now()) {
-			m.deps.Metrics.RecordRun(OutcomeInFlight)
-			return Capture{}, ErrInFlight
-		}
+	// Durable half of the one-at-a-time gate. It is DEFAULT-CLOSED: a store read
+	// that fails does not get to quietly disable the gate (§3 zero trust, §10 no
+	// silent failures). A capture is a privileged, payload-revealing action on a
+	// production device, and the failure mode of an unanswered ActiveFor is a
+	// SECOND capture point on an interface that already has one — the design's
+	// top operational risk. The write that follows would have failed anyway, so
+	// refusing here costs nothing and refuses honestly.
+	running, found, aerr := m.deps.Store.ActiveFor(ctx, p.Tenant, p.Cross, dev.ID)
+	if aerr != nil {
+		m.deps.LogError("packet capture in-flight check failed", map[string]any{
+			"device": dev.ID, "error": m.deps.Scrub(aerr.Error())})
+		m.deps.Metrics.RecordRun(OutcomeFailed)
+		return Capture{}, fmt.Errorf("%w: %w", ErrStore, aerr)
+	}
+	if found && running.ExpiresAt.After(m.deps.Now()) {
+		m.deps.Metrics.RecordRun(OutcomeInFlight)
+		return Capture{}, ErrInFlight
 	}
 	id, err := mintID()
 	if err != nil {
@@ -359,8 +370,12 @@ func (m *Manager) Start(ctx context.Context, p Principal, dev Device, req StartR
 	}
 	if err := m.deps.Store.Put(ctx, p.Tenant, p.Cross, rec); err != nil {
 		m.release(dev.ID)
+		m.deps.LogError("packet capture row could not be recorded", map[string]any{
+			"device": dev.ID, "capture": rec.ID, "error": m.deps.Scrub(err.Error())})
 		m.deps.Metrics.RecordRun(OutcomeFailed)
-		return Capture{}, err
+		// An infrastructure failure, not a guardrail breach: the sentinel is what
+		// keeps the driver's own message off the wire (see ErrStore).
+		return Capture{}, fmt.Errorf("%w: %w", ErrStore, err)
 	}
 	m.deps.Metrics.SetActive(1)
 

@@ -65,6 +65,14 @@ func ValidateFilter(raw string) (string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return "", nil
 	}
+	// The cheap first cut: stop an enormous string before it is tokenized. It is
+	// NOT the bound that matters — that one is re-applied to the CANONICAL
+	// rendering at the end of this function, because the canonical form is what
+	// every caller stores, re-validates and interpolates, and it is LONGER than
+	// the input (each parenthesis becomes its own space-separated token).
+	// Bounding only the input made this validator non-idempotent: a filter
+	// accepted here could be refused by the identical check in prepareRequest,
+	// deep inside the run body, quoting a length the operator never typed.
 	if len(raw) > MaxFilterLen {
 		return "", fmt.Errorf("capture filter is longer than %d characters", MaxFilterLen)
 	}
@@ -93,7 +101,17 @@ func ValidateFilter(raw string) (string, error) {
 	if err := parseFilter(toks); err != nil {
 		return "", err
 	}
-	return strings.Join(toks, " "), nil
+	canon := strings.Join(toks, " ")
+	// The canonical rendering is the string that is stored, re-validated and
+	// interpolated, so IT is what MaxFilterLen has to bound. Checking it here
+	// makes ValidateFilter idempotent — ValidateFilter(ValidateFilter(x)) is
+	// stable — which is the property prepareRequest's defence-in-depth re-check
+	// silently depended on.
+	if len(canon) > MaxFilterLen {
+		return "", fmt.Errorf("capture filter is %d characters once normalised, longer than the %d-character "+
+			"limit (each parenthesis becomes its own term) — shorten it", len(canon), MaxFilterLen)
+	}
+	return canon, nil
 }
 
 // tokenizeFilter splits on whitespace and makes parentheses their own tokens.

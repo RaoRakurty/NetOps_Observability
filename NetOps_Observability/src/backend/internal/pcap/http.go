@@ -176,6 +176,16 @@ func (a *API) handleStart(w http.ResponseWriter, r *http.Request, deviceID strin
 	case errors.Is(err, ErrNoPlatform), errors.Is(err, ErrFilterUnsupported), errors.Is(err, ErrNoAddress):
 		a.m.deps.WriteError(w, http.StatusBadRequest, err)
 		return
+	case errors.Is(err, ErrStore):
+		// An INFRASTRUCTURE failure, not the operator's mistake. The cause is
+		// logged scrubbed and the caller gets a generic 500 — the same shape
+		// handleList uses — because the wrapped cause is a driver string
+		// (SQLSTATE, server file path, column names) and none of that is a
+		// response field (§8).
+		a.m.deps.LogError("packet capture could not be started", map[string]any{
+			"device": dev.ID, "error": a.m.deps.Scrub(err.Error())})
+		a.m.deps.WriteError(w, http.StatusInternalServerError, errors.New("packet captures are unavailable"))
+		return
 	case err != nil:
 		// Every remaining refusal is a GUARDRAIL breach with a reason the
 		// operator can act on, so it is a 400 carrying that reason verbatim.
