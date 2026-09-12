@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"netops/backend/internal/caplink"
+	"netops/backend/reports"
 )
 
 // report_links.go — secure-link delivery (delivery_mode="link"). Instead of
@@ -132,7 +133,11 @@ func (s *server) handleReportView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The token authorizes this specific execution; load it at platform scope.
-	rec, _, found, err := s.reportPipeline.execs.Get(r.Context(), "", true, execID)
+	// Platform scope is right even under the operator-visibility restriction:
+	// the recipient of a report link is the TENANT, and the restriction hides a
+	// tenant from the platform, never from itself. The token's tenant binding
+	// below is what keeps it from being replayed against another tenant.
+	rec, _, found, err := s.reportPipeline.execs.Get(r.Context(), reports.PlatformExecScope(), execID)
 	if err != nil || !found {
 		writeError(w, http.StatusNotFound, errors.New("report not found"))
 		return

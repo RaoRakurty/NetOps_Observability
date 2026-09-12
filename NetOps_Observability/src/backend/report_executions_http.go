@@ -19,6 +19,24 @@ import (
 // executions; the platform owner sees all). Returns 409 on the file backend,
 // where durable execution history does not exist (honest, not fabricated).
 
+// execScope resolves WHO is reading the execution history, ONCE per request: the
+// ordinary tenant scope PLUS the per-tenant operator-visibility restriction
+// (Tenant.OperatorRestricted), both taken from the shared tenantVisibility
+// chokepoint rather than re-derived here.
+//
+// The restriction has to reach the STORE rather than stop at this handler. An
+// execution row carries the rendered SUMMARY of one report fire and the key of
+// the stored artifact, and the /artifact branch below STREAMS that artifact —
+// the complete HTML/XLSX/PDF document, rendered under the owning tenant's own
+// scope, so the tenant's whole report, not a summary of it. The list's LIMIT is
+// applied inside the store, so a filter here would hand back a short page whose
+// missing rows are themselves the disclosure. tenant_id is the right key: an
+// execution row names its owning tenant.
+func (s *server) execScope(c jwtClaims) reports.ExecScope {
+	v := s.tenantVisibilityFor(c)
+	return reports.ExecScope{Tenant: v.tenant, Cross: v.cross, Deny: v.deny, Hidden: v.hiddenTenantIDs()}
+}
+
 func (s *server) handleReportExecutions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
@@ -46,7 +64,6 @@ func (s *server) handleReportExecutions(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	tenant, cross := principalTenant(claims)
 	// Scope to report executions only — log exports share the table (kind='export').
 	q := reports.ExecQuery{Kind: "report", ScheduleID: r.URL.Query().Get("schedule_id"), Limit: limit}
 	if b := r.URL.Query().Get("before"); b != "" {
@@ -57,7 +74,7 @@ func (s *server) handleReportExecutions(w http.ResponseWriter, r *http.Request) 
 		}
 		q.Before = t
 	}
-	list, err := s.reportPipeline.execs.List(r.Context(), tenant, cross, q)
+	list, err := s.reportPipeline.execs.List(r.Context(), s.execScope(claims), q)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -82,19 +99,20 @@ func (s *server) handleReportExecutionByID(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusConflict, errors.New("execution history requires the Postgres backend (STORE_BACKEND=postgres)"))
 		return
 	}
-	tenant, cross := principalTenant(claims)
 	rest := strings.TrimPrefix(r.URL.Path, "/api/reports/executions/")
 	id, sub, _ := strings.Cut(rest, "/")
 	if id == "" {
 		writeError(w, http.StatusBadRequest, errors.New("execution id required"))
 		return
 	}
-	rec, events, found, err := s.reportPipeline.execs.Get(r.Context(), tenant, cross, id)
+	rec, events, found, err := s.reportPipeline.execs.Get(r.Context(), s.execScope(claims), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	if !found {
+		// 404, never 403: a row hidden by tenancy or by the operator-visibility
+		// restriction must be indistinguishable from one that does not exist.
 		writeError(w, http.StatusNotFound, errors.New("execution not found"))
 		return
 	}

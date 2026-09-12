@@ -43,23 +43,39 @@ func (s *server) handleReportRuns(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	tenant, cross := principalTenant(claims)
 	// Under the async backend, derive last/next/status from the execution history
 	// (scoped to the caller's tenant); the file backend uses the in-memory map.
+	// BOTH backends resolve the operator-visibility restriction, because both
+	// surface run.Detail — the rendered summary of that tenant's report.
 	if s.reportPipeline != nil {
-		writeJSON(w, http.StatusOK, s.reportPipeline.runsFromExecutions(r.Context(), tenant, cross))
+		writeJSON(w, http.StatusOK, s.reportPipeline.runsFromExecutions(r.Context(), s.execScope(claims)))
 		return
 	}
 	// File backend: keep only runs whose owning saved report the caller may
 	// see (mirrors the PG branch). A run for a deleted report has no owner to
 	// authorize against, so a scoped caller doesn't get it either
 	// (default-closed; gc reaps those entries anyway).
+	v := s.tenantVisibilityFor(claims)
 	runs := s.reports.Runs()
-	if !cross {
-		for id := range runs {
-			if o, ok := s.saved.Get(id); !ok || !canSeeSaved(o, tenant, cross) {
-				delete(runs, id)
+	if v.deny {
+		// The operator scoped INTO a restricted tenant: no run of that tenant,
+		// and nothing else under its name either.
+		writeJSON(w, http.StatusOK, map[string]reportRun{})
+		return
+	}
+	for id := range runs {
+		o, ok := s.saved.Get(id)
+		if !ok {
+			if !v.cross {
+				delete(runs, id) // orphaned run: platform-owned, cross-tenant only
 			}
+			continue
+		}
+		// canSeeSaved answers TENANCY only, and it answers true for everything
+		// on the cross-tenant path — so the restriction is asked FIRST, exactly
+		// as it is for devices, sites, alerts and episodes.
+		if v.hides(savedTenant(o)) || !canSeeSaved(o, v.tenant, v.cross) {
+			delete(runs, id)
 		}
 	}
 	writeJSON(w, http.StatusOK, runs)

@@ -44,7 +44,12 @@ import (
 // /api/reports/preview (2026-09-12) — report_preview_restriction_test.go drives
 // the route for the platform operator's Global view, an ?as_tenant walk into a
 // restricted and an unrestricted tenant, and the tenant's own admin, in both
-// output formats. The baseline only ever shrinks.
+// output formats. /api/reports/executions and /api/reports/executions/
+// (2026-09-12) — report_executions_restriction_test.go drives the list, the
+// by-id row and the ARTIFACT STREAM across the tenant boundary and the
+// operator-visibility restriction, asserting on the bytes actually written (the
+// xlsx unzipped, since a DEFLATEd sheet hides a leak from a byte search). The
+// baseline only ever shrinks.
 var isolationCoverageBaseline = map[string]string{
 	"/api/ai/modules":                         "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/appid/fusion/status":                "store/RLS-scoped; dedicated HTTP isolation test is backlog",
@@ -76,8 +81,6 @@ var isolationCoverageBaseline = map[string]string{
 	"/api/regions/topology":                   "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/reliability/chronic-offenders":      "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/reliability/trends":                 "store/RLS-scoped; dedicated HTTP isolation test is backlog",
-	"/api/reports/executions":                 "store/RLS-scoped; dedicated HTTP isolation test is backlog",
-	"/api/reports/executions/":                "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/seams":                              "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/seams/":                             "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/seams/groups":                       "store/RLS-scoped; dedicated HTTP isolation test is backlog",

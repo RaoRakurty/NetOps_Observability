@@ -133,17 +133,31 @@ func (s *PGExecStore) RecordEvent(ctx context.Context, tenant, execID string, ph
 	})
 }
 
-func (s *PGExecStore) Get(ctx context.Context, tenant string, cross bool, id string) (ExecutionRecord, []ExecEvent, bool, error) {
+// Get reads one execution and its phase timeline through the caller's resolved
+// scope. A scope that may not see the row answers found=false — the artifact
+// route and the by-id route both turn that into a 404, so a restricted tenant's
+// execution id is never confirmed to platform staff by a 403.
+func (s *PGExecStore) Get(ctx context.Context, sc ExecScope, id string) (ExecutionRecord, []ExecEvent, bool, error) {
+	if sc.Deny {
+		return ExecutionRecord{}, nil, false, nil // scoped INTO a restricted tenant: nothing exists here
+	}
 	var rec ExecutionRecord
 	var events []ExecEvent
 	found := false
-	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, sc.Tenant, sc.Cross, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, selectExecCols+` FROM report_executions WHERE id=$1`, id)
 		r, ok, err := scanExec(row)
 		if err != nil {
 			return err
 		}
 		if !ok {
+			return nil
+		}
+		// The restriction's Global half: RLS answers tenancy, and '*' means all,
+		// so the exclusion is applied here. A single row needs no count, so the
+		// row form of the rule is the exact one — and the timeline below is not
+		// even read for a row the caller may not see.
+		if !sc.Sees(r) {
 			return nil
 		}
 		found = true
@@ -173,10 +187,22 @@ func (s *PGExecStore) Get(ctx context.Context, tenant string, cross bool, id str
 	return rec, events, found, nil
 }
 
-func (s *PGExecStore) List(ctx context.Context, tenant string, cross bool, q ExecQuery) ([]ExecutionRecord, error) {
+// List returns the page of executions the scope may read, newest first. The
+// restriction is a WHERE clause rather than a filter over the result, because
+// the LIMIT is applied in this same statement: excluding after the fact would
+// spend page slots on rows the caller is not shown, and the missing slots are
+// themselves the disclosure the restriction exists to prevent.
+func (s *PGExecStore) List(ctx context.Context, sc ExecScope, q ExecQuery) ([]ExecutionRecord, error) {
+	if sc.Deny {
+		return nil, nil // scoped INTO a restricted tenant: no query, no rows
+	}
 	sql := selectExecCols + ` FROM report_executions`
 	var args []any
 	var conds []string
+	if hidden := sc.hiddenLower(); len(hidden) > 0 {
+		args = append(args, hidden)
+		conds = append(conds, fmt.Sprintf("lower(tenant_id) <> ALL($%d)", len(args)))
+	}
 	if q.Kind != "" {
 		args = append(args, q.Kind)
 		conds = append(conds, fmt.Sprintf("kind = $%d", len(args)))
@@ -196,7 +222,7 @@ func (s *PGExecStore) List(ctx context.Context, tenant string, cross bool, q Exe
 	sql += fmt.Sprintf(" ORDER BY fire_time DESC, id DESC LIMIT $%d", len(args))
 
 	var out []ExecutionRecord
-	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, sc.Tenant, sc.Cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, sql, args...)
 		if err != nil {
 			return err
