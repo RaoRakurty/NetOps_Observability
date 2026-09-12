@@ -272,3 +272,171 @@ func TestSSHGatewayRefusesDeviceWithoutAddress(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNoAddress", err)
 	}
 }
+
+// ── the bounded retry (§9), and what it must never retry ────────────────────
+
+// countingDial wraps the real dialer, failing the first failures attempts and
+// counting every call.
+type countingDial struct {
+	mu       sync.Mutex
+	calls    int
+	failures int
+}
+
+func (c *countingDial) dial(ctx context.Context, network, addr string) (net.Conn, error) {
+	c.mu.Lock()
+	c.calls++
+	fail := c.calls <= c.failures
+	c.mu.Unlock()
+	if fail {
+		return nil, errors.New("connect: connection reset by peer")
+	}
+	d := &net.Dialer{Timeout: 5 * time.Second}
+	return d.DialContext(ctx, network, addr)
+}
+
+func (c *countingDial) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
+// TestSSHGatewayRetriesATransientDial: a reset that costs the whole capture
+// interval was the defect. Two failures then a success must still capture.
+func TestSSHGatewayRetriesATransientDial(t *testing.T) {
+	srv := newTestSSHServer(t, "pw", sampleConfig("edge-01"))
+	gw := newGatewayFor(srv, func(string, string) (bool, bool) { return true, true })
+	gw.retryBackoff = 5 * time.Millisecond
+	cd := &countingDial{failures: 2}
+	gw.Dial = cd.dial
+
+	out, err := gw.Run(context.Background(), deviceFor(srv), "show running-config", MaxCaptureBytes)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(out, "hostname edge-01") {
+		t.Fatalf("unexpected capture: %q", out)
+	}
+	if got := cd.count(); got != 3 {
+		t.Errorf("dialed %d times, want 3 (two resets then the capture)", got)
+	}
+}
+
+// TestSSHGatewayStopsRetryingAtTheAttemptBound: the retry is BOUNDED. A device
+// that is simply unreachable must not be dialled forever.
+func TestSSHGatewayStopsRetryingAtTheAttemptBound(t *testing.T) {
+	srv := newTestSSHServer(t, "pw", sampleConfig("edge-01"))
+	gw := newGatewayFor(srv, func(string, string) (bool, bool) { return true, true })
+	gw.retryBackoff = 5 * time.Millisecond
+	cd := &countingDial{failures: 1 << 30}
+	gw.Dial = cd.dial
+
+	out, err := gw.Run(context.Background(), deviceFor(srv), "show running-config", MaxCaptureBytes)
+	if err == nil {
+		t.Fatal("an unreachable device must fail the capture")
+	}
+	if out != "" {
+		t.Fatal("a failed capture must return no configuration")
+	}
+	if got := cd.count(); got != maxCaptureAttempts {
+		t.Errorf("dialed %d times, want exactly maxCaptureAttempts (%d)", got, maxCaptureAttempts)
+	}
+}
+
+// TestSSHGatewayNeverRetriesAHostKeyMismatch is the whole point of the
+// classification: a device whose key changed is refused ONCE. Re-dialling it
+// would re-offer the capture credential to whatever is answering for it.
+func TestSSHGatewayNeverRetriesAHostKeyMismatch(t *testing.T) {
+	srv := newTestSSHServer(t, "pw", sampleConfig("edge-01"))
+	checks := 0
+	gw := newGatewayFor(srv, func(string, string) (bool, bool) { checks++; return false, false })
+	gw.retryBackoff = 5 * time.Millisecond
+	cd := &countingDial{}
+	gw.Dial = cd.dial
+
+	out, err := gw.Run(context.Background(), deviceFor(srv), "show running-config", MaxCaptureBytes)
+	if err == nil {
+		t.Fatal("a host-key mismatch must refuse the capture")
+	}
+	if out != "" {
+		t.Fatal("a refused capture must return no configuration")
+	}
+	if !strings.Contains(err.Error(), "host key mismatch") {
+		t.Fatalf("the refusal must name the reason: %v", err)
+	}
+	if got := cd.count(); got != 1 {
+		t.Errorf("dialed %d times, want exactly 1 — a mismatch is permanent", got)
+	}
+	if checks != 1 {
+		t.Errorf("host-key check consulted %d times, want exactly 1", checks)
+	}
+}
+
+// TestSSHGatewayNeverRetriesAnAuthFailure: repeated attempts with a bad
+// credential are how a capture account gets locked out of a whole fleet.
+func TestSSHGatewayNeverRetriesAnAuthFailure(t *testing.T) {
+	srv := newTestSSHServer(t, "correct", sampleConfig("edge-01"))
+	gw := newGatewayFor(srv, func(string, string) (bool, bool) { return true, true })
+	gw.retryBackoff = 5 * time.Millisecond
+	gw.Credentials = func(context.Context, Device) (Credential, error) {
+		return Credential{Username: "capture-ro", Password: "wrong"}, nil
+	}
+	cd := &countingDial{}
+	gw.Dial = cd.dial
+
+	if _, err := gw.Run(context.Background(), deviceFor(srv), "show running-config", MaxCaptureBytes); err == nil {
+		t.Fatal("a bad credential must fail the capture")
+	}
+	if got := cd.count(); got != 1 {
+		t.Errorf("dialed %d times with a bad credential, want exactly 1", got)
+	}
+}
+
+// TestSSHGatewayRetryStaysInsideTheCallerDeadline: the retry must never push the
+// capture past the budget the caller set. With less time left than one backoff
+// plus one dial, there is no second attempt.
+func TestSSHGatewayRetryStaysInsideTheCallerDeadline(t *testing.T) {
+	srv := newTestSSHServer(t, "pw", sampleConfig("edge-01"))
+	gw := newGatewayFor(srv, func(string, string) (bool, bool) { return true, true })
+	// The backoff itself would fit inside the deadline; one more DIAL would not
+	// (DialTimeout is 5 s). It is that sum the guard has to weigh, so this is the
+	// case that tells a real deadline check from a bare context wait.
+	gw.retryBackoff = time.Millisecond
+	cd := &countingDial{failures: 1 << 30}
+	gw.Dial = cd.dial
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := gw.Run(ctx, deviceFor(srv), "show running-config", MaxCaptureBytes); err == nil {
+		t.Fatal("an unreachable device must fail the capture")
+	}
+	if elapsed := time.Since(start); elapsed > 120*time.Millisecond {
+		t.Errorf("the capture ran %v, past the caller's 120ms deadline", elapsed)
+	}
+	if got := cd.count(); got != 1 {
+		t.Errorf("dialed %d times, want 1 — no backoff fits inside the deadline", got)
+	}
+}
+
+// TestSSHGatewayRetryDelayIsBoundedAndJittered: every step stays inside
+// [step/2, step) and never exceeds the ceiling.
+func TestSSHGatewayRetryDelayIsBoundedAndJittered(t *testing.T) {
+	gw := &SSHGateway{}
+	seen := map[time.Duration]bool{}
+	for i := 0; i < 40; i++ {
+		d := gw.retryDelay(1)
+		if d < captureRetryBase/2 || d >= captureRetryBase {
+			t.Fatalf("attempt-1 delay %v outside [%v,%v)", d, captureRetryBase/2, captureRetryBase)
+		}
+		seen[d] = true
+	}
+	if len(seen) < 2 {
+		t.Error("the backoff carries no jitter — replicas would re-dial in lockstep")
+	}
+	for attempt := 1; attempt <= 12; attempt++ {
+		if d := gw.retryDelay(attempt); d >= captureRetryCeiling {
+			t.Errorf("attempt %d delay %v reached the ceiling %v", attempt, d, captureRetryCeiling)
+		}
+	}
+}

@@ -5,13 +5,16 @@ package configstore
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -60,6 +63,41 @@ type Credential struct {
 	Passphrase string
 }
 
+// THE BOUNDED CAPTURE RETRY (§9: "all network calls must retry with backoff +
+// jitter") — and, just as importantly, what it must NEVER retry.
+//
+// A capture is one read-only `show running-config` inside a 60 s budget behind a
+// 10 s dial timeout. Before this, the dial, the handshake and the exec were
+// attempted exactly ONCE, so a single TCP reset — a device reloading a line card,
+// a firewall dropping a SYN, an NOS with a busy vty — cost a whole capture
+// interval and wrote a failure row into the device's history.
+//
+// The retry is deliberately narrow. It covers the connection that never came up
+// and the handshake that died BEFORE the device proved its host key. It does NOT
+// cover:
+//
+//   - a HOST-KEY MISMATCH — a permanent, security-relevant refusal. Re-dialling a
+//     device whose key changed is re-offering a credential to whatever is
+//     answering for it.
+//   - an AUTHENTICATION FAILURE — permanent, and repeated attempts are how a
+//     capture account gets locked out of a fleet.
+//   - anything that happened after the session opened — a non-zero exit, a cap
+//     refusal, a reset mid-transfer. Bytes of configuration have already been
+//     accepted by then, and a capture is only idempotent while it has read none.
+//
+// The two are told apart without parsing an error string: SSH verifies the host
+// key BEFORE user authentication, so a handshake that reached the host-key
+// callback at all failed for a permanent reason, and one that did not failed in
+// the transport.
+const (
+	// maxCaptureAttempts bounds the dial/handshake attempts for ONE capture.
+	maxCaptureAttempts = 3
+	// captureRetryBase is the first backoff step; it doubles per attempt.
+	captureRetryBase = 500 * time.Millisecond
+	// captureRetryCeiling caps ONE backoff step however many attempts are made.
+	captureRetryCeiling = 4 * time.Second
+)
+
 // SSHGateway is the production Gateway.
 type SSHGateway struct {
 	// Credentials yields the capture identity for a device. Required.
@@ -78,9 +116,14 @@ type SSHGateway struct {
 	// OnHostKey is an optional observability hook (first-seen pins are worth a
 	// log line). It never decides anything.
 	OnHostKey func(dev Device, fingerprint string, firstSeen bool)
+	// retryBackoff overrides captureRetryBase. It is UNEXPORTED on purpose: the
+	// backoff is a property of the capture budget, not something a caller gets to
+	// widen, and the only thing that needs to narrow it is this package's own
+	// test.
+	retryBackoff time.Duration
 }
 
-// Run implements Gateway.
+// Run implements Gateway. It is the retry loop; runOnce is one attempt.
 func (g *SSHGateway) Run(ctx context.Context, dev Device, command string, maxBytes int64) (string, error) {
 	if g.Credentials == nil {
 		return "", errors.New("configstore: no capture credentials configured")
@@ -121,10 +164,38 @@ func (g *SSHGateway) Run(ctx context.Context, dev Device, command string, maxByt
 		return "", err
 	}
 
+	for attempt := 1; ; attempt++ {
+		if cerr := ctx.Err(); cerr != nil {
+			return "", fmt.Errorf("capture aborted: %w", cerr)
+		}
+		out, retryable, err := g.runOnce(ctx, dev, addr, command, maxBytes, cred.Username, auth, timeout)
+		if err == nil {
+			return out, nil
+		}
+		if !retryable || attempt >= maxCaptureAttempts {
+			return "", err
+		}
+		if !g.waitBeforeRetry(ctx, attempt, timeout) {
+			return "", err
+		}
+	}
+}
+
+// runOnce is ONE dial + handshake + exec. It reports whether the failure it
+// returns is worth another attempt; see the retry constants above for the rule.
+func (g *SSHGateway) runOnce(ctx context.Context, dev Device, addr, command string, maxBytes int64,
+	user string, auth []ssh.AuthMethod, timeout time.Duration) (string, bool, error) {
+
+	// hostKeyChecked is what separates a transport failure from a permanent one.
+	// It is atomic because x/crypto/ssh may run the callback on its own read
+	// loop rather than on this goroutine.
+	var hostKeyChecked atomic.Bool
+
 	cfg := &ssh.ClientConfig{
-		User: cred.Username,
+		User: user,
 		Auth: auth,
 		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+			hostKeyChecked.Store(true)
 			fp := Fingerprint(key)
 			first, ok := g.HostKeyCheck(dev.Address, fp)
 			if !ok {
@@ -145,7 +216,8 @@ func (g *SSHGateway) Run(ctx context.Context, dev Device, command string, maxByt
 	}
 	conn, err := dial(ctx, "tcp", addr)
 	if err != nil {
-		return "", fmt.Errorf("connect: %w", err)
+		// Nothing was read and no credential was offered: the retryable case.
+		return "", true, fmt.Errorf("connect: %w", err)
 	}
 	// A context deadline must be able to break a stuck handshake or read, so it
 	// is pushed onto the socket rather than only wrapping the call (§9).
@@ -165,14 +237,17 @@ func (g *SSHGateway) Run(ctx context.Context, dev Device, command string, maxByt
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
 	if err != nil {
 		_ = conn.Close() // best-effort: the handshake already failed
-		return "", fmt.Errorf("ssh handshake: %w", err)
+		// Reaching the host-key callback means the transport came up and the
+		// device presented its key: what failed after that is the PIN or the
+		// CREDENTIAL, and neither improves by being tried again.
+		return "", !hostKeyChecked.Load(), fmt.Errorf("ssh handshake: %w", err)
 	}
 	client := ssh.NewClient(sshConn, chans, reqs)
 	defer client.Close()
 
 	session, err := client.NewSession()
 	if err != nil {
-		return "", fmt.Errorf("ssh session: %w", err)
+		return "", false, fmt.Errorf("ssh session: %w", err)
 	}
 	defer session.Close()
 
@@ -181,16 +256,66 @@ func (g *SSHGateway) Run(ctx context.Context, dev Device, command string, maxByt
 	session.Stderr = io.Discard // device chatter is not configuration
 	if err := session.Run(command); err != nil {
 		if out.overflow {
-			return "", ErrTooLarge
+			return "", false, ErrTooLarge
 		}
 		// A non-zero exit with output is still a failed capture: a truncated or
-		// error-prefixed config must never be stored as a version.
-		return "", fmt.Errorf("command %q failed: %w", command, err)
+		// error-prefixed config must never be stored as a version. It is also
+		// never retried — the command has already been run at the device.
+		return "", false, fmt.Errorf("command %q failed: %w", command, err)
 	}
 	if out.overflow {
-		return "", ErrTooLarge
+		return "", false, ErrTooLarge
 	}
-	return out.String(), nil
+	return out.String(), false, nil
+}
+
+// waitBeforeRetry sleeps out the backoff for the attempt just failed. It returns
+// false — retry ABANDONED — when the context ends during the wait, or when the
+// wait plus one more dial would not fit inside the caller's deadline. The retry
+// exists to survive a reset, never to overrun the budget the caller set (§9).
+func (g *SSHGateway) waitBeforeRetry(ctx context.Context, attempt int, dialTimeout time.Duration) bool {
+	d := g.retryDelay(attempt)
+	if dl, ok := ctx.Deadline(); ok && time.Until(dl) < d+dialTimeout {
+		return false
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// retryDelay is the exponential step for attempt n with FULL jitter over its
+// upper half, so replicas that lost the same device do not re-dial in lockstep.
+//
+// The randomness comes from crypto/rand for the same reason Manager.jittered()
+// uses it: no seeded package-level generator, no shared mutable state to race
+// on, and no gosec G404 exemption to justify.
+func (g *SSHGateway) retryDelay(attempt int) time.Duration {
+	base := g.retryBackoff
+	if base <= 0 {
+		base = captureRetryBase
+	}
+	step := base
+	for i := 1; i < attempt; i++ {
+		step *= 2
+		if step >= captureRetryCeiling {
+			step = captureRetryCeiling
+			break
+		}
+	}
+	half := step / 2
+	if half <= 0 {
+		return step
+	}
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(half)))
+	if err != nil {
+		return half // fail safe to a fixed, still-bounded step
+	}
+	return half + time.Duration(n.Int64())
 }
 
 // authMethods builds the offered SSH auth methods. Password is ALSO offered as
