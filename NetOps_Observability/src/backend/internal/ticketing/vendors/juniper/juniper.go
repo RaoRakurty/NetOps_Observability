@@ -92,8 +92,23 @@ type Client struct {
 
 	baseOverride string // scheme+host for tests
 
-	mu      sync.Mutex
-	window  time.Time
+	mu sync.Mutex
+	// budgets is one invocation window PER JUNIPER CUSTOMER (Auth.Account —
+	// appId + customerSourceID, which is what Juniper's onboarding issues and
+	// what the published ceiling is written against). One connector object
+	// serves every tenant, so a single shared counter enforced a per-customer
+	// ceiling across all of them combined: one tenant's traffic could refuse
+	// every other tenant's case for up to an hour.
+	budgets map[string]*invocationWindow
+}
+
+// maxTrackedBudgets bounds the window map (§9: every map a request can grow is
+// bounded). An account beyond the cap is counted against the shared "" window,
+// which is the pre-fix behaviour and still fails closed.
+const maxTrackedBudgets = 512
+
+type invocationWindow struct {
+	start   time.Time
 	callsIn int
 }
 
@@ -116,25 +131,49 @@ func (c *Client) base() string {
 	return "https://" + APIHost + strings.TrimRight(c.BasePath, "/")
 }
 
-// budget enforces the documented 1000-invocations-per-hour ceiling.
-func (c *Client) budget() error {
+// budget enforces the documented 1000-invocations-per-hour ceiling for ONE
+// Juniper customer account. The ceiling is published per customer, so it is
+// counted per customer.
+func (c *Client) budget(account string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := time.Now()
-	if now.Sub(c.window) >= time.Hour {
-		c.window, c.callsIn = now, 0
+	if c.budgets == nil {
+		c.budgets = map[string]*invocationWindow{}
 	}
-	if c.callsIn >= HourlyInvocationLimit {
-		return &RateLimitError{Until: c.window.Add(time.Hour)}
+	w := c.budgets[account]
+	if w == nil {
+		if len(c.budgets) >= maxTrackedBudgets {
+			// Fall back to the shared window rather than growing without bound.
+			account = ""
+			w = c.budgets[""]
+		}
+		if w == nil {
+			w = &invocationWindow{start: now}
+			c.budgets[account] = w
+		}
 	}
-	c.callsIn++
+	if now.Sub(w.start) >= time.Hour {
+		w.start, w.callsIn = now, 0
+	}
+	if w.callsIn >= HourlyInvocationLimit {
+		return &RateLimitError{Until: w.start.Add(time.Hour)}
+	}
+	w.callsIn++
 	return nil
 }
 
 // Auth is the per-request credential. Exactly one of Bearer / APIKey is set.
+//
+// Account is NOT a credential: it names the Juniper customer the call is being
+// made for (appId + customerSourceID), and it exists so the published
+// per-customer invocation ceiling is counted per customer rather than across
+// every tenant this process serves. An empty Account shares one window, which
+// is a refusal one tenant can spend on another — always set it.
 type Auth struct {
-	Bearer string
-	APIKey string
+	Bearer  string
+	APIKey  string
+	Account string
 }
 
 func (a Auth) apply(req *http.Request) error {
@@ -487,7 +526,7 @@ func expiresIn(v any) time.Duration {
 // ── plumbing ────────────────────────────────────────────────────────────────
 
 func (c *Client) post(ctx context.Context, auth Auth, path string, body any) ([]byte, error) {
-	if err := c.budget(); err != nil {
+	if err := c.budget(auth.Account); err != nil {
 		return nil, err
 	}
 	b, err := json.Marshal(body)
