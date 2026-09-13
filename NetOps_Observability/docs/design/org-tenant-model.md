@@ -161,7 +161,12 @@ The recent Source-of-Truth work follows the rules above end-to-end:
   scoped (`infrastructure:write`), records stamped from the principal/device;
   device matching runs **only against the caller's visible inventory** so a
   foreign device can't match (structurally no cross-tenant write); the target
-  site must be visible to the caller. (`TestSoTImportIsolation`.)
+  site must be visible to the caller. The SITES half decides create-vs-conflict
+  from the same visible read (`resolveSiteForScope`): a slug owned by a site the
+  caller may not read is a third outcome, `refused` — nothing is written, no
+  shadow row is created under that slug, and the plan discloses the collision and
+  nothing else (tracker 298). (`TestSoTImportIsolation`,
+  `TestSoTSitesImportRefusesASlugTheCallerMayNotRead`.)
 
 All three are classified `scoped` in the route-coverage guard and ship with a
 cross-org isolation test.

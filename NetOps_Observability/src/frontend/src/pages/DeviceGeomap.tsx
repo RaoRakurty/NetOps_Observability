@@ -395,10 +395,13 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
   );
 }
 
-// Action → tone for the import plan chips/rows (honest: conflict & error stand out).
+// Action → tone for the import plan chips/rows (honest: conflict, refused & error
+// stand out). `refused` is a row naming a record the operator may not read: the
+// server writes nothing and tells us only that the key is taken, so it reads as a
+// refusal, not as a conflict the operator could resolve with Overwrite.
 const ACTION_TONE: Record<string, string> = {
   create: "var(--good, #16a34a)", update: "var(--accent, #2563eb)",
-  conflict: "var(--warn, #d97706)", error: "var(--bad, #dc2626)",
+  conflict: "var(--warn, #d97706)", refused: "var(--bad, #dc2626)", error: "var(--bad, #dc2626)",
   skip: "var(--muted)", unchanged: "var(--muted)",
 };
 
