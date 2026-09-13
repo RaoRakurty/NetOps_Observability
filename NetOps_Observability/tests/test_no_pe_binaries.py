@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 from pathlib import Path
 
@@ -216,6 +217,97 @@ def test_clean_sbom_passes(tmp_path):
         "foundBy": "apk-db-cataloger", "purl": "pkg:apk/alpine/busybox@1.37.0-r31",
         "locations": [{"path": "/lib/apk/db/installed"}]}]}), encoding="utf-8")
     assert gate.check_sbom(p) == []
+
+
+# --------------------------------------------------------------------------- #
+# §16.1 — the gate fails when it cannot LOOK, it never passes by default
+# --------------------------------------------------------------------------- #
+def test_unreadable_tree_file_is_a_violation_not_a_skip(tmp_path):
+    """A file the scan cannot read is a HOLE in the scan.
+
+    `_is_pe_file` must escalate (UnreadableArtifact), and `check_tree` must
+    record it as a violation — reporting "no PE content" for bytes nobody was
+    able to look at is the accept-and-ignore defect scripts/CLAUDE.md §16.1
+    exists to kill. The old shape returned the errno AS the PE reason, which
+    also mislabelled the finding ("Windows PE binary … (unreadable)").
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root reads a 0o000 file; the unreadable case cannot be staged")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    victim = sub / "opaque.bin"
+    victim.write_bytes(b"MZ\x90\x00")   # a real PE, hidden behind the mode bits
+    victim.chmod(0o000)
+    try:
+        with pytest.raises(gate.UnreadableArtifact):
+            gate._is_pe_file(victim)
+        problems = gate.check_tree(tmp_path)
+        assert len(problems) == 1, problems
+        assert "cannot be scanned" in problems[0] and "opaque.bin" in problems[0], problems
+    finally:
+        victim.chmod(0o600)
+
+
+def test_main_exits_non_zero_on_an_unreadable_tree_file(tmp_path, monkeypatch):
+    """End-to-end exit code for the same condition: rc 1, not 0."""
+    if os.geteuid() == 0:
+        pytest.skip("root reads a 0o000 file; the unreadable case cannot be staged")
+    victim = tmp_path / "opaque.bin"
+    victim.write_bytes(b"MZ\x90\x00")
+    victim.chmod(0o000)
+    real_check_tree = gate.check_tree
+    # Point the real check_tree at the staged tree; the Dockerfile rule is a
+    # separate concern and is asserted clean above.
+    monkeypatch.setattr(gate, "check_tree", lambda: real_check_tree(tmp_path))
+    monkeypatch.setattr(gate, "check_dockerfiles", list)
+    try:
+        assert gate.main(["--tree"]) == 1
+    finally:
+        victim.chmod(0o600)
+
+
+def test_main_exits_non_zero_on_a_malformed_or_absent_sbom(tmp_path):
+    """Each fail-closed SBOM path reaches a non-zero process exit, not just a
+    problem string: malformed JSON, an absent file, and a document that is
+    neither Syft nor CycloneDX."""
+    garbage = tmp_path / "garbage.json"
+    garbage.write_text("}{", encoding="utf-8")
+    assert gate.main(["--sbom", str(garbage)]) == 1
+
+    assert gate.main(["--sbom", str(tmp_path / "absent.json")]) == 1
+
+    alien = tmp_path / "alien.json"
+    alien.write_text(json.dumps({"spdxVersion": "SPDX-2.3"}), encoding="utf-8")
+    assert gate.main(["--sbom", str(alien)]) == 1
+
+    empty = tmp_path / "empty.json"
+    empty.write_text(json.dumps({"artifacts": []}), encoding="utf-8")
+    assert gate.main(["--sbom", str(empty)]) == 1
+
+    # Control: a clean SBOM through the same entry point still exits 0, so the
+    # non-zero results above are the condition and not a broken code path.
+    clean = tmp_path / "clean.json"
+    clean.write_text(json.dumps({"artifacts": [{
+        "name": "busybox", "version": "1.37.0-r31", "type": "apk",
+        "foundBy": "apk-db-cataloger", "purl": "pkg:apk/alpine/busybox@1.37.0-r31",
+        "locations": [{"path": "/lib/apk/db/installed"}]}]}), encoding="utf-8")
+    assert gate.main(["--sbom", str(clean)]) == 0
+
+
+def test_unreadable_sbom_escalates_out_of_the_loader(tmp_path):
+    """The loader raises one type for every unreadable/unparsable shape, so no
+    caller can mistake a failed read for an empty component list."""
+    if os.geteuid() == 0:
+        pytest.skip("root reads a 0o000 file; the unreadable case cannot be staged")
+    sealed = tmp_path / "sealed.json"
+    sealed.write_text(json.dumps({"artifacts": []}), encoding="utf-8")
+    sealed.chmod(0o000)
+    try:
+        with pytest.raises(gate.UnreadableArtifact):
+            gate._load_sbom(sealed)
+        assert any("unreadable" in p for p in gate.check_sbom(sealed))
+    finally:
+        sealed.chmod(0o600)
 
 
 # --------------------------------------------------------------------------- #

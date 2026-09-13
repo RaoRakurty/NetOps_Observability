@@ -94,19 +94,37 @@ PE_PKG_TYPES = ("dotnet", "nuget")
 PE_PURL_PREFIX = "pkg:nuget/"
 
 
+class UnreadableArtifact(Exception):
+    """An artifact the gate must inspect could not be read, parsed or understood.
+
+    §16.1, structurally: every read this gate depends on raises THIS instead of
+    returning a value, because "I could not look" is not evidence of absence. A
+    raise reaches a `problems` entry at the boundary below and therefore exit 1 —
+    a gate that cannot read its input must FAIL, never PASS.
+    """
+
+
 # --------------------------------------------------------------------------- #
 # --tree
 # --------------------------------------------------------------------------- #
 def _is_pe_file(path: Path) -> str | None:
-    """Return a reason string if `path` is a Windows PE binary, else None."""
+    """Return a reason string if `path` is a Windows PE binary, else None.
+
+    Raises UnreadableArtifact when the magic cannot be read; the caller records
+    that as a violation (§16.1) rather than reading it as "not a PE file". The
+    old shape returned the error AS a reason, which both mislabelled the file
+    ("Windows PE binary (unreadable)") and hid the escalation from the §16.1
+    guard — tests/test_error_swallow_guard.py.
+    """
     if path.suffix.lower() in PE_SUFFIXES:
         return f"{path.suffix.lower()} suffix"
     try:
         with path.open("rb") as fh:
             if fh.read(2) == b"MZ":
                 return "PE MZ magic"
-    except OSError as exc:  # unreadable is reported, never skipped (§16.1)
-        return f"unreadable ({exc.strerror})"
+    except OSError as exc:
+        raise UnreadableArtifact(
+            f"cannot read the file to sniff for PE magic ({exc.strerror})") from exc
     return None
 
 
@@ -119,10 +137,17 @@ def check_tree(root: Path = ROOT) -> list[str]:
             continue
         if not path.is_file() or path.is_symlink():
             continue
-        reason = _is_pe_file(path)
-        if reason is None:
-            continue
         if str(rel) in TREE_ALLOWLIST:
+            continue
+        try:
+            reason = _is_pe_file(path)
+        except UnreadableArtifact as exc:
+            # NOT a skip: an unreadable file is a hole in the scan, and a scan
+            # with a hole in it cannot assert the tree is clean (§16.1).
+            problems.append(
+                f"{rel}: cannot be scanned for Windows PE content — {exc}")
+            continue
+        if reason is None:
             continue
         problems.append(f"{rel}: Windows PE binary in the source tree ({reason})")
     return problems
@@ -222,20 +247,35 @@ def _pe_reason(comp: dict) -> str | None:
     return None
 
 
-def check_sbom(path: Path) -> list[str]:
-    """Fail on any Windows PE component in an SBOM of a final image.
+def _load_sbom(path: Path) -> list[dict]:
+    """Read + normalise an SBOM, or raise UnreadableArtifact.
 
-    FAIL CLOSED (§16.1): an unparsable SBOM, or one with zero components, is an
-    error — never "zero affected packages". A gate that passes because the
-    scanner produced nothing is not a gate.
+    Every failure mode — absent file, permission denied, invalid JSON, a
+    document that is neither Syft nor CycloneDX — escalates out of here as one
+    exception type. None of them may return an empty component list: "no PE
+    component found in a file I could not read" is the accept-and-ignore defect
+    §16.1 exists to kill.
     """
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        return [f"{path}: unreadable/unparsable SBOM ({exc})"]
+        raise UnreadableArtifact(f"unreadable/unparsable SBOM ({exc})") from exc
     try:
-        comps = _syft_components(doc)
+        return _syft_components(doc)
     except ValueError as exc:
+        raise UnreadableArtifact(str(exc)) from exc
+
+
+def check_sbom(path: Path) -> list[str]:
+    """Fail on any Windows PE component in an SBOM of a final image.
+
+    FAIL CLOSED (§16.1): an unreadable SBOM, an unrecognised shape, or one with
+    zero components is a VIOLATION — never "zero affected packages". A gate that
+    passes because the scanner produced nothing is not a gate.
+    """
+    try:
+        comps = _load_sbom(path)
+    except UnreadableArtifact as exc:
         return [f"{path}: {exc}"]
     if not comps:
         return [f"{path}: SBOM lists ZERO components — treated as a scanner failure"]
