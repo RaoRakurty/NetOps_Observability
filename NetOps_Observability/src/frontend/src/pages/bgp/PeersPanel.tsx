@@ -132,10 +132,9 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
         {!busy && state === "bmp_denied" && (
           <p className="fact-line fact-bad" role="alert">
             <b>Neighbour state is being collected, but not for this account.</b>{" "}
-            The BMP receiver is running and refused this read, so the list below is
+            The BMP receiver is running and refused this read, so this list is
             empty for you — not for the network. Ask an administrator to include the
             BGP feed in your access.
-            {bmpErr && <> ({bmpErr})</>}
           </p>
         )}
         {!busy && state === "bmp_unreadable" && (

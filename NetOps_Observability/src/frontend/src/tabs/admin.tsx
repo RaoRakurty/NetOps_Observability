@@ -2169,8 +2169,8 @@ export function ApiAccessAdmin() {
     // A refused revocation is a security-relevant failure and the operator must
     // read it, not the api.ts envelope: the raw message put internal hostnames
     // and container IPs on the API-keys card. (The list read on this same card
-    // still goes through the shared `useReload`, which has the same raw
-    // message — a file-wide pattern, out of this change's bounded context.)
+    // went through the shared `useReload` and carried the same raw message; the
+    // file-wide sweep that was out of scope then is tracker 293, now done.)
     try { await api.revokeApiKey(k.id); reload(); } catch (e) { setErr(operatorError(e, "That key was not revoked.")); }
   };
 
