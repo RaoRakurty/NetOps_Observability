@@ -892,7 +892,9 @@ def test_bundle_ships_every_file_the_policy_says_it_must(policy):
     assert copy_loop, "make-installer.sh lost its verbatim licence-file copy loop"
     copied = set(copy_loop.group(1).split())
 
-    sums = re.search(r'^\(cd "\$BUNDLE_DIR" && sha256sum (.+) > SHA256SUMS\)$', src, re.M)
+    # `^\s*`: the SHA256SUMS line moved INTO make-installer.sh's finalize_bundle()
+    # when release mode landed (RC1 directive, Decision 3B), so it is indented now.
+    sums = re.search(r'^\s*\(cd "\$BUNDLE_DIR" && sha256sum (.+) > SHA256SUMS\)$', src, re.M)
     assert sums, "make-installer.sh lost its SHA256SUMS line"
     manifest = sums.group(1)
 
@@ -975,7 +977,9 @@ def test_licence_tool_is_smoke_tested_on_the_build_host():
 
 def test_sha256sums_covers_the_licence_tool_and_the_licence_texts():
     src = _installer_src()
-    m = re.search(r'^\(cd "\$BUNDLE_DIR" && sha256sum (.+) > SHA256SUMS\)$', src, re.M)
+    # `^\s*`: the SHA256SUMS line moved INTO make-installer.sh's finalize_bundle()
+    # when release mode landed (RC1 directive, Decision 3B), so it is indented now.
+    m = re.search(r'^\s*\(cd "\$BUNDLE_DIR" && sha256sum (.+) > SHA256SUMS\)$', src, re.M)
     assert m, "make-installer.sh lost its SHA256SUMS line"
     listed = m.group(1)
     for want in ("correlix-licence", "LICENSE", "./LICENSES/*.txt"):

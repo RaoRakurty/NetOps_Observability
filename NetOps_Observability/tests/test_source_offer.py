@@ -243,7 +243,9 @@ def test_installer_covers_the_source_offer_in_sha256sums():
     """A compliance artifact outside SHA256SUMS is one the customer cannot
     verify — and cannot prove we did not swap."""
     body = read(INSTALLER)
-    m = re.search(r"^\(cd \"\$BUNDLE_DIR\" && sha256sum .*> SHA256SUMS\)$",
+    m = re.search(# `^\s*`: indented since the line moved into finalize_bundle()
+                  # (RC1 directive Decision 3B, release mode).
+                  r"^\s*\(cd \"\$BUNDLE_DIR\" && sha256sum .*> SHA256SUMS\)$",
                   body, re.MULTILINE)
     assert m, "could not find the SHA256SUMS line in make-installer.sh"
     line = m.group(0)
