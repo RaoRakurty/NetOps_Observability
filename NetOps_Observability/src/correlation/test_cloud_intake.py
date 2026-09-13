@@ -17,7 +17,28 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
+import pytest
+
 import main
+
+
+@pytest.fixture(autouse=True)
+def _restore_lane_config(monkeypatch):
+    """`_reset` and the tailer tests assign these module globals DIRECTLY, for
+    readability — so each is registered with monkeypatch at its CURRENT value
+    first and teardown puts it back whatever a test did.
+
+    Without this the tailer tests left CLOUD_LOGS_DIR pointing at a tmp_path
+    pytest had already deleted, and CLOUD_LOGS_TENANT at "acme", for every later
+    test in the process: any test that reaches the cloud lane then ran against a
+    tenant and a directory it never configured. Same convention as `_stack` in
+    test_p2_lifecycle_window.py and `_isolated` in test_sync_stretch_bound_p1.py.
+    """
+    for _name in ("ch", "CORR_SIGNALS_ENABLED", "CLOUD_LOGS_DIR",
+                  "CLOUD_LOGS_TENANT"):
+        monkeypatch.setattr(main, _name, getattr(main, _name))
+    yield
+    main._cloud_log_offsets.clear()
 
 
 class FakeCH:

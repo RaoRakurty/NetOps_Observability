@@ -227,6 +227,18 @@ def _isolated(monkeypatch):
     monkeypatch.setattr(main, "CORR_LOOP_YIELD_MS", 50.0)
     monkeypatch.setattr(main, "CORR_SYNC_BUDGET_MS", BUDGET_S * 1000.0)
     monkeypatch.setattr(main, "CORR_SYNC_OFFLOAD", True)
+    # The grind helpers below (`_run_close_batch`, `_run_merge_pass`) assign
+    # these DIRECTLY, for readability — so each is registered with monkeypatch
+    # at its CURRENT value first, and teardown puts it back whatever the helper
+    # did. Without this, `_run_close_batch`'s CORR_QUIESCE_S=300 (and
+    # `_run_merge_pass`'s 10_000_000) leaked into every later test in the
+    # process: `test_ownership_seed_155` then read a quiesce the correlation
+    # engine was never configured with and went red for a reason that had
+    # nothing to do with it. Same convention as `_stack` in
+    # test_p2_lifecycle_window.py.
+    for _name in ("CORR_QUIESCE_S", "CORR_OPEN_OBJECTS_MAX",
+                  "VERSIONS_PERSISTED", "ch"):
+        monkeypatch.setattr(main, _name, getattr(main, _name))
     main._ARCHIVE_SLICE_HASH.clear()
     lvl = main.log.level
     main.log.setLevel(logging.WARNING)   # per-object INFO would dwarf the grind

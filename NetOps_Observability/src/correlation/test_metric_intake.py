@@ -130,6 +130,10 @@ class MetricIdentityTest(unittest.TestCase):
 class HandleMetricTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.ch = FakeCH()
+        # Snapshot every module global this setUp forces, and restore it in
+        # tearDown: a lane flag or a fake ClickHouse left behind reconfigures
+        # every later test in the process (see test_no_module_global_leakage).
+        self._saved = (main.ch, main.CORR_SIGNALS_ENABLED)
         main.ch = self.ch
         main.CORR_SIGNALS_ENABLED = True
         # reset counters
@@ -141,6 +145,7 @@ class HandleMetricTest(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self):
         main.DETECTOR.observe = self._orig_observe
+        main.ch, main.CORR_SIGNALS_ENABLED = self._saved
 
     def _fake_observe(self, tenant, entity_id, metric, ts, value, clock_quality="unknown"):
         return EpisodeEvent(

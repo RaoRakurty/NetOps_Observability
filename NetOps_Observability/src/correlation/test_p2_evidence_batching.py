@@ -1586,6 +1586,10 @@ def _gc_restore():
     tuned, frozen = main._GC_TUNED, main.GC_FROZEN_OBJECTS
     pause_max, pause_total = main.GC_PAUSE_MAX_S, main.GC_PAUSE_TOTAL_S
     counts = list(main.GC_COLLECTIONS)
+    # The FLAG too, not just the state it produced: B15c/B15d flip
+    # CORR_GC_TUNE directly, and a leaked True re-tunes the collector for every
+    # later test in the process.
+    gc_tune = main.CORR_GC_TUNE
     yield
     gc.unfreeze()
     gc.set_threshold(*thresholds)
@@ -1593,6 +1597,7 @@ def _gc_restore():
     main._GC_TUNED, main.GC_FROZEN_OBJECTS = tuned, frozen
     main.GC_PAUSE_MAX_S, main.GC_PAUSE_TOTAL_S = pause_max, pause_total
     main.GC_COLLECTIONS[:] = counts
+    main.CORR_GC_TUNE = gc_tune
     if main._gc_probe in gc.callbacks:
         gc.callbacks.remove(main._gc_probe)
 
