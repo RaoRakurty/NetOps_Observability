@@ -333,6 +333,8 @@ def test_the_gauge_reports_worst_block_not_total_elapsed():
     grows with the number of chunks while no single chunk does. A gauge
     reporting elapsed then reads ~20x the gauge reporting worst-block.
     """
+    saved_chunk = main.CORR_PRUNE_CHUNK
+
     async def scenario():
         main.CORR_PRUNE_CHUNK = 200
         load(20 * 200)
@@ -368,7 +370,9 @@ def test_the_gauge_reports_worst_block_not_total_elapsed():
             f"gauge {main.PRUNE_SECONDS_LAST:.4f}s vs total {total:.4f}s across "
             "20 chunks — it is reporting elapsed, not the worst contiguous block")
     finally:
-        main.CORR_PRUNE_CHUNK = 5000
+        # The value this test found, not a hardcoded 5000: the chunk is
+        # env-tunable, and restoring a guess is itself a leak.
+        main.CORR_PRUNE_CHUNK = saved_chunk
 
 
 # --- housekeeping observability -------------------------------------------

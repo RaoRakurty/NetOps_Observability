@@ -172,6 +172,26 @@ jobs:
           # policy pass.
           syft-version: v1.42.3
 
+      # NO WINDOWS PE BINARIES IN A LINUX IMAGE (tracker 238(b), owner decision
+      # 2026-09-13). `netops-correlation` shipped six PE launcher stubs vendored
+      # inside pip's distlib for months — unexecutable on musl, linked by nothing,
+      # and carrying no licence text, so Syft recorded them as an undischarged
+      # obligation (`Simple Launcher 1.1.0.14`) under two different package types
+      # depending on which PE cataloger named the file first. The bytes are now
+      # deleted in Dockerfile.correlation's runtime stage, which ASSERTS they are
+      # gone, so the real image is gated by its own build. This step is the
+      # repo-side half: the source tree carries no PE file, the Dockerfile still
+      # declares strip + assertion (a deleted guard is the regression), and the
+      # SBOM rule runs against the Syft scan the step above just produced —
+      # representation-independent by construction, because a scanner-shape
+      # difference must never drop an obligation.
+      - name: No Windows PE binaries in a Linux image (blocking)
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          python3 scripts/check-no-pe-binaries.py --selftest \
+            --sbom "${{ runner.temp }}/regression.cdx.json" --tree
+
       # The RETAINED source, produced by the mechanism that already ships it in
       # every release bundle (owner decision 2026-09-04, licence audit D2). No
       # second source-archive architecture: BusyBox is one more entry in the same
@@ -284,8 +304,10 @@ jobs:
           # test_source_archive.py proves the release path survives every
           # upstream URL being dead — with no AWS credential anywhere, because
           # the object store and the upstream fetcher are both interfaces.
+          # test_no_pe_binaries.py is tracker 238(b): the Dockerfile guard and the
+          # SBOM rule, both representations, offline.
           python3 -m pytest tests/test_oci_compliance.py tests/test_oci_digest_lock.py \
-                            tests/test_source_archive.py -v
+                            tests/test_source_archive.py tests/test_no_pe_binaries.py -v
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()

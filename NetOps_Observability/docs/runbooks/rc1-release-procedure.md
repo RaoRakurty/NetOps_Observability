@@ -3,10 +3,13 @@
 > # ⛔ NOTHING IN THIS DOCUMENT IS AUTHORIZED, AND NOTHING IN IT HAS BEEN RUN.
 >
 > Every command below is written as a **PROPOSED ACTION**. Not one of them has
-> been executed. No branch-protection ruleset has been changed, no merge to
-> `main` has been made, **no `v0.9.0-rc1` tag exists**, no release has been
-> published, no image has been pushed to GHCR, and no registry access has been
-> granted.
+> been executed, **with one exception: step 1 (branch protection) was authorized
+> by the owner as Decision 5 and APPLIED on 2026-09-13** — 21 required checks,
+> `strict`, `enforce_admins`, conversation resolution, plus a tag ruleset; see
+> `docs/release/BRANCH_PROTECTION_DECISION5_2026-09-13.md` for the live readings.
+> Steps 2–6 remain unexecuted: no merge to `main` has been made, **no
+> `v0.9.0-rc1` tag exists**, no release has been published, no image has been
+> pushed to GHCR, and no registry access has been granted.
 >
 > This page exists so that when the owner *does* authorize a release, the exact
 > sequence, the exact payloads and the exact verifications are already written
@@ -41,13 +44,37 @@ qualified. Dropping `-rc1` is a separate decision that this page does not cover.
 
 These are not per-step. If any is false, **no step below may be authorized.**
 
+**Establish them all with one command first** (RC1 directive Decision 8 — the
+fail-closed release gate):
+
+```bash
+cd NetOps_Observability
+make release-check              # or: python3 scripts/release-gate.py --json
+```
+
+It runs every check that can run outside CI — 0.2, 0.3's offline half, 0.4, 0.5,
+0.6 and the tag/artifact preconditions of steps 3 and 4 — and prints one row per
+check with its result, its evidence and the exact command behind it. It exits
+non-zero unless **every** row PASSes: a `BLOCKED-HUMAN` row (counsel's licence
+text, the CLA mechanism, the distribution signing key, the owner's tag signature)
+fails the gate exactly like an engineering `FAIL` does, and a `CI-ONLY` row names
+the workflow and job that must be green on the tag instead of being counted as a
+pass. Read `docs/RELEASE_CHECKLIST.md` §0.0 for the result vocabulary and the exit
+codes, and **do not confuse it with `make release-gate`**, which is the unrelated
+#101 storm-SLO lane contract. The table below stays the authority for *what each
+precondition means*; the gate is how you establish them without missing one.
+
+> `make release-check` is expected to exit non-zero today. That is the correct
+> answer, not a broken gate: blockers A–F are open.
+
 | | Precondition | How it is established | State at the time of writing |
 |---|---|---|---|
-| 0.1 | **CI is green on the exact commit** that will be tagged — all 19 blocking checks of `ci-branch-protection.md` §1.1 | `gh run list --branch <branch> --limit 5`, and after step 2 `gh run list --branch main --limit 5` | not established — the work is on `feat/observability-platform` |
-| 0.2 | **Licence release blockers are cleared** | `python3 scripts/licensing-gate.py --release` exits **0** | **FAILS.** Two blockers are open: `enterprise-text-placeholder` (`LICENSES/Correlix-Enterprise.txt` is a placeholder) and `cla-process-undefined` (`CONTRIBUTING.md` carries `CLA-PROCESS-TBD`; the CLA text at `CLA.md` is pending counsel). Both are 👤 owner + counsel actions |
+| 0.1 | **CI is green on the exact commit** that will be tagged — all 19 blocking checks of `ci-branch-protection.md` §1.1 (live ruleset requires 21; see step 1) | `gh run list --branch <branch> --limit 5`, and after step 2 `gh run list --branch main --limit 5` | not established — the work is on `feat/observability-platform` |
+| 0.2 | **Licence release blockers are cleared** | `python3 scripts/licensing-gate.py --release` exits **0** | **FAILS.** Two blockers are open: `enterprise-text-placeholder` (`LICENSES/LicenseRef-Correlix-Enterprise.txt` is a placeholder) and `cla-process-undefined` (`CONTRIBUTING.md` carries `CLA-PROCESS-TBD`; the CLA text at `CLA.md` is pending counsel). Both are 👤 owner + counsel actions |
 | 0.3 | **OCI source-compliance passes in release mode** for every image that will be published | the `oci-compliance` matrix job in `.github/workflows/publish-images.yml` runs `python3 scripts/oci-compliance.py --sbom … --image … --digest … --source-dir "$OFFER" --manifest … --release` against **each pushed digest**. It is `needs:`-gated by `release-gate.yml`, so it cannot be skipped. Offline pre-check: `python3 scripts/oci-compliance.py --selftest` | the gate exists and is wired; it has never run on a real tag, because no `v*` tag has ever existed |
 | 0.4 | **Working tree clean at the commit to be tagged** | `git status --porcelain` prints nothing | not established |
 | 0.5 | **The gate machinery itself is consistent** | `python3 -m pytest tests/test_required_checks_consistency.py -q` and `actionlint` over `.github/workflows/` | the pytest passes today |
+| 0.6 | **The distribution signing secret exists** — `CORRELIX_DIST_SIGNING_KEY` (armored SECRET half of the **distribution/artifact** key, a different key from the tag key of step 3 and from the licence-signing key). A tag build sets `CORRELIX_RELEASE_BUILD=1`, so `make-installer.sh` REFUSES to produce an unsigned or partially signed bundle and `release-bundle.yml` fails the job — it never skips — when the secret is absent | `gh secret list` names it; offline proof of the mechanism: `python3 -m pytest tests/test_release_signing.py tests/test_release_bundle_signing_workflow.py -q` | **FALSE.** The secret has never been created (RC1 directive Blocker D). Until it is, **step 4 fails closed**: the bundle job stops with `BLOCKED: distribution signing key not configured — CORRELIX_DIST_SIGNING_KEY` and nothing is published. Creating it is 👤 owner-only; custody is tracker 259 |
 
 > **0.2 is currently FALSE.** A release cannot honestly proceed past step 3 while
 > `licensing-gate.py --release` fails: the tag is what publishes artifacts, and
@@ -56,10 +83,25 @@ These are not per-step. If any is false, **no step below may be authorized.**
 
 ---
 
-## Step 1 — Branch protection: require the 19 checks on `main`
+## Step 1 — Branch protection: require the 19 checks on `main` — **DONE 2026-09-13**
 
-**PROPOSED ACTION: apply the branch-protection ruleset with the 19 required
-status checks — requires explicit owner authorization**
+**APPLIED 2026-09-13** under the owner's Decision-5 directive. The live ruleset
+requires **21** checks (the 19 below plus `integrity` and `tracker staleness
+(blocking on HIGH)`, both already required beforehand), with `strict: true`,
+`enforce_admins: true`, conversation resolution on and
+`required_approving_review_count` **0** — not the `1` in the payload below, which
+is the target for when a second independent maintainer exists. A tag ruleset
+(`release-tags-immutable`) now makes a pushed `v*` tag immutable. Live readings
+and the bypass-actor enumeration:
+`docs/release/BRANCH_PROTECTION_DECISION5_2026-09-13.md`.
+
+Everything below is kept as the payload of record and the re-apply procedure. Do
+NOT `PUT` it verbatim now: it would drop the two extra required checks and
+deadlock every PR on an approval nobody can give. Build the payload from the live
+protection.
+
+**ORIGINAL PROPOSED ACTION (now executed): apply the branch-protection ruleset
+with the 19 required status checks — requires explicit owner authorization**
 
 The payload is reproduced **verbatim** from `docs/runbooks/ci-branch-protection.md`
 §4, which is the list of record and is machine-checked against the workflows'
@@ -184,8 +226,11 @@ git tag -s -a v0.9.0-rc1 -m "Correlix v0.9.0-rc1"
 git tag -v v0.9.0-rc1        # verify the signature BEFORE it leaves the machine
 ```
 
-Annotated **and GPG-signed**. Until image signing exists (`RELEASE_CHECKLIST.md`
-§4.9) the tag is the only signed link between the source and the artifacts.
+Annotated **and GPG-signed**. This is the **source/tag** trust domain: a
+different key from the distribution key that signs the bundle (§0.6) and from the
+licence-signing key — never one key for all three (RC1 directive, Decision 3B).
+Until image signing exists (`RELEASE_CHECKLIST.md` §4.9) the tag and the bundle
+signature are the only signed links between the source and the artifacts.
 
 **PRECONDITIONS**
 
@@ -228,10 +273,38 @@ git push origin v0.9.0-rc1
 Each workflow runs `release-gate.yml` as its first job — the full blocking gate
 against the tag's exact commit, ~45–60 minutes because of the TLS install leg —
 and every other job `needs:` it, so a failed, cancelled or skipped gate leaves
-publishing unreachable. `release-bundle.yml` then builds the offline bundle,
-smoke-tests it (`sha256sum -c`, `zstd -t`, git-SHA lockstep, a full `docker load`
-round-trip, the source-offer assertions) and runs
-`gh release create --verify-tag` + `gh release upload --clobber`.
+publishing unreachable. `release-bundle.yml` then:
+
+1. confirms the checked-out commit IS the tagged commit (`git describe
+   --exact-match --tags` must equal the pushed tag) — the build is from the tag,
+   never a branch head (directive Decision 9);
+2. imports `secrets.CORRELIX_DIST_SIGNING_KEY` into a throwaway `GNUPGHOME`
+   (mode 700, wiped in an `always()` step) and exports the fingerprint as
+   `CORRELIX_SIGNING_KEY`. **If the secret is absent the job FAILS here** with
+   `BLOCKED: distribution signing key not configured — CORRELIX_DIST_SIGNING_KEY`
+   (§0.6) — it does not skip, and nothing is uploaded;
+3. builds the offline bundle with `CORRELIX_RELEASE_BUILD=1`, which makes signing
+   mandatory: the bundle's `MANIFEST` gains the provenance block (tag, full
+   source sha, UTC timestamp, build environment, signer fingerprint), every
+   shipped file must be covered by `SHA256SUMS`, and `SHA256SUMS.asc` is written
+   and self-verified — any failure fails the build rather than producing a
+   checksum-only release;
+4. smoke-tests it (`sha256sum -c`, `zstd -t`, git-SHA lockstep, a full
+   `docker load` round-trip, the source-offer assertions);
+5. verifies the signature in a step of its own (`gpg --verify SHA256SUMS.asc
+   SHA256SUMS`, `sha256sum -c`, `MANIFEST` carries `signing-key`) **before** any
+   upload;
+6. runs `gh release create --verify-tag` + `gh release upload --clobber`.
+
+A customer repeats step 5 with `gpg --verify SHA256SUMS.asc SHA256SUMS` — which
+needs the distribution PUBLIC key published somewhere they can fetch it
+(`RELEASE_CHECKLIST.md` §6.7a-2, still open).
+
+That is the **bundle** trust domain. The **image** trust domain is a different
+key material entirely — Cosign keyless, no stored key, nothing for the owner to
+create — and is verified in step 5 below. All four signing domains and the
+customer-facing verification commands are tabulated in `RELEASE_CHECKLIST.md`
+§4.16.
 
 The **manual half** of publishing the release page:
 
@@ -284,11 +357,32 @@ executed by `publish-images.yml` on the step-4 tag push; requires explicit owner
 authorization AS PART OF the step-4 authorization**
 
 There is no separate command. `publish-images.yml` fires on `push: tags:
-['v*.*.*']`, runs `release-gate.yml` first, and only then builds and pushes the
-four images tagged `semver`, `major.minor` and `sha`, attaching to each digest a
-keyless Sigstore **SLSA build-provenance attestation** and a per-image
-**CycloneDX SBOM**, and running the `oci-compliance … --release` gate against the
-pushed digest.
+['v*.*.*']` and runs `release-gate.yml` first. Then, **per image, in this order**
+(owner Decision 4, 2026-09-13 — the order is the control, not a detail):
+
+1. build from the tag's commit and **push BY DIGEST ONLY** — `push-by-digest=true`,
+   so at this point the image exists in GHCR and **no tag resolves to it**;
+2. `cosign sign --yes <image>@sha256:<digest>` — **keyless**, against this
+   workflow's Actions OIDC identity. There is no signing secret and no key to
+   create: the signing material is a short-lived Fulcio certificate. The digest
+   is signed, never a tag, because a tag can be re-pointed afterwards;
+3. `cosign verify` in a step of its own, pinned to the **exact** identity
+   (`--certificate-oidc-issuer` + `--certificate-identity`, never a permissive
+   `--certificate-identity-regexp`) — this is the gate;
+4. the keyless Sigstore **SLSA build-provenance attestation**, now *after* the
+   signature verified, plus a check that the attestation bundle really names this
+   digest, repository, workflow, commit and build event;
+5. the per-image **CycloneDX SBOM** (a separate control, unchanged);
+6. the `oci-compliance … --release` gate against the pushed digest;
+7. **only then** the release tags — `semver`, `major.minor`, `sha` — applied by
+   `docker buildx imagetools create --prefer-index=false` (a registry-side retag,
+   no rebuild, digest preserved), each one then asserted to resolve to the digest
+   that was signed.
+
+So nothing a customer can name by tag exists until its signature has been
+verified. If any step from 2 to 6 fails, the run fails leaving an **untagged**
+digest in the registry — unreferenced, unpullable by name, and recoverable;
+that is deliberately the cheaper failure.
 
 This is called out as its own step because it is a **distinct irreversible
 publication** with its own failure modes — not because it can be triggered
@@ -309,9 +403,24 @@ a decision available at push time.
 gh run list --workflow=publish-images.yml --limit 3         # success
 gh api user/packages/container/netops-api/versions | jq -r '.[0].metadata.container.tags[]'
 
-# The provenance a customer would actually check:
-gh attestation verify oci://ghcr.io/raorakurty/netops-api@<digest> --owner RaoRakurty
+# The SIGNATURE a customer would actually check. The identity is pinned: without
+# it cosign verifies a signature minted by ANY workflow in ANY repository.
+# Needs cosign >= 3.0. Verify the DIGEST, never the tag.
+IMAGE=ghcr.io/raorakurty/netops-api
+TAG=v0.9.0-rc1
+DIGEST=$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{.Manifest.Digest}}')
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity https://github.com/RaoRakurty/NetOps_Observability/.github/workflows/publish-images.yml@refs/tags/$TAG \
+  "$IMAGE@$DIGEST"
+
+# The provenance, which is an adjacent control and not a substitute for the above:
+gh attestation verify "oci://$IMAGE@$DIGEST" --owner RaoRakurty
 ```
+
+Repeat for `netops-correlation`, `netops-nginx` and `netops-frontend`. A signature
+that verifies only *without* `--certificate-identity` is **not** a pass — it means
+something else signed the image.
 
 Also download the `oci-compliance-*` manifest artifacts from the run and confirm
 each records `PASS` in release mode.
@@ -372,12 +481,12 @@ An empty row means the step is not authorized and must not be run.
 
 | Step | Action | Authorized by | Date (UTC) | Executed by | Result |
 |---|---|---|---|---|---|
-| 1 | branch protection — 19 required checks | | | | |
+| 1 | branch protection — 19 required checks | owner (Decision 5 directive) | 2026-09-13 | coordinating agent session, via the GitHub API | **APPLIED** — 21 required checks live, `strict`, `enforce_admins`, conversation resolution; tag ruleset `release-tags-immutable`; verified by live re-read |
 | 2 | merge to `main` | | | | |
 | 3 | create + sign `v0.9.0-rc1` | | | | |
 | 4 | push the tag · publish the release | | | | |
 | 5 | publish GHCR images | | | | |
 | 6 | registry access | | | | |
 
-**As of the writing of this page every row is empty, and that is the accurate
-state of the release.**
+**Row 1 was filled on 2026-09-13. Rows 2–6 are still empty, and that is the
+accurate state of the release: nothing has been merged, tagged or published.**

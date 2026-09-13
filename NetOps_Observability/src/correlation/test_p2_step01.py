@@ -513,6 +513,11 @@ def _stack(monkeypatch):
     monkeypatch.setattr(main, "CORR_COHORT_TOUCH_GATE", True)
     monkeypatch.setattr(main, "CORR_LIFECYCLE_EPOCH_CADENCE", True)
     monkeypatch.setattr(main, "CORR_ENGINE_DRAIN_COHORTS", 5)
+    # E4's `rows_for` helper sets the epoch budget DIRECTLY, so register it at
+    # its current value here and let teardown put it back: a leaked budget
+    # changes how every later test in the process schedules its sweep.
+    monkeypatch.setattr(main, "CORR_ENGINE_EPOCH_BUDGET_S",
+                        main.CORR_ENGINE_EPOCH_BUDGET_S)
     yield monkeypatch
     main.WINDOW_BUFFER.clear(); main._BUFFERED_IDS.clear()
     main._BUFFERED_ID_ORDER.clear(); main._PROCESSED_IDS.clear()

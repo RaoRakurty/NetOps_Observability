@@ -853,7 +853,28 @@ async def _sweep(components: int, cohorts: int, cohort_size: int) -> None:
 # the lab box and 3.6 on a hosted runner — i.e. straddled its own floor.
 _E10_COHORTS = 8
 _E10_COHORT_SIZE = 20
-_E10_MAX_COHORT_SIZE = 60
+# AXIS AUDIT (tracker 289, 2026-09-13). Walked past the old cap of 60 on the
+# 4-core lab box, worst of 3 reps at each size:
+#   cohort   drained (floor 32)   mean cohort   holds expired   host load1
+#      20          150   (4.7x)      0.396 s          0            14.4
+#      40          300   (9.4x)      0.623 s          0            14.6
+#      60          570  (17.8x)      1.078 s        **1**          17.4
+#     120        1,260  (39.4x)      2.298 s        **1**          30.8
+#     240        3,284 (102.6x)      9.699 s        **4**          42.1
+# The MEASURED quantity is sound and does not saturate — drained grows at
+# elasticity 1.24 and clears the fixed floor by 4.7x at the base size — and the
+# floor itself never moves with the axis, which is this knob's whole point.
+#
+# What the axis DOES do is grow each cohort's wall-clock duration against
+# `CORR_EVIDENCE_HOLD_MAX_S` (5 s), the per-cohort hold deadline this very test
+# asserts is never hit (`hold_expired_total == 0`). Nothing connected the two,
+# and at the old cap of 60 a hold DID expire on a contended box — a sibling
+# assertion in the same test, broken by the sizer growing the fixture, which is
+# exactly the shared-axis trap tracker 289 went looking for. The cap is now 40,
+# the largest size measured with zero expiries; growing past it buys margin the
+# floor did not need (17.8x already) at the cost of the one absolute deadline
+# here. If this ever needs to grow again, measure the expiries, not the drain.
+_E10_MAX_COHORT_SIZE = 40
 _E10_PER_COHORT_FLOOR = 4
 
 
@@ -912,7 +933,17 @@ def test_E10_the_consumer_drains_between_cohorts_without_the_queue_being_full(_s
         f"{produced} items across {_E10_COHORTS} cohorts of {gate.size} — that "
         f"is the one-item-per-cohort starvation the generational hold exists to "
         f"fix ({gate.report()})")
-    assert q.held is False and q.hold_expired_total == 0
+    assert q.held is False, "a cohort hold outlived its cohort"
+    assert q.hold_expired_total == 0, (
+        f"{q.hold_expired_total} cohort hold(s) hit the "
+        f"{main.CORR_EVIDENCE_HOLD_MAX_S:.0f}s CORR_EVIDENCE_HOLD_MAX_S "
+        f"deadline at cohort size {gate.size}"
+        + ("" if not gate.calibrated else
+           f" — and timing_gate GREW this cohort from {_E10_COHORT_SIZE} to "
+           f"{gate.size}. That deadline is wall-clock and the cohort's duration "
+           f"grows with this axis, so suspect the sizer before the hold: see "
+           f"_E10_MAX_COHORT_SIZE for the measured expiry/size curve. Do NOT "
+           f"raise CORR_EVIDENCE_HOLD_MAX_S to make this pass"))
 
 
 def test_E10b_the_hold_is_released_by_every_exit_including_a_raising_cohort(_stack):

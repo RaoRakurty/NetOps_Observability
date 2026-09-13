@@ -82,10 +82,10 @@ func (leaseFakeExecStore) Cancel(context.Context, string, time.Time, string) err
 func (leaseFakeExecStore) RecordEvent(context.Context, string, string, reports.Phase, time.Time, string) error {
 	return nil
 }
-func (leaseFakeExecStore) Get(context.Context, string, bool, string) (reports.ExecutionRecord, []reports.ExecEvent, bool, error) {
+func (leaseFakeExecStore) Get(context.Context, reports.ExecScope, string) (reports.ExecutionRecord, []reports.ExecEvent, bool, error) {
 	return reports.ExecutionRecord{}, nil, false, nil
 }
-func (leaseFakeExecStore) List(context.Context, string, bool, reports.ExecQuery) ([]reports.ExecutionRecord, error) {
+func (leaseFakeExecStore) List(context.Context, reports.ExecScope, reports.ExecQuery) ([]reports.ExecutionRecord, error) {
 	return nil, nil
 }
 

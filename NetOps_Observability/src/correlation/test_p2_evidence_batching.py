@@ -704,6 +704,21 @@ def _storm_fixture(*, nodes: int, edges: int, ambient: int):
 # which must stay two nodes for the slice to be what is isolated.
 _B10_AMBIENT = 50_000
 _B10_MAX_AMBIENT = 400_000     # ~8 s of grind on the lab box; the cap
+# AXIS AUDIT (tracker 289, 2026-09-13) — walked to the cap and past it on the
+# 4-core lab box, both legs at every size:
+#     ambient    window   mutant     FIXED   fixed:mutant
+#      50,000    50,002    500 ms   16.7 ms       0.033
+#     100,000   100,002  1,071 ms   24.9 ms       0.023
+#     200,000   200,002  2,216 ms   42.0 ms       0.019
+#     400,000   400,002  6,446 ms   59.0 ms       0.009   <- the cap
+# The axis does NOT saturate: the window grows exactly linearly and the mutant
+# pays at elasticity 1.23 all the way to the cap. The fixed leg DOES grow with
+# the axis — an offloaded `_window_index` build still holds the GIL for each
+# un-preemptible C call (B10b's rule) — but at elasticity 0.61, i.e. far slower
+# than the mutant, so the fixed:mutant ratio FALLS as the fixture grows. That is
+# what makes this axis rescuable, and it is the property to re-check if this
+# gate is ever re-sized: at the cap the fixed leg is 59 ms against the 500 ms
+# budget, an 8.5x margin, and the watchdog counted no stall at any size.
 _LOOP_BUDGET_MS = 500.0        # §4's budget: the number the watchdog warns at
 
 
@@ -781,7 +796,15 @@ def test_B10_the_decision_write_never_holds_the_loop_past_the_budget(_stack,
     assert fixed < _LOOP_BUDGET_MS, (
         f"the Decision write still froze the loop for {fixed:.0f} ms over "
         f"{len(window)} signals — the window-sized work is back on the event "
-        f"loop")
+        f"loop"
+        + ("" if not gate.calibrated else
+           f". NOTE: timing_gate grew this window from {_B10_AMBIENT:,} to "
+           f"{gate.size:,} ({gate.size / _B10_AMBIENT:.1f}x), and the fixed leg "
+           f"grows with the axis too (measured elasticity 0.61 against the "
+           f"mutant's 1.23 — see _B10_MAX_AMBIENT). Before touching the "
+           f"offload, check whether the fixture simply outgrew it: at the "
+           f"{_B10_MAX_AMBIENT:,} cap the fixed leg measured 59 ms, so a "
+           f"breach here on a grown window is NOT the shape this audit found"))
     assert main.LOOP_LAG_STALLS == 0
     assert fixed < mutant / 2
 
@@ -943,16 +966,40 @@ def storm_aggregate():
 _SHIPPED_SNAP_COST = main._snap_cost
 
 # The live aggregate's shape: 950 folded entities (`bb1e46d6` had 922) carrying
-# 90 signals each. The NODE COUNT is load-bearing and must never be the growth
-# axis — `_snap_elements` is `len(nodes) + len(edges)` and the whole defect is
-# that it reads BELOW `CORR_OFFLOAD_MIN_ELEMENTS` (2,000) for the costliest
-# object in the process. Measured: at 2,375 nodes the mutant's worst lag fell
-# from 2,418 ms to 339 ms, because past the threshold the mutant sizer offloads
-# too and there is no mutant left. SIGNALS PER NODE is the axis that grows the
-# serialize-and-hash cost while keeping the shape (B12 calibrates on it).
+# 90 signals each. The NODE COUNT is load-bearing — `_snap_elements` is
+# `len(nodes) + len(edges)` and the whole defect is that it reads BELOW
+# `CORR_OFFLOAD_MIN_ELEMENTS` (2,000) for the costliest object in the process.
+# Measured: at 2,375 nodes the mutant's worst lag fell from 2,418 ms to 339 ms,
+# because past the threshold the mutant sizer offloads too and there is no
+# mutant left.
+#
+# B12 USED TO CALIBRATE ON SIGNALS PER NODE (`_AGG_MAX_SIGNALS_PER_NODE = 360`).
+# It no longer does, and the axit audit that retired it (tracker 289,
+# 2026-09-13) is worth stating because it is NOT the loop-yield failure mode:
+# this axis does not saturate at all — it pays SUPERLINEARLY, elasticity 2.35
+# over 90 -> 360 signals per node (85,500 -> 342,000 signals; the mutant's worst
+# lag 259 -> 6,687 ms on the lab box). The problem is that the FIXED leg pays at
+# elasticity **2.29** — the same exponent. The two legs are locked together, so
+# no cap buys margin: growing the fixture to make the mutant breach the budget
+# moves the offloaded leg toward it in lockstep (an offloaded serialize still
+# holds the GIL for each un-preemptible C call, B10b's rule). Every other
+# `timing_gate` caller measured that day has a fixed leg an order of magnitude
+# slacker — B10 0.61 against a 1.23 mutant, the lifecycle merge 0.86 against
+# 1.14, the sync close batch 0.02 against 0.80 (its fixed leg is FLAT: 53.0 /
+# 54.8 / 54.2 ms across a 3x axis).
+#
+# Worse, `calibrated_stall` extrapolates on a LINEAR model, so a 2.35 axis makes
+# it overshoot the SIZE badly: to multiply the reading by 4x this axis needs 1.8x
+# the fixture, and the model asks for 4x. Simulating the real sizer against the
+# measured curve, anchored on this file's own documented numbers (lab mutant
+# 1,321 ms / fixed 94 ms at 90; the 2026-09-03 hosted runner 466 ms): the lab box
+# never calibrates and sits at 19 % of the 500 ms budget, that hosted runner
+# grows to 194 and sits at 39 %, and a machine 2x that runner grows to the 360
+# cap and sits at **79 %** — a 1.3x margin on an assertion whose failure message
+# says the offload regressed. It would not have. So the fixture is FIXED at the
+# live shape and the adequacy claim is structural instead (see B12).
 _AGG_NODES = 950
 _AGG_SIGNALS_PER_NODE = 90
-_AGG_MAX_SIGNALS_PER_NODE = 360
 
 
 def _aggregate_fixture(per_node: int = _AGG_SIGNALS_PER_NODE):
@@ -1079,50 +1126,61 @@ def _aggregate_lag(_stack, snap, window, *, cost_gate: bool) -> float:
 
 def test_B12_the_storm_aggregate_never_holds_the_loop_past_the_budget(
         _stack, storm_aggregate):
-    """The regression, pinned by the watchdog that saw it live.
+    """The regression, pinned by the watchdog that saw it live, on the LIVE
+    SHAPE — 950 folded entities carrying 90 signals each.
 
     MUTANT (`_snap_cost` = `_snap_elements`, the shipped-before sizer): the
-    aggregate's ~85k signals are serialized and hashed on the loop thread and
-    the watchdog counts a stall above the 500 ms budget.
+    aggregate's ~85k signals are serialized and hashed on the loop thread.
+    FIXED (`_snap_cost` = the shipped sizer): they go to the executor.
 
-    THE FLOOD IS SIZED TO THE MACHINE (timing_gate.py). `fixed < 500 ms` is the
-    §4 budget and stays absolute; the same number on the mutant leg is only the
-    proof that the flood was big enough for that budget to be a real test, and
-    a hosted runner on 2026-09-03 serialized this one in 466 ms and so proved
-    nothing. Signals per node is the only axis grown — see `_aggregate_fixture`
-    for why the node count must not be."""
-    built = {_AGG_SIGNALS_PER_NODE: storm_aggregate}
+    NOT SIZED TO THE MACHINE ANY MORE (tracker 289, 2026-09-13). This gate used
+    to grow the flood through `timing_gate` until the mutant's stall cleared
+    500 ms, which made the MUTANT's breach the adequacy proof. The audit that
+    retired it is in `_AGG_SIGNALS_PER_NODE`'s comment: the axis is superlinear
+    (elasticity 2.35) and so is the FIXED leg (2.29), so the two ride the same
+    exponent and growing the fixture cannot separate them — on a machine 2x the
+    2026-09-03 hosted runner the sizer lands at the old 360 cap with the fixed
+    leg at 79 % of the very budget it is asserting, and the failure message
+    would blame the offload for a fixture the sizer grew.
 
-    def grind(per_node: int) -> float:
-        if per_node not in built:
-            built[per_node] = _aggregate_fixture(per_node)
-        snap, window = built[per_node]
-        assert len(snap.nodes) >= 900 and not snap.edges, (
-            "fixture must be an aggregate")
-        assert snap.signal_count() >= 50_000, "fixture must carry the flood"
-        assert main._snap_elements(snap) < main.CORR_OFFLOAD_MIN_ELEMENTS, (
-            "the graph-sized reading must be BELOW the threshold — that is the "
-            "defect")
-        assert _SHIPPED_SNAP_COST(snap) >= main.CORR_OFFLOAD_MIN_ELEMENTS
-        return _aggregate_lag(_stack, snap, window, cost_gate=False)
+    So the ADEQUACY claim is structural now, and machine-independent:
+      * the fixture really is the shape the defect lives in — an aggregate,
+        carrying the flood, whose graph-sized reading is BELOW the offload
+        threshold while its true cost is far above it. That IS the defect;
+      * `fixed < mutant / 2` is a same-fixture, same-machine RATIO: both legs
+        scale with the machine, so it says the offload moved most of the work
+        without a clock deciding anything. Measured 14x on the lab box
+        (1,321 ms vs 94 ms) and 2.9x on a box at load average 9.
 
-    gate = timing_gate.calibrated_stall(
-        grind, size=_AGG_SIGNALS_PER_NODE, floor=_LOOP_BUDGET_MS,
-        max_size=_AGG_MAX_SIGNALS_PER_NODE,
-        name="storm aggregate serialized on the loop thread")
-    assert gate.ok, gate.report()
-    mutant = gate.value
-    assert main.LOOP_LAG_STALLS >= 1, "the watchdog must count the mutant's stall"
+    `fixed < 500 ms` stays absolute — it is the §4 budget, it is asserted on the
+    live shape rather than on a grown one, and it measures 94 ms on the lab box
+    (a 5.3x margin) with the watchdog counting no stall. WHICH calls are
+    dispatched off the loop is pinned exactly, and with no clock at all, by
+    B12b.
+    """
+    snap, window = storm_aggregate
+    # Teeth: without these the mutant is not a mutant and nothing below means
+    # anything. They are the whole defect, stated as facts about the fixture.
+    assert len(snap.nodes) >= 900 and not snap.edges, "fixture must be an aggregate"
+    assert snap.signal_count() >= 50_000, "fixture must carry the flood"
+    assert main._snap_elements(snap) < main.CORR_OFFLOAD_MIN_ELEMENTS, (
+        "the graph-sized reading must be BELOW the threshold — that is the defect")
+    assert _SHIPPED_SNAP_COST(snap) >= main.CORR_OFFLOAD_MIN_ELEMENTS, (
+        "…and the true cost must be above it, or the shipped sizer would not "
+        "offload either and the two legs would be the same leg")
 
-    # The FIXED leg runs against the SAME flood the mutant breached on.
-    snap, window = built[gate.size]
+    mutant = _aggregate_lag(_stack, snap, window, cost_gate=False)
+    # The FIXED leg runs against the SAME flood, which is now also the live one.
     fixed = _aggregate_lag(_stack, snap, window, cost_gate=True)
     assert fixed < _LOOP_BUDGET_MS, (
         f"a storm aggregate still froze the loop for {fixed:.0f} ms over "
         f"{snap.signal_count()} signals — its signal-sized work is back on the "
         f"event loop")
     assert main.LOOP_LAG_STALLS == 0
-    assert fixed < mutant / 2
+    assert fixed < mutant / 2, (
+        f"the offload moved almost nothing: {fixed:.0f} ms fixed against "
+        f"{mutant:.0f} ms with the shipped-before sizer over "
+        f"{snap.signal_count()} signals")
 
 
 def test_B12b_the_aggregates_signal_sized_steps_go_to_the_executor(
@@ -1528,6 +1586,10 @@ def _gc_restore():
     tuned, frozen = main._GC_TUNED, main.GC_FROZEN_OBJECTS
     pause_max, pause_total = main.GC_PAUSE_MAX_S, main.GC_PAUSE_TOTAL_S
     counts = list(main.GC_COLLECTIONS)
+    # The FLAG too, not just the state it produced: B15c/B15d flip
+    # CORR_GC_TUNE directly, and a leaked True re-tunes the collector for every
+    # later test in the process.
+    gc_tune = main.CORR_GC_TUNE
     yield
     gc.unfreeze()
     gc.set_threshold(*thresholds)
@@ -1535,6 +1597,7 @@ def _gc_restore():
     main._GC_TUNED, main.GC_FROZEN_OBJECTS = tuned, frozen
     main.GC_PAUSE_MAX_S, main.GC_PAUSE_TOTAL_S = pause_max, pause_total
     main.GC_COLLECTIONS[:] = counts
+    main.CORR_GC_TUNE = gc_tune
     if main._gc_probe in gc.callbacks:
         gc.callbacks.remove(main._gc_probe)
 

@@ -215,6 +215,68 @@ describe("PeersPanel", () => {
     expect(screen.getByText(/absent feed, not a healthy fleet/i)).toBeTruthy();
   });
 
+  // ── tracker 295 ──────────────────────────────────────────────────────────
+  // A failed BMP query used to render as "the receiver is off (FEATURE_BMP)".
+  // Off is a deployment decision; broken is the thing the operator opened this
+  // tab to find. They must not be the same screen.
+  it("a receiver that is ON and did not answer is NOT reported as switched off", async () => {
+    bgpBmpSessions.mockRejectedValue(new Error(
+      '502 Bad Gateway: {"error":"dial tcp 172.18.0.9:9000: connect: connection refused"}',
+    ));
+    metricsQuery.mockResolvedValue({ status: "success", data: { resultType: "vector", result: [] } });
+    const { container } = render(<PeersPanel />);
+
+    await waitFor(() => expect(screen.getByText(/switched on and did not answer/i)).toBeTruthy());
+    expect(screen.getByText(/the feed is broken, not because the/i)).toBeTruthy();
+    // The off-state copy must be nowhere near it…
+    expect(screen.queryByText(/FEATURE_BMP/)).toBeNull();
+    expect(screen.queryByText(/absent feed, not a healthy fleet/i)).toBeNull();
+    // …it is announced, not carried by colour alone (§ errors)…
+    expect(screen.getByRole("alert")).toBeTruthy();
+    // …and the api envelope still does not reach the screen.
+    expect(container.textContent ?? "").not.toMatch(/dial tcp|172\.18\.0\.9|Bad Gateway/);
+  });
+
+  it("a REFUSED read says the data exists and this account cannot see it", async () => {
+    bgpBmpSessions.mockRejectedValue(new Error('403 Forbidden: {"error":"no"}'));
+    metricsQuery.mockResolvedValue({ status: "success", data: { resultType: "vector", result: [] } });
+    render(<PeersPanel />);
+    await waitFor(() => expect(screen.getByText(/not for this account/i)).toBeTruthy());
+    expect(screen.getByText(/empty for you — not for the network/i)).toBeTruthy();
+    expect(screen.queryByText(/FEATURE_BMP/)).toBeNull();
+  });
+
+  it("a device-metric table with a dead BMP half SAYS it is incomplete", async () => {
+    // The worst case: rows render, so the screen looks like an answer, while
+    // every BMP row (the ones carrying the transition reason) is missing.
+    bgpBmpSessions.mockRejectedValue(new Error("504 Gateway Timeout: "));
+    metricsQuery.mockResolvedValue({
+      status: "success",
+      data: { resultType: "vector", result: [{ metric: { device: "edge-r2", peer: "10.1.0.1" }, value: [0, "6"] }] },
+    });
+    render(<PeersPanel />);
+    await waitFor(() => expect(screen.getByText("10.1.0.1")).toBeTruthy());
+    expect(screen.getByText(/This list is incomplete/i)).toBeTruthy();
+    expect(screen.getByText(/did not answer, so the rows it would have carried are missing/i)).toBeTruthy();
+    // And it names the RIGHT missing half: a refused read and a dead one are
+    // different sentences, and neither is the flag-off one.
+    expect(screen.queryByText(/refused this account's read/i)).toBeNull();
+    expect(screen.queryByText(/The BMP receiver is off/i)).toBeNull();
+  });
+
+  it("a REFUSED read on a partial table says refused, not unanswered", async () => {
+    bgpBmpSessions.mockRejectedValue(new Error("403 Forbidden: "));
+    metricsQuery.mockResolvedValue({
+      status: "success",
+      data: { resultType: "vector", result: [{ metric: { device: "edge-r2", peer: "10.1.0.1" }, value: [0, "6"] }] },
+    });
+    render(<PeersPanel />);
+    await waitFor(() => expect(screen.getByText("10.1.0.1")).toBeTruthy());
+    expect(screen.getByText(/refused this account's read/i)).toBeTruthy();
+    expect(screen.getByText(/not missing from the network/i)).toBeTruthy();
+    expect(screen.queryByText(/did not answer/i)).toBeNull();
+  });
+
   it("says nothing is exporting when the receiver is up with no sessions", async () => {
     bgpBmpSessions.mockResolvedValue({ sessions: [], count: 0, coverage: { receiver_enabled: true, sessions_up: 0, complete: false, notes: [] } });
     metricsQuery.mockResolvedValue({ status: "success", data: { resultType: "vector", result: [] } });

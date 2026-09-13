@@ -17,11 +17,21 @@
 //
 // FIVE HONEST STATES (peersState in the model), because the difference between
 // them is the whole value of the tab:
-//   bmp_off      — FEATURE_BMP is off; the receiver is not even running.
-//   no_exporter  — the receiver is up but no router is exporting to it.
-//   no_peers     — sessions exist but we have seen no peer state.
-//   rows         — real rows.
-//   error        — the read failed; we say so instead of showing an empty table.
+//   bmp_off        — FEATURE_BMP is off; the receiver is not even running.
+//   bmp_denied     — the receiver IS running; this caller may not read it.
+//   bmp_unreadable — the receiver is enabled and did not answer. A BROKEN feed.
+//   no_exporter    — the receiver is up but no router is exporting to it.
+//   no_peers       — sessions exist but we have seen no peer state.
+//   rows           — real rows.
+//   error          — the read failed; we say so instead of showing an empty table.
+//
+// The middle two used to be the first one (tracker 295): the BMP read had a
+// catch-all `.catch(() => setBmpAvailable(false))`, so a 502 or a timeout put
+// "the BMP receiver is off (FEATURE_BMP)" on the screen. Off and broken are
+// opposite instructions — one needs no action tonight, the other is why the
+// operator opened this tab — so the status now decides which, via
+// `bmpProbeFrom` (404 = the route is not served = the flag is off; anything
+// else = it is served and the read failed).
 
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -30,8 +40,8 @@ import {
 import { operatorError } from "../../lib/errors";
 import { Chip } from "../../components/noc";
 import {
-  mergePeerRows, peerRowsFromMetrics, peerRowsFromSessions, peersState,
-  transitSet, type PeerRow,
+  bmpFeedIncomplete, bmpProbeFrom, mergePeerRows, peerRowsFromMetrics,
+  peerRowsFromSessions, peersState, transitSet, type BmpProbe, type PeerRow,
 } from "./bgpAlerts.model";
 import { Section, ShowAll, SubBlock, useCap } from "./Section";
 import AskIris from "../../components/AskIris";
@@ -56,7 +66,8 @@ function stateChip(r: PeerRow) {
 
 export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
   const [sessions, setSessions] = useState<BgpBmpSessionsResp | null>(null);
-  const [bmpAvailable, setBmpAvailable] = useState(false);
+  const [bmp, setBmp] = useState<BmpProbe>("ok");
+  const [bmpErr, setBmpErr] = useState("");
   const [metrics, setMetrics] = useState<PromInstantResponse | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(true);
@@ -64,12 +75,20 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
 
   const load = useCallback(() => {
     let alive = true;
-    setBusy(true); setErr("");
+    setBusy(true); setErr(""); setBmpErr("");
     // Each source loads independently and fails independently: a dead metric
     // store must not blank the BMP half, and vice versa.
     api.bgpBmpSessions()
-      .then((d) => { if (alive) { setSessions(d); setBmpAvailable(true); } })
-      .catch(() => { if (alive) { setSessions(null); setBmpAvailable(false); } });
+      .then((d) => { if (alive) { setSessions(d); setBmp("ok"); setBmpErr(""); } })
+      .catch((e: unknown) => {
+        if (!alive) return;
+        setSessions(null);
+        const probe = bmpProbeFrom(e);
+        setBmp(probe);
+        // A flag that is off is not a failure and has no failure to report; the
+        // other two do, and the operator needs the reason, not just the fact.
+        setBmpErr(probe === "not_enabled" ? "" : operatorError(e, "The BMP receiver did not answer."));
+      });
     api.metricsQuery(PEER_QUERY)
       .then((d) => { if (alive) setMetrics(d); })
       .catch((e: unknown) => { if (alive) setErr(operatorError(e, "The peer state of your devices could not be read.")); })
@@ -83,7 +102,7 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
   const rows = mergePeerRows(bmpRows, devRows);
   const state = peersState({
     error: !!err && rows.length === 0,
-    bmpAvailable,
+    bmp,
     sessions: sessions?.sessions.length ?? 0,
     rows: rows.length,
   });
@@ -110,6 +129,22 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
             <AskIris topic="bgp.bmp-not-reporting" label="Nothing is reporting neighbour state" />
           </div>
         )}
+        {!busy && state === "bmp_denied" && (
+          <p className="fact-line fact-bad" role="alert">
+            <b>Neighbour state is being collected, but not for this account.</b>{" "}
+            The BMP receiver is running and refused this read, so this list is
+            empty for you — not for the network. Ask an administrator to include the
+            BGP feed in your access.
+          </p>
+        )}
+        {!busy && state === "bmp_unreadable" && (
+          <p className="fact-line fact-bad" role="alert">
+            <b>The BMP receiver is switched on and did not answer.</b>{" "}
+            Neighbour state is missing because the feed is broken, not because the
+            fleet is quiet. This one needs someone to look at it.
+            {bmpErr && <> {bmpErr}</>}
+          </p>
+        )}
         {!busy && state === "no_exporter" && (
           <div className="empty">
             No router is sending neighbour state yet. An empty feed, not a converged network.
@@ -123,6 +158,19 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
         {!busy && state === "error" && (
           <p className="fact-line fact-bad" role="alert">
             Neighbour state could not be read: {err}
+          </p>
+        )}
+
+        {!busy && bmpFeedIncomplete(bmp, rows.length) && (
+          <p className="fact-line fact-warn" role="alert">
+            <b>This list is incomplete.</b>{" "}
+            {bmp === "not_enabled" &&
+              "The BMP receiver is off, so these rows come only from device sampling — no transition reason and no counters."}
+            {bmp === "denied" &&
+              "The BMP receiver refused this account's read, so the rows it would have carried are missing from this list — they are not missing from the network."}
+            {bmp === "unreadable" &&
+              "The BMP receiver did not answer, so the rows it would have carried are missing. That is a broken feed, not a quiet one."}
+            {bmp === "unreadable" && bmpErr ? <> {bmpErr}</> : null}
           </p>
         )}
 

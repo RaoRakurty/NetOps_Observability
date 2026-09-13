@@ -48,7 +48,8 @@ var validSavedTypes = map[string]bool{
 // backend / an in-memory filter on the file backend); infrastructure callers
 // (the report scheduler) pass ("", true) for the platform view. Get/Create/
 // Update/Delete operate by id; the HTTP layer enforces per-object authz
-// (canSeeSaved/canMutateSaved) before mutating, so they need no scope arg.
+// (savedVisibility.visible / .mutable — tenant scope PLUS the operator-
+// visibility restriction) before reading or mutating, so they need no scope arg.
 type Repo interface {
 	List(typ, tenant string, cross bool) []Object
 	Get(id string) (Object, bool)

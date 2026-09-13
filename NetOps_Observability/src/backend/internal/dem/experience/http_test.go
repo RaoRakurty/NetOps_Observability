@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -422,6 +423,120 @@ func TestAChangeListCutAtTheServerCeilingIsNotReportedComplete(t *testing.T) {
 	if resp.Total <= maxPageLimit {
 		t.Fatalf("total is %d, which cannot tell a full page from a truncated one", resp.Total)
 	}
+}
+
+// tracker 291 — `total` must be HOW MANY MATCHED, not how many we fetched.
+//
+// The handler asks the store for `maxPageLimit + 1` rows so it can tell a full
+// page from a truncated one, and it published len(rows) as `total`. So an
+// estate with 525 changes in the window answered `"total": 501` — a number
+// describing OUR FETCH, tied to the page ceiling rather than to the estate, and
+// wrong by exactly the amount that matters to a caller sizing a walk.
+func TestATruncatedChangeListReportsTheREALCount(t *testing.T) {
+	api, _ := newTestAPI(t, nil)
+	ctx := context.Background()
+	const seeded = maxPageLimit + 25
+	for i := 0; i < seeded; i++ {
+		if _, err := api.deps.Store.RecordChange(ctx, ChangeEvent{
+			TenantID: "acme", Type: ChangeConfig, Object: "sw-1",
+			Summary: "vlan edit", App: "checkout", Site: "dc1",
+			Provenance: prov(SourceConfigDrift, -time.Duration(i+1)*time.Second),
+		}); err != nil {
+			t.Fatalf("seed %d: %v", i, err)
+		}
+	}
+
+	read := func(query string) (total, returned int, header string) {
+		r := httptest.NewRequest(http.MethodGet, ChangesPath+query, nil)
+		w := httptest.NewRecorder()
+		api.HandleChanges(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("list%s: %d %s", query, w.Code, w.Body.Bytes())
+		}
+		var resp struct {
+			Total    int `json:"total"`
+			Returned int `json:"returned"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v (%s)", err, w.Body.Bytes())
+		}
+		return resp.Total, resp.Returned, w.Header().Get("X-Total-Count")
+	}
+
+	total, returned, header := read("?limit=500")
+	if total != seeded {
+		t.Fatalf("total is %d, want the %d changes that actually matched "+
+			"(%d would be the fetch artefact maxPageLimit+1)", total, seeded, maxPageLimit+1)
+	}
+	if returned != maxPageLimit {
+		t.Fatalf("returned %d rows, want the %d ceiling", returned, maxPageLimit)
+	}
+	if header != fmt.Sprintf("%d", seeded) {
+		t.Fatalf("X-Total-Count is %q — a walking client sizes its walk on this header", header)
+	}
+
+	// The estate does not change size because the caller asked for a smaller
+	// page. `total` answering differently for the same window is the tell that
+	// it was never a total.
+	small, _, _ := read("?limit=10")
+	if small != total {
+		t.Fatalf("total moved with the page limit: %d at limit=10 vs %d at limit=500", small, total)
+	}
+
+	// And it stays a count of the FILTERED set, not of the tenant.
+	filtered, _, _ := read("?limit=10&app=nothing-matches-this")
+	if filtered != 0 {
+		t.Fatalf("total ignored the filter: %d for an app with no changes", filtered)
+	}
+}
+
+// A count the store cannot answer is reported as the FLOOR it is, with the note
+// saying so — never as the fetch artefact wearing the word "total".
+func TestAChangeCountThatFailsIsNotPaperedOverWithTheArtefact(t *testing.T) {
+	api, _ := newTestAPI(t, nil)
+	ctx := context.Background()
+	for i := 0; i < maxPageLimit+25; i++ {
+		if _, err := api.deps.Store.RecordChange(ctx, ChangeEvent{
+			TenantID: "acme", Type: ChangeConfig, Object: "sw-1",
+			Summary: "vlan edit", Provenance: prov(SourceConfigDrift, -time.Duration(i+1)*time.Second),
+		}); err != nil {
+			t.Fatalf("seed %d: %v", i, err)
+		}
+	}
+	api.deps.Store = countRefusingStore{Store: api.deps.Store}
+
+	r := httptest.NewRequest(http.MethodGet, ChangesPath+"?limit=500", nil)
+	w := httptest.NewRecorder()
+	api.HandleChanges(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", w.Code, w.Body.Bytes())
+	}
+	var resp struct {
+		Total    int    `json:"total"`
+		Complete bool   `json:"complete"`
+		Note     string `json:"note"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != maxPageLimit {
+		t.Fatalf("total is %d — with no count available it must be the floor %d, "+
+			"and never the %d fetch artefact", resp.Total, maxPageLimit, maxPageLimit+1)
+	}
+	if resp.Complete {
+		t.Fatal("a read whose total is only a floor reported itself complete")
+	}
+	if !strings.Contains(resp.Note, "could not be counted") {
+		t.Fatalf("the note does not say the total is unknown: %q", resp.Note)
+	}
+}
+
+// countRefusingStore is a store whose COUNT is broken and whose LIST is fine —
+// the split every "degrade honestly" path has to survive.
+type countRefusingStore struct{ Store }
+
+func (countRefusingStore) CountChanges(context.Context, string, ChangeQuery) (int, error) {
+	return 0, errors.New("count refused")
 }
 
 // The same list BELOW the ceiling is complete, and says so.

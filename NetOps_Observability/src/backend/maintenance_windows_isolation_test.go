@@ -42,13 +42,12 @@ func TestMaintenanceWindowCrossOrgIsolation(t *testing.T) {
 		}
 		tenantID := idOf(t, b)
 		user := "mw-user-" + name
-		st, b = do(t, srv, "POST", "/api/users", admin, map[string]any{
+		// `created_by` is stamped from the token's subject — the PRINCIPAL ID
+		// (tracker 300), so the fixture records that rather than the login name.
+		principal := createUserID(t, srv, admin, map[string]any{
 			"username": user, "password": "Passw0rd!2345", "role": "operator", "tenant_id": tenantID,
 		})
-		if st != 201 {
-			t.Fatalf("create user %s: %d %s", name, st, b)
-		}
-		fix[name] = &orgFixture{orgID: orgID, tenantID: tenantID, user: user, token: login(t, srv, user, "Passw0rd!2345").Token}
+		fix[name] = &orgFixture{orgID: orgID, tenantID: tenantID, user: principal, token: login(t, srv, user, "Passw0rd!2345").Token}
 	}
 	a, b := fix["A"], fix["B"]
 

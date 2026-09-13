@@ -4,6 +4,7 @@
 package users
 
 import (
+	"errors"
 	"netops/backend/internal/token"
 	"os"
 	"path/filepath"
@@ -54,13 +55,28 @@ func TestUserStoreCRUD(t *testing.T) {
 		t.Fatalf("returned user wrong: %+v", u)
 	}
 
-	if _, err := s.Create("alice", "anotherpw", "admin"); err == nil {
-		t.Fatalf("expected duplicate username (case-insensitive) to fail")
+	// Tracker 300: the same local name in the SAME tenant is still refused, and
+	// the refusal is now typed — it is the identity PK (tenant, "local", name)
+	// saying so, not a global username check.
+	if _, err := s.Create("alice", "anotherpw", "admin"); !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("duplicate local username: err = %v, want ErrUsernameTaken", err)
 	}
 
-	got, ok := s.Get("ALICE") // case-insensitive lookup
+	// With no Deps.MintID the store keeps the LEGACY id shape, so every existing
+	// deployment's ids (and everything that references them) are unchanged.
+	if u.ID != "alice" {
+		t.Fatalf("id = %q, want the legacy lower(username) shape", u.ID)
+	}
+	if u.Identity == nil || u.Identity.Issuer != LocalIssuer || u.Identity.Subject != "alice" {
+		t.Fatalf("Create must register the local identity in the same write: %+v", u.Identity)
+	}
+
+	got, ok := s.Get("ALICE") // by id, case-insensitively
 	if !ok || got.Username != "Alice" {
 		t.Fatalf("case-insensitive get failed: ok=%v got=%+v", ok, got)
+	}
+	if byName, ok := s.LookupLocal("", "alice"); !ok || byName.ID != u.ID {
+		t.Fatalf("LookupLocal(\"\", alice) = %q/%v, want %q", byName.ID, ok, u.ID)
 	}
 
 	// Reload from disk and make sure state survived.

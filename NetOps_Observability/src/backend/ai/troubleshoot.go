@@ -194,6 +194,21 @@ type TopologyContext struct {
 	Seams      []TopologySeam
 	Paths      []TopologyPathRef
 	Notes      []string
+
+	// NeighborsCapped / PathsCapped say the PROVIDER already cut the list before
+	// handing it over.
+	//
+	// They exist because a truncation that only ever travelled as prose in Notes
+	// was invisible to everything that reads the structured flag —
+	// RenderToolReply's "results truncated" line and the skill runner's
+	// "<tool> results were capped" note both key off ToolResult.Truncated, and
+	// for paths that flag could never be set: the provider caps at exactly
+	// MaxTopologyPaths and the tool's own bound tests for MORE than
+	// MaxTopologyPaths, so the condition was unreachable by construction
+	// (tracker 294). A boolean the provider sets is the fact; a sentence a
+	// reader has to parse is not.
+	NeighborsCapped bool
+	PathsCapped     bool
 }
 
 // TimelineEvent is one entry of a correlation case's timeline.
@@ -569,6 +584,24 @@ func (t topologyContextTool) Run(ctx context.Context, p Principal, args ToolArgs
 		CitationID: "topo:" + dev.ID, Kind: "topology", Text: clampText(head, maxToolTextChars), Href: href,
 	})
 
+	// THE TWO BOUNDS ARE NOT THE SAME BOUND, and conflating them is what made
+	// the paths flag dead code (tracker 294).
+	//
+	//   * the PROVIDER's bound is how much it was willing to gather. Only it
+	//     knows a cut happened, and it reports it in *Capped.
+	//   * the bound below is THIS TOOL's contract with the model — how much one
+	//     turn can carry — and it must hold for ANY injected TopologyContext
+	//     implementation, not just the one we ship. Against the shipped provider
+	//     the neighbour bound (25 vs the provider's 200) can fire and the path
+	//     bound (10 vs the provider's 10) cannot; both stay, because a bound
+	//     that happens not to bind today is still the contract.
+	//
+	// What was wrong was never the bound. It was that a cut made upstream left
+	// Truncated false, so the model was handed a partial fleet with the
+	// structured "this was capped" signal saying nothing had been cut.
+	if tc.NeighborsCapped || tc.PathsCapped {
+		tr.Truncated = true
+	}
 	ns := tc.Neighbors
 	if len(ns) > MaxTopologyNeighbors {
 		ns = ns[:MaxTopologyNeighbors]
@@ -585,6 +618,11 @@ func (t topologyContextTool) Run(ctx context.Context, p Principal, args ToolArgs
 	}
 	seams := tc.Seams
 	if len(seams) > MaxTopologySeams {
+		// This one DOES fire — the seam register is not bounded upstream — and
+		// it used to cut the list in silence. A seam that is not listed is an
+		// ownership handoff the answer does not mention, which reads as "this
+		// device sits on no seam". Say the count, as the neighbour bound does.
+		tr.Notes = append(tr.Notes, fmt.Sprintf("showing %d of %d seams", MaxTopologySeams, len(seams)))
 		seams = seams[:MaxTopologySeams]
 		tr.Truncated = true
 	}
@@ -598,6 +636,7 @@ func (t topologyContextTool) Run(ctx context.Context, p Principal, args ToolArgs
 	}
 	paths := tc.Paths
 	if len(paths) > MaxTopologyPaths {
+		tr.Notes = append(tr.Notes, fmt.Sprintf("showing %d of %d measured paths", MaxTopologyPaths, len(paths)))
 		paths = paths[:MaxTopologyPaths]
 		tr.Truncated = true
 	}

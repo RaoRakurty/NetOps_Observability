@@ -243,7 +243,7 @@ func TestWithheldMonitoringIsListedAndReleasable(t *testing.T) {
 	if got := a.MonitoredCount(); got != 2 {
 		t.Fatalf("monitored = %d, want 2", got)
 	}
-	withheld := a.MonitoringWithheld()
+	withheld := a.MonitoringWithheldFor("", true)
 	if len(withheld) != 3 || a.MonitoringWithheldCount() != 3 {
 		t.Fatalf("3 devices must be listed as withheld, got %d", len(withheld))
 	}

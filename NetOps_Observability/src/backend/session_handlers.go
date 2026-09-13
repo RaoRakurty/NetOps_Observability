@@ -50,7 +50,9 @@ func (s *server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		if !sameTenant(u.TenantID, tenant, cross) {
 			continue
 		}
-		out = append(out, sessionView{Session: x, DisplayName: u.DisplayName, TenantID: u.TenantID})
+		// The label, not the raw display name: a federated account's username is
+		// its opaque id, so the SPA must never have to fall back to it.
+		out = append(out, sessionView{Session: x, DisplayName: userDisplayLabel(u), TenantID: u.TenantID})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

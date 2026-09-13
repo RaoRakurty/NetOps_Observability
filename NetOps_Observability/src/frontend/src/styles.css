@@ -3426,22 +3426,55 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   position: relative;
   border-radius: var(--login-r-panel);
   border: 1px solid var(--panel-border);
-  background: var(--login-panel-bg);           /* opaque fallback */
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  /* A sheet of glass, lit from above. The gloss lives in the PANEL, not in the
+     backdrop: the ground behind it is a single flat charcoal, so a blur has
+     nothing to refract and cannot carry the look on its own. What reads as
+     glass here is the edge treatment — a crisp lit top rim, a dark underside
+     giving the sheet thickness, a hairline ring — plus a specular falloff
+     across the face. No orbs, no particles, no neon: just how a pane behaves
+     under a light source. */
+  background:
+    linear-gradient(180deg,
+      rgba(255, 255, 255, 0.058),
+      rgba(255, 255, 255, 0.014) 38%,
+      rgba(255, 255, 255, 0) 62%),
+    var(--login-panel-bg);                     /* opaque fallback */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),   /* lit top rim */
+    inset 0 -1px 0 rgba(0, 0, 0, 0.45),        /* shaded underside = thickness */
+    0 0 0 1px rgba(255, 255, 255, 0.045),      /* hairline ring, catches the eye at any angle */
+    0 2px 6px rgba(0, 0, 0, 0.34),             /* contact shadow */
+    0 26px 64px rgba(0, 0, 0, 0.52);           /* ambient */
+}
+/* Specular sweep: a soft diagonal highlight across the upper-left face, the
+   cue that says "this surface is smooth". Kept under 6% so it reads as sheen
+   rather than a gradient someone painted on. */
+.login-scene .card::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(128deg,
+    rgba(255, 255, 255, 0.055) 0%,
+    rgba(255, 255, 255, 0.018) 26%,
+    rgba(255, 255, 255, 0) 52%);
 }
 /* Blur only where the browser actually does it, and only then trade opacity
    for it — an unsupported backdrop-filter would otherwise leave the panel
    thinner than its contrast was measured against. */
 @supports ((backdrop-filter: blur(8px)) or (-webkit-backdrop-filter: blur(8px))) {
   .login-scene .card {
-    background: var(--login-panel-bg-blur);
-    backdrop-filter: blur(16px) saturate(1.1);
-    -webkit-backdrop-filter: blur(16px) saturate(1.1);
+    background:
+      linear-gradient(180deg,
+        rgba(255, 255, 255, 0.07),
+        rgba(255, 255, 255, 0.018) 38%,
+        rgba(255, 255, 255, 0) 62%),
+      var(--login-panel-bg-blur);
+    backdrop-filter: blur(20px) saturate(1.35) brightness(1.06);
+    -webkit-backdrop-filter: blur(20px) saturate(1.35) brightness(1.06);
   }
 }
 /* The fine top-edge highlight that makes glass read as glass. */
 .login-scene .card::before {
-  content: ""; position: absolute; left: 1px; right: 1px; top: 0; height: 1px;
+  content: ""; position: absolute; left: 1px; right: 1px; top: 0; height: 1px; z-index: 1;
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.28) 30%, rgba(255, 255, 255, 0.28) 70%, transparent);
   border-radius: var(--login-r-panel) var(--login-r-panel) 0 0;
   pointer-events: none;
@@ -3468,6 +3501,9 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   height: 48px; border-radius: var(--login-r-control);
   border: 1px solid var(--login-field-border);   /* a real boundary, ≥3:1 */
   background: var(--login-field-bg);
+  /* Recessed into the sheet: a shaded top lip and a faint lit floor read as
+     depth, which is what stops a glass panel looking like flat paper. */
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.45), inset 0 -1px 0 rgba(255, 255, 255, 0.035);
   font-family: var(--font-sans); font-size: 16px; letter-spacing: normal;
   color: var(--fg);
 }
@@ -3580,7 +3616,38 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   color-scheme: light;
   background: #eceef2;                        /* uniform cool light gray */
 }
-.login-scene.login-light .card { box-shadow: 0 16px 40px rgba(23, 28, 36, 0.12); }
+/* Frosted, not smoked. The same sheet under the same light, but on a pale
+   ground the cues invert: the lit rim is nearly white and does little, so the
+   work is done by a crisper ring and a real contact shadow. Without these the
+   panel and the background differ by about 1.07:1 and it reads as paper. */
+.login-scene.login-light .card {
+  background:
+    linear-gradient(180deg,
+      rgba(255, 255, 255, 0.85),
+      rgba(255, 255, 255, 0.30) 40%,
+      rgba(255, 255, 255, 0) 64%),
+    var(--login-panel-bg);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),      /* lit top rim */
+    inset 0 -1px 0 rgba(23, 28, 36, 0.10),        /* underside */
+    0 0 0 1px rgba(23, 28, 36, 0.055),            /* hairline ring */
+    0 2px 6px rgba(23, 28, 36, 0.10),             /* contact */
+    0 22px 52px rgba(23, 28, 36, 0.14);           /* ambient */
+}
+.login-scene.login-light .card::after {
+  background: linear-gradient(128deg,
+    rgba(255, 255, 255, 0.75) 0%,
+    rgba(255, 255, 255, 0.22) 26%,
+    rgba(255, 255, 255, 0) 52%);
+}
+.login-scene.login-light .form-input,
+.login-scene.login-light .form-select,
+.login-scene.login-light .pw-input {
+  box-shadow: inset 0 1px 2px rgba(23, 28, 36, 0.10), inset 0 -1px 0 rgba(255, 255, 255, 0.9);
+}
+.login-scene.login-light .login-scene-toggle {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 3px rgba(23, 28, 36, 0.10);
+}
 .login-scene.login-light .card::before {
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.9) 30%, rgba(255, 255, 255, 0.9) 70%, transparent);
 }

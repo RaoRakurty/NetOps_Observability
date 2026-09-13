@@ -541,3 +541,66 @@ from users where data->>'auth_source' = 'oidc';
 ```
 
 Expect `tenant_id = t_062d774a46c631273e4b9e9496df67e9` (Homedepot) for all four.
+
+## Identity key material — read before changing any issuer setting
+
+Since tracker 300 (2026-09-13) every federated account is keyed by
+**tenant + issuer + subject**, never by username or email. The issuer is
+literal key material:
+
+- OIDC/SSO: the broker's `iss` (the Keycloak realm issuer URL);
+- LDAP: `ldap:<host>:<port>` derived from `LDAP_HOST`/`LDAP_PORT`/`LDAP_USE_TLS`;
+- TACACS+: `tacacs:<host>:<port>`.
+
+Changing any of these **re-namespaces every account under it**: existing
+accounts stop matching (they show as *identity not linked yet* in Users) and the
+next sign-in provisions a fresh account with no role history. Renaming a
+directory host, moving Keycloak to a new URL, or switching LDAP TLS on/off is
+therefore an identity migration, not a config edit. Plan it: keep the old
+value until every user has been re-homed through the explicit linking
+workflow (deferred, design §15), or accept fresh accounts and re-assign roles.
+
+### The LDAP subject is the login name, not the DN (owner decision, 2026-09-13)
+
+An LDAP account's subject is the **normalised login name** the directory
+authenticated — the same rule TACACS+ has always had. The distinguished name is
+kept beside it as a profile attribute (`user_identities.directory_dn`), refreshed
+on every sign-in, and is **not** part of the key. Two consequences worth knowing:
+
+- **moving a person between OUs changes nothing.** Their DN changes, their account
+  does not. (Under the first cut it minted a new account and orphaned the old one.)
+- **renaming a person's login attribute IS an identity change**, because the login
+  name is the subject. Treat a `uid` change like an issuer change: it re-namespaces
+  that one account.
+
+### What the migration does at start-up, and what it leaves for you
+
+Every start-up runs a **deterministic identity backfill** before the API serves
+anything, and logs one summary line (`"deterministic identity migration
+complete"`) plus these metrics:
+
+```
+netops_identity_migration_accounts{state="bound-deterministic"}   # migrated offline, or asserted at a sign-in
+netops_identity_migration_accounts{state="bound-legacy-lazy"}     # repaired at a verified sign-in
+netops_identity_migration_accounts{state="unresolved"}            # waiting
+netops_identity_migration_accounts{state="ambiguous"}             # waiting for YOU
+netops_identity_legacy_bind_total{result="bound"|"ambiguous"|"refused"}
+```
+
+- **local, LDAP and TACACS+ accounts are migrated in that one pass**, because
+  their issuer (the configured host:port) and subject (the login name) are known
+  offline. Nothing waits for a login.
+- If a directory is **not configured on that boot**, its accounts are listed as
+  *unresolved* with reason `issuer-unavailable` and are migrated automatically by
+  the first start-up that has it configured. Configure the directory, restart, and
+  check the gauge.
+- **OIDC/SAML accounts cannot be migrated offline** (the broker's subject is not
+  derivable from a username or an email, and guessing it would link accounts by
+  email, which is forbidden). They stay *unresolved* until their owner signs in
+  through the same provider that created them, which binds them once, with an
+  `identity.legacy_bound` audit entry.
+- **Ambiguous** accounts need a human: the identity they would be given is already
+  another account's. Nothing was merged. List them with
+  `GET /api/users?identity=ambiguous` (or the badge in Users), decide which
+  account keeps the identity, and remove or rename the other. They are
+  re-examined on every start-up, so the flag clears itself once you have.

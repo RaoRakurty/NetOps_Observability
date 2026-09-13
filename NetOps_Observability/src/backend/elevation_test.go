@@ -31,6 +31,7 @@ import (
 	"netops/backend/internal/jwks"
 	"netops/backend/internal/oidc"
 	"netops/backend/internal/ssoidp"
+	"netops/backend/internal/users"
 	"netops/backend/models"
 )
 
@@ -45,6 +46,21 @@ type elevHarness struct {
 	key    *rsa.PrivateKey
 	p      *oidcProvider
 	claims map[string]any // what the next token exchange will assert
+	// seeded maps the IdP SUBJECT a test asserts to the account's opaque
+	// PRINCIPAL ID. Tracker 300: bindings, grants and audit actors are keyed by
+	// the id, and a federated account's id is nothing like its subject — so the
+	// tests name people by subject and look ids up here.
+	seeded map[string]string
+}
+
+// principal returns the opaque principal id of a seeded subject.
+func (h *elevHarness) principal(t *testing.T, subject string) string {
+	t.Helper()
+	id, ok := h.seeded[subject]
+	if !ok {
+		t.Fatalf("subject %q was never seeded", subject)
+	}
+	return id
 }
 
 func newElevHarness(t *testing.T) *elevHarness {
@@ -55,7 +71,7 @@ func newElevHarness(t *testing.T) *elevHarness {
 	if err != nil {
 		t.Fatalf("rsa: %v", err)
 	}
-	h := &elevHarness{srv: srv, s: s, key: key}
+	h := &elevHarness{srv: srv, s: s, key: key, seeded: map[string]string{}}
 
 	jwksSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{
@@ -179,22 +195,34 @@ func (h *elevHarness) ssoRoundTrip(t *testing.T, alias, subject string, extra ma
 }
 
 // seedFederatedUser creates the standing account an elevation login needs to
-// find. It is created through UpsertFederated, exactly as a standing SSO login
-// would create it.
+// find. It is resolved from the CANONICAL TUPLE (tracker 300) — the same
+// (tenant, issuer, subject) a standing SSO login through this broker would
+// assert — because that is the only thing the elevation door looks up. `name` is
+// the IdP subject the round trip will present, not a login handle.
 func (h *elevHarness) seedFederatedUser(t *testing.T, name, role, tenant string) User {
 	t.Helper()
-	u, err := h.s.users.UpsertFederated(name, name+"@example.test", name, role, "oidc", tenant)
+	u, err := h.s.users.ResolveFederated(users.Assertion{
+		Identity: users.Identity{
+			TenantID: tenant, Issuer: h.p.Issuer(), Subject: name, Protocol: users.ProtocolOIDC,
+		},
+		Email: name + "@example.test", DisplayName: name, Role: role,
+	}, users.Realm{}, true)
 	if err != nil {
 		t.Fatalf("seed federated user: %v", err)
 	}
+	if u.ID == name {
+		t.Fatalf("fixture rule broken: the account id equals the subject (%q)", u.ID)
+	}
+	h.seeded[name] = u.ID
 	h.s.logBindingSync(u, "oidc")
 	return u
 }
 
-// elevationOf returns the principal's live elevation binding.
-func (h *elevHarness) elevationOf(t *testing.T, user string) (RoleBinding, bool) {
+// elevationOf returns the live elevation binding of a seeded SUBJECT, looked up
+// by the account's principal id.
+func (h *elevHarness) elevationOf(t *testing.T, subject string) (RoleBinding, bool) {
 	t.Helper()
-	return h.s.activeElevation(httptest.NewRequest(http.MethodGet, "http://x/api/x", nil), user, "")
+	return h.s.activeElevation(httptest.NewRequest(http.MethodGet, "http://x/api/x", nil), h.principal(t, subject), "")
 }
 
 // ── 1. it never creates an account ──────────────────────────────────────────
@@ -208,8 +236,10 @@ func TestElevationLoginRefusesAnUnknownAccount(t *testing.T) {
 	if msg := frag.Get("sso_error"); !strings.Contains(msg, "standing provider") {
 		t.Errorf("refusal %q does not point at the standing provider", msg)
 	}
-	if _, ok := h.s.users.Get("nobody"); ok {
-		t.Fatal("an elevation login PROVISIONED an account; it must never create one")
+	// Nothing was created. `nobody` names no tuple, so the check is the store's
+	// own count: an elevation door provisions nothing, ever.
+	if n := h.s.users.Count(); n != 1 {
+		t.Fatalf("the store holds %d accounts, want only the bootstrap admin — an elevation login PROVISIONED one", n)
 	}
 }
 
@@ -295,7 +325,7 @@ func TestElevationLoginNeverChangesTenantOrStandingRole(t *testing.T) {
 		"realm_access": map[string]any{"roles": []string{"netops-admin"}},
 		"tenant_id":    TenantGlobal,
 	})
-	after, ok := h.s.users.Get("acmeuser")
+	after, ok := h.s.users.Get(before.ID)
 	if !ok {
 		t.Fatal("the account vanished")
 	}
@@ -329,7 +359,7 @@ func TestElevationLoginDoesNotStack(t *testing.T) {
 	})
 	h.ssoRoundTrip(t, "elev", "stacker", nil)
 	live := 0
-	for _, b := range h.s.bindings.ListByPrincipal("stacker") {
+	for _, b := range h.s.bindings.ListByPrincipal(h.principal(t, "stacker")) {
 		if b.IsElevation() {
 			live++
 		}
@@ -360,7 +390,7 @@ func TestElevationExpiryIsEnforcedOnTheNextRequest(t *testing.T) {
 		t.Fatal("an EXPIRED elevation is still being honoured")
 	}
 	// And it is reaped, so it cannot come back.
-	for _, x := range h.s.bindings.ListByPrincipal("expiring") {
+	for _, x := range h.s.bindings.ListByPrincipal(h.principal(t, "expiring")) {
 		if x.IsElevation() {
 			t.Fatalf("the expired elevation binding %s survived", x.ID)
 		}
@@ -613,7 +643,7 @@ func TestElevationLoginRefusedAfterTheGrantLeavesNoElevatedAccess(t *testing.T) 
 		t.Fatalf("a sign-in the server REPORTED AS FAILED left live elevated access: binding %s role %s scope %s",
 			b.ID, b.RoleID, b.ScopeID)
 	}
-	for _, b := range h.s.bindings.ListByPrincipal("refused") {
+	for _, b := range h.s.bindings.ListByPrincipal(h.principal(t, "refused")) {
 		if b.IsElevation() {
 			t.Fatalf("a refused sign-in persisted an elevation binding: %s (expires %v)", b.ID, b.ExpiresAt)
 		}

@@ -396,7 +396,7 @@ func TestLicenceSourceMonitoringWithheld(t *testing.T) {
 	if got := d.MonitoredCount(); got != 25 {
 		t.Fatalf("monitored = %d, want the Community ceiling of 25", got)
 	}
-	withheld := d.MonitoringWithheld()
+	withheld := d.MonitoringWithheldFor("", true)
 	if len(withheld) != 15 {
 		t.Fatalf("15 devices are over the ceiling and must be LISTED, got %d", len(withheld))
 	}

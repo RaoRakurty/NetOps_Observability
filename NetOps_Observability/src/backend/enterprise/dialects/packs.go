@@ -4,7 +4,7 @@
 // COMMERCIAL ADD-ON MODULE. This package implements the `security_dialects`
 // entitlement (Enterprise tier) and is NOT Apache-2.0 core. See the LICENSE
 // notice file in this directory, ../../../../LICENSING.md, and
-// LICENSES/Correlix-Enterprise.txt.
+// LICENSES/LicenseRef-Correlix-Enterprise.txt.
 
 // Package dialects carries the device-hardening DIALECTS beyond the core one.
 //
@@ -36,6 +36,7 @@ package dialects
 
 import (
 	"netops/backend/internal/hardening"
+	"netops/backend/internal/srlpath"
 )
 
 // Packs returns every dialect this module contributes, in a stable order. It is
@@ -132,32 +133,38 @@ func eosPack() hardening.DialectPack {
 
 // srlinuxPack is the Nokia SR Linux dialect pack.
 //
-// SR Linux is a flat `set / <path> <value>` rendering of a YANG tree. Several
+// SR Linux is a flat `set <path> <value>` rendering of a YANG tree. Several
 // controls are structurally inexpressible on it and are bound NotApplicable with
 // the reason, which is a different and more honest answer than leaving them
 // unbound. See fabric.go for the detection helpers.
+//
+// Every pattern is built from internal/srlpath so it matches all three spellings
+// this platform writes the same path in, and the pack declares a Recognize so a
+// config none of them can read is reported UNASSESSED rather than clean
+// (tracker 296 — both halves are documented in fabric.go).
 func srlinuxPack() hardening.DialectPack {
-	return hardening.DialectPack{Vendor: hardening.VendorSRLinux, Bindings: map[string]hardening.VendorBinding{
+	return hardening.DialectPack{Vendor: hardening.VendorSRLinux, Recognize: srlinuxReadableConfig, Bindings: map[string]hardening.VendorBinding{
 		"http-server-nontls": {Detect: srlJSONRPCPlaintext,
 			Remediation: "set / system json-rpc-server network-instance mgmt http admin-state disable\nset / system json-rpc-server network-instance mgmt https admin-state enable"},
 		"local-user-weak-secret": {Detect: srlWeakLocalSecret,
 			Remediation: "set / system aaa authentication <user> password <value>   ! SR Linux hashes on commit; verify the stored value carries a $scheme$ marker"},
 		"mgmt-api-unencrypted": {Detect: srlInsecureGRPC,
 			Remediation: "set / system grpc-server <name> tls-profile <profile>\n! or, if the instance is not needed:\nset / system grpc-server <name> admin-state disable"},
-		"no-central-logging": {Detect: hardening.DetectAbsent(`^set / system logging remote-server \S+`,
+		"no-central-logging": {Detect: hardening.DetectAbsent(srlpath.Statement("system", "logging", "remote-server")+srlpath.Sep+`\S+`,
 			"no `system logging remote-server` target — audit events not forwarded",
 			"central logging target configured"),
 			Remediation: "set / system logging remote-server 10.0.0.10 transport udp\nset / system logging remote-server 10.0.0.10 remote-port 514"},
 		"no-ntp-server": {Detect: srlNTPUnconfigured,
 			Remediation: "set / system ntp admin-state enable\nset / system ntp network-instance mgmt\nset / system ntp server 10.0.0.20 iburst true"},
-		"no-remote-aaa": {Detect: hardening.DetectAbsent(`^set / system aaa server-group \S+ type (?:tacacs|radius)`,
+		"no-remote-aaa": {Detect: hardening.DetectAbsent(srlpath.Statement("system", "aaa", "server-group", `\S+?`, "type")+srlpath.Sep+`(?:tacacs|radius)`,
 			"no TACACS+/RADIUS server-group — device authenticates against local accounts only",
 			"remote AAA server-group configured"),
 			Remediation: "set / system aaa server-group TAC type tacacs\nset / system aaa authentication authentication-method [ TAC local ]"},
 		"no-service-password-encryption": {Detect: hardening.DetectNotApplicable(
 			"SR Linux has no global password-encryption switch: stored credentials are always written as a `$scheme$` crypt value, and the storage question is scored by local-user-weak-secret instead"),
 			Remediation: "no action: see rule local-user-weak-secret for SR Linux credential storage"},
-		"snmp-default-community": {Detect: hardening.DetectPresent(`(?i)^set / system snmp access-group \S+ community-entry (public|private)\b`, "no default community present"),
+		"snmp-default-community": {Detect: hardening.DetectPresent(`(?i)`+srlpath.Statement("system", "snmp", "access-group", `\S+?`, "community-entry")+srlpath.Sep+`(?:public|private)\b`,
+			"no default community present"),
 			Remediation: "delete / system snmp access-group <group> community-entry public"},
 		"snmp-no-source-acl": {Detect: hardening.DetectNotApplicable(
 			"SR Linux binds no source ACL to a community; SNMP reachability is bounded by the network-instance the server is enabled in, which this control cannot express"),

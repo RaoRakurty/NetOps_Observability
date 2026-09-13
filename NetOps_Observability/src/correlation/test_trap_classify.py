@@ -149,6 +149,10 @@ class HandleSnmptrapCountersTest(unittest.IsolatedAsyncioTestCase):
                 for r in rows:
                     self.rows.append({"_table": table, **r})
 
+        # Snapshot the module globals this setUp forces (restored in
+        # _restore_registry): a lane flag or a fake ClickHouse left behind
+        # reconfigures every later test in the process.
+        self._prev_lane = (main.ch, main.CORR_SIGNALS_ENABLED)
         main.ch = FakeCH()
         main.CORR_SIGNALS_ENABLED = True
         main.TRAPS_RECEIVED = main.TRAPS_NORMALIZED = main.TRAPS_DROPPED = main.TRAPS_RECANON = 0
@@ -171,6 +175,7 @@ class HandleSnmptrapCountersTest(unittest.IsolatedAsyncioTestCase):
     def _restore_registry(self):
         (main.TENANT_ENRICHMENT_FILE, main._tenant_map,
          main._tenant_mtime) = self._prev_registry
+        main.ch, main.CORR_SIGNALS_ENABLED = self._prev_lane
         self._tmp.cleanup()
 
     async def test_classified_trap_creates_signal_and_counts(self):

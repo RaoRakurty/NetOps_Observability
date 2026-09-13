@@ -23,9 +23,9 @@ notice file, is `Apache-2.0`. Nothing becomes commercial by omission.
 | SPDX identifier | Text | What it covers |
 | --- | --- | --- |
 | `Apache-2.0` | [`LICENSES/Apache-2.0.txt`](LICENSES/Apache-2.0.txt) | Correlix core. Use it, modify it, redistribute it, run it in production. |
-| `LicenseRef-Correlix-Enterprise` | [`LICENSES/Correlix-Enterprise.txt`](LICENSES/Correlix-Enterprise.txt) | Commercial add-on modules. Source-available for inspection, development and evaluation; production use requires a commercial licence from Correlix. |
+| `LicenseRef-Correlix-Enterprise` | [`LICENSES/LicenseRef-Correlix-Enterprise.txt`](LICENSES/LicenseRef-Correlix-Enterprise.txt) | Commercial add-on modules. Source-available for inspection, development and evaluation; production use requires a commercial licence from Correlix. |
 
-> **The Correlix Enterprise License text does not exist yet.** `LICENSES/Correlix-Enterprise.txt` is a
+> **The Correlix Enterprise License text does not exist yet.** `LICENSES/LicenseRef-Correlix-Enterprise.txt` is a
 > placeholder. Files carrying that identifier are therefore licensed to nobody, and
 > all rights in them are reserved until the text lands. `scripts/licensing-gate.py
 > --release` fails while it is missing, so no artifact can ship in this state.

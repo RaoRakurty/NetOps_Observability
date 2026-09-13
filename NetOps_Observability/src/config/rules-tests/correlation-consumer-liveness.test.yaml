@@ -514,3 +514,94 @@ tests:
       - eval_time: 25m
         alertname: ClickHouseWritesRejected
         exp_alerts: []
+
+  # ==========================================================================
+  # 11) CorrRequiredLaneUnauthorized — tracker 309. The lane that BLOCKS the
+  #     whole subscription, named. WARNING, never a page: the page for the
+  #     outcome (nothing is being consumed) already exists twice over, and this
+  #     rule's job is to say WHICH lane and WHY.
+  #
+  #     The measured shape is netops.controller_events refused with
+  #     TopicAuthorizationFailedError ([Error 29]) in the scale-miniladder
+  #     nightly, which nothing judged: not the harness, not a rule, not
+  #     deploy-qualify.sh.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'corr_required_topic_unavailable{topic="netops.controller_events",reason="unauthorized",instance="correlation:8000"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CorrRequiredLaneUnauthorized
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: correlation
+              tier: warning
+              topic: "netops.controller_events"
+              reason: unauthorized
+              instance: "correlation:8000"
+            exp_annotations:
+              summary: "Correlation cannot subscribe to REQUIRED lane netops.controller_events (reason: unauthorized) \u2014 this one lane is blocking the ENTIRE subscription"
+              description: 'aiokafka resolves the whole subscription at start() and `_wait_topics` is all-or-nothing, so ONE refused required lane means the engine consumes NOTHING on any lane — read this together with CorrConsumerNotRunning / CorrelationConsumerDead, which are the page for that outcome. This rule exists to name the cause, which used to live only in a log line. reason="unauthorized": the correlation principal has no Read+Describe ACL on this topic — pipe deployment/docker/kafka/apply-acls.sh into the broker (idempotent, and it now reads every correlation grant back); the engine''s /healthz consumer.subscription.principal field names the exact principal the broker refused. reason="absent": the topic was never created — run kafka-init (broker auto-create is OFF by design). reason="unreachable": the broker itself, not the matrix. Restarting the container fixes NONE of these.'
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 11a) An ABSENT required lane is the same rule with a different reason label —
+  #      the remedy differs (kafka-init, not the ACL matrix), so the label has to
+  #      reach the annotation.
+  - interval: 1m
+    input_series:
+      - series: 'corr_required_topic_unavailable{topic="netops.probes",reason="absent",instance="correlation:8000"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CorrRequiredLaneUnauthorized
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: correlation
+              tier: warning
+              topic: "netops.probes"
+              reason: absent
+              instance: "correlation:8000"
+            exp_annotations:
+              summary: "Correlation cannot subscribe to REQUIRED lane netops.probes (reason: absent) \u2014 this one lane is blocking the ENTIRE subscription"
+              description: 'aiokafka resolves the whole subscription at start() and `_wait_topics` is all-or-nothing, so ONE refused required lane means the engine consumes NOTHING on any lane — read this together with CorrConsumerNotRunning / CorrelationConsumerDead, which are the page for that outcome. This rule exists to name the cause, which used to live only in a log line. reason="unauthorized": the correlation principal has no Read+Describe ACL on this topic — pipe deployment/docker/kafka/apply-acls.sh into the broker (idempotent, and it now reads every correlation grant back); the engine''s /healthz consumer.subscription.principal field names the exact principal the broker refused. reason="absent": the topic was never created — run kafka-init (broker auto-create is OFF by design). reason="unreachable": the broker itself, not the matrix. Restarting the container fixes NONE of these.'
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 11b) THE SILENCE THAT MATTERS MOST: a healthy engine publishes NO series at
+  #      all for this gauge (it is retracted the instant start() succeeds). The
+  #      rule must therefore stay silent on absence, never invert into an
+  #      absent() page.
+  - interval: 1m
+    input_series:
+      - series: 'corr_consumer_running{instance="correlation:8000"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CorrRequiredLaneUnauthorized
+        exp_alerts: []
+
+  # 11c) A refusal that CLEARS inside the window (the installer's own ACL
+  #      bootstrap: the stack necessarily starts before the matrix can be
+  #      applied) must not alert. This is the shape deploy-qualify.sh's Q6 floors
+  #      its log window for, and the rule needs the same tolerance.
+  - interval: 1m
+    input_series:
+      - series: 'corr_required_topic_unavailable{topic="netops.controller_events",reason="unauthorized",instance="correlation:8000"}'
+        values: "1x3 0x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CorrRequiredLaneUnauthorized
+        exp_alerts: []
+
+  # 11d) A required-lane refusal does NOT make the evidence-lane advisory fire —
+  #      one fault, one advisory, and the two maps are deliberately separate.
+  - interval: 1m
+    input_series:
+      - series: 'corr_required_topic_unavailable{topic="netops.controller_events",reason="unauthorized",instance="correlation:8000"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CorrEvidenceLaneNotGrounded
+        exp_alerts: []

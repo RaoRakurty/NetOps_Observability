@@ -87,10 +87,21 @@ func redisTLSConfig() (*tls.Config, error) {
 	return &tls.Config{RootCAs: bundle.Pool(), ServerName: os.Getenv("REDIS_HOST"), MinVersion: tls.VersionTLS12}, nil
 }
 
+// ErrNotConfigured says there is no sharing channel at all — REDIS_HOST is
+// unset, so no collector publishes here and no reader should expect anything.
+//
+// It is a SENTINEL because a read path has to tell that apart from a channel
+// that is configured and DEAD. Both produce an empty result; only one of them
+// means "nothing was observed". A topology with no adjacencies is the honest
+// answer on a deployment that runs no discovery collector, and a lie on one
+// whose collectors are publishing into a channel the api cannot reach
+// (tracker 290).
+var ErrNotConfigured = errors.New("redis not configured")
+
 func redisDial(ctx context.Context) (net.Conn, error) {
 	addr := RedisAddr()
 	if addr == "" {
-		return nil, fmt.Errorf("redis not configured")
+		return nil, ErrNotConfigured
 	}
 	tcfg, err := redisTLSConfig()
 	if err != nil {
@@ -448,76 +459,149 @@ func FetchProbePathsAll(ctx context.Context) ([]PathResult, error) {
 // topology-discovery collector (LLDP, CDP, …) into one slice. LLDP is listed
 // first so it wins the read-side dedup when two protocols report the same
 // adjacency. A missing/empty per-protocol key is not an error (collector off).
+//
+// WHAT IS AN ERROR, AND WHY IT MATTERS (tracker 290). This used to fold every
+// outcome into one `if err != nil || raw == "" { continue }`, so a dead channel
+// returned an EMPTY neighbour set with a NIL error: the topology read path was
+// told, in the only language it understands, that no device on the estate has a
+// neighbour. That is a statement about the network, and it was false — the
+// evidence had simply never arrived. It is the same fold review 3.2-18 closed in
+// FetchDEMRuns and FetchProbePathsAll two functions above, and the three now
+// answer alike:
+//
+//   - a DEAD CONNECTION ends the read and is reported, naming the key it died
+//     on and how many protocol keys went unread. Everything read so far still
+//     comes back, so a caller that can render a PARTIAL adjacency set beside a
+//     banner has the material to do it;
+//   - a per-key REFUSAL from a live server, or a payload that will not decode,
+//     costs that one protocol and is reported once at the end — the other
+//     protocols' adjacencies are real and are returned;
+//   - an ABSENT or EMPTY key is not an error at all. That collector is off, and
+//     "this protocol reported nothing" is a true statement about it.
 func FetchTopologyLinks(ctx context.Context) ([]LLDPNeighbor, error) {
 	c, err := redisDial(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer c.Close()
+	keys := []string{topoLinksKeyLLDP, topoLinksKeyCDP, topoLinksKeyBGPLS}
 	var out []LLDPNeighbor
-	for _, key := range []string{topoLinksKeyLLDP, topoLinksKeyCDP, topoLinksKeyBGPLS} {
-		raw, err := redisCmd(c, "GET", key)
-		if err != nil || raw == "" {
+	var bad []string
+	for i, key := range keys {
+		raw, gerr := redisCmd(c, "GET", key)
+		switch {
+		case errors.Is(gerr, errRedisTransport):
+			return out, fmt.Errorf("topology links: the discovery channel failed while reading %s (%d of %d protocol keys were not read): %w",
+				key, len(keys)-i, len(keys), gerr)
+		case gerr != nil:
+			bad = append(bad, key)
 			continue
+		case raw == "":
+			continue // that discovery protocol is off — an absent key is not a failure
 		}
 		var n []LLDPNeighbor
-		if json.Unmarshal([]byte(raw), &n) == nil {
-			out = append(out, n...)
+		if jerr := json.Unmarshal([]byte(raw), &n); jerr != nil {
+			// The publisher authored this payload, so a decode failure means the
+			// record is corrupt. Skipping it quietly turned a corrupt LLDP blob
+			// into "no LLDP adjacency exists" (§10).
+			bad = append(bad, key)
+			continue
 		}
+		out = append(out, n...)
+	}
+	if len(bad) > 0 {
+		return out, fmt.Errorf("topology links: %d of %d protocol key(s) were unreadable (%s)",
+			len(bad), len(keys), strings.Join(bad, ","))
 	}
 	return out, nil
 }
 
-// FetchIfAddrMap reads the interface-address map (deviceID → interface IP → ifName)
-// published by the SNMP metrics collector. Empty map when absent (collector off /
-// Redis down) — enrichment is best-effort, never an error.
+// redisGetJSON is the ONE-KEY dependency read: dial, GET, decode into dst.
+//
+// It exists so the single-key readers below cannot drift apart on the one
+// question tracker 307 was filed about — WHICH OUTCOME IS AN ERROR. Each of them
+// used to answer `if err != nil || raw == "" { return <empty>, nil }`, so a dead
+// channel was indistinguishable from a key nobody had written: the caller was
+// handed an empty result and a nil error, i.e. the confident sentence "the
+// publisher on the other end has published nothing". That is a statement about
+// the estate, and on a broken channel it is false — nobody looked. Same fold as
+// tracker 290's FetchTopologyLinks and review 3.2-18's FetchDEMRuns, both in
+// this file, and the answers are now the same three:
+//
+//   - the CHANNEL failed (dead socket, expired deadline, desynced stream) or the
+//     server REFUSED the command → an ERROR. The key was not read, so whether
+//     anything is published there is UNKNOWN, which is not "nothing".
+//   - an ABSENT or EMPTY key → dst is left at its zero value and the error is
+//     NIL. The publisher has not published; that is a true statement about it and
+//     the ordinary first-boot / collector-disabled state, so each reader turns
+//     the untouched dst into its own empty result.
+//   - a payload that will NOT DECODE → an ERROR. We authored the payload, so a
+//     decode failure is corruption of evidence, never absence of it (§10).
+//
+// dst is left untouched unless the decode succeeds, so no caller can read a
+// half-filled map out of a failed read.
+func redisGetJSON(ctx context.Context, what, key string, dst any) error {
+	c, err := redisDial(ctx)
+	if err != nil {
+		return err // includes ErrNotConfigured: no channel on this deployment
+	}
+	defer c.Close()
+	raw, err := redisCmd(c, "GET", key)
+	if err != nil {
+		return fmt.Errorf("%s: %s was not read, so whether anything is published there is unknown: %w", what, key, err)
+	}
+	if raw == "" {
+		return nil // nothing published yet — not a failure
+	}
+	if err := json.Unmarshal([]byte(raw), dst); err != nil {
+		return fmt.Errorf("%s: the payload at %s will not decode — we authored it, so this is corrupt evidence, not absent evidence: %w", what, key, err)
+	}
+	return nil
+}
+
+// FetchIfAddrMap reads the interface-address map (deviceID → interface IP →
+// ifName) published by the SNMP metrics collector.
+//
+// An absent key is an empty map with a nil error (the collector is off, or has
+// not polled yet). A channel that could not be read, or a payload that will not
+// decode, is an ERROR — see redisGetJSON. Callers use this map to NAME ports and
+// resolve addresses, and every one of them may proceed without it; what none of
+// them may do is proceed SILENTLY (tracker 307).
 func FetchIfAddrMap(ctx context.Context) (map[string]map[string]string, error) {
-	c, err := redisDial(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer c.Close()
-	raw, err := redisCmd(c, "GET", ifAddrKey)
-	if err != nil || raw == "" {
-		return map[string]map[string]string{}, nil
-	}
 	out := map[string]map[string]string{}
-	_ = json.Unmarshal([]byte(raw), &out) // best-effort: cache payload we authored; malformed decodes empty
+	if err := redisGetJSON(ctx, "interface-address map", ifAddrKey, &out); err != nil {
+		return map[string]map[string]string{}, err
+	}
 	return out, nil
 }
 
-// FetchRoutingDirection reads the directed forwarding pairs ([{from,to}]) computed by
-// the BGP-LS collector's SPF (C7.5 routing-direction source). Empty when absent
-// (no LSDB / collector off) — best-effort, never an error.
+// FetchRoutingDirection reads the directed forwarding pairs ([{from,to}]) computed
+// by the BGP-LS collector's SPF (C7.5 routing-direction source).
+//
+// No LSDB / collector off → an empty slice, nil error: the source then abstains,
+// which is exactly the pre-C7.5 behaviour. An unread channel is an ERROR instead,
+// because "the SPF computed no direction anywhere" and "we never read the SPF's
+// answer" lead the enricher to opposite actions — the first publishes an empty
+// direction file, the second must keep the last good one (tracker 307).
 func FetchRoutingDirection(ctx context.Context) ([]RoutingPair, error) {
-	c, err := redisDial(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer c.Close()
-	raw, err := redisCmd(c, "GET", routingDirKey)
-	if err != nil || raw == "" {
-		return []RoutingPair{}, nil
-	}
 	var out []RoutingPair
-	_ = json.Unmarshal([]byte(raw), &out) // best-effort: cache payload we authored; malformed decodes empty
+	if err := redisGetJSON(ctx, "routing direction", routingDirKey, &out); err != nil {
+		return []RoutingPair{}, err
+	}
+	if out == nil {
+		out = []RoutingPair{} // the enricher marshals this straight to JSON: [] not null
+	}
 	return out, nil
 }
 
-// FetchIfIndexMap reads the ifIndex map (deviceID → ifIndex → ifName) published by
-// the SNMP metrics collector. Empty map when absent — best-effort, never an error.
+// FetchIfIndexMap reads the ifIndex map (deviceID → ifIndex → ifName) published
+// by the SNMP metrics collector. Absent → empty map, nil error; unread or
+// undecodable → an error (tracker 307, same rule as FetchIfAddrMap).
 func FetchIfIndexMap(ctx context.Context) (map[string]map[string]string, error) {
-	c, err := redisDial(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer c.Close()
-	raw, err := redisCmd(c, "GET", ifIndexKey)
-	if err != nil || raw == "" {
-		return map[string]map[string]string{}, nil
-	}
 	out := map[string]map[string]string{}
-	_ = json.Unmarshal([]byte(raw), &out) // best-effort: cache payload we authored; malformed decodes empty
+	if err := redisGetJSON(ctx, "ifIndex map", ifIndexKey, &out); err != nil {
+		return map[string]map[string]string{}, err
+	}
 	return out, nil
 }
 
@@ -555,20 +639,19 @@ func PublishWANCircuits(ctx context.Context, targets []EchoTarget, ttlSec int) e
 	return redisSetEX(ctx, wanCircuitsKey, string(body), ttlSec)
 }
 
-// FetchWANCircuits reads the circuit list published by the API. Empty (not an
-// error) when absent — the collector then falls back to WAN_ECHO_TARGETS.
+// FetchWANCircuits reads the circuit list published by the API.
+//
+// An ABSENT key is an empty list with a nil error — the api has not published
+// (yet), and the collector then falls back to WAN_ECHO_TARGETS. An UNREAD channel
+// is an error, because the fallback is only the honest answer for the first case:
+// on a dead channel it silently swaps the api's derived per-circuit targets for
+// whatever a static env var says, and the metrics keep flowing under the same
+// names as if nothing had changed (tracker 307).
 func FetchWANCircuits(ctx context.Context) ([]EchoTarget, error) {
-	c, err := redisDial(ctx)
-	if err != nil {
+	var out []EchoTarget
+	if err := redisGetJSON(ctx, "wan circuits", wanCircuitsKey, &out); err != nil {
 		return nil, err
 	}
-	defer c.Close()
-	raw, err := redisCmd(c, "GET", wanCircuitsKey)
-	if err != nil || raw == "" {
-		return nil, nil
-	}
-	var out []EchoTarget
-	_ = json.Unmarshal([]byte(raw), &out) // best-effort: cache payload we authored; malformed decodes empty
 	return out, nil
 }
 

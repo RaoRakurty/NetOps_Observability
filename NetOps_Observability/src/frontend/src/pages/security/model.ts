@@ -638,14 +638,15 @@ export type SecFindingLike = SecFinding;
 
 // ── §5g: an unassessed verdict must carry its WHY ───────────────────────────
 //
-// "Unassessed" on its own is only half the honesty rule. The three reasons a
-// hardening control reaches no verdict are entirely different problems with
-// entirely different fixes — the running-config was not available, the control
-// has no realization on this platform, or the platform itself did not resolve —
-// and an operator who cannot tell them apart cannot act on any of them. The
-// producer states the reason (secfindings.Finding.Detail → the bus's
-// attrs.status_detail → the API's `status_detail`); these adapters are the one
-// place the UI decides how to present its presence and its ABSENCE.
+// "Unassessed" on its own is only half the honesty rule. The reasons a hardening
+// control reaches no verdict are entirely different problems with entirely
+// different fixes — the running-config was not available, the config on file is
+// not in the grammar the device's dialect reads, the control has no realization
+// on this platform, or the platform itself did not resolve — and an operator who
+// cannot tell them apart cannot act on any of them. The producer states the
+// reason (secfindings.Finding.Detail → the bus's attrs.status_detail → the API's
+// `status_detail`); these adapters are the one place the UI decides how to
+// present its presence and its ABSENCE.
 
 /** The reason an unassessed verdict gives, or null when it gave none. */
 export function unassessedReason(f: Pick<SecFinding, "status_id" | "status_detail">): string | null {

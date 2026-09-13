@@ -19,10 +19,10 @@ licence.
 | SPDX identifier | Text in the source tree | What it permits |
 |---|---|---|
 | `Apache-2.0` | `LICENSES/Apache-2.0.txt` | Use, modification, redistribution and production use, under the terms of the Apache License, Version 2.0. |
-| `LicenseRef-Correlix-Enterprise` | `LICENSES/Correlix-Enterprise.txt` | Inspection, development and evaluation. Production use requires a commercial licence from Correlix. Redistribution and hosting as a service are not permitted. |
+| `LicenseRef-Correlix-Enterprise` | `LICENSES/LicenseRef-Correlix-Enterprise.txt` | Inspection, development and evaluation. Production use requires a commercial licence from Correlix. Redistribution and hosting as a service are not permitted. |
 
 :::caution The Correlix Enterprise License text is not drafted yet
-`LICENSES/Correlix-Enterprise.txt` is a placeholder as of 2026-09-04. Files
+`LICENSES/LicenseRef-Correlix-Enterprise.txt` is a placeholder as of 2026-09-04. Files
 marked with that identifier carry a licence that has no terms, so no rights in
 them are granted, and Correlix does not ship a release in this state. The
 release gate refuses the build while the placeholder is present.

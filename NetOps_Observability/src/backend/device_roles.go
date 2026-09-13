@@ -83,7 +83,20 @@ func (s *server) deviceRoleIndex(ctx context.Context, claims jwtClaims) map[stri
 	if len(devs) == 0 {
 		return map[string]topology.RoleResult{}
 	}
-	links := s.gatherTopoLinksFor(ctx, claims, devs)
+	// RENDERABLE, DEGRADED, LOGGED (tracker 290). The classifier takes two
+	// independent signal families — identity strings (sysDescr, name, type) and
+	// link topology — and treats a zero neighbour count as ABSENCE OF EVIDENCE,
+	// never as a negative signal: an unread link set lowers what can be
+	// classified, it does not invent a role. Devices it cannot classify are left
+	// out of the index, and stampSpineRoles leaves a hop that resolves to nothing
+	// untouched, so the surface already renders the gap as "unknown". There is
+	// nothing to refuse and nowhere on a spine hop to put a banner — but a read
+	// that failed must still be OBSERVABLE (§10), so it is logged.
+	links, err := s.gatherTopoLinksFor(ctx, claims, devs)
+	if err != nil {
+		logWarn("topology", "adjacency evidence unread for the device role index — roles that need link topology stay unknown",
+			map[string]any{"devices": len(devs), "error": err.Error()})
+	}
 	idx := make(map[string]topology.RoleResult)
 	for _, f := range toDeviceFacts(devs, nil, nil, links) {
 		rr := topology.ClassifyDeviceRole(f)

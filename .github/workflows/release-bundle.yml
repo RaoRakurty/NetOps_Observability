@@ -36,9 +36,17 @@ name: release-bundle
 #     the standard runner (2 vCPU / 7 GB on private repos) is below the 8 GB
 #     evaluation floor — the static preflight + image round-trip cover the
 #     bundle mechanics; boot coverage stays with fresh-install-integrity.
-#   - TODO(#97, owner-gated): GPG signing of SHA256SUMS — needs the product
-#     signing key (owner-held secret). Seam: sign right after the smoke step,
-#     upload SHA256SUMS.asc next to SHA256SUMS. Do NOT generate a key in CI.
+# RELEASE SIGNING (RC1 governance directive 2026-09-13, Decision 3B — Blocker D).
+# A tag build is a RELEASE build: `CORRELIX_RELEASE_BUILD=1` makes
+# make-installer.sh refuse to produce an unsigned or partially signed bundle, the
+# distribution signing key is imported from `secrets.CORRELIX_DIST_SIGNING_KEY`
+# into a THROWAWAY gnupg home that is wiped in an always() step, the signature is
+# verified in its own step BEFORE anything is uploaded, and a missing secret FAILS
+# the job instead of skipping it. Until the owner creates that secret, a tag build
+# fails closed — which is the intent: no unsigned bundle can reach a customer.
+# The key is a DIFFERENT key from the source/tag signing key and from the licence
+# signing key (three trust domains, never one key); custody is tracker 259. CI
+# never generates a key, and no step echoes one.
 #
 # GitHub Releases cap assets at 2 GiB per file; any larger bundle member is
 # split into .partNN pieces (client: `cat <name>.part* > <name>`, then verify
@@ -83,10 +91,49 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: write # attach bundle assets to the release (tag runs only)
+    env:
+      # A TAG build is a release build: signing becomes mandatory in
+      # make-installer.sh (Decision 3B). A main/dispatch build stays a developer
+      # build — checksum-only, exactly as before — so the lockstep artifact legs
+      # keep working without the signing key.
+      CORRELIX_RELEASE_BUILD: ${{ startsWith(github.ref, 'refs/tags/') && '1' || '0' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
+          # Decision 9: build FROM THE TAG's commit. `github.sha` is the commit
+          # the pushed ref points at — pinned explicitly so no later change can
+          # turn this into a branch-HEAD checkout.
+          ref: ${{ github.sha }}
           fetch-depth: 0 # make-installer.sh versions the bundle via `git describe --tags`
+
+      # Decision 9 (tag → exact commit → build): prove the tree we are about to
+      # package is the tagged commit itself, not a branch head that happens to be
+      # close to it. Refuses when HEAD is not an exact tag, or carries a different
+      # tag than the ref that triggered the run.
+      - name: Confirm the build commit is the tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TAG: ${{ github.ref_name }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "$EXPECTED_SHA" ]; then
+            echo "BLOCKED: checked-out commit $HEAD_SHA is not the tagged commit $EXPECTED_SHA" >&2
+            exit 1
+          fi
+          DESCRIBED="$(git describe --exact-match --tags HEAD 2>/dev/null || true)"
+          if [ -z "$DESCRIBED" ]; then
+            echo "BLOCKED: HEAD ($HEAD_SHA) is not an exact tag — a release must be built from the tagged commit (Decision 9)" >&2
+            exit 1
+          fi
+          if [ "$DESCRIBED" != "$TAG" ]; then
+            echo "BLOCKED: HEAD describes as '$DESCRIBED' but the run was triggered by '$TAG'" >&2
+            echo "tags pointing at HEAD:" >&2
+            git tag --points-at HEAD >&2
+            exit 1
+          fi
+          echo "building $TAG from $HEAD_SHA"
 
       # The image set + save/compress needs ~12 GB of scratch; the stock runner
       # image ships ~25 GB of toolchains we never touch. Reclaim them first.
@@ -96,11 +143,17 @@ jobs:
           sudo docker image prune -af
           df -h /
 
+      # Two npm trees feed the frontend image, so BOTH lockfiles key the cache:
+      # src/frontend (make-installer.sh rebuilds dist/ itself) and docs-portal
+      # (built below). Keying on the SPA lockfile alone left the Docusaurus
+      # install uncached.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
           cache: npm
-          cache-dependency-path: NetOps_Observability/src/frontend/package-lock.json
+          cache-dependency-path: |
+            NetOps_Observability/src/frontend/package-lock.json
+            NetOps_Observability/docs-portal/package-lock.json
 
       - name: Install zstd
         run: command -v zstd >/dev/null || sudo apt-get install -y --no-install-recommends zstd
@@ -111,6 +164,69 @@ jobs:
       # never enter the bundle (make-installer.sh archives HEAD, not the tree).
       - name: Provision build env
         run: python3 NetOps_Observability/scripts/install.py --no-start
+
+      # Decision 3B: the distribution signing key is imported into a throwaway
+      # keyring for this job only. FAIL-CLOSED — an absent secret fails the job;
+      # it must never be a skipped step that quietly yields an unsigned release.
+      # The key never reaches the log: no `set -x`, no `env` dump, no echo of the
+      # secret, `--batch --quiet` throughout; only the public fingerprint is
+      # printed. The key is NOT generated here (CI must never mint a release key).
+      - name: Import the distribution signing key
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          DIST_KEY: ${{ secrets.CORRELIX_DIST_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DIST_KEY:-}" ]; then
+            echo "BLOCKED: distribution signing key not configured — CORRELIX_DIST_SIGNING_KEY" >&2
+            echo "  A release bundle MUST be signed (RC1 governance directive 2026-09-13, Decision 3B)." >&2
+            echo "  Create the repository secret from the ARMORED SECRET half of the DISTRIBUTION signing key" >&2
+            echo "  — a different key from the source/tag signing key and from the licence signing key — then re-run this tag." >&2
+            echo "  Custody: tracker 259. See docs/runbooks/rc1-release-procedure.md." >&2
+            exit 1
+          fi
+          GNUPGHOME="$(mktemp -d "${RUNNER_TEMP}/correlix-gnupg.XXXXXXXX")"
+          chmod 700 "$GNUPGHOME"
+          export GNUPGHOME
+          # `%s\n`: an armored block whose final newline GitHub trimmed can fail
+          # to parse. The value goes to gpg on a PIPE and never to the log.
+          printf '%s\n' "$DIST_KEY" | gpg --batch --quiet --import
+          FPR="$(gpg --batch --quiet --with-colons --list-secret-keys \
+            | awk -F: '$1 == "fpr" { print $10; exit }')"
+          if [ -z "$FPR" ]; then
+            echo "BLOCKED: CORRELIX_DIST_SIGNING_KEY imported no SECRET key — the secret must hold the armored private key" >&2
+            exit 1
+          fi
+          # Exported for the build step (make-installer.sh reads both).
+          {
+            echo "GNUPGHOME=$GNUPGHOME"
+            echo "CORRELIX_SIGNING_KEY=$FPR"
+          } >> "$GITHUB_ENV"
+          echo "distribution signing key imported: $FPR"
+
+      # PRE-BUILT WEB ASSET, and the reason the `bundle` job was RED on main
+      # (run 34721086054, 2026-09-12). deployment/docker/Dockerfile.frontend
+      # COPYs TWO gitignored build artifacts: src/frontend/dist — which
+      # make-installer.sh rebuilds itself (its step 1, always, so a stale dist
+      # cannot ship) — and docs-portal/build, the Docusaurus portal served at
+      # /docs/, which NOTHING in this job built. The image build therefore died
+      # inside BuildKit with `"/docs-portal/build": not found`, after the full
+      # release gate had already been paid for. It never surfaced locally
+      # because the deploy chain builds the portal before `docker compose
+      # build`, exactly as install.py's PREBUILT_WEB_ASSETS tells an operator
+      # to.
+      #
+      # It must run BEFORE the image build, and a Docusaurus failure must fail
+      # the job — `set -euo pipefail` plus the `&&` chain, no `|| true` (§16.1).
+      # The command is ONE canonical line, character-identical in
+      # publish-images.yml, fresh-install-integrity.yml and
+      # scale-miniladder-nightly.yml and equal to install.py's recipe;
+      # tests/test_release_bundle_docs_portal.py asserts that so the copies
+      # cannot drift.
+      - name: Build the in-app documentation portal (docs-portal/build)
+        run: |
+          set -euo pipefail
+          (cd NetOps_Observability/docs-portal && npm ci --no-audit --no-fund && npm run build)
 
       - name: Build bundle (base + add-on packs)
         id: build
@@ -245,15 +361,48 @@ jobs:
               echo "-- splitting $f"
               split -b 1900m -d "$f" "$f.part"
               rm "$f"
-              echo "Note: $f ships as .partNN pieces; ./install-correlix.sh rejoins them automatically." >> README.md
-              # README changed after SHA256SUMS was written — refresh its entry
-              # so the customer's `sha256sum -c` (and install-correlix.sh's
-              # verify) still pass.
-              sed -i "\|  \./README\.md\$|c\\$(sha256sum ./README.md)" SHA256SUMS
+              # On a SIGNED bundle, README.md and SHA256SUMS are frozen: editing
+              # either after signing would leave SHA256SUMS.asc verifying nothing
+              # (Decision 3B — a release bundle is signed in full). The release
+              # body and install-correlix.sh both already explain the rejoin, so
+              # the note is redundant there; the split itself is fine because
+              # SHA256SUMS records the JOINED file, which is what the customer
+              # verifies after `cat *.part*`.
+              if [ -f SHA256SUMS.asc ]; then
+                echo "signed bundle: leaving README.md and SHA256SUMS untouched after the split (the signature covers them)"
+              else
+                echo "Note: $f ships as .partNN pieces; ./install-correlix.sh rejoins them automatically." >> README.md
+                # README changed after SHA256SUMS was written — refresh its entry
+                # so the customer's `sha256sum -c` (and install-correlix.sh's
+                # verify) still pass.
+                sed -i "\|  \./README\.md\$|c\\$(sha256sum ./README.md)" SHA256SUMS
+              fi
             fi
           done
           sha256sum -c --ignore-missing SHA256SUMS   # self-check post-split
           ls -lh
+
+      # Decision 3B: verification is its OWN step and it runs BEFORE anything is
+      # uploaded — only signed bundles are published. This is the last gate that
+      # can still stop an unsigned or tampered artifact, so it asserts all three
+      # halves: the signature file exists, it verifies against SHA256SUMS, and
+      # the checksums themselves still match the files on disk.
+      - name: Verify the bundle signature (fail closed)
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: ${{ steps.build.outputs.dir }}
+        run: |
+          set -euo pipefail
+          if [ ! -f SHA256SUMS.asc ]; then
+            echo "BLOCKED: SHA256SUMS.asc is missing — refusing to publish an unsigned bundle (Decision 3B)" >&2
+            exit 1
+          fi
+          gpg --batch --quiet --verify SHA256SUMS.asc SHA256SUMS
+          # --ignore-missing: a >1900 MiB member has just been split into .partNN
+          # pieces and the joined file is intentionally absent; every file still
+          # present must match.
+          sha256sum -c --ignore-missing SHA256SUMS
+          grep -q '^signing-key ' MANIFEST
+          echo "signature verified over SHA256SUMS; MANIFEST records the signer fingerprint"
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
@@ -291,3 +440,26 @@ jobs:
           path: ${{ steps.build.outputs.dir }}
           retention-days: 7
           compression-level: 0 # members are already zstd/gzip-compressed
+
+      # The throwaway keyring is wiped whether the job passed, failed or was
+      # cancelled. RUNNER_TEMP is discarded with the runner too, but a signing
+      # keyring must not depend on that for its removal.
+      - name: Wipe the signing keyring
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -z "${GNUPGHOME:-}" ]; then
+            echo "no throwaway keyring to wipe"
+            exit 0
+          fi
+          # `|| true` is justified (§16.1): no agent is started for a batch
+          # import/sign, so `gpgconf --kill` legitimately has nothing to kill;
+          # its failure says nothing about whether the keyring was removed,
+          # which the rm below is responsible for.
+          gpgconf --kill gpg-agent >/dev/null 2>&1 || true
+          rm -rf "$GNUPGHOME"
+          if [ -e "$GNUPGHOME" ]; then
+            echo "FATAL: failed to wipe $GNUPGHOME" >&2
+            exit 1
+          fi
+          echo "wiped the throwaway signing keyring"

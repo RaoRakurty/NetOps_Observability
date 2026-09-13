@@ -332,7 +332,7 @@ func (s *server) elevationScopeID(u User, raw string) (string, error) {
 	if id == "" {
 		return "", errors.New("elevation scope names no resource")
 	}
-	claims := jwtClaims{Sub: u.Username, Role: u.Role, Tenant: u.TenantID}
+	claims := jwtClaims{Sub: u.ID, Role: u.Role, Tenant: u.TenantID}
 	tenant, cross := principalTenant(claims)
 	if s.discovery == nil {
 		return "", errors.New("elevation scope cannot be verified: inventory unavailable")
@@ -363,7 +363,7 @@ type elevationGrant struct {
 
 // prepareElevationGrant turns a verified sign-in through an elevation provider
 // into the one artefact it is allowed to produce — WITHOUT writing anything.
-// The account is READ, never written: no UpsertFederated, no MergeFederated, no
+// The account is READ, never written: no provisioning, no MergeFederated, no
 // tenant, no role change.
 //
 // Every refusal an elevation sign-in owes (an expired window, a scope naming a
@@ -400,7 +400,7 @@ func (s *server) prepareElevationGrant(pol elevation.Policy, u User, role, sid s
 	}
 	return elevationGrant{
 		binding: RoleBinding{
-			PrincipalID:   u.Username,
+			PrincipalID:   u.ID, // the internal principal id (tracker 300 §4.3)
 			PrincipalType: PrincipalUser,
 			RoleID:        role,
 			ScopeID:       scopeID,
@@ -435,7 +435,7 @@ func (s *server) commitElevationGrant(r *http.Request, pol elevation.Policy, u U
 		return RoleBinding{}, errors.New("role bindings are unavailable")
 	}
 	// Drop every prior elevation for this principal BEFORE adding the new one.
-	for _, b := range s.bindings.ListByPrincipal(u.Username) {
+	for _, b := range s.bindings.ListByPrincipal(u.ID) {
 		if !b.IsElevation() {
 			continue
 		}
@@ -448,10 +448,10 @@ func (s *server) commitElevationGrant(r *http.Request, pol elevation.Policy, u U
 		return RoleBinding{}, err
 	}
 	logWarn("elevation", "elevated access granted", map[string]any{
-		"user": u.Username, "provider": pol.Provider, "role": b.RoleID, "scope": b.ScopeID,
+		"user": u.ID, "provider": pol.Provider, "role": b.RoleID, "scope": b.ScopeID,
 		"expires_at": g.expires.Format(time.RFC3339), "expiry_source": g.source, "binding": b.ID,
 	})
-	s.auditElevation(r, "ELEVATION_GRANTED", b, u.Username, u.TenantID, sid)
+	s.auditElevation(r, "ELEVATION_GRANTED", b, u.ID, u.TenantID, sid)
 	return b, nil
 }
 

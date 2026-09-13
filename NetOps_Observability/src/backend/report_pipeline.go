@@ -144,7 +144,13 @@ func (p *reportPipeline) anchorFor(ctx context.Context, o saved.Object, now time
 	if !o.CreatedAt.IsZero() && o.CreatedAt.After(anchor) {
 		anchor = o.CreatedAt
 	}
-	recent, err := p.execs.List(ctx, "", true, reports.ExecQuery{ScheduleID: o.ID, Limit: 1})
+	// Platform scope on purpose (reports.PlatformExecScope): this is the
+	// scheduler's own bookkeeping, not a read on behalf of a principal. A
+	// restricted tenant is still SCHEDULED and still delivered its own reports —
+	// the restriction governs what platform staff may read, never what the
+	// platform runs — so a scope that hid this tenant's last fire would re-fire
+	// its schedule for ever.
+	recent, err := p.execs.List(ctx, reports.PlatformExecScope(), reports.ExecQuery{ScheduleID: o.ID, Limit: 1})
 	if err == nil && len(recent) > 0 && recent[0].FireTime.After(anchor) {
 		anchor = recent[0].FireTime
 	}
@@ -433,9 +439,15 @@ func (p *reportPipeline) recordPhase(ctx context.Context, tenant, execID string,
 // report) from the immutable execution history, so GET /api/reports/runs keeps
 // working under the async backend. List is newest-first, so the first row seen
 // per schedule is its latest run; the next fire comes from the recurrence.
-func (p *reportPipeline) runsFromExecutions(ctx context.Context, tenant string, cross bool) map[string]reportRun {
+//
+// It takes the caller's RESOLVED scope, because run.Detail below is the
+// artifact's rendered SUMMARY ("3 active alert(s) · 2 critical/error") for that
+// tenant, and because the 200-row window is a bound the store applies: rows a
+// restricted tenant owns would otherwise consume it and push a VISIBLE tenant's
+// latest run off the operator's screen.
+func (p *reportPipeline) runsFromExecutions(ctx context.Context, sc reports.ExecScope) map[string]reportRun {
 	out := map[string]reportRun{}
-	list, err := p.execs.List(ctx, tenant, cross, reports.ExecQuery{Kind: "report", Limit: 200})
+	list, err := p.execs.List(ctx, sc, reports.ExecQuery{Kind: "report", Limit: 200})
 	if err != nil {
 		return out
 	}

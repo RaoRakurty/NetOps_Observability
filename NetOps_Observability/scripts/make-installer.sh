@@ -62,11 +62,35 @@
 #              regenerate + gate the third-party notices, write LICENSES.md and
 #              stop (no images, no tarballs). What CI runs to prove the customer
 #              notice matches the tree.
+#     --sign-only DIR
+#              finalize an ALREADY-BUILT bundle directory: append the provenance
+#              block to its MANIFEST, recompute SHA256SUMS, prove every shipped
+#              file is covered by it, then sign + self-verify. No docker, no npm,
+#              no Go. This is the dry run for the SIGNING path (the same shape as
+#              --licenses-only / --source-offer-only), and it calls the very same
+#              finalize_bundle() the full build calls, so the tested path and the
+#              release path cannot drift apart.
+#
+# RELEASE MODE (RC1 governance directive 2026-09-13, Decision 3B — distribution/
+# artifact signing is its own trust domain):
+#   CORRELIX_RELEASE_BUILD=1 makes signing MANDATORY. An unset
+#   CORRELIX_SIGNING_KEY, a key whose secret half is absent from the keyring, a
+#   signing failure, a failed self-verification, or a shipped file left outside
+#   SHA256SUMS each FAIL the build — a release bundle is signed in full or it is
+#   not produced. Unset (developer mode) keeps the historical checksum-only
+#   behaviour, announced loudly, so nothing about a local build changes.
 #
 # Prereqs on the BUILD host: docker+compose v2, zstd, node/npm (frontend dist),
-# python3 (licence notices), git. The frontend dist/ and docs portal are built if missing (they are
-# gitignored — the classic stale-dist trap — so the bundle never depends on a
-# developer having built them recently: REBUILD_FRONTEND=1 forces both).
+# python3 (licence notices), git. Both web assets the frontend image COPYs are
+# gitignored build artifacts — the classic stale-dist trap — and they are handled
+# DIFFERENTLY, deliberately:
+#   * src/frontend/dist   — this script rebuilds it on every run (step 1), so a
+#                           bundle never ships a stale SPA. REBUILD_FRONTEND=0
+#                           force-skips that only if you KNOW dist is fresh.
+#   * docs-portal/build   — built by the CALLER (`cd docs-portal && npm ci
+#                           --no-audit --no-fund && npm run build`); this script
+#                           REFUSES to start without it, in seconds, rather than
+#                           letting `docker compose build` fail on the COPY.
 #
 # LICENSING (see docs/design/packaging-strategy.md §4 + bundle LICENSES.md):
 # gate CLOSED 2026-07-03 — bus = Apache Kafka (Apache-2.0, replaced Redpanda
@@ -81,6 +105,8 @@ OUT="$ROOT/dist"
 PROFILE="full"
 LICENSES_ONLY=0
 SOURCE_OFFER_ONLY=0
+SIGN_ONLY=0
+SIGN_DIR=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --core) PROFILE="core"; shift ;;
@@ -95,21 +121,284 @@ while [ $# -gt 0 ]; do
     # so CI (and tests/test_source_offer.py) can prove the source offer is
     # honoured without cutting a whole bundle.
     --source-offer-only) SOURCE_OFFER_ONLY=1; shift ;;
+    # Dry-run for the SIGNING path: finalize an already-built bundle directory
+    # (provenance + checksums + coverage + signature) and stop. Same shape as
+    # the two flags above, and it runs the real finalize_bundle().
+    --sign-only) SIGN_ONLY=1; SIGN_DIR="${2:-}"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 
+# --- Release mode (RC1 governance directive 2026-09-13, Decision 3B) ----------
+# Blocker D of that directive: signing was OPTIONAL for every build, so every
+# bundle ever produced was unsigned. Release mode makes it mandatory and makes a
+# missing key a BUILD FAILURE rather than a NOTE. The value is read strictly: a
+# typo (`true`, `yes`, `Y`) must not silently fall back to an unsigned build,
+# which is the exact fail-open this mode exists to remove.
+RELEASE_BUILD=0
+case "${CORRELIX_RELEASE_BUILD:-}" in
+  ""|0) ;;
+  1) RELEASE_BUILD=1 ;;
+  *) echo "FATAL: CORRELIX_RELEASE_BUILD='${CORRELIX_RELEASE_BUILD}' is not understood — use exactly 1 for a release build, or leave it unset for a developer build. Refusing to guess: guessing wrong produces an unsigned release." >&2; exit 2 ;;
+esac
+
+# --- Signing key: resolved ONCE, BEFORE the expensive build -------------------
+# Key custody is an OWNER decision: the distribution signing key is owner-held
+# and lives OUTSIDE the repo and outside the source tree — this script may USE a
+# key, never mint one. Resolution happens here, ahead of ~20 minutes of docker
+# save / npm / go work, so a misconfigured release build fails in seconds instead
+# of at the very end. SIGNING_FPR is the single source of truth from here on:
+# finalize_bundle() records it in MANIFEST (before checksumming, so the signed
+# SHA256SUMS covers the fingerprint claim) and signs with it.
+SIGNING_FPR=""
+if [ -n "${CORRELIX_SIGNING_KEY:-}" ]; then
+  command -v gpg >/dev/null || { echo "FATAL: CORRELIX_SIGNING_KEY is set but gpg is not installed" >&2; exit 1; }
+  # `|| true` + discarded stderr are justified (§16.1): a missing key makes
+  # gpg exit non-zero with noisy chatter, and that exact failure is handled
+  # LOUDLY on the next line as a FATAL with a clearer message than gpg's.
+  SIGNING_FPR="$(gpg --batch --with-colons --list-secret-keys "$CORRELIX_SIGNING_KEY" 2>/dev/null \
+    | awk -F: '$1 == "fpr" { print $10; exit }')" || true
+  [ -n "$SIGNING_FPR" ] || { echo "FATAL: CORRELIX_SIGNING_KEY='$CORRELIX_SIGNING_KEY' has no secret key in the GPG keyring" >&2; exit 1; }
+  if [ "$RELEASE_BUILD" = 1 ]; then
+    echo "== release build (CORRELIX_RELEASE_BUILD=1): signing is MANDATORY — key $SIGNING_FPR"
+  fi
+elif [ "$RELEASE_BUILD" = 1 ]; then
+  echo "FATAL: BLOCKED: release build requires a distribution signing key — CORRELIX_SIGNING_KEY is unset." >&2
+  echo "  CORRELIX_RELEASE_BUILD=1 makes distribution/artifact signing MANDATORY (RC1 governance directive 2026-09-13, Decision 3B): SHA256SUMS is generated, signed and self-verified, and an unsigned or partially signed bundle is never produced." >&2
+  echo "  Export CORRELIX_SIGNING_KEY (a GPG key id or fingerprint whose SECRET key is in this host's keyring), or drop CORRELIX_RELEASE_BUILD for a developer build." >&2
+  exit 1
+fi
+
 # python3 generates the third-party notices (and gates their licences) below.
 command -v python3 >/dev/null || { echo "python3 is required (third-party licence notices)" >&2; exit 1; }
+
+# --- Pre-built documentation portal: checked HERE, not at the docker build -----
+# deployment/docker/Dockerfile.frontend COPYs docs-portal/build (the Docusaurus
+# site served at /docs/), and step 7i copies the same directory into the bundle.
+# It is a gitignored BUILD ARTIFACT produced by the CALLER — CI: the "Build the
+# in-app documentation portal" step in release-bundle.yml / publish-images.yml;
+# locally: `cd docs-portal && npm ci --no-audit --no-fund && npm run build`,
+# which is also what install.py's PREBUILT_WEB_ASSETS tells an operator to run.
+#
+# Until now it was only checked at 7i — AFTER step 2's `docker compose build` —
+# so a tree without the portal never got this message: it got BuildKit's
+# `failed to compute cache key: "/docs-portal/build": not found`, minutes into an
+# image build, naming a path that does not exist in the repository
+# (release-bundle.yml run 34721086054 on main, 2026-09-12, after a full release
+# gate). §16.1: a real failure must not surface as somebody else's noise, and
+# §16.3: fail before the expensive, destructive part, with the command to fix it.
+# One function, called both here and at 7i, so there is exactly one contract.
+require_prebuilt_docs_portal() {
+  local portal="$ROOT/docs-portal/build" entries
+  if [ ! -d "$portal" ]; then
+    echo "FATAL: docs-portal/build is missing — the frontend image COPYs it and the customer bundle ships the documentation portal offline." >&2
+    echo "  Build it first:  cd $ROOT/docs-portal && npm ci --no-audit --no-fund && npm run build" >&2
+    return 1
+  fi
+  # An UNREADABLE directory is not a missing one: printing the npm recipe for a
+  # permission problem would send the operator after the wrong fix, and the
+  # docker COPY would fail on the same directory again (install.py's
+  # _is_populated_dir makes the same distinction, for the same reason).
+  if ! entries="$(ls -A "$portal" 2>&1)"; then
+    echo "FATAL: cannot read $portal: $entries" >&2
+    echo "  The frontend image build reads this directory; fix its ownership/permissions and rerun." >&2
+    return 1
+  fi
+  if [ -z "$entries" ]; then
+    echo "FATAL: docs-portal/build exists but is EMPTY — an interrupted or cleaned build leaves the directory behind, and the docker COPY fails on it exactly as if it were absent." >&2
+    echo "  Rebuild it:  cd $ROOT/docs-portal && npm ci --no-audit --no-fund && npm run build" >&2
+    return 1
+  fi
+  if [ ! -f "$portal/index.html" ]; then
+    echo "FATAL: docs-portal/build has no index.html — refusing to ship a documentation portal with no entry point" >&2
+    return 1
+  fi
+}
+
+# The dry-run modes (--licenses-only, --source-offer-only, --sign-only) build no
+# image and copy no portal, and CI runs all three on commits that never build the
+# web assets — requiring the portal there would break them for nothing.
+if [ "$LICENSES_ONLY" = 0 ] && [ "$SOURCE_OFFER_ONLY" = 0 ] && [ "$SIGN_ONLY" = 0 ]; then
+  require_prebuilt_docs_portal || exit 1
+fi
+
 # date+sha, not `git describe` — the repo's tags are milestone markers, not
 # release tags, and produce unusable bundle names. Product release tags
 # (v-prefixed) win when present.
 VERSION="$(git -C "$ROOT" describe --tags --match 'v[0-9]*' --always 2>/dev/null | grep -E '^v[0-9]' || true)"
 [ -n "$VERSION" ] || VERSION="$(date +%Y.%m.%d)-g$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 GITSHA="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-BUNDLE_DIR="$OUT/correlix-$VERSION"
+# Provenance (directive Decision 7): one release traces to ONE immutable commit,
+# so the bundle carries the FULL sha and the tag it was cut from, not just the
+# short sha the lockstep smoke test greps for. `(none)` is the honest answer on an
+# untagged build — an empty field would read as "unknown", which is different.
+GITSHA_FULL="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+GITTAG="$(git -C "$ROOT" describe --exact-match --tags HEAD 2>/dev/null || echo '(none)')"
 COMPOSE_DIR="$ROOT/deployment/docker"
-mkdir -p "$BUNDLE_DIR"
+if [ "$SIGN_ONLY" = 1 ]; then
+  [ -n "$SIGN_DIR" ] || { echo "FATAL: --sign-only needs a bundle directory" >&2; exit 2; }
+  [ -d "$SIGN_DIR" ] || { echo "FATAL: --sign-only: '$SIGN_DIR' is not a directory" >&2; exit 2; }
+  BUNDLE_DIR="$(cd "$SIGN_DIR" && pwd)"
+  # MANIFEST is the proof this is a bundle directory and not, say, $HOME: the
+  # mode rewrites SHA256SUMS in place, so it must never be pointed at a tree
+  # that was not produced by this script (§16.3 dry-run/target confirmation).
+  [ -f "$BUNDLE_DIR/MANIFEST" ] || { echo "FATAL: --sign-only: '$BUNDLE_DIR' has no MANIFEST — it is not a built bundle directory" >&2; exit 2; }
+else
+  BUNDLE_DIR="$OUT/correlix-$VERSION"
+  mkdir -p "$BUNDLE_DIR"
+fi
+
+# --- Bundle finalization: provenance, integrity manifest, signature -----------
+# Everything below runs at the END of a full build AND, identically, under
+# --sign-only. It is a function rather than a tail block precisely so the tested
+# path and the release path are the same code (directive Decision 4).
+
+build_env_id() {
+  # The build ENVIRONMENT, with NO hostname and NO user name: MANIFEST ships to
+  # customers and §16.5 forbids internal host identifiers in a shipped artifact.
+  # A CI run id is a public, reproducible coordinate; a dev box's hostname is not.
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    printf 'github-actions workflow=%s run=%s attempt=%s runner=%s/%s kernel=%s' \
+      "${GITHUB_WORKFLOW:-unknown}" "${GITHUB_RUN_ID:-unknown}" \
+      "${GITHUB_RUN_ATTEMPT:-unknown}" "${RUNNER_OS:-unknown}" \
+      "${RUNNER_ARCH:-unknown}" "$(uname -srm)"
+  else
+    printf 'local-build kernel=%s' "$(uname -srm)"
+  fi
+}
+
+build_tool_versions() {
+  # The toolchain that produced the artifacts (directive Decision 7: "build
+  # environment"). Absent tools are simply not listed — every tool this build
+  # actually REQUIRES is checked by name elsewhere and fails loudly there, so
+  # this line stays provenance and never becomes a second, weaker gate.
+  local out="" v t
+  for t in docker go node npm zstd python3 git gpg tar; do
+    command -v "$t" >/dev/null 2>&1 || continue
+    # `|| true`: a version banner we cannot parse must not fail a build (the
+    # `head -1` also SIGPIPEs grep under pipefail). "unknown" is recorded
+    # instead — a cosmetic provenance field, not an integrity check.
+    # `go` has no --version (it is `go version`); everything else answers to it.
+    case "$t" in
+      go) v="$(go version 2>&1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)" || true ;;
+      *)  v="$("$t" --version 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)" || true ;;
+    esac
+    out="$out${out:+ }$t=${v:-unknown}"
+  done
+  printf '%s' "$out"
+}
+
+manifest_provenance() {
+  # Directive Decision 7: version, tag, full source sha, UTC build timestamp and
+  # build-environment id, all INSIDE MANIFEST, which is itself a SHA256SUMS
+  # member — so the provenance claim is covered by the signature. Idempotent
+  # (§9): a second --sign-only run must not stack duplicate blocks.
+  if grep -q '^source_sha:' "$BUNDLE_DIR/MANIFEST"; then
+    return 0
+  fi
+  {
+    printf 'tag:      %s\n' "$GITTAG"
+    printf 'source_sha: %s\n' "$GITSHA_FULL"
+    printf 'built_utc: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'build_env: %s\n' "$(build_env_id)"
+    printf 'build_tools: %s\n' "$(build_tool_versions)"
+    if [ "$RELEASE_BUILD" = 1 ]; then
+      printf 'release_mode: yes\n'
+    else
+      printf 'release_mode: no\n'
+    fi
+  } >> "$BUNDLE_DIR/MANIFEST"
+}
+
+assert_checksum_coverage() {
+  # A PARTIALLY signed bundle is never produced (directive Decision 3B).
+  # SHA256SUMS is exactly what the signature covers, so any shipped file outside
+  # it is an unmeasured, unsigned artifact on the customer host — the same defect
+  # the correlix-setup binary once had (design gui-installer-2026-08.md §5 H6),
+  # generalised: the check is now "every file in the bundle", so the NEXT
+  # artifact someone adds cannot ship outside the manifest unnoticed.
+  # (The directive's "every file listed in MANIFEST" is strictly weaker: MANIFEST
+  # names container IMAGES, whose presence the release workflow proves with a
+  # docker-load round-trip. Filesystem coverage is the stronger invariant.)
+  local uncovered
+  uncovered="$(cd "$BUNDLE_DIR" && LC_ALL=C comm -23 \
+    <(find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.asc | sed 's|^\./||' | LC_ALL=C sort) \
+    <(sed 's/^[0-9a-f]\{64\}  //' SHA256SUMS | sed 's|^\./||' | LC_ALL=C sort))"
+  if [ -z "$uncovered" ]; then
+    return 0
+  fi
+  if [ "$RELEASE_BUILD" = 1 ]; then
+    echo "FATAL: these bundle files are NOT covered by SHA256SUMS — refusing to sign a bundle whose signature would cover only part of its contents (RC1 governance directive, Decision 3B):" >&2
+    printf '%s\n' "$uncovered" | sed 's/^/  /' >&2
+    exit 1
+  fi
+  echo "WARN: bundle files not covered by SHA256SUMS (a release build — CORRELIX_RELEASE_BUILD=1 — REFUSES this; add them to finalize_bundle()'s sha256sum line):" >&2
+  printf '%s\n' "$uncovered" | sed 's/^/  /' >&2
+}
+
+finalize_bundle() {
+  manifest_provenance
+  if [ -n "$SIGNING_FPR" ]; then
+    # Re-signing the same directory must not stack fingerprint lines, and a
+    # re-sign with a DIFFERENT key must not leave the old claim behind.
+    sed -i '/^signing-key /d' "$BUNDLE_DIR/MANIFEST"
+    printf 'signing-key %s\n' "$SIGNING_FPR" >> "$BUNDLE_DIR/MANIFEST"
+  fi
+
+  # Integrity manifest covers EVERY shipped artifact, including the
+  # correlix-setup binary (design gui-installer-2026-08.md §5 H6 — a binary
+  # outside SHA256SUMS is an unverifiable execution path on the customer host)
+  # and, for the same reason, correlix-debug (7c) and correlix-licence (7d).
+  # LICENSE, NOTICE and LICENSES/*.txt are listed explicitly: LICENSING.md is
+  # caught by ./*.md, but the extensionless notices and the two licence TEXTS the
+  # bundle's notice points at would otherwise sit outside the integrity manifest.
+  # It also covers ./source-offer/* (licence audit D2): the mirrored GPL/LGPL
+  # corresponding source is a compliance artifact, and a customer must be able to
+  # prove the tarball they received is the one we measured.
+  # ./*.txt covers README.txt and SUPPORT.txt.
+  (cd "$BUNDLE_DIR" && sha256sum ./*.tar.* ./*.md ./*.txt LICENSE NOTICE ./LICENSES/*.txt MANIFEST install-correlix.sh prepare-host.sh correlix-setup correlix-debug correlix-licence ./source-offer/* > SHA256SUMS)
+  # The documentation portal is a TREE, so it is appended rather than globbed: a
+  # documentation set the customer cannot verify is one an attacker can edit, and
+  # the offline portal is what a customer reads when the product will not start.
+  (cd "$BUNDLE_DIR" && find ./docs -type f -print0 | sort -z | xargs -0 sha256sum >> SHA256SUMS)
+
+  # CHECKSUMS.sha256 is the name a customer looks for; SHA256SUMS is the name the
+  # installer and every existing runbook use. A symlink gives both without a
+  # second file that can drift from the first.
+  ln -sfn SHA256SUMS "$BUNDLE_DIR/CHECKSUMS.sha256"
+
+  # Coverage is proven BEFORE the signature exists, so a bundle that would be
+  # only partly signed is refused rather than signed and then rejected.
+  assert_checksum_coverage
+
+  if [ -n "$SIGNING_FPR" ]; then
+    gpg --batch --quiet --yes --local-user "$SIGNING_FPR" --armor \
+      --output "$BUNDLE_DIR/SHA256SUMS.asc" --detach-sign "$BUNDLE_DIR/SHA256SUMS"
+    # Self-check the fresh signature: an agent/passphrase hiccup must fail the
+    # build HERE, not on the customer host (stderr left visible on purpose).
+    gpg --batch --verify "$BUNDLE_DIR/SHA256SUMS.asc" "$BUNDLE_DIR/SHA256SUMS" \
+      || { echo "FATAL: self-verification of fresh SHA256SUMS.asc failed" >&2; exit 1; }
+    echo "== signed SHA256SUMS (key fingerprint $SIGNING_FPR — recorded in MANIFEST)"
+  else
+    # A STALE signature is worse than none: SHA256SUMS was just rewritten, so an
+    # .asc left over from an earlier signed build of the same output directory
+    # would make install-correlix.sh die on a "BAD signature" that is really a
+    # stale one. Remove it and say so. (Only fires when one exists — a clean
+    # unsigned build is byte-for-byte what it always was.)
+    if [ -f "$BUNDLE_DIR/SHA256SUMS.asc" ]; then
+      rm -f "$BUNDLE_DIR/SHA256SUMS.asc"
+      echo "NOTE: removed a STALE SHA256SUMS.asc from a previous signed build of this output directory (this build is unsigned; a stale signature would fail the customer's verification)."
+    fi
+    echo "NOTE: CORRELIX_SIGNING_KEY unset — bundle is CHECKSUM-ONLY (no SHA256SUMS.asc; key custody is an owner decision, #97)."
+  fi
+}
+
+if [ "$SIGN_ONLY" = 1 ]; then
+  echo "== sign-only run: finalizing $BUNDLE_DIR"
+  finalize_bundle
+  echo "== done (sign-only)"
+  exit 0
+fi
 
 # --- Third-party notices: GENERATED, never hand-written -----------------------
 # What used to live here was a hand-maintained heredoc, and it had rotted
@@ -217,8 +506,12 @@ FTR
     || { echo "FATAL: $ROOT/LICENSES/ is missing — the bundle must carry both SPDX licence texts" >&2; exit 1; }
   rm -rf "$BUNDLE_DIR/LICENSES"
   cp -R "$ROOT/LICENSES" "$BUNDLE_DIR/LICENSES"
-  # Both texts, by SPDX id, or the footer's third claim is false too.
-  for t in Apache-2.0 Correlix-Enterprise; do
+  # Both texts, by SPDX id, or the footer's third claim is false too. The file
+  # names ARE the identifiers: owner Decision 3 (2026-09-13) binds
+  # LicenseRef-Correlix-Enterprise one-to-one to
+  # LICENSES/LicenseRef-Correlix-Enterprise.txt, and licensing-gate.py check B
+  # fails if the two ever drift apart, so this loop reads as the id list it is.
+  for t in Apache-2.0 LicenseRef-Correlix-Enterprise; do
     [ -s "$BUNDLE_DIR/LICENSES/$t.txt" ] \
       || { echo "FATAL: bundle LICENSES/$t.txt is missing or empty" >&2; exit 1; }
   done
@@ -438,8 +731,10 @@ command -v zstd >/dev/null || { echo "zstd is required (apt-get install zstd)" >
 
 echo "== correlix installer bundle $VERSION ($PROFILE) -> $BUNDLE_DIR"
 
-# 1. Frontend dist + docs portal (gitignored build artifacts the frontend image
-#    COPYs). ALWAYS rebuild for a bundle: dist/ is gitignored and long-lived, so
+# 1. Frontend dist (a gitignored build artifact the frontend image COPYs; the
+#    OTHER one, docs-portal/build, is the caller's to build and was already
+#    required by the preflight at the top of this script).
+#    ALWAYS rebuild for a bundle: dist/ is gitignored and long-lived, so
 #    a "build only if missing" check silently ships a STALE UI whenever a dev's
 #    dist predates their source edits — exactly what shipped four bundles' worth
 #    of un-scrubbed UI on 2026-07-04. Correctness over the ~30s build cost.
@@ -1154,15 +1449,14 @@ if grep -qE "$LAB_MARKERS" "$BUNDLE_DIR/RELEASE-NOTES.md"; then
   echo "FATAL: a lab identifier reached the generated release notes" >&2; exit 1
 fi
 
-# 7i. The offline documentation portal. docs-portal/build is a gitignored
-#     build artifact that the frontend image COPYs, so `docker compose build`
-#     above has already failed if it were missing — but a bundle silently
-#     shipping no documentation is exactly the omission §16.1 forbids, so this
-#     is checked by name rather than inferred.
-[ -d "$ROOT/docs-portal/build" ] \
-  || { echo "FATAL: docs-portal/build is missing — the customer bundle ships the documentation portal offline. Build it (cd docs-portal && npm ci && npm run build) and rerun." >&2; exit 1; }
-[ -f "$ROOT/docs-portal/build/index.html" ] \
-  || { echo "FATAL: docs-portal/build has no index.html — refusing to ship a documentation portal with no entry point" >&2; exit 1; }
+# 7i. The offline documentation portal. docs-portal/build is a gitignored build
+#     artifact that the frontend image COPYs; the preflight near the top of this
+#     script already refused to start without it (that check used to live ONLY
+#     here, which is why a missing portal was reported by BuildKit instead of by
+#     us). Re-asserted at the point of use: a bundle silently shipping no
+#     documentation is exactly the omission §16.1 forbids, and the copy below
+#     must not be reached on a portal that vanished mid-build.
+require_prebuilt_docs_portal || exit 1
 echo "-- copying the offline documentation portal"
 rm -rf "$BUNDLE_DIR/docs"
 cp -a "$ROOT/docs-portal/build" "$BUNDLE_DIR/docs"
@@ -1181,63 +1475,14 @@ if grep -qi 'redpanda' "$BUNDLE_DIR/README.md" "$BUNDLE_DIR/ADVANCED.md" "$BUNDL
   echo "FATAL: customer-facing bundle docs mention redpanda" >&2; exit 1
 fi
 
-# --- Release signing (#97, owner-gated) --------------------------------------
-# Key custody is an OWNER decision: the product signing key is owner-held and
-# lives OUTSIDE the repo and outside CI — NEVER generate or embed a signing
-# key in this script or in a workflow. When CORRELIX_SIGNING_KEY (a GPG key id
-# or fingerprint) is exported and its SECRET key exists in the local keyring,
-# the bundle gains SHA256SUMS.asc (detached, ASCII-armored) and MANIFEST
-# records the signing-key fingerprint. The fingerprint goes into MANIFEST
-# BEFORE checksumming, so the signed SHA256SUMS covers the fingerprint claim.
-# Unset ⇒ checksum-only bundle — unchanged behavior, announced loudly below so
-# an unsigned release is a visible choice, never an accident. Set-but-missing
-# key is a hard failure (§16.1): the operator asked for a signed bundle;
-# silently shipping unsigned would be worse than failing the build.
-SIGNING_FPR=""
-if [ -n "${CORRELIX_SIGNING_KEY:-}" ]; then
-  command -v gpg >/dev/null || { echo "FATAL: CORRELIX_SIGNING_KEY is set but gpg is not installed" >&2; exit 1; }
-  # `|| true` + discarded stderr are justified (§16.1): a missing key makes
-  # gpg exit non-zero with noisy chatter, and that exact failure is handled
-  # LOUDLY on the next line as a FATAL with a clearer message than gpg's.
-  SIGNING_FPR="$(gpg --batch --with-colons --list-secret-keys "$CORRELIX_SIGNING_KEY" 2>/dev/null \
-    | awk -F: '$1 == "fpr" { print $10; exit }')" || true
-  [ -n "$SIGNING_FPR" ] || { echo "FATAL: CORRELIX_SIGNING_KEY='$CORRELIX_SIGNING_KEY' has no secret key in the GPG keyring" >&2; exit 1; }
-  printf 'signing-key %s\n' "$SIGNING_FPR" >> "$BUNDLE_DIR/MANIFEST"
-fi
-
-# Integrity manifest covers EVERY shipped artifact, including the
-# correlix-setup binary (design gui-installer-2026-08.md §5 H6 — a binary
-# outside SHA256SUMS is an unverifiable execution path on the customer host)
-# and, for the same reason, correlix-debug (7c) and correlix-licence (7d).
-# LICENSE, NOTICE and LICENSES/*.txt are listed explicitly: LICENSING.md is
-# caught by ./*.md, but the extensionless notices and the two licence TEXTS the
-# bundle's notice points at would otherwise sit outside the integrity manifest.
-# It also covers ./source-offer/* (licence audit D2): the mirrored GPL/LGPL
-# corresponding source is a compliance artifact, and a customer must be able to
-# prove the tarball they received is the one we measured.
-# ./*.txt covers README.txt and SUPPORT.txt.
-(cd "$BUNDLE_DIR" && sha256sum ./*.tar.* ./*.md ./*.txt LICENSE NOTICE ./LICENSES/*.txt MANIFEST install-correlix.sh prepare-host.sh correlix-setup correlix-debug correlix-licence ./source-offer/* > SHA256SUMS)
-# The documentation portal is a TREE, so it is appended rather than globbed: a
-# documentation set the customer cannot verify is one an attacker can edit, and
-# the offline portal is what a customer reads when the product will not start.
-(cd "$BUNDLE_DIR" && find ./docs -type f -print0 | sort -z | xargs -0 sha256sum >> SHA256SUMS)
-
-# CHECKSUMS.sha256 is the name a customer looks for; SHA256SUMS is the name the
-# installer and every existing runbook use. A symlink gives both without a
-# second file that can drift from the first.
-ln -sfn SHA256SUMS "$BUNDLE_DIR/CHECKSUMS.sha256"
-
-if [ -n "$SIGNING_FPR" ]; then
-  gpg --batch --yes --local-user "$SIGNING_FPR" --armor \
-    --output "$BUNDLE_DIR/SHA256SUMS.asc" --detach-sign "$BUNDLE_DIR/SHA256SUMS"
-  # Self-check the fresh signature: an agent/passphrase hiccup must fail the
-  # build HERE, not on the customer host (stderr left visible on purpose).
-  gpg --batch --verify "$BUNDLE_DIR/SHA256SUMS.asc" "$BUNDLE_DIR/SHA256SUMS" \
-    || { echo "FATAL: self-verification of fresh SHA256SUMS.asc failed" >&2; exit 1; }
-  echo "== signed SHA256SUMS (key fingerprint $SIGNING_FPR — recorded in MANIFEST)"
-else
-  echo "NOTE: CORRELIX_SIGNING_KEY unset — bundle is CHECKSUM-ONLY (no SHA256SUMS.asc; key custody is an owner decision, #97)."
-fi
+# --- Bundle finalization: provenance + integrity manifest + signature --------
+# finalize_bundle() (defined near the top, alongside the release-mode preflight)
+# appends the provenance block and the signing fingerprint to MANIFEST, writes
+# SHA256SUMS over EVERY shipped file, proves nothing is left outside it, and then
+# signs + self-verifies. In release mode (CORRELIX_RELEASE_BUILD=1) each of those
+# is fail-closed; with no key it is the historical checksum-only bundle, and the
+# NOTE says so.
+finalize_bundle
 
 echo "== done"
 du -sh "$BUNDLE_DIR"/* | sed 's/^/   /'

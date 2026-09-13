@@ -1,0 +1,116 @@
+# CODEOWNERS — review ownership for the release-critical surfaces
+# RC1 governance directive (docs/release/RC1_GOVERNANCE_DIRECTIVE_2026-09-13.md),
+# Decision 6. Filed 2026-09-13.
+#
+# ---------------------------------------------------------------------------
+# HUMAN ACTION REQUIRED: replace @OWNER-PLACEHOLDER with the release/security
+# owner (a GitHub user or team handle). Until that replacement is made THIS
+# FILE IS INERT: GitHub silently ignores an owner it cannot resolve, so every
+# rule below matches a path and then assigns it to nobody. It reviews nothing.
+# ---------------------------------------------------------------------------
+#
+# WHY IT IS COMMITTED INERT. The directive's Non-goals forbid inventing
+# personnel, and there is exactly one authorized maintainer today. So the
+# *inventory* of paths that must never change without a named reviewer is
+# recorded now — reviewable, diffable, and testable
+# (NetOps_Observability/tests/test_codeowners.py proves every path below still
+# exists and that every sensitive class is covered) — and only the handle is
+# left for a human.
+#
+# BRANCH PROTECTION. `require_code_owner_reviews` stays OFF. The protection
+# applied to `main` on 2026-09-13 keeps required approvals at **0** on purpose:
+# one authorized maintainer plus a required approval deadlocks every PR
+# (docs/release/BRANCH_PROTECTION_DECISION5_2026-09-13.md §"Governance
+# hardening"). Turning code-owner review on before a real second maintainer
+# exists would either deadlock the repository or be satisfied by the author
+# approving their own change — neither is a control.
+#
+# TWO APPROVALS ON THE SIGNING PATHS (consideration, not yet enforced).
+# Directive Decision 6 asks for two approvals on the most sensitive signing
+# paths. The three signing trust domains (Decision 3) are source/tag signing,
+# distribution/artifact signing, and production licence signing; the paths that
+# implement them are marked `# SIGNING PATH — 2 approvals when 3 maintainers
+# exist` below. Two required approvals needs three humans to stay unblocked
+# (author + 2 reviewers), so it is recorded as the target state rather than
+# applied. Raising it is a branch-protection change, not a CODEOWNERS change.
+#
+# SYNTAX NOTES. Patterns are ROOT-relative to this repository, and the project
+# tree lives in the `NetOps_Observability/` subdirectory — hence the prefix on
+# nearly every line. The LAST matching rule wins, so ordering here goes
+# general → specific. GitHub reads the first CODEOWNERS it finds in
+# `.github/`, then the repository root, then `docs/`; this is the `.github/`
+# one, which takes precedence, so do not add a second copy elsewhere.
+
+
+# ── 0. this file, and the CI that enforces everything else ───────────────────
+# A change to CODEOWNERS is a change to who may approve changes.
+/.github/CODEOWNERS                                     @OWNER-PLACEHOLDER
+/.github/workflows/                                     @OWNER-PLACEHOLDER
+
+
+# ── 1. the licence declarations a customer relies on ─────────────────────────
+# Both roots: the repository root carries the notices a reader lands on first,
+# the project root carries the copies that ship in the bundle and the images.
+/LICENSE                                                @OWNER-PLACEHOLDER
+/LICENSES/                                              @OWNER-PLACEHOLDER
+/LICENSING.md                                           @OWNER-PLACEHOLDER
+/CONTRIBUTING.md                                        @OWNER-PLACEHOLDER
+/CLA.md                                                 @OWNER-PLACEHOLDER
+/NetOps_Observability/LICENSE                            @OWNER-PLACEHOLDER
+/NetOps_Observability/LICENSES/                          @OWNER-PLACEHOLDER
+/NetOps_Observability/LICENSING.md                       @OWNER-PLACEHOLDER
+/NetOps_Observability/NOTICE                             @OWNER-PLACEHOLDER
+
+# The machine-readable policy IS the open-core boundary; the gate reads nothing
+# else as authority.
+/NetOps_Observability/licensing-policy.json              @OWNER-PLACEHOLDER
+/NetOps_Observability/scripts/licensing-gate.py          @OWNER-PLACEHOLDER
+/NetOps_Observability/scripts/gen-licensing-map.py       @OWNER-PLACEHOLDER
+/NetOps_Observability/scripts/spdx-headers.py            @OWNER-PLACEHOLDER
+/NetOps_Observability/scripts/license-audit.py           @OWNER-PLACEHOLDER
+
+
+# ── 2. the core / commercial boundary ────────────────────────────────────────
+# Everything under this directory is `LicenseRef-Correlix-Enterprise` — the
+# PHYSICAL boundary licensing-policy.json `commercial_paths` declares. Moving a
+# file in or out of it relicenses that file.
+/NetOps_Observability/src/backend/enterprise/            @OWNER-PLACEHOLDER
+
+
+# ── 3. release and installer scripts ─────────────────────────────────────────
+# These decide what bytes reach a customer host.
+# SIGNING PATH — 2 approvals when 3 maintainers exist: make-installer.sh and
+# install-correlix.sh produce and then verify SHA256SUMS for the bundle.
+/NetOps_Observability/scripts/make-installer.sh          @OWNER-PLACEHOLDER
+/NetOps_Observability/scripts/install-correlix.sh        @OWNER-PLACEHOLDER
+/NetOps_Observability/scripts/install.py                 @OWNER-PLACEHOLDER
+/NetOps_Observability/scripts/release-qualify.py         @OWNER-PLACEHOLDER
+/NetOps_Observability/scripts/deploy-qualify.sh          @OWNER-PLACEHOLDER
+/NetOps_Observability/scripts/source-archive.py          @OWNER-PLACEHOLDER
+/NetOps_Observability/scripts/bundle-autoupdate.sh       @OWNER-PLACEHOLDER
+
+
+# ── 4. licence verification and signing code ─────────────────────────────────
+# SIGNING PATH — 2 approvals when 3 maintainers exist. `internal/licence`
+# verifies the ed25519 signature and holds the embedded trusted public-key set;
+# `internal/licence/signer` and `cmd/correlix-licence` are the issuing side.
+# A change here can forge an entitlement or silently trust a new key.
+/NetOps_Observability/src/backend/internal/licence/      @OWNER-PLACEHOLDER
+/NetOps_Observability/src/backend/cmd/correlix-licence/  @OWNER-PLACEHOLDER
+
+
+# ── 5. authn / authz policy ──────────────────────────────────────────────────
+# Who may call what, and the tenant/org isolation every data surface is scoped
+# by (CLAUDE.md §3a). A regression here is a cross-tenant leak.
+/NetOps_Observability/src/backend/auth.go                @OWNER-PLACEHOLDER
+/NetOps_Observability/src/backend/auth_config.go         @OWNER-PLACEHOLDER
+/NetOps_Observability/src/backend/authz.go               @OWNER-PLACEHOLDER
+/NetOps_Observability/src/backend/oidc.go                @OWNER-PLACEHOLDER
+/NetOps_Observability/src/backend/oidc_config.go         @OWNER-PLACEHOLDER
+/NetOps_Observability/src/backend/tenancy.go             @OWNER-PLACEHOLDER
+/NetOps_Observability/src/backend/tenant_context.go      @OWNER-PLACEHOLDER
+/NetOps_Observability/src/backend/tenant_governance.go   @OWNER-PLACEHOLDER
+/NetOps_Observability/src/backend/internal/users/        @OWNER-PLACEHOLDER
+/NetOps_Observability/src/backend/internal/rbac/         @OWNER-PLACEHOLDER
+/NetOps_Observability/src/backend/internal/token/        @OWNER-PLACEHOLDER
+/NetOps_Observability/src/backend/internal/elevation/    @OWNER-PLACEHOLDER

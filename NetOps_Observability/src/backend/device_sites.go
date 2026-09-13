@@ -69,7 +69,17 @@ func newDeviceSiteStore(path string) (*deviceSiteStore, error) {
 // (tenant, cross) principal — the shape the geomap join consumes. Each binding
 // contributes one entry per identity token so any of a device's tokens resolves
 // its site. A non-cross caller only ever sees its own tenant's bindings.
+// A server built WITHOUT the store answers the same way a deployment that has
+// placed no device does: nothing is bound. main.go builds it or aborts the boot,
+// so a nil store is a partially-built server and nothing else — but a missing
+// guard is not an error path (§10), and without it the nil dereference came out
+// of /api/wan/interfaces as a recovered panic and a 500, which is a failure
+// reported in the wrong way. Same reasoning, same route and the same fix as
+// wanPolicyStore.Get one file over (tracker 285).
 func (s *deviceSiteStore) Assignments(tenant string, cross bool) map[string]string {
+	if s == nil || s.kv == nil {
+		return nil
+	}
 	rows := s.kv.All(tenant, cross)
 	if len(rows) == 0 {
 		return nil
@@ -88,6 +98,9 @@ func (s *deviceSiteStore) Assignments(tenant string, cross bool) map[string]stri
 
 // Get returns the binding for a device id if visible to the caller.
 func (s *deviceSiteStore) Get(tenant string, cross bool, deviceID string) (DeviceSiteBinding, bool) {
+	if s == nil || s.kv == nil {
+		return DeviceSiteBinding{}, false // no store: no device is placed, which is the honest answer
+	}
 	return s.kv.Get(tenant, cross, deviceID)
 }
 
@@ -95,6 +108,11 @@ func (s *deviceSiteStore) Get(tenant string, cross bool, deviceID string) (Devic
 // tenant (server-side), validated the site, and populated Tokens — see
 // handleDeviceSite.
 func (s *deviceSiteStore) Set(b DeviceSiteBinding) error {
+	if s == nil || s.kv == nil {
+		// The read side can fall back to "unplaced"; a write that cannot be
+		// written down has no such fallback and must SAY so rather than panic.
+		return errors.New("device site store is not configured")
+	}
 	b.UpdatedAt = time.Now().UTC()
 	return s.kv.Upsert(b)
 }
@@ -102,6 +120,9 @@ func (s *deviceSiteStore) Set(b DeviceSiteBinding) error {
 // Delete clears a device's binding within the caller's scope. Returns false when
 // the device id isn't visible to the caller (or has no binding).
 func (s *deviceSiteStore) Delete(tenant string, cross bool, deviceID string) bool {
+	if s == nil || s.kv == nil {
+		return false // nothing is bound, so nothing was deleted
+	}
 	return s.kv.Delete(tenant, cross, deviceID)
 }
 

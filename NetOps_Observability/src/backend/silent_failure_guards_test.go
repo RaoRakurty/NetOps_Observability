@@ -142,11 +142,31 @@ func TestErrorIsNotConflatedWithABenignState(t *testing.T) {
 	// added here must say WHY, and must not be a dependency read.
 	allow := map[string]string{
 		"collectors/snmptrap.go":      "byte-level BER walk: a malformed varbind is skipped, the trap still lands",
-		"collectors/redis.go":         "byte-level RESP parse: a malformed entry is skipped, the scan continues",
 		"integration_reconciler.go":   "documented dedup skip; the reconcile outcome is counted separately",
 		"internal/totp/totp.go":       "fail-closed crypto: a malformed secret and an empty key both mean 'no code can be computed'; the caller treats \"\" as invalid either way (path updated when the primitive moved out of package main, 2026-07-27)",
 		"internal/selfheal/healer.go": "diskUsedPct returns an explicit -1 'unmeasurable' sentinel for both statfs failure and a zero-block filesystem — the healer refuses to act on unmeasurable disk, which is the safe branch (path updated when the healer moved, 2026-07-28)",
 	}
+
+	// FUNCTION-SCOPED exemptions. A whole FILE is the wrong unit whenever the
+	// same file holds byte-level wire parsing AND dependency reads, because the
+	// entry's own rule — "must not be a dependency read" — then cannot be
+	// enforced. collectors/redis.go was allowlisted whole for its RESP walk, and
+	// the exemption silently covered every Fetch* on the file: tracker 290's
+	// FetchTopologyLinks sat inside it for months, reporting a dead discovery
+	// channel as "this estate has no adjacencies", and this guard could not see
+	// it. Narrowed to the parser it was actually written for (2026-09-13).
+	allowFn := map[string]string{
+		"collectors/redis.go#redisMembers": "byte-level RESP parse: a malformed member entry is skipped, the scan continues",
+	}
+
+	// FROZEN BASELINE, function-scoped — the dependency reads the file-level
+	// exemption above was hiding. It held four entries, all four in
+	// collectors/redis.go (FetchIfAddrMap, FetchRoutingDirection, FetchIfIndexMap,
+	// FetchWANCircuits), and tracker 307 cleared them: each now tells an unread
+	// channel from an unwritten key, and every caller reports the read failure
+	// instead of dropping it. EMPTY IS THE GOAL STATE, and it stays SHRINK-ONLY —
+	// a new function with this shape must be fixed, not baselined.
+	baselineFn := map[string]bool{}
 
 	// FROZEN BASELINE — the pre-existing backlog this guard found on the day it
 	// was introduced (2026-07-27), recorded per-file so it survives line drift.
@@ -180,6 +200,7 @@ func TestErrorIsNotConflatedWithABenignState(t *testing.T) {
 	srcs := goSourcesRaw(t)
 	fset := token.NewFileSet()
 	stillDirty := map[string]bool{}
+	stillDirtyFn := map[string]bool{}
 
 	for path, src := range srcs {
 		if _, ok := allow[path]; ok {
@@ -189,39 +210,64 @@ func TestErrorIsNotConflatedWithABenignState(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: cannot parse — the guard would silently stop covering it: %v", path, err)
 		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			ifs, ok := n.(*ast.IfStmt)
-			if !ok {
+		// Walk per DECLARATION so an exemption can name the parser it was written
+		// for instead of blanketing every read in the same file. A non-func decl
+		// (a package-level var holding a func literal) still gets walked, under a
+		// key no function-scoped entry can match — dropping it would trade one
+		// blind spot for another, which is the defect this guard is about.
+		for _, decl := range f.Decls {
+			key := path + "#"
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				key += fn.Name.Name
+			}
+			if _, ok := allowFn[key]; ok {
+				continue
+			}
+			ast.Inspect(decl, func(n ast.Node) bool {
+				ifs, ok := n.(*ast.IfStmt)
+				if !ok {
+					return true
+				}
+				bin, ok := ifs.Cond.(*ast.BinaryExpr)
+				if !ok || bin.Op != token.LOR {
+					return true
+				}
+				if !(isErrNotNil(bin.X) || isErrNotNil(bin.Y)) {
+					return true
+				}
+				if !(isEmptinessTest(bin.X) || isEmptinessTest(bin.Y)) {
+					return true
+				}
+				if !isBenignBody(ifs.Body) {
+					return true
+				}
+				if baselineFn[key] {
+					stillDirtyFn[key] = true
+					return true // known backlog; tracked, shrink-only (asserted below)
+				}
+				if baseline[path] {
+					stillDirty[path] = true
+					return true // known backlog; tracked, shrink-only (asserted below)
+				}
+				t.Errorf("%s:%d: `if err != nil || <empty> { %s }` conflates a FAILURE with "+
+					"an empty state — the caller cannot tell a broken dependency from "+
+					"'there is nothing here', so an outage renders as normal (CLAUDE.md §10). "+
+					"Split the branches: handle the error (surface/count it and preserve prior "+
+					"state), then handle empty separately. See cloud_monitor_eval.go for the "+
+					"three-state shape this repo already uses.",
+					path, fset.Position(ifs.Pos()).Line, bodyKind(ifs.Body))
 				return true
-			}
-			bin, ok := ifs.Cond.(*ast.BinaryExpr)
-			if !ok || bin.Op != token.LOR {
-				return true
-			}
-			if !(isErrNotNil(bin.X) || isErrNotNil(bin.Y)) {
-				return true
-			}
-			if !(isEmptinessTest(bin.X) || isEmptinessTest(bin.Y)) {
-				return true
-			}
-			if !isBenignBody(ifs.Body) {
-				return true
-			}
-			if baseline[path] {
-				stillDirty[path] = true
-				return true // known backlog; tracked, shrink-only (asserted below)
-			}
-			t.Errorf("%s:%d: `if err != nil || <empty> { %s }` conflates a FAILURE with "+
-				"an empty state — the caller cannot tell a broken dependency from "+
-				"'there is nothing here', so an outage renders as normal (CLAUDE.md §10). "+
-				"Split the branches: handle the error (surface/count it and preserve prior "+
-				"state), then handle empty separately. See cloud_monitor_eval.go for the "+
-				"three-state shape this repo already uses.",
-				path, fset.Position(ifs.Pos()).Line, bodyKind(ifs.Body))
-			return true
-		})
+			})
+		}
 	}
 
+	// Shrink-only, function scope: same rule as the path baseline below.
+	for key := range baselineFn {
+		if !stillDirtyFn[key] {
+			t.Errorf("%s is in the frozen function baseline but no longer conflates an error "+
+				"with an empty state — delete its baseline entry. The baseline only shrinks.", key)
+		}
+	}
 	// Shrink-only: a baselined file that no longer trips the guard must be
 	// REMOVED from the baseline, so the backlog can never silently grow back
 	// under cover of a stale exemption.

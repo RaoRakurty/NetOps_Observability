@@ -27,7 +27,10 @@ import (
 // Sources: discovery devices (mgmt IP→device) + the SNMP collector's Redis maps
 // (interface IP→ifName via ifAddrKey, ifIndex→ifName via ifIndexKey). An absent
 // source simply omits those rows → the resolver abstains for that pair (UNKNOWN),
-// never guesses.
+// never guesses. A source that could not be READ omits the same rows — the export
+// is not worth refusing over a naming bridge — but it is LOGGED, because an
+// abstention the engine was never told about looks exactly like a fleet that has
+// no interface addresses (tracker 307, §10).
 
 type erDevice struct {
 	TenantID string `json:"tenant_id"`
@@ -75,22 +78,29 @@ func (s *server) startEntityResolverEnrichment(ctx context.Context) {
 				TenantID: t, Device: d.ID, Name: d.Name, MgmtIP: d.Address,
 			})
 		}
-		if ifaddr, err := collectors.FetchIfAddrMap(ctx); err == nil {
-			for dev, m := range ifaddr {
-				for ip, name := range m {
-					out.InterfaceIPs = append(out.InterfaceIPs, erIfaceIP{
-						TenantID: tenantBy[dev], Device: dev, IP: ip, IfName: name,
-					})
-				}
+		// Both registry reads are OMIT-THE-ROWS-AND-SAY-SO (tracker 307). The
+		// resolver abstains for a pair it has no row for, which is the correct and
+		// safe behaviour — it never guesses — but "abstain" and "the SNMP collector
+		// published nothing" are indistinguishable downstream: the correlation
+		// engine simply resolves fewer IPs / ifIndexes to entities and every
+		// direction source that needs them quietly weakens. The device rows above
+		// come from discovery and are unaffected, so the export still happens.
+		ifaddr, ifaddrErr := collectors.FetchIfAddrMap(ctx)
+		reportIfRegistryUnread("enrichment", "entity_resolver.json is exported with NO interface-IP rows, so the correlation engine cannot resolve an interface IP to device:ifName this cycle", ifaddrErr, nil)
+		for dev, m := range ifaddr {
+			for ip, name := range m {
+				out.InterfaceIPs = append(out.InterfaceIPs, erIfaceIP{
+					TenantID: tenantBy[dev], Device: dev, IP: ip, IfName: name,
+				})
 			}
 		}
-		if ifidx, err := collectors.FetchIfIndexMap(ctx); err == nil {
-			for dev, m := range ifidx {
-				for idx, name := range m {
-					out.IfIndex = append(out.IfIndex, erIfIndex{
-						TenantID: tenantBy[dev], Device: dev, IfIndex: idx, IfName: name,
-					})
-				}
+		ifidx, ifidxErr := collectors.FetchIfIndexMap(ctx)
+		reportIfRegistryUnread("enrichment", "entity_resolver.json is exported with NO ifIndex rows, so NetFlow/gNMI ifIndexes cannot be resolved to device:ifName this cycle", ifidxErr, nil)
+		for dev, m := range ifidx {
+			for idx, name := range m {
+				out.IfIndex = append(out.IfIndex, erIfIndex{
+					TenantID: tenantBy[dev], Device: dev, IfIndex: idx, IfName: name,
+				})
 			}
 		}
 		data, err := json.Marshal(out)

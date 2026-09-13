@@ -241,8 +241,11 @@ func (s *server) handleExportStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("export id required"))
 		return
 	}
-	tenant, cross := principalTenant(claims)
-	rec, _, found, err := s.reportPipeline.execs.Get(r.Context(), tenant, cross, id)
+	// The caller's RESOLVED scope, not a bare (tenant, cross) pair: this record
+	// carries the export's size, status and — once complete — a signed download
+	// URL for the stored rows themselves, so a restricted tenant's export must
+	// be as absent here as it is in the list. 404, never 403.
+	rec, _, found, err := s.reportPipeline.execs.Get(r.Context(), s.execScope(claims), id)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -299,7 +302,10 @@ func (s *server) handleExportView(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, errors.New("invalid or expired export link"))
 		return
 	}
-	rec, _, found, err := s.reportPipeline.execs.Get(r.Context(), "", true, execID)
+	// Platform scope: the signed token IS the authorization here, and it is
+	// bound to the owning tenant (checked below). A tenant downloading its own
+	// export is never the operator reading across tenants.
+	rec, _, found, err := s.reportPipeline.execs.Get(r.Context(), reports.PlatformExecScope(), execID)
 	if err != nil || !found || rec.Kind != jobTypeExport {
 		writeError(w, http.StatusNotFound, errors.New("export not found"))
 		return

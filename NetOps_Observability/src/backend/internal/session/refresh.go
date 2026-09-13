@@ -28,15 +28,20 @@ import (
 )
 
 type refreshToken struct {
-	ID        string    `json:"id"`
-	Hash      string    `json:"hash"` // sha256 hex of the full secret
-	Username  string    `json:"username"`
-	Family    string    `json:"family"`               // rotation lineage (reuse detection)
-	SessionID string    `json:"session_id,omitempty"` // server-side session this token belongs to
-	CreatedAt time.Time `json:"created_at"`
-	ExpiresAt time.Time `json:"expires_at"`
-	Used      bool      `json:"used"`    // rotated away from
-	Revoked   bool      `json:"revoked"` // explicitly killed
+	ID   string `json:"id"`
+	Hash string `json:"hash"` // sha256 hex of the full secret
+	// PrincipalID is the internal principal id of the account this token belongs
+	// to (tracker 300). THE JSON TAG STAYS `username`: every refresh token
+	// already on disk carries that key, and for every account that predates the
+	// change the value is identical (`id == lower(username)`), so renaming the
+	// wire field would invalidate live credentials for nothing.
+	PrincipalID string    `json:"username"`
+	Family      string    `json:"family"`               // rotation lineage (reuse detection)
+	SessionID   string    `json:"session_id,omitempty"` // server-side session this token belongs to
+	CreatedAt   time.Time `json:"created_at"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	Used        bool      `json:"used"`    // rotated away from
+	Revoked     bool      `json:"revoked"` // explicitly killed
 }
 
 type RefreshStore struct {
@@ -133,8 +138,8 @@ func gcView(view map[string]refreshToken, now time.Time) {
 
 // issueLocked mints a token in the given family (empty = new family), bound to
 // the given server-side session id (empty for legacy/federated logins).
-func (s *RefreshStore) issueLocked(username, family, sessionID string) (string, error) {
-	return s.issueIntoLocked(s.cloneToksLocked(), username, family, sessionID)
+func (s *RefreshStore) issueLocked(principalID, family, sessionID string) (string, error) {
+	return s.issueIntoLocked(s.cloneToksLocked(), principalID, family, sessionID)
 }
 
 // issueIntoLocked mints the token into `view` — a private copy of the register
@@ -144,7 +149,7 @@ func (s *RefreshStore) issueLocked(username, family, sessionID string) (string, 
 // Persist FIRST, adopt SECOND. A write that fails leaves the live register
 // exactly as it was, so memory never disagrees with the file and no later write
 // can make a change that was refused durable.
-func (s *RefreshStore) issueIntoLocked(view map[string]refreshToken, username, family, sessionID string) (string, error) {
+func (s *RefreshStore) issueIntoLocked(view map[string]refreshToken, principalID, family, sessionID string) (string, error) {
 	now := time.Now().UTC()
 	if family == "" {
 		family = randHex(8)
@@ -153,7 +158,7 @@ func (s *RefreshStore) issueIntoLocked(view map[string]refreshToken, username, f
 	secret := id + "." + randHex(24)
 	sum := sha256.Sum256([]byte(secret))
 	view[id] = refreshToken{
-		ID: id, Hash: hex.EncodeToString(sum[:]), Username: username, Family: family, SessionID: sessionID,
+		ID: id, Hash: hex.EncodeToString(sum[:]), PrincipalID: principalID, Family: family, SessionID: sessionID,
 		CreatedAt: now, ExpiresAt: now.Add(s.ttl),
 	}
 	if err := s.flushViewLocked(view); err != nil {
@@ -182,22 +187,22 @@ func (s *RefreshStore) TTL() time.Duration {
 	return s.ttl
 }
 
-// Issue creates a brand-new refresh token (and family) for a username, with no
-// server-side session (legacy / federated logins).
-func (s *RefreshStore) Issue(username string) (string, error) {
-	return s.IssueForSession(username, "")
+// Issue creates a brand-new refresh token (and family) for a PRINCIPAL ID, with
+// no server-side session (legacy / federated logins).
+func (s *RefreshStore) Issue(principalID string) (string, error) {
+	return s.IssueForSession(principalID, "")
 }
 
 // IssueForSession creates a brand-new refresh token (and family) bound to a
 // server-side session id.
-func (s *RefreshStore) IssueForSession(username, sessionID string) (string, error) {
+func (s *RefreshStore) IssueForSession(principalID, sessionID string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// The collection rides this write: it is applied to the view, never to the
 	// live map, so an issue that cannot persist collects nothing either.
 	view := s.cloneToksLocked()
 	gcView(view, time.Now().UTC())
-	return s.issueIntoLocked(view, username, "", sessionID)
+	return s.issueIntoLocked(view, principalID, "", sessionID)
 }
 
 // SessionOf returns the session id a refresh token belongs to, without rotating
@@ -235,7 +240,7 @@ func (s *RefreshStore) revokeFamilyLocked(family string) {
 // Rotate validates a refresh token and swaps it for a fresh one (3-return form
 // kept for the store's own tests). On replay of an already-used/revoked token,
 // the whole family is revoked and an error returned.
-func (s *RefreshStore) Rotate(secret string) (newSecret, username string, err error) {
+func (s *RefreshStore) Rotate(secret string) (newSecret, principalID string, err error) {
 	ns, u, _, e := s.RotateSession(secret)
 	return ns, u, e
 }
@@ -243,7 +248,7 @@ func (s *RefreshStore) Rotate(secret string) (newSecret, username string, err er
 // RotateSession is Rotate plus the rotated token's server-side session id, so the
 // refresh handler can enforce the session lifecycle. The replacement token keeps
 // the same session id (and family) as the one it rotates away from.
-func (s *RefreshStore) RotateSession(secret string) (newSecret, username, sessionID string, err error) {
+func (s *RefreshStore) RotateSession(secret string) (newSecret, principalID, sessionID string, err error) {
 	id, ok := parseSecret(secret)
 	if !ok {
 		return "", "", "", errors.New("malformed refresh token")
@@ -275,11 +280,11 @@ func (s *RefreshStore) RotateSession(secret string) (newSecret, username, sessio
 	t.Used = true
 	t.Revoked = true
 	s.toks[id] = t
-	ns, err := s.issueLocked(t.Username, t.Family, t.SessionID)
+	ns, err := s.issueLocked(t.PrincipalID, t.Family, t.SessionID)
 	if err != nil {
 		return "", "", "", err
 	}
-	return ns, t.Username, t.SessionID, nil
+	return ns, t.PrincipalID, t.SessionID, nil
 }
 
 // Revoke kills a single refresh token (logout).

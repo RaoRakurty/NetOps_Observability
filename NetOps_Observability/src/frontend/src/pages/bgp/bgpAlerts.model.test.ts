@@ -11,6 +11,7 @@ import type {
 import {
   incidentTone, incidentSummary, pathLabel, alertStatusLine,
   peerRowsFromSessions, peerRowsFromMetrics, mergePeerRows, peersState,
+  bmpProbeFrom, bmpFeedIncomplete,
   transitSet, groupSightings, type PeerRow,
   EMPTY_POLICY_CONFIG, POLICY_LIMIT_FALLBACK, emptySetConsequence, isPrefixKey,
   parseAsnList, policyBody, policyDirty, policyEvaluationNote, policyForm,
@@ -132,17 +133,66 @@ describe("peer rows", () => {
   });
 });
 
-describe("peersState — the five honest states", () => {
+describe("peersState — the honest states", () => {
   it("distinguishes the receiver being off from nothing exporting", () => {
-    expect(peersState({ bmpAvailable: false, sessions: 0, rows: 0 })).toBe("bmp_off");
-    expect(peersState({ bmpAvailable: true, sessions: 0, rows: 0 })).toBe("no_exporter");
+    expect(peersState({ bmp: "not_enabled", sessions: 0, rows: 0 })).toBe("bmp_off");
+    expect(peersState({ bmp: "ok", sessions: 0, rows: 0 })).toBe("no_exporter");
   });
   it("distinguishes sessions-with-no-peer-state from real rows", () => {
-    expect(peersState({ bmpAvailable: true, sessions: 2, rows: 0 })).toBe("no_peers");
-    expect(peersState({ bmpAvailable: true, sessions: 2, rows: 3 })).toBe("rows");
+    expect(peersState({ bmp: "ok", sessions: 2, rows: 0 })).toBe("no_peers");
+    expect(peersState({ bmp: "ok", sessions: 2, rows: 3 })).toBe("rows");
   });
   it("reports a failed read as an error, not as an empty table", () => {
-    expect(peersState({ error: true, bmpAvailable: true, sessions: 0, rows: 0 })).toBe("error");
+    expect(peersState({ error: true, bmp: "ok", sessions: 0, rows: 0 })).toBe("error");
+  });
+
+  // ── tracker 295 ──────────────────────────────────────────────────────────
+  // "The receiver is off" and "the receiver is on and not answering" are
+  // opposite instructions to an operator. They used to be the same screen.
+  it("a BROKEN receiver is not the same state as a receiver that is OFF", () => {
+    expect(peersState({ bmp: "unreadable", sessions: 0, rows: 0 })).toBe("bmp_unreadable");
+    expect(peersState({ bmp: "not_enabled", sessions: 0, rows: 0 })).toBe("bmp_off");
+    expect(peersState({ bmp: "unreadable", sessions: 0, rows: 0 }))
+      .not.toBe(peersState({ bmp: "not_enabled", sessions: 0, rows: 0 }));
+  });
+  it("a refused read is its own state — the data exists, this caller cannot see it", () => {
+    expect(peersState({ bmp: "denied", sessions: 0, rows: 0 })).toBe("bmp_denied");
+  });
+});
+
+describe("bmpProbeFrom — the status decides, and only the status", () => {
+  // FEATURE_BMP off ⇒ bmpAPI is nil ⇒ main.go answers 404 on every
+  // /api/bgp/bmp/* route. That 404 is the ONLY thing that means "off".
+  it("reads 404 as the flag being off", () => {
+    expect(bmpProbeFrom(new Error('404 Not Found: '))).toBe("not_enabled");
+  });
+  it("reads 401/403 as running-but-refused", () => {
+    expect(bmpProbeFrom(new Error('403 Forbidden: {"error":"no"}'))).toBe("denied");
+    expect(bmpProbeFrom(new Error("401 Unauthorized: "))).toBe("denied");
+  });
+  it("reads every other failure as enabled-and-broken", () => {
+    expect(bmpProbeFrom(new Error('502 Bad Gateway: {"error":"dial tcp 172.18.0.9:9000: connect: connection refused"}')))
+      .toBe("unreadable");
+    expect(bmpProbeFrom(new Error("504 Gateway Timeout: "))).toBe("unreadable");
+    expect(bmpProbeFrom(new Error("500 Internal Server Error: "))).toBe("unreadable");
+    // No status at all — the request never landed. That is not "off" either.
+    expect(bmpProbeFrom(new TypeError("NetworkError when attempting to fetch resource."))).toBe("unreadable");
+    expect(bmpProbeFrom(undefined)).toBe("unreadable");
+  });
+});
+
+describe("bmpFeedIncomplete — a partial table says it is partial", () => {
+  it("is silent when the receiver answered", () => {
+    expect(bmpFeedIncomplete("ok", 5)).toBe(false);
+    expect(bmpFeedIncomplete("ok", 0)).toBe(false);
+  });
+  it("speaks up when device rows are showing and the BMP half is missing", () => {
+    expect(bmpFeedIncomplete("unreadable", 5)).toBe(true);
+    expect(bmpFeedIncomplete("denied", 5)).toBe(true);
+    expect(bmpFeedIncomplete("not_enabled", 5)).toBe(true);
+  });
+  it("stays quiet with no rows — the state block is already saying it", () => {
+    expect(bmpFeedIncomplete("unreadable", 0)).toBe(false);
   });
 });
 

@@ -17,11 +17,58 @@ template. Every step names the real script or workflow, and is marked:
 
 ---
 
+## 0.0 The one command
+
+Everything below is also aggregated behind a single fail-closed entry point — RC1
+governance directive 2026-09-13, **Decision 8**:
+
+```bash
+cd NetOps_Observability
+make release-check          # the table
+make release-check-json     # the same report as JSON, for the RC1 report
+```
+
+`scripts/release-gate.py` runs **every** check it can run here, prints one row per
+check — `check · result · evidence · the exact command` — and only then exits.
+Four results:
+
+| Result | Meaning | Counts as green? |
+|---|---|---|
+| **PASS** | proven here, now, on this tree | yes |
+| **FAIL** | an engineering failure. **A missing tool is a FAIL, never a skip** | no |
+| **BLOCKED-HUMAN** | fails only because a human-controlled input does not exist yet (counsel's licence text, the CLA mechanism, the distribution signing key, the owner's tag signature). Engineering cannot clear it and must not pretend to | no — it fails the release exactly like a FAIL, and is labelled so the report separates a bug from a blocker |
+| **CI-ONLY** | cannot run on a developer host at all (clean runner, network vulnerability feed, built images). The row names the workflow **and job** that runs it on the tag | **no** — an unverified check is not a green one |
+
+Exit codes: `0` every row PASSed (the only result that means *releasable*) · `1`
+at least one FAIL or BLOCKED-HUMAN · `2` the gate itself could not run · `3`
+nothing failed but CI-ONLY rows are still unverified here, or the run was
+filtered with `--only`. **Exit 3 is the best a developer host can produce** — the
+remaining rows are closed by the tag's own `release-gate.yml` run, which
+`publish-images.yml` and `release-bundle.yml` `needs:` before anything is
+published. Useful flags: `--bundle dist/correlix-…` grades a built artifact
+(checksums, signature, verification, MANIFEST, build commit), `--run-tests` runs
+the long suites locally instead of citing the CI job, `--list` prints the
+registry.
+
+> ⚠️ **`make release-check` is NOT `make release-gate`.** The names are one word
+> apart; the meanings are unrelated. `release-gate` / `release-gate-live` is the
+> **#101 storm-SLO lane contract** — may a *new signal lane* ship (write budget,
+> tenant blast radius, RCA integrity under damping). `release-check` is *may this
+> commit be tagged and published*. `release-gate` is referenced by tracker items
+> and by `docs/design/correlation-data-contract.md`, so it was deliberately left
+> alone and the new gate took a new name.
+
+Its own regression suite is `tests/test_release_gate_entrypoint.py`, which drives
+every check through a stub that passes, fails, or is missing, and parses Decision
+8's item list out of the directive so the aggregate cannot silently shrink.
+
+---
+
 ## 0. Preconditions — the ones that block everything
 
 | | Step | State |
 |---|---|---|
-| 0.1 | **Branch protection matches the real job names.** The runbook is now correct (18 required checks, §1.1) and machine-checked against the workflows by `tests/test_required_checks_consistency.py`. What remains is an **admin action outside the repo**: apply the ruleset. Command in 👤 §6.2. | 🟡 MANUAL — 👤 owner/admin, not yet applied |
+| 0.1 | **Branch protection matches the real job names.** The runbook is now correct (19 required checks, §1.1) and machine-checked against the workflows by `tests/test_required_checks_consistency.py`. Command in 👤 §6.2. | 🟢 **APPLIED 2026-09-13** — 21 required checks live on `main` (§1.1's 19 + `integrity` + `tracker staleness`), `strict`, `enforce_admins` and conversation resolution all on; approvals stay 0 (one maintainer); tag ruleset `release-tags-immutable` added. Readings: `docs/release/BRANCH_PROTECTION_DECISION5_2026-09-13.md` |
 | 0.2 | **Work is merged to `main`.** All of this ships from `feat/observability-platform`; `main` is behind. Tagging a branch that is not `main` makes `release-bundle.yml`'s `branches: [main]` leg and every "on main" assumption wrong. | 🟡 MANUAL |
 | 0.3 | Working tree clean, no untracked source. `git status --porcelain` empty. | 🟡 MANUAL |
 | 0.4 | `.trivyignore.yaml` entries each still carry a reason and a revisit condition. | 🟡 MANUAL |
@@ -38,7 +85,7 @@ All of these run on every PR and push. None needs a human unless it fails.
 | 1.2 | **Offline vendor build** — `GOFLAGS=-mod=vendor GOPROXY=off go build/vet/test-compile`, cold module cache | `backend-ci` · `offline vendor build (blocking)` | 🟢 AUTOMATED *(new — CLAUDE.md §6 gate 2, previously asserted but never proven)* |
 | 1.3 | Postgres integration + the full RLS / tenant-isolation corpus against a live DB as a `NOBYPASSRLS` role | `backend-ci` · `Postgres integration (blocking)` | 🟢 AUTOMATED |
 | 1.4 | `govulncheck` | `backend-ci` · `govulncheck (blocking)` | 🟢 AUTOMATED |
-| 1.5 | staticcheck + gosec + golangci-lint on the crypto/trust packages | `backend-ci` · `staticcheck + gosec …` | 🟢 AUTOMATED |
+| 1.5 | staticcheck + gosec + golangci-lint on the crypto/trust packages. The gosec step asserts gosec's own `Files:` count is non-zero: `gosec -quiet` **exits 0 after failing to load every package** (proved 2026-09-13), so exit 0 alone was not evidence of a scan | `backend-ci` · `staticcheck + gosec …` | 🟢 AUTOMATED |
 | 1.6 | golangci-lint repo-wide | `backend-ci` · `golangci-lint (repo-wide, blocking)` | 🟢 AUTOMATED |
 | 1.7 | `pytest` (whole suite — also the signature-catalogue fixture gate and the golden-replay gate) | `correlation-ci` · `pytest (blocking)` | 🟢 AUTOMATED |
 | 1.8 | ruff · bandit · mypy · **pip-audit** | `correlation-ci` · `ruff · bandit · mypy · pip-audit (blocking)` | 🟢 AUTOMATED |
@@ -55,7 +102,7 @@ All of these run on every PR and push. None needs a human unless it fails.
 | 1.16c | **Third-party licence gate** | `supply-chain` · `Third-party licence gate (blocking)` | 🟢 AUTOMATED |
 | 1.16d | **OCI image compliance** — the FINAL image is the compliance boundary: inherited base-layer software (BusyBox et al.) is discovered, its corresponding-source obligation evaluated, and the Correlix-retained artifact checksum-verified. Tracker 238 | `supply-chain` · `OCI image compliance (inherited layers, blocking)`; release mode runs per pushed digest in `publish-images` | 🟢 AUTOMATED |
 | 1.17 | Fuzz corpus exploration | `fuzz-nightly` (scheduled, not per-PR) | 🟢 AUTOMATED |
-| 1.18 | **`go.mod` direct requires ⊆ the CLAUDE.md §6 allowlist** | — | 🔴 MISSING — human review only |
+| 1.18 | **`go.mod` direct requires ⊆ the CLAUDE.md §6 allowlist** | `release-check` · `dependency-lock.allowlist` (the allowlist table is parsed out of `CLAUDE.md` §6, not retyped) | 🟡 MANUAL — in the aggregate gate (§0.0); not yet a CI job |
 | 1.19 | Helm chart renders and validates (lint · template · kubeconform, Kubernetes 1.30 schemas) — rendered-and-validated only, not cluster-proven (tracker 271) | `fresh-install-integrity` · `helm chart lint · template · kubeconform (blocking)` | 🟢 AUTOMATED |
 
 > **Every one of the gates above also runs on the TAG.** `.github/workflows/release-gate.yml`
@@ -145,17 +192,62 @@ Other first-time friction, in order of likelihood:
 | 4.2a | **The licensing assertions actually fail the build.** They were written `! grep -qi redpanda MANIFEST`; under `set -e` bash never exits on a pipeline whose value is inverted with `!`, so a bundle carrying redpanda/redis/prometheus passed the smoke test **silently**. Replaced with a `refute` helper that prints the offending line and `exit 1`s (2026-09-04). | `release-bundle.yml` | 🟢 AUTOMATED *(fixed)* |
 | 4.3 | Bundle staleness gate | `bash scripts/bundle-staleness.sh` (warn-only pre-push hook; `make bundle-status` wraps it where make exists) | 🟢 AUTOMATED (advisory) |
 | 4.4 | **GHCR images** — `netops-{api,correlation,nginx,frontend}`, tagged `semver`, `major.minor`, `sha` | `publish-images.yml` on a `v*.*.*` tag, **behind `needs: gate`** | 🟢 AUTOMATED on tag *(gate added 2026-09-04 — it previously pushed with no test job gating it)* |
-| 4.5 | **Build provenance** — `actions/attest-build-provenance`, keyless Sigstore, `push-to-registry: true` | `publish-images.yml` | 🟢 AUTOMATED on tag — **never executed**, because no `v*` tag has ever existed |
+| 4.5 | **Build provenance** — `actions/attest-build-provenance`, keyless Sigstore, `push-to-registry: true`. Since 2026-09-13 it runs **after** the image signature has been verified (§4.9) and its output bundle is checked rather than assumed: the DSSE statement must be SLSA provenance over the published digest and must identify the repository, the workflow file, the triggering commit and the build event. | `publish-images.yml` | 🟢 AUTOMATED on tag — **never executed**, because no `v*` tag has ever existed |
 | 4.6 | Per-image CycloneDX SBOM | `anchore/sbom-action` in `publish-images.yml` | 🟢 AUTOMATED on tag — never executed |
 | 4.7 | **Committed source SBOM** — CycloneDX for Go vendor, both npm trees, the pip lock and every image pin | `python3 scripts/sbom.py` → `docs/sbom/`; verified by `scripts/sbom.py --check` and `tests/test_sbom.py` | 🟢 AUTOMATED *(new)* |
-| 4.8 | **Bundle signature.** `make-installer.sh` GPG-signs `SHA256SUMS` → `SHA256SUMS.asc` when `CORRELIX_SIGNING_KEY` is set, and `install-correlix.sh` treats a bad signature as fatal. **`release-bundle.yml` never sets the key**, so every bundle ever produced is checksum-only. | — | 🔴 MISSING — see 👤 6.4 |
-| 4.9 | **Container image signing (cosign / Notation).** Zero references repo-wide. Provenance attestation (4.5) is adjacent but is not a signature over the image. | — | 🔴 MISSING |
+| 4.8 | **Bundle signature — FAIL-CLOSED on a tag.** A tag build sets `CORRELIX_RELEASE_BUILD=1`, which makes signing MANDATORY in `make-installer.sh`: no `CORRELIX_SIGNING_KEY` → the build FAILS; a key absent from the keyring → FAILS; a signing or self-verification failure → FAILS; any bundle file left outside `SHA256SUMS` → FAILS (a partially signed bundle is never produced). `release-bundle.yml` imports the distribution key from `secrets.CORRELIX_DIST_SIGNING_KEY` into a throwaway keyring (wiped in an `always()` step), verifies `SHA256SUMS.asc` in its own step **before** any upload, and FAILS the job — never skips — when the secret is absent. `install-correlix.sh` treats a bad signature as fatal. A developer build with no key stays checksum-only with a loud NOTE. RC1 governance directive 2026-09-13, Decision 3B | `release-bundle.yml` (tag leg); dry run `bash scripts/make-installer.sh --sign-only <bundle-dir>`; contracts in `tests/test_release_signing.py` + `tests/test_release_bundle_signing_workflow.py` | 🟢 AUTOMATED on tag (fail-closed) — **blocked until 👤 6.7a creates `CORRELIX_DIST_SIGNING_KEY`**; a tag build fails closed until then, by design |
+| 4.9 | **Container image signing — Cosign keyless, by DIGEST, verified before release.** Owner Decision 4 (2026-09-13, tracker 313) chose Cosign keyless over the GPG domain for images: the signing material is a short-lived Fulcio certificate bound to this workflow's GitHub Actions OIDC identity, so there is no permanent private key in GitHub Secrets. Per image, in this order: build → push **by digest only** (`push-by-digest=true`, so no tag exists yet) → `cosign sign --yes IMAGE@sha256:…` → `cosign verify` pinned to the exact `--certificate-oidc-issuer` + `--certificate-identity` (never a permissive `--certificate-identity-regexp`) → provenance attestation, whose bundle is then parsed and asserted to name this digest, repository, workflow, commit and build event → SBOM → release-mode OCI compliance → **and only then** the release tags, applied by `imagetools create --prefer-index=false` and each asserted to resolve to the signed digest. A tag is never signed; a digest cannot be moved. §4.16 records the four trust domains. | `publish-images.yml` (publish job); contract in `tests/test_publish_images_signing_workflow.py` | 🟢 IMPLEMENTED, **unexercised** — keyless signing needs the Actions OIDC token, so it cannot run locally and has never run at all (no `v*` tag has ever existed) |
 | 4.10 | `release-bundle.yml` artifact name, MANIFEST `profile:` line and release notes all say **full**, and the smoke step asserts the MANIFEST agrees — they can no longer drift silently. | `release-bundle.yml` | 🟢 fixed 2026-09-03 |
 | 4.11 | VM appliance images (qcow2/vmdk/vhdx) | `scripts/make-vm-image.sh` | 🟡 MANUAL |
 | 4.12 | **No root `.dockerignore`** while 8 services build with `context: ../..` (tracker 193) | — | 🔴 MISSING (build-size, not correctness) |
 | 4.14 | **GPL/LGPL corresponding source ships with the bundle.** Owner decision 2026-09-04 (licence audit D2): the source obligation is discharged under GPL-2.0 §3(a) by SHIPPING the source, not by a three-year written offer. `make-installer.sh` mirrors the pinned upstream tarball into `source-offer/`, verifies its sha256 against `scripts/source-mirror.json`, and FAILS THE BUILD on any fetch or integrity failure. **Generalised 2026-09-05 (tracker 238):** the same table now also carries the source for copyleft software INHERITED from base-image layers — BusyBox is named in no Dockerfile of ours but is in every frontend/nginx image we ship. Verify on the produced bundle that EVERY pin-table component is present, hashes to its pin and appears in `SHA256SUMS` (the release-bundle smoke does this for the whole table, not one component), and that `source-offer/README` states the terms. Re-mirror whenever a pinned image or base image version changes | `bash scripts/make-installer.sh` (dry run: `--source-offer-only`); asserted in `release-bundle.yml`; contract guarded by `tests/test_source_offer.py` | 🟢 AUTOMATED (build-time fail-closed) |
 | 4.15 | **Gotenberg can no longer reach a bundle.** The `pdf` profile hides PDFtk (GPL-2.0+), a proprietary Microsoft font EULA and Google Chrome. Was a written convention; now a build failure if the image appears in the base set or any add-on pack | `scripts/make-installer.sh` licensing guards | 🟢 AUTOMATED *(2026-09-04)* |
 | 4.13 | **Pipeline debugger in the bundle** — `correlix-debug` is built (§7c), self-tested on the build host (`--help` must exit 0 before the build continues) and covered by `SHA256SUMS`. Verify on the produced bundle: `cd dist/correlix-<version> && ./correlix-debug --help` (exit 0) and `grep correlix-debug SHA256SUMS` | `bash scripts/make-installer.sh`; contract guarded by `tests/test_pipeline_debug_ship.py` | 🟢 AUTOMATED (build-time self-test) + 🟡 MANUAL on the published bundle |
+
+### 4.16 The four signing trust domains
+
+Four things get signed on the way to a release, and **each has its own authority and its own key
+material.** One key doing two of these jobs is a single point of compromise, and the blast radius of
+each is different: a leaked bundle key forges installers, a leaked licence key forges entitlements.
+
+| # | What is signed | Authority / key material | Where it happens | Verified by |
+|---|---|---|---|---|
+| 1 | **The git tag** — the source commit a release is cut from | **A human.** The release owner's personal GPG key, on their own machine. Never in CI, never in a secret | locally, §6.4 (`git tag -s`) | `git tag -v v0.9.0-rc1`, before the tag is pushed |
+| 2 | **The distribution bundle** — `SHA256SUMS` of the offline installer | **GPG**, `secrets.CORRELIX_DIST_SIGNING_KEY` — the armored private half, imported into a throwaway keyring that is wiped in an `always()` step. A *different* key from #1 and #3 | `release-bundle.yml`, §4.8 | `gpg --verify SHA256SUMS.asc SHA256SUMS` (customer); own step in the job before any upload |
+| 3 | **The OCI images** — each published digest | **Cosign keyless (Sigstore).** No key at all: a short-lived Fulcio certificate issued against this workflow's GitHub Actions OIDC identity. Nothing to store, rotate or lose custody of | `publish-images.yml`, §4.9 | `cosign verify --certificate-identity … --certificate-oidc-issuer …` (below); own step in the job before any release tag is applied |
+| 4 | **Enterprise licence files** — customer entitlements | **A separate authority, deliberately outside GitHub Actions** (directive Decision 3C: HSM > cloud KMS > isolated offline host). CI may at most send a constrained signing *request*; it must never hold this key | not in this repository; custody is tracker 259 | the offline `correlix-licence` verifier against the published public half |
+
+Domain 3 is keyless **because** of what domain 2 costs: a stored private key needs custody,
+rotation, revocation and a compromise runbook, and every one of those is a human process that can be
+skipped. A per-run certificate bound to a workflow identity has none of that surface. *(Cosign also
+supports a **KMS-backed key mode** — a long-lived key held in a cloud KMS or HSM and referenced by
+URI. If the organisation later wants a private trust root it controls end-to-end rather than the
+public Sigstore transparency log, that is the documented upgrade path for domain 3. It is **not
+implemented and not configured** here; recording it is the whole of it.)*
+
+**Verifying a published image** — what a recipient with pull access actually runs. The identity is
+pinned, and pinning it is the point: without `--certificate-identity` and
+`--certificate-oidc-issuer`, cosign will happily verify a signature minted by *any* workflow in
+*any* repository. Needs cosign ≥ 3.0.
+
+```bash
+IMAGE=ghcr.io/raorakurty/netops-api
+TAG=v0.9.0-rc1
+DIGEST=$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{.Manifest.Digest}}')
+
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity https://github.com/RaoRakurty/NetOps_Observability/.github/workflows/publish-images.yml@refs/tags/$TAG \
+  "$IMAGE@$DIGEST"
+
+# And the provenance, which is a separate control:
+gh attestation verify "oci://$IMAGE@$DIGEST" --owner RaoRakurty
+```
+
+Verify the **digest**, not the tag: a tag is a pointer and a pointer can be moved, which is also why
+the workflow signs the digest and applies the tags only afterwards. The identity's `@refs/tags/<tag>`
+suffix is the release tag the images were built from — it changes per release, and a signature whose
+certificate names a different ref must not be accepted.
 
 ---
 
@@ -172,10 +264,10 @@ Other first-time friction, in order of likelihood:
 | 5.7 | **Third-party licence obligations inventory** — every distributed component, its licence, the distribution unit it ships in, the licence texts and the written source offer | `docs/THIRD_PARTY_LICENSES.md` (GENERATED by `python3 scripts/license-audit.py --notices` from `scripts/license-data.json`); gated by `python3 scripts/license-audit.py --check` and `tests/test_license_audit.py`; served by the product at `/licenses/`; shipped as the bundle's `LICENSES.md`; summarised for customers at `docs-portal/docs/deploy/third-party-components.md` | 🟢 present *(2026-09-03; owner decisions D1–D6 recorded 2026-09-04)* |
 | 5.7a | **Owner licence decisions are recorded, not pending.** `python3 scripts/license-audit.py` prints every acknowledged finding still awaiting an owner call. The list must be empty, or every remaining entry must be one the owner has knowingly left open | `python3 scripts/license-audit.py` | 🟢 D1–D6 DECIDED 2026-09-04 — see `docs/security/LICENSE_AUDIT_2026-09-03.md` §4 |
 | 5.7b | **Red Hat UBI EULA acceptance is stated in the ship set.** Keycloak ships in the core bundle on a UBI base, which is not an OSS licence. The acceptance AND the terms URL (<https://www.redhat.com/licenses/EULA_Red_Hat_Universal_Base_Image_English_20190422.pdf>) must appear in the generated notices, in `NOTICE`, on the customer docs page, and in the release notes | `grep -l 'Universal Base Image' docs/THIRD_PARTY_LICENSES.md NOTICE docs-portal/docs/deploy/third-party-components.md docs/RELEASE_NOTES_v0.9.0-rc1.md`; automated by `tests/test_license_audit.py::test_the_ubi_eula_reaches_every_ship_set_surface` | 🟢 present *(2026-09-04; release notes + test added 2026-09-05)* |
-| 5.8 | **Project licence declared.** Apache-2.0 open core with commercial add-ons under `LicenseRef-Correlix-Enterprise` (owner, 2026-09-04). `LICENSE` (the mixed-licence notice), `LICENSES/Apache-2.0.txt`, `LICENSES/Correlix-Enterprise.txt` and `LICENSING.md` ship at BOTH repository roots, byte-identical; `CONTRIBUTING.md` carries the CLA requirement | `LICENSE`, `LICENSES/`, `LICENSING.md`, `CONTRIBUTING.md`, `NetOps_Observability/licensing-policy.json` | 🟢 present *(2026-09-04)* |
+| 5.8 | **Project licence declared.** Apache-2.0 open core with commercial add-ons under `LicenseRef-Correlix-Enterprise` (owner, 2026-09-04). `LICENSE` (the mixed-licence notice), `LICENSES/Apache-2.0.txt`, `LICENSES/LicenseRef-Correlix-Enterprise.txt` and `LICENSING.md` ship at BOTH repository roots, byte-identical; `CONTRIBUTING.md` carries the CLA requirement | `LICENSE`, `LICENSES/`, `LICENSING.md`, `CONTRIBUTING.md`, `NetOps_Observability/licensing-policy.json` | 🟢 present *(2026-09-04)* |
 | 5.8a | **Licensing consistency is green.** One canonical sentence in all nine places that state the licence, every top-level directory classified exactly once, every Correlix image labelled, core never importing commercial code | `python3 -m pytest tests/test_licensing_consistency.py` and `python3 scripts/licensing-gate.py` (checks A–H) | 🟢 AUTOMATED |
 | 5.8b | **`LICENSING.md` is not stale.** It is GENERATED from `licensing-policy.json`; a hand edit enforces nothing | `python3 scripts/gen-licensing-map.py --check` | 🟢 AUTOMATED |
-| 5.8c | 👤 **The Correlix Enterprise License text does not exist.** `LICENSES/Correlix-Enterprise.txt` is a placeholder, yet `src/backend/internal/ldap` is already marked with the identifier — those files are licensed to nobody. Engineering must not draft, paraphrase or borrow commercial licence terms | `python3 scripts/licensing-gate.py --release` fails while the placeholder is present | 🔴 BLOCKING a tag — 👤 owner: obtain the text from counsel |
+| 5.8c | 👤 **The Correlix Enterprise License text does not exist.** `LICENSES/LicenseRef-Correlix-Enterprise.txt` is a placeholder, yet `src/backend/internal/ldap` is already marked with the identifier — those files are licensed to nobody. Engineering must not draft, paraphrase or borrow commercial licence terms | `python3 scripts/licensing-gate.py --release` fails while the placeholder is present | 🔴 BLOCKING a tag — 👤 owner: obtain the text from counsel |
 | 5.8d | 👤 **No CLA signing process.** `CONTRIBUTING.md` states the requirement and says honestly that the mechanism is undecided. Open core depends on the right to relicense contributed code; without a signed CLA that right is not held | same `--release` gate (`CLA-PROCESS-TBD` marker) | 🔴 BLOCKING external contributions — 👤 owner decision |
 | 5.8e | **No directory mixes core and commercial code**, and every source file declares its own licence. `LICENSING.md` § Nothing is mixed names the four packages examined last and why each is core; `header_enforcement.mode` is `enforced`, so a source file in scope with no SPDX header fails the gate | `python3 scripts/spdx-headers.py --check` and `python3 scripts/licensing-gate.py` (check A) | 🟢 AUTOMATED (2026-09-06) |
 | 5.9 | **No `VERSION` file.** Version comes from `git describe --tags --match 'v[0-9]*'`, falling back to a date stamp. Once a `v*` tag exists this resolves correctly everywhere (bundle name, `/admin/version`, SBOM metadata). | — | 🟡 by design |
@@ -205,6 +297,16 @@ actionlint            # .github/workflows/ must be clean
 ```
 
 ### 6.2 Correct branch protection — the required job names
+
+> **APPLIED 2026-09-13.** This is now the reproduction/re-apply procedure, not an
+> open action. Live: 21 required checks (these 19 + `integrity` +
+> `tracker staleness (blocking on HIGH)`), `strict: true`, `enforce_admins: true`,
+> conversation resolution on, and `required_approving_review_count` **0** (not the
+> `1` in the payload below, which is the target for when a second maintainer
+> exists). A verbatim `PUT` of the payload below would *drop* the two extra checks
+> and deadlock PRs on the approval — build the payload from the live protection.
+> Readings: `docs/release/BRANCH_PROTECTION_DECISION5_2026-09-13.md`;
+> rationale: `docs/runbooks/ci-branch-protection.md` "Live state 2026-09-13".
 
 Apply the **nineteen** names from `docs/runbooks/ci-branch-protection.md` §1.1. They are the
 jobs' real `name:` fields; a required check that names no real job pins every PR at
@@ -272,13 +374,28 @@ git status --porcelain    # must be empty at the commit you are about to tag (§
 
 ### 6.4 Sign the tag
 
-Annotated **and GPG-signed**, on `main`, at the commit whose CI is green. Until 6.6 exists the
-tag is the only signed link between the source and the artifacts.
+Annotated **and GPG-signed**, on `main`, at the commit whose CI is green. This is the
+**source/tag** signing key — a different key from the distribution key of 6.4b and from the
+licence-signing key (three trust domains, never one key).
 
 ```bash
 git tag -s -a v0.9.0-rc1 -m "Correlix v0.9.0-rc1"
 git tag -v v0.9.0-rc1            # verify the signature before it leaves the machine
 ```
+
+### 6.4b Create the distribution signing secret — **before** the push
+
+`CORRELIX_DIST_SIGNING_KEY`, the armored SECRET half of the **distribution/artifact** signing key
+(§6.7a). A tag build makes signing mandatory, so without this secret 6.5 stops at
+`BLOCKED: distribution signing key not configured — CORRELIX_DIST_SIGNING_KEY` and publishes
+nothing. That is the intended behaviour, not a workaround to route around.
+
+```bash
+gh secret set CORRELIX_DIST_SIGNING_KEY < /path/to/correlix-dist-signing.asc   # 👤 owner only
+gh secret list | grep CORRELIX_DIST_SIGNING_KEY
+```
+
+Never the licence-signing key, and never the tag key from 6.4. Custody is tracker 259.
 
 ### 6.5 Push the tag — the point of no return
 
@@ -309,7 +426,8 @@ fix, re-tag. Watch it: `gh run watch` / `gh run list --workflow=publish-images.y
 
 | | Step | Command / place |
 |---|---|---|
-| 6.7a | **Decide the signing story and wire it.** Three gaps: (a) set `CORRELIX_SIGNING_KEY` in `release-bundle.yml` so `SHA256SUMS.asc` is produced — the fail-closed verifier in `install-correlix.sh` already exists; (b) decide whether cosign signs the GHCR images or keyless build provenance is the whole story; (c) publish the public key where customers can fetch it. | repo secrets + `release-bundle.yml` |
+| 6.7a | **Create the distribution signing secret — `CORRELIX_DIST_SIGNING_KEY`.** The workflow half is done and fail-closed (§4.8); what is missing is the secret, and only the owner can create it. It must hold the **armored SECRET half** of the **distribution/artifact** signing key — a key that is NOT the source/tag signing key of 6.4 and NOT the licence-signing key (three separate trust domains, directive Decision 3B); the licence key must never be put in Actions at all (Decision 3C). The key must be usable non-interactively (no passphrase, or the workflow needs a passphrase secret added alongside it). Custody — generation, storage, rotation, revocation, custodians — is tracker 259 and is not drafted here. Verified by: pushing a tag and reading the `Import the distribution signing key` + `Verify the bundle signature (fail closed)` steps; a customer verifies with `gpg --verify SHA256SUMS.asc SHA256SUMS`. **Until it exists, every tag build fails closed rather than publishing an unsigned bundle.** | `gh secret set CORRELIX_DIST_SIGNING_KEY` (repo secret) |
+| 6.7a-2 | **Still open in the signing story:** ~~(b) decide whether cosign signs the GHCR images~~ — **decided 2026-09-13, owner Decision 4:** Cosign **keyless** signs every image digest, identity-pinned verification runs before any release tag is applied, and provenance stays a separate adjacent control (§4.9, §4.16); no key for the owner to create, so nothing here is blocked on a secret. (c) publish the distribution PUBLIC key where customers can fetch it, so `SHA256SUMS.asc` is verifiable by someone who has only the bundle — **still open.** | — |
 | 6.7b | **Ratify the open exceptions** the release notes disclose: tracker 212 (gnmic→Kafka plaintext, `review_by 2026-12-02`), O10 (api→gotenberg plaintext), and the deployment of tracker 209 (OpenSearch flood-stage fix — built, deploy pending owner approval). | — |
 | 6.7c | **Green-light the qualification run** (§3.1). ~1 h of exclusive rig time. Dropping `-rc1` depends on it. | — |
 | 6.7d | `/code-review ultra` on the release diff. | — |
@@ -336,8 +454,9 @@ proven offline vendor build and a committed SBOM. What is missing is not code qu
 **release plumbing and one un-run measurement**:
 
 **Blocking a `-rc1` tag (all small, and all owner-only now):**
-1. 👤 §6.2 apply the branch ruleset — the 18 required checks. The runbook and the workflows
-   agree and are machine-checked; GitHub's ruleset is the half that is not in the repo.
+1. ~~👤 §6.2 apply the branch ruleset~~ — **DONE 2026-09-13.** 21 required checks, `strict`,
+   `enforce_admins`, conversation resolution, plus a tag ruleset (`release-tags-immutable`) so a
+   published tag cannot be moved or deleted.
 2. 👤 §6.3 the work is on `feat/observability-platform`, not `main`.
 
 Cleared since the last revision: the runbook no longer names a job that does not exist (§0.1);
@@ -347,8 +466,11 @@ licensing assertions also actually fail the build now (§4.2a).
 
 **Blocking a *final* tag:**
 4. §3.1 the reference-capacity regression has never been executed.
-5. §4.8 no bundle is signed, though both the signer and the fail-closed verifier already exist.
-6. §4.9 no image signing story.
+5. §4.8 bundle signing is now mandatory and fail-closed on a tag, but the repository secret
+   `CORRELIX_DIST_SIGNING_KEY` does not exist yet (👤 §6.7a), so a tag build FAILS instead of
+   publishing — deliberately. Creating the secret is the whole remaining action; (c) publishing the
+   public key still stands (§6.7a-2).
+6. ~~§4.9 no image signing story.~~ — **closed 2026-09-13 (owner Decision 4, tracker 313):** Cosign keyless signs each image digest and an identity-pinned `cosign verify` gates the release tags. Implemented and contract-tested, but **never executed** — keyless signing needs the Actions OIDC token, so the first real evidence is the first `v*` tag build (§4.9, §4.16).
 7. §5.8c the Correlix Enterprise License text is a placeholder while code is already marked with its identifier, and §5.8d the CLA has no signing process. Both are owner actions; `scripts/licensing-gate.py --release` fails on each. (The `LICENSE` files themselves landed 2026-09-04.)
 8. §2.9 a clean clone cannot build the frontend image without an undocumented-at-the-failure-point
    `npm run build` (bundle path unaffected).

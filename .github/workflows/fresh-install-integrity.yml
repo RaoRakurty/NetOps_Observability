@@ -67,7 +67,7 @@ jobs:
     # service gets. Top-level scripts only: scripts/lab/ is operator-local
     # tooling and deliberately out of scope.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: install ruff (pinned)
         run: pip install "ruff==${RUFF_VERSION}"
       - name: ruff check (top-level operational scripts)
@@ -78,7 +78,7 @@ jobs:
   integrity:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       # Layer 1 — static, no docker. Fails if a clean install.py would miss something.
       - name: install integrity (compose ↔ install.py)
@@ -102,7 +102,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       # The full stack + the golang/node build layers need more than the ~14 GB
       # the runner image leaves free on /.
@@ -241,7 +241,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       # Downloaded and checksum-verified rather than taken from a marketplace
       # action, so the bytes this job runs are the bytes named in `env:` above.

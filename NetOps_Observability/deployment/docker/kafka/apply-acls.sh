@@ -156,12 +156,31 @@ $ACLS --add --allow-principal "$ROUTER" --operation Read \
 # OpenSearch, and granting a topic nothing consumes would imply a consumer that
 # does not exist.
 echo "acls: correlation — consume-only on its 15 topics + its one group" >&2
-for t in netops.syslog netops.syslog.control \
-         netops.flows netops.metrics netops.probes \
-         netops.snmptrap netops.security netops.bgp \
-         netops.cloud netops.app.identities.v1 \
-         netops.controller_events netops.app.edge netops.verification \
-         netops.wireless_sessions netops.wireless_events; do
+# ONE list, applied AND verified (tracker 309). It used to be an inline literal
+# loop whose only proof was the count floor at the bottom of this file — which a
+# matrix missing a correlation grant passes easily (the floor is 40 and a healthy
+# store holds ~54). So the list is a variable now and the verification block reads
+# every entry of it BACK. The defect this closes is not hypothetical: the engine
+# logged a TopicAuthorizationFailedError (Error 29) on the controller_events lane
+# in the scale-miniladder nightly and had no counter-evidence anywhere, because
+# "applied and verified" verified one ROUTER grant and a headcount.
+#
+# Topic names appear in this block ONLY inside the list below — the contract tests
+# in tests/ parse it by whitespace, so prose must not mint look-alike tokens.
+#
+# The newlines just inside both quotes are deliberate: they keep the FIRST and
+# LAST entries bare topic names, so the contract tests that parse this block by
+# whitespace get clean tokens instead of `CORR_TOPICS="netops.syslog`.
+CORR_TOPICS="
+netops.syslog netops.syslog.control
+netops.flows netops.metrics netops.probes
+netops.snmptrap netops.security netops.bgp
+netops.cloud netops.app.identities.v1
+netops.controller_events netops.app.edge netops.verification
+netops.wireless_sessions netops.wireless_events
+"
+
+for t in $CORR_TOPICS; do
     $ACLS --add --allow-principal "$CORR" \
         --operation Read --operation Describe --topic "$t" >/dev/null
 done
@@ -224,13 +243,64 @@ case "$VERIFY" in
     exit 1
     ;;
 esac
+# The WHOLE store, read once. Reused twice below (the count floor and the
+# per-topic correlation read-back), because every kafka-acls.sh call is a fresh
+# JVM: on a loaded host each costs seconds, and a per-topic --list loop added
+# ~2 minutes to an install for information this one call already contains.
+ALL_ACLS=$($ACLS --list) || {
+    echo "acls: FATAL: could not list the ACL store back — matrix state unknown" >&2
+    exit 1
+}
 # grep -c exits 1 on zero matches; a zero count is caught by the floor below,
 # not swallowed (§16.1) — the || true only neutralizes that documented exit.
-COUNT=$($ACLS --list | grep -c "principal=" || true)
+COUNT=$(printf '%s\n' "$ALL_ACLS" | grep -c "principal=" || true)
 FLOOR=40
 if [ "$COUNT" -lt "$FLOOR" ]; then
     echo "acls: FATAL: only $COUNT ACL entries live (< $FLOOR) — partial matrix" >&2
     exit 1
 fi
+# PER-TOPIC read-back for the CONSUMER whose subscription is all-or-nothing
+# (tracker 309). The count floor above CANNOT see a single missing grant — the
+# floor is 40 and a healthy store holds ~54 — and a single missing grant is the
+# whole fault: aiokafka's `start()` -> `_wait_topics()` is all-or-nothing over
+# the subscription, so ONE ungranted REQUIRED lane leaves the engine consuming
+# NOTHING on all fifteen while every container reports healthy (2026-08-16,
+# 2026-09-02 — and the controller_events lane in the scale-miniladder nightly).
+#
+# Verified against OBSERVED state, not against the --add exit codes: this block
+# exists so the installer's "applied and verified" line is a claim about the
+# broker. The awk slices $ALL_ACLS into the section for one topic — matching the
+# header's full `name=<topic>, patternType=LITERAL` so netops.syslog cannot be
+# confused with netops.syslog.control — and FAILS CLOSED: a topic whose section
+# is absent (or whose header format changed under us) yields an empty slice and
+# is therefore reported missing, never passed over.
+CORR_MISSING=''
+CORR_CHECKED=0
+for t in $CORR_TOPICS; do
+    CORR_CHECKED=$((CORR_CHECKED + 1))
+    tv=$(printf '%s\n' "$ALL_ACLS" | awk -v topic="$t" '
+        index($0, "resourceType=TOPIC, name=" topic ", patternType=LITERAL") {
+            insection = 1; next }
+        /^Current ACLs for resource/ { insection = 0 }
+        insection { print }')
+    # Both operations matter and are checked SEPARATELY: Describe alone lets the
+    # consumer resolve metadata and then fail at fetch, Read alone is refused at
+    # metadata resolution. Either half missing is the same outage.
+    for op in READ DESCRIBE; do
+        printf '%s\n' "$tv" \
+            | grep -F "$CORR" \
+            | grep -q "operation=$op" \
+            || CORR_MISSING="$CORR_MISSING $t:$op"
+    done
+done
+if [ -n "$CORR_MISSING" ]; then
+    echo "acls: FATAL: the correlation principal is MISSING grants after apply:$CORR_MISSING" >&2
+    echo "acls: principal=$CORR" >&2
+    echo "acls: one ungranted REQUIRED lane abandons the ENTIRE correlation" >&2
+    echo "acls: subscription (aiokafka _wait_topics is all-or-nothing), so the" >&2
+    echo "acls: engine would consume nothing on every lane while reading healthy" >&2
+    exit 1
+fi
+echo "acls: correlation read-back OK — Read+Describe present on all $CORR_CHECKED of its topics" >&2
 echo "acls: matrix applied and verified — $COUNT ACL entries live" >&2
 echo "acls: (enforce posture: allow.everyone.if.no.acl.found=false since SEC-007.2)" >&2

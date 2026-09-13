@@ -616,7 +616,7 @@ func TestWanEchoPublisherKeepsMeasuringARestrictedTenant(t *testing.T) {
 	f := newRestrictedWanFixture(t)
 	f.restrictAcme()
 
-	_, circuits := f.s.wanProject(context.Background(), platformInfraDeviceVisibility())
+	_, circuits, _ := f.s.wanProject(context.Background(), platformInfraDeviceVisibility())
 	var sawAcme bool
 	for _, c := range circuits {
 		if c.Local.Device == "acme-wan" {

@@ -78,6 +78,23 @@ const (
 	// the window" — a ring that wraps in an afternoon cannot answer it.
 	OperationsCapacity = 500
 
+	// operationsOutcomeReserve is the share of the ring NEITHER outcome may
+	// evict the other below (tracker 282). One plain newest-first queue shared by
+	// both outcomes meant a burst of operations that failed in MILLISECONDS — an
+	// automation retrying a delete against a repository answering 502, the shape
+	// of the 2026-08-27 incident — cost a full slot each and pushed out every
+	// create and restore that had actually landed. The forensic question this
+	// ring exists to answer ("what was done to the repository, by whom, in the
+	// window") then had no answer at exactly the moment it was being asked.
+	//
+	// The reserve is symmetric on purpose: a flood of failures cannot bury the
+	// successful history, and a flood of routine nightly successes cannot bury
+	// the failed restores an operator is trying to explain. Within a class the
+	// OLDEST entries still go first, so the ring stays newest-first and stays
+	// bounded (§9). One slot always belongs to the operation IN FLIGHT, which has
+	// no outcome yet, so a settled class floors one below the reserve.
+	operationsOutcomeReserve = OperationsCapacity / 2
+
 	// snapshotNoteMax bounds the free-text note a create may carry into the
 	// audit trail.
 	snapshotNoteMax = 200
@@ -225,10 +242,67 @@ func (r *opsRing) loadLocked() {
 		ops[i].Error = strings.TrimSpace(ops[i].Error + " the api restarted while this operation was in flight, " +
 			"so its outcome is UNKNOWN — check the snapshot list for what actually landed")
 	}
-	if len(ops) > OperationsCapacity {
-		ops = ops[:OperationsCapacity]
+	r.ops = trimOperations(ops)
+}
+
+// trimOperations caps the ring at OperationsCapacity without letting one outcome
+// crowd the other out. It evicts the OLDEST entries first, but only from a class
+// that holds MORE than operationsOutcomeReserve — so the last thing a burst of
+// failures can do is evict the record of what actually succeeded.
+//
+// It builds the next ring in ITS OWN array and returns it; the caller adopts the
+// result. Nothing is removed in place and put back, so there is no surviving
+// slice header that can end up pointing at rows the trim moved (the 282 trap).
+func trimOperations(ops []Operation) []Operation {
+	if len(ops) <= OperationsCapacity {
+		return ops
 	}
-	r.ops = ops
+	failed := 0
+	for _, op := range ops {
+		if op.State == OpStateFailed {
+			failed++
+		}
+	}
+	// How many entries each class may give up before it reaches its reserve.
+	budget := func(n int) int {
+		if n <= operationsOutcomeReserve {
+			return 0
+		}
+		return n - operationsOutcomeReserve
+	}
+	failedBudget, otherBudget := budget(failed), budget(len(ops)-failed)
+	over := len(ops) - OperationsCapacity
+	drop := make([]bool, len(ops))
+	for i := len(ops) - 1; i >= 0 && over > 0; i-- { // oldest first
+		if ops[i].State == OpStateFailed {
+			if failedBudget == 0 {
+				continue
+			}
+			failedBudget--
+		} else {
+			if otherBudget == 0 {
+				continue
+			}
+			otherBudget--
+		}
+		drop[i] = true
+		over--
+	}
+	out := make([]Operation, 0, OperationsCapacity)
+	for i, op := range ops {
+		if drop[i] {
+			continue
+		}
+		out = append(out, op)
+	}
+	// Both classes sat at their reserve and the ring is still over: the reserves
+	// cannot both be honoured, so the plain newest-first cut applies. Reachable
+	// only if the reserve is ever raised past half the ring; guarded rather than
+	// assumed, because the failure mode of assuming it is an unbounded ring (§9).
+	if len(out) > OperationsCapacity {
+		out = out[:OperationsCapacity]
+	}
+	return out
 }
 
 // persistLocked writes the history atomically (tmp + rename, 0600), the same
@@ -282,10 +356,7 @@ func (r *opsRing) begin(kind, actor string, target OperationTarget) (Operation, 
 		return Operation{}, r.running, false
 	}
 	r.running = id
-	r.ops = append([]Operation{op}, r.ops...)
-	if len(r.ops) > OperationsCapacity {
-		r.ops = r.ops[:OperationsCapacity]
-	}
+	r.ops = trimOperations(append([]Operation{op}, r.ops...))
 	r.logPersistFailure(r.persistLocked())
 	return op, "", true
 }

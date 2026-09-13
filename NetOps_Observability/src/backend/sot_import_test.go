@@ -30,6 +30,10 @@ func newImportTestServer(t *testing.T) *server {
 
 func TestRunSitesImport(t *testing.T) {
 	s := newImportTestServer(t)
+	// The planner reads the caller's VISIBLE sites, so it takes the principal
+	// (tracker 298). This one is an ordinary t1 operator: no restriction applies,
+	// so every outcome below is the unrestricted behaviour.
+	claims := jwtClaims{Sub: "u", Role: RoleOperator, Tenant: "t1"}
 	rows := []importedSite{
 		{Slug: "nyc", Name: "New York", Status: "active", Owner: "NetEng", Lat: 40.71, Lng: -74.01, HasCoords: true},
 		{Name: "No Name OK"}, // slug derived
@@ -37,7 +41,7 @@ func TestRunSitesImport(t *testing.T) {
 	}
 
 	// Dry-run: plans creates but writes NOTHING.
-	plan := s.runSitesImport("t1", false, false, true, rows)
+	plan := s.runSitesImport(claims, "t1", false, false, true, rows)
 	if plan.Summary["create"] != 2 || plan.Summary["error"] != 1 {
 		t.Fatalf("dry-run summary = %v, want 2 create / 1 error", plan.Summary)
 	}
@@ -46,7 +50,7 @@ func TestRunSitesImport(t *testing.T) {
 	}
 
 	// Apply: now it writes.
-	app := s.runSitesImport("t1", false, false, false, rows)
+	app := s.runSitesImport(claims, "t1", false, false, false, rows)
 	if app.Summary["create"] != 2 {
 		t.Fatalf("apply create = %d, want 2", app.Summary["create"])
 	}
@@ -55,14 +59,14 @@ func TestRunSitesImport(t *testing.T) {
 	}
 
 	// Re-import identical → unchanged, no clobber.
-	again := s.runSitesImport("t1", false, false, false, rows[:1])
+	again := s.runSitesImport(claims, "t1", false, false, false, rows[:1])
 	if again.Summary["unchanged"] != 1 {
 		t.Fatalf("re-import = %v, want 1 unchanged", again.Summary)
 	}
 
 	// Changed row without overwrite → conflict (skipped, not written).
 	changed := []importedSite{{Slug: "nyc", Name: "NYC Renamed", Owner: "SecOps"}}
-	conf := s.runSitesImport("t1", false, false, false, changed)
+	conf := s.runSitesImport(claims, "t1", false, false, false, changed)
 	if conf.Summary["conflict"] != 1 {
 		t.Fatalf("conflict summary = %v, want 1 conflict", conf.Summary)
 	}
@@ -71,7 +75,7 @@ func TestRunSitesImport(t *testing.T) {
 	}
 
 	// Same change WITH overwrite → update applied; owner reassigned tenant preserved.
-	upd := s.runSitesImport("t1", false, true, false, changed)
+	upd := s.runSitesImport(claims, "t1", false, true, false, changed)
 	if upd.Summary["update"] != 1 {
 		t.Fatalf("overwrite summary = %v, want 1 update", upd.Summary)
 	}

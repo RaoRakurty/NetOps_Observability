@@ -125,7 +125,21 @@ describe("Teams channel card", () => {
     await openCard(TEAMS_TILE);
     vi.mocked(api.notifyTeamsTest).mockRejectedValueOnce(new Error("configure a webhook url first"));
     fireEvent.click(await screen.findByRole("button", { name: "Send test" }));
-    expect(await screen.findByText("Test failed: configure a webhook url first")).toBeTruthy();
+    // The server's own sentence is kept — it is the actionable half — and the
+    // line still says WHICH action did not happen.
+    expect(await screen.findByText("Test not sent. Configure a webhook url first.")).toBeTruthy();
+  });
+
+  // tracker 293: this line used to be `"Test failed: " + (e as Error).message`,
+  // so an unreachable provider put the api.ts envelope on the card.
+  it("does not put the api envelope on the card when the provider is unreachable", async () => {
+    const dlg = await openCard(TEAMS_TILE);
+    vi.mocked(api.notifyTeamsTest).mockRejectedValueOnce(new Error(
+      '502 Bad Gateway: {"error":"Post http://api:8080/notify/teams/test: dial tcp 172.18.0.9:8080: connect: connection refused"}',
+    ));
+    fireEvent.click(await screen.findByRole("button", { name: "Send test" }));
+    expect(await screen.findByText("Test not sent. The service did not answer.")).toBeTruthy();
+    expect(dlg.textContent ?? "").not.toMatch(/dial tcp|172\.18\.0\.9|api:8080|Bad Gateway/);
   });
 });
 
@@ -183,7 +197,7 @@ describe("SNS channel card", () => {
     expect(await screen.findByText(/Test sent/)).toBeTruthy();
     vi.mocked(api.notifySNSTest).mockRejectedValueOnce(new Error("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set in the deployment environment"));
     fireEvent.click(screen.getByRole("button", { name: "Send test" }));
-    expect(await screen.findByText(/Test failed: AWS_ACCESS_KEY_ID/)).toBeTruthy();
+    expect(await screen.findByText(/Test not sent\. AWS_ACCESS_KEY_ID/)).toBeTruthy();
   });
 });
 

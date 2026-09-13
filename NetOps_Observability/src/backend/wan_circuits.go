@@ -165,11 +165,19 @@ func (s *server) wanPolicyFor(claims jwtClaims) WanMeasurementPolicy {
 // target label — the interface facing it falls through to the reachability
 // anchor instead, which names nothing. That is the half a device filter alone
 // does not obviously buy you, and TestWanCircuitsHonour… asserts it on the wire.
-func (s *server) wanProject(ctx context.Context, vis deviceVisibility) ([]WanEndpoint, []WanCircuit) {
+// It returns a THIRD value: whether the directly-connected-peer evidence was
+// actually read. The whole target-derivation ranking hangs off it — with no
+// neighbour index every interface falls through to the reachability anchor, so
+// an unread channel silently re-points the measurement from "the peer across
+// this link" to "1.1.1.1". That failure is SAFE (it fails closed and discloses
+// nothing) and completely INVISIBLE, which is precisely tracker 290: the row
+// still says "Reachability anchor" and nothing says the peer was never looked
+// for. Callers surface it; they do not drop it.
+func (s *server) wanProject(ctx context.Context, vis deviceVisibility) ([]WanEndpoint, []WanCircuit, error) {
 	if vis.deny {
 		// The operator scoped INTO a restricted tenant: no devices, and no read of
 		// that tenant's measurement policy either.
-		return nil, nil
+		return nil, nil, nil
 	}
 	tenant, cross := vis.tenant, vis.cross
 	pol := s.wanPolicy.Get(tenant, cross)
@@ -190,14 +198,26 @@ func (s *server) wanProject(ctx context.Context, vis deviceVisibility) ([]WanEnd
 		}
 	}
 	if len(wanDev) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	fetchIfAddr := s.wanIfAddr
 	if fetchIfAddr == nil {
 		fetchIfAddr = collectors.FetchIfAddrMap
 	}
-	ifaddr, _ := fetchIfAddr(ctx) // device → ip → ifName (empty if collector off)
+	// device → ip → ifName. This registry is what makes an interface VISIBLE to the
+	// projection at all (`for ip, ifn := range ifaddr[devID]` below is the only
+	// source of in-scope interfaces on a WAN device), so an unread registry does
+	// not merely drop port labels here — it empties the WAN interface table and
+	// the circuit list derived from it. The projection still answers, because the
+	// alternative is refusing a WAN page whenever the SNMP share channel blips and
+	// because `wanProject` already carries the adjacency-evidence error its callers
+	// turn into a banner; what it must not do is answer "this tenant has no WAN
+	// interfaces" without anyone being able to find out that nothing was read
+	// (tracker 307, §10).
+	ifaddr, ifaddrErr := fetchIfAddr(ctx)
+	reportIfRegistryUnread("wan", "the interface table for this projection is EMPTY — no WAN interface or circuit can be derived, which is indistinguishable from a tenant that has none", ifaddrErr,
+		map[string]any{"tenant": tenant, "cross": cross, "wan_devices": len(wanDev)})
 
 	// ifName → ip, per device (inverse of ifaddr) — for peer-IP resolution.
 	ipByDevIf := map[string]map[string]string{}
@@ -210,7 +230,7 @@ func (s *server) wanProject(ctx context.Context, vis deviceVisibility) ([]WanEnd
 	}
 
 	// Directly-connected neighbours, joined to the peer's interface IP.
-	neighbors := s.wanNeighborIndex(ctx, visible, nameToID, ipByDevIf)
+	neighbors, neighborsErr := s.wanNeighborIndex(ctx, visible, nameToID, ipByDevIf)
 
 	// Which (device, ifName) interfaces are IN SCOPE:
 	//   - every interface on a WAN device, PLUS
@@ -295,18 +315,28 @@ func (s *server) wanProject(ctx context.Context, vis deviceVisibility) ([]WanEnd
 			Kind: ep.TargetKind, Source: "registry", Enabled: true,
 		})
 	}
-	return endpoints, circuits
+	return endpoints, circuits, neighborsErr
 }
 
 // wanNeighborIndex fetches the merged topology links via the DI seam and
 // builds the pure wan.NeighborIndex over them.
-func (s *server) wanNeighborIndex(ctx context.Context, visible map[string]models.Device, nameToID map[string]string, ipByDevIf map[string]map[string]string) map[string]wan.Peer {
+//
+// It REPORTS a failed fetch rather than folding it into an empty index
+// (tracker 290). An empty index is a legitimate state — no discovery collector
+// is deployed, or nothing is directly connected — and it is also exactly what a
+// dead channel produces, so the two have to be told apart before the projection
+// quietly downgrades every interface to a reachability anchor.
+func (s *server) wanNeighborIndex(ctx context.Context, visible map[string]models.Device, nameToID map[string]string, ipByDevIf map[string]map[string]string) (map[string]wan.Peer, error) {
 	fetch := s.wanNeighbors
 	if fetch == nil {
-		fetch = collectors.FetchTopologyLinks
+		fetch = s.fetchTopoLinks // the shared adjacency-evidence resolver (seam, then collector)
 	}
-	links, _ := fetch(ctx)
-	return wan.NeighborIndex(links, visible, nameToID, ipByDevIf)
+	links, err := fetch(ctx)
+	idx := wan.NeighborIndex(links, visible, nameToID, ipByDevIf)
+	if errTopoLinksUnread(err) {
+		return idx, err
+	}
+	return idx, nil
 }
 
 // ---- interface-target publisher (→ Redis, for the wan-echo collector) ----
@@ -329,7 +359,20 @@ func (s *server) startWANCircuitPublish(ctx context.Context) {
 		// operator-visibility rule governs operator READS (the request handlers
 		// below); narrowing the prober here would take a restricted tenant's
 		// measurements away from the tenant itself.
-		_, circuits := s.wanProject(ctx, platformInfraDeviceVisibility())
+		_, circuits, err := s.wanProject(ctx, platformInfraDeviceVisibility())
+		if err != nil {
+			// REFUSAL (tracker 290). Publishing now would REPLACE the prober's
+			// target list with one derived from no adjacency evidence at all —
+			// every direct-peer target downgraded to a reachability anchor — and
+			// the prober would then measure the wrong thing for as long as the
+			// list lived. Skipping leaves the last good list in place (it carries
+			// a 3-interval TTL), and the next cycle is 60s away. The publish
+			// channel is the same channel the read just failed on, so there is
+			// almost nothing to lose and a whole measurement programme to protect.
+			logError("wan", "adjacency evidence unread — the wan-echo target list is NOT being republished, so the prober keeps its last targets",
+				map[string]any{"error": err.Error()})
+			return
+		}
 		targets := make([]collectors.EchoTarget, 0, len(circuits))
 		for _, c := range circuits {
 			if !c.Enabled || c.Remote.Measurable == "" {
@@ -515,10 +558,10 @@ func (s *server) vmQueryRangeByIf(ctx context.Context, query string, start, end,
 // device+ifName NAME, so an unscoped read surfaces another tenant's link load,
 // speed and oper-state whenever a device name collides across tenants — the
 // defect topology_view.go:86-91 documents.
-func (s *server) wanInterfaceRows(ctx context.Context, vis deviceVisibility, f []string) []WanInterfaceRow {
-	endpoints, circuits := s.wanProject(ctx, vis)
+func (s *server) wanInterfaceRows(ctx context.Context, vis deviceVisibility, f []string) ([]WanInterfaceRow, error) {
+	endpoints, circuits, projErr := s.wanProject(ctx, vis)
 	if len(endpoints) == 0 {
-		return nil
+		return nil, projErr
 	}
 
 	// local (device,if) → target link, so each interface finds its target.
@@ -620,10 +663,28 @@ func (s *server) wanInterfaceRows(ctx context.Context, vis deviceVisibility, f [
 		}
 		return rows[i].Interface < rows[j].Interface
 	})
-	return rows
+	return rows, projErr
 }
 
 // ---- HTTP handlers ----
+
+// wanTargetsUnreadNote is what an operator is told when the WAN projection had
+// no adjacency evidence to derive targets from. It names the CONSEQUENCE, not
+// the plumbing: the Target column is what the reader is looking at.
+const wanTargetsUnreadNote = "Adjacency evidence could not be read, so directly-connected peers were not resolved — interfaces shown against a reachability anchor may in fact have a peer, and are not confirmed to be internet-facing."
+
+// wanDegradedNotes turns a projection failure into the operator-facing notes the
+// WAN payloads carry. nil on a healthy read, and nil when no discovery collector
+// is deployed at all (errTopoLinksUnread already filtered that), so the banner
+// never appears on a deployment where the anchor really is the right target.
+func wanDegradedNotes(err error) []string {
+	if err == nil {
+		return nil
+	}
+	logWarn("wan", "adjacency evidence unread for a WAN projection — every interface fell back to its reachability anchor",
+		map[string]any{"error": err.Error()})
+	return []string{wanTargetsUnreadNote}
+}
 
 // handleWanInterfaces: GET /api/wan/interfaces — the per-WAN-interface table.
 func (s *server) handleWanInterfaces(w http.ResponseWriter, r *http.Request) {
@@ -631,7 +692,14 @@ func (s *server) handleWanInterfaces(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"interfaces": s.wanInterfaceRows(r.Context(), s.deviceVisibilityFor(claims), s.metricsScopeFiltersFor(claims))})
+	// RENDERABLE-WITH-A-BANNER (tracker 290). The row is mostly real without the
+	// neighbour index — the interface, its utilisation, its oper-state and its
+	// measured SLA all still arrive — so refusing the table would cost far more
+	// than it saves. What the table cannot say for itself is that every "Reachability
+	// anchor" in the Target column may be a fallback the projection took because
+	// the peer was never looked for, so the payload says it instead.
+	rows, err := s.wanInterfaceRows(r.Context(), s.deviceVisibilityFor(claims), s.metricsScopeFiltersFor(claims))
+	writeJSON(w, http.StatusOK, map[string]any{"interfaces": rows, "degraded": wanDegradedNotes(err)})
 }
 
 // handleWanEndpoints: GET /api/wan/endpoints — the derived WAN endpoint registry.
@@ -640,8 +708,8 @@ func (s *server) handleWanEndpoints(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	eps, _ := s.wanProject(r.Context(), s.deviceVisibilityFor(claims))
-	writeJSON(w, http.StatusOK, map[string]any{"endpoints": eps})
+	eps, _, err := s.wanProject(r.Context(), s.deviceVisibilityFor(claims))
+	writeJSON(w, http.StatusOK, map[string]any{"endpoints": eps, "degraded": wanDegradedNotes(err)})
 }
 
 // handleWanCircuits: GET /api/wan/circuits — the derived interface→target links.
@@ -650,8 +718,8 @@ func (s *server) handleWanCircuits(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	_, circuits := s.wanProject(r.Context(), s.deviceVisibilityFor(claims))
-	writeJSON(w, http.StatusOK, map[string]any{"circuits": circuits})
+	_, circuits, err := s.wanProject(r.Context(), s.deviceVisibilityFor(claims))
+	writeJSON(w, http.StatusOK, map[string]any{"circuits": circuits, "degraded": wanDegradedNotes(err)})
 }
 
 // handleWanPolicy: GET|PUT /api/wan/policy — the per-tenant measurement policy.

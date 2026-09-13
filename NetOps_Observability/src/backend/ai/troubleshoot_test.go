@@ -475,6 +475,92 @@ func TestSecurityFindingsEmptyIsNotClean(t *testing.T) {
 	}
 }
 
+// tracker 294 — the cut the SHIPPED provider makes must set Truncated.
+//
+// The tool's own path bound tests `len(paths) > MaxTopologyPaths`, and the
+// provider (aiDevicePaths) hands back a list capped at EXACTLY MaxTopologyPaths.
+// The condition was therefore unreachable against the only implementation we
+// ship: every real truncation left Truncated false, so RenderToolReply's
+// "results truncated" line and the skill runner's "<tool> results were capped"
+// note both said nothing had been cut. The test above passed because it fed an
+// OVER-cap list no provider produces — coverage that looked like proof.
+//
+// So this one reproduces the provider's actual shape: at the cap, not over it.
+func TestAProviderSideTopologyCapIsDisclosedAsTruncated(t *testing.T) {
+	atCap := func(pathsCapped, neighborsCapped bool) TopologyContext {
+		tc := TopologyContext{
+			DeviceID: "edge-1", DeviceName: "edge-1",
+			PathsCapped: pathsCapped, NeighborsCapped: neighborsCapped,
+		}
+		// EXACTLY the cap, which is what aiDevicePaths/aiDeviceNeighbors return
+		// when they cut — never one more.
+		for i := 0; i < MaxTopologyPaths; i++ {
+			tc.Paths = append(tc.Paths, TopologyPathRef{ID: "p", Label: "l", Hops: 3})
+		}
+		for i := 0; i < MaxTopologyNeighbors; i++ {
+			tc.Neighbors = append(tc.Neighbors, TopologyNeighbor{LocalPort: "Gi0/1", PeerName: "core", PeerPort: "Gi1/1"})
+		}
+		return tc
+	}
+
+	for _, tc := range []struct {
+		name              string
+		paths, neighbours bool
+	}{
+		{"the provider cut the path list", true, false},
+		{"the provider cut the neighbour list", false, true},
+		{"the provider cut both", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := tsDeps()
+			d.TopologyContext = func(_ context.Context, _ Principal, _ string) (TopologyContext, error) {
+				return atCap(tc.paths, tc.neighbours), nil
+			}
+			res := mustRun(t, tsRegistry(t, d), "get_topology_context", ToolArgs{"device_id": "edge-1"})
+			if !res.Truncated {
+				t.Fatal("the provider reported a cut list and Truncated is false — " +
+					"RenderToolReply will tell the model nothing was truncated")
+			}
+			// And the flag reaches the model, which is the whole point of it.
+			if !strings.Contains(RenderToolReply(&res), "results truncated") {
+				t.Error("the rendered reply does not disclose the truncation")
+			}
+		})
+	}
+
+	// The control: nothing cut, nothing claimed. A flag that is always on is as
+	// useless as one that is always off.
+	d := tsDeps()
+	d.TopologyContext = func(_ context.Context, _ Principal, _ string) (TopologyContext, error) {
+		return atCap(false, false), nil
+	}
+	res := mustRun(t, tsRegistry(t, d), "get_topology_context", ToolArgs{"device_id": "edge-1"})
+	if res.Truncated {
+		t.Error("a complete topology context reported itself truncated")
+	}
+}
+
+// A seam list cut by the TOOL used to be cut in silence — Truncated was set but
+// no note said which count the reader was looking at, unlike the neighbour
+// bound right above it. A seam that is not listed reads as an ownership handoff
+// this device does not sit on.
+func TestASeamListCutByTheToolSaysHowManyItIsShowing(t *testing.T) {
+	d := tsDeps()
+	d.TopologyContext = func(_ context.Context, _ Principal, deviceID string) (TopologyContext, error) {
+		tc := TopologyContext{DeviceID: deviceID, DeviceName: "edge-1"}
+		for i := 0; i < MaxTopologySeams+7; i++ {
+			tc.Seams = append(tc.Seams, TopologySeam{ID: "seam", Type: "dia"})
+		}
+		return tc, nil
+	}
+	res := mustRun(t, tsRegistry(t, d), "get_topology_context", ToolArgs{"device_id": "edge-1"})
+	note := strings.Join(res.Notes, " ")
+	want := fmt.Sprintf("showing %d of %d seams", MaxTopologySeams, MaxTopologySeams+7)
+	if !strings.Contains(note, want) {
+		t.Errorf("a cut seam list did not say so: notes = %q, want %q", note, want)
+	}
+}
+
 func TestTopologyContextCapsAndUnknownDisclosure(t *testing.T) {
 	d := tsDeps()
 	d.TopologyContext = func(_ context.Context, _ Principal, deviceID string) (TopologyContext, error) {

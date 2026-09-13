@@ -42,6 +42,30 @@ type DialectPack struct {
 	Vendor Vendor
 	// Bindings maps a Rule.ID to that rule's realization in this dialect.
 	Bindings map[string]VendorBinding
+	// Recognize answers ONE question for the engine: is the running-config on
+	// file something these bindings can READ at all? It returns ok=false plus a
+	// short operator-facing REASON when the text is not this platform's
+	// configuration grammar.
+	//
+	// WHY THE SEAM NEEDS IT (tracker 296). A binding's Detect is a pattern over
+	// a grammar. Hand it a capture in a shape the patterns do not know — a
+	// different rendering of the same platform's configuration, another
+	// dialect's config under a mislabelled platform, a structured export, an
+	// empty capture — and every pattern simply fails to match. "No insecure
+	// line found" then renders as PASS, so the device is reported hardened on
+	// the strength of a config nothing in the pack could read. That is a
+	// fail-OPEN on a security control, and no amount of per-rule care fixes it:
+	// the check has to happen once, at the boundary, before any verdict.
+	//
+	// A pack that leaves this nil declares no shape test and is evaluated
+	// exactly as before. A pack that sets it makes the engine fail CLOSED: every
+	// one of that dialect's controls is reported StatusUnknown with the reason,
+	// plus one RuleConfigDialectUnreadable coverage finding, and not one Pass.
+	//
+	// It must be CONSERVATIVE — rejecting a real config of this platform would
+	// blind the whole dialect. "I cannot see a single statement of this grammar"
+	// is the bar, not "this config looks unusual".
+	Recognize func(cfg *Config) (ok bool, reason string)
 }
 
 // applyDialects returns rules with the packs' bindings merged in. Inputs are
@@ -82,6 +106,24 @@ func applyDialects(rules []Rule, packs []DialectPack) []Rule {
 			merged[v] = b
 		}
 		out[i].bindings = merged
+	}
+	return out
+}
+
+// dialectRecognizers collects the packs' config-shape tests, keyed by vendor.
+// A pack with no Recognize contributes nothing, so a dialect that declares no
+// shape test behaves exactly as it did before the seam existed. Last pack wins
+// for a vendor, which mirrors how applyDialects merges bindings.
+func dialectRecognizers(packs []DialectPack) map[Vendor]func(*Config) (bool, string) {
+	var out map[Vendor]func(*Config) (bool, string)
+	for _, p := range packs {
+		if p.Vendor == VendorUnknown || p.Recognize == nil {
+			continue
+		}
+		if out == nil {
+			out = make(map[Vendor]func(*Config) (bool, string), len(packs))
+		}
+		out[p.Vendor] = p.Recognize
 	}
 	return out
 }

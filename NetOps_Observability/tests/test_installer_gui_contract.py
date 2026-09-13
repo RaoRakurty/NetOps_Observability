@@ -547,7 +547,9 @@ def test_install_py_shares_the_thresholds_instead_of_duplicating():
 
 def test_sha256sums_covers_the_correlix_setup_binary():
     src = (SCRIPTS / "make-installer.sh").read_text()
-    m = re.search(r"^\(cd \"\$BUNDLE_DIR\" && sha256sum (.+) > SHA256SUMS\)$",
+    m = re.search(# `^\s*`: the line moved INTO finalize_bundle() when release mode landed
+                  # (RC1 directive Decision 3B), so it is indented now.
+                  r"^\s*\(cd \"\$BUNDLE_DIR\" && sha256sum (.+) > SHA256SUMS\)$",
                   src, re.MULTILINE)
     assert m, "make-installer.sh lost its SHA256SUMS line"
     assert "correlix-setup" in m.group(1), (

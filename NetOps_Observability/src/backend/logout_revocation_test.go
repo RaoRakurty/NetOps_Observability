@@ -213,7 +213,7 @@ func TestRefreshRevokeDistinguishesUnknownFromFailed(t *testing.T) {
 func TestAdminSessionKillDoesNotReport204OnAFailedPersist(t *testing.T) {
 	srv, s := newTestServerState(t)
 	tok, _ := loginFor(t, srv.URL)
-	sessions := s.sessions.ListForUser(seedUser)
+	sessions := s.sessions.ListForUser(principalID(t, s, seedUser))
 	if len(sessions) == 0 {
 		t.Fatal("expected a session after login")
 	}

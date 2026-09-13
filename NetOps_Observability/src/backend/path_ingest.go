@@ -156,7 +156,17 @@ func (f serverPathFacts) Facts(ctx context.Context, tenant string, at time.Time)
 	if fetchIfAddr == nil {
 		fetchIfAddr = collectors.FetchIfAddrMap
 	}
-	ifaddr, _ := fetchIfAddr(ctx) // empty when the collector is off — degrade, never fail
+	// DEGRADE AND SAY SO (tracker 307). rank 3 is one of several fact ranks, and
+	// the resolver is built to abstain on a rank it has nothing for — so losing
+	// the interface registry must not fail the whole fact base and take ranks 2,
+	// 4 and 6 down with it. But an unread registry produces the same PathFacts as
+	// a fleet with no interface addresses, and the path observations built from
+	// them are IMMUTABLE: a hop that could have resolved to device:ifName is
+	// written unresolved, for good. The cycle continues; it no longer does so
+	// without a word.
+	ifaddr, ifaddrErr := fetchIfAddr(ctx)
+	reportIfRegistryUnread("pathgraph", "rank-3 interface bindings are absent from this tenant's fact base, so hops that would resolve to device:ifName are written UNRESOLVED into immutable observations", ifaddrErr,
+		map[string]any{"tenant": tenant})
 	if len(ifaddr) > 0 && s.discovery != nil {
 		visible := map[string]bool{}
 		for _, d := range s.discovery.Devices() {

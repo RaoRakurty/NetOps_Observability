@@ -189,6 +189,101 @@ type ExecQuery struct {
 	Limit      int
 }
 
+// ExecScope is WHO is reading the execution history, resolved by the caller and
+// handed to the store as data. Both reads below take one; neither takes a bare
+// (tenant, cross) pair any more.
+//
+// The pair was not enough. An execution row is the ledger entry for one report
+// fire, and it carries the rendered SUMMARY of that report ("3 active alert(s) ·
+// 2 critical/error") plus the key of the stored artifact — the complete
+// HTML/XLSX/PDF document, rendered under the owning tenant's own scope. The
+// platform operator's Global view is cross=true, and cross meant "everything",
+// so a tenant that platform staff may administer but must not READ
+// (Tenant.OperatorRestricted) had its report runs listed and its rendered
+// documents streamed on request.
+//
+// Expressed as a pair there was nowhere for "cross-tenant EXCEPT these" to ride,
+// which is the same wall alerts.EpisodeScope and reports.DeviceScope hit. And a
+// filter at the handler could not make up the difference either: List applies
+// its LIMIT inside the store, over the unfiltered set, so a post-filter would
+// hand back a short page whose missing slots are themselves the disclosure — and
+// runsFromExecutions reads a fixed 200-row window, which a restricted tenant's
+// runs would silently consume, taking a VISIBLE tenant's runs off the operator's
+// screen. The filter and the bound have to be the same pass, and that pass is in
+// the store.
+//
+// Hidden is the operator-visibility restriction in its tenant_id form, which is
+// the exact form for an execution: the row names its owning tenant. Deny is the
+// operator scoped INTO a restricted tenant — it reads nothing at all.
+//
+// The zero value is a CLOSED scope (tenant "", not cross): the platform's own
+// executions only, the right default for a caller that forgot to say who it is.
+type ExecScope struct {
+	Tenant string
+	Cross  bool
+	Deny   bool
+	Hidden []string
+}
+
+// ExecScopeFor builds the ordinary scope, for callers with no restriction to
+// apply (the engine's own bookkeeping, tests).
+func ExecScopeFor(tenant string, cross bool) ExecScope {
+	return ExecScope{Tenant: tenant, Cross: cross}
+}
+
+// PlatformExecScope is the UNRESTRICTED platform scope, for the readers that act
+// on behalf of the PLATFORM rather than on behalf of a principal:
+//
+//   - the pipeline's own de-duplication probe, which must see every tenant's last
+//     fire or it would re-fire a restricted tenant's schedule forever, and
+//   - the signed-link download paths (/api/reports/view, /api/exports/view),
+//     where the short-lived token IS the authorization and the recipient is the
+//     tenant itself. The restriction hides a tenant from the platform, never from
+//     itself, so resolving it there would take a tenant's own report away from
+//     the address it asked for it at.
+//
+// It is deliberately not derivable from claims: an operator request must go
+// through the principal's own scope, never this.
+func PlatformExecScope() ExecScope { return ExecScope{Cross: true} }
+
+// Sees reports whether this scope may read one execution row: the restriction
+// first, then the ordinary tenancy rule — in that order, because the tenancy
+// rule answers TRUE FOR EVERYTHING on the cross-tenant path and would otherwise
+// hand a hidden row straight back.
+func (sc ExecScope) Sees(rec ExecutionRecord) bool {
+	if sc.Deny {
+		return false
+	}
+	for _, id := range sc.Hidden {
+		// A blank entry is skipped rather than matched: a blank owner is
+		// PLATFORM-owned, which the restriction never hides, and the SQL half
+		// (hiddenLower) drops blanks for the same reason — the two halves of
+		// one rule must not disagree.
+		if h := normTenant(id); h != "" && h == normTenant(rec.TenantID) {
+			return false
+		}
+	}
+	return sc.Cross || normTenant(rec.TenantID) == normTenant(sc.Tenant)
+}
+
+// hiddenLower renders the restriction as the lower-cased list a SQL exclusion
+// binds, or nil when there is nothing to exclude.
+func (sc ExecScope) hiddenLower() []string {
+	if len(sc.Hidden) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(sc.Hidden))
+	for _, id := range sc.Hidden {
+		if h := normTenant(id); h != "" {
+			out = append(out, h)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // ExecutionStore is the immutable execution history + phase-event timeline.
 type ExecutionStore interface {
 	// Append inserts the initial queued record (tenant from e.TenantID). Writes
@@ -210,8 +305,13 @@ type ExecutionStore interface {
 	Cancel(ctx context.Context, id string, at time.Time, reason string) error
 	// RecordEvent appends a phase transition (tenant sets the events row scope).
 	RecordEvent(ctx context.Context, tenant, execID string, phase Phase, at time.Time, note string) error
-	Get(ctx context.Context, tenant string, cross bool, id string) (ExecutionRecord, []ExecEvent, bool, error)
-	List(ctx context.Context, tenant string, cross bool, q ExecQuery) ([]ExecutionRecord, error)
+	// Get and List take the RESOLVED ExecScope, not a (tenant, cross) pair, so
+	// the operator-visibility restriction reaches the store rather than stopping
+	// at a handler that would have to remember it. A row the scope may not see
+	// is reported as ABSENT (found=false), which the HTTP callers answer 404 —
+	// never 403, which would confirm the id exists.
+	Get(ctx context.Context, sc ExecScope, id string) (ExecutionRecord, []ExecEvent, bool, error)
+	List(ctx context.Context, sc ExecScope, q ExecQuery) ([]ExecutionRecord, error)
 }
 
 // ---- rendering & artifacts -------------------------------------------------

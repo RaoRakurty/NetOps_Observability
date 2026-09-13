@@ -56,13 +56,14 @@ func TestBindingConformance(t *testing.T) {
 	s.backfillBindings()
 
 	for _, u := range s.users.List(TenantGlobal, true) {
-		// Legacy path: build the claim the login flow would mint.
-		c := jwtClaims{Sub: u.Username, Role: u.Role, Tenant: u.TenantID}
+		// Legacy path: build the claim the login flow would mint. `Sub` is the
+		// PRINCIPAL ID (tracker 300 §4.1), which is also the binding's principal.
+		c := jwtClaims{Sub: u.ID, Role: u.Role, Tenant: u.TenantID}
 		wantTenant, wantCross := principalTenant(c)
 		wantOwner := isPlatformOwner(c)
 
 		// Binding path.
-		gotTenant, gotCross := s.bindingDerivedScope(u.Username)
+		gotTenant, gotCross := s.bindingDerivedScope(u.ID)
 
 		if gotCross != wantCross || gotCross != wantOwner {
 			t.Errorf("%s: binding cross=%v, principalTenant cross=%v, isPlatformOwner=%v", u.Username, gotCross, wantCross, wantOwner)
@@ -83,31 +84,32 @@ func TestBindingSyncOnRoleChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.syncUserBinding(u)
-	if got := s.bindings.ListByPrincipal("alice"); len(got) != 1 || got[0].RoleID != "operator" || got[0].ScopeID != scopeTenant("acme") {
+	// Tracker 300: the mirror's principal is the account's PRINCIPAL ID.
+	if got := s.bindings.ListByPrincipal(u.ID); len(got) != 1 || got[0].RoleID != "operator" || got[0].ScopeID != scopeTenant("acme") {
 		t.Fatalf("initial binding wrong: %+v", got)
 	}
-	v1 := s.bindings.Version("alice")
+	v1 := s.bindings.Version(u.ID)
 
 	// Promote alice to super-admin and move her to globex.
-	u2, err := s.users.Update("alice", User{Role: "super-admin", TenantID: "globex"})
+	u2, err := s.users.Update(u.ID, User{Role: "super-admin", TenantID: "globex"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.syncUserBinding(u2)
-	got := s.bindings.ListByPrincipal("alice")
+	got := s.bindings.ListByPrincipal(u.ID)
 	if len(got) != 1 {
 		t.Fatalf("expected exactly one binding after re-sync, got %d: %+v", len(got), got)
 	}
 	if got[0].RoleID != "super-admin" || got[0].ScopeID != scopeTenant("globex") {
 		t.Errorf("re-synced binding wrong: %+v", got[0])
 	}
-	if s.bindings.Version("alice") <= v1 {
+	if s.bindings.Version(u.ID) <= v1 {
 		t.Error("bindings_version should bump on re-sync")
 	}
 
 	// Delete drops the binding.
-	s.removeUserBindings("alice")
-	if got := s.bindings.ListByPrincipal("alice"); len(got) != 0 {
+	s.removeUserBindings(u.ID)
+	if got := s.bindings.ListByPrincipal(u.ID); len(got) != 0 {
 		t.Errorf("bindings should be gone after delete, got %+v", got)
 	}
 }

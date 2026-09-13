@@ -564,6 +564,38 @@ ALLOWLIST: dict[AllowKey, str] = {
     ("licensing-gate.py", "check_spdx", "95be8ea1"): "a source file the SPDX check could not read: appended as a check-A Failure naming the path and the errno, which is what makes the gate exit non-zero (the gate fails closed by design). The `continue` is what lets the remaining files still be checked, so one unreadable file yields a complete report instead of a truncated one. NOT a swallow: the silent `continue` this replaced would have passed an unreadable commercial file as if its header had been verified",
 
     # ===================================================================
+    # 2026-09-13 — scripts/licensing-gate.py, RC1 governance directive
+    # Decision 1 (the five licence-gate reject cases). The SAME accumulator
+    # shape as check_spdx above, in the two checks that decide whether the
+    # ENTERPRISE LICENCE TEXT itself is real: a file the gate could not read
+    # is a file whose contents it never verified, and in a gate whose whole
+    # contract is to fail closed, "unreadable" must not resolve the same way
+    # as "fine". The hole this closed was exactly that shape in the other
+    # direction: deleting or blanking LICENSES/LicenseRef-Correlix-Enterprise.txt used
+    # to make its release blocker DISAPPEAR, so the gate reported the
+    # placeholder resolved because the placeholder was gone. Proven by
+    # tests/test_licensing_gate_reject_cases.py.
+    # ===================================================================
+    ("licensing-gate.py", "check_licence_texts", "379eecaf"): "a declared licence TEXT the gate could not read: appended as a check-B Failure naming the path, the identifier and the errno, which is what makes the gate exit non-zero. The `continue` only lets the other root's copy and the other identifier's text still be checked in the same run, so one unreadable file yields a complete report instead of a truncated one. NOT a swallow: skipping silently would report a licence text as verified when its contents were never read, and every file marked with that identifier would then be shipped under terms nobody checked exist",
+    ("licensing-gate.py", "check_release_blockers", "9e955dab"): "a recorded release-blocker file the gate could not read: appended as a RELEASE Failure that carries the blocker's own `report` sentence, names the path and the errno, and says the blocker could not be EVALUATED and must not be assumed resolved — which is what makes --release exit non-zero. The `continue` lets the other root's copy and the other blocker still be evaluated in the same run. NOT a swallow: the whole point of this check is that an unevaluable blocker must never read as a cleared one",
+
+    # ===================================================================
+    # 2026-09-13 — scripts/licensing-gate.py, owner Decision 3: the
+    # canonical enterprise licence path is EXACTLY
+    # LICENSES/LicenseRef-Correlix-Enterprise.txt, one-to-one with the SPDX
+    # id. Part of that binding is that no SECOND file beside it carries the
+    # same terms, which means reading the other files in the licence
+    # directory. SAME accumulator shape as the three entries above, and
+    # written the same way for the same reason: the site started as
+    # `except (OSError, UnicodeDecodeError): continue` and was SPLIT before
+    # being pinned. A non-UTF-8 file is not a licence text and is still
+    # skipped; an unreadable one is a check-B FAILURE, because a file in
+    # LICENSES/ the gate could not open is a file that might be the
+    # duplicate the scan exists to find.
+    # ===================================================================
+    ("licensing-gate.py", "_check_no_duplicate_terms", "973fbbaf"): "a file in the licence directory the duplicate-terms scan could not read: appended as a check-B Failure naming the path, the identifier whose terms were being looked for, and the errno, which is what makes the gate exit non-zero. The `continue` only lets the rest of that directory, the other root and the other identifier still be scanned in the same run. NOT a swallow: skipping silently would report the canonical file as the ONLY holder of the terms while a file the gate never managed to read sat beside it, and two files resolving one LicenseRef can disagree about what was granted",
+
+    # ===================================================================
     # 2026-09-06 — scripts/spdx-headers.py (tracker 240, the SPDX header
     # sweep). The SAME accumulator shape as the two entries above, and for
     # the same reason: the sweep visits ~3 200 files in one pass, and an
@@ -584,6 +616,23 @@ ALLOWLIST: dict[AllowKey, str] = {
     # ===================================================================
     ("spdx-headers.py", "scan", "285202b9"): "a source file the sweep could not READ: appended as a Violation naming the path and the errno, which is what makes --check/--write exit non-zero. The `continue` lets the remaining ~3 200 files still be swept, so one unreadable file yields a complete report instead of a truncated one. NOT a swallow: skipping silently would report a file as carrying a header the sweep never managed to read",
     ("spdx-headers.py", "scan", "21205363"): "a source file the sweep could not WRITE: appended as a Violation naming the path and the errno, which is what makes --write exit non-zero even though other files were stamped. The `continue` finishes the sweep so the operator gets every unwritable path in one run; the alternative — stopping at the first — leaves a half-stamped tree AND an incomplete list",
+    # ===================================================================
+    # 2026-09-13 — scripts/release-gate.py, the fail-closed release gate
+    # (RC1 governance directive, Decision 8). Three sites, and all three
+    # ESCALATE — just not by raising, because this script's escalation
+    # channel IS its report: a check whose command could not run becomes a
+    # FAIL row (never a skip, never a pass), and one FAIL row makes the gate
+    # exit non-zero. Raising instead would abort the run at the first broken
+    # tool and destroy the property the gate exists for — run-all,
+    # report-all, so the owner sees the WHOLE blocker matrix in one run
+    # rather than bisecting through fifteen. The FAIL-on-missing-tool
+    # behaviour is asserted directly by
+    # tests/test_release_gate_entrypoint.py::test_a_missing_tool_is_a_fail_not_a_skip.
+    # ===================================================================
+    ("release-gate.py", "run_process", "ca0a4730"): "a gate tool that exists but is not executable: returned as Proc(missing=True), which cmd_result() grades FAIL with the errno in the evidence line and the exact command beside it. Not swallowed — the row is in the table and the gate exits non-zero; raising here would stop the other 37 checks from ever running",
+    ("release-gate.py", "run_process", "8d2ca242"): "the residual OSError of spawning a gate tool (a broken interpreter, ENOMEM, EMFILE): same path — Proc(missing=True) -> a FAIL row carrying the OS error text -> non-zero exit. Catching it is what keeps one unspawnable tool from hiding the fourteen other Decision-8 items",
+    ("release-gate.py", "workflow_job_exists", "1cdb4321"): "an unreadable .github/workflows file while verifying that a CI-ONLY row's delegate job still exists: returns False, which turns that row into a FAIL ('nothing is checking it') instead of a reassuring CI-ONLY reference. The unreadable workflow and the deleted job are the same verdict — the promise cannot be verified — so the safe direction is the failing one",
+    ("release-gate.py", "check_dependency_lock_npm", "07376830"): "an unreadable or malformed package-lock.json: recorded as a FAIL row naming the file and the parse error ('lockfileVersion' drift and unreadable locks are the same verdict — the lock is not verifiable), so the dependency-lock item fails the release. Continuing to the second lockfile means the report names BOTH broken locks instead of only the first",
 }
 
 # Rule 1: literal swallows, any text file (catches heredoc Python in .sh too).

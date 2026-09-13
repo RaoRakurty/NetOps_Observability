@@ -71,7 +71,7 @@ func TestPgExecStore(t *testing.T) {
 		t.Fatalf("complete: %v", err)
 	}
 
-	got, events, ok, err := s.Get(ctx, "acme", false, "e1")
+	got, events, ok, err := s.Get(ctx, reports.ExecScopeFor("acme", false), "e1")
 	if err != nil || !ok {
 		t.Fatalf("get e1: ok=%v err=%v", ok, err)
 	}
@@ -111,21 +111,21 @@ func TestPgExecStore(t *testing.T) {
 	if err := s.FailExec(ctx, "e2", base.Add(time.Hour+time.Second), "render timeout", deliveries[:1], "w1"); err != nil {
 		t.Fatalf("fail e2: %v", err)
 	}
-	g2, _, _, _ := s.Get(ctx, "acme", false, "e2")
+	g2, _, _, _ := s.Get(ctx, reports.ExecScopeFor("acme", false), "e2")
 	if g2.Status != reports.StatusFailed || g2.Error != "render timeout" || len(g2.Deliveries) != 1 {
 		t.Errorf("failed exec not recorded: status=%q err=%q deliveries=%d", g2.Status, g2.Error, len(g2.Deliveries))
 	}
 
 	// ---- RLS isolation: globex execution invisible to acme ----
 	_ = s.Append(ctx, reports.ExecutionRecord{ID: "g1", TenantID: "globex", ScheduleID: "rep-9", FireTime: base})
-	if _, _, ok, _ := s.Get(ctx, "acme", false, "g1"); ok {
+	if _, _, ok, _ := s.Get(ctx, reports.ExecScopeFor("acme", false), "g1"); ok {
 		t.Errorf("EXEC LEAK: acme scope read globex execution g1")
 	}
 	// platform owner sees it.
-	if _, _, ok, _ := s.Get(ctx, "", true, "g1"); !ok {
+	if _, _, ok, _ := s.Get(ctx, reports.ExecScopeFor("", true), "g1"); !ok {
 		t.Errorf("platform owner should see g1")
 	}
-	acme, err := s.List(ctx, "acme", false, reports.ExecQuery{})
+	acme, err := s.List(ctx, reports.ExecScopeFor("acme", false), reports.ExecQuery{})
 	if err != nil {
 		t.Fatalf("list acme: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestPgExecStore(t *testing.T) {
 	}
 
 	// ---- schedule filter + ordering (newest fire first) ----
-	rep1, err := s.List(ctx, "acme", false, reports.ExecQuery{ScheduleID: "rep-1"})
+	rep1, err := s.List(ctx, reports.ExecScopeFor("acme", false), reports.ExecQuery{ScheduleID: "rep-1"})
 	if err != nil {
 		t.Fatalf("list rep-1: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestPgExecStore(t *testing.T) {
 	}
 
 	// ---- keyset pagination via Before ----
-	page, err := s.List(ctx, "acme", false, reports.ExecQuery{ScheduleID: "rep-1", Before: base.Add(time.Hour)})
+	page, err := s.List(ctx, reports.ExecScopeFor("acme", false), reports.ExecQuery{ScheduleID: "rep-1", Before: base.Add(time.Hour)})
 	if err != nil {
 		t.Fatalf("list before: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestPgExecStoreZombieWriteLeaseGuard(t *testing.T) {
 	if err := s.FailExec(ctx, "ez", base.Add(2*time.Second), "zombie abort", nil, "wA"); !errors.Is(err, reports.ErrLeaseLost) {
 		t.Fatalf("zombie FailExec err = %v, want ErrLeaseLost", err)
 	}
-	got, _, ok, err := s.Get(ctx, "acme", false, "ez")
+	got, _, ok, err := s.Get(ctx, reports.ExecScopeFor("acme", false), "ez")
 	if err != nil || !ok {
 		t.Fatalf("get ez: ok=%v err=%v", ok, err)
 	}
@@ -218,7 +218,7 @@ func TestPgExecStoreZombieWriteLeaseGuard(t *testing.T) {
 	if err := q.Complete(ctx, "jz", "wB"); err != nil {
 		t.Fatalf("wB queue complete: %v", err)
 	}
-	got, _, _, err = s.Get(ctx, "acme", false, "ez")
+	got, _, _, err = s.Get(ctx, reports.ExecScopeFor("acme", false), "ez")
 	if err != nil || got.Status != reports.StatusCompleted {
 		t.Fatalf("owner status = %q err=%v, want completed", got.Status, err)
 	}
@@ -228,7 +228,7 @@ func TestPgExecStoreZombieWriteLeaseGuard(t *testing.T) {
 	if err := s.FailExec(ctx, "ez", base.Add(4*time.Second), "very late zombie", nil, "wA"); !errors.Is(err, reports.ErrLeaseLost) {
 		t.Fatalf("late zombie FailExec err = %v, want ErrLeaseLost", err)
 	}
-	got, _, _, _ = s.Get(ctx, "acme", false, "ez")
+	got, _, _, _ = s.Get(ctx, reports.ExecScopeFor("acme", false), "ez")
 	if got.Status != reports.StatusCompleted || got.Error != "" {
 		t.Fatalf("late zombie overwrote owner state: status=%q error=%q", got.Status, got.Error)
 	}

@@ -22,7 +22,7 @@ type fakeExecStore struct {
 	found bool
 }
 
-func (f fakeExecStore) Get(_ context.Context, _ string, _ bool, id string) (reports.ExecutionRecord, []reports.ExecEvent, bool, error) {
+func (f fakeExecStore) Get(_ context.Context, _ reports.ExecScope, id string) (reports.ExecutionRecord, []reports.ExecEvent, bool, error) {
 	if !f.found || id != f.rec.ID {
 		return reports.ExecutionRecord{}, nil, false, nil
 	}

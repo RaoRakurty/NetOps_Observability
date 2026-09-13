@@ -205,6 +205,13 @@ def _quiet_and_isolated(monkeypatch):
     # honest size knob it reads as.
     monkeypatch.setattr(main, "RETENTION_REQUIRED_S",
                         float(_STORM_DEVICES) * 4.0 + 120.0)
+    # The measurement helpers (`_measure`, `_objects_between_handoffs`,
+    # `_digest_after_open_then_damped`) set the yield budget and the CH stub by
+    # DIRECT ASSIGNMENT, for readability — so each is registered at its CURRENT
+    # value first and teardown puts it back. Without this the last leg's budget
+    # (0 ms on the mutant legs) leaked into every later test in the process.
+    for _name in ("CORR_LOOP_YIELD_MS", "ch"):
+        monkeypatch.setattr(main, _name, getattr(main, _name))
     main._ARCHIVE_SLICE_HASH.clear()
     main.VERSIONS_PERSISTED = 0
     main.VERSIONS_DAMPED = 0

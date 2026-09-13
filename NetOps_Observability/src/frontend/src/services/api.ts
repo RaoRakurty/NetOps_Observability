@@ -2320,6 +2320,15 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
 
 // ---- auth types ----
 export type AuthUser = {
+  // id = the internal PRINCIPAL ID (tracker 300). This is what the API, the
+  // audit trail and every /api/users mutation key on. `username` is a DISPLAY
+  // handle: for a federated account it is an opaque `fed_…` string that must
+  // never be rendered (use display_name, else email).
+  id?: string;
+  // identity_status = bound | unresolved | ambiguous (owner Decision 2,
+  // 2026-09-13). `unresolved` is a pre-migration federated account whose identity
+  // could not be established offline; `ambiguous` needs a human.
+  identity_status?: string;
   username: string;
   role: string;
   tenant_id?: string;
@@ -5011,7 +5020,9 @@ export const api = {
   mfaActivate: (code: string) => request<{ enabled: boolean }>("/api/auth/mfa/activate", { method: "POST", body: JSON.stringify({ code }) }),
   mfaDisable: (code: string) => request<{ enabled: boolean }>("/api/auth/mfa/disable", { method: "POST", body: JSON.stringify({ code }) }),
   // Admin recovery: clear a user's MFA (lost device).
-  adminResetMfa: (username: string) => request<{ enabled: boolean }>("/api/users/mfa-reset", { method: "POST", body: JSON.stringify({ username }) }),
+  // The target is named by its PRINCIPAL ID (tracker 300); the field name stays
+  // `username` for wire compatibility and carries the id.
+  adminResetMfa: (userID: string) => request<{ enabled: boolean }>("/api/users/mfa-reset", { method: "POST", body: JSON.stringify({ user_id: userID, username: userID }) }),
   logout: async () => {
     const rt = getRefresh();
     if (rt) {
@@ -5496,7 +5507,10 @@ export const api = {
     if (status) p.set("status", status);
     return request<ClickHouseResponse<Tunnel>>(`/api/tunnels?${p}`);
   },
-  wanInterfaces: () => request<{ interfaces: WanInterfaceRow[] }>(`/api/wan/interfaces`),
+  // `degraded` carries the evidence the SERVER could not read while deriving the
+  // table — today: the adjacency evidence, without which every interface falls
+  // back to a reachability anchor (tracker 290). Absent/empty on a healthy read.
+  wanInterfaces: () => request<{ interfaces: WanInterfaceRow[]; degraded?: string[] }>(`/api/wan/interfaces`),
 
   // ---- WAN projection + measurement policy (set B) --------------------------
   // Endpoints and circuits are DERIVED on read (interface-IP table × neighbours
@@ -6150,12 +6164,19 @@ export const api = {
   permissions: () => request<{ role: string; permissions: Record<string, number> }>("/api/auth/permissions"),
 
   listUsers: () => request<AdminUser[]>("/api/users"),
+  // The admin work queue (owner Decision 2): accounts whose identity could not be
+  // established offline and are waiting for a verified sign-in, and accounts whose
+  // derivation collided and need a human. The backend also accepts the retired
+  // `?identity=pending` spelling as an alias for `unresolved`.
+  listUnresolvedIdentityUsers: () => request<AdminUser[]>("/api/users?identity=unresolved"),
+  listAmbiguousIdentityUsers: () => request<AdminUser[]>("/api/users?identity=ambiguous"),
   createUser: (u: Partial<AdminUser> & { password?: string }) =>
     request<AdminUser>("/api/users", { method: "POST", body: JSON.stringify(u) }),
-  updateUser: (username: string, patch: Partial<AdminUser> & { password?: string }) =>
-    request<AdminUser>(`/api/users/${encodeURIComponent(username)}`, { method: "PATCH", body: JSON.stringify(patch) }),
-  deleteUser: (username: string) =>
-    request<void>(`/api/users/${encodeURIComponent(username)}`, { method: "DELETE" }),
+  // Keyed by the PRINCIPAL ID, never the login name (tracker 300 §4.5).
+  updateUser: (id: string, patch: Partial<AdminUser> & { password?: string }) =>
+    request<AdminUser>(`/api/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteUser: (id: string) =>
+    request<void>(`/api/users/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   listRoles: () => request<{ modules: string[]; roles: Role[] }>("/api/roles"),
   saveRole: (r: Role) =>
@@ -8230,6 +8251,21 @@ export type SNMPCredential = {
 
 // ----- Identity & access types -----
 export type AdminUser = {
+  // id = the internal PRINCIPAL ID and the ONLY handle a mutation may use
+  // (tracker 300 §4.7). A login name is unique only within a tenant, so two
+  // tenants can both hold `admin` and a username can no longer address a row.
+  id: string;
+  // identity_status = bound | unresolved | ambiguous (owner Decision 2,
+  // 2026-09-13) — the account's EXPLICIT, stored migration state:
+  //   bound      — it holds its canonical identity tuple;
+  //   unresolved — it does not, and none could be derived offline (an admin can
+  //                disable it if they do not want it bound at the next sign-in);
+  //   ambiguous  — deriving it would have collided with another account, so it was
+  //                never merged and a human has to decide.
+  identity_status?: string;
+  // identity_reason = why, for unresolved/ambiguous (provenance-unreconstructable
+  // | issuer-unavailable | tuple-claimed | unknown-auth-source | pending-backfill).
+  identity_reason?: string;
   username: string;
   role: string;
   email?: string;

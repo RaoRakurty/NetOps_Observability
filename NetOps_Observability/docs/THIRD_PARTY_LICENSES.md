@@ -8,7 +8,7 @@
 Correlix core is licensed under the Apache License, Version 2.0. Commercial add-on modules are licensed under the Correlix Enterprise License (LicenseRef-Correlix-Enterprise) — see LICENSING.md.
 
 The licence texts ship with the source as `LICENSES/Apache-2.0.txt` and
-`LICENSES/Correlix-Enterprise.txt`. `LICENSING.md` maps every directory to
+`LICENSES/LicenseRef-Correlix-Enterprise.txt`. `LICENSING.md` maps every directory to
 one of the two. Everything else in this file concerns THIRD-PARTY software
 Correlix redistributes, which keeps its own licence and its own obligations.
 

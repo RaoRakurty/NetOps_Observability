@@ -164,7 +164,7 @@ cross-tenant leak is a defect in every edition.
 |---|---|
 | Which directory is which | [`LICENSING.md`](LICENSING.md) (generated from `licensing-policy.json`) |
 | Apache-2.0 text | [`LICENSES/Apache-2.0.txt`](LICENSES/Apache-2.0.txt) |
-| Correlix Enterprise License | [`LICENSES/Correlix-Enterprise.txt`](LICENSES/Correlix-Enterprise.txt) — **text not yet drafted; see the file** |
+| Correlix Enterprise License | [`LICENSES/LicenseRef-Correlix-Enterprise.txt`](LICENSES/LicenseRef-Correlix-Enterprise.txt) — **text not yet drafted; see the file** |
 | What each tier gets | [`docs/design/TIERING_PLAN_2026-09-03.md`](docs/design/TIERING_PLAN_2026-09-03.md) |
 | Third-party components | [`NOTICE`](NOTICE), [`docs/THIRD_PARTY_LICENSES.md`](docs/THIRD_PARTY_LICENSES.md) |
 | Contributing (CLA required) | [`CONTRIBUTING.md`](../CONTRIBUTING.md) |

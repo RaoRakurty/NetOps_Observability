@@ -543,6 +543,90 @@ CH_WINDOW_COVERAGE_SLACK_S = 120.0
 CORR_MEM_SETTLE_S = float(os.environ.get("MLX_CORR_MEM_SETTLE_S", "120"))
 CORR_MEM_SETTLE_MAX_S = float(
     os.environ.get("MLX_CORR_MEM_SETTLE_MAX_S", "300"))
+
+# ── VictoriaMetrics memory anchor: TWO end samples, a quiet interval apart ──
+#
+# THE THIRD SERVICE THE GENERIC CLAUSE FALSE-FAILED (tracker 308). Nightly
+# 33727173163 (2026-09-03):
+#
+#   [FAIL] memflat — netops-victoria-1: LEAK SLOPE (cgroup_anon)
+#          195 -> 259 MiB (x1.33 > x1.3) after input stopped
+#
+# Refuted from the ten surviving run artifacts (2026-09-13). The end state is
+# the whole claim and it is unremarkable: 259.2 MiB = 16.3 % of the 1,587 MiB
+# cap, and THREE PASSING runs ended holding MORE (278.7 / 284.5 / 286.1 MiB).
+# The nine prior runs' warm->end ratio is 0.942 … 1.198 (mean 1.071, sd 0.081),
+# so x1.3 sits ~2.8 sd out on a 9-sample base — INSIDE VictoriaMetrics' own
+# run-to-run spread. What moved was the ANCHOR, not the footprint: that run's
+# cold sample (172.4 MiB) was the LOWEST of the ten and its warm (194.6 MiB)
+# the second lowest, so it started unusually light and converged to a mid-range
+# steady state, and the ratio read convergence as slope. It cleared both guards
+# by a hair — x1.3322 vs x1.30, and 64.641 MiB vs the 64 MiB absolute floor.
+#
+# WHY THE ANCHOR IS WRONG HERE, exactly as it was for ClickHouse (page cache in
+# docker stats) and correlation (a draining backlog): VictoriaMetrics' working
+# set MATERIALIZES AFTER INPUT STOPS. Background part merges plus the harness's
+# own post-burst query storm (the accounting phase's `vm_query` calls) populate
+# its tsid / metricName / index-block caches, which are ANON and are not
+# reclaimed. Warm->end therefore measures first-touch materialization, which a
+# 2-minute burst cannot separate from a slow leak at all.
+#
+# THE FIX IS AN HONEST ANCHOR, NOT A WIDER `--mem-factor`. Widening the factor
+# buys one run of quiet and blinds the clause for every service that shares it.
+# Instead VictoriaMetrics gets TWO end samples separated by a QUIET interval —
+# no injection, no harness queries against VM, nothing but the container's own
+# background work:
+#
+#   end1   the ordinary end sample (cgroup anon), taken with input stopped
+#   quiet  VM_MEM_QUIET_S of measured silence, bounded by VM_MEM_QUIET_MAX_S
+#   end2   a second cgroup anon sample
+#   slope  end2/end1 against VM_MEM_QUIET_FACTOR, with the 64 MiB absolute
+#          floor SCALED TO THE INTERVAL (see VM_MEM_QUIET_FLOOR_RATE_B_PER_S)
+#
+# A materialized cache is flat across that interval; a leak keeps climbing.
+# No second sample (or a short one) => UNKNOWN, never PASS and never a LEAK
+# verdict — accusing VM of leaking on evidence that cannot separate a leak from
+# a materialization is the defect itself. The warm->end ratio stays in the
+# evidence UNJUDGED: on 33727173163 it is the x1.33 that false-failed.
+#
+# THE NUMBERS. Quiet interval 90 s: long enough that a leak worth paging for is
+# visible, short enough to add ~1.5 min to a run whose memflat already spends
+# more than that settling correlation. Factor x1.05 is deliberately TIGHT —
+# across a truly quiet interval the honest expectation is zero growth, and the
+# floor, not the ratio, is what keeps the clause off jitter. The floor travels
+# with the interval at 64 MiB per CORR_MEM_SETTLE_S (the file's existing unit of
+# "long enough to tell"), i.e. 48 MiB over the default 90 s = 32 MiB/min =
+# ~1.9 GiB/h, which would eat VM's entire 1,587 MiB cap in under an hour. It is
+# clamped at VM_MEM_QUIET_FLOOR_MIN_B so a misconfigured short interval cannot
+# make the clause hair-trigger.
+VM_MEM_SERVICE = "victoria"
+VM_MEM_QUIET_S = float(os.environ.get("MLX_VM_MEM_QUIET_S", "90"))
+# Bound on the wait itself (§9: all IO/waits bounded). The wait is a sleep, so
+# the budget only matters when a clock jumps; it is still stated, not assumed.
+VM_MEM_QUIET_MAX_S = float(os.environ.get("MLX_VM_MEM_QUIET_MAX_S", "180"))
+# The default is a MODULE CONSTANT, not just an env read, because the offline
+# `--rescore-memflat` path must judge a finished run by the threshold that run
+# was judged by — never by whatever this invocation's environment happens to
+# say. Same reason MEM_FACTOR_RESCORE restates `--mem-factor`'s default.
+VM_MEM_QUIET_FACTOR_DEFAULT = 1.05
+VM_MEM_QUIET_FACTOR = float(
+    os.environ.get("MLX_VM_MEM_QUIET_FACTOR", str(VM_MEM_QUIET_FACTOR_DEFAULT)))
+# 64 MiB per CORR_MEM_SETTLE_S's 120 s, expressed as a rate so the floor scales
+# with the interval instead of being a number that only fits one duration.
+VM_MEM_QUIET_FLOOR_RATE_B_PER_S = 64 * 1024 ** 2 / 120.0
+VM_MEM_QUIET_FLOOR_MIN_B = 32 * 1024 ** 2
+
+
+def vm_quiet_floor_bytes(quiet_s: float) -> float:
+    """The absolute growth floor for a quiet interval of `quiet_s` seconds.
+
+    Module level so the live clause and the offline re-score compute it from
+    one source text, and so a zero/negative interval cannot produce a floor of
+    0 bytes (which would fail on a single page of jitter)."""
+    return max(VM_MEM_QUIET_FLOOR_MIN_B,
+               VM_MEM_QUIET_FLOOR_RATE_B_PER_S * max(0.0, quiet_s))
+
+
 # Parts must come back down after input stops: within +20 % of the preflight
 # MaxPartCountForPartition (or +8 parts, whichever is the larger envelope — a
 # baseline of 3 parts must not fail on a 4th), and never within a factor of two
@@ -1029,6 +1113,31 @@ MIN_FREE_GIB_DEFAULT = 10.0        # V1 section 8(e)
 MAX_LOAD1_DEFAULT = 6.0            # s11 launched at 2.9; s10 at 16-38
 LOADAVG_PATH = "/proc/loadavg"
 GIB = 1024 ** 3
+# SETTLE (tracker 286). A host that is BUSY and a host that is STILL BUSY FROM
+# THE BRING-UP are different facts, and the gate could not tell them apart.
+# `scale-miniladder-nightly` was red every night from 2026-09-06 to 2026-09-12
+# with `host load1 N exceeds the 6.00 bound` at N = 6.91 / 7.18 / 7.48 / 7.78 /
+# 8.09 / 8.24 / 8.55 — every one of them taken seconds after the step that
+# built two vite bundles, ran `install.py --tls=yes` and spent a JVM per topic
+# across 16 topics on a 4-vCPU shared VM. load1 is a ~60 s exponential average,
+# so those readings are the DECAY TAIL of work that had already finished, not
+# concurrent work that would distort the burst.
+#
+# The settle is PATIENCE ONLY — the same contract as `--consumer-settle-seconds`:
+# the bound is never raised, the reading is never fabricated, and the verdict is
+# passed on a REAL reading taken after the wait. If load1 never comes down the
+# run still REFUSES, and the poll trail goes into the evidence so the next
+# diagnosis starts from the decay curve instead of from one number. Raising
+# `--max-load1` instead would assert, with no evidence, that a host at 8.55 does
+# not distort the timing clauses; `--allow-unquiet` would stamp UNQUIET into the
+# evidence and make every future nightly's timing clauses unciteable. Neither is
+# this.
+#
+# DEFAULT 0 = today's behaviour exactly: one reading, instant refusal, nothing
+# touched. Only a caller that knows it has just finished a heavy bring-up opts
+# in.
+HOST_QUIET_SETTLE_SECONDS_DEFAULT = 0
+HOST_QUIET_SETTLE_POLL_S = 10.0
 
 
 def read_load1(path: str | None = None) -> tuple[float, str]:
@@ -1106,6 +1215,93 @@ def host_quiet_problems(readings: dict) -> list[str]:
             f"timing clause (storm-s11 launched at 2.9, storm-s10, excluded for "
             f"environment violation, at 16-38) (--max-load1 / --allow-unquiet)")
     return problems
+
+
+def host_quiet_load_only(readings: dict) -> bool:
+    """True when the ONE thing wrong with these readings is a load1 over the
+    bound — the only violation waiting can fix.
+
+    Disk headroom does not come back by itself, and an UNREADABLE probe is the
+    exact failure this gate exists to stop (nobody was measuring when s10 ran),
+    so neither is settleable and both must refuse at once (16.1).
+    """
+    if readings.get("disk_error") or readings.get("load1_error"):
+        return False
+    if float(readings.get("free_gib", -1)) < float(readings["min_free_gib"]):
+        return False
+    return float(readings.get("load1", -1)) > float(readings["max_load1"])
+
+
+def settle_host_quiet(min_free_gib: float, max_load1: float,
+                      settle_seconds: float, fs_path: str | None = None,
+                      loadavg_path: str | None = None,
+                      sleep=None, clock=None) -> tuple[dict, dict]:
+    """(final readings, settle trail). Wait up to `settle_seconds` for a load1
+    left over from a bring-up to decay under the bound, then judge a REAL
+    reading — see the HOST_QUIET_SETTLE_SECONDS_DEFAULT comment for why this is
+    patience and not a weakened bound.
+
+    The bound is never moved and no reading is ever synthesised: the caller
+    applies `host_quiet_problems()` to whatever comes back, so a host that
+    stays loud still REFUSES. `sleep`/`clock` default to the real ones, bound
+    at CALL time and never at def time (the same rule `read_load1` states for
+    LOADAVG_PATH), so the wait is testable without taking one.
+
+    Trail `outcome` is one of:
+      quiet-on-first-reading  nothing was wrong; no wait was taken
+      no-settle-requested     something was wrong and settling is off (the
+                              default) — today's instant refusal
+      settled                 waited, and a later reading came back quiet
+      timeout                 waited the whole budget and it never did
+      not-settleable          the violation is disk or an unreadable probe
+    """
+    sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+    readings = host_quiet_readings(min_free_gib, max_load1, fs_path, loadavg_path)
+    trail: dict = {"requested_s": float(settle_seconds),
+                   "poll_interval_s": HOST_QUIET_SETTLE_POLL_S,
+                   "waited_s": 0.0,
+                   "polls": [{"at_s": 0.0, "load1": readings["load1"]}],
+                   "outcome": "quiet-on-first-reading"}
+    if not host_quiet_problems(readings):
+        return readings, trail
+    if settle_seconds <= 0:
+        trail["outcome"] = "no-settle-requested"
+        return readings, trail
+    if not host_quiet_load_only(readings):
+        trail["outcome"] = "not-settleable"
+        return readings, trail
+
+    start = clock()
+    while True:
+        remaining = float(settle_seconds) - (clock() - start)
+        if remaining <= 0:
+            trail["waited_s"] = round(clock() - start, 1)
+            trail["outcome"] = "timeout"
+            return readings, trail
+        sleep(min(HOST_QUIET_SETTLE_POLL_S, remaining))
+        readings = host_quiet_readings(min_free_gib, max_load1, fs_path,
+                                       loadavg_path)
+        trail["waited_s"] = round(clock() - start, 1)
+        trail["polls"].append({"at_s": trail["waited_s"],
+                               "load1": readings["load1"]})
+        if not host_quiet_problems(readings):
+            trail["outcome"] = "settled"
+            return readings, trail
+        if not host_quiet_load_only(readings):
+            trail["outcome"] = "not-settleable"
+            return readings, trail
+
+
+def settle_summary(trail: dict) -> str:
+    """One line an operator can act on: how long was waited and what load1 did
+    while we waited. A refusal that says only "8.55 exceeds 6.00" cannot be
+    told apart from one that waited seven minutes and watched it sit there."""
+    curve = " -> ".join(f"{p['load1']:.2f}@{p['at_s']:.0f}s"
+                        for p in trail.get("polls", ()))
+    return (f"host-quiet settle: {trail['outcome']} after "
+            f"{trail.get('waited_s', 0.0):.0f}s of a "
+            f"{trail.get('requested_s', 0.0):.0f}s budget [load1 {curve}]")
 
 
 def run(cmd: list[str], timeout: int, input_text: str | None = None) -> tuple[int, str, str]:
@@ -5185,7 +5381,17 @@ class Harness:
         # else is probed, so the refusal is instant and has touched nothing.
         # See host_quiet_problems(): this refuses BEFORE the leg runs and
         # changes no gate semantics.
-        quiet = host_quiet_readings(self.args.min_free_gib, self.args.max_load1)
+        # Tracker 286: the reading may be the DECAY TAIL of our own bring-up
+        # rather than concurrent work — `--host-quiet-settle-seconds` waits for
+        # it (patience only; the bound is untouched and the verdict is passed
+        # on a real reading taken after the wait).
+        quiet, settle = settle_host_quiet(
+            self.args.min_free_gib, self.args.max_load1,
+            self.args.host_quiet_settle_seconds)
+        quiet["settle"] = settle
+        if settle["outcome"] not in ("quiet-on-first-reading",
+                                     "no-settle-requested"):
+            log(settle_summary(settle))
         quiet_problems = host_quiet_problems(quiet)
         quiet["violations"] = quiet_problems
         if not quiet_problems:
@@ -5209,7 +5415,12 @@ class Harness:
             self.host_quiet = "UNQUIET"
             ev["host_quiet"] = quiet
             self.preflight_ok = False
-            return self.phase("preflight", "FAIL", ev, "; ".join(quiet_problems))
+            notes = "; ".join(quiet_problems)
+            if settle["outcome"] in ("settled", "timeout"):
+                # A refusal that says only "8.55 exceeds 6.00" cannot be told
+                # apart from one that waited and watched it sit there.
+                notes += " | " + settle_summary(settle)
+            return self.phase("preflight", "FAIL", ev, notes)
         ev["host_quiet"] = quiet
 
         states = self.stack.service_states()
@@ -7387,12 +7598,24 @@ class Harness:
         # first-touch materialization from a slow leak. The leak gate proper
         # is the lab's 1000-device/5-minute run and the 72 h soak that
         # docs/scale/CORRELIX_SCALE_TEST_REPORT.md §6 still lists as not run.
+        #
+        # TWO SERVICES DO NOT USE THAT ANCHOR, because their working set is
+        # BUILT after input stops and warm->end reads materialization as slope:
+        # correlation is anchored at `corr_engine_pending == 0` (2026-08-29,
+        # `_memflat_judge_correlation`) and VictoriaMetrics on two end samples a
+        # quiet interval apart (tracker 308, `_memflat_judge_victoria`). Both
+        # report UNKNOWN — never PASS, never LEAK — when their anchor is absent.
         ####################################################################
         """
         settle = self._corr_mem_settle()
         end_stats = self.stack.mem_stats()
         end = {n: v["used"] for n, v in end_stats.items()}
         end_anon = self.stack.anon_sample(self._anon_services())
+        # VictoriaMetrics' second end sample, taken after a QUIET interval
+        # (tracker 308). It runs HERE — immediately after the first end sample
+        # and BEFORE the ClickHouse probes — so nothing this phase does can
+        # touch VM inside the interval.
+        vm_quiet, end_anon_2 = self._vm_mem_quiet()
         cold = self.baseline.get("mem", {})
         warm = self.warm_mem or {}
         cold_anon = self.baseline.get("mem_anon", {}) or {}
@@ -7402,7 +7625,8 @@ class Harness:
         ref_anon = warm_anon or cold_anon
         samples = {"cold": cold, "warm": warm, "end": end, "ref": ref,
                    "cold_anon": cold_anon, "warm_anon": warm_anon,
-                   "end_anon": end_anon, "ref_anon": ref_anon}
+                   "end_anon": end_anon, "ref_anon": ref_anon,
+                   "end_anon_2": end_anon_2, "vm_quiet": vm_quiet}
         rows, problems = [], []
         # Replica discovery by NAME PATTERN, not a hardcoded -1 index: after a
         # `--force-recreate --scale correlation=2` compose numbers replicas
@@ -7411,7 +7635,8 @@ class Harness:
         # replica present in ANY sample is judged; one that appears without an
         # anchor (scaled up mid-run) still fails honestly as missing evidence.
         seen = (set(cold) | set(warm) | set(end)
-                | set(cold_anon) | set(warm_anon) | set(end_anon))
+                | set(cold_anon) | set(warm_anon) | set(end_anon)
+                | set(end_anon_2))
         for svc in MEM_SERVICES:
             pref = f"{self.args.project}-{svc}-"
             names = sorted(n for n in seen
@@ -7423,19 +7648,25 @@ class Harness:
                 if svc == "correlation":
                     self._memflat_judge_correlation(
                         name, svc, samples, end_stats, rows, problems)
+                elif svc == VM_MEM_SERVICE:
+                    self._memflat_judge_victoria(
+                        name, svc, samples, end_stats, rows, problems)
                 else:
                     self._memflat_judge(name, svc, samples, end_stats,
                                         rows, problems)
         ch_ev, ch_problems, ch_summary = self._clickhouse_memory_verdict(rows)
         problems += ch_problems
         corr_summary = self._correlation_memory_summary(rows)
+        vm_summary = self._victoria_memory_summary(rows)
         ev = {"factor": self.args.mem_factor, "anchor": anchor,
               "headroom_percent": self.args.mem_headroom_percent,
               "stateless_services": list(MEM_STATELESS_SERVICES),
               "correlation_settle": settle,
+              "victoria_quiet": vm_quiet,
               "containers": rows, "clickhouse": ch_ev}
         status = "PASS" if not problems else "FAIL"
-        tail = "".join(f" | {s}" for s in (corr_summary, ch_summary) if s)
+        tail = "".join(f" | {s}"
+                       for s in (corr_summary, vm_summary, ch_summary) if s)
         return self.phase("memflat", status, ev,
                           ("; ".join(problems) + tail) if problems else
                           f"all {len(rows)} key containers within x{self.args.mem_factor} "
@@ -7663,6 +7894,181 @@ class Harness:
                 f"settle {'?' if settled is None else f'{settled:.0f}'}s, "
                 f"{r.get('verdict', 'UNKNOWN')})")
         return "correlation " + "; ".join(parts) if parts else ""
+
+    # -- memflat, the VictoriaMetrics anchor ---------------------------------
+    #
+    # THE FALSE FAIL THIS REPLACES (nightly 33727173163, 2026-09-03):
+    #
+    #   [FAIL] memflat — netops-victoria-1: LEAK SLOPE (cgroup_anon)
+    #          195 -> 259 MiB (x1.33 > x1.3) after input stopped
+    #
+    # "after input stopped" was true and, again, beside the point: that is when
+    # VictoriaMetrics' working set is BUILT. See the VM_MEM_QUIET_S header for
+    # the full refutation (259.2 MiB = 16.3 % of cap, three PASSING runs ended
+    # holding more, warm->end mean 1.071 sd 0.081 over nine runs). The anchor is
+    # replaced, not the threshold:
+    #
+    #   end1   the ordinary end sample, cgroup anon, input stopped
+    #   quiet  VM_MEM_QUIET_S of silence — no injection, and this phase touches
+    #          nothing on VM inside it
+    #   end2   a second cgroup anon sample
+    #   slope  end2/end1 vs VM_MEM_QUIET_FACTOR with vm_quiet_floor_bytes()
+    #
+    # No second sample, or an interval shorter than asked for => UNKNOWN,
+    # carrying anon_end / anon_end_second / the unjudged warm->end ratio.
+    # UNKNOWN is never PASS (it stays a `problems` entry, like every other
+    # unmeasurable clause in this file) and it is never a LEAK either.
+    def _vm_mem_quiet(self) -> tuple[dict, dict]:
+        """The quiet interval, then VictoriaMetrics' SECOND end sample.
+
+        Returns (evidence, {container -> anon bytes}). A non-positive
+        MLX_VM_MEM_QUIET_S is the explicit opt-out: it yields no second sample,
+        and the judge then reports UNKNOWN rather than a pass."""
+        ev: dict = {"quiet_s": VM_MEM_QUIET_S, "budget_s": VM_MEM_QUIET_MAX_S,
+                    "factor": VM_MEM_QUIET_FACTOR,
+                    "floor_bytes": vm_quiet_floor_bytes(VM_MEM_QUIET_S),
+                    "waited_s": 0.0, "second_sample": False, "note": ""}
+        if VM_MEM_SERVICE not in MEM_SERVICES:
+            # Nobody is going to be judged on it, so the run does not pay for
+            # it. Spending 90 s of wall clock to sample a container this phase
+            # will not look at is the kind of cost a gate must not impose.
+            ev["note"] = (f"{VM_MEM_SERVICE} is not in MEM_SERVICES — no quiet "
+                          f"interval was taken and nothing is judged on it")
+            return ev, {}
+        if VM_MEM_QUIET_S <= 0:
+            ev["note"] = (
+                "MLX_VM_MEM_QUIET_S <= 0: the quiet interval is DISABLED, so "
+                "VictoriaMetrics has no second end sample and its leak clause "
+                "is UNKNOWN — which is not a pass")
+            warn(f"memflat: {ev['note']}")
+            return ev, {}
+        if VM_MEM_QUIET_MAX_S < VM_MEM_QUIET_S:
+            warn(f"memflat: MLX_VM_MEM_QUIET_MAX_S "
+                 f"({VM_MEM_QUIET_MAX_S:.0f}s) is below the quiet interval it "
+                 f"bounds ({VM_MEM_QUIET_S:.0f}s) — VictoriaMetrics' clause "
+                 f"will report UNKNOWN on a short interval")
+        # Never a silent wait (§16): the operator is told what the pause buys.
+        log(f"memflat: holding {VM_MEM_QUIET_S:.0f}s of QUIET before "
+            f"VictoriaMetrics' second end sample — no injection and no harness "
+            f"query against VM inside it. A materialized cache is flat across "
+            f"this interval; a leak keeps climbing (tracker 308)")
+        t0 = time.monotonic()
+        while True:
+            waited = time.monotonic() - t0
+            if waited >= VM_MEM_QUIET_S or waited >= VM_MEM_QUIET_MAX_S:
+                break
+            time.sleep(min(5.0, max(0.5, VM_MEM_QUIET_S - waited)))
+        ev["waited_s"] = round(time.monotonic() - t0, 1)
+        second = self.stack.anon_sample((VM_MEM_SERVICE,))
+        ev["second_sample"] = True
+        ev["containers"] = dict(second)
+        return ev, second
+
+    def _memflat_judge_victoria(self, name: str, svc: str, samples: dict,
+                                end_stats: dict, rows: list,
+                                problems: list) -> None:
+        """Judge ONE VictoriaMetrics container on the two end samples."""
+        quiet = samples.get("vm_quiet") or {}
+        quiet_s = float(quiet.get("quiet_s", VM_MEM_QUIET_S))
+        waited = float(quiet.get("waited_s", 0.0))
+        cold = samples["cold_anon"].get(name, -1)
+        warm = samples["warm_anon"].get(name, -1)
+        first = samples["end_anon"].get(name, -1)
+        second = (samples.get("end_anon_2") or {}).get(name, -1)
+        limit = end_stats.get(name, {}).get("limit", -1)
+        # The OOM clause takes the WORST of the two end samples: the question it
+        # asks is how close this container came to its cap after input stopped,
+        # which the later sample can understate.
+        worst = max(first, second)
+        pct_limit = (round(100.0 * worst / limit, 1)
+                     if limit > 0 and worst > 0 else None)
+        ratio = self._ratio(second, first)
+        floor = vm_quiet_floor_bytes(waited if waited > 0 else quiet_s)
+        row = {"container": name, "service": svc,
+               "instrument": "cgroup_anon",
+               "anchor": "post-burst quiet interval",
+               "cold_bytes": cold, "warm_bytes": warm,
+               "end_bytes": first, "end_bytes_second": second,
+               "limit_bytes": limit, "pct_of_limit": pct_limit,
+               "anon_end": first, "anon_end_second": second,
+               "quiet_interval_s": quiet_s, "quiet_waited_s": waited,
+               "quiet_factor": VM_MEM_QUIET_FACTOR,
+               "quiet_floor_bytes": floor,
+               "ratio_vs_anchor": ratio,
+               # The OLD anchor, kept as evidence and never judged: on nightly
+               # 33727173163 it read x1.33 and meant "the caches materialized
+               # after input stopped", not "VictoriaMetrics leaked".
+               "ratio_warm_to_end_unjudged": self._ratio(first, warm),
+               "ratio_cold_to_end": self._ratio(first, cold),
+               # Page cache and slab put this figure well above the container's
+               # real footprint — reported, never judged (2026-08-29).
+               "docker_stats_end_bytes": samples["end"].get(name, -1),
+               "docker_stats_ratio_unjudged": self._ratio(
+                   samples["end"].get(name, -1), samples["ref"].get(name, -1)),
+               "verdict": "UNKNOWN"}
+        rows.append(row)
+        numbers = (f"anon_end {mib(first)} -> anon_end_second {mib(second)} "
+                   f"after {waited:.0f}s of quiet (warm anchor {mib(warm)}, "
+                   f"x{row['ratio_warm_to_end_unjudged']} warm->end, UNJUDGED)")
+        # Anchor-independent, exactly as for correlation: a container at 90 % of
+        # its cap is one burst from a kill whatever its slope says.
+        if pct_limit is not None and pct_limit > self.args.mem_headroom_percent:
+            problems.append(
+                f"{name}: {worst / 1024**2:.0f} MiB (cgroup_anon) is "
+                f"{pct_limit}% of its {limit / 1024**2:.0f} MiB cap "
+                f"(> {self.args.mem_headroom_percent}%) — one burst from an "
+                f"OOM kill")
+        if first <= 0:
+            problems.append(
+                f"{name}: no cgroup_anon end sample (end {first}) — cgroup "
+                f"memory.stat unreadable, and docker stats cannot substitute "
+                f"for it (it is mostly page cache); the leak clause has no "
+                f"measurement to judge")
+            return
+        if second <= 0:
+            problems.append(
+                f"{name}: LEAK SLOPE UNKNOWN — no SECOND end sample across the "
+                f"{quiet_s:.0f}s quiet interval "
+                f"({quiet.get('note') or 'cgroup memory.stat unreadable'}), so "
+                f"the only slope available is warm->end, which cannot separate "
+                f"a cache that materializes after input stops from a leak; "
+                f"{numbers}. This is NOT judged")
+            return
+        if waited + 0.5 < quiet_s:
+            problems.append(
+                f"{name}: LEAK SLOPE UNKNOWN — the second end sample is only "
+                f"{waited:.0f}s past the first (needs {quiet_s:.0f}s of quiet, "
+                f"budget {quiet.get('budget_s', VM_MEM_QUIET_MAX_S):.0f}s); "
+                f"{numbers}")
+            return
+        row["verdict"] = "LEAK" if (
+            ratio is not None and ratio > VM_MEM_QUIET_FACTOR
+            and (second - first) > floor) else "FLAT"
+        if row["verdict"] == "LEAK":
+            problems.append(
+                f"{name}: LEAK SLOPE (cgroup_anon, anchored on the post-burst "
+                f"quiet interval) {first / 1024**2:.0f} -> "
+                f"{second / 1024**2:.0f} MiB (x{ratio:.2f} > "
+                f"x{VM_MEM_QUIET_FACTOR}, +{(second - first) / 1024**2:.0f} MiB "
+                f"> the {floor / 1024**2:.0f} MiB floor for this interval) over "
+                f"{waited:.0f}s of QUIET — this is growth with no input and no "
+                f"query to materialize for")
+
+    def _victoria_memory_summary(self, rows: list) -> str:
+        """Both end samples, on the phase line, for every VM container."""
+        parts = []
+        for r in rows:
+            if r.get("service") != VM_MEM_SERVICE:
+                continue
+            ratio = r.get("ratio_vs_anchor")
+            parts.append(
+                f"{r['container']} anon {mib(r.get('warm_bytes', -1))} at "
+                f"input stop -> {mib(r.get('anon_end', -1))} end -> "
+                f"{mib(r.get('anon_end_second', -1))} after "
+                f"{r.get('quiet_waited_s', 0.0):.0f}s quiet "
+                f"(x{'?' if ratio is None else ratio} across the quiet "
+                f"interval, {r.get('verdict', 'UNKNOWN')})")
+        return "victoria " + "; ".join(parts) if parts else ""
 
     # -- memflat, ClickHouse clauses (2) and (3) -----------------------------
     #
@@ -8675,6 +9081,7 @@ class Harness:
                 "host_quiet": self.host_quiet,
                 "min_free_gib": self.args.min_free_gib,
                 "max_load1": self.args.max_load1,
+                "host_quiet_settle_seconds": self.args.host_quiet_settle_seconds,
                 "allow_unquiet": bool(self.args.allow_unquiet),
                 "tls_variant": self.stack.tls,
                 "base_url": self.stack.base_url,
@@ -9016,6 +9423,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                          f"(default {MAX_LOAD1_DEFAULT}). storm-s11 launched at "
                          f"2.9; storm-s10, excluded for environment violation, "
                          f"at 16-38")
+    ap.add_argument("--host-quiet-settle-seconds", type=float,
+                    default=HOST_QUIET_SETTLE_SECONDS_DEFAULT,
+                    help=f"bounded wait for a load1 left over from a heavy "
+                         f"bring-up to decay below --max-load1 before the gate "
+                         f"judges it (default "
+                         f"{HOST_QUIET_SETTLE_SECONDS_DEFAULT:g}, i.e. off: one "
+                         f"reading and an instant refusal). PATIENCE ONLY — the "
+                         f"bound is never raised and a host that stays loud "
+                         f"still refuses, with the load1 poll trail in the "
+                         f"evidence. Only a load1 violation is waited on; a "
+                         f"disk-headroom violation or an unreadable probe "
+                         f"refuses at once (tracker 286)")
     ap.add_argument("--allow-unquiet", action="store_true",
                     help="proceed despite a --min-free-gib / --max-load1 "
                          "violation, recording UNQUIET in the preflight evidence "
@@ -9052,7 +9471,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="OFFLINE RE-SCORE, no run. Re-judges a FINISHED run's memflat "
              "verdict from its own report.json + correlation-completion.json "
              "and a READ-ONLY system.metric_log query for that run's window, "
-             "using the current clauses. Writes "
+             "using the current clauses. A run whose report lacks the evidence "
+             "a current clause needs (VictoriaMetrics' second end sample, "
+             "correlation's per-replica curve) re-scores UNKNOWN, never PASS. "
+             "Writes "
              f"{RESCORE_FILE} into RUN_DIR and NEVER touches the run's own "
              "report files. Exit 0 = re-scored PASS, 1 = not PASS, 2 = could "
              "not re-score.")
@@ -9220,6 +9642,18 @@ def main(argv: list[str]) -> int:
               f"{args.max_load1}) -> "
               f"{'QUIET' if not host_quiet_problems(_q) else 'REFUSE'}"
               f"{' [--allow-unquiet: would PROCEED, stamped UNQUIET]' if args.allow_unquiet else ''}")
+        # The dry run touches nothing, so it does not SPEND the settle budget —
+        # it reports it, because a REFUSE printed here is not what the real run
+        # would decide when a settle is configured.
+        print("  host quiet settle: "
+              + (f"the real run waits up to "
+                 f"{args.host_quiet_settle_seconds:.0f}s (polling every "
+                 f"{HOST_QUIET_SETTLE_POLL_S:.0f}s) for a load1 over the bound "
+                 f"to decay; a disk violation or an unreadable probe still "
+                 f"refuses at once"
+                 if args.host_quiet_settle_seconds > 0 else
+                 "off — one reading, instant refusal "
+                 "(--host-quiet-settle-seconds)"))
         print(f"  phase 1 preflight: REFUSES on any leftover {DEVICE_PREFIX_ROOT} "
               f"device of any run id ({ALLOW_FOREIGN_RESIDUE_ENV}=1 overrides), "
               f"{len(REQUIRED_SERVICES)} required services, "
@@ -9246,7 +9680,12 @@ def main(argv: list[str]) -> int:
               f"{args.mem_headroom_percent}% of their own caps; CORRELATION is "
               f"anchored instead on the first sample where each replica reports "
               f"corr_engine_pending==0, judged {CORR_MEM_SETTLE_S:.0f}s later "
-              f"(no such sample = UNKNOWN, never a leak verdict); clickhouse also "
+              f"(no such sample = UNKNOWN, never a leak verdict); VICTORIA on "
+              f"TWO end samples {VM_MEM_QUIET_S:.0f}s of quiet apart "
+              f"(x{VM_MEM_QUIET_FACTOR} + a "
+              f"{vm_quiet_floor_bytes(VM_MEM_QUIET_S) / 1024**2:.0f} MiB floor "
+              f"across that interval; no second sample = UNKNOWN, never a leak "
+              f"verdict); clickhouse also "
               f"zero new {CH_MEM_ERROR} (system.errors delta, cross-checked "
               f"against system.error_log — query_log misses background raises) "
               f"and p99 MemoryTracking < {CH_MEMORY_TRACKING_MAX_PCT}% of "
@@ -9304,11 +9743,18 @@ def main(argv: list[str]) -> int:
 # ── offline re-score of a finished run's memflat verdict ───────────────────
 #
 # WHY THIS EXISTS. The two memflat defects fixed on 2026-08-29 (the ClickHouse
-# metric_log plausibility filter and correlation's pending-zero anchor) each
-# turned a live FAIL into what the evidence actually says. A run costs an hour;
-# re-running one to find out what the corrected clauses say about it is not the
-# answer. This re-scores a FINISHED run from its own saved evidence plus a
-# read-only `system.metric_log` query for that run's window.
+# metric_log plausibility filter and correlation's pending-zero anchor) — and
+# the third, VictoriaMetrics' quiet-interval anchor (tracker 308, 2026-09-13) —
+# each turned a live FAIL into what the evidence actually says. A run costs an
+# hour; re-running one to find out what the corrected clauses say about it is
+# not the answer. This re-scores a FINISHED run from its own saved evidence plus
+# a read-only `system.metric_log` query for that run's window.
+#
+# WHAT IT WILL NOT DO is invent the evidence a corrected clause needs. The
+# VictoriaMetrics clause is judged on a second end sample taken after a QUIET
+# interval, and a quiet interval cannot be reconstructed from a finished run:
+# a report without that sample re-scores as UNKNOWN, never as a PASS, and never
+# as the LEAK the superseded warm->end ratio claimed.
 #
 # It NEVER writes to the run's own report files — the original verdict is the
 # record of what the gate said at the time — only `memflat-rescore.md` beside
@@ -9318,6 +9764,14 @@ def main(argv: list[str]) -> int:
 # p99, docs/scale/P2_CLICKHOUSE_PEAK_S06_2026-08-29.md). Two files that say
 # different things about the same run must not share a name — a v2 re-score
 # silently overwriting a v1 one would destroy the record of what changed.
+# The VictoriaMetrics clause (tracker 308, 2026-09-13) joined this file WITHOUT
+# a v3 bump, deliberately. The v1 -> v2 bump existed because the replacement
+# clause CONTRADICTED v1 about the same numbers (the metric_log plausibility
+# filter), and the superseded claim had to survive. This clause contradicts
+# nothing already in a v2 document: it ADDS a section about a container v2 was
+# silent on, and for a run that predates the second end sample it says UNKNOWN
+# rather than re-reading the warm->end ratio v2 never judged. Overwriting a v2
+# file with a strict superset of itself destroys no record.
 RESCORE_FILE = "memflat-rescore-v2.md"
 # `--mem-factor`'s default, restated for the offline path: a re-score judges a
 # FINISHED run, so it must use the threshold that run was judged by, not
@@ -9542,6 +9996,99 @@ def _rescore_correlation(run_dir: str, memflat_ev: dict) -> tuple[dict, list[str
     return out, problems
 
 
+def _rescore_number(value: object, default: float = -1.0) -> float:
+    """One number out of a SAVED report, which is untrusted input like any other
+    (§3): a null, a string or a list becomes `default`, never a crash and never
+    a plausible-looking 0."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return float(value)
+
+
+def _rescore_victoria(memflat_ev: dict) -> tuple[dict, list[str]]:
+    """Clause (1) for VictoriaMetrics, on the two end samples (tracker 308).
+
+    Offline and evidence-only: the quiet interval cannot be reconstructed after
+    the fact, so either the run recorded a second end sample or the clause is
+    UNKNOWN. A report that carries only the warm->end ratio re-scores as
+    UNKNOWN, NOT as a pass and NOT as the LEAK that ratio once claimed — that
+    ratio is exactly the instrument this clause replaced.
+    """
+    rows = [r for r in (memflat_ev.get("containers") or [])
+            if r.get("service") == VM_MEM_SERVICE
+            or f"-{VM_MEM_SERVICE}-" in str(r.get("container", ""))]
+    out: dict = {"containers": {}, "factor": VM_MEM_QUIET_FACTOR_DEFAULT}
+    problems: list[str] = []
+    if not rows:
+        out["source"] = "none"
+        problems.append(
+            f"UNKNOWN: the run's memflat evidence carries no {VM_MEM_SERVICE} "
+            f"container at all, so there is nothing to re-score")
+        return out, problems
+    scored = [r for r in rows if r.get("anchor") == "post-burst quiet interval"]
+    if not scored:
+        out["source"] = "none"
+        for r in rows:
+            out["containers"][str(r.get("container", "?"))] = {
+                "anon_end": int(_rescore_number(r.get("end_bytes"))),
+                "anon_end_second": -1,
+                "ratio_warm_to_end_unjudged":
+                    _rescore_number(r.get("ratio_vs_anchor"), 0.0) or None,
+                "verdict": "UNKNOWN"}
+        problems.append(
+            "UNKNOWN: this run predates the post-burst quiet interval (added "
+            "2026-09-13, tracker 308), so VictoriaMetrics has no second end "
+            "sample and the interval cannot be reconstructed offline. The "
+            "warm->end ratio in the run's own report is NOT reused: it cannot "
+            "separate caches that materialize after input stops (background "
+            "part merges plus the harness's own post-burst query storm) from a "
+            "leak, which is why it was replaced. Re-run to get a judged "
+            "VictoriaMetrics slope")
+        return out, problems
+    out["source"] = ("memflat evidence (already scored on the two end samples "
+                     "either side of the quiet interval)")
+    for r in scored:
+        name = str(r.get("container", "?"))
+        first = _rescore_number(r.get("anon_end", r.get("end_bytes")))
+        second = _rescore_number(
+            r.get("anon_end_second", r.get("end_bytes_second")))
+        quiet_s = _rescore_number(r.get("quiet_interval_s"), VM_MEM_QUIET_S)
+        waited = _rescore_number(r.get("quiet_waited_s"), 0.0)
+        ratio = (round(second / first, 3) if first > 0 and second > 0 else None)
+        rec = {"anon_end": int(first), "anon_end_second": int(second),
+               "quiet_interval_s": quiet_s, "quiet_waited_s": waited,
+               "ratio_vs_anchor": ratio,
+               "ratio_warm_to_end_unjudged":
+                   r.get("ratio_warm_to_end_unjudged"),
+               "verdict": "UNKNOWN"}
+        out["containers"][name] = rec
+        if ratio is None:
+            problems.append(
+                f"{name}: UNKNOWN — the run recorded the quiet interval but "
+                f"not both end samples (anon_end {mib(first)}, "
+                f"anon_end_second {mib(second)})")
+            continue
+        if waited + 0.5 < quiet_s:
+            problems.append(
+                f"{name}: UNKNOWN — the second end sample is only "
+                f"{waited:.0f}s past the first, short of the {quiet_s:.0f}s "
+                f"the clause asks for")
+            continue
+        # The threshold the run was judged by, never this invocation's env —
+        # same rule as MEM_FACTOR_RESCORE.
+        floor = vm_quiet_floor_bytes(waited)
+        leak = (ratio > VM_MEM_QUIET_FACTOR_DEFAULT
+                and (second - first) > floor)
+        rec["verdict"] = "LEAK" if leak else "FLAT"
+        if leak:
+            problems.append(
+                f"{name}: LEAK SLOPE across the post-burst quiet interval "
+                f"({mib(first)} -> {mib(second)}, x{ratio} > "
+                f"x{VM_MEM_QUIET_FACTOR_DEFAULT}, +{mib(second - first)} > the "
+                f"{mib(floor)} floor for {waited:.0f}s)")
+    return out, problems
+
+
 def rescore_memflat(args: argparse.Namespace) -> int:
     """`--rescore-memflat DIR`. Read-only; exit 0 PASS, 1 not-PASS, 2 refused."""
     run_dir = args.rescore_memflat
@@ -9576,7 +10123,9 @@ def rescore_memflat(args: argparse.Namespace) -> int:
     stack = Stack(args.env_file, args.base_url, args.project)
     ch_ev, ch_problems = _rescore_clickhouse(stack, start, end)
     corr_ev, corr_problems = _rescore_correlation(run_dir, memflat_ev)
-    verdict = "PASS" if not (ch_problems or corr_problems) else "FAIL/UNKNOWN"
+    vm_ev, vm_problems = _rescore_victoria(memflat_ev)
+    verdict = ("PASS" if not (ch_problems or corr_problems or vm_problems)
+               else "FAIL/UNKNOWN")
     lines = [
         f"# memflat re-score — {os.path.basename(run_dir)}",
         "",
@@ -9636,6 +10185,21 @@ def rescore_memflat(args: argparse.Namespace) -> int:
             f"(x{rec.get('ratio_vs_anchor')}, {rec.get('verdict')})")
     lines += ["", "correlation: " + ("PASS" if not corr_problems
                                      else "; ".join(corr_problems)), ""]
+    lines += [("## clause (1) — VictoriaMetrics, two end samples a quiet "
+               "interval apart"), "",
+              f"* source: {vm_ev.get('source', 'none')}",
+              (f"* factor: "
+               f"x{vm_ev.get('factor', VM_MEM_QUIET_FACTOR_DEFAULT)} with the "
+               f"64 MiB floor scaled to the interval")]
+    for name, rec in sorted(vm_ev.get("containers", {}).items()):
+        lines.append(
+            f"* {name}: anon_end {mib(rec.get('anon_end', -1))} -> "
+            f"anon_end_second {mib(rec.get('anon_end_second', -1))} after "
+            f"{rec.get('quiet_waited_s', 0.0):.0f}s of quiet "
+            f"(x{rec.get('ratio_vs_anchor')}, {rec.get('verdict')}; "
+            f"warm->end x{rec.get('ratio_warm_to_end_unjudged')} UNJUDGED)")
+    lines += ["", "victoria: " + ("PASS" if not vm_problems
+                                  else "; ".join(vm_problems)), ""]
     doc = "\n".join(lines)
     out_path = os.path.join(run_dir, RESCORE_FILE)
     with open(out_path, "w", encoding="utf-8") as f:

@@ -160,6 +160,11 @@ WHAT IT DOES
   PHASE 2 (qualification)
     REQUIRED
       Q1  correlation consumer joined its group
+      Q1b every REQUIRED correlation lane is subscribable — the engine's own
+          per-lane authorization report (corr_required_topic_unavailable).
+          Membership alone cannot see this: aiokafka resolves the whole
+          subscription at start(), so ONE refused lane means the engine
+          consumes nothing on all of them (tracker 309)
       Q2  every netops-router-* consumer group has a live member
       Q3  correlation lag is draining, not strictly increasing
       Q4  vector-aggregator sinks are emitting events
@@ -1074,6 +1079,63 @@ elif poll_until "Q1 correlation consumer" probe_q1; then
 else
   record FAIL REQUIRED "Q1 correlation consumer joined" \
     "no live member of consumer group 'netops-correlation' within ${TIMEOUT_SEC}s ($PROBE_DETAIL). This is the exact 2026-09-02 shape: the container is 'healthy' and the engine is consuming NOTHING. Check its logs for TopicAuthorizationFailedError / UnknownTopicOrPartitionError — one bad topic abandons the whole subscription."
+fi
+
+# --- Q1b: every REQUIRED correlation lane is AUTHORIZED ---------------------
+# Q1 proves a member joined the group. That is necessary and not sufficient: the
+# engine resolves its whole subscription at start(), and aiokafka's
+# `_wait_topics` is all-or-nothing — so a single REQUIRED lane the broker refuses
+# means the engine consumes NOTHING while the group looks alive on the next
+# successful round. The measured case is tracker 309:
+# `TopicAuthorizationFailedError: [Error 29] ... netops.controller_events` in the
+# scale-miniladder nightly, which NOTHING judged — not the harness, not a rule,
+# not this gate. Q6 greps the logs for it afterwards, but a log grep is floored
+# out of the install's own bootstrap window and says nothing about the state NOW.
+#
+# The engine publishes the state directly (tracker 309):
+#   corr_required_topic_unavailable{topic,reason}   one series per refused lane,
+#                                                   absent when healthy;
+#   corr_required_topic_unavailable_count           ALWAYS published, 0 = healthy.
+# The count is what makes a PASS meaningful: the labelled gauge is absent both
+# when nothing is wrong and when the deployed image predates it, and a gate that
+# could not tell those apart would rubber-stamp the second. So absence of the
+# count is a SKIP with the reason named, never a PASS.
+Q1B_COUNT='max(corr_required_topic_unavailable_count)'
+Q1B_TOPICS='corr_required_topic_unavailable > 0'
+Q1B_BLOCKED=''
+# shellcheck disable=SC2329  # invoked indirectly by poll_until "$@"
+probe_q1b() {
+  local v
+  if ! v="$(vm_scalar "$Q1B_COUNT" 2>&1)"; then
+    PROBE_DETAIL="$v"
+    return 1
+  fi
+  if ! is_num "$v"; then PROBE_DETAIL="non-numeric value '$v'"; return 1; fi
+  if [ "${v%%.*}" = "0" ]; then
+    Q1B_BLOCKED=''
+    PROBE_DETAIL="$v"
+    return 0
+  fi
+  # Name them. `|| true` only neutralizes an empty label read; the FAIL detail
+  # below says "<could not read>" rather than pretending the set is empty.
+  Q1B_BLOCKED="$(vm_labels "$Q1B_TOPICS" topic | tr '\n' ' ')" || Q1B_BLOCKED=''
+  PROBE_DETAIL="$v refused lane(s): ${Q1B_BLOCKED:-<could not read the topic labels>}"
+  return 1
+}
+if [ "$METRICS_OK" -eq 0 ]; then
+  record SKIP REQUIRED "Q1b correlation lanes authorized" "$VICTORIA_SKIP_REASON"
+elif ! vm_scalar "$Q1B_COUNT" >/dev/null 2>&1; then
+  # Deliberately BEFORE the poll: polling for a series that structurally does not
+  # exist would burn the whole window and then report a timeout, which reads as a
+  # fault in the engine rather than in what we can see.
+  record SKIP REQUIRED "Q1b correlation lanes authorized" \
+    "corr_required_topic_unavailable_count does not exist in VictoriaMetrics. Either the deployed correlation image predates tracker 309 (the gauge ships with it) or VM is not scraping job=\"correlation\" — check src/config/vmscrape*.yml. Per-lane authorization CANNOT be evaluated; 'I could not look' is not 'nothing is wrong'."
+elif poll_until "Q1b correlation lane authorization" probe_q1b; then
+  record PASS REQUIRED "Q1b correlation lanes authorized" \
+    "the engine reports every REQUIRED lane subscribable — corr_required_topic_unavailable_count = $PROBE_DETAIL"
+else
+  record FAIL REQUIRED "Q1b correlation lanes authorized" \
+    "the correlation engine cannot subscribe to $PROBE_DETAIL after ${TIMEOUT_SEC}s. aiokafka resolves the whole subscription at start(), so ONE refused REQUIRED lane means the engine consumes NOTHING on ANY lane — the 2026-08-16 / 2026-09-02 shape, and tracker 309's netops.controller_events. reason=unauthorized: the correlation principal has no Read+Describe grant — apply the SEC-007 matrix again by piping deployment/docker/kafka/apply-acls.sh into the broker (idempotent, and it now reads every correlation grant back; PHASE 1 of this very script does it). reason=absent: the topic was never created, which is kafka-init's job. The engine's /healthz consumer.subscription.principal names the principal the broker refused."
 fi
 
 # --- Q2: every netops-router-* group has a member ---------------------------

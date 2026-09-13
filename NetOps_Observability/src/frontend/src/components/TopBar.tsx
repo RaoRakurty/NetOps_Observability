@@ -2,6 +2,7 @@
 // Copyright 2026 Correlix
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { userLabel } from "../lib/userLabel";
 import { AuthUser, Health } from "../services/api";
 import { omniSearch, groupHits, OmniHit, OmniKind, OMNI_KIND_ICON, OMNI_KIND_TAG, OMNI_KIND_LABEL } from "../lib/omniSearch";
 import { useShell } from "../context/shell";
@@ -269,14 +270,14 @@ export default function TopBar({ health, user, onLogout, onChangePassword, onTwo
         {!hideUserMenu && (
         <div className="user-menu" ref={menuRef} onKeyDown={onMenuKeyDown}>
           <button className="user-btn" onClick={() => setMenuOpen((o) => !o)} aria-haspopup="menu" aria-expanded={menuOpen}>
-            <span className="avatar" aria-hidden="true">{user.username.slice(0, 1).toUpperCase()}</span>
-            <span className="user-name">{user.username}</span>
+            <span className="avatar" aria-hidden="true">{userLabel(user).slice(0, 1).toUpperCase()}</span>
+            <span className="user-name">{userLabel(user)}</span>
             <span style={{ opacity: 0.6, fontSize: 10 }} aria-hidden="true">▾</span>
           </button>
           {menuOpen && (
             <div className="menu-pop">
               <div className="menu-head">
-                {user.username}
+                {userLabel(user)}
                 <span style={{ color: "var(--muted)" }}> · {user.role}</span>
                 <ScopeBadge user={user} />
               </div>

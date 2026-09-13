@@ -375,3 +375,34 @@ describe("measurement policy", () => {
     await waitFor(() => expect(screen.getByText(/Changing the policy needs write access\./)).toBeTruthy());
   });
 });
+
+// ── the adjacency evidence the SERVER could not read (tracker 290) ──────────
+//
+// The neighbour index is the second rung of the target-derivation ranking, so
+// with no index every interface falls through to the reachability anchor. That
+// fallback used to be invisible: the row said "Reachability anchor 1.1.1.1" and
+// nothing said the peer across the link had never been looked for. The failure
+// is SAFE — it fails closed and discloses nothing — and that is exactly what let
+// it survive. The backend now says so on the payload; this is the half that puts
+// it in front of the reader.
+
+describe("a WAN projection whose adjacency evidence never arrived", () => {
+  const NOTE =
+    "Adjacency evidence could not be read, so directly-connected peers were not resolved — interfaces shown against a reachability anchor may in fact have a peer, and are not confirmed to be internet-facing.";
+
+  it("says so beside the table, and still shows the table", async () => {
+    mockApi.wanInterfaces.mockResolvedValue({ interfaces: [], degraded: [NOTE] });
+    render(<WanCircuits />);
+
+    const alert = await waitFor(() => screen.getByTestId("wan-degraded"));
+    expect(alert).toHaveAttribute("role", "alert");
+    expect(alert.textContent).toMatch(/reachability anchor/i);
+    expect(screen.getByRole("heading", { name: "WAN interfaces" })).toBeTruthy();
+  });
+
+  it("says nothing on a healthy read", async () => {
+    render(<WanCircuits />);
+    await waitFor(() => expect(mockApi.wanInterfaces).toHaveBeenCalled());
+    expect(screen.queryByTestId("wan-degraded")).toBeNull();
+  });
+});

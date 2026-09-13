@@ -44,7 +44,12 @@ func newTestServerState(t *testing.T) (*httptest.Server, *server) {
 			t.Fatal(err)
 		}
 	}
-	us, err := users.NewFileStore(dir+"/users.json", userDeps())
+	// Tracker 300 §2.6: the harness wires the legacy-bind reporter exactly as
+	// newServer does (the store is built FROM the sink, the sink is bound to the
+	// server afterwards), so the audit event and the counter are provable here
+	// rather than only in production.
+	identitySink := &identityAuditSink{}
+	us, err := users.NewFileStore(dir+"/users.json", userDepsWith(identitySink))
 	must(err)
 	rs, err := newRoleStore(dir + "/roles.json")
 	must(err)
@@ -93,6 +98,7 @@ func newTestServerState(t *testing.T) (*httptest.Server, *server) {
 	// mechanism and the semantics.
 	s.entitlements = licence.NewUnlimitedService()
 	// LICENCE-END
+	identitySink.bind(s.onIdentityLegacyBind)
 	must(us.SeedAdmin("admin", "Passw0rd!2345"))
 	s.backfillBindings() // PBAC Phase A: mirror seeded users into role_bindings
 	// DATA-PROTECTION: the routes are registered off s.dataProtect, so the
@@ -185,17 +191,17 @@ func TestLoginBadCredentials(t *testing.T) {
 func TestLoginDisabledAccountRejected(t *testing.T) {
 	srv := newTestServer(t)
 	admin := login(t, srv, "admin", "Passw0rd!2345")
-	if st, b := do(t, srv, "POST", "/api/users", admin.Token, map[string]string{
+	// Tracker 300: /api/users/{id} is keyed by the PRINCIPAL ID the create
+	// response returns, never by the login name.
+	lockmeID := createUserID(t, srv, admin.Token, map[string]any{
 		"username": "lockme", "password": "Lockme-Pass!1", "role": "read-only",
-	}); st != 201 {
-		t.Fatalf("create user: status %d: %s", st, b)
-	}
+	})
 	// Active → can sign in.
 	if st, _ := do(t, srv, "POST", "/api/auth/login", "", map[string]string{"username": "lockme", "password": "Lockme-Pass!1"}); st != 200 {
 		t.Fatalf("active user login: status %d, want 200", st)
 	}
 	// Disable, then the SAME credentials must be refused.
-	if st, b := do(t, srv, "PATCH", "/api/users/lockme", admin.Token, map[string]string{"status": "disabled"}); st != 200 {
+	if st, b := do(t, srv, "PATCH", "/api/users/"+lockmeID, admin.Token, map[string]string{"status": "disabled"}); st != 200 {
 		t.Fatalf("disable user: status %d: %s", st, b)
 	}
 	if st, b := do(t, srv, "POST", "/api/auth/login", "", map[string]string{"username": "lockme", "password": "Lockme-Pass!1"}); st != 401 {
@@ -213,25 +219,23 @@ func TestLoginDisabledAccountRejected(t *testing.T) {
 func TestInstantRevokeOnDisableAndDelete(t *testing.T) {
 	srv := newTestServer(t)
 	admin := login(t, srv, "admin", "Passw0rd!2345")
-	if st, b := do(t, srv, "POST", "/api/users", admin.Token, map[string]string{
-		"username": "ghosted", "password": "Ghosted-Pass!1", "role": "read-only"}); st != 201 {
-		t.Fatalf("create user: %d %s", st, b)
-	}
+	ghostedID := createUserID(t, srv, admin.Token, map[string]any{
+		"username": "ghosted", "password": "Ghosted-Pass!1", "role": "read-only"})
 	victim := login(t, srv, "ghosted", "Ghosted-Pass!1")
 	if st, _ := do(t, srv, "GET", "/api/auth/me", victim.Token, nil); st != 200 {
 		t.Fatalf("active token /me: want 200")
 	}
 	// Disable → the SAME token is rejected on the very next request.
-	if st, _ := do(t, srv, "PATCH", "/api/users/ghosted", admin.Token, map[string]string{"status": "disabled"}); st != 200 {
+	if st, _ := do(t, srv, "PATCH", "/api/users/"+ghostedID, admin.Token, map[string]string{"status": "disabled"}); st != 200 {
 		t.Fatalf("disable: not 200")
 	}
 	if st, _ := do(t, srv, "GET", "/api/auth/me", victim.Token, nil); st != 401 {
 		t.Errorf("disabled user's existing token: status %d, want 401 (instant revoke)", st)
 	}
 	// Re-enable + fresh token, then delete → existing token rejected immediately.
-	do(t, srv, "PATCH", "/api/users/ghosted", admin.Token, map[string]string{"status": "active"})
+	do(t, srv, "PATCH", "/api/users/"+ghostedID, admin.Token, map[string]string{"status": "active"})
 	again := login(t, srv, "ghosted", "Ghosted-Pass!1")
-	do(t, srv, "DELETE", "/api/users/ghosted", admin.Token, nil)
+	do(t, srv, "DELETE", "/api/users/"+ghostedID, admin.Token, nil)
 	if st, _ := do(t, srv, "GET", "/api/auth/me", again.Token, nil); st != 401 {
 		t.Errorf("deleted user's existing token: status %d, want 401", st)
 	}
@@ -453,10 +457,15 @@ func TestAPIKeyAuth(t *testing.T) {
 }
 
 func TestAdminSafeLastSuperAdmin(t *testing.T) {
-	srv := newTestServer(t)
+	srv, s := newTestServerState(t)
 	admin := login(t, srv, "admin", "Passw0rd!2345")
-	if st, _ := do(t, srv, "DELETE", "/api/users/admin", admin.Token, nil); st != 400 {
+	adminID := principalID(t, s, "admin")
+	if st, _ := do(t, srv, "DELETE", "/api/users/"+adminID, admin.Token, nil); st != 400 {
 		t.Errorf("delete last super-admin: status %d, want 400", st)
+	}
+	// …and the login name does not address the account at all (tracker 300).
+	if st, _ := do(t, srv, "DELETE", "/api/users/admin", admin.Token, nil); st != 404 {
+		t.Errorf("delete by login name: status %d, want 404", st)
 	}
 }
 

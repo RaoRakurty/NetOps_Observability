@@ -23,7 +23,7 @@ func TestWSTicketRefusedForDisabledUser(t *testing.T) {
 	if st != http.StatusOK || tk == "" {
 		t.Fatalf("ticket issuance: status %d, ticket %q", st, tk)
 	}
-	if _, err := f.s.users.Update("op-acme", User{Status: "disabled"}); err != nil {
+	if _, err := f.s.users.Update(principalID(t, f.s, "op-acme"), User{Status: "disabled"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := wsConnectStatus(t, f, "dev-1", tk); got != http.StatusUnauthorized {

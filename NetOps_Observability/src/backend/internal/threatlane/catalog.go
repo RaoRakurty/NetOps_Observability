@@ -8,10 +8,10 @@ import (
 	"math"
 	"regexp"
 	"sort"
-	"strings"
 	"time"
 
 	"netops/backend/internal/secfindings"
+	"netops/backend/internal/srlpath"
 )
 
 // DetectResult is the outcome of running one rule's detection. Tripped=true means
@@ -274,30 +274,19 @@ func msgMatch(patterns ...string) func(LogEvent) DetectResult {
 	}
 }
 
-// srlSep is the separator SR Linux writes BETWEEN configuration path elements.
-// It is a character class rather than a literal because the same path reaches
-// the log in three spellings, all of them legal and all of them observed:
+// ── SR Linux path spellings ──────────────────────────────────────────────────
 //
-//	set / system aaa authentication user bob …   (bare slash, space-separated —
-//	                                              the `info … flat` / commit form)
-//	set /system aaa authentication user bob …    (the commit-audit line captured
-//	                                              on the lab, 2026-09-03)
-//	set /system/aaa/authentication/user/bob      (the gNMI-style path form)
-const srlSep = `[\s/]+`
-
-// srlPath renders an SR Linux configuration path as a regexp FRAGMENT that
-// matches all three spellings above. It is a helper rather than a typed-out
-// literal per rule so the three spellings cannot drift apart between rules —
-// a rule that accidentally matched only one of them would be silently dead on
-// two thirds of this platform's log lines, which is exactly the failure mode
-// (tracker D-02) this dialect coverage exists to close.
+// The same configuration path reaches the log in three spellings, all legal and
+// all observed, so a pattern typed out against one of them is silently dead on
+// the other two (tracker D-02, and tracker 296 for the
+// same failure in the hardening rules). The canonical encoding of the three now
+// lives in internal/srlpath — ONE place, shared with the SR Linux hardening
+// dialect, which cannot import this package and must not carry a second copy:
 //
-// The leading element is `/\s*` — the slash is always present, the space after
-// it is optional. Segments are joined by srlSep. The caller appends whatever
-// boundary/suffix the rule needs, so a path fragment never asserts its own end.
-func srlPath(segs ...string) string {
-	return `/\s*` + strings.Join(segs, srlSep)
-}
+//	srlpath.Sep     the separator BETWEEN path elements (space, slash, or both)
+//	srlpath.Path()  a path rendered as a regexp fragment matching all three
+//
+// ─────────────────────────────────────────────────────────────────────────────
 
 // summarize renders a short, redacted one-line evidence string for a log event.
 func summarize(ev LogEvent) string {
@@ -337,8 +326,8 @@ func NewCatalog(params Params) *Catalog {
 				// `no logging host`. `console` is deliberately ABSENT for exactly
 				// the reason `no logging console` is absent above: dropping
 				// console logging is hardening, not tampering.
-				`\bdelete\s+`+srlPath("system", "logging", `(?:remote-server|file|buffer)`)+`\b`,
-				srlPath("system", "logging")+`\b[^\n]*\badmin-state\s+disable\b`,
+				`\bdelete\s+`+srlpath.Path("system", "logging", `(?:remote-server|file|buffer)`)+`\b`,
+				srlpath.Path("system", "logging")+`\b[^\n]*\badmin-state\s+disable\b`,
 			),
 		},
 		{
@@ -356,7 +345,7 @@ func NewCatalog(params Params) *Catalog {
 				// clear/purge of the logging subsystem is the analogue. Removing
 				// a logging DESTINATION is a different act and belongs to
 				// log-logging-disabled, so it is deliberately not matched here.
-				`\btools\s+system`+srlSep+`logging\b[^\n]*\b(?:clear|purge)\b`,
+				`\btools\s+system`+srlpath.Sep+`logging\b[^\n]*\b(?:clear|purge)\b`,
 			),
 		},
 		{
@@ -383,13 +372,13 @@ func NewCatalog(params Params) *Catalog {
 				// <hash>`. SR Linux says `user`, NEVER `username`, which is why
 				// the clause above matched nothing on the lab fabric (D-02).
 				// LIVE-VALIDATED against the real line B of the same run.
-				srlPath("system", "aaa", "authentication", "user")+srlSep+`\S+[^\n]*\bpassword\b`,
+				srlpath.Path("system", "aaa", "authentication", "user")+srlpath.Sep+`\S+[^\n]*\bpassword\b`,
 				// SR Linux built-in account: `/system aaa authentication
 				// admin-user password …` is its own leaf (it is NOT reached by the
 				// `user` clause above, whose separator cannot match "admin-user").
 				// Resetting the built-in admin credential is the same class of
 				// act. doc_claimed.
-				srlPath("system", "aaa", "authentication", "admin-user")+`[^\n]*\bpassword\b`,
+				srlpath.Path("system", "aaa", "authentication", "admin-user")+`[^\n]*\bpassword\b`,
 			),
 		},
 		{
@@ -411,8 +400,8 @@ func NewCatalog(params Params) *Catalog {
 				// (documentation.nokia.com/srlinux 26-3, config-basics/
 				// secur-access: `system aaa authorization role <r> superuser
 				// [true|false]`).
-				srlPath("system", "aaa", "authorization", "role")+`[^\n]*\bsuperuser\s+true\b`,
-				srlPath("system", "aaa", "authentication", "user")+`[^\n]*\brole\s*\[?\s*admin\b`,
+				srlpath.Path("system", "aaa", "authorization", "role")+`[^\n]*\bsuperuser\s+true\b`,
+				srlpath.Path("system", "aaa", "authentication", "user")+`[^\n]*\brole\s*\[?\s*admin\b`,
 			),
 		},
 		{
@@ -452,10 +441,10 @@ func NewCatalog(params Params) *Catalog {
 				// purpose: a bare `delete /system aaa authentication …` also
 				// covers `… user <rogue>`, i.e. REMOVING a backdoor account,
 				// which is a remediation and must never be reported as tampering.
-				`\bdelete\s+`+srlPath("system", "aaa", "authentication", "authentication-method")+`\b`,
+				`\bdelete\s+`+srlpath.Path("system", "aaa", "authentication", "authentication-method")+`\b`,
 				// Disabling a AAA server-group takes the authenticating method
 				// out of the path without deleting anything.
-				srlPath("system", "aaa", "server-group")+`\b[^\n]*\badmin-state\s+disable\b`,
+				srlpath.Path("system", "aaa", "server-group")+`\b[^\n]*\badmin-state\s+disable\b`,
 			),
 		},
 		{
@@ -476,7 +465,7 @@ func NewCatalog(params Params) *Catalog {
 				// `tools system deploy-image <img>` stages the ISSU image and
 				// `tools system boot image <img>` repoints the boot list
 				// (documentation.nokia.com/srlinux, Software Install Guide).
-				`\btools\s+system`+srlSep+`(?:deploy-image|boot`+srlSep+`image)\b`,
+				`\btools\s+system`+srlpath.Sep+`(?:deploy-image|boot`+srlpath.Sep+`image)\b`,
 			),
 		},
 	}

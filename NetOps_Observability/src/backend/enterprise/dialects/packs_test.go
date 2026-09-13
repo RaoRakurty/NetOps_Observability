@@ -4,7 +4,7 @@
 // COMMERCIAL ADD-ON MODULE. This package implements the `security_dialects`
 // entitlement (Enterprise tier) and is NOT Apache-2.0 core. See the LICENSE
 // notice file in this directory, ../../../../LICENSING.md, and
-// LICENSES/Correlix-Enterprise.txt.
+// LICENSES/LicenseRef-Correlix-Enterprise.txt.
 
 package dialects
 
@@ -183,6 +183,14 @@ func TestOnlyBoundRulesAreEvaluatedForPackDialects(t *testing.T) {
 				}
 				got := map[string]bool{}
 				for _, f := range fs {
+					// A CategoryCoverage finding is not a rule verdict: it is the
+					// engine saying what it could not assess and why (here, for
+					// srlinux, that `hostname lab` is not SR Linux configuration —
+					// tracker 296). It carries no binding by design, so it is not
+					// a dialect leak.
+					if f.Category == hardening.CategoryCoverage {
+						continue
+					}
 					got[f.RawRuleID] = true
 				}
 				for id := range want {
