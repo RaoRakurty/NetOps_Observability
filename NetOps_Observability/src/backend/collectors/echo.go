@@ -5,6 +5,7 @@ package collectors
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"netops/backend/internal/applog"
 	"netops/backend/safego"
 
 	"golang.org/x/net/icmp"
@@ -79,8 +81,25 @@ func (s *wanEcho) Run(ctx context.Context) error {
 
 // echoTargets prefers the API-published circuit list (Redis), falling back to
 // WAN_ECHO_TARGETS (comma list of `remoteAddr` or `localAddr=remoteAddr`).
+//
+// The fallback is correct for exactly one reason — the api has not published a
+// circuit list — and it used to be taken for a second, indistinguishable one:
+// the channel could not be read (tracker 307). That swap is not benign. The
+// api's list carries the derived per-circuit source-bind address, tenant and
+// device labels; WAN_ECHO_TARGETS carries a static remote address and labels
+// itself `LocalDevice: "prober"`. The circuit_* gauges keep flowing either way,
+// so a dead share channel quietly re-points the WAN SLA measurement at whatever
+// the env var says and nothing in the metric names it. The fallback still
+// happens — measuring the env targets beats measuring nothing — but the read
+// failure is now reported, and reported as the DIFFERENT thing it is from an
+// api that has published nothing yet.
 func echoTargets(ctx context.Context) []EchoTarget {
-	if t, err := FetchWANCircuits(ctx); err == nil && len(t) > 0 {
+	t, err := FetchWANCircuits(ctx)
+	if err != nil && !errors.Is(err, ErrNotConfigured) {
+		applog.Warn("wan-echo", "the published WAN circuit list could not be read — falling back to WAN_ECHO_TARGETS, so this round measures the STATIC targets and not the api's derived circuits",
+			map[string]any{"error": err.Error(), "env_targets_set": strings.TrimSpace(os.Getenv("WAN_ECHO_TARGETS")) != ""})
+	}
+	if err == nil && len(t) > 0 {
 		return t
 	}
 	raw := strings.TrimSpace(os.Getenv("WAN_ECHO_TARGETS"))

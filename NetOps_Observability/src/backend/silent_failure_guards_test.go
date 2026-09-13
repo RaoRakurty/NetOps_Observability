@@ -160,16 +160,13 @@ func TestErrorIsNotConflatedWithABenignState(t *testing.T) {
 	}
 
 	// FROZEN BASELINE, function-scoped — the dependency reads the file-level
-	// exemption above was hiding. CENSUS CORRECTION, not backlog growth: all four
-	// predate the guard and were simply invisible to it. Tracked as tracker 307,
-	// which carries the per-caller work; SHRINK-ONLY, exactly like the path
-	// baseline below.
-	baselineFn := map[string]bool{
-		"collectors/redis.go#FetchIfAddrMap":        true, // 307
-		"collectors/redis.go#FetchRoutingDirection": true, // 307
-		"collectors/redis.go#FetchIfIndexMap":       true, // 307
-		"collectors/redis.go#FetchWANCircuits":      true, // 307
-	}
+	// exemption above was hiding. It held four entries, all four in
+	// collectors/redis.go (FetchIfAddrMap, FetchRoutingDirection, FetchIfIndexMap,
+	// FetchWANCircuits), and tracker 307 cleared them: each now tells an unread
+	// channel from an unwritten key, and every caller reports the read failure
+	// instead of dropping it. EMPTY IS THE GOAL STATE, and it stays SHRINK-ONLY —
+	// a new function with this shape must be fixed, not baselined.
+	baselineFn := map[string]bool{}
 
 	// FROZEN BASELINE — the pre-existing backlog this guard found on the day it
 	// was introduced (2026-07-27), recorded per-file so it survives line drift.

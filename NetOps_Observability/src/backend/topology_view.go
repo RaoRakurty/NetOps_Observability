@@ -48,8 +48,47 @@ const topoLinksUnreadNote = "Adjacency evidence could not be read, so links are 
 // evidence NEVER ARRIVED. A deployment that configures no sharing channel at all
 // runs no discovery collector, so "no adjacency was published" is a true
 // statement about it and must not raise a banner on every map in the product.
-func errTopoLinksUnread(err error) bool {
+func errTopoLinksUnread(err error) bool { return errShareChannelUnread(err) }
+
+// errShareChannelUnread is that test generalised to EVERY read from the shared
+// key-value channel — the interface-address map, the ifIndex map, the BGP-LS
+// routing direction, the WAN circuit list (tracker 307) as well as the adjacency
+// evidence (290). The one outcome that is not a failure is ErrNotConfigured: a
+// deployment that configures no sharing channel runs no collector on the other
+// end of it either, so "nothing was published" is a true statement about that
+// deployment and must not raise a warning on every cycle of every enricher.
+func errShareChannelUnread(err error) bool {
 	return err != nil && !errors.Is(err, collectors.ErrNotConfigured)
+}
+
+// reportIfRegistryUnread is the ONE place a failed interface-registry read is made
+// observable, and it is the whole caller-side half of tracker 307.
+//
+// The disposition for every caller of these registries is the same and is
+// deliberately NOT a refusal: the registries only NAME and ORIENT things —
+// a port label on a BGP-LS link, an ifIndex→ifName bridge, the address a WAN
+// interface is reached on — so failing the operator's map, the correlation
+// export or a WAN projection outright would cost more evidence than the gap
+// does. What is forbidden is proceeding INVISIBLY, which is exactly what the
+// four `ifaddr, _ :=` call sites did: the surface renders a raw interface IP
+// where a port name belongs, or an empty interface table, and nothing anywhere
+// says the registry was never read.
+//
+// `consequence` must name what the caller actually loses, because that gap is
+// otherwise indistinguishable from the truth. One line per read: every caller is
+// either a ≥60s ticker or one HTTP request, which is the same cadence tracker
+// 290's adjacency warnings already log at, so no throttle is warranted here — and
+// a throttle that hid the FIRST line of an outage would defeat the purpose.
+func reportIfRegistryUnread(component, consequence string, err error, fields map[string]any) {
+	if !errShareChannelUnread(err) {
+		return
+	}
+	f := make(map[string]any, len(fields)+1)
+	for k, v := range fields {
+		f[k] = v
+	}
+	f["error"] = err.Error()
+	logWarn(component, "interface registry unread — "+consequence, f)
 }
 
 // fetchTopoLinks resolves the adjacency-evidence source: the injected seam in a
@@ -75,9 +114,13 @@ func (s *server) gatherTopoLinks(ctx context.Context, devs []models.Device) ([]t
 	// anything. So this read's failure is carried out to the caller, which
 	// decides whether its surface can say so (a banner) or has nowhere to say it
 	// (a refusal) — tracker 290. The interface-address map is not in that class:
-	// it only names the ports on links that were themselves read.
+	// it only names the ports on links that were themselves read, so its failure
+	// does not travel — it is REPORTED HERE and the links stand without the port
+	// names (tracker 307).
 	neighbors, err := s.fetchTopoLinks(ctx)
-	ifaddr, _ := collectors.FetchIfAddrMap(ctx) // best-effort: names ports, never decides an adjacency exists
+	ifaddr, ifaddrErr := collectors.FetchIfAddrMap(ctx)
+	reportIfRegistryUnread("topology", "BGP-LS links keep the raw interface IP where a port name belongs, and links that join to interface metrics by ifName will not join", ifaddrErr,
+		map[string]any{"devices": len(devs)})
 	links := topology.NormalizeLLDP(neighbors, ownedID, byName, byAddr, ifaddr)
 	if errTopoLinksUnread(err) {
 		return links, err

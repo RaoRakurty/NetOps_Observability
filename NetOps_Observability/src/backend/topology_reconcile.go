@@ -130,7 +130,19 @@ func (s *server) observeTopology(ctx context.Context) (topology.GraphRecords, er
 		})
 	}
 	neighbors, linksErr := s.fetchTopoLinks(ctx)
-	ifaddr, _ := collectors.FetchIfAddrMap(ctx) // best-effort: names ports, never decides an adjacency exists
+	// The interface registry only NAMES ports, so an unread registry does not stop
+	// this cycle — but on the one caller that WRITES it is not free either, and
+	// that is why it is logged rather than dropped (tracker 307). topoEdgeID is
+	// built from the port names, and NormalizeLLDP resolves a BGP-LS link
+	// descriptor's interface IP to an ifName through this map: without it the same
+	// physical adjacency is observed under a DIFFERENT edge id, so the persisted
+	// edge is not observed this cycle, goes Stale at topologyStaleAfter, and a
+	// duplicate id appears beside it. Renaming ports is not a reason to refuse a
+	// reconcile, but an operator reading two ids for one link must be able to find
+	// out why.
+	ifaddr, ifaddrErr := collectors.FetchIfAddrMap(ctx)
+	reportIfRegistryUnread("topology", "BGP-LS edge ports stay raw interface IPs this cycle, so those edges reconcile under a different id and the previous one ages toward Stale", ifaddrErr,
+		map[string]any{"devices": len(devs)})
 	for _, l := range observeTopoLinks(devs, neighbors, ifaddr) {
 		g.Edges = append(g.Edges, topology.EdgeRecord{
 			TenantID:      tenantByDev[l.Source], // edge belongs to its source device's tenant
