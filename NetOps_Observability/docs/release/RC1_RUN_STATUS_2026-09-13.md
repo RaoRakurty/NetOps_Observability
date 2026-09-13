@@ -16,7 +16,7 @@ who is on it, where it is, and when it is expected. Times are local box time.
 | 306 | `visibleSaved` cross-tenant leak, read + write paths | Opus | 🔄 running | Sun 04:58 | Sun 07:58 | isolation test required |
 | 298 | `runSitesImport` read oracle → third outcome `refused` | Opus | ✅ DONE (77ef4606, merged; row deleted) — also closed an overwrite path that wrote over a hidden tenant's site | Sun 04:58 | Sun 07:58 | decision taken: refused = writes nothing, discloses existence only |
 | 307 | four `collectors/redis.go` reads carry the 290 fold | Opus | ✅ DONE (86839690, merged; row deleted; guard baseline now empty) | Sun 04:58 | Sun 07:58 | callers disposition + baseline entries deleted |
-| 296 | SR Linux hardening fails open on 2 of 3 path spellings | Opus | 🔄 running | Sun 04:58 | Sun 06:58 | decision taken: match all three spellings AND refuse unrecognised SRL form as UNASSESSED |
+| 296 | SR Linux hardening fails open on 2 of 3 path spellings | Opus | ✅ DONE (9657160c, merged; row deleted; residue filed as 310) | Sun 04:58 | Sun 06:58 | decision taken: match all three spellings AND refuse unrecognised SRL form as UNASSESSED |
 | 308 | memflat false leak call on VictoriaMetrics | Opus | ✅ DONE (58ce94c8, merged; row deleted) | Sun 04:58 | Sun 07:58 | quiet-interval two-end-sample anchor, NOT a wider --mem-factor |
 | 309 | correlation cannot read `netops.controller_events` | Opus | 🔄 running | Sun 04:58 | Sun 06:58 | ACL matrix + explicit observable refusal + a gate that judges it |
 | 238a | verify 29 licence reviews against 7 conditions, sign only passes | Opus | ✅ DONE (3f93abb7, merged) — 25 signed, 2 need an owner call (xz-libs 5.6.3-r1 C7, .python-rundeps C3) | Sun 04:58 | Sun 07:58 | each failure reported individually |
