@@ -84,14 +84,23 @@ type secOSCall struct {
 //     order, i.e. the newest verdict per native_id;
 //   - `search_after` (keyset paging), `from` (offset paging) and `size`
 //     (`size: 0` returns no hits at all, as an aggregation-only read does);
-//   - `range` on `ts`, but ONLY when windowAware is set (see below).
+//   - `range` on `ts`, but ONLY when windowAware is set (see below);
+//   - the aggregation vocabulary the lane emits, but ONLY when aggAware is set
+//     (see below): `terms`, `cardinality`, `top_hits` (with its sort) and
+//     `date_histogram` — the last including `min_doc_count` and
+//     `extended_bounds`, so the DENSE histogram the trend endpoint pays for
+//     (and caps the range for) is the one a test sees.
 //
 // NOT HONOURED — a test that depends on any of these is still only reading a
 // canned answer, and must say so:
-//   - AGGREGATIONS. `aggs` is echoed back verbatim from the `aggs` field
-//     regardless of the query, so facets, the CTEM funnel, coverage, the trend
-//     histogram and the compliance fold are canned. Nothing here proves an
-//     aggregation narrows.
+//   - AGGREGATIONS WITHOUT aggAware. With the flag off, `aggs` is echoed back
+//     verbatim from the `aggs` field regardless of the query, so facets, the
+//     CTEM funnel, coverage, the trend histogram and the compliance fold are
+//     canned and nothing proves they narrow. With it on they are computed from
+//     the documents that matched — see security_findings_agg_filter_test.go,
+//     which is what closed that half of tracker 283. The compliance fold is
+//     still asserted against hand-written buckets on purpose; its own file says
+//     why.
 //   - `track_total_hits`: `hits.total` is always the exact number of matched
 //     documents, never the 10k cap the cluster would apply without it.
 //   - Lucene analysis: `simple_query_string` is matched as lowercase substrings
@@ -840,8 +849,47 @@ func (f *secFakeOS) secDateHistogram(spec any, sub map[string]any, docs []secHit
 		groups[k] = append(groups[k], h)
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+
+	// `min_doc_count: 0` + `extended_bounds` is what makes the histogram DENSE,
+	// and the trend endpoint depends on it: it refuses a window/bucket pair over
+	// MaxTrendBuckets precisely because every point in the range comes back,
+	// occupied or not. A double that returned only the occupied buckets would
+	// answer a filter matching nothing with NO buckets at all — which reads as
+	// "the query failed" rather than "the window is empty", and would let a
+	// regression that dropped either option through unseen.
+	minDocCount := 0 // the date_histogram default
+	if n, ok := opts["min_doc_count"].(float64); ok {
+		minDocCount = int(n)
+	}
+	if minDocCount == 0 {
+		lo, hi, bounded := secExtendedBounds(opts, step)
+		if len(keys) > 0 {
+			if !bounded || keys[0] < lo {
+				lo = keys[0]
+			}
+			if !bounded || keys[len(keys)-1] > hi {
+				hi = keys[len(keys)-1]
+			}
+			bounded = true
+		}
+		if bounded && hi >= lo {
+			if n := (hi-lo)/step + 1; n > secMaxFakeBuckets {
+				f.t.Errorf("the emitted date_histogram spans %d buckets — the double refuses to render that many; "+
+					"the handler is supposed to cap the range before asking", n)
+				return nil
+			}
+			keys = keys[:0]
+			for k := lo; k <= hi; k += step {
+				keys = append(keys, k)
+			}
+		}
+	}
+
 	buckets := make([]any, 0, len(keys))
 	for _, k := range keys {
+		if len(groups[k]) < minDocCount {
+			continue
+		}
 		b := map[string]any{
 			"key":           k,
 			"key_as_string": time.UnixMilli(k).UTC().Format(time.RFC3339),
@@ -853,6 +901,39 @@ func (f *secFakeOS) secDateHistogram(spec any, sub map[string]any, docs []secHit
 		buckets = append(buckets, b)
 	}
 	return buckets
+}
+
+// secMaxFakeBuckets bounds what the double will render, so a malformed or
+// unbounded histogram spec fails the test instead of allocating for a very long
+// time. It is comfortably above secapi.MaxTrendBuckets, which is the real cap.
+const secMaxFakeBuckets = 5000
+
+// secExtendedBounds reads the `extended_bounds` the trend body emits (RFC3339
+// strings) and snaps them onto the interval grid, as the cluster does.
+func secExtendedBounds(opts map[string]any, step int64) (lo, hi int64, ok bool) {
+	b, is := opts["extended_bounds"].(map[string]any)
+	if !is {
+		return 0, 0, false
+	}
+	at := func(key string) (int64, bool) {
+		switch v := b[key].(type) {
+		case string:
+			t, err := time.Parse(time.RFC3339, v)
+			if err != nil {
+				return 0, false
+			}
+			return (t.UnixMilli() / step) * step, true
+		case float64:
+			return (int64(v) / step) * step, true
+		}
+		return 0, false
+	}
+	loV, loOK := at("min")
+	hiV, hiOK := at("max")
+	if !loOK || !hiOK {
+		return 0, 0, false
+	}
+	return loV, hiV, true
 }
 
 // secInterval reads the fixed_interval vocabulary TrendBuckets emits (minutes,
