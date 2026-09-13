@@ -32,6 +32,40 @@ tags and the two publishing workflows had no test gate at all; and the whole pag
 is now machine-checked against the workflows by
 `NetOps_Observability/tests/test_required_checks_consistency.py` (§5).
 
+## Live state 2026-09-13 — APPLIED, and what is actually enforced
+
+Until this date the page described a ruleset that was only **partly** enforced:
+16 required checks, `strict: false`, `enforce_admins: false`, no conversation
+resolution. The owner's Decision 5 closed that. Read back from the live GitHub
+API after the change:
+
+| Setting | Live value on `main` |
+|---|---|
+| required status checks | **21** — the 19 of §1.1 **plus** `integrity` (§1.2) and `tracker staleness (blocking on HIGH)` (§1.3), both already required before today |
+| `strict` (require branches to be up to date) | **true** |
+| `enforce_admins` (no bypass, admins included) | **true** |
+| `required_conversation_resolution` | **true** |
+| `required_approving_review_count` | **0** — deliberate, see below |
+| `allow_force_pushes` / `allow_deletions` | **false** / **false** |
+| `required_linear_history` | **false** — deliberate: merge commits must stay possible |
+| push restrictions | none |
+| bypass actors | none — `/rulesets` was empty, collaborators = the owner only (admin), no teams, no deploy keys, no webhooks; check runs come only from `github-actions` (app_id 15368) and `dependabot`, whose default workflow permission is `read` and which cannot approve PRs |
+
+**Why approvals are 0 while §4's payload says 1.** There is one authorized
+maintainer. `required_approving_review_count: 1` with `enforce_admins: true` and
+nobody able to approve would deadlock every PR, `main` included. §4 keeps `1` as
+the **target for when a second independent maintainer exists** — apply it then,
+not before. Do not "fix" the live value to match §4.
+
+Names were applied in the **BARE** form (`offline vendor build (blocking)`, not
+`gate / backend / offline vendor build (blocking)`) — see §2 and
+`docs/release/BRANCH_PROTECTION_DECISION5_2026-09-13.md`, which records the
+enumeration and the exact payload.
+
+Deliberately still NOT required: the `bundle` check, which is red on `main`
+because the customer bundle is ~210 commits stale. Requiring it would make `main`
+unmergeable. Revisit after the bundle rebuild.
+
 ## 1. Required status checks (the blocking jobs)
 
 Use exactly these check names — they are the `name:` of each blocking job (or the
@@ -88,12 +122,22 @@ are **not** optional for a release, because `release-gate.yml` runs the whole
 | fresh-install-integrity | `install.py --tls=yes two-phase boot (blocking)` | a real two-phase install on a scratch runner — the slowest check in the repo (~45 min); require it on PRs only if you want every PR to pay for it |
 | fresh-install-integrity | `helm chart lint · template · kubeconform (blocking)` | job id `helm-chart`; the chart is rendered and schema-validated (Kubernetes 1.30), NOT cluster-proven — tracker 271 carries the cluster leg |
 
+Live as of 2026-09-13: `integrity` **is** required on `main` (it is cheap and it
+is the one check that loads a real config). The other three in this table are
+not, and the ~45-min boot test is the reason.
+
 ### 1.3 Deliberately NOT required — and why
 
 | Workflow | Check name | Why not |
 |---|---|---|
 | renovate | `renovate-config-validator (blocking)` | `renovate.yml`'s `pull_request` trigger carries a `paths:` filter (`.github/renovate.json`, `.github/workflows/renovate.yml`), so on any PR that does not touch those files the check never reports and the PR sticks at "Expected" — exactly the pitfall in §2. It still blocks the PRs that matter (the ones editing the config). Drop its `paths:` filter first if you want it required |
 | tracker-ci | `tracker staleness (blocking on HIGH)` | document hygiene, not artifact correctness. A stale tracker row must not be able to block a release, so it is out of the tag gate — and a check in the ruleset but not the tag gate would break the one-list invariant |
+
+Live as of 2026-09-13: `tracker staleness (blocking on HIGH)` **is** required on
+`main` — it predates this page's rationale and was already in the ruleset. The
+rationale above still holds for the **tag** gate, which it stays out of; if a
+stale tracker row ever blocks a needed merge, drop it from the branch ruleset
+rather than weakening the check.
 
 > A check only appears in GitHub's picker **after it has run at least once** on the
 > repo. Open one PR first (or push to a branch) so every check reports, then add
@@ -146,14 +190,42 @@ testing the tree being published.
 When you add a gate workflow, add it to §1.1/§1.2 **and** to `release-gate.yml`.
 The test named in §1 fails if you do only one.
 
+### 2.2 Tag immutability — a tag ruleset now exists (2026-09-13)
+
+`release-gate.yml` (§2.1) gates what a tag may *publish*. It does not stop a tag
+from being **moved** afterwards, which would silently re-point a published
+version at a different commit. As of 2026-09-13 a tag ruleset closes that:
+
+| Field | Value |
+|---|---|
+| name | `release-tags-immutable` (id `23134136`) |
+| target | tag · enforcement **active** |
+| include | `refs/tags/v*` |
+| rules | `deletion` · `update` · `non_fast_forward` |
+| bypass actors | none |
+
+Tag **creation** is deliberately not restricted — the release owner pushes the
+release tag once, and restricting creation would only block that. Development
+tags (`correlation-v2-*`, `review/*`, …) do not match `refs/tags/v*` and are
+untouched.
+
 ## 3. Enable it — UI
 
+All four boxes below are **ticked on `main` as of 2026-09-13** (see "Live state
+2026-09-13"). This section stays as the reproduction procedure — for a fork, a
+mirror, or a re-apply after an accidental reset.
+
 Settings → Branches → Add branch ruleset (or “Add rule”) for `main`:
-- ☑ Require a pull request before merging (≥1 approval recommended).
+- ☑ Require a pull request before merging. Approvals stay at **0** while there is
+  one authorized maintainer — require ≥1 *once a second independent maintainer
+  exists*, because 1 approval with no second approver deadlocks every PR.
 - ☑ Require status checks to pass → **Require branches to be up to date**, then add
   every check from §1.
 - ☑ Do not allow bypassing the above settings (apply to admins).
 - ☑ Block force pushes.
+- ☑ Require conversation resolution before merging.
+
+Leave **linear history off**: merge commits must stay possible.
 
 ## 4. Enable it — `gh` CLI (scriptable)
 
@@ -198,6 +270,16 @@ JSON
 
 Verify: `gh api repos/RaoRakurty/NetOps_Observability/branches/main/protection | jq '.required_status_checks.checks'`
 
+> **Two deliberate divergences between this payload and the live ruleset**
+> (2026-09-13). (a) `required_approving_review_count` is **1** here as the target
+> for a two-maintainer repo; the live value is **0** and must stay 0 until a
+> second maintainer exists. (b) The live required set is **21**: this payload's 19
+> (§1.1) plus `integrity` and `tracker staleness (blocking on HIGH)`. The
+> `checks:` list above is pinned to §1.1 exactly by
+> `tests/test_required_checks_consistency.py` — so a PUT of this payload verbatim
+> would *drop* those two. Build the payload from the live protection, as
+> `docs/release/BRANCH_PROTECTION_DECISION5_2026-09-13.md` step 1 says.
+
 ## 5. Keeping this list correct
 
 There are **no** `continue-on-error` jobs left in `.github/workflows/` — the triage
@@ -228,7 +310,9 @@ Steps 1–3 are now **mechanically enforced**:
 - a job in `publish-images.yml` or `release-bundle.yml` does not `needs:` the gate.
 
 What it cannot check is **GitHub's ruleset itself** — that is not in the repo, so
-§4 remains the manual half. `tests/test_toolchain_pin.py` guards the toolchain
+§4 remains the manual half. The live readings of 2026-09-13 are transcribed in
+"Live state 2026-09-13" above; re-read them from the API rather than trusting
+either page if the two ever disagree. `tests/test_toolchain_pin.py` guards the toolchain
 version of the same drift class.
 
 ## 6. Related security follow-ups (not done here)
