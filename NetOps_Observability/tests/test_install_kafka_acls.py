@@ -343,6 +343,111 @@ def test_acl_script_carries_tls_admin_plane_and_readback_verification():
     assert "--list 2>/dev/null" not in src
 
 
+# ── tracker 309: the matrix must COVER, and the read-back must PROVE ─────────
+#
+# THE DEFECT. The engine logged
+# `TopicAuthorizationFailedError: [Error 29] ... netops.controller_events` in the
+# scale-miniladder nightly and nothing judged it. The matrix itself turned out to
+# carry the grant — but "applied and verified" proved only ONE router grant plus a
+# count floor of 40 against a store that holds ~54, so a matrix missing exactly
+# one correlation grant would have passed the installer's own verification. These
+# tests close both halves statically: the LIST must cover every lane the engine
+# subscribes to, and the READ-BACK must cover the list.
+
+
+def _acl_correlation_topics() -> set[str]:
+    """The topic set apply-acls.sh grants the CORRELATION principal.
+
+    Parsed from the `CORR_TOPICS` variable the script applies AND verifies from,
+    so this test and the script can only ever disagree about a real gap."""
+    import re
+
+    src = ACL_SCRIPT_PATH.read_text()
+    m = re.search(r'^CORR_TOPICS="([^"]*)"', src, re.MULTILINE)
+    assert m, (
+        "apply-acls.sh no longer names the correlation topic set in CORR_TOPICS "
+        "— the read-back verification and this test both read that variable")
+    return {t for t in m.group(1).split() if t.startswith("netops.")}
+
+
+def _engine_lane_topics() -> list[str]:
+    """`LANE_TOPICS` read out of src/correlation/main.py.
+
+    Read, never duplicated: a copy of the list here would be one more thing to
+    forget. Parsed statically rather than imported because importing the engine
+    pulls aiokafka/fastapi into a test whose subject is a shell script."""
+    import ast
+    import re
+
+    src = (ROOT / "src" / "correlation" / "main.py").read_text()
+    m = re.search(r"^LANE_TOPICS = (\[.*?\])$", src, re.MULTILINE | re.DOTALL)
+    assert m, "LANE_TOPICS is no longer a literal list in main.py"
+    topics = ast.literal_eval(m.group(1))
+    assert topics and all(t.startswith("netops.") for t in topics), topics
+    return topics
+
+
+def test_every_engine_lane_topic_has_a_correlation_read_grant():
+    """THE tracker-309 assertion. aiokafka's `start()` -> `_wait_topics()` is
+    all-or-nothing over the subscription, so ONE required lane missing from the
+    matrix leaves the engine consuming NOTHING on all of them — with every
+    container still reporting healthy. LANE_TOPICS is exactly the REQUIRED set
+    (main.REQUIRED_TOPICS is LANE_TOPICS with the A4 syslog swap applied), so
+    every entry must appear in the matrix."""
+    granted = _acl_correlation_topics()
+    missing = [t for t in _engine_lane_topics() if t not in granted]
+    assert not missing, (
+        "correlation subscribes to these lanes with NO Read/Describe grant in "
+        f"deployment/docker/kafka/apply-acls.sh: {missing}. One ungranted "
+        "REQUIRED lane abandons the entire subscription.")
+
+
+def test_the_a4_syslog_control_switch_target_is_granted_too():
+    """CORR_SYSLOG_TOPIC can point the syslog lane at the pre-screened feed. The
+    switch is meant to be one env var in a change window, not an env var plus an
+    ACL change — so both candidate topics are granted up front."""
+    granted = _acl_correlation_topics()
+    assert {"netops.syslog", "netops.syslog.control"} <= granted
+
+
+def test_the_readback_verifies_every_granted_correlation_topic():
+    """The half that was missing: the script must READ ITS OWN LIST BACK.
+
+    Before tracker 309 the verification block asserted one router grant on
+    netops.deadletter and a count floor of 40 — and a healthy store holds ~54, so
+    a matrix short exactly one correlation grant reported "applied and verified".
+    """
+    src = ACL_SCRIPT_PATH.read_text()
+    # The verification loop iterates the SAME variable the apply loop does, so it
+    # cannot cover a subset.
+    assert src.count("for t in $CORR_TOPICS; do") == 2, (
+        "apply-acls.sh must apply AND verify the correlation set from the one "
+        "CORR_TOPICS list — two loops over the same variable")
+    # Both operations, checked separately: Describe alone lets the consumer
+    # resolve metadata and then fail at fetch; Read alone is refused earlier.
+    assert "for op in READ DESCRIBE; do" in src
+    assert "CORR_MISSING" in src
+    # …and a gap is FATAL, not a warning (§16.1: an installer that reports
+    # success over a partial matrix is the whole defect).
+    assert "the correlation principal is MISSING grants after apply" in src
+    verify = src.split("---- verification", 1)[1]
+    assert "exit 1" in verify and "$CORR_MISSING" in verify
+    # The count floor stays — it is a different assertion (whole-store sanity),
+    # and it is the one that cannot see a single missing grant.
+    assert "FLOOR=40" in src
+
+
+def test_the_helm_copy_of_the_matrix_has_not_drifted():
+    """deployment/helm ships its own copy of the script; a matrix that is correct
+    in compose and stale in helm is a Kubernetes install that boots auth-dead."""
+    helm = ROOT / "deployment" / "helm" / "correlix" / "files" / "kafka" / "apply-acls.sh"
+    if not helm.exists():
+        pytest.skip("helm chart files not present in this checkout")
+    assert helm.read_text() == ACL_SCRIPT_PATH.read_text(), (
+        "deployment/helm/.../kafka/apply-acls.sh has drifted from "
+        "deployment/docker/kafka/apply-acls.sh")
+
+
 def test_nightly_workflow_interim_step_is_gone():
     wf = ROOT.parent / ".github" / "workflows" / "scale-miniladder-nightly.yml"
     if not wf.exists():                      # tests may run from a subtree copy

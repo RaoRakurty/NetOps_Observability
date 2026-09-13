@@ -184,7 +184,9 @@ curl -s localhost:8000/../healthz   # or: docker exec <correlation> wget -qO- 12
 
 `/healthz` now carries `status`, `health_reasons` and `consumer.subscription`,
 and the engine exports `corr_consumer_running`,
-`corr_consumer_start_failures_total`, `corr_consumer_restarts_total` and
+`corr_consumer_start_failures_total`, `corr_consumer_restarts_total`,
+`corr_required_topic_unavailable{topic,reason}` (+ the always-published
+`corr_required_topic_unavailable_count`) and
 `corr_evidence_topic_dropped{topic,reason}`. **These name the exact topic and
 error.** Two shapes:
 
@@ -197,6 +199,17 @@ error.** Two shapes:
 > no longer takes the subscription down: it is dropped, re-probed, and reported
 > via `corr_evidence_topic_dropped` / `CorrEvidenceLaneNotGrounded` (warning,
 > not a page). Only a **REQUIRED** lane is fatal.
+
+> Since tracker 309 a **REQUIRED** lane the broker refuses is named the same
+> way: `corr_required_topic_unavailable{topic,reason}` /
+> `CorrRequiredLaneUnauthorized` (warning — the *page* for the outcome is
+> `CorrConsumerNotRunning` / `CorrelationConsumerDead`, and there are still only
+> four page conditions). `consumer.subscription.required_unavailable` on
+> `/healthz` is the same map, and `consumer.subscription.principal` is the
+> identity the broker refused — the string to grep for in
+> `kafka-acls --list`. `scripts/deploy-qualify.sh`'s **Q1b** fails a deploy on
+> it, and the gauge is retracted the instant `start()` succeeds, so a firing
+> alert always means "right now".
 
 ### 3.3 Bootstrap: ACLs and topics
 

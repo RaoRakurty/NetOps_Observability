@@ -210,6 +210,14 @@ def test_router_does_not_consume_the_syslog_control_topic():
             f"vector-router source {name!r} must not consume "
             f"{SYSLOG_CONTROL_TOPIC}")
     acls = read("deployment", "docker", "kafka", "apply-acls.sh")
+    # tracker 309: a principal's topic set may be named in a shell VARIABLE (the
+    # correlation set is, so the script's own verification block can read the
+    # SAME list back instead of trusting the --add exit codes). Inline any such
+    # assignment so the loop parse below sees literal topics either way — and so
+    # this test cannot go vacuous the day another principal follows suit.
+    for var, body in re.findall(r'^(\w+)="([^"]*netops\.[^"]*)"', acls,
+                                re.MULTILINE | re.DOTALL):
+        acls = acls.replace(f"${var}", body)
     grants = {}   # principal variable -> the topic set its Read loop covers
     for topics, body in re.findall(r"for t in (.*?);\s*do(.*?)done", acls,
                                    re.DOTALL):
