@@ -81,9 +81,16 @@
 #   behaviour, announced loudly, so nothing about a local build changes.
 #
 # Prereqs on the BUILD host: docker+compose v2, zstd, node/npm (frontend dist),
-# python3 (licence notices), git. The frontend dist/ and docs portal are built if missing (they are
-# gitignored — the classic stale-dist trap — so the bundle never depends on a
-# developer having built them recently: REBUILD_FRONTEND=1 forces both).
+# python3 (licence notices), git. Both web assets the frontend image COPYs are
+# gitignored build artifacts — the classic stale-dist trap — and they are handled
+# DIFFERENTLY, deliberately:
+#   * src/frontend/dist   — this script rebuilds it on every run (step 1), so a
+#                           bundle never ships a stale SPA. REBUILD_FRONTEND=0
+#                           force-skips that only if you KNOW dist is fresh.
+#   * docs-portal/build   — built by the CALLER (`cd docs-portal && npm ci
+#                           --no-audit --no-fund && npm run build`); this script
+#                           REFUSES to start without it, in seconds, rather than
+#                           letting `docker compose build` fail on the COPY.
 #
 # LICENSING (see docs/design/packaging-strategy.md §4 + bundle LICENSES.md):
 # gate CLOSED 2026-07-03 — bus = Apache Kafka (Apache-2.0, replaced Redpanda
@@ -164,6 +171,57 @@ fi
 
 # python3 generates the third-party notices (and gates their licences) below.
 command -v python3 >/dev/null || { echo "python3 is required (third-party licence notices)" >&2; exit 1; }
+
+# --- Pre-built documentation portal: checked HERE, not at the docker build -----
+# deployment/docker/Dockerfile.frontend COPYs docs-portal/build (the Docusaurus
+# site served at /docs/), and step 7i copies the same directory into the bundle.
+# It is a gitignored BUILD ARTIFACT produced by the CALLER — CI: the "Build the
+# in-app documentation portal" step in release-bundle.yml / publish-images.yml;
+# locally: `cd docs-portal && npm ci --no-audit --no-fund && npm run build`,
+# which is also what install.py's PREBUILT_WEB_ASSETS tells an operator to run.
+#
+# Until now it was only checked at 7i — AFTER step 2's `docker compose build` —
+# so a tree without the portal never got this message: it got BuildKit's
+# `failed to compute cache key: "/docs-portal/build": not found`, minutes into an
+# image build, naming a path that does not exist in the repository
+# (release-bundle.yml run 34721086054 on main, 2026-09-12, after a full release
+# gate). §16.1: a real failure must not surface as somebody else's noise, and
+# §16.3: fail before the expensive, destructive part, with the command to fix it.
+# One function, called both here and at 7i, so there is exactly one contract.
+require_prebuilt_docs_portal() {
+  local portal="$ROOT/docs-portal/build" entries
+  if [ ! -d "$portal" ]; then
+    echo "FATAL: docs-portal/build is missing — the frontend image COPYs it and the customer bundle ships the documentation portal offline." >&2
+    echo "  Build it first:  cd $ROOT/docs-portal && npm ci --no-audit --no-fund && npm run build" >&2
+    return 1
+  fi
+  # An UNREADABLE directory is not a missing one: printing the npm recipe for a
+  # permission problem would send the operator after the wrong fix, and the
+  # docker COPY would fail on the same directory again (install.py's
+  # _is_populated_dir makes the same distinction, for the same reason).
+  if ! entries="$(ls -A "$portal" 2>&1)"; then
+    echo "FATAL: cannot read $portal: $entries" >&2
+    echo "  The frontend image build reads this directory; fix its ownership/permissions and rerun." >&2
+    return 1
+  fi
+  if [ -z "$entries" ]; then
+    echo "FATAL: docs-portal/build exists but is EMPTY — an interrupted or cleaned build leaves the directory behind, and the docker COPY fails on it exactly as if it were absent." >&2
+    echo "  Rebuild it:  cd $ROOT/docs-portal && npm ci --no-audit --no-fund && npm run build" >&2
+    return 1
+  fi
+  if [ ! -f "$portal/index.html" ]; then
+    echo "FATAL: docs-portal/build has no index.html — refusing to ship a documentation portal with no entry point" >&2
+    return 1
+  fi
+}
+
+# The dry-run modes (--licenses-only, --source-offer-only, --sign-only) build no
+# image and copy no portal, and CI runs all three on commits that never build the
+# web assets — requiring the portal there would break them for nothing.
+if [ "$LICENSES_ONLY" = 0 ] && [ "$SOURCE_OFFER_ONLY" = 0 ] && [ "$SIGN_ONLY" = 0 ]; then
+  require_prebuilt_docs_portal || exit 1
+fi
+
 # date+sha, not `git describe` — the repo's tags are milestone markers, not
 # release tags, and produce unusable bundle names. Product release tags
 # (v-prefixed) win when present.
@@ -673,8 +731,10 @@ command -v zstd >/dev/null || { echo "zstd is required (apt-get install zstd)" >
 
 echo "== correlix installer bundle $VERSION ($PROFILE) -> $BUNDLE_DIR"
 
-# 1. Frontend dist + docs portal (gitignored build artifacts the frontend image
-#    COPYs). ALWAYS rebuild for a bundle: dist/ is gitignored and long-lived, so
+# 1. Frontend dist (a gitignored build artifact the frontend image COPYs; the
+#    OTHER one, docs-portal/build, is the caller's to build and was already
+#    required by the preflight at the top of this script).
+#    ALWAYS rebuild for a bundle: dist/ is gitignored and long-lived, so
 #    a "build only if missing" check silently ships a STALE UI whenever a dev's
 #    dist predates their source edits — exactly what shipped four bundles' worth
 #    of un-scrubbed UI on 2026-07-04. Correctness over the ~30s build cost.
@@ -1389,15 +1449,14 @@ if grep -qE "$LAB_MARKERS" "$BUNDLE_DIR/RELEASE-NOTES.md"; then
   echo "FATAL: a lab identifier reached the generated release notes" >&2; exit 1
 fi
 
-# 7i. The offline documentation portal. docs-portal/build is a gitignored
-#     build artifact that the frontend image COPYs, so `docker compose build`
-#     above has already failed if it were missing — but a bundle silently
-#     shipping no documentation is exactly the omission §16.1 forbids, so this
-#     is checked by name rather than inferred.
-[ -d "$ROOT/docs-portal/build" ] \
-  || { echo "FATAL: docs-portal/build is missing — the customer bundle ships the documentation portal offline. Build it (cd docs-portal && npm ci && npm run build) and rerun." >&2; exit 1; }
-[ -f "$ROOT/docs-portal/build/index.html" ] \
-  || { echo "FATAL: docs-portal/build has no index.html — refusing to ship a documentation portal with no entry point" >&2; exit 1; }
+# 7i. The offline documentation portal. docs-portal/build is a gitignored build
+#     artifact that the frontend image COPYs; the preflight near the top of this
+#     script already refused to start without it (that check used to live ONLY
+#     here, which is why a missing portal was reported by BuildKit instead of by
+#     us). Re-asserted at the point of use: a bundle silently shipping no
+#     documentation is exactly the omission §16.1 forbids, and the copy below
+#     must not be reached on a portal that vanished mid-build.
+require_prebuilt_docs_portal || exit 1
 echo "-- copying the offline documentation portal"
 rm -rf "$BUNDLE_DIR/docs"
 cp -a "$ROOT/docs-portal/build" "$BUNDLE_DIR/docs"

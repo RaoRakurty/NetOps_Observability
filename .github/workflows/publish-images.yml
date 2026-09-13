@@ -86,17 +86,37 @@ jobs:
 
       # The frontend image copies a prebuilt SPA bundle (src/frontend/dist),
       # which is gitignored — build it here, same as the host install does.
+      # Both npm trees the image bakes in key the cache: the SPA and the
+      # documentation portal built two steps below.
       - if: matrix.name == 'frontend'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
           cache: npm
-          cache-dependency-path: NetOps_Observability/src/frontend/package-lock.json
+          cache-dependency-path: |
+            NetOps_Observability/src/frontend/package-lock.json
+            NetOps_Observability/docs-portal/package-lock.json
       - if: matrix.name == 'frontend'
         working-directory: NetOps_Observability/src/frontend
         run: |
           npm ci
           npm run build
+
+      # ...and the SECOND gitignored artifact the same Dockerfile COPYs:
+      # docs-portal/build, the Docusaurus portal served at /docs/. This workflow
+      # looked green only because it has NEVER RUN — it fires on `v*.*.*` tags
+      # and workflow_dispatch only, and no tag has been pushed — so the defect
+      # that turned release-bundle.yml's `bundle` job red on main (run
+      # 34721086054, 2026-09-12: BuildKit `"/docs-portal/build": not found`) was
+      # latent here too and would have failed the first RC1 tag in this matrix
+      # leg. ONE canonical line, character-identical to release-bundle.yml's
+      # (asserted by tests/test_release_bundle_docs_portal.py), and it precedes
+      # the image build because the image cannot be built without it.
+      - if: matrix.name == 'frontend'
+        name: Build the in-app documentation portal (docs-portal/build)
+        run: |
+          set -euo pipefail
+          (cd NetOps_Observability/docs-portal && npm ci --no-audit --no-fund && npm run build)
 
       - name: Compute (lowercase) image ref
         id: img

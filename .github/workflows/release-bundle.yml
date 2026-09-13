@@ -143,11 +143,17 @@ jobs:
           sudo docker image prune -af
           df -h /
 
+      # Two npm trees feed the frontend image, so BOTH lockfiles key the cache:
+      # src/frontend (make-installer.sh rebuilds dist/ itself) and docs-portal
+      # (built below). Keying on the SPA lockfile alone left the Docusaurus
+      # install uncached.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
           cache: npm
-          cache-dependency-path: NetOps_Observability/src/frontend/package-lock.json
+          cache-dependency-path: |
+            NetOps_Observability/src/frontend/package-lock.json
+            NetOps_Observability/docs-portal/package-lock.json
 
       - name: Install zstd
         run: command -v zstd >/dev/null || sudo apt-get install -y --no-install-recommends zstd
@@ -197,6 +203,30 @@ jobs:
             echo "CORRELIX_SIGNING_KEY=$FPR"
           } >> "$GITHUB_ENV"
           echo "distribution signing key imported: $FPR"
+
+      # PRE-BUILT WEB ASSET, and the reason the `bundle` job was RED on main
+      # (run 34721086054, 2026-09-12). deployment/docker/Dockerfile.frontend
+      # COPYs TWO gitignored build artifacts: src/frontend/dist — which
+      # make-installer.sh rebuilds itself (its step 1, always, so a stale dist
+      # cannot ship) — and docs-portal/build, the Docusaurus portal served at
+      # /docs/, which NOTHING in this job built. The image build therefore died
+      # inside BuildKit with `"/docs-portal/build": not found`, after the full
+      # release gate had already been paid for. It never surfaced locally
+      # because the deploy chain builds the portal before `docker compose
+      # build`, exactly as install.py's PREBUILT_WEB_ASSETS tells an operator
+      # to.
+      #
+      # It must run BEFORE the image build, and a Docusaurus failure must fail
+      # the job — `set -euo pipefail` plus the `&&` chain, no `|| true` (§16.1).
+      # The command is ONE canonical line, character-identical in
+      # publish-images.yml, fresh-install-integrity.yml and
+      # scale-miniladder-nightly.yml and equal to install.py's recipe;
+      # tests/test_release_bundle_docs_portal.py asserts that so the copies
+      # cannot drift.
+      - name: Build the in-app documentation portal (docs-portal/build)
+        run: |
+          set -euo pipefail
+          (cd NetOps_Observability/docs-portal && npm ci --no-audit --no-fund && npm run build)
 
       - name: Build bundle (base + add-on packs)
         id: build
