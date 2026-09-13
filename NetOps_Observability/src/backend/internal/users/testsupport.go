@@ -31,7 +31,7 @@ func (s *FileStore) MutateForTest(id string, mod func(*User)) error {
 // LegacySeeder writes a PRE-TRACKER-300 account: `id == lower(username)`, an
 // auth_source, and NO identity row — exactly the shape the username-keyed code
 // left behind, which is what the §2.6 lazy bind and the §3 backfill have to cope
-// with. TEST SUPPORT ONLY, and deliberately NOT the deprecated UpsertFederated:
+// with. TEST SUPPORT ONLY, and deliberately NOT a resolution call:
 // the new tests must not exercise the code path they are replacing.
 //
 // It is an interface so the cross-backend contract can seed both stores.

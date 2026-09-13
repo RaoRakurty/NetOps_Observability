@@ -150,6 +150,14 @@ func (s *server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		// weaker password than the policy allows. (Empty password = invited/passwordless
 		// account; CreateFull permits it and login simply never matches.)
 		if req.Password != "" {
+			// The account does not exist yet, so it HAS no principal id: the only
+			// user reference available here is the name the admin typed. A
+			// user-scoped password rule written against that name therefore still
+			// applies at create time, and one written against a principal id
+			// (which is what every other resolution uses since tracker 300)
+			// correctly does not — the id it names is not this request's account.
+			// Deliberately fail-SAFE rather than fail-open: a rule that matches
+			// makes the create stricter, never weaker.
 			rules := s.callerPasswordRules(jwtClaims{Sub: req.Username, Role: role, Tenant: req.TenantID})
 			if err := validatePasswordAgainstPolicy(req.Password, rules); err != nil {
 				writeError(w, http.StatusBadRequest, err)

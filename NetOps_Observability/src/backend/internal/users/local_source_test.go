@@ -6,7 +6,7 @@ package users
 // local_source_test.go — H1 regression coverage for the local/federated split:
 // the IsLocalSource predicate (""=local), the AuthSource stamp on the
 // bootstrap/seed write paths, and the one-time load migration that normalizes
-// pre-stamp rows. The UpsertFederated refusal these enable is proven in the
+// pre-stamp rows. The local-account refusal these enable is proven in the
 // cross-backend authorization contract (federated_contract_test.go).
 
 import (

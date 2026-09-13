@@ -13,7 +13,7 @@ package users
 //
 //	CreateFull(admin @ t_aaaaaaa) → ok
 //	CreateFull(admin @ t_bbbbbbb) → `user "admin" already exists`
-//	UpsertFederated("jdoe", …, "oidc", t_a) then ("jdoe", …, "ldap", t_b)
+//	the username-keyed upsert of "jdoe" as oidc@t_a, then as ldap@t_b
 //	  → count=1, role="operator", email="jdoe@b.example", tenant="t_aaaaaaa"
 //	  — two unrelated directories MERGED into one account.
 //

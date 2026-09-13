@@ -427,6 +427,66 @@ func TestPendingIdentityIsVisibleToTheAdmin(t *testing.T) {
 	}
 }
 
+// §3a rule 5 — the isolation test the new ?identity=pending surface owes. The
+// filter narrows an already tenant-scoped list; this proves it never widens one.
+func TestPendingIdentityListIsTenantScoped(t *testing.T) {
+	f := newSigninFixture(t)
+	seeder, ok := f.s.users.(users.LegacySeeder)
+	if !ok {
+		t.Fatalf("%T cannot seed a legacy row", f.s.users)
+	}
+	// One pending legacy account in each tenant.
+	for name, tenant := range map[string]string{"pending-a": f.tenantA, "pending-b": f.tenantB} {
+		if err := seeder.SeedLegacyForTest(User{
+			Username: name, Role: RoleReadOnly, Status: "active", TenantID: tenant,
+			AuthSource: users.ProtocolOIDC, CreatedAt: time.Now().UTC().Add(-time.Hour),
+		}); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	// A tenant-A administrator.
+	if _, err := f.s.users.CreateFull(User{Username: "a-admin", Role: RoleSuperAdmin, TenantID: f.tenantA}, "Passw0rd!2345"); err != nil {
+		t.Fatalf("create tenant admin: %v", err)
+	}
+	tokA := login(t, f.srv, "a-admin", "Passw0rd!2345").Token
+
+	st, b := do(t, f.srv, "GET", "/api/users?identity=pending", tokA, nil)
+	if st != 200 {
+		t.Fatalf("tenant admin list pending: %d %s", st, b)
+	}
+	var got []publicUser
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "pending-a" {
+		t.Fatalf("?identity=pending returned %+v, want only tenant A's pending row", got)
+	}
+	// The platform owner still sees both — the filter narrows, it does not scope.
+	st, b = do(t, f.srv, "GET", "/api/users?identity=pending", f.admin, nil)
+	if st != 200 {
+		t.Fatalf("platform list pending: %d %s", st, b)
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("platform owner saw %d pending rows, want 2", len(got))
+	}
+	// An unrecognised filter value narrows nothing and widens nothing.
+	st, b = do(t, f.srv, "GET", "/api/users?identity=bogus", tokA, nil)
+	if st != 200 {
+		t.Fatalf("bogus filter: %d %s", st, b)
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range got {
+		if u.TenantID != f.tenantA {
+			t.Fatalf("an unrecognised filter widened the tenant scope: %+v", u)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // §3 Enforce — the boot gate
 // ---------------------------------------------------------------------------

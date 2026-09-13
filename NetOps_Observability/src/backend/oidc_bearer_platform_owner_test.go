@@ -6,7 +6,7 @@ package backend
 // oidc_bearer_platform_owner_test.go — SR-025 parity for the RS256 BEARER path.
 //
 // The interactive SSO callback gets the federated platform-owner guard for free:
-// it provisions through users.UpsertFederated, which runs Deps.GuardRole
+// it provisions through users.ResolveFederatedUnbound, which runs Deps.GuardRole
 // (= guardFederatedRole). The bearer branch of withAuth mints jwtClaims DIRECTLY
 // from the verified token and so had no guard at all — an IdP access token whose
 // realm roles merely contain "admin" (one of the DEFAULT OIDC_ADMIN_ROLES values,

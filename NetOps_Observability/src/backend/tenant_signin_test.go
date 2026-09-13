@@ -538,7 +538,7 @@ func TestPerTenantFlowReturnsToTheTenantPath(t *testing.T) {
 
 // A user arriving through a tenant's own connection is PROVISIONED into that
 // tenant — the binding is the operator's, not a claim, and it never moves an
-// account that already exists (UpsertFederated leaves an existing tenant alone).
+// account that already exists (resolution leaves an existing tenant alone).
 func TestProvisionTenantFollowsTheConnectionBinding(t *testing.T) {
 	f := newSigninFixture(t)
 	p := f.s.oidcProvider()
