@@ -12,17 +12,17 @@ who is on it, where it is, and when it is expected. Times are local box time.
 |---|---|---|---|---|---|---|
 | D5 | Branch protection on `main` — 21 checks, strict, enforce_admins, conversation resolution | Fable | ✅ DONE | Sun 04:58 | — | Re-read live: 21/strict/admins/conv all true, approvals 0, force-push+deletion off. Rulesets: none existed; bypass actors: none (sole collaborator is the owner, admin). `bundle` check left unrequired (failing, stale bundle). |
 | D5 | Tag ruleset `release-tags-immutable` on `refs/tags/v*` | Fable | ✅ DONE | Sun 04:58 | — | id 23134136, active, rules deletion+update+non_fast_forward, no bypass actors. Creation allowed (the owner pushes the tag once); dev tags untouched. |
-| D5 | Docs: runbook live-state, Decision-5 doc → APPLIED, pending register, consistency test | Opus | 🔄 running | Sun 04:58 | Sun 05:58 | |
+| D5 | Docs: runbook live-state, Decision-5 doc → APPLIED, pending register, consistency test | Opus | ✅ DONE (merged 1e3cd70b) | Sun 04:58 | Sun 05:58 | |
 | 306 | `visibleSaved` cross-tenant leak, read + write paths | Opus | 🔄 running | Sun 04:58 | Sun 07:58 | isolation test required |
 | 298 | `runSitesImport` read oracle → third outcome `refused` | Opus | 🔄 running | Sun 04:58 | Sun 07:58 | decision taken: refused = writes nothing, discloses existence only |
 | 307 | four `collectors/redis.go` reads carry the 290 fold | Opus | 🔄 running | Sun 04:58 | Sun 07:58 | callers disposition + baseline entries deleted |
 | 296 | SR Linux hardening fails open on 2 of 3 path spellings | Opus | 🔄 running | Sun 04:58 | Sun 06:58 | decision taken: match all three spellings AND refuse unrecognised SRL form as UNASSESSED |
-| 308 | memflat false leak call on VictoriaMetrics | Opus | 🔄 running | Sun 04:58 | Sun 07:58 | quiet-interval two-end-sample anchor, NOT a wider --mem-factor |
+| 308 | memflat false leak call on VictoriaMetrics | Opus | ✅ DONE (58ce94c8, merged; row deleted) | Sun 04:58 | Sun 07:58 | quiet-interval two-end-sample anchor, NOT a wider --mem-factor |
 | 309 | correlation cannot read `netops.controller_events` | Opus | 🔄 running | Sun 04:58 | Sun 06:58 | ACL matrix + explicit observable refusal + a gate that judges it |
 | 238a | verify 29 licence reviews against 7 conditions, sign only passes | Opus | 🔄 running | Sun 04:58 | Sun 07:58 | each failure reported individually |
 | 238b | strip six distlib PE launchers from the correlation runtime image | Opus | 🔄 running | Sun 04:58 | Sun 08:58 | both Syft representations must vanish; pip regression; report if dropping pip is stronger |
-| 300 | identity namespacing — Phase 1 inspection | Fable | 🔄 running | Sun 04:58 | Sun 08:58 | inspection only, no code |
-| 300 | Phases 2–6 (schema, backfill, switch, enforce, tests) | Opus | ⏳ queued | — | Mon 10:58 | ~3–4 working days in the register; parallelised where the phases allow |
+| 300 | identity namespacing — Phase 1 inspection + design of record (docs/design/IDENTITY_NAMESPACING_2026-09-13.md) | Fable | ✅ DONE (92bcf524) | Sun 04:58 | Sun 08:58 | inspection only, no code |
+| 300 | Phases 2–3 store+schema+migration (agent 300-store), then 4–6 doors+fan-out+tests (agent 300-doors) | Opus | 🔄 running (store) | Sun 05:10 | Mon 10:58 | ~3–4 working days in the register; parallelised where the phases allow |
 | — | merge agent branches, tracker rows deleted, full gate, push, CI green | Fable+Opus | ⏳ queued | — | Sun 12:58 | after the first wave lands |
 | — | main → feature merge (main is not an ancestor of the branch; strict mode needs it) | Fable | ⏳ queued | — | Sun 12:58 | routine merge, no rewrite |
 | — | customer bundle rebuild from the final commit | Opus | ⏳ queued | — | after 300 | ~210 commits stale today |
