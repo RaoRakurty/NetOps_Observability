@@ -64,6 +64,50 @@ applies to the platform operator, and is a no-op when no tenant is restricted.
   tenant still pays for its devices): licence usage and ceilings, metering,
   config-backup device sets, and the `netops_devices_total` gauge.
 
+✅ **Reports — the run, execution and ARTIFACT surfaces** (`reports.ExecScope`,
+  threaded into `ExecutionStore.List/Get`, tenant_id based; tracker 304). An
+  execution row carries the rendered summary of one report fire, and
+  `GET /api/reports/executions/{id}/artifact` streams the stored HTML/XLSX/PDF —
+  rendered under the owning tenant's own scope, so it is that tenant's complete
+  data, not a summary of it.
+  - `GET /api/reports/executions` and `/{id}` (**404**, never 403) and the
+    `/artifact` stream. The exclusion rides in the SQL, not in a post-filter, so
+    the LIMIT is applied to the visible set (a short page is itself a disclosure).
+  - `GET /api/reports/runs` on BOTH backends — the execution history under
+    Postgres (`runsFromExecutions`) and the scheduler's in-memory map under the
+    file backend; `run.Detail` is the rendered summary in both.
+  - `GET /api/exports/{id}`, which carries an export's size and a signed
+    download link for the stored rows.
+  - `POST /api/reports/run` ("Send now") — the synchronous (file-backend) branch
+    answers with the run it just produced, `Detail` and all, so a report platform
+    staff may not read is not one they may fire on demand either (**404**).
+
+  **Deliberately NOT restricted on this path**: the scheduler's own
+  de-duplication probe (`anchorFor`), which must see a restricted tenant's last
+  fire or it re-fires its schedule for ever, and the signed-link download routes
+  `/api/reports/view` + `/api/exports/view`, where the short-lived token IS the
+  authorization and the recipient is the TENANT — the restriction hides a tenant
+  from the platform, never from itself.
+
+✅ **Maintenance windows** (`tenantVisibility` at the handler, tenant_id based;
+  tracker 305). A declared window is when a customer's network is deliberately
+  down and who is touching it — device ids, site slugs, rule names, the
+  operator's description and the schedule.
+  - `GET /api/alerts/maintenance-windows` (rows AND the `count` beside them) and
+    `GET|PUT|DELETE /api/alerts/maintenance-windows/{id}` (**404**, never 403 —
+    a window platform staff may not read is not one they may overwrite or
+    delete either).
+  - The count is computed at the handler over the filtered list, which is
+    sufficient HERE because `maintenance.Store.List` takes no limit and returns
+    whole rows — unlike the episode list, whose `total` is computed inside the
+    store and therefore needed `alerts.EpisodeScope`.
+
+  **Deliberately NOT restricted**: window SUPPRESSION itself
+  (`alertNotifySuppressed`, `maintenanceCoveredIDs`, `Store.Covering`). A
+  restricted tenant's planned work still pauses that tenant's notifications and
+  still stamps its timeintel snapshots — this is a rule about operator reads,
+  never about what the platform collects or does on a tenant's behalf.
+
 ✅ **Raw OpenSearch Dashboards console** (`/search`) — can't be per-tenant filtered
   (security plugin off), so it is **denied entirely whenever any tenant is
   operator-restricted** (`?c=search` gate). The operator uses the in-app Logs view

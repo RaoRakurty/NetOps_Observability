@@ -66,19 +66,19 @@ func TestExportSubstratePG(t *testing.T) {
 	mustAppend("ex1", jobTypeExport, "exp1")
 	mustAppend("rx1", "report", "rep1")
 
-	rec, _, found, err := es.Get(ctx, "acme", false, "ex1")
+	rec, _, found, err := es.Get(ctx, reports.ExecScopeFor("acme", false), "ex1")
 	if err != nil || !found || rec.Kind != jobTypeExport {
 		t.Fatalf("get export exec: err=%v found=%v kind=%q", err, found, rec.Kind)
 	}
-	if ex, _ := es.List(ctx, "acme", false, reports.ExecQuery{Kind: jobTypeExport}); len(ex) != 1 || ex[0].ID != "ex1" {
+	if ex, _ := es.List(ctx, reports.ExecScopeFor("acme", false), reports.ExecQuery{Kind: jobTypeExport}); len(ex) != 1 || ex[0].ID != "ex1" {
 		t.Errorf("List(kind=export) = %v, want [ex1]", ex)
 	}
-	if rp, _ := es.List(ctx, "acme", false, reports.ExecQuery{Kind: "report"}); len(rp) != 1 || rp[0].ID != "rx1" {
+	if rp, _ := es.List(ctx, reports.ExecScopeFor("acme", false), reports.ExecQuery{Kind: "report"}); len(rp) != 1 || rp[0].ID != "rx1" {
 		t.Errorf("List(kind=report) = %v, want [rx1]", rp)
 	}
 
 	// 3) RLS: another tenant sees none of acme's exports.
-	if other, _ := es.List(ctx, "globex", false, reports.ExecQuery{Kind: jobTypeExport}); len(other) != 0 {
+	if other, _ := es.List(ctx, reports.ExecScopeFor("globex", false), reports.ExecQuery{Kind: jobTypeExport}); len(other) != 0 {
 		t.Errorf("cross-tenant leak: globex sees %d export execs, want 0", len(other))
 	}
 
@@ -88,7 +88,7 @@ func TestExportSubstratePG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnqueueExport: %v", err)
 	}
-	rec2, _, found2, err := es.Get(ctx, "acme", false, execID)
+	rec2, _, found2, err := es.Get(ctx, reports.ExecScopeFor("acme", false), execID)
 	if err != nil || !found2 || rec2.Kind != jobTypeExport || rec2.Status != reports.StatusQueued {
 		t.Errorf("EnqueueExport exec wrong: found=%v kind=%q status=%q err=%v", found2, rec2.Kind, rec2.Status, err)
 	}
