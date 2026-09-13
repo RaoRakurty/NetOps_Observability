@@ -102,8 +102,10 @@ Pure standard library (CLAUDE.md §6). No network, no docker, no running stack.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
 import hashlib
+import io
 import json
 import os
 import re
@@ -118,6 +120,8 @@ GO_MOD = os.path.join(ROOT, "src", "backend", "go.mod")
 INVENTORY = os.path.join(ROOT, "docs", "compliance", "oci-inventory.json")
 ARCHIVE_INDEX = os.path.join(ROOT, "docs", "compliance", "source-archive-index.json")
 SOURCE_ARCHIVE_TOOL = os.path.join(ROOT, "scripts", "source-archive.py")
+# tracker 238(a): the mechanical verification a signature rests on.
+REVIEW_VERIFIER = os.path.join(ROOT, "scripts", "verify-source-reviews.py")
 
 SCHEMA_VERSION = 1
 
@@ -1184,6 +1188,43 @@ def _source_archive_module():
     return mod
 
 
+def _review_verifier_module():
+    """scripts/verify-source-reviews.py, which owns the seven sign-off
+    conditions (tracker 238(a)). Loading it is offline and side-effect free."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "correlix_verify_source_reviews", REVIEW_VERIFIER)
+    if spec is None or spec.loader is None:
+        raise ComplianceError(
+            f"cannot load {REVIEW_VERIFIER}, which owns the mechanical conditions "
+            f"a review signature rests on")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def offline_review_defects(review: dict, verifier_mod: Any) -> list[str]:
+    """The sign-off conditions that need NEITHER docker NOR the network: an
+    explicit conclusion (3), a rationale that exists (4) and no placeholder
+    text (5). The evidence-bound conditions (1, 2, 6, 7) live in
+    `verify-source-reviews.py --check`, which fetches the bytes.
+
+    This is what lets --selftest hold the invariant "no signature sits on an
+    entry that is not even internally complete" on every offline run.
+    """
+    # load_oci() re-reads THIS file from disk rather than relying on how this
+    # module happened to be imported (the tests load it by path, so __name__ is
+    # not in sys.modules); it is offline and its tables are the same ones.
+    verifier = verifier_mod.Verifier(verifier_mod.MappingFetcher(),
+                                     verifier_mod.load_oci())
+    res = verifier_mod.Result(review)
+    verifier.check_conclusion_is_explicit(review, res)
+    verifier.check_no_placeholders(review, res)
+    if not str(review.get("rationale") or "").strip():
+        res.fail(4, "no rationale")
+    return [f"C{f.condition}: {f.reason}" for f in res.findings]
+
+
 def validate_archive_index(doc: Any, path: str = ARCHIVE_INDEX) -> list[str]:
     mod = _source_archive_module()
     try:
@@ -1721,6 +1762,22 @@ def print_reviews(path: str | None) -> int:
     print(f"  needs a human          : {len(human)}")
     print(f"  awaiting owner signoff : {len(unsigned)}"
           f"{'  (--release FAILS on every one it relies on)' if unsigned else ''}")
+    # tracker 238(a): a signature is only worth the evidence under it, so the
+    # counts above are reported next to the check that earns them.
+    signable = [r for r in entries
+                if not (r.get("needs_human") or r["source_required"] == "unclear")]
+    print(f"  eligible for signoff   : {len(signable)}"
+          f"  ({len(entries) - len(signable)} need a human first)")
+    print("  verify before signing  : python3 scripts/verify-source-reviews.py "
+          "--check")
+    print("                           (7 mechanical conditions per entry: evidence "
+          "fetched, sha re-computed,")
+    print("                            conclusion explicit, rationale about the "
+          "SHIPPED artifact, no")
+    print("                            placeholders, shipped version, no "
+          "evidence/conclusion contradiction.")
+    print("                            `--sign` sets owner_signoff on the entries "
+          "that pass all seven.)")
     print("  by package type        : "
           + ", ".join(f"{k}={v}" for k, v in sorted(by_type.items())))
     if human:
@@ -2001,6 +2058,29 @@ def selftest() -> int:
           validate_archive_index(read_json(ARCHIVE_INDEX,
                                            what="source archive index"),
                                  ARCHIVE_INDEX), [])
+
+    # tracker 238(a) — the sign-off gate has a mechanical floor, and it is held
+    # here because this is the selftest CI runs. Conditions 1/2/6/7 need the
+    # images and aports (`verify-source-reviews.py --check`); 3, 4 and 5 need
+    # nothing, so no SIGNED review may fail them, ever.
+    check("the review verifier is present", os.path.isfile(REVIEW_VERIFIER), True)
+    if os.path.isfile(REVIEW_VERIFIER):
+        verifier_mod = _review_verifier_module()
+        # Its own selftest, run silently so this one's output stays one block.
+        quiet = io.StringIO()
+        with contextlib.redirect_stdout(quiet):
+            verifier_rc = verifier_mod.selftest()
+        check("the review verifier's own selftest is offline-clean", verifier_rc, 0)
+        signed_defects: list[str] = []
+        for rev in load_reviews(REVIEW_TABLE, required=True).values():
+            if not rev.get("owner_signoff"):
+                continue
+            defects = offline_review_defects(rev, verifier_mod)
+            if defects:
+                signed_defects.append(
+                    f"{rev['component']} {rev['version']}: " + "; ".join(defects))
+        check("no signed licence review fails an offline sign-off condition",
+              signed_defects, [])
 
     if fails:
         for f in fails:

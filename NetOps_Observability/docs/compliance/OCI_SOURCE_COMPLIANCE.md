@@ -601,10 +601,11 @@ customer release on its own.
 python3 scripts/oci-compliance.py --reviews      # counts + every needs_human item
 ```
 
-**State on 2026-09-06.** 17 review entries. 95 were written on 2026-09-05, but 82
-of them described `netops-correlation`'s Debian userland and the CPython build
-that sat on it; tracker 263 moved that image to `python:3.12-alpine` and those
-packages are no longer shipped, so their reviews were deleted with them (a review
+**State on 2026-09-06.** 29 review entries (95 -> 29: 82 deleted, 16 written, 13
+kept). 95 were written on 2026-09-05, but 82 of them described
+`netops-correlation`'s Debian userland and the CPython build that sat on it;
+tracker 263 moved that image to `python:3.12-alpine` and those packages are no
+longer shipped, so their reviews were deleted with them (a review
 of bytes nobody distributes rots exactly the way the register does — `git show`
 recovers them if a past release has to be re-audited). What remains: 2 Debian
 reviews for `netops-api`, 9 Alpine reviews for `netops-frontend`/`netops-nginx`,
@@ -613,8 +614,9 @@ is byte-identical to 3.12.13's, same sha256 — only the version moved), and thr
 new Alpine reviews for the packages whose metadata the scan could not resolve
 (`.python-rundeps`, a virtual meta-package that installs zero files;
 `sqlite-libs`, licence id `blessing`; `xz-libs`, whose origin package's licence
-LIST includes GPL-2.0-or-later but whose own file list is `liblzma.so.5` alone).
-**All 17 are awaiting owner sign-off.** `dash 0.5.12-12` — the other 2026-09-05
+LIST includes GPL-2.0-or-later but whose own file list is `liblzma.so.5` alone),
+alongside the twelve Alpine components whose copyleft obligation the entry states
+in writing rather than settles. `dash 0.5.12-12` — the other 2026-09-05
 `unclear` — went away with the Debian base; the remaining unclear one:
 
 * **`Simple Launcher 1.1.0.14`** — six **Windows** PE stubs vendored inside pip
@@ -625,6 +627,51 @@ LIST includes GPL-2.0-or-later but whose own file list is `liblzma.so.5` alone).
   reported under is a property of the scanner (`binary` from the PE cataloger,
   `nuget` when a .NET cataloger names them first), so both spellings are
   recorded — a scanner-shape difference must never drop an obligation.
+
+### 12.1 The signature has a mechanical floor (tracker 238(a))
+
+A signature is worth exactly what the evidence under it is worth, so the owner's
+2026-09-13 decision approved the technical sign-off **subject to** a mechanical
+verification of seven conditions per entry.
+`scripts/verify-source-reviews.py` is that verification, and it is a script
+rather than a one-off because §13 rewrites this table on every base-image bump:
+
+| # | condition |
+|---|---|
+| 1 | the evidence is **fetched** — the file the image itself carries, or the APKBUILD at the aports commit the image's own apk database records (a commit the database does not record is the wrong evidence) |
+| 2 | the `sha256` is present and **recomputed** over those bytes |
+| 3 | the conclusion is explicit: `governing_licences` non-empty, `source_required` true/false/`"unclear"` |
+| 4 | the rationale explains the **shipped artifact**, not the source tree in general (or, where the package's own licence record carries no copyleft term at all, says so — and the pass is reported as "by exclusion") |
+| 5 | no TODO / TBD / UNKNOWN / placeholder anywhere in the entry |
+| 6 | the version is the **shipped** one: apk `V:`, dpkg `Version:`, CPython's `patchlevel.h`, corroborated against `docs/compliance/oci-inventory.json` |
+| 7 | evidence and conclusion do not contradict: the licences the package's own metadata records must support the ones the review claims, a copyleft term may be narrowed away only when the rationale **names it** and rests on the package's file list, and a copyleft conclusion can never come back as `source_required: false` |
+
+```bash
+python3 scripts/verify-source-reviews.py --check   # report; exit 1 on any failure
+python3 scripts/verify-source-reviews.py --sign    # sign the entries that pass all seven
+```
+
+It never edits a conclusion, a rationale or a licence to make a condition pass,
+and it never removes a signature: a failing entry stays unsigned and is reported.
+`oci-compliance.py --selftest` holds the offline half of the conditions (3, 4, 5)
+over the committed table on every run, so no signature can sit on an entry that
+is not even internally complete.
+
+**Verification of 2026-09-13.** 25 of the 29 entries passed all seven and are
+signed. Four are not:
+
+* **`xz-libs 5.6.3-r1`** (condition 7) — the apk record is
+  `GPL-2.0-or-later AND 0BSD AND Public-Domain AND LGPL-2.1-or-later` and the
+  review narrows it to `0BSD`, but its rationale addresses only the
+  GPL-2.0-or-later term and never the LGPL-2.1-or-later one. The newer
+  `xz-libs 5.8.3-r0` entry addresses both, which is why it passed.
+* **`.python-rundeps 20260901.001029`** (condition 3) — `governing_licences` is
+  empty. The conclusion ("not a work at all — the record installs zero files")
+  may well be right, but the entry states no licence, so nothing mechanical can
+  confirm what it cleared.
+* **`Simple Launcher 1.1.0.14`** (×2, `needs_human`) — not eligible for sign-off
+  at all, and unverifiable by construction: the entry's own evidence kind is
+  `no-licence-evidence-in-image`.
 
 ---
 
