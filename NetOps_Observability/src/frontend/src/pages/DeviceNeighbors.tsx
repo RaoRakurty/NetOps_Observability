@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import { vrfTerm } from "../lib/vendorTerms";
 import { api, Device, TopoLink, PromInstantSeries } from "../services/api";
+import { operatorError } from "../lib/errors";
 import AskIris from "../components/AskIris";
 
 // DeviceNeighbors — the Neighbours tab of the device page. Three live
@@ -56,7 +57,7 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
       .catch((e) => {
         if (!alive) return;
         setLinks([]);
-        setLinksError((e as Error).message || "The adjacency evidence could not be read.");
+        setLinksError(operatorError(e, "The adjacency evidence could not be read."));
       });
     api.metricsQuery(`device_bgp_peer_state{device="${id}"}`).then((r) => alive && setBgp(r?.data?.result ?? [])).catch(() => alive && setBgp([]));
     api.metricsQuery(`device_ospf_nbr_state{device="${id}"}`).then((r) => alive && setOspf(r?.data?.result ?? [])).catch(() => alive && setOspf([]));
