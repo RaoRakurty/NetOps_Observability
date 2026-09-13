@@ -31,6 +31,12 @@ import (
 const (
 	orgIDPrefix    = "org_"
 	tenantIDPrefix = "t_"
+	// userIDPrefix tags the internal principal id of a USER (tracker 300,
+	// docs/design/IDENTITY_NAMESPACING_2026-09-13.md §2.1). Accounts that predate
+	// the change keep `id == lower(username)` — nothing that already references a
+	// user changes value — so a `u_` prefix is a positive signal that the id is
+	// opaque and was never derived from the login name.
+	userIDPrefix = "u_"
 )
 
 // opaqueIDBytes is the entropy per id: 16 bytes = 128 bits, hex-encoded to 32
@@ -56,9 +62,20 @@ func newOpaqueID(prefix string) string {
 	return prefix + hex.EncodeToString(b[:])
 }
 
-// mintOrgID / mintTenantID are the ONLY ways a new org/tenant id is created.
+// mintOrgID / mintTenantID / mintUserID are the ONLY ways a new org/tenant/user
+// id is created.
 func mintOrgID() string    { return newOpaqueID(orgIDPrefix) }
 func mintTenantID() string { return newOpaqueID(tenantIDPrefix) }
+
+// mintUserID mints the immutable internal principal id of a NEW LOCAL account.
+// It is opaque for the same reasons an org/tenant id is, plus one specific to
+// identity: a username is a PER-TENANT display handle that an administrator may
+// reuse, so an id derived from it could not be a stable foreign key for sessions,
+// role bindings, audit actors and API handles. Federated accounts do NOT come
+// through here — their id is the deterministic hash of their canonical tuple
+// (users.FederatedID, design §2.4), so a JIT race and a re-run migration converge
+// on the same id without coordination.
+func mintUserID() string { return newOpaqueID(userIDPrefix) }
 
 // reservedSlugs are handles a customer may never take, because they collide with
 // platform routes, sentinels, or well-known paths (an attacker must not be able

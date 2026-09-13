@@ -3,6 +3,14 @@
 
 package users
 
+// DEPRECATED SURFACE (tracker 300). Everything below exercises
+// UpsertFederated/UpsertFederatedInRealm, the USERNAME-keyed federated upsert
+// that identity namespacing replaces. The methods are kept, unchanged, only so
+// the doors keep compiling until the 300-doors change rewrites them; THIS FILE
+// GOES WITH THEM. The properties it pins (the SR-025 guard wiring, H1's
+// local-account refusal, the C3 realm rule) are re-asserted on the tuple path in
+// identity_contract_test.go, so nothing is lost when it is deleted.
+
 // federated_realm_test.go — the realm contract for UpsertFederatedInRealm, run
 // against BOTH backends through the Repo seam so the file and Postgres stores
 // cannot drift.
