@@ -205,7 +205,19 @@ func (s *server) wanProject(ctx context.Context, vis deviceVisibility) ([]WanEnd
 	if fetchIfAddr == nil {
 		fetchIfAddr = collectors.FetchIfAddrMap
 	}
-	ifaddr, _ := fetchIfAddr(ctx) // device → ip → ifName (empty if collector off)
+	// device → ip → ifName. This registry is what makes an interface VISIBLE to the
+	// projection at all (`for ip, ifn := range ifaddr[devID]` below is the only
+	// source of in-scope interfaces on a WAN device), so an unread registry does
+	// not merely drop port labels here — it empties the WAN interface table and
+	// the circuit list derived from it. The projection still answers, because the
+	// alternative is refusing a WAN page whenever the SNMP share channel blips and
+	// because `wanProject` already carries the adjacency-evidence error its callers
+	// turn into a banner; what it must not do is answer "this tenant has no WAN
+	// interfaces" without anyone being able to find out that nothing was read
+	// (tracker 307, §10).
+	ifaddr, ifaddrErr := fetchIfAddr(ctx)
+	reportIfRegistryUnread("wan", "the interface table for this projection is EMPTY — no WAN interface or circuit can be derived, which is indistinguishable from a tenant that has none", ifaddrErr,
+		map[string]any{"tenant": tenant, "cross": cross, "wan_devices": len(wanDev)})
 
 	// ifName → ip, per device (inverse of ifaddr) — for peer-IP resolution.
 	ipByDevIf := map[string]map[string]string{}
