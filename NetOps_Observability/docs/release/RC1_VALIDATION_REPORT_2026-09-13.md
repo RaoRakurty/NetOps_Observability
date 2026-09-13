@@ -93,8 +93,8 @@ Four trust domains stay separate (tag → human; bundles → GPG; images → Cos
 ```
 protected main (Decision 5, applied 2026-09-13; 21 checks, strict, enforce_admins, tag ruleset)
   -> PR #5 (feat/observability-platform → main), branch tip 1fe6f618, gated 16/16 locally incl. Postgres leg
-  -> FINAL_RC1_SHA: PENDING-MERGE
-  -> release-only gates on that SHA (release-gate incl. install.py boot test; bundle job): PENDING-MERGE
+  -> FINAL_RC1_SHA: 78e82c54ff0e96847555c2e6f5c503e46cd02611   (PR #5 merged 2026-09-13 23:27 UTC as a two-parent merge commit; 31/31 checks green)
+  -> release-only gates on that SHA (release-bundle.yml on the push to main → release-gate.yml incl. install.py boot test; bundle job): RUNNING — result appended below when complete
   -> signed v0.9.0-rc1 tag: BLOCKER C (release owner)
 ```
 Lab: c7b08be7 deployed and QUALIFIED 12/12 (twice; the one load-shaped Q3 miss re-ran clean).
