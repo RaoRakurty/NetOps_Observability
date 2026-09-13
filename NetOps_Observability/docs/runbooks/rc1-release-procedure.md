@@ -51,6 +51,7 @@ These are not per-step. If any is false, **no step below may be authorized.**
 | 0.3 | **OCI source-compliance passes in release mode** for every image that will be published | the `oci-compliance` matrix job in `.github/workflows/publish-images.yml` runs `python3 scripts/oci-compliance.py --sbom … --image … --digest … --source-dir "$OFFER" --manifest … --release` against **each pushed digest**. It is `needs:`-gated by `release-gate.yml`, so it cannot be skipped. Offline pre-check: `python3 scripts/oci-compliance.py --selftest` | the gate exists and is wired; it has never run on a real tag, because no `v*` tag has ever existed |
 | 0.4 | **Working tree clean at the commit to be tagged** | `git status --porcelain` prints nothing | not established |
 | 0.5 | **The gate machinery itself is consistent** | `python3 -m pytest tests/test_required_checks_consistency.py -q` and `actionlint` over `.github/workflows/` | the pytest passes today |
+| 0.6 | **The distribution signing secret exists** — `CORRELIX_DIST_SIGNING_KEY` (armored SECRET half of the **distribution/artifact** key, a different key from the tag key of step 3 and from the licence-signing key). A tag build sets `CORRELIX_RELEASE_BUILD=1`, so `make-installer.sh` REFUSES to produce an unsigned or partially signed bundle and `release-bundle.yml` fails the job — it never skips — when the secret is absent | `gh secret list` names it; offline proof of the mechanism: `python3 -m pytest tests/test_release_signing.py tests/test_release_bundle_signing_workflow.py -q` | **FALSE.** The secret has never been created (RC1 directive Blocker D). Until it is, **step 4 fails closed**: the bundle job stops with `BLOCKED: distribution signing key not configured — CORRELIX_DIST_SIGNING_KEY` and nothing is published. Creating it is 👤 owner-only; custody is tracker 259 |
 
 > **0.2 is currently FALSE.** A release cannot honestly proceed past step 3 while
 > `licensing-gate.py --release` fails: the tag is what publishes artifacts, and
@@ -202,8 +203,11 @@ git tag -s -a v0.9.0-rc1 -m "Correlix v0.9.0-rc1"
 git tag -v v0.9.0-rc1        # verify the signature BEFORE it leaves the machine
 ```
 
-Annotated **and GPG-signed**. Until image signing exists (`RELEASE_CHECKLIST.md`
-§4.9) the tag is the only signed link between the source and the artifacts.
+Annotated **and GPG-signed**. This is the **source/tag** trust domain: a
+different key from the distribution key that signs the bundle (§0.6) and from the
+licence-signing key — never one key for all three (RC1 directive, Decision 3B).
+Until image signing exists (`RELEASE_CHECKLIST.md` §4.9) the tag and the bundle
+signature are the only signed links between the source and the artifacts.
 
 **PRECONDITIONS**
 
@@ -246,10 +250,32 @@ git push origin v0.9.0-rc1
 Each workflow runs `release-gate.yml` as its first job — the full blocking gate
 against the tag's exact commit, ~45–60 minutes because of the TLS install leg —
 and every other job `needs:` it, so a failed, cancelled or skipped gate leaves
-publishing unreachable. `release-bundle.yml` then builds the offline bundle,
-smoke-tests it (`sha256sum -c`, `zstd -t`, git-SHA lockstep, a full `docker load`
-round-trip, the source-offer assertions) and runs
-`gh release create --verify-tag` + `gh release upload --clobber`.
+publishing unreachable. `release-bundle.yml` then:
+
+1. confirms the checked-out commit IS the tagged commit (`git describe
+   --exact-match --tags` must equal the pushed tag) — the build is from the tag,
+   never a branch head (directive Decision 9);
+2. imports `secrets.CORRELIX_DIST_SIGNING_KEY` into a throwaway `GNUPGHOME`
+   (mode 700, wiped in an `always()` step) and exports the fingerprint as
+   `CORRELIX_SIGNING_KEY`. **If the secret is absent the job FAILS here** with
+   `BLOCKED: distribution signing key not configured — CORRELIX_DIST_SIGNING_KEY`
+   (§0.6) — it does not skip, and nothing is uploaded;
+3. builds the offline bundle with `CORRELIX_RELEASE_BUILD=1`, which makes signing
+   mandatory: the bundle's `MANIFEST` gains the provenance block (tag, full
+   source sha, UTC timestamp, build environment, signer fingerprint), every
+   shipped file must be covered by `SHA256SUMS`, and `SHA256SUMS.asc` is written
+   and self-verified — any failure fails the build rather than producing a
+   checksum-only release;
+4. smoke-tests it (`sha256sum -c`, `zstd -t`, git-SHA lockstep, a full
+   `docker load` round-trip, the source-offer assertions);
+5. verifies the signature in a step of its own (`gpg --verify SHA256SUMS.asc
+   SHA256SUMS`, `sha256sum -c`, `MANIFEST` carries `signing-key`) **before** any
+   upload;
+6. runs `gh release create --verify-tag` + `gh release upload --clobber`.
+
+A customer repeats step 5 with `gpg --verify SHA256SUMS.asc SHA256SUMS` — which
+needs the distribution PUBLIC key published somewhere they can fetch it
+(`RELEASE_CHECKLIST.md` §6.7a-2, still open).
 
 The **manual half** of publishing the release page:
 

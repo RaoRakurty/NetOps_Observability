@@ -106,7 +106,9 @@ def test_build_script_produces_every_required_directory(script, name):
 
 def test_checksum_manifest_covers_everything_executable_or_installable(script):
     """A file outside SHA256SUMS is a file the customer cannot verify."""
-    m = re.search(r'^\(cd "\$BUNDLE_DIR" && sha256sum (.+) > SHA256SUMS\)$',
+    # `^\s*`: the SHA256SUMS line moved INTO make-installer.sh's finalize_bundle()
+    # when release mode landed (RC1 directive, Decision 3B), so it is indented now.
+    m = re.search(r'^\s*\(cd "\$BUNDLE_DIR" && sha256sum (.+) > SHA256SUMS\)$',
                   script, re.MULTILINE)
     assert m, "the SHA256SUMS command is gone from make-installer.sh"
     cmd = m.group(1)

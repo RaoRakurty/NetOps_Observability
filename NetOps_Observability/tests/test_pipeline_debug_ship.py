@@ -137,7 +137,9 @@ def test_freshly_built_binary_is_smoke_tested_on_the_build_host():
 
 def test_sha256sums_covers_the_correlix_debug_binary():
     src = _make_installer_src()
-    m = re.search(r'^\(cd "\$BUNDLE_DIR" && sha256sum (.+) > SHA256SUMS\)$',
+    # `^\s*`: the SHA256SUMS line moved INTO make-installer.sh's finalize_bundle()
+    # when release mode landed (RC1 directive, Decision 3B), so it is indented now.
+    m = re.search(r'^\s*\(cd "\$BUNDLE_DIR" && sha256sum (.+) > SHA256SUMS\)$',
                   src, re.MULTILINE)
     assert m, "make-installer.sh lost its SHA256SUMS line"
     assert "correlix-debug" in m.group(1), (

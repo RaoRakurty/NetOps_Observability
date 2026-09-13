@@ -148,7 +148,7 @@ Other first-time friction, in order of likelihood:
 | 4.5 | **Build provenance** — `actions/attest-build-provenance`, keyless Sigstore, `push-to-registry: true` | `publish-images.yml` | 🟢 AUTOMATED on tag — **never executed**, because no `v*` tag has ever existed |
 | 4.6 | Per-image CycloneDX SBOM | `anchore/sbom-action` in `publish-images.yml` | 🟢 AUTOMATED on tag — never executed |
 | 4.7 | **Committed source SBOM** — CycloneDX for Go vendor, both npm trees, the pip lock and every image pin | `python3 scripts/sbom.py` → `docs/sbom/`; verified by `scripts/sbom.py --check` and `tests/test_sbom.py` | 🟢 AUTOMATED *(new)* |
-| 4.8 | **Bundle signature.** `make-installer.sh` GPG-signs `SHA256SUMS` → `SHA256SUMS.asc` when `CORRELIX_SIGNING_KEY` is set, and `install-correlix.sh` treats a bad signature as fatal. **`release-bundle.yml` never sets the key**, so every bundle ever produced is checksum-only. | — | 🔴 MISSING — see 👤 6.4 |
+| 4.8 | **Bundle signature — FAIL-CLOSED on a tag.** A tag build sets `CORRELIX_RELEASE_BUILD=1`, which makes signing MANDATORY in `make-installer.sh`: no `CORRELIX_SIGNING_KEY` → the build FAILS; a key absent from the keyring → FAILS; a signing or self-verification failure → FAILS; any bundle file left outside `SHA256SUMS` → FAILS (a partially signed bundle is never produced). `release-bundle.yml` imports the distribution key from `secrets.CORRELIX_DIST_SIGNING_KEY` into a throwaway keyring (wiped in an `always()` step), verifies `SHA256SUMS.asc` in its own step **before** any upload, and FAILS the job — never skips — when the secret is absent. `install-correlix.sh` treats a bad signature as fatal. A developer build with no key stays checksum-only with a loud NOTE. RC1 governance directive 2026-09-13, Decision 3B | `release-bundle.yml` (tag leg); dry run `bash scripts/make-installer.sh --sign-only <bundle-dir>`; contracts in `tests/test_release_signing.py` + `tests/test_release_bundle_signing_workflow.py` | 🟢 AUTOMATED on tag (fail-closed) — **blocked until 👤 6.7a creates `CORRELIX_DIST_SIGNING_KEY`**; a tag build fails closed until then, by design |
 | 4.9 | **Container image signing (cosign / Notation).** Zero references repo-wide. Provenance attestation (4.5) is adjacent but is not a signature over the image. | — | 🔴 MISSING |
 | 4.10 | `release-bundle.yml` artifact name, MANIFEST `profile:` line and release notes all say **full**, and the smoke step asserts the MANIFEST agrees — they can no longer drift silently. | `release-bundle.yml` | 🟢 fixed 2026-09-03 |
 | 4.11 | VM appliance images (qcow2/vmdk/vhdx) | `scripts/make-vm-image.sh` | 🟡 MANUAL |
@@ -282,13 +282,28 @@ git status --porcelain    # must be empty at the commit you are about to tag (§
 
 ### 6.4 Sign the tag
 
-Annotated **and GPG-signed**, on `main`, at the commit whose CI is green. Until 6.6 exists the
-tag is the only signed link between the source and the artifacts.
+Annotated **and GPG-signed**, on `main`, at the commit whose CI is green. This is the
+**source/tag** signing key — a different key from the distribution key of 6.4b and from the
+licence-signing key (three trust domains, never one key).
 
 ```bash
 git tag -s -a v0.9.0-rc1 -m "Correlix v0.9.0-rc1"
 git tag -v v0.9.0-rc1            # verify the signature before it leaves the machine
 ```
+
+### 6.4b Create the distribution signing secret — **before** the push
+
+`CORRELIX_DIST_SIGNING_KEY`, the armored SECRET half of the **distribution/artifact** signing key
+(§6.7a). A tag build makes signing mandatory, so without this secret 6.5 stops at
+`BLOCKED: distribution signing key not configured — CORRELIX_DIST_SIGNING_KEY` and publishes
+nothing. That is the intended behaviour, not a workaround to route around.
+
+```bash
+gh secret set CORRELIX_DIST_SIGNING_KEY < /path/to/correlix-dist-signing.asc   # 👤 owner only
+gh secret list | grep CORRELIX_DIST_SIGNING_KEY
+```
+
+Never the licence-signing key, and never the tag key from 6.4. Custody is tracker 259.
 
 ### 6.5 Push the tag — the point of no return
 
@@ -319,7 +334,8 @@ fix, re-tag. Watch it: `gh run watch` / `gh run list --workflow=publish-images.y
 
 | | Step | Command / place |
 |---|---|---|
-| 6.7a | **Decide the signing story and wire it.** Three gaps: (a) set `CORRELIX_SIGNING_KEY` in `release-bundle.yml` so `SHA256SUMS.asc` is produced — the fail-closed verifier in `install-correlix.sh` already exists; (b) decide whether cosign signs the GHCR images or keyless build provenance is the whole story; (c) publish the public key where customers can fetch it. | repo secrets + `release-bundle.yml` |
+| 6.7a | **Create the distribution signing secret — `CORRELIX_DIST_SIGNING_KEY`.** The workflow half is done and fail-closed (§4.8); what is missing is the secret, and only the owner can create it. It must hold the **armored SECRET half** of the **distribution/artifact** signing key — a key that is NOT the source/tag signing key of 6.4 and NOT the licence-signing key (three separate trust domains, directive Decision 3B); the licence key must never be put in Actions at all (Decision 3C). The key must be usable non-interactively (no passphrase, or the workflow needs a passphrase secret added alongside it). Custody — generation, storage, rotation, revocation, custodians — is tracker 259 and is not drafted here. Verified by: pushing a tag and reading the `Import the distribution signing key` + `Verify the bundle signature (fail closed)` steps; a customer verifies with `gpg --verify SHA256SUMS.asc SHA256SUMS`. **Until it exists, every tag build fails closed rather than publishing an unsigned bundle.** | `gh secret set CORRELIX_DIST_SIGNING_KEY` (repo secret) |
+| 6.7a-2 | **Still open in the signing story:** (b) decide whether cosign signs the GHCR images or keyless build provenance is the whole story (§4.9); (c) publish the distribution PUBLIC key where customers can fetch it, so `SHA256SUMS.asc` is verifiable by someone who has only the bundle. | — |
 | 6.7b | **Ratify the open exceptions** the release notes disclose: tracker 212 (gnmic→Kafka plaintext, `review_by 2026-12-02`), O10 (api→gotenberg plaintext), and the deployment of tracker 209 (OpenSearch flood-stage fix — built, deploy pending owner approval). | — |
 | 6.7c | **Green-light the qualification run** (§3.1). ~1 h of exclusive rig time. Dropping `-rc1` depends on it. | — |
 | 6.7d | `/code-review ultra` on the release diff. | — |
@@ -358,7 +374,10 @@ licensing assertions also actually fail the build now (§4.2a).
 
 **Blocking a *final* tag:**
 4. §3.1 the reference-capacity regression has never been executed.
-5. §4.8 no bundle is signed, though both the signer and the fail-closed verifier already exist.
+5. §4.8 bundle signing is now mandatory and fail-closed on a tag, but the repository secret
+   `CORRELIX_DIST_SIGNING_KEY` does not exist yet (👤 §6.7a), so a tag build FAILS instead of
+   publishing — deliberately. Creating the secret is the whole remaining action; (c) publishing the
+   public key still stands (§6.7a-2).
 6. §4.9 no image signing story.
 7. §5.8c the Correlix Enterprise License text is a placeholder while code is already marked with its identifier, and §5.8d the CLA has no signing process. Both are owner actions; `scripts/licensing-gate.py --release` fails on each. (The `LICENSE` files themselves landed 2026-09-04.)
 8. §2.9 a clean clone cannot build the frontend image without an undocumented-at-the-failure-point
