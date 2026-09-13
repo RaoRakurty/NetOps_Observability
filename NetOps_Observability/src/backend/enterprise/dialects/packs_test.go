@@ -183,6 +183,14 @@ func TestOnlyBoundRulesAreEvaluatedForPackDialects(t *testing.T) {
 				}
 				got := map[string]bool{}
 				for _, f := range fs {
+					// A CategoryCoverage finding is not a rule verdict: it is the
+					// engine saying what it could not assess and why (here, for
+					// srlinux, that `hostname lab` is not SR Linux configuration —
+					// tracker 296). It carries no binding by design, so it is not
+					// a dialect leak.
+					if f.Category == hardening.CategoryCoverage {
+						continue
+					}
 					got[f.RawRuleID] = true
 				}
 				for id := range want {

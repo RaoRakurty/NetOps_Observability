@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"netops/backend/internal/hardening"
+	"netops/backend/internal/srlpath"
 )
 
 // fabric.go — the detection bindings for the two DATA-CENTRE FABRIC
@@ -153,26 +154,45 @@ func eosWeakLocalSecret(c *hardening.Config) hardening.DetectResult {
 // ─────────────────────────────────────────────────────────────────────────────
 // Nokia SR Linux
 //
-// The captured configuration is the FLAT form: one `set / <path> <value>`
-// statement per line, which is why every pattern here anchors on `^set / `.
-// That form is also why the two multi-instance probes below (gRPC servers, TLS
-// profiles) have to group lines by instance name rather than read a block: an
-// instance's leaves are spread across many independent lines, and a per-line
+// The captured configuration is a flat list of `set <path> <value>` statements,
+// one per line. That is why the two multi-instance probes below (gRPC servers,
+// TLS profiles) have to group lines by instance name rather than read a block:
+// an instance's leaves are spread across many independent lines, and a per-line
 // rule would report an instance secure because SOME other instance carried the
 // TLS binding.
+//
+// THE PATH IS WRITTEN THREE WAYS (tracker 296). `set / system …`,
+// `set /system …` and the gNMI-style `set /system/aaa/…` are the same statement,
+// all legal, all observed. Every pattern here used to anchor on the literal
+// `^set / system`, so a capture in either other form matched NOTHING — and a
+// rule pack that matches nothing reports Pass, i.e. a CLEAN device. Both halves
+// of the fix live below: the patterns are built from internal/srlpath (the one
+// place the three spellings are encoded, shared with the core log catalogue),
+// and srlinuxReadableConfig fails the whole dialect CLOSED when it cannot see a
+// single statement it recognizes — because the next unforeseen rendering must
+// produce "not evaluated", not a clean bill of health.
 // ─────────────────────────────────────────────────────────────────────────────
+
+// srlListKey is the regexp fragment for a LIST KEY inside an SR Linux path — a
+// gRPC-server name, a TLS profile name, an SNMP access-group name. It is LAZY
+// (`+?`) on purpose: the key is one token in the space-separated spellings, but
+// in the gNMI-style form the separators around it are slashes, and a greedy
+// `\S+` would swallow the following path elements with them. Lazy takes the
+// shortest token that still lets the rest of the path match, which is the key
+// itself in every spelling.
+const srlListKey = `(\S+?)`
 
 var (
 	// `http admin-state enable` and never `https admin-state enable` — "https"
-	// does not match `http\b`.
-	reSRLJSONRPCHTTP  = regexp.MustCompile(`^set / system json-rpc-server\b.*\bhttp admin-state enable\b`)
-	reSRLJSONRPCHTTPS = regexp.MustCompile(`^set / system json-rpc-server\b.*\bhttps admin-state enable\b`)
-	reSRLGRPCEnable   = regexp.MustCompile(`^set / system grpc-server (\S+) admin-state enable\b`)
-	reSRLGRPCTLS      = regexp.MustCompile(`^set / system grpc-server (\S+) (?:tls-profile\s+\S+|default-tls-profile true)\b`)
-	reSRLNoClientAuth = regexp.MustCompile(`^set / system tls profile (\S+) authenticate-client false\b`)
-	reSRLNTPServer    = regexp.MustCompile(`^set / system ntp server \S+`)
-	reSRLNTPAdmin     = regexp.MustCompile(`^set / system ntp admin-state enable\b`)
-	reSRLCommunity    = regexp.MustCompile(`^set / system snmp access-group (\S+) community-entry (\S+)`)
+	// does not match `http\b`, in any of the three spellings.
+	reSRLJSONRPCHTTP  = regexp.MustCompile(srlpath.Statement("system", "json-rpc-server") + `\b.*\bhttp` + srlpath.Sep + `admin-state` + srlpath.Sep + `enable\b`)
+	reSRLJSONRPCHTTPS = regexp.MustCompile(srlpath.Statement("system", "json-rpc-server") + `\b.*\bhttps` + srlpath.Sep + `admin-state` + srlpath.Sep + `enable\b`)
+	reSRLGRPCEnable   = regexp.MustCompile(srlpath.Statement("system", "grpc-server", srlListKey, "admin-state", "enable") + `\b`)
+	reSRLGRPCTLS      = regexp.MustCompile(srlpath.Statement("system", "grpc-server", srlListKey) + srlpath.Sep + `(?:tls-profile` + srlpath.Sep + `\S+|default-tls-profile` + srlpath.Sep + `true)\b`)
+	reSRLNoClientAuth = regexp.MustCompile(srlpath.Statement("system", "tls", "profile", srlListKey, "authenticate-client", "false") + `\b`)
+	reSRLNTPServer    = regexp.MustCompile(srlpath.Statement("system", "ntp", "server") + srlpath.Sep + `\S+`)
+	reSRLNTPAdmin     = regexp.MustCompile(srlpath.Statement("system", "ntp", "admin-state", "enable") + `\b`)
+	reSRLCommunity    = regexp.MustCompile(srlpath.Statement("system", "snmp", "access-group", srlListKey, "community-entry") + srlpath.Sep + `(\S+)`)
 	// SR Linux stores local credentials in TWO shapes, and the rule has to read
 	// both. The two BUILT-IN accounts carry the leaf directly
 	// (`admin-user password …`, `linuxadmin-user password …`); every account an
@@ -181,8 +201,72 @@ var (
 	// `authentication` and `password`, so it only ever saw the two built-ins:
 	// every configured user went unexamined while the rule still reported a
 	// clean verdict over "all locally stored passwords".
-	reSRLLocalPassword = regexp.MustCompile(`^set / system aaa authentication (user \S+|\S+-user) password\s+(\S+)`)
+	reSRLLocalPassword = regexp.MustCompile(srlpath.Statement("system", "aaa", "authentication") + srlpath.Sep +
+		`(user` + srlpath.Sep + `\S+?|\S+?-user)` + srlpath.Sep + `password` + srlpath.Sep + `(\S+)`)
 )
+
+// reSRLForeignGrammar matches a configuration statement SR Linux NEVER writes:
+// the unmistakable opening tokens of the other dialects we capture (IOS / EOS /
+// NX-OS, Junos' slash-less `set system …`, SR OS' `configure …`) and the first
+// character of a structured export. It exists only for srlinuxReadableConfig,
+// which uses it to tell "a capture in an SR Linux spelling we have not seen" from
+// "some other platform's configuration under an SR Linux platform label" — two
+// different operator actions, both of which must produce "not evaluated".
+var reSRLForeignGrammar = regexp.MustCompile(`(?i)^(?:version \d|hostname \S|interface \S|line (?:con|vty|aux)|` +
+	`snmp-server |ip (?:http|ssh|domain|route|name-server) |username \S|enable (?:secret|password)|aaa new-model|` +
+	`router (?:bgp|ospf|isis|eigrp)|management (?:api|telnet|ssh|security)|vlan \d|spanning-tree |` +
+	`set (?:system|interfaces|protocols|snmp|security|routing-instances|groups|chassis|policy-options) \S|` +
+	`/?configure |exit all|[<{])`)
+
+// srlinuxReadableConfig is the dialect's FAIL-CLOSED boundary (hardening's
+// DialectPack.Recognize, tracker 296): can the rules below read this text at all?
+//
+// Every rule in this dialect is a pattern over the SR Linux `set <path>` grammar.
+// Handed text in a shape those patterns do not know, each one simply fails to
+// match — and "no insecure line found" is the input to a PASS. That is how a
+// device nothing could assess gets reported hardened. The only place to catch it
+// is once, before any verdict, by asking whether the grammar is present at all.
+//
+// It is deliberately CONSERVATIVE, because rejecting a genuine capture would
+// blind the whole dialect: ONE line that parses as a `set /<path>` statement in
+// ANY of the three spellings is enough to accept the config. It rejects only
+// three states, each of which is a real operational fault:
+//
+//   - a capture with no configuration in it at all (the transport returned
+//     nothing, or only banners),
+//   - a capture in which not one line is an SR Linux `set` path,
+//   - a capture whose lines are mostly another platform's grammar — the
+//     mislabelled-device case, where a handful of incidental `set /` lines must
+//     not buy a verdict over someone else's configuration.
+func srlinuxReadableConfig(c *hardening.Config) (bool, string) {
+	statements, foreign, considered := 0, 0, 0
+	for _, ln := range c.Lines() {
+		t := strings.TrimSpace(ln)
+		// Blank lines and the comment markers both grammars carry say nothing
+		// about which grammar this is.
+		if t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, "!") {
+			continue
+		}
+		considered++
+		switch {
+		case srlpath.IsStatement(t):
+			statements++
+		case reSRLForeignGrammar.MatchString(t):
+			foreign++
+		}
+	}
+	switch {
+	case considered == 0:
+		return false, "the capture carries no configuration at all"
+	case statements == 0:
+		return false, "not one of its " + strconv.Itoa(considered) +
+			" statement(s) parses as an SR Linux `set /<path>` line, in any of the three spellings this platform writes"
+	case foreign > statements:
+		return false, strconv.Itoa(foreign) + " of its statements are another platform's configuration grammar, " +
+			"against " + strconv.Itoa(statements) + " SR Linux `set` path(s)"
+	}
+	return true, ""
+}
 
 // srlJSONRPCPlaintext trips when the JSON-RPC management server serves the
 // cleartext HTTP listener. SR Linux exposes HTTP and HTTPS as independent
@@ -262,7 +346,10 @@ func srlWeakLocalSecret(c *hardening.Config) hardening.DetectResult {
 		if m == nil {
 			continue
 		}
-		account := m[1]
+		// The capture reads `user field-tech` or `user/field-tech` depending on
+		// the spelling the device wrote; the ACCOUNT is the same either way, so
+		// the evidence names it the same way too.
+		account := strings.ReplaceAll(m[1], "/", " ")
 		examined = append(examined, account)
 		if !strings.HasPrefix(m[2], "$") {
 			weak = append(weak, account)

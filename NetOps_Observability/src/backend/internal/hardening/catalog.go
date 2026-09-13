@@ -532,5 +532,11 @@ func DefaultCatalog(packs ...DialectPack) *Catalog {
 		},
 	}
 
-	return NewCatalog(applyDialects(rules, packs), probes)
+	cat := NewCatalog(applyDialects(rules, packs), probes)
+	// The packs' config-shape tests ride along with their bindings: a dialect
+	// that declares one makes the engine fail closed on a config it cannot read
+	// (DialectPack.Recognize), instead of reporting Pass for controls nothing
+	// looked at.
+	cat.recognizers = dialectRecognizers(packs)
+	return cat
 }
