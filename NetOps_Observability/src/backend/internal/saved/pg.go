@@ -76,8 +76,10 @@ func (s *PGStore) Get(id string) (Object, bool) {
 	defer cancel()
 	var o Object
 	found := false
-	// Platform scope: the HTTP layer enforces per-object tenant authz (canSee/
-	// canMutateSaved), and the report scheduler reads any tenant's report by id.
+	// Platform scope: the HTTP layer enforces per-object authz for every caller
+	// (savedVisibility.visible / .mutable, which carry BOTH the tenant scope and
+	// the operator-visibility restriction), and the report scheduler reads any
+	// tenant's report by id.
 	if err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		var data []byte
 		err := tx.QueryRow(ctx, `SELECT data FROM saved_objects WHERE id=$1`, id).Scan(&data)

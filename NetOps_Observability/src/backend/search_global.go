@@ -74,9 +74,12 @@ func (s *server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 				})
 			}
 		}
-		// Saved objects (name or body match) — tenant-scoped.
-		sTenant, sCross := principalTenant(claims)
-		for _, o := range visibleSaved(s.saved.List("", sTenant, sCross), claims) {
+		// Saved objects (name or body match) — read through the saved-object
+		// chokepoint (s.visibleSavedFor), so the operator-visibility restriction
+		// applies here too. This box answers on a saved object's NAME and matches
+		// on its BODY — the query text, the panels, a report's recipients — which
+		// is the disclosure itself (tracker 306).
+		for _, o := range s.visibleSavedFor(claims, "") {
 			if strings.Contains(strings.ToLower(o.Name), q) ||
 				strings.Contains(strings.ToLower(string(o.Body)), q) {
 				add(globalResult{

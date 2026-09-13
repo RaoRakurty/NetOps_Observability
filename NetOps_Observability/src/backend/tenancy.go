@@ -359,10 +359,27 @@ func savedTenant(o saved.Object) string {
 	return strings.ToLower(strings.TrimSpace(o.TenantID))
 }
 
-// canSeeSaved reports whether a scoped principal may view a saved object.
-// Strict isolation: only the principal's own tenant (global/unassigned objects
-// are platform-owned, visible only cross-tenant). Routed through Authorize().
-func canSeeSaved(o saved.Object, tenant string, cross bool) bool {
+// canSeeSavedTenantOnly is HALF the saved-object visibility rule: TENANCY, and
+// nothing else. It is not a surface's answer and no surface may call it — call
+// savedVisibility.visible (or .filter), which is this rule PLUS the per-tenant
+// operator-visibility restriction (Tenant.OperatorRestricted).
+//
+// The name carries the warning because the omission is invisible at the call
+// site, exactly as it was for alertVisibleTenantOnly. This rule answers TRUE FOR
+// EVERYTHING on the cross-tenant path — the platform owner may see every tenant
+// — so a reader that asks it looks correct, passes ordinary tenant-isolation
+// tests, and silently serves the one class of tenant that has asked not to be
+// readable by platform staff. visibleSaved did precisely that (tracker 306): it
+// returned the WHOLE store unfiltered to any cross-tenant caller, handing over a
+// restricted tenant's saved searches, dashboards and report definitions —
+// names AND bodies, which is the query text, the panel definitions, the schedule
+// and the recipient contact points a rendered report is delivered to — plus the
+// report ids /api/reports/run accepts.
+//
+// The rule itself: strict isolation. A scoped principal sees only its own
+// tenant; global/unassigned objects are platform-owned and visible only
+// cross-tenant. Routed through Authorize().
+func canSeeSavedTenantOnly(o saved.Object, tenant string, cross bool) bool {
 	return Authorize(
 		Principal{Tenant: tenant, Cross: cross},
 		ActionView,
@@ -370,10 +387,12 @@ func canSeeSaved(o saved.Object, tenant string, cross bool) bool {
 	).Allow
 }
 
-// canMutateSaved reports whether a scoped principal may modify/delete a saved
-// object. Scoped principals own only their own tenant's objects — never the
+// canMutateSavedTenantOnly is the same HALF rule for a write: TENANCY only, true
+// for everything cross-tenant. Call savedVisibility.mutable instead.
+//
+// Scoped principals own only their own tenant's objects — never the
 // shared/global ones (which belong to no single tenant), mirroring devices.
-func canMutateSaved(o saved.Object, tenant string, cross bool) bool {
+func canMutateSavedTenantOnly(o saved.Object, tenant string, cross bool) bool {
 	return Authorize(
 		Principal{Tenant: tenant, Cross: cross},
 		ActionUpdate,
@@ -381,19 +400,102 @@ func canMutateSaved(o saved.Object, tenant string, cross bool) bool {
 	).Allow
 }
 
-// visibleSaved filters a saved-object list to those the principal may view.
-func visibleSaved(all []saved.Object, c jwtClaims) []saved.Object {
-	tenant, cross := principalTenant(c)
-	if cross {
+// savedVisibility is the saved-object decision RESOLVED for one principal: the
+// ordinary tenant scope PLUS the operator-visibility restriction
+// (Tenant.OperatorRestricted) in its tenant_id form. The saved-object sibling of
+// deviceVisibility, and it exists for the same two reasons: the restriction is
+// resolved per SUBJECT (break-glass is a per-operator, time-boxed session), so
+// resolving it per row would rescan the tenant store for every object; and the
+// LIST, the omnibox and the by-id read then ask the same object, so they cannot
+// disagree about what the caller may see.
+//
+// A saved object carries the customer's own work in an opaque body — a saved
+// search's query, a dashboard's panels, a report's schedule and contact points.
+// That is the same class of disclosure as the site list and the fleet the owner
+// has already ruled are per-tenant, so a restricted tenant's saved objects are
+// not part of the platform operator's estate either.
+type savedVisibility struct {
+	// tenantVisibility carries the scope and the restriction. savedVisibility
+	// adds only what it means for a saved.Object row.
+	tenantVisibility
+}
+
+// savedVisibilityFor resolves the saved-object rule ONCE for a principal.
+func (s *server) savedVisibilityFor(c jwtClaims) savedVisibility {
+	return savedVisibility{tenantVisibility: s.tenantVisibilityFor(c)}
+}
+
+// visible reports whether this principal may see one saved object. The
+// restriction is applied BEFORE the ordinary tenant rule, so a hidden object
+// stays hidden on the cross-tenant path, where canSeeSavedTenantOnly allows
+// everything.
+func (v savedVisibility) visible(o saved.Object) bool {
+	if v.hides(savedTenant(o)) {
+		return false
+	}
+	return canSeeSavedTenantOnly(o, v.tenant, v.cross)
+}
+
+// mutable reports whether this principal may update or delete one saved object.
+//
+// The restriction reaches the WRITE path deliberately, and it is the half that
+// was open for the maintenance windows (tracker 305) when only the read was
+// fixed: an object platform staff may not READ is not one they may rename,
+// overwrite or delete either. A 200 from PUT/DELETE on an id whose GET answers
+// 404 confirms the id exists just as loudly as a 403 would, and the write then
+// takes a restricted tenant's own saved search, dashboard or report schedule
+// away from it. Callers answer 404.
+func (v savedVisibility) mutable(o saved.Object) bool {
+	if v.hides(savedTenant(o)) {
+		return false
+	}
+	return canMutateSavedTenantOnly(o, v.tenant, v.cross)
+}
+
+// creatable reports whether this principal may create a saved object OWNED BY
+// tenantID (already resolved from the token, never from the request body).
+//
+// A restricted tenant is one platform staff may administer but not read, and a
+// saved `report` is not inert data: the platform renders it on a timer, against
+// that tenant's data, and delivers it to the contact points in its body. Being
+// able to plant one inside a tenant whose objects the same operator may not read
+// is a write-path route to the read the restriction forbids, so it is refused.
+func (v savedVisibility) creatable(tenantID string) bool {
+	return !v.hides(tenantID)
+}
+
+// filter applies the resolved rule to a saved-object list, preserving order.
+func (v savedVisibility) filter(all []saved.Object) []saved.Object {
+	if v.unrestricted() {
 		return all
 	}
 	out := make([]saved.Object, 0, len(all))
 	for _, o := range all {
-		if canSeeSaved(o, tenant, cross) {
+		if v.visible(o) {
 			out = append(out, o)
 		}
 	}
 	return out
+}
+
+// visibleSavedFor reads the saved-object store through the resolved rule — the
+// ONE way a request-serving surface lists saved objects. The store's own List
+// applies the ordinary tenant scope (RLS on the pg backend, an in-memory filter
+// on the file one); what this adds is the operator-visibility restriction.
+//
+// It replaced a free function that took the claims and returned the whole store
+// to any cross-tenant caller, so the restriction now cannot be forgotten by a
+// new reader: there is no unfiltered list to reach for.
+func (s *server) visibleSavedFor(c jwtClaims, typ string) []saved.Object {
+	if s.saved == nil {
+		return []saved.Object{}
+	}
+	v := s.savedVisibilityFor(c)
+	if v.deny {
+		// The operator scoped INTO a restricted tenant: nothing, not an error.
+		return []saved.Object{}
+	}
+	return v.filter(s.saved.List(typ, v.tenant, v.cross))
 }
 
 // visibleDevices filters a device list to those the principal may view.

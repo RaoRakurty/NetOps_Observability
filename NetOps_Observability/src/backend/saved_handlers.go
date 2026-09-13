@@ -29,10 +29,10 @@ func (s *server) handleSaved(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		// Tenant isolation: List is RLS/scope-filtered per request (pg backend) or
-		// in-memory filtered (file backend); visibleSaved stays as a defense-in-
-		// depth app-layer pass.
-		tenant, cross := principalTenant(claims)
-		writeJSON(w, http.StatusOK, visibleSaved(s.saved.List(r.URL.Query().Get("type"), tenant, cross), claims))
+		// in-memory filtered (file backend); visibleSavedFor is the app-layer pass
+		// on top, and it carries the operator-visibility restriction — the store's
+		// own scope answers everything to a cross-tenant caller (tracker 306).
+		writeJSON(w, http.StatusOK, s.visibleSavedFor(claims, r.URL.Query().Get("type")))
 	case http.MethodPost:
 		var req savedRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -41,10 +41,21 @@ func (s *server) handleSaved(w http.ResponseWriter, r *http.Request) {
 		}
 		// A scoped principal can only create objects inside its own tenant; a
 		// cross-tenant principal may target any tenant (defaults to global).
-		tenant, cross := principalTenant(claims)
+		// §3a.2: the owner comes from the token whenever the caller is scoped.
+		v := s.savedVisibilityFor(claims)
 		objTenant := req.TenantID
-		if !cross {
-			objTenant = tenant
+		if !v.cross {
+			objTenant = v.tenant
+		}
+		// ...but never INTO a tenant the operator-visibility restriction hides
+		// from this caller. A saved `report` is a standing delivery instruction
+		// the platform executes on a timer against that tenant's data, so
+		// planting one is a write-path route to the read the restriction forbids.
+		// 403, not 404: the tenant id came from this caller's own request, so
+		// refusing plainly discloses nothing it did not already supply.
+		if !v.creatable(objTenant) {
+			writeError(w, http.StatusForbidden, errors.New("tenant not available to this principal"))
+			return
 		}
 		obj, err := s.saved.Create(req.Type, strings.TrimSpace(req.Name), claims.Sub, objTenant, req.Body)
 		if err != nil {
@@ -66,19 +77,26 @@ func (s *server) handleSavedByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims, _ := userFrom(r.Context())
-	tenant, cross := principalTenant(claims)
+	// The RESOLVED rule, not a bare (tenant, cross) pair: the saved store's Get
+	// is UNSCOPED — every gate below is the only thing standing between the
+	// caller and another tenant's object, and the tenancy half of those gates
+	// answers true for everything cross-tenant (tracker 306).
+	v := s.savedVisibilityFor(claims)
 	switch r.Method {
 	case http.MethodGet:
 		obj, ok := s.saved.Get(id)
-		// 404 (not 403) for out-of-tenant objects: don't reveal the id exists.
-		if !ok || !canSeeSaved(obj, tenant, cross) {
+		// 404 (not 403) for objects outside the caller's reach — its own tenant's,
+		// and a restricted tenant's: don't reveal the id exists.
+		if !ok || !v.visible(obj) {
 			writeError(w, http.StatusNotFound, errors.New("not found"))
 			return
 		}
 		writeJSON(w, http.StatusOK, obj)
 	case http.MethodPut:
-		// A scoped principal may only mutate an object owned by its own tenant.
-		if obj, ok := s.saved.Get(id); !ok || !canMutateSaved(obj, tenant, cross) {
+		// A scoped principal may only mutate an object owned by its own tenant,
+		// and nobody may mutate one the restriction hides. Checked BEFORE the
+		// write, so the refusal is not a rollback.
+		if obj, ok := s.saved.Get(id); !ok || !v.mutable(obj) {
 			writeError(w, http.StatusNotFound, errors.New("not found"))
 			return
 		}
@@ -94,7 +112,7 @@ func (s *server) handleSavedByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, obj)
 	case http.MethodDelete:
-		if obj, ok := s.saved.Get(id); !ok || !canMutateSaved(obj, tenant, cross) {
+		if obj, ok := s.saved.Get(id); !ok || !v.mutable(obj) {
 			writeError(w, http.StatusNotFound, errors.New("not found"))
 			return
 		}
