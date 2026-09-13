@@ -213,18 +213,20 @@ func TestErrorIsNotConflatedWithABenignState(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: cannot parse — the guard would silently stop covering it: %v", path, err)
 		}
-		// Walk per FUNCTION so an exemption can name the parser it was written
-		// for instead of blanketing every read in the same file.
+		// Walk per DECLARATION so an exemption can name the parser it was written
+		// for instead of blanketing every read in the same file. A non-func decl
+		// (a package-level var holding a func literal) still gets walked, under a
+		// key no function-scoped entry can match — dropping it would trade one
+		// blind spot for another, which is the defect this guard is about.
 		for _, decl := range f.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok {
-				continue
+			key := path + "#"
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				key += fn.Name.Name
 			}
-			key := path + "#" + fn.Name.Name
 			if _, ok := allowFn[key]; ok {
 				continue
 			}
-			ast.Inspect(fn, func(n ast.Node) bool {
+			ast.Inspect(decl, func(n ast.Node) bool {
 				ifs, ok := n.(*ast.IfStmt)
 				if !ok {
 					return true
