@@ -3,10 +3,13 @@
 > # ⛔ NOTHING IN THIS DOCUMENT IS AUTHORIZED, AND NOTHING IN IT HAS BEEN RUN.
 >
 > Every command below is written as a **PROPOSED ACTION**. Not one of them has
-> been executed. No branch-protection ruleset has been changed, no merge to
-> `main` has been made, **no `v0.9.0-rc1` tag exists**, no release has been
-> published, no image has been pushed to GHCR, and no registry access has been
-> granted.
+> been executed, **with one exception: step 1 (branch protection) was authorized
+> by the owner as Decision 5 and APPLIED on 2026-09-13** — 21 required checks,
+> `strict`, `enforce_admins`, conversation resolution, plus a tag ruleset; see
+> `docs/release/BRANCH_PROTECTION_DECISION5_2026-09-13.md` for the live readings.
+> Steps 2–6 remain unexecuted: no merge to `main` has been made, **no
+> `v0.9.0-rc1` tag exists**, no release has been published, no image has been
+> pushed to GHCR, and no registry access has been granted.
 >
 > This page exists so that when the owner *does* authorize a release, the exact
 > sequence, the exact payloads and the exact verifications are already written
@@ -43,7 +46,7 @@ These are not per-step. If any is false, **no step below may be authorized.**
 
 | | Precondition | How it is established | State at the time of writing |
 |---|---|---|---|
-| 0.1 | **CI is green on the exact commit** that will be tagged — all 19 blocking checks of `ci-branch-protection.md` §1.1 | `gh run list --branch <branch> --limit 5`, and after step 2 `gh run list --branch main --limit 5` | not established — the work is on `feat/observability-platform` |
+| 0.1 | **CI is green on the exact commit** that will be tagged — all 19 blocking checks of `ci-branch-protection.md` §1.1 (live ruleset requires 21; see step 1) | `gh run list --branch <branch> --limit 5`, and after step 2 `gh run list --branch main --limit 5` | not established — the work is on `feat/observability-platform` |
 | 0.2 | **Licence release blockers are cleared** | `python3 scripts/licensing-gate.py --release` exits **0** | **FAILS.** Two blockers are open: `enterprise-text-placeholder` (`LICENSES/Correlix-Enterprise.txt` is a placeholder) and `cla-process-undefined` (`CONTRIBUTING.md` carries `CLA-PROCESS-TBD`; the CLA text at `CLA.md` is pending counsel). Both are 👤 owner + counsel actions |
 | 0.3 | **OCI source-compliance passes in release mode** for every image that will be published | the `oci-compliance` matrix job in `.github/workflows/publish-images.yml` runs `python3 scripts/oci-compliance.py --sbom … --image … --digest … --source-dir "$OFFER" --manifest … --release` against **each pushed digest**. It is `needs:`-gated by `release-gate.yml`, so it cannot be skipped. Offline pre-check: `python3 scripts/oci-compliance.py --selftest` | the gate exists and is wired; it has never run on a real tag, because no `v*` tag has ever existed |
 | 0.4 | **Working tree clean at the commit to be tagged** | `git status --porcelain` prints nothing | not established |
@@ -56,10 +59,25 @@ These are not per-step. If any is false, **no step below may be authorized.**
 
 ---
 
-## Step 1 — Branch protection: require the 19 checks on `main`
+## Step 1 — Branch protection: require the 19 checks on `main` — **DONE 2026-09-13**
 
-**PROPOSED ACTION: apply the branch-protection ruleset with the 19 required
-status checks — requires explicit owner authorization**
+**APPLIED 2026-09-13** under the owner's Decision-5 directive. The live ruleset
+requires **21** checks (the 19 below plus `integrity` and `tracker staleness
+(blocking on HIGH)`, both already required beforehand), with `strict: true`,
+`enforce_admins: true`, conversation resolution on and
+`required_approving_review_count` **0** — not the `1` in the payload below, which
+is the target for when a second independent maintainer exists. A tag ruleset
+(`release-tags-immutable`) now makes a pushed `v*` tag immutable. Live readings
+and the bypass-actor enumeration:
+`docs/release/BRANCH_PROTECTION_DECISION5_2026-09-13.md`.
+
+Everything below is kept as the payload of record and the re-apply procedure. Do
+NOT `PUT` it verbatim now: it would drop the two extra required checks and
+deadlock every PR on an approval nobody can give. Build the payload from the live
+protection.
+
+**ORIGINAL PROPOSED ACTION (now executed): apply the branch-protection ruleset
+with the 19 required status checks — requires explicit owner authorization**
 
 The payload is reproduced **verbatim** from `docs/runbooks/ci-branch-protection.md`
 §4, which is the list of record and is machine-checked against the workflows'
@@ -372,12 +390,12 @@ An empty row means the step is not authorized and must not be run.
 
 | Step | Action | Authorized by | Date (UTC) | Executed by | Result |
 |---|---|---|---|---|---|
-| 1 | branch protection — 19 required checks | | | | |
+| 1 | branch protection — 19 required checks | owner (Decision 5 directive) | 2026-09-13 | coordinating agent session, via the GitHub API | **APPLIED** — 21 required checks live, `strict`, `enforce_admins`, conversation resolution; tag ruleset `release-tags-immutable`; verified by live re-read |
 | 2 | merge to `main` | | | | |
 | 3 | create + sign `v0.9.0-rc1` | | | | |
 | 4 | push the tag · publish the release | | | | |
 | 5 | publish GHCR images | | | | |
 | 6 | registry access | | | | |
 
-**As of the writing of this page every row is empty, and that is the accurate
-state of the release.**
+**Row 1 was filled on 2026-09-13. Rows 2–6 are still empty, and that is the
+accurate state of the release: nothing has been merged, tagged or published.**

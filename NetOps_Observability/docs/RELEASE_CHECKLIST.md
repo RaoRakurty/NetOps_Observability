@@ -21,7 +21,7 @@ template. Every step names the real script or workflow, and is marked:
 
 | | Step | State |
 |---|---|---|
-| 0.1 | **Branch protection matches the real job names.** The runbook is now correct (18 required checks, §1.1) and machine-checked against the workflows by `tests/test_required_checks_consistency.py`. What remains is an **admin action outside the repo**: apply the ruleset. Command in 👤 §6.2. | 🟡 MANUAL — 👤 owner/admin, not yet applied |
+| 0.1 | **Branch protection matches the real job names.** The runbook is now correct (19 required checks, §1.1) and machine-checked against the workflows by `tests/test_required_checks_consistency.py`. Command in 👤 §6.2. | 🟢 **APPLIED 2026-09-13** — 21 required checks live on `main` (§1.1's 19 + `integrity` + `tracker staleness`), `strict`, `enforce_admins` and conversation resolution all on; approvals stay 0 (one maintainer); tag ruleset `release-tags-immutable` added. Readings: `docs/release/BRANCH_PROTECTION_DECISION5_2026-09-13.md` |
 | 0.2 | **Work is merged to `main`.** All of this ships from `feat/observability-platform`; `main` is behind. Tagging a branch that is not `main` makes `release-bundle.yml`'s `branches: [main]` leg and every "on main" assumption wrong. | 🟡 MANUAL |
 | 0.3 | Working tree clean, no untracked source. `git status --porcelain` empty. | 🟡 MANUAL |
 | 0.4 | `.trivyignore.yaml` entries each still carry a reason and a revisit condition. | 🟡 MANUAL |
@@ -206,6 +206,16 @@ actionlint            # .github/workflows/ must be clean
 
 ### 6.2 Correct branch protection — the required job names
 
+> **APPLIED 2026-09-13.** This is now the reproduction/re-apply procedure, not an
+> open action. Live: 21 required checks (these 19 + `integrity` +
+> `tracker staleness (blocking on HIGH)`), `strict: true`, `enforce_admins: true`,
+> conversation resolution on, and `required_approving_review_count` **0** (not the
+> `1` in the payload below, which is the target for when a second maintainer
+> exists). A verbatim `PUT` of the payload below would *drop* the two extra checks
+> and deadlock PRs on the approval — build the payload from the live protection.
+> Readings: `docs/release/BRANCH_PROTECTION_DECISION5_2026-09-13.md`;
+> rationale: `docs/runbooks/ci-branch-protection.md` "Live state 2026-09-13".
+
 Apply the **nineteen** names from `docs/runbooks/ci-branch-protection.md` §1.1. They are the
 jobs' real `name:` fields; a required check that names no real job pins every PR at
 *"Expected — Waiting for status to be reported"* forever. Requires `gh auth login` **as a repo
@@ -336,8 +346,9 @@ proven offline vendor build and a committed SBOM. What is missing is not code qu
 **release plumbing and one un-run measurement**:
 
 **Blocking a `-rc1` tag (all small, and all owner-only now):**
-1. 👤 §6.2 apply the branch ruleset — the 18 required checks. The runbook and the workflows
-   agree and are machine-checked; GitHub's ruleset is the half that is not in the repo.
+1. ~~👤 §6.2 apply the branch ruleset~~ — **DONE 2026-09-13.** 21 required checks, `strict`,
+   `enforce_admins`, conversation resolution, plus a tag ruleset (`release-tags-immutable`) so a
+   published tag cannot be moved or deleted.
 2. 👤 §6.3 the work is on `feat/observability-platform`, not `main`.
 
 Cleared since the last revision: the runbook no longer names a job that does not exist (§0.1);
