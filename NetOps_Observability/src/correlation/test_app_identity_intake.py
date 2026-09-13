@@ -17,7 +17,19 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
+import pytest
+
 import main
+
+
+@pytest.fixture(autouse=True)
+def _restore_lane_config(monkeypatch):
+    """`_reset` assigns these module globals DIRECTLY, so register each at its
+    CURRENT value first and let teardown put it back — a lane flag this file
+    forced must not outlive it (same convention as `_stack` in
+    test_p2_lifecycle_window.py)."""
+    for _name in ("ch", "CORR_SIGNALS_ENABLED"):
+        monkeypatch.setattr(main, _name, getattr(main, _name))
 
 
 class FakeCH:
