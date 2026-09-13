@@ -135,6 +135,18 @@ POP, DEVICES, SEAMS = 1800, 500, 500
 # grounded index stayed at 65 ms and 86 ms. The 1,177 ms in the header was
 # measured on a different box, which is exactly the point.
 POP_MAX = 3_600
+# AXIS AUDIT (tracker 289, 2026-09-13) — walked to the cap and to twice it on
+# the 4-core lab box, all three legs at every size:
+#      POP    EV mutant   index-only (on loop)   shipped (offloaded)
+#     1,800    2,116 ms          21.9 ms               5.4 ms
+#     3,600    4,119 ms          37.7 ms               5.3 ms   <- the cap
+#     7,200   10,288 ms          72.0 ms               5.8 ms
+# SOUND. The axis does not saturate — the mutant pays at elasticity 1.14 and is
+# still climbing at twice the cap — and while the on-loop index leg does grow
+# with POP (elasticity 0.86), it grows SLOWER than the mutant, so the ratio
+# falls (0.010 -> 0.009 -> 0.007) and it keeps a 13x margin on the 500 ms budget
+# at the cap. The two bound tests read the module `storm` fixture at POP, never
+# `gate.size`, so growing this witness cannot move them in any case.
 # The bound this file exists to defend. Well under the 30 s Kafka session
 # timeout that storm-s02 breached, so a breach is caught long before ejection.
 LOOP_BUDGET_S = 0.5

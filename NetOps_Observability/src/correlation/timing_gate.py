@@ -62,13 +62,63 @@ WHAT IT DELIBERATELY DOES NOT DO
     measurement, not blindly doubled.
 
 CHOOSING THE GROWTH AXIS IS THE CALLER'S JOB, and it is not free. The axis must
-grow the MUTANT's stall without moving the shape the defect lives in:
+grow the MUTANT's stall without moving the shape the defect lives in — AND
+without moving anything else the test asserts.
 
-  * `test_p2_evidence_batching::B12` grows SIGNALS PER NODE, never the node
-    count: `_snap_elements` (nodes + edges) must stay under
-    `CORR_OFFLOAD_MIN_ELEMENTS` or the mutant sizer starts offloading and the
-    defect evaporates — measured, at 2,375 nodes the "mutant" stall fell from
-    2,418 ms to 339 ms because it was no longer a mutant at all.
+THE AUDIT OF RECORD (tracker 289, 2026-09-13). Every caller's axis was walked to
+its cap and past it on the 4-core lab box, with BOTH legs measured at every
+size. Two numbers decide whether an axis is sound, and each caller's own
+constant carries its full table:
+
+  * ELASTICITY of the mutant — the exponent `e` in `value ~ size**e`. Below ~0.5
+    the axis has SATURATED and no amount of calibration can reach the floor;
+    `StallGate.saturated` now says so in the failure message instead of blaming
+    the machine.
+  * The FIXED leg's elasticity beside it. A fixed leg that grows is fine — B10's
+    does — as long as it grows SLOWER, so the fixed:mutant ratio falls as the
+    fixture grows. When the two exponents match, the legs are locked together
+    and growing the fixture cannot separate them.
+
+      caller                        mutant e   fixed e   verdict
+      B10  ambient window               1.23      0.61   SOUND, ratio falls
+                                                         0.033 -> 0.009; fixed
+                                                         59 ms at the cap, 8.5x
+      test_lifecycle_merge_storm_p1     1.14      0.86   SOUND, ratio falls
+      test_sync_stretch_bound_p1        0.80      0.02   SOUND, fixed leg FLAT
+                                                         (53.0/54.8/54.2 ms)
+      B12  signals per node             2.35      2.29   **RETIRED** — locked
+      test_p2_evidence_async E10        1.24       n/a   sound axis, CAP CUT
+      test_loop_yield_resilience        0.17       —     RETIRED 2026-09-12
+
+NONE of the four had the saturating axis the loop-yield gate had. Two were
+unsound for the OTHER reason, and it is the one worth remembering:
+
+  * B12's fixed leg pays at 2.29 against its mutant's 2.35 — the same exponent —
+    so the sizer cannot buy margin. Worse, `calibrated_stall` extrapolates
+    LINEARLY, so on a 2.35 axis it overshoots the size badly (to multiply the
+    reading by 4x the axis needs 1.8x the fixture; the model asks for 4x).
+    Simulated against the measured curve on this file's own documented anchors,
+    a machine 2x the 2026-09-03 hosted runner grows to B12's old 360 cap with
+    the fixed leg at 79 % of the very budget it asserts — and the failure
+    message would have blamed the offload. B12 no longer uses this module: its
+    adequacy claim is structural and its dispatch proof is B12b's count.
+  * E10's axis is sound, but it grows each cohort's WALL-CLOCK duration into
+    `CORR_EVIDENCE_HOLD_MAX_S` (5 s) — a deadline the same test asserts is never
+    hit. At its old cap a hold expired. The cap is now the largest size measured
+    with none.
+
+SO: "does the axis saturate" is NOT the whole check. Before adding a caller, ask
+BOTH questions — does the mutant keep paying, and does anything else in the test
+(the fixed leg, a timeout, a queue bound, a wall-clock deadline) grow with the
+same knob? Per-caller notes:
+
+  * `test_p2_evidence_batching::B12` USED to grow SIGNALS PER NODE. It no longer
+    uses this module at all — see the audit above: the axis pays superlinearly
+    and so does its fixed leg, at the same exponent. (Its shape rule stands for
+    anyone who re-sizes that fixture by hand: `_snap_elements` (nodes + edges)
+    must stay under `CORR_OFFLOAD_MIN_ELEMENTS` or the mutant sizer starts
+    offloading and the defect evaporates — measured, at 2,375 nodes the "mutant"
+    stall fell from 2,418 ms to 339 ms because it was no longer a mutant.)
   * `test_loop_yield_resilience` USED to grow DEVICES at a fixed 1 s spacing.
     It no longer uses this module at all, and the reason is the sharpest lesson
     here (2026-09-12): **the axis saturated, so no amount of calibration could
@@ -85,7 +135,9 @@ grow the MUTANT's stall without moving the shape the defect lives in:
     processed between event-loop handoffs, with no clock in the assertion.
     BEFORE ADDING A CALLER, CHECK ITS AXIS: "bigger fixture => bigger number"
     must hold, and the quantity being grown must not appear in the fixed leg
-    too.
+    too. `StallGate.saturated` now catches the first half mechanically; the
+    second half is still the caller's to check, and the audit above is what it
+    looks like done.
   * `test_sync_stretch_bound_p1` grows the CLOSE COUNT, never the signals per
     object (its own module docstring's rule: signals per object would grow the
     bounded leg's single-builder block toward the budget).
