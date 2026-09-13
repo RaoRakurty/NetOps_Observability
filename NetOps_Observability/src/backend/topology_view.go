@@ -38,11 +38,6 @@ func topologyModeOrDefault(m string) string {
 	}
 }
 
-// gatherTopoLinks builds the deduped, evidence-bearing adjacency set for a device
-// slice: it constructs the same id/name/address resolution maps /links and /view
-// use, fetches the raw LLDP/CDP/BGP-LS neighbours + interface-address map, and runs
-// the shared normalizer. Extracted so /api/topology/view, /links and the persistent
-// reconciler all derive links identically and can never disagree.
 // topoLinksUnreadNote is the ONE sentence every surface uses when the adjacency
 // evidence never arrived. Written for an operator working an incident, and
 // deliberately explicit about the inference it is forbidding: the map being
@@ -67,6 +62,11 @@ func (s *server) fetchTopoLinks(ctx context.Context) ([]collectors.LLDPNeighbor,
 	return collectors.FetchTopologyLinks(ctx)
 }
 
+// gatherTopoLinks builds the deduped, evidence-bearing adjacency set for a device
+// slice: it constructs the same id/name/address resolution maps /links and /view
+// use, fetches the raw LLDP/CDP/BGP-LS neighbours + interface-address map, and runs
+// the shared normalizer. Extracted so /api/topology/view, /links and the persistent
+// reconciler all derive links identically and can never disagree.
 func (s *server) gatherTopoLinks(ctx context.Context, devs []models.Device) ([]topoLink, error) {
 	ownedID, byName, byAddr := topoLinkMaps(devs)
 	// The adjacency evidence is the one input whose absence is INDISTINGUISHABLE
