@@ -275,3 +275,259 @@ def test_report_parameters_carry_the_host_quiet_verdict():
     for key in ('"host_quiet"', '"min_free_gib"', '"max_load1"',
                 '"allow_unquiet"'):
         assert key in params, f"{key} missing from report.json parameters"
+
+
+# ---------------------------------------------------------------------------
+# the settle (tracker 286)
+# ---------------------------------------------------------------------------
+# WHY. `scale-miniladder-nightly` was red every night from 2026-09-06 to
+# 2026-09-12 with `host load1 N exceeds the 6.00 bound` at N = 6.91 / 7.18 /
+# 7.48 / 7.78 / 8.09 / 8.24 / 8.55 — each reading taken seconds after the step
+# that built two vite bundles, ran `install.py --tls=yes` and spent a JVM per
+# topic across 16 topics on a 4-vCPU shared VM. load1 is a ~60 s exponential
+# average, so a reading taken THEN describes work that had already stopped.
+#
+# The settle waits for that to decay and then judges a REAL reading. What these
+# tests pin is that it is patience and nothing else:
+#
+#   * the bound is never raised and no reading is ever fabricated — a host that
+#     stays loud still REFUSES, and refuses with the whole load1 curve in the
+#     evidence;
+#   * only a load1 violation is waited on. Disk headroom does not come back by
+#     waiting, and an UNREADABLE probe is the exact failure the gate exists to
+#     stop, so both refuse at once — waiting on them would be the gate looking
+#     away (16.1);
+#   * the DEFAULT is off, so every existing caller keeps today's instant
+#     refusal, byte for byte.
+
+class FakeWait:
+    """An injectable sleep+clock, so the wait is tested without taking one.
+
+    Every `sleep(n)` advances the clock by exactly `n` and appends it, which is
+    what lets a test assert that NOTHING was waited on the paths that must
+    refuse at once.
+    """
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.slept: list[float] = []
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += seconds
+
+    def clock(self) -> float:
+        return self.now
+
+
+def decaying_loadavg(monkeypatch, free_gib: float, load1s: list[str]):
+    """Point the harness at a /proc/loadavg that reads a different value each
+    time — the decay curve of a bring-up that has finished. The LAST value is
+    what every further read returns.
+    """
+    def usage(_path):
+        return FakeUsage(free_gib)
+    monkeypatch.setattr(shutil, "disk_usage", usage)
+    monkeypatch.setattr(ml.shutil, "disk_usage", usage)
+    monkeypatch.setattr(ml, "LOADAVG_PATH", str(LOADAVG_FIXTURE))
+    remaining = list(load1s)
+    LOADAVG_FIXTURE.write_text(remaining[0])
+
+    real_read = ml.read_load1
+
+    def read(path=None):
+        value = remaining.pop(0) if len(remaining) > 1 else remaining[0]
+        LOADAVG_FIXTURE.write_text(value)
+        return real_read(path)
+
+    monkeypatch.setattr(ml, "read_load1", read)
+
+
+def test_a_quiet_host_is_never_waited_on(monkeypatch):
+    """The settle must cost a quiet host nothing — not one poll."""
+    patch_host(monkeypatch, 40.0, "1.50 1 1 1/1 1")
+    wait = FakeWait()
+    readings, trail = ml.settle_host_quiet(10.0, 6.0, 420.0,
+                                           loadavg_path=ml.LOADAVG_PATH,
+                                           sleep=wait.sleep, clock=wait.clock)
+    assert ml.host_quiet_problems(readings) == []
+    assert trail["outcome"] == "quiet-on-first-reading"
+    assert wait.slept == []
+
+
+def test_the_default_is_off_so_a_loud_host_still_refuses_instantly(monkeypatch):
+    """Every caller that does not opt in keeps today's behaviour exactly: one
+    reading, an instant refusal, nothing touched."""
+    patch_host(monkeypatch, 40.0, "8.55 7 6 1/1 1")
+    wait = FakeWait()
+    readings, trail = ml.settle_host_quiet(10.0, 6.0, 0.0,
+                                           loadavg_path=ml.LOADAVG_PATH,
+                                           sleep=wait.sleep, clock=wait.clock)
+    assert ml.host_quiet_problems(readings)      # still refused
+    assert trail["outcome"] == "no-settle-requested"
+    assert wait.slept == []
+    assert ml.HOST_QUIET_SETTLE_SECONDS_DEFAULT == 0
+
+
+def test_the_bring_up_decay_tail_settles(monkeypatch):
+    """The nightly's actual shape: 8.55 at the gate, decaying once the bring-up
+    stops. The verdict is passed on the reading taken AFTER the wait, and that
+    reading is a real one."""
+    decaying_loadavg(monkeypatch, 40.0,
+                     ["8.55 7 6 1/1 1", "7.10 7 6 1/1 1", "5.20 7 6 1/1 1"])
+    wait = FakeWait()
+    readings, trail = ml.settle_host_quiet(10.0, 6.0, 420.0,
+                                           loadavg_path=ml.LOADAVG_PATH,
+                                           sleep=wait.sleep, clock=wait.clock)
+    assert ml.host_quiet_problems(readings) == []
+    assert readings["load1"] == 5.2          # the reading judged is the real one
+    assert trail["outcome"] == "settled"
+    assert [p["load1"] for p in trail["polls"]] == [8.55, 7.1, 5.2]
+    assert wait.slept == [ml.HOST_QUIET_SETTLE_POLL_S] * 2
+    assert trail["waited_s"] == 2 * ml.HOST_QUIET_SETTLE_POLL_S
+
+
+def test_a_host_that_never_comes_down_still_refuses(monkeypatch):
+    """The bound is not raised and the wait is not a pass. This is the clause
+    that keeps the settle from being `--allow-unquiet` with extra steps."""
+    patch_host(monkeypatch, 40.0, "8.55 7 6 1/1 1")
+    wait = FakeWait()
+    readings, trail = ml.settle_host_quiet(10.0, 6.0, 42.0,
+                                           loadavg_path=ml.LOADAVG_PATH,
+                                           sleep=wait.sleep, clock=wait.clock)
+    problems = ml.host_quiet_problems(readings)
+    assert len(problems) == 1 and "load1 8.55" in problems[0]
+    assert trail["outcome"] == "timeout"
+    assert trail["waited_s"] == pytest.approx(42.0)
+    # …and it waited the WHOLE budget, in poll-sized steps with a short last one
+    assert sum(wait.slept) == pytest.approx(42.0)
+    assert wait.slept[-1] == pytest.approx(2.0)
+
+
+def test_a_disk_violation_is_never_waited_on(monkeypatch):
+    """Free space does not come back by itself, and it is the more dangerous of
+    the two readings — s10 crossed OpenSearch's flood-stage watermark and lost
+    291,296 evidence docs. Refuse at once, however large the budget."""
+    patch_host(monkeypatch, 3.4, "1.50 1 1 1/1 1")
+    wait = FakeWait()
+    readings, trail = ml.settle_host_quiet(10.0, 6.0, 420.0,
+                                           loadavg_path=ml.LOADAVG_PATH,
+                                           sleep=wait.sleep, clock=wait.clock)
+    assert trail["outcome"] == "not-settleable"
+    assert wait.slept == []
+    assert ml.host_quiet_problems(readings)
+
+
+def test_an_unreadable_probe_is_never_waited_on(monkeypatch):
+    """An unmeasured host is not a quiet one, and it does not become one by
+    waiting — the whole failure mode was that nobody was measuring (16.1)."""
+    patch_host(monkeypatch, 40.0, "1.50 1 1 1/1 1",
+               disk_exc=OSError("no such filesystem"))
+    wait = FakeWait()
+    _readings, trail = ml.settle_host_quiet(10.0, 6.0, 420.0,
+                                            loadavg_path=ml.LOADAVG_PATH,
+                                            sleep=wait.sleep, clock=wait.clock)
+    assert trail["outcome"] == "not-settleable"
+    assert wait.slept == []
+
+
+def test_a_disk_violation_appearing_mid_settle_stops_the_wait(monkeypatch):
+    """The load came down; the filesystem filled while we waited. That is no
+    longer a settleable reading, so the wait ends there instead of burning the
+    rest of the budget on a violation it cannot fix."""
+    free = [40.0, 40.0, 3.4]
+
+    def usage(_path):
+        return FakeUsage(free.pop(0) if len(free) > 1 else free[0])
+    monkeypatch.setattr(shutil, "disk_usage", usage)
+    monkeypatch.setattr(ml.shutil, "disk_usage", usage)
+    decaying_loadavg(monkeypatch, 40.0,
+                     ["8.55 7 6 1/1 1", "7.10 7 6 1/1 1", "7.00 7 6 1/1 1"])
+    monkeypatch.setattr(shutil, "disk_usage", usage)
+    monkeypatch.setattr(ml.shutil, "disk_usage", usage)
+    wait = FakeWait()
+    readings, trail = ml.settle_host_quiet(10.0, 6.0, 420.0,
+                                           loadavg_path=ml.LOADAVG_PATH,
+                                           sleep=wait.sleep, clock=wait.clock)
+    assert trail["outcome"] == "not-settleable"
+    assert wait.slept == [ml.HOST_QUIET_SETTLE_POLL_S] * 2
+    assert len(ml.host_quiet_problems(readings)) == 2
+
+
+def test_the_summary_carries_the_decay_curve():
+    """A refusal that says only "8.55 exceeds 6.00" cannot be told apart from
+    one that waited seven minutes and watched it sit there. The curve is what
+    the NEXT diagnosis starts from."""
+    line = ml.settle_summary({
+        "outcome": "timeout", "waited_s": 420.0, "requested_s": 420.0,
+        "polls": [{"at_s": 0.0, "load1": 8.55}, {"at_s": 10.0, "load1": 8.40}]})
+    assert "timeout" in line and "420s" in line
+    assert "8.55@0s" in line and "8.40@10s" in line
+
+
+# ---------------------------------------------------------------------------
+# how preflight uses the settle
+# ---------------------------------------------------------------------------
+def _preflight_with_settle(monkeypatch, load1s, settle_seconds, free_gib=40.0):
+    decaying_loadavg(monkeypatch, free_gib, load1s)
+    wait = FakeWait()
+    monkeypatch.setattr(ml.time, "sleep", wait.sleep)
+    monkeypatch.setattr(ml.time, "monotonic", wait.clock)
+    args = ml.parse_args(["--host-quiet-settle-seconds", str(settle_seconds)])
+    runner = StubRunner(args)
+    try:
+        runner.preflight()
+    except RuntimeError as exc:
+        assert "STOP" in str(exc)
+        return runner, "continued", wait
+    return runner, "refused", wait
+
+
+def test_preflight_waits_out_the_bring_up_and_continues(monkeypatch):
+    runner, outcome, wait = _preflight_with_settle(
+        monkeypatch, ["8.55 7 6 1/1 1", "5.10 7 6 1/1 1"], 420)
+    assert outcome == "continued"
+    assert runner.host_quiet == "OK"
+    assert wait.slept == [ml.HOST_QUIET_SETTLE_POLL_S]
+
+
+def test_preflight_refuses_after_a_settle_and_shows_the_curve(monkeypatch):
+    """The refusal is unchanged; what is added is the evidence that we waited."""
+    runner, outcome, _wait = _preflight_with_settle(
+        monkeypatch, ["8.55 7 6 1/1 1"], 30)
+    assert outcome == "refused"
+    assert runner.host_quiet == "UNQUIET"
+    phase = runner.phases[-1]
+    assert phase["status"] == "FAIL"
+    quiet = phase["evidence"]["host_quiet"]
+    assert quiet["verdict"] == "REFUSED"
+    assert quiet["settle"]["outcome"] == "timeout"
+    assert [p["load1"] for p in quiet["settle"]["polls"]] == [8.55] * 4
+    assert "host-quiet settle: timeout" in phase["notes"]
+    assert "load1 8.55@0s" in phase["notes"]
+
+
+def test_the_settle_flag_defaults_to_off_and_is_settable():
+    assert ml.parse_args([]).host_quiet_settle_seconds == 0
+    assert ml.parse_args(
+        ["--host-quiet-settle-seconds", "420"]).host_quiet_settle_seconds == 420.0
+
+
+def test_report_parameters_carry_the_settle_budget():
+    """The wait is part of how a verdict was reached, so it travels with it."""
+    source = (ROOT / "scripts" / "scale-miniladder.py").read_text()
+    params = source.split('"parameters": {', 1)[1].split("},", 1)[0]
+    assert '"host_quiet_settle_seconds"' in params
+
+
+def test_the_nightly_opts_in_and_does_not_reach_for_allow_unquiet():
+    """The workflow is the caller this was built for, and the two things it
+    must NOT do are raise the bound and stamp UNQUIET."""
+    wf = (ROOT.parent / ".github" / "workflows"
+          / "scale-miniladder-nightly.yml").read_text()
+    # The COMMAND, not the file: the comment above it names both rejected fixes
+    # and has to keep saying why they were rejected.
+    cmd = wf.split("python3 scripts/scale-miniladder.py", 1)[1].split("\n\n", 1)[0]
+    assert "--host-quiet-settle-seconds 420" in cmd
+    assert "--allow-unquiet" not in cmd
+    assert "--max-load1" not in cmd

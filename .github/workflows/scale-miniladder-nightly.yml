@@ -95,10 +95,27 @@ jobs:
         # PATIENCE ONLY: the preflight assertion is unchanged (a live member
         # must be there), and a genuinely dead/authorization-dead consumer
         # still FAILS the run — see tests/test_scale_miniladder_group_parse.py.
+        #
+        # --host-quiet-settle-seconds 420 (tracker 286): the SAME contract, for
+        # the SAME reason, one gate earlier. This job was red every night from
+        # 2026-09-06 to 2026-09-12 on `host load1 N exceeds the 6.00 bound`
+        # (6.91 / 7.18 / 7.48 / 7.78 / 8.09 / 8.24 / 8.55) — every reading taken
+        # seconds after the steps above built two vite bundles, ran
+        # `install.py --tls=yes` and spent a JVM per topic across 16 topics on a
+        # 4-vCPU shared VM. load1 is a ~60 s exponential average, so those are
+        # the decay tail of work that had already finished. The bound is NOT
+        # raised (that would assert, with no evidence, that a host at 8.55 does
+        # not distort the timing clauses) and --allow-unquiet is NOT used (it
+        # stamps UNQUIET into the evidence and makes every future nightly's
+        # timing clauses unciteable). A host that never comes down still
+        # REFUSES — with the load1 poll trail in the preflight evidence, which
+        # is the reading that settles whether the idle stack itself sits above
+        # the bound on this runner class.
         run: |
           sudo -E python3 scripts/scale-miniladder.py \
             --devices 200 --burst-minutes 2 --eps 500 \
             --consumer-settle-seconds 300 \
+            --host-quiet-settle-seconds 420 \
             --run-dir "$RUNNER_TEMP/miniladder-run"
 
       - name: failure diagnostics
