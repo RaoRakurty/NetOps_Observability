@@ -257,7 +257,24 @@ describe("PeersPanel", () => {
     render(<PeersPanel />);
     await waitFor(() => expect(screen.getByText("10.1.0.1")).toBeTruthy());
     expect(screen.getByText(/This list is incomplete/i)).toBeTruthy();
-    expect(screen.getByText(/did not answer, so rows it would have carried are missing/i)).toBeTruthy();
+    expect(screen.getByText(/did not answer, so the rows it would have carried are missing/i)).toBeTruthy();
+    // And it names the RIGHT missing half: a refused read and a dead one are
+    // different sentences, and neither is the flag-off one.
+    expect(screen.queryByText(/refused this account's read/i)).toBeNull();
+    expect(screen.queryByText(/The BMP receiver is off/i)).toBeNull();
+  });
+
+  it("a REFUSED read on a partial table says refused, not unanswered", async () => {
+    bgpBmpSessions.mockRejectedValue(new Error("403 Forbidden: "));
+    metricsQuery.mockResolvedValue({
+      status: "success",
+      data: { resultType: "vector", result: [{ metric: { device: "edge-r2", peer: "10.1.0.1" }, value: [0, "6"] }] },
+    });
+    render(<PeersPanel />);
+    await waitFor(() => expect(screen.getByText("10.1.0.1")).toBeTruthy());
+    expect(screen.getByText(/refused this account's read/i)).toBeTruthy();
+    expect(screen.getByText(/not missing from the network/i)).toBeTruthy();
+    expect(screen.queryByText(/did not answer/i)).toBeNull();
   });
 
   it("says nothing is exporting when the receiver is up with no sessions", async () => {

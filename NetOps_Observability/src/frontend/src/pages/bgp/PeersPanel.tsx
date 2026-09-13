@@ -164,10 +164,13 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
         {!busy && bmpFeedIncomplete(bmp, rows.length) && (
           <p className="fact-line fact-warn" role="alert">
             <b>This list is incomplete.</b>{" "}
-            {bmp === "not_enabled"
-              ? "The BMP receiver is off, so these rows come only from device sampling — no transition reason and no counters."
-              : "The BMP receiver did not answer, so rows it would have carried are missing."}
-            {bmpErr && <> {bmpErr}</>}
+            {bmp === "not_enabled" &&
+              "The BMP receiver is off, so these rows come only from device sampling — no transition reason and no counters."}
+            {bmp === "denied" &&
+              "The BMP receiver refused this account's read, so the rows it would have carried are missing from this list — they are not missing from the network."}
+            {bmp === "unreadable" &&
+              "The BMP receiver did not answer, so the rows it would have carried are missing. That is a broken feed, not a quiet one."}
+            {bmp === "unreadable" && bmpErr ? <> {bmpErr}</> : null}
           </p>
         )}
 
