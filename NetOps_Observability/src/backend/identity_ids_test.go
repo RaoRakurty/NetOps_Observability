@@ -158,3 +158,30 @@ func TestRenameKeepsIdentity(t *testing.T) {
 		t.Error("org no longer resolvable by slug after update")
 	}
 }
+
+// mintUserID is the third opaque-id minter (tracker 300): the internal principal
+// id of a NEW LOCAL account. It exists for a reason the org/tenant minters do not
+// have — a username is a PER-TENANT handle an administrator may reuse, so an id
+// derived from it could never be a stable foreign key for sessions, role
+// bindings, audit actors and API handles.
+func TestMintUserIDIsOpaqueAndUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 1000; i++ {
+		id := mintUserID()
+		if !strings.HasPrefix(id, "u_") {
+			t.Fatalf("user id %q missing u_ prefix", id)
+		}
+		// 16 random bytes → 32 hex chars after the prefix, like every other id.
+		if len(strings.TrimPrefix(id, "u_")) != 32 {
+			t.Fatalf("unexpected user id length: %q", id)
+		}
+		if seen[id] {
+			t.Fatalf("duplicate opaque user id minted: %q", id)
+		}
+		seen[id] = true
+		// It must never be mistakable for an org or tenant id.
+		if isOrgID(id) || isTenantID(id) {
+			t.Fatalf("user id %q collides with another id namespace", id)
+		}
+	}
+}
