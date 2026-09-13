@@ -32,7 +32,7 @@
   "default_identifier": "Apache-2.0",
   "licence_texts": {
     "Apache-2.0": "LICENSES/Apache-2.0.txt",
-    "LicenseRef-Correlix-Enterprise": "LICENSES/Correlix-Enterprise.txt"
+    "LicenseRef-Correlix-Enterprise": "LICENSES/LicenseRef-Correlix-Enterprise.txt"
   },
   "locked_commercial_set": {
     "_why": "The ONLY entitlements the owner has locked as commercial (2026-09-04). Everything else in the tiering plan is a proposal and is NOT gated. A capability may not be marked commercial here without appearing in this list.",
@@ -427,7 +427,7 @@
         "requires": [
           "LICENSE",
           "LICENSES/Apache-2.0.txt",
-          "LICENSES/Correlix-Enterprise.txt",
+          "LICENSES/LicenseRef-Correlix-Enterprise.txt",
           "LICENSING.md",
           "NOTICE"
         ],
@@ -541,11 +541,11 @@
       {
         "id": "enterprise-text-placeholder",
         "report": "BLOCKED: final Correlix Enterprise licence text required from counsel.",
-        "what": "LICENSES/Correlix-Enterprise.txt still contains the marker CORRELIX-ENTERPRISE-TEXT-PLACEHOLDER.",
+        "what": "LICENSES/LicenseRef-Correlix-Enterprise.txt still contains the marker CORRELIX-ENTERPRISE-TEXT-PLACEHOLDER.",
         "why": "Files are marked LicenseRef-Correlix-Enterprise but the identifier resolves to no terms. Shipping code under a licence that does not exist grants nothing and is not honest.",
         "owner_action": "Obtain the drafted Correlix Enterprise License from counsel and replace the placeholder.",
         "marker": "CORRELIX-ENTERPRISE-TEXT-PLACEHOLDER",
-        "file": "LICENSES/Correlix-Enterprise.txt"
+        "file": "LICENSES/LicenseRef-Correlix-Enterprise.txt"
       },
       {
         "id": "cla-process-undefined",

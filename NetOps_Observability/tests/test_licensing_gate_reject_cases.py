@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Correlix
 
-"""The five licence-gate REJECT cases the RC1 directive names, each proven.
+"""The licence-gate REJECT cases the RC1 directive names, each proven.
 
 WHY THIS FILE EXISTS, separately from tests/test_licensing_consistency.py. That
 suite asserts the TREE is in a good state today — the placeholder is still a
@@ -20,6 +20,13 @@ the gate must reject:
   3. it is EMPTY
   4. a file in a commercial directory does not carry the commercial SPDX id
   5. a core/Apache file wrongly carries the commercial SPDX id
+
+A sixth group was added when the owner's Decision 3 (2026-09-13) fixed the
+canonical path at EXACTLY `LICENSES/LicenseRef-Correlix-Enterprise.txt`, one-to-
+one with the SPDX id. Decision 1's five cases all assume the gate knows WHICH
+file to look at; case 6 proves that binding, because during the rename the tree
+briefly had one filename and every reference had the other, and a stale checkout
+in that state must fail rather than pass on a path nothing resolves.
 
 (2), (4) and (5) were already rejected; (1) and (3) were not, and were fixed in
 the same change as this file. The specific holes, recorded because they are the
@@ -336,6 +343,197 @@ def test_case3_a_licenceref_text_that_does_not_name_its_identifier_is_rejected(
         "for LicenseRef-Correlix-Enterprise"
     )
     assert "does not name the identifier" in messages(fails)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# case 6 — the identifier and its file are bound one-to-one (owner Decision 3)
+# ─────────────────────────────────────────────────────────────────────────────
+# Owner Decision 3 (2026-09-13) fixes the canonical artifact path at EXACTLY
+# `LICENSES/LicenseRef-Correlix-Enterprise.txt`, one-to-one with the SPDX id
+# commercial sources declare. The rename is the interesting part: for one commit
+# the tree had one name and every reference had the other, and the states below
+# are the ones a half-applied checkout, a bad merge, or a "make both paths work"
+# copy actually produces. None of them may pass.
+STALE_ENTERPRISE_NAME = "Correlix-Enterprise.txt"  # the pre-Decision-3 filename
+
+
+def test_case6_the_canonical_name_is_what_the_policy_declares(policy):
+    """The binding itself, asserted against the real policy and the real tree.
+
+    Pinned as a literal rather than derived from the id, so renaming the FILE and
+    the id together — which would silently satisfy a derived assertion — still
+    fails here and forces the owner decision to be re-read.
+    """
+    comm = policy["identifiers"]["commercial"]
+    assert comm == "LicenseRef-Correlix-Enterprise", (
+        "the SPDX identifier changed. Decision 3 keeps it fixed; a rename is an "
+        "owner decision, not a refactor"
+    )
+    assert policy["licence_texts"][comm] == (
+        "LICENSES/LicenseRef-Correlix-Enterprise.txt"
+    ), "the canonical enterprise licence path is not the one Decision 3 names"
+    for root in (REPO, PROJ):
+        canonical = root / "LICENSES" / "LicenseRef-Correlix-Enterprise.txt"
+        assert canonical.is_file(), f"{canonical} is missing"
+        stale = root / "LICENSES" / STALE_ENTERPRISE_NAME
+        assert not stale.exists(), (
+            f"{stale} still exists. The terms must live in exactly one file; the "
+            f"rename is a `git mv`, never a copy"
+        )
+
+
+def test_case6_a_stale_checkout_with_only_the_old_filename_is_rejected(
+        gate, policy, fixture_tree):
+    """The stale-checkout state: the placeholder is present, but under the name
+    the tree used BEFORE Decision 3 — so every reference, every SPDX header and
+    the installer's bundle list point at a path that does not exist.
+
+    This must fail in the DEFAULT mode. A gate that passed here would certify a
+    tree in which the commercial identifier resolves to nothing, which is the
+    exact defect the identifier-to-file binding exists to prevent.
+    """
+    repo, proj = fixture_tree
+    assert_healthy(gate, policy)
+    for path in enterprise_text_paths(policy, repo, proj):
+        path.rename(path.with_name(STALE_ENTERPRISE_NAME))
+
+    fails = gate.check_notice_files(policy)
+    assert fails, (
+        "the gate ACCEPTED a tree carrying the enterprise licence text ONLY under "
+        "its pre-Decision-3 filename. Nothing in the repository resolves that "
+        "path, so every commercially marked file is licensed to nobody."
+    )
+    text = messages(fails)
+    assert all(f.check == "B" for f in fails), text
+    assert "LicenseRef-Correlix-Enterprise.txt" in text, text
+    assert "missing" in text, text
+
+
+def test_case6_the_stale_filename_does_not_clear_the_release_blocker(
+        gate, policy, fixture_tree):
+    """And `--release` must still say BLOCKED. The marker is still in the tree,
+    just under a name the blocker is not evaluated against — which is precisely
+    the fail-open shape (a blocker that became unevaluable reading as cleared)
+    that case 1 closed for deletion. Renaming must not reopen it."""
+    repo, proj = fixture_tree
+    narrowed = {"release_blockers": {"entries": [
+        b for b in policy["release_blockers"]["entries"]
+        if b["id"] == "enterprise-text-placeholder"
+    ]}}
+    assert narrowed["release_blockers"]["entries"], "the blocker has been removed"
+    for path in enterprise_text_paths(policy, repo, proj):
+        path.rename(path.with_name(STALE_ENTERPRISE_NAME))
+
+    fails = gate.check_release_blockers(narrowed)
+    assert fails, (
+        "renaming the licence text to its old filename cleared its release "
+        "blocker. A blocker that cannot be evaluated is not a blocker that was "
+        "cleared."
+    )
+    text = messages(fails)
+    assert BLOCKED_SENTENCE in text, text
+    assert "NEITHER" in text or "could not be evaluated" in text, text
+
+
+@pytest.mark.parametrize("which", ["both roots", "project root only",
+                                   "repository root only"])
+def test_case6_a_second_file_carrying_the_same_terms_is_rejected(
+        gate, policy, fixture_tree, which):
+    """A copy left beside the canonical file — "so both paths keep working".
+
+    Two files resolving one LicenseRef can disagree about what was granted, and
+    the one a scanner picks is then a matter of which reference it followed. The
+    bytes are identical the day the copy is made and nothing keeps them that way,
+    so this fails even though the copy is currently correct.
+    """
+    repo, proj = fixture_tree
+    assert_healthy(gate, policy)
+    repo_text, proj_text = enterprise_text_paths(policy, repo, proj)
+    targets = {"both roots": [repo_text, proj_text],
+               "project root only": [proj_text],
+               "repository root only": [repo_text]}[which]
+    for path in targets:
+        path.with_name(STALE_ENTERPRISE_NAME).write_text(
+            path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    fails = gate.check_notice_files(policy)
+    assert fails, (
+        f"the gate ACCEPTED a duplicate copy of the enterprise licence terms at "
+        f"{which}. Exactly one file may carry them."
+    )
+    text = messages(fails)
+    assert all(f.check == "B" for f in fails), text
+    assert "SECOND file" in text, text
+    assert STALE_ENTERPRISE_NAME in text, text
+    assert len(fails) == len(targets), text
+
+
+def test_case6_the_apache_text_is_not_treated_as_a_duplicate(
+        gate, policy, fixture_tree):
+    """The other direction, so the duplicate scan is not just rejecting company.
+
+    The enterprise placeholder names `Apache-2.0` in prose — it has to, because it
+    says what is NOT commercial — and `LICENSES/Apache-2.0.txt` sits in the same
+    directory. Neither is a second copy of the other's terms, and a scan that
+    flagged either would be un-silenceable noise on a healthy tree.
+    """
+    assert_healthy(gate, policy)
+    comm = policy["identifiers"]["commercial"]
+    assert gate._check_no_duplicate_terms(
+        policy["identifiers"]["core"],
+        policy["licence_texts"][policy["identifiers"]["core"]]) == [], (
+        "the stock Apache-2.0 text was reported as having a duplicate"
+    )
+    assert gate._check_no_duplicate_terms(comm, policy["licence_texts"][comm]) == []
+
+
+def test_case6_a_licenceref_declared_at_a_non_matching_path_is_rejected(
+        gate, policy, fixture_tree):
+    """The policy itself pointed somewhere else.
+
+    `licensing-policy.json` is the gate's only authority, so a rename applied
+    there and nowhere else would move the canonical path by editing one line. The
+    basename must be the identifier, which makes the canonical path a rule rather
+    than a value somebody can re-point.
+    """
+    repo, proj = fixture_tree
+    comm = policy["identifiers"]["commercial"]
+    moved = dict(policy)
+    moved["licence_texts"] = dict(policy["licence_texts"])
+    moved["licence_texts"][comm] = "LICENSES/Commercial.txt"
+    for root in (repo, proj):
+        (root / "LICENSES" / "Commercial.txt").write_text(
+            (root / policy["licence_texts"][comm]).read_text(encoding="utf-8"),
+            encoding="utf-8")
+        (root / policy["licence_texts"][comm]).unlink()
+
+    fails = gate.check_notice_files(moved)
+    assert fails, (
+        "the policy was allowed to declare the enterprise licence text at a path "
+        "not named for its identifier, so the canonical path is re-pointable"
+    )
+    text = messages(fails)
+    assert "one-to-one" in text and "LicenseRef-Correlix-Enterprise.txt" in text, text
+
+
+def test_case6_an_identifier_with_no_licence_text_at_all_is_rejected(
+        gate, policy, fixture_tree):
+    """The simplest way to make every arm above vacuous: drop the mapping. Then
+    the commercial identifier every enterprise file declares resolves to no file,
+    and a loop over `licence_texts` checks nothing."""
+    comm = policy["identifiers"]["commercial"]
+    orphaned = dict(policy)
+    orphaned["licence_texts"] = {
+        k: v for k, v in policy["licence_texts"].items() if k != comm
+    }
+    fails = gate.check_notice_files(orphaned)
+    assert fails, (
+        "an identifier the policy declares with NO licence_texts entry passed. "
+        "Every file marked with it then resolves to no terms and the gate looked "
+        "at nothing."
+    )
+    text = messages(fails)
+    assert "no entry in licence_texts" in text, text
 
 
 # ─────────────────────────────────────────────────────────────────────────────

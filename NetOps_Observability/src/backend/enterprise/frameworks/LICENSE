@@ -22,7 +22,7 @@ enabled framework whose crosswalk is gone reports a NULL score with a sentence
 saying the crosswalk is not included in this deployment — never an empty
 scorecard that would read as a clean bill.
 
-  Full terms      : LICENSES/Correlix-Enterprise.txt at the repository root
+  Full terms      : LICENSES/LicenseRef-Correlix-Enterprise.txt at the repository root
   Directory map   : LICENSING.md
   Which tier      : docs/design/TIERING_PLAN_2026-09-03.md
   Why the split   : docs/design/LICENSING_MODEL_2026-09-04.md

@@ -15,7 +15,7 @@ this notice. With this directory deleted the engine still runs: it assesses
 the core dialect and reports every other platform as NotApplicable, never a
 false Pass.
 
-  Full terms      : LICENSES/Correlix-Enterprise.txt at the repository root
+  Full terms      : LICENSES/LicenseRef-Correlix-Enterprise.txt at the repository root
   Directory map   : LICENSING.md
   Which tier      : docs/design/TIERING_PLAN_2026-09-03.md
   Why the split   : docs/design/LICENSING_MODEL_2026-09-04.md

@@ -448,8 +448,12 @@ FTR
     || { echo "FATAL: $ROOT/LICENSES/ is missing — the bundle must carry both SPDX licence texts" >&2; exit 1; }
   rm -rf "$BUNDLE_DIR/LICENSES"
   cp -R "$ROOT/LICENSES" "$BUNDLE_DIR/LICENSES"
-  # Both texts, by SPDX id, or the footer's third claim is false too.
-  for t in Apache-2.0 Correlix-Enterprise; do
+  # Both texts, by SPDX id, or the footer's third claim is false too. The file
+  # names ARE the identifiers: owner Decision 3 (2026-09-13) binds
+  # LicenseRef-Correlix-Enterprise one-to-one to
+  # LICENSES/LicenseRef-Correlix-Enterprise.txt, and licensing-gate.py check B
+  # fails if the two ever drift apart, so this loop reads as the id list it is.
+  for t in Apache-2.0 LicenseRef-Correlix-Enterprise; do
     [ -s "$BUNDLE_DIR/LICENSES/$t.txt" ] \
       || { echo "FATAL: bundle LICENSES/$t.txt is missing or empty" >&2; exit 1; }
   done

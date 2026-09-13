@@ -398,7 +398,7 @@ the investigation surface and the tenant isolation model are Apache-2.0. A named
 of commercial add-on modules is source-available under the Correlix Enterprise
 License. Tenant isolation is core in every edition and is never a commercial add-on.</p>
 <p>The licence texts ship with the source as <code>LICENSES/Apache-2.0.txt</code> and
-<code>LICENSES/Correlix-Enterprise.txt</code>; <code>LICENSING.md</code> maps every
+<code>LICENSES/LicenseRef-Correlix-Enterprise.txt</code>; <code>LICENSING.md</code> maps every
 directory to one of the two.</p>
 <p>Everything below this box concerns THIRD-PARTY software Correlix redistributes,
 which keeps its own licences and its own obligations.</p>
