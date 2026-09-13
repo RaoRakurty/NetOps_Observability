@@ -15,6 +15,7 @@ import type {
   BgpAlertConfigResp, BgpAlertPolicy, BgpAlertPolicyConfig,
   PromInstantResponse,
 } from "../../services/api";
+import { httpFailure } from "../../lib/errors";
 
 export type ClassTone = {
   label: string;
@@ -179,11 +180,43 @@ export function mergePeerRows(bmp: PeerRow[], device: PeerRow[]): PeerRow[] {
     a.peer.localeCompare(b.peer));
 }
 
-/** The five honest states of the Peers tab. Each one is a DIFFERENT sentence,
- *  because "the feature is off", "nothing is exporting" and "every peer is up"
- *  must never look alike. */
+/**
+ * What the BMP receiver said when we asked it for sessions.
+ *
+ * WHY THIS IS NOT A BOOLEAN (tracker 295). It was `bmpAvailable: boolean`, and
+ * the panel's catch-all `.catch(() => setBmpAvailable(false))` mapped EVERY
+ * failure — a 502, a timeout, a 403 — onto the same screen as "FEATURE_BMP is
+ * off". Those are opposite instructions to an operator: a receiver that is off
+ * is a deployment decision and needs no action tonight; a receiver that is on
+ * and not answering is a broken feed and is the reason they opened this tab.
+ *
+ * The discriminator is exact and not a guess: with FEATURE_BMP off `bmpAPI` is
+ * nil and main.go's handler answers **404** on all three /api/bgp/bmp/* routes,
+ * so the feature does not even enumerate. Any OTHER status means the routes are
+ * served — the receiver is enabled — and the read itself failed.
+ */
+export type BmpProbe =
+  | "ok"            // it answered
+  | "not_enabled"   // 404 — the route is not served: FEATURE_BMP is off
+  | "denied"        // 401/403 — it is running; this caller may not read it
+  | "unreadable";   // anything else, including no response at all
+
+/** Read the BMP probe out of a thrown api.ts error. Status only — never the body. */
+export function bmpProbeFrom(e: unknown): BmpProbe {
+  const f = httpFailure(e);
+  if (!f) return "unreadable";        // no status at all: the request never landed
+  if (f.status === 404) return "not_enabled";
+  if (f.status === 401 || f.status === 403) return "denied";
+  return "unreadable";
+}
+
+/** The honest states of the Peers tab. Each one is a DIFFERENT sentence,
+ *  because "the feature is off", "the feed is broken", "nothing is exporting"
+ *  and "every peer is up" must never look alike. */
 export type PeersState =
   | "bmp_off"          // FEATURE_BMP is off — the receiver is not even running
+  | "bmp_denied"       // the receiver is running; this caller may not read it
+  | "bmp_unreadable"   // the receiver is enabled and the read failed — act on this
   | "no_exporter"      // the receiver is up but no router is pushing to it
   | "no_peers"         // sessions exist but carry no peers we have seen state for
   | "rows"             // we have rows to show
@@ -191,15 +224,32 @@ export type PeersState =
 
 export function peersState(args: {
   error?: boolean;
-  bmpAvailable: boolean;
+  bmp: BmpProbe;
   sessions: number;
   rows: number;
 }): PeersState {
   if (args.error) return "error";
-  if (!args.bmpAvailable && args.rows === 0) return "bmp_off";
+  if (args.rows === 0) {
+    if (args.bmp === "not_enabled") return "bmp_off";
+    if (args.bmp === "denied") return "bmp_denied";
+    if (args.bmp === "unreadable") return "bmp_unreadable";
+  }
   if (args.sessions === 0 && args.rows === 0) return "no_exporter";
   if (args.rows === 0) return "no_peers";
   return "rows";
+}
+
+/**
+ * The BMP half is missing while the OTHER source still has rows.
+ *
+ * Without this the panel showed a partial table with nothing saying it was
+ * partial: the SNMP/gNMI rows rendered, the BMP rows (the ones carrying the
+ * transition reason and the counters) were simply absent, and the operator had
+ * no way to know. A partial answer presented as a whole one is the same lie in
+ * a smaller font.
+ */
+export function bmpFeedIncomplete(bmp: BmpProbe, rows: number): boolean {
+  return rows > 0 && bmp !== "ok";
 }
 
 /** The transit set observed for a prefix, newest observation first, with the
