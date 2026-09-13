@@ -21,6 +21,7 @@ who is on it, where it is, and when it is expected. Times are local box time.
 | 309 | correlation cannot read `netops.controller_events` | Opus | ✅ DONE (50c5e54e, merged; row deleted) — premise half wrong: grant existed; fixed the read-back + per-lane metric/rule/Q1b gate. Post-deploy: re-run apply-acls, restart correlation, Q1b must PASS | Sun 04:58 | Sun 06:58 | ACL matrix + explicit observable refusal + a gate that judges it |
 | 238a | verify 29 licence reviews against 7 conditions, sign only passes | Opus | ✅ DONE (3f93abb7, merged) — 25 signed, 2 need an owner call (xz-libs 5.6.3-r1 C7, .python-rundeps C3) | Sun 04:58 | Sun 07:58 | each failure reported individually |
 | 238b | strip six distlib PE launchers from the correlation runtime image | Opus | ✅ DONE (20ece8a3, merged) — both Syft shapes gone; keep pip (recommendation with evidence in tracker 238); residue filed as 311 | Sun 04:58 | Sun 08:58 | both Syft representations must vanish; pip regression; report if dropping pip is stronger |
+| D | Blocker D engineering half: release-mode fail-closed artifact signing (`CORRELIX_RELEASE_BUILD=1`, key import from a not-yet-existing secret, verify-before-upload, provenance in MANIFEST) | Opus | 🔄 running | Sun 07:51 | Sun 10:51 | leaves the tag build failing closed until the owner creates the distribution key secret |
 | 300 | identity namespacing — Phase 1 inspection + design of record (docs/design/IDENTITY_NAMESPACING_2026-09-13.md) | Fable | ✅ DONE (92bcf524) | Sun 04:58 | Sun 08:58 | inspection only, no code |
 | 300 | Phases 2–3 store+schema+migration (agent 300-store), then 4–6 doors+fan-out+tests (agent 300-doors) | Opus | 🔄 store DONE (1db02c1e, merged) → doors running | Sun 05:10 | Mon 10:58 | ~3–4 working days in the register; parallelised where the phases allow |
 | — | merge agent branches, tracker rows deleted, full gate, push, CI green | Fable+Opus | ⏳ queued | — | Sun 12:58 | after the first wave lands |
@@ -36,3 +37,4 @@ who is on it, where it is, and when it is expected. Times are local box time.
 ## Log
 
 - 2026-09-13 04:58 UTC — Decision 5 applied and re-read. Nine agents launched on disjoint files. 300 Phase 1 inspection started.
+- 2026-09-13 07:51 UTC — first wave fully merged (306 298 307 296 308 309 238a 238b + D5 docs + test-leak + neighbours + PE-check); gate run 2 green except 6 lint findings in the store package (with the doors agent) ; disk crisis at 100 % cleared to 87 % by removing dead worktrees/caches; residues filed 310 311 312; signing fail-closed agent started.
