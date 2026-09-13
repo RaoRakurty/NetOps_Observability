@@ -63,7 +63,6 @@ The plan shows per-action counters and a per-row table of the source line, the k
 | `unchanged` | An existing record matched and is already identical. | Nothing to do |
 | `conflict` | An existing record matched and the row would change it. The detail names what, for example `exists; would change coordinates (enable overwrite to apply)`. | No, unless overwrite is on |
 | `update` | Overwrite is on. The detail lists the changed fields, or a rebind from the old site to the new one for a placement. | Yes |
-| `refused` | The slug in the row belongs to a site you are not allowed to read. The detail says only that the slug is taken — never which fields differ, because that would compare the row against contents you cannot see. | No, never |
 | `error` | The row is invalid and is never applied. Fix the row. | No |
 
 An import preserves an existing value where the row is blank, and never reassigns a record's owning tenant.
@@ -72,7 +71,6 @@ Two error details are worth recognising:
 
 - `no visible device matches "…"` means the identifier matched nothing in your tenant by id, serial, management address or hostname. Confirm the device is onboarded and the identifier is exact.
 - `no site "…" visible in this tenant` means the target slug does not exist yet. Import the sites file before the placement file.
-- `a site with this slug exists and you may not read it` is the `refused` detail. Nothing is written for that row and no second site is created under the slug; pick a different slug, or open a break-glass session if you are platform staff who must administer that tenant.
 
 Both strings are produced by the importer itself and appear in the plan's **Detail** column.
 
