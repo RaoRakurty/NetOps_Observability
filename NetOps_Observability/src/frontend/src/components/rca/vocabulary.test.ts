@@ -72,12 +72,19 @@ describe('UI vocabulary — the word "Signals" never reaches the screen', () => 
     expect(files.length).toBeGreaterThan(20);
   });
 
+  // 30s, not the 5s default. This walks every shipped source file and runs the
+  // whole rule set over each one: 1.1s on an idle box, 4.8s observed with other
+  // work on the machine, against a hard 5s. It crossed it, and a guard that goes
+  // red for a reason that has nothing to do with the thing it guards is a guard
+  // people learn to re-run rather than read. The budget is generous on purpose —
+  // it is there to catch a scan that has genuinely stopped terminating, not to
+  // police how busy the box was.
   it("no rendered .tsx shows the word to an operator (raw rows are observations)", () => {
     const hits = files.flatMap((f) =>
       scanForEngineVocabulary(readFileSync(f, "utf-8"), relative(SRC, f).split(sep).join("/")),
     );
     expect(hits, `engine vocabulary reached the UI:\n${hits.join("\n")}`).toEqual([]);
-  });
+  }, 30_000);
 
   // Teeth: every shape that was actually fixed still trips the scanner.
   it("would fail on the pre-rename source (scanner has teeth)", () => {

@@ -250,6 +250,13 @@ describe("UI copy — developer-speak stays removed", () => {
     expect(files.length).toBeGreaterThan(200);
   });
 
+  // 30s, not the 5s default. This walks every shipped source file and runs the
+  // whole rule set over each one: 1.1s on an idle box, 4.8s observed with other
+  // work on the machine, against a hard 5s. It crossed it, and a guard that goes
+  // red for a reason that has nothing to do with the thing it guards is a guard
+  // people learn to re-run rather than read. The budget is generous on purpose —
+  // it is there to catch a scan that has genuinely stopped terminating, not to
+  // police how busy the box was.
   it("no shipped .ts/.tsx shows a denied phrase to an operator", () => {
     const hits = files.flatMap((f) =>
       scanCopy(readFileSync(f, "utf-8"), relative(SRC, f).split(sep).join("/")),
@@ -258,7 +265,7 @@ describe("UI copy — developer-speak stays removed", () => {
       hits,
       `developer-speak reached the UI (${hits.length} hit(s)):\n${hits.join("\n")}`,
     ).toEqual([]);
-  });
+  }, 30_000);
 
   // Teeth: every rule must still fire on the copy it was written to kill.
   // Without this a typo in a regex turns the whole guard into a no-op that
