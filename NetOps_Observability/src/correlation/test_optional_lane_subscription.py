@@ -140,6 +140,11 @@ def _hermetic(monkeypatch):
     residue conftest already guards for the window and the batcher."""
     dropped = dict(main.EVIDENCE_TOPICS_DROPPED)
     subscribed = list(main.SUBSCRIBED_TOPICS)
+    # tracker 309: the REQUIRED-lane refusal map is the same kind of residue.
+    # The fail-loud tests below populate it, and a leak would leave every LATER
+    # test in the suite reading a "degraded" engine for a fault it never had.
+    required_unavailable = dict(main.REQUIRED_TOPICS_UNAVAILABLE)
+    main.REQUIRED_TOPICS_UNAVAILABLE.clear()
     main.EVIDENCE_TOPICS_DROPPED.clear()
     main.SUBSCRIBED_TOPICS[:] = list(main.TOPICS)
     monkeypatch.setattr(main, "CONSUMER_RUNNING", False)
@@ -159,6 +164,8 @@ def _hermetic(monkeypatch):
     yield
     main.EVIDENCE_TOPICS_DROPPED.clear()
     main.EVIDENCE_TOPICS_DROPPED.update(dropped)
+    main.REQUIRED_TOPICS_UNAVAILABLE.clear()
+    main.REQUIRED_TOPICS_UNAVAILABLE.update(required_unavailable)
     main.SUBSCRIBED_TOPICS[:] = subscribed
 
 

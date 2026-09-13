@@ -744,6 +744,49 @@ groups:
             permanently-firing advisory is how a real one gets ignored.
           runbook: "docs/runbooks/engine-not-consuming.md"
 
+      - alert: CorrRequiredLaneUnauthorized
+        # WARNING, deliberately NOT a page (tracker 309). The page for this
+        # OUTCOME already exists and already fires: a REQUIRED lane the broker
+        # refuses means start() never succeeds, so CorrConsumerNotRunning and
+        # CorrelationConsumerDead both go off — "an engine consumer is not
+        # consuming" is page condition 1 of the four, and this is not a fifth.
+        # What this rule adds is the NAME: which lane, and why. Minting a second
+        # page for the same fault is how one outage becomes three phone calls
+        # and then a muted pager.
+        #
+        # `corr_required_topic_unavailable{topic,reason}` is published only while
+        # the refusal stands and is retracted the instant start() succeeds, so
+        # this cannot survive the fix. `for: 5m` is shorter than the evidence
+        # lane's 15m on purpose: a required lane is not an off-by-design state,
+        # and 5m is already well past a broker restart or a kafka-init race
+        # (install.py's own ACL bootstrap window is floored out of
+        # deploy-qualify.sh's Q6 for exactly the same reason).
+        #
+        # No `absent()` branch: the series is ABSENT in the healthy case, which
+        # is the whole design. Absence proves nothing here and an absent() guard
+        # would invert the rule.
+        expr: corr_required_topic_unavailable > 0
+        for: 5m
+        labels: { severity: warning, layer: correlation, tier: warning }
+        annotations:
+          summary: "Correlation cannot subscribe to REQUIRED lane {{ $labels.topic }} (reason: {{ $labels.reason }}) — this one lane is blocking the ENTIRE subscription"
+          description: >-
+            aiokafka resolves the whole subscription at start() and
+            `_wait_topics` is all-or-nothing, so ONE refused required lane means
+            the engine consumes NOTHING on any lane — read this together with
+            CorrConsumerNotRunning / CorrelationConsumerDead, which are the page
+            for that outcome. This rule exists to name the cause, which used to
+            live only in a log line. reason="unauthorized": the correlation
+            principal has no Read+Describe ACL on this topic — pipe
+            deployment/docker/kafka/apply-acls.sh into the broker (idempotent,
+            and it now reads every correlation grant back); the engine's
+            /healthz consumer.subscription.principal field names the exact
+            principal the broker refused. reason="absent": the topic was never
+            created — run kafka-init (broker auto-create is OFF by design).
+            reason="unreachable": the broker itself, not the matrix. Restarting
+            the container fixes NONE of these.
+          runbook: "docs/runbooks/engine-not-consuming.md"
+
       # ==================================================================
       # SNAPSHOT RESTORABILITY  (2026-09-03)
       #

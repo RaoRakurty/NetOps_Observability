@@ -249,6 +249,57 @@ def kafka_security_kwargs(env=os.environ) -> dict:
 # Built once at import: a broken TLS config fails the BOOT, loudly, not the
 # Nth reconnect attempt at 3am.
 KAFKA_SECURITY = kafka_security_kwargs()
+
+
+# ── WHO the broker denies (tracker 309) ──────────────────────────────────────
+#
+# A `TopicAuthorizationFailedError` names a topic and nothing else. The operator
+# then has to work out which principal was refused before they can read the ACL
+# matrix, and "correlation" is not what the broker sees: the grant in
+# deployment/docker/kafka/apply-acls.sh is written against the full DN of the
+# service's SVID, because there are no ssl.principal.mapping.rules (see that
+# file's header for why). So the refusal line must carry the DN.
+#
+# WHERE IT COMES FROM, and what is NOT claimed. The engine cannot read its own
+# certificate's subject: the correlation image carries no X.509 parser (no
+# `cryptography` in requirements.in, and §6 keeps it that way), and the stdlib
+# `ssl` module exposes a PEER certificate, never the local one. What IS known for
+# certain is the SVID FILE the engine authenticates with (KAFKA_SSL_CERT, mounted
+# per-service by compose.tls.yml as /certs/svid/<service>.crt) and the DN
+# TEMPLATE the matrix uses for every service. This composes the two, and the
+# result is an IDENTIFYING LABEL for logs, /healthz and /metrics — never an
+# authorization input. `CORR_KAFKA_PRINCIPAL` overrides it outright for a
+# deployment whose mapping rules differ.
+KAFKA_SVID_CERT = os.environ.get("KAFKA_SSL_CERT", "")
+# The `SA` of apply-acls.sh, byte-for-byte. Kept as an env knob rather than a
+# literal so a deployment with a different trust domain does not have to ship a
+# patched engine to get a correct log line.
+KAFKA_PRINCIPAL_SA = os.environ.get(
+    "KAFKA_PRINCIPAL_SA", "CN=spiffe://netops/ns/default/sa")
+
+
+def kafka_principal(cert_path: str, override: str = "", *,
+                    sa: str = "") -> str:
+    """The principal the broker authorizes this engine AS, for DIAGNOSTICS.
+
+    `override` (CORR_KAFKA_PRINCIPAL) wins. With an SVID configured the name is
+    the matrix's DN form for the cert's own basename — `/certs/svid/correlation.crt`
+    -> `User:CN=spiffe://netops/ns/default/sa/correlation`, which is exactly the
+    string apply-acls.sh grants and `kafka-acls --list` prints. With no SVID the
+    engine is on the plaintext listener and the broker really does see
+    `User:ANONYMOUS`; saying so is the honest answer, not a placeholder.
+
+    Pure, so the mapping is testable without a broker or a certificate."""
+    if override.strip():
+        return override.strip()
+    stem = os.path.basename(cert_path).rsplit(".", 1)[0] if cert_path else ""
+    if not stem:
+        return "User:ANONYMOUS"
+    return f"User:{sa or KAFKA_PRINCIPAL_SA}/{stem}"
+
+
+KAFKA_PRINCIPAL = kafka_principal(
+    KAFKA_SVID_CERT, os.environ.get("CORR_KAFKA_PRINCIPAL", ""))
 CLICKHOUSE_URL   = os.environ.get("CLICKHOUSE_URL", "http://clickhouse:8123")
 CLICKHOUSE_USER  = os.environ.get("CLICKHOUSE_USER", "netops")
 CLICKHOUSE_PASS  = os.environ.get("CLICKHOUSE_PASSWORD", "")
@@ -10053,6 +10104,21 @@ EVIDENCE_TOPICS_DROPPED: dict[str, str] = {}
 EVIDENCE_TOPIC_REPROBES = 0         # bounded re-probe passes over the dropped set
 EVIDENCE_TOPIC_RESUBSCRIBES = 0     # re-probes that recovered a lane (no restart)
 
+# The SAME map for the lanes that are NOT optional (tracker 309). A REQUIRED
+# lane the broker refuses is a harder fault than a dropped evidence lane — the
+# engine consumes NOTHING until it clears — and until now it had no per-topic
+# exposure at all: the restart loop showed up as `corr_consumer_running 0` plus
+# `corr_consumer_start_failures_total` climbing, and WHICH lane and WHY lived
+# only in a log line that repeated every supervision round. The measured case is
+# netops.controller_events in the scale-miniladder nightly: the engine logged
+# `TopicAuthorizationFailedError [Error 29]` for it, and nothing — not the
+# harness, not a rule, not deploy-qualify.sh — read that.
+#
+# topic -> "absent" | "unauthorized" | "unreachable", same vocabulary as
+# EVIDENCE_TOPICS_DROPPED so an operator reads both maps the same way. Cleared
+# the moment start() succeeds, so a non-empty map always means "right now".
+REQUIRED_TOPICS_UNAVAILABLE: dict[str, str] = {}
+
 # Bounds for the metadata probe and its retry cadence (§9: all IO has a
 # timeout; all retries are backed off + jittered).
 CORR_TOPIC_PROBE_TIMEOUT_S = float(os.environ.get("CORR_TOPIC_PROBE_TIMEOUT_S", "15"))
@@ -10144,17 +10210,46 @@ async def _log_required_topic_failure(consumer: AIOKafkaConsumer,
                     "start() error is reported unqualified below",
                     type(probe_exc).__name__)
     if named:
-        for topic, why in sorted(named.items()):
-            log.error(
-                "REQUIRED lane unavailable: topic=%s reason=%s lane=required "
-                "— the engine consumes NOTHING until this is fixed. absent: "
-                "run the kafka-init job (BUS_PARTITIONS) or create the topic; "
-                "unauthorized: grant the correlation principal Read "
-                "(deployment/docker/kafka/apply-acls.sh)", topic, why)
+        _note_required_lane_failures(named)
     else:
+        # Not a lane fault: clear the map so a stale per-topic gauge cannot
+        # outlive the condition it reported (a gauge that lies about WHICH lane
+        # is worse than no gauge — it sends the operator to the ACL matrix for a
+        # broker outage).
+        _note_required_lane_failures({})
         log.error("consumer.start() failed with %s (reason=%s) but every "
                   "required topic resolves — treating it as a broker/transport "
                   "fault: %s", type(exc).__name__, reason, exc)
+
+
+def _note_required_lane_failures(unavailable: Mapping[str, str]) -> None:
+    """Publish the REQUIRED-lane refusal set: ONE structured error line per
+    newly-unavailable topic (naming the topic, the reason AND the principal the
+    broker refused), plus the /healthz field and the
+    `corr_required_topic_unavailable` gauge.
+
+    ONCE, not per round. `consume()`'s supervisor retries every backoff period
+    forever, so logging on each attempt turns a standing misconfiguration into
+    pages of identical tracebacks — the same spam `_note_dropped_lanes` avoids
+    for optional lanes, and the reason the 2026-09-02 logs were unreadable. A
+    topic is announced when it becomes unavailable and again only if its REASON
+    changes; recovery gets its own line so "it cleared" is in the log too."""
+    for topic, reason in sorted(unavailable.items()):
+        if REQUIRED_TOPICS_UNAVAILABLE.get(topic) == reason:
+            continue
+        log.error(
+            "REQUIRED lane unavailable: topic=%s reason=%s lane=required "
+            "principal=%s — the engine consumes NOTHING until this is fixed. "
+            "absent: run the kafka-init job (BUS_PARTITIONS) or create the "
+            "topic; unauthorized: grant THAT principal Read+Describe on THIS "
+            "topic (deployment/docker/kafka/apply-acls.sh, then re-run it "
+            "against the broker — it is idempotent)",
+            topic, reason, KAFKA_PRINCIPAL)
+    for topic in [t for t in REQUIRED_TOPICS_UNAVAILABLE if t not in unavailable]:
+        log.info("REQUIRED lane available again: topic=%s — the subscription's "
+                 "blocker on this lane has cleared", topic)
+        del REQUIRED_TOPICS_UNAVAILABLE[topic]
+    REQUIRED_TOPICS_UNAVAILABLE.update(unavailable)
 
 
 def _record_start_failure(exc: BaseException) -> None:
@@ -11867,10 +11962,13 @@ def subscription_health() -> tuple[str, list[str]]:
     nothing that reads health — a human, the watchdog, an alert rule — could
     tell a consuming engine from a starving one.
 
-    WHAT DEGRADES IT. Exactly one condition: the supervisor has tried and is
-    not currently consuming (`start()` failed, or a round ended and the next
-    has not come up). That is the honest reading of "the required subscription
-    is live" and it is the state a restart loop produces.
+    WHAT DEGRADES IT. The supervisor has tried and is not currently consuming
+    (`start()` failed, or a round ended and the next has not come up). That is
+    the honest reading of "the required subscription is live" and it is the state
+    a restart loop produces. Tracker 309 adds NAMING, not a new condition: when
+    the blocker is a specific REQUIRED lane the broker refuses, each one is
+    appended as `required_lane_<reason>:<topic>` after `consumer_not_running`, so
+    the body says which lane without a second lookup.
 
     WHAT DOES NOT. (a) A DROPPED OPTIONAL LANE. Reporting an off-by-design
     evidence lane as unhealthy would re-create the defect from the other side —
@@ -11890,6 +11988,13 @@ def subscription_health() -> tuple[str, list[str]]:
     attempted = CONSUMER_STARTS or CONSUMER_START_FAILURES or CONSUMER_RESTARTS
     if attempted and not CONSUMER_RUNNING:
         reasons.append("consumer_not_running")
+    # ...and, when the blocker is a NAMED required lane, say which (tracker 309).
+    # This is additive on purpose: `consumer_not_running` stays the first reason
+    # so nothing that reads reasons[0] moves, and the per-lane reasons follow in
+    # a stable (sorted) order. A mandatory lane the broker refuses IS a degraded
+    # engine — unlike a dropped OPTIONAL lane, which deliberately is not.
+    for topic, why in sorted(REQUIRED_TOPICS_UNAVAILABLE.items()):
+        reasons.append(f"required_lane_{why}:{topic}")
     return ("degraded" if reasons else "ok"), reasons
 
 
@@ -12076,6 +12181,12 @@ async def consume() -> None:
             CONSUMER_STARTS += 1
             CONSUMER_RUNNING = True
             CONSUMER_LAST_ERROR = ""
+            # start() succeeded, so every REQUIRED lane resolved: retract any
+            # standing refusal (tracker 309). Done HERE rather than in the
+            # failure path so the gauge and the /healthz field can never outlive
+            # the fault — a per-topic alert that stays firing after the ACL was
+            # applied is the noise that gets the rule muted.
+            _note_required_lane_failures({})
             # The required lanes are already live at this point — whatever the
             # optional resolution decides, the engine consumes.
             subscribed = await resolve_optional_lanes(consumer, listener)
@@ -14393,6 +14504,32 @@ def _metrics_text(health: dict | None = None) -> str:
         "# HELP corr_health_degraded 1 when /healthz status is not ok (see health_reasons).",
         "# TYPE corr_health_degraded gauge",
         f"corr_health_degraded {int(h['status'] != 'ok')}",
+        # One series per REQUIRED lane the broker will not let us subscribe to
+        # (tracker 309). Present ONLY while the refusal stands, so
+        # `corr_required_topic_unavailable > 0` means exactly "this core lane is
+        # blocking the whole subscription right now, and here is which one and
+        # why". Bounded cardinality: at most one series per REQUIRED_TOPICS
+        # entry, and the `reason` label takes one of three fixed values.
+        #
+        # Read it WITH corr_consumer_running: that gauge says the engine is
+        # consuming nothing, THIS one says which lane and whose ACL. Before it
+        # existed the "which" was only ever in a log line.
+        "# HELP corr_required_topic_unavailable A REQUIRED lane the engine cannot subscribe to (the WHOLE subscription is blocked while this is set).",
+        "# TYPE corr_required_topic_unavailable gauge",
+        *(f'corr_required_topic_unavailable{{topic="{_prom_label(t)}",'
+          f'reason="{_prom_label(r)}"}} 1'
+          for t, r in sorted(REQUIRED_TOPICS_UNAVAILABLE.items())),
+        # …and the same fact as ONE always-present series. The per-topic gauge
+        # above is absent in the healthy case by design, which makes "no refusal"
+        # and "this build has no such gauge / VM is not scraping the engine"
+        # indistinguishable to a query — a gate that reads only the labelled
+        # gauge would rubber-stamp a PASS on an old image. This one is emitted
+        # unconditionally, so 0 is a POSITIVE statement and absence is honestly
+        # an un-answered question (scripts/deploy-qualify.sh relies on exactly
+        # that distinction).
+        "# HELP corr_required_topic_unavailable_count REQUIRED lanes the engine currently cannot subscribe to (always published; 0 is the healthy value).",
+        "# TYPE corr_required_topic_unavailable_count gauge",
+        f"corr_required_topic_unavailable_count {len(REQUIRED_TOPICS_UNAVAILABLE)}",
         # One series per DROPPED optional evidence lane. Present only while a
         # lane is dropped, so `corr_evidence_topic_dropped > 0` means exactly
         # "this evidence lane is NOT grounded" — bounded cardinality (at most
@@ -15243,6 +15380,14 @@ def _health_payload() -> dict:
                 "restarts": CONSUMER_RESTARTS,
                 "last_error": CONSUMER_LAST_ERROR,
                 "required": list(REQUIRED_TOPICS),
+                # WHICH required lanes the broker is refusing, and why
+                # (tracker 309). Non-empty means the subscription is blocked on
+                # exactly these, so the engine consumes NOTHING; `principal` is
+                # the identity the broker refused, which is the half an operator
+                # needs before they can read the ACL matrix.
+                "required_unavailable": dict(sorted(
+                    REQUIRED_TOPICS_UNAVAILABLE.items())),
+                "principal": KAFKA_PRINCIPAL,
                 "declared": list(TOPICS),
                 "subscribed": list(SUBSCRIBED_TOPICS),
                 "optional_declared": list(OPTIONAL_TOPICS),
