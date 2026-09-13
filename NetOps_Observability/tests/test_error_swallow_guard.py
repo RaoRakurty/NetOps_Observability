@@ -584,6 +584,23 @@ ALLOWLIST: dict[AllowKey, str] = {
     # ===================================================================
     ("spdx-headers.py", "scan", "285202b9"): "a source file the sweep could not READ: appended as a Violation naming the path and the errno, which is what makes --check/--write exit non-zero. The `continue` lets the remaining ~3 200 files still be swept, so one unreadable file yields a complete report instead of a truncated one. NOT a swallow: skipping silently would report a file as carrying a header the sweep never managed to read",
     ("spdx-headers.py", "scan", "21205363"): "a source file the sweep could not WRITE: appended as a Violation naming the path and the errno, which is what makes --write exit non-zero even though other files were stamped. The `continue` finishes the sweep so the operator gets every unwritable path in one run; the alternative — stopping at the first — leaves a half-stamped tree AND an incomplete list",
+    # ===================================================================
+    # 2026-09-13 — scripts/release-gate.py, the fail-closed release gate
+    # (RC1 governance directive, Decision 8). Three sites, and all three
+    # ESCALATE — just not by raising, because this script's escalation
+    # channel IS its report: a check whose command could not run becomes a
+    # FAIL row (never a skip, never a pass), and one FAIL row makes the gate
+    # exit non-zero. Raising instead would abort the run at the first broken
+    # tool and destroy the property the gate exists for — run-all,
+    # report-all, so the owner sees the WHOLE blocker matrix in one run
+    # rather than bisecting through fifteen. The FAIL-on-missing-tool
+    # behaviour is asserted directly by
+    # tests/test_release_gate_entrypoint.py::test_a_missing_tool_is_a_fail_not_a_skip.
+    # ===================================================================
+    ("release-gate.py", "run_process", "ca0a4730"): "a gate tool that exists but is not executable: returned as Proc(missing=True), which cmd_result() grades FAIL with the errno in the evidence line and the exact command beside it. Not swallowed — the row is in the table and the gate exits non-zero; raising here would stop the other 37 checks from ever running",
+    ("release-gate.py", "run_process", "8d2ca242"): "the residual OSError of spawning a gate tool (a broken interpreter, ENOMEM, EMFILE): same path — Proc(missing=True) -> a FAIL row carrying the OS error text -> non-zero exit. Catching it is what keeps one unspawnable tool from hiding the fourteen other Decision-8 items",
+    ("release-gate.py", "workflow_job_exists", "1cdb4321"): "an unreadable .github/workflows file while verifying that a CI-ONLY row's delegate job still exists: returns False, which turns that row into a FAIL ('nothing is checking it') instead of a reassuring CI-ONLY reference. The unreadable workflow and the deleted job are the same verdict — the promise cannot be verified — so the safe direction is the failing one",
+    ("release-gate.py", "check_dependency_lock_npm", "07376830"): "an unreadable or malformed package-lock.json: recorded as a FAIL row naming the file and the parse error ('lockfileVersion' drift and unreadable locks are the same verdict — the lock is not verifiable), so the dependency-lock item fails the release. Continuing to the second lockfile means the report names BOTH broken locks instead of only the first",
 }
 
 # Rule 1: literal swallows, any text file (catches heredoc Python in .sh too).

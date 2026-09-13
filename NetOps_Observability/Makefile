@@ -1,7 +1,7 @@
 # NetOps_Observability — developer make targets.
 .PHONY: test-correlation-e2e mib-index test-ticketing-unit test-servicenow-mock \
         release-gate release-gate-live bundle bundle-core bundle-status \
-        release-qualify release-qualify-selftest
+        release-qualify release-qualify-selftest release-check release-check-json
 
 # #97 packaging — customer-bundle lockstep. `bundle` builds the offline
 # installer bundle at HEAD (scripts/make-installer.sh: images + source +
@@ -34,6 +34,38 @@ release-gate:
 release-gate-live: release-gate
 	scripts/ch-query-budget-check.sh
 	scripts/ch-retention-dry-run.sh
+
+# THE fail-closed release gate — RC1 governance directive 2026-09-13, Decision 8:
+# ONE entry point aggregating tests, build, offline build, dependency lock,
+# copyleft gate, SPDX gate, enterprise licence validity, generated-code
+# cleanliness, security scans, SBOM, checksums, signature, signature
+# verification, release metadata and source/tag consistency. It runs every check
+# and reports the WHOLE blocker matrix, then exits non-zero: exit 0 is the only
+# result that means "releasable".
+#
+# NOT `release-gate` ABOVE. The names are one word apart and the meanings are not
+# related:
+#
+#   release-gate / release-gate-live  #101 storm-SLO lane contract — may a NEW
+#                                     SIGNAL LANE ship (write budget, tenant
+#                                     blast radius, RCA integrity under damping)
+#   release-check                     may THIS COMMIT be tagged and published
+#                                     (licensing, provenance, signing, deps)
+#
+# `release-gate` is referenced by tracker items and by the data-contract docs, so
+# it is not renamed or repurposed. Documented in docs/RELEASE_CHECKLIST.md §0.0.
+#
+# A BLOCKED-HUMAN row (counsel's licence text, the CLA mechanism, the
+# distribution signing key, the owner's tag signature) fails the gate exactly
+# like a FAIL does — it is labelled so the report separates a bug from a blocker.
+# CI-ONLY rows name the workflow and job that runs them on the tag and are never
+# counted as a pass.
+release-check:
+	python3 scripts/release-gate.py
+
+# The same report as JSON, for the RC1 release report / an artifact upload.
+release-check-json:
+	python3 scripts/release-gate.py --json
 
 # Tracker 203 — the reference-capacity regression suite. `release-qualify`
 # reruns the FROZEN CORRELIX REFERENCE CAPACITY V1 qualification against the

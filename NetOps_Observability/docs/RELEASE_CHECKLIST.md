@@ -17,6 +17,53 @@ template. Every step names the real script or workflow, and is marked:
 
 ---
 
+## 0.0 The one command
+
+Everything below is also aggregated behind a single fail-closed entry point — RC1
+governance directive 2026-09-13, **Decision 8**:
+
+```bash
+cd NetOps_Observability
+make release-check          # the table
+make release-check-json     # the same report as JSON, for the RC1 report
+```
+
+`scripts/release-gate.py` runs **every** check it can run here, prints one row per
+check — `check · result · evidence · the exact command` — and only then exits.
+Four results:
+
+| Result | Meaning | Counts as green? |
+|---|---|---|
+| **PASS** | proven here, now, on this tree | yes |
+| **FAIL** | an engineering failure. **A missing tool is a FAIL, never a skip** | no |
+| **BLOCKED-HUMAN** | fails only because a human-controlled input does not exist yet (counsel's licence text, the CLA mechanism, the distribution signing key, the owner's tag signature). Engineering cannot clear it and must not pretend to | no — it fails the release exactly like a FAIL, and is labelled so the report separates a bug from a blocker |
+| **CI-ONLY** | cannot run on a developer host at all (clean runner, network vulnerability feed, built images). The row names the workflow **and job** that runs it on the tag | **no** — an unverified check is not a green one |
+
+Exit codes: `0` every row PASSed (the only result that means *releasable*) · `1`
+at least one FAIL or BLOCKED-HUMAN · `2` the gate itself could not run · `3`
+nothing failed but CI-ONLY rows are still unverified here, or the run was
+filtered with `--only`. **Exit 3 is the best a developer host can produce** — the
+remaining rows are closed by the tag's own `release-gate.yml` run, which
+`publish-images.yml` and `release-bundle.yml` `needs:` before anything is
+published. Useful flags: `--bundle dist/correlix-…` grades a built artifact
+(checksums, signature, verification, MANIFEST, build commit), `--run-tests` runs
+the long suites locally instead of citing the CI job, `--list` prints the
+registry.
+
+> ⚠️ **`make release-check` is NOT `make release-gate`.** The names are one word
+> apart; the meanings are unrelated. `release-gate` / `release-gate-live` is the
+> **#101 storm-SLO lane contract** — may a *new signal lane* ship (write budget,
+> tenant blast radius, RCA integrity under damping). `release-check` is *may this
+> commit be tagged and published*. `release-gate` is referenced by tracker items
+> and by `docs/design/correlation-data-contract.md`, so it was deliberately left
+> alone and the new gate took a new name.
+
+Its own regression suite is `tests/test_release_gate_entrypoint.py`, which drives
+every check through a stub that passes, fails, or is missing, and parses Decision
+8's item list out of the directive so the aggregate cannot silently shrink.
+
+---
+
 ## 0. Preconditions — the ones that block everything
 
 | | Step | State |
@@ -55,7 +102,7 @@ All of these run on every PR and push. None needs a human unless it fails.
 | 1.16c | **Third-party licence gate** | `supply-chain` · `Third-party licence gate (blocking)` | 🟢 AUTOMATED |
 | 1.16d | **OCI image compliance** — the FINAL image is the compliance boundary: inherited base-layer software (BusyBox et al.) is discovered, its corresponding-source obligation evaluated, and the Correlix-retained artifact checksum-verified. Tracker 238 | `supply-chain` · `OCI image compliance (inherited layers, blocking)`; release mode runs per pushed digest in `publish-images` | 🟢 AUTOMATED |
 | 1.17 | Fuzz corpus exploration | `fuzz-nightly` (scheduled, not per-PR) | 🟢 AUTOMATED |
-| 1.18 | **`go.mod` direct requires ⊆ the CLAUDE.md §6 allowlist** | — | 🔴 MISSING — human review only |
+| 1.18 | **`go.mod` direct requires ⊆ the CLAUDE.md §6 allowlist** | `release-check` · `dependency-lock.allowlist` (the allowlist table is parsed out of `CLAUDE.md` §6, not retyped) | 🟡 MANUAL — in the aggregate gate (§0.0); not yet a CI job |
 | 1.19 | Helm chart renders and validates (lint · template · kubeconform, Kubernetes 1.30 schemas) — rendered-and-validated only, not cluster-proven (tracker 271) | `fresh-install-integrity` · `helm chart lint · template · kubeconform (blocking)` | 🟢 AUTOMATED |
 
 > **Every one of the gates above also runs on the TAG.** `.github/workflows/release-gate.yml`

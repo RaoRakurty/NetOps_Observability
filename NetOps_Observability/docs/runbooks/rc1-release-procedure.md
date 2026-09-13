@@ -44,6 +44,29 @@ qualified. Dropping `-rc1` is a separate decision that this page does not cover.
 
 These are not per-step. If any is false, **no step below may be authorized.**
 
+**Establish them all with one command first** (RC1 directive Decision 8 — the
+fail-closed release gate):
+
+```bash
+cd NetOps_Observability
+make release-check              # or: python3 scripts/release-gate.py --json
+```
+
+It runs every check that can run outside CI — 0.2, 0.3's offline half, 0.4, 0.5,
+0.6 and the tag/artifact preconditions of steps 3 and 4 — and prints one row per
+check with its result, its evidence and the exact command behind it. It exits
+non-zero unless **every** row PASSes: a `BLOCKED-HUMAN` row (counsel's licence
+text, the CLA mechanism, the distribution signing key, the owner's tag signature)
+fails the gate exactly like an engineering `FAIL` does, and a `CI-ONLY` row names
+the workflow and job that must be green on the tag instead of being counted as a
+pass. Read `docs/RELEASE_CHECKLIST.md` §0.0 for the result vocabulary and the exit
+codes, and **do not confuse it with `make release-gate`**, which is the unrelated
+#101 storm-SLO lane contract. The table below stays the authority for *what each
+precondition means*; the gate is how you establish them without missing one.
+
+> `make release-check` is expected to exit non-zero today. That is the correct
+> answer, not a broken gate: blockers A–F are open.
+
 | | Precondition | How it is established | State at the time of writing |
 |---|---|---|---|
 | 0.1 | **CI is green on the exact commit** that will be tagged — all 19 blocking checks of `ci-branch-protection.md` §1.1 (live ruleset requires 21; see step 1) | `gh run list --branch <branch> --limit 5`, and after step 2 `gh run list --branch main --limit 5` | not established — the work is on `feat/observability-platform` |
