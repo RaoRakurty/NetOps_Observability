@@ -186,6 +186,28 @@ row inserted in the same transaction (PK/UNIQUE violations map to
 resurrects `status=disabled` (design §4.2.5): a disabled account is returned
 as-is and the caller refuses, exactly as today.
 
+**Amendment 2026-09-13 (architect ruling on the store agent's open question 1).**
+A person is not duplicated per tenant inside one org. On a BOUND connection,
+after the exact `(tenant, issuer, subject)` miss and before provisioning,
+`ResolveFederated` looks up `(issuer, subject)` across the tenants the sign-in
+REALM reaches (own tenant for a tenant-bound connection; the org's tenants for
+an org-owned realm — `Realm.Reaches` is the bound, never wider). Exactly one
+account → that account is signed in (profile refreshed, no new row); more than
+one → `ErrAmbiguousIdentity`, refused and audited; none → provision in the
+connection's tenant. This is the same canonical tuple differing only in
+tenant, bounded by the C3 realm — it is neither email- nor username-linking,
+and `PRIMARY KEY (tenant, issuer, subject)` + `UNIQUE(user_id)` still hold.
+Never across realms. Pinned by a test: two connections in one org, one person
+→ one account; two connections in two unrelated orgs, same Keycloak subject →
+two accounts.
+
+**Accepted deviations from the store agent:** §2.6 gains condition 5b (the
+identity row must land in the account's own tenant, else the row stays
+pending); `Deps.MintID` nil = legacy id shape and MUST be wired in the same
+commit that switches `handleLogin` to `LookupLocal`; `CreateFull` refuses a
+federated `AuthSource`; the migration epoch row is created in 0049, written in
+0050, and never deleted by 0050's rollback.
+
 The three doors call it with what they actually verified:
 - OIDC callback: `{Tenant: ssoProvisionTenant, Issuer: p.Issuer(), Subject: claims.Sub, Protocol: "oidc", ConnectionID: txn.IdP}` + realm from `ssoSignInRealm`.
 - Bearer: `{Tenant: op.DefaultTenant(), Issuer: op.Issuer(), Subject: oc.Sub, Protocol: "oidc"}` via `ResolveFederatedUnbound`.
