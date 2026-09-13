@@ -2,6 +2,7 @@
 // Copyright 2026 Correlix
 
 import { ReactNode, useState } from "react";
+import { operatorError } from "../lib/errors";
 
 // Wizard — the shared guided-setup primitive. Every multi-field setup flow
 // (ITSM, auth providers, API keys, notifications, …) should use this instead of
@@ -15,7 +16,16 @@ import { ReactNode, useState } from "react";
 //     onFinish={submit}      // called only after the LAST step is valid
 //     onCancel={() => …}     // optional
 //     finishLabel="Create"
+//     errorFallback="The key was not created."   // optional, see below
 //   />
+//
+// WHEN onFinish THROWS. The thrown value is a caller's api.ts error — the
+// envelope "502 Bad Gateway: {…dial tcp 172.18.0.9:8080…}". That is a stack
+// trace wearing a label and it used to be rendered here verbatim, on every
+// wizard in the product, because this is the ONE shared submit path. It now
+// goes through `operatorError`, which keeps a server sentence worth reading and
+// replaces developer text with `errorFallback` — so pass one that names what
+// this particular wizard was trying to do.
 
 export type WizardStep = {
   id: string;
@@ -30,11 +40,14 @@ export default function Wizard({
   onFinish,
   onCancel,
   finishLabel = "Finish",
+  errorFallback = "That could not be completed.",
 }: {
   steps: WizardStep[];
   onFinish: () => void | Promise<void>;
   onCancel?: () => void;
   finishLabel?: string;
+  /** What WE were trying to do, as a sentence, shown when the failure carries no usable explanation. */
+  errorFallback?: string;
 }) {
   const [i, setI] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -54,7 +67,7 @@ export default function Wizard({
     try {
       await onFinish();
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(operatorError(e, errorFallback));
     } finally {
       setBusy(false);
     }
@@ -82,7 +95,11 @@ export default function Wizard({
 
       <div className="wizard-body">{step.render()}</div>
 
-      {err && <p style={{ color: "var(--bad)", fontSize: 13 }}>{err}</p>}
+      {err && (
+        <p role="alert" style={{ color: "var(--bad)", fontSize: "var(--fs-meta)", margin: "0 0 var(--sp-2)" }}>
+          <strong>Not done.</strong> {err}
+        </p>
+      )}
 
       <div style={footer}>
         <div>
