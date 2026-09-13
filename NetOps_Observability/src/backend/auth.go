@@ -1170,6 +1170,18 @@ func (s *server) bearerPrincipal(r *http.Request, op *oidcProvider, oc jwks.Clai
 		logWarn("auth", "bearer rejected — MFA required but not asserted by IdP", map[string]any{"sub": oc.Sub, "amr": oc.Amr, "acr": oc.Acr})
 		return jwtClaims{}, http.StatusUnauthorized, errors.New("multi-factor authentication is required — token does not assert a second factor")
 	}
+	// THE USERNAME IS THE WHOLE KEY HERE, and that is safe only because this
+	// path has exactly ONE realm (tracker 279d): the bearer branch consults
+	// `s.oidcProvider()`, the single platform relying-party connection, and
+	// per-tenant IdPs are BROKERED through it, so there is no per-tenant
+	// provider for this branch to pick.
+	//
+	// If that stops being true, this lookup becomes a cross-realm account
+	// takeover — the second realm's identity receiving the first realm's
+	// account, role and tenant, looking exactly like a successful sign-in.
+	// Thread the realm down to it first, the way C3 did where a realm was
+	// already in play. The premise is pinned by
+	// TestBearerUsernameIsOneGlobalNamespace.
 	u, ok := s.users.Get(sub)
 	if !ok {
 		var err error

@@ -46,5 +46,14 @@ func (s *server) handleTACACSLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	// Provisioning + account-state gates + session, shared with LDAP (auth.go).
 	// H1: refuses outright when the username names a LOCALLY-managed account.
+	// THE USERNAME IS THE WHOLE KEY HERE, and that is safe only because this
+	// path has exactly ONE realm (tracker 279d): there is one platform-global
+	// TACACS+ configuration, so one directory and one username namespace.
+	//
+	// If that stops being true — a per-tenant server — this call becomes a
+	// cross-realm account takeover, the second realm's identity receiving the
+	// first realm's account, role and tenant, looking exactly like a successful
+	// sign-in. Thread the realm down to the account lookup first. The premise
+	// is pinned by TestBearerUsernameIsOneGlobalNamespace.
 	s.completeFederatedLogin(w, r, req.Username, "", req.Username, t.DefaultRole(), "tacacs", t.DefaultTenant())
 }
