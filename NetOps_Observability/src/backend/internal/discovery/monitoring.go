@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"netops/backend/internal/devmon"
+	"netops/backend/internal/rbac"
 	"netops/backend/models"
 )
 
@@ -364,12 +365,28 @@ type WithheldMonitoring struct {
 	Reason   string `json:"reason"`
 }
 
-// MonitoringWithheld lists them. This is the honest half of the ceiling: these
-// devices are in the inventory, nothing about them was deleted or hidden, and
-// the operator is told exactly which ones are not being collected from and why.
-func (a *DiscoveryAggregator) MonitoringWithheld() []WithheldMonitoring {
+// MonitoringWithheldFor lists them FOR ONE PRINCIPAL. This is the honest half
+// of the ceiling: these devices are in the inventory, nothing about them was
+// deleted or hidden, and the operator is told exactly which ones are not being
+// collected from and why.
+//
+// The scope is a required argument and there is deliberately no unscoped
+// sibling: the rows carry another tenant's device ids and names, so a caller
+// that wants the platform-wide view has to TYPE cross=true, which makes the
+// gate visible at the call site (CLAUDE.md §3a rules 1 and 3 — cross=true
+// belongs behind requirePlatformAdmin, as the Licence surface is). A scoped
+// caller sees only its own tenant's rows; untagged/platform-owned devices are
+// their own partition and are visible only cross-tenant, exactly as the device
+// registry itself treats them.
+//
+// The decision funnels through rbac.Authorize rather than re-deriving "same
+// tenant?" here, so this read can never drift from the one policy. A withheld
+// id with no row left in the cache is treated as platform-owned (tenant "") —
+// default-closed for every scoped caller.
+func (a *DiscoveryAggregator) MonitoringWithheldFor(tenant string, cross bool) []WithheldMonitoring {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
+	p := rbac.Principal{Tenant: tenant, Cross: cross}
 	out := make([]WithheldMonitoring, 0, len(a.withheld))
 	for id, reason := range a.withheld {
 		w := WithheldMonitoring{DeviceID: id, Reason: reason}
@@ -377,12 +394,19 @@ func (a *DiscoveryAggregator) MonitoringWithheld() []WithheldMonitoring {
 			w.TenantID = deviceTenantKey(d)
 			w.Name = d.Name
 		}
+		if !rbac.Authorize(p, rbac.ActionView, rbac.Resource{Type: rbac.ResDevice, Tenant: w.TenantID}).Allow {
+			continue
+		}
 		out = append(out, w)
 	}
 	return out
 }
 
-// MonitoringWithheldCount is MonitoringWithheld's size without the copy.
+// MonitoringWithheldCount is the PLATFORM-WIDE size of that list without the
+// copy. It is a count and carries no tenant's identities: it feeds the licence
+// ceiling (which is itself platform-global — one installation, one allowance)
+// and the /metrics gauge. Anything that renders WHICH devices must go through
+// MonitoringWithheldFor.
 func (a *DiscoveryAggregator) MonitoringWithheldCount() int {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
