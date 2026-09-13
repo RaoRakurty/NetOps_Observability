@@ -90,6 +90,10 @@ export function normalizeView(v: TopologyView): TopologyView {
     edges,
     groups,
     overlays: Array.isArray(v.overlays) ? v.overlays : [],
+    // The degradation notes are what stops an empty adjacency set being read as a
+    // finding, so they must survive normalization verbatim — never widened, never
+    // invented here. A producer that omits them is a HEALTHY read.
+    degraded: Array.isArray(v.degraded) ? v.degraded.filter((d) => typeof d === "string" && d !== "") : [],
   };
 }
 

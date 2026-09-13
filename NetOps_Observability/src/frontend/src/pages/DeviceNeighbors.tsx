@@ -35,13 +35,29 @@ const mono: React.CSSProperties = { ...td, fontFamily: "var(--font-mono)" };
 
 export default function DeviceNeighbors({ device }: { device: Device }) {
   const [links, setLinks] = useState<TopoLink[] | null>(null);
+  // The adjacency READ failing is not the same fact as this device having no
+  // neighbour (tracker 290). This tab used to catch the failure into an empty
+  // list and render "No neighbour protocol reported one here." — a statement
+  // about the network, made from no evidence at all. /api/topology/links now
+  // refuses (502) rather than answering count:0, and the refusal is shown.
+  const [linksError, setLinksError] = useState<string | null>(null);
   const [bgp, setBgp] = useState<PromInstantSeries[] | null>(null);
   const [ospf, setOspf] = useState<PromInstantSeries[] | null>(null);
   const id = device.id;
 
   useEffect(() => {
     let alive = true;
-    api.topologyLinks().then((r) => alive && setLinks((r?.links ?? []).filter((l) => l.source === id || l.target === id))).catch(() => alive && setLinks([]));
+    api.topologyLinks()
+      .then((r) => {
+        if (!alive) return;
+        setLinks((r?.links ?? []).filter((l) => l.source === id || l.target === id));
+        setLinksError(null);
+      })
+      .catch((e) => {
+        if (!alive) return;
+        setLinks([]);
+        setLinksError((e as Error).message || "The adjacency evidence could not be read.");
+      });
     api.metricsQuery(`device_bgp_peer_state{device="${id}"}`).then((r) => alive && setBgp(r?.data?.result ?? [])).catch(() => alive && setBgp([]));
     api.metricsQuery(`device_ospf_nbr_state{device="${id}"}`).then((r) => alive && setOspf(r?.data?.result ?? [])).catch(() => alive && setOspf([]));
     return () => { alive = false; };
@@ -49,8 +65,12 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
 
   return (
     <div style={{ maxWidth: 1100 }}>
-      <Section title="Neighbours" sub={links ? `${links.length} adjacenc${links.length === 1 ? "y" : "ies"}` : "loading…"} ask={<AskIris topic="device.neighbors" label="Neighbours" />}>
-        {links === null ? <div className="empty">Loading…</div> : links.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No neighbour protocol reported one here.</p> : (
+      <Section title="Neighbours" sub={linksError ? "unread" : links ? `${links.length} adjacenc${links.length === 1 ? "y" : "ies"}` : "loading…"} ask={<AskIris topic="device.neighbors" label="Neighbours" />}>
+        {linksError ? (
+          <p role="alert" data-testid="device-neighbours-unread" style={{ color: "var(--bad)", padding: "0 12px" }}>
+            The adjacency evidence could not be read, so this device&rsquo;s neighbours are UNKNOWN here — not absent. {linksError}
+          </p>
+        ) : links === null ? <div className="empty">Loading…</div> : links.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No neighbour protocol reported one here.</p> : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={th}>Local port</th><th style={th}>Neighbor</th><th style={th}>Remote port</th><th style={th}>Protocol</th></tr></thead>
             <tbody>

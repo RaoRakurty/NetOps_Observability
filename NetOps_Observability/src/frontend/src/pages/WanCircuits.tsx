@@ -491,6 +491,11 @@ function PolicySection({ panel, onRetry, canEdit, onSaved }: {
 export default function WanCircuits() {
   const [rows, setRows] = useState<WanInterfaceRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  // Evidence the SERVER could not read while deriving this table (tracker 290).
+  // Distinct from `err`, which is this read failing: the table below is real, but
+  // without the adjacency evidence every "Anchor" in the Target column may be a
+  // fallback the projection took because the peer was never looked for.
+  const [degraded, setDegraded] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [q, setQ] = useState("");
 
@@ -499,7 +504,7 @@ export default function WanCircuits() {
     const tick = async () => {
       try {
         const res = await api.wanInterfaces();
-        if (alive) { setRows(res?.interfaces ?? []); setErr(null); setLoaded(true); }
+        if (alive) { setRows(res?.interfaces ?? []); setDegraded(res?.degraded ?? []); setErr(null); setLoaded(true); }
       } catch (e) {
         if (alive) { setErr((e as Error).message); setLoaded(true); }
       }
@@ -641,6 +646,9 @@ export default function WanCircuits() {
         <AskIris topic="wan.tiers" label="Measured by" />
       </p>
       {err && <p style={{ color: "var(--bad)" }}>{err}</p>}
+      {degraded.map((note) => (
+        <p key={note} role="alert" data-testid="wan-degraded" style={{ color: "var(--bad)" }}>{note}</p>
+      ))}
 
       <div className="stat-grid" style={{ marginBottom: 18 }}>
         <div className={`stat ${rows.length ? "s-good" : "s-muted"}`}>
