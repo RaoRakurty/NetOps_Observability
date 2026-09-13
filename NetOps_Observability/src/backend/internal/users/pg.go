@@ -140,6 +140,11 @@ func isUniqueViolation(err error) bool {
 // second copy inside the JSON would be two sources of truth that drift.
 func marshalUserRow(u User) ([]byte, error) {
 	u.Identity = nil
+	// Owner Decision 2: `user_identity_state` (migration 0051) is the authority
+	// for the migration state on this backend, exactly as `user_identities` is for
+	// the tuple. Persisting a second copy inside the JSON would be two sources of
+	// truth that drift.
+	u.IdentityMigration = nil
 	return json.Marshal(u)
 }
 
@@ -261,8 +266,7 @@ func (s *PGStore) List(tenant string, cross bool) []User {
 	var out []User
 	// RLS scopes the read: a scoped admin sees only its own tenant; '*' sees all.
 	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT `+userIdentityCols+` FROM users u
-			LEFT JOIN user_identities i ON i.user_id = u.id`)
+		rows, err := tx.Query(ctx, `SELECT `+userIdentityCols+userIdentityJoin)
 		if err != nil {
 			return err
 		}
@@ -347,6 +351,8 @@ func (s *PGStore) createLocal(u User) (User, error) {
 	u.ID = s.deps.mintID(u.Username)
 	ident := localIdentity(u.TenantID, u.Username, ProvenanceAsserted, u.CreatedAt)
 	u.Identity = &ident
+	state := boundState(u.CreatedAt)
+	u.IdentityMigration = &state
 
 	ctx, cancel := usersCtx()
 	defer cancel()
@@ -545,9 +551,15 @@ func (s *PGStore) VerifyIdentityInvariants() error {
 	var pending int
 	var doubled int
 	err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
+		// The `<> 'ambiguous'` is owner Decision 2: an ambiguous account is a
+		// RECORDED STATE, not an invariant failure — see FileStore's twin for why
+		// refusing to boot over one would turn a flagged row into an outage. An
+		// `unresolved` local account still fails the gate.
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM users u
 			LEFT JOIN user_identities i ON i.user_id = u.id
+			LEFT JOIN user_identity_state st ON st.user_id = u.id
 			WHERE i.user_id IS NULL
+			  AND COALESCE(st.state, '') <> 'ambiguous'
 			  AND COALESCE(u.data->>'auth_source', '') IN ('', 'local')`).Scan(&pending); err != nil {
 			return err
 		}
@@ -599,14 +611,18 @@ func (s *PGStore) resolve(a Assertion, realm Realm, provision, unbound bool) (Us
 	defer cancel()
 	var (
 		out   User
-		bound bool
+		event *LegacyBindEvent
 	)
 	err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
-		u, didBind, err := s.resolveTx(ctx, tx, a, realm, provision, unbound)
+		u, ev, err := s.resolveTx(ctx, tx, a, realm, provision, unbound)
+		// The outcome is kept even on the error paths: a refusal is what the owner
+		// asked to be able to count. It is only REPORTED after the transaction
+		// settles, so nothing is audited that the database then rolled back.
+		event = ev
 		if err != nil {
 			return err
 		}
-		out, bound = u, didBind
+		out = u
 		return nil
 	})
 	if err != nil {
@@ -632,54 +648,58 @@ func (s *PGStore) resolve(a Assertion, realm Realm, provision, unbound bool) (Us
 			if rerr != nil {
 				return User{}, rerr
 			}
+			// The tuple was won by a concurrent sign-in, so the adoption this
+			// transaction planned never happened: nothing is reported.
 			return retry, nil
 		}
+		// The transaction rolled back, so whatever it decided did not persist.
+		// Reporting a refusal here would count a decision the database threw away.
 		return User{}, err
 	}
 	// Reported after the transaction commits, and outside it: the integrator's
 	// audit sink writes to its own store.
-	if bound && s.deps.OnLegacyBound != nil {
-		s.deps.OnLegacyBound(out, a)
-	}
+	reportLegacyBind(s.deps, event)
 	return out, nil
 }
 
-func (s *PGStore) resolveTx(ctx context.Context, tx pgx.Tx, a Assertion, realm Realm, provision, unbound bool) (User, bool, error) {
+func (s *PGStore) resolveTx(ctx context.Context, tx pgx.Tx, a Assertion, realm Realm, provision, unbound bool) (User, *LegacyBindEvent, error) {
 	owner, err := lookupTupleTx(ctx, tx, a, unbound)
 	if err != nil {
-		return User{}, false, err
+		return User{}, nil, err
 	}
 	if owner == "" && !unbound {
 		// §2.5 Amendment — see realmScopedOwner. Same decision, same bound, on
 		// rows this transaction already holds FOR UPDATE.
 		cands, cerr := tupleCandidatesTx(ctx, tx, a)
 		if cerr != nil {
-			return User{}, false, cerr
+			return User{}, nil, cerr
 		}
 		if owner, err = realmScopedOwner(realm, cands); err != nil {
-			return User{}, false, err
+			return User{}, nil, err
 		}
 	}
 	if owner != "" {
 		u, err := loadUserTx(ctx, tx, owner)
 		if err != nil {
-			return User{}, false, err
+			return User{}, nil, err
 		}
 		out, err := s.refreshTx(ctx, tx, u, a, realm)
-		return out, false, err
+		return out, nil, err
 	}
 	if !provision {
 		// The read-only door (elevation): a tuple miss is a refusal, and nothing
 		// is written. It never binds by username again.
-		return User{}, false, ErrNoSuchUser
+		return User{}, nil, ErrNoSuchUser
 	}
-	if u, ok, err := s.bindLegacyTx(ctx, tx, a, realm, unbound); err != nil {
-		return User{}, false, err
-	} else if ok {
-		return u, true, nil
+	u, event, err := s.bindLegacyTx(ctx, tx, a, realm, unbound)
+	if err != nil {
+		return User{}, event, err
 	}
-	u, err := s.provisionTx(ctx, tx, a, realm)
-	return u, false, err
+	if event != nil && event.Result == LegacyBindBound {
+		return u, event, nil
+	}
+	fresh, err := s.provisionTx(ctx, tx, a, realm)
+	return fresh, event, err
 }
 
 // lookupTupleTx locks the identity row so a concurrent sign-in cannot merge
@@ -766,11 +786,13 @@ func (s *PGStore) refreshTx(ctx context.Context, tx pgx.Tx, u User, a Assertion,
 	if u.Identity != nil {
 		next := refreshIdentityMeta(*u.Identity, a, now)
 		if _, err := tx.Exec(ctx,
-			`UPDATE user_identities SET last_login_at=$2, connection_id=$3, subject_kind=$4 WHERE user_id=$1`,
-			normID(u.ID), next.LastLoginAt, next.ConnectionID, next.SubjectKind); err != nil {
+			`UPDATE user_identities SET last_login_at=$2, connection_id=$3, subject_kind=$4, directory_dn=$5
+			  WHERE user_id=$1`,
+			normID(u.ID), next.LastLoginAt, next.ConnectionID, next.SubjectKind, next.DirectoryDN); err != nil {
 			return User{}, err
 		}
 		u.Identity = &next
+		applyState(&u, boundState(now))
 	}
 	if err := writeUserTx(ctx, tx, u); err != nil {
 		return User{}, err
@@ -778,41 +800,71 @@ func (s *PGStore) refreshTx(ctx context.Context, tx pgx.Tx, u User, a Assertion,
 	return u, nil
 }
 
-// bindLegacyTx is design §2.6 on Postgres: the candidate row is locked FOR
-// UPDATE, every condition is evaluated against the locked row, and the identity
-// insert rides the same transaction. ok=false means "conditions not met" — the
-// caller then provisions a fresh account, which is the "flagged, never guessed"
-// outcome.
-func (s *PGStore) bindLegacyTx(ctx context.Context, tx pgx.Tx, a Assertion, realm Realm, unbound bool) (User, bool, error) {
+// bindLegacyTx is design §2.6 on Postgres, as narrowed by owner Decision 2: the
+// candidate row is locked FOR UPDATE, every condition is evaluated against the
+// locked row, and the identity insert rides the same transaction. It returns the
+// OUTCOME (bound / ambiguous / refused, nil for "no candidate at all"); anything
+// but `bound` means the caller provisions a fresh account, which is design §2.6's
+// "flagged, never guessed".
+//
+// The collision check is a SELECT, not a caught unique violation: a violation
+// aborts the transaction, which would take the ambiguous mark down with it.
+func (s *PGStore) bindLegacyTx(ctx context.Context, tx pgx.Tx, a Assertion, realm Realm, unbound bool) (User, *LegacyBindEvent, error) {
 	cand := legacyUserID(a.LegacyUsername)
 	if cand == "" {
-		return User{}, false, nil
+		return User{}, nil, nil
 	}
 	u, err := loadUserTx(ctx, tx, cand)
 	if errors.Is(err, ErrNoSuchUser) {
-		return User{}, false, nil
+		return User{}, nil, nil
 	}
 	if err != nil {
-		return User{}, false, err
+		return User{}, nil, err
 	}
 	identityTenant := normTenant(a.TenantID)
 	if unbound {
 		identityTenant = normTenant(u.TenantID)
 	}
-	if !legacyBindPermitted(u, a, realm, s.markerAt, u.Identity != nil, identityTenant) {
-		return User{}, false, nil
+	if reason := legacyBindRefusal(u, a, realm, s.markerAt, u.Identity != nil, identityTenant); reason != "" {
+		return User{}, &LegacyBindEvent{Result: LegacyBindRefused, Reason: reason, User: u, Assertion: a}, nil
 	}
 	now := time.Now().UTC()
 	ident := assertedIdentity(a, identityTenant, ProvenanceLegacyLazyBound, now)
+	// NEVER SILENTLY MERGE TWO IDENTITIES (owner Decision 2).
+	var claimedBy string
+	switch err := tx.QueryRow(ctx,
+		`SELECT user_id FROM user_identities WHERE tenant_id=$1 AND issuer=$2 AND subject=$3 FOR UPDATE`,
+		ident.TenantID, ident.Issuer, ident.Subject).Scan(&claimedBy); {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return User{}, nil, err
+	case claimedBy != normID(u.ID):
+		marked, merr := markAmbiguousTx(ctx, tx, u, ReasonTupleClaimed, now)
+		if merr != nil {
+			return User{}, nil, merr
+		}
+		return User{}, &LegacyBindEvent{Result: LegacyBindAmbiguous, Reason: ReasonTupleClaimed, User: marked, Assertion: a}, nil
+	}
 	u.Identity = &ident
+	applyState(&u, boundState(now))
 	u = MergeFederated(u, a.Email, a.DisplayName, s.deps.GuardRole(a.Role, u.TenantID, u.ID, a.Protocol), a.Protocol)
 	if err := insertIdentityTx(ctx, tx, normID(u.ID), ident); err != nil {
-		return User{}, false, err
+		return User{}, nil, err
 	}
 	if err := writeUserTx(ctx, tx, u); err != nil {
-		return User{}, false, err
+		return User{}, nil, err
 	}
-	return u, true, nil
+	return u, &LegacyBindEvent{Result: LegacyBindBound, User: u, Assertion: a}, nil
+}
+
+// markAmbiguousTx stamps the ambiguous state on a legacy row inside the caller's
+// transaction, so the refusal to guess is DURABLE and the account appears under
+// ?identity=ambiguous for an operator.
+func markAmbiguousTx(ctx context.Context, tx pgx.Tx, u User, reason string, now time.Time) (User, error) {
+	if !applyState(&u, ambiguousState(reason, now)) {
+		return u, nil
+	}
+	return u, upsertStateTx(ctx, tx, u)
 }
 
 // provisionTx mints a brand-new federated account. CAP-EXEMPT on purpose:
@@ -865,7 +917,15 @@ func mintFederatedIDTx(ctx context.Context, tx pgx.Tx, a Assertion, tenant strin
 // pending` state (§2.7), not an error.
 const userIdentityCols = `u.id, u.data,
 	i.tenant_id, i.issuer, i.subject, i.protocol, i.connection_id, i.subject_kind,
-	i.provenance, i.first_seen_at, i.last_login_at`
+	i.provenance, i.directory_dn, i.first_seen_at, i.last_login_at,
+	st.state, st.reason, st.since`
+
+// userIdentityJoin is the FROM clause every user read shares: the tuple and the
+// explicit migration state, both LEFT-joined because both may legitimately be
+// absent (an unresolved account has no tuple; an unstamped row has no state).
+const userIdentityJoin = ` FROM users u
+	LEFT JOIN user_identities i ON i.user_id = u.id
+	LEFT JOIN user_identity_state st ON st.user_id = u.id`
 
 // rowScanner is the one method pgx.Row and pgx.Rows share.
 type rowScanner interface{ Scan(dest ...any) error }
@@ -876,12 +936,14 @@ type rowScanner interface{ Scan(dest ...any) error }
 // everything that already references the account.
 func scanUserRow(r rowScanner) (User, error) {
 	var (
-		id                                                      string
-		data                                                    []byte
-		tenant, issuer, subject, protocol, conn, subjKind, prov *string
-		firstSeen, lastLogin                                    *time.Time
+		id                                                          string
+		data                                                        []byte
+		tenant, issuer, subject, protocol, conn, subjKind, prov, dn *string
+		state, reason                                               *string
+		firstSeen, lastLogin, since                                 *time.Time
 	)
-	if err := r.Scan(&id, &data, &tenant, &issuer, &subject, &protocol, &conn, &subjKind, &prov, &firstSeen, &lastLogin); err != nil {
+	if err := r.Scan(&id, &data, &tenant, &issuer, &subject, &protocol, &conn, &subjKind, &prov, &dn,
+		&firstSeen, &lastLogin, &state, &reason, &since); err != nil {
 		return User{}, err
 	}
 	var u User
@@ -890,6 +952,14 @@ func scanUserRow(r rowScanner) (User, error) {
 	}
 	u.ID = id
 	u.Identity = nil
+	u.IdentityMigration = nil
+	if state != nil {
+		ms := MigrationState{State: *state, Reason: derefString(reason)}
+		if since != nil {
+			ms.Since = since.UTC()
+		}
+		u.IdentityMigration = &ms
+	}
 	if issuer != nil && subject != nil {
 		ident := Identity{
 			Issuer:   *issuer,
@@ -900,6 +970,7 @@ func scanUserRow(r rowScanner) (User, error) {
 		ident.ConnectionID = derefString(conn)
 		ident.SubjectKind = derefString(subjKind)
 		ident.Provenance = derefString(prov)
+		ident.DirectoryDN = derefString(dn)
 		if firstSeen != nil {
 			ident.FirstSeenAt = firstSeen.UTC()
 		}
@@ -920,8 +991,7 @@ func derefString(p *string) string {
 
 // selectUserTx reads one user WITHOUT locking (the read paths).
 func selectUserTx(ctx context.Context, tx pgx.Tx, id string) (User, error) {
-	row := tx.QueryRow(ctx, `SELECT `+userIdentityCols+` FROM users u
-		LEFT JOIN user_identities i ON i.user_id = u.id
+	row := tx.QueryRow(ctx, `SELECT `+userIdentityCols+userIdentityJoin+`
 		WHERE u.id = $1`, id)
 	u, err := scanUserRow(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -968,10 +1038,52 @@ func insertUserTx(ctx context.Context, tx pgx.Tx, u User) error {
 		normID(u.ID), normTenant(u.TenantID), data); err != nil {
 		return err
 	}
+	if err := upsertStateTx(ctx, tx, u); err != nil {
+		return err
+	}
 	if u.Identity == nil {
 		return nil
 	}
 	return insertIdentityTx(ctx, tx, normID(u.ID), *u.Identity)
+}
+
+// upsertStateTx writes the account's EXPLICIT migration state (owner Decision 2).
+// Called from every write path, so the side table can never fall behind the
+// account it describes.
+//
+// `since` only moves when the state or the reason actually CHANGES — compare-then-
+// write in SQL. Without that, every login would reset the clock and "unresolved
+// since when?" would have no answer.
+func upsertStateTx(ctx context.Context, tx pgx.Tx, u User) error {
+	st := effectiveState(u, time.Now().UTC())
+	_, err := tx.Exec(ctx, `INSERT INTO user_identity_state (user_id, tenant_id, state, reason, since)
+		VALUES ($1,$2,$3,$4,$5)
+		ON CONFLICT (user_id) DO UPDATE SET
+			tenant_id = EXCLUDED.tenant_id,
+			state     = EXCLUDED.state,
+			reason    = EXCLUDED.reason,
+			since     = CASE WHEN user_identity_state.state = EXCLUDED.state
+			                  AND user_identity_state.reason = EXCLUDED.reason
+			                 THEN user_identity_state.since ELSE EXCLUDED.since END`,
+		normID(u.ID), normTenant(u.TenantID), st.State, st.Reason, st.Since)
+	return err
+}
+
+// effectiveState is the state to persist for u: the stamp it carries, or the
+// derivation for a row nothing has stamped yet (which is how a store upgraded
+// from a release that predates 0051 converges without a repair pass).
+func effectiveState(u User, now time.Time) MigrationState {
+	if u.IdentityMigration != nil && validState(u.IdentityMigration.State) {
+		st := *u.IdentityMigration
+		if st.Since.IsZero() {
+			st.Since = now
+		}
+		return st
+	}
+	if u.Identity != nil {
+		return boundState(now)
+	}
+	return unresolvedState("", now)
 }
 
 func insertIdentityTx(ctx context.Context, tx pgx.Tx, userID string, i Identity) error {
@@ -984,10 +1096,11 @@ func insertIdentityTx(ctx context.Context, tx pgx.Tx, userID string, i Identity)
 		i.FirstSeenAt = time.Now().UTC()
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO user_identities
-		(tenant_id, issuer, subject, user_id, protocol, connection_id, subject_kind, provenance, first_seen_at, last_login_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		(tenant_id, issuer, subject, user_id, protocol, connection_id, subject_kind, provenance,
+		 directory_dn, first_seen_at, last_login_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
 		i.TenantID, i.Issuer, i.Subject, userID, i.Protocol, i.ConnectionID, i.SubjectKind, i.Provenance,
-		nullableTime(i.FirstSeenAt), nullableTime(i.LastLoginAt))
+		i.DirectoryDN, nullableTime(i.FirstSeenAt), nullableTime(i.LastLoginAt))
 	return err
 }
 
@@ -1008,9 +1121,13 @@ func writeUserTx(ctx context.Context, tx pgx.Tx, u User) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE users SET data=$2, tenant_id=$3, updated_at=now() WHERE id=$1`,
-		normID(u.ID), data, normTenant(u.TenantID))
-	return err
+	if _, err := tx.Exec(ctx, `UPDATE users SET data=$2, tenant_id=$3, updated_at=now() WHERE id=$1`,
+		normID(u.ID), data, normTenant(u.TenantID)); err != nil {
+		return err
+	}
+	// The state row carries the tenant for its own RLS policy, so it has to follow
+	// a tenant move too — one write path, one place to keep them in step.
+	return upsertStateTx(ctx, tx, u)
 }
 
 // countSuperAdminsTx counts active super-admins across ALL tenants inside the

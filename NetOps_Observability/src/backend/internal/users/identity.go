@@ -65,10 +65,87 @@ const (
 	// ProvenanceBackfilledLocal: written by the migration for an existing LOCAL
 	// account, whose issuer/subject are derivable offline with certainty.
 	ProvenanceBackfilledLocal = "backfilled-local"
+	// ProvenanceBackfilledLDAP / ProvenanceBackfilledTACACS: written by the
+	// DETERMINISTIC boot backfill (migrate.go) for a pre-migration LDAP/TACACS+
+	// account. The owner's Decision 2 (2026-09-13) is what these exist for: for
+	// those two doors the provenance CAN be established offline — the issuer is
+	// the configured directory/server and the subject is the login name the
+	// directory authenticated — so the estate is migrated in one pass instead of
+	// being left un-namespaced waiting for logins to repair it one at a time.
+	ProvenanceBackfilledLDAP   = "backfilled-ldap"
+	ProvenanceBackfilledTACACS = "backfilled-tacacs"
 	// ProvenanceLegacyLazyBound: a pre-migration FEDERATED account adopted by
-	// the bounded §2.6 rule. Every one of these is visible to the operator.
+	// the bounded §2.6 rule. After owner Decision 2 this is reachable ONLY for
+	// the oidc/saml class, whose broker `sub` is genuinely not derivable from
+	// anything on disk. Every one of these is visible to the operator.
 	ProvenanceLegacyLazyBound = "legacy-lazy-bound"
 )
+
+// The EXPLICIT migration states (owner Decision 2, 2026-09-13). They are STORED,
+// not inferred: an operator must be able to ask "what is waiting for me?" and get
+// an answer that does not depend on which code path last looked at the row.
+//
+//   - bound       — the account holds its canonical identity tuple.
+//   - unresolved  — the account has no tuple and one could not be established
+//     offline. The only legitimate reasons are listed below.
+//   - ambiguous   — establishing the tuple would have COLLIDED with another
+//     account's. Never merged, never guessed: it waits for manual remediation
+//     (the owner's rule 6).
+const (
+	IdentityStateBound      = "bound"
+	IdentityStateUnresolved = "unresolved"
+	IdentityStateAmbiguous  = "ambiguous"
+)
+
+// The reason vocabulary behind an unresolved/ambiguous state. Closed set: the
+// admin surface and the metrics both read these, and an unrecognised value would
+// be an unactionable "something is wrong".
+const (
+	// ReasonUnreconstructable: an oidc/saml account. The broker `sub` is NOT
+	// derivable from a username or an email, and deriving it from either would be
+	// exactly the auto-linking rule 4 forbids. This is the one class the
+	// constrained lazy bind may still repair at a verified login.
+	ReasonUnreconstructable = "provenance-unreconstructable"
+	// ReasonIssuerUnavailable: an ldap/tacacs account whose door is not
+	// configured on THIS boot, so the issuer namespace (host:port) is unknown.
+	// Deterministically backfilled on a later boot once it is configured — which
+	// is why the backfill must be idempotent and re-examine unresolved rows.
+	ReasonIssuerUnavailable = "issuer-unavailable"
+	// ReasonTupleClaimed: the deterministically derived tuple is already held by
+	// a DIFFERENT account. Two principals cannot share one identity, and which of
+	// them owns it is not ours to guess.
+	ReasonTupleClaimed = "tuple-claimed"
+	// ReasonUnknownAuthSource: an auth_source this build does not know. Fail
+	// closed — it is listed for an operator rather than guessed at.
+	ReasonUnknownAuthSource = "unknown-auth-source"
+	// ReasonPendingBackfill: written by migration 0051 for a row it found without
+	// a tuple. It is a TRANSIENT value that the boot backfill replaces with a real
+	// reason in the same boot (the migration cannot know the doors' configuration),
+	// and seeing it in the admin surface means the backfill has not run yet.
+	ReasonPendingBackfill = "pending-backfill"
+)
+
+// MigrationState is the stored identity-migration state of ONE account: the
+// state, WHY it is in that state, and SINCE when. On the file backend it is a
+// field of the persisted User; on Postgres it is a row of `user_identity_state`
+// (migration 0051) and User carries a read-only view of it, stripped before the
+// `data` column is written so the two can never disagree.
+type MigrationState struct {
+	State  string    `json:"state,omitempty"`
+	Reason string    `json:"reason,omitempty"`
+	Since  time.Time `json:"since,omitempty"`
+}
+
+// validState reports whether s is one of the three states. Anything else is
+// treated as unset, so a value written by a newer release cannot silently become
+// a fourth state in this one.
+func validState(s string) bool {
+	switch s {
+	case IdentityStateBound, IdentityStateUnresolved, IdentityStateAmbiguous:
+		return true
+	}
+	return false
+}
 
 // SubjectKind records WHICH string an LDAP directory gave us as the subject, so
 // a later DN-vs-login policy change is visible rather than silent (§2.3).
@@ -102,6 +179,14 @@ type Identity struct {
 	ConnectionID string `json:"connection_id,omitempty"` // ssoidp alias; "" = platform/legacy global
 	SubjectKind  string `json:"subject_kind,omitempty"`  // dn | login | "" (LDAP only)
 	Provenance   string `json:"provenance,omitempty"`
+
+	// DirectoryDN is the distinguished name an LDAP directory returned for this
+	// principal. It is a PROFILE ATTRIBUTE, refreshed on login and NEVER part of
+	// the key (owner Decision 2 / design §2.3, amended 2026-09-13): the DN moves
+	// when a person moves OU, and keying on it both re-namespaced the account and
+	// made every legacy row un-backfillable offline. Kept because it is what an
+	// operator correlates with the directory.
+	DirectoryDN string `json:"directory_dn,omitempty"`
 
 	FirstSeenAt time.Time `json:"first_seen_at,omitempty"`
 	LastLoginAt time.Time `json:"last_login_at,omitempty"`
@@ -224,7 +309,13 @@ func normalizeHostPort(raw, defaultPort string, schemePorts map[string]string) s
 	if s == "" {
 		return ""
 	}
-	if h, p, err := net.SplitHostPort(s); err == nil && h != "" && p != "" {
+	if h, p, err := net.SplitHostPort(s); err == nil && p != "" {
+		if h == "" {
+			// ":49" is a port with no host, which is not a namespace. Refusing it
+			// here is what keeps an unconfigured door out of the backfill plan
+			// (owner Decision 2: no issuer means wait, never guess).
+			return ""
+		}
 		return net.JoinHostPort(h, p)
 	}
 	s = strings.TrimSuffix(strings.TrimPrefix(s, "["), "]")
@@ -245,6 +336,8 @@ func (i Identity) normalized() Identity {
 	i.SubjectKind = strings.ToLower(strings.TrimSpace(i.SubjectKind))
 	i.ConnectionID = strings.TrimSpace(i.ConnectionID)
 	i.Provenance = strings.ToLower(strings.TrimSpace(i.Provenance))
+	// A profile attribute, so it is only tidied — never folded into a key.
+	i.DirectoryDN = strings.TrimSpace(i.DirectoryDN)
 	if i.Issuer == LocalIssuer {
 		// The one subject the store owns rather than receives.
 		i.Subject = strings.ToLower(i.Subject)

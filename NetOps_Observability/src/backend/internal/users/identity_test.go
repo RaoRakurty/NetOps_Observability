@@ -274,20 +274,26 @@ func TestIdentityValidateMirrorsTheDatabaseChecks(t *testing.T) {
 	}
 }
 
-// The §2.6 conditions as a PURE table — the six written-down rules, one failing
-// field at a time, plus the fail-closed reading of an unknown epoch. The
-// cross-backend contract proves the same rules end-to-end; this proves the
-// predicate itself, including the case no backend can reach once it has written
-// its marker.
-func TestLegacyBindPermittedConditions(t *testing.T) {
+// The §2.6 conditions as a PURE table — the written-down rules, one failing field
+// at a time, plus owner Decision 2's two new gates (the state must be
+// `unresolved`, and the protocol must be one whose provenance genuinely cannot be
+// reconstructed offline) and the fail-closed reading of an unknown epoch.
+//
+// The cross-backend contract proves the same rules end-to-end; this proves the
+// predicate itself, including the cases no backend can reach once it has written
+// its marker. Each expectation is the NAME of the condition that refused, so a
+// condition silently moving to a different rule fails here.
+func TestLegacyBindRefusalConditions(t *testing.T) {
 	epoch := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
 	ok := func(mod func(*User, *Assertion, *Realm, *time.Time, *bool, *string)) (User, Assertion, Realm, time.Time, bool, string) {
-		// The all-conditions-hold baseline: a pre-epoch, active, unbound LDAP
-		// account in t_a, and an LDAP assertion naming it by its legacy username.
-		u := User{ID: "jdoe", Username: "jdoe", AuthSource: ProtocolLDAP, TenantID: "t_a",
+		// The all-conditions-hold baseline: a pre-epoch, active, unbound OIDC
+		// account in t_a, and an OIDC assertion naming it by its legacy username.
+		// OIDC because after owner Decision 2 it is the ONLY class the lazy path may
+		// touch — ldap and tacacs are migrated deterministically.
+		u := User{ID: "jdoe", Username: "jdoe", AuthSource: ProtocolOIDC, TenantID: "t_a",
 			Status: "active", CreatedAt: epoch.Add(-time.Hour)}
 		a := Assertion{
-			Identity:       Identity{TenantID: "t_a", Issuer: "ldap:dir:389", Subject: "cn=jdoe", Protocol: ProtocolLDAP},
+			Identity:       Identity{TenantID: "t_a", Issuer: kcIssuer, Subject: "sub-1", Protocol: ProtocolOIDC},
 			LegacyUsername: "JDoe", // case-insensitive by design: condition 4 folds it
 		}
 		rl := realmOf("t_a")
@@ -300,51 +306,87 @@ func TestLegacyBindPermittedConditions(t *testing.T) {
 		return u, a, rl, marker, has, identityTenant
 	}
 
-	if u, a, rl, m, has, it := ok(nil); !legacyBindPermitted(u, a, rl, m, has, it) {
-		t.Fatal("the baseline (every condition satisfied) was refused — the rest of this table is meaningless")
+	if u, a, rl, m, has, it := ok(nil); legacyBindRefusal(u, a, rl, m, has, it) != "" {
+		t.Fatalf("the baseline (every condition satisfied) was refused with %q — the rest of this table is meaningless",
+			legacyBindRefusal(ok(nil)))
 	}
 
-	for name, mod := range map[string]func(*User, *Assertion, *Realm, *time.Time, *bool, *string){
-		"1 already bound": func(_ *User, _ *Assertion, _ *Realm, _ *time.Time, has *bool, _ *string) {
-			*has = true
-		},
-		"2 different auth source": func(u *User, _ *Assertion, _ *Realm, _ *time.Time, _ *bool, _ *string) {
-			u.AuthSource = ProtocolOIDC
-		},
-		"2 local account": func(u *User, _ *Assertion, _ *Realm, _ *time.Time, _ *bool, _ *string) {
-			u.AuthSource = ProtocolLocal
-		},
-		"2 legacy empty auth source reads as local": func(u *User, _ *Assertion, _ *Realm, _ *time.Time, _ *bool, _ *string) {
-			u.AuthSource = ""
-		},
-		"3 created after the epoch": func(u *User, _ *Assertion, _ *Realm, m *time.Time, _ *bool, _ *string) {
-			u.CreatedAt = m.Add(time.Hour)
-		},
-		"3 created exactly at the epoch": func(u *User, _ *Assertion, _ *Realm, m *time.Time, _ *bool, _ *string) {
-			u.CreatedAt = *m
-		},
-		"3 unknown epoch fails closed": func(_ *User, _ *Assertion, _ *Realm, m *time.Time, _ *bool, _ *string) {
-			*m = time.Time{}
-		},
-		"4 no legacy username": func(_ *User, a *Assertion, _ *Realm, _ *time.Time, _ *bool, _ *string) {
-			a.LegacyUsername = ""
-		},
-		"4 legacy username names another account": func(_ *User, a *Assertion, _ *Realm, _ *time.Time, _ *bool, _ *string) {
-			a.LegacyUsername = "someone-else"
-		},
-		"5a realm does not reach the account's tenant": func(_ *User, _ *Assertion, rl *Realm, _ *time.Time, _ *bool, _ *string) {
-			*rl = realmOf("t_b")
-		},
-		"5b the identity row would land in another tenant": func(_ *User, _ *Assertion, _ *Realm, _ *time.Time, _ *bool, it *string) {
-			*it = "t_b"
-		},
-		"6 disabled": func(u *User, _ *Assertion, _ *Realm, _ *time.Time, _ *bool, _ *string) {
-			u.Status = "disabled"
-		},
+	for name, tc := range map[string]struct {
+		mod  func(*User, *Assertion, *Realm, *time.Time, *bool, *string)
+		want string
+	}{
+		"1 already bound": {want: refusalAlreadyBound,
+			mod: func(_ *User, _ *Assertion, _ *Realm, _ *time.Time, has *bool, _ *string) { *has = true }},
+		// Owner Decision 2: an AMBIGUOUS account is waiting for a human precisely
+		// because its identity cannot be settled without guessing. A login must not
+		// settle it.
+		"1b the state is ambiguous": {want: refusalNotUnresolved,
+			mod: func(u *User, _ *Assertion, _ *Realm, _ *time.Time, _ *bool, _ *string) {
+				u.IdentityMigration = &MigrationState{State: IdentityStateAmbiguous, Reason: ReasonTupleClaimed}
+			}},
+		// Owner Decision 2: ldap/tacacs have a DETERMINISTIC backfill, so the lazy
+		// path must never reach for a username match there.
+		"1c an ldap assertion never lazily binds": {want: refusalProtocolDeterministic,
+			mod: func(u *User, a *Assertion, _ *Realm, _ *time.Time, _ *bool, _ *string) {
+				u.AuthSource, a.Protocol = ProtocolLDAP, ProtocolLDAP
+			}},
+		"1c a tacacs assertion never lazily binds": {want: refusalProtocolDeterministic,
+			mod: func(u *User, a *Assertion, _ *Realm, _ *time.Time, _ *bool, _ *string) {
+				u.AuthSource, a.Protocol = ProtocolTACACS, ProtocolTACACS
+			}},
+		"2 different auth source": {want: refusalAuthSourceMismatch,
+			mod: func(u *User, _ *Assertion, _ *Realm, _ *time.Time, _ *bool, _ *string) {
+				u.AuthSource = ProtocolSAML
+			}},
+		"2 local account": {want: refusalLocalAccount,
+			mod: func(u *User, _ *Assertion, _ *Realm, _ *time.Time, _ *bool, _ *string) {
+				u.AuthSource = ProtocolLocal
+			}},
+		"2 legacy empty auth source reads as local": {want: refusalLocalAccount,
+			mod: func(u *User, _ *Assertion, _ *Realm, _ *time.Time, _ *bool, _ *string) {
+				u.AuthSource = ""
+			}},
+		"3 created after the epoch": {want: refusalPostEpoch,
+			mod: func(u *User, _ *Assertion, _ *Realm, m *time.Time, _ *bool, _ *string) {
+				u.CreatedAt = m.Add(time.Hour)
+			}},
+		"3 created exactly at the epoch": {want: refusalPostEpoch,
+			mod: func(u *User, _ *Assertion, _ *Realm, m *time.Time, _ *bool, _ *string) {
+				u.CreatedAt = *m
+			}},
+		"3 unknown epoch fails closed": {want: refusalUnknownEpoch,
+			mod: func(_ *User, _ *Assertion, _ *Realm, m *time.Time, _ *bool, _ *string) {
+				*m = time.Time{}
+			}},
+		"4 no legacy username": {want: refusalLegacyUsername,
+			mod: func(_ *User, a *Assertion, _ *Realm, _ *time.Time, _ *bool, _ *string) {
+				a.LegacyUsername = ""
+			}},
+		"4 legacy username names another account": {want: refusalLegacyUsername,
+			mod: func(_ *User, a *Assertion, _ *Realm, _ *time.Time, _ *bool, _ *string) {
+				a.LegacyUsername = "someone-else"
+			}},
+		"5a realm does not reach the account's tenant": {want: refusalOutsideRealm,
+			mod: func(_ *User, _ *Assertion, rl *Realm, _ *time.Time, _ *bool, _ *string) {
+				*rl = realmOf("t_b")
+			}},
+		"5b the identity row would land in another tenant": {want: refusalForeignIdentityTenant,
+			mod: func(_ *User, _ *Assertion, _ *Realm, _ *time.Time, _ *bool, it *string) {
+				*it = "t_b"
+			}},
+		"6 disabled": {want: refusalDisabled,
+			mod: func(u *User, _ *Assertion, _ *Realm, _ *time.Time, _ *bool, _ *string) {
+				u.Status = "disabled"
+			}},
 	} {
-		u, a, rl, m, has, it := ok(mod)
-		if legacyBindPermitted(u, a, rl, m, has, it) {
-			t.Errorf("%s: the lazy bind was PERMITTED — every one of the §2.6 conditions must hold", name)
+		u, a, rl, m, has, it := ok(tc.mod)
+		got := legacyBindRefusal(u, a, rl, m, has, it)
+		if got == "" {
+			t.Errorf("%s: the lazy bind was PERMITTED — every condition must hold", name)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%s: refused with %q, want %q (the reason an operator reads must name the right rule)", name, got, tc.want)
 		}
 	}
 }

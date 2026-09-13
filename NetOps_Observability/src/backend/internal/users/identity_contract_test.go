@@ -67,9 +67,11 @@ const (
 // sink. The store must not import audit, so these are how it tells the
 // integrator what happened.
 type identityEvents struct {
-	guard  []guardCall
-	bound  []string // ids adopted by the lazy bind
-	errors []string
+	guard     []guardCall
+	bound     []string // ids adopted by the lazy bind
+	refused   []string // "id:reason" for every refused adoption (owner Decision 2)
+	ambiguous []string // "id:reason" for every flagged-not-merged derivation
+	errors    []string
 }
 
 func identityTestDeps(marker time.Time) (Deps, *identityEvents) {
@@ -91,7 +93,16 @@ func identityTestDeps(marker time.Time) (Deps, *identityEvents) {
 		// The fixture rule: an opaque id that can never equal a username.
 		MintID:          func() string { n++; return fmt.Sprintf("u_%013x%04d", seed, n) },
 		MigrationMarker: marker,
-		OnLegacyBound:   func(u User, _ Assertion) { ev.bound = append(ev.bound, u.ID) },
+		OnLegacyBind: func(e LegacyBindEvent) {
+			switch e.Result {
+			case LegacyBindBound:
+				ev.bound = append(ev.bound, e.User.ID)
+			case LegacyBindAmbiguous:
+				ev.ambiguous = append(ev.ambiguous, e.User.ID+":"+e.Reason)
+			case LegacyBindRefused:
+				ev.refused = append(ev.refused, e.User.ID+":"+e.Reason)
+			}
+		},
 	}, ev
 }
 
@@ -536,18 +547,19 @@ func runLegacyBindContract(t *testing.T, newStore func(t *testing.T, d Deps) Rep
 	t.Helper()
 	pre := identityEpoch.Add(-24 * time.Hour) // created before the migration
 	post := identityEpoch.Add(24 * time.Hour) // created after it
-	ldapSub := "cn=legacy,ou=people,dc=example,dc=com"
+	oidcSub := "kc-sub-legacy-0001"
 
 	// seedLegacy plants a PRE-TRACKER-300 row: id == lower(username), an
 	// auth_source, and NO identity — the shape the username-keyed code left behind.
-	seedLegacy := func(t *testing.T, s Repo, name, source, tenant, status string, created time.Time) User {
+	seedLegacyState := func(t *testing.T, s Repo, name, source, tenant, status string, created time.Time, state *MigrationState) User {
 		t.Helper()
 		sd, ok := s.(LegacySeeder)
 		if !ok {
 			t.Fatalf("%T cannot seed a legacy row — the contract cannot run", s)
 		}
 		u := User{Username: name, Role: "read-only", TenantID: tenant, Status: status,
-			AuthSource: source, Email: name + "@old.example", CreatedAt: created}
+			AuthSource: source, Email: name + "@old.example", CreatedAt: created,
+			IdentityMigration: state}
 		if err := sd.SeedLegacyForTest(u); err != nil {
 			t.Fatalf("seed %s: %v", name, err)
 		}
@@ -555,18 +567,39 @@ func runLegacyBindContract(t *testing.T, newStore func(t *testing.T, d Deps) Rep
 		if !ok {
 			t.Fatalf("seeded %s is not readable by its legacy id", name)
 		}
-		if !got.IdentityPending() {
+		if got.IdentityBound() {
 			t.Fatalf("seeded %s already has an identity — the fixture is wrong", name)
+		}
+		if state != nil && got.IdentityState() != state.State {
+			t.Fatalf("seeded %s has state %q, want the seeded %q — the fixture cannot prove the state gate", name, got.IdentityState(), state.State)
 		}
 		return got
 	}
+	seedLegacy := func(t *testing.T, s Repo, name, source, tenant, status string, created time.Time) User {
+		t.Helper()
+		return seedLegacyState(t, s, name, source, tenant, status, created, nil)
+	}
 
-	// ldapAssertion is what the LDAP door verified, plus the legacy derivation
-	// (§2.6 condition 4): for LDAP that is the typed login name.
+	// lazyAssertion is what the OIDC door verified, plus the legacy derivation
+	// (§2.6 condition 4): firstNonEmpty(preferred_username, email, sub).
+	//
+	// OIDC, not LDAP, because owner Decision 2 (2026-09-13) restricted the lazy
+	// path to the class whose provenance genuinely cannot be reconstructed offline.
+	// An LDAP/TACACS+ row is migrated deterministically (runBackfillContract), and
+	// the refusal table below pins that the lazy path cannot touch one.
+	lazyAssertion := func(tenant, subject, legacy string) Assertion {
+		return Assertion{
+			Identity: Identity{TenantID: tenant, Issuer: kcIssuer, Subject: subject,
+				Protocol: ProtocolOIDC, ConnectionID: ""},
+			Email: "new@idp.example", DisplayName: "Legacy User", Role: "read-only",
+			LegacyUsername: legacy,
+		}
+	}
+	// ldapAssertion is the door that must NEVER lazily bind any more.
 	ldapAssertion := func(tenant, subject, legacy string) Assertion {
 		return Assertion{
 			Identity: Identity{TenantID: tenant, Issuer: dirIssuer, Subject: subject,
-				Protocol: ProtocolLDAP, SubjectKind: SubjectKindDN, ConnectionID: ""},
+				Protocol: ProtocolLDAP, SubjectKind: SubjectKindLogin},
 			Email: "new@dir.example", DisplayName: "Legacy User", Role: "read-only",
 			LegacyUsername: legacy,
 		}
@@ -575,10 +608,10 @@ func runLegacyBindContract(t *testing.T, newStore func(t *testing.T, d Deps) Rep
 	t.Run("binds exactly once, then never again", func(t *testing.T) {
 		d, ev := identityTestDeps(identityEpoch)
 		s := newStore(t, d)
-		legacy := seedLegacy(t, s, "lb-once", ProtocolLDAP, tenantA, "active", pre)
+		legacy := seedLegacy(t, s, "lb-once", ProtocolOIDC, tenantA, "active", pre)
 		before := s.Count()
 
-		got, err := s.ResolveFederated(ldapAssertion(tenantA, ldapSub, "lb-once"), realmOf(tenantA), true)
+		got, err := s.ResolveFederated(lazyAssertion(tenantA, oidcSub, "lb-once"), realmOf(tenantA), true)
 		if err != nil {
 			t.Fatalf("bind: %v", err)
 		}
@@ -592,18 +625,19 @@ func runLegacyBindContract(t *testing.T, newStore func(t *testing.T, d Deps) Rep
 		if id.Provenance != ProvenanceLegacyLazyBound {
 			t.Errorf("provenance = %q, want %q — an operator must be able to see every adoption", id.Provenance, ProvenanceLegacyLazyBound)
 		}
-		if id.key() != (identityKey{tenantA, dirIssuer, ldapSub}) {
+		if id.key() != (identityKey{tenantA, kcIssuer, oidcSub}) {
 			t.Errorf("bound identity = %+v, want the asserted tuple", id.key())
 		}
-		if id.SubjectKind != SubjectKindDN {
-			t.Errorf("subject_kind = %q, want %q recorded so a later DN-vs-login change is visible", id.SubjectKind, SubjectKindDN)
+		// Owner Decision 2: the state is STORED, and an adoption flips it to bound.
+		if got.IdentityState() != IdentityStateBound || got.IdentityStateReason() != "" {
+			t.Errorf("state = %q/%q, want bound with no reason", got.IdentityState(), got.IdentityStateReason())
 		}
 		if len(ev.bound) != 1 || ev.bound[0] != legacy.ID {
-			t.Fatalf("OnLegacyBound fired %v, want exactly one notification for %q (audit + counter)", ev.bound, legacy.ID)
+			t.Fatalf("OnLegacyBind fired %v, want exactly one notification for %q (audit + counter)", ev.bound, legacy.ID)
 		}
 		// A SECOND, DIFFERENT subject presenting the SAME legacy username gets a
 		// FRESH account: the one-shot claim is spent.
-		other, err := s.ResolveFederated(ldapAssertion(tenantA, "cn=impostor,dc=example,dc=com", "lb-once"), realmOf(tenantA), true)
+		other, err := s.ResolveFederated(lazyAssertion(tenantA, "sub-impostor", "lb-once"), realmOf(tenantA), true)
 		if err != nil {
 			t.Fatalf("second subject: %v", err)
 		}
@@ -611,10 +645,10 @@ func runLegacyBindContract(t *testing.T, newStore func(t *testing.T, d Deps) Rep
 			t.Fatalf("a second subject adopted the already-bound account %q", legacy.ID)
 		}
 		if len(ev.bound) != 1 {
-			t.Fatalf("OnLegacyBound fired %d times, want 1", len(ev.bound))
+			t.Fatalf("OnLegacyBind fired %d times, want 1", len(ev.bound))
 		}
 		// And the next sign-in of the bound principal hits the TUPLE, not the name.
-		again, err := s.ResolveFederated(ldapAssertion(tenantA, ldapSub, ""), realmOf(tenantA), true)
+		again, err := s.ResolveFederated(lazyAssertion(tenantA, oidcSub, ""), realmOf(tenantA), true)
 		if err != nil {
 			t.Fatalf("re-login: %v", err)
 		}
@@ -624,17 +658,17 @@ func runLegacyBindContract(t *testing.T, newStore func(t *testing.T, d Deps) Rep
 	})
 
 	t.Run("the unbound door adopts and then resolves by tuple", func(t *testing.T) {
-		// This is the LDAP/TACACS+ reality today: ONE platform-global directory
-		// config, so the door has no per-connection tenant and resolves by
-		// (issuer, subject) across tenants. The adopted identity must land in the
-		// ACCOUNT's tenant — if it landed in the assertion's provisioning tenant,
-		// the next sign-in would miss the tuple and duplicate the account.
+		// This is the bearer/platform-front-door reality: one platform connection,
+		// so the door has no per-connection tenant and resolves by (issuer, subject)
+		// across tenants. The adopted identity must land in the ACCOUNT's tenant —
+		// if it landed in the assertion's provisioning tenant, the next sign-in
+		// would miss the tuple and duplicate the account.
 		d, ev := identityTestDeps(identityEpoch)
 		s := newStore(t, d)
-		legacy := seedLegacy(t, s, "lb-unbound", ProtocolLDAP, tenantA, "active", pre)
+		legacy := seedLegacy(t, s, "lb-unbound", ProtocolOIDC, tenantA, "active", pre)
 		before := s.Count()
 
-		a := ldapAssertion("", "cn=unbound,dc=example,dc=com", "lb-unbound")
+		a := lazyAssertion("", "sub-unbound", "lb-unbound")
 		got, err := s.ResolveFederatedUnbound(a)
 		if err != nil {
 			t.Fatalf("unbound bind: %v", err)
@@ -656,11 +690,11 @@ func runLegacyBindContract(t *testing.T, newStore func(t *testing.T, d Deps) Rep
 			t.Errorf("the adoption MOVED the account to %q", got.TenantID)
 		}
 		if len(ev.bound) != 1 {
-			t.Fatalf("OnLegacyBound fired %v, want one notification", ev.bound)
+			t.Fatalf("OnLegacyBind fired %v, want one notification", ev.bound)
 		}
 		// And the round trip: the next sign-in hits the tuple, in the same tenant,
 		// with no legacy username at all.
-		again, err := s.ResolveFederatedUnbound(ldapAssertion("", "cn=unbound,dc=example,dc=com", ""))
+		again, err := s.ResolveFederatedUnbound(lazyAssertion("", "sub-unbound", ""))
 		if err != nil {
 			t.Fatalf("re-login: %v", err)
 		}
@@ -674,7 +708,9 @@ func runLegacyBindContract(t *testing.T, newStore func(t *testing.T, d Deps) Rep
 
 	// Each refusal below provisions a FRESH account instead — which is exactly
 	// design §2.6's "flagged, never guessed" outcome for ambiguous provenance.
-	// Every case is ONE condition failing, with the rest satisfied.
+	// Every case is ONE condition failing, with the rest satisfied, and every one
+	// asserts the REASON the store reported, so a case cannot start passing for
+	// the wrong reason.
 	for _, tc := range []struct {
 		name, why  string
 		user       string
@@ -685,55 +721,95 @@ func runLegacyBindContract(t *testing.T, newStore func(t *testing.T, d Deps) Rep
 		aTenant    string
 		realm      Realm
 		withLegacy bool
+		door       string          // the asserting protocol (default oidc)
+		state      *MigrationState // the seeded explicit state, if any
+		wantReason string
 	}{
 		{
 			name: "a post-marker account is never adopted",
 			why:  "condition 3 — it was created by code that already records its identity",
-			user: "lb-post", source: ProtocolLDAP, tenant: tenantA, status: "active", created: post,
-			aTenant: tenantA, realm: realmOf(tenantA), withLegacy: true,
+			user: "lb-post", source: ProtocolOIDC, tenant: tenantA, status: "active", created: post,
+			aTenant: tenantA, realm: realmOf(tenantA), withLegacy: true, wantReason: refusalPostEpoch,
 		},
 		{
 			name: "a different auth_source never adopts",
-			why:  "condition 2 — an LDAP assertion cannot claim an account OIDC created",
-			user: "lb-source", source: ProtocolOIDC, tenant: tenantA, status: "active", created: pre,
-			aTenant: tenantA, realm: realmOf(tenantA), withLegacy: true,
+			why:  "condition 2 — an OIDC assertion cannot claim an account LDAP created",
+			user: "lb-source", source: ProtocolLDAP, tenant: tenantA, status: "active", created: pre,
+			aTenant: tenantA, realm: realmOf(tenantA), withLegacy: true, wantReason: refusalAuthSourceMismatch,
 		},
 		{
 			name: "a LOCAL account is never adopted",
 			why:  "condition 2 / H1 — adoption would bypass the local password and its MFA enrollment",
 			user: "lb-local", source: ProtocolLocal, tenant: tenantA, status: "active", created: pre,
+			aTenant: tenantA, realm: realmOf(tenantA), withLegacy: true, wantReason: refusalLocalAccount,
+		},
+		// Owner Decision 2: the two DETERMINISTICALLY migrated doors can never reach
+		// the lazy path. Their estate is namespaced by the boot backfill, so a
+		// username match here would be a guess where a certainty exists.
+		{
+			name: "an LDAP account is never LAZILY adopted",
+			why:  "owner Decision 2 — an LDAP row has a deterministic backfill",
+			user: "lb-ldap", source: ProtocolLDAP, tenant: tenantA, status: "active", created: pre,
+			aTenant: tenantA, realm: realmOf(tenantA), withLegacy: true, door: ProtocolLDAP,
+			wantReason: refusalProtocolDeterministic,
+		},
+		{
+			name: "a TACACS+ account is never LAZILY adopted",
+			why:  "owner Decision 2 — a TACACS+ row has a deterministic backfill",
+			user: "lb-tacacs", source: ProtocolTACACS, tenant: tenantA, status: "active", created: pre,
+			aTenant: tenantA, realm: realmOf(tenantA), withLegacy: true, door: ProtocolTACACS,
+			wantReason: refusalProtocolDeterministic,
+		},
+		{
+			name: "an AMBIGUOUS account is never adopted",
+			why:  "owner Decision 2 — it is waiting for a human precisely because its identity cannot be settled without guessing",
+			user: "lb-ambiguous", source: ProtocolOIDC, tenant: tenantA, status: "active", created: pre,
 			aTenant: tenantA, realm: realmOf(tenantA), withLegacy: true,
+			state:      &MigrationState{State: IdentityStateAmbiguous, Reason: ReasonTupleClaimed},
+			wantReason: refusalNotUnresolved,
 		},
 		{
 			name: "a disabled account is never adopted",
 			why:  "condition 6 — JIT never resurrects a disabled principal",
-			user: "lb-disabled", source: ProtocolLDAP, tenant: tenantA, status: "disabled", created: pre,
-			aTenant: tenantA, realm: realmOf(tenantA), withLegacy: true,
+			user: "lb-disabled", source: ProtocolOIDC, tenant: tenantA, status: "disabled", created: pre,
+			aTenant: tenantA, realm: realmOf(tenantA), withLegacy: true, wantReason: refusalDisabled,
 		},
 		{
 			name: "an account outside the flow's realm is never adopted",
 			why:  "condition 5a",
-			user: "lb-realm", source: ProtocolLDAP, tenant: tenantA, status: "active", created: pre,
-			aTenant: tenantB, realm: realmOf(tenantB), withLegacy: true,
+			user: "lb-realm", source: ProtocolOIDC, tenant: tenantA, status: "active", created: pre,
+			aTenant: tenantB, realm: realmOf(tenantB), withLegacy: true, wantReason: refusalOutsideRealm,
 		},
 		{
 			name: "an account in another tenant of the same realm is never adopted",
 			why:  "condition 5b — the identity row must land in the account's OWN tenant, or the next sign-in misses the tuple and duplicates the account",
-			user: "lb-tenant", source: ProtocolLDAP, tenant: tenantA, status: "active", created: pre,
-			aTenant: tenantB, realm: realmOf(tenantA, tenantB), withLegacy: true,
+			user: "lb-tenant", source: ProtocolOIDC, tenant: tenantA, status: "active", created: pre,
+			aTenant: tenantB, realm: realmOf(tenantA, tenantB), withLegacy: true, wantReason: refusalForeignIdentityTenant,
 		},
 		{
 			name: "an assertion with no legacy username never adopts",
 			why:  "condition 4 — a new door supplies none, and must not reach an old account",
-			user: "lb-nolegacy", source: ProtocolLDAP, tenant: tenantA, status: "active", created: pre,
+			user: "lb-nolegacy", source: ProtocolOIDC, tenant: tenantA, status: "active", created: pre,
 			aTenant: tenantA, realm: realmOf(tenantA), withLegacy: false,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d, ev := identityTestDeps(identityEpoch)
 			s := newStore(t, d)
-			legacy := seedLegacy(t, s, tc.user, tc.source, tc.tenant, tc.status, tc.created)
-			assertion := ldapAssertion(tc.aTenant, "cn="+tc.user+",dc=example,dc=com", "")
+			legacy := seedLegacyState(t, s, tc.user, tc.source, tc.tenant, tc.status, tc.created, tc.state)
+			var assertion Assertion
+			switch tc.door {
+			case ProtocolLDAP:
+				assertion = ldapAssertion(tc.aTenant, tc.user, "")
+			case ProtocolTACACS:
+				assertion = Assertion{
+					Identity: Identity{TenantID: tc.aTenant, Issuer: tacIssuer, Subject: tc.user,
+						Protocol: ProtocolTACACS, SubjectKind: SubjectKindLogin},
+					Role: "read-only",
+				}
+			default:
+				assertion = lazyAssertion(tc.aTenant, "sub-"+tc.user, "")
+			}
 			if tc.withLegacy {
 				assertion.LegacyUsername = tc.user
 			}
@@ -749,7 +825,18 @@ func runLegacyBindContract(t *testing.T, newStore func(t *testing.T, d Deps) Rep
 				t.Fatalf("want exactly one fresh account, count %d → %d", before, s.Count())
 			}
 			if len(ev.bound) != 0 {
-				t.Fatalf("OnLegacyBound fired %v on a refused adoption", ev.bound)
+				t.Fatalf("OnLegacyBind fired %v on a refused adoption", ev.bound)
+			}
+			if len(ev.ambiguous) != 0 {
+				t.Fatalf("a refusal was reported as AMBIGUOUS: %v", ev.ambiguous)
+			}
+			// Owner Decision 2: the refusal is COUNTED and names its condition, so the
+			// owner can see how much still needs manual remediation.
+			if tc.wantReason != "" {
+				want := legacy.ID + ":" + tc.wantReason
+				if len(ev.refused) != 1 || ev.refused[0] != want {
+					t.Fatalf("refusals reported %v, want exactly [%q]", ev.refused, want)
+				}
 			}
 			// The legacy row is left EXACTLY as found — still pending, still its own
 			// role, source, tenant and status. Nothing is guessed and nothing is
@@ -758,7 +845,7 @@ func runLegacyBindContract(t *testing.T, newStore func(t *testing.T, d Deps) Rep
 			if !ok {
 				t.Fatal("the legacy row vanished")
 			}
-			if !after.IdentityPending() || after.Role != legacy.Role ||
+			if after.IdentityBound() || after.Role != legacy.Role ||
 				after.AuthSource != legacy.AuthSource || after.TenantID != legacy.TenantID ||
 				after.Status != legacy.Status || after.Email != legacy.Email {
 				t.Fatalf("the refused adoption still wrote to the legacy row: %+v", after)
@@ -778,7 +865,7 @@ func runLegacyBindContract(t *testing.T, newStore func(t *testing.T, d Deps) Rep
 		}
 		// A PENDING FEDERATED row is not a failure — that is the documented
 		// waiting state, not a broken one.
-		if got, ok := s.Get("lb-enforce"); !ok || !got.IdentityPending() {
+		if got, ok := s.Get("lb-enforce"); !ok || got.IdentityBound() {
 			t.Fatalf("the seeded row was silently repaired: %+v", got)
 		}
 	})

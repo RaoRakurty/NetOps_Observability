@@ -80,7 +80,7 @@ func TestFileStoreLoadMigratesEmptyAuthSource(t *testing.T) {
 	// namespace owns the handle `admin` and a federated assertion carrying the
 	// strongest claim available — that very username, which §2.6 consults — gets
 	// its own fresh account instead of the bootstrap admin's.
-	if u, _ := s.Get("admin"); u.IdentityPending() {
+	if u, _ := s.Get("admin"); !u.IdentityBound() {
 		t.Fatal("the migrated local admin was not backfilled with its identity")
 	}
 	a := Assertion{

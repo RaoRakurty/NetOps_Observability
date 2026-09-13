@@ -114,10 +114,35 @@ type Repo interface {
 	SetMFA(id string, enabled bool, secret, pending string) error
 	TouchLogin(id string)
 
+	// BackfillIdentities is the DETERMINISTIC migration the owner's Decision 2
+	// (2026-09-13) makes the primary model: every account whose provenance CAN be
+	// established offline gets its canonical identity in ONE pass, at boot,
+	// before anything serves traffic — local, ldap and tacacs accounts all
+	// qualify. What cannot be established offline (an oidc/saml broker `sub`) is
+	// put into an EXPLICIT `unresolved` state with a reason, and a derivation that
+	// would collide with another account's tuple becomes `ambiguous` and is never
+	// merged.
+	//
+	// It is IDEMPOTENT (compare-then-write on both backends): a second boot
+	// changes nothing, and an `unresolved`/`ambiguous` row is RE-EXAMINED on every
+	// boot, which is what lets an `issuer-unavailable` row resolve itself once the
+	// door is configured.
+	BackfillIdentities(plan BackfillPlan) (BackfillReport, error)
+
+	// IdentityCensus counts the estate by migration state, for the
+	// netops_identity_migration_accounts gauges. Recomputed after the backfill and
+	// after each legacy lazy bind — the numbers are how the owner judges the
+	// migration, so they are measured rather than incremented hopefully.
+	IdentityCensus() (MigrationCensus, error)
+
 	// VerifyIdentityInvariants is the §3 "Enforce" gate, called at boot: every
 	// LOCAL account has an identity, and no account has two. It REFUSES rather
 	// than repairing — a converge step must not destroy the estate it is
 	// converging (the F-58 lesson).
+	//
+	// An `unresolved` or `ambiguous` account is a RECORDED STATE, not an invariant
+	// failure: those rows are the documented output of the migration, and refusing
+	// to boot over them would turn a legacy oidc account into an outage.
 	VerifyIdentityInvariants() error
 }
 
@@ -153,6 +178,17 @@ type User struct {
 	// is written so the row and the table can never disagree.
 	Identity *Identity `json:"identity,omitempty"`
 
+	// IdentityMigration is the EXPLICIT, STORED migration state of this account
+	// (owner Decision 2, 2026-09-13) — `bound`, `unresolved` or `ambiguous`, with
+	// the reason and the timestamp. Read it through IdentityState(); a nil value
+	// means no state has been stamped yet (a store that has not run the backfill),
+	// and IdentityState() then derives the obvious answer rather than lying.
+	//
+	// FILE backend: persisted inside the user JSON. POSTGRES: a read-only view of
+	// `user_identity_state` (migration 0051), stripped before the `data` column is
+	// written so the row and the table can never disagree.
+	IdentityMigration *MigrationState `json:"identity_state,omitempty"`
+
 	// MFA (TOTP) for local accounts. MFASecret/MFAPending hold the base32 seed
 	// SEALED at rest (platform DEK) — never returned to clients. MFAPending is the
 	// not-yet-confirmed seed during enrollment; on confirm it becomes MFASecret and
@@ -179,9 +215,53 @@ type User struct {
 	MustChangePassword bool `json:"must_change_password,omitempty"`
 }
 
-// IdentityPending reports whether the account still has no canonical identity —
-// the `identity_status: pending` the admin surface shows (§2.7).
-func (u User) IdentityPending() bool { return u.Identity == nil }
+// IdentityState reports the account's migration state — the closed vocabulary
+// `bound` | `unresolved` | `ambiguous` the admin surface and the metrics both
+// read (owner Decision 2; it replaces the inferred two-state IdentityPending).
+//
+// The STORED state wins. The derivation below is a fallback for a row nothing has
+// stamped yet (a store opened by a release that predates 0051, or a test that
+// never ran the backfill): an account holding a tuple is bound, one without is
+// unresolved. It is deliberately not "guess a reason" — an unstamped row has no
+// reason, and IdentityStateReason() says so by returning "".
+func (u User) IdentityState() string {
+	if u.IdentityMigration != nil && validState(u.IdentityMigration.State) {
+		// A stored `bound` for a row that holds no tuple would be a lie the rest of
+		// the system would act on, so the tuple wins over a stale stamp in exactly
+		// that one direction. The reverse (a tuple with a stale unresolved stamp)
+		// is reported as stored, because a state machine that silently repaired
+		// itself would hide the write path that forgot to stamp.
+		if u.IdentityMigration.State == IdentityStateBound && u.Identity == nil {
+			return IdentityStateUnresolved
+		}
+		return u.IdentityMigration.State
+	}
+	if u.Identity != nil {
+		return IdentityStateBound
+	}
+	return IdentityStateUnresolved
+}
+
+// IdentityStateReason is WHY the account is in its state — one of the closed
+// reason constants, or "" for a bound (or unstamped) account.
+func (u User) IdentityStateReason() string {
+	if u.IdentityMigration == nil {
+		return ""
+	}
+	return u.IdentityMigration.Reason
+}
+
+// IdentityStateSince is when the account entered its current state (zero when
+// unstamped).
+func (u User) IdentityStateSince() time.Time {
+	if u.IdentityMigration == nil {
+		return time.Time{}
+	}
+	return u.IdentityMigration.Since
+}
+
+// IdentityBound is the common question in one word.
+func (u User) IdentityBound() bool { return u.IdentityState() == IdentityStateBound }
 
 // KV abstracts where the file backend persists its JSON blob (the platform kv
 // layer; a missing key must return an os.ErrNotExist-wrapped error).
@@ -223,11 +303,33 @@ type Deps struct {
 	// the epoch without sleeping.
 	MigrationMarker time.Time
 
-	// OnLegacyBound is called AFTER the write commits and OUTSIDE the store's
-	// lock/transaction, whenever the §2.6 lazy bind adopts a legacy account, so the
-	// integrator can emit the `identity.legacy_bound` audit event and increment
-	// its counter. The store must not import audit, so it reports instead.
-	OnLegacyBound func(u User, a Assertion)
+	// OnLegacyBind is called AFTER the write commits and OUTSIDE the store's
+	// lock/transaction with what the constrained §2.6 lazy path DID — adopted a
+	// legacy account, refused to, or found the derivation ambiguous — so the
+	// integrator can emit the audit event and move the counters. The store must
+	// not import audit, so it reports instead.
+	//
+	// Every outcome is reported, not just the happy one: the owner's Decision 2
+	// asks for "deterministically migrated / legacy-unresolved / ambiguous"
+	// NUMBERS, and a refusal nobody counts is a migration nobody can judge.
+	OnLegacyBind func(LegacyBindEvent)
+}
+
+// The three outcomes of the constrained lazy path (LegacyBindEvent.Result).
+const (
+	LegacyBindBound     = "bound"
+	LegacyBindAmbiguous = "ambiguous"
+	LegacyBindRefused   = "refused"
+)
+
+// LegacyBindEvent is one lazy-path outcome. Reason names the condition that
+// decided it (see legacyBindRefusal) so an operator gets "post-epoch" rather
+// than "refused".
+type LegacyBindEvent struct {
+	Result    string
+	Reason    string
+	User      User
+	Assertion Assertion
 }
 
 func (d Deps) validate() error {
@@ -407,6 +509,14 @@ func (s *FileStore) load() error {
 		if u.Identity != nil {
 			norm := u.Identity.normalized()
 			u.Identity = &norm
+			// Owner Decision 2: the migration state is STORED, not inferred. A row
+			// that holds a tuple is `bound`, and saying so here means the estate
+			// carries explicit states even before the boot backfill runs. The
+			// UNRESOLVED rows are deliberately left to BackfillIdentities: their
+			// REASON depends on the door configuration, which the store does not know.
+			if applyState(&u, boundState(now)) {
+				migrated = true
+			}
 		}
 		if _, dup := s.users[normID(u.ID)]; dup {
 			return fmt.Errorf("users: duplicate account id %q in %s", u.ID, s.path)
@@ -454,6 +564,13 @@ func (s *FileStore) indexLocked(u User) error {
 	if u.Identity.Issuer == LocalIssuer {
 		lk := u.Identity.localKey()
 		if other, dup := s.byLocalLogin[lk]; dup {
+			// Roll the tuple entry back before refusing. Without this a caller that
+			// recovers from the refusal (the deterministic backfill marks the row
+			// ambiguous and carries on) would leave the index claiming a tuple for an
+			// account that does not hold it — and the next lookup of that tuple would
+			// resolve to the wrong record. The entry was written two lines above, by
+			// us, so deleting it cannot drop someone else's.
+			delete(s.byTuple, tk)
 			return fmt.Errorf("users: local login %q in tenant %q claimed by both %q and %q",
 				lk.username, lk.tenant, other, u.ID)
 		}
@@ -619,6 +736,8 @@ func (s *FileStore) createLocal(u User) (User, error) {
 	u.ID = s.deps.mintID(u.Username)
 	ident := localIdentity(u.TenantID, u.Username, ProvenanceAsserted, u.CreatedAt)
 	u.Identity = &ident
+	state := boundState(u.CreatedAt)
+	u.IdentityMigration = &state
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -845,9 +964,24 @@ func (s *FileStore) VerifyIdentityInvariants() error {
 	defer s.mu.RUnlock()
 	var pending []string
 	for _, u := range s.users {
-		if IsLocalSource(u.AuthSource) && u.Identity == nil {
-			pending = append(pending, u.ID)
+		if !IsLocalSource(u.AuthSource) || u.Identity != nil {
+			continue
 		}
+		// Owner Decision 2: an AMBIGUOUS account is a RECORDED STATE, not an
+		// invariant failure. Its identity could not be established without guessing
+		// (its derivation is already another account's), it is listed for an operator
+		// under ?identity=ambiguous, and the backfill re-examines it every boot.
+		// Refusing to start over it would turn one flagged row into a whole-platform
+		// outage — and the state is only reachable BECAUSE the store refused to
+		// merge, which is the behaviour we want to keep.
+		//
+		// An `unresolved` local account still fails: after the deterministic backfill
+		// a local account can only be bound or ambiguous, so `unresolved` means the
+		// backfill did not run, and the invariant keeps its teeth.
+		if u.IdentityState() == IdentityStateAmbiguous {
+			continue
+		}
+		pending = append(pending, u.ID)
 	}
 	// "No user has two identities" is structural on this backend (one field), so
 	// what must be proven is that the INDEX agrees: every tuple points at a

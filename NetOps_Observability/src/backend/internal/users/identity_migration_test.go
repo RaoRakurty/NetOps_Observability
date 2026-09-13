@@ -74,7 +74,7 @@ func TestFileStoreBackfillsIdentitiesAtLoad(t *testing.T) {
 			t.Errorf("%s: id = %q — a legacy id must NOT change value", tc.id, u.ID)
 		}
 		if tc.wantPending {
-			if !u.IdentityPending() {
+			if u.IdentityBound() {
 				t.Errorf("%s: got identity %+v, want PENDING (nothing is derivable offline for a federated row)", tc.id, *u.Identity)
 			}
 			continue

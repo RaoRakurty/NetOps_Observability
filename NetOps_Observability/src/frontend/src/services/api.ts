@@ -2325,8 +2325,9 @@ export type AuthUser = {
   // handle: for a federated account it is an opaque `fed_…` string that must
   // never be rendered (use display_name, else email).
   id?: string;
-  // identity_status = bound | pending. `pending` is a pre-migration federated
-  // account that carries no canonical identity tuple yet.
+  // identity_status = bound | unresolved | ambiguous (owner Decision 2,
+  // 2026-09-13). `unresolved` is a pre-migration federated account whose identity
+  // could not be established offline; `ambiguous` needs a human.
   identity_status?: string;
   username: string;
   role: string;
@@ -6163,8 +6164,12 @@ export const api = {
   permissions: () => request<{ role: string; permissions: Record<string, number> }>("/api/auth/permissions"),
 
   listUsers: () => request<AdminUser[]>("/api/users"),
-  // The §2.7 admin view: only the accounts that hold no canonical identity yet.
-  listPendingIdentityUsers: () => request<AdminUser[]>("/api/users?identity=pending"),
+  // The admin work queue (owner Decision 2): accounts whose identity could not be
+  // established offline and are waiting for a verified sign-in, and accounts whose
+  // derivation collided and need a human. The backend also accepts the retired
+  // `?identity=pending` spelling as an alias for `unresolved`.
+  listUnresolvedIdentityUsers: () => request<AdminUser[]>("/api/users?identity=unresolved"),
+  listAmbiguousIdentityUsers: () => request<AdminUser[]>("/api/users?identity=ambiguous"),
   createUser: (u: Partial<AdminUser> & { password?: string }) =>
     request<AdminUser>("/api/users", { method: "POST", body: JSON.stringify(u) }),
   // Keyed by the PRINCIPAL ID, never the login name (tracker 300 §4.5).
@@ -8250,10 +8255,17 @@ export type AdminUser = {
   // (tracker 300 §4.7). A login name is unique only within a tenant, so two
   // tenants can both hold `admin` and a username can no longer address a row.
   id: string;
-  // identity_status = bound | pending (design §2.7). `pending` = the account has
-  // no canonical identity tuple yet; an admin can disable it if they do not want
-  // it bound on its owner's next sign-in.
+  // identity_status = bound | unresolved | ambiguous (owner Decision 2,
+  // 2026-09-13) — the account's EXPLICIT, stored migration state:
+  //   bound      — it holds its canonical identity tuple;
+  //   unresolved — it does not, and none could be derived offline (an admin can
+  //                disable it if they do not want it bound at the next sign-in);
+  //   ambiguous  — deriving it would have collided with another account, so it was
+  //                never merged and a human has to decide.
   identity_status?: string;
+  // identity_reason = why, for unresolved/ambiguous (provenance-unreconstructable
+  // | issuer-unavailable | tuple-claimed | unknown-auth-source | pending-backfill).
+  identity_reason?: string;
   username: string;
   role: string;
   email?: string;
