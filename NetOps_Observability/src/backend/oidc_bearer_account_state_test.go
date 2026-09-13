@@ -28,6 +28,7 @@ import (
 
 	"netops/backend/internal/jwks"
 	"netops/backend/internal/oidc"
+	"netops/backend/internal/users"
 )
 
 // bearerRequest runs the REAL withAuth middleware and returns the HTTP status
@@ -44,6 +45,18 @@ func bearerRequest(t *testing.T, h *bearerHarness, token string) (int, jwtClaims
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, r)
 	return rec.Code, got, reached
+}
+
+// baseClaims is a minimal valid claim set for this harness: the verified issuer
+// and audience, one `sub` (the IDENTITY) and one `preferred_username` (a PROFILE
+// attribute). Keeping them separate is what lets a test vary one without the
+// other — the whole point of tracker 300.
+func (h *bearerHarness) baseClaims(sub, preferredUsername string) map[string]any {
+	return map[string]any{
+		"iss": h.p.Issuer(), "aud": h.p.ClientID(), "sub": sub,
+		"preferred_username": preferredUsername,
+		"exp":                time.Now().Add(5 * time.Minute).Unix(), "iat": time.Now().Unix(),
+	}
 }
 
 // mintBearerClaims signs an RS256 token with the harness key from an arbitrary
@@ -77,17 +90,24 @@ func TestOIDCBearerHonoursStoredAccountState(t *testing.T) {
 	h := newBearerHarness(t, TenantGlobal)
 	tok := h.mintBearer(t, "svc-2") // no admin roles → default read-only
 
-	// First sight JIT-provisions through UpsertFederated, like the SSO callback.
+	// First sight JIT-provisions from the canonical tuple, like the SSO callback.
 	if st, _, reached := bearerRequest(t, h, tok); st != http.StatusOK || !reached {
 		t.Fatalf("initial bearer: status %d reached=%v, want 200/true", st, reached)
 	}
-	u, ok := h.s.users.Get("svc-2")
+	// Tracker 300: the account's id is the DETERMINISTIC derivation of its tuple,
+	// which is what lets a test (and a re-run migration, and a JIT race) name it
+	// without coordinating.
+	svcID := users.FederatedID(TenantGlobal, h.p.Issuer(), "svc-2")
+	u, ok := h.s.users.Get(svcID)
 	if !ok || u.AuthSource != "oidc" {
 		t.Fatalf("bearer subject not provisioned as federated: %+v (ok=%v)", u, ok)
 	}
+	if u.Username != svcID {
+		t.Errorf("federated username = %q, want the opaque id", u.Username)
+	}
 
 	// Disabled account → 401 on the very next request, token still valid or not.
-	if _, err := h.s.users.Update("svc-2", User{Status: "disabled"}); err != nil {
+	if _, err := h.s.users.Update(svcID, User{Status: "disabled"}); err != nil {
 		t.Fatal(err)
 	}
 	if st, _, reached := bearerRequest(t, h, tok); st != http.StatusUnauthorized || reached {
@@ -99,7 +119,7 @@ func TestOIDCBearerHonoursStoredAccountState(t *testing.T) {
 	if _, err := h.s.tenants.Create("Acme", "acme", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.s.users.Update("svc-2", User{Status: "active", TenantID: "acme"}); err != nil {
+	if _, err := h.s.users.Update(svcID, User{Status: "active", TenantID: "acme"}); err != nil {
 		t.Fatal(err)
 	}
 	st, claims, reached := bearerRequest(t, h, tok)
@@ -119,22 +139,36 @@ func TestOIDCBearerHonoursStoredAccountState(t *testing.T) {
 	}
 }
 
-// A bearer whose subject names a LOCAL account must be refused — the API twin
-// of the H1 interactive rule (an IdP identity must never act as a colliding
-// local account; that bypasses its password and MFA enrollment).
+// A bearer whose subject spells a LOCAL account's login name must not act as
+// that account — the API twin of the H1 interactive rule (an IdP identity must
+// never act as a colliding local account; that bypasses its password and MFA
+// enrolment).
+//
+// Since tracker 300 the separation is STRUCTURAL rather than a refusal: local
+// accounts live in their own issuer namespace, so a bearer token naming `admin`
+// cannot address the local admin at all. It gets its OWN federated account in the
+// provider's default tenant, carrying whatever role the guard allows — and the
+// local admin's record, role and MFA enrolment are untouched.
 func TestOIDCBearerRefusedForLocalAccount(t *testing.T) {
 	h := newBearerHarness(t, TenantGlobal)
-	before, ok := h.s.users.Get("admin") // seeded LOCAL bootstrap admin
+	adminID := principalID(t, h.s, "admin") // seeded LOCAL bootstrap admin
+	before, ok := h.s.users.Get(adminID)
 	if !ok {
 		t.Fatal("seeded admin missing")
 	}
-	st, _, reached := bearerRequest(t, h, h.mintBearer(t, "admin", "admin"))
-	if st != http.StatusForbidden || reached {
-		t.Fatalf("bearer as local admin: status %d reached=%v, want 403/false", st, reached)
+	st, claims, reached := bearerRequest(t, h, h.mintBearer(t, "admin", "admin"))
+	if st != http.StatusOK || !reached {
+		t.Fatalf("bearer naming a local login handle: status %d reached=%v, want 200/true in its OWN account", st, reached)
 	}
-	after, _ := h.s.users.Get("admin")
-	if after.Role != before.Role || after.AuthSource != before.AuthSource {
-		t.Errorf("local admin mutated by refused bearer: %+v", after)
+	if claims.Sub == adminID {
+		t.Fatal("A BEARER TOKEN ACTED AS THE LOCAL ADMIN — the local namespace must not be addressable from an IdP")
+	}
+	if isSuperAdminRole(claims.Role) {
+		t.Errorf("the bearer acted as %q; SR-025 must have downgraded a platform-owner mapping", claims.Role)
+	}
+	after, _ := h.s.users.Get(adminID)
+	if after.Role != before.Role || after.AuthSource != before.AuthSource || after.MFAEnabled != before.MFAEnabled {
+		t.Errorf("local admin mutated by the bearer sign-in: %+v", after)
 	}
 }
 

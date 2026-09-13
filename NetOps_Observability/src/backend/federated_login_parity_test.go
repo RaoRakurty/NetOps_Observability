@@ -123,19 +123,28 @@ func assertSSORefused(t *testing.T, loc, wantSubstr string) {
 // The mintIDToken test IdP always asserts subject "user-1".
 const fedSSOUser = "user-1"
 
+// fedID is the PRINCIPAL ID of the account that subject provisioned. A federated
+// account has no login handle (its username IS its opaque id — tracker 300 §2.1),
+// so every reference to it goes through the canonical tuple.
+func (h *ssoHarness) fedID(t *testing.T) string {
+	t.Helper()
+	return federatedPrincipalID(t, h.s, h.s.oidcProvider().Issuer(), fedSSOUser)
+}
+
 func TestSSOLoginRefusedForExpiredAccount(t *testing.T) {
 	h := newSSOHarness(t, "acme")
 	if _, err := h.s.tenants.Create("Acme", "acme", "", "", ""); err != nil {
 		t.Fatalf("create tenant: %v", err)
 	}
 	assertSSOSuccess(t, h.login(t)) // provisions the federated account
-	before := len(activeSessions(h.s, fedSSOUser))
+	fedID := h.fedID(t)
+	before := len(activeSessions(h.s, fedID))
 
 	setScopeSettings(t, h.s, "acme", func(ss *SecuritySettings) { ss.AccountValidityDays = 30 })
-	backdateUser(t, h.s, fedSSOUser, func(u *User) { u.CreatedAt = time.Now().UTC().AddDate(0, 0, -60) })
+	backdateUserID(t, h.s, fedID, func(u *User) { u.CreatedAt = time.Now().UTC().AddDate(0, 0, -60) })
 
 	assertSSORefused(t, h.login(t), "expired")
-	if got := len(activeSessions(h.s, fedSSOUser)); got != before {
+	if got := len(activeSessions(h.s, fedID)); got != before {
 		t.Errorf("refused SSO login minted a session: %d active, want %d", got, before)
 	}
 }
@@ -148,7 +157,7 @@ func TestSSOLoginRefusedForInactiveAccount(t *testing.T) {
 	assertSSOSuccess(t, h.login(t))
 
 	setScopeSettings(t, h.s, "acme", func(ss *SecuritySettings) { ss.AccountInactivityDays = 90 })
-	backdateUser(t, h.s, fedSSOUser, func(u *User) { u.LastLoginAt = time.Now().UTC().AddDate(0, 0, -120) })
+	backdateUserID(t, h.s, h.fedID(t), func(u *User) { u.LastLoginAt = time.Now().UTC().AddDate(0, 0, -120) })
 
 	assertSSORefused(t, h.login(t), "inactivity")
 }
@@ -160,13 +169,14 @@ func TestSSOLoginRefusedWhenTenantSuspended(t *testing.T) {
 		t.Fatalf("create tenant: %v", err)
 	}
 	assertSSOSuccess(t, h.login(t))
-	before := len(activeSessions(h.s, fedSSOUser))
+	fedID := h.fedID(t)
+	before := len(activeSessions(h.s, fedID))
 
 	if _, err := h.s.tenants.SetStatus(tn.ID, TenantStatusSuspended); err != nil {
 		t.Fatalf("suspend tenant: %v", err)
 	}
 	assertSSORefused(t, h.login(t), "tenant suspended")
-	if got := len(activeSessions(h.s, fedSSOUser)); got != before {
+	if got := len(activeSessions(h.s, fedID)); got != before {
 		t.Errorf("refused SSO login minted a session: %d active, want %d", got, before)
 	}
 
@@ -185,12 +195,13 @@ func TestSSOConcurrentLoginDenyRevokesPriorSession(t *testing.T) {
 	setScopeSettings(t, h.s, "acme", func(ss *SecuritySettings) { ss.ConcurrentLogin = "deny" })
 
 	assertSSOSuccess(t, h.login(t))
-	first := activeSessions(h.s, fedSSOUser)
+	fedID := h.fedID(t)
+	first := activeSessions(h.s, fedID)
 	if len(first) != 1 {
 		t.Fatalf("after first SSO login: %d active sessions, want 1", len(first))
 	}
 	assertSSOSuccess(t, h.login(t))
-	second := activeSessions(h.s, fedSSOUser)
+	second := activeSessions(h.s, fedID)
 	if len(second) != 1 {
 		t.Fatalf("concurrent_login=deny: %d active sessions after second SSO login, want 1", len(second))
 	}
@@ -203,19 +214,20 @@ func TestAdminCannotSetPasswordOnFederatedAccount(t *testing.T) {
 	h := newSSOHarness(t, "")
 	assertSSOSuccess(t, h.login(t)) // provisions the federated account
 
+	fedID := h.fedID(t)
 	a := login(t, h.srv, "admin", "Passw0rd!2345")
-	st, b := do(t, h.srv, "PATCH", "/api/users/"+fedSSOUser, a.Token,
+	st, b := do(t, h.srv, "PATCH", "/api/users/"+fedID, a.Token,
 		map[string]string{"password": "NewPassw0rd!9999"})
 	if st != http.StatusBadRequest {
 		t.Fatalf("password set on federated account: status %d (%s), want 400", st, b)
 	}
 	// Profile edits (no password) remain allowed.
-	st, b = do(t, h.srv, "PATCH", "/api/users/"+fedSSOUser, a.Token,
+	st, b = do(t, h.srv, "PATCH", "/api/users/"+fedID, a.Token,
 		map[string]string{"display_name": "Renamed By Admin"})
 	if st != http.StatusOK {
 		t.Fatalf("profile-only patch on federated account: status %d (%s), want 200", st, b)
 	}
-	if u, ok := h.s.users.Get(fedSSOUser); !ok || u.PasswordHash != "" {
+	if u, ok := h.s.users.Get(fedID); !ok || u.PasswordHash != "" {
 		t.Errorf("federated account must remain passwordless, got hash %q", u.PasswordHash)
 	}
 }

@@ -161,15 +161,28 @@ func TestPgUsersStoreCapAndFederated(t *testing.T) {
 	}
 
 	// Federated provisioning is cap-exempt; first login creates, second refreshes.
-	ext, err := s.UpsertFederated("ext-user", "e@x.com", "Ext", RoleReadOnly, "oidc", "acme")
+	// Resolved by the canonical tuple (tracker 300), so the SAME tuple twice is
+	// one account and the profile is what gets refreshed.
+	extAssertion := func(email, display, role string) users.Assertion {
+		return users.Assertion{
+			Identity: users.Identity{
+				TenantID: "acme", Issuer: "https://kc.example.test/realms/x",
+				Subject: "kc-sub-ext", Protocol: users.ProtocolOIDC,
+			},
+			Email: email, DisplayName: display, Role: role,
+		}
+	}
+	ext, err := s.ResolveFederatedUnbound(extAssertion("e@x.com", "Ext", RoleReadOnly))
 	if err != nil {
 		t.Fatalf("federated provisioning should bypass the cap: %v", err)
 	}
 	if ext.AuthSource != "oidc" || normTenant(ext.TenantID) != "acme" {
 		t.Errorf("federated user wrong: %+v", ext)
 	}
-	if again, err := s.UpsertFederated("ext-user", "new@x.com", "Ext2", RoleOperator, "oidc", "acme"); err != nil {
+	if again, err := s.ResolveFederatedUnbound(extAssertion("new@x.com", "Ext2", RoleOperator)); err != nil {
 		t.Errorf("federated refresh: %v", err)
+	} else if again.ID != ext.ID {
+		t.Errorf("the same tuple resolved to a second account: %q then %q", ext.ID, again.ID)
 	} else if again.Email != "new@x.com" || again.Role != RoleOperator {
 		t.Errorf("federated refresh did not sync IdP attributes: %+v", again)
 	}

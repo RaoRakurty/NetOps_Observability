@@ -25,11 +25,13 @@ func TestActingTenantSuspensionEnforced(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A multi-tenant operator: home in acme, bound (reachable) into globex.
-	if _, err := s.users.CreateFull(User{Username: "sre", Role: RoleOperator, TenantID: "acme"}, "Passw0rd!2345"); err != nil {
+	// Tracker 300: a binding names the PRINCIPAL ID.
+	sre, err := s.users.CreateFull(User{Username: "sre", Role: RoleOperator, TenantID: "acme"}, "Passw0rd!2345")
+	if err != nil {
 		t.Fatal(err)
 	}
 	s.backfillBindings()
-	if _, err := s.bindings.Add(RoleBinding{PrincipalID: "sre", RoleID: RoleOperator, ScopeID: scopeTenant(glob.ID), Effect: EffectAllow}); err != nil {
+	if _, err := s.bindings.Add(RoleBinding{PrincipalID: sre.ID, RoleID: RoleOperator, ScopeID: scopeTenant(glob.ID), Effect: EffectAllow}); err != nil {
 		t.Fatal(err)
 	}
 	tok := login(t, srv, "sre", "Passw0rd!2345").Token

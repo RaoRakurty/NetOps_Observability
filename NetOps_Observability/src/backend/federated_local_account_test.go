@@ -4,8 +4,11 @@
 package backend
 
 // federated_local_account_test.go — H1: a federated (TACACS+/LDAP/SSO) sign-in
-// whose username collides with a LOCALLY-managed account must be REFUSED, never
-// accepted against (or merged into) the local record. Before this fix the
+// that would reach a LOCALLY-managed account must be REFUSED, never accepted
+// against (or merged into) the local record. Since tracker 300 the refusal is
+// STRUCTURAL: local accounts live in their own issuer namespace, so a federated
+// door cannot even name the namespace they are in, however its subject is
+// spelled. These tests assert that end to end, through the real handlers. Before this fix the
 // bootstrap admin's empty AuthSource counted as federated, so a TACACS+/LDAP/
 // OIDC identity named "admin" was merged straight into the platform owner —
 // re-roled, re-sourced, and issued a session with NO MFA challenge even though
@@ -27,6 +30,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"netops/backend/internal/users"
 )
 
 // TestGuardFederatedRoleNormalization (H1c): the guard's predicate must match
@@ -103,11 +108,16 @@ func mockTacacsPassServer(t *testing.T) (host string, port int) {
 }
 
 // TestTACACSLoginRefusedForLocalAccount: TACACS+ says PASS for "admin", but
-// "admin" is the LOCAL bootstrap account (with MFA enrolled). The login must be
-// refused with NO session, and the local record must come through unchanged —
-// role, auth_source, everything. Without the fix this path re-sourced the
-// bootstrap admin to "tacacs", re-roled it to the TACACS default role, and
-// minted a session with no MFA challenge.
+// "admin" is also the LOCAL bootstrap account's login handle (with MFA enrolled).
+// The local record must come through unchanged — role, auth_source, everything —
+// and must get NO session. The original defect re-sourced the bootstrap admin to
+// "tacacs", re-roled it to the TACACS default role, and minted a session with no
+// MFA challenge.
+//
+// Since tracker 300 the two `admin`s are two accounts in two issuer namespaces:
+// `(tenant, "local", "admin")` and `(tacacs:host:port, "admin")`. The TACACS+
+// sign-in therefore SUCCEEDS — into its own account — and the assertion is that
+// it is not the local one, which is the stronger property.
 func TestTACACSLoginRefusedForLocalAccount(t *testing.T) {
 	srv, s := newTestServerState(t)
 	host, port := mockTacacsPassServer(t)
@@ -117,10 +127,11 @@ func TestTACACSLoginRefusedForLocalAccount(t *testing.T) {
 	}}
 	// The local admin has MFA enrolled — the exact account whose second factor
 	// the federated path used to skip.
-	if err := s.users.SetMFA("admin", true, "sealed-secret", ""); err != nil {
+	adminID := principalID(t, s, "admin")
+	if err := s.users.SetMFA(adminID, true, "sealed-secret", ""); err != nil {
 		t.Fatal(err)
 	}
-	before, ok := s.users.Get("admin")
+	before, ok := s.users.Get(adminID)
 	if !ok {
 		t.Fatal("seeded admin missing")
 	}
@@ -128,16 +139,24 @@ func TestTACACSLoginRefusedForLocalAccount(t *testing.T) {
 	st, b := do(t, srv, "POST", "/api/auth/tacacs/login", "", map[string]string{
 		"username": "admin", "password": "whatever-tacacs-accepted",
 	})
-	if st != http.StatusForbidden {
-		t.Fatalf("TACACS login against local admin: status %d (%s), want 403", st, b)
+	if st != http.StatusOK {
+		t.Fatalf("TACACS login naming a local handle: status %d (%s), want 200 in its OWN account", st, b)
 	}
-	if strings.Contains(string(b), `"token"`) {
-		t.Fatalf("refusal body carries a token: %s", b)
+	if got := activeSessions(s, adminID); len(got) != 0 {
+		t.Fatalf("the TACACS login minted %d session(s) FOR THE LOCAL ADMIN, want 0", len(got))
 	}
-	if got := activeSessions(s, "admin"); len(got) != 0 {
-		t.Fatalf("refused TACACS login minted %d session(s), want 0", len(got))
+	// The session that WAS issued belongs to the TACACS+ namespace's own account.
+	var lr loginResponse
+	if err := json.Unmarshal(b, &lr); err != nil {
+		t.Fatalf("decode login response: %v (%s)", err, b)
 	}
-	after, _ := s.users.Get("admin")
+	if lr.User.ID == adminID {
+		t.Fatal("A TACACS+ SIGN-IN ACTED AS THE LOCAL ADMIN")
+	}
+	if lr.User.AuthSource != "tacacs" {
+		t.Errorf("the provisioned account auth_source = %q, want tacacs", lr.User.AuthSource)
+	}
+	after, _ := s.users.Get(adminID)
 	if after.Role != before.Role || after.AuthSource != before.AuthSource || after.MFAEnabled != before.MFAEnabled {
 		t.Errorf("local admin mutated by refused TACACS login: before role=%q src=%q mfa=%v, after role=%q src=%q mfa=%v",
 			before.Role, before.AuthSource, before.MFAEnabled, after.Role, after.AuthSource, after.MFAEnabled)
@@ -149,32 +168,52 @@ func TestTACACSLoginRefusedForLocalAccount(t *testing.T) {
 
 // TestCompleteFederatedLoginRefusesLocalAccount exercises the shared tail the
 // LDAP handler calls after its external bind succeeds (the LDAP wire protocol
-// itself is proven in enterprise/sso/ldap): a colliding local account → 403, no
-// session, record untouched.
+// itself is proven in enterprise/sso/ldap). Two refusals, both required:
+// an LDAP subject that merely LOOKS like the local admin's login handle lands in
+// its OWN account and leaves the local record untouched (the namespace does the
+// work), and an assertion that tries to NAME the local namespace is a typed 403.
 func TestCompleteFederatedLoginRefusesLocalAccount(t *testing.T) {
 	_, s := newTestServerState(t)
-	if err := s.users.SetMFA("admin", true, "sealed-secret", ""); err != nil {
+	adminID := principalID(t, s, "admin")
+	if err := s.users.SetMFA(adminID, true, "sealed-secret", ""); err != nil {
 		t.Fatal(err)
 	}
-	before, _ := s.users.Get("admin")
+	before, _ := s.users.Get(adminID)
 
 	rec := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/auth/ldap/login", nil)
-	s.completeFederatedLogin(rec, r, "admin", "a@idp.example", "IdP Admin", RoleSuperAdmin, "ldap", "")
+	// The assertion a directory would hand down for a person whose DN is absent
+	// and whose login name happens to be `admin`. It names the LDAP namespace,
+	// never the local one — and a subject that merely LOOKS like a local login
+	// handle must not reach the local account.
+	local := ldapAssertion(ldapConfig{Host: "dir.example.com", DefaultTenant: TenantGlobal},
+		nil, "admin", RoleSuperAdmin)
+	s.completeFederatedLogin(rec, r, local)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("completeFederatedLogin for local admin: status %d (%s), want 403", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("an LDAP subject that merely looks like a local login handle: status %d (%s), want 200 in its OWN account", rec.Code, rec.Body.String())
 	}
-	if got := activeSessions(s, "admin"); len(got) != 0 {
-		t.Fatalf("refused LDAP login minted %d session(s), want 0", len(got))
+	if got := activeSessions(s, adminID); len(got) != 0 {
+		t.Fatalf("the LDAP sign-in minted %d session(s) FOR THE LOCAL ADMIN, want 0", len(got))
 	}
-	after, _ := s.users.Get("admin")
-	if after.Role != before.Role || after.AuthSource != before.AuthSource {
+	after, _ := s.users.Get(adminID)
+	if after.Role != before.Role || after.AuthSource != before.AuthSource || after.MFAEnabled != before.MFAEnabled {
 		t.Errorf("local admin mutated: role %q→%q, auth_source %q→%q", before.Role, after.Role, before.AuthSource, after.AuthSource)
+	}
+	// And the explicit H1 refusal is still typed: an assertion that names the
+	// LOCAL namespace itself is refused 403 rather than resolved.
+	rec3 := httptest.NewRecorder()
+	s.completeFederatedLogin(rec3, r, users.Assertion{Identity: users.Identity{
+		Issuer: users.LocalIssuer, Subject: "admin", Protocol: users.ProtocolLDAP}})
+	if rec3.Code != http.StatusForbidden {
+		t.Fatalf("an assertion naming the local namespace: status %d (%s), want 403", rec3.Code, rec3.Body.String())
 	}
 	// A NON-colliding federated user still signs in through the same tail.
 	rec2 := httptest.NewRecorder()
-	s.completeFederatedLogin(rec2, r, "ldap-only-user", "", "LDAP User", RoleReadOnly, "ldap", "")
+	s.completeFederatedLogin(rec2, r, ldapAssertion(
+		ldapConfig{Host: "dir.example.com", DefaultTenant: TenantGlobal},
+		&ldapIdentity{DN: "cn=ldap-only-user,dc=example,dc=com", DisplayName: "LDAP User"},
+		"ldap-only-user", RoleReadOnly))
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("fresh federated login: status %d (%s), want 200", rec2.Code, rec2.Body.String())
 	}
@@ -190,20 +229,33 @@ func TestCompleteFederatedLoginRefusesLocalAccount(t *testing.T) {
 // test IdP asserts subject "user-1".
 func TestSSOCallbackRefusedForLocalAccount(t *testing.T) {
 	h := newSSOHarness(t, "")
-	if _, err := h.s.users.CreateFull(User{Username: fedSSOUser, Role: RoleSuperAdmin}, "Passw0rd!2345"); err != nil {
+	local, err := h.s.users.CreateFull(User{Username: fedSSOUser, Role: RoleSuperAdmin}, "Passw0rd!2345")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.s.users.SetMFA(fedSSOUser, true, "sealed-secret", ""); err != nil {
+	if err := h.s.users.SetMFA(local.ID, true, "sealed-secret", ""); err != nil {
 		t.Fatal(err)
 	}
-	before, _ := h.s.users.Get(fedSSOUser)
+	before, _ := h.s.users.Get(local.ID)
 
-	assertSSORefused(t, h.login(t), "managed locally")
-	if got := activeSessions(h.s, fedSSOUser); len(got) != 0 {
-		t.Fatalf("refused SSO login minted %d session(s), want 0", len(got))
+	// Since tracker 300 the ID token's `sub` naming a local login handle is not a
+	// collision at all: local accounts live in their own issuer namespace, so the
+	// sign-in lands in its OWN federated account and the local record is
+	// unreachable from this door. The session that IS issued must not be the
+	// local super-admin's.
+	loc := h.login(t)
+	if strings.Contains(loc, "sso_error") {
+		t.Fatalf("the SSO sign-in was refused outright: %q", loc)
 	}
-	after, _ := h.s.users.Get(fedSSOUser)
+	if got := activeSessions(h.s, local.ID); len(got) != 0 {
+		t.Fatalf("the SSO login minted %d session(s) FOR THE LOCAL ACCOUNT, want 0", len(got))
+	}
+	fedID := h.fedID(t)
+	if fedID == local.ID {
+		t.Fatal("AN SSO SIGN-IN REACHED THE LOCAL ACCOUNT")
+	}
+	after, _ := h.s.users.Get(local.ID)
 	if after.Role != before.Role || after.AuthSource != "local" || after.MFAEnabled != before.MFAEnabled {
-		t.Errorf("local account mutated by refused SSO login: %+v", after)
+		t.Errorf("local account mutated by the SSO login: %+v", after)
 	}
 }

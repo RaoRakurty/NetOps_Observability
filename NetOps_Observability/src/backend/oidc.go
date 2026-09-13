@@ -248,18 +248,23 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username := firstNonEmpty(claims.PreferredUsername, claims.Email, claims.Sub)
-	if username == "" {
+	// THE SUBJECT IS `sub`, AND ONLY `sub` (tracker 300 §2.3). It used to be
+	// firstNonEmpty(preferred_username, email, sub), which made the account key
+	// a mutable profile attribute: two IdPs asserting one e-mail were ONE
+	// account, and a person renamed at the IdP became a second one. `sub` is the
+	// broker's stable per-realm principal id and is the only thing keyed on now;
+	// the old derivation survives solely as Assertion.LegacyUsername, for the
+	// bounded §2.6 adoption of accounts the pre-migration code created from it.
+	if strings.TrimSpace(claims.Sub) == "" {
 		s.ssoFail(w, r, "id token carried no usable subject")
 		return
 	}
-	role := p.RoleFor(claims)
 	// ELEVATION DOOR. A provider configured as `kind: elevation` provisions
-	// nothing: it reads the existing account and mints a time-bound binding on
-	// it. UpsertFederated — and therefore MergeFederated, and therefore any
-	// chance of a role or a source being rewritten — is not on this path at all.
+	// nothing: it reads the existing account by its canonical tuple and mints a
+	// time-bound binding on it. No provisioning, and no profile the IdP could
+	// rewrite, is on this path at all.
 	if pol, isElev := s.elevationPolicy(txn.IdP); isElev {
-		s.completeElevationSSO(w, r, p, pol, txn.IdP, username, role, txn.FEState, claims)
+		s.completeElevationSSO(w, r, p, pol, txn.IdP, txn.FEState, claims)
 		return
 	}
 	// THE REALM TRAVELS WITH THE SIGN-IN. Until now only the CONNECTION was
@@ -271,27 +276,45 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	// The realm comes from ssoSignInRealm, never from the callback URL alone: a
 	// URL that names no realm falls back to the CONNECTION's own registration,
 	// so only a connection nobody bound to a tenant carries no constraint.
-	user, err := s.users.UpsertFederatedInRealm(username, claims.Email, firstNonEmpty(claims.Name, username), role, "oidc", s.ssoProvisionTenant(r, p), s.ssoSignInRealm(r, txn.IdP))
+	assertion := oidcSSOAssertion(p, claims, s.ssoProvisionTenant(r, p), txn.IdP)
+	// THE REALM DECIDES WHICH RESOLUTION FORM IS CORRECT, and the two are not
+	// interchangeable.
+	//
+	// A tenant-BOUND connection is resolved inside its own realm: the exact tuple,
+	// then (§2.5 Amendment) the same (issuer, subject) across the tenants that
+	// realm reaches, and nothing wider.
+	//
+	// An UNBOUND connection is the shared platform front door. It has no realm
+	// because it legitimately signs in users of EVERY tenant — that is the
+	// pre-locator behaviour every existing deployment depends on — so it uses the
+	// same unbound form the bearer, LDAP and TACACS+ doors use: find the account by
+	// (issuer, subject) whatever tenant it lives in, refuse an ambiguous match, and
+	// provision into the provider's default tenant on first sight. Handing the ZERO
+	// realm to the bound form instead would make the front door resolve the exact
+	// tuple only, and every existing per-tenant account would be re-provisioned as
+	// a duplicate in the global tenant on its owner's next sign-in.
+	realm := s.ssoSignInRealm(r, txn.IdP)
+	var user User
+	if realm.Reaches == nil {
+		user, err = s.users.ResolveFederatedUnbound(assertion)
+	} else {
+		user, err = s.users.ResolveFederated(assertion, realm, true)
+	}
 	if err != nil {
 		// The account exists, in a realm this URL does not reach. Say only what
 		// a mis-registered provider is told — naming the real reason would be a
-		// cross-tenant username-existence oracle.
+		// cross-tenant existence oracle. The subject is logged, never echoed.
 		if errors.Is(err, users.ErrForeignTenant) {
-			s.ssoRefuseForeignRealm(w, r, username)
+			s.ssoRefuseForeignRealm(w, r, claims.Sub)
 			return
 		}
-		// H1: the username names a LOCALLY-managed account — the IdP's verdict
-		// must not be accepted against it (that would bypass the local password
-		// AND its MFA enrollment, and used to let the IdP re-role/re-source the
-		// record, bootstrap admin included). Refuse; the local login path is the
-		// only door for this account.
-		if errors.Is(err, users.ErrLocalAccount) {
-			logWarn("auth", "sso login refused: username collides with a locally-managed account",
-				map[string]any{"user": username, "src": "oidc"})
-			s.ssoFail(w, r, "this account is managed locally; sign in with your local password")
-			return
-		}
-		s.ssoFail(w, r, "provisioning failed: "+err.Error())
+		// Everything else — H1's local-account refusal (the IdP's verdict must
+		// never be accepted against a locally-managed record: that would bypass
+		// its password AND its MFA enrolment), an identity ambiguous across the
+		// realm's tenants, a lost race on the tuple — maps once, for every door.
+		_, msg, reason := identityRefusal(err)
+		logWarn("auth", "sso login refused", map[string]any{"sub": claims.Sub, "src": "oidc", "reason": reason})
+		s.ssoFail(w, r, msg)
 		return
 	}
 	s.logBindingSync(user, "oidc") // PBAC Phase A: mirror the provisioned identity
@@ -319,8 +342,8 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		s.ssoFail(w, r, err.Error())
 		return
 	}
-	s.users.TouchLogin(user.Username)
-	logInfo("auth", "sso login ok", map[string]any{"user": user.Username, "role": user.Role, "src": "oidc"})
+	s.users.TouchLogin(user.ID)
+	logInfo("auth", "sso login ok", map[string]any{"user": user.ID, "role": user.Role, "src": "oidc"})
 
 	// Hand the session to the SPA via the URL fragment (never logged, never sent
 	// to the server). The SPA captures it on load (services/api.ts).
@@ -345,7 +368,7 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 // — an elevation IdP must not be the back door to platform ownership either),
 // mint the grant, and then open an ordinary session so the operator is simply
 // signed in with elevated access held beside their standing rights.
-func (s *server) completeElevationSSO(w http.ResponseWriter, r *http.Request, p *oidcProvider, pol elevation.Policy, alias, username, mappedRole, feState string, claims jwks.Claims) {
+func (s *server) completeElevationSSO(w http.ResponseWriter, r *http.Request, p *oidcProvider, pol elevation.Policy, alias, feState string, claims jwks.Claims) {
 	// The realm this sign-in is confined to. An elevation provider registered by
 	// one tenant must not reach another tenant's account any more than a
 	// standing one may — and, like the standing path, the constraint is read
@@ -354,27 +377,62 @@ func (s *server) completeElevationSSO(w http.ResponseWriter, r *http.Request, p 
 	// (ssoSignInRealm).
 	realm := s.ssoSignInRealm(r, alias)
 	bound := realm.Reaches != nil
-	user, ok := s.users.Get(username)
-	if !ok {
-		if bound {
+	// THE READ-ONLY DOOR (design §2.5, tracker 300). It resolves the CANONICAL
+	// TUPLE with provision=false: a tuple miss is a refusal and nothing is
+	// written. It never binds by username again — the old `users.Get(username)`
+	// made an elevation IdP able to name any account whose login handle it could
+	// guess.
+	//
+	// The assertion deliberately carries NO Email, NO DisplayName, NO Role and NO
+	// LegacyUsername. That keeps the documented invariant of this door intact:
+	// the account is READ, never re-profiled, never re-roled and never adopted.
+	// (MergeFederated with every profile field empty is a no-op, and the mapped
+	// role is applied to the GRANT below, never to the record.)
+	probe := users.Assertion{Identity: users.Identity{
+		TenantID: s.ssoProvisionTenant(r, p),
+		Issuer:   p.Issuer(),
+		Subject:  claims.Sub,
+		Protocol: users.ProtocolOIDC,
+		// The alias is recorded beside the key, never in it.
+		ConnectionID: alias,
+	}}
+	// An UNBOUND elevation connection is the SHARED PLATFORM FRONT DOOR: it
+	// legitimately serves every tenant, exactly as it did when this lookup was
+	// `users.Get(username)`. So the find-only lookup is told to reach every
+	// tenant explicitly rather than being handed the "no constraint" zero value,
+	// which the store deliberately reads as "no cross-tenant reach" to keep the
+	// PROVISIONING path narrow (realmScopedOwner). Nothing is provisioned here,
+	// and an identity that resolves to more than one account is still refused
+	// rather than guessed.
+	lookupRealm := realm
+	if !bound {
+		lookupRealm = users.Realm{Reaches: func(string) bool { return true }}
+	}
+	user, err := s.users.ResolveFederated(probe, lookupRealm, false)
+	if err != nil {
+		if bound || errors.Is(err, users.ErrForeignTenant) {
 			// In a tenant-bound flow "no such account" and "not your account"
 			// must answer identically, or the pair is an existence oracle.
-			s.ssoRefuseForeignRealm(w, r, username)
+			s.ssoRefuseForeignRealm(w, r, claims.Sub)
 			return
 		}
-		logWarn("auth", "elevation login refused — no such account", map[string]any{"user": username, "provider": pol.Provider})
-		s.ssoFail(w, r, elevation.UnknownAccountRefusal)
+		if errors.Is(err, users.ErrNoSuchUser) {
+			logWarn("auth", "elevation login refused — no account holds this identity",
+				map[string]any{"sub": claims.Sub, "provider": pol.Provider})
+			s.ssoFail(w, r, elevation.UnknownAccountRefusal)
+			return
+		}
+		_, msg, reason := identityRefusal(err)
+		logWarn("auth", "elevation login refused", map[string]any{"sub": claims.Sub, "provider": pol.Provider, "reason": reason})
+		s.ssoFail(w, r, msg)
 		return
 	}
-	if !realm.Permits(user.TenantID) {
-		s.ssoRefuseForeignRealm(w, r, username)
-		return
-	}
-	// H1 parity: an elevation IdP must not act against a LOCALLY-managed
-	// account any more than a standing one may. The local password and its MFA
-	// enrolment are what protect that record.
+	// H1 parity, defence in depth: the store already refuses a federated tuple
+	// pointing at a locally-managed account, so this can only fire on a corrupt
+	// index — and it must still refuse. The local password and its MFA enrolment
+	// are what protect that record.
 	if isLocalAccount(user.AuthSource) {
-		logWarn("auth", "elevation login refused — account is managed locally", map[string]any{"user": username, "provider": pol.Provider})
+		logWarn("auth", "elevation login refused — account is managed locally", map[string]any{"user": user.ID, "provider": pol.Provider})
 		s.ssoFail(w, r, "this account is managed locally; sign in with your local password")
 		return
 	}
@@ -387,8 +445,9 @@ func (s *server) completeElevationSSO(w http.ResponseWriter, r *http.Request, p 
 		return
 	}
 	// SR-025 still applies: the guard is evaluated against the ACCOUNT's tenant,
-	// which is the tenant the grant will be made in.
-	role := guardFederatedRole(mappedRole, user.TenantID, username, "oidc-elevation")
+	// which is the tenant the grant will be made in. The principal it is handed
+	// is the OPAQUE PRINCIPAL ID, never an IdP-derived handle (§4.9).
+	role := guardFederatedRole(p.RoleFor(claims), user.TenantID, user.ID, "oidc-elevation")
 	// ORDERING, not cleanup: the grant is validated here but PERSISTED last,
 	// after every gate that can still refuse this sign-in has passed. A grant
 	// written before the deny gate or the session mint would outlive a sign-in
@@ -397,7 +456,7 @@ func (s *server) completeElevationSSO(w http.ResponseWriter, r *http.Request, p 
 	grant, err := s.prepareElevationGrant(pol, user, role, claims.Sid, claims.Claim)
 	if err != nil {
 		logWarn("auth", "elevation login refused", map[string]any{
-			"user": username, "provider": pol.Provider, "reason": err.Error()})
+			"user": user.ID, "provider": pol.Provider, "reason": err.Error()})
 		s.ssoFail(w, r, err.Error())
 		return
 	}
@@ -417,13 +476,13 @@ func (s *server) completeElevationSSO(w http.ResponseWriter, r *http.Request, p 
 		// leave a live credential behind a refusal.
 		s.abandonSession(r, user, sid, "elevation_grant_not_persisted")
 		logWarn("auth", "elevation login refused", map[string]any{
-			"user": username, "provider": pol.Provider, "reason": err.Error()})
+			"user": user.ID, "provider": pol.Provider, "reason": err.Error()})
 		s.ssoFail(w, r, err.Error())
 		return
 	}
-	s.users.TouchLogin(user.Username)
+	s.users.TouchLogin(user.ID)
 	logInfo("auth", "elevation login ok", map[string]any{
-		"user": user.Username, "role": user.Role, "elevated_role": b.RoleID,
+		"user": user.ID, "role": user.Role, "elevated_role": b.RoleID,
 		"provider": pol.Provider, "binding": b.ID, "src": "oidc-elevation"})
 	frag := url.Values{}
 	frag.Set("token", access)
@@ -489,3 +548,52 @@ type (
 )
 
 func newSSOTxnStore() *ssoTxnStore { return oidc.NewTxnStore() }
+
+// ---------------------------------------------------------------------------
+// TRACKER 300 IDENTITY NAMESPACING — see docs/design/IDENTITY_NAMESPACING_2026-09-13.md
+//
+// One rule, restated where it is applied: a principal is identified by
+// **tenant_id + issuer + subject**, never by a username and never by an e-mail.
+// Each door hands the store exactly what it VERIFIED — the issuer it checked the
+// signature against and the subject that issuer asserted — and lets
+// internal/users resolve it. preferred_username, e-mail and a directory login
+// name travel as PROFILE attributes; the one place a username is still consulted
+// is Assertion.LegacyUsername, which feeds only the bounded §2.6 lazy bind.
+// ---------------------------------------------------------------------------
+
+// oidcSSOAssertion is what the interactive OIDC callback verified.
+//
+// The ISSUER is the one `iss` this code ever checks a signature against (the
+// platform broker's), and the SUBJECT is `claims.Sub` and nothing else. The
+// upstream IdP is recorded beside the key as the connection alias, NOT in it
+// (design §1.4): brokered identities differ by `sub`, and putting the alias in
+// the key would mint a second account for the same person the day an operator
+// re-registers a connection.
+func oidcSSOAssertion(p *oidcProvider, claims jwks.Claims, tenant, connectionID string) users.Assertion {
+	return users.Assertion{
+		Identity: users.Identity{
+			TenantID:     tenant,
+			Issuer:       p.Issuer(),
+			Subject:      claims.Sub,
+			Protocol:     users.ProtocolOIDC,
+			ConnectionID: connectionID,
+		},
+		Email:       claims.Email,
+		DisplayName: firstNonEmpty(claims.Name, claims.PreferredUsername, claims.Email),
+		Role:        p.RoleFor(claims),
+		// §2.6 ONLY: the EXACT legacy derivation this door used before tracker
+		// 300, so an SSO account that already exists is adopted once instead of
+		// being re-provisioned and re-roled by hand.
+		LegacyUsername: legacyOIDCUsername(claims),
+	}
+}
+
+// legacyOIDCUsername reproduces the pre-tracker-300 username derivation of the
+// OIDC doors — `firstNonEmpty(preferred_username, email, sub)` — byte for byte.
+// It is an INPUT TO §2.6 AND NOTHING ELSE: getting it wrong cannot link two
+// identities (the lazy bind refuses anything already bound, anything created
+// after the migration epoch and anything of another auth_source), it can only
+// mean an existing account is left pending for an operator.
+func legacyOIDCUsername(claims jwks.Claims) string {
+	return firstNonEmpty(claims.PreferredUsername, claims.Email, claims.Sub)
+}

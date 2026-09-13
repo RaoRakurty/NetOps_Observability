@@ -15,12 +15,10 @@ func TestAuditTrail(t *testing.T) {
 	srv := newTestServer(t)
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token // platform owner (tenant "")
 
-	st, b := do(t, srv, "POST", "/api/users", admin, map[string]any{
+	// Tracker 300: the audit ACTOR is the PRINCIPAL ID, not the login handle.
+	aliceID := createUserID(t, srv, admin, map[string]any{
 		"username": "alice", "password": "Passw0rd!2345", "role": "super-admin", "tenant_id": "acme",
 	})
-	if st != 201 {
-		t.Fatalf("create alice: %d %s", st, b)
-	}
 	alice := login(t, srv, "alice", "Passw0rd!2345").Token
 
 	// A successful mutation by alice (recorded, tenant=acme).
@@ -49,7 +47,7 @@ func TestAuditTrail(t *testing.T) {
 	// Platform owner sees alice's saved-object creation.
 	foundSaved := false
 	for _, e := range events(admin) {
-		if e["actor"] == "alice" && e["method"] == "POST" && e["path"] == "/api/saved" {
+		if e["actor"] == aliceID && e["method"] == "POST" && e["path"] == "/api/saved" {
 			foundSaved = true
 		}
 	}

@@ -67,21 +67,23 @@ func TestUserStoreAdminSafe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newUserStore: %v", err)
 	}
-	if _, err := us.CreateFull(User{Username: "root", Role: RoleSuperAdmin}, "Passw0rd!2345"); err != nil {
+	// Tracker 300: every mutator is keyed by the PRINCIPAL ID the create returns.
+	root, err := us.CreateFull(User{Username: "root", Role: RoleSuperAdmin}, "Passw0rd!2345")
+	if err != nil {
 		t.Fatalf("create super-admin: %v", err)
 	}
 	// The last super-admin can't be deleted or demoted.
-	if err := us.Delete("root"); err == nil {
+	if err := us.Delete(root.ID); err == nil {
 		t.Error("expected refusal deleting last super-admin")
 	}
-	if _, err := us.Update("root", User{Role: RoleReadOnly}); err == nil {
+	if _, err := us.Update(root.ID, User{Role: RoleReadOnly}); err == nil {
 		t.Error("expected refusal demoting last super-admin")
 	}
 	// Add a second super-admin; now the first can be demoted.
 	if _, err := us.CreateFull(User{Username: "root2", Role: RoleSuperAdmin}, "Passw0rd!2345"); err != nil {
 		t.Fatalf("create second super-admin: %v", err)
 	}
-	if _, err := us.Update("root", User{Role: RoleReadOnly}); err != nil {
+	if _, err := us.Update(root.ID, User{Role: RoleReadOnly}); err != nil {
 		t.Errorf("demote with a spare super-admin should succeed: %v", err)
 	}
 }
@@ -101,14 +103,22 @@ func TestUserCRUD(t *testing.T) {
 	if got := us.List("", true); len(got) != 1 {
 		t.Fatalf("List len = %d, want 1", len(got))
 	}
-	if _, err := us.Update("dana", User{DisplayName: "Dana Ops", Status: "disabled"}); err != nil {
+	// The LOGIN HANDLE is not a key any more; the account is addressed by its id.
+	if _, err := us.Update("dana", User{DisplayName: "x"}); err == nil {
+		t.Error("Update by login handle must not resolve an account")
+	}
+	if _, err := us.Update(u.ID, User{DisplayName: "Dana Ops", Status: "disabled"}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	got, _ := us.Get("dana")
+	got, _ := us.Get(u.ID)
 	if got.DisplayName != "Dana Ops" || got.Status != "disabled" {
 		t.Errorf("update not persisted: %+v", got)
 	}
-	if err := us.Delete("dana"); err != nil {
+	// …and the handle still resolves inside its tenant, which is what a login does.
+	if byName, ok := us.LookupLocal("acme", "dana"); !ok || byName.ID != u.ID {
+		t.Errorf("LookupLocal(acme, dana) = %+v/%v, want %q", byName, ok, u.ID)
+	}
+	if err := us.Delete(u.ID); err != nil {
 		t.Errorf("Delete operator should succeed: %v", err)
 	}
 }

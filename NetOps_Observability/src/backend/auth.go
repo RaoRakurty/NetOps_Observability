@@ -17,6 +17,7 @@ import (
 	"netops/backend/internal/apikey"
 	"netops/backend/internal/jwks"
 	"netops/backend/internal/session"
+	"netops/backend/internal/tenantlocator"
 	"netops/backend/internal/token"
 	"netops/backend/internal/users"
 	"netops/backend/policy"
@@ -142,30 +143,51 @@ type loginResponse struct {
 }
 
 type publicUser struct {
-	Username    string    `json:"username"`
-	Role        string    `json:"role"`
-	Email       string    `json:"email,omitempty"`
-	DisplayName string    `json:"display_name,omitempty"`
-	TenantID    string    `json:"tenant_id,omitempty"`
-	Status      string    `json:"status,omitempty"`
-	AuthSource  string    `json:"auth_source,omitempty"`
-	MFAEnabled  bool      `json:"mfa_enabled"` // status only — the secret never leaves the server
-	CreatedAt   time.Time `json:"created_at,omitempty"`
-	LastLoginAt time.Time `json:"last_login_at,omitempty"`
+	// ID is the internal PRINCIPAL ID — the handle every /api/users mutation and
+	// every audit actor uses (tracker 300 §4.7). The SPA keys rows and mutations
+	// on it; the username is a display handle and, for a federated account, an
+	// opaque string that is never shown.
+	ID string `json:"id"`
+	// IdentityStatus is `bound` when the account holds its canonical identity
+	// tuple and `pending` when it does not — a pre-migration federated row that
+	// carries no issuer/subject and cannot have one derived offline (§2.7). An
+	// admin can disable a pending account if they do not want it lazily bound.
+	IdentityStatus string    `json:"identity_status,omitempty"`
+	Username       string    `json:"username"`
+	Role           string    `json:"role"`
+	Email          string    `json:"email,omitempty"`
+	DisplayName    string    `json:"display_name,omitempty"`
+	TenantID       string    `json:"tenant_id,omitempty"`
+	Status         string    `json:"status,omitempty"`
+	AuthSource     string    `json:"auth_source,omitempty"`
+	MFAEnabled     bool      `json:"mfa_enabled"` // status only — the secret never leaves the server
+	CreatedAt      time.Time `json:"created_at,omitempty"`
+	LastLoginAt    time.Time `json:"last_login_at,omitempty"`
+}
+
+// identityStatusOf renders §2.7's two states. Values are a CLOSED vocabulary —
+// the SPA switches on them.
+func identityStatusOf(u User) string {
+	if u.IdentityPending() {
+		return "pending"
+	}
+	return "bound"
 }
 
 func toPublic(u User) publicUser {
 	return publicUser{
-		Username:    u.Username,
-		Role:        u.Role,
-		Email:       u.Email,
-		DisplayName: u.DisplayName,
-		TenantID:    u.TenantID,
-		Status:      u.Status,
-		AuthSource:  u.AuthSource,
-		MFAEnabled:  u.MFAEnabled,
-		CreatedAt:   u.CreatedAt,
-		LastLoginAt: u.LastLoginAt,
+		ID:             u.ID,
+		IdentityStatus: identityStatusOf(u),
+		Username:       u.Username,
+		Role:           u.Role,
+		Email:          u.Email,
+		DisplayName:    u.DisplayName,
+		TenantID:       u.TenantID,
+		Status:         u.Status,
+		AuthSource:     u.AuthSource,
+		MFAEnabled:     u.MFAEnabled,
+		CreatedAt:      u.CreatedAt,
+		LastLoginAt:    u.LastLoginAt,
 	}
 }
 
@@ -185,12 +207,55 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Account lockout (best-effort, in-memory): reject while locked, before we even
 	// check the password, so a brute-forcer can't keep guessing. Per the scope's
 	// Security Settings (login_attempts_allowed / unlock_time_seconds).
-	if locked, d := s.loginThrottle.Locked(req.Username); locked {
-		w.Header().Set("Retry-After", intToString(int(d.Seconds())+1))
-		writeError(w, http.StatusTooManyRequests, errors.New("account temporarily locked due to failed sign-ins; try again later"))
+	//
+	// TWO KEYS, deliberately. The typed NAME is all that exists before the account
+	// is resolved, so a spray against names that do not exist is still counted;
+	// once the account IS resolved the PRINCIPAL ID is checked as well, because
+	// every post-resolution stage (the MFA challenge, in particular) counts
+	// against the id. Checking only the name would mean an account locked out by
+	// repeated bad MFA codes still accepted password attempts — the F-25 hole
+	// reopened by tracker 300's re-keying.
+	if s.refuseWhileLocked(w, req.Username) {
 		return
 	}
-	user, ok := s.users.Get(req.Username)
+	// LOCAL RESOLUTION (tracker 300 §2.5). A typed login name is NOT a principal
+	// id any more: local accounts live in their own issuer namespace, keyed
+	// (tenant, "local", lower(username)), so tenant A's `admin` and tenant B's
+	// `admin` are two unrelated accounts.
+	//
+	//	per-tenant sign-in URL → LookupLocal in THAT tenant and no other
+	//	generic sign-in page    → LookupLocalAny: one → proceed, none → 401,
+	//	                          MANY → the same generic 401, audited
+	//
+	// The ambiguous case answers exactly like an unknown name, and the message
+	// points at the organisation's own sign-in URL, because a reply that
+	// distinguished "that name exists in several tenants" from "no such account"
+	// would be a cross-tenant account-existence oracle.
+	outcome := s.resolveLocalLogin(r, req.Username)
+	if outcome.ambiguous > 0 {
+		s.auditAmbiguousLocalLogin(r, outcome.ambiguous)
+		// Counted like any other failed attempt: an attacker must not learn that
+		// this name is special by watching the lockout counter stand still.
+		allowed, unlock := s.lockoutPolicy(User{}, false)
+		if !s.loginThrottle.Fail(req.Username, allowed, unlock) {
+			w.Header().Set("Retry-After", "60")
+			writeError(w, http.StatusTooManyRequests,
+				errors.New("sign-in temporarily unavailable due to failed-login pressure; try again shortly"))
+			return
+		}
+		writeError(w, http.StatusUnauthorized, errors.New(s.localLoginRefusal(r)))
+		return
+	}
+	user, ok := outcome.user, outcome.found
+	if ok && s.refuseWhileLocked(w, user.ID) {
+		return
+	}
+	// throttleKey is what a failure counts against: the resolved PRINCIPAL when
+	// there is one, the typed name when there is not.
+	throttleKey := req.Username
+	if ok {
+		throttleKey = user.ID
+	}
 	if !ok || !token.VerifyPassword(req.Password, user.PasswordHash) {
 		// Count the failure against the lockout policy for the account's scope.
 		allowed, unlock := s.lockoutPolicy(user, ok)
@@ -198,30 +263,36 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// stop counting silently once its map was full, so a username spray turned
 		// brute-force lockout off platform-wide. Now it says so, and we refuse the
 		// attempt rather than serving a guess we cannot count.
-		if !s.loginThrottle.Fail(req.Username, allowed, unlock) {
+		if !s.loginThrottle.Fail(throttleKey, allowed, unlock) {
 			w.Header().Set("Retry-After", "60")
 			writeError(w, http.StatusTooManyRequests,
 				errors.New("sign-in temporarily unavailable due to failed-login pressure; try again shortly"))
 			return
 		}
-		// Generic message: don't leak whether the username exists.
-		writeError(w, http.StatusUnauthorized, errors.New("invalid username or password"))
+		// Generic message: don't leak whether the username exists — and it is the
+		// SAME sentence the ambiguous case gets, so the pair is not an oracle
+		// either (localLoginRefusal).
+		writeError(w, http.StatusUnauthorized, errors.New(s.localLoginRefusal(r)))
 		return
 	}
-	s.loginThrottle.Success(req.Username) // clear any prior failures on success
+	// Clear BOTH counters: the proof of the password clears the account's own
+	// record, and the typed name's record with it, so a mistyped tenant followed
+	// by the right sign-in does not leave a half-full counter behind.
+	s.loginThrottle.Success(user.ID)
+	s.loginThrottle.Success(req.Username)
 	// A disabled account cannot sign in — parity with the refresh / MFA / SSO /
 	// LDAP / TACACS paths, which all reject status=="disabled". Checked AFTER the
 	// password verifies, so an unauthenticated probe can't use it to enumerate
 	// accounts (a wrong password still returns the generic error above).
 	if user.Status == "disabled" {
-		logWarn("auth", "login refused: account disabled", map[string]any{"user": user.Username})
+		logWarn("auth", "login refused: account disabled", map[string]any{"user": user.ID})
 		writeError(w, http.StatusUnauthorized, errors.New("account disabled"))
 		return
 	}
 	// A SUSPENDED tenant blocks its users from signing in (deny-by-default tenant
 	// lifecycle; see userTenantSuspended for the never-lock-out-the-operator rule).
 	if s.userTenantSuspended(user) {
-		logWarn("auth", "login refused: tenant suspended", map[string]any{"user": user.Username, "tenant_id": user.TenantID})
+		logWarn("auth", "login refused: tenant suspended", map[string]any{"user": user.ID, "tenant_id": user.TenantID})
 		writeError(w, http.StatusForbidden, errors.New("tenant suspended"))
 		return
 	}
@@ -239,8 +310,8 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// same secret, re-wrapped. Treating it as a change would restart the
 	// password_expire_days clock on every sign-in and make expiry unreachable.
 	if token.PasswordNeedsRehash(user.PasswordHash) {
-		if err := s.users.RehashPassword(user.Username, req.Password); err != nil {
-			logWarn("auth", "password rehash-on-login failed", map[string]any{"user": user.Username, "err": err.Error()})
+		if err := s.users.RehashPassword(user.ID, req.Password); err != nil {
+			logWarn("auth", "password rehash-on-login failed", map[string]any{"user": user.ID, "err": err.Error()})
 		}
 	}
 	// MFA gate: an enrolled (local) user gets a short-lived challenge instead of a
@@ -248,18 +319,34 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if user.MFAEnabled {
 		now := time.Now()
 		ch, err := token.Sign(jwtClaims{
-			Sub: user.Username, Scopes: []string{mfaChallengeScope},
+			Sub: user.ID, Scopes: []string{mfaChallengeScope},
 			Iat: now.Unix(), Exp: now.Add(mfaChallengeTTL).Unix(),
 		}, jwtSecret())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		logInfo("auth", "mfa challenge issued", map[string]any{"user": user.Username})
+		logInfo("auth", "mfa challenge issued", map[string]any{"user": user.ID})
 		writeJSON(w, http.StatusOK, map[string]any{"mfa_required": true, "mfa_token": ch})
 		return
 	}
 	s.issueSession(w, r, user)
+}
+
+// refuseWhileLocked answers 429 when `key` is currently locked out, and reports
+// whether it did. One helper so the pre- and post-resolution checks cannot drift
+// on the status code, the Retry-After or the wording.
+func (s *server) refuseWhileLocked(w http.ResponseWriter, key string) bool {
+	if strings.TrimSpace(key) == "" {
+		return false
+	}
+	locked, d := s.loginThrottle.Locked(key)
+	if !locked {
+		return false
+	}
+	w.Header().Set("Retry-After", intToString(int(d.Seconds())+1))
+	writeError(w, http.StatusTooManyRequests, errors.New("account temporarily locked due to failed sign-ins; try again later"))
+	return true
 }
 
 // lockoutPolicy resolves the failed-login lockout thresholds for an account's
@@ -362,33 +449,33 @@ func (s *server) mintSession(r *http.Request, user User) (access, refresh string
 func (s *server) mintSessionWithID(r *http.Request, user User) (access, refresh, sid string, err error) {
 	ttl := accessTokenTTL()
 	if s.sessions != nil {
-		idle, absolute, enforceIdle, enforceAbsolute := s.sessionPolicy(user.TenantID, user.Role, user.Username)
+		idle, absolute, enforceIdle, enforceAbsolute := s.sessionPolicy(user.TenantID, user.Role, user.ID)
 		if !enforceIdle {
 			idle = 0 // 0 = disabled at the Validate gate
 		}
 		if !enforceAbsolute {
 			absolute = 0
 		}
-		sess, evicted, e := s.sessions.Create(user.Username, clientIP(r).String(), r.UserAgent(), idle, absolute)
+		sess, evicted, e := s.sessions.Create(user.ID, clientIP(r).String(), r.UserAgent(), idle, absolute)
 		if e != nil {
 			return "", "", "", e
 		}
 		sid = sess.ID
-		s.recordSessionEvent(r, "SESSION_CREATED", user.Username, sid, user.TenantID, map[string]any{
+		s.recordSessionEvent(r, "SESSION_CREATED", user.ID, sid, user.TenantID, map[string]any{
 			"idle_min": int(idle.Minutes()), "absolute_min": int(absolute.Minutes()),
 		})
 		for _, ev := range evicted { // concurrent-session cap evictions
-			s.recordSessionEvent(r, "SESSION_REVOKED", user.Username, ev, user.TenantID, map[string]any{"reason": "max_sessions"})
+			s.recordSessionEvent(r, "SESSION_REVOKED", user.ID, ev, user.TenantID, map[string]any{"reason": "max_sessions"})
 		}
 	}
 	access, err = token.Sign(jwtClaims{
-		Sub: user.Username, Role: user.Role, Tenant: user.TenantID, Sid: sid,
+		Sub: user.ID, Role: user.Role, Tenant: user.TenantID, Sid: sid,
 		Iat: time.Now().Unix(), Exp: time.Now().Add(ttl).Unix(),
 	}, jwtSecret())
 	if err != nil {
 		return "", "", "", err
 	}
-	refresh, err = s.refresh.IssueForSession(user.Username, sid)
+	refresh, err = s.refresh.IssueForSession(user.ID, sid)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -406,10 +493,10 @@ func (s *server) abandonSession(r *http.Request, user User, sid, reason string) 
 	}
 	if _, err := s.sessions.Revoke(sid); err != nil {
 		logError("auth", "abandoned session could not be closed", map[string]any{
-			"user": user.Username, "session_id": sid, "reason": reason, "err": err.Error()})
+			"user": user.ID, "session_id": sid, "reason": reason, "err": err.Error()})
 		return
 	}
-	s.recordSessionEvent(r, "SESSION_REVOKED", user.Username, sid, user.TenantID,
+	s.recordSessionEvent(r, "SESSION_REVOKED", user.ID, sid, user.TenantID,
 		map[string]any{"reason": reason})
 }
 
@@ -429,14 +516,14 @@ func (s *server) enforceConcurrentLoginDeny(r *http.Request, user User) error {
 	if s.sessions == nil || !concurrentLoginDenied(s.securitySettingsFor(user)) {
 		return nil
 	}
-	n, err := s.sessions.RevokeAllForUser(user.Username)
+	n, err := s.sessions.RevokeAllForUser(user.ID)
 	if err != nil {
-		logError("auth", "concurrent-login revoke did not persist", map[string]any{"user": user.Username, "err": err.Error()})
+		logError("auth", "concurrent-login revoke did not persist", map[string]any{"user": user.ID, "err": err.Error()})
 		return errors.New("sign-in could not be completed; prior sessions could not be closed")
 	}
 	if n > 0 {
-		logInfo("auth", "concurrent sessions revoked by policy", map[string]any{"user": user.Username, "count": n})
-		s.recordSessionEvent(r, "SESSION_REVOKED", user.Username, "", user.TenantID,
+		logInfo("auth", "concurrent sessions revoked by policy", map[string]any{"user": user.ID, "count": n})
+		s.recordSessionEvent(r, "SESSION_REVOKED", user.ID, "", user.TenantID,
 			map[string]any{"reason": "concurrent_login_deny", "count": n})
 	}
 	return nil
@@ -453,36 +540,44 @@ func (s *server) issueSession(w http.ResponseWriter, r *http.Request, user User)
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	s.users.TouchLogin(user.Username)
+	s.users.TouchLogin(user.ID)
 	setOSDCookie(w, r, tok, ttl) // /search gate cookie (enforced for platform owner only)
-	logInfo("auth", "login ok", map[string]any{"user": user.Username, "role": user.Role})
+	logInfo("auth", "login ok", map[string]any{"user": user.ID, "role": user.Role})
 	writeJSON(w, http.StatusOK, loginResponse{
 		Token: tok, RefreshToken: refresh, ExpiresIn: int(ttl.Seconds()), User: toPublic(user),
 	})
 }
 
 // completeFederatedLogin finishes a TACACS+/LDAP sign-in after the external
-// server verified the credentials: JIT-provision/refresh the account, run the
-// same account-state gates as handleLogin, and issue the session. Shared by
-// handleTACACSLogin and handleLDAPLogin so the two JSON federated front doors
-// cannot drift.
+// server verified the credentials: resolve the account from the CANONICAL TUPLE
+// the door verified, run the same account-state gates as handleLogin, and issue
+// the session. Shared by handleTACACSLogin and handleLDAPLogin so the two JSON
+// federated front doors cannot drift.
 //
-// H1: UpsertFederated REFUSES (users.ErrLocalAccount) when the username
-// collides with a LOCALLY-managed account — accepting the IdP's verdict against
-// a local record would bypass the local password AND its MFA enrollment, and
-// used to let the IdP re-role/re-source the record (the bootstrap admin's empty
-// AuthSource counted as federated). The refusal is 403: the IdP credentials
-// were right; this account just isn't federated — sign in locally instead.
-func (s *server) completeFederatedLogin(w http.ResponseWriter, r *http.Request, username, email, displayName, role, source, tenant string) {
-	user, err := s.users.UpsertFederated(username, email, displayName, role, source, tenant)
+// It takes a users.Assertion rather than a bag of strings (tracker 300): the
+// door's job is to say WHAT IT VERIFIED — which directory, and which subject in
+// it — and the store's job is to resolve that to an account. A login name
+// reaches the store only as a profile attribute and as the §2.6
+// LegacyUsername, never as a key.
+//
+// THE UNBOUND FORM is used because there is exactly one platform-global LDAP and
+// one platform-global TACACS+ configuration today, so one directory legitimately
+// signs in users of every tenant and the account's own tenant is authoritative.
+// The seam for per-tenant directories is the bound form, already implemented;
+// when they arrive, the realm is threaded down here.
+//
+// H1: the store REFUSES (users.ErrLocalAccount) an assertion that names the
+// local namespace or whose tuple points at a locally-managed account — accepting
+// the IdP's verdict against a local record would bypass the local password AND
+// its MFA enrollment. 403: the IdP credentials were right; this account just
+// isn't federated — sign in locally instead.
+func (s *server) completeFederatedLogin(w http.ResponseWriter, r *http.Request, a users.Assertion) {
+	source := a.Protocol
+	user, err := s.users.ResolveFederatedUnbound(a)
 	if err != nil {
-		if errors.Is(err, users.ErrLocalAccount) {
-			logWarn("auth", "federated login refused: username collides with a locally-managed account",
-				map[string]any{"user": username, "src": source})
-			writeError(w, http.StatusForbidden, errors.New("this account is managed locally; sign in with your local password"))
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err)
+		status, msg, reason := identityRefusal(err)
+		logWarn("auth", "federated login refused", map[string]any{"src": source, "reason": reason})
+		writeError(w, status, errors.New(msg))
 		return
 	}
 	s.logBindingSync(user, source) // PBAC Phase A: mirror the provisioned identity
@@ -496,7 +591,7 @@ func (s *server) completeFederatedLogin(w http.ResponseWriter, r *http.Request, 
 		writeError(w, http.StatusForbidden, errors.New(msg))
 		return
 	}
-	logInfo("auth", "login ok", map[string]any{"user": user.Username, "role": user.Role, "src": source})
+	logInfo("auth", "login ok", map[string]any{"user": user.ID, "role": user.Role, "src": source})
 	s.issueSession(w, r, user) // server-side session + tokens (same as password login)
 }
 
@@ -544,23 +639,25 @@ func (s *server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	newRefresh, username, sid, err := s.refresh.RotateSession(req.RefreshToken)
+	// The refresh store is keyed by the internal PRINCIPAL ID (§4.2) — legacy
+	// rows carry `id == lower(username)`, so no stored token changes meaning.
+	newRefresh, principalID, sid, err := s.refresh.RotateSession(req.RefreshToken)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	user, ok := s.users.Get(username)
+	user, ok := s.users.Get(principalID)
 	if !ok || user.Status == "disabled" {
 		writeError(w, http.StatusUnauthorized, errors.New("account unavailable"))
 		return
 	}
 	if sid != "" && s.sessions != nil {
 		s.sessions.Touch(sid) // record activity at the refresh boundary
-		s.recordSessionEvent(r, "SESSION_REFRESHED", user.Username, sid, user.TenantID, nil)
+		s.recordSessionEvent(r, "SESSION_REFRESHED", user.ID, sid, user.TenantID, nil)
 	}
 	ttl := accessTokenTTL()
 	tok, err := token.Sign(jwtClaims{
-		Sub: user.Username, Role: user.Role, Tenant: user.TenantID, Sid: sid,
+		Sub: user.ID, Role: user.Role, Tenant: user.TenantID, Sid: sid,
 		Iat: time.Now().Unix(), Exp: time.Now().Add(ttl).Unix(),
 	}, jwtSecret())
 	if err != nil {
@@ -779,24 +876,37 @@ func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Identify the account. An authenticated caller can only change its own.
-	username := ""
-	authed := false
-	if claims, ok := userFrom(r.Context()); ok {
-		username, authed = claims.Sub, true
-	} else {
-		username = strings.TrimSpace(req.Username)
-	}
-	if username == "" {
-		writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
-		return
-	}
+	//
+	// Tracker 300: the two modes resolve DIFFERENTLY and must. An authenticated
+	// caller is named by its token, whose `sub` IS the principal id. The
+	// pre-auth login-window form types a LOCAL LOGIN NAME, which is only unique
+	// per tenant — so it goes through the same §2.5 resolution handleLogin uses,
+	// including the generic refusal for a name several tenants hold.
+	var (
+		user   User
+		ok     bool
+		authed bool
+	)
 	// Generic credential error so the pre-auth path doesn't enumerate usernames;
 	// the authed path keeps the clearer "current password incorrect".
 	badCreds := errors.New("invalid username or password")
-	if authed {
+	if claims, cok := userFrom(r.Context()); cok {
+		authed = true
 		badCreds = errors.New("current password incorrect")
+		user, ok = s.users.Get(claims.Sub)
+	} else {
+		if strings.TrimSpace(req.Username) == "" {
+			writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+			return
+		}
+		outcome := s.resolveLocalLogin(r, req.Username)
+		if outcome.ambiguous > 0 {
+			s.auditAmbiguousLocalLogin(r, outcome.ambiguous)
+			writeError(w, http.StatusUnauthorized, errors.New(s.localLoginRefusal(r)))
+			return
+		}
+		user, ok = outcome.user, outcome.found
 	}
-	user, ok := s.users.Get(username)
 	if !ok {
 		writeError(w, http.StatusUnauthorized, badCreds)
 		return
@@ -813,7 +923,7 @@ func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	// Enforce the account's resolved Security Policy (length + complexity) before
 	// the store's own floor — zero-trust, server-authoritative (#24 wiring).
-	rules := s.callerPasswordRules(jwtClaims{Sub: user.Username, Role: user.Role, Tenant: user.TenantID})
+	rules := s.callerPasswordRules(jwtClaims{Sub: user.ID, Role: user.Role, Tenant: user.TenantID})
 	if err := validatePasswordAgainstPolicy(req.NewPassword, rules); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -830,7 +940,7 @@ func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.users.ChangePassword(user.Username, req.NewPassword); err != nil {
+	if err := s.users.ChangePassword(user.ID, req.NewPassword); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -844,16 +954,16 @@ func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	// failed when it did not.
 	sessionsRevoked := true
 	if s.sessions != nil {
-		n, err := s.sessions.RevokeAllForUser(user.Username)
+		n, err := s.sessions.RevokeAllForUser(user.ID)
 		if err != nil {
 			sessionsRevoked = false
 			logError("auth", "password change: session revoke did not persist — old sessions may survive a restart",
-				map[string]any{"user": user.Username, "err": err.Error()})
+				map[string]any{"user": user.ID, "err": err.Error()})
 		} else if n > 0 {
-			s.recordSessionEvent(r, "SESSION_REVOKED", user.Username, "", user.TenantID, map[string]any{"reason": "password_change", "count": n})
+			s.recordSessionEvent(r, "SESSION_REVOKED", user.ID, "", user.TenantID, map[string]any{"reason": "password_change", "count": n})
 		}
 	}
-	logInfo("auth", "password changed", map[string]any{"user": user.Username, "pre_auth": !authed})
+	logInfo("auth", "password changed", map[string]any{"user": user.ID, "pre_auth": !authed})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "sessions_revoked": sessionsRevoked})
 }
 
@@ -1150,9 +1260,11 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 //     isLocalAccount — "" counts as local) is refused outright: an IdP identity
 //     must never act as a colliding local account, which would bypass its
 //     password and MFA enrollment.
-//   - Unknown user → JIT-provision via UpsertFederated, exactly like the
-//     interactive SSO callback (same SR-025 guardFederatedRole downgrade via
-//     the store's Deps.GuardRole; same JIT tenant default).
+//   - Unknown identity → JIT-provision through ResolveFederatedUnbound, exactly
+//     like the interactive SSO callback (same canonical tuple, same SR-025
+//     guardFederatedRole downgrade via the store's Deps.GuardRole, same JIT
+//     tenant default), so a bearer token and an ID token from one broker name
+//     the SAME principal.
 //   - RequireMFA is honoured for USER tokens: the IdP must assert a second
 //     factor (amr/acr), as the SSO callback demands. Tokens carrying an azp
 //     (authorized-party/client id) claim are treated as service-account
@@ -1162,40 +1274,40 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 //     check for them; the interactive login path still enforces it, and the
 //     bearer path never mints a session.
 func (s *server) bearerPrincipal(r *http.Request, op *oidcProvider, oc jwks.Claims) (jwtClaims, int, error) {
-	sub := firstNonEmpty(oc.PreferredUsername, oc.Email, oc.Sub)
-	if sub == "" {
+	if strings.TrimSpace(oc.Sub) == "" {
 		return jwtClaims{}, http.StatusUnauthorized, errors.New("bearer token carried no usable subject")
 	}
 	if op.RequireMFA() && oc.Azp == "" && !op.MFASatisfied(oc) {
 		logWarn("auth", "bearer rejected — MFA required but not asserted by IdP", map[string]any{"sub": oc.Sub, "amr": oc.Amr, "acr": oc.Acr})
 		return jwtClaims{}, http.StatusUnauthorized, errors.New("multi-factor authentication is required — token does not assert a second factor")
 	}
-	// THE USERNAME IS THE WHOLE KEY HERE, and that is safe only because this
-	// path has exactly ONE realm (tracker 279d): the bearer branch consults
-	// `s.oidcProvider()`, the single platform relying-party connection, and
-	// per-tenant IdPs are BROKERED through it, so there is no per-tenant
-	// provider for this branch to pick.
+	// THE KEY IS (tenant, iss, sub) — tracker 300. It used to be
+	// firstNonEmpty(preferred_username, email, sub) used as a GLOBAL account key,
+	// which is why two tokens carrying the same `preferred_username` from
+	// different principals landed in one account, and why renaming a person at
+	// the IdP minted a second one.
 	//
-	// If that stops being true, this lookup becomes a cross-realm account
-	// takeover — the second realm's identity receiving the first realm's
-	// account, role and tenant, looking exactly like a successful sign-in.
-	// Thread the realm down to it first, the way C3 did where a realm was
-	// already in play. The premise is pinned by
-	// TestBearerUsernameIsOneGlobalNamespace.
-	u, ok := s.users.Get(sub)
-	if !ok {
-		var err error
-		u, err = s.users.UpsertFederated(sub, oc.Email, firstNonEmpty(oc.Name, sub), op.RoleFor(oc), "oidc", op.DefaultTenant())
-		if err != nil {
-			if errors.Is(err, users.ErrLocalAccount) {
-				return jwtClaims{}, http.StatusForbidden, errors.New("this account is managed locally; sign in with your local password")
-			}
-			return jwtClaims{}, http.StatusInternalServerError, err
-		}
-		s.logBindingSync(u, "oidc") // PBAC Phase A: mirror the provisioned identity
-	} else if isLocalAccount(u.AuthSource) {
-		return jwtClaims{}, http.StatusForbidden, errors.New("this account is managed locally; sign in with your local password")
+	// The UNBOUND form is the right one here, and only here: this branch consults
+	// `s.oidcProvider()`, the single platform relying-party connection through
+	// which per-tenant IdPs are BROKERED, so one config legitimately signs in
+	// users of every tenant and the account's own tenant is authoritative. It
+	// resolves (issuer, subject) across tenants and REFUSES an ambiguous match
+	// rather than picking one — the takeover the old global-username lookup made
+	// possible is now a typed refusal instead of a successful-looking sign-in.
+	//
+	// H2 is unchanged: the STORED account decides tenant, role and status.
+	// ResolveFederatedUnbound returns a disabled account AS IS, and the gates
+	// below refuse it.
+	u, err := s.users.ResolveFederatedUnbound(bearerAssertion(op, oc))
+	if err != nil {
+		status, msg, reason := identityRefusal(err)
+		logWarn("auth", "bearer refused", map[string]any{"sub": oc.Sub, "reason": reason})
+		return jwtClaims{}, status, errors.New(msg)
 	}
+	// A first sight provisioned an account: mirror it (PBAC Phase A). A tuple hit
+	// re-mirrors too, which is harmless (the mirror is idempotent) and keeps the
+	// binding in step with a role the IdP has since remapped.
+	s.logBindingSync(u, "oidc")
 	if u.Status == "disabled" {
 		return jwtClaims{}, http.StatusUnauthorized, errors.New("account unavailable")
 	}
@@ -1204,7 +1316,9 @@ func (s *server) bearerPrincipal(r *http.Request, op *oidcProvider, oc jwks.Clai
 	if msg := s.federatedLoginBarrier(r, u); msg != "" {
 		return jwtClaims{}, http.StatusForbidden, errors.New(msg)
 	}
-	return jwtClaims{Sub: u.Username, Role: u.Role, Tenant: u.TenantID}, 0, nil
+	// The JWT subject is the internal PRINCIPAL ID (§4.1), which every downstream
+	// consumer — sessions, bindings, audit actor, API handles — now keys on.
+	return jwtClaims{Sub: u.ID, Role: u.Role, Tenant: u.TenantID}, 0, nil
 }
 
 func userFrom(ctx context.Context) (jwtClaims, bool) {
@@ -1391,4 +1505,189 @@ func ensureSigningSecret() error {
 		return nil
 	}
 	return errors.New("JWT_SECRET is not set — refusing to start with the publicly-known dev fallback secret (it also signs report/export links). Set JWT_SECRET, or set ALLOW_DEV_SECRETS=true for local development only")
+}
+
+// ---------------------------------------------------------------------------
+// TRACKER 300 IDENTITY NAMESPACING — see docs/design/IDENTITY_NAMESPACING_2026-09-13.md
+//
+// One rule, restated where it is applied: a principal is identified by
+// **tenant_id + issuer + subject**, never by a username and never by an e-mail.
+// Each door hands the store exactly what it VERIFIED — the issuer it checked the
+// signature against and the subject that issuer asserted — and lets
+// internal/users resolve it. preferred_username, e-mail and a directory login
+// name travel as PROFILE attributes; the one place a username is still consulted
+// is Assertion.LegacyUsername, which feeds only the bounded §2.6 lazy bind.
+// ---------------------------------------------------------------------------
+
+// bearerAssertion is the RS256 service-account / direct-API door. Same issuer
+// and subject as the interactive callback — a bearer token and an ID token from
+// one broker name the SAME principal, which is the point of keying on the tuple.
+func bearerAssertion(op *oidcProvider, oc jwks.Claims) users.Assertion {
+	return users.Assertion{
+		Identity: users.Identity{
+			TenantID: op.DefaultTenant(),
+			Issuer:   op.Issuer(),
+			Subject:  oc.Sub,
+			Protocol: users.ProtocolOIDC,
+		},
+		Email:          oc.Email,
+		DisplayName:    firstNonEmpty(oc.Name, oc.PreferredUsername, oc.Email),
+		Role:           op.RoleFor(oc),
+		LegacyUsername: legacyOIDCUsername(oc),
+	}
+}
+
+// ---- local login resolution (§2.5) ----------------------------------------
+
+// loginRealmTenant is the tenant a LOCAL sign-in is scoped to: the one named by
+// the per-tenant entry URL the browser is on (the signed candidate cookie, which
+// the server armed — never a value the browser asserted). An /org/{id} entry
+// names a realm but not ONE tenant, so it resolves nothing here and the sign-in
+// falls through to the cross-tenant form.
+func (s *server) loginRealmTenant(r *http.Request) (string, bool) {
+	c, ok := s.locatorCandidate(r)
+	if !ok || c.Kind != tenantlocator.KindTenant || strings.TrimSpace(c.TenantID) == "" {
+		return "", false
+	}
+	return c.TenantID, true
+}
+
+// localLoginOutcome is the result of resolving a typed login name to ONE local
+// account. `ambiguous` means the name exists in more than one tenant and the
+// per-tenant sign-in URL is the disambiguator.
+type localLoginOutcome struct {
+	user      User
+	found     bool
+	ambiguous int // how many tenants hold the name (0 unless ambiguous)
+}
+
+// resolveLocalLogin is design §2.5's local resolution, and the only place a
+// typed login name becomes an account.
+//
+//	tenant named by the entry URL → LookupLocal, that tenant and no other
+//	no tenant                     → LookupLocalAny: one → proceed; none → unknown;
+//	                                MANY → ambiguous, which the caller refuses
+//	                                with the SAME generic 401 an unknown name
+//	                                gets. Distinguishing them would be a
+//	                                cross-tenant account-existence oracle.
+//
+// Federated accounts are unreachable from here by construction: LookupLocal*
+// resolve the `local` issuer namespace, and a federated account has no local
+// login handle at all (its username IS its opaque id).
+func (s *server) resolveLocalLogin(r *http.Request, name string) localLoginOutcome {
+	if strings.TrimSpace(name) == "" {
+		return localLoginOutcome{}
+	}
+	if tenant, ok := s.loginRealmTenant(r); ok {
+		u, found := s.users.LookupLocal(tenant, name)
+		return localLoginOutcome{user: u, found: found}
+	}
+	matches, ok := s.users.LookupLocalAny(name)
+	switch {
+	case !ok || len(matches) == 0:
+		return localLoginOutcome{}
+	case len(matches) == 1:
+		return localLoginOutcome{user: matches[0], found: true}
+	default:
+		return localLoginOutcome{ambiguous: len(matches)}
+	}
+}
+
+// auditAmbiguousLocalLogin records a sign-in refused because the typed name
+// exists in several tenants. It records the COUNT and never the tenants or the
+// name's owners: the event has to be investigable without becoming the oracle
+// the generic refusal exists to prevent.
+func (s *server) auditAmbiguousLocalLogin(r *http.Request, count int) {
+	logWarn("auth", "login refused: local login name exists in more than one tenant — the per-tenant sign-in URL is the disambiguator",
+		map[string]any{"tenants": count})
+	if s.audit == nil {
+		return
+	}
+	s.audit.Record(AuditEvent{
+		Method:   "LOGIN",
+		Path:     "/login.ambiguous_local_identity",
+		Decision: "deny",
+		Remote:   auditClientIP(r),
+		Detail:   map[string]any{"action": "login.ambiguous_local_identity", "tenants": count},
+	})
+}
+
+// The two refusals a LOCAL sign-in can give, and the rule that keeps them from
+// becoming an oracle: EVERY 401 at this door says the same thing for a given
+// REQUEST, whatever the reason. An unknown name, a wrong password and a name held
+// by several tenants are indistinguishable, so none of them can be used to probe
+// for accounts across the platform.
+//
+// The hint is attached on the GENERIC sign-in page only, where it is the actual
+// remedy for the ambiguous case (design §2.5: "the per-tenant sign-in URL is the
+// disambiguator") and harmless advice for the other two. It depends on the URL
+// the browser is on, never on the account — which is what stops it from carrying
+// information about anybody.
+const (
+	localLoginRefusalPlain = "invalid username or password"
+	localLoginRefusalHint  = "invalid username or password — if your organisation has its own sign-in address, use that"
+)
+
+// localLoginRefusal is the ONE sentence this door answers 401 with.
+func (s *server) localLoginRefusal(r *http.Request) string {
+	if _, named := s.loginRealmTenant(r); named {
+		return localLoginRefusalPlain
+	}
+	return localLoginRefusalHint
+}
+
+// ---- refusal mapping ------------------------------------------------------
+
+// identityRefusal maps a store refusal onto (status, browser message, log
+// reason). ONE mapping for every door, so the JSON doors and the redirecting SSO
+// door cannot drift apart on what a refusal says.
+//
+// ErrForeignTenant is deliberately absent: it is answered by
+// ssoRefuseForeignRealm, which says only what a mis-registered provider is told.
+// Callers handle it before calling this.
+func identityRefusal(err error) (int, string, string) {
+	switch {
+	case errors.Is(err, users.ErrLocalAccount):
+		// The tuple, or the namespace it names, belongs to a LOCALLY-managed
+		// account. 403: the IdP credentials were right, this account just is not
+		// federated. Not split into two sentinels (store open question 4) —
+		// "the assertion named the local issuer" is a door bug and "the tuple
+		// points at a local record" is a corrupt index; both are the same
+		// refusal and the same message, and splitting them would only add a
+		// branch no door can act on differently.
+		return http.StatusForbidden,
+			"this account is managed locally; sign in with your local password",
+			"account is managed locally"
+	case errors.Is(err, users.ErrAmbiguousIdentity):
+		// The same (issuer, subject) resolves to more than one reachable account.
+		// Refused GENERICALLY — naming the tenants would be a cross-tenant
+		// existence oracle — and never guessed (owner rule 6).
+		return http.StatusForbidden,
+			"your identity could not be resolved to a single account; contact your administrator",
+			"identity is ambiguous across tenants"
+	case errors.Is(err, users.ErrNoSuchUser):
+		return http.StatusForbidden, "no account is linked to this identity", "no account for this identity"
+	case errors.Is(err, users.ErrIdentityConflict):
+		return http.StatusConflict, "sign-in could not be completed; please try again", "identity conflict"
+	}
+	return http.StatusInternalServerError, "provisioning failed", err.Error()
+}
+
+// userDisplayLabel is the SERVER-SIDE twin of the SPA's userLabel (src/frontend/
+// src/lib/userLabel.ts): what to call a person on screen, never an opaque id.
+//
+// A federated account's username IS its `fed_<tenant>_<hash>` principal id, so
+// showing it would put a meaningless hash where an operator expects a name. Any
+// surface that ships a label for a user — the session list is the one today —
+// goes through this, so the rule lives in one place per side of the wire.
+func userDisplayLabel(u User) string {
+	if d := strings.TrimSpace(u.DisplayName); d != "" {
+		return d
+	}
+	if isLocalAccount(u.AuthSource) {
+		if n := strings.TrimSpace(u.Username); n != "" {
+			return n
+		}
+	}
+	return strings.TrimSpace(u.Email)
 }

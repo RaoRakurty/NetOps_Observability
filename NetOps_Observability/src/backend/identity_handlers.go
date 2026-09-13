@@ -17,6 +17,7 @@ import (
 	"netops/backend/internal/entitlement"
 	// LICENCE-END
 	"netops/backend/internal/rbac"
+	"netops/backend/internal/users"
 	"strings"
 	"time"
 )
@@ -105,9 +106,23 @@ func (s *server) handleUsers(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		// Strict isolation is enforced in the repo: List returns only the caller's
 		// tenant (RLS-scoped on the pg backend; the same sameTenant filter on file).
-		users := s.users.List(tenant, cross)
-		out := make([]publicUser, 0, len(users))
-		for _, u := range users {
+		list := s.users.List(tenant, cross)
+		// ?identity=pending (design §2.7) — the accounts that hold no canonical
+		// identity tuple yet, so an operator can find and remediate (or disable)
+		// every pre-migration federated row without reading the whole table. The
+		// filter is applied AFTER the tenant scope, never instead of it: an
+		// unrecognised value narrows nothing and is ignored rather than widening.
+		if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("identity")), "pending") {
+			pending := make([]User, 0, len(list))
+			for _, u := range list {
+				if u.IdentityPending() {
+					pending = append(pending, u)
+				}
+			}
+			list = pending
+		}
+		out := make([]publicUser, 0, len(list))
+		for _, u := range list {
 			out = append(out, toPublic(u))
 		}
 		writeJSON(w, http.StatusOK, out)
@@ -146,11 +161,25 @@ func (s *server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			DisplayName: req.DisplayName, TenantID: req.TenantID, Status: req.Status,
 		}, req.Password)
 		if err != nil {
+			// A duplicate login name is a CONFLICT, and it is now per-TENANT
+			// (tracker 300 §0 rule 3): the same name in another tenant is not a
+			// collision at all. 409 rather than 400 because nothing about the
+			// request is malformed — the name is simply taken here.
+			if errors.Is(err, users.ErrUsernameTaken) {
+				writeError(w, http.StatusConflict, err)
+				return
+			}
+			// A FEDERATED account cannot be created administratively: only a door
+			// knows an issuer and a subject (§2.5).
+			if errors.Is(err, users.ErrFederatedCreate) {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
 		s.logBindingSync(u, "user-create") // keep the role_binding mirror in sync (PBAC Phase A)
-		logInfo("identity", "user created", map[string]any{"user": u.Username, "role": u.Role})
+		logInfo("identity", "user created", map[string]any{"user": u.ID, "role": u.Role})
 		writeJSON(w, http.StatusCreated, toPublic(u))
 	default:
 		w.Header().Set("Allow", "GET, POST")
@@ -172,9 +201,12 @@ func (s *server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// The path segment is the PRINCIPAL ID (tracker 300 §4.5), not a login name:
+	// a login handle is unique only within a tenant, so it cannot address an
+	// account on a platform-wide route.
 	id := strings.TrimPrefix(r.URL.Path, "/api/users/")
 	if id == "" || strings.Contains(id, "/") {
-		writeError(w, http.StatusBadRequest, errors.New("invalid username"))
+		writeError(w, http.StatusBadRequest, errors.New("invalid user id"))
 		return
 	}
 	tenant, cross := principalTenant(claims)
@@ -220,6 +252,14 @@ func (s *server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 			TenantID: tid, Status: req.Status,
 		})
 		if err != nil {
+			// A TENANT MOVE carries the account's identity with it, so the
+			// destination tenant already holding that local login name is a
+			// per-tenant CONFLICT — the same refusal the database's primary key
+			// gives (tracker 300 §0 rule 3).
+			if errors.Is(err, users.ErrUsernameTaken) {
+				writeError(w, http.StatusConflict, err)
+				return
+			}
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}

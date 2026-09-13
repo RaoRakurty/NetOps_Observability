@@ -42,9 +42,9 @@ func TestIssueThatCannotPersistChangesNothing(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "refresh_tokens.json")
 	seedRefreshFile(t, path,
-		refreshToken{ID: "expired1", Hash: hashOf("expired1.aaaa"), Username: "alice", Family: "f1",
+		refreshToken{ID: "expired1", Hash: hashOf("expired1.aaaa"), PrincipalID: "alice", Family: "f1",
 			CreatedAt: now.Add(-72 * time.Hour), ExpiresAt: now.Add(-48 * time.Hour)},
-		refreshToken{ID: "live1", Hash: hashOf("live1.bbbb"), Username: "bob", Family: "f2",
+		refreshToken{ID: "live1", Hash: hashOf("live1.bbbb"), PrincipalID: "bob", Family: "f2",
 			CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(time.Hour)},
 	)
 
@@ -91,7 +91,7 @@ func TestIssueCollectsLongExpiredRowsWhenItDoesPersist(t *testing.T) {
 	now := time.Now().UTC()
 	path := filepath.Join(t.TempDir(), "refresh_tokens.json")
 	seedRefreshFile(t, path,
-		refreshToken{ID: "expired1", Hash: hashOf("expired1.aaaa"), Username: "alice", Family: "f1",
+		refreshToken{ID: "expired1", Hash: hashOf("expired1.aaaa"), PrincipalID: "alice", Family: "f1",
 			CreatedAt: now.Add(-72 * time.Hour), ExpiresAt: now.Add(-48 * time.Hour)},
 	)
 	rs, err := NewRefreshStore(path, time.Hour, fileTestKV{})

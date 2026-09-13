@@ -30,17 +30,21 @@ const mfaChallengeTTL = 5 * time.Minute
 // sealMFA / openMFA encrypt the per-user TOTP seed at rest with the platform DEK,
 // bound to the username (AAD), mirroring the other config-secret seals. A dormant
 // Vault passes through (plaintext) — same posture as every other stored secret.
-func (s *server) sealMFA(username, secret string) (string, error) {
+// sealMFA/openMFA bind the sealed TOTP seed to the account it belongs to. The
+// AAD field id is "user.mfa:" + the lowercased PRINCIPAL ID (tracker 300) —
+// which for every account that predates the change is the same string the
+// username produced, so nothing already at rest changes.
+func (s *server) sealMFA(principalID, secret string) (string, error) {
 	if secret == "" {
 		return "", nil
 	}
-	return sealFn(s.vault)("", "user.mfa:"+strings.ToLower(username), secret) // #nosec G101 -- Vault AAD field-id, not a credential
+	return sealFn(s.vault)("", "user.mfa:"+strings.ToLower(principalID), secret) // #nosec G101 -- Vault AAD field-id, not a credential
 }
-func (s *server) openMFA(username, sealed string) (string, error) {
+func (s *server) openMFA(principalID, sealed string) (string, error) {
 	if sealed == "" {
 		return "", nil
 	}
-	return openFn(s.vault)("", "user.mfa:"+strings.ToLower(username), sealed) // #nosec G101 -- Vault AAD field-id, not a credential
+	return openFn(s.vault)("", "user.mfa:"+strings.ToLower(principalID), sealed) // #nosec G101 -- Vault AAD field-id, not a credential
 }
 
 // handleMFASetup (POST, authed) issues a fresh PENDING secret for the caller and
@@ -71,12 +75,16 @@ func (s *server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	sealed, err := s.sealMFA(u.Username, secret)
+	// The seal's AAD is the PRINCIPAL ID (tracker 300): immutable, and unique
+	// across tenants, where a local login handle is only unique within one.
+	// Legacy accounts carry `id == lower(username)` and openMFA lowercases, so
+	// every secret already at rest opens with exactly the same AAD as before.
+	sealed, err := s.sealMFA(u.ID, secret)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errors.New("could not store MFA secret"))
 		return
 	}
-	if err := s.users.SetMFA(u.Username, u.MFAEnabled, u.MFASecret, sealed); err != nil {
+	if err := s.users.SetMFA(u.ID, u.MFAEnabled, u.MFASecret, sealed); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -96,7 +104,7 @@ func (s *server) handleMFAActivate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("no pending MFA setup — start enrollment first"))
 		return
 	}
-	secret, err := s.openMFA(u.Username, u.MFAPending)
+	secret, err := s.openMFA(u.ID, u.MFAPending)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errors.New("could not read MFA secret"))
 		return
@@ -123,7 +131,7 @@ func (s *server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
 		return
 	}
-	secret, err := s.openMFA(u.Username, u.MFASecret)
+	secret, err := s.openMFA(u.ID, u.MFASecret)
 	if err != nil || !totp.Verify(secret, code) {
 		writeError(w, http.StatusBadRequest, errors.New("that code didn't match — MFA was not disabled"))
 		return
@@ -189,14 +197,17 @@ func (s *server) handleMFALogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("account unavailable"))
 		return
 	}
-	secret, err := s.openMFA(u.Username, u.MFASecret)
+	secret, err := s.openMFA(u.ID, u.MFASecret)
 	if err != nil || !totp.Verify(secret, req.Code) {
 		// Count the failure against the account's lockout policy. An UNCOUNTED
 		// failure is an unlimited guess (F-25), so a saturated throttle refuses the
 		// attempt instead. Same wording as the password path — never reveal whether
 		// the code or the account was the problem.
 		allowed, unlock := s.lockoutPolicy(u, true)
-		if !s.loginThrottle.Fail(u.Username, allowed, unlock) {
+		// Keyed by the principal id, matching the Locked() check above (claims.Sub):
+		// the MFA stage is POST-resolution, so it counts against the account, not
+		// against whatever string was typed at the password stage.
+		if !s.loginThrottle.Fail(u.ID, allowed, unlock) {
 			w.Header().Set("Retry-After", "60")
 			writeError(w, http.StatusTooManyRequests,
 				errors.New("sign-in temporarily unavailable due to failed-login pressure; try again shortly"))
@@ -205,7 +216,7 @@ func (s *server) handleMFALogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("invalid authentication code"))
 		return
 	}
-	s.loginThrottle.Success(u.Username) // full sign-in succeeded — clear the counter
+	s.loginThrottle.Success(u.ID) // full sign-in succeeded — clear the counter
 	s.issueSession(w, r, u)
 }
 
@@ -237,35 +248,43 @@ func (s *server) mfaCodeRequest(w http.ResponseWriter, r *http.Request) (jwtClai
 	return claims, strings.TrimSpace(req.Code), u, true
 }
 
-// handleMFAAdminReset (POST {username}, admin) clears a user's MFA — the recovery
+// handleMFAAdminReset (POST {user_id}, admin) clears a user's MFA — the recovery
 // path when someone loses their device. Same-tenant unless platform owner.
+//
+// The target is named by its PRINCIPAL ID (tracker 300 §4.5), like every other
+// administrative mutation. `username` is still accepted as the field name for
+// the SPA's benefit and carries the same id; a login handle is not unique across
+// tenants and therefore cannot name an account here.
 func (s *server) handleMFAAdminReset(w http.ResponseWriter, r *http.Request) {
 	claims, ok := s.requireAdmin(w, r)
 	if !ok {
 		return
 	}
 	var req struct {
-		Username string `json:"username"`
+		UserID   string `json:"user_id"`
+		Username string `json:"username"` // legacy field name, same value: the id
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	target, ok := s.users.Get(req.Username)
+	target, ok := s.users.Get(firstNonEmpty(req.UserID, req.Username))
 	if !ok {
 		writeError(w, http.StatusNotFound, errors.New("user not found"))
 		return
 	}
 	tenant, cross := principalTenant(claims)
 	if !cross && !strings.EqualFold(target.TenantID, tenant) {
+		// 404 would be the stricter answer, but this surface has always answered
+		// 403 here and the id is not guessable, so the existing contract stands.
 		writeError(w, http.StatusForbidden, errors.New("cannot manage a user in another tenant"))
 		return
 	}
-	if err := s.users.SetMFA(target.Username, false, "", ""); err != nil {
+	if err := s.users.SetMFA(target.ID, false, "", ""); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	logInfo("mfa", "admin reset", map[string]any{"user": target.Username, "by": claims.Sub})
+	logInfo("mfa", "admin reset", map[string]any{"user": target.ID, "by": claims.Sub})
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
 }
 

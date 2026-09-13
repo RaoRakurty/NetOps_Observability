@@ -441,7 +441,6 @@ func TestElevationStaysTimeBoundAfterATenantAdminSave(t *testing.T) {
 		t.Fatalf("create tenant admin: %d %s", st, b)
 	}
 	token := login(t, h.f.srv, "globex-admin", "Passw0rd!2345").Token
-	before := h.seedFederated(t, "globexuser", h.f.tenantB, RoleReadOnly, "ldap")
 
 	// The save that used to convert the door.
 	body := oidcIdPBody("Globex Break Glass (renamed)")
@@ -449,6 +448,15 @@ func TestElevationStaysTimeBoundAfterATenantAdminSave(t *testing.T) {
 		t.Fatalf("tenant-admin save: %d %s", st, b)
 	}
 	h.seedDiscovery(t) // any save rebuilds the live provider
+
+	// The account is seeded AFTER the save, because this save REBUILDS the live
+	// provider — and in this fixture it rebuilds it with a different `iss`. Under
+	// tracker 300 the issuer is KEY MATERIAL (§2.3): an account provisioned under
+	// one issuer is simply not the same principal as the same subject asserted
+	// under another, which is the property the whole change exists to establish.
+	// Seeding first would therefore test the re-namespacing, not the elevation
+	// door this test is about.
+	before := h.seedFederated(t, "globexuser", h.f.tenantB, RoleReadOnly)
 
 	grant := map[string]any{
 		"access_expires_at": time.Now().Add(10 * time.Minute).Unix(),
@@ -459,7 +467,7 @@ func TestElevationStaysTimeBoundAfterATenantAdminSave(t *testing.T) {
 		t.Fatalf("the elevation sign-in was refused after the save: %q", frag.Get("sso_error"))
 	}
 
-	b, ok := h.f.s.activeElevation(httptest.NewRequest(http.MethodGet, "http://x/api/x", nil), "globexuser", h.f.tenantB)
+	b, ok := h.f.s.activeElevation(httptest.NewRequest(http.MethodGet, "http://x/api/x", nil), before.ID, h.f.tenantB)
 	if !ok {
 		t.Fatal("NO ELEVATION BINDING: the tenant-admin save turned the elevation door into a standing one, and the sign-in handed out a permanent role")
 	}
@@ -474,7 +482,7 @@ func TestElevationStaysTimeBoundAfterATenantAdminSave(t *testing.T) {
 	}
 	// ELEVATION NEVER CHANGES A STANDING ROLE (owner, 2026-09-07): the account
 	// is read on this path, never written.
-	after, ok := h.f.s.users.Get("globexuser")
+	after, ok := h.f.s.users.Get(before.ID)
 	if !ok {
 		t.Fatal("the account vanished")
 	}

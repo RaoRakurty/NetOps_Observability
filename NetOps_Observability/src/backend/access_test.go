@@ -49,21 +49,23 @@ func seedOrgTenants(t *testing.T, s *server) seededIDs {
 func TestReachMultiTenant(t *testing.T) {
 	s := newPBACTestServer(t)
 	seedOrgTenants(t, s)
-	if _, err := s.users.CreateFull(User{Username: "sre", Role: "operator", TenantID: "acme-prod"}, "Passw0rd!2345"); err != nil {
+	// Tracker 300: every principal reference is the PRINCIPAL ID.
+	sre, err := s.users.CreateFull(User{Username: "sre", Role: "operator", TenantID: "acme-prod"}, "Passw0rd!2345")
+	if err != nil {
 		t.Fatal(err)
 	}
 	s.backfillBindings() // gives sre its home binding at tenant:acme-prod
 	// Grant a second tenant.
-	if _, err := s.bindings.Add(RoleBinding{PrincipalID: "sre", RoleID: "operator", ScopeID: scopeTenant("globex"), Effect: EffectAllow}); err != nil {
+	if _, err := s.bindings.Add(RoleBinding{PrincipalID: sre.ID, RoleID: "operator", ScopeID: scopeTenant("globex"), Effect: EffectAllow}); err != nil {
 		t.Fatal(err)
 	}
-	if !s.reachesTenant("sre", "acme-prod") || !s.reachesTenant("sre", "globex") {
+	if !s.reachesTenant(sre.ID, "acme-prod") || !s.reachesTenant(sre.ID, "globex") {
 		t.Error("sre should reach both bound tenants")
 	}
-	if s.reachesTenant("sre", "acme-dev") {
+	if s.reachesTenant(sre.ID, "acme-dev") {
 		t.Error("sre must NOT reach acme-dev (no binding)")
 	}
-	got, all := s.accessibleTenants("sre")
+	got, all := s.accessibleTenants(sre.ID)
 	if all || len(got) != 2 {
 		t.Fatalf("accessibleTenants=%v all=%v, want 2 tenants", got, all)
 	}
@@ -162,40 +164,37 @@ func TestBindingsAPINoEscalation(t *testing.T) {
 	if st, _ := do(t, srv, "POST", "/api/tenants", admin, map[string]any{"name": "Acme Prod", "org_id": "acme-corp"}); st != 201 {
 		t.Fatal("create tenant")
 	}
-	if st, b := do(t, srv, "POST", "/api/users", admin, map[string]any{
+	// Tracker 300: a binding names the PRINCIPAL ID the create response returns.
+	bossID := createUserID(t, srv, admin, map[string]any{
 		"username": "boss", "password": "Passw0rd!2345", "role": "org-admin", "tenant_id": "acme-prod",
-	}); st != 201 {
-		t.Fatalf("create boss: %d %s", st, b)
-	}
+	})
 	if st, b := do(t, srv, "POST", "/api/bindings", admin, map[string]any{
-		"principal_id": "boss", "role_id": "org-admin", "scope_id": "org:acme-corp",
+		"principal_id": bossID, "role_id": "org-admin", "scope_id": "org:acme-corp",
 	}); st != 201 {
 		t.Fatalf("grant org-admin binding: %d %s", st, b)
 	}
 	// a target user to receive grants
-	if st, _ := do(t, srv, "POST", "/api/users", admin, map[string]any{
+	aliceID := createUserID(t, srv, admin, map[string]any{
 		"username": "alice", "password": "Passw0rd!2345", "role": "operator", "tenant_id": "acme-prod",
-	}); st != 201 {
-		t.Fatal("create alice")
-	}
+	})
 
 	boss := login(t, srv, "boss", "Passw0rd!2345").Token
 
 	// org-admin grants operator within its org → allowed.
 	if st, b := do(t, srv, "POST", "/api/bindings", boss, map[string]any{
-		"principal_id": "alice", "role_id": "operator", "scope_id": "tenant:acme-prod",
+		"principal_id": aliceID, "role_id": "operator", "scope_id": "tenant:acme-prod",
 	}); st != 201 {
 		t.Errorf("org-admin grant within org: got %d, want 201: %s", st, b)
 	}
 	// org-admin tries to grant super-admin → forbidden (no escalation).
 	if st, _ := do(t, srv, "POST", "/api/bindings", boss, map[string]any{
-		"principal_id": "alice", "role_id": "super-admin", "scope_id": "tenant:acme-prod",
+		"principal_id": aliceID, "role_id": "super-admin", "scope_id": "tenant:acme-prod",
 	}); st != 403 {
 		t.Errorf("org-admin grant super-admin: got %d, want 403", st)
 	}
 	// org-admin tries platform scope → forbidden.
 	if st, _ := do(t, srv, "POST", "/api/bindings", boss, map[string]any{
-		"principal_id": "alice", "role_id": "operator", "scope_id": "platform",
+		"principal_id": aliceID, "role_id": "operator", "scope_id": "platform",
 	}); st != 403 {
 		t.Errorf("org-admin grant at platform: got %d, want 403", st)
 	}
@@ -204,7 +203,7 @@ func TestBindingsAPINoEscalation(t *testing.T) {
 		t.Fatal("create globex")
 	}
 	if st, _ := do(t, srv, "POST", "/api/bindings", boss, map[string]any{
-		"principal_id": "alice", "role_id": "operator", "scope_id": "tenant:globex",
+		"principal_id": aliceID, "role_id": "operator", "scope_id": "tenant:globex",
 	}); st != 403 {
 		t.Errorf("org-admin grant into another org: got %d, want 403", st)
 	}

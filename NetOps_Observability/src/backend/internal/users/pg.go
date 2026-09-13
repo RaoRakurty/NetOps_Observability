@@ -80,7 +80,7 @@ func NewPGStore(db DB, d Deps) (*PGStore, error) {
 
 // migrateLocalAuthSource is the pg twin of FileStore.load()'s one-time H1
 // normalization: rows written by Create/SeedAdmin before the stamp carry an
-// empty auth_source, which UpsertFederated used to read as "not local" and
+// empty auth_source, which the username-keyed federated upsert used to read as "not local" and
 // merge an IdP identity into. Runs at construction, platform scope, and is
 // idempotent (matches nothing once every row is stamped). Fail-closed: a store
 // that cannot prove its local/federated split does not open.
@@ -591,7 +591,7 @@ func (s *PGStore) ResolveFederatedUnbound(a Assertion) (User, error) {
 }
 
 func (s *PGStore) resolve(a Assertion, realm Realm, provision, unbound bool) (User, error) {
-	a.Identity = a.Identity.normalized()
+	a.Identity = a.normalized()
 	if err := validateAssertion(a); err != nil {
 		return User{}, err
 	}
@@ -856,88 +856,6 @@ func mintFederatedIDTx(ctx context.Context, tx pgx.Tx, a Assertion, tenant strin
 		return "", fmt.Errorf("%w: federated id %q already held by a different identity", ErrIdentityConflict, id)
 	}
 	return id, nil
-}
-
-// ---- deprecated username-keyed federated upsert ---------------------------
-
-// UpsertFederated provisions or refreshes a user authenticated by an external
-// IdP, keyed by USERNAME.
-//
-// Deprecated: tracker 300 — username is not an identity. Superseded by
-// ResolveFederated / ResolveFederatedUnbound. Kept UNCHANGED in behaviour only
-// so the doors keep compiling until the 300-doors change rewrites them.
-func (s *PGStore) UpsertFederated(username, email, displayName, role, source, tenant string) (User, error) {
-	return s.UpsertFederatedInRealm(username, email, displayName, role, source, tenant, Realm{})
-}
-
-// UpsertFederatedInRealm is the pg twin of the FileStore method: the realm is
-// checked inside the SAME transaction that holds the row FOR UPDATE, so the
-// refusal and the merge write can never interleave.
-//
-// Deprecated: tracker 300 — see UpsertFederated.
-func (s *PGStore) UpsertFederatedInRealm(username, email, displayName, role, source, tenant string, realm Realm) (User, error) {
-	username = strings.TrimSpace(username)
-	if username == "" {
-		return User{}, errors.New("username required")
-	}
-	if source == "" {
-		source = ProtocolOIDC
-	}
-	ctx, cancel := usersCtx()
-	defer cancel()
-	id := legacyUserID(username)
-	var out User
-	err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
-		u, err := loadUserTx(ctx, tx, id)
-		switch {
-		case err == nil:
-			// Existing account. A LOCAL account (IsLocalSource — "" is local) is
-			// REFUSED (H1): merging would bypass the local password + MFA and let
-			// the IdP re-role/re-source the record.
-			if IsLocalSource(u.AuthSource) {
-				return ErrLocalAccount
-			}
-			if !realm.Permits(u.TenantID) {
-				return ErrForeignTenant
-			}
-			u = MergeFederated(u, email, displayName, s.deps.GuardRole(role, u.TenantID, username, source), source)
-			if err := writeUserTx(ctx, tx, u); err != nil {
-				return err
-			}
-			out = u
-			return nil
-		case errors.Is(err, ErrNoSuchUser):
-			// First federated login — provision a passwordless account. Cap-exempt
-			// so SSO never locks out at MAX_USERS.
-			if tenant == "" {
-				tenant = s.deps.DefaultTenant
-			}
-			if !realm.Permits(tenant) {
-				return ErrForeignTenant
-			}
-			role = s.deps.GuardRole(role, tenant, username, source)
-			nu := User{
-				ID: id, Username: username, Role: role, Email: email, DisplayName: displayName,
-				TenantID: tenant, Status: "active", AuthSource: source, CreatedAt: time.Now().UTC(),
-			}
-			data, err := marshalUserRow(nu)
-			if err != nil {
-				return err
-			}
-			if _, err := tx.Exec(ctx, `INSERT INTO users (id, tenant_id, data) VALUES ($1, $2, $3)`,
-				id, normTenant(nu.TenantID), data); err != nil {
-				return err
-			}
-			out = nu
-			return nil
-		default:
-			return err
-		}
-	})
-	if err != nil {
-		return User{}, err
-	}
-	return out, nil
 }
 
 // ---- transaction helpers (platform-scope tx already open) ------------------

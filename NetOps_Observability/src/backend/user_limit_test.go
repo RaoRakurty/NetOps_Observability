@@ -36,8 +36,14 @@ func TestUserLimitEnforced(t *testing.T) {
 		t.Errorf("store should hold exactly the cap (2), got %d", got)
 	}
 
-	// Federated provisioning is exempt so SSO never locks out at the cap.
-	if _, err := us.UpsertFederated("ext-user", "e@x.com", "Ext", RoleReadOnly, "oidc", ""); err != nil {
+	// Federated provisioning is exempt so SSO never locks out at the cap. Keyed
+	// by the canonical tuple (tracker 300): a login name is not an identity.
+	if _, err := us.ResolveFederatedUnbound(users.Assertion{
+		Identity:    users.Identity{Issuer: "https://kc.example.test/realms/x", Subject: "kc-sub-ext", Protocol: users.ProtocolOIDC},
+		Email:       "e@x.com",
+		DisplayName: "Ext",
+		Role:        RoleReadOnly,
+	}); err != nil {
 		t.Errorf("federated provisioning should bypass the cap: %v", err)
 	}
 }

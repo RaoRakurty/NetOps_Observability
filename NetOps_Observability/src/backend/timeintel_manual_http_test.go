@@ -28,13 +28,17 @@ type timeEventWire struct {
 	CreatedBy string `json:"created_by"`
 }
 
-func setupTimeEventOrgs(t *testing.T) (srv *httptest.Server, tokens map[string]string) {
+// setupTimeEventOrgs returns the server, one token per org and the PRINCIPAL ID
+// each token acts as — `created_by` is stamped from the token's subject, which
+// since tracker 300 is the opaque principal id, never the login name.
+func setupTimeEventOrgs(t *testing.T) (srv *httptest.Server, tokens map[string]string, principals map[string]string) {
 	t.Helper()
 	hs, s := newTestServerState(t)
 	s.incidentTimeline = timeintel.NewMemTimelineStore()
 
 	admin := login(t, hs, "admin", "Passw0rd!2345").Token
 	tokens = map[string]string{"admin": admin}
+	principals = map[string]string{}
 	for _, name := range []string{"A", "B"} {
 		st, b := do(t, hs, "POST", "/api/orgs", admin, map[string]any{"name": "Org " + name})
 		if st != 201 {
@@ -45,19 +49,16 @@ func setupTimeEventOrgs(t *testing.T) (srv *httptest.Server, tokens map[string]s
 			t.Fatalf("create tenant %s: %d %s", name, st, b)
 		}
 		user := "tev-user-" + name
-		st, b2 := do(t, hs, "POST", "/api/users", admin, map[string]any{
+		principals[name] = createUserID(t, hs, admin, map[string]any{
 			"username": user, "password": "Passw0rd!2345", "role": "operator", "tenant_id": idOf(t, b),
 		})
-		if st != 201 {
-			t.Fatalf("create user %s: %d %s", name, st, b2)
-		}
 		tokens[name] = login(t, hs, user, "Passw0rd!2345").Token
 	}
-	return hs, tokens
+	return hs, tokens, principals
 }
 
 func TestTimeEventsCloseIsolationAndVerification(t *testing.T) {
-	srv, tok := setupTimeEventOrgs(t)
+	srv, tok, principal := setupTimeEventOrgs(t)
 	const corr = "33333333-3333-3333-3333-333333333333"
 	path := "/api/correlations/" + corr + "/time-events"
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -75,8 +76,8 @@ func TestTimeEventsCloseIsolationAndVerification(t *testing.T) {
 		t.Fatalf("close response: %s", b)
 	}
 	// 1) actor stamped from the token, never the body.
-	if created.CreatedBy != "tev-user-A" {
-		t.Fatalf("created_by = %q, want tev-user-A", created.CreatedBy)
+	if created.CreatedBy != principal["A"] {
+		t.Fatalf("created_by = %q, want A's principal id %q", created.CreatedBy, principal["A"])
 	}
 	// 2) the override is server-labeled in the stored note — never silent.
 	if !strings.HasPrefix(created.Note, "Override — closed while the signal was still present") {

@@ -317,23 +317,28 @@ type server struct {
 	bindings         *bindingStore
 	securitySettings *securitySettingsStore
 	loginThrottle    *loginguard.Throttle // in-memory failed-login lockout (best-effort)
-	sessions         *session.Store       // server-side session lifecycle (idle/absolute/revocation)
-	apiKeys          *apikey.Store
-	refresh          *session.RefreshStore
-	snmpCreds        *snmpcred.Store
-	credOverrides    *credOverrideStore // learned SNMP credential bindings (credential sentinel)
-	credSentinel     *credSentinel      // self-healing credential resolution loop
-	sshHosts         *sshHostStore      // #20/device-ssh: TOFU host-key store for the SSH gateway
-	snmpProfiles     *snmpProfileStore
-	saved            saved.Repo
-	audit            auditRepo
-	notifyCfg        *notifyConfigStore
-	contactPoints    *contactPointStore
-	deviceLocations  *deviceLocationStore
-	sites            *sitesStore      // internal SoT sites (default provider)
-	deviceSites      *deviceSiteStore // operator device→site bindings (intent)
-	wanPolicy        *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
-	systemNet        *systemNetStore  // platform DNS + NTP system settings (clock sync + URL resolution)
+	// identityLegacyBinds counts §2.6 legacy lazy binds since boot
+	// (netops_identity_legacy_bound_total). The exception is flagged for the
+	// owner's veto, so it has to be MEASURABLE, not merely documented: on a
+	// converged estate this stays at 0 forever.
+	identityLegacyBinds atomic.Uint64
+	sessions            *session.Store // server-side session lifecycle (idle/absolute/revocation)
+	apiKeys             *apikey.Store
+	refresh             *session.RefreshStore
+	snmpCreds           *snmpcred.Store
+	credOverrides       *credOverrideStore // learned SNMP credential bindings (credential sentinel)
+	credSentinel        *credSentinel      // self-healing credential resolution loop
+	sshHosts            *sshHostStore      // #20/device-ssh: TOFU host-key store for the SSH gateway
+	snmpProfiles        *snmpProfileStore
+	saved               saved.Repo
+	audit               auditRepo
+	notifyCfg           *notifyConfigStore
+	contactPoints       *contactPointStore
+	deviceLocations     *deviceLocationStore
+	sites               *sitesStore      // internal SoT sites (default provider)
+	deviceSites         *deviceSiteStore // operator device→site bindings (intent)
+	wanPolicy           *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
+	systemNet           *systemNetStore  // platform DNS + NTP system settings (clock sync + URL resolution)
 	// DATA-PROTECTION-BEGIN — the whole Data Protection domain lives in
 	// internal/dataprotect: the backup intent store + live DR status, the
 	// netops-daily SM policy control plane, the snapshot inventory/management
@@ -910,7 +915,12 @@ func newServer() *server {
 	engine := alerts.NewEngine(os.Getenv("RULES_FILE"), notifier)
 	userRules := newUserRulesStore(envOr("USER_RULES_FILE", "/data/user_rules.json"))
 
-	users, err := newUsersStore(envOr("USERS_FILE", "/data/users.json"))
+	// identityAuditSink is the §2.6 legacy-bind reporter. The store is built
+	// FROM it and the server is built from the store, so the real reporter is
+	// bound once `srv` exists (see the bind below); until then it is inert, and
+	// no door can be reached before then.
+	identitySink := &identityAuditSink{}
+	users, err := newUsersStore(envOr("USERS_FILE", "/data/users.json"), identitySink)
 	if err != nil {
 		log.Fatalf("user store: %v", err)
 	}
@@ -920,16 +930,39 @@ func newServer() *server {
 	); err != nil {
 		log.Printf("seed admin (non-fatal): %v", err)
 	}
+	// Tracker 300 §3 "Enforce": every LOCAL account holds its identity and no
+	// account holds two — checked after the store's expand + backfill and after
+	// SeedAdmin, and FATAL. A store that fails this can resolve a federated
+	// assertion into the wrong record, which is the whole class of defect this
+	// work closes; it refuses rather than repairing, so the estate is left
+	// exactly as found for the operator to inspect.
+	if err := verifyIdentityInvariantsAtBoot(users); err != nil {
+		log.Fatalf("user store: %v", err)
+	}
 	// Break-glass admin recovery: when ADMIN_RESET_PASSWORD is set, force the
 	// bootstrap admin's password on boot (SeedAdmin only ever seeds a *new* admin,
 	// so a rotated/forgotten password otherwise locks everyone out). Unset it
 	// again after recovering. Logged loudly on purpose.
 	if pw := os.Getenv("ADMIN_RESET_PASSWORD"); pw != "" {
 		adminUser := envOr("ADMIN_USERNAME", "admin")
-		if err := users.ResetPassword(adminUser, pw); err != nil {
-			log.Printf("admin password reset (non-fatal): %v", err)
-		} else {
-			log.Printf("SECURITY: reset password for admin %q via ADMIN_RESET_PASSWORD — unset this env now", adminUser)
+		// Tracker 300: the store is keyed by the opaque principal id, so the
+		// LOGIN NAME has to be resolved first. A fresh install's admin carries a
+		// `u_…` id that is nothing like its username, and the old
+		// ResetPassword(username) call would simply have missed it — a
+		// break-glass path that silently does nothing is worse than one that
+		// fails loudly. More than one tenant holding the name is refused rather
+		// than guessed: an operator must say WHICH admin.
+		switch matches, ok := users.LookupLocalAny(adminUser); {
+		case !ok || len(matches) == 0:
+			log.Printf("admin password reset (non-fatal): no local account named %q", adminUser)
+		case len(matches) > 1:
+			log.Printf("admin password reset (non-fatal): %d tenants hold a local account named %q — refusing to guess which one to reset", len(matches), adminUser)
+		default:
+			if err := users.ResetPassword(matches[0].ID, pw); err != nil {
+				log.Printf("admin password reset (non-fatal): %v", err)
+			} else {
+				log.Printf("SECURITY: reset password for admin %q via ADMIN_RESET_PASSWORD — unset this env now", adminUser)
+			}
 		}
 	}
 
@@ -1099,6 +1132,10 @@ func newServer() *server {
 	// platform owners are not interchangeable. Wired here, after srv exists,
 	// because resolving the restriction needs the tenant store and the bindings.
 	srv.hub.SetScopeSalt(srv.broadcastRestrictionSalt)
+	// Tracker 300 §2.6: bind the legacy-bind reporter now that srv (and its audit
+	// sink) exists. Until this line the sink is inert — which is correct, because
+	// no door is reachable before the listener starts.
+	identitySink.bind(srv.onIdentityLegacyBound)
 	// DATA-PROTECTION-BEGIN — the Data Protection domain (internal/dataprotect).
 	// Built here, after srv exists, because every seam it takes is a method on
 	// *server (the platform-admin gate, the audit sink, the OpenSearch caller).
@@ -4514,6 +4551,12 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "# TYPE netops_login_throttle_saturated_total counter\n")
 		fmt.Fprintf(w, "netops_login_throttle_saturated_total %d\n", s.loginThrottle.Saturations())
 	}
+	// Tracker 300 §2.6: the legacy lazy bind is the ONE place username equality
+	// is ever consulted, and it is flagged for the owner's veto — so it is
+	// counted. A converged estate never increments this again.
+	fmt.Fprintf(w, "# HELP netops_identity_legacy_bound_total Pre-migration federated accounts adopted by the bounded §2.6 legacy identity bind since boot.\n")
+	fmt.Fprintf(w, "# TYPE netops_identity_legacy_bound_total counter\n")
+	fmt.Fprintf(w, "netops_identity_legacy_bound_total %d\n", s.identityLegacyBinds.Load())
 	// F-21: a response body that failed to encode used to be a 200 with zero
 	// bytes and no trace anywhere. This counter is that trace.
 	fmt.Fprintf(w, "# HELP netops_json_encode_failures_total Responses that failed to JSON-encode and were answered 500 instead of an empty 200.\n")

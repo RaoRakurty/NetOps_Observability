@@ -21,7 +21,6 @@ package users
 // legacyBindPermitted below, with a named condition per rule.
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -37,7 +36,7 @@ import (
 //     account, however its subject is spelled, because it cannot even name the
 //     namespace local accounts live in.
 func validateAssertion(a Assertion) error {
-	if err := a.Identity.validate(); err != nil {
+	if err := a.validate(); err != nil {
 		return err
 	}
 	if a.Issuer == LocalIssuer || a.Protocol == ProtocolLocal {
@@ -204,7 +203,7 @@ func (s *FileStore) ResolveFederatedUnbound(a Assertion) (User, error) {
 }
 
 func (s *FileStore) resolve(a Assertion, realm Realm, provision, unbound bool) (User, error) {
-	a.Identity = a.Identity.normalized()
+	a.Identity = a.normalized()
 	if err := validateAssertion(a); err != nil {
 		return User{}, err
 	}
@@ -276,7 +275,7 @@ func (s *FileStore) resolveLocked(a Assertion, realm Realm, provision, unbound b
 // and refuses an ambiguous result rather than picking one.
 func (s *FileStore) lookupTupleLocked(a Assertion, unbound bool) (string, error) {
 	if !unbound {
-		return s.byTuple[a.Identity.key()], nil
+		return s.byTuple[a.key()], nil
 	}
 	var found string
 	for tk, owner := range s.byTuple {
@@ -370,7 +369,7 @@ func (s *FileStore) bindLegacyLocked(a Assertion, realm Realm, unbound bool) (Us
 		// The tuple is already claimed by someone else: do NOT adopt, and do NOT
 		// fall through to provisioning a duplicate of a claimed identity.
 		s.putLocked(before)
-		return User{}, false, fmt.Errorf("%w: %v", ErrIdentityConflict, err)
+		return User{}, false, fmt.Errorf("%w: %w", ErrIdentityConflict, err)
 	}
 	s.putLocked(u)
 	if err := s.flushLocked(); err != nil {
@@ -398,7 +397,7 @@ func (s *FileStore) provisionLocked(a Assertion, realm Realm) (User, error) {
 	role := s.deps.GuardRole(a.Role, tenant, id, a.Protocol)
 	u := newFederatedUser(a, id, tenant, role, now)
 	if err := s.indexLocked(u); err != nil {
-		return User{}, fmt.Errorf("%w: %v", ErrIdentityConflict, err)
+		return User{}, fmt.Errorf("%w: %w", ErrIdentityConflict, err)
 	}
 	s.putLocked(u)
 	if err := s.flushLocked(); err != nil {
@@ -423,77 +422,4 @@ func (s *FileStore) mintFederatedIDLocked(a Assertion, tenant string) (string, e
 		return "", fmt.Errorf("%w: federated id %q already held by a different identity", ErrIdentityConflict, id)
 	}
 	return id, nil
-}
-
-// ---- deprecated username-keyed federated upsert ---------------------------
-
-// UpsertFederated provisions or refreshes a user authenticated by an external
-// IdP, keyed by USERNAME.
-//
-// Deprecated: tracker 300 — username is not an identity. Superseded by
-// ResolveFederated / ResolveFederatedUnbound, which key on
-// (tenant_id, issuer, subject). Kept UNCHANGED in behaviour only so the doors
-// keep compiling until the 300-doors change rewrites them, and deleted by that
-// change. Nothing new may call it.
-func (s *FileStore) UpsertFederated(username, email, displayName, role, source, tenant string) (User, error) {
-	return s.UpsertFederatedInRealm(username, email, displayName, role, source, tenant, Realm{})
-}
-
-// UpsertFederatedInRealm is UpsertFederated with the flow's login realm applied.
-// An EXISTING federated account whose tenant the realm does not reach is refused
-// with ErrForeignTenant BEFORE the merge, inside the same lock, so a sign-in
-// from another tenant's IdP cannot rewrite the account's role or auth source on
-// its way to being refused.
-//
-// Deprecated: tracker 300 — see UpsertFederated.
-func (s *FileStore) UpsertFederatedInRealm(username, email, displayName, role, source, tenant string, realm Realm) (User, error) {
-	username = strings.TrimSpace(username)
-	if username == "" {
-		return User{}, errors.New("username required")
-	}
-	if source == "" {
-		source = ProtocolOIDC
-	}
-	key := legacyUserID(username)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if u, ok := s.users[key]; ok {
-		if IsLocalSource(u.AuthSource) {
-			return User{}, ErrLocalAccount
-		}
-		// The account must live in the realm this flow came in on. Refused here,
-		// before MergeFederated, so the record is left exactly as it was.
-		if !realm.Permits(u.TenantID) {
-			return User{}, ErrForeignTenant
-		}
-		// Federated account — keep it in sync with the IdP (SR-025: guard the
-		// IdP-mapped role against silent platform-owner escalation, using the
-		// account's existing tenant).
-		u = MergeFederated(u, email, displayName, s.deps.GuardRole(role, u.TenantID, username, source), source)
-		s.putLocked(u)
-		if err := s.flushLocked(); err != nil {
-			return User{}, err
-		}
-		return u, nil
-	}
-	if tenant == "" {
-		tenant = s.deps.DefaultTenant
-	}
-	// A new account is provisioned into the realm the flow is bound to. The
-	// caller already proved the connection belongs to that realm; this is the
-	// same rule applied one layer down, so the two can never disagree.
-	if !realm.Permits(tenant) {
-		return User{}, ErrForeignTenant
-	}
-	role = s.deps.GuardRole(role, tenant, username, source)
-	u := User{
-		ID: key, Username: username, Role: role, Email: email, DisplayName: displayName,
-		TenantID: tenant, Status: "active", AuthSource: source, CreatedAt: time.Now().UTC(),
-	}
-	s.putLocked(u)
-	if err := s.flushLocked(); err != nil {
-		delete(s.users, key)
-		return User{}, err
-	}
-	return u, nil
 }
