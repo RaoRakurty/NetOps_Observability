@@ -125,12 +125,74 @@ class StallGate:
         """True when the base size was not enough and the fixture was grown."""
         return len(self.tried) > 1
 
+    @property
+    def elasticity(self) -> float | None:
+        """How hard the axis actually pays, over the whole trail: the exponent
+        `e` in `value ~ size**e`.
+
+        A sound growth axis reads ~1.0 (linear) or above (the EV-keyed merge
+        witness is quadratic). `None` when there is nothing to compare —
+        one attempt, or a degenerate measurement.
+        """
+        if len(self.tried) < 2:
+            return None
+        (s0, v0), (s1, v1) = self.tried[0], self.tried[-1]
+        if s1 <= s0 or v0 <= 0 or v1 <= 0:
+            return None
+        return math.log(v1 / v0) / math.log(s1 / s0)
+
+    @property
+    def saturated(self) -> bool:
+        """The axis STOPPED PAYING: the fixture was grown and the measurement
+        did not follow.
+
+        This is the defect that cost a diagnosis cycle on 2026-09-12 and is the
+        reason this property exists. `calibrated_stall` extrapolates on a LINEAR
+        cost model, so when the axis saturates it asks for a bigger and bigger
+        fixture, gets nothing back, burns every attempt and then reports "this
+        machine outran the size cap" — blaming the hardware for a workload that
+        was bounded all along. `test_loop_yield_resilience` walked exactly that
+        wall: `CORR_OPEN_OBJECTS_MAX` force-closes past 5,000 objects, so 700 ->
+        12,342 devices (17.6x) moved the stall 2.05 s -> 3.31 s (1.61x, and the
+        last step went DOWN) — elasticity 0.17 against the ~1.0 a sound axis
+        reads.
+
+        Deliberately ADVISORY: it changes what a failure SAYS, never whether it
+        fails. A gate that cannot witness its defect is red either way; the
+        point is that the next reader is told to fix the invariant instead of
+        raising the cap.
+        """
+        if len(self.tried) < 2:
+            return False
+        (s0, v0), (s1, v1) = self.tried[0], self.tried[-1]
+        if s1 <= s0 or v0 <= 0:
+            return False
+        if v1 <= v0:
+            return True                  # grew the fixture, got the same or less
+        e = self.elasticity
+        return e is not None and e < 0.5
+
     def report(self) -> str:
         # 4 significant digits, so the same formatter reads correctly for a
         # gate measured in milliseconds (1086) and one measured in seconds
         # (0.4673) — `:.0f` printed the latter as "0".
         trail = ", ".join(f"size {size} -> {value:.4g} {self.unit}"
                           for size, value in self.tried)
+        if self.saturated:
+            (s0, v0), (s1, v1) = self.tried[0], self.tried[-1]
+            e = self.elasticity
+            return (
+                f"{self.name}: THE GROWTH AXIS SATURATED — growing the fixture "
+                f"{s1 / s0:.1f}x moved the measurement {v1 / v0:.2f}x "
+                f"(elasticity {e:.2f}; a sound axis reads ~1.0 or above) "
+                f"[{trail}], cap {self.max_size}. This is NOT a fast machine "
+                f"and RAISING THE CAP WILL NOT HELP: something bounds the "
+                f"workload — a cap like CORR_OPEN_OBJECTS_MAX, a threshold the "
+                f"grown fixture crossed so it stopped being the shape under "
+                f"test, or a defect that is simply gone. Make this gate's "
+                f"invariant machine-independent (a COUNT, as "
+                f"test_loop_yield_resilience did on 2026-09-12) and retire it "
+                f"from this module. Do NOT widen a tolerance.")
         return (
             f"{self.name}: the workload did not reach the adequacy floor on "
             f"this machine — {self.value:.4g} {self.unit} against a floor of "
