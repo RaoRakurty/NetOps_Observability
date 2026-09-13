@@ -22,7 +22,7 @@ import { Group } from "../components/board/panels";
 import { AwsLogo } from "../components/ConnectorLogos";
 import ConnectorGlyph from "../components/ConnectorGlyph";
 import { teamsErrors, snsErrors, hasErrors, FieldErrors } from "../lib/notifyValidation";
-import { operatorError } from "../lib/errors";
+import { operatorError, httpFailure } from "../lib/errors";
 import Icon from "../components/Icon";
 import { useAuth } from "../hooks/useAuth";
 import AskIris from "../components/AskIris";
@@ -66,11 +66,11 @@ export const LANDING_OPTIONS: { route: string; label: string }[] = [
   { route: "#/investigate/topology", label: "Topology" },
 ];
 
-function useReload<T>(loader: () => Promise<T>): [T | undefined, string | null, () => void, (e: string | null) => void] {
+function useReload<T>(loader: () => Promise<T>, fallback = "That could not be loaded."): [T | undefined, string | null, () => void, (e: string | null) => void] {
   const [data, setData] = useState<T>();
   const [err, setErr] = useState<string | null>(null);
   const reload = useCallback(() => {
-    loader().then(setData).catch((e) => setErr((e as Error).message));
+    loader().then(setData).catch((e: unknown) => setErr(operatorError(e, fallback)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(reload, [reload]);
@@ -103,7 +103,7 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
   const platform = !!user?.platform_admin;
   const locked = scopeTenant !== undefined; // embedded → scope fixed by the parent
 
-  const [users, err, reload, setErr] = useReload(() => api.listUsers());
+  const [users, err, reload, setErr] = useReload(() => api.listUsers(), "The user list could not be read.");
   const [roles] = useReload(() => api.listRoles());
   const [tenants] = useReload(() => api.listTenants());
   const [adding, setAdding] = useState(false);
@@ -156,11 +156,11 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
       setForm({ ...BLANK_USER });
       setAdding(false);
       reload();
-    } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
+    } catch (e) { setErr(operatorError(e, "That user was not created.")); }
   };
   const changeRole = async (u: AdminUser, role: string) => {
     setErr(null);
-    try { await api.updateUser(u.username, { role }); reload(); } catch (e) { setErr((e as Error).message); }
+    try { await api.updateUser(u.username, { role }); reload(); } catch (e) { setErr(operatorError(e, "That role change was not saved.")); }
   };
 
   const all = users ?? [];
@@ -200,7 +200,7 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
       for (const u of selUsers) await fn(u);
       clearSel();
       reload();
-    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+    } catch (e) { setErr(operatorError(e, "That change was not applied to every selected user.")); } finally { setBusy(false); }
   };
   const lock = () => runBatch((u) => api.updateUser(u.username, { status: "disabled" }));
   const unlock = () => runBatch((u) => api.updateUser(u.username, { status: "active" }));
@@ -219,7 +219,7 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
     if (!pw) return;
     setErr(null); setBusy(true);
     try { await api.updateUser(u.username, { password: pw }); clearSel(); reload(); }
-    catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+    catch (e) { setErr(operatorError(e, "That password was not changed.")); } finally { setBusy(false); }
   };
 
   // Knob enablement reflects what the selection can actually do.
@@ -417,7 +417,7 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
 // variant: "builtin" = the standard User Roles (read-only), "custom" = Custom
 // User Roles (create/edit), "all" = both in one matrix (legacy).
 export function RolesAdmin({ scopeTenant, variant = "all" }: { scopeTenant?: string; variant?: "all" | "builtin" | "custom" } = {}) {
-  const [data, err, reload, setErr] = useReload(() => api.listRoles());
+  const [data, err, reload, setErr] = useReload(() => api.listRoles(), "The role list could not be read.");
   const modules = data?.modules ?? [];
   const allRoles = data?.roles ?? [];
   const roles = variant === "builtin" ? allRoles.filter((r) => r.builtin)
@@ -432,17 +432,17 @@ export function RolesAdmin({ scopeTenant, variant = "all" }: { scopeTenant?: str
     const cur = role.permissions[module] ?? 0;
     const next = { ...role, permissions: { ...role.permissions, [module]: (cur + 1) % 4 } };
     setErr(null);
-    try { await api.saveRole(next); reload(); } catch (e) { setErr((e as Error).message); }
+    try { await api.saveRole(next); reload(); } catch (e) { setErr(operatorError(e, "That permission change was not saved.")); }
   };
   const addRole = async () => {
     const name = window.prompt("New role name (e.g. NOC Engineer)");
     if (!name) return;
     setErr(null);
-    try { await api.saveRole({ name, permissions: {} }); reload(); } catch (e) { setErr((e as Error).message); }
+    try { await api.saveRole({ name, permissions: {} }); reload(); } catch (e) { setErr(operatorError(e, "That role was not created.")); }
   };
   const remove = async (role: Role) => {
     setErr(null);
-    try { await api.deleteRole(role.id!); reload(); } catch (e) { setErr((e as Error).message); }
+    try { await api.deleteRole(role.id!); reload(); } catch (e) { setErr(operatorError(e, "That role was not deleted.")); }
   };
 
   const title = variant === "builtin" ? "User Roles" : variant === "custom" ? "Custom User Roles" : "Roles & Permissions";
@@ -506,7 +506,7 @@ export function RolesAdmin({ scopeTenant, variant = "all" }: { scopeTenant?: str
 // ---- Tenants (multi-tenancy) ----------------------------------------------
 
 export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: string, name: string) => void; orgId?: string } = {}) {
-  const [tenants, err, reload, setErr] = useReload(() => api.listTenants());
+  const [tenants, err, reload, setErr] = useReload(() => api.listTenants(), "The tenant list could not be read.");
   const [orgs] = useReload(() => api.listOrgs());
   const [regions] = useReload(() => api.listRegions());
   const [name, setName] = useState("");
@@ -521,14 +521,14 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
   const orgRegion = (orgId?: string) => (orgs ?? []).find((o) => o.id === (orgId || "global"))?.home_region;
   const changeTenantRegion = async (t: Tenant, value: string) => {
     setErr(null);
-    try { await api.setTenantRegion(t.id, value); reload(); } catch (e) { setErr((e as Error).message); }
+    try { await api.setTenantRegion(t.id, value); reload(); } catch (e) { setErr(operatorError(e, "That region was not changed.")); }
   };
   // Admin-configurable default landing page. Curated to real, safe nav leaves.
   // Editing the parent (global) tenant sets the PLATFORM default; a child tenant
   // overrides it for that tenant ("" = inherit).
   const changeTenantLanding = async (t: Tenant, value: string) => {
     setErr(null);
-    try { await api.setTenantLanding(t.id, value); reload(); } catch (e) { setErr((e as Error).message); }
+    try { await api.setTenantLanding(t.id, value); reload(); } catch (e) { setErr(operatorError(e, "That landing page was not saved.")); }
   };
   // Type-to-confirm delete modal state.
   const [delTarget, setDelTarget] = useState<Tenant | null>(null);
@@ -546,7 +546,7 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
     if (!bgTarget || !bgReason.trim()) return;
     setBgErr(null); setBgBusy(true);
     try { await api.openBreakGlass(bgTarget.id, bgReason.trim(), bgMins); setBgTarget(null); setBgReason(""); }
-    catch (e) { setBgErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
+    catch (e) { setBgErr(operatorError(e, "Emergency access was not opened.")); }
     finally { setBgBusy(false); }
   };
 
@@ -554,7 +554,7 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
     const useOrg = orgId || org;
     if (!name.trim() || !useOrg) return;
     setErr(null);
-    try { await api.createTenant(name.trim(), note.trim(), hideGlobal, useOrg, region); setName(""); setNote(""); setOrg(orgId ?? "global"); setRegion(""); setHideGlobal(false); setAdding(false); reload(); } catch (e) { setErr((e as Error).message); }
+    try { await api.createTenant(name.trim(), note.trim(), hideGlobal, useOrg, region); setName(""); setNote(""); setOrg(orgId ?? "global"); setRegion(""); setHideGlobal(false); setAdding(false); reload(); } catch (e) { setErr(operatorError(e, "That tenant was not created.")); }
   };
   const openDelete = (t: Tenant) => { setDelTarget(t); setDelTyped(""); setDelForce(false); setDelErr(null); };
   const confirmDelete = async () => {
@@ -564,23 +564,26 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
       await api.deleteTenant(delTarget.id, delTyped.trim(), delForce);
       setDelTarget(null); reload();
     } catch (e) {
-      const m = (e as Error).message;
-      // 409 = tenant still has users; reveal the force option.
-      if (/\b409\b|still has/.test(m)) setDelForce(true);
-      setDelErr(m.replace(/^\d+[^:]*:\s*/, ""));
+      // Two different readings of one failure, and they must not be confused.
+      // The STATUS is a CONTRACT the form branches on — 409 = the tenant still
+      // has users, so reveal the force option — and that is what `httpFailure`
+      // is for. What the operator READS is never the envelope.
+      const f = httpFailure(e);
+      if (f?.status === 409 || /still has/.test(f?.body ?? "")) setDelForce(true);
+      setDelErr(operatorError(e, "That tenant was not deleted."));
     } finally { setDelBusy(false); }
   };
   const toggleGlobalVisibility = async (t: Tenant) => {
     setErr(null);
     const hide = !t.operator_restricted;
     if (hide && !window.confirm(`Hide "${t.name}" from the global view?\n\nGlobal/platform-level users will no longer see this tenant's logs, flows, findings or metrics. The tenant's own users are unaffected. Use this for data-privacy / compliance.`)) return;
-    try { await api.setTenantOperatorRestricted(t.id, hide); reload(); } catch (e) { setErr((e as Error).message); }
+    try { await api.setTenantOperatorRestricted(t.id, hide); reload(); } catch (e) { setErr(operatorError(e, "That visibility change was not saved.")); }
   };
   const toggleStatus = async (t: Tenant) => {
     setErr(null);
     const suspend = (t.status || "active") !== "suspended";
     if (suspend && !window.confirm(`Suspend "${t.name}"?\n\nIts users (and API keys) will be unable to sign in or make requests until you reactivate it. The platform operator is unaffected.`)) return;
-    try { await api.setTenantStatus(t.id, suspend ? "suspended" : "active"); reload(); } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
+    try { await api.setTenantStatus(t.id, suspend ? "suspended" : "active"); reload(); } catch (e) { setErr(operatorError(e, "That status change was not saved.")); }
   };
 
   const list = (tenants ?? []).filter((t) => !orgId || (t.org_id || "global") === orgId);
@@ -832,7 +835,7 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
 // An Organization is the top-level customer/account. Each tenant belongs to one
 // org; data region and sign-in are set on the org and inherited by its tenants.
 export function OrgsAdmin({ onManageOrg }: { onManageOrg?: (id: string, name: string) => void } = {}) {
-  const [orgs, err, reload, setErr] = useReload(() => api.listOrgs());
+  const [orgs, err, reload, setErr] = useReload(() => api.listOrgs(), "The organization list could not be read.");
   const [regions] = useReload(() => api.listRegions());
   const [tenants] = useReload(() => api.listTenants());
   const [users] = useReload(() => api.listUsers());
@@ -854,7 +857,7 @@ export function OrgsAdmin({ onManageOrg }: { onManageOrg?: (id: string, name: st
     if (!window.confirm(`Delete organization "${o.name}"?\n\nThis can't be undone. An organization that still has tenants can't be deleted — move or remove its tenants first.`)) return;
     setErr(null);
     try { await api.deleteOrg(o.id); reload(); }
-    catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
+    catch (e) { setErr(operatorError(e, "That organization was not deleted.")); }
   };
 
   const list = orgs ?? [];
@@ -937,7 +940,7 @@ function OrgEditModal({ org, regions, onClose, onSaved }: { org: Org; regions: R
     try {
       await api.updateOrg(org.id, { home_region: region, sso_connection: sso.trim(), note: note.trim() });
       onSaved();
-    } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
+    } catch (e) { setErr(operatorError(e, "Those organization settings were not saved.")); }
     finally { setBusy(false); }
   };
   return (
@@ -975,7 +978,7 @@ function OrgEditModal({ org, regions, onClose, onSaved }: { org: Org; regions: R
 // stack); a region with a configured data plane shows as remote — the model is
 // ready for real regions without code changes.
 export function RegionsAdmin() {
-  const [topo, err] = useReload(() => api.regionTopology());
+  const [topo, err] = useReload(() => api.regionTopology(), "The region map could not be read.");
   const cp = topo?.control_plane;
   const rows = topo?.regions ?? [];
   const active = rows.filter((r) => r.tenants > 0 || r.orgs > 0);
@@ -1086,12 +1089,12 @@ function SecuritySettings({ scopeTenant }: { scopeTenant: string }) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [savedTick, setSavedTick] = useState(false);
-  useEffect(() => { setS(null); api.getSecuritySettings(scope).then(setS).catch((e) => setErr((e as Error).message)); }, [scope]);
+  useEffect(() => { setS(null); api.getSecuritySettings(scope).then(setS).catch((e: unknown) => setErr(operatorError(e, "The user global settings could not be read."))); }, [scope]);
   const upd = (patch: Partial<SecuritySettingsT>) => setS((p) => (p ? { ...p, ...patch } : p));
   const save = async () => {
     if (!s) return; setErr(null); setBusy(true);
     try { setS(await api.saveSecuritySettings(scope, s)); setSavedTick(true); setTimeout(() => setSavedTick(false), 1800); }
-    catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); } finally { setBusy(false); }
+    catch (e) { setErr(operatorError(e, "Those settings were not saved.")); } finally { setBusy(false); }
   };
   if (!s) return <div className="card"><Skeleton w={220} h={20} /></div>;
   const num = (k: keyof SecuritySettingsT) => (
@@ -1152,7 +1155,7 @@ function SecuritySettings({ scopeTenant }: { scopeTenant: string }) {
 // tenant or org, deny, or revoke. The server enforces no-escalation (an org-admin
 // can only grant within its org, never super-admin / platform).
 export function BindingsAdmin() {
-  const [bindings, err, reload, setErr] = useReload(() => api.listBindings());
+  const [bindings, err, reload, setErr] = useReload(() => api.listBindings(), "The access grants could not be read.");
   const [roles] = useReload(() => api.listRoles());
   const [tenants] = useReload(() => api.listTenants());
   const [orgs] = useReload(() => api.listOrgs());
@@ -1184,12 +1187,12 @@ export function BindingsAdmin() {
     try {
       await api.grantBinding({ principal_id: principal, role_id: roleId, scope_id: scopeId, effect });
       setGranting(false); reload();
-    } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); } finally { setBusy(false); }
+    } catch (e) { setErr(operatorError(e, "That access was not granted.")); } finally { setBusy(false); }
   };
   const revoke = async (b: RoleBinding) => {
     if (!window.confirm(`Revoke ${b.role_id} on ${labelScope(b.scope_id)} for ${b.principal_id}?`)) return;
     setErr(null);
-    try { await api.revokeBinding(b.id); reload(); } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
+    try { await api.revokeBinding(b.id); reload(); } catch (e) { setErr(operatorError(e, "That access was not revoked.")); }
   };
 
   const list = bindings ?? [];
@@ -1365,7 +1368,7 @@ function OrgTenants({ orgId, orgName }: { orgId: string; orgName: string }) {
 // org). Same grantBinding model as the global Access screen, scoped.
 function OrgAccessPanel({ orgId, orgName }: { orgId: string; orgName?: string }) {
   const scope = `org:${orgId}`;
-  const [bindings, err, reload, setErr] = useReload(() => api.listBindings());
+  const [bindings, err, reload, setErr] = useReload(() => api.listBindings(), "The access grants could not be read.");
   const [roles] = useReload(() => api.listRoles());
   const [users] = useReload(() => api.listUsers());
   const [assigning, setAssigning] = useState(false);
@@ -1381,12 +1384,12 @@ function OrgAccessPanel({ orgId, orgName }: { orgId: string; orgName?: string })
     if (!principal) return;
     setErr(null); setBusy(true);
     try { await api.grantBinding({ principal_id: principal, role_id: roleId, scope_id: scope, effect: "allow" }); setAssigning(false); reload(); }
-    catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); } finally { setBusy(false); }
+    catch (e) { setErr(operatorError(e, "That access was not granted.")); } finally { setBusy(false); }
   };
   const revoke = async (b: RoleBinding) => {
     if (!window.confirm(`Revoke ${b.role_id} for ${b.principal_id} in ${orgName || "this organization"}?`)) return;
     setErr(null);
-    try { await api.revokeBinding(b.id); reload(); } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
+    try { await api.revokeBinding(b.id); reload(); } catch (e) { setErr(operatorError(e, "That access was not revoked.")); }
   };
 
   return (
@@ -1715,7 +1718,7 @@ function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: (
 
   return (
     <Modal title="Add" subtitle="Organization, tenant, user or access." onClose={onClose}>
-      <Wizard steps={steps} onFinish={finish} onCancel={onClose} finishLabel="Create" />
+      <Wizard steps={steps} onFinish={finish} onCancel={onClose} finishLabel="Create" errorFallback="That user was not created." />
     </Modal>
   );
 }
@@ -1793,7 +1796,7 @@ export function IdentityAccess() {
 // ---- Sessions (admin: live session listing + revocation) -------------------
 
 export function SessionsAdmin() {
-  const [sessions, err, reload, setErr] = useReload(() => api.listSessions());
+  const [sessions, err, reload, setErr] = useReload(() => api.listSessions(), "The session list could not be read.");
   const [q, setQ] = useState("");
   const list = sessions ?? [];
   const active = list.filter((s) => s.status === "active");
@@ -1804,7 +1807,7 @@ export function SessionsAdmin() {
   const revoke = async (s: AdminSession) => {
     if (!window.confirm(`Revoke this session for ${s.display_name || s.user_id}?\n\nThey'll be signed out immediately.`)) return;
     setErr(null);
-    try { await api.revokeSession(s.id); reload(); } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
+    try { await api.revokeSession(s.id); reload(); } catch (e) { setErr(operatorError(e, "That session was not revoked.")); }
   };
   const fmt = (t?: string) => (t ? fmtDateTime(t) : "—");
   const statusBadge = (st: string) => {
@@ -2074,7 +2077,7 @@ const GRANT_TYPE_OPTIONS = ["authorization_code", "client_credentials", "refresh
 type ApiTile = "keys" | "token" | "rest";
 
 export function ApiAccessAdmin() {
-  const [keys, err, reload, setErr] = useReload(() => api.listApiKeys());
+  const [keys, err, reload, setErr] = useReload(() => api.listApiKeys(), "The API key list could not be read.");
   const { user } = useAuth();
   const [label, setLabel] = useState("");
   const [scopes, setScopes] = useState<string[]>(["read:metrics"]);
@@ -2166,8 +2169,8 @@ export function ApiAccessAdmin() {
     // A refused revocation is a security-relevant failure and the operator must
     // read it, not the api.ts envelope: the raw message put internal hostnames
     // and container IPs on the API-keys card. (The list read on this same card
-    // still goes through the shared `useReload`, which has the same raw
-    // message — a file-wide pattern, out of this change's bounded context.)
+    // went through the shared `useReload` and carried the same raw message; the
+    // file-wide sweep that was out of scope then is tracker 293, now done.)
     try { await api.revokeApiKey(k.id); reload(); } catch (e) { setErr(operatorError(e, "That key was not revoked.")); }
   };
 
@@ -2259,6 +2262,7 @@ export function ApiAccessAdmin() {
             </div>
           )}
           <Wizard
+            errorFallback="That key was not created."
             finishLabel="Generate key"
             onFinish={generate}
             steps={[
@@ -2385,7 +2389,7 @@ export function GraphQLExplorer() {
       const res = await api.graphql(query);
       setResult(JSON.stringify(res, null, 2));
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(operatorError(e, "That query did not run."));
       setResult("");
     } finally {
       setBusy(false);
@@ -2435,7 +2439,7 @@ export function GraphQLExplorer() {
 // OpenAPIReference renders a live, grouped index of the REST surface from the
 // generated /api/openapi.json — no external Swagger UI / CDN (offline-friendly).
 function OpenAPIReference({ embedded = false }: { embedded?: boolean }) {
-  const [spec, err] = useReload(() => api.openapi());
+  const [spec, err] = useReload(() => api.openapi(), "The API reference could not be read.");
   if (err) return null;
   const groups: Record<string, { method: string; path: string; summary?: string }[]> = {};
   for (const [path, ops] of Object.entries(spec?.paths ?? {})) {
@@ -2567,7 +2571,7 @@ function LdapAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embed
   useEffect(() => {
     api.ldapConfig()
       .then((r) => setCfg({ ...r.config, role_mappings: r.config.role_mappings ?? [] }))
-      .catch((e) => setMsg((e as Error).message));
+      .catch((e: unknown) => setMsg(operatorError(e, "The LDAP settings could not be read.")));
   }, []);
   if (!cfg) return embedded ? <p className="adm-line">Loading…</p> : <div className="card adm"><h2>LDAP / Active Directory</h2><p className="adm-line">Loading…</p></div>;
 
@@ -2585,12 +2589,12 @@ function LdapAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embed
       if (pw) body.bind_password = pw; // only override the secret when re-typed
       const r = await api.saveLdapConfig(body);
       setCfg(r.config); setPw(""); setMsg("Saved.");
-    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+    } catch (e) { setMsg(operatorError(e, "Those LDAP settings were not saved.")); } finally { setBusy(false); }
   };
   const test = async () => {
     setBusy(true); setResult(null);
     try { setResult(await api.testLdap(testUser || undefined, testPass || undefined)); }
-    catch (e) { setResult({ ok: false, stage: "error", message: (e as Error).message }); }
+    catch (e) { setResult({ ok: false, stage: "error", message: operatorError(e, "The test did not complete.") }); }
     finally { setBusy(false); }
   };
 
@@ -2614,6 +2618,7 @@ function LdapAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embed
         <AskIris topic="auth.ldap" label="LDAP sign-in" />
       </p>
       <Wizard
+        errorFallback="Those LDAP settings were not saved."
         finishLabel="Save"
         onFinish={save}
         steps={[
@@ -2709,7 +2714,7 @@ function TacacsAdminForm({ roleIds, embedded = false }: { roleIds: string[]; emb
   const [testPass, setTestPass] = useState("");
   const [result, setResult] = useState<AuthTestResult | null>(null);
 
-  useEffect(() => { api.tacacsConfig().then((r) => setCfg(r.config)).catch((e) => setMsg((e as Error).message)); }, []);
+  useEffect(() => { api.tacacsConfig().then((r) => setCfg(r.config)).catch((e: unknown) => setMsg(operatorError(e, "The TACACS+ settings could not be read."))); }, []);
   if (!cfg) return embedded ? <p className="adm-line">Loading…</p> : <div className="card adm"><h2>TACACS+</h2><p className="adm-line">Loading…</p></div>;
   const set = (patch: Partial<TacacsConfig>) => setCfg({ ...cfg, ...patch });
 
@@ -2720,12 +2725,12 @@ function TacacsAdminForm({ roleIds, embedded = false }: { roleIds: string[]; emb
       if (secret) body.secret = secret;
       const r = await api.saveTacacsConfig(body);
       setCfg(r.config); setSecret(""); setMsg("Saved.");
-    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+    } catch (e) { setMsg(operatorError(e, "Those TACACS+ settings were not saved.")); } finally { setBusy(false); }
   };
   const test = async () => {
     setBusy(true); setResult(null);
     try { setResult(await api.testTacacs(testUser || undefined, testPass || undefined)); }
-    catch (e) { setResult({ ok: false, stage: "error", message: (e as Error).message }); }
+    catch (e) { setResult({ ok: false, stage: "error", message: operatorError(e, "The test did not complete.") }); }
     finally { setBusy(false); }
   };
 
@@ -2749,6 +2754,7 @@ function TacacsAdminForm({ roleIds, embedded = false }: { roleIds: string[]; emb
         <AskIris topic="auth.tacacs" label="TACACS+ sign-in" />
       </p>
       <Wizard
+        errorFallback="Those TACACS+ settings were not saved."
         finishLabel="Save"
         onFinish={save}
         steps={[
@@ -2908,7 +2914,7 @@ function SsoAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedd
   useEffect(() => {
     api.oidcConfig()
       .then((r) => { setCfg(r.config); setReady(r.ready); })
-      .catch((e) => setMsg((e as Error).message));
+      .catch((e: unknown) => setMsg(operatorError(e, "The single sign-on settings could not be read.")));
   }, []);
   if (!cfg) return embedded ? <p className="adm-line">{msg ?? "Loading…"}</p> : <div className="card adm"><h2>Single Sign-On (OIDC)</h2><p className="adm-line">{msg ?? "Loading…"}</p></div>;
 
@@ -2961,6 +2967,7 @@ function SsoAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedd
       </div>
       {view === "idps" && <SsoIdpPanel roleIds={roleIds} defaultRole={cfg.default_role} />}
       {view === "connection" && <Wizard
+        errorFallback="Those single sign-on settings were not saved."
         finishLabel="Save"
         onFinish={save}
         steps={[
@@ -3047,7 +3054,7 @@ function TokenPolicyForm({ embedded = false }: { embedded?: boolean }) {
     setAccessMin(String(Math.round(p.access_ttl_seconds / 60)));
     setRefreshDays(String(Math.round(p.refresh_ttl_seconds / 86400)));
   };
-  useEffect(() => { api.tokenPolicy().then(load).catch((e) => setMsg((e as Error).message)); }, []);
+  useEffect(() => { api.tokenPolicy().then(load).catch((e: unknown) => setMsg(operatorError(e, "The token policy could not be read."))); }, []);
   if (!tp) return embedded ? <p className="adm-line">{msg ?? "Loading…"}</p> : <div className="card adm"><h2>Token policy</h2><p className="adm-line">{msg ?? "Loading…"}</p></div>;
 
   const b = tp.bounds;
@@ -3059,7 +3066,7 @@ function TokenPolicyForm({ embedded = false }: { embedded?: boolean }) {
         refresh_ttl_seconds: Math.max(1, Math.round(Number(refreshDays) * 86400)),
       });
       load(p); setMsg("Saved. Access TTL applies to new logins immediately; refresh TTL applies to newly issued tokens.");
-    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+    } catch (e) { setMsg(operatorError(e, "That token policy was not saved.")); } finally { setBusy(false); }
   };
 
   const inner = (
@@ -3110,7 +3117,7 @@ export function ExportPolicyForm() {
       syncRows: String(pol.sync_max_rows),
     });
   };
-  useEffect(() => { api.exportPolicy().then(load).catch((e) => setMsg((e as Error).message)); }, []);
+  useEffect(() => { api.exportPolicy().then(load).catch((e: unknown) => setMsg(operatorError(e, "The log export limits could not be read."))); }, []);
   if (!p) return <div className="card adm"><h2>Log export limits</h2><p className="adm-line">{msg ?? "Loading…"}</p></div>;
 
   const set = (k: string) => (v: string) => setF((s) => ({ ...s, [k]: v }));
@@ -3128,7 +3135,7 @@ export function ExportPolicyForm() {
         sync_max_rows: num(f.syncRows),
       });
       load(out); setMsg("Saved. New limits apply to all exports immediately.");
-    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+    } catch (e) { setMsg(operatorError(e, "Those limits were not saved.")); } finally { setBusy(false); }
   };
 
   return (
@@ -3194,7 +3201,7 @@ export function IntegrationsAdmin() {
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    api.itsmConfig().then(setCfg).catch((e) => setErr((e as Error).message));
+    api.itsmConfig().then(setCfg).catch((e: unknown) => setErr(operatorError(e, "The ticketing settings could not be read.")));
     api.integrations().then((r) => { setIntegrations(r.integrations); setInboundEnabled(r.inbound_enabled); }).catch(() => {});
     api.itsmServiceNow().then(setSn).catch(() => {});
     api.itsmJira().then(setJira).catch(() => {});
@@ -3467,7 +3474,7 @@ function ConnectorSetup({ id, cfg, integration, inboundEnabled, onClose, onSaved
 
   return (
     <Modal title={meta.name} subtitle={meta.tagline} logo={<span className={`conn-logo ${id}`}><ConnectorGlyph connector={id} size={28} /></span>} onClose={onClose}>
-      <Wizard steps={steps} onFinish={save} onCancel={onClose} finishLabel="Save & connect" />
+      <Wizard steps={steps} onFinish={save} onCancel={onClose} finishLabel="Save & connect" errorFallback="That connection was not saved." />
     </Modal>
   );
 }
@@ -3546,7 +3553,7 @@ function SyncSettings({ integration, inboundEnabled, webhookHint, onSaved }: {
       if (secret.trim()) body.webhook_secret = secret.trim();
       const next = await api.saveIntegration(integration.provider, body);
       onSaved(next); setSecret(""); setMsg("Saved.");
-    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+    } catch (e) { setMsg(operatorError(e, "Those settings were not saved.")); } finally { setBusy(false); }
   };
 
   return (
@@ -3665,12 +3672,12 @@ export function NotificationsAdmin() {
       resetCp();
       await loadCps();
       flash("cp", "Saved.");
-    } catch (e) { flash("cp", (e as Error).message); }
+    } catch (e) { flash("cp", operatorError(e, "That contact point was not saved.")); }
   };
   const deleteCp = async (cp: ContactPoint) => {
     if (!window.confirm(`Delete contact point "${cp.name}"?`)) return;
     try { await api.deleteContactPoint(cp.id); await loadCps(); }
-    catch (e) { flash("cp", (e as Error).message); }
+    catch (e) { flash("cp", operatorError(e, "That contact point was not deleted.")); }
   };
 
   const flash = (k: string, m: string) => setMsg((p) => ({ ...p, [k]: m }));
@@ -3681,7 +3688,7 @@ export function NotificationsAdmin() {
       const body: Partial<SmtpConfig> = { ...smtp };
       if (secret.smtp) body.pass = secret.smtp;
       setSmtp(await api.saveSmtpConfig(body)); setSecret((s) => ({ ...s, smtp: "" })); flash("smtp", "Saved.");
-    } catch (e) { flash("smtp", (e as Error).message); }
+    } catch (e) { flash("smtp", operatorError(e, "Those email settings were not saved.")); }
   };
   const saveTwilio = async () => {
     if (!twilio) return;
@@ -3689,7 +3696,7 @@ export function NotificationsAdmin() {
       const body: Partial<TwilioConfig> = { ...twilio };
       if (secret.twilio) body.auth_token = secret.twilio;
       setTwilio(await api.saveTwilioConfig(body)); setSecret((s) => ({ ...s, twilio: "" })); flash("twilio", "Saved.");
-    } catch (e) { flash("twilio", (e as Error).message); }
+    } catch (e) { flash("twilio", operatorError(e, "Those SMS settings were not saved.")); }
   };
   const saveNtfy = async () => {
     if (!ntfy) return;
@@ -3697,7 +3704,7 @@ export function NotificationsAdmin() {
       const body: Partial<NtfyConfig> = { ...ntfy };
       if (secret.ntfy) body.token = secret.ntfy;
       setNtfy(await api.saveNtfyConfig(body)); setSecret((s) => ({ ...s, ntfy: "" })); flash("ntfy", "Saved.");
-    } catch (e) { flash("ntfy", (e as Error).message); }
+    } catch (e) { flash("ntfy", operatorError(e, "Those ntfy settings were not saved.")); }
   };
   const saveSlack = async () => {
     if (!slack) return;
@@ -3705,7 +3712,7 @@ export function NotificationsAdmin() {
       const body: Partial<SlackConfig> = { ...slack };
       if (secret.slack) body.webhook_url = secret.slack;
       setSlack(await api.saveSlackConfig(body)); setSecret((s) => ({ ...s, slack: "" })); flash("slack", "Saved.");
-    } catch (e) { flash("slack", (e as Error).message); }
+    } catch (e) { flash("slack", operatorError(e, "Those Slack settings were not saved.")); }
   };
   const savePager = async () => {
     if (!pager) return;
@@ -3713,7 +3720,7 @@ export function NotificationsAdmin() {
       const body: Partial<PagerDutyConfig> = { ...pager };
       if (secret.pager) body.routing_key = secret.pager;
       setPager(await api.savePagerDutyConfig(body)); setSecret((s) => ({ ...s, pager: "" })); flash("pager", "Saved.");
-    } catch (e) { flash("pager", (e as Error).message); }
+    } catch (e) { flash("pager", operatorError(e, "Those PagerDuty settings were not saved.")); }
   };
   // Teams / SNS (G10). Validation mirrors the API's own validators
   // (lib/notifyValidation) so a rejection names the field inline instead of
@@ -3734,7 +3741,7 @@ export function NotificationsAdmin() {
       const body: Partial<TeamsConfig> = { enabled: teams.enabled, min_severity: teams.min_severity };
       if (secret.teams.trim()) body.webhook_url = secret.teams.trim();
       setTeams(await api.notifyTeamsUpdate(body)); setSecret((s) => ({ ...s, teams: "" })); flash("teams", "Saved.");
-    } catch (e) { flash("teams", (e as Error).message); }
+    } catch (e) { flash("teams", operatorError(e, "Those Teams settings were not saved.")); }
   };
   const saveSns = async () => {
     if (!sns) return;
@@ -3746,11 +3753,11 @@ export function NotificationsAdmin() {
         phone_numbers: sns.phone_numbers.trim(), min_severity: sns.min_severity, scope: sns.scope,
       };
       setSns(await api.notifySNSUpdate(body)); flash("sns", "Saved.");
-    } catch (e) { flash("sns", (e as Error).message); }
+    } catch (e) { flash("sns", operatorError(e, "Those Amazon SNS settings were not saved.")); }
   };
   const test = async (k: string, fn: () => Promise<{ status: string }>) => {
     try { await fn(); flash(k, "Test sent — check your inbox/phone."); }
-    catch (e) { flash(k, "Test failed: " + (e as Error).message); }
+    catch (e) { flash(k, `Test not sent. ${operatorError(e, "The service did not answer.")}`); }
   };
 
   return (
@@ -4291,14 +4298,14 @@ function PagerDutyPagingConnection() {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   useEffect(() => {
-    api.itsmConfig().then((c) => { setCfg(c); setEnabled(!!c.pagerduty?.enabled); }).catch((e) => setErr((e as Error).message));
+    api.itsmConfig().then((c) => { setCfg(c); setEnabled(!!c.pagerduty?.enabled); }).catch((e: unknown) => setErr(operatorError(e, "The PagerDuty connection could not be read.")));
   }, []);
   const save = async () => {
     setErr(""); setMsg("");
     try {
       const out = await api.saveItsmPagerDutyRCA({ enabled, ...(key.trim() ? { routing_key: key.trim() } : {}) });
       setCfg(out); setKey(""); setMsg("Saved.");
-    } catch (e) { setErr((e as Error).message); }
+    } catch (e) { setErr(operatorError(e, "That connection was not saved.")); }
   };
   const hasKey = !!cfg?.pagerduty?.has_routing_key;
   return (
@@ -4329,14 +4336,14 @@ function SlackChannelConnection() {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   useEffect(() => {
-    api.itsmConfig().then((c) => { setCfg(c); setEnabled(!!c.slack?.enabled); }).catch((e) => setErr((e as Error).message));
+    api.itsmConfig().then((c) => { setCfg(c); setEnabled(!!c.slack?.enabled); }).catch((e: unknown) => setErr(operatorError(e, "The Slack connection could not be read.")));
   }, []);
   const save = async () => {
     setErr(""); setMsg("");
     try {
       const out = await api.saveItsmSlackRCA({ enabled, ...(url.trim() ? { webhook_url: url.trim() } : {}) });
       setCfg(out); setUrl(""); setMsg("Saved.");
-    } catch (e) { setErr((e as Error).message); }
+    } catch (e) { setErr(operatorError(e, "That connection was not saved.")); }
   };
   const hasHook = !!cfg?.slack?.has_webhook;
   return (
