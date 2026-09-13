@@ -46,6 +46,43 @@ func validateAssertion(a Assertion) error {
 	return nil
 }
 
+// realmScopedOwner is the §2.5 Amendment (architect ruling, 2026-09-13): a person
+// is not duplicated per tenant inside one org. After the EXACT
+// (tenant, issuer, subject) miss, a BOUND connection looks the same canonical
+// (issuer, subject) up across the tenants its sign-in REALM reaches, and signs
+// into the single account it finds.
+//
+// THE BOUND IS THE REALM, NEVER WIDER. An UNCONSTRAINED realm (Realm.Reaches ==
+// nil — the shared platform front door) therefore gets NO cross-tenant reach
+// here at all: "everything" is wider than any realm, and widening a lookup to
+// the whole estate is precisely the cross-tenant takeover C3 closed. Those flows
+// keep exact-tuple semantics, which is also what keeps the tenant part of the
+// key meaningful (the same subject asserted for another tenant is another
+// principal). The deliberately unbound door — one platform LDAP/TACACS+/bearer
+// config that legitimately signs in every tenant — is a different method,
+// ResolveFederatedUnbound, and says so in its name.
+//
+// candidates is every (tenant, owner) pair matching (issuer, subject), the exact
+// tuple included; the exact hit is handled by the caller before this runs.
+// Exactly one reachable account → that account. More than one → the refusal, so
+// nothing is ever guessed. None → "" and the caller provisions.
+func realmScopedOwner(realm Realm, candidates map[string]string) (string, error) {
+	if realm.Reaches == nil {
+		return "", nil
+	}
+	var found string
+	for tenant, owner := range candidates {
+		if !realm.Permits(tenant) {
+			continue
+		}
+		if found != "" && found != owner {
+			return "", ErrAmbiguousIdentity
+		}
+		found = owner
+	}
+	return found, nil
+}
+
 // legacyBindPermitted is design §2.6, one boolean per written-down condition.
 // Every one must hold. identityTenant is the tenant the identity row WOULD be
 // written with — see condition 5b.
@@ -199,6 +236,17 @@ func (s *FileStore) resolveLocked(a Assertion, realm Realm, provision, unbound b
 	if err != nil {
 		return User{}, false, err
 	}
+	if owner == "" && !unbound {
+		// §2.5 Amendment: the same canonical (issuer, subject) inside the realm's
+		// OWN tenants is the same person, not a second one. Runs before the §2.6
+		// legacy check and before provisioning — and before the read-only door's
+		// refusal, because finding the person's existing account is exactly what
+		// an org-realm elevation sign-in needs and it provisions nothing.
+		owner, err = realmScopedOwner(realm, s.tupleCandidatesLocked(a))
+		if err != nil {
+			return User{}, false, err
+		}
+	}
 	if owner != "" {
 		u, ok := s.users[owner]
 		if !ok {
@@ -241,6 +289,23 @@ func (s *FileStore) lookupTupleLocked(a Assertion, unbound bool) (string, error)
 		found = owner
 	}
 	return found, nil
+}
+
+// tupleCandidatesLocked maps tenant → owning account id for every identity that
+// matches this assertion's (issuer, subject), whatever tenant it sits in. The
+// REALM, not this function, decides which of them may be reached.
+func (s *FileStore) tupleCandidatesLocked(a Assertion) map[string]string {
+	var out map[string]string
+	for tk, owner := range s.byTuple {
+		if tk.issuer != a.Issuer || tk.subject != a.Subject {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]string, 2)
+		}
+		out[tk.tenant] = owner
+	}
+	return out
 }
 
 // refreshLocked is the tuple-hit path: realm check, then the profile refresh.

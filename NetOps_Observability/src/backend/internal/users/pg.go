@@ -649,6 +649,17 @@ func (s *PGStore) resolveTx(ctx context.Context, tx pgx.Tx, a Assertion, realm R
 	if err != nil {
 		return User{}, false, err
 	}
+	if owner == "" && !unbound {
+		// §2.5 Amendment — see realmScopedOwner. Same decision, same bound, on
+		// rows this transaction already holds FOR UPDATE.
+		cands, cerr := tupleCandidatesTx(ctx, tx, a)
+		if cerr != nil {
+			return User{}, false, cerr
+		}
+		if owner, err = realmScopedOwner(realm, cands); err != nil {
+			return User{}, false, err
+		}
+	}
 	if owner != "" {
 		u, err := loadUserTx(ctx, tx, owner)
 		if err != nil {
@@ -713,6 +724,33 @@ func lookupTupleTx(ctx context.Context, tx pgx.Tx, a Assertion, unbound bool) (s
 	default:
 		return "", ErrAmbiguousIdentity
 	}
+}
+
+// tupleCandidatesTx is the pg twin of tupleCandidatesLocked: tenant → owning
+// account id for every identity matching (issuer, subject). Locked FOR UPDATE
+// like the exact lookup, so the realm-scoped decision cannot race a concurrent
+// provision in a sibling tenant.
+func tupleCandidatesTx(ctx context.Context, tx pgx.Tx, a Assertion) (map[string]string, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT tenant_id, user_id FROM user_identities
+		  WHERE issuer=$1 AND subject=$2 ORDER BY tenant_id FOR UPDATE`,
+		a.Issuer, a.Subject)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]string, 2)
+	for rows.Next() {
+		var tenant, id string
+		if err := rows.Scan(&tenant, &id); err != nil {
+			return nil, err
+		}
+		out[tenant] = id
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // refreshTx is the tuple-hit path: H1, then the realm, then the profile refresh.

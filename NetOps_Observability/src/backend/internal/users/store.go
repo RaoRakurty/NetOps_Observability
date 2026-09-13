@@ -81,6 +81,13 @@ type Repo interface {
 	// (provision=true) mint one. provision=false is the read-only door (elevation):
 	// a tuple miss is ErrNoSuchUser and nothing is written — it never binds by
 	// username again.
+	//
+	// §2.5 Amendment (2026-09-13): on a realm-CONSTRAINED flow an exact-tuple miss
+	// also looks (issuer, subject) up across the tenants that realm reaches, so one
+	// person with two connections in one org is one account. Exactly one match
+	// signs in; more than one is ErrAmbiguousIdentity. An UNCONSTRAINED realm gets
+	// no cross-tenant reach at all — see realmScopedOwner for why that is the
+	// fail-closed reading, not a gap.
 	ResolveFederated(a Assertion, realm Realm, provision bool) (User, error)
 
 	// ResolveFederatedUnbound is the platform-default-connection form: the
