@@ -123,14 +123,20 @@ DECISION8_ITEMS = (
     "source/tag consistency",
 )
 
-# Go checks run with GOTOOLCHAIN=local DELIBERATELY. A release must build with the
-# toolchain that is on the host; silently downloading go1.26.8 mid-gate would make
-# the result a property of the network rather than of the release host, and an
-# air-gapped signing host has no network to download it from. A host whose `go` is
-# older than go.mod's `go` directive is a FAIL for the operator to fix, not
-# something for this script to paper over.
-GO_ENV = {"GOTOOLCHAIN": "local"}
-GO_OFFLINE_ENV = {"GOTOOLCHAIN": "local", "GOFLAGS": "-mod=vendor", "GOPROXY": "off"}
+# Go checks set NO GOTOOLCHAIN. Normal toolchain selection is the intended path:
+# `go` on PATH may be older than go.mod's `go` directive, and the `toolchain
+# go1.26.8` line is what resolves the real compiler — from the module cache when it
+# is already there. Pinning GOTOOLCHAIN=local would fail every Go row on a host
+# whose PATH `go` is older, which reports that host's PATH rather than the
+# release's buildability. (GOTOOLCHAIN=local belongs to the docker lint container,
+# where the image's own toolchain is the thing under test.)
+#
+# The OFFLINE row keeps GOPROXY=off, and that is where the toolchain question gets
+# its honest answer: with the proxy off an uncached `toolchain go1.x` cannot be
+# fetched and the row FAILS — correctly, because a clean offline build implies a
+# cached toolchain, and a host that must reach the network for its compiler cannot
+# build air-gapped.
+GO_OFFLINE_ENV = {"GOFLAGS": "-mod=vendor", "GOPROXY": "off"}
 
 
 # ── process plumbing ─────────────────────────────────────────────────────────
@@ -358,6 +364,7 @@ def cmd_result(
     ok_evidence: str = "",
     human_action: str = "",
     human_when: str = "",
+    tool: str = "",
 ) -> Result:
     """Run one command and grade it.
 
@@ -365,12 +372,19 @@ def cmd_result(
     failure is a human blocker (counsel's text, a key nobody has minted) rather
     than an engineering defect, so it is labelled BLOCKED-HUMAN. It still fails
     the release.
+
+    `tool` is the resolved path of a binary found OFF the default PATH (the Go gate
+    tools live in GOBIN/GOPATH/bin). It goes in the evidence, because "staticcheck
+    passed" and "THIS staticcheck passed" are different claims when two versions
+    can be installed.
     """
     proc = run_process(argv, cwd, timeout, env_overrides)
     cmd = display(argv, cwd, env_overrides)
+    note = f" · via {tool}" if tool else ""
     if proc.ok:
         return Result(check, item, title, PASS,
-                      ok_evidence or proc.tail or f"exit 0 in {proc.seconds:.1f}s",
+                      (ok_evidence or proc.tail or f"exit 0 in {proc.seconds:.1f}s")
+                      + note,
                       cmd, seconds=proc.seconds)
     if proc.missing:
         return Result(check, item, title, FAIL,
@@ -379,10 +393,10 @@ def cmd_result(
                       cmd, seconds=proc.seconds)
     blob = f"{proc.out}\n{proc.err}"
     if human_when and re.search(human_when, blob):
-        return Result(check, item, title, BLOCKED, proc.tail, cmd,
+        return Result(check, item, title, BLOCKED, proc.tail + note, cmd,
                       human_action=human_action, seconds=proc.seconds)
     return Result(check, item, title, FAIL,
-                  proc.tail or f"exit {proc.rc}", cmd,
+                  (proc.tail or f"exit {proc.rc}") + note, cmd,
                   human_action=human_action, seconds=proc.seconds)
 
 
@@ -475,7 +489,6 @@ def check_tests_go_suite(ctx: Ctx) -> Result:
     return cmd_result(
         "tests.go-suite", "tests", "go test + go test -race",
         ["go", "test", "./...", "-count=1"], BACKEND, 5400.0,
-        env_overrides=GO_ENV,
     )
 
 
@@ -491,8 +504,9 @@ def check_tests_install_boot(ctx: Ctx) -> Result:
 def check_build_go(ctx: Ctx) -> Result:
     return cmd_result(
         "build.go", "build", "go build ./... (backend)",
-        ["go", "build", "./..."], BACKEND, 1800.0, env_overrides=GO_ENV,
-        ok_evidence="the backend module compiles with the host toolchain",
+        ["go", "build", "./..."], BACKEND, 1800.0,
+        ok_evidence="the backend module compiles (go.mod's `toolchain` line selects "
+                    "the compiler)",
     )
 
 
@@ -505,15 +519,30 @@ def check_build_frontend(ctx: Ctx) -> Result:
     )
 
 
+TOOLCHAIN_FETCH = re.compile(r"toolchain|GOPROXY=off|module lookup disabled")
+
+
 def check_offline_build(ctx: Ctx) -> Result:
-    """CLAUDE.md §6 gate 2, enforced rather than asserted: the whole reason the
-    tree vendors its modules is that `go build` must work with no network."""
-    return cmd_result(
+    """CLAUDE.md §6 gate 2, enforced rather than asserted: the whole reason the tree
+    vendors its modules is that `go build` must work with no network.
+
+    The toolchain is part of that claim. With GOPROXY=off an uncached
+    `toolchain go1.x` cannot be fetched, so the row fails — and it says which
+    problem it is, because "vendor/ is incomplete" and "this host would have to
+    download its compiler" have different fixes.
+    """
+    result = cmd_result(
         "offline-build.go-vendor", "offline build",
         "vendor-only, network-off build (GOFLAGS=-mod=vendor GOPROXY=off)",
         ["go", "build", "./..."], BACKEND, 1800.0, env_overrides=GO_OFFLINE_ENV,
         ok_evidence="builds from vendor/ with GOPROXY=off — the air-gapped host path",
     )
+    if result.status != PASS and TOOLCHAIN_FETCH.search(result.evidence):
+        result.evidence += (" — the Go TOOLCHAIN itself is not in the module cache, "
+                            "and a clean offline build implies a cached toolchain: "
+                            "warm it once where there is network, or build where it "
+                            "is already cached")
+    return result
 
 
 # ── dependency lock ──────────────────────────────────────────────────────────
@@ -899,7 +928,7 @@ def check_security_secrets(ctx: Ctx) -> Result:
         "security.secrets-history", "security scans",
         "gitleaks over the FULL git history (not just the tip)",
         [tool, "detect", "--source", ".", "--redact", "--exit-code", "1",
-         "--log-opts=--all"], REPO, 1800.0,
+         "--log-opts=--all"], REPO, 1800.0, tool=tool,
     )
 
 
@@ -907,7 +936,7 @@ def check_security_govulncheck(ctx: Ctx) -> Result:
     tool = resolve_tool("govulncheck") or "govulncheck"
     return cmd_result(
         "security.go-vuln", "security scans", "govulncheck ./... (backend)",
-        [tool, "./..."], BACKEND, 1800.0, env_overrides=GO_ENV,
+        [tool, "./..."], BACKEND, 1800.0, tool=tool,
     )
 
 
@@ -917,7 +946,7 @@ def check_security_staticcheck(ctx: Ctx) -> Result:
         "security.staticcheck", "security scans",
         "staticcheck on the crypto/trust packages",
         [tool, "./tlsconfig/...", "./internalca/...", "./sealing/..."],
-        BACKEND, 1800.0, env_overrides=GO_ENV,
+        BACKEND, 1800.0, tool=tool,
     )
 
 
@@ -938,8 +967,8 @@ def check_security_gosec(ctx: Ctx) -> Result:
     tool = resolve_tool("gosec") or "gosec"
     title = "gosec on the crypto/trust packages (and it analysed something)"
     argv = [tool, "./tlsconfig/...", "./internalca/...", "./sealing/..."]
-    cmd = display(argv, BACKEND, GO_ENV)
-    proc = run_process(argv, BACKEND, 1800.0, GO_ENV)
+    cmd = display(argv, BACKEND)
+    proc = run_process(argv, BACKEND, 1800.0)
     if proc.missing:
         return Result("security.gosec", "security scans", title, FAIL,
                       f"{proc.err} — a gate tool that is not installed has proven "
@@ -959,8 +988,8 @@ def check_security_gosec(ctx: Ctx) -> Result:
                       "checked nothing (package loading failed)", cmd,
                       seconds=proc.seconds)
     return Result("security.gosec", "security scans", title, PASS,
-                  f"gosec: no findings across {match.group(1)} file(s)", cmd,
-                  seconds=proc.seconds)
+                  f"gosec: no findings across {match.group(1)} file(s) · via {tool}",
+                  cmd, seconds=proc.seconds)
 
 
 def check_security_cis_docker(ctx: Ctx) -> Result:

@@ -84,9 +84,11 @@ class StubRunner:
         self.tag = tag
         self.have_key = have_key
         self.calls: list[tuple[tuple[str, ...], str, float]] = []
+        self.envs: list[dict[str, str]] = []
 
     def __call__(self, argv, cwd, timeout, env_overrides=None):
         self.calls.append((tuple(argv), str(cwd), timeout))
+        self.envs.append(dict(env_overrides or {}))
         # CLAUDE.md §9: all IO has a timeout. A check that forgot one would hang a
         # release gate forever, so the stub refuses to answer an unbounded call.
         assert isinstance(timeout, (int, float)) and 0 < timeout < 86_400, (
@@ -742,6 +744,91 @@ def test_a_dirty_worktree_fails_generated_code_cleanliness(monkeypatch):
     result = mod.check_generated_worktree_clean(ctx_for())
     assert result.status == mod.FAIL
     assert "2 path(s)" in result.evidence
+
+
+# ── the Go rows use this host's real toolchain selection ─────────────────────
+def test_no_check_pins_gotoolchain(monkeypatch):
+    """Standing rule on the build hosts: `go` on PATH can be older than go.mod's
+    `go` directive, and go.mod's `toolchain` line is what resolves the real
+    compiler (from the module cache). Pinning GOTOOLCHAIN=local made every Go row
+    fail on a fact about the host's PATH rather than about the release.
+    GOTOOLCHAIN=local belongs to the docker lint container, not here."""
+    runner = StubRunner("pass")
+    run_all(monkeypatch, runner, ctx_for())
+    offenders = [env for env in runner.envs if "GOTOOLCHAIN" in env]
+    assert not offenders, f"a check pinned GOTOOLCHAIN: {offenders}"
+    # …and the name appears nowhere in the script's CODE, so a check added later
+    # cannot reintroduce it on a path this stub does not reach. Comments are
+    # exempt: the one that explains why it is absent is the point.
+    code = "\n".join(line for line in SCRIPT.read_text(encoding="utf-8").splitlines()
+                     if not line.lstrip().startswith("#"))
+    assert "GOTOOLCHAIN" not in code
+
+
+def test_the_offline_row_still_forbids_the_network():
+    """Dropping GOTOOLCHAIN must not have dropped the offline invariant with it."""
+    assert mod.GO_OFFLINE_ENV == {"GOFLAGS": "-mod=vendor", "GOPROXY": "off"}
+
+
+def test_an_uncached_toolchain_fails_the_offline_row_and_says_so(monkeypatch):
+    """A clean offline build implies a cached toolchain. If the compiler itself
+    would have to be downloaded, that is a FAIL — and the row must distinguish it
+    from an incomplete vendor/, because the two have different fixes."""
+    class NoToolchain(StubRunner):
+        def __call__(self, argv, cwd, timeout, env_overrides=None):
+            if "build" in argv:
+                return mod.Proc(rc=1, err="go: downloading go1.26.8: module lookup "
+                                          "disabled by GOPROXY=off")
+            return super().__call__(argv, cwd, timeout, env_overrides)
+
+    monkeypatch.setattr(mod, "run_process", NoToolchain("pass"))
+    result = mod.check_offline_build(ctx_for())
+    assert result.status == mod.FAIL
+    assert "TOOLCHAIN itself is not in the module cache" in result.evidence
+    assert "GOFLAGS=-mod=vendor GOPROXY=off" in result.command
+
+
+def test_a_vendor_gap_is_not_reported_as_a_toolchain_problem(monkeypatch):
+    class VendorGap(StubRunner):
+        def __call__(self, argv, cwd, timeout, env_overrides=None):
+            if "build" in argv:
+                return mod.Proc(rc=1, err="netops/backend/foo: cannot find module "
+                                          "providing package example.com/bar")
+            return super().__call__(argv, cwd, timeout, env_overrides)
+
+    monkeypatch.setattr(mod, "run_process", VendorGap("pass"))
+    result = mod.check_offline_build(ctx_for())
+    assert result.status == mod.FAIL
+    assert "TOOLCHAIN" not in result.evidence
+    assert "cannot find module" in result.evidence
+
+
+def test_the_gate_tools_are_found_off_the_default_path(monkeypatch, tmp_path):
+    """staticcheck/gosec/govulncheck/gitleaks are `go install`ed into GOBIN or
+    $GOPATH/bin, which is on no default and no cron PATH (scripts/CLAUDE.md
+    §16.2). A gate that reported them 'not installed' would answer the wrong
+    question."""
+    gobin = tmp_path / "gobin"
+    gobin.mkdir()
+    fake = gobin / "staticcheck"
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("GOBIN", str(gobin))
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    assert mod.resolve_tool("staticcheck") == str(fake)
+    assert mod.resolve_tool("definitely-not-a-real-tool") is None
+
+
+def test_the_row_names_the_binary_it_used(monkeypatch):
+    """Two versions of a linter can be installed; "staticcheck passed" and "THIS
+    staticcheck passed" are different claims."""
+    report = run_all(monkeypatch, StubRunner("pass"), ctx_for())
+    by_id = {r.check: r for r in report.results}
+    for cid in ("security.staticcheck", "security.go-vuln", "security.gosec",
+                "security.secrets-history"):
+        assert "via " in by_id[cid].evidence, (
+            f"{cid} does not say which binary it ran: {by_id[cid].evidence}"
+        )
 
 
 # ── evidence hygiene ─────────────────────────────────────────────────────────

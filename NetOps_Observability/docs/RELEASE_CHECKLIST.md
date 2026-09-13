@@ -85,7 +85,7 @@ All of these run on every PR and push. None needs a human unless it fails.
 | 1.2 | **Offline vendor build** — `GOFLAGS=-mod=vendor GOPROXY=off go build/vet/test-compile`, cold module cache | `backend-ci` · `offline vendor build (blocking)` | 🟢 AUTOMATED *(new — CLAUDE.md §6 gate 2, previously asserted but never proven)* |
 | 1.3 | Postgres integration + the full RLS / tenant-isolation corpus against a live DB as a `NOBYPASSRLS` role | `backend-ci` · `Postgres integration (blocking)` | 🟢 AUTOMATED |
 | 1.4 | `govulncheck` | `backend-ci` · `govulncheck (blocking)` | 🟢 AUTOMATED |
-| 1.5 | staticcheck + gosec + golangci-lint on the crypto/trust packages | `backend-ci` · `staticcheck + gosec …` | 🟢 AUTOMATED |
+| 1.5 | staticcheck + gosec + golangci-lint on the crypto/trust packages. The gosec step asserts gosec's own `Files:` count is non-zero: `gosec -quiet` **exits 0 after failing to load every package** (proved 2026-09-13), so exit 0 alone was not evidence of a scan | `backend-ci` · `staticcheck + gosec …` | 🟢 AUTOMATED |
 | 1.6 | golangci-lint repo-wide | `backend-ci` · `golangci-lint (repo-wide, blocking)` | 🟢 AUTOMATED |
 | 1.7 | `pytest` (whole suite — also the signature-catalogue fixture gate and the golden-replay gate) | `correlation-ci` · `pytest (blocking)` | 🟢 AUTOMATED |
 | 1.8 | ruff · bandit · mypy · **pip-audit** | `correlation-ci` · `ruff · bandit · mypy · pip-audit (blocking)` | 🟢 AUTOMATED |

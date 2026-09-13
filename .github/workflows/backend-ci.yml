@@ -254,8 +254,35 @@ jobs:
           go install github.com/securego/gosec/v2/cmd/gosec@${{ env.GOSEC_VERSION }}
       - name: staticcheck (tlsconfig, internalca, sealing)
         run: staticcheck ./tlsconfig/... ./internalca/... ./sealing/...
+      # `-quiet` DROPPED, and the file count asserted. Proved on 2026-09-13 while
+      # building scripts/release-gate.py: `gosec -quiet` EXITS 0 after failing to
+      # load every package — on a host whose toolchain could not load the module it
+      # "passed" in 0.2 s having analysed 0 files, and with -quiet there is not even
+      # a summary in the log to notice it by. Exit 0 is not evidence of a scan, so
+      # this step now reads gosec's own summary and fails on zero files: the same
+      # guard scripts/release-gate.py applies (check `security.gosec`), asserted by
+      # tests/test_backend_ci_scanner_guards.py so it cannot regress.
+      #
+      # Without -quiet the log carries gosec's rule list and summary for three
+      # packages, which is the readable end of the trade: a suppressed log that can
+      # hide a zero-file run is worse than a slightly longer one.
       - name: gosec (tlsconfig, internalca, sealing)
-        run: gosec -quiet ./tlsconfig/... ./internalca/... ./sealing/...
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/gosec.log"
+          # pipefail: a gosec failure (findings OR a package it could not load)
+          # fails the step through the pipe, exactly as the bare command did.
+          gosec ./tlsconfig/... ./internalca/... ./sealing/... 2>&1 | tee "$log"
+          files="$(sed -n 's/^[[:space:]]*Files[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$log" | tail -1)"
+          if [ -z "$files" ]; then
+            echo "::error::gosec printed no 'Files:' summary — refusing to read that as a scan"
+            exit 1
+          fi
+          if [ "$files" -eq 0 ]; then
+            echo "::error::gosec exited 0 having analysed 0 files — a green run that checked nothing (package loading failed)"
+            exit 1
+          fi
+          echo "gosec analysed $files file(s) across tlsconfig, internalca and sealing"
       - name: golangci-lint (tlsconfig, internalca, sealing)
         uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
         with:
