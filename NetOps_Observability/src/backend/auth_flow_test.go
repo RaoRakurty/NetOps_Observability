@@ -98,7 +98,7 @@ func newTestServerState(t *testing.T) (*httptest.Server, *server) {
 	// mechanism and the semantics.
 	s.entitlements = licence.NewUnlimitedService()
 	// LICENCE-END
-	identitySink.bind(s.onIdentityLegacyBound)
+	identitySink.bind(s.onIdentityLegacyBind)
 	must(us.SeedAdmin("admin", "Passw0rd!2345"))
 	s.backfillBindings() // PBAC Phase A: mirror seeded users into role_bindings
 	// DATA-PROTECTION: the routes are registered off s.dataProtect, so the

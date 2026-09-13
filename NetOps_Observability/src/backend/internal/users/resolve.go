@@ -13,12 +13,20 @@ package users
 // email, the same preferred_username or even the same `sub` therefore produce
 // TWO accounts, and no code path can link them.
 //
-// The single, bounded exception is the legacy lazy bind (§2.6): a pre-migration
-// FEDERATED account carries no issuer/subject, cannot have one derived offline,
-// and is adopted exactly once — by the same door that created it, before the
-// migration epoch, for an account that is not local, not disabled, not already
-// bound, and inside the flow's realm. Everything about it is written down in
-// legacyBindPermitted below, with a named condition per rule.
+// The single, bounded exception is the legacy lazy bind (§2.6), and owner
+// Decision 2 (2026-09-13) narrowed it to what it was always claimed to be. It is
+// NO LONGER the migration — migrate.go's deterministic backfill is — so it may
+// now run ONLY for the class whose provenance genuinely cannot be reconstructed
+// offline: an `unresolved` oidc/saml account. It can no longer touch a bound, an
+// ambiguous, a local, an ldap or a tacacs account, because every one of those
+// either already has its identity or can be given one deterministically.
+//
+// It keeps every original condition: adopted exactly once, by the same door that
+// created it, before the migration epoch, inside the flow's realm, into the
+// account's own tenant, and never for a disabled account. Everything about it is
+// written down in legacyBindRefusal below, one named condition per rule, and the
+// name of the condition that refused is what the audit trail and the
+// netops_identity_legacy_bind_total{result="refused"} counter carry.
 
 import (
 	"fmt"
@@ -82,31 +90,79 @@ func realmScopedOwner(realm Realm, candidates map[string]string) (string, error)
 	return found, nil
 }
 
-// legacyBindPermitted is design §2.6, one boolean per written-down condition.
-// Every one must hold. identityTenant is the tenant the identity row WOULD be
-// written with — see condition 5b.
-func legacyBindPermitted(account User, a Assertion, realm Realm, markerAt time.Time, hasIdentity bool, identityTenant string) bool {
+// lazyBindableProtocol reports whether the constrained lazy path may run for this
+// protocol at all (owner Decision 2). Only oidc and saml: their subject is a
+// broker-minted `sub` that no offline derivation can produce. LDAP and TACACS+
+// are DETERMINISTICALLY migrated (migrate.go), and local accounts were never
+// eligible (H1) — for all three, reaching this path would mean guessing where a
+// certainty exists.
+func lazyBindableProtocol(protocol string) bool {
+	switch protocol {
+	case ProtocolOIDC, ProtocolSAML:
+		return true
+	}
+	return false
+}
+
+// The named conditions. Each string is the value an operator sees in the audit
+// detail and in the refusal log, so they say WHICH rule refused rather than "no".
+const (
+	refusalAlreadyBound          = "already-bound"
+	refusalNotUnresolved         = "state-not-unresolved"
+	refusalProtocolDeterministic = "protocol-deterministically-migrated"
+	refusalLocalAccount          = "local-account"
+	refusalAuthSourceMismatch    = "auth-source-mismatch"
+	refusalPostEpoch             = "post-epoch"
+	refusalUnknownEpoch          = "unknown-epoch"
+	refusalLegacyUsername        = "legacy-username-mismatch"
+	refusalOutsideRealm          = "outside-realm"
+	refusalForeignIdentityTenant = "foreign-identity-tenant"
+	refusalDisabled              = "disabled"
+)
+
+// legacyBindRefusal is design §2.6 as narrowed by owner Decision 2: one named
+// condition per rule, returning "" when the adoption is permitted and the NAME of
+// the condition that refused otherwise. identityTenant is the tenant the identity
+// row WOULD be written with — see condition 5b.
+func legacyBindRefusal(account User, a Assertion, realm Realm, markerAt time.Time, hasIdentity bool, identityTenant string) string {
 	// 1. the account has NO identity row (UNIQUE(user_id) would refuse anyway).
 	if hasIdentity {
-		return false
+		return refusalAlreadyBound
+	}
+	// 1b. owner Decision 2: the account's STORED state must be `unresolved`. An
+	//     `ambiguous` account is waiting for a human precisely because its identity
+	//     cannot be settled without guessing, and a login must not settle it.
+	if account.IdentityState() != IdentityStateUnresolved {
+		return refusalNotUnresolved
+	}
+	// 1c. owner Decision 2: only the class that cannot be reconstructed offline.
+	//     An ldap/tacacs assertion has a deterministic backfill and must use it.
+	if !lazyBindableProtocol(a.Protocol) {
+		return refusalProtocolDeterministic
 	}
 	// 2. the account's auth_source equals the assertion's protocol. An OIDC
 	//    assertion can never adopt an LDAP account — and never a LOCAL one (H1),
 	//    which IsLocalSource excludes explicitly because "" reads as local.
-	if IsLocalSource(account.AuthSource) || !strings.EqualFold(strings.TrimSpace(account.AuthSource), a.Protocol) {
-		return false
+	if IsLocalSource(account.AuthSource) {
+		return refusalLocalAccount
+	}
+	if !strings.EqualFold(strings.TrimSpace(account.AuthSource), a.Protocol) {
+		return refusalAuthSourceMismatch
 	}
 	// 3. the account was created BEFORE the migration epoch. A zero epoch means
 	//    the epoch is unknown, which fails closed: nothing is ever adopted.
-	if markerAt.IsZero() || !account.CreatedAt.Before(markerAt) {
-		return false
+	if markerAt.IsZero() {
+		return refusalUnknownEpoch
+	}
+	if !account.CreatedAt.Before(markerAt) {
+		return refusalPostEpoch
 	}
 	// 4. the legacy derivation of THIS door equals the account's own id — the one
 	//    place username equality is ever consulted, and only for a row the legacy
 	//    code created from that very string.
 	legacy := legacyUserID(a.LegacyUsername)
 	if legacy == "" || legacy != normID(account.ID) {
-		return false
+		return refusalLegacyUsername
 	}
 	// 5a. the realm permits the account's tenant (a bound flow never reaches out
 	//     of its realm), and
@@ -119,12 +175,18 @@ func legacyBindPermitted(account User, a Assertion, realm Realm, markerAt time.T
 	//     provisioning tenant is not the legacy account's tenant the provenance
 	//     IS ambiguous, so rule 6 applies: it is left pending for an operator,
 	//     never guessed.
-	if !realm.Permits(account.TenantID) || identityTenant != normTenant(account.TenantID) {
-		return false
+	if !realm.Permits(account.TenantID) {
+		return refusalOutsideRealm
+	}
+	if identityTenant != normTenant(account.TenantID) {
+		return refusalForeignIdentityTenant
 	}
 	// 6. the account is not disabled. JIT never resurrects a disabled account
 	//    (design §4.2.5), and adoption is a stronger write than a refresh.
-	return !strings.EqualFold(strings.TrimSpace(account.Status), "disabled")
+	if strings.EqualFold(strings.TrimSpace(account.Status), "disabled") {
+		return refusalDisabled
+	}
+	return ""
 }
 
 // assertedIdentity is the identity row a fresh (or newly-bound) assertion writes.
@@ -138,6 +200,7 @@ func assertedIdentity(a Assertion, tenant, provenance string, now time.Time) Ide
 		Protocol:     a.Protocol,
 		ConnectionID: a.ConnectionID,
 		SubjectKind:  a.SubjectKind,
+		DirectoryDN:  a.DirectoryDN,
 		Provenance:   provenance,
 		FirstSeenAt:  now,
 		LastLoginAt:  now,
@@ -150,6 +213,10 @@ func assertedIdentity(a Assertion, tenant, provenance string, now time.Time) Ide
 // display name or email instead.
 func newFederatedUser(a Assertion, id, tenant, role string, now time.Time) User {
 	ident := assertedIdentity(a, tenant, ProvenanceAsserted, now)
+	// The state is STAMPED at birth (owner Decision 2): every account carries an
+	// explicit migration state, so "what is waiting for me?" never depends on which
+	// code path last looked at the row.
+	state := boundState(now)
 	return User{
 		ID:          id,
 		Username:    id,
@@ -161,6 +228,8 @@ func newFederatedUser(a Assertion, id, tenant, role string, now time.Time) User 
 		AuthSource:  a.Protocol,
 		CreatedAt:   now,
 		Identity:    &ident,
+
+		IdentityMigration: &state,
 	}
 }
 
@@ -175,6 +244,11 @@ func refreshIdentityMeta(cur Identity, a Assertion, now time.Time) Identity {
 	}
 	if a.SubjectKind != "" {
 		cur.SubjectKind = a.SubjectKind
+	}
+	// The DN is a PROFILE attribute (owner Decision 2): refreshed on every login,
+	// so an OU move updates it instead of re-namespacing the account.
+	if a.DirectoryDN != "" {
+		cur.DirectoryDN = a.DirectoryDN
 	}
 	return cur
 }
@@ -209,31 +283,39 @@ func (s *FileStore) resolve(a Assertion, realm Realm, provision, unbound bool) (
 	}
 	var (
 		out   User
-		bound bool
+		event *LegacyBindEvent
 		err   error
 	)
 	func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		out, bound, err = s.resolveLocked(a, realm, provision, unbound)
+		out, event, err = s.resolveLocked(a, realm, provision, unbound)
 	}()
+	// Reported OUTSIDE the lock — including on the error paths, because a refusal
+	// is exactly what the owner asked to be able to count: the integrator's audit
+	// sink writes to its own store, and holding the user-store lock across a
+	// foreign write is how a deadlock gets built.
+	reportLegacyBind(s.deps, event)
 	if err != nil {
 		return User{}, err
-	}
-	// Reported OUTSIDE the lock: the integrator's audit sink writes to its own
-	// store, and holding the user-store lock across a foreign write is how a
-	// deadlock gets built.
-	if bound && s.deps.OnLegacyBound != nil {
-		s.deps.OnLegacyBound(out, a)
 	}
 	return out, nil
 }
 
-// resolveLocked returns (user, boundLegacy, error). Caller holds s.mu.
-func (s *FileStore) resolveLocked(a Assertion, realm Realm, provision, unbound bool) (User, bool, error) {
+// reportLegacyBind hands one lazy-path outcome to the integrator. Shared by both
+// backends so neither can forget half of the vocabulary.
+func reportLegacyBind(d Deps, event *LegacyBindEvent) {
+	if event == nil || d.OnLegacyBind == nil {
+		return
+	}
+	d.OnLegacyBind(*event)
+}
+
+// resolveLocked returns (user, lazy-path outcome or nil, error). Caller holds s.mu.
+func (s *FileStore) resolveLocked(a Assertion, realm Realm, provision, unbound bool) (User, *LegacyBindEvent, error) {
 	owner, err := s.lookupTupleLocked(a, unbound)
 	if err != nil {
-		return User{}, false, err
+		return User{}, nil, err
 	}
 	if owner == "" && !unbound {
 		// §2.5 Amendment: the same canonical (issuer, subject) inside the realm's
@@ -243,7 +325,7 @@ func (s *FileStore) resolveLocked(a Assertion, realm Realm, provision, unbound b
 		// an org-realm elevation sign-in needs and it provisions nothing.
 		owner, err = realmScopedOwner(realm, s.tupleCandidatesLocked(a))
 		if err != nil {
-			return User{}, false, err
+			return User{}, nil, err
 		}
 	}
 	if owner != "" {
@@ -251,23 +333,27 @@ func (s *FileStore) resolveLocked(a Assertion, realm Realm, provision, unbound b
 		if !ok {
 			// The index and the collection disagree — refuse rather than provision
 			// a second account over the top of a row we cannot see.
-			return User{}, false, fmt.Errorf("%w: identity index points at missing account %q", ErrIdentityConflict, owner)
+			return User{}, nil, fmt.Errorf("%w: identity index points at missing account %q", ErrIdentityConflict, owner)
 		}
 		refreshed, rerr := s.refreshLocked(u, a, realm)
-		return refreshed, false, rerr
+		return refreshed, nil, rerr
 	}
 	if !provision {
 		// The read-only door (elevation): a tuple miss is a refusal. It never
 		// binds by username again, and it writes nothing.
-		return User{}, false, ErrNoSuchUser
+		return User{}, nil, ErrNoSuchUser
 	}
-	if u, ok, err := s.bindLegacyLocked(a, realm, unbound); err != nil {
-		return User{}, false, err
-	} else if ok {
-		return u, true, nil
+	u, event, err := s.bindLegacyLocked(a, realm, unbound)
+	if err != nil {
+		return User{}, event, err
 	}
-	u, err := s.provisionLocked(a, realm)
-	return u, false, err
+	if event != nil && event.Result == LegacyBindBound {
+		return u, event, nil
+	}
+	// Refused or ambiguous: the assertion provisions a FRESH account and the legacy
+	// row is left for the operator — design §2.6's "flagged, never guessed".
+	fresh, err := s.provisionLocked(a, realm)
+	return fresh, event, err
 }
 
 // lookupTupleLocked finds the account holding this identity. The bound form is an
@@ -330,6 +416,7 @@ func (s *FileStore) refreshLocked(u User, a Assertion, realm Realm) (User, error
 	if u.Identity != nil {
 		next := refreshIdentityMeta(*u.Identity, a, now)
 		u.Identity = &next
+		applyState(&u, boundState(now))
 	}
 	s.putLocked(u)
 	if err := s.flushLocked(); err != nil {
@@ -339,17 +426,22 @@ func (s *FileStore) refreshLocked(u User, a Assertion, realm Realm) (User, error
 	return u, nil
 }
 
-// bindLegacyLocked is design §2.6. It returns ok=false (not an error) when the
-// conditions do not hold, so the caller provisions a fresh account instead —
-// which is exactly the "flagged, never guessed" outcome for ambiguous provenance.
-func (s *FileStore) bindLegacyLocked(a Assertion, realm Realm, unbound bool) (User, bool, error) {
+// bindLegacyLocked is design §2.6 as narrowed by owner Decision 2. It returns the
+// OUTCOME (bound / ambiguous / refused, or nil when there was no candidate at
+// all) rather than a bare bool, because the owner asked for the numbers: a
+// refusal nobody counts is a migration nobody can judge.
+//
+// It NEVER merges. When the tuple the adoption would write is already another
+// account's, the legacy row is marked `ambiguous` — durably, so it appears in
+// ?identity=ambiguous — and the assertion provisions a fresh account instead.
+func (s *FileStore) bindLegacyLocked(a Assertion, realm Realm, unbound bool) (User, *LegacyBindEvent, error) {
 	cand := legacyUserID(a.LegacyUsername)
 	if cand == "" {
-		return User{}, false, nil
+		return User{}, nil, nil
 	}
 	u, ok := s.users[cand]
 	if !ok {
-		return User{}, false, nil
+		return User{}, nil, nil
 	}
 	identityTenant := normTenant(a.TenantID)
 	if unbound {
@@ -357,27 +449,54 @@ func (s *FileStore) bindLegacyLocked(a Assertion, realm Realm, unbound bool) (Us
 		// account already lives.
 		identityTenant = normTenant(u.TenantID)
 	}
-	if !legacyBindPermitted(u, a, realm, s.markerAt, u.Identity != nil, identityTenant) {
-		return User{}, false, nil
+	if reason := legacyBindRefusal(u, a, realm, s.markerAt, u.Identity != nil, identityTenant); reason != "" {
+		return User{}, &LegacyBindEvent{Result: LegacyBindRefused, Reason: reason, User: u, Assertion: a}, nil
 	}
 	before := u
 	now := time.Now().UTC()
 	ident := assertedIdentity(a, identityTenant, ProvenanceLegacyLazyBound, now)
+	// NEVER SILENTLY MERGE TWO IDENTITIES (owner Decision 2). Checked BEFORE any
+	// write, so the refusal needs no rollback.
+	if other, dup := s.byTuple[ident.key()]; dup && other != cand {
+		u = s.markAmbiguousLocked(u, ReasonTupleClaimed, now)
+		return User{}, &LegacyBindEvent{Result: LegacyBindAmbiguous, Reason: ReasonTupleClaimed, User: u, Assertion: a}, nil
+	}
 	u.Identity = &ident
+	applyState(&u, boundState(now))
 	u = MergeFederated(u, a.Email, a.DisplayName, s.deps.GuardRole(a.Role, u.TenantID, u.ID, a.Protocol), a.Protocol)
 	if err := s.indexLocked(u); err != nil {
-		// The tuple is already claimed by someone else: do NOT adopt, and do NOT
-		// fall through to provisioning a duplicate of a claimed identity.
+		// The index refused what the tuple check allowed (a torn index): do NOT
+		// adopt, and record the ambiguity rather than proceeding. unindexLocked
+		// drops anything the failed index write left behind for THIS account.
+		s.unindexLocked(u)
 		s.putLocked(before)
-		return User{}, false, fmt.Errorf("%w: %w", ErrIdentityConflict, err)
+		marked := s.markAmbiguousLocked(before, ReasonTupleClaimed, now)
+		return User{}, &LegacyBindEvent{Result: LegacyBindAmbiguous, Reason: ReasonTupleClaimed, User: marked, Assertion: a},
+			fmt.Errorf("%w: %w", ErrIdentityConflict, err)
 	}
 	s.putLocked(u)
 	if err := s.flushLocked(); err != nil {
 		s.unindexLocked(u)
 		s.putLocked(before)
-		return User{}, false, err
+		return User{}, nil, err
 	}
-	return u, true, nil
+	return u, &LegacyBindEvent{Result: LegacyBindBound, Reason: "", User: u, Assertion: a}, nil
+}
+
+// markAmbiguousLocked stamps the ambiguous state on a legacy row and persists it.
+// Best-effort on the flush: the refusal has already been decided, and a failed
+// write must not turn "we refused to guess" into an error the caller reads as
+// "try again". It is never silent — the error sink gets it (§10).
+func (s *FileStore) markAmbiguousLocked(u User, reason string, now time.Time) User {
+	if !applyState(&u, ambiguousState(reason, now)) {
+		return u
+	}
+	s.putLocked(u)
+	if err := s.flushLocked(); err != nil {
+		s.deps.Errorf("users", "identity ambiguity could not be persisted — the account will be re-examined at the next boot",
+			map[string]any{"user": u.ID, "reason": reason, "err": err.Error()})
+	}
+	return u
 }
 
 // provisionLocked mints a brand-new federated account. It is CAP-EXEMPT on

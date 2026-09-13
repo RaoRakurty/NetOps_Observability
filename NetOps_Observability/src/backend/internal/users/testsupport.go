@@ -42,6 +42,11 @@ type LegacySeeder interface {
 // SeedLegacyForTest — see LegacySeeder. The id is derived from the username
 // exactly as the legacy code derived it, and CreatedAt is taken from the caller so
 // a test can place an account on either side of the migration epoch.
+//
+// u.IdentityMigration is honoured when set, so a test can seed a row in an
+// explicit `unresolved` or `ambiguous` state (owner Decision 2). `ambiguous` is
+// otherwise only reachable through a write race, and the rule that the lazy path
+// must never touch such a row has to be provable on both backends.
 func (s *FileStore) SeedLegacyForTest(u User) error {
 	u.ID = legacyUserID(u.Username)
 	u.Identity = nil
@@ -71,8 +76,15 @@ func (s *PGStore) SeedLegacyForTest(u User) error {
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO users (id, tenant_id, data) VALUES ($1, $2, $3)`,
-			u.ID, normTenant(u.TenantID), data)
-		return err
+		if _, err := tx.Exec(ctx, `INSERT INTO users (id, tenant_id, data) VALUES ($1, $2, $3)`,
+			u.ID, normTenant(u.TenantID), data); err != nil {
+			return err
+		}
+		if u.IdentityMigration == nil {
+			// A legacy row genuinely has NO state row: that is what the migration has
+			// to cope with, so the default seed leaves the side table empty.
+			return nil
+		}
+		return upsertStateTx(ctx, tx, u)
 	})
 }

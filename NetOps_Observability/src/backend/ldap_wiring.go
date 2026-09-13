@@ -101,11 +101,10 @@ func (s *server) handleLDAPLogin(w http.ResponseWriter, r *http.Request) {
 	role := ldap.RoleFor(id.Groups, cfg.RoleMappings, cfg.DefaultRole)
 	// Resolution + account-state gates + session, shared with TACACS+ (auth.go).
 	//
-	// THE KEY IS ("ldap:" + host:port, lower(DN or login)) — tracker 300 §2.3, so
-	// two directories are two namespaces even when they hand out the same login
-	// names, and a login name is no longer an identity anywhere. The DN is
-	// preferred when the directory returned one and `subject_kind` records which
-	// was used. H1: refuses outright when the tuple would reach a LOCALLY-managed
+	// THE KEY IS ("ldap:" + host:port, lower(login)) — tracker 300 §2.3 as amended
+	// by owner Decision 2, so two directories are two namespaces even when they
+	// hand out the same login names, and a login name is never an identity on its
+	// own. H1: refuses outright when the tuple would reach a LOCALLY-managed
 	// account.
 	s.completeFederatedLogin(w, r, ldapAssertion(cfg, id, req.Username, role))
 }
@@ -134,19 +133,26 @@ func ldapDirectoryIssuer(cfg ldapConfig) string {
 	return users.LDAPIssuer(scheme + "://" + host)
 }
 
-// ldapAssertion is what the directory verified: the DN it returned when it
-// returned one, else the login name it accepted — and `subject_kind` records
-// WHICH, so a later DN-vs-login policy change is visible rather than silent
-// (§2.3). A DN move (an OU change) therefore yields a new account by design; the
-// old one surfaces as `identity_status: pending` for the operator.
+// ldapAssertion is what the directory verified. THE SUBJECT IS THE NORMALISED
+// LOGIN NAME (`subject_kind = login`), matching TACACS+ — owner Decision 2,
+// 2026-09-13, amending design §2.3, for three reasons:
+//
+//  1. it is what the directory AUTHENTICATED (the DN is a directory-internal
+//     locator that the bind returns, not the credential the person presented);
+//  2. it is STABLE — a DN moves whenever a person moves OU, and keying on it
+//     silently re-namespaced the account and orphaned everything that referenced
+//     it;
+//  3. decisively for this change, it makes every legacy LDAP row
+//     DETERMINISTICALLY backfillable offline: the row records the login name, so
+//     the whole estate is migrated in one boot pass instead of waiting for each
+//     person to sign in.
+//
+// The DN travels as a PROFILE attribute (Identity.DirectoryDN), refreshed on every
+// login, so an operator can still correlate an account with the directory.
 func ldapAssertion(cfg ldapConfig, id *ldap.Identity, login, role string) users.Assertion {
 	var dn, email, display string
 	if id != nil {
 		dn, email, display = id.DN, id.Email, id.DisplayName
-	}
-	subject, kind := strings.ToLower(strings.TrimSpace(dn)), users.SubjectKindDN
-	if subject == "" {
-		subject, kind = strings.ToLower(strings.TrimSpace(login)), users.SubjectKindLogin
 	}
 	return users.Assertion{
 		Identity: users.Identity{
@@ -154,14 +160,18 @@ func ldapAssertion(cfg ldapConfig, id *ldap.Identity, login, role string) users.
 			// authoritative and the provisioning tenant is the configured default.
 			TenantID:    cfg.DefaultTenant,
 			Issuer:      ldapDirectoryIssuer(cfg),
-			Subject:     subject,
+			Subject:     strings.ToLower(strings.TrimSpace(login)),
 			Protocol:    users.ProtocolLDAP,
-			SubjectKind: kind,
+			SubjectKind: users.SubjectKindLogin,
+			DirectoryDN: strings.TrimSpace(dn),
 		},
 		Email:       email,
 		DisplayName: firstNonEmpty(display, login),
 		Role:        role,
-		// §2.6: the legacy LDAP door keyed on the TYPED LOGIN NAME, not the DN.
+		// The legacy LDAP door keyed on the TYPED LOGIN NAME. It is carried for
+		// completeness, but the constrained lazy bind now refuses an ldap assertion
+		// outright (owner Decision 2: an LDAP row has a deterministic backfill, so
+		// reaching for a username match would be guessing where a certainty exists).
 		LegacyUsername: login,
 	}
 }

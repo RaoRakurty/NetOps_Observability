@@ -96,6 +96,21 @@ type createUserRequest struct {
 	Status      string `json:"status"`
 }
 
+// identityFilterState maps the ?identity= query value to a migration state, or ""
+// for "no filter". Closed vocabulary: anything else is ignored rather than
+// interpreted, so a typo can never widen a tenant-scoped list.
+func identityFilterState(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case users.IdentityStateBound:
+		return users.IdentityStateBound
+	case users.IdentityStateUnresolved, "pending":
+		return users.IdentityStateUnresolved
+	case users.IdentityStateAmbiguous:
+		return users.IdentityStateAmbiguous
+	}
+	return ""
+}
+
 func (s *server) handleUsers(w http.ResponseWriter, r *http.Request) {
 	claims, ok := s.requireAdmin(w, r)
 	if !ok {
@@ -107,19 +122,22 @@ func (s *server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		// Strict isolation is enforced in the repo: List returns only the caller's
 		// tenant (RLS-scoped on the pg backend; the same sameTenant filter on file).
 		list := s.users.List(tenant, cross)
-		// ?identity=pending (design §2.7) — the accounts that hold no canonical
-		// identity tuple yet, so an operator can find and remediate (or disable)
-		// every pre-migration federated row without reading the whole table. The
-		// filter is applied AFTER the tenant scope, never instead of it: an
+		// ?identity=bound|unresolved|ambiguous (owner Decision 2) — the migration
+		// state as an operator work queue: `unresolved` is what is waiting for a
+		// verified sign-in, `ambiguous` is what needs a human decision. `pending` is
+		// kept as an alias for `unresolved` so operator scripts and the shipped SPA
+		// written against the first cut keep working.
+		//
+		// The filter is applied AFTER the tenant scope, never instead of it: an
 		// unrecognised value narrows nothing and is ignored rather than widening.
-		if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("identity")), "pending") {
-			pending := make([]User, 0, len(list))
+		if want := identityFilterState(r.URL.Query().Get("identity")); want != "" {
+			matched := make([]User, 0, len(list))
 			for _, u := range list {
-				if u.IdentityPending() {
-					pending = append(pending, u)
+				if u.IdentityState() == want {
+					matched = append(matched, u)
 				}
 			}
-			list = pending
+			list = matched
 		}
 		out := make([]publicUser, 0, len(list))
 		for _, u := range list {

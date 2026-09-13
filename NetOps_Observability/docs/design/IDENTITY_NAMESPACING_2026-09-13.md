@@ -1,6 +1,10 @@
 # Identity namespacing — tracker 300 (owner decision 2026-09-13)
 
-**Status: DESIGN OF RECORD, Phase 1 inspection complete, Phases 2–6 in execution.**
+**Status: DESIGN OF RECORD. Phases 1–6 shipped; AMENDED by the owner's Decision 2
+of 2026-09-13 (§10), which VETOES the lazy bind as the migration model and
+replaces it with a deterministic boot backfill plus explicit states and metrics.
+Where §2.3, §2.6, §2.7 or §3 disagree with §10, §10 wins — each of them carries an
+inline pointer.**
 Supersedes nothing: it implements `docs/design/sso-saml-oidc-design-2026-08-03.md`
 §4.1–4.3 under the owner's 2026-09-13 tightening (`docs/TRACKER.md` row 300,
 `docs/release/RC1_GOVERNANCE_DIRECTIVE_2026-09-13.md`). Where the two disagree,
@@ -140,13 +144,24 @@ pattern) runs the same cases against both backends.
 |---|---|---|---|
 | local | `local` | `lower(trim(username))` | `` |
 | OIDC callback / bearer | the verified `iss`, trailing `/` trimmed, lowercased host | `claims.Sub` **only** | alias (`txn.IdP`), or `` for the platform default |
-| LDAP | `ldap:` + normalised `LDAP_URL` host:port (no scheme case, no path) | `lower(DN)` when the directory returned one, else `lower(login name)`; which one was used is recorded in `subject_kind` (`dn` \| `login`) | `` |
+| LDAP | `ldap:` + normalised `LDAP_URL` host:port (no scheme case, no path) | `lower(login name)`, `subject_kind = login` — **AMENDED by §10 (owner Decision 2, 2026-09-13); it was `lower(DN)` when the directory returned one.** The DN is now a profile attribute, `user_identities.directory_dn` | `` |
 | TACACS+ | `tacacs:` + normalised server host:port | `lower(login name)` | `` |
-`subject_kind TEXT NOT NULL DEFAULT ''` is added for LDAP so a later DN-vs-login
-policy change is visible, not silent. A DN move (OU change) therefore yields a
-NEW account — by design; the old one is listed as identity-orphaned for the
-admin (§2.7). preferred_username and email are **profile attributes**
-refreshed on login (`MergeFederated`), never keys.
+`subject_kind TEXT NOT NULL DEFAULT ''` records WHICH string a directory gave us,
+so the policy change §10 made is visible in the data rather than silent: rows
+written before it carry `dn`, rows written after carry `login`.
+
+**Why the policy changed (§10).** Three reasons, in ascending order of weight: the
+login name is what the directory actually AUTHENTICATED (the DN is a
+directory-internal locator the bind happens to return); it is STABLE, where a DN
+moves whenever a person moves OU — which under the old rule minted a NEW account
+and orphaned the old one; and decisively, the login name is recorded on every
+legacy row, so the whole LDAP estate becomes DETERMINISTICALLY backfillable
+offline instead of waiting for each person to sign in. Renaming a person's login
+attribute is now the identity change (treat it like an issuer change); moving
+their DN is not.
+
+preferred_username, email and the DN are **profile attributes** refreshed on login
+(`MergeFederated` / `refreshIdentityMeta`), never keys.
 
 ### 2.4 Federated id/username derivation (design §4.2.4, unchanged)
 ```
@@ -222,6 +237,14 @@ disambiguator, and the generic message tells the user to use their
 organisation's sign-in page.
 
 ### 2.6 Legacy accounts — the one bounded exception, written down
+> **AMENDED by §10.** The owner VETOED this as the MIGRATION. It survives only as
+> the repair path for `identity_state = unresolved` accounts of protocol
+> **oidc/saml** — the one class whose provenance cannot be reconstructed offline.
+> Every condition below still holds, and three more were added: the stored state
+> must be `unresolved`, the protocol must be oidc/saml, and a derivation that
+> collides is marked `ambiguous` instead of being merged. local/ldap/tacacs
+> accounts are migrated deterministically at boot (§10) and can no longer reach
+> this path at all.
 Pre-migration federated rows (`auth_source ∈ {oidc, ldap, tacacs}`) carry no
 issuer/subject; **it cannot be derived offline**, and design §4.3 (owner-
 approved 2026-08-03) says such rows are bound "lazily at next login". Rule 6
@@ -264,17 +287,22 @@ or door than its `auth_source` (condition 2 fails) — it stays unbound, the
 assertion provisions a fresh account, and the legacy row is listed as pending.
 
 ### 2.7 Admin visibility (minimal, no new pages)
-`publicUser` gains `id` and `identity_status: bound | pending` (pending = no
-identity row). `GET /api/users?identity=pending` filters. The users table shows
-a small "identity pending" badge; no other UI change. The admin can disable a
-pending account (existing control) if they do not want it lazily bound.
+> **AMENDED by §10:** the vocabulary is `bound | unresolved | ambiguous`, stored
+> rather than inferred, with an `identity_reason`. `pending` survives only as a
+> query-string alias for `unresolved`.
+
+`publicUser` gains `id`, `identity_status` and `identity_reason`.
+`GET /api/users?identity=bound|unresolved|ambiguous` filters. The users table
+shows a small "identity not linked yet" badge, and a "needs a decision" badge for
+an ambiguous account; no other UI change. The admin can disable an unresolved
+account (existing control) if they do not want it bound at a later sign-in.
 
 ## 3. Migration — expand / backfill / switch / enforce / contract
 
 | Step | PG | File | Idempotent because |
 |---|---|---|---|
 | **Expand** (0049) | create `user_identities` + RLS; `users` gets nothing | `User.Identity` field, nil = pending | `IF NOT EXISTS`; nil field |
-| **Backfill** (0050 + Go at boot) | insert `(tenant, 'local', id, id, 'local', '', 'backfilled-local')` for every `auth_source ∈ {'', local}` row `ON CONFLICT DO NOTHING`; federated rows: **nothing** (§2.6); write the migration marker once | same in `load()`; the marker in the KV | `ON CONFLICT DO NOTHING`; marker written only if absent |
+| **Backfill** (0050 + 0051 + Go at boot) | insert `(tenant, 'local', id, id, 'local', '', 'backfilled-local')` for every `auth_source ∈ {'', local}` row `ON CONFLICT DO NOTHING`; write the migration marker once. **§10: 0051 adds the explicit state table, and the Go boot pass also derives every LDAP and TACACS+ identity** — only oidc/saml rows are left unresolved | same in `load()` + the same Go boot pass; the marker in the KV | `ON CONFLICT DO NOTHING`; marker written only if absent; the Go pass is compare-then-write |
 | **Switch** | code resolves through §2.5 for every door; legacy tests updated; `TestBearerUsernameIsOneGlobalNamespace` replaced by `TestBearerIdentityIsTenantIssuerSubject` | same code path | n/a |
 | **Enforce** | already enforced by the PK from step 1; add `CHECK (issuer <> '' AND subject <> '' )`; boot refuses to start if any `local` user lacks an identity row after backfill (a converge step must not destroy the estate, so it refuses, it does not delete) | store refuses a write that would create a second identity for a user | pure constraints |
 | **Contract** | **NOT in this release.** `users.id` stays the principal id and legacy rows keep `id == username`. Nothing is dropped. Recorded as a follow-up tracker row: retire the username-as-id shape once no pending legacy federated row remains on any deployment | | |
@@ -396,4 +424,116 @@ re-homing (e.g. an IdP migration) needs the explicit linking ceremony that
 design §15 defers.
 
 **Open for the owner:** the §2.6 lazy bind veto (default: enabled, bounded,
-audited).
+audited). → **ANSWERED 2026-09-13: vetoed as the migration model. See §10.**
+
+## 10. Owner Decision 2 (2026-09-13) — deterministic migration, explicit states, metrics
+
+The owner's ruling, verbatim and binding:
+
+> "Use deterministic migration/backfill for identities whose current provenance
+> can be established. Preferred process: expand schema -> backfill known identity
+> mappings -> validate -> switch resolver -> enforce uniqueness -> retire
+> global-username assumptions. Do not leave all existing identities un-namespaced
+> and rely on future logins to repair them one at a time. … A constrained lazy
+> migration MAY exist only for legacy records whose issuer/source/subject
+> provenance cannot safely be reconstructed offline. For those cases: place them in
+> an explicit legacy/unresolved state or namespace; never auto-link by email; never
+> auto-link by username; require validated tenant/provider context before binding;
+> produce an audit event; make the operation idempotent; reject ambiguous matches
+> instead of guessing. Do not silently merge two identities. Add migration metrics
+> showing: deterministically migrated / legacy/unresolved / ambiguous/manual
+> remediation."
+
+### 10.1 What can be established offline, and what cannot
+
+| auth_source | issuer | subject | provenance | offline? |
+|---|---|---|---|---|
+| `local`, `''` | `local` | `lower(username)` | `backfilled-local` | **yes** — we are the issuer |
+| `ldap` | `ldap:host:port` from the door's config | `lower(login name)` | `backfilled-ldap` | **yes**, once the door's host is known |
+| `tacacs` | `tacacs:host:port` | `lower(login name)` | `backfilled-tacacs` | **yes**, same |
+| `oidc`, `saml` | the broker `iss` | the broker `sub` | — | **NO.** `sub` is not a function of the username or the email, and deriving it from either is precisely the auto-linking rule 4 forbids |
+
+The LDAP row is what §2.3's amendment bought: with the DN as subject nothing was
+derivable offline; with the login name, everything is.
+
+### 10.2 The state machine (stored, never inferred)
+
+```
+                 ┌───────────── boot backfill: idempotent, runs EVERY boot ─────────────┐
+ legacy row  ────┤ local/ldap/tacacs, issuer known   → write identity → bound            │
+ (no identity)   │ ldap/tacacs, issuer NOT configured → unresolved(issuer-unavailable) ───┤ re-examined next boot
+                 │ oidc/saml                          → unresolved(provenance-unrecon…) ──┤
+                 │ derived tuple is another account's → ambiguous(tuple-claimed)      ────┘ never merged
+                 └─────────────────────────────────────────────────────────────────────┘
+
+ unresolved(oidc|saml) ── verified sign-in, all §2.6 conditions ──► bound (legacy-lazy-bound)
+ unresolved(oidc|saml) ── a condition refuses ────────────────────► unresolved (counted, reason named)
+ unresolved(oidc|saml) ── tuple claimed by another account ───────► ambiguous (audited, never merged)
+ ambiguous ───────────── operator removes the collision, next boot ► bound
+ bound ───────────────── nothing. A bound identity is never re-keyed.
+```
+
+`bound` / `unresolved` / `ambiguous`, each with a reason and a `since`, are
+**stored**: Postgres in `user_identity_state` (migration 0051 — FORCE-RLS
+`tenant_iso` like every other per-tenant table, `ON DELETE CASCADE`), file backend
+in the user JSON (`identity_state`). `users` is untouched by 0051. The reasons are
+a closed set: `provenance-unreconstructable`, `issuer-unavailable`,
+`tuple-claimed`, `unknown-auth-source`, `pending-backfill` (transient, written by
+0051 and replaced by the boot pass in the same boot).
+
+It is **impossible for the lazy path to touch** a `bound`, `ambiguous`, local, ldap
+or tacacs account: four named refusals (`already-bound`, `state-not-unresolved`,
+`protocol-deterministically-migrated`, `local-account`), each pinned by a test on
+both backends.
+
+### 10.3 Metrics (the owner's validation surface)
+
+```
+netops_identity_migration_accounts{state="bound-deterministic"}   # gauge
+netops_identity_migration_accounts{state="bound-legacy-lazy"}     # gauge
+netops_identity_migration_accounts{state="unresolved"}            # gauge
+netops_identity_migration_accounts{state="ambiguous"}             # gauge
+netops_identity_legacy_bind_total{result="bound"|"ambiguous"|"refused"}  # counters
+```
+
+The four gauges **partition the estate** (their sum is the account count), which is
+what makes them checkable at a glance. They are re-MEASURED after the boot backfill
+and after every lazy bind, never incremented hopefully. Boot logs one structured
+line, `"deterministic identity migration complete"`, carrying the same numbers plus
+what this boot did. A lazy repair is deliberately never counted as a deterministic
+migration.
+
+### 10.4 Where it runs
+
+`main()`: open the store → `SeedAdmin` → **`runIdentityBackfillAtBoot`** →
+`verifyIdentityInvariantsAtBoot` → … → listener. The plan's issuer strings come from
+the same `ldapConfigStore` / `tacacsConfigStore` the doors resolve against (built
+early in `main` and handed to `srv` unchanged), so the namespace the migration
+writes and the namespace the next sign-in looks up are ONE string — pinned by a
+test.
+
+`VerifyIdentityInvariants` stays fail-closed on the invariants (every LOCAL account
+holds an identity; no account holds two) and treats `unresolved`/`ambiguous` as
+RECORDED STATES, not failures: refusing to boot over a legacy oidc account would
+turn the documented waiting state into an outage.
+
+### 10.5 Accepted deviations, recorded
+
+1. **"Refuse" on an ambiguous match means refuse the ADOPTION, not the sign-in.**
+   The asserting principal is legitimate; only its claim on the legacy row is
+   refused. The legacy row is marked `ambiguous` and audited, and the assertion
+   provisions a fresh account. Refusing the session would turn a stale legacy row
+   into a self-inflicted outage.
+2. **"Two unresolved accounts match the legacy derivation" is unreachable by
+   construction**, so it has no end-to-end test: the derivation is an account-ID
+   lookup (`lower(LegacyUsername)` = `users.id`), which matches at most one row. The
+   reachable ambiguity is "the tuple is already claimed", which IS tested
+   deterministically through the backfill, and pinned at the pure level for the lazy
+   path (where it is otherwise only reachable as a write race).
+3. **A door with a configured host but sign-in DISABLED still contributes its
+   issuer.** The namespace is a pure function of host:port, so migrating those rows
+   is deterministic, and re-enabling the door changes nothing.
+4. **`load()` and `stampBoundStates` stamp `bound` for rows that already hold a
+   tuple**, so the stored state is complete even before the boot pass; the
+   unresolved REASONS are left to the boot pass, which is the only place that knows
+   the door configuration.

@@ -390,13 +390,22 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
                 </td>
                 <td style={{ fontWeight: 500 }}>
                   {userLabel(u)}
-                  {u.identity_status === "pending" && (
+                  {u.identity_status === "unresolved" && (
                     <span
                       className="badge warn"
                       style={{ marginLeft: 6 }}
-                      title="This account has no single sign-on identity recorded yet. It will be linked the next time its owner signs in through the same provider that created it. Disable the account if you would rather it were not."
+                      title="This account has no single sign-on identity recorded yet. Accounts from a directory (LDAP or TACACS+) are linked automatically when the system starts; this one comes from an identity provider, so it is linked the next time its owner signs in through the same provider that created it. Disable the account if you would rather it were not."
                     >
-                      identity pending
+                      identity not linked yet
+                    </span>
+                  )}
+                  {u.identity_status === "ambiguous" && (
+                    <span
+                      className="badge bad"
+                      style={{ marginLeft: 6 }}
+                      title="This account cannot be linked automatically: the identity it would be given already belongs to another account. Nothing was merged. Decide which account should keep it, then remove or rename the other."
+                    >
+                      needs a decision
                     </span>
                   )}
                 </td>

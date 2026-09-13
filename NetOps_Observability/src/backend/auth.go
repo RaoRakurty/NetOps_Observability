@@ -148,11 +148,23 @@ type publicUser struct {
 	// on it; the username is a display handle and, for a federated account, an
 	// opaque string that is never shown.
 	ID string `json:"id"`
-	// IdentityStatus is `bound` when the account holds its canonical identity
-	// tuple and `pending` when it does not — a pre-migration federated row that
-	// carries no issuer/subject and cannot have one derived offline (§2.7). An
-	// admin can disable a pending account if they do not want it lazily bound.
-	IdentityStatus string    `json:"identity_status,omitempty"`
+	// IdentityStatus is the account's EXPLICIT migration state (owner Decision 2,
+	// 2026-09-13) — a CLOSED three-value vocabulary the SPA switches on:
+	//
+	//	bound      — the account holds its canonical identity tuple.
+	//	unresolved — it does not, and one could not be established offline. For an
+	//	             oidc/saml account that is the documented waiting state (the
+	//	             broker `sub` is not derivable); IdentityReason says which.
+	//	ambiguous  — establishing it would have collided with another account's
+	//	             identity. It was NEVER merged: a human has to decide.
+	//
+	// It replaces the inferred `pending` of the first cut. An admin can disable an
+	// unresolved account if they do not want it bound at a later sign-in.
+	IdentityStatus string `json:"identity_status,omitempty"`
+	// IdentityReason is WHY, for an unresolved/ambiguous account
+	// (provenance-unreconstructable | issuer-unavailable | tuple-claimed |
+	// unknown-auth-source | pending-backfill). Empty for a bound account.
+	IdentityReason string    `json:"identity_reason,omitempty"`
 	Username       string    `json:"username"`
 	Role           string    `json:"role"`
 	Email          string    `json:"email,omitempty"`
@@ -165,19 +177,16 @@ type publicUser struct {
 	LastLoginAt    time.Time `json:"last_login_at,omitempty"`
 }
 
-// identityStatusOf renders §2.7's two states. Values are a CLOSED vocabulary —
-// the SPA switches on them.
-func identityStatusOf(u User) string {
-	if u.IdentityPending() {
-		return "pending"
-	}
-	return "bound"
-}
+// identityStatusOf renders the STORED migration state (owner Decision 2). The
+// store is the authority — this is a projection, not a second derivation, so the
+// admin surface and the metrics can never disagree about an account.
+func identityStatusOf(u User) string { return u.IdentityState() }
 
 func toPublic(u User) publicUser {
 	return publicUser{
 		ID:             u.ID,
 		IdentityStatus: identityStatusOf(u),
+		IdentityReason: u.IdentityStateReason(),
 		Username:       u.Username,
 		Role:           u.Role,
 		Email:          u.Email,

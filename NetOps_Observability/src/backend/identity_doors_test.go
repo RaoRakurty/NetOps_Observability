@@ -178,17 +178,41 @@ func TestAmbiguousLocalLoginIsRefusedGenericallyAndAudited(t *testing.T) {
 // §5.9 — the legacy lazy bind is observable at the door
 // ---------------------------------------------------------------------------
 
+// oidcLegacyAssertion is what the OIDC callback hands down for a person whose
+// account predates the migration: the verified issuer and `sub`, plus the legacy
+// derivation the old code keyed on.
+//
+// OIDC, not LDAP, because owner Decision 2 (2026-09-13) restricted the lazy path
+// to the one class whose provenance cannot be reconstructed offline. The LDAP and
+// TACACS+ estate is migrated deterministically at boot instead, and
+// TestLazyBindRefusesTheDeterministicallyMigratedDoors pins that it can no longer
+// be reached through those doors at all.
+func oidcLegacyAssertion(sub, legacy string) users.Assertion {
+	return users.Assertion{
+		Identity: users.Identity{
+			TenantID: TenantGlobal,
+			Issuer:   "https://kc.example.com/realms/correlix",
+			Subject:  sub,
+			Protocol: users.ProtocolOIDC,
+		},
+		Email:          "legacy@idp.example",
+		DisplayName:    "Legacy Person",
+		Role:           RoleReadOnly,
+		LegacyUsername: legacy,
+	}
+}
+
 func TestLegacyLazyBindIsAuditedAndCounted(t *testing.T) {
 	_, s := newTestServerState(t)
 	seeder, ok := s.users.(users.LegacySeeder)
 	if !ok {
 		t.Fatalf("%T cannot seed a legacy row", s.users)
 	}
-	// A PRE-TRACKER-300 row: id == lower(username), auth_source ldap, no identity.
+	// A PRE-TRACKER-300 row: id == lower(username), auth_source oidc, no identity.
 	// CreatedAt is well before the marker the store wrote when this store opened.
 	legacy := User{
-		Username: "legacy-ldap", Role: RoleReadOnly, Status: "active",
-		AuthSource: users.ProtocolLDAP, Email: "legacy@old.example",
+		Username: "legacy-oidc", Role: RoleReadOnly, Status: "active",
+		AuthSource: users.ProtocolOIDC, Email: "legacy@old.example",
 		// Old enough to be PRE-MARKER (the marker is stamped when this store
 		// opens), young enough that account_validity_days does not refuse it —
 		// this test is about the bind, not about the lifecycle gates.
@@ -199,22 +223,19 @@ func TestLegacyLazyBindIsAuditedAndCounted(t *testing.T) {
 	}
 	before := s.identityLegacyBinds.Load()
 
-	// The LDAP door signs that person in for the first time since the migration.
+	// The OIDC door signs that person in for the first time since the migration.
 	rec := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/auth/ldap/login", nil)
-	s.completeFederatedLogin(rec, r, ldapAssertion(
-		ldapConfig{Host: "dir.example.com", DefaultTenant: TenantGlobal},
-		&ldapIdentity{DN: "cn=legacy-ldap,ou=people,dc=example,dc=com", Email: "legacy@dir.example"},
-		"legacy-ldap", RoleReadOnly))
+	r := httptest.NewRequest(http.MethodPost, "/api/auth/sso/callback", nil)
+	s.completeFederatedLogin(rec, r, oidcLegacyAssertion("kc-sub-0001", "legacy-oidc"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("the legacy account's own door was refused: %d (%s)", rec.Code, rec.Body.String())
 	}
 	// It was ADOPTED, not duplicated: the same row, now holding its tuple.
-	adopted, found := s.users.Get("legacy-ldap")
+	adopted, found := s.users.Get("legacy-oidc")
 	if !found {
 		t.Fatal("the legacy row vanished")
 	}
-	if adopted.IdentityPending() {
+	if !adopted.IdentityBound() {
 		t.Fatal("the account was not bound to its canonical identity")
 	}
 	if got := adopted.Identity.Provenance; got != users.ProvenanceLegacyLazyBound {
@@ -239,11 +260,14 @@ func TestLegacyLazyBindIsAuditedAndCounted(t *testing.T) {
 		if e.Actor != adopted.ID {
 			t.Errorf("audit actor = %q, want the adopted account %q", e.Actor, adopted.ID)
 		}
-		if iss, _ := e.Detail["issuer"].(string); !strings.HasPrefix(iss, "ldap:") {
-			t.Errorf("audited issuer = %q, want the ldap namespace", iss)
+		if iss, _ := e.Detail["issuer"].(string); !strings.HasPrefix(iss, "https://kc.example.com/") {
+			t.Errorf("audited issuer = %q, want the broker namespace", iss)
 		}
-		if p, _ := e.Detail["protocol"].(string); p != users.ProtocolLDAP {
-			t.Errorf("audited protocol = %q, want %q", p, users.ProtocolLDAP)
+		if p, _ := e.Detail["protocol"].(string); p != users.ProtocolOIDC {
+			t.Errorf("audited protocol = %q, want %q", p, users.ProtocolOIDC)
+		}
+		if st, _ := e.Detail["identity_state"].(string); st != users.IdentityStateBound {
+			t.Errorf("audited identity_state = %q, want bound", st)
 		}
 		if prov, _ := e.Detail["provenance"].(string); prov != users.ProvenanceLegacyLazyBound {
 			t.Errorf("audited provenance = %q", prov)
@@ -254,17 +278,72 @@ func TestLegacyLazyBindIsAuditedAndCounted(t *testing.T) {
 	}
 
 	// A SECOND, DIFFERENT subject presenting the same legacy name gets a FRESH
-	// account, and nothing is bound again.
+	// account, and nothing is bound again — the refusal is COUNTED instead.
+	refusedBefore := s.identityLegacyBindRefused.Load()
 	rec2 := httptest.NewRecorder()
-	s.completeFederatedLogin(rec2, r, ldapAssertion(
-		ldapConfig{Host: "dir.example.com", DefaultTenant: TenantGlobal},
-		&ldapIdentity{DN: "cn=impostor,ou=people,dc=example,dc=com"},
-		"legacy-ldap", RoleReadOnly))
+	s.completeFederatedLogin(rec2, r, oidcLegacyAssertion("kc-sub-impostor", "legacy-oidc"))
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("the second subject: %d (%s)", rec2.Code, rec2.Body.String())
 	}
 	if after := s.identityLegacyBinds.Load(); after != before+1 {
 		t.Fatalf("a second subject bound again: counter %d, want %d", after, before+1)
+	}
+	if after := s.identityLegacyBindRefused.Load(); after != refusedBefore+1 {
+		t.Fatalf("netops_identity_legacy_bind_total{result=\"refused\"} went %d → %d, want +1", refusedBefore, after)
+	}
+}
+
+// Owner Decision 2: the two doors whose estate is migrated DETERMINISTICALLY can
+// no longer reach the lazy path at all. An LDAP/TACACS+ sign-in whose login name
+// matches a legacy row provisions a fresh account and leaves that row exactly as
+// it was, for the boot backfill to migrate.
+func TestLazyBindRefusesTheDeterministicallyMigratedDoors(t *testing.T) {
+	_, s := newTestServerState(t)
+	seeder, ok := s.users.(users.LegacySeeder)
+	if !ok {
+		t.Fatalf("%T cannot seed a legacy row", s.users)
+	}
+	for name, source := range map[string]string{
+		"legacy-dir": users.ProtocolLDAP,
+		"legacy-tac": users.ProtocolTACACS,
+	} {
+		if err := seeder.SeedLegacyForTest(User{
+			Username: name, Role: RoleReadOnly, Status: "active", AuthSource: source,
+			CreatedAt: time.Now().UTC().Add(-time.Hour),
+		}); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	boundBefore := s.identityLegacyBinds.Load()
+	r := httptest.NewRequest(http.MethodPost, "/api/auth/ldap/login", nil)
+
+	rec := httptest.NewRecorder()
+	s.completeFederatedLogin(rec, r, ldapAssertion(
+		ldapConfig{Host: "dir.example.com", DefaultTenant: TenantGlobal},
+		&ldapIdentity{DN: "cn=legacy-dir,ou=people,dc=example,dc=com"},
+		"legacy-dir", RoleReadOnly))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ldap sign-in: %d (%s)", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	s.completeFederatedLogin(rec, r, tacacsAssertion(tacacsConfig{
+		Enabled: true, Host: "tac1.example.com", DefaultTenant: TenantGlobal, DefaultRole: RoleReadOnly,
+	}.client(), "legacy-tac"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("tacacs sign-in: %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	if after := s.identityLegacyBinds.Load(); after != boundBefore {
+		t.Fatalf("a deterministically-migrated door LAZILY BOUND an account: counter %d → %d", boundBefore, after)
+	}
+	for _, id := range []string{"legacy-dir", "legacy-tac"} {
+		u, ok := s.users.Get(id)
+		if !ok {
+			t.Fatalf("%s vanished", id)
+		}
+		if u.IdentityBound() {
+			t.Fatalf("%s was lazily bound (%+v) — its migration is the boot backfill's job", id, u.Identity)
+		}
 	}
 }
 
@@ -392,6 +471,16 @@ func TestPendingIdentityIsVisibleToTheAdmin(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+	// The boot pass is what stamps the EXPLICIT state and its reason (owner
+	// Decision 2), so run exactly what main() runs — an oidc row is the one class
+	// it leaves `unresolved`.
+	rep, err := runIdentityBackfillAtBoot(s.users, identityBackfillPlan(s.ldap, s.tacacs))
+	if err != nil {
+		t.Fatalf("boot backfill: %v", err)
+	}
+	if rep.Census.Unresolved != 1 {
+		t.Fatalf("census = %+v, want exactly the one oidc row unresolved", rep.Census)
+	}
 	tok := adminToken(t, srv)
 
 	st, b := do(t, srv, "GET", "/api/users?identity=pending", tok, nil)
@@ -405,8 +494,11 @@ func TestPendingIdentityIsVisibleToTheAdmin(t *testing.T) {
 	if len(pending) != 1 || pending[0].ID != "pending-fed" {
 		t.Fatalf("?identity=pending returned %+v, want only the unbound legacy row", pending)
 	}
-	if pending[0].IdentityStatus != "pending" {
-		t.Errorf("identity_status = %q, want pending", pending[0].IdentityStatus)
+	if pending[0].IdentityStatus != users.IdentityStateUnresolved {
+		t.Errorf("identity_status = %q, want %q", pending[0].IdentityStatus, users.IdentityStateUnresolved)
+	}
+	if pending[0].IdentityReason == "" {
+		t.Error("identity_reason is empty — an unresolved account must say WHY (owner Decision 2)")
 	}
 	// The unfiltered list holds both it and the bootstrap admin, and the admin is
 	// BOUND — the local backfill ran.
@@ -542,7 +634,7 @@ func TestBootRefusesAStoreWhoseIdentityInvariantsFail(t *testing.T) {
 		}
 	}
 	// It REFUSED; it did not repair.
-	if u, ok := store.Get("unbackfilled"); !ok || !u.IdentityPending() {
+	if u, ok := store.Get("unbackfilled"); !ok || u.IdentityBound() {
 		t.Fatalf("the boot gate mutated the estate: %+v (ok=%v)", u, ok)
 	}
 	// A nil store is a refusal too, never a silent pass.

@@ -322,23 +322,39 @@ type server struct {
 	// owner's veto, so it has to be MEASURABLE, not merely documented: on a
 	// converged estate this stays at 0 forever.
 	identityLegacyBinds atomic.Uint64
-	sessions            *session.Store // server-side session lifecycle (idle/absolute/revocation)
-	apiKeys             *apikey.Store
-	refresh             *session.RefreshStore
-	snmpCreds           *snmpcred.Store
-	credOverrides       *credOverrideStore // learned SNMP credential bindings (credential sentinel)
-	credSentinel        *credSentinel      // self-healing credential resolution loop
-	sshHosts            *sshHostStore      // #20/device-ssh: TOFU host-key store for the SSH gateway
-	snmpProfiles        *snmpProfileStore
-	saved               saved.Repo
-	audit               auditRepo
-	notifyCfg           *notifyConfigStore
-	contactPoints       *contactPointStore
-	deviceLocations     *deviceLocationStore
-	sites               *sitesStore      // internal SoT sites (default provider)
-	deviceSites         *deviceSiteStore // operator device→site bindings (intent)
-	wanPolicy           *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
-	systemNet           *systemNetStore  // platform DNS + NTP system settings (clock sync + URL resolution)
+	// The other two outcomes of the constrained lazy path
+	// (netops_identity_legacy_bind_total{result=…}, owner Decision 2): a
+	// derivation that collided and was flagged rather than merged, and a bind a
+	// condition refused. A refusal count that climbs is legacy rows an operator
+	// still has to look at.
+	identityLegacyBindAmbiguous atomic.Uint64
+	identityLegacyBindRefused   atomic.Uint64
+	// The MIGRATION CENSUS gauges (netops_identity_migration_accounts{state=…}).
+	// Owner Decision 2 asks for exactly these three numbers —
+	// deterministically migrated / unresolved / ambiguous — and splits the bound
+	// population so a lazy repair is never counted as a deterministic migration.
+	// Published after the boot backfill and re-measured after every lazy bind.
+	identityBoundDeterministic atomic.Int64
+	identityBoundLegacyLazy    atomic.Int64
+	identityUnresolved         atomic.Int64
+	identityAmbiguous          atomic.Int64
+	sessions                   *session.Store // server-side session lifecycle (idle/absolute/revocation)
+	apiKeys                    *apikey.Store
+	refresh                    *session.RefreshStore
+	snmpCreds                  *snmpcred.Store
+	credOverrides              *credOverrideStore // learned SNMP credential bindings (credential sentinel)
+	credSentinel               *credSentinel      // self-healing credential resolution loop
+	sshHosts                   *sshHostStore      // #20/device-ssh: TOFU host-key store for the SSH gateway
+	snmpProfiles               *snmpProfileStore
+	saved                      saved.Repo
+	audit                      auditRepo
+	notifyCfg                  *notifyConfigStore
+	contactPoints              *contactPointStore
+	deviceLocations            *deviceLocationStore
+	sites                      *sitesStore      // internal SoT sites (default provider)
+	deviceSites                *deviceSiteStore // operator device→site bindings (intent)
+	wanPolicy                  *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
+	systemNet                  *systemNetStore  // platform DNS + NTP system settings (clock sync + URL resolution)
 	// DATA-PROTECTION-BEGIN — the whole Data Protection domain lives in
 	// internal/dataprotect: the backup intent store + live DR status, the
 	// netops-daily SM policy control plane, the snapshot inventory/management
@@ -920,6 +936,14 @@ func newServer() *server {
 	// bound once `srv` exists (see the bind below); until then it is inert, and
 	// no door can be reached before then.
 	identitySink := &identityAuditSink{}
+	// The LDAP/TACACS+ config stores are built HERE, before the user store, because
+	// the DETERMINISTIC identity backfill below needs the issuer namespaces from the
+	// very configuration the doors sign people in with (owner Decision 2,
+	// 2026-09-13). They are handed to srv further down — the same objects, because
+	// building a second overlay would be a second answer to "which directory is
+	// this".
+	ldapCfgStore := newLDAPConfigStore(envOr("LDAP_CONFIG_FILE", "/data/ldap_config.json"), vault)
+	tacacsCfgStore := newTACACSConfigStore(envOr("TACACS_CONFIG_FILE", "/data/tacacs_config.json"), vault)
 	users, err := newUsersStore(envOr("USERS_FILE", "/data/users.json"), identitySink)
 	if err != nil {
 		log.Fatalf("user store: %v", err)
@@ -929,6 +953,20 @@ func newServer() *server {
 		os.Getenv("ADMIN_INITIAL_PASSWORD"),
 	); err != nil {
 		log.Printf("seed admin (non-fatal): %v", err)
+	}
+	// Owner Decision 2 (2026-09-13), tracker 300: the identity migration is
+	// DETERMINISTIC and happens HERE — one pass, at boot, before anything serves
+	// traffic. Every account whose provenance can be established offline (local,
+	// ldap, tacacs) gets its canonical identity now; what genuinely cannot (an
+	// oidc/saml broker `sub`) is recorded in an explicit `unresolved` state with a
+	// reason, and a derivation that would collide becomes `ambiguous` and waits for
+	// a human. The lazy bind is no longer the migration.
+	//
+	// FATAL on failure, and idempotent, so a retry is always safe: a migration that
+	// half-ran must be visible at boot rather than discovered at a sign-in.
+	identityBackfill, err := runIdentityBackfillAtBoot(users, identityBackfillPlan(ldapCfgStore, tacacsCfgStore))
+	if err != nil {
+		log.Fatalf("user store: %v", err)
 	}
 	// Tracker 300 §3 "Enforce": every LOCAL account holds its identity and no
 	// account holds two — checked after the store's expand + backfill and after
@@ -1135,7 +1173,10 @@ func newServer() *server {
 	// Tracker 300 §2.6: bind the legacy-bind reporter now that srv (and its audit
 	// sink) exists. Until this line the sink is inert — which is correct, because
 	// no door is reachable before the listener starts.
-	identitySink.bind(srv.onIdentityLegacyBound)
+	identitySink.bind(srv.onIdentityLegacyBind)
+	// The boot backfill ran before srv existed (it has to: the enforce gate is
+	// upstream of the server), so its census is published onto the gauges now.
+	srv.setIdentityCensus(identityBackfill.Census)
 	// DATA-PROTECTION-BEGIN — the Data Protection domain (internal/dataprotect).
 	// Built here, after srv exists, because every seam it takes is a method on
 	// *server (the platform-admin gate, the audit sink, the OpenSearch caller).
@@ -1629,8 +1670,11 @@ func newServer() *server {
 		}
 	}
 	// VMALERT-WEBHOOK-END
-	srv.ldap = newLDAPConfigStore(envOr("LDAP_CONFIG_FILE", "/data/ldap_config.json"), vault)
-	srv.tacacs = newTACACSConfigStore(envOr("TACACS_CONFIG_FILE", "/data/tacacs_config.json"), vault)
+	// The same two stores the deterministic identity backfill read at boot — not
+	// rebuilt, so the issuer namespace the migration wrote is exactly the one this
+	// door resolves against.
+	srv.ldap = ldapCfgStore
+	srv.tacacs = tacacsCfgStore
 	srv.tokenPolicy = newTokenPolicyStore(envOr("TOKEN_POLICY_FILE", "/data/token_policy.json"), refresh)
 	// Security Policy engine (#24): deterministic System→Tenant→Role→User
 	// resolution of NIST-aligned controls. The store (Phase 2) is the engine's
@@ -4557,6 +4601,21 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "# HELP netops_identity_legacy_bound_total Pre-migration federated accounts adopted by the bounded §2.6 legacy identity bind since boot.\n")
 	fmt.Fprintf(w, "# TYPE netops_identity_legacy_bound_total counter\n")
 	fmt.Fprintf(w, "netops_identity_legacy_bound_total %d\n", s.identityLegacyBinds.Load())
+	// Owner Decision 2 (2026-09-13): the migration must be MEASURABLE — how much of
+	// the estate was migrated deterministically, how much is waiting in an explicit
+	// unresolved state, and how much needs a human. The four states partition the
+	// accounts, so the four gauges sum to the account count.
+	fmt.Fprintf(w, "# HELP netops_identity_migration_accounts Accounts by identity-migration state (bound-deterministic|bound-legacy-lazy|unresolved|ambiguous).\n")
+	fmt.Fprintf(w, "# TYPE netops_identity_migration_accounts gauge\n")
+	fmt.Fprintf(w, "netops_identity_migration_accounts{state=%q} %d\n", "bound-deterministic", s.identityBoundDeterministic.Load())
+	fmt.Fprintf(w, "netops_identity_migration_accounts{state=%q} %d\n", "bound-legacy-lazy", s.identityBoundLegacyLazy.Load())
+	fmt.Fprintf(w, "netops_identity_migration_accounts{state=%q} %d\n", "unresolved", s.identityUnresolved.Load())
+	fmt.Fprintf(w, "netops_identity_migration_accounts{state=%q} %d\n", "ambiguous", s.identityAmbiguous.Load())
+	fmt.Fprintf(w, "# HELP netops_identity_legacy_bind_total Outcomes of the constrained legacy identity bind since boot.\n")
+	fmt.Fprintf(w, "# TYPE netops_identity_legacy_bind_total counter\n")
+	fmt.Fprintf(w, "netops_identity_legacy_bind_total{result=%q} %d\n", "bound", s.identityLegacyBinds.Load())
+	fmt.Fprintf(w, "netops_identity_legacy_bind_total{result=%q} %d\n", "ambiguous", s.identityLegacyBindAmbiguous.Load())
+	fmt.Fprintf(w, "netops_identity_legacy_bind_total{result=%q} %d\n", "refused", s.identityLegacyBindRefused.Load())
 	// F-21: a response body that failed to encode used to be a 200 with zero
 	// bytes and no trace anywhere. This counter is that trace.
 	fmt.Fprintf(w, "# HELP netops_json_encode_failures_total Responses that failed to JSON-encode and were answered 500 instead of an empty 200.\n")
