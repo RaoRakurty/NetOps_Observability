@@ -115,6 +115,47 @@ COPY src/correlation/ ./
 # source offer; NOTICE carries the per-component attributions. certifi's own
 # LICENSE also remains in its dist-info under site-packages.
 COPY docs/THIRD_PARTY_LICENSES.md NOTICE /app/licenses/
+
+# NO WINDOWS PE BINARIES IN A LINUX RUNTIME IMAGE (tracker 238(b), owner
+# decision 2026-09-13). pip vendors distlib, and distlib carries SIX WINDOWS PE
+# launcher stubs — t32/t64/t64-arm/w32/w64/w64-arm.exe. They cannot execute on
+# musl Linux, nothing in this image links them, and the image ships NO licence
+# text beside them (pip's own LICENSE.txt covers pip; `_vendor/vendor.txt` names
+# `distlib==0.3.9` without stating distlib's or the stubs' licence). Syft
+# catalogues them as a distributed component all the same — `Simple Launcher
+# 1.1.0.14`, six times — and under TWO different shapes depending on which PE
+# cataloger claims the file first: package type `binary` with no purl
+# (v1.42.3, `pe-binary-package-cataloger`) or type `dotnet` with
+# `pkg:nuget/Simple%20Launcher@1.1.0.14` (v1.18.1,
+# `dotnet-portable-executable-cataloger`). Both spellings are the same six
+# files, and both were carried as UNDISCHARGED obligations.
+#
+# The decision is to DELETE THE BYTES, not to infer a licence basis that would
+# silence the scanner: a component Correlix does not ship needs no licence, and
+# an unreadable licence is not a licence. See
+# docs/compliance/OCI_SOURCE_COMPLIANCE.md §12.
+#
+# WHY THIS IS IN THE RUNTIME STAGE. The stubs reach the final image from the
+# BASE LAYER, not from the build stage — the build stage already deletes its own
+# duplicate copy of pip (~:95 above), so the `COPY --from=build` of
+# site-packages carries no pip at all, while `python:3.12-alpine` carries pip
+# 25.0.1 at the identical path underneath it. A delete in the build stage would
+# therefore remove nothing that ships.
+#
+# AND THE BUILD ITSELF IS THE CHECK. The assertion below fails the build if any
+# `*.exe` or any file with the PE `MZ` magic survives under /usr/local or /app,
+# so a base-image bump that reintroduces them cannot ship silently
+# (scripts/CLAUDE.md §16.1 — fail closed). `scripts/check-no-pe-binaries.py` is
+# the repo-side half of the same guard, wired into supply-chain.yml. No package
+# is installed, no pin moves: this stage still installs nothing.
+RUN rm -f /usr/local/lib/python3.12/site-packages/pip/_vendor/distlib/t32.exe \
+          /usr/local/lib/python3.12/site-packages/pip/_vendor/distlib/t64.exe \
+          /usr/local/lib/python3.12/site-packages/pip/_vendor/distlib/t64-arm.exe \
+          /usr/local/lib/python3.12/site-packages/pip/_vendor/distlib/w32.exe \
+          /usr/local/lib/python3.12/site-packages/pip/_vendor/distlib/w64.exe \
+          /usr/local/lib/python3.12/site-packages/pip/_vendor/distlib/w64-arm.exe \
+    && find /usr/local -type f -name '*.exe' -delete \
+    && python3 -c 'import pathlib, sys; files = (f for r in ("/usr/local", "/app") for f in pathlib.Path(r).rglob("*") if f.is_file() and not f.is_symlink()); bad = sorted(str(f) for f in files if f.suffix.lower() == ".exe" or f.open("rb").read(2) == b"MZ"); sys.exit("tracker 238(b) ASSERTION FAILED - Windows PE binary in a Linux image: " + ", ".join(bad)) if bad else print("tracker 238(b) OK: no *.exe and no PE (MZ) file under /usr/local or /app")'
 ENV PYTHONUNBUFFERED=1
 # SC-008: drop to a non-root system user. The app reads world-readable code and
 # binds an unprivileged port (8000), so it needs no root. UID 10001 is load
