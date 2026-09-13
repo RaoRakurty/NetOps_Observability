@@ -473,7 +473,7 @@ per design §3:
 
 **Also pending, and blocking commercial issue:** the **Correlix Enterprise
 licence TEXT and the CLA are awaiting legal approval, and no terms are written
-anywhere in this repository.** `LICENSES/Correlix-Enterprise.txt` is a slot, not
+anywhere in this repository.** `LICENSES/LicenseRef-Correlix-Enterprise.txt` is a slot, not
 a document, and [`CLA.md`](../../../CLA.md) at the repository root is the other —
 an explicit placeholder that says so on its face and must not be treated as an
 agreement. Do not draft, paraphrase, or generate licence or CLA text — the

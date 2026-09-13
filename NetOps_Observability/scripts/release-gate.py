@@ -874,9 +874,9 @@ def check_enterprise_licence_text(ctx: Ctx) -> Result:
     nothing. Engineering MUST NOT draft, paraphrase or adapt the terms."""
     return _blocker_row(
         "enterprise-licence.text", "Correlix Enterprise licence text is real",
-        "LICENSES/Correlix-Enterprise.txt", ENTERPRISE_MARKER,
+        "LICENSES/LicenseRef-Correlix-Enterprise.txt", ENTERPRISE_MARKER,
         "BLOCKED: final Correlix Enterprise licence text required from counsel — "
-        "replace LICENSES/Correlix-Enterprise.txt (RC1 blocker A)",
+        "replace LICENSES/LicenseRef-Correlix-Enterprise.txt (RC1 blocker A)",
     )
 
 

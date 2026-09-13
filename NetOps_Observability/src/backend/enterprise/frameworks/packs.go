@@ -4,7 +4,7 @@
 // COMMERCIAL ADD-ON MODULE. This package implements the `security_dialects`
 // entitlement (Enterprise tier) and is NOT Apache-2.0 core. See the LICENSE
 // notice file in this directory, ../../../../LICENSING.md, and
-// LICENSES/Correlix-Enterprise.txt.
+// LICENSES/LicenseRef-Correlix-Enterprise.txt.
 
 // Package frameworks carries the compliance-framework CROSSWALKS beyond the
 // shipped default two.

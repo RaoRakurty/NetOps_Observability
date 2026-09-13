@@ -16,7 +16,7 @@
 
 Engineering does not draft, paraphrase, borrow or generate licence or CLA text.
 That rule is recorded in [`NetOps_Observability/docs/runbooks/licensing.md`](NetOps_Observability/docs/runbooks/licensing.md)
-alongside the identical rule for `LICENSES/Correlix-Enterprise.txt`, and it exists
+alongside the identical rule for `LICENSES/LicenseRef-Correlix-Enterprise.txt`, and it exists
 because a plausible-looking agreement that no lawyer wrote is worse than an empty
 file: it invites reliance on rights the project does not actually hold.
 

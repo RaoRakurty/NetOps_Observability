@@ -10,7 +10,7 @@ Project licence
 Correlix core is licensed under the Apache License, Version 2.0. Commercial add-on modules are licensed under the Correlix Enterprise License (LicenseRef-Correlix-Enterprise) — see LICENSING.md.
 
 Correlix is open core. The full Apache-2.0 text is in LICENSES/Apache-2.0.txt;
-the Correlix Enterprise License is in LICENSES/Correlix-Enterprise.txt.
+the Correlix Enterprise License is in LICENSES/LicenseRef-Correlix-Enterprise.txt.
 LICENSING.md maps every directory to one of the two, and a file may also declare
 its own with an `SPDX-License-Identifier:` header. A file with no header, in a
 directory with no Enterprise notice file, is Apache-2.0 — the default is open.

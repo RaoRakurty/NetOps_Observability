@@ -24,7 +24,8 @@ deciding whether it is open or commercial.
 What is NOT asserted here, and why:
 
   * The Correlix Enterprise License TEXT. It does not exist yet
-    (`LICENSES/Correlix-Enterprise.txt` is a placeholder). One test asserts the
+    (`LICENSES/LicenseRef-Correlix-Enterprise.txt` is a placeholder).
+    One test asserts the
     placeholder is still a placeholder, so that landing the real text fails
     loudly and forces this file to be updated rather than silently passing.
   * `docs/THIRD_PARTY_LICENSES.md` itself. It is generated on a different cadence
@@ -143,7 +144,7 @@ def test_licence_notice_is_identical_at_both_roots_and_states_the_sentence():
     # marking on a file has to be told what that means.
     assert "Apache-2.0" in bodies[0] and COMMERCIAL_ID in bodies[0]
     assert "LICENSES/Apache-2.0.txt" in bodies[0]
-    assert "LICENSES/Correlix-Enterprise.txt" in bodies[0]
+    assert "LICENSES/LicenseRef-Correlix-Enterprise.txt" in bodies[0]
 
 
 # The opening of the stock Apache-2.0 licence body and its own section heading.
@@ -189,7 +190,7 @@ def test_root_licence_is_the_mixed_notice_and_not_the_stock_apache_text():
         assert "Correlix Enterprise License" in body
         # And it routes the reader to the detailed texts rather than inlining one.
         assert "LICENSES/Apache-2.0.txt" in body
-        assert "LICENSES/Correlix-Enterprise.txt" in body
+        assert "LICENSES/LicenseRef-Correlix-Enterprise.txt" in body
 
         # (b) It is NOT the stock Apache-2.0 text — by digest and by content.
         assert sha256(normalise(body)) != APACHE_2_0_SHA256, (
@@ -216,7 +217,8 @@ def test_root_licence_is_the_mixed_notice_and_not_the_stock_apache_text():
 def test_enterprise_licence_text_is_still_an_undrafted_placeholder(policy):
     """A tripwire in both directions.
 
-    Today `LICENSES/Correlix-Enterprise.txt` has no terms in it, and files are
+    Today `LICENSES/LicenseRef-Correlix-Enterprise.txt` has no terms in it,
+    and files are
     already marked with the identifier. That is a real, recorded release blocker,
     not an oversight. When counsel delivers the text, this test fails — which is
     exactly what should happen, because whoever lands it must then also flip the
@@ -848,7 +850,7 @@ def test_installer_bundle_states_the_project_licence():
     )
 
 
-def test_bundle_ships_the_licence_texts_its_footer_points_at():
+def test_bundle_ships_the_licence_texts_its_footer_points_at(policy):
     """A licence notice that names a file the customer did not receive is worse
     than no notice: it reads as a deliberate omission. The footer points at
     LICENSE, LICENSING.md and LICENSES/, so the build must copy all three — and
@@ -866,9 +868,26 @@ def test_bundle_ships_the_licence_texts_its_footer_points_at():
             f"a missing {missing!r} must stop the build — a bundle whose licence "
             f"notice points at nothing is a release-integrity failure"
         )
-    # And both texts must be non-empty in the bundle, by SPDX id.
-    assert 'for t in Apache-2.0 Correlix-Enterprise; do' in body, (
-        "the build must prove BOTH licence texts landed, by SPDX id"
+    # And both texts must be non-empty in the bundle, by SPDX id. The id list is
+    # DERIVED from licensing-policy.json rather than pinned as a literal: owner
+    # Decision 3 (2026-09-13) binds each LicenseRef one-to-one to
+    # LICENSES/<identifier>.txt, so the loop's stems ARE the declared texts'
+    # basenames. A rename applied to the policy but not to the installer — which
+    # is exactly how the bundle would start checking for a file the tree no longer
+    # has, and shipping one it never verified — fails here.
+    loop = re.search(
+        r'for t in ([^;\n]+); do\n\s*\[ -s "\$BUNDLE_DIR/LICENSES/\$t\.txt" \]',
+        body)
+    assert loop, (
+        "the build must prove BOTH licence texts landed in the bundle, by SPDX id "
+        "— the `for t in ...` / `[ -s $BUNDLE_DIR/LICENSES/$t.txt ]` check is gone "
+        "or has been rewritten into a shape this test no longer recognises"
+    )
+    expected = {Path(relpath).stem for relpath in policy["licence_texts"].values()}
+    assert set(loop.group(1).split()) == expected, (
+        f"make-installer.sh proves {sorted(loop.group(1).split())} landed, but "
+        f"licensing-policy.json declares the texts {sorted(expected)}. The bundle "
+        f"would check a name the tree does not have and ship one nothing verified."
     )
 
 

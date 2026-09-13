@@ -3,7 +3,7 @@
 > **RATIFIED 2026-09-05.** The owner re-affirmed the model as built: the root `LICENSE`
 > stays the concise mixed-licence notice (Apache-2.0 core + Correlix Enterprise
 > commercial/source-available portions) and is never the stock Apache text; the detailed
-> texts stay in `LICENSES/Apache-2.0.txt` and `LICENSES/Correlix-Enterprise.txt`, the
+> texts stay in `LICENSES/Apache-2.0.txt` and `LICENSES/LicenseRef-Correlix-Enterprise.txt`, the
 > latter a placeholder until counsel delivers it. Recorded in `licensing-policy.json`
 > (`decided`) and pinned by `tests/test_licensing_consistency.py`. The Enterprise licence
 > TEXT remains BLOCKED ON COUNSEL: the `enterprise-text-placeholder` release blocker in
@@ -19,7 +19,7 @@ one binary, a REAL directory boundary (`enterprise/`), SPDX headers (`Apache-2.0
 `LicenseRef-Correlix-Enterprise`), core never imports enterprise (stdlib import checker in
 CI, fail closed on unclassified directories), a machine-readable `licensing-policy.json`
 that `LICENSING.md` mirrors, a concise mixed-licence root `LICENSE` (never the bare Apache
-text), `LICENSES/Apache-2.0.txt` + `LICENSES/Correlix-Enterprise.txt` (the latter ONLY when
+text), `LICENSES/Apache-2.0.txt` + `LICENSES/LicenseRef-Correlix-Enterprise.txt` (the latter ONLY when
 lawyer-approved — **no invented legal text**, same for the CLA), central semantic
 entitlements (FeatureSAML, FeatureSCIM, FeatureLDAP, FeatureSIEMExport,
 FeatureSecurityDialects, FeatureMSPManagement, FeatureSecurityFindings) instead of tier
@@ -120,7 +120,7 @@ as under-claiming it on a mixed one.
 
 ## 7. Build order
 1. Legal + boundary structure: mixed-licence `LICENSE`, `LICENSES/Apache-2.0.txt`, placeholder
-   slot for `LICENSES/Correlix-Enterprise.txt` (approved text pending — blocker),
+   slot for `LICENSES/LicenseRef-Correlix-Enterprise.txt` (approved text pending — blocker),
    `licensing-policy.json` → generated `LICENSING.md`, SPDX headers, stdlib import checker +
    CI boundary gate (A–H of the owner spec), CONTRIBUTING CLA requirement (text pending —
    blocker), release-artifact inclusion checks (in flight, 2026-09-04).

@@ -27,7 +27,12 @@ The eight checks
        names its own identifier. An identifier is only worth what the text it
        resolves to says; a missing or blank licence file means the marking
        grants nothing, which is the same defect as the placeholder and must fail
-       the same way.
+       the same way. A `LicenseRef-` identifier is additionally bound ONE-TO-ONE
+       to `LICENSES/<identifier>.txt` (owner Decision 3, 2026-09-13): the file
+       must be named for the id, no second file beside it may carry the same
+       terms, and every identifier the policy declares must map to a text at
+       all. A stale checkout that still has the pre-rename filename therefore
+       fails rather than passing on a path nothing else references.
     C  The commercial identifier appears nowhere outside a commercial directory.
     D  Every Dockerfile is classified, and Correlix images declare the licence
        in OCI metadata while third-party repackages deliberately do not.
@@ -231,14 +236,81 @@ def check_headers(policy: dict) -> list[Failure]:
 MIN_LICENCE_TEXT_CHARS = 32
 
 
+def _check_no_duplicate_terms(ident: str, relpath: str) -> list[Failure]:
+    """Part of check B: the canonical file is the ONLY one carrying those terms.
+
+    Scoped to `LicenseRef-` identifiers and to the directory the text is declared
+    in, at both roots. Both bounds are deliberate: a LicenseRef is resolved by
+    nothing but its own file, so a second copy is an ambiguity nothing else would
+    catch, whereas a stock identifier like `Apache-2.0` is legitimately QUOTED all
+    over the tree — including inside the enterprise text, which says what is NOT
+    commercial — and flagging that would be noise. A whole-tree scan would also
+    trip over every doc that names the identifier in prose; what must be unique is
+    a licence ARTIFACT sitting in the licence directory.
+    """
+    fails: list[Failure] = []
+    if not ident.startswith("LicenseRef-"):
+        return fails
+    canonical = os.path.basename(relpath)
+    subdir = os.path.dirname(relpath)
+    for root in (REPO, PROJ):
+        directory = os.path.join(root, subdir)
+        if not os.path.isdir(directory):
+            continue  # the missing-file arm reports this; nothing to scan
+        for name in sorted(os.listdir(directory)):
+            if name == canonical:
+                continue
+            sibling = os.path.join(directory, name)
+            if not os.path.isfile(sibling):
+                continue
+            try:
+                with open(sibling, encoding="utf-8") as fh:
+                    body = fh.read()
+            except UnicodeDecodeError:
+                # NOT text. A licence text is text, so this is not a second copy
+                # of one, and skipping it asserts nothing false.
+                continue
+            except OSError as err:
+                # A file sitting in the licence directory that the gate could not
+                # OPEN is a file the gate did NOT check, and it may be exactly the
+                # duplicate this scan exists to find. Same accumulator escalation
+                # as check_spdx and check_licence_texts: the Failure is what makes
+                # the gate exit non-zero, and the `continue` only lets the rest of
+                # the directory still be scanned in the same run.
+                fails.append(Failure(
+                    "B", rel(sibling),
+                    f"sits in the licence directory but could not be read, so "
+                    f"whether it is a second file carrying the terms for {ident} "
+                    f"was never checked: {err}"))
+                continue
+            if ident in body:
+                fails.append(Failure(
+                    "B", rel(sibling),
+                    f"is a SECOND file carrying the terms for {ident}; the only "
+                    f"file that may is {relpath}. Two files resolving one "
+                    f"identifier can disagree about what was granted. If this is "
+                    f"a leftover from the rename to LICENSES/{canonical} (owner "
+                    f"Decision 3, 2026-09-13), delete it"))
+    return fails
+
+
 def check_licence_texts(policy: dict) -> list[Failure]:
     """Part of check B: every identifier resolves to a real text, at both roots.
 
     `licence_texts` in the policy is the mapping from SPDX identifier to the file
     that states its terms, and it is the ONLY thing that makes a marking mean
-    anything. Three ways it can silently stop meaning anything, all checked here
+    anything. Six ways it can silently stop meaning anything, all checked here
     and all in the DEFAULT mode, because none of them is a release-day concern:
 
+      * an identifier the policy declares in `identifiers` has no entry in
+        `licence_texts` at all. Source files declare those identifiers; one that
+        maps to no file resolves to no terms and nothing below would run.
+      * a `LicenseRef-` identifier's file is not NAMED for it. Owner Decision 3
+        (2026-09-13) fixes the canonical path at `LICENSES/<identifier>.txt`, so
+        the SPDX id a commercial source declares and the artifact that resolves
+        it are one-to-one and a reader can find one from the other without
+        consulting this policy. A LicenseRef is resolved by nothing except its
+        own file, so "which file" must not be a lookup.
       * the file is missing. Check H would notice only if BOTH roots lost it —
         its either-root fallback is about where the installer bundle sources the
         file from, not about whether the declaration holds. Deleting just the
@@ -251,12 +323,41 @@ def check_licence_texts(policy: dict) -> list[Failure]:
         texts are exempt from that one — `LICENSES/Apache-2.0.txt` is byte-for-
         byte upstream (a checked sha256) and does not contain the literal string
         "Apache-2.0", and editing it to satisfy a gate would be the wrong fix.
+      * a SECOND file beside it carries the same `LicenseRef-` terms. Two files
+        resolving one identifier can disagree, and the Decision-3 rename is
+        exactly how a second one appears: a stale `Correlix-Enterprise.txt` left
+        behind by a half-applied checkout, a merge that restored the old name, or
+        a copy made "so both paths work". Only the canonical file may carry the
+        terms; a duplicate is a failure even when its bytes match today, because
+        nothing keeps them matching tomorrow.
 
     NOT checked here: whether the enterprise text is still the placeholder. That
-    is a release blocker, not everyday drift, and it belongs to --release.
+    is a release blocker, not everyday drift, and it belongs to --release. Also
+    not here: that a commercial source file DECLARES the identifier — that is
+    check A's commercial direction, and check C is its converse.
     """
     fails: list[Failure] = []
-    for ident, relpath in sorted(policy["licence_texts"].items()):
+    texts = policy["licence_texts"]
+    for role, ident in sorted(policy["identifiers"].items()):
+        if ident not in texts:
+            fails.append(Failure(
+                "B", "licensing-policy.json",
+                f"the {role} identifier {ident} has no entry in licence_texts, so "
+                f"it resolves to no terms and no file was checked for it. Every "
+                f"identifier the policy declares must name the text that states "
+                f"its terms"))
+    for ident, relpath in sorted(texts.items()):
+        if ident.startswith("LicenseRef-"):
+            expected = f"{ident}.txt"
+            if os.path.basename(relpath) != expected:
+                fails.append(Failure(
+                    "B", "licensing-policy.json",
+                    f"the licence text for {ident} is declared at {relpath}, but a "
+                    f"LicenseRef must map one-to-one to a file named for it: "
+                    f"LICENSES/{expected} (owner Decision 3, 2026-09-13). Rename "
+                    f"the file with `git mv` — do not copy it — and update every "
+                    f"reference"))
+        fails.extend(_check_no_duplicate_terms(ident, relpath))
         for root in (REPO, PROJ):
             path = os.path.join(root, relpath)
             if not os.path.isfile(path):

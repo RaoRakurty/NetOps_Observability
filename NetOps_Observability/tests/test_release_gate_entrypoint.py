@@ -130,8 +130,8 @@ class StubRunner:
 
 ENTERPRISE_BLOCKER = {
     "check": "RELEASE",
-    "where": "LICENSES/Correlix-Enterprise.txt",
-    "message": ("LICENSES/Correlix-Enterprise.txt still contains the marker "
+    "where": "LICENSES/LicenseRef-Correlix-Enterprise.txt",
+    "message": ("LICENSES/LicenseRef-Correlix-Enterprise.txt still contains the marker "
                 "CORRELIX-ENTERPRISE-TEXT-PLACEHOLDER. OWNER ACTION: counsel."),
 }
 CLA_BLOCKER = {

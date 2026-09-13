@@ -571,13 +571,29 @@ ALLOWLIST: dict[AllowKey, str] = {
     # is a file whose contents it never verified, and in a gate whose whole
     # contract is to fail closed, "unreadable" must not resolve the same way
     # as "fine". The hole this closed was exactly that shape in the other
-    # direction: deleting or blanking LICENSES/Correlix-Enterprise.txt used
+    # direction: deleting or blanking LICENSES/LicenseRef-Correlix-Enterprise.txt used
     # to make its release blocker DISAPPEAR, so the gate reported the
     # placeholder resolved because the placeholder was gone. Proven by
     # tests/test_licensing_gate_reject_cases.py.
     # ===================================================================
     ("licensing-gate.py", "check_licence_texts", "379eecaf"): "a declared licence TEXT the gate could not read: appended as a check-B Failure naming the path, the identifier and the errno, which is what makes the gate exit non-zero. The `continue` only lets the other root's copy and the other identifier's text still be checked in the same run, so one unreadable file yields a complete report instead of a truncated one. NOT a swallow: skipping silently would report a licence text as verified when its contents were never read, and every file marked with that identifier would then be shipped under terms nobody checked exist",
     ("licensing-gate.py", "check_release_blockers", "9e955dab"): "a recorded release-blocker file the gate could not read: appended as a RELEASE Failure that carries the blocker's own `report` sentence, names the path and the errno, and says the blocker could not be EVALUATED and must not be assumed resolved — which is what makes --release exit non-zero. The `continue` lets the other root's copy and the other blocker still be evaluated in the same run. NOT a swallow: the whole point of this check is that an unevaluable blocker must never read as a cleared one",
+
+    # ===================================================================
+    # 2026-09-13 — scripts/licensing-gate.py, owner Decision 3: the
+    # canonical enterprise licence path is EXACTLY
+    # LICENSES/LicenseRef-Correlix-Enterprise.txt, one-to-one with the SPDX
+    # id. Part of that binding is that no SECOND file beside it carries the
+    # same terms, which means reading the other files in the licence
+    # directory. SAME accumulator shape as the three entries above, and
+    # written the same way for the same reason: the site started as
+    # `except (OSError, UnicodeDecodeError): continue` and was SPLIT before
+    # being pinned. A non-UTF-8 file is not a licence text and is still
+    # skipped; an unreadable one is a check-B FAILURE, because a file in
+    # LICENSES/ the gate could not open is a file that might be the
+    # duplicate the scan exists to find.
+    # ===================================================================
+    ("licensing-gate.py", "_check_no_duplicate_terms", "973fbbaf"): "a file in the licence directory the duplicate-terms scan could not read: appended as a check-B Failure naming the path, the identifier whose terms were being looked for, and the errno, which is what makes the gate exit non-zero. The `continue` only lets the rest of that directory, the other root and the other identifier still be scanned in the same run. NOT a swallow: skipping silently would report the canonical file as the ONLY holder of the terms while a file the gate never managed to read sat beside it, and two files resolving one LicenseRef can disagree about what was granted",
 
     # ===================================================================
     # 2026-09-06 — scripts/spdx-headers.py (tracker 240, the SPDX header
