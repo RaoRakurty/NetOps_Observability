@@ -540,6 +540,7 @@
     "entries": [
       {
         "id": "enterprise-text-placeholder",
+        "report": "BLOCKED: final Correlix Enterprise licence text required from counsel.",
         "what": "LICENSES/Correlix-Enterprise.txt still contains the marker CORRELIX-ENTERPRISE-TEXT-PLACEHOLDER.",
         "why": "Files are marked LicenseRef-Correlix-Enterprise but the identifier resolves to no terms. Shipping code under a licence that does not exist grants nothing and is not honest.",
         "owner_action": "Obtain the drafted Correlix Enterprise License from counsel and replace the placeholder.",
@@ -548,6 +549,7 @@
       },
       {
         "id": "cla-process-undefined",
+        "report": "BLOCKED: a CLA signing mechanism must be chosen by the owner before an external release.",
         "what": "CONTRIBUTING.md states the CLA requirement but names no signing process.",
         "why": "Open core depends on holding the rights to relicense contributed code into the commercial edition. A stated-but-unsigned CLA does not confer those rights, and inventing a process or a URL would be worse than saying it is undecided.",
         "owner_action": "Choose the mechanism (CLA assistant on the repository, or a countersigned document) and record it in CONTRIBUTING.md.",
