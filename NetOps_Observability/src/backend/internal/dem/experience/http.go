@@ -1224,9 +1224,12 @@ func (a *API) listChanges(w http.ResponseWriter, r *http.Request) {
 		// "that is all of them" from "that is all we would fetch", so a caller
 		// asking for the ceiling was told the answer was complete. The extra
 		// row is never needed to fill a page — `limit` cannot exceed the
-		// ceiling — it exists so `total` differs from `returned` when there is
-		// more, which is what makes complete, X-Page-Complete and the
-		// truncation log tell the truth.
+		// ceiling — it exists purely to DETECT truncation, which is what makes
+		// complete, X-Page-Complete and the truncation log tell the truth.
+		//
+		// It is a detector, not a measurement: `len(all)` is what we fetched,
+		// never how many matched, so the total below comes from a COUNT and not
+		// from this slice (tracker 291).
 		Limit: maxPageLimit + 1,
 	}
 	if t := strings.ToUpper(strings.TrimSpace(q.Get("type"))); t != "" {
@@ -1254,11 +1257,10 @@ func (a *API) listChanges(w http.ResponseWriter, r *http.Request) {
 	countErr := false
 	if atCeiling {
 		n, cerr := a.deps.Store.CountChanges(r.Context(), tenant, cq)
-		switch {
-		case cerr != nil:
+		if cerr != nil {
 			countErr = true
 			total = maxPageLimit
-		default:
+		} else {
 			total = n
 		}
 	}
