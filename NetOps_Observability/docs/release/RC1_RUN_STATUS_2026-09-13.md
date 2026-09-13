@@ -29,10 +29,10 @@ who is on it, where it is, and when it is expected. Times are local box time.
 | D2 | Tracker 300 deterministic migration (owner Decision 2): LDAP/TACACS backfilled offline, OIDC → explicit unresolved, lazy path constrained, metrics | Opus | ✅ DONE (84e91bde, merged; row 300 deleted) | — | — | |
 | 300 | identity namespacing — Phase 1 inspection + design of record (docs/design/IDENTITY_NAMESPACING_2026-09-13.md) | Fable | ✅ DONE (92bcf524) | Sun 04:58 | Sun 08:58 | inspection only, no code |
 | 300 | Phases 2–3 store+schema+migration (agent 300-store), then 4–6 doors+fan-out+tests (agent 300-doors) | Opus | ✅ DONE (store 1db02c1e + doors 40f328c5, merged 731d1f48) — row 300 rewrite pending CI green | — | — | ~3–4 working days in the register; parallelised where the phases allow |
-| — | merge agent branches, tracker rows deleted, full gate, push, CI green | Fable+Opus | 🔄 065f62d2 PUSHED after a 16/16 green local gate (incl. the new Postgres leg); CI 5/5 green. One more gate on the final head after D2 | Sun 16:37 | Sun 20:37 | after the first wave lands |
+| — | merge agent branches, tracker rows deleted, full gate, push, CI green | Fable+Opus | ✅ DONE — c7b08be7 pushed after 16/16 local gates incl. Postgres leg; CI 6/6 green | Sun 16:37 | Sun 20:37 | after the first wave lands |
 | — | main → feature merge (main is not an ancestor of the branch; strict mode needs it) | Fable | ⏳ queued (before the RC1 PR) | — | Sun 12:58 | routine merge, no rewrite |
 | — | customer bundle rebuild from the final commit | Opus | ⏳ queued behind CI green | — | Sun 22:37 | ~210 commits stale today |
-| — | lab deploy (.122) + qualify | Fable+Opus | ⏳ queued behind CI green | — | Sun 23:37 | verify served bundle markers |
+| — | lab deploy (.122) + qualify | Fable+Opus | 🔄 running (deploy18 c7b08be7; PG dumped first) | — | Sun 23:37 | verify served bundle markers |
 | — | final RC1 preparation PR merged under the full ruleset → FINAL_RC1_SHA → release-only gates | Fable | ⏳ queued | — | Mon 01:37 | then STOP; the tag is the owner's |
 
 ## Human blockers (unchanged)
