@@ -596,10 +596,18 @@ func (s *server) visibleDevicesFor(c jwtClaims) []models.Device {
 // class of disclosure as its fleet size, and the Sites tile already counts this
 // way (dashboard.go).
 func (s *server) visibleSitesFor(c jwtClaims) []Site {
+	return s.visibleSitesForScope(s.tenantVisibilityFor(c))
+}
+
+// visibleSitesForScope is visibleSitesFor over an ALREADY-RESOLVED visibility,
+// for the same reason tenantVisibilityForScope exists: a caller that must answer
+// MANY slugs (the sites importer walks a whole CSV) resolves the rule ONCE and
+// reuses it, instead of rescanning the tenant store per row. visibleSitesFor is
+// this function plus the principal lookup.
+func (s *server) visibleSitesForScope(v tenantVisibility) []Site {
 	if s.sites == nil {
 		return nil
 	}
-	v := s.tenantVisibilityFor(c)
 	if v.deny {
 		return nil
 	}
@@ -626,26 +634,58 @@ func (s *server) visibleSitesFor(c jwtClaims) []Site {
 // in arbitrary order for a cross-tenant caller, so when two tenants declare the
 // same slug it can return the HIDDEN one and shadow a site the caller may see.
 func (s *server) visibleSiteFor(c jwtClaims, slug string) (Site, bool) {
+	st, r := s.resolveSiteForScope(s.tenantVisibilityFor(c), slug)
+	return st, r == siteReadable
+}
+
+// siteReadability is what ONE declared slug is to a principal. A READ surface
+// only ever needs two of these — visibleSiteFor collapses both negatives into
+// not-found, because telling a caller "it exists but is not yours" is exactly the
+// 403-instead-of-404 disclosure the sites handler must not make.
+//
+// A WRITE path needs all three. An importer that cannot tell siteAbsent from
+// siteHidden has to guess, and both guesses are wrong: treat it as absent and it
+// CREATEs a second row under a slug that is already taken (or, with overwrite,
+// writes over a tenant's row the caller may not read); treat it as an ordinary
+// existing record and the plan compares the CSV against contents the caller may
+// not read and reports which fields differ. The third answer lets the importer
+// refuse the row and disclose nothing but the collision (tracker 298).
+type siteReadability int
+
+const (
+	siteAbsent   siteReadability = iota // no site under this slug in the caller's scope
+	siteReadable                        // exists, and the caller may read it
+	siteHidden                          // exists, and the caller may NOT read it
+)
+
+// resolveSiteForScope answers a slug against an ALREADY-RESOLVED visibility and
+// keeps "not there" distinct from "there but not yours". It is the ONE
+// implementation of that lookup: visibleSiteFor is this function plus the
+// principal lookup, and the sites importer is this function plus a refusal, so
+// neither carries its own copy of the restriction.
+func (s *server) resolveSiteForScope(v tenantVisibility, slug string) (Site, siteReadability) {
 	if s.sites == nil {
-		return Site{}, false
-	}
-	v := s.tenantVisibilityFor(c)
-	if v.deny {
-		return Site{}, false
+		return Site{}, siteAbsent
 	}
 	st, ok := s.sites.Get(v.tenant, v.cross, slug)
-	if ok && !v.hides(st.TenantID) {
-		return st, true
+	if !ok {
+		return Site{}, siteAbsent
 	}
-	if !ok || len(v.hiddenTenants) == 0 {
-		return Site{}, false
+	if v.deny { // scoped INTO a restricted tenant: every row of it is hidden
+		return Site{}, siteHidden
 	}
-	for _, cand := range s.visibleSitesFor(c) {
+	if !v.hides(st.TenantID) {
+		return st, siteReadable
+	}
+	// Hidden — but tenant.Collection.Get walks the map in arbitrary order for a
+	// cross-tenant caller, so when two tenants declare the same slug it may have
+	// handed back the HIDDEN one and shadowed a site this caller may see.
+	for _, cand := range s.visibleSitesForScope(v) {
 		if cand.Slug == slug {
-			return cand, true
+			return cand, siteReadable
 		}
 	}
-	return Site{}, false
+	return Site{}, siteHidden
 }
 
 // alertVisibleTenantOnly is HALF the alert visibility rule: TENANCY, and nothing

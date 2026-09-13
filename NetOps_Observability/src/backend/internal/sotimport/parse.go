@@ -41,9 +41,13 @@ type Binding struct {
 // ── results ─────────────────────────────────────────────────────────────────
 
 type RowResult struct {
-	Line   int    `json:"line"`             // 1-based source row (header = line 1)
-	Key    string `json:"key"`              // site slug / device identifier
-	Action string `json:"action"`           // create|update|skip|conflict|unchanged|error
+	Line int    `json:"line"` // 1-based source row (header = line 1)
+	Key  string `json:"key"`  // site slug / device identifier
+	// Action is create|update|skip|conflict|unchanged|refused|error. "refused" is
+	// a row naming a record the caller may not READ: the planner writes nothing
+	// and Detail says only that the key is taken — never which fields differ,
+	// which would be a comparison against contents (see runSitesImport).
+	Action string `json:"action"`
 	Detail string `json:"detail,omitempty"` // what would change, or why it failed
 }
 

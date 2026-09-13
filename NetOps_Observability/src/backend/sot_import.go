@@ -21,9 +21,12 @@ package backend
 //      `overwrite` to apply them. Exact matches are UNCHANGED.
 //
 // Safety: dry-run is the default — the planner returns a per-row plan (create /
-// update / skip / conflict / error) with counts and writes nothing; applying is a
-// second, explicit call. Tenant-scoped (infrastructure:write); records are
-// stamped from the caller's principal, never the payload. Bounded body.
+// update / skip / conflict / refused / error) with counts and writes nothing;
+// applying is a second, explicit call, and it reports the SAME outcomes. A row
+// naming a record the caller may not read is REFUSED: nothing is written and the
+// plan discloses only the collision (see runSitesImport). Tenant-scoped
+// (infrastructure:write); records are stamped from the caller's principal, never
+// the payload. Bounded body.
 
 import (
 	"encoding/json"
@@ -65,11 +68,35 @@ func siteChangeDetail(existing Site, in importedSite) string {
 	return strings.Join(ch, ", ")
 }
 
+// refusedSiteDetail is the WHOLE answer for a slug the caller may not read. It
+// names no field, no value and no tenant: existence is the only disclosure, and
+// it is accepted because the alternative — a silent create — collides with the
+// row that is already there under that slug. See runSitesImport.
+const refusedSiteDetail = "a site with this slug exists and you may not read it"
+
 // runSitesImport plans (and, unless dryRun, applies) a sites import for the
 // (tenant, cross) principal. Non-clobbering: existing records that would change
 // are CONFLICT/skipped unless overwrite is set.
-func (s *server) runSitesImport(tenant string, cross, overwrite, dryRun bool, rows []importedSite) *importResult {
+//
+// The create-vs-conflict decision is made against the caller's VISIBLE sites
+// (resolveSiteForScope), not the raw store, for the reason the device resolver
+// above is: the plan is returned to the caller, so an import of guessed slugs is
+// otherwise an existence oracle over a restricted tenant's site names — and the
+// conflict detail went further than existence by naming which FIELDS would
+// change, which is a comparison against contents the caller may not read. With
+// overwrite the same unfiltered read then wrote over that tenant's row.
+//
+// A slug that resolves to a site the caller may NOT read is a third outcome,
+// REFUSED: nothing is written, no shadow row is created under that slug, and the
+// row reports refusedSiteDetail and nothing else. create/conflict/update keep
+// their exact semantics for the sites the caller CAN read, and the dry-run plan
+// and the apply report the same three outcomes — the plan is the oracle, so it
+// must not be able to say more than the write does.
+func (s *server) runSitesImport(claims jwtClaims, tenant string, cross, overwrite, dryRun bool, rows []importedSite) *importResult {
 	res := sotimport.NewResult("sites", dryRun)
+	// Resolved ONCE per principal, not per row: the restriction is a per-subject
+	// question (break-glass is a time-boxed session) and a CSV is many rows.
+	vis := s.tenantVisibilityFor(claims)
 	for i, in := range rows {
 		line := i + 2 // +1 for 0-index, +1 for header row
 		slug := siteSlug(in.Slug)
@@ -87,8 +114,13 @@ func (s *server) runSitesImport(tenant string, cross, overwrite, dryRun bool, ro
 			res.Add(line, key, "error", err.Error())
 			continue
 		}
-		existing, found := s.sites.Get(tenant, cross, slug)
-		if !found {
+		existing, readable := s.resolveSiteForScope(vis, slug)
+		if readable == siteHidden {
+			// Write NOTHING and say only that the slug is taken.
+			res.Add(line, key, "refused", refusedSiteDetail)
+			continue
+		}
+		if readable == siteAbsent {
 			if !dryRun {
 				if _, err := s.sites.Upsert(cand); err != nil {
 					res.Add(line, key, "error", err.Error())
@@ -291,7 +323,7 @@ func (s *server) handleSoTImport(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		res = s.runSitesImport(tenant, cross, req.Overwrite, dryRun, rows)
+		res = s.runSitesImport(claims, tenant, cross, req.Overwrite, dryRun, rows)
 	case "device_sites", "devices":
 		rows, err := sotimport.ParseBindings(format, []byte(req.Data))
 		if err != nil {
@@ -304,7 +336,9 @@ func (s *server) handleSoTImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Ensure all action keys are present so the UI can render stable counters.
-	for _, k := range []string{"create", "update", "skip", "conflict", "unchanged", "error"} {
+	// "refused" is one of them: a row the caller may not read must show up as a
+	// counted outcome, not as a silently absent one (see runSitesImport).
+	for _, k := range []string{"create", "update", "skip", "conflict", "unchanged", "refused", "error"} {
 		if _, ok := res.Summary[k]; !ok {
 			res.Summary[k] = 0
 		}
