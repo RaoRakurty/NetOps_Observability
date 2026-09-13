@@ -108,6 +108,35 @@ applies to the platform operator, and is a no-op when no tenant is restricted.
   still stamps its timeintel snapshots — this is a rule about operator reads,
   never about what the platform collects or does on a tenant's behalf.
 
+✅ **Saved objects — searches, dashboards and report definitions**
+  (`savedVisibility`, tenant_id based; tracker 306). A saved object's BODY is the
+  customer's own work: a saved search's query string, a dashboard's panel
+  definitions, and a report's schedule plus the contact points it is delivered
+  to. `visibleSaved` returned the WHOLE store to any cross-tenant caller, so all
+  three reached platform staff a tenant had excluded, and the report ids
+  `POST /api/reports/run` accepts became discoverable with them.
+  - `GET /api/saved` (every `?type=`) and the `saved` branch of the omnibox
+    `GET /api/search/global`, which matches on the NAME and on the BODY.
+  - `GET|PUT|DELETE /api/saved/{id}` (**404**, never 403). The store's `Get` is
+    UNSCOPED, so this gate is the only thing between the caller and the row;
+    unfixed, the owner's PUT renamed a restricted tenant's report and the DELETE
+    destroyed it.
+  - `POST /api/saved` refuses to CREATE inside a hidden tenant (**403** — the
+    tenant id came from the caller's own request, so nothing is disclosed by
+    refusing plainly). A planted saved `report` is a standing delivery
+    instruction the platform executes on a timer against that tenant's data.
+  - One chokepoint for all of it: `canSeeSavedTenantOnly` /
+    `canMutateSavedTenantOnly` are the TENANCY half and are called in exactly one
+    place each, inside `savedVisibility`
+    (`TestSavedTenancyRulesAreNotCalledOutsideTheChokepoint` fails the build on a
+    second caller).
+
+  **Deliberately NOT restricted**: the report SCHEDULER and PIPELINE reads
+  (`saved.List("report", "", true)`, `Get` by schedule id in the worker). A
+  restricted tenant's own scheduled reports must keep rendering and reaching that
+  tenant's own recipients; whose visibility a run carries is decided separately,
+  by the report's own tenant (tracker 297/304).
+
 ✅ **Raw OpenSearch Dashboards console** (`/search`) — can't be per-tenant filtered
   (security plugin off), so it is **denied entirely whenever any tenant is
   operator-restricted** (`?c=search` gate). The operator uses the in-app Logs view
