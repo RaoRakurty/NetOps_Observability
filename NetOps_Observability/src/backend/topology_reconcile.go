@@ -77,8 +77,26 @@ func (s *server) reconcileTopologyOnce(ctx context.Context) {
 		logError("topology", "reconcile snapshot", map[string]any{"error": err.Error()})
 		return
 	}
-	observed := s.observeTopology(ctx)
+	observed, obsErr := s.observeTopology(ctx)
 	merged := topology.Reconcile(prev, observed, time.Now(), topologyStaleAfter, topologyPruneAfter)
+	if obsErr != nil {
+		// REFUSAL, for the EDGE HALF ONLY (tracker 290). This is the one caller
+		// that WRITES. Reconcile ages out every persisted record it does not
+		// observe — stale after topologyStaleAfter, dropped after
+		// topologyPruneAfter — so an unread adjacency channel does not merely
+		// draw an empty map for one request: it marks the entire persisted spine
+		// stale within 15 minutes and DELETES it within 7 days, while the
+		// Persisted tab stamps the graph as freshly reconciled. An observation
+		// that never happened must not be able to age anything out, so the
+		// previous edges are carried forward exactly as they were.
+		//
+		// The node half still reconciles: nodes come from the device registry,
+		// which is a different source and was read successfully. Refusing the
+		// whole cycle would let the inventory rot for the sake of the links.
+		merged.Edges = prev.Edges
+		logError("topology", "adjacency evidence unread — the persisted edges are carried forward unaged, and this cycle observed no adjacency",
+			map[string]any{"error": obsErr.Error(), "carried_edges": len(prev.Edges)})
+	}
 	if err := s.topology.ReplaceAll(ctx, merged); err != nil {
 		logError("topology", "reconcile replace", map[string]any{"error": err.Error()})
 	}
@@ -88,7 +106,7 @@ func (s *server) reconcileTopologyOnce(ctx context.Context) {
 // managed device (tenant stamped from the device), and an edge per deduped
 // adjacency (tenant = the source device's tenant). first_seen/last_seen/stale are
 // filled by topology.Reconcile, not here.
-func (s *server) observeTopology(ctx context.Context) topology.GraphRecords {
+func (s *server) observeTopology(ctx context.Context) (topology.GraphRecords, error) {
 	devs := s.discovery.Devices() // platform-wide (the reconciler has no claims)
 	tenantByDev := make(map[string]string, len(devs))
 	for _, d := range devs {
@@ -111,8 +129,8 @@ func (s *server) observeTopology(ctx context.Context) topology.GraphRecords {
 			Owner:    f.Owner,
 		})
 	}
-	neighbors, _ := collectors.FetchTopologyLinks(ctx) // best-effort: collector off/unreachable → empty map
-	ifaddr, _ := collectors.FetchIfAddrMap(ctx)        // best-effort: collector off/unreachable → empty map
+	neighbors, linksErr := s.fetchTopoLinks(ctx)
+	ifaddr, _ := collectors.FetchIfAddrMap(ctx) // best-effort: names ports, never decides an adjacency exists
 	for _, l := range observeTopoLinks(devs, neighbors, ifaddr) {
 		g.Edges = append(g.Edges, topology.EdgeRecord{
 			TenantID:      tenantByDev[l.Source], // edge belongs to its source device's tenant
@@ -128,7 +146,10 @@ func (s *server) observeTopology(ctx context.Context) topology.GraphRecords {
 			Bidirectional: l.Bidirectional,
 		})
 	}
-	return g
+	if errTopoLinksUnread(linksErr) {
+		return g, linksErr
+	}
+	return g, nil
 }
 
 // observeTopoLinks resolves the raw neighbour set into adjacencies PER TENANT

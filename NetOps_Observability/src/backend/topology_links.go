@@ -5,6 +5,7 @@ package backend
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"netops/backend/topology"
@@ -52,8 +53,21 @@ func (s *server) handleTopologyLinks(w http.ResponseWriter, r *http.Request) {
 
 	// Merged neighbour records from every discovery protocol (LLDP, CDP, …) plus
 	// the interface-address map that gives BGP-LS links real port names. Absent
-	// data (collectors off) → empty set; the UI falls back to labelled
-	// tier-inference. Not an error condition.
-	links := s.gatherTopoLinksFor(r.Context(), claims, devs)
+	// data (no discovery collector deployed) → empty set; the UI falls back to
+	// labelled tier-inference. Not an error condition.
+	//
+	// A READ THAT FAILED IS A REFUSAL HERE, not a banner (tracker 290). The link
+	// set is this endpoint's ENTIRE payload: there is no inventory, no alert
+	// overlay, nothing else in the response to hang a caveat on, so
+	// `{"links":[],"count":0}` with a 200 is the silent failure in its purest
+	// form — every consumer, ours and anyone's script, reads count:0 as "this
+	// estate has no adjacencies". 502 is the same call handleTopologyView already
+	// makes for the dependency projection: never a confident empty.
+	links, err := s.gatherTopoLinksFor(r.Context(), claims, devs)
+	if err != nil {
+		logWarn("topology", "adjacency evidence unread for /api/topology/links", map[string]any{"error": err.Error()})
+		writeError(w, http.StatusBadGateway, fmt.Errorf("%s: %w", topoLinksUnreadNote, err))
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"links": links, "count": len(links), "source": topology.LinkSources(links)})
 }

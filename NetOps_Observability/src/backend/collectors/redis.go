@@ -87,10 +87,21 @@ func redisTLSConfig() (*tls.Config, error) {
 	return &tls.Config{RootCAs: bundle.Pool(), ServerName: os.Getenv("REDIS_HOST"), MinVersion: tls.VersionTLS12}, nil
 }
 
+// ErrNotConfigured says there is no sharing channel at all — REDIS_HOST is
+// unset, so no collector publishes here and no reader should expect anything.
+//
+// It is a SENTINEL because a read path has to tell that apart from a channel
+// that is configured and DEAD. Both produce an empty result; only one of them
+// means "nothing was observed". A topology with no adjacencies is the honest
+// answer on a deployment that runs no discovery collector, and a lie on one
+// whose collectors are publishing into a channel the api cannot reach
+// (tracker 290).
+var ErrNotConfigured = errors.New("redis not configured")
+
 func redisDial(ctx context.Context) (net.Conn, error) {
 	addr := RedisAddr()
 	if addr == "" {
-		return nil, fmt.Errorf("redis not configured")
+		return nil, ErrNotConfigured
 	}
 	tcfg, err := redisTLSConfig()
 	if err != nil {
@@ -448,22 +459,59 @@ func FetchProbePathsAll(ctx context.Context) ([]PathResult, error) {
 // topology-discovery collector (LLDP, CDP, …) into one slice. LLDP is listed
 // first so it wins the read-side dedup when two protocols report the same
 // adjacency. A missing/empty per-protocol key is not an error (collector off).
+//
+// WHAT IS AN ERROR, AND WHY IT MATTERS (tracker 290). This used to fold every
+// outcome into one `if err != nil || raw == "" { continue }`, so a dead channel
+// returned an EMPTY neighbour set with a NIL error: the topology read path was
+// told, in the only language it understands, that no device on the estate has a
+// neighbour. That is a statement about the network, and it was false — the
+// evidence had simply never arrived. It is the same fold review 3.2-18 closed in
+// FetchDEMRuns and FetchProbePathsAll two functions above, and the three now
+// answer alike:
+//
+//   - a DEAD CONNECTION ends the read and is reported, naming the key it died
+//     on and how many protocol keys went unread. Everything read so far still
+//     comes back, so a caller that can render a PARTIAL adjacency set beside a
+//     banner has the material to do it;
+//   - a per-key REFUSAL from a live server, or a payload that will not decode,
+//     costs that one protocol and is reported once at the end — the other
+//     protocols' adjacencies are real and are returned;
+//   - an ABSENT or EMPTY key is not an error at all. That collector is off, and
+//     "this protocol reported nothing" is a true statement about it.
 func FetchTopologyLinks(ctx context.Context) ([]LLDPNeighbor, error) {
 	c, err := redisDial(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer c.Close()
+	keys := []string{topoLinksKeyLLDP, topoLinksKeyCDP, topoLinksKeyBGPLS}
 	var out []LLDPNeighbor
-	for _, key := range []string{topoLinksKeyLLDP, topoLinksKeyCDP, topoLinksKeyBGPLS} {
-		raw, err := redisCmd(c, "GET", key)
-		if err != nil || raw == "" {
+	var bad []string
+	for i, key := range keys {
+		raw, gerr := redisCmd(c, "GET", key)
+		switch {
+		case errors.Is(gerr, errRedisTransport):
+			return out, fmt.Errorf("topology links: the discovery channel failed while reading %s (%d of %d protocol keys were not read): %w",
+				key, len(keys)-i, len(keys), gerr)
+		case gerr != nil:
+			bad = append(bad, key)
 			continue
+		case raw == "":
+			continue // that discovery protocol is off — an absent key is not a failure
 		}
 		var n []LLDPNeighbor
-		if json.Unmarshal([]byte(raw), &n) == nil {
-			out = append(out, n...)
+		if jerr := json.Unmarshal([]byte(raw), &n); jerr != nil {
+			// The publisher authored this payload, so a decode failure means the
+			// record is corrupt. Skipping it quietly turned a corrupt LLDP blob
+			// into "no LLDP adjacency exists" (§10).
+			bad = append(bad, key)
+			continue
 		}
+		out = append(out, n...)
+	}
+	if len(bad) > 0 {
+		return out, fmt.Errorf("topology links: %d of %d protocol key(s) were unreadable (%s)",
+			len(bad), len(keys), strings.Join(bad, ","))
 	}
 	return out, nil
 }

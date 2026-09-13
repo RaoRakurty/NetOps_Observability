@@ -253,6 +253,17 @@ type View struct {
 	// Empty whenever a path resolved, or when the plain no-route case applies —
 	// the UI must never turn a missing fact into an invented hop.
 	PathState string `json:"path_state,omitempty"`
+	// Degraded names the evidence classes this view could NOT read, in operator
+	// language, so the canvas can say so instead of drawing the gap as a fact.
+	//
+	// A topology with no adjacencies is a STATEMENT — "nothing on this estate is
+	// next to anything" — and the read path used to make it whenever the
+	// discovery channel was unreachable (tracker 290). The nodes, alerts and
+	// health overlay in the same payload are still real and still worth drawing,
+	// so the view renders; this field is what keeps it from being read as
+	// complete. Empty on a healthy read, and empty when a collector is simply
+	// not deployed — absence of a collector is not a degradation.
+	Degraded []string `json:"degraded,omitempty"`
 }
 
 // ── input: the DI'd telemetry bundle ─────────────────────────────────────────
