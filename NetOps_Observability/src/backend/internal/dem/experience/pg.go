@@ -278,6 +278,48 @@ func (s *PGStore) ListChanges(ctx context.Context, tenant string, q ChangeQuery)
 	return filterChanges(out, q), nil
 }
 
+// CountChanges runs the SAME predicate as ListChanges with no LIMIT and no row
+// transfer — `SELECT count(*)`, which is what a database is for. The bounded
+// read above cannot answer "how many exist"; asking it to would mean shipping
+// every matching row across the wire to length one slice, which is the thing
+// the bound exists to prevent.
+//
+// The statement is kept character-for-character in step with ListChanges'
+// WHERE clause. If one changes, the other must: a count that answers a
+// different question from the list it accompanies is worse than no count.
+func (s *PGStore) CountChanges(ctx context.Context, tenant string, q ChangeQuery) (int, error) {
+	t, err := concreteTenant(tenant)
+	if err != nil {
+		return 0, nil
+	}
+	since := q.Since
+	if since.IsZero() {
+		since = time.Unix(0, 0).UTC()
+	}
+	var types []string
+	for _, raw := range q.Types {
+		if v := strings.ToUpper(strings.TrimSpace(raw)); v != "" {
+			types = append(types, v)
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, pgTimeout)
+	defer cancel()
+	n := 0
+	err = s.db.WithTenant(ctx, t, false, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT count(*) FROM dem_change_events
+			  WHERE event_at >= $1
+			    AND ($2::text[] IS NULL OR change_type = ANY($2::text[]))
+			    AND ($3::text = '' OR app = $3::text)
+			    AND ($4::text = '' OR site = $4::text)`,
+			since, types, q.App, q.Site).Scan(&n)
+	})
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 func (s *PGStore) RecordChange(ctx context.Context, in ChangeEvent) (ChangeEvent, error) {
 	if in.ID == "" {
 		in.ID = newChangeID()

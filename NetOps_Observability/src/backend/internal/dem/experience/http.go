@@ -1239,19 +1239,53 @@ func (a *API) listChanges(w http.ResponseWriter, r *http.Request) {
 	}
 	atCeiling := len(all) > maxPageLimit
 	rows := httppage.SliceOf(all, page)
-	httppage.LogTruncated(ChangesPath, page, len(rows), len(all))
-	httppage.WriteHeaders(w, page, len(rows), len(all))
+
+	// `total` MEANS "how many changes matched", and on a truncated read len(all)
+	// is not that number — it is `maxPageLimit + 1`, an artefact of the extra
+	// row we fetch to detect truncation, and it MOVES WITH THE PAGE LIMIT
+	// (tracker 291). So the moment the fetch is known to be short of the estate,
+	// the real count is asked for, from the store, with no limit.
+	//
+	// A count that FAILS is not papered over with the artefact. It is reported
+	// as the floor it is — the rows we did fetch, ceiling-clamped so it is a
+	// number we can stand behind — and the note says the total is unknown. An
+	// approximate answer presented as an exact one is the bug this fixes.
+	total := len(all)
+	countErr := false
+	if atCeiling {
+		n, cerr := a.deps.Store.CountChanges(r.Context(), tenant, cq)
+		switch {
+		case cerr != nil:
+			countErr = true
+			total = maxPageLimit
+		default:
+			total = n
+		}
+	}
+
+	// `complete` is derived from returned vs total, so the floor above would make
+	// it say TRUE (500 returned, 500 "total") on a read that is definitely
+	// short. atCeiling is a direct observation — more rows matched than one read
+	// returns — and it overrules the derivation in both the body and the header.
+	complete := !atCeiling && httppage.Complete(page, len(rows), total)
+	httppage.LogTruncated(ChangesPath, page, len(rows), total)
+	httppage.WriteHeaders(w, page, len(rows), total)
+	if !complete {
+		w.Header().Set(httppage.HeaderPageDone, "false")
+	}
 	note := ""
 	switch {
 	case len(all) == 0:
 		note = "No change was recorded in this window. That may be correct — a quiet estate reports nothing — but it is not proof that nothing changed: only the producers that are wired report here."
+	case countErr:
+		note = "More changes matched than this endpoint returns in one read, and the total could not be counted — the number shown is a floor, not a total. Narrow the window, or filter by type, app or site, to see the rest."
 	case atCeiling:
-		note = "More changes matched than this endpoint returns in one read. The count is a floor, not a total. Narrow the window, or filter by type, app or site, to see the rest."
+		note = "More changes matched than this endpoint returns in one read. The total is the whole matching count; this page is one read of it. Narrow the window, or filter by type, app or site, to see the rest."
 	}
 	a.deps.WriteJSON(w, http.StatusOK, map[string]any{
-		"window": label, "changes": rows, "total": len(all), "returned": len(rows),
+		"window": label, "changes": rows, "total": total, "returned": len(rows),
 		"limit": page.Limit, "offset": page.Offset,
-		"complete": httppage.Complete(page, len(rows), len(all)), "note": note,
+		"complete": complete, "note": note,
 	})
 }
 

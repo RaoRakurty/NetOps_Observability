@@ -67,6 +67,17 @@ type Store interface {
 	DeleteJourney(ctx context.Context, tenant, id string) error
 
 	ListChanges(ctx context.Context, tenant string, q ChangeQuery) ([]ChangeEvent, error)
+	// CountChanges answers HOW MANY match the predicate, ignoring q.Limit.
+	//
+	// It exists because a bounded read cannot answer that question about
+	// itself. /experience/changes fetches `ceiling + 1` rows so it can tell a
+	// full page from a truncated one, and then reported `len(rows)` as
+	// "total" — so a truncated read published `"total": 501` against a 500-row
+	// ceiling, a number that describes OUR FETCH and moves with the page limit
+	// (tracker 291). A client reading `total` as "how many changes exist" was
+	// wrong by construction. The count is the only way to answer it honestly,
+	// so it is part of the seam rather than something each caller approximates.
+	CountChanges(ctx context.Context, tenant string, q ChangeQuery) (int, error)
 	RecordChange(ctx context.Context, in ChangeEvent) (ChangeEvent, error)
 
 	// Promotions are the THIRD persisted object (tracker 255): the durable link
@@ -390,6 +401,19 @@ func (s *FileStore) ListChanges(_ context.Context, tenant string, q ChangeQuery)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return filterChanges(s.changes[t], q), nil
+}
+
+// CountChanges counts the matching rows with the LIMIT deliberately dropped —
+// the whole point is the number the bounded read cannot see.
+func (s *FileStore) CountChanges(_ context.Context, tenant string, q ChangeQuery) (int, error) {
+	t, err := concreteTenant(tenant)
+	if err != nil {
+		return 0, nil
+	}
+	q.Limit = 0
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(filterChanges(s.changes[t], q)), nil
 }
 
 func (s *FileStore) RecordChange(_ context.Context, in ChangeEvent) (ChangeEvent, error) {
