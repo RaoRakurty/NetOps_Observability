@@ -14,7 +14,7 @@ who is on it, where it is, and when it is expected. Times are local box time.
 | D5 | Tag ruleset `release-tags-immutable` on `refs/tags/v*` | Fable | ✅ DONE | Sun 04:58 | — | id 23134136, active, rules deletion+update+non_fast_forward, no bypass actors. Creation allowed (the owner pushes the tag once); dev tags untouched. |
 | D5 | Docs: runbook live-state, Decision-5 doc → APPLIED, pending register, consistency test | Opus | ✅ DONE (merged 1e3cd70b) | Sun 04:58 | Sun 05:58 | |
 | 306 | `visibleSaved` cross-tenant leak, read + write paths | Opus | 🔄 running | Sun 04:58 | Sun 07:58 | isolation test required |
-| 298 | `runSitesImport` read oracle → third outcome `refused` | Opus | 🔄 running | Sun 04:58 | Sun 07:58 | decision taken: refused = writes nothing, discloses existence only |
+| 298 | `runSitesImport` read oracle → third outcome `refused` | Opus | ✅ DONE (77ef4606, merged; row deleted) — also closed an overwrite path that wrote over a hidden tenant's site | Sun 04:58 | Sun 07:58 | decision taken: refused = writes nothing, discloses existence only |
 | 307 | four `collectors/redis.go` reads carry the 290 fold | Opus | 🔄 running | Sun 04:58 | Sun 07:58 | callers disposition + baseline entries deleted |
 | 296 | SR Linux hardening fails open on 2 of 3 path spellings | Opus | 🔄 running | Sun 04:58 | Sun 06:58 | decision taken: match all three spellings AND refuse unrecognised SRL form as UNASSESSED |
 | 308 | memflat false leak call on VictoriaMetrics | Opus | ✅ DONE (58ce94c8, merged; row deleted) | Sun 04:58 | Sun 07:58 | quiet-interval two-end-sample anchor, NOT a wider --mem-factor |
