@@ -541,3 +541,21 @@ from users where data->>'auth_source' = 'oidc';
 ```
 
 Expect `tenant_id = t_062d774a46c631273e4b9e9496df67e9` (Homedepot) for all four.
+
+## Identity key material — read before changing any issuer setting
+
+Since tracker 300 (2026-09-13) every federated account is keyed by
+**tenant + issuer + subject**, never by username or email. The issuer is
+literal key material:
+
+- OIDC/SSO: the broker's `iss` (the Keycloak realm issuer URL);
+- LDAP: `ldap:<host>:<port>` derived from `LDAP_HOST`/`LDAP_PORT`/`LDAP_USE_TLS`;
+- TACACS+: `tacacs:<host>:<port>`.
+
+Changing any of these **re-namespaces every account under it**: existing
+accounts stop matching (they show as *identity pending* in Users) and the
+next sign-in provisions a fresh account with no role history. Renaming a
+directory host, moving Keycloak to a new URL, or switching LDAP TLS on/off is
+therefore an identity migration, not a config edit. Plan it: keep the old
+value until every user has been re-homed through the explicit linking
+workflow (deferred, design §15), or accept fresh accounts and re-assign roles.

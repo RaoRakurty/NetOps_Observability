@@ -357,3 +357,43 @@ test that no `fed_` username is ever rendered.
   as pending on the old row.
 - The lazy bind (§2.6) is the one place username equality is consulted;
   flagged for the owner's veto.
+
+## 9. Phases 4–6 as shipped (2026-09-13, merged 731d1f48) — architect review
+
+Accepted deviations from §2.5/§4, all reviewed against §0:
+1. An UNBOUND connection (platform front door, elevation likewise) resolves
+   through `ResolveFederatedUnbound`, exactly as the bearer path does — the
+   platform realm signs in every tenant, so the bound form with a zero realm
+   would have duplicated every per-tenant account into the global tenant.
+2. `realmScopedOwner` (the §2.5 Amendment) treats an unconstrained realm as
+   NO cross-tenant reach — fail closed; the unbound form is the only
+   cross-tenant lookup, and it refuses >1 match.
+3. The elevation door passes no profile fields and never merges — read, never
+   written, is preserved on a tuple hit.
+4. One generic 401 for the local door (unknown, wrong password, ambiguous),
+   with the organisation sign-in hint shown to all three — a hint shown only
+   on ambiguity would itself be an existence oracle.
+5. The login throttle now checks and counts BOTH the typed name and the
+   resolved principal id (else an MFA-locked account still accepted password
+   attempts — F-25 would have reopened), and admin password reset resolves
+   the login name instead of missing an opaque id.
+6. `/api/sessions?user=` and `/api/users/mfa-reset` take the principal id;
+   the SPA was updated; operator scripts must pass ids.
+7. Refresh tokens keep the `username` JSON tag with the principal id inside
+   so live tokens stay valid across the upgrade.
+
+PARTIALLY_FIXED, by design and documented in code: admin-create password
+policy still matches the typed name (the account has no id yet; stricter, not
+weaker); user-scoped policy selectors are free text and take ids for new
+accounts; `created_by`/`owner` free-text columns keep legacy values.
+
+**Residual risk — issuer strings are key material.** `iss` of the broker,
+`LDAP_HOST/PORT/TLS`, and the TACACS+ host:port are part of every federated
+identity tuple; changing any of them re-namespaces every account under it
+(they become identity-pending, and a next login provisions fresh accounts).
+Operator note added to `docs/runbooks/okta-sso-setup.md`. A deliberate
+re-homing (e.g. an IdP migration) needs the explicit linking ceremony that
+design §15 defers.
+
+**Open for the owner:** the §2.6 lazy bind veto (default: enabled, bounded,
+audited).
