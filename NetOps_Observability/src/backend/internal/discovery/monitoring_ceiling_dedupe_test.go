@@ -69,7 +69,7 @@ func TestASecondSourceForAnAlreadyMonitoredDeviceIsNotChargedAgain(t *testing.T)
 	if got := a.MonitoredCount(); got != 1 {
 		t.Fatalf("monitored = %d, want 1 — the device was already being collected from", got)
 	}
-	if w := a.MonitoringWithheld(); len(w) != 0 {
+	if w := a.MonitoringWithheldFor("", true); len(w) != 0 {
 		t.Fatalf("a device the platform is already collecting from was reported as withheld by the licence ceiling: %+v", w)
 	}
 	for _, d := range a.Devices() {
@@ -100,7 +100,7 @@ func TestTwoRecordsOfOneDeviceInOnePollAreChargedOnce(t *testing.T) {
 	if got := a.MonitoredCount(); got != 1 {
 		t.Fatalf("monitored = %d, want 1", got)
 	}
-	if w := a.MonitoringWithheld(); len(w) != 0 {
+	if w := a.MonitoringWithheldFor("", true); len(w) != 0 {
 		t.Fatalf("one device was charged twice inside one poll: %+v", w)
 	}
 }
@@ -129,7 +129,7 @@ func TestTheCeilingStillRefusesAGenuinelyNewDevice(t *testing.T) {
 	if got := a.MonitoredCount(); got != 1 {
 		t.Fatalf("monitored = %d, want 1 — the ceiling must still hold", got)
 	}
-	w := a.MonitoringWithheld()
+	w := a.MonitoringWithheldFor("", true)
 	if len(w) != 1 || w[0].DeviceID != "netbox-leaf2" {
 		t.Fatalf("the second DEVICE must be withheld and listed, got %+v", w)
 	}
@@ -162,7 +162,7 @@ func TestTheSameHostnameInAnotherTenantIsADifferentDevice(t *testing.T) {
 	if got := a.MonitoredCount(); got != 1 {
 		t.Fatalf("monitored = %d, want 1 — a second tenant's box is a second entitlement", got)
 	}
-	w := a.MonitoringWithheld()
+	w := a.MonitoringWithheldFor("", true)
 	if len(w) != 1 || w[0].DeviceID != "netbox-globex-leaf1" {
 		t.Fatalf("the second TENANT's device must be withheld, got %+v", w)
 	}

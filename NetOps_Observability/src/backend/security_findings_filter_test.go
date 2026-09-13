@@ -21,11 +21,13 @@ package backend
 // selects. Break BuildFilters (drop the severity terms clause, swap the status
 // field, widen the seam anyOf) and these fail.
 //
-// WHAT IS STILL NOT PROVEN HERE, because the double does not honour it: any
-// AGGREGATION. Facets, the CTEM funnel, coverage, the trend histogram and the
-// compliance fold all read canned `aggregations` regardless of the query, so no
-// test in the lane shows a filter narrowing a facet count. That is named in the
-// double's own comment and is the honest boundary of this change.
+// WHAT IS NOT PROVEN HERE is the AGGREGATION half — facets, the CTEM funnel,
+// coverage and the trend histogram. It is proven next door, in
+// security_findings_agg_filter_test.go, which runs the same corpus with the
+// double in aggAware mode so those counts are computed from the documents that
+// matched. It was a real hole while it lasted: making FacetsBody, CurrentFoldBody,
+// TrendBody or CoverageBody build its query from EMPTY filters left every test
+// in this lane green.
 
 import (
 	"encoding/json"
