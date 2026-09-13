@@ -902,6 +902,23 @@ function CanvasInner({
             {CLOUD_READ_FAILED_NOTE}
           </span>
         )}
+        {/* Evidence the PROJECTION could not read (tracker 290). The canvas still
+            draws — the nodes, the alerts and the health overlay arrived and are
+            real — but an empty adjacency set is indistinguishable from the finding
+            "nothing here is next to anything", so the gap is named beside the map
+            rather than drawn as a fact. Same persistent role="alert" treatment as
+            the cloud read above, and it does not appear on a healthy read. */}
+        {(fetched?.degraded ?? []).map((note) => (
+          <span
+            key={note}
+            className="topo-select-label"
+            role="alert"
+            data-testid="topo-view-degraded"
+            style={{ color: "var(--bad)", fontSize: 12 }}
+          >
+            {note}
+          </span>
+        ))}
         <AskIris topic="topo.domain" label="Domain" />
         <button
           className={`topo-render-toggle topo-carrier${carrier ? " on" : ""}`}

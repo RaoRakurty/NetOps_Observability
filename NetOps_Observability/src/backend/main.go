@@ -390,6 +390,16 @@ type server struct {
 	// topology links) for deriving each WAN interface's measurement target. Defaults
 	// to collectors.FetchTopologyLinks; a DI seam so target derivation is testable.
 	wanNeighbors func(context.Context) ([]collectors.LLDPNeighbor, error)
+	// topoLinks is the ADJACENCY EVIDENCE source for every other read on the
+	// topology path — the canvas, /api/topology/links, the persistent reconciler,
+	// the assistant's topology context and the device-role index. Defaults to
+	// collectors.FetchTopologyLinks.
+	//
+	// It is a seam because the interesting case is the read FAILING: an empty
+	// adjacency set is indistinguishable from "nothing is next to anything", and
+	// tracker 290 is the whole read path having presented the first as the second.
+	// A test has to be able to break the channel to prove each surface says so.
+	topoLinks func(context.Context) ([]collectors.LLDPNeighbor, error)
 	// vmRangeRaw is an optional test seam for the WAN sparkline range query
 	// (query → device+ifName → value series). nil in prod = real VM query_range.
 	vmRangeRaw     func(ctx context.Context, query string, start, end, step int64) (map[string][]float64, error)

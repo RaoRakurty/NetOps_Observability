@@ -511,7 +511,19 @@ func (s *server) aiTopologyContext(claims jwtClaims) func(context.Context, ai.Pr
 		// Adjacencies: the deduped LLDP/CDP/BGP-LS link set, restricted to the
 		// caller's own inventory, then to this device's own edges.
 		devs := visibleDevices(s.discovery.Devices(), claims)
-		links := s.gatherTopoLinks(tctx, devs)
+		// RENDERABLE-WITH-A-NOTE (tracker 290), through the mechanism this answer
+		// already uses for the seam register two blocks down. An empty Neighbors
+		// list is read by the model as "this device is adjacent to nothing", and
+		// it will reason from that to a wrong diagnosis with full confidence —
+		// §15's rule that model input is untrusted cuts both ways, and we must not
+		// feed it a fact we do not have. The seams, the paths and the device
+		// identity in the same answer are still real, so the answer stands with
+		// the gap named in it.
+		links, linksErr := s.gatherTopoLinks(tctx, devs)
+		if linksErr != nil {
+			logWarn("ai", "adjacency evidence unread for topology context", map[string]any{"device_id": dev.ID, "error": linksErr.Error()})
+			out.Notes = append(out.Notes, "the adjacency evidence could not be read — the neighbours of this device are UNKNOWN for this answer, not absent")
+		}
 		neighbors, capped := aiDeviceNeighbors(links, dev.ID)
 		out.Neighbors = append(out.Neighbors, neighbors...)
 		if capped {

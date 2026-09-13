@@ -73,7 +73,7 @@ func TestWanProjectTenantIsolation(t *testing.T) {
 	ctx := context.Background()
 
 	// acme principal sees ONLY its own two devices' interfaces.
-	eps, _ := s.wanProject(ctx, wanVis(s, "acme"))
+	eps, _, _ := s.wanProject(ctx, wanVis(s, "acme"))
 	if len(eps) == 0 {
 		t.Fatal("acme should see its own WAN endpoints")
 	}
@@ -87,7 +87,7 @@ func TestWanProjectTenantIsolation(t *testing.T) {
 	}
 
 	// globex sees ONLY wan-other.
-	gEps, _ := s.wanProject(ctx, wanVis(s, "globex"))
+	gEps, _, _ := s.wanProject(ctx, wanVis(s, "globex"))
 	for _, e := range gEps {
 		if e.Device != "wan-other" {
 			t.Fatalf("TENANT LEAK: globex saw %q", e.Device)
@@ -95,7 +95,7 @@ func TestWanProjectTenantIsolation(t *testing.T) {
 	}
 
 	// Cross-tenant platform principal sees all three.
-	allEps, _ := s.wanProject(ctx, wanVis(s, ""))
+	allEps, _, _ := s.wanProject(ctx, wanVis(s, ""))
 	devs := map[string]bool{}
 	for _, e := range allEps {
 		devs[e.Device] = true
@@ -107,7 +107,7 @@ func TestWanProjectTenantIsolation(t *testing.T) {
 	}
 
 	// Interface→target links never cross the tenant boundary either.
-	_, links := s.wanProject(ctx, wanVis(s, "acme"))
+	_, links, _ := s.wanProject(ctx, wanVis(s, "acme"))
 	for _, c := range links {
 		if c.Local.Device == "wan-other" {
 			t.Fatalf("TENANT LEAK in link %s: touches globex device", c.ID)
@@ -162,7 +162,7 @@ func TestWanConnectedInterfaceIncluded(t *testing.T) {
 	s.discovery.Upsert(models.Device{ID: "wan-r2", Name: "wan-r2", TenantID: "acme"})
 	s.discovery.Upsert(models.Device{ID: "spine1", Name: "spine1", TenantID: "acme"})
 
-	eps, _ := s.wanProject(context.Background(), wanVis(s, "acme"))
+	eps, _, _ := s.wanProject(context.Background(), wanVis(s, "acme"))
 	byKey := map[string]WanEndpoint{}
 	for _, e := range eps {
 		byKey[e.Device+"/"+e.Interface] = e
@@ -205,7 +205,7 @@ func TestWanMgmtInterfacesExcluded(t *testing.T) {
 	s := newWanTestServer(t, ifaddr, neighbors)
 	s.discovery.Upsert(models.Device{ID: "wan-r2", Name: "wan-r2", TenantID: "acme"})
 	s.discovery.Upsert(models.Device{ID: "leaf1", Name: "leaf1", TenantID: "acme"})
-	eps, _ := s.wanProject(context.Background(), wanVis(s, "acme"))
+	eps, _, _ := s.wanProject(context.Background(), wanVis(s, "acme"))
 	for _, e := range eps {
 		if wan.IsMgmtInterface(e.Interface) {
 			t.Fatalf("management interface leaked into WAN scope: %s/%s", e.Device, e.Interface)
@@ -242,7 +242,7 @@ func TestWanConnectedDisabled(t *testing.T) {
 	if err := s.wanPolicy.Put(WanMeasurementPolicy{TenantID: "acme", IncludeConnected: &no}); err != nil {
 		t.Fatalf("policy put: %v", err)
 	}
-	eps, _ := s.wanProject(context.Background(), wanVis(s, "acme"))
+	eps, _, _ := s.wanProject(context.Background(), wanVis(s, "acme"))
 	for _, e := range eps {
 		if e.Device == "spine1" {
 			t.Fatalf("include_connected=false must drop the spine interface, got %+v", e)

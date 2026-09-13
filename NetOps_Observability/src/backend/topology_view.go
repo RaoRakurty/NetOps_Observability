@@ -38,16 +38,51 @@ func topologyModeOrDefault(m string) string {
 	}
 }
 
+// topoLinksUnreadNote is the ONE sentence every surface uses when the adjacency
+// evidence never arrived. Written for an operator working an incident, and
+// deliberately explicit about the inference it is forbidding: the map being
+// empty is not a finding.
+const topoLinksUnreadNote = "Adjacency evidence could not be read, so links are missing from this view — an absent link here does NOT mean the devices are not adjacent."
+
+// errTopoLinksUnread reports whether a FetchTopologyLinks failure means the
+// evidence NEVER ARRIVED. A deployment that configures no sharing channel at all
+// runs no discovery collector, so "no adjacency was published" is a true
+// statement about it and must not raise a banner on every map in the product.
+func errTopoLinksUnread(err error) bool {
+	return err != nil && !errors.Is(err, collectors.ErrNotConfigured)
+}
+
+// fetchTopoLinks resolves the adjacency-evidence source: the injected seam in a
+// test, collectors.FetchTopologyLinks in production. ONE resolver, so no read on
+// this path can quietly bypass the seam and go straight to the collector.
+func (s *server) fetchTopoLinks(ctx context.Context) ([]collectors.LLDPNeighbor, error) {
+	if s.topoLinks != nil {
+		return s.topoLinks(ctx)
+	}
+	return collectors.FetchTopologyLinks(ctx)
+}
+
 // gatherTopoLinks builds the deduped, evidence-bearing adjacency set for a device
 // slice: it constructs the same id/name/address resolution maps /links and /view
 // use, fetches the raw LLDP/CDP/BGP-LS neighbours + interface-address map, and runs
 // the shared normalizer. Extracted so /api/topology/view, /links and the persistent
 // reconciler all derive links identically and can never disagree.
-func (s *server) gatherTopoLinks(ctx context.Context, devs []models.Device) []topoLink {
+func (s *server) gatherTopoLinks(ctx context.Context, devs []models.Device) ([]topoLink, error) {
 	ownedID, byName, byAddr := topoLinkMaps(devs)
-	neighbors, _ := collectors.FetchTopologyLinks(ctx) // best-effort: collector off/unreachable → empty map
-	ifaddr, _ := collectors.FetchIfAddrMap(ctx)        // best-effort: collector off/unreachable → empty map
-	return topology.NormalizeLLDP(neighbors, ownedID, byName, byAddr, ifaddr)
+	// The adjacency evidence is the one input whose absence is INDISTINGUISHABLE
+	// from a finding: an empty device list draws an empty canvas that nobody
+	// misreads, but an empty LINK set draws a fabric in which nothing is next to
+	// anything. So this read's failure is carried out to the caller, which
+	// decides whether its surface can say so (a banner) or has nowhere to say it
+	// (a refusal) — tracker 290. The interface-address map is not in that class:
+	// it only names the ports on links that were themselves read.
+	neighbors, err := s.fetchTopoLinks(ctx)
+	ifaddr, _ := collectors.FetchIfAddrMap(ctx) // best-effort: names ports, never decides an adjacency exists
+	links := topology.NormalizeLLDP(neighbors, ownedID, byName, byAddr, ifaddr)
+	if errTopoLinksUnread(err) {
+		return links, err
+	}
+	return links, nil
 }
 
 // gatherTopoLinksFor is gatherTopoLinks plus the operator-visibility restriction
@@ -61,8 +96,9 @@ func (s *server) gatherTopoLinks(ctx context.Context, devs []models.Device) []to
 // one whose target is "ext:<its hostname>" with that hostname in target_name.
 // The node goes, the edge stays and still names the device. This is the edge
 // half of the rule: an adjacency that names a hidden device is the disclosure.
-func (s *server) gatherTopoLinksFor(ctx context.Context, claims jwtClaims, devs []models.Device) []topoLink {
-	return s.hideRestrictedLinkEndpoints(claims, s.gatherTopoLinks(ctx, devs))
+func (s *server) gatherTopoLinksFor(ctx context.Context, claims jwtClaims, devs []models.Device) ([]topoLink, error) {
+	links, err := s.gatherTopoLinks(ctx, devs)
+	return s.hideRestrictedLinkEndpoints(claims, links), err
 }
 
 // hideRestrictedLinkEndpoints drops every link with an endpoint that identifies a
@@ -190,7 +226,22 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 	// so a restricted tenant's fabric must leave the operator's Global view (and
 	// an as_tenant into it draws nothing). gatherTopoLinksFor closes the edge half.
 	devs := s.visibleDevicesFor(claims)
-	links := s.gatherTopoLinksFor(r.Context(), claims, devs)
+	// RENDERABLE-WITH-A-BANNER, not a refusal (tracker 290). This is the
+	// operator's primary situational display: the nodes, the alert overlay and
+	// the health overlay in this same payload are real, and refusing the whole
+	// canvas because the adjacency read failed would take away the evidence that
+	// DID arrive at the moment it is most needed. What must not happen is the
+	// canvas presenting the gap as a fact, so the view carries the degradation
+	// and the SPA renders it as a persistent alert beside the map — the pattern
+	// the cloud domain already uses.
+	links, linksErr := s.gatherTopoLinksFor(r.Context(), claims, devs)
+	var degraded []string
+	if linksErr != nil {
+		logWarn("topology", "adjacency evidence unread for the topology view", map[string]any{
+			"mode": mode, "tenant": tenant, "error": linksErr.Error(),
+		})
+		degraded = append(degraded, topoLinksUnreadNote)
+	}
 
 	// ── active alerts, scoped to devices the caller can see (same rule as /alerts) ──
 	// alertVisibilityFor, not the bare alertVisibleTenantOnly: the nodes already drop a
@@ -207,13 +258,17 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 	// bearing device links into WAN circuits between SoT-placed sites. It needs
 	// the links + site placement, not the device-level node facts.
 	if mode == topology.ModeExecutiveGeo {
-		writeJSON(w, http.StatusOK, s.projectGeoView(r.Context(), claims, tenant, linkFacts))
+		geo := s.projectGeoView(r.Context(), claims, tenant, linkFacts)
+		geo.Degraded = append(geo.Degraded, degraded...)
+		writeJSON(w, http.StatusOK, geo)
 		return
 	}
 
 	// Dependency is a SERVICE graph from observed flows, not the physical fabric —
 	// it answers "who depends on whom" (the blast-radius-for-services question).
 	if mode == topology.ModeDependency {
+		// The dependency mode is a SERVICE graph from observed flows; it does not
+		// read adjacency at all, so it carries no adjacency degradation.
 		view, err := s.projectDependencyView(r, claims, tenant, devs)
 		if err != nil {
 			// Never a confident empty: the SPA renders an empty dependency view
@@ -250,6 +305,7 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	view := topology.Project(in)
+	view.Degraded = append(view.Degraded, degraded...)
 	// Path Trace: attach per-hop STAMP metrics (latency/jitter/delay/loss) to the
 	// hops on the resolved path so the NetworkPathView ribbon shows them hop-by-hop.
 	if mode == topology.ModePathTrace && len(view.Path) > 0 {

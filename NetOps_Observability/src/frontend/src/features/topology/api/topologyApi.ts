@@ -95,7 +95,11 @@ export async function fetchTopologyView(
     // graph (collectors off / no inventory / no flow attribution) returns the empty
     // view so the canvas renders its "nothing to display" state, not a fake cloud map.
     const view = normalizeView(raw);
-    return view.nodes.length > 0 ? { view, status: "live" } : { view: emptyView(), status: "empty" };
+    if (view.nodes.length > 0) return { view, status: "live" };
+    // An empty node set still carries whatever the backend could not read: the
+    // canvas has to be able to say "the adjacency evidence never arrived" even
+    // when there was no inventory to draw it on (tracker 290).
+    return { view: { ...emptyView(), degraded: view.degraded }, status: "empty" };
   } catch (err) {
     // A failed fetch is not "no data" either (audit S2: this branch used to be
     // indistinguishable from an empty network — an API outage rendered as "you

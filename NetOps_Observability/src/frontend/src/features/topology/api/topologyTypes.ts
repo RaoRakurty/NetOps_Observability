@@ -265,6 +265,17 @@ export type TopologyView = {
    * flow. Absent whenever a path resolved.
    */
   path_state?: PathState;
+  /**
+   * Evidence classes this view could NOT read, in operator language (tracker 290).
+   *
+   * A topology with no adjacencies is a STATEMENT — "nothing on this estate is
+   * next to anything" — and the backend read path used to make it whenever the
+   * discovery channel was unreachable. The nodes, alerts and health in the same
+   * payload are still real and still worth drawing, so the canvas renders and
+   * puts these beside it as a persistent alert. Empty on a healthy read, and
+   * empty when a collector is simply not deployed.
+   */
+  degraded?: string[];
   renderer_hints?: { preferred: "react_flow" | "sigma" | "deck_geo"; max_detail_level: number };
 };
 

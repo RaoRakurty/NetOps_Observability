@@ -5496,7 +5496,10 @@ export const api = {
     if (status) p.set("status", status);
     return request<ClickHouseResponse<Tunnel>>(`/api/tunnels?${p}`);
   },
-  wanInterfaces: () => request<{ interfaces: WanInterfaceRow[] }>(`/api/wan/interfaces`),
+  // `degraded` carries the evidence the SERVER could not read while deriving the
+  // table — today: the adjacency evidence, without which every interface falls
+  // back to a reachability anchor (tracker 290). Absent/empty on a healthy read.
+  wanInterfaces: () => request<{ interfaces: WanInterfaceRow[]; degraded?: string[] }>(`/api/wan/interfaces`),
 
   // ---- WAN projection + measurement policy (set B) --------------------------
   // Endpoints and circuits are DERIVED on read (interface-IP table × neighbours
