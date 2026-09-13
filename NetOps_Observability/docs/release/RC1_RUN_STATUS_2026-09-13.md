@@ -21,7 +21,7 @@ who is on it, where it is, and when it is expected. Times are local box time.
 | 309 | correlation cannot read `netops.controller_events` | Opus | ✅ DONE (50c5e54e, merged; row deleted) — premise half wrong: grant existed; fixed the read-back + per-lane metric/rule/Q1b gate. Post-deploy: re-run apply-acls, restart correlation, Q1b must PASS | Sun 04:58 | Sun 06:58 | ACL matrix + explicit observable refusal + a gate that judges it |
 | 238a | verify 29 licence reviews against 7 conditions, sign only passes | Opus | ✅ DONE (3f93abb7, merged) — 25 signed, 2 need an owner call (xz-libs 5.6.3-r1 C7, .python-rundeps C3) | Sun 04:58 | Sun 07:58 | each failure reported individually |
 | 238b | strip six distlib PE launchers from the correlation runtime image | Opus | ✅ DONE (20ece8a3, merged) — both Syft shapes gone; keep pip (recommendation with evidence in tracker 238); residue filed as 311 | Sun 04:58 | Sun 08:58 | both Syft representations must vanish; pip regression; report if dropping pip is stronger |
-| D | Blocker D engineering half: release-mode fail-closed artifact signing (`CORRELIX_RELEASE_BUILD=1`, key import from a not-yet-existing secret, verify-before-upload, provenance in MANIFEST) | Opus | 🔄 running | Sun 07:51 | Sun 10:51 | leaves the tag build failing closed until the owner creates the distribution key secret |
+| D | Blocker D engineering half: release-mode fail-closed artifact signing (`CORRELIX_RELEASE_BUILD=1`, key import from a not-yet-existing secret, verify-before-upload, provenance in MANIFEST) | Opus | ✅ DONE (82be3e50, merged) | Sun 07:51 | Sun 10:51 | leaves the tag build failing closed until the owner creates the distribution key secret |
 | 300 | identity namespacing — Phase 1 inspection + design of record (docs/design/IDENTITY_NAMESPACING_2026-09-13.md) | Fable | ✅ DONE (92bcf524) | Sun 04:58 | Sun 08:58 | inspection only, no code |
 | 300 | Phases 2–3 store+schema+migration (agent 300-store), then 4–6 doors+fan-out+tests (agent 300-doors) | Opus | 🔄 store DONE (1db02c1e, merged) → doors running | Sun 05:10 | Mon 10:58 | ~3–4 working days in the register; parallelised where the phases allow |
 | — | merge agent branches, tracker rows deleted, full gate, push, CI green | Fable+Opus | ⏳ queued | — | Sun 12:58 | after the first wave lands |
@@ -32,7 +32,7 @@ who is on it, where it is, and when it is expected. Times are local box time.
 
 ## Human blockers (unchanged)
 
-**NEW: two licence reviews need your call** — `xz-libs 5.6.3-r1` (C7) and `.python-rundeps` (C3); see tracker 238. · A licence text (counsel) · B CLA terms (counsel + admin) · C signed tag (release owner) · D artifact-signing key (security owner) · F custody (owner). **E is now closed by D5 above.**
+**NEW: two licence reviews need your call** — `xz-libs 5.6.3-r1` (C7) and `.python-rundeps` (C3); see tracker 238. · **Blocker D human action is now exact:** create repo secret `CORRELIX_DIST_SIGNING_KEY` (armored SECRET half of the DISTRIBUTION key — not the tag key, never the licence key; non-interactive); until then every tag build fails closed by design. · A licence text (counsel) · B CLA terms (counsel + admin) · C signed tag (release owner) · D artifact-signing key (security owner) · F custody (owner). **E is now closed by D5 above.**
 
 ## Log
 
