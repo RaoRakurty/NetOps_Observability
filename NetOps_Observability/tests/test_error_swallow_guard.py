@@ -564,6 +564,22 @@ ALLOWLIST: dict[AllowKey, str] = {
     ("licensing-gate.py", "check_spdx", "95be8ea1"): "a source file the SPDX check could not read: appended as a check-A Failure naming the path and the errno, which is what makes the gate exit non-zero (the gate fails closed by design). The `continue` is what lets the remaining files still be checked, so one unreadable file yields a complete report instead of a truncated one. NOT a swallow: the silent `continue` this replaced would have passed an unreadable commercial file as if its header had been verified",
 
     # ===================================================================
+    # 2026-09-13 — scripts/licensing-gate.py, RC1 governance directive
+    # Decision 1 (the five licence-gate reject cases). The SAME accumulator
+    # shape as check_spdx above, in the two checks that decide whether the
+    # ENTERPRISE LICENCE TEXT itself is real: a file the gate could not read
+    # is a file whose contents it never verified, and in a gate whose whole
+    # contract is to fail closed, "unreadable" must not resolve the same way
+    # as "fine". The hole this closed was exactly that shape in the other
+    # direction: deleting or blanking LICENSES/Correlix-Enterprise.txt used
+    # to make its release blocker DISAPPEAR, so the gate reported the
+    # placeholder resolved because the placeholder was gone. Proven by
+    # tests/test_licensing_gate_reject_cases.py.
+    # ===================================================================
+    ("licensing-gate.py", "check_licence_texts", "379eecaf"): "a declared licence TEXT the gate could not read: appended as a check-B Failure naming the path, the identifier and the errno, which is what makes the gate exit non-zero. The `continue` only lets the other root's copy and the other identifier's text still be checked in the same run, so one unreadable file yields a complete report instead of a truncated one. NOT a swallow: skipping silently would report a licence text as verified when its contents were never read, and every file marked with that identifier would then be shipped under terms nobody checked exist",
+    ("licensing-gate.py", "check_release_blockers", "9e955dab"): "a recorded release-blocker file the gate could not read: appended as a RELEASE Failure that carries the blocker's own `report` sentence, names the path and the errno, and says the blocker could not be EVALUATED and must not be assumed resolved — which is what makes --release exit non-zero. The `continue` lets the other root's copy and the other blocker still be evaluated in the same run. NOT a swallow: the whole point of this check is that an unevaluable blocker must never read as a cleared one",
+
+    # ===================================================================
     # 2026-09-06 — scripts/spdx-headers.py (tracker 240, the SPDX header
     # sweep). The SAME accumulator shape as the two entries above, and for
     # the same reason: the sweep visits ~3 200 files in one pass, and an

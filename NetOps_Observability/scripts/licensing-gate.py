@@ -22,7 +22,12 @@ The eight checks
     A  SPDX headers agree with the policy's classification of their path, and —
        once `header_enforcement.mode` is `enforced` — every source file in the
        swept scope actually carries one.
-    B  Every commercial directory carries its own LICENSE notice file.
+    B  Every commercial directory carries its own LICENSE notice file, and every
+       licence text the policy declares EXISTS at both roots, is not empty, and
+       names its own identifier. An identifier is only worth what the text it
+       resolves to says; a missing or blank licence file means the marking
+       grants nothing, which is the same defect as the placeholder and must fail
+       the same way.
     C  The commercial identifier appears nowhere outside a commercial directory.
     D  Every Dockerfile is classified, and Correlix images declare the licence
        in OCI metadata while third-party repackages deliberately do not.
@@ -35,7 +40,12 @@ The eight checks
 `--release` additionally fails on the recorded release blockers: a commercial
 marking whose licence text does not exist yet, and a CLA with no signing
 process. Those must not reach a customer even though they do not block daily
-development.
+development. Each blocker carries a `report` string in the policy, which is
+printed verbatim at the head of its failure line — the sentence the RC1
+governance directive requires the release report to contain, so the gate and the
+report cannot drift. A blocker whose file is absent from BOTH roots fails too: a
+blocker that could not be EVALUATED must never read as a blocker that was
+CLEARED (deleting the placeholder file used to make its release blocker vanish).
 
 Usage
     python3 scripts/licensing-gate.py             # the eight checks
@@ -213,9 +223,82 @@ def check_headers(policy: dict) -> list[Failure]:
     return [Failure("A", v.path, v.reason) for v in violations]
 
 
-# ── B: per-directory notice files ────────────────────────────────────────────
-def check_notice_files(policy: dict) -> list[Failure]:
+# ── B: the licence texts and the per-directory notice files ──────────────────
+# A licence file with nothing in it is not a smaller problem than a licence file
+# that is absent; both leave every file marked with that identifier licensed to
+# nobody. 32 non-whitespace characters is far below any real notice and far above
+# a stray newline or a stub, so it separates "empty or truncated" from "edited".
+MIN_LICENCE_TEXT_CHARS = 32
+
+
+def check_licence_texts(policy: dict) -> list[Failure]:
+    """Part of check B: every identifier resolves to a real text, at both roots.
+
+    `licence_texts` in the policy is the mapping from SPDX identifier to the file
+    that states its terms, and it is the ONLY thing that makes a marking mean
+    anything. Three ways it can silently stop meaning anything, all checked here
+    and all in the DEFAULT mode, because none of them is a release-day concern:
+
+      * the file is missing. Check H would notice only if BOTH roots lost it —
+        its either-root fallback is about where the installer bundle sources the
+        file from, not about whether the declaration holds. Deleting just the
+        project copy — the one that ships in the bundle and in every image — used
+        to leave the gate green.
+      * the file is empty, or has been truncated to a stub.
+      * a `LicenseRef-` text does not name its own identifier. A LicenseRef has
+        no meaning outside this repository: nothing but the file resolves it, so
+        the file must say which identifier it is the text for. The stock upstream
+        texts are exempt from that one — `LICENSES/Apache-2.0.txt` is byte-for-
+        byte upstream (a checked sha256) and does not contain the literal string
+        "Apache-2.0", and editing it to satisfy a gate would be the wrong fix.
+
+    NOT checked here: whether the enterprise text is still the placeholder. That
+    is a release blocker, not everyday drift, and it belongs to --release.
+    """
     fails: list[Failure] = []
+    for ident, relpath in sorted(policy["licence_texts"].items()):
+        for root in (REPO, PROJ):
+            path = os.path.join(root, relpath)
+            if not os.path.isfile(path):
+                fails.append(Failure(
+                    "B", rel(path),
+                    f"the licence text for {ident} is missing. Every file marked "
+                    f"with that identifier resolves to no terms, so it is "
+                    f"licensed to nobody"))
+                continue
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    body = fh.read()
+            except (OSError, UnicodeDecodeError) as err:
+                # Unreadable is not the same as absent, but it is just as
+                # unshippable, and a `continue` here would pass it as verified.
+                fails.append(Failure(
+                    "B", rel(path),
+                    f"the licence text for {ident} could not be read, so its "
+                    f"contents were never checked: {err}"))
+                continue
+            substance = "".join(body.split())
+            if not substance:
+                fails.append(Failure(
+                    "B", rel(path),
+                    f"the licence text for {ident} is EMPTY. An empty licence "
+                    f"file grants nothing; it must not be shippable"))
+            elif len(substance) < MIN_LICENCE_TEXT_CHARS:
+                fails.append(Failure(
+                    "B", rel(path),
+                    f"the licence text for {ident} is {len(substance)} "
+                    f"non-whitespace characters, below the {MIN_LICENCE_TEXT_CHARS} "
+                    f"any real notice needs — it looks truncated or stubbed"))
+            elif ident.startswith("LicenseRef-") and ident not in body:
+                fails.append(Failure(
+                    "B", rel(path),
+                    f"does not name the identifier {ident} it is the text for. A "
+                    f"LicenseRef is resolved by nothing except this file"))
+    return fails
+
+
+def check_notice_files(policy: dict) -> list[Failure]:
+    fails: list[Failure] = check_licence_texts(policy)
     comm = policy["identifiers"]["commercial"]
     for entry in policy["commercial_paths"]["entries"]:
         notice = os.path.join(PROJ, entry["notice_file"])
@@ -470,23 +553,76 @@ def check_artifacts(policy: dict) -> list[Failure]:
 
 # ── release blockers ─────────────────────────────────────────────────────────
 def check_release_blockers(policy: dict) -> list[Failure]:
+    """The recorded blockers, evaluated FAIL-CLOSED.
+
+    Each blocker is "a marker string is still present in a file". The obvious
+    implementation — look for the marker where the file exists, ignore it where it
+    does not — fails OPEN in the one direction that matters: delete the file and
+    the blocker silently disappears, so `--release` reports the blocker resolved
+    when in fact it became unevaluable. The enterprise licence placeholder is
+    exactly that shape, and deleting it is exactly the mistake somebody makes
+    while trying to make the gate green. So a blocker whose file is present at
+    NEITHER root is itself a failure.
+
+    `report` is the sentence the RC1 governance directive requires the release
+    report to contain, printed first so grepping the gate's output for it works.
+    """
     fails: list[Failure] = []
     for b in policy["release_blockers"]["entries"]:
+        report = b.get("report", "").strip()
+        head = f"{report} " if report else ""
+        evaluated = 0
         for root in (REPO, PROJ):
             path = os.path.join(root, b["file"])
             if not os.path.isfile(path):
                 continue
-            with open(path, encoding="utf-8") as fh:
-                if b["marker"] in fh.read():
-                    fails.append(Failure("RELEASE", rel(path),
-                                         f"{b['what']} {b['why']} "
-                                         f"OWNER ACTION: {b['owner_action']}"))
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    body = fh.read()
+            except (OSError, UnicodeDecodeError) as err:
+                fails.append(Failure(
+                    "RELEASE", rel(path),
+                    f"{head}the file this blocker ({b['id']}) is evaluated "
+                    f"against could not be read, so the blocker could not be "
+                    f"evaluated and must not be assumed resolved: {err}"))
+                continue
+            if len("".join(body.split())) < MIN_LICENCE_TEXT_CHARS:
+                # The blocker asks "is the placeholder marker still there?". A
+                # file with nothing in it answers neither yes nor no, so treating
+                # the absent marker as "resolved" would report the blocker
+                # cleared by the very act of blanking the file. Check B fails on
+                # this too; this arm is what makes the RELEASE report say so with
+                # the directive's own sentence.
+                fails.append(Failure(
+                    "RELEASE", rel(path),
+                    f"{head}the file this blocker ({b['id']}) is evaluated "
+                    f"against is empty or a stub, so the marker "
+                    f"{b['marker']!r} could not be looked for and the blocker "
+                    f"must not be assumed resolved. "
+                    f"OWNER ACTION: {b['owner_action']}"))
+                evaluated += 1
+                continue
+            evaluated += 1
+            if b["marker"] in body:
+                fails.append(Failure("RELEASE", rel(path),
+                                     f"{head}{b['what']} {b['why']} "
+                                     f"OWNER ACTION: {b['owner_action']}"))
+        if evaluated == 0:
+            fails.append(Failure(
+                "RELEASE", b["file"],
+                f"{head}the file this blocker ({b['id']}) is evaluated against "
+                f"exists at NEITHER the repository root nor the project root, so "
+                f"the blocker could not be evaluated. A blocker that cannot be "
+                f"checked is not a blocker that was cleared. Restore the file, or "
+                f"remove the blocker from licensing-policy.json deliberately. "
+                f"OWNER ACTION: {b['owner_action']}"))
     return fails
 
 
 CHECKS = (
     ("A", "SPDX headers agree with the policy", check_spdx),
-    ("B", "commercial directories carry a LICENSE notice", check_notice_files),
+    ("B", "licence texts exist and commercial directories carry a notice",
+     check_notice_files),
     ("D", "container images declare the right licence", check_dockerfiles),
     ("E", "core never imports commercial code", check_import_boundary),
     ("F", "every directory is classified exactly once", check_coverage),
