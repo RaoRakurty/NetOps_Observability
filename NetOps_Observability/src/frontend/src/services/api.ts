@@ -2320,6 +2320,14 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
 
 // ---- auth types ----
 export type AuthUser = {
+  // id = the internal PRINCIPAL ID (tracker 300). This is what the API, the
+  // audit trail and every /api/users mutation key on. `username` is a DISPLAY
+  // handle: for a federated account it is an opaque `fed_…` string that must
+  // never be rendered (use display_name, else email).
+  id?: string;
+  // identity_status = bound | pending. `pending` is a pre-migration federated
+  // account that carries no canonical identity tuple yet.
+  identity_status?: string;
   username: string;
   role: string;
   tenant_id?: string;
@@ -5011,7 +5019,9 @@ export const api = {
   mfaActivate: (code: string) => request<{ enabled: boolean }>("/api/auth/mfa/activate", { method: "POST", body: JSON.stringify({ code }) }),
   mfaDisable: (code: string) => request<{ enabled: boolean }>("/api/auth/mfa/disable", { method: "POST", body: JSON.stringify({ code }) }),
   // Admin recovery: clear a user's MFA (lost device).
-  adminResetMfa: (username: string) => request<{ enabled: boolean }>("/api/users/mfa-reset", { method: "POST", body: JSON.stringify({ username }) }),
+  // The target is named by its PRINCIPAL ID (tracker 300); the field name stays
+  // `username` for wire compatibility and carries the id.
+  adminResetMfa: (userID: string) => request<{ enabled: boolean }>("/api/users/mfa-reset", { method: "POST", body: JSON.stringify({ user_id: userID, username: userID }) }),
   logout: async () => {
     const rt = getRefresh();
     if (rt) {
@@ -6153,12 +6163,15 @@ export const api = {
   permissions: () => request<{ role: string; permissions: Record<string, number> }>("/api/auth/permissions"),
 
   listUsers: () => request<AdminUser[]>("/api/users"),
+  // The §2.7 admin view: only the accounts that hold no canonical identity yet.
+  listPendingIdentityUsers: () => request<AdminUser[]>("/api/users?identity=pending"),
   createUser: (u: Partial<AdminUser> & { password?: string }) =>
     request<AdminUser>("/api/users", { method: "POST", body: JSON.stringify(u) }),
-  updateUser: (username: string, patch: Partial<AdminUser> & { password?: string }) =>
-    request<AdminUser>(`/api/users/${encodeURIComponent(username)}`, { method: "PATCH", body: JSON.stringify(patch) }),
-  deleteUser: (username: string) =>
-    request<void>(`/api/users/${encodeURIComponent(username)}`, { method: "DELETE" }),
+  // Keyed by the PRINCIPAL ID, never the login name (tracker 300 §4.5).
+  updateUser: (id: string, patch: Partial<AdminUser> & { password?: string }) =>
+    request<AdminUser>(`/api/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteUser: (id: string) =>
+    request<void>(`/api/users/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   listRoles: () => request<{ modules: string[]; roles: Role[] }>("/api/roles"),
   saveRole: (r: Role) =>
@@ -8233,6 +8246,14 @@ export type SNMPCredential = {
 
 // ----- Identity & access types -----
 export type AdminUser = {
+  // id = the internal PRINCIPAL ID and the ONLY handle a mutation may use
+  // (tracker 300 §4.7). A login name is unique only within a tenant, so two
+  // tenants can both hold `admin` and a username can no longer address a row.
+  id: string;
+  // identity_status = bound | pending (design §2.7). `pending` = the account has
+  // no canonical identity tuple yet; an admin can disable it if they do not want
+  // it bound on its owner's next sign-in.
+  identity_status?: string;
   username: string;
   role: string;
   email?: string;

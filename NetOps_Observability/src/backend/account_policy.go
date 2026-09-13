@@ -78,13 +78,13 @@ func (s *server) userTenantSuspended(u User) bool {
 // sign in through SSO/LDAP/TACACS).
 func (s *server) federatedLoginBarrier(r *http.Request, u User) string {
 	if s.userTenantSuspended(u) {
-		logWarn("auth", "login refused: tenant suspended", map[string]any{"user": u.Username, "tenant_id": u.TenantID})
+		logWarn("auth", "login refused: tenant suspended", map[string]any{"user": u.ID, "tenant_id": u.TenantID})
 		return "tenant suspended"
 	}
 	d := secpolicy.EvaluateAccountPolicy(s.securitySettingsFor(u), u, time.Now().UTC())
 	if d.Deny {
-		logWarn("auth", "sign-in blocked by account policy", map[string]any{"user": u.Username, "reason": d.Reason})
-		s.recordSessionEvent(r, "LOGIN_BLOCKED", u.Username, "", u.TenantID, map[string]any{"reason": d.Reason})
+		logWarn("auth", "sign-in blocked by account policy", map[string]any{"user": u.ID, "reason": d.Reason})
+		s.recordSessionEvent(r, "LOGIN_BLOCKED", u.ID, "", u.TenantID, map[string]any{"reason": d.Reason})
 		return d.Message
 	}
 	return ""
@@ -103,9 +103,9 @@ func (s *server) enforceAccountPolicy(w http.ResponseWriter, r *http.Request, u 
 		return false
 	}
 	logWarn("auth", "sign-in blocked by account policy", map[string]any{
-		"user": u.Username, "reason": d.Reason,
+		"user": u.ID, "reason": d.Reason,
 	})
-	s.recordSessionEvent(r, "LOGIN_BLOCKED", u.Username, "", u.TenantID, map[string]any{"reason": d.Reason})
+	s.recordSessionEvent(r, "LOGIN_BLOCKED", u.ID, "", u.TenantID, map[string]any{"reason": d.Reason})
 	if d.Deny {
 		writeError(w, http.StatusForbidden, errors.New(d.Message))
 		return true
@@ -114,7 +114,11 @@ func (s *server) enforceAccountPolicy(w http.ResponseWriter, r *http.Request, u 
 		"must_change_password": true,
 		"reason":               d.Reason,
 		"message":              d.Message,
-		"username":             u.Username,
+		// The login window echoes this back to /api/auth/change-password, which
+		// resolves it through the SAME per-tenant local namespace handleLogin just
+		// used — so it stays the login HANDLE, not the principal id (a federated
+		// account never reaches this branch: it has no local password to change).
+		"username": u.Username,
 	})
 	return true
 }

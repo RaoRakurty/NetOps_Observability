@@ -10,8 +10,10 @@ package backend
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"netops/backend/internal/tacacs"
+	"netops/backend/internal/users"
 )
 
 type TACACS = tacacs.Client
@@ -44,16 +46,31 @@ func (s *server) handleTACACSLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("invalid username or password"))
 		return
 	}
-	// Provisioning + account-state gates + session, shared with LDAP (auth.go).
-	// H1: refuses outright when the username names a LOCALLY-managed account.
-	// THE USERNAME IS THE WHOLE KEY HERE, and that is safe only because this
-	// path has exactly ONE realm (tracker 279d): there is one platform-global
-	// TACACS+ configuration, so one directory and one username namespace.
+	// Resolution + account-state gates + session, shared with LDAP (auth.go).
 	//
-	// If that stops being true — a per-tenant server — this call becomes a
-	// cross-realm account takeover, the second realm's identity receiving the
-	// first realm's account, role and tenant, looking exactly like a successful
-	// sign-in. Thread the realm down to the account lookup first. The premise
-	// is pinned by TestBearerUsernameIsOneGlobalNamespace.
-	s.completeFederatedLogin(w, r, req.Username, "", req.Username, t.DefaultRole(), "tacacs", t.DefaultTenant())
+	// THE KEY IS ("tacacs:" + host:port, lower(login)) — tracker 300 §2.3. The
+	// login name is the only subject TACACS+ has, which is exactly why the SERVER
+	// that accepted it is in the key: the same `admin` accepted by two different
+	// TACACS+ servers is two principals, not one. H1: refuses outright when the
+	// tuple would reach a LOCALLY-managed account.
+	s.completeFederatedLogin(w, r, tacacsAssertion(t, req.Username))
+}
+
+// tacacsAssertion is the TACACS+ door. The login name is the only subject that
+// exists on the wire, so subject and legacy username coincide — which is exactly
+// why the issuer (the server that accepted it) has to be in the key.
+func tacacsAssertion(t *TACACS, login string) users.Assertion {
+	return users.Assertion{
+		Identity: users.Identity{
+			TenantID: t.DefaultTenant(),
+			Issuer:   users.TACACSIssuer(t.Addr()),
+			Subject:  strings.ToLower(strings.TrimSpace(login)),
+			Protocol: users.ProtocolTACACS,
+			// The login name is not a directory handle; there is no DN to record.
+			SubjectKind: users.SubjectKindLogin,
+		},
+		DisplayName:    login,
+		Role:           t.DefaultRole(),
+		LegacyUsername: login,
+	}
 }

@@ -7,8 +7,9 @@ package backend
 // a faithful mirror of the legacy single-(role,tenant) user model, so the
 // auditable artifact lands WITHOUT changing any authorization decision.
 //
-// Each user ⇒ one principal (id = username) ⇒ one allow binding at its tenant
-// scope. The platform owner (super-admin in the global tenant) maps to a
+// Each user ⇒ one principal (id = User.ID, the internal principal id — tracker
+// 300 §4.3; legacy rows carry `id == lower(username)` so no stored binding id
+// changes value) ⇒ one allow binding at its tenant scope. The platform owner (super-admin in the global tenant) maps to a
 // super-admin binding at tenant:global, which bindingDerivedScope resolves back
 // to cross-tenant — identical to isPlatformOwner. A conformance test
 // (bindings_conformance_test.go) proves the round-trip for every user.
@@ -57,10 +58,14 @@ func userBindingScope(u User) string {
 // refusing the login would be worse than a stale mirror) must still LOG it —
 // see logBindingSync.
 func (s *server) syncUserBinding(u User) error {
-	if s.bindings == nil || strings.TrimSpace(u.Username) == "" {
+	if s.bindings == nil || strings.TrimSpace(u.ID) == "" {
 		return nil
 	}
-	pid := strings.ToLower(strings.TrimSpace(u.Username))
+	// THE PRINCIPAL IS THE ACCOUNT'S ID, not its login handle (tracker 300 §4.3).
+	// A federated account's username is an opaque string equal to its id, and a
+	// local account's is unique only per tenant — binding on it would have made
+	// two tenants' `admin` ONE principal in the authorization mirror.
+	pid := strings.ToLower(strings.TrimSpace(u.ID))
 	want := rbac.BindingID(pid, u.Role, userBindingScope(u), EffectAllow)
 	// Remove any binding for this principal that isn't the desired mirror (so a
 	// role/tenant change re-syncs cleanly). Phase A holds exactly one per user.
@@ -91,24 +96,24 @@ func (s *server) syncUserBinding(u User) error {
 func (s *server) logBindingSync(u User, source string) {
 	if err := s.syncUserBinding(u); err != nil {
 		logError("bindings", "role-binding mirror out of sync", map[string]any{
-			"user": u.Username, "role": u.Role, "tenant": u.TenantID,
+			"user": u.ID, "role": u.Role, "tenant": u.TenantID,
 			"source": source, "err": err.Error(),
 		})
 	}
 }
 
-// removeUserBindings drops a deleted user's bindings.
-func (s *server) removeUserBindings(username string) {
+// removeUserBindings drops a deleted user's bindings. Keyed by the principal id.
+func (s *server) removeUserBindings(principalID string) {
 	if s.bindings == nil {
 		return
 	}
-	if err := s.bindings.RemoveByPrincipal(username); err != nil {
+	if err := s.bindings.RemoveByPrincipal(principalID); err != nil {
 		// The user is gone but their role bindings DO remain: the purge is
 		// persist-then-adopt, so a failed write leaves every grant in force,
 		// in memory and on disk alike. A stale-grant hazard that must be
 		// visible, not discarded.
 		logError("bindings", "removing a deleted user's bindings failed", map[string]any{
-			"user": username, "err": err.Error()})
+			"user": principalID, "err": err.Error()})
 	}
 }
 
@@ -122,7 +127,7 @@ func (s *server) backfillBindings() {
 	for _, u := range s.users.List(TenantGlobal, true) { // cross-tenant: every user
 		if err := s.syncUserBinding(u); err != nil {
 			logError("bindings", "backfill mirror failed", map[string]any{
-				"user": u.Username, "err": err.Error(),
+				"user": u.ID, "err": err.Error(),
 			})
 			failed++
 		}

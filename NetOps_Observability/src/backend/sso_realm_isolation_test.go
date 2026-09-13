@@ -8,29 +8,48 @@ package backend
 // THE DEFECT. Per-tenant SSO URLs (tracker 276) validated three things, and all
 // three were properties of the CONNECTION: the locator resolves, the connection
 // is registered for the realm in the URL, and the browser started the flow in
-// that realm. The ACCOUNT the ID token names was never checked. Usernames are a
-// GLOBAL key, and UpsertFederated returned an existing account with its ORIGINAL
-// tenant, so an administrator of tenant B — who holds administration:admin and
-// may therefore register an identity provider of their own — could create a user
-// named `alice` in it, sign in at /t/tenant-b/sso/b-idp/login, and be handed a
-// session whose tenant was A. The merge on the way through rewrote the victim's
-// role and auth source as well. Every account with no user in the attacker's
-// IdP was reachable: LDAP-, TACACS- and bearer-provisioned accounts included.
+// that realm. The ACCOUNT the ID token names was never checked. Usernames were a
+// GLOBAL key, and the federated upsert returned an existing account with its
+// ORIGINAL tenant, so an administrator of tenant B — who holds
+// administration:admin and may therefore register an identity provider of their
+// own — could name `alice`, sign in at /t/tenant-b/sso/b-idp/login, and be handed
+// a session whose tenant was A. The merge on the way through rewrote the victim's
+// role and auth source as well. Every account with no user in the attacker's IdP
+// was reachable: LDAP-, TACACS- and bearer-provisioned accounts included.
+//
+// TRACKER 300 CHANGED WHAT "REACHABLE" MEANS, and this file is updated to say so
+// honestly rather than to keep asserting the old shape. An account is now
+// addressed by (tenant_id, issuer, subject). A tenant-bound flow derives its
+// provisioning tenant from the SAME connection its realm comes from, so the
+// tuple it looks up can only ever name its own realm: a subject another tenant
+// owns is no longer a reachable account at all — it is simply a subject this
+// connection has not seen, and it provisions THIS tenant's own account.
+//
+// One consequence is recorded deliberately: a cross-tenant ATTEMPT through a
+// bound URL is no longer a distinguishable event, so there is no longer a
+// refusal to audit there and no existence oracle to prevent. The realm check has
+// become defence in depth on that path, and what remains REACHABLE — and is
+// still proved below — is the case C3's second half found: a bound connection
+// whose tenant stops resolving falls back to the GENERIC callback, so the
+// provisioning tenant (the OIDC default) and the realm (the connection's own
+// tenant) disagree, and the sign-in is refused with nothing written.
 //
 // What is proved here, through the REAL router, the REAL code flow and a real
 // fake IdP (JWKS + token endpoint):
-//   - the attack is refused, no session is minted, and the victim's record is
-//     BYTE-FOR-BYTE unchanged (the merge write is itself the damage);
-//   - the refusal is byte-identical to the "provider not registered for this
-//     realm" refusal, so it is not a cross-tenant username-existence oracle;
+//   - a tenant-bound connection asserting a subject another tenant owns gets its
+//     OWN new account, never a session in the other tenant's, and the victim's
+//     record is BYTE-FOR-BYTE unchanged (the merge write is itself the damage);
+//   - the generic-callback fallback is refused, writes nothing, and its message
+//     names neither the other realm nor the account;
 //   - an /org/{id} realm still reaches every tenant its org owns;
 //   - an UNBOUND (platform-realm) connection still signs in users of every
 //     tenant — the regression guard against the easiest wrong fix;
 //   - a genuinely new account is still provisioned by a tenant-bound flow;
 //   - the elevation door is closed the same way.
 //
-// The store-side half of the fix (the realm applied inside the lock, beside the
-// merge, on BOTH backends) is proved in internal/users/federated_realm_test.go.
+// The store-side half (the realm applied inside the lock, beside the merge, on
+// BOTH backends, plus the §2.5 realm-scoped resolution) is proved in
+// internal/users/identity_contract_test.go and identity_realm_scope_test.go.
 
 import (
 	"crypto"
@@ -49,6 +68,8 @@ import (
 	"netops/backend/internal/jwks"
 	"netops/backend/internal/ssoidp"
 	"netops/backend/internal/tenant"
+	"netops/backend/internal/token"
+	"netops/backend/internal/users"
 )
 
 const realmKID = "realm-kid"
@@ -60,6 +81,10 @@ type realmHarness struct {
 	f      *signinFixture
 	key    *rsa.PrivateKey
 	claims map[string]any // what the next token exchange will assert
+	// seeded maps the IdP SUBJECT a test asserts to the account's opaque
+	// PRINCIPAL ID (tracker 300): sessions, bindings and elevation grants are all
+	// keyed by the id, and a federated account's id is nothing like its subject.
+	seeded map[string]string
 	// The fake IdP's two endpoints. Kept because ANY save rebuilds the live
 	// provider (and with it the JWKS cache), so a test that saves after the
 	// harness is built has to seed the discovery again — see seedDiscovery.
@@ -73,7 +98,7 @@ func newRealmHarness(t *testing.T) *realmHarness {
 	if err != nil {
 		t.Fatalf("rsa: %v", err)
 	}
-	h := &realmHarness{f: f, key: key}
+	h := &realmHarness{f: f, key: key, seeded: map[string]string{}}
 
 	jwksSrv := fakeIdPEndpoint(t, func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{
@@ -209,52 +234,125 @@ func fragmentOf(t *testing.T, resp *http.Response) url.Values {
 	return v
 }
 
-// seedFederated creates the kind of account the attack targets: one an IdP
-// provisioned (LDAP here — the unconditional case, since the attacker's own IdP
-// has no user of that name), living in a tenant of its own.
-func (h *realmHarness) seedFederated(t *testing.T, name, tenant, role, source string) User {
+// seedFederated creates the kind of account the attack targets: one the BROKER
+// provisioned, living in a tenant of its own, holding the canonical tuple
+// (tenant, the broker's issuer, `name`) — which is exactly the tuple a round
+// trip asserting subject `name` will look up. Anything else would make these
+// tests unreachable rather than passing (an LDAP-tuple account is not
+// addressable from an OIDC assertion at all, by design — §5.5).
+func (h *realmHarness) seedFederated(t *testing.T, name, tenant, role string) User {
 	t.Helper()
-	u, err := h.f.s.users.UpsertFederated(name, name+"@victim.example", "Alice Victim", role, source, tenant)
+	u, err := h.f.s.users.ResolveFederated(users.Assertion{
+		Identity: users.Identity{
+			TenantID: tenant, Issuer: h.f.s.oidcProvider().Issuer(),
+			Subject: name, Protocol: users.ProtocolOIDC,
+		},
+		Email: name + "@victim.example", DisplayName: "Alice Victim", Role: role,
+	}, users.Realm{}, true)
 	if err != nil {
 		t.Fatalf("seed %s: %v", name, err)
 	}
+	if u.ID == name {
+		t.Fatalf("fixture rule broken: the account id equals the subject (%q)", u.ID)
+	}
+	h.seeded[name] = u.ID
+	// A standing SSO login mirrors the account into the binding store; the fixture
+	// must too, or a test about what an attack does to the mirror has no mirror.
+	h.f.s.logBindingSync(u, "oidc")
 	return u
+}
+
+// principal returns the opaque principal id of a seeded subject.
+func (h *realmHarness) principal(t *testing.T, subject string) string {
+	t.Helper()
+	id, ok := h.seeded[subject]
+	if !ok {
+		t.Fatalf("subject %q was never seeded", subject)
+	}
+	return id
+}
+
+// accountOf reads the account behind a seeded subject.
+func (h *realmHarness) accountOf(t *testing.T, subject string) User {
+	t.Helper()
+	u, ok := h.f.s.users.Get(h.principal(t, subject))
+	if !ok {
+		t.Fatalf("the account for subject %q vanished", subject)
+	}
+	return u
+}
+
+// subjectOf resolves the account a round trip's subject ended up in, by the
+// canonical tuple the callback would have used. ok=false when no account holds
+// it in that tenant.
+func (h *realmHarness) accountFor(t *testing.T, tenant, subject string) (User, bool) {
+	t.Helper()
+	u, err := h.f.s.users.ResolveFederated(users.Assertion{Identity: users.Identity{
+		TenantID: tenant, Issuer: h.f.s.oidcProvider().Issuer(),
+		Subject: subject, Protocol: users.ProtocolOIDC,
+	}}, users.Realm{}, false)
+	if err != nil {
+		return User{}, false
+	}
+	return u, true
 }
 
 // ---- 1. the attack ---------------------------------------------------------
 
 // A tenant administrator may register their own identity provider. That must
 // buy them their own users and nobody else's.
+//
+// Since tracker 300 the isolation is STRUCTURAL, and the assertion says so: the
+// flow's tuple names tenant B, so tenant B's IdP gets tenant B's own account. The
+// property that matters — no session in tenant A's account, and not one byte
+// written to it — is asserted directly, on the session that WAS issued.
 func TestTenantSSOCannotSignInAnotherTenantsAccount(t *testing.T) {
 	h := newRealmHarness(t)
-	before := h.seedFederated(t, "alice", h.f.tenantA, RoleReadOnly, "ldap")
+	before := h.seedFederated(t, "alice", h.f.tenantA, RoleReadOnly)
 
-	// Tenant B's own IdP, tenant B's own URL, a username tenant A owns.
+	// Tenant B's own IdP, tenant B's own URL, a subject tenant A owns.
 	frag := h.roundTrip(t, "/t/"+h.f.slugB+"/sso/globex-idp/login", "/t/"+h.f.slugB+"/sso/globex-idp/callback", "alice", nil)
 
-	if frag.Get("token") != "" || frag.Get("refresh") != "" {
-		t.Fatal("CROSS-TENANT SESSION MINTED: tenant B's IdP signed in tenant A's account")
-	}
-	if frag.Get("sso_error") == "" {
+	if tok := frag.Get("token"); tok != "" {
+		// A session exists — it must belong to tenant B's OWN, brand-new account.
+		claims, err := token.Verify(tok, jwtSecret())
+		if err != nil {
+			t.Fatalf("verify the issued token: %v", err)
+		}
+		if claims.Sub == before.ID {
+			t.Fatal("CROSS-TENANT SESSION MINTED: tenant B's IdP signed in tenant A's account")
+		}
+		if claims.Tenant != h.f.tenantB {
+			t.Fatalf("the session's tenant is %q, want tenant B's own %q", claims.Tenant, h.f.tenantB)
+		}
+		if _, ok := h.accountFor(t, h.f.tenantB, "alice"); !ok {
+			t.Fatal("a session was issued but no tenant-B account holds the tuple")
+		}
+	} else if frag.Get("sso_error") == "" {
 		t.Fatal("the callback neither refused nor signed in — no message came back")
 	}
 	// The merge write is damage of its own: it rewrites role and auth source.
-	// Refusing the session is not enough; nothing may have been written.
-	after, ok := h.f.s.users.Get("alice")
-	if !ok {
-		t.Fatal("the victim account vanished")
-	}
+	// Whatever happened to tenant B, tenant A's record may not have moved.
+	after := h.accountOf(t, "alice")
 	if after.TenantID != before.TenantID || after.Role != before.Role || after.AuthSource != before.AuthSource ||
 		after.Email != before.Email || after.DisplayName != before.DisplayName {
-		t.Fatalf("A REFUSED SIGN-IN STILL REWROTE THE VICTIM: %+v, want %+v", after, before)
+		t.Fatalf("ANOTHER REALM'S SIGN-IN REWROTE THE VICTIM: %+v, want %+v", after, before)
+	}
+	// …and no session of the victim's exists.
+	if got := activeSessions(h.f.s, before.ID); len(got) != 0 {
+		t.Fatalf("the victim holds %d session(s) after another realm's sign-in, want 0", len(got))
 	}
 }
 
-// The refusal is evidence, and it carries the real reason where only an
-// operator can read it (§10 — no silent failures).
-func TestTenantSSOForeignAccountRefusalIsAudited(t *testing.T) {
+// The audit trail must never record ANOTHER TENANT'S account as the actor of a
+// sign-in that reached this realm. Before tracker 300 the attempt produced an
+// audited deny naming the realm problem; now the attempt is not an attempt at
+// all — the tuple names tenant B — so what is asserted is the property that
+// outlived the refusal: nothing in the trail, and nothing in the binding mirror,
+// attaches tenant B's flow to tenant A's principal.
+func TestTenantSSOForeignSubjectNeverAttachesToTheOtherTenantsPrincipal(t *testing.T) {
 	h := newRealmHarness(t)
-	h.seedFederated(t, "alice", h.f.tenantA, RoleReadOnly, "ldap")
+	victim := h.seedFederated(t, "alice", h.f.tenantA, RoleReadOnly)
 	h.roundTrip(t, "/t/"+h.f.slugB+"/sso/globex-idp/login", "/t/"+h.f.slugB+"/sso/globex-idp/callback", "alice", nil)
 
 	events, err := h.f.s.audit.List("", true, auditQuery{Limit: 200})
@@ -262,43 +360,51 @@ func TestTenantSSOForeignAccountRefusalIsAudited(t *testing.T) {
 		t.Fatalf("audit list: %v", err)
 	}
 	for _, e := range events {
-		if e.Decision == "deny" && strings.Contains(e.Path, "/sso/globex-idp/callback") {
-			if got, _ := e.Detail["reason"].(string); !strings.Contains(got, "realm") {
-				t.Errorf("audited reason %q does not name the realm problem", got)
-			}
-			return
+		if e.Actor == victim.ID && strings.Contains(e.Path, "globex-idp") {
+			t.Fatalf("tenant B's flow was recorded as tenant A's principal: %+v", e)
 		}
 	}
-	t.Fatalf("the cross-tenant sign-in was not audited (%d entries)", len(events))
+	// The mirror binding of the victim still names tenant A's scope and role.
+	found := false
+	for _, b := range h.f.s.bindings.ListByPrincipal(victim.ID) {
+		found = true
+		if b.RoleID != RoleReadOnly {
+			t.Errorf("the victim's binding was re-roled to %q by another realm's sign-in", b.RoleID)
+		}
+	}
+	if !found {
+		t.Fatal("the victim lost its role binding")
+	}
 }
 
-// NO EXISTENCE ORACLE. "That account belongs to someone else" and "that provider
-// is not registered here" must be the SAME sentence, or a tenant administrator
-// can probe for usernames across the whole platform: type a name, read the
-// error, learn whether another customer has that user.
-func TestTenantSSOForeignAccountRefusalIsIndistinguishable(t *testing.T) {
+// NO EXISTENCE ORACLE. The refusal that is still REACHABLE (the generic-callback
+// fallback, C3's second half — see the header) must say nothing about the other
+// realm or the account it could not reach, or a tenant administrator can probe
+// for accounts across the whole platform: assert a subject, read the error, learn
+// whether another customer has that principal.
+func TestForeignRealmRefusalNamesNothing(t *testing.T) {
 	h := newRealmHarness(t)
-	h.seedFederated(t, "alice", h.f.tenantA, RoleReadOnly, "ldap")
-
-	attack := h.roundTrip(t, "/t/"+h.f.slugB+"/sso/globex-idp/login", "/t/"+h.f.slugB+"/sso/globex-idp/callback", "alice", nil).Get("sso_error")
-	if attack == "" {
-		t.Fatal("the attack was not refused at all")
+	h.seedFederated(t, "alice", h.f.tenantA, RoleReadOnly)
+	// Tenant B suspended ⇒ its connection's locator stops resolving ⇒ the flow
+	// falls back to the generic callback, where the provisioning tenant (the OIDC
+	// default) and the realm (tenant B) disagree.
+	if _, err := h.f.s.tenants.SetStatus(h.f.tenantB, tenant.StatusSuspended); err != nil {
+		t.Fatalf("suspend tenant B: %v", err)
 	}
-
-	// The same URL, the same alias, the same realm — but now the connection is
-	// bound elsewhere, which is the OTHER refusal. The two messages must match
-	// byte for byte.
-	h.f.bind("globex-idp", "Globex SSO", h.f.tenantA)
-	resp, _ := getWith(t, h.f.srv, "/t/"+h.f.slugB+"/sso/globex-idp/callback?code=x&state=y")
-	binding := fragmentOf(t, resp).Get("sso_error")
-
-	if attack != binding {
-		t.Fatalf("EXISTENCE ORACLE: the foreign-account refusal\n  %q\ndiffers from the binding refusal\n  %q", attack, binding)
+	refusal := h.roundTrip(t, "/api/auth/sso/login?idp=globex-idp", "/api/auth/sso/callback", "alice", nil).Get("sso_error")
+	if refusal == "" {
+		t.Fatal("the fallback flow was not refused at all")
 	}
-	for _, leak := range []string{"alice", "Acme", h.f.tenantA, h.f.slugA} {
-		if strings.Contains(attack, leak) {
-			t.Errorf("the refusal names %q — it must say nothing about the other realm or the account", leak)
+	for _, leak := range []string{"alice", "Acme", h.f.tenantA, h.f.slugA, h.f.tenantB, h.f.slugB} {
+		if strings.Contains(refusal, leak) {
+			t.Errorf("the refusal %q names %q — it must say nothing about a realm or an account", refusal, leak)
 		}
+	}
+	// A subject nobody holds is refused with the SAME sentence, so the pair is
+	// not an oracle either.
+	unknown := h.roundTrip(t, "/api/auth/sso/login?idp=globex-idp", "/api/auth/sso/callback", "nobody-at-all", nil).Get("sso_error")
+	if unknown != refusal {
+		t.Fatalf("EXISTENCE ORACLE: a known subject says\n  %q\nan unknown one says\n  %q", refusal, unknown)
 	}
 }
 
@@ -307,7 +413,7 @@ func TestTenantSSOForeignAccountRefusalIsIndistinguishable(t *testing.T) {
 // does not exist, so the pair is not an oracle either.
 func TestTenantElevationSSOCannotElevateAnotherTenantsAccount(t *testing.T) {
 	h := newRealmHarness(t)
-	before := h.seedFederated(t, "alice", h.f.tenantA, RoleReadOnly, "ldap")
+	before := h.seedFederated(t, "alice", h.f.tenantA, RoleReadOnly)
 	grant := map[string]any{
 		"access_expires_at": time.Now().Add(5 * time.Minute).Unix(),
 		"change_ticket":     "CHG-1",
@@ -317,10 +423,10 @@ func TestTenantElevationSSOCannotElevateAnotherTenantsAccount(t *testing.T) {
 	if frag.Get("token") != "" {
 		t.Fatal("CROSS-TENANT ELEVATION: tenant B's break-glass IdP elevated tenant A's account")
 	}
-	if _, ok := h.f.s.activeElevation(httptest.NewRequest(http.MethodGet, "http://x/api/x", nil), "alice", ""); ok {
+	if _, ok := h.f.s.activeElevation(httptest.NewRequest(http.MethodGet, "http://x/api/x", nil), before.ID, ""); ok {
 		t.Fatal("a refused elevation login still created a binding")
 	}
-	if after, _ := h.f.s.users.Get("alice"); after.TenantID != before.TenantID || after.Role != before.Role || after.AuthSource != before.AuthSource {
+	if after := h.accountOf(t, "alice"); after.TenantID != before.TenantID || after.Role != before.Role || after.AuthSource != before.AuthSource {
 		t.Fatalf("the elevation path mutated the account: %+v, want %+v", after, before)
 	}
 	// An account that does not exist must answer identically, or the two answers
@@ -337,14 +443,14 @@ func TestTenantElevationSSOCannotElevateAnotherTenantsAccount(t *testing.T) {
 // the ones it has never seen.
 func TestTenantSSOStillSignsInItsOwnAccounts(t *testing.T) {
 	h := newRealmHarness(t)
-	h.seedFederated(t, "acmeuser", h.f.tenantA, RoleReadOnly, "ldap")
+	h.seedFederated(t, "acmeuser", h.f.tenantA, RoleReadOnly)
 
 	frag := h.roundTrip(t, "/t/"+h.f.slugA+"/sso/acme-idp/login", "/t/"+h.f.slugA+"/sso/acme-idp/callback", "acmeuser", nil)
 	if frag.Get("token") == "" {
 		t.Fatalf("a tenant's own account was refused by its own connection: %q", frag.Get("sso_error"))
 	}
 	// The refresh the IdP is entitled to make on its own users still happens.
-	if u, _ := h.f.s.users.Get("acmeuser"); u.Role != RoleOperator || u.AuthSource != "oidc" || u.TenantID != h.f.tenantA {
+	if u := h.accountOf(t, "acmeuser"); u.Role != RoleOperator || u.AuthSource != "oidc" || u.TenantID != h.f.tenantA {
 		t.Errorf("own-realm sign-in did not refresh the account: %+v", u)
 	}
 
@@ -353,9 +459,12 @@ func TestTenantSSOStillSignsInItsOwnAccounts(t *testing.T) {
 	if frag.Get("token") == "" {
 		t.Fatalf("a new account was not provisioned by a tenant-bound flow: %q", frag.Get("sso_error"))
 	}
-	u, ok := h.f.s.users.Get("newcomer")
+	u, ok := h.accountFor(t, h.f.tenantA, "newcomer")
 	if !ok || u.TenantID != h.f.tenantA {
 		t.Fatalf("new account = %+v (ok=%v), want one in the bound tenant %s", u, ok, h.f.tenantA)
+	}
+	if u.Username != u.ID {
+		t.Errorf("a JIT-provisioned account has a login handle %q — a federated account's username IS its opaque id", u.Username)
 	}
 }
 
@@ -375,7 +484,7 @@ func TestTenantSSOStillSignsInItsOwnAccounts(t *testing.T) {
 // narrowed for a reason that is demonstrated rather than asserted.
 func TestGenericEntryCannotUseABoundConnection(t *testing.T) {
 	h := newRealmHarness(t)
-	h.seedFederated(t, "acmeuser", h.f.tenantA, RoleReadOnly, "ldap")
+	h.seedFederated(t, "acmeuser", h.f.tenantA, RoleReadOnly)
 
 	// The flow a bare-page button would start: no locator cookie anywhere.
 	frag := h.roundTrip(t, "/api/auth/sso/login?idp=acme-idp",
@@ -388,7 +497,7 @@ func TestGenericEntryCannotUseABoundConnection(t *testing.T) {
 		t.Fatalf("no token and no error: %v", frag)
 	}
 	// The account is untouched by the refused round trip.
-	if u, _ := h.f.s.users.Get("acmeuser"); u.Role != RoleReadOnly || u.TenantID != h.f.tenantA {
+	if u := h.accountOf(t, "acmeuser"); u.Role != RoleReadOnly || u.TenantID != h.f.tenantA {
 		t.Fatalf("the refused flow still rewrote the account: %+v", u)
 	}
 
@@ -407,7 +516,7 @@ func TestGenericEntryCannotUseABoundConnection(t *testing.T) {
 	if !h.f.s.providerVisible(nil, "shared-idp") {
 		t.Fatalf("the unbound platform-realm connection was hidden from the bare sign-in page")
 	}
-	h.seedFederated(t, "corpuser", h.f.tenantB, RoleReadOnly, "ldap")
+	h.seedFederated(t, "corpuser", h.f.tenantB, RoleReadOnly)
 	frag = h.roundTrip(t, "/api/auth/sso/login?idp=shared-idp", "/api/auth/sso/callback", "corpuser", nil)
 	if frag.Get("token") == "" {
 		t.Fatalf("the platform-realm button stopped working from the bare page: %q", frag.Get("sso_error"))
@@ -425,8 +534,8 @@ func TestOrgSSORealmReachesItsMemberTenants(t *testing.T) {
 		t.Fatalf("create sibling tenant: %d %s", st, b)
 	}
 	sibling := idOf(t, b)
-	h.seedFederated(t, "sibuser", sibling, RoleReadOnly, "ldap")
-	h.seedFederated(t, "acmeuser", h.f.tenantA, RoleReadOnly, "ldap")
+	h.seedFederated(t, "sibuser", sibling, RoleReadOnly)
+	h.seedFederated(t, "acmeuser", h.f.tenantA, RoleReadOnly)
 
 	for _, user := range []string{"acmeuser", "sibuser"} {
 		frag := h.roundTrip(t, "/org/"+h.f.orgA+"/sso/acme-idp/login", "/org/"+h.f.orgA+"/sso/acme-idp/callback", user, nil)
@@ -434,11 +543,28 @@ func TestOrgSSORealmReachesItsMemberTenants(t *testing.T) {
 			t.Fatalf("the org realm refused %s, a member tenant's account: %q", user, frag.Get("sso_error"))
 		}
 	}
-	// It still stops at the org boundary: tenant B is in another org.
-	h.seedFederated(t, "globexuser", h.f.tenantB, RoleReadOnly, "ldap")
+	// It still stops at the org boundary. Since tracker 300 the boundary is in the
+	// KEY: org Alpha's URL derives its provisioning tenant from a connection org
+	// Alpha owns, so the tuple it looks up names org Alpha and the realm-scoped
+	// fallback (§2.5 Amendment) reaches only org Alpha's tenants. Org Beta's
+	// account is therefore not reachable at all — the sign-in provisions org
+	// Alpha's OWN account instead, and must not be a session in org Beta's.
+	victim := h.seedFederated(t, "globexuser", h.f.tenantB, RoleReadOnly)
 	frag := h.roundTrip(t, "/org/"+h.f.orgA+"/sso/acme-idp/login", "/org/"+h.f.orgA+"/sso/acme-idp/callback", "globexuser", nil)
-	if frag.Get("token") != "" {
-		t.Fatal("CROSS-ORG LEAK: org Alpha's URL signed in a tenant of org Beta")
+	if tok := frag.Get("token"); tok != "" {
+		claims, err := token.Verify(tok, jwtSecret())
+		if err != nil {
+			t.Fatalf("verify: %v", err)
+		}
+		if claims.Sub == victim.ID {
+			t.Fatal("CROSS-ORG LEAK: org Alpha's URL signed in a tenant of org Beta")
+		}
+		if claims.Tenant == h.f.tenantB {
+			t.Fatalf("org Alpha's URL minted a session in org Beta's tenant %q", claims.Tenant)
+		}
+	}
+	if after := h.accountOf(t, "globexuser"); after.Role != victim.Role || after.TenantID != victim.TenantID {
+		t.Fatalf("org Alpha's sign-in rewrote org Beta's account: %+v, want %+v", after, victim)
 	}
 }
 
@@ -447,15 +573,15 @@ func TestOrgSSORealmReachesItsMemberTenants(t *testing.T) {
 // account tenant" would break every deployment that predates per-tenant URLs.
 func TestPlatformRealmSSOStillSignsInEveryTenant(t *testing.T) {
 	h := newRealmHarness(t)
-	h.seedFederated(t, "acmeuser", h.f.tenantA, RoleReadOnly, "ldap")
-	h.seedFederated(t, "globexuser", h.f.tenantB, RoleReadOnly, "ldap")
+	h.seedFederated(t, "acmeuser", h.f.tenantA, RoleReadOnly)
+	h.seedFederated(t, "globexuser", h.f.tenantB, RoleReadOnly)
 
 	for _, user := range []string{"acmeuser", "globexuser"} {
 		frag := h.roundTrip(t, "/api/auth/sso/login?idp=shared-idp", "/api/auth/sso/callback", user, nil)
 		if frag.Get("token") == "" {
 			t.Fatalf("the platform-realm connection refused %s: %q", user, frag.Get("sso_error"))
 		}
-		if u, _ := h.f.s.users.Get(user); u.Role != RoleOperator {
+		if u := h.accountOf(t, user); u.Role != RoleOperator {
 			t.Errorf("%s was not refreshed by the unbound flow: %+v", user, u)
 		}
 	}
@@ -463,7 +589,7 @@ func TestPlatformRealmSSOStillSignsInEveryTenant(t *testing.T) {
 	if frag := h.roundTrip(t, "/api/auth/sso/login?idp=shared-idp", "/api/auth/sso/callback", "platformnew", nil); frag.Get("token") == "" {
 		t.Fatalf("the platform-realm connection provisioned nobody: %q", frag.Get("sso_error"))
 	}
-	if u, ok := h.f.s.users.Get("platformnew"); !ok || u.TenantID != TenantGlobal {
+	if u, ok := h.accountFor(t, TenantGlobal, "platformnew"); !ok || u.TenantID != TenantGlobal {
 		t.Fatalf("platform-realm provisioning = %+v (ok=%v), want the OIDC default tenant", u, ok)
 	}
 }
@@ -484,7 +610,7 @@ func TestPlatformRealmSSOStillSignsInEveryTenant(t *testing.T) {
 // never hand out a platform-wide skeleton key.
 func TestTenantSSOCannotSignInAnotherTenantsAccountWhenItsOwnLocatorStopsResolving(t *testing.T) {
 	h := newRealmHarness(t)
-	before := h.seedFederated(t, "alice", h.f.tenantA, RoleReadOnly, "ldap")
+	before := h.seedFederated(t, "alice", h.f.tenantA, RoleReadOnly)
 	if _, err := h.f.s.tenants.SetStatus(h.f.tenantB, tenant.StatusSuspended); err != nil {
 		t.Fatalf("suspend tenant B: %v", err)
 	}
@@ -496,10 +622,7 @@ func TestTenantSSOCannotSignInAnotherTenantsAccountWhenItsOwnLocatorStopsResolvi
 	if frag.Get("token") != "" || frag.Get("refresh") != "" {
 		t.Fatalf("CROSS-TENANT SIGN-IN: tenant B's connection minted a session for %s of tenant %s", before.Username, before.TenantID)
 	}
-	after, ok := h.f.s.users.Get("alice")
-	if !ok {
-		t.Fatal("the victim's account disappeared")
-	}
+	after := h.accountOf(t, "alice")
 	// The merge write IS the damage: it rewrites role, e-mail, display name and
 	// auth source. Refusing the session is not enough; nothing may have been
 	// written.
@@ -513,7 +636,7 @@ func TestTenantSSOCannotSignInAnotherTenantsAccountWhenItsOwnLocatorStopsResolvi
 // closed by the same helper.
 func TestTenantElevationSSOCannotElevateAnotherTenantsAccountWhenItsLocatorStopsResolving(t *testing.T) {
 	h := newRealmHarness(t)
-	before := h.seedFederated(t, "alice", h.f.tenantA, RoleReadOnly, "ldap")
+	before := h.seedFederated(t, "alice", h.f.tenantA, RoleReadOnly)
 	if _, err := h.f.s.tenants.SetStatus(h.f.tenantB, tenant.StatusSuspended); err != nil {
 		t.Fatalf("suspend tenant B: %v", err)
 	}

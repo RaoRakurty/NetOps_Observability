@@ -30,8 +30,23 @@ func backdateUser(t *testing.T, s *server, username string, mod func(*User)) {
 	if !ok {
 		t.Fatalf("expected the file-backed users.FileStore, got %T", s.users)
 	}
-	if err := us.MutateForTest(username, mod); err != nil {
+	// Tracker 300: MutateForTest is keyed by the PRINCIPAL ID, like every other
+	// mutator — tests still name people by their login handle, so resolve it.
+	if err := us.MutateForTest(principalID(t, s, username), mod); err != nil {
 		t.Fatalf("mutate %q: %v", username, err)
+	}
+}
+
+// backdateUserID is backdateUser for an account named by its PRINCIPAL ID — the
+// only way to reach a FEDERATED account, which has no login handle.
+func backdateUserID(t *testing.T, s *server, id string, mod func(*User)) {
+	t.Helper()
+	us, ok := s.users.(*users.FileStore)
+	if !ok {
+		t.Fatalf("expected the file-backed users.FileStore, got %T", s.users)
+	}
+	if err := us.MutateForTest(id, mod); err != nil {
+		t.Fatalf("mutate %q: %v", id, err)
 	}
 }
 
@@ -47,6 +62,13 @@ func setScopeSettings(t *testing.T, s *server, scope string, mod func(*SecurityS
 // activeSessions filters by status: ListForUser deliberately returns revoked
 // rows too (the admin UI shows them), so counting it directly would report a
 // revocation as a no-op.
+// activeSessionsFor is activeSessions for a LOCAL login handle: it resolves the
+// handle to the principal id the sessions are actually keyed by (tracker 300).
+func activeSessionsFor(t *testing.T, s *server, username string) []session.Session {
+	t.Helper()
+	return activeSessions(s, principalID(t, s, username))
+}
+
 func activeSessions(s *server, userID string) []session.Session {
 	var out []session.Session
 	for _, x := range s.sessions.ListForUser(userID) {
@@ -143,10 +165,11 @@ func TestRehashOnLoginDoesNotResetTheExpiryClock(t *testing.T) {
 	old := time.Now().UTC().AddDate(0, 0, -120)
 	backdateUser(t, s, seedUser, func(u *User) { u.PasswordChangedAt = old })
 
-	if err := s.users.RehashPassword(seedUser, seedPass); err != nil {
+	seedID := principalID(t, s, seedUser)
+	if err := s.users.RehashPassword(seedID, seedPass); err != nil {
 		t.Fatalf("rehash: %v", err)
 	}
-	u, ok := s.users.Get(seedUser)
+	u, ok := s.users.Get(seedID)
 	if !ok {
 		t.Fatal("user vanished")
 	}
@@ -163,10 +186,11 @@ func TestRehashOnLoginDoesNotResetTheExpiryClock(t *testing.T) {
 func TestChangePasswordStampsTheClock(t *testing.T) {
 	_, s := newTestServerState(t)
 	before := time.Now().UTC().Add(-time.Second)
-	if err := s.users.ChangePassword(seedUser, "An0therPassw0rd!"); err != nil {
+	seedID := principalID(t, s, seedUser)
+	if err := s.users.ChangePassword(seedID, "An0therPassw0rd!"); err != nil {
 		t.Fatalf("change: %v", err)
 	}
-	u, _ := s.users.Get(seedUser)
+	u, _ := s.users.Get(seedID)
 	if u.PasswordChangedAt.Before(before) {
 		t.Fatalf("PasswordChangedAt not stamped: %v", u.PasswordChangedAt)
 	}
@@ -182,14 +206,14 @@ func TestConcurrentLoginDenyRevokesThePriorSession(t *testing.T) {
 	if code, _ := postLogin(t, srv.URL, seedUser, seedPass); code != http.StatusOK {
 		t.Fatalf("first login = %d, want 200", code)
 	}
-	first := activeSessions(s, seedUser)
+	first := activeSessionsFor(t, s, seedUser)
 	if len(first) != 1 {
 		t.Fatalf("want 1 session after first login, got %d", len(first))
 	}
 	if code, _ := postLogin(t, srv.URL, seedUser, seedPass); code != http.StatusOK {
 		t.Fatalf("second login = %d, want 200", code)
 	}
-	after := activeSessions(s, seedUser)
+	after := activeSessionsFor(t, s, seedUser)
 	if len(after) != 1 {
 		t.Fatalf("concurrent_login=deny must leave exactly 1 live session, got %d", len(after))
 	}
@@ -207,7 +231,7 @@ func TestConcurrentLoginAllowKeepsBothSessions(t *testing.T) {
 			t.Fatalf("login %d = %d, want 200", i, code)
 		}
 	}
-	if n := len(activeSessions(s, seedUser)); n != 2 {
+	if n := len(activeSessionsFor(t, s, seedUser)); n != 2 {
 		t.Fatalf("concurrent_login=allow must keep both sessions, got %d", n)
 	}
 }

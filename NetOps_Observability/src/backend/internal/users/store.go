@@ -81,6 +81,13 @@ type Repo interface {
 	// (provision=true) mint one. provision=false is the read-only door (elevation):
 	// a tuple miss is ErrNoSuchUser and nothing is written — it never binds by
 	// username again.
+	//
+	// §2.5 Amendment (2026-09-13): on a realm-CONSTRAINED flow an exact-tuple miss
+	// also looks (issuer, subject) up across the tenants that realm reaches, so one
+	// person with two connections in one org is one account. Exactly one match
+	// signs in; more than one is ErrAmbiguousIdentity. An UNCONSTRAINED realm gets
+	// no cross-tenant reach at all — see realmScopedOwner for why that is the
+	// fail-closed reading, not a gap.
 	ResolveFederated(a Assertion, realm Realm, provision bool) (User, error)
 
 	// ResolveFederatedUnbound is the platform-default-connection form: the
@@ -112,14 +119,6 @@ type Repo interface {
 	// than repairing — a converge step must not destroy the estate it is
 	// converging (the F-58 lesson).
 	VerifyIdentityInvariants() error
-
-	// Deprecated: tracker 300 — the username-keyed federated upsert is replaced
-	// by ResolveFederated/ResolveFederatedUnbound. It is kept, UNCHANGED in
-	// behaviour, only so the doors keep compiling until the 300-doors change
-	// rewrites them; it is removed by that change. Do not call it from new code.
-	UpsertFederated(username, email, displayName, role, source, tenant string) (User, error)
-	// Deprecated: tracker 300 — see UpsertFederated. Removed by the doors change.
-	UpsertFederatedInRealm(username, email, displayName, role, source, tenant string, realm Realm) (User, error)
 }
 
 type User struct {
@@ -380,9 +379,9 @@ func (s *FileStore) load() error {
 	for _, u := range list {
 		// One-time migration (H1): Create/SeedAdmin historically never stamped
 		// AuthSource, so pre-existing LOCAL rows (including the bootstrap admin)
-		// carry "". UpsertFederated used to read that "" as "not local" and merge
-		// an IdP identity — role, source and all — straight into the local
-		// account. Every write path now stamps the source explicitly, and legacy
+		// carry "". The username-keyed federated upsert used to read that "" as
+		// "not local" and merge an IdP identity — role, source and all — straight
+		// into the local account. Every write path now stamps the source explicitly, and legacy
 		// rows are normalized here so the local/federated split is unambiguous.
 		if u.AuthSource == "" {
 			u.AuthSource = ProtocolLocal

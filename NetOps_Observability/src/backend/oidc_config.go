@@ -1147,7 +1147,7 @@ func (s *server) ssoClientRedirectURIs(base string) []string {
 // bound the connection to, read from the callback URL the binding checks have
 // already validated. Every other flow keeps the global OIDC default, unchanged.
 //
-// It never MOVES anyone: UpsertFederated leaves an existing federated account's
+// It never MOVES anyone: resolving an existing federated account leaves its
 // tenant untouched, so the design's "a claim never moves a tenant" invariant
 // holds — and this is not a claim at all, it is the operator's registration.
 func (s *server) ssoProvisionTenant(r *http.Request, p *oidcProvider) string {

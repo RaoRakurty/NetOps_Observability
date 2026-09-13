@@ -83,6 +83,7 @@ func TestEpisodeTriageHTTPAndAudit(t *testing.T) {
 	store, clock := newEpisodeStore(t)
 	s.alertEpisodes = store
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+	adminPrincipal := principalID(t, s, "admin")
 
 	store.Observe("", "", "StackDisk", "warning", "disk 90%", true)
 	ep := listAll(t, store)[0]
@@ -94,8 +95,9 @@ func TestEpisodeTriageHTTPAndAudit(t *testing.T) {
 		t.Fatalf("ack: %d %s", st, b)
 	}
 	var got AlertEpisode
-	if err := json.Unmarshal(b, &got); err != nil || got.AcknowledgedBy != "admin" || got.AcknowledgedAt == nil {
-		t.Fatalf("ack must stamp the PRINCIPAL as actor: %s", b)
+	// The actor is the PRINCIPAL ID, never the login name (tracker 300 §4.4).
+	if err := json.Unmarshal(b, &got); err != nil || got.AcknowledgedBy != adminPrincipal || got.AcknowledgedAt == nil {
+		t.Fatalf("ack must stamp the PRINCIPAL as actor (want %q): %s", adminPrincipal, b)
 	}
 	// assign — payload actor fields must be impossible (only assignee accepted).
 	if st, b = do(t, srv, "POST", base+"/assign", admin, map[string]any{"assignee": "noc-lee"}); st != 200 {
@@ -144,8 +146,8 @@ func TestEpisodeTriageHTTPAndAudit(t *testing.T) {
 		if e.Method != "TRIAGE" {
 			continue
 		}
-		if e.Actor != "admin" {
-			t.Fatalf("triage audit must carry the actor: %+v", e)
+		if e.Actor != adminPrincipal {
+			t.Fatalf("triage audit must carry the actor as the PRINCIPAL ID (want %q): %+v", adminPrincipal, e)
 		}
 		if act, _ := e.Detail["action"].(string); act != "" {
 			actions[act]++

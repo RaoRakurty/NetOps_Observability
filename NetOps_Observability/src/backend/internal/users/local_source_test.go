@@ -6,7 +6,7 @@ package users
 // local_source_test.go — H1 regression coverage for the local/federated split:
 // the IsLocalSource predicate (""=local), the AuthSource stamp on the
 // bootstrap/seed write paths, and the one-time load migration that normalizes
-// pre-stamp rows. The UpsertFederated refusal these enable is proven in the
+// pre-stamp rows. The local-account refusal these enable is proven in the
 // cross-backend authorization contract (federated_contract_test.go).
 
 import (
@@ -54,7 +54,7 @@ func TestSeedAdminStampsLocalAuthSource(t *testing.T) {
 
 // TestFileStoreLoadMigratesEmptyAuthSource: a users.json written before the
 // AuthSource stamp (rows carry "") is normalized to "local" at load — in memory
-// AND back to disk — so UpsertFederated's local-account refusal applies to the
+// AND back to disk — so the local-account refusal (H1) applies to the
 // pre-existing bootstrap admin, not just freshly created accounts.
 func TestFileStoreLoadMigratesEmptyAuthSource(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
@@ -75,9 +75,30 @@ func TestFileStoreLoadMigratesEmptyAuthSource(t *testing.T) {
 	if u, _ := s.Get("fed-user"); u.AuthSource != "oidc" {
 		t.Errorf("federated row AuthSource = %q after load, want %q (migration must not touch it)", u.AuthSource, "oidc")
 	}
-	// The refusal the migration exists for:
-	if _, err := s.UpsertFederated("admin", "a@idp", "IdP", "super-admin", "oidc", ""); err == nil {
-		t.Fatal("UpsertFederated against the migrated local admin must refuse")
+	// The refusal the migration exists for. Asserted on the tuple path (tracker
+	// 300): the migrated row is backfilled as a LOCAL identity, so the local
+	// namespace owns the handle `admin` and a federated assertion carrying the
+	// strongest claim available — that very username, which §2.6 consults — gets
+	// its own fresh account instead of the bootstrap admin's.
+	if u, _ := s.Get("admin"); u.IdentityPending() {
+		t.Fatal("the migrated local admin was not backfilled with its identity")
+	}
+	a := Assertion{
+		Identity:       Identity{Issuer: "https://kc.example.com/realms/x", Subject: "admin", Protocol: ProtocolOIDC},
+		Email:          "a@idp",
+		DisplayName:    "IdP",
+		Role:           "super-admin",
+		LegacyUsername: "admin",
+	}
+	fed, err := s.ResolveFederated(a, Realm{}, true)
+	if err != nil {
+		t.Fatalf("federated assertion naming the local admin's handle: %v", err)
+	}
+	if fed.ID == "admin" {
+		t.Fatal("a federated assertion reached the migrated local admin")
+	}
+	if after, _ := s.Get("admin"); after.Role != "admin" || after.AuthSource != "local" {
+		t.Fatalf("the migrated local admin was mutated: %+v", after)
 	}
 	// And the normalization persisted (a restart must not resurrect "").
 	b, err := os.ReadFile(path)

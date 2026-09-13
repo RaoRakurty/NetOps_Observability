@@ -2,6 +2,7 @@
 // Copyright 2026 Correlix
 
 import { ReactNode, Suspense, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { isLocalAccount, userLabel } from "./lib/userLabel";
 import { api, Health, LANDING_PENDING_KEY } from "./services/api";
 import { useAuth } from "./hooks/useAuth";
 import { ShellContext, ShellState, TimeRange, SectionCtx } from "./context/shell";
@@ -66,7 +67,9 @@ export default function App() {
   // account's second factor is the IdP's, so the entry is not offered at all
   // rather than opening a card with nothing it can do.
   const [tfaOpen, setTfaOpen] = useState(false);
-  const localAccount = !user?.auth_source || user.auth_source === "local";
+  // The change-password / MFA controls are for LOCAL accounts only: a federated
+  // credential lives at the IdP. Same predicate the backend uses.
+  const localAccount = isLocalAccount(user);
   const onChangePassword = localAccount ? () => setPwOpen(true) : undefined;
   const onTwoFactor = localAccount ? () => setTfaOpen(true) : undefined;
 
@@ -398,12 +401,12 @@ export default function App() {
         <Inspector />
         <BottomDrawer />
         {pwOpen && (
-          <Modal title="Change password" subtitle={user.username} onClose={() => setPwOpen(false)}>
+          <Modal title="Change password" subtitle={userLabel(user)} onClose={() => setPwOpen(false)}>
             <ChangePasswordCard fixedUsername={user.username} onDone={() => setPwOpen(false)} />
           </Modal>
         )}
         {tfaOpen && (
-          <Modal title="Two-factor authentication" subtitle={user.username} onClose={() => setTfaOpen(false)}>
+          <Modal title="Two-factor authentication" subtitle={userLabel(user)} onClose={() => setTfaOpen(false)}>
             <TwoFactorCard onDone={() => setTfaOpen(false)} />
           </Modal>
         )}

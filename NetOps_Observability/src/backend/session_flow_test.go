@@ -48,7 +48,9 @@ func TestSessionIdleAndAbsoluteAtRefresh(t *testing.T) {
 	// Idle: a session whose last activity is older than the idle window (default
 	// 30m) is rejected on refresh with SESSION_IDLE_TIMEOUT.
 	a := login(t, srv, "admin", "Passw0rd!2345")
-	sess := s.sessions.ListForUser("admin")
+	// Tracker 300: a session is keyed by the PRINCIPAL ID, not the login handle.
+	adminID := principalID(t, s, "admin")
+	sess := s.sessions.ListForUser(adminID)
 	if len(sess) == 0 {
 		t.Fatal("no session created on login")
 	}
@@ -66,7 +68,7 @@ func TestSessionIdleAndAbsoluteAtRefresh(t *testing.T) {
 	// Absolute: a fresh session older than the absolute cap (default 12h) is
 	// rejected with SESSION_ABSOLUTE_TIMEOUT even if just active.
 	b2 := login(t, srv, "admin", "Passw0rd!2345")
-	sess2 := s.sessions.ListForUser("admin")
+	sess2 := s.sessions.ListForUser(adminID)
 	var newID string
 	for _, x := range sess2 {
 		if x.Status == session.StatusActive {
@@ -98,7 +100,7 @@ func TestSessionHappyRefresh(t *testing.T) {
 		t.Fatalf("happy refresh: status %d: %s", st, b)
 	}
 	// last_activity advanced.
-	for _, x := range s.sessions.ListForUser("admin") {
+	for _, x := range s.sessions.ListForUser(principalID(t, s, "admin")) {
 		if x.Status == session.StatusActive && time.Since(x.LastActivityAt) > time.Minute {
 			t.Errorf("refresh did not touch last_activity")
 		}
@@ -109,14 +111,14 @@ func TestSessionHappyRefresh(t *testing.T) {
 func TestSessionRevokeAllOnPasswordChange(t *testing.T) {
 	srv, s := newTestServerState(t)
 	a := login(t, srv, "admin", "Passw0rd!2345")
-	if n := countActive(s, "admin"); n < 1 {
+	if n := countActive(t, s, "admin"); n < 1 {
 		t.Fatalf("expected an active session, got %d", n)
 	}
 	if st, body := do(t, srv, "POST", "/api/auth/change-password", "",
 		map[string]string{"username": "admin", "current_password": "Passw0rd!2345", "new_password": "NewPassw0rd!9"}); st != 200 {
 		t.Fatalf("change-password: %d: %s", st, body)
 	}
-	if n := countActive(s, "admin"); n != 0 {
+	if n := countActive(t, s, "admin"); n != 0 {
 		t.Errorf("after password change, active sessions = %d, want 0", n)
 	}
 	// The old session's refresh token is now dead.
@@ -131,7 +133,7 @@ func TestSessionMaxConcurrent(t *testing.T) {
 	for i := 0; i < session.MaxSessionsPerUser+2; i++ {
 		login(t, srv, "admin", "Passw0rd!2345")
 	}
-	if n := countActive(s, "admin"); n != session.MaxSessionsPerUser {
+	if n := countActive(t, s, "admin"); n != session.MaxSessionsPerUser {
 		t.Errorf("active sessions = %d, want %d (cap)", n, session.MaxSessionsPerUser)
 	}
 }
@@ -141,16 +143,16 @@ func TestSessionMaxConcurrent(t *testing.T) {
 func TestSessionAdminListAndRevoke(t *testing.T) {
 	srv, _ := newTestServerState(t)
 	admin := login(t, srv, "admin", "Passw0rd!2345")
-	if st, _ := do(t, srv, "POST", "/api/users", admin.Token, map[string]string{
-		"username": "victim2", "password": "Victim2-Pass!1", "role": "read-only"}); st != 201 {
-		t.Fatal("create user")
-	}
+	victimID := createUserID(t, srv, admin.Token, map[string]any{
+		"username": "victim2", "password": "Victim2-Pass!1", "role": "read-only"})
 	victim := login(t, srv, "victim2", "Victim2-Pass!1")
 	if st, _ := do(t, srv, "GET", "/api/auth/me", victim.Token, nil); st != 200 {
 		t.Fatal("victim token should work before revoke")
 	}
 	// Admin lists the victim's sessions.
-	st, b := do(t, srv, "GET", "/api/sessions?user=victim2", admin.Token, nil)
+	// ?user= is the PRINCIPAL ID (tracker 300): a login handle is unique only
+	// within a tenant and cannot address an account on a platform-wide route.
+	st, b := do(t, srv, "GET", "/api/sessions?user="+victimID, admin.Token, nil)
 	if st != 200 {
 		t.Fatalf("list sessions: %d", st)
 	}
@@ -170,9 +172,12 @@ func TestSessionAdminListAndRevoke(t *testing.T) {
 	}
 }
 
-func countActive(s *server, user string) int {
+// countActive counts a LOCAL login handle's live sessions. It resolves the handle
+// to the PRINCIPAL ID the session store is keyed by (tracker 300).
+func countActive(t *testing.T, s *server, username string) int {
+	t.Helper()
 	n := 0
-	for _, x := range s.sessions.ListForUser(user) {
+	for _, x := range s.sessions.ListForUser(principalID(t, s, username)) {
 		if x.Status == session.StatusActive {
 			n++
 		}

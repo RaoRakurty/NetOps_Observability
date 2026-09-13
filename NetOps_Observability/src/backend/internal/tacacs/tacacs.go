@@ -31,7 +31,7 @@ import (
 //   - Every body is XOR-obfuscated with a pseudo-pad derived from the shared
 //     secret (tacacsPad below). The header travels in clear.
 //   - On PASS, handleTACACSLogin JIT-provisions the user via
-//     users.UpsertFederated(..., source="tacacs", ...) and issues a native
+//     users.ResolveFederatedUnbound(assertion with protocol "tacacs") and issues a native
 //     session — identical to the SSO broker-and-reissue model, so RBAC/tenancy
 //     are unchanged downstream.
 //

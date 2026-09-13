@@ -496,6 +496,7 @@ func TestSnapshotWritesReachTheRealAuditStore(t *testing.T) {
 	stub := newOSStub()
 	srv, s, _ := backupTestServer(t, stub)
 	admin := platformToken(t, srv)
+	adminPrincipal := principalID(t, s, "admin")
 
 	// DENY: a delete without the confirm token.
 	if st, _ := do(t, srv, "POST", "/api/system/backup/snapshots/delete", admin,
@@ -527,8 +528,9 @@ func TestSnapshotWritesReachTheRealAuditStore(t *testing.T) {
 		}
 		if action == "snapshot_create" && e.Decision == "allow" {
 			sawAllow = true
-			if e.Actor != "admin" {
-				t.Errorf("audited actor = %q, want the authenticated subject", e.Actor)
+			// Tracker 300: the audit actor is the PRINCIPAL ID, not the login name.
+			if e.Actor != adminPrincipal {
+				t.Errorf("audited actor = %q, want the authenticated principal %q", e.Actor, adminPrincipal)
 			}
 			if _, ok := e.Detail["operation"]; !ok {
 				t.Error("an accepted operation must be attributable to its id in the audit trail")

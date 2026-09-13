@@ -81,7 +81,8 @@ func TestUserStoreRoundTripsThroughBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newUserStore: %v", err)
 	}
-	if _, err := us.CreateFull(User{Username: "bob", Role: RoleReadOnly}, "hunter2hunter2"); err != nil {
+	bob, err := us.CreateFull(User{Username: "bob", Role: RoleReadOnly}, "hunter2hunter2")
+	if err != nil {
 		t.Fatalf("CreateFull: %v", err)
 	}
 	// Reload through the same in-memory backend.
@@ -89,7 +90,12 @@ func TestUserStoreRoundTripsThroughBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if _, ok := us2.Get("bob"); !ok {
+	// Tracker 300: an account is addressed by its PRINCIPAL ID; the login handle
+	// resolves through the per-tenant local namespace.
+	if _, ok := us2.Get(bob.ID); !ok {
 		t.Error("reloaded user store should see bob via the backend")
+	}
+	if got, ok := us2.LookupLocalAny("bob"); !ok || len(got) != 1 || got[0].ID != bob.ID {
+		t.Errorf("reloaded store lost bob's local login handle: %+v/%v", got, ok)
 	}
 }
