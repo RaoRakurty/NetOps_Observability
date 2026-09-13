@@ -515,6 +515,11 @@ func (s *server) aiTopologyContext(claims jwtClaims) func(context.Context, ai.Pr
 		neighbors, capped := aiDeviceNeighbors(links, dev.ID)
 		out.Neighbors = append(out.Neighbors, neighbors...)
 		if capped {
+			// Both, always: the note is what a reader sees, NeighborsCapped is
+			// what ToolResult.Truncated is derived from. A cut that travelled
+			// only as prose left the structured flag saying nothing was cut
+			// (tracker 294).
+			out.NeighborsCapped = true
 			out.Notes = append(out.Notes, aiNeighborCapNote)
 		}
 
@@ -547,6 +552,7 @@ func (s *server) aiTopologyContext(claims jwtClaims) func(context.Context, ai.Pr
 			paths, pathsCapped := s.aiDevicePaths(tctx, tenant, cross, dev)
 			out.Paths = append(out.Paths, paths...)
 			if pathsCapped {
+				out.PathsCapped = true
 				out.Notes = append(out.Notes, aiPathCapNote)
 			}
 		}
