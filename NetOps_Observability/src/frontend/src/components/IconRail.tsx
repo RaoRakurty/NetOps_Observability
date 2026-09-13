@@ -2,6 +2,7 @@
 // Copyright 2026 Correlix
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { userLabel } from "../lib/userLabel";
 import { createPortal } from "react-dom";
 import { NavSection, routeFor } from "../nav";
 import { useShell } from "../context/shell";
@@ -361,16 +362,16 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
             aria-haspopup="menu"
             aria-expanded={acctOpen}
           >
-            <span className="avatar">{user.username.slice(0, 1).toUpperCase()}</span>
+            <span className="avatar">{userLabel(user).slice(0, 1).toUpperCase()}</span>
             <span className="rail-account-id">
-              <span className="rail-account-name">{user.username}</span>
+              <span className="rail-account-name">{userLabel(user)}</span>
               <span className="rail-account-role">{user.role}</span>
             </span>
           </button>
           {acctOpen && (
             <div className="menu-pop rail-account-pop" role="menu">
               <div className="menu-head">
-                {user.username}
+                {userLabel(user)}
                 <span style={{ color: "var(--muted)" }}> · {user.role}</span>
                 <ScopeBadge user={user} />
               </div>

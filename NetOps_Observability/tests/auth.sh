@@ -100,6 +100,10 @@ code DELETE "/api/apikeys/$RLID" "$TOK" >/dev/null
 echo "-- 7. RBAC (least privilege) --"
 RUSER="smoke_ro_$$"; RPASS="ReadOnlyPass123!"
 MK=$(body POST /api/users "$TOK" "{\"username\":\"$RUSER\",\"password\":\"$RPASS\",\"role\":\"read-only\"}")
+# Tracker 300: /api/users/{id} is keyed by the opaque PRINCIPAL ID, never the
+# login name (a login name is unique only within a tenant). The create response
+# carries it, so the cleanup below reads it from there rather than guessing.
+RUID=$(printf '%s' "$MK" | J "['id']" 2>/dev/null || true)
 if printf '%s' "$MK" | grep -q "$RUSER"; then
   ok "created read-only user"
   RLR=$(body POST /api/auth/login '' "{\"username\":\"$RUSER\",\"password\":\"$RPASS\"}")
@@ -107,7 +111,11 @@ if printf '%s' "$MK" | grep -q "$RUSER"; then
   ac "read-only can view devices" 200 "$(code GET /api/devices "$ROTOK")"
   ac "read-only DENIED admin (GET /api/users)" 403 "$(code GET /api/users "$ROTOK")"
   ac "read-only DENIED key mint" 403 "$(code POST /api/apikeys "$ROTOK" '{"label":"x","scopes":[]}')"
-  code DELETE "/api/users/$RUSER" "$TOK" >/dev/null  # cleanup
+  if [ -n "$RUID" ]; then
+    code DELETE "/api/users/$RUID" "$TOK" >/dev/null  # cleanup (keyed by principal id)
+  else
+    bad "the create response carried no user id — cleanup skipped, and /api/users must return one"
+  fi
 else
   bad "could not create read-only user (admin perms / cap?): $MK"
 fi

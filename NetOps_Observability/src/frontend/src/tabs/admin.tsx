@@ -23,6 +23,7 @@ import { AwsLogo } from "../components/ConnectorLogos";
 import ConnectorGlyph from "../components/ConnectorGlyph";
 import { teamsErrors, snsErrors, hasErrors, FieldErrors } from "../lib/notifyValidation";
 import { operatorError, httpFailure } from "../lib/errors";
+import { userLabel } from "../lib/userLabel";
 import Icon from "../components/Icon";
 import { useAuth } from "../hooks/useAuth";
 import AskIris from "../components/AskIris";
@@ -160,7 +161,7 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
   };
   const changeRole = async (u: AdminUser, role: string) => {
     setErr(null);
-    try { await api.updateUser(u.username, { role }); reload(); } catch (e) { setErr(operatorError(e, "That role change was not saved.")); }
+    try { await api.updateUser(u.id, { role }); reload(); } catch (e) { setErr(operatorError(e, "That role change was not saved.")); }
   };
 
   const all = users ?? [];
@@ -181,16 +182,18 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
   };
   const ql = q.trim().toLowerCase();
   const shown = ql
-    ? list.filter((u) => [u.username, u.email, u.display_name, u.role, u.tenant_id].some((f) => (f ?? "").toLowerCase().includes(ql)))
+    ? list.filter((u) => [userLabel(u), u.email, u.display_name, u.role, u.tenant_id].some((f) => (f ?? "").toLowerCase().includes(ql)))
     : list;
 
   // ---- selection + bulk actions --------------------------------------------
-  const toggle = (name: string) =>
-    setSelected((s) => { const n = new Set(s); n.has(name) ? n.delete(name) : n.add(name); return n; });
-  const allShownSelected = shown.length > 0 && shown.every((u) => selected.has(u.username));
-  const toggleAll = () => setSelected(allShownSelected ? new Set() : new Set(shown.map((u) => u.username)));
+  // SELECTION IS KEYED BY THE PRINCIPAL ID (tracker 300): two tenants may both
+  // hold a user called `admin`, so a set of usernames would select both.
+  const toggle = (id: string) =>
+    setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const allShownSelected = shown.length > 0 && shown.every((u) => selected.has(u.id));
+  const toggleAll = () => setSelected(allShownSelected ? new Set() : new Set(shown.map((u) => u.id)));
   const clearSel = () => setSelected(new Set());
-  const selUsers = all.filter((u) => selected.has(u.username));
+  const selUsers = all.filter((u) => selected.has(u.id));
   const selCount = selUsers.length;
   const isLocal = (u: AdminUser) => !u.auth_source || u.auth_source === "local";
 
@@ -202,23 +205,23 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
       reload();
     } catch (e) { setErr(operatorError(e, "That change was not applied to every selected user.")); } finally { setBusy(false); }
   };
-  const lock = () => runBatch((u) => api.updateUser(u.username, { status: "disabled" }));
-  const unlock = () => runBatch((u) => api.updateUser(u.username, { status: "active" }));
+  const lock = () => runBatch((u) => api.updateUser(u.id, { status: "disabled" }));
+  const unlock = () => runBatch((u) => api.updateUser(u.id, { status: "active" }));
   const del = () => {
     if (!window.confirm(`Delete ${selCount} user${selCount > 1 ? "s" : ""}? This cannot be undone.`)) return;
-    runBatch((u) => api.deleteUser(u.username));
+    runBatch((u) => api.deleteUser(u.id));
   };
   const resetMfa = () => {
     if (!window.confirm(`Reset two-factor for ${selCount} user${selCount > 1 ? "s" : ""}? They'll sign in with just their password until they set it up again.`)) return;
-    runBatch((u) => api.adminResetMfa(u.username));
+    runBatch((u) => api.adminResetMfa(u.id));
   };
   const resetPw = async () => {
     if (selCount !== 1) return;
     const u = selUsers[0];
-    const pw = window.prompt(`Set a new password for "${u.username}" (must meet the password policy):`);
+    const pw = window.prompt(`Set a new password for "${userLabel(u)}" (must meet the password policy):`);
     if (!pw) return;
     setErr(null); setBusy(true);
-    try { await api.updateUser(u.username, { password: pw }); clearSel(); reload(); }
+    try { await api.updateUser(u.id, { password: pw }); clearSel(); reload(); }
     catch (e) { setErr(operatorError(e, "That password was not changed.")); } finally { setBusy(false); }
   };
 
@@ -381,11 +384,22 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
           </thead>
           <tbody>
             {shown.map((u) => (
-              <tr key={u.username} className={selected.has(u.username) ? "row-selected" : ""}>
+              <tr key={u.id} className={selected.has(u.id) ? "row-selected" : ""}>
                 <td>
-                  <input type="checkbox" checked={selected.has(u.username)} onChange={() => toggle(u.username)} aria-label={`Select ${u.username}`} />
+                  <input type="checkbox" checked={selected.has(u.id)} onChange={() => toggle(u.id)} aria-label={`Select ${userLabel(u)}`} />
                 </td>
-                <td style={{ fontWeight: 500 }}>{u.display_name || u.username}</td>
+                <td style={{ fontWeight: 500 }}>
+                  {userLabel(u)}
+                  {u.identity_status === "pending" && (
+                    <span
+                      className="badge warn"
+                      style={{ marginLeft: 6 }}
+                      title="This account has no single sign-on identity recorded yet. It will be linked the next time its owner signs in through the same provider that created it. Disable the account if you would rather it were not."
+                    >
+                      identity pending
+                    </span>
+                  )}
+                </td>
                 <td className="mono">{u.email || "—"}</td>
                 <td>
                   <select className="inline-select" value={u.role} onChange={(e) => changeRole(u, e.target.value)}>
@@ -1174,7 +1188,7 @@ export function BindingsAdmin() {
     .filter((o) => o.id !== "global")
     .map((o) => ({ id: `org:${o.id}`, label: o.name }));
   const userList = (users ?? []).slice().sort((a, b) =>
-    (a.display_name || a.username).localeCompare(b.display_name || b.username));
+    userLabel(a).localeCompare(userLabel(b)));
 
   const openGrant = () => {
     setErr(null); setPrincipal(""); setRoleId("operator");
@@ -1229,8 +1243,8 @@ export function BindingsAdmin() {
               <select autoFocus value={principal} onChange={(e) => setPrincipal(e.target.value)}>
                 <option value="">Select a person…</option>
                 {userList.map((u) => (
-                  <option key={u.username} value={u.username}>
-                    {u.display_name ? `${u.display_name} (${u.username})` : u.username}
+                  <option key={u.id} value={u.id}>
+                    {userLabel(u)}
                   </option>
                 ))}
               </select>
@@ -1378,7 +1392,7 @@ function OrgAccessPanel({ orgId, orgName }: { orgId: string; orgName?: string })
 
   const list = (bindings ?? []).filter((b) => b.scope_id === scope);
   const roleList = roles?.roles ?? [];
-  const userList = (users ?? []).slice().sort((a, b) => (a.display_name || a.username).localeCompare(b.display_name || b.username));
+  const userList = (users ?? []).slice().sort((a, b) => userLabel(a).localeCompare(userLabel(b)));
 
   const assign = async () => {
     if (!principal) return;
@@ -1425,7 +1439,7 @@ function OrgAccessPanel({ orgId, orgName }: { orgId: string; orgName?: string })
             <label className="req-field"><span>User <Req /></span>
               <select value={principal} onChange={(e) => setPrincipal(e.target.value)}>
                 <option value="">Select a user…</option>
-                {userList.map((u) => <option key={u.username} value={u.username}>{u.display_name || u.username}</option>)}
+                {userList.map((u) => <option key={u.id} value={u.id}>{userLabel(u)}</option>)}
               </select></label>
             <label className="req-field"><span>Role <Req /></span>
               <select value={roleId} onChange={(e) => setRoleId(e.target.value)}>
@@ -1498,7 +1512,7 @@ function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: (
   const roleOptions = roles.length === 0
     ? <option value="operator">operator</option>
     : roles.map((r) => <option key={r.id} value={r.id}>{r.name || r.id}</option>);
-  const userList = users.slice().sort((a, b) => (a.display_name || a.username).localeCompare(b.display_name || b.username));
+  const userList = users.slice().sort((a, b) => userLabel(a).localeCompare(userLabel(b)));
   const scopeName = (id: string) =>
     id === "" ? "Provider (platform)" :
     orgs.find((o) => o.id === id)?.name || tenants.find((t) => t.id === id)?.name || id;
@@ -1670,7 +1684,7 @@ function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: (
         <label className="req-field"><span>Person <Req /></span>
           <select autoFocus value={aPrincipal} onChange={(e) => setAPrincipal(e.target.value)}>
             <option value="">Select a person…</option>
-            {userList.map((u) => <option key={u.username} value={u.username}>{u.display_name ? `${u.display_name} (${u.username})` : u.username}</option>)}
+            {userList.map((u) => <option key={u.id} value={u.id}>{userLabel(u)}</option>)}
           </select></label>
         <label className="req-field"><span>Organization <Req /></span>
           <select value={aScope} onChange={(e) => setAScope(e.target.value)}>
