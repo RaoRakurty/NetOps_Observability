@@ -339,5 +339,11 @@ version of the same drift class.
   history)` are required checks (§1.1); `supply-chain` · `SBOM (CycloneDX)` emits
   a whole-tree CycloneDX SBOM on every build; `publish-images.yml` attaches a
   per-image CycloneDX SBOM **and** a keyless SLSA build-provenance attestation to
-  each pushed digest. Still open: image **signing** (cosign/Notation) and GPG
-  signing of the bundle's `SHA256SUMS` — see `docs/RELEASE_CHECKLIST.md` §4.8/§4.9.
+  each pushed digest. **Image signing landed 2026-09-13** (owner Decision 4,
+  tracker 313): `publish-images.yml` pushes each image BY DIGEST, signs the
+  digest with Cosign keyless (Actions OIDC — no stored key), and runs an
+  identity-pinned `cosign verify` before the release tags are applied. GPG
+  signing of the bundle's `SHA256SUMS` is implemented and fail-closed too, and
+  waits only on the owner creating `CORRELIX_DIST_SIGNING_KEY`. Neither has
+  ever executed: no `v*` tag exists yet. See `docs/RELEASE_CHECKLIST.md`
+  §4.8/§4.9/§4.16.

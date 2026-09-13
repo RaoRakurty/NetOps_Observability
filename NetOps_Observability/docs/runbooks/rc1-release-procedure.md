@@ -300,6 +300,12 @@ A customer repeats step 5 with `gpg --verify SHA256SUMS.asc SHA256SUMS` — whic
 needs the distribution PUBLIC key published somewhere they can fetch it
 (`RELEASE_CHECKLIST.md` §6.7a-2, still open).
 
+That is the **bundle** trust domain. The **image** trust domain is a different
+key material entirely — Cosign keyless, no stored key, nothing for the owner to
+create — and is verified in step 5 below. All four signing domains and the
+customer-facing verification commands are tabulated in `RELEASE_CHECKLIST.md`
+§4.16.
+
 The **manual half** of publishing the release page:
 
 **PROPOSED ACTION: publish the GitHub release page from
@@ -351,11 +357,32 @@ executed by `publish-images.yml` on the step-4 tag push; requires explicit owner
 authorization AS PART OF the step-4 authorization**
 
 There is no separate command. `publish-images.yml` fires on `push: tags:
-['v*.*.*']`, runs `release-gate.yml` first, and only then builds and pushes the
-four images tagged `semver`, `major.minor` and `sha`, attaching to each digest a
-keyless Sigstore **SLSA build-provenance attestation** and a per-image
-**CycloneDX SBOM**, and running the `oci-compliance … --release` gate against the
-pushed digest.
+['v*.*.*']` and runs `release-gate.yml` first. Then, **per image, in this order**
+(owner Decision 4, 2026-09-13 — the order is the control, not a detail):
+
+1. build from the tag's commit and **push BY DIGEST ONLY** — `push-by-digest=true`,
+   so at this point the image exists in GHCR and **no tag resolves to it**;
+2. `cosign sign --yes <image>@sha256:<digest>` — **keyless**, against this
+   workflow's Actions OIDC identity. There is no signing secret and no key to
+   create: the signing material is a short-lived Fulcio certificate. The digest
+   is signed, never a tag, because a tag can be re-pointed afterwards;
+3. `cosign verify` in a step of its own, pinned to the **exact** identity
+   (`--certificate-oidc-issuer` + `--certificate-identity`, never a permissive
+   `--certificate-identity-regexp`) — this is the gate;
+4. the keyless Sigstore **SLSA build-provenance attestation**, now *after* the
+   signature verified, plus a check that the attestation bundle really names this
+   digest, repository, workflow, commit and build event;
+5. the per-image **CycloneDX SBOM** (a separate control, unchanged);
+6. the `oci-compliance … --release` gate against the pushed digest;
+7. **only then** the release tags — `semver`, `major.minor`, `sha` — applied by
+   `docker buildx imagetools create --prefer-index=false` (a registry-side retag,
+   no rebuild, digest preserved), each one then asserted to resolve to the digest
+   that was signed.
+
+So nothing a customer can name by tag exists until its signature has been
+verified. If any step from 2 to 6 fails, the run fails leaving an **untagged**
+digest in the registry — unreferenced, unpullable by name, and recoverable;
+that is deliberately the cheaper failure.
 
 This is called out as its own step because it is a **distinct irreversible
 publication** with its own failure modes — not because it can be triggered
@@ -376,9 +403,24 @@ a decision available at push time.
 gh run list --workflow=publish-images.yml --limit 3         # success
 gh api user/packages/container/netops-api/versions | jq -r '.[0].metadata.container.tags[]'
 
-# The provenance a customer would actually check:
-gh attestation verify oci://ghcr.io/raorakurty/netops-api@<digest> --owner RaoRakurty
+# The SIGNATURE a customer would actually check. The identity is pinned: without
+# it cosign verifies a signature minted by ANY workflow in ANY repository.
+# Needs cosign >= 3.0. Verify the DIGEST, never the tag.
+IMAGE=ghcr.io/raorakurty/netops-api
+TAG=v0.9.0-rc1
+DIGEST=$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{.Manifest.Digest}}')
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity https://github.com/RaoRakurty/NetOps_Observability/.github/workflows/publish-images.yml@refs/tags/$TAG \
+  "$IMAGE@$DIGEST"
+
+# The provenance, which is an adjacent control and not a substitute for the above:
+gh attestation verify "oci://$IMAGE@$DIGEST" --owner RaoRakurty
 ```
+
+Repeat for `netops-correlation`, `netops-nginx` and `netops-frontend`. A signature
+that verifies only *without* `--certificate-identity` is **not** a pass — it means
+something else signed the image.
 
 Also download the `oci-compliance-*` manifest artifacts from the run and confirm
 each records `PASS` in release mode.

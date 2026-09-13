@@ -449,6 +449,7 @@ def check_tests_gate_machinery(ctx: Ctx) -> Result:
         "tests/test_required_checks_consistency.py",
         "tests/test_release_signing.py",
         "tests/test_release_bundle_signing_workflow.py",
+        "tests/test_publish_images_signing_workflow.py",
         "tests/test_licensing_consistency.py",
         "tests/test_sbom.py",
         "tests/test_license_audit.py",
@@ -798,6 +799,43 @@ def check_copyleft_source_reviews(ctx: Ctx) -> Result:
         [PY, "scripts/verify-source-reviews.py", "--check"], PROJ, 600.0,
         human_action="entries marked needs_human/unclear are a human licence "
                      "determination, not an engineering fix",
+    )
+
+
+def check_signature_image(ctx: Ctx) -> Result:
+    """The IMAGE signature — the second artifact trust domain (owner Decision 4,
+    2026-09-13; tracker 313). Keyless Cosign against the Actions OIDC identity, so
+    unlike the bundle's GPG signature there is no key on this host that could
+    reproduce it and no local dry run that could stand in for it: a Fulcio
+    certificate is only issuable inside a GitHub-hosted run. The row exists
+    because "the release is signed" was, until 2026-09-13, true of the bundle and
+    false of the four images, and an aggregate gate that names only the bundle
+    lets that asymmetry back in. The SHAPE of the workflow is verified offline by
+    tests/test_publish_images_signing_workflow.py, which `tests.gate-machinery`
+    runs.
+    """
+    return ci_only(
+        "signature.image", "signature",
+        "each image digest signed with Cosign keyless (no stored key)",
+        "publish-images.yml", "publish",
+        "keyless signing needs the Actions OIDC token, which exists only inside a "
+        "GitHub-hosted run; signs IMAGE@sha256:<digest>, never a tag",
+    )
+
+
+def check_signature_image_verification(ctx: Ctx) -> Result:
+    """Verification is its own row for the images too, and for the same reason it
+    is for the bundle: "we signed it" and "the signature verifies" are different
+    claims. The identity is pinned to this repository and this workflow file, and
+    the release TAGS are applied only after it passes — so an unverified digest
+    stays unreachable by name.
+    """
+    return ci_only(
+        "signature.image-verify", "signature verification",
+        "identity-pinned `cosign verify` gates the release tags",
+        "publish-images.yml", "publish",
+        "runs in the tag job before the provenance attestation and before any tag "
+        "is applied; pins --certificate-oidc-issuer + --certificate-identity",
     )
 
 
@@ -1368,6 +1406,9 @@ CHECKS: tuple[tuple[str, str, object], ...] = (
     ("checksums.bundle", "checksums", check_checksums),
     ("signature.bundle", "signature", check_signature),
     ("signature.verify", "signature verification", check_signature_verification),
+    ("signature.image", "signature", check_signature_image),
+    ("signature.image-verify", "signature verification",
+     check_signature_image_verification),
     ("release-metadata.manifest", "release metadata", check_release_metadata),
     ("source-tag.exact-tag", "source/tag consistency", check_source_tag_exact),
     ("source-tag.signed-tag", "source/tag consistency", check_source_tag_signed),
