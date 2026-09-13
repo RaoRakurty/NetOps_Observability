@@ -167,6 +167,10 @@ func (p ExposureProbe) canonicalControl() string {
 type Catalog struct {
 	rules  []Rule
 	probes []ExposureProbe
+	// recognizers holds each dialect's config-shape test (DialectPack.Recognize),
+	// keyed by vendor. Nil, or a vendor with no entry, means that dialect
+	// declares no shape test — see recognizerFor.
+	recognizers map[Vendor]func(*Config) (bool, string)
 }
 
 // NewCatalog builds a catalog from a rule set and a probe set, copying its inputs
@@ -191,6 +195,17 @@ func (c *Catalog) Probes() []ExposureProbe {
 	out := make([]ExposureProbe, len(c.probes))
 	copy(out, c.probes)
 	return out
+}
+
+// recognizerFor returns the dialect's config-shape test, or nil when the dialect
+// declares none. A nil result means "assess whatever config we were given", the
+// behaviour every dialect had before the seam existed; a non-nil one makes the
+// engine fail closed on a config it cannot read (see DialectPack.Recognize).
+func (c *Catalog) recognizerFor(v Vendor) func(*Config) (bool, string) {
+	if c == nil || c.recognizers == nil {
+		return nil
+	}
+	return c.recognizers[v]
 }
 
 // Len reports the total number of checks (rules + probes) in the catalog.

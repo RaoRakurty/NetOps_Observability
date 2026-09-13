@@ -116,6 +116,11 @@ func NewEngine(catalog *Catalog, cfgSrc ConfigSource, seams SeamResolver, opts .
 //     evaluated and exactly ONE finding says so (RulePlatformUnresolved,
 //     StatusUnknown). Never a fallback dialect, never the IOS catalogue.
 //   - running-config unavailable, rule bound → StatusUnknown (never Pass).
+//   - running-config on file but NOT READABLE in the device's dialect (the pack's
+//     DialectPack.Recognize says so) → every bound control StatusUnknown with the
+//     reason, plus one RuleConfigDialectUnreadable coverage finding. Never Pass:
+//     a config whose grammar our patterns do not know produces no matches, and
+//     "no insecure line matched" is not evidence of a hardened device.
 //   - bound, but the control has no realization on the platform
 //     (DetectResult.NotApplicable) → StatusNotApplicable WITH the reason.
 //   - seam model unavailable for an exposure probe → StatusUnknown.
@@ -147,7 +152,32 @@ func (e *Engine) Evaluate(ctx context.Context, dev Device) ([]secfindings.Findin
 		cfg = NewConfig(vendor, raw)
 	}
 
+	// FAIL CLOSED AT THE DIALECT BOUNDARY (tracker 296). "The config is on file"
+	// is not the same question as "this dialect's rules can read it". A pack's
+	// detections are patterns over a grammar; handed text in a shape they do not
+	// know, every pattern simply fails to match and "no insecure line found"
+	// renders as PASS — a clean bill of health for a device nothing assessed.
+	//
+	// So the shape test runs ONCE here, before any verdict, and a config the
+	// dialect cannot read is treated exactly like a config we do not have: every
+	// control Unknown with the reason, plus one coverage finding that says so at
+	// device level. unusable is that reason, empty when the config is readable.
+	unusable := ""
+	unreadableDialect := false
+	if !haveCfg {
+		unusable = "running-config unavailable"
+	} else if recognize := e.catalog.recognizerFor(vendor); recognize != nil {
+		if ok, reason := recognize(cfg); !ok {
+			unusable = "the running-config on file does not parse as " + DisplayVendor(vendor) +
+				" configuration (" + reason + ")"
+			unreadableDialect = true
+		}
+	}
+
 	var out []secfindings.Finding
+	if unreadableDialect {
+		out = append(out, e.configDialectUnreadable(dev, vendor, unusable))
+	}
 
 	// ── posture rules ────────────────────────────────────────────────────────
 	for _, rule := range e.catalog.Rules() {
@@ -173,9 +203,9 @@ func (e *Engine) Evaluate(ctx context.Context, dev Device) ([]secfindings.Findin
 		f.Category = rule.Category
 		f.Intended = rule.Intended
 
-		if !haveCfg {
+		if unusable != "" {
 			f.Severity = rule.Severity
-			f.Detail = "running-config unavailable — control not assessed (fail-closed)"
+			f.Detail = unusable + " — control not assessed (fail-closed)"
 			f.SetStatus(secfindings.StatusUnknown)
 			out = append(out, f)
 			continue
@@ -210,7 +240,7 @@ func (e *Engine) Evaluate(ctx context.Context, dev Device) ([]secfindings.Findin
 		if _, bound := probe.Binding(vendor); !bound {
 			continue // not this platform's probe — same rule as the rules above
 		}
-		out = append(out, e.evaluateExposure(ctx, dev, vendor, cfg, haveCfg, probe))
+		out = append(out, e.evaluateExposure(ctx, dev, vendor, cfg, unusable, probe))
 	}
 
 	sortFindings(out)
@@ -244,6 +274,38 @@ func (e *Engine) platformUnresolved(dev Device) secfindings.Finding {
 		", so NO hardening control was evaluated for this device"
 	f.Remediation = "Complete device discovery (vendor + OS, or SNMP sysDescr) or add a vendor profile " +
 		"whose detection.platform_contains recognizes this platform label."
+	f.SetStatus(secfindings.StatusUnknown)
+	return f
+}
+
+// RuleConfigDialectUnreadable is the RawRuleID/ControlID of the single
+// device-level finding emitted when the running-config on file is not something
+// the device's dialect can read (see DialectPack.Recognize). Like
+// RulePlatformUnresolved it is NOT a catalog rule: it is a statement about our
+// ability to assess the device from the evidence we hold.
+const RuleConfigDialectUnreadable = "config-dialect-unreadable"
+
+// configDialectUnreadable is the device-level half of the tracker-296 fix. Every
+// bound control is already reported Unknown with the same reason; this finding
+// says it ONCE, at device level, in the same shape as platformUnresolved, so an
+// operator (and the compliance rollup) sees "we hold a config we cannot read for
+// this device" as its own condition rather than having to infer it from a wall
+// of per-control Unknowns.
+func (e *Engine) configDialectUnreadable(dev Device, vendor Vendor, why string) secfindings.Finding {
+	f := e.base(dev, secfindings.EvidencePosture)
+	f.ID = RuleConfigDialectUnreadable
+	f.RawRuleID = RuleConfigDialectUnreadable
+	f.ControlID = RuleConfigDialectUnreadable
+	f.ControlTitle = "Running-config unreadable in the device's dialect — no hardening control assessed"
+	f.Category = CategoryCoverage
+	f.Severity = secfindings.SeverityInfo
+	f.Intended = "Every assessed device has a running-config on file in the configuration grammar its dialect reads."
+	f.Observed = truncateLabel(dev.Platform)
+	f.Detail = "unassessed: " + why + ", so NO hardening control was evaluated from it. " +
+		"A config this dialect cannot read yields no matches, and no matches must never be reported as a clean device."
+	f.Remediation = "Re-capture the running-config with the collection command this platform's dialect expects " +
+		"(SR Linux: `info from running flat`), and confirm the device's platform label names the platform the " +
+		"capture actually came from."
 	f.SetStatus(secfindings.StatusUnknown)
 	return f
 }
@@ -304,7 +366,7 @@ func truncateLabel(platform string) string {
 //
 //	service enabled AND reachable via an untrusted seam AND no ACL → EXPOSED (critical)
 //	same service behind an ACL, or only on a mgmt seam               → informational
-func (e *Engine) evaluateExposure(ctx context.Context, dev Device, vendor Vendor, cfg *Config, haveCfg bool, probe ExposureProbe) secfindings.Finding {
+func (e *Engine) evaluateExposure(ctx context.Context, dev Device, vendor Vendor, cfg *Config, unusable string, probe ExposureProbe) secfindings.Finding {
 	f := e.base(dev, secfindings.EvidenceExposure)
 	f.RawRuleID = probe.ID
 	f.ID = probe.ID // see the note on the posture loop: control ids are shared
@@ -316,10 +378,11 @@ func (e *Engine) evaluateExposure(ctx context.Context, dev Device, vendor Vendor
 
 	binding, bound := probe.Binding(vendor)
 
-	// Fail closed on a missing config or a missing binding.
-	if !haveCfg {
+	// Fail closed on a config we do not have or cannot read, and on a missing
+	// binding. unusable carries the reason for the first two (see Evaluate).
+	if unusable != "" {
 		f.Severity = secfindings.SeverityHigh
-		f.Detail = "running-config unavailable — exposure not assessed (fail-closed)"
+		f.Detail = unusable + " — exposure not assessed (fail-closed)"
 		f.SetStatus(secfindings.StatusUnknown)
 		return f
 	}
