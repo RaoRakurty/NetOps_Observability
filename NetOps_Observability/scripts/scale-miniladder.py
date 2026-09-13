@@ -1029,6 +1029,31 @@ MIN_FREE_GIB_DEFAULT = 10.0        # V1 section 8(e)
 MAX_LOAD1_DEFAULT = 6.0            # s11 launched at 2.9; s10 at 16-38
 LOADAVG_PATH = "/proc/loadavg"
 GIB = 1024 ** 3
+# SETTLE (tracker 286). A host that is BUSY and a host that is STILL BUSY FROM
+# THE BRING-UP are different facts, and the gate could not tell them apart.
+# `scale-miniladder-nightly` was red every night from 2026-09-06 to 2026-09-12
+# with `host load1 N exceeds the 6.00 bound` at N = 6.91 / 7.18 / 7.48 / 7.78 /
+# 8.09 / 8.24 / 8.55 — every one of them taken seconds after the step that
+# built two vite bundles, ran `install.py --tls=yes` and spent a JVM per topic
+# across 16 topics on a 4-vCPU shared VM. load1 is a ~60 s exponential average,
+# so those readings are the DECAY TAIL of work that had already finished, not
+# concurrent work that would distort the burst.
+#
+# The settle is PATIENCE ONLY — the same contract as `--consumer-settle-seconds`:
+# the bound is never raised, the reading is never fabricated, and the verdict is
+# passed on a REAL reading taken after the wait. If load1 never comes down the
+# run still REFUSES, and the poll trail goes into the evidence so the next
+# diagnosis starts from the decay curve instead of from one number. Raising
+# `--max-load1` instead would assert, with no evidence, that a host at 8.55 does
+# not distort the timing clauses; `--allow-unquiet` would stamp UNQUIET into the
+# evidence and make every future nightly's timing clauses unciteable. Neither is
+# this.
+#
+# DEFAULT 0 = today's behaviour exactly: one reading, instant refusal, nothing
+# touched. Only a caller that knows it has just finished a heavy bring-up opts
+# in.
+HOST_QUIET_SETTLE_SECONDS_DEFAULT = 0
+HOST_QUIET_SETTLE_POLL_S = 10.0
 
 
 def read_load1(path: str | None = None) -> tuple[float, str]:
@@ -1106,6 +1131,93 @@ def host_quiet_problems(readings: dict) -> list[str]:
             f"timing clause (storm-s11 launched at 2.9, storm-s10, excluded for "
             f"environment violation, at 16-38) (--max-load1 / --allow-unquiet)")
     return problems
+
+
+def host_quiet_load_only(readings: dict) -> bool:
+    """True when the ONE thing wrong with these readings is a load1 over the
+    bound — the only violation waiting can fix.
+
+    Disk headroom does not come back by itself, and an UNREADABLE probe is the
+    exact failure this gate exists to stop (nobody was measuring when s10 ran),
+    so neither is settleable and both must refuse at once (16.1).
+    """
+    if readings.get("disk_error") or readings.get("load1_error"):
+        return False
+    if float(readings.get("free_gib", -1)) < float(readings["min_free_gib"]):
+        return False
+    return float(readings.get("load1", -1)) > float(readings["max_load1"])
+
+
+def settle_host_quiet(min_free_gib: float, max_load1: float,
+                      settle_seconds: float, fs_path: str | None = None,
+                      loadavg_path: str | None = None,
+                      sleep=None, clock=None) -> tuple[dict, dict]:
+    """(final readings, settle trail). Wait up to `settle_seconds` for a load1
+    left over from a bring-up to decay under the bound, then judge a REAL
+    reading — see the HOST_QUIET_SETTLE_SECONDS_DEFAULT comment for why this is
+    patience and not a weakened bound.
+
+    The bound is never moved and no reading is ever synthesised: the caller
+    applies `host_quiet_problems()` to whatever comes back, so a host that
+    stays loud still REFUSES. `sleep`/`clock` default to the real ones, bound
+    at CALL time and never at def time (the same rule `read_load1` states for
+    LOADAVG_PATH), so the wait is testable without taking one.
+
+    Trail `outcome` is one of:
+      quiet-on-first-reading  nothing was wrong; no wait was taken
+      no-settle-requested     something was wrong and settling is off (the
+                              default) — today's instant refusal
+      settled                 waited, and a later reading came back quiet
+      timeout                 waited the whole budget and it never did
+      not-settleable          the violation is disk or an unreadable probe
+    """
+    sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+    readings = host_quiet_readings(min_free_gib, max_load1, fs_path, loadavg_path)
+    trail: dict = {"requested_s": float(settle_seconds),
+                   "poll_interval_s": HOST_QUIET_SETTLE_POLL_S,
+                   "waited_s": 0.0,
+                   "polls": [{"at_s": 0.0, "load1": readings["load1"]}],
+                   "outcome": "quiet-on-first-reading"}
+    if not host_quiet_problems(readings):
+        return readings, trail
+    if settle_seconds <= 0:
+        trail["outcome"] = "no-settle-requested"
+        return readings, trail
+    if not host_quiet_load_only(readings):
+        trail["outcome"] = "not-settleable"
+        return readings, trail
+
+    start = clock()
+    while True:
+        remaining = float(settle_seconds) - (clock() - start)
+        if remaining <= 0:
+            trail["waited_s"] = round(clock() - start, 1)
+            trail["outcome"] = "timeout"
+            return readings, trail
+        sleep(min(HOST_QUIET_SETTLE_POLL_S, remaining))
+        readings = host_quiet_readings(min_free_gib, max_load1, fs_path,
+                                       loadavg_path)
+        trail["waited_s"] = round(clock() - start, 1)
+        trail["polls"].append({"at_s": trail["waited_s"],
+                               "load1": readings["load1"]})
+        if not host_quiet_problems(readings):
+            trail["outcome"] = "settled"
+            return readings, trail
+        if not host_quiet_load_only(readings):
+            trail["outcome"] = "not-settleable"
+            return readings, trail
+
+
+def settle_summary(trail: dict) -> str:
+    """One line an operator can act on: how long was waited and what load1 did
+    while we waited. A refusal that says only "8.55 exceeds 6.00" cannot be
+    told apart from one that waited seven minutes and watched it sit there."""
+    curve = " -> ".join(f"{p['load1']:.2f}@{p['at_s']:.0f}s"
+                        for p in trail.get("polls", ()))
+    return (f"host-quiet settle: {trail['outcome']} after "
+            f"{trail.get('waited_s', 0.0):.0f}s of a "
+            f"{trail.get('requested_s', 0.0):.0f}s budget [load1 {curve}]")
 
 
 def run(cmd: list[str], timeout: int, input_text: str | None = None) -> tuple[int, str, str]:
@@ -5185,7 +5297,17 @@ class Harness:
         # else is probed, so the refusal is instant and has touched nothing.
         # See host_quiet_problems(): this refuses BEFORE the leg runs and
         # changes no gate semantics.
-        quiet = host_quiet_readings(self.args.min_free_gib, self.args.max_load1)
+        # Tracker 286: the reading may be the DECAY TAIL of our own bring-up
+        # rather than concurrent work — `--host-quiet-settle-seconds` waits for
+        # it (patience only; the bound is untouched and the verdict is passed
+        # on a real reading taken after the wait).
+        quiet, settle = settle_host_quiet(
+            self.args.min_free_gib, self.args.max_load1,
+            self.args.host_quiet_settle_seconds)
+        quiet["settle"] = settle
+        if settle["outcome"] not in ("quiet-on-first-reading",
+                                     "no-settle-requested"):
+            log(settle_summary(settle))
         quiet_problems = host_quiet_problems(quiet)
         quiet["violations"] = quiet_problems
         if not quiet_problems:
@@ -5209,7 +5331,12 @@ class Harness:
             self.host_quiet = "UNQUIET"
             ev["host_quiet"] = quiet
             self.preflight_ok = False
-            return self.phase("preflight", "FAIL", ev, "; ".join(quiet_problems))
+            notes = "; ".join(quiet_problems)
+            if settle["outcome"] in ("settled", "timeout"):
+                # A refusal that says only "8.55 exceeds 6.00" cannot be told
+                # apart from one that waited and watched it sit there.
+                notes += " | " + settle_summary(settle)
+            return self.phase("preflight", "FAIL", ev, notes)
         ev["host_quiet"] = quiet
 
         states = self.stack.service_states()
@@ -8675,6 +8802,7 @@ class Harness:
                 "host_quiet": self.host_quiet,
                 "min_free_gib": self.args.min_free_gib,
                 "max_load1": self.args.max_load1,
+                "host_quiet_settle_seconds": self.args.host_quiet_settle_seconds,
                 "allow_unquiet": bool(self.args.allow_unquiet),
                 "tls_variant": self.stack.tls,
                 "base_url": self.stack.base_url,
@@ -9016,6 +9144,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                          f"(default {MAX_LOAD1_DEFAULT}). storm-s11 launched at "
                          f"2.9; storm-s10, excluded for environment violation, "
                          f"at 16-38")
+    ap.add_argument("--host-quiet-settle-seconds", type=float,
+                    default=HOST_QUIET_SETTLE_SECONDS_DEFAULT,
+                    help=f"bounded wait for a load1 left over from a heavy "
+                         f"bring-up to decay below --max-load1 before the gate "
+                         f"judges it (default "
+                         f"{HOST_QUIET_SETTLE_SECONDS_DEFAULT:g}, i.e. off: one "
+                         f"reading and an instant refusal). PATIENCE ONLY — the "
+                         f"bound is never raised and a host that stays loud "
+                         f"still refuses, with the load1 poll trail in the "
+                         f"evidence. Only a load1 violation is waited on; a "
+                         f"disk-headroom violation or an unreadable probe "
+                         f"refuses at once (tracker 286)")
     ap.add_argument("--allow-unquiet", action="store_true",
                     help="proceed despite a --min-free-gib / --max-load1 "
                          "violation, recording UNQUIET in the preflight evidence "
@@ -9220,6 +9360,18 @@ def main(argv: list[str]) -> int:
               f"{args.max_load1}) -> "
               f"{'QUIET' if not host_quiet_problems(_q) else 'REFUSE'}"
               f"{' [--allow-unquiet: would PROCEED, stamped UNQUIET]' if args.allow_unquiet else ''}")
+        # The dry run touches nothing, so it does not SPEND the settle budget —
+        # it reports it, because a REFUSE printed here is not what the real run
+        # would decide when a settle is configured.
+        print("  host quiet settle: "
+              + (f"the real run waits up to "
+                 f"{args.host_quiet_settle_seconds:.0f}s (polling every "
+                 f"{HOST_QUIET_SETTLE_POLL_S:.0f}s) for a load1 over the bound "
+                 f"to decay; a disk violation or an unreadable probe still "
+                 f"refuses at once"
+                 if args.host_quiet_settle_seconds > 0 else
+                 "off — one reading, instant refusal "
+                 "(--host-quiet-settle-seconds)"))
         print(f"  phase 1 preflight: REFUSES on any leftover {DEVICE_PREFIX_ROOT} "
               f"device of any run id ({ALLOW_FOREIGN_RESIDUE_ENV}=1 overrides), "
               f"{len(REQUIRED_SERVICES)} required services, "

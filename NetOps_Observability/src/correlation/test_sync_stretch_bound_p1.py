@@ -84,6 +84,21 @@ OPEN, STALE = 6_500, 2_000
 # batch costs ~0.6 GB of fixture and ~6 s of build, paid ONLY on a leg
 # that would otherwise have gone red for being too small to witness.
 STALE_MAX = 4_000
+# AXIS AUDIT (tracker 289, 2026-09-13) — walked to the cap and half again past
+# it on the 4-core lab box, both legs at every size:
+#     closes   closed   mutant (yield off)   BOUND leg   bound:mutant
+#      2,000    2,000        4,800 ms          53.0 ms       0.011
+#      4,000    4,000        8,255 ms          54.8 ms       0.007   <- the cap
+#      6,000    6,000       11,553 ms          54.2 ms       0.005
+# SOUND, and the strongest of the four callers. `closed` equals `closes` at
+# every size, so nothing truncates the workload (`_run_close_batch` sets
+# CORR_OPEN_OBJECTS_MAX = 0 on purpose) — the axis does not saturate, the mutant
+# pays at elasticity 0.80. And the BOUNDED leg is FLAT — 53.0 / 54.8 / 54.2 ms
+# across a 3x axis, elasticity 0.02 — which is the measured form of this file's
+# own claim that growing the close count leaves "the bounded leg's worst stretch
+# — one builder's inline block — unchanged". It keeps a 9x margin on the 500 ms
+# budget at every size, and the bound tests read the module fixture at STALE
+# rather than `gate.size`, so they are not coupled to the calibration at all.
 # Signals per closing object. Sized from measurement, not taste: at 240 signals
 # one close costs ~4 ms on the lab box (~0.77 ms on the 2026-09 hosted
 # runner), while the bounded leg's worst stretch stays at ~70 ms, a 7x margin.
