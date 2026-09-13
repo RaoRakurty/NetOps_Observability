@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"netops/backend/alerts"
 	"netops/backend/internal/token"
 	"netops/backend/internal/users"
 )
@@ -423,6 +424,25 @@ func TestPendingIdentityIsVisibleToTheAdmin(t *testing.T) {
 	for _, u := range all {
 		if u.Username == "admin" && u.IdentityStatus != "bound" {
 			t.Errorf("the local admin is %q, want bound", u.IdentityStatus)
+		}
+	}
+}
+
+// The §2.6 counter must actually reach /metrics. A counter nothing scrapes is not
+// a signal — and this one is the evidence the owner judges the lazy-bind
+// exception on.
+func TestLegacyBindCounterIsExposedOnMetrics(t *testing.T) {
+	_, s := newTestServerState(t)
+	s.alerts = alerts.NewEngine("", nil)
+	w := httptest.NewRecorder()
+	s.handlePromMetrics(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	out := w.Body.String()
+	for _, want := range []string{
+		"# TYPE netops_identity_legacy_bound_total counter",
+		"netops_identity_legacy_bound_total 0",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("/metrics is missing %q — the §2.6 exception stays unmeasurable without it", want)
 		}
 	}
 }
