@@ -518,6 +518,46 @@ FTR
   echo "   project licence shipped (LICENSE, LICENSING.md, LICENSES/, NOTICE)"
 }
 
+# The retention directory this repository carries: the copies Correlix keeps of
+# the corresponding source it owes (tracker 238, owner decision 2026-09-05 — "if
+# Correlix ships the binary, Correlix retains the source"). Same convention
+# publish-images.yml and compliance/corresponding-sources/README.md name, so the
+# build and the documentation cannot disagree about where retention lives.
+RETAINED_SOURCE_DIR="compliance/corresponding-sources"
+
+# Fetch ONE pinned URL into $2, bounded and retried with backoff + jitter
+# (scripts/CLAUDE.md §16.2/§16.3, CLAUDE.md §9) — CORRELIX_SOURCE_FETCH_ATTEMPTS
+# attempts per URL, default 4. Returns non-zero after the last attempt WITHOUT touching the caller's control flow: acquiring corresponding
+# source may legitimately try a second recorded source, but it may never end in a
+# silent skip, so every caller must still handle the failure (§16.1).
+#
+# curl's own --retry is deliberately not used: this loop owns the schedule so the
+# delay is jittered (parallel builders must not retry a struggling host in
+# lockstep) and so each attempt is reported by number. A named User-Agent is
+# mandatory — gitlab.alpinelinux.org answers curl's default UA with HTTP 418 (bot
+# filter, GitHub-hosted runners, 2026-09-05) — and it is no substitute for
+# retention: it did not stop run 34789741432 from failing with 418 anyway.
+CORRELIX_SOURCE_UA="correlix-source-mirror/1.0 (corresponding-source fetch; +https://github.com/correlix)"
+fetch_pinned_url() {
+  local url="$1" dest="$2"
+  local attempts="${CORRELIX_SOURCE_FETCH_ATTEMPTS:-4}"
+  local i=1 delay
+  while :; do
+    if curl -fsSL -A "$CORRELIX_SOURCE_UA" \
+            --connect-timeout 20 --max-time 600 -o "$dest" "$url"; then
+      return 0
+    fi
+    # Never leave a partial body behind for the sha256 gate to hash.
+    rm -f "$dest"
+    [ "$i" -lt "$attempts" ] || return 1
+    # 2s, 4s, 8s … plus 0-2s of jitter.
+    delay=$(( (1 << i) + (RANDOM % 3) ))
+    echo "     attempt $i/$attempts failed for $url — retrying in ${delay}s" >&2
+    sleep "$delay"
+    i=$((i + 1))
+  done
+}
+
 # --- GPL/LGPL corresponding source: MIRRORED, not merely offered ------------
 # Licence audit D2, owner decision 2026-09-04 (docs/security/LICENSE_AUDIT_2026-09-03.md
 # §4 D2). We redistribute syslog-ng as an unmodified upstream container image.
@@ -543,12 +583,30 @@ FTR
 #
 # THREE ACQUISITION MODES, in the order this function tries them:
 #
-#   1. RETAINED COPIES (CORRELIX_SOURCE_MIRROR_DIR) — everything in
-#      compliance/corresponding-sources/, taken from the repository itself.
+#   1. RETAINED COPIES — the copy Correlix keeps, tried FIRST and WITHOUT being
+#      asked: $CORRELIX_SOURCE_MIRROR_DIR/<file> when that variable is set, the
+#      path the pin records in `retained_in_git`, and the retention directory
+#      compliance/corresponding-sources/ this repository carries. A retained
+#      candidate is accepted only when it hashes to the recorded pin; a retained
+#      candidate that does NOT is a hard failure, never a reason to go to the
+#      network (pin/retention drift is resolved deliberately, not routed around).
 #   2. THE CORRELIX ARCHIVE (release mode only) — scripts/source-archive.py
 #      release-fetch, which reads the Correlix-controlled S3 store and NEVER
 #      touches upstream.
-#   3. THE PINNED UPSTREAM URL — development and daily CI only.
+#   3. THE PINNED UPSTREAM URL, then the alternate mirrors the pin lists for that
+#      component — each bounded and retried with backoff + jitter (§16.2/§9).
+#      Development and daily CI only.
+#
+# WHY 1 IS UNCONDITIONAL (2026-09-14). It used to run only when a caller had
+# exported CORRELIX_SOURCE_MIRROR_DIR — so publish-images.yml and
+# supply-chain.yml got the retained copies and release-bundle.yml's `bundle` job,
+# which exports nothing, fetched all 35 artifacts live. Eleven of them are Alpine
+# aports archives, and gitlab.alpinelinux.org answers GitHub-hosted runners with
+# HTTP 418: run 34789741432 on main died on `busybox 1.37.0-r12` while a
+# byte-identical, sha256-matching copy of that exact archive sat in
+# compliance/corresponding-sources/ in the same checkout. Retention that a build
+# only consults when an env var asks it to is not retention — it is tracker 238's
+# "a recorded obligation decays" with an extra step.
 #
 # CORRELIX_SOURCE_RELEASE_MODE=1 turns step 3 OFF. That is the point of tracker
 # 262: an upstream URL is provenance, not retention, and a production release
@@ -610,7 +668,34 @@ for c in comps:
     if len(c["sha256"]) != 64 or not all(ch in "0123456789abcdef" for ch in c["sha256"]):
         print(f"component {c['name']} has a malformed sha256", file=sys.stderr)
         raise SystemExit(1)
-    print("\t".join((c["name"], c["version"], c["file"], c["url"], c["sha256"], c["license"], c.get("notes", ""))))
+    # `retained_in_git` is read as a path under the repository root, so it is
+    # validated like the file name above: relative, non-traversing, and naming
+    # the very file this pin is about (a pin that points its retained copy at
+    # some OTHER artifact would pass the sha gate against the wrong bytes only
+    # by accident, and must not be allowed to try).
+    retained = c.get("retained_in_git") or ""
+    if retained and (retained.startswith("/") or ".." in retained.split("/")
+                     or not retained.endswith("/" + c["file"])):
+        print(f"component {c['name']} has an unsafe retained_in_git {retained!r}", file=sys.stderr)
+        raise SystemExit(1)
+    # Alternate mirrors are fetched from, so they are input too: TLS only.
+    mirrors = []
+    for m in c.get("mirrors") or []:
+        mu = m.get("url") if isinstance(m, dict) else m
+        if not isinstance(mu, str) or not mu.startswith("https://"):
+            print(f"component {c['name']} has a mirror that is not an https URL: {m!r}", file=sys.stderr)
+            raise SystemExit(1)
+        if " " in mu or "\t" in mu:
+            print(f"component {c['name']} has a mirror URL with whitespace: {mu!r}", file=sys.stderr)
+            raise SystemExit(1)
+        mirrors.append(mu)
+    # A literal "-" marks an empty field: tab is an IFS *whitespace* character,
+    # so consecutive tabs collapse in `read` and a genuinely empty middle field
+    # would shift every field after it. `notes` stays last, where the remainder
+    # lands harmlessly.
+    print("\t".join((c["name"], c["version"], c["file"], c["url"], c["sha256"],
+                     c["license"], retained or "-", " ".join(mirrors) or "-",
+                     c.get("notes", ""))))
 PYEOF
 )" || { echo "FATAL: could not read the source-offer pin table ($pins)" >&2; exit 1; }
 
@@ -639,7 +724,7 @@ container process, so no Correlix code is combined with or derived from it.
 
 OFFERHDR
     printf 'Components\n----------\n\n'
-    printf '%s\n' "$rows" | while IFS="$(printf '\t')" read -r name version file url sha license notes; do
+    printf '%s\n' "$rows" | while IFS="$(printf '\t')" read -r name version file url sha license retained mirrors notes; do
       printf '  %s %s\n' "$name" "$version"
       printf '    file     : %s\n' "$file"
       printf '    licence  : %s\n' "$license"
@@ -661,20 +746,55 @@ listed here, can be sent to the address in the bundle's LICENSES.md.
 OFFERFTR
   } > "$readme"
 
+  # Where a retained copy may live, most specific first. The caller's explicit
+  # directory wins over the repository's own retention directory (an air-gapped
+  # host or supply-chain.yml's `materialise` step has deliberately prepared it),
+  # but BOTH are tried unasked — see "WHY 1 IS UNCONDITIONAL" above.
+  local -a retained_dirs=()
+  [ -n "${CORRELIX_SOURCE_MIRROR_DIR:-}" ] && retained_dirs+=("$CORRELIX_SOURCE_MIRROR_DIR")
+  retained_dirs+=("$ROOT/$RETAINED_SOURCE_DIR")
+
   # Fetch + verify. A `while read` loop would run the body in a subshell, where
   # `exit 1` cannot fail the build — so iterate in the parent shell instead.
-  local line name version file url sha license notes dest got
-  local n=0
+  local line name version file url sha license retained mirrors notes dest got
+  local rdir cand cand_sha picked drifted drifted_sha u fetched
+  local -a cands urls extra
+  local n=0 retained_n=0
   while IFS= read -r line; do
     [ -n "$line" ] || continue
-    IFS="$(printf '\t')" read -r name version file url sha license notes <<<"$line"
+    IFS="$(printf '\t')" read -r name version file url sha license retained mirrors notes <<<"$line"
     dest="$offer/$file"
 
-    if [ -n "${CORRELIX_SOURCE_MIRROR_DIR:-}" ] && [ -f "$CORRELIX_SOURCE_MIRROR_DIR/$file" ]; then
-      # Air-gapped/offline build host: take the local copy, then verify it the
-      # same way. Local provenance is not trusted provenance.
-      echo "   $name $version <- $CORRELIX_SOURCE_MIRROR_DIR/$file (local mirror)"
-      cp "$CORRELIX_SOURCE_MIRROR_DIR/$file" "$dest"
+    # 1. RETAINED COPIES. Accept the first candidate that hashes to the pin;
+    #    remember one that does not, because that is drift to report, not a
+    #    reason to reach for the network.
+    cands=()
+    for rdir in "${retained_dirs[@]}"; do cands+=("$rdir/$file"); done
+    [ "$retained" != "-" ] && cands+=("$ROOT/$retained")
+    picked=""; drifted=""; drifted_sha=""
+    for cand in "${cands[@]}"; do
+      [ -f "$cand" ] || continue
+      cand_sha="$(sha256sum "$cand" | awk '{print $1}')"
+      if [ "$cand_sha" = "$sha" ]; then
+        picked="$cand"
+        break
+      fi
+      drifted="$cand"; drifted_sha="$cand_sha"
+    done
+
+    if [ -n "$picked" ]; then
+      # A candidate that disagreed with the pin is never silently passed over
+      # (§16.1): another candidate satisfied the pin, so the build continues, but
+      # the stale/corrupt copy is named on stderr for whoever prepared it.
+      [ -n "$drifted" ] && echo "   WARNING: ${drifted#"$ROOT/"} does not match the pin for $file (got $drifted_sha, expected $sha) — using ${picked#"$ROOT/"} instead; fix or remove the stale copy" >&2
+      # Local provenance is not trusted provenance: it was just checked against
+      # the pin, and the gate below checks the placed copy again.
+      echo "   $name $version <- ${picked#"$ROOT/"} (retained copy)"
+      cp "$picked" "$dest"
+      retained_n=$((retained_n + 1))
+    elif [ -n "$drifted" ]; then
+      echo "FATAL: checksum mismatch for $file — expected $sha, got $drifted_sha from the retained copy at ${drifted#"$ROOT/"}. Correlix's OWN retained artifact disagrees with the reviewed pin, so one of the two is wrong: re-measure deliberately and update scripts/source-mirror.json, or restore the retained file. Falling back to the network here would ship bytes nobody reviewed." >&2
+      exit 1
     elif [ "$release_mode" = "1" ]; then
       # RELEASE: the Correlix-controlled archive, and nothing else. source-archive.py
       # verifies the sha256 of what it places; the gate below verifies it again,
@@ -685,16 +805,26 @@ OFFERFTR
               --pins "$pins" --file "$file" --dest "$offer" \
         || { echo "FATAL: $name $version ($file) is not in the Correlix corresponding-source archive, and a release does not fall back to $url. Ingest it first: scripts/source-archive.py ingest --file $file  (see docs/compliance/SOURCE_ARCHIVE.md)" >&2; exit 1; }
     else
-      echo "   $name $version <- $url"
-      command -v curl >/dev/null || { echo "FATAL: curl is required to mirror $name's corresponding source (or set CORRELIX_SOURCE_MIRROR_DIR to a directory holding $file)" >&2; exit 1; }
-      # Bounded + retried (§16.3 / CLAUDE.md §9). stderr stays visible so a real
-      # network failure is readable rather than inferred from a missing file.
-      # A named User-Agent: gitlab.alpinelinux.org answers curl's default UA with
-      # HTTP 418 (bot filter, seen on GitHub-hosted runners 2026-09-05).
-      curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
-           -A "correlix-source-mirror/1.0 (corresponding-source fetch; +https://github.com/correlix)" \
-           --connect-timeout 20 --max-time 600 -o "$dest" "$url" \
-        || { echo "FATAL: could not fetch $name $version corresponding source from $url. A GPL/LGPL binary must never ship without its source (licence audit D2). Fix the network, or pre-fetch the file and set CORRELIX_SOURCE_MIRROR_DIR." >&2; exit 1; }
+      # 3. THE NETWORK, last: the pinned URL, then every alternate mirror the pin
+      #    records for this component. Each is bounded and retried with backoff +
+      #    jitter inside fetch_pinned_url; stderr stays visible so a real network
+      #    failure is readable rather than inferred from a missing file.
+      command -v curl >/dev/null || { echo "FATAL: curl is required to mirror $name's corresponding source (or retain $file in $RETAINED_SOURCE_DIR/ — see its README — or set CORRELIX_SOURCE_MIRROR_DIR to a directory holding it)" >&2; exit 1; }
+      urls=("$url")
+      if [ "$mirrors" != "-" ]; then
+        IFS=' ' read -r -a extra <<<"$mirrors"
+        urls+=("${extra[@]}")
+      fi
+      fetched=0
+      for u in "${urls[@]}"; do
+        echo "   $name $version <- $u"
+        if fetch_pinned_url "$u" "$dest"; then fetched=1; break; fi
+        echo "     $u did not serve $file" >&2
+      done
+      [ "$fetched" = "1" ] || {
+        echo "FATAL: could not fetch $name $version corresponding source from any recorded source (${urls[*]}). A GPL/LGPL binary must never ship without its source (licence audit D2). The durable fix is retention, not a retry: put the file in $RETAINED_SOURCE_DIR/ with its sha256 in scripts/source-mirror.json \`retained_in_git\` (or ingest it into the Correlix archive, docs/compliance/SOURCE_ARCHIVE.md). CORRELIX_SOURCE_MIRROR_DIR takes a pre-fetched copy for a one-off build." >&2
+        exit 1
+      }
     fi
 
     got="$(sha256sum "$dest" | awk '{print $1}')"
@@ -709,7 +839,7 @@ OFFERFTR
   done <<<"$rows"
 
   [ "$n" -gt 0 ] || { echo "FATAL: source-offer mirrored zero components — the pin table resolved nothing" >&2; exit 1; }
-  echo "   source offer complete ($n component(s) in $offer)"
+  echo "   source offer complete ($n component(s) in $offer; $retained_n from retained copies, $((n - retained_n)) acquired)"
 }
 
 if [ "$LICENSES_ONLY" = "1" ]; then
