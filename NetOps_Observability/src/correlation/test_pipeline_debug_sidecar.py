@@ -28,9 +28,12 @@ Run:  python3 -m pytest src/correlation/test_pipeline_debug_sidecar.py -v
 """
 from __future__ import annotations
 
+import http.client
 import inspect
 import json
 import logging
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -398,3 +401,86 @@ def test_the_post_handler_parses_content_length_through_the_helper():
         "do_POST calls int() on a raw header again — that exception escapes the response writer"
     # And both refusals are still distinguishable to the caller.
     assert "400" in post and "413" in post
+
+
+# ── the same class one level out: a handler that raises must still ANSWER ────
+#
+# 3.9-14's two named raises are closed above, and both were closed at the point
+# they happened. The reason they were findings at all is what the blanket
+# `except Exception` does with anything that reaches it: it counts the failure,
+# keeps the thread alive — and writes NO RESPONSE, so the caller gets a bare
+# connection close instead of a status. That is the finding's own third
+# remediation clause ("give do_POST a fallback that always writes a response
+# before the blanket except"), and until it exists every future raise in this
+# handler reproduces the finding exactly.
+#
+# The api's debug proxy is the caller, and "the sidecar hung up" is the answer it
+# cannot tell apart from "the sidecar is gone" — the inversion this whole feature
+# was built to stop (a failure to look reported as an absence).
+
+def _sidecar_on(monkeypatch, port: int):
+    """Start the real threaded sidecar on a loopback port; caller shuts it down."""
+    main._publish_health_snapshot()
+    monkeypatch.setattr(main, "CORR_HEALTH_SIDECAR_PORT", port)
+    srv = main._start_health_sidecar()
+    assert srv is not None
+    return srv
+
+
+def _post(port: int, path: str = "/debug/kafka-peek"):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}", data=peek_body(), method="POST",
+        headers={"Authorization": auth(), "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as exc:            # a STATUS is an answer
+        return exc.code, exc.read()
+
+
+def test_a_raising_post_handler_still_answers_the_caller(monkeypatch):
+    def boom(*_a, **_kw):
+        raise RuntimeError("anything at all")
+
+    monkeypatch.setattr(main, "_sidecar_debug_response", boom)
+    monkeypatch.setattr(main, "HEALTH_SIDECAR_ERRORS", 0)
+    srv = _sidecar_on(monkeypatch, 18196)
+    try:
+        status, body = _post(18196)
+        # The health surface — the sidecar's reason to exist — is still served by
+        # the same thread after the debug route blew up on it.
+        with urllib.request.urlopen("http://127.0.0.1:18196/healthz", timeout=5) as r:
+            assert r.status == 200
+    except (urllib.error.URLError, http.client.HTTPException, ConnectionError) as exc:
+        raise AssertionError(
+            "the handler decided nothing and said nothing: the caller got "
+            f"{type(exc).__name__}: {exc} instead of a status") from None
+    finally:
+        srv.shutdown()
+    assert status == 500, f"status = {status}, want 500 ({body!r})"
+    assert b"detail" in body, f"a 500 with no reason is not an answer: {body!r}"
+    # The two guarantees that were already true stay true.
+    assert main.HEALTH_SIDECAR_ERRORS == 1, "the failure stopped being counted"
+
+
+def test_a_raising_get_handler_still_answers_the_caller(monkeypatch):
+    """Same contract on the health half: a probe that gets no response at all
+    cannot distinguish a broken handler from a dead container, and the sidecar
+    exists to make that distinction."""
+    monkeypatch.setattr(main, "_sidecar_response",
+                        lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(main, "HEALTH_SIDECAR_ERRORS", 0)
+    srv = _sidecar_on(monkeypatch, 18197)
+    try:
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:18197/healthz", timeout=5) as r:
+                status, body = r.status, r.read()
+        except urllib.error.HTTPError as exc:
+            status, body = exc.code, exc.read()
+        except (urllib.error.URLError, http.client.HTTPException, ConnectionError) as exc:
+            raise AssertionError(
+                f"the probe got {type(exc).__name__}: {exc} instead of a status") from None
+    finally:
+        srv.shutdown()
+    assert status == 500, f"status = {status} ({body!r})"
+    assert main.HEALTH_SIDECAR_ERRORS == 1

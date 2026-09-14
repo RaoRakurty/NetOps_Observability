@@ -538,7 +538,7 @@ func (f fakeLevel) RevertAt() time.Time { return f.revert }
 // check could not run" and "the check passed" would look identical to it.
 func TestMetricsAreAlwaysExportedEvenAtZero(t *testing.T) {
 	out := RenderMetrics(
-		map[Module]LevelReader{ModuleAPI: fakeLevel{level: LevelInfo}}, nil)
+		map[Module]LevelReader{ModuleAPI: fakeLevel{level: LevelInfo}}, nil, nil)
 	for _, want := range []string{
 		MetricLevelActive + `{module="api"} 0`,
 		MetricLevelRevertAt + `{module="api"} 0`,
@@ -560,7 +560,7 @@ func TestMetricsReportARaisedLevelAndAnArmedFilter(t *testing.T) {
 	revert := time.Date(2026, 9, 4, 11, 30, 0, 0, time.UTC)
 	sw := &fakeParseSwitch{needle: "spine1", until: revert, on: true}
 	out := RenderMetrics(
-		map[Module]LevelReader{ModuleAPI: fakeLevel{level: LevelDebug, revert: revert}}, sw)
+		map[Module]LevelReader{ModuleAPI: fakeLevel{level: LevelDebug, revert: revert}}, sw, nil)
 	if !strings.Contains(out, MetricLevelActive+`{module="api"} 1`) {
 		t.Errorf("a raised level is not exported as 1:\n%s", out)
 	}
@@ -582,7 +582,7 @@ func TestMetricsReportARaisedLevelAndAnArmedFilter(t *testing.T) {
 // the export must let the watchdog tell it apart from a normal window.
 func TestMetricsDistinguishNoRevertArmedFromAFutureRevert(t *testing.T) {
 	out := RenderMetrics(
-		map[Module]LevelReader{ModuleAPI: fakeLevel{level: LevelDebug}}, nil)
+		map[Module]LevelReader{ModuleAPI: fakeLevel{level: LevelDebug}}, nil, nil)
 	if !strings.Contains(out, MetricLevelActive+`{module="api"} 1`) ||
 		!strings.Contains(out, MetricLevelRevertAt+`{module="api"} 0`) {
 		t.Fatalf("a raise with no revert armed is not distinguishable:\n%s", out)

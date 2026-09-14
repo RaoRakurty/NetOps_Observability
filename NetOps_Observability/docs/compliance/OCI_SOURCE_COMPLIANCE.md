@@ -269,7 +269,7 @@ history, and the obligation is to the *recipient of the binary*, so:
 |---|---|---|
 | pin table, checksums, provenance, licence facts | `scripts/source-mirror.json` (git) | forever, in history |
 | compliance manifests + inventory | `docs/compliance/` (git) | forever, in history |
-| small source archives (≤ ~500 KB: every Alpine packaging archive, the small Debian source packages, three small upstream tarballs) | `compliance/corresponding-sources/` (git) — taken FIRST by the installer via `CORRELIX_SOURCE_MIRROR_DIR` and re-checksummed exactly as a download would be | forever, in history |
+| small source archives (≤ ~500 KB: every Alpine packaging archive, the small Debian source packages, three small upstream tarballs) | `compliance/corresponding-sources/` (git) — taken FIRST by the installer, unasked (no env var; `CORRELIX_SOURCE_MIRROR_DIR` only *adds* a directory to try before it) and re-checksummed exactly as a download would be | forever, in history |
 | large upstream tarballs (gettext, libgcrypt, libgpg-error, libidn2, libunistring, musl, libseccomp's orig, busybox, syslog-ng) | **the Correlix corresponding-source archive** — AWS S3, Versioning + Object Lock, content-addressed by sha256 (`docs/compliance/SOURCE_ARCHIVE.md`, tracker 262); then the release bundle's `source-offer/`, covered by its `SHA256SUMS`, and uploaded as GitHub Release assets by `release-bundle.yml` | the retention period in `scripts/source-retention-policy.json`, enforced by Object Lock, and never shorter than the release they support (§8) |
 
 An air-gapped build host sets `CORRELIX_SOURCE_MIRROR_DIR` to a directory of

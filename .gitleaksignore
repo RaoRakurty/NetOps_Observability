@@ -82,3 +82,11 @@ f861d29ae5a0e16c4864708a1bbc03b281feb3cd:NetOps_Observability/deployment/docker/
 # TAC exports. Deliberately fake, never key material; flagged by the
 # private-key rule on the BEGIN/END markers the tests must contain.
 e63e3021ee136c513fa797aeccb086d9161c0ed2:NetOps_Observability/src/backend/internal/protocoldiag/redact_test.go:private-key:105
+#
+# protocoldiag/redactstream_trailing_test.go — false positive, same class as the
+# redact_test.go entry above: a SYNTHETIC PEM fixture for the streaming
+# redactor's end-of-stream test (a fabricated marker pair around a few base64
+# characters), never key material. The current tree assembles the marker lines
+# from the label at runtime, so only this one historical commit carries the
+# literal. Commit eda0b806, verified 2026-09-14.
+eda0b8063ef29b66c961004c8c12791a43cc0dd0:NetOps_Observability/src/backend/internal/protocoldiag/redactstream_trailing_test.go:private-key:95

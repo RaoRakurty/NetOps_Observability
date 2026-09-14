@@ -4504,7 +4504,7 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	if s.debugAPILevel != nil {
 		fmt.Fprint(w, pipedebug.RenderMetrics(
 			map[pipedebug.Module]pipedebug.LevelReader{pipedebug.ModuleAPI: s.debugAPILevel},
-			s.debugParseFilter))
+			s.debugParseFilter, s.debugRing))
 	}
 	// DEBUG-ROUTES-END
 	// BGP-WATCH-BEGIN

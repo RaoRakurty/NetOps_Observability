@@ -191,11 +191,13 @@ type hostJob struct {
 	push notify.NtfyPush
 	tier string
 	name string
-	// onFail runs after the LAST attempt has failed. It exists for content a
-	// failed push would otherwise destroy: the digest drains its accumulator to
-	// compose the message, and without this the window's warnings are gone even
-	// though nothing was delivered (review 3.9-09). Nil for every job whose
-	// content survives its own delivery.
+	// onFail runs on EVERY path that ends without delivery: after the last
+	// attempt has failed (deliverHost), and when the job was never attempted at
+	// all because the queue was full or no topic is configured (enqueueHost). It
+	// exists for content that non-delivery would otherwise destroy: the digest
+	// drains its accumulator to compose the message, so without this the
+	// window's warnings are gone even though nothing was sent (review 3.9-09).
+	// Nil for every job whose content survives its own delivery.
 	onFail func()
 }
 
@@ -367,6 +369,14 @@ func (r *receiver) enqueueHost(j hostJob) {
 				EnvHostTopic+" (or "+EnvWatchdogTopic+") or the stack cannot report its own failures to a phone",
 				map[string]any{"route": RouteHostMonitoring, "env": EnvHostTopic})
 		})
+		// Never delivered, so content that lives only inside this job comes back
+		// (review 3.9-09). Unreachable for the digest today — maybeFlushDigest
+		// returns before it composes anything when there is no route — and wired
+		// anyway, because the invariant is "a job that was not delivered does not
+		// take its content with it", not "the one path we happened to notice".
+		if j.onFail != nil {
+			j.onFail()
+		}
 		return
 	}
 	select {
@@ -375,7 +385,17 @@ func (r *receiver) enqueueHost(j hostJob) {
 		r.deps.Metrics.inc(&r.deps.Metrics.hostQueueFull)
 		r.log("warn", "platform alert DROPPED: the host-monitoring push queue is full", map[string]any{
 			"route": RouteHostMonitoring, "alertname": j.name, "tier": j.tier, "queue": hostQueueSize,
+			"content_kept": j.onFail != nil,
 		})
+		// THE DIGEST DRAINED ITS ACCUMULATOR TO COMPOSE THIS JOB, so a job the
+		// queue refuses destroys the window's warnings exactly as a failed push
+		// did (review 3.9-09) — and a full queue is the wedged-ntfy state the
+		// bound exists for, which is the same 429 storm that motivated the
+		// digest. deliverHost's handback covers the attempted-and-failed case;
+		// this covers the never-attempted one.
+		if j.onFail != nil {
+			j.onFail()
+		}
 		return
 	}
 	r.hostMu.Lock()

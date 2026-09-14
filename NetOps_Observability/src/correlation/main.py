@@ -13973,9 +13973,44 @@ def _start_health_sidecar() -> object | None:
     import threading
 
     class _Handler(http.server.BaseHTTPRequestHandler):
+        def _answer_500(self, started: bool) -> None:
+            """Write the status a raising handler never got to write.
+
+            The blanket excepts below keep the thread alive and count the
+            failure, and both of those are deliberate — but writing NO response
+            leaves the caller with a bare connection close and no status at all,
+            which is the very symptom review 3.9-14 filed against the bearer
+            check and the Content-Length parse. Those two are fixed where they
+            happen; this is the floor under everything that has not been thought
+            of, so a future raise here cannot reproduce the finding.
+
+            `started` says a response was already begun, and then nothing more is
+            written: a second status line on the same connection is a worse
+            answer than a truncated one. The write is itself guarded because the
+            usual reason a handler raises is that the peer is already gone, and
+            the never-kill-the-thread contract outranks this courtesy.
+            """
+            if started:
+                return
+            try:
+                body = b'{"detail":"the sidecar handler failed; see the correlation log"}'
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:  # noqa: BLE001 — the peer is gone; the
+                # original failure is already counted and logged by the caller,
+                # so this is reported at debug and never raised (§10: observable,
+                # not silent — and never fatal to the thread).
+                log.debug("health sidecar could not write its 500 (%s): %s",
+                          type(exc).__name__, exc)
+
         def do_GET(self):
+            started = False
             try:
                 status, ctype, body = _sidecar_response(self.path.split("?")[0])
+                started = True
                 self.send_response(status)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
@@ -13988,6 +14023,7 @@ def _start_health_sidecar() -> object | None:
                 HEALTH_SIDECAR_ERRORS += 1
                 log.warning("health sidecar request failed (%s): %s — total=%d",
                             type(exc).__name__, exc, HEALTH_SIDECAR_ERRORS)
+                self._answer_500(started)
 
         # DEBUG-ROUTES-BEGIN
         def do_POST(self):
@@ -13995,6 +14031,7 @@ def _start_health_sidecar() -> object | None:
             # never-kill-the-thread contract as do_GET: reachability of the
             # health surface is the sidecar's reason to exist, and a debug
             # request must not be able to take it down.
+            started = False
             try:
                 try:
                     length = _debug_body_length(self.headers.get("Content-Length"))
@@ -14010,6 +14047,7 @@ def _start_health_sidecar() -> object | None:
                     raw = self.rfile.read(length) if length else b""
                     status, ctype, body = _sidecar_debug_response(
                         self.path.split("?")[0], raw, self.headers.get("Authorization"))
+                started = True
                 self.send_response(status)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
@@ -14020,6 +14058,7 @@ def _start_health_sidecar() -> object | None:
                 HEALTH_SIDECAR_ERRORS += 1
                 log.warning("health sidecar POST failed (%s): %s — total=%d",
                             type(exc).__name__, exc, HEALTH_SIDECAR_ERRORS)
+                self._answer_500(started)
 
         # DEBUG-ROUTES-END
 
