@@ -4,9 +4,18 @@ Files here are **Correlix's retained copies** of corresponding source that a GPL
 component shipped in a Correlix image obliges us to make available (tracker 238, owner decision
 2026-09-05: "if Correlix ships the binary, Correlix retains the compliance artifacts"). Each file is
 pinned by name, upstream URL, size and sha256 in `scripts/source-mirror.json`; the installer
-(`scripts/make-installer.sh`, `CORRELIX_SOURCE_MIRROR_DIR`) takes the copy from here first and
-re-verifies the checksum exactly as it would a fresh download. Upstream URLs are provenance and a
-retrieval source, never the compliance evidence.
+(`scripts/make-installer.sh`) takes the copy from here FIRST — unasked, with no environment variable
+to set — and re-verifies the checksum exactly as it would a fresh download. Upstream URLs are
+provenance and a retrieval source, never the compliance evidence.
+
+**2026-09-14:** that used to be true only when the caller exported
+`CORRELIX_SOURCE_MIRROR_DIR`, which `release-bundle.yml` does not, so the release bundle fetched all
+35 artifacts live and CI run 34789741432 died on `busybox 1.37.0-r12` with
+`curl: (22) … error: 418` from gitlab.alpinelinux.org — while the byte-identical retained copy sat
+in this directory in the same checkout. The installer now tries, in order:
+`$CORRELIX_SOURCE_MIRROR_DIR/<file>`, the pin's `retained_in_git` path, and this directory; a
+candidate is used only if it hashes to the pin, a candidate that does NOT match fails the build
+(never a fallback to the network), and a stale copy that is stepped over is named on stderr.
 
 **Why retention is not optional.** `base-files` is the proof: the exact versions our images ship
 (`12.4+deb12u14`, `13.8+deb13u5`) had already been superseded in Debian's live pool and had to be

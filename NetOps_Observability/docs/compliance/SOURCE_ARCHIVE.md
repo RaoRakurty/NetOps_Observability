@@ -317,11 +317,16 @@ AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN
 
 `scripts/make-installer.sh` `write_source_offer()` tries three sources in order:
 
-1. **retained copies** (`CORRELIX_SOURCE_MIRROR_DIR`) — everything in
-   `compliance/corresponding-sources/`, re-checksummed like a download;
+1. **retained copies** — `$CORRELIX_SOURCE_MIRROR_DIR/<file>` when that
+   variable is set, then the pin's `retained_in_git` path, then everything in
+   `compliance/corresponding-sources/`, which is tried with no variable set at
+   all (2026-09-14: it used to need one, and release-bundle.yml sets none — see
+   that directory's README); each re-checksummed like a download, and a
+   candidate that fails the pin FAILS the build instead of falling back;
 2. **the Correlix archive** — `release-fetch`, only when
    `CORRELIX_SOURCE_RELEASE_MODE=1`;
-3. **the pinned upstream URL** — development and daily CI only.
+3. **the pinned upstream URL, then the pin's alternate mirrors** — each bounded
+   and retried with backoff + jitter; development and daily CI only.
 
 `CORRELIX_SOURCE_RELEASE_MODE=1` turns step 3 **off**. Every path ends at the
 same sha256 gate: local provenance is not trusted provenance, and neither is
