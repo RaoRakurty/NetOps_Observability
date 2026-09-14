@@ -510,10 +510,7 @@ func TestADigestTheQueueRefusedKeepsItsContent(t *testing.T) {
 	r.clock.advance(2 * time.Minute)
 	r.tick(t)
 	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if p.bodyContaining("[DIGEST]", "VectorComponentErrors") != "" {
-			break
-		}
+	for p.bodyContaining("[DIGEST]", "VectorComponentErrors") == "" {
 		if time.Now().After(deadline) {
 			t.Fatalf("the digest the queue refused was lost: a warning that fired and cleared inside " +
 				"that window is re-sent by nobody, so the operator never learns it happened")
