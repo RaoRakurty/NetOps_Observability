@@ -88,7 +88,11 @@
   /* ---------- the numbered step strip (the only navigation) ---------- */
   .strip{
     position:relative;z-index:2;
-    display:flex;align-items:center;gap:28px;flex-wrap:wrap;padding:0 4px;
+    display:flex;align-items:center;gap:28px;flex-wrap:wrap;
+    /* the sheet is pushed to the bottom by margin-top:auto, which can collapse
+       the column gap to nothing on a tall step — this padding keeps a floor of
+       28px between the strip and the sheet on every step. */
+    padding:0 4px 28px;
   }
   .rs{
     display:flex;align-items:center;gap:10px;
@@ -707,23 +711,25 @@ async function loadFacts() {
   h.push(fact(f.disk_free_bytes>=100*1073741824?'ok':'warn', gib(f.disk_free_bytes)+' GB free', '≥ 100 GB recommended'));
   h.push(fact(f.docker&&f.docker.present?(f.docker.compose_v2?'ok':'warn'):'warn',
     f.docker&&f.docker.present?('Docker '+esc(f.docker.version||'')+(f.docker.compose_v2?' + Compose v2':' — Compose v2 missing')):'Docker not installed',
-    f.docker&&f.docker.present?(f.docker.daemon_ok?'daemon healthy':'daemon unreachable'):'Prepare host installs it'));
+    f.docker&&f.docker.present?(f.docker.daemon_ok?'running':'not reachable'):'Prepare will install it'));
   h.push(fact(f.time_sync?'ok':'warn', 'System clock '+(f.time_sync?'synchronized':'not synchronized')));
   h.push(fact(f.ports&&f.ports.stack&&f.ports.stack.free?'ok':'warn',
-    'Port '+((f.ports&&f.ports.stack)?f.ports.stack.port:8000)+' '+((f.ports&&f.ports.stack&&f.ports.stack.free)?'free':'IN USE'),
+    'Port '+((f.ports&&f.ports.stack)?f.ports.stack.port:8000)+((f.ports&&f.ports.stack&&f.ports.stack.free)?' is free':' is already in use'),
     'dashboard port'));
   $('facts-host').innerHTML = h.join('');
   $('m-host').textContent = 'host ' + (f.os_id||'');
   const src = [];
   if (f.bundle && f.bundle.version) {
-    src.push(fact('ok','Offline bundle <b>'+esc(f.bundle.version)+'</b>','integrity verified at unpack'));
-    $('m-bundle').textContent = 'bundle '+f.bundle.version;
+    src.push(fact('ok','Offline bundle <b>'+esc(f.bundle.version)+'</b>','checksums verified'));
+    $('m-bundle').textContent = 'Offline bundle '+f.bundle.version;
   } else {
-    src.push(fact('ok','Source tree install','images build locally'));
-    $('m-bundle').textContent = 'source tree';
+    src.push(fact('ok','Built from source on this server'));
+    $('m-bundle').textContent = 'Built from source';
   }
   if (f.sizing && f.sizing.suggested_profile) {
-    $('size-hint').textContent = 'auto → '+f.sizing.suggested_profile+' ('+gib(f.mem_bytes)+' GiB host)';
+    const sp = String(f.sizing.suggested_profile);
+    $('size-hint').textContent = 'Automatic: '+sp.charAt(0).toUpperCase()+sp.slice(1)+
+      ', from '+gib(f.mem_bytes)+' GiB of memory';
     renderSizeHost();
   }
   $('facts-src').innerHTML = src.join('');
@@ -733,8 +739,9 @@ function renderSizeHost() {
   $('size-host').innerHTML =
     '<dt>Memory</dt><dd>'+gib(facts.mem_bytes)+' GiB</dd>'+
     '<dt>CPU</dt><dd>'+facts.cpus+' cores</dd>'+
-    '<dt>Disk free</dt><dd>'+gib(facts.disk_free_bytes)+' GB</dd>'+
-    (facts.sizing?('<dt>Suggested profile</dt><dd>'+esc(facts.sizing.suggested_profile)+' <span class="tag rec">AUTO</span></dd>'):'');
+    '<dt>Free disk</dt><dd>'+gib(facts.disk_free_bytes)+' GB</dd>'+
+    (facts.sizing?('<dt>Suggested size</dt><dd>'+esc(facts.sizing.suggested_profile)+
+      ' <span class="tag">chosen automatically</span></dd>'):'');
 }
 async function runCheck() {
   $('check-items').innerHTML = fact('run','Checking this server …');
@@ -745,12 +752,12 @@ async function runCheck() {
     const fixes = checkItems.filter(i => !i.ok);
     $('check-items').innerHTML = checkItems.length
       ? checkItems.map(i => fact(i.ok?'ok':'warn', esc(i.text))).join('')
-      : fact('warn','audit produced no items — see log');
+      : fact('warn','Nothing to fix');
     prepared = fixes.length === 0;
     $('b-ready-next').disabled = false;
-    $('b-ready-next').textContent = prepared ? 'Continue' : 'Prepare host';
-    $('ready-hint').textContent = prepared ? 'all checks pass — host is ready'
-      : fixes.length+' item(s) need the preparation step';
+    $('b-ready-next').textContent = prepared ? 'Continue' : 'Prepare this server';
+    $('ready-hint').textContent = prepared ? 'Everything checks out'
+      : fixes.length+' item(s) need Prepare';
     if (prepared) { markDone('ready'); markDone('prepare'); }
     renderPrepItems(fixes);
   } catch (e) {
@@ -762,7 +769,7 @@ function renderPrepItems(fixes) {
   $('prep-items').innerHTML = fixes.length
     ? fixes.map(i => fact('warn', esc(i.text))).join('') +
       fact('ok', (checkItems.length - fixes.length)+' other checks already pass', 'nothing else is touched')
-    : fact('ok','nothing to fix — host is already prepared');
+    : fact('ok','Nothing to fix');
 }
 $('b-recheck').addEventListener('click', runCheck);
 $('b-ready-next').addEventListener('click', () => show(prepared ? 'deploy' : 'prepare'));
@@ -779,7 +786,7 @@ async function waitPhase(phases) {
 /* ---------- 02 prepare ---------- */
 $('b-prepare').addEventListener('click', async () => {
   const pw = $('sudo-pw').value;
-  if (!pw) { $('prep-err').textContent = 'sudo password required'; return; }
+  if (!pw) { $('prep-err').textContent = 'Enter the administrator password'; return; }
   $('prep-err').textContent = ''; $('b-prepare').disabled = true;
   $('prep-log').hidden = false; $('prep-log').textContent = '';
   $('prep-run').hidden = false;
@@ -807,7 +814,7 @@ function validateDeploy() {
   const v = parseInt($('port').value, 10);
   if (!(v>=1 && v<=65535)) { $('deploy-err').textContent = 'dashboard port must be 1–65535'; return false; }
   if (document.querySelector('input[name=preset]:checked').value === 'external-kafka' && !$('brokers').value.trim()) {
-    $('deploy-err').textContent = 'external Kafka needs at least one broker URL'; return false;
+    $('deploy-err').textContent = 'Enter at least one broker address'; return false;
   }
   $('deploy-err').textContent = ''; markDone('deploy'); return true;
 }
@@ -876,7 +883,7 @@ function scope() {
   parts.forEach(p => { const n = cidrHosts(p); if (n===null) bad.push(p); else total += n; });
   $('cidr-err').textContent = bad.length ? 'invalid CIDR: '+bad.join(', ') : '';
   $('cidr-scope').textContent = (!bad.length && parts.length)
-    ? 'scan scope ≈ '+total.toLocaleString()+' hosts'+(total>1048576?' — keep it narrow':'') : '';
+    ? 'That range is about '+total.toLocaleString()+' addresses'+(total>1048576?' — narrow it':'') : '';
 }
 function validateDiscovery() {
   if ($('disc-on').checked) {
@@ -912,17 +919,19 @@ function buildReview() {
   markDone('size'); markDone('sec');
   const p = buildProfile();
   $('rev-kv').innerHTML =
-    '<dt>Dashboard</dt><dd>:'+p.port+(p.tls==='yes'?' → https after TLS enablement':' (http — lab only)')+'</dd>'+
-    '<dt>Preset</dt><dd>'+(p.external_kafka?'standard + external kafka':'standard')+'</dd>'+
+    '<dt>Sign in at</dt><dd>'+(p.tls==='yes'
+        ? esc($('mgmt-url').textContent)+' once traffic is encrypted'
+        : 'http on port '+p.port+' (lab only)')+'</dd>'+
+    '<dt>Layout</dt><dd>'+(p.external_kafka?'Standard, using your own message brokers':'Standard')+'</dd>'+
     '<dt>Add-ons</dt><dd>'+(p.addons.length?esc(p.addons.join(' · ')):'none')+'</dd>'+
-    '<dt>Discovery</dt><dd>'+(p.discovery.enabled?esc(p.discovery.cidrs.join(', ')):'off')+'</dd>'+
-    '<dt>Retention</dt><dd>'+esc(p.retention_profile)+'</dd>'+
-    '<dt>Sizing</dt><dd>'+esc(p.sizing.profile)+(facts&&facts.sizing&&p.sizing.profile==='auto'?' → '+esc(facts.sizing.suggested_profile):'')+'</dd>'+
-    '<dt>Transport</dt><dd>'+(p.tls==='yes'?'full mTLS mesh':'plaintext — lab only')+'</dd>'+
-    '<dt>Administrator</dt><dd>'+esc(p.admin_user)+' <span class="hint">password generated</span></dd>'+
-    '<dt>State store</dt><dd>'+(p.store_backend==='postgres'?'PostgreSQL (default)':'files (compatibility)')+'</dd>'+
-    '<dt>Sign-in URL</dt><dd>'+esc($('mgmt-url').textContent)+'</dd>'+
-    '<dt>Source</dt><dd>'+esc($('m-bundle').textContent)+'</dd>';
+    '<dt>Discover</dt><dd>'+(p.discovery.enabled?esc(p.discovery.cidrs.join(', ')):'off')+'</dd>'+
+    '<dt>Keep data for</dt><dd>'+esc(p.retention_profile)+'</dd>'+
+    '<dt>Size</dt><dd>'+esc(p.sizing.profile)+(facts&&facts.sizing&&p.sizing.profile==='auto'?' → '+esc(facts.sizing.suggested_profile):'')+'</dd>'+
+    '<dt>Traffic</dt><dd>'+(p.tls==='yes'?'Encrypted (all services)':'Plain HTTP (lab only)')+'</dd>'+
+    '<dt>Administrator</dt><dd>'+esc(p.admin_user)+' <span class="hint">password generated on this server, shown once</span></dd>'+
+    '<dt>Records</dt><dd>'+(p.store_backend==='postgres'?'PostgreSQL (default)':'Files (for compatibility)')+'</dd>'+
+    '<dt>Sign-in address</dt><dd>'+esc($('mgmt-url').textContent)+'</dd>'+
+    '<dt>Installed from</dt><dd>'+esc($('m-bundle').textContent)+'</dd>';
 }
 function exportProfile() {
   const blob = new Blob([JSON.stringify(buildProfile(), null, 2)], {type:'application/json'});
@@ -936,16 +945,23 @@ $('b-export2').addEventListener('click', exportProfile);
 
 /* ---------- 08 install ---------- */
 const STAGE_TITLES = {
-  preflight:'Host preflight', prereq:'Prerequisites', scaffold:'Scaffold verified',
-  env:'Environment generated — secrets minted on this host', sizing:'Resource plan',
-  'tls-env':'Transport security variables', 'data-dirs':'Data directories',
-  bundle:'Images loaded from bundle', 'addon-pack':'Add-on packs loaded',
-  'up-a':'Stack started — TLS phase A',
-  mint:'Minting service identities', 'up-b':'TLS phase B — fail-closed mesh restart',
-  status:'Service status', 'bootstrap-os':'Search index bootstrap',
-  'bootstrap-kc':'SSO database bootstrap', 'bootstrap-grafana':'Grafana datasource',
-  'verify-health':'Verifying platform health', 'verify-login':'Verifying administrator login'
+  preflight:'Checking the server', prereq:'Checking prerequisites', scaffold:'Checking the bundle',
+  env:'Creating settings and secrets on this server', sizing:'Planning resources',
+  'tls-env':'Preparing encryption settings', 'data-dirs':'Creating data folders',
+  bundle:'Loading images', 'addon-pack':'Loading add-ons',
+  'up-a':['Starting services','TLS phase A'],
+  mint:'Creating service certificates', 'up-b':['Restarting under encryption','TLS phase B'],
+  status:'Checking service status', 'bootstrap-os':'Preparing search',
+  'bootstrap-kc':'Preparing sign-on', 'bootstrap-grafana':'Connecting dashboards',
+  'verify-health':'Checking every service is healthy', 'verify-login':'Verifying the administrator sign-in'
 };
+/* A stage title is either plain words, or plain words plus the interoperable
+   technical name an admin might need to quote (rendered as a muted <small>). */
+function stageName(id, fallback) {
+  const t = STAGE_TITLES[id];
+  const name = Array.isArray(t) ? t[0] : t;
+  return name || fallback || id;
+}
 let stages = [], es = null, streamHooks = [];
 function attachStream(onLog) {
   if (onLog) streamHooks.push(onLog);
@@ -972,11 +988,15 @@ function renderStages() {
   const total = Math.max(stages.length, 12);
   const done = stages.filter(s => s.status === 'ok').length;
   $('stages').innerHTML = stages.map(s => {
-    const st = s.status==='ok'?'ok':(s.status==='fail'?'bad':'run');
+    const st = s.status==='ok'?'ok':(s.status==='fail'?'bad':(s.status==='start'?'run':'dim'));
     const icon = s.status==='ok'?'✓':(s.status==='fail'?'✕':'▸');
-    return '<div class="ps '+(s.status==='start'?'run':'')+'"><span class="s '+st+'">'+icon+'</span>'+
-      '<span>'+esc(STAGE_TITLES[s.id]||s.title||s.id)+
-      (s.message?'<span class="msg">'+esc(s.message)+'</span>':'')+'</span></div>';
+    const t = STAGE_TITLES[s.id];
+    const sec = Array.isArray(t) ? t[1] : '';
+    return '<div class="ps '+(s.status==='start'?'run':(s.status==='ok'||s.status==='fail'?'':'todo'))+
+      '"><span class="s '+st+'">'+icon+'</span>'+
+      '<span>'+esc(stageName(s.id, s.title))+
+      (s.message?'<span class="msg">'+esc(s.message)+'</span>':'')+'</span>'+
+      (sec?'<small>'+esc(sec)+'</small>':'')+'</div>';
   }).join('');
   const pct = Math.min(99, Math.round(done/total*100));
   $('meter-i').style.width = pct+'%'; $('pct').textContent = pct+'%';
@@ -999,19 +1019,20 @@ $('b-install').addEventListener('click', startInstall);
 $('b-retry').addEventListener('click', startInstall);
 $('b-log').addEventListener('click', () => {
   $('inst-log').hidden = !$('inst-log').hidden;
-  $('b-log').textContent = $('inst-log').hidden ? 'Show technical log' : 'Hide technical log';
+  $('b-log').textContent = $('inst-log').hidden ? 'Show technical details' : 'Hide technical details';
 });
 $('b-bundle').addEventListener('click', () => { location.href = '/api/support-bundle'; });
 function onFail(head, msg) {
   installing = false;
   $('fail-h').textContent = head || 'Installation stopped';
-  $('fail-p').textContent = (msg||'') + ' — your data has not been deleted; retry resumes idempotently.';
+  $('fail-p').textContent = (msg ? msg+' — ' : '') +
+    'Nothing you entered was lost. Retry continues from where it stopped.';
   $('inst-fail').hidden = false;
 }
 async function onResult(d) {
   if (d.status !== 'ok') {
     const failed = stages.find(s => s.status==='fail');
-    onFail(failed ? (STAGE_TITLES[failed.id]||failed.id)+' failed' : 'Installation stopped',
+    onFail(failed ? stageName(failed.id)+' failed' : 'Installation stopped',
            (failed && failed.message) || d.message || 'see the technical log');
     return;
   }
@@ -1027,7 +1048,7 @@ async function onResult(d) {
   $('done-user').textContent = res.admin_user || 'admin';
   $('done-pass').textContent = res.admin_password || 'see deployment/docker/.env';
   $('done-checks').innerHTML =
-    fact('ok','All services healthy — held stable through a re-check') +
+    fact('ok','Every service is healthy and stayed healthy on a second check') +
     fact('ok','Ingress answered end to end') +
     fact('ok','Administrator login verified');
   $('b-open').onclick = async () => {
@@ -1055,18 +1076,18 @@ $('b-watchdog').addEventListener('click', async () => {
     webhook_token: $('wd-whtoken').value
   };
   Object.keys(body).forEach(k => { if (!body[k]) delete body[k]; });
-  if (!body.password) { $('wd-err').textContent = 'sudo password required to install the cron'; return; }
+  if (!body.password) { $('wd-err').textContent = 'Enter the administrator password'; return; }
   if (!body.ntfy_topic && !body.email && !body.hc_url && !body.webhook_url) {
-    $('wd-err').textContent = 'configure at least one channel'; return;
+    $('wd-err').textContent = 'Fill in at least one way to reach you'; return;
   }
   $('wd-err').textContent = ''; $('b-watchdog').disabled = true;
   try {
     await api('/api/watchdog', {method:'POST', body: JSON.stringify(body)});
     ['wd-sudo','wd-token','wd-whtoken'].forEach(id => { $(id).value = ''; });
     $('wd-done').hidden = false;
-    $('wd-done').innerHTML = fact('ok','Watchdog installed — checks every minute, alerts on up/down transitions',
+    $('wd-done').innerHTML = fact('ok','Alerts are on: this server is checked every minute',
       'config: /etc/correlix/stack-watchdog.env');
-    $('b-watchdog').textContent = 'Watchdog enabled';
+    $('b-watchdog').textContent = 'Alerts enabled';
   } catch (e) {
     $('wd-err').textContent = e.message;
     $('b-watchdog').disabled = false;

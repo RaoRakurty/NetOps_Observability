@@ -161,9 +161,37 @@ func TestWizardPulsesWorkInProgress(t *testing.T) {
 	if !strings.Contains(markup, `id="prep-run"`) {
 		t.Error("the Prepare step has no running row to pulse while sudo work runs")
 	}
-	// renderStages() maps a started stage to .s.run; that is what pulses during
-	// the install.
-	if !strings.Contains(script, `s.status==='fail'?'bad':'run'`) {
-		t.Error("renderStages no longer marks the active install stage 'run'")
+	// renderStages() maps a STARTED stage to .s.run — that is what pulses — and
+	// anything not started/ok/failed to the grey .s.dim. A pending stage wearing
+	// the running indigo is the regression this pins (second pass, 2026-09-14).
+	if !strings.Contains(script, `(s.status==='start'?'run':'dim')`) {
+		t.Error("renderStages must mark only the started stage 'run' and leave " +
+			"pending stages on the grey 'dim' dot")
+	}
+}
+
+// TestWizardKeepsTheOldJargonOut: the plain-language pass (owner's NOC-admin UI
+// standard) is only worth anything if the old phrasing cannot creep back in
+// through a JS-generated string, where it is invisible to a glance at the
+// markup. Every phrase below was on this page before 2026-09-14.
+func TestWizardKeepsTheOldJargonOut(t *testing.T) {
+	page, _, _ := uiParts(t)
+	scan := dataURIRE.ReplaceAllString(page, "DATA")
+	for _, phrase := range []string{
+		"IN USE",         // "Port 8000 IN USE"      -> "Port 8000 is already in use"
+		"daemon healthy", //                         -> "running"
+		"daemon unreachable",
+		"mTLS mesh",      // "full mTLS mesh"        -> "Encrypted (all services)"
+		"Host preflight", //                         -> "Checking the server"
+		"TLS enablement", // ":8000 -> https after TLS enablement"
+		"idempotently",   // "retry resumes idempotently"
+		"AUTO",           // the uppercase sizing chip
+		"Watchdog installed",
+		"Show technical log",
+	} {
+		if strings.Contains(scan, phrase) {
+			t.Errorf("ui.html still says %q — plain words lead, with the technical "+
+				"name only as a muted <small> where an admin must quote it", phrase)
+		}
 	}
 }
