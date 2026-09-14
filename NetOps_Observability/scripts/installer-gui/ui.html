@@ -191,6 +191,27 @@
   .s.run{animation:cxpulse 1.4s ease-out infinite}
   @media (prefers-reduced-motion:reduce){.s.run{animation:none}}
 
+  /* a row that has JUST reached PASS blinks green (owner, 2026-09-14): the dot
+     swells and throws an expanding green ring, twice, and then rests as the
+     plain solid green dot. The .just class is added by the renderer only on the
+     transition into PASS and removed on animationend, so re-rendering a list
+     never re-blinks a row that was already passing. */
+  @keyframes cxpass{
+    0%  {transform:scale(1);    box-shadow:0 0 0 0 rgba(15,157,110,0.55)}
+    45% {transform:scale(1.35); box-shadow:0 0 0 8px rgba(15,157,110,0)}
+    100%{transform:scale(1);    box-shadow:0 0 0 0 rgba(15,157,110,0)}
+  }
+  .s.ok.just{animation:cxpass 0.9s ease-out 2}
+  @media (prefers-reduced-motion:reduce){.s.ok.just{animation:none}}
+
+  /* the status word on the right of a row — PASS green, FIX amber, a failure
+     red — so the verdict reads without decoding the dot colour. Only rows whose
+     right-hand text IS a verdict carry these; a plain hint stays muted. */
+  .f small.st-ok{color:var(--ok);font-weight:600}
+  .f small.st-warn{color:var(--warn);font-weight:600}
+  .f small.st-bad{color:var(--bad);font-weight:600}
+  .f small.st-run{color:var(--accent);font-weight:600}
+
   /* ---------- choices ---------- */
   .opts{display:flex;flex-direction:column;gap:10px}
   .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
@@ -662,9 +683,37 @@ async function api(path, opts) {
   const ct = r.headers.get('Content-Type')||'';
   return ct.includes('json') ? r.json() : r.text();
 }
-function fact(st, text, small) {
-  return '<div class="f"><span class="s '+st+'">'+({ok:'✓',warn:'✻',bad:'✕',dim:'○',run:'◆'}[st]||'○')+
-         '</span> <span>'+text+'</span>'+(small?'<small>'+esc(small)+'</small>':'')+'</div>';
+/* One status row. `verdict` marks the right-hand text as the row's verdict
+   (PASS / FIX / a failure) rather than a hint, which colours it by state. The
+   data-k key is what blinkNewPasses() uses to tell a row that has just reached
+   PASS from one that was already passing before this render. */
+function fact(st, text, small, verdict) {
+  const cls = verdict ? ' class="st-'+st+'"' : '';
+  return '<div class="f" data-k="'+String(text).replace(/"/g, '&quot;')+'">'+
+         '<span class="s '+st+'">'+({ok:'✓',warn:'✻',bad:'✕',dim:'○',run:'◆'}[st]||'○')+
+         '</span> <span>'+text+'</span>'+(small?'<small'+cls+'>'+esc(small)+'</small>':'')+'</div>';
+}
+
+/* A row that has just reached PASS blinks green once and then settles. The
+   verdict of every row is remembered per list, so a re-render of a list whose
+   rows were already passing is silent — only a real transition into PASS
+   blinks. Keys are namespaced by list id: the same check text appears in both
+   the readiness list and the Prepare list. */
+const PASS_BLINK_HOLD_MS = 1800;   /* both 0.9s beats of the green blink */
+const passSeen = new Map();
+function blinkNewPasses(el) {
+  if (!el) return;
+  el.querySelectorAll('.f').forEach(row => {
+    const dot = row.querySelector('.s');
+    if (!dot || !row.dataset.k) return;
+    const key = el.id + '\u0000' + row.dataset.k;
+    const ok = dot.classList.contains('ok');
+    if (ok && passSeen.get(key) !== true) {
+      dot.classList.add('just');
+      dot.addEventListener('animationend', () => dot.classList.remove('just'), {once: true});
+    }
+    passSeen.set(key, ok);
+  });
 }
 
 /* ---------- wizard state ---------- */
@@ -733,6 +782,8 @@ async function loadFacts() {
     renderSizeHost();
   }
   $('facts-src').innerHTML = src.join('');
+  blinkNewPasses($('facts-host'));
+  blinkNewPasses($('facts-src'));
 }
 function renderSizeHost() {
   if (!facts) return;
@@ -751,8 +802,9 @@ async function runCheck() {
     checkItems = st.check_items || st.checkItems || [];
     const fixes = checkItems.filter(i => !i.ok);
     $('check-items').innerHTML = checkItems.length
-      ? checkItems.map(i => fact(i.ok?'ok':'warn', esc(i.text))).join('')
+      ? checkItems.map(i => fact(i.ok?'ok':'warn', esc(i.text), i.ok?'PASS':'FIX', true)).join('')
       : fact('warn','Nothing to fix');
+    blinkNewPasses($('check-items'));
     prepared = fixes.length === 0;
     $('b-ready-next').disabled = false;
     $('b-ready-next').textContent = prepared ? 'Continue' : 'Prepare this server';
@@ -765,11 +817,20 @@ async function runCheck() {
     $('b-ready-next').disabled = true;
   }
 }
-function renderPrepItems(fixes) {
+/* The Prepare list, rendered in one of three states: 'warn' (what will change),
+   'run' (the sudo work is in flight — the dot pulses indigo) and 'ok' (done —
+   every row flips to PASS and blinks green). prepFixes remembers the rows so
+   the running and finished renders can reuse them. */
+let prepFixes = [];
+function renderPrepItems(fixes, state) {
+  prepFixes = fixes;
+  const st = state || 'warn';
+  const word = {ok:'PASS', run:'working', warn:'FIX'}[st] || 'FIX';
   $('prep-items').innerHTML = fixes.length
-    ? fixes.map(i => fact('warn', esc(i.text))).join('') +
+    ? fixes.map(i => fact(st, esc(i.text), word, true)).join('') +
       fact('ok', (checkItems.length - fixes.length)+' other checks already pass', 'nothing else is touched')
-    : fact('ok','Nothing to fix');
+    : fact('ok','Nothing to fix', 'PASS', true);
+  blinkNewPasses($('prep-items'));
 }
 $('b-recheck').addEventListener('click', runCheck);
 $('b-ready-next').addEventListener('click', () => show(prepared ? 'deploy' : 'prepare'));
@@ -790,12 +851,26 @@ $('b-prepare').addEventListener('click', async () => {
   $('prep-err').textContent = ''; $('b-prepare').disabled = true;
   $('prep-log').hidden = false; $('prep-log').textContent = '';
   $('prep-run').hidden = false;
+  /* the rows being worked on pulse indigo for as long as the sudo work runs */
+  const working = prepFixes.slice();
+  renderPrepItems(working, 'run');
   attachStream(line => { $('prep-log').textContent += line + "\n"; $('prep-log').scrollTop = 1e9; });
   try {
     await api('/api/run/prepare', {method:'POST', body: JSON.stringify({password: pw, firewall: $('prep-fw').checked})});
     $('sudo-pw').value = '';
     const st = await waitPhase(['ready','needs-prep','error']);
-    if (st.phase === 'ready') { prepared = true; markDone('ready'); markDone('prepare'); await runCheck(); show('deploy'); }
+    if (st.phase === 'ready') {
+      prepared = true; markDone('ready'); markDone('prepare');
+      await runCheck();
+      $('prep-run').hidden = true;
+      if (working.length) {
+        /* show the operator what changed: each row flips to PASS and blinks
+           green, and the wizard holds for that beat before moving on. */
+        renderPrepItems(working, 'ok');
+        await new Promise(r => setTimeout(r, PASS_BLINK_HOLD_MS));
+      }
+      show('deploy');
+    }
     else $('prep-err').textContent = st.error || 'preparation did not complete — see log';
   } catch (e) { $('prep-err').textContent = e.message; }
   $('prep-run').hidden = true;
