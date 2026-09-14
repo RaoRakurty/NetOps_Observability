@@ -668,11 +668,11 @@
     "was_partial": false
   },
   "3.7-06": {
-    "disposition": "CONFIRMED_FIX_REQUIRED",
-    "rationale": "OVERTURNED. Triage called it INTENTIONAL and the intent WAS written down — on a false premise. The stated reason, that every existing deployment depends on it, is not true for tenant-bound connections: the tenant callback refuses any browser holding no locator cookie, which a bare-page browser by construction does not. The test was written expecting success and failed.",
-    "source": "triage re-check 2026-09-12",
+    "disposition": "ALREADY_FIXED",
+    "rationale": "PARTIALLY_FIXED then closed 2026-09-14: providerVisible hides tenant-bound connections from the generic sign-in page (held under mutation), but the public /api/auth/sso/config still answered p.Providers() verbatim — anonymous enumeration of every bound alias and label. handleSSOConfig now filters through the same providerVisible; red-before TestPublicSSOConfigHidesTenantBoundConnections.",
+    "source": "re-verification 2026-09-14 (agent/review-verify-2, d777063e)",
     "triage_overturned": true,
-    "was_partial": false
+    "was_partial": true
   },
   "3.7-07": {
     "disposition": "ALREADY_FIXED",
@@ -802,9 +802,9 @@
     "was_partial": false
   },
   "3.9-07": {
-    "disposition": "CONFIRMED_FIX_REQUIRED",
-    "rationale": "OVERTURNED. Tenant isolation. The deferral reasoned platform-owner-only, which ignores both the tenant switcher and the operator-visibility restriction — the same defect class debugAuthz's own comment says was closed for ClickHouse.",
-    "source": "triage re-check 2026-09-12",
+    "disposition": "ALREADY_FIXED",
+    "rationale": "VERIFIED_FIXED on re-check 2026-09-14: pipedebug passive/Victoria reads carry a derived MetricsScope folded from the tenant switcher and the operator-visibility restriction, and refuse an underived boundary; TestPassiveVictoriaStageCarriesTheCallersMetricBoundary and TestDebugAuthzCarriesTheMetricsBoundary fail under mutation. OpenSearch and ClickHouse stages scoped the same way.",
+    "source": "re-verification 2026-09-14 (agent/review-verify-2, d777063e)",
     "triage_overturned": true,
     "was_partial": false
   },
@@ -815,11 +815,11 @@
     "was_partial": false
   },
   "3.9-09": {
-    "disposition": "CONFIRMED_FIX_REQUIRED",
-    "rationale": "OVERTURNED. The written justification — a digest is re-sent next window — is false for a warning that cleared inside the failed window.",
-    "source": "triage re-check 2026-09-12",
+    "disposition": "ALREADY_FIXED",
+    "rationale": "PARTIALLY_FIXED then closed 2026-09-14: a failed digest delivery restored its content (held under mutation), but enqueueHost's queue-full branch dropped the composed digest without onFail — a warning that fired and cleared inside that window was re-sent by nobody. Both non-delivery exits now run onFail; red-before TestADigestTheQueueRefusedKeepsItsContent.",
+    "source": "re-verification 2026-09-14 (agent/review-verify-2, d777063e)",
     "triage_overturned": true,
-    "was_partial": false
+    "was_partial": true
   },
   "3.9-10": {
     "disposition": "ALREADY_FIXED",
@@ -846,11 +846,11 @@
     "was_partial": false
   },
   "3.9-14": {
-    "disposition": "CONFIRMED_FIX_REQUIRED",
-    "rationale": "OVERTURNED. Input validation at a trust boundary: the 401 and 413 the code decides never reach the caller.",
-    "source": "triage re-check 2026-09-12",
+    "disposition": "ALREADY_FIXED",
+    "rationale": "PARTIALLY_FIXED then closed 2026-09-14: byte-wise bearer compare and the Content-Length helper held under mutation, but the finding's third clause — a response before the blanket except — was never done, so any other raise still closed the connection with no status. _answer_500 on do_GET/do_POST when no response was begun; red-before against the real threaded sidecar.",
+    "source": "re-verification 2026-09-14 (agent/review-verify-2, d777063e)",
     "triage_overturned": true,
-    "was_partial": false
+    "was_partial": true
   },
   "C1": {
     "disposition": "ALREADY_FIXED",
