@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//
+// Copyright 2026 Correlix
+
 // Presentation contract for the embedded wizard page. The UI is a single
 // hand-written file with no build step and no framework, so the things that
 // silently break it — a type size below the NOC-admin floor, an asset that
