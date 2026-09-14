@@ -32,6 +32,7 @@ Run:  python3 -m pytest tests/test_install_data_dirs.py -v
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import stat
@@ -468,13 +469,38 @@ def test_bundle_load_precedes_the_chown_dependent_steps():
     assert load < dirs, "load_bundle must precede ensure_data_dirs"
 
 
-# ── (g) postgres first-boot race: provisioning must retry through it ────────
+# ── (g) postgres first-boot race: readiness and provisioning must ride it ───
 # Fresh-install acceptance, 2026-09-06. The official postgres entrypoint runs
 # initdb, starts a TEMPORARY server on the unix socket for its init scripts,
 # shuts that down, and only then starts the real one. `pg_isready` answers
 # "ready" against the temporary server, so the very next psql landed in the
 # shutdown window and the whole install died on
 # "FATAL: the database system is shutting down".
+#
+# 2026-09-14, .123 lab box, GUI wizard, first Install attempt: it happened
+# AGAIN, in its most common form —
+#   psql: error: connection to server on socket
+#   "/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory
+# — and the retry loop spent ZERO retries on it, because the transient
+# classifier spelled that case `No such file or directory.*PGSQL` while psql
+# prints the socket path FIRST. Reproduced against a throwaway
+# postgres:16-alpine container: every probe for the first ~16s of a first boot
+# fails with exactly that text. The tests below pin both halves of the fix:
+# the classifier, and a readiness signal that is a real query on the real
+# server rather than pg_isready.
+
+#: The verbatim first-boot error from the .123 lab install (2026-09-14) and
+#: from the local postgres:16-alpine reproduction.
+LAB_SOCKET_ERROR = (
+    'psql: error: connection to server on socket '
+    '"/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory\n'
+    '\tIs the server running locally and accepting connections on that socket?')
+
+#: A genuine error waiting cannot fix.
+REAL_SQL_ERROR = (
+    'psql: error: connection to server at "127.0.0.1", port 5432 failed: '
+    'FATAL:  password authentication failed for user "netops_app"')
+
 
 class FakeRotation:
     """Stands in for the secret_rotation module's provision_app_state_role."""
@@ -488,16 +514,173 @@ class FakeRotation:
         return self.results[min(self.calls - 1, len(self.results) - 1)]
 
 
-def _provision(sr, tmp_path, **kw):
-    slept: list[float] = []
+class FakeRunner:
+    """Stands in for `docker compose exec -T <service> …`.
+
+    `script` is a list of (returncode, stdout, stderr); the last entry repeats,
+    so "fails forever" and "fails N times then succeeds" are both one line.
+    """
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.calls: list[list[str]] = []
+
+    def exec(self, service, argv, stdin="", timeout=60):
+        self.calls.append(list(argv))
+        rc, out, err = self.script[min(len(self.calls) - 1, len(self.script) - 1)]
+        return install._rotation_module().ExecResult(rc, out, err)
+
+
+SOCKET_FAIL = (2, "", LAB_SOCKET_ERROR)
+QUERY_OK = (0, "1\n", "")
+
+
+class FakeClock:
+    """Monotonic time the test advances — only through sleep()."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+        self.slept: list[float] = []
+
+    def now(self) -> float:
+        return self.t
+
+    def sleep(self, d: float) -> None:
+        self.slept.append(d)
+        self.t += d
+
+
+# -- the classifier itself ---------------------------------------------------
+
+@pytest.mark.parametrize("transient", [
+    LAB_SOCKET_ERROR,
+    "psql: error: FATAL:  the database system is shutting down",
+    "psql: error: FATAL:  the database system is starting up",
+    ('connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" '
+     "failed: Connection refused"),
+    'connection to server at "127.0.0.1", port 5432 failed: Connection refused',
+    "server closed the connection unexpectedly",
+    'service "postgres" is not running',
+])
+def test_connection_class_errors_are_transient(transient):
+    assert install._pg_transient(transient), (
+        f"{transient!r} is a connection failure — it must be retried, not fatal")
+
+
+@pytest.mark.parametrize("fatal", [
+    REAL_SQL_ERROR,
+    'ERROR:  syntax error at or near "CREAT"',
+    'FATAL:  database "netops" does not exist',
+    'ERROR:  permission denied for schema public',
+])
+def test_real_errors_are_never_classified_transient(fatal):
+    assert not install._pg_transient(fatal), (
+        f"{fatal!r} cannot be fixed by waiting — it must surface immediately")
+
+
+# -- wait_for_postgres: a real query on the real server ----------------------
+
+def test_readiness_waits_through_the_socket_window_then_succeeds():
+    """(a) the lab failure: N socket errors, then the real server answers."""
+    clock = FakeClock()
+    runner = FakeRunner([SOCKET_FAIL] * 5 + [QUERY_OK])
+    ready, msg = install.wait_for_postgres(
+        runner, user="netops", db="netops", budget_s=180.0,
+        sleep=clock.sleep, now=clock.now)
+    assert ready, msg
+    assert "ready after" in msg
+    probes = [c for c in runner.calls if c[0] == "psql"]
+    assert len(probes) >= 7, "must probe past the window and confirm stability"
+    assert probes[0][-1] == "select 1", "readiness must be a REAL query"
+    assert clock.slept, "the waits must be logged/bounded, not a busy loop"
+
+
+def test_readiness_requires_two_successes_a_stable_interval_apart():
+    """The init server answers too — one success must never be enough."""
+    clock = FakeClock()
+    runner = FakeRunner([QUERY_OK] * 20)
+    ready, _msg = install.wait_for_postgres(
+        runner, user="netops", db="netops", budget_s=180.0, stable_s=2.0,
+        sleep=clock.sleep, now=clock.now)
+    assert ready
+    assert len(runner.calls) >= 2, "one answer is the init server's answer too"
+    assert clock.t >= 2.0, f"must observe the server for >= 2s, waited {clock.t}"
+
+
+def test_an_init_server_that_goes_away_does_not_count_as_ready():
+    """Answer, vanish (the init→real handover), answer twice → only then ready."""
+    clock = FakeClock()
+    runner = FakeRunner([QUERY_OK, SOCKET_FAIL, SOCKET_FAIL, QUERY_OK, QUERY_OK])
+    ready, msg = install.wait_for_postgres(
+        runner, user="netops", db="netops", budget_s=180.0, stable_s=2.0,
+        sleep=clock.sleep, now=clock.now)
+    assert ready, msg
+    assert len(runner.calls) >= 5, (
+        "the stability window must restart after the server drops, not carry "
+        "the init server's success forward")
+
+
+def test_readiness_surfaces_a_real_error_immediately():
+    """(b) a genuine SQL/auth error is never masked as 'not ready yet'."""
+    clock = FakeClock()
+    runner = FakeRunner([(2, "", REAL_SQL_ERROR)])
+    ready, msg = install.wait_for_postgres(
+        runner, user="netops", db="netops", budget_s=180.0,
+        sleep=clock.sleep, now=clock.now)
+    assert not ready
+    assert len(runner.calls) == 1, "a real error must not be retried"
+    assert "password authentication failed" in msg
+    assert clock.slept == []
+
+
+def test_readiness_is_bounded_and_reports_the_elapsed_time():
+    """(c) a postgres that never boots fails after the budget, loudly."""
+    clock = FakeClock()
+    runner = FakeRunner([SOCKET_FAIL])
+    ready, msg = install.wait_for_postgres(
+        runner, user="netops", db="netops", budget_s=30.0,
+        sleep=clock.sleep, now=clock.now)
+    assert not ready
+    assert "did not become ready within 30s" in msg
+    assert "elapsed" in msg and "No such file or directory" in msg
+    assert clock.t >= 30.0 and len(runner.calls) < 200, "bounded, not a spin"
+
+
+def test_readiness_backoff_is_jittered_and_capped():
+    clock = FakeClock()
+    runner = FakeRunner([SOCKET_FAIL])
+    install.wait_for_postgres(runner, user="netops", db="netops", budget_s=120.0,
+                              sleep=clock.sleep, now=clock.now)
+    assert max(clock.slept) <= 10.0 * 1.25 + 0.01, "backoff must be capped"
+    assert len(set(clock.slept)) > 1, "backoff must carry jitter (§9)"
+
+
+def test_readiness_budget_is_env_tunable(monkeypatch):
+    monkeypatch.setenv(install.PG_READY_BUDGET_ENV, "42")
+    assert install._pg_ready_budget_s() == 42.0
+    monkeypatch.setenv(install.PG_READY_BUDGET_ENV, "not-a-number")
+    assert install._pg_ready_budget_s() == install.PG_READY_BUDGET_S
+    monkeypatch.setenv(install.PG_READY_BUDGET_ENV, "-5")
+    assert install._pg_ready_budget_s() == install.PG_READY_BUDGET_S
+    monkeypatch.delenv(install.PG_READY_BUDGET_ENV)
+    assert install._pg_ready_budget_s() == install.PG_READY_BUDGET_S
+
+
+# -- provisioning retry ------------------------------------------------------
+
+def _provision(sr, tmp_path, ready=None, clock=None, **kw):
+    clock = clock or FakeClock()
+    ready = ready or (lambda budget_s: (True, "ready after 0s"))
     ok, msg = install._provision_app_state_role_with_retry(
         sr, tmp_path, db_user="netops", db_name="netops",
         app_user="netops_app", app_password="pw",
-        sleep=slept.append, **kw)
-    return ok, msg, slept
+        runner=FakeRunner([QUERY_OK]), ready=ready,
+        sleep=clock.sleep, now=clock.now, **kw)
+    return ok, msg, clock.slept
 
 
 @pytest.mark.parametrize("transient", [
+    LAB_SOCKET_ERROR,
     "psql: error: FATAL:  the database system is shutting down",
     "psql: error: FATAL:  the database system is starting up",
     ('connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" '
@@ -512,10 +695,48 @@ def test_first_boot_states_are_retried_not_fatal(transient, tmp_path):
     assert slept and slept == sorted(slept), "retries must back off"
 
 
+def test_the_lab_failure_is_survived_and_reported(tmp_path, capsys):
+    """(a) end to end: the exact 2026-09-14 message, then success."""
+    sr = FakeRotation([(False, f"provisioning failed: {LAB_SOCKET_ERROR}")] * 3
+                      + [(True, "app-state role provisioned and verified")])
+    ok, msg, _slept = _provision(sr, tmp_path)
+    assert ok and sr.calls == 4
+    out = capsys.readouterr().out
+    assert "provisioned on attempt 4" in out, out
+    assert "budget" in out, "every wait must name the elapsed time (§16.1)"
+    assert "provisioned and verified" in msg
+
+
+def test_readiness_is_re_proved_before_every_retry(tmp_path):
+    """A retry must not be thrown at a socket that is still gone."""
+    seen: list[float] = []
+
+    def ready(budget_s):
+        seen.append(budget_s)
+        return (True, "ready after 1s")
+
+    sr = FakeRotation([(False, LAB_SOCKET_ERROR), (False, LAB_SOCKET_ERROR),
+                       (True, "created")])
+    ok, _msg, _slept = _provision(sr, tmp_path, ready=ready)
+    assert ok
+    assert len(seen) == 2, "readiness must be re-proved before each retry"
+    assert all(b > 0 for b in seen), "the re-check must get the REMAINING budget"
+
+
+def test_a_readiness_failure_during_retries_is_final(tmp_path):
+    """The readiness helper is itself bounded — its verdict is the last word."""
+    sr = FakeRotation([(False, LAB_SOCKET_ERROR)])
+    verdict = (False, "postgres did not become ready within 180s (40 probes)")
+    ok, msg, _slept = _provision(sr, tmp_path, ready=lambda budget_s: verdict)
+    assert not ok
+    assert "did not become ready" in msg
+    assert sr.calls == 1
+
+
 def test_a_real_error_is_not_retried(tmp_path):
     """A genuine failure must surface immediately — three minutes of retries
     on a bad password only delays the message the operator needs."""
-    sr = FakeRotation([(False, 'psql: FATAL:  password authentication failed for user "netops_app"')])
+    sr = FakeRotation([(False, f"provisioning failed: {REAL_SQL_ERROR}")])
     ok, msg, slept = _provision(sr, tmp_path)
     assert not ok
     assert sr.calls == 1, "a non-transient error must not be retried"
@@ -524,22 +745,13 @@ def test_a_real_error_is_not_retried(tmp_path):
 
 
 def test_retry_is_bounded(tmp_path):
-    """A postgres that never finishes booting must not hang the install."""
+    """(c) a postgres that never finishes booting must not hang the install."""
     sr = FakeRotation([(False, "FATAL:  the database system is starting up")])
-    clock = {"t": 0.0}
-    def fake_sleep(d):
-        clock["t"] += d
-    real = install.time.monotonic
-    install.time.monotonic = lambda: clock["t"]
-    try:
-        ok, msg = install._provision_app_state_role_with_retry(
-            sr, tmp_path, db_user="netops", db_name="netops",
-            app_user="netops_app", app_password="pw",
-            deadline_s=30.0, sleep=fake_sleep)
-    finally:
-        install.time.monotonic = real
+    clock = FakeClock()
+    ok, msg, _slept = _provision(sr, tmp_path, clock=clock, deadline_s=30.0)
     assert not ok
     assert "still transient after" in msg
+    assert clock.t >= 30.0, "the budget must actually be spent waiting"
     assert sr.calls < 100, "the retry loop must terminate, not spin"
 
 
@@ -547,6 +759,38 @@ def test_first_attempt_success_does_not_sleep(tmp_path):
     sr = FakeRotation([(True, "already present")])
     ok, _msg, slept = _provision(sr, tmp_path)
     assert ok and sr.calls == 1 and slept == []
+
+
+def test_no_call_site_judges_postgres_by_pg_isready():
+    """The regression guard: pg_isready answers for the entrypoint's temporary
+    init server, so it must never again be the signal a step keys on. Checked
+    over the AST, so the prose explaining that cannot satisfy the test."""
+    tree = ast.parse((SCRIPTS / "install.py").read_text())
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef)) and node.body:
+            first = node.body[0]
+            if (isinstance(first, ast.Expr)
+                    and isinstance(first.value, ast.Constant)
+                    and isinstance(first.value.value, str)):
+                docstrings.add(id(first.value))
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and "pg_isready" in node.value and id(node) not in docstrings):
+            raise AssertionError(
+                f"install.py line {node.lineno} runs pg_isready as a readiness "
+                f"signal — use wait_for_postgres()")
+
+
+def test_the_postgres_bootstraps_use_the_shared_readiness_helper():
+    src = (SCRIPTS / "install.py").read_text()
+    for func in ("def bootstrap_app_state_role(", "def bootstrap_keycloak_db("):
+        start = src.index(func)
+        body = src[start:src.index("\ndef ", start + 1)]
+        assert "wait_for_postgres(" in body, (
+            f"{func} talks to postgres right after a compose up — it must wait "
+            f"for it through the shared helper")
 
 
 # ── (h) data/tls/services must be the api's tree, never Docker's ────────────
