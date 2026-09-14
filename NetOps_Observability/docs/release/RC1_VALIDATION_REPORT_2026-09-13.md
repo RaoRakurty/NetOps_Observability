@@ -94,11 +94,14 @@ Four trust domains stay separate (tag → human; bundles → GPG; images → Cos
 protected main (Decision 5, applied 2026-09-13; 21 checks, strict, enforce_admins, tag ruleset)
   -> PR #5 (feat/observability-platform → main), branch tip 1fe6f618, gated 16/16 locally incl. Postgres leg
   -> FINAL_RC1_SHA: 78e82c54ff0e96847555c2e6f5c503e46cd02611   (PR #5 merged 2026-09-13 23:27 UTC as a two-parent merge commit; 31/31 checks green)
-  -> release-only gates on that SHA: release-gate.yml ALL 24 JOBS GREEN on main (incl. install.py --tls=yes two-phase boot,
-     Postgres integration, OCI compliance, licence gate, SBOM, Playwright, helm) — run 34789741432, 2026-09-14 00:14 UTC.
-     The `bundle` job (developer-mode CI bundle) got past the docs-portal defect and then FAILED fetching the busybox
-     aports packaging archive: gitlab.alpinelinux.org answers HTTP 418 to GitHub runners. Live-fetch dependency in the
-     release path (the 238 'obligation decays' class) — being fixed by retaining the archive in the repo mirror.
+  -> release-only gates on 78e82c54: release-gate.yml ALL 24 JOBS GREEN on main (incl. install.py --tls=yes two-phase
+     boot, Postgres integration, OCI compliance, licence gate, SBOM, Playwright, helm) — run 34789741432. The `bundle` job
+     failed there on a live gitlab fetch (HTTP 418) despite the archive being retained in the repo.
+  -> PR #6 (second pass: nine review findings closed class-wide, bundle mirroring uses the retained copies, gitleaks
+     fixture) merged under the same ruleset, 31/31 checks: main = 3c825dbb397243061b07ada996771505f1b66acb
+  -> on 3c825dbb: ALL six workflows GREEN incl. release-bundle (release-gate 24/24 AND the `bundle` job — the first green
+     CI-built customer bundle, developer mode / unsigned by design until CORRELIX_DIST_SIGNING_KEY exists).
+  -> FINAL_RC1_SHA (superseding 78e82c54): 3c825dbb397243061b07ada996771505f1b66acb — every engineering item is in it
   -> signed v0.9.0-rc1 tag: BLOCKER C (release owner)
 ```
 Lab: c7b08be7 deployed and QUALIFIED 12/12 (twice; the one load-shaped Q3 miss re-ran clean).
@@ -113,7 +116,12 @@ Genuinely unresolved blockers:
 3. **C** — the release owner's signed tag on FINAL_RC1_SHA (after the release-only gates).
 4. **D** — repository secret `CORRELIX_DIST_SIGNING_KEY` (the mechanism is built and fail-closed; the key is not).
 5. **F** — Primary and Backup Custodian names for the licence-signing ceremony (tracker 259).
-6. Customer bundle rebuild — blocked on an owner-run command this session may not execute
-   (`APK_REPO_SCHEME=http bash scripts/make-installer.sh`); frontend dist and docs portal already rebuilt.
+6. Customer bundle: the CI-built bundle on 3c825dbb is green and is a workflow artifact; the LOCAL dist/ rebuild on the lab box
+   still needs the owner-run `APK_REPO_SCHEME=http bash scripts/make-installer.sh` (a permission this session may not exercise).
 7. Two licence reviews unsigned (xz-libs 5.6.3-r1 C7; .python-rundeps C3) — `oci-compliance --release` refuses until
    they are corrected and signed or the components are removed.
+
+## Engineering status
+
+**DONE (2026-09-14 12:07 UTC)** — every engineering item is merged to `main` (3c825dbb) under the full ruleset with all
+workflows green; the only open items are the human ones listed above.
