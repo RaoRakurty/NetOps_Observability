@@ -61,11 +61,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"netops/backend/internal/jwks"
+	"netops/backend/internal/oidc"
 	"netops/backend/internal/ssoidp"
 	"netops/backend/internal/tenant"
 	"netops/backend/internal/token"
@@ -520,6 +522,71 @@ func TestGenericEntryCannotUseABoundConnection(t *testing.T) {
 	frag = h.roundTrip(t, "/api/auth/sso/login?idp=shared-idp", "/api/auth/sso/callback", "corpuser", nil)
 	if frag.Get("token") == "" {
 		t.Fatalf("the platform-realm button stopped working from the bare page: %q", frag.Get("sso_error"))
+	}
+}
+
+// THE SECOND PUBLIC DOOR ONTO THE SAME LIST (review 3.7-06, whole class).
+//
+// /api/auth/methods was narrowed above. /api/auth/sso/config is the OTHER
+// unauthenticated endpoint that answers "which SSO buttons exist", it is in the
+// same publicPaths list, and it returned oidcProvider().Providers() verbatim —
+// so the alias and display label of every customer's connection stayed one
+// anonymous GET away, and a caller reading that list still got handed buttons
+// whose tenant callback can only refuse it. Whatever the bare sign-in page may
+// see, both doors must agree on.
+func TestPublicSSOConfigHidesTenantBoundConnections(t *testing.T) {
+	h := newRealmHarness(t)
+
+	resp, body := getWith(t, h.f.srv, "/api/auth/sso/config")
+	if resp.StatusCode != 200 {
+		t.Fatalf("sso/config: %d %s", resp.StatusCode, body)
+	}
+	var got struct {
+		Enabled   bool                `json:"enabled"`
+		Providers []oidc.ProviderInfo `json:"providers"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode sso/config: %v (%s)", err, body)
+	}
+	if !got.Enabled {
+		t.Fatalf("sso must still report enabled on the bare page: %s", body)
+	}
+	ids := make([]string, 0, len(got.Providers))
+	for _, p := range got.Providers {
+		ids = append(ids, p.ID)
+	}
+	if len(ids) != 1 || ids[0] != "shared-idp" {
+		t.Fatalf("anonymous /api/auth/sso/config = %v, want the unbound platform-realm button only "+
+			"(a tenant-bound alias and its display label must not be enumerable, and its button cannot work here)", ids)
+	}
+	// Nothing about a customer travels in the body either — the display label is
+	// as identifying as the alias.
+	for _, leak := range []string{"acme-idp", "Acme SSO", "globex-idp", "Globex SSO", "globex-elev", "Globex Break Glass"} {
+		if strings.Contains(string(body), leak) {
+			t.Errorf("anonymous sso/config body carries %q: %s", leak, body)
+		}
+	}
+
+	// At the tenant's OWN sign-in URL the same door offers that tenant's button,
+	// so narrowing the bare page costs the customer nothing.
+	acme := locatorFor(t, h.f.srv, "/t/"+h.f.slugA)
+	resp, body = getWith(t, h.f.srv, "/api/auth/sso/config", acme)
+	if resp.StatusCode != 200 {
+		t.Fatalf("sso/config at the locator: %d %s", resp.StatusCode, body)
+	}
+	got.Providers = nil
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode sso/config: %v (%s)", err, body)
+	}
+	ids = ids[:0]
+	for _, p := range got.Providers {
+		ids = append(ids, p.ID)
+	}
+	if !slices.Contains(ids, "acme-idp") {
+		t.Fatalf("Acme's own sign-in URL must still offer acme-idp, got %v", ids)
+	}
+	if slices.Contains(ids, "globex-idp") || slices.Contains(ids, "globex-elev") {
+		t.Fatalf("Acme's sign-in URL offered another tenant's connection: %v", ids)
 	}
 }
 

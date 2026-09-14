@@ -57,6 +57,20 @@ func (f *fakePusher) Push(p notify.NtfyPush) error {
 	return err
 }
 
+// bodyContaining returns the body of the first push whose TITLE and BODY carry
+// the two substrings, or "". It reads the whole record rather than the signal
+// channel, so a push that arrived behind a backlog is still findable.
+func (f *fakePusher) bodyContaining(title, body string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, p := range f.got {
+		if strings.Contains(p.Title, title) && strings.Contains(p.Body, body) {
+			return p.Body
+		}
+	}
+	return ""
+}
+
 func (f *fakePusher) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

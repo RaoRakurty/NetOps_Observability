@@ -445,6 +445,87 @@ func TestAFailedDigestKeepsItsContentForTheNextWindow(t *testing.T) {
 	r.push.quiet(t)
 }
 
+// THE SAME LOSS, ONE STEP EARLIER: A DIGEST THE QUEUE REFUSED (review 3.9-09,
+// whole class).
+//
+// maybeFlushDigest drains the accumulator to COMPOSE the message and only then
+// hands the job to the async drain, so from that moment the window's warnings
+// exist nowhere else. The delivery-failure path hands them back (above). The
+// enqueue path had the same hole and no handback: a full queue — the wedged-ntfy
+// case the queue bound exists for, and the state a 429 storm actually produces —
+// logged "platform alert DROPPED" and destroyed the content, including the
+// fired-and-cleared warnings nobody will ever re-send.
+func TestADigestTheQueueRefusedKeepsItsContent(t *testing.T) {
+	p := newFakePusher()
+	p.gate = make(chan struct{}) // ntfy is wedged: nothing leaves, the queue fills
+	// Budget off (negative): this test measures the QUEUE bound, which has to be
+	// reached before the digest is composed. Cool-down at 1ns so every page post
+	// is accepted rather than deduped.
+	r := newHostRigWith(t, time.Nanosecond, p, func(d *Deps) {
+		d.PushBudget = -1
+		d.WarningDigestInterval = time.Minute
+	})
+
+	// 1. Wedge the drain and fill the queue with PAGE traffic (the warning tier
+	//    never touches the queue — it is digested).
+	var sb strings.Builder
+	sb.WriteString("[")
+	for i := 0; i < hostQueueSize+120; i++ {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fmt.Fprintf(&sb, `{"status":"firing","labels":{"alertname":"P%d","severity":"critical","layer":"stack","tier":"page"}}`, i)
+	}
+	sb.WriteString("]")
+	if w := r.post(t, sb.String(), bearer); w.Code != http.StatusOK {
+		t.Fatalf("page flood: status = %d", w.Code)
+	}
+	waitForMetric(t, r.mx, `netops_alert_webhook_push_failures_total{route="host_monitoring",reason="queue_full"}`)
+
+	// 2. A warning that fires and clears inside the window: the one class of
+	//    content nobody re-sends.
+	if w := r.post(t, warnJSON("VectorComponentErrors", "vector component errors observed", "firing"), bearer); w.Code != http.StatusOK {
+		t.Fatalf("firing post: status = %d", w.Code)
+	}
+	r.clock.advance(10 * time.Second)
+	if w := r.post(t, warnJSON("VectorComponentErrors", "vector component errors observed", "resolved"), bearer); w.Code != http.StatusOK {
+		t.Fatalf("resolved post: status = %d", w.Code)
+	}
+
+	// 3. Window one closes while the queue is still full: the digest is composed
+	//    and the enqueue refuses it.
+	dropsBefore := r.logs.countContaining("platform alert DROPPED")
+	r.clock.advance(2 * time.Minute)
+	r.tick(t)
+	if got := r.logs.countContaining("platform alert DROPPED") - dropsBefore; got == 0 {
+		t.Fatalf("the digest was not refused by the full queue, so this test is not exercising the drop path")
+	}
+
+	// 4. The wedge clears and the backlog drains.
+	close(p.gate)
+	waitForMetric(t, r.mx, `netops_alert_webhook_pushed_total{route="host_monitoring",tier="page"} `+
+		fmt.Sprint(hostQueueSize+1))
+
+	// 5. Window two: the refused digest's content must come back.
+	r.clock.advance(2 * time.Minute)
+	r.tick(t)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if p.bodyContaining("[DIGEST]", "VectorComponentErrors") != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the digest the queue refused was lost: a warning that fired and cleared inside " +
+				"that window is re-sent by nobody, so the operator never learns it happened")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	body := p.bodyContaining("[DIGEST]", "VectorComponentErrors")
+	if !strings.Contains(strings.ToUpper(body), "RESOLVED") {
+		t.Errorf("the restored entry lost its resolved state: %q", body)
+	}
+}
+
 // ── the push budget ─────────────────────────────────────────────────────────
 
 // The reserve is the guarantee: warnings and digests stop at it, a page spends
