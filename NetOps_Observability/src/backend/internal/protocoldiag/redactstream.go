@@ -21,6 +21,10 @@ package protocoldiag
 // `RedactOutput(readAll(r))` — a test asserts that on the package's own corpus,
 // because two redactors that could disagree would be worse than one.
 //
+// The identity holds at the END of the stream as well as inside it: output that
+// ends with a newline keeps it, and output that stops mid-line does not gain one
+// (see Close).
+//
 // FAIL CLOSED. A line longer than maxRedactLineBytes cannot be held forever, so
 // it is flushed in pieces — but a piece is emitted only AFTER the rules have run
 // over it, and a PEM body is never emitted at all. An unterminated PEM block at
@@ -122,13 +126,31 @@ func (rw *RedactingWriter) Write(p []byte) (int, error) {
 }
 
 // Close flushes the trailing partial line and releases the writer.
+//
+// A STREAM THAT ENDED EXACTLY AT A NEWLINE still has one line to emit, and it is
+// the empty one after that newline. The buffered pass has it too —
+// strings.Split("a\n", "\n") is ["a", ""], so the join puts the separator back —
+// and device output essentially always ends this way, so dropping it made every
+// streamed spill file one byte shorter than the same output rendered in memory,
+// contradicting this file's byte-identity claim (review 3.5-15, the half the
+// first fix did not cover). It goes through emit like any other line, which is
+// what keeps the PEM cases right: inside an unterminated key block that final
+// line is dropped with the rest of the body, exactly as redactText drops it.
+//
+// pendingSep is the discriminator, and it is precise: it is true only after a
+// COMPLETE line, false before the first one and false after a partial flush of
+// an over-long line (whose logical line never ended, so the buffered pass has no
+// empty element for it either).
 func (rw *RedactingWriter) Close() error {
 	if rw.closed {
 		return nil
 	}
 	rw.closed = true
 	if rw.line.Len() == 0 {
-		return nil
+		if !rw.pendingSep {
+			return nil
+		}
+		return rw.emit("", true)
 	}
 	err := rw.emit(rw.line.String(), true)
 	rw.line.Reset()

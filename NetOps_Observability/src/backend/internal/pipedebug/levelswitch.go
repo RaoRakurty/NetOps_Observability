@@ -34,6 +34,15 @@ type LevelSwitch struct {
 	current  Level
 	revertAt time.Time
 	pending  stopper
+	// gen identifies the CURRENT raise. Stop() reports false for a timer that
+	// has already fired, and that callback is then waiting on mu for whoever is
+	// replacing it: without a generation to check, it reverted the raise that
+	// replaced it while the API had already answered "raised until T+window"
+	// (review 3.5-16, the same defect as internal/parsetrace's). Every Set bumps
+	// it, so a callback from an older generation is a no-op rather than a silent
+	// revert. A failed revert's RETRY keeps its own generation, because it is
+	// still that raise's revert.
+	gen uint64
 }
 
 // stopper is the small part of *time.Timer this type needs.
@@ -70,11 +79,13 @@ func (s *LevelSwitch) Set(level Level, window time.Duration) LevelChange {
 	}
 	s.current = level
 	s.cancelPendingLocked()
+	s.gen++
+	gen := s.gen
 
 	if level == LevelDebug {
 		w := ClampWindow(window)
 		s.revertAt = s.now().Add(w)
-		s.pending = s.afterFunc(w, s.revert)
+		s.pending = s.afterFunc(w, func() { s.revert(gen) })
 		change.RevertAt = s.revertAt
 		change.Reason = "auto-reverts to info at the stamped time even if the caller dies"
 	} else {
@@ -84,10 +95,16 @@ func (s *LevelSwitch) Set(level Level, window time.Duration) LevelChange {
 	return change
 }
 
-// revert is the timer callback: back to info, unconditionally.
-func (s *LevelSwitch) revert() {
+// revert is the timer callback: back to info — for the raise that armed it and
+// no other. A timer that had already fired when Set called Stop() arrives here
+// holding an older generation and must leave the live raise alone, or it reverts
+// a window the API has already reported as armed (review 3.5-16).
+func (s *LevelSwitch) revert(gen uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.gen != gen {
+		return
+	}
 	if s.current == LevelInfo {
 		return
 	}
@@ -96,7 +113,7 @@ func (s *LevelSwitch) revert() {
 	// debug, and the next Set retries.
 	if err := s.apply(LevelInfo); err != nil {
 		s.revertAt = s.now().Add(time.Minute)
-		s.pending = s.afterFunc(time.Minute, s.revert)
+		s.pending = s.afterFunc(time.Minute, func() { s.revert(gen) })
 		return
 	}
 	s.current = LevelInfo

@@ -25,6 +25,13 @@ import (
 	"time"
 )
 
+// RejectionReader is the part of a Ring /metrics needs: how many lines it has
+// refused because their marker was never minted here (review 3.3-13). A nil
+// reader still exports zero — see the note above on absence versus zero.
+type RejectionReader interface {
+	Rejected() uint64
+}
+
 // LevelReader is the part of a LevelSwitch /metrics needs.
 type LevelReader interface {
 	Current() Level
@@ -39,14 +46,19 @@ const (
 	MetricLevelRevertAt = "netops_debug_level_revert_at_seconds"
 	MetricParseActive   = "netops_debug_parse_marker_active"
 	MetricParseRevertAt = "netops_debug_parse_marker_revert_at_seconds"
+	// MetricRingRejected counts debug-ring lines refused because their marker
+	// was never minted by this process — the one signal that something on the
+	// wire is carrying trace markers (ring.go's admission note, review 3.3-13).
+	MetricRingRejected = "netops_debug_ring_rejected_total"
 )
 
-// RenderMetrics writes the four gauges in Prometheus text format.
+// RenderMetrics writes the debugger's gauges and its one counter in Prometheus
+// text format.
 //
 // `levels` is keyed by module so a future runtime-switchable module joins the
 // export by being added to the map — the watchdog's `max()` over the series
 // picks it up with no change on either side.
-func RenderMetrics(levels map[Module]LevelReader, parse ParseSwitch) string {
+func RenderMetrics(levels map[Module]LevelReader, parse ParseSwitch, ring RejectionReader) string {
 	var b strings.Builder
 	b.WriteString("# HELP " + MetricLevelActive + " 1 when the pipeline debugger has a module's runtime log level raised to debug, 0 when it is at its shipped level. Always exported, so an absent series means this build has no debugger rather than nothing being raised.\n")
 	b.WriteString("# TYPE " + MetricLevelActive + " gauge\n")
@@ -87,5 +99,16 @@ func RenderMetrics(levels map[Module]LevelReader, parse ParseSwitch) string {
 	b.WriteString("# HELP " + MetricParseRevertAt + " Unix time at which the armed parser decision-trace filter auto-disarms; 0 when it is not armed.\n")
 	b.WriteString("# TYPE " + MetricParseRevertAt + " gauge\n")
 	fmt.Fprintf(&b, "%s %d\n", MetricParseRevertAt, until)
+
+	// The ring's refusals. Exported even when nothing has been refused, for the
+	// same reason as the gauges: zero and "this build cannot tell you" must not
+	// look alike.
+	var refused uint64
+	if ring != nil {
+		refused = ring.Rejected()
+	}
+	b.WriteString("# HELP " + MetricRingRejected + " Debug-ring lines refused because their `cx_debug` marker was not minted by this process. Non-zero means something reaching a collector port is carrying trace markers of its own; the lines were never retained.\n")
+	b.WriteString("# TYPE " + MetricRingRejected + " counter\n")
+	fmt.Fprintf(&b, "%s %d\n", MetricRingRejected, refused)
 	return b.String()
 }
