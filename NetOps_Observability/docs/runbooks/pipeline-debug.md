@@ -289,6 +289,24 @@ timer reverts on its own, and
 `PUT /api/debug/loglevel {"module":"…","level":"info"}` (platform admin) forces
 it down now.
 
+One more series is exported beside those four, and the watchdog does **not** read
+it — it is for whoever is looking at a trace:
+
+| series | meaning |
+|---|---|
+| `netops_debug_ring_rejected_total` | debug-ring lines refused because their `cx_debug` marker was not minted by this api |
+
+The api keeps trace lines only under markers it minted itself, because the
+records reaching the parse hook are not all authenticated — an SNMP trap only
+loses device attribution on a community mismatch, it is still parsed — so
+otherwise anyone who could reach a collector port could push an operator's
+in-flight trace out of a bounded ring (review 3.3-13). A **non-zero and rising**
+counter therefore means something on the wire is carrying `cx_debug` markers of
+its own: no trace evidence was lost, and nothing was retained, but a record
+source is minting marker tokens and is worth finding. A trace whose `parser.log`
+looks thin is NOT explained by this counter — refused lines were never part of
+that trace.
+
 ---
 
 ## 7. Enabling the Kafka peek and the correlation log level
