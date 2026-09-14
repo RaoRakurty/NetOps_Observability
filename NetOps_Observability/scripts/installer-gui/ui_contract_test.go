@@ -188,6 +188,8 @@ func TestWizardKeepsTheOldJargonOut(t *testing.T) {
 		"AUTO",           // the uppercase sizing chip
 		"Watchdog installed",
 		"Show technical log",
+		"PostgreSQL (default)",      // the store picker -> "PostgreSQL database · recommended"
+		"Files (for compatibility)", //                  -> "File-based · labs and older installs"
 	} {
 		if strings.Contains(scan, phrase) {
 			t.Errorf("ui.html still says %q — plain words lead, with the technical "+
@@ -283,6 +285,41 @@ func TestWizardColoursTheVerdictWord(t *testing.T) {
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("the script is missing %q — that list shows no verdict word", want)
+		}
+	}
+}
+
+// TestWizardNamesTheRecordStoreInPlainWords pins the store picker's wording
+// (owner, 2026-09-14). The two phrases are what the operator reads on the
+// Security step AND on the Review step's "Records" row — the pair must stay in
+// step, since a Review page that describes a different choice than the one the
+// picker offered is how a wrong STORE_BACKEND gets confirmed. The option
+// VALUES are the contract with the installer (they become STORE_BACKEND), so
+// they are pinned here too and must not follow the label.
+func TestWizardNamesTheRecordStoreInPlainWords(t *testing.T) {
+	_, markup, script := uiParts(t)
+
+	const (
+		pg   = "PostgreSQL database \u00b7 recommended"
+		file = "File-based \u00b7 labs and older installs"
+	)
+	for _, want := range []string{
+		`<option value="postgres" selected>` + pg + `</option>`,
+		`<option value="file">` + file + `</option>`,
+	} {
+		if !strings.Contains(markup, want) {
+			t.Errorf("the store picker is missing %q", want)
+		}
+	}
+	// The field keeps its plain-language label.
+	if !strings.Contains(markup, "Where Correlix keeps its own records") {
+		t.Error("the store field lost its plain-language label")
+	}
+	// buildReview() repeats the operator's choice in the same words.
+	for _, want := range []string{pg, file} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the Review step never says %q — its Records row has drifted "+
+				"from the words the picker offered", want)
 		}
 	}
 }

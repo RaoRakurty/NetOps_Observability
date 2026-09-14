@@ -531,8 +531,8 @@
         <div class="field">
           <label for="store">Where Correlix keeps its own records</label>
           <select id="store">
-            <option value="postgres" selected>PostgreSQL (default)</option>
-            <option value="file">Files (for compatibility)</option>
+            <option value="postgres" selected>PostgreSQL database · recommended</option>
+            <option value="file">File-based · labs and older installs</option>
           </select>
           <span class="hint">PostgreSQL keeps each tenant&rsquo;s data separated in the database itself.</span>
         </div>
@@ -1004,7 +1004,7 @@ function buildReview() {
     '<dt>Size</dt><dd>'+esc(p.sizing.profile)+(facts&&facts.sizing&&p.sizing.profile==='auto'?' → '+esc(facts.sizing.suggested_profile):'')+'</dd>'+
     '<dt>Traffic</dt><dd>'+(p.tls==='yes'?'Encrypted (all services)':'Plain HTTP (lab only)')+'</dd>'+
     '<dt>Administrator</dt><dd>'+esc(p.admin_user)+' <span class="hint">password generated on this server, shown once</span></dd>'+
-    '<dt>Records</dt><dd>'+(p.store_backend==='postgres'?'PostgreSQL (default)':'Files (for compatibility)')+'</dd>'+
+    '<dt>Records</dt><dd>'+(p.store_backend==='postgres'?'PostgreSQL database · recommended':'File-based · labs and older installs')+'</dd>'+
     '<dt>Sign-in address</dt><dd>'+esc($('mgmt-url').textContent)+'</dd>'+
     '<dt>Installed from</dt><dd>'+esc($('m-bundle').textContent)+'</dd>';
 }
