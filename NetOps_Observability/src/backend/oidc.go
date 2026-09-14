@@ -16,6 +16,7 @@ import (
 	"netops/backend/internal/elevation"
 	"netops/backend/internal/jwks"
 	"netops/backend/internal/oidc"
+	"netops/backend/internal/tenantlocator"
 	"netops/backend/internal/users"
 )
 
@@ -39,13 +40,33 @@ import (
 // line of SAML in Go. See docs/IDENTITY_ACCESS.md.
 
 // ssoProviderInfo describes a sign-in button for the UI / login page.
-func (s *server) handleSSOConfig(w http.ResponseWriter, _ *http.Request) {
+//
+// handleSSOConfig: GET /api/auth/sso/config (PUBLIC — publicPaths). The second
+// unauthenticated door onto the button list, beside /api/auth/methods, and it is
+// filtered by the SAME realm rule (review 3.7-06): the caller sees the
+// connections its locator candidate reaches, and with no locator only the
+// PLATFORM realm. The reasoning — why a tenant-bound button on the bare page is
+// a dead end, and why its alias and display label are not an anonymous caller's
+// to read — is written out once on handleAuthMethods; the two doors must not
+// disagree, or narrowing one of them means nothing.
+func (s *server) handleSSOConfig(w http.ResponseWriter, r *http.Request) {
 	p := s.oidcProvider()
 	if !p.Ready() {
 		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "providers": []ssoProviderInfo{}})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "providers": p.Providers()})
+	var cand *tenantlocator.Candidate
+	if c, ok := s.locatorCandidate(r); ok {
+		cand = &c
+	}
+	all := p.Providers()
+	shown := make([]ssoProviderInfo, 0, len(all))
+	for _, pi := range all {
+		if s.providerVisible(cand, pi.ID) {
+			shown = append(shown, pi)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "providers": shown})
 }
 
 const ssoStateCookie = "netops_sso_state"
