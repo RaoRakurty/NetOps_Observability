@@ -195,3 +195,94 @@ func TestWizardKeepsTheOldJargonOut(t *testing.T) {
 		}
 	}
 }
+
+// TestWizardBlinksRowsThatJustPassed: a check that has just reached PASS blinks
+// green on the left and its verdict word turns green (owner, 2026-09-14,
+// watching the Prepare step). The animation is one-shot and bound to a class
+// the renderer adds only on the transition into PASS — a plain re-render of a
+// list must not set the whole page flashing, which is what this pins.
+func TestWizardBlinksRowsThatJustPassed(t *testing.T) {
+	page, _, script := uiParts(t)
+	css := dataURIRE.ReplaceAllString(page, "DATA")
+
+	for _, want := range []string{
+		"@keyframes cxpass",
+		"rgba(15,157,110,0.55)", // the green ring the blink expands
+		".s.ok.just{animation:cxpass",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("ui.html is missing %q — a row that just passed must blink green", want)
+		}
+	}
+	if !strings.Contains(css, "@media (prefers-reduced-motion:reduce){.s.ok.just{animation:none}}") {
+		t.Error("the PASS blink must stop for prefers-reduced-motion, leaving a static green dot")
+	}
+	// The blink is one-shot: the class goes on at the transition and comes off
+	// again on animationend, so a re-render cannot re-blink a settled row.
+	for _, want := range []string{
+		"classList.add('just')",
+		"animationend",
+		"classList.remove('just')",
+		"{once: true}",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the script is missing %q — the PASS blink would not be one-shot", want)
+		}
+	}
+	// ...and it only fires on a real transition, which is what passSeen records.
+	for _, want := range []string{"passSeen", "function blinkNewPasses(", "passSeen.get(key) !== true"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the script is missing %q — every re-render would blink every passing row", want)
+		}
+	}
+	// Both lists the owner watches feed the blink.
+	for _, list := range []string{"blinkNewPasses($('check-items'))", "blinkNewPasses($('prep-items'))"} {
+		if !strings.Contains(script, list) {
+			t.Errorf("%s is missing — that list's PASS rows would never blink", list)
+		}
+	}
+	// While the sudo work runs the same rows keep the indigo pulse, and they
+	// flip to PASS afterwards rather than being replaced by a summary line.
+	for _, want := range []string{"renderPrepItems(working, 'run')", "renderPrepItems(working, 'ok')"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the Prepare step is missing %q — the operator never sees the rows flip to PASS", want)
+		}
+	}
+}
+
+// TestWizardColoursTheVerdictWord: PASS reads green, FIX amber, a failure red —
+// via a class, so the colour lives in the stylesheet and the renderer only
+// names the state. Grepped in BOTH halves of the file: a class defined in the
+// CSS that no renderer emits (or the reverse) is the silent failure here.
+func TestWizardColoursTheVerdictWord(t *testing.T) {
+	page, _, script := uiParts(t)
+	css := dataURIRE.ReplaceAllString(page, "DATA")
+
+	for _, decl := range []string{
+		".f small.st-ok{color:var(--ok);font-weight:600}",
+		".f small.st-warn{color:var(--warn);font-weight:600}",
+		".f small.st-bad{color:var(--bad);font-weight:600}",
+	} {
+		if !strings.Contains(css, decl) {
+			t.Errorf("the stylesheet is missing %q — the verdict word would stay muted grey", decl)
+		}
+	}
+	// The tokens those classes resolve to are the owner's colours.
+	for _, token := range []string{"--ok:#0f9d6e", "--warn:#b45309", "--bad:#dc2626"} {
+		if !strings.Contains(css, token) {
+			t.Errorf("the palette no longer defines %q — the verdict colours would drift", token)
+		}
+	}
+	// The renderer emits the class by state, and both lists ask for it.
+	if !strings.Contains(script, `' class="st-'+st+'"'`) {
+		t.Error("fact() no longer emits the st-<state> class — the verdict word cannot be coloured")
+	}
+	for _, want := range []string{
+		`i.ok?'PASS':'FIX', true`,                // the readiness / preparation list
+		`{ok:'PASS', run:'working', warn:'FIX'}`, // the Prepare list
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the script is missing %q — that list shows no verdict word", want)
+		}
+	}
+}
