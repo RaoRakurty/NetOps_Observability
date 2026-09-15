@@ -303,7 +303,7 @@ def _timing_finish(status: str) -> None:
 _PASSWORD_ALPHABET = string.ascii_letters + string.digits + "!@#%^&*-_=+"
 
 def generate_password(length: int = 24) -> str:
-    return "".join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(length))
+    return _no_leading_dash(_PASSWORD_ALPHABET, length)
 
 # Credentials that ride URL userinfo (https://user:pw@host — the SEC-010
 # vmauth family today) must NOT contain @ # % ^ & + =: Go's url.Parse rejects
@@ -313,8 +313,27 @@ def generate_password(length: int = 24) -> str:
 # at startup. URL-embedded credentials use this alphabet instead.
 _URLSAFE_PASSWORD_ALPHABET = string.ascii_letters + string.digits + "-_"
 
+# A generated secret must never START with "-". Several consumers hand the
+# value to a command-line parser as the argument AFTER an option — the
+# OpenSearch Dashboards image turns OPENSEARCH_PASSWORD into
+# `--opensearch.password <value>`, and a value beginning with "-" is read as
+# another option ("must have a value"), so the service crash-loops. With "-"
+# in a 64-character alphabet that was a ~1-in-64 chance per fresh install
+# (CI two-phase boot run 34911914843, 2026-09-15; reproduced locally). The
+# first character is drawn from letters and digits only — about 0.1 bits of
+# entropy for a 24-character secret.
+_LEADING_SAFE_ALPHABET = string.ascii_letters + string.digits
+
+
+def _no_leading_dash(alphabet: str, length: int) -> str:
+    if length <= 0:
+        return ""
+    return secrets.choice(_LEADING_SAFE_ALPHABET) + "".join(
+        secrets.choice(alphabet) for _ in range(length - 1))
+
+
 def generate_urlsafe_password(length: int = 24) -> str:
-    return "".join(secrets.choice(_URLSAFE_PASSWORD_ALPHABET) for _ in range(length))
+    return _no_leading_dash(_URLSAFE_PASSWORD_ALPHABET, length)
 
 def _git_sha(root: Path) -> str:
     """HEAD of the checkout, or "unknown".
@@ -827,6 +846,25 @@ def write_env(env_path: Path, port: int, *, force: bool,
                 f.write("\n# ---- Event bus (Apache Kafka) — appended by install.py migration ----\n")
                 f.write("\n".join(additions) + "\n")
             ok(f"migrated .env: added {', '.join(a.split('=')[0] for a in additions)}")
+            env = _parse_env(env_path)
+        # Heal (2026-09-15): an install minted before the leading-character fix
+        # can hold an OS_DASHBOARDS_PASSWORD that starts with "-", which the
+        # Dashboards image passes as `--opensearch.password <value>` and its
+        # parser reads as an option — the service crash-loops on every start.
+        # The password is bootstrap-applied (apply-security.sh re-hashes it
+        # from .env on each run; secret_rotation classes it FREE), so
+        # re-minting it here is safe and converges on the next compose up.
+        if (env.get("OS_DASHBOARDS_PASSWORD") or "").startswith("-"):
+            text = env_path.read_text()
+            healed, not_found = _rotation_module().substitute_env(
+                text, {"OS_DASHBOARDS_PASSWORD": generate_urlsafe_password(24)})
+            if "OS_DASHBOARDS_PASSWORD" in not_found:
+                fail("OS_DASHBOARDS_PASSWORD starts with '-' (OpenSearch "
+                     "Dashboards cannot start with it) and could not be "
+                     "re-minted in .env — set a new value by hand")
+            env_path.write_text(healed)
+            ok("re-minted OS_DASHBOARDS_PASSWORD: the old value began with "
+               "'-', which OpenSearch Dashboards reads as a command-line option")
             env = _parse_env(env_path)
         return env
 
@@ -2740,33 +2778,37 @@ def bootstrap_keycloak_db(compose_dir: Path, env: dict) -> None:
              "re-run, or create the database manually")
         return
     # Bounded readiness wait (the postgres container may still be starting on a
-    # first boot), then the existence probe. -tAc → bare "1" when the row exists.
-    probe = [
-        "docker", "compose", "exec", "-T", "postgres", "bash", "-lc",
-        (f"for i in $(seq 1 30); do pg_isready -q -U {user} && break; sleep 2; done; "
-         f"psql -U {user} -d postgres -tAc "
-         f"\"SELECT 1 FROM pg_database WHERE datname='{db}'\""),
-    ]
-    res = subprocess.run(probe, cwd=str(compose_dir), capture_output=True,
-                         text=True, timeout=120, check=False)
+    # first boot), then the existence probe. The wait is the SHARED helper — a
+    # real query against the real server, never pg_isready, which also answers
+    # for the entrypoint's temporary init server (2026-09-14 lab install).
+    runner = ComposeRunner(compose_dir)
+    rok, rmsg = wait_for_postgres(runner, user=user, db="postgres",
+                                  label="postgres (keycloak db check)")
+    if not rok:
+        warn(f"could not reach postgres to check for the {db} database "
+             f"(Keycloak will crash-loop until it exists): {rmsg}")
+        info(f"re-run install.py once postgres is healthy, or run: {manual}")
+        return
+    # -tAc → bare "1" when the row exists.
+    res = runner.exec("postgres", ["psql", "-v", "ON_ERROR_STOP=1", "-U", user,
+                                   "-d", "postgres", "-tAc",
+                                   f"SELECT 1 FROM pg_database WHERE datname='{db}'"],
+                      stdin="", timeout=60)
     if res.returncode != 0:
         warn(f"could not check for the {db} database (Keycloak will crash-loop "
-             f"until it exists): {res.stderr.strip()}")
+             f"until it exists): {(res.stderr or res.stdout).strip()}")
         info(f"re-run install.py once postgres is healthy, or run: {manual}")
         return
     if res.stdout.strip() == "1":
         ok(f"keycloak database '{db}' already exists")
         return
-    create = [
-        "docker", "compose", "exec", "-T", "postgres",
-        "psql", "-U", user, "-d", "postgres",
-        "-c", f'CREATE DATABASE "{db}" OWNER "{user}"',
-    ]
-    res = subprocess.run(create, cwd=str(compose_dir), capture_output=True,
-                         text=True, timeout=60, check=False)
+    res = runner.exec("postgres", ["psql", "-v", "ON_ERROR_STOP=1", "-U", user,
+                                   "-d", "postgres", "-c",
+                                   f'CREATE DATABASE "{db}" OWNER "{user}"'],
+                      stdin="", timeout=60)
     if res.returncode != 0:
         warn(f"creating the {db} database failed (Keycloak will crash-loop "
-             f"until it exists): {res.stderr.strip()}")
+             f"until it exists): {(res.stderr or res.stdout).strip()}")
         info(f"create it manually: {manual}")
         return
     ok(f"keycloak database '{db}' created (owner {user})")
@@ -2796,54 +2838,263 @@ def _split_app_dsn(dsn: str) -> tuple[str, str, str, str]:
 # Postgres first-boot states that are NOT a failure, only "not yet". The
 # official entrypoint runs initdb, brings up a TEMPORARY server on the unix
 # socket to run its init scripts, SHUTS THAT DOWN, and only then starts the
-# real one. `pg_isready` answers "yes" against the temporary server, so a
-# readiness probe alone lands the very next psql in the shutdown window and
-# the install dies on "FATAL: the database system is shutting down" — which is
-# exactly what a fresh install did (fresh-install acceptance, 2026-09-06).
-# Retrying through the window is the fix (§9: bounded retry with backoff).
+# real one, so for the first ~10-30s of a fresh install every connection to
+# the container either finds no socket at all, is refused, or is dropped
+# mid-handshake.
+#
+# 2026-09-14, fresh install on the .123 lab box: this classifier MISSED the
+# most common form of that window and the install died on the first attempt —
+#
+#   psql: error: connection to server on socket
+#   "/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory
+#
+# because the old pattern spelled it `No such file or directory.*PGSQL`, and
+# psql (>= 14) prints the socket path BEFORE the errno text. Nothing matched,
+# the error was classified as fatal, and zero retries were spent on a
+# condition that cleared seconds later. Order-independent alternatives below,
+# each one a CONNECTION-class failure only: an authentication failure, a
+# missing database or a SQL error must still surface immediately (never mask a
+# real error as transient).
 _PG_TRANSIENT = re.compile(
     r"the database system is (shutting down|starting up|not yet accepting"
-    r" connections)|could not connect to server|Connection refused|"
-    r"No such file or directory.*PGSQL|server closed the connection unexpectedly",
+    r" connections|in recovery mode)"
+    r"|could not connect to server"
+    r"|connection to server (on socket|at) [^\n]*failed:\s*"
+    r"(no such file or directory|connection refused|network is unreachable"
+    r"|connection timed out|timeout expired|server closed)"
+    r"|connection refused"
+    r"|server closed the connection unexpectedly"
+    r"|terminating connection due to (administrator command"
+    r"|unexpected postmaster exit)"
+    r"|is not running|is restarting"
+    r"|timed out after \d+s",
     re.IGNORECASE)
+
+# …and the veto. psql reports an authentication or SQL failure in the SAME
+# "connection to server at … failed:" envelope as a refused connection, so the
+# pattern above alone would happily retry a wrong password for three minutes
+# and then report the socket window instead of the credential. Anything here
+# is a real error: it is returned to the operator on the first attempt.
+_PG_FATAL = re.compile(
+    r"password authentication failed|authentication failed for user"
+    r"|no pg_hba\.conf entry|role \".*\" does not exist"
+    r"|database \".*\" does not exist|permission denied"
+    r"|syntax error|does not exist|already exists",
+    re.IGNORECASE)
+
+
+def _pg_db_not_created_yet(message: str, db: str) -> bool:
+    """True when psql says the TARGET database does not exist — the state the
+    postgres entrypoint's init server is in before it creates POSTGRES_DB.
+    Readiness-only: provisioning keeps classifying this as a real error."""
+    if not db:
+        return False
+    return re.search(r'database "' + re.escape(db) + r'" does not exist',
+                     message or "", re.IGNORECASE) is not None
+
+
+def _pg_transient(message: str) -> bool:
+    """True only for a CONNECTION-class psql failure — one that can clear by
+    waiting. A real SQL/auth error is never masked as "not ready yet" (§16.1).
+    """
+    text = message or ""
+    if _PG_FATAL.search(text):
+        return False
+    return bool(_PG_TRANSIENT.search(text))
+
+
+# How long to wait for postgres to finish its first boot before giving up, and
+# how long it must keep answering before we believe it is the REAL server and
+# not the entrypoint's temporary init server. Env-tunable (§9: bounded, but a
+# slow disk must be survivable without editing the installer).
+PG_READY_BUDGET_S = 180.0
+PG_READY_STABLE_S = 2.0
+PG_READY_BUDGET_ENV = "CORRELIX_PG_READY_TIMEOUT"
+
+
+def _pg_ready_budget_s(default: float = PG_READY_BUDGET_S) -> float:
+    """The readiness budget in seconds, from CORRELIX_PG_READY_TIMEOUT."""
+    raw = (os.environ.get(PG_READY_BUDGET_ENV) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        warn(f"{PG_READY_BUDGET_ENV}={raw!r} is not a number — using the "
+             f"{default:.0f}s default")
+        return default
+    if value <= 0:
+        warn(f"{PG_READY_BUDGET_ENV}={raw!r} must be > 0 — using the "
+             f"{default:.0f}s default")
+        return default
+    return value
+
+
+def _jittered(delay: float) -> float:
+    """delay ±25% (§9: backoff WITH jitter). `secrets` not because this is a
+    security decision but because it is the RNG already imported here."""
+    return delay * (0.75 + (secrets.randbelow(501) / 1000.0))
+
+
+def wait_for_postgres(runner, *, user: str, db: str, service: str = "postgres",
+                      budget_s: float | None = None,
+                      stable_s: float = PG_READY_STABLE_S,
+                      sleep=time.sleep, now=time.monotonic,
+                      label: str = "postgres") -> tuple[bool, str]:
+    """Block until `service` answers a REAL query on the REAL server.
+
+    `pg_isready` is NOT the signal: it answers "yes" against the temporary
+    server the postgres entrypoint runs during initdb, and it answers about a
+    moment that has already passed by the time the next command runs. So this
+    runs the query the caller is about to depend on — `SELECT 1`, over the
+    container's local socket, as the superuser (trust auth inside the
+    container, no credential in argv) — and requires TWO successes at least
+    `stable_s` apart. The init server is torn down between them, so a pair of
+    spaced successes cannot come from it.
+
+    Bounded (§9/§16.3): the loop always ends, at the latest when the budget is
+    spent. Loud (§16.1): every wait is logged with the elapsed time, and the
+    failure carries the elapsed time, the probe count and the last error.
+
+    Returns (ready, message). A probe that fails for a reason that is NOT a
+    connection-class error (authentication, a missing database, a broken
+    server) returns False IMMEDIATELY: waiting three minutes cannot fix it,
+    and calling it "not ready yet" would hide the error the operator needs.
+    """
+    budget = _pg_ready_budget_s() if budget_s is None else budget_s
+    started = now()
+    probes, delay, first_ok = 0, 1.0, None
+    last = "no probe ran"
+    while True:
+        probes += 1
+        r = runner.exec(service, ["psql", "-v", "ON_ERROR_STOP=1", "-U", user,
+                                  "-d", db, "-Atc", "select 1"],
+                        stdin="", timeout=30)
+        if r.returncode == 0 and "1" in (r.stdout or "").split():
+            t = now()
+            if first_ok is None:
+                first_ok = t
+                info(f"{label}: answered a query after {t - started:.0f}s — "
+                     f"confirming it is the real server (the first-boot init "
+                     f"server answers too, then goes away)")
+            elif t - first_ok >= stable_s:
+                return True, (f"ready after {t - started:.0f}s "
+                              f"({probes} probes, answering for "
+                              f"{t - first_ok:.0f}s)")
+            wait = max(stable_s - (now() - first_ok), 0.5)
+            reason = "confirming the server stays up"
+        else:
+            detail = ((r.stderr or "") + " " + (r.stdout or "")).strip()
+            last = (detail.splitlines() or ["(no output)"])[0].strip()[:300]
+            # FIRST BOOT: the entrypoint's temporary server is up before it has
+            # run CREATE DATABASE for POSTGRES_DB, so a probe of the target
+            # database can be told it "does not exist" for a few seconds. That
+            # is a first-boot state, not a misconfiguration: wait it out inside
+            # the same bounded budget. Only the TARGET database is excused, and
+            # only here — once readiness is proven, the provisioning classifier
+            # still treats a missing database as a real error (§16.1). Found by
+            # the CI two-phase boot test (run 34909387288, 2026-09-14): second
+            # probe, `FATAL:  database "netops" does not exist`.
+            if _pg_db_not_created_yet(detail, db):
+                if first_ok is not None:
+                    warn(f"{label} stopped answering after it had answered — "
+                         f"that is the first-boot handover; the stability "
+                         f"wait restarts")
+                    first_ok = None
+                wait = _jittered(delay)
+                delay = min(delay * 2, 10.0)
+                reason = (f"database {db!r} not created yet (the first-boot "
+                          f"init server is still running)")
+                elapsed = now() - started
+                if elapsed >= budget:
+                    return False, (f"{label} did not create database {db!r} "
+                                   f"within {budget:.0f}s ({probes} probes, "
+                                   f"{elapsed:.0f}s elapsed); last error: "
+                                   f"{last}")
+                info(f"waiting for {label}: {reason} ({elapsed:.0f}s of a "
+                     f"{budget:.0f}s budget; next probe in {wait:.1f}s)")
+                sleep(wait)
+                continue
+            if not _pg_transient(detail):
+                return False, (f"{label} refused a probe with an error that is "
+                               f"not a connection failure — this will not clear "
+                               f"by waiting: {last}")
+            if first_ok is not None:
+                # It answered and then stopped: that IS the init→real handover.
+                warn(f"{label} stopped answering after it had answered — that "
+                     f"is the first-boot handover; the stability wait restarts")
+                first_ok = None
+            wait = _jittered(delay)
+            delay = min(delay * 2, 10.0)
+            reason = last
+        elapsed = now() - started
+        if elapsed >= budget:
+            return False, (f"{label} did not become ready within {budget:.0f}s "
+                           f"({probes} probes, {elapsed:.0f}s elapsed); last "
+                           f"error: {last}")
+        info(f"waiting for {label}: {reason} ({elapsed:.0f}s of a "
+             f"{budget:.0f}s budget; next probe in {wait:.1f}s)")
+        sleep(wait)
 
 
 def _provision_app_state_role_with_retry(sr, compose_dir: Path, *, db_user: str,
                                          db_name: str, app_user: str,
                                          app_password: str,
                                          deadline_s: float = 180.0,
-                                         sleep=time.sleep) -> tuple[bool, str]:
+                                         sleep=time.sleep, now=time.monotonic,
+                                         runner=None, ready=None
+                                         ) -> tuple[bool, str]:
     """provision_app_state_role, retried across the first-boot restart.
 
     Returns the LAST (ok, message) pair. A non-transient failure (bad
     credentials, a syntax error, a genuinely broken database) is returned
     immediately — retrying those would only delay a real error by three
     minutes. Bounded (§16.3): the loop always ends.
+
+    Before every RETRY the server is re-proved ready (`ready`, by default
+    `wait_for_postgres` with whatever is left of the budget), so an attempt is
+    never thrown at a socket that is still gone: the retry waits for the real
+    server rather than burning the budget on `psql` invocations.
     """
-    started = time.monotonic()
+    runner = ComposeRunner(compose_dir) if runner is None else runner
+    if ready is None:
+        def ready(budget_s: float) -> tuple[bool, str]:
+            return wait_for_postgres(runner, user=db_user, db=db_name,
+                                     budget_s=budget_s, sleep=sleep, now=now)
+    started = now()
     attempt, backoff, last = 0, 1.0, (False, "not attempted")
     while True:
         attempt += 1
         last = sr.provision_app_state_role(
-            ComposeRunner(compose_dir), db_user=db_user, db_name=db_name,
+            runner, db_user=db_user, db_name=db_name,
             app_user=app_user, app_password=app_password)
         if last[0]:
             if attempt > 1:
-                info(f"app-state role provisioned on attempt {attempt} "
-                     f"(postgres was still completing its first boot)")
+                info(f"app-state role provisioned on attempt {attempt} after "
+                     f"{now() - started:.0f}s (postgres was still completing "
+                     f"its first boot)")
             return last
-        if not _PG_TRANSIENT.search(last[1] or ""):
+        if not _pg_transient(last[1] or ""):
             return last                      # a real error: surface it now
-        if time.monotonic() - started >= deadline_s:
-            waited = int(time.monotonic() - started)
-            detail = (f"{last[1]} (still transient after {waited}s "
-                      f"and {attempt} attempts)")
-            return (False, detail)
-        if attempt == 1:
-            info("postgres is still completing its first boot — retrying the "
-                 "app-state role provisioning")
-        sleep(backoff)
+        elapsed = now() - started
+        if elapsed >= deadline_s:
+            return (False, (f"{last[1]} (still transient after {elapsed:.0f}s "
+                            f"and {attempt} attempts)"))
+        info(f"postgres is still completing its first boot ({last[1]}) — "
+             f"retrying the app-state role provisioning "
+             f"({elapsed:.0f}s of a {deadline_s:.0f}s budget)")
+        sleep(_jittered(backoff))
         backoff = min(backoff * 2, 10.0)
+        remaining = deadline_s - (now() - started)
+        if remaining <= 0:
+            waited = now() - started
+            return (False, (f"{last[1]} (still transient after {waited:.0f}s "
+                            f"and {attempt} attempts)"))
+        rok, rmsg = ready(remaining)
+        if not rok:
+            # Not "not ready yet" — the readiness helper is itself bounded and
+            # has already spent what was left, so this is the final word (§16.1).
+            return (False, rmsg)
 
 
 def bootstrap_app_state_role(compose_dir: Path, env: dict) -> None:
@@ -2901,20 +3152,27 @@ def bootstrap_app_state_role(compose_dir: Path, env: dict) -> None:
         fail("could not start the postgres service, so the app-state role cannot "
              "be provisioned: " + (detail[-1] if detail else "see the output above"))
         return
-    ready = subprocess.run(
-        ["docker", "compose", "exec", "-T", "postgres", "bash", "-lc",
-         f"for i in $(seq 1 45); do pg_isready -q -U {db_user} && exit 0; sleep 2; done; exit 1"],
-        cwd=str(compose_dir), capture_output=True, text=True, timeout=180, check=False)
-    if ready.returncode != 0:
-        fail("postgres did not become ready within 90s; the app-state role was "
-             "NOT provisioned and the api would fail to start. Check "
-             "`docker compose logs postgres` and re-run install.py.")
+    # Readiness is a REAL query on the REAL server, twice, seconds apart — not
+    # pg_isready, which answers for the entrypoint's temporary init server and
+    # for a moment that has already passed (see wait_for_postgres).
+    runner = ComposeRunner(compose_dir)
+    budget = _pg_ready_budget_s()
+    rok, rmsg = wait_for_postgres(runner, user=db_user, db=dbname,
+                                  budget_s=budget)
+    if not rok:
+        fail(f"postgres is not usable, so the app-state role was NOT "
+             f"provisioned and the api would fail to start: {rmsg}. Check "
+             f"`docker compose logs postgres` and re-run install.py "
+             f"(a slow disk can need a longer wait: "
+             f"{PG_READY_BUDGET_ENV}=600 python3 scripts/install.py).")
         return
+    info(f"postgres {rmsg}")
 
     sr = _rotation_module()
     done, msg = _provision_app_state_role_with_retry(
         sr, compose_dir, db_user=db_user, db_name=dbname,
-        app_user=app_user, app_password=app_pw)
+        app_user=app_user, app_password=app_pw, runner=runner,
+        deadline_s=budget)
     if not done:
         fail(f"the app-state role could not be provisioned: {msg}. The api needs "
              f"it to store registries (STORE_BACKEND=postgres) and will not "
