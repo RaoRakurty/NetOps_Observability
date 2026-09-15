@@ -103,7 +103,14 @@ def service_block(name: str) -> str:
 
 
 def seconds(value: str) -> int:
-    m = re.fullmatch(r"(\d+)(s|m)", value.strip())
+    # The host-profile budgets (FMEA §4.3) put these behind .env variables:
+    # `${STORE_STOP_GRACE:-120s}`. What must hold is the DEFAULT — the value a
+    # host without a profile (or an operator who never set it) runs with.
+    v = value.strip()
+    var = re.fullmatch(r"\$\{[A-Z_]+:-([^}]+)\}", v)
+    if var:
+        v = var.group(1)
+    m = re.fullmatch(r"(\d+)(s|m)", v)
     assert m, f"unparsed duration {value!r}"
     return int(m.group(1)) * (60 if m.group(2) == "m" else 1)
 
@@ -248,7 +255,7 @@ def test_phase_b_stops_the_stores_before_recreating_them():
     main_src = (SCRIPTS / "install.py").read_text()
     main_src = main_src[main_src.index("def main("):]
     first_up = main_src.index("compose_up(compose_dir")
-    stop = main_src.index("stop_stores_cleanly(compose_dir)")
+    stop = main_src.index("stop_stores_cleanly(compose_dir")
     second_up = main_src.index("compose_up(compose_dir", first_up + 1)
     assert first_up < stop < second_up
 
@@ -258,7 +265,7 @@ def test_phase_b_stops_the_stores_before_recreating_them():
 def test_keycloak_database_is_created_before_the_first_start():
     main_src = (SCRIPTS / "install.py").read_text()
     main_src = main_src[main_src.index("def main("):]
-    early = main_src.index("bootstrap_keycloak_db(compose_dir, _parse_env(env_path), start_postgres=True)")
+    early = main_src.index("bootstrap_keycloak_db(compose_dir, _parse_env(env_path), start_postgres=True")
     assert early < main_src.index("compose_up(compose_dir")
 
 

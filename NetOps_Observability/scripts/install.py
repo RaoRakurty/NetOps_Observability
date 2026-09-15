@@ -38,9 +38,11 @@ import argparse
 import base64
 import errno
 import fcntl
+import functools
 import hashlib
 import ipaddress
 import json
+import math
 import os
 import re
 import secrets
@@ -53,8 +55,10 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 # Compose profiles a default install activates (written to .env as
 # COMPOSE_PROFILES — the single source of truth; see compose_up). --core
@@ -2764,7 +2768,245 @@ def activate_tls_compose_file(compose_dir: Path, env_path: Path) -> None:
     ok("compose.tls.yml activated via COMPOSE_FILE")
 
 
-def wait_for_minted_certs(root: Path, timeout_s: int = 300) -> None:
+# ── host profile → wait budgets (FMEA 2026-09-15 §4.3, row 3) ───────────────
+#
+# Every fixed wait was too short on a slow disk: on .123 the install quit about
+# 25 s before postgres would have answered. install-correlix.sh's preflight
+# measures the host (scripts/host_profile.py) and writes data/.host-profile.json
+# with a speed class and a budget_factor; every installer wait is base × factor.
+# The profile is advisory: without a usable one the waits are the bases below,
+# which are exactly what the installer used before it existed. An explicit
+# setting always wins over the profile.
+
+HOST_PROFILE_PATH = Path("data") / ".host-profile.json"
+HOST_CLASSES = ("fast", "normal", "slow", "very-slow")
+BUDGET_FACTOR_MIN = 1.0
+BUDGET_FACTOR_MAX = 4.0
+_JSON_READ_LIMIT = 64 * 1024
+
+MINT_WAIT_BASE_S = 300
+ACL_APPLY_BASE_S = 900
+BUS_CONSUMERS_BASE_S = 420
+# Compose reads these two windows from .env (docker-compose.yml); its defaults
+# equal the bases here (pinned by tests/test_install_budgets.py).
+STORE_STOP_GRACE_ENV = "STORE_STOP_GRACE"
+STORE_STOP_GRACE_BASE_S = 120
+PG_START_PERIOD_ENV = "PG_START_PERIOD"
+PG_START_PERIOD_BASE_S = 300
+
+
+# NamedTuple, not @dataclass: several tests load install.py by file path without
+# registering it in sys.modules, and dataclasses resolves string annotations
+# through sys.modules[cls.__module__] (AttributeError at import there).
+class HostProfile(NamedTuple):
+    """What the preflight measured, reduced to what the waits need."""
+    host_class: str      # one of HOST_CLASSES, or "unknown"
+    factor: float        # within [BUDGET_FACTOR_MIN, BUDGET_FACTOR_MAX]
+
+
+class InstallBudgets(NamedTuple):
+    """Every installer wait for this run, in seconds, after the profile and
+    any explicit setting. `yours` names the budgets a setting decided."""
+    host_class: str
+    factor: float
+    converge_s: int
+    pg_ready_s: float
+    mint_s: int
+    acl_apply_s: int
+    bus_consumers_s: int
+    store_stop_grace_s: int
+    pg_start_period_s: int
+    yours: frozenset[str] = frozenset()
+
+
+def _short_repr(value: object) -> str:
+    text = repr(value)
+    return text if len(text) <= 40 else text[:37] + "..."
+
+
+def _read_json_object(path: Path) -> tuple[dict | None, str]:
+    """(object, "") or (None, reason) — reason is "missing" when there is no
+    file. Bounded read. Every caller treats the file as advisory and says why
+    it was not used, so an unreadable file is a reason, not a crash."""
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read(_JSON_READ_LIMIT + 1)
+    except FileNotFoundError:
+        return None, "missing"
+    except OSError as e:
+        return None, f"unreadable ({e.strerror or e})"
+    if len(raw) > _JSON_READ_LIMIT:
+        return None, f"larger than {_JSON_READ_LIMIT // 1024} KiB"
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except ValueError as e:     # includes UnicodeDecodeError
+        return None, f"not valid JSON ({e})"
+    if not isinstance(doc, dict):
+        return None, "not a JSON object"
+    return doc, ""
+
+
+def load_host_profile(path: Path) -> HostProfile:
+    """The host profile, or factor 1 with a line saying why the waits are not
+    scaled. Never fatal: every wait it scales worked before it existed."""
+    doc, why = _read_json_object(path)
+    if doc is None:
+        if why == "missing":
+            info(f"no host speed profile at {path} — waits are not scaled")
+        else:
+            warn(f"the host speed profile {path} is {why} — waits are not scaled")
+        return HostProfile("unknown", 1.0)
+    cls = doc.get("class")
+    factor = doc.get("budget_factor")
+    if not isinstance(cls, str) or cls not in HOST_CLASSES:
+        warn(f"the host speed profile {path} has no known class ({_short_repr(cls)}) "
+             "— waits are not scaled")
+        return HostProfile("unknown", 1.0)
+    if (isinstance(factor, bool) or not isinstance(factor, (int, float))
+            or not math.isfinite(factor)):
+        warn(f"the host speed profile {path} has a budget_factor that is not a number "
+             f"({_short_repr(factor)}) — waits are not scaled")
+        return HostProfile("unknown", 1.0)
+    clamped = min(BUDGET_FACTOR_MAX, max(BUDGET_FACTOR_MIN, float(factor)))
+    if clamped != factor:
+        info(f"the host speed profile's budget_factor {factor:g} is outside "
+             f"{BUDGET_FACTOR_MIN:g}–{BUDGET_FACTOR_MAX:g}; using {clamped:g}")
+    return HostProfile(cls, clamped)
+
+
+_COMPOSE_DURATION = re.compile(r"(?:(\d{1,6})h)?(?:(\d{1,6})m)?(?:(\d{1,7})s)?")
+
+
+def parse_compose_seconds(value: str) -> int | None:
+    """Seconds in a compose duration like `120s`, `5m` or `1m30s`; None for
+    anything compose would not read the same way (a bare number has no unit,
+    `ms` is not whole seconds)."""
+    m = _COMPOSE_DURATION.fullmatch(value)
+    if not value or m is None:
+        return None
+    h, mins, s = (int(g) if g else 0 for g in m.groups())
+    return h * 3600 + mins * 60 + s
+
+
+def _window_setting(name: str, scaled: int, environ: Mapping[str, str],
+                    dotenv: Mapping[str, str]) -> tuple[int, bool]:
+    """A compose window (stop grace, start period): (seconds, explicit?).
+
+    Set in this shell → it wins (compose reads the shell before .env), and one
+    compose cannot parse stops the install now rather than at `compose up`. Set
+    in .env → kept when longer than the scaled value, never shortened; one
+    compose cannot parse is replaced by write_budget_env."""
+    raw = (environ.get(name) or "").strip()
+    if raw:
+        secs = parse_compose_seconds(raw)
+        if secs is None or secs <= 0:
+            fail(f"{name}={raw!r} (set in this shell) is not a duration docker compose "
+                 "accepts, such as 120s or 5m. Fix or unset it, then re-run the installer.")
+            raise SystemExit(2)
+        return secs, True
+    raw = (dotenv.get(name) or "").strip()
+    if raw:
+        secs = parse_compose_seconds(raw)
+        if secs is None or secs <= 0:
+            warn(f"{name}={raw!r} in .env is not a duration docker compose accepts "
+                 f"— replacing it with {scaled}s")
+            return scaled, False
+        return max(scaled, secs), False
+    return scaled, False
+
+
+def resolve_budgets(profile: HostProfile, environ: Mapping[str, str] | None = None,
+                    dotenv: Mapping[str, str] | None = None) -> InstallBudgets:
+    """Scale every installer wait by the host profile; explicit settings win
+    (CORRELIX_CONVERGE_BUDGET_S, CORRELIX_PG_READY_TIMEOUT, STORE_STOP_GRACE,
+    PG_START_PERIOD). `dotenv` is the current .env, for the two compose windows."""
+    environ = os.environ if environ is None else environ
+    dotenv = {} if dotenv is None else dotenv
+    f = profile.factor
+
+    def scaled(base: float) -> int:
+        return math.ceil(base * f)
+
+    yours: set[str] = set()
+    converge, mine = _converge_setting(min(3600, scaled(_CONVERGE_BUDGET_DEFAULT_S)), environ)
+    if mine:
+        yours.add("converge")
+    pg_ready, mine = _pg_ready_setting(float(scaled(PG_READY_BUDGET_S)), environ)
+    if mine:
+        yours.add("pg_ready")
+    grace, mine = _window_setting(STORE_STOP_GRACE_ENV, scaled(STORE_STOP_GRACE_BASE_S),
+                                  environ, dotenv)
+    if mine:
+        yours.add("store_stop_grace")
+    start, mine = _window_setting(PG_START_PERIOD_ENV, scaled(PG_START_PERIOD_BASE_S),
+                                  environ, dotenv)
+    if mine:
+        yours.add("pg_start_period")
+    return InstallBudgets(
+        host_class=profile.host_class, factor=f, converge_s=converge, pg_ready_s=pg_ready,
+        mint_s=scaled(MINT_WAIT_BASE_S), acl_apply_s=scaled(ACL_APPLY_BASE_S),
+        bus_consumers_s=scaled(BUS_CONSUMERS_BASE_S), store_stop_grace_s=grace,
+        pg_start_period_s=start, yours=frozenset(yours))
+
+
+_SPEED_WORDS = {
+    "fast": "this host's disk is fast",
+    "normal": "this host's disk speed is normal",
+    "slow": "this host's disk is slow",
+    "very-slow": "this host's disk is very slow",
+}
+_SPEED_UNKNOWN = "this host's disk speed was not measured"
+
+
+def _duration_words(seconds: float) -> str:
+    return f"{round(seconds / 60, 1):g} min" if seconds >= 120 else f"{seconds:.0f}s"
+
+
+def describe_budgets(b: InstallBudgets) -> str:
+    """One plain-words line: how slow the host is and how long each wait is."""
+    speed = _SPEED_WORDS.get(b.host_class, _SPEED_UNKNOWN)
+    head = (f"{speed} — waits are {b.factor:g}× longer" if b.factor > 1
+            else f"{speed} — standard waits")
+    parts = [f"{_duration_words(secs)} for {what}"
+             + (" (your setting)" if key in b.yours else "")
+             for key, what, secs in (
+                 ("converge", "services to start", b.converge_s),
+                 ("pg_ready", "the database to answer", b.pg_ready_s),
+                 ("mint", "service identities to be issued", b.mint_s),
+                 ("acl", "bus permissions to apply", b.acl_apply_s),
+                 ("store_stop_grace", "each data store to shut down cleanly",
+                  b.store_stop_grace_s))]
+    return f"{head}: up to {', '.join(parts)}"
+
+
+def write_budget_env(env_path: Path, budgets: InstallBudgets,
+                     environ: Mapping[str, str] | None = None) -> None:
+    """Put the stores' shutdown window and postgres' start period into .env
+    (through the atomic writer) when this host needs longer ones, or when the
+    value there is one compose cannot parse. A window set in this shell is left
+    to the shell; a longer one already in .env is kept (resolve_budgets)."""
+    environ = os.environ if environ is None else environ
+    current = _parse_env(env_path)
+    wanted: dict[str, str] = {}
+    for name, secs in ((STORE_STOP_GRACE_ENV, budgets.store_stop_grace_s),
+                       (PG_START_PERIOD_ENV, budgets.pg_start_period_s)):
+        if (environ.get(name) or "").strip():
+            continue
+        raw = (current.get(name) or "").strip()
+        have = parse_compose_seconds(raw) if raw else None
+        if (raw and not have) or (budgets.factor > 1 and have != secs):
+            wanted[name] = f"{secs}s"
+    if not wanted:
+        return
+    splice_env_values(
+        env_path, wanted,
+        header=["# Host speed (data/.host-profile.json, FMEA §4.3): longer store",
+                "# shutdown and database start windows for a slow disk. install.py",
+                "# manages these and never shortens a longer value set here."],
+        label="slow-host start and stop windows")
+
+
+def wait_for_minted_certs(root: Path, timeout_s: int = MINT_WAIT_BASE_S) -> None:
     """Phase-A gate: block until the api has minted every issuance surface.
     A timeout is a loud install FAILURE — activating fail-closed wrappers on
     a half-minted tree would take the whole stack down."""
@@ -2841,7 +3083,16 @@ def ensure_ingress_cert(root: Path) -> None:
 def compose_up(compose_dir: Path, offline: bool = False,
                root: Path | None = None, *, ops=None,
                sleep=time.sleep, clock=time.monotonic,
-               budget_s: int | None = None) -> None:
+               budget_s: int | None = None,
+               services: list[str] | None = None,
+               tiered: bool = False) -> None:
+    # `services`: start only these, and wait until they have settled (healthy,
+    # or running with no healthcheck) — an empty list starts nothing, never
+    # everything. `tiered`: start the stack group by group (FMEA §4.5, see
+    # plan_tiers), then everything together. Neither: one `up -d` of it all.
+    if services is not None and not services:
+        info("no services to start in this group")
+        return
     # Profiles come from COMPOSE_PROFILES in the generated .env — NOT from a
     # --profile flag here: the CLI flag would OVERRIDE (not merge with) the env
     # var, silently dropping profiles like embedded-bus/prober. The .env is the
@@ -2893,14 +3144,33 @@ def compose_up(compose_dir: Path, offline: bool = False,
     # use, missing image, full disk) fail on the first pass with the remedy.
     budget = budget_s if budget_s is not None else _converge_budget()
     ops = ops if ops is not None else ComposeOps(compose_dir, build_env)
+    if services is not None:
+        _converge(ops, build_flag, budget, sleep, clock, list(services))
+    elif tiered:
+        _tiered_up(ops, build_flag, budget, sleep, clock)
+    else:
+        _converge(ops, build_flag, budget, sleep, clock)
+
+
+def _converge(ops, build_flag: str, budget: int, sleep, clock,
+              services: list[str] | None = None, *, required: bool = True,
+              label: str = "") -> None:
+    """Drive one `up -d` (of everything, or of `services`) to convergence
+    within `budget` seconds. With `services`, a passed `up` is followed by a
+    wait until they have settled; `required=False` reports a group that cannot
+    settle instead of failing on it (see _settle)."""
     started = clock()
     deadline = started + budget
     last = 1
     passes = 0
     for passes in range(1, _UP_MAX_PASSES + 1):
-        rc, out = ops.up(build_flag)
+        rc, out = ops.up(build_flag) if services is None else ops.up(build_flag, services)
         if rc == 0:
-            ok("services started" + (f" (converged on pass {passes})" if passes > 1 else ""))
+            ok(f"{label or 'services'} started"
+               + (f" (converged on pass {passes})" if passes > 1 else ""))
+            if services:
+                _settle(ops, services, started, deadline, budget, sleep, clock,
+                        required=required, label=label or ", ".join(services))
             return
         last = rc
         for sig, remedy in _UP_FATAL_SIGNATURES:
@@ -2925,6 +3195,56 @@ def compose_up(compose_dir: Path, offline: bool = False,
         sleep(pause)
     fail(f"docker compose up did not converge within {budget}s ({passes} passes, "
          f"last exit {last}). Check: docker compose ps -a")
+
+
+def _settle(ops, services: list[str], started: float, deadline: float, budget: int,
+            sleep, clock, *, required: bool, label: str) -> None:
+    """Wait until a started group has settled, before the next group starts.
+
+    A required group (the data stores) that cannot settle fails the install:
+    every later service depends on it, so a single start would fail on it too.
+    Any other group is reported and the final full pass decides — the verdict
+    must not depend on whether this host was slow enough to start in groups.
+    One-shot bootstraps that exited 0 have settled."""
+    names, why = ops.containers(services)
+    if names is None:
+        warn(f"could not list the containers of the {label} ({why}) — not waiting "
+             "for them; compose's own dependency checks still apply")
+        return
+    if not names:
+        return
+    kind, msg = _wait_blockers_healthy(ops, names, started, deadline, budget, sleep,
+                                       clock, exit_ok=not required)
+    if kind == "healthy":
+        return
+    if required:
+        fail(msg if kind == "timeout"
+             else msg + "\n  Re-running the installer is safe once the cause is fixed.")
+    warn(msg + f"\n  continuing: nothing else waits on the {label} here; the final "
+               "start pass checks the whole stack, as a single start would")
+
+
+def _tiered_up(ops, build_flag: str, budget: int, sleep, clock) -> None:
+    """Start the stack group by group (plan_tiers), each group settling before
+    the next, then one full `up -d` so nothing is left out. The groups come from
+    the effective compose config, never from an assumption about it."""
+    available, why = ops.services()
+    if available is None:
+        warn(f"could not read which services this install runs ({why}) — starting "
+             "them all together instead")
+        _converge(ops, build_flag, budget, sleep, clock)
+        return
+    tiers, rest = plan_tiers(available)
+    for n, (label, names, required) in enumerate(tiers, start=1):
+        if not names:
+            info(f"group {n} of {len(tiers)} ({label}): nothing to start on this install")
+            continue
+        info(f"group {n} of {len(tiers)} ({label}): {', '.join(names)}")
+        _converge(ops, build_flag, budget, sleep, clock, names, required=required,
+                  label=label)
+    info("final pass: starting everything together so nothing is left out"
+         + (f" (not in any group: {', '.join(rest)})" if rest else ""))
+    _converge(ops, build_flag, budget, sleep, clock)
 
 
 # ── compose convergence policy ───────────────────────────────────────────────
@@ -2985,19 +3305,108 @@ _PROGRESS_SIGNATURES = (
 )
 _SECRETISH = re.compile(r"passw|secret|token|apikey|api_key|credential|bearer",
                         re.IGNORECASE)
+# A compose service or container name (never starts with "-", no spaces).
+_COMPOSE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 
 
-def _converge_budget() -> int:
-    raw = os.environ.get("CORRELIX_CONVERGE_BUDGET_S", "").strip()
+def _converge_setting(default: int, environ: Mapping[str, str] | None = None
+                      ) -> tuple[int, bool]:
+    """(budget, explicit?) — CORRELIX_CONVERGE_BUDGET_S wins, clamped to
+    120..3600; otherwise `default` (the host-profile-scaled value)."""
+    environ = os.environ if environ is None else environ
+    raw = (environ.get("CORRELIX_CONVERGE_BUDGET_S") or "").strip()
     if not raw:
-        return _CONVERGE_BUDGET_DEFAULT_S
+        return default, False
     try:
         v = int(raw)
     except ValueError:
         warn(f"CORRELIX_CONVERGE_BUDGET_S={raw!r} is not a number of seconds; "
-             f"using {_CONVERGE_BUDGET_DEFAULT_S}")
-        return _CONVERGE_BUDGET_DEFAULT_S
-    return max(120, min(3600, v))
+             f"using {default}")
+        return default, False
+    return max(120, min(3600, v)), True
+
+
+def _converge_budget(default: int = _CONVERGE_BUDGET_DEFAULT_S) -> int:
+    return _converge_setting(default)[0]
+
+
+# ── tiered bring-up (FMEA 2026-09-15 §4.5, row 11) ──────────────────────────
+#
+# On .123 each phase created and started ~25 containers at once on 4 cores and
+# a slow disk, so every first-boot timer competed for the same IO. A slow host
+# starts the stack in these groups instead. Only services the effective compose
+# config runs are started; anything in no group (opensearch-init — its ISM
+# script can wait a long time, FMEA row 9 — or a TLS init container) is left to
+# the final full pass. (label, members, settling required?)
+BRING_UP_TIERS: tuple[tuple[str, tuple[str, ...], bool], ...] = (
+    ("data stores", ("postgres", "clickhouse", "kafka", "opensearch", "redis",
+                     "victoria", "secrets-seal"), True),
+    # The app-state role and Keycloak's database are created before any start.
+    ("store bootstraps", ("kafka-init", "opensearch-security-init"), False),
+    ("engines", ("api", "correlation", "vector-aggregator", "vector-router", "syslog-ng",
+                 "goflow2", "gnmic", "prober", "vmalert", "vmauth"), False),
+    ("dashboard and ingress", ("frontend", "nginx"), False),
+    ("add-ons", ("opensearch-dashboards", "grafana", "cadvisor", "node-exporter",
+                 "kafka-exporter", "keycloak"), False),
+)
+_SLOW_HOST_CLASSES = ("slow", "very-slow")
+
+
+def plan_tiers(available: Iterable[str]
+               ) -> tuple[list[tuple[str, list[str], bool]], list[str]]:
+    """(groups with only the available services, in group order; the
+    available services in no group, sorted)."""
+    avail = set(available)
+    tiers: list[tuple[str, list[str], bool]] = []
+    placed: set[str] = set()
+    for label, members, required in BRING_UP_TIERS:
+        names = [s for s in members if s in avail]
+        placed.update(names)
+        tiers.append((label, names, required))
+    return tiers, sorted(avail - placed)
+
+
+def choose_bring_up_mode(host_class: str, overcommit: str) -> tuple[bool, str]:
+    """(start in groups?, the reason in plain words). Groups on a slow or very
+    slow host, or when the resource plan over-commits memory (`overcommit` is
+    the planner's finding in words, "" when it fits)."""
+    if host_class in _SLOW_HOST_CLASSES:
+        return True, ("starting the stack in groups: this host's disk is "
+                      f"{host_class.replace('-', ' ')}, so the data stores start first and "
+                      "each group waits for the one before it, instead of every service "
+                      "competing for the disk at once")
+    if overcommit:
+        return True, (f"starting the stack in groups: {overcommit}, so the data stores "
+                      "start first and each group waits for the one before it")
+    speed = _SPEED_WORDS.get(host_class, _SPEED_UNKNOWN)
+    return False, (f"starting every service together: {speed} and the resource plan "
+                   "reports no over-commitment")
+
+
+def planner_overcommit(plan_path: Path) -> str:
+    """The resource plan's memory over-commitment in plain words, from the
+    resource-plan.json run_resource_plan records; "" when it fits or there is
+    no plan (sizing was skipped)."""
+    doc, why = _read_json_object(plan_path)
+    if doc is None:
+        if why != "missing":
+            warn(f"could not read the resource plan {plan_path} ({why}) — treating it "
+                 "as fitting this host")
+        return ""
+    try:
+        reserved = sum(int(v) for v in doc["reservations_bytes"].values())
+        allocatable = int(doc["reserves"]["allocatable_bytes"])
+        limits = int(doc["totals"]["limits_bytes"])
+        budget = int(doc["totals"]["budget_bytes"])
+    except (KeyError, TypeError, ValueError, AttributeError) as e:
+        warn(f"the resource plan {plan_path} is missing a total ({type(e).__name__}: {e}) "
+             "— treating it as fitting this host")
+        return ""
+    if reserved > allocatable:
+        return "the resource plan reserves more memory than this host can guarantee"
+    if limits > budget:
+        return "the resource plan's memory limits exceed what this host can over-commit"
+    return ""
 
 
 class ComposeOps:
@@ -3010,11 +3419,56 @@ class ComposeOps:
         self.compose_dir = compose_dir
         self.env = env
 
-    def up(self, build_flag: str) -> tuple[int, str]:
-        """Run `up -d`, streaming its output live (the GUI parses it) while
-        keeping the tail for diagnosis."""
+    QUERY_TIMEOUT_S = 120
+
+    def _query(self, argv: list[str]) -> tuple[str | None, str]:
+        """stdout of a read-only compose query, or (None, redacted reason)."""
+        what = " ".join(argv[:3])
         try:
-            p = subprocess.Popen(["docker", "compose", "up", "-d", build_flag],
+            r = subprocess.run(argv, cwd=str(self.compose_dir), env=self.env,
+                               capture_output=True, text=True,
+                               timeout=self.QUERY_TIMEOUT_S, check=False)
+        except (OSError, subprocess.SubprocessError) as e:
+            return None, f"could not run {what}: {e}"
+        if r.returncode != 0:
+            detail = " | ".join(_redacted_tail((r.stderr or "") + "\n" + (r.stdout or ""), 3))
+            return None, f"{what} exited {r.returncode}: {detail or 'no output'}"
+        return r.stdout or "", ""
+
+    @staticmethod
+    def _names(text: str, what: str) -> tuple[list[str] | None, str]:
+        names = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        # A name becomes an argv element of the next compose call: never let
+        # unexpected output (a flag, a warning line) through (§3).
+        if len(names) > 500 or any(not _COMPOSE_NAME.fullmatch(n) for n in names):
+            return None, f"unexpected output from {what}"
+        return names, ""
+
+    def services(self) -> tuple[list[str] | None, str]:
+        """The services the effective compose config runs — the compose files
+        and active profiles from .env — or (None, reason)."""
+        out, why = self._query(["docker", "compose", "config", "--services"])
+        if out is None:
+            return None, why
+        names, why = self._names(out, "docker compose config")
+        if names is not None and not names:
+            return None, "docker compose config listed no services"
+        return names, why
+
+    def containers(self, services: list[str]) -> tuple[list[str] | None, str]:
+        """Container names of these services, or (None, reason)."""
+        out, why = self._query(["docker", "compose", "ps", "-a", "--format", "{{.Name}}",
+                                *services])
+        if out is None:
+            return None, why
+        return self._names(out, "docker compose ps")
+
+    def up(self, build_flag: str, services: list[str] | None = None) -> tuple[int, str]:
+        """Run `up -d` (of everything, or of `services`), streaming its output
+        live (the GUI parses it) while keeping the tail for diagnosis."""
+        try:
+            p = subprocess.Popen(["docker", "compose", "up", "-d", build_flag,
+                                  *(services or [])],
                                  cwd=str(self.compose_dir), env=self.env,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  text=True)
@@ -3082,12 +3536,14 @@ def _diagnosis(ops, name: str, headline: str) -> str:
 
 
 def _wait_blockers_healthy(ops, names: list[str], started: float, deadline: float,
-                           budget: int, sleep, clock) -> tuple[str, str]:
+                           budget: int, sleep, clock, *,
+                           exit_ok: bool = False) -> tuple[str, str]:
     """Watch the containers compose gave up on until every one is healthy.
 
     Returns ("healthy", "") or a failure kind with an operator-facing message:
     "exited" / "crashloop" (waiting cannot fix it) or "timeout" (the budget ran
-    out while it was still progressing)."""
+    out while it was still progressing). `exit_ok`: a container that exited 0
+    has finished (a one-shot bootstrap in a start group)."""
     base: dict[str, int] = {}
     last_note = float("-inf")
     while True:
@@ -3107,6 +3563,8 @@ def _wait_blockers_healthy(ops, names: list[str], started: float, deadline: floa
                     ops, n, f"{n} keeps restarting ({restarts - base[n]} restarts "
                             "while the installer waited), so waiting will not fix it.")
             if status in ("exited", "dead"):
+                if exit_ok and status == "exited" and state.get("ExitCode") == 0:
+                    continue
                 return "exited", _diagnosis(
                     ops, n, f"{n} stopped with exit code {state.get('ExitCode')}.")
             if status == "running" and health in ("healthy", ""):
@@ -3162,7 +3620,7 @@ def _postgres_shutdown_unconfirmed(compose_dir: Path, since: str, run) -> str:
 
 
 def stop_stores_cleanly(compose_dir: Path, services=_STATEFUL_STORES, *,
-                        run=subprocess.run, grace_s: int = 120,
+                        run=subprocess.run, grace_s: int = STORE_STOP_GRACE_BASE_S,
                         now=lambda: datetime.now(timezone.utc)) -> None:
     """Stop the running stateful stores with a shutdown window before phase B
     recreates them, and say so when one was killed anyway (its next start runs
@@ -3305,7 +3763,15 @@ def compose_status(compose_dir: Path) -> None:
 # kafka-init only creates topics; the installer owns authorization state too,
 # so a completed install is never a silently dead bus.
 
-_ACL_SCRIPT = "/acls/apply-acls.sh"          # mounted by compose.tls.yml
+# The matrix is the script THIS bundle ships, piped into the broker on stdin —
+# never the copy compose.tls.yml bind-mounts into the container. A single-file
+# bind mount pins the inode it was created with, so after an upgrade that does
+# not recreate kafka the mounted copy is the OLD matrix (FMEA row 7 / T7; the
+# 2026-09-02 lab incident: an ungranted topic, consumer auth-dead for 3 h, all
+# green). deploy-qualify.sh B1 applies it the same way.
+_ACL_SCRIPT_REL = Path("kafka") / "apply-acls.sh"   # under deployment/docker
+_ACL_EXEC = ["docker", "compose", "exec", "-T", "kafka", "sh", "-s"]
+_ACL_SCRIPT_MAX_BYTES = 1024 * 1024
 _KAFKA_ADMIN_PROPS = "/tmp/kafka-tls/admin.properties"  # tls-entrypoint.sh
 
 
@@ -3325,26 +3791,45 @@ def _kafka_group_members(describe_out: str, group: str) -> int:
     return members
 
 
-def apply_kafka_acls(compose_dir: Path, timeout_s: int = 900) -> None:
+def _acl_runbook_step(compose_dir: Path) -> str:
+    return f"cd {compose_dir} && docker compose exec -T kafka sh -s < {_ACL_SCRIPT_REL}"
+
+
+def apply_kafka_acls(compose_dir: Path, timeout_s: int = ACL_APPLY_BASE_S, *,
+                     run=None) -> None:
     """Run the SEC-007 ACL matrix inside the broker, bounded + loud (§16.1).
 
-    deployment/docker/kafka/apply-acls.sh executes in the kafka container
-    against the mTLS listener with the broker's super-user SVID (it
-    auto-detects /tmp/kafka-tls/admin.properties). It is idempotent
-    (kafka-acls --add of an existing ACL is a no-op) and verifies the matrix
-    back before exiting 0, so a zero exit here is a proven-applied matrix.
-    Retries over a bounded window because right after the phase-B recreate
-    the broker may still be in log recovery; persistent failure FAILS the
-    install — completing with a dead bus is the defect this step removes."""
-    cmd = ["docker", "compose", "exec", "-T", "kafka", _ACL_SCRIPT]
+    The bundle's deployment/docker/kafka/apply-acls.sh is piped into
+    `sh -s` in the kafka container (never the bind-mounted copy, which can be
+    stale — see _ACL_SCRIPT_REL) and runs against the mTLS listener with the
+    broker's super-user SVID (it auto-detects /tmp/kafka-tls/admin.properties).
+    It is idempotent (kafka-acls --add of an existing ACL is a no-op) and
+    verifies the matrix back before exiting 0, so a zero exit here is a
+    proven-applied matrix. Retries over a bounded window because right after
+    the phase-B recreate the broker may still be in log recovery; persistent
+    failure FAILS the install — completing with a dead bus is the defect this
+    step removes. `run` is the injected subprocess runner."""
+    run = run if run is not None else subprocess.run
+    script_path = compose_dir / _ACL_SCRIPT_REL
+    try:
+        size = script_path.stat().st_size
+        if size > _ACL_SCRIPT_MAX_BYTES:
+            raise OSError(errno.EFBIG, f"{size} bytes is larger than expected")
+        script = script_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        fail(f"cannot read the Kafka ACL matrix script {script_path} "
+             f"({getattr(e, 'strerror', None) or e}) — the installer applies the copy "
+             "this bundle ships and refuses to report success over an "
+             "authorization-dead bus. Re-extract the bundle, then re-run the installer.")
+        raise SystemExit(1) from e
     deadline = time.time() + timeout_s
     attempt = 0
     last = "no output"
     while True:
         attempt += 1
         try:
-            res = subprocess.run(cmd, cwd=str(compose_dir), capture_output=True,
-                                 text=True, timeout=600, check=False)
+            res = run(_ACL_EXEC, cwd=str(compose_dir), input=script,
+                      capture_output=True, text=True, timeout=600, check=False)
             rc, out, err = res.returncode, res.stdout, res.stderr
         except subprocess.TimeoutExpired:
             rc, out, err = 1, "", "apply-acls.sh timed out after 600s inside the broker"
@@ -3366,11 +3851,11 @@ def apply_kafka_acls(compose_dir: Path, timeout_s: int = 900) -> None:
          "healthy (live incident 2026-08-16). Refusing to report install "
          "success over a dead bus. Inspect `docker compose logs kafka`, then "
          "re-run the installer (idempotent) or the runbook step: "
-         f"docker compose exec kafka {_ACL_SCRIPT}. Last error: {last}")
+         f"{_acl_runbook_step(compose_dir)}. Last error: {last}")
 
 
 def verify_bus_consumers(compose_dir: Path, group: str = "netops-correlation",
-                         timeout_s: int = 420) -> None:
+                         timeout_s: int = BUS_CONSUMERS_BASE_S) -> None:
     """Post-apply liveness gate (§16.1: no blind success).
 
     The matrix being WRITTEN is necessary but not sufficient — prove a real
@@ -3446,7 +3931,9 @@ def record_bus_authorization_time(root: Path, when: float | None = None) -> Path
 
 
 def apply_bus_authorization(compose_dir: Path, env_path: Path,
-                            tls_enabled: bool) -> None:
+                            tls_enabled: bool, *,
+                            acl_timeout_s: int = ACL_APPLY_BASE_S,
+                            consumers_timeout_s: int = BUS_CONSUMERS_BASE_S) -> None:
     """Install-owned Kafka authorization convergence (SEC-007, P0 2026-08-16).
 
     Only the TLS variant runs it: the plaintext baseline configures NO
@@ -3467,8 +3954,8 @@ def apply_bus_authorization(compose_dir: Path, env_path: Path,
              "belongs to the broker owner; apply the SEC-007 matrix there "
              "per docs/runbooks/tls-enforce-wave.md")
         return
-    apply_kafka_acls(compose_dir)
-    verify_bus_consumers(compose_dir)
+    apply_kafka_acls(compose_dir, timeout_s=acl_timeout_s)
+    verify_bus_consumers(compose_dir, timeout_s=consumers_timeout_s)
     # Both proved: the matrix is written AND a real consumer holds membership
     # through the enforcing broker. That instant is the honest floor for Q6.
     record_bus_authorization_time(compose_dir.parents[1])
@@ -3533,7 +4020,8 @@ _PG_IDENT = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 def bootstrap_keycloak_db(compose_dir: Path, env: dict, *,
-                          start_postgres: bool = False) -> bool:
+                          start_postgres: bool = False,
+                          pg_budget_s: float | None = None) -> bool:
     """Create Keycloak's database when the `sso` profile is active. Returns True
     when the database exists afterwards.
 
@@ -3579,7 +4067,8 @@ def bootstrap_keycloak_db(compose_dir: Path, env: dict, *,
             return False
     runner = ComposeRunner(compose_dir)
     rok, rmsg = wait_for_postgres(runner, user=user, db="postgres",
-                                  label="postgres (keycloak db check)")
+                                  label="postgres (keycloak db check)",
+                                  budget_s=pg_budget_s)
     if not rok:
         warn(f"could not reach postgres to check for the {db} database "
              f"(Keycloak will crash-loop until it exists): {rmsg}")
@@ -3618,12 +4107,15 @@ KEYCLOAK_DB_RETRY_BASE_S = 10.0
 def confirm_keycloak_db(compose_dir: Path, env: dict, *, bootstrap=None,
                         attempts: int = KEYCLOAK_DB_CONFIRM_ATTEMPTS,
                         base_delay_s: float = KEYCLOAK_DB_RETRY_BASE_S,
-                        sleep=time.sleep) -> None:
+                        sleep=time.sleep,
+                        pg_budget_s: float | None = None) -> None:
     """Post-start confirmation under the `sso` profile: the database must
     exist. Bounded retry (each attempt carries its own postgres readiness
-    budget) with exponential backoff and jitter (§9), then FATAL with the
-    manual command — never "installed" over a crash-looping Keycloak."""
-    bootstrap = bootstrap if bootstrap is not None else bootstrap_keycloak_db
+    budget, `pg_budget_s` from the host profile) with exponential backoff and
+    jitter (§9), then FATAL with the manual command — never "installed" over a
+    crash-looping Keycloak."""
+    bootstrap = (bootstrap if bootstrap is not None
+                 else functools.partial(bootstrap_keycloak_db, pg_budget_s=pg_budget_s))
     for attempt in range(1, attempts + 1):
         if bootstrap(compose_dir, env):
             return
@@ -3748,22 +4240,30 @@ PG_READY_STABLE_S = 2.0
 PG_READY_BUDGET_ENV = "CORRELIX_PG_READY_TIMEOUT"
 
 
-def _pg_ready_budget_s(default: float = PG_READY_BUDGET_S) -> float:
-    """The readiness budget in seconds, from CORRELIX_PG_READY_TIMEOUT."""
-    raw = (os.environ.get(PG_READY_BUDGET_ENV) or "").strip()
+def _pg_ready_setting(default: float, environ: Mapping[str, str] | None = None
+                      ) -> tuple[float, bool]:
+    """(budget, explicit?) — CORRELIX_PG_READY_TIMEOUT wins when it is a
+    positive number; otherwise `default` (the host-profile-scaled value)."""
+    environ = os.environ if environ is None else environ
+    raw = (environ.get(PG_READY_BUDGET_ENV) or "").strip()
     if not raw:
-        return default
+        return default, False
     try:
         value = float(raw)
     except ValueError:
         warn(f"{PG_READY_BUDGET_ENV}={raw!r} is not a number — using the "
              f"{default:.0f}s default")
-        return default
-    if value <= 0:
+        return default, False
+    if not math.isfinite(value) or value <= 0:
         warn(f"{PG_READY_BUDGET_ENV}={raw!r} must be > 0 — using the "
              f"{default:.0f}s default")
-        return default
-    return value
+        return default, False
+    return value, True
+
+
+def _pg_ready_budget_s(default: float = PG_READY_BUDGET_S) -> float:
+    """The readiness budget in seconds, from CORRELIX_PG_READY_TIMEOUT."""
+    return _pg_ready_setting(default)[0]
 
 
 def _jittered(delay: float) -> float:
@@ -3933,7 +4433,8 @@ def _provision_app_state_role_with_retry(sr, compose_dir: Path, *, db_user: str,
             return (False, rmsg)
 
 
-def bootstrap_app_state_role(compose_dir: Path, env: dict) -> None:
+def bootstrap_app_state_role(compose_dir: Path, env: dict, *,
+                             pg_budget_s: float | None = None) -> None:
     """Provision the Postgres role the api's registry storage connects as
     (tracker 245).
 
@@ -3992,7 +4493,7 @@ def bootstrap_app_state_role(compose_dir: Path, env: dict) -> None:
     # pg_isready, which answers for the entrypoint's temporary init server and
     # for a moment that has already passed (see wait_for_postgres).
     runner = ComposeRunner(compose_dir)
-    budget = _pg_ready_budget_s()
+    budget = _pg_ready_budget_s() if pg_budget_s is None else pg_budget_s
     rok, rmsg = wait_for_postgres(runner, user=db_user, db=dbname,
                                   budget_s=budget)
     if not rok:
@@ -4460,7 +4961,10 @@ def main() -> None:
         if not env_path.exists():
             fail(".env not found — run a full install first")
         step("bootstrap Keycloak database (profile sso)", stage="bootstrap-kc")
-        bootstrap_keycloak_db(compose_dir, _parse_env(env_path))
+        budgets = resolve_budgets(load_host_profile(root / HOST_PROFILE_PATH),
+                                  os.environ, _parse_env(env_path))
+        bootstrap_keycloak_db(compose_dir, _parse_env(env_path),
+                              pg_budget_s=budgets.pg_ready_s)
         return
 
     if args.replan:
@@ -4500,7 +5004,7 @@ def main() -> None:
                  "broker boots an EMPTY ACL store (default-deny = auth-dead "
                  "bus). After the recreate, re-run `python3 scripts/install.py` "
                  "(idempotent; applies + verifies the SEC-007 matrix) or run "
-                 "the runbook step: docker compose exec kafka /acls/apply-acls.sh")
+                 f"the runbook step: {_acl_runbook_step(compose_dir)}")
         if failures:
             fail(f"{failures} secret(s) could not be rotated (details above)")
         return
@@ -4566,6 +5070,15 @@ def main() -> None:
     if args.plan_resources:
         step("planning resources (#102)", stage="sizing")
         run_resource_plan(env_path, args.plan_resources, args.sizing_file)
+
+    # Every wait from here on is scaled to the host's measured speed (FMEA
+    # §4.3). Resolved once, after the .env is generated and planned — the
+    # stores' shutdown window and postgres' start period land in it — and
+    # before anything starts or waits.
+    budgets = resolve_budgets(load_host_profile(root / HOST_PROFILE_PATH),
+                              os.environ, _parse_env(env_path))
+    info(describe_budgets(budgets))
+    write_budget_env(env_path, budgets)
 
     # Load the image archive BEFORE the first step that may need the chown
     # helper container. Both ensure_ingress_cert() (uid 101 ingress key) and
@@ -4635,7 +5148,7 @@ def main() -> None:
     # The api's registry storage must exist before the api does (tracker 245):
     # on the default postgres backend a missing role is a failed boot, not a
     # quiet downgrade to another store.
-    bootstrap_app_state_role(compose_dir, _parse_env(env_path))
+    bootstrap_app_state_role(compose_dir, _parse_env(env_path), pg_budget_s=budgets.pg_ready_s)
 
     # Keycloak cannot create its own database, and a Keycloak started without
     # it crash-loops. This used to run only AFTER the stack converged, so any
@@ -4645,7 +5158,7 @@ def main() -> None:
     if "sso" in {p.strip() for p in
                  _parse_env(env_path).get("COMPOSE_PROFILES", "").split(",")}:
         step("bootstrap Keycloak database (profile sso)", stage="bootstrap-kc")
-        bootstrap_keycloak_db(compose_dir, _parse_env(env_path), start_postgres=True)
+        bootstrap_keycloak_db(compose_dir, _parse_env(env_path), start_postgres=True, pg_budget_s=budgets.pg_ready_s)
 
     # Phase A (TLS): the baseline stack boots with the mint variables set; the
     # api's internal CA writes every SVID to data/tls while the stores are
@@ -4656,24 +5169,31 @@ def main() -> None:
     validate_env_complete(env_path)
     step("starting stack" + (" (TLS phase A: mint identities)" if tls_enabled else ""),
          stage="up-a", inputs=stage_inputs(env_path))
-    compose_up(compose_dir, offline=args.offline, root=root)
+    # Start in groups on a slow host or an over-committed plan (FMEA §4.5);
+    # phase B reuses the same choice.
+    tiered, why = choose_bring_up_mode(budgets.host_class,
+                                       planner_overcommit(compose_dir / "resource-plan.json"))
+    info(why)
+    compose_up(compose_dir, offline=args.offline, root=root, budget_s=budgets.converge_s, tiered=tiered)
 
     if tls_enabled:
-        wait_for_minted_certs(root)
+        wait_for_minted_certs(root, timeout_s=budgets.mint_s)
         activate_tls_compose_file(compose_dir, env_path)
         enable_tls_database_url(env_path)
         # Never skipped on the journal's word (§4.1 rule 3): the recreate runs
         # and compose_up verifies convergence every time.
         step("starting stack (TLS phase B: fail-closed mesh)", stage="up-b",
              inputs=stage_inputs(env_path))
-        stop_stores_cleanly(compose_dir)
-        compose_up(compose_dir, offline=args.offline, root=root)
+        stop_stores_cleanly(compose_dir, grace_s=budgets.store_stop_grace_s)
+        compose_up(compose_dir, offline=args.offline, root=root, budget_s=budgets.converge_s, tiered=tiered)
 
     # SEC-007 P0 (2026-08-16): with default-deny enforced, an empty KRaft ACL
     # store (fresh install, data/kafka wipe) is a silently auth-dead ingest
     # tier — apply + verify the matrix before claiming success. No-op on the
     # plaintext baseline (no authorizer) and external brokers (owner-managed).
-    apply_bus_authorization(compose_dir, env_path, tls_enabled)
+    apply_bus_authorization(compose_dir, env_path, tls_enabled,
+                            acl_timeout_s=budgets.acl_apply_s,
+                            consumers_timeout_s=budgets.bus_consumers_s)
 
     step("status", stage="status")
     compose_status(compose_dir)
@@ -4691,7 +5211,7 @@ def main() -> None:
         # FATAL after a bounded retry (T2 residual): with sso active, a missing
         # database is a crash-looping Keycloak, not a successful install.
         step("bootstrap Keycloak database (profile sso)", stage="bootstrap-kc")
-        confirm_keycloak_db(compose_dir, _parse_env(env_path))
+        confirm_keycloak_db(compose_dir, _parse_env(env_path), pg_budget_s=budgets.pg_ready_s)
 
     if "self-monitoring" in args.profiles:
         step("wiring grafana clickhouse datasource", stage="bootstrap-grafana")
