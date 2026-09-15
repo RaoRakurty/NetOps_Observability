@@ -423,13 +423,9 @@ describe("UI word budget — a screen states facts, it does not teach", () => {
     "pages/panels.tsx",
     "pages/telemetry/TelemetryCoverage.tsx",
     "pages/telemetry/coverageModel.ts",
-    // sweep 6 — Iris Knowledge, the last file on the debt list. The coverage
-    // catalogue, the unplanned platforms, the command templates and the
-    // learning backlog keep every count and every honest absence; the four
-    // paragraphs that TAUGHT what a dialect, an unplanned platform and a
-    // command template are became tac.coverage-catalogue, tac.unplanned-platforms
-    // and tac.command-templates behind the `(i)`.
-    "pages/iris/Knowledge.tsx",
+    // sweep 6 swept Iris Knowledge, the last file on the debt list. The page
+    // itself was removed on 2026-09-15: its catalogue is now knowledge Iris
+    // reads before answering, not a page an administrator reads.
   ])("%s stays swept", (label) => {
     expect(ALLOW[label], `${label} is in a completed sweep and may not carry budget debt`).toBeUndefined();
     expect(counted.get(label)?.map((b) => fmtBreach(label, b)) ?? [], `${label} regressed`).toEqual([]);

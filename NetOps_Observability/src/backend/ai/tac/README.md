@@ -382,7 +382,7 @@ same length; an unrecognised dialect still gets every common rule.
 
 The purge writes what it excluded, per family and per dialect, and nothing else.
 It is CUMULATIVE (a purge removes the commands, so a per-run count would fall
-back to zero and claim the policy excluded nothing). Iris → Knowledge renders it
+back to zero and claim the policy excluded nothing). Iris reads it
 as "excluded by policy: N (config · restart · daemon)".
 
 ### `session_scoped:` — the one exemption
@@ -560,7 +560,7 @@ So **editing a plan file changes the default template**, and there is no way for
 the two to drift apart. Generation is deterministic — the same catalog always
 yields the same ids, in the same order — and a test asserts it, because a
 tenant's saved fork records the default it was forked from and is diffed against
-it in Iris → Knowledge.
+it in the knowledge Iris reads before answering.
 
 Four kinds of binding are deliberately EXCLUDED from a default:
 

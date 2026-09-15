@@ -6,7 +6,7 @@
 //
 // It holds no logic on purpose. It sits under ai/ because this is Iris's
 // knowledge surface — the sibling of ai/skills and ai/docs_corpus, and the thing
-// the Iris → Knowledge page renders — while the engine that validates and runs
+// the knowledge Iris reads before answering — while the engine that validates and runs
 // it lives in internal/tac (CLAUDE.md §2). The split is what lets the data be
 // reviewed like a skill and the engine be tested like code.
 package tacdata

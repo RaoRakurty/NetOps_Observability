@@ -19,7 +19,6 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   Dashboard: () => import("./pages/Dashboard"),
   DemoShowcase: () => import("./pages/DemoShowcase"),
   FrontPage: () => import("./pages/FrontPage"),
-  IrisKnowledge: () => import("./pages/iris/Knowledge"),
   Devices: () => import("./pages/Devices"),
   DeviceMonitoring: () => import("./pages/DeviceMonitoring"),
   InterfacePerformance: () => import("./pages/InterfacePerformance"),
@@ -96,7 +95,6 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   Quarantine: () => import("./pages/platform/Quarantine"),
 };
 
-const IrisKnowledge = lazy(ROUTE_CHUNKS["IrisKnowledge"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Dashboard = lazy(ROUTE_CHUNKS["Dashboard"] as () => Promise<{ default: React.ComponentType<any> }>);
 const DemoShowcase = lazy(ROUTE_CHUNKS["DemoShowcase"] as () => Promise<{ default: React.ComponentType<any> }>);
 const FrontPage = lazy(ROUTE_CHUNKS["FrontPage"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -428,20 +426,17 @@ export const NAV: NavSection[] = [
       { id: "scorecard", label: "Recovery Scorecard", render: () => <ReliabilityScorecard /> },
     ],
   },
-  // Iris is the one section that BOTH acts and routes. Clicking it opens the
-  // ask slide-over (`action: "copilot"`, unchanged); its children are ordinary
-  // routed leaves reached from the flyout or the expanded sidebar. Knowledge
-  // lives here because the catalogue IS what Iris knows — the same reason the
-  // skills, the docs corpus and the TAC command plans all sit under ai/.
+  // Iris is an ACTION: clicking it opens the ask slide-over. It carries no
+  // pages. Its knowledge — the TAC catalogue of issue classes and per-vendor
+  // checks, the playbooks, the docs corpus, the skills — is built into Iris and
+  // read before it answers (owner, 2026-09-15: an administrator should not have
+  // to read what Iris knows). The Knowledge page that used to sit here is gone.
   {
     id: "copilot",
     label: AI_NAME,
     icon: "copilot",
     action: "copilot",
     footer: true,
-    children: [
-      { id: "knowledge", label: "Knowledge", render: () => <IrisKnowledge /> },
-    ],
   },
   // Administration — config + power-user escape hatches to the raw backend
   // tools, kept out of the day-to-day monitoring sections (as Grafana

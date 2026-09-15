@@ -15,6 +15,7 @@ import (
 
 	"netops/backend/ai"
 	"netops/backend/internal/platformdb"
+	"netops/backend/internal/tac"
 )
 
 // ai_handlers.go — the Iris AI HTTP surface. POST /api/ai/ask runs the
@@ -188,6 +189,7 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		KB:        aiKB,                                                 // Network Expert KB (supporting knowledge)
 		ProductKB: aiProductKB,                                          // Correlix product knowledge (concepts + how-tos)
 		Docs:      aiDocsIndex,                                          // docs-portal retriever (real page citations)
+		TAC:       s.aiTACKnowledge(),                                   // vendor TAC knowledge Iris reads before answering
 		Skills:    aiSkills,                                             // troubleshooting methods (nil = layer disabled)
 		Explain:   aiExplanations,                                       // authored UI explanations (the AskIris (i))
 
@@ -414,4 +416,33 @@ func aiHelpAnswer() map[string]any {
 		"commands": cmds,
 		"items":    lines,
 	}
+}
+
+// aiTACKnowledge adapts the TAC catalogue to Iris's knowledge seam. The
+// catalogue is curated, version-pinned reference data with no tenant content,
+// so it needs no scoping. nil when the TAC service is not wired, which leaves
+// every Iris answer exactly as it was.
+func (s *server) aiTACKnowledge() ai.TACKnowledgeSource {
+	svc := s.tacSvc()
+	if svc == nil || svc.Catalog() == nil {
+		return nil
+	}
+	return aiTACCatalog{cat: svc.Catalog()}
+}
+
+type aiTACCatalog struct{ cat *tac.Catalog }
+
+func (a aiTACCatalog) Lookup(query string, limit int) []ai.TACKnowledgeHit {
+	hits := a.cat.Lookup(query, limit)
+	out := make([]ai.TACKnowledgeHit, 0, len(hits))
+	for _, h := range hits {
+		kh := ai.TACKnowledgeHit{ClassID: h.ClassID, Title: h.Title, Protocol: h.Protocol,
+			Summary: h.Summary, FirstLook: h.FirstLook, Dialect: h.Dialect}
+		for _, in := range h.Intents {
+			kh.Intents = append(kh.Intents, ai.TACKnowledgeIntent{Title: in.Title, Command: in.Command,
+				Verified: in.Verified == tac.VerifiedCapture, Consent: in.Consent})
+		}
+		out = append(out, kh)
+	}
+	return out
 }

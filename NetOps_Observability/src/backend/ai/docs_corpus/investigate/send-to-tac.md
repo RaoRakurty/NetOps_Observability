@@ -105,8 +105,7 @@ Correlix collects **outputs only**. A command that changes configuration, that
 restarts or reboots the device, or that addresses a daemon or a process is not
 merely refused at run time — it is not carried at all: it is removed from the
 research corpus, never merged into a plan, never rendered and never sent. Only a
-count survives, which is what Iris → Knowledge shows as "excluded by policy",
-grouped as configuration, restart and daemon. Matching is on the command's own
+count survives, grouped as configuration, restart and daemon. Matching is on the command's own
 words, so `show reload cause` and `show system processes` remain ordinary reads.
 The one thing Correlix runs that is not a read is a **bounded ping or
 traceroute** — at most five echoes, 1500 bytes, 30 hops, three probes per hop,
@@ -137,8 +136,7 @@ is offered on the next escalation against a device of the same vendor. Correlix
 ships its own defaults, generated from the authored plans — they are read-only,
 labelled `Correlix default v1`, and you fork one by saving a copy. Your team's
 sets are visible only to your tenant, carry the name of whoever saved them and
-their version, and can be edited or deleted from the same step. Iris → Knowledge
-lists both, and shows what a saved set changed about the default it came from.
+their version, and can be edited or deleted from the same step.
 
 Every command in a template is checked on the way in, and every command is
 checked again on the server before the collection starts. A template changes
