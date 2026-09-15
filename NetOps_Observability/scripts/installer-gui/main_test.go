@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -97,13 +98,14 @@ func sessionClient(t *testing.T, ts *httptest.Server) *http.Client {
 		t.Fatal(err)
 	}
 	c := &http.Client{Transport: ts.Client().Transport, Jar: jar}
-	res, err := c.Get(ts.URL + "/api/state?t=tok123")
+	// The landing page's Continue button: POST /session, 303 back to the wizard.
+	res, err := c.PostForm(ts.URL+"/session", url.Values{"t": {"tok123"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		t.Fatalf("session exchange: got %d, want 200", res.StatusCode)
+		t.Fatalf("session exchange: got %d, want 200 after the redirect", res.StatusCode)
 	}
 	return c
 }
@@ -156,14 +158,25 @@ func TestTokenGate(t *testing.T) {
 			t.Errorf("%s without token: got %d, want 403", url, res.StatusCode)
 		}
 	}
-	res, err := c.Get(ts.URL + "/api/state?t=tok123")
+	// A tokened GET of the page renders the landing page (no session yet)...
+	res, err := c.Get(ts.URL + "/?t=tok123")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		t.Errorf("with token: got %d, want 200", res.StatusCode)
+		t.Errorf("tokened landing page: got %d, want 200", res.StatusCode)
 	}
+	// ...but an API route never exchanges a query-string token (FMEA G8).
+	res, err = c.Get(ts.URL + "/api/state?t=tok123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Errorf("tokened API GET: got %d, want 403", res.StatusCode)
+	}
+	_ = sessionClient(t, ts) // the POST exchange works
 }
 
 func TestCheckParsesPassAndFix(t *testing.T) {

@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -132,7 +133,7 @@ func TestMintCertCoversTheChosenManagementAddress(t *testing.T) {
 func TestSessionCookieIsSecureByDefaultAndOnlyRelaxedForHTTP(t *testing.T) {
 	// Default posture: TLS, so the session cookie must carry Secure.
 	_, ts := newTestServer(t, &fakeRunner{})
-	res, err := ts.Client().Get(ts.URL + "/api/state?t=tok123")
+	res, err := noRedirectClient(t, ts.Client()).PostForm(ts.URL+"/session", url.Values{"t": {"tok123"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +158,7 @@ func TestSessionCookieIsSecureByDefaultAndOnlyRelaxedForHTTP(t *testing.T) {
 	// dropped — and ONLY then.
 	s2, ts2 := newTestServer(t, &fakeRunner{})
 	s2.secureCookie = false
-	res2, err := ts2.Client().Get(ts2.URL + "/api/state?t=tok123")
+	res2, err := noRedirectClient(t, ts2.Client()).PostForm(ts2.URL+"/session", url.Values{"t": {"tok123"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,8 +462,9 @@ func TestWizardWalkAgainstRealScripts(t *testing.T) {
 		}},
 	}
 
-	// Welcome: the token in the URL is exchanged for the session cookie.
-	res, err := c.Get(base + "/?t=walktok")
+	// Welcome: the landing page's Continue button exchanges the token for the
+	// session cookie and lands on the wizard (FMEA G8: POST only).
+	res, err := c.PostForm(base+"/session", url.Values{"t": {"walktok"}})
 	if err != nil {
 		t.Fatal(err)
 	}

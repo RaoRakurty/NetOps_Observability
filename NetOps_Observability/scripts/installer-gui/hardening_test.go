@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -137,7 +138,7 @@ func TestSingleSessionConflict(t *testing.T) {
 
 	// Second token exchange (fresh browser, no cookie) while the first
 	// session is alive must be refused with 409 and a clear message.
-	res, err := ts.Client().Get(ts.URL + "/api/state?t=tok123")
+	res, err := ts.Client().PostForm(ts.URL+"/session", url.Values{"t": {"tok123"}})
 	if err != nil {
 		t.Fatal(err)
 	}

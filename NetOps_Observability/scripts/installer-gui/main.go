@@ -24,7 +24,10 @@
 //   - Every request must carry a one-time session token (printed at launch);
 //     the token is exchanged exactly once for an HttpOnly Secure session
 //     cookie. A second token exchange while a session lives is refused (H2),
-//     and sessions die after 15 idle minutes (sliding).
+//     and sessions die after 15 idle minutes (sliding). The exchange happens
+//     ONLY on the landing page's POST /session: a bare GET of the printed link
+//     (a chat link preview, a prefetch) renders a Continue button and burns
+//     nothing (FMEA G8, TRACKER 315).
 //   - The API executes a FIXED set of commands (I1: no request data ever
 //     reaches a shell line — argv is constant; the only user input, the sudo
 //     password, is written to sudo's stdin and the buffer zeroed after use).
@@ -60,6 +63,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"math/big"
@@ -1712,11 +1716,10 @@ func randomHex(n int) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// authenticate resolves a request against the single-session model (H2):
-// a live session cookie wins (and slides the idle window); otherwise the
-// one-time token may be exchanged for a NEW session — but only when no other
-// session is alive (conflict=true → 409).
-func (s *server) authenticate(r *http.Request) (ok bool, conflict bool, newCookie string) {
+// authenticate reports whether r carries the live session cookie, sliding the
+// idle window when it does (H2). It never exchanges a token: that happens only
+// in apiSession, on POST.
+func (s *server) authenticate(r *http.Request) bool {
 	now := s.now()
 	s.sessMu.Lock()
 	defer s.sessMu.Unlock()
@@ -1726,49 +1729,116 @@ func (s *server) authenticate(r *http.Request) (ok bool, conflict bool, newCooki
 	if c, err := r.Cookie("cx_setup"); err == nil && s.sessID != "" &&
 		subtle.ConstantTimeCompare([]byte(c.Value), []byte(s.sessID)) == 1 {
 		s.sessLast = now // sliding idle window
-		return true, false, ""
+		return true
 	}
-	if t := r.URL.Query().Get("t"); subtle.ConstantTimeCompare([]byte(t), []byte(s.token)) == 1 {
-		if s.sessID != "" {
-			return false, true, ""
-		}
-		id, err := randomHex(16)
-		if err != nil {
-			return false, false, "" // no entropy → fail closed
-		}
-		s.sessID = id
-		s.sessLast = now
-		return true, false, id
-	}
-	return false, false, ""
+	return false
 }
 
-// auth gates every route behind the token/session model.
+// tokenMatches compares a presented one-time token in constant time.
+func (s *server) tokenMatches(t string) bool {
+	return t != "" && subtle.ConstantTimeCompare([]byte(t), []byte(s.token)) == 1
+}
+
+// exchangeToken trades the one-time token for a NEW session — but only when no
+// other session is alive (conflict=true → 409).
+func (s *server) exchangeToken(t string) (cookie string, conflict bool, ok bool) {
+	if !s.tokenMatches(t) {
+		return "", false, false
+	}
+	now := s.now()
+	s.sessMu.Lock()
+	defer s.sessMu.Unlock()
+	if s.sessID != "" && now.Sub(s.sessLast) > idleTimeout {
+		s.sessID = ""
+	}
+	if s.sessID != "" {
+		return "", true, false
+	}
+	id, err := randomHex(16)
+	if err != nil {
+		return "", false, false // no entropy → fail closed
+	}
+	s.sessID = id
+	s.sessLast = now
+	return id, false, true
+}
+
+const sessionConflictMsg = "another setup session is already active — close that browser tab or wait 15 minutes for it to time out"
+
+// auth gates every route behind the session cookie. The only unauthenticated
+// answer is the landing page, for GET / carrying the correct token.
 func (s *server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ok, conflict, cookie := s.authenticate(r)
-		if conflict {
-			writeErr(w, http.StatusConflict,
-				"another setup session is already active — close that browser tab or wait 15 minutes for it to time out")
+		if s.authenticate(r) {
+			next(w, r)
 			return
 		}
-		if !ok {
-			writeErr(w, http.StatusForbidden, "forbidden — open the tokened URL printed by correlix-setup")
+		if r.Method == http.MethodGet && r.URL.Path == "/" && s.tokenMatches(r.URL.Query().Get("t")) {
+			s.landing(w)
 			return
 		}
-		if cookie != "" {
-			// #nosec G124 — Secure is a variable, not a weakened default. It is
-			// TRUE in every default deployment (this server serves TLS) and is
-			// set false ONLY by the explicit, twice-warned --http opt-out, where
-			// a Secure cookie would never be sent back and the wizard could not
-			// hold a session at all. HttpOnly and SameSite=Strict are constant.
-			http.SetCookie(w, &http.Cookie{
-				Name: "cx_setup", Value: cookie, Path: "/",
-				HttpOnly: true, Secure: s.secureCookie, SameSite: http.SameSiteStrictMode,
-			})
-		}
-		next(w, r)
+		writeErr(w, http.StatusForbidden, "forbidden — open the tokened URL printed by correlix-setup")
 	}
+}
+
+// landingPage is what a GET of the printed link renders: a Continue button
+// whose POST exchanges the token. No script, so a previewer cannot "click" it.
+const landingPage = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Correlix Setup</title>
+<style>
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+font-family:"Inter","Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;font-size:15px;
+color:#0b1020;background:#eef1f7}
+main{max-width:34rem;padding:32px;background:rgba(255,255,255,0.7);border:1px solid rgba(23,33,60,0.12);border-radius:12px}
+h1{font-size:24px;margin:0 0 12px}
+p{font-size:15px;color:#232a3a;margin:0 0 20px}
+button{font-size:15px;font-weight:600;padding:10px 22px;border:0;border-radius:8px;background:#4f46e5;color:#fff;cursor:pointer}
+</style></head>
+<body><main>
+<h1>Correlix Setup</h1>
+<p>Continue to open the setup wizard in this browser. Only one browser at a time can hold the setup session.</p>
+<form method="post" action="/session"><input type="hidden" name="t" value="%s"><button type="submit">Continue</button></form>
+</main></body></html>
+`
+
+func (s *server) landing(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
+	h.Set("Referrer-Policy", "no-referrer") // the URL carries the token
+	if _, err := fmt.Fprintf(w, landingPage, html.EscapeString(s.token)); err != nil {
+		return // client went away
+	}
+}
+
+// apiSession is the one token exchange: POST /session with the form field t.
+func (s *server) apiSession(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	if err := r.ParseForm(); err != nil {
+		writeErr(w, http.StatusBadRequest, "malformed session request")
+		return
+	}
+	cookie, conflict, ok := s.exchangeToken(r.PostForm.Get("t"))
+	if conflict {
+		writeErr(w, http.StatusConflict, sessionConflictMsg)
+		return
+	}
+	if !ok {
+		writeErr(w, http.StatusForbidden, "forbidden — open the tokened URL printed by correlix-setup")
+		return
+	}
+	// #nosec G124 — Secure is a variable, not a weakened default. It is TRUE in
+	// every default deployment (this server serves TLS) and is set false ONLY by
+	// the explicit, twice-warned --http opt-out, where a Secure cookie would
+	// never be sent back and the wizard could not hold a session at all.
+	// HttpOnly and SameSite=Strict are constant.
+	http.SetCookie(w, &http.Cookie{
+		Name: "cx_setup", Value: cookie, Path: "/",
+		HttpOnly: true, Secure: s.secureCookie, SameSite: http.SameSiteStrictMode,
+	})
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 // secureHeaders stamps the H4 header set on every response; the HTML page
@@ -1802,6 +1872,7 @@ func (s *server) handler() http.Handler {
 			return // client went away
 		}
 	}))
+	mux.HandleFunc("POST /session", s.apiSession) // the token exchange itself
 	mux.HandleFunc("GET /api/state", s.auth(s.apiState))
 	mux.HandleFunc("GET /api/facts", s.auth(s.apiFacts))
 	mux.HandleFunc("GET /api/stream", s.auth(s.apiStream))
