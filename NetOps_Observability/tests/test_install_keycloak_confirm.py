@@ -112,7 +112,7 @@ def test_main_confirms_fatally_only_after_the_stack_started():
     main_src = src[src.index("def main("):]
     first_up = main_src.index("compose_up(compose_dir")
     early = main_src.index(
-        "bootstrap_keycloak_db(compose_dir, _parse_env(env_path), start_postgres=True)")
-    confirm = main_src.index("confirm_keycloak_db(compose_dir, _parse_env(env_path))")
+        "bootstrap_keycloak_db(compose_dir, _parse_env(env_path), start_postgres=True")
+    confirm = main_src.index("confirm_keycloak_db(compose_dir, _parse_env(env_path)")
     assert early < first_up < confirm
     assert "confirm_keycloak_db(" not in main_src[:first_up]

@@ -189,6 +189,11 @@ ALLOWLIST: dict[AllowKey, str] = {
     ("install.py", "_postgres_shutdown_unconfirmed", "669b319a"): "log read failure returns the reason; stop_stores_cleanly warns postgres is NOT confirmed clean (never assumes clean)",
     # -- early Keycloak DB attempt: deliberately non-fatal, the fatal gate follows --
     ("install.py", "bootstrap_keycloak_db", "e4a91b90"): "pre-start postgres start failure warns + returns False; confirm_keycloak_db retries after the stack is up and fail()s under sso",
+    # Reviewed 2026-09-15 (selfheal/tiers: host-profile budgets §4.3, tiered bring-up §4.5).
+    # Both return the reason to a caller that prints it and falls back to what
+    # the installer did before the feature existed — never to a success claim:
+    ("install.py", "_read_json_object", "4f55f1f9"): "unreadable advisory JSON (host profile / resource plan) returns (None, reason); load_host_profile / planner_overcommit warn it and use unscaled waits / 'plan fits' — the pre-feature behaviour",
+    ("install.py", "ComposeOps._query", "19ea2a08"): "read-only compose query (config --services / ps) failure returns (None, redacted reason); _tiered_up warns and falls back to one full start, _settle warns and compose's own depends_on gates still apply; the final `up -d` still decides",
     ("refresh_provider_ranges.py", "main", "0e6dd5ac"): "first-run bootstrap: no previous snapshot file => empty baseline",
     # Re-pinned 2026-08-17: shifted by the BUS_PARTITIONS planner work
     # (constants + derive_bus_partitions inserted above it). Handler re-read,

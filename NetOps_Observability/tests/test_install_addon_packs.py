@@ -232,7 +232,7 @@ def test_enabling_sso_creates_keycloaks_database() -> None:
     src = (SCRIPTS / "install.py").read_text()
     assert '"--bootstrap-sso"' in src, "install.py has no --bootstrap-sso flag"
     assert "if args.bootstrap_sso:" in src
-    assert "bootstrap_keycloak_db(compose_dir, _parse_env(env_path))" in src
+    assert "bootstrap_keycloak_db(compose_dir, _parse_env(env_path)" in src
 
 
 def test_the_setup_console_offers_every_pack() -> None:
