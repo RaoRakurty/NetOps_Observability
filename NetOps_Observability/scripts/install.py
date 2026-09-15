@@ -47,6 +47,7 @@ import stat
 import string
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -2403,7 +2404,9 @@ def ensure_ingress_cert(root: Path) -> None:
 
 
 def compose_up(compose_dir: Path, offline: bool = False,
-               root: Path | None = None) -> None:
+               root: Path | None = None, *, ops=None,
+               sleep=time.sleep, clock=time.monotonic,
+               budget_s: int | None = None) -> None:
     # Profiles come from COMPOSE_PROFILES in the generated .env — NOT from a
     # --profile flag here: the CLI flag would OVERRIDE (not merge with) the env
     # var, silently dropping profiles like embedded-bus/prober. The .env is the
@@ -2445,21 +2448,284 @@ def compose_up(compose_dir: Path, offline: bool = False,
     build_env.setdefault("BUILD_TIME",
                          datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
+    # Convergence (2026-09-15, .123 fresh install): the old loop was three blind
+    # passes 30 s apart. Postgres, SIGKILLed mid-shutdown when phase B recreated
+    # it, spent 145 s in crash recovery; its health gate said "unhealthy" at
+    # 50 s and the install failed while the database was healing itself. Now a
+    # failed pass is DIAGNOSED: a dependency compose gave up on is watched until
+    # it is healthy (with the reason shown), a crash loop or an exit fails at once
+    # with that service's own log lines, and failures no wait can fix (port in
+    # use, missing image, full disk) fail on the first pass with the remedy.
+    budget = budget_s if budget_s is not None else _converge_budget()
+    ops = ops if ops is not None else ComposeOps(compose_dir, build_env)
+    started = clock()
+    deadline = started + budget
     last = 1
-    for attempt in range(1, 4):
-        r = subprocess.run(["docker", "compose", "up", "-d", build_flag],
-                           cwd=str(compose_dir), env=build_env, check=False)
-        if r.returncode == 0:
-            ok("services started")
+    passes = 0
+    for passes in range(1, _UP_MAX_PASSES + 1):
+        rc, out = ops.up(build_flag)
+        if rc == 0:
+            ok("services started" + (f" (converged on pass {passes})" if passes > 1 else ""))
             return
-        last = r.returncode
-        if attempt < 3:
-            warn(f"start pass {attempt} incomplete (slow first-boot health) — "
-                 "waiting 30s and retrying…")
-            time.sleep(30)
-    fail(f"docker compose up did not converge after 3 attempts (last exit {last}). "
-         "Check: docker compose ps")
+        last = rc
+        for sig, remedy in _UP_FATAL_SIGNATURES:
+            if sig.search(out):
+                fail(f"docker compose up failed (exit {rc}): {remedy}")
+        if clock() >= deadline:
+            break
+        blockers = sorted({m.group(1) for m in _UP_BLOCKER.finditer(out)})
+        if blockers:
+            warn(f"start pass {passes}: compose stopped waiting for "
+                 f"{', '.join(blockers)} before it reported healthy — watching it")
+            kind, msg = _wait_blockers_healthy(ops, blockers, started, deadline,
+                                               budget, sleep, clock)
+            if kind == "timeout":
+                fail(msg)
+            if kind != "healthy":
+                fail(msg + "\n  Re-running the installer is safe once the cause is fixed.")
+            continue
+        pause = max(0.0, min(30.0, deadline - clock()))
+        warn(f"start pass {passes} incomplete (exit {rc}, no single service to "
+             f"wait on) — retrying in {int(pause)}s")
+        sleep(pause)
+    fail(f"docker compose up did not converge within {budget}s ({passes} passes, "
+         f"last exit {last}). Check: docker compose ps -a")
 
+
+# ── compose convergence policy ───────────────────────────────────────────────
+
+_UP_MAX_PASSES = 8
+_CRASHLOOP_RESTARTS = 3
+_CONVERGE_BUDGET_DEFAULT_S = 900
+
+# `docker compose up` output that no amount of waiting fixes.
+_UP_FATAL_SIGNATURES = (
+    (re.compile(r"port is already allocated|address already in use", re.IGNORECASE),
+     ("a host port Correlix needs is already in use by another process. Find it "
+      "with `ss -ltnp`, stop it, and re-run the installer")),
+    (re.compile(r"No such image|pull access denied|manifest unknown|"
+                r"image with reference .* was found but does not match", re.IGNORECASE),
+     ("an image is missing on this host, so the bundle load did not complete. "
+      "Re-run the installer; it reloads the image bundle")),
+    (re.compile(r"no space left on device", re.IGNORECASE),
+     ("the disk is full. Free space under the install directory and Docker's "
+      "data root (`docker system df`), then re-run the installer")),
+)
+# The dependency compose gave up on, e.g.
+#   dependency failed to start: container netops-postgres-1 is unhealthy
+_UP_BLOCKER = re.compile(
+    r"dependency failed to start: container (\S+) (?:is unhealthy|exited)")
+
+# Log lines that say a slow service is healing, not broken.
+_PROGRESS_SIGNATURES = (
+    (re.compile(r"syncing data directory|automatic recovery in progress|"
+                r"redo starts|database system was interrupted|end-of-recovery"),
+     ("recovering from an unclean stop (normal after an interrupted shutdown; "
+      "slow disks take minutes)")),
+    (re.compile(r"database system is starting up|not yet accepting connections"),
+     "still starting up"),
+)
+_SECRETISH = re.compile(r"passw|secret|token|apikey|api_key|credential|bearer",
+                        re.IGNORECASE)
+
+
+def _converge_budget() -> int:
+    raw = os.environ.get("CORRELIX_CONVERGE_BUDGET_S", "").strip()
+    if not raw:
+        return _CONVERGE_BUDGET_DEFAULT_S
+    try:
+        v = int(raw)
+    except ValueError:
+        warn(f"CORRELIX_CONVERGE_BUDGET_S={raw!r} is not a number of seconds; "
+             f"using {_CONVERGE_BUDGET_DEFAULT_S}")
+        return _CONVERGE_BUDGET_DEFAULT_S
+    return max(120, min(3600, v))
+
+
+class ComposeOps:
+    """Everything compose_up asks Docker. Injectable, so the convergence policy
+    is tested without a stack (CLAUDE.md §2). Every call is bounded (§9)."""
+
+    UP_TIMEOUT_S = 1800
+
+    def __init__(self, compose_dir: Path, env: dict) -> None:
+        self.compose_dir = compose_dir
+        self.env = env
+
+    def up(self, build_flag: str) -> tuple[int, str]:
+        """Run `up -d`, streaming its output live (the GUI parses it) while
+        keeping the tail for diagnosis."""
+        try:
+            p = subprocess.Popen(["docker", "compose", "up", "-d", build_flag],
+                                 cwd=str(self.compose_dir), env=self.env,
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 text=True)
+        except OSError as e:
+            return 126, f"could not run docker compose: {e}"
+        killer = threading.Timer(self.UP_TIMEOUT_S, p.kill)
+        killer.start()
+        tail: list[str] = []
+        try:
+            assert p.stdout is not None
+            for line in p.stdout:
+                print(line, end="", flush=True)
+                tail.append(line)
+                if len(tail) > 400:
+                    del tail[:100]
+            rc = p.wait()
+        finally:
+            killer.cancel()
+        return rc, "".join(tail)
+
+    def inspect(self, name: str) -> dict | None:
+        try:
+            r = subprocess.run(["docker", "inspect", "--format",
+                                '{"state":{{json .State}},"restarts":{{.RestartCount}}}',
+                                name], capture_output=True, text=True, timeout=30,
+                               check=False)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if r.returncode != 0:
+            return None
+        try:
+            return json.loads(r.stdout)
+        except ValueError:
+            return None
+
+    def logs(self, name: str, n: int = 40) -> str:
+        try:
+            r = subprocess.run(["docker", "logs", "--tail", str(n), name],
+                               capture_output=True, text=True, timeout=30, check=False)
+        except (OSError, subprocess.SubprocessError) as e:
+            return f"(could not read logs: {e})"
+        return (r.stdout or "") + (r.stderr or "")
+
+
+def _redacted_tail(text: str, n: int = 15) -> list[str]:
+    lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+    return [("[line withheld: may contain a credential]" if _SECRETISH.search(ln) else ln)
+            for ln in lines[-n:]]
+
+
+def _progress_reason(logs: str) -> str:
+    recent = "\n".join(logs.splitlines()[-30:])
+    for sig, why in _PROGRESS_SIGNATURES:
+        if sig.search(recent):
+            return why
+    return ""
+
+
+def _diagnosis(ops, name: str, headline: str) -> str:
+    body = "\n".join("    " + ln for ln in _redacted_tail(ops.logs(name, 40)))
+    return f"{headline}\n  last log lines of {name}:\n{body or '    (no output)'}"
+
+
+def _wait_blockers_healthy(ops, names: list[str], started: float, deadline: float,
+                           budget: int, sleep, clock) -> tuple[str, str]:
+    """Watch the containers compose gave up on until every one is healthy.
+
+    Returns ("healthy", "") or a failure kind with an operator-facing message:
+    "exited" / "crashloop" (waiting cannot fix it) or "timeout" (the budget ran
+    out while it was still progressing)."""
+    base: dict[str, int] = {}
+    last_note = float("-inf")
+    while True:
+        pending: list[tuple[str, str]] = []
+        for n in names:
+            st = ops.inspect(n)
+            if st is None:
+                return "exited", (f"{n} no longer exists (it was removed while the "
+                                  "installer waited). Check: docker compose ps -a")
+            state = st.get("state") or {}
+            restarts = int(st.get("restarts") or 0)
+            base.setdefault(n, restarts)
+            status = state.get("Status", "")
+            health = (state.get("Health") or {}).get("Status", "")
+            if restarts - base[n] >= _CRASHLOOP_RESTARTS:
+                return "crashloop", _diagnosis(
+                    ops, n, f"{n} keeps restarting ({restarts - base[n]} restarts "
+                            "while the installer waited), so waiting will not fix it.")
+            if status in ("exited", "dead"):
+                return "exited", _diagnosis(
+                    ops, n, f"{n} stopped with exit code {state.get('ExitCode')}.")
+            if status == "running" and health in ("healthy", ""):
+                continue
+            pending.append((n, health or status or "unknown"))
+        if not pending:
+            ok(f"{', '.join(names)} healthy after {int(clock() - started)}s — "
+               "starting the rest")
+            return "healthy", ""
+        now = clock()
+        if now >= deadline:
+            n, h = pending[0]
+            return "timeout", _diagnosis(
+                ops, n, f"{n} is still {h} after the {budget}s start budget. "
+                        "A slower host can raise it with CORRELIX_CONVERGE_BUDGET_S "
+                        "(max 3600) and re-run the installer, which is safe.")
+        if now - last_note >= 30:
+            for n, h in pending:
+                why = _progress_reason(ops.logs(n, 30))
+                info(f"waiting for {n}: {h}" + (f" — {why}" if why else "")
+                     + f" ({int(now - started)}s of a {budget}s budget)")
+            last_note = now
+        sleep(max(0.0, min(5.0, deadline - now)))
+
+
+# Stores the TLS phase-B restart recreates. Stopping them first, with a real
+# shutdown window, is what keeps that restart from being a crash.
+_STATEFUL_STORES = ("postgres", "clickhouse", "kafka", "opensearch")
+_SIGKILL_EXIT = 137
+
+
+def stop_stores_cleanly(compose_dir: Path, services=_STATEFUL_STORES, *,
+                        run=subprocess.run, grace_s: int = 120) -> None:
+    """Stop the running stateful stores with a shutdown window before phase B
+    recreates them, and say so when one was killed anyway (its next start runs
+    crash recovery, which compose_up now waits through). Never fatal: the
+    recreate would stop them regardless; this only makes the stop clean."""
+    try:
+        ps = run(["docker", "compose", "ps", "--status", "running", "--services"],
+                 cwd=str(compose_dir), capture_output=True, text=True, timeout=60,
+                 check=False)
+    except (OSError, subprocess.SubprocessError) as e:
+        warn(f"could not list running services before the TLS restart: {e}")
+        return
+    if ps.returncode != 0:
+        warn("could not list running services before the TLS restart: "
+             f"{(ps.stderr or ps.stdout).strip()}")
+        return
+    running = set(ps.stdout.split())
+    targets = [s for s in services if s in running]
+    if not targets:
+        return
+    info(f"stopping {', '.join(targets)} cleanly before the TLS restart "
+         f"(up to {grace_s}s)…")
+    try:
+        r = run(["docker", "compose", "stop", "--timeout", str(grace_s), *targets],
+                cwd=str(compose_dir), capture_output=True, text=True,
+                timeout=grace_s + 120, check=False)
+    except (OSError, subprocess.SubprocessError) as e:
+        warn(f"stopping the stores before the TLS restart failed: {e}")
+        return
+    if r.returncode != 0:
+        warn(f"stopping the stores before the TLS restart failed: "
+             f"{(r.stderr or r.stdout).strip()}")
+    killed = []
+    for svc in targets:
+        try:
+            q = run(["docker", "compose", "ps", "-a", "--format", "{{.ExitCode}}", svc],
+                    cwd=str(compose_dir), capture_output=True, text=True, timeout=60,
+                    check=False)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if q.returncode == 0 and q.stdout.strip().splitlines()[:1] == [str(_SIGKILL_EXIT)]:
+            killed.append(svc)
+    if killed:
+        warn(f"{', '.join(killed)} did not finish shutting down within {grace_s}s "
+             "and was killed; its next start runs crash recovery, which can take "
+             "minutes on a slow disk (the installer waits for it)")
+    else:
+        ok(f"{', '.join(targets)} stopped cleanly")
 
 def load_bundle(bundle: Path) -> None:
     """docker-load the installer's image archive (.tar, .tar.gz, or .tar.zst).
@@ -2756,7 +3022,8 @@ def bootstrap_opensearch(root: Path, tls: bool = False) -> None:
 _PG_IDENT = re.compile(r"^[A-Za-z0-9_]+$")
 
 
-def bootstrap_keycloak_db(compose_dir: Path, env: dict) -> None:
+def bootstrap_keycloak_db(compose_dir: Path, env: dict, *,
+                          start_postgres: bool = False) -> None:
     """Create Keycloak's database when the `sso` profile is active.
 
     Keycloak does not create its own DB: without this it crash-loops on first
@@ -2781,6 +3048,22 @@ def bootstrap_keycloak_db(compose_dir: Path, env: dict) -> None:
     # first boot), then the existence probe. The wait is the SHARED helper — a
     # real query against the real server, never pg_isready, which also answers
     # for the entrypoint's temporary init server (2026-09-14 lab install).
+    # Before the stack starts (the normal install path) nothing has started
+    # postgres yet unless the app-state backend did; start ONLY postgres.
+    if start_postgres:
+        try:
+            up = subprocess.run(["docker", "compose", "up", "-d", "postgres"],
+                                cwd=str(compose_dir), capture_output=True, text=True,
+                                timeout=300, check=False)
+        except (OSError, subprocess.SubprocessError) as e:
+            warn(f"could not start postgres to create the {db} database: {e}")
+            info(f"re-run install.py, or once postgres is up run: {manual}")
+            return
+        if up.returncode != 0:
+            warn(f"could not start postgres to create the {db} database: "
+                 f"{(up.stderr or up.stdout).strip()}")
+            info(f"re-run install.py, or once postgres is up run: {manual}")
+            return
     runner = ComposeRunner(compose_dir)
     rok, rmsg = wait_for_postgres(runner, user=user, db="postgres",
                                   label="postgres (keycloak db check)")
@@ -3594,6 +3877,16 @@ def main() -> None:
     # quiet downgrade to another store.
     bootstrap_app_state_role(compose_dir, _parse_env(env_path))
 
+    # Keycloak cannot create its own database, and a Keycloak started without
+    # it crash-loops. This used to run only AFTER the stack converged, so any
+    # failed start left sign-on crash-looping on a missing database as well
+    # (2026-09-15, .123). Create it before anything starts; the check after
+    # the stack is up stays as an idempotent confirmation.
+    if "sso" in {p.strip() for p in
+                 _parse_env(env_path).get("COMPOSE_PROFILES", "").split(",")}:
+        step("bootstrap Keycloak database (profile sso)", stage="bootstrap-kc")
+        bootstrap_keycloak_db(compose_dir, _parse_env(env_path), start_postgres=True)
+
     # Phase A (TLS): the baseline stack boots with the mint variables set; the
     # api's internal CA writes every SVID to data/tls while the stores are
     # still plaintext. On a rerun with certs already minted this converges in
@@ -3607,6 +3900,7 @@ def main() -> None:
         activate_tls_compose_file(compose_dir, env_path)
         enable_tls_database_url(env_path)
         step("starting stack (TLS phase B: fail-closed mesh)", stage="up-b")
+        stop_stores_cleanly(compose_dir)
         compose_up(compose_dir, offline=args.offline, root=root)
 
     # SEC-007 P0 (2026-08-16): with default-deny enforced, an empty KRaft ACL
@@ -3626,6 +3920,8 @@ def main() -> None:
     active = {p.strip() for p in
               _parse_env(env_path).get("COMPOSE_PROFILES", "").split(",")}
     if "sso" in active:
+        # Confirmation pass: normally "already exists" (created before the first
+        # start); creates it when that early attempt could not reach postgres.
         step("bootstrap Keycloak database (profile sso)", stage="bootstrap-kc")
         bootstrap_keycloak_db(compose_dir, _parse_env(env_path))
 
