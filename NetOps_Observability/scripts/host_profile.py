@@ -5,7 +5,7 @@
 """Host profile — how fast this host really is, so installer budgets can scale.
 
 docs/design/INSTALLER_SELF_HEALING_FMEA_2026-09-15.md §4.3 (row 3, §3.12 H1).
-On 10.70.245.123 every synchronous write cost ≈60 ms and tasks were fully
+On the 2026-09-15 lab install every synchronous write cost ≈60 ms and tasks were fully
 stalled on IO 22 % of the time; every fixed installer budget was too short and
 nothing had measured the disk. This module measures it, boundedly:
 

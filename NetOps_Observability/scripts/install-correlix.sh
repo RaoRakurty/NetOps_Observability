@@ -38,6 +38,11 @@
 #         Collect a REDACTED diagnostic bundle (compose state, container logs,
 #         health, store/bus summaries) as one .tar.zst to send to support.
 #         Secrets are stripped; read its MANIFEST before sending.
+#     ./install-correlix.sh doctor [--json]
+#         Read-only health report: host speed, installer lock, setup wizard,
+#         every container's state and log verdict, disk against the OpenSearch
+#         watermarks, missing .env settings (names only). Changes nothing.
+#         Exit 0 healthy, 1 problems found, 2 could not assess.
 #
 # Advanced (documented in ADVANCED.md, hidden from the quickstart):
 #     --external-kafka --broker-urls host1:9092[,host2:9092]
@@ -255,11 +260,12 @@ CONFIG_FILE=""
 PRINT_FLAGS=0
 # support-bundle passthrough (rejected for every other subcommand).
 SB_ARGS=()
+DOCTOR_JSON=0
 if [ $# -gt 0 ]; then
   case "$1" in
-    install|status|logs|stop|start|uninstall|reset-demo-data|enable|disable|menu|console|gui|support-bundle) CMD="$1"; shift ;;
+    install|status|logs|stop|start|uninstall|reset-demo-data|enable|disable|menu|console|gui|support-bundle|doctor) CMD="$1"; shift ;;
     -*) : ;;  # bare options → install
-    *) die "Unknown command: $1" "Commands: install status logs stop start uninstall reset-demo-data enable disable support-bundle gui console menu" ;;
+    *) die "Unknown command: $1" "Commands: install status logs stop start uninstall reset-demo-data enable disable support-bundle doctor gui console menu" ;;
   esac
 elif [ -t 0 ] && [ -t 1 ]; then
   # No arguments in an interactive terminal → the setup console (menu
@@ -282,9 +288,11 @@ while [ $# -gt 0 ]; do
                       SB_ARGS+=("$1" "${2:?$1 needs a value}"); shift 2 ;;
     --no-logs)        [ "$CMD" = "support-bundle" ] || die "Unknown option: $1" "--no-logs is only valid for: ./install-correlix.sh support-bundle"
                       SB_ARGS+=("$1"); shift ;;
+    --json)           [ "$CMD" = "doctor" ] || die "Unknown option: $1" "--json is only valid for: ./install-correlix.sh doctor"
+                      DOCTOR_JSON=1; shift ;;
     --lab)            LAB=1; shift ;;
     --purge)          PURGE=1; shift ;;
-    -h|--help)        sed -n '3,36p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)        sed -n '3,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) if [ "$CMD" = "logs" ] && [ -z "$LOG_SVC" ]; then LOG_SVC="$1"; shift
        else die "Unknown option: $1" "See ./install-correlix.sh --help"; fi ;;
   esac
@@ -365,6 +373,219 @@ port_purpose() {
   esac
 }
 
+# ---------- host checks (FMEA 2026-09-15 §3.12; rows 3, 10, 15) -------------
+# Each check prints a pass (ok) or a warning (warn, the install continues), or
+# stops the install with a named remedy (die) — die ONLY for a genuine blocker.
+# A check that cannot measure says so by name and continues (§16.1).
+
+# Compose added the `!override` merge tag, which compose.tls.yml uses, in
+# 2.24.4 (Docker docs, "Merge and override" reference). An older plugin
+# rejects the TLS layout late, part-way through the install.
+COMPOSE_MIN_VERSION="2.24.4"
+# Unpacked image size per byte of .tar.zst when MANIFEST does not record it:
+# measured on the 2026-09-15 lab install (containerd image store) — 1.9 GB of
+# archives became 11.8 GB of images, 6.2x. An ESTIMATE, and printed as one.
+IMAGE_UNPACK_RATIO_X10=62
+DISK_PROJECTION_WARN_PCT=80   # keeps a shared data/ under OpenSearch's 85 % low watermark
+INODE_FAIL_PCT=5
+INODE_WARN_PCT=10
+
+# version_ge A B — true when dotted version A >= B.
+version_ge() { [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$2" ]; }
+
+# The closest directory that exists: what a not-yet-created path will live on.
+nearest_existing_dir() {
+  local p="$1"
+  while [ -n "$p" ] && [ "$p" != "/" ] && [ ! -d "$p" ]; do p=$(dirname -- "$p"); done
+  printf '%s' "${p:-/}"
+}
+
+gib() { awk -v b="$1" 'BEGIN { printf "%.1f GB", b / 1073741824 }'; }
+
+# Rootless Docker cannot publish the privileged ports the stack needs (443,
+# 514, 162); it used to surface as a bind failure mid-install (H9).
+check_rootless_docker() {
+  local out
+  if ! out=$(timeout 15 docker info --format '{{json .SecurityOptions}}' 2>&1); then
+    warn "could not read Docker's security options ($(printf '%s' "$out" | tail -1)) — rootless mode not checked."
+    return 0
+  fi
+  case "$out" in
+    *name=rootless*)
+      die "Docker is running in rootless mode." \
+        "Correlix publishes privileged ports (443, 514, 162) that rootless Docker cannot bind.
+Use the system Docker service instead (sudo ./prepare-host.sh installs and enables it),
+make sure DOCKER_HOST does not point at a rootless socket, then re-run the installer." ;;
+  esac
+  ok "docker: rootful daemon"
+}
+
+check_compose_version() {
+  local out v
+  if ! out=$(timeout 15 docker compose version --short 2>&1); then
+    warn "could not read the Docker Compose version ($(printf '%s' "$out" | tail -1)) — minimum $COMPOSE_MIN_VERSION not checked."
+    return 0
+  fi
+  v=$(printf '%s\n' "$out" | head -1 | tr -d '[:space:]')
+  v=${v#v}
+  case "$v" in
+    [0-9]*.[0-9]*) ;;
+    *) warn "could not read the Docker Compose version ('$v') — minimum $COMPOSE_MIN_VERSION not checked."
+       return 0 ;;
+  esac
+  if ! version_ge "${v%%[-+]*}" "$COMPOSE_MIN_VERSION"; then
+    die "Docker Compose $v is too old; Correlix needs $COMPOSE_MIN_VERSION or newer." \
+      "The TLS layout uses the '!override' merge tag, added in Compose $COMPOSE_MIN_VERSION.
+Upgrade the plugin (Debian/Ubuntu: sudo apt-get install --only-upgrade docker-compose-plugin),
+then re-run the installer."
+  fi
+  ok "docker compose $v"
+}
+
+# check_inode_headroom LABEL PATH — a filesystem out of inodes fails every
+# write with "no space left on device" while df -h still shows free space (H7).
+check_inode_headroom() {
+  local label="$1" path out total free pct
+  path=$(nearest_existing_dir "$2")
+  if ! out=$(timeout 15 df -Pi -- "$path" 2>&1); then
+    warn "could not read inode usage of $path ($(printf '%s' "$out" | tail -1)) — inode headroom not checked."
+    return 0
+  fi
+  read -r _ total _ free _ <<< "$(printf '%s\n' "$out" | tail -1)"
+  case "$total$free" in
+    ''|*[!0-9]*)
+      warn "unexpected inode report for $path — inode headroom not checked."
+      return 0 ;;
+  esac
+  if [ "$total" -eq 0 ]; then
+    ok "$label: no fixed inode limit ($path)"
+    return 0
+  fi
+  pct=$(( free * 100 / total ))
+  if [ "$pct" -lt "$INODE_FAIL_PCT" ]; then
+    die "Only $pct % of inodes (file slots) are free on the filesystem holding $path ($label)." \
+      "Correlix's stores create many small files. Find what uses them:
+  sudo du --inodes -x -d 3 $path | sort -n | tail
+remove what is not needed, then re-run the installer."
+  elif [ "$pct" -lt "$INODE_WARN_PCT" ]; then
+    warn "$label: only $pct % of inodes free on $path — the stores create many files; keep an eye on it."
+  else
+    ok "$label: $pct % inodes free"
+  fi
+}
+
+# check_image_disk_projection DOCKER_ROOT — the image bundle unpacks to several
+# times its compressed size in Docker's store (FMEA row 10). The unpacked size
+# is MANIFEST's `images_unpacked_bytes:` when the bundle records it, otherwise
+# the labelled estimate above. Fails only when even the compressed archives
+# cannot fit (images never unpack smaller); anything built on the estimate is
+# a warning.
+check_image_disk_projection() {
+  if [ "$MODE" != "bundle" ] || [ -z "$BUNDLE_DIR" ]; then
+    ok "disk projection: source install — images are built on this host, there is no image bundle to size"
+    return 0
+  fi
+  local droot zst=0 f sz unpacked="" label out size used avail after note=""
+  droot=$(nearest_existing_dir "$1")
+  for f in "$BUNDLE_DIR"/correlix-images-*.tar.zst "$BUNDLE_DIR"/correlix-images-*.tar.zst.part[0-9][0-9] \
+           "$BUNDLE_DIR"/correlix-addon-*.tar.zst; do
+    [ -f "$f" ] || continue
+    # A joined archive and its .partNN pieces are the same bytes: count one.
+    case "$f" in
+      *.part[0-9][0-9]) if [ -f "${f%.part[0-9][0-9]}" ]; then continue; fi ;;
+    esac
+    if ! sz=$(stat -c %s -- "$f" 2>&1); then
+      warn "could not read the size of ${f##*/} ($sz) — disk projection skipped."
+      return 0
+    fi
+    zst=$(( zst + sz ))
+  done
+  if [ -f "$BUNDLE_DIR/MANIFEST" ]; then
+    unpacked=$(sed -n 's/^images_unpacked_bytes:[[:space:]]*\([0-9][0-9]*\)[[:space:]]*$/\1/p' "$BUNDLE_DIR/MANIFEST" | head -1)
+  fi
+  if [ -n "$unpacked" ]; then
+    label="$(gib "$unpacked") unpacked (from MANIFEST)"
+  elif [ "$zst" -gt 0 ]; then
+    unpacked=$(( zst * IMAGE_UNPACK_RATIO_X10 / 10 ))
+    label="about $(gib "$unpacked") unpacked (ESTIMATE: 6.2x the $(gib "$zst") of image archives, the ratio measured on a 2026-09-15 install)"
+  else
+    warn "no image archives found next to the installer — disk projection skipped."
+    return 0
+  fi
+  if ! out=$(timeout 15 df -PB1 -- "$droot" 2>&1); then
+    warn "could not read the free space of $droot ($(printf '%s' "$out" | tail -1)) — disk projection skipped."
+    return 0
+  fi
+  read -r _ size used avail _ <<< "$(printf '%s\n' "$out" | tail -1)"
+  case "$size$used$avail" in
+    ''|*[!0-9]*)
+      warn "unexpected free-space report for $droot — disk projection skipped."
+      return 0 ;;
+  esac
+  if [ -f "$ENV_FILE" ]; then
+    note=" (Images from an earlier install may already be loaded; this counts them again.)"
+  fi
+  if [ "$zst" -gt 0 ] && [ "$avail" -lt "$zst" ]; then
+    die "The image bundle cannot fit: Docker's filesystem ($droot) has $(gib "$avail") free, and the compressed images alone are $(gib "$zst")." \
+      "Images unpack to $label. Free space there (see 'df -h $droot' and 'docker system df'), then re-run the installer."
+  fi
+  if [ "$size" -le 0 ]; then
+    warn "Docker's filesystem ($droot) reports no size — disk projection skipped."
+    return 0
+  fi
+  after=$(( (used + unpacked) * 100 / size ))
+  if [ "$unpacked" -gt "$avail" ]; then
+    warn "disk projection: the images may not fit — they need $label, and Docker's filesystem ($droot) has $(gib "$avail") free.$note"
+  elif [ "$after" -gt "$DISK_PROJECTION_WARN_PCT" ]; then
+    warn "disk projection: after loading the images Docker's filesystem ($droot) would be about $after % full ($label); OpenSearch stops placing data at 85-90 % when data/ shares it.$note"
+  else
+    ok "disk projection: images need $label; Docker's filesystem would be about $after % full"
+  fi
+}
+
+# run_host_profile [DOCKER_ROOT] — measure how fast this host is (FMEA row 3,
+# design §4.3) and save data/.host-profile.json for the installer's time
+# budgets. Bounded (the probe caps itself at 5 s per filesystem, 30 s overall)
+# and never fatal: a host that cannot be measured installs with the standard
+# budgets, and says so. A very slow host is warned about, never refused (owner
+# decision, FMEA §7 Q1). Without DOCKER_ROOT the profiler asks Docker itself.
+run_host_profile() {
+  local profiler="$ROOT/scripts/host_profile.py" out rc=0 first klass verdict saved
+  local dargs=()
+  if [ ! -f "$profiler" ]; then
+    say "host speed: measured after the bundle is unpacked"
+    return 0
+  fi
+  if [ -n "${1:-}" ]; then
+    dargs=(--docker-root "$1")
+  fi
+  out=$(timeout 30 python3 -B "$profiler" probe --data-dir "$ROOT/data" ${dargs[@]+"${dargs[@]}"} \
+          --write "$ROOT/data/.host-profile.json" 2>&1) || rc=$?
+  first=$(printf '%s\n' "$out" | head -1)
+  klass=${first%%$'\t'*}
+  verdict=${first#*$'\t'}
+  verdict=${verdict#*$'\t'}
+  case "$rc" in
+    0|3)
+      case "$klass" in
+        fast|normal) ok "host speed: $verdict" ;;
+        slow)        warn "host speed: $verdict" ;;
+        very-slow)   warn "$verdict" ;;
+        *)           warn "host speed: unexpected answer from the profiler: $first" ;;
+      esac
+      if [ "$rc" = 3 ]; then
+        # grep exits 1 when the profiler printed no reason line; the fallback
+        # text then stands in for it.
+        saved=$(printf '%s\n' "$out" | grep -m1 '^not saved:') || saved="not saved"
+        warn "host speed profile $saved — the installer uses its standard time budgets."
+      fi ;;
+    2)   warn "host speed could not be measured: $verdict The install continues with standard time budgets." ;;
+    124) warn "host speed measurement did not finish within 30 s (itself a sign of very slow storage) — the install continues with standard time budgets." ;;
+    *)   warn "host speed measurement failed (exit $rc): $(printf '%s\n' "$out" | tail -1) — the install continues with standard time budgets." ;;
+  esac
+  printf '%s\n' "$out" | sed -n 's/^note: /    note: /p'
+}
+
 preflight() {
   say "${BOLD}Checking this host...${RST}"
 
@@ -412,6 +633,8 @@ preflight() {
     "Start it (e.g. 'sudo systemctl start docker') or add your user to the docker group, then re-run."
   docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required ('docker compose' plugin)." \
     "Install the compose plugin: https://docs.docker.com/compose/install/linux/"
+  check_rootless_docker
+  check_compose_version
   if [ "$MODE" = "bundle" ]; then
     command -v zstd >/dev/null || die "zstd is required to unpack the image bundle." \
       "Install it (Debian/Ubuntu: sudo apt-get install zstd · RHEL: sudo dnf install zstd) and re-run."
@@ -428,8 +651,12 @@ preflight() {
     ok "memory: ${mem_gb} GB"
   fi
 
-  local free_gb
-  free_gb=$(df -BG --output=avail "$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)" 2>/dev/null | tail -1 | tr -dc '0-9')
+  local free_gb droot
+  if ! droot=$(timeout 15 docker info -f '{{.DockerRootDir}}' 2>&1) || [ "${droot#/}" = "$droot" ]; then
+    warn "could not read Docker's data root ($(printf '%s' "${droot:-no answer}" | tail -1)) — assuming /var/lib/docker."
+    droot=/var/lib/docker
+  fi
+  free_gb=$(df -BG --output=avail "$droot" 2>/dev/null | tail -1 | tr -dc '0-9')
   free_gb=${free_gb:-0}
   if [ "$free_gb" -lt 20 ]; then
     die "Only ${free_gb} GB free disk for Docker; Correlix needs at least 40 GB (100 GB recommended)."
@@ -438,6 +665,9 @@ preflight() {
   else
     ok "disk: ${free_gb} GB free"
   fi
+  check_image_disk_projection "$droot"
+  check_inode_headroom "Docker data root" "$droot"
+  check_inode_headroom "data directory" "$ROOT/data"
 
   if [ ! -f "$ENV_FILE" ] && port_in_use "$UI_PORT"; then
     die "Port $UI_PORT is already in use. Correlix's web UI needs this port." \
@@ -472,6 +702,7 @@ or apply just this setting:
 then re-run ./install-correlix.sh"
     fi
   fi
+  run_host_profile "$droot"
   ok "docker + compose ready"
 }
 
@@ -1258,6 +1489,8 @@ cmd_install() {
     return 0
   fi
   start_install_log
+  local root_was_unpacked=0
+  if [ -d "$ROOT" ]; then root_was_unpacked=1; fi
   # Single writer from here on (FMEA row 12). A refusal exits 3 naming the
   # holder, before anything on the host is touched.
   acquire_bundle_lock install
@@ -1276,6 +1509,11 @@ cmd_install() {
     verify_bundle
     # A first-run bundle only now has deployment/docker/ to lock.
     acquire_install_lock install
+    # preflight ran before the source tree existed, so the host profiler that
+    # ships inside it could not run yet: measure now, before any budget is spent.
+    if [ "$root_was_unpacked" = 0 ]; then
+      run_host_profile ""
+    fi
   fi
 
   # Assemble install.py arguments. Defaults are the appliance path: embedded
@@ -1663,6 +1901,34 @@ cmd_support_bundle() {
   esac
 }
 
+# Read-only health report (FMEA 2026-09-15 §4.6). No lock is taken on purpose:
+# a doctor must be able to look at an install that is running, or at one whose
+# installer died holding the lock. The report module only reads, bounds every
+# docker call, and never prints a secret value. Its exit code passes through:
+# 0 healthy · 1 problems found · 2 could not assess. Messages from this wrapper
+# go to stderr so `doctor --json` keeps stdout pure JSON.
+cmd_doctor() {
+  local report="$ROOT/scripts/install_doctor.py" rc=0
+  local jflag=()
+  if [ ! -f "$report" ]; then
+    printf 'doctor: %s is missing — this bundle is not unpacked yet, so there is no install to examine.\n' "$report" >&2
+    exit 2
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf 'doctor: python3 is missing, so the report cannot run (prepare the host first: sudo ./prepare-host.sh).\n' >&2
+    exit 2
+  fi
+  if [ "$DOCTOR_JSON" = 1 ]; then
+    jflag=(--json)
+  fi
+  timeout 300 python3 -B "$report" --root "$ROOT" --bundle-dir "$HERE" ${jflag[@]+"${jflag[@]}"} || rc=$?
+  case "$rc" in
+    0|1|2) exit "$rc" ;;
+    124)   printf 'doctor: the report did not finish within 300 s — could not assess.\n' >&2; exit 2 ;;
+    *)     printf 'doctor: the report itself failed (exit %s) — could not assess.\n' "$rc" >&2; exit 2 ;;
+  esac
+}
+
 # ---------- setup console (menu navigation) ------------------------------
 menu_state() {
   if [ ! -f "$ENV_FILE" ]; then echo "not installed"
@@ -1868,5 +2134,6 @@ case "$CMD" in
   reset-demo-data) cmd_reset_demo ;;
   enable)          cmd_enable ;;
   support-bundle)  cmd_support_bundle ;;
+  doctor)          cmd_doctor ;;
   disable)         cmd_disable ;;
 esac
