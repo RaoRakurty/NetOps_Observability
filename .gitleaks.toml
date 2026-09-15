@@ -45,6 +45,10 @@ regexes = [
   # credential-shaped string in it. Fabricated throughout — RFC 2606
   # `nas.example.net`, `backupuser:sup3rs3cret`, and this ascending-hex token.
   '''token=abcdef123456''',
+  # Installer self-healing tests (2026-09-15): doctor's never-print-a-secret
+  # sentinels and a recorded compose error naming a bundle image tag.
+  '''Sentinel-(DB|JWT|KCID|Admin)-[0-9a-z]+''',
+  '''2026\.09\.15-ge8ebc980''',
 ]
 # Test fixtures that DELIBERATELY look like secrets — reviewed 2026-09-04:
 #   ErrorBoundary.test.tsx: a synthetic error string carrying a fake token/api_key
