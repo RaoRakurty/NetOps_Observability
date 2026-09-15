@@ -303,7 +303,7 @@ def _timing_finish(status: str) -> None:
 _PASSWORD_ALPHABET = string.ascii_letters + string.digits + "!@#%^&*-_=+"
 
 def generate_password(length: int = 24) -> str:
-    return "".join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(length))
+    return _no_leading_dash(_PASSWORD_ALPHABET, length)
 
 # Credentials that ride URL userinfo (https://user:pw@host — the SEC-010
 # vmauth family today) must NOT contain @ # % ^ & + =: Go's url.Parse rejects
@@ -313,8 +313,27 @@ def generate_password(length: int = 24) -> str:
 # at startup. URL-embedded credentials use this alphabet instead.
 _URLSAFE_PASSWORD_ALPHABET = string.ascii_letters + string.digits + "-_"
 
+# A generated secret must never START with "-". Several consumers hand the
+# value to a command-line parser as the argument AFTER an option — the
+# OpenSearch Dashboards image turns OPENSEARCH_PASSWORD into
+# `--opensearch.password <value>`, and a value beginning with "-" is read as
+# another option ("must have a value"), so the service crash-loops. With "-"
+# in a 64-character alphabet that was a ~1-in-64 chance per fresh install
+# (CI two-phase boot run 34911914843, 2026-09-15; reproduced locally). The
+# first character is drawn from letters and digits only — about 0.1 bits of
+# entropy for a 24-character secret.
+_LEADING_SAFE_ALPHABET = string.ascii_letters + string.digits
+
+
+def _no_leading_dash(alphabet: str, length: int) -> str:
+    if length <= 0:
+        return ""
+    return secrets.choice(_LEADING_SAFE_ALPHABET) + "".join(
+        secrets.choice(alphabet) for _ in range(length - 1))
+
+
 def generate_urlsafe_password(length: int = 24) -> str:
-    return "".join(secrets.choice(_URLSAFE_PASSWORD_ALPHABET) for _ in range(length))
+    return _no_leading_dash(_URLSAFE_PASSWORD_ALPHABET, length)
 
 def _git_sha(root: Path) -> str:
     """HEAD of the checkout, or "unknown".
@@ -827,6 +846,25 @@ def write_env(env_path: Path, port: int, *, force: bool,
                 f.write("\n# ---- Event bus (Apache Kafka) — appended by install.py migration ----\n")
                 f.write("\n".join(additions) + "\n")
             ok(f"migrated .env: added {', '.join(a.split('=')[0] for a in additions)}")
+            env = _parse_env(env_path)
+        # Heal (2026-09-15): an install minted before the leading-character fix
+        # can hold an OS_DASHBOARDS_PASSWORD that starts with "-", which the
+        # Dashboards image passes as `--opensearch.password <value>` and its
+        # parser reads as an option — the service crash-loops on every start.
+        # The password is bootstrap-applied (apply-security.sh re-hashes it
+        # from .env on each run; secret_rotation classes it FREE), so
+        # re-minting it here is safe and converges on the next compose up.
+        if (env.get("OS_DASHBOARDS_PASSWORD") or "").startswith("-"):
+            text = env_path.read_text()
+            healed, not_found = _rotation_module().substitute_env(
+                text, {"OS_DASHBOARDS_PASSWORD": generate_urlsafe_password(24)})
+            if "OS_DASHBOARDS_PASSWORD" in not_found:
+                fail("OS_DASHBOARDS_PASSWORD starts with '-' (OpenSearch "
+                     "Dashboards cannot start with it) and could not be "
+                     "re-minted in .env — set a new value by hand")
+            env_path.write_text(healed)
+            ok("re-minted OS_DASHBOARDS_PASSWORD: the old value began with "
+               "'-', which OpenSearch Dashboards reads as a command-line option")
             env = _parse_env(env_path)
         return env
 
