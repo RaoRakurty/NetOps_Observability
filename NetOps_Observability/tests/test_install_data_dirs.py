@@ -595,6 +595,62 @@ def test_readiness_waits_through_the_socket_window_then_succeeds():
     assert clock.slept, "the waits must be logged/bounded, not a busy loop"
 
 
+#: The CI two-phase boot failure (run 34909387288, 2026-09-14): the entrypoint's
+#: init server is up but has not yet created POSTGRES_DB.
+DB_NOT_CREATED = (2, "", ('psql: error: connection to server on socket '
+                          '"/var/run/postgresql/.s.PGSQL.5432" failed: FATAL:  '
+                          'database "netops" does not exist'))
+
+
+def test_readiness_waits_while_the_target_database_is_not_created_yet():
+    """The exact CI sequence: socket gone, then the init server answers
+    'database does not exist', then the real server — must be READY, not fatal."""
+    clock = FakeClock()
+    runner = FakeRunner([SOCKET_FAIL, DB_NOT_CREATED, DB_NOT_CREATED,
+                         SOCKET_FAIL, QUERY_OK])
+    ready, msg = install.wait_for_postgres(
+        runner, user="netops", db="netops", budget_s=180.0,
+        sleep=clock.sleep, now=clock.now)
+    assert ready, msg
+    assert "ready after" in msg
+
+
+def test_a_different_missing_database_is_still_fatal():
+    """Only the TARGET database is excused: a probe naming another database is
+    a misconfiguration and must surface on the first probe."""
+    clock = FakeClock()
+    other = (2, "", 'psql: error: FATAL:  database "postgres_typo" does not exist')
+    runner = FakeRunner([other])
+    ready, msg = install.wait_for_postgres(
+        runner, user="netops", db="netops", budget_s=180.0,
+        sleep=clock.sleep, now=clock.now)
+    assert not ready
+    assert "will not clear by waiting" in msg
+    assert len(runner.calls) == 1 and clock.slept == []
+
+
+def test_a_database_that_is_never_created_is_bounded():
+    """Waiting for the database is bounded by the same budget, and the failure
+    names the database — never a silent hang."""
+    clock = FakeClock()
+    runner = FakeRunner([DB_NOT_CREATED])
+    ready, msg = install.wait_for_postgres(
+        runner, user="netops", db="netops", budget_s=30.0,
+        sleep=clock.sleep, now=clock.now)
+    assert not ready
+    assert "did not create database 'netops' within 30s" in msg
+    assert clock.t >= 30.0
+    assert len(runner.calls) < 100
+
+
+def test_provisioning_still_treats_a_missing_database_as_fatal():
+    """The readiness allowance must not leak into the classifier."""
+    assert not install._pg_transient(DB_NOT_CREATED[2])
+    assert install._pg_db_not_created_yet(DB_NOT_CREATED[2], "netops")
+    assert not install._pg_db_not_created_yet(DB_NOT_CREATED[2], "other")
+    assert not install._pg_db_not_created_yet(DB_NOT_CREATED[2], "")
+
+
 def test_readiness_requires_two_successes_a_stable_interval_apart():
     """The init server answers too — one success must never be enough."""
     clock = FakeClock()

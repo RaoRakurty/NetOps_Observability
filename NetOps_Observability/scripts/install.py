@@ -2845,6 +2845,16 @@ _PG_FATAL = re.compile(
     re.IGNORECASE)
 
 
+def _pg_db_not_created_yet(message: str, db: str) -> bool:
+    """True when psql says the TARGET database does not exist — the state the
+    postgres entrypoint's init server is in before it creates POSTGRES_DB.
+    Readiness-only: provisioning keeps classifying this as a real error."""
+    if not db:
+        return False
+    return re.search(r'database "' + re.escape(db) + r'" does not exist',
+                     message or "", re.IGNORECASE) is not None
+
+
 def _pg_transient(message: str) -> bool:
     """True only for a CONNECTION-class psql failure — one that can clear by
     waiting. A real SQL/auth error is never masked as "not ready yet" (§16.1).
@@ -2938,6 +2948,35 @@ def wait_for_postgres(runner, *, user: str, db: str, service: str = "postgres",
         else:
             detail = ((r.stderr or "") + " " + (r.stdout or "")).strip()
             last = (detail.splitlines() or ["(no output)"])[0].strip()[:300]
+            # FIRST BOOT: the entrypoint's temporary server is up before it has
+            # run CREATE DATABASE for POSTGRES_DB, so a probe of the target
+            # database can be told it "does not exist" for a few seconds. That
+            # is a first-boot state, not a misconfiguration: wait it out inside
+            # the same bounded budget. Only the TARGET database is excused, and
+            # only here — once readiness is proven, the provisioning classifier
+            # still treats a missing database as a real error (§16.1). Found by
+            # the CI two-phase boot test (run 34909387288, 2026-09-14): second
+            # probe, `FATAL:  database "netops" does not exist`.
+            if _pg_db_not_created_yet(detail, db):
+                if first_ok is not None:
+                    warn(f"{label} stopped answering after it had answered — "
+                         f"that is the first-boot handover; the stability "
+                         f"wait restarts")
+                    first_ok = None
+                wait = _jittered(delay)
+                delay = min(delay * 2, 10.0)
+                reason = (f"database {db!r} not created yet (the first-boot "
+                          f"init server is still running)")
+                elapsed = now() - started
+                if elapsed >= budget:
+                    return False, (f"{label} did not create database {db!r} "
+                                   f"within {budget:.0f}s ({probes} probes, "
+                                   f"{elapsed:.0f}s elapsed); last error: "
+                                   f"{last}")
+                info(f"waiting for {label}: {reason} ({elapsed:.0f}s of a "
+                     f"{budget:.0f}s budget; next probe in {wait:.1f}s)")
+                sleep(wait)
+                continue
             if not _pg_transient(detail):
                 return False, (f"{label} refused a probe with an error that is "
                                f"not a connection failure — this will not clear "
