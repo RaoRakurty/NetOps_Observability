@@ -91,3 +91,7 @@ data/licence-signer/
 # vitest writes a cache under src/ when run from the repo root rather than
 # from src/frontend; it is a build artefact, never a dependency tree.
 src/node_modules/
+
+# Installer single-writer locks (install-correlix.sh fd 9 / fd 8, install.py re-flock) — runtime state, never committed.
+deployment/docker/.install.lock
+deployment/docker/.install-bundle.lock
