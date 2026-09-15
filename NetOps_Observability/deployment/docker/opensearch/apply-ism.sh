@@ -38,8 +38,117 @@ ADD_PATTERNS='netops-applogs-*,netops-platformlogs-*,netops-syslog-*,netops-flow
 # secured cluster — strip it before logging (this line used to echo the
 # password into the container log on every init run; found 2026-08-05).
 OS_REDACTED=$(printf '%s' "$OS" | sed 's#//[^@/]*@#//<redacted>@#')
-echo "ism: waiting for OpenSearch at $OS_REDACTED ..."
-until curl -sf "$OS/_cluster/health" >/dev/null 2>&1; do sleep 5; done
+
+# ---------------------------------------------------------------------------
+# Bounded readiness wait (installer FMEA 2026-09-15, row 9 / O1).
+#
+# This used to be `until curl -sf …/_cluster/health; do sleep 5; done`: no
+# budget, and every reason for looping thrown away. Under TLS a rejected
+# bootstrap credential answers 401 forever while the node's own healthcheck
+# counts 401 as healthy — so this one-shot hung silently and nothing named the
+# cause. Now: a wall-clock budget (OPENSEARCH_WAIT_BUDGET_S, default 900 s,
+# clamped to 1..3600), exponential backoff capped at 30 s with jitter, each
+# failure class named once as it changes, and budget exhaustion exits non-zero
+# (78 = configuration: credential / permission / TLS; 69 = unavailable) so the
+# installer's stability gate names this one-shot instead of reporting success.
+# ---------------------------------------------------------------------------
+WAIT_BUDGET="${OPENSEARCH_WAIT_BUDGET_S:-900}"
+case "$WAIT_BUDGET" in
+  ''|*[!0-9]*)
+    echo "ism: WARNING OPENSEARCH_WAIT_BUDGET_S is not a whole number of seconds; using 900" >&2
+    WAIT_BUDGET=900 ;;
+esac
+if [ "$WAIT_BUDGET" -lt 1 ]; then WAIT_BUDGET=1; fi
+if [ "$WAIT_BUDGET" -gt 3600 ]; then
+  echo "ism: WARNING OPENSEARCH_WAIT_BUDGET_S=$WAIT_BUDGET is capped at 3600" >&2
+  WAIT_BUDGET=3600
+fi
+
+# os_health_probe — one bounded look at _cluster/health. Sets PROBE_CLASS
+# (ok|refused|dns|timeout|tls|reset|transport|auth|forbidden|server|http) and a
+# plain-language PROBE_DETAIL. curl's own stderr is not shown: its exit code is
+# classified and named below, and its message could echo the credential-bearing
+# URL.
+os_health_probe() {
+  _hp_rc=0
+  _hp_url="$OS/_cluster/health"
+  # One physical line: the transport fault is captured (`|| _hp_rc=$?`) where
+  # the capture is, which is what the bare-assignment guard checks for.
+  _hp_code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 --connect-timeout 5 "$_hp_url" 2>/dev/null) || _hp_rc=$?
+  case "$_hp_rc" in
+    0) ;;
+    7)  PROBE_CLASS=refused
+        PROBE_DETAIL="connection refused (curl exit 7): nothing is listening at $OS_REDACTED yet"
+        return 0 ;;
+    6)  PROBE_CLASS=dns
+        PROBE_DETAIL="cannot resolve the OpenSearch host in $OS_REDACTED (curl exit 6)"
+        return 0 ;;
+    28) PROBE_CLASS=timeout
+        PROBE_DETAIL="no answer within 10 s (curl exit 28): the node accepts connections but does not respond"
+        return 0 ;;
+    35|51|53|54|58|59|60|64|66|77|80|82|83|90|91)
+        PROBE_CLASS=tls
+        PROBE_DETAIL="TLS handshake or certificate verification failed (curl exit $_hp_rc): check CURL_CA_BUNDLE and the node certificate"
+        return 0 ;;
+    52|56)
+        PROBE_CLASS=reset
+        PROBE_DETAIL="the connection closed without a reply (curl exit $_hp_rc): plaintext/TLS mismatch, or the node is restarting"
+        return 0 ;;
+    *)  PROBE_CLASS=transport
+        PROBE_DETAIL="transport failure talking to $OS_REDACTED (curl exit $_hp_rc)"
+        return 0 ;;
+  esac
+  case "$_hp_code" in
+    2??) PROBE_CLASS=ok; PROBE_DETAIL="HTTP $_hp_code" ;;
+    401) PROBE_CLASS=auth
+         PROBE_DETAIL="HTTP 401 Unauthorized: the bootstrap credential in OPENSEARCH_URL was rejected (security plugin not initialised yet, or OS_BOOTSTRAP_PASSWORD no longer matches)" ;;
+    403) PROBE_CLASS=forbidden
+         PROBE_DETAIL="HTTP 403 Forbidden: the bootstrap user authenticated but may not read cluster health (check its role mapping)" ;;
+    5??) PROBE_CLASS=server
+         PROBE_DETAIL="HTTP $_hp_code: OpenSearch is up but not serving yet (cluster still forming, or the security index not initialised)" ;;
+    *)   PROBE_CLASS=http
+         PROBE_DETAIL="unexpected HTTP ${_hp_code:-none} from _cluster/health" ;;
+  esac
+  return 0
+}
+
+echo "ism: waiting for OpenSearch at $OS_REDACTED (budget ${WAIT_BUDGET}s) ..."
+_w_start=$(date +%s)
+_w_delay=2
+_w_last=""
+_w_attempts=0
+while :; do
+  _w_attempts=$((_w_attempts + 1))
+  os_health_probe
+  if [ "$PROBE_CLASS" = ok ]; then
+    break
+  fi
+  if [ "$PROBE_CLASS" != "$_w_last" ]; then
+    echo "ism: not ready yet: $PROBE_DETAIL"
+    _w_last=$PROBE_CLASS
+  fi
+  _w_elapsed=$(( $(date +%s) - _w_start ))
+  if [ "$_w_elapsed" -ge "$WAIT_BUDGET" ]; then
+    echo "ism: ERROR gave up waiting for OpenSearch after ${_w_elapsed}s (budget ${WAIT_BUDGET}s, ${_w_attempts} attempts)." >&2
+    echo "ism:       last answer: $PROBE_DETAIL" >&2
+    echo "ism:       nothing was applied. Fix the cause above, then re-run this step:" >&2
+    echo "ism:         docker compose up opensearch-init" >&2
+    case "$PROBE_CLASS" in
+      auth|forbidden|tls) exit 78 ;;
+      *) exit 69 ;;
+    esac
+  fi
+  # Jitter 0-2 s so several one-shots do not probe in lock-step. od is in
+  # busybox and coreutils; an empty read just means no jitter.
+  _w_rand=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -dc '0-9')
+  _w_sleep=$((_w_delay + ${_w_rand:-0} % 3))
+  _w_left=$((WAIT_BUDGET - _w_elapsed))
+  if [ "$_w_sleep" -gt "$_w_left" ]; then _w_sleep=$_w_left; fi
+  sleep "$_w_sleep"
+  _w_delay=$((_w_delay * 2))
+  if [ "$_w_delay" -gt 30 ]; then _w_delay=30; fi
+done
+echo "ism: OpenSearch is answering ($PROBE_DETAIL)"
 
 # ---------------------------------------------------------------------------
 # os_curl — every CAPTURED curl call in this file goes through this (H-3.8-09).

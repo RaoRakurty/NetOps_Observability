@@ -109,6 +109,9 @@ while [ $# -gt 0 ]; do
     -d) if [ "$2" = "@-" ]; then stdin_body=$(cat); else stdin_body="$2"; fi; shift 2 ;;
     -o) shift 2 ;;
     -m) shift 2 ;;
+    # -w: the bounded readiness probe asks for the status code only.
+    -w) wfmt="$2"; shift 2 ;;
+    --connect-timeout) shift 2 ;;
     -s|-f|-sf|-fsS|-sS) shift ;;
     -*) shift ;;
     *) url="$1"; shift ;;
@@ -128,7 +131,9 @@ if [ -n "${FAKE_DEAD_URL:-}" ]; then
   esac
 fi
 case "$url" in
-  */_cluster/health*)  printf '{"status":"green","number_of_data_nodes":1}' ;;
+  */_cluster/health*)
+      if [ -n "${wfmt:-}" ]; then printf '200'
+      else printf '{"status":"green","number_of_data_nodes":1}'; fi ;;
   */_cluster/settings*) printf '{"acknowledged":true}' ;;
   */_snapshot/_all*)   printf '%s' "$FAKE_REPOS" ;;
   */_snapshot/netops-fs) printf '%s' "${FAKE_REPO_PUT:-{\"acknowledged\":true\}}" ;;
