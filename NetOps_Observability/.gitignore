@@ -95,5 +95,4 @@ data/licence-signer/
 src/node_modules/
 
 # Installer single-writer locks (install-correlix.sh fd 9 / fd 8, install.py re-flock) — runtime state, never committed.
-deployment/docker/.install.lock
 deployment/docker/.install-bundle.lock
