@@ -2,6 +2,8 @@
 # install.py writes next to it — .env.rotate.bak (secret rotation) and
 # .env.plan.bak (resource replan) — which were previously committable (M26).
 deployment/docker/.env*
+# Single-writer install lock (install.py / install-correlix.sh, FMEA 2026-09-15 §4.2).
+deployment/docker/.install.lock
 data/
 
 # Pre-cutover app-state snapshots (contain live secrets — never commit)

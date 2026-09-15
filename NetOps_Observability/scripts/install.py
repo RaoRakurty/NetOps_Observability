@@ -36,6 +36,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import errno
+import fcntl
+import hashlib
 import ipaddress
 import json
 import os
@@ -88,16 +91,19 @@ def ok(msg: str) -> None:      print(f"[ ok  ] {msg}")
 def warn(msg: str) -> None:    print(f"[warn ] {msg}", file=sys.stderr)
 
 
-def fail(msg: str) -> None:
-    _stage_fail(msg)
+def fail(msg: str, *, interrupted: bool = False) -> None:
+    _stage_fail(msg, journal_status="interrupted" if interrupted else "failed")
     _timing_finish("fail")
     print(f"[fail ] {msg}", file=sys.stderr)
     sys.exit(1)
 
 
-def step(msg: str, stage: str | None = None) -> None:
+def step(msg: str, stage: str | None = None, *, key: str | None = None,
+         inputs: dict | None = None) -> None:
+    """Start a stage. `key` names its install-journal entry when one stage id
+    runs more than once (addon-pack:<name>); `inputs` are its fingerprints."""
     if stage is not None:
-        _stage_start(stage, msg)
+        _stage_start(stage, msg, key=key, inputs=inputs)
     print()
     print(f"=== {msg} ===")
 
@@ -145,6 +151,12 @@ _TIMING: dict = {
     "record": False,          # set by main(): a real run may write the file
     "report": False,          # --time-report: print the table at the end
     "path": None,             # data/install-timing.json (resolved in main())
+    # Install journal (FMEA §4.1): stage key -> {status, started_utc,
+    # ended_utc, pid, inputs}. Carried over from the previous run's file, so a
+    # re-run knows what already finished. Replaced (never mutated in place) on
+    # every change, so a caller holding the old dict keeps a stable snapshot.
+    "journal": {},
+    "open_key": None,         # journal key of the currently-open stage
 }
 
 
@@ -168,30 +180,59 @@ def _stage_record(sid: str, title: str, status: str, elapsed: float) -> None:
     _TIMING["open_t"] = None
 
 
+def _utc_stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _journal_open(key: str, inputs: dict) -> None:
+    entry = {"status": "running", "started_utc": _utc_stamp(), "ended_utc": None,
+             "pid": os.getpid(), "inputs": dict(inputs)}
+    _TIMING["journal"] = {**_TIMING.get("journal", {}), key: entry}
+    _TIMING["open_key"] = key
+
+
+def _journal_close(status: str) -> None:
+    key = _TIMING.get("open_key")
+    if key is None:
+        return
+    entry = dict(_TIMING.get("journal", {}).get(key) or {})
+    entry.update(status=status, ended_utc=_utc_stamp())
+    _TIMING["journal"] = {**_TIMING.get("journal", {}), key: entry}
+    _TIMING["open_key"] = None
+
+
 def _stage_close_ok() -> None:
     if _PROGRESS["stage"] is not None:
         sid, title = _PROGRESS["stage"]
         _PROGRESS["stage"] = None
         elapsed = _stage_elapsed()
         _stage_record(sid, title, "ok", elapsed)
+        _journal_close("done")
         _progress({"kind": "stage", "id": sid, "title": title, "status": "ok",
                    "elapsed_s": elapsed})
 
 
-def _stage_start(sid: str, title: str) -> None:
+def _stage_start(sid: str, title: str, *, key: str | None = None,
+                 inputs: dict | None = None) -> None:
     _stage_close_ok()
     _PROGRESS["stage"] = (sid, title)
     _TIMING["open_t"] = time.monotonic()
+    _journal_open(key or sid, inputs or {})
     _progress({"kind": "stage", "id": sid, "title": title, "status": "start"})
+    # Journal on disk at every stage start: a run killed mid-stage (SIGKILL,
+    # reboot, a wizard restart) leaves the stage `running`, which the next run
+    # reads as interrupted and runs again.
+    _timing_finish("running", final=False)
 
 
-def _stage_fail(message: str) -> None:
+def _stage_fail(message: str, journal_status: str = "failed") -> None:
     """fail() path: close the open stage as failed, then the terminal result."""
     if _PROGRESS["stage"] is not None:
         sid, title = _PROGRESS["stage"]
         _PROGRESS["stage"] = None
         elapsed = _stage_elapsed()
         _stage_record(sid, title, "fail", elapsed)
+        _journal_close(journal_status)
         _progress({"kind": "stage", "id": sid, "title": title,
                    "status": "fail", "message": message, "elapsed_s": elapsed})
     _progress({"kind": "result", "status": "fail"})
@@ -257,6 +298,11 @@ def _timing_doc(status: str) -> dict:
         "status": status,
         "total_s": round(time.monotonic() - _TIMING["t0"], 3),
         "stages": list(_TIMING["stages"]),
+        # Additive (v1 readers ignore it): the resumable-stage journal, FMEA
+        # §4.1. Stage keys, statuses, UTC stamps, pids and sha256 input
+        # fingerprints only — never a secret value.
+        "journal": {"schema": JOURNAL_SCHEMA, "pid": os.getpid(),
+                    "stages": dict(_TIMING.get("journal", {}))},
     }
 
 
@@ -269,18 +315,22 @@ def _print_time_report(doc: dict) -> None:
     print(f"  {'TOTAL':<18} {doc['status']:<7} {doc['total_s']:>10.1f}")
 
 
-def _timing_finish(status: str) -> None:
+def _timing_finish(status: str, final: bool = True) -> None:
     """Terminal timing side effects: the summary marker, the JSON file and —
     with --time-report — the table. Never fatal: a run that installed the stack
     must not be reported as failed because a timing file could not be written,
-    but the failure IS named (§16.1 — reported, never swallowed)."""
+    but the failure IS named (§16.1 — reported, never swallowed).
+
+    final=False is the mid-run journal write at each stage start: the file
+    only, no marker, no table."""
     if not _TIMING["record"]:
         return
     doc = _timing_doc(status)
-    _progress({"kind": "timing", "status": doc["status"],
-               "total_s": doc["total_s"],
-               "stages": [{"id": s["id"], "status": s["status"],
-                           "elapsed_s": s["elapsed_s"]} for s in doc["stages"]]})
+    if final:
+        _progress({"kind": "timing", "status": doc["status"],
+                   "total_s": doc["total_s"],
+                   "stages": [{"id": s["id"], "status": s["status"],
+                               "elapsed_s": s["elapsed_s"]} for s in doc["stages"]]})
     path = _TIMING["path"]
     if path is not None:
         try:
@@ -291,8 +341,191 @@ def _timing_finish(status: str) -> None:
         except OSError as e:
             warn(f"could not write the install timing file {path}: {e} "
                  "(the install itself is unaffected)")
-    if _TIMING["report"]:
+    if final and _TIMING["report"]:
         _print_time_report(doc)
+
+# ---- install journal: resume without redoing finished work (FMEA §4.1, B1) ---
+# data/install-timing.json doubles as the journal (one file, not a third): per
+# stage key a status (running|done|failed|interrupted), UTC stamps, the pid and
+# sha256 input fingerprints. Rules:
+#   1. Advisory. A missing, unreadable or corrupt journal means "run every
+#      stage" — never a refusal.
+#   2. Only the image loads may be skipped (SKIPPABLE_STAGES), and only when the
+#      journal says done from the SAME bundle fingerprint AND every image the
+#      MANIFEST lists for that archive still inspects present on this host.
+#   3. Every state-changing stage (up-a, mint, up-b, the bootstraps) always runs
+#      and verifies its own post-condition; the journal only describes it.
+#   4. A stage left `running` belongs to a run that died (the install lock
+#      guarantees no other run is live); it is marked `interrupted` and re-run.
+
+JOURNAL_SCHEMA = 1
+JOURNAL_STATUSES = ("running", "done", "failed", "interrupted")
+SKIPPABLE_STAGES = frozenset({"bundle", "addon-pack"})
+_JOURNAL_MAX_BYTES = 1 << 20
+_MANIFEST_MAX_BYTES = 1 << 20
+# A MANIFEST image ref goes to `docker image inspect` as one argv element. No
+# shell is involved, but a ref starting with "-" would be read as an option.
+_IMAGE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$")
+
+
+def _pid_alive(pid: int) -> bool:
+    """Linux-only (the installer is): a live pid has a /proc entry."""
+    return pid > 0 and Path(f"/proc/{pid}").exists()
+
+
+def journal_may_skip(stage_id: str) -> bool:
+    """Only the pure image loads are ever skipped on the journal's word."""
+    return stage_id in SKIPPABLE_STAGES
+
+
+def load_install_journal(path: Path, *, pid_alive=_pid_alive) -> tuple[dict, list[str]]:
+    """Read the previous run's journal. Returns (stages, notes-to-print).
+
+    Never raises for a bad journal and never refuses: anything unusable yields
+    an empty journal, which means every stage runs."""
+    everything = "every stage runs"
+    if not path.is_file():
+        return {}, [f"no install journal yet ({path.name}) — {everything}"]
+    if not os.access(path, os.R_OK):
+        return {}, [f"install journal {path} is not readable by this user — {everything}"]
+    if path.stat().st_size > _JOURNAL_MAX_BYTES:
+        return {}, [f"install journal {path} is implausibly large — ignoring it; {everything}"]
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8", errors="strict"))
+    except ValueError as e:
+        return {}, [(f"install journal {path} is corrupt ({type(e).__name__}) — "
+                     f"ignoring it; {everything}")]
+    journal = doc.get("journal") if isinstance(doc, dict) else None
+    stages = journal.get("stages") if isinstance(journal, dict) else None
+    if not isinstance(stages, dict) or journal.get("schema") != JOURNAL_SCHEMA:
+        return {}, [f"{path.name} carries no usable install journal — {everything}"]
+    out: dict[str, dict] = {}
+    notes: list[str] = []
+    for key, entry in stages.items():
+        if not (isinstance(key, str) and isinstance(entry, dict)
+                and entry.get("status") in JOURNAL_STATUSES):
+            continue                     # malformed entry: forget it, the stage runs
+        entry = dict(entry)
+        if entry["status"] == "running":
+            pid = entry.get("pid") if isinstance(entry.get("pid"), int) else 0
+            state = ("is still alive but does not hold the install lock (a reused pid)"
+                     if pid and pid != os.getpid() and pid_alive(pid)
+                     else "is no longer running")
+            entry["status"] = "interrupted"
+            notes.append(f"the previous run was interrupted during stage {key!r} "
+                         f"(pid {pid or '?'} {state}) — that stage runs again")
+        out[key] = entry
+    return out, notes
+
+
+def _sha256sums_entry(sums: Path, name: str) -> str | None:
+    """The digest SHA256SUMS records for `name`, or None."""
+    if not (sums.is_file() and os.access(sums, os.R_OK)
+            and sums.stat().st_size <= _MANIFEST_MAX_BYTES):
+        return None
+    for line in sums.read_text(encoding="utf-8", errors="replace").splitlines():
+        m = re.fullmatch(r"([0-9a-f]{64})\s+\*?(?:\./)?(\S+)", line.strip())
+        if m and m.group(2) == name:
+            return m.group(1)
+    return None
+
+
+def archive_fingerprint(archive: Path) -> str | None:
+    """sha256 identity of an image archive, or None when it cannot be pinned.
+
+    Hashing a multi-GB archive on every re-run would cost the time the skip is
+    meant to save, so this binds: the MANIFEST's bytes, the archive's name and
+    size, and the digest SHA256SUMS records for it (install-correlix.sh has
+    already verified the archive against that digest). Without a SHA256SUMS
+    entry the mtime stands in. No MANIFEST → None → the load is never skipped."""
+    manifest = archive.parent / "MANIFEST"
+    if not (archive.is_file() and manifest.is_file() and os.access(manifest, os.R_OK)):
+        return None
+    if manifest.stat().st_size > _MANIFEST_MAX_BYTES:
+        return None
+    st = archive.stat()
+    h = hashlib.sha256(b"correlix-archive-fingerprint/1\0")
+    h.update(hashlib.sha256(manifest.read_bytes()).digest())
+    h.update(f"{archive.name}\0{st.st_size}\0".encode())
+    digest = _sha256sums_entry(archive.parent / "SHA256SUMS", archive.name)
+    h.update((f"sha256:{digest}" if digest else f"mtime:{st.st_mtime_ns}").encode())
+    return h.hexdigest()
+
+
+def manifest_image_refs(text: str) -> dict[str, list[str]]:
+    """Image refs per MANIFEST section, digests stripped (docker load restores
+    tags, not registry digests). Keys: "base" (the `images:` list) and
+    "addon:<name>" (each `addon <name> (profile <p>):` list — make-installer.sh
+    writes both). A ref that is not a plausible image reference is dropped, so
+    the section then counts as unverifiable and its load is not skipped."""
+    out: dict[str, list[str]] = {}
+    section: str | None = None
+    bad: set[str] = set()
+    for line in text.splitlines():
+        if line.rstrip() == "images:":
+            section = "base"
+            out.setdefault(section, [])
+            continue
+        m = re.fullmatch(r"addon ([A-Za-z0-9._-]+) \(profile [^)]*\):\s*", line)
+        if m:
+            section = f"addon:{m.group(1)}"
+            out.setdefault(section, [])
+            continue
+        item = re.fullmatch(r"  - (\S+)\s*", line)
+        if item and section:
+            ref = re.sub(r"@sha256:[0-9a-f]{64}$", "", item.group(1))
+            if _IMAGE_REF.match(ref):
+                out[section].append(ref)
+            else:
+                bad.add(section)
+            continue
+        if line and not line.startswith(" "):
+            section = None
+    for s in bad:
+        out[s] = []
+    return out
+
+
+def image_load_decision(journal: dict, key: str, archive: Path, section: str,
+                        image_present) -> tuple[bool, str, str | None]:
+    """(skip, why, fingerprint) for one image-archive load. Pure apart from the
+    injected `image_present(ref) -> bool` and reading the bundle's MANIFEST."""
+    stage_id = key.split(":", 1)[0]
+    fp = archive_fingerprint(archive)
+    entry = journal.get(key)
+    if not journal_may_skip(stage_id):
+        return False, f"stage {stage_id!r} is never skipped", fp
+    if not isinstance(entry, dict) or entry.get("status") != "done":
+        state = entry.get("status") if isinstance(entry, dict) else "never run"
+        return False, f"the journal has no completed load of it ({state})", fp
+    if fp is None:
+        return False, "the bundle has no readable MANIFEST to verify against", fp
+    if (entry.get("inputs") or {}).get("bundle") != fp:
+        return False, "the archive or its MANIFEST differs from the one recorded as loaded", fp
+    refs = manifest_image_refs(
+        (archive.parent / "MANIFEST").read_text(encoding="utf-8", errors="replace")
+    ).get(section, [])
+    if not refs:
+        return False, f"the MANIFEST lists no verifiable images for {section}", fp
+    missing = [r for r in refs if not image_present(r)]
+    if missing:
+        return False, (f"{len(missing)} of its {len(refs)} images are no longer on "
+                       f"this host (first: {missing[0]})"), fp
+    return True, (f"already loaded from this same archive (journal fingerprint "
+                  f"{fp[:12]}) and all {len(refs)} images it lists are present"), fp
+
+
+def stage_inputs(env_path: Path) -> dict:
+    """Fingerprints of what a compose stage starts from: .env key NAMES (never
+    values), the COMPOSE_FILE chain and the profile set."""
+    env = _parse_env_text(env_path.read_text()) if env_path.is_file() else {}
+
+    def h(s: str) -> str:
+        return hashlib.sha256(s.encode()).hexdigest()
+    return {"env_keys": h("\n".join(sorted(env))),
+            "compose_file": h(env.get("COMPOSE_FILE", "")),
+            "profiles": h(env.get("COMPOSE_PROFILES", ""))}
+
 
 # ---- secret generation ------------------------------------------------------
 
@@ -629,7 +862,8 @@ def run_resource_plan(env_path: Path, profile: str, sizing_file: Path | None) ->
     for src, bak in rp.plan_backup_paths(env_path).items():
         if os.path.exists(src):
             _write_private(Path(bak), Path(src).read_text())
-    _write_private(env_path, rp.splice_env(env_text, rp.env_block(plan)))
+    write_env_text(env_path, rp.splice_env(env_text, rp.env_block(plan)),
+                   what="write the resource plan")
     for name, text in (("resource-plan.json",
                         json.dumps(plan, indent=2, sort_keys=True) + "\n"),
                        ("resource-plan.txt", rp.plan_txt(plan))):
@@ -642,27 +876,186 @@ def run_resource_plan(env_path: Path, profile: str, sizing_file: Path | None) ->
 
 # ---- .env generation --------------------------------------------------------
 
+def _raw_write(fd: int, data: memoryview) -> int:
+    """os.write under a name of its own, so a test can inject a failure part
+    way through a write (ENOSPC) and prove the destination survives."""
+    return os.write(fd, data)
+
+
+def _preserve_owner(fd: int, path: Path) -> None:
+    """Keep the destination's owner across the replace. A root re-run must not
+    hand an operator's .env to root; a non-root run cannot take root's file
+    (fchown raises, and the write fails loudly instead of changing owner)."""
+    if not path.exists():
+        return
+    st = path.stat()
+    if (st.st_uid, st.st_gid) != (os.geteuid(), os.getegid()):
+        os.fchown(fd, st.st_uid, st.st_gid)
+
+
 def _write_private(path: Path, text: str) -> None:
-    """Write `text` to `path` owner-only FROM THE FIRST BYTE (M26).
+    """Write `text` to `path` owner-only FROM THE FIRST BYTE (M26), atomically.
 
     Path.write_text() + chmod(0o600) leaves a umask-wide window (0644 on a
     stock host) between creation and chmod during which any local user can
     open the file — and every caller here writes stack secrets (.env, its
-    .rotate.bak / .plan.bak siblings). O_EXCL on a fresh temp name in the same
-    directory, mode 0600 at open, then an atomic rename over the destination;
-    a crashed run leaves at worst a 0600 temp file, never a half-written or
-    world-readable secret."""
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    .rotate.bak / .plan.bak / .snapshot siblings). O_EXCL on a fresh temp name
+    in the same directory, mode 0600 at open, every byte written, fsync, the
+    destination's owner kept, then an atomic rename over the destination. A
+    kill or ENOSPC at any point leaves the destination byte-identical and at
+    worst a 0600 temp file (removed on the error path) — never a half-written
+    or world-readable secret (FMEA row 13 / E1)."""
+    data = memoryview(text.encode("utf-8"))
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
     try:
-        with os.fdopen(fd, "w") as fh:
-            fh.write(text)
+        try:
+            while data:
+                n = _raw_write(fd, data)
+                if n <= 0:
+                    raise OSError(errno.EIO, f"short write to {tmp.name}")
+                data = data[n:]
+            os.fsync(fd)
+            _preserve_owner(fd, path)
+        finally:
+            os.close(fd)
         os.replace(tmp, path)
     finally:
         try:
             os.unlink(tmp)
         except FileNotFoundError:
             pass  # the normal case: replace() already moved it into place
+
+
+# ---- .env integrity: one writer, a snapshot, a completeness gate (row 13/E1) --
+
+ENV_SNAPSHOT_SUFFIX = ".snapshot"
+ENV_DAMAGED_SUFFIX = ".damaged"
+ENV_REQUIRED_COMPOSE_FILES = ("docker-compose.yml", "compose.tls.yml")
+# `${VAR:?msg}` / `${VAR?msg}` — compose refuses to start without VAR. `$${`
+# is compose's escape for a literal `${` and is not a requirement.
+_COMPOSE_REQUIRED_VAR = re.compile(r"(?<!\$)\$\{([A-Za-z_][A-Za-z0-9_]*):?\?")
+
+
+def env_snapshot_path(env_path: Path) -> Path:
+    return env_path.with_name(env_path.name + ENV_SNAPSHOT_SUFFIX)
+
+
+def compose_required_env_keys(compose_dir: Path) -> set[str]:
+    """Every variable compose itself refuses to start without."""
+    keys: set[str] = set()
+    for name in ENV_REQUIRED_COMPOSE_FILES:
+        f = compose_dir / name
+        if f.is_file():
+            keys.update(_COMPOSE_REQUIRED_VAR.findall(f.read_text(encoding="utf-8")))
+    return keys
+
+
+def required_env_keys(compose_dir: Path) -> set[str]:
+    """Keys a complete .env carries: compose's `${VAR:?}` set plus every secret
+    install.py mints (names only; the values generated here are discarded)."""
+    return compose_required_env_keys(compose_dir) | set(generate_secrets())
+
+
+def migrated_env_keys() -> set[str]:
+    """Keys write_env's re-run migration can seed into an older .env —
+    derived from the migration code itself, so the two cannot drift."""
+    return {line.split("=", 1)[0] for line in _env_migration_lines({})}
+
+
+def env_missing_keys(env: dict, keys) -> list[str]:
+    """Names of `keys` that are absent or empty in `env`, sorted."""
+    return sorted(k for k in keys if not (env.get(k) or "").strip())
+
+
+def _snapshot_env(env_path: Path, current: str) -> None:
+    """Keep the last COMPLETE .env beside it before a change. A damaged file
+    never replaces a good snapshot, and an unchanged one is not rewritten."""
+    if env_missing_keys(_parse_env_text(current), required_env_keys(env_path.parent)):
+        return
+    snap = env_snapshot_path(env_path)
+    if snap.is_file() and snap.read_text(encoding="utf-8", errors="replace") == current:
+        return
+    _write_private(snap, current)
+
+
+def write_env_text(env_path: Path, text: str, *, what: str) -> None:
+    """The ONE way install.py changes .env (FMEA row 13 / E1): snapshot the
+    current file when it is complete, then replace it atomically. Any failure
+    (ENOSPC, EACCES, EIO) is named and fatal, and the .env on disk is the
+    previous one, byte for byte."""
+    try:
+        if env_path.is_file():
+            _snapshot_env(env_path, env_path.read_text(encoding="utf-8", errors="replace"))
+        _write_private(env_path, text)
+    except OSError as e:
+        fail(f"could not {what} in {env_path}: {e.strerror or e}. The .env on disk "
+             "is unchanged (every write is atomic). Free disk space or fix the "
+             "permission, then re-run the installer — re-running is safe.")
+
+
+def validate_env_complete(env_path: Path, *, before_migration: bool = False) -> None:
+    """Refuse to continue from a .env that lost keys (FMEA row 13 / E1).
+
+    Default (after generation or migration): every key compose requires and
+    every key generate_secrets() mints must be present and non-empty.
+
+    before_migration=True (a re-run, before write_env's migration mints
+    anything): the keys no migration can recreate must be present, AND no
+    required key the last complete snapshot holds may be missing. A truncated
+    file loses its tail, and letting the migration re-mint REDIS_PASSWORD, the
+    OS_* credentials or KAFKA_CLUSTER_ID into it would silently split the
+    stores from their own credentials.
+
+    Incomplete → restore the snapshot when the snapshot is complete (the
+    damaged file is kept as .env.damaged), otherwise refuse. Messages carry KEY
+    NAMES only, never a value."""
+    full = required_env_keys(env_path.parent)
+    need = full - migrated_env_keys() if before_migration else full
+    env = _parse_env_text(env_path.read_text(encoding="utf-8", errors="replace"))
+    snap = env_snapshot_path(env_path)
+    snap_text = snap.read_text(encoding="utf-8", errors="replace") if snap.is_file() else ""
+    snap_env = _parse_env_text(snap_text)
+    missing = set(env_missing_keys(env, need))
+    if before_migration:
+        missing.update(k for k in full
+                       if (snap_env.get(k) or "").strip() and not (env.get(k) or "").strip())
+    if not missing:
+        return
+    names = ", ".join(sorted(missing))
+    if snap_env and not env_missing_keys(snap_env, need):
+        damaged = env_path.with_name(env_path.name + ENV_DAMAGED_SUFFIX)
+        try:
+            _write_private(damaged, env_path.read_text(encoding="utf-8", errors="replace"))
+            _write_private(env_path, snap_text)
+        except OSError as e:
+            fail(f".env is incomplete (missing or empty: {names}) and restoring it "
+                 f"from {snap.name} failed: {e.strerror or e}. Nothing else was changed.")
+        warn(f".env was incomplete — missing or empty: {names}. Restored it from "
+             f"{snap.name}, the last complete copy install.py kept; the damaged file "
+             f"is kept as {damaged.name}. Re-apply any edit made after that copy.")
+        return
+    root = env_path.parent.parent.parent
+    profiles = env.get("COMPOSE_PROFILES") or snap_env.get("COMPOSE_PROFILES") or ""
+    if _rotation_module().install_started(root, profiles):
+        remedy = ("Restore .env from a backup. Do NOT regenerate it: the stores "
+                  "already hold the current secrets, and new ones would lock the "
+                  "stack out of its own data.")
+    else:
+        remedy = ("Nothing has started yet, so `python3 scripts/install.py "
+                  "--reset-env` can safely regenerate it.")
+    why = (f"Its snapshot {snap.name} is incomplete too." if snap_env
+           else "There is no snapshot to restore it from.")
+    fail(f".env is incomplete — these keys are missing or empty: {names}. {why} {remedy}")
+
+
+def _kafka_volume_initialized(env_path: Path) -> bool:
+    """True when this .env sits in a real install tree whose embedded broker
+    has already formatted data/kafka with some cluster id."""
+    compose_dir = env_path.parent
+    if compose_dir.name != "docker" or compose_dir.parent.name != "deployment":
+        return False
+    return _rotation_module().store_initialized(compose_dir.parent.parent, "kafka")
 
 
 def generate_secrets() -> dict[str, str]:
@@ -753,6 +1146,103 @@ def generate_secrets() -> dict[str, str]:
     }
 
 
+def _env_migration_lines(env: dict, profiles: str = DEFAULT_PROFILES,
+                         retention_profile: str = "production") -> list[str]:
+    """`KEY=value` lines a re-run appends to an older .env that lacks them.
+
+    Also the single source of migrated_env_keys(): calling it with an empty
+    env names every key a migration can seed."""
+    # Migration (Redpanda→Kafka, #97): a pre-Kafka .env lacks the bus vars
+    # the compose file now requires. Append them idempotently so rerunning
+    # the installer upgrades an existing install instead of failing on
+    # ${KAFKA_CLUSTER_ID:?}.
+    additions: list[str] = []
+    if "BROKER_URLS" not in env:
+        additions.append("BROKER_URLS=kafka:9092")
+    if "KAFKA_CLUSTER_ID" not in env:
+        additions.append("KAFKA_CLUSTER_ID="
+                         + base64.urlsafe_b64encode(uuid.uuid4().bytes).decode().rstrip("="))
+    if "COMPOSE_PROFILES" not in env:
+        additions.append(f"COMPOSE_PROFILES={profiles}")
+    if "CORRELIX_UID" not in env:
+        additions.append(f"CORRELIX_UID={os.getuid()}")
+        additions.append(f"CORRELIX_GID={os.getgid()}")
+    # Migration (#101): pre-retention .env gets the correlation retention
+    # profile so upgraded installs get bounded correlation history too.
+    # Migration (tracker 245): a .env written before the app-state backend
+    # became explicit has no STORE_BACKEND line, and the compose fallback
+    # (`${STORE_BACKEND:-file}`) is the only thing keeping such an install on
+    # the backend its data actually lives on. Stamp the historical value
+    # EXPLICITLY so the choice survives any future default change — an
+    # upgrade must never silently repoint a registry at an empty database.
+    # A fresh install gets `postgres` from the template above; this path
+    # only ever writes what the install is already running on.
+    if "STORE_BACKEND" not in env:
+        additions.append("STORE_BACKEND=file")
+    if "CORR_RETENTION_PROFILE" not in env:
+        additions.append(f"CORR_RETENTION_PROFILE={retention_profile}")
+    if "CORR_CHAOS_FIXTURES" not in env:
+        additions.append("CORR_CHAOS_FIXTURES=")
+    # Migration (F-08): a pre-auth .env has no ingest credential, and
+    # vector-aggregator now refuses to start without one (${INGEST_TOKEN:?}).
+    # Seed it here so an upgrade converges instead of taking the whole
+    # ingest tier down — this is the ONLY supported way to get the value,
+    # so it must never be generated per-boot or the producers and the
+    # collector would disagree.
+    if "INGEST_TOKEN" not in env:
+        additions.append("INGEST_USER=netops-ingest")
+        additions.append(f"INGEST_TOKEN={generate_token(32)}")
+    # Migration (vmalert delivery): a pre-webhook .env has no shared secret,
+    # and without one the api refuses to register the receiver (fail-closed)
+    # — i.e. the upgrade would keep delivering nothing. Seed it so an
+    # upgraded install converges on the same behaviour as a fresh one. Same
+    # generator as INGEST_TOKEN: URL-safe, because it rides URL userinfo.
+    if "VMALERT_WEBHOOK_TOKEN" not in env:
+        additions.append(f"VMALERT_WEBHOOK_TOKEN={generate_token(32)}")
+    if "VMALERT_WEBHOOK_COOLDOWN" not in env:
+        # Byte-identical to the docker-compose default and to
+        # alertwebhook.DefaultCooldown.
+        additions.append("VMALERT_WEBHOOK_COOLDOWN=30m")
+    # Migration (pipeline debugger): a pre-debugger .env has no sidecar
+    # secret, so the bus peek and the correlation log-level switch stay
+    # default-closed forever on an upgraded install — `correlix-debug
+    # trace` would report the bus stage "not observable" on the very host
+    # where someone is trying to find a lost record. Seeded, never
+    # overwritten: an operator-set value is authoritative, and rewriting it
+    # here would desynchronise the api from the correlation sidecar.
+    if "CORR_DEBUG_TOKEN" not in env:
+        additions.append(f"CORR_DEBUG_TOKEN={generate_token(32)}")
+    # Migration (F-07/F-59): search-tier durability posture.
+    if "OPENSEARCH_REPLICAS" not in env:
+        additions.append("OPENSEARCH_REPLICAS=0")
+    if "OPENSEARCH_SNAPSHOT_KEEP" not in env:
+        additions.append("OPENSEARCH_SNAPSHOT_KEEP=14")
+    # Migration (SEC-010/012/013/008): credentials the security epics
+    # introduced. generate_secrets() has minted them since those epics
+    # landed, but a pre-epic .env lacks them and the fresh-install template
+    # only covers NEW installs. Values converge on the next compose up —
+    # every consumer reads the same .env.
+    if "REDIS_PASSWORD" not in env:
+        additions.append(f"REDIS_PASSWORD={generate_password(24)}")
+    for lane in ("TRAPS", "PROBES", "METRICS", "BUS"):
+        if f"INGEST_TOKEN_{lane}" not in env:
+            additions.append(f"INGEST_TOKEN_{lane}={generate_token(32)}")
+    for svc in ("API", "GNMIC", "VECTOR", "VMALERT", "GRAFANA", "PROBER"):
+        if f"VMAUTH_{svc}_PASSWORD" not in env:
+            additions.append(f"VMAUTH_{svc}_PASSWORD={generate_urlsafe_password(24)}")
+    for svc in ("API", "ROUTER", "CORRELATION", "BOOTSTRAP", "DASHBOARDS", "AGGREGATOR"):
+        if f"OS_{svc}_PASSWORD" not in env:
+            additions.append(f"OS_{svc}_PASSWORD={generate_urlsafe_password(24)}")
+    # Migration (row 13 / E1): the read-only Grafana ClickHouse credential.
+    # bootstrap_grafana used to append it at the very END of a run, so an
+    # older .env was "incomplete" for the whole install; seeding it here
+    # is the same value-generation, just early enough for the completeness
+    # gate. bootstrap_grafana reconciles the ClickHouse user to it.
+    if "GRAFANA_CH_PASSWORD" not in env:
+        additions.append(f"GRAFANA_CH_PASSWORD={generate_password(24)}")
+    return additions
+
+
 def write_env(env_path: Path, port: int, *, force: bool,
               profiles: str = DEFAULT_PROFILES,
               broker_urls: str | None = None,
@@ -761,91 +1251,23 @@ def write_env(env_path: Path, port: int, *, force: bool,
     if env_path.exists() and not force:
         info(f".env already exists at {env_path} — keeping existing secrets")
         env = _parse_env(env_path)
-        # Migration (Redpanda→Kafka, #97): a pre-Kafka .env lacks the bus vars
-        # the compose file now requires. Append them idempotently so rerunning
-        # the installer upgrades an existing install instead of failing on
-        # ${KAFKA_CLUSTER_ID:?}.
-        additions: list[str] = []
-        if "BROKER_URLS" not in env:
-            additions.append("BROKER_URLS=kafka:9092")
-        if "KAFKA_CLUSTER_ID" not in env:
-            additions.append("KAFKA_CLUSTER_ID="
-                             + base64.urlsafe_b64encode(uuid.uuid4().bytes).decode().rstrip("="))
-        if "COMPOSE_PROFILES" not in env:
-            additions.append(f"COMPOSE_PROFILES={profiles}")
-        if "CORRELIX_UID" not in env:
-            additions.append(f"CORRELIX_UID={os.getuid()}")
-            additions.append(f"CORRELIX_GID={os.getgid()}")
-        # Migration (#101): pre-retention .env gets the correlation retention
-        # profile so upgraded installs get bounded correlation history too.
-        # Migration (tracker 245): a .env written before the app-state backend
-        # became explicit has no STORE_BACKEND line, and the compose fallback
-        # (`${STORE_BACKEND:-file}`) is the only thing keeping such an install on
-        # the backend its data actually lives on. Stamp the historical value
-        # EXPLICITLY so the choice survives any future default change — an
-        # upgrade must never silently repoint a registry at an empty database.
-        # A fresh install gets `postgres` from the template above; this path
-        # only ever writes what the install is already running on.
-        if "STORE_BACKEND" not in env:
-            additions.append("STORE_BACKEND=file")
-        if "CORR_RETENTION_PROFILE" not in env:
-            additions.append(f"CORR_RETENTION_PROFILE={retention_profile}")
-        if "CORR_CHAOS_FIXTURES" not in env:
-            additions.append("CORR_CHAOS_FIXTURES=")
-        # Migration (F-08): a pre-auth .env has no ingest credential, and
-        # vector-aggregator now refuses to start without one (${INGEST_TOKEN:?}).
-        # Seed it here so an upgrade converges instead of taking the whole
-        # ingest tier down — this is the ONLY supported way to get the value,
-        # so it must never be generated per-boot or the producers and the
-        # collector would disagree.
-        if "INGEST_TOKEN" not in env:
-            additions.append("INGEST_USER=netops-ingest")
-            additions.append(f"INGEST_TOKEN={generate_token(32)}")
-        # Migration (vmalert delivery): a pre-webhook .env has no shared secret,
-        # and without one the api refuses to register the receiver (fail-closed)
-        # — i.e. the upgrade would keep delivering nothing. Seed it so an
-        # upgraded install converges on the same behaviour as a fresh one. Same
-        # generator as INGEST_TOKEN: URL-safe, because it rides URL userinfo.
-        if "VMALERT_WEBHOOK_TOKEN" not in env:
-            additions.append(f"VMALERT_WEBHOOK_TOKEN={generate_token(32)}")
-        if "VMALERT_WEBHOOK_COOLDOWN" not in env:
-            # Byte-identical to the docker-compose default and to
-            # alertwebhook.DefaultCooldown.
-            additions.append("VMALERT_WEBHOOK_COOLDOWN=30m")
-        # Migration (pipeline debugger): a pre-debugger .env has no sidecar
-        # secret, so the bus peek and the correlation log-level switch stay
-        # default-closed forever on an upgraded install — `correlix-debug
-        # trace` would report the bus stage "not observable" on the very host
-        # where someone is trying to find a lost record. Seeded, never
-        # overwritten: an operator-set value is authoritative, and rewriting it
-        # here would desynchronise the api from the correlation sidecar.
-        if "CORR_DEBUG_TOKEN" not in env:
-            additions.append(f"CORR_DEBUG_TOKEN={generate_token(32)}")
-        # Migration (F-07/F-59): search-tier durability posture.
-        if "OPENSEARCH_REPLICAS" not in env:
-            additions.append("OPENSEARCH_REPLICAS=0")
-        if "OPENSEARCH_SNAPSHOT_KEEP" not in env:
-            additions.append("OPENSEARCH_SNAPSHOT_KEEP=14")
-        # Migration (SEC-010/012/013/008): credentials the security epics
-        # introduced. generate_secrets() has minted them since those epics
-        # landed, but a pre-epic .env lacks them and the fresh-install template
-        # only covers NEW installs. Values converge on the next compose up —
-        # every consumer reads the same .env.
-        if "REDIS_PASSWORD" not in env:
-            additions.append(f"REDIS_PASSWORD={generate_password(24)}")
-        for lane in ("TRAPS", "PROBES", "METRICS", "BUS"):
-            if f"INGEST_TOKEN_{lane}" not in env:
-                additions.append(f"INGEST_TOKEN_{lane}={generate_token(32)}")
-        for svc in ("API", "GNMIC", "VECTOR", "VMALERT", "GRAFANA", "PROBER"):
-            if f"VMAUTH_{svc}_PASSWORD" not in env:
-                additions.append(f"VMAUTH_{svc}_PASSWORD={generate_urlsafe_password(24)}")
-        for svc in ("API", "ROUTER", "CORRELATION", "BOOTSTRAP", "DASHBOARDS", "AGGREGATOR"):
-            if f"OS_{svc}_PASSWORD" not in env:
-                additions.append(f"OS_{svc}_PASSWORD={generate_urlsafe_password(24)}")
+        # A KAFKA_CLUSTER_ID the migration would mint for a broker that has
+        # already formatted data/kafka is not an upgrade, it is a broker that
+        # refuses its own volume. Only a damaged .env gets here.
+        if "KAFKA_CLUSTER_ID" not in env and _kafka_volume_initialized(env_path):
+            fail("KAFKA_CLUSTER_ID is missing from .env, but the embedded broker "
+                 "has already formatted data/kafka with an id: minting a new one "
+                 "would make the broker refuse its own data. Restore the key from "
+                 f"{env_snapshot_path(env_path).name} or a backup (see "
+                 "docs/runbooks/secret-rotation.md for a deliberate rotation).")
+        additions = _env_migration_lines(env, profiles, retention_profile)
         if additions:
-            with env_path.open("a") as f:
-                f.write("\n# ---- Event bus (Apache Kafka) — appended by install.py migration ----\n")
-                f.write("\n".join(additions) + "\n")
+            write_env_text(
+                env_path,
+                env_path.read_text()
+                + "\n# ---- Event bus (Apache Kafka) — appended by install.py migration ----\n"
+                + "\n".join(additions) + "\n",
+                what="migrate .env")
             ok(f"migrated .env: added {', '.join(a.split('=')[0] for a in additions)}")
             env = _parse_env(env_path)
         # Heal (2026-09-15): an install minted before the leading-character fix
@@ -863,7 +1285,7 @@ def write_env(env_path: Path, port: int, *, force: bool,
                 fail("OS_DASHBOARDS_PASSWORD starts with '-' (OpenSearch "
                      "Dashboards cannot start with it) and could not be "
                      "re-minted in .env — set a new value by hand")
-            env_path.write_text(healed)
+            write_env_text(env_path, healed, what="re-mint OS_DASHBOARDS_PASSWORD")
             ok("re-minted OS_DASHBOARDS_PASSWORD: the old value began with "
                "'-', which OpenSearch Dashboards reads as a command-line option")
             env = _parse_env(env_path)
@@ -1423,14 +1845,18 @@ OS_AGGREGATOR_PASSWORD={secrets_map["OS_AGGREGATOR_PASSWORD"]}
 #   osd           OpenSearch Dashboards (omitted by --core bundles)
 COMPOSE_PROFILES={profiles}
 """
-    _write_private(env_path, body)
+    write_env_text(env_path, body, what="write .env")
     ok(f"wrote {env_path} (mode 0600)")
     return secrets_map
 
 
 def _parse_env(path: Path) -> dict[str, str]:
+    return _parse_env_text(path.read_text())
+
+
+def _parse_env_text(text: str) -> dict[str, str]:
     out: dict[str, str] = {}
-    for line in path.read_text().splitlines():
+    for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -1598,7 +2024,7 @@ def rotate_secrets(root: Path, compose_dir: Path, env_path: Path, *,
     if missing:
         new_text += ("\n# ---- added by install.py secret rotation ----\n"
                      + "".join(f"{k}={new_values[k]}\n" for k in missing))
-    _write_private(env_path, new_text)
+    write_env_text(env_path, new_text, what="write the rotated secrets")
     rotated.update(new_values)
     ok(f"{env_path} updated ({len(new_values)} secrets; previous copy at "
        f"{backup.name}, mode 0600)")
@@ -1613,7 +2039,7 @@ def rotate_secrets(root: Path, compose_dir: Path, env_path: Path, *,
                  "verify the store before relying on it")
             return
         reverted, _ = sr.substitute_env(env_path.read_text(), {name: env[name]})
-        _write_private(env_path, reverted)
+        write_env_text(env_path, reverted, what=f"roll back {name}")
         info(f"{name} rolled back in .env so it still matches the running store")
 
     ch_admin_pw = env.get("CLICKHOUSE_PASSWORD", "")
@@ -2124,9 +2550,12 @@ def write_offline_override(compose_dir: Path, env_path: Path) -> None:
     (compose_dir / "compose.offline-images.yml").write_text("\n".join(body) + "\n")
     env_text = env_path.read_text() if env_path.exists() else ""
     if "COMPOSE_FILE=" not in env_text:
-        with env_path.open("a") as f:
-            f.write("\n# Offline install: tag-pinned image override (see file header).\n")
-            f.write("COMPOSE_FILE=docker-compose.yml:compose.offline-images.yml\n")
+        write_env_text(
+            env_path,
+            env_text
+            + "\n# Offline install: tag-pinned image override (see file header).\n"
+            + "COMPOSE_FILE=docker-compose.yml:compose.offline-images.yml\n",
+            what="activate the offline image override")
     ok(f"offline image override written ({len(overrides)} digest-pinned images → tag-pinned)")
 
 
@@ -2221,7 +2650,7 @@ def splice_env_values(env_path: Path, values: dict[str, str],
             lines.append(f"{k}={values[k]}")
         changed = True
     if changed:
-        env_path.write_text("\n".join(lines) + "\n")
+        write_env_text(env_path, "\n".join(lines) + "\n", what=f"set the {label}")
         ok(f"{label} set in .env ({len(present)} updated, {len(missing)} added)")
     else:
         info(f"{label} already present in .env")
@@ -2258,7 +2687,8 @@ def normalize_database_url_for_bootstrap(env_path: Path) -> None:
             changed = True
         break
     if changed:
-        env_path.write_text("\n".join(lines) + "\n")
+        write_env_text(env_path, "\n".join(lines) + "\n",
+                       what="normalize DATABASE_URL")
         info("normalized DATABASE_URL to the plaintext bootstrap form for TLS "
              "phase-A minting (verify-full is supplied by compose.tls.yml in phase B)")
 
@@ -2296,7 +2726,8 @@ def augment_profiles_for_tls(env_path: Path) -> None:
             added = [p for p in TLS_EXTRA_PROFILES if p not in current]
             if added:
                 lines[i] = "COMPOSE_PROFILES=" + ",".join(current + added)
-                env_path.write_text("\n".join(lines) + "\n")
+                write_env_text(env_path, "\n".join(lines) + "\n",
+                               what="add the TLS compose profiles")
                 ok(f"compose profiles gained {', '.join(added)}")
             return
     # No COMPOSE_PROFILES line at all would already have failed compose; be loud.
@@ -2320,12 +2751,16 @@ def activate_tls_compose_file(compose_dir: Path, env_path: Path) -> None:
                 info("compose.tls.yml already active in COMPOSE_FILE")
                 return
             lines[i] = f"COMPOSE_FILE={chain}:compose.tls.yml"
-            env_path.write_text("\n".join(lines) + "\n")
+            write_env_text(env_path, "\n".join(lines) + "\n",
+                           what="append compose.tls.yml to COMPOSE_FILE")
             ok("compose.tls.yml appended to the COMPOSE_FILE chain")
             return
-    with env_path.open("a") as f:
-        f.write("\n# TLS/mTLS variant (tracker #151): activated by install.py --tls=yes.\n")
-        f.write("COMPOSE_FILE=docker-compose.yml:compose.tls.yml\n")
+    write_env_text(
+        env_path,
+        env_path.read_text()
+        + "\n# TLS/mTLS variant (tracker #151): activated by install.py --tls=yes.\n"
+        + "COMPOSE_FILE=docker-compose.yml:compose.tls.yml\n",
+        what="activate compose.tls.yml")
     ok("compose.tls.yml activated via COMPOSE_FILE")
 
 
@@ -2516,7 +2951,11 @@ _UP_FATAL_SIGNATURES = (
 _UP_BLOCKER = re.compile(
     r"dependency failed to start: container (\S+) (?:is unhealthy|exited)")
 
-# Log lines that say a slow service is healing, not broken.
+# Log lines that say a slow service is healing, not broken. Only the WORDING
+# of the wait note comes from here — whether to keep waiting is decided by the
+# container's state, restart count and the budget. Each store's pattern is
+# pinned by a log line recorded from a real container
+# (tests/test_install_selfheal_signatures.py).
 _PROGRESS_SIGNATURES = (
     (re.compile(r"syncing data directory|automatic recovery in progress|"
                 r"redo starts|database system was interrupted|end-of-recovery"),
@@ -2524,6 +2963,25 @@ _PROGRESS_SIGNATURES = (
       "slow disks take minutes)")),
     (re.compile(r"database system is starting up|not yet accepting connections"),
      "still starting up"),
+    # Kafka (apache/kafka 4.x LogLoader / LogManager): segments past the
+    # recovery point are re-validated after a stop that did not flush them.
+    (re.compile(r"Recovering unflushed segment|no clean shutdown file was found"),
+     ("Kafka is recovering log segments it had not flushed (normal after an "
+      "unclean stop; slow disks take minutes)")),
+    # ClickHouse 24.x: metadata then asynchronous table/part loading. Every
+    # start does this; after an unclean stop the part checks make it slow.
+    # "Loading data parts" is the debug-level wording of the same phase.
+    (re.compile(r"Loading data parts|Loading metadata from /var/lib/clickhouse|"
+                r"Start asynchronous loading of databases|AsyncLoader: Processed: \d"),
+     ("ClickHouse is loading its tables and data parts (slower after an "
+      "unclean stop)")),
+    # OpenSearch 2.x: the gateway recovers index metadata, then local shard
+    # recovery (translog replay after an unclean stop) turns health from RED.
+    (re.compile(r"recovered \[\d+\] indices into cluster_state|"
+                r"Cluster health status changed from \[RED\]|"
+                r"\btranslog\b.*\brecover|\brecover\w*\b.*\btranslog\b"),
+     ("OpenSearch is recovering its shards (translog replay after an unclean "
+      "stop takes minutes)")),
 )
 _SECRETISH = re.compile(r"passw|secret|token|apikey|api_key|credential|bearer",
                         re.IGNORECASE)
@@ -2561,7 +3019,10 @@ class ComposeOps:
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  text=True)
         except OSError as e:
-            return 126, f"could not run docker compose: {e}"
+            # No docker binary / no permission to run it: no pass can succeed,
+            # so there is nothing to converge on (§16.1: stop, and say why).
+            fail(f"could not run docker compose: {e}")
+            raise
         killer = threading.Timer(self.UP_TIMEOUT_S, p.kill)
         killer.start()
         tail: list[str] = []
@@ -2677,12 +3138,39 @@ _STATEFUL_STORES = ("postgres", "clickhouse", "kafka", "opensearch")
 _SIGKILL_EXIT = 137
 
 
+# The last line a postgres postmaster writes after a clean (smart/fast)
+# shutdown. Recorded from netops-postgres-1: `[1] LOG:  database system is shut
+# down`. Exit code 0 alone does not prove it: a wrapper can exit 0 around a
+# postmaster that never finished.
+_PG_SHUTDOWN_DONE = "database system is shut down"
+
+
+def _postgres_shutdown_unconfirmed(compose_dir: Path, since: str, run) -> str:
+    """"" when postgres logged a completed shutdown since `since`, else why not."""
+    try:
+        r = run(["docker", "compose", "logs", "--since", since, "--no-color", "postgres"],
+                cwd=str(compose_dir), capture_output=True, text=True, timeout=60,
+                check=False)
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"its log could not be read to confirm a clean shutdown ({e})"
+    if r.returncode != 0:
+        return ("its log could not be read to confirm a clean shutdown ("
+                f"{(r.stderr or r.stdout).strip()[:200]})")
+    if _PG_SHUTDOWN_DONE not in (r.stdout or "") + (r.stderr or ""):
+        return f"it did not log '{_PG_SHUTDOWN_DONE}'"
+    return ""
+
+
 def stop_stores_cleanly(compose_dir: Path, services=_STATEFUL_STORES, *,
-                        run=subprocess.run, grace_s: int = 120) -> None:
+                        run=subprocess.run, grace_s: int = 120,
+                        now=lambda: datetime.now(timezone.utc)) -> None:
     """Stop the running stateful stores with a shutdown window before phase B
     recreates them, and say so when one was killed anyway (its next start runs
     crash recovery, which compose_up now waits through). Never fatal: the
-    recreate would stop them regardless; this only makes the stop clean."""
+    recreate would stop them regardless; this only makes the stop clean.
+
+    postgres counts as clean only when it logged `database system is shut
+    down` after the stop began — not merely because it exited 0."""
     try:
         ps = run(["docker", "compose", "ps", "--status", "running", "--services"],
                  cwd=str(compose_dir), capture_output=True, text=True, timeout=60,
@@ -2700,6 +3188,7 @@ def stop_stores_cleanly(compose_dir: Path, services=_STATEFUL_STORES, *,
         return
     info(f"stopping {', '.join(targets)} cleanly before the TLS restart "
          f"(up to {grace_s}s)…")
+    since = now().strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         r = run(["docker", "compose", "stop", "--timeout", str(grace_s), *targets],
                 cwd=str(compose_dir), capture_output=True, text=True,
@@ -2720,12 +3209,21 @@ def stop_stores_cleanly(compose_dir: Path, services=_STATEFUL_STORES, *,
             continue
         if q.returncode == 0 and q.stdout.strip().splitlines()[:1] == [str(_SIGKILL_EXIT)]:
             killed.append(svc)
+    unconfirmed: list[str] = []
+    if "postgres" in targets and "postgres" not in killed:
+        why = _postgres_shutdown_unconfirmed(compose_dir, since, run)
+        if why:
+            unconfirmed.append("postgres")
+            warn(f"postgres stopped, but {why}; its next start may run crash "
+                 "recovery, which can take minutes on a slow disk (the installer "
+                 "waits for it)")
     if killed:
         warn(f"{', '.join(killed)} did not finish shutting down within {grace_s}s "
              "and was killed; its next start runs crash recovery, which can take "
              "minutes on a slow disk (the installer waits for it)")
-    else:
-        ok(f"{', '.join(targets)} stopped cleanly")
+    clean = [s for s in targets if s not in killed and s not in unconfirmed]
+    if clean:
+        ok(f"{', '.join(clean)} stopped cleanly")
 
 def load_bundle(bundle: Path) -> None:
     """docker-load the installer's image archive (.tar, .tar.gz, or .tar.zst).
@@ -2749,7 +3247,7 @@ def load_bundle(bundle: Path) -> None:
     ok("images loaded")
 
 
-def load_addon_packs(bundle: Path, profiles: str) -> None:
+def load_addon_packs(bundle: Path, profiles: str, *, image_present=None) -> None:
     """docker-load the add-on pack for every activated profile that has one.
 
     WHY THIS REFUSES INSTEAD OF CONTINUING. On an offline install the images
@@ -2764,6 +3262,7 @@ def load_addon_packs(bundle: Path, profiles: str) -> None:
     Packs live next to the base archive, which is what --bundle points at.
     """
     active = {p.strip() for p in profiles.split(",") if p.strip()}
+    image_present = image_present if image_present is not None else _image_present
     for prof in sorted(active & set(ADDON_PACKS)):
         name, what = ADDON_PACKS[prof]
         packs = sorted(bundle.parent.glob(f"correlix-addon-{name}-*.tar.zst"))
@@ -2776,7 +3275,18 @@ def load_addon_packs(bundle: Path, profiles: str) -> None:
                  f"       Either copy correlix-addon-{name}-<version>.tar.zst next "
                  f"to the installer and re-run, or install without it "
                  f"(drop '{prof}' from --profiles).")
-        step(f"loading add-on pack {name}", stage="addon-pack")
+        # Journal-driven skip (B1): a re-run does not reload a pack that the
+        # journal records as loaded from this same archive when every image
+        # its MANIFEST section lists is still present.
+        key = f"addon-pack:{name}"
+        skip, why, fp = image_load_decision(_TIMING["journal"], key, packs[-1],
+                                            f"addon:{name}", image_present)
+        step(f"loading add-on pack {name}", stage="addon-pack", key=key,
+             inputs={"bundle": fp or ""})
+        if skip:
+            info(f"skipping add-on pack {name}: {why}")
+            continue
+        info(f"loading add-on pack {name} (not skipped: {why})")
         load_bundle(packs[-1])
 
 
@@ -3023,16 +3533,19 @@ _PG_IDENT = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 def bootstrap_keycloak_db(compose_dir: Path, env: dict, *,
-                          start_postgres: bool = False) -> None:
-    """Create Keycloak's database when the `sso` profile is active.
+                          start_postgres: bool = False) -> bool:
+    """Create Keycloak's database when the `sso` profile is active. Returns True
+    when the database exists afterwards.
 
     Keycloak does not create its own DB: without this it crash-loops on first
     boot with `FATAL: database "keycloak" does not exist` (hit on the first
     real SSO bring-up, 2026-08-03 — docs/runbooks/okta-sso-setup.md §1).
     install.py owns first-boot provisioning, so it owns this too. Idempotent
-    (SELECT-then-CREATE); non-fatal like the other bootstrap steps — the rest
-    of the stack is healthy without Keycloak — but loud, with the manual
-    command, because Keycloak stays in a crash-loop until the DB exists."""
+    (SELECT-then-CREATE). A single attempt is non-fatal and loud, with the
+    manual command: the early pre-start call may simply be too early. The
+    post-start confirmation (confirm_keycloak_db) retries it and makes a
+    database that still does not exist FATAL under `sso` — reporting success
+    over a crash-looping Keycloak is FMEA §2 #5 (T2 residual)."""
     user = env.get("DB_USER", "netops")
     db = env.get("KEYCLOAK_DB_NAME", "keycloak")
     manual = f"docker compose exec postgres createdb -U {user} {db}"
@@ -3043,7 +3556,7 @@ def bootstrap_keycloak_db(compose_dir: Path, env: dict, *,
         warn("DB_USER/KEYCLOAK_DB_NAME contain characters this step will not "
              "interpolate into SQL ([A-Za-z0-9_] only) — fix them in .env and "
              "re-run, or create the database manually")
-        return
+        return False
     # Bounded readiness wait (the postgres container may still be starting on a
     # first boot), then the existence probe. The wait is the SHARED helper — a
     # real query against the real server, never pg_isready, which also answers
@@ -3058,12 +3571,12 @@ def bootstrap_keycloak_db(compose_dir: Path, env: dict, *,
         except (OSError, subprocess.SubprocessError) as e:
             warn(f"could not start postgres to create the {db} database: {e}")
             info(f"re-run install.py, or once postgres is up run: {manual}")
-            return
+            return False
         if up.returncode != 0:
             warn(f"could not start postgres to create the {db} database: "
                  f"{(up.stderr or up.stdout).strip()}")
             info(f"re-run install.py, or once postgres is up run: {manual}")
-            return
+            return False
     runner = ComposeRunner(compose_dir)
     rok, rmsg = wait_for_postgres(runner, user=user, db="postgres",
                                   label="postgres (keycloak db check)")
@@ -3071,7 +3584,7 @@ def bootstrap_keycloak_db(compose_dir: Path, env: dict, *,
         warn(f"could not reach postgres to check for the {db} database "
              f"(Keycloak will crash-loop until it exists): {rmsg}")
         info(f"re-run install.py once postgres is healthy, or run: {manual}")
-        return
+        return False
     # -tAc → bare "1" when the row exists.
     res = runner.exec("postgres", ["psql", "-v", "ON_ERROR_STOP=1", "-U", user,
                                    "-d", "postgres", "-tAc",
@@ -3081,10 +3594,10 @@ def bootstrap_keycloak_db(compose_dir: Path, env: dict, *,
         warn(f"could not check for the {db} database (Keycloak will crash-loop "
              f"until it exists): {(res.stderr or res.stdout).strip()}")
         info(f"re-run install.py once postgres is healthy, or run: {manual}")
-        return
+        return False
     if res.stdout.strip() == "1":
         ok(f"keycloak database '{db}' already exists")
-        return
+        return True
     res = runner.exec("postgres", ["psql", "-v", "ON_ERROR_STOP=1", "-U", user,
                                    "-d", "postgres", "-c",
                                    f'CREATE DATABASE "{db}" OWNER "{user}"'],
@@ -3093,8 +3606,48 @@ def bootstrap_keycloak_db(compose_dir: Path, env: dict, *,
         warn(f"creating the {db} database failed (Keycloak will crash-loop "
              f"until it exists): {(res.stderr or res.stdout).strip()}")
         info(f"create it manually: {manual}")
-        return
+        return False
     ok(f"keycloak database '{db}' created (owner {user})")
+    return True
+
+
+KEYCLOAK_DB_CONFIRM_ATTEMPTS = 3
+KEYCLOAK_DB_RETRY_BASE_S = 10.0
+
+
+def confirm_keycloak_db(compose_dir: Path, env: dict, *, bootstrap=None,
+                        attempts: int = KEYCLOAK_DB_CONFIRM_ATTEMPTS,
+                        base_delay_s: float = KEYCLOAK_DB_RETRY_BASE_S,
+                        sleep=time.sleep) -> None:
+    """Post-start confirmation under the `sso` profile: the database must
+    exist. Bounded retry (each attempt carries its own postgres readiness
+    budget) with exponential backoff and jitter (§9), then FATAL with the
+    manual command — never "installed" over a crash-looping Keycloak."""
+    bootstrap = bootstrap if bootstrap is not None else bootstrap_keycloak_db
+    for attempt in range(1, attempts + 1):
+        if bootstrap(compose_dir, env):
+            return
+        if attempt < attempts:
+            delay = _jittered(base_delay_s * (2 ** (attempt - 1)))
+            warn(f"Keycloak's database is not confirmed yet (attempt {attempt} of "
+                 f"{attempts}); trying again in {delay:.0f}s")
+            sleep(delay)
+    user = env.get("DB_USER", "netops")
+    db = env.get("KEYCLOAK_DB_NAME", "keycloak")
+    if _PG_IDENT.match(user) and _PG_IDENT.match(db):
+        manual = (f"cd {compose_dir} && docker compose exec postgres "
+                  f"createdb -U {user} {db}")
+        name = f"'{db}'"
+    else:
+        manual = ("fix DB_USER / KEYCLOAK_DB_NAME in .env ([A-Za-z0-9_] only), "
+                  "then create that database by hand")
+        name = "(KEYCLOAK_DB_NAME)"
+    fail(f"Keycloak's database {name} still does not exist after {attempts} "
+         "attempts, and the sso profile is active: Keycloak crash-loops without "
+         "it, so this install is not reported as a success.\n"
+         f"  Create it:  {manual}\n"
+         "  then re-run the installer (safe), or remove 'sso' from "
+         "COMPOSE_PROFILES in .env if single sign-on is not wanted.")
 
 
 # The non-superuser role the Postgres app-state backend authenticates as. It is
@@ -3496,7 +4049,8 @@ def enable_tls_database_url(env_path: Path) -> None:
             changed = True
         break
     if changed:
-        _write_private(env_path, "\n".join(lines) + "\n")
+        write_env_text(env_path, "\n".join(lines) + "\n",
+                       what="switch DATABASE_URL to verify-full")
         ok("DATABASE_URL switched to sslmode=verify-full for the TLS mesh")
     else:
         info("DATABASE_URL already carries the TLS verify-full form")
@@ -3517,9 +4071,12 @@ def bootstrap_grafana(root: Path, secrets_map: dict) -> None:
     ch_pw = (secrets_map.get("GRAFANA_CH_PASSWORD") or env.get("GRAFANA_CH_PASSWORD") or "").strip()
     if not ch_pw:
         ch_pw = generate_password(24)
-        with env_path.open("a") as f:
-            f.write("\n# Read-only ClickHouse user for Grafana (added on upgrade).\n"
-                    f"GRAFANA_CH_PASSWORD={ch_pw}\n")
+        write_env_text(
+            env_path,
+            (env_path.read_text() if env_path.exists() else "")
+            + "\n# Read-only ClickHouse user for Grafana (added on upgrade).\n"
+            + f"GRAFANA_CH_PASSWORD={ch_pw}\n",
+            what="add GRAFANA_CH_PASSWORD")
         info("added GRAFANA_CH_PASSWORD to .env")
 
     # 2. Create / update the read-only ClickHouse user. tenant_scope='' is pinned
@@ -3564,6 +4121,169 @@ def bootstrap_grafana(root: Path, secrets_map: dict) -> None:
     subprocess.run(["docker", "compose", "up", "-d", "grafana"],
                    cwd=str(compose_dir), check=False)
     ok("grafana reloaded with ClickHouse datasource + flow/findings dashboards")
+
+
+# ---- single-writer install lock (FMEA §2 #12, §4.2) --------------------------
+# GUI + CLI, two wizard processes, or a cron update.sh must never run install
+# steps at once: they race on .env surgery and on compose. flock releases on
+# process death, so a held lock always means a live holder; the file contents
+# (pid, command, start) exist only to NAME that holder in the refusal.
+#
+# Contract with install-correlix.sh (implemented there, not here): the shell
+# holds `flock -n 9` on this same file and exports CORRELIX_INSTALL_LOCK_FD=9.
+# install.py then re-flocks THAT descriptor (the same open file description,
+# so it succeeds) instead of opening the file, and leaves its contents to the
+# shell. A direct `python3 scripts/install.py` opens and locks the file itself.
+
+INSTALL_LOCK_NAME = ".install.lock"
+INSTALL_LOCK_FD_ENV = "CORRELIX_INSTALL_LOCK_FD"
+INSTALL_LOCK_BUSY_EXIT = 3
+_LOCK_INFO_MAX = 4096
+_LOCK_FIELDS = ("pid", "cmd", "started_utc")
+
+# Module state, not a hidden singleton: the lock this run holds, released by
+# the __main__ block on every exit path.
+_LOCK: dict = {"held": None}
+
+
+class InstallLock:
+    """A held install lock. `owned` = this process opened (and records itself
+    in) the file; otherwise the descriptor was inherited from the shell."""
+
+    def __init__(self, path: Path, fd: int, owned: bool) -> None:
+        self.path = path
+        self.fd = fd
+        self.owned = owned
+
+    def release(self) -> None:
+        if self.fd < 0:
+            return
+        fd, self.fd = self.fd, -1
+        if self.owned:
+            # Empty the holder record so the next run does not report a stale
+            # lock after a clean exit; closing releases the flock.
+            os.ftruncate(fd, 0)
+            os.close(fd)
+        # Inherited: never LOCK_UN or close the shell's lock — it still holds it.
+
+
+def _read_lock_holder(fd: int) -> dict[str, str]:
+    """The holder record, bounded and reduced to printable text (the file is
+    writable by whoever can write deployment/docker — never trust it)."""
+    raw = os.pread(fd, _LOCK_INFO_MAX, 0).decode("utf-8", errors="replace")
+    out: dict[str, str] = {}
+    for line in raw.splitlines():
+        k, sep, v = line.partition("=")
+        if sep and k in _LOCK_FIELDS:
+            out[k] = "".join(ch for ch in v if ch.isprintable())[:200]
+    return out
+
+
+def _lock_holder_text(holder: dict[str, str]) -> str:
+    parts = []
+    if holder.get("pid"):
+        parts.append(f"pid {holder['pid']}")
+    if holder.get("cmd"):
+        parts.append(f"command {holder['cmd']!r}")
+    if holder.get("started_utc"):
+        parts.append(f"started {holder['started_utc']}")
+    return ", ".join(parts)
+
+
+def _refuse_lock_busy(path: Path, holder: dict[str, str]) -> None:
+    who = _lock_holder_text(holder) or "a process that has not recorded itself yet"
+    print(f"[fail ] another Correlix install is already running on this "
+          f"installation ({who}).", file=sys.stderr)
+    print("        Two installs at once race on .env and on docker compose, so this "
+          "one stops here and changed nothing.", file=sys.stderr)
+    print(f"        Wait for it to finish (the lock {path} is released the moment "
+          "it exits), then re-run.", file=sys.stderr)
+    _progress({"kind": "result", "status": "fail"})
+    sys.exit(INSTALL_LOCK_BUSY_EXIT)
+
+
+def _inherited_lock_fd(path: Path, environ, proc_fd_dir: Path = Path("/proc/self/fd")) -> int | None:
+    """The descriptor install-correlix.sh passed in CORRELIX_INSTALL_LOCK_FD,
+    when it really is an open descriptor on THIS lock file; else None (with a
+    warning when the variable was set but unusable)."""
+    raw = (environ.get(INSTALL_LOCK_FD_ENV) or "").strip()
+    if not raw:
+        return None
+    if not re.fullmatch(r"[0-9]{1,5}", raw) or int(raw) < 3:
+        warn(f"ignoring {INSTALL_LOCK_FD_ENV}: {raw[:16]!r} is not a usable file "
+             "descriptor number; taking the install lock directly")
+        return None
+    fd = int(raw)
+    if not (proc_fd_dir / str(fd)).exists():
+        warn(f"ignoring {INSTALL_LOCK_FD_ENV}={fd}: that descriptor is not open in "
+             "this process; taking the install lock directly")
+        return None
+    if not path.exists() or not os.path.samestat(os.fstat(fd), os.stat(path)):
+        warn(f"ignoring {INSTALL_LOCK_FD_ENV}={fd}: that descriptor is not {path}; "
+             "taking the install lock directly")
+        return None
+    return fd
+
+
+def acquire_install_lock(compose_dir: Path, argv: list[str], *, environ=None,
+                         pid_alive=_pid_alive) -> InstallLock:
+    """Take the single-writer lock or refuse (exit 3) naming the holder."""
+    environ = os.environ if environ is None else environ
+    path = compose_dir / INSTALL_LOCK_NAME
+    fd = _inherited_lock_fd(path, environ)
+    if fd is not None:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            _refuse_lock_busy(path, _read_lock_holder(fd))
+        except OSError as e:
+            fail(f"could not take the install lock {path} through the inherited "
+                 f"descriptor {fd}: {e.strerror or e}")
+        return InstallLock(path, fd, owned=False)
+    if not compose_dir.is_dir():
+        fail(f"{compose_dir} does not exist — the checkout or bundle is incomplete, "
+             "so there is no installation to lock")
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    except OSError as e:
+        fail(f"could not open the install lock {path}: {e.strerror or e}")
+        raise
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        holder = _read_lock_holder(fd)
+        os.close(fd)
+        _refuse_lock_busy(path, holder)
+    except OSError as e:
+        os.close(fd)
+        fail(f"could not take the install lock {path}: {e.strerror or e}")
+    previous = _read_lock_holder(fd)
+    prev_pid = previous.get("pid", "")
+    if prev_pid.isdigit() and int(prev_pid) != os.getpid():
+        who = _lock_holder_text(previous)
+        if pid_alive(int(prev_pid)):
+            warn(f"took over the install lock: its record named {who}, which is "
+                 "running but no longer holds the lock (a reused pid)")
+        else:
+            warn(f"took over a stale install lock: {who} is no longer running "
+                 "(that run was killed or crashed; see data/install-timing.json "
+                 "for the stage it reached)")
+    cmd = " ".join([Path(argv[0]).name, *argv[1:2]]) if argv else "install.py"
+    record = f"pid={os.getpid()}\ncmd={cmd}\nstarted_utc={_utc_stamp()}\n"
+    try:
+        os.ftruncate(fd, 0)
+        os.pwrite(fd, record.encode("utf-8"), 0)
+    except OSError as e:
+        os.close(fd)
+        fail(f"could not record this run in the install lock {path}: {e.strerror or e}")
+    return InstallLock(path, fd, owned=True)
+
+
+def _release_install_lock() -> None:
+    held = _LOCK["held"]
+    _LOCK["held"] = None
+    if held is not None:
+        held.release()
 
 
 # ---- main -------------------------------------------------------------------
@@ -3705,6 +4425,12 @@ def main() -> None:
     compose_dir = root / "deployment" / "docker"
     env_path = compose_dir / ".env"
 
+    # Every mode from here on changes this installation (.env, data/, the
+    # stack), so every one holds the single-writer lock (FMEA §2 #12, §4.2).
+    # The read-only paths — --help and argument errors — exited above without
+    # touching anything. Released by the __main__ block on every exit path.
+    _LOCK["held"] = acquire_install_lock(compose_dir, sys.argv)
+
     # Standalone resource-plan operations (#102) — no install steps.
     if args.rollback_plan:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -3716,7 +4442,11 @@ def main() -> None:
         restored = []
         for src, bak in paths.items():
             if os.path.exists(bak):
-                _write_private(Path(src), Path(bak).read_text())
+                if Path(src).resolve() == env_path.resolve():
+                    write_env_text(env_path, Path(bak).read_text(),
+                                   what="restore .env from its plan backup")
+                else:
+                    _write_private(Path(src), Path(bak).read_text())
                 restored.append(os.path.basename(src))
         ok(f"restored {', '.join(restored)} from .plan.bak backups — "
            "run 'docker compose up -d' to apply")
@@ -3736,6 +4466,7 @@ def main() -> None:
     if args.replan:
         if not env_path.exists():
             fail(".env not found — run a full install first")
+        validate_env_complete(env_path, before_migration=True)
         run_resource_plan(env_path, args.plan_resources or "auto", args.sizing_file)
         info("replan complete — apply with: cd deployment/docker && docker compose up -d")
         return
@@ -3744,6 +4475,10 @@ def main() -> None:
     # leave everything else — including every operator edit in .env — alone.
     if args.rotate_app_secrets:
         step("rotating secrets in place")
+        if env_path.exists():
+            # Never rotate into a truncated .env (heals from the snapshot or
+            # refuses naming the missing keys).
+            validate_env_complete(env_path, before_migration=True)
         sr = _rotation_module()
         # Reconciling a live store needs the compose CLI. Only demand it when
         # something has actually started — a pre-start rotation is file-only.
@@ -3775,6 +4510,12 @@ def main() -> None:
     _TIMING["record"] = True
     _TIMING["report"] = args.time_report
     _TIMING["path"] = root / "data" / "install-timing.json"
+    # The previous run's journal (FMEA §4.1): what finished, what was
+    # interrupted. Advisory only — unusable means every stage runs.
+    journal, journal_notes = load_install_journal(_TIMING["path"])
+    _TIMING["journal"] = journal
+    for note in journal_notes:
+        info(note)
 
     step("checking prerequisites", stage="prereq")
     check_docker(args.bootstrap_docker)
@@ -3789,8 +4530,15 @@ def main() -> None:
     # stores already hold most of these credentials, and rewriting the template
     # would also revert every operator setting in .env.
     sr = _rotation_module()
-    if args.reset_env and env_path.exists() and sr.install_started(
-            root, _parse_env(env_path).get("COMPOSE_PROFILES", "")):
+    started = env_path.exists() and sr.install_started(
+        root, _parse_env(env_path).get("COMPOSE_PROFILES", ""))
+    # A re-run starts from whatever .env the last run, an ENOSPC or an editor
+    # left: heal a truncated file from its snapshot, or refuse naming the
+    # missing keys, BEFORE a migration mints replacements for them (row 13 /
+    # E1). --reset-env on an install that never started regenerates it anyway.
+    if env_path.exists() and (started or not args.reset_env):
+        validate_env_complete(env_path, before_migration=True)
+    if args.reset_env and started:
         info("this install has already started — rotating in place "
              "(see docs/runbooks/secret-rotation.md)")
         secrets_map, failures = rotate_secrets(
@@ -3806,6 +4554,9 @@ def main() -> None:
         secrets_map = write_env(env_path, args.port, force=args.reset_env,
                                 profiles=args.profiles, broker_urls=args.broker_urls,
                                 retention_profile=args.retention_profile)
+    # After generation, migration or rotation: every key compose and the
+    # stack need is present and non-empty, or heal/refuse (row 13 / E1).
+    validate_env_complete(env_path)
 
     # --snmp-discovery: same line-surgery doctrine as --tls, so a fresh
     # template and an existing operator-edited .env converge identically.
@@ -3825,8 +4576,17 @@ def main() -> None:
     # the TLS stage 100% of the time (fresh-install acceptance, 2026-09-06).
     # load_bundle() depends on nothing above it but the extracted tree.
     if args.bundle:
-        step("loading image bundle", stage="bundle")
-        load_bundle(args.bundle)
+        # Journal-driven skip (B1): the core archive was 382 s of the .123 run.
+        # Skipped only when the journal records it loaded from this SAME
+        # archive + MANIFEST and every image the MANIFEST lists still inspects.
+        skip, why, bundle_fp = image_load_decision(
+            _TIMING["journal"], "bundle", args.bundle, "base", _image_present)
+        step("loading image bundle", stage="bundle", inputs={"bundle": bundle_fp or ""})
+        if skip:
+            info(f"skipping the image load: {why}")
+        else:
+            info(f"loading the image archive (not skipped: {why})")
+            load_bundle(args.bundle)
 
     # The one transport-security question (tracker #151 delivery shape).
     # Resolved AFTER .env exists so both fresh and existing installs converge
@@ -3891,15 +4651,21 @@ def main() -> None:
     # api's internal CA writes every SVID to data/tls while the stores are
     # still plaintext. On a rerun with certs already minted this converges in
     # one pass (the sentinels exist, the variant is already in the chain).
+    # Last gate before anything reads .env to start containers: the surgery
+    # above (TLS, offline override) must not have left it incomplete.
+    validate_env_complete(env_path)
     step("starting stack" + (" (TLS phase A: mint identities)" if tls_enabled else ""),
-         stage="up-a")
+         stage="up-a", inputs=stage_inputs(env_path))
     compose_up(compose_dir, offline=args.offline, root=root)
 
     if tls_enabled:
         wait_for_minted_certs(root)
         activate_tls_compose_file(compose_dir, env_path)
         enable_tls_database_url(env_path)
-        step("starting stack (TLS phase B: fail-closed mesh)", stage="up-b")
+        # Never skipped on the journal's word (§4.1 rule 3): the recreate runs
+        # and compose_up verifies convergence every time.
+        step("starting stack (TLS phase B: fail-closed mesh)", stage="up-b",
+             inputs=stage_inputs(env_path))
         stop_stores_cleanly(compose_dir)
         compose_up(compose_dir, offline=args.offline, root=root)
 
@@ -3922,8 +4688,10 @@ def main() -> None:
     if "sso" in active:
         # Confirmation pass: normally "already exists" (created before the first
         # start); creates it when that early attempt could not reach postgres.
+        # FATAL after a bounded retry (T2 residual): with sso active, a missing
+        # database is a crash-looping Keycloak, not a successful install.
         step("bootstrap Keycloak database (profile sso)", stage="bootstrap-kc")
-        bootstrap_keycloak_db(compose_dir, _parse_env(env_path))
+        confirm_keycloak_db(compose_dir, _parse_env(env_path))
 
     if "self-monitoring" in args.profiles:
         step("wiring grafana clickhouse datasource", stage="bootstrap-grafana")
@@ -3980,4 +4748,6 @@ if __name__ == "__main__":
         fail(f"command failed (exit {e.returncode}): {' '.join(e.cmd)}")
     except KeyboardInterrupt:
         print()
-        fail("interrupted")
+        fail("interrupted", interrupted=True)
+    finally:
+        _release_install_lock()
