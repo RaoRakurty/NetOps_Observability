@@ -197,6 +197,8 @@ func TestEveryRouteIsBehindTheSessionGate(t *testing.T) {
 		{"POST", "/api/run/check"},
 		{"POST", "/api/run/prepare"},
 		{"POST", "/api/run/install"},
+		{"POST", "/api/run/resume"},
+		{"POST", "/api/credential"},
 		{"POST", "/api/watchdog"},
 		{"POST", "/api/done"},
 	} {

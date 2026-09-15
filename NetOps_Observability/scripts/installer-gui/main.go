@@ -29,9 +29,17 @@
 //     reaches a shell line — argv is constant; the only user input, the sudo
 //     password, is written to sudo's stdin and the buffer zeroed after use).
 //   - Log streams are rendered client-side with textContent (no innerHTML).
+//   - The install runs as a DETACHED job (job.go): its own session, output to a
+//     0600 log, a 0600 secret-free job-state file. The wizard follows the log,
+//     so a restarted wizard re-attaches instead of killing or losing it.
 //   - The server stops itself 60 s after the browser acknowledges the success
-//     screen (POST /api/done), or 15 min after an install result if never
-//     acknowledged (H2 auto-stop).
+//     screen (POST /api/done, refused unless installed), or after a long idle
+//     (resultShutdown) following an unacknowledged SUCCESS — and never while a
+//     job runs or the page is still polling. After a FAILED or interrupted
+//     install it never stops itself: the operator closes it (FMEA G3).
+//   - The initial administrator password is redacted from every buffered line
+//     and handed to the page exactly once (POST /api/credential); /api/state
+//     never carries it.
 package main
 
 import (
@@ -91,9 +99,14 @@ const (
 const (
 	idleTimeout      = 15 * time.Minute // H2: sliding session idle timeout
 	ackShutdownDelay = 60 * time.Second // H2: auto-stop after POST /api/done
-	resultShutdown   = 15 * time.Minute // H2: auto-stop after an unacked result
-	logRingSize      = 5000             // bounded buffers (§9)
-	watchdogTimeout  = 2 * time.Minute  // §9: bound the synchronous watchdog op
+	// H2: long idle before auto-stopping after an unacknowledged SUCCESS (a
+	// failure never auto-stops). 15 min stranded the owner on 2026-09-15.
+	resultShutdown = 60 * time.Minute
+	// An authenticated request this recent means the operator's page is still
+	// polling: a due auto-stop is postponed instead of pulling the page's server.
+	pagePollGrace   = 2 * time.Minute
+	logRingSize     = 5000            // bounded buffers (§9)
+	watchdogTimeout = 2 * time.Minute // §9: bound the synchronous watchdog op
 )
 
 // CheckItem is one PASS/FIX line from prepare-host.sh --check.
@@ -127,7 +140,8 @@ type state struct {
 	err        string
 	uiURL      string
 	adminUser  string
-	adminPW    string
+	adminPW    string // in memory only, until the one-time handover
+	credShown  bool   // the initial password was handed over (POST /api/credential)
 	stages     []Stage
 	result     *Result
 	installKey string // Idempotency-Key of the accepted install job (H5)
@@ -136,6 +150,11 @@ type state struct {
 
 	watchdogBusy      bool // single-flight guard for the synchronous watchdog op
 	watchdogInstalled bool // POST /api/watchdog succeeded (surfaced in /api/state)
+
+	job           *jobState // the install job this wizard follows (launched or re-attached)
+	following     bool      // a follower goroutine owns the install state right now
+	jobReattached bool      // the job was found on disk, not launched by this process
+	lastOutput    time.Time // last engine output line (server-side inactivity clock)
 
 	logMu   sync.Mutex
 	logBuf  []string // raw sanitized log lines (support bundle)
@@ -235,6 +254,11 @@ type server struct {
 	shutdownFn func(reason string)                     // auto-stop action
 	setupPort  int
 
+	procRoot       string        // "/proc" in production: install-job liveness
+	jobPoll        time.Duration // liveness poll for a re-attached job
+	tailPoll       time.Duration // install-log follow interval
+	heartbeatEvery time.Duration // SSE heartbeat interval
+
 	// secureCookie stamps the Secure attribute on the session cookie. TRUE in
 	// every default deployment (the server serves TLS). It is turned off ONLY
 	// by the explicit --http opt-out, because a Secure cookie is never sent
@@ -260,6 +284,11 @@ func newServer(bundle, token string, run runner) *server {
 		now:       time.Now,
 		afterFunc: time.AfterFunc,
 		setupPort: 8800,
+
+		procRoot:       "/proc",
+		jobPoll:        defaultJobPoll,
+		tailPoll:       defaultTailPoll,
+		heartbeatEvery: defaultHeartbeat,
 		// TLS is the default and the only supported posture; --http flips this
 		// off explicitly in main().
 		secureCookie: true,
@@ -319,6 +348,14 @@ func (s *server) emit(eventJSON string) {
 		default: // slow consumer: drop rather than block the installer
 		}
 	}
+}
+
+// resetEvents clears the SSE replay history when a new install run begins, so
+// a page connecting mid-run never replays the previous run's result first.
+func (s *server) resetEvents() {
+	s.st.logMu.Lock()
+	s.st.events = nil
+	s.st.logMu.Unlock()
 }
 
 func (s *server) appendLog(line string) {
@@ -411,7 +448,7 @@ func upsertStage(stages []Stage, ev Stage) []Stage {
 // Returns false if another phase is already running (single-flight).
 func (s *server) runPhase(running Phase, done Phase, stdin []byte, extraEnv []string, onLine func(string), after func(err error, out []string), argv ...string) bool {
 	s.st.mu.Lock()
-	if s.st.watchdogBusy { // the synchronous watchdog op holds the run guard too
+	if s.st.watchdogBusy || s.st.following { // the watchdog op and a followed install hold the run guard too
 		s.st.mu.Unlock()
 		return false
 	}
@@ -799,8 +836,7 @@ func (s *server) apiInstall(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"job": "existing"})
 		return
 	}
-	busy := s.st.phase == PhaseChecking || s.st.phase == PhasePreparing ||
-		s.st.phase == PhaseInstalling || s.st.watchdogBusy
+	busy := s.installBusyLocked()
 	s.st.mu.Unlock()
 	if busy {
 		writeErr(w, http.StatusConflict, "another job is already running")
@@ -812,89 +848,9 @@ func (s *server) apiInstall(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	cfgPath, err := s.writeProfile(p)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not stage the install profile: "+err.Error())
-		return
-	}
-	etcListed, procMember := s.dockerGroupMembership()
-	argv, err := installArgv(needSGDocker(procMember, etcListed), cfgPath)
-	if err != nil {
-		s.removeQuiet(cfgPath)
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	onLine := func(l string) {
-		if m := uiURLRE.FindString(l); m != "" {
-			s.st.mu.Lock()
-			s.st.uiURL = m
-			s.st.mu.Unlock()
-		}
-		if m := adminRE.FindStringSubmatch(l); m != nil {
-			s.st.mu.Lock()
-			s.st.adminPW = m[1]
-			s.st.mu.Unlock()
-		}
-	}
-	started := s.runPhase(PhaseInstalling, PhaseInstalled, nil, []string{"CORRELIX_PROGRESS_JSON=1"}, onLine, func(err error, _ []string) {
-		s.removeQuiet(cfgPath)
-		s.finishInstall(err)
-	}, argv...)
-	if !started {
-		s.removeQuiet(cfgPath)
-		writeErr(w, http.StatusConflict, "another job is already running")
-		return
-	}
-	s.st.mu.Lock()
-	s.st.installKey = key
-	s.st.mu.Unlock()
-	s.disarmShutdown() // a fresh install cancels any pending auto-stop
-	writeJSON(w, map[string]any{"started": true, "job": "new"})
-}
-
-// finishInstall settles the terminal install state: the engine's result marker
-// and the process exit status must both be good, credentials come from the
-// generated .env (banner scrape stays as the fallback), and the auto-stop
-// clock starts (H2).
-func (s *server) finishInstall(runErr error) {
-	s.st.mu.Lock()
-	res := s.st.result
-	s.st.mu.Unlock()
-	failed := runErr != nil || (res != nil && res.Status == "fail")
-	if failed {
-		msg := "installation failed — see the log and the support bundle"
-		if runErr != nil {
-			msg = "installation failed: " + runErr.Error()
-		}
-		s.st.mu.Lock()
-		if s.st.result == nil {
-			s.st.result = &Result{Status: "fail", URL: s.st.uiURL}
-		}
-		s.st.mu.Unlock()
-		s.setPhase(PhaseError, msg)
-		s.armShutdown(resultShutdown, "install result never acknowledged")
-		return
-	}
-	env := readFileOr(s.envPath())
-	adminUser := envValue(env, "ADMIN_USERNAME")
-	adminPW := envValue(env, "ADMIN_INITIAL_PASSWORD")
-	s.st.mu.Lock()
-	if adminUser != "" {
-		s.st.adminUser = adminUser
-	}
-	if adminPW != "" {
-		s.st.adminPW = adminPW // .env is authoritative; scrape was the fallback
-	}
-	if s.st.result == nil {
-		// Engine predates result markers — synthesize from the banner scrape.
-		s.st.result = &Result{Status: "ok", URL: s.st.uiURL, AdminUser: firstNonEmpty(adminUser, "admin")}
-	} else if adminUser != "" {
-		s.st.result.AdminUser = adminUser
-	}
-	s.st.mu.Unlock()
-	s.setPhase(PhaseInstalled, "")
-	s.armShutdown(resultShutdown, "install result never acknowledged")
+	// The detached launch, the "one alive already?" check and the follower
+	// live in job.go (FMEA G1/G2).
+	s.beginInstall(w, key, p)
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -928,23 +884,52 @@ func (s *server) apiState(w http.ResponseWriter, r *http.Request) {
 		"error":              s.st.err,
 		"stages":             s.st.stages,
 		"ui_url":             uiURL,
-		"admin_pw":           s.st.adminPW,
 		"bundle":             filepath.Base(s.bundle),
 		"facts_hash":         s.st.factsHash,
 		"watchdog_installed": s.st.watchdogInstalled,
 	}
 	if s.st.result != nil {
-		res := map[string]any{
-			"url":        firstNonEmpty(s.st.result.URL, uiURL),
-			"admin_user": firstNonEmpty(s.st.adminUser, s.st.result.AdminUser, "admin"),
+		// The initial password is deliberately NOT here: a state snapshot is
+		// polled repeatedly and cached by tooling. POST /api/credential hands it
+		// over exactly once (FMEA row 6).
+		resp["result"] = map[string]any{
+			"status":               s.st.result.Status,
+			"url":                  firstNonEmpty(s.st.result.URL, uiURL),
+			"admin_user":           firstNonEmpty(s.st.adminUser, s.st.result.AdminUser, "admin"),
+			"credential_available": s.st.result.Status == outcomeOK && s.st.adminPW != "" && !s.st.credShown,
 		}
-		if s.st.result.Status == "ok" && s.st.adminPW != "" {
-			// H2/I5: the one-time credential handover, TLS + session gated.
-			res["admin_password"] = s.st.adminPW
+	}
+	if j := s.st.job; j != nil {
+		resp["job"] = map[string]any{
+			"started_utc": j.StartedUTC,
+			"log":         filepath.Base(j.Log),
+			"detached":    j.Detached,
+			"reattached":  s.st.jobReattached,
+			"outcome":     j.Outcome,
+			"resumable": (j.Outcome == outcomeFail || j.Outcome == outcomeInterrupt) &&
+				j.Profile != nil && !s.installBusyLocked(),
+			"idle_s": s.idleSecondsLocked(),
 		}
-		resp["result"] = res
 	}
 	writeJSON(w, resp)
+}
+
+// idleSecondsLocked is the server-side inactivity clock: whole seconds since
+// the install last wrote a line, 0 when no install runs. Caller holds s.st.mu.
+func (s *server) idleSecondsLocked() int {
+	if s.st.phase != PhaseInstalling || s.st.lastOutput.IsZero() {
+		return 0
+	}
+	return int(s.now().Sub(s.st.lastOutput) / time.Second)
+}
+
+// heartbeatEvent is the SSE liveness beacon (never stored in the replay
+// history): it lets the page tell "the connection is gone" from "the
+// installer is quiet", and carries the phase so a page can resync.
+func (s *server) heartbeatEvent() string {
+	s.st.mu.Lock()
+	defer s.st.mu.Unlock()
+	return mustJSON(map[string]any{"kind": "heartbeat", "phase": s.st.phase, "idle_s": s.idleSecondsLocked()})
 }
 
 // apiStream is the SSE live feed: JSON event history first, then follow.
@@ -984,7 +969,10 @@ func (s *server) apiStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	keep := time.NewTicker(15 * time.Second)
+	if !send(s.heartbeatEvent()) { // the page knows at once that it is connected
+		return
+	}
+	keep := time.NewTicker(s.heartbeatEvery)
 	defer keep.Stop()
 	for {
 		select {
@@ -993,12 +981,11 @@ func (s *server) apiStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-keep.C:
-			// SSE comment line: keeps the connection alive, invisible to
-			// EventSource consumers.
-			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+			// A data heartbeat (not an SSE comment, which EventSource hides):
+			// the page's stall watchdog needs to SEE the connection is alive.
+			if !send(s.heartbeatEvent()) {
 				return
 			}
-			fl.Flush()
 		case <-r.Context().Done():
 			return
 		}
@@ -1006,6 +993,15 @@ func (s *server) apiStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) apiDone(w http.ResponseWriter, _ *http.Request) {
+	s.st.mu.Lock()
+	phase := s.st.phase
+	s.st.mu.Unlock()
+	if phase != PhaseInstalled {
+		// G7: an acknowledgement cannot schedule a shutdown mid-install, and a
+		// failed install is closed by the operator, not by a timer (G3).
+		writeErr(w, http.StatusConflict, "nothing to acknowledge — the wizard is "+string(phase))
+		return
+	}
 	s.armShutdown(ackShutdownDelay, "success screen acknowledged")
 	writeJSON(w, map[string]bool{"ok": true})
 }
@@ -1157,8 +1153,7 @@ func (s *server) apiWatchdog(w http.ResponseWriter, r *http.Request) {
 	// Single-flight against the run guard: acquire the watchdog slot only when
 	// no phase job is running AND a successful install result exists.
 	s.st.mu.Lock()
-	busy := s.st.phase == PhaseChecking || s.st.phase == PhasePreparing ||
-		s.st.phase == PhaseInstalling || s.st.watchdogBusy
+	busy := s.installBusyLocked()
 	appURL := ""
 	if !busy && s.st.result != nil && s.st.result.Status == "ok" {
 		appURL = firstNonEmpty(s.st.result.URL, s.st.uiURL)
@@ -1232,7 +1227,34 @@ func (s *server) armShutdown(d time.Duration, reason string) {
 	if s.shutTimer != nil {
 		s.shutTimer.Stop()
 	}
-	s.shutTimer = s.afterFunc(d, func() { s.shutdownFn(reason) })
+	s.shutTimer = s.afterFunc(d, func() { s.shutdownIfIdle(d, reason) })
+}
+
+// shutdownIfIdle is what a due auto-stop actually does. It never stops the
+// wizard while a job runs or after a failed install, and postpones while the
+// operator's page is still polling; every decision is logged with its reason.
+func (s *server) shutdownIfIdle(d time.Duration, reason string) {
+	s.st.mu.Lock()
+	phase, busy := s.st.phase, s.installBusyLocked()
+	s.st.mu.Unlock()
+	if busy {
+		log.Printf("correlix-setup: auto-stop (%s) postponed: a job is running", reason)
+		s.armShutdown(d, reason)
+		return
+	}
+	if phase == PhaseError {
+		log.Printf("correlix-setup: auto-stop (%s) cancelled: the last install did not finish — staying up until the operator closes the wizard", reason)
+		return
+	}
+	s.sessMu.Lock()
+	last := s.sessLast
+	s.sessMu.Unlock()
+	if idle := s.now().Sub(last); !last.IsZero() && idle < pagePollGrace {
+		log.Printf("correlix-setup: auto-stop (%s) postponed: the setup page was active %s ago", reason, idle.Round(time.Second))
+		s.armShutdown(pagePollGrace, reason)
+		return
+	}
+	s.shutdownFn(fmt.Sprintf("%s; no page activity for at least %s", reason, pagePollGrace))
 }
 
 func (s *server) disarmShutdown() {
@@ -1787,6 +1809,8 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("POST /api/run/check", s.auth(s.apiCheck))
 	mux.HandleFunc("POST /api/run/prepare", s.auth(s.apiPrepare))
 	mux.HandleFunc("POST /api/run/install", s.auth(s.apiInstall))
+	mux.HandleFunc("POST /api/run/resume", s.auth(s.apiResume))
+	mux.HandleFunc("POST /api/credential", s.auth(s.apiCredential))
 	mux.HandleFunc("POST /api/watchdog", s.auth(s.apiWatchdog))
 	mux.HandleFunc("POST /api/done", s.auth(s.apiDone))
 	return secureHeaders(mux)
@@ -1973,6 +1997,9 @@ func main() {
 		log.Fatal(err)
 	}
 	s := newServer(*bundle, token, execRunner{})
+	// A wizard started while an install runs (or after one died) picks it up
+	// from the job-state file instead of offering to start another (FMEA G2).
+	s.recoverJob()
 
 	la := listenAddr(*addr, *remote)
 	_, portStr, err := net.SplitHostPort(la)

@@ -303,16 +303,30 @@ func TestInstallExtractsCredentials(t *testing.T) {
 	var st struct {
 		Phase  string `json:"phase"`
 		Result struct {
-			URL           string `json:"url"`
-			AdminUser     string `json:"admin_user"`
-			AdminPassword string `json:"admin_password"`
+			URL                 string `json:"url"`
+			AdminUser           string `json:"admin_user"`
+			AdminPassword       string `json:"admin_password"`
+			CredentialAvailable bool   `json:"credential_available"`
 		} `json:"result"`
 	}
 	if err := json.NewDecoder(res2.Body).Decode(&st); err != nil {
 		t.Fatal(err)
 	}
 	if st.Phase != "installed" || st.Result.URL != "http://10.0.0.5:8000" ||
-		st.Result.AdminUser != "admin" || st.Result.AdminPassword != "s3cr3tPW" {
-		t.Fatalf("state result wrong: %+v", st)
+		st.Result.AdminUser != "admin" || st.Result.AdminPassword != "" || !st.Result.CredentialAvailable {
+		t.Fatalf("state result wrong (the password must not ride /api/state): %+v", st)
+	}
+
+	// The scraped password is handed over once, through its own endpoint.
+	res3 := postJSON(t, c, ts.URL+"/api/credential", "{}", nil)
+	defer res3.Body.Close()
+	var cred struct {
+		AdminPassword string `json:"admin_password"`
+	}
+	if err := json.NewDecoder(res3.Body).Decode(&cred); err != nil {
+		t.Fatal(err)
+	}
+	if res3.StatusCode != http.StatusOK || cred.AdminPassword != "s3cr3tPW" {
+		t.Fatalf("credential handover: %d %+v", res3.StatusCode, cred)
 	}
 }

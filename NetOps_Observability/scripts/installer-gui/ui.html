@@ -577,6 +577,11 @@
       <div class="sect"><div class="cap">Progress</div>
         <div class="rows" id="stages"></div>
       </div>
+      <div class="note warn" id="conn-note" hidden role="status" aria-live="polite">
+        <h3 id="conn-h">Connection to the installer stalled &mdash; reconnecting</h3>
+        <p id="conn-p">The install keeps running on the server while this page reconnects.</p>
+      </div>
+      <p class="hint" id="inst-idle" hidden></p>
       <div class="note bad" id="inst-fail" hidden>
         <h3 id="fail-h">Installation stopped</h3>
         <p id="fail-p"></p>
@@ -679,10 +684,21 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function api(path, opts) {
   const r = await fetch(path, Object.assign({headers: Object.assign({'Content-Type':'application/json'}, (opts&&opts.headers)||{})}, opts));
-  if (!r.ok) { let m; try { m = (await r.json()).error; } catch { m = r.statusText; } throw new Error(m || ('HTTP '+r.status)); }
+  if (!r.ok) {
+    let m; try { m = (await r.json()).error; } catch { m = r.statusText; }
+    const err = new Error(m || ('HTTP '+r.status)); err.status = r.status; throw err;
+  }
   const ct = r.headers.get('Content-Type')||'';
   return ct.includes('json') ? r.json() : r.text();
 }
+/* A script error must never leave a silently frozen page: say what happened and
+   that the install itself is unaffected (it runs on the server, not here). */
+function reportPageError(msg) {
+  showConn('Something went wrong on this page',
+    String(msg || 'unknown error') + ' — reload the page if it stops updating. The install keeps running on the server.');
+}
+window.addEventListener('error', ev => reportPageError(ev.message));
+window.addEventListener('unhandledrejection', ev => reportPageError(ev.reason && ev.reason.message ? ev.reason.message : ev.reason));
 /* One status row. `verdict` marks the right-hand text as the row's verdict
    (PASS / FIX / a failure) rather than a hint, which colours it by state. The
    data-k key is what blinkNewPasses() uses to tell a row that has just reached
@@ -1038,14 +1054,113 @@ function stageName(id, fallback) {
   return name || fallback || id;
 }
 let stages = [], es = null, streamHooks = [];
+
+/* ---------- stream resilience ----------
+   The server replays the whole event history on every (re)connect and sends a
+   heartbeat every 15 s. A stream that stays silent for STALL_MS means the
+   connection — or the wizard — is gone: say so, and reconnect with capped,
+   jittered backoff, resyncing the page from /api/state every time. */
+const STALL_MS = 45000;
+const RECONNECT_MIN_MS = 2000, RECONNECT_MAX_MS = 30000;
+const QUIET_NOTICE_S = 600;
+let lastMsgAt = Date.now(), reconnectDelay = RECONNECT_MIN_MS, reconnectTimer = null;
+let credentialP = null;
+function showConn(head, body) {
+  $('conn-h').textContent = head;
+  $('conn-p').textContent = body || 'The install keeps running on the server while this page reconnects.';
+  $('conn-note').hidden = false;
+}
+function hideConn() { $('conn-note').hidden = true; }
+function checkStall() {
+  if (!es || reconnectTimer) return;
+  if (Date.now() - lastMsgAt > STALL_MS) {
+    scheduleReconnect('No word from the installer for ' + Math.round(STALL_MS/1000) + ' seconds');
+  }
+}
+setInterval(checkStall, 5000);
+function scheduleReconnect(why) {
+  showConn('Connection to the installer stalled — reconnecting',
+    (why ? why + '. ' : '') + 'The install keeps running on the server; this page catches up by itself.');
+  if (reconnectTimer) return;
+  if (es) { es.close(); es = null; }
+  const delay = Math.round(reconnectDelay * (0.8 + Math.random() * 0.4));
+  reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
+    try {
+      const st = await api('/api/state');
+      resyncFromState(st);
+      attachStream();
+    } catch (e) {
+      lastMsgAt = Date.now();
+      scheduleReconnect('Still cannot reach the installer (' + e.message + ')');
+      if (e.status === 403 || e.status === 409) {
+        showConn('The setup server restarted or this session ended — still reconnecting',
+          'Open the new link correlix-setup printed on the server. The install keeps running, and the new page picks it up.');
+      }
+    }
+  }, delay);
+}
+/* Bring the page in line with the server: stages, whether an install runs,
+   and its verdict. Used on boot (re-attach) and after every reconnect. */
+function resyncFromState(st) {
+  if (!st) return;
+  lastJob = st.job || null;
+  if (Array.isArray(st.stages)) { stages = st.stages.map(s => Object.assign({}, s)); renderStages(); }
+  const installStep = document.querySelector('.rs[data-s="install"]');
+  if (st.phase === 'installing') {
+    installing = true;
+    $('inst-fail').hidden = true;
+    installStep.disabled = false;
+    if (cur !== 'install') show('install');
+  } else if ((st.phase === 'error' || st.phase === 'installed') && st.result && st.job && !doneShown) {
+    installStep.disabled = false;
+    if (cur !== 'install') show('install');
+    onResult({status: st.result.status, message: st.error});
+  }
+}
+function onHeartbeat(d) {
+  hideConn();
+  if (d.phase === 'installing') {
+    const idle = d.idle_s || 0;
+    $('inst-idle').hidden = idle < QUIET_NOTICE_S;
+    $('inst-idle').textContent = 'No new output from the installer for ' + Math.floor(idle/60) +
+      ' minutes. It is still running — loading images on a slow disk can be this quiet. Nothing has been stopped.';
+  } else {
+    $('inst-idle').hidden = true;
+    /* the page thinks an install runs but the server has settled it: a result
+       event was missed — take the verdict from server state */
+    if (installing && !doneShown) {
+      api('/api/state').then(resyncFromState).catch(e => scheduleReconnect(e.message));
+    }
+  }
+}
+function onPhase(p) {
+  if (p === 'installing') { installing = true; $('inst-fail').hidden = true; }
+}
 function attachStream(onLog) {
   if (onLog) streamHooks.push(onLog);
   if (es) return;
+  lastMsgAt = Date.now();
   es = new EventSource('/api/stream');
+  es.onopen = () => {
+    /* every connection replays the full history: start the views clean so
+       nothing is shown twice */
+    $('inst-log').textContent = ''; stages = []; renderStages();
+    reconnectDelay = RECONNECT_MIN_MS; lastMsgAt = Date.now(); hideConn();
+  };
+  es.onerror = () => {
+    if (!es) return;
+    if (es.readyState === EventSource.CLOSED) scheduleReconnect('The connection to the installer closed');
+    else showConn('Connection to the installer lost — reconnecting');
+  };
   es.onmessage = ev => {
+    lastMsgAt = Date.now();
     let d; try { d = JSON.parse(ev.data); } catch { d = {kind:'log', line: ev.data}; }
-    if (d.kind === 'stage') upsertStage(d);
+    if (d.kind === 'heartbeat') onHeartbeat(d);
+    else if (d.kind === 'stage') upsertStage(d);
     else if (d.kind === 'result') onResult(d);
+    else if (d.kind === 'phase') onPhase(d.phase);
     else if (d.kind === 'log' || d.line !== undefined) {
       const line = d.line !== undefined ? d.line : ev.data;
       $('inst-log').textContent += line + "\n";
@@ -1081,7 +1196,7 @@ function idemKey() {
   return Array.from(a, b => b.toString(16).padStart(2,'0')).join('');
 }
 async function startInstall() {
-  installing = true; stages = []; renderStages();
+  installing = true; stages = []; renderStages(); credentialP = null;
   $('inst-fail').hidden = true;
   document.querySelector('.rs[data-s="install"]').disabled = false;
   markDone('review'); show('install'); attachStream();
@@ -1091,7 +1206,23 @@ async function startInstall() {
   } catch (e) { onFail('The install could not start', e.message); }
 }
 $('b-install').addEventListener('click', startInstall);
-$('b-retry').addEventListener('click', startInstall);
+/* Try again re-runs the RECORDED answers when the server has them (a page
+   reloaded after a wizard restart has lost the form, and its defaults could
+   silently change TLS or the administrator name). */
+let lastJob = null;
+async function retryInstall() {
+  let st;
+  try { st = await api('/api/state'); } catch (e) { onFail('Could not reach the installer', e.message); return; }
+  lastJob = st.job || null;
+  if (!(lastJob && lastJob.resumable)) { startInstall(); return; }
+  installing = true; stages = []; renderStages(); credentialP = null;
+  $('inst-fail').hidden = true;
+  attachStream();
+  try {
+    await api('/api/run/resume', {method:'POST', headers:{'Idempotency-Key': idemKey()}});
+  } catch (e) { onFail('The install could not start again', e.message); }
+}
+$('b-retry').addEventListener('click', retryInstall);
 $('b-log').addEventListener('click', () => {
   $('inst-log').hidden = !$('inst-log').hidden;
   $('b-log').textContent = $('inst-log').hidden ? 'Show technical details' : 'Hide technical details';
@@ -1101,16 +1232,32 @@ function onFail(head, msg) {
   installing = false;
   $('fail-h').textContent = head || 'Installation stopped';
   $('fail-p').textContent = (msg ? msg+' — ' : '') +
-    'Nothing you entered was lost. Retry continues from where it stopped.';
+    'Nothing you entered was lost. Try again runs the same install with the same answers, and it is safe to repeat. ' +
+    'This setup page stays open until you close it.';
   $('inst-fail').hidden = false;
+  $('inst-idle').hidden = true;
+}
+/* The initial password is handed over once by the server; a replayed result
+   (reconnect, resync) reuses the same answer instead of asking twice. */
+function getCredential() {
+  if (!credentialP) {
+    credentialP = api('/api/credential', {method:'POST'}).catch(e => ({error: e.message}));
+  }
+  return credentialP;
 }
 async function onResult(d) {
   if (d.status !== 'ok') {
     const failed = stages.find(s => s.status==='fail');
-    onFail(failed ? stageName(failed.id)+' failed' : 'Installation stopped',
-           (failed && failed.message) || d.message || 'see the technical log');
+    if (d.status === 'interrupted') {
+      onFail('The installer was interrupted',
+             (failed ? stageName(failed.id) + ' did not finish' : 'it stopped without finishing'));
+    } else {
+      onFail(failed ? stageName(failed.id)+' failed' : 'Installation stopped',
+             (failed && failed.message) || d.message || 'see the technical details');
+    }
     return;
   }
+  if (doneShown) return;
   $('meter-i').style.width = '100%'; $('pct').textContent = '100%';
   let st = {};
   try { st = await api('/api/state'); } catch {}
@@ -1121,7 +1268,10 @@ async function onResult(d) {
      the server itself. Scheme and port come from the installer's own result. */
   $('done-url').textContent = localizeURL(res.url || '');
   $('done-user').textContent = res.admin_user || 'admin';
-  $('done-pass').textContent = res.admin_password || 'see deployment/docker/.env';
+  $('done-pass').textContent = '…';
+  const cred = await getCredential();
+  $('done-pass').textContent = (cred && cred.admin_password) ||
+    'already shown once — it is ADMIN_INITIAL_PASSWORD in deployment/docker/.env on this server';
   $('done-checks').innerHTML =
     fact('ok','Every service is healthy and stayed healthy on a second check') +
     fact('ok','Ingress answered end to end') +
@@ -1174,6 +1324,16 @@ $('b-watchdog').addEventListener('click', async () => {
   $('hd-addr').textContent = location.hostname || 'this server';
   show('ready');
   refreshMgmtURL();
+  /* A wizard restarted mid-install re-attaches to the running job: open the
+     page where the server is, instead of offering a second install. */
+  let st = null;
+  try { st = await api('/api/state'); } catch (e) { reportPageError(e.message); }
+  if (st && st.job && ['installing','installed','error'].includes(st.phase)) {
+    attachStream();
+    resyncFromState(st);
+    loadFacts();
+    return;
+  }
   await loadFacts();
   await runCheck();
 })();

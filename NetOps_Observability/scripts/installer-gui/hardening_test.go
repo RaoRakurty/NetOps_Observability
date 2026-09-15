@@ -539,7 +539,8 @@ func TestMarkerParsingAndSSE(t *testing.T) {
 		t.Fatalf("result = %+v", r)
 	}
 
-	// /api/state carries stages + result with the .env password.
+	// /api/state carries stages + result, but never the password; the .env
+	// password is handed over once through POST /api/credential.
 	res2, err := c.Get(ts.URL + "/api/state")
 	if err != nil {
 		t.Fatal(err)
@@ -557,8 +558,19 @@ func TestMarkerParsingAndSSE(t *testing.T) {
 	}
 	res2.Body.Close()
 	if len(st.Stages) != 1 || st.Result.URL != "https://10.0.0.7:8000" ||
-		st.Result.AdminUser != "admin" || st.Result.AdminPassword != "envPW9" {
+		st.Result.AdminUser != "admin" || st.Result.AdminPassword != "" {
 		t.Fatalf("state stages/result wrong: %+v", st)
+	}
+	credRes := postJSON(t, c, ts.URL+"/api/credential", "{}", nil)
+	var cred struct {
+		AdminPassword string `json:"admin_password"`
+	}
+	if err := json.NewDecoder(credRes.Body).Decode(&cred); err != nil {
+		t.Fatal(err)
+	}
+	credRes.Body.Close()
+	if cred.AdminPassword != "envPW9" {
+		t.Fatalf("credential handover did not use the .env password: %+v", cred)
 	}
 
 	// SSE must replay the marker payloads as-is and wrap plain lines as log events.
