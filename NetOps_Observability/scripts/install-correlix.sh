@@ -88,7 +88,135 @@ COMPOSE_DIR="$ROOT/deployment/docker"
 ENV_FILE="$COMPOSE_DIR/.env"
 
 compose() { (cd "$COMPOSE_DIR" && docker compose "$@"); }
+# Read-only compose queries, bounded (§16.3): a wedged daemon must not hang the
+# health gate. Never used for up/down/stop, whose legitimate duration is long.
+compose_q() { (cd "$COMPOSE_DIR" && timeout 60 docker compose "$@"); }
 env_get() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | head -1; }
+utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# ---------- process exit: lock records + log flush ---------------------------
+# One EXIT handler per process (the setup console runs each command in its own
+# subshell, which gets its own). It clears the lock records this process wrote,
+# hands stdout back to the terminal so the log filter sees EOF, waits (bounded)
+# for the filter to drain, and only THEN prints anything that must reach the
+# terminal but never the log (the initial admin password, FMEA row 6).
+LOCK_FILES_HELD=""
+LOG_FILTER_PID=""
+TERMINAL_EPILOGUE=""
+on_exit() {
+  local rc=$? f pid state i
+  # Cleanup must run every step and then exit with the status the script was
+  # already leaving with — errexit inside the trap would replace that status
+  # with the first failed probe below (e.g. the filter exiting between the
+  # /proc test and the read).
+  set +e
+  for f in $LOCK_FILES_HELD; do
+    # Only a record this process wrote is cleared; a leftover record is what
+    # lets the next run say "the previous install did not finish".
+    if [ "$(sed -n 's/^pid=//p' "$f" 2>/dev/null | head -1)" = "$BASHPID" ]; then
+      : > "$f"
+    fi
+  done
+  if [ -n "$LOG_FILTER_PID" ]; then
+    exec 1>&5 2>&6
+    pid="$LOG_FILTER_PID"
+    for i in $(seq 1 100); do
+      [ -r "/proc/$pid/stat" ] || break
+      # Gone between the test and the read = exited.
+      state=$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null) || break
+      [ "$state" = "Z" ] && break
+      [ "$i" -eq 100 ] && printf 'note: the install log writer is still flushing (pid %s)\n' "$pid" >&2
+      sleep 0.1
+    done
+    # Reaps the exited filter. Its status is not ours to report: a log-write
+    # failure was already announced on the terminal by the filter itself.
+    wait "$pid" 2>/dev/null || true
+  fi
+  if [ -n "$TERMINAL_EPILOGUE" ]; then
+    printf '%s\n' "$TERMINAL_EPILOGUE"
+  fi
+  exit "$rc"
+}
+
+# ---------- single-writer lock (FMEA row 12, design §4.2) --------------------
+# Every state-changing command holds `flock -n` on deployment/docker/.install.lock
+# for its whole run: the wizard and a terminal, two wizard tabs, or a cron
+# update.sh must never interleave `.env` surgery and compose operations.
+#
+# CONTRACT with install.py (owned there): this script opens the lock on fd 9,
+# takes `flock -n 9`, and exports CORRELIX_INSTALL_LOCK_FD=9. install.py
+# re-flocks the INHERITED fd (same open file description, so it succeeds)
+# instead of opening the file again. Do not change the fd number.
+#
+# The lock itself dies with its holder (flock semantics). The pid/command/
+# start-time record written into the file is diagnostics: a refusal quotes it,
+# and a record whose pid is gone means the previous run ended without cleaning
+# up, which is said out loud before taking over.
+INSTALL_LOCK_FILE="$COMPOSE_DIR/.install.lock"
+LOCK_REFUSED_RC=3
+INSTALL_LOCK_HELD=0
+
+lock_field() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1; }
+
+# take_lock FD FILE COMMAND — returns with the lock held, or exits 3.
+take_lock() {
+  local fd="$1" file="$2" what="$3" old_umask old_pid old_cmd old_started
+  command -v flock >/dev/null 2>&1 || die "flock (util-linux) is missing — cannot guarantee a single installer run." \
+    "Install util-linux, then re-run."
+  old_umask=$(umask)
+  umask 077
+  case "$fd" in
+    8) exec 8<>"$file" ;;
+    9) exec 9<>"$file" ;;
+    *) umask "$old_umask"; die "internal error: unsupported lock descriptor $fd" ;;
+  esac
+  umask "$old_umask"
+  old_pid=$(lock_field "$file" pid)
+  old_cmd=$(lock_field "$file" command)
+  old_started=$(lock_field "$file" started_utc)
+  if ! flock -n "$fd"; then
+    local who="pid ${old_pid:-unknown}, command '${old_cmd:-unknown}', started ${old_started:-unknown}"
+    local why="It is still running."
+    if [ -n "$old_pid" ] && [ ! -d "/proc/$old_pid" ]; then
+      why="That process has exited, but a program it started still holds the lock (find it with: fuser -v '$file')."
+    fi
+    printf '\n%sERROR:%s another Correlix installer operation is in progress on this host (%s).\n' "$RED$BOLD" "$RST" "$who"
+    printf '%s\n' "$why" \
+      "Running two at once would corrupt the configuration. Wait for it to finish, then re-run:" \
+      "  ./install-correlix.sh $what" \
+      "Lock file: $file"
+    cx_result fail
+    exit "$LOCK_REFUSED_RC"
+  fi
+  if [ -n "$old_pid" ] && [ "$old_pid" != "$BASHPID" ]; then
+    if [ ! -d "/proc/$old_pid" ]; then
+      warn "stale lock record: the previous '${old_cmd:-?}' (pid $old_pid, started ${old_started:-?}) is no longer running and did not finish cleanly — taking over."
+    else
+      warn "lock record named pid $old_pid ('${old_cmd:-?}'), which no longer holds the lock — taking over."
+    fi
+  fi
+  printf 'pid=%s\ncommand=%s\nstarted_utc=%s\n' "$BASHPID" "$what" "$(utc_now)" > "$file"
+  LOCK_FILES_HELD="$LOCK_FILES_HELD $file"
+  trap on_exit EXIT
+}
+
+# The install lock. Needs deployment/docker/, which a first-run bundle does not
+# have until verify_bundle extracted it — cmd_install calls this again after.
+acquire_install_lock() {
+  [ "$INSTALL_LOCK_HELD" = 1 ] && return 0
+  [ -d "$COMPOSE_DIR" ] || return 0
+  take_lock 9 "$INSTALL_LOCK_FILE" "$1"
+  INSTALL_LOCK_HELD=1
+  export CORRELIX_INSTALL_LOCK_FD=9
+}
+
+# Bundle installs also serialise the archive join and source extraction, which
+# happen before deployment/docker/ exists. Always taken BEFORE the install lock
+# (one order, so two installers can only ever refuse, never deadlock).
+acquire_bundle_lock() {
+  [ "$MODE" = "bundle" ] || return 0
+  take_lock 8 "$BUNDLE_DIR/.install-bundle.lock" "$1"
+}
 
 # ---------- GUI progress markers (design gui-installer-2026-08.md §6, P0) ----
 # Same `@CX@ {json}` stdout line format install.py emits; activated by
@@ -383,16 +511,93 @@ verify_release_signature() {
   fi
 }
 
+# The expected sha256 of one bundle member from SHA256SUMS, or nothing.
+sums_entry() {
+  [ -f SHA256SUMS ] || return 0
+  awk -v a="$1" -v b="./$1" '$2 == a || $2 == b || $2 == "*" a || $2 == "*" b { print $1; exit }' SHA256SUMS
+}
+
+# Join a split image archive through a .partial and an atomic rename (FMEA S9).
+# A crash, SIGKILL or full disk mid-join used to leave a truncated file under
+# the FINAL name, which every re-run then trusted — and whose checksum failure
+# told the operator to re-download a bundle that was fine. Runs in BUNDLE_DIR.
+join_image_parts() {
+  local joined="$1" partial="$1.partial" want got
+  say "Joining image archive parts..."
+  if ! cat "$joined".part* > "$partial"; then
+    rm -f "$partial"
+    die "Could not join the image archive pieces into $joined." \
+      "Check free disk space in $BUNDLE_DIR (df -h $BUNDLE_DIR), then re-run — the join starts over."
+  fi
+  want=$(sums_entry "$joined")
+  if [ -n "$want" ]; then
+    got=$(sha256sum "$partial" | awk '{print $1}')
+    if [ "$got" != "$want" ]; then
+      rm -f "$partial"
+      die "The joined image archive does not match SHA256SUMS ($joined)." \
+        "At least one of the $joined.partNN pieces is incomplete or corrupted. Re-download the pieces and try again."
+    fi
+  fi
+  mv -f "$partial" "$joined"
+}
+
+# Extract the source tree through a staging directory and an atomic rename
+# (FMEA S11). A half-extracted tree under the final name used to make every
+# re-run skip extraction and install from an incomplete tree.
+extract_source_tree() {
+  [ -n "$BUNDLE_DIR" ] || die "internal error: extract_source_tree outside a bundle"
+  local stage="$BUNDLE_DIR/NetOps_Observability.partial" out
+  local tarballs=()
+  mapfile -t tarballs < <(compgen -G "$BUNDLE_DIR/correlix-source-*.tar.gz")
+  if [ "${#tarballs[@]}" -ne 1 ]; then
+    die "Expected exactly one correlix-source-<version>.tar.gz in $BUNDLE_DIR, found ${#tarballs[@]}." \
+      "Keep only the source archive that belongs to this bundle, then re-run."
+  fi
+  if [ -e "$stage" ]; then
+    warn "removing $stage left by an interrupted extraction — it is redone, never trusted"
+    rm -rf "$stage"
+  fi
+  mkdir "$stage"
+  say "Extracting Correlix..."
+  if ! out=$(tar -xzf "${tarballs[0]}" -C "$stage" 2>&1); then
+    rm -rf "$stage"
+    die "Could not extract ${tarballs[0]##*/}: $(printf '%s' "$out" | tail -3)" \
+      "Check free disk space in $BUNDLE_DIR (df -h $BUNDLE_DIR), then re-run — extraction starts over."
+  fi
+  if [ ! -f "$stage/NetOps_Observability/deployment/docker/docker-compose.yml" ]; then
+    rm -rf "$stage"
+    die "${tarballs[0]##*/} is not a Correlix source archive (no deployment/docker/docker-compose.yml inside)." \
+      "Re-download the bundle and try again."
+  fi
+  mv "$stage/NetOps_Observability" "$ROOT"
+  rm -rf "$stage"
+}
+
 verify_bundle() {
   cd "$BUNDLE_DIR"
   # Re-join a split image archive (release assets are capped at 2 GiB/file).
-  local part0
+  local part0 joined want got
+  # `|| true`: compgen exits 1 when nothing matches, which is the normal
+  # unsplit-bundle case; an empty result is handled right below.
   part0=$(compgen -G "correlix-images-*.tar.zst.part00" | head -1 || true)
   if [ -n "$part0" ]; then
-    local joined="${part0%.part00}"
+    joined="${part0%.part00}"
+    if [ -e "$joined.partial" ]; then
+      warn "removing $joined.partial left by an interrupted join — it is rebuilt, never trusted"
+      rm -f "$joined.partial"
+    fi
     if [ ! -f "$joined" ]; then
-      say "Joining image archive parts..."
-      cat "${joined}".part* > "$joined"
+      join_image_parts "$joined"
+    else
+      want=$(sums_entry "$joined")
+      if [ -n "$want" ]; then
+        got=$(sha256sum "$joined" | awk '{print $1}')
+        if [ "$got" != "$want" ]; then
+          warn "$joined does not match SHA256SUMS (an interrupted join by an older installer?) — rebuilding it once from its pieces"
+          rm -f "$joined"
+          join_image_parts "$joined"
+        fi
+      fi
     fi
   fi
   if [ -f SHA256SUMS ]; then
@@ -411,8 +616,7 @@ verify_bundle() {
     fi
   fi
   if [ ! -d "$ROOT" ]; then
-    say "Extracting Correlix..."
-    tar -xzf correlix-source-*.tar.gz
+    extract_source_tree
   fi
 }
 
@@ -428,8 +632,10 @@ verify_admin_login() {
   # JSON-escape backslash + double-quote (generated passwords can hold both).
   payload=$(printf '{"username":"admin","password":"%s"}' \
     "$(printf '%s' "$pw" | sed 's/\\/\\\\/g; s/"/\\"/g')")
-  code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 \
-    -H 'Content-Type: application/json' -d "$payload" \
+  # The body rides stdin, not argv: an argv is readable by every local user
+  # through /proc for as long as curl runs.
+  code=$(printf '%s' "$payload" | curl -s -o /dev/null -w '%{http_code}' -m 10 \
+    -H 'Content-Type: application/json' --data-binary @- \
     "http://localhost:${UI_PORT}/api/auth/login" 2>/dev/null) || return 0
   if [ "$code" = "200" ]; then
     ok "admin credential verified (login self-test passed)"
@@ -441,28 +647,151 @@ verify_admin_login() {
   fi
 }
 
+# ---------- health + stability gate (FMEA row 5, design §4.7) ----------------
+# "Healthy" used to be two samples of State 25 s apart. A JVM restarting every
+# 20 s reads `running` in both (keycloak: RestartCount=106 on .123 while every
+# sample said running), and most services have no healthcheck at all. Success
+# now means STABLE: nothing restarted, nothing (re)started, nothing unhealthy
+# across a whole window, and every one-shot `*-init` step exited 0.
+
+# One line per container of this compose project (running or not):
+#   id|service|restart_count|started_at|status|health|exit_code
+# health is "none" for a service without a healthcheck.
+container_snapshot() {
+  local ids
+  ids=$(compose_q ps -aq 2>/dev/null) || return 1
+  [ -n "$ids" ] || return 1
+  # shellcheck disable=SC2086  # deliberate word-split of the container id list
+  timeout 60 docker inspect --format \
+    '{{.Id}}|{{index .Config.Labels "com.docker.compose.service"}}|{{.RestartCount}}|{{.State.StartedAt}}|{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{.State.ExitCode}}' \
+    $ids 2>/dev/null
+}
+
+# The window, from CORRELIX_STABILITY_WINDOW_S: default 60 s, clamped to
+# 10..900 so neither a typo nor a huge value turns the gate into nothing or into
+# a hang. Warnings go to stderr — stdout is the value.
+stability_window_s() {
+  local w="${CORRELIX_STABILITY_WINDOW_S:-60}"
+  case "$w" in
+    ''|*[!0-9]*)
+      warn "CORRELIX_STABILITY_WINDOW_S='$w' is not a whole number of seconds — using 60." >&2
+      w=60 ;;
+  esac
+  w=$((10#$w))
+  if [ "$w" -lt 10 ]; then
+    warn "CORRELIX_STABILITY_WINDOW_S=$w is too short to see a crash loop — using 10." >&2
+    w=10
+  elif [ "$w" -gt 900 ]; then
+    warn "CORRELIX_STABILITY_WINDOW_S=$w is capped at 900." >&2
+    w=900
+  fi
+  printf '%s' "$w"
+}
+
+# Hide any log line that looks like it carries a credential before it is shown.
+redact_log_lines() {
+  sed -E '/passw|secret|token|api[-_]?key|credential|bearer/I s/.*/[line hidden: it may contain a credential]/'
+}
+
+# Name one problem container and show its recent (redacted) log lines.
+report_container() { # id service reason
+  local out
+  warn "$2: $3"
+  if out=$(timeout 15 docker logs --tail 20 "$1" 2>&1 </dev/null); then
+    if [ -n "$out" ]; then
+      say "    last log lines of $2 (lines that may hold a credential are hidden):"
+      printf '%s\n' "$out" | redact_log_lines | sed 's/^/      /'
+    fi
+  else
+    say "    (could not read the logs of $2: $(printf '%s' "$out" | redact_log_lines | tail -1))"
+  fi
+}
+
+report_containers() { # "id|service|reason" lines
+  local id svc reason
+  while IFS='|' read -r id svc reason; do
+    [ -n "$id" ] || continue
+    report_container "$id" "$svc" "$reason"
+  done <<< "$1"
+}
+
+stability_gate() {
+  local w t0 t1 problems
+  w=$(stability_window_s)
+  say "All services are up — confirming they stay up for ${w}s (a crash-looping service looks healthy between restarts)..."
+  if ! t0=$(container_snapshot); then
+    warn "could not read this install's container state for the stability check (docker compose ps / docker inspect failed)."
+    return 1
+  fi
+  sleep "$w"
+  if ! t1=$(container_snapshot); then
+    warn "could not read this install's container state at the end of the stability window."
+    return 1
+  fi
+  problems=$(awk -F'|' -v w="$w" '
+    NR == FNR { rc[$1] = $3; st[$1] = $4; name[$1] = $2; next }
+    {
+      seen[$1] = 1
+      if ($2 ~ /-init$/) {
+        if ($5 != "exited") print $1 "|" $2 "|one-shot setup step is still " $5 " after the window"
+        else if ($7 != "0") print $1 "|" $2 "|one-shot setup step exited with code " $7 " (it must exit 0)"
+        next
+      }
+      if (!($1 in rc))        { print $1 "|" $2 "|container was created during the " w "s window"; next }
+      if ($3 + 0 > rc[$1] + 0) { print $1 "|" $2 "|restarted " ($3 - rc[$1]) " time(s) during the " w "s window (crash loop)"; next }
+      if ($4 != st[$1])       { print $1 "|" $2 "|restarted during the " w "s window (started " st[$1] ", then " $4 ")"; next }
+      if ($5 != "running")    { print $1 "|" $2 "|is " $5 ", not running"; next }
+      if ($6 == "unhealthy")  { print $1 "|" $2 "|is unhealthy at the end of the window"; next }
+    }
+    END { for (id in rc) if (!(id in seen)) print id "|" name[id] "|container disappeared during the window" }
+  ' <(printf '%s\n' "$t0") <(printf '%s\n' "$t1"))
+  if [ -z "$problems" ]; then
+    ok "stable: no service restarted or went unhealthy during the ${w}s window"
+    return 0
+  fi
+  warn "the stack is NOT stable, so the install is not reported as successful:"
+  report_containers "$problems"
+  return 1
+}
+
 wait_healthy() {
   say "Waiting for services to become healthy (this can take a few minutes)..."
-  local deadline=$(( $(date +%s) + 420 ))
+  local deadline=$(( $(date +%s) + 420 )) snap="" failed notready ready=0
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    local total unhealthy
-    total=$(compose ps --format '{{.Service}}' 2>/dev/null | wc -l)
-    unhealthy=$(compose ps --format '{{.Service}}|{{.State}}|{{.Health}}' 2>/dev/null \
-      | awk -F'|' '$1 ~ /-init$/ {next} $2!="running" || $3=="unhealthy" || $3=="starting" {print}' | wc -l)
-    if [ "$total" -gt 0 ] && [ "$unhealthy" -eq 0 ] \
-       && curl -fsS -m 5 -o /dev/null "http://127.0.0.1:${UI_PORT}/" 2>/dev/null; then
-      # Require STABILITY, not a lucky sample: a service can pass its first
-      # seconds and then crash-loop (seen live: the api on a perms bug).
-      # Re-verify after a pause before declaring success.
-      sleep 25
-      local bad2
-      bad2=$(compose ps --format '{{.Service}}|{{.State}}|{{.Health}}' 2>/dev/null \
-        | awk -F'|' '$1 ~ /-init$/ {next} $2!="running" || $3=="unhealthy" {print}' | wc -l)
-      [ "$bad2" -eq 0 ] && return 0
+    if snap=$(container_snapshot); then
+      # A one-shot that already failed will not improve by waiting.
+      failed=$(printf '%s\n' "$snap" | awk -F'|' '$2 ~ /-init$/ && $5 == "exited" && $7 != "0" {
+        print $1 "|" $2 "|one-shot setup step exited with code " $7 " (it must exit 0)" }')
+      if [ -n "$failed" ]; then
+        report_containers "$failed"
+        return 1
+      fi
+      notready=$(printf '%s\n' "$snap" | awk -F'|' '
+        $2 ~ /-init$/ { if ($5 != "exited") print $1 "|" $2 "|one-shot setup step is still " $5; next }
+        $5 != "running"      { print $1 "|" $2 "|is " $5 ", not running"; next }
+        $6 == "unhealthy"    { print $1 "|" $2 "|is unhealthy"; next }
+        $6 == "starting"     { print $1 "|" $2 "|is still starting" }')
+      if [ -z "$notready" ] && curl -fsS -m 5 -o /dev/null "http://127.0.0.1:${UI_PORT}/" 2>/dev/null; then
+        ready=1
+        break
+      fi
+    else
+      snap=""
     fi
     sleep 10
   done
-  return 1
+  if [ "$ready" != 1 ]; then
+    warn "services did not all become ready within 7 minutes:"
+    if [ -z "$snap" ]; then
+      warn "could not list this install's containers (docker compose ps / docker inspect failed)."
+    elif [ -n "$notready" ]; then
+      report_containers "$notready"
+    else
+      warn "every container is up, but the web UI did not answer on http://127.0.0.1:${UI_PORT}/"
+    fi
+    return 1
+  fi
+  stability_gate
 }
 
 # Is this install running the TLS/mTLS variant? .env's COMPOSE_FILE chain is
@@ -485,16 +814,57 @@ dashboard_url() {
   else printf 'http://%s:%s' "$host" "$UI_PORT"; fi
 }
 
+ADMIN_CREDENTIAL_FILE="$ROOT/data/initial-admin-credential.txt"
+
+# Write the initial admin credential to a 0600 file, atomically. It lives under
+# data/ so it is kept with the install's data on a plain uninstall and removed
+# by --purge. Returns non-zero (with the reason on stderr) if it cannot.
+write_admin_credential() { # url user password
+  local dir tmp
+  dir=$(dirname "$ADMIN_CREDENTIAL_FILE")
+  mkdir -p "$dir" || return 1
+  tmp="$ADMIN_CREDENTIAL_FILE.tmp.$$"
+  # printf is a builtin: the password never appears in a process argv.
+  if ! ( umask 077 && printf '%s\n' \
+      "# Correlix initial administrator credential, generated for this install." \
+      "# Sign in, change the password in Settings, then delete this file." \
+      "url=$1" "username=$2" "password=$3" > "$tmp" ); then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv -f "$tmp" "$ADMIN_CREDENTIAL_FILE"
+}
+
 print_success() {
+  local url user pw
+  url=$(dashboard_url)
+  user=$(env_get ADMIN_USERNAME); user=${user:-admin}
+  pw=$(env_get ADMIN_INITIAL_PASSWORD)
   say ""
   say "${GREEN}${BOLD}────────────────────────────────────────────────${RST}"
   say "${GREEN}${BOLD}  Correlix is installed and running${RST}"
   say "${GREEN}${BOLD}────────────────────────────────────────────────${RST}"
   say ""
-  say "  Open the UI:   ${BOLD}$(dashboard_url)${RST}"
-  say "  Sign in as:    ${BOLD}$(env_get ADMIN_USERNAME || echo admin)${RST}"
-  say "  Password:      ${BOLD}$(env_get ADMIN_INITIAL_PASSWORD)${RST}"
-  say "                 ${DIM}(generated for this install — change it in Settings)${RST}"
+  say "  Open the UI:   ${BOLD}${url}${RST}"
+  say "  Sign in as:    ${BOLD}${user}${RST}"
+  # The generated password never goes through say(): stdout is the tee'd
+  # install log, the wizard's log ring and its SSE replay (FMEA row 6). It is
+  # written to a 0600 file whose PATH is printed, and — for an operator at a
+  # real terminal only — shown on that terminal after the log has closed. The
+  # wizard reads it from .env itself. The pointer line deliberately does not
+  # start with "Password:" (the wizard's banner scrape would take the next word).
+  if [ -n "$pw" ]; then
+    if write_admin_credential "$url" "$user" "$pw"; then
+      say "  Initial password saved to: ${BOLD}${ADMIN_CREDENTIAL_FILE}${RST}"
+      say "                 ${DIM}(readable only by you — change the password in Settings, then delete the file)${RST}"
+    else
+      warn "could not write $ADMIN_CREDENTIAL_FILE — the initial password is ADMIN_INITIAL_PASSWORD in $ENV_FILE"
+    fi
+    if [ "${CORRELIX_PROGRESS_JSON:-0}" != "1" ] && [ -n "$LOG_FILTER_PID" ] && [ -t 5 ]; then
+      TERMINAL_EPILOGUE=$(printf '\n  Password:      %s%s%s\n                 %s(shown on this terminal only; it is not in the log)%s' \
+        "$BOLD" "$pw" "$RST" "$DIM" "$RST")
+    fi
+  fi
   say ""
   say "  Useful commands:"
   say "    ./install-correlix.sh status     service health"
@@ -787,6 +1157,93 @@ assemble_install_args() {
   fi
 }
 
+# ---------- install transcript (FMEA row 14) ---------------------------------
+# The filter copies the byte stream to the terminal untouched — a prompt with no
+# newline still shows at once, and `@CX@` markers reach the wizard exactly as
+# emitted — and writes the log line by line, each line prefixed with the UTC
+# time it began. `@CX@ {json}` markers are the exception: they stay
+# byte-identical at line start in the log too. If the terminal goes away (a
+# dropped ssh session, a stopped wizard) the filter keeps logging instead of
+# dying and taking the install down with SIGPIPE; if the log cannot be written
+# (disk full) it says so once and keeps the terminal copy flowing.
+# Kept in single quotes, so it must contain no single quote.
+LOG_FILTER_PY='
+import os, sys, time
+MARK = b"@CX@ "
+log = os.open(sys.argv[1], os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+state = {"out": True, "log": True}
+
+def put(fd, data):
+    while data:
+        data = data[os.write(fd, data):]
+
+def emit(line, t):
+    if not state["log"]:
+        return
+    stamp = b"" if line.startswith(MARK) else time.strftime("%Y-%m-%dT%H:%M:%SZ ", time.gmtime(t)).encode()
+    try:
+        put(log, stamp + line + b"\n")
+    except OSError as e:
+        state["log"] = False
+        if state["out"]:
+            try:
+                put(1, ("\ncorrelix: writing the install log failed (%s); the install continues, output on this terminal only\n" % e).encode())
+            except OSError:
+                state["out"] = False
+
+pending, started = b"", 0.0
+while True:
+    chunk = os.read(0, 65536)
+    if not chunk:
+        break
+    if state["out"]:
+        try:
+            put(1, chunk)
+        except OSError:
+            state["out"] = False
+    now = time.time()
+    parts = chunk.split(b"\n")
+    for i, part in enumerate(parts[:-1]):
+        if i == 0 and pending:
+            emit(pending + part, started)
+        else:
+            emit(part, now)
+    if len(parts) > 1:
+        pending, started = parts[-1], now
+    else:
+        if not pending:
+            started = now
+        pending += parts[-1]
+if pending:
+    emit(pending, started)
+'
+
+# Full transcript of the installation — tail-able live from another terminal,
+# and the first thing support asks for when something fails. Private (0600):
+# it names hosts, paths and service accounts even though no secret is written.
+start_install_log() {
+  INSTALL_LOG="$HERE/correlix-install-$(date +%Y%m%d-%H%M%S).log"
+  if ! ( umask 077 && : >> "$INSTALL_LOG" ); then
+    die "Cannot create the install log $INSTALL_LOG." \
+      "Make $HERE writable by $(id -un), then re-run."
+  fi
+  chmod 600 "$INSTALL_LOG"
+  say "${BOLD}Correlix installer${RST}"
+  say "Full log: $INSTALL_LOG"
+  say "${DIM}(watch live from another terminal:  tail -f $INSTALL_LOG)${RST}"
+  # fds 5/6 keep the real terminal: on_exit restores it, and the password
+  # epilogue is written there so it never passes through the log.
+  exec 5>&1 6>&2
+  if command -v python3 >/dev/null 2>&1; then
+    exec > >(exec python3 -c "$LOG_FILTER_PY" "$INSTALL_LOG" 5>&- 6>&-) 2>&1
+  else
+    warn "python3 is missing, so this log has no per-line timestamps (the host check below stops the install)."
+    exec > >(exec tee -a "$INSTALL_LOG" 5>&- 6>&-) 2>&1
+  fi
+  LOG_FILTER_PID=$!
+  trap on_exit EXIT
+}
+
 # ---------- commands ----------------------------------------------------
 cmd_install() {
   if [ -n "$CONFIG_FILE" ]; then
@@ -800,13 +1257,11 @@ cmd_install() {
     printf '%s\n' "${INSTALL_ARGS[@]}"
     return 0
   fi
-  # Full transcript of the installation — tail-able live from another
-  # terminal, and the first thing support asks for when something fails.
-  INSTALL_LOG="$HERE/correlix-install-$(date +%Y%m%d-%H%M%S).log"
-  say "${BOLD}Correlix installer${RST}"
-  say "Full log: $INSTALL_LOG"
-  say "${DIM}(watch live from another terminal:  tail -f $INSTALL_LOG)${RST}"
-  exec > >(tee -a "$INSTALL_LOG") 2>&1
+  start_install_log
+  # Single writer from here on (FMEA row 12). A refusal exits 3 naming the
+  # holder, before anything on the host is touched.
+  acquire_bundle_lock install
+  acquire_install_lock install
   # The subshell exists for the fail marker: die() inside preflight exits it,
   # and we translate that into a stage-fail + result before stopping. The
   # human output and the exit code are unchanged from the direct call.
@@ -817,14 +1272,23 @@ cmd_install() {
     exit 1
   fi
   cx_stage preflight "checking this host" ok
-  [ "$MODE" = "bundle" ] && verify_bundle
+  if [ "$MODE" = "bundle" ]; then
+    verify_bundle
+    # A first-run bundle only now has deployment/docker/ to lock.
+    acquire_install_lock install
+  fi
 
   # Assemble install.py arguments. Defaults are the appliance path: embedded
   # Apache Kafka + embedded Valkey + everything else, zero questions asked.
   assemble_install_args
 
   say ""
-  if ! python3 "$ROOT/scripts/install.py" "${INSTALL_ARGS[@]}"; then
+  # -u + PYTHONUNBUFFERED: through the log pipe a buffered python writes its
+  # stdout in 4 KiB blocks, so the log's lines came out of order and a killed
+  # run lost its last lines (FMEA row 14). fds 5/6 are the terminal copies the
+  # log filter bypasses; install.py must not inherit them. fd 9 (the lock) is
+  # inherited on purpose — see the lock contract above.
+  if ! PYTHONUNBUFFERED=1 python3 -u "$ROOT/scripts/install.py" "${INSTALL_ARGS[@]}" 5>&- 6>&-; then
     print_failure
     cx_result fail
     exit 1
@@ -836,7 +1300,12 @@ cmd_install() {
     # upgrades load new tags and the old layers otherwise sit on the appliance
     # disk forever. Dangling-only: everything the running stack references is
     # untouchable by definition.
-    docker image prune -f >/dev/null 2>&1 || true
+    local prune_out
+    if ! prune_out=$(timeout 300 docker image prune -f 2>&1); then
+      # Reclaiming disk is housekeeping, not the install: name the failure and
+      # carry on (§16.1 — reported, not swallowed).
+      warn "could not reclaim superseded image layers: $(printf '%s' "$prune_out" | tail -1)"
+    fi
     cx_stage verify-login "verifying the admin credential" start
     verify_admin_login
     # verify_admin_login is advisory by design (it warns, never blocks), so
@@ -846,7 +1315,7 @@ cmd_install() {
     cx_result ok "$(dashboard_url)" "$(env_get ADMIN_USERNAME || echo admin)"
   else
     cx_stage verify-health "waiting for services to become healthy" fail \
-      "services did not become healthy within the wait window"
+      "services did not become healthy and stable (see the named services above)"
     print_failure
     cx_result fail
     exit 1
@@ -960,7 +1429,52 @@ remove_project_volumes() {
   return 0
 }
 
+# The install transcripts next to this script, the setup wizard's own install
+# transcripts / job-state file / lock (it writes them into the bundle dir, which
+# is this script's dir), and the initial-credential file. Transcripts written
+# before FMEA row 6 carry the admin password in clear, so a purge has to remove
+# them too (X3). A file that cannot be removed is named with the command that
+# removes it, and the purge stops before dropping .env, so a re-run finishes.
+#
+# The wizard's lock and job file are left in place, and named, while a running
+# wizard still holds that lock: unlinking a held lock file lets the next opener
+# lock a NEW inode while the wizard believes it is the only one.
+purge_install_logs() {
+  local f n=0 failed="" kept=""
+  local wiz_lock="$HERE/correlix-setup-install.lock" wiz_job="$HERE/correlix-setup-install.job.json"
+  local wizard_running=0
+  if [ -e "$wiz_lock" ] && ! flock -n "$wiz_lock" true; then
+    wizard_running=1
+  fi
+  for f in "$HERE"/correlix-install-*.log "$HERE"/correlix-setup-install-*.log \
+           "$wiz_job" "$wiz_lock" "$ADMIN_CREDENTIAL_FILE"; do
+    [ -e "$f" ] || continue
+    if [ "$wizard_running" = 1 ] && { [ "$f" = "$wiz_lock" ] || [ "$f" = "$wiz_job" ]; }; then
+      kept="$kept '$f'"
+      continue
+    fi
+    if rm -f -- "$f" && [ ! -e "$f" ]; then
+      n=$((n + 1))
+      say "  removed ${f##*/}"
+    else
+      failed="$failed '$f'"
+    fi
+  done
+  if [ "$n" -gt 0 ]; then ok "$n install log / credential file(s) removed"; fi
+  if [ -n "$kept" ]; then
+    warn "the setup wizard is still running (it holds its lock), so these were left in place:$kept"
+    warn "stop the wizard, then remove them with: rm -f$kept"
+  fi
+  if [ -n "$failed" ]; then
+    die "could not remove:$failed" \
+"They may contain the initial admin password. Remove them by hand, then re-run the purge:
+  rm -f$failed"
+  fi
+  return 0
+}
+
 cmd_uninstall() {
+  acquire_install_lock uninstall
   [ -f "$ENV_FILE" ] || die "Nothing to uninstall — no Correlix install found here."
   # Read the volume list while the containers still exist (see above). Only a
   # purge removes them; a plain uninstall keeps them with the rest of the data.
@@ -990,6 +1504,7 @@ cmd_uninstall() {
         docker rmi "$img" >/dev/null 2>&1 || true
       done
     fi
+    purge_install_logs
     rm -f "$ENV_FILE"
     ok "data, volumes and configuration removed (images unreferenced elsewhere were deleted)"
   else
@@ -1001,6 +1516,7 @@ cmd_uninstall() {
 }
 
 cmd_reset_demo() {
+  acquire_install_lock reset-demo-data
   [ -f "$ENV_FILE" ] || die "Correlix is not installed here yet." "Run: ./install-correlix.sh"
   UI_PORT=$(env_get BASE_PORT); UI_PORT=${UI_PORT:-8000}
   say "Resetting to a clean evaluation state (credentials are kept)..."
@@ -1010,7 +1526,7 @@ cmd_reset_demo() {
   docker run --rm -v "$ROOT/data:/data" alpine sh -c 'find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} +'
   local rargs=(--port "$(env_get BASE_PORT || echo 8000)")
   [ "$MODE" = "bundle" ] && rargs+=(--offline)   # images are already loaded; never build/pull
-  python3 "$ROOT/scripts/install.py" "${rargs[@]}"
+  PYTHONUNBUFFERED=1 python3 -u "$ROOT/scripts/install.py" "${rargs[@]}"
   if wait_healthy; then
     ok "Correlix reset — same URL and credentials as before."
   else
@@ -1050,6 +1566,7 @@ set_env_var() { # KEY VALUE — replace or append in .env
 }
 
 cmd_enable() {
+  acquire_install_lock enable
   [ -f "$ENV_FILE" ] || die "Correlix is not installed here yet." "Run: ./install-correlix.sh"
   local spec; spec=$(addon_spec "$ADDON_ARG")
   [ -n "$spec" ] || die "Unknown add-on: '${ADDON_ARG:-}'" "$ADDON_HELP"
@@ -1079,7 +1596,7 @@ Copy that file next to this script and run the same command again."
   # Idempotent (SELECT-then-CREATE), and it needs postgres already running.
   if [ "$ADDON_ARG" = "sso" ]; then
     say "Preparing the Keycloak database..."
-    python3 "$ROOT/scripts/install.py" --bootstrap-sso \
+    PYTHONUNBUFFERED=1 python3 -u "$ROOT/scripts/install.py" --bootstrap-sso \
       || die "Could not create Keycloak's database." \
            "Keycloak will crash-loop until it exists. Create it by hand with:
   cd $ROOT/deployment/docker && docker compose exec postgres createdb -U \$DB_USER keycloak
@@ -1093,6 +1610,7 @@ then run: ./install-correlix.sh enable sso"
 }
 
 cmd_disable() {
+  acquire_install_lock disable
   [ -f "$ENV_FILE" ] || die "Correlix is not installed here yet."
   local spec; spec=$(addon_spec "$ADDON_ARG")
   [ -n "$spec" ] || die "Unknown add-on: '${ADDON_ARG:-}'" "$ADDON_HELP"
@@ -1207,11 +1725,11 @@ cmd_menu() {
       8) ( compose start && ok "Correlix starting." ) || true; pause ;;
       9) printf '%s' "  This wipes all collected data (login kept). Type yes to confirm: "
          read -r conf || true
-         [ "${conf:-}" = "yes" ] && { ( cmd_reset_demo ) || true; } || say "  cancelled."
+         if [ "${conf:-}" = "yes" ]; then ( cmd_reset_demo ) || true; else say "  cancelled."; fi
          pause ;;
       0) printf '%s' "  Remove Correlix containers? Type yes to confirm: "
          read -r conf || true
-         [ "${conf:-}" = "yes" ] && { ( cmd_uninstall ) || true; } || say "  cancelled."
+         if [ "${conf:-}" = "yes" ]; then ( cmd_uninstall ) || true; else say "  cancelled."; fi
          pause ;;
       q|Q) exit 0 ;;
       *) : ;;
