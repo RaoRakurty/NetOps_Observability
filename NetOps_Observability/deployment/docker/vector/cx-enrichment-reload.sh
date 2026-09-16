@@ -65,4 +65,41 @@ last="$(hash_of "$CSV" || true)"
 ) &
 
 # The container lives and dies with vector; its exit code is the container's.
+#
+# 324 — SAY WHY IT DIED, on the way out. This shell is PID 1, vector is its
+# CHILD, and that hid a memory problem for ten days. The kernel's cgroup OOM
+# killer picks the fattest task in the cgroup — vector — not PID 1, so the
+# container's init survives and Docker never stamps `State.OOMKilled`. An
+# operator running `docker inspect` then reads `OOMKilled=false, ExitCode=0`
+# (Docker also zeroes both on a container that has since RESTARTED) and
+# concludes the restarts were clean. On .122 they were not: 114 cgroup OOM
+# kills of vector-router between 2026-09-06 and 2026-09-15 all read that way.
+# §10 — no silent failures: the exit status is data we already have, so report
+# it rather than making the next operator reach for dmesg to learn it existed.
+#
+# §16.1: nothing is swallowed. `set +e` is scoped to the `wait` ONLY so the
+# status can be captured instead of killing the shell before it can be
+# reported, and the script still exits with exactly that status — the
+# container's exit code is unchanged by this block.
+set +e
 wait "$VECTOR_PID"
+vector_status=$?
+set -e
+
+case "$vector_status" in
+    0)
+        ;;
+    137)
+        echo "cx-enrichment-reload: vector was KILLED (SIGKILL, status 137)." \
+             "Under a container memory cap this is almost always the cgroup" \
+             "OOM killer reaping the child process; \`docker inspect\` will" \
+             "still report OOMKilled=false because PID 1 (this shell)" \
+             "survived. Confirm with:" \
+             "dmesg -T | grep -i 'Memory cgroup out of memory'" >&2
+        ;;
+    *)
+        echo "cx-enrichment-reload: vector exited with status ${vector_status}" >&2
+        ;;
+esac
+
+exit "$vector_status"
