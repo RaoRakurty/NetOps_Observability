@@ -122,6 +122,33 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # ── 324, the SOURCE half — bounded consumer prefetch ────────────────────
+    # Bounding the sink side (see opensearch_syslog) removed a 22,915 MiB
+    # in-flight ceiling, but it did not make the container fit its cgroup on
+    # its own. Measured on the live router immediately after that fix, while
+    # this lane drained a backlog: RSS sat at 368-434 MiB of a 525 MiB cap
+    # (70-83 %), sawtoothing rather than settling, with
+    #   vector_kafka_consumed_messages_total{kafka_applogs} = 241,214
+    #   vector_component_sent_events_total{opensearch_applogs} = 213,299
+    # i.e. ~28k events in flight BETWEEN this source and the sink, at ~7.7 KB
+    # each (1,859,838,263 consumed bytes / 241,214 messages) = ~215 MiB. The
+    # sink buffer was pinned at its 500-event cap the whole time, so those
+    # events were NOT in Vector's buffer — they were in librdkafka's consumer
+    # prefetch queue, which this config never bounded. librdkafka's defaults
+    # are `queue.buffered.max.messages=1000000` and
+    # `queue.buffered.max.kbytes=1048576` (1 GiB) PER CONSUMER, and the router
+    # runs ten of them: ten unbounded queues inside a 512 MiB container.
+    #
+    # 4 MiB x 10 lanes = 40 MiB of prefetch, which with the sink side's 72 MiB
+    # and a ~128 MiB baseline leaves the whole tier inside 60 % of the compose
+    # default. 4 MiB is not tight: at this lane's own measured event size it is
+    # ~500 messages, the same depth as the sink buffer it feeds, and at the
+    # qualified 1k eps profile it is seconds of runway. A bounded prefetch is
+    # also the CORRECT degradation — it back-pressures into the topic, which
+    # retains 72 h, exactly as the sink side does (#209).
+    librdkafka_options:
+      queue.buffered.max.messages: "5000"
+      queue.buffered.max.kbytes: "4096"
     topics: ["netops.applogs"]
     group_id: "netops-router-applogs"
     decoding: { codec: json }
@@ -148,6 +175,10 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # 324: bounded consumer prefetch — arithmetic on kafka_applogs.
+    librdkafka_options:
+      queue.buffered.max.messages: "5000"
+      queue.buffered.max.kbytes: "4096"
     topics: ["netops.flows.raw"]
     group_id: "netops-router-flows-rekey"
     decoding: { codec: json }
@@ -164,6 +195,10 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # 324: bounded consumer prefetch — arithmetic on kafka_applogs.
+    librdkafka_options:
+      queue.buffered.max.messages: "5000"
+      queue.buffered.max.kbytes: "4096"
     topics: ["netops.syslog"]
     group_id: "netops-router-syslog"
     decoding: { codec: json }
@@ -180,6 +215,10 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # 324: bounded consumer prefetch — arithmetic on kafka_applogs.
+    librdkafka_options:
+      queue.buffered.max.messages: "5000"
+      queue.buffered.max.kbytes: "4096"
     topics: ["netops.flows"]
     group_id: "netops-router-flows"
     decoding: { codec: json }
@@ -196,6 +235,10 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # 324: bounded consumer prefetch — arithmetic on kafka_applogs.
+    librdkafka_options:
+      queue.buffered.max.messages: "5000"
+      queue.buffered.max.kbytes: "4096"
     topics: ["netops.snmptrap"]
     group_id: "netops-router-snmptrap"
     decoding: { codec: json }
@@ -216,6 +259,10 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # 324: bounded consumer prefetch — arithmetic on kafka_applogs.
+    librdkafka_options:
+      queue.buffered.max.messages: "5000"
+      queue.buffered.max.kbytes: "4096"
     topics: ["netops.cloudlogs"]
     group_id: "netops-router-cloudlogs"
     decoding: { codec: json }
@@ -239,6 +286,10 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # 324: bounded consumer prefetch — arithmetic on kafka_applogs.
+    librdkafka_options:
+      queue.buffered.max.messages: "5000"
+      queue.buffered.max.kbytes: "4096"
     topics: ["netops.security"]
     group_id: "netops-router-security"
     decoding: { codec: json }
@@ -260,6 +311,10 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # 324: bounded consumer prefetch — arithmetic on kafka_applogs.
+    librdkafka_options:
+      queue.buffered.max.messages: "5000"
+      queue.buffered.max.kbytes: "4096"
     topics: ["netops.deadletter"]
     group_id: "netops-router-deadletter"
     decoding: { codec: json }
@@ -282,6 +337,10 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # 324: bounded consumer prefetch — arithmetic on kafka_applogs.
+    librdkafka_options:
+      queue.buffered.max.messages: "5000"
+      queue.buffered.max.kbytes: "4096"
     topics: ["netops.experience"]
     group_id: "netops-router-experience"
     decoding: { codec: json }
@@ -302,6 +361,10 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # 324: bounded consumer prefetch — arithmetic on kafka_applogs.
+    librdkafka_options:
+      queue.buffered.max.messages: "5000"
+      queue.buffered.max.kbytes: "4096"
     topics: ["netops.cloudcosts"]
     group_id: "netops-router-cloudcosts"
     decoding: { codec: json }

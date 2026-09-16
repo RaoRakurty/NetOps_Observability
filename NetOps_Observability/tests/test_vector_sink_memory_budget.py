@@ -67,10 +67,15 @@ THE CONTRACT ENFORCED HERE
      `request.adaptive_concurrency.max_concurrency_limit` and a finite
      `request.retry_attempts`. Leaving any of them to the default puts a
      multi-gigabyte ceiling inside a half-gigabyte cgroup.
-  3. The arithmetic closes: summed over a tier's sinks,
+  2a. Every kafka SOURCE pins `queue.buffered.max.kbytes` and
+     `queue.buffered.max.messages`. This queue is librdkafka's, not Vector's —
+     no `buffer:` block covers it — and it defaults to 1 GiB per consumer.
+
+  3. The arithmetic closes: summed over a tier's sinks AND sources,
 
          worst_case = SUM(buffer_events x EVENT_BYTES_CEILING)
                     + SUM(max_concurrency_limit x batch.max_bytes)
+                    + SUM(queue.buffered.max.kbytes)
 
      plus a baseline RSS allowance must fit inside HEADROOM_SHARE of the
      service's compose mem_limit DEFAULT — the value a fresh install gets, not
@@ -79,12 +84,14 @@ THE CONTRACT ENFORCED HERE
   4. The compose default and the resource planner's floor for the same service
      agree, so raising one silently cannot invalidate the arithmetic in (3).
 
-KAFKA SINKS ARE OUT OF SCOPE HERE, DELIBERATELY. Their producer queue belongs
-to librdkafka (`queue.buffering.max.kbytes`, a 1 GiB default), not to Vector's
-request pipeline, so the terms in (3) do not describe them and pinning
-`batch`/`adaptive_concurrency` on them would be meaningless. That is a real and
-separate latent exposure on the aggregator; it has no incident behind it and is
-not bundled into this fix.
+KAFKA *SINKS* ARE OUT OF SCOPE HERE, DELIBERATELY — unlike kafka SOURCES,
+which (2a) covers. A sink's PRODUCER queue is librdkafka's
+`queue.buffering.max.kbytes` (note: buffer-ING, a different setting from the
+consumer's buffer-ED), also a 1 GiB default, and pinning
+`batch`/`adaptive_concurrency` on it would be meaningless because it does not
+use Vector's request pipeline. That is a real latent exposure, mostly on the
+aggregator, which produces to eleven topics; it has no incident behind it, was
+not what OOMed the router, and is not bundled into this fix.
 
 Run:  python3 -m pytest tests/test_vector_sink_memory_budget.py -v
 """
@@ -155,6 +162,16 @@ HEADROOM_SHARE = 0.60
 MAX_CONCURRENCY_CEILING = 8
 MAX_BATCH_BYTES_CEILING = 4 * MIB
 
+# librdkafka's consumer prefetch queue, which is NOT Vector's buffer and is not
+# covered by any `buffer:` block. Its defaults are `queue.buffered.max.messages`
+# 1,000,000 and `queue.buffered.max.kbytes` 1,048,576 (1 GiB) PER CONSUMER; the
+# router runs ten. Sizing this is the SOURCE half of tracker 324 — bounding the
+# sinks alone still left the container at 70-83 % of its cap while one lane
+# drained a backlog. The default is spelled out so an unpinned source is scored
+# at what it actually costs, and blows the budget assertion below.
+LIBRDKAFKA_DEFAULT_PREFETCH_KBYTES = 1048576
+MAX_PREFETCH_KBYTES_CEILING = 4096
+
 
 def read(path: str) -> str:
     with open(os.path.join(ROOT, path)) as fh:
@@ -167,6 +184,20 @@ def vector_cfg(tier: str) -> dict:
 
 def sinks(tier: str) -> dict:
     return vector_cfg(tier).get("sinks") or {}
+
+
+def sources(tier: str) -> dict:
+    return vector_cfg(tier).get("sources") or {}
+
+
+def kafka_sources(tier: str) -> list[tuple[str, dict]]:
+    return [(n, s) for n, s in sources(tier).items() if s.get("type") == "kafka"]
+
+
+def prefetch_kbytes(src: dict) -> int:
+    """This consumer's prefetch ceiling in KiB — librdkafka's default if unset."""
+    opts = src.get("librdkafka_options") or {}
+    return int(opts.get("queue.buffered.max.kbytes", LIBRDKAFKA_DEFAULT_PREFETCH_KBYTES))
 
 
 def compose() -> dict:
@@ -330,7 +361,48 @@ def worst_case_bytes(tier: str) -> tuple[int, list[str]]:
         total += term
         if term:
             workings.append(f"{name}={term // MIB} MiB")
+    # The SOURCE half (324): librdkafka's consumer prefetch queue is resident in
+    # the same cgroup and is bounded by nothing Vector owns. Measured on the
+    # live router, bounding only the sinks still let it reach 99.99 % of its cap
+    # while one lane drained a backlog, so this term is not optional.
+    for name, src in sorted(kafka_sources(tier)):
+        term = prefetch_kbytes(src) * 1024
+        total += term
+        workings.append(f"{name}(prefetch)={term // MIB} MiB")
     return total, workings
+
+
+@pytest.mark.parametrize("tier", ALL_TIERS)
+def test_kafka_sources_pin_their_consumer_prefetch(tier: str) -> None:
+    """The SOURCE half of tracker 324, and the one that actually dominated.
+
+    A kafka source's prefetch queue belongs to librdkafka, so no `buffer:`
+    block describes it and nothing in Vector's config surface bounds it unless
+    it is stated. Left at the defaults each consumer may hold 1 GiB; the router
+    runs ten of them inside a 512 MiB container. Measured live: with the sinks
+    bounded but the sources unpinned, the router still climbed to 99.99 % of
+    its 525 MiB cap draining a single lane's backlog.
+    """
+    offenders = []
+    for name, src in kafka_sources(tier):
+        opts = src.get("librdkafka_options") or {}
+        kb = opts.get("queue.buffered.max.kbytes")
+        if kb is None:
+            offenders.append(
+                f"{name}: queue.buffered.max.kbytes unpinned — librdkafka "
+                f"defaults to {LIBRDKAFKA_DEFAULT_PREFETCH_KBYTES} KiB (1 GiB)"
+            )
+        elif int(kb) > MAX_PREFETCH_KBYTES_CEILING:
+            offenders.append(
+                f"{name}: prefetch {kb} KiB exceeds the "
+                f"{MAX_PREFETCH_KBYTES_CEILING} KiB this container is sized for"
+            )
+        if opts.get("queue.buffered.max.messages") is None:
+            offenders.append(
+                f"{name}: queue.buffered.max.messages unpinned — the byte cap "
+                f"alone does not bound a flood of small events"
+            )
+    assert not offenders, f"{tier}: " + "; ".join(offenders)
 
 
 @pytest.mark.parametrize("tier", ALL_TIERS)
