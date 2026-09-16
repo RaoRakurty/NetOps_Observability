@@ -4595,6 +4595,13 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "# TYPE netops_login_throttle_saturated_total counter\n")
 		fmt.Fprintf(w, "netops_login_throttle_saturated_total %d\n", s.loginThrottle.Saturations())
 	}
+	// Tracker 322: sign-ins the SERVER refused because a session-path store
+	// write could not finish under pressure. Distinct from the throttle
+	// counters above, which count what CALLERS did wrong. Emitted every scrape,
+	// including as a zero, so a vanished series still means a scrape failure.
+	fmt.Fprintf(w, "# HELP netops_login_store_pressure_refusals_total Sign-ins refused with a retryable 503 because a session-path store write could not complete under pressure.\n")
+	fmt.Fprintf(w, "# TYPE netops_login_store_pressure_refusals_total counter\n")
+	fmt.Fprintf(w, "netops_login_store_pressure_refusals_total %d\n", loginStorePressureRefusals.Load())
 	// Tracker 300 §2.6: the legacy lazy bind is the ONE place username equality
 	// is ever consulted, and it is flagged for the owner's veto — so it is
 	// counted. A converged estate never increments this again.
@@ -4653,6 +4660,12 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 var (
 	jsonEncodeFailures atomic.Uint64
 	jsonWriteFailures  atomic.Uint64
+	// loginStorePressureRefusals counts sign-ins refused with a retryable 503
+	// because a session-path store write could not complete under pressure
+	// (tracker 322). Same reasoning as the two above: a write-only atomic, set
+	// from a free-standing refusal helper, with no configuration to race on.
+	// Without it, "nobody could log in for an hour" stays anecdotal.
+	loginStorePressureRefusals atomic.Uint64
 )
 
 // writeJSON encodes body as the response.

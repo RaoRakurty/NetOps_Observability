@@ -2271,6 +2271,44 @@ export function authHeaders(extra: Record<string, string> = {}): Record<string, 
   return headers;
 }
 
+/**
+ * A 503 from our api: the server could not serve THIS REQUEST right now, and
+ * said when to come back. Tracker 322 — under IO pressure a session write times
+ * out and the sign-in is refused, while the same credentials succeed seconds
+ * later. That is not a failure to report to the operator as a broken server; it
+ * is a delay, and a caller that can usefully wait needs the advertised one.
+ *
+ * The MESSAGE is byte-identical to every other throw from `request`, so
+ * `operatorError()` and every existing `catch` behave exactly as before. Only a
+ * caller that asks (`e instanceof ServiceBusyError`) sees the extra half.
+ */
+export class ServiceBusyError extends Error {
+  constructor(message: string, public readonly retryAfterSeconds: number) {
+    super(message);
+    this.name = "ServiceBusyError";
+  }
+}
+
+const RETRY_AFTER_FALLBACK_SECONDS = 3;
+// A server under pressure can advertise any delay it likes; a UI that honours it
+// literally can sit on a spinner for minutes. The cap is what keeps "retry once
+// automatically" a convenience rather than a hang.
+const RETRY_AFTER_CAP_SECONDS = 10;
+
+/**
+ * The delay a 503 advertised, in seconds, clamped to something a person will
+ * wait through. Only the delta-seconds form is honoured: Retry-After may also
+ * carry an HTTP-date, our api never sends one, and guessing across a clock skew
+ * would be worse than the fallback.
+ */
+export function retryAfterSecondsFrom(res: Response, fallback = RETRY_AFTER_FALLBACK_SECONDS): number {
+  const raw = (res.headers.get("Retry-After") ?? "").trim();
+  if (!raw) return fallback;
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds < 0) return fallback;
+  return Math.min(seconds, RETRY_AFTER_CAP_SECONDS);
+}
+
 async function request<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
   const token = getToken();
   const headers = authHeaders({
@@ -2311,6 +2349,12 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
         window.dispatchEvent(new CustomEvent<ElevationRefusal>(ELEVATION_REQUIRED_EVENT, { detail: refusal }));
         throw new Error(refusal.error);
       }
+    }
+    // BUSY, not broken (tracker 322). Typed so a caller that can retry does not
+    // have to re-parse the envelope to find the delay; the message is unchanged,
+    // so a caller that does not care is unaffected.
+    if (res.status === 503) {
+      throw new ServiceBusyError(`${res.status} ${res.statusText}: ${text}`, retryAfterSecondsFrom(res));
     }
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
   }

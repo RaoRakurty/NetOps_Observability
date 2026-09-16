@@ -2,7 +2,7 @@
 // Copyright 2026 Correlix
 
 import { useEffect, useRef, useState } from "react";
-import { api, AuthMethods, takeSessionEndMessage } from "../services/api";
+import { api, AuthMethods, ServiceBusyError, takeSessionEndMessage } from "../services/api";
 import { readAppearance, setAppearancePref } from "../theme/prefs";
 import { BRAND } from "../brand";
 
@@ -10,6 +10,13 @@ import { BRAND } from "../brand";
 // ("Network Observability") and feeds the document title and the installer
 // docs, where title case is right. Here it is a caption under a wordmark.
 const LOGIN_CAPTION = "Network observability";
+
+// What a saturated server gets to say, after we have already retried for the
+// operator (tracker 322). Deliberately not the raw envelope: "503 Service
+// Unavailable" reads as a broken product, when what happened is that the box
+// was too busy for a moment. No advice to "contact support" either — the thing
+// that actually works is waiting a little.
+const BUSY_MESSAGE = "The system is busy — try again shortly.";
 import Icon from "../components/Icon";
 import ChangePasswordCard from "../components/ChangePasswordCard";
 import eyeIris from "../assets/brand/eye-iris.webp";
@@ -129,12 +136,14 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
     }
     setBusy(true);
     setError(null);
-    try {
+    // ONE sign-in attempt. "halt" means the flow has already moved somewhere
+    // else (the MFA step, the forced password change) and this submit is done.
+    const attempt = async (): Promise<"in" | "halt"> => {
       if (method === "ldap") await api.ldapLogin(username, password);
       else if (method === "tacacs") await api.tacacsLogin(username, password);
       else {
         const r = await api.login(username, password);
-        if (r.mfaRequired && r.mfaToken) { setMfaToken(r.mfaToken); return; } // → code step
+        if (r.mfaRequired && r.mfaToken) { setMfaToken(r.mfaToken); return "halt"; } // → code step
         // F-68: credentials were right, but the scope's Security Settings
         // withhold the session until the password is reset (expiry /
         // reset-on-first-login). No token was issued — send the user to the
@@ -142,10 +151,39 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
         if (r.mustChangePassword) {
           setError(r.message ?? "A password reset is required before you can sign in.");
           setView("changepw");
+          return "halt";
+        }
+      }
+      return "in";
+    };
+    try {
+      let outcome: "in" | "halt";
+      try {
+        outcome = await attempt();
+      } catch (first) {
+        // Tracker 322. A 503 is the server saying "not now", not "you got this
+        // wrong": under IO pressure the session write misses its deadline and
+        // the same credentials succeed seconds later. Wait the delay the server
+        // advertised (the api clamps it to something a person will sit through)
+        // and try exactly once more. The button stays busy throughout, so the
+        // operator sees one continuous "Signing in…" instead of an error they
+        // would have to act on.
+        //
+        // ONE retry, never a loop: a second refusal means the box really is
+        // saturated, and a client that keeps hammering it is part of the
+        // problem. Any other failure — a wrong password above all — is
+        // re-thrown untouched, so nothing else is retried or reworded.
+        if (!(first instanceof ServiceBusyError)) throw first;
+        await new Promise((resolve) => setTimeout(resolve, first.retryAfterSeconds * 1000));
+        try {
+          outcome = await attempt();
+        } catch (again) {
+          if (!(again instanceof ServiceBusyError)) throw again;
+          setError(BUSY_MESSAGE);
           return;
         }
       }
-      onLoggedIn();
+      if (outcome === "in") onLoggedIn();
     } catch (e) {
       setError((e as Error).message.replace(/^401 Unauthorized: ?/, ""));
     } finally {
