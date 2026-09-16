@@ -109,7 +109,48 @@ ENV_FILE="$COMPOSE_DIR/.env"
 compose() { (cd "$COMPOSE_DIR" && docker compose "$@"); }
 # Read-only compose queries, bounded (§16.3): a wedged daemon must not hang the
 # health gate. Never used for up/down/stop, whose legitimate duration is long.
-compose_q() { (cd "$COMPOSE_DIR" && timeout 60 docker compose "$@"); }
+# How slow is this host? install.py's host profile (data/.host-profile.json)
+# carries budget_factor 1 (fast/normal), 2 (slow) or 3 (very slow). Every
+# bounded wait below is multiplied by it: on the 2026-09-16 .123 install the
+# stack was healthy and the gate still failed, because fixed 60 s / 7 min
+# budgets are not enough on a disk whose p99 write is ~2.8 s.
+host_budget_factor() {
+  local f="" prof="$ROOT/data/.host-profile.json"
+  [ -f "$prof" ] || { printf '1'; return 0; }
+  f=$(python3 - "$prof" <<'PYEOF' 2>/dev/null
+import json, sys
+try:
+    v = float(json.load(open(sys.argv[1])).get("budget_factor", 1))
+except Exception:
+    v = 1.0
+print(int(max(1, min(4, round(v)))))
+PYEOF
+)
+  case "$f" in ''|*[!0-9]*) f=1 ;; esac
+  printf '%s' "$f"
+}
+scaled_s() { printf '%s' "$(( $1 * $(host_budget_factor) ))"; }
+
+# Read-only compose queries, bounded (§16.3): a wedged daemon must not hang the
+# health gate. Never used for up/down/stop, whose legitimate duration is long.
+# The failure REASON is kept in COMPOSE_Q_ERR — swallowing it (§16.1) is what
+# made the .123 gate say only "could not list this install's containers".
+compose_q_errfile() {
+  local f="${TMPDIR:-/tmp}/correlix-compose-err.$$"
+  : > "$f" 2>/dev/null || { printf '%s' ""; return 0; }
+  printf '%s' "$f"
+}
+compose_q_err() { cat "${TMPDIR:-/tmp}/correlix-compose-err.$$" 2>/dev/null; }
+compose_q() {
+  local rc f="${TMPDIR:-/tmp}/correlix-compose-err.$$"
+  (cd "$COMPOSE_DIR" && timeout "$(scaled_s 60)" docker compose "$@") 2>"${f:-/dev/null}"; rc=$?
+  if [ "$rc" -ne 0 ] && [ -n "$f" ]; then
+    # Keep the last two lines; a timeout has no output of its own to explain it.
+    printf '%s' "$(tail -2 "$f" 2>/dev/null)" > "$f"
+    [ "$rc" -eq 124 ] && printf 'timed out after %ss: docker compose %s' "$(scaled_s 60)" "$*" > "$f"
+  fi
+  return "$rc"
+}
 env_get() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | head -1; }
 utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -120,6 +161,7 @@ utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # for the filter to drain, and only THEN prints anything that must reach the
 # terminal but never the log (the initial admin password, FMEA row 6).
 LOCK_FILES_HELD=""
+COMPOSE_Q_ERRFILE="${TMPDIR:-/tmp}/correlix-compose-err.$$"
 LOG_FILTER_PID=""
 TERMINAL_EPILOGUE=""
 on_exit() {
@@ -920,14 +962,28 @@ verify_admin_login() {
 # One line per container of this compose project (running or not):
 #   id|service|restart_count|started_at|status|health|exit_code
 # health is "none" for a service without a healthcheck.
+SNAPSHOT_ERR=""
 container_snapshot() {
-  local ids
-  ids=$(compose_q ps -aq 2>/dev/null) || return 1
-  [ -n "$ids" ] || return 1
+  local ids out rc
+  SNAPSHOT_ERR=""
+  if ! ids=$(compose_q ps -aq); then
+    SNAPSHOT_ERR="docker compose ps: $(compose_q_err)"
+    [ "$SNAPSHOT_ERR" = "docker compose ps: " ] && SNAPSHOT_ERR="docker compose ps failed with no output"
+    return 1
+  fi
+  if [ -z "$ids" ]; then
+    SNAPSHOT_ERR="docker compose ps listed no containers for this install (wrong directory, or the stack was removed)"
+    return 1
+  fi
   # shellcheck disable=SC2086  # deliberate word-split of the container id list
-  timeout 60 docker inspect --format \
+  out=$(timeout "$(scaled_s 60)" docker inspect --format \
     '{{.Id}}|{{index .Config.Labels "com.docker.compose.service"}}|{{.RestartCount}}|{{.State.StartedAt}}|{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{.State.ExitCode}}' \
-    $ids 2>/dev/null
+    $ids 2>&1); rc=$?
+  if [ "$rc" -ne 0 ]; then
+    SNAPSHOT_ERR="docker inspect (exit $rc): $(printf '%s' "$out" | tail -2)"
+    return 1
+  fi
+  printf '%s\n' "$out"
 }
 
 # The window, from CORRELIX_STABILITY_WINDOW_S: default 60 s, clamped to
@@ -1019,7 +1075,8 @@ stability_gate() {
 
 wait_healthy() {
   say "Waiting for services to become healthy (this can take a few minutes)..."
-  local deadline=$(( $(date +%s) + 420 )) snap="" failed notready ready=0
+  local budget; budget=$(scaled_s 420)
+  local deadline=$(( $(date +%s) + budget )) snap="" failed notready ready=0 lasterr=""
   while [ "$(date +%s)" -lt "$deadline" ]; do
     if snap=$(container_snapshot); then
       # A one-shot that already failed will not improve by waiting.
@@ -1039,14 +1096,16 @@ wait_healthy() {
         break
       fi
     else
+      lasterr="$SNAPSHOT_ERR"
       snap=""
     fi
     sleep 10
   done
   if [ "$ready" != 1 ]; then
-    warn "services did not all become ready within 7 minutes:"
+    warn "services did not all become ready within $((budget / 60)) minutes:"
     if [ -z "$snap" ]; then
-      warn "could not list this install's containers (docker compose ps / docker inspect failed)."
+      warn "could not read this install's container state: ${lasterr:-docker compose ps / docker inspect failed}"
+      warn "the stack itself may be fine — check with: ./install-correlix.sh status"
     elif [ -n "$notready" ]; then
       report_containers "$notready"
     else
