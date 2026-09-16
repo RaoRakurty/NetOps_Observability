@@ -247,7 +247,19 @@ fi
 # ---------- 12) security patches ----------------------------------------------
 if dpkg -s unattended-upgrades >/dev/null 2>&1; then pass "unattended-upgrades installed"
 elif [ "$CHECK" = 1 ]; then need "unattended-upgrades not installed (automatic security patches)"
-else apt-get install -y -qq unattended-upgrades && dpkg-reconfigure -f noninteractive unattended-upgrades >/dev/null 2>&1 || true; fixd "unattended-upgrades installed + enabled"; fi
+else
+  # A && B || true then reporting FIXED said "installed + enabled" even when the
+  # install failed (FMEA P3, shellcheck SC2015). Report what actually happened.
+  if apt-get install -y -qq unattended-upgrades; then
+    if dpkg-reconfigure -f noninteractive unattended-upgrades >/dev/null 2>&1; then
+      fixd "unattended-upgrades installed + enabled"
+    else
+      fixfail "unattended-upgrades installed, but enabling it failed — run: sudo dpkg-reconfigure unattended-upgrades"
+    fi
+  else
+    fixfail "could not install unattended-upgrades (automatic security patches) — check apt and run: sudo apt-get install unattended-upgrades"
+  fi
+fi
 
 # >>> firewall-lib ------------------------------------------------------------
 # Everything --firewall / --close-wizard-port does lives between these markers.
