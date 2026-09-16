@@ -149,7 +149,19 @@ else apt-get install -y -qq "${MISSING_PKGS[@]}" ca-certificates && fixd "instal
 if timedatectl show -p NTPSynchronized --value 2>/dev/null | grep -q yes; then
   pass "clock is NTP-synchronized"
 elif [ "$CHECK" = 1 ]; then need "clock not NTP-synchronized (will enable systemd-timesyncd)"
-else systemctl enable --now systemd-timesyncd 2>/dev/null || true; fixd "systemd-timesyncd enabled (verify sync with: timedatectl)"; fi
+else
+  # `systemctl … 2>/dev/null || true` then an unconditional FIXED reported
+  # "enabled" on hosts where the unit does not exist or is masked (FMEA P3,
+  # the unattended-upgrades sibling of 217e3ab4). An undisciplined clock is not
+  # cosmetic: it breaks TLS handshakes, expires tokens early and files events
+  # into the wrong correlation window — all of it long after the install said
+  # the host was ready. Report what happened, and name the command to run.
+  if ts_err=$(systemctl enable --now systemd-timesyncd 2>&1); then
+    fixd "systemd-timesyncd enabled (sync can take a minute; verify with: timedatectl)"
+  else
+    fixfail "could not enable time sync: $(printf '%s' "$ts_err" | tail -1) — run: sudo systemctl enable --now systemd-timesyncd (or install another NTP client, e.g. sudo apt-get install chrony)"
+  fi
+fi
 
 # ---------- 4) docker daemon best practices -----------------------------------
 DAEMON_JSON=/etc/docker/daemon.json
