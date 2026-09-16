@@ -330,26 +330,91 @@ done
 # ---------- preflight checks (install only) ----------------------------------
 port_in_use() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && { exec 3>&-; return 0; } || return 1; }
 
-# Device-facing host ports published by docker-compose.yml, as
-# "port/proto[:ENV_VAR]" — the env var (where one exists) is what moves the
-# port, and is quoted back to the customer in the failure. Keep in sync with
-# the `ports:` blocks of syslog-ng, goflow2 and api; pinned by
-# tests/test_ingest_contract.py::test_installer_checks_every_published_port.
-STACK_INGEST_PORTS="514/tcp 514/udp 5514/tcp:SYSLOG_PORT 5514/udp:SYSLOG_PORT \
-2055/udp:NETFLOW_PORT 4739/udp:IPFIX_PORT 6343/udp:SFLOW_PORT \
-162/udp:SNMP_TRAP_PORT 11019/tcp:BMP_PORT"
+# Host ports the stack publishes, as "port/proto[:ENV_VAR]" — the env var
+# (where one exists) is what moves the port, and is quoted back to the customer
+# in the failure.
+#
+# DERIVED, never typed. This used to be a hand-kept list, and prepare-host.sh
+# --firewall kept a second one: the two disagreed, so 443 and 11019 were never
+# checked while the firewall opened the CONTAINER side of the trap mapping
+# (1162/udp) instead of the 162/udp compose publishes (FMEA S6, TRACKER 320).
+# Both callers now read the compose files through ONE parser — prepare-host.sh's
+# firewall library — so they cannot drift apart again.
+#
+# Empty means "not derived yet"; a derivation that FAILS is reported and the
+# check is skipped by name (§16.1), never silently, and never from a fallback
+# list — a guessed list is the defect, not the remedy.
+STACK_INGEST_PORTS=""
+STACK_INGEST_PORTS_WHY=""
+
+derive_stack_ingest_ports() {
+  local prep="" entries
+  if [ -f "$HERE/prepare-host.sh" ]; then prep="$HERE/prepare-host.sh"
+  elif [ -f "$ROOT/scripts/prepare-host.sh" ]; then prep="$ROOT/scripts/prepare-host.sh"
+  else
+    STACK_INGEST_PORTS_WHY="prepare-host.sh, which owns the compose port parser, is not next to this script"
+    return 1
+  fi
+  # A subshell so the library's own names never land in this script's scope.
+  # Its stderr is folded in: when it cannot read the compose files it says why,
+  # and that reason is exactly what the operator needs to see.
+  if ! entries=$(
+      (
+        set -euo pipefail
+        # The library is a block of a host-check script: these exist for it to
+        # load against and are read by it, never by this script. The port
+        # derivation calls none of the reporters.
+        # shellcheck disable=SC2034,SC2317,SC2329
+        { pass(){ :; }; fixd(){ :; }; need(){ :; }; fixfail(){ :; }
+          CHECK=0; CLOSE_WIZARD_PORT=0; SELF_DIR="$HERE"; }
+        # shellcheck source=/dev/null  # a delimited block of prepare-host.sh
+        . <(sed -n '/^# >>> firewall-lib/,/^# <<< firewall-lib/p' "$prep")
+        if ! fw_locate_compose; then printf '%s\n' "$FW_WHY" >&2; exit 1; fi
+        # shellcheck disable=SC2034  # read by the library's fw_env_get
+        FW_ENV_FILE="$ENV_FILE"
+        out=$(fw_stack_port_entries) || { if [ -n "$FW_TMP" ]; then rm -rf -- "$FW_TMP"; fi; exit 1; }
+        if [ -n "$FW_TMP" ]; then rm -rf -- "$FW_TMP"; fi
+        printf '%s\n' "$out"
+      ) 2>&1
+    ); then
+    STACK_INGEST_PORTS_WHY="$(printf '%s' "$entries" | tail -1)"
+    [ -n "$STACK_INGEST_PORTS_WHY" ] \
+      || STACK_INGEST_PORTS_WHY="the compose port parser in prepare-host.sh produced no output"
+    return 1
+  fi
+  # The web UI is checked separately, by port_in_use, which has the --ui-port
+  # remedy. Both forms of it go: the port this run will publish, and the entry
+  # BASE_PORT moves — on a fresh host there is no .env yet, so the compose
+  # default (8000) is what the parser resolves, and reporting THAT as taken is
+  # exactly backwards for the customer who passed --ui-port because 8000 is.
+  STACK_INGEST_PORTS=$(printf '%s\n' "$entries" \
+    | awk -F: -v ui="$UI_PORT/tcp" 'NF && $1 != ui && $2 != "BASE_PORT"' | tr '\n' ' ')
+  STACK_INGEST_PORTS=${STACK_INGEST_PORTS% }
+  if [ -z "$STACK_INGEST_PORTS" ]; then
+    STACK_INGEST_PORTS_WHY="the compose files publish no host ports besides the web UI"
+    return 1
+  fi
+  return 0
+}
 
 # Report each STACK_INGEST_PORTS entry already bound on this host, and stop the
 # install naming them. UDP cannot be probed by connecting, so this reads the
 # kernel's listening table via `ss` (iproute2). No `ss` -> say so and continue
 # rather than pretend the ports were checked (§16.1: never a silent skip).
 check_ingest_ports() {
-  if ! command -v ss >/dev/null 2>&1; then
-    warn "'ss' (iproute2) is not installed — cannot verify the device-facing ports are free."
-    warn "If a collector fails to start, check for another service on 514/5514, 2055/4739/6343, 162 or 11019."
+  if ! derive_stack_ingest_ports; then
+    warn "could not work out which ports Correlix publishes ($STACK_INGEST_PORTS_WHY) — cannot verify the device-facing ports are free."
+    warn "The install continues. If a collector then fails to start, look for another service on the ports deployment/docker/docker-compose.yml publishes."
     return 0
   fi
-  local listening busy="" entry port proto var move
+  if ! command -v ss >/dev/null 2>&1; then
+    warn "'ss' (iproute2) is not installed — cannot verify the device-facing ports are free."
+    # The ports come from the derivation above, so this line cannot go stale
+    # the way a typed list does.
+    warn "If a collector fails to start, check for another service on: $(printf '%s' "$STACK_INGEST_PORTS" | tr ' ' '\n' | cut -d: -f1 | tr '\n' ' ')"
+    return 0
+  fi
+  local listening
   # -H no header, -l listening, -n numeric, -t tcp, -u udp. Fold every local
   # address down to "proto:port" so 0.0.0.0:514, [::]:514 and 127.0.0.1:514
   # all match. A non-zero ss here is a real failure, not noise.
@@ -360,6 +425,15 @@ check_ingest_ports() {
   listening=$(printf '%s\n' "$listening" \
     | awk '{ n=$1; a=$5; sub(/.*:/, "", a); if (a ~ /^[0-9]+$/) print n ":" a }' \
     | sort -u)
+  report_busy_ingest_ports "$listening"
+}
+
+# Report every derived port already bound in the "proto:port" lines given, and
+# stop the install naming them. Its own function because the report must be
+# proven to survive `set -e` on its own merits (see the comment inside), not by
+# luck of a call site that suspends errexit.
+report_busy_ingest_ports() { # "proto:port" lines
+  local listening="$1" busy="" entry port proto var move
   for entry in $STACK_INGEST_PORTS; do
     var="${entry#*:}"; [ "$var" = "$entry" ] && var=""
     entry="${entry%%:*}"
@@ -398,6 +472,7 @@ port_purpose() {
     6343)       echo "sFlow" ;;
     162)        echo "SNMP traps" ;;
     11019)      echo "BGP Monitoring Protocol (BMP)" ;;
+    443)        echo "the Correlix web UI over HTTPS" ;;
     *)          echo "device telemetry" ;;
   esac
 }

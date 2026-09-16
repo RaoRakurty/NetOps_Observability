@@ -383,8 +383,38 @@ fw_resolve_publish() {
   printf '%s/%s\n' "$host" "$proto"
 }
 
-# Every host port the stack publishes off-host, sorted and unique.
-fw_stack_ports() {
+# The environment variable that MOVES a published host port
+# ("${SYSLOG_PORT:-5514}:514/tcp" -> SYSLOG_PORT), or nothing when the compose
+# file pins the port. The host port is the FIRST field of a publish entry, so
+# only a leading ${...} moves it; an entry that pins an address first
+# (127.0.0.1:...) is loopback-bound and never opened. install-correlix.sh's
+# preflight quotes this back to the customer when the port is already in use,
+# so the port check and the firewall name the same variable.
+fw_publish_mover() {
+  if [[ "$1" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-[^}]*)?\} ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+  fi
+  return 0
+}
+
+# One compose publish entry -> "hostport/proto[:MOVER_VAR]", or nothing when it
+# is not an off-host publish.
+fw_emit_publish() {
+  local resolved mover
+  resolved=$(fw_resolve_publish "$1")
+  [ -n "$resolved" ] || return 0
+  mover=$(fw_publish_mover "$1")
+  if [ -n "$mover" ]; then
+    printf '%s:%s\n' "$resolved" "$mover"
+  else
+    printf '%s\n' "$resolved"
+  fi
+}
+
+# Every host port the stack publishes off-host as "port/proto[:MOVER_VAR]",
+# sorted and unique. THE port set: --firewall opens it, and
+# install-correlix.sh's preflight checks it is free. One parser, two callers.
+fw_stack_port_entries() {
   local scheme base tls="" overridden="" svc spec _ovr
   scheme=$(fw_scheme)
   base=$(fw_compose_ports "$FW_COMPOSE_DIR/docker-compose.yml")
@@ -399,13 +429,18 @@ fw_stack_ports() {
     while IFS=$'\t' read -r svc spec _ovr; do
       if [ -z "$svc" ] || [ "$spec" = "-" ]; then continue; fi
       if printf '%s\n' "$overridden" | grep -qx -- "$svc"; then continue; fi
-      fw_resolve_publish "$spec"
+      fw_emit_publish "$spec"
     done <<< "$base"
     while IFS=$'\t' read -r svc spec _ovr; do
       if [ -z "$svc" ] || [ "$spec" = "-" ]; then continue; fi
-      fw_resolve_publish "$spec"
+      fw_emit_publish "$spec"
     done <<< "$tls"
   } | sort -u
+}
+
+# The same set as ports only — what the firewall rules are built from.
+fw_stack_ports() {
+  fw_stack_port_entries | sed 's/:[A-Za-z_][A-Za-z0-9_]*$//' | sort -u
 }
 
 # Every port sshd listens on. sshd absent or unreadable → 22, the safe default

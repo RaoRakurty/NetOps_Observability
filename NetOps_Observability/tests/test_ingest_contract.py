@@ -1253,25 +1253,25 @@ def _published_host_ports() -> set[str]:
 
 
 def test_installer_checks_every_published_port():
+    """The list is no longer typed: preflight derives it from the compose files
+    through prepare-host.sh's firewall library, so it cannot fall behind a new
+    port (FMEA S6). That the derived set EQUALS what compose publishes is proven
+    behaviourally in tests/test_install_preflight_ports.py; here we pin that no
+    hand-kept registry came back, and that the UI port keeps its own check."""
     installer = os.path.join(ROOT, "scripts", "install-correlix.sh")
     with open(installer, encoding="utf-8") as fh:
         src = fh.read()
     m = re.search(r'STACK_INGEST_PORTS="(.*?)"', src, re.DOTALL)
-    assert m, "STACK_INGEST_PORTS registry not found in install-correlix.sh"
-    checked = {e.split(":")[0]
-               for e in m.group(1).replace("\\\n", " ").split()}
-    # The UI port has its own dedicated check (with the --ui-port remedy).
-    ui_port = "8000/tcp"
+    assert m, "STACK_INGEST_PORTS is gone from install-correlix.sh"
+    assert not m.group(1).strip(), (
+        f"install-correlix.sh carries a hand-kept port list again ({m.group(1)!r}) "
+        "— that is how 443 and 11019 went unchecked while the firewall opened "
+        "the container side of the trap mapping")
+    assert "fw_stack_port_entries" in src, (
+        "preflight must derive its ports through prepare-host.sh's firewall "
+        "library — one parser for the port check and the firewall")
     assert "port_in_use \"$UI_PORT\"" in src
-    missing = _published_host_ports() - checked - {ui_port}
-    assert not missing, (
-        f"docker-compose.yml publishes {sorted(missing)} on the host but the "
-        "installer never checks whether they are free — docker will fail to "
-        "bind them part-way through the install")
-    stale = checked - _published_host_ports()
-    assert not stale, (
-        f"the installer checks {sorted(stale)}, which compose no longer "
-        "publishes — a stale entry can block an install for no reason")
+    assert _published_host_ports(), "compose publishes no host ports at all?"
 
 
 def test_port_check_is_wired_into_preflight_and_is_fresh_install_only():
@@ -1308,7 +1308,10 @@ def test_port_check_is_wired_into_preflight_and_is_fresh_install_only():
 # is proven to survive on its own merits rather than by luck of the call site.
 
 def _ingest_port_helpers() -> str:
-    """The shipped STACK_INGEST_PORTS registry + check_ingest_ports + port_purpose."""
+    """The shipped port derivation + check_ingest_ports + report_busy_ingest_ports
+    + port_purpose. The tests below drive the REPORT with a port set of their
+    own, so they pin the report's behaviour under errexit without needing a
+    compose tree to derive one from."""
     with open(os.path.join(ROOT, "scripts", "install-correlix.sh"), encoding="utf-8") as fh:
         src = fh.read()
     return src[src.index('STACK_INGEST_PORTS="'):src.index("preflight() {")]
@@ -1317,30 +1320,20 @@ def _ingest_port_helpers() -> str:
 def test_busy_ingest_port_is_reported_even_with_errexit_live(tmp_path):
     import subprocess
 
-    # A host rsyslog holding 514 on both protocols: the two registry entries
-    # that carry NO mover variable, i.e. the ones that made the assignment
-    # return 1.
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    ss = fake_bin / "ss"
-    ss.write_text(
-        "#!/bin/sh\n"
-        "printf 'tcp LISTEN 0 25 0.0.0.0:514 0.0.0.0:*\\n'\n"
-        "printf 'udp UNCONN 0 0 0.0.0.0:514 0.0.0.0:*\\n'\n")
-    ss.chmod(0o755)
-
+    # A host rsyslog holding 514 on both protocols: the two entries that carry
+    # NO mover variable, i.e. the ones that made the assignment return 1.
     body = (
         "set -euo pipefail\n"
         'warn() { printf "WARN: %s\\n" "$*"; }\n'
         'die()  { printf "DIE: %s\\n" "$1"; exit 1; }\n'
         + _ingest_port_helpers()
-        + "\ncheck_ingest_ports\n"
+        + '\nSTACK_INGEST_PORTS="514/tcp 514/udp"\n'
+        + 'report_busy_ingest_ports "tcp:514\nudp:514"\n'
     )
-    env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}")
-    res = subprocess.run(["bash", "-c", body], capture_output=True, text=True, env=env)
+    res = subprocess.run(["bash", "-c", body], capture_output=True, text=True)
 
     assert res.returncode == 1, (
-        "check_ingest_ports must exit 1 through die() when a published port is "
+        "the busy-port report must exit 1 through die() when a published port is "
         f"taken; got rc={res.returncode} out={res.stdout!r}")
     assert "Another service already listens" in res.stdout, (
         "the busy-port report never reached the customer — the shell aborted "
@@ -1354,21 +1347,15 @@ def test_busy_port_with_a_mover_variable_names_it(tmp_path):
     """The other half: an entry that HAS a mover variable still prints it."""
     import subprocess
 
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    ss = fake_bin / "ss"
-    ss.write_text("#!/bin/sh\nprintf 'udp UNCONN 0 0 0.0.0.0:2055 0.0.0.0:*\\n'\n")
-    ss.chmod(0o755)
-
     body = (
         "set -euo pipefail\n"
         'warn() { printf "WARN: %s\\n" "$*"; }\n'
         'die()  { printf "DIE: %s\\n" "$1"; exit 1; }\n'
         + _ingest_port_helpers()
-        + "\ncheck_ingest_ports\n"
+        + '\nSTACK_INGEST_PORTS="2055/udp:NETFLOW_PORT"\n'
+        + 'report_busy_ingest_ports "udp:2055"\n'
     )
-    env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}")
-    res = subprocess.run(["bash", "-c", body], capture_output=True, text=True, env=env)
+    res = subprocess.run(["bash", "-c", body], capture_output=True, text=True)
 
     assert res.returncode == 1, f"rc={res.returncode} out={res.stdout!r}"
     assert "2055/udp" in res.stdout and "NETFLOW_PORT=<port>" in res.stdout, (
@@ -1379,20 +1366,14 @@ def test_free_ingest_ports_pass_cleanly(tmp_path):
     """Nothing listening: the check returns 0 and says nothing."""
     import subprocess
 
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    ss = fake_bin / "ss"
-    ss.write_text("#!/bin/sh\nexit 0\n")
-    ss.chmod(0o755)
-
     body = (
         "set -euo pipefail\n"
         'warn() { printf "WARN: %s\\n" "$*"; }\n'
         'die()  { printf "DIE: %s\\n" "$1"; exit 1; }\n'
         + _ingest_port_helpers()
-        + "\ncheck_ingest_ports\necho CLEAN\n"
+        + '\nSTACK_INGEST_PORTS="514/tcp 2055/udp:NETFLOW_PORT"\n'
+        + 'report_busy_ingest_ports ""\necho CLEAN\n'
     )
-    env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}")
-    res = subprocess.run(["bash", "-c", body], capture_output=True, text=True, env=env)
+    res = subprocess.run(["bash", "-c", body], capture_output=True, text=True)
     assert res.returncode == 0 and "CLEAN" in res.stdout, (
         f"rc={res.returncode} out={res.stdout!r} err={res.stderr!r}")
