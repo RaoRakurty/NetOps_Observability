@@ -31,6 +31,20 @@
 #     ./install-correlix.sh stop
 #     ./install-correlix.sh start
 #     ./install-correlix.sh uninstall [--purge]
+#         Removes Correlix. Host preparation (prepare-host.sh: kernel
+#         settings, Docker daemon configuration, firewall rules, the service
+#         user) is kept by design — uninstall does not undo host hardening
+#         (owner decision 2026-09-15). --purge also removes the data, the
+#         configuration (.env and every backup of it), install logs and the
+#         bundle's images.
+#     ./install-correlix.sh upgrade [--from DIR] [--backup-dir DIR] [--backup-file FILE]
+#         Run from a NEW bundle folder: verified backup of the current
+#         install, settings and data carried over, install, stability check,
+#         automatic rollback on failure. Exit 4 = failed and rolled back,
+#         5 = rollback failed too (the backup path and restore steps are shown).
+#     ./install-correlix.sh cleanup-old-images [--confirm]
+#         After a successful upgrade: list (with --confirm: remove) the
+#         previous version's images that nothing uses any more.
 #     ./install-correlix.sh reset-demo-data
 #     ./install-correlix.sh enable  <add-on>    log-search-ui | self-monitoring | sso
 #     ./install-correlix.sh disable <add-on>
@@ -38,6 +52,11 @@
 #         Collect a REDACTED diagnostic bundle (compose state, container logs,
 #         health, store/bus summaries) as one .tar.zst to send to support.
 #         Secrets are stripped; read its MANIFEST before sending.
+#     ./install-correlix.sh doctor [--json]
+#         Read-only health report: host speed, installer lock, setup wizard,
+#         every container's state and log verdict, disk against the OpenSearch
+#         watermarks, missing .env settings (names only). Changes nothing.
+#         Exit 0 healthy, 1 problems found, 2 could not assess.
 #
 # Advanced (documented in ADVANCED.md, hidden from the quickstart):
 #     --external-kafka --broker-urls host1:9092[,host2:9092]
@@ -88,7 +107,137 @@ COMPOSE_DIR="$ROOT/deployment/docker"
 ENV_FILE="$COMPOSE_DIR/.env"
 
 compose() { (cd "$COMPOSE_DIR" && docker compose "$@"); }
+# Read-only compose queries, bounded (§16.3): a wedged daemon must not hang the
+# health gate. Never used for up/down/stop, whose legitimate duration is long.
+compose_q() { (cd "$COMPOSE_DIR" && timeout 60 docker compose "$@"); }
 env_get() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | head -1; }
+utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# ---------- process exit: lock records + log flush ---------------------------
+# One EXIT handler per process (the setup console runs each command in its own
+# subshell, which gets its own). It clears the lock records this process wrote,
+# hands stdout back to the terminal so the log filter sees EOF, waits (bounded)
+# for the filter to drain, and only THEN prints anything that must reach the
+# terminal but never the log (the initial admin password, FMEA row 6).
+LOCK_FILES_HELD=""
+LOG_FILTER_PID=""
+TERMINAL_EPILOGUE=""
+on_exit() {
+  local rc=$? f pid state i
+  # Cleanup must run every step and then exit with the status the script was
+  # already leaving with — errexit inside the trap would replace that status
+  # with the first failed probe below (e.g. the filter exiting between the
+  # /proc test and the read).
+  set +e
+  for f in $LOCK_FILES_HELD; do
+    # Only a record this process wrote is cleared; a leftover record is what
+    # lets the next run say "the previous install did not finish".
+    if [ "$(sed -n 's/^pid=//p' "$f" 2>/dev/null | head -1)" = "$BASHPID" ]; then
+      : > "$f"
+    fi
+  done
+  if [ -n "$LOG_FILTER_PID" ]; then
+    exec 1>&5 2>&6
+    pid="$LOG_FILTER_PID"
+    for i in $(seq 1 100); do
+      [ -r "/proc/$pid/stat" ] || break
+      # Gone between the test and the read = exited.
+      state=$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null) || break
+      [ "$state" = "Z" ] && break
+      [ "$i" -eq 100 ] && printf 'note: the install log writer is still flushing (pid %s)\n' "$pid" >&2
+      sleep 0.1
+    done
+    # Reaps the exited filter. Its status is not ours to report: a log-write
+    # failure was already announced on the terminal by the filter itself.
+    wait "$pid" 2>/dev/null || true
+  fi
+  if [ -n "$TERMINAL_EPILOGUE" ]; then
+    printf '%s\n' "$TERMINAL_EPILOGUE"
+  fi
+  exit "$rc"
+}
+
+# ---------- single-writer lock (FMEA row 12, design §4.2) --------------------
+# Every state-changing command holds `flock -n` on deployment/docker/.install.lock
+# for its whole run: the wizard and a terminal, two wizard tabs, or a cron
+# update.sh must never interleave `.env` surgery and compose operations.
+#
+# CONTRACT with install.py (owned there): this script opens the lock on fd 9,
+# takes `flock -n 9`, and exports CORRELIX_INSTALL_LOCK_FD=9. install.py
+# re-flocks the INHERITED fd (same open file description, so it succeeds)
+# instead of opening the file again. Do not change the fd number.
+#
+# The lock itself dies with its holder (flock semantics). The pid/command/
+# start-time record written into the file is diagnostics: a refusal quotes it,
+# and a record whose pid is gone means the previous run ended without cleaning
+# up, which is said out loud before taking over.
+INSTALL_LOCK_FILE="$COMPOSE_DIR/.install.lock"
+LOCK_REFUSED_RC=3
+INSTALL_LOCK_HELD=0
+
+lock_field() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1; }
+
+# take_lock FD FILE COMMAND — returns with the lock held, or exits 3.
+take_lock() {
+  local fd="$1" file="$2" what="$3" old_umask old_pid old_cmd old_started
+  command -v flock >/dev/null 2>&1 || die "flock (util-linux) is missing — cannot guarantee a single installer run." \
+    "Install util-linux, then re-run."
+  old_umask=$(umask)
+  umask 077
+  case "$fd" in
+    # 7: the PREVIOUS install's lock, held by `upgrade` for its whole run.
+    7) exec 7<>"$file" ;;
+    8) exec 8<>"$file" ;;
+    9) exec 9<>"$file" ;;
+    *) umask "$old_umask"; die "internal error: unsupported lock descriptor $fd" ;;
+  esac
+  umask "$old_umask"
+  old_pid=$(lock_field "$file" pid)
+  old_cmd=$(lock_field "$file" command)
+  old_started=$(lock_field "$file" started_utc)
+  if ! flock -n "$fd"; then
+    local who="pid ${old_pid:-unknown}, command '${old_cmd:-unknown}', started ${old_started:-unknown}"
+    local why="It is still running."
+    if [ -n "$old_pid" ] && [ ! -d "/proc/$old_pid" ]; then
+      why="That process has exited, but a program it started still holds the lock (find it with: fuser -v '$file')."
+    fi
+    printf '\n%sERROR:%s another Correlix installer operation is in progress on this host (%s).\n' "$RED$BOLD" "$RST" "$who"
+    printf '%s\n' "$why" \
+      "Running two at once would corrupt the configuration. Wait for it to finish, then re-run:" \
+      "  ./install-correlix.sh $what" \
+      "Lock file: $file"
+    cx_result fail
+    exit "$LOCK_REFUSED_RC"
+  fi
+  if [ -n "$old_pid" ] && [ "$old_pid" != "$BASHPID" ]; then
+    if [ ! -d "/proc/$old_pid" ]; then
+      warn "stale lock record: the previous '${old_cmd:-?}' (pid $old_pid, started ${old_started:-?}) is no longer running and did not finish cleanly — taking over."
+    else
+      warn "lock record named pid $old_pid ('${old_cmd:-?}'), which no longer holds the lock — taking over."
+    fi
+  fi
+  printf 'pid=%s\ncommand=%s\nstarted_utc=%s\n' "$BASHPID" "$what" "$(utc_now)" > "$file"
+  LOCK_FILES_HELD="$LOCK_FILES_HELD $file"
+  trap on_exit EXIT
+}
+
+# The install lock. Needs deployment/docker/, which a first-run bundle does not
+# have until verify_bundle extracted it — cmd_install calls this again after.
+acquire_install_lock() {
+  [ "$INSTALL_LOCK_HELD" = 1 ] && return 0
+  [ -d "$COMPOSE_DIR" ] || return 0
+  take_lock 9 "$INSTALL_LOCK_FILE" "$1"
+  INSTALL_LOCK_HELD=1
+  export CORRELIX_INSTALL_LOCK_FD=9
+}
+
+# Bundle installs also serialise the archive join and source extraction, which
+# happen before deployment/docker/ exists. Always taken BEFORE the install lock
+# (one order, so two installers can only ever refuse, never deadlock).
+acquire_bundle_lock() {
+  [ "$MODE" = "bundle" ] || return 0
+  take_lock 8 "$BUNDLE_DIR/.install-bundle.lock" "$1"
+}
 
 # ---------- GUI progress markers (design gui-installer-2026-08.md §6, P0) ----
 # Same `@CX@ {json}` stdout line format install.py emits; activated by
@@ -125,13 +274,19 @@ PURGE=0
 LOG_SVC=""
 CONFIG_FILE=""
 PRINT_FLAGS=0
+# upgrade / cleanup-old-images options (rejected for every other subcommand).
+UPGRADE_FROM=""
+UPGRADE_BACKUP_DIR=""
+UPGRADE_BACKUP_FILE=""
+CONFIRM=0
 # support-bundle passthrough (rejected for every other subcommand).
 SB_ARGS=()
+DOCTOR_JSON=0
 if [ $# -gt 0 ]; then
   case "$1" in
-    install|status|logs|stop|start|uninstall|reset-demo-data|enable|disable|menu|console|gui|support-bundle) CMD="$1"; shift ;;
+    install|status|logs|stop|start|uninstall|reset-demo-data|enable|disable|menu|console|gui|support-bundle|upgrade|cleanup-old-images|doctor) CMD="$1"; shift ;;
     -*) : ;;  # bare options → install
-    *) die "Unknown command: $1" "Commands: install status logs stop start uninstall reset-demo-data enable disable support-bundle gui console menu" ;;
+    *) die "Unknown command: $1" "Commands: install upgrade cleanup-old-images status logs stop start uninstall reset-demo-data enable disable support-bundle doctor gui console menu" ;;
   esac
 elif [ -t 0 ] && [ -t 1 ]; then
   # No arguments in an interactive terminal → the setup console (menu
@@ -154,9 +309,19 @@ while [ $# -gt 0 ]; do
                       SB_ARGS+=("$1" "${2:?$1 needs a value}"); shift 2 ;;
     --no-logs)        [ "$CMD" = "support-bundle" ] || die "Unknown option: $1" "--no-logs is only valid for: ./install-correlix.sh support-bundle"
                       SB_ARGS+=("$1"); shift ;;
+    --json)           [ "$CMD" = "doctor" ] || die "Unknown option: $1" "--json is only valid for: ./install-correlix.sh doctor"
+                      DOCTOR_JSON=1; shift ;;
     --lab)            LAB=1; shift ;;
     --purge)          PURGE=1; shift ;;
-    -h|--help)        sed -n '3,36p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)        sed -n '5,/^# Advanced (documented/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --from)           [ "$CMD" = "upgrade" ] || die "Unknown option: $1" "--from is only valid for: ./install-correlix.sh upgrade"
+                      UPGRADE_FROM="${2:?--from needs the previous install folder}"; shift 2 ;;
+    --backup-dir)     [ "$CMD" = "upgrade" ] || die "Unknown option: $1" "--backup-dir is only valid for: ./install-correlix.sh upgrade"
+                      UPGRADE_BACKUP_DIR="${2:?--backup-dir needs a directory}"; shift 2 ;;
+    --backup-file)    [ "$CMD" = "upgrade" ] || die "Unknown option: $1" "--backup-file is only valid for: ./install-correlix.sh upgrade"
+                      UPGRADE_BACKUP_FILE="${2:?--backup-file needs a backup.sh artifact}"; shift 2 ;;
+    --confirm)        [ "$CMD" = "cleanup-old-images" ] || die "Unknown option: $1" "--confirm is only valid for: ./install-correlix.sh cleanup-old-images"
+                      CONFIRM=1; shift ;;
     *) if [ "$CMD" = "logs" ] && [ -z "$LOG_SVC" ]; then LOG_SVC="$1"; shift
        else die "Unknown option: $1" "See ./install-correlix.sh --help"; fi ;;
   esac
@@ -237,6 +402,219 @@ port_purpose() {
   esac
 }
 
+# ---------- host checks (FMEA 2026-09-15 §3.12; rows 3, 10, 15) -------------
+# Each check prints a pass (ok) or a warning (warn, the install continues), or
+# stops the install with a named remedy (die) — die ONLY for a genuine blocker.
+# A check that cannot measure says so by name and continues (§16.1).
+
+# Compose added the `!override` merge tag, which compose.tls.yml uses, in
+# 2.24.4 (Docker docs, "Merge and override" reference). An older plugin
+# rejects the TLS layout late, part-way through the install.
+COMPOSE_MIN_VERSION="2.24.4"
+# Unpacked image size per byte of .tar.zst when MANIFEST does not record it:
+# measured on the 2026-09-15 lab install (containerd image store) — 1.9 GB of
+# archives became 11.8 GB of images, 6.2x. An ESTIMATE, and printed as one.
+IMAGE_UNPACK_RATIO_X10=62
+DISK_PROJECTION_WARN_PCT=80   # keeps a shared data/ under OpenSearch's 85 % low watermark
+INODE_FAIL_PCT=5
+INODE_WARN_PCT=10
+
+# version_ge A B — true when dotted version A >= B.
+version_ge() { [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$2" ]; }
+
+# The closest directory that exists: what a not-yet-created path will live on.
+nearest_existing_dir() {
+  local p="$1"
+  while [ -n "$p" ] && [ "$p" != "/" ] && [ ! -d "$p" ]; do p=$(dirname -- "$p"); done
+  printf '%s' "${p:-/}"
+}
+
+gib() { awk -v b="$1" 'BEGIN { printf "%.1f GB", b / 1073741824 }'; }
+
+# Rootless Docker cannot publish the privileged ports the stack needs (443,
+# 514, 162); it used to surface as a bind failure mid-install (H9).
+check_rootless_docker() {
+  local out
+  if ! out=$(timeout 15 docker info --format '{{json .SecurityOptions}}' 2>&1); then
+    warn "could not read Docker's security options ($(printf '%s' "$out" | tail -1)) — rootless mode not checked."
+    return 0
+  fi
+  case "$out" in
+    *name=rootless*)
+      die "Docker is running in rootless mode." \
+        "Correlix publishes privileged ports (443, 514, 162) that rootless Docker cannot bind.
+Use the system Docker service instead (sudo ./prepare-host.sh installs and enables it),
+make sure DOCKER_HOST does not point at a rootless socket, then re-run the installer." ;;
+  esac
+  ok "docker: rootful daemon"
+}
+
+check_compose_version() {
+  local out v
+  if ! out=$(timeout 15 docker compose version --short 2>&1); then
+    warn "could not read the Docker Compose version ($(printf '%s' "$out" | tail -1)) — minimum $COMPOSE_MIN_VERSION not checked."
+    return 0
+  fi
+  v=$(printf '%s\n' "$out" | head -1 | tr -d '[:space:]')
+  v=${v#v}
+  case "$v" in
+    [0-9]*.[0-9]*) ;;
+    *) warn "could not read the Docker Compose version ('$v') — minimum $COMPOSE_MIN_VERSION not checked."
+       return 0 ;;
+  esac
+  if ! version_ge "${v%%[-+]*}" "$COMPOSE_MIN_VERSION"; then
+    die "Docker Compose $v is too old; Correlix needs $COMPOSE_MIN_VERSION or newer." \
+      "The TLS layout uses the '!override' merge tag, added in Compose $COMPOSE_MIN_VERSION.
+Upgrade the plugin (Debian/Ubuntu: sudo apt-get install --only-upgrade docker-compose-plugin),
+then re-run the installer."
+  fi
+  ok "docker compose $v"
+}
+
+# check_inode_headroom LABEL PATH — a filesystem out of inodes fails every
+# write with "no space left on device" while df -h still shows free space (H7).
+check_inode_headroom() {
+  local label="$1" path out total free pct
+  path=$(nearest_existing_dir "$2")
+  if ! out=$(timeout 15 df -Pi -- "$path" 2>&1); then
+    warn "could not read inode usage of $path ($(printf '%s' "$out" | tail -1)) — inode headroom not checked."
+    return 0
+  fi
+  read -r _ total _ free _ <<< "$(printf '%s\n' "$out" | tail -1)"
+  case "$total$free" in
+    ''|*[!0-9]*)
+      warn "unexpected inode report for $path — inode headroom not checked."
+      return 0 ;;
+  esac
+  if [ "$total" -eq 0 ]; then
+    ok "$label: no fixed inode limit ($path)"
+    return 0
+  fi
+  pct=$(( free * 100 / total ))
+  if [ "$pct" -lt "$INODE_FAIL_PCT" ]; then
+    die "Only $pct % of inodes (file slots) are free on the filesystem holding $path ($label)." \
+      "Correlix's stores create many small files. Find what uses them:
+  sudo du --inodes -x -d 3 $path | sort -n | tail
+remove what is not needed, then re-run the installer."
+  elif [ "$pct" -lt "$INODE_WARN_PCT" ]; then
+    warn "$label: only $pct % of inodes free on $path — the stores create many files; keep an eye on it."
+  else
+    ok "$label: $pct % inodes free"
+  fi
+}
+
+# check_image_disk_projection DOCKER_ROOT — the image bundle unpacks to several
+# times its compressed size in Docker's store (FMEA row 10). The unpacked size
+# is MANIFEST's `images_unpacked_bytes:` when the bundle records it, otherwise
+# the labelled estimate above. Fails only when even the compressed archives
+# cannot fit (images never unpack smaller); anything built on the estimate is
+# a warning.
+check_image_disk_projection() {
+  if [ "$MODE" != "bundle" ] || [ -z "$BUNDLE_DIR" ]; then
+    ok "disk projection: source install — images are built on this host, there is no image bundle to size"
+    return 0
+  fi
+  local droot zst=0 f sz unpacked="" label out size used avail after note=""
+  droot=$(nearest_existing_dir "$1")
+  for f in "$BUNDLE_DIR"/correlix-images-*.tar.zst "$BUNDLE_DIR"/correlix-images-*.tar.zst.part[0-9][0-9] \
+           "$BUNDLE_DIR"/correlix-addon-*.tar.zst; do
+    [ -f "$f" ] || continue
+    # A joined archive and its .partNN pieces are the same bytes: count one.
+    case "$f" in
+      *.part[0-9][0-9]) if [ -f "${f%.part[0-9][0-9]}" ]; then continue; fi ;;
+    esac
+    if ! sz=$(stat -c %s -- "$f" 2>&1); then
+      warn "could not read the size of ${f##*/} ($sz) — disk projection skipped."
+      return 0
+    fi
+    zst=$(( zst + sz ))
+  done
+  if [ -f "$BUNDLE_DIR/MANIFEST" ]; then
+    unpacked=$(sed -n 's/^images_unpacked_bytes:[[:space:]]*\([0-9][0-9]*\)[[:space:]]*$/\1/p' "$BUNDLE_DIR/MANIFEST" | head -1)
+  fi
+  if [ -n "$unpacked" ]; then
+    label="$(gib "$unpacked") unpacked (from MANIFEST)"
+  elif [ "$zst" -gt 0 ]; then
+    unpacked=$(( zst * IMAGE_UNPACK_RATIO_X10 / 10 ))
+    label="about $(gib "$unpacked") unpacked (ESTIMATE: 6.2x the $(gib "$zst") of image archives, the ratio measured on a 2026-09-15 install)"
+  else
+    warn "no image archives found next to the installer — disk projection skipped."
+    return 0
+  fi
+  if ! out=$(timeout 15 df -PB1 -- "$droot" 2>&1); then
+    warn "could not read the free space of $droot ($(printf '%s' "$out" | tail -1)) — disk projection skipped."
+    return 0
+  fi
+  read -r _ size used avail _ <<< "$(printf '%s\n' "$out" | tail -1)"
+  case "$size$used$avail" in
+    ''|*[!0-9]*)
+      warn "unexpected free-space report for $droot — disk projection skipped."
+      return 0 ;;
+  esac
+  if [ -f "$ENV_FILE" ]; then
+    note=" (Images from an earlier install may already be loaded; this counts them again.)"
+  fi
+  if [ "$zst" -gt 0 ] && [ "$avail" -lt "$zst" ]; then
+    die "The image bundle cannot fit: Docker's filesystem ($droot) has $(gib "$avail") free, and the compressed images alone are $(gib "$zst")." \
+      "Images unpack to $label. Free space there (see 'df -h $droot' and 'docker system df'), then re-run the installer."
+  fi
+  if [ "$size" -le 0 ]; then
+    warn "Docker's filesystem ($droot) reports no size — disk projection skipped."
+    return 0
+  fi
+  after=$(( (used + unpacked) * 100 / size ))
+  if [ "$unpacked" -gt "$avail" ]; then
+    warn "disk projection: the images may not fit — they need $label, and Docker's filesystem ($droot) has $(gib "$avail") free.$note"
+  elif [ "$after" -gt "$DISK_PROJECTION_WARN_PCT" ]; then
+    warn "disk projection: after loading the images Docker's filesystem ($droot) would be about $after % full ($label); OpenSearch stops placing data at 85-90 % when data/ shares it.$note"
+  else
+    ok "disk projection: images need $label; Docker's filesystem would be about $after % full"
+  fi
+}
+
+# run_host_profile [DOCKER_ROOT] — measure how fast this host is (FMEA row 3,
+# design §4.3) and save data/.host-profile.json for the installer's time
+# budgets. Bounded (the probe caps itself at 5 s per filesystem, 30 s overall)
+# and never fatal: a host that cannot be measured installs with the standard
+# budgets, and says so. A very slow host is warned about, never refused (owner
+# decision, FMEA §7 Q1). Without DOCKER_ROOT the profiler asks Docker itself.
+run_host_profile() {
+  local profiler="$ROOT/scripts/host_profile.py" out rc=0 first klass verdict saved
+  local dargs=()
+  if [ ! -f "$profiler" ]; then
+    say "host speed: measured after the bundle is unpacked"
+    return 0
+  fi
+  if [ -n "${1:-}" ]; then
+    dargs=(--docker-root "$1")
+  fi
+  out=$(timeout 30 python3 -B "$profiler" probe --data-dir "$ROOT/data" ${dargs[@]+"${dargs[@]}"} \
+          --write "$ROOT/data/.host-profile.json" 2>&1) || rc=$?
+  first=$(printf '%s\n' "$out" | head -1)
+  klass=${first%%$'\t'*}
+  verdict=${first#*$'\t'}
+  verdict=${verdict#*$'\t'}
+  case "$rc" in
+    0|3)
+      case "$klass" in
+        fast|normal) ok "host speed: $verdict" ;;
+        slow)        warn "host speed: $verdict" ;;
+        very-slow)   warn "$verdict" ;;
+        *)           warn "host speed: unexpected answer from the profiler: $first" ;;
+      esac
+      if [ "$rc" = 3 ]; then
+        # grep exits 1 when the profiler printed no reason line; the fallback
+        # text then stands in for it.
+        saved=$(printf '%s\n' "$out" | grep -m1 '^not saved:') || saved="not saved"
+        warn "host speed profile $saved — the installer uses its standard time budgets."
+      fi ;;
+    2)   warn "host speed could not be measured: $verdict The install continues with standard time budgets." ;;
+    124) warn "host speed measurement did not finish within 30 s (itself a sign of very slow storage) — the install continues with standard time budgets." ;;
+    *)   warn "host speed measurement failed (exit $rc): $(printf '%s\n' "$out" | tail -1) — the install continues with standard time budgets." ;;
+  esac
+  printf '%s\n' "$out" | sed -n 's/^note: /    note: /p'
+}
+
 preflight() {
   say "${BOLD}Checking this host...${RST}"
 
@@ -284,6 +662,11 @@ preflight() {
     "Start it (e.g. 'sudo systemctl start docker') or add your user to the docker group, then re-run."
   docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required ('docker compose' plugin)." \
     "Install the compose plugin: https://docs.docker.com/compose/install/linux/"
+  check_rootless_docker
+  check_compose_version
+  # Installing from THIS folder must not adopt another folder's stack (FMEA
+  # S7). Before the UI-port check: that port is usually held by the other stack.
+  check_existing_install
   if [ "$MODE" = "bundle" ]; then
     command -v zstd >/dev/null || die "zstd is required to unpack the image bundle." \
       "Install it (Debian/Ubuntu: sudo apt-get install zstd · RHEL: sudo dnf install zstd) and re-run."
@@ -300,8 +683,12 @@ preflight() {
     ok "memory: ${mem_gb} GB"
   fi
 
-  local free_gb
-  free_gb=$(df -BG --output=avail "$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)" 2>/dev/null | tail -1 | tr -dc '0-9')
+  local free_gb droot
+  if ! droot=$(timeout 15 docker info -f '{{.DockerRootDir}}' 2>&1) || [ "${droot#/}" = "$droot" ]; then
+    warn "could not read Docker's data root ($(printf '%s' "${droot:-no answer}" | tail -1)) — assuming /var/lib/docker."
+    droot=/var/lib/docker
+  fi
+  free_gb=$(df -BG --output=avail "$droot" 2>/dev/null | tail -1 | tr -dc '0-9')
   free_gb=${free_gb:-0}
   if [ "$free_gb" -lt 20 ]; then
     die "Only ${free_gb} GB free disk for Docker; Correlix needs at least 40 GB (100 GB recommended)."
@@ -310,6 +697,9 @@ preflight() {
   else
     ok "disk: ${free_gb} GB free"
   fi
+  check_image_disk_projection "$droot"
+  check_inode_headroom "Docker data root" "$droot"
+  check_inode_headroom "data directory" "$ROOT/data"
 
   if [ ! -f "$ENV_FILE" ] && port_in_use "$UI_PORT"; then
     die "Port $UI_PORT is already in use. Correlix's web UI needs this port." \
@@ -344,6 +734,7 @@ or apply just this setting:
 then re-run ./install-correlix.sh"
     fi
   fi
+  run_host_profile "$droot"
   ok "docker + compose ready"
 }
 
@@ -383,16 +774,93 @@ verify_release_signature() {
   fi
 }
 
+# The expected sha256 of one bundle member from SHA256SUMS, or nothing.
+sums_entry() {
+  [ -f SHA256SUMS ] || return 0
+  awk -v a="$1" -v b="./$1" '$2 == a || $2 == b || $2 == "*" a || $2 == "*" b { print $1; exit }' SHA256SUMS
+}
+
+# Join a split image archive through a .partial and an atomic rename (FMEA S9).
+# A crash, SIGKILL or full disk mid-join used to leave a truncated file under
+# the FINAL name, which every re-run then trusted — and whose checksum failure
+# told the operator to re-download a bundle that was fine. Runs in BUNDLE_DIR.
+join_image_parts() {
+  local joined="$1" partial="$1.partial" want got
+  say "Joining image archive parts..."
+  if ! cat "$joined".part* > "$partial"; then
+    rm -f "$partial"
+    die "Could not join the image archive pieces into $joined." \
+      "Check free disk space in $BUNDLE_DIR (df -h $BUNDLE_DIR), then re-run — the join starts over."
+  fi
+  want=$(sums_entry "$joined")
+  if [ -n "$want" ]; then
+    got=$(sha256sum "$partial" | awk '{print $1}')
+    if [ "$got" != "$want" ]; then
+      rm -f "$partial"
+      die "The joined image archive does not match SHA256SUMS ($joined)." \
+        "At least one of the $joined.partNN pieces is incomplete or corrupted. Re-download the pieces and try again."
+    fi
+  fi
+  mv -f "$partial" "$joined"
+}
+
+# Extract the source tree through a staging directory and an atomic rename
+# (FMEA S11). A half-extracted tree under the final name used to make every
+# re-run skip extraction and install from an incomplete tree.
+extract_source_tree() {
+  [ -n "$BUNDLE_DIR" ] || die "internal error: extract_source_tree outside a bundle"
+  local stage="$BUNDLE_DIR/NetOps_Observability.partial" out
+  local tarballs=()
+  mapfile -t tarballs < <(compgen -G "$BUNDLE_DIR/correlix-source-*.tar.gz")
+  if [ "${#tarballs[@]}" -ne 1 ]; then
+    die "Expected exactly one correlix-source-<version>.tar.gz in $BUNDLE_DIR, found ${#tarballs[@]}." \
+      "Keep only the source archive that belongs to this bundle, then re-run."
+  fi
+  if [ -e "$stage" ]; then
+    warn "removing $stage left by an interrupted extraction — it is redone, never trusted"
+    rm -rf "$stage"
+  fi
+  mkdir "$stage"
+  say "Extracting Correlix..."
+  if ! out=$(tar -xzf "${tarballs[0]}" -C "$stage" 2>&1); then
+    rm -rf "$stage"
+    die "Could not extract ${tarballs[0]##*/}: $(printf '%s' "$out" | tail -3)" \
+      "Check free disk space in $BUNDLE_DIR (df -h $BUNDLE_DIR), then re-run — extraction starts over."
+  fi
+  if [ ! -f "$stage/NetOps_Observability/deployment/docker/docker-compose.yml" ]; then
+    rm -rf "$stage"
+    die "${tarballs[0]##*/} is not a Correlix source archive (no deployment/docker/docker-compose.yml inside)." \
+      "Re-download the bundle and try again."
+  fi
+  mv "$stage/NetOps_Observability" "$ROOT"
+  rm -rf "$stage"
+}
+
 verify_bundle() {
   cd "$BUNDLE_DIR"
   # Re-join a split image archive (release assets are capped at 2 GiB/file).
-  local part0
+  local part0 joined want got
+  # `|| true`: compgen exits 1 when nothing matches, which is the normal
+  # unsplit-bundle case; an empty result is handled right below.
   part0=$(compgen -G "correlix-images-*.tar.zst.part00" | head -1 || true)
   if [ -n "$part0" ]; then
-    local joined="${part0%.part00}"
+    joined="${part0%.part00}"
+    if [ -e "$joined.partial" ]; then
+      warn "removing $joined.partial left by an interrupted join — it is rebuilt, never trusted"
+      rm -f "$joined.partial"
+    fi
     if [ ! -f "$joined" ]; then
-      say "Joining image archive parts..."
-      cat "${joined}".part* > "$joined"
+      join_image_parts "$joined"
+    else
+      want=$(sums_entry "$joined")
+      if [ -n "$want" ]; then
+        got=$(sha256sum "$joined" | awk '{print $1}')
+        if [ "$got" != "$want" ]; then
+          warn "$joined does not match SHA256SUMS (an interrupted join by an older installer?) — rebuilding it once from its pieces"
+          rm -f "$joined"
+          join_image_parts "$joined"
+        fi
+      fi
     fi
   fi
   if [ -f SHA256SUMS ]; then
@@ -411,8 +879,7 @@ verify_bundle() {
     fi
   fi
   if [ ! -d "$ROOT" ]; then
-    say "Extracting Correlix..."
-    tar -xzf correlix-source-*.tar.gz
+    extract_source_tree
   fi
 }
 
@@ -428,8 +895,10 @@ verify_admin_login() {
   # JSON-escape backslash + double-quote (generated passwords can hold both).
   payload=$(printf '{"username":"admin","password":"%s"}' \
     "$(printf '%s' "$pw" | sed 's/\\/\\\\/g; s/"/\\"/g')")
-  code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 \
-    -H 'Content-Type: application/json' -d "$payload" \
+  # The body rides stdin, not argv: an argv is readable by every local user
+  # through /proc for as long as curl runs.
+  code=$(printf '%s' "$payload" | curl -s -o /dev/null -w '%{http_code}' -m 10 \
+    -H 'Content-Type: application/json' --data-binary @- \
     "http://localhost:${UI_PORT}/api/auth/login" 2>/dev/null) || return 0
   if [ "$code" = "200" ]; then
     ok "admin credential verified (login self-test passed)"
@@ -441,28 +910,151 @@ verify_admin_login() {
   fi
 }
 
+# ---------- health + stability gate (FMEA row 5, design §4.7) ----------------
+# "Healthy" used to be two samples of State 25 s apart. A JVM restarting every
+# 20 s reads `running` in both (keycloak: RestartCount=106 on .123 while every
+# sample said running), and most services have no healthcheck at all. Success
+# now means STABLE: nothing restarted, nothing (re)started, nothing unhealthy
+# across a whole window, and every one-shot `*-init` step exited 0.
+
+# One line per container of this compose project (running or not):
+#   id|service|restart_count|started_at|status|health|exit_code
+# health is "none" for a service without a healthcheck.
+container_snapshot() {
+  local ids
+  ids=$(compose_q ps -aq 2>/dev/null) || return 1
+  [ -n "$ids" ] || return 1
+  # shellcheck disable=SC2086  # deliberate word-split of the container id list
+  timeout 60 docker inspect --format \
+    '{{.Id}}|{{index .Config.Labels "com.docker.compose.service"}}|{{.RestartCount}}|{{.State.StartedAt}}|{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{.State.ExitCode}}' \
+    $ids 2>/dev/null
+}
+
+# The window, from CORRELIX_STABILITY_WINDOW_S: default 60 s, clamped to
+# 10..900 so neither a typo nor a huge value turns the gate into nothing or into
+# a hang. Warnings go to stderr — stdout is the value.
+stability_window_s() {
+  local w="${CORRELIX_STABILITY_WINDOW_S:-60}"
+  case "$w" in
+    ''|*[!0-9]*)
+      warn "CORRELIX_STABILITY_WINDOW_S='$w' is not a whole number of seconds — using 60." >&2
+      w=60 ;;
+  esac
+  w=$((10#$w))
+  if [ "$w" -lt 10 ]; then
+    warn "CORRELIX_STABILITY_WINDOW_S=$w is too short to see a crash loop — using 10." >&2
+    w=10
+  elif [ "$w" -gt 900 ]; then
+    warn "CORRELIX_STABILITY_WINDOW_S=$w is capped at 900." >&2
+    w=900
+  fi
+  printf '%s' "$w"
+}
+
+# Hide any log line that looks like it carries a credential before it is shown.
+redact_log_lines() {
+  sed -E '/passw|secret|token|api[-_]?key|credential|bearer/I s/.*/[line hidden: it may contain a credential]/'
+}
+
+# Name one problem container and show its recent (redacted) log lines.
+report_container() { # id service reason
+  local out
+  warn "$2: $3"
+  if out=$(timeout 15 docker logs --tail 20 "$1" 2>&1 </dev/null); then
+    if [ -n "$out" ]; then
+      say "    last log lines of $2 (lines that may hold a credential are hidden):"
+      printf '%s\n' "$out" | redact_log_lines | sed 's/^/      /'
+    fi
+  else
+    say "    (could not read the logs of $2: $(printf '%s' "$out" | redact_log_lines | tail -1))"
+  fi
+}
+
+report_containers() { # "id|service|reason" lines
+  local id svc reason
+  while IFS='|' read -r id svc reason; do
+    [ -n "$id" ] || continue
+    report_container "$id" "$svc" "$reason"
+  done <<< "$1"
+}
+
+stability_gate() {
+  local w t0 t1 problems
+  w=$(stability_window_s)
+  say "All services are up — confirming they stay up for ${w}s (a crash-looping service looks healthy between restarts)..."
+  if ! t0=$(container_snapshot); then
+    warn "could not read this install's container state for the stability check (docker compose ps / docker inspect failed)."
+    return 1
+  fi
+  sleep "$w"
+  if ! t1=$(container_snapshot); then
+    warn "could not read this install's container state at the end of the stability window."
+    return 1
+  fi
+  problems=$(awk -F'|' -v w="$w" '
+    NR == FNR { rc[$1] = $3; st[$1] = $4; name[$1] = $2; next }
+    {
+      seen[$1] = 1
+      if ($2 ~ /-init$/) {
+        if ($5 != "exited") print $1 "|" $2 "|one-shot setup step is still " $5 " after the window"
+        else if ($7 != "0") print $1 "|" $2 "|one-shot setup step exited with code " $7 " (it must exit 0)"
+        next
+      }
+      if (!($1 in rc))        { print $1 "|" $2 "|container was created during the " w "s window"; next }
+      if ($3 + 0 > rc[$1] + 0) { print $1 "|" $2 "|restarted " ($3 - rc[$1]) " time(s) during the " w "s window (crash loop)"; next }
+      if ($4 != st[$1])       { print $1 "|" $2 "|restarted during the " w "s window (started " st[$1] ", then " $4 ")"; next }
+      if ($5 != "running")    { print $1 "|" $2 "|is " $5 ", not running"; next }
+      if ($6 == "unhealthy")  { print $1 "|" $2 "|is unhealthy at the end of the window"; next }
+    }
+    END { for (id in rc) if (!(id in seen)) print id "|" name[id] "|container disappeared during the window" }
+  ' <(printf '%s\n' "$t0") <(printf '%s\n' "$t1"))
+  if [ -z "$problems" ]; then
+    ok "stable: no service restarted or went unhealthy during the ${w}s window"
+    return 0
+  fi
+  warn "the stack is NOT stable, so the install is not reported as successful:"
+  report_containers "$problems"
+  return 1
+}
+
 wait_healthy() {
   say "Waiting for services to become healthy (this can take a few minutes)..."
-  local deadline=$(( $(date +%s) + 420 ))
+  local deadline=$(( $(date +%s) + 420 )) snap="" failed notready ready=0
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    local total unhealthy
-    total=$(compose ps --format '{{.Service}}' 2>/dev/null | wc -l)
-    unhealthy=$(compose ps --format '{{.Service}}|{{.State}}|{{.Health}}' 2>/dev/null \
-      | awk -F'|' '$1 ~ /-init$/ {next} $2!="running" || $3=="unhealthy" || $3=="starting" {print}' | wc -l)
-    if [ "$total" -gt 0 ] && [ "$unhealthy" -eq 0 ] \
-       && curl -fsS -m 5 -o /dev/null "http://127.0.0.1:${UI_PORT}/" 2>/dev/null; then
-      # Require STABILITY, not a lucky sample: a service can pass its first
-      # seconds and then crash-loop (seen live: the api on a perms bug).
-      # Re-verify after a pause before declaring success.
-      sleep 25
-      local bad2
-      bad2=$(compose ps --format '{{.Service}}|{{.State}}|{{.Health}}' 2>/dev/null \
-        | awk -F'|' '$1 ~ /-init$/ {next} $2!="running" || $3=="unhealthy" {print}' | wc -l)
-      [ "$bad2" -eq 0 ] && return 0
+    if snap=$(container_snapshot); then
+      # A one-shot that already failed will not improve by waiting.
+      failed=$(printf '%s\n' "$snap" | awk -F'|' '$2 ~ /-init$/ && $5 == "exited" && $7 != "0" {
+        print $1 "|" $2 "|one-shot setup step exited with code " $7 " (it must exit 0)" }')
+      if [ -n "$failed" ]; then
+        report_containers "$failed"
+        return 1
+      fi
+      notready=$(printf '%s\n' "$snap" | awk -F'|' '
+        $2 ~ /-init$/ { if ($5 != "exited") print $1 "|" $2 "|one-shot setup step is still " $5; next }
+        $5 != "running"      { print $1 "|" $2 "|is " $5 ", not running"; next }
+        $6 == "unhealthy"    { print $1 "|" $2 "|is unhealthy"; next }
+        $6 == "starting"     { print $1 "|" $2 "|is still starting" }')
+      if [ -z "$notready" ] && curl -fsS -m 5 -o /dev/null "http://127.0.0.1:${UI_PORT}/" 2>/dev/null; then
+        ready=1
+        break
+      fi
+    else
+      snap=""
     fi
     sleep 10
   done
-  return 1
+  if [ "$ready" != 1 ]; then
+    warn "services did not all become ready within 7 minutes:"
+    if [ -z "$snap" ]; then
+      warn "could not list this install's containers (docker compose ps / docker inspect failed)."
+    elif [ -n "$notready" ]; then
+      report_containers "$notready"
+    else
+      warn "every container is up, but the web UI did not answer on http://127.0.0.1:${UI_PORT}/"
+    fi
+    return 1
+  fi
+  stability_gate
 }
 
 # Is this install running the TLS/mTLS variant? .env's COMPOSE_FILE chain is
@@ -485,16 +1077,57 @@ dashboard_url() {
   else printf 'http://%s:%s' "$host" "$UI_PORT"; fi
 }
 
+ADMIN_CREDENTIAL_FILE="$ROOT/data/initial-admin-credential.txt"
+
+# Write the initial admin credential to a 0600 file, atomically. It lives under
+# data/ so it is kept with the install's data on a plain uninstall and removed
+# by --purge. Returns non-zero (with the reason on stderr) if it cannot.
+write_admin_credential() { # url user password
+  local dir tmp
+  dir=$(dirname "$ADMIN_CREDENTIAL_FILE")
+  mkdir -p "$dir" || return 1
+  tmp="$ADMIN_CREDENTIAL_FILE.tmp.$$"
+  # printf is a builtin: the password never appears in a process argv.
+  if ! ( umask 077 && printf '%s\n' \
+      "# Correlix initial administrator credential, generated for this install." \
+      "# Sign in, change the password in Settings, then delete this file." \
+      "url=$1" "username=$2" "password=$3" > "$tmp" ); then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv -f "$tmp" "$ADMIN_CREDENTIAL_FILE"
+}
+
 print_success() {
+  local url user pw
+  url=$(dashboard_url)
+  user=$(env_get ADMIN_USERNAME); user=${user:-admin}
+  pw=$(env_get ADMIN_INITIAL_PASSWORD)
   say ""
   say "${GREEN}${BOLD}────────────────────────────────────────────────${RST}"
   say "${GREEN}${BOLD}  Correlix is installed and running${RST}"
   say "${GREEN}${BOLD}────────────────────────────────────────────────${RST}"
   say ""
-  say "  Open the UI:   ${BOLD}$(dashboard_url)${RST}"
-  say "  Sign in as:    ${BOLD}$(env_get ADMIN_USERNAME || echo admin)${RST}"
-  say "  Password:      ${BOLD}$(env_get ADMIN_INITIAL_PASSWORD)${RST}"
-  say "                 ${DIM}(generated for this install — change it in Settings)${RST}"
+  say "  Open the UI:   ${BOLD}${url}${RST}"
+  say "  Sign in as:    ${BOLD}${user}${RST}"
+  # The generated password never goes through say(): stdout is the tee'd
+  # install log, the wizard's log ring and its SSE replay (FMEA row 6). It is
+  # written to a 0600 file whose PATH is printed, and — for an operator at a
+  # real terminal only — shown on that terminal after the log has closed. The
+  # wizard reads it from .env itself. The pointer line deliberately does not
+  # start with "Password:" (the wizard's banner scrape would take the next word).
+  if [ -n "$pw" ]; then
+    if write_admin_credential "$url" "$user" "$pw"; then
+      say "  Initial password saved to: ${BOLD}${ADMIN_CREDENTIAL_FILE}${RST}"
+      say "                 ${DIM}(readable only by you — change the password in Settings, then delete the file)${RST}"
+    else
+      warn "could not write $ADMIN_CREDENTIAL_FILE — the initial password is ADMIN_INITIAL_PASSWORD in $ENV_FILE"
+    fi
+    if [ "${CORRELIX_PROGRESS_JSON:-0}" != "1" ] && [ -n "$LOG_FILTER_PID" ] && [ -t 5 ]; then
+      TERMINAL_EPILOGUE=$(printf '\n  Password:      %s%s%s\n                 %s(shown on this terminal only; it is not in the log)%s' \
+        "$BOLD" "$pw" "$RST" "$DIM" "$RST")
+    fi
+  fi
   say ""
   say "  Useful commands:"
   say "    ./install-correlix.sh status     service health"
@@ -787,6 +1420,93 @@ assemble_install_args() {
   fi
 }
 
+# ---------- install transcript (FMEA row 14) ---------------------------------
+# The filter copies the byte stream to the terminal untouched — a prompt with no
+# newline still shows at once, and `@CX@` markers reach the wizard exactly as
+# emitted — and writes the log line by line, each line prefixed with the UTC
+# time it began. `@CX@ {json}` markers are the exception: they stay
+# byte-identical at line start in the log too. If the terminal goes away (a
+# dropped ssh session, a stopped wizard) the filter keeps logging instead of
+# dying and taking the install down with SIGPIPE; if the log cannot be written
+# (disk full) it says so once and keeps the terminal copy flowing.
+# Kept in single quotes, so it must contain no single quote.
+LOG_FILTER_PY='
+import os, sys, time
+MARK = b"@CX@ "
+log = os.open(sys.argv[1], os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+state = {"out": True, "log": True}
+
+def put(fd, data):
+    while data:
+        data = data[os.write(fd, data):]
+
+def emit(line, t):
+    if not state["log"]:
+        return
+    stamp = b"" if line.startswith(MARK) else time.strftime("%Y-%m-%dT%H:%M:%SZ ", time.gmtime(t)).encode()
+    try:
+        put(log, stamp + line + b"\n")
+    except OSError as e:
+        state["log"] = False
+        if state["out"]:
+            try:
+                put(1, ("\ncorrelix: writing the install log failed (%s); the install continues, output on this terminal only\n" % e).encode())
+            except OSError:
+                state["out"] = False
+
+pending, started = b"", 0.0
+while True:
+    chunk = os.read(0, 65536)
+    if not chunk:
+        break
+    if state["out"]:
+        try:
+            put(1, chunk)
+        except OSError:
+            state["out"] = False
+    now = time.time()
+    parts = chunk.split(b"\n")
+    for i, part in enumerate(parts[:-1]):
+        if i == 0 and pending:
+            emit(pending + part, started)
+        else:
+            emit(part, now)
+    if len(parts) > 1:
+        pending, started = parts[-1], now
+    else:
+        if not pending:
+            started = now
+        pending += parts[-1]
+if pending:
+    emit(pending, started)
+'
+
+# Full transcript of the installation — tail-able live from another terminal,
+# and the first thing support asks for when something fails. Private (0600):
+# it names hosts, paths and service accounts even though no secret is written.
+start_install_log() {
+  INSTALL_LOG="$HERE/correlix-install-$(date +%Y%m%d-%H%M%S).log"
+  if ! ( umask 077 && : >> "$INSTALL_LOG" ); then
+    die "Cannot create the install log $INSTALL_LOG." \
+      "Make $HERE writable by $(id -un), then re-run."
+  fi
+  chmod 600 "$INSTALL_LOG"
+  say "${BOLD}Correlix installer${RST}"
+  say "Full log: $INSTALL_LOG"
+  say "${DIM}(watch live from another terminal:  tail -f $INSTALL_LOG)${RST}"
+  # fds 5/6 keep the real terminal: on_exit restores it, and the password
+  # epilogue is written there so it never passes through the log.
+  exec 5>&1 6>&2
+  if command -v python3 >/dev/null 2>&1; then
+    exec > >(exec python3 -c "$LOG_FILTER_PY" "$INSTALL_LOG" 5>&- 6>&-) 2>&1
+  else
+    warn "python3 is missing, so this log has no per-line timestamps (the host check below stops the install)."
+    exec > >(exec tee -a "$INSTALL_LOG" 5>&- 6>&-) 2>&1
+  fi
+  LOG_FILTER_PID=$!
+  trap on_exit EXIT
+}
+
 # ---------- commands ----------------------------------------------------
 cmd_install() {
   if [ -n "$CONFIG_FILE" ]; then
@@ -800,13 +1520,13 @@ cmd_install() {
     printf '%s\n' "${INSTALL_ARGS[@]}"
     return 0
   fi
-  # Full transcript of the installation — tail-able live from another
-  # terminal, and the first thing support asks for when something fails.
-  INSTALL_LOG="$HERE/correlix-install-$(date +%Y%m%d-%H%M%S).log"
-  say "${BOLD}Correlix installer${RST}"
-  say "Full log: $INSTALL_LOG"
-  say "${DIM}(watch live from another terminal:  tail -f $INSTALL_LOG)${RST}"
-  exec > >(tee -a "$INSTALL_LOG") 2>&1
+  start_install_log
+  local root_was_unpacked=0
+  if [ -d "$ROOT" ]; then root_was_unpacked=1; fi
+  # Single writer from here on (FMEA row 12). A refusal exits 3 naming the
+  # holder, before anything on the host is touched.
+  acquire_bundle_lock install
+  acquire_install_lock install
   # The subshell exists for the fail marker: die() inside preflight exits it,
   # and we translate that into a stage-fail + result before stopping. The
   # human output and the exit code are unchanged from the direct call.
@@ -817,14 +1537,28 @@ cmd_install() {
     exit 1
   fi
   cx_stage preflight "checking this host" ok
-  [ "$MODE" = "bundle" ] && verify_bundle
+  if [ "$MODE" = "bundle" ]; then
+    verify_bundle
+    # A first-run bundle only now has deployment/docker/ to lock.
+    acquire_install_lock install
+    # preflight ran before the source tree existed, so the host profiler that
+    # ships inside it could not run yet: measure now, before any budget is spent.
+    if [ "$root_was_unpacked" = 0 ]; then
+      run_host_profile ""
+    fi
+  fi
 
   # Assemble install.py arguments. Defaults are the appliance path: embedded
   # Apache Kafka + embedded Valkey + everything else, zero questions asked.
   assemble_install_args
 
   say ""
-  if ! python3 "$ROOT/scripts/install.py" "${INSTALL_ARGS[@]}"; then
+  # -u + PYTHONUNBUFFERED: through the log pipe a buffered python writes its
+  # stdout in 4 KiB blocks, so the log's lines came out of order and a killed
+  # run lost its last lines (FMEA row 14). fds 5/6 are the terminal copies the
+  # log filter bypasses; install.py must not inherit them. fd 9 (the lock) is
+  # inherited on purpose — see the lock contract above.
+  if ! PYTHONUNBUFFERED=1 python3 -u "$ROOT/scripts/install.py" "${INSTALL_ARGS[@]}" 5>&- 6>&-; then
     print_failure
     cx_result fail
     exit 1
@@ -832,11 +1566,11 @@ cmd_install() {
   cx_stage verify-health "waiting for services to become healthy" start
   if wait_healthy; then
     cx_stage verify-health "waiting for services to become healthy" ok
-    # Reclaim superseded image layers from any previous version this host ran —
-    # upgrades load new tags and the old layers otherwise sit on the appliance
-    # disk forever. Dangling-only: everything the running stack references is
-    # untouchable by definition.
-    docker image prune -f >/dev/null 2>&1 || true
+    # No image pruning here (owner rule, FMEA S13): deleting unreferenced
+    # image objects on a live host already removed images under running
+    # containers once (2026-09-06). A previous version's images are removed
+    # only by the explicit, named `cleanup-old-images --confirm` after an
+    # upgrade.
     cx_stage verify-login "verifying the admin credential" start
     verify_admin_login
     # verify_admin_login is advisory by design (it warns, never blocks), so
@@ -846,7 +1580,7 @@ cmd_install() {
     cx_result ok "$(dashboard_url)" "$(env_get ADMIN_USERNAME || echo admin)"
   else
     cx_stage verify-health "waiting for services to become healthy" fail \
-      "services did not become healthy within the wait window"
+      "services did not become healthy and stable (see the named services above)"
     print_failure
     cx_result fail
     exit 1
@@ -960,7 +1694,79 @@ remove_project_volumes() {
   return 0
 }
 
+# The install transcripts next to this script, the setup wizard's own install
+# transcripts / job-state file / lock (it writes them into the bundle dir, which
+# is this script's dir), and the initial-credential file. Transcripts written
+# before FMEA row 6 carry the admin password in clear, so a purge has to remove
+# them too (X3). A file that cannot be removed is named with the command that
+# removes it, and the purge stops before dropping .env, so a re-run finishes.
+#
+# The wizard's lock and job file are left in place, and named, while a running
+# wizard still holds that lock: unlinking a held lock file lets the next opener
+# lock a NEW inode while the wizard believes it is the only one.
+purge_install_logs() {
+  local f n=0 failed="" kept=""
+  local wiz_lock="$HERE/correlix-setup-install.lock" wiz_job="$HERE/correlix-setup-install.job.json"
+  local wizard_running=0
+  if [ -e "$wiz_lock" ] && ! flock -n "$wiz_lock" true; then
+    wizard_running=1
+  fi
+  for f in "$HERE"/correlix-install-*.log "$HERE"/correlix-setup-install-*.log \
+           "$wiz_job" "$wiz_lock" "$ADMIN_CREDENTIAL_FILE"; do
+    [ -e "$f" ] || continue
+    if [ "$wizard_running" = 1 ] && { [ "$f" = "$wiz_lock" ] || [ "$f" = "$wiz_job" ]; }; then
+      kept="$kept '$f'"
+      continue
+    fi
+    if rm -f -- "$f" && [ ! -e "$f" ]; then
+      n=$((n + 1))
+      say "  removed ${f##*/}"
+    else
+      failed="$failed '$f'"
+    fi
+  done
+  if [ "$n" -gt 0 ]; then ok "$n install log / credential file(s) removed"; fi
+  if [ -n "$kept" ]; then
+    warn "the setup wizard is still running (it holds its lock), so these were left in place:$kept"
+    warn "stop the wizard, then remove them with: rm -f$kept"
+  fi
+  if [ -n "$failed" ]; then
+    die "could not remove:$failed" \
+"They may contain the initial admin password. Remove them by hand, then re-run the purge:
+  rm -f$failed"
+  fi
+  return 0
+}
+
+# The .env siblings that hold the same secrets as .env: install.py's last
+# complete snapshot and the damaged copy it sets aside, the secret-rotation and
+# resource-plan backups, and the .env a failed or completed upgrade set aside.
+# A purge that removed .env but left these would leave every credential on
+# disk. One that cannot be removed is named, and the purge stops before
+# dropping .env, so a re-run finishes.
+purge_env_siblings() {
+  local f n=0 failed=""
+  for f in "$ENV_FILE.snapshot" "$ENV_FILE.damaged" "$ENV_FILE.rotate.bak" "$ENV_FILE.plan.bak" \
+           "$ENV_FILE".upgrade-failed-* "$ENV_FILE".upgraded-*; do
+    [ -e "$f" ] || continue
+    if rm -f -- "$f" && [ ! -e "$f" ]; then
+      n=$((n + 1))
+      say "  removed ${f##*/}"
+    else
+      failed="$failed '$f'"
+    fi
+  done
+  if [ "$n" -gt 0 ]; then ok "$n configuration backup(s) holding secrets removed"; fi
+  if [ -n "$failed" ]; then
+    die "could not remove:$failed" \
+"They hold this install's secrets. Remove them by hand, then re-run the purge:
+  rm -f$failed"
+  fi
+  return 0
+}
+
 cmd_uninstall() {
+  acquire_install_lock uninstall
   [ -f "$ENV_FILE" ] || die "Nothing to uninstall — no Correlix install found here."
   # Read the volume list while the containers still exist (see above). Only a
   # purge removes them; a plain uninstall keeps them with the rest of the data.
@@ -990,6 +1796,8 @@ cmd_uninstall() {
         docker rmi "$img" >/dev/null 2>&1 || true
       done
     fi
+    purge_install_logs
+    purge_env_siblings
     rm -f "$ENV_FILE"
     ok "data, volumes and configuration removed (images unreferenced elsewhere were deleted)"
   else
@@ -1001,6 +1809,7 @@ cmd_uninstall() {
 }
 
 cmd_reset_demo() {
+  acquire_install_lock reset-demo-data
   [ -f "$ENV_FILE" ] || die "Correlix is not installed here yet." "Run: ./install-correlix.sh"
   UI_PORT=$(env_get BASE_PORT); UI_PORT=${UI_PORT:-8000}
   say "Resetting to a clean evaluation state (credentials are kept)..."
@@ -1010,7 +1819,7 @@ cmd_reset_demo() {
   docker run --rm -v "$ROOT/data:/data" alpine sh -c 'find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} +'
   local rargs=(--port "$(env_get BASE_PORT || echo 8000)")
   [ "$MODE" = "bundle" ] && rargs+=(--offline)   # images are already loaded; never build/pull
-  python3 "$ROOT/scripts/install.py" "${rargs[@]}"
+  PYTHONUNBUFFERED=1 python3 -u "$ROOT/scripts/install.py" "${rargs[@]}"
   if wait_healthy; then
     ok "Correlix reset — same URL and credentials as before."
   else
@@ -1050,6 +1859,7 @@ set_env_var() { # KEY VALUE — replace or append in .env
 }
 
 cmd_enable() {
+  acquire_install_lock enable
   [ -f "$ENV_FILE" ] || die "Correlix is not installed here yet." "Run: ./install-correlix.sh"
   local spec; spec=$(addon_spec "$ADDON_ARG")
   [ -n "$spec" ] || die "Unknown add-on: '${ADDON_ARG:-}'" "$ADDON_HELP"
@@ -1079,7 +1889,7 @@ Copy that file next to this script and run the same command again."
   # Idempotent (SELECT-then-CREATE), and it needs postgres already running.
   if [ "$ADDON_ARG" = "sso" ]; then
     say "Preparing the Keycloak database..."
-    python3 "$ROOT/scripts/install.py" --bootstrap-sso \
+    PYTHONUNBUFFERED=1 python3 -u "$ROOT/scripts/install.py" --bootstrap-sso \
       || die "Could not create Keycloak's database." \
            "Keycloak will crash-loop until it exists. Create it by hand with:
   cd $ROOT/deployment/docker && docker compose exec postgres createdb -U \$DB_USER keycloak
@@ -1093,6 +1903,7 @@ then run: ./install-correlix.sh enable sso"
 }
 
 cmd_disable() {
+  acquire_install_lock disable
   [ -f "$ENV_FILE" ] || die "Correlix is not installed here yet."
   local spec; spec=$(addon_spec "$ADDON_ARG")
   [ -n "$spec" ] || die "Unknown add-on: '${ADDON_ARG:-}'" "$ADDON_HELP"
@@ -1142,6 +1953,749 @@ cmd_support_bundle() {
        exit 2 ;;
     *) die "Could not produce a support bundle (support-bundle.sh exited $rc)." \
            "Run it directly for the full output: $sb" ;;
+  esac
+}
+
+# ---------- existing install · upgrade · rollback · old images ------------
+# FMEA 2026-09-15 row 7: S7 (an install from a new folder adopts another
+# folder's stack), U1 (no upgrade path, no pre-upgrade backup), S13 (a blanket
+# image prune after every install).
+#
+# The compose project name is pinned (`name: netops`, docker-compose.yml), so
+# EVERY Correlix folder on a host drives the same containers. Which folder owns
+# them is recorded by compose itself, in each container's
+# com.docker.compose.project.working_dir label — that label, not a file of
+# ours, is the source of truth for "is Correlix installed, and where".
+COMPOSE_PROJECT="netops"
+UPGRADE_IN_PROGRESS=0
+UPGRADE_STATE_FILE="$COMPOSE_DIR/.correlix-upgrade.state"
+UPGRADE_COMPOSE_TIMEOUT_S=1800
+UPGRADE_SPACE_MARGIN_KB=1048576
+UPGRADE_STAMP=""
+UPGRADE_FAIL_CAUSE=""
+UPGRADE_BACKUP_PATH=""
+UPGRADE_BACKUP_ARTIFACT=""
+UPGRADE_HAS_DATA=0
+UPGRADE_PREV_VERSION=""
+UPGRADE_NEW_VERSION=""
+PREV_COMPOSE_DIR="" PREV_ROOT="" PREV_ENV="" PREV_BUNDLE_DIR=""
+DATA_MOVED=0
+ENV_CARRIED=0
+TAG_PROBLEMS=""
+
+# canon_dir DIR — the physical path (symlinks resolved), or DIR itself when it
+# does not exist (a deleted bundle folder still labels its containers).
+canon_dir() { (cd -P -- "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"; }
+
+# The working directories of every container of the project, one per line.
+# On failure: non-zero, with docker's own message on stdout for the caller.
+project_working_dirs() {
+  local out
+  if ! out=$(timeout 60 docker ps -a --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" \
+      --format '{{.Label "com.docker.compose.project.working_dir"}}' 2>&1); then
+    printf '%s' "$out"
+    return 1
+  fi
+  printf '%s\n' "$out" | sed '/^$/d' | sort -u
+}
+
+# Ids of the project's RUNNING containers (empty = none). Non-zero if docker
+# cannot answer.
+project_running_ids() {
+  timeout 60 docker ps -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT"
+}
+
+# The installer a human runs for a compose dir: the bundle root's when the
+# compose dir sits in an extracted bundle, else the source tree's.
+installer_for_compose_dir() {
+  local root
+  root=$(dirname "$(dirname "$1")")
+  if [ -f "$(dirname "$root")/install-correlix.sh" ]; then
+    printf '%s' "$(dirname "$root")/install-correlix.sh"
+  else
+    printf '%s' "$root/scripts/install-correlix.sh"
+  fi
+}
+
+# Preflight gate (FMEA S7): refuse when a container of the project belongs to a
+# DIFFERENT folder. The same folder is a normal idempotent re-run. `upgrade`
+# skips it — another folder's stack is exactly what it expects to find.
+check_existing_install() {
+  if [ "$UPGRADE_IN_PROGRESS" = 1 ]; then return 0; fi
+  local dirs d here others="" first=""
+  if ! dirs=$(project_working_dirs); then
+    die "Could not check this host for an existing Correlix install (docker ps failed: $(printf '%s' "$dirs" | tail -1))." \
+      "Without that check an install could take over another folder's containers. Fix Docker access, then re-run."
+  fi
+  here=$(canon_dir "$COMPOSE_DIR")
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    [ "$(canon_dir "$d")" != "$here" ] || continue
+    others="$others
+  $d"
+    [ -n "$first" ] || first="$d"
+  done <<< "$dirs"
+  [ -n "$others" ] || return 0
+  die "Correlix is already installed on this host from another folder:$others" \
+"This folder: $COMPOSE_DIR
+Both folders drive the same Docker Compose project ('$COMPOSE_PROJECT'), so installing
+from here would take over those containers while that install's data and settings
+stay in the other folder. Choose one:
+  * upgrade that install to this bundle (verified backup first, automatic rollback on failure):
+      $HERE/install-correlix.sh upgrade --from '$first'
+  * or remove the old install first (its data is kept unless you add --purge):
+      '$(installer_for_compose_dir "$first")' uninstall
+If that folder no longer exists, stop its containers with:
+  docker compose -p $COMPOSE_PROJECT down"
+}
+
+# ---- upgrade state: key=value lines, 0600, rewritten atomically ----
+state_get() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1; }  # FILE KEY
+
+state_set() { # KEY VALUE
+  local tmp="$UPGRADE_STATE_FILE.tmp.$$"
+  if ! ( umask 077
+         { if [ -f "$UPGRADE_STATE_FILE" ]; then grep -v "^$1=" "$UPGRADE_STATE_FILE" || [ "$?" -eq 1 ]; fi
+           printf '%s=%s\n' "$1" "$2"; } > "$tmp" ) \
+     || ! mv -f -- "$tmp" "$UPGRADE_STATE_FILE"; then
+    rm -f -- "$tmp"
+    warn "could not record the upgrade state ($1=$2) in $UPGRADE_STATE_FILE"
+    return 1
+  fi
+}
+
+# After the upgrade has started changing things, the state file is a
+# diagnostic record: a failed write is already named by state_set's warning
+# and must never abort a rollback half-way.
+state_note() { state_set "$1" "$2" || warn "(continuing — the state file is a diagnostic record)"; }
+
+prev_env_get() { sed -n "s/^$1=//p" "$PREV_ENV" 2>/dev/null | head -1; }
+
+manifest_version() {
+  if [ -f "$1" ]; then sed -n 's/^version:[[:space:]]*//p' "$1" | head -1; fi
+}
+
+# Image refs a MANIFEST names (base + add-on packs), by TAG: docker load
+# restores tags, never the pull-time digest.
+manifest_image_refs() {
+  sed -n 's/^  - //p' "$1" | sed 's/@sha256:[0-9a-f]*$//' | sed '/^$/d' | sort -u
+}
+
+# The part of a bundle version that orders releases: a tag (v0.9.0-rc1) as is,
+# a dated build (2026.09.15-ge8ebc980) without its commit.
+version_key() { printf '%s' "${1%%-g[0-9a-f]*}"; }
+
+# Sets PREV_COMPOSE_DIR / PREV_ROOT / PREV_ENV / PREV_BUNDLE_DIR, or refuses.
+upgrade_resolve_previous() {
+  local cand="" dirs d here n=0 c
+  here=$(canon_dir "$COMPOSE_DIR")
+  if [ -n "$UPGRADE_FROM" ]; then
+    d=$(canon_dir "$UPGRADE_FROM")
+    for c in "$d/deployment/docker" "$d/NetOps_Observability/deployment/docker" "$d"; do
+      if [ -f "$c/docker-compose.yml" ]; then cand="$c"; break; fi
+    done
+    [ -n "$cand" ] || die "--from '$UPGRADE_FROM' is not a Correlix install folder (no deployment/docker/docker-compose.yml under it)." \
+      "Point --from at the previous bundle folder, or leave it out to find the install automatically."
+  else
+    if ! dirs=$(project_working_dirs); then
+      die "Could not look for the existing Correlix install (docker ps failed: $(printf '%s' "$dirs" | tail -1))." \
+        "Fix Docker access, or name the previous folder with --from DIR."
+    fi
+    while IFS= read -r d; do
+      [ -n "$d" ] || continue
+      [ "$(canon_dir "$d")" != "$here" ] || continue
+      n=$((n + 1))
+      cand=$(canon_dir "$d")
+    done <<< "$dirs"
+    if [ "$n" -eq 0 ]; then
+      die "No existing Correlix install was found on this host to upgrade." \
+"For a first install run:  $HERE/install-correlix.sh install
+If the previous install's containers were removed, name its folder:
+  $HERE/install-correlix.sh upgrade --from <previous bundle folder>"
+    fi
+    if [ "$n" -gt 1 ]; then
+      die "More than one other folder owns Correlix containers on this host:
+$dirs" "Name the install to upgrade:  $HERE/install-correlix.sh upgrade --from <folder>"
+    fi
+  fi
+  PREV_COMPOSE_DIR=$(canon_dir "$cand")
+  [ "$PREV_COMPOSE_DIR" != "$here" ] || die "That is this bundle's own install — there is nothing to upgrade from." \
+    "To repair or re-run it:  $HERE/install-correlix.sh install"
+  PREV_ROOT=$(dirname "$(dirname "$PREV_COMPOSE_DIR")")
+  PREV_ENV="$PREV_COMPOSE_DIR/.env"
+  PREV_BUNDLE_DIR=$(dirname "$PREV_ROOT")
+  [ -f "$PREV_BUNDLE_DIR/MANIFEST" ] || PREV_BUNDLE_DIR=""
+  [ -f "$PREV_ENV" ] || die "The install in $PREV_COMPOSE_DIR has no .env, so there are no settings to carry forward." \
+    "If it was uninstalled, run a fresh install from this folder instead:  $HERE/install-correlix.sh install"
+  [ -w "$PREV_COMPOSE_DIR" ] || die "$PREV_COMPOSE_DIR is not writable by $(id -un)." \
+    "Run the upgrade as the user that installed Correlix."
+  say "Current install: $PREV_COMPOSE_DIR"
+}
+
+# An earlier upgrade from this folder that stopped half-way is never repeated
+# blindly: data/ may already have moved.
+upgrade_refuse_if_interrupted() {
+  [ -f "$UPGRADE_STATE_FILE" ] || return 0
+  local st bk
+  st=$(state_get "$UPGRADE_STATE_FILE" status)
+  bk=$(state_get "$UPGRADE_STATE_FILE" backup_dir)
+  case "$st" in
+    applying|rolling-back|rollback-failed)
+      die "An earlier upgrade from this folder did not finish (status: $st)." \
+"Previous install: $(state_get "$UPGRADE_STATE_FILE" previous_compose_dir)
+Backup taken before it: ${bk:-unknown}
+Repeating it blindly could move data twice. Bring the previous install back with the
+steps in ${bk:-the backup folder}/RESTORE.txt, then remove $UPGRADE_STATE_FILE and re-run." ;;
+  esac
+}
+
+# This bundle folder must be clean: an upgrade carries settings and data INTO
+# it and never merges with, or overwrites, what is already there.
+upgrade_check_new_folder() {
+  local src="$PREV_ROOT/data" dst="$ROOT/data" d
+  [ ! -e "$ENV_FILE" ] || die "This bundle folder already has its own configuration: $ENV_FILE" \
+    "An upgrade carries the current install's settings into a freshly extracted bundle folder. Use one."
+  if [ -e "$dst" ] && { [ ! -d "$dst" ] || [ -n "$(ls -A -- "$dst" 2>/dev/null)" ]; }; then
+    die "This bundle folder already has a data directory: $dst" \
+      "An upgrade moves the current install's data here; it never merges or overwrites. Use a freshly extracted bundle folder."
+  fi
+  UPGRADE_HAS_DATA=0
+  [ -d "$src" ] || return 0
+  UPGRADE_HAS_DATA=1
+  if [ "$(stat -c %d -- "$src")" != "$(stat -c %d -- "$ROOT")" ]; then
+    die "The current install's data ($src) is on a different filesystem than this bundle ($ROOT)." \
+      "The upgrade moves data/ with a rename, which is instant and cannot half-finish; across filesystems it would be a long copy. Extract the new bundle on the same disk as the current one, then re-run."
+  fi
+  for d in "$PREV_ROOT" "$ROOT" "$src"; do
+    [ -w "$d" ] || die "Cannot move data/: $d is not writable by $(id -un)." \
+      "Run the upgrade as the user that installed Correlix."
+  done
+}
+
+upgrade_check_versions() {
+  local pk nk
+  UPGRADE_PREV_VERSION=""
+  if [ -n "$PREV_BUNDLE_DIR" ]; then UPGRADE_PREV_VERSION=$(manifest_version "$PREV_BUNDLE_DIR/MANIFEST"); fi
+  UPGRADE_NEW_VERSION=$(manifest_version "$BUNDLE_DIR/MANIFEST")
+  say "Upgrading Correlix ${UPGRADE_PREV_VERSION:-<unknown version>} -> ${UPGRADE_NEW_VERSION:-<unknown version>}"
+  if [ -z "$UPGRADE_PREV_VERSION" ] || [ -z "$UPGRADE_NEW_VERSION" ]; then
+    warn "a version is unknown (no MANIFEST) — the downgrade check is skipped."
+    return 0
+  fi
+  if [ "$UPGRADE_PREV_VERSION" = "$UPGRADE_NEW_VERSION" ]; then
+    die "This bundle is the version already installed ($UPGRADE_NEW_VERSION)." \
+      "Nothing to upgrade. To repair that install, re-run it in its own folder:  '$(installer_for_compose_dir "$PREV_COMPOSE_DIR")' install"
+  fi
+  pk=$(version_key "$UPGRADE_PREV_VERSION")
+  nk=$(version_key "$UPGRADE_NEW_VERSION")
+  # Only versions of one scheme are ordered (both tags, or both dated builds).
+  if [ "$pk" != "$nk" ] && [ "${pk%%[0-9]*}" = "${nk%%[0-9]*}" ] \
+     && [ "$(printf '%s\n%s\n' "$pk" "$nk" | sort -V | head -1)" = "$nk" ] \
+     && [ "${CORRELIX_ALLOW_DOWNGRADE:-0}" != 1 ]; then
+    die "This bundle ($UPGRADE_NEW_VERSION) is OLDER than the installed version ($UPGRADE_PREV_VERSION) — refusing to downgrade." \
+      "A downgrade can meet data a newer version already migrated. Restore a backup taken on $UPGRADE_NEW_VERSION instead, or set CORRELIX_ALLOW_DOWNGRADE=1 only if support asked you to."
+  fi
+}
+
+fs_free_kb() { df -Pk -- "$1" 2>/dev/null | awk 'NR == 2 {print $4}'; }
+
+# Size of a data tree in KiB. Store directories belong to the containers'
+# uids, so when this user cannot read all of it the tree is measured from
+# inside a local image that is root in a READ-ONLY mount.
+data_size_kb() {
+  local out img
+  if out=$(du -sk -- "$1" 2>/dev/null); then
+    printf '%s' "${out%%[[:space:]]*}"
+    return 0
+  fi
+  if img=$(purge_helper_image) \
+     && out=$(timeout 600 docker run --rm --entrypoint sh -v "$1:/data:ro" "$img" -c 'du -sk /data' 2>&1); then
+    printf '%s' "${out%%[[:space:]]*}"
+    return 0
+  fi
+  return 1
+}
+
+# Free-space gate BEFORE the backup (§16.4: a real gate, not a skip).
+upgrade_space_gate() { # BACKUP_BASE
+  local base="$1" need_kb data_kb=0 free_kb tmp_dir tmp_free
+  if [ -n "$UPGRADE_BACKUP_FILE" ]; then
+    need_kb=65536  # the settings copy only
+  else
+    if [ "$UPGRADE_HAS_DATA" = 1 ]; then
+      data_kb=$(data_size_kb "$PREV_ROOT/data") || die "Could not measure $PREV_ROOT/data to check there is room for the backup." \
+"Nothing was changed. Take the backup yourself, then pass it in:
+  sudo '$PREV_ROOT/scripts/backup.sh' /roomy/disk/correlix-pre-upgrade.tar.zst
+  $HERE/install-correlix.sh upgrade --backup-file /roomy/disk/correlix-pre-upgrade.tar.zst"
+      case "$data_kb" in ''|*[!0-9]*) die "Could not measure $PREV_ROOT/data (du said: $data_kb)." ;; esac
+    fi
+    need_kb=$((data_kb + UPGRADE_SPACE_MARGIN_KB))
+  fi
+  free_kb=$(fs_free_kb "$base")
+  case "$free_kb" in ''|*[!0-9]*) die "Could not read the free space of $base (df failed)." ;; esac
+  if [ -z "$UPGRADE_BACKUP_FILE" ]; then
+    tmp_dir="${TMPDIR:-/tmp}"
+    if [ "$(stat -c %d -- "$tmp_dir")" = "$(stat -c %d -- "$base")" ]; then
+      need_kb=$((need_kb * 2))  # backup.sh stages a copy, then writes the artifact, on one filesystem
+    else
+      tmp_free=$(fs_free_kb "$tmp_dir")
+      case "$tmp_free" in ''|*[!0-9]*) die "Could not read the free space of $tmp_dir (df failed)." ;; esac
+      [ "$tmp_free" -ge "$need_kb" ] || die "Not enough free space in $tmp_dir for the backup's staging copy: $((tmp_free / 1024)) MB free, about $((need_kb / 1024)) MB needed." \
+        "Nothing was changed. backup.sh stages the data there before compressing it. Free space, or set TMPDIR to a roomier filesystem, then re-run."
+    fi
+  fi
+  [ "$free_kb" -ge "$need_kb" ] || die "Not enough free space for the pre-upgrade backup in $base: $((free_kb / 1024)) MB free, about $((need_kb / 1024)) MB needed." \
+    "Nothing was changed. Free space there, or put the backup elsewhere with --backup-dir DIR (or pass an existing backup with --backup-file FILE)."
+  ok "disk: room for the pre-upgrade backup in $base"
+}
+
+# A VERIFIED backup before anything is touched: the settings (.env, compose
+# files, MANIFEST — never .env.snapshot / .env.damaged) checksummed and
+# re-read, and the stores through the install's own backup.sh plus its
+# --verify. Refuses, having changed nothing, when either cannot be proven.
+upgrade_backup() {
+  local base bk f rc out bscript="$PREV_ROOT/scripts/backup.sh"
+  base="${UPGRADE_BACKUP_DIR:-$(dirname "$BUNDLE_DIR")}"
+  mkdir -p -- "$base" || die "Cannot create the backup folder $base."
+  base=$(canon_dir "$base")
+  upgrade_space_gate "$base"
+  bk="$base/correlix-upgrade-backup-$UPGRADE_STAMP"
+  [ ! -e "$bk" ] || die "The backup folder $bk already exists." "Re-run in a moment (the name carries the time)."
+  ( umask 077 && mkdir -p -- "$bk/config" ) || die "Cannot create the backup folder $bk."
+  chmod 700 "$bk" "$bk/config"
+  say "${BOLD}Backing up the current install before changing anything${RST} -> $bk"
+  cp -p -- "$PREV_ENV" "$bk/config/.env" || die "Could not copy $PREV_ENV into the backup." "Nothing was changed."
+  for f in "$PREV_COMPOSE_DIR"/*.yml "$PREV_COMPOSE_DIR"/*.yaml; do
+    [ -f "$f" ] || continue
+    cp -p -- "$f" "$bk/config/" || die "Could not copy ${f##*/} into the backup." "Nothing was changed."
+  done
+  if [ -n "$PREV_BUNDLE_DIR" ]; then
+    cp -p -- "$PREV_BUNDLE_DIR/MANIFEST" "$bk/config/MANIFEST" || die "Could not copy the previous MANIFEST into the backup." "Nothing was changed."
+  fi
+  out=""
+  if ! ( cd "$bk/config" && find . -maxdepth 1 -type f -printf '%P\0' | sort -z \
+           | xargs -0 sha256sum -- > "$bk/config.sha256" ) \
+     || ! out=$(cd "$bk/config" && sha256sum -c --quiet "$bk/config.sha256" 2>&1) \
+     || ! cmp -s -- "$PREV_ENV" "$bk/config/.env"; then
+    die "The settings backup could not be verified ($bk/config)${out:+: $out}." "Nothing was changed."
+  fi
+  ok "settings backed up and verified ($bk/config)"
+  [ -f "$bscript" ] || die "The current install has no scripts/backup.sh, so its stores cannot be backed up and verified." \
+    "Nothing was changed. An upgrade never starts without a verified backup."
+  if [ -n "$UPGRADE_BACKUP_FILE" ]; then
+    [ -f "$UPGRADE_BACKUP_FILE" ] || die "--backup-file $UPGRADE_BACKUP_FILE does not exist." "Nothing was changed."
+    UPGRADE_BACKUP_ARTIFACT=$(canon_dir "$(dirname "$UPGRADE_BACKUP_FILE")")/$(basename "$UPGRADE_BACKUP_FILE")
+    say "Using the store backup you supplied: $UPGRADE_BACKUP_ARTIFACT"
+  else
+    UPGRADE_BACKUP_ARTIFACT="$bk/correlix-pre-upgrade.tar.zst"
+    say "Backing up the stores with $bscript (the stack keeps running meanwhile)..."
+    rc=0
+    timeout "${CORRELIX_UPGRADE_BACKUP_TIMEOUT_S:-14400}" bash "$bscript" "$UPGRADE_BACKUP_ARTIFACT" 5>&- 6>&- || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      die "The pre-upgrade backup failed (backup.sh exit $rc), so the upgrade was not started." \
+"Nothing was changed. The lines above name the failing component. If it is the sealed
+custody material, set BACKUP_SEALED_PASSPHRASE (docs/runbooks/backup-restore.md) and
+re-run. Or take the backup as root and pass it in:
+  sudo '$bscript' /roomy/disk/correlix-pre-upgrade.tar.zst
+  $HERE/install-correlix.sh upgrade --backup-file /roomy/disk/correlix-pre-upgrade.tar.zst"
+    fi
+  fi
+  rc=0
+  out=$(timeout 1800 bash "$bscript" --verify "$UPGRADE_BACKUP_ARTIFACT" 2>&1 5>&- 6>&-) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s\n' "$out" | tail -5 | redact_log_lines | sed 's/^/    /'
+    die "The pre-upgrade backup could not be verified (backup.sh --verify exit $rc): $UPGRADE_BACKUP_ARTIFACT" \
+      "Nothing was changed. An upgrade never starts without a backup proven readable."
+  fi
+  ok "store backup verified: $UPGRADE_BACKUP_ARTIFACT"
+  UPGRADE_BACKUP_PATH="$bk"
+}
+
+# Protect every image of the previous version for a rollback BEFORE the new
+# bundle's `docker load` moves tags such as netops-api:latest onto new images:
+# each gets a correlix-rollback:<stamp>-NNN tag, and ref|id|tag is recorded.
+upgrade_preserve_images() {
+  local list="$UPGRADE_BACKUP_PATH/rollback-images.txt" ps_out refs ref id keep n=0 missing="" out
+  if ! ps_out=$(timeout 60 docker ps -a --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" --format '{{.Image}}' 2>&1); then
+    die "Could not list the current install's container images (docker ps: $(printf '%s' "$ps_out" | tail -1))." \
+      "Nothing was changed except the backup in $UPGRADE_BACKUP_PATH."
+  fi
+  refs=$( { if [ -n "$PREV_BUNDLE_DIR" ]; then manifest_image_refs "$PREV_BUNDLE_DIR/MANIFEST"; fi
+            printf '%s\n' "$ps_out" | sed 's/@sha256:[0-9a-f]*$//'; } | sed '/^$/d; /^sha256:/d' | sort -u )
+  ( umask 077 && : > "$list" ) || die "Cannot write $list." "Nothing was changed except the backup in $UPGRADE_BACKUP_PATH."
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    # stderr is docker's "No such image" for a ref this host never loaded
+    # (an add-on pack that was not enabled): inspected, genuine noise here.
+    if ! id=$(timeout 60 docker image inspect --format '{{.Id}}' "$ref" 2>/dev/null); then
+      missing="$missing $ref"
+      continue
+    fi
+    n=$((n + 1))
+    keep="correlix-rollback:$UPGRADE_STAMP-$(printf '%03d' "$n")"
+    if ! out=$(timeout 60 docker tag "$id" "$keep" 2>&1); then
+      die "Could not protect image $ref for a rollback (docker tag: $out)." \
+        "Nothing was changed except the backup in $UPGRADE_BACKUP_PATH."
+    fi
+    printf '%s|%s|%s\n' "$ref" "$id" "$keep" >> "$list" || die "Cannot write $list."
+  done <<< "$refs"
+  [ "$n" -gt 0 ] || die "None of the current install's images is on this host, so a rollback could not restore it." \
+    "Nothing was changed except the backup in $UPGRADE_BACKUP_PATH."
+  if [ -n "$missing" ]; then warn "not on this host (not needed for a rollback):$missing"; fi
+  ok "$n image(s) of the current version kept for a rollback (tags correlix-rollback:$UPGRADE_STAMP-*)"
+}
+
+upgrade_restore_image_tags() {
+  local list="$UPGRADE_BACKUP_PATH/rollback-images.txt" ref id keep out
+  TAG_PROBLEMS=""
+  while IFS='|' read -r ref id keep; do
+    [ -n "$ref" ] || continue
+    if ! out=$(timeout 60 docker tag "$id" "$ref" 2>&1); then
+      TAG_PROBLEMS="$TAG_PROBLEMS
+  - could not restore image tag $ref -> $id (kept as $keep): $out"
+    fi
+  done < "$list"
+  [ -z "$TAG_PROBLEMS" ]
+}
+
+# The manual way back, printed on a failed rollback and kept in the backup.
+upgrade_restore_steps() {
+  cat <<EOF
+cd '$COMPOSE_DIR' && docker compose down --remove-orphans
+cd '$PREV_COMPOSE_DIR' && docker compose down --remove-orphans
+[ -d '$ROOT/data' ] && mv -T '$ROOT/data' '$PREV_ROOT/data'    # only if data/ is still in the new folder
+[ -f '$PREV_ENV' ] || cp -p '$UPGRADE_BACKUP_PATH/config/.env' '$PREV_ENV'
+while IFS='|' read -r ref id keep; do docker tag "\$id" "\$ref"; done < '$UPGRADE_BACKUP_PATH/rollback-images.txt'
+'$PREV_ROOT/scripts/restore.sh' '$UPGRADE_BACKUP_ARTIFACT'    # ONLY if the data itself is damaged: it overwrites data/
+cd '$PREV_COMPOSE_DIR' && docker compose up -d
+EOF
+}
+
+# Settings carried forward: .env byte-for-byte (never regenerated, never the
+# .env.snapshot / .env.damaged siblings), plus any overlay the .env's
+# COMPOSE_FILE chain names that this bundle does not ship, and an operator's
+# docker-compose.override.yml.
+upgrade_carry_settings() {
+  local tmp="$ENV_FILE.upgrade.tmp.$$" chain f parts=()
+  if ! ( umask 077 && cp -- "$PREV_ENV" "$tmp" ) || ! mv -f -- "$tmp" "$ENV_FILE"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+  chain=$(prev_env_get COMPOSE_FILE)
+  IFS=: read -ra parts <<< "$chain"
+  parts+=(docker-compose.override.yml)
+  for f in "${parts[@]}"; do
+    case "$f" in ''|*/*) continue ;; esac
+    if [ ! -e "$COMPOSE_DIR/$f" ] && [ -f "$PREV_COMPOSE_DIR/$f" ]; then
+      cp -p -- "$PREV_COMPOSE_DIR/$f" "$COMPOSE_DIR/$f" || return 1
+      say "  carried $f from the current install (this bundle does not ship it)"
+    fi
+  done
+  ok "settings carried forward (.env unchanged — no secret was regenerated)"
+}
+
+# Every step after the first change. errexit is suspended in here (the caller
+# tests the result), so each step checks and names its own failure.
+upgrade_apply() {
+  local running
+  say ""
+  say "${BOLD}Stopping the current install${RST} ($PREV_COMPOSE_DIR)..."
+  if ! (cd "$PREV_COMPOSE_DIR" && timeout "$UPGRADE_COMPOSE_TIMEOUT_S" docker compose down --remove-orphans); then
+    UPGRADE_FAIL_CAUSE="could not stop the current install (docker compose down in $PREV_COMPOSE_DIR failed — see above)"
+    return 1
+  fi
+  if ! running=$(project_running_ids); then
+    UPGRADE_FAIL_CAUSE="could not confirm the current install stopped (docker ps failed)"
+    return 1
+  fi
+  if [ -n "$running" ]; then
+    UPGRADE_FAIL_CAUSE="containers of the current install are still running after it was stopped: $(printf '%s' "$running" | tr '\n' ' ')"
+    return 1
+  fi
+  if [ "$UPGRADE_HAS_DATA" = 1 ]; then
+    if [ -d "$ROOT/data" ] && ! rmdir -- "$ROOT/data"; then
+      UPGRADE_FAIL_CAUSE="could not clear the empty $ROOT/data before moving the data in"
+      return 1
+    fi
+    if ! mv -T -- "$PREV_ROOT/data" "$ROOT/data"; then
+      UPGRADE_FAIL_CAUSE="could not move data/ from $PREV_ROOT to $ROOT"
+      return 1
+    fi
+    DATA_MOVED=1
+    ok "data moved into $ROOT/data"
+  fi
+  ENV_CARRIED=1
+  if ! upgrade_carry_settings; then
+    UPGRADE_FAIL_CAUSE="could not carry the settings (.env) into $ENV_FILE"
+    return 1
+  fi
+  say ""
+  say "${BOLD}Installing ${UPGRADE_NEW_VERSION:-the new version} from this bundle${RST}"
+  # Exactly as cmd_install runs it: unbuffered, no terminal fds, lock fd 9 inherited.
+  if ! PYTHONUNBUFFERED=1 python3 -u "$ROOT/scripts/install.py" "${INSTALL_ARGS[@]}" 5>&- 6>&-; then
+    UPGRADE_FAIL_CAUSE="the new version's installer (install.py) failed — see the lines above"
+    return 1
+  fi
+  if ! wait_healthy; then
+    UPGRADE_FAIL_CAUSE="the upgraded stack did not become healthy and stable (see the named services above)"
+    return 1
+  fi
+}
+
+# Put the previous install back, check it is stable, report both results,
+# and exit: 4 = rolled back, 5 = the rollback failed too.
+upgrade_rollback() {
+  local cause="$1" problems="" running
+  state_note status rolling-back
+  say ""
+  say "${RED}${BOLD}UPGRADE FAILED:${RST} $cause"
+  say "${BOLD}Rolling back to the previous install${RST} ($PREV_COMPOSE_DIR)..."
+  if [ "$ENV_CARRIED" = 1 ]; then
+    say "  stopping the new version's containers..."
+    if ! (cd "$COMPOSE_DIR" && timeout "$UPGRADE_COMPOSE_TIMEOUT_S" docker compose down --remove-orphans); then
+      problems="$problems
+  - could not stop the new version's containers (docker compose down in $COMPOSE_DIR failed)"
+    fi
+  fi
+  if [ "$DATA_MOVED" = 1 ]; then
+    if ! running=$(project_running_ids) || [ -n "$running" ]; then
+      problems="$problems
+  - containers are still running (or docker could not say), so data/ was NOT moved back; it is in $ROOT/data"
+    elif mv -T -- "$ROOT/data" "$PREV_ROOT/data"; then
+      DATA_MOVED=0
+      ok "data moved back to $PREV_ROOT/data"
+    else
+      problems="$problems
+  - could not move data/ back from $ROOT/data to $PREV_ROOT/data"
+    fi
+  fi
+  if [ "$ENV_CARRIED" = 1 ] && [ -e "$ENV_FILE" ]; then
+    if mv -f -- "$ENV_FILE" "$ENV_FILE.upgrade-failed-$UPGRADE_STAMP"; then
+      ENV_CARRIED=0
+    else
+      problems="$problems
+  - could not set aside $ENV_FILE (this folder still looks installed)"
+    fi
+  fi
+  if upgrade_restore_image_tags; then
+    ok "previous image tags restored"
+  else
+    problems="$problems$TAG_PROBLEMS"
+  fi
+  if [ -z "$problems" ]; then
+    say "  starting the previous version again..."
+    if ! (cd "$PREV_COMPOSE_DIR" && timeout "$UPGRADE_COMPOSE_TIMEOUT_S" docker compose up -d); then
+      problems="$problems
+  - docker compose up -d in $PREV_COMPOSE_DIR failed (see above)"
+    elif ! ( COMPOSE_DIR="$PREV_COMPOSE_DIR" ENV_FILE="$PREV_ENV" wait_healthy ); then
+      problems="$problems
+  - the previous version started but did not pass the stability check (see the named services above)"
+    fi
+  else
+    problems="$problems
+  - the previous version was NOT started: the steps above must succeed first"
+  fi
+  say ""
+  if [ -z "$problems" ]; then
+    state_note status rolled-back
+    say "${RED}${BOLD}The upgrade did not complete and was rolled back.${RST}"
+    say "  Why it failed:  $cause"
+    say "  Rollback:       the previous version (${UPGRADE_PREV_VERSION:-unknown}) is running again from"
+    say "                  $PREV_COMPOSE_DIR and passed the stability check."
+    say "  Backup taken before the upgrade (kept): $UPGRADE_BACKUP_PATH"
+    say "  Full log: ${INSTALL_LOG:-}"
+    say "  Fix the cause above, then run the upgrade again from this folder."
+    cx_result fail
+    exit 4
+  fi
+  state_note status rollback-failed
+  say "${RED}${BOLD}################################################################${RST}"
+  say "${RED}${BOLD}  THE UPGRADE FAILED AND THE AUTOMATIC ROLLBACK ALSO FAILED${RST}"
+  say "${RED}${BOLD}################################################################${RST}"
+  say "  Why the upgrade failed:  $cause"
+  say "  What the rollback could not do:$problems"
+  say ""
+  say "  A verified backup of the install as it was before the upgrade: $UPGRADE_BACKUP_PATH"
+  say "  Restore by hand (also in $UPGRADE_BACKUP_PATH/RESTORE.txt):"
+  upgrade_restore_steps | sed 's/^/    /'
+  say "  Full log: ${INSTALL_LOG:-}"
+  cx_result fail
+  exit 5
+}
+
+cmd_upgrade() {
+  [ "$MODE" = "bundle" ] || die "upgrade runs from a NEW Correlix bundle folder." \
+    "Extract the new bundle next to the current one and run its installer:  ./install-correlix.sh upgrade"
+  [ -z "$CONFIG_FILE" ] || die "--config is not used by upgrade: the installed configuration is carried forward unchanged."
+  UPGRADE_IN_PROGRESS=1
+  UPGRADE_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+  start_install_log
+  acquire_bundle_lock upgrade
+  acquire_install_lock upgrade
+  upgrade_resolve_previous
+  # The previous install is ours for the whole run too: nobody may enable,
+  # uninstall or re-install it while its data is being moved.
+  take_lock 7 "$PREV_COMPOSE_DIR/.install.lock" upgrade
+  cx_stage preflight "checking this host" start
+  # Preflight sees the CURRENT install's .env: the ports it publishes are held
+  # by the very stack being upgraded, not by a foreign process.
+  if ! ( ENV_FILE="$PREV_ENV" preflight ); then
+    cx_stage preflight "checking this host" fail "host preflight failed (see messages above)"
+    cx_result fail
+    exit 1
+  fi
+  cx_stage preflight "checking this host" ok
+  verify_bundle
+  acquire_install_lock upgrade
+  upgrade_refuse_if_interrupted
+  upgrade_check_new_folder
+  upgrade_check_versions
+
+  UI_PORT=$(prev_env_get BASE_PORT)
+  UI_PORT=${UI_PORT:-8000}
+  assemble_install_args
+  local tls=no
+  case "$(prev_env_get COMPOSE_FILE)" in *compose.tls.yml*) tls=yes ;; esac
+  INSTALL_ARGS+=(--tls "$tls" --bootstrap-docker no)
+
+  upgrade_backup
+  upgrade_preserve_images
+  upgrade_restore_steps > "$UPGRADE_BACKUP_PATH/RESTORE.txt" \
+    || die "Cannot write $UPGRADE_BACKUP_PATH/RESTORE.txt." "Nothing was changed except the backup."
+  rm -f -- "$UPGRADE_STATE_FILE"
+  if ! { state_set status applying && state_set started_utc "$(utc_now)" \
+         && state_set previous_compose_dir "$PREV_COMPOSE_DIR" \
+         && state_set previous_version "${UPGRADE_PREV_VERSION:-unknown}" \
+         && state_set new_version "${UPGRADE_NEW_VERSION:-unknown}" \
+         && state_set backup_dir "$UPGRADE_BACKUP_PATH"; }; then
+    die "Cannot record the upgrade state in $UPGRADE_STATE_FILE." "Nothing was changed except the backup in $UPGRADE_BACKUP_PATH."
+  fi
+
+  if ! upgrade_apply; then
+    upgrade_rollback "$UPGRADE_FAIL_CAUSE"
+  fi
+
+  # The previous folder must no longer be able to operate the shared-name
+  # project: its install/uninstall would act on the upgraded containers.
+  if ! mv -f -- "$PREV_ENV" "$PREV_ENV.upgraded-$UPGRADE_STAMP"; then
+    warn "could not set aside $PREV_ENV — do NOT run install or uninstall from $PREV_ROOT: it would act on the upgraded containers."
+  fi
+  state_note status upgraded
+  state_note finished_utc "$(utc_now)"
+  verify_admin_login
+  say ""
+  say "${GREEN}${BOLD}────────────────────────────────────────────────${RST}"
+  say "${GREEN}${BOLD}  Correlix upgraded: ${UPGRADE_PREV_VERSION:-unknown} -> ${UPGRADE_NEW_VERSION:-unknown}${RST}"
+  say "${GREEN}${BOLD}────────────────────────────────────────────────${RST}"
+  say "  Open the UI:   ${BOLD}$(dashboard_url)${RST}"
+  say "  Sign-in is unchanged: same accounts and passwords as before."
+  say "  Backup taken before the upgrade: $UPGRADE_BACKUP_PATH"
+  say "  The previous version's images are kept, so you can still go back. When satisfied:"
+  say "    $HERE/install-correlix.sh cleanup-old-images             (lists what would go)"
+  say "    $HERE/install-correlix.sh cleanup-old-images --confirm   (removes it)"
+  say "  $PREV_ROOT no longer holds an install (its .env was set aside as .env.upgraded-$UPGRADE_STAMP)."
+  say "  Delete that folder once you no longer need it."
+  cx_result ok "$(dashboard_url)" "$(env_get ADMIN_USERNAME || echo admin)"
+}
+
+# Remove ONLY named refs of the previous bundle — its MANIFEST and the rollback
+# tags `upgrade` recorded — that no container on this host uses and this
+# bundle does not name. No prune of any kind: docker is never asked to decide
+# what is unused.
+cmd_cleanup_old_images() {
+  acquire_install_lock cleanup-old-images
+  [ -f "$UPGRADE_STATE_FILE" ] || die "No upgrade is recorded for this install ($UPGRADE_STATE_FILE is missing)." \
+    "cleanup-old-images removes only what a completed 'install-correlix.sh upgrade' left behind, run from the folder that upgrade ran in. Nothing was removed."
+  local st bk list prev_manifest current="" ids used="" candidates ref id out n=0 failed=""
+  st=$(state_get "$UPGRADE_STATE_FILE" status)
+  [ "$st" = "upgraded" ] || die "The last upgrade recorded here did not complete (status: ${st:-unknown}), so the previous version's images are still needed." \
+    "Nothing was removed."
+  bk=$(state_get "$UPGRADE_STATE_FILE" backup_dir)
+  list="$bk/rollback-images.txt"
+  prev_manifest="$bk/config/MANIFEST"
+  [ -f "$list" ] || die "The rollback image list $list is missing." \
+    "Nothing was removed: without it this command cannot tell which images belonged to the previous version."
+  if [ -n "$BUNDLE_DIR" ] && [ -f "$BUNDLE_DIR/MANIFEST" ]; then
+    current=$(manifest_image_refs "$BUNDLE_DIR/MANIFEST")
+  fi
+  if ! ids=$(timeout 60 docker ps -aq 2>&1); then
+    die "Could not list this host's containers (docker ps: $(printf '%s' "$ids" | tail -1))." \
+      "Nothing was removed: an image is removed only when it is proven unused."
+  fi
+  if [ -n "$ids" ]; then
+    # shellcheck disable=SC2086  # deliberate word-split of the container id list
+    if ! used=$(timeout 120 docker inspect --format '{{.Image}}' $ids 2>&1); then
+      die "Could not read which images this host's containers use (docker inspect: $(printf '%s' "$used" | tail -1))." \
+        "Nothing was removed: an image is removed only when it is proven unused. Re-run in a moment."
+    fi
+  fi
+  candidates=$( { if [ -f "$prev_manifest" ]; then manifest_image_refs "$prev_manifest"; fi
+                  awk -F'|' 'NF >= 3 && $3 != "" {print $3}' "$list"; } | sed '/^$/d' | sort -u )
+  say "Images of the previous version ($(state_get "$UPGRADE_STATE_FILE" previous_version)):"
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    case $'\n'"$current"$'\n' in *$'\n'"$ref"$'\n'*)
+      say "  keep     $ref   (this version uses it too)"; continue ;;
+    esac
+    # stderr is "No such image" for a ref already gone: inspected, noise here.
+    if ! id=$(timeout 60 docker image inspect --format '{{.Id}}' "$ref" 2>/dev/null); then
+      say "  gone     $ref"
+      continue
+    fi
+    case $'\n'"$used"$'\n' in *$'\n'"$id"$'\n'*)
+      say "  keep     $ref   (a container uses it)"; continue ;;
+    esac
+    if [ "$CONFIRM" != 1 ]; then
+      say "  remove   $ref"
+      n=$((n + 1))
+      continue
+    fi
+    if out=$(timeout 300 docker rmi "$ref" 2>&1); then
+      say "  removed  $ref"
+      n=$((n + 1))
+    else
+      failed="$failed
+  $ref: $(printf '%s' "$out" | tail -1)"
+    fi
+  done <<< "$candidates"
+  if [ "$CONFIRM" != 1 ]; then
+    say ""
+    say "Nothing was removed. To remove the $n image(s) marked 'remove':"
+    say "  $HERE/install-correlix.sh cleanup-old-images --confirm"
+    return 0
+  fi
+  if [ -n "$failed" ]; then
+    die "$n image(s) removed, but these could not be:$failed" "Nothing else was touched. Re-run after checking what still uses them (docker ps -a)."
+  fi
+  state_note images_removed_utc "$(utc_now)"
+  ok "$n image(s) of the previous version removed — rolling back to it now needs its bundle again."
+}
+
+# Read-only health report (FMEA 2026-09-15 §4.6). No lock is taken on purpose:
+# a doctor must be able to look at an install that is running, or at one whose
+# installer died holding the lock. The report module only reads, bounds every
+# docker call, and never prints a secret value. Its exit code passes through:
+# 0 healthy · 1 problems found · 2 could not assess. Messages from this wrapper
+# go to stderr so `doctor --json` keeps stdout pure JSON.
+cmd_doctor() {
+  local report="$ROOT/scripts/install_doctor.py" rc=0
+  local jflag=()
+  if [ ! -f "$report" ]; then
+    printf 'doctor: %s is missing — this bundle is not unpacked yet, so there is no install to examine.\n' "$report" >&2
+    exit 2
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf 'doctor: python3 is missing, so the report cannot run (prepare the host first: sudo ./prepare-host.sh).\n' >&2
+    exit 2
+  fi
+  if [ "$DOCTOR_JSON" = 1 ]; then
+    jflag=(--json)
+  fi
+  timeout 300 python3 -B "$report" --root "$ROOT" --bundle-dir "$HERE" ${jflag[@]+"${jflag[@]}"} || rc=$?
+  case "$rc" in
+    0|1|2) exit "$rc" ;;
+    124)   printf 'doctor: the report did not finish within 300 s — could not assess.\n' >&2; exit 2 ;;
+    *)     printf 'doctor: the report itself failed (exit %s) — could not assess.\n' "$rc" >&2; exit 2 ;;
   esac
 }
 
@@ -1207,11 +2761,11 @@ cmd_menu() {
       8) ( compose start && ok "Correlix starting." ) || true; pause ;;
       9) printf '%s' "  This wipes all collected data (login kept). Type yes to confirm: "
          read -r conf || true
-         [ "${conf:-}" = "yes" ] && { ( cmd_reset_demo ) || true; } || say "  cancelled."
+         if [ "${conf:-}" = "yes" ]; then ( cmd_reset_demo ) || true; else say "  cancelled."; fi
          pause ;;
       0) printf '%s' "  Remove Correlix containers? Type yes to confirm: "
          read -r conf || true
-         [ "${conf:-}" = "yes" ] && { ( cmd_uninstall ) || true; } || say "  cancelled."
+         if [ "${conf:-}" = "yes" ]; then ( cmd_uninstall ) || true; else say "  cancelled."; fi
          pause ;;
       q|Q) exit 0 ;;
       *) : ;;
@@ -1350,5 +2904,8 @@ case "$CMD" in
   reset-demo-data) cmd_reset_demo ;;
   enable)          cmd_enable ;;
   support-bundle)  cmd_support_bundle ;;
+  doctor)          cmd_doctor ;;
   disable)         cmd_disable ;;
+  upgrade)         cmd_upgrade ;;
+  cleanup-old-images) cmd_cleanup_old_images ;;
 esac

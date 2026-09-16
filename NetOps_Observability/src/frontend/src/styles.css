@@ -3381,7 +3381,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 
   --login-panel-bg: rgba(26, 30, 38, 0.78);
   --login-panel-bg-blur: rgba(26, 30, 38, 0.60);
-  --login-field-bg: rgba(13, 16, 21, 0.94);   /* inputs stay MORE opaque than the panel */
+  --login-field-bg: rgba(10, 12, 16, 0.38);   /* translucent well: the pane is clear, the field a shade deeper */
   --login-field-border: #6b7280;              /* 3.4:1 on panel, 4.0:1 on the field */
   --login-btn-bg: #22d3ee;
   --login-btn-fg: #06121a;                    /* 10.5:1 on the cyan */
@@ -3396,7 +3396,20 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   display: flex; flex-direction: column;
   min-height: 100vh; min-height: 100dvh;
   padding: 32px 20px; overflow-y: auto;
-  background: #14171c;                         /* uniform charcoal, no gradient */
+  /* The installer template (2026-09-15): the same network-mesh wallpaper and
+     frost grain the setup wizard uses, lifted for a dark ground — so the clear
+     pane below has something real to be transparent OVER. */
+  background-color: #14171c;
+  background-image:
+    url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNDQwIiBoZWlnaHQ9IjkwMCIgdmlld0JveD0iMCAwIDE0NDAgOTAwIj48ZyBzdHJva2U9IiNhNWI0ZmMiIHN0cm9rZS1vcGFjaXR5PSIwLjE0IiBzdHJva2Utd2lkdGg9IjEuMiIgZmlsbD0ibm9uZSI+PGxpbmUgeDE9IjQ2NiIgeTE9IjEzNiIgeDI9IjI0MiIgeTI9IjEwNSIvPjxsaW5lIHgxPSI0NjYiIHkxPSIxMzYiIHgyPSI2NTMiIHkyPSIyNzAiLz48bGluZSB4MT0iOTM3IiB5MT0iNjUiIHgyPSI3ODkiIHkyPSI1NyIvPjxsaW5lIHgxPSI5MzciIHkxPSI2NSIgeDI9IjEwNTAiIHkyPSIyNTkiLz48bGluZSB4MT0iNzcyIiB5MT0iMzI5IiB4Mj0iODMxIiB5Mj0iMzU3Ii8+PGxpbmUgeDE9Ijc3MiIgeTE9IjMyOSIgeDI9IjgzNSIgeTI9IjQxMSIvPjxsaW5lIHgxPSI4NCIgeTE9IjQ1NyIgeDI9IjExNiIgeTI9IjQwNCIvPjxsaW5lIHgxPSI4NCIgeTE9IjQ1NyIgeDI9IjMyIiB5Mj0iNDE2Ii8+PGxpbmUgeDE9IjU0IiB5MT0iMzkwIiB4Mj0iMzIiIHkyPSI0MTYiLz48bGluZSB4MT0iNTQiIHkxPSIzOTAiIHgyPSIxMTYiIHkyPSI0MDQiLz48bGluZSB4MT0iMTAxIiB5MT0iODIiIHgyPSI4NiIgeTI9IjE4NSIvPjxsaW5lIHgxPSIxMDEiIHkxPSI4MiIgeDI9IjIwOCIgeTI9IjEwNiIvPjxsaW5lIHgxPSI2MTEiIHkxPSI3NDQiIHgyPSI1NjMiIHkyPSI3ODQiLz48bGluZSB4MT0iNjExIiB5MT0iNzQ0IiB4Mj0iNjAyIiB5Mj0iNjgxIi8+PGxpbmUgeDE9IjE3OCIgeTE9IjIwMSIgeDI9IjE4NiIgeTI9IjIyMyIvPjxsaW5lIHgxPSIxNzgiIHkxPSIyMDEiIHgyPSI4NiIgeTI9IjE4NSIvPjxsaW5lIHgxPSI5MDQiIHkxPSI4NTMiIHgyPSI5MzIiIHkyPSI4OTQiLz48bGluZSB4MT0iOTA0IiB5MT0iODUzIiB4Mj0iNzkxIiB5Mj0iNzk1Ii8+PGxpbmUgeDE9IjgzMSIgeTE9IjM1NyIgeDI9IjgzNSIgeTI9IjQxMSIvPjxsaW5lIHgxPSIxNDA2IiB5MT0iNDIiIHgyPSIxNDExIiB5Mj0iMTA2Ii8+PGxpbmUgeDE9IjE0MDYiIHkxPSI0MiIgeDI9IjEyMzYiIHkyPSIyNjEiLz48bGluZSB4MT0iMTIzNiIgeTE9IjI2MSIgeDI9IjEyNjEiIHkyPSIyODIiLz48bGluZSB4MT0iMTIzNiIgeTE9IjI2MSIgeDI9IjExODQiIHkyPSIyNTYiLz48bGluZSB4MT0iMjA4IiB5MT0iMTA2IiB4Mj0iMjQyIiB5Mj0iMTA1Ii8+PGxpbmUgeDE9IjIwOCIgeTE9IjEwNiIgeDI9IjE3OCIgeTI9IjIwMSIvPjxsaW5lIHgxPSI0NDQiIHkxPSI3MzUiIHgyPSI1NjMiIHkyPSI3ODQiLz48bGluZSB4MT0iNDQ0IiB5MT0iNzM1IiB4Mj0iNjAyIiB5Mj0iNjgxIi8+PGxpbmUgeDE9IjI2MCIgeTE9IjUyMyIgeDI9IjM1MSIgeTI9IjUxNyIvPjxsaW5lIHgxPSIyNjAiIHkxPSI1MjMiIHgyPSIyMTkiIHkyPSI0NDAiLz48bGluZSB4MT0iOTIwIiB5MT0iMzM1IiB4Mj0iOTgwIiB5Mj0iMzg1Ii8+PGxpbmUgeDE9IjkyMCIgeTE9IjMzNSIgeDI9IjgzMSIgeTI9IjM1NyIvPjxsaW5lIHgxPSI3ODkiIHkxPSI1NyIgeDI9IjY1MyIgeTI9IjI3MCIvPjxsaW5lIHgxPSI5ODAiIHkxPSIzODUiIHgyPSIxMDUwIiB5Mj0iMjU5Ii8+PGxpbmUgeDE9IjQ1MiIgeTE9IjUyNyIgeDI9IjM1MSIgeTI9IjUxNyIvPjxsaW5lIHgxPSI0NTIiIHkxPSI1MjciIHgyPSI1NTYiIHkyPSI2MDIiLz48bGluZSB4MT0iNjUzIiB5MT0iMjcwIiB4Mj0iNzcyIiB5Mj0iMzI5Ii8+PGxpbmUgeDE9IjY1MyIgeTE9IjI3MCIgeDI9IjgzMSIgeTI9IjM1NyIvPjxsaW5lIHgxPSIxMTQ0IiB5MT0iNjI5IiB4Mj0iMTEwMSIgeTI9IjUxNiIvPjxsaW5lIHgxPSIxMTQ0IiB5MT0iNjI5IiB4Mj0iMTAwMSIgeTI9IjUzNSIvPjxsaW5lIHgxPSI3NTYiIHkxPSI3ODgiIHgyPSI3OTEiIHkyPSI3OTUiLz48bGluZSB4MT0iNzU2IiB5MT0iNzg4IiB4Mj0iNjExIiB5Mj0iNzQ0Ii8+PGxpbmUgeDE9IjEwNTAiIHkxPSIyNTkiIHgyPSIxMTg0IiB5Mj0iMjU2Ii8+PGxpbmUgeDE9IjE0MTEiIHkxPSIxMDYiIHgyPSIxMjYxIiB5Mj0iMjgyIi8+PGxpbmUgeDE9IjYwMiIgeTE9IjY4MSIgeDI9IjU1NiIgeTI9IjYwMiIvPjxsaW5lIHgxPSIyMTkiIHkxPSI0NDAiIHgyPSIxMTYiIHkyPSI0MDQiLz48bGluZSB4MT0iNTYiIHkxPSI2MDEiIHgyPSI4NyIgeTI9IjYzMSIvPjxsaW5lIHgxPSI1NiIgeTE9IjYwMSIgeDI9Ijg1IiB5Mj0iNjkxIi8+PGxpbmUgeDE9IjExMDEiIHkxPSI1MTYiIHgyPSIxMDAxIiB5Mj0iNTM1Ii8+PGxpbmUgeDE9IjEyNjEiIHkxPSIyODIiIHgyPSIxMTg0IiB5Mj0iMjU2Ii8+PGxpbmUgeDE9IjEwMDEiIHkxPSI1MzUiIHgyPSI5ODAiIHkyPSIzODUiLz48bGluZSB4MT0iMTIxMCIgeTE9Ijg1MCIgeDI9IjExNDQiIHkyPSI2MjkiLz48bGluZSB4MT0iMTIxMCIgeTE9Ijg1MCIgeDI9IjkzMiIgeTI9Ijg5NCIvPjxsaW5lIHgxPSI2ODMiIHkxPSI1OTgiIHgyPSI2MDIiIHkyPSI2ODEiLz48bGluZSB4MT0iNjgzIiB5MT0iNTk4IiB4Mj0iNTU2IiB5Mj0iNjAyIi8+PGxpbmUgeDE9Ijg3IiB5MT0iNjMxIiB4Mj0iODUiIHkyPSI2OTEiLz48bGluZSB4MT0iOTMyIiB5MT0iODk0IiB4Mj0iNzkxIiB5Mj0iNzk1Ii8+PGxpbmUgeDE9IjI0MiIgeTE9IjEwNSIgeDI9IjE3OCIgeTI9IjIwMSIvPjxsaW5lIHgxPSIxODYiIHkxPSIyMjMiIHgyPSI4NiIgeTI9IjE4NSIvPjxsaW5lIHgxPSI1NjMiIHkxPSI3ODQiIHgyPSI2MDIiIHkyPSI2ODEiLz48L2c+PGcgZmlsbD0iI2M3ZDJmZSIgZmlsbC1vcGFjaXR5PSIwLjE4Ij48Y2lyY2xlIGN4PSI0NjYiIGN5PSIxMzYiIHI9IjMiLz48Y2lyY2xlIGN4PSI5MzciIGN5PSI2NSIgcj0iMy42Ii8+PGNpcmNsZSBjeD0iNzcyIiBjeT0iMzI5IiByPSIzIi8+PGNpcmNsZSBjeD0iODQiIGN5PSI0NTciIHI9IjMuNiIvPjxjaXJjbGUgY3g9IjU0IiBjeT0iMzkwIiByPSIzIi8+PGNpcmNsZSBjeD0iMTAxIiBjeT0iODIiIHI9IjMiLz48Y2lyY2xlIGN4PSI2MTEiIGN5PSI3NDQiIHI9IjMuNiIvPjxjaXJjbGUgY3g9IjE3OCIgY3k9IjIwMSIgcj0iMyIvPjxjaXJjbGUgY3g9IjkwNCIgY3k9Ijg1MyIgcj0iMi4yIi8+PGNpcmNsZSBjeD0iODMxIiBjeT0iMzU3IiByPSIyLjIiLz48Y2lyY2xlIGN4PSIxNDA2IiBjeT0iNDIiIHI9IjIuMiIvPjxjaXJjbGUgY3g9IjEyMzYiIGN5PSIyNjEiIHI9IjIuMiIvPjxjaXJjbGUgY3g9IjIwOCIgY3k9IjEwNiIgcj0iMi4yIi8+PGNpcmNsZSBjeD0iNDQ0IiBjeT0iNzM1IiByPSIyLjIiLz48Y2lyY2xlIGN4PSIyNjAiIGN5PSI1MjMiIHI9IjMuNiIvPjxjaXJjbGUgY3g9IjkyMCIgY3k9IjMzNSIgcj0iMi4yIi8+PGNpcmNsZSBjeD0iNzg5IiBjeT0iNTciIHI9IjIuMiIvPjxjaXJjbGUgY3g9Ijg2IiBjeT0iMTg1IiByPSIzIi8+PGNpcmNsZSBjeD0iOTgwIiBjeT0iMzg1IiByPSIzLjYiLz48Y2lyY2xlIGN4PSI0NTIiIGN5PSI1MjciIHI9IjIuMiIvPjxjaXJjbGUgY3g9IjY1MyIgY3k9IjI3MCIgcj0iMyIvPjxjaXJjbGUgY3g9IjExNDQiIGN5PSI2MjkiIHI9IjMiLz48Y2lyY2xlIGN4PSIzNTEiIGN5PSI1MTciIHI9IjIuMiIvPjxjaXJjbGUgY3g9Ijc1NiIgY3k9Ijc4OCIgcj0iMi4yIi8+PGNpcmNsZSBjeD0iMTA1MCIgY3k9IjI1OSIgcj0iMyIvPjxjaXJjbGUgY3g9IjE0MTEiIGN5PSIxMDYiIHI9IjMuNiIvPjxjaXJjbGUgY3g9IjYwMiIgY3k9IjY4MSIgcj0iMyIvPjxjaXJjbGUgY3g9IjIxOSIgY3k9IjQ0MCIgcj0iMy42Ii8+PGNpcmNsZSBjeD0iNTYiIGN5PSI2MDEiIHI9IjMuNiIvPjxjaXJjbGUgY3g9IjExMDEiIGN5PSI1MTYiIHI9IjMiLz48Y2lyY2xlIGN4PSIxMjYxIiBjeT0iMjgyIiByPSIyLjIiLz48Y2lyY2xlIGN4PSIxMDAxIiBjeT0iNTM1IiByPSIzLjYiLz48Y2lyY2xlIGN4PSI4MzUiIGN5PSI0MTEiIHI9IjMuNiIvPjxjaXJjbGUgY3g9IjEyMTAiIGN5PSI4NTAiIHI9IjMuNiIvPjxjaXJjbGUgY3g9IjY4MyIgY3k9IjU5OCIgcj0iMy42Ii8+PGNpcmNsZSBjeD0iODciIGN5PSI2MzEiIHI9IjMuNiIvPjxjaXJjbGUgY3g9IjkzMiIgY3k9Ijg5NCIgcj0iMy42Ii8+PGNpcmNsZSBjeD0iMTE4NCIgY3k9IjI1NiIgcj0iMi4yIi8+PGNpcmNsZSBjeD0iNTU2IiBjeT0iNjAyIiByPSIzIi8+PGNpcmNsZSBjeD0iMzIiIGN5PSI0MTYiIHI9IjMuNiIvPjxjaXJjbGUgY3g9IjI0MiIgY3k9IjEwNSIgcj0iMy42Ii8+PGNpcmNsZSBjeD0iODUiIGN5PSI2OTEiIHI9IjMiLz48Y2lyY2xlIGN4PSIxODYiIGN5PSIyMjMiIHI9IjMiLz48Y2lyY2xlIGN4PSI1NjMiIGN5PSI3ODQiIHI9IjMiLz48Y2lyY2xlIGN4PSIxMTYiIGN5PSI0MDQiIHI9IjMiLz48Y2lyY2xlIGN4PSI3OTEiIGN5PSI3OTUiIHI9IjIuMiIvPjwvZz48ZyBmaWxsPSJub25lIiBzdHJva2U9IiM2N2U4ZjkiIHN0cm9rZS1vcGFjaXR5PSIwLjEwIiBzdHJva2Utd2lkdGg9IjEiPjxjaXJjbGUgY3g9IjQ2NiIgY3k9IjEzNiIgcj0iMzgiLz48Y2lyY2xlIGN4PSIxMDEiIGN5PSI4MiIgcj0iNTIiLz48Y2lyY2xlIGN4PSIxNDA2IiBjeT0iNDIiIHI9IjM4Ii8+PGNpcmNsZSBjeD0iOTIwIiBjeT0iMzM1IiByPSIyNiIvPjxjaXJjbGUgY3g9IjY1MyIgY3k9IjI3MCIgcj0iMjYiLz48Y2lyY2xlIGN4PSIxNDExIiBjeT0iMTA2IiByPSIyNiIvPjxjaXJjbGUgY3g9IjEyNjEiIGN5PSIyODIiIHI9IjI2Ii8+PGNpcmNsZSBjeD0iODciIGN5PSI2MzEiIHI9IjM4Ii8+PGNpcmNsZSBjeD0iMjQyIiBjeT0iMTA1IiByPSIyNiIvPjxjaXJjbGUgY3g9Ijc5MSIgY3k9Ijc5NSIgcj0iMjYiLz48L2c+PC9zdmc+"),
+    linear-gradient(112deg, rgba(255, 255, 255, 0.035) 0%, rgba(255, 255, 255, 0.01) 38%, rgba(255, 255, 255, 0) 62%, rgba(255, 255, 255, 0.025) 100%),
+    radial-gradient(1100px 640px at 0% -20%, rgba(99, 102, 241, 0.10), transparent 65%),
+    radial-gradient(900px 600px at 100% 115%, rgba(56, 189, 248, 0.08), transparent 65%),
+    url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNjAiIGhlaWdodD0iMTYwIj48ZmlsdGVyIGlkPSJuIj48ZmVUdXJidWxlbmNlIHR5cGU9ImZyYWN0YWxOb2lzZSIgYmFzZUZyZXF1ZW5jeT0iMS4xIiBudW1PY3RhdmVzPSIyIiBzdGl0Y2hUaWxlcz0ic3RpdGNoIi8+PGZlQ29sb3JNYXRyaXggdmFsdWVzPSIwIDAgMCAwIDEgIDAgMCAwIDAgMSAgMCAwIDAgMCAxICAwIDAgMCAwLjA3IDAiLz48L2ZpbHRlcj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWx0ZXI9InVybCgjbikiLz48L3N2Zz4=");
+  background-blend-mode: normal, normal, normal, normal, overlay;
+  background-size: cover, auto, auto, auto, 160px 160px;
+  background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, repeat;
+  background-position: center top, center, center, center, center;
   color: var(--fg);
 }
 
@@ -3425,26 +3438,17 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .login-scene .card {
   position: relative;
   border-radius: var(--login-r-panel);
-  border: 1px solid var(--panel-border);
-  /* A sheet of glass, lit from above. The gloss lives in the PANEL, not in the
-     backdrop: the ground behind it is a single flat charcoal, so a blur has
-     nothing to refract and cannot carry the look on its own. What reads as
-     glass here is the edge treatment — a crisp lit top rim, a dark underside
-     giving the sheet thickness, a hairline ring — plus a specular falloff
-     across the face. No orbs, no particles, no neon: just how a pane behaves
-     under a light source. */
-  background:
-    linear-gradient(180deg,
-      rgba(255, 255, 255, 0.058),
-      rgba(255, 255, 255, 0.014) 38%,
-      rgba(255, 255, 255, 0) 62%),
-    var(--login-panel-bg);                     /* opaque fallback */
+  /* The installer's clear pane (owner-chosen option A, 2026-09-14): almost no
+     fill and NO blur, so the wallpaper reads straight through; what makes it
+     glass is the edge — a bright lit rim, an inner hairline, a soft contact
+     shadow. */
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.03);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.10),   /* lit top rim */
-    inset 0 -1px 0 rgba(0, 0, 0, 0.45),        /* shaded underside = thickness */
-    0 0 0 1px rgba(255, 255, 255, 0.045),      /* hairline ring, catches the eye at any angle */
-    0 2px 6px rgba(0, 0, 0, 0.34),             /* contact shadow */
-    0 26px 64px rgba(0, 0, 0, 0.52);           /* ambient */
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 0 0 1px rgba(0, 0, 0, 0.35),
+    0 14px 40px rgba(0, 0, 0, 0.45);
 }
 /* Specular sweep: a soft diagonal highlight across the upper-left face, the
    cue that says "this surface is smooth". Kept under 6% so it reads as sheen
@@ -3456,21 +3460,6 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
     rgba(255, 255, 255, 0.055) 0%,
     rgba(255, 255, 255, 0.018) 26%,
     rgba(255, 255, 255, 0) 52%);
-}
-/* Blur only where the browser actually does it, and only then trade opacity
-   for it — an unsupported backdrop-filter would otherwise leave the panel
-   thinner than its contrast was measured against. */
-@supports ((backdrop-filter: blur(8px)) or (-webkit-backdrop-filter: blur(8px))) {
-  .login-scene .card {
-    background:
-      linear-gradient(180deg,
-        rgba(255, 255, 255, 0.07),
-        rgba(255, 255, 255, 0.018) 38%,
-        rgba(255, 255, 255, 0) 62%),
-      var(--login-panel-bg-blur);
-    backdrop-filter: blur(20px) saturate(1.35) brightness(1.06);
-    -webkit-backdrop-filter: blur(20px) saturate(1.35) brightness(1.06);
-  }
 }
 /* The fine top-edge highlight that makes glass read as glass. */
 .login-scene .card::before {
@@ -3578,7 +3567,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .login-scene-toggle {
   position: absolute; top: 16px; right: 16px; z-index: 2;
   display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px;
-  background: var(--login-panel-bg); border: 1px solid var(--panel-border);
+  background: rgba(255, 255, 255, 0.04); border: 1px solid var(--panel-border);
 }
 .login-scene-toggle button {
   border: 0; background: transparent; color: var(--fg-muted); cursor: pointer;
@@ -3590,55 +3579,54 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .login-scene-toggle button.on { background: var(--accent-soft); color: var(--fg); }
 .login-scene-toggle button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* --- Light frosted glass on a cool light gray ---------------------------- */
+/* --- Light: the setup wizard's template, verbatim ----------------------- */
 .login-scene.login-light {
-  --fg: #171c24;
-  --fg-muted: #4d586b;          /* 7.4:1 on the panel */
-  --fg-subtle: #6b7686;
-  --muted: #4d586b;
-  --good: #047857; --warn: #b45309; --bad: #b42318;   /* --bad: 6.6:1 on panel */
-  --panel: rgba(255, 255, 255, 0.78);
-  --panel-border: rgba(23, 28, 36, 0.14);
-  --hover: rgba(23, 28, 36, 0.05);
-  --accent: #0e7490;            /* 5.4:1 on the panel — the LINK colour */
-  --accent-soft: rgba(14, 116, 144, 0.12);
-  --accent-ring: rgba(14, 116, 144, 0.45);
-
-  --login-panel-bg: rgba(255, 255, 255, 0.86);
-  --login-panel-bg-blur: rgba(255, 255, 255, 0.72);
-  --login-field-bg: #ffffff;                 /* more opaque than the panel */
-  --login-field-border: #6b7280;             /* 4.8:1 on white, 3.6:1 on panel */
-  /* The button keeps the SAME cyan in both themes — it is the product accent,
-     and near-black on it measures 10.5:1 either way. Only the link colour
-     changes, because a light cyan cannot carry text on white. */
-  --login-btn-bg: #22d3ee;
-  --login-btn-fg: #06121a;
+  --fg: #0b1020;
+  --fg-muted: #232a3a;
+  --fg-subtle: #343c4d;
+  --muted: #232a3a;
+  --good: #0f9d6e; --warn: #b45309; --bad: #dc2626;
+  --panel: rgba(255, 255, 255, 0.06);
+  --panel-border: rgba(23, 33, 60, 0.14);
+  --hover: rgba(23, 33, 60, 0.05);
+  --accent: #4f46e5;            /* the product's light accent; links and focus */
+  --accent-soft: rgba(79, 70, 229, 0.10);
+  --accent-ring: rgba(79, 70, 229, 0.35);
+  --login-field-bg: rgba(255, 255, 255, 0.35);
+  --login-field-border: rgba(23, 33, 60, 0.35);
+  /* Indigo with a white label, as in the installer (6.3:1). The dark scene
+     keeps the cyan button: the accent follows the theme, not the page. */
+  --login-btn-bg: #4f46e5;
+  --login-btn-fg: #ffffff;
   color-scheme: light;
-  background: #eceef2;                        /* uniform cool light gray */
+  background-color: #f8f9fc;
+  background-image:
+    url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNDQwIiBoZWlnaHQ9IjkwMCIgdmlld0JveD0iMCAwIDE0NDAgOTAwIj48ZyBzdHJva2U9IiM0ZjQ2ZTUiIHN0cm9rZS1vcGFjaXR5PSIwLjE2IiBzdHJva2Utd2lkdGg9IjEuMiIgZmlsbD0ibm9uZSI+PGxpbmUgeDE9IjQ2NiIgeTE9IjEzNiIgeDI9IjI0MiIgeTI9IjEwNSIvPjxsaW5lIHgxPSI0NjYiIHkxPSIxMzYiIHgyPSI2NTMiIHkyPSIyNzAiLz48bGluZSB4MT0iOTM3IiB5MT0iNjUiIHgyPSI3ODkiIHkyPSI1NyIvPjxsaW5lIHgxPSI5MzciIHkxPSI2NSIgeDI9IjEwNTAiIHkyPSIyNTkiLz48bGluZSB4MT0iNzcyIiB5MT0iMzI5IiB4Mj0iODMxIiB5Mj0iMzU3Ii8+PGxpbmUgeDE9Ijc3MiIgeTE9IjMyOSIgeDI9IjgzNSIgeTI9IjQxMSIvPjxsaW5lIHgxPSI4NCIgeTE9IjQ1NyIgeDI9IjExNiIgeTI9IjQwNCIvPjxsaW5lIHgxPSI4NCIgeTE9IjQ1NyIgeDI9IjMyIiB5Mj0iNDE2Ii8+PGxpbmUgeDE9IjU0IiB5MT0iMzkwIiB4Mj0iMzIiIHkyPSI0MTYiLz48bGluZSB4MT0iNTQiIHkxPSIzOTAiIHgyPSIxMTYiIHkyPSI0MDQiLz48bGluZSB4MT0iMTAxIiB5MT0iODIiIHgyPSI4NiIgeTI9IjE4NSIvPjxsaW5lIHgxPSIxMDEiIHkxPSI4MiIgeDI9IjIwOCIgeTI9IjEwNiIvPjxsaW5lIHgxPSI2MTEiIHkxPSI3NDQiIHgyPSI1NjMiIHkyPSI3ODQiLz48bGluZSB4MT0iNjExIiB5MT0iNzQ0IiB4Mj0iNjAyIiB5Mj0iNjgxIi8+PGxpbmUgeDE9IjE3OCIgeTE9IjIwMSIgeDI9IjE4NiIgeTI9IjIyMyIvPjxsaW5lIHgxPSIxNzgiIHkxPSIyMDEiIHgyPSI4NiIgeTI9IjE4NSIvPjxsaW5lIHgxPSI5MDQiIHkxPSI4NTMiIHgyPSI5MzIiIHkyPSI4OTQiLz48bGluZSB4MT0iOTA0IiB5MT0iODUzIiB4Mj0iNzkxIiB5Mj0iNzk1Ii8+PGxpbmUgeDE9IjgzMSIgeTE9IjM1NyIgeDI9IjgzNSIgeTI9IjQxMSIvPjxsaW5lIHgxPSIxNDA2IiB5MT0iNDIiIHgyPSIxNDExIiB5Mj0iMTA2Ii8+PGxpbmUgeDE9IjE0MDYiIHkxPSI0MiIgeDI9IjEyMzYiIHkyPSIyNjEiLz48bGluZSB4MT0iMTIzNiIgeTE9IjI2MSIgeDI9IjEyNjEiIHkyPSIyODIiLz48bGluZSB4MT0iMTIzNiIgeTE9IjI2MSIgeDI9IjExODQiIHkyPSIyNTYiLz48bGluZSB4MT0iMjA4IiB5MT0iMTA2IiB4Mj0iMjQyIiB5Mj0iMTA1Ii8+PGxpbmUgeDE9IjIwOCIgeTE9IjEwNiIgeDI9IjE3OCIgeTI9IjIwMSIvPjxsaW5lIHgxPSI0NDQiIHkxPSI3MzUiIHgyPSI1NjMiIHkyPSI3ODQiLz48bGluZSB4MT0iNDQ0IiB5MT0iNzM1IiB4Mj0iNjAyIiB5Mj0iNjgxIi8+PGxpbmUgeDE9IjI2MCIgeTE9IjUyMyIgeDI9IjM1MSIgeTI9IjUxNyIvPjxsaW5lIHgxPSIyNjAiIHkxPSI1MjMiIHgyPSIyMTkiIHkyPSI0NDAiLz48bGluZSB4MT0iOTIwIiB5MT0iMzM1IiB4Mj0iOTgwIiB5Mj0iMzg1Ii8+PGxpbmUgeDE9IjkyMCIgeTE9IjMzNSIgeDI9IjgzMSIgeTI9IjM1NyIvPjxsaW5lIHgxPSI3ODkiIHkxPSI1NyIgeDI9IjY1MyIgeTI9IjI3MCIvPjxsaW5lIHgxPSI5ODAiIHkxPSIzODUiIHgyPSIxMDUwIiB5Mj0iMjU5Ii8+PGxpbmUgeDE9IjQ1MiIgeTE9IjUyNyIgeDI9IjM1MSIgeTI9IjUxNyIvPjxsaW5lIHgxPSI0NTIiIHkxPSI1MjciIHgyPSI1NTYiIHkyPSI2MDIiLz48bGluZSB4MT0iNjUzIiB5MT0iMjcwIiB4Mj0iNzcyIiB5Mj0iMzI5Ii8+PGxpbmUgeDE9IjY1MyIgeTE9IjI3MCIgeDI9IjgzMSIgeTI9IjM1NyIvPjxsaW5lIHgxPSIxMTQ0IiB5MT0iNjI5IiB4Mj0iMTEwMSIgeTI9IjUxNiIvPjxsaW5lIHgxPSIxMTQ0IiB5MT0iNjI5IiB4Mj0iMTAwMSIgeTI9IjUzNSIvPjxsaW5lIHgxPSI3NTYiIHkxPSI3ODgiIHgyPSI3OTEiIHkyPSI3OTUiLz48bGluZSB4MT0iNzU2IiB5MT0iNzg4IiB4Mj0iNjExIiB5Mj0iNzQ0Ii8+PGxpbmUgeDE9IjEwNTAiIHkxPSIyNTkiIHgyPSIxMTg0IiB5Mj0iMjU2Ii8+PGxpbmUgeDE9IjE0MTEiIHkxPSIxMDYiIHgyPSIxMjYxIiB5Mj0iMjgyIi8+PGxpbmUgeDE9IjYwMiIgeTE9IjY4MSIgeDI9IjU1NiIgeTI9IjYwMiIvPjxsaW5lIHgxPSIyMTkiIHkxPSI0NDAiIHgyPSIxMTYiIHkyPSI0MDQiLz48bGluZSB4MT0iNTYiIHkxPSI2MDEiIHgyPSI4NyIgeTI9IjYzMSIvPjxsaW5lIHgxPSI1NiIgeTE9IjYwMSIgeDI9Ijg1IiB5Mj0iNjkxIi8+PGxpbmUgeDE9IjExMDEiIHkxPSI1MTYiIHgyPSIxMDAxIiB5Mj0iNTM1Ii8+PGxpbmUgeDE9IjEyNjEiIHkxPSIyODIiIHgyPSIxMTg0IiB5Mj0iMjU2Ii8+PGxpbmUgeDE9IjEwMDEiIHkxPSI1MzUiIHgyPSI5ODAiIHkyPSIzODUiLz48bGluZSB4MT0iMTIxMCIgeTE9Ijg1MCIgeDI9IjExNDQiIHkyPSI2MjkiLz48bGluZSB4MT0iMTIxMCIgeTE9Ijg1MCIgeDI9IjkzMiIgeTI9Ijg5NCIvPjxsaW5lIHgxPSI2ODMiIHkxPSI1OTgiIHgyPSI2MDIiIHkyPSI2ODEiLz48bGluZSB4MT0iNjgzIiB5MT0iNTk4IiB4Mj0iNTU2IiB5Mj0iNjAyIi8+PGxpbmUgeDE9Ijg3IiB5MT0iNjMxIiB4Mj0iODUiIHkyPSI2OTEiLz48bGluZSB4MT0iOTMyIiB5MT0iODk0IiB4Mj0iNzkxIiB5Mj0iNzk1Ii8+PGxpbmUgeDE9IjI0MiIgeTE9IjEwNSIgeDI9IjE3OCIgeTI9IjIwMSIvPjxsaW5lIHgxPSIxODYiIHkxPSIyMjMiIHgyPSI4NiIgeTI9IjE4NSIvPjxsaW5lIHgxPSI1NjMiIHkxPSI3ODQiIHgyPSI2MDIiIHkyPSI2ODEiLz48L2c+PGcgZmlsbD0iIzMxMmU4MSIgZmlsbC1vcGFjaXR5PSIwLjIyIj48Y2lyY2xlIGN4PSI0NjYiIGN5PSIxMzYiIHI9IjMiLz48Y2lyY2xlIGN4PSI5MzciIGN5PSI2NSIgcj0iMy42Ii8+PGNpcmNsZSBjeD0iNzcyIiBjeT0iMzI5IiByPSIzIi8+PGNpcmNsZSBjeD0iODQiIGN5PSI0NTciIHI9IjMuNiIvPjxjaXJjbGUgY3g9IjU0IiBjeT0iMzkwIiByPSIzIi8+PGNpcmNsZSBjeD0iMTAxIiBjeT0iODIiIHI9IjMiLz48Y2lyY2xlIGN4PSI2MTEiIGN5PSI3NDQiIHI9IjMuNiIvPjxjaXJjbGUgY3g9IjE3OCIgY3k9IjIwMSIgcj0iMyIvPjxjaXJjbGUgY3g9IjkwNCIgY3k9Ijg1MyIgcj0iMi4yIi8+PGNpcmNsZSBjeD0iODMxIiBjeT0iMzU3IiByPSIyLjIiLz48Y2lyY2xlIGN4PSIxNDA2IiBjeT0iNDIiIHI9IjIuMiIvPjxjaXJjbGUgY3g9IjEyMzYiIGN5PSIyNjEiIHI9IjIuMiIvPjxjaXJjbGUgY3g9IjIwOCIgY3k9IjEwNiIgcj0iMi4yIi8+PGNpcmNsZSBjeD0iNDQ0IiBjeT0iNzM1IiByPSIyLjIiLz48Y2lyY2xlIGN4PSIyNjAiIGN5PSI1MjMiIHI9IjMuNiIvPjxjaXJjbGUgY3g9IjkyMCIgY3k9IjMzNSIgcj0iMi4yIi8+PGNpcmNsZSBjeD0iNzg5IiBjeT0iNTciIHI9IjIuMiIvPjxjaXJjbGUgY3g9Ijg2IiBjeT0iMTg1IiByPSIzIi8+PGNpcmNsZSBjeD0iOTgwIiBjeT0iMzg1IiByPSIzLjYiLz48Y2lyY2xlIGN4PSI0NTIiIGN5PSI1MjciIHI9IjIuMiIvPjxjaXJjbGUgY3g9IjY1MyIgY3k9IjI3MCIgcj0iMyIvPjxjaXJjbGUgY3g9IjExNDQiIGN5PSI2MjkiIHI9IjMiLz48Y2lyY2xlIGN4PSIzNTEiIGN5PSI1MTciIHI9IjIuMiIvPjxjaXJjbGUgY3g9Ijc1NiIgY3k9Ijc4OCIgcj0iMi4yIi8+PGNpcmNsZSBjeD0iMTA1MCIgY3k9IjI1OSIgcj0iMyIvPjxjaXJjbGUgY3g9IjE0MTEiIGN5PSIxMDYiIHI9IjMuNiIvPjxjaXJjbGUgY3g9IjYwMiIgY3k9IjY4MSIgcj0iMyIvPjxjaXJjbGUgY3g9IjIxOSIgY3k9IjQ0MCIgcj0iMy42Ii8+PGNpcmNsZSBjeD0iNTYiIGN5PSI2MDEiIHI9IjMuNiIvPjxjaXJjbGUgY3g9IjExMDEiIGN5PSI1MTYiIHI9IjMiLz48Y2lyY2xlIGN4PSIxMjYxIiBjeT0iMjgyIiByPSIyLjIiLz48Y2lyY2xlIGN4PSIxMDAxIiBjeT0iNTM1IiByPSIzLjYiLz48Y2lyY2xlIGN4PSI4MzUiIGN5PSI0MTEiIHI9IjMuNiIvPjxjaXJjbGUgY3g9IjEyMTAiIGN5PSI4NTAiIHI9IjMuNiIvPjxjaXJjbGUgY3g9IjY4MyIgY3k9IjU5OCIgcj0iMy42Ii8+PGNpcmNsZSBjeD0iODciIGN5PSI2MzEiIHI9IjMuNiIvPjxjaXJjbGUgY3g9IjkzMiIgY3k9Ijg5NCIgcj0iMy42Ii8+PGNpcmNsZSBjeD0iMTE4NCIgY3k9IjI1NiIgcj0iMi4yIi8+PGNpcmNsZSBjeD0iNTU2IiBjeT0iNjAyIiByPSIzIi8+PGNpcmNsZSBjeD0iMzIiIGN5PSI0MTYiIHI9IjMuNiIvPjxjaXJjbGUgY3g9IjI0MiIgY3k9IjEwNSIgcj0iMy42Ii8+PGNpcmNsZSBjeD0iODUiIGN5PSI2OTEiIHI9IjMiLz48Y2lyY2xlIGN4PSIxODYiIGN5PSIyMjMiIHI9IjMiLz48Y2lyY2xlIGN4PSI1NjMiIGN5PSI3ODQiIHI9IjMiLz48Y2lyY2xlIGN4PSIxMTYiIGN5PSI0MDQiIHI9IjMiLz48Y2lyY2xlIGN4PSI3OTEiIGN5PSI3OTUiIHI9IjIuMiIvPjwvZz48ZyBmaWxsPSJub25lIiBzdHJva2U9IiMwZWE1ZTkiIHN0cm9rZS1vcGFjaXR5PSIwLjE0IiBzdHJva2Utd2lkdGg9IjEiPjxjaXJjbGUgY3g9IjQ2NiIgY3k9IjEzNiIgcj0iMzgiLz48Y2lyY2xlIGN4PSIxMDEiIGN5PSI4MiIgcj0iNTIiLz48Y2lyY2xlIGN4PSIxNDA2IiBjeT0iNDIiIHI9IjM4Ii8+PGNpcmNsZSBjeD0iOTIwIiBjeT0iMzM1IiByPSIyNiIvPjxjaXJjbGUgY3g9IjY1MyIgY3k9IjI3MCIgcj0iMjYiLz48Y2lyY2xlIGN4PSIxNDExIiBjeT0iMTA2IiByPSIyNiIvPjxjaXJjbGUgY3g9IjEyNjEiIGN5PSIyODIiIHI9IjI2Ii8+PGNpcmNsZSBjeD0iODciIGN5PSI2MzEiIHI9IjM4Ii8+PGNpcmNsZSBjeD0iMjQyIiBjeT0iMTA1IiByPSIyNiIvPjxjaXJjbGUgY3g9Ijc5MSIgY3k9Ijc5NSIgcj0iMjYiLz48L2c+PC9zdmc+"),
+    linear-gradient(112deg, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0.55) 38%, rgba(255, 255, 255, 0.15) 62%, rgba(255, 255, 255, 0.8) 100%),
+    radial-gradient(1100px 640px at 0% -20%, rgba(99, 102, 241, 0.07), transparent 65%),
+    radial-gradient(900px 600px at 100% 115%, rgba(56, 189, 248, 0.09), transparent 65%),
+    radial-gradient(700px 360px at 55% 30%, rgba(255, 255, 255, 0.9), transparent 70%),
+    url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNjAiIGhlaWdodD0iMTYwIj48ZmlsdGVyIGlkPSJuIj48ZmVUdXJidWxlbmNlIHR5cGU9ImZyYWN0YWxOb2lzZSIgYmFzZUZyZXF1ZW5jeT0iMS4xIiBudW1PY3RhdmVzPSIyIiBzdGl0Y2hUaWxlcz0ic3RpdGNoIi8+PGZlQ29sb3JNYXRyaXggdmFsdWVzPSIwIDAgMCAwIDEgIDAgMCAwIDAgMSAgMCAwIDAgMCAxICAwIDAgMCAwLjA3IDAiLz48L2ZpbHRlcj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWx0ZXI9InVybCgjbikiLz48L3N2Zz4=");
+  background-blend-mode: normal, normal, normal, normal, normal, overlay;
+  background-size: cover, auto, auto, auto, auto, 160px 160px;
+  background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, repeat;
+  background-position: center top, center, center, center, center, center;
 }
 /* Frosted, not smoked. The same sheet under the same light, but on a pale
    ground the cues invert: the lit rim is nearly white and does little, so the
    work is done by a crisper ring and a real contact shadow. Without these the
    panel and the background differ by about 1.07:1 and it reads as paper. */
 .login-scene.login-light .card {
-  background:
-    linear-gradient(180deg,
-      rgba(255, 255, 255, 0.85),
-      rgba(255, 255, 255, 0.30) 40%,
-      rgba(255, 255, 255, 0) 64%),
-    var(--login-panel-bg);
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  background: rgba(255, 255, 255, 0.06);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.95),      /* lit top rim */
-    inset 0 -1px 0 rgba(23, 28, 36, 0.10),        /* underside */
-    0 0 0 1px rgba(23, 28, 36, 0.055),            /* hairline ring */
-    0 2px 6px rgba(23, 28, 36, 0.10),             /* contact */
-    0 22px 52px rgba(23, 28, 36, 0.14);           /* ambient */
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.35),
+    0 0 0 1px rgba(23, 33, 60, 0.10),
+    0 14px 40px rgba(23, 33, 60, 0.14);
 }
 .login-scene.login-light .card::after {
-  background: linear-gradient(128deg,
-    rgba(255, 255, 255, 0.75) 0%,
-    rgba(255, 255, 255, 0.22) 26%,
-    rgba(255, 255, 255, 0) 52%);
+  background: linear-gradient(128deg, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0.06) 30%, rgba(255, 255, 255, 0) 55%);
 }
 .login-scene.login-light .form-input,
 .login-scene.login-light .form-select,
@@ -3646,7 +3634,8 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   box-shadow: inset 0 1px 2px rgba(23, 28, 36, 0.10), inset 0 -1px 0 rgba(255, 255, 255, 0.9);
 }
 .login-scene.login-light .login-scene-toggle {
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 3px rgba(23, 28, 36, 0.10);
+  background: rgba(255, 255, 255, 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 3px rgba(23, 33, 60, 0.10);
 }
 .login-scene.login-light .card::before {
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.9) 30%, rgba(255, 255, 255, 0.9) 70%, transparent);
@@ -3655,7 +3644,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .login-scene.login-light input:-webkit-autofill:hover,
 .login-scene.login-light input:-webkit-autofill:focus {
   -webkit-box-shadow: inset 0 0 0 1000px #ffffff;
-  -webkit-text-fill-color: #171c24; caret-color: #171c24;
+  -webkit-text-fill-color: #0b1020; caret-color: #0b1020;
 }
 
 /* --- Narrow and short viewports ----------------------------------------- */

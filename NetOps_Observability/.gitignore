@@ -2,6 +2,8 @@
 # install.py writes next to it — .env.rotate.bak (secret rotation) and
 # .env.plan.bak (resource replan) — which were previously committable (M26).
 deployment/docker/.env*
+# Single-writer install lock (install.py / install-correlix.sh, FMEA 2026-09-15 §4.2).
+deployment/docker/.install.lock
 data/
 
 # Pre-cutover app-state snapshots (contain live secrets — never commit)
@@ -91,3 +93,6 @@ data/licence-signer/
 # vitest writes a cache under src/ when run from the repo root rather than
 # from src/frontend; it is a build artefact, never a dependency tree.
 src/node_modules/
+
+# Installer single-writer locks (install-correlix.sh fd 9 / fd 8, install.py re-flock) — runtime state, never committed.
+deployment/docker/.install-bundle.lock

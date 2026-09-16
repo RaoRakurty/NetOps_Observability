@@ -173,6 +173,27 @@ ALLOWLIST: dict[AllowKey, str] = {
     # the errno, and says in one line which protection is missing.
     ("install.py", "ensure_data_dirs", "bcb62824"): "do-not-delete notice beside data/opensearch-snapshots; warn() names path+errno, no service reads it, install verdict unchanged",
     ("install.py", "api_runtime_uid", "831da648"): "uid/gid from a .env that may not exist yet (--no-start dry paths); compose default",
+    # Reviewed 2026-09-15 (installer self-healing, docs/design/INSTALLER_SELF_HEALING_FMEA_2026-09-15.md).
+    # These seven landed with ffbb4055 (compose_up convergence, clean store stop,
+    # early Keycloak DB) and failed this guard at that HEAD; the selfheal/install-py
+    # tranche reviewed each. ComposeOps.up, which could not run docker at all, now
+    # ESCALATES instead of being listed. The rest feed a decision that is itself
+    # loud, or are best-effort by design:
+    # -- compose_up diagnosis: a docker call that fails becomes the diagnosis --
+    ("install.py", "ComposeOps.inspect", "159729cc"): "inspect failure returns None; _wait_blockers_healthy turns None into a named 'no longer exists' install FAILURE",
+    ("install.py", "ComposeOps.logs", "c9f2d79a"): "log read failure returns '(could not read logs: <err>)', which is printed inside the fail() diagnosis it feeds",
+    # -- stop_stores_cleanly: best-effort before a recreate that stops the stores anyway --
+    ("install.py", "stop_stores_cleanly", "927c3dcd"): "`compose ps` failure warns with the error; phase B's recreate still stops the stores and compose_up waits through recovery",
+    ("install.py", "stop_stores_cleanly", "12be201c"): "`compose stop` failure warns with the error; the recreate stops them regardless and compose_up waits through recovery",
+    ("install.py", "stop_stores_cleanly", "4e0c21a3"): "per-store exit-code probe; an unreadable code only skips the SIGKILL note, the stop itself already happened",
+    ("install.py", "_postgres_shutdown_unconfirmed", "669b319a"): "log read failure returns the reason; stop_stores_cleanly warns postgres is NOT confirmed clean (never assumes clean)",
+    # -- early Keycloak DB attempt: deliberately non-fatal, the fatal gate follows --
+    ("install.py", "bootstrap_keycloak_db", "e4a91b90"): "pre-start postgres start failure warns + returns False; confirm_keycloak_db retries after the stack is up and fail()s under sso",
+    # Reviewed 2026-09-15 (selfheal/tiers: host-profile budgets §4.3, tiered bring-up §4.5).
+    # Both return the reason to a caller that prints it and falls back to what
+    # the installer did before the feature existed — never to a success claim:
+    ("install.py", "_read_json_object", "4f55f1f9"): "unreadable advisory JSON (host profile / resource plan) returns (None, reason); load_host_profile / planner_overcommit warn it and use unscaled waits / 'plan fits' — the pre-feature behaviour",
+    ("install.py", "ComposeOps._query", "19ea2a08"): "read-only compose query (config --services / ps) failure returns (None, redacted reason); _tiered_up warns and falls back to one full start, _settle warns and compose's own depends_on gates still apply; the final `up -d` still decides",
     ("refresh_provider_ranges.py", "main", "0e6dd5ac"): "first-run bootstrap: no previous snapshot file => empty baseline",
     # Re-pinned 2026-08-17: shifted by the BUS_PARTITIONS planner work
     # (constants + derive_bus_partitions inserted above it). Handler re-read,

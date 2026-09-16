@@ -226,6 +226,190 @@ jobs:
           sudo test -s data/tls/ca.pem || { echo "::error::mesh CA missing"; missing=1; }
           exit "$missing"
 
+  # Layer 3b — installer self-healing (docs/design/INSTALLER_SELF_HEALING_FMEA_
+  # 2026-09-15.md §3.7 T1/T2, §4.7, §5 "CI real boot"). The leg above boots
+  # once, on a fast disk, and samples container state once — the FMEA's §1.3
+  # names exactly those gaps as why CI did not catch the .123 failure. This job
+  # is the same real `install.py --tls=yes` with three additions:
+  #   1. CHAOS: postgres is SIGKILLed the moment phase A has converged and the
+  #      mint is done (install.py's `mint ... ok` marker), before phase B's
+  #      clean stop — the unclean stop behind .123. The install must heal: exit
+  #      0, postgres healthy after crash recovery, Keycloak's database present,
+  #      Keycloak never crash-looping on it.
+  #   2. RE-RUN: the documented remedy is "re-run the installer"; a second run
+  #      on the same host must exit 0 and repeat the same stage plan (once the
+  #      install journal lands, skip the bundle — asserted conditionally).
+  #   3. STABILITY: success means stable over a window, not one sample — every
+  #      long-running container keeps its RestartCount and StartedAt for
+  #      STABILITY_WINDOW_S, nothing unhealthy, every *-init exited 0.
+  # Helpers live in NetOps_Observability/scripts/ci/ and are unit-tested in
+  # tests/test_ci_*.py; that gate runs FIRST so a broken helper costs seconds,
+  # not a 40-minute boot.
+  #
+  # PROVEN HERE: healing on a FAST runner disk (crash recovery takes seconds).
+  # NOT proven here: the .123 slow-disk timing (145 s recovery) — that needs the
+  # rig or a throttled-disk leg (FMEA §5 item 4, feasibility unverified).
+  tls-install-selfheal:
+    name: install.py --tls=yes self-heal · postgres SIGKILL between phases · re-run · stability window (blocking)
+    runs-on: ubuntu-latest
+    # Two installs (the second reuses the build cache) + two stability windows
+    # + asset build. The single-boot leg above is budgeted 45 min.
+    timeout-minutes: 100
+    env:
+      STABILITY_WINDOW_S: '60'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: self-heal helpers — ruff, shellcheck, unit tests (before the expensive boot)
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          pip install "ruff==${RUFF_VERSION}" "pytest==${PYTEST_VERSION}"
+          ruff check scripts/ci tests/test_ci_stack_stability.py \
+            tests/test_ci_chaos_install.py tests/test_ci_install_markers.py
+          shellcheck scripts/ci/assert-postgres-sso.sh
+          python3 -m pytest -v tests/test_ci_stack_stability.py \
+            tests/test_ci_chaos_install.py tests/test_ci_install_markers.py
+
+      - name: free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+      - name: build web assets the images bake in
+        run: |
+          set -euo pipefail
+          (cd NetOps_Observability/src/frontend && npm ci --no-audit --no-fund && npm run build)
+          (cd NetOps_Observability/docs-portal && npm ci --no-audit --no-fund && npm run build)
+
+      - name: "chaos: install.py --tls=yes with postgres SIGKILLed between phase A and B"
+        id: chaos
+        working-directory: NetOps_Observability
+        env:
+          PYTHONUNBUFFERED: "1"
+        # chaos_install.py streams the install live, fires `docker kill -s KILL`
+        # on postgres at the mint-ok marker, and exits non-zero if the kill did
+        # not land (a chaos leg that injected nothing must not go green) or the
+        # install did not exit 0. sudo -E for the same data-dir chown reason as
+        # the leg above; the wrapper itself runs unprivileged (docker group).
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/selfheal"
+          python3 scripts/ci/chaos_install.py \
+            --log "$RUNNER_TEMP/selfheal/install-1.log" \
+            --evidence "$RUNNER_TEMP/selfheal/chaos-evidence.json" \
+            -- sudo -E python3 scripts/install.py --tls=yes --progress-json
+
+      - name: "chaos: every stage of the first install closed ok"
+        working-directory: NetOps_Observability
+        run: python3 scripts/ci/install_markers.py check --log "$RUNNER_TEMP/selfheal/install-1.log"
+
+      - name: "chaos: stack stable over the window (no restarts, nothing unhealthy, one-shots exited 0)"
+        working-directory: NetOps_Observability
+        run: |
+          python3 scripts/ci/stack_stability.py --project netops \
+            --window "$STABILITY_WINDOW_S" \
+            --save-services "$RUNNER_TEMP/selfheal/services-1.json"
+
+      - name: "chaos: postgres healed from the SIGKILL; Keycloak database exists, Keycloak not crash-looping"
+        working-directory: NetOps_Observability
+        run: bash scripts/ci/assert-postgres-sso.sh --expect-crash-recovery "$RUNNER_TEMP/selfheal/chaos-evidence.json"
+
+      # Runs even when the chaos install failed: whether the documented remedy
+      # heals a failed install is exactly what an operator needs to know, and the
+      # job is already red, so nothing is masked.
+      - name: "re-run: the same install a second time on the same host"
+        id: rerun
+        if: ${{ !cancelled() && steps.chaos.conclusion != 'skipped' }}
+        working-directory: NetOps_Observability
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          sudo -E python3 scripts/install.py --tls=yes --progress-json 2>&1 \
+            | tee "$RUNNER_TEMP/selfheal/install-2.log"
+
+      - name: "re-run: exit 0, same stage plan, bundle skipped once a journal exists"
+        if: ${{ !cancelled() && steps.rerun.conclusion == 'success' }}
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          # The journal (FMEA §4.1) is not built yet. When it lands at this
+          # path the check switches to its journal rules on its own. It is
+          # root-owned 0600, so a copy is read; absence means "no journal".
+          journal="data/.install-journal.json"
+          copy="$RUNNER_TEMP/selfheal/install-journal.json"
+          if sudo test -f "$journal"; then
+            sudo cp "$journal" "$copy"
+            sudo chown "$(id -u):$(id -g)" "$copy"
+            echo "install journal present — journal rules apply"
+          fi
+          python3 scripts/ci/install_markers.py check-rerun \
+            --first "$RUNNER_TEMP/selfheal/install-1.log" \
+            --second "$RUNNER_TEMP/selfheal/install-2.log" \
+            --journal "$copy"
+
+      - name: "re-run: stack stable over the window and no service lost"
+        if: ${{ !cancelled() && steps.rerun.conclusion == 'success' }}
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          baseline=()
+          if [ -f "$RUNNER_TEMP/selfheal/services-1.json" ]; then
+            baseline=(--baseline-services "$RUNNER_TEMP/selfheal/services-1.json")
+          else
+            # Only when the first stability step never ran — the job is
+            # already red in that case; the window check itself still runs.
+            echo "::warning::no first-run service baseline (the chaos leg failed earlier); checking stability only"
+          fi
+          python3 scripts/ci/stack_stability.py --project netops \
+            --window "$STABILITY_WINDOW_S" "${baseline[@]}"
+
+      - name: "re-run: postgres healthy, Keycloak database exists, Keycloak not crash-looping"
+        if: ${{ !cancelled() && steps.rerun.conclusion == 'success' }}
+        working-directory: NetOps_Observability
+        run: bash scripts/ci/assert-postgres-sso.sh
+
+      - name: "re-run: the TLS ingress still serves (CA-verified)"
+        if: ${{ !cancelled() && steps.rerun.conclusion == 'success' }}
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent --max-time 30 --retry 6 --retry-delay 10 \
+            --cacert deployment/docker/nginx/certs/fullchain.pem \
+            https://localhost/admin/health
+          echo "TLS ingress healthy after the re-run"
+
+      - name: failure diagnostics (compose state, restart counts, store + keycloak logs)
+        if: failure()
+        working-directory: NetOps_Observability/deployment/docker
+        # Diagnostics only, on a job that is already red: each `|| true` keeps
+        # one unreadable source (e.g. a container that no longer exists) from
+        # hiding the rest. Nothing here decides pass or fail.
+        run: |
+          echo "=== docker compose ps -a ==="; sudo docker compose ps -a || true
+          echo "=== restart counts / started at ==="
+          docker ps -aq --filter label=com.docker.compose.project=netops \
+            | xargs -r docker inspect --format '{{.Name}} status={{.State.Status}} restarts={{.RestartCount}} started={{.State.StartedAt}} exit={{.State.ExitCode}}' || true
+          echo "=== chaos evidence ==="; cat "$RUNNER_TEMP/selfheal/chaos-evidence.json" || true
+          for svc in postgres keycloak api; do
+            echo "=== $svc log (tail) ==="; sudo docker compose logs "$svc" --tail 80 || true
+          done
+          echo "=== df -h ==="; df -h / || true
+
+      - name: keep the install logs and evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tls-install-selfheal-logs
+          path: ${{ runner.temp }}/selfheal/
+          if-no-files-found: warn
+          retention-days: 14
+
   # Layer 4 — the Kubernetes packaging (tracker 114). Same doctrine as the
   # legs above: a chart that "looks fine" is not evidence. This renders it and
   # validates every object against the real Kubernetes schemas, then asserts

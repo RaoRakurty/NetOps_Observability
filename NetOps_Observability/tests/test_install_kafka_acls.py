@@ -13,8 +13,10 @@ deployment/docker/kafka/apply-acls.sh.
 
 These tests pin the fix — install.py owns authorization convergence:
 
-  (a) TLS + embedded-bus: after phase B the installer execs the mounted
-      /acls/apply-acls.sh inside the broker, then proves a real consumer
+  (a) TLS + embedded-bus: after phase B the installer pipes the bundle's
+      kafka/apply-acls.sh into `sh -s` inside the broker (never the
+      bind-mounted copy, which is stale after an upgrade that does not
+      recreate kafka — FMEA row 7 / T7), then proves a real consumer
       group holds membership through the enforcing broker (§16.1: no blind
       success);
   (b) persistent apply/verify failure ⇒ the install FAILS loudly (exit 1) —
@@ -28,9 +30,10 @@ These tests pin the fix — install.py owns authorization convergence:
       operator pointer (owner-managed broker);
   (f) re-running is idempotent at the installer layer (the script itself
       converges: kafka-acls --add of an existing ACL is a no-op);
-  (g) the compose/script contract holds: compose.tls.yml mounts the script
-      where install.py execs it, and the script carries its own read-back
-      verification + TLS admin-plane auto-detection.
+  (g) the compose/script contract holds: install.py never executes the
+      mounted copy (compose.tls.yml keeps the mount for the manual runbook),
+      and the script carries its own read-back verification + TLS admin-plane
+      auto-detection.
 
 Everything runs with subprocess/time monkeypatched — no docker, no broker.
 
@@ -81,8 +84,17 @@ DEAD_GROUP_OUT = (
 @pytest.fixture()
 def compose_dir(tmp_path: Path) -> Path:
     d = tmp_path / "deployment" / "docker"
-    d.mkdir(parents=True)
+    (d / "kafka").mkdir(parents=True)
+    # The bundle's own copy — the one install.py pipes into the broker.
+    (d / "kafka" / "apply-acls.sh").write_text(ACL_SCRIPT_PATH.read_text())
     return d
+
+
+APPLY_ARGV = ["docker", "compose", "exec", "-T", "kafka", "sh", "-s"]
+
+
+def is_apply(cmd) -> bool:
+    return list(cmd) == APPLY_ARGV
 
 
 def write_env(compose_dir: Path, profiles: str) -> Path:
@@ -131,7 +143,7 @@ class BusRecorder:
     def __call__(self, cmd, **kwargs):
         self.calls.append(list(cmd))
         self.kwargs.append(kwargs)
-        if "/acls/apply-acls.sh" in cmd:
+        if is_apply(cmd):
             rc, out, err = self._next(self.apply_results)
         elif any("kafka-consumer-groups.sh" in c for c in cmd):
             rc, out, err = self._next(self.describe_results)
@@ -141,7 +153,7 @@ class BusRecorder:
 
     @property
     def apply_calls(self) -> list[list[str]]:
-        return [c for c in self.calls if "/acls/apply-acls.sh" in c]
+        return [c for c in self.calls if is_apply(c)]
 
     @property
     def describe_calls(self) -> list[list[str]]:
@@ -159,12 +171,13 @@ def test_tls_embedded_bus_applies_matrix_then_verifies_membership(
 
     install.apply_bus_authorization(compose_dir, env_path, tls_enabled=True)
 
-    # One idempotent in-container exec of the mounted matrix script — argv is
-    # a list (no shell), -T (no TTY: runs unattended), cwd is the compose dir.
-    assert bus.apply_calls == [
-        ["docker", "compose", "exec", "-T", "kafka", "/acls/apply-acls.sh"]]
+    # One idempotent in-container `sh -s` fed the BUNDLE's matrix script on
+    # stdin — argv is a list (no host shell), -T (no TTY: runs unattended),
+    # cwd is the compose dir.
+    assert bus.apply_calls == [APPLY_ARGV]
     apply_idx = bus.calls.index(bus.apply_calls[0])
     assert bus.kwargs[apply_idx]["cwd"] == str(compose_dir)
+    assert bus.kwargs[apply_idx]["input"] == ACL_SCRIPT_PATH.read_text()
     assert bus.kwargs[apply_idx].get("timeout")  # bounded (§16.2/§9)
 
     # Then the liveness read-back through the enforcing broker: super-user
@@ -321,11 +334,44 @@ def test_group_member_parse_live_vs_dead():
 
 # ── (g) compose/script contract pins ─────────────────────────────────────────
 
-def test_compose_tls_mounts_the_script_where_install_execs_it():
+def test_compose_tls_keeps_the_mount_for_the_manual_runbook():
     tls = COMPOSE_TLS.read_text()
     assert "./kafka/apply-acls.sh:/acls/apply-acls.sh:ro" in tls, (
-        "compose.tls.yml must mount apply-acls.sh at /acls/apply-acls.sh — "
-        "install.py execs that path inside the broker")
+        "compose.tls.yml mounts apply-acls.sh at /acls/apply-acls.sh for the "
+        "manual runbook path (docs/runbooks/tls-enforce-wave.md)")
+
+
+def test_install_never_executes_the_mounted_copy():
+    """FMEA row 7 / T7: a single-file bind mount keeps the inode it was
+    created with, so after an upgrade that does not recreate kafka the mounted
+    /acls/apply-acls.sh is the OLD matrix (2026-09-02: an ungranted topic left
+    a consumer auth-dead for 3 h). install.py must pipe the bundle's copy —
+    it must not name the in-container path at all, not even in a hint an
+    operator would copy."""
+    src = (SCRIPTS / "install.py").read_text()
+    assert "/acls/" not in src
+    assert '_ACL_EXEC = ["docker", "compose", "exec", "-T", "kafka", "sh", "-s"]' in src
+    assert 'Path("kafka") / "apply-acls.sh"' in src
+
+
+def test_a_missing_bundle_script_fails_before_touching_the_broker(compose_dir, clock,
+                                                                  monkeypatch, capsys):
+    (compose_dir / "kafka" / "apply-acls.sh").unlink()
+    bus = BusRecorder()
+    monkeypatch.setattr(install.subprocess, "run", bus)
+    with pytest.raises(SystemExit) as e:
+        install.apply_kafka_acls(compose_dir)
+    assert e.value.code == 1 and bus.calls == []
+    assert "apply-acls.sh" in capsys.readouterr().err
+
+
+def test_the_injected_runner_receives_the_script(compose_dir, clock, monkeypatch):
+    bus = BusRecorder()
+    monkeypatch.setattr(install.subprocess, "run",
+                        lambda *a, **k: pytest.fail("the default runner was used"))
+    install.apply_kafka_acls(compose_dir, run=bus)
+    assert bus.apply_calls == [APPLY_ARGV]
+    assert bus.kwargs[0]["input"].startswith("#!/bin/sh")
 
 
 def test_acl_script_carries_tls_admin_plane_and_readback_verification():

@@ -72,6 +72,14 @@ services:
   # =========================================================================
 
   postgres:
+    # Stateful store: give it a real shutdown window. Compose uses this on `stop`
+    # AND when `up` recreates the container (the installer's TLS phase B does).
+    # The 10 s default SIGKILLed postgres mid-shutdown on a 4-core lab box
+    # (2026-09-15, .123): the next start ran crash recovery for 145 s and the
+    # install failed on a health gate. A clean stop takes seconds; the window
+    # only matters when the disk is slow — install.py lengthens it on a host its
+    # preflight measured as slow (STORE_STOP_GRACE in .env, FMEA §4.3).
+    stop_grace_period: ${STORE_STOP_GRACE:-120s}
     image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
     mem_limit: ${POSTGRES_MEM_LIMIT:-1g}
     cpus: ${POSTGRES_CPU_LIMIT:-2}
@@ -94,6 +102,12 @@ services:
       - maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-64MB}
       - -c
       - max_connections=${PG_MAX_CONNECTIONS:-100}
+      # Crash recovery used to fsync every file in the data directory one by one
+      # (recovery_init_sync_method=fsync, the default): 107 s on the lab box before
+      # redo even began. syncfs (PG14+, Linux) flushes the filesystem in one call.
+      # A failing syncfs is logged, never fatal.
+      - -c
+      - recovery_init_sync_method=syncfs
     volumes:
       - ../../data/postgres:/var/lib/postgresql/data
     healthcheck:
@@ -101,6 +115,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      # Failures inside start_period do not count, and the first success flips
+      # the container to healthy at once — so a fast start is not slowed down,
+      # and a start that needs crash recovery is not declared unhealthy at 50 s.
+      # A slow host gets a longer window (PG_START_PERIOD in .env, FMEA §4.3).
+      start_period: ${PG_START_PERIOD:-300s}
     networks: [netops]
     restart: *restart
 
@@ -217,6 +236,14 @@ services:
   # drop `embedded-bus` from COMPOSE_PROFILES and point BROKER_URLS at it
   # (install-correlix.sh --external-kafka does both).
   kafka:
+    # Stateful store: give it a real shutdown window. Compose uses this on `stop`
+    # AND when `up` recreates the container (the installer's TLS phase B does).
+    # The 10 s default SIGKILLed postgres mid-shutdown on a 4-core lab box
+    # (2026-09-15, .123): the next start ran crash recovery for 145 s and the
+    # install failed on a health gate. A clean stop takes seconds; the window
+    # only matters when the disk is slow — install.py lengthens it on a host its
+    # preflight measured as slow (STORE_STOP_GRACE in .env, FMEA §4.3).
+    stop_grace_period: ${STORE_STOP_GRACE:-120s}
     image: apache/kafka:4.1.1@sha256:0bc1bb2478f45b6cea78864df86acdc11e8df2c5172477819a4d12942cbe5d40
     profiles: ["embedded-bus"]
     mem_limit: ${KAFKA_MEM_LIMIT:-1g}
@@ -714,6 +741,14 @@ services:
   # =========================================================================
 
   opensearch:
+    # Stateful store: give it a real shutdown window. Compose uses this on `stop`
+    # AND when `up` recreates the container (the installer's TLS phase B does).
+    # The 10 s default SIGKILLed postgres mid-shutdown on a 4-core lab box
+    # (2026-09-15, .123): the next start ran crash recovery for 145 s and the
+    # install failed on a health gate. A clean stop takes seconds; the window
+    # only matters when the disk is slow — install.py lengthens it on a host its
+    # preflight measured as slow (STORE_STOP_GRACE in .env, FMEA §4.3).
+    stop_grace_period: ${STORE_STOP_GRACE:-120s}
     # Slim build over the pinned stock image: ~560 MB of unused plugins removed
     # (ml/knn/sql/PA/security-analytics/…, security KEPT for the prod flip) —
     # see opensearch/Dockerfile for the full list + rationale. The FROM pin is
@@ -1231,6 +1266,14 @@ services:
   # =========================================================================
 
   clickhouse:
+    # Stateful store: give it a real shutdown window. Compose uses this on `stop`
+    # AND when `up` recreates the container (the installer's TLS phase B does).
+    # The 10 s default SIGKILLed postgres mid-shutdown on a 4-core lab box
+    # (2026-09-15, .123): the next start ran crash recovery for 145 s and the
+    # install failed on a health gate. A clean stop takes seconds; the window
+    # only matters when the disk is slow — install.py lengthens it on a host its
+    # preflight measured as slow (STORE_STOP_GRACE in .env, FMEA §4.3).
+    stop_grace_period: ${STORE_STOP_GRACE:-120s}
     image: clickhouse/clickhouse-server:24.8-alpine@sha256:b002e56ed5c16e224c312527f6fcba7e77216fec5d7a88a7828f59efc614feb5
     # PID-1 REAPING (incident 2026-08-19). This container's PID 1 is
     # clickhouse-server, which is an application, not an init — it never reaps

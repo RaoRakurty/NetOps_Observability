@@ -245,9 +245,9 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
     // Two INDEPENDENT questions, which this used to conflate:
     //   · what does a CLICK do?      → act (Iris opens the slide-over) or route
     //   · does it open a FLYOUT?     → does it have routed children
-    // Iris answers "act" to the first and, since it gained a Knowledge page,
-    // "yes" to the second. Gating the flyout on `!isCopilot` made every page
-    // under an acting section unreachable in rail mode.
+    // Iris answers "act" to the first and, having no pages, "no" to the second.
+    // The flyout stays gated on children rather than on `!isCopilot`: gating on
+    // the action once made every page under an acting section unreachable.
     const isCopilot = s.action === "copilot";
     const hasFlyout = !!s.children?.length;
     const active = isCopilot ? copilotOpen : s.id === activeSection;

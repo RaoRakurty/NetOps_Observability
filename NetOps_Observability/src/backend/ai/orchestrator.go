@@ -30,6 +30,10 @@ type Orchestrator struct {
 	KB        *KB        // Network Expert KB (curated playbooks); nil = no supporting knowledge
 	ProductKB *ProductKB // Correlix product knowledge (concepts + how-tos); nil = no product answers
 	Docs      *DocsIndex // docs-portal BM25 retriever; when set it upgrades product answers with real page citations
+	// TAC is the vendor TAC knowledge (issue classes, per-vendor checks and their
+	// bound read-only commands) Iris reads before answering a troubleshooting
+	// question (tac_knowledge.go). nil = not wired; every answer keeps its shape.
+	TAC TACKnowledgeSource
 	// Skills is the loaded, validated troubleshooting-method catalog (IRIS Phase
 	// A, skills/<name>/SKILL.md compiled in). nil = skills DISABLED: Ask keeps
 	// its classic classify→mode path exactly as before, so the feature can be
@@ -395,6 +399,13 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 	// state. Unrecognized question → a helpful capability clarification (NOT the
 	// current-state briefing); it reads no data and needs no module.
 	if plan.Intent == "capability" {
+		// A protocol or vendor question the classifier could not place is often
+		// exactly what the TAC catalogue covers ("bgp neighbour down on SR
+		// Linux"): answer from that knowledge before falling back to the
+		// capability clarification. No tenant data is read.
+		if ans, ok := o.answerTACKnowledge(plan, disc, o.tacFor(question, 2)); ok {
+			return ans, nil
+		}
 		return o.answerCapability(plan), nil
 	}
 
@@ -564,6 +575,9 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 	// general guidance, not evidence about this network).
 	for _, hit := range o.kbFor(pr) {
 		disc = append(disc, "Referenced general playbook: "+hit.Playbook.Title+" (guidance, not evidence).")
+	}
+	for _, h := range o.tacForProblem(pr) {
+		disc = append(disc, "Referenced vendor TAC knowledge: "+h.Title+" (guidance, not evidence).")
 	}
 
 	pe := &ProblemExplanation{
@@ -1188,7 +1202,11 @@ func (o *Orchestrator) answerNavigation(question string, plan Plan, disc []strin
 // best matches directly is honest and works even with no provider. The answer is
 // explicitly framed as general guidance, never live evidence about this network.
 func (o *Orchestrator) answerKB(question string, plan Plan, disc []string) Answer {
+	tacHits := o.tacFor(question, 2)
 	if o.KB == nil {
+		if ans, ok := o.answerTACKnowledge(plan, disc, tacHits); ok {
+			return ans
+		}
 		return Answer{
 			Mode: ModeUnavailable, Intent: plan.Intent, Modules: plan.Modules,
 			Text:      "The network playbook library isn't available in this build.",
@@ -1197,6 +1215,9 @@ func (o *Orchestrator) answerKB(question string, plan Plan, disc []string) Answe
 	}
 	hits := o.KB.Search(question, KBHints{}, 3)
 	if len(hits) == 0 {
+		if ans, ok := o.answerTACKnowledge(plan, disc, tacHits); ok {
+			return ans
+		}
 		return Answer{
 			Mode: ModeUnavailable, Intent: plan.Intent, Modules: plan.Modules,
 			Text:      "I don't have a curated playbook matching that yet. Name the protocol or symptom — e.g. 'BGP flap', 'packet loss', 'ISP latency', 'MTU', 'asymmetric routing'.",
@@ -1211,6 +1232,15 @@ func (o *Orchestrator) answerKB(question string, plan Plan, disc []string) Answe
 		cites = append(cites, Citation{ID: "playbook:" + h.Playbook.ID, Kind: "knowledge", Label: h.Playbook.Title})
 	}
 	mh.Headline = "Curated guidance for: " + top.Title + " — general best-practice, not live evidence about your network. Verify against Correlix evidence."
+	// The vendor TAC knowledge for the same question rides along, after the
+	// playbooks, so the operator sees what a vendor's TAC would check too.
+	for _, h := range tacHits {
+		mh.Items = append(mh.Items, h.Snippet())
+		cites = append(cites, Citation{ID: "tac:" + h.ClassID, Kind: "knowledge", Label: h.Title})
+	}
+	if len(tacHits) > 0 {
+		disc = append(disc, tacDisclaimer)
+	}
 	return Answer{
 		Mode: ModeInvestigationPlan, Intent: plan.Intent, Modules: plan.Modules,
 		Text: mh.Headline, Module: mh, Citations: cites,
@@ -1613,6 +1643,14 @@ func (o *Orchestrator) problemPrompt(question string, pr *Problem, bundle []Evid
 		b.WriteString("\nSUPPORTING NETWORK-ENGINEERING KNOWLEDGE (general guidance, NOT Correlix evidence — the evidence above wins):\n")
 		for _, hit := range hits {
 			fmt.Fprintf(&b, "- %s\n", hit.Playbook.Snippet())
+		}
+	}
+	// Vendor TAC knowledge for the same problem, fenced the same way: what a
+	// vendor's TAC would check first. General guidance, never evidence.
+	if hits := o.tacForProblem(pr); len(hits) > 0 {
+		b.WriteString("\nSUPPORTING VENDOR TAC KNOWLEDGE (what a vendor TAC checks first — general guidance, NOT Correlix evidence):\n")
+		for _, h := range hits {
+			fmt.Fprintf(&b, "- %s\n", strings.ReplaceAll(h.Snippet(), "\n", " · "))
 		}
 	}
 	b.WriteString("\nWrite 2–4 sentences: the likely root cause and why, grounded in the EVIDENCE above (the supporting knowledge is general guidance only, not facts about this network), citing ids. Then one line: the recommended next action.")
