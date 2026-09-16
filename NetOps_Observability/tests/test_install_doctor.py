@@ -691,6 +691,25 @@ def _preflight_body() -> str:
     return src[src.index("\npreflight() {"):src.index("\n# Release-signature check")]
 
 
+PIPED_HEAD = "printf '%s\\n' \"$out\" | head"
+
+
+def test_no_host_check_pipes_its_captured_output_into_head():
+    """A preflight check must not abort the install with no message.
+
+    `first=$(printf '%s\\n' "$out" | head -1)` under the script's `set -o
+    pipefail` takes SIGPIPE's exit status (141) whenever head exits before
+    printf has finished writing, and errexit then kills preflight silently.
+    It showed up as a RANDOM failure of the host-profile test below (rc 141,
+    empty stdout), on a different parametrisation each time. Bash takes a
+    first line without a pipe, so the race cannot exist."""
+    src = SCRIPT.read_text(encoding="utf-8")
+    offenders = [ln.strip() for ln in src.splitlines() if PIPED_HEAD in ln]
+    assert not offenders, (
+        "these lines can abort preflight with SIGPIPE's 141 and no output "
+        "(use ${out%%$'\\n'*} instead):\n  " + "\n  ".join(offenders))
+
+
 def test_preflight_wires_every_new_host_check():
     body = _preflight_body()
     for fn in ("check_rootless_docker", "check_compose_version", "check_image_disk_projection",

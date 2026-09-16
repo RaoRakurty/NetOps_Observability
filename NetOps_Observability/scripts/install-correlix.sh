@@ -530,7 +530,11 @@ check_compose_version() {
     warn "could not read the Docker Compose version ($(printf '%s' "$out" | tail -1)) — minimum $COMPOSE_MIN_VERSION not checked."
     return 0
   fi
-  v=$(printf '%s\n' "$out" | head -1 | tr -d '[:space:]')
+  # No pipe, for the reason spelled out in run_host_profile: stderr is merged
+  # into $out, so a daemon that answers with a warning line first makes
+  # `printf … | head -1` a SIGPIPE race that aborts preflight silently.
+  v=${out%%$'\n'*}
+  v=${v//[[:space:]]/}
   v=${v#v}
   case "$v" in
     [0-9]*.[0-9]*) ;;
@@ -665,7 +669,12 @@ run_host_profile() {
   fi
   out=$(timeout 30 python3 -B "$profiler" probe --data-dir "$ROOT/data" ${dargs[@]+"${dargs[@]}"} \
           --write "$ROOT/data/.host-profile.json" 2>&1) || rc=$?
-  first=$(printf '%s\n' "$out" | head -1)
+  # First line only, WITHOUT a pipe. `printf … | head -1` under `set -o
+  # pipefail` takes SIGPIPE's exit status (141) whenever head exits before
+  # printf has finished writing — a race the probe's multi-line output loses
+  # often enough to be seen — and errexit then kills preflight with no message
+  # at all. Bash can take the first line on its own.
+  first=${out%%$'\n'*}
   klass=${first%%$'\t'*}
   verdict=${first#*$'\t'}
   verdict=${verdict#*$'\t'}
