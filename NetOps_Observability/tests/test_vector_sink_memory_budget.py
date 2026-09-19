@@ -67,15 +67,23 @@ THE CONTRACT ENFORCED HERE
      `request.adaptive_concurrency.max_concurrency_limit` and a finite
      `request.retry_attempts`. Leaving any of them to the default puts a
      multi-gigabyte ceiling inside a half-gigabyte cgroup.
-  2a. Every kafka SOURCE pins `queue.buffered.max.kbytes` and
-     `queue.buffered.max.messages`. This queue is librdkafka's, not Vector's —
-     no `buffer:` block covers it — and it defaults to 1 GiB per consumer.
+  2a. Every kafka SOURCE pins `queued.max.messages.kbytes` and
+     `queued.min.messages`, and pins them under those exact names. This queue
+     is librdkafka's, not Vector's — no `buffer:` block covers it — and it
+     defaults to 64 MiB per consumer, ten of which do not fit a 512 MiB cgroup.
+     The NAME is checked as strictly as the number: librdkafka rejects an
+     unknown property instead of ignoring it, so a plausible-looking misspelling
+     (`queue.buffered.max.kbytes`, or the producer's `queue.buffering.*`) does
+     not merely fail to bound anything — it fails the topology build with exit
+     78 and crash-loops the tier. That is not hypothetical: it took vector-router
+     down on the lab box for three days, because `vector validate
+     --no-environment` skips component construction and passes such a name.
 
   3. The arithmetic closes: summed over a tier's sinks AND sources,
 
          worst_case = SUM(buffer_events x EVENT_BYTES_CEILING)
                     + SUM(max_concurrency_limit x batch.max_bytes)
-                    + SUM(queue.buffered.max.kbytes)
+                    + SUM(queued.max.messages.kbytes)
 
      plus a baseline RSS allowance must fit inside HEADROOM_SHARE of the
      service's compose mem_limit DEFAULT — the value a fresh install gets, not
@@ -86,12 +94,13 @@ THE CONTRACT ENFORCED HERE
 
 KAFKA *SINKS* ARE OUT OF SCOPE HERE, DELIBERATELY — unlike kafka SOURCES,
 which (2a) covers. A sink's PRODUCER queue is librdkafka's
-`queue.buffering.max.kbytes` (note: buffer-ING, a different setting from the
-consumer's buffer-ED), also a 1 GiB default, and pinning
-`batch`/`adaptive_concurrency` on it would be meaningless because it does not
-use Vector's request pipeline. That is a real latent exposure, mostly on the
-aggregator, which produces to eleven topics; it has no incident behind it, was
-not what OOMed the router, and is not bundled into this fix.
+`queue.buffering.max.kbytes` — a different property on a different code path
+from the consumer's `queued.max.messages.kbytes`, and one the consumer refuses
+outright — defaulting to 1 GiB, and pinning `batch`/`adaptive_concurrency` on
+it would be meaningless because it does not use Vector's request pipeline.
+That is a real latent exposure, mostly on the aggregator, which produces to
+eleven topics; it has no incident behind it, was not what OOMed the router,
+and is not bundled into this fix.
 
 Run:  python3 -m pytest tests/test_vector_sink_memory_budget.py -v
 """
@@ -163,14 +172,34 @@ MAX_CONCURRENCY_CEILING = 8
 MAX_BATCH_BYTES_CEILING = 4 * MIB
 
 # librdkafka's consumer prefetch queue, which is NOT Vector's buffer and is not
-# covered by any `buffer:` block. Its defaults are `queue.buffered.max.messages`
-# 1,000,000 and `queue.buffered.max.kbytes` 1,048,576 (1 GiB) PER CONSUMER; the
-# router runs ten. Sizing this is the SOURCE half of tracker 324 — bounding the
-# sinks alone still left the container at 70-83 % of its cap while one lane
-# drained a backlog. The default is spelled out so an unpinned source is scored
-# at what it actually costs, and blows the budget assertion below.
-LIBRDKAFKA_DEFAULT_PREFETCH_KBYTES = 1048576
+# covered by any `buffer:` block. Sizing it is the SOURCE half of tracker 324 —
+# bounding the sinks alone still left the container at 70-83 % of its cap while
+# one lane drained a backlog.
+#
+# `queued.max.messages.kbytes` is the byte ceiling on a high-level consumer's
+# whole prefetch queue; librdkafka 2.3.0 (the version inside timberio/vector
+# 0.40.0 — it prints it on the INIT line at debug level) defaults it to 65,536
+# KiB, 64 MiB PER CONSUMER, and the router runs ten of them: 640 MiB of
+# prefetch alone inside a 512 MiB container. The default is spelled out here so
+# an unpinned source is scored at what it actually costs and blows the budget
+# assertion below. `queued.min.messages` (default 100,000 per topic+partition)
+# is the refill trigger, not a hard cap, so it is required but not summed.
+LIBRDKAFKA_DEFAULT_PREFETCH_KBYTES = 65536
 MAX_PREFETCH_KBYTES_CEILING = 4096
+PREFETCH_KBYTES_KEY = "queued.max.messages.kbytes"
+PREFETCH_MESSAGES_KEY = "queued.min.messages"
+
+# Names librdkafka does NOT accept on a consumer, mapped to what was meant.
+# An unknown property is not ignored: rdkafka refuses to create the client,
+# Vector exits 78 at topology build, and compose crash-loops the tier.
+CONSUMER_NAME_TRAPS = {
+    "queue.buffered.max.kbytes": PREFETCH_KBYTES_KEY,
+    "queue.buffered.max.messages": PREFETCH_MESSAGES_KEY,
+    "queue.buffering.max.kbytes": PREFETCH_KBYTES_KEY,
+    "queue.buffering.max.messages": PREFETCH_MESSAGES_KEY,
+    "queued.max.messages": PREFETCH_MESSAGES_KEY,
+    "queued.min.messages.kbytes": PREFETCH_KBYTES_KEY,
+}
 
 
 def read(path: str) -> str:
@@ -197,7 +226,7 @@ def kafka_sources(tier: str) -> list[tuple[str, dict]]:
 def prefetch_kbytes(src: dict) -> int:
     """This consumer's prefetch ceiling in KiB — librdkafka's default if unset."""
     opts = src.get("librdkafka_options") or {}
-    return int(opts.get("queue.buffered.max.kbytes", LIBRDKAFKA_DEFAULT_PREFETCH_KBYTES))
+    return int(opts.get(PREFETCH_KBYTES_KEY, LIBRDKAFKA_DEFAULT_PREFETCH_KBYTES))
 
 
 def compose() -> dict:
@@ -378,30 +407,42 @@ def test_kafka_sources_pin_their_consumer_prefetch(tier: str) -> None:
 
     A kafka source's prefetch queue belongs to librdkafka, so no `buffer:`
     block describes it and nothing in Vector's config surface bounds it unless
-    it is stated. Left at the defaults each consumer may hold 1 GiB; the router
-    runs ten of them inside a 512 MiB container. Measured live: with the sinks
+    it is stated. Left at the default each consumer may hold 64 MiB; the router
+    runs ten of them inside a 512 MiB container. The property NAMES are checked
+    as strictly as the numbers — see CONSUMER_NAME_TRAPS for why a misspelling
+    is worse than an unbounded queue, not better. Measured live: with the sinks
     bounded but the sources unpinned, the router still climbed to 99.99 % of
     its 525 MiB cap draining a single lane's backlog.
     """
     offenders = []
     for name, src in kafka_sources(tier):
         opts = src.get("librdkafka_options") or {}
-        kb = opts.get("queue.buffered.max.kbytes")
+        kb = opts.get(PREFETCH_KBYTES_KEY)
         if kb is None:
             offenders.append(
-                f"{name}: queue.buffered.max.kbytes unpinned — librdkafka "
-                f"defaults to {LIBRDKAFKA_DEFAULT_PREFETCH_KBYTES} KiB (1 GiB)"
+                f"{name}: {PREFETCH_KBYTES_KEY} unpinned — librdkafka defaults "
+                f"to {LIBRDKAFKA_DEFAULT_PREFETCH_KBYTES} KiB (64 MiB) per consumer"
             )
         elif int(kb) > MAX_PREFETCH_KBYTES_CEILING:
             offenders.append(
                 f"{name}: prefetch {kb} KiB exceeds the "
                 f"{MAX_PREFETCH_KBYTES_CEILING} KiB this container is sized for"
             )
-        if opts.get("queue.buffered.max.messages") is None:
+        if opts.get(PREFETCH_MESSAGES_KEY) is None:
             offenders.append(
-                f"{name}: queue.buffered.max.messages unpinned — the byte cap "
-                f"alone does not bound a flood of small events"
+                f"{name}: {PREFETCH_MESSAGES_KEY} unpinned — the byte cap alone "
+                f"leaves librdkafka refilling toward 100,000 messages per "
+                f"topic+partition"
             )
+        for wrong, meant in CONSUMER_NAME_TRAPS.items():
+            if wrong in opts:
+                offenders.append(
+                    f"{name}: `{wrong}` is not a librdkafka CONSUMER property "
+                    f"(meant `{meant}`). rdkafka refuses to create a consumer "
+                    f"with an unknown property, so this does not silently fail "
+                    f"to bound anything — it fails the topology build with exit "
+                    f"78 and crash-loops the tier"
+                )
     assert not offenders, f"{tier}: " + "; ".join(offenders)
 
 

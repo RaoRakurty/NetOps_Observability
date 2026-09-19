@@ -134,10 +134,32 @@ sources:
     # each (1,859,838,263 consumed bytes / 241,214 messages) = ~215 MiB. The
     # sink buffer was pinned at its 500-event cap the whole time, so those
     # events were NOT in Vector's buffer — they were in librdkafka's consumer
-    # prefetch queue, which this config never bounded. librdkafka's defaults
-    # are `queue.buffered.max.messages=1000000` and
-    # `queue.buffered.max.kbytes=1048576` (1 GiB) PER CONSUMER, and the router
-    # runs ten of them: ten unbounded queues inside a 512 MiB container.
+    # PREFETCH queue, which no `buffer:` block describes and which this config
+    # never bounded.
+    #
+    # THE NAMES BELOW ARE LOAD-BEARING. librdkafka has two families that read
+    # alike: the consumer's `queued.*` (these) and the producer's
+    # `queue.buffering.*`. A consumer handed a name from the wrong family — or
+    # an invented one — does not warn and does not fall back to the default:
+    # rdkafka refuses to create the client, Vector fails the topology build and
+    # exits 78, and under compose's restart policy the tier crash-loops. A
+    # wrong spelling took vector-router down on the lab box for three days.
+    # `vector validate --no-environment` does NOT catch it (it skips component
+    # construction). `vector validate --skip-healthchecks` does, and so does
+    # scripts/preflight-configs.sh, which boots the committed config against
+    # the shipped image — run it before shipping a change to this block.
+    # Verified there: librdkafka v2.3.0 inside timberio/vector 0.40.0.
+    #
+    #   queued.max.messages.kbytes — the hard BYTE ceiling on this consumer's
+    #     prefetch queue; for a high-level consumer it covers the whole
+    #     consumer, not each partition. librdkafka 2.3.0 defaults it to
+    #     65,536 KiB (64 MiB) PER CONSUMER and the router runs ten: 640 MiB of
+    #     prefetch alone, inside a 512 MiB container. This is the term that
+    #     bounds memory.
+    #   queued.min.messages — the low-water mark librdkafka refills toward,
+    #     per topic+partition (default 100,000). It is a fetch TRIGGER rather
+    #     than a hard cap, lowered here so a flood of small events cannot park
+    #     100k messages per partition underneath the byte ceiling.
     #
     # 4 MiB x 10 lanes = 40 MiB of prefetch, which with the sink side's 72 MiB
     # and a ~128 MiB baseline leaves the whole tier inside 60 % of the compose
@@ -147,8 +169,8 @@ sources:
     # also the CORRECT degradation — it back-pressures into the topic, which
     # retains 72 h, exactly as the sink side does (#209).
     librdkafka_options:
-      queue.buffered.max.messages: "5000"
-      queue.buffered.max.kbytes: "4096"
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.applogs"]
     group_id: "netops-router-applogs"
     decoding: { codec: json }
@@ -175,10 +197,11 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
-    # 324: bounded consumer prefetch — arithmetic on kafka_applogs.
+    # 324: bounded consumer prefetch — arithmetic and the name trap on
+    # kafka_applogs.
     librdkafka_options:
-      queue.buffered.max.messages: "5000"
-      queue.buffered.max.kbytes: "4096"
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.flows.raw"]
     group_id: "netops-router-flows-rekey"
     decoding: { codec: json }
@@ -195,10 +218,11 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
-    # 324: bounded consumer prefetch — arithmetic on kafka_applogs.
+    # 324: bounded consumer prefetch — arithmetic and the name trap on
+    # kafka_applogs.
     librdkafka_options:
-      queue.buffered.max.messages: "5000"
-      queue.buffered.max.kbytes: "4096"
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.syslog"]
     group_id: "netops-router-syslog"
     decoding: { codec: json }
@@ -215,10 +239,11 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
-    # 324: bounded consumer prefetch — arithmetic on kafka_applogs.
+    # 324: bounded consumer prefetch — arithmetic and the name trap on
+    # kafka_applogs.
     librdkafka_options:
-      queue.buffered.max.messages: "5000"
-      queue.buffered.max.kbytes: "4096"
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.flows"]
     group_id: "netops-router-flows"
     decoding: { codec: json }
@@ -235,10 +260,11 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
-    # 324: bounded consumer prefetch — arithmetic on kafka_applogs.
+    # 324: bounded consumer prefetch — arithmetic and the name trap on
+    # kafka_applogs.
     librdkafka_options:
-      queue.buffered.max.messages: "5000"
-      queue.buffered.max.kbytes: "4096"
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.snmptrap"]
     group_id: "netops-router-snmptrap"
     decoding: { codec: json }
@@ -259,10 +285,11 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
-    # 324: bounded consumer prefetch — arithmetic on kafka_applogs.
+    # 324: bounded consumer prefetch — arithmetic and the name trap on
+    # kafka_applogs.
     librdkafka_options:
-      queue.buffered.max.messages: "5000"
-      queue.buffered.max.kbytes: "4096"
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.cloudlogs"]
     group_id: "netops-router-cloudlogs"
     decoding: { codec: json }
@@ -286,10 +313,11 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
-    # 324: bounded consumer prefetch — arithmetic on kafka_applogs.
+    # 324: bounded consumer prefetch — arithmetic and the name trap on
+    # kafka_applogs.
     librdkafka_options:
-      queue.buffered.max.messages: "5000"
-      queue.buffered.max.kbytes: "4096"
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.security"]
     group_id: "netops-router-security"
     decoding: { codec: json }
@@ -311,10 +339,11 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
-    # 324: bounded consumer prefetch — arithmetic on kafka_applogs.
+    # 324: bounded consumer prefetch — arithmetic and the name trap on
+    # kafka_applogs.
     librdkafka_options:
-      queue.buffered.max.messages: "5000"
-      queue.buffered.max.kbytes: "4096"
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.deadletter"]
     group_id: "netops-router-deadletter"
     decoding: { codec: json }
@@ -337,10 +366,11 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
-    # 324: bounded consumer prefetch — arithmetic on kafka_applogs.
+    # 324: bounded consumer prefetch — arithmetic and the name trap on
+    # kafka_applogs.
     librdkafka_options:
-      queue.buffered.max.messages: "5000"
-      queue.buffered.max.kbytes: "4096"
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.experience"]
     group_id: "netops-router-experience"
     decoding: { codec: json }
@@ -361,10 +391,11 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
-    # 324: bounded consumer prefetch — arithmetic on kafka_applogs.
+    # 324: bounded consumer prefetch — arithmetic and the name trap on
+    # kafka_applogs.
     librdkafka_options:
-      queue.buffered.max.messages: "5000"
-      queue.buffered.max.kbytes: "4096"
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.cloudcosts"]
     group_id: "netops-router-cloudcosts"
     decoding: { codec: json }
