@@ -161,7 +161,6 @@ utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # for the filter to drain, and only THEN prints anything that must reach the
 # terminal but never the log (the initial admin password, FMEA row 6).
 LOCK_FILES_HELD=""
-COMPOSE_Q_ERRFILE="${TMPDIR:-/tmp}/correlix-compose-err.$$"
 LOG_FILTER_PID=""
 TERMINAL_EPILOGUE=""
 on_exit() {
@@ -178,6 +177,9 @@ on_exit() {
       : > "$f"
     fi
   done
+  # compose_q's stderr scratch file is this process's own (pid-suffixed), so it
+  # goes with the run rather than accumulating in /tmp.
+  rm -f "${TMPDIR:-/tmp}/correlix-compose-err.$$" 2>/dev/null
   if [ -n "$LOG_FILTER_PID" ]; then
     exec 1>&5 2>&6
     pid="$LOG_FILTER_PID"
