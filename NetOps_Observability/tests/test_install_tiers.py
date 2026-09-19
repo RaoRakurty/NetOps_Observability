@@ -202,6 +202,52 @@ def test_the_mode_follows_host_speed_and_planner_overcommit(cls, overcommit, tie
         assert overcommit in why
 
 
+# ── the support lever: CORRELIX_BRINGUP_MODE ────────────────────────────────
+#
+# The host-speed thresholds that choose the mode are uncalibrated (TRACKER 325).
+# When they call a customer's host wrong there has to be a way to say so without
+# a patched installer: support sets the variable and the reason printed says the
+# variable, not the host, decided.
+
+def test_tiered_can_be_forced_on_a_host_the_thresholds_call_fast():
+    chosen, why = install.choose_bring_up_mode("fast", "", "tiered")
+    assert chosen is True
+    assert "CORRELIX_BRINGUP_MODE=tiered" in why and "in groups" in why
+
+
+def test_single_can_be_forced_on_a_host_the_thresholds_call_slow():
+    chosen, why = install.choose_bring_up_mode("very-slow", "", "single")
+    assert chosen is False
+    assert "CORRELIX_BRINGUP_MODE=single" in why and "together" in why
+
+
+def test_single_overrides_the_planners_overcommitment_too():
+    """The planner is the other input the lever has to be able to outrank."""
+    chosen, _why = install.choose_bring_up_mode(
+        "normal", "the resource plan reserves more memory than this host can guarantee",
+        "single")
+    assert chosen is False
+
+
+@pytest.mark.parametrize("value", ["", "auto", "  AUTO  "])
+def test_auto_and_unset_leave_the_automatic_choice_alone(value):
+    assert install.choose_bring_up_mode("very-slow", "", value)[0] is True
+    assert install.choose_bring_up_mode("fast", "", value)[1] == \
+        install.choose_bring_up_mode("fast", "")[1]
+
+
+@pytest.mark.parametrize("value", ["teired", "yes", "1", "none"])
+def test_a_value_nobody_defined_stops_the_install_naming_the_three(value, capsys):
+    """Falling back to auto would lose the lever silently — the support call
+    would be told the variable was set and the install would ignore it."""
+    with pytest.raises(SystemExit):
+        install.choose_bring_up_mode("fast", "", value)
+    err = capsys.readouterr().err
+    assert "CORRELIX_BRINGUP_MODE" in err and value in err
+    for mode in ("auto", "tiered", "single"):
+        assert mode in err
+
+
 def plan_json(tmp_path, reservations, allocatable, limits, budget):
     p = tmp_path / "resource-plan.json"
     p.write_text(json.dumps({"reservations_bytes": {"a": reservations},
@@ -404,3 +450,5 @@ def test_both_phases_use_the_chosen_mode_and_the_choice_is_printed():
     assert choose < src.index("compose_up(compose_dir")
     assert "info(why)" in src[choose:src.index("compose_up(compose_dir")]
     assert "planner_overcommit(compose_dir / \"resource-plan.json\")" in src
+    assert 'os.environ.get("CORRELIX_BRINGUP_MODE"' in src[choose:src.index("compose_up(compose_dir")], \
+        "the support lever must reach the choice main() makes, not just the function"

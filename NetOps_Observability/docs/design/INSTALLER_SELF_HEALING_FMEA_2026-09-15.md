@@ -378,6 +378,10 @@ and loud when it cannot heal.
   own readiness through the classifier before the next. On `fast`/`normal` hosts the tiers can collapse to today's single
   `up -d` for speed; on `slow`/`very-slow` or planner `overcommitted` they stay separate.
 - Phase B uses the same tiers after `stop_stores_cleanly` (IN FLIGHT).
+- The thresholds that pick the mode are uncalibrated, so `CORRELIX_BRINGUP_MODE=auto|tiered|single` (default `auto`)
+  settles it for a host they read wrong — the support lever, no patched installer. `tiered`/`single` outrank both the
+  host class and the planner, and the reason the installer prints then names the variable instead of the host. A value
+  that is none of the three stops the install rather than being ignored.
 
 ### 4.6 `doctor` (read-only, bounded, redacted)
 
