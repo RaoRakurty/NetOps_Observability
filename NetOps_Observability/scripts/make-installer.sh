@@ -981,6 +981,36 @@ done
 #    digest-pinned image we just built/pulled, so the bytes are identical.
 strip_digests() { sed 's/@sha256:[0-9a-f]*$//' | sort -u; }
 
+# image_bytes_total — the UNPACKED size, in bytes, of the image refs on stdin.
+#
+# The customer's installer projects how full Docker's filesystem will be after
+# this bundle is loaded (install-correlix.sh check_image_disk_projection). With
+# no recorded size it multiplies the compressed archives by 6.2 — a ratio
+# measured on ONE install in 2026-09 — so the gate meant to stop an install
+# before it fills the disk is a guess (FMEA row 10). We are the only ones who
+# can measure it honestly: these images are on THIS host, right now.
+#
+# §16.1: an inspect that fails, or answers something that is not a byte count,
+# stops the build. Shipping a size we could not measure would be worse than
+# shipping none — the customer's gate would trust a wrong number.
+image_bytes_total() {
+  local ref sz total=0
+  while read -r ref; do
+    [ -n "$ref" ] || continue
+    if ! sz=$(docker image inspect --format '{{.Size}}' "$ref" 2>&1); then
+      echo "FATAL: could not read the size of $ref (docker image inspect: $(printf '%s' "$sz" | tail -1)) — the bundle MANIFEST must not claim a size this build could not measure" >&2
+      return 1
+    fi
+    case "$sz" in
+      ''|*[!0-9]*)
+        echo "FATAL: docker reported a size for $ref that is not a byte count: $(printf '%s' "$sz" | tail -1)" >&2
+        return 1 ;;
+    esac
+    total=$((total + sz))
+  done
+  printf '%s\n' "$total"
+}
+
 # verify_archive_tags <archive.tar.zst> — every image in the archive must
 # carry a RepoTag, or a fresh host cannot use it. Build-time hard failure.
 verify_archive_tags() {
@@ -1003,6 +1033,10 @@ verify_archive_tags "$IMG_OUT"
 
 # 4b. Add-on packs: per pack, the images its profile adds on top of base.
 ADDON_MANIFEST=""
+# Every pack's images, for the unpacked-size total below: an add-on archive
+# lands on the same filesystem as the base one, so the customer's disk
+# projection has to count it.
+ALL_PACK_IMAGES=""
 for spec in $ADDONS; do
   name="${spec%%:*}"; prof="${spec##*:}"
   PACK_IMAGES="$(cd "$COMPOSE_DIR" && docker compose "${BASE_PROFILES[@]}" --profile "$prof" config --images | sort -u | comm -13 <(printf '%s\n' "$IMAGES") -)"
@@ -1025,6 +1059,8 @@ for spec in $ADDONS; do
   # shellcheck disable=SC2086
   docker save $PACK_REFS | zstd -q -T0 -3 -f -o "$PACK_OUT"
   verify_archive_tags "$PACK_OUT"
+  ALL_PACK_IMAGES="$ALL_PACK_IMAGES$PACK_IMAGES
+"
   ADDON_MANIFEST="$ADDON_MANIFEST$(printf 'addon %s (profile %s):\n' "$name" "$prof"; printf '%s\n' "$PACK_IMAGES" | sed 's/^/  - /')
 "
 done
@@ -1063,6 +1099,14 @@ if tar -xzOf "$SRC_OUT" 2>/dev/null | grep -qaE "$LAB_MARKERS"; then
 fi
 echo "-- lab-leak guard: clean"
 
+# 5c. The unpacked size of everything this bundle loads onto the customer's
+#     Docker filesystem — base images plus every add-on pack, each ref counted
+#     once (a pack that shares a base image must not be counted twice). The
+#     refs are inspected in the same TAG form they were saved in.
+echo "-- measuring the unpacked size of the shipped images"
+UNPACKED_BYTES="$(printf '%s\n' "$IMAGES" "$ALL_PACK_IMAGES" | strip_digests | image_bytes_total)"
+echo "   images unpack to $((UNPACKED_BYTES / 1000 / 1000)) MB on the customer's host"
+
 # 6. Manifest + checksums + client instructions.
 {
   echo "product:  Correlix (NetOps Observability)"
@@ -1076,6 +1120,11 @@ echo "-- lab-leak guard: clean"
   # BOTH profiles; install-correlix.sh globs it.)
   echo "profile:  $PROFILE"
   echo "built:    $(date -Is)"
+  # What these images occupy once loaded, measured on this build host. The
+  # customer's preflight prefers it over its 6.2x estimate (FMEA row 10), so
+  # the disk gate stops being a guess. Bytes, one whole number, no separators:
+  # install-correlix.sh parses it with a sed that accepts nothing else.
+  echo "images_unpacked_bytes: $UNPACKED_BYTES"
   echo "images:"
   printf '%s\n' "$IMAGES" | sed 's/^/  - /'
   [ -n "$ADDON_MANIFEST" ] && printf '%s' "$ADDON_MANIFEST"

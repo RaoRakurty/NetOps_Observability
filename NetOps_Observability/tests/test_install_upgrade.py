@@ -602,6 +602,114 @@ def test_cleanup_refuses_after_a_rolled_back_upgrade(rig: Rig) -> None:
     assert not [e for e in rig.events() if e.startswith("docker rmi")]
 
 
+# ── the .env copies an upgrade leaves behind ────────────────────────────────
+#
+# Every upgrade sets the .env it replaced aside under a timestamped name, and
+# each of those files holds the whole stack's secrets. Retention has to be
+# explicit and bounded (scripts/CLAUDE.md 16.4): the third upgrade on a host
+# otherwise leaves three of them, forever, each one 0600 at best.
+
+OLD_STAMPS = ("20250101T000000Z", "20250601T120000Z", "20250901T235959Z")
+
+
+def _seed_set_asides(dirpath: Path, klass: str, stamps=OLD_STAMPS) -> list[Path]:
+    out = []
+    for st in stamps:
+        f = dirpath / f".env.{klass}-{st}"
+        f.write_text(OLD_ENV)
+        f.chmod(0o644)
+        out.append(f)
+    return out
+
+
+def _prune(rig: Rig, dirpath: Path):
+    return rig.run(["status"], f'prune_env_set_asides "{dirpath}/.env"\n')
+
+
+def test_only_the_newest_copy_of_each_class_survives(rig: Rig, tmp_path: Path) -> None:
+    d = tmp_path / "keep"
+    d.mkdir()
+    (d / ".env").write_text(OLD_ENV)
+    _seed_set_asides(d, "upgraded")
+    _seed_set_asides(d, "upgrade-failed")
+    r = _prune(rig, d)
+    assert r.returncode == 0, r.stdout + r.stderr
+    left = sorted(p.name for p in d.glob(".env.*"))
+    assert left == [f".env.upgrade-failed-{OLD_STAMPS[-1]}", f".env.upgraded-{OLD_STAMPS[-1]}"], left
+    assert (d / ".env").is_file(), "the live .env is not a set-aside copy"
+    _no_secret(r.stdout, r.stderr)
+
+
+def test_the_copy_that_is_kept_is_owner_only(rig: Rig, tmp_path: Path) -> None:
+    """A copy of .env is as sensitive as .env; one restored from a backup
+    archive can arrive 0644."""
+    d = tmp_path / "mode"
+    d.mkdir()
+    kept = _seed_set_asides(d, "upgraded")[-1]
+    r = _prune(rig, d)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert oct(kept.stat().st_mode & 0o777) == "0o600", oct(kept.stat().st_mode)
+
+
+def test_a_lone_copy_and_no_copy_at_all_are_both_fine(rig: Rig, tmp_path: Path) -> None:
+    """Idempotent (16.3): the prune runs after every upgrade, including the
+    first one on a host."""
+    d = tmp_path / "lone"
+    d.mkdir()
+    only = _seed_set_asides(d, "upgraded", stamps=OLD_STAMPS[:1])[0]
+    assert _prune(rig, d).returncode == 0
+    assert only.is_file()
+    assert _prune(rig, d).returncode == 0, "a second run must be a no-op, not a failure"
+    empty = tmp_path / "none"
+    empty.mkdir()
+    r = _prune(rig, empty)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_copy_that_cannot_be_removed_is_named_and_not_fatal(rig: Rig, tmp_path: Path) -> None:
+    """16.1: never silent. But an upgrade that worked must not be reported as
+    failed because a stale copy could not be deleted."""
+    d = tmp_path / "stuck"
+    d.mkdir()
+    _seed_set_asides(d, "upgraded")
+    d.chmod(0o500)
+    try:
+        r = _prune(rig, d)
+    finally:
+        d.chmod(0o700)
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = r.stdout + r.stderr
+    assert "remove it by hand" in out and ".env.upgraded-" in out, \
+        "the copy left behind must be named, with the command to remove it: " + out
+    assert len(list(d.glob(".env.upgraded-*"))) == 3, "nothing was removed, so nothing may be claimed"
+    _no_secret(r.stdout, r.stderr)
+
+
+def test_a_finished_upgrade_leaves_exactly_one_copy_of_the_old_env(rig: Rig) -> None:
+    odc = rig.old / "NetOps_Observability" / "deployment" / "docker"
+    _seed_set_asides(odc, "upgraded")
+    r = rig.upgrade()
+    assert r.returncode == 0, r.stdout + r.stderr
+    left = sorted(p.name for p in odc.glob(".env.upgraded-*"))
+    assert len(left) == 1, left
+    assert left[0] > f".env.upgraded-{OLD_STAMPS[-1]}", (
+        "the copy kept must be the one this upgrade just set aside: " + str(left))
+    assert oct((odc / left[0]).stat().st_mode & 0o777) == "0o600"
+
+
+def test_both_set_aside_sites_prune(rig: Rig) -> None:
+    """The rollback path sets one aside too — an uncovered sibling accumulates
+    forever (16.4)."""
+    code = _code()
+    sites = [m for m in re.finditer(r'mv -f -- "\$(?:PREV_)?ENV(?:_FILE)?" '
+                                    r'"\$(?:PREV_)?ENV(?:_FILE)?\.upgrade', code)]
+    assert len(sites) == 2, [code[m.start():m.end()] for m in sites]
+    for m in sites:
+        after = code[m.end():m.end() + 1200]
+        assert "prune_env_set_asides" in after, \
+            "a set-aside with no prune after it accumulates: " + code[m.start():m.end()]
+
+
 # ── static contracts ────────────────────────────────────────────────────────
 
 def _code() -> str:
