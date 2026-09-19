@@ -528,7 +528,13 @@ func (s *server) enforceConcurrentLoginDeny(r *http.Request, user User) error {
 	n, err := s.sessions.RevokeAllForUser(user.ID)
 	if err != nil {
 		logError("auth", "concurrent-login revoke did not persist", map[string]any{"user": user.ID, "err": err.Error()})
-		return errors.New("sign-in could not be completed; prior sessions could not be closed")
+		// The CAUSE is carried but never spoken. issueSession classifies on it
+		// (tracker 322: a store that ran out of time earns a retryable 503), and
+		// the sentence the caller sees stays free of store internals (§8).
+		return &loginStoreError{
+			public: "sign-in could not be completed; prior sessions could not be closed",
+			cause:  err,
+		}
 	}
 	if n > 0 {
 		logInfo("auth", "concurrent sessions revoked by policy", map[string]any{"user": user.ID, "count": n})
@@ -538,15 +544,174 @@ func (s *server) enforceConcurrentLoginDeny(r *http.Request, user User) error {
 	return nil
 }
 
+// ── transient store pressure on the sign-in path (tracker 322) ──────────────
+//
+// THE DEFECT. On 2026-09-15 the box sat at 94 % disk with IO PSI ~64 %. A login
+// took 26 s and answered 500 from here, while audit persistence logged
+// `timeout: context deadline exceeded` in the same second; the same credentials
+// returned 200 three seconds later once the pressure eased. Nothing was broken.
+// A 500 says "this server is defective" and leaves the operator with nothing to
+// do; the honest answer to "I could not complete that write in time" is a 503
+// with a Retry-After, which is a request to come back — not a verdict.
+//
+// THE RULE. Only a failure that a RETRY CAN PLAUSIBLY FIX is a 503. A defect, a
+// corrupt row and a schema fault keep their 500, because a 503 invites a retry
+// that will fail identically forever, and because a blanket 503 would hide real
+// bugs behind a soothing message. A full disk is deliberately on the 500 side of
+// that line too: five seconds will not empty it, so "the system is busy, try
+// again shortly" would be a lie.
+//
+// ONE HELPER, NOT A HABIT. The classification lives here and nowhere else.
+// String matching sprinkled at call sites drifts apart silently — one site
+// learns about pool exhaustion, the next does not — and every copy is a place
+// where a 500 quietly becomes a 503 for the wrong reason.
+
+// loginStoreError carries a store failure under a sentence that is SAFE to show.
+// The public half is what the caller reads; the cause is what the classifier and
+// the log read. Nothing else may print the cause.
+type loginStoreError struct {
+	public string
+	cause  error
+}
+
+func (e *loginStoreError) Error() string { return e.public }
+func (e *loginStoreError) Unwrap() error { return e.cause }
+
+// loginRefusalStorePressure is the audit reason that distinguishes "the server
+// was too busy to finish your sign-in" from "your password was wrong". An
+// investigator reading the trail after an outage needs the two to be one glance
+// apart, not one inference apart.
+const loginRefusalStorePressure = "store_under_pressure"
+
+// sessionPressureRetryAfterSeconds is what a busy refusal advertises. Short
+// enough that a human waits it out rather than filing a ticket, long enough that
+// a fleet of browsers retrying in lockstep does not become the next spike.
+const sessionPressureRetryAfterSeconds = 5
+
+// storeUnderPressure reports whether err is a TRANSIENT store failure — the
+// store could not answer in time, or could not be reached at all, right now.
+//
+// Typed checks come first because they are unambiguous. The text pass exists
+// because the failures that matter most arrive as driver strings with no
+// sentinel to match on (a pgx pool that timed out acquiring a connection says
+// exactly "timeout: context deadline exceeded"), and the root package must not
+// import the driver to find that out. The list is deliberately SHORT and
+// SPECIFIC: every entry names a condition that is over when the pressure is
+// over. Nothing generic like "error" or a bare "timeout" is in it, because a
+// substring that can appear inside an unrelated message would turn real defects
+// into retry advice.
+func storeUnderPressure(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Deadlines and cancellations, however deeply wrapped.
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
+		errors.Is(err, os.ErrDeadlineExceeded) || os.IsTimeout(err) {
+		return true
+	}
+	var nerr net.Error
+	if errors.As(err, &nerr) && nerr.Timeout() {
+		return true
+	}
+	// The whole wrap chain is scanned, not just the outermost message: a
+	// loginStoreError deliberately hides the driver's words behind a safe
+	// sentence, and losing them here would lose the classification with them.
+	var chain strings.Builder
+	for e, depth := err, 0; e != nil && depth < 16; e, depth = errors.Unwrap(e), depth+1 {
+		chain.WriteString(strings.ToLower(e.Error()))
+		chain.WriteByte('\n')
+	}
+	text := chain.String()
+	for _, sig := range []string{
+		"context deadline exceeded",                    // a write that ran out of its budget
+		"connection refused",                           // the store is down or restarting
+		"connection reset by peer",                     // it dropped us mid-write
+		"broken pipe",                                  // ditto, the other direction
+		"i/o timeout",                                  // the socket gave up
+		"operation timed out",                          // ditto, other wording
+		"pool exhausted",                               // every connection is in use
+		"too many clients already",                     // PG's own version of the same
+		"the database system is starting up",           // a restart in progress
+		"the database system is shutting down",         // and the other half of one
+		"canceling statement due to statement timeout", // server-side budget
+		"no connection available",                      // pool handed back nothing
+		"server closed the connection",                 // mid-flight teardown
+	} {
+		if strings.Contains(text, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+// refuseLoginUnderPressure answers a busy-store failure with 503 + Retry-After
+// and reports whether it did; a caller that gets false must write its own 500.
+//
+// THE 503 IS NOT A FAILED SIGN-IN ATTEMPT. It is never counted against the
+// lockout (the throttle is not touched here, and by this point in handleLogin
+// the password has already verified and CLEARED both counters), because an
+// outage that locks every operator out of the console is exactly the wrong
+// behaviour at exactly the wrong moment.
+//
+// AUDIT FAILS OPEN, DELIBERATELY. The trail write here — like every other
+// session-lifecycle record in this file (recordSessionEvent) — goes through the
+// best-effort Record, not RecordStrict. An audit blip must never be the reason a
+// verified operator cannot sign in during an incident; the strict, fail-CLOSED
+// path is reserved for actions whose whole point is the record (the sealed-PII
+// reveal). The structured log below is written FIRST and unconditionally, so a
+// refusal is never invisible even if the trail itself is a casualty of the same
+// saturation.
+func (s *server) refuseLoginUnderPressure(w http.ResponseWriter, r *http.Request, user User, stage string, err error) bool {
+	if !storeUnderPressure(err) {
+		return false
+	}
+	loginStorePressureRefusals.Add(1)
+	logError("auth", "sign-in refused: a session-path store write could not complete under pressure",
+		map[string]any{"user": user.ID, "tenant_id": user.TenantID, "stage": stage, "err": err.Error()})
+	if s.audit != nil {
+		s.audit.Record(AuditEvent{
+			Actor:    user.ID,
+			Tenant:   user.TenantID,
+			Method:   "LOGIN",
+			Path:     "/login." + loginRefusalStorePressure,
+			Status:   http.StatusServiceUnavailable,
+			Decision: "deny",
+			Remote:   auditClientIP(r),
+			Detail: map[string]any{
+				"action": "login." + loginRefusalStorePressure,
+				"reason": loginRefusalStorePressure,
+				"stage":  stage,
+			},
+		})
+	}
+	w.Header().Set("Retry-After", intToString(sessionPressureRetryAfterSeconds))
+	// Plain language, and nothing about stores, deadlines or paths: this door is
+	// reachable before a session exists, and the detail is already in the log.
+	writeError(w, http.StatusServiceUnavailable,
+		errors.New("the system is busy right now — please try again in a few seconds"))
+	return true
+}
+
 func (s *server) issueSession(w http.ResponseWriter, r *http.Request, user User) {
 	if err := s.enforceConcurrentLoginDeny(r, user); err != nil {
+		if s.refuseLoginUnderPressure(w, r, user, "concurrent_session_revoke", err) {
+			return
+		}
+		// err is already a SAFE public sentence (loginStoreError).
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	ttl := accessTokenTTL()
 	tok, refresh, err := s.mintSession(r, user)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		if s.refuseLoginUnderPressure(w, r, user, "session_mint", err) {
+			return
+		}
+		// Not pressure: a defect or a corruption, and the store's raw words used
+		// to go straight to the client from here. The operator gets the cause
+		// from the log; the caller gets a sentence (§8).
+		logError("auth", "session mint failed", map[string]any{"user": user.ID, "err": err.Error()})
+		writeError(w, http.StatusInternalServerError, errors.New("sign-in could not be completed"))
 		return
 	}
 	s.users.TouchLogin(user.ID)

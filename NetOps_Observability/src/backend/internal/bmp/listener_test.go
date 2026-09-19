@@ -332,9 +332,15 @@ func TestListenerRefusesAnOversizedFrameWithoutAllocatingForIt(t *testing.T) {
 	f.waitFor("the oversize refusal", func() bool {
 		return f.metrics.Snapshot().ParseErrors[StageOversize] == 1
 	})
-	if got := f.sessions(); len(got) != 1 || got[0].State != "closed" {
-		t.Fatalf("sessions = %+v", got)
-	}
+	// The metric is stamped where the header is refused; the session reaches
+	// "closed" further along, when the teardown completes. Sampling the state
+	// straight after the metric raced on a loaded runner (CI, 2026-09-19:
+	// sessions = [{ID:bmp-1 … }] with the state not yet closed) — wait for the
+	// state this actually asserts.
+	f.waitFor("the session to be closed", func() bool {
+		got := f.sessions()
+		return len(got) == 1 && got[0].State == "closed"
+	})
 }
 
 func TestListenerSkipsOneBadFrameAndKeepsReading(t *testing.T) {

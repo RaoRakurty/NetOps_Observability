@@ -96,3 +96,6 @@ src/node_modules/
 
 # Installer single-writer locks (install-correlix.sh fd 9 / fd 8, install.py re-flock) — runtime state, never committed.
 deployment/docker/.install-bundle.lock
+
+# Watchdog runtime stamp (scripts/stack-watchdog.sh writes it next to itself).
+scripts/.backup-config.applied

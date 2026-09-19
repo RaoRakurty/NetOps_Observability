@@ -109,7 +109,48 @@ ENV_FILE="$COMPOSE_DIR/.env"
 compose() { (cd "$COMPOSE_DIR" && docker compose "$@"); }
 # Read-only compose queries, bounded (§16.3): a wedged daemon must not hang the
 # health gate. Never used for up/down/stop, whose legitimate duration is long.
-compose_q() { (cd "$COMPOSE_DIR" && timeout 60 docker compose "$@"); }
+# How slow is this host? install.py's host profile (data/.host-profile.json)
+# carries budget_factor 1 (fast/normal), 2 (slow) or 3 (very slow). Every
+# bounded wait below is multiplied by it: on the 2026-09-16 .123 install the
+# stack was healthy and the gate still failed, because fixed 60 s / 7 min
+# budgets are not enough on a disk whose p99 write is ~2.8 s.
+host_budget_factor() {
+  local f="" prof="$ROOT/data/.host-profile.json"
+  [ -f "$prof" ] || { printf '1'; return 0; }
+  f=$(python3 - "$prof" <<'PYEOF' 2>/dev/null
+import json, sys
+try:
+    v = float(json.load(open(sys.argv[1])).get("budget_factor", 1))
+except Exception:
+    v = 1.0
+print(int(max(1, min(4, round(v)))))
+PYEOF
+)
+  case "$f" in ''|*[!0-9]*) f=1 ;; esac
+  printf '%s' "$f"
+}
+scaled_s() { printf '%s' "$(( $1 * $(host_budget_factor) ))"; }
+
+# Read-only compose queries, bounded (§16.3): a wedged daemon must not hang the
+# health gate. Never used for up/down/stop, whose legitimate duration is long.
+# The failure REASON is kept in COMPOSE_Q_ERR — swallowing it (§16.1) is what
+# made the .123 gate say only "could not list this install's containers".
+compose_q_errfile() {
+  local f="${TMPDIR:-/tmp}/correlix-compose-err.$$"
+  : > "$f" 2>/dev/null || { printf '%s' ""; return 0; }
+  printf '%s' "$f"
+}
+compose_q_err() { cat "${TMPDIR:-/tmp}/correlix-compose-err.$$" 2>/dev/null; }
+compose_q() {
+  local rc f="${TMPDIR:-/tmp}/correlix-compose-err.$$"
+  (cd "$COMPOSE_DIR" && timeout "$(scaled_s 60)" docker compose "$@") 2>"${f:-/dev/null}"; rc=$?
+  if [ "$rc" -ne 0 ] && [ -n "$f" ]; then
+    # Keep the last two lines; a timeout has no output of its own to explain it.
+    printf '%s' "$(tail -2 "$f" 2>/dev/null)" > "$f"
+    [ "$rc" -eq 124 ] && printf 'timed out after %ss: docker compose %s' "$(scaled_s 60)" "$*" > "$f"
+  fi
+  return "$rc"
+}
 env_get() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | head -1; }
 utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -136,6 +177,9 @@ on_exit() {
       : > "$f"
     fi
   done
+  # compose_q's stderr scratch file is this process's own (pid-suffixed), so it
+  # goes with the run rather than accumulating in /tmp.
+  rm -f "${TMPDIR:-/tmp}/correlix-compose-err.$$" 2>/dev/null
   if [ -n "$LOG_FILTER_PID" ]; then
     exec 1>&5 2>&6
     pid="$LOG_FILTER_PID"
@@ -330,26 +374,91 @@ done
 # ---------- preflight checks (install only) ----------------------------------
 port_in_use() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && { exec 3>&-; return 0; } || return 1; }
 
-# Device-facing host ports published by docker-compose.yml, as
-# "port/proto[:ENV_VAR]" — the env var (where one exists) is what moves the
-# port, and is quoted back to the customer in the failure. Keep in sync with
-# the `ports:` blocks of syslog-ng, goflow2 and api; pinned by
-# tests/test_ingest_contract.py::test_installer_checks_every_published_port.
-STACK_INGEST_PORTS="514/tcp 514/udp 5514/tcp:SYSLOG_PORT 5514/udp:SYSLOG_PORT \
-2055/udp:NETFLOW_PORT 4739/udp:IPFIX_PORT 6343/udp:SFLOW_PORT \
-162/udp:SNMP_TRAP_PORT 11019/tcp:BMP_PORT"
+# Host ports the stack publishes, as "port/proto[:ENV_VAR]" — the env var
+# (where one exists) is what moves the port, and is quoted back to the customer
+# in the failure.
+#
+# DERIVED, never typed. This used to be a hand-kept list, and prepare-host.sh
+# --firewall kept a second one: the two disagreed, so 443 and 11019 were never
+# checked while the firewall opened the CONTAINER side of the trap mapping
+# (1162/udp) instead of the 162/udp compose publishes (FMEA S6, TRACKER 320).
+# Both callers now read the compose files through ONE parser — prepare-host.sh's
+# firewall library — so they cannot drift apart again.
+#
+# Empty means "not derived yet"; a derivation that FAILS is reported and the
+# check is skipped by name (§16.1), never silently, and never from a fallback
+# list — a guessed list is the defect, not the remedy.
+STACK_INGEST_PORTS=""
+STACK_INGEST_PORTS_WHY=""
+
+derive_stack_ingest_ports() {
+  local prep="" entries
+  if [ -f "$HERE/prepare-host.sh" ]; then prep="$HERE/prepare-host.sh"
+  elif [ -f "$ROOT/scripts/prepare-host.sh" ]; then prep="$ROOT/scripts/prepare-host.sh"
+  else
+    STACK_INGEST_PORTS_WHY="prepare-host.sh, which owns the compose port parser, is not next to this script"
+    return 1
+  fi
+  # A subshell so the library's own names never land in this script's scope.
+  # Its stderr is folded in: when it cannot read the compose files it says why,
+  # and that reason is exactly what the operator needs to see.
+  if ! entries=$(
+      (
+        set -euo pipefail
+        # The library is a block of a host-check script: these exist for it to
+        # load against and are read by it, never by this script. The port
+        # derivation calls none of the reporters.
+        # shellcheck disable=SC2034,SC2317,SC2329
+        { pass(){ :; }; fixd(){ :; }; need(){ :; }; fixfail(){ :; }
+          CHECK=0; CLOSE_WIZARD_PORT=0; SELF_DIR="$HERE"; }
+        # shellcheck source=/dev/null  # a delimited block of prepare-host.sh
+        . <(sed -n '/^# >>> firewall-lib/,/^# <<< firewall-lib/p' "$prep")
+        if ! fw_locate_compose; then printf '%s\n' "$FW_WHY" >&2; exit 1; fi
+        # shellcheck disable=SC2034  # read by the library's fw_env_get
+        FW_ENV_FILE="$ENV_FILE"
+        out=$(fw_stack_port_entries) || { if [ -n "$FW_TMP" ]; then rm -rf -- "$FW_TMP"; fi; exit 1; }
+        if [ -n "$FW_TMP" ]; then rm -rf -- "$FW_TMP"; fi
+        printf '%s\n' "$out"
+      ) 2>&1
+    ); then
+    STACK_INGEST_PORTS_WHY="$(printf '%s' "$entries" | tail -1)"
+    [ -n "$STACK_INGEST_PORTS_WHY" ] \
+      || STACK_INGEST_PORTS_WHY="the compose port parser in prepare-host.sh produced no output"
+    return 1
+  fi
+  # The web UI is checked separately, by port_in_use, which has the --ui-port
+  # remedy. Both forms of it go: the port this run will publish, and the entry
+  # BASE_PORT moves — on a fresh host there is no .env yet, so the compose
+  # default (8000) is what the parser resolves, and reporting THAT as taken is
+  # exactly backwards for the customer who passed --ui-port because 8000 is.
+  STACK_INGEST_PORTS=$(printf '%s\n' "$entries" \
+    | awk -F: -v ui="$UI_PORT/tcp" 'NF && $1 != ui && $2 != "BASE_PORT"' | tr '\n' ' ')
+  STACK_INGEST_PORTS=${STACK_INGEST_PORTS% }
+  if [ -z "$STACK_INGEST_PORTS" ]; then
+    STACK_INGEST_PORTS_WHY="the compose files publish no host ports besides the web UI"
+    return 1
+  fi
+  return 0
+}
 
 # Report each STACK_INGEST_PORTS entry already bound on this host, and stop the
 # install naming them. UDP cannot be probed by connecting, so this reads the
 # kernel's listening table via `ss` (iproute2). No `ss` -> say so and continue
 # rather than pretend the ports were checked (§16.1: never a silent skip).
 check_ingest_ports() {
-  if ! command -v ss >/dev/null 2>&1; then
-    warn "'ss' (iproute2) is not installed — cannot verify the device-facing ports are free."
-    warn "If a collector fails to start, check for another service on 514/5514, 2055/4739/6343, 162 or 11019."
+  if ! derive_stack_ingest_ports; then
+    warn "could not work out which ports Correlix publishes ($STACK_INGEST_PORTS_WHY) — cannot verify the device-facing ports are free."
+    warn "The install continues. If a collector then fails to start, look for another service on the ports deployment/docker/docker-compose.yml publishes."
     return 0
   fi
-  local listening busy="" entry port proto var move
+  if ! command -v ss >/dev/null 2>&1; then
+    warn "'ss' (iproute2) is not installed — cannot verify the device-facing ports are free."
+    # The ports come from the derivation above, so this line cannot go stale
+    # the way a typed list does.
+    warn "If a collector fails to start, check for another service on: $(printf '%s' "$STACK_INGEST_PORTS" | tr ' ' '\n' | cut -d: -f1 | tr '\n' ' ')"
+    return 0
+  fi
+  local listening
   # -H no header, -l listening, -n numeric, -t tcp, -u udp. Fold every local
   # address down to "proto:port" so 0.0.0.0:514, [::]:514 and 127.0.0.1:514
   # all match. A non-zero ss here is a real failure, not noise.
@@ -360,6 +469,15 @@ check_ingest_ports() {
   listening=$(printf '%s\n' "$listening" \
     | awk '{ n=$1; a=$5; sub(/.*:/, "", a); if (a ~ /^[0-9]+$/) print n ":" a }' \
     | sort -u)
+  report_busy_ingest_ports "$listening"
+}
+
+# Report every derived port already bound in the "proto:port" lines given, and
+# stop the install naming them. Its own function because the report must be
+# proven to survive `set -e` on its own merits (see the comment inside), not by
+# luck of a call site that suspends errexit.
+report_busy_ingest_ports() { # "proto:port" lines
+  local listening="$1" busy="" entry port proto var move
   for entry in $STACK_INGEST_PORTS; do
     var="${entry#*:}"; [ "$var" = "$entry" ] && var=""
     entry="${entry%%:*}"
@@ -398,6 +516,7 @@ port_purpose() {
     6343)       echo "sFlow" ;;
     162)        echo "SNMP traps" ;;
     11019)      echo "BGP Monitoring Protocol (BMP)" ;;
+    443)        echo "the Correlix web UI over HTTPS" ;;
     *)          echo "device telemetry" ;;
   esac
 }
@@ -455,7 +574,11 @@ check_compose_version() {
     warn "could not read the Docker Compose version ($(printf '%s' "$out" | tail -1)) — minimum $COMPOSE_MIN_VERSION not checked."
     return 0
   fi
-  v=$(printf '%s\n' "$out" | head -1 | tr -d '[:space:]')
+  # No pipe, for the reason spelled out in run_host_profile: stderr is merged
+  # into $out, so a daemon that answers with a warning line first makes
+  # `printf … | head -1` a SIGPIPE race that aborts preflight silently.
+  v=${out%%$'\n'*}
+  v=${v//[[:space:]]/}
   v=${v#v}
   case "$v" in
     [0-9]*.[0-9]*) ;;
@@ -590,7 +713,12 @@ run_host_profile() {
   fi
   out=$(timeout 30 python3 -B "$profiler" probe --data-dir "$ROOT/data" ${dargs[@]+"${dargs[@]}"} \
           --write "$ROOT/data/.host-profile.json" 2>&1) || rc=$?
-  first=$(printf '%s\n' "$out" | head -1)
+  # First line only, WITHOUT a pipe. `printf … | head -1` under `set -o
+  # pipefail` takes SIGPIPE's exit status (141) whenever head exits before
+  # printf has finished writing — a race the probe's multi-line output loses
+  # often enough to be seen — and errexit then kills preflight with no message
+  # at all. Bash can take the first line on its own.
+  first=${out%%$'\n'*}
   klass=${first%%$'\t'*}
   verdict=${first#*$'\t'}
   verdict=${verdict#*$'\t'}
@@ -920,14 +1048,28 @@ verify_admin_login() {
 # One line per container of this compose project (running or not):
 #   id|service|restart_count|started_at|status|health|exit_code
 # health is "none" for a service without a healthcheck.
+SNAPSHOT_ERR=""
 container_snapshot() {
-  local ids
-  ids=$(compose_q ps -aq 2>/dev/null) || return 1
-  [ -n "$ids" ] || return 1
+  local ids out rc
+  SNAPSHOT_ERR=""
+  if ! ids=$(compose_q ps -aq); then
+    SNAPSHOT_ERR="docker compose ps: $(compose_q_err)"
+    [ "$SNAPSHOT_ERR" = "docker compose ps: " ] && SNAPSHOT_ERR="docker compose ps failed with no output"
+    return 1
+  fi
+  if [ -z "$ids" ]; then
+    SNAPSHOT_ERR="docker compose ps listed no containers for this install (wrong directory, or the stack was removed)"
+    return 1
+  fi
   # shellcheck disable=SC2086  # deliberate word-split of the container id list
-  timeout 60 docker inspect --format \
+  out=$(timeout "$(scaled_s 60)" docker inspect --format \
     '{{.Id}}|{{index .Config.Labels "com.docker.compose.service"}}|{{.RestartCount}}|{{.State.StartedAt}}|{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{.State.ExitCode}}' \
-    $ids 2>/dev/null
+    $ids 2>&1); rc=$?
+  if [ "$rc" -ne 0 ]; then
+    SNAPSHOT_ERR="docker inspect (exit $rc): $(printf '%s' "$out" | tail -2)"
+    return 1
+  fi
+  printf '%s\n' "$out"
 }
 
 # The window, from CORRELIX_STABILITY_WINDOW_S: default 60 s, clamped to
@@ -1019,7 +1161,8 @@ stability_gate() {
 
 wait_healthy() {
   say "Waiting for services to become healthy (this can take a few minutes)..."
-  local deadline=$(( $(date +%s) + 420 )) snap="" failed notready ready=0
+  local budget; budget=$(scaled_s 420)
+  local deadline=$(( $(date +%s) + budget )) snap="" failed notready ready=0 lasterr=""
   while [ "$(date +%s)" -lt "$deadline" ]; do
     if snap=$(container_snapshot); then
       # A one-shot that already failed will not improve by waiting.
@@ -1039,14 +1182,16 @@ wait_healthy() {
         break
       fi
     else
+      lasterr="$SNAPSHOT_ERR"
       snap=""
     fi
     sleep 10
   done
   if [ "$ready" != 1 ]; then
-    warn "services did not all become ready within 7 minutes:"
+    warn "services did not all become ready within $((budget / 60)) minutes:"
     if [ -z "$snap" ]; then
-      warn "could not list this install's containers (docker compose ps / docker inspect failed)."
+      warn "could not read this install's container state: ${lasterr:-docker compose ps / docker inspect failed}"
+      warn "the stack itself may be fine — check with: ./install-correlix.sh status"
     elif [ -n "$notready" ]; then
       report_containers "$notready"
     else
@@ -2394,6 +2539,48 @@ upgrade_carry_settings() {
   ok "settings carried forward (.env unchanged — no secret was regenerated)"
 }
 
+# Every upgrade sets the .env it replaced aside under a timestamped name
+# (.env.upgraded-<stamp> when it worked, .env.upgrade-failed-<stamp> when it
+# rolled back), and each of those files holds the whole stack's secrets.
+# Retention is explicit and bounded (scripts/CLAUDE.md 16.4): the NEWEST of
+# each class is kept — the one an operator would restore from — and the rest
+# are removed, or the third upgrade on a host leaves three copies of every
+# credential, forever. The one kept is forced to 0600: a copy of .env is as
+# sensitive as .env, and one restored from a backup archive can arrive 0644.
+#
+# Not fatal. This runs after the upgrade's last real step, and an upgrade that
+# worked must not be reported as failed because a stale copy could not be
+# deleted — but nothing is swallowed either (16.1): what is left behind is
+# named, by file name only, never its contents.
+prune_env_set_asides() {
+  local env_file="$1" class f kept n
+  for class in upgraded upgrade-failed; do
+    kept=""
+    n=0
+    # The stamps are %Y%m%dT%H%M%SZ, fixed width, so the newest sorts last.
+    for f in "$env_file"."$class"-*; do
+      [ -e "$f" ] || continue
+      kept="$f"
+      n=$((n + 1))
+    done
+    [ -n "$kept" ] || continue
+    if ! chmod 600 -- "$kept"; then
+      warn "could not make ${kept##*/} owner-only — it holds this install's secrets; run: chmod 600 '$kept'"
+    fi
+    [ "$n" -gt 1 ] || continue
+    for f in "$env_file"."$class"-*; do
+      [ -e "$f" ] || continue
+      [ "$f" != "$kept" ] || continue
+      if rm -f -- "$f" && [ ! -e "$f" ]; then
+        say "  removed the superseded ${f##*/} (it held this install's secrets)"
+      else
+        warn "could not remove ${f##*/} — it holds this install's secrets; remove it by hand: rm -f '$f'"
+      fi
+    done
+  done
+  return 0
+}
+
 # Every step after the first change. errexit is suspended in here (the caller
 # tests the result), so each step checks and names its own failure.
 upgrade_apply() {
@@ -2472,6 +2659,7 @@ upgrade_rollback() {
   if [ "$ENV_CARRIED" = 1 ] && [ -e "$ENV_FILE" ]; then
     if mv -f -- "$ENV_FILE" "$ENV_FILE.upgrade-failed-$UPGRADE_STAMP"; then
       ENV_CARRIED=0
+      prune_env_set_asides "$ENV_FILE"
     else
       problems="$problems
   - could not set aside $ENV_FILE (this folder still looks installed)"
@@ -2579,6 +2767,8 @@ cmd_upgrade() {
   # project: its install/uninstall would act on the upgraded containers.
   if ! mv -f -- "$PREV_ENV" "$PREV_ENV.upgraded-$UPGRADE_STAMP"; then
     warn "could not set aside $PREV_ENV — do NOT run install or uninstall from $PREV_ROOT: it would act on the upgraded containers."
+  else
+    prune_env_set_asides "$PREV_ENV"
   fi
   state_note status upgraded
   state_note finished_utc "$(utc_now)"

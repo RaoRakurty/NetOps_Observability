@@ -122,6 +122,55 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # ── 324, the SOURCE half — bounded consumer prefetch ────────────────────
+    # Bounding the sink side (see opensearch_syslog) removed a 22,915 MiB
+    # in-flight ceiling, but it did not make the container fit its cgroup on
+    # its own. Measured on the live router immediately after that fix, while
+    # this lane drained a backlog: RSS sat at 368-434 MiB of a 525 MiB cap
+    # (70-83 %), sawtoothing rather than settling, with
+    #   vector_kafka_consumed_messages_total{kafka_applogs} = 241,214
+    #   vector_component_sent_events_total{opensearch_applogs} = 213,299
+    # i.e. ~28k events in flight BETWEEN this source and the sink, at ~7.7 KB
+    # each (1,859,838,263 consumed bytes / 241,214 messages) = ~215 MiB. The
+    # sink buffer was pinned at its 500-event cap the whole time, so those
+    # events were NOT in Vector's buffer — they were in librdkafka's consumer
+    # PREFETCH queue, which no `buffer:` block describes and which this config
+    # never bounded.
+    #
+    # THE NAMES BELOW ARE LOAD-BEARING. librdkafka has two families that read
+    # alike: the consumer's `queued.*` (these) and the producer's
+    # `queue.buffering.*`. A consumer handed a name from the wrong family — or
+    # an invented one — does not warn and does not fall back to the default:
+    # rdkafka refuses to create the client, Vector fails the topology build and
+    # exits 78, and under compose's restart policy the tier crash-loops. A
+    # wrong spelling took vector-router down on the lab box for three days.
+    # `vector validate --no-environment` does NOT catch it (it skips component
+    # construction). `vector validate --skip-healthchecks` does, and so does
+    # scripts/preflight-configs.sh, which boots the committed config against
+    # the shipped image — run it before shipping a change to this block.
+    # Verified there: librdkafka v2.3.0 inside timberio/vector 0.40.0.
+    #
+    #   queued.max.messages.kbytes — the hard BYTE ceiling on this consumer's
+    #     prefetch queue; for a high-level consumer it covers the whole
+    #     consumer, not each partition. librdkafka 2.3.0 defaults it to
+    #     65,536 KiB (64 MiB) PER CONSUMER and the router runs ten: 640 MiB of
+    #     prefetch alone, inside a 512 MiB container. This is the term that
+    #     bounds memory.
+    #   queued.min.messages — the low-water mark librdkafka refills toward,
+    #     per topic+partition (default 100,000). It is a fetch TRIGGER rather
+    #     than a hard cap, lowered here so a flood of small events cannot park
+    #     100k messages per partition underneath the byte ceiling.
+    #
+    # 4 MiB x 10 lanes = 40 MiB of prefetch, which with the sink side's 72 MiB
+    # and a ~128 MiB baseline leaves the whole tier inside 60 % of the compose
+    # default. 4 MiB is not tight: at this lane's own measured event size it is
+    # ~500 messages, the same depth as the sink buffer it feeds, and at the
+    # qualified 1k eps profile it is seconds of runway. A bounded prefetch is
+    # also the CORRECT degradation — it back-pressures into the topic, which
+    # retains 72 h, exactly as the sink side does (#209).
+    librdkafka_options:
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.applogs"]
     group_id: "netops-router-applogs"
     decoding: { codec: json }
@@ -148,6 +197,11 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # 324: bounded consumer prefetch — arithmetic and the name trap on
+    # kafka_applogs.
+    librdkafka_options:
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.flows.raw"]
     group_id: "netops-router-flows-rekey"
     decoding: { codec: json }
@@ -164,6 +218,11 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # 324: bounded consumer prefetch — arithmetic and the name trap on
+    # kafka_applogs.
+    librdkafka_options:
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.syslog"]
     group_id: "netops-router-syslog"
     decoding: { codec: json }
@@ -180,6 +239,11 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # 324: bounded consumer prefetch — arithmetic and the name trap on
+    # kafka_applogs.
+    librdkafka_options:
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.flows"]
     group_id: "netops-router-flows"
     decoding: { codec: json }
@@ -196,6 +260,11 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # 324: bounded consumer prefetch — arithmetic and the name trap on
+    # kafka_applogs.
+    librdkafka_options:
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.snmptrap"]
     group_id: "netops-router-snmptrap"
     decoding: { codec: json }
@@ -216,6 +285,11 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # 324: bounded consumer prefetch — arithmetic and the name trap on
+    # kafka_applogs.
+    librdkafka_options:
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.cloudlogs"]
     group_id: "netops-router-cloudlogs"
     decoding: { codec: json }
@@ -239,6 +313,11 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # 324: bounded consumer prefetch — arithmetic and the name trap on
+    # kafka_applogs.
+    librdkafka_options:
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.security"]
     group_id: "netops-router-security"
     decoding: { codec: json }
@@ -260,6 +339,11 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # 324: bounded consumer prefetch — arithmetic and the name trap on
+    # kafka_applogs.
+    librdkafka_options:
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.deadletter"]
     group_id: "netops-router-deadletter"
     decoding: { codec: json }
@@ -282,6 +366,11 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # 324: bounded consumer prefetch — arithmetic and the name trap on
+    # kafka_applogs.
+    librdkafka_options:
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.experience"]
     group_id: "netops-router-experience"
     decoding: { codec: json }
@@ -302,6 +391,11 @@ sources:
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    # 324: bounded consumer prefetch — arithmetic and the name trap on
+    # kafka_applogs.
+    librdkafka_options:
+      queued.max.messages.kbytes: "4096"
+      queued.min.messages: "5000"
     topics: ["netops.cloudcosts"]
     group_id: "netops-router-cloudcosts"
     decoding: { codec: json }
@@ -1275,10 +1369,18 @@ sinks:
     # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
     # above makes the retried batch an UPSERT, so a retry cannot duplicate.
     request_retry_partial: true
+    # 324 — the IN-FLIGHT ceiling, which is what actually OOMed this container.
+    # Full arithmetic on opensearch_syslog; enforced by
+    # tests/test_vector_sink_memory_budget.py.
+    batch:
+      max_events: 500                # one buffer-full per request, never more
+      max_bytes: 1048576             # 1 MiB — Vector's elasticsearch default is 10 MB
     request:
       retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
       retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
       retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+      adaptive_concurrency:
+        max_concurrency_limit: 4     # 324: Vector defaults this to 200 PER SINK
     buffer:
       type: memory                   # never disk: the router's only writable host
       max_events: 500                # path is the root fs whose exhaustion is the
@@ -1316,10 +1418,18 @@ sinks:
     # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
     # above makes the retried batch an UPSERT, so a retry cannot duplicate.
     request_retry_partial: true
+    # 324 — the IN-FLIGHT ceiling, which is what actually OOMed this container.
+    # Full arithmetic on opensearch_syslog; enforced by
+    # tests/test_vector_sink_memory_budget.py.
+    batch:
+      max_events: 500                # one buffer-full per request, never more
+      max_bytes: 1048576             # 1 MiB — Vector's elasticsearch default is 10 MB
     request:
       retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
       retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
       retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+      adaptive_concurrency:
+        max_concurrency_limit: 4     # 324: Vector defaults this to 200 PER SINK
     buffer:
       type: memory                   # never disk: the router's only writable host
       max_events: 500                # path is the root fs whose exhaustion is the
@@ -1351,10 +1461,18 @@ sinks:
     # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
     # above makes the retried batch an UPSERT, so a retry cannot duplicate.
     request_retry_partial: true
+    # 324 — the IN-FLIGHT ceiling, which is what actually OOMed this container.
+    # Full arithmetic on opensearch_syslog; enforced by
+    # tests/test_vector_sink_memory_budget.py.
+    batch:
+      max_events: 500                # one buffer-full per request, never more
+      max_bytes: 1048576             # 1 MiB — Vector's elasticsearch default is 10 MB
     request:
       retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
       retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
       retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+      adaptive_concurrency:
+        max_concurrency_limit: 4     # 324: Vector defaults this to 200 PER SINK
     buffer:
       type: memory                   # never disk: the router's only writable host
       max_events: 500                # path is the root fs whose exhaustion is the
@@ -1418,6 +1536,52 @@ sinks:
     # `id_key: cx_event_id` above is what makes the retry safe: the replayed
     # batch UPSERTS instead of duplicating (the F-18 idempotency contract).
     request_retry_partial: true
+    # ── 324 — THE IN-FLIGHT CEILING, and why it is not a default ────────────
+    # THE DEFECT THIS FIXES (lab box .122, proven 2026-09-16): vector-router
+    # restarted 37 times between 2026-09-06 and 2026-09-15 with
+    # `OOMKilled=false` and `ExitCode=0`. Both readings were artefacts — Docker
+    # clears them on a RUNNING container, and PID 1 here is the F-10 wrapper
+    # SHELL, so when the cgroup OOM killer reaps the fattest task (vector, the
+    # child) the container's init survives and is never stamped OOM-killed.
+    # The kernel disagreed 114 times over that window:
+    #   Sep 15 10:16:34 kernel: Memory cgroup out of memory: Killed process
+    #     3793551 (vector) total-vm:2272740kB, anon-rss:507212kB
+    # 507 MB of anon against a 525 MiB cap, at the same second `docker inspect`
+    # recorded FinishedAt. It was an OOM every time.
+    #
+    # WHAT GREW was NOT this buffer — measured at 0 events on every lane. It
+    # was the in-flight request set, whose ceiling this config never stated.
+    # Read out of the shipped image itself
+    # (`vector generate '//elasticsearch'`, timberio/vector 0.40.0):
+    #     request.adaptive_concurrency.max_concurrency_limit: 200
+    #     request.retry_attempts: 9223372036854775807   (forever)
+    #     batch: {}                                     (10 MB default)
+    # i.e. up to 200 concurrent 10 MB bulk bodies PER SINK — ~2 GB against a
+    # 525 MiB cgroup, twelve times over. Under a sustained flood-stage block
+    # the retried batches are held for the whole 43-minute envelope, the
+    # in-flight set grows, and the kernel reaps the process. Kafka replays, so
+    # nothing was lost (#209 still holds) — but a restart loop is not a
+    # back-pressure strategy, and §9 requires the queue to be bounded.
+    #
+    # THE ARITHMETIC, per sink, worst case, all of it resident:
+    #     buffer      500 events x 4 KiB ceiling      =  2 MiB
+    #     in-flight   4 requests x 1 MiB max_bytes    =  4 MiB
+    #                                                   ------
+    #                                                    6 MiB
+    # x 12 storage sinks = 72 MiB, + ~85 MiB measured idle RSS = ~157 MiB,
+    # which is 31 % of the 512 MiB compose default. The cap does NOT need to be
+    # raised, and is not: it stays the resource-planner floor (#102).
+    #
+    # The 4 KiB per-event ceiling is ~6x the largest measured event on the live
+    # router (syslog 660 B, secfindings 1182 B, the #209 sample 478 B).
+    # Concurrency 4 is 8x the in-flight concurrency this deployment actually
+    # reaches (vector_adaptive_concurrency_in_flight: mean 0.5, top bucket <=1),
+    # so bounding it costs no observed throughput while removing the 200 ceiling.
+    # tests/test_vector_sink_memory_budget.py re-derives this sum from the
+    # config and fails if a new sink or a raised number breaks it.
+    batch:
+      max_events: 500
+      max_bytes: 1048576
     request:
       # RETRY ENVELOPE — deliberately long, deliberately NOT infinite.
       # Measured on 0.40.0: `retry_max_duration_secs` caps the DELAY BETWEEN
@@ -1448,6 +1612,13 @@ sinks:
       retry_attempts: 90
       retry_initial_backoff_secs: 1
       retry_max_duration_secs: 30
+      # 324: the fourth number the arithmetic above needs. Vector's default is
+      # 200, and AIMD only ever ramps TOWARD it — the ceiling is what bounds
+      # the memory, not the controller. Keeping adaptive_concurrency (rather
+      # than a fixed `concurrency`) preserves Vector's own back-pressure
+      # control loop; this just stops it from ramping past the cgroup.
+      adaptive_concurrency:
+        max_concurrency_limit: 4
     buffer:
       # NO DISK BUFFER HERE — ON PURPOSE, and that is the other half of #209.
       # Sizing one honestly from the measured numbers: this sink's events
@@ -1505,10 +1676,18 @@ sinks:
     # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
     # above makes the retried batch an UPSERT, so a retry cannot duplicate.
     request_retry_partial: true
+    # 324 — the IN-FLIGHT ceiling, which is what actually OOMed this container.
+    # Full arithmetic on opensearch_syslog; enforced by
+    # tests/test_vector_sink_memory_budget.py.
+    batch:
+      max_events: 500                # one buffer-full per request, never more
+      max_bytes: 1048576             # 1 MiB — Vector's elasticsearch default is 10 MB
     request:
       retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
       retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
       retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+      adaptive_concurrency:
+        max_concurrency_limit: 4     # 324: Vector defaults this to 200 PER SINK
     buffer:
       type: memory                   # never disk: the router's only writable host
       max_events: 500                # path is the root fs whose exhaustion is the
@@ -1547,10 +1726,18 @@ sinks:
     # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
     # above makes the retried batch an UPSERT, so a retry cannot duplicate.
     request_retry_partial: true
+    # 324 — the IN-FLIGHT ceiling, which is what actually OOMed this container.
+    # Full arithmetic on opensearch_syslog; enforced by
+    # tests/test_vector_sink_memory_budget.py.
+    batch:
+      max_events: 500                # one buffer-full per request, never more
+      max_bytes: 1048576             # 1 MiB — Vector's elasticsearch default is 10 MB
     request:
       retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
       retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
       retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+      adaptive_concurrency:
+        max_concurrency_limit: 4     # 324: Vector defaults this to 200 PER SINK
     buffer:
       type: memory                   # never disk: the router's only writable host
       max_events: 500                # path is the root fs whose exhaustion is the
@@ -1598,10 +1785,18 @@ sinks:
     # request_retry_partial defaults to FALSE. Evidence lanes degrade to
     # DELAYED, never to LOST.
     request_retry_partial: true
+    # 324 — the IN-FLIGHT ceiling, which is what actually OOMed this container.
+    # Full arithmetic on opensearch_syslog; enforced by
+    # tests/test_vector_sink_memory_budget.py.
+    batch:
+      max_events: 500                # one buffer-full per request, never more
+      max_bytes: 1048576             # 1 MiB — Vector's elasticsearch default is 10 MB
     request:
       retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
       retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
       retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+      adaptive_concurrency:
+        max_concurrency_limit: 4     # 324: Vector defaults this to 200 PER SINK
     buffer:
       type: memory                   # never disk: the router's only writable host
       max_events: 500                # path is the root fs whose exhaustion is the
@@ -1646,10 +1841,18 @@ sinks:
     # OS copy. That is the intended trade — ClickHouse resumes from the retained
     # topic, and s10 proved the alternative is permanent evidence loss.
     request_retry_partial: true
+    # 324 — the IN-FLIGHT ceiling, which is what actually OOMed this container.
+    # Full arithmetic on opensearch_syslog; enforced by
+    # tests/test_vector_sink_memory_budget.py.
+    batch:
+      max_events: 500                # one buffer-full per request, never more
+      max_bytes: 1048576             # 1 MiB — Vector's elasticsearch default is 10 MB
     request:
       retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
       retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
       retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+      adaptive_concurrency:
+        max_concurrency_limit: 4     # 324: Vector defaults this to 200 PER SINK
     buffer:
       type: memory                   # never disk: the router's only writable host
       max_events: 500                # path is the root fs whose exhaustion is the
@@ -1693,6 +1896,24 @@ sinks:
       password: "${CLICKHOUSE_PASSWORD}"
     skip_unknown_fields: true
     healthcheck: { enabled: true }
+    # 324 — same bounded in-flight contract as the OpenSearch lanes, and these
+    # lanes needed it MORE: with no `request` block at all they inherited
+    # `retry_attempts: 9223372036854775807` as well as the 200-request / 10 MB
+    # ceiling, so a ClickHouse stall held batches in memory with no envelope at
+    # all. Arithmetic and evidence: see opensearch_syslog.
+    batch:
+      max_events: 500
+      max_bytes: 1048576
+    request:
+      retry_attempts: 90
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 30
+      adaptive_concurrency:
+        max_concurrency_limit: 4
+    buffer:
+      type: memory
+      max_events: 500
+      when_full: block
 
   # Daily cloud cost records → ClickHouse (Wave 5 #18). skip_unknown_fields
   # drops the record's `kind` routing field; schema growth is a plain
@@ -1709,6 +1930,24 @@ sinks:
       password: "${CLICKHOUSE_PASSWORD}"
     skip_unknown_fields: true
     healthcheck: { enabled: true }
+    # 324 — same bounded in-flight contract as the OpenSearch lanes, and these
+    # lanes needed it MORE: with no `request` block at all they inherited
+    # `retry_attempts: 9223372036854775807` as well as the 200-request / 10 MB
+    # ceiling, so a ClickHouse stall held batches in memory with no envelope at
+    # all. Arithmetic and evidence: see opensearch_syslog.
+    batch:
+      max_events: 500
+      max_bytes: 1048576
+    request:
+      retry_attempts: 90
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 30
+      adaptive_concurrency:
+        max_concurrency_limit: 4
+    buffer:
+      type: memory
+      max_events: 500
+      when_full: block
 
   # DEM experience-event lane (tracker 254) → ClickHouse. Two sinks over one
   # topic because the two record shapes have different columns, different
@@ -1733,6 +1972,24 @@ sinks:
       password: "${CLICKHOUSE_PASSWORD}"
     skip_unknown_fields: true
     healthcheck: { enabled: true }
+    # 324 — same bounded in-flight contract as the OpenSearch lanes, and these
+    # lanes needed it MORE: with no `request` block at all they inherited
+    # `retry_attempts: 9223372036854775807` as well as the 200-request / 10 MB
+    # ceiling, so a ClickHouse stall held batches in memory with no envelope at
+    # all. Arithmetic and evidence: see opensearch_syslog.
+    batch:
+      max_events: 500
+      max_bytes: 1048576
+    request:
+      retry_attempts: 90
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 30
+      adaptive_concurrency:
+        max_concurrency_limit: 4
+    buffer:
+      type: memory
+      max_events: 500
+      when_full: block
 
   clickhouse_business_events:
     type: clickhouse
@@ -1746,3 +2003,21 @@ sinks:
       password: "${CLICKHOUSE_PASSWORD}"
     skip_unknown_fields: true
     healthcheck: { enabled: true }
+    # 324 — same bounded in-flight contract as the OpenSearch lanes, and these
+    # lanes needed it MORE: with no `request` block at all they inherited
+    # `retry_attempts: 9223372036854775807` as well as the 200-request / 10 MB
+    # ceiling, so a ClickHouse stall held batches in memory with no envelope at
+    # all. Arithmetic and evidence: see opensearch_syslog.
+    batch:
+      max_events: 500
+      max_bytes: 1048576
+    request:
+      retry_attempts: 90
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 30
+      adaptive_concurrency:
+        max_concurrency_limit: 4
+    buffer:
+      type: memory
+      max_events: 500
+      when_full: block

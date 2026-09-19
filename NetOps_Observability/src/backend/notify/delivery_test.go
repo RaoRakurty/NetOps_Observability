@@ -130,9 +130,10 @@ func TestPermanentFailureIsCountedAndLogged(t *testing.T) {
 	d.Dispatch(dispatcherAlert())
 
 	waitUntil(t, "failure to be counted", func() bool { return d.statsSnapshot("pagerduty").failed == 1 })
-	if got := c.attempts.Load(); got != deliveryAttempts {
-		t.Errorf("attempts = %d, want %d — the retry budget must be exhausted before giving up", got, deliveryAttempts)
-	}
+	// The counter is stamped by the dispatcher's give-up path; the final retry's
+	// own attempt increment races it on a loaded runner (it fails under -race in
+	// CI, never locally). Wait for the budget rather than sampling it once.
+	waitUntil(t, "the retry budget to be exhausted", func() bool { return c.attempts.Load() == deliveryAttempts })
 	logMu.Lock()
 	defer logMu.Unlock()
 	found := false

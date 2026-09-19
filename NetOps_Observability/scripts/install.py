@@ -3366,10 +3366,34 @@ def plan_tiers(available: Iterable[str]
     return tiers, sorted(avail - placed)
 
 
-def choose_bring_up_mode(host_class: str, overcommit: str) -> tuple[bool, str]:
+BRING_UP_MODES = ("auto", "tiered", "single")
+
+
+def choose_bring_up_mode(host_class: str, overcommit: str, override: str = "") -> tuple[bool, str]:
     """(start in groups?, the reason in plain words). Groups on a slow or very
     slow host, or when the resource plan over-commits memory (`overcommit` is
-    the planner's finding in words, "" when it fits)."""
+    the planner's finding in words, "" when it fits).
+
+    `override` is CORRELIX_BRINGUP_MODE, the support lever: the host-speed
+    thresholds are uncalibrated, so `tiered` and `single` settle the question
+    for a host they read wrong, with no patched installer. A value nobody
+    defined stops the install instead of falling back to auto — an ignored
+    lever is a support call told the variable was set and an install that never
+    saw it."""
+    mode = (override or "auto").strip().lower()
+    if mode not in BRING_UP_MODES:
+        fail(f"CORRELIX_BRINGUP_MODE={override!r} must be "
+             + ", ".join(f"'{m}'" for m in BRING_UP_MODES)
+             + " ('auto', the default, chooses from this host's speed and the resource plan).")
+    if mode == "tiered":
+        return True, ("starting the stack in groups: CORRELIX_BRINGUP_MODE=tiered was set, so "
+                      "the data stores start first and each group waits for the one before it "
+                      "— this overrides what this host's speed and the resource plan would "
+                      "have chosen")
+    if mode == "single":
+        return False, ("starting every service together: CORRELIX_BRINGUP_MODE=single was set "
+                       "— this overrides what this host's speed and the resource plan would "
+                       "have chosen")
     if host_class in _SLOW_HOST_CLASSES:
         return True, ("starting the stack in groups: this host's disk is "
                       f"{host_class.replace('-', ' ')}, so the data stores start first and "
@@ -5172,7 +5196,8 @@ def main() -> None:
     # Start in groups on a slow host or an over-committed plan (FMEA §4.5);
     # phase B reuses the same choice.
     tiered, why = choose_bring_up_mode(budgets.host_class,
-                                       planner_overcommit(compose_dir / "resource-plan.json"))
+                                       planner_overcommit(compose_dir / "resource-plan.json"),
+                                       os.environ.get("CORRELIX_BRINGUP_MODE", ""))
     info(why)
     compose_up(compose_dir, offline=args.offline, root=root, budget_s=budgets.converge_s, tiered=tiered)
 

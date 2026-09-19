@@ -25,12 +25,29 @@ function rule(selector: string): string {
 const loginBlock = css.slice(css.indexOf(".login-scene {"), css.indexOf(".mode-toggle {"));
 
 describe("the sign-in screen uses the setup wizard's template", () => {
-  it("draws the mesh wallpaper and frost grain behind both appearances", () => {
-    for (const sel of [".login-scene", ".login-scene.login-light"]) {
-      const r = rule(sel);
-      expect(r).toContain("background-image:");
-      expect(r.match(/data:image\/svg\+xml;base64,/g)?.length, `${sel} mesh + grain`).toBe(2);
-    }
+  it("draws the network topology behind both appearances, smoke and ash in the dark", () => {
+    // The wallpaper is generated, not hand-drawn: scripts/login_topology.py
+    // emits POPs on metro rings with a long-haul backbone, and
+    // tests/test_login_topology.py re-derives it and proves nothing sits behind
+    // the sign-in panel. Here we only pin the LAYERS the stylesheet carries.
+    const dark = rule(".login-scene");
+    expect(dark).toContain("background-image:");
+    expect(dark.match(/data:image\/svg\+xml;base64,/g)?.length,
+      ".login-scene: smoke sheet + topology + frost grain").toBe(3);
+
+    const light = rule(".login-scene.login-light");
+    expect(light).toContain("background-image:");
+    expect(light.match(/data:image\/svg\+xml;base64,/g)?.length,
+      ".login-scene.login-light: topology + frost grain").toBe(2);
+  });
+
+  it("wears the rustic smoke-and-ash ground in the dark appearance", () => {
+    const dark = rule(".login-scene");
+    expect(dark).toContain("background-color: #16151a");        // warm charcoal, not blue-black
+    expect(dark).toMatch(/rgba\(176, 137, 104/);                 // ember haze, top left
+    expect(dark).toMatch(/rgba\(140, 130, 120/);                 // ash haze, bottom right
+    expect(dark).toMatch(/soft-light/);                          // the smoke sits IN the ground
+    expect(dark, "the old indigo/cyan wash is gone").not.toMatch(/rgba\(99, 102, 241|rgba\(56, 189, 248/);
   });
 
   it("keeps the pane clear — a whisper of fill and no blur", () => {
