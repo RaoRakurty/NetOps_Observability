@@ -2478,6 +2478,48 @@ upgrade_carry_settings() {
   ok "settings carried forward (.env unchanged — no secret was regenerated)"
 }
 
+# Every upgrade sets the .env it replaced aside under a timestamped name
+# (.env.upgraded-<stamp> when it worked, .env.upgrade-failed-<stamp> when it
+# rolled back), and each of those files holds the whole stack's secrets.
+# Retention is explicit and bounded (scripts/CLAUDE.md 16.4): the NEWEST of
+# each class is kept — the one an operator would restore from — and the rest
+# are removed, or the third upgrade on a host leaves three copies of every
+# credential, forever. The one kept is forced to 0600: a copy of .env is as
+# sensitive as .env, and one restored from a backup archive can arrive 0644.
+#
+# Not fatal. This runs after the upgrade's last real step, and an upgrade that
+# worked must not be reported as failed because a stale copy could not be
+# deleted — but nothing is swallowed either (16.1): what is left behind is
+# named, by file name only, never its contents.
+prune_env_set_asides() {
+  local env_file="$1" class f kept n
+  for class in upgraded upgrade-failed; do
+    kept=""
+    n=0
+    # The stamps are %Y%m%dT%H%M%SZ, fixed width, so the newest sorts last.
+    for f in "$env_file"."$class"-*; do
+      [ -e "$f" ] || continue
+      kept="$f"
+      n=$((n + 1))
+    done
+    [ -n "$kept" ] || continue
+    if ! chmod 600 -- "$kept"; then
+      warn "could not make ${kept##*/} owner-only — it holds this install's secrets; run: chmod 600 '$kept'"
+    fi
+    [ "$n" -gt 1 ] || continue
+    for f in "$env_file"."$class"-*; do
+      [ -e "$f" ] || continue
+      [ "$f" != "$kept" ] || continue
+      if rm -f -- "$f" && [ ! -e "$f" ]; then
+        say "  removed the superseded ${f##*/} (it held this install's secrets)"
+      else
+        warn "could not remove ${f##*/} — it holds this install's secrets; remove it by hand: rm -f '$f'"
+      fi
+    done
+  done
+  return 0
+}
+
 # Every step after the first change. errexit is suspended in here (the caller
 # tests the result), so each step checks and names its own failure.
 upgrade_apply() {
@@ -2556,6 +2598,7 @@ upgrade_rollback() {
   if [ "$ENV_CARRIED" = 1 ] && [ -e "$ENV_FILE" ]; then
     if mv -f -- "$ENV_FILE" "$ENV_FILE.upgrade-failed-$UPGRADE_STAMP"; then
       ENV_CARRIED=0
+      prune_env_set_asides "$ENV_FILE"
     else
       problems="$problems
   - could not set aside $ENV_FILE (this folder still looks installed)"
@@ -2663,6 +2706,8 @@ cmd_upgrade() {
   # project: its install/uninstall would act on the upgraded containers.
   if ! mv -f -- "$PREV_ENV" "$PREV_ENV.upgraded-$UPGRADE_STAMP"; then
     warn "could not set aside $PREV_ENV — do NOT run install or uninstall from $PREV_ROOT: it would act on the upgraded containers."
+  else
+    prune_env_set_asides "$PREV_ENV"
   fi
   state_note status upgraded
   state_note finished_utc "$(utc_now)"
