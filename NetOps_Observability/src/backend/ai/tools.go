@@ -167,8 +167,13 @@ type DataSource interface {
 	GetProblem(ctx context.Context, p Principal, id string) (*Problem, error)
 	// GetProblemEvidence returns the cited evidence items for the problem.
 	GetProblemEvidence(ctx context.Context, p Principal, id string) ([]EvidenceItem, error)
-	// ListActiveProblems returns the tenant-scoped recent/active correlation
-	// problems (newest first), bounded by limit — for Command Center summaries (P2).
+	// ListActiveProblems returns the tenant-scoped LIVE correlation problems
+	// (newest first), bounded by limit — for Command Center summaries (P2).
+	// "Live" is the platform's own definition, not a display window: the latest
+	// version is open AND was persisted inside the orphan-close horizon, beyond
+	// which the reconciler force-closes the object as abandoned. An implementer
+	// must bound the read — the server's used to fold the whole correlation
+	// history and died with MEMORY_LIMIT_EXCEEDED on a one-month appliance.
 	ListActiveProblems(ctx context.Context, p Principal, limit int) ([]Problem, error)
 }
 
