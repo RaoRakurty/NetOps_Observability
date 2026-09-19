@@ -49,6 +49,26 @@ import (
 // idempotent (NOT IN makes a re-run a no-op). Runs in the boot converge list
 // (corr_schema.go) and from the periodic reconciler.
 
+// corrOrphanOpenCloseHoursDefault is the age at which an 'open' corr_current
+// row stops being a live problem: the engine re-persists every live open object
+// at least every CORR_VERSION_HEARTBEAT_S (900 s), so a row this stale is an
+// orphan (its engine lost the in-memory window at restart) awaiting a closing
+// version.
+const corrOrphanOpenCloseHoursDefault = 24
+
+// corrOrphanOpenCloseHours resolves CORR_ORPHAN_OPEN_CLOSE_HOURS (0 = orphan
+// sweep disabled). ONE source of truth on purpose: the sweep that force-closes
+// stale open rows and every reader that asks "is this problem still live?" must
+// share a horizon, or they report different realities for the same object.
+func corrOrphanOpenCloseHours() int {
+	if raw := envOr("CORR_ORPHAN_OPEN_CLOSE_HOURS", ""); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return corrOrphanOpenCloseHoursDefault
+}
+
 func (s *server) corrCurrentReconcileLoop(ctx context.Context) {
 	interval := durationOr("CORR_CURRENT_RECONCILE_INTERVAL", time.Hour)
 	if interval <= 0 {
@@ -61,12 +81,7 @@ func (s *server) corrCurrentReconcileLoop(ctx context.Context) {
 			lookback = n
 		}
 	}
-	orphanHours := 24
-	if raw := envOr("CORR_ORPHAN_OPEN_CLOSE_HOURS", ""); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
-			orphanHours = n
-		}
-	}
+	orphanHours := corrOrphanOpenCloseHours()
 	base := envOr("CLICKHOUSE_URL", "")
 	if base == "" {
 		return

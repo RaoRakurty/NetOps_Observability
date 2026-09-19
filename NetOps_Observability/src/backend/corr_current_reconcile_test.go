@@ -35,6 +35,32 @@ func TestCorrCurrentRepairSQLStaysNarrow(t *testing.T) {
 	}
 }
 
+// TestCorrOrphanOpenCloseHours: the liveness horizon is ONE value, shared by
+// the sweep that force-closes stale open rows and by every reader that asks
+// "is this problem still live?" (aiDataSource.ListActiveProblems). A bad env
+// value must fall back to the default, never to zero — zero means "sweep
+// disabled", a materially different posture.
+func TestCorrOrphanOpenCloseHours(t *testing.T) {
+	if got := corrOrphanOpenCloseHours(); got != corrOrphanOpenCloseHoursDefault {
+		t.Errorf("unset: got %d, want %d", got, corrOrphanOpenCloseHoursDefault)
+	}
+	for raw, want := range map[string]int{
+		"48":    48,
+		"0":     0, // explicit disable
+		"":      corrOrphanOpenCloseHoursDefault,
+		"soon":  corrOrphanOpenCloseHoursDefault, // unparseable → default, not 0
+		"-1":    corrOrphanOpenCloseHoursDefault, // negative → default, not 0
+		"1.5":   corrOrphanOpenCloseHoursDefault,
+		" 24 ":  corrOrphanOpenCloseHoursDefault,
+		"99999": 99999,
+	} {
+		t.Setenv("CORR_ORPHAN_OPEN_CLOSE_HOURS", raw)
+		if got := corrOrphanOpenCloseHours(); got != want {
+			t.Errorf("CORR_ORPHAN_OPEN_CLOSE_HOURS=%q: got %d, want %d", raw, got, want)
+		}
+	}
+}
+
 func TestCorrCurrentDriftScanIsTimeBounded(t *testing.T) {
 	sql := chschema.CorrDriftSelect(7)
 	if !strings.Contains(sql, "created_at >= now() - INTERVAL 7 DAY") {
