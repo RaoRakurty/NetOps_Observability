@@ -198,3 +198,66 @@ func TestNoWholeTableEdgesAggregation(t *testing.T) {
 		}
 	}
 }
+
+// Rule 5 (permanent, 2026-09-19 Iris regression): a LATEST-VERSION FOLD over
+// netops.corr_objects must carry a created_at bound.
+//
+// corr_objects is the full version history, partitioned by
+// (tenant_id, toYYYYMMDD(created_at)). A fold with no created_at predicate
+// prunes NOTHING: every partition is read and every matching history row is
+// materialised and sorted before `LIMIT 1 BY` folds it away. That is how
+// aiDataSource.ListActiveProblems — Iris's "what is going on right now" — died
+// with MEMORY_LIMIT_EXCEEDED on a one-month appliance (measured: 2 660 822
+// rows / 773.95 MiB read, 1011.30 MiB peak, to return 25 rows), surfacing to
+// the operator as a 502 from the assistant.
+//
+// The fix is either the sanctioned hot projection (netops.corr_current) or a
+// created_at bound in ListProblemsInWindow's style (widened by
+// corrPartitionSkewSlackSeconds so it prunes without narrowing the answer).
+func TestNoUnboundedCorrObjectsFold(t *testing.T) {
+	strLit := regexp.MustCompile("(?s)`[^`]*`")
+	for name, src := range backendSQLSources(t) {
+		for _, lit := range strLit.FindAllString(src, -1) {
+			if !strings.Contains(lit, "netops.corr_objects") || !strings.Contains(lit, "LIMIT 1 BY") {
+				continue
+			}
+			if !strings.Contains(lit, "created_at >=") {
+				t.Errorf("%s: latest-version fold over netops.corr_objects with no created_at bound — "+
+					"nothing prunes, so the whole history is sorted to return one page (#100):\n%s", name, lit)
+			}
+		}
+	}
+}
+
+// Rule 5b: Iris's active-problems read keeps the shape that fixed it — the hot
+// projection, a narrow pick, the wide columns fetched keyed by that pick, and
+// the liveness bound whenever the orphan sweep is on.
+func TestAIActiveProblemsSQLShape(t *testing.T) {
+	sql := aiActiveProblemsSQL(25, corrOrphanOpenCloseHoursDefault)
+	for _, must := range []string{
+		"FROM netops.corr_current FINAL",                  // hot projection, folded before state is tested
+		"created_at >= now() - INTERVAL 24 HOUR",          // liveness horizon == the orphan sweep's
+		"LIMIT 1 BY correlation_id",                       // belt-and-braces fold
+		"IN (SELECT correlation_id, version FROM picked)", // wide columns fetched keyed
+		"LIMIT 25", // bounded rows
+	} {
+		if !strings.Contains(sql, must) {
+			t.Errorf("active-problems SQL lost its bounded shape: missing %q\n%s", must, sql)
+		}
+	}
+	if strings.Contains(sql, "netops.corr_objects") {
+		t.Errorf("active-problems SQL is back on the history table — that is the 502:\n%s", sql)
+	}
+	// The pick must stay narrow: no wide column may cross its sort.
+	picked := sql[strings.Index(sql, "WITH picked"):strings.Index(sql, "\n)")]
+	for _, wide := range append([]string{"top_hypothesis", "affected"}, corrWideColumns...) {
+		if strings.Contains(picked, wide) {
+			t.Errorf("active-problems pick references %q — the fold must pick narrow keys only (#100)\n%s", wide, picked)
+		}
+	}
+	// Sweep disabled (0 = open rows may legitimately be arbitrarily old): no
+	// bound at all, never a zero-hour bound that would answer "nothing".
+	if off := aiActiveProblemsSQL(25, 0); strings.Contains(off, "created_at >= now()") {
+		t.Errorf("orphan sweep disabled must drop the liveness bound, not narrow to now():\n%s", off)
+	}
+}

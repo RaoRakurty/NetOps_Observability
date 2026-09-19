@@ -153,23 +153,114 @@ SELECT hypotheses, affected, tenant_id
 	return items, nil
 }
 
-// ListActiveProblems returns the tenant-scoped recent correlation problems
-// (newest first) for the Command Center summary (P2). Bounded by limit; the
-// corr_objects row policy keeps it to the caller's tenant.
+// aiActiveProblemsSQL builds the "what is going on right now" read. Pure, so
+// its bounded shape can be asserted without a ClickHouse (house style —
+// correlationsListSQL is pure for the same reason).
+//
+// ── WHY THIS READS corr_current AND NOT corr_objects ─────────────────────────
+//
+// It used to fold netops.corr_objects — the full VERSION HISTORY, partitioned
+// by (tenant_id, toYYYYMMDD(created_at)) — with `WHERE state='open'` and no
+// time bound at all, so nothing pruned: every partition was read and every
+// open history row was materialised and SORTED before `LIMIT 1 BY` folded it
+// down to 25. That is precisely the #100 2026-07-09 shape ("wide columns
+// sorted through a latest-version fold", deployment/docker/clickhouse/
+// query-spill.xml). MEASURED on a one-month appliance (2.66 M history rows):
+// 2 660 822 rows / 773.95 MiB read and 1011.30 MiB peak to return 25 rows —
+// over the 1 GiB per-read ceiling (chWorkerReadMemoryBytes), so ClickHouse
+// answered MEMORY_LIMIT_EXCEEDED and Iris answered 502.
+//
+// corr_current is the #100 hot projection built for exactly this question: one
+// narrow row per correlation, latest version, SAME strict row policy
+// (tenant_iso_corr_current), and it carries every column this answer needs.
+// Every other live surface — the Command Center list, the health strip,
+// unified search, verify — already reads it; only the AI seam did not.
+//
+// Two stages, the sanctioned #100 split: the fold picks NARROW keys
+// (correlation_id, version) and the wide columns (top_hypothesis, affected)
+// are then fetched keyed by that ≤limit set, so no wide column ever crosses a
+// sort. FINAL folds the ReplacingMergeTree BEFORE `state` is tested — a
+// predicate pushed under the fold can surface a stale version whose state
+// happens to match (handleCorrelations documents the same trap), and on the
+// measured appliance the old query did exactly that: it reported objects as
+// open that history had closed weeks earlier. `LIMIT 1 BY` stays as the
+// belt-and-braces fold for rows FINAL cannot collapse across partitions.
+//
+// MEASURED, same appliance, same 1 GiB ceiling, the shipped query at
+// tenant_scope='__all__' (the worst case — every tenant partition): 989 288
+// rows / 39.77 MiB read, 8.85 MiB peak, 0.13 s. Scoped to one tenant the row
+// policy prunes to that tenant's partition (corr_current is PARTITIONED BY
+// tenant_id): 12 374 rows / 894.13 KiB / 608.39 KiB / 0.024 s. Without the
+// liveness bound below — the liveHours<=0 path — the same two-stage shape
+// costs 1 090 647 rows / 65.68 MiB / 10.20 MiB / 0.144 s, still two orders of
+// magnitude under the ceiling.
+//
+// ── THE TIME BOUND AND WHAT IT MEANS ─────────────────────────────────────────
+//
+// liveHours bounds created_at to the LIVENESS HORIZON, not to a display
+// window. Unlike the sibling ListProblemsInWindow's bound, this one is NOT a
+// partition-pruning device: corr_current is partitioned by tenant_id alone and
+// ordered by (tenant_id, correlation_id), so created_at prunes nothing —
+// measured on the single-stage form, bounded and unbounded read the identical
+// 217.43 MiB. It is here for CORRECTNESS of the answer: it is the platform's
+// own definition of "still going on". (The COST is bounded by the two-stage
+// narrow pick above, which is why this stays cheap when the bound is absent.)
+//
+// The engine re-persists every live open object at least every
+// CORR_VERSION_HEARTBEAT_S (900 s), and the reconciler's orphan sweep
+// (chschema.CorrOrphanClosePickSQL) force-closes any open projection row whose
+// created_at is older than CORR_ORPHAN_OPEN_CLOSE_HOURS — those rows are
+// abandoned objects awaiting a closing version, not current problems. So the
+// bound is provably non-narrowing for any live problem (900 s heartbeat vs a
+// 24 h horizon, a 96x margin) and it drops exactly the rows the janitor is
+// about to close. Iris and the sweep share ONE horizon so they cannot disagree
+// about what is live. liveHours <= 0 (sweep disabled → open rows may legitimately
+// be arbitrarily old) emits no bound; the two-stage pick keeps that case cheap.
+func aiActiveProblemsSQL(limit, liveHours int) string {
+	live := ""
+	if liveHours > 0 {
+		live = "\n        AND created_at >= now() - INTERVAL " + intToString(liveHours) + " HOUR"
+	}
+	return fmt.Sprintf(`
+WITH picked AS (
+     SELECT correlation_id, version
+       FROM netops.corr_current FINAL
+      WHERE state = 'open'%s
+      ORDER BY created_at DESC, correlation_id DESC
+      LIMIT 1 BY correlation_id
+      LIMIT %d
+)
+SELECT toString(c.correlation_id) AS correlation_id, c.tenant_id AS tenant_id,
+       c.top_hypothesis AS top_hypothesis, c.top_confidence AS top_confidence,
+       c.verdict_tier AS verdict_tier, c.affected AS affected,
+       c.signal_count AS signal_count, c.node_count AS node_count
+  FROM netops.corr_current AS c FINAL
+ WHERE (c.correlation_id, c.version) IN (SELECT correlation_id, version FROM picked)
+ ORDER BY c.created_at DESC, c.correlation_id DESC
+ LIMIT 1 BY c.correlation_id
+ LIMIT %d
+ FORMAT JSON`, live, limit, limit)
+}
+
+// ListActiveProblems returns the tenant-scoped LIVE correlation problems
+// (newest first) for the Command Center summary (P2) — the "what is going on
+// right now" answer.
+//
+// SEMANTICS (changed 2026-09-19, and narrower than the name once implied): a
+// problem is active when its latest version is 'open' AND that version was
+// persisted inside the orphan-close horizon (CORR_ORPHAN_OPEN_CLOSE_HOURS,
+// default 24 h). A live object heartbeats every 900 s, so no live problem can
+// fall outside it; what falls outside is the abandoned-open backlog the
+// reconciler's sweep exists to close — and since Iris reads the SAME horizon
+// the sweep uses, the only problems it can drop are ones the platform is
+// itself about to close. Bounded by limit, and by the row policy
+// on netops.corr_current to the caller's tenant (plus the strict app-side
+// corrRowVisible narrowing below). See aiActiveProblemsSQL for the measurements.
 func (d aiDataSource) ListActiveProblems(_ context.Context, _ ai.Principal, limit int) ([]ai.Problem, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 25
 	}
-	sql := fmt.Sprintf(`
-SELECT toString(o.correlation_id) AS correlation_id, tenant_id,
-       top_hypothesis, top_confidence, verdict_tier,
-       affected, signal_count, node_count
-  FROM netops.corr_objects AS o
- WHERE state = 'open'
- ORDER BY created_at DESC
- LIMIT 1 BY o.correlation_id
- LIMIT %d
- FORMAT JSON`, limit)
+	sql := aiActiveProblemsSQL(limit, corrOrphanOpenCloseHours())
 	rows, err := d.srv.chRowsScope(d.ctx, d.scope, sql)
 	if err != nil {
 		return nil, err

@@ -5,6 +5,7 @@ package backend
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"netops/backend/internal/discovery"
@@ -39,6 +40,116 @@ func TestAICorrRowVisibleStrict(t *testing.T) {
 	cross := aiDataSource{claims: jwtClaims{Role: RoleSuperAdmin, Tenant: TenantGlobal, Sub: "root"}}
 	if !cross.corrRowVisible(map[string]any{"tenant_id": ""}) || !cross.corrRowVisible(map[string]any{"tenant_id": "t-a"}) {
 		t.Fatal("the platform owner sees untagged and tagged rows")
+	}
+}
+
+// TestAIListActiveProblemsIsolation — §3a for the active-problems read after it
+// moved from netops.corr_objects to the netops.corr_current hot projection
+// (2026-09-19 memory-limit defect). The projection carries its OWN strict row
+// policy (tenant_iso_corr_current, chschema.StrictRowPolicyDDL), and it is
+// applied by exactly the same mechanism as before — the tenant_scope setting
+// chRowsScope puts on the wire — so this test pins BOTH layers on the new
+// query:
+//
+//	layer 1 — the read carries the caller's scope (a fake ClickHouse that
+//	          enforces the policy returns nothing for a foreign scope);
+//	layer 2 — even when the store hands over foreign and untagged rows anyway
+//	          (the hybrid-policy leak of 2026-07-02), corrRowVisible drops them.
+func TestAIListActiveProblemsIsolation(t *testing.T) {
+	const own, foreign = "t-own", "t-foreign"
+	ownRow := `{"correlation_id":"11111111-2222-4333-8444-555555555555","tenant_id":"` + own + `",
+		"top_hypothesis":"sig.wan.flap","top_confidence":0.9,"verdict_tier":"suspected",
+		"affected":"[]","signal_count":3,"node_count":2}`
+	foreignRow := `{"correlation_id":"22222222-3333-4444-8555-666666666666","tenant_id":"` + foreign + `",
+		"top_hypothesis":"sig.ent.isp","top_confidence":0.8,"verdict_tier":"confirmed",
+		"affected":"[]","signal_count":5,"node_count":4}`
+	untaggedRow := `{"correlation_id":"33333333-4444-4555-8666-777777777777","tenant_id":"",
+		"top_hypothesis":"sig.core.bgp","top_confidence":0.7,"verdict_tier":"confirmed",
+		"affected":"[]","signal_count":7,"node_count":6}`
+
+	var gotScope, gotSQL string
+	ch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotSQL, gotScope = string(body), r.URL.Query().Get("tenant_scope")
+		// Deliberately hostile store: it answers with EVERY row regardless of
+		// scope, so anything the caller gets back is the app layer's doing.
+		_, _ = w.Write([]byte(`{"data":[` + ownRow + `,` + foreignRow + `,` + untaggedRow + `]}`))
+	}))
+	defer ch.Close()
+	t.Setenv("CLICKHOUSE_URL", ch.URL)
+	s := aiCfgTestServer(t)
+
+	d := aiDataSource{
+		srv: s, ctx: context.Background(), scope: own,
+		claims: jwtClaims{Role: "viewer", Tenant: own, Sub: "u"},
+	}
+	probs, err := d.ListActiveProblems(context.Background(), ai.Principal{Tenant: own}, 25)
+	if err != nil {
+		t.Fatalf("ListActiveProblems: %v", err)
+	}
+	// Layer 1: the caller's scope reached ClickHouse, against the projection.
+	if gotScope != own {
+		t.Fatalf("read did not carry the caller's tenant_scope: got %q, want %q", gotScope, own)
+	}
+	if !strings.Contains(gotSQL, "netops.corr_current") {
+		t.Fatalf("active-problems read is not on the hot projection:\n%s", gotSQL)
+	}
+	// Layer 2: own rows only — a foreign tenant's and the platform's are dropped.
+	if len(probs) != 1 {
+		t.Fatalf("own-only list: got %d problems, want 1 — %+v", len(probs), probs)
+	}
+	if probs[0].ID != "11111111-2222-4333-8444-555555555555" {
+		t.Fatalf("LEAK: wrong problem returned to %s: %+v", own, probs[0])
+	}
+	for _, p := range probs {
+		if strings.Contains(p.Title, "isp") || strings.Contains(p.Title, "bgp") {
+			t.Fatalf("LEAK: foreign/platform correlation intel in a scoped answer: %+v", p)
+		}
+	}
+	// The platform owner (cross-tenant) legitimately sees all three.
+	cross := aiDataSource{
+		srv: s, ctx: context.Background(), scope: "__all__",
+		claims: jwtClaims{Role: RoleSuperAdmin, Tenant: TenantGlobal, Sub: "root"},
+	}
+	all, err := cross.ListActiveProblems(context.Background(), ai.Principal{Cross: true}, 25)
+	if err != nil {
+		t.Fatalf("cross-tenant ListActiveProblems: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("cross-tenant list: got %d problems, want 3", len(all))
+	}
+	if gotScope != "__all__" {
+		t.Fatalf("cross-tenant read carried scope %q, want __all__", gotScope)
+	}
+}
+
+// TestAIListActiveProblemsEmptyWhenStoreEnforcesPolicy: the row policy alone
+// (a store that answers a foreign scope with nothing) already yields an honest
+// empty answer — not an error, and never another tenant's rows.
+func TestAIListActiveProblemsEmptyWhenStoreEnforcesPolicy(t *testing.T) {
+	ch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("tenant_scope") == "t-owner" {
+			_, _ = w.Write([]byte(`{"data":[{"correlation_id":"11111111-2222-4333-8444-555555555555",
+				"tenant_id":"t-owner","top_hypothesis":"sig.wan.flap","top_confidence":0.9,
+				"verdict_tier":"suspected","affected":"[]","signal_count":1,"node_count":1}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer ch.Close()
+	t.Setenv("CLICKHOUSE_URL", ch.URL)
+	s := aiCfgTestServer(t)
+
+	d := aiDataSource{
+		srv: s, ctx: context.Background(), scope: "t-other",
+		claims: jwtClaims{Role: "viewer", Tenant: "t-other", Sub: "u"},
+	}
+	probs, err := d.ListActiveProblems(context.Background(), ai.Principal{Tenant: "t-other"}, 25)
+	if err != nil {
+		t.Fatalf("a scoped caller with no rows must get an honest empty list, not an error: %v", err)
+	}
+	if len(probs) != 0 {
+		t.Fatalf("LEAK: %d problems reached a tenant the row policy excluded: %+v", len(probs), probs)
 	}
 }
 
