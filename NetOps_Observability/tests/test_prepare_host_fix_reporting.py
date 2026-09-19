@@ -74,12 +74,29 @@ def _run_step(tmp_path: Path, *, synced: bool, check: int,
                 f'printf \'%s\\n\' "$*" >> "{tmp_path}/systemctl.log"\n'
                 f'printf \'%s\\n\' "{systemctl_err}" >&2\n'
                 f"exit {systemctl_rc}\n")
+    # The PATH has to carry /usr/bin for real coreutils, and that is also where
+    # the developer's (and the CI runner's) live docker sits. The fakes go
+    # FIRST and the probe below proves they won before the step runs:
+    # prepare-host.sh's other steps install and start a container runtime, so a
+    # harness that let a real binary through would be editing this host.
+    _write_exec(bindir / "docker",
+                "#!/bin/sh\n"
+                "printf 'fake docker: a test must never reach a container runtime: "
+                "%s\\n' \"$*\" >&2\n"
+                "exit 97\n")
     script = tmp_path / "step.sh"
     script.write_text(HARNESS_HEAD + f"CHECK={check}\n" + _step() + HARNESS_TAIL)
+    env = {"PATH": f"{bindir}:/usr/bin:/bin", "HOME": str(tmp_path)}
+    probe = subprocess.run(
+        ["bash", "-c", "command -v timedatectl; command -v systemctl; command -v docker"],
+        env=env, capture_output=True, text=True, timeout=10, check=False)
+    assert probe.stdout.split() == [str(bindir / "timedatectl"), str(bindir / "systemctl"),
+                                    str(bindir / "docker")], \
+        ("a test could reach the host's real timedatectl/systemctl/docker — refusing to run:\n"
+         + probe.stdout)
     return subprocess.run(
         ["bash", str(script)], capture_output=True, text=True, timeout=60,
-        env={"PATH": f"{bindir}:/usr/bin:/bin", "HOME": str(tmp_path)},
-        stdin=subprocess.DEVNULL, check=False)
+        env=env, stdin=subprocess.DEVNULL, check=False)
 
 
 def _lines(r: subprocess.CompletedProcess) -> list[str]:

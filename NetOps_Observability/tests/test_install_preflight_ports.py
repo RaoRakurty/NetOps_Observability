@@ -100,6 +100,15 @@ printf '%s\\n' "$*" >> "$SS_LOG"
 printf '%s\\n' "${FAKE_SS_OUT:-}"
 """
 
+# The harness PATH has to carry /usr/bin for real coreutils, and that is also
+# where the developer's (and the CI runner's) live docker sits. A refusing fake
+# goes FIRST so a check that one day reaches for a container runtime fails this
+# test instead of talking to a real daemon.
+REFUSING_DOCKER = """#!/bin/sh
+printf 'fake docker: a test must never reach a container runtime: %s\\n' "$*" >&2
+exit 97
+"""
+
 
 def _env(tmp_path: Path, bindir: Path, **extra: str) -> dict:
     env = {"PATH": f"{bindir}:/usr/bin:/bin", "HOME": str(tmp_path),
@@ -112,10 +121,25 @@ def _bin(tmp_path: Path) -> Path:
     b = tmp_path / "bin"
     b.mkdir(exist_ok=True)
     _write_exec(b / "ss", FAKE_SS)
+    _write_exec(b / "docker", REFUSING_DOCKER)
     return b
 
 
+def _assert_fakes_win(env: dict) -> None:
+    """`ss` and `docker` must resolve inside tmp_path, never on the host.
+
+    install-correlix.sh prepends /usr/local/bin:/usr/bin:/bin to PATH, which is
+    how a fake loses; `_fakes_win` neutralises that one line, and this proves
+    the result before any harness runs."""
+    bindir = Path(env["PATH"].split(":")[0])
+    probe = subprocess.run(["bash", "-c", "command -v ss; command -v docker"], env=env,
+                           capture_output=True, text=True, timeout=10, check=False)
+    assert probe.stdout.split() == [str(bindir / "ss"), str(bindir / "docker")], \
+        "a test could reach the host's real ss/docker — refusing to run: " + probe.stdout
+
+
 def _harness(root: Path, tail: str, env: dict, timeout: int = 120):
+    _assert_fakes_win(env)
     h = root / "scripts" / "harness.sh"
     h.write_text(_script_without_dispatch() + tail)
     return subprocess.run(["bash", str(h)], capture_output=True, text=True, timeout=timeout,
@@ -200,8 +224,10 @@ def test_preflight_and_the_firewall_open_the_same_ports(tmp_path: Path) -> None:
         f'SELF_DIR="{root / "scripts"}"\nCHECK=0\nCLOSE_WIZARD_PORT=0\n'
         + block
         + f'\nfw_locate_compose\nFW_ENV_FILE="{root}/deployment/docker/.env"\nfw_stack_ports\n')
+    fw_env = _env(tmp_path, _bin(tmp_path))
+    _assert_fakes_win(fw_env)
     r = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=120,
-                       env=_env(tmp_path, _bin(tmp_path)), stdin=subprocess.DEVNULL, check=False)
+                       env=fw_env, stdin=subprocess.DEVNULL, check=False)
     assert r.returncode == 0, r.stdout + r.stderr
     firewall = {ln.strip() for ln in r.stdout.splitlines() if "/" in ln}
     assert _ports(entries) == firewall - {f"{UI_PORT}/tcp"}, (
