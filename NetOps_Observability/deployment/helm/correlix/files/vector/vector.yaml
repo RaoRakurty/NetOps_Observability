@@ -1715,6 +1715,28 @@ sinks:
       user: "${VMAUTH_VECTOR_USER:-svc-vector}"
       password: "${VMAUTH_VECTOR_PASSWORD:-unused-on-plaintext-victoria}"
     healthcheck: false
+    # 324 — the aggregator's only request-pipeline sink, held to the same
+    # bounded in-flight contract as the router's storage lanes (the router is
+    # where this was PROVEN, but both tiers share one VECTOR_MEM_LIMIT, so both
+    # are sized against the same cap). Unpinned, this inherited Vector's
+    # 200-concurrent-request / 10 MB-batch / retry-forever defaults; a
+    # VictoriaMetrics stall would then grow the in-flight set inside a 512 MiB
+    # cgroup. The kafka sinks below are NOT covered by this contract: their
+    # producer queue belongs to librdkafka, not to Vector's request pipeline.
+    # Enforced by tests/test_vector_sink_memory_budget.py.
+    batch:
+      max_events: 500
+      max_bytes: 1048576
+    request:
+      retry_attempts: 90
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 30
+      adaptive_concurrency:
+        max_concurrency_limit: 4
+    buffer:
+      type: memory
+      max_events: 500
+      when_full: block
 
   kafka_metrics:
     type: kafka
