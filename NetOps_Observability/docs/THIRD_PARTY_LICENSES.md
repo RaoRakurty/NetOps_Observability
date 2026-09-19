@@ -109,12 +109,13 @@ distributed and carries no notice obligation.
 | `aiokafka` | 0.11.0 | Apache-2.0 | installed into site-packages in the shipped image |
 | `annotated-doc` | 0.0.4 | MIT | installed into site-packages in the shipped image |
 | `annotated-types` | 0.7.0 | MIT | installed into site-packages in the shipped image |
-| `anyio` | 4.13.0 | MIT | installed into site-packages in the shipped image |
+| `anyio` | 4.14.2 | MIT | installed into site-packages in the shipped image |
 | `async-timeout` | 5.0.1 | Apache-2.0 | installed into site-packages in the shipped image |
 | `asyncpg` | 0.29.0 | Apache-2.0 | installed into site-packages in the shipped image |
 | `certifi` | 2026.5.20 | MPL-2.0 | installed into site-packages in the shipped image |
 | `click` | 8.4.1 | BSD-3-Clause | installed into site-packages in the shipped image |
 | `cramjam` | 2.8.4 | MIT | installed into site-packages in the shipped image |
+| `exceptiongroup` | 1.3.1 | MIT | installed into site-packages in the shipped image |
 | `fastapi` | 0.133.1 | MIT | installed into site-packages in the shipped image |
 | `h11` | 0.16.0 | MIT | installed into site-packages in the shipped image |
 | `httpcore` | 1.0.9 | BSD-3-Clause | installed into site-packages in the shipped image |
