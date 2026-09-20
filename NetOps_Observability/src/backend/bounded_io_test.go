@@ -199,8 +199,26 @@ func TestNoWholeTableEdgesAggregation(t *testing.T) {
 	}
 }
 
-// Rule 5 (permanent, 2026-09-19 Iris regression): a LATEST-VERSION FOLD over
-// netops.corr_objects must carry a created_at bound.
+// corrWideDisplayColumns are the columns no latest-version FOLD over the
+// history table may carry: the #100 blobs, plus the two display strings that
+// are wide in practice (a hypothesis signature and the affected-entity JSON
+// array) — those two are what made the 30 d time-range read 732 MiB.
+var corrWideDisplayColumns = append([]string{"top_hypothesis", "affected", "evidence_missing", "attribution"}, corrWideColumns...)
+
+// corrFoldExemptionMarker lets a genuinely bounded fold opt out of Rule 5 in
+// writing. It must appear IN the SQL literal (a `--` comment ClickHouse
+// ignores) and say why, e.g.
+//
+//	-- bounded-io: exempt — single correlation_id, at most one page of versions
+//
+// A reviewer then sees the claim next to the query it excuses. There is no
+// silent exemption.
+const corrFoldExemptionMarker = "bounded-io: exempt"
+
+// Rule 5 (permanent, 2026-09-19 + 2026-09-20 Iris regressions): a
+// LATEST-VERSION FOLD over netops.corr_objects must (a) carry a created_at
+// bound AND (b) keep the #100 split — the fold picks NARROW keys, the wide
+// columns are fetched keyed by that ≤limit set.
 //
 // corr_objects is the full version history, partitioned by
 // (tenant_id, toYYYYMMDD(created_at)). A fold with no created_at predicate
@@ -211,9 +229,21 @@ func TestNoWholeTableEdgesAggregation(t *testing.T) {
 // rows / 773.95 MiB read, 1011.30 MiB peak, to return 25 rows), surfacing to
 // the operator as a 502 from the assistant.
 //
-// The fix is either the sanctioned hot projection (netops.corr_current) or a
-// created_at bound in ListProblemsInWindow's style (widened by
-// corrPartitionSkewSlackSeconds so it prunes without narrowing the answer).
+// Half (a) alone was NOT enough, which is why half (b) exists. Its sibling
+// aiDataSource.ListProblemsInWindow — "what happened last night", `/history`,
+// and every "in the last N days" question — carried a created_at bound and
+// passed this rule as originally written, and still died the same death one
+// day later: the bound prunes partitions, it does not stop the sort from
+// dragging top_hypothesis and affected through every version row in the
+// window. MEASURED at a 30 d lookback (the clampLookback maximum) with
+// tenant_scope='__all__': 2 444 427 rows / 737.24 MiB read / 1023.34 MiB peak
+// → Code 241, against 2 686 812 rows / 95.42 MiB / 92.02 MiB for the split
+// shape. So the bound is necessary and the split is what makes it sufficient.
+//
+// The fix for a new fold is one of: the sanctioned hot projection
+// (netops.corr_current, for a "right now" question), the narrow-pick +
+// keyed-wide-fetch split (aiProblemsInWindowSQL, for a history question), or a
+// written corrFoldExemptionMarker saying why this one is bounded anyway.
 func TestNoUnboundedCorrObjectsFold(t *testing.T) {
 	strLit := regexp.MustCompile("(?s)`[^`]*`")
 	for name, src := range backendSQLSources(t) {
@@ -221,9 +251,27 @@ func TestNoUnboundedCorrObjectsFold(t *testing.T) {
 			if !strings.Contains(lit, "netops.corr_objects") || !strings.Contains(lit, "LIMIT 1 BY") {
 				continue
 			}
+			if strings.Contains(lit, corrFoldExemptionMarker) {
+				continue // opted out in writing, next to the query
+			}
 			if !strings.Contains(lit, "created_at >=") {
 				t.Errorf("%s: latest-version fold over netops.corr_objects with no created_at bound — "+
 					"nothing prunes, so the whole history is sorted to return one page (#100):\n%s", name, lit)
+			}
+			// (b) the FIRST fold is the pick, and a pick carries narrow keys
+			// only — everything before it is the picking SELECT and its WHERE.
+			pick := lit[:strings.Index(lit, "LIMIT 1 BY")]
+			for _, wide := range corrWideDisplayColumns {
+				if strings.Contains(pick, wide) {
+					t.Errorf("%s: latest-version fold over netops.corr_objects drags wide column %q through its sort — "+
+						"pick (correlation_id, version) narrow first and fetch the wide columns keyed by that set (#100):\n%s",
+						name, wide, lit)
+				}
+			}
+			// …and the wide read that follows must be keyed by the picked set.
+			if !strings.Contains(lit, ") IN (SELECT") {
+				t.Errorf("%s: fold over netops.corr_objects has no keyed wide fetch — the columns the answer needs "+
+					"must be read `WHERE (…) IN (SELECT … FROM <pick>)`, never carried through the fold (#100):\n%s", name, lit)
 			}
 		}
 	}
@@ -259,5 +307,52 @@ func TestAIActiveProblemsSQLShape(t *testing.T) {
 	// bound at all, never a zero-hour bound that would answer "nothing".
 	if off := aiActiveProblemsSQL(25, 0); strings.Contains(off, "created_at >= now()") {
 		t.Errorf("orphan sweep disabled must drop the liveness bound, not narrow to now():\n%s", off)
+	}
+}
+
+// Rule 5c: Iris's time-range read ("what happened last night", /history) keeps
+// the shape that fixed its 30 d MEMORY_LIMIT_EXCEEDED — a narrow page pick, an
+// exact latest-version resolve, the wide columns fetched keyed by that set,
+// and a partition-pruning created_at bound on every history touch.
+func TestAIProblemsInWindowSQLShape(t *testing.T) {
+	const since = 30 * 24 * 3600
+	sql := aiProblemsInWindowSQL(since, aiWindowProblemsLimit)
+
+	for _, must := range []string{
+		"WITH page AS", // stage 1: the narrow page pick
+		"window_start >= now() - INTERVAL 2592000 SECOND", // the caller's window
+		"created_at >= now() - INTERVAL 2678400 SECOND",   // + partition-pruning slack
+		"max(version) AS version",                         // stage 2: exact latest version
+		"(o.tenant_id, o.correlation_id, o.version) IN (SELECT tenant_id, correlation_id, version FROM picked)", // stage 3, keyed on the table's ORDER BY prefix
+		"LIMIT 1 BY o.correlation_id", // belt-and-braces fold
+		"LIMIT 1000",                  // bounded rows
+	} {
+		if !strings.Contains(sql, must) {
+			t.Errorf("time-range SQL lost its bounded shape: missing %q\n%s", must, sql)
+		}
+	}
+	// Every history touch must prune partitions: one created_at bound per
+	// `FROM netops.corr_objects` (three stages, three bounds).
+	bounds, touches := strings.Count(sql, "created_at >= now()"), strings.Count(sql, "FROM netops.corr_objects")
+	if bounds != touches {
+		t.Errorf("time-range SQL touches netops.corr_objects %d times but carries %d created_at bounds — "+
+			"an unbounded touch reads every partition (#100)\n%s", touches, bounds, sql)
+	}
+	// The page pick must stay narrow: no wide column may cross its sort.
+	page := sql[strings.Index(sql, "WITH page AS"):strings.Index(sql, "), picked AS")]
+	for _, wide := range corrWideDisplayColumns {
+		if strings.Contains(page, wide) {
+			t.Errorf("time-range page pick references %q — the fold must pick narrow keys only (#100)\n%s", wide, page)
+		}
+	}
+	// The latest-version resolve is deliberately NOT window-bounded (a later
+	// version may have slid its window_start out of the window) but it must
+	// stay keyed to the page, never scan the window again.
+	picked := sql[strings.Index(sql, "), picked AS"):strings.Index(sql, "\nSELECT toString(")]
+	if !strings.Contains(picked, "(tenant_id, correlation_id) IN (SELECT tenant_id, correlation_id FROM page)") {
+		t.Errorf("latest-version resolve is not keyed to the picked page:\n%s", picked)
+	}
+	if regexp.MustCompile(`(?i)SELECT\s+\*`).MatchString(sql) {
+		t.Error("time-range SQL contains SELECT *")
 	}
 }

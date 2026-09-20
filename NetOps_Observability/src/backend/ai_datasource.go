@@ -298,25 +298,122 @@ func (d aiDataSource) ListActiveProblems(_ context.Context, _ ai.Principal, limi
 // non-narrowing for any clock skew short of 24 h.
 const corrPartitionSkewSlackSeconds = 86400
 
+// aiWindowProblemsLimit bounds the time-range read's page (§9: every read is
+// bounded). The summary counts verdicts and lists a handful of notable
+// incidents (ai.Orchestrator.answerTimeRange), so 1000 objects is already far
+// more than any answer renders.
+const aiWindowProblemsLimit = 1000
+
+// aiProblemsInWindowSQL builds the "what happened in the last N" read. Pure, so
+// its bounded shape can be asserted without a ClickHouse (house style —
+// aiActiveProblemsSQL and correlationsListSQL are pure for the same reason).
+//
+// ── WHY THE THREE STAGES (2026-09-20 memory-limit defect) ────────────────────
+//
+// This read deliberately wants HISTORY — problems whose onset falls in the
+// window whether they are still open or long since resolved — so unlike its
+// sibling ListActiveProblems it can NOT move to the netops.corr_current hot
+// projection (which keeps only the latest version of each object and is built
+// to answer "right now"). What applies here is the other half of the #100
+// pattern: a NARROW PICK first, the wide columns fetched keyed by that ≤limit
+// set, so no wide column ever crosses a sort.
+//
+// The single-stage shape this replaces carried a created_at bound (it passed
+// bounded_io_test Rule 5) but dragged the wide columns — top_hypothesis and
+// affected — through `ORDER BY window_start DESC` + `LIMIT 1 BY` over EVERY
+// version row in the window. The bound prunes partitions; it does not stop the
+// sort from materialising every matching history row with its blobs attached.
+// MEASURED on the lab appliance (2 661 251 corr_objects rows / 926 366
+// correlations / 51 tenants / 30 d of history) at max_memory_usage = 1 GiB
+// (chWorkerReadMemoryBytes), tenant_scope='__all__' — the platform owner, the
+// only principal for whom nothing prunes:
+//
+//	window  old (single stage)                      new (three stages)
+//	 12 h   1 122 rows /  210.92 KiB /  181.49 KiB   26 610 / 1.55 MiB / 187.82 KiB
+//	  7 d   17 995     /    3.37 MiB /    2.28 MiB   43 575 / 2.15 MiB /   1.22 MiB
+//	 30 d   2 444 427  /  737.24 MiB / 1023.34 MiB   2 686 812 / 95.42 MiB / 92.02 MiB
+//	        → Code 241 MEMORY_LIMIT_EXCEEDED        → 1000 rows in 0.343 s
+//
+// (columns: read_rows / read_bytes / peak memory, from system.query_log.) The
+// 30 d case is `/history`, "what happened last night" and every "in the last
+// N days" question — parseLookback/clampLookback allow up to 30 d — and it
+// reached the operator as a 502 from the assistant. A tenant-scoped caller was
+// never affected (corr_objects is PARTITIONED BY (tenant_id,
+// toYYYYMMDD(created_at)), so the row policy prunes to one tenant's
+// partitions): 30 d for the busiest tenant cost 8.65 MiB peak before and
+// 1.90 MiB after. The new shape reads MORE rows (it touches the history twice,
+// narrowly) and an order of magnitude fewer BYTES, which is what the ceiling
+// is spent on.
+//
+// ── THE STAGES ───────────────────────────────────────────────────────────────
+//
+//  1. page   — the ≤limit correlations whose onset falls in the window, newest
+//     first. Narrow keys only: no wide column crosses this sort.
+//  2. picked — the LATEST version of each of those (≤limit) correlations.
+//     `max(version)` is exact where the old query was not: it ordered by
+//     window_start alone, so for any correlation whose versions share a
+//     window_start (the overwhelming majority — an object heartbeats a new
+//     version every 900 s at the same onset) `LIMIT 1 BY` kept an ARBITRARY
+//     version, and the `state` this read exists to report ("still open or
+//     resolved?") could be a stale one. Measured on the same appliance, 7 d:
+//     the two shapes return the IDENTICAL 1000 correlation_ids and disagree on
+//     `state` for 6 of them — six problems the old read called open that
+//     history had closed. This stage is NOT window-bounded (a later version can
+//     have slid its window_start out of the window; its created_at cannot
+//     precede the bound) and it costs ~18 k extra narrow rows.
+//  3. the wide fetch — top_hypothesis/affected/state read for exactly those
+//     (tenant_id, correlation_id, version) triples. Keyed on the table's full
+//     ORDER BY prefix (tenant_id, correlation_id, version), which is what keeps
+//     it to granule lookups; the created_at bound is repeated so partitions
+//     still prune. `LIMIT 1 BY` stays as the belt-and-braces fold.
+//
+// COST MODEL, honestly: stages 1 and 2 are linear in the history rows inside
+// the window (the pick sorts them narrow, ~39 B/row), not constant. At the
+// measured 2.4 M-row 30 d window that is 92 MiB against a 1 GiB ceiling —
+// 11x headroom — but an appliance an order of magnitude busier would need the
+// structural fix (a window-keyed hot projection), not a wider ceiling.
+func aiProblemsInWindowSQL(sinceSeconds, limit int) string {
+	created := intToString(sinceSeconds + corrPartitionSkewSlackSeconds)
+	return fmt.Sprintf(`
+WITH page AS (
+     SELECT tenant_id, correlation_id
+       FROM netops.corr_objects
+      WHERE window_start >= now() - INTERVAL %d SECOND
+        AND created_at >= now() - INTERVAL %s SECOND
+      ORDER BY window_start DESC, version DESC
+      LIMIT 1 BY correlation_id
+      LIMIT %d
+), picked AS (
+     SELECT tenant_id, correlation_id, max(version) AS version
+       FROM netops.corr_objects
+      WHERE created_at >= now() - INTERVAL %s SECOND
+        AND (tenant_id, correlation_id) IN (SELECT tenant_id, correlation_id FROM page)
+      GROUP BY tenant_id, correlation_id
+)
+SELECT toString(o.correlation_id) AS correlation_id, o.tenant_id AS tenant_id,
+       o.top_hypothesis AS top_hypothesis, o.top_confidence AS top_confidence,
+       o.verdict_tier AS verdict_tier, o.state AS state,
+       o.affected AS affected, o.signal_count AS signal_count, o.node_count AS node_count
+  FROM netops.corr_objects AS o
+ WHERE o.created_at >= now() - INTERVAL %s SECOND
+   AND (o.tenant_id, o.correlation_id, o.version) IN (SELECT tenant_id, correlation_id, version FROM picked)
+ ORDER BY o.window_start DESC, o.correlation_id DESC
+ LIMIT 1 BY o.correlation_id
+ LIMIT %d
+ FORMAT JSON`, sinceSeconds, created, limit, created, created, limit)
+}
+
 // ListProblemsInWindow implements the WindowDataSource seam: correlation problems
 // whose onset falls in the past window, tenant-scoped via the corr_objects row
-// policy. NOT filtered to open, so a time-range summary can distinguish still-open
-// from resolved. One row per correlation (latest version).
+// policy (plus the strict app-side corrRowVisible narrowing below). NOT filtered
+// to open, so a time-range summary can distinguish still-open from resolved.
+// One row per correlation, and since 2026-09-20 that row is provably its LATEST
+// version. See aiProblemsInWindowSQL for the shape and the measurements.
 func (d aiDataSource) ListProblemsInWindow(_ context.Context, _ ai.Principal, sinceSeconds int) ([]ai.Problem, error) {
 	if sinceSeconds <= 0 {
 		sinceSeconds = 12 * 3600
 	}
-	sql := fmt.Sprintf(`
-SELECT toString(o.correlation_id) AS correlation_id, tenant_id,
-       top_hypothesis, top_confidence, verdict_tier, state,
-       affected, signal_count, node_count
-  FROM netops.corr_objects AS o
- WHERE window_start >= now() - INTERVAL %d SECOND
-   AND created_at >= now() - INTERVAL %d SECOND
- ORDER BY window_start DESC
- LIMIT 1 BY o.correlation_id
- LIMIT 1000
- FORMAT JSON`, sinceSeconds, sinceSeconds+corrPartitionSkewSlackSeconds)
+	sql := aiProblemsInWindowSQL(sinceSeconds, aiWindowProblemsLimit)
 	rows, err := d.srv.chRowsScope(d.ctx, d.scope, sql)
 	if err != nil {
 		return nil, err
