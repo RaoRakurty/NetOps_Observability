@@ -612,6 +612,13 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 	// The deterministic fallback is already grounded, so only verify model output.
 	if !evidenceOnly {
 		text, badges, disc = verifyNarrative(text, bundleCitationIDs(bundle), badges, disc)
+		// Honesty gate (§15 / review item 5): the engine owns the verdict, so a
+		// narrative may not assert an established cause the engine did not
+		// establish. Deterministic — the verdict-conditional prompt above ASKS
+		// for hedged wording, this enforces it. The evidence-only summary is
+		// the fallback when nothing honest survives.
+		text, badges, disc = enforceVerdictHonesty(text, pr.Verdict,
+			o.deterministicProblemSummary(pr, missing, owner), badges, disc)
 	}
 	// Engine voice contract (v1 NOC catalog): when the matched signature carries
 	// owner-approved fault-family wording, LEAD with it — the AI narrates the
@@ -1064,7 +1071,11 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 	var badges []string
 	var providerNote string
 	evidenceOnly := false
-	if lerr != nil {
+	// A provider that returns an empty body with a NIL error is the same
+	// outcome as a failed call — without the empty check (which the problem and
+	// current-state paths at :596/:753 already have) the module card renders an
+	// empty headline instead of the deterministic summary.
+	if lerr != nil || strings.TrimSpace(text) == "" {
 		mh.Headline = o.deterministicModuleSummary(mh, bundle)
 		provider = "none"
 		evidenceOnly = true
@@ -1079,12 +1090,15 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 		ModeBadges: sortedUnique(badges), EvidenceOnly: evidenceOnly, ProviderNote: providerNote}, nil
 }
 
+// moduleHealthPrompt assembles the module summary's grounded user message.
+// Line-structured, so every interpolated value passes promptLine — see
+// prompt_fence.go.
 func (o *Orchestrator) moduleHealthPrompt(question string, mh *ModuleHealthSummary, bundle []EvidenceItem) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Question: %s\n\n", strings.TrimSpace(question))
-	fmt.Fprintf(&b, "MODULE: %s\n\nEVIDENCE (cite ids):\n", mh.DisplayName)
+	fmt.Fprintf(&b, "Question: %s\n\n", promptLine(question))
+	fmt.Fprintf(&b, "MODULE: %s\n\nEVIDENCE (cite ids):\n", promptLine(mh.DisplayName))
 	for _, ev := range bundle {
-		fmt.Fprintf(&b, "- [%s] %s\n", ev.CitationID, ev.Text)
+		fmt.Fprintf(&b, "- [%s] %s\n", promptCitationID(ev.CitationID), promptLine(ev.Text))
 	}
 	b.WriteString("\nWrite a 2–3 sentence NOC summary grounded ONLY in the evidence above, citing ids. Lead with what matters most. Be concise. If the evidence shows nothing notable, say so plainly.")
 	return o.redact(b.String())
@@ -1106,26 +1120,31 @@ func aiDisplayName(m Module, id string) string {
 	return id
 }
 
+// currentStatePrompt assembles the shift-lead briefing's grounded user message.
+// Line-structured, so every interpolated value passes promptLine — incident
+// lines and impacted-entity labels carry device names that came from the
+// network (SNMP sysName), which is data, not prompt structure. See
+// prompt_fence.go.
 func (o *Orchestrator) currentStatePrompt(question string, cs *CurrentStateSummary) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Question: %s\n\n", strings.TrimSpace(question))
+	fmt.Fprintf(&b, "Question: %s\n\n", promptLine(question))
 	fmt.Fprintf(&b, "ACTIVE CORRELATIONS: %d confirmed, %d suspected, %d undetermined (total %d).\n",
 		cs.Confirmed, cs.Suspected, cs.Undetermined, cs.Confirmed+cs.Suspected+cs.Undetermined)
 	if len(cs.RecommendedFocus) > 0 {
-		fmt.Fprintf(&b, "RECOMMENDED FOCUS (highest operational priority): %s\n", cs.RecommendedFocus[0])
-		fmt.Fprintf(&b, "Why first: %s\n", cs.FocusReason)
+		fmt.Fprintf(&b, "RECOMMENDED FOCUS (highest operational priority): %s\n", promptLine(cs.RecommendedFocus[0]))
+		fmt.Fprintf(&b, "Why first: %s\n", promptLine(cs.FocusReason))
 	}
 	if len(cs.ActiveIncidents) > 0 {
 		b.WriteString("Other actionable incidents:\n")
 		for _, l := range cs.ActiveIncidents[1:] {
-			fmt.Fprintf(&b, "- %s\n", l)
+			fmt.Fprintf(&b, "- %s\n", promptLine(l))
 		}
 	}
 	if cs.WatchNote != "" {
-		fmt.Fprintf(&b, "WATCH ITEMS: %s\n", cs.WatchNote)
+		fmt.Fprintf(&b, "WATCH ITEMS: %s\n", promptLine(cs.WatchNote))
 	}
 	if len(cs.ImpactedEntities) > 0 {
-		fmt.Fprintf(&b, "Most impacted: %s\n", strings.Join(cs.ImpactedEntities, ", "))
+		fmt.Fprintf(&b, "Most impacted: %s\n", strings.Join(promptLines(cs.ImpactedEntities), ", "))
 	}
 	b.WriteString("\nWrite a 2–3 sentence NOC shift-lead briefing grounded ONLY in the above: the overall picture, then what to work FIRST and why. Treat undetermined low-evidence items as watch items, not equal priorities. Be concise and operational; do not invent severity or impact not stated.")
 	return o.redact(b.String())
@@ -1620,20 +1639,25 @@ func (o *Orchestrator) systemPrompt() string {
 }
 
 // problemPrompt assembles the grounded user message (redacted before egress).
+//
+// Every interpolated value passes promptLine (prompt_fence.go) because this
+// prompt is line-structured: an unflattened device name (SNMP sysName) or
+// evidence line could open a sibling "- [id] …" bullet and forge evidence.
 func (o *Orchestrator) problemPrompt(question string, pr *Problem, bundle []EvidenceItem) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Question: %s\n\n", strings.TrimSpace(question))
+	fmt.Fprintf(&b, "Question: %s\n\n", promptLine(question))
 	fmt.Fprintf(&b, "PROBLEM %s — %s\nverdict: %s (%.0f%% confidence); %d signals across %d nodes\ndevices: %s\n",
-		pr.Display(), pr.Title, pr.Verdict, pr.Confidence*100, pr.SignalCount, pr.NodeCount, strings.Join(pr.Devices, ", "))
+		promptLine(pr.Display()), promptLine(pr.Title), promptLine(pr.Verdict), pr.Confidence*100,
+		pr.SignalCount, pr.NodeCount, strings.Join(promptLines(pr.Devices), ", "))
 	if len(pr.MissingEvidence) > 0 {
-		fmt.Fprintf(&b, "missing evidence: %s\n", strings.Join(pr.MissingEvidence, ", "))
+		fmt.Fprintf(&b, "missing evidence: %s\n", strings.Join(promptLines(pr.MissingEvidence), ", "))
 	}
 	b.WriteString("\nEVIDENCE:\n")
 	if len(bundle) == 0 {
 		b.WriteString("(none beyond the problem facts above)\n")
 	}
 	for _, ev := range bundle {
-		fmt.Fprintf(&b, "- [%s] %s\n", ev.CitationID, ev.Text)
+		fmt.Fprintf(&b, "- [%s] %s\n", promptCitationID(ev.CitationID), promptLine(ev.Text))
 	}
 	// Supporting network-engineering knowledge (HLD §8/§9): a few relevant curated
 	// playbook snippets, clearly fenced as GENERAL guidance — never Correlix
@@ -1642,7 +1666,7 @@ func (o *Orchestrator) problemPrompt(question string, pr *Problem, bundle []Evid
 	if hits := o.kbFor(pr); len(hits) > 0 {
 		b.WriteString("\nSUPPORTING NETWORK-ENGINEERING KNOWLEDGE (general guidance, NOT Correlix evidence — the evidence above wins):\n")
 		for _, hit := range hits {
-			fmt.Fprintf(&b, "- %s\n", hit.Playbook.Snippet())
+			fmt.Fprintf(&b, "- %s\n", promptLine(hit.Playbook.Snippet()))
 		}
 	}
 	// Vendor TAC knowledge for the same problem, fenced the same way: what a
@@ -1650,11 +1674,31 @@ func (o *Orchestrator) problemPrompt(question string, pr *Problem, bundle []Evid
 	if hits := o.tacForProblem(pr); len(hits) > 0 {
 		b.WriteString("\nSUPPORTING VENDOR TAC KNOWLEDGE (what a vendor TAC checks first — general guidance, NOT Correlix evidence):\n")
 		for _, h := range hits {
-			fmt.Fprintf(&b, "- %s\n", strings.ReplaceAll(h.Snippet(), "\n", " · "))
+			fmt.Fprintf(&b, "- %s\n", promptLine(strings.ReplaceAll(h.Snippet(), "\n", " · ")))
 		}
 	}
-	b.WriteString("\nWrite 2–4 sentences: the likely root cause and why, grounded in the EVIDENCE above (the supporting knowledge is general guidance only, not facts about this network), citing ids. Then one line: the recommended next action.")
+	b.WriteString("\n" + problemClosingInstruction(pr.Verdict))
 	return o.redact(b.String())
+}
+
+// problemClosingInstruction is the closing ask, CONDITIONED ON THE ENGINE'S
+// VERDICT. The engine — not the model — decides whether a cause is established,
+// and every deterministic field already says so (StatusLabel "Undetermined",
+// ConfidenceLabel "Not established"). Asking for "the likely root cause and
+// why" regardless of tier is how the prose headline came to contradict the
+// badge beside it.
+//
+// The non-confirmed wording follows the RCA report's own philosophy
+// (internal/rca/rca_report_wording.go: "Root cause has not been identified —
+// possibly because of X (unconfirmed best hypothesis)"): state the symptom,
+// name what is missing, and hedge any hypothesis explicitly. The post-check in
+// verify.go enforces it deterministically, because a prompt is a request, not
+// a guarantee.
+func problemClosingInstruction(verdict string) string {
+	if strings.EqualFold(strings.TrimSpace(verdict), "confirmed") {
+		return "Write 2–4 sentences: the likely root cause and why, grounded in the EVIDENCE above (the supporting knowledge is general guidance only, not facts about this network), citing ids. Then one line: the recommended next action."
+	}
+	return "The correlation engine has NOT established a cause for this incident (verdict above). Write 2–4 sentences: the SYMPTOM that was observed and who/what it affects, grounded in the EVIDENCE above (the supporting knowledge is general guidance only, not facts about this network), citing ids, then what evidence is still missing before a cause could be established. Do NOT name, assert or imply a root cause, and do not use the words \"root cause is\", \"caused by\", \"confirmed\", \"definitely\" or \"proven\". If one explanation is worth mentioning, hedge it exactly like this: \"possibly because of X (unconfirmed)\". Then one line: the recommended next action."
 }
 
 // kbFor retrieves the playbooks relevant to a problem — keyed on its title +

@@ -139,6 +139,15 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("question (or a context id) required"))
 		return
 	}
+	// Bound the CONTENT as well as the body (LLM04). The body cap above stops a
+	// huge upload; it does not stop a single ~256 KiB question riding into the
+	// prompt and the provider's token bill. The copilot path has had this cap
+	// since SanitizeMessages — this is the same budget, applied to the one
+	// free-text field this handler forwards.
+	if len(req.Question) > ai.MaxInputChars {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("question too large (max %d characters)", ai.MaxInputChars))
+		return
+	}
 
 	// Slash commands (HLD §5) resolve to the SAME intent path as natural language:
 	// "/status" becomes the canonical "what is going on right now" before Classify,
