@@ -142,7 +142,7 @@ func loadSkillCases(sk *Skill) ([]SkillCase, error) {
 	p := path.Join("skills", sk.Name, skillCasesFile)
 	raw, err := skillCasesFS.ReadFile(p)
 	if err != nil {
-		return nil, fmt.Errorf("%s is missing or unreadable (%v) — every skill must ship behavioural cases", p, err)
+		return nil, fmt.Errorf("%s is missing or unreadable (%w) — every skill must ship behavioural cases", p, err)
 	}
 	cases, perr := parseSkillCaseFile(sk, string(raw))
 	if perr != nil {
@@ -348,15 +348,15 @@ func parseSkillCase(sk *Skill, doc string, targets map[string]bool) (SkillCase, 
 			c.ExpectChain[1].Skill, sk.Name)
 	}
 	c.ExpectSelected = strings.TrimSpace(fields["expect_selected"])
-	switch {
-	case c.ExpectSelected == "":
+	switch c.ExpectSelected {
+	case "":
 		return SkillCase{}, named("expect_selected is required — say how the LAST hop was chosen (%s, %s or %s)",
 			ChainSelectedRule, ChainSelectedModel, caseSelectNone)
-	case c.ExpectSelected == caseSelectNone:
+	case caseSelectNone:
 		if len(c.ExpectChain) != 1 {
 			return SkillCase{}, named("expect_selected %q contradicts a %d-hop expect_chain", caseSelectNone, len(c.ExpectChain))
 		}
-	case c.ExpectSelected == ChainSelectedRule || c.ExpectSelected == ChainSelectedModel:
+	case ChainSelectedRule, ChainSelectedModel:
 		last := c.ExpectChain[len(c.ExpectChain)-1]
 		if len(c.ExpectChain) == 1 || last.Selected != c.ExpectSelected {
 			return SkillCase{}, named("expect_selected %q does not match the last hop of expect_chain", c.ExpectSelected)
