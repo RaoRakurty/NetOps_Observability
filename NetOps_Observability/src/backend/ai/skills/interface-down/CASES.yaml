@@ -1,0 +1,126 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for interface-down. Dialect + contract: skill_cases.go.
+
+case: a port counting errors alongside the link event is an optics question
+question: interface down on edge-1
+ui:
+  - correlation_id=case-if-errors
+  - device=edge-1
+signals:
+  - state:if_errors=present
+evidence:
+  - finding
+  - device
+expect_chain:
+  - interface-down entry
+  - optics-degraded rule
+expect_selected: rule
+expect_reason: counting errors
+expect_verdict:
+  - error type
+  - direction
+expect_never:
+  - log-confirmation
+  - ospf-adjacency
+  - bgp-session-down
+
+---
+
+case: a device whose own state cannot be read pins the transition from its logs instead
+question: link down on edge-1, when did it go
+ui:
+  - correlation_id=case-if-notwired
+  - device=edge-1
+signals:
+  - state:collect=not_wired
+notes:
+  - live device state could not be read on this deployment — no command was run
+evidence:
+  - finding
+expect_chain:
+  - interface-down entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: pinned from its logs
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - live device state could not be read on this deployment
+expect_never:
+  - optics-degraded
+
+---
+
+case: an anomalous interface counter alongside the link event is also an optics question
+question: uplink down on edge-1
+ui:
+  - correlation_id=case-if-metric
+  - device=edge-1
+evidence:
+  - finding
+  - metric
+expect_chain:
+  - interface-down entry
+  - optics-degraded rule
+expect_selected: rule
+expect_reason: anomalous interface counter
+expect_verdict:
+  - error type
+  - direction
+expect_never:
+  - log-confirmation
+
+---
+
+# A tool that FAILED is never quietly absent: the operator is told, and the
+# model is told not to invent what it would have returned.
+case: a failed health read is disclosed and no hop is invented from it
+question: port down on edge-1
+ui:
+  - correlation_id=case-if-flat
+  - device=edge-1
+tools:
+  - get_device_health=error
+evidence:
+  - finding
+expect_chain:
+  - interface-down entry
+expect_selected: none
+expect_verdict:
+  - interface
+  - transition
+expect_notes:
+  - do NOT invent the data it would have returned
+expect_never:
+  - optics-degraded
+  - log-confirmation
+  - ospf-adjacency
+  - bgp-session-down
+  - path-seam-handoff
+expect_select: interface-down
+
+---
+
+case: a link that came back while the IGP did not is the model's to propose
+question: line protocol down on edge-1 and ospf never came back
+ui:
+  - correlation_id=case-if-model
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=not_found
+model_next: ospf-adjacency
+evidence:
+  - finding
+expect_chain:
+  - interface-down entry
+  - ospf-adjacency model
+expect_selected: model
+expect_reason: IGP neighbour did not
+expect_verdict:
+  - stuck state
+  - mismatch
+expect_never:
+  - optics-degraded

@@ -568,6 +568,10 @@ type Skill struct {
 	LookFor      []string
 	Decisions    []SkillDecision
 	Body         string
+	// Cases are the skill's authored BEHAVIOURAL cases (skill_cases.go), loaded
+	// from `skills/<name>/CASES.yaml` by the same loader on the same terms: a
+	// method that ships with none does not load at all.
+	Cases []SkillCase
 }
 
 // Ref is the provenance stamp returned with an answer so the UI can show which
@@ -654,6 +658,14 @@ func LoadSkills() (*SkillSet, error) {
 		if perr != nil {
 			return nil, fmt.Errorf("skills: %s: %w", p, perr)
 		}
+		// BEHAVIOURAL CASES are loaded on the SAME terms as the method itself
+		// (tracker 331): zero cases is a load error, so a new skill cannot ship
+		// with ~30 authored conditions and nothing proving any of them fires.
+		cases, cerr := loadSkillCases(sk)
+		if cerr != nil {
+			return nil, fmt.Errorf("skills: %s: %w", sk.Name, cerr)
+		}
+		sk.Cases = cases
 		if _, dup := set.byName[sk.Name]; dup {
 			return nil, fmt.Errorf("skills: duplicate skill %q", sk.Name)
 		}
@@ -681,6 +693,11 @@ func LoadSkills() (*SkillSet, error) {
 	}
 	if methods != 1 {
 		return nil, fmt.Errorf("skills: expected exactly 1 method-layer entry skill, found %d", methods)
+	}
+	// Whole-set case check: a case may only assert a path the method graph can
+	// actually take (skill_cases.go).
+	if err := validateCaseGraph(set); err != nil {
+		return nil, err
 	}
 	return set, nil
 }

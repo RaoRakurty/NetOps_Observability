@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for app-edge-5xx. Dialect + contract: skill_cases.go.
+
+case: an anomalous counter on the path while transport reads clean is an optics question
+question: users are getting 502 errors from the app
+ui:
+  - correlation_id=case-app-metric
+  - device=edge-1
+evidence:
+  - metric
+  - finding
+expect_chain:
+  - app-edge-5xx entry
+  - optics-degraded rule
+expect_selected: rule
+expect_reason: anomalous counter
+expect_verdict:
+  - error type
+  - direction
+expect_never:
+  - path-seam-handoff
+  - log-confirmation
+
+---
+
+case: service-side errors with no path anomaly stay with the service owner
+question: 503 from the load balancer, app team says network
+ui:
+  - correlation_id=case-app-flat
+  - device=edge-1
+tools:
+  - get_case_timeline=not_found
+evidence:
+  - finding
+expect_chain:
+  - app-edge-5xx entry
+expect_selected: none
+expect_verdict:
+  - baseline
+  - service-side
+expect_notes:
+  - found nothing for the id in scope
+expect_never:
+  - optics-degraded
+  - path-seam-handoff
+  - log-confirmation
+expect_select: app-edge-5xx
+
+---
+
+case: transport outside baseline is the model's to propose, as the seam question it is
+question: tls handshake timeouts and app slow at the branch
+ui:
+  - correlation_id=case-app-model
+  - device=edge-1
+model_next: path-seam-handoff
+evidence:
+  - finding
+expect_chain:
+  - app-edge-5xx entry
+  - path-seam-handoff model
+expect_selected: model
+expect_reason: outside baseline
+expect_verdict:
+  - seam
+  - baseline
+expect_never:
+  - optics-degraded

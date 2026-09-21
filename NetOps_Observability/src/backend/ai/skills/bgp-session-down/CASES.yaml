@@ -1,0 +1,218 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for bgp-session-down. Dialect + contract: skill_cases.go.
+# Every case runs the REAL chain over fixture tool results, so a reworded NOC
+# signature or a retired condition breaks the build instead of quietly making
+# the investigation one hop shallower.
+
+case: the device's own Idle FSM state drives the chain down to the link
+question: why is bgp down on edge-1
+ui:
+  - correlation_id=case-bgp-idle
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=ok
+signals:
+  - state:bgp_peer=idle
+evidence:
+  - finding
+  - device
+expect_chain:
+  - bgp-session-down entry
+  - interface-down rule
+expect_selected: rule
+expect_reason: reports the peer Idle
+expect_verdict:
+  - interface
+  - transition
+expect_never:
+  - log-confirmation
+  - bgp-prefix-missing
+expect_select: bgp-session-down
+
+---
+
+# The engine's OWN operator phrase is the routing fact — not the model's reading
+# of it. This is the `verdict:phrase=link` rule the review named: reword the NOC
+# signature from "link" to "circuit" and this case goes red.
+case: the engine's verdict naming the link routes to the physical layer
+question: bgp neighbor down on edge-1, what happened
+ui:
+  - correlation_id=case-bgp-phrase
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=not_found
+signals:
+  - verdict:phrase=link
+  - verdict:tier=confirmed
+evidence:
+  - finding
+expect_chain:
+  - bgp-session-down entry
+  - interface-down rule
+expect_selected: rule
+expect_reason: RCA verdict names the link
+expect_verdict:
+  - interface
+  - transition
+expect_notes:
+  - found nothing for the id in scope
+expect_never:
+  - log-confirmation
+
+---
+
+case: an unreachable peering address is the diagnostic's own signature
+question: bgp session not established on edge-1
+ui:
+  - correlation_id=case-bgp-sig
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=ok
+signals:
+  - signature=bgp-idle-unreachable
+evidence:
+  - finding
+expect_chain:
+  - bgp-session-down entry
+  - interface-down rule
+expect_selected: rule
+expect_reason: peering address is unreachable
+expect_verdict:
+  - interface
+  - transition
+expect_never:
+  - bgp-prefix-missing
+
+---
+
+# D-4: a capture that produced ZERO bytes is not a clean protocol. It must route
+# to the device's own words and say so — never to "no signature matched".
+case: a device that rejected every read-only command routes to its own logs
+question: bgp idle on edge-1
+ui:
+  - correlation_id=case-bgp-uncollected
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=ok
+signals:
+  - signature=uncollected
+evidence:
+  - finding
+expect_chain:
+  - bgp-session-down entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: rejected every read-only command
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - interface-down
+
+---
+
+case: a diagnostic that captured output and matched nothing still pins the reset reason from the logs
+question: ebgp down on edge-1 since this morning
+ui:
+  - correlation_id=case-bgp-nomatch
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=ok
+evidence:
+  - finding
+expect_chain:
+  - bgp-session-down entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: no known signature matched
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - interface-down
+
+---
+
+# An unread device is not a clean one: the live state read is the FIRST thing
+# this method does, and its absence is a disclosure, not a silent gap.
+case: live state that cannot be read on this deployment is disclosed and routes to the logs
+question: is bgp ok on edge-1
+ui:
+  - correlation_id=case-bgp-notwired
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=not_found
+  - search_logs=not_wired
+signals:
+  - state:collect=not_wired
+notes:
+  - live device state could not be read on this deployment — no command was run
+evidence:
+  - finding
+expect_chain:
+  - bgp-session-down entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: could not be read live
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - live device state could not be read on this deployment
+  - Log search is not available on this deployment
+expect_never:
+  - interface-down
+
+---
+
+# No server-derived fact, no deterministic hop. With no provider directive
+# either, the investigation stops here rather than guessing onward.
+case: evidence with no routing fact takes no hop at all
+question: what is the bgp peer doing on edge-1
+ui:
+  - correlation_id=case-bgp-flat
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=not_found
+evidence:
+  - finding
+expect_chain:
+  - bgp-session-down entry
+expect_selected: none
+expect_verdict:
+  - fsm
+  - reset reason
+expect_notes:
+  - found nothing for the id in scope
+expect_never:
+  - interface-down
+  - log-confirmation
+  - bgp-prefix-missing
+  - path-seam-handoff
+
+---
+
+# The model may only pick from the author's OWN handoff list, and the reason the
+# operator is shown is the AUTHOR's words, never the model's.
+case: the model may route to a seam handoff the author declared
+question: bgp peer down across the provider handoff on edge-1
+ui:
+  - correlation_id=case-bgp-model
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=not_found
+model_next: path-seam-handoff
+evidence:
+  - finding
+expect_chain:
+  - bgp-session-down entry
+  - path-seam-handoff model
+expect_selected: model
+expect_reason: provider or partner handoff
+expect_verdict:
+  - seam
+  - baseline
+expect_never:
+  - interface-down

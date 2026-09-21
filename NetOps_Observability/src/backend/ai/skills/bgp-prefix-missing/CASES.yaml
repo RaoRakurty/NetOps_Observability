@@ -1,0 +1,154 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for bgp-prefix-missing. Dialect + contract: skill_cases.go.
+
+# A missing prefix on a session that is not up is the SESSION's fault, not
+# policy — and the chain has to say so by going there, from the device's own
+# word for the FSM state.
+case: an Idle peer sends the investigation to the session, and on to the link beneath it
+question: prefix missing on edge-1, route not advertised
+ui:
+  - correlation_id=case-prefix-idle
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=ok
+signals:
+  - state:bgp_peer=idle
+evidence:
+  - finding
+  - device
+expect_chain:
+  - bgp-prefix-missing entry
+  - bgp-session-down rule
+  - interface-down rule
+expect_selected: rule
+expect_reason: reachability to the peer
+expect_verdict:
+  - interface
+  - transition
+expect_notes:
+  - per-turn lookup budget
+expect_never:
+  - log-confirmation
+  - path-seam-handoff
+expect_select: bgp-prefix-missing
+
+---
+
+case: an Active peer is also the session's fault, so policy is not yet the question
+question: bgp not advertising the prefix from edge-1
+ui:
+  - correlation_id=case-prefix-active
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=not_found
+signals:
+  - state:bgp_peer=active
+evidence:
+  - finding
+expect_chain:
+  - bgp-prefix-missing entry
+  - bgp-session-down rule
+expect_selected: rule
+expect_reason: reports the peer Active
+expect_verdict:
+  - fsm
+  - reset reason
+expect_notes:
+  - found nothing for the id in scope
+expect_never:
+  - interface-down
+  - log-confirmation
+
+---
+
+case: a prefix diagnostic that captured nothing falls back to the device's own words
+question: route not received on edge-1
+ui:
+  - correlation_id=case-prefix-uncollected
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=ok
+signals:
+  - signature=uncollected
+evidence:
+  - finding
+expect_chain:
+  - bgp-prefix-missing entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: rejected every read-only command
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - bgp-session-down
+  - interface-down
+
+---
+
+case: a diagnostic that matched no signature still has to pin a maximum-prefix or policy event
+question: prefix not in table on edge-1
+ui:
+  - correlation_id=case-prefix-nomatch
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=ok
+evidence:
+  - finding
+expect_chain:
+  - bgp-prefix-missing entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: no known signature matched
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - bgp-session-down
+
+---
+
+case: no session fact and no diagnostic outcome takes no hop
+question: best path wrong on edge-1
+ui:
+  - correlation_id=case-prefix-flat
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=not_found
+evidence:
+  - finding
+expect_chain:
+  - bgp-prefix-missing entry
+expect_selected: none
+expect_verdict:
+  - filtered
+  - policy
+expect_never:
+  - bgp-session-down
+  - log-confirmation
+  - path-seam-handoff
+
+---
+
+case: a prefix owned across a handoff is the model's to propose, from the author's own list
+question: not learning routes from the partner on edge-1
+ui:
+  - correlation_id=case-prefix-model
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=not_found
+model_next: path-seam-handoff
+evidence:
+  - finding
+expect_chain:
+  - bgp-prefix-missing entry
+  - path-seam-handoff model
+expect_selected: model
+expect_reason: partner or provider
+expect_verdict:
+  - seam
+  - baseline
+expect_never:
+  - bgp-session-down

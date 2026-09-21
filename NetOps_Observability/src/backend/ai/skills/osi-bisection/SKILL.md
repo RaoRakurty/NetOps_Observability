@@ -25,8 +25,8 @@ decisions:
   - next=optics-degraded when errors rise without the link going down
   - next=stp-topology when verdict:phrase=stp the engine's verdict names spanning tree
   - next=mac-flap when verdict:phrase=mac the engine's verdict names a MAC address or MAC churn
-  - next=ospf-adjacency when verdict:phrase=ospf the engine's verdict names OSPF
-  - next=isis-adjacency when verdict:phrase=isis the engine's verdict names IS-IS
+  - next=ospf-adjacency when the engine's verdict names OSPF
+  - next=isis-adjacency when the engine's verdict names IS-IS
   - next=bgp-session-down when verdict:phrase=bgp the engine's verdict names BGP
   - next=bgp-prefix-missing when verdict:phrase=prefix the engine's verdict names a missing or unadvertised prefix
   - next=path-seam-handoff when the loss or latency sits on a hop we do not own

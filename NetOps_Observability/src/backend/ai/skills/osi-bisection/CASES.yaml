@@ -1,0 +1,268 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for osi-bisection — the ENTRY METHOD. Dialect + contract:
+# skill_cases.go.
+#
+# Every `verdict:phrase=` rule below fires on a WORD in the correlation engine's
+# OWN authored operator phrase. skill_reference_test.go proves each of those
+# words is still producible by the shipped signature catalogue; these cases prove
+# that when the word is there, the bisection actually takes the hop.
+
+case: a verdict that names an interface starts the bisection at the physical layer
+question: something is broken on edge-1
+ui:
+  - correlation_id=case-osi-interface
+  - device=edge-1
+signals:
+  - verdict:phrase=interface
+  - verdict:tier=confirmed
+evidence:
+  - finding
+  - device
+expect_chain:
+  - osi-bisection entry
+  - interface-down rule
+expect_selected: rule
+expect_reason: names an interface
+expect_verdict:
+  - interface
+  - transition
+expect_never:
+  - optics-degraded
+  - log-confirmation
+  - bgp-session-down
+
+---
+
+case: a verdict that names a link starts the bisection at the physical layer
+question: site is down, where do i start
+ui:
+  - correlation_id=case-osi-link
+  - device=edge-1
+signals:
+  - verdict:phrase=link
+evidence:
+  - finding
+expect_chain:
+  - osi-bisection entry
+  - interface-down rule
+expect_selected: rule
+expect_reason: names a link
+expect_verdict:
+  - interface
+  - transition
+expect_never:
+  - log-confirmation
+  - stp-topology
+
+---
+
+case: a verdict that names spanning tree starts the bisection at L2
+question: users complain, no idea where to look
+ui:
+  - correlation_id=case-osi-stp
+  - device=edge-1
+signals:
+  - verdict:phrase=stp
+evidence:
+  - finding
+expect_chain:
+  - osi-bisection entry
+  - stp-topology rule
+expect_selected: rule
+expect_reason: names spanning tree
+expect_verdict:
+  - vlan
+  - root
+expect_never:
+  - mac-flap
+  - interface-down
+
+---
+
+case: a verdict that names MAC churn starts the bisection at the forwarding table
+question: unknown fault at the branch, network slow
+ui:
+  - correlation_id=case-osi-mac
+  - device=edge-1
+signals:
+  - verdict:phrase=mac
+evidence:
+  - finding
+expect_chain:
+  - osi-bisection entry
+  - mac-flap rule
+expect_selected: rule
+expect_reason: MAC address or MAC churn
+expect_verdict:
+  - two ports
+  - move rate
+expect_never:
+  - stp-topology
+  - interface-down
+
+---
+
+case: a verdict that names BGP starts the bisection at the routing layer
+question: investigate the outage on edge-1
+ui:
+  - correlation_id=case-osi-bgp
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=not_found
+signals:
+  - verdict:phrase=bgp
+evidence:
+  - finding
+expect_chain:
+  - osi-bisection entry
+  - bgp-session-down rule
+expect_selected: rule
+expect_reason: names BGP
+expect_verdict:
+  - fsm
+  - reset reason
+expect_never:
+  - bgp-prefix-missing
+  - interface-down
+
+---
+
+case: a verdict that names a missing prefix starts the bisection at policy
+question: troubleshoot the reachability problem on edge-1
+ui:
+  - correlation_id=case-osi-prefix
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=not_found
+signals:
+  - verdict:phrase=prefix
+evidence:
+  - finding
+expect_chain:
+  - osi-bisection entry
+  - bgp-prefix-missing rule
+expect_selected: rule
+expect_reason: missing or unadvertised prefix
+expect_verdict:
+  - filtered
+  - policy
+expect_never:
+  - bgp-session-down
+  - interface-down
+
+---
+
+# A router that is CPU-bound reframes every symptom above it: adjacency and
+# session loss that looks like a link fault is the control plane starving.
+case: a saturated control plane is read off the device, not inferred from the symptom
+question: why is everything flapping on edge-1
+ui:
+  - correlation_id=case-osi-cpu
+  - device=edge-1
+signals:
+  - state:platform=cpu_high
+evidence:
+  - finding
+  - device
+expect_chain:
+  - osi-bisection entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: control plane is saturated
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - interface-down
+  - bgp-session-down
+  - ospf-adjacency
+
+---
+
+# The turn is BOUNDED, and a truncated investigation must never read like a
+# complete one: the lookup budget that cut it short is disclosed.
+case: a three-method bisection stops at the per-turn lookup budget and says so
+question: something is broken on edge-1 and errors are climbing
+ui:
+  - correlation_id=case-osi-budget
+  - device=edge-1
+signals:
+  - verdict:phrase=interface
+  - state:if_errors=present
+evidence:
+  - finding
+  - device
+expect_chain:
+  - osi-bisection entry
+  - interface-down rule
+  - optics-degraded rule
+expect_selected: rule
+expect_reason: counting errors
+expect_verdict:
+  - error type
+  - direction
+expect_notes:
+  - per-turn lookup budget
+expect_never:
+  - log-confirmation
+  - bgp-session-down
+
+---
+
+# No verdict phrase, no platform fact: the bisection has nothing to branch on and
+# must not invent one.
+case: an engine verdict with no routing word takes no hop
+question: something is broken at the branch site
+ui:
+  - correlation_id=case-osi-flat
+  - device=edge-1
+tools:
+  - get_active_major_incidents=not_wired
+evidence:
+  - finding
+expect_chain:
+  - osi-bisection entry
+expect_selected: none
+expect_verdict:
+  - layer
+  - evidence classes
+expect_notes:
+  - Active incidents is not available on this deployment
+expect_never:
+  - interface-down
+  - optics-degraded
+  - stp-topology
+  - mac-flap
+  - ospf-adjacency
+  - isis-adjacency
+  - bgp-session-down
+  - bgp-prefix-missing
+  - path-seam-handoff
+  - app-edge-5xx
+  - security-exposure-context
+  - log-confirmation
+expect_select: osi-bisection
+
+---
+
+case: an exposure question is the model's to propose, from the author's own list
+question: where do i start with the posture question on edge-1
+ui:
+  - correlation_id=case-osi-model
+  - device=edge-1
+model_next: security-exposure-context
+evidence:
+  - finding
+expect_chain:
+  - osi-bisection entry
+  - security-exposure-context model
+expect_selected: model
+expect_reason: exposure, posture, or a security finding
+expect_verdict:
+  - severity
+  - assessed scope
+expect_never:
+  - interface-down
+  - log-confirmation

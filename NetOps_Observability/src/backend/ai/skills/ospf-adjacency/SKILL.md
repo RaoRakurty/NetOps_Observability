@@ -20,7 +20,7 @@ look_for:
 decisions:
   - next=interface-down when state:igp_nbr=none the device has no OSPF adjacency at all in this table, so the circuit beneath it is the next check
   - next=log-confirmation when state:collect=not_wired the adjacency table could not be read live, so the transition times must come from the device's own words
-  - next=interface-down when signature=ospf-flap-l1 the adjacency is flapping with L1 errors on the interface beneath it
+  - next=interface-down when the adjacency is flapping with L1 errors on the interface beneath it
   - next=interface-down when verdict:phrase=link the RCA verdict names the link beneath the adjacency
   - next=optics-degraded when the link is up but errors could be dropping the larger database packets
   - next=log-confirmation when signature=uncollected the device rejected every read-only command, so NOTHING was captured and the device's own words are the only evidence left
