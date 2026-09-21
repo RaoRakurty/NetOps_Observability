@@ -1,0 +1,174 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for isis-adjacency. Dialect + contract: skill_cases.go.
+
+case: a device with no IS-IS adjacency at all points at the circuit beneath it
+question: isis adjacency down on edge-1
+ui:
+  - correlation_id=case-isis-none
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=ok
+signals:
+  - state:igp_nbr=none
+evidence:
+  - finding
+  - device
+expect_chain:
+  - isis-adjacency entry
+  - interface-down rule
+expect_selected: rule
+expect_reason: no IS-IS adjacency at all
+expect_verdict:
+  - interface
+  - transition
+expect_never:
+  - log-confirmation
+  - optics-degraded
+expect_select: isis-adjacency
+
+---
+
+case: an unreadable adjacency table sends the transition times to the device's own words
+question: is-is down on edge-1
+ui:
+  - correlation_id=case-isis-notwired
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=not_found
+signals:
+  - state:collect=not_wired
+notes:
+  - live device state could not be read on this deployment — no command was run
+evidence:
+  - finding
+expect_chain:
+  - isis-adjacency entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: could not be read live
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - live device state could not be read on this deployment
+expect_never:
+  - interface-down
+
+---
+
+case: the engine's verdict naming the link routes beneath the adjacency
+question: isis neighbor lost on edge-1
+ui:
+  - correlation_id=case-isis-phrase
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=not_found
+signals:
+  - verdict:phrase=link
+evidence:
+  - finding
+expect_chain:
+  - isis-adjacency entry
+  - interface-down rule
+expect_selected: rule
+expect_reason: verdict names the circuit
+expect_verdict:
+  - interface
+  - transition
+expect_never:
+  - log-confirmation
+
+---
+
+case: an IS-IS capture that produced nothing is UNKNOWN, not clean
+question: isis flapping on edge-1
+ui:
+  - correlation_id=case-isis-uncollected
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=ok
+signals:
+  - signature=uncollected
+evidence:
+  - finding
+expect_chain:
+  - isis-adjacency entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: rejected every read-only command
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - interface-down
+
+---
+
+case: a capture that matched no signature still pins the transition times from the logs
+question: isis init on edge-1
+ui:
+  - correlation_id=case-isis-nomatch
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=ok
+evidence:
+  - finding
+expect_chain:
+  - isis-adjacency entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: no known signature matched
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - interface-down
+
+---
+
+case: no adjacency fact and no diagnostic outcome takes no hop
+question: level-2 question on edge-1
+ui:
+  - correlation_id=case-isis-flat
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=not_found
+evidence:
+  - finding
+expect_chain:
+  - isis-adjacency entry
+expect_selected: none
+expect_verdict:
+  - system id
+  - level
+expect_notes:
+  - found nothing for the id in scope
+expect_never:
+  - interface-down
+  - log-confirmation
+  - optics-degraded
+
+---
+
+case: padded hellos over a clean link are the model's to propose
+question: isis adjacency flapping on edge-1 with the link up
+ui:
+  - correlation_id=case-isis-model
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=not_found
+model_next: optics-degraded
+evidence:
+  - finding
+expect_chain:
+  - isis-adjacency entry
+  - optics-degraded model
+expect_selected: model
+expect_reason: padded hellos could be corrupted
+expect_verdict:
+  - error type
+  - direction
+expect_never:
+  - interface-down
