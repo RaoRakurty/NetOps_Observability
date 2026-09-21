@@ -41,6 +41,17 @@ var appKnowledge string
 //     context to the message list, so a misbehaving model can't reach into
 //     arbitrary indices on its own.
 //   - Responses are rendered as escaped text by the SPA (LLM02: no output-as-HTML).
+//
+// GROUNDING HONESTY (tracker 330). This endpoint is NOT the grounded engine.
+// What comes back from here is, in descending order of grounding:
+//   - an agent-loop answer that actually executed governed read-only lookups,
+//   - the grounded orchestrator answering because no provider could be reached,
+//   - a PLAIN provider completion with no tenant evidence behind it at all.
+//
+// Every response therefore carries `is_grounded`, and the UI labels anything
+// that is false rather than rendering it beside a "grounded, tenant-scoped and
+// cited" claim. The SERVER states it; the client never infers it from the
+// endpoint it happened to call.
 
 // copilotBodyCap caps the request body (LLM04: bound the request).
 const copilotBodyCap = 256 << 10
@@ -167,7 +178,12 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 			// retrieved chunks) — same fake-authority guardrail as the grounded
 			// engine, scoped to doc: ids so ordinary bracketed prose survives.
 			text = ai.StripFabricatedDocRefs(text, docRefs)
-			writeJSON(w, http.StatusOK, map[string]any{"provider": name, "text": text, "doc_refs": docRefs})
+			// A plain completion: retrieved documentation may have been appended
+			// to the system prompt, but NO tenant evidence was read and nothing
+			// was verified against citations. Say so (tracker 330).
+			writeJSON(w, http.StatusOK, map[string]any{
+				"provider": name, "text": text, "doc_refs": docRefs, "is_grounded": false,
+			})
 			return
 		}
 		// SR-022: the provider's raw error body is logged server-side by
@@ -185,6 +201,8 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusOK, map[string]any{
 					"provider": "engine", "text": ans.Text, "grounded": ans, "doc_refs": docRefs,
 					"fallback": "provider_unavailable",
+					// The orchestrator answered: tenant-scoped, redacted, cited.
+					"is_grounded": true,
 				})
 				return
 			}
@@ -270,10 +288,14 @@ func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwt
 		}
 	}
 	text := ai.StripFabricatedDocRefs(res.Text, docRefs)
+	// Grounded only if the loop ACTUALLY investigated. A turn where the model
+	// declined every tool and simply talked is a plain completion wearing the
+	// agent loop's clothes; it must not claim to be anything else.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"provider": name, "text": text, "doc_refs": docRefs,
 		"lookups": res.Lookups, "investigated": len(res.Lookups),
 		"citations": evCites, "truncated": res.Truncated,
+		"is_grounded": len(res.Lookups) > 0,
 	})
 	return true
 }

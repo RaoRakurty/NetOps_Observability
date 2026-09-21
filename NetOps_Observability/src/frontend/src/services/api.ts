@@ -1838,6 +1838,12 @@ export type NormalizedChatResponse = {
   // the UI shows a slim disclosure banner.
   fallback?: "provider_unavailable";
   grounded?: AiAnswer;
+  // Whether the SERVER considers this answer grounded (tracker 330): true for an
+  // agent-loop turn that actually ran lookups and for the grounded-engine
+  // fallback, false for a plain provider completion with no tenant evidence
+  // behind it. The UI labels a false — it never infers grounding on its own, and
+  // an absent field is treated as NOT grounded (a pre-330 backend cannot claim it).
+  is_grounded?: boolean;
 };
 export type CopilotChatResponse = NormalizedChatResponse | AnthropicChatResponse | OpenAIChatResponse;
 

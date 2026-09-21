@@ -24,10 +24,41 @@ import Icon from "../components/Icon";
 import { friendlyProblemId } from "../components/rca/labels";
 import { useShell } from "../context/shell";
 
-// Iris AI — the in-app assistant chat. Posts to /api/copilot/chat (provider
-// fallback chain server-side); key-free questions fall through to the grounded
-// /api/ai/ask engine. Rendered inside the right-side drawer. Assistant output is
-// rendered as ESCAPED React text only (OWASP LLM02 — never dangerouslySetInnerHTML).
+// Iris AI — the in-app assistant chat, rendered inside the right-side drawer.
+// Assistant output is rendered as ESCAPED React text only (OWASP LLM02 — never
+// dangerouslySetInnerHTML).
+//
+// ROUTING (tracker 330 — the product's central claim).
+// EVERY freely typed question goes to the grounded engine, POST /api/ai/ask,
+// whether or not a provider key is configured. That is the only route that runs
+// classification → the policy engine → the skill chain → tenant-scoped evidence
+// → TAC/product knowledge → the quality layer → Redact → grounding verification
+// → citations. The orchestrator calls the SAME provider the plain proxy would
+// have called, so this is not a downgrade in answer quality: it is the same
+// model with the evidence attached and the claims checked.
+//
+// Until this change the branch was inverted — `key_present` sent free text to
+// the plain chat proxy — so configuring a key, the normal production state,
+// silently un-grounded the assistant while the panel went on advertising
+// "grounded, tenant-scoped and cited".
+//
+// WHAT IS LEFT ON THE PLAIN PROXY, and why.
+// Exactly one case: a question the engine could not place at all (it answers
+// with the capability clarification, mode "unavailable" / intent "capability"),
+// when a provider key IS configured. Those are the conversational turns the
+// single-shot grounded engine has no schema for — "shorter", "what about the
+// second one", "thanks" — and the 2026-07-02 brevity incident is precisely an
+// operator issuing one of them. Rather than dead-end a paid provider on
+// "I didn't quite catch that", the turn is retried on /api/copilot/chat WITH
+// the conversation, and the resulting bubble is labelled from the server's own
+// `is_grounded` flag. It costs one extra provider call at most, only on a
+// question the engine already declined, and it never carries the grounded claim.
+//
+// The model-driven agent loop (FEATURE_AI_TOOLS) is deliberately NOT the default
+// route for free text: it is off by default, entitled per tenant, and its tool
+// replies are not yet fenced as data (tracker 333), so it cannot carry the
+// grounded claim on its own. The server-planned skill chain inside the
+// orchestrator is the supported investigator.
 
 const SUGGESTIONS = [
   "Why might my edge router be dropping BGP sessions?",
@@ -91,6 +122,25 @@ const INTENT_BADGE: Record<string, string> = {
   time_range_summary: "History", product_navigation: "Navigation", help: "Help",
 };
 
+// isCapabilityMiss reports the grounded engine's honest "I could not place that
+// question" answer (orchestrator answerCapability): mode "unavailable" with
+// intent "capability". It is the ONLY engine outcome that may be retried on the
+// plain chat proxy — an access refusal, a not-built answer mode or any real
+// answer stays exactly as the engine wrote it.
+export function isCapabilityMiss(ans: AiAnswer): boolean {
+  return ans.mode === "unavailable" && ans.intent === "capability";
+}
+
+// groundedChipLabel is the per-answer provenance claim. "cited" is asserted only
+// when the answer actually carries citations — a grounded answer with nothing to
+// link to is still grounded, and saying "cited" beside no citation would be the
+// same class of untruth this whole change removes.
+export function groundedChipLabel(ans: AiAnswer): string {
+  return ans.citations && ans.citations.length > 0
+    ? "Grounded · tenant-scoped · cited"
+    : "Grounded · tenant-scoped";
+}
+
 // cmdToSlash adapts a backend AiCommand (the single source of truth) to the menu
 // row shape. Every command routes through the grounded engine as the raw "/cmd"
 // — the backend resolves it to the same intent as the natural-language question.
@@ -124,6 +174,10 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
   // ran ("Investigated 3 sources") + the evidence citations they produced.
   const [lookups, setLookups] = useState<Record<number, ChatLookup[]>>({});
   const [chatCites, setChatCites] = useState<Record<number, ChatCitation[]>>({});
+  // Assistant turns the SERVER reported as NOT grounded (tracker 330) — the
+  // general-model retry for a question the engine could not place. Keyed the same
+  // way as `grounded`; the two are mutually exclusive by construction.
+  const [ungrounded, setUngrounded] = useState<Record<number, boolean>>({});
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -156,7 +210,8 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
 
   // New conversation — clear the thread + transient panels, focus the composer.
   const newConversation = () => {
-    setHistory([]); setGrounded({}); setDocRefs({}); setLookups({}); setChatCites({}); setDraft(""); setError(null);
+    setHistory([]); setGrounded({}); setDocRefs({}); setLookups({}); setChatCites({}); setUngrounded({});
+    setDraft(""); setError(null);
     setShowSettings(false); setShowHelp(false); setSlashOpen(false);
     taRef.current?.focus();
   };
@@ -250,28 +305,34 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
     setBusy(true);
     setError(null);
     try {
-      if (ready) {
-        // Free-form LLM chat — a provider key is configured.
-        const r = await api.copilotChat(newHistory);
-        setHistory([...newHistory, { role: "assistant", content: extractAssistantText(r) }]);
-        const nr = r as NormalizedChatResponse;
-        if (nr.doc_refs?.length) setDocRefs((d) => ({ ...d, [idx]: nr.doc_refs! }));
-        if (nr.lookups?.length) setLookups((d) => ({ ...d, [idx]: nr.lookups! }));
-        if (nr.citations?.length) setChatCites((d) => ({ ...d, [idx]: nr.citations! }));
-        // Provider-down fallback: the engine answered — render the rich grounded
-        // card and disclose it with the slim banner (never a dead-end error).
-        if (nr.fallback && nr.grounded) {
-          setGrounded((g) => ({ ...g, [idx]: nr.grounded! }));
-          setFallbackNote(true);
-        } else if (nr.provider && nr.provider !== "engine") {
-          setFallbackNote(false); // provider is back — banner clears itself
-        }
-      } else {
-        // No provider key: answer from the grounded engine instead of erroring, so
-        // any typed question still gets a tenant-scoped, evidence-cited answer.
-        const ans = await api.aiAsk(content);
+      // The grounded engine answers EVERY typed question, key or no key. See the
+      // ROUTING note at the top of this file for why this is unconditional.
+      const ans = await api.aiAsk(content);
+      if (!(ready && isCapabilityMiss(ans))) {
         setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
         setGrounded((g) => ({ ...g, [idx]: ans }));
+        return;
+      }
+      // The engine declined to place the question and a provider IS configured:
+      // retry the CONVERSATION on the plain proxy so a follow-up ("shorter",
+      // "what about the second one") still works. The answer is labelled from
+      // the server's `is_grounded` — we never infer grounding here.
+      const r = await api.copilotChat(newHistory);
+      setHistory([...newHistory, { role: "assistant", content: extractAssistantText(r) }]);
+      const nr = r as NormalizedChatResponse;
+      if (nr.doc_refs?.length) setDocRefs((d) => ({ ...d, [idx]: nr.doc_refs! }));
+      if (nr.lookups?.length) setLookups((d) => ({ ...d, [idx]: nr.lookups! }));
+      if (nr.citations?.length) setChatCites((d) => ({ ...d, [idx]: nr.citations! }));
+      // Provider-down fallback: the engine answered — render the rich grounded
+      // card and disclose it with the slim banner (never a dead-end error).
+      if (nr.fallback && nr.grounded) {
+        setGrounded((g) => ({ ...g, [idx]: nr.grounded! }));
+        setFallbackNote(true);
+      } else if (nr.provider && nr.provider !== "engine") {
+        setFallbackNote(false); // provider is back — banner clears itself
+      }
+      if (nr.is_grounded !== true && !(nr.fallback && nr.grounded)) {
+        setUngrounded((u) => ({ ...u, [idx]: true }));
       }
     } catch (e) {
       setError((e as Error).message);
@@ -459,7 +520,9 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
             <li><b>Playbooks</b> — “how do I troubleshoot a BGP flap?”, CCIE-grade guidance.</li>
             <li><b>Navigation</b> — “where do I configure ServiceNow?”.</li>
           </ul>
-          <div className="op-help-tip">Type <kbd>/</kbd> in the box for ready-made questions. Answers are grounded, tenant-scoped and cited — setup and how-to answers link to the documentation, and the <b>?</b> button opens the full docs.</div>
+          {/* The claim, stated exactly as the routing makes it true (tracker
+              330): grounded by default, labelled when it isn't. */}
+          <div className="op-help-tip">Type <kbd>/</kbd> in the box for ready-made questions. Every question goes to the grounded engine first, so answers are tenant-scoped and cite the evidence or documentation behind them — setup and how-to answers link to the documentation, and the <b>?</b> button opens the full docs. If Iris can&apos;t place a question and a provider key is connected, it answers from the general model instead and labels that answer <b>Not grounded</b>.</div>
         </div>
       )}
 
@@ -686,6 +749,23 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
           <div key={i} className={`op-row ${m.role}`}>
             {m.role === "assistant" && <span className="op-avatar"><Icon name="copilot" size={14} /></span>}
             <div className={`op-bubble ${m.role}${m.role === "assistant" && grounded[i] ? " op-bubble-grounded" : ""}`}>
+              {/* Provenance chip (tracker 330). Exactly one per assistant turn:
+                  what this answer is, stated beside the answer itself rather
+                  than as a blanket claim under the composer. */}
+              {m.role === "assistant" && grounded[i] && (
+                <div className="op-badges">
+                  <span className="op-badge tone-accent" data-testid="iris-grounded-chip">
+                    {groundedChipLabel(grounded[i])}
+                  </span>
+                </div>
+              )}
+              {m.role === "assistant" && !grounded[i] && ungrounded[i] && (
+                <div className="op-badges">
+                  <span className="op-badge tone-warn" data-testid="iris-ungrounded-chip">
+                    Not grounded — general AI answer, no evidence read
+                  </span>
+                </div>
+              )}
               {m.role === "assistant" && grounded[i]
                 ? <GroundedAnswer ans={grounded[i]} onCite={() => setCopilotOpen(false)} onClose={() => setCopilotOpen(false)} />
                 : renderContent(m.content)}
@@ -780,8 +860,10 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
           }}
         />
         <div className="op-composer-actions">
+          {/* A statement about the ROUTE (always true), not about every answer
+              (which is claimed per-bubble by the provenance chip). */}
           <span className="op-composer-hint">
-            <span className="op-composer-dot" /> Grounded · tenant-scoped · cited
+            <span className="op-composer-dot" /> Grounded engine by default · tenant-scoped
           </span>
           <button type="submit" className="op-send" disabled={busy || !draft.trim()} title="Send (⏎)">
             <Icon name="chevron" size={16} />

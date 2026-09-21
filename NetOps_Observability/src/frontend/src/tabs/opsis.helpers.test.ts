@@ -2,7 +2,7 @@
 // Copyright 2026 Correlix
 
 import { describe, it, expect } from "vitest";
-import { topProblemId, groundedToText } from "./Opsis";
+import { topProblemId, groundedToText, isCapabilityMiss, groundedChipLabel } from "./Opsis";
 import type { AiAnswer } from "../services/api";
 
 // A minimal current-state answer factory for the helper tests.
@@ -70,5 +70,37 @@ describe("groundedToText", () => {
   it("gives an honest quiet-fleet line when there's no narrative", () => {
     const ans = currentState({ text: "", current_state: undefined, provider: "anthropic" });
     expect(groundedToText(ans)).toContain("fleet is quiet");
+  });
+});
+
+// ── tracker 330: the two pure decisions behind the routing and the claim ─────
+describe("isCapabilityMiss — the ONLY engine outcome eligible for the plain proxy", () => {
+  it("is true for the capability clarification (the engine could not place it)", () => {
+    expect(isCapabilityMiss(currentState({ mode: "unavailable", intent: "capability" }))).toBe(true);
+  });
+
+  it("is false for any real answer, however thin", () => {
+    expect(isCapabilityMiss(currentState())).toBe(false);
+    expect(isCapabilityMiss(currentState({ text: "", citations: [] }))).toBe(false);
+  });
+
+  it("is false for an access refusal or a not-built answer mode", () => {
+    // "unavailable" also carries "no module is available for your access" and
+    // "that answer mode isn't built yet". Neither may be re-answered by a
+    // general model: one is an authorization decision, the other is honesty.
+    expect(isCapabilityMiss(currentState({ mode: "unavailable", intent: "current_state" }))).toBe(false);
+    expect(isCapabilityMiss(currentState({ mode: "unavailable", intent: "shift_handoff" }))).toBe(false);
+  });
+});
+
+describe("groundedChipLabel — 'cited' is claimed only when there are citations", () => {
+  it("claims cited when the answer carries citations", () => {
+    expect(groundedChipLabel(currentState())).toMatch(/cited/);
+  });
+
+  it("drops the cited claim when the answer carries none", () => {
+    const label = groundedChipLabel(currentState({ citations: [] }));
+    expect(label).toMatch(/Grounded/);
+    expect(label).not.toMatch(/cited/);
   });
 });
