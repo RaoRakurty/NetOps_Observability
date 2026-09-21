@@ -72,6 +72,13 @@ func (s *server) copilotSystemPrompt() string {
 	// live in a console, and style instructions ("too verbose", "briefly") are
 	// commands, not commentary — live incident 2026-07-02.
 	persona += "\n\nBREVITY: be concise by default — at most ~6 short sentences unless the operator asks for detail. ALWAYS obey style instructions immediately: \"too verbose\"/\"briefly\"/\"shorter\" means compress your PREVIOUS answer to 2-3 sentences keeping the counts, the top item and the next action. Never respond to a style instruction with a menu of capabilities."
+	// The data-vs-instruction fence rides EVERY persona the same way, and for
+	// the same structural reason: a platform admin replacing the persona above
+	// must not be able to delete the LLM01 stance on untrusted content
+	// (CLAUDE.md §15). Concatenated after, so an override cannot reach it. The
+	// agent loop gets it a second time inside ai.AgentDoctrine — that path is
+	// the one carrying live syslog, so belt and braces is correct there.
+	persona += "\n\n" + ai.DataNotInstructionsFence()
 	// Always ground the assistant in the embedded application knowledge, whether
 	// the persona is the default or an admin override.
 	if k := strings.TrimSpace(appKnowledge); k != "" {

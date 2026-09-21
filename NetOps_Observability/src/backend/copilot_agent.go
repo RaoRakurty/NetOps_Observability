@@ -154,7 +154,10 @@ func (s *server) runAgentLoop(ctx context.Context, claims jwtClaims, p ai.Princi
 			continue
 		}
 		seen[ev.CitationID] = true
-		label := ev.Text
+		// Same rendering-boundary rule as the prompt (ai/prompt_fence.go): the
+		// chip label is cut from untrusted evidence text, so it is flattened
+		// before it is clipped.
+		label := ai.OneLine(ev.Text)
 		if len(label) > 80 {
 			label = label[:80] + "…"
 		}

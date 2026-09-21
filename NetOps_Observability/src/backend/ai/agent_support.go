@@ -26,8 +26,14 @@ const toolsReplyMaxChars = 4000
 // current-time anchor lets it resolve relative phrases itself, and the
 // incidents-first rule points it at the platform's already-merged view instead
 // of offering a logs/metrics/flows menu.
+//
+// It also carries the data-vs-instruction fence (prompt_fence.go). This is the
+// path whose tool replies carry live syslog — the one corpus an attacker can
+// write to — so it is the path that most needs the stance the curated docs
+// block has always had. Because the doctrine is CONCATENATED AFTER the persona
+// (copilot.go), an admin persona override cannot remove it.
 func AgentDoctrine(now time.Time) string {
-	return "CURRENT TIME (UTC): " + now.Format("Monday, 2006-01-02 15:04") + `
+	return dataNotInstructionsFence + "\n\nCURRENT TIME (UTC): " + now.Format("Monday, 2006-01-02 15:04") + `
 
 INVESTIGATION DOCTRINE — how to answer with the tools:
 - Act first, ask later. NEVER ask which data source to check, and NEVER ask for exact timestamps. Run the lookups, answer, then state what you covered and offer to narrow.
@@ -131,10 +137,17 @@ func EstTokens(turns []AgentTurn, text string) int {
 // Redaction runs on the ASSEMBLED block rather than per item: one pass instead
 // of N, and the mask never lengthens a line enough to matter against the
 // character budget (it only ever replaces a longer secret with "***").
+//
+// It is also the STRUCTURE boundary (prompt_fence.go): this block is
+// line-structured, one "[id] text" line per finding, so every value is
+// flattened with promptLine before it is written. Without that, a planted
+// multi-line log line forges additional evidence bullets that the downstream
+// grounding verifier would keep — it checks only that a cited id EXISTS.
+// Doing it here rather than per tool means a tool added tomorrow inherits it.
 func RenderToolReply(result *ToolResult) string {
 	var b strings.Builder
 	for _, it := range result.Items {
-		line := fmt.Sprintf("[%s] %s\n", it.CitationID, it.Text)
+		line := fmt.Sprintf("[%s] %s\n", promptCitationID(it.CitationID), promptLine(it.Text))
 		if b.Len()+len(line) > toolsReplyMaxChars {
 			result.Truncated = true
 			break
@@ -142,7 +155,7 @@ func RenderToolReply(result *ToolResult) string {
 		b.WriteString(line)
 	}
 	for _, n := range result.Notes {
-		b.WriteString("note: " + n + "\n")
+		b.WriteString("note: " + promptLine(n) + "\n")
 	}
 	if result.Truncated {
 		b.WriteString("note: results truncated.\n")
