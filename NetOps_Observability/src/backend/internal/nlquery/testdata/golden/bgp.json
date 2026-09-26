@@ -1,0 +1,393 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "bgp",
+  "cases": [
+    {
+      "id": "bgp-001",
+      "category": "bgp",
+      "question": "Show BGP flaps in the last 24 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "bgp_peer",
+          "metric": "bgp_flaps",
+          "aggregation": "sum",
+          "predicate": {
+            "op": "gt",
+            "value": 0
+          },
+          "time_range": {
+            "kind": "relative",
+            "last": "24h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "bgp flaps last 24h",
+        "any bgp resets past day",
+        "which peers flapped in the last 24 hours"
+      ]
+    },
+    {
+      "id": "bgp-002",
+      "category": "bgp",
+      "question": "Which BGP sessions are down right now?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "bgp_peer",
+          "metric": "bgp_session_state",
+          "aggregation": "last",
+          "predicate": {
+            "op": "ne",
+            "value": 6
+          },
+          "time_range": {
+            "kind": "relative",
+            "last": "5m"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "bgp down now",
+        "any bgp neighbors not established",
+        "which peers are down currently"
+      ]
+    },
+    {
+      "id": "bgp-003",
+      "category": "bgp",
+      "question": "Show BGP state for the Comcast peer on dfw-edge-1 over the last 2 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "the Comcast peer on dfw-edge-1",
+            "type": "bgp_peer",
+            "id": "bgp_peer:dfw-edge-1/203.0.113.1",
+            "method": "label_pair"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "bgp_peer",
+          "metric": "bgp_session_state",
+          "aggregation": "last",
+          "entities": [
+            {
+              "type": "bgp_peer",
+              "id": "bgp_peer:dfw-edge-1/203.0.113.1"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "2h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "bgp_peer:dfw-edge-1/203.0.113.1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "dfw-edge-1 comcast bgp state last 2h",
+        "bgp session to 203.0.113.1 on DFW-EDGE-1 past two hours",
+        "comcast neighbor state dfw edge 1 last 2 hrs"
+      ]
+    },
+    {
+      "id": "bgp-004",
+      "category": "bgp",
+      "question": "How many prefixes are we receiving from the AWS peer in NYC?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "the AWS peer in NYC",
+            "type": "bgp_peer",
+            "id": "bgp_peer:nyc-edge-1/169.254.10.1@aws-dx",
+            "method": "label_pair"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "bgp_peer",
+          "metric": "bgp_prefixes_received",
+          "aggregation": "last",
+          "entities": [
+            {
+              "type": "bgp_peer",
+              "id": "bgp_peer:nyc-edge-1/169.254.10.1@aws-dx"
+            }
+          ],
+          "time_range": {}
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "bgp_peer:nyc-edge-1/169.254.10.1@aws-dx"
+          ]
+        }
+      },
+      "paraphrases": [
+        "prefixes from the aws dx peer nyc",
+        "received prefix count aws neighbor new york",
+        "how many routes do we get from AWS in NYC"
+      ]
+    },
+    {
+      "id": "bgp-005",
+      "category": "bgp",
+      "question": "Did the prefix count from 198.51.100.1 drop below 1000 today?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [
+          {
+            "input": "198.51.100.1",
+            "type": "bgp_peer",
+            "id": "bgp_peer:dfw-edge-2/198.51.100.1@mpls",
+            "method": "label_pair"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "bgp_peer",
+          "metric": "bgp_prefixes_received",
+          "aggregation": "min",
+          "entities": [
+            {
+              "type": "bgp_peer",
+              "id": "bgp_peer:dfw-edge-2/198.51.100.1@mpls"
+            }
+          ],
+          "predicate": {
+            "op": "lt",
+            "value": 1000
+          },
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "prefixes from 198.51.100.1 under 1000 today?",
+        "did 198.51.100.1 send fewer than 1000 prefixes today",
+        "198.51.100.1 received prefixes below 1k today?"
+      ]
+    },
+    {
+      "id": "bgp-006",
+      "category": "bgp",
+      "question": "Were there BGP flaps at Houston yesterday?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [
+          {
+            "input": "Houston",
+            "type": "site",
+            "id": "site:hou-br",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "bgp_peer",
+          "metric": "bgp_flaps",
+          "aggregation": "sum",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:hou-br"
+            }
+          ],
+          "predicate": {
+            "op": "gt",
+            "value": 0
+          },
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-23T05:00:00Z",
+            "to": "2026-09-24T05:00:00Z"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "houston bgp flaps yesterday?",
+        "any bgp resets at hou yesterday",
+        "did bgp flap in houston yesterday"
+      ]
+    },
+    {
+      "id": "bgp-007",
+      "category": "bgp",
+      "question": "Top 5 BGP peers by flaps this week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "rank",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_topk",
+          "target": "bgp_peer",
+          "metric": "bgp_flaps",
+          "aggregation": "sum",
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "value",
+              "dir": "desc"
+            }
+          ],
+          "limit": 5
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "ranking",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "most flappy bgp peers this week, top 5",
+        "top five neighbors by session flaps since monday",
+        "5 worst bgp peers by flaps this week"
+      ]
+    },
+    {
+      "id": "bgp-008",
+      "category": "bgp",
+      "question": "Were there BGP flaps on those circuits?",
+      "context": {
+        "tz": "America/Chicago",
+        "prior_ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "circuit",
+          "metric": "circuit_loss_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "provider",
+              "id": "provider:comcast"
+            },
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "predicate": {
+            "op": "above_baseline"
+          },
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          }
+        },
+        "cross": true,
+        "script": "N-S2b",
+        "turn": 3
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [
+          {
+            "input": "those circuits",
+            "type": "circuit",
+            "id": "circuit:dfw-comcast-1",
+            "method": "context"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "bgp_peer",
+          "metric": "bgp_flaps",
+          "aggregation": "sum",
+          "entities": [
+            {
+              "type": "circuit",
+              "id": "circuit:dfw-comcast-1"
+            }
+          ],
+          "predicate": {
+            "op": "gt",
+            "value": 0
+          },
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "any bgp flaps on those circuits?",
+        "did bgp flap on them",
+        "bgp resets on those links?"
+      ]
+    }
+  ]
+}

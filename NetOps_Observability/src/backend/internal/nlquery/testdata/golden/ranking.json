@@ -1,0 +1,449 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "ranking",
+  "cases": [
+    {
+      "id": "ranking-001",
+      "category": "ranking",
+      "question": "Which interfaces changed most?",
+      "context": {
+        "tz": "America/Chicago",
+        "prior_ast": {
+          "v": 1,
+          "query_type": "compare_windows",
+          "target": "circuit",
+          "metric": "circuit_loss_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            },
+            {
+              "type": "provider",
+              "id": "provider:comcast"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "2h"
+          },
+          "compare_to": {
+            "kind": "relative",
+            "last": "2h",
+            "offset": "1d"
+          }
+        },
+        "cross": true,
+        "script": "N-S2a",
+        "turn": 4
+      },
+      "expect": {
+        "intent": "compare",
+        "entities": [
+          {
+            "input": "it",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "context"
+          },
+          {
+            "input": "Comcast",
+            "type": "provider",
+            "id": "provider:comcast",
+            "method": "context"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "compare_windows",
+          "target": "circuit",
+          "metric": "circuit_loss_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            },
+            {
+              "type": "provider",
+              "id": "provider:comcast"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "2h"
+          },
+          "compare_to": {
+            "kind": "relative",
+            "last": "2h",
+            "offset": "1d"
+          },
+          "order_by": [
+            {
+              "field": "delta",
+              "dir": "desc"
+            }
+          ],
+          "limit": 10
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "ranking",
+          "must_include_refs": [
+            "circuit:dfw-comcast-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "which interfaces changed the most",
+        "biggest movers?",
+        "what changed most"
+      ]
+    },
+    {
+      "id": "ranking-002",
+      "category": "ranking",
+      "question": "Top 5 devices by CPU in the last hour.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "rank",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_topk",
+          "target": "device",
+          "metric": "cpu_util_pct",
+          "aggregation": "avg",
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          },
+          "order_by": [
+            {
+              "field": "value",
+              "dir": "desc"
+            }
+          ],
+          "limit": 5
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "ranking",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "top 5 cpu devices last hour",
+        "five busiest boxes by cpu past 60m",
+        "highest cpu devices top 5 last 1h"
+      ]
+    },
+    {
+      "id": "ranking-003",
+      "category": "ranking",
+      "question": "Top 10 busiest interfaces at NYC right now.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "rank",
+        "entities": [
+          {
+            "input": "NYC",
+            "type": "site",
+            "id": "site:nyc-dc",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_topk",
+          "target": "interface",
+          "metric": "if_util_max_pct",
+          "aggregation": "max",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:nyc-dc"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "5m"
+          },
+          "order_by": [
+            {
+              "field": "value",
+              "dir": "desc"
+            }
+          ],
+          "limit": 10
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "ranking",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "10 busiest nyc ports now",
+        "top ten interfaces by utilization at nyc currently",
+        "most utilized nyc links right now, top 10"
+      ]
+    },
+    {
+      "id": "ranking-004",
+      "category": "ranking",
+      "question": "Which 3 circuits have the highest latency today?",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "rank",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_topk",
+          "target": "circuit",
+          "metric": "circuit_latency_ms",
+          "aggregation": "p95",
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "value",
+              "dir": "desc"
+            }
+          ],
+          "limit": 3
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "ranking",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "top 3 circuits by latency today",
+        "3 slowest wan links today",
+        "highest latency circuits today, top three"
+      ]
+    },
+    {
+      "id": "ranking-005",
+      "category": "ranking",
+      "question": "Top interfaces by errors this week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "rank",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_topk",
+          "target": "interface",
+          "metric": "if_errors",
+          "aggregation": "max",
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "value",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "ranking",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "worst interfaces by errors this week",
+        "ports with the most errors since monday",
+        "top error interfaces this week"
+      ]
+    },
+    {
+      "id": "ranking-006",
+      "category": "ranking",
+      "question": "Which routers have the lowest memory usage?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "rank",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_topk",
+          "target": "device",
+          "metric": "mem_util_pct",
+          "aggregation": "avg",
+          "time_range": {},
+          "order_by": [
+            {
+              "field": "value",
+              "dir": "asc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "ranking",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "lowest memory routers",
+        "routers with the least mem used",
+        "bottom devices by memory utilization"
+      ]
+    },
+    {
+      "id": "ranking-007",
+      "category": "ranking",
+      "question": "Top 5 BGP peers by flaps in the last 24 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "rank",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_topk",
+          "target": "bgp_peer",
+          "metric": "bgp_flaps",
+          "aggregation": "sum",
+          "time_range": {
+            "kind": "relative",
+            "last": "24h"
+          },
+          "order_by": [
+            {
+              "field": "value",
+              "dir": "desc"
+            }
+          ],
+          "limit": 5
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "ranking",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "5 flappiest bgp peers last 24h",
+        "top five neighbors by flaps past day",
+        "bgp peers with most flaps last 24 hours, top 5"
+      ]
+    },
+    {
+      "id": "ranking-008",
+      "category": "ranking",
+      "question": "Worst 5 probe targets by loss today.",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "rank",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_topk",
+          "target": "probe_target",
+          "metric": "probe_loss_pct",
+          "aggregation": "avg",
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "value",
+              "dir": "desc"
+            }
+          ],
+          "limit": 5
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "ranking",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "top 5 probe targets by loss today",
+        "which 5 synthetic targets lost the most today",
+        "probe targets with highest loss today, top five"
+      ]
+    },
+    {
+      "id": "ranking-009",
+      "category": "ranking",
+      "question": "Most recent 3 incidents at Austin.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [
+          {
+            "input": "Austin",
+            "type": "site",
+            "id": "site:aus-br",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:aus-br"
+            }
+          ],
+          "time_range": {},
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ],
+          "limit": 3
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:8c41d2e7-15a9-4f3b-b2c6-0e9d7a6b5c41"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "last 3 austin incidents",
+        "3 latest incidents at aus",
+        "three most recent austin incidents"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,393 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "applications",
+  "cases": [
+    {
+      "id": "applications-001",
+      "category": "applications",
+      "question": "Why is Salesforce slow in Dallas?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [
+          {
+            "input": "Salesforce",
+            "type": "application",
+            "id": "app:salesforce",
+            "method": "alias_table"
+          },
+          {
+            "input": "Dallas",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "entities": [
+            {
+              "type": "application",
+              "id": "app:salesforce"
+            },
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "time_range": {},
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "salesforce slow at dfw - why?",
+        "what's wrong with salesforce in dallas",
+        "why's SFDC sluggish in Dallas"
+      ]
+    },
+    {
+      "id": "applications-002",
+      "category": "applications",
+      "question": "Any incidents affecting Zoom this week?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [
+          {
+            "input": "Zoom",
+            "type": "application",
+            "id": "app:zoom",
+            "method": "alias_table"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "entities": [
+            {
+              "type": "application",
+              "id": "app:zoom"
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:e2d7a4c9-6b01-4f58-a3e9-71c5b8d02f6a",
+            "incident:8c41d2e7-15a9-4f3b-b2c6-0e9d7a6b5c41"
+          ],
+          "min_rows": 2
+        }
+      },
+      "paraphrases": [
+        "zoom incidents this week",
+        "has zoom had problems since monday?",
+        "outages hitting zoom this week"
+      ]
+    },
+    {
+      "id": "applications-003",
+      "category": "applications",
+      "question": "What was deployed for SAP ERP in the last 3 days?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [
+          {
+            "input": "SAP ERP",
+            "type": "application",
+            "id": "app:sap-erp",
+            "method": "alias_table"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "application",
+              "id": "app:sap-erp"
+            }
+          ],
+          "filters": [
+            {
+              "field": "type",
+              "op": "eq",
+              "values": [
+                "APPLICATION_DEPLOY"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "3d"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1047"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "sap erp deploys last 3 days",
+        "any sap releases in the past 72h",
+        "deployments to SAP ERP last three days"
+      ]
+    },
+    {
+      "id": "applications-004",
+      "category": "applications",
+      "question": "Show changes affecting Office 365 in the last week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [
+          {
+            "input": "Office 365",
+            "type": "application",
+            "id": "app:office365",
+            "method": "alias_table"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "application",
+              "id": "app:office365"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "7d"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1056"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "o365 changes past week",
+        "what changed for office 365 in the last 7 days",
+        "changes touching office365 last week"
+      ]
+    },
+    {
+      "id": "applications-005",
+      "category": "applications",
+      "question": "Show latency to login.salesforce.com for the last hour.",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "login.salesforce.com",
+            "type": "probe_target",
+            "id": "probe:login.salesforce.com",
+            "method": "label_pair"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "probe_target",
+          "metric": "probe_rtt_ms",
+          "aggregation": "p95",
+          "entities": [
+            {
+              "type": "probe_target",
+              "id": "probe:login.salesforce.com"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "probe:login.salesforce.com"
+          ]
+        }
+      },
+      "paraphrases": [
+        "probe rtt to login.salesforce.com last hour",
+        "how's latency to salesforce login past 60m",
+        "login.salesforce.com latency last 1h"
+      ]
+    },
+    {
+      "id": "applications-006",
+      "category": "applications",
+      "question": "Show open Salesforce incidents.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [
+          {
+            "input": "Salesforce",
+            "type": "application",
+            "id": "app:salesforce",
+            "method": "alias_table"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "entities": [
+            {
+              "type": "application",
+              "id": "app:salesforce"
+            }
+          ],
+          "filters": [
+            {
+              "field": "state",
+              "op": "eq",
+              "values": [
+                "open"
+              ]
+            }
+          ],
+          "time_range": {},
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "open salesforce incidents",
+        "any active sfdc incidents",
+        "salesforce incidents still open"
+      ]
+    },
+    {
+      "id": "applications-007",
+      "category": "applications",
+      "question": "Show packet loss to outlook.office365.com over the last 30 minutes.",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "outlook.office365.com",
+            "type": "probe_target",
+            "id": "probe:outlook.office365.com",
+            "method": "label_pair"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "probe_target",
+          "metric": "probe_loss_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "probe_target",
+              "id": "probe:outlook.office365.com"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "30m"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "probe:outlook.office365.com"
+          ]
+        }
+      },
+      "paraphrases": [
+        "loss to outlook.office365.com last 30m",
+        "o365 probe loss past half hour",
+        "packet loss outlook office365 last 30 min"
+      ]
+    }
+  ]
+}

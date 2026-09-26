@@ -1,0 +1,456 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "interfaces",
+  "cases": [
+    {
+      "id": "interfaces-001",
+      "category": "interfaces",
+      "question": "Show utilization on dfw-edge-1 ge-0/0/0 for the last 4 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "dfw-edge-1 ge-0/0/0",
+            "type": "interface",
+            "id": "interface:dfw-edge-1/ge-0/0/0",
+            "method": "label_pair"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "interface",
+          "metric": "if_util_max_pct",
+          "aggregation": "max",
+          "entities": [
+            {
+              "type": "interface",
+              "id": "interface:dfw-edge-1/ge-0/0/0"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "4h"
+          }
+        },
+        "alternates": [
+          {
+            "v": 1,
+            "query_type": "metric_series",
+            "target": "interface",
+            "metric": "if_util_in_pct",
+            "aggregation": "avg",
+            "entities": [
+              {
+                "type": "interface",
+                "id": "interface:dfw-edge-1/ge-0/0/0"
+              }
+            ],
+            "time_range": {
+              "kind": "relative",
+              "last": "4h"
+            }
+          },
+          {
+            "v": 1,
+            "query_type": "metric_series",
+            "target": "interface",
+            "metric": "if_util_out_pct",
+            "aggregation": "avg",
+            "entities": [
+              {
+                "type": "interface",
+                "id": "interface:dfw-edge-1/ge-0/0/0"
+              }
+            ],
+            "time_range": {
+              "kind": "relative",
+              "last": "4h"
+            }
+          }
+        ],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "interface:dfw-edge-1/ge-0/0/0"
+          ]
+        }
+      },
+      "paraphrases": [
+        "util dfw-edge-1 ge-0/0/0 last 4h",
+        "how busy is ge-0/0/0 on DFW-EDGE-1 past 4 hours",
+        "dfw edge 1 ge-0/0/0 utilization last four hours"
+      ]
+    },
+    {
+      "id": "interfaces-002",
+      "category": "interfaces",
+      "question": "Which interfaces in Dallas are down?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [
+          {
+            "input": "Dallas",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "interface",
+          "metric": "if_oper_status",
+          "aggregation": "last",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "predicate": {
+            "op": "eq",
+            "value": 2
+          },
+          "time_range": {
+            "kind": "relative",
+            "last": "5m"
+          }
+        },
+        "alternates": [
+          {
+            "v": 1,
+            "query_type": "metric_filter",
+            "target": "interface",
+            "metric": "if_oper_status",
+            "aggregation": "last",
+            "entities": [
+              {
+                "type": "site",
+                "id": "site:dfw-hq"
+              }
+            ],
+            "predicate": {
+              "op": "ne",
+              "value": 1
+            },
+            "time_range": {
+              "kind": "relative",
+              "last": "5m"
+            }
+          }
+        ],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "any ports down at DFW?",
+        "down interfaces dallas",
+        "what links are down in dallas right now"
+      ]
+    },
+    {
+      "id": "interfaces-003",
+      "category": "interfaces",
+      "question": "Show interface errors on aus-sw-1 over the last day.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "aus-sw-1",
+            "type": "device",
+            "id": "device:aus-sw-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "interface",
+          "metric": "if_errors",
+          "aggregation": "max",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:aus-sw-1"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "24h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "interface:aus-sw-1/Gi1/0/24"
+          ]
+        }
+      },
+      "paraphrases": [
+        "aus-sw-1 errors past 24h",
+        "port errors on the austin switch last day",
+        "AUS-SW-1 interface errors last 24 hours"
+      ]
+    },
+    {
+      "id": "interfaces-004",
+      "category": "interfaces",
+      "question": "Any interfaces flapping on hou-edge-1 in the last hour?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [
+          {
+            "input": "hou-edge-1",
+            "type": "device",
+            "id": "device:hou-edge-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "interface",
+          "metric": "if_flaps",
+          "aggregation": "sum",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:hou-edge-1"
+            }
+          ],
+          "predicate": {
+            "op": "gt",
+            "value": 0
+          },
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "hou-edge-1 link flaps last hour?",
+        "is anything flapping on HOU-EDGE-1 past 60m",
+        "port flaps hou edge last 1h"
+      ]
+    },
+    {
+      "id": "interfaces-005",
+      "category": "interfaces",
+      "question": "Show inbound traffic on nyc-edge-1 xe-0/0/1 for the last 2 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "nyc-edge-1 xe-0/0/1",
+            "type": "interface",
+            "id": "interface:nyc-edge-1/xe-0/0/1",
+            "method": "label_pair"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "interface",
+          "metric": "if_in_bps",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "interface",
+              "id": "interface:nyc-edge-1/xe-0/0/1"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "2h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "interface:nyc-edge-1/xe-0/0/1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "rx rate nyc-edge-1 xe-0/0/1 last 2h",
+        "ingress traffic on xe-0/0/1 at NYC-EDGE-1 past two hours",
+        "nyc edge xe-0/0/1 input traffic last 2 hrs"
+      ]
+    },
+    {
+      "id": "interfaces-006",
+      "category": "interfaces",
+      "question": "Which ports at the Austin branch have output drops in the last 30 minutes?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [
+          {
+            "input": "Austin branch",
+            "type": "site",
+            "id": "site:aus-br",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "interface",
+          "metric": "if_out_discards",
+          "aggregation": "max",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:aus-br"
+            }
+          ],
+          "predicate": {
+            "op": "gt",
+            "value": 0
+          },
+          "time_range": {
+            "kind": "relative",
+            "last": "30m"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "austin ports with tx drops last 30m",
+        "any outbound discards at aus past half hour",
+        "output drops austin last 30 min"
+      ]
+    },
+    {
+      "id": "interfaces-007",
+      "category": "interfaces",
+      "question": "Show interfaces above 90% utilization in NYC over the last hour.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [
+          {
+            "input": "NYC",
+            "type": "site",
+            "id": "site:nyc-dc",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "interface",
+          "metric": "if_util_max_pct",
+          "aggregation": "max",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:nyc-dc"
+            }
+          ],
+          "predicate": {
+            "op": "gt",
+            "value": 90
+          },
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "nyc links over 90% util last hour",
+        "which nyc interfaces are saturated (>90%) past 1h",
+        "ports > 90 percent utilization at the NYC DC last hour"
+      ]
+    },
+    {
+      "id": "interfaces-008",
+      "category": "interfaces",
+      "question": "Show CRC errors on dfw-core-1 xe-1/0/1 today.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "dfw-core-1 xe-1/0/1",
+            "type": "interface",
+            "id": "interface:dfw-core-1/xe-1/0/1",
+            "method": "label_pair"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "interface",
+          "metric": "if_in_errors",
+          "aggregation": "max",
+          "entities": [
+            {
+              "type": "interface",
+              "id": "interface:dfw-core-1/xe-1/0/1"
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "interface:dfw-core-1/xe-1/0/1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "crc errors dfw-core-1 xe-1/0/1 today",
+        "input errors on DFW-CORE-1 xe-1/0/1 since midnight",
+        "rx errors dfw core xe-1/0/1 today"
+      ]
+    }
+  ]
+}

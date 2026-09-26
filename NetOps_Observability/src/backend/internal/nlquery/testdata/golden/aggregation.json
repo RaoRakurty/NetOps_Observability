@@ -1,0 +1,350 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "aggregation",
+  "cases": [
+    {
+      "id": "aggregation-001",
+      "category": "aggregation",
+      "question": "Show average CPU across Dallas devices for the last 6 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "Dallas",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "device",
+          "metric": "cpu_util_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "6h"
+          },
+          "group_by": [
+            "site"
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "avg cpu across dfw last 6h",
+        "mean cpu over all dallas boxes past six hours",
+        "dallas average cpu last 6 hrs"
+      ]
+    },
+    {
+      "id": "aggregation-002",
+      "category": "aggregation",
+      "question": "Show p95 utilization per site today.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "interface",
+          "metric": "if_util_max_pct",
+          "aggregation": "p95",
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "group_by": [
+            "site"
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "p95 util by site today",
+        "95th percentile utilization for each site today",
+        "per-site p95 utilization today"
+      ]
+    },
+    {
+      "id": "aggregation-003",
+      "category": "aggregation",
+      "question": "How many changes per actor this week?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "group_by": [
+            "actor"
+          ],
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "group_counts",
+          "must_include_refs": [
+            "change:chg-1042",
+            "change:chg-1048"
+          ],
+          "min_rows": 10
+        }
+      },
+      "paraphrases": [
+        "change count by person this week",
+        "changes per engineer since monday",
+        "number of changes per actor this week"
+      ]
+    },
+    {
+      "id": "aggregation-004",
+      "category": "aggregation",
+      "question": "Count incidents by seam class over the last 30 days.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "time_range": {
+            "kind": "relative",
+            "last": "30d"
+          },
+          "group_by": [
+            "seam_class"
+          ],
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "group_counts",
+          "must_include_refs": [
+            "incident:91f4c6a3-0e7d-4b29-bc58-d3a2e1f0c947",
+            "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c"
+          ],
+          "min_rows": 8
+        }
+      },
+      "paraphrases": [
+        "incident counts per seam class last 30 days",
+        "how many incidents per seam past month",
+        "incidents grouped by seam class last 30d"
+      ]
+    },
+    {
+      "id": "aggregation-005",
+      "category": "aggregation",
+      "question": "Show max interface errors per device at NYC over the last 24 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "NYC",
+            "type": "site",
+            "id": "site:nyc-dc",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "interface",
+          "metric": "if_errors",
+          "aggregation": "max",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:nyc-dc"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "24h"
+          },
+          "group_by": [
+            "device"
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "max errors per device at nyc last 24h",
+        "peak interface errors by device nyc past day",
+        "nyc: worst interface errors per device last 24 hours"
+      ]
+    },
+    {
+      "id": "aggregation-006",
+      "category": "aggregation",
+      "question": "Show incident counts by state and verdict this week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "group_by": [
+            "state",
+            "verdict_tier"
+          ],
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "group_counts",
+          "must_include_refs": [
+            "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+            "incident:5b9e3f10-a2c4-4d87-8f61-2c7a9e0b4d13"
+          ],
+          "min_rows": 6
+        }
+      },
+      "paraphrases": [
+        "incidents by state and verdict this week",
+        "count of incidents per status and certainty since monday",
+        "state x verdict incident breakdown this week"
+      ]
+    },
+    {
+      "id": "aggregation-007",
+      "category": "aggregation",
+      "question": "Show total traffic per site for the last hour.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "interface",
+          "metric": "if_total_bps",
+          "aggregation": "avg",
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          },
+          "group_by": [
+            "site"
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "traffic by site last hour",
+        "throughput per site past 60 min",
+        "total bandwidth for each site last 1h"
+      ]
+    },
+    {
+      "id": "aggregation-008",
+      "category": "aggregation",
+      "question": "Show average latency per provider today.",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "circuit",
+          "metric": "circuit_latency_ms",
+          "aggregation": "avg",
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "group_by": [
+            "provider"
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "avg latency by provider today",
+        "mean circuit latency per carrier today",
+        "latency averaged per isp today"
+      ]
+    }
+  ]
+}

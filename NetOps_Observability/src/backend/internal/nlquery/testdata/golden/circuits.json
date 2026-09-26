@@ -1,0 +1,350 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "circuits",
+  "cases": [
+    {
+      "id": "circuits-001",
+      "category": "circuits",
+      "question": "Show latency on the Dallas Comcast circuit for the last 2 hours.",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "the Dallas Comcast circuit",
+            "type": "circuit",
+            "id": "circuit:dfw-comcast-1",
+            "method": "wan_projection"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "circuit",
+          "metric": "circuit_latency_ms",
+          "aggregation": "p95",
+          "entities": [
+            {
+              "type": "circuit",
+              "id": "circuit:dfw-comcast-1"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "2h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "circuit:dfw-comcast-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "dfw comcast circuit latency last 2h",
+        "rtt on the Dallas Comcast link past two hours",
+        "latency dfw-comcast-1 last 2 hrs"
+      ]
+    },
+    {
+      "id": "circuits-002",
+      "category": "circuits",
+      "question": "Which circuits had more than 1% loss in the last hour?",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "circuit",
+          "metric": "circuit_loss_pct",
+          "aggregation": "avg",
+          "predicate": {
+            "op": "gt",
+            "value": 1
+          },
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          }
+        },
+        "alternates": [
+          {
+            "v": 1,
+            "query_type": "metric_filter",
+            "target": "circuit",
+            "metric": "circuit_loss_pct",
+            "aggregation": "max",
+            "predicate": {
+              "op": "gt",
+              "value": 1
+            },
+            "time_range": {
+              "kind": "relative",
+              "last": "1h"
+            }
+          }
+        ],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "circuits with loss > 1% last hour",
+        "any wan links losing more than 1 percent past 60 min",
+        "loss over 1% on which circuits last 1h"
+      ]
+    },
+    {
+      "id": "circuits-003",
+      "category": "circuits",
+      "question": "Show jitter on nyc-verizon-1 today.",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "nyc-verizon-1",
+            "type": "circuit",
+            "id": "circuit:nyc-verizon-1",
+            "method": "wan_projection"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "circuit",
+          "metric": "circuit_jitter_ms",
+          "aggregation": "p95",
+          "entities": [
+            {
+              "type": "circuit",
+              "id": "circuit:nyc-verizon-1"
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "circuit:nyc-verizon-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "nyc-verizon-1 jitter today",
+        "jitter on the NYC Verizon circuit since midnight",
+        "verizon nyc circuit jitter today"
+      ]
+    },
+    {
+      "id": "circuits-004",
+      "category": "circuits",
+      "question": "Which 5 circuits have the worst quality in the last hour?",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "rank",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_topk",
+          "target": "circuit",
+          "metric": "circuit_qoe",
+          "aggregation": "avg",
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          },
+          "order_by": [
+            {
+              "field": "value",
+              "dir": "asc"
+            }
+          ],
+          "limit": 5
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "ranking",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "worst 5 circuits by qoe last hour",
+        "bottom five wan links by quality past 1h",
+        "lowest qoe circuits last hour, top 5"
+      ]
+    },
+    {
+      "id": "circuits-005",
+      "category": "circuits",
+      "question": "Show packet loss on circuits at Austin over the last 6 hours.",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "Austin",
+            "type": "site",
+            "id": "site:aus-br",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "circuit",
+          "metric": "circuit_loss_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:aus-br"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "6h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "circuit:aus-comcast-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "austin circuit loss last 6h",
+        "loss on aus wan links past six hours",
+        "packet loss austin circuits last 6 hrs"
+      ]
+    },
+    {
+      "id": "circuits-006",
+      "category": "circuits",
+      "question": "Did latency on the AWS Direct Connect circuit rise by more than 10 ms in the last hour?",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [
+          {
+            "input": "the AWS Direct Connect circuit",
+            "type": "circuit",
+            "id": "circuit:nyc-aws-dx-1",
+            "method": "wan_projection"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "circuit",
+          "metric": "circuit_latency_ms",
+          "aggregation": "p95",
+          "entities": [
+            {
+              "type": "circuit",
+              "id": "circuit:nyc-aws-dx-1"
+            }
+          ],
+          "predicate": {
+            "op": "increased_by",
+            "value": 10
+          },
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "dx circuit latency up more than 10ms last hour?",
+        "has the direct connect latency increased by over 10 ms past 1h",
+        "aws dx latency jump > 10 ms in the last hour?"
+      ]
+    },
+    {
+      "id": "circuits-007",
+      "category": "circuits",
+      "question": "Show max latency on the AT&T MPLS circuit in Dallas yesterday.",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "the AT&T MPLS circuit in Dallas",
+            "type": "circuit",
+            "id": "circuit:dfw-att-mpls-1",
+            "method": "wan_projection"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "circuit",
+          "metric": "circuit_latency_ms",
+          "aggregation": "max",
+          "entities": [
+            {
+              "type": "circuit",
+              "id": "circuit:dfw-att-mpls-1"
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-23T05:00:00Z",
+            "to": "2026-09-24T05:00:00Z"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "circuit:dfw-att-mpls-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "dfw att mpls max latency yesterday",
+        "peak rtt on the Dallas AT&T MPLS link yesterday",
+        "max latency dfw-att-mpls-1 yesterday"
+      ]
+    }
+  ]
+}

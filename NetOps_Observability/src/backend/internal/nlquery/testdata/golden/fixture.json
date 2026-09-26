@@ -1,0 +1,150 @@
+{
+  "schema": "correlix.nlquery.golden.fixture/v1",
+  "description": "Fixed two-tenant inventory the golden NL corpus is written against. Tenant A (acme) is the asking tenant in every case. Tenant B (globex) exists so isolation can be asserted: none of its ids may appear in a tenant-A expectation, and its device gx-edge-9 carries the SAME site label slug as tenant A's site:dfw-hq (the isolation trap — site expansion must never pick it up). Device 'site' is the raw site LABEL slug (what Labels[\"site\"] holds), not an id. All times are UTC; 'now' is fixed so relative and calendar windows are deterministic.",
+  "now": "2026-09-24T15:00:00Z",
+  "tenant_a": {
+    "tenant": "t-acme",
+    "sites": [
+      {"id": "site:dfw-hq", "name": "Dallas HQ", "aliases": ["dallas", "dfw", "dfw hq", "dallas hq"]},
+      {"id": "site:aus-br", "name": "Austin Branch", "aliases": ["austin", "aus"]},
+      {"id": "site:hou-br", "name": "Houston Branch", "aliases": ["houston", "hou"]},
+      {"id": "site:nyc-dc", "name": "New York Data Center", "aliases": ["nyc", "new york", "nyc dc"]},
+      {"id": "site:sjc-br", "name": "San Jose Branch", "aliases": ["san jose", "sjc"]}
+    ],
+    "devices": [
+      {"id": "device:dfw-edge-1", "name": "DFW-EDGE-1", "site": "dfw-hq"},
+      {"id": "device:dfw-edge-2", "name": "DFW-EDGE-2", "site": "dfw-hq"},
+      {"id": "device:dfw-core-1", "name": "DFW-CORE-1", "site": "dfw-hq"},
+      {"id": "device:dfw-fw-1", "name": "DFW-FW-1", "site": "dfw-hq"},
+      {"id": "device:aus-edge-1", "name": "AUS-EDGE-1", "site": "aus-br"},
+      {"id": "device:aus-sw-1", "name": "AUS-SW-1", "site": "aus-br"},
+      {"id": "device:hou-edge-1", "name": "HOU-EDGE-1", "site": "hou-br"},
+      {"id": "device:nyc-edge-1", "name": "NYC-EDGE-1", "site": "nyc-dc"},
+      {"id": "device:nyc-core-1", "name": "NYC-CORE-1", "site": "nyc-dc"},
+      {"id": "device:nyc-fw-1", "name": "NYC-FW-1", "site": "nyc-dc"},
+      {"id": "device:sjc-edge-1", "name": "SJC-EDGE-1", "site": "sjc-br"}
+    ],
+    "interfaces": [
+      {"id": "interface:dfw-edge-1/ge-0/0/0", "device": "device:dfw-edge-1"},
+      {"id": "interface:dfw-edge-1/ge-0/0/1", "device": "device:dfw-edge-1"},
+      {"id": "interface:dfw-edge-2/ge-0/0/0", "device": "device:dfw-edge-2"},
+      {"id": "interface:dfw-core-1/xe-1/0/1", "device": "device:dfw-core-1"},
+      {"id": "interface:dfw-core-1/xe-1/0/2", "device": "device:dfw-core-1"},
+      {"id": "interface:dfw-fw-1/ethernet1/1", "device": "device:dfw-fw-1"},
+      {"id": "interface:aus-edge-1/ge-0/0/0", "device": "device:aus-edge-1"},
+      {"id": "interface:aus-sw-1/Gi1/0/24", "device": "device:aus-sw-1"},
+      {"id": "interface:hou-edge-1/ge-0/0/0", "device": "device:hou-edge-1"},
+      {"id": "interface:nyc-edge-1/xe-0/0/0", "device": "device:nyc-edge-1"},
+      {"id": "interface:nyc-edge-1/xe-0/0/1", "device": "device:nyc-edge-1"},
+      {"id": "interface:nyc-core-1/Ethernet1/1", "device": "device:nyc-core-1"},
+      {"id": "interface:sjc-edge-1/ge-0/0/0", "device": "device:sjc-edge-1"}
+    ],
+    "circuits": [
+      {"id": "circuit:dfw-comcast-1", "local_device": "device:dfw-edge-1", "local_interface": "interface:dfw-edge-1/ge-0/0/0", "provider": "provider:comcast"},
+      {"id": "circuit:dfw-att-mpls-1", "local_device": "device:dfw-edge-2", "local_interface": "interface:dfw-edge-2/ge-0/0/0", "provider": "provider:att"},
+      {"id": "circuit:aus-comcast-1", "local_device": "device:aus-edge-1", "local_interface": "interface:aus-edge-1/ge-0/0/0", "provider": "provider:comcast"},
+      {"id": "circuit:hou-lumen-1", "local_device": "device:hou-edge-1", "local_interface": "interface:hou-edge-1/ge-0/0/0", "provider": "provider:lumen"},
+      {"id": "circuit:nyc-verizon-1", "local_device": "device:nyc-edge-1", "local_interface": "interface:nyc-edge-1/xe-0/0/1", "provider": "provider:verizon"},
+      {"id": "circuit:nyc-aws-dx-1", "local_device": "device:nyc-edge-1", "local_interface": "interface:nyc-edge-1/xe-0/0/0", "provider": "provider:aws"},
+      {"id": "circuit:sjc-comcast-1", "local_device": "device:sjc-edge-1", "local_interface": "interface:sjc-edge-1/ge-0/0/0", "provider": "provider:comcast"}
+    ],
+    "providers": [
+      {"id": "provider:comcast", "name": "Comcast Business"},
+      {"id": "provider:att", "name": "AT&T"},
+      {"id": "provider:lumen", "name": "Lumen"},
+      {"id": "provider:verizon", "name": "Verizon"},
+      {"id": "provider:aws", "name": "AWS Direct Connect"}
+    ],
+    "bgp_peers": [
+      {"id": "bgp_peer:dfw-edge-1/203.0.113.1", "device": "device:dfw-edge-1"},
+      {"id": "bgp_peer:dfw-edge-2/198.51.100.1@mpls", "device": "device:dfw-edge-2"},
+      {"id": "bgp_peer:aus-edge-1/203.0.113.9", "device": "device:aus-edge-1"},
+      {"id": "bgp_peer:hou-edge-1/192.0.2.1", "device": "device:hou-edge-1"},
+      {"id": "bgp_peer:nyc-edge-1/169.254.10.1@aws-dx", "device": "device:nyc-edge-1"},
+      {"id": "bgp_peer:nyc-edge-1/198.51.100.77", "device": "device:nyc-edge-1"},
+      {"id": "bgp_peer:nyc-core-1/10.255.0.2", "device": "device:nyc-core-1"},
+      {"id": "bgp_peer:sjc-edge-1/203.0.113.33", "device": "device:sjc-edge-1"}
+    ],
+    "applications": [
+      {"id": "app:salesforce", "name": "Salesforce"},
+      {"id": "app:office365", "name": "Office 365"},
+      {"id": "app:zoom", "name": "Zoom"},
+      {"id": "app:sap-erp", "name": "SAP ERP"},
+      {"id": "app:internal-dns", "name": "Internal DNS"}
+    ],
+    "probe_targets": [
+      {"id": "probe:8.8.8.8"},
+      {"id": "probe:1.1.1.1"},
+      {"id": "probe:10.20.0.53"},
+      {"id": "probe:login.salesforce.com"},
+      {"id": "probe:outlook.office365.com"},
+      {"id": "probe:zoom.us"}
+    ],
+    "incidents": [
+      {"id": "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c", "created_at": "2026-09-24T13:40:00Z", "state": "open", "verdict_tier": "confirmed", "seam_type": "SDWAN", "top_confidence": 0.86, "owner": "network-ops", "sites": ["site:dfw-hq"], "devices": ["device:dfw-edge-1"], "apps": ["app:salesforce", "app:office365"]},
+      {"id": "incident:8c41d2e7-15a9-4f3b-b2c6-0e9d7a6b5c41", "created_at": "2026-09-23T16:20:00Z", "state": "closed", "verdict_tier": "suspected", "seam_type": "DIA", "top_confidence": 0.62, "owner": "Comcast Business", "sites": ["site:aus-br"], "devices": ["device:aus-edge-1"], "apps": ["app:zoom"]},
+      {"id": "incident:c7e05b92-3d18-4a6f-9e27-b4f1a0c3d852", "created_at": "2026-09-22T09:05:00Z", "state": "closed", "verdict_tier": "confirmed", "seam_type": "DX", "top_confidence": 0.91, "owner": "cloud-team", "sites": ["site:nyc-dc"], "devices": ["device:nyc-edge-1"], "apps": ["app:sap-erp"]},
+      {"id": "incident:5b9e3f10-a2c4-4d87-8f61-2c7a9e0b4d13", "created_at": "2026-09-24T08:30:00Z", "state": "open", "verdict_tier": "undetermined", "seam_type": "VPN", "top_confidence": 0.31, "owner": "network-ops", "sites": ["site:hou-br"], "devices": ["device:hou-edge-1"], "apps": []},
+      {"id": "incident:e2d7a4c9-6b01-4f58-a3e9-71c5b8d02f6a", "created_at": "2026-09-21T19:10:00Z", "state": "closed", "verdict_tier": "confirmed", "seam_type": "SDWAN", "top_confidence": 0.88, "owner": "network-ops", "sites": ["site:dfw-hq"], "devices": ["device:dfw-edge-2"], "apps": ["app:zoom"]},
+      {"id": "incident:91f4c6a3-0e7d-4b29-bc58-d3a2e1f0c947", "created_at": "2026-09-15T12:00:00Z", "state": "closed", "verdict_tier": "suspected", "seam_type": "DIA", "top_confidence": 0.55, "owner": "Comcast Business", "sites": ["site:sjc-br"], "devices": ["device:sjc-edge-1"], "apps": []},
+      {"id": "incident:4a0c8e5d-f913-4c72-8b4e-6d2f1a9c07b5", "created_at": "2026-09-23T07:00:00Z", "state": "merged", "verdict_tier": "undetermined", "seam_type": "CLOUD_BACKBONE", "top_confidence": 0.4, "owner": "cloud-team", "sites": ["site:nyc-dc"], "devices": [], "apps": ["app:internal-dns", "app:office365"]},
+      {"id": "incident:b6d31a7f-2c89-4e05-a1d6-9f4e7c3b582e", "created_at": "2026-09-22T14:00:00Z", "state": "closed", "verdict_tier": "suspected", "seam_type": "SDWAN", "top_confidence": 0.7, "owner": "network-ops", "sites": ["site:aus-br"], "devices": ["device:aus-edge-1"], "apps": ["app:salesforce"]}
+    ],
+    "changes": [
+      {"id": "change:chg-1042", "at": "2026-09-24T13:32:00Z", "type": "ROUTE_CHANGE", "actor": "jsmith", "source": "ledger", "site": "site:dfw-hq", "device": "device:dfw-edge-1", "object": "route-map COMCAST-IN", "object_kind": "route_policy", "seam": "SDWAN"},
+      {"id": "change:chg-1043", "at": "2026-09-24T14:20:00Z", "type": "CONFIG_CHANGE", "source": "config_capture", "site": "site:dfw-hq", "device": "device:dfw-core-1", "object": "interface xe-1/0/2", "object_kind": "interface"},
+      {"id": "change:chg-1044", "at": "2026-09-24T09:10:00Z", "type": "NETWORK_CHANGE", "actor": "jsmith", "source": "ledger", "site": "site:aus-br", "device": "device:aus-edge-1", "object": "sdwan policy QOS-VOICE", "object_kind": "sdwan_policy", "seam": "SDWAN"},
+      {"id": "change:chg-1045", "at": "2026-09-23T20:00:00Z", "type": "SECURITY_POLICY_CHANGE", "actor": "mlee", "source": "ledger", "site": "site:dfw-hq", "device": "device:dfw-fw-1", "object": "acl OUTSIDE-IN", "object_kind": "acl"},
+      {"id": "change:chg-1046", "at": "2026-09-23T06:40:00Z", "type": "DNS_CHANGE", "actor": "mlee", "source": "ledger", "site": "site:nyc-dc", "app": "app:internal-dns", "object": "zone corp.example.com", "object_kind": "dns_zone"},
+      {"id": "change:chg-1047", "at": "2026-09-22T08:50:00Z", "type": "APPLICATION_DEPLOY", "actor": "deploy-bot", "source": "ledger", "site": "site:nyc-dc", "app": "app:sap-erp", "object": "sap-erp 4.12.0", "object_kind": "release"},
+      {"id": "change:chg-1048", "at": "2026-09-22T08:45:00Z", "type": "CLOUD_CHANGE", "actor": "akumar", "source": "ledger", "site": "site:nyc-dc", "object": "route table rtb-0a1b", "object_kind": "cloud_route_table", "seam": "DX"},
+      {"id": "change:chg-1049", "at": "2026-09-21T18:55:00Z", "type": "ROUTE_CHANGE", "actor": "jsmith", "source": "ledger", "site": "site:dfw-hq", "device": "device:dfw-edge-2", "object": "bgp neighbor 198.51.100.1 local-preference", "object_kind": "route_policy", "seam": "SDWAN"},
+      {"id": "change:chg-1050", "at": "2026-09-24T08:05:00Z", "type": "NETWORK_CHANGE", "actor": "akumar", "source": "ledger", "site": "site:hou-br", "device": "device:hou-edge-1", "object": "ipsec tunnel HOU-DC", "object_kind": "vpn_tunnel", "seam": "VPN"},
+      {"id": "change:chg-1051", "at": "2026-09-19T03:00:00Z", "type": "INFRASTRUCTURE_CHANGE", "actor": "akumar", "source": "ledger", "site": "site:sjc-br", "device": "device:sjc-edge-1", "object": "firmware 22.4R3", "object_kind": "firmware"},
+      {"id": "change:chg-1052", "at": "2026-09-24T11:00:00Z", "type": "FEATURE_FLAG_CHANGE", "actor": "deploy-bot", "source": "ledger", "site": "site:nyc-dc", "app": "app:sap-erp", "object": "flag new-checkout", "object_kind": "feature_flag"},
+      {"id": "change:chg-1053", "at": "2026-09-24T12:00:00Z", "type": "CONFIG_CHANGE", "source": "config_capture", "site": "site:nyc-dc", "device": "device:nyc-core-1", "object": "router bgp 65010", "object_kind": "bgp"},
+      {"id": "change:chg-1054", "at": "2026-09-22T13:45:00Z", "type": "ROUTE_CHANGE", "actor": "mlee", "source": "ledger", "site": "site:aus-br", "device": "device:aus-edge-1", "object": "prefix-list ALLOW-DEFAULT", "object_kind": "route_policy", "seam": "SDWAN"},
+      {"id": "change:chg-1055", "at": "2026-09-10T10:00:00Z", "type": "DNS_CHANGE", "actor": "jsmith", "source": "ledger", "site": "site:nyc-dc", "app": "app:internal-dns", "object": "record vpn.corp.example.com", "object_kind": "dns_record"},
+      {"id": "change:chg-1056", "at": "2026-09-23T17:00:00Z", "type": "SECURITY_POLICY_CHANGE", "actor": "mlee", "source": "ledger", "site": "site:dfw-hq", "app": "app:office365", "object": "proxy bypass list", "object_kind": "proxy_policy"}
+    ]
+  },
+  "tenant_b": {
+    "tenant": "t-globex",
+    "sites": [
+      {"id": "site:gx-chi-hq", "name": "Globex Chicago HQ", "aliases": ["chicago", "chi"]},
+      {"id": "site:gx-mia-br", "name": "Globex Miami Branch", "aliases": ["miami", "mia"]}
+    ],
+    "devices": [
+      {"id": "device:gx-core-1", "name": "GX-CORE-1", "site": "gx-chi-hq"},
+      {"id": "device:gx-edge-2", "name": "GX-EDGE-2", "site": "gx-mia-br"},
+      {"id": "device:gx-edge-9", "name": "GX-EDGE-9", "site": "dfw-hq"}
+    ],
+    "interfaces": [
+      {"id": "interface:gx-edge-9/ge-0/0/0", "device": "device:gx-edge-9"},
+      {"id": "interface:gx-core-1/et-0/0/0", "device": "device:gx-core-1"}
+    ],
+    "circuits": [
+      {"id": "circuit:gx-dfw-spectrum-1", "local_device": "device:gx-edge-9", "local_interface": "interface:gx-edge-9/ge-0/0/0", "provider": "provider:gx-spectrum"}
+    ],
+    "providers": [
+      {"id": "provider:gx-spectrum", "name": "Spectrum"}
+    ],
+    "bgp_peers": [
+      {"id": "bgp_peer:gx-edge-9/203.0.113.201", "device": "device:gx-edge-9"}
+    ],
+    "applications": [
+      {"id": "app:gx-crm", "name": "Globex CRM"}
+    ],
+    "probe_targets": [
+      {"id": "probe:gx-crm.globex.example"}
+    ],
+    "incidents": [
+      {"id": "incident:0d5e9f2a-8b37-4c61-9a0e-f5c2d8b17e34", "created_at": "2026-09-24T13:45:00Z", "state": "open", "verdict_tier": "confirmed", "seam_type": "SDWAN", "top_confidence": 0.9, "owner": "globex-noc", "sites": ["site:gx-chi-hq"], "devices": ["device:gx-edge-9"], "apps": ["app:gx-crm"]},
+      {"id": "incident:7f2b0c4e-d9a1-4e63-85f7-a3c6e1d09b28", "created_at": "2026-09-23T10:00:00Z", "state": "closed", "verdict_tier": "suspected", "seam_type": "DIA", "top_confidence": 0.5, "owner": "globex-noc", "sites": ["site:gx-mia-br"], "devices": ["device:gx-edge-2"], "apps": []}
+    ],
+    "changes": [
+      {"id": "change:gx-chg-2001", "at": "2026-09-24T13:35:00Z", "type": "ROUTE_CHANGE", "actor": "jsmith", "source": "ledger", "site": "site:gx-chi-hq", "device": "device:gx-edge-9", "object": "route-map SPECTRUM-IN", "object_kind": "route_policy", "seam": "SDWAN"},
+      {"id": "change:gx-chg-2002", "at": "2026-09-23T09:00:00Z", "type": "DNS_CHANGE", "actor": "bwong", "source": "ledger", "site": "site:gx-mia-br", "object": "zone globex.example", "object_kind": "dns_zone"}
+    ]
+  }
+}

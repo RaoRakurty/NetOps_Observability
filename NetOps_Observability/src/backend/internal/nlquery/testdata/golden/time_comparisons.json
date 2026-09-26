@@ -1,0 +1,392 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "time_comparisons",
+  "cases": [
+    {
+      "id": "time_comparisons-001",
+      "category": "time_comparisons",
+      "question": "Compare CPU on dfw-edge-1 with yesterday.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "compare",
+        "entities": [
+          {
+            "input": "dfw-edge-1",
+            "type": "device",
+            "id": "device:dfw-edge-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "compare_windows",
+          "target": "device",
+          "metric": "cpu_util_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:dfw-edge-1"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          },
+          "compare_to": {
+            "kind": "relative",
+            "last": "1h",
+            "offset": "1d"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "comparison",
+          "must_include_refs": [
+            "device:dfw-edge-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "dfw-edge-1 cpu vs yesterday",
+        "cpu on DFW-EDGE-1 compared to this time yesterday",
+        "compare dfw edge 1 cpu with yesterday"
+      ]
+    },
+    {
+      "id": "time_comparisons-002",
+      "category": "time_comparisons",
+      "question": "Is traffic on nyc-edge-1 xe-0/0/1 higher than the same time last week?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "compare",
+        "entities": [
+          {
+            "input": "nyc-edge-1 xe-0/0/1",
+            "type": "interface",
+            "id": "interface:nyc-edge-1/xe-0/0/1",
+            "method": "label_pair"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "compare_windows",
+          "target": "interface",
+          "metric": "if_total_bps",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "interface",
+              "id": "interface:nyc-edge-1/xe-0/0/1"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          },
+          "compare_to": {
+            "kind": "relative",
+            "last": "1h",
+            "offset": "7d"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "comparison",
+          "must_include_refs": [
+            "interface:nyc-edge-1/xe-0/0/1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "nyc-edge-1 xe-0/0/1 traffic vs last week",
+        "is xe-0/0/1 on NYC-EDGE-1 busier than a week ago",
+        "compare throughput nyc edge xe-0/0/1 with same time last week"
+      ]
+    },
+    {
+      "id": "time_comparisons-003",
+      "category": "time_comparisons",
+      "question": "Compare interface utilization at Austin today vs yesterday.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "compare",
+        "entities": [
+          {
+            "input": "Austin",
+            "type": "site",
+            "id": "site:aus-br",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "compare_windows",
+          "target": "interface",
+          "metric": "if_util_max_pct",
+          "aggregation": "max",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:aus-br"
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "compare_to": {
+            "kind": "absolute",
+            "from": "2026-09-23T05:00:00Z",
+            "to": "2026-09-23T15:00:00Z"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "comparison",
+          "must_include_refs": [
+            "interface:aus-edge-1/ge-0/0/0",
+            "interface:aus-sw-1/Gi1/0/24"
+          ]
+        }
+      },
+      "paraphrases": [
+        "austin util today vs yesterday",
+        "compare aus interface utilization with yesterday",
+        "utilization at austin: today compared to yesterday"
+      ]
+    },
+    {
+      "id": "time_comparisons-004",
+      "category": "time_comparisons",
+      "question": "How does memory on nyc-core-1 this week compare to last week?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "compare",
+        "entities": [
+          {
+            "input": "nyc-core-1",
+            "type": "device",
+            "id": "device:nyc-core-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "compare_windows",
+          "target": "device",
+          "metric": "mem_util_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:nyc-core-1"
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "compare_to": {
+            "kind": "absolute",
+            "from": "2026-09-14T05:00:00Z",
+            "to": "2026-09-17T15:00:00Z"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "comparison",
+          "must_include_refs": [
+            "device:nyc-core-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "nyc-core-1 memory this week vs last week",
+        "compare NYC-CORE-1 mem week over week",
+        "memory nyc core this week compared with last"
+      ]
+    },
+    {
+      "id": "time_comparisons-005",
+      "category": "time_comparisons",
+      "question": "Which interfaces in Dallas changed most in utilization since yesterday?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "compare",
+        "entities": [
+          {
+            "input": "Dallas",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "compare_windows",
+          "target": "interface",
+          "metric": "if_util_max_pct",
+          "aggregation": "max",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          },
+          "compare_to": {
+            "kind": "relative",
+            "last": "1h",
+            "offset": "1d"
+          },
+          "order_by": [
+            {
+              "field": "delta",
+              "dir": "desc"
+            }
+          ],
+          "limit": 10
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "ranking",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "dallas interfaces with the biggest util change vs yesterday",
+        "which dfw ports changed the most in utilization compared to yesterday",
+        "top utilization movers in dallas vs yesterday"
+      ]
+    },
+    {
+      "id": "time_comparisons-006",
+      "category": "time_comparisons",
+      "question": "Compare BGP flaps this week with last week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "compare",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "compare_windows",
+          "target": "bgp_peer",
+          "metric": "bgp_flaps",
+          "aggregation": "sum",
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "compare_to": {
+            "kind": "absolute",
+            "from": "2026-09-14T05:00:00Z",
+            "to": "2026-09-17T15:00:00Z"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "comparison",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "bgp flaps this week vs last",
+        "week over week bgp flaps",
+        "are bgp flaps up compared to last week"
+      ]
+    },
+    {
+      "id": "time_comparisons-007",
+      "category": "time_comparisons",
+      "question": "Compare it with yesterday.",
+      "context": {
+        "tz": "America/Chicago",
+        "prior_ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "circuit",
+          "metric": "circuit_loss_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "2h"
+          }
+        },
+        "cross": true,
+        "script": "N-S2a",
+        "turn": 2
+      },
+      "expect": {
+        "intent": "compare",
+        "entities": [
+          {
+            "input": "it",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "context"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "compare_windows",
+          "target": "circuit",
+          "metric": "circuit_loss_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "2h"
+          },
+          "compare_to": {
+            "kind": "relative",
+            "last": "2h",
+            "offset": "1d"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "comparison",
+          "must_include_refs": [
+            "circuit:dfw-comcast-1",
+            "circuit:dfw-att-mpls-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "compare with yesterday",
+        "vs yesterday?",
+        "how does that compare to yesterday"
+      ]
+    }
+  ]
+}

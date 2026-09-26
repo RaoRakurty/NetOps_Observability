@@ -1,0 +1,459 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "configuration",
+  "cases": [
+    {
+      "id": "configuration-001",
+      "category": "configuration",
+      "question": "Show config changes on dfw-core-1 today.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [
+          {
+            "input": "dfw-core-1",
+            "type": "device",
+            "id": "device:dfw-core-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:dfw-core-1"
+            }
+          ],
+          "filters": [
+            {
+              "field": "type",
+              "op": "eq",
+              "values": [
+                "CONFIG_CHANGE"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1043"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "dfw-core-1 config changes today",
+        "configuration edits on DFW-CORE-1 since midnight",
+        "what config changed on dfw core today"
+      ]
+    },
+    {
+      "id": "configuration-002",
+      "category": "configuration",
+      "question": "What config backups were captured in the last 24 hours?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "source",
+              "op": "eq",
+              "values": [
+                "config_capture"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "24h"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1043",
+            "change:chg-1053"
+          ],
+          "min_rows": 2
+        }
+      },
+      "paraphrases": [
+        "config captures last 24h",
+        "config backups taken past day",
+        "which configs were captured in the last day"
+      ]
+    },
+    {
+      "id": "configuration-003",
+      "category": "configuration",
+      "question": "Show configuration changes across NYC this week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [
+          {
+            "input": "NYC",
+            "type": "site",
+            "id": "site:nyc-dc",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:nyc-dc"
+            }
+          ],
+          "filters": [
+            {
+              "field": "type",
+              "op": "eq",
+              "values": [
+                "CONFIG_CHANGE"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1053"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "nyc config changes this week",
+        "config edits at the new york dc since monday",
+        "configuration changes nyc this week"
+      ]
+    },
+    {
+      "id": "configuration-004",
+      "category": "configuration",
+      "question": "Who touched the ACLs on dfw-fw-1 in the last 2 days?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [
+          {
+            "input": "dfw-fw-1",
+            "type": "device",
+            "id": "device:dfw-fw-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:dfw-fw-1"
+            }
+          ],
+          "filters": [
+            {
+              "field": "type",
+              "op": "eq",
+              "values": [
+                "SECURITY_POLICY_CHANGE"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "2d"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1045"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "acl changes dfw-fw-1 last 2 days - who",
+        "who edited acls on DFW-FW-1 past 48 hours",
+        "dfw firewall acl changes last two days"
+      ]
+    },
+    {
+      "id": "configuration-005",
+      "category": "configuration",
+      "question": "Show changes to route-map COMCAST-IN this week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "object",
+              "op": "eq",
+              "values": [
+                "route-map COMCAST-IN"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1042"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "route-map COMCAST-IN changes this week",
+        "who changed COMCAST-IN since monday",
+        "edits to the COMCAST-IN route-map this week"
+      ]
+    },
+    {
+      "id": "configuration-006",
+      "category": "configuration",
+      "question": "Show infrastructure changes in the last 7 days.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "class",
+              "op": "eq",
+              "values": [
+                "infrastructure"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "7d"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1043",
+            "change:chg-1048",
+            "change:chg-1051",
+            "change:chg-1053"
+          ],
+          "min_rows": 4
+        }
+      },
+      "paraphrases": [
+        "infra changes past week",
+        "infrastructure changes last 7 days",
+        "what infra changed this past week"
+      ]
+    },
+    {
+      "id": "configuration-007",
+      "category": "configuration",
+      "question": "Show interface config changes this week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "object_kind",
+              "op": "eq",
+              "values": [
+                "interface"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1043"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "interface config changes this week",
+        "changes to interface configs since monday",
+        "which interface configs changed this week"
+      ]
+    },
+    {
+      "id": "configuration-008",
+      "category": "configuration",
+      "question": "Show the before and after of the last config change on dfw-core-1.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "change_diff",
+        "entities": [
+          {
+            "input": "dfw-core-1",
+            "type": "device",
+            "id": "device:dfw-core-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:dfw-core-1"
+            }
+          ],
+          "filters": [
+            {
+              "field": "type",
+              "op": "eq",
+              "values": [
+                "CONFIG_CHANGE"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "7d"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ],
+          "limit": 1
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_diff",
+          "must_include_refs": [
+            "change:chg-1043"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "diff of the latest config change on dfw-core-1",
+        "before/after last DFW-CORE-1 config change",
+        "last config diff dfw core 1"
+      ]
+    }
+  ]
+}
