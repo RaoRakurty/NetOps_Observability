@@ -202,17 +202,25 @@ func (ix *DocsIndex) All() []DocChunk { return ix.chunks }
 //	0.17  "configure vmware vsphere drs affinity for my cluster"   → must decline
 //	0.34  "reset my kubernetes ingress controller certificate …"   → must decline
 //	0.39  "how do I tune the jvm heap on my elasticsearch data …"  → must decline
-//	0.56  lowest golden docs question (docs-019)                    → must retrieve
+//	0.60  lowest of the 61 golden docs questions (docs-004)         → must retrieve
 //	0.81  "walk me through onboarding my very first device"        → must retrieve
 //	1.00  "how do I set up SNMP discovery"                         → must retrieve
 //
 // Folding raised every ratio — "certificates" now matches "certificate", "heaps"
 // matches "heap" — so the pre-folding floor of 0.30 let the kubernetes and jvm
 // questions through on incidental words. 0.45 sits between the highest
-// must-decline (0.39) and the lowest must-retrieve (0.56). Both sides are
+// must-decline (0.39) and the lowest must-retrieve (0.60). Both sides are
 // pinned by docs_relevance_test.go, so re-tuning it requires re-stating the
 // evidence.
+//
+// It is a QUESTION-level floor: it is compared with the best chunk's ratio
+// (the quantity the evidence above measures). Each individual chunk then
+// only has to clear docsChunkMinSpecificity, the original 0.30.
 const docsMinSpecificity = 0.45
+
+// docsChunkMinSpecificity is the per-chunk share of the question's IDF a hit
+// must match once the question as a whole has cleared docsMinSpecificity.
+const docsChunkMinSpecificity = 0.30
 
 // Search runs BM25 over the corpus and returns the top hits. Three honesty
 // floors, in order:
@@ -220,8 +228,9 @@ const docsMinSpecificity = 0.45
 //  1. TERM COVERAGE — a chunk qualifies only when it matches ≥2 distinct query
 //     terms, or 1 term that appears in its page/section title, so a lone
 //     incidental body word never surfaces documentation.
-//  2. SPECIFICITY (absolute) — the matched terms must carry ≥ docsMinSpecificity
-//     of the query's total IDF. This is the floor that lets the index say "the
+//  2. SPECIFICITY (absolute) — the best chunk's matched terms must carry
+//     ≥ docsMinSpecificity of the query's total IDF, and every returned chunk
+//     ≥ docsChunkMinSpecificity. This is the floor that lets the index say "the
 //     corpus does not cover this" instead of always returning its best guess.
 //  3. LEAGUE (relative) — the tail is trimmed to hits in the leader's league.
 //
@@ -301,6 +310,7 @@ func (ix *DocsIndex) Search(query string, limit int) []DocsHit {
 		})
 	}
 	var hits []DocsHit
+	bestIDF := 0.0
 	for _, c := range cands {
 		// ≥2 matched terms, or a title match covering at least half the query —
 		// so "syslog" finds the Syslog page, but one incidental word ("chart" in
@@ -308,12 +318,25 @@ func (ix *DocsIndex) Search(query string, limit int) []DocsHit {
 		if !(c.matched >= 2 || (c.inTitle && c.matched*2 >= len(qterms))) {
 			continue
 		}
-		// Floor 2: the matched terms must carry enough of the question. Without
-		// this an out-of-scope question still gets the corpus's least-bad page.
-		if queryIDF > 0 && c.matchedIDF < docsMinSpecificity*queryIDF {
+		if c.matchedIDF > bestIDF {
+			bestIDF = c.matchedIDF
+		}
+		// Floor 2b (per chunk): the chunk's own matched terms must carry a real
+		// share of the question, so a chunk that shares only filler with it
+		// never rides along behind a good hit.
+		if queryIDF > 0 && c.matchedIDF < docsChunkMinSpecificity*queryIDF {
 			continue
 		}
 		hits = append(hits, c.hit)
+	}
+	// Floor 2a (per question): when even the best chunk covers too little of
+	// the question, the corpus does not know what it is about — decline it
+	// outright. This is the stricter floor; applying it per chunk instead
+	// would drop the right page whenever the question carries words that page
+	// does not use ("pin an incident onto the topology view to see its blast
+	// radius" → the topology page never says "blast radius").
+	if queryIDF > 0 && bestIDF < docsMinSpecificity*queryIDF {
+		return nil
 	}
 	sort.SliceStable(hits, func(i, j int) bool {
 		if hits[i].Score != hits[j].Score {

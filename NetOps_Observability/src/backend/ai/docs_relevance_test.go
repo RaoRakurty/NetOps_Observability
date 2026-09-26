@@ -126,7 +126,7 @@ func TestDocsRelevanceFloorIsCalibrated(t *testing.T) {
 		{"configure vmware vsphere drs affinity for my cluster", false},
 		{"reset my kubernetes ingress controller certificate rotation policy", false},
 		{"how do I tune the jvm heap on my elasticsearch data nodes", false},
-		{"pin an incident onto the topology view to see its blast radius", true},
+		{"create a monitor that alerts when interface errors climb", true},
 		{"walk me through onboarding my very first device", true},
 		{"how do I set up SNMP discovery", true},
 	}
@@ -157,5 +157,79 @@ func TestDocsRelevanceFloorOnlyRemoves(t *testing.T) {
 				t.Errorf("%q: results are no longer score-ordered at %d", q, i)
 			}
 		}
+	}
+}
+
+// chunkSpecificity is specificity() for one chunk: the share of the question's
+// IDF that this chunk's terms match. -1 when the chunk is not in the index.
+func chunkSpecificity(ix *DocsIndex, query, id string) float64 {
+	qterms := docsQueryTerms(query)
+	n := float64(ix.Len())
+	idf := func(term string) float64 {
+		df := float64(ix.df[term])
+		return math.Log(1 + (n-df+0.5)/(df+0.5))
+	}
+	total := 0.0
+	for _, q := range qterms {
+		total += idf(q)
+	}
+	for i, c := range ix.chunks {
+		if c.ID != id {
+			continue
+		}
+		present := map[string]bool{}
+		for _, t := range ix.terms[i] {
+			present[t] = true
+		}
+		m := 0.0
+		for _, q := range qterms {
+			if present[q] {
+				m += idf(q)
+			}
+		}
+		return m / total
+	}
+	return -1
+}
+
+// TestDocsFloorIsPerQuestionNotPerChunk — the strict floor asks whether the
+// corpus knows what the QUESTION is about. Applied per chunk it dropped the
+// right page whenever the question used words that page does not: the
+// topology canvas explains pinning an incident but never says "blast radius",
+// so its own ratio sits under docsMinSpecificity. It must still be returned,
+// because a better-covered chunk proves the question is in scope, and it
+// clears the per-chunk floor.
+func TestDocsFloorIsPerQuestionNotPerChunk(t *testing.T) {
+	ix := goldenIndex()
+	if ix.Len() == 0 {
+		t.Skip("no documentation corpus embedded in this build")
+	}
+	const q = "Pin an incident onto the topology view to see its blast radius"
+	const id = "doc:infrastructure/topology-canvas#step-4---pin-an-incident-in-investigate-mode"
+	got := chunkSpecificity(ix, q, id)
+	if got < 0 {
+		t.Fatalf("chunk %s is missing from the corpus — the page moved; update this test", id)
+	}
+	if got >= docsMinSpecificity || got < docsChunkMinSpecificity {
+		t.Fatalf("precondition: want the chunk's own ratio between %.2f and %.2f, got %.3f — pick another probe",
+			docsChunkMinSpecificity, docsMinSpecificity, got)
+	}
+	found := false
+	for _, h := range ix.Search(q, 3) {
+		if h.Chunk.ID == id {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the topology page (own ratio %.3f) must be retrieved once the question clears the question-level floor", got)
+	}
+	// The other side: a question whose BEST chunk is under the floor returns
+	// nothing at all, however many chunks clear the per-chunk floor.
+	const out = "how do I tune the jvm heap on my elasticsearch data nodes"
+	if specificity(ix, out) >= docsMinSpecificity {
+		t.Fatal("precondition: the jvm question must sit under the question-level floor")
+	}
+	if hits := ix.Search(out, 3); len(hits) != 0 {
+		t.Fatalf("an out-of-scope question must return nothing, got %s", hits[0].Chunk.ID)
 	}
 }
