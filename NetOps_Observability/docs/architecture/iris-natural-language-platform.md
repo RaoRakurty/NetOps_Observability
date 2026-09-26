@@ -354,7 +354,7 @@ returns data, `pgintegration` when it touches PG, and the CI gate (§12). Effort
 | N-A1 | **Land D9 model tiers** (recovered): rebase, full gate; tier fields in the AI settings UI | — | 0.5 |
 | N-A2 | **Finish D10 change tools**: populate the `RecentChanges`/`ConfigDiff` seams through config authz; unit + §3a isolation tests; a skill hop that uses them | A1 | 1 |
 | N-A3 | **Finish D19 scorecard**: tests, wire `ScoreSink`, emit the §7 KPI set incl. time-to-evidence-backed-diagnosis; vmalert rules + dashboard | — | 2 |
-| N-A4 | **Model gateway hygiene**: retry with backoff + jitter (§9), structured-output (JSON-schema) call on `LLMClient`, real token/cost accounting on every path (persisted, per tenant), model id + prompt version on every call | A1 | 2 |
+| N-A4 | **Model gateway hygiene**: retry with backoff + jitter (§9), real provider-reported token accounting on every path, every grounded call charged against (and refused by) the tenant budget. *Structured-output (JSON-schema) calls move to N-C5, which owns the schema they validate against; model id + prompt version per call move to N-A6, which persists them.* | A1 | 2 |
 | N-A5 | **One brain, one registry**: copilot loop and grounded engine share one tool registry (Phase-A tools + `search_docs`) behind the same double `EvaluateTool`; drop client assistant turns | A4 | 1.5 |
 | N-A6 | **Decision ledger**: `ai_decision_ledger` (PG, append-only, RLS) — Part 1 §35 event types, model/tool versions, SHA-256 of args/results, persisted answer id; `/api/ai/ask` enters the platform audit trail | — | 2 |
 | N-A7 | **Atomic AI entitlements** (`ai.chat`, `ai.investigate`, `ai.nlquery`, `ai.context.author`, `ai.runbook.author`, `ai.mcp`) mapped from existing flags/tiering — no plan names in code | — | 1 |
