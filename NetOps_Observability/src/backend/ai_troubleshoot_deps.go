@@ -45,6 +45,7 @@ import (
 
 	"netops/backend/ai"
 	"netops/backend/internal/bgpdepth"
+	"netops/backend/internal/chschema"
 	"netops/backend/internal/configdrift"
 	"netops/backend/internal/configstore"
 	"netops/backend/internal/dem/experience"
@@ -2271,8 +2272,13 @@ func (h *nlqScope) Circuits(ctx context.Context, f plan.CircuitFilter) ([]plan.C
 
 // incidentRow maps one corr_current row. start is window_start — when the
 // incident BEGAN — not created_at, which is the latest version's time.
-func incidentRowFrom(r map[string]any) plan.IncidentRow {
-	start, _ := time.Parse(time.RFC3339Nano, asStr(r["window_start"]))
+func incidentRowFrom(r map[string]any) (plan.IncidentRow, error) {
+	start, err := time.Parse(time.RFC3339Nano, asStr(r["start_iso"]))
+	if err != nil {
+		// A start time we cannot read would anchor every incident window at
+		// the zero time — refuse the row loudly rather than answer wrongly.
+		return plan.IncidentRow{}, fmt.Errorf("incident %s: unreadable window_start %q: %w", asStr(r["correlation_id"]), asStr(r["start_iso"]), err)
+	}
 	id := asStr(r["correlation_id"])
 	row := plan.IncidentRow{
 		ID: id, DisplayID: noclabel.ProblemDisplayID(id), Title: noclabel.ProblemTitle(asStr(r["top_hypothesis"]), id),
@@ -2287,23 +2293,47 @@ func incidentRowFrom(r map[string]any) plan.IncidentRow {
 		_ = json.Unmarshal([]byte(raw), &aff) // best-effort: a malformed blob just lists no sites/devices
 	}
 	row.Sites, row.Devices = aff.Sites, aff.Devices
-	return row
+	return row, nil
 }
 
-const nlqIncidentCols = `toString(correlation_id) AS correlation_id, state, verdict_tier, seam_type, top_hypothesis,
-       top_confidence, affected, ` + "`window_start`"
+var nlqIncidentCols = `toString(correlation_id) AS correlation_id, state, verdict_tier, seam_type, top_hypothesis,
+       top_confidence, affected, ` + chschema.ISO("window_start") + ` AS start_iso`
 
 func (h *nlqScope) Incidents(ctx context.Context, q plan.IncidentQuery) ([]plan.IncidentRow, bool, error) {
-	if len(q.Owners) > 0 {
-		return nil, false, errors.New("filtering incidents by owner is not supported yet")
+	sql, limit, err := nlqIncidentsSQL(q, h.s.tenantIDExcludeCondFor(h.claims, "tenant_id"))
+	if err != nil {
+		return nil, false, err
 	}
+	rows, err := h.s.chRowsScope(ctx, h.s.chTenantScopeFor(h.claims), sql, "iris:nlquery:incidents")
+	if err != nil {
+		return nil, false, err
+	}
+	out := make([]plan.IncidentRow, 0, len(rows))
+	for i, r := range rows {
+		if i == limit {
+			return out, true, nil
+		}
+		row, err := incidentRowFrom(r)
+		if err != nil {
+			return nil, false, err
+		}
+		out = append(out, row)
+	}
+	return out, false, nil
+}
+
+// nlqIncidentsSQL builds the incident list read. Pure, so the exact text is
+// testable against a real ClickHouse. Tenant scope is NOT in this text: it is
+// the tenant_scope setting (row policies) the caller passes to chRowsScope,
+// plus the operator-restriction condition passed in as exclude.
+func nlqIncidentsSQL(q plan.IncidentQuery, exclude string) (string, int, error) {
 	conds := []string{
 		"window_start >= toDateTime64(" + strconv.FormatInt(q.From.Unix(), 10) + ", 3)",
 		"window_start <= toDateTime64(" + strconv.FormatInt(q.To.Unix(), 10) + ", 3)",
 		"chaos_fixture = ''", "debug_excluded = 0",
 	}
-	if c := h.s.tenantIDExcludeCondFor(h.claims, "tenant_id"); c != "" {
-		conds = append(conds, c)
+	if exclude != "" {
+		conds = append(conds, exclude)
 	}
 	in := func(col string, vals []string) {
 		if len(vals) > 0 {
@@ -2313,13 +2343,15 @@ func (h *nlqScope) Incidents(ctx context.Context, q plan.IncidentQuery) ([]plan.
 	in("state", q.States)
 	in("verdict_tier", q.Tiers)
 	in("seam_type", q.SeamTypes)
+	in("owner", q.Owners)
 	if stringSet(q.States)["open"] {
 		conds = append(conds, "created_at >= now() - INTERVAL "+strconv.Itoa(int(nlqIncidentLiveness.Hours()))+" HOUR")
 	}
 	if q.MinConf > 0 {
 		conds = append(conds, "top_confidence >= "+strconv.FormatFloat(q.MinConf, 'f', 4, 64))
 	}
-	for key, vals := range map[string][]string{"sites": q.Sites, "devices": q.Devices, "apps": q.Apps} {
+	for _, key := range []string{"sites", "devices", "apps"} {
+		vals := map[string][]string{"sites": q.Sites, "devices": q.Devices, "apps": q.Apps}[key]
 		if len(vals) > 0 {
 			conds = append(conds, "hasAny(JSONExtract(affected, '"+key+"', 'Array(String)'), ["+sqlInList(vals)+"])")
 		}
@@ -2332,20 +2364,8 @@ func (h *nlqScope) Incidents(ctx context.Context, q plan.IncidentQuery) ([]plan.
 	if limit <= 0 || limit > 200 {
 		limit = 200
 	}
-	sql := "SELECT " + nlqIncidentCols + " FROM netops.corr_current FINAL WHERE " + strings.Join(conds, " AND ") +
-		" ORDER BY window_start " + order + " LIMIT " + strconv.Itoa(limit+1) + " FORMAT JSON"
-	rows, err := h.s.chRowsScope(ctx, h.s.chTenantScopeFor(h.claims), sql, "iris:nlquery:incidents")
-	if err != nil {
-		return nil, false, err
-	}
-	out := make([]plan.IncidentRow, 0, len(rows))
-	for i, r := range rows {
-		if i == limit {
-			return out, true, nil
-		}
-		out = append(out, incidentRowFrom(r))
-	}
-	return out, false, nil
+	return "SELECT " + nlqIncidentCols + " FROM netops.corr_current FINAL WHERE " + strings.Join(conds, " AND ") +
+		" ORDER BY window_start " + order + " LIMIT " + strconv.Itoa(limit+1) + " FORMAT JSON", limit, nil
 }
 
 func (h *nlqScope) Incident(ctx context.Context, id string) (plan.IncidentDetail, error) {
@@ -2364,7 +2384,11 @@ func (h *nlqScope) Incident(ctx context.Context, id string) (plan.IncidentDetail
 	if len(rows) == 0 {
 		return plan.IncidentDetail{}, plan.ErrNotFound
 	}
-	det := plan.IncidentDetail{Row: incidentRowFrom(rows[0])}
+	row, err := incidentRowFrom(rows[0])
+	if err != nil {
+		return plan.IncidentDetail{}, err
+	}
+	det := plan.IncidentDetail{Row: row}
 	if res, rerr := h.s.aiRCAResult(h.r, h.claims)(ctx, ai.Principal{}, id); rerr == nil {
 		det.Detail = res
 	}

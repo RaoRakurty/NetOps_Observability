@@ -210,3 +210,43 @@ func TestChangeMatchesAppliesEveryFilter(t *testing.T) {
 		}
 	}
 }
+
+// incidentRowFrom reads the ISO start the adapter selects (chschema.ISO), and
+// an unreadable start is an ERROR — never a zero time that would anchor every
+// incident window at 1970.
+func TestIncidentRowFromParsesTheSelectedStart(t *testing.T) {
+	row, err := incidentRowFrom(map[string]any{"correlation_id": "c-1", "start_iso": "2026-09-21T10:17:00.000Z",
+		"affected": `{"sites":["dfw-hq"],"devices":["edge-1"]}`, "top_confidence": 0.9})
+	if err != nil || row.CreatedAt.IsZero() || row.CreatedAt.Hour() != 10 || row.Sites[0] != "dfw-hq" {
+		t.Fatalf("row = %+v err = %v", row, err)
+	}
+	if _, err := incidentRowFrom(map[string]any{"correlation_id": "c-2", "start_iso": "2026-09-21 10:17:00.000"}); err == nil {
+		t.Fatal("a non-ISO start must be an error, not a zero time")
+	}
+	if !strings.Contains(nlqIncidentCols, `AS start_iso`) || strings.Contains(nlqIncidentCols, "AS window_start") {
+		t.Fatal("window_start must be selected through chschema.ISO under a NON-shadowing alias")
+	}
+}
+
+// The incident SQL (verified against ClickHouse 24.8 with the production
+// init.sql and custom settings on 2026-09-26: row-policy isolation held for
+// two tenants on the same site; chaos fixtures and other sites excluded;
+// backslash values stayed inside their literals). This pins its shape.
+func TestNLQIncidentsSQLShape(t *testing.T) {
+	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	sql, limit, err := nlqIncidentsSQL(plan.IncidentQuery{From: now.Add(-time.Hour), To: now, States: []string{"open"},
+		Owners: []string{"NOC"}, Sites: []string{`dfw\`}, Limit: 500, NewestFirst: true}, "tenant_id NOT IN ('t-z')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"FROM netops.corr_current FINAL", "chaos_fixture = ''", "debug_excluded = 0",
+		"tenant_id NOT IN ('t-z')", "state IN ('open')", "owner IN ('NOC')", "created_at >= now() - INTERVAL 24 HOUR",
+		`['dfw\\']`, "AS start_iso", "ORDER BY window_start DESC", "LIMIT 201"} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("SQL missing %q:\n%s", want, sql)
+		}
+	}
+	if limit != 200 || strings.Contains(sql, "tenant_scope") {
+		t.Fatalf("limit=%d — and tenant scope must be the SETTING, not SQL text", limit)
+	}
+}
