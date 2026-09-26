@@ -28,7 +28,7 @@ import (
 // Recomputed here from the index's own document frequencies so the test measures
 // the property, not the implementation.
 func specificity(ix *DocsIndex, query string) float64 {
-	qterms := tokenize(query)
+	qterms := docsQueryTerms(query) // folded exactly as Search folds it
 	if len(qterms) == 0 || ix.Len() == 0 {
 		return 0
 	}
@@ -125,6 +125,8 @@ func TestDocsRelevanceFloorIsCalibrated(t *testing.T) {
 	}{
 		{"configure vmware vsphere drs affinity for my cluster", false},
 		{"reset my kubernetes ingress controller certificate rotation policy", false},
+		{"how do I tune the jvm heap on my elasticsearch data nodes", false},
+		{"pin an incident onto the topology view to see its blast radius", true},
 		{"walk me through onboarding my very first device", true},
 		{"how do I set up SNMP discovery", true},
 	}
