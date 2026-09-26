@@ -150,10 +150,14 @@ func str(v any) string {
 	return ""
 }
 
+// sqlInList renders a quoted ClickHouse list. Both the quote AND the backslash
+// are escaped: ClickHouse reads backslash escapes inside a literal, so a value
+// ending in `\` could otherwise escape its own closing quote (§3).
 func sqlInList(vals []string) string {
+	esc := strings.NewReplacer(`\`, `\\`, `'`, `\'`)
 	parts := make([]string, 0, len(vals))
 	for _, v := range vals {
-		parts = append(parts, "'"+strings.ReplaceAll(v, "'", "''")+"'")
+		parts = append(parts, "'"+esc.Replace(v)+"'")
 	}
 	return strings.Join(parts, ", ")
 }

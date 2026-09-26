@@ -146,8 +146,12 @@ func isUUIDToken(s string) bool {
 
 // ── rollup SQL (Phase-2 W4.11, from main's svc_rollup_worker.go) ─────────────
 
+// SQLStringLiteral renders a single-quoted ClickHouse literal. Both the quote
+// AND the backslash are escaped: ClickHouse reads backslash escapes inside a
+// literal, so doubling only the quote let a value ending in `\` escape its own
+// closing quote. Selector values are tenant-authored, i.e. untrusted (§3).
 func SQLStringLiteral(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(s) + "'"
 }
 
 // RollupInsertSQL renders the single per-tenant attribution statement for
