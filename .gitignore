@@ -4,6 +4,13 @@ Netops/
 secrets_wrapped_keys.json
 **/secrets_wrapped_keys.json
 
-# Local Claude Code config / skills (not shared)
+# Local Claude Code config (not shared): settings, caches, worktrees.
+# EXCEPTION, deliberately force-added and therefore tracked:
+#   .claude/agents/*.md                     - CLAUDE.md §17 routes work to the
+#     `researcher` and `scout` agents, so their definitions must travel with the
+#     repo or §17 is unenforceable on a fresh clone.
+#   NetOps_Observability/.claude/skills/    - the topology-ui skill (pre-existing).
+# A gitignore negation cannot re-include these: git will not descend into a
+# parent directory excluded by `.claude/`. Force-add is the only mechanism.
 .claude/
 NetOps_Observability/scripts/installer-gui/installer-gui

@@ -423,3 +423,83 @@ The full rules (16.1 never swallow an error · 16.2 cron's hostile environment �
 in **`NetOps_Observability/scripts/CLAUDE.md`**, which loads automatically when
 you work on scripts. **Read it before writing or editing ANY shell script in
 this repo** — including ones outside `scripts/` (`tests/`, `deployment/docker/`).
+
+---
+
+## 17. MODEL & TOKEN USAGE
+
+### Prime rule
+Code and test quality is never traded for cost — not by 1%. Save tokens only by
+removing **waste** (redundant reads, stale context, repeated work). Never save
+by using a weaker model, lower effort, fewer tests, or skipped verification on
+anything that produces or judges code, tests, config, or scripts.
+
+### Model routing (automatic — never ask me to switch)
+The main session runs **Opus** (`opus[1m]`, set in user settings). Routing
+happens by delegation, without asking:
+
+| Work | Who does it | Model |
+|---|---|---|
+| Research & analysis: architecture/design decisions, docs/specs/RFCs, root-cause & post-mortem analysis, CVE/advisory impact, §6 allowlist evaluation, comparing approaches, planning a change | `researcher` subagent | **Fable**, high |
+| Writing or changing Go, TypeScript/React, Python, shell (§16), SQL/migrations, compose/vector/vmalert config | main session | **Opus**, high |
+| Writing and running tests — unit, integration, `-race`, promtool, §3a isolation tests | main session | **Opus**, high |
+| Debugging, CI fixes, code review, security review (§3, §3a, §8, §15) | main session | **Opus**, high |
+| Read-only legwork: locating files/symbols, grep sweeps, condensing long logs/output | `scout` subagent | Haiku |
+
+Rules:
+- For any non-trivial task, **delegate the research/planning phase to
+  `researcher` first**, then implement and test in the main session from its
+  plan. Do this on your own; don't ask permission to delegate.
+- Anything whose output becomes code, a test, a config, a review verdict, a
+  tracker/invariant update, or a design decision is done by **Opus (main) or
+  Fable (`researcher`)** — no "it's a one-liner" exceptions.
+- `scout` only **gathers or condenses**. Its findings are leads to verify, never
+  conclusions. It never edits files.
+- Security-, tenant-isolation-, auth-, and dependency-touching work is always
+  Opus (implementation) or Fable (analysis) at high effort.
+- Never downgrade the main session's model or effort to save tokens.
+- If the `researcher` agent is unavailable, do the research phase in the main
+  session on Opus at high effort. Never skip or shorten research because
+  the agent is missing.
+
+### Token discipline (waste only)
+- **Start from current state:** `docs/TRACKER.md` + `docs/audit/INVARIANTS.md`.
+  Never read `docs/archive/` or `network-automation-mpls-l3vpn/` unless the
+  task specifically needs past rationale.
+- **Read precisely:** search first, then read only the relevant files/ranges.
+  Don't re-read a file already in context unless it changed.
+- **Delegate broad sweeps** to `scout` and bring back only the conclusion,
+  not file dumps. Subagent work stays out of the main context.
+- **Plan once, build once:** for multi-file or cross-service changes, get the
+  plan from `researcher` before writing code, so nothing is redone.
+- **Context hygiene:** auto-compaction handles long sessions; before a large
+  phase ends, record decisions and open items in `docs/TRACKER.md` or the plan
+  so nothing is lost when context is compacted.
+- **Context size:** 1M context (`opus[1m]`) is the default. Use it to keep long
+  sessions intact, but never read files just because there's room. Read
+  precisely either way.
+- **Trim noisy output** (`-q`, `tail`, `grep`) while iterating — but always show
+  the full output of any failing check.
+- **Replies:** concise. No restating the task, no repeated summaries, no pasting
+  code already visible in the diff.
+
+### Test in layers (fast while iterating, complete before done)
+- **While iterating:** run only the affected package(s), e.g.
+  `go test ./internal/<pkg>/...`, the relevant `pytest` file, or the relevant
+  promtool test.
+- **Before declaring done — always, in full:** `go vet ./...`,
+  `go test -race ./...`, `staticcheck ./...`, `gosec ./...`, `govulncheck ./...`,
+  `golangci-lint run`, `scripts/preflight-configs.sh`, `pytest`, and
+  `npm run build` if the frontend changed. Any failure = not done (§12).
+- A feature that stores or returns data is not done without its §3a isolation
+  test passing.
+- Never run `scripts/stack-watchdog.sh --test` to save time or to "check"; it
+  pages the owner's phone.
+
+### Never do to save tokens
+- Use Haiku/Sonnet to write, fix, or review code, tests, config, or scripts.
+- Lower effort on design, coding, testing, or review.
+- Skip or shorten tests, edge cases, failure paths, `-race`, or isolation tests.
+- Skip the final full gate run, or claim something works without running it.
+- Stop a bug investigation before the root cause is proven.
+- Build on a premise without verifying it against the code.
