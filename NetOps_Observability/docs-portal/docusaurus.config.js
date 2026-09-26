@@ -31,8 +31,10 @@ const config = {
   // A dead link in an administration guide costs an operator their time in the
   // middle of an incident. Both are hard failures.
   onBrokenLinks: 'throw',
-  onBrokenMarkdownLinks: 'throw',
   onBrokenAnchors: 'warn',
+  // Docusaurus 3.10 moved the markdown-link check under markdown.hooks; the
+  // policy is unchanged — a broken markdown link still fails the build.
+  markdown: { hooks: { onBrokenMarkdownLinks: 'throw' } },
 
   i18n: { defaultLocale: 'en', locales: ['en'] },
 

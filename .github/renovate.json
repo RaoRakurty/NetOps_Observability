@@ -541,7 +541,7 @@
       ]
     },
     {
-      "description": "8. DOCS PORTAL npm. Docusaurus 3.5.2 is pinned exact and its build chain is Node 18 (see the GHSA-5c6j-r48x-rmvq entry in .trivyignore.yaml). Grouped, never automerged, low priority -- it ships no product runtime code.",
+      "description": "8. DOCS PORTAL npm. Docusaurus is pinned exact (3.10.2 since 2026-09-26: 3.5.2 carried image-size 1.x, CVE-2025-71329/71330, fixed only in the 2.x line that 3.9+ uses) and builds on Node >= 20. Grouped, never automerged, low priority -- it ships no product runtime code.",
       "groupName": "docs portal",
       "matchManagers": [
         "npm"
