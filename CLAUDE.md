@@ -349,8 +349,16 @@ Mandatory tools:
 
 ## 12. CI/CD GUARDRAILS
 
-The gate is enforced mechanically in `.github/workflows/` (vet, test, `-race`,
-staticcheck, gosec, govulncheck — all blocking). ANY failure = BLOCK MERGE.
+The gate is enforced mechanically in `.github/workflows/`. **ANY failure = BLOCK
+MERGE.** Backend blocking jobs: `go build` / `go vet` / `go test`; `go test -race`
+(needs cgo, so it is meaningful only in CI); the `pgintegration` leg against a
+real Postgres, which carries part of the §3a RLS/isolation corpus; `govulncheck`;
+`staticcheck` + `gosec` on the crypto/trust packages (`tlsconfig`, `internalca`,
+`sealing`) only; and **repo-wide `golangci-lint`, which bundles staticcheck +
+gosec** for the rest of the tree — so a standalone repo-wide staticcheck/gosec
+run is NOT the gate and will report findings CI does not. Frontend adds
+`npm run build` and Playwright `npm run e2e`; the correlation engine has its own
+pytest suite. Run the gate from `src/backend` (the gate module).
 
 ---
 
@@ -428,11 +436,17 @@ this repo** — including ones outside `scripts/` (`tests/`, `deployment/docker/
 
 ## 17. MODEL & TOKEN USAGE
 
+**Scope of this section:** spend the right model and the right number of tokens
+on each task. It does NOT define the gate (§12 does) and it does not relax any
+rule in §1–§16. Where this section and another disagree, the other section wins
+and this one is the bug.
+
 ### Prime rule
 Code and test quality is never traded for cost — not by 1%. Save tokens only by
-removing **waste** (redundant reads, stale context, repeated work). Never save
-by using a weaker model, lower effort, fewer tests, or skipped verification on
-anything that produces or judges code, tests, config, or scripts.
+removing **waste** (redundant reads, stale context, repeated work, re-deriving
+what is already written down). Never save by using a weaker model, lower effort,
+fewer tests, or skipped verification on anything that produces or judges code,
+tests, config, or scripts.
 
 ### Model routing (automatic — never ask me to switch)
 The main session runs **Opus** (`opus[1m]`, set in user settings). Routing
@@ -444,32 +458,45 @@ happens by delegation, without asking:
 | Writing or changing Go, TypeScript/React, Python, shell (§16), SQL/migrations, compose/vector/vmalert config | main session | **Opus**, high |
 | Writing and running tests — unit, integration, `-race`, promtool, §3a isolation tests | main session | **Opus**, high |
 | Debugging, CI fixes, code review, security review (§3, §3a, §8, §15) | main session | **Opus**, high |
-| Read-only legwork: locating files/symbols, grep sweeps, condensing long logs/output | `scout` subagent | Haiku |
+| Read-only legwork: locating files/symbols, grep sweeps, condensing a long log or output **already written to a file** | `scout` subagent | Haiku |
+
+Agent definitions live in `.claude/agents/` and are tracked (force-added past the
+`.claude/` ignore rule) so this table is enforceable on a fresh clone. A new
+agent file is NOT hot-loaded when it creates the directory: that needs a restart.
+`/context` shows which agents loaded and from where.
 
 Rules:
-- For any non-trivial task, **delegate the research/planning phase to
-  `researcher` first**, then implement and test in the main session from its
-  plan. Do this on your own; don't ask permission to delegate.
+- **Delegate the research/planning phase to `researcher` when the work is
+  genuinely non-trivial** — it spans multiple files or services, the approach is
+  not obvious, or a premise needs proving. A single-file edit with a known shape
+  does not need a research round; spending one is itself waste. Do this on your
+  own; don't ask permission to delegate.
 - Anything whose output becomes code, a test, a config, a review verdict, a
   tracker/invariant update, or a design decision is done by **Opus (main) or
   Fable (`researcher`)** — no "it's a one-liner" exceptions.
 - `scout` only **gathers or condenses**. Its findings are leads to verify, never
   conclusions. It never edits files.
+- **Every subagent finding is a lead until verified in the main session.** They
+  are confidently wrong often enough that acting on one unverified costs more
+  than the check. This applies to `researcher` too.
 - Security-, tenant-isolation-, auth-, and dependency-touching work is always
   Opus (implementation) or Fable (analysis) at high effort.
 - Never downgrade the main session's model or effort to save tokens.
 - If the `researcher` agent is unavailable, do the research phase in the main
-  session on Opus at high effort. Never skip or shorten research because
-  the agent is missing.
+  session on Opus at high effort. Never skip or shorten research because the
+  agent is missing.
 
 ### Token discipline (waste only)
 - **Start from current state:** `docs/TRACKER.md` + `docs/audit/INVARIANTS.md`.
-  Never read `docs/archive/` or `network-automation-mpls-l3vpn/` unless the
-  task specifically needs past rationale.
+  Never read `docs/archive/` or `network-automation-mpls-l3vpn/` unless the task
+  specifically needs past rationale.
 - **Read precisely:** search first, then read only the relevant files/ranges.
   Don't re-read a file already in context unless it changed.
-- **Delegate broad sweeps** to `scout` and bring back only the conclusion,
-  not file dumps. Subagent work stays out of the main context.
+- **Delegate broad sweeps** to `scout` and bring back only the conclusion, not
+  file dumps. Subagent work stays out of the main context.
+- **One bounded question per agent.** Two agents with overlapping briefs pay
+  twice for one answer and then disagree. Give each a scope the other does not
+  touch, and say what is already known so it is not re-derived.
 - **Plan once, build once:** for multi-file or cross-service changes, get the
   plan from `researcher` before writing code, so nothing is redone.
 - **Context hygiene:** auto-compaction handles long sessions; before a large
@@ -483,16 +510,49 @@ Rules:
 - **Replies:** concise. No restating the task, no repeated summaries, no pasting
   code already visible in the diff.
 
-### Test in layers (fast while iterating, complete before done)
-- **While iterating:** run only the affected package(s), e.g.
-  `go test ./internal/<pkg>/...`, the relevant `pytest` file, or the relevant
-  promtool test.
-- **Before declaring done — always, in full:** `go vet ./...`,
-  `go test -race ./...`, `staticcheck ./...`, `gosec ./...`, `govulncheck ./...`,
-  `golangci-lint run`, `scripts/preflight-configs.sh`, `pytest`, and
-  `npm run build` if the frontend changed. Any failure = not done (§12).
-- A feature that stores or returns data is not done without its §3a isolation
-  test passing.
+### Test in layers (fast while iterating, CI is the verdict)
+**§12 owns the gate. `.github/workflows/` is the mechanical authority and this
+section deliberately does NOT restate its command list, because a second copy
+drifts and then lies.** What follows is only how to run things locally without
+waste, so CI round-trips are rare.
+
+- **Iterate narrow:** the affected package(s), the relevant `pytest` file, or the
+  relevant promtool test. Note most backend code is in the `src/backend` **root**
+  package (`ai/`, `alerts/`, `api/`, `appid/` … are top-level); `internal/` is a
+  minority, so `./internal/<pkg>/...` is usually not where the change is.
+- **Working directory matters.** Four `go.mod` files exist; the gate module is
+  `src/backend` — `./...` from the repo root matches nothing. Python is
+  `pytest tests` from `NetOps_Observability/` **plus** the correlation suite from
+  `src/correlation` (there is no root pytest config, so a bare `pytest` is
+  ambiguous and silently runs only one of them). Frontend is `src/frontend`, not
+  `docs-portal/`.
+- **Gate tools are not on PATH** — they live in `~/go/bin`; put it on PATH first.
+  `promtool` is not installed locally at all: `scripts/preflight-configs.sh`
+  runs promtool, vector and syslog-ng through docker and exits 2 without docker,
+  so it is not a standalone command.
+- **`go test` needs an explicit long timeout.** The root package alone runs
+  15–20 min and the 10 min default kills it. CI uses `-timeout 20m`; locally pass
+  `-timeout 60m`.
+- **`-race` is CI-only on this host.** There is no `gcc`/`cc` and
+  `CGO_ENABLED=0`, so the detector cannot build; CI runs it with `CGO_ENABLED=1`.
+  Never report a local run as race-clean.
+- **`golangci-lint` is the repo-wide lint gate and it bundles staticcheck + gosec**
+  (plus errcheck/noctx/errorlint). Run it in docker with `GOTOOLCHAIN=local` and
+  `-mod=vendor` from `src/backend`: the local binary is built with an older Go and
+  refuses a `go 1.26` module. Standalone `staticcheck`/`gosec` gate only
+  `./tlsconfig/... ./internalca/... ./sealing/...`, and the tree's `//nolint` /
+  `// #nosec` suppressions are golangci's, so a standalone repo-wide run is not
+  the gate and will report findings CI does not.
+- **The `pgintegration` build tag is a separate leg that `./...` never reaches**,
+  and it carries part of the §3a RLS/isolation corpus. A feature that stores or
+  returns data is therefore NOT done until `go test -tags=pgintegration` passes
+  against a real Postgres, in addition to its §3a isolation test.
+- **Declaring done means CI green on the branch, not a local pass.** Run locally
+  what this host can run — that is the token saving, fewer CI round-trips — but
+  the verdict is CI's, and `-race` and `govulncheck` (which needs the vuln
+  database) are only meaningful there.
+- **A docs-only change does not need the code gate.** CI still runs whatever
+  applies. Don't burn a full local suite to land a comment.
 - Never run `scripts/stack-watchdog.sh --test` to save time or to "check"; it
   pages the owner's phone.
 
@@ -500,6 +560,6 @@ Rules:
 - Use Haiku/Sonnet to write, fix, or review code, tests, config, or scripts.
 - Lower effort on design, coding, testing, or review.
 - Skip or shorten tests, edge cases, failure paths, `-race`, or isolation tests.
-- Skip the final full gate run, or claim something works without running it.
+- Claim something works without running it, or report a local pass as a gate pass.
 - Stop a bug investigation before the root cause is proven.
 - Build on a premise without verifying it against the code.
