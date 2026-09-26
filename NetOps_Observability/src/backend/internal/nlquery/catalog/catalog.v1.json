@@ -24,7 +24,7 @@
    "name": "device",
    "description": "A network device (router, switch, firewall, SD-WAN edge)",
    "id_prefix": "device:",
-   "id_pattern": "^device:[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+   "id_pattern": "^device:[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
    "name_fields": [
     "name",
     "id"
@@ -53,7 +53,7 @@
    "name": "interface",
    "description": "An interface (port) on a device",
    "id_prefix": "interface:",
-   "id_pattern": "^interface:[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+   "id_pattern": "^interface:[A-Za-z0-9][A-Za-z0-9._:-]{0,127}/[A-Za-z0-9._:/-]{1,64}$",
    "name_fields": [
     "ifName",
     "ifAlias"
@@ -112,7 +112,7 @@
    "name": "bgp_peer",
    "description": "A BGP session between a device and a neighbour",
    "id_prefix": "bgp_peer:",
-   "id_pattern": "^bgp_peer:[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+   "id_pattern": "^bgp_peer:[A-Za-z0-9][A-Za-z0-9._:-]{0,127}/[0-9A-Fa-f.:]{2,45}(@[A-Za-z0-9._-]{1,32})?$",
    "name_fields": [
     "peer"
    ],

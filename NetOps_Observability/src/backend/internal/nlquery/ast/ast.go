@@ -208,3 +208,11 @@ func ParseDuration(s string) (time.Duration, error) {
 	unit := map[string]time.Duration{"m": time.Minute, "h": time.Hour, "d": 24 * time.Hour}[m[2]]
 	return time.Duration(n) * unit, nil
 }
+
+// LimitOr returns the query's limit, or def when unset.
+func (a *AST) LimitOr(def int) int {
+	if a.Limit > 0 {
+		return a.Limit
+	}
+	return def
+}

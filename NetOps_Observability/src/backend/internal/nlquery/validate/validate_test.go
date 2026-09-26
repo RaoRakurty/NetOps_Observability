@@ -223,3 +223,12 @@ func TestOSADistance(t *testing.T) {
 		}
 	}
 }
+
+func TestCompoundIDsNeedTheirDeviceAndName(t *testing.T) {
+	base := `{"v":1,"query_type":"metric_series","target":"interface","metric":"if_in_bps","entities":[{"type":"interface","id":"%s"}]}`
+	for _, bad := range []string{"interface:edge-1", "interface:edge/1/Gi0/0x y", "interface:/Gi0/0"} {
+		mustFail(t, fakeScope{}, strings.Replace(base, "%s", bad, 1), CodeInvalidEntityID)
+	}
+	mustFail(t, fakeScope{}, `{"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","entities":[{"type":"device","id":"device:a/b"}]}`, CodeInvalidEntityID)
+	mustFail(t, fakeScope{}, `{"v":1,"query_type":"metric_series","target":"bgp_peer","metric":"bgp_flaps","entities":[{"type":"bgp_peer","id":"bgp_peer:d1/not-an-ip"}]}`, CodeInvalidEntityID)
+}
