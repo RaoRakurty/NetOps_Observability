@@ -33,6 +33,7 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -46,6 +47,11 @@ import (
 	"netops/backend/internal/bgpdepth"
 	"netops/backend/internal/configdrift"
 	"netops/backend/internal/configstore"
+	"netops/backend/internal/dem/experience"
+	nlqast "netops/backend/internal/nlquery/ast"
+	"netops/backend/internal/nlquery/mql"
+	"netops/backend/internal/nlquery/plan"
+	"netops/backend/internal/noclabel"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/rca"
 	"netops/backend/internal/showparse"
@@ -2142,4 +2148,371 @@ func clipStrings(xs []string, n int, truncated *bool) []string {
 	}
 	*truncated = true
 	return xs[:n]
+}
+
+// ---- the NL query Scope (tracker 337 N-C4) ----------------------------------
+//
+// nlqScope is the ONLY root implementation of nlquery's plan.Scope and
+// validate.Scope. It is bound to one request's claims, and every read goes
+// through the chokepoint the UI's own pages use:
+//   - VictoriaMetrics: s.metricsScopeFiltersFor(claims) as extra_filters[]
+//     (server-side AND on every selector; a denied operator gets the
+//     no-visible-device sentinel);
+//   - ClickHouse: s.chTenantScopeFor(claims) as the tenant_scope setting (row
+//     policies) + s.tenantIDExcludeCondFor for the operator restriction;
+//   - devices / sites / circuits: the caller's visibility sets;
+//   - changes: the tenant from principalTenant(claims).
+// A structural guard test pins each of those calls.
+
+// nlqIncidentLiveness bounds "open" to the platform's liveness horizon: the
+// corr_current projection keeps rows open long after history closed them
+// (tracker 328), and the engine re-persists every live object every 15 min.
+const nlqIncidentLiveness = 24 * time.Hour
+
+type nlqScope struct {
+	s      *server
+	r      *http.Request
+	claims jwtClaims
+}
+
+func (s *server) nlqScopeFor(r *http.Request, claims jwtClaims) *nlqScope {
+	return &nlqScope{s: s, r: r, claims: claims}
+}
+
+func (h *nlqScope) Now() time.Time { return time.Now().UTC() }
+
+func (h *nlqScope) CrossTenant() bool {
+	_, cross := principalTenant(h.claims)
+	return cross
+}
+
+func (h *nlqScope) MetricRange(ctx context.Context, e mql.Expr, from, to time.Time, step time.Duration, maxSeries int) ([]plan.Series, bool, error) {
+	return h.s.vmRangeSeries(ctx, e.String(), from, to, step, h.s.metricsScopeFiltersFor(h.claims), maxSeries)
+}
+
+func (h *nlqScope) MetricInstant(ctx context.Context, e mql.Expr, at time.Time, maxSeries int) ([]plan.Sample, bool, error) {
+	query := e.String()
+	if !at.IsZero() {
+		// vmInstantScoped evaluates "now"; an explicit evaluation time is sent
+		// as an offset-free `time` by wrapping nothing — instead shift the
+		// expression, which keeps the one scoped entry point.
+		if d := time.Since(at); d > time.Minute {
+			shifted, err := mql.Offset(e, d.Truncate(time.Second))
+			if err != nil {
+				return nil, false, err
+			}
+			query = shifted.String()
+		}
+	}
+	raw, err := h.s.vmInstantScoped(ctx, query, h.s.metricsScopeFiltersFor(h.claims))
+	if err != nil {
+		return nil, false, err
+	}
+	out := make([]plan.Sample, 0, len(raw))
+	truncated := false
+	for _, v := range raw {
+		if len(out) == maxSeries {
+			truncated = true
+			break
+		}
+		out = append(out, plan.Sample{Labels: v.Labels, Value: v.Value})
+	}
+	return out, truncated, nil
+}
+
+// visibleDevices returns the caller's devices with their SoT site.
+func (h *nlqScope) visibleDevices() []plan.DeviceRef {
+	tenant, cross := principalTenant(h.claims)
+	assign := h.s.geoAssignments(tenant, cross)
+	var out []plan.DeviceRef
+	for _, d := range h.s.visibleDevicesFor(h.claims) {
+		out = append(out, plan.DeviceRef{ID: d.ID, Name: d.Name, Site: sotSiteFor(d, assign)})
+	}
+	return out
+}
+
+func (h *nlqScope) Devices(_ context.Context, f plan.DeviceFilter) ([]plan.DeviceRef, error) {
+	ids, sites := stringSet(f.IDs), stringSet(f.Sites)
+	var out []plan.DeviceRef
+	for _, d := range h.visibleDevices() {
+		if (len(ids) == 0 && len(sites) == 0) || ids[d.ID] || (d.Site != "" && sites[d.Site]) {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
+func (h *nlqScope) Circuits(ctx context.Context, f plan.CircuitFilter) ([]plan.CircuitRef, error) {
+	if len(f.Providers) > 0 {
+		// Provider → circuit needs the per-tenant alias table (N-C2). Until it
+		// exists there is no honest mapping, so a provider resolves to nothing
+		// (the planner then answers "nothing visible", never an unscoped read).
+		return nil, nil
+	}
+	_, circuits, err := h.s.wanProject(ctx, h.s.deviceVisibilityFor(h.claims))
+	if err != nil {
+		return nil, err
+	}
+	devs := map[string]plan.DeviceRef{}
+	for _, d := range h.visibleDevices() {
+		devs[d.Name] = d
+	}
+	ids, sites, devIDs := stringSet(f.IDs), stringSet(f.Sites), stringSet(f.Devices)
+	var out []plan.CircuitRef
+	for _, c := range circuits {
+		d := devs[c.Local.Device]
+		ref := plan.CircuitRef{ID: c.ID, LocalDevice: c.Local.Device, LocalIf: c.Local.Interface, Site: d.Site}
+		if ids[c.ID] || (ref.Site != "" && sites[ref.Site]) || devIDs[d.ID] {
+			out = append(out, ref)
+		}
+	}
+	return out, nil
+}
+
+// incidentRow maps one corr_current row. start is window_start — when the
+// incident BEGAN — not created_at, which is the latest version's time.
+func incidentRowFrom(r map[string]any) plan.IncidentRow {
+	start, _ := time.Parse(time.RFC3339Nano, asStr(r["window_start"]))
+	id := asStr(r["correlation_id"])
+	row := plan.IncidentRow{
+		ID: id, DisplayID: noclabel.ProblemDisplayID(id), Title: noclabel.ProblemTitle(asStr(r["top_hypothesis"]), id),
+		State: asStr(r["state"]), Tier: asStr(r["verdict_tier"]), SeamType: asStr(r["seam_type"]),
+		Confidence: asFloat(r["top_confidence"]), CreatedAt: start.UTC(),
+	}
+	var aff struct {
+		Sites   []string `json:"sites"`
+		Devices []string `json:"devices"`
+	}
+	if raw := asStr(r["affected"]); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &aff) // best-effort: a malformed blob just lists no sites/devices
+	}
+	row.Sites, row.Devices = aff.Sites, aff.Devices
+	return row
+}
+
+const nlqIncidentCols = `toString(correlation_id) AS correlation_id, state, verdict_tier, seam_type, top_hypothesis,
+       top_confidence, affected, ` + "`window_start`"
+
+func (h *nlqScope) Incidents(ctx context.Context, q plan.IncidentQuery) ([]plan.IncidentRow, bool, error) {
+	if len(q.Owners) > 0 {
+		return nil, false, errors.New("filtering incidents by owner is not supported yet")
+	}
+	conds := []string{
+		"window_start >= toDateTime64(" + strconv.FormatInt(q.From.Unix(), 10) + ", 3)",
+		"window_start <= toDateTime64(" + strconv.FormatInt(q.To.Unix(), 10) + ", 3)",
+		"chaos_fixture = ''", "debug_excluded = 0",
+	}
+	if c := h.s.tenantIDExcludeCondFor(h.claims, "tenant_id"); c != "" {
+		conds = append(conds, c)
+	}
+	in := func(col string, vals []string) {
+		if len(vals) > 0 {
+			conds = append(conds, col+" IN ("+sqlInList(vals)+")")
+		}
+	}
+	in("state", q.States)
+	in("verdict_tier", q.Tiers)
+	in("seam_type", q.SeamTypes)
+	if stringSet(q.States)["open"] {
+		conds = append(conds, "created_at >= now() - INTERVAL "+strconv.Itoa(int(nlqIncidentLiveness.Hours()))+" HOUR")
+	}
+	if q.MinConf > 0 {
+		conds = append(conds, "top_confidence >= "+strconv.FormatFloat(q.MinConf, 'f', 4, 64))
+	}
+	for key, vals := range map[string][]string{"sites": q.Sites, "devices": q.Devices, "apps": q.Apps} {
+		if len(vals) > 0 {
+			conds = append(conds, "hasAny(JSONExtract(affected, '"+key+"', 'Array(String)'), ["+sqlInList(vals)+"])")
+		}
+	}
+	order := "DESC"
+	if !q.NewestFirst {
+		order = "ASC"
+	}
+	limit := q.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 200
+	}
+	sql := "SELECT " + nlqIncidentCols + " FROM netops.corr_current FINAL WHERE " + strings.Join(conds, " AND ") +
+		" ORDER BY window_start " + order + " LIMIT " + strconv.Itoa(limit+1) + " FORMAT JSON"
+	rows, err := h.s.chRowsScope(ctx, h.s.chTenantScopeFor(h.claims), sql, "iris:nlquery:incidents")
+	if err != nil {
+		return nil, false, err
+	}
+	out := make([]plan.IncidentRow, 0, len(rows))
+	for i, r := range rows {
+		if i == limit {
+			return out, true, nil
+		}
+		out = append(out, incidentRowFrom(r))
+	}
+	return out, false, nil
+}
+
+func (h *nlqScope) Incident(ctx context.Context, id string) (plan.IncidentDetail, error) {
+	if !isUUIDToken(id) {
+		return plan.IncidentDetail{}, plan.ErrNotFound
+	}
+	conds := []string{"correlation_id = '" + id + "'"}
+	if c := h.s.tenantIDExcludeCondFor(h.claims, "tenant_id"); c != "" {
+		conds = append(conds, c)
+	}
+	sql := "SELECT " + nlqIncidentCols + " FROM netops.corr_current FINAL WHERE " + strings.Join(conds, " AND ") + " LIMIT 1 FORMAT JSON"
+	rows, err := h.s.chRowsScope(ctx, h.s.chTenantScopeFor(h.claims), sql, "iris:nlquery:incident")
+	if err != nil {
+		return plan.IncidentDetail{}, err
+	}
+	if len(rows) == 0 {
+		return plan.IncidentDetail{}, plan.ErrNotFound
+	}
+	det := plan.IncidentDetail{Row: incidentRowFrom(rows[0])}
+	if res, rerr := h.s.aiRCAResult(h.r, h.claims)(ctx, ai.Principal{}, id); rerr == nil {
+		det.Detail = res
+	}
+	return det, nil
+}
+
+// nlqChangeFetch bounds the ledger read the post-filter runs over; hitting it
+// is reported as truncation (N-D1 moves these filters into SQL).
+const nlqChangeFetch = 500
+
+func (h *nlqScope) Changes(ctx context.Context, q plan.ChangeQuery) ([]plan.ChangeRow, bool, error) {
+	tenant, _ := principalTenant(h.claims)
+	var out []plan.ChangeRow
+	truncated := false
+	if h.s.experienceStore != nil {
+		site, app := "", ""
+		if len(q.Sites) == 1 {
+			site = q.Sites[0]
+		}
+		if len(q.Apps) == 1 {
+			app = q.Apps[0]
+		}
+		evs, err := h.s.experienceStore.ListChanges(ctx, tenant, experience.ChangeQuery{Since: q.From, Types: q.Types, Site: site, App: app, Limit: nlqChangeFetch})
+		if err != nil {
+			return nil, false, err
+		}
+		truncated = len(evs) >= nlqChangeFetch
+		for _, ev := range evs {
+			row := plan.ChangeRow{ID: ev.ID, Type: ev.Type, Actor: ev.Actor, Source: "ledger", Object: ev.Object,
+				ObjectKind: ev.ObjectKind, Site: ev.Site, App: ev.App, Seam: ev.Seam, Summary: ev.Summary,
+				At: ev.EventAt, HasDiff: ev.Before != "" || ev.After != ""}
+			if changeMatches(row, q) {
+				out = append(out, row)
+			}
+		}
+	}
+	// The configuration-capture arm: every observed config version change the
+	// caller may see, until N-D2 feeds these into the ledger itself.
+	if h.s.configBackup != nil && h.s.configDrift != nil && (len(q.Types) == 0 || stringSet(q.Types)[experience.ChangeConfig]) {
+		secs := int(time.Since(q.From).Seconds())
+		rep, err := h.s.aiRecentChanges(h.claims)(ctx, ai.Principal{}, ai.ChangeQuery{SinceSeconds: secs, Limit: ai.MaxRecentChanges})
+		if err == nil && rep.NotWired == "" {
+			truncated = truncated || rep.Truncated
+			for _, c := range rep.Changes {
+				row := plan.ChangeRow{ID: "config:" + c.DeviceID + ":" + shortVersion(c.SHA), Type: experience.ChangeConfig,
+					Source: "config_capture", Object: c.DeviceID, ObjectKind: "device", At: c.ChangedAt, HasDiff: c.PreviousSHA != "" || c.Added+c.Removed > 0,
+					Summary: fmt.Sprintf("%s configuration %s (+%d/-%d lines)", firstNonBlank(c.DeviceName, c.DeviceID), c.State, c.Added, c.Removed)}
+				if changeMatches(row, q) {
+					out = append(out, row)
+				}
+			}
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].At.After(out[j].At) })
+	if q.Limit > 0 && len(out) > q.Limit {
+		out, truncated = out[:q.Limit], true
+	}
+	return out, truncated, nil
+}
+
+// changeMatches applies the filters the ledger read cannot yet push into SQL.
+func changeMatches(c plan.ChangeRow, q plan.ChangeQuery) bool {
+	if !c.At.IsZero() && (c.At.Before(q.From) || (!q.To.IsZero() && c.At.After(q.To))) {
+		return false
+	}
+	match := func(vals []string, v string) bool { return len(vals) == 0 || stringSet(vals)[v] }
+	return match(q.Types, c.Type) && match(q.Actors, c.Actor) && match(q.Objects, c.Object) &&
+		match(q.ObjectKinds, c.ObjectKind) && match(q.Sites, c.Site) && match(q.Apps, c.App) &&
+		match(q.Seams, c.Seam) && match(q.Sources, c.Source) && !stringSet(q.ExcludeIDs)[c.ID]
+}
+
+// Visible answers validate.Scope: may the caller see this entity? A missing
+// and a foreign entity both answer false — the validator turns either into the
+// identical unknown_entity error.
+func (h *nlqScope) Visible(ctx context.Context, ref nlqast.EntityRef) (bool, error) {
+	id := ref.ID
+	if i := strings.IndexByte(id, ':'); i >= 0 {
+		id = id[i+1:]
+	}
+	tenant, cross := principalTenant(h.claims)
+	switch ref.Type {
+	case "site":
+		if h.s.sites == nil {
+			return false, nil
+		}
+		_, ok := h.s.sites.Get(tenant, cross, id)
+		return ok, nil
+	case "device", "interface", "bgp_peer":
+		dev := id
+		if j := strings.IndexByte(dev, '/'); j >= 0 {
+			dev = dev[:j]
+		}
+		for _, d := range h.visibleDevices() {
+			if d.ID == dev {
+				return true, nil
+			}
+		}
+		return false, nil
+	case "circuit":
+		cs, err := h.Circuits(ctx, plan.CircuitFilter{IDs: []string{id}})
+		return err == nil && len(cs) == 1, err
+	case "incident":
+		_, err := h.Incident(ctx, id)
+		if errors.Is(err, plan.ErrNotFound) {
+			return false, nil
+		}
+		return err == nil, err
+	case "probe_target":
+		return cross, nil // probe series are unscoped until N-B5 (the metric is gated too)
+	}
+	// provider, application, change: resolvable only through N-C2 / N-D.
+	return false, nil
+}
+
+// Count estimates how many target entities the refs select (validator cost).
+func (h *nlqScope) Count(ctx context.Context, target string, refs []nlqast.EntityRef) (int, error) {
+	var sites, devs []string
+	for _, r := range refs {
+		id := r.ID[strings.IndexByte(r.ID, ':')+1:]
+		switch r.Type {
+		case "site":
+			sites = append(sites, id)
+		case "device":
+			devs = append(devs, id)
+		case "interface", "bgp_peer", "circuit", "probe_target":
+			return len(refs), nil
+		}
+	}
+	d, err := h.Devices(ctx, plan.DeviceFilter{IDs: devs, Sites: sites})
+	if err != nil {
+		return 0, err
+	}
+	n := len(d)
+	switch target {
+	case "interface":
+		n *= 24
+	case "bgp_peer":
+		n *= 4
+	case "circuit":
+		n *= 2
+	}
+	return n, nil
+}
+
+func stringSet(xs []string) map[string]bool {
+	m := make(map[string]bool, len(xs))
+	for _, x := range xs {
+		m[x] = true
+	}
+	return m
 }

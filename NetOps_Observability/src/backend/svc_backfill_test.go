@@ -104,9 +104,10 @@ func TestSvcRollupLatestVersionSQLShape(t *testing.T) {
 	}
 }
 
-// sqlStringLiteral must neutralize quotes (store-sourced values, but SR-011).
+// sqlStringLiteral must neutralize quotes AND backslashes (store-sourced
+// values, but SR-011): ClickHouse reads backslash escapes inside a literal.
 func TestSqlStringLiteralEscapes(t *testing.T) {
-	if got := servicecat.SQLStringLiteral("a'b"); got != "'a''b'" {
+	if got := servicecat.SQLStringLiteral("a'b"); got != `'a\'b'` {
 		t.Errorf("sqlStringLiteral = %q", got)
 	}
 }

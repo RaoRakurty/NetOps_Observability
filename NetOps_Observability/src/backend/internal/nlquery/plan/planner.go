@@ -49,14 +49,14 @@ func (p Planner) Execute(ctx context.Context, sc Scope, q *ast.AST, constraints 
 	rs.QueryID = "q-" + rs.ASTHash[:16]
 	rs.Provenance.Entities = q.Refs
 	var err error
-	switch {
-	case q.Type == ast.MetricSeries, q.Type == ast.MetricTopK, q.Type == ast.MetricFilter, q.Type == ast.CompareWindows:
+	switch q.Type {
+	case ast.MetricSeries, ast.MetricTopK, ast.MetricFilter, ast.CompareWindows:
 		err = p.metric(ctx, sc, q, rs)
-	case q.Type == ast.ChangeList:
+	case ast.ChangeList:
 		err = p.changes(ctx, sc, q, rs)
-	case q.Type == ast.IncidentList:
+	case ast.IncidentList:
 		err = p.incidents(ctx, sc, q, rs)
-	case q.Type == ast.IncidentExplain:
+	case ast.IncidentExplain:
 		err = p.explain(ctx, sc, q, rs)
 	default:
 		err = fmt.Errorf("plan: query type %q is not executable", q.Type)

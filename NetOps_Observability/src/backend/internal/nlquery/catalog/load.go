@@ -103,8 +103,11 @@ func (c *Catalog) index() error {
 		if !resolvers[e.Resolver] || !sensitivity[e.Sensitivity] {
 			return fmt.Errorf("catalog: entity %q: resolver/sensitivity outside the closed set", e.Name)
 		}
-		if _, err := regexp.Compile(e.IDPattern); err != nil || e.IDPattern == "" {
-			return fmt.Errorf("catalog: entity %q: id_pattern does not compile", e.Name)
+		if e.IDPattern == "" {
+			return fmt.Errorf("catalog: entity %q: id_pattern is empty", e.Name)
+		}
+		if _, err := regexp.Compile(e.IDPattern); err != nil {
+			return fmt.Errorf("catalog: entity %q: id_pattern does not compile: %w", e.Name, err)
 		}
 		c.byEntity[e.Name] = e
 		c.addAliases("entity", e.Name, e.Name, append([]string{e.Name}, e.Aliases...))

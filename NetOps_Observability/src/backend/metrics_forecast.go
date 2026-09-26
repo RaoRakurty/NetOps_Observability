@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"netops/backend/internal/metricval"
+	"netops/backend/internal/nlquery/plan"
 )
 
 const forecastThreshold = 0.90 // 90% utilization line
@@ -359,4 +361,65 @@ func forecastRank(r forecastRow) float64 {
 	default: // building_baseline
 		return 1e7
 	}
+}
+
+// vmRangeSeries is the GENERIC scoped range read for the Iris NL query path
+// (tracker 337 N-C4): unlike vmRange it keys series by their FULL label set
+// (BGP-peer and circuit series carry no `index`, and vmRange would merge them),
+// and unlike vmQueryRangeByIf it keeps series that are not interfaces. The body
+// read is bounded, NaN/Inf become 0 (they cannot be JSON-encoded), and at most
+// maxSeries series are returned, with truncation reported rather than hidden.
+// filters are the caller's tenant-scope extra_filters[] — never nil on a
+// principal's path (the structural guard enforces it).
+func (s *server) vmRangeSeries(ctx context.Context, query string, start, end time.Time, step time.Duration, filters []string, maxSeries int) ([]plan.Series, bool, error) {
+	q := url.Values{}
+	q.Set("query", query)
+	q.Set("start", strconv.FormatInt(start.Unix(), 10))
+	q.Set("end", strconv.FormatInt(end.Unix(), 10))
+	q.Set("step", strconv.FormatInt(int64(step/time.Second), 10))
+	for _, f := range filters {
+		q.Add("extra_filters[]", f)
+	}
+	endpoint := strings.TrimRight(s.metricsBase(), "/") + "/api/v1/query_range?" + q.Encode()
+	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	resp, err := backendHTTPClient(25 * time.Second).Do(req)
+	if err != nil {
+		return nil, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, false, fmt.Errorf("victoriametrics status %d", resp.StatusCode)
+	}
+	var out struct {
+		Data struct {
+			Result []struct {
+				Metric map[string]string `json:"metric"`
+				Values [][2]any          `json:"values"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&out); err != nil {
+		return nil, false, err
+	}
+	truncated := false
+	series := make([]plan.Series, 0, len(out.Data.Result))
+	for _, r := range out.Data.Result {
+		if len(series) == maxSeries {
+			truncated = true
+			break
+		}
+		pts := make([]plan.Point, 0, len(r.Values))
+		for _, v := range r.Values {
+			ts, _ := v[0].(float64)
+			str, _ := v[1].(string)
+			pts = append(pts, plan.Point{T: int64(ts), V: metricval.FiniteOrZero(str)})
+		}
+		series = append(series, plan.Series{Labels: r.Metric, Points: pts})
+	}
+	return series, truncated, nil
 }

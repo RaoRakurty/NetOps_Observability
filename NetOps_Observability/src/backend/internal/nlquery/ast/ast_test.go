@@ -4,6 +4,7 @@
 package ast
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +51,7 @@ func TestDecodeRejectsMalformedInput(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	if _, err := Decode([]byte(strings.Repeat(" ", MaxBytes+1))); err != ErrTooLarge {
+	if _, err := Decode([]byte(strings.Repeat(" ", MaxBytes+1))); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("oversized input: %v", err)
 	}
 }
