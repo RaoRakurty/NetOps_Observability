@@ -36,9 +36,15 @@ const (
 	// absorb benign corpus edits — a real regression (renamed page, broken
 	// chunker, scoring change) lands under the floor and fails CI.
 	// Measured baseline 2026-07-02: hit@1 0.81 (26/32), hit@3 0.97 (31/32).
-	// Floors leave a two-miss margin each.
+	// Measured 2026-09-26 before N-G2: hit@1 0.81 (26/32), hit@3 0.91 (29/32).
+	// Measured 2026-09-26 after N-G2 (plural folding, release-notes weight,
+	// per-page cap) and N-G1 (29 nav-leaf items added, 61 total):
+	// hit@1 0.89 (54/61), hit@3 1.00 (61/61); on the original 32 items alone
+	// hit@1 0.88 (28/32), hit@3 1.00 (32/32).
+	// The hit@3 floor of 0.95 leaves a three-miss margin on 61 items; the hit@1
+	// floor is unchanged.
 	goldenHitAt1Floor = 0.75
-	goldenHitAt3Floor = 0.90
+	goldenHitAt3Floor = 0.95
 )
 
 func goldenPath(t *testing.T) string {

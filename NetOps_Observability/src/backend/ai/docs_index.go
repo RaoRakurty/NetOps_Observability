@@ -26,6 +26,12 @@ import (
 //go:embed docs_corpus
 var docsCorpusFS embed.FS
 
+// productKnowledgeFS is the curated concept doc (ai/product_knowledge/*.md),
+// indexed as the DocTierCurated tier.
+//
+//go:embed product_knowledge/*.md
+var productKnowledgeFS embed.FS
+
 // Content tiers — curated concept docs outrank the runbook file, which outranks
 // portal pages, when scores are otherwise close.
 const (
@@ -65,8 +71,9 @@ type DocsHit struct {
 // DocsIndex is the in-process BM25 index over every documentation chunk.
 type DocsIndex struct {
 	chunks []DocChunk
-	terms  [][]string     // per-chunk term list (with title terms boosted by repetition)
-	df     map[string]int // document frequency per term
+	terms  [][]string        // per-chunk term list (with title terms boosted by repetition)
+	titles []map[string]bool // per-chunk folded page/section-title/slug terms
+	df     map[string]int    // document frequency per term
 	avgLen float64
 }
 
@@ -78,6 +85,11 @@ const (
 	// docTitleBoost repeats page/section-title terms in the term list so a match
 	// on what a section is ABOUT outweighs an incidental body mention.
 	docTitleBoost = 3
+	// docReleaseNotesWeight scales a release-notes chunk's score (see Search).
+	docReleaseNotesWeight = 0.5
+	// docMaxChunksPerPage caps how many sections of one page a search returns
+	// (see diversifyByPage).
+	docMaxChunksPerPage = 2
 	// maxChunkBody bounds a stored chunk so one giant section can't flood a prompt.
 	maxChunkBody = 4000
 )
@@ -136,8 +148,13 @@ func (ix *DocsIndex) add(c DocChunk) {
 	if len(terms) == 0 {
 		return
 	}
+	titleSet := make(map[string]bool, len(title))
+	for _, t := range title {
+		titleSet[t] = true
+	}
 	ix.chunks = append(ix.chunks, c)
 	ix.terms = append(ix.terms, terms)
+	ix.titles = append(ix.titles, titleSet)
 }
 
 func (ix *DocsIndex) finish() {
@@ -179,18 +196,31 @@ func (ix *DocsIndex) All() []DocChunk { return ix.chunks }
 // out of six terms is not a hit — it is the absence of one.
 //
 // The value is calibrated against the golden set, not guessed. Measured best
-// ratios on the shipped corpus:
+// ratios on the shipped corpus (2026-09-26, with plural/suffix folding — see
+// foldTerm in kb.go):
 //
-//	0.19  "configure vmware vsphere drs affinity for my cluster"   → must decline
-//	0.27  "reset my kubernetes ingress controller certificate …"   → must decline
-//	0.34  "walk me through onboarding my very first device"        → must retrieve
+//	0.17  "configure vmware vsphere drs affinity for my cluster"   → must decline
+//	0.34  "reset my kubernetes ingress controller certificate …"   → must decline
+//	0.39  "how do I tune the jvm heap on my elasticsearch data …"  → must decline
+//	0.60  lowest of the 61 golden docs questions (docs-004)         → must retrieve
+//	0.81  "walk me through onboarding my very first device"        → must retrieve
 //	1.00  "how do I set up SNMP discovery"                         → must retrieve
 //
-// A third of the question's information is the line between "the corpus knows
-// what this is about" and "the corpus recognised some filler words". Both sides
-// are pinned by docs_relevance_test.go, so re-tuning it requires re-stating the
+// Folding raised every ratio — "certificates" now matches "certificate", "heaps"
+// matches "heap" — so the pre-folding floor of 0.30 let the kubernetes and jvm
+// questions through on incidental words. 0.45 sits between the highest
+// must-decline (0.39) and the lowest must-retrieve (0.60). Both sides are
+// pinned by docs_relevance_test.go, so re-tuning it requires re-stating the
 // evidence.
-const docsMinSpecificity = 0.30
+//
+// It is a QUESTION-level floor: it is compared with the best chunk's ratio
+// (the quantity the evidence above measures). Each individual chunk then
+// only has to clear docsChunkMinSpecificity, the original 0.30.
+const docsMinSpecificity = 0.45
+
+// docsChunkMinSpecificity is the per-chunk share of the question's IDF a hit
+// must match once the question as a whole has cleared docsMinSpecificity.
+const docsChunkMinSpecificity = 0.30
 
 // Search runs BM25 over the corpus and returns the top hits. Three honesty
 // floors, in order:
@@ -198,15 +228,16 @@ const docsMinSpecificity = 0.30
 //  1. TERM COVERAGE — a chunk qualifies only when it matches ≥2 distinct query
 //     terms, or 1 term that appears in its page/section title, so a lone
 //     incidental body word never surfaces documentation.
-//  2. SPECIFICITY (absolute) — the matched terms must carry ≥ docsMinSpecificity
-//     of the query's total IDF. This is the floor that lets the index say "the
+//  2. SPECIFICITY (absolute) — the best chunk's matched terms must carry
+//     ≥ docsMinSpecificity of the query's total IDF, and every returned chunk
+//     ≥ docsChunkMinSpecificity. This is the floor that lets the index say "the
 //     corpus does not cover this" instead of always returning its best guess.
 //  3. LEAGUE (relative) — the tail is trimmed to hits in the leader's league.
 //
 // When nothing clears them the caller must SAY the docs don't cover it, never
 // paraphrase from nothing.
 func (ix *DocsIndex) Search(query string, limit int) []DocsHit {
-	qterms := tokenize(query)
+	qterms := docsQueryTerms(query)
 	if len(qterms) == 0 || len(ix.chunks) == 0 {
 		return nil
 	}
@@ -239,14 +270,13 @@ func (ix *DocsIndex) Search(query string, limit int) []DocsHit {
 		matched := 0
 		matchedIDF := 0.0
 		inTitle := false
-		lowTitle := strings.ToLower(chunk.PageTitle + " " + chunk.SectionTitle + " " + strings.ReplaceAll(chunk.Slug, "/", " "))
 		for _, q := range qterms {
 			f := tf[q]
 			if f == 0 {
 				continue
 			}
 			matched++
-			if strings.Contains(lowTitle, q) {
+			if ix.titles[i][q] {
 				inTitle = true
 			}
 			idf := qIDF[q]
@@ -267,11 +297,20 @@ func (ix *DocsIndex) Search(query string, limit int) []DocsHit {
 		case DocTierRunbook:
 			score *= 1.05
 		}
+		// Release notes restate every feature in passing ("verdicts, seams and
+		// evidence classes shipped …"), so on a how-to or concept question they
+		// compete with the page that actually explains the feature. They stay
+		// retrievable — "what changed in August" still finds them — but lose
+		// close calls to the real page.
+		if isReleaseNotes(chunk.Slug) {
+			score *= docReleaseNotesWeight
+		}
 		cands = append(cands, cand{
 			hit: DocsHit{Chunk: chunk, Score: score}, matched: matched, inTitle: inTitle, matchedIDF: matchedIDF,
 		})
 	}
 	var hits []DocsHit
+	bestIDF := 0.0
 	for _, c := range cands {
 		// ≥2 matched terms, or a title match covering at least half the query —
 		// so "syslog" finds the Syslog page, but one incidental word ("chart" in
@@ -279,12 +318,25 @@ func (ix *DocsIndex) Search(query string, limit int) []DocsHit {
 		if !(c.matched >= 2 || (c.inTitle && c.matched*2 >= len(qterms))) {
 			continue
 		}
-		// Floor 2: the matched terms must carry enough of the question. Without
-		// this an out-of-scope question still gets the corpus's least-bad page.
-		if queryIDF > 0 && c.matchedIDF < docsMinSpecificity*queryIDF {
+		if c.matchedIDF > bestIDF {
+			bestIDF = c.matchedIDF
+		}
+		// Floor 2b (per chunk): the chunk's own matched terms must carry a real
+		// share of the question, so a chunk that shares only filler with it
+		// never rides along behind a good hit.
+		if queryIDF > 0 && c.matchedIDF < docsChunkMinSpecificity*queryIDF {
 			continue
 		}
 		hits = append(hits, c.hit)
+	}
+	// Floor 2a (per question): when even the best chunk covers too little of
+	// the question, the corpus does not know what it is about — decline it
+	// outright. This is the stricter floor; applying it per chunk instead
+	// would drop the right page whenever the question carries words that page
+	// does not use ("pin an incident onto the topology view to see its blast
+	// radius" → the topology page never says "blast radius").
+	if queryIDF > 0 && bestIDF < docsMinSpecificity*queryIDF {
+		return nil
 	}
 	sort.SliceStable(hits, func(i, j int) bool {
 		if hits[i].Score != hits[j].Score {
@@ -292,6 +344,7 @@ func (ix *DocsIndex) Search(query string, limit int) []DocsHit {
 		}
 		return hits[i].Chunk.ID < hits[j].Chunk.ID
 	})
+	hits = diversifyByPage(hits, docMaxChunksPerPage)
 	// Keep only hits in the same league as the leader — a strong top match plus
 	// a tail of weak ones reads as padding, not grounding.
 	if len(hits) > 1 {
@@ -308,6 +361,35 @@ func (ix *DocsIndex) Search(query string, limit int) []DocsHit {
 		hits = hits[:limit]
 	}
 	return hits
+}
+
+// diversifyByPage keeps at most perPage chunks of any one page, preserving the
+// ranked order. Without it one long page whose TITLE shares a word with the
+// question fills every slot — "point my routers' syslog at the platform"
+// returned eleven sections of "Point a router at the BMP receiver" before the
+// syslog page — and the reader never sees the second-best page at all.
+// Pages are keyed by the citation id up to the anchor, so curated sources
+// (which have no portal slug) are grouped the same way.
+func diversifyByPage(hits []DocsHit, perPage int) []DocsHit {
+	if perPage <= 0 {
+		return hits
+	}
+	count := map[string]int{}
+	out := hits[:0]
+	for _, h := range hits {
+		page, _, _ := strings.Cut(h.Chunk.ID, "#")
+		if count[page] >= perPage {
+			continue
+		}
+		count[page]++
+		out = append(out, h)
+	}
+	return out
+}
+
+// isReleaseNotes reports whether a portal slug is a release-notes page.
+func isReleaseNotes(slug string) bool {
+	return slug == "release-notes" || strings.HasPrefix(slug, "release-notes/")
 }
 
 // ---- chunking ----------------------------------------------------------------
@@ -574,7 +656,11 @@ func docTerms(s string) []string {
 	for _, f := range strings.FieldsFunc(s, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9')
 	}) {
-		if len(f) >= 3 && !kbStopwords[f] {
+		if len(f) < 3 || kbStopwords[f] {
+			continue
+		}
+		// Fold exactly as docsQueryTerms folds the query (kb.go foldTerm).
+		if f = foldTerm(f); !kbStopwords[f] {
 			out = append(out, f)
 		}
 	}

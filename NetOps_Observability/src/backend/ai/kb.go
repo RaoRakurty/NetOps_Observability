@@ -295,6 +295,10 @@ var kbStopwords = map[string]bool{
 	"got": true, "see": true, "out": true, "off": true, "but": true, "not": true,
 	"its": true, "our": true, "their": true, "some": true, "more": true, "much": true,
 	"need": true, "want": true, "show": true, "tell": true, "give": true, "please": true,
+	// Conversational filler: "walk me THROUGH …", "my VERY first device". Once
+	// plural folding made the real terms (onboard, device) common, these two
+	// words outweighed them and pulled in unrelated pages.
+	"very": true, "through": true,
 }
 
 // tokenize lowercases and splits a query into dedup'd word tokens (len ≥ 3, no
@@ -310,6 +314,128 @@ func tokenize(q string) []string {
 			seen[f] = true
 			out = append(out, f)
 		}
+	}
+	return out
+}
+
+// ---- term folding (docs retrieval) ------------------------------------------
+
+// foldIrregular maps inflections the suffix rules below would get wrong (or
+// deliberately leave alone) straight to their base form. Keys are what the
+// tokenizer emits (lowercase, ≥3 chars).
+var foldIrregular = map[string]string{
+	"aliases":  "alias",
+	"statuses": "status",
+	"analyses": "analysis",
+	"indices":  "index",
+	"indexes":  "index",
+	"caches":   "cache",
+	"apis":     "api",
+	"kpis":     "kpi",
+	"uris":     "uri",
+}
+
+// foldKeep lists words that end like an inflection but are not one. Folding
+// them would merge unrelated terms ("series" → "sery") or split a word from
+// its own plural.
+var foldKeep = map[string]bool{
+	"series": true, "species": true, "alias": true, "canvas": true, "atlas": true,
+	"bias": true, "news": true, "always": true, "perhaps": true, "towards": true,
+	"sometimes": true, "https": true, "during": true,
+}
+
+// foldTerm reduces one token to a conservative stem so that "seams" finds
+// "seam", "commands" finds "command" and "configured" / "configuring" find
+// "configure". It is NOT a full stemmer: it only removes regular English
+// plural and -ed / -ing inflections, and it refuses whenever the stem left
+// would be short enough to collide with an unrelated word ("setting" stays
+// "setting" — folding it to "set" would match every "set up" in the corpus).
+// Deterministic, stdlib-only, and applied identically to documents and
+// queries (docTerms and docsQueryTerms) — a fold used on one side only would
+// make matches impossible.
+//
+// Rules, in order:
+//  1. Tokens shorter than 4, tokens containing a digit, the irregular table
+//     and the keep list are returned as they are / as the table says.
+//  2. Plurals: -ies → -y; -sses/-ches/-shes/-xes/-zzes drop "es"; otherwise a
+//     trailing "s" is dropped — but never after "ss", "us" or "is" ("access",
+//     "status", "analysis").
+//  3. Inflections: -ied → -y; -ing and -ed (not -eed) are dropped when the
+//     stem left is ≥ 5 letters, then a doubled final consonant is undoubled
+//     ("shipped" → "ship") except l, s and z ("installed" → "install").
+//  4. A final silent "e" on a word of ≥ 6 letters is dropped, which is what
+//     makes "configure", "configures", "configured" and "configuring" meet.
+//     Five-letter words keep it, so "plane" never becomes "plan".
+func foldTerm(w string) string {
+	if len(w) < 4 {
+		return w
+	}
+	for i := 0; i < len(w); i++ {
+		if w[i] < 'a' || w[i] > 'z' {
+			return w // version strings, ports, "ipv4" — never fold
+		}
+	}
+	if v, ok := foldIrregular[w]; ok {
+		return v
+	}
+	if foldKeep[w] {
+		return w
+	}
+	// 2. plurals
+	switch {
+	case strings.HasSuffix(w, "ies") && len(w) >= 5:
+		w = w[:len(w)-3] + "y"
+	case strings.HasSuffix(w, "sses"), strings.HasSuffix(w, "ches"),
+		strings.HasSuffix(w, "shes"), strings.HasSuffix(w, "xes"), strings.HasSuffix(w, "zzes"):
+		w = w[:len(w)-2]
+	case strings.HasSuffix(w, "s") && !strings.HasSuffix(w, "ss") &&
+		!strings.HasSuffix(w, "us") && !strings.HasSuffix(w, "is"):
+		w = w[:len(w)-1]
+	}
+	// 3. -ied / -ing / -ed
+	switch {
+	case strings.HasSuffix(w, "ied") && len(w) >= 5:
+		return w[:len(w)-3] + "y"
+	case strings.HasSuffix(w, "ing") && len(w)-3 >= 5:
+		return undouble(w[:len(w)-3])
+	case strings.HasSuffix(w, "ed") && !strings.HasSuffix(w, "eed") && len(w)-2 >= 5:
+		return undouble(w[:len(w)-2])
+	}
+	// 4. silent final e
+	if strings.HasSuffix(w, "e") && len(w) >= 6 {
+		w = w[:len(w)-1]
+	}
+	return w
+}
+
+// undouble drops one letter of a doubled final consonant ("dropp" → "drop"),
+// except l, s and z, which English keeps doubled in the base form.
+func undouble(s string) string {
+	n := len(s)
+	if n < 2 || s[n-1] != s[n-2] {
+		return s
+	}
+	switch s[n-1] {
+	case 'l', 's', 'z', 'a', 'e', 'i', 'o', 'u':
+		return s
+	}
+	return s[:n-1]
+}
+
+// docsQueryTerms is the query side of docs retrieval: tokenize, then fold
+// exactly as docTerms folds the documents. A fold that lands on a stopword
+// ("needs" → "need") is dropped, as the unfolded stopword would have been.
+func docsQueryTerms(q string) []string {
+	raw := tokenize(q)
+	seen := make(map[string]bool, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, t := range raw {
+		f := foldTerm(t)
+		if kbStopwords[f] || seen[f] {
+			continue
+		}
+		seen[f] = true
+		out = append(out, f)
 	}
 	return out
 }
