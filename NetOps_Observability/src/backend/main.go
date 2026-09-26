@@ -115,6 +115,8 @@ import (
 	// SECURITY-LANE-END
 	"math"
 	"netops/backend/internal/aiscore"
+	"netops/backend/internal/entityalias"
+	"netops/backend/internal/nlquery/catalog"
 	"netops/backend/internal/secobs"
 	"netops/backend/internal/secprofile"
 	"netops/backend/internal/selfheal"
@@ -352,10 +354,16 @@ type server struct {
 	notifyCfg                  *notifyConfigStore
 	contactPoints              *contactPointStore
 	deviceLocations            *deviceLocationStore
-	sites                      *sitesStore      // internal SoT sites (default provider)
-	deviceSites                *deviceSiteStore // operator device→site bindings (intent)
-	wanPolicy                  *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
-	systemNet                  *systemNetStore  // platform DNS + NTP system settings (clock sync + URL resolution)
+	sites                      *sitesStore // internal SoT sites (default provider)
+	// IRIS-NLQUERY-BEGIN — the NL query path (tracker 337 Phase C): the
+	// semantic catalog (nil = catalog failed to load; NL routes answer 503)
+	// and the per-tenant entity aliases.
+	nlqCatalog *catalog.Catalog
+	nlqAliases *entityalias.Store
+	// IRIS-NLQUERY-END
+	deviceSites *deviceSiteStore // operator device→site bindings (intent)
+	wanPolicy   *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
+	systemNet   *systemNetStore  // platform DNS + NTP system settings (clock sync + URL resolution)
 	// DATA-PROTECTION-BEGIN — the whole Data Protection domain lives in
 	// internal/dataprotect: the backup intent store + live DR status, the
 	// netops-daily SM policy control plane, the snapshot inventory/management
@@ -1093,6 +1101,21 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("device sites store: %v", err)
 	}
+	// IRIS-NLQUERY-BEGIN — a catalog that fails to load disables the NL routes
+	// LOUDLY (503 + an error log) instead of aborting boot: every other Iris
+	// path works without it.
+	nlqCat, nlqCatErr := catalog.Load()
+	if nlqCatErr != nil {
+		logError("iris.nlquery", "semantic catalog failed to load — NL query routes are disabled", errf(nlqCatErr))
+		nlqCat = nil
+	}
+	aliasKV, err := newTenantKV[entityalias.Alias](envOr("IRIS_ALIASES_FILE", "/data/iris_aliases.json"),
+		func(a entityalias.Alias) string { return a.TenantID },
+		func(a entityalias.Alias) string { return a.Key() })
+	if err != nil {
+		log.Fatalf("iris alias store: %v", err)
+	}
+	// IRIS-NLQUERY-END
 	// MONITORING-BEGIN — per-device monitoring decisions (owner decision C4,
 	// 2026-09-05): which devices Correlix collects from, and therefore which
 	// ones the licence counts.
@@ -1163,6 +1186,8 @@ func newServer() *server {
 		contactPoints:   contactPoints,
 		deviceLocations: deviceLocations,
 		sites:           sites,
+		nlqCatalog:      nlqCat,
+		nlqAliases:      &entityalias.Store{C: aliasKV, Cat: nlqCat},
 		deviceSites:     deviceSites,
 		wanPolicy:       wanPolicy,
 		systemNet:       systemNet,
@@ -3620,9 +3645,11 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/tenants", s.handleAITenants)
 	mux.HandleFunc("/api/ai/tenants/", s.handleAITenants)
 	mux.HandleFunc("/api/ai/modules", s.handleAIModules)
-	mux.HandleFunc("/api/ai/commands", s.handleAICommands)             // slash-command registry for the "/" menu
-	mux.HandleFunc("/api/ai/commands/suggestions", s.handleAICommands) // typed-fragment suggestions
-	mux.HandleFunc("/api/ai/feedback", s.handleAIFeedback)             // thumbs up/down (audited)
+	mux.HandleFunc("/api/ai/commands", s.handleAICommands)              // slash-command registry for the "/" menu
+	mux.HandleFunc("/api/ai/commands/suggestions", s.handleAICommands)  // typed-fragment suggestions
+	mux.HandleFunc("/api/ai/feedback", s.handleAIFeedback)              // thumbs up/down (audited)
+	mux.HandleFunc("/api/ai/aliases", s.handleAIAliases)                // Iris NL: per-tenant entity aliases (N-C2)
+	mux.HandleFunc("/api/ai/entities/resolve", s.handleAIEntityResolve) // Iris NL: resolution ladder (N-C2)
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Self-describing API + ITSM connector status.
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)

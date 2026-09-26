@@ -4,18 +4,23 @@
 package backend
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"netops/backend/ai"
 	"netops/backend/internal/aiscore"
+	"netops/backend/internal/entityalias"
+	nlqast "netops/backend/internal/nlquery/ast"
+	"netops/backend/internal/nlquery/resolve"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/tac"
 )
@@ -526,4 +531,197 @@ func (a aiTACCatalog) Lookup(query string, limit int) []ai.TACKnowledgeHit {
 		out = append(out, kh)
 	}
 	return out
+}
+
+// ---- Iris NL: entity aliases + resolution (tracker 337 N-C2) ----------------
+//
+// /api/ai/aliases        GET own aliases · PUT create/re-point · DELETE ?entity_type=&alias=
+// /api/ai/entities/resolve  POST {text, types[]} → the resolution ladder's answer
+//
+// §3a: per-tenant DATA → requirePerm + tenant filter. The owning tenant is
+// stamped from the principal, never the body; a Global (cross-tenant) view
+// has no tenant to write for and must pick a workspace first. An alias may
+// only point at an entity the caller can SEE (provider / application ids are
+// tenant-scoped names that the alias itself defines).
+
+const nlqBodyCap = 8 << 10
+
+func (s *server) handleAIAliases(w http.ResponseWriter, r *http.Request) {
+	if s.nlqCatalog == nil || s.nlqAliases == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("the Iris query catalog is not available on this deployment"))
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+		if !ok {
+			return
+		}
+		tenant, cross := principalTenant(claims)
+		list := s.nlqAliases.List(tenant, cross)
+		sort.Slice(list, func(i, j int) bool { return list[i].Key() < list[j].Key() })
+		writeJSON(w, http.StatusOK, map[string]any{"aliases": list, "max": entityalias.MaxPerTenant})
+	case http.MethodPut:
+		claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
+		if !ok {
+			return
+		}
+		tenant, cross := principalTenant(claims)
+		if cross {
+			writeError(w, http.StatusBadRequest, errors.New("choose a workspace first — an alias belongs to one workspace"))
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, nlqBodyCap)
+		var req struct {
+			EntityType string `json:"entity_type"`
+			EntityID   string `json:"entity_id"`
+			Alias      string `json:"alias"`
+		}
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields() // a smuggled tenant_id is an error, not a silent no-op
+		if err := dec.Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		a := entityalias.Alias{TenantID: tenant, EntityType: req.EntityType, EntityID: req.EntityID, Alias: req.Alias, CreatedBy: claims.Sub}
+		if err := s.nlqAliases.Validate(&a); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if a.EntityType != "provider" && a.EntityType != "application" {
+			vis, err := s.nlqScopeFor(r, claims).Visible(r.Context(), nlqast.EntityRef{Type: a.EntityType, ID: a.EntityID})
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, errors.New("could not check the entity"))
+				return
+			}
+			if !vis {
+				writeError(w, http.StatusNotFound, errors.New("no such "+a.EntityType+" is visible to you"))
+				return
+			}
+		}
+		saved, err := s.nlqAliases.Put(a)
+		switch {
+		case errors.Is(err, entityalias.ErrFull):
+			writeError(w, http.StatusConflict, err)
+		case errors.Is(err, entityalias.ErrInvalid):
+			writeError(w, http.StatusBadRequest, err)
+		case err != nil:
+			logError("iris.aliases", "alias write failed", errf(err))
+			writeError(w, http.StatusInternalServerError, errors.New("the alias could not be saved"))
+		default:
+			writeJSON(w, http.StatusOK, saved)
+		}
+	case http.MethodDelete:
+		claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
+		if !ok {
+			return
+		}
+		tenant, cross := principalTenant(claims)
+		q := r.URL.Query()
+		if err := s.nlqAliases.Delete(tenant, cross, q.Get("entity_type"), q.Get("alias")); err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.Header().Set("Allow", "GET, PUT, DELETE")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET, PUT or DELETE"))
+	}
+}
+
+func (s *server) handleAIEntityResolve(w http.ResponseWriter, r *http.Request) {
+	if s.nlqCatalog == nil || s.nlqAliases == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("the Iris query catalog is not available on this deployment"))
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, nlqBodyCap)
+	var req struct {
+		Text  string   `json:"text"`
+		Types []string `json:"types"`
+	}
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if len([]rune(req.Text)) > 128 || len(req.Types) > 10 {
+		writeError(w, http.StatusBadRequest, errors.New("text is at most 128 characters and types at most 10"))
+		return
+	}
+	for _, t := range req.Types {
+		if _, ok := s.nlqCatalog.Entity(t); !ok {
+			writeError(w, http.StatusBadRequest, errors.New("unknown entity type "+t))
+			return
+		}
+	}
+	res, err := s.nlqResolver(r, claims).Resolve(r.Context(), req.Text, req.Types)
+	if err != nil {
+		logError("iris.resolve", "entity resolution failed", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("entity resolution is unavailable"))
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// nlqResolver builds the resolution ladder over the caller's own aliases and
+// visible inventory.
+func (s *server) nlqResolver(r *http.Request, claims jwtClaims) resolve.Resolver {
+	return resolve.Resolver{Cat: s.nlqCatalog, L: nlqLookups{s: s, h: s.nlqScopeFor(r, claims), claims: claims}}
+}
+
+// nlqLookups implements resolve.Lookups from the caller's own scope.
+type nlqLookups struct {
+	s      *server
+	h      *nlqScope
+	claims jwtClaims
+}
+
+func (l nlqLookups) Aliases(context.Context) ([]resolve.Alias, error) {
+	tenant, cross := principalTenant(l.claims)
+	var out []resolve.Alias
+	for _, a := range l.s.nlqAliases.List(tenant, cross) {
+		out = append(out, resolve.Alias{EntityType: a.EntityType, EntityID: a.EntityID, Alias: a.Alias})
+	}
+	return out, nil
+}
+
+func (l nlqLookups) Inventory(ctx context.Context, types []string) ([]resolve.Named, error) {
+	want := stringSet(types)
+	var out []resolve.Named
+	if want["site"] && l.s.sites != nil {
+		tenant, cross := principalTenant(l.claims)
+		for _, st := range l.s.sites.All(tenant, cross) {
+			out = append(out, resolve.Named{Type: "site", ID: "site:" + st.Slug, Names: []string{st.Name, st.Slug}})
+		}
+	}
+	if want["device"] {
+		for _, d := range l.h.visibleDevices() {
+			out = append(out, resolve.Named{Type: "device", ID: "device:" + d.ID, Names: []string{d.Name, d.ID}})
+		}
+	}
+	if want["circuit"] {
+		// The caller's visible circuits (the same projection nlqScope.Circuits reads).
+		_, all, err := l.s.wanProject(ctx, l.s.deviceVisibilityFor(l.claims))
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range all {
+			out = append(out, resolve.Named{Type: "circuit", ID: "circuit:" + c.ID, Names: []string{c.ID, c.Local.Device + " " + c.Local.Interface}})
+		}
+	}
+	return out, nil
+}
+
+func (l nlqLookups) Visible(ctx context.Context, entityType, id string) (bool, error) {
+	return l.h.Visible(ctx, nlqast.EntityRef{Type: entityType, ID: id})
 }
