@@ -340,6 +340,331 @@
       }
     },
     {
+      "id": "docs-033",
+      "category": "docs",
+      "question": "How do I connect an AWS account to Correlix?",
+      "expect": {
+        "slugs": [
+          "monitoring/cloud"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Operations \u2192 Cloud \u2192 Data sources"
+    },
+    {
+      "id": "docs-034",
+      "category": "docs",
+      "question": "What does the Cloud overview tab show?",
+      "expect": {
+        "slugs": [
+          "monitoring/cloud"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Operations \u2192 Cloud \u2192 Overview"
+    },
+    {
+      "id": "docs-035",
+      "category": "docs",
+      "question": "Where do I see untagged cloud resources?",
+      "expect": {
+        "slugs": [
+          "monitoring/cloud"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Operations \u2192 Cloud \u2192 Resources"
+    },
+    {
+      "id": "docs-036",
+      "category": "docs",
+      "question": "Is data arriving from my cloud accounts?",
+      "expect": {
+        "slugs": [
+          "monitoring/cloud"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Operations \u2192 Cloud \u2192 Data sources"
+    },
+    {
+      "id": "docs-037",
+      "category": "docs",
+      "question": "Where are the WAF and load balancer security findings for my cloud accounts?",
+      "expect": {
+        "slugs": [
+          "monitoring/cloud"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Operations \u2192 Cloud \u2192 Security"
+    },
+    {
+      "id": "docs-038",
+      "category": "docs",
+      "question": "Where can I see CloudTrail changes when investigating a cloud problem?",
+      "expect": {
+        "slugs": [
+          "monitoring/cloud"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Operations \u2192 Cloud \u2192 Investigations"
+    },
+    {
+      "id": "docs-039",
+      "category": "docs",
+      "question": "How do I set the required tags for cloud resources?",
+      "expect": {
+        "slugs": [
+          "monitoring/cloud"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Operations \u2192 Cloud \u2192 Settings"
+    },
+    {
+      "id": "docs-040",
+      "category": "docs",
+      "question": "Where is the application catalog?",
+      "expect": {
+        "slugs": [
+          "infrastructure/applications"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Infrastructure \u2192 Applications \u2192 Catalog"
+    },
+    {
+      "id": "docs-041",
+      "category": "docs",
+      "question": "How do I read the application map of observed dependencies?",
+      "expect": {
+        "slugs": [
+          "infrastructure/applications"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Infrastructure \u2192 Applications \u2192 Application map"
+    },
+    {
+      "id": "docs-042",
+      "category": "docs",
+      "question": "How do I set the criticality of a business service?",
+      "expect": {
+        "slugs": [
+          "infrastructure/applications"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Infrastructure \u2192 Applications \u2192 Business services"
+    },
+    {
+      "id": "docs-043",
+      "category": "docs",
+      "question": "What is the difference between the service catalog and the application registry?",
+      "expect": {
+        "slugs": [
+          "infrastructure/applications",
+          "explore/application-attribution"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Infrastructure \u2192 Applications \u2192 Registries"
+    },
+    {
+      "id": "docs-044",
+      "category": "docs",
+      "question": "How do I declare a user journey in Digital Experience?",
+      "expect": {
+        "slugs": [
+          "monitoring/digital-experience"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Operations \u2192 Digital Experience \u2192 Journeys"
+    },
+    {
+      "id": "docs-045",
+      "category": "docs",
+      "question": "What does the Service Paths tab show for a digital experience incident?",
+      "expect": {
+        "slugs": [
+          "monitoring/digital-experience"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Operations \u2192 Digital Experience \u2192 Service Paths"
+    },
+    {
+      "id": "docs-046",
+      "category": "docs",
+      "question": "Where do I see recent changes in Digital Experience?",
+      "expect": {
+        "slugs": [
+          "monitoring/digital-experience"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Operations \u2192 Digital Experience \u2192 Changes"
+    },
+    {
+      "id": "docs-047",
+      "category": "docs",
+      "question": "What does Data Health mean in Digital Experience?",
+      "expect": {
+        "slugs": [
+          "monitoring/digital-experience"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Operations \u2192 Digital Experience \u2192 Data Health"
+    },
+    {
+      "id": "docs-048",
+      "category": "docs",
+      "question": "Why does this user have access to that tenant?",
+      "expect": {
+        "slugs": [
+          "administration/access-explorer"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Access & Audit \u2192 Access Explorer"
+    },
+    {
+      "id": "docs-049",
+      "category": "docs",
+      "question": "How do I revoke a user's session?",
+      "expect": {
+        "slugs": [
+          "administration/sessions"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Access & Audit \u2192 Sessions"
+    },
+    {
+      "id": "docs-050",
+      "category": "docs",
+      "question": "How do I check if the platform backends are healthy?",
+      "expect": {
+        "slugs": [
+          "administration/stack-health"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Platform \u2192 Tools \u2192 Stack Health"
+    },
+    {
+      "id": "docs-051",
+      "category": "docs",
+      "question": "Where are the Grafana self-monitoring dashboards?",
+      "expect": {
+        "slugs": [
+          "administration/self-monitoring"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Platform \u2192 Tools \u2192 Self-Monitoring"
+    },
+    {
+      "id": "docs-052",
+      "category": "docs",
+      "question": "How do I open OpenSearch Dashboards?",
+      "expect": {
+        "slugs": [
+          "administration/search-dashboards"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Platform \u2192 Tools \u2192 Search Dashboards"
+    },
+    {
+      "id": "docs-053",
+      "category": "docs",
+      "question": "How do I run a GraphQL query in the console?",
+      "expect": {
+        "slugs": [
+          "administration/graphql-explorer"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Platform \u2192 Tools \u2192 GraphQL Explorer"
+    },
+    {
+      "id": "docs-054",
+      "category": "docs",
+      "question": "My syslog is not showing up, how do I trace where the record stopped?",
+      "expect": {
+        "slugs": [
+          "administration/pipeline-debugger",
+          "send-data/debug-the-pipeline",
+          "administration/debug-the-pipeline-cli"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Platform \u2192 Tools \u2192 Pipeline Debugger"
+    },
+    {
+      "id": "docs-055",
+      "category": "docs",
+      "question": "Can this appliance be recovered, and how much data would we lose?",
+      "expect": {
+        "slugs": [
+          "administration/data-protection",
+          "deploy/back-up-and-restore"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Platform \u2192 Security \u2192 Data Protection"
+    },
+    {
+      "id": "docs-056",
+      "category": "docs",
+      "question": "Which collectors are healthy and reaching their targets?",
+      "expect": {
+        "slugs": [
+          "administration/sensors"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Data sources \u2192 Sensors"
+    },
+    {
+      "id": "docs-057",
+      "category": "docs",
+      "question": "Where is the queue of incidents that need action?",
+      "expect": {
+        "slugs": [
+          "incidents/action-queue"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Operations \u2192 Action Queue"
+    },
+    {
+      "id": "docs-058",
+      "category": "docs",
+      "question": "Where do I see MTTI and MTTR for our incidents?",
+      "expect": {
+        "slugs": [
+          "dashboards-reports/recovery-scorecard",
+          "incident-response/rca-time-intelligence"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 Recovery Scorecard"
+    },
+    {
+      "id": "docs-059",
+      "category": "docs",
+      "question": "Where do I see the anomalies the engine detected?",
+      "expect": {
+        "slugs": [
+          "investigate/detected-findings",
+          "incidents/anomalies-and-correlations"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Investigate \u2192 Findings"
+    },
+    {
+      "id": "docs-060",
+      "category": "docs",
+      "question": "What does the Operations Overview page show?",
+      "expect": {
+        "slugs": [
+          "dashboards-reports/operations-overview"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Overview \u2192 Operations Overview"
+    },
+    {
+      "id": "docs-061",
+      "category": "docs",
+      "question": "Why does My Dashboard say Disconnected?",
+      "expect": {
+        "slugs": [
+          "dashboards-reports/my-dashboard"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Overview \u2192 My Dashboard"
+    },
+    {
       "id": "intent-001",
       "category": "intent",
       "question": "show me the top talkers",
