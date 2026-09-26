@@ -26,6 +26,12 @@ import (
 //go:embed docs_corpus
 var docsCorpusFS embed.FS
 
+// productKnowledgeFS is the curated concept doc (ai/product_knowledge/*.md),
+// indexed as the DocTierCurated tier.
+//
+//go:embed product_knowledge/*.md
+var productKnowledgeFS embed.FS
+
 // Content tiers — curated concept docs outrank the runbook file, which outranks
 // portal pages, when scores are otherwise close.
 const (

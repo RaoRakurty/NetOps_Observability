@@ -28,9 +28,8 @@ type Orchestrator struct {
 	// hatch: redact() falls back to the package default Redact, so an
 	// orchestrator built without one still cannot leak. See redact.go.
 	Redactor  func(string) string
-	KB        *KB        // Network Expert KB (curated playbooks); nil = no supporting knowledge
-	ProductKB *ProductKB // Correlix product knowledge (concepts + how-tos); nil = no product answers
-	Docs      *DocsIndex // docs-portal BM25 retriever; when set it upgrades product answers with real page citations
+	KB   *KB        // Network Expert KB (curated playbooks); nil = no supporting knowledge
+	Docs *DocsIndex // docs portal + curated product knowledge (BM25); nil = no product answers
 	// TAC is the vendor TAC knowledge (issue classes, per-vendor checks and their
 	// bound read-only commands) Iris reads before answering a troubleshooting
 	// question (tac_knowledge.go). nil = not wired; every answer keeps its shape.
@@ -1526,66 +1525,38 @@ func (o *Orchestrator) answerTimeRange(ctx context.Context, p Principal, questio
 // answerProduct answers a question ABOUT Correlix from the documentation index
 // (portal pages + curated product knowledge, §9 upgraded by the intelligence
 // plan §3.a) — deterministic, key-free, with citations that open the exact doc
-// page+section. Falls back to the legacy keyword KB when no docs index is
-// wired, and to an HONEST "the documentation doesn't cover that" when the
-// docs exist but genuinely don't answer (never a weak paraphrase source).
+// page+section. Returns an HONEST "the documentation doesn't cover that" when
+// the docs genuinely don't answer (never a weak paraphrase source), and the
+// capability clarification when no docs index is wired at all.
+//
+// The docs index is the ONE product-knowledge path: the curated concept doc
+// and the runbook brief are indexed into it as their own tiers. The older
+// keyword ProductKB was removed 2026-09-26 — production always wired Docs, so
+// it was unreachable; its UI deep-link table lives on in docs_routes.go.
 func (o *Orchestrator) answerProduct(question string, plan Plan, disc []string) Answer {
-	if o.Docs != nil {
-		if a, ok := o.answerProductFromDocs(question, plan, disc); ok {
-			return a
-		}
-		// No documentation match → the honest decline. No navigation fallback
-		// here: FindFeature keyword-matches eagerly, and "3 places in Correlix"
-		// for an uncovered product question is noise dressed as an answer
-		// ("where is X" questions classify to navigation before reaching here).
-		return Answer{
-			Mode: ModeProductAnswer, Intent: plan.Intent, Modules: plan.Modules,
-			Text:      "The documentation doesn't cover that (yet). I can explain what's going on right now, look up a troubleshooting playbook, or point you to a feature — or browse the docs from the ? menu.",
-			Citations: []Citation{}, ModeBadges: []string{"Product help"},
-			Disclaimers: append(disc, "No matching documentation — nothing was invented."),
-		}
-	}
-	if o.ProductKB == nil {
+	if o.Docs == nil {
 		return o.answerCapability(plan)
 	}
-	hits := o.ProductKB.Search(question, 3)
-	if len(hits) == 0 {
-		// Maybe they meant "where is X" — offer navigation as a fallback path.
-		if nav := FindFeature(question); len(nav) > 0 {
-			return o.answerNavigation(question, plan, disc)
-		}
-		return o.answerCapability(plan)
+	if a, ok := o.answerProductFromDocs(question, plan, disc); ok {
+		return a
 	}
-	top := hits[0].Section
-	mh := &ModuleHealthSummary{Module: "product_navigation", DisplayName: "Correlix"}
-	// The answer body is the top section (the curated content). Related sections
-	// become "learn more" pointers.
-	body := top.Body
-	if len(body) > 900 { // keep the card readable; the deep link has the rest
-		body = strings.TrimSpace(body[:900]) + " …"
-	}
-	cites := []Citation{}
-	if top.Route != "" {
-		cites = append(cites, Citation{ID: "doc:" + top.Title, Kind: "navigation", Label: top.Title, Href: top.Route})
-	}
-	var related []string
-	for _, h := range hits[1:] {
-		related = append(related, "See also: "+h.Section.Title)
-		if h.Section.Route != "" {
-			cites = append(cites, Citation{ID: "doc:" + h.Section.Title, Kind: "navigation", Label: h.Section.Title, Href: h.Section.Route})
-		}
-	}
-	mh.Headline = top.Title
+	// No documentation match → the honest decline. No navigation fallback
+	// here: FindFeature keyword-matches eagerly, and "3 places in Correlix"
+	// for an uncovered product question is noise dressed as an answer
+	// ("where is X" questions classify to navigation before reaching here).
 	return Answer{
 		Mode: ModeProductAnswer, Intent: plan.Intent, Modules: plan.Modules,
-		Text: body, Module: mh, Citations: cites, NextActions: related,
-		ModeBadges: []string{"Product help"}, Disclaimers: disc,
+		Text:      "The documentation doesn't cover that (yet). I can explain what's going on right now, look up a troubleshooting playbook, or point you to a feature — or browse the docs from the ? menu.",
+		Citations: []Citation{}, ModeBadges: []string{"Product help"},
+		Disclaimers: append(disc, "No matching documentation — nothing was invented."),
 	}
 }
 
 // answerProductFromDocs builds the documentation-grounded product answer: the
-// top chunk's text as the body, every hit as a citation that opens the Help
-// drawer at that page+section. ok=false when the index has no honest match.
+// top chunk's text as the body, every portal hit as a citation that opens the
+// Help drawer at that page+section, and — for curated concept chunks, which
+// have no portal page — a navigation citation to the Correlix page the concept
+// lives on (docs_routes.go). ok=false when the index has no honest match.
 func (o *Orchestrator) answerProductFromDocs(question string, plan Plan, disc []string) (Answer, bool) {
 	hits := o.Docs.Search(question, 4)
 	if len(hits) == 0 {
@@ -1596,17 +1567,24 @@ func (o *Orchestrator) answerProductFromDocs(question string, plan Plan, disc []
 	if len(body) > 900 { // keep the card readable; the doc link has the rest
 		body = strings.TrimSpace(body[:900]) + " …"
 	}
-	cites := make([]Citation, 0, len(hits))
+	cites := make([]Citation, 0, len(hits)+1)
+	var navCites []Citation // in-app links for curated chunks, after the doc links
+	navCited := map[string]bool{}
 	var related []string
 	for i, h := range hits {
 		c := h.Chunk
 		if c.Href != "" {
 			cites = append(cites, Citation{ID: c.ID, Kind: "doc", Label: c.Breadcrumb, Href: c.Href})
 		}
+		if route := docRoute(c); route != "" && !navCited[route] {
+			navCited[route] = true
+			navCites = append(navCites, Citation{ID: "nav:" + route, Kind: "navigation", Label: "Open in Correlix", Href: route})
+		}
 		if i > 0 {
 			related = append(related, "See also: "+c.Breadcrumb)
 		}
 	}
+	cites = append(cites, navCites...)
 	mh := &ModuleHealthSummary{Module: "product_navigation", DisplayName: "Correlix", Headline: top.Breadcrumb}
 	return Answer{
 		Mode: ModeProductAnswer, Intent: plan.Intent, Modules: plan.Modules,

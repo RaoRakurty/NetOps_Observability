@@ -48,11 +48,6 @@ func envFlagLookup(flag string) bool { return os.Getenv(flag) == "true" }
 // across requests.
 var aiKB = ai.LoadKB()
 
-// aiProductKB is the Correlix PRODUCT knowledge (concepts + how-tos), parsed once
-// from the same embedded doc that grounds the free-form copilot — so the grounded,
-// key-free assistant answers "what is a seam / how do I set up SNMP" accurately.
-var aiProductKB = ai.LoadProductKB(appKnowledge)
-
 // aiDocsIndex is the documentation retriever (intelligence plan P1): the whole
 // docs portal + the curated product knowledge + the copilot runbook brief in ONE
 // BM25 index, built once from embedded markdown. Both assistant brains ground
@@ -191,18 +186,17 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 	deps := s.aiTroubleshootDeps(r, claims)
 	tools.AddTroubleshootTools(ds, deps)
 	return &ai.Orchestrator{
-		DS:        ds,
-		Tools:     tools,
-		LLM:       aiLLM{srv: s, claims: claims},
-		Flags:     envFlagLookup,
-		Policy:    ai.NewPolicyEngine(ai.PolicyConfig{}, envFlagLookup), // safe default: read-only
-		Redactor:  ai.Redact,                                            // outbound DLP: secrets + direct identifiers (LLM06)
-		KB:        aiKB,                                                 // Network Expert KB (supporting knowledge)
-		ProductKB: aiProductKB,                                          // Correlix product knowledge (concepts + how-tos)
-		Docs:      aiDocsIndex,                                          // docs-portal retriever (real page citations)
-		TAC:       s.aiTACKnowledge(),                                   // vendor TAC knowledge Iris reads before answering
-		Skills:    aiSkills,                                             // troubleshooting methods (nil = layer disabled)
-		Explain:   aiExplanations,                                       // authored UI explanations (the AskIris (i))
+		DS:       ds,
+		Tools:    tools,
+		LLM:      aiLLM{srv: s, claims: claims},
+		Flags:    envFlagLookup,
+		Policy:   ai.NewPolicyEngine(ai.PolicyConfig{}, envFlagLookup), // safe default: read-only
+		Redactor: ai.Redact,                                            // outbound DLP: secrets + direct identifiers (LLM06)
+		KB:       aiKB,                                                 // Network Expert KB (supporting knowledge)
+		Docs:     aiDocsIndex,                                          // docs-portal retriever (real page citations)
+		TAC:      s.aiTACKnowledge(),                                   // vendor TAC knowledge Iris reads before answering
+		Skills:   aiSkills,                                             // troubleshooting methods (nil = layer disabled)
+		Explain:  aiExplanations,                                       // authored UI explanations (the AskIris (i))
 
 		Troubleshoot: deps,                  // tenant-scoped Phase-A reads
 		ToolAudit:    s.aiToolAudit(claims), // one audit line per gather step (arg NAMES only)
