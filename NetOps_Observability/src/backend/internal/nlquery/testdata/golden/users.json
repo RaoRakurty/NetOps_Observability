@@ -1,0 +1,453 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "users",
+  "cases": [
+    {
+      "id": "users-001",
+      "category": "users",
+      "question": "What else did they change?",
+      "context": {
+        "tz": "America/Chicago",
+        "incident_id": "3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+        "prior_ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "change",
+              "id": "change:chg-1042"
+            }
+          ],
+          "time_range": {
+            "kind": "incident",
+            "anchor": {
+              "incident_id": "3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+              "before": "30m",
+              "after": "10m"
+            }
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ],
+          "limit": 1
+        },
+        "script": "N-S1",
+        "turn": 4
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "actor",
+              "op": "eq",
+              "values": [
+                "jsmith"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "24h"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1042",
+            "change:chg-1044"
+          ],
+          "min_rows": 2
+        }
+      },
+      "paraphrases": [
+        "what else did he change",
+        "anything else they changed?",
+        "other changes by the same person"
+      ]
+    },
+    {
+      "id": "users-002",
+      "category": "users",
+      "question": "What did jsmith change today?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "actor",
+              "op": "eq",
+              "values": [
+                "jsmith"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1042",
+            "change:chg-1044"
+          ],
+          "min_rows": 2
+        }
+      },
+      "paraphrases": [
+        "jsmith changes today",
+        "what has jsmith changed since midnight",
+        "today's changes by jsmith"
+      ]
+    },
+    {
+      "id": "users-003",
+      "category": "users",
+      "question": "Show all changes by akumar in the last 7 days.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "actor",
+              "op": "eq",
+              "values": [
+                "akumar"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "7d"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1048",
+            "change:chg-1050",
+            "change:chg-1051"
+          ],
+          "min_rows": 3
+        }
+      },
+      "paraphrases": [
+        "akumar changes past week",
+        "everything akumar changed last 7 days",
+        "changes made by akumar this past week"
+      ]
+    },
+    {
+      "id": "users-004",
+      "category": "users",
+      "question": "Show changes by jsmith or mlee at Dallas this week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [
+          {
+            "input": "Dallas",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "filters": [
+            {
+              "field": "actor",
+              "op": "in",
+              "values": [
+                "jsmith",
+                "mlee"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1042",
+            "change:chg-1045",
+            "change:chg-1049",
+            "change:chg-1056"
+          ],
+          "min_rows": 4
+        }
+      },
+      "paraphrases": [
+        "jsmith/mlee changes in dallas this week",
+        "dfw changes by jsmith or mlee since monday",
+        "changes at dallas from jsmith and mlee this week"
+      ]
+    },
+    {
+      "id": "users-005",
+      "category": "users",
+      "question": "Which engineers made changes yesterday?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-23T05:00:00Z",
+            "to": "2026-09-24T05:00:00Z"
+          },
+          "group_by": [
+            "actor"
+          ],
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "group_counts",
+          "must_include_refs": [
+            "change:chg-1045",
+            "change:chg-1046",
+            "change:chg-1056"
+          ],
+          "min_rows": 3
+        }
+      },
+      "paraphrases": [
+        "who made changes yesterday",
+        "engineers with changes yesterday",
+        "list the people who changed things yesterday"
+      ]
+    },
+    {
+      "id": "users-006",
+      "category": "users",
+      "question": "Show incidents assigned to cloud-team this month.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "filters": [
+            {
+              "field": "owner",
+              "op": "eq",
+              "values": [
+                "cloud-team"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-01T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:c7e05b92-3d18-4a6f-9e27-b4f1a0c3d852",
+            "incident:4a0c8e5d-f913-4c72-8b4e-6d2f1a9c07b5"
+          ],
+          "min_rows": 2
+        }
+      },
+      "paraphrases": [
+        "cloud-team incidents this month",
+        "incidents owned by the cloud team since the 1st",
+        "what did cloud-team get this month"
+      ]
+    },
+    {
+      "id": "users-007",
+      "category": "users",
+      "question": "Who was changing things before the Houston VPN outage?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [
+          {
+            "input": "the Houston VPN outage",
+            "type": "incident",
+            "id": "incident:5b9e3f10-a2c4-4d87-8f61-2c7a9e0b4d13",
+            "method": "corr_current"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "time_range": {
+            "kind": "incident",
+            "anchor": {
+              "incident_id": "5b9e3f10-a2c4-4d87-8f61-2c7a9e0b4d13",
+              "before": "30m",
+              "after": "10m"
+            }
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1050"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "who changed stuff right before the houston vpn outage",
+        "changes before the hou vpn incident - who",
+        "who made changes just before the Houston VPN issue"
+      ]
+    },
+    {
+      "id": "users-008",
+      "category": "users",
+      "question": "Show changes made by deploy-bot this week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "actor",
+              "op": "eq",
+              "values": [
+                "deploy-bot"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1047",
+            "change:chg-1052"
+          ],
+          "min_rows": 2
+        }
+      },
+      "paraphrases": [
+        "deploy-bot changes this week",
+        "what has deploy-bot pushed since monday",
+        "automated changes by deploy-bot this week"
+      ]
+    }
+  ]
+}

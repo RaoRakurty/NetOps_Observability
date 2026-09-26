@@ -1,0 +1,706 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "changes",
+  "cases": [
+    {
+      "id": "changes-001",
+      "category": "changes",
+      "question": "What changed in the last hour?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1043"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "changes last hour",
+        "anything change in the past 60 min?",
+        "what's changed in the last 1h"
+      ]
+    },
+    {
+      "id": "changes-002",
+      "category": "changes",
+      "question": "Show all changes at Dallas today.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [
+          {
+            "input": "Dallas",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1042",
+            "change:chg-1043"
+          ],
+          "min_rows": 2
+        }
+      },
+      "paraphrases": [
+        "dfw changes today",
+        "everything that changed in dallas today",
+        "today's changes at dallas hq"
+      ]
+    },
+    {
+      "id": "changes-003",
+      "category": "changes",
+      "question": "Show security policy changes in the last 2 days.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "type",
+              "op": "eq",
+              "values": [
+                "SECURITY_POLICY_CHANGE"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "2d"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [
+          {
+            "v": 1,
+            "query_type": "change_list",
+            "target": "change",
+            "filters": [
+              {
+                "field": "class",
+                "op": "eq",
+                "values": [
+                  "security"
+                ]
+              }
+            ],
+            "time_range": {
+              "kind": "relative",
+              "last": "2d"
+            },
+            "order_by": [
+              {
+                "field": "event_at",
+                "dir": "desc"
+              }
+            ]
+          }
+        ],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1045",
+            "change:chg-1056"
+          ],
+          "min_rows": 2
+        }
+      },
+      "paraphrases": [
+        "firewall policy changes last 2 days",
+        "security policy edits past 48h",
+        "acl / security changes in the last two days"
+      ]
+    },
+    {
+      "id": "changes-004",
+      "category": "changes",
+      "question": "Show changes by type in the last 7 days.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "time_range": {
+            "kind": "relative",
+            "last": "7d"
+          },
+          "group_by": [
+            "type"
+          ],
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "group_counts",
+          "must_include_refs": [
+            "change:chg-1042",
+            "change:chg-1051"
+          ],
+          "min_rows": 10
+        }
+      },
+      "paraphrases": [
+        "changes grouped by type past week",
+        "breakdown of changes by kind last 7 days",
+        "change counts per type this past week"
+      ]
+    },
+    {
+      "id": "changes-005",
+      "category": "changes",
+      "question": "Show the 10 most recent changes.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "time_range": {},
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ],
+          "limit": 10
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1043",
+            "change:chg-1042"
+          ],
+          "min_rows": 5
+        }
+      },
+      "paraphrases": [
+        "last 10 changes",
+        "10 latest changes",
+        "most recent ten changes"
+      ]
+    },
+    {
+      "id": "changes-006",
+      "category": "changes",
+      "question": "Show non-DNS changes today.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "type",
+              "op": "ne",
+              "values": [
+                "DNS_CHANGE"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1042",
+            "change:chg-1043",
+            "change:chg-1044"
+          ],
+          "min_rows": 6
+        }
+      },
+      "paraphrases": [
+        "today's changes except dns",
+        "all changes today excluding dns",
+        "changes today, no dns"
+      ]
+    },
+    {
+      "id": "changes-007",
+      "category": "changes",
+      "question": "Show the diff for change chg-1051.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "change_diff",
+        "entities": [
+          {
+            "input": "chg-1051",
+            "type": "change",
+            "id": "change:chg-1051",
+            "method": "change_ledger"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "change",
+              "id": "change:chg-1051"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "30d"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ],
+          "limit": 1
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_diff",
+          "must_include_refs": [
+            "change:chg-1051"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "diff chg-1051",
+        "what exactly changed in chg-1051",
+        "before/after for change chg-1051"
+      ]
+    },
+    {
+      "id": "changes-008",
+      "category": "changes",
+      "question": "Who changed it?",
+      "context": {
+        "tz": "America/Chicago",
+        "incident_id": "3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+        "prior_ast": {
+          "v": 1,
+          "query_type": "incident_explain",
+          "target": "incident",
+          "incident_id": "3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+          "time_range": {}
+        },
+        "script": "N-S1",
+        "turn": 2
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [
+          {
+            "input": "it",
+            "type": "incident",
+            "id": "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+            "method": "context"
+          },
+          {
+            "input": "the incident's site",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "context"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "time_range": {
+            "kind": "incident",
+            "anchor": {
+              "incident_id": "3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+              "before": "30m",
+              "after": "10m"
+            }
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1042"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "who made the change?",
+        "who touched it",
+        "who did this"
+      ]
+    },
+    {
+      "id": "changes-009",
+      "category": "changes",
+      "question": "Show exactly what he changed.",
+      "context": {
+        "tz": "America/Chicago",
+        "incident_id": "3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+        "prior_ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "time_range": {
+            "kind": "incident",
+            "anchor": {
+              "incident_id": "3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+              "before": "30m",
+              "after": "10m"
+            }
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "script": "N-S1",
+        "turn": 3
+      },
+      "expect": {
+        "intent": "change_diff",
+        "entities": [
+          {
+            "input": "he",
+            "type": "change",
+            "id": "change:chg-1042",
+            "method": "context"
+          },
+          {
+            "input": "the incident",
+            "type": "incident",
+            "id": "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+            "method": "context"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "change",
+              "id": "change:chg-1042"
+            }
+          ],
+          "time_range": {
+            "kind": "incident",
+            "anchor": {
+              "incident_id": "3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+              "before": "30m",
+              "after": "10m"
+            }
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ],
+          "limit": 1
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_diff",
+          "must_include_refs": [
+            "change:chg-1042"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "show me exactly what he changed",
+        "what exactly did he change",
+        "show his diff"
+      ]
+    },
+    {
+      "id": "changes-010",
+      "category": "changes",
+      "question": "Only WAN changes.",
+      "context": {
+        "tz": "America/Chicago",
+        "incident_id": "3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+        "prior_ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "actor",
+              "op": "eq",
+              "values": [
+                "jsmith"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "24h"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "script": "N-S1",
+        "turn": 5
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "actor",
+              "op": "eq",
+              "values": [
+                "jsmith"
+              ]
+            },
+            {
+              "field": "class",
+              "op": "eq",
+              "values": [
+                "wan"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "24h"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1042",
+            "change:chg-1044"
+          ],
+          "min_rows": 2
+        }
+      },
+      "paraphrases": [
+        "just the wan changes",
+        "only wan",
+        "filter to wan-related changes"
+      ]
+    },
+    {
+      "id": "changes-011",
+      "category": "changes",
+      "question": "Show the last 7 days.",
+      "context": {
+        "tz": "America/Chicago",
+        "incident_id": "3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+        "prior_ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "actor",
+              "op": "eq",
+              "values": [
+                "jsmith"
+              ]
+            },
+            {
+              "field": "class",
+              "op": "eq",
+              "values": [
+                "wan"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "24h"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "script": "N-S1",
+        "turn": 6
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "actor",
+              "op": "eq",
+              "values": [
+                "jsmith"
+              ]
+            },
+            {
+              "field": "class",
+              "op": "eq",
+              "values": [
+                "wan"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "7d"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1042",
+            "change:chg-1044",
+            "change:chg-1049"
+          ],
+          "min_rows": 3
+        }
+      },
+      "paraphrases": [
+        "last 7 days",
+        "expand to the past week",
+        "go back a week"
+      ]
+    }
+  ]
+}

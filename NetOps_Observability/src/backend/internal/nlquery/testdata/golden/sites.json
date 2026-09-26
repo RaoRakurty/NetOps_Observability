@@ -1,0 +1,564 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "sites",
+  "cases": [
+    {
+      "id": "sites-001",
+      "category": "sites",
+      "question": "Show WAN loss in Dallas.",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "Dallas",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "circuit",
+          "metric": "circuit_loss_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "time_range": {}
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "circuit:dfw-comcast-1",
+            "circuit:dfw-att-mpls-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "dallas wan loss",
+        "wan packet loss at DFW",
+        "loss on the dallas wan"
+      ]
+    },
+    {
+      "id": "sites-002",
+      "category": "sites",
+      "question": "What happened at the Austin branch?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [
+          {
+            "input": "the Austin branch",
+            "type": "site",
+            "id": "site:aus-br",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:aus-br"
+            }
+          ],
+          "time_range": {},
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ],
+          "limit": 5
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:8c41d2e7-15a9-4f3b-b2c6-0e9d7a6b5c41"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "what happened in austin",
+        "anything going on at aus?",
+        "what's been happening at the austin branch"
+      ]
+    },
+    {
+      "id": "sites-003",
+      "category": "sites",
+      "question": "Show CPU for all devices at DFW HQ.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "DFW HQ",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "device",
+          "metric": "cpu_util_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "time_range": {}
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "device:dfw-edge-1",
+            "device:dfw-edge-2",
+            "device:dfw-core-1",
+            "device:dfw-fw-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "dfw hq cpu",
+        "cpu for every box at dallas hq",
+        "all dfw devices cpu"
+      ]
+    },
+    {
+      "id": "sites-004",
+      "category": "sites",
+      "question": "Show changes at the Houston branch over the last 2 days.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [
+          {
+            "input": "the Houston branch",
+            "type": "site",
+            "id": "site:hou-br",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:hou-br"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "2d"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [
+          {
+            "v": 1,
+            "query_type": "change_list",
+            "target": "change",
+            "entities": [
+              {
+                "type": "site",
+                "id": "site:hou-br"
+              }
+            ],
+            "time_range": {
+              "kind": "relative",
+              "last": "48h"
+            },
+            "order_by": [
+              {
+                "field": "event_at",
+                "dir": "desc"
+              }
+            ]
+          }
+        ],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1050"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "houston changes last 2 days",
+        "what changed at hou in the past 48 hours",
+        "changes hou branch last two days"
+      ]
+    },
+    {
+      "id": "sites-005",
+      "category": "sites",
+      "question": "Show interface utilization at the NYC data center for the last hour.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "the NYC data center",
+            "type": "site",
+            "id": "site:nyc-dc",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "interface",
+          "metric": "if_util_max_pct",
+          "aggregation": "max",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:nyc-dc"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "interface:nyc-edge-1/xe-0/0/0",
+            "interface:nyc-core-1/Ethernet1/1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "nyc dc interface util last hour",
+        "utilization on all nyc ports past 60 min",
+        "new york dc link utilization last 1h"
+      ]
+    },
+    {
+      "id": "sites-006",
+      "category": "sites",
+      "question": "Any open incidents in Dallas?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [
+          {
+            "input": "Dallas",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "filters": [
+            {
+              "field": "state",
+              "op": "eq",
+              "values": [
+                "open"
+              ]
+            }
+          ],
+          "time_range": {},
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "open incidents dfw?",
+        "anything open in dallas",
+        "are there active incidents at DFW"
+      ]
+    },
+    {
+      "id": "sites-007",
+      "category": "sites",
+      "question": "Show BGP session state for all peers at the Dallas site.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "the Dallas site",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "bgp_peer",
+          "metric": "bgp_session_state",
+          "aggregation": "last",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "time_range": {}
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "bgp_peer:dfw-edge-1/203.0.113.1",
+            "bgp_peer:dfw-edge-2/198.51.100.1@mpls"
+          ]
+        }
+      },
+      "paraphrases": [
+        "dallas bgp peer states",
+        "bgp sessions at dfw",
+        "state of every bgp neighbor in dallas"
+      ]
+    },
+    {
+      "id": "sites-008",
+      "category": "sites",
+      "question": "Show memory on San Jose devices since yesterday.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "San Jose",
+            "type": "site",
+            "id": "site:sjc-br",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "device",
+          "metric": "mem_util_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:sjc-br"
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-23T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "device:sjc-edge-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "sjc memory since yesterday",
+        "san jose device mem from yesterday until now",
+        "memory at the san jose branch since yesterday"
+      ]
+    },
+    {
+      "id": "sites-009",
+      "category": "sites",
+      "question": "Only Dallas.",
+      "context": {
+        "tz": "America/Chicago",
+        "prior_ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "circuit",
+          "metric": "circuit_loss_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "provider",
+              "id": "provider:comcast"
+            }
+          ],
+          "predicate": {
+            "op": "above_baseline"
+          },
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          }
+        },
+        "cross": true,
+        "script": "N-S2b",
+        "turn": 2
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [
+          {
+            "input": "Comcast",
+            "type": "provider",
+            "id": "provider:comcast",
+            "method": "context"
+          },
+          {
+            "input": "Dallas",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "circuit",
+          "metric": "circuit_loss_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "provider",
+              "id": "provider:comcast"
+            },
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "predicate": {
+            "op": "above_baseline"
+          },
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "just dallas",
+        "only dfw",
+        "narrow it to dallas"
+      ]
+    },
+    {
+      "id": "sites-010",
+      "category": "sites",
+      "question": "Show Dallas WAN packet loss for the last two hours.",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true,
+        "script": "N-S2a",
+        "turn": 1
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "Dallas",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "circuit",
+          "metric": "circuit_loss_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "2h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "circuit:dfw-comcast-1",
+            "circuit:dfw-att-mpls-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "dallas wan loss last 2h",
+        "dfw wan packet loss past two hours",
+        "wan loss in dallas for the last 2 hours"
+      ]
+    }
+  ]
+}

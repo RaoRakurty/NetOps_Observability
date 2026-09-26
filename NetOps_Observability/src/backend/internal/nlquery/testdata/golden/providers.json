@@ -1,0 +1,506 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "providers",
+  "cases": [
+    {
+      "id": "providers-001",
+      "category": "providers",
+      "question": "Show loss on Comcast circuits for the last hour.",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "Comcast",
+            "type": "provider",
+            "id": "provider:comcast",
+            "method": "alias_table"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "circuit",
+          "metric": "circuit_loss_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "provider",
+              "id": "provider:comcast"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "circuit:dfw-comcast-1",
+            "circuit:aus-comcast-1",
+            "circuit:sjc-comcast-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "comcast loss last hour",
+        "packet loss on all comcast links past 60m",
+        "comcast circuit loss last 1h"
+      ]
+    },
+    {
+      "id": "providers-002",
+      "category": "providers",
+      "question": "Show latency on all AT&T circuits today.",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "AT&T",
+            "type": "provider",
+            "id": "provider:att",
+            "method": "alias_table"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "circuit",
+          "metric": "circuit_latency_ms",
+          "aggregation": "p95",
+          "entities": [
+            {
+              "type": "provider",
+              "id": "provider:att"
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "circuit:dfw-att-mpls-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "att circuit latency today",
+        "latency on at&t links since midnight",
+        "AT&T latency today"
+      ]
+    },
+    {
+      "id": "providers-003",
+      "category": "providers",
+      "question": "Which providers had circuits with loss above 2% today?",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "circuit",
+          "metric": "circuit_loss_pct",
+          "aggregation": "avg",
+          "predicate": {
+            "op": "gt",
+            "value": 2
+          },
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "group_by": [
+            "provider"
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "providers with > 2% loss today",
+        "which carriers lost more than 2 percent today",
+        "loss over 2% by provider today"
+      ]
+    },
+    {
+      "id": "providers-004",
+      "category": "providers",
+      "question": "Show incidents owned by Comcast Business this week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "filters": [
+            {
+              "field": "owner",
+              "op": "eq",
+              "values": [
+                "Comcast Business"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:8c41d2e7-15a9-4f3b-b2c6-0e9d7a6b5c41"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "comcast-owned incidents this week",
+        "incidents where comcast business is the owner since monday",
+        "which incidents belong to comcast this week"
+      ]
+    },
+    {
+      "id": "providers-005",
+      "category": "providers",
+      "question": "Show BGP flaps on the Verizon circuit in the last 24 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [
+          {
+            "input": "the Verizon circuit",
+            "type": "circuit",
+            "id": "circuit:nyc-verizon-1",
+            "method": "wan_projection"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "bgp_peer",
+          "metric": "bgp_flaps",
+          "aggregation": "sum",
+          "entities": [
+            {
+              "type": "circuit",
+              "id": "circuit:nyc-verizon-1"
+            }
+          ],
+          "predicate": {
+            "op": "gt",
+            "value": 0
+          },
+          "time_range": {
+            "kind": "relative",
+            "last": "24h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "verizon bgp flaps last 24h",
+        "any bgp resets on the verizon link past day",
+        "bgp flaps nyc verizon last 24 hours"
+      ]
+    },
+    {
+      "id": "providers-006",
+      "category": "providers",
+      "question": "Show utilization on the Comcast-facing ports.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "Comcast",
+            "type": "provider",
+            "id": "provider:comcast",
+            "method": "alias_table"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "interface",
+          "metric": "if_util_max_pct",
+          "aggregation": "max",
+          "entities": [
+            {
+              "type": "provider",
+              "id": "provider:comcast"
+            }
+          ],
+          "time_range": {}
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "interface:dfw-edge-1/ge-0/0/0",
+            "interface:aus-edge-1/ge-0/0/0",
+            "interface:sjc-edge-1/ge-0/0/0"
+          ]
+        }
+      },
+      "paraphrases": [
+        "util on comcast facing interfaces",
+        "how busy are our comcast ports",
+        "comcast port utilization"
+      ]
+    },
+    {
+      "id": "providers-007",
+      "category": "providers",
+      "question": "Show Comcast latency at Austin and San Jose for the last 3 hours.",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "Comcast",
+            "type": "provider",
+            "id": "provider:comcast",
+            "method": "alias_table"
+          },
+          {
+            "input": "Austin",
+            "type": "site",
+            "id": "site:aus-br",
+            "method": "site_store"
+          },
+          {
+            "input": "San Jose",
+            "type": "site",
+            "id": "site:sjc-br",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "circuit",
+          "metric": "circuit_latency_ms",
+          "aggregation": "p95",
+          "entities": [
+            {
+              "type": "provider",
+              "id": "provider:comcast"
+            },
+            {
+              "type": "site",
+              "id": "site:aus-br"
+            },
+            {
+              "type": "site",
+              "id": "site:sjc-br"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "3h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "circuit:aus-comcast-1",
+            "circuit:sjc-comcast-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "comcast latency aus + sjc last 3h",
+        "latency on comcast circuits in austin and san jose past three hours",
+        "austin/san jose comcast rtt last 3 hrs"
+      ]
+    },
+    {
+      "id": "providers-008",
+      "category": "providers",
+      "question": "Which Comcast circuits had unusual loss in the last hour?",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true,
+        "script": "N-S2b",
+        "turn": 1
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [
+          {
+            "input": "Comcast",
+            "type": "provider",
+            "id": "provider:comcast",
+            "method": "alias_table"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "circuit",
+          "metric": "circuit_loss_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "provider",
+              "id": "provider:comcast"
+            }
+          ],
+          "predicate": {
+            "op": "above_baseline"
+          },
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "comcast circuits with abnormal loss last hour",
+        "unusual loss on comcast links past 60 min",
+        "any comcast circuit with loss above normal in the last hour"
+      ]
+    },
+    {
+      "id": "providers-009",
+      "category": "providers",
+      "question": "Only Comcast.",
+      "context": {
+        "tz": "America/Chicago",
+        "prior_ast": {
+          "v": 1,
+          "query_type": "compare_windows",
+          "target": "circuit",
+          "metric": "circuit_loss_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "2h"
+          },
+          "compare_to": {
+            "kind": "relative",
+            "last": "2h",
+            "offset": "1d"
+          }
+        },
+        "cross": true,
+        "script": "N-S2a",
+        "turn": 3
+      },
+      "expect": {
+        "intent": "compare",
+        "entities": [
+          {
+            "input": "it",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "context"
+          },
+          {
+            "input": "Comcast",
+            "type": "provider",
+            "id": "provider:comcast",
+            "method": "alias_table"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "compare_windows",
+          "target": "circuit",
+          "metric": "circuit_loss_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            },
+            {
+              "type": "provider",
+              "id": "provider:comcast"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "2h"
+          },
+          "compare_to": {
+            "kind": "relative",
+            "last": "2h",
+            "offset": "1d"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "comparison",
+          "must_include_refs": [
+            "circuit:dfw-comcast-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "just comcast",
+        "only the comcast ones",
+        "filter to comcast"
+      ]
+    }
+  ]
+}

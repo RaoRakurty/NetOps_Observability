@@ -1,0 +1,300 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "grouping",
+  "cases": [
+    {
+      "id": "grouping-001",
+      "category": "grouping",
+      "question": "Show changes grouped by site this week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "group_by": [
+            "site"
+          ],
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "group_counts",
+          "must_include_refs": [
+            "change:chg-1042",
+            "change:chg-1050"
+          ],
+          "min_rows": 10
+        }
+      },
+      "paraphrases": [
+        "changes by site this week",
+        "per-site changes since monday",
+        "group this week's changes by site"
+      ]
+    },
+    {
+      "id": "grouping-002",
+      "category": "grouping",
+      "question": "Show CPU per site for the last 2 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "device",
+          "metric": "cpu_util_pct",
+          "aggregation": "avg",
+          "time_range": {
+            "kind": "relative",
+            "last": "2h"
+          },
+          "group_by": [
+            "site"
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "cpu by site last 2h",
+        "per-site cpu past two hours",
+        "site-level cpu last 2 hrs"
+      ]
+    },
+    {
+      "id": "grouping-003",
+      "category": "grouping",
+      "question": "Show incidents by owner in the last 7 days.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "time_range": {
+            "kind": "relative",
+            "last": "7d"
+          },
+          "group_by": [
+            "owner"
+          ],
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "group_counts",
+          "must_include_refs": [
+            "incident:8c41d2e7-15a9-4f3b-b2c6-0e9d7a6b5c41",
+            "incident:c7e05b92-3d18-4a6f-9e27-b4f1a0c3d852"
+          ],
+          "min_rows": 6
+        }
+      },
+      "paraphrases": [
+        "incidents per owner last week",
+        "group incidents by owning team past 7 days",
+        "who owns what incidents this past week"
+      ]
+    },
+    {
+      "id": "grouping-004",
+      "category": "grouping",
+      "question": "Break down interface discards by device at Dallas today.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "Dallas",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "interface",
+          "metric": "if_discards",
+          "aggregation": "max",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "group_by": [
+            "device"
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "discards per device dfw today",
+        "dallas drops by device today",
+        "interface discards grouped by device in dallas today"
+      ]
+    },
+    {
+      "id": "grouping-005",
+      "category": "grouping",
+      "question": "Show changes by type and actor in the last 30 days.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "time_range": {
+            "kind": "relative",
+            "last": "30d"
+          },
+          "group_by": [
+            "type",
+            "actor"
+          ],
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "group_counts",
+          "must_include_refs": [
+            "change:chg-1055",
+            "change:chg-1042"
+          ],
+          "min_rows": 15
+        }
+      },
+      "paraphrases": [
+        "changes by type + actor last 30d",
+        "type x person change breakdown past month",
+        "group changes by type and who, last 30 days"
+      ]
+    },
+    {
+      "id": "grouping-006",
+      "category": "grouping",
+      "question": "Show circuit loss grouped by provider for the last hour.",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "circuit",
+          "metric": "circuit_loss_pct",
+          "aggregation": "avg",
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          },
+          "group_by": [
+            "provider"
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "loss by provider last hour",
+        "circuit loss per carrier past 60m",
+        "group wan loss by isp last 1h"
+      ]
+    },
+    {
+      "id": "grouping-007",
+      "category": "grouping",
+      "question": "Show BGP flaps by device this week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "bgp_peer",
+          "metric": "bgp_flaps",
+          "aggregation": "sum",
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "group_by": [
+            "device"
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "bgp flaps per device this week",
+        "group bgp flaps by router since monday",
+        "which devices had bgp flaps this week, grouped"
+      ]
+    }
+  ]
+}
