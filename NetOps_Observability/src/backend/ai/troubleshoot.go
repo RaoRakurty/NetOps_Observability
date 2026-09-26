@@ -269,6 +269,14 @@ type TroubleshootDeps struct {
 	// deployment, and `recall_investigations` is then not registered at all.
 	RecallInvestigations func(ctx context.Context, p Principal, q InvestigationQuery) ([]InvestigationRow, error)
 
+	// ── the Iris RCA contract (tracker 337 N-B1) ───────────────────────────
+
+	// RCAResult projects the correlation engine's own report for ONE incident
+	// the caller may see (the same tenant-scoped read the RCA page takes).
+	// Unknown or another tenant's incident is ErrNotFound. nil = not wired, and
+	// the four N-B2 tools are then not registered.
+	RCAResult func(ctx context.Context, p Principal, correlationID string) (RCAResult, error)
+
 	// ── configuration change (review item 10) ──────────────────────────────
 
 	// RecentChanges lists the configuration changes the CALLER may see — one
@@ -803,6 +811,8 @@ func (r *ToolRegistry) AddTroubleshootTools(ds DataSource, d TroubleshootDeps) {
 	if d.CaseTimeline != nil {
 		r.add(caseTimelineTool{deps: d})
 	}
+	// The RCA contract tools are incident-scoped, not device-scoped.
+	r.AddRCATools(d)
 	// The BGP operations reads are RESOURCE-scoped, not device-scoped: they need
 	// no inventory resolution, so they register independently of ResolveDevice.
 	if d.BGPWatchlist != nil {

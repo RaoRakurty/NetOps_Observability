@@ -47,6 +47,7 @@ import (
 	"netops/backend/internal/configdrift"
 	"netops/backend/internal/configstore"
 	"netops/backend/internal/protocoldiag"
+	"netops/backend/internal/rca"
 	"netops/backend/internal/showparse"
 	"netops/backend/models"
 	"netops/backend/pathgraph"
@@ -173,6 +174,9 @@ func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.Troubl
 	if s.irisMemory != nil {
 		deps.RecallInvestigations = s.aiRecallInvestigations(claims)
 	}
+	// The Iris RCA contract (tracker 337 N-B1): the engine's own report,
+	// projected. It rides the same tenant-scoped slice read as the RCA page.
+	deps.RCAResult = s.aiRCAResult(r, claims)
 	// Configuration change history (design item 10). Wired only when config
 	// backup is enabled — the version register and the drift state it reads
 	// exist only then.
@@ -2025,4 +2029,117 @@ func firstNonBlank(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// ---- the Iris RCA contract (tracker 337 N-B1) ------------------------------
+
+// aiRCAResult builds the engine's RCA report for ONE incident through the SAME
+// tenant-scoped read the RCA page takes (buildRcaReportForID → loadCorrSlice,
+// which scopes by the request's claims) and projects it for Iris, bounded. A
+// foreign or unknown incident is ai.ErrNotFound — never a 403 (§3a).
+func (s *server) aiRCAResult(r *http.Request, claims jwtClaims) func(context.Context, ai.Principal, string) (ai.RCAResult, error) {
+	return func(_ context.Context, _ ai.Principal, id string) (ai.RCAResult, error) {
+		if !isUUIDToken(id) {
+			return ai.RCAResult{}, ai.ErrNotFound
+		}
+		rep, status, err := s.buildRcaReportForID(r, claims, id, 0)
+		if err != nil {
+			if status == http.StatusNotFound || status == http.StatusForbidden {
+				return ai.RCAResult{}, ai.ErrNotFound
+			}
+			return ai.RCAResult{}, err
+		}
+		return projectRCAReport(rep), nil
+	}
+}
+
+// projectRCAReport is a pure projection — every value is the engine's, only
+// bounded. Nothing is recomputed.
+func projectRCAReport(rep rca.Report) ai.RCAResult {
+	trunc := false
+	out := ai.RCAResult{
+		IncidentID: rep.CorrelationID, DisplayID: rep.DisplayID, Title: rep.Title,
+		RootCause: ai.RCARootCause{
+			Identified: rep.RootCause.Identified, Statement: rep.RootCause.Statement,
+			Mechanism: rep.RootCause.Mechanism, Object: rep.RootCause.Object, ObjectType: rep.RootCause.ObjectType,
+			PossibleCause: rep.RootCause.PossibleCause,
+			Known:         clipStrings(rep.RootCause.EvidenceKnown, ai.MaxRCAEvidenceLines, &trunc),
+			Missing:       clipStrings(rep.RootCause.EvidenceMissing, ai.MaxRCAEvidenceLines, &trunc),
+		},
+		Localization: ai.RCALocalization{
+			Localized: rep.FaultLocalization.Localized, Statement: rep.FaultLocalization.Statement,
+			Object: rep.FaultLocalization.Object, ObjectType: rep.FaultLocalization.ObjectType,
+		},
+		ChainNote:           rep.CausalChain.Note,
+		PrimaryContradicted: rep.CausalChain.PrimaryContradicted,
+		Affected: ai.RCAAffected{
+			Services: clipStrings(rep.Scope.Services, ai.MaxRCAAffectedPerSet, &trunc),
+			Devices:  clipStrings(rep.Scope.Devices, ai.MaxRCAAffectedPerSet, &trunc),
+			Sites:    clipStrings(rep.Scope.Sites, ai.MaxRCAAffectedPerSet, &trunc),
+			Targets:  clipStrings(rep.Scope.Targets, ai.MaxRCAAffectedPerSet, &trunc),
+			Seams:    clipStrings(rep.Scope.Seams, ai.MaxRCAAffectedPerSet, &trunc),
+			Regions:  clipStrings(rep.Scope.Regions, ai.MaxRCAAffectedPerSet, &trunc),
+			Paths:    rep.Scope.PathsCount,
+		},
+		Owner: ai.RCAOwner{
+			Triage: rep.Ownership.TriageOwner, TriageReason: rep.Ownership.TriageReason,
+			SuspectedDomain: rep.Ownership.SuspectedDomain, Technical: rep.Ownership.TechnicalOwner,
+			ExternalCandidate: rep.Ownership.ExternalCandidate, Demarcation: rep.Ownership.Demarcation,
+			Escalation: rep.Ownership.EscalationOwner, EscalationWhy: rep.Ownership.EscalationReason,
+		},
+	}
+	for _, c := range rep.Ownership.Candidates {
+		out.Owner.Candidates = append(out.Owner.Candidates, strings.TrimSpace(c.Team+" — "+c.Reason))
+	}
+	for i, st := range rep.CausalChain.Steps {
+		if i == ai.MaxRCAChainSteps {
+			trunc = true
+			break
+		}
+		out.CausalChain = append(out.CausalChain, ai.RCACausalLink{
+			Number: st.Number, Claim: st.Claim, Role: st.CausalRole, Link: st.Link,
+			Relation: ai.RelationFor(st.EpistemicState), EpistemicState: st.EpistemicState,
+			Basis: st.EpistemicBasis, Interval: st.Interval,
+			Evidence:       clipStrings(st.Evidence, ai.MaxRCAEvidenceLines, &trunc),
+			Contradictions: clipStrings(st.Contradictions, ai.MaxRCAEvidenceLines, &trunc),
+		})
+	}
+	for i, h := range rep.Hypotheses {
+		if i == ai.MaxRCAHypotheses {
+			trunc = true
+			break
+		}
+		if i == 0 {
+			out.Confidence, out.ConfidenceLabel = h.Confidence, h.Label
+		}
+		out.Hypotheses = append(out.Hypotheses, ai.RCAHypothesis{
+			Rank: h.Rank, Title: h.Title, Problem: h.Problem, CausalRole: h.CausalRole, Candidacy: h.CandidacyState,
+			Confidence: h.Confidence, Label: h.Label, Owner: h.Owner,
+			Supporting:    clipStrings(h.Supporting, ai.MaxRCAEvidenceLines, &trunc),
+			Contradicting: clipStrings(h.Contradicting, ai.MaxRCAEvidenceLines, &trunc),
+			Missing:       clipStrings(h.Missing, ai.MaxRCAEvidenceLines, &trunc),
+			ConfirmWhen:   clipStrings(h.ConfirmWhen, ai.MaxRCAEvidenceLines, &trunc),
+		})
+	}
+	out.Verdict, out.RootCauseState = rep.States.Analysis, rep.States.RootCauseState
+	for i, m := range rep.ImpactProvenance.Measures {
+		if i == ai.MaxRCAImpactMeasures {
+			trunc = true
+			break
+		}
+		out.Impact = append(out.Impact, ai.RCAImpact{Measure: m.Measure, Label: m.Label, Status: m.Status,
+			Unit: m.Unit, Scope: m.Scope, Source: m.Source, Basis: m.Basis, Value: m.Value})
+	}
+	out.Missing = clipStrings(rep.RootCause.EvidenceMissing, ai.MaxRCAEvidenceLines, &trunc)
+	out.Truncated = trunc
+	return out
+}
+
+// clipStrings bounds a list, recording truncation instead of hiding it.
+func clipStrings(xs []string, n int, truncated *bool) []string {
+	if len(xs) <= n {
+		return xs
+	}
+	*truncated = true
+	return xs[:n]
 }

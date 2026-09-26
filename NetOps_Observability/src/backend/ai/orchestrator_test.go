@@ -531,3 +531,19 @@ func TestNavigation(t *testing.T) {
 		t.Fatalf("expected navigation help, got %+v", ans)
 	}
 }
+
+// Tracker 336: the engine's contradiction item is evidence AGAINST the leading
+// hypothesis and must land in ContradictingEvidence, never SupportingEvidence.
+func TestSplitEvidenceFilesContradictionsSeparately(t *testing.T) {
+	sup, con := splitEvidence([]EvidenceItem{
+		{CitationID: "problem:abc", Text: "header"},
+		{CitationID: "log:os:1", Text: "loss rising"},
+		{CitationID: "contradiction:abc", Text: "contradicting evidence present: one site healthy"},
+	})
+	if len(sup) != 1 || sup[0] != "loss rising" {
+		t.Fatalf("supporting = %v", sup)
+	}
+	if len(con) != 1 || !strings.Contains(con[0], "one site healthy") {
+		t.Fatalf("contradicting = %v", con)
+	}
+}

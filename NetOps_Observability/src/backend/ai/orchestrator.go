@@ -610,11 +610,7 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 		MissingEvidence:  missing,
 		RecommendedOwner: owner,
 	}
-	for _, ev := range bundle {
-		if !strings.HasPrefix(ev.CitationID, "problem:") { // header item is restated in the summary
-			pe.SupportingEvidence = append(pe.SupportingEvidence, ev.Text)
-		}
-	}
+	pe.SupportingEvidence, pe.ContradictingEvidence = splitEvidence(bundle)
 
 	// Grounded narrative from the model; degrade to a polished evidence-only
 	// summary (NOT a raw "provider unavailable" line) when the provider is absent.
@@ -1812,4 +1808,22 @@ func capitalize(s string) string {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// splitEvidence files a problem's evidence bundle into supporting and
+// contradicting lines. The engine's `contradiction:` item is evidence AGAINST
+// its leading hypothesis (Part 1 §12, tracker 336) — it used to be filed under
+// supporting evidence, which presented the argument against a cause as
+// support for it. The `problem:` header item is restated in the summary.
+func splitEvidence(bundle []EvidenceItem) (supporting, contradicting []string) {
+	for _, ev := range bundle {
+		switch {
+		case strings.HasPrefix(ev.CitationID, "problem:"):
+		case strings.HasPrefix(ev.CitationID, "contradiction:"):
+			contradicting = append(contradicting, ev.Text)
+		default:
+			supporting = append(supporting, ev.Text)
+		}
+	}
+	return supporting, contradicting
 }

@@ -99,7 +99,7 @@ var modules = []Module{
 		Description:        "Root-cause analysis: correlation groups (problems), their evidence ledger, timeline, candidate root domains, missing evidence, and recommended owner.",
 		Entities:           []string{"problem", "correlation_group", "evidence", "hypothesis", "owner"},
 		QuestionCategories: []string{"problem_explanation", "evidence", "missing_evidence", "recommended_owner", "root_domain"},
-		Tools:              []string{"get_problem", "get_problem_timeline", "get_problem_evidence", "get_candidate_root_domains", "get_missing_evidence", "get_recommended_owner", "get_rca_verdict", "get_case_timeline"},
+		Tools:              []string{"get_problem", "get_problem_timeline", "get_problem_evidence", "get_candidate_root_domains", "get_missing_evidence", "get_recommended_owner", "get_rca_verdict", "get_case_timeline", "get_causal_chain", "get_blast_radius", "get_owner", "get_confidence_breakdown"},
 		Permissions:        []string{"correlations:read"},
 		Freshness:          FreshnessLive, Sensitivity: SensitivityOperational, Availability: AvailabilityStable,
 		CrossModule:   []string{"topology", "telemetry", "flow_analytics", "itsm"},

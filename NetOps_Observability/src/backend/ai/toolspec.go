@@ -254,6 +254,34 @@ var toolMetas = map[string]toolMeta{
 			{name: "correlation_id", desc: "The case's correlation UUID (take it from a problem:<uuid> citation id).", required: true},
 		},
 	},
+	"get_causal_chain": {
+		description: "The engine's proposed causal chain for one incident, step by step. Each step says whether it was OBSERVED or only INFERRED and what contradicts it. Use it to explain WHY the engine thinks what it thinks — never present an inferred step as observed, and where only timing links two steps say \"followed by\".",
+		label:       "Causal chain",
+		args: []toolArgSpec{
+			{name: "correlation_id", desc: "The incident's correlation UUID (take it from a problem:<uuid> or verdict:<uuid> citation id).", required: true},
+		},
+	},
+	"get_blast_radius": {
+		description: "Who and what one incident affects, from the engine's own scope: services, sites, devices, targets, seams, paths, and impact measures WITH provenance. A measure the engine did not measure is reported as not measured — never estimate a user count.",
+		label:       "Blast radius",
+		args: []toolArgSpec{
+			{name: "correlation_id", desc: "The incident's correlation UUID.", required: true},
+		},
+	},
+	"get_owner": {
+		description: "Who owns one incident, as the engine decided it: triage owner, technical owner, suspected domain, an external provider candidate with its demarcation state, and the escalation target. Never guess an owner the engine did not name.",
+		label:       "Owner",
+		args: []toolArgSpec{
+			{name: "correlation_id", desc: "The incident's correlation UUID.", required: true},
+		},
+	},
+	"get_confidence_breakdown": {
+		description: "Why the engine is as sure as it is: its verdict and confidence, then each ranked candidate cause with the evidence FOR it, the evidence AGAINST it and what is still missing. Use it for \"why does Correlix think X?\" and \"what argues against it?\".",
+		label:       "Confidence breakdown",
+		args: []toolArgSpec{
+			{name: "correlation_id", desc: "The incident's correlation UUID.", required: true},
+		},
+	},
 }
 
 // ToolLabel returns the customer-facing label for a tool ("Log search", not
