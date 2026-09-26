@@ -27,9 +27,9 @@ type Orchestrator struct {
 	// Redactor strips secrets/PII before egress (LLM06). nil is NOT an escape
 	// hatch: redact() falls back to the package default Redact, so an
 	// orchestrator built without one still cannot leak. See redact.go.
-	Redactor  func(string) string
-	KB   *KB        // Network Expert KB (curated playbooks); nil = no supporting knowledge
-	Docs *DocsIndex // docs portal + curated product knowledge (BM25); nil = no product answers
+	Redactor func(string) string
+	KB       *KB        // Network Expert KB (curated playbooks); nil = no supporting knowledge
+	Docs     *DocsIndex // docs portal + curated product knowledge (BM25); nil = no product answers
 	// TAC is the vendor TAC knowledge (issue classes, per-vendor checks and their
 	// bound read-only commands) Iris reads before answering a troubleshooting
 	// question (tac_knowledge.go). nil = not wired; every answer keeps its shape.
