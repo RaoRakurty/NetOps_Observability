@@ -181,6 +181,11 @@ var skillToolAllowlist = map[string]bool{
 	// Phase-B addition: prior CONCLUDED investigations for the entity in scope.
 	// Read-only and signal-free — memory is evidence, never a routing rule.
 	"recall_investigations": true,
+	// Design item 10: configuration change history. Metadata-only reads (and a
+	// redacted diff) over the caller's own config-backup register — the "was
+	// there a change at the same time?" question every adjacency skill asks.
+	"get_recent_changes": true,
+	"get_config_diff":    true,
 	// Phase-A4 additions: the show-first state battery and the read-only BGP
 	// operations reads.
 	"get_device_state":    true,

@@ -48,8 +48,13 @@ func (s *server) handleCopilotConfig(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		c := s.copilotCfg.Get()
 		writeJSON(w, http.StatusOK, map[string]any{
-			"provider":        c.Provider,
-			"model":           c.Model,
+			"provider": c.Provider,
+			"model":    c.Model,
+			// §10 model router. Blank means "this tier uses model"; the UI must
+			// show the blank, not the resolved value, or an operator cannot tell
+			// a deliberate tier split from the single-model default.
+			"model_fast":      c.ModelFast,
+			"model_strong":    c.ModelStrong,
 			"system":          c.System,
 			"feature_enabled": aiEnabled(),
 			"key_present":     s.copilotKeyPresent(),
@@ -72,6 +77,8 @@ func (s *server) handleCopilotConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"provider":        out.Provider,
 			"model":           out.Model,
+			"model_fast":      out.ModelFast,
+			"model_strong":    out.ModelStrong,
 			"system":          out.System,
 			"feature_enabled": aiEnabled(),
 			"key_present":     s.copilotKeyPresent(),

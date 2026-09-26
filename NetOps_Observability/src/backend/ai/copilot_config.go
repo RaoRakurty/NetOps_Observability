@@ -31,10 +31,24 @@ const FieldCopilotKey = "copilot.apikey" // #nosec G101 -- AAD field-id (a confi
 // reversible secret (in-memory plaintext, sealed at rest); the rest are
 // non-secret.
 type CopilotConfig struct {
-	Provider string `json:"provider"`      // "anthropic" | "openai" | "gemini"
-	Model    string `json:"model"`         // e.g. claude-sonnet-4-6, claude-opus-4-8, gpt-4o
-	System   string `json:"system"`        // optional system-prompt override ("" => default)
-	Key      string `json:"key,omitempty"` // provider API key — sealed at rest, never sent to clients
+	Provider string `json:"provider"` // "anthropic" | "openai" | "gemini"
+	Model    string `json:"model"`    // e.g. claude-sonnet-4-6, claude-opus-4-8, gpt-4o
+	// ModelFast / ModelStrong are the OPTIONAL §10 model-router overrides: the
+	// cheap model for grounded headlines and chain routing, the reasoning model
+	// for multi-fact RCA narratives. Both blank (the default, and what every
+	// existing stored config is) means every tier resolves to Model, so the
+	// deployment calls exactly the model it called before — see ai.TierModels.
+	// Same provider and same key for both: a tier is a model choice within one
+	// provider account, not a second provider chain.
+	ModelFast   string `json:"model_fast,omitempty"`
+	ModelStrong string `json:"model_strong,omitempty"`
+	System      string `json:"system"`        // optional system-prompt override ("" => default)
+	Key         string `json:"key,omitempty"` // provider API key — sealed at rest, never sent to clients
+}
+
+// Models projects the stored config onto the router's tier→model mechanism.
+func (c CopilotConfig) Models() TierModels {
+	return TierModels{Default: c.Model, Fast: c.ModelFast, Strong: c.ModelStrong}
 }
 
 // CopilotConfigStore holds the platform assistant config (one row, kv-backed).
@@ -130,6 +144,11 @@ func (s *CopilotConfigStore) Set(c CopilotConfig) CopilotConfig {
 		c.Provider = "anthropic" // default; supported: anthropic | openai | gemini
 	}
 	c.Model = strings.TrimSpace(c.Model)
+	// The tier overrides are normalized but NOT defaulted: blank means "this tier
+	// uses Model", which is the property that keeps an existing deployment on one
+	// model at one price until an operator deliberately splits them.
+	c.ModelFast = strings.TrimSpace(c.ModelFast)
+	c.ModelStrong = strings.TrimSpace(c.ModelStrong)
 	c.System = strings.TrimSpace(c.System)
 	c.Key = strings.TrimSpace(c.Key)
 	s.mu.Lock()

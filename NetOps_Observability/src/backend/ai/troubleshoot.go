@@ -268,6 +268,21 @@ type TroubleshootDeps struct {
 	// unscoped list). nil = investigation memory is not wired on this
 	// deployment, and `recall_investigations` is then not registered at all.
 	RecallInvestigations func(ctx context.Context, p Principal, q InvestigationQuery) ([]InvestigationRow, error)
+
+	// ── configuration change (review item 10) ──────────────────────────────
+
+	// RecentChanges lists the configuration changes the CALLER may see — one
+	// device's history when q.DeviceID is set (already resolved through the
+	// caller's own inventory), otherwise their whole estate. Metadata only:
+	// fingerprints, counts and timestamps, never configuration text. nil =
+	// config backup is not enabled here, and `get_recent_changes` is then not
+	// registered at all.
+	RecentChanges func(ctx context.Context, p Principal, q ChangeQuery) (ChangeReport, error)
+	// ConfigDiff renders the REDACTED unified diff between two of ONE device's
+	// stored configuration versions. A foreign or unknown device is ErrNotFound.
+	// nil = config backup is not enabled here, and `get_config_diff` is then not
+	// registered at all.
+	ConfigDiff func(ctx context.Context, p Principal, req ConfigDiffRequest) (ConfigDiffReport, error)
 }
 
 // ---- shared validation -----------------------------------------------------
@@ -820,6 +835,17 @@ func (r *ToolRegistry) AddTroubleshootTools(ds DataSource, d TroubleshootDeps) {
 	}
 	if d.DeviceState != nil {
 		r.add(deviceStateTool{deps: d})
+	}
+	// Configuration change (review item 10). Both resolve a device through the
+	// caller's own inventory, so they sit below the ResolveDevice guard even
+	// though get_recent_changes can also answer estate-wide: without an
+	// inventory seam a device ARGUMENT could not be scoped, and an unscopable
+	// argument is not a tool we ship.
+	if d.RecentChanges != nil {
+		r.add(recentChangesTool{deps: d})
+	}
+	if d.ConfigDiff != nil {
+		r.add(configDiffTool{deps: d})
 	}
 }
 

@@ -242,6 +242,8 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       const saved = await api.setCopilotConfig({
         provider: cfg.provider,
         model: cfg.model,
+        model_fast: cfg.model_fast ?? "",
+        model_strong: cfg.model_strong ?? "",
         system: cfg.system,
         ...(keyDraft.trim() ? { key: keyDraft.trim() } : {}),
       });
@@ -265,6 +267,8 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       const saved = await api.setAITenantConfig({
         provider: tcfg.provider,
         model: tcfg.model,
+        model_fast: tcfg.model_fast ?? "",
+        model_strong: tcfg.model_strong ?? "",
         no_platform_key: tcfg.no_platform_key,
         ...(tKeyDraft.trim() ? { key: tKeyDraft.trim() } : {}),
       });
@@ -575,6 +579,9 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
               </div>
             )}
           </div>
+          <TierModelFields
+            fast={cfg.model_fast ?? ""} strong={cfg.model_strong ?? ""}
+            onChange={(t) => setCfg({ ...cfg, model_fast: t.fast, model_strong: t.strong })} />
           <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
             <button className="dash-btn accent" onClick={saveCfg} disabled={savingCfg}>{savingCfg ? "Saving…" : "Save"}</button>
             <button className="dash-btn" onClick={() => setShowSettings(false)} disabled={savingCfg}>Cancel</button>
@@ -669,6 +676,9 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
               onChange={(e) => setTcfg({ ...tcfg, model: e.target.value })}
               placeholder="model id (blank = provider default)" />
           </div>
+          <TierModelFields
+            fast={tcfg.model_fast ?? ""} strong={tcfg.model_strong ?? ""}
+            onChange={(t) => setTcfg({ ...tcfg, model_fast: t.fast, model_strong: t.strong })} />
           {tcfg.platform_key_available && (
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--muted)", margin: "2px 0 8px" }}>
               <input type="checkbox" checked={!tcfg.no_platform_key}
@@ -1106,4 +1116,27 @@ function extractAssistantText(r: CopilotChatResponse): string {
   }
   if ((r as OpenAIChatResponse).choices) return (r as OpenAIChatResponse).choices[0]?.message?.content ?? "";
   return JSON.stringify(r);
+}
+
+// TierModelFields — the optional model-router overrides. Iris answers quick
+// look-ups with the "fast" model and multi-step investigations with the
+// "strong" one; blank means "use the model above for everything", which is the
+// behaviour of every install that never sets them.
+function TierModelFields({ fast, strong, onChange }: {
+  fast: string;
+  strong: string;
+  onChange: (t: { fast: string; strong: string }) => void;
+}) {
+  return (
+    <div className="op-field">
+      <span>Model for quick answers <span style={{ color: "var(--muted)" }}>(optional)</span></span>
+      <input className="op-modelinput" value={fast} aria-label="Model for quick answers"
+        onChange={(e) => onChange({ fast: e.target.value, strong })}
+        placeholder="blank = same as Model" />
+      <span>Model for deep investigations <span style={{ color: "var(--muted)" }}>(optional)</span></span>
+      <input className="op-modelinput" value={strong} aria-label="Model for deep investigations"
+        onChange={(e) => onChange({ fast, strong: e.target.value })}
+        placeholder="blank = same as Model" />
+    </div>
+  );
 }

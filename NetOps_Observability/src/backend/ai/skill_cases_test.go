@@ -80,6 +80,12 @@ func caseDeps() TroubleshootDeps {
 	d.RecallInvestigations = func(context.Context, Principal, InvestigationQuery) ([]InvestigationRow, error) {
 		return nil, nil
 	}
+	d.RecentChanges = func(context.Context, Principal, ChangeQuery) (ChangeReport, error) {
+		return ChangeReport{}, nil
+	}
+	d.ConfigDiff = func(context.Context, Principal, ConfigDiffRequest) (ConfigDiffReport, error) {
+		return ConfigDiffReport{}, nil
+	}
 	return d
 }
 

@@ -102,7 +102,7 @@ func TestPlainChatAnswerIsReportedUngrounded(t *testing.T) {
 	s := groundingTestServer(t)
 	// A tenant with its own key: the production state that used to un-ground the
 	// assistant silently.
-	if _, err := s.aiTenantCfg.SetTenantSettings("t-a", "openai", "gpt-4o-mini", "sk-test", false, false); err != nil {
+	if _, err := s.aiTenantCfg.SetTenantSettings("t-a", ai.TenantSettings{Provider: "openai", Model: "gpt-4o-mini", Key: "sk-test"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -161,7 +161,7 @@ func TestProviderDownFallbackIsReportedGrounded(t *testing.T) {
 	defer restore()
 
 	s := groundingTestServer(t)
-	if _, err := s.aiTenantCfg.SetTenantSettings("t-a", "openai", "gpt-4o-mini", "sk-test", false, false); err != nil {
+	if _, err := s.aiTenantCfg.SetTenantSettings("t-a", ai.TenantSettings{Provider: "openai", Model: "gpt-4o-mini", Key: "sk-test"}); err != nil {
 		t.Fatal(err)
 	}
 

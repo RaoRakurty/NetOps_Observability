@@ -87,18 +87,33 @@ type providerCandidate struct {
 	source           string // "tenant" | "platform"
 }
 
-// providerCandidates resolves the provider fallback chain FOR A PRINCIPAL
-// (§3a: every data-touching surface scopes by the caller). Rules:
+// providerCandidates resolves the provider fallback chain FOR A PRINCIPAL with
+// NO routed tier — the free-form assistant proxy (copilot.go), which is not an
+// answer mode. It is the pre-router behaviour, preserved exactly.
+func (s *server) providerCandidates(claims jwtClaims) []providerCandidate {
+	return s.providerCandidatesForTier(claims, "")
+}
+
+// providerCandidatesForTier resolves the provider fallback chain FOR A PRINCIPAL
+// AND A MODEL TIER (§3a: every data-touching surface scopes by the caller;
+// §10: the router picks the tier, this picks the model). Rules, unchanged:
 //   - a tenant's own BYO key wins outright — their traffic never rides the
 //     platform account when they brought a key;
 //   - a strict tenant (no_platform_key) with no key of its own gets NOTHING —
 //     fail closed to key-free mode rather than leak onto the platform key;
 //   - otherwise (and always for cross-tenant principals) the platform chain
 //     applies: per-provider env keys, then the UI-stored platform key.
-func (s *server) providerCandidates(claims jwtClaims) []providerCandidate {
+//
+// The TIER only ever chooses which of one configuration's model names is used.
+// It cannot change the provider, cannot change the key, cannot add a candidate
+// and cannot reorder the chain — so none of the BYO rules above can be reached
+// through it. With no per-tier model configured (every deployment until an
+// operator sets one) every tier resolves to the same single model the chain
+// resolved before, which is why this change is invisible to an existing install.
+func (s *server) providerCandidatesForTier(claims jwtClaims, tier ai.ModelTier) []providerCandidate {
 	tenant, cross := principalTenant(claims)
 	if !cross {
-		if name, key, model, ok := s.aiTenantCfg.BYOProvider(tenant, providerModel); ok {
+		if name, key, model, ok := s.aiTenantCfg.BYOProvider(tenant, tier, providerModel); ok {
 			return []providerCandidate{{name: name, key: key, model: model, source: "tenant"}}
 		}
 		if s.aiTenantCfg.NoPlatformKey(tenant) {
@@ -107,6 +122,7 @@ func (s *server) providerCandidates(claims jwtClaims) []providerCandidate {
 	}
 	storedKey := s.copilotCfg.APIKey()
 	cfg := s.copilotCfg.Get()
+	tiered := cfg.Models().For(tier)
 	var out []providerCandidate
 	for _, name := range copilotProviderChain() {
 		key := providerKey(name)
@@ -117,8 +133,12 @@ func (s *server) providerCandidates(claims jwtClaims) []providerCandidate {
 			continue
 		}
 		model := providerModel(name)
-		if name == cfg.Provider && cfg.Model != "" {
-			model = cfg.Model
+		// A per-tier (or single) model override applies only to the provider it
+		// was configured FOR: a model name is provider-specific, and riding the
+		// anthropic model into the openai fallback produces exactly the baffling
+		// failure the provider-switch key rule already exists to prevent.
+		if name == cfg.Provider && tiered != "" {
+			model = tiered
 		}
 		out = append(out, providerCandidate{name: name, key: key, model: model, source: "platform"})
 	}
@@ -151,6 +171,8 @@ func (s *server) handleAITenantConfig(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Provider      string `json:"provider"`
 			Model         string `json:"model"`
+			ModelFast     string `json:"model_fast"`
+			ModelStrong   string `json:"model_strong"`
 			Key           string `json:"key"`
 			NoPlatformKey bool   `json:"no_platform_key"`
 			ClearKey      bool   `json:"clear_key"`
@@ -163,7 +185,11 @@ func (s *server) handleAITenantConfig(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errors.New("unknown provider — use anthropic, openai or gemini"))
 			return
 		}
-		if _, err := s.aiTenantCfg.SetTenantSettings(tenant, req.Provider, req.Model, req.Key, req.NoPlatformKey, req.ClearKey); err != nil {
+		if _, err := s.aiTenantCfg.SetTenantSettings(tenant, ai.TenantSettings{
+			Provider: req.Provider, Model: req.Model,
+			ModelFast: req.ModelFast, ModelStrong: req.ModelStrong,
+			Key: req.Key, NoPlatformKey: req.NoPlatformKey, ClearKey: req.ClearKey,
+		}); err != nil {
 			// Audit the REFUSAL too. A write that failed and was never recorded
 			// is indistinguishable from one that never happened.
 			s.audit.Record(AuditEvent{
@@ -192,8 +218,13 @@ func (s *server) handleAITenantConfig(w http.ResponseWriter, r *http.Request) {
 func (s *server) aiTenantConfigView(tenant string) map[string]any {
 	c := s.aiTenantCfg.Get(tenant)
 	return map[string]any{
-		"provider":               c.Provider,
-		"model":                  c.Model,
+		"provider": c.Provider,
+		"model":    c.Model,
+		// §10 model-router overrides. Blank means "this tier uses model", which
+		// is what the UI must render — not the resolved value, or an operator
+		// could not tell a deliberate split from an inherited default.
+		"model_fast":             c.ModelFast,
+		"model_strong":           c.ModelStrong,
 		"key_present":            c.Key != "",
 		"no_platform_key":        c.NoPlatformKey,
 		"assistant_enabled":      !c.AssistantOff,

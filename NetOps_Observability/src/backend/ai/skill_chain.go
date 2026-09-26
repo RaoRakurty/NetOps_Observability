@@ -446,7 +446,12 @@ func (o *Orchestrator) nextByModel(ctx context.Context, cur *Skill, st *chainSta
 	}
 	system := chainRouteSystemBlock(cur, cands)
 	prompt := chainRoutePrompt(question, cur, cands, roundItems)
-	text, _, err := o.LLM.Complete(ctx, system, []LLMMessage{{Role: "user", Content: o.redact(prompt)}})
+	// §10 model router. This is not an answer mode: it is CLASSIFICATION — pick
+	// one name out of a closed candidate list — which the strategy's Basic/
+	// Advanced split puts squarely on the cheap tier, so it is named directly
+	// rather than looked up by mode. Everything about the choice is still
+	// validated server-side below, so a weaker model cannot widen anything.
+	text, _, err := o.completeTier(ctx, TierFast, system, []LLMMessage{{Role: "user", Content: o.redact(prompt)}})
 	if err != nil {
 		return nil, "", false // a routing failure ends the chain; it never guesses
 	}

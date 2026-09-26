@@ -21,7 +21,19 @@ type aiLLM struct {
 	claims jwtClaims
 }
 
+// Complete is the tier-less completion: the pre-router behaviour, and what any
+// caller that has not routed a tier gets.
 func (l aiLLM) Complete(ctx context.Context, system string, msgs []ai.LLMMessage) (string, string, error) {
+	return l.CompleteTier(ctx, "", system, msgs)
+}
+
+// CompleteTier satisfies ai.TieredLLMClient: the orchestrator hands over the
+// tier the §10 router chose for this answer, and the per-principal provider
+// chain resolves that tier to a model name. The tier NEVER changes which
+// provider or which key is used — only which of that configuration's model
+// names is called — so the BYO-key rules (a tenant's own key wins; a strict
+// tenant rides nothing) are structurally untouched by it.
+func (l aiLLM) CompleteTier(ctx context.Context, tier ai.ModelTier, system string, msgs []ai.LLMMessage) (string, string, error) {
 	cmsgs := make([]copilotMessage, 0, len(msgs))
 	for _, m := range msgs {
 		// Only user/assistant turns cross the boundary; the system prompt is the
@@ -32,7 +44,7 @@ func (l aiLLM) Complete(ctx context.Context, system string, msgs []ai.LLMMessage
 		}
 		cmsgs = append(cmsgs, copilotMessage{Role: role, Content: m.Content})
 	}
-	for _, cand := range l.srv.providerCandidates(l.claims) {
+	for _, cand := range l.srv.providerCandidatesForTier(l.claims, tier) {
 		text, err := ai.CallProvider(ctx, cand.name, cand.key, cand.model, system, cmsgs)
 		if err == nil {
 			return text, cand.name, nil

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/ai"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/rca"
 	"strings"
@@ -201,14 +202,14 @@ func TestAITenantConfigFailedSaveDoesNotDestroyOtherTenants(t *testing.T) {
 	// Tenant A stores a BYO provider key through a healthy vault + backend.
 	sealer := &failingVault{}
 	stA := newAITenantConfigStore(path, sealer)
-	if _, err := stA.SetTenantSettings("t-a", "anthropic", "claude-opus-4-8", "sk-tenant-a-secret", false, false); err != nil {
+	if _, err := stA.SetTenantSettings("t-a", ai.TenantSettings{Provider: "anthropic", Model: "claude-opus-4-8", Key: "sk-tenant-a-secret"}); err != nil {
 		t.Fatalf("tenant A seed write: %v", err)
 	}
 
 	// Now tenant B writes while the vault refuses to seal. The old code
 	// `continue`d past the unsealable record and persisted the rest.
 	sealer.fail = true
-	if _, err := stA.SetTenantSettings("t-b", "openai", "", "sk-tenant-b", false, false); err == nil {
+	if _, err := stA.SetTenantSettings("t-b", ai.TenantSettings{Provider: "openai", Key: "sk-tenant-b"}); err == nil {
 		t.Fatal("a save that could not seal every record must fail, not persist a partial map")
 	}
 

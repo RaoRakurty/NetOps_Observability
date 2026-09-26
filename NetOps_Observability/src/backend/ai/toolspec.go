@@ -229,6 +229,24 @@ var toolMetas = map[string]toolMeta{
 			{name: "window", desc: "How far back to look: 24h, 7d, 30d, 90d (default) or 180d.", required: false},
 		},
 	},
+	// ── configuration change (review item 10) ──────────────────────────────
+	"get_recent_changes": {
+		description: "Configuration changes recorded for this tenant's devices: which device moved, when, how many lines, and whether it has drifted from its golden baseline. ASK THIS EARLY — a fault that began shortly after a configuration change is a different investigation from one that did not. Says plainly when a device has never been captured (that is NOT the same as unchanged).",
+		label:       "Recent changes",
+		args: []toolArgSpec{
+			{name: "device", desc: "Restrict to one device by name or id; omit for every device in your scope.", required: false},
+			{name: "window", desc: "Lookback window: 24h, 7d (default), 30d or 90d. Configuration changes are slower than telemetry — prefer a wider window than you would for logs.", required: false},
+		},
+	},
+	"get_config_diff": {
+		description: "The line-by-line difference between two stored configuration versions of one device, redacted. Use it after get_recent_changes to see WHAT changed, not just that something did. Secrets are masked; the added/removed counts are computed before masking.",
+		label:       "Configuration diff",
+		args: []toolArgSpec{
+			{name: "device", desc: "The device name or id exactly as it appears in the inventory.", required: true},
+			{name: "from", desc: "The older side: a configuration version id, or one of latest, previous (default), golden.", required: false},
+			{name: "to", desc: "The newer side: a configuration version id, or one of latest (default), previous, golden.", required: false},
+		},
+	},
 	"get_rca_verdict": {
 		description: "The engine's RCA header for one correlation case: what broke, the verdict tier and confidence, what is affected, what evidence is missing, and the recommended owner. START HERE when a case is in scope — narrate this conclusion rather than deriving a different one.",
 		label:       "RCA verdict",

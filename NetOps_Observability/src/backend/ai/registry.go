@@ -305,6 +305,42 @@ var modules = []Module{
 		ResponseModes: []string{"troubleshoot_finding", "module_health_summary"},
 	},
 	{
+		// Review item 10. A NEW module rather than a tenant of an existing one,
+		// and the reasoning is worth stating because "just put it in telemetry"
+		// was the obvious alternative:
+		//
+		//   - No existing module owns CHANGE. telemetry is metrics/syslog/traps
+		//     (what the device is REPORTING), device_state is live CLI reads
+		//     (what it is DOING now), security_posture is control verdicts. A
+		//     configuration version register is a different bounded context, and
+		//     internal/configdrift's own package doc says so: config backup is
+		//     FOUNDATIONAL and security/compliance/RCA are its consumers.
+		//   - Sensitivity would have to be wrong somewhere else. A stored
+		//     configuration is a device's operational blueprint; this module is
+		//     SENSITIVE. telemetry is (correctly) operational, and widening it to
+		//     sensitive to accommodate these two tools would re-tag five
+		//     unrelated tools.
+		//   - A module is the unit the Policy Engine gates. Keeping change its
+		//     own module means an operator can deny configuration reads to the
+		//     assistant — DenyModules: ["config_changes"] — without also blinding
+		//     it to syslog, which is precisely the control a security-conscious
+		//     deployment asks for first.
+		//
+		// No AvailabilityFlag, matching protocol_diagnostics / device_state /
+		// bgp_operations: absence is expressed by NOT REGISTERING the tools (the
+		// seams are nil when config backup is off), which is the honest form —
+		// the module exists, the capability is simply not wired here.
+		ID: "config_changes", DisplayName: "Configuration Changes",
+		Description:        "What changed on a device and when: the per-device configuration version history, the drift verdict against its golden baseline, and the redacted line-by-line difference between two stored versions. Read-only — the assistant can never capture a configuration or move a baseline.",
+		Entities:           []string{"config_version", "config_change", "config_diff", "golden_baseline"},
+		QuestionCategories: []string{"recent_changes", "config_drift", "what_changed", "change_proximity"},
+		Tools:              []string{"get_recent_changes", "get_config_diff"},
+		Permissions:        []string{"infrastructure:read"},
+		Freshness:          FreshnessRecent, Sensitivity: SensitivitySensitive, Availability: AvailabilityStable,
+		CrossModule:   []string{"correlations_rca", "device_state", "security_posture", "topology"},
+		ResponseModes: []string{"troubleshoot_finding", "module_health_summary"},
+	},
+	{
 		ID: "documentation", DisplayName: "Documentation",
 		Description:        "The Correlix product documentation portal: setup guides, operator procedures, and concept reference (platform-global, tenant-free corpus).",
 		Entities:           []string{"doc_page", "doc_section"},

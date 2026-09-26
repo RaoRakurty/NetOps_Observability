@@ -1852,6 +1852,9 @@ export type CopilotChatResponse = NormalizedChatResponse | AnthropicChatResponse
 export type CopilotConfig = {
   provider: string; // "anthropic" | "openai"
   model: string;
+  // Optional model-router overrides (blank = use `model` for every answer).
+  model_fast?: string;
+  model_strong?: string;
   system?: string;
   feature_enabled?: boolean;
   key_present?: boolean;
@@ -1865,6 +1868,9 @@ export type CopilotConfig = {
 export type AITenantConfig = {
   provider: string;
   model: string;
+  // Optional model-router overrides (blank = use `model` for every answer).
+  model_fast?: string;
+  model_strong?: string;
   key_present: boolean;
   no_platform_key: boolean;
   assistant_enabled: boolean;
@@ -5997,7 +6003,7 @@ export const api = {
 
   // Runtime assistant config (admin): provider/model picker. Key never returned.
   copilotConfig: () => request<CopilotConfig>("/api/copilot/config"),
-  setCopilotConfig: (cfg: { provider: string; model: string; system?: string; key?: string }) =>
+  setCopilotConfig: (cfg: { provider: string; model: string; model_fast?: string; model_strong?: string; system?: string; key?: string }) =>
     request<CopilotConfig>("/api/copilot/config", {
       method: "PUT",
       body: JSON.stringify(cfg),
@@ -6005,7 +6011,7 @@ export const api = {
   // Per-workspace AI settings (tenant admin): own provider key + platform-service
   // opt-out. 403 for non-admins, 400 for the platform owner (who uses the above).
   aiTenantConfig: () => request<AITenantConfig>("/api/ai/tenant-config"),
-  setAITenantConfig: (cfg: { provider: string; model: string; key?: string; no_platform_key: boolean; clear_key?: boolean }) =>
+  setAITenantConfig: (cfg: { provider: string; model: string; model_fast?: string; model_strong?: string; key?: string; no_platform_key: boolean; clear_key?: boolean }) =>
     request<AITenantConfig>("/api/ai/tenant-config", { method: "PUT", body: JSON.stringify(cfg) }),
   // Per-tenant AI access (platform owner): who gets the assistant/investigations.
   aiTenants: () => request<{ tenants: AITenantRow[] | null; tools_feature: boolean; defaults?: { max_calls: number; daily_tokens: number } }>("/api/ai/tenants"),

@@ -599,7 +599,9 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 	var providerNote string
 	system := o.systemPrompt()
 	user := o.problemPrompt(question, pr, bundle)
-	text, provider, lerr := o.LLM.Complete(ctx, system, []LLMMessage{{Role: "user", Content: user}})
+	// §10 model router: this answer's tier comes from RouteFor, not from a local
+	// choice — the policy is stated once and the mechanism reads it.
+	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeProblemExplanation).Tier, system, []LLMMessage{{Role: "user", Content: user}})
 	evidenceOnly := false
 	if lerr != nil || strings.TrimSpace(text) == "" {
 		text = o.deterministicProblemSummary(pr, missing, owner)
@@ -756,7 +758,9 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 	evidenceOnly := false
 	system := o.systemPrompt()
 	user := o.currentStatePrompt(question, cs)
-	text, provider, lerr := o.LLM.Complete(ctx, system, []LLMMessage{{Role: "user", Content: user}})
+	// §10 model router: a grounded headline over an already-ranked structure is
+	// the FAST tier's work — RouteFor says so, this reads it.
+	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeCurrentStateSummary).Tier, system, []LLMMessage{{Role: "user", Content: user}})
 	if lerr != nil || strings.TrimSpace(text) == "" {
 		text = o.deterministicStateSummary(cs)
 		provider = "none"
@@ -1067,7 +1071,8 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 	// Model headline grounded ONLY in the tool evidence (deterministic fallback).
 	system := o.systemPrompt()
 	user := o.moduleHealthPrompt(question, mh, bundle)
-	text, provider, lerr := o.LLM.Complete(ctx, system, []LLMMessage{{Role: "user", Content: user}})
+	// §10 model router: a module headline is the FAST tier (RouteFor's policy).
+	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeModuleHealthSummary).Tier, system, []LLMMessage{{Role: "user", Content: user}})
 	var badges []string
 	var providerNote string
 	evidenceOnly := false

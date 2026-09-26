@@ -581,6 +581,32 @@ func (m *Manager) open(tenant string, v Version) (string, error) {
 // tenant-scoped store read produced.
 func (m *Manager) Open(v Version) (string, error) { return m.open(v.TenantID, v) }
 
+// Versions returns ONE device's version rows, newest first, for a caller whose
+// scope is already resolved. It is a thin pass-through to the store on purpose:
+// the store IS the tenant filter (§3a rule 4), so this adds no rule of its own
+// and cannot forget one. A scoped caller therefore gets an EMPTY list for a
+// device it may not see — never another tenant's history, and never a signal
+// that the device exists elsewhere.
+//
+// It exists so a consumer outside this package (today: the assistant's
+// change-history seam) can read the register through the same path the HTTP
+// handlers take, instead of being handed the Store and its unscoped surface.
+func (m *Manager) Versions(ctx context.Context, tenant string, cross bool, deviceID string) ([]Version, error) {
+	if m == nil {
+		return nil, ErrDisabled
+	}
+	return m.deps.Store.List(ctx, tenant, cross, deviceID)
+}
+
+// Version returns ONE stored version's metadata. A foreign or absent
+// (device, sha) is ErrNotFound — the two are deliberately indistinguishable.
+func (m *Manager) Version(ctx context.Context, tenant string, cross bool, deviceID, sha string) (Version, error) {
+	if m == nil {
+		return Version{}, ErrDisabled
+	}
+	return m.deps.Store.Get(ctx, tenant, cross, deviceID, sha)
+}
+
 // recordFailure stores the failed capture, counts it and tells the consumer, so
 // an unreachable device reports "unknown" rather than silently keeping its last
 // green badge (§10).

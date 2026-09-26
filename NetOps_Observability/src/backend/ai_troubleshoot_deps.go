@@ -44,6 +44,8 @@ import (
 
 	"netops/backend/ai"
 	"netops/backend/internal/bgpdepth"
+	"netops/backend/internal/configdrift"
+	"netops/backend/internal/configstore"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/showparse"
 	"netops/backend/models"
@@ -170,6 +172,13 @@ func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.Troubl
 	// deployment without it never exposes a tool that could only answer nothing.
 	if s.irisMemory != nil {
 		deps.RecallInvestigations = s.aiRecallInvestigations(claims)
+	}
+	// Configuration change history (design item 10). Wired only when config
+	// backup is enabled — the version register and the drift state it reads
+	// exist only then.
+	if s.configBackup != nil && s.configDrift != nil {
+		deps.RecentChanges = s.aiRecentChanges(claims)
+		deps.ConfigDiff = s.aiConfigDiff(r, claims)
 	}
 	return deps
 }
@@ -1725,4 +1734,295 @@ func aiBGPScopeLabel(tenant string, cross bool) string {
 		return "unscoped"
 	}
 	return tenant
+}
+
+// ---- configuration change history (design item 10, plan N-A2) ------------
+//
+// The assistant's configuration-change seams (IRIS design item 10, plan N-A2):
+// the server side of `get_recent_changes` and `get_config_diff` (ai/config_changes.go).
+//
+// Both seams answer through the SAME reads the /api/devices/{id}/config/* and
+// /api/config/drift handlers take, with the SAME read rule — configstore/configdrift
+// Principal.Admits, i.e. the tenant boundary AND the operator-visibility
+// restriction — resolved from the CLAIMS, never from anything the model said.
+// A device the caller may not see is ai.ErrNotFound, indistinguishable from one
+// that does not exist (§3a rule 1).
+//
+// They are wired only when configuration backup is enabled (s.configBackup and
+// s.configDrift non-nil), so a deployment without it never registers a tool that
+// could only answer "nothing".
+
+const (
+	// aiConfigReadTimeout bounds every store read one seam call makes (§9).
+	aiConfigReadTimeout = 5 * time.Second
+	// aiConfigScanLimit bounds how many drift rows an estate-wide change read
+	// scans. The drift store pages by device id, not by change time, so the scan
+	// is a bound on work, and hitting it is reported as truncation.
+	aiConfigScanLimit = 2000
+)
+
+// aiConfigPrincipal resolves the config-backup read principal for the caller —
+// the same fields configAuthz produces for the HTTP subtree.
+func (s *server) aiConfigPrincipal(claims jwtClaims) configstore.Principal {
+	tenant, cross := principalTenant(claims)
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
+	return configstore.Principal{Tenant: tenant, Cross: cross, Subject: claims.Sub, Deny: deny, ExcludeTenants: exclude}
+}
+
+// aiConfigDevice authorizes ONE device for the caller: it must exist in the
+// inventory and the caller's principal must admit its owning tenant. Absent,
+// foreign and operator-restricted are the same answer.
+func (s *server) aiConfigDevice(p configstore.Principal, deviceID string) (configstore.Device, bool) {
+	if p.Deny {
+		return configstore.Device{}, false
+	}
+	dev, ok := s.configLookupDevice(deviceID)
+	if !ok || !p.Admits(dev.TenantID) {
+		return configstore.Device{}, false
+	}
+	return dev, true
+}
+
+// aiRecentChanges is the `get_recent_changes` seam.
+func (s *server) aiRecentChanges(claims jwtClaims) func(context.Context, ai.Principal, ai.ChangeQuery) (ai.ChangeReport, error) {
+	cp := s.aiConfigPrincipal(claims)
+	return func(ctx context.Context, _ ai.Principal, q ai.ChangeQuery) (ai.ChangeReport, error) {
+		if s.configBackup == nil || s.configDrift == nil {
+			return ai.ChangeReport{NotWired: "configuration backup is not enabled on this deployment, so no change history exists"}, nil
+		}
+		ctx, cancel := context.WithTimeout(ctx, aiConfigReadTimeout)
+		defer cancel()
+		since := time.Now().UTC().Add(-time.Duration(q.SinceSeconds) * time.Second)
+		if q.DeviceID != "" {
+			return s.aiDeviceChangeHistory(ctx, cp, q, since)
+		}
+		return s.aiEstateChanges(ctx, cp, q, since)
+	}
+}
+
+// aiDeviceChangeHistory lists one device's captured configurations inside the
+// window: each successful version is a configuration the device moved to, and
+// the next-older successful version is what it moved from.
+func (s *server) aiDeviceChangeHistory(ctx context.Context, cp configstore.Principal, q ai.ChangeQuery, since time.Time) (ai.ChangeReport, error) {
+	dev, ok := s.aiConfigDevice(cp, q.DeviceID)
+	if !ok {
+		return ai.ChangeReport{}, ai.ErrNotFound
+	}
+	versions, err := s.configBackup.Versions(ctx, cp.Tenant, cp.Cross, dev.ID)
+	if err != nil {
+		return ai.ChangeReport{}, err
+	}
+	okVersions := successfulNewestFirst(versions)
+	rep := ai.ChangeReport{Scope: firstNonBlank(dev.Name, dev.ID)}
+	for i, v := range okVersions {
+		if v.CapturedAt.Before(since) {
+			break
+		}
+		c := ai.DeviceChange{
+			DeviceID: dev.ID, DeviceName: dev.Name, State: firstNonBlank(v.Drift, "unknown"),
+			SHA: v.SHA, Added: v.Added, Removed: v.Removed,
+			ChangedAt: v.CapturedAt, CapturedAt: v.CapturedAt, Golden: v.Golden,
+		}
+		if i+1 < len(okVersions) {
+			c.PreviousSHA = okVersions[i+1].SHA
+		}
+		if len(rep.Changes) == q.Limit {
+			rep.Truncated = true
+			break
+		}
+		rep.Changes = append(rep.Changes, c)
+	}
+	return rep, nil
+}
+
+// aiEstateChanges lists every device the caller may see whose configuration
+// moved inside the window, from the drift state rows.
+func (s *server) aiEstateChanges(ctx context.Context, cp configstore.Principal, q ai.ChangeQuery, since time.Time) (ai.ChangeReport, error) {
+	rep := ai.ChangeReport{}
+	if cp.Deny {
+		return rep, nil
+	}
+	dp := configdrift.Principal{Tenant: cp.Tenant, Cross: cp.Cross, Subject: cp.Subject, Deny: cp.Deny, ExcludeTenants: cp.ExcludeTenants}
+	cursor, scanned := "", 0
+	for {
+		rows, next, err := s.configDrift.States(ctx, dp, cursor, configdrift.MaxListLimit)
+		if err != nil {
+			return ai.ChangeReport{}, err
+		}
+		for _, st := range rows {
+			scanned++
+			if st.ChangedAt.IsZero() || st.ChangedAt.Before(since) {
+				continue
+			}
+			name := st.DeviceID
+			if dev, ok := s.configLookupDevice(st.DeviceID); ok {
+				name = firstNonBlank(dev.Name, dev.ID)
+			}
+			rep.Changes = append(rep.Changes, ai.DeviceChange{
+				DeviceID: st.DeviceID, DeviceName: name, State: st.State, SHA: st.LastSHA,
+				Added: st.Added, Removed: st.Removed, ChangedAt: st.ChangedAt, CapturedAt: st.LastCapture,
+				Golden: st.GoldenSHA != "" && st.GoldenSHA == st.LastSHA, Error: st.LastError,
+			})
+		}
+		if next == "" {
+			break
+		}
+		if scanned >= aiConfigScanLimit {
+			rep.Truncated = true
+			break
+		}
+		cursor = next
+	}
+	// The tool re-sorts and caps; the seam caps too so an estate with thousands
+	// of changes does not hand the tool an unbounded slice.
+	sort.SliceStable(rep.Changes, func(i, j int) bool { return rep.Changes[i].ChangedAt.After(rep.Changes[j].ChangedAt) })
+	if q.Limit > 0 && len(rep.Changes) > q.Limit {
+		rep.Changes = rep.Changes[:q.Limit]
+		rep.Truncated = true
+	}
+	return rep, nil
+}
+
+// aiConfigDiff is the `get_config_diff` seam. It reads the same sealed versions
+// the diff handler reads, diffs the UNREDACTED text and renders through the
+// redaction rules, and writes the same sensitive-read audit record.
+func (s *server) aiConfigDiff(r *http.Request, claims jwtClaims) func(context.Context, ai.Principal, ai.ConfigDiffRequest) (ai.ConfigDiffReport, error) {
+	cp := s.aiConfigPrincipal(claims)
+	return func(ctx context.Context, _ ai.Principal, req ai.ConfigDiffRequest) (ai.ConfigDiffReport, error) {
+		if s.configBackup == nil {
+			return ai.ConfigDiffReport{NotWired: "configuration backup is not enabled on this deployment"}, nil
+		}
+		dev, ok := s.aiConfigDevice(cp, req.DeviceID)
+		if !ok {
+			return ai.ConfigDiffReport{}, ai.ErrNotFound
+		}
+		ctx, cancel := context.WithTimeout(ctx, aiConfigReadTimeout)
+		defer cancel()
+		versions, err := s.configBackup.Versions(ctx, cp.Tenant, cp.Cross, dev.ID)
+		if err != nil {
+			return ai.ConfigDiffReport{}, err
+		}
+		rep := ai.ConfigDiffReport{DeviceID: dev.ID, DeviceName: dev.Name}
+		okVersions := successfulNewestFirst(versions)
+		if len(okVersions) < 2 {
+			rep.Unavailable = "fewer than two successful configuration captures are on file, so there is nothing to compare"
+			return rep, nil
+		}
+		toV, toLabel, found := pickVersion(okVersions, req.To, -1)
+		if !found {
+			rep.Unavailable = unavailableFor(req.To)
+			return rep, nil
+		}
+		fromV, fromLabel, found := pickVersion(okVersions, req.From, versionIndex(okVersions, toV.SHA))
+		if !found {
+			rep.Unavailable = unavailableFor(req.From)
+			return rep, nil
+		}
+		if fromV.SHA == toV.SHA {
+			rep.Unavailable = "both ends name the same configuration version"
+			return rep, nil
+		}
+		fromText, err1 := s.configBackup.Open(fromV)
+		toText, err2 := s.configBackup.Open(toV)
+		if err1 != nil || err2 != nil {
+			return ai.ConfigDiffReport{}, errors.New("stored configuration could not be read")
+		}
+		res := configstore.Diff(configstore.Vendor(toV.Vendor), fromText, toText)
+		s.configAudit(r, cp.Tenant, "config_backup_diff_read", map[string]any{
+			"device": dev.ID, "from": fromV.SHA, "to": toV.SHA, "sensitive": true, "redacted": true, "via": "assistant",
+		})
+		rep.FromSHA, rep.ToSHA = fromV.SHA, toV.SHA
+		rep.FromLabel, rep.ToLabel = fromLabel, toLabel
+		rep.FromAt, rep.ToAt = fromV.CapturedAt, toV.CapturedAt
+		rep.Added, rep.Removed = res.Added, res.Removed
+		rep.Unified, rep.Truncated = res.Unified, res.Truncated
+		return rep, nil
+	}
+}
+
+// successfulNewestFirst keeps the successful captures, newest first. A failed
+// capture has no configuration behind it and can never be one end of a diff.
+func successfulNewestFirst(vs []configstore.Version) []configstore.Version {
+	out := make([]configstore.Version, 0, len(vs))
+	for _, v := range vs {
+		if v.Status == configstore.StatusOK {
+			out = append(out, v)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].CapturedAt.After(out[j].CapturedAt) })
+	return out
+}
+
+// pickVersion resolves one diff end. `ref` is an anchor or a version id (or its
+// unique prefix, as the tool accepts ≥ 8 hex characters). For the "previous"
+// anchor, `after` is the index of the OTHER end: previous means the capture
+// immediately older than it (or than the newest, when after < 0).
+func pickVersion(vs []configstore.Version, ref string, after int) (configstore.Version, string, bool) {
+	switch ref {
+	case ai.DiffAnchorLatest:
+		return vs[0], "latest capture", true
+	case ai.DiffAnchorPrevious:
+		i := after + 1
+		if after < 0 {
+			i = 1
+		}
+		if i < len(vs) {
+			return vs[i], "the capture before it", true
+		}
+		return configstore.Version{}, "", false
+	case ai.DiffAnchorGolden:
+		for _, v := range vs {
+			if v.Golden {
+				return v, "golden baseline", true
+			}
+		}
+		return configstore.Version{}, "", false
+	}
+	var match configstore.Version
+	n := 0
+	for _, v := range vs {
+		if strings.HasPrefix(v.SHA, ref) {
+			match = v
+			n++
+		}
+	}
+	if n != 1 { // unknown, or an ambiguous prefix — never guess
+		return configstore.Version{}, "", false
+	}
+	return match, "version " + shortVersion(match.SHA), true
+}
+
+func versionIndex(vs []configstore.Version, sha string) int {
+	for i, v := range vs {
+		if v.SHA == sha {
+			return i
+		}
+	}
+	return -1
+}
+
+func unavailableFor(ref string) string {
+	switch ref {
+	case ai.DiffAnchorGolden:
+		return "no golden baseline is marked for this device"
+	case ai.DiffAnchorPrevious:
+		return "there is no earlier successful capture to compare against"
+	}
+	return "that configuration version is not on file for this device"
+}
+
+func shortVersion(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
+}
+
+func firstNonBlank(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
