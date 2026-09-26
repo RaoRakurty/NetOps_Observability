@@ -114,6 +114,7 @@ import (
 	"netops/backend/internal/seclane"
 	// SECURITY-LANE-END
 	"math"
+	"netops/backend/internal/aiscore"
 	"netops/backend/internal/secobs"
 	"netops/backend/internal/secprofile"
 	"netops/backend/internal/selfheal"
@@ -372,6 +373,13 @@ type server struct {
 	// registration, the sampler worker and the /metrics delegation (§2).
 	storageMeter *storagemeter.Meter
 	// STORAGE-MEASUREMENT-END
+	// AI-SCORECARD-BEGIN — the production Iris scorecard (tracker 337 N-A3,
+	// design item 19): live counters fed by the orchestrator's ScoreSink plus a
+	// cached correlation-store sample. Platform aggregates only (no tenant
+	// label — see internal/aiscore's package doc for why).
+	aiScore        *aiscore.Metrics
+	aiScoreSampler *aiscore.Sampler
+	// AI-SCORECARD-END
 	// LICENCE-BEGIN — the licence mechanism. `entitlements` is the CENTRAL
 	// entitlement service every commercial gate asks (entitlement.Service);
 	// `licenceStore` owns the signed document at /data/api/licence.json;
@@ -1188,6 +1196,18 @@ func newServer() *server {
 	// resolved ONCE below and travels in Deps as a value.
 	srv.storageMeter = storagemeter.New(srv.storageMeterDeps())
 	// STORAGE-MEASUREMENT-END
+	// AI-SCORECARD-BEGIN — built unconditionally: the counters cost nothing when
+	// Iris is idle, and an absent series would read as "never measured" to the
+	// alerts that watch it. The sample rides the cross-tenant ClickHouse worker
+	// lane and reads aggregate counts only.
+	srv.aiScore = aiscore.NewMetrics(aiScorePrice())
+	srv.aiScoreSampler = aiscore.NewSampler(srv.aiScore, aiscore.Deps{
+		Query: func(ctx context.Context, sql string) ([]map[string]any, error) {
+			return chWorkerQueryTuned(ctx, chWorkerRead{SQL: sql, Tag: "worker:ai-scorecard"})
+		},
+		Log: aiScoreLog,
+	})
+	// AI-SCORECARD-END
 	// LICENCE-BEGIN — built here, after srv exists, because the gate, the audit
 	// sink and the usage counters are all methods on *server.
 	//
@@ -2538,6 +2558,9 @@ func Run() {
 	// `system.parts` is a scrape that times out under load.
 	workers.start("storage-measurement-sampler", func() { srv.storageMeter.RunSampler(ctx) })
 	// STORAGE-MEASUREMENT-END
+	// AI-SCORECARD-BEGIN — same rule: the scrape formats the cache, never queries.
+	workers.start("ai-scorecard-sampler", func() { srv.aiScoreSampler.RunSampler(ctx) })
+	// AI-SCORECARD-END
 	// METERING-BEGIN — the hourly usage snapshot (tracker 258). It takes one
 	// reading immediately and then every hour: immediately, because otherwise
 	// the staleness rule spends its first hour unable to tell "just booted" from
@@ -4438,6 +4461,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	// look the same, which is the presentation bug this was filed about.
 	s.storageMeter.Metrics().Write(w)
 	// STORAGE-MEASUREMENT-END
+	// AI-SCORECARD-BEGIN
+	s.aiScore.Write(w)
+	// AI-SCORECARD-END
 	// SECURITY-LANE-BEGIN
 	if s.securityLane != nil {
 		s.securityLane.Metrics().Write(w)

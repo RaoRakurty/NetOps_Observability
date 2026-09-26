@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Orchestrator turns a question into a governed, evidence-grounded answer. It is
@@ -63,6 +64,11 @@ type Orchestrator struct {
 	// memory row written. nil = investigation memory is not wired here, and
 	// nothing about the answer changes.
 	RecordInvestigation func(ctx context.Context, p Principal, inv ConcludedInvestigation)
+	// Score receives production-scorecard observations (score.go): grounding
+	// coverage, agent/tool outcomes, latency and provider token usage. nil =
+	// the layer is not wired and NOTHING about any answer changes. Nothing that
+	// crosses this seam identifies a tenant or an entity (§3a).
+	Score ScoreSink
 }
 
 // policy returns the configured Policy Engine, or the safe v1 default
@@ -340,7 +346,24 @@ func Classify(question string, uiContext map[string]string) Plan {
 
 // Ask is the entry point: classify → govern (availability + permissions) →
 // dispatch by answer mode → ground → return a typed Answer.
+//
+// It is a thin wrapper over ask so the production scorecard has EXACTLY ONE
+// place to observe a finished answer (score.go). ask has a dozen return paths;
+// instrumenting them individually is how a coverage metric ends up counting
+// some modes twice and others not at all. An error is not observed: a turn that
+// never produced an answer is not an answer with no citations, and folding the
+// two together would quietly depress grounding coverage whenever a provider or
+// a store was down.
 func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, uiContext map[string]string) (Answer, error) {
+	started := time.Now()
+	ans, err := o.ask(ctx, p, question, uiContext)
+	if err == nil {
+		o.observeAnswer(&ans, started)
+	}
+	return ans, err
+}
+
+func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, uiContext map[string]string) (Answer, error) {
 	// An EXPLAIN ask is a lookup, not a classification: the `(i)` next to a
 	// number on a screen already named the term it wants defined, and the answer
 	// is server-authored prose returned verbatim (explain.go). It runs first so a
@@ -601,7 +624,7 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 	user := o.problemPrompt(question, pr, bundle)
 	// §10 model router: this answer's tier comes from RouteFor, not from a local
 	// choice — the policy is stated once and the mechanism reads it.
-	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeProblemExplanation).Tier, system, []LLMMessage{{Role: "user", Content: user}})
+	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeProblemExplanation).Tier, system, []LLMMessage{{Role: "user", Content: user}}, false)
 	evidenceOnly := false
 	if lerr != nil || strings.TrimSpace(text) == "" {
 		text = o.deterministicProblemSummary(pr, missing, owner)
@@ -613,13 +636,13 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 	// Unsupported-claim guard (§11/§16): strip any citation the MODEL invented.
 	// The deterministic fallback is already grounded, so only verify model output.
 	if !evidenceOnly {
-		text, badges, disc = verifyNarrative(text, bundleCitationIDs(bundle), badges, disc)
+		text, badges, disc = o.verifyNarrative(text, bundleCitationIDs(bundle), badges, disc)
 		// Honesty gate (§15 / review item 5): the engine owns the verdict, so a
 		// narrative may not assert an established cause the engine did not
 		// establish. Deterministic — the verdict-conditional prompt above ASKS
 		// for hedged wording, this enforces it. The evidence-only summary is
 		// the fallback when nothing honest survives.
-		text, badges, disc = enforceVerdictHonesty(text, pr.Verdict,
+		text, badges, disc = o.enforceVerdictHonesty(text, pr.Verdict,
 			o.deterministicProblemSummary(pr, missing, owner), badges, disc)
 	}
 	// Engine voice contract (v1 NOC catalog): when the matched signature carries
@@ -760,7 +783,7 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 	user := o.currentStatePrompt(question, cs)
 	// §10 model router: a grounded headline over an already-ranked structure is
 	// the FAST tier's work — RouteFor says so, this reads it.
-	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeCurrentStateSummary).Tier, system, []LLMMessage{{Role: "user", Content: user}})
+	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeCurrentStateSummary).Tier, system, []LLMMessage{{Role: "user", Content: user}}, false)
 	if lerr != nil || strings.TrimSpace(text) == "" {
 		text = o.deterministicStateSummary(cs)
 		provider = "none"
@@ -770,7 +793,7 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 	} else {
 		// Unsupported-claim guard (§11/§16) — verify the model didn't cite an id
 		// that isn't among this answer's citations.
-		text, badges, disc = verifyNarrative(text, citationRefIDs(cites), badges, disc)
+		text, badges, disc = o.verifyNarrative(text, citationRefIDs(cites), badges, disc)
 	}
 	cs.Summary = Scrub(strings.TrimSpace(text))
 
@@ -1072,7 +1095,7 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 	system := o.systemPrompt()
 	user := o.moduleHealthPrompt(question, mh, bundle)
 	// §10 model router: a module headline is the FAST tier (RouteFor's policy).
-	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeModuleHealthSummary).Tier, system, []LLMMessage{{Role: "user", Content: user}})
+	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeModuleHealthSummary).Tier, system, []LLMMessage{{Role: "user", Content: user}}, false)
 	var badges []string
 	var providerNote string
 	evidenceOnly := false
@@ -1088,7 +1111,7 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 		providerNote = ProviderFallbackNote(false)
 	} else {
 		// Unsupported-claim guard (§11/§16) on the model headline.
-		mh.Headline, badges, disc = verifyNarrative(strings.TrimSpace(text), bundleCitationIDs(bundle), badges, disc)
+		mh.Headline, badges, disc = o.verifyNarrative(strings.TrimSpace(text), bundleCitationIDs(bundle), badges, disc)
 	}
 	return Answer{Mode: ModeModuleHealthSummary, Intent: plan.Intent, Modules: allowed,
 		Text: mh.Headline, Module: mh, Citations: cites, Disclaimers: dedupeLines(disc), Provider: provider,

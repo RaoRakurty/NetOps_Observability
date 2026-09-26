@@ -248,7 +248,7 @@ func TestOrchestratorUntieredClientUnchanged(t *testing.T) {
 func TestCompleteTierWithoutProviderIsHonest(t *testing.T) {
 	ds := newMockDS()
 	o := &Orchestrator{DS: ds, Tools: Tools(ds), Flags: func(string) bool { return false }}
-	if _, _, err := o.completeTier(context.Background(), TierStrong, "sys", nil); err == nil {
+	if _, _, err := o.completeTier(context.Background(), TierStrong, "sys", nil, false); err == nil {
 		t.Fatal("a missing provider must be an error, not an empty success")
 	}
 	ans, err := o.Ask(context.Background(), opsA(), "explain this", map[string]string{"correlation_id": "pa"})

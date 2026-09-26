@@ -244,6 +244,11 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 	ctx, cancel := context.WithTimeout(ctx, SkillTurnBudget)
 	defer cancel()
 
+	// The investigation clock starts with the turn budget, not after the
+	// gather: the scorecard's "investigation latency" is what the operator
+	// waited, which includes entity resolution.
+	started := time.Now()
+
 	// §3a: entities are resolved ONCE per turn, under the caller's tenant,
 	// before any skill runs. Every later hop reuses this binding — a skill
 	// selected in a later round can never resolve a new device or otherwise
@@ -271,15 +276,18 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 			if len(o.chainCandidates(cur, st)) > 0 {
 				st.addNote("the investigation stopped at its " + strconv.Itoa(MaxInvestigationRounds) +
 					"-round budget — the remaining checks were not run")
+				st.cutoff(CutoffRounds)
 			}
 			break
 		}
 		if st.toolCalls >= MaxChainToolCalls {
 			st.addNote("the investigation stopped at its per-turn lookup budget — the remaining checks were not run")
+			st.cutoff(CutoffToolCalls)
 			break
 		}
 		if !timeLeftForAnotherRound(ctx) {
 			st.addNote("the investigation stopped at its time budget — the remaining checks were not run")
+			st.cutoff(CutoffTime)
 			break
 		}
 
@@ -298,11 +306,16 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 		cur, selected, reason = next, how, why
 	}
 	if st.ran == 0 || last == nil {
+		// The chain RAN and produced nothing. That is a task-completion failure
+		// and it is counted as one — the alternative, observing only the turns
+		// that succeeded, would report a completion rate of 100 % forever.
+		o.observeInvestigation(st, started, InvestigationNoEvidence, false)
 		return Answer{}, false // nothing was gathered — fall back rather than narrate nothing
 	}
 	st.notes = append(st.notes, ent.notes...)
 	if st.capped {
 		st.addNote("the gathered evidence was capped at the prompt budget — later rows were not narrated")
+		st.cutoff(CutoffEvidenceChars)
 	}
 	bundle, notes := st.bundle, dedupeStrings(st.notes)
 
@@ -334,7 +347,7 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 	if o.LLM != nil {
 		// §10 model router: a skill finding reasons over everything a multi-hop
 		// chain gathered, which is the STRONG tier by RouteFor's own policy.
-		text, provider, err = o.completeTier(ctx, RouteFor(ModeTroubleshootFinding).Tier, system, []LLMMessage{{Role: "user", Content: o.redact(prompt)}})
+		text, provider, err = o.completeTier(ctx, RouteFor(ModeTroubleshootFinding).Tier, system, []LLMMessage{{Role: "user", Content: o.redact(prompt)}}, true)
 	}
 	// A routing directive is a server↔model control line, never operator text:
 	// strip it even from the final narration — and BEFORE the emptiness check, so
@@ -354,11 +367,35 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 	// stripped before the operator ever sees it (fake authority is the worst
 	// failure mode, LLM09).
 	var badges []string
-	ans.Text, badges, ans.Disclaimers = verifyNarrative(ans.Text, bundleCitationIDs(bundle), badges, ans.Disclaimers)
+	ans.Text, badges, ans.Disclaimers = o.verifyNarrative(ans.Text, bundleCitationIDs(bundle), badges, ans.Disclaimers)
 	ans.ModeBadges = append(ans.ModeBadges, badges...)
 	ans.MissingEvidence = skillMissingEvidence(notes)
 	o.recordConcluded(ctx, p, &ans, ent, st)
+	o.observeInvestigation(st, started, InvestigationAnswered, len(ans.Citations) > 0)
 	return ans, true
+}
+
+// observeInvestigation reports one finished skill-chain turn to the scorecard
+// seam. It reads state the chain already computed and adds nothing; a nil sink
+// makes it free.
+func (o *Orchestrator) observeInvestigation(st *chainState, started time.Time, outcome string, evidenceBacked bool) {
+	s := o.score()
+	if s == nil || st == nil {
+		return
+	}
+	hops := make([]string, 0, len(st.chain))
+	for _, h := range st.chain {
+		hops = append(hops, h.Selected)
+	}
+	s.InvestigationObserved(InvestigationScore{
+		Outcome:        outcome,
+		Duration:       time.Since(started),
+		Hops:           hops,
+		HopsRejected:   st.hopsRejected,
+		ToolOutcomes:   st.toolOutcomes,
+		Cutoffs:        st.cutoffs,
+		EvidenceBacked: evidenceBacked,
+	})
 }
 
 // recordConcluded hands the finished investigation to the server's memory seam
@@ -426,13 +463,13 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 			// The capability is not wired on this deployment. Disclose it rather
 			// than pretending the check happened.
 			notes = append(notes, ToolLabel(step.Tool)+" is not available on this deployment — treat that evidence as UNKNOWN, not clean")
-			st.facts.recordTool(step.Tool, "not_wired")
+			st.recordTool(step.Tool, "not_wired")
 			o.auditSkillTool(sk.Name, step, false, "not_registered", 0, 0, round, selected)
 			continue
 		}
 		if d := pe.EvaluateTool(tool, p); !d.Allow {
 			notes = append(notes, ToolLabel(step.Tool)+" was not run: "+d.Reason)
-			st.facts.recordTool(step.Tool, "denied")
+			st.recordTool(step.Tool, "denied")
 			o.auditSkillTool(sk.Name, step, false, "policy_denied", 0, 0, round, selected)
 			continue
 		}
@@ -452,7 +489,7 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 			default:
 				notes = append(notes, ToolLabel(step.Tool)+" failed — do NOT invent the data it would have returned")
 			}
-			st.facts.recordTool(step.Tool, outcome)
+			st.recordTool(step.Tool, outcome)
 			o.auditSkillTool(sk.Name, step, false, reason, 0, elapsed, round, selected)
 			continue
 		}
@@ -467,7 +504,7 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 		// asserted about what it read; kinds and outcomes are what the SERVER
 		// observed. Neither can come from model text.
 		st.facts.addSignals(res.Signals)
-		st.facts.recordTool(step.Tool, "ok")
+		st.recordTool(step.Tool, "ok")
 		o.auditSkillTool(sk.Name, step, true, "ok", len(res.Items), elapsed, round, selected)
 	}
 	st.facts.addEvidence(items)

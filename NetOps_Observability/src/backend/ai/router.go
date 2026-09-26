@@ -114,12 +114,33 @@ var ErrNoProvider = errors.New("no AI provider is configured")
 // A client that does not implement TieredLLMClient is called exactly as before —
 // that assertion, not a config flag, is what makes this change invisible to an
 // existing deployment.
-func (o *Orchestrator) completeTier(ctx context.Context, tier ModelTier, system string, msgs []LLMMessage) (string, string, error) {
+//
+// It is also the ONE place the production scorecard observes a provider call
+// (score.go): exactly one observation per attempt, failures included, because an
+// erroring provider is still a provider that was called and an error rate nobody
+// can see is the §10 failure. `investigation` says whether the call narrates or
+// routes a skill-chain turn — the honest numerator for tokens-per-investigation.
+// Token usage is counted only when the client reports the PROVIDER'S OWN numbers
+// (LLMUsageClient); it is never estimated here.
+func (o *Orchestrator) completeTier(ctx context.Context, tier ModelTier, system string, msgs []LLMMessage, investigation bool) (string, string, error) {
 	if o == nil || o.LLM == nil {
 		return "", "", ErrNoProvider
 	}
-	if tc, ok := o.LLM.(TieredLLMClient); ok {
-		return tc.CompleteTier(ctx, tier, system, msgs)
+	var (
+		text, provider string
+		usage          TokenUsage
+		err            error
+	)
+	switch c := o.LLM.(type) {
+	case LLMUsageClient:
+		text, provider, usage, err = c.CompleteTierWithUsage(ctx, tier, system, msgs)
+	case TieredLLMClient:
+		text, provider, err = c.CompleteTier(ctx, tier, system, msgs)
+	default:
+		text, provider, err = o.LLM.Complete(ctx, system, msgs)
 	}
-	return o.LLM.Complete(ctx, system, msgs)
+	if s := o.score(); s != nil {
+		s.ProviderObserved(ProviderScore{Usage: usage, Investigation: investigation})
+	}
+	return text, provider, err
 }

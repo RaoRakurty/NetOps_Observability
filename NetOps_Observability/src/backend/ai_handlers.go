@@ -10,10 +10,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"netops/backend/ai"
+	"netops/backend/internal/aiscore"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/tac"
 )
@@ -208,7 +210,77 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		// memory, per principal) until an operator judges it on /api/ai/feedback;
 		// only then is a tenant-scoped memory row written.
 		RecordInvestigation: s.aiRecordInvestigation(claims),
+		// Production scorecard (tracker 337 N-A3): counts, enums and durations
+		// only — nothing tenant- or entity-identifying crosses this seam.
+		Score: s.aiScoreSink(),
 	}
+}
+
+// ---- production AI scorecard (tracker 337 N-A3, design item 19) -------------
+
+// aiScoreSink adapts internal/aiscore to the ai package's ScoreSink seam. The two
+// packages never import each other; the integrator owns the mapping. A server
+// without a scorecard (tests, tools) returns nil, which disables the layer.
+func (s *server) aiScoreSink() ai.ScoreSink {
+	if s == nil || s.aiScore == nil {
+		return nil
+	}
+	return aiScoreAdapter{m: s.aiScore}
+}
+
+type aiScoreAdapter struct{ m *aiscore.Metrics }
+
+func (a aiScoreAdapter) AnswerObserved(sc ai.AnswerScore) {
+	a.m.ObserveAnswer(sc.Citations > 0, sc.Citations, sc.Duration.Seconds())
+}
+
+func (a aiScoreAdapter) InvestigationObserved(sc ai.InvestigationScore) {
+	a.m.ObserveInvestigation(aiscore.Investigation{
+		Outcome: sc.Outcome, Seconds: sc.Duration.Seconds(), Hops: sc.Hops,
+		HopsRejected: sc.HopsRejected, ToolCalls: sc.ToolOutcomes, Cutoffs: sc.Cutoffs,
+		EvidenceBacked: sc.EvidenceBacked,
+	})
+}
+
+func (a aiScoreAdapter) GuardObserved(guard string, removed int) { a.m.ObserveGuard(guard, removed) }
+
+func (a aiScoreAdapter) ProviderObserved(sc ai.ProviderScore) {
+	a.m.ObserveProviderCall(aiscore.ProviderCall{
+		InputTokens: sc.Usage.InputTokens, OutputTokens: sc.Usage.OutputTokens,
+		Reported: sc.Usage.Reported, Investigation: sc.Investigation,
+	})
+}
+
+// aiScorePrice reads the operator-configured model price, in US dollars per
+// MILLION tokens (the unit providers publish). Unset, unparsable or negative
+// means "not configured": the cost metric is then CENSORED with a reason rather
+// than computed from a price nobody set.
+func aiScorePrice() aiscore.Price {
+	parse := func(key string) float64 {
+		v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv(key)), 64)
+		if err != nil || v < 0 {
+			return 0
+		}
+		return v
+	}
+	return aiscore.Price{
+		InputUSDPerMTok:  parse("AI_PRICE_INPUT_USD_PER_MTOK"),
+		OutputUSDPerMTok: parse("AI_PRICE_OUTPUT_USD_PER_MTOK"),
+	}
+}
+
+// aiScoreLog is the sampler's structured logger (key/value pairs → fields).
+func aiScoreLog(msg string, kv ...any) {
+	fields := make(map[string]any, len(kv)/2+1)
+	for i := 0; i < len(kv); i += 2 {
+		key := fmt.Sprint(kv[i])
+		if i+1 < len(kv) {
+			fields[key] = kv[i+1]
+		} else {
+			fields[key] = ""
+		}
+	}
+	logInfo("ai.scorecard", msg, fields)
 }
 
 // newIrisInvestigationStore picks the investigation-memory backend (IRIS Phase

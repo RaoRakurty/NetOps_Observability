@@ -110,11 +110,19 @@ func citationRefIDs(cites []Citation) []string {
 // verifyNarrative runs the grounding check and returns the cleaned text plus a
 // badge/disclaimer when it stripped anything — so the operator sees the answer
 // was verified and knows an unsupported reference was removed (transparency).
-func verifyNarrative(text string, validIDs, badges, disc []string) (string, []string, []string) {
+//
+// It is a METHOD so that a firing can also be COUNTED (score.go). The count is
+// the scorecard's unsupported-claim numerator, and it is raised here rather
+// than at the four call sites for the same reason Ask wraps ask: one place to
+// observe means no path can be instrumented and another forgotten. What crosses
+// the seam is a name from a closed vocabulary and a COUNT — never the stripped
+// text, which is untrusted model output.
+func (o *Orchestrator) verifyNarrative(text string, validIDs, badges, disc []string) (string, []string, []string) {
 	vr := VerifyGrounding(text, validIDs)
 	if len(vr.Removed) > 0 {
 		badges = append(badges, "Verified")
 		disc = append(disc, plural(len(vr.Removed), "unsupported reference")+" removed (not in the evidence).")
+		o.observeGuard(GuardFabricatedCitation, len(vr.Removed))
 	}
 	return vr.Text, badges, disc
 }
@@ -200,8 +208,26 @@ func splitSentences(text string) []string {
 // the operator is told the answer was changed and why, never silently handed a
 // shortened one.
 func enforceVerdictHonesty(text, verdict, fallback string, badges, disc []string) (string, []string, []string) {
+	out, badges, disc, _ := verdictHonesty(text, verdict, fallback, badges, disc)
+	return out, badges, disc
+}
+
+// enforceVerdictHonesty is the orchestrator's form of the gate: identical
+// behaviour, plus one scorecard observation when it fires, so the uncertain-
+// claim guard is counted exactly where it acts (score.go).
+func (o *Orchestrator) enforceVerdictHonesty(text, verdict, fallback string, badges, disc []string) (string, []string, []string) {
+	out, badges, disc, removed := verdictHonesty(text, verdict, fallback, badges, disc)
+	if removed > 0 {
+		o.observeGuard(GuardUncertainClaim, removed)
+	}
+	return out, badges, disc
+}
+
+// verdictHonesty is the gate's body; removed is how many overclaiming
+// sentences it dropped (0 = it did not fire).
+func verdictHonesty(text, verdict, fallback string, badges, disc []string) (string, []string, []string, int) {
 	if strings.EqualFold(strings.TrimSpace(verdict), "confirmed") || strings.TrimSpace(text) == "" {
-		return text, badges, disc
+		return text, badges, disc, 0
 	}
 	kept := make([]string, 0, 8)
 	removed := 0
@@ -213,7 +239,7 @@ func enforceVerdictHonesty(text, verdict, fallback string, badges, disc []string
 		kept = append(kept, s)
 	}
 	if removed == 0 {
-		return text, badges, disc
+		return text, badges, disc, 0
 	}
 	out := strings.TrimSpace(strings.Join(kept, ""))
 	note := plural(removed, "sentence") + " claiming an established cause was removed — Correlix has not identified a root cause for this incident (status: " +
@@ -223,5 +249,5 @@ func enforceVerdictHonesty(text, verdict, fallback string, badges, disc []string
 		note = "The AI narrative claimed a cause Correlix has not established (status: " + StatusLabel(verdict) +
 			"), so it was replaced with the evidence-only summary."
 	}
-	return out, append(badges, "Verified"), append(disc, note)
+	return out, append(badges, "Verified"), append(disc, note), removed
 }
