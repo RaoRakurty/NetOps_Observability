@@ -227,6 +227,51 @@ opinion. Zero declared steps is not 100 percent coverage, and the view says so.
 Per-check reliability reads `unknown` until the prober records per-run results.
 A check nobody has graded is not a check that passed.
 
+### The Journeys view
+
+**Journeys** lists the workflows declared for your tenant, with the count
+against the tenant limit. Each card shows the application, the business
+importance, the version and the objective. When the workflow is measured, the
+card shows its success rate and whether it meets or misses its objective. Use
+**Edit** and **Remove** on the card, and **Declare** to add one, as in the
+steps above.
+
+### The Service Paths view
+
+**Service Paths** shows observed paths only. Choose an open incident from the
+**Incident** list. The view shows the seam ribbon for it, meaning the likely
+layer, the seam, the owner and the leading cause, and the reference to the path
+observation the incident rode.
+
+The view never draws a path of its own. The ordered hops belong to the path
+graph. When no forward path was observed, the view prints the reason the server
+gives. "No forward path was observed" is a different finding from "the path was
+clean", and only the first one is claimed. With no incident open in the window,
+it reads **No incident open in this window**.
+
+### The Changes view
+
+**Changes** is one feed of everything done to the estate: deployments, device
+and cloud configuration, feature flags, security policy, DNS and routing. Filter
+it by **Kind of change** and **Application**. Each row gives **When**, **Kind**,
+**Object**, **Summary**, **Before → after**, **Actor**, **Where**, and a last
+column that names how the change is known. A field the producer did not send reads **not recorded**.
+
+An empty feed shows the server's note. Only the change producers that are wired
+report at all, so an empty feed is not proof that nothing changed.
+
+### The Data Health view
+
+**Data Health** says whether the other six views are worth reading. It opens
+with **Can a cause be confirmed?**. A tenant with fewer than two independent
+kinds of instrument can never reach a confirmed verdict, and this panel says so
+before you need it.
+
+**Sources** lists every source of experience evidence with its state, its
+**Coverage**, its **Freshness** and its **Effect on confidence**, meaning how
+much confidence its current state costs. The states are the ones in the
+telemetry-confidence table above.
+
 ## Related
 
 - [What an empty result means](/reference/honest-states)
