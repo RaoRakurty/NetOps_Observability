@@ -322,9 +322,11 @@
         "slugs": [
           "getting-started/concepts",
           "incidents/reading-an-incident",
-          "noc-guide/overview"
+          "noc-guide/overview",
+          "investigate/rca-explained"
         ]
-      }
+      },
+      "notes": "investigate/rca-explained (\"How root-cause analysis works\": the verdict ladder, and why a verdict names a seam) is a correct answer and was added 2026-09-26 once plural folding let \"seams\"/\"verdicts\" match the singular forms. Before folding the top hit was reference/licensing, the one page that happened to use both plurals."
     },
     {
       "id": "docs-032",
