@@ -232,3 +232,7 @@ func TestCompoundIDsNeedTheirDeviceAndName(t *testing.T) {
 	mustFail(t, fakeScope{}, `{"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","entities":[{"type":"device","id":"device:a/b"}]}`, CodeInvalidEntityID)
 	mustFail(t, fakeScope{}, `{"v":1,"query_type":"metric_series","target":"bgp_peer","metric":"bgp_flaps","entities":[{"type":"bgp_peer","id":"bgp_peer:d1/not-an-ip"}]}`, CodeInvalidEntityID)
 }
+
+func TestMetricGroupByIsRefusedNotIgnored(t *testing.T) {
+	mustFail(t, fakeScope{}, strings.Replace(series, `"time_range"`, `"group_by":["site"],"time_range"`, 1), CodeForbiddenFieldForType)
+}

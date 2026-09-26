@@ -524,9 +524,10 @@ func (c *checker) groupOrder() {
 	for i, g := range q.GroupBy {
 		path := fmt.Sprintf("group_by[%d]", i)
 		if q.Type.IsMetric() {
-			if _, ok := c.cat.Entity(g); !ok || !c.cat.Reachable(q.Target, g) {
-				c.fail(path, CodeUnknownDimension, g, "metrics group by a related entity type (e.g. site, device)")
-			}
+			// Refused, not accepted-and-ignored: the v1 planner does not group
+			// metric series, and a query that silently dropped the grouping
+			// would answer a different question than the one asked.
+			c.fail(path, CodeForbiddenFieldForType, g, "grouping metric results is not available yet")
 			continue
 		}
 		if d, ok := c.cat.Dimension(q.Target, g); !ok || !d.Groupable {

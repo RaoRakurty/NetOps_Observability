@@ -205,3 +205,23 @@ func TestTripwireSeesTheCircuitLabelSet(t *testing.T) {
 		t.Fatalf("the tripwire is not reading the circuit label set: %q", got)
 	}
 }
+
+// Change classes must PARTITION the stored change types: every type in exactly
+// one class. A type outside every class would silently vanish from a negated
+// class filter ("everything except WAN changes").
+func TestChangeClassesPartitionTheTypes(t *testing.T) {
+	c := MustLoad()
+	typ, _ := c.Dimension("change", "type")
+	cls, _ := c.Dimension("change", "class")
+	count := map[string]int{}
+	for _, ev := range cls.Enum {
+		for _, p := range ev.Physical {
+			count[p]++
+		}
+	}
+	for _, ev := range typ.Enum {
+		if count[ev.Value] != 1 {
+			t.Errorf("change type %s is in %d classes — it must be in exactly one", ev.Value, count[ev.Value])
+		}
+	}
+}

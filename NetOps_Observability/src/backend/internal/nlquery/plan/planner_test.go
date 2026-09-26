@@ -272,3 +272,26 @@ func TestSplitPairKeepsSlashesInTheSecondPart(t *testing.T) {
 		}
 	}
 }
+
+// A negated enum filter is its exact complement — never dropped, never read
+// as the positive value (found by the golden corpus, 2026-09-26).
+func TestNegatedFiltersBecomeTheirComplement(t *testing.T) {
+	sc := &fakeScope{}
+	run(t, sc, `{"v":1,"query_type":"incident_list","target":"incident","filters":[{"field":"state","op":"ne","values":["closed"]}],"time_range":{"kind":"relative","last":"7d"}}`)
+	st := sc.incidentQs[0].States
+	sort.Strings(st)
+	if strings.Join(st, ",") != "merged,open" {
+		t.Fatalf("state ne closed → %v, want merged,open", st)
+	}
+	sc = &fakeScope{}
+	run(t, sc, `{"v":1,"query_type":"change_list","target":"change","filters":[{"field":"type","op":"ne","values":["DNS_CHANGE"]},{"field":"id","op":"ne","values":["chg-1"]}],"time_range":{"kind":"relative","last":"24h"}}`)
+	q := sc.changeQs[0]
+	if len(q.Types) != 8 || contains(q.Types, "DNS_CHANGE") || q.ExcludeIDs[0] != "chg-1" {
+		t.Fatalf("type ne DNS → %v, exclude %v", q.Types, q.ExcludeIDs)
+	}
+	sc = &fakeScope{}
+	run(t, sc, `{"v":1,"query_type":"change_list","target":"change","filters":[{"field":"class","op":"ne","values":["wan"]}],"time_range":{"kind":"relative","last":"24h"}}`)
+	if contains(sc.changeQs[0].Types, "NETWORK_CHANGE") || contains(sc.changeQs[0].Types, "ROUTE_CHANGE") || len(sc.changeQs[0].Types) != 7 || !contains(sc.changeQs[0].Types, "DNS_CHANGE") {
+		t.Fatalf("class ne wan → %v", sc.changeQs[0].Types)
+	}
+}

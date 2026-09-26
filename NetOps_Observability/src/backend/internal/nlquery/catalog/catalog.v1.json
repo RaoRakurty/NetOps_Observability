@@ -1591,6 +1591,21 @@
  "dimensions": [
   {
    "entity": "change",
+   "name": "id",
+   "type": "string",
+   "aliases": [
+    "change id"
+   ],
+   "operators": [
+    "ne"
+   ],
+   "filterable": true,
+   "groupable": false,
+   "display": true,
+   "sensitivity": "operational"
+  },
+  {
+   "entity": "change",
    "name": "type",
    "type": "enum",
    "aliases": [
@@ -1758,6 +1773,16 @@
       "INFRASTRUCTURE_CHANGE",
       "CLOUD_CHANGE",
       "CONFIG_CHANGE"
+     ]
+    },
+    {
+     "value": "dns",
+     "aliases": [
+      "dns related",
+      "name resolution"
+     ],
+     "physical": [
+      "DNS_CHANGE"
      ]
     }
    ],

@@ -15,16 +15,35 @@ import (
 
 // physical maps an AST filter on an enum dimension to its stored values
 // (a catalog class such as change class "wan" covers several stored types).
+// A NEGATED enum filter ("ne") becomes its exact COMPLEMENT — every stored
+// value of the dimension except the excluded ones — so the Scope only ever
+// receives a positive list and a "not closed" filter can never be read as
+// "closed" or dropped.
 func (p Planner) physical(entity string, f ast.Filter) []string {
 	d, ok := p.Cat.Dimension(entity, f.Field)
 	if !ok || d.Type != "enum" {
 		return f.Values
 	}
-	var out []string
+	picked := map[string]bool{}
 	for _, v := range f.Values {
 		for _, e := range d.Enum {
 			if e.Value == v {
-				out = append(out, e.Physical...)
+				for _, ph := range e.Physical {
+					picked[ph] = true
+				}
+			}
+		}
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, e := range d.Enum {
+		for _, ph := range e.Physical {
+			if seen[ph] {
+				continue
+			}
+			seen[ph] = true
+			if picked[ph] != (f.Op == "ne") {
+				out = append(out, ph)
 			}
 		}
 	}
@@ -37,10 +56,8 @@ func (p Planner) changeQuery(q *ast.AST, filters []ast.Filter) ChangeQuery {
 	cq := ChangeQuery{Limit: q.LimitOr(100)}
 	for _, f := range filters {
 		vals := p.physical("change", f)
-		if f.Op == "ne" {
-			if f.Field == "id" {
-				cq.ExcludeIDs = append(cq.ExcludeIDs, vals...)
-			}
+		if f.Field == "id" { // the only non-enum negation: "what ELSE did they change"
+			cq.ExcludeIDs = append(cq.ExcludeIDs, vals...)
 			continue
 		}
 		switch f.Field {
