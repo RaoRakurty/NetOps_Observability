@@ -22,6 +22,7 @@ import (
 	"netops/backend/internal/irisconvo"
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/compile"
+	"netops/backend/internal/nlquery/modelc"
 	"netops/backend/internal/nlquery/plan"
 	"netops/backend/internal/nlquery/resolve"
 	"netops/backend/internal/nlquery/validate"
@@ -266,13 +267,13 @@ func (s *server) aiNLQueryWith(r *http.Request, claims jwtClaims, st *irisconvo.
 	if s.nlqCatalog == nil || s.roles == nil || !s.roles.Allows(claims.Role, "infrastructure", LevelRead) {
 		return nil
 	}
-	return func(ctx context.Context, _ ai.Principal, question string) (ai.DataAnswer, error) {
+	return func(ctx context.Context, _ ai.Principal, question string, opts ai.DataOpts) (ai.DataAnswer, error) {
 		cx := compile.Context{Loc: time.UTC, Now: time.Now()}
 		if st != nil {
 			cx.PriorAST = st.LastAST
 			cx.Conv = &compile.Conversation{Entities: st.Entities, Actors: st.Actors, ChangeIDs: st.ChangeIDs}
 		}
-		c, err := s.nlqCompileQuestion(r.WithContext(ctx), claims, question, cx)
+		c, err := s.nlqCompile(r.WithContext(ctx), claims, question, cx, opts.AllowModel)
 		if err != nil {
 			return ai.DataAnswer{}, err
 		}
@@ -383,12 +384,17 @@ func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled,
 		return ai.DataAnswer{}, err
 	}
 	var notes []string
+	if c.source == modelc.SourceModel {
+		// The grammar did not understand this question; a model interpreted it.
+		// The query shown with the answer is what ran — say so, first.
+		notes = append(notes, nlqModelDisclosure)
+	}
 	for _, k := range c.vr.Constraints {
 		notes = append(notes, "Adjusted: "+k.Reason)
 	}
 	tenant, _ := principalTenant(claims)
 	logInfo("iris.router", "data answer", map[string]any{"tenant": tenant, "sub": claims.Sub, "intent": c.res.Intent,
-		"query_type": string(c.checked.Type), "rows": len(rs.Rows), "series": len(rs.Series)})
+		"query_type": string(c.checked.Type), "rows": len(rs.Rows), "series": len(rs.Series), "source": c.source})
 	return ai.DataAnswer{Status: ai.DataAnswered, Intent: c.res.Intent, Payload: payload, Notes: notes,
 		Text:      plan.Summarize(s.nlqCatalog, c.checked, rs),
 		Citations: []ai.Citation{{ID: "query:" + rs.QueryID, Kind: "query", Label: "Query " + rs.ASTHash, Href: ""}}}, nil
@@ -899,6 +905,94 @@ func (l nlqLookups) Visible(ctx context.Context, entityType, id string) (bool, e
 	return l.h.Visible(ctx, nlqast.EntityRef{Type: entityType, ID: id})
 }
 
+// aiCompileQuery binds the compile_query tool (tracker 337 N-C5) to the caller:
+// the same compiler, model fallback, validator and scope as
+// /api/ai/query/compile, behind the same infrastructure:read gate. It returns
+// the interpretation only — nothing is executed. nil when the catalog is
+// absent or the caller may not read infrastructure (the tool then does not
+// register).
+func (s *server) aiCompileQuery(r *http.Request, claims jwtClaims) func(context.Context, ai.Principal, string) (ai.QueryInterpretation, error) {
+	if s.nlqCatalog == nil || s.roles == nil || !s.roles.Allows(claims.Role, "infrastructure", LevelRead) {
+		return nil
+	}
+	return func(ctx context.Context, _ ai.Principal, question string) (ai.QueryInterpretation, error) {
+		c, err := s.nlqCompileQuestion(r.WithContext(ctx), claims, question, compile.Context{Loc: time.UTC, Now: time.Now()})
+		if err != nil {
+			return ai.QueryInterpretation{}, err
+		}
+		in := ai.QueryInterpretation{Intent: c.res.Intent, Source: c.source, NotUnderstood: c.res.NotUnderstood}
+		for _, e := range c.res.Entities {
+			in.Entities = append(in.Entities, e.EntityID)
+		}
+		switch {
+		case c.res.Decline != "":
+			in.Status = ai.QueryDeclined
+		case len(c.res.Clarify) > 0:
+			in.Status = ai.QueryClarify
+			for _, e := range c.res.Clarify {
+				in.Clarify = append(in.Clarify, e.EntityID)
+			}
+		case c.res.AST == nil:
+			in.Status = ai.QueryNotUnderstood
+		case c.checked == nil:
+			in.Status = ai.QueryInvalid
+			if in.Query, err = c.res.AST.Canonical(); err != nil {
+				return ai.QueryInterpretation{}, err
+			}
+			for _, e := range c.vr.Errors {
+				in.ValidationCodes = append(in.ValidationCodes, e.Code)
+			}
+		default:
+			in.Status = ai.QueryCompiled
+			if in.Query, err = c.checked.Canonical(); err != nil {
+				return ai.QueryInterpretation{}, err
+			}
+			for _, k := range c.vr.Constraints {
+				in.Constraints = append(in.Constraints, k.Reason)
+			}
+		}
+		return in, nil
+	}
+}
+
+// nlqModelDisclosure is the note every model-compiled answer carries.
+const nlqModelDisclosure = "Interpreted by the AI model, not the built-in question grammar — check the query shown with this answer before relying on it."
+
+// nlqModelFallbackTier is the model tier the fallback asks for: turning a
+// question into a checked query is structured reasoning, not a headline.
+const nlqModelFallbackTier = ai.TierStrong
+
+// nlqModelFallback binds the model fallback (tracker 337 N-C5) to the caller:
+// their own aliases and inventory, and their own provider chain and daily
+// budget through aiLLM. With Iris off, IRIS_NLQ_MODEL_FALLBACK=false, or no
+// provider this caller may use, Model stays nil and the fallback is silently
+// unavailable — the grammar's answer stands, key-free.
+func (s *server) nlqModelFallback(r *http.Request, claims jwtClaims) modelc.Fallback {
+	f := modelc.Fallback{Cat: s.nlqCatalog, L: nlqLookups{s: s, h: s.nlqScopeFor(r, claims), claims: claims}}
+	if !aiEnabled() || strings.EqualFold(strings.TrimSpace(os.Getenv("IRIS_NLQ_MODEL_FALLBACK")), "false") ||
+		s.aiTenantCfg == nil || s.copilotCfg == nil || len(s.providerCandidatesForTier(claims, nlqModelFallbackTier)) == 0 {
+		return f
+	}
+	f.Model = nlqModel{llm: aiLLM{srv: s, claims: claims}}
+	return f
+}
+
+// nlqModel adapts aiLLM to modelc.Model: the server-owned system prompt goes
+// in its own channel, every turn is stripped of credential-shaped text before
+// it crosses the provider boundary (LLM06), and the call is charged to the
+// caller's tenant budget — an exhausted budget refuses before any provider is
+// called (LLM04).
+type nlqModel struct{ llm aiLLM }
+
+func (m nlqModel) Complete(ctx context.Context, system string, msgs []modelc.Message) (string, error) {
+	lm := make([]ai.LLMMessage, 0, len(msgs))
+	for _, x := range msgs {
+		lm = append(lm, ai.LLMMessage{Role: x.Role, Content: ai.RedactSecrets(x.Content)})
+	}
+	text, _, _, err := m.llm.CompleteTierWithUsage(ctx, nlqModelFallbackTier, system, lm)
+	return text, err
+}
+
 // ---- Iris NL: compile + execute (tracker 337 N-C5) ---------------------------
 //
 // POST /api/ai/query/compile  {question, incident_id?, prior_ast?, tz?}
@@ -1001,7 +1095,7 @@ func (s *server) handleAIQueryCompile(w http.ResponseWriter, r *http.Request) {
 	}
 	tenant, _ := principalTenant(claims)
 	logInfo("iris.nlquery", "compile", map[string]any{"tenant": tenant, "sub": claims.Sub, "intent": c.res.Intent,
-		"unparsed": c.res.Unparsed, "declined": c.res.Decline != "", "question_chars": len(req.Question)})
+		"unparsed": c.res.Unparsed, "declined": c.res.Decline != "", "source": c.source, "question_chars": len(req.Question)})
 	writeJSON(w, http.StatusOK, c.body())
 }
 
@@ -1010,13 +1104,44 @@ type nlqCompiled struct {
 	res     compile.Result
 	checked *nlqast.AST      // the validated query; nil unless it is valid
 	vr      *validate.Result // nil when nothing compiled
+	// source is modelc.SourceModel when the model fallback compiled the
+	// question (the grammar's queries carry none); the UI and the router's
+	// data arm disclose it.
+	source string
 }
 
-// nlqCompileQuestion runs the compiler and the validator for the caller.
+// nlqCompileQuestion runs the compiler and the validator for the caller. When
+// the grammar cannot parse the question, the model fallback (tracker 337 N-C5)
+// may: only then, only with a provider this caller may use, and only with a
+// query that passes the same validator in the same scope.
 func (s *server) nlqCompileQuestion(r *http.Request, claims jwtClaims, question string, cx compile.Context) (nlqCompiled, error) {
+	return s.nlqCompile(r, claims, question, cx, true)
+}
+
+// nlqCompile is nlqCompileQuestion with the model fallback optional
+// (allowModel=false: grammar only — the /ask data arm on product-help
+// questions).
+func (s *server) nlqCompile(r *http.Request, claims jwtClaims, question string, cx compile.Context, allowModel bool) (nlqCompiled, error) {
 	res, err := compile.Compiler{Cat: s.nlqCatalog, R: s.nlqResolver(r, claims)}.Compile(r.Context(), question, cx)
 	if err != nil {
 		return nlqCompiled{}, err
+	}
+	if res.Unparsed && allowModel {
+		scope := s.nlqScopeFor(r, claims)
+		o, err := s.nlqModelFallback(r, claims).Compile(r.Context(), question, cx, scope, res)
+		if err != nil {
+			return nlqCompiled{}, err
+		}
+		tenant, _ := principalTenant(claims)
+		if o.Calls > 0 {
+			// Counts and closed reasons only — never the question or the reply.
+			logInfo("iris.nlquery", "model fallback", map[string]any{"tenant": tenant, "sub": claims.Sub,
+				"accepted": o.Accepted(), "refusal": o.Refusal, "calls": o.Calls})
+		}
+		if o.Accepted() {
+			vr := o.Validation
+			return nlqCompiled{res: o.Result, checked: o.Checked, vr: &vr, source: o.Source}, nil
+		}
 	}
 	out := nlqCompiled{res: res}
 	if res.AST != nil {
@@ -1035,6 +1160,9 @@ func (s *server) nlqCompileQuestion(r *http.Request, claims jwtClaims, question 
 func (c nlqCompiled) body() map[string]any {
 	out := map[string]any{"intent": c.res.Intent, "entities": c.res.Entities, "clarify": c.res.Clarify,
 		"decline": c.res.Decline, "unparsed": c.res.Unparsed, "not_understood": c.res.NotUnderstood}
+	if c.source != "" {
+		out["source"] = c.source // "model": interpreted by the model, not the grammar
+	}
 	if c.res.AST != nil {
 		out["validation"] = *c.vr
 		if c.checked != nil {

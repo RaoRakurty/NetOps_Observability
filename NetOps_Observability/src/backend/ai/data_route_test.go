@@ -17,10 +17,14 @@ import (
 	"testing"
 )
 
-type dataCall struct{ n int }
+type dataCall struct {
+	n    int
+	opts []DataOpts
+}
 
 func dataArm(c *dataCall, d DataAnswer, err error) NLQueryFunc {
-	return func(context.Context, Principal, string) (DataAnswer, error) {
+	return func(_ context.Context, _ Principal, _ string, opts DataOpts) (DataAnswer, error) {
+		c.opts = append(c.opts, opts)
 		c.n++
 		return d, err
 	}
@@ -88,5 +92,27 @@ func TestAnUnwiredDataArmChangesNothing(t *testing.T) {
 	}
 	if a.Mode != b.Mode || a.Intent != b.Intent || a.Text != b.Text {
 		t.Fatalf("a declining data arm changed the classic answer: %v/%v vs %v/%v", a.Mode, a.Intent, b.Mode, b.Intent)
+	}
+}
+
+// The model fallback is not spent on questions the classifier already knows
+// are product help; the grammar still runs for them (a misrouted data
+// question is still caught key-free).
+func TestTheModelIsNotSpentOnProductHelp(t *testing.T) {
+	var c dataCall
+	o := newOrch(newMockDS())
+	o.NLQuery = dataArm(&c, DataAnswer{Status: DataNotData}, nil)
+	if _, err := o.Ask(context.Background(), tenantA(), "how do I add a device", nil); err != nil {
+		t.Fatal(err)
+	}
+	if c.n != 1 || c.opts[0].AllowModel {
+		t.Fatalf("product help: consulted %d times with %+v", c.n, c.opts)
+	}
+	c = dataCall{}
+	if _, err := o.Ask(context.Background(), tenantA(), "show p95 utilization per site today", nil); err != nil {
+		t.Fatal(err)
+	}
+	if c.n != 1 || !c.opts[0].AllowModel {
+		t.Fatalf("a data-shaped question may use the model: %+v", c.opts)
 	}
 }

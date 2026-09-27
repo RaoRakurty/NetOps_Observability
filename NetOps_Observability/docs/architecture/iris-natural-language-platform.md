@@ -160,16 +160,16 @@ Evidence paths are relative to `src/backend/` unless prefixed. "Closes in" names
 | 6 | `QueryIntent` taxonomy (23 intents), structured model output | MISSING | Regex `Classify` only | N-C5, N-A4 |
 | 7 | Entity recognition + `ResolvedEntityRef` + 6-rung priority; ambiguity blocks actions | MISSING | No alias table; `/api/search` covers device/app/case, not site/interface/circuit (`search_unified.go:44`) | N-C2 |
 | 8 | `SemanticSchemaCatalog` | MISSING | Real metric names enumerated in the audit (e.g. `circuit_loss_pct`, `device_if_in_octets`, `device_bgp_peer_state`, `probe_rtt_ms`) | N-C1 |
-| 9 | Schema RAG (relevant fragments only) | MISSING | — | N-C5 |
+| 9 | Schema RAG (relevant fragments only) | SHIPPED | Lexical (catalog alias index + description overlap, no vector store): `internal/nlquery/modelc/retrieve.go` | — |
 | 10 | Multi-layer RAG A–G (schema, environment, runbook, incident, docs, structured change, never-vector telemetry) | PARTIAL | Docs BM25 (E) shipped; others missing | N-C5, N-F3, N-F4, N-D3 |
 | 11 | Hybrid retrieval (filters + lexical + semantic + recency + authority + rerank) | PARTIAL | Lexical BM25 + tier tie-break only | N-F3 |
 | 12 | RAG security: tenant pre-filter, provenance fields, retrieved content is data | PARTIAL | Docs corpus is platform-global (no tenant data); investigation memory is tenant-scoped | N-F3 |
 | 13 | `IrisConversationState` | DONE | `internal/irisconvo` + migration 0053 (2026-09-27); design §9 of `iris-nl-query-design.md` | — |
 | 14 | Reference resolution (that/it/there/those) from structured state | DONE | `compile/refer.go` — bound from server state or Unparsed (2026-09-27) | — |
-| 15 | `NLQueryCompiler` pipeline + compile/execute/get/explain APIs + `compile_query` tool | MISSING | — | N-C5 |
+| 15 | `NLQueryCompiler` pipeline + compile/execute/get/explain APIs + `compile_query` tool | PARTIAL | Grammar → guarded model fallback (`internal/nlquery/modelc`) → validator; compile/execute APIs; `compile_query` tool (`ai/compile_query.go`, interpret-only). `GET /api/ai/query/{id}` + `/explain` missing | N-C5 |
 | 16 | Query validation + hard limits; reject unknown/cross-tenant/forbidden | MISSING | — | N-C3 |
-| 17 | Query repair loop with structured errors, bounded retries | MISSING | — | N-C5 |
-| 18 | Versioned validated NL↔Intent↔AST example library | MISSING | — | N-C6 |
+| 17 | Query repair loop with structured errors, bounded retries | SHIPPED | ≤ 2 repair rounds fed closed codes/paths/catalog suggestions only (`modelc/prompt.go` `repairPrompt`) | — |
+| 18 | Versioned validated NL↔Intent↔AST example library | SHIPPED | `modelc/examples.v1.json` (82 golden-derived pairs, placeholder ids; every entry decodes + validates in `examples_test`) | — |
 | 19 | No fine-tuning first; frontier model + structure | COMPLIANT | Owner decision: no training a proprietary model | — |
 | 20 | Golden NL query corpus `tests/iris/nlquery/golden/` | MISSING | — | N-C6 |
 | 21 | Controlled synthetic paraphrases validated against same AST | MISSING | — | N-C6 |
@@ -370,8 +370,8 @@ returns data, `pgintegration` when it touches PG, and the CI gate (§12). Effort
 |---|---|---|---:|
 | N-C2 | **Resolver remainder** (ladder canonical id → tenant alias → inventory name → partial-needs-confirm, alias store + CRUD API + UI SHIPPED): topology rung, catalog-synonym rung, model-suggestion-needs-confirm rung; provider/application seeding (providers resolve to nothing until aliased) | — | 1 |
 | N-C4 | **Planner remainder** (metrics, changes, incidents, explain, site/device/provider grouping SHIPPED): `flow_top` over CH allowlisted templates and `log_search` over OS structured filters (both reserved today — the validator refuses them precisely); depends on N-B5 for circuit/probe series | B5 | 1.5 |
-| N-C5 | **Compiler remainder** (deterministic grammar, compile/execute APIs SHIPPED): model fallback via structured output + schema-RAG + example-RAG; repair loop ≤2; `GET /api/ai/query/{id}` + `/explain`; `compile_query` tool | A4 | 2.5 |
-| N-C6 | **Corpus remainder** (212-case corpus, paraphrases, safety at 100 %, and per-metric floors — entity precision 0.88, executable 0.97, answered precision 0.85, accuracy 0.70 — SHIPPED 2026-09-27): coverage of Part 2 §20's 21 categories; offline harness for the model path | C5 | 0.5 |
+| N-C5 | **Compiler remainder** (deterministic grammar, compile/execute APIs, model fallback — structured output + lexical schema-RAG + example-RAG, repair ≤ 2, entity/widening/value guards, `source=model` disclosure — and the `compile_query` tool SHIPPED 2026-09-27): `GET /api/ai/query/{id}` + `/explain` | A4 | 0.5 |
+| N-C6 | **Corpus remainder** (212-case corpus, paraphrases, safety at 100 %, per-metric floors — entity precision 0.88, executable 0.97, answered precision 0.85, accuracy 0.70 — and the model-path offline harness — stub models in CI `model_golden_test.go`, live provider behind `-tags nlqmodeleval` — SHIPPED 2026-09-27): coverage of Part 2 §20's 21 categories; a first live-provider baseline for the model path | C5 | 0.25 |
 | N-C7 | **Conversation remainder** (store, state, reference binding, follow-up rewriting and the conversation API SHIPPED 2026-09-27): editable-chip → AST regeneration; a scored multi-turn corpus (Part 2 §50) with a ratchet like the golden corpus; Part 2 §69's 14 routine questions end to end | C5, E3 | 1 |
 | N-C8 | **Query capture + operator corrections**: per-query record (Part 2 §22 fields) and chip edits stored for offline evaluation; no automatic retraining | C7, A6 | 1 |
 
@@ -386,9 +386,9 @@ returns data, `pgintegration` when it touches PG, and the CI gate (§12). Effort
 
 | # | Item | Depends | ew |
 |---|---|---|---:|
-| N-E1 | **`PresentationPlan` + `ResultSet` contract**: closed view enum (SUMMARY, TABLE, TIME_SERIES, TIMELINE, BAR, TOPOLOGY, PATH, DIFF, EVIDENCE_LIST, INCIDENT_CARD, CHANGE_CARD, RECOMMENDATION_CARD); semantic view selection; every row/point carries query id + provenance | C4 | 1.5 |
+| N-E1 | **Server-side `PresentationPlan`** (client contract SHIPPED: closed view enum, `validatePlan`, `normalizeResult`, `defaultPlanFor` in `src/frontend/src/iris/presentation.ts`): the server selects the view and returns the plan with the ResultSet (today the client's `defaultPlanFor` chooses), the model may only suggest from the enum | C4 | 0.75 |
 | N-E2 | **SSE progress stream**: operational trace events; bounded; falls back to one JSON response | A5 | 1.5 |
-| N-E3 | **Frontend components**: plan renderer; shared `IrisTimeline` (cause/start/recovery accents); change table + drawer; unified + side-by-side JSON diff; evidence drawer ("why am I seeing this?"); editable chip bar; progress trace; incident/change/recommendation cards; ≥14 px; `safeCiteHref` everywhere | E1, E2 | 4 |
+| N-E3 | **Component wiring remainder** (renderer, timeline, change table + drawer, JSON diff, evidence drawer, chip bar, progress trace, cards, ≥14 px, safe hrefs SHIPPED in `src/frontend/src/iris/`): progress trace fed by the E2 stream; chip edits regenerating the AST (with N-C7); cards used by the classic RCA answers | E2, C7 | 1 |
 | N-E4 | **Page context in the UI** (the Iris box now holds a server conversation — id in sessionStorage survives drawer close, follow-ups bind through the data arm, SHIPPED 2026-09-27): route/entity/incident bound into the ask and validated server-side; incident-detail Iris entry; merge the two RCA Iris asks into one | C7 | 2 |
 | N-E5 | **Playwright e2e remainder** (the Iris box and the vocabulary panel SHIPPED 2026-09-27: `e2e/irisDrawer.spec.ts`, `e2e/irisVocabulary.spec.ts` over the faked Iris API in `e2e/irisBackend.ts` — data answer with chart + table + citation and hostile cells as text, one server conversation across drawer close/reopen, 404 drop and "clear", honest not-understood and ask-back, alias choice never auto-saved, name check, question + follow-up + new conversation, a11y smoke): one spec per flagship slice once N-S1–S3 exist | S1–S3 | 0.75 |
 

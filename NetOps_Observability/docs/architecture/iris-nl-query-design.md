@@ -223,6 +223,20 @@ DUR" → metric_series · 14 "compare it with (yesterday|last week)" → compare
 interfaces changed most" → compare_windows topk |Δ| · 16 "top N ENTITY by METRIC [TIME]" →
 metric_topk · 17 "(open|confirmed) incidents [at SITE] [TIME]" → incident_list.
 
+**Model fallback (`internal/nlquery/modelc`, shipped 2026-09-27).** Runs ONLY on Unparsed, only with a
+provider the caller may use (their BYO or the platform chain, strong tier, charged to the tenant's daily
+budget; `IRIS_NLQ_MODEL_FALLBACK=false` disables it). Pre-checks spend no call: an unbound reference
+("it", "that device"), a name-like word (identifier or capitalised) the caller's resolver did not find in
+a question that cannot carry it as a list filter, or no catalog vocabulary at all. The prompt is the
+server-constant system prompt + AST JSON schema, and one digest-tagged data block holding the question,
+the entities the caller's resolver found in it (exact rungs only), lexically chosen catalog fragments and
+≤ 4 examples (`examples.v1.json`, placeholder ids). The reply `{"ast", "unmatched_names"}` is decoded
+strictly; a tenant/org key, an honest null or a non-empty `unmatched_names` ends the fallback. Guards
+before the validator: every entity id must be one resolved for THIS question (foreign ≡ missing), every
+resolved mention must narrow the query (no silent widening), string filter values and incident ids must
+come from the question (or the incident on screen). ≤ 2 repair rounds with closed codes only; still
+invalid ⇒ Unparsed. Accepted results carry `source: "model"`; the router's data arm discloses it.
+
 ## 7. Tests
 
 Catalog (strict load, uniqueness, alias collisions, relationship endpoints, drift + B5 tripwire, Go⇔JSON

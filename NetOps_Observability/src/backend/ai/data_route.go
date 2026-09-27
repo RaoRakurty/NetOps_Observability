@@ -54,9 +54,17 @@ type DataAnswer struct {
 	Notes     []string
 }
 
+// DataOpts steers one data-arm attempt.
+type DataOpts struct {
+	// AllowModel lets the server's model fallback try a question the grammar
+	// could not parse. Off for questions the classifier already knows are
+	// product help: those have a better answer than up to three model calls.
+	AllowModel bool
+}
+
 // NLQueryFunc answers a question with the NL query engine, in the caller's
 // scope. Status DataNotData (or an error) means "not mine".
-type NLQueryFunc func(ctx context.Context, p Principal, question string) (DataAnswer, error)
+type NLQueryFunc func(ctx context.Context, p Principal, question string, opts DataOpts) (DataAnswer, error)
 
 // diagnosticCue marks a question that asks for a diagnosis, not a listing.
 var diagnosticCue = regexp.MustCompile(`(?i)\b(?:why|root cause|caused?|causing|troubleshoot\w*|diagnos\w*|investigat\w*|what'?s wrong|what is wrong|not working|broken|fix|explain)\b`)
@@ -67,7 +75,7 @@ func (o *Orchestrator) answerData(ctx context.Context, p Principal, question str
 	if o.NLQuery == nil || plan.Intent == "problem_explanation" || diagnosticCue.MatchString(question) {
 		return Answer{}, false
 	}
-	d, err := o.NLQuery(ctx, p, question)
+	d, err := o.NLQuery(ctx, p, question, DataOpts{AllowModel: plan.Intent != "product_question" && plan.Intent != "product_navigation"})
 	if err != nil || (d.Status != DataAnswered && d.Status != DataClarify) {
 		return Answer{}, false
 	}

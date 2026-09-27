@@ -160,7 +160,7 @@ var modules = []Module{
 		Description:        "Device telemetry: metric anomalies, syslog, SNMP traps, probe health, interface health.",
 		Entities:           []string{"metric", "syslog", "snmp_trap", "probe", "interface"},
 		QuestionCategories: []string{"metric_anomaly", "syslog_summary", "trap_summary", "probe_health", "interface_health"},
-		Tools:              []string{"get_metric_anomalies", "get_syslog_summary", "get_snmp_trap_summary", "get_probe_health", "get_interface_health"},
+		Tools:              []string{"get_metric_anomalies", "get_syslog_summary", "get_snmp_trap_summary", "get_probe_health", "get_interface_health", "compile_query"},
 		Permissions:        []string{"infrastructure:read"},
 		Freshness:          FreshnessRecent, Sensitivity: SensitivityOperational, Availability: AvailabilityStable,
 		CrossModule:   []string{"correlations_rca", "topology"},
