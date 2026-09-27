@@ -286,7 +286,10 @@ func (a *API) handleBackup(w http.ResponseWriter, r *http.Request, deviceID stri
 		defer a.m.Release(dev.ID)
 		ctx, cancel := context.WithTimeout(context.Background(), a.m.timeout+10*time.Second)
 		defer cancel()
-		if _, err := a.m.CaptureClaimed(ctx, dev, owner, "manual", job); err != nil {
+		// The trigger names the authenticated principal (never a body field),
+		// so the version row — and the change the ledger derives from it —
+		// records who asked for this capture.
+		if _, err := a.m.CaptureClaimed(ctx, dev, owner, ManualTrigger(p.Subject), job); err != nil {
 			a.m.deps.LogWarn("manual configuration capture failed", map[string]any{
 				"device": dev.ID, "job_id": job, "error": a.m.deps.Scrub(err.Error())})
 		}

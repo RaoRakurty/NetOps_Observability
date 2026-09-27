@@ -56,6 +56,27 @@ type DriftVerdict struct {
 // binds its evaluator here; nil means "no consumer", and capture still works.
 type DriftObserver func(ctx context.Context, ev CaptureEvent) DriftVerdict
 
+// NewVersionEvent is handed to the OnNewVersion consumer when a capture stored a
+// NEW content-addressed version — i.e. the device's configuration CHANGED since
+// the previous successful capture (or this is the device's first one). It is
+// METADATA ONLY: no configuration text crosses this seam, so a consumer that
+// persists it (the change ledger) can never spill a device's secrets (§8).
+type NewVersionEvent struct {
+	Device  Device
+	Tenant  string
+	Version Version // the stored row, including Trigger and the drift verdict
+	// PreviousSHA is the content address of the previous successful version;
+	// HasPrevious is false on a device's first capture.
+	PreviousSHA string
+	HasPrevious bool
+}
+
+// NewVersionObserver is the optional change-feed seam. An error is COUNTED
+// (netops_config_backup_new_version_hook_failures_total) and logged; it never
+// fails the capture, because the version is already durable and the change feed
+// is derived from it.
+type NewVersionObserver func(ctx context.Context, ev NewVersionEvent) error
+
 // CaptureFailure is handed to the observer when a capture could NOT be taken, so
 // the badge can report the honest "unknown / unreachable" rather than going
 // stale on the last good verdict.
@@ -171,6 +192,9 @@ type Deps struct {
 	// OnCapture / OnFailure are the drift consumer seams. Optional.
 	OnCapture DriftObserver
 	OnFailure FailureObserver
+	// OnNewVersion is told about every capture that stored a NEW version (the
+	// change ledger's config_capture producer, Iris N-D2). Optional.
+	OnNewVersion NewVersionObserver
 	// Authz resolves the caller for the HTTP surface. Required.
 	Authz func(w http.ResponseWriter, r *http.Request, gate Gate) (Principal, bool)
 	// Audit records an API action. `tags` carries the audit classification —
@@ -353,7 +377,7 @@ func (m *Manager) Sweep(ctx context.Context) int {
 				return attempted
 			}
 			attempted++
-			if _, err := m.Capture(ctx, dev, NormTenant(tenant), "scheduled"); err != nil &&
+			if _, err := m.Capture(ctx, dev, NormTenant(tenant), TriggerScheduled); err != nil &&
 				!errors.Is(err, ErrInFlight) {
 				m.deps.LogWarn("scheduled configuration capture failed", map[string]any{
 					"device": dev.ID, "tenant": Seg(tenant), "error": m.deps.Scrub(err.Error())})
@@ -476,7 +500,7 @@ func (m *Manager) captureClaimed(ctx context.Context, dev Device, tenant, trigge
 	ver := Version{
 		TenantID: tenant, DeviceID: dev.ID, SHA: sha, CapturedAt: now,
 		SizeBytes: int64(len(normalized)), Vendor: string(vendor),
-		Status: StatusOK, Drift: DriftUnknown,
+		Status: StatusOK, Drift: DriftUnknown, Trigger: trigger,
 	}
 
 	outcome := OutcomeUnchanged
@@ -520,12 +544,35 @@ func (m *Manager) captureClaimed(ctx context.Context, dev Device, tenant, trigge
 		}
 	}
 
+	if outcome == OutcomeNew {
+		m.notifyNewVersion(ctx, dev, tenant, ver, prev, hasPrev)
+	}
+
 	m.prune(ctx, tenant, dev.ID)
 	m.auditCapture(tenant, dev.ID, "config_backup_capture", map[string]any{
 		"trigger": trigger, "job_id": job, "sha": ver.SHA,
 		"outcome": outcome, "drift": ver.Drift, "size_bytes": ver.SizeBytes,
 	})
 	return ver, nil
+}
+
+// notifyNewVersion hands a NEW version to the change-feed consumer. A refusal is
+// counted and logged, never swallowed and never fatal to the capture: the
+// version is durable, and failing the capture would record the device as
+// unreachable when it is not (§10).
+func (m *Manager) notifyNewVersion(ctx context.Context, dev Device, tenant string, ver, prev Version, hasPrev bool) {
+	if m.deps.OnNewVersion == nil {
+		return
+	}
+	ev := NewVersionEvent{Device: dev, Tenant: tenant, Version: ver, HasPrevious: hasPrev}
+	if hasPrev {
+		ev.PreviousSHA = prev.SHA
+	}
+	if err := m.deps.OnNewVersion(ctx, ev); err != nil {
+		m.deps.Metrics.RecordNewVersionHookFailure()
+		m.deps.LogWarn("a new configuration version was stored but the change ledger did not record it", map[string]any{
+			"device": dev.ID, "sha": ver.SHA, "error": m.deps.Scrub(err.Error())})
+	}
 }
 
 // observe reads the previous/golden plaintext (unsealing only what the consumer
@@ -624,6 +671,7 @@ func (m *Manager) recordFailure(ctx context.Context, dev Device, tenant string, 
 		SHA:        failureSHA(dev.ID, now),
 		CapturedAt: now, Status: StatusFailed, Error: reason,
 		Vendor: string(VendorFromPlatform(dev.Platform())), Drift: DriftUnknown,
+		Trigger: trigger,
 	}
 	if err := m.deps.Store.Put(ctx, tenant, false, row); err != nil {
 		m.deps.LogError("failed configuration capture was not recorded", map[string]any{
