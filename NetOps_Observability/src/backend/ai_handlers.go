@@ -107,6 +107,9 @@ func loadAISkills() *ai.SkillSet {
 type aiAskRequest struct {
 	Question string            `json:"question"`
 	Context  map[string]string `json:"context,omitempty"` // e.g. {"correlation_id": "<uuid>"}
+	// ConversationID (optional, N-C7/N-E4): the caller's own Iris conversation;
+	// follow-ups ("that device") resolve against its server-held state.
+	ConversationID string `json:"conversation_id,omitempty"`
 }
 
 func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
@@ -168,10 +171,30 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		question = canonical
 	}
 
-	ans, err := s.newOrchestrator(r, claims).Ask(r.Context(), s.aiPrincipal(claims), question, req.Context)
+	// A conversation, when named, must be the caller's own and live: another
+	// principal's id, a stale one and a malformed one are the same 404, and
+	// the client starts a new conversation.
+	var conv *irisconvo.Conversation
+	if id := strings.TrimSpace(req.ConversationID); id != "" {
+		c, status, err := s.askConversation(r, claims, id)
+		if err != nil {
+			writeError(w, status, err)
+			return
+		}
+		conv = &c
+	}
+	orch := s.newOrchestrator(r, claims)
+	var ran nlqRan
+	if conv != nil && orch.NLQuery != nil {
+		orch.NLQuery = s.aiNLQueryWith(r, claims, &conv.State, &ran)
+	}
+	ans, err := orch.Ask(r.Context(), s.aiPrincipal(claims), question, req.Context)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
+	}
+	if conv != nil {
+		s.recordAskTurn(r, claims, conv, question, &ans, &ran)
 	}
 	// AI audit (best-effort): who asked, intent, modules, provider — never the
 	// question text or any retrieved data (no PII/secret in the audit line).
@@ -226,15 +249,78 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 // validator, scope and executor as /api/ai/query, and the same
 // infrastructure:read gate (which /api/ai/ask itself does not require).
 func (s *server) aiNLQuery(r *http.Request, claims jwtClaims) ai.NLQueryFunc {
+	return s.aiNLQueryWith(r, claims, nil, nil)
+}
+
+// nlqRan records the query the data arm ran in this request, so a
+// conversation turn can carry its state forward.
+type nlqRan struct {
+	q  *nlqast.AST
+	rs *plan.ResultSet
+}
+
+// aiNLQueryWith is aiNLQuery inside a conversation: st (may be nil) is the
+// server-held state follow-ups resolve against, and ran (may be nil) receives
+// the query that answered.
+func (s *server) aiNLQueryWith(r *http.Request, claims jwtClaims, st *irisconvo.State, ran *nlqRan) ai.NLQueryFunc {
 	if s.nlqCatalog == nil || s.roles == nil || !s.roles.Allows(claims.Role, "infrastructure", LevelRead) {
 		return nil
 	}
 	return func(ctx context.Context, _ ai.Principal, question string) (ai.DataAnswer, error) {
-		c, err := s.nlqCompileQuestion(r.WithContext(ctx), claims, question, compile.Context{Loc: time.UTC, Now: time.Now()})
+		cx := compile.Context{Loc: time.UTC, Now: time.Now()}
+		if st != nil {
+			cx.PriorAST = st.LastAST
+			cx.Conv = &compile.Conversation{Entities: st.Entities, Actors: st.Actors, ChangeIDs: st.ChangeIDs}
+		}
+		c, err := s.nlqCompileQuestion(r.WithContext(ctx), claims, question, cx)
 		if err != nil {
 			return ai.DataAnswer{}, err
 		}
-		return s.nlqDataAnswer(r.WithContext(ctx), claims, c)
+		return s.nlqDataAnswer(r.WithContext(ctx), claims, c, ran)
+	}
+}
+
+// askConversation loads the caller's own live conversation for /api/ai/ask.
+func (s *server) askConversation(r *http.Request, claims jwtClaims, id string) (irisconvo.Conversation, int, error) {
+	if s.nlqConvos == nil || !irisconvo.ValidID(id) {
+		return irisconvo.Conversation{}, http.StatusNotFound, errors.New("not found")
+	}
+	tenant, _ := principalTenant(claims)
+	c, err := s.nlqConvos.Get(r.Context(), tenant, claims.Sub, id)
+	if errors.Is(err, irisconvo.ErrNotFound) {
+		return irisconvo.Conversation{}, http.StatusNotFound, errors.New("not found")
+	}
+	if err != nil {
+		logError("iris.convo", "read failed", errf(err))
+		return irisconvo.Conversation{}, http.StatusInternalServerError, errors.New("the conversation could not be read")
+	}
+	return c, 0, nil
+}
+
+// recordAskTurn appends one /api/ai/ask turn. Only an answer that RAN a query
+// moves the state forward; every other answer is recorded as a turn and
+// leaves the references where they were. A failure to record never costs the
+// operator the answer — it is disclosed instead.
+func (s *server) recordAskTurn(r *http.Request, claims jwtClaims, conv *irisconvo.Conversation, question string, ans *ai.Answer, ran *nlqRan) {
+	turn := irisconvo.Turn{Question: question, Intent: ans.Intent, Outcome: irisconvo.OutcomeAnswered}
+	if ans.Mode == ai.ModeUnavailable {
+		turn.Outcome = irisconvo.OutcomeUnparsed
+	}
+	next := conv.State
+	if ran.rs != nil {
+		next = irisconvo.Next(s.nlqCatalog, conv.State, ran.q, ran.rs)
+		turn.ASTHash, turn.QueryID, turn.Rows = ran.rs.ASTHash, ran.rs.QueryID, len(ran.rs.Rows)+len(ran.rs.Series)
+	}
+	tenant, _ := principalTenant(claims)
+	_, err := s.nlqConvos.Append(r.Context(), tenant, claims.Sub, conv.ID, turn, next)
+	switch {
+	case err == nil:
+		ans.ConversationID = conv.ID
+	case errors.Is(err, irisconvo.ErrFull):
+		ans.Disclaimers = append(ans.Disclaimers, "This conversation is full — your next question starts a new one.")
+	default:
+		logError("iris.convo", "append failed", errf(err))
+		ans.Disclaimers = append(ans.Disclaimers, "This answer could not be added to the conversation, so a follow-up may not know about it.")
 	}
 }
 
@@ -247,7 +333,7 @@ var nlqAnswerable = map[string]bool{
 }
 
 // nlqDataAnswer turns one compiled question into the data arm's answer.
-func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled) (ai.DataAnswer, error) {
+func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled, ran *nlqRan) (ai.DataAnswer, error) {
 	notData := ai.DataAnswer{Status: ai.DataNotData}
 	switch {
 	case c.res.Decline != "" || c.res.Unparsed:
@@ -286,6 +372,9 @@ func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled)
 	}
 	if err != nil {
 		return ai.DataAnswer{}, err
+	}
+	if ran != nil {
+		ran.q, ran.rs = c.checked, rs
 	}
 	body := c.body()
 	body["result"] = rs

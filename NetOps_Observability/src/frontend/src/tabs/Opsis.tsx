@@ -23,6 +23,22 @@ import {
 import Icon from "../components/Icon";
 import IrisVocabulary from "../components/IrisVocabulary";
 import PresentationPlanRenderer from "../iris/PresentationPlanRenderer";
+import { httpFailure } from "../lib/errors";
+
+// The Iris box's server conversation (tracker 337 N-C7/N-E4): only its id
+// lives in the browser, in sessionStorage so it survives the drawer closing.
+// Storage can be unavailable (private window, blocked site data); then
+// follow-ups still work until the page reloads.
+const CONV_KEY = "iris.conversation";
+function loadConversation(): string | null {
+  try { return sessionStorage.getItem(CONV_KEY); } catch { return null; }
+}
+function saveConversation(id: string | null): void {
+  try {
+    if (id) sessionStorage.setItem(CONV_KEY, id);
+    else sessionStorage.removeItem(CONV_KEY);
+  } catch { /* storage unavailable: the in-memory id still carries this session */ }
+}
 import { friendlyProblemId } from "../components/rca/labels";
 import { useShell } from "../context/shell";
 
@@ -187,6 +203,27 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
   // answered instead (owner decision: degrade elegantly, never dead-end).
   const [fallbackNote, setFallbackNote] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const convRef = useRef<string | null>(loadConversation());
+  const setConversation = (id: string | null) => { convRef.current = id; saveConversation(id); };
+  // askInConversation sends a typed question in the box's conversation, so a
+  // follow-up ("memory on that device") resolves against what the server
+  // holds. A conversation the server no longer has is dropped and the
+  // question is asked without one — the next question starts a new one.
+  const askInConversation = async (content: string): Promise<AiAnswer> => {
+    let id = convRef.current;
+    if (!id) {
+      try { id = (await api.startIrisConversation()).id; } catch { id = null; } // conversations unavailable: ask without
+    }
+    try {
+      const ans = await api.aiAsk(content, undefined, id ?? undefined);
+      setConversation(ans.conversation_id ?? null);
+      return ans;
+    } catch (e) {
+      if (!id || httpFailure(e)?.status !== 404) throw e;
+      setConversation(null);
+      return api.aiAsk(content);
+    }
+  };
   const taRef = useRef<HTMLTextAreaElement | null>(null);
 
   const [cfg, setCfg] = useState<CopilotConfig | null>(null);
@@ -213,6 +250,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
   // New conversation — clear the thread + transient panels, focus the composer.
   const newConversation = () => {
     setHistory([]); setGrounded({}); setDocRefs({}); setLookups({}); setChatCites({}); setUngrounded({});
+    setConversation(null); // a cleared chat forgets its follow-up context too
     setDraft(""); setError(null);
     setShowSettings(false); setShowHelp(false); setSlashOpen(false);
     taRef.current?.focus();
@@ -313,7 +351,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
     try {
       // The grounded engine answers EVERY typed question, key or no key. See the
       // ROUTING note at the top of this file for why this is unconditional.
-      const ans = await api.aiAsk(content);
+      const ans = await askInConversation(content);
       if (!(ready && isCapabilityMiss(ans))) {
         setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
         setGrounded((g) => ({ ...g, [idx]: ans }));

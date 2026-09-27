@@ -389,7 +389,7 @@ returns data, `pgintegration` when it touches PG, and the CI gate (§12). Effort
 | N-E1 | **`PresentationPlan` + `ResultSet` contract**: closed view enum (SUMMARY, TABLE, TIME_SERIES, TIMELINE, BAR, TOPOLOGY, PATH, DIFF, EVIDENCE_LIST, INCIDENT_CARD, CHANGE_CARD, RECOMMENDATION_CARD); semantic view selection; every row/point carries query id + provenance | C4 | 1.5 |
 | N-E2 | **SSE progress stream**: operational trace events; bounded; falls back to one JSON response | A5 | 1.5 |
 | N-E3 | **Frontend components**: plan renderer; shared `IrisTimeline` (cause/start/recovery accents); change table + drawer; unified + side-by-side JSON diff; evidence drawer ("why am I seeing this?"); editable chip bar; progress trace; incident/change/recommendation cards; ≥14 px; `safeCiteHref` everywhere | E1, E2 | 4 |
-| N-E4 | **Conversation + page context in the UI**: history survives drawer close (server conversation id); route/entity/incident bound into the ask and validated server-side; incident-detail Iris entry; merge the two RCA Iris asks into one | C7 | 2 |
+| N-E4 | **Page context in the UI** (the Iris box now holds a server conversation — id in sessionStorage survives drawer close, follow-ups bind through the data arm, SHIPPED 2026-09-27): route/entity/incident bound into the ask and validated server-side; incident-detail Iris entry; merge the two RCA Iris asks into one | C7 | 2 |
 | N-E5 | **Playwright e2e** for the drawer and the three flagship slices | S1–S3 | 1.5 |
 
 ### Phase S — The flagship vertical slices (acceptance tests of A–E)
@@ -420,7 +420,7 @@ plus a recorded-model run in the offline harness.
 |---|---|---|---:|
 | N-G1 | **Corpus coverage**: write the missing pages (§3.1 list); one golden item per nav leaf (≈90, today 32) | — | 3 |
 | N-G3 | **Page-aware help**: current route boosts that page's docs; "what am I looking at?" answers from the page's doc + `(i)` answers | E4 | 1 |
-| N-G4 | **Router remainder** (deterministic data arm SHIPPED 2026-09-27: `/api/ai/ask` answers a question the NL compiler fully understands from its query — key-free summary + result rendered by the presentation renderer; diagnostic cues stay with skills; product questions never compile): model tie-break for questions two arms could claim; data arm inside a conversation (follow-ups in the Iris box, with N-E4); a routing scoreboard over the golden corpus | C5, E4 | 0.5 |
+| N-G4 | **Router remainder** (deterministic data arm SHIPPED 2026-09-27: `/api/ai/ask` answers a question the NL compiler fully understands from its query — key-free summary + result rendered by the presentation renderer; diagnostic cues stay with skills; product questions never compile): model tie-break for questions two arms could claim; a routing scoreboard over the golden corpus | C5, E4 | 0.5 |
 
 ### Phase H — Evaluation, replay and release gates (Part 1 §43–48; Part 2 §48–50, 67; D13, D18)
 

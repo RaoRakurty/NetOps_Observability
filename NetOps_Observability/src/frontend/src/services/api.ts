@@ -6050,10 +6050,10 @@ export const api = {
   // Iris AI — application-aware assistant. Ask a question (optionally with a
   // context id like the open RCA's correlation_id); returns a grounded, cited
   // answer in a typed answer-mode schema. Read-only (FEATURE_AI gated server-side).
-  aiAsk: (question: string, context?: Record<string, string>) =>
+  aiAsk: (question: string, context?: Record<string, string>, conversationId?: string) =>
     request<AiAnswer>("/api/ai/ask", {
       method: "POST",
-      body: JSON.stringify({ question, context }),
+      body: JSON.stringify(conversationId ? { question, context, conversation_id: conversationId } : { question, context }),
     }),
   // Slash-command registry (the "/" menu) — single source of truth on the server.
   aiCommands: () => request<{ commands: AiCommand[] }>("/api/ai/commands"),
@@ -9846,6 +9846,9 @@ export type AiAnswer = {
   // compile answer + the result set, rendered as data. Untrusted — the
   // presentation renderer validates and bounds it.
   data?: { result?: unknown; [k: string]: unknown };
+  // Set when the server recorded this answer in the caller's conversation;
+  // absent = the next question starts a new one.
+  conversation_id?: string;
   mode: string;
   intent: string;
   modules: string[];

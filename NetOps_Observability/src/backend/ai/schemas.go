@@ -71,6 +71,10 @@ type Answer struct {
 	// Data is the structured answer of the DATA arm (ModeDataQuery, N-G4): the
 	// compile answer + result set, rendered by the client as data, never prose.
 	Data json.RawMessage `json:"data,omitempty"`
+	// ConversationID is set when this answer was recorded in the caller's
+	// conversation (the server's, never the client's state); empty = send the
+	// next question without it, or start a new conversation.
+	ConversationID string `json:"conversation_id,omitempty"`
 	// Universal Response-Quality fields (spec §6) — reusable across every answer
 	// mode, rendered by the generic AI answer card as badges + sections.
 	Status           string   `json:"status,omitempty"`           // NOC status word (Confirmed/Suspected/…)

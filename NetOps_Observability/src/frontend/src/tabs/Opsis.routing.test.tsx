@@ -29,6 +29,7 @@ const aiTenantConfig = vi.fn();
 const aiTenants = vi.fn();
 const aiCommands = vi.fn();
 const features = vi.fn();
+const startIrisConversation = vi.fn();
 
 vi.mock("../services/api", () => ({
   api: {
@@ -40,6 +41,7 @@ vi.mock("../services/api", () => ({
     aiCommands: (...a: unknown[]) => aiCommands(...a),
     features: (...a: unknown[]) => features(...a),
     aiFeedback: () => Promise.resolve(),
+    startIrisConversation: (...a: unknown[]) => startIrisConversation(...a),
   },
 }));
 
@@ -104,7 +106,9 @@ async function ask(text: string) {
 }
 
 beforeEach(() => {
-  [aiAsk, copilotChat, copilotConfig, aiTenantConfig, aiTenants, aiCommands, features].forEach((m) => m.mockReset());
+  [aiAsk, copilotChat, copilotConfig, aiTenantConfig, aiTenants, aiCommands, features, startIrisConversation].forEach((m) => m.mockReset());
+  try { sessionStorage.clear(); } catch { /* no storage in this environment */ }
+  startIrisConversation.mockRejectedValue(new Error("503")); // conversations off unless a test turns them on
   features.mockResolvedValue({ copilot: true });
   aiCommands.mockResolvedValue({ commands: [] });
   aiTenants.mockResolvedValue({ tenants: [] });
@@ -249,5 +253,41 @@ describe("Opsis — a data answer renders its result as data (tracker 337 N-G4)"
     await ask("cpu on edge-1 for the last year");
     await screen.findByText(/can't run it as asked/);
     expect(screen.queryByTestId("op-data-answer")).toBeNull();
+  });
+});
+
+describe("Opsis — follow-ups ride the server conversation (tracker 337 N-E4)", () => {
+  it("starts one conversation and sends its id with every typed question", async () => {
+    startIrisConversation.mockReset().mockResolvedValue({ id: "c-1", turns: [] });
+    aiAsk.mockResolvedValue(citedAnswer({ conversation_id: "c-1" }));
+    await renderOpsis();
+    await screen.findByText(/How can I help/);
+    await ask("show cpu on edge-1");
+    await waitFor(() => expect(aiAsk).toHaveBeenCalledTimes(1));
+    await ask("memory on that device");
+    await waitFor(() => expect(aiAsk).toHaveBeenCalledTimes(2));
+    expect(startIrisConversation).toHaveBeenCalledTimes(1);
+    expect(aiAsk.mock.calls.map((c) => c[2])).toEqual(["c-1", "c-1"]);
+  });
+
+  it("a conversation the server no longer has is dropped and the question still answered", async () => {
+    startIrisConversation.mockReset().mockResolvedValue({ id: "gone", turns: [] });
+    aiAsk.mockRejectedValueOnce(new Error('404 Not Found: {"error":"not found"}')).mockResolvedValue(citedAnswer());
+    await renderOpsis();
+    await screen.findByText(/How can I help/);
+    await ask("show cpu on edge-1");
+    await waitFor(() => expect(aiAsk).toHaveBeenCalledTimes(2));
+    expect(aiAsk.mock.calls[0][2]).toBe("gone");
+    expect(aiAsk.mock.calls[1][2]).toBeUndefined();
+    await screen.findByText(/Three suspected incidents/);
+  });
+
+  it("without conversations the box asks exactly as before", async () => {
+    aiAsk.mockResolvedValue(citedAnswer());
+    await renderOpsis();
+    await screen.findByText(/How can I help/);
+    await ask("what is going on right now?");
+    await waitFor(() => expect(aiAsk).toHaveBeenCalled());
+    expect(aiAsk.mock.calls[0][2]).toBeUndefined();
   });
 });
