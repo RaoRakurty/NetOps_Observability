@@ -36,7 +36,11 @@ type Resolver interface {
 
 // Context is what the conversation and the page contribute.
 type Context struct {
-	PriorAST   *ast.AST
+	PriorAST *ast.AST
+	// Conv is the server-held conversation a follow-up may point at ("that
+	// device", "what else did they change"); nil outside a conversation, when
+	// every referential phrase is left unexplained.
+	Conv       *Conversation
 	IncidentID string // the incident on screen, if any
 	Loc        *time.Location
 	Now        time.Time
@@ -115,6 +119,7 @@ func (c Compiler) Compile(ctx context.Context, question string, cx Context) (Res
 	timeText := compareScratchRe.ReplaceAllString(text, " ")
 	tp, hasTime := parseTime(timeText, cx.Now, cx.Loc)
 	st := &state{c: c, ctx: ctx, text: text, cx: cx, e: newEaten()}
+	st.requireReferences()
 	if hasTime {
 		st.time = tp.tr
 		st.e.phrase(tp.span)
@@ -162,6 +167,7 @@ type state struct {
 	cx   Context
 	time ast.TimeRange
 	e    *eaten
+	refs []reference
 }
 
 // threshold reads the number a comparison regexp captured. A number too large
@@ -332,6 +338,9 @@ func (s *state) mentions(types []string) ([]resolve.Ref, []resolve.Ref, error) {
 	sort.SliceStable(refs, func(i, j int) bool {
 		return strings.Index(s.text, strings.ToLower(refs[i].InputText)) < strings.Index(s.text, strings.ToLower(refs[j].InputText))
 	})
+	if s.e != nil {
+		refs = append(refs, s.bindEntities(types)...)
+	}
 	return refs, clarify, nil
 }
 
@@ -645,6 +654,16 @@ func (s *state) changes() (Result, error) {
 		q.Filters = append(q.Filters, ast.Filter{Field: "actor", Op: op, Values: vals})
 		s.e.phrase(strings.Join(vals, " "))
 	}
+	if s.cx.IncidentID == "" {
+		if actors, ok := s.bindActors(); ok {
+			q.Filters = append(q.Filters, ast.Filter{Field: "actor", Op: "in", Values: actors})
+		}
+	}
+	// "What ELSE did they change": the previous turn's changes are excluded.
+	if s.cx.Conv != nil && len(s.cx.Conv.ChangeIDs) > 0 && regexp.MustCompile(`\belse\b`).MatchString(s.text) {
+		q.Filters = append(q.Filters, ast.Filter{Field: "id", Op: "ne", Values: s.cx.Conv.ChangeIDs})
+		s.e.phrase("else")
+	}
 	if s.e.re(regexp.MustCompile(`\b(?:which|what) (?:engineers?|people|users|admins?|persons?) (?:made|did|pushed)\b|\bwho (?:made|pushed) (?:the most )?changes\b`), s.text) {
 		q.GroupBy = []string{"actor"}
 	}
@@ -661,9 +680,13 @@ func (s *state) changes() (Result, error) {
 			s.e.phrase(g[0])
 		}
 	}
-	// The incident on screen anchors "who changed it" / "what changed before this".
-	if s.cx.IncidentID != "" && q.Time.Kind == "" && s.e.re(regexp.MustCompile(`\b(?:it|this|that|the incident|before this|before the incident|incident|he|she|they)\b`), s.text) {
-		q.Time = ast.TimeRange{Kind: ast.TimeIncident, Anchor: &ast.Anchor{IncidentID: s.cx.IncidentID, Before: "30m", After: "10m"}}
+	// The incident on screen anchors "who changed it" / "what changed before
+	// this": the incident is those pronouns' referent.
+	if s.cx.IncidentID != "" && s.e.re(regexp.MustCompile(`\b(?:it|this|that|the incident|before this|before the incident|incident|he|she|they)\b`), s.text) {
+		s.bindIncidentPronouns()
+		if q.Time.Kind == "" {
+			q.Time = ast.TimeRange{Kind: ast.TimeIncident, Anchor: &ast.Anchor{IncidentID: s.cx.IncidentID, Before: "30m", After: "10m"}}
+		}
 	}
 	return Result{Intent: "list_changes", AST: q, Entities: refs}, nil
 }

@@ -40,9 +40,27 @@ func init() {
 }
 
 // eaten tracks which words of the question the grammar explained.
-type eaten struct{ words map[string]bool }
+//
+// required words (the lead word of a referential phrase: "it", "that", "there")
+// are explained ONLY by binding them to a referent — framing vocabulary does
+// not cover them — and a leftover one is reported as its whole phrase.
+type eaten struct {
+	words    map[string]bool
+	required map[string]string // lead word → the phrase shown when unbound
+	bound    map[string]bool
+}
 
-func newEaten() *eaten { return &eaten{words: map[string]bool{}} }
+func newEaten() *eaten {
+	return &eaten{words: map[string]bool{}, required: map[string]string{}, bound: map[string]bool{}}
+}
+
+func (e *eaten) require(word, phrase string) {
+	if _, ok := e.required[word]; !ok {
+		e.required[word] = phrase
+	}
+}
+
+func (e *eaten) bind(word string) { e.bound[word] = true }
 
 // phrase marks every word of a phrase explained.
 func (e *eaten) phrase(p string) {
@@ -65,6 +83,13 @@ func (e *eaten) leftovers(text string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, w := range strings.Fields(text) {
+		if phrase, req := e.required[w]; req && !e.bound[w] {
+			if !seen[phrase] {
+				seen[phrase] = true
+				out = append(out, phrase)
+			}
+			continue
+		}
 		if e.words[w] || questionVocab[w] || seen[w] {
 			continue
 		}
