@@ -217,6 +217,37 @@ func rcaItem(res RCAResult, cite, kind, text string) EvidenceItem {
 	return EvidenceItem{CitationID: cite + ":" + res.IncidentID, Kind: kind, Text: clampText(text, maxToolTextChars), Href: rcaHref(res)}
 }
 
+// maxAffectedItems bounds get_affected_entities; the rest is counted, not dropped silently.
+const maxAffectedItems = 40
+
+// projectAffectedEntities — get_affected_entities: the engine's affected scope
+// as ONE citable item per entity (blast radius gives the same scope as
+// aggregated lines plus impact). An empty scope is unknown, not "nothing".
+func projectAffectedEntities(res RCAResult, tr *ToolResult) {
+	a := res.Affected
+	total := 0
+	add := func(kind, citeKind string, xs []string) {
+		for _, x := range xs {
+			total++
+			if len(tr.Items) < maxAffectedItems {
+				tr.Items = append(tr.Items, rcaItem(res, "affected-"+kind+"-"+x, citeKind, "affected "+kind+": "+x))
+			}
+		}
+	}
+	add("device", "device", a.Devices)
+	add("site", "topology", a.Sites)
+	add("service", "topology", a.Services)
+	add("target", "topology", a.Targets)
+	add("seam", "topology", a.Seams)
+	add("region", "topology", a.Regions)
+	if total > maxAffectedItems {
+		tr.Notes = append(tr.Notes, fmt.Sprintf("%d affected entities in all; the first %d are listed — say that the list is partial", total, maxAffectedItems))
+	}
+	if total == 0 {
+		tr.Notes = append(tr.Notes, "the engine lists no affected entities for this incident — the scope is unknown, not empty; do not claim nothing is affected")
+	}
+}
+
 // projectCausalChain — get_causal_chain.
 func projectCausalChain(res RCAResult, tr *ToolResult) {
 	if len(res.CausalChain) == 0 {
@@ -341,6 +372,7 @@ func (r *ToolRegistry) AddRCATools(d TroubleshootDeps) {
 		{deps: d, name: "get_blast_radius", project: projectBlastRadius},
 		{deps: d, name: "get_owner", project: projectOwner},
 		{deps: d, name: "get_confidence_breakdown", project: projectConfidence},
+		{deps: d, name: "get_affected_entities", project: projectAffectedEntities},
 	} {
 		r.add(t)
 	}

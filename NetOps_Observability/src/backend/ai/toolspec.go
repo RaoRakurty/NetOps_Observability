@@ -275,6 +275,13 @@ var toolMetas = map[string]toolMeta{
 			{name: "correlation_id", desc: "The incident's correlation UUID.", required: true},
 		},
 	},
+	"get_affected_entities": {
+		description: "Every entity one incident affects, from the engine's own scope — each device, site, service, target, seam and region as its own citable item. Use it to answer \"which devices/sites are affected?\"; use get_blast_radius for how badly (impact measures).",
+		label:       "Affected entities",
+		args: []toolArgSpec{
+			{name: "correlation_id", desc: "The incident's correlation UUID.", required: true},
+		},
+	},
 	"get_confidence_breakdown": {
 		description: "Why the engine is as sure as it is: its verdict and confidence, then each ranked candidate cause with the evidence FOR it, the evidence AGAINST it and what is still missing. Use it for \"why does Correlix think X?\" and \"what argues against it?\".",
 		label:       "Confidence breakdown",

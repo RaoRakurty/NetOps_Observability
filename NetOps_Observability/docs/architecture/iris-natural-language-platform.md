@@ -360,7 +360,6 @@ returns data, `pgintegration` when it touches PG, and the CI gate (§12). Effort
 
 | # | Item | Depends | ew |
 |---|---|---|---:|
-| N-B2 | **RCA tools remainder** (`get_causal_chain`, `get_blast_radius`, `get_owner`, `get_confidence_breakdown` SHIPPED): `get_affected_entities`; blast-radius user counts where DEM has them | — | 0.5 |
 | N-B3 | **Investigation hypotheses** (PROPOSED→TESTING→SUPPORTED/REJECTED/INCONCLUSIVE) held per investigation, driven by tool outcomes; never overrides the engine verdict; shown in the trace | B1 | 2 |
 | N-B4 | **Statement classes** (OBSERVED/CORRELIX_RCA/DERIVED/HISTORICAL/DOCUMENTATION/RECOMMENDATION) on answer sentences, checked by `VerifyGrounding`; "temporally correlated, not established as cause" wording enforced when a change is not in the engine's chain | B1 | 1.5 |
 | N-B5 | **Substrate fix — circuit/probe series visible to scoped tenants** (verify on lab first; add the scope label at emit or map `local_device`); isolation test | — | 1 |

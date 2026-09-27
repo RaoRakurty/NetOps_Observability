@@ -13,6 +13,7 @@ package ai
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -71,7 +72,7 @@ func joinTexts(tr ToolResult) string {
 }
 
 func TestRCAToolsRegisterOnlyWhenWired(t *testing.T) {
-	names := []string{"get_causal_chain", "get_blast_radius", "get_owner", "get_confidence_breakdown"}
+	names := []string{"get_causal_chain", "get_blast_radius", "get_owner", "get_confidence_breakdown", "get_affected_entities"}
 	reg := tsRegistry(t, tsDeps())
 	for _, n := range names {
 		if _, ok := reg.Get(n); ok {
@@ -145,6 +146,32 @@ func TestBlastRadiusNeverTurnsUnmeasuredIntoZero(t *testing.T) {
 	}
 	none := RCAResult{IncidentID: rcaTestID}
 	if out := joinTexts(runRCATool(t, none, "get_blast_radius")); !strings.Contains(out, "unknown, not empty") {
+		t.Fatalf("an empty scope must be disclosed as unknown: %s", out)
+	}
+}
+
+func TestAffectedEntitiesAreOneCitableItemEach(t *testing.T) {
+	tr := runRCATool(t, rcaFixture(), "get_affected_entities")
+	out := joinTexts(tr)
+	if !strings.Contains(out, "affected site: Dallas HQ") || !strings.Contains(out, "affected service: Salesforce") {
+		t.Fatalf("affected entities:\n%s", out)
+	}
+	seen := map[string]bool{}
+	for _, it := range tr.Items {
+		if seen[it.CitationID] {
+			t.Fatalf("duplicate citation id %s", it.CitationID)
+		}
+		seen[it.CitationID] = true
+	}
+	big := RCAResult{IncidentID: rcaTestID}
+	for i := 0; i < maxAffectedItems+5; i++ {
+		big.Affected.Devices = append(big.Affected.Devices, fmt.Sprintf("dev-%d", i))
+	}
+	tr = runRCATool(t, big, "get_affected_entities")
+	if len(tr.Items) != maxAffectedItems || !strings.Contains(joinTexts(tr), "the list is partial") {
+		t.Fatalf("a long scope must be capped AND said to be partial: %d items", len(tr.Items))
+	}
+	if out := joinTexts(runRCATool(t, RCAResult{IncidentID: rcaTestID}, "get_affected_entities")); !strings.Contains(out, "unknown, not empty") {
 		t.Fatalf("an empty scope must be disclosed as unknown: %s", out)
 	}
 }
