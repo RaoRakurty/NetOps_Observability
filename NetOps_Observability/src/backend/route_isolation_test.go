@@ -56,7 +56,17 @@ var routeIsolationLedger = map[string]string{
 	"/api/ai/commands":             "selfScoped",
 	"/api/ai/commands/suggestions": "selfScoped",
 	"/api/ai/feedback":             "scoped", // POST own rating (tenant-stamped); GET tenant-scoped aggregate (store RLS)
-	"/api/alerts":                  "scoped",
+	// Iris NL (tracker 337 N-C2/N-C5): entity aliases are per-tenant DATA
+	// (tenantKV, owner stamped from the principal, Global view may not write);
+	// resolve/compile/execute read only through nlqScope, bound to the caller's
+	// claims (chTenantScope, metricsScopeFiltersFor, visible inventory) — a
+	// foreign id is indistinguishable from a missing one. Proven by
+	// nlquery_alias_test.go and nlquery_api_test.go cross-tenant tests.
+	"/api/ai/aliases":          "scoped",
+	"/api/ai/entities/resolve": "scoped",
+	"/api/ai/query/compile":    "scoped",
+	"/api/ai/query/execute":    "scoped",
+	"/api/alerts":              "scoped",
 	// BGP Operations (item 10): the watchlist is per-tenant DATA (the prefixes/
 	// ASNs a tenant watches), owner stamped from the RLS GUC, cross-org
 	// isolation proven by TestBGPWatchlistTenantIsolationPG. The resource proxy

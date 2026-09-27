@@ -21,6 +21,7 @@ import {
   AiCommand,
 } from "../services/api";
 import Icon from "../components/Icon";
+import IrisVocabulary from "../components/IrisVocabulary";
 import { friendlyProblemId } from "../components/rca/labels";
 import { useShell } from "../context/shell";
 
@@ -699,6 +700,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
             )}
             <button className="dash-btn" onClick={() => setShowSettings(false)} disabled={savingCfg}>Cancel</button>
           </div>
+          {tcfg.assistant_enabled && <IrisVocabulary />}
         </div>
       )}
 

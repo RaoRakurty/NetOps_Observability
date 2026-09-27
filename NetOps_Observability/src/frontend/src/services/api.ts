@@ -1865,6 +1865,62 @@ export type CopilotConfig = {
 
 // Per-workspace (tenant) AI settings — a tenant admin's own view. The key is
 // write-only; entitlement fields are read-only here (platform-controlled).
+// ---- Iris vocabulary + NL query (internal/nlquery; tracker 337) ----
+export interface IrisAlias {
+  entity_type: string;
+  entity_id: string;
+  alias: string;
+  created_by?: string;
+  created_at?: string;
+}
+export interface IrisRef {
+  input_text: string;
+  entity_id: string;
+  entity_type: string;
+  confidence: number;
+  resolution_method: string;
+  needs_confirmation?: boolean;
+}
+export interface IrisResolution {
+  refs: IrisRef[] | null;
+  ambiguous: boolean;
+}
+export interface IrisValidationError {
+  path: string;
+  code: string;
+  got?: string;
+  suggestions?: string[];
+  message?: string;
+}
+export interface IrisConstraint { path: string; from: string; to: string; reason: string }
+export interface IrisValidation {
+  valid: boolean;
+  errors?: IrisValidationError[];
+  constraints_applied?: IrisConstraint[];
+}
+export interface IrisCompiled {
+  intent?: string;
+  entities?: IrisRef[] | null;
+  clarify?: IrisRef[] | null;
+  decline?: string;
+  unparsed?: boolean;
+  not_understood?: string[] | null;
+  ast?: Record<string, unknown>;
+  validation?: IrisValidation;
+}
+export interface IrisResultSet {
+  query_id: string;
+  query_type: string;
+  metric?: string;
+  unit?: string;
+  window: { from: string; to: string };
+  series?: { entity: Record<string, string>; points: { t: number; v: number }[] }[] | null;
+  rows?: Record<string, unknown>[] | null;
+  truncated: boolean;
+  notes?: string[] | null;
+  provenance: { source: string; executed_at: string; duration_ms: number };
+}
+
 export type AITenantConfig = {
   provider: string;
   model: string;
@@ -6017,6 +6073,20 @@ export const api = {
   aiTenants: () => request<{ tenants: AITenantRow[] | null; tools_feature: boolean; defaults?: { max_calls: number; daily_tokens: number } }>("/api/ai/tenants"),
   setAITenantAccess: (id: string, body: { assistant_enabled: boolean; investigations_enabled: boolean; max_calls?: number; daily_tokens?: number }) =>
     request<AITenantRow>(`/api/ai/tenants/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
+  // Iris vocabulary (tracker 337 N-C2/N-C5): the workspace's own names for its
+  // entities, how a name resolves, and how a question compiles. All four are
+  // scoped server-side to the caller's workspace — the tenant is never sent.
+  irisAliases: () => request<{ aliases: IrisAlias[] | null; max: number }>("/api/ai/aliases"),
+  putIrisAlias: (a: { entity_type: string; entity_id: string; alias: string }) =>
+    request<IrisAlias>("/api/ai/aliases", { method: "PUT", body: JSON.stringify(a) }),
+  deleteIrisAlias: (entityType: string, alias: string) =>
+    request<void>(`/api/ai/aliases?entity_type=${encodeURIComponent(entityType)}&alias=${encodeURIComponent(alias)}`, { method: "DELETE" }),
+  resolveIrisEntity: (text: string, types: string[] = []) =>
+    request<IrisResolution>("/api/ai/entities/resolve", { method: "POST", body: JSON.stringify({ text, types }) }),
+  compileIrisQuery: (question: string, tz?: string) =>
+    request<IrisCompiled>("/api/ai/query/compile", { method: "POST", body: JSON.stringify(tz ? { question, tz } : { question }) }),
+  executeIrisQuery: (ast: unknown) =>
+    request<{ result: IrisResultSet }>("/api/ai/query/execute", { method: "POST", body: JSON.stringify({ ast }) }),
 
   // Native metrics (Prometheus-compatible API via the Go proxy).
   metricNames: () => request<PromNamesResponse>("/api/metrics/names"),
