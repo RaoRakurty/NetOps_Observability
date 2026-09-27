@@ -351,7 +351,6 @@ returns data, `pgintegration` when it touches PG, and the CI gate (§12). Effort
 
 | # | Item | Depends | ew |
 |---|---|---|---:|
-| N-A3 | **Scorecard remainder** (sink, sampler, `/metrics` KPI set, and the `iris-ai-quality` vmalert group — unsupported-claim rate, invisible provider usage, scorecard not sampling — with promtool tests + runbook SHIPPED): a Grafana dashboard over `netops_ai_*` | — | 0.25 |
 | N-A5 | **One brain, one registry**: copilot loop and grounded engine share one tool registry (Phase-A tools + `search_docs`) behind the same double `EvaluateTool`; drop client assistant turns | A4 | 1.5 |
 | N-A6 | **Decision ledger**: `ai_decision_ledger` (PG, append-only, RLS) — Part 1 §35 event types, model/tool versions, SHA-256 of args/results, persisted answer id; `/api/ai/ask` enters the platform audit trail | — | 2 |
 | N-A7 | **Atomic AI entitlements** (`ai.chat`, `ai.investigate`, `ai.nlquery`, `ai.context.author`, `ai.runbook.author`, `ai.mcp`) mapped from existing flags/tiering — no plan names in code | — | 1 |
