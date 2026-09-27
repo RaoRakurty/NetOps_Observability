@@ -30,6 +30,7 @@ const aiTenants = vi.fn();
 const aiCommands = vi.fn();
 const features = vi.fn();
 const startIrisConversation = vi.fn();
+const correctIrisQuery = vi.fn();
 
 vi.mock("../services/api", () => ({
   api: {
@@ -42,6 +43,7 @@ vi.mock("../services/api", () => ({
     features: (...a: unknown[]) => features(...a),
     aiFeedback: () => Promise.resolve(),
     startIrisConversation: (...a: unknown[]) => startIrisConversation(...a),
+    correctIrisQuery: (...a: unknown[]) => correctIrisQuery(...a),
   },
 }));
 
@@ -244,6 +246,28 @@ describe("Opsis — a data answer renders its result as data (tracker 337 N-G4)"
     expect(screen.getByText(/Memory — 2 results/)).toBeInTheDocument();
     expect(card).toHaveTextContent("edge-1");
     expect(card).toHaveTextContent("edge-2");
+  });
+
+  it("a recorded data answer can be marked 'not what I meant' — tied to its own record (N-C8)", async () => {
+    const id = "11111111-2222-4333-8444-555555555555";
+    correctIrisQuery.mockReset().mockResolvedValue({});
+    aiAsk.mockResolvedValue(citedAnswer({ mode: "data_query", text: "CPU on edge-1: peak 48%.", data: { query_log_id: id } }));
+    await renderOpsis();
+    await screen.findByText(/How can I help/);
+    await ask("show cpu on edge-1");
+    fireEvent.click(await screen.findByText("That's not what I meant"));
+    fireEvent.change(screen.getByLabelText("Iris got the"), { target: { value: "wrong_window" } });
+    fireEvent.click(screen.getByText("Send"));
+    await waitFor(() => expect(correctIrisQuery).toHaveBeenCalledWith(id, { kind: "wrong_window" }));
+  });
+
+  it("an answer the server did not record offers no correction", async () => {
+    aiAsk.mockResolvedValue(citedAnswer({ mode: "data_query", text: "CPU on edge-1: peak 48%.", data: { query_log_id: 42 } }));
+    await renderOpsis();
+    await screen.findByText(/How can I help/);
+    await ask("show cpu on edge-1");
+    await screen.findByText(/peak 48%/);
+    expect(screen.queryByText("That's not what I meant")).toBeNull();
   });
 
   it("an answer without a result renders only its text", async () => {

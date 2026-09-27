@@ -1907,6 +1907,44 @@ export interface IrisCompiled {
   not_understood?: string[] | null;
   ast?: Record<string, unknown>;
   validation?: IrisValidation;
+  /** The query-log record of this question (N-C8) — what a correction attaches to. */
+  query_log_id?: string;
+}
+// Query capture + operator corrections (tracker 337 N-C8). A record holds
+// counts and references about a question — never the answer's rows.
+export type IrisCorrectionKind = "wrong_entity" | "wrong_metric" | "wrong_window" | "wrong_filter" | "other";
+export interface IrisCorrection {
+  at: string;
+  by: string;
+  kind: IrisCorrectionKind;
+  note?: string;
+  corrected_ast?: Record<string, unknown>;
+  corrected_ast_hash?: string;
+}
+export interface IrisQueryRecord {
+  id: string;
+  principal: string;
+  conversation_id?: string;
+  source: "router" | "query_compile" | "query_execute" | "conversation";
+  at: string;
+  question: string;
+  intent?: string;
+  outcome: "answered" | "compiled" | "clarify" | "declined" | "unparsed" | "invalid" | "error";
+  query_type?: string;
+  ast_hash?: string;
+  catalog_version?: string;
+  validation_codes: string[] | null;
+  entities: { type: string; id: string; resolution_method: string; confidence?: number }[] | null;
+  rows: number;
+  series: number;
+  duration_ms: number;
+  corrections: IrisCorrection[] | null;
+}
+export interface IrisQueryList {
+  queries: IrisQueryRecord[] | null;
+  scope: "mine" | "tenant";
+  retention_days: number;
+  kinds: IrisCorrectionKind[];
 }
 export interface IrisTurn {
   at: string;
@@ -6113,6 +6151,14 @@ export const api = {
   askIrisConversation: (id: string, question: string, tz?: string) =>
     request<IrisConversationAnswer>(`/api/ai/conversations/${encodeURIComponent(id)}/messages`,
       { method: "POST", body: JSON.stringify(tz ? { question, tz } : { question }) }),
+  // Query capture (N-C8): the caller's own recent questions (a workspace admin
+  // may ask for the workspace's), and "that's not what I meant" on one of
+  // them. A corrected query is re-validated by the server; corrections are
+  // kept for offline evaluation only.
+  irisQueries: (scope: "mine" | "tenant" = "mine", limit = 10) =>
+    request<IrisQueryList>(`/api/ai/queries?scope=${scope}&limit=${limit}`),
+  correctIrisQuery: (id: string, body: { kind: IrisCorrectionKind; note?: string; ast?: Record<string, unknown> }) =>
+    request<IrisQueryRecord>(`/api/ai/queries/${encodeURIComponent(id)}/corrections`, { method: "POST", body: JSON.stringify(body) }),
 
   // Native metrics (Prometheus-compatible API via the Go proxy).
   metricNames: () => request<PromNamesResponse>("/api/metrics/names"),

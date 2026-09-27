@@ -173,7 +173,7 @@ Evidence paths are relative to `src/backend/` unless prefixed. "Closes in" names
 | 19 | No fine-tuning first; frontier model + structure | COMPLIANT | Owner decision: no training a proprietary model | — |
 | 20 | Golden NL query corpus `tests/iris/nlquery/golden/` | MISSING | — | N-C6 |
 | 21 | Controlled synthetic paraphrases validated against same AST | MISSING | — | N-C6 |
-| 22 | Capture query telemetry + operator corrections, no auto-retrain | PARTIAL | Thumbs only, `Mode` never stored (`ai_handlers.go:332-335`) | N-C8 |
+| 22 | Capture query telemetry + operator corrections, no auto-retrain | DONE (chip edits open) | `internal/irisquerylog` + migration 0054 (2026-09-27): one record per compiled question from the router's data arm, the query API and conversations; `GET /api/ai/queries`, `POST /api/ai/queries/{id}/corrections`; corrections are offline-only; design §10 of `iris-nl-query-design.md`. Chip edits wait on N-C7's chip → AST regeneration | N-C8 (rest) |
 | 23 | Optional future fine-tuning to AST | DEFERRED | Owner decision stands; revisit only with a measured corpus | — |
 | 24 | Normalized `ChangeEvent` + actor normalization | PARTIAL | Provenance columns + 180-day retention (migration 0052, N-D1); producers `config_capture` and `correlix_audit` + `changeledger.NormalizeActor` (N-D2 part, N-D4) shipped 2026-09-27; syslog `CONFIG_I`/`UI_COMMIT`, trap, Versa and cloud producers open — evidence each needs is in N-D2 below | N-D2 (rest) |
 | 25 | Change questions (who/what/when/ticket/same person/other sites/before-after/rollback) | MISSING | — | N-D3, N-C5 |
@@ -373,7 +373,7 @@ returns data, `pgintegration` when it touches PG, and the CI gate (§12). Effort
 | N-C5 | **Compiler remainder** (deterministic grammar, compile/execute APIs SHIPPED): model fallback via structured output + schema-RAG + example-RAG; repair loop ≤2; `GET /api/ai/query/{id}` + `/explain`; `compile_query` tool | A4 | 2.5 |
 | N-C6 | **Corpus remainder** (212-case corpus, paraphrases, safety at 100 %, and per-metric floors — entity precision 0.88, executable 0.97, answered precision 0.85, accuracy 0.70 — SHIPPED 2026-09-27): coverage of Part 2 §20's 21 categories; offline harness for the model path | C5 | 0.5 |
 | N-C7 | **Conversation remainder** (store, state, reference binding, follow-up rewriting and the conversation API SHIPPED 2026-09-27): editable-chip → AST regeneration; a scored multi-turn corpus (Part 2 §50) with a ratchet like the golden corpus; Part 2 §69's 14 routine questions end to end | C5, E3 | 1 |
-| N-C8 | **Query capture + operator corrections**: per-query record (Part 2 §22 fields) and chip edits stored for offline evaluation; no automatic retraining | C7, A6 | 1 |
+| N-C8 | **Query capture remainder** (per-query record, operator corrections with a server-validated corrected query, the recent-questions list and the "That's not what I meant" action SHIPPED 2026-09-27): once N-C7's editable chips regenerate the AST, record each chip edit as a `wrong_filter` correction carrying the regenerated query; an offline export of corrections for the N-C6 harness | C7 | 0.25 |
 
 ### Phase D — Change Intelligence (Part 2 §24–29; Part 1 §33; D12)
 
