@@ -191,6 +191,9 @@ func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.Troubl
 		deps.RecentChanges = s.aiRecentChanges(claims)
 		deps.ConfigDiff = s.aiConfigDiff(r, claims)
 	}
+	// The NL query compiler (tracker 337 N-C5): interpret-only, and only for a
+	// caller who could run the same question on /api/ai/query/compile.
+	deps.CompileQuery = s.aiCompileQuery(r, claims)
 	return deps
 }
 

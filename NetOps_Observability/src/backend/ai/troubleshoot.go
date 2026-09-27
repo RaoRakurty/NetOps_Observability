@@ -291,6 +291,14 @@ type TroubleshootDeps struct {
 	// nil = config backup is not enabled here, and `get_config_diff` is then not
 	// registered at all.
 	ConfigDiff func(ctx context.Context, p Principal, req ConfigDiffRequest) (ConfigDiffReport, error)
+
+	// ── the NL query compiler (tracker 337 N-C5) ───────────────────────────
+
+	// CompileQuery interprets one question as the caller's validated
+	// CorrelixQueryAST — grammar first, guarded model fallback second — and
+	// NEVER runs it. nil = the query catalog is absent or the caller may not
+	// read infrastructure, and `compile_query` is then not registered.
+	CompileQuery func(ctx context.Context, p Principal, question string) (QueryInterpretation, error)
 }
 
 // ---- shared validation -----------------------------------------------------
@@ -813,6 +821,8 @@ func (r *ToolRegistry) AddTroubleshootTools(ds DataSource, d TroubleshootDeps) {
 	}
 	// The RCA contract tools are incident-scoped, not device-scoped.
 	r.AddRCATools(d)
+	// The NL query compiler interprets; it never reads data itself.
+	r.AddCompileQueryTool(d)
 	// The BGP operations reads are RESOURCE-scoped, not device-scoped: they need
 	// no inventory resolution, so they register independently of ResolveDevice.
 	if d.BGPWatchlist != nil {

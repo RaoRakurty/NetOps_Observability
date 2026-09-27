@@ -282,6 +282,13 @@ var toolMetas = map[string]toolMeta{
 			{name: "correlation_id", desc: "The incident's correlation UUID.", required: true},
 		},
 	},
+	"compile_query": {
+		description: "Interpret an operator's data question the way Iris would: the validated query (metric, entities, window, filters) it compiles to, the entities it resolved, or what it did not understand. It NEVER runs the query or returns data — use it to check how a question will be read, or to explain an interpretation.",
+		label:       "Query interpretation",
+		args: []toolArgSpec{
+			{name: "question", desc: "The data question, in plain words (one line, at most 1000 characters).", required: true},
+		},
+	},
 	"get_confidence_breakdown": {
 		description: "Why the engine is as sure as it is: its verdict and confidence, then each ranked candidate cause with the evidence FOR it, the evidence AGAINST it and what is still missing. Use it for \"why does Correlix think X?\" and \"what argues against it?\".",
 		label:       "Confidence breakdown",
