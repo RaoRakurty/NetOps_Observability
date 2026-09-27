@@ -390,7 +390,7 @@ returns data, `pgintegration` when it touches PG, and the CI gate (§12). Effort
 | N-E2 | **SSE progress stream**: operational trace events; bounded; falls back to one JSON response | A5 | 1.5 |
 | N-E3 | **Frontend components**: plan renderer; shared `IrisTimeline` (cause/start/recovery accents); change table + drawer; unified + side-by-side JSON diff; evidence drawer ("why am I seeing this?"); editable chip bar; progress trace; incident/change/recommendation cards; ≥14 px; `safeCiteHref` everywhere | E1, E2 | 4 |
 | N-E4 | **Page context in the UI** (the Iris box now holds a server conversation — id in sessionStorage survives drawer close, follow-ups bind through the data arm, SHIPPED 2026-09-27): route/entity/incident bound into the ask and validated server-side; incident-detail Iris entry; merge the two RCA Iris asks into one | C7 | 2 |
-| N-E5 | **Playwright e2e** for the drawer and the three flagship slices | S1–S3 | 1.5 |
+| N-E5 | **Playwright e2e remainder** (the Iris box and the vocabulary panel SHIPPED 2026-09-27: `e2e/irisDrawer.spec.ts`, `e2e/irisVocabulary.spec.ts` over the faked Iris API in `e2e/irisBackend.ts` — data answer with chart + table + citation and hostile cells as text, one server conversation across drawer close/reopen, 404 drop and "clear", honest not-understood and ask-back, alias choice never auto-saved, name check, question + follow-up + new conversation, a11y smoke): one spec per flagship slice once N-S1–S3 exist | S1–S3 | 0.75 |
 
 ### Phase S — The flagship vertical slices (acceptance tests of A–E)
 
