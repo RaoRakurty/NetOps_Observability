@@ -58,7 +58,7 @@ afterEach(() => cleanup());
 // ── safeCiteHref: the link allowlist ─────────────────────────────────────────
 
 describe("safeCiteHref", () => {
-  it.each(["/correlations/1", "/api/events/feed?from=1h", "/", "/a#b"])(
+  it.each(["/correlations/1", "/api/events/feed?from=1h", "/", "/a#b", "#/monitoring/correlations?id=abc", "#/flows"])(
     "keeps the same-origin relative path %p", (h) => { expect(safeCiteHref(h)).toBe(h); },
   );
 
@@ -72,6 +72,8 @@ describe("safeCiteHref", () => {
     "data:text/html,<script>",
     "vbscript:msgbox(1)",
     "correlations/1",               // not rooted: could resolve anywhere
+    "#javascript:alert(1)",         // a bare fragment is not an in-app route
+    "#",
     "",
     "   ",
   ])("refuses %p", (h) => { expect(safeCiteHref(h)).toBeNull(); });
