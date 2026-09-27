@@ -113,7 +113,7 @@ Evidence paths are relative to `src/backend/` unless prefixed. "Closes in" names
 | 26 | Tool risk tiers 1–5 | PARTIAL | `CapRead` only in use; tier 2 = `CapProbe` (design 14) missing; tier 3 = ApprovalGate (design 15); tiers 4–5 **DECLINED** (device writes prohibited) | N-I3, N-I4 |
 | 27 | Modes OBSERVE/INVESTIGATE/RECOMMEND/ACT | PARTIAL | Answer modes cover observe/investigate; recommend = next-actions only; ACT = none (by design until N-I4) | N-I1, N-I7, N-I4 |
 | 28 | Model Gateway (provider, model, region, creds, retry, timeout, structured output, tokens, cost, prompt version, redaction) | PARTIAL | Provider chain + BYO keys + redaction shipped; retry/backoff, structured output, real token/cost accounting, prompt versioning missing | N-A4 |
-| 29 | Model Router by task | IN-FLIGHT | Item 9 recovered: `TieredLLMClient`, per-tenant `model_fast`/`model_strong` | N-A1 |
+| 29 | Model Router by task | DONE | `TieredLLMClient`, per-tenant `model_fast`/`model_strong`, settings UI (N-A1) | — |
 | 30 | Operational investigation trace, no chain-of-thought | PARTIAL | "Investigated N sources" after the fact, free-form path only (`Opsis.tsx:775`); no plan/queries/hypotheses view, no streaming | N-E2, N-E3 |
 | 31 | Standard Iris RCA result contract | PARTIAL | Data exists across `corr_objects` + rca-report; no single typed contract for Iris | N-B1 |
 | 32 | Ownership from deterministic metadata | SHIPPED | Hypothesis `owner` + seam owners (`internal/tenant/governance.go:64`); exposed as a tool in N-B2 | N-B2 |
@@ -191,7 +191,7 @@ Evidence paths are relative to `src/backend/` unless prefixed. "Closes in" names
 | 37 | Experienced-engineer voice | PARTIAL | NOC-English quality layer shipped (`ai/quality.go`) | N-B4 |
 | 38 | Existing Correlix evidence first when incident context exists | PARTIAL | Case-bound asks use correlation_id; free-form drawer asks carry no page context (`Opsis.tsx:310`) | N-B2, N-E4 |
 | 39 | Investigation without incident: query → existing anomaly/RCA → tools | PARTIAL | Skill chain; no NL query step | N-I1 |
-| 40 | Model routing fast/advanced | IN-FLIGHT | Item 9 | N-A1 |
+| 40 | Model routing fast/advanced | DONE | Item 9 (N-A1) | — |
 | 41 | Environment Context feeds NLP/entity resolution; never overrides telemetry | DESIGNED | — | N-F1, N-C2 |
 | 42 | Configurable source authority order | MISSING | — | N-F6 |
 | 43 | "Have we seen this before?" | MISSING | — | N-F4 |
@@ -200,7 +200,7 @@ Evidence paths are relative to `src/backend/` unless prefixed. "Closes in" names
 | 46 | Streamed operational progress | MISSING | No SSE/Flusher anywhere | N-E2 |
 | 47 | Performance targets per class; tenant-keyed caches | MISSING | — | N-C5, N-H4 |
 | 48 | Query eval metrics + targets (entity ≥99 %, exec ≥98 %, semantic ≥95 %) | MISSING | — | N-C6, N-H5 |
-| 49 | RAG evaluation per layer | PARTIAL | Docs hit@k only | N-F3, N-G2 |
+| 49 | RAG evaluation per layer | PARTIAL | Docs hit@1/hit@3 floors 0.75/0.95 (N-G2 shipped); other layers not built | N-F3 |
 | 50 | Multi-turn naturalness tests | PARTIAL | Unit + HTTP follow-up tests (`refer_test.go`, `nlquery_convo_isolation_test.go`); no scored multi-turn corpus yet | N-C7 |
 | 51 | Flagship test 1: change incident conversation | MISSING | — | N-S1 |
 | 52 | Flagship test 2: Comcast circuits → only Dallas → BGP flaps | MISSING | — | N-S2 |
@@ -230,7 +230,7 @@ Evidence paths are relative to `src/backend/` unless prefixed. "Closes in" names
 |---|---|---|---|
 | Answer any "how do I / what is / what does this page mean" question | PARTIAL | BM25 over 147 pages + 354 `(i)` explain answers (`ai/explain.go`) | N-G1…G3 |
 | Coverage of every nav area | PARTIAL | None/thin: Operations→Cloud (6 pages), Application Map, Business Services, DEM Journeys/Service Paths/Changes/Data Health, Access Explorer, Sessions, Search Dashboards, GraphQL Explorer, Stack Health, Self-Monitoring, Data Protection, Sensors, Action Queue, Recovery Scorecard, Findings | N-G1 |
-| Retrieval quality ≥ floor with headroom | PARTIAL | hit@3 0.91 vs 0.90; docs-031 top hit is the licensing page (precision defect); no stemming | N-G2 |
+| Retrieval quality ≥ floor with headroom | DONE | hit@3 floor raised to 0.95 with folding/stemming, release-note down-weighting and the docs-031 fix (N-G2, 2026-09-26) | — |
 | Page-aware help ("what am I looking at?") | PARTIAL | `(i)` sends a topic; the drawer does not send the route | N-G3 |
 | One product-KB path (no dead code) | PARTIAL | `ProductKB` unreachable (`ai/orchestrator.go:1504-1523`); unique `productRoutes` deep-link map must move first | N-G2 |
 
@@ -351,10 +351,7 @@ returns data, `pgintegration` when it touches PG, and the CI gate (§12). Effort
 
 | # | Item | Depends | ew |
 |---|---|---|---:|
-| N-A1 | **Land D9 model tiers** (recovered): rebase, full gate; tier fields in the AI settings UI | — | 0.5 |
-| N-A2 | **Finish D10 change tools**: populate the `RecentChanges`/`ConfigDiff` seams through config authz; unit + §3a isolation tests; a skill hop that uses them | A1 | 1 |
-| N-A3 | **Finish D19 scorecard**: tests, wire `ScoreSink`, emit the §7 KPI set incl. time-to-evidence-backed-diagnosis; vmalert rules + dashboard | — | 2 |
-| N-A4 | **Model gateway hygiene**: retry with backoff + jitter (§9), real provider-reported token accounting on every path, every grounded call charged against (and refused by) the tenant budget. *Structured-output (JSON-schema) calls move to N-C5, which owns the schema they validate against; model id + prompt version per call move to N-A6, which persists them.* | A1 | 2 |
+| N-A3 | **Scorecard remainder** (sink, sampler, `/metrics` KPI set SHIPPED): vmalert rules over `netops_ai_*` (guard-rate, provider-error, budget-refusal) with promtool tests, and a Grafana dashboard | — | 0.5 |
 | N-A5 | **One brain, one registry**: copilot loop and grounded engine share one tool registry (Phase-A tools + `search_docs`) behind the same double `EvaluateTool`; drop client assistant turns | A4 | 1.5 |
 | N-A6 | **Decision ledger**: `ai_decision_ledger` (PG, append-only, RLS) — Part 1 §35 event types, model/tool versions, SHA-256 of args/results, persisted answer id; `/api/ai/ask` enters the platform audit trail | — | 2 |
 | N-A7 | **Atomic AI entitlements** (`ai.chat`, `ai.investigate`, `ai.nlquery`, `ai.context.author`, `ai.runbook.author`, `ai.mcp`) mapped from existing flags/tiering — no plan names in code | — | 1 |
@@ -364,8 +361,7 @@ returns data, `pgintegration` when it touches PG, and the CI gate (§12). Effort
 
 | # | Item | Depends | ew |
 |---|---|---|---:|
-| N-B1 | **`IrisRCAResult` adapter** over `corr_objects` + rca-report: root cause entity/type, engine confidence + breakdown, causal chain with OBSERVED/INFERRED/DERIVED/USER_DEFINED per link, supporting + **contradicting** evidence, affected, owner, missing evidence; tenant-bound evidence ids; fills `ContradictingEvidence`/`ItsmNote` (tracker 336) | — | 2 |
-| N-B2 | **RCA tools**: `get_causal_chain`, `get_blast_radius` (incl. user counts where DEM has them), `get_owner`, `get_affected_entities`, `get_confidence_breakdown` | B1 | 1.5 |
+| N-B2 | **RCA tools remainder** (`get_causal_chain`, `get_blast_radius`, `get_owner`, `get_confidence_breakdown` SHIPPED): `get_affected_entities`; blast-radius user counts where DEM has them | — | 0.5 |
 | N-B3 | **Investigation hypotheses** (PROPOSED→TESTING→SUPPORTED/REJECTED/INCONCLUSIVE) held per investigation, driven by tool outcomes; never overrides the engine verdict; shown in the trace | B1 | 2 |
 | N-B4 | **Statement classes** (OBSERVED/CORRELIX_RCA/DERIVED/HISTORICAL/DOCUMENTATION/RECOMMENDATION) on answer sentences, checked by `VerifyGrounding`; "temporally correlated, not established as cause" wording enforced when a change is not in the engine's chain | B1 | 1.5 |
 | N-B5 | **Substrate fix — circuit/probe series visible to scoped tenants** (verify on lab first; add the scope label at emit or map `local_device`); isolation test | — | 1 |
@@ -374,12 +370,10 @@ returns data, `pgintegration` when it touches PG, and the CI gate (§12). Effort
 
 | # | Item | Depends | ew |
 |---|---|---|---:|
-| N-C1 | **Semantic Schema Catalog**: embedded, versioned; entities, metrics (real names, units, quality), dimensions, operators, backends + physical mapping, aliases/synonyms, relationships, sensitivity, examples; a drift test fails when a catalogued metric has no emitter | — | 2 |
-| N-C2 | **Entity aliases + resolver**: migration `entity_aliases` (RLS); 6-rung ladder (canonical id → tenant alias → inventory name → topology → catalog synonym → model suggestion-needs-confirm); `ResolvedEntityRef{input,id,type,confidence,method}`; seeded from sites/devices/apps/circuits/providers; alias CRUD API; ambiguity → clarification (reads) / block (actions) | C1 | 3 |
-| N-C3 | **`CorrelixQueryAST` + validator**: closed Go type; query types (metric_series, metric_filter/topk, change_list, incident_list, incident_explain, flow_top, log_search, compare_windows); hard limits; structured validation errors with suggestions | C1 | 2 |
-| N-C4 | **Planner + adapters**: typed MetricsQL builder (escaped labels) → `vmRange`/`vmInstantScoped`; CH allowlisted templates → `chSelect`; RCA/change reads → existing functions; OS structured filters (no `query_string` from model text); site→device expansion; typed `ResultSet` with provenance; chokepoint guard test | C3, B5 | 3 |
-| N-C5 | **`NLQueryCompiler`**: deterministic grammar + intent taxonomy (Part 2 §6); model fallback via structured output + schema-RAG + example-RAG; repair loop ≤2; compile/execute/get/explain APIs; `compile_query` tool; interpreted-query explain | C2, C4, A4 | 4 |
-| N-C6 | **Golden NL corpus + example library**: `tests/iris/nlquery/golden/` (question, intent, entity refs, AST, alternates, result semantics) across Part 2 §20's 21 categories; controlled paraphrases validated to the same AST; CI metrics (entity precision, executable rate, semantic correctness) on the deterministic path; offline harness for the model path | C5 | 3 |
+| N-C2 | **Resolver remainder** (ladder canonical id → tenant alias → inventory name → partial-needs-confirm, alias store + CRUD API + UI SHIPPED): topology rung, catalog-synonym rung, model-suggestion-needs-confirm rung; provider/application seeding (providers resolve to nothing until aliased) | — | 1 |
+| N-C4 | **Planner remainder** (metrics, changes, incidents, explain, site/device/provider grouping SHIPPED): `flow_top` over CH allowlisted templates and `log_search` over OS structured filters (both reserved today — the validator refuses them precisely); depends on N-B5 for circuit/probe series | B5 | 1.5 |
+| N-C5 | **Compiler remainder** (deterministic grammar, compile/execute APIs SHIPPED): model fallback via structured output + schema-RAG + example-RAG; repair loop ≤2; `GET /api/ai/query/{id}` + `/explain`; `compile_query` tool | A4 | 2.5 |
+| N-C6 | **Corpus remainder** (212-case golden corpus + paraphrases + accuracy ratchet + 0-violation safety SHIPPED): per-metric CI numbers (entity precision, executable rate, semantic correctness) with floors; coverage of Part 2 §20's 21 categories; offline harness for the model path | C5 | 1 |
 | N-C7 | **Conversation remainder** (store, state, reference binding, follow-up rewriting and the conversation API SHIPPED 2026-09-27): editable-chip → AST regeneration; a scored multi-turn corpus (Part 2 §50) with a ratchet like the golden corpus; Part 2 §69's 14 routine questions end to end | C5, E3 | 1 |
 | N-C8 | **Query capture + operator corrections**: per-query record (Part 2 §22 fields) and chip edits stored for offline evaluation; no automatic retraining | C7, A6 | 1 |
 
@@ -427,7 +421,6 @@ plus a recorded-model run in the offline harness.
 | # | Item | Depends | ew |
 |---|---|---|---:|
 | N-G1 | **Corpus coverage**: write the missing pages (§3.1 list); one golden item per nav leaf (≈90, today 32) | — | 3 |
-| N-G2 | **Retrieval quality**: stemming/plural folding, release notes down-weighted, docs-031 precision fix, move `productRoutes` into chunks then delete `ProductKB` (336); raise the hit@3 floor to 0.95 | — | 1.5 |
 | N-G3 | **Page-aware help**: current route boosts that page's docs; "what am I looking at?" answers from the page's doc + `(i)` answers | E4 | 1 |
 | N-G4 | **Question router**: one entry decides product-help vs operational vs NL-query vs investigation (deterministic first, model tie-break), so a user never has to choose a mode | C5, G2 | 1 |
 
