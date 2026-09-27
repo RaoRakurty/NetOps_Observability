@@ -65,112 +65,120 @@ func RelationFor(epistemic string) string {
 
 // RCAResult is the engine's conclusion for ONE incident, projected for Iris.
 type RCAResult struct {
-	IncidentID string
-	DisplayID  string
-	Title      string
+	IncidentID string `json:"incident_id,omitempty"`
+	DisplayID  string `json:"display_id,omitempty"`
+	Title      string `json:"title,omitempty"`
 	// Verdict is the report's analysis state (observed | suspected | probable |
 	// confirmed | inconclusive) and RootCauseState its root-cause state
 	// (not_identified | under_investigation | confirmed); Confidence is the
 	// ENGINE's number for the leading hypothesis, never a model's.
-	Verdict         string
-	RootCauseState  string
-	Confidence      float64
-	ConfidenceLabel string
-	RootCause       RCARootCause
-	Localization    RCALocalization
-	CausalChain     []RCACausalLink
+	Verdict         string          `json:"verdict,omitempty"`
+	RootCauseState  string          `json:"root_cause_state,omitempty"`
+	Confidence      float64         `json:"confidence,omitempty"`
+	ConfidenceLabel string          `json:"confidence_label,omitempty"`
+	RootCause       RCARootCause    `json:"root_cause,omitempty"`
+	Localization    RCALocalization `json:"localization,omitempty"`
+	CausalChain     []RCACausalLink `json:"causal_chain,omitempty"`
 	// ChainNote is the engine's honest sentence when no chain is proposed.
-	ChainNote string
+	ChainNote string `json:"chain_note,omitempty"`
 	// PrimaryContradicted: the primary sequence's hypothesis has been
 	// contradicted; the chain stays for the record.
-	PrimaryContradicted bool
-	Hypotheses          []RCAHypothesis
-	Affected            RCAAffected
-	Impact              []RCAImpact
-	Owner               RCAOwner
+	PrimaryContradicted bool            `json:"primary_contradicted,omitempty"`
+	Hypotheses          []RCAHypothesis `json:"hypotheses,omitempty"`
+	Affected            RCAAffected     `json:"affected,omitempty"`
+	Impact              []RCAImpact     `json:"impact,omitempty"`
+	Owner               RCAOwner        `json:"owner,omitempty"`
 	// Missing is the evidence the engine says it still needs.
-	Missing   []string
-	Truncated bool
+	Missing   []string `json:"missing,omitempty"`
+	Truncated bool     `json:"truncated,omitempty"`
 }
 
 // RCARootCause mirrors the engine's root-cause block, including its honesty
 // rule: Identified is set only when a mechanism AND an object are established.
 type RCARootCause struct {
-	Identified    bool
-	Statement     string
-	Mechanism     string
-	Object        string
-	ObjectType    string
-	PossibleCause string
-	Known         []string
-	Missing       []string
+	Identified    bool     `json:"identified,omitempty"`
+	Statement     string   `json:"statement,omitempty"`
+	Mechanism     string   `json:"mechanism,omitempty"`
+	Object        string   `json:"object,omitempty"`
+	ObjectType    string   `json:"object_type,omitempty"`
+	PossibleCause string   `json:"possible_cause,omitempty"`
+	Known         []string `json:"known,omitempty"`
+	Missing       []string `json:"missing,omitempty"`
 }
 
 // RCALocalization is WHERE the evidence converges — never the cause.
 type RCALocalization struct {
-	Localized  bool
-	Statement  string
-	Object     string
-	ObjectType string
+	Localized  bool   `json:"localized,omitempty"`
+	Statement  string `json:"statement,omitempty"`
+	Object     string `json:"object,omitempty"`
+	ObjectType string `json:"object_type,omitempty"`
 }
 
 // RCACausalLink is one step of the proposed propagation.
 type RCACausalLink struct {
-	Number         int
-	Claim          string
-	Role           string
-	Relation       string // OBSERVED | INFERRED | DERIVED | USER_DEFINED
-	EpistemicState string // the engine's own word
-	Basis          string
-	Interval       string
-	Link           string // "followed by" etc. — temporal language only
-	Evidence       []string
-	Contradictions []string
+	Number         int      `json:"number,omitempty"`
+	Claim          string   `json:"claim,omitempty"`
+	Role           string   `json:"role,omitempty"`
+	Relation       string   `json:"relation,omitempty"`        // OBSERVED | INFERRED | DERIVED | USER_DEFINED
+	EpistemicState string   `json:"epistemic_state,omitempty"` // the engine's own word
+	Basis          string   `json:"basis,omitempty"`
+	Interval       string   `json:"interval,omitempty"`
+	Link           string   `json:"link,omitempty"` // "followed by" etc. — temporal language only
+	Evidence       []string `json:"evidence,omitempty"`
+	Contradictions []string `json:"contradictions,omitempty"`
 }
 
 // RCAHypothesis is one ranked candidate with the evidence for AND against it.
 type RCAHypothesis struct {
-	Rank          int
-	Title         string
-	Problem       string
-	CausalRole    string
-	Candidacy     string
-	Confidence    float64
-	Label         string
-	Supporting    []string
-	Contradicting []string
-	Missing       []string
-	ConfirmWhen   []string
-	Owner         string
+	Rank          int      `json:"rank,omitempty"`
+	Title         string   `json:"title,omitempty"`
+	Problem       string   `json:"problem,omitempty"`
+	CausalRole    string   `json:"causal_role,omitempty"`
+	Candidacy     string   `json:"candidacy,omitempty"`
+	Confidence    float64  `json:"confidence,omitempty"`
+	Label         string   `json:"label,omitempty"`
+	Supporting    []string `json:"supporting,omitempty"`
+	Contradicting []string `json:"contradicting,omitempty"`
+	Missing       []string `json:"missing,omitempty"`
+	ConfirmWhen   []string `json:"confirm_when,omitempty"`
+	Owner         string   `json:"owner,omitempty"`
 }
 
 // RCAAffected is the deterministic blast radius from the engine's scope.
 type RCAAffected struct {
-	Services []string
-	Devices  []string
-	Sites    []string
-	Targets  []string
-	Seams    []string
-	Regions  []string
-	Paths    int
+	Services []string `json:"services,omitempty"`
+	Devices  []string `json:"devices,omitempty"`
+	Sites    []string `json:"sites,omitempty"`
+	Targets  []string `json:"targets,omitempty"`
+	Seams    []string `json:"seams,omitempty"`
+	Regions  []string `json:"regions,omitempty"`
+	Paths    int      `json:"paths,omitempty"`
 }
 
 // RCAImpact is one impact measure with its provenance; Value is nil when the
 // measure was not measured (never zero).
 type RCAImpact struct {
-	Measure, Label, Status, Unit, Scope, Source, Basis string
-	Value                                              *float64
+	Measure string   `json:"measure,omitempty"`
+	Label   string   `json:"label,omitempty"`
+	Status  string   `json:"status,omitempty"`
+	Unit    string   `json:"unit,omitempty"`
+	Scope   string   `json:"scope,omitempty"`
+	Source  string   `json:"source,omitempty"`
+	Basis   string   `json:"basis,omitempty"`
+	Value   *float64 `json:"value,omitempty"`
 }
 
 // RCAOwner is the engine's ownership decision.
 type RCAOwner struct {
-	Triage, TriageReason      string
-	SuspectedDomain           string
-	Technical                 string
-	ExternalCandidate         string
-	Demarcation               string
-	Escalation, EscalationWhy string
-	Candidates                []string
+	Triage            string   `json:"triage,omitempty"`
+	TriageReason      string   `json:"triage_reason,omitempty"`
+	SuspectedDomain   string   `json:"suspected_domain,omitempty"`
+	Technical         string   `json:"technical,omitempty"`
+	ExternalCandidate string   `json:"external_candidate,omitempty"`
+	Demarcation       string   `json:"demarcation,omitempty"`
+	Escalation        string   `json:"escalation,omitempty"`
+	EscalationWhy     string   `json:"escalation_why,omitempty"`
+	Candidates        []string `json:"candidates,omitempty"`
 }
 
 // ---- the tools --------------------------------------------------------------

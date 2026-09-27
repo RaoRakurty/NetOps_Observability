@@ -3650,6 +3650,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/feedback", s.handleAIFeedback)              // thumbs up/down (audited)
 	mux.HandleFunc("/api/ai/aliases", s.handleAIAliases)                // Iris NL: per-tenant entity aliases (N-C2)
 	mux.HandleFunc("/api/ai/entities/resolve", s.handleAIEntityResolve) // Iris NL: resolution ladder (N-C2)
+	mux.HandleFunc("/api/ai/query/compile", s.handleAIQueryCompile)     // Iris NL: question → validated query (N-C5)
+	mux.HandleFunc("/api/ai/query/execute", s.handleAIQueryExecute)     // Iris NL: validated query → ResultSet (N-C5)
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Self-describing API + ITSM connector status.
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)

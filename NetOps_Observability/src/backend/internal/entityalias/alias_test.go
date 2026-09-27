@@ -118,3 +118,13 @@ func TestPerTenantCap(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestNilStoreListsNothing(t *testing.T) {
+	var s *Store
+	if got := s.List("t-a", false); got != nil {
+		t.Fatalf("nil store = %v", got)
+	}
+	if got := (&Store{}).List("t-a", false); got != nil {
+		t.Fatalf("unwired store = %v", got)
+	}
+}

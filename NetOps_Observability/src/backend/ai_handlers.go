@@ -20,7 +20,10 @@ import (
 	"netops/backend/internal/aiscore"
 	"netops/backend/internal/entityalias"
 	nlqast "netops/backend/internal/nlquery/ast"
+	"netops/backend/internal/nlquery/compile"
+	"netops/backend/internal/nlquery/plan"
 	"netops/backend/internal/nlquery/resolve"
+	"netops/backend/internal/nlquery/validate"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/tac"
 )
@@ -718,4 +721,166 @@ func (l nlqLookups) Inventory(ctx context.Context, types []string) ([]resolve.Na
 
 func (l nlqLookups) Visible(ctx context.Context, entityType, id string) (bool, error) {
 	return l.h.Visible(ctx, nlqast.EntityRef{Type: entityType, ID: id})
+}
+
+// ---- Iris NL: compile + execute (tracker 337 N-C5) ---------------------------
+//
+// POST /api/ai/query/compile  {question, incident_id?, prior_ast?, tz?}
+//      → intent, resolved entities, the VALIDATED (constrained) query, or a
+//        clarification / decline / "not understood" — never a guess.
+// POST /api/ai/query/execute  {ast}
+//      → the typed ResultSet, after the query is decoded strictly and
+//        validated AGAIN (a client-supplied or client-edited query is
+//        untrusted exactly like a model-written one).
+//
+// Gates, same as /api/ai/ask: Iris enabled, authenticated, per-principal rate
+// limit, tenant entitlement, plus infrastructure:read (these read inventory
+// and telemetry). The tenant is NEVER in the request: every read runs through
+// nlqScope, bound to the caller's claims.
+
+const (
+	nlqQuestionMax = 1000
+	nlqQueryBody   = 16 << 10
+)
+
+// nlqGate runs the shared gates and returns the caller's claims.
+func (s *server) nlqGate(w http.ResponseWriter, r *http.Request) (jwtClaims, bool) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST"))
+		return jwtClaims{}, false
+	}
+	if !aiEnabled() {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Iris AI is disabled — set FEATURE_AI=true"))
+		return jwtClaims{}, false
+	}
+	if s.nlqCatalog == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("the Iris query catalog is not available on this deployment"))
+		return jwtClaims{}, false
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
+		return jwtClaims{}, false
+	}
+	if !s.copilotLimiter.AllowN(claims.Tenant+"|"+claims.Sub, envInt("COPILOT_RATE_PER_MIN", 20)) {
+		writeError(w, http.StatusTooManyRequests, fmt.Errorf("Iris AI rate limit exceeded — slow down"))
+		return jwtClaims{}, false
+	}
+	if !s.aiAssistantAllowed(claims) {
+		writeError(w, http.StatusForbidden, errAITenantDisabled)
+		return jwtClaims{}, false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, nlqQueryBody)
+	return claims, true
+}
+
+func (s *server) handleAIQueryCompile(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.nlqGate(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Question   string          `json:"question"`
+		IncidentID string          `json:"incident_id"`
+		PriorAST   json.RawMessage `json:"prior_ast"`
+		TZ         string          `json:"tz"`
+	}
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if q := strings.TrimSpace(req.Question); q == "" || len([]rune(q)) > nlqQuestionMax {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("question is 1 to %d characters", nlqQuestionMax))
+		return
+	}
+	loc := time.UTC
+	if req.TZ != "" {
+		l, err := time.LoadLocation(req.TZ)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, errors.New("tz must be an IANA time zone"))
+			return
+		}
+		loc = l
+	}
+	cx := compile.Context{Loc: loc, Now: time.Now(), IncidentID: strings.TrimSpace(req.IncidentID)}
+	if cx.IncidentID != "" && !isUUIDToken(cx.IncidentID) {
+		writeError(w, http.StatusBadRequest, errors.New("incident_id is not an incident id"))
+		return
+	}
+	if len(req.PriorAST) > 0 && string(req.PriorAST) != "null" {
+		prior, err := nlqast.Decode(req.PriorAST)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("prior_ast: %w", err))
+			return
+		}
+		cx.PriorAST = prior
+	}
+	scope := s.nlqScopeFor(r, claims)
+	res, err := compile.Compiler{Cat: s.nlqCatalog, R: s.nlqResolver(r, claims)}.Compile(r.Context(), req.Question, cx)
+	if err != nil {
+		logError("iris.nlquery", "compile failed", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("the question could not be compiled"))
+		return
+	}
+	out := map[string]any{"intent": res.Intent, "entities": res.Entities, "clarify": res.Clarify,
+		"decline": res.Decline, "unparsed": res.Unparsed, "not_understood": res.NotUnderstood}
+	if res.AST != nil {
+		checked, vr := validate.Validate(r.Context(), s.nlqCatalog, scope, res.AST)
+		out["validation"] = vr
+		if vr.Valid {
+			out["ast"] = checked
+		} else {
+			out["ast"] = res.AST // shown so the operator sees what was understood — never executed
+		}
+	}
+	tenant, _ := principalTenant(claims)
+	logInfo("iris.nlquery", "compile", map[string]any{"tenant": tenant, "sub": claims.Sub, "intent": res.Intent,
+		"unparsed": res.Unparsed, "declined": res.Decline != "", "question_chars": len(req.Question)})
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *server) handleAIQueryExecute(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.nlqGate(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		AST json.RawMessage `json:"ast"`
+	}
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	q, err := nlqast.Decode(req.AST)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	scope := s.nlqScopeFor(r, claims)
+	checked, vr := validate.Validate(r.Context(), s.nlqCatalog, scope, q)
+	if !vr.Valid {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"validation": vr})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	rs, err := plan.Planner{Cat: s.nlqCatalog}.Execute(ctx, scope, checked, vr.Constraints)
+	switch {
+	case errors.Is(err, plan.ErrNotFound):
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+		return
+	case err != nil:
+		logError("iris.nlquery", "execute failed", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("the query could not be run"))
+		return
+	}
+	tenant, _ := principalTenant(claims)
+	logInfo("iris.nlquery", "execute", map[string]any{"tenant": tenant, "sub": claims.Sub, "query_type": string(checked.Type),
+		"ast_hash": rs.ASTHash, "catalog": rs.CatalogVersion, "rows": len(rs.Rows), "series": len(rs.Series),
+		"truncated": rs.Truncated, "duration_ms": rs.Provenance.DurationMs})
+	writeJSON(w, http.StatusOK, map[string]any{"result": rs, "validation": vr})
 }

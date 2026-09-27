@@ -125,8 +125,13 @@ func (s *Store) Put(a Alias) (Alias, error) {
 	return a, nil
 }
 
-// List returns the caller's aliases.
-func (s *Store) List(tenant string, cross bool) []Alias { return s.C.All(tenant, cross) }
+// List returns the caller's aliases. A nil or unwired store has none.
+func (s *Store) List(tenant string, cross bool) []Alias {
+	if s == nil || s.C == nil {
+		return nil
+	}
+	return s.C.All(tenant, cross)
+}
 
 // Delete removes one alias by (type, alias text). A foreign or absent alias is
 // ErrNotFound.
