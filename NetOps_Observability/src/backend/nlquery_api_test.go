@@ -26,7 +26,7 @@ func nlqAPI(t *testing.T, s *server, c jwtClaims, path, body string) (int, map[s
 	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	r = r.WithContext(context.WithValue(r.Context(), userCtxKey, c))
 	w := httptest.NewRecorder()
-	if strings.HasSuffix(path, "/compile") {
+	if strings.Contains(path, "/compile") {
 		s.handleAIQueryCompile(w, r)
 	} else {
 		s.handleAIQueryExecute(w, r)
@@ -121,6 +121,27 @@ func TestQueryExecuteRefusesForeignAndReadsScoped(t *testing.T) {
 
 	if code, _ := nlqAPI(t, s, a, "/api/ai/query/execute", strings.Replace(q, `"v":1,`, `"v":1,"tenant":"t-b",`, 1)); code != http.StatusBadRequest {
 		t.Fatalf("a smuggled tenant in the query must be a 400, got %d", code)
+	}
+}
+
+// CLAUDE.md §3a rule 5: a non-owner cannot walk into another tenant — neither
+// with ?as_tenant= on the URL nor with an ActingTenant smuggled into its
+// claims (principalTenant ignores it for a non-owner). The cross-tenant read
+// stays unknown, exactly as without the attempt.
+func TestQueryRoutesIgnoreAsTenantForANonOwner(t *testing.T) {
+	t.Setenv("FEATURE_AI", "true")
+	s, a, b := nlqAPIFixture(t)
+	b.ActingTenant = a.Tenant
+	for _, path := range []string{"/api/ai/query/compile?as_tenant=" + a.Tenant, "/api/ai/query/compile"} {
+		code, out := nlqAPI(t, s, b, path, `{"question":"show cpu on edge-a for the last hour"}`)
+		if code != 200 || out["ast"] != nil || out["unparsed"] != true {
+			t.Fatalf("%s: tenant B must not reach tenant A's device: %d %v", path, code, out)
+		}
+	}
+	q := `{"ast":{"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","entities":[{"type":"device","id":"device:dev-a"}],"time_range":{"kind":"relative","last":"1h"}}}`
+	code, out := nlqAPI(t, s, b, "/api/ai/query/execute?as_tenant="+a.Tenant, q)
+	if code != http.StatusUnprocessableEntity || !strings.Contains(nlqJSON(out), "unknown_entity") {
+		t.Fatalf("cross-tenant execute via as_tenant must stay unknown_entity: %d %v", code, out)
 	}
 }
 
