@@ -216,7 +216,93 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		// Production scorecard (tracker 337 N-A3): counts, enums and durations
 		// only — nothing tenant- or entity-identifying crosses this seam.
 		Score: s.aiScoreSink(),
+		// The question router's DATA arm (tracker 337 N-G4): nil when the
+		// catalog is absent or the caller may not read infrastructure data.
+		NLQuery: s.aiNLQuery(r, claims),
 	}
+}
+
+// aiNLQuery binds the router's data arm to the caller: the same compiler,
+// validator, scope and executor as /api/ai/query, and the same
+// infrastructure:read gate (which /api/ai/ask itself does not require).
+func (s *server) aiNLQuery(r *http.Request, claims jwtClaims) ai.NLQueryFunc {
+	if s.nlqCatalog == nil || s.roles == nil || !s.roles.Allows(claims.Role, "infrastructure", LevelRead) {
+		return nil
+	}
+	return func(ctx context.Context, _ ai.Principal, question string) (ai.DataAnswer, error) {
+		c, err := s.nlqCompileQuestion(r.WithContext(ctx), claims, question, compile.Context{Loc: time.UTC, Now: time.Now()})
+		if err != nil {
+			return ai.DataAnswer{}, err
+		}
+		return s.nlqDataAnswer(r.WithContext(ctx), claims, c)
+	}
+}
+
+// nlqAnswerable are the validation refusals that ARE the answer to a question
+// Iris understood ("that window is too long", "that is too broad"). Any other
+// refusal hands the question back to the classic path.
+var nlqAnswerable = map[string]bool{
+	validate.CodeWindowTooLarge: true, validate.CodeTooBroad: true, validate.CodeInvalidTime: true,
+	validate.CodeScopeUnavailable: true, validate.CodeUnmappedProvider: true,
+}
+
+// nlqDataAnswer turns one compiled question into the data arm's answer.
+func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled) (ai.DataAnswer, error) {
+	notData := ai.DataAnswer{Status: ai.DataNotData}
+	switch {
+	case c.res.Decline != "" || c.res.Unparsed:
+		return notData, nil
+	case len(c.res.Clarify) > 0:
+		var names []string
+		for _, ref := range c.res.Clarify {
+			names = append(names, ref.EntityID)
+		}
+		payload, err := json.Marshal(c.body())
+		if err != nil {
+			return ai.DataAnswer{}, err
+		}
+		return ai.DataAnswer{Status: ai.DataClarify, Intent: c.res.Intent, Payload: payload,
+			Text: "More than one thing matches that name — which did you mean: " + strings.Join(names, ", ") + "?"}, nil
+	case c.res.AST == nil:
+		return notData, nil
+	case c.checked == nil:
+		var msgs []string
+		for _, e := range c.vr.Errors {
+			if !nlqAnswerable[e.Code] {
+				return notData, nil
+			}
+			msgs = append(msgs, firstNonBlank(e.Message, e.Code))
+		}
+		payload, err := json.Marshal(c.body())
+		if err != nil {
+			return ai.DataAnswer{}, err
+		}
+		return ai.DataAnswer{Status: ai.DataAnswered, Intent: c.res.Intent, Payload: payload,
+			Text: "I understood the question but can't run it as asked: " + strings.Join(msgs, "; ") + "."}, nil
+	}
+	rs, err := s.nlqRun(r, claims, c.checked, *c.vr)
+	if errors.Is(err, plan.ErrNotFound) {
+		return ai.DataAnswer{Status: ai.DataAnswered, Intent: c.res.Intent, Text: "Nothing by that name is visible to you."}, nil
+	}
+	if err != nil {
+		return ai.DataAnswer{}, err
+	}
+	body := c.body()
+	body["result"] = rs
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return ai.DataAnswer{}, err
+	}
+	var notes []string
+	for _, k := range c.vr.Constraints {
+		notes = append(notes, "Adjusted: "+k.Reason)
+	}
+	tenant, _ := principalTenant(claims)
+	logInfo("iris.router", "data answer", map[string]any{"tenant": tenant, "sub": claims.Sub, "intent": c.res.Intent,
+		"query_type": string(c.checked.Type), "rows": len(rs.Rows), "series": len(rs.Series)})
+	return ai.DataAnswer{Status: ai.DataAnswered, Intent: c.res.Intent, Payload: payload, Notes: notes,
+		Text:      plan.Summarize(s.nlqCatalog, c.checked, rs),
+		Citations: []ai.Citation{{ID: "query:" + rs.QueryID, Kind: "query", Label: "Query " + rs.ASTHash, Href: ""}}}, nil
 }
 
 // ---- production AI scorecard (tracker 337 N-A3, design item 19) -------------

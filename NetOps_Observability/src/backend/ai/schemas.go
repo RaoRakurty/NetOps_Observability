@@ -3,6 +3,8 @@
 
 package ai
 
+import "encoding/json"
+
 // Answer modes (HLD §6). The Response Builder validates the assistant's output
 // into one of these typed schemas; the UI renders a card per mode. Every mode
 // carries Citations + Disclaimers so answers are always grounded and honest
@@ -66,6 +68,9 @@ type Answer struct {
 	Citations    []Citation           `json:"citations"`
 	Disclaimers  []string             `json:"disclaimers"`
 	Provider     string               `json:"provider,omitempty"` // which LLM answered (audit)
+	// Data is the structured answer of the DATA arm (ModeDataQuery, N-G4): the
+	// compile answer + result set, rendered by the client as data, never prose.
+	Data json.RawMessage `json:"data,omitempty"`
 	// Universal Response-Quality fields (spec §6) — reusable across every answer
 	// mode, rendered by the generic AI answer card as badges + sections.
 	Status           string   `json:"status,omitempty"`           // NOC status word (Confirmed/Suspected/…)

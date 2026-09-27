@@ -22,6 +22,7 @@ import {
 } from "../services/api";
 import Icon from "../components/Icon";
 import IrisVocabulary from "../components/IrisVocabulary";
+import PresentationPlanRenderer from "../iris/PresentationPlanRenderer";
 import { friendlyProblemId } from "../components/rca/labels";
 import { useShell } from "../context/shell";
 
@@ -976,6 +977,9 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
       )}
 
       {ans.text && <div className="op-text">{ans.text}</div>}
+      {ans.mode === "data_query" && ans.data?.result !== undefined && (
+        <div data-testid="op-data-answer"><PresentationPlanRenderer result={ans.data.result} /></div>
+      )}
 
       {/* Live-state briefing: counts → focus + why → suspected list → watch items. */}
       {cs && (

@@ -9842,6 +9842,10 @@ export type AiCommand = {
   requires_context?: boolean;
 };
 export type AiAnswer = {
+  // The question router's DATA arm (tracker 337 N-G4, mode "data_query"): the
+  // compile answer + the result set, rendered as data. Untrusted — the
+  // presentation renderer validates and bounds it.
+  data?: { result?: unknown; [k: string]: unknown };
   mode: string;
   intent: string;
   modules: string[];

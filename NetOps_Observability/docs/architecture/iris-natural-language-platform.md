@@ -422,7 +422,7 @@ plus a recorded-model run in the offline harness.
 |---|---|---|---:|
 | N-G1 | **Corpus coverage**: write the missing pages (§3.1 list); one golden item per nav leaf (≈90, today 32) | — | 3 |
 | N-G3 | **Page-aware help**: current route boosts that page's docs; "what am I looking at?" answers from the page's doc + `(i)` answers | E4 | 1 |
-| N-G4 | **Question router**: one entry decides product-help vs operational vs NL-query vs investigation (deterministic first, model tie-break), so a user never has to choose a mode | C5, G2 | 1 |
+| N-G4 | **Router remainder** (deterministic data arm SHIPPED 2026-09-27: `/api/ai/ask` answers a question the NL compiler fully understands from its query — key-free summary + result rendered by the presentation renderer; diagnostic cues stay with skills; product questions never compile): model tie-break for questions two arms could claim; data arm inside a conversation (follow-ups in the Iris box, with N-E4); a routing scoreboard over the golden corpus | C5, E4 | 0.5 |
 
 ### Phase H — Evaluation, replay and release gates (Part 1 §43–48; Part 2 §48–50, 67; D13, D18)
 

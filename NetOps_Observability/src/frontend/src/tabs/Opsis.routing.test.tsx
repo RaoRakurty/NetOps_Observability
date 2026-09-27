@@ -43,6 +43,10 @@ vi.mock("../services/api", () => ({
   },
 }));
 
+// happy-dom has no canvas: charts render as a placeholder (the chart itself is
+// covered by src/iris/charts.test.tsx).
+vi.mock("../components/EChart", () => ({ default: () => <div data-testid="chart" /> }));
+
 const shell: ShellState = {
   range: TIME_RANGES[1], setRange: () => {},
   query: "", setQuery: () => {},
@@ -214,5 +218,36 @@ describe("Opsis — the grounded claim is per-answer, and an ungrounded answer i
     await screen.findByText(/How can I help/);
     fireEvent.click(screen.getByTitle("Help & documentation"));
     expect(screen.queryByText(/Answers are grounded, tenant-scoped and cited/)).toBeNull();
+  });
+});
+
+describe("Opsis — a data answer renders its result as data (tracker 337 N-G4)", () => {
+  it("shows the summary text AND the result through the presentation renderer", async () => {
+    aiAsk.mockResolvedValue(citedAnswer({
+      mode: "data_query", intent: "query_metric", text: "Memory — 2 results: edge-1 91%; edge-2 88%;",
+      citations: [{ id: "query:q1", kind: "query", label: "Query abc", href: "" }],
+      data: { result: {
+        query_id: "q1", ast_hash: "abc", catalog_version: "1", query_type: "metric_topk", metric: "mem_util_pct", unit: "percent",
+        window: { from: "2026-09-27T00:00:00Z", to: "2026-09-27T01:00:00Z" }, series: [],
+        rows: [{ device: "edge-1", value: 91 }, { device: "edge-2", value: 88 }], truncated: false,
+        provenance: { source: "victoriametrics", entities: [], executed_at: "2026-09-27T01:00:00Z", duration_ms: 4 },
+      } },
+    }));
+    await renderOpsis();
+    await screen.findByText(/How can I help/);
+    await ask("which devices are over 85% memory right now");
+    const card = await screen.findByTestId("op-data-answer");
+    expect(screen.getByText(/Memory — 2 results/)).toBeInTheDocument();
+    expect(card).toHaveTextContent("edge-1");
+    expect(card).toHaveTextContent("edge-2");
+  });
+
+  it("an answer without a result renders only its text", async () => {
+    aiAsk.mockResolvedValue(citedAnswer({ mode: "data_query", text: "I understood the question but can't run it as asked: window too large." }));
+    await renderOpsis();
+    await screen.findByText(/How can I help/);
+    await ask("cpu on edge-1 for the last year");
+    await screen.findByText(/can't run it as asked/);
+    expect(screen.queryByTestId("op-data-answer")).toBeNull();
   });
 });

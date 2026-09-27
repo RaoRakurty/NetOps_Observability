@@ -19,11 +19,14 @@ import (
 // an LLMClient (the provider proxy), the feature-flag lookup, and an optional
 // redactor. It holds NO credentials and makes NO store query itself.
 type Orchestrator struct {
-	DS     DataSource
-	Tools  *ToolRegistry
-	LLM    LLMClient
-	Flags  FlagLookup
-	Policy *PolicyEngine // the gate for what the AI may run; nil = safe default
+	// NLQuery is the question router's DATA arm (data_route.go): a question the
+	// NL compiler fully understands is answered from its query. nil = disabled.
+	NLQuery NLQueryFunc
+	DS      DataSource
+	Tools   *ToolRegistry
+	LLM     LLMClient
+	Flags   FlagLookup
+	Policy  *PolicyEngine // the gate for what the AI may run; nil = safe default
 	// Redactor strips secrets/PII before egress (LLM06). nil is NOT an escape
 	// hatch: redact() falls back to the package default Redact, so an
 	// orchestrator built without one still cannot leak. See redact.go.
@@ -373,6 +376,14 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 	}
 
 	plan := Classify(question, uiContext)
+
+	// The question router's DATA arm (N-G4) runs before module governance and
+	// skills: it claims only questions the NL compiler understands completely
+	// and that ask for a listing, not a diagnosis; everything else continues
+	// below unchanged.
+	if ans, handled := o.answerData(ctx, p, question, plan, nil); handled {
+		return ans, nil
+	}
 
 	// Governance: every module route passes the Policy Engine (availability +
 	// deny-list + RBAC/PBAC). Disallowed modules are dropped with an honest reason.
