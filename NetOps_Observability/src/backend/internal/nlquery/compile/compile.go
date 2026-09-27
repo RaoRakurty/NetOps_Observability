@@ -17,6 +17,7 @@ package compile
 
 import (
 	"context"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -161,6 +162,14 @@ type state struct {
 	cx   Context
 	time ast.TimeRange
 	e    *eaten
+}
+
+// threshold reads the number a comparison regexp captured. A number too large
+// to be finite is not a threshold anyone meant: it is reported as not
+// understood, never silently turned into +Inf.
+func threshold(re *regexp.Regexp, text string) (float64, bool) {
+	v, err := strconv.ParseFloat(re.FindStringSubmatch(text)[1], 64)
+	return v, err == nil && !math.IsInf(v, 0)
 }
 
 // done enforces coverage on a finished result.
@@ -458,10 +467,16 @@ func (s *state) metric(hits []catalog.AliasHit) (Result, error) {
 	case s.e.re(regexp.MustCompile(`\b(?:unusual|abnormal|higher than normal|above normal|above baseline|anomalous|than normal)\b`), s.text):
 		q.Type, q.Predicate = ast.MetricFilter, &ast.Predicate{Op: "above_baseline"}
 	case s.e.re(pctRe, s.text):
-		v, _ := strconv.ParseFloat(pctRe.FindStringSubmatch(s.text)[1], 64)
+		v, ok := threshold(pctRe, s.text)
+		if !ok {
+			return Result{Unparsed: true, NotUnderstood: []string{pctRe.FindStringSubmatch(s.text)[1]}}, nil
+		}
 		q.Type, q.Predicate = ast.MetricFilter, &ast.Predicate{Op: "gt", Value: v}
 	case s.e.re(belowRe, s.text):
-		v, _ := strconv.ParseFloat(belowRe.FindStringSubmatch(s.text)[1], 64)
+		v, ok := threshold(belowRe, s.text)
+		if !ok {
+			return Result{Unparsed: true, NotUnderstood: []string{belowRe.FindStringSubmatch(s.text)[1]}}, nil
+		}
 		q.Type, q.Predicate = ast.MetricFilter, &ast.Predicate{Op: "lt", Value: v}
 	case s.stateQuestion(m, q):
 	case s.e.re(regexp.MustCompile(`\b(?:high|elevated|too high)\b`), s.text) && m.DefaultThreshold != nil:

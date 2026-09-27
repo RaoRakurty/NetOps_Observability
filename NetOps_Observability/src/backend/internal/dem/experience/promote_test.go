@@ -193,7 +193,7 @@ func TestPromotionValidateRefusesWhatItCannotLink(t *testing.T) {
 }
 
 func TestPromotionStoreIsTenantKeyedAndIdempotent(t *testing.T) {
-	store := NewFileStore("")
+	store := newTestFileStore("")
 	ctx := context.Background()
 	a := Promotion{TenantID: "acme", ExperienceID: "exp-1", IncidentID: "inc-a", PromotedAt: testNow, PromotedBy: "alice"}
 	b := Promotion{TenantID: "globex", ExperienceID: "exp-1", IncidentID: "inc-b", PromotedAt: testNow, PromotedBy: "bob"}
@@ -292,7 +292,7 @@ func TestApplyPromotionsStampsTheLinkage(t *testing.T) {
 // ── the route ───────────────────────────────────────────────────────────────
 
 func TestPromoteRouteRefusesWhenNoIncidentRecordExists(t *testing.T) {
-	api, _ := promoteAPI(t, nil, NewFileStore(""), "acme")
+	api, _ := promoteAPI(t, nil, newTestFileStore(""), "acme")
 	// A REAL derived id: the 404-for-an-unknown-id check runs first on purpose,
 	// so that what a caller learns from probing an id never depends on which
 	// storage backend the operator happens to run.
@@ -315,7 +315,7 @@ func TestPromoteRouteRefusesWhenNoIncidentRecordExists(t *testing.T) {
 }
 
 func TestPromoteRouteRefusesAnUnknownOrForeignID(t *testing.T) {
-	api, _ := promoteAPI(t, newFakePromoter(), NewFileStore(""), "acme")
+	api, _ := promoteAPI(t, newFakePromoter(), newTestFileStore(""), "acme")
 	// Well-formed but not derived in this window: 404, never 403 — a 403 would
 	// confirm that the id exists somewhere.
 	code, _ := call(t, api.HandleIncidentItem, http.MethodPost,
@@ -337,7 +337,7 @@ func TestPromoteRouteRefusesAnUnknownOrForeignID(t *testing.T) {
 }
 
 func TestPromotedIncidentsAreStampedOnTheListAndTheItem(t *testing.T) {
-	store := NewFileStore("")
+	store := newTestFileStore("")
 	api, _ := promoteAPI(t, newFakePromoter(), store, "acme")
 	// Seed a promotion directly: the derived list is recomputed on every read,
 	// so a stored linkage for an id that IS derived must appear on both
@@ -382,7 +382,7 @@ func TestPromotedIncidentsAreStampedOnTheListAndTheItem(t *testing.T) {
 }
 
 func TestOneTenantsPromotionsAreInvisibleToAnother(t *testing.T) {
-	store := NewFileStore("")
+	store := newTestFileStore("")
 	api, _ := promoteAPI(t, newFakePromoter(), store, "acme")
 	id := derivedIncidentID(t, api, "acme")
 	if _, err := store.SavePromotion(context.Background(), Promotion{
@@ -407,7 +407,7 @@ func TestOneTenantsPromotionsAreInvisibleToAnother(t *testing.T) {
 }
 
 func TestPromoteStampsTheOwnerAndTheEvidenceClass(t *testing.T) {
-	store := NewFileStore("")
+	store := newTestFileStore("")
 	promoter := newFakePromoter()
 	api, counters := promoteAPI(t, promoter, store, "acme")
 	id := derivedIncidentID(t, api, "acme")
@@ -474,7 +474,7 @@ func TestPromoteStampsTheOwnerAndTheEvidenceClass(t *testing.T) {
 func TestAFailedPromotionSaysTheIncidentAlreadyExists(t *testing.T) {
 	promoter := newFakePromoter()
 	promoter.err = errors.New("the database is unavailable")
-	api, counters := promoteAPI(t, promoter, NewFileStore(""), "acme")
+	api, counters := promoteAPI(t, promoter, newTestFileStore(""), "acme")
 	id := derivedIncidentID(t, api, "acme")
 	code, body := call(t, api.HandleIncidentItem, http.MethodPost, IncidentItemPath+id+"/promote", "", nil)
 	if code != http.StatusInternalServerError {

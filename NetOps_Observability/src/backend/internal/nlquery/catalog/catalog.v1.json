@@ -1954,6 +1954,16 @@
      "physical": [
       "config_capture"
      ]
+    },
+    {
+     "value": "correlix_audit",
+     "aliases": [
+      "made in correlix",
+      "platform audit"
+     ],
+     "physical": [
+      "correlix_audit"
+     ]
     }
    ],
    "operators": [

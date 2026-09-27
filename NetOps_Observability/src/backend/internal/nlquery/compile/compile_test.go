@@ -11,6 +11,7 @@ package compile
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,6 +69,21 @@ func TestUnexplainedWordsMakeItUnparsed(t *testing.T) {
 		if r.AST != nil || !r.Unparsed || len(r.NotUnderstood) == 0 {
 			t.Errorf("%q must be Unparsed with the words it did not understand, got %+v", q, r)
 		}
+	}
+}
+
+// A threshold too large to be a finite number is not understood — it never
+// becomes a filter against +Inf that quietly matches nothing.
+func TestUnreadableThresholdIsUnparsed(t *testing.T) {
+	huge := "1" + strings.Repeat("0", 400)
+	for _, q := range []string{"devices with cpu above " + huge + " percent", "devices with cpu below " + huge + " percent"} {
+		r := run(t, q, cx)
+		if r.AST != nil || !r.Unparsed || len(r.NotUnderstood) != 1 || r.NotUnderstood[0] != huge {
+			t.Errorf("%.40q… must be Unparsed naming the number, got AST=%v unparsed=%v", q, r.AST != nil, r.Unparsed)
+		}
+	}
+	if r := run(t, "devices with cpu above 90 percent", cx); r.AST == nil || r.AST.Predicate == nil || r.AST.Predicate.Value != 90 {
+		t.Errorf("a normal threshold still compiles, got %+v", r)
 	}
 }
 

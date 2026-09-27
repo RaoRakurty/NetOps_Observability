@@ -26,7 +26,7 @@ func newJourney(tenant, name string) JourneyDefinition {
 
 func TestFileStoreScopesByTenant(t *testing.T) {
 	ctx := context.Background()
-	s := NewFileStore(filepath.Join(t.TempDir(), "exp.json"))
+	s := newTestFileStore(filepath.Join(t.TempDir(), "exp.json"))
 
 	a, err := s.CreateJourney(ctx, newJourney("acme", "A checkout"))
 	if err != nil {
@@ -62,7 +62,7 @@ func TestFileStoreScopesByTenant(t *testing.T) {
 
 func TestFileStoreChangesAreImmutableAndScoped(t *testing.T) {
 	ctx := context.Background()
-	s := NewFileStore("")
+	s := newTestFileStore("")
 	ch := ChangeEvent{
 		TenantID: "acme", Type: ChangeConfig, Object: "sw-1", Summary: "vlan edit",
 		Provenance: prov(SourceConfigDrift, -5*time.Minute),
@@ -96,7 +96,7 @@ func TestFileStoreSurvivesACorruptFileAndSaysSo(t *testing.T) {
 	if err := writeFile(path, []byte("{not json")); err != nil {
 		t.Fatal(err)
 	}
-	s := NewFileStore(path)
+	s := newTestFileStore(path)
 	if s.LoadErr() == nil {
 		t.Fatal("a corrupt store loaded silently — an empty table that is really a read failure is the worst of both")
 	}
@@ -110,7 +110,7 @@ func TestFileStoreDropsANonConcreteTenantBucket(t *testing.T) {
 	if err := writeFile(path, []byte(`{"journeys":{"*":[{"id":"jny-x","name":"n"}]}}`)); err != nil {
 		t.Fatal(err)
 	}
-	s := NewFileStore(path)
+	s := newTestFileStore(path)
 	if s.LoadErr() == nil {
 		t.Fatal("a wildcard tenant bucket was loaded without complaint")
 	}
@@ -148,7 +148,7 @@ func TestRecordChangeDoesNotCorruptTheChangeLogWhenTheFlushFails(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "exp.json")
-	s := NewFileStore(path)
+	s := newTestFileStore(path)
 
 	// Three, deliberately: a nil slice grown by three appends is len 3 cap 4, so
 	// the fourth append has a spare slot to scribble into.
@@ -206,7 +206,7 @@ func TestRecordChangeDoesNotCorruptTheChangeLogWhenTheFlushFails(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	reloaded := NewFileStore(path)
+	reloaded := newTestFileStore(path)
 	if err := reloaded.LoadErr(); err != nil {
 		t.Fatalf("the store wrote a file it cannot read back: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestRecordChangeDoesNotCorruptTheChangeLogWhenTheFlushFails(t *testing.T) {
 // the write must refuse.
 func TestUnreadableStoreFileIsNotAnEmptyOneAndIsNeverOverwritten(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "exp.json")
-	seed := NewFileStore(path)
+	seed := newTestFileStore(path)
 	kept, err := seed.CreateJourney(context.Background(), newJourney("acme", "Checkout"))
 	if err != nil {
 		t.Fatalf("seed: %v", err)
@@ -244,7 +244,7 @@ func TestUnreadableStoreFileIsNotAnEmptyOneAndIsNeverOverwritten(t *testing.T) {
 		t.Skip("this environment can read a 0000 file (running as root?), so the case cannot be staged")
 	}
 
-	s := NewFileStore(path)
+	s := newTestFileStore(path)
 	if s.LoadErr() == nil {
 		t.Fatal("an unreadable store loaded silently — the operator sees an empty table with no reason, and the next write destroys the file")
 	}
@@ -271,7 +271,7 @@ func TestUnreadableStoreFileIsNotAnEmptyOneAndIsNeverOverwritten(t *testing.T) {
 	if string(after) != string(before) {
 		t.Fatalf("the store file was rewritten while it could not be read:\nbefore %s\nafter  %s", before, after)
 	}
-	reopened := NewFileStore(path)
+	reopened := newTestFileStore(path)
 	if reopened.LoadErr() != nil {
 		t.Fatalf("the repaired file no longer loads: %v", reopened.LoadErr())
 	}
@@ -283,7 +283,7 @@ func TestUnreadableStoreFileIsNotAnEmptyOneAndIsNeverOverwritten(t *testing.T) {
 
 // A file that is ABSENT is still just an empty store, with nothing reported.
 func TestAbsentStoreFileStaysAnEmptyStore(t *testing.T) {
-	s := NewFileStore(filepath.Join(t.TempDir(), "nothing-here.json"))
+	s := newTestFileStore(filepath.Join(t.TempDir(), "nothing-here.json"))
 	if err := s.LoadErr(); err != nil {
 		t.Fatalf("a store that was never written reported %v", err)
 	}

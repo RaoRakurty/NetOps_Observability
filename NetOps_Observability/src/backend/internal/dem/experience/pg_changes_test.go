@@ -23,7 +23,9 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -35,10 +37,14 @@ import (
 // ── the stand-in relational seam ────────────────────────────────────────────
 
 // fakeChangeDB holds one tenant's dem_change_events table and answers the
-// statement ListChanges issues. It reads the BOUND ARGUMENTS by type — the time
-// bound (time.Time), the change-type list ([]string), the app and site strings
-// in that order, and the row limit (int) — and applies them the way PostgreSQL
-// would. Arguments the statement does not bind are not applied.
+// statements ListChanges and CountChanges issue. It does NOT know the argument
+// layout: it READS THE SQL to learn which column each placeholder is compared
+// with (`event_at >= $n`, `event_at <= $n`, `<column> = ANY($n)`,
+// `NOT (change_id = ANY($n))`, `LIMIT $n`) and applies exactly those
+// comparisons to the bound values, the way PostgreSQL would. A filter the
+// statement never binds is therefore a filter this database never applies —
+// which is the property under test — and a placeholder bound to the wrong
+// column fails the parity tests instead of passing by coincidence.
 type fakeChangeDB struct {
 	table []ChangeEvent
 	sql   string
@@ -49,56 +55,119 @@ func (f *fakeChangeDB) WithTenant(_ context.Context, _ string, _ bool, fn func(p
 	return fn(&fakeTx{db: f})
 }
 
+var (
+	fakeAnyRe   = regexp.MustCompile(`(NOT \()?(change_type|app|site|COALESCE\(data->>'seam', ''\)|lower\(actor\)|lower\(actor_id\)|lower\(actor_display\)|object|object_kind|source_system|change_id) = ANY\(\$(\d+)`)
+	fakeSinceRe = regexp.MustCompile(`event_at >= \$(\d+)`)
+	fakeUntilRe = regexp.MustCompile(`event_at <= \$(\d+)`)
+	fakeLimitRe = regexp.MustCompile(`LIMIT \$(\d+)`)
+)
+
+// fakeColumn reads the row value a SQL column expression names.
+func fakeColumn(c ChangeEvent, expr string) string {
+	switch expr {
+	case "change_type":
+		return c.Type
+	case "app":
+		return c.App
+	case "site":
+		return c.Site
+	case "COALESCE(data->>'seam', '')":
+		return c.Seam
+	case "lower(actor)":
+		return strings.ToLower(c.Actor)
+	case "lower(actor_id)":
+		return strings.ToLower(c.ActorID)
+	case "lower(actor_display)":
+		return strings.ToLower(c.ActorDisplay)
+	case "object":
+		return c.Object
+	case "object_kind":
+		return c.ObjectKind
+	case "source_system":
+		return c.SourceSystem
+	case "change_id":
+		return c.ID
+	}
+	panic("fake: unmapped column " + expr)
+}
+
+func argAt(args []any, pos string) any {
+	i, err := strconv.Atoi(pos)
+	if err != nil || i < 1 || i > len(args) {
+		panic("fake: placeholder $" + pos + " has no bound argument")
+	}
+	return args[i-1]
+}
+
 func (f *fakeChangeDB) query(sql string, args []any) []ChangeEvent {
 	f.sql, f.args = sql, args
 
-	var since time.Time
-	var types []string
-	var strs []string
-	limit := len(f.table)
-	for _, a := range args {
-		switch v := a.(type) {
-		case time.Time:
-			since = v
-		case []string:
-			types = v
-		case string:
-			strs = append(strs, v)
-		case int:
-			limit = v
-		case int32:
-			limit = int(v)
+	var since, until time.Time
+	if m := fakeSinceRe.FindStringSubmatch(sql); m != nil {
+		since = argAt(args, m[1]).(time.Time)
+	}
+	if m := fakeUntilRe.FindStringSubmatch(sql); m != nil {
+		if v, ok := argAt(args, m[1]).(time.Time); ok {
+			until = v
 		}
 	}
-	app, site := "", ""
-	if len(strs) > 0 {
-		app = strs[0]
+	limit := -1
+	if m := fakeLimitRe.FindStringSubmatch(sql); m != nil {
+		limit = argAt(args, m[1]).(int)
 	}
-	if len(strs) > 1 {
-		site = strs[1]
+	// placeholder → the column expressions compared with it, ORed together.
+	type anyFilter struct {
+		cols    []string
+		negated bool
+	}
+	filters := map[string]*anyFilter{}
+	order := []string{}
+	for _, m := range fakeAnyRe.FindAllStringSubmatch(sql, -1) {
+		af, ok := filters[m[3]]
+		if !ok {
+			af = &anyFilter{}
+			filters[m[3]] = af
+			order = append(order, m[3])
+		}
+		af.cols = append(af.cols, m[2])
+		af.negated = af.negated || m[1] != ""
 	}
 
-	typeSet := map[string]bool{}
-	for _, t := range types {
-		typeSet[t] = true
-	}
 	out := []ChangeEvent{}
 	for _, c := range f.table {
-		if c.EventAt.Before(since) {
+		c.applyDefaults()
+		if c.EventAt.Before(since) || (!until.IsZero() && c.EventAt.After(until)) {
 			continue
 		}
-		if len(typeSet) > 0 && !typeSet[c.Type] {
-			continue
+		keep := true
+		for _, pos := range order {
+			vals, _ := argAt(args, pos).([]string)
+			if len(vals) == 0 {
+				continue // cardinality 0: "no such filter"
+			}
+			hit := false
+			for _, col := range filters[pos].cols {
+				for _, v := range vals {
+					if fakeColumn(c, col) == v {
+						hit = true
+					}
+				}
+			}
+			if hit == filters[pos].negated {
+				keep = false
+				break
+			}
 		}
-		if app != "" && c.App != app {
-			continue
+		if keep {
+			out = append(out, c)
 		}
-		if site != "" && c.Site != site {
-			continue
-		}
-		out = append(out, c)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].EventAt.After(out[j].EventAt) })
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].EventAt.Equal(out[j].EventAt) {
+			return out[i].EventAt.After(out[j].EventAt)
+		}
+		return out[i].ID < out[j].ID
+	})
 	if limit >= 0 && len(out) > limit {
 		out = out[:limit]
 	}
@@ -136,8 +205,26 @@ func (tx *fakeTx) Prepare(context.Context, string, string) (*pgconn.StatementDes
 func (tx *fakeTx) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
 	panic("unused")
 }
-func (tx *fakeTx) QueryRow(context.Context, string, ...any) pgx.Row { panic("unused") }
-func (tx *fakeTx) Conn() *pgx.Conn                                  { return nil }
+
+// QueryRow answers CountChanges' `SELECT count(*)` over the same fake predicate.
+func (tx *fakeTx) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	if !strings.Contains(sql, "count(*)") {
+		panic("fake: only the count statement is answered by QueryRow")
+	}
+	return fakeCountRow{n: len(tx.db.query(sql, args))}
+}
+func (tx *fakeTx) Conn() *pgx.Conn { return nil }
+
+type fakeCountRow struct{ n int }
+
+func (r fakeCountRow) Scan(dest ...any) error {
+	p, ok := dest[0].(*int)
+	if len(dest) != 1 || !ok {
+		return errors.New("fake count row: scanned into one *int")
+	}
+	*p = r.n
+	return nil
+}
 
 type fakeRows struct {
 	data [][]byte
@@ -205,7 +292,7 @@ func TestBothBackendsBoundTheSameFilteredChangeSet(t *testing.T) {
 	ctx := context.Background()
 	corpus := busyTenantChanges()
 
-	file := NewFileStore("")
+	file := newTestFileStore("")
 	for _, c := range corpus {
 		if _, err := file.RecordChange(ctx, c); err != nil {
 			t.Fatalf("seed %s: %v", c.ID, err)

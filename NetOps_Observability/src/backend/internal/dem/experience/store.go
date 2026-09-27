@@ -49,13 +49,130 @@ var ErrStoreUnreadable = errors.New("experience: the store file could not be rea
 // ErrPromotionsFull is returned when a tenant is at its promotion ceiling.
 var ErrPromotionsFull = fmt.Errorf("experience: the promoted-incident table is full (max %d per tenant)", MaxPromotionsPerTenant)
 
+// ErrChangeTooOld refuses a change whose event_at is already outside
+// ChangeRetention. Storing it would only have it deleted by the next write —
+// a producer told "recorded" about a row that then silently vanished.
+var ErrChangeTooOld = fmt.Errorf("experience: the change happened longer ago than the ledger keeps changes (%s)", ChangeRetention)
+
+// MaxChangeFilterValues bounds each list-valued filter of a ChangeQuery. A
+// longer list is REFUSED, never clipped: clipping ExcludeIDs would return rows
+// the caller excluded, and clipping Actors would silently narrow the question.
+const MaxChangeFilterValues = 200
+
 // ChangeQuery bounds a change listing.
+//
+// EVERY field is applied by the store BEFORE the row limit — in SQL on the
+// Postgres backend, in filterChanges on the file backend — so a filtered read on
+// a busy tenant returns the matching rows, never the newest N rows post-filtered
+// down to nothing. The list-valued filters are "any of"; an empty list is "no
+// such filter". Both backends normalize the query through ONE function
+// (normalizeChangeQuery), so they cannot disagree about what a filter means.
 type ChangeQuery struct {
 	Since time.Time
+	// Until is the INCLUSIVE upper bound on event_at; zero means no bound.
+	Until time.Time
 	Types []string
 	App   string
 	Site  string
-	Limit int
+	// Apps / Sites / Seams are the any-of forms; App / Site above remain for
+	// the callers that ask about exactly one.
+	Apps  []string
+	Sites []string
+	Seams []string
+	// Actors matches the source actor, the canonical actor id OR the display
+	// label, case-insensitively — "who changed it" is asked in whichever of the
+	// three the operator happens to know.
+	Actors      []string
+	Objects     []string
+	ObjectKinds []string
+	// Sources matches ChangeEvent.SourceSystem.
+	Sources    []string
+	ExcludeIDs []string
+	Limit      int
+}
+
+// changeFilter is a ChangeQuery after normalization: trimmed, empties dropped,
+// types upper-cased, actors and sources lower-cased, every list non-nil.
+type changeFilter struct {
+	since, until                               time.Time
+	types, apps, sites, seams, actors, objects []string
+	objectKinds, sources, excludeIDs           []string
+	limit                                      int
+}
+
+// normalizeChangeQuery is the ONE interpretation of a ChangeQuery both
+// backends run. It refuses an over-long filter list rather than clipping it.
+func normalizeChangeQuery(q ChangeQuery) (changeFilter, error) {
+	f := changeFilter{since: q.Since, until: q.Until, limit: q.Limit}
+	var err error
+	list := func(name string, in []string, fold func(string) string) []string {
+		out := make([]string, 0, len(in))
+		if len(in) > MaxChangeFilterValues {
+			if err == nil {
+				err = fmt.Errorf("experience: the %s filter lists %d values, over the %d limit", name, len(in), MaxChangeFilterValues)
+			}
+			return out
+		}
+		seen := map[string]bool{}
+		for _, raw := range in {
+			v := fold(strings.TrimSpace(raw))
+			if v == "" || seen[v] {
+				continue
+			}
+			seen[v] = true
+			out = append(out, v)
+		}
+		return out
+	}
+	same := func(s string) string { return s }
+	f.types = list("type", q.Types, strings.ToUpper)
+	f.apps = list("app", append(append([]string{}, q.Apps...), q.App), same)
+	f.sites = list("site", append(append([]string{}, q.Sites...), q.Site), same)
+	f.seams = list("seam", q.Seams, same)
+	f.actors = list("actor", q.Actors, strings.ToLower)
+	f.objects = list("object", q.Objects, same)
+	f.objectKinds = list("object kind", q.ObjectKinds, same)
+	f.sources = list("source", q.Sources, strings.ToLower)
+	f.excludeIDs = list("exclude", q.ExcludeIDs, same)
+	return f, err
+}
+
+// matches is the file backend's form of the predicate the Postgres backend
+// writes in SQL (pgChangeWhere). Kept beside normalizeChangeQuery so the two
+// read as one definition.
+func (f changeFilter) matches(c ChangeEvent) bool {
+	if !f.since.IsZero() && c.EventAt.Before(f.since) {
+		return false
+	}
+	if !f.until.IsZero() && c.EventAt.After(f.until) {
+		return false
+	}
+	anyOf := func(vals []string, v string) bool {
+		if len(vals) == 0 {
+			return true
+		}
+		for _, w := range vals {
+			if w == v {
+				return true
+			}
+		}
+		return false
+	}
+	if !anyOf(f.types, c.Type) || !anyOf(f.apps, c.App) || !anyOf(f.sites, c.Site) ||
+		!anyOf(f.seams, c.Seam) || !anyOf(f.objects, c.Object) ||
+		!anyOf(f.objectKinds, c.ObjectKind) || !anyOf(f.sources, c.SourceSystem) {
+		return false
+	}
+	if len(f.actors) > 0 && !anyOf(f.actors, strings.ToLower(c.Actor)) &&
+		!anyOf(f.actors, strings.ToLower(c.ActorID)) && !anyOf(f.actors, strings.ToLower(c.ActorDisplay)) {
+		return false
+	}
+	for _, id := range f.excludeIDs {
+		if id == c.ID {
+			return false
+		}
+	}
+	return true
 }
 
 // Store is the persistence seam.
@@ -78,7 +195,17 @@ type Store interface {
 	// wrong by construction. The count is the only way to answer it honestly,
 	// so it is part of the seam rather than something each caller approximates.
 	CountChanges(ctx context.Context, tenant string, q ChangeQuery) (int, error)
+	// RecordChange is idempotent on (tenant, id): a repeated id returns without
+	// rewriting the recorded fact. It refuses a change older than
+	// ChangeRetention (ErrChangeTooOld), and as a side effect ages out up to
+	// changePruneBatch of THIS tenant's expired rows, so retention needs no
+	// sweeper that would have to enumerate tenants.
 	RecordChange(ctx context.Context, in ChangeEvent) (ChangeEvent, error)
+	// PruneChanges deletes at most max of ONE tenant's changes whose event_at is
+	// before `before`, returning how many went. It is the retention mechanism,
+	// exported so an operator job or a test can drive it directly; it never
+	// reaches another tenant's rows (RLS on Postgres, the bucket on file).
+	PruneChanges(ctx context.Context, tenant string, before time.Time, max int) (int, error)
 
 	// Promotions are the THIRD persisted object (tracker 255): the durable link
 	// from a derived experience incident to the platform incident record it
@@ -96,11 +223,22 @@ type Store interface {
 // EnvStoreFile is the file backend's path knob.
 const EnvStoreFile = "DEM_EXPERIENCE_FILE"
 
-// changeRetention bounds the file backend's change log per tenant. Changes are
-// an append-only feed and would otherwise grow without limit; the OLDEST are
-// dropped, which is the right end to lose — a change from last month cannot be
-// the cause of an incident inside the lookback.
-const changeRetention = 2000
+// maxChangeRead bounds ONE change read on either backend, whatever limit the
+// caller asked for (§9: a read is bounded even when its caller is not).
+const maxChangeRead = 2000
+
+// fileChangeCeiling is the FILE backend's per-tenant memory bound, on top of
+// age retention. The file backend holds every row in memory and rewrites the
+// whole file on every write, so it needs a count bound the Postgres backend does
+// not; the oldest rows go first. It is the compat/dev backend (Postgres is the
+// default for installs, tracker 245), and the bound is stated here rather than
+// hidden: a file-backed tenant keeps the newer of 180 days or 2000 changes.
+const fileChangeCeiling = 2000
+
+// changePruneBatch bounds how many expired rows one RecordChange ages out, so a
+// write never turns into an unbounded delete (§9). A tenant writing at all
+// drains its backlog at this rate per write, far faster than rows expire.
+const changePruneBatch = 500
 
 // MaxPromotionsPerTenant bounds the file backend's promotion table. Promotions
 // are operator decisions, so the ceiling is generous and hitting it is a
@@ -145,12 +283,22 @@ type filePayload struct {
 // like one a tenant never wrote — AND refuses every write from then on, so the
 // file it could not read is never replaced by an empty one.
 func NewFileStore(path string) *FileStore {
+	return NewFileStoreWithClock(path, func() time.Time { return time.Now().UTC() })
+}
+
+// NewFileStoreWithClock is NewFileStore with the clock injected. The clock
+// decides change retention (what is aged out on load and on write), so a test
+// that pins it passes the same way in a year as it does today.
+func NewFileStoreWithClock(path string, now func() time.Time) *FileStore {
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
+	}
 	s := &FileStore{
 		path:       path,
 		journeys:   map[string]map[string]JourneyDefinition{},
 		changes:    map[string][]ChangeEvent{},
 		promotions: map[string]map[string]Promotion{},
-		now:        func() time.Time { return time.Now().UTC() },
+		now:        now,
 	}
 	if path == "" {
 		return s
@@ -210,7 +358,9 @@ func NewFileStore(path string) *FileStore {
 			}
 			s.changes[t] = append(s.changes[t], c)
 		}
-		s.changes[t] = trimChanges(s.changes[t])
+		// Rows past retention are aged out on load, not reported: expiring is
+		// the retention rule working, not a defect in the file.
+		s.changes[t] = trimChanges(s.changes[t], s.now())
 	}
 	for rawTenant, list := range payload.Promotions {
 		t := normTenant(rawTenant)
@@ -398,9 +548,13 @@ func (s *FileStore) ListChanges(_ context.Context, tenant string, q ChangeQuery)
 	if err != nil {
 		return []ChangeEvent{}, nil
 	}
+	f, ferr := normalizeChangeQuery(q)
+	if ferr != nil {
+		return nil, ferr
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return filterChanges(s.changes[t], q), nil
+	return filterChanges(s.changes[t], f), nil
 }
 
 // CountChanges counts the matching rows with the LIMIT deliberately dropped —
@@ -410,10 +564,63 @@ func (s *FileStore) CountChanges(_ context.Context, tenant string, q ChangeQuery
 	if err != nil {
 		return 0, nil
 	}
-	q.Limit = 0
+	f, ferr := normalizeChangeQuery(q)
+	if ferr != nil {
+		return 0, ferr
+	}
+	f.limit = -1 // no limit: counting is the point
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(filterChanges(s.changes[t], q)), nil
+	return len(filterChanges(s.changes[t], f)), nil
+}
+
+// PruneChanges ages out at most max of ONE tenant's expired changes. Only that
+// tenant's bucket is walked, so no other tenant's rows are reachable from here.
+// Like RecordChange it persists FIRST and adopts SECOND, so a failed write
+// leaves both the file and memory as they were.
+func (s *FileStore) PruneChanges(_ context.Context, tenant string, before time.Time, max int) (int, error) {
+	t, err := concreteTenant(tenant)
+	if err != nil {
+		return 0, err
+	}
+	if max <= 0 {
+		return 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next, removed := pruneOlder(s.changes[t], before, max)
+	if removed == 0 {
+		return 0, nil
+	}
+	if err := s.flushViewLocked(map[string][]ChangeEvent{t: next}); err != nil {
+		return 0, err
+	}
+	s.changes[t] = next
+	return removed, nil
+}
+
+// pruneOlder returns a NEW slice without at most max rows older than before
+// (the oldest go first), and how many it dropped. It never writes into the
+// input's backing array.
+func pruneOlder(list []ChangeEvent, before time.Time, max int) ([]ChangeEvent, int) {
+	expired := 0
+	for _, c := range list {
+		if c.EventAt.Before(before) {
+			expired++
+		}
+	}
+	if expired == 0 {
+		return list, 0
+	}
+	if expired > max {
+		expired = max
+	}
+	// The log is kept newest-first, so the expired rows are its tail; drop the
+	// OLDEST `expired` of them.
+	ordered := make([]ChangeEvent, len(list))
+	copy(ordered, list)
+	sortChangesNewestFirst(ordered)
+	return ordered[:len(ordered)-expired], expired
 }
 
 func (s *FileStore) RecordChange(_ context.Context, in ChangeEvent) (ChangeEvent, error) {
@@ -422,6 +629,10 @@ func (s *FileStore) RecordChange(_ context.Context, in ChangeEvent) (ChangeEvent
 	}
 	if err := in.Validate(); err != nil {
 		return ChangeEvent{}, err
+	}
+	now := s.now()
+	if in.EventAt.Before(now.Add(-ChangeRetention)) {
+		return ChangeEvent{}, ErrChangeTooOld
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -439,7 +650,7 @@ func (s *FileStore) RecordChange(_ context.Context, in ChangeEvent) (ChangeEvent
 	// will succeed.
 	next := make([]ChangeEvent, 0, len(s.changes[t])+1)
 	next = append(next, s.changes[t]...)
-	next = trimChanges(append(next, in))
+	next = trimChanges(append(next, in), now)
 	// Persist FIRST, adopt SECOND. The other order put a SAVED SLICE HEADER back
 	// on failure, which restores a mutated array under the old length: the
 	// refused change stayed in the log and the oldest kept change fell out of
@@ -518,44 +729,52 @@ func sortPromotions(list []Promotion) {
 	})
 }
 
-func filterChanges(list []ChangeEvent, q ChangeQuery) []ChangeEvent {
-	types := map[string]bool{}
-	for _, t := range q.Types {
-		types[strings.ToUpper(strings.TrimSpace(t))] = true
-	}
+// filterChanges applies a normalized filter, newest first, then the limit: a
+// non-positive limit means maxChangeRead for a read, and a NEGATIVE one means
+// "no limit" (CountChanges). Ties on event_at order by id so the two backends
+// agree on which row a limit cuts.
+func filterChanges(list []ChangeEvent, f changeFilter) []ChangeEvent {
 	out := make([]ChangeEvent, 0, len(list))
 	for _, c := range list {
-		if !q.Since.IsZero() && c.EventAt.Before(q.Since) {
-			continue
+		if f.matches(c) {
+			out = append(out, c)
 		}
-		if len(types) > 0 && !types[c.Type] {
-			continue
-		}
-		if q.App != "" && c.App != q.App {
-			continue
-		}
-		if q.Site != "" && c.Site != q.Site {
-			continue
-		}
-		out = append(out, c)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		return out[i].EventAt.After(out[j].EventAt)
-	})
-	if q.Limit > 0 && len(out) > q.Limit {
-		out = out[:q.Limit]
+	sortChangesNewestFirst(out)
+	limit := f.limit
+	if limit == 0 || limit > maxChangeRead {
+		limit = maxChangeRead
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	return out
 }
 
-func trimChanges(list []ChangeEvent) []ChangeEvent {
+func sortChangesNewestFirst(list []ChangeEvent) {
 	sort.SliceStable(list, func(i, j int) bool {
-		return list[i].EventAt.After(list[j].EventAt)
+		if !list[i].EventAt.Equal(list[j].EventAt) {
+			return list[i].EventAt.After(list[j].EventAt)
+		}
+		return list[i].ID < list[j].ID
 	})
-	if len(list) > changeRetention {
-		list = list[:changeRetention]
+}
+
+// trimChanges applies the file backend's two bounds to one tenant's log: age
+// (ChangeRetention, measured from now) and the fileChangeCeiling memory bound.
+func trimChanges(list []ChangeEvent, now time.Time) []ChangeEvent {
+	cutoff := now.Add(-ChangeRetention)
+	kept := list[:0:0]
+	for _, c := range list {
+		if !c.EventAt.Before(cutoff) {
+			kept = append(kept, c)
+		}
 	}
-	return list
+	sortChangesNewestFirst(kept)
+	if len(kept) > fileChangeCeiling {
+		kept = kept[:fileChangeCeiling]
+	}
+	return kept
 }
 
 func sortJourneys(list []JourneyDefinition) {

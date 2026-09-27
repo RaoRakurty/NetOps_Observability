@@ -117,7 +117,7 @@ Evidence paths are relative to `src/backend/` unless prefixed. "Closes in" names
 | 30 | Operational investigation trace, no chain-of-thought | PARTIAL | "Investigated N sources" after the fact, free-form path only (`Opsis.tsx:775`); no plan/queries/hypotheses view, no streaming | N-E2, N-E3 |
 | 31 | Standard Iris RCA result contract | PARTIAL | Data exists across `corr_objects` + rca-report; no single typed contract for Iris | N-B1 |
 | 32 | Ownership from deterministic metadata | SHIPPED | Hypothesis `owner` + seam owners (`internal/tenant/governance.go:64`); exposed as a tool in N-B2 | N-B2 |
-| 33 | Change correlation (temporal ≠ causal) | PARTIAL | Engine rule: a change can corroborate, never confirm (INVARIANTS 402-403); cloud onset-anchored change read (`cloud_investigation_changes.go:160`); network change ledger unfed | N-D1…D3 |
+| 33 | Change correlation (temporal ≠ causal) | PARTIAL | Engine rule: a change can corroborate, never confirm (INVARIANTS 402-403); cloud onset-anchored change read (`cloud_investigation_changes.go:160`); network ledger now fed by config capture + Correlix audit (N-D2, 2026-09-27); device-syslog/trap/Versa/cloud producers still open | N-D2 (rest), N-D3 |
 | 34 | Deterministic blast radius | PARTIAL | `affected` JSON + `app_impact` on `corr_objects`; no tool, no user counts | N-B2 |
 | 35 | Append-only decision ledger (events, model/tool version, arg/result hashes) | MISSING | Log lines only (`ai_handlers.go:172-176`) | N-A6 |
 | 36 | Prompt-injection channel separation | SHIPPED | Non-overridable data fence at 5 rendering boundaries (commercial item 4); extended to new channels in N-C5/N-F3 | — |
@@ -175,7 +175,7 @@ Evidence paths are relative to `src/backend/` unless prefixed. "Closes in" names
 | 21 | Controlled synthetic paraphrases validated against same AST | MISSING | — | N-C6 |
 | 22 | Capture query telemetry + operator corrections, no auto-retrain | PARTIAL | Thumbs only, `Mode` never stored (`ai_handlers.go:332-335`) | N-C8 |
 | 23 | Optional future fine-tuning to AST | DEFERRED | Owner decision stands; revisit only with a measured corpus | — |
-| 24 | Normalized `ChangeEvent` + actor normalization | PARTIAL | `dem_change_events` + `experience.ChangeEvent` exist (`internal/dem/experience/change.go:81`), no producers | N-D1, N-D2, N-D4 |
+| 24 | Normalized `ChangeEvent` + actor normalization | PARTIAL | Provenance columns + 180-day retention (migration 0052, N-D1); producers `config_capture` and `correlix_audit` + `changeledger.NormalizeActor` (N-D2 part, N-D4) shipped 2026-09-27; syslog `CONFIG_I`/`UI_COMMIT`, trap, Versa and cloud producers open — evidence each needs is in N-D2 below | N-D2 (rest) |
 | 25 | Change questions (who/what/when/ticket/same person/other sites/before-after/rollback) | MISSING | — | N-D3, N-C5 |
 | 26 | Temporal correlation ≠ causality in wording | PARTIAL | Engine rule shipped; Iris wording + label in N-B4 | N-B4, N-D3 |
 | 27 | Change timeline with restrained accents | MISSING | `EventTimeline` private (`components/rca/RcaWorkspace.tsx:130`) | N-E3 |
@@ -387,10 +387,8 @@ returns data, `pgintegration` when it touches PG, and the CI gate (§12). Effort
 
 | # | Item | Depends | ew |
 |---|---|---|---:|
-| N-D1 | **Extend `dem_change_events`** (additive migration): `source_system`, `actor_type/actor_id/actor_display`, `ticket_ref`, `object`, `automation` flag, `detected_at` vs `event_at`; replace the 20 k row cap with age-based retention; index (tenant, object, event_at) | — | 1 |
-| N-D2 | **Producers** (idempotent): configstore capture → CONFIG_CHANGE (trigger actor stored on the version row); trap `device_config_change`; syslog `CONFIG_I`/`UI_COMMIT` un-shadowed after fidelity check; Versa `controller_policy_change`; cloud change feed; Correlix audit with the target object | D1 | 3 |
+| N-D2 | **Remaining producers** (config capture + Correlix audit SHIPPED 2026-09-27, `internal/changeledger`). Open: (a) syslog `CONFIG_I`/`UI_COMMIT` — un-shadow only after real-traffic hit rate (`corr_parser_shadow_hits_total{rule_id="syslog.config.change"}`), per-vendor lab fixtures proving user/source/line extraction, and a false-positive check; then bridge into the ledger with a deterministic id, device user kept verbatim; (b) trap `trap.config.change` feeds only corr_signals — same bridge; (c) Versa `controller_policy_change` — needs an exact event-type allowlist (today a substring match on "policy" also catches violations) and real Concerto samples; (d) cloud — producer keyed on the provider event id, or a decision to keep cloud changes read-time only | — | 2 |
 | N-D3 | **Change APIs + tools**: `/api/changes[/{id}[/diff]]`; incident-anchored change read (cloud pattern); causal vs temporal label taken from the engine's chain only; structured before/after + redacted diff | D1, B1 | 2 |
-| N-D4 | **Actor normalization**: map source actors to Correlix identities where the canonical identity store (tracker 300) knows them; otherwise keep source identity, never guess | D2 | 1 |
 
 ### Phase E — Presentation and the operator experience (Part 2 §27–37, 46, 64–66; Part 1 §30)
 

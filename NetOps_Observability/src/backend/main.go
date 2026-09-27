@@ -43,6 +43,7 @@ import (
 	// VMALERT-WEBHOOK-END
 	"netops/backend/internal/applog"
 	"netops/backend/internal/audit"
+	"netops/backend/internal/changeledger"
 	// BMP-BEGIN
 	"netops/backend/internal/bmp"
 	// BMP-END
@@ -245,6 +246,10 @@ type server struct {
 	experienceStore      experience.Store
 	experienceAPI        *experience.API
 	demExperienceMetrics *experience.Counters
+	// changeLedger feeds experienceStore's change ledger from the config
+	// capture and the audit middleware (internal/changeledger, Iris N-D2).
+	// nil when it could not be built; both feeds then say so in the log.
+	changeLedger *changeledger.Producer
 	// experienceEvents is the bounded producer behind POST /api/dem/events and
 	// /business-events (tracker 254). nil when it could not be built, and the
 	// routes then answer 503 with the reason rather than 202 for events with
@@ -1479,6 +1484,18 @@ func newServer() *server {
 	}
 	srv.demExperienceMetrics = experience.NewCounters()
 	srv.experienceStore = newExperienceStore()
+	// The change ledger's producers (Iris N-D2): config captures and audited
+	// mutations → srv.experienceStore. Its queue is drained by the
+	// "change-ledger" worker started beside the others.
+	if cl, err := changeledger.New(changeledger.Deps{
+		Sink:      srv.experienceStore,
+		Directory: changeLedgerDirectory{users: srv.users},
+		LogWarn:   func(m string, f map[string]any) { logWarn("change.ledger", m, f) },
+	}); err != nil {
+		logError("change.ledger", "the change-ledger producers could not be built — configuration changes and audited mutations will NOT appear in the change feed", errf(err))
+	} else {
+		srv.changeLedger = cl
+	}
 	if q, err := newExperienceEventLane(); err != nil {
 		logError("dem", "the experience event lane could not be built — POST /api/dem/events and /api/dem/business-events will answer 503 and no first-party RUM or business evidence can be collected", errf(err))
 	} else {
@@ -2518,6 +2535,10 @@ func Run() {
 		workers.start("bgp-watch", func() { eval.Run(ctx) })
 	}
 	// BGP-WATCH-END
+	if srv.changeLedger != nil {
+		cl := srv.changeLedger
+		workers.start("change-ledger", func() { cl.Run(ctx) })
+	}
 	// CONFIG-BACKUP-BEGIN — Config Backup & Drift (P3-CFG): capture over the SSH
 	// gateway → sealed, content-addressed version store → drift verdict →
 	// ConfigDrift finding onto netops.security. Opt-in and default-off; with the
@@ -4301,6 +4322,7 @@ func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, errors.New("device was not deleted"))
 			return
 		}
+		changeledger.SetTarget(r.Context(), "device", id) // the change ledger's target (N-D2)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.Header().Set("Allow", "GET, DELETE")
@@ -4593,6 +4615,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 		// first day of the lane and rendered nowhere: nothing called Write, so
 		// a DEM ingest that started refusing every event was invisible here.
 		s.demExperienceMetrics.Write(w)
+	}
+	if s.changeLedger != nil {
+		s.changeLedger.Metrics().Write(w)
 	}
 	if s.secMetrics != nil {
 		s.secMetrics.Write(w)
@@ -7479,6 +7504,7 @@ func (s *server) buildConfigBackup() error {
 		Metrics:      configstore.NewMetrics(),
 		OnCapture:    drift.Observe,
 		OnFailure:    drift.OnFailure,
+		OnNewVersion: s.configChangeToLedger,
 		Authz:        s.configAuthz,
 		Audit:        s.configAudit,
 		AuditCapture: s.configCaptureAudit,
@@ -7496,6 +7522,32 @@ func (s *server) buildConfigBackup() error {
 	s.configDrift, s.configBackup = drift, mgr
 	s.configAPI = configstore.NewAPI(mgr, drift.StatusFor)
 	return nil
+}
+
+// configChangeToLedger adapts a stored NEW configuration version onto the change
+// ledger's config_capture producer (Iris N-D2): the device's site from the
+// operator's device→site binding (else the discovery-stamped site label — the
+// geomap's order), the trigger split into kind and principal. Thin wiring; the
+// change itself is built and written by internal/changeledger.
+func (s *server) configChangeToLedger(ctx context.Context, ev configstore.NewVersionEvent) error {
+	if s.changeLedger == nil {
+		return errors.New("the change-ledger producer is not running")
+	}
+	site := ""
+	if b, ok := s.deviceSites.Get(ev.Tenant, false, ev.Device.ID); ok {
+		site = b.Site
+	} else if s.discovery != nil {
+		if d, found := s.discovery.Get(ev.Device.ID); found && deviceTenant(d) == configstore.NormTenant(ev.Tenant) {
+			site = d.Labels["site"]
+		}
+	}
+	kind, subject := configstore.SplitTrigger(ev.Version.Trigger)
+	return s.changeLedger.RecordConfigCapture(ctx, changeledger.ConfigCapture{
+		Tenant: ev.Tenant, DeviceID: ev.Device.ID, DeviceName: ev.Device.Name, Site: site,
+		SHA: ev.Version.SHA, PreviousSHA: ev.PreviousSHA, HasPrevious: ev.HasPrevious,
+		CapturedAt: ev.Version.CapturedAt, TriggerKind: kind, TriggerSubject: subject,
+		Drift: ev.Version.Drift, Added: ev.Version.Added, Removed: ev.Version.Removed,
+	})
 }
 
 // configHardeningSource is the seam internal/seclane's Deps.ConfigSource takes.

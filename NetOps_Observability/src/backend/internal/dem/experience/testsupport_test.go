@@ -15,6 +15,14 @@ var testNow = time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 
 func testWindow() Window { return NewWindow(testNow.Add(-time.Hour), testNow) }
 
+// newTestFileStore is the file store on testNow's clock. Retention is measured
+// against the store's clock, so a store on the real clock would age testNow's
+// changes out once the calendar moved past ChangeRetention, and every test that
+// records one would start failing for no reason in the code.
+func newTestFileStore(path string) *FileStore {
+	return NewFileStoreWithClock(path, func() time.Time { return testNow })
+}
+
 // prov builds a valid provenance block at an offset from testNow.
 func prov(source string, offset time.Duration) Provenance {
 	at := testNow.Add(offset)

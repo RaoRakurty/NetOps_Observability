@@ -1318,13 +1318,19 @@ func (a *API) recordChange(w http.ResponseWriter, r *http.Request) {
 	if src == "" {
 		src = SourceManual
 	}
-	actor := cw.Actor
-	if actor == "" {
-		actor = p.Subject
+	actor, actorType, actorID := cw.Actor, "", ""
+	if strings.TrimSpace(actor) == "" {
+		// Nobody named an actor, so the actor is the authenticated caller — a
+		// Correlix principal, whose id IS the canonical identity (N-D4). A body
+		// that names someone else is kept verbatim with type unknown: the API
+		// cannot vouch for who that string refers to.
+		actor, actorType, actorID = p.Subject, ChangeActorUser, p.Subject
 	}
 	ch := ChangeEvent{
 		TenantID: tenant, // from the TOKEN, never the body
-		Type:     cw.Type, Actor: actor, Object: cw.Object, ObjectKind: cw.ObjectKind,
+		Type:     cw.Type, Actor: actor, ActorType: actorType, ActorID: actorID,
+		SourceSystem: SourceSystemLedger,
+		Object:       cw.Object, ObjectKind: cw.ObjectKind,
 		Summary: cw.Summary, Before: cw.Before, After: cw.After,
 		ReleaseID: cw.ReleaseID, RollbackRef: cw.RollbackRef,
 		Site: cw.Site, App: cw.App, Seam: cw.Seam, Cohort: cw.Cohort,

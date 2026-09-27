@@ -115,6 +115,30 @@ func TestChangeTypeEnumMatchesStoreAndMigration(t *testing.T) {
 	}
 }
 
+// The change ledger's producers (N-D2) are named by source_system; a producer
+// the catalog does not list can be read but never asked for by name.
+func TestChangeSourceEnumMatchesTheProducers(t *testing.T) {
+	root, c := projectRoot(t), MustLoad()
+	d, ok := c.Dimension("change", "source")
+	if !ok {
+		t.Fatal("change.source missing")
+	}
+	var cat []string
+	for _, v := range d.Enum {
+		cat = append(cat, v.Value)
+	}
+	sort.Strings(cat)
+	src := readFile(t, root, "src/backend/internal/dem/experience/change.go")
+	var consts []string
+	for _, m := range regexp.MustCompile(`SourceSystem[A-Za-z]+\s*=\s*"([a-z_]+)"`).FindAllStringSubmatch(src, -1) {
+		consts = append(consts, m[1])
+	}
+	sort.Strings(consts)
+	if len(consts) == 0 || strings.Join(cat, ",") != strings.Join(consts, ",") {
+		t.Fatalf("change sources drifted:\n catalog   %v\n producers %v", cat, consts)
+	}
+}
+
 func TestSeamEnumMatchesTheEngine(t *testing.T) {
 	root, c := projectRoot(t), MustLoad()
 	eng := readFile(t, root, "src/correlation/engine.py")
