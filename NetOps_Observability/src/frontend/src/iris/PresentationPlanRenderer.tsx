@@ -191,12 +191,19 @@ export default function PresentationPlanRenderer({
   const empty = isEmptyResult(result);
   const groupField = hint?.group_by?.[0];
 
-  const renderView = (view: ViewType): ReactNode => {
+  const renderView = (view: ViewType, secondary = false): ReactNode => {
     if (empty && DATA_VIEWS.has(view)) return null;
     switch (view) {
       case "SUMMARY":
         return <SummaryView result={result} plan={plan} />;
       case "TABLE":
+        // A series-only answer (metric_series carries series, never rows) has
+        // no rows to tabulate. As the second view, "Nothing found in this
+        // window" under the chart that just drew the data would contradict it,
+        // so there is no second view; as the only view, the series are drawn.
+        if (result.rows.length === 0) {
+          return secondary ? null : <TimeSeriesView result={result} onDrill={handleDrill} />;
+        }
         return result.rows.some(isChangeRow) ? (
           <ChangeTable rows={result.rows} result={result} plan={plan} />
         ) : (
@@ -303,6 +310,8 @@ export default function PresentationPlanRenderer({
   };
 
   const wtext = windowText(result);
+  const secondaryNode =
+    plan.secondary_view && !(empty && DATA_VIEWS.has(plan.secondary_view)) ? renderView(plan.secondary_view, true) : null;
   return (
     <section className="iris-answer" aria-label={plan.title}>
       <header className="iris-answer-head">
@@ -356,9 +365,7 @@ export default function PresentationPlanRenderer({
       ) : (
         <>
           <div className="iris-view">{renderView(plan.primary_view)}</div>
-          {plan.secondary_view && !(empty && DATA_VIEWS.has(plan.secondary_view)) && (
-            <div className="iris-view iris-view-secondary">{renderView(plan.secondary_view)}</div>
-          )}
+          {secondaryNode !== null && <div className="iris-view iris-view-secondary">{secondaryNode}</div>}
         </>
       )}
 

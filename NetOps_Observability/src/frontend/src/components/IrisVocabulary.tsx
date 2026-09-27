@@ -366,10 +366,10 @@ export default function IrisVocabulary() {
           {rows.length > 0 && (
             <div style={{ overflowX: "auto" }}>
               <table style={{ ...text14, borderCollapse: "collapse", marginTop: 4 }}>
-                <thead><tr>{cols.map((c) => <th key={c} style={{ textAlign: "left", padding: "2px 8px" }}>{c}</th>)}</tr></thead>
+                <thead><tr>{cols.map((c) => <th key={c} style={{ ...text14, textAlign: "left", padding: "2px 8px" }}>{c}</th>)}</tr></thead>
                 <tbody>
                   {rows.slice(0, MAX_ROWS_SHOWN).map((r, i) => (
-                    <tr key={i}>{cols.map((c) => <td key={c} style={{ padding: "2px 8px" }}>{cell(r[c])}</td>)}</tr>
+                    <tr key={i}>{cols.map((c) => <td key={c} style={{ ...text14, padding: "2px 8px" }}>{cell(r[c])}</td>)}</tr>
                   ))}
                 </tbody>
               </table>

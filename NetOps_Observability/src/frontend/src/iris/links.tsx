@@ -28,6 +28,20 @@ export function irisHref(kind: string, id: string): string | null {
 }
 
 /**
+ * The safe href for a citation on an Iris answer, or null (render as text).
+ * The engine writes in-app citations as hash routes ("#/monitoring/…"), which
+ * cannot leave the document; a "/…" path goes through safeCiteHref. Everything
+ * else — "" (a query citation has no page), "javascript:", "https://…",
+ * "//host" — is not a link: an empty href is a full reload of the app, and the
+ * others are the reasons links are checked at all.
+ */
+export function answerCiteHref(href: string | undefined): string | null {
+  const h = (href || "").trim();
+  if (h.startsWith("#/")) return h;
+  return safeCiteHref(h);
+}
+
+/**
  * A reference that is a link when it can be one. `href` (e.g. from a
  * recommendation) is checked with safeCiteHref; otherwise kind+id is mapped.
  */

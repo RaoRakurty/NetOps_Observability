@@ -161,6 +161,12 @@ describe("3 · try a question", () => {
     expect(res).toHaveTextContent("1 row (more exist — showing the first page) · from change_ledger in 7 ms");
     expect(res).toHaveTextContent("<b>x</b>"); // text, not markup
     expect(res.querySelector("b")).toBeNull();
+    // Headers and cells carry the 14 px body size themselves: the global th/td
+    // rule is 12 px, so inheriting from the table was not enough (found by the
+    // N-E5 browser spec).
+    for (const el of Array.from(res.querySelectorAll("th, td"))) {
+      expect((el as HTMLElement).style.fontSize).toBe("14px");
+    }
   });
 
   it("a declined request says so and offers nothing to run", async () => {
