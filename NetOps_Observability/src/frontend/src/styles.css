@@ -2004,7 +2004,10 @@ code, kbd, pre, .mono, td.mono {
 .op-iconbtn:hover:not(:disabled) { background: var(--hover); border-color: var(--accent-ring); }
 .op-iconbtn:disabled { opacity: .45; cursor: default; }
 
-.op-settings { padding: 14px; border-bottom: 1px solid var(--panel-border); background: var(--bg); }
+/* The settings / help pane scrolls inside the fixed drawer. Without it the
+   workspace settings plus the Iris vocabulary (≈1 000 px) ran past the bottom
+   of the drawer with no way to reach them (found by the N-E5 browser spec). */
+.op-settings { padding: 14px; border-bottom: 1px solid var(--panel-border); background: var(--bg); min-height: 0; overflow-y: auto; }
 .op-field { display: grid; gap: 6px; margin-bottom: 13px; font-size: 14px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--muted); }
 .op-field > span { display: inline-flex; align-items: center; gap: 6px; }
 /* Modern input boxes — rounded, hairline, accent focus glow (matches the panel). */

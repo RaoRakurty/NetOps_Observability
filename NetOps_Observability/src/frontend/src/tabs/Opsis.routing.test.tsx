@@ -256,6 +256,39 @@ describe("Opsis — a data answer renders its result as data (tracker 337 N-G4)"
   });
 });
 
+describe("Opsis — a citation is a link only when it is a safe in-app one (tracker 337 N-E5)", () => {
+  // Found by the N-E5 browser spec: the data arm cites its query with href ""
+  // and the box rendered <a href="">, so clicking the citation reloaded the
+  // whole app (route and drawer gone). A hostile href rendered as a live link.
+  it("renders an empty or unsafe href as text and keeps the engine's hash routes", async () => {
+    aiAsk.mockResolvedValue(citedAnswer({
+      citations: [
+        { id: "query:q1", kind: "query", label: "Query 9f2c", href: "" },
+        { id: "evil", kind: "finding", label: "evil-cite", href: "javascript:alert(1)" },
+        { id: "off", kind: "finding", label: "off-origin", href: "//evil.example/x" },
+        { id: "problem:abc", kind: "finding", label: "dia-egress", href: "#/monitoring/correlations?id=abc" },
+      ],
+    }));
+    await renderOpsis();
+    await screen.findByText(/How can I help/);
+    await ask("top cpu");
+    await screen.findByText("Query 9f2c");
+    for (const label of ["Query 9f2c", "evil-cite", "off-origin"]) {
+      expect(screen.getByText(label).closest("a")).toBeNull();
+    }
+    expect(screen.getByRole("link", { name: /dia-egress/ })).toHaveAttribute("href", "#/monitoring/correlations?id=abc");
+  });
+
+  it("shows a failed ask as the server's sentence, never the raw HTTP envelope", async () => {
+    aiAsk.mockRejectedValue(new Error('502 Bad Gateway: {"error":"the metrics store did not answer in time"}'));
+    await renderOpsis();
+    await screen.findByText(/How can I help/);
+    await ask("top cpu");
+    await screen.findByText("The metrics store did not answer in time.");
+    expect(screen.queryByText(/502 Bad Gateway/)).toBeNull();
+  });
+});
+
 describe("Opsis — follow-ups ride the server conversation (tracker 337 N-E4)", () => {
   it("starts one conversation and sends its id with every typed question", async () => {
     startIrisConversation.mockReset().mockResolvedValue({ id: "c-1", turns: [] });

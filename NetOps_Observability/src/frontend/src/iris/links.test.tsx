@@ -6,7 +6,7 @@
 
 import { describe, it, expect, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
-import { SafeLink, irisHref } from "./links";
+import { SafeLink, answerCiteHref, irisHref } from "./links";
 
 afterEach(cleanup);
 
@@ -52,4 +52,20 @@ describe("SafeLink", () => {
     );
     expect(screen.getByRole("link", { name: "inc" })).toHaveAttribute("href", "/#/investigate/rca?id=i1");
   });
+});
+
+describe("answerCiteHref", () => {
+  it("keeps the engine's in-app hash routes and same-origin paths", () => {
+    expect(answerCiteHref("#/monitoring/correlations?id=abc")).toBe("#/monitoring/correlations?id=abc");
+    expect(answerCiteHref(" /docs/iris ")).toBe("/docs/iris");
+  });
+
+  // A query citation carries href "" — as a link that is a full reload of the
+  // app (the drawer and the route are lost). Hostile hrefs are why this exists.
+  it.each(["", "   ", undefined, "#", "javascript:alert(1)", "//evil.example", "/\\evil.example", "https://evil.example", "data:text/html,x"])(
+    "refuses %p",
+    (href) => {
+      expect(answerCiteHref(href)).toBeNull();
+    },
+  );
 });

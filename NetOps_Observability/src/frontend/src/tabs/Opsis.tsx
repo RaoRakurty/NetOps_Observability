@@ -23,7 +23,8 @@ import {
 import Icon from "../components/Icon";
 import IrisVocabulary from "../components/IrisVocabulary";
 import PresentationPlanRenderer from "../iris/PresentationPlanRenderer";
-import { httpFailure } from "../lib/errors";
+import { answerCiteHref } from "../iris/links";
+import { httpFailure, operatorError } from "../lib/errors";
 
 // The Iris box's server conversation (tracker 337 N-C7/N-E4): only its id
 // lives in the browser, in sessionStorage so it survives the drawer closing.
@@ -291,7 +292,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       setKeyDraft("");
       setShowSettings(false);
     } catch (e) {
-      setError((e as Error).message);
+      setError(operatorError(e, "The settings could not be saved."));
     } finally {
       setSavingCfg(false);
     }
@@ -316,7 +317,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       setTKeyDraft("");
       setShowSettings(false);
     } catch (e) {
-      setError((e as Error).message);
+      setError(operatorError(e, "The settings could not be saved."));
     } finally {
       setSavingCfg(false);
     }
@@ -335,7 +336,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       });
     } catch (e) {
       setTenantRows((rows) => (rows ?? []).map((r) => (r.tenant_id === row.tenant_id ? row : r)));
-      setError((e as Error).message);
+      setError(operatorError(e, "That workspace's access could not be changed."));
     }
   };
 
@@ -379,7 +380,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
         setUngrounded((u) => ({ ...u, [idx]: true }));
       }
     } catch (e) {
-      setError((e as Error).message);
+      setError(operatorError(e, "Iris could not answer that — try again."));
     } finally {
       setBusy(false);
     }
@@ -401,7 +402,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
       setGrounded((g) => ({ ...g, [idx]: ans }));
     } catch (e) {
-      setError((e as Error).message);
+      setError(operatorError(e, "Iris could not answer that — try again."));
     } finally {
       setBusy(false);
     }
@@ -423,7 +424,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
       setGrounded((g) => ({ ...g, [idx]: ans }));
     } catch (e) {
-      setError((e as Error).message);
+      setError(operatorError(e, "Iris could not answer that — try again."));
     } finally {
       setBusy(false);
     }
@@ -445,7 +446,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
       setGrounded((g) => ({ ...g, [idx]: ans }));
     } catch (e) {
-      setError((e as Error).message);
+      setError(operatorError(e, "Iris could not answer that — try again."));
     } finally {
       setBusy(false);
     }
@@ -733,7 +734,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
                 onClick={async () => {
                   setSavingCfg(true);
                   try { setTcfg(await api.setAITenantConfig({ provider: tcfg.provider, model: tcfg.model, no_platform_key: tcfg.no_platform_key, clear_key: true })); setTKeyDraft(""); }
-                  catch (e) { setError((e as Error).message); }
+                  catch (e) { setError(operatorError(e, "The key could not be removed.")); }
                   finally { setSavingCfg(false); }
                 }}>Remove key</button>
             )}
@@ -831,12 +832,14 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
               {m.role === "assistant" && chatCites[i] && chatCites[i].length > 0 && (
                 <div className="op-cites">
                   <span className="op-cites-h">Evidence</span>
-                  {chatCites[i].map((c) => (
-                    <a key={c.id} className="op-cite" href={c.href} title={c.label}
-                      onClick={() => setCopilotOpen(false)}>
-                      {c.label.length > 42 ? c.label.slice(0, 42) + "…" : c.label}
-                    </a>
-                  ))}
+                  {chatCites[i].map((c) => {
+                    const text = c.label.length > 42 ? c.label.slice(0, 42) + "…" : c.label;
+                    const href = answerCiteHref(c.href);
+                    return href
+                      ? <a key={c.id} className="op-cite" href={href} title={c.label}
+                          onClick={() => setCopilotOpen(false)}>{text}</a>
+                      : <span key={c.id} className="op-cite" title={c.label}>{text}</span>;
+                  })}
                 </div>
               )}
               {/* Documentation the answer was grounded in — opens the Help drawer
@@ -1113,9 +1116,13 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
                   onClick={(e) => { e.preventDefault(); openHelp(c.href); }}>
                   <Icon name="docs" size={11} /> {c.label || c.id}
                 </a>
-              : <a key={c.id} className="op-cite" href={c.href} title={c.label} onClick={onCite}>
-                  <Icon name="external" size={11} /> {c.label || c.id}
-                </a>
+              : answerCiteHref(c.href)
+                ? <a key={c.id} className="op-cite" href={answerCiteHref(c.href)!} title={c.label} onClick={onCite}>
+                    <Icon name="external" size={11} /> {c.label || c.id}
+                  </a>
+                // Not a page (a query citation has no href) or not a safe one:
+                // the reference is still shown, as text.
+                : <span key={c.id} className="op-cite" title={c.label}>{c.label || c.id}</span>
           ))}
         </div>
       )}

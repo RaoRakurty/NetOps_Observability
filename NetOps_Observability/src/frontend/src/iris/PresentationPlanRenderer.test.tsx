@@ -92,6 +92,22 @@ describe("PresentationPlanRenderer — honest states", () => {
     expect(screen.queryByRole("grid")).toBeNull();
   });
 
+  // Found by the N-E5 browser spec: metric_series answers carry series and no
+  // rows, and the default plan's second view (TABLE) said "Nothing found in this
+  // window" directly under the chart that had just drawn the data.
+  it("a series-only answer draws the chart and never claims nothing was found", () => {
+    render(<PresentationPlanRenderer result={seriesResult()} />);
+    expect(screen.getByTestId("chart")).toBeInTheDocument();
+    expect(screen.queryByText(/Nothing found/)).toBeNull();
+    expect(screen.queryByRole("grid")).toBeNull();
+  });
+
+  it("a series-only answer planned as a TABLE still draws its series", () => {
+    render(<PresentationPlanRenderer result={seriesResult()} plan={{ primary_view: "TABLE", title: "t" }} />);
+    expect(screen.getByTestId("chart")).toBeInTheDocument();
+    expect(screen.queryByText(/Nothing found/)).toBeNull();
+  });
+
   it("a truncated answer shows a visible notice", () => {
     render(<PresentationPlanRenderer result={baseResult({ rows: [changeRow()], truncated: true })} />);
     expect(screen.getByText(/Partial answer — more matched than could be shown/)).toBeInTheDocument();
