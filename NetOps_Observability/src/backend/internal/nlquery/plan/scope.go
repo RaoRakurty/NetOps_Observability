@@ -56,7 +56,10 @@ type Sample struct {
 	Value  float64
 }
 
-// DeviceFilter selects devices the caller may see: by id, or by site.
+// DeviceFilter selects devices the caller may see. Fields NARROW each other
+// (AND); the values within one field are a list (OR). An empty field does
+// not constrain. "dfw-edge-1 in Dallas" is that device IF it is in Dallas —
+// never every Dallas device.
 type DeviceFilter struct {
 	IDs   []string
 	Sites []string
@@ -65,7 +68,8 @@ type DeviceFilter struct {
 // DeviceRef is one visible device.
 type DeviceRef struct{ ID, Name, Site string }
 
-// CircuitFilter selects visible circuits.
+// CircuitFilter selects visible circuits, with DeviceFilter's semantics:
+// AND across fields, OR within one, empty = unconstrained.
 type CircuitFilter struct {
 	IDs       []string
 	Sites     []string

@@ -21,6 +21,7 @@ import (
 	"go/token"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -240,7 +241,7 @@ func TestNLQIncidentsSQLShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"FROM netops.corr_current FINAL", "chaos_fixture = ''", "debug_excluded = 0",
-		"tenant_id NOT IN ('t-z')", "state IN ('open')", "owner IN ('NOC')", "created_at >= now() - INTERVAL 24 HOUR",
+		"tenant_id NOT IN ('t-z')", "state IN ('open')", "lower(owner) IN ('noc')", "created_at >= now() - INTERVAL 24 HOUR",
 		`['dfw\\']`, "AS start_iso", "ORDER BY window_start DESC", "LIMIT 201"} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("SQL missing %q:\n%s", want, sql)
@@ -248,5 +249,43 @@ func TestNLQIncidentsSQLShape(t *testing.T) {
 	}
 	if limit != 200 || strings.Contains(sql, "tenant_scope") {
 		t.Fatalf("limit=%d — and tenant scope must be the SETTING, not SQL text", limit)
+	}
+}
+
+// DeviceFilter fields NARROW each other (plan.DeviceFilter): "edge-a in
+// Austin" is nothing when edge-a is in Dallas — the old union answered with
+// every Austin device (and here, every device of the named site).
+func TestNLQScopeDeviceFilterNarrowsAcrossFields(t *testing.T) {
+	s, a, _ := nlqFixture(t)
+	if err := s.discovery.Upsert(models.Device{ID: "dev-a2", Name: "edge-a2", TenantID: "t-a", Labels: map[string]string{"site": "aus-br"}}); err != nil {
+		t.Fatal(err)
+	}
+	h := s.nlqScopeFor(newAITestRequest(t, a), a)
+	ctx := context.Background()
+	ids := func(f plan.DeviceFilter) string {
+		devs, err := h.Devices(ctx, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, d := range devs {
+			out = append(out, d.ID)
+		}
+		sort.Strings(out)
+		return strings.Join(out, ",")
+	}
+	for name, tc := range map[string]struct {
+		f    plan.DeviceFilter
+		want string
+	}{
+		"device in its site":      {plan.DeviceFilter{IDs: []string{"dev-a"}, Sites: []string{"dfw-hq"}}, "dev-a"},
+		"device not in that site": {plan.DeviceFilter{IDs: []string{"dev-a"}, Sites: []string{"aus-br"}}, ""},
+		"a list of devices":       {plan.DeviceFilter{IDs: []string{"dev-a", "dev-a2"}}, "dev-a,dev-a2"},
+		"a list of sites":         {plan.DeviceFilter{Sites: []string{"dfw-hq", "aus-br"}}, "dev-a,dev-a2"},
+		"unconstrained":           {plan.DeviceFilter{}, "dev-a,dev-a2"},
+	} {
+		if got := ids(tc.f); got != tc.want {
+			t.Errorf("%s: got %q, want %q", name, got, tc.want)
+		}
 	}
 }

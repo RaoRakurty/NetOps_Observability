@@ -5,6 +5,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
@@ -59,7 +60,7 @@ func (f *fakeScope) Devices(_ context.Context, df DeviceFilter) ([]DeviceRef, er
 	all := []DeviceRef{{ID: "d1", Name: "edge-1", Site: "dfw-hq"}, {ID: "d2", Name: "edge-2", Site: "dfw-hq"}}
 	var out []DeviceRef
 	for _, d := range all {
-		if (len(df.IDs) == 0 && len(df.Sites) == 0) || contains(df.IDs, d.ID) || contains(df.Sites, d.Site) {
+		if (len(df.IDs) == 0 || contains(df.IDs, d.ID)) && (len(df.Sites) == 0 || contains(df.Sites, d.Site)) {
 			out = append(out, d)
 		}
 	}
@@ -347,5 +348,62 @@ func TestCombineP95(t *testing.T) {
 	}
 	if got := combine("p95", vals); got != 95 {
 		t.Fatalf("p95 of 1..100 = %v", got)
+	}
+}
+
+// Refs of DIFFERENT types narrow each other. "cpu on edge-1 in Dallas" is
+// edge-1 if it is in Dallas — never every Dallas device (the union read the
+// whole site, a silent widening).
+func TestRefsOfDifferentTypesNarrow(t *testing.T) {
+	sc := &fakeScope{}
+	run(t, sc, `{"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","entities":[{"type":"device","id":"device:d1"},{"type":"site","id":"site:dfw-hq"}],"time_range":{"kind":"relative","last":"1h"}}`)
+	if len(sc.exprs) != 1 || !strings.Contains(sc.exprs[0], `device=~"d1|edge-1"`) || strings.Contains(sc.exprs[0], "d2") {
+		t.Fatalf("device AND site must read only that device: %v", sc.exprs)
+	}
+	// The device is not at that site: nothing visible, and nothing read.
+	sc = &fakeScope{}
+	rs := run(t, sc, `{"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","entities":[{"type":"device","id":"device:d1"},{"type":"site","id":"site:aus"}],"time_range":{"kind":"relative","last":"1h"}}`)
+	if len(sc.exprs) != 0 || len(rs.Notes) == 0 {
+		t.Fatalf("a device outside the named site must be an empty scope, not a read: %v %v", sc.exprs, rs.Notes)
+	}
+	// Two devices are a LIST (same type): both are read.
+	sc = &fakeScope{}
+	run(t, sc, `{"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","entities":[{"type":"device","id":"device:d1"},{"type":"device","id":"device:d2"}],"time_range":{"kind":"relative","last":"1h"}}`)
+	if len(sc.exprs) != 1 || !strings.Contains(sc.exprs[0], `device=~"d1|d2|edge-1|edge-2"`) {
+		t.Fatalf("two devices must both be read: %v", sc.exprs)
+	}
+}
+
+// A provider narrows the devices named: "CPU on edge-2's Comcast router" is
+// empty when edge-2 terminates no Comcast circuit — never every
+// Comcast-connected device. (A provider cannot narrow a bgp_peer query at
+// all: the validator refuses that relationship.)
+func TestAProviderNarrowsTheDevicesNamed(t *testing.T) {
+	sc := &fakeScope{}
+	rs := run(t, sc, `{"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","entities":[{"type":"device","id":"device:d2"},{"type":"provider","id":"provider:comcast"}],"time_range":{"kind":"relative","last":"1h"}}`)
+	if len(sc.exprs) != 0 || len(rs.Notes) == 0 {
+		t.Fatalf("edge-2 has no Comcast circuit: must be empty, got %v", sc.exprs)
+	}
+	sc = &fakeScope{}
+	run(t, sc, `{"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","entities":[{"type":"device","id":"device:d1"},{"type":"provider","id":"provider:comcast"}],"time_range":{"kind":"relative","last":"1h"}}`)
+	if len(sc.exprs) != 1 || !strings.Contains(sc.exprs[0], `device=~"d1|edge-1"`) || strings.Contains(sc.exprs[0], "d2") {
+		t.Fatalf("device AND provider: %v", sc.exprs)
+	}
+}
+
+// A selection larger than one matcher may carry is read partially — and the
+// answer says so.
+func TestAnOverCapSelectionIsDisclosed(t *testing.T) {
+	var r resolved
+	var vals []string
+	for i := 0; i < MaxMatchValues+100; i++ {
+		vals = append(vals, fmt.Sprintf("dev-%04d", i))
+	}
+	if got := r.cap(vals); len(got) != MaxMatchValues || !r.capped {
+		t.Fatalf("cap: %d values, capped=%v", len(got), r.capped)
+	}
+	var small resolved
+	if small.cap([]string{"a", "b", "a"}); small.capped {
+		t.Fatal("duplicates under the cap are not a truncation")
 	}
 }

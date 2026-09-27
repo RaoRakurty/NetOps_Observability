@@ -139,6 +139,23 @@ func TestWhatElseDidTheyChange(t *testing.T) {
 	}
 }
 
+// With an incident on screen AND a previous change list, "they" are the
+// people that list showed — the incident only takes the pronouns left over.
+func TestConversationActorsOutrankTheIncidentOnScreen(t *testing.T) {
+	x := withConv(&Conversation{Actors: []string{"jsmith"}, ChangeIDs: []string{"chg-1042"}})
+	x.IncidentID = "11111111-2222-4333-8444-555555555555"
+	r := run(t, "what else did they change", x)
+	if r.AST == nil {
+		t.Fatalf("must compile: %+v", r)
+	}
+	if f := filterOf(r.AST, "actor"); f == nil || strings.Join(f.Values, ",") != "jsmith" {
+		t.Fatalf("they = the previous list's actor, got %+v", r.AST.Filters)
+	}
+	if r.AST.Time.Kind == ast.TimeIncident {
+		t.Fatal("'what else did they change' is about the people, not the incident window")
+	}
+}
+
 func TestTheIncidentOnScreenIsThePronounsReferent(t *testing.T) {
 	x := cx
 	x.IncidentID = "11111111-2222-4333-8444-555555555555"

@@ -116,9 +116,17 @@ func (c Compiler) Compile(ctx context.Context, question string, cx Context) (Res
 	var tp timePhrase
 	// The comparison window ("with yesterday", "vs last week") is not the
 	// question's own window.
-	timeText := compareScratchRe.ReplaceAllString(text, " ")
+	// Only the comparison TARGET is removed: "compare latency today with
+	// yesterday" still asks about TODAY (removing the whole compare span
+	// silently turned that into the last hour).
+	timeText := compareTargetRe.ReplaceAllStringFunc(text, func(m string) string {
+		if i := strings.LastIndex(m, "since "); strings.Contains(m, "changed") && i >= 0 {
+			return m[:i] // keep "changed most", drop only "since yesterday"
+		}
+		return " "
+	})
 	tp, hasTime := parseTime(timeText, cx.Now, cx.Loc)
-	st := &state{c: c, ctx: ctx, text: text, cx: cx, e: newEaten()}
+	st := &state{c: c, ctx: ctx, text: text, raw: question, cx: cx, e: newEaten()}
 	st.requireReferences()
 	if hasTime {
 		st.time = tp.tr
@@ -168,6 +176,7 @@ type state struct {
 	time ast.TimeRange
 	e    *eaten
 	refs []reference
+	raw  string // the question as asked, for values whose casing is data (owner names)
 }
 
 // threshold reads the number a comparison regexp captured. A number too large
@@ -227,6 +236,10 @@ func (c Compiler) stateMetric(text string) ([]catalog.AliasHit, string) {
 
 var compareScratchRe = regexp.MustCompile(`\bcompare\b.*\b(?:with|to|vs|versus|against)\s+(yesterday|last week)\b|\b(?:vs\.?|versus)\s+(yesterday|last week)\b|\bthan (?:the same time )?(yesterday|last week)\b|\bcompare to (yesterday|last week)\b|\bchanged (?:the )?most\b.*\bsince (yesterday|last week)\b|\bcompare\b.*\b(this week)\b.*\b(last week)\b`)
 
+// compareTargetRe is just the earlier window a comparison is made against.
+// ("changed most … since yesterday" compares against yesterday, too).
+var compareTargetRe = regexp.MustCompile(`\b(?:with|to|vs\.?|versus|against|than(?: the same time)?)\s+(?:yesterday|last week)\b|\bchanged (?:the )?most\b.*\b(since\s+(?:yesterday|last week))\b`)
+
 // compareFromScratch turns a metric question that compares against an
 // earlier window into compare_windows — the SAME window length shifted back.
 func (s *state) compareFromScratch(q *ast.AST) {
@@ -264,6 +277,52 @@ func (s *state) compareFromScratch(q *ast.AST) {
 	} else {
 		q.OrderBy, q.Limit = nil, 0
 	}
+}
+
+// singularRole is a role noun that names ONE device: led by an article
+// ("the NYC firewall", "on our austin switch"). Plurals ("dallas routers"),
+// "which router" and terse telegraphic phrasing ("dallas router memory") ask
+// about the class and stay target words; "that/this router" is a reference
+// (refer.go).
+var singularRole = regexp.MustCompile(`\b(?:the|our|my)\s+(?:[a-z0-9.&'-]+\s+){0,3}?(firewall|switch|router|box)\b`)
+
+// explainTargetWords marks target words explained only when they name the
+// query's target or an entity type the question resolved. Before, every
+// target word was explained unconditionally, so "prefixes received over
+// Direct Connect" dropped "direct connect" and read EVERY peer, and "memory
+// on the NYC firewall" dropped "firewall" and read every NYC device.
+//
+// A singular role noun with no resolved device is left unexplained: it names
+// one device the grammar could not identify, and answering for the whole site
+// would be a different question.
+func (s *state) explainTargetWords(target string, refs []resolve.Ref) {
+	named := map[string]bool{target: true}
+	for _, r := range refs {
+		named[r.EntityType] = true
+	}
+	for _, tw := range targetWords {
+		if named[tw.target] {
+			s.e.re(tw.re, s.text)
+		}
+	}
+	if named["device"] && hasRefType(refs, "device", "interface", "bgp_peer") {
+		return
+	}
+	for _, m := range singularRole.FindAllStringSubmatchIndex(s.text, -1) {
+		w := s.text[m[2]:m[3]]
+		s.e.require(w, strings.TrimSpace(s.text[m[0]:m[1]]))
+	}
+}
+
+func hasRefType(refs []resolve.Ref, types ...string) bool {
+	for _, r := range refs {
+		for _, t := range types {
+			if r.EntityType == t {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func anyTargetWord(t string) bool {
@@ -400,7 +459,7 @@ var targetWords = []struct {
 	target string
 }{
 	{regexp.MustCompile(`\b(?:interfaces?|ports?|links?|intf)\b`), "interface"},
-	{regexp.MustCompile(`\b(?:circuits?|underlay|wan|sdwan underlay|direct connect|mpls)\b`), "circuit"},
+	{regexp.MustCompile(`\b(?:circuits?|underlay|wan|sdwan underlay|direct connect|mpls|links?)\b`), "circuit"},
 	{regexp.MustCompile(`\b(?:bgp|peers?|neighbou?rs?|sessions?)\b`), "bgp_peer"},
 	{regexp.MustCompile(`\b(?:devices?|routers?|switch(?:es)?|firewalls?|boxes)\b`), "device"},
 }
@@ -410,9 +469,6 @@ func (s *state) metric(hits []catalog.AliasHit) (Result, error) {
 	// to, else the first applicable entity type of the first hit.
 	var m *catalog.Metric
 	target := ""
-	for _, tw := range targetWords {
-		s.e.re(tw.re, s.text)
-	}
 	for _, tw := range targetWords {
 		if !tw.re.MatchString(s.text) {
 			continue
@@ -460,6 +516,7 @@ func (s *state) metric(hits []catalog.AliasHit) (Result, error) {
 			target = refs[0].EntityType
 		}
 	}
+	s.explainTargetWords(target, refs)
 	q := &ast.AST{V: 1, Type: ast.MetricSeries, Target: target, Metric: m.Name, Agg: s.aggFor(m), Refs: astRefs(refs), Time: s.time}
 	if g := perRe.FindStringSubmatch(s.text); g != nil && (g[1] == "site" || g[1] == "device" || g[1] == "provider") {
 		q.GroupBy = []string{g[1]}
@@ -654,10 +711,13 @@ func (s *state) changes() (Result, error) {
 		q.Filters = append(q.Filters, ast.Filter{Field: "actor", Op: op, Values: vals})
 		s.e.phrase(strings.Join(vals, " "))
 	}
-	if s.cx.IncidentID == "" {
-		if actors, ok := s.bindActors(); ok {
-			q.Filters = append(q.Filters, ast.Filter{Field: "actor", Op: "in", Values: actors})
-		}
+	// "They" is first the people the previous answer showed (server-held
+	// conversation state); only pronouns left unbound fall to the incident on
+	// screen below.
+	actorBound := false
+	if actors, ok := s.bindActors(); ok {
+		q.Filters = append(q.Filters, ast.Filter{Field: "actor", Op: "in", Values: actors})
+		actorBound = true
 	}
 	// "What ELSE did they change": the previous turn's changes are excluded.
 	if s.cx.Conv != nil && len(s.cx.Conv.ChangeIDs) > 0 && regexp.MustCompile(`\belse\b`).MatchString(s.text) {
@@ -684,7 +744,9 @@ func (s *state) changes() (Result, error) {
 	// this": the incident is those pronouns' referent.
 	if s.cx.IncidentID != "" && s.e.re(regexp.MustCompile(`\b(?:it|this|that|the incident|before this|before the incident|incident|he|she|they)\b`), s.text) {
 		s.bindIncidentPronouns()
-		if q.Time.Kind == "" {
+		// "What else did they change" asks about the PEOPLE, not the incident
+		// window: it keeps the default window rather than the anchor.
+		if q.Time.Kind == "" && !actorBound {
 			q.Time = ast.TimeRange{Kind: ast.TimeIncident, Anchor: &ast.Anchor{IncidentID: s.cx.IncidentID, Before: "30m", After: "10m"}}
 		}
 	}
@@ -811,8 +873,14 @@ func (s *state) incidents() (Result, error) {
 		}
 		owner := strings.Join(ow, " ")
 		s.e.phrase(m[0][:strings.Index(m[0], " ")] + " " + owner)
+		ownerValue := owner
+		// Keep the operator's casing ("Comcast Business"): the store matches
+		// case-insensitively, but the filter is shown back to them as typed.
+		if i := strings.Index(strings.ToLower(s.raw), owner); i >= 0 && i+len(owner) <= len(s.raw) {
+			ownerValue = s.raw[i : i+len(owner)]
+		}
 		s.e.re(regexp.MustCompile(`\b(?:owned by|assigned to|owner is)\b`), s.text)
-		q.Filters = append(q.Filters, ast.Filter{Field: "owner", Op: "eq", Values: []string{owner}})
+		q.Filters = append(q.Filters, ast.Filter{Field: "owner", Op: "eq", Values: []string{ownerValue}})
 	}
 	if g := perRe.FindStringSubmatch(s.text); g != nil {
 		if dim := map[string]string{"owner": "owner", "seam": "seam_class", "seam class": "seam_class", "state": "state"}[g[1]]; dim != "" {

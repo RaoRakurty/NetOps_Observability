@@ -35,8 +35,14 @@ import (
 
 // Accuracy floors (ratchet: raise when the measured value rises; never lower).
 const (
-	minQuestionAccuracy   = 0.68
+	minQuestionAccuracy   = 0.70
 	minParaphraseAccuracy = 0.36
+	// Per-metric floors (N-C6). Coverage is reported, not floored: an honesty
+	// fix that turns a wrong compile into "not understood" LOWERS coverage and
+	// raises answered precision, which is the trade this design wants.
+	minEntityPrecision   = 0.88
+	minExecutableRate    = 0.97
+	minAnsweredPrecision = 0.85
 )
 
 // fixtureLookups is tenant A's world as the root would present it.
@@ -127,6 +133,17 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 
 	perCat := map[string]*score{}
 	var qScore, pScore score
+	// Per-metric numbers over every answerable phrasing (N-C6):
+	//   entity precision   — refs the compiler emitted that the expected query
+	//                        (or an alternate) also names: a WRONG entity is
+	//                        worse than none;
+	//   executable rate    — compiled queries that validate in scope;
+	//   answered precision — of the phrasings it compiled at all, the share it
+	//                        compiled exactly right ("when it answers, it is
+	//                        right");
+	//   coverage           — the share it compiled at all (the rest go to the
+	//                        model fallback or a clarifying question).
+	var entityP, executable, answeredP, coverage score
 	var misses []string
 
 	for _, c := range cases {
@@ -182,6 +199,34 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 			for _, wv := range want {
 				hit = hit || got == wv
 			}
+			coverage.total++
+			if res.AST != nil {
+				coverage.ok++
+				answeredP.total++
+				if hit {
+					answeredP.ok++
+				} else if testing.Verbose() && qi == 0 {
+					t.Logf("WRONG %s %q\n    got  %s\n    want %s", c.ID, question, got, want[0])
+				}
+				executable.total++
+				if _, vr := validate.Validate(ctx, cat, sc, res.AST); vr.Valid {
+					executable.ok++
+				}
+				expected := map[string]bool{}
+				for _, raw := range append([]json.RawMessage{c.Expect.AST}, c.Expect.Alternates...) {
+					for _, r := range decodeAST(t, c.ID+" refs", raw).Refs {
+						expected[r.Type+"|"+r.ID] = true
+					}
+				}
+				for _, r := range res.AST.Refs {
+					entityP.total++
+					if expected[r.Type+"|"+r.ID] {
+						entityP.ok++
+					} else if testing.Verbose() {
+						t.Logf("ENTITY-MISS %s %q → %s|%s (expected %v)", c.ID, question, r.Type, r.ID, expected)
+					}
+				}
+			}
 			s := perCat[c.Category]
 			if s == nil {
 				s = &score{}
@@ -200,6 +245,11 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 				pScore.total++
 				if hit {
 					pScore.ok++
+					if testing.Verbose() {
+						t.Logf("PARA-HIT %s %q", c.ID, question)
+					}
+				} else if testing.Verbose() && res.AST == nil {
+					t.Logf("PARA-UNPARSED %s %q %v", c.ID, question, res.NotUnderstood)
 				}
 			}
 		}
@@ -212,12 +262,27 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "deterministic compiler vs golden corpus: questions %d/%d (%.2f), paraphrases %d/%d (%.2f)\n",
 		qScore.ok, qScore.total, qScore.rate(), pScore.ok, pScore.total, pScore.rate())
+	fmt.Fprintf(&b, "entity precision %d/%d (%.3f) · executable %d/%d (%.3f) · answered precision %d/%d (%.3f) · coverage %d/%d (%.3f)\n",
+		entityP.ok, entityP.total, entityP.rate(), executable.ok, executable.total, executable.rate(),
+		answeredP.ok, answeredP.total, answeredP.rate(), coverage.ok, coverage.total, coverage.rate())
 	for _, k := range cats {
 		fmt.Fprintf(&b, "  %-18s %d/%d\n", k, perCat[k].ok, perCat[k].total)
 	}
 	t.Log(b.String())
 	if testing.Verbose() {
 		t.Log("misses:\n" + strings.Join(misses, "\n"))
+	}
+	for _, f := range []struct {
+		name       string
+		got, floor float64
+	}{
+		{"entity precision", entityP.rate(), minEntityPrecision},
+		{"executable rate", executable.rate(), minExecutableRate},
+		{"answered precision", answeredP.rate(), minAnsweredPrecision},
+	} {
+		if f.got < f.floor {
+			t.Errorf("%s fell below its ratchet floor: %.3f < %.2f", f.name, f.got, f.floor)
+		}
 	}
 	if qScore.rate() < minQuestionAccuracy || pScore.rate() < minParaphraseAccuracy {
 		t.Fatalf("accuracy fell below its ratchet floor (questions %.2f < %.2f or paraphrases %.2f < %.2f)",

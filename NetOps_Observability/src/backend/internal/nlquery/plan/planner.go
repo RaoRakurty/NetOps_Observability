@@ -132,6 +132,10 @@ type resolved struct {
 	// applied after the fetch (a matcher cross-product would over-include).
 	pairLabel string
 	pairs     map[string]bool // device-id-or-name + "\x1f" + ifName|peer
+	// capped: the selection resolved to more values than one matcher may
+	// carry (MaxMatchValues), so only the first ones were read — the answer
+	// is partial and must say so.
+	capped bool
 }
 
 func stripPrefix(id string) string {
@@ -197,10 +201,10 @@ func (p Planner) resolve(ctx context.Context, sc Scope, target string, refs []as
 		for _, c := range cs {
 			ids = append(ids, c.ID)
 		}
-		out.matchers = append(out.matchers, mql.Matcher{Label: "circuit", Op: "=~", Values: capValues(ids)})
+		out.matchers = append(out.matchers, mql.Matcher{Label: "circuit", Op: "=~", Values: out.cap(ids)})
 	case "probe_target":
 		if len(probes) > 0 {
-			out.matchers = append(out.matchers, mql.Matcher{Label: "dst", Op: "=~", Values: capValues(probes)})
+			out.matchers = append(out.matchers, mql.Matcher{Label: "dst", Op: "=~", Values: out.cap(probes)})
 		}
 	default: // device, interface, bgp_peer
 		if len(providers) > 0 {
@@ -219,14 +223,23 @@ func (p Planner) resolve(ctx context.Context, sc Scope, target string, refs []as
 			if err != nil {
 				return out, err
 			}
+			// A provider NARROWS: "the Comcast peer on dfw-edge-1" is the
+			// devices named AND terminating a Comcast circuit — never the
+			// union, which would read every Comcast-connected device.
+			named := map[string]bool{}
+			for _, id := range devIDs {
+				named[id] = true
+			}
+			var narrowed []string
 			for _, d := range devs {
-				if names[d.Name] {
-					devIDs = append(devIDs, d.ID)
+				if names[d.Name] && (len(devIDs) == 0 || named[d.ID]) {
+					narrowed = append(narrowed, d.ID)
 				}
 			}
-			if len(devIDs) == 0 {
+			if len(narrowed) == 0 {
 				return out, ErrEmptyScope
 			}
+			devIDs = narrowed
 		}
 		if len(sites)+len(devIDs) == 0 {
 			return out, nil
@@ -248,7 +261,7 @@ func (p Planner) resolve(ctx context.Context, sc Scope, target string, refs []as
 			}
 			idToName[d.ID] = d.Name
 		}
-		out.matchers = append(out.matchers, mql.Matcher{Label: "device", Op: "=~", Values: capValues(vals)})
+		out.matchers = append(out.matchers, mql.Matcher{Label: "device", Op: "=~", Values: out.cap(vals)})
 		if len(pairIDs) > 0 {
 			out.pairLabel = pairLabel
 			out.pairs = map[string]bool{}
@@ -260,10 +273,27 @@ func (p Planner) resolve(ctx context.Context, sc Scope, target string, refs []as
 				}
 				seconds = append(seconds, pr[1])
 			}
-			out.matchers = append(out.matchers, mql.Matcher{Label: pairLabel, Op: "=~", Values: capValues(seconds)})
+			out.matchers = append(out.matchers, mql.Matcher{Label: pairLabel, Op: "=~", Values: out.cap(seconds)})
 		}
 	}
 	return out, nil
+}
+
+// cap bounds one matcher's values and records when it had to.
+func (r *resolved) cap(v []string) []string {
+	out := capValues(v)
+	if len(out) < len(uniqueCount(v)) {
+		r.capped = true
+	}
+	return out
+}
+
+func uniqueCount(v []string) map[string]bool {
+	m := map[string]bool{}
+	for _, x := range v {
+		m[x] = true
+	}
+	return m
 }
 
 func capValues(v []string) []string {
@@ -301,6 +331,10 @@ func (p Planner) metric(ctx context.Context, sc Scope, q *ast.AST, rs *ResultSet
 		return err
 	}
 	res, err := p.resolve(ctx, sc, q.Target, q.Refs)
+	if err == nil && res.capped {
+		rs.Truncated = true
+		rs.Notes = append(rs.Notes, fmt.Sprintf("The selection named more than %d entities; only the first %d were read, so this answer is partial.", MaxMatchValues, MaxMatchValues))
+	}
 	if errors.Is(err, ErrEmptyScope) {
 		rs.Window = Window{From: from, To: to}
 		rs.Notes = append(rs.Notes, ErrEmptyScope.Error())

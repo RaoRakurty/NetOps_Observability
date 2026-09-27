@@ -2236,7 +2236,8 @@ func (h *nlqScope) Devices(_ context.Context, f plan.DeviceFilter) ([]plan.Devic
 	ids, sites := stringSet(f.IDs), stringSet(f.Sites)
 	var out []plan.DeviceRef
 	for _, d := range h.visibleDevices() {
-		if (len(ids) == 0 && len(sites) == 0) || ids[d.ID] || (d.Site != "" && sites[d.Site]) {
+		// AND across fields, OR within one (plan.DeviceFilter).
+		if (len(ids) == 0 || ids[d.ID]) && (len(sites) == 0 || (d.Site != "" && sites[d.Site])) {
 			out = append(out, d)
 		}
 	}
@@ -2263,7 +2264,9 @@ func (h *nlqScope) Circuits(ctx context.Context, f plan.CircuitFilter) ([]plan.C
 	for _, c := range circuits {
 		d := devs[c.Local.Device]
 		ref := plan.CircuitRef{ID: c.ID, LocalDevice: c.Local.Device, LocalIf: c.Local.Interface, Site: d.Site}
-		if ids[c.ID] || (ref.Site != "" && sites[ref.Site]) || devIDs[d.ID] {
+		// AND across fields, OR within one (plan.CircuitFilter).
+		if (len(ids) == 0 || ids[c.ID]) && (len(sites) == 0 || (ref.Site != "" && sites[ref.Site])) &&
+			(len(devIDs) == 0 || devIDs[d.ID]) {
 			out = append(out, ref)
 		}
 	}
@@ -2343,7 +2346,15 @@ func nlqIncidentsSQL(q plan.IncidentQuery, exclude string) (string, int, error) 
 	in("state", q.States)
 	in("verdict_tier", q.Tiers)
 	in("seam_type", q.SeamTypes)
-	in("owner", q.Owners)
+	// Owner names are matched case-insensitively ("comcast business" is
+	// "Comcast Business"); an exact match silently answered "no incidents".
+	if len(q.Owners) > 0 {
+		lowered := make([]string, len(q.Owners))
+		for i, o := range q.Owners {
+			lowered[i] = strings.ToLower(o)
+		}
+		conds = append(conds, "lower(owner) IN ("+sqlInList(lowered)+")")
+	}
 	if stringSet(q.States)["open"] {
 		conds = append(conds, "created_at >= now() - INTERVAL "+strconv.Itoa(int(nlqIncidentLiveness.Hours()))+" HOUR")
 	}

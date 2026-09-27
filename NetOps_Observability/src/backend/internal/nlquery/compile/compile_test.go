@@ -137,3 +137,47 @@ func TestListLimitIsNotATimeWindow(t *testing.T) {
 		t.Fatalf("\"last 5 changes\" is a limit: %+v", r.AST)
 	}
 }
+
+// Precision fixes found by the per-metric scoreboard (N-C6): a word that
+// names something the grammar did not resolve is never silently dropped.
+func TestUnresolvedTargetsAreNotDropped(t *testing.T) {
+	for q, phrase := range map[string]string{
+		"show memory on the dallas firewall for the last hour": "the dallas firewall", // ONE device, not all of Dallas
+		"prefixes received over direct connect last 24 hours": "connect",             // a circuit it did not resolve
+	} {
+		r := run(t, q, cx)
+		if r.AST != nil || !r.Unparsed {
+			t.Errorf("%q must not compile (it would widen), got %+v", q, r.AST)
+			continue
+		}
+		if !strings.Contains(strings.Join(r.NotUnderstood, " "), phrase) {
+			t.Errorf("%q: not-understood %v must name %q", q, r.NotUnderstood, phrase)
+		}
+	}
+	// The class forms still compile: plural, "which", terse phrasing.
+	for _, q := range []string{"dallas router memory last 6 hours", "which routers in dallas have high cpu", "memory on dallas routers last hour"} {
+		if r := run(t, q, cx); r.AST == nil {
+			t.Errorf("%q is a class question and must compile, got %+v", q, r)
+		}
+	}
+}
+
+// "Compare … today with yesterday" compares TODAY — the compare span must not
+// swallow the question's own window (it became the last hour).
+func TestCompareKeepsTheQuestionsOwnWindow(t *testing.T) {
+	r := run(t, "compare cpu on edge-1 today with yesterday", cx)
+	if r.AST == nil || r.AST.Type != ast.CompareWindows || r.AST.Time.Kind != ast.TimeAbsolute || r.AST.CompareTo == nil {
+		t.Fatalf("got %+v", r.AST)
+	}
+	if !r.AST.Time.From.Equal(time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)) || r.AST.CompareTo.From.Sub(*r.AST.Time.From) != -24*time.Hour {
+		t.Fatalf("today vs yesterday: %v → compare %v", r.AST.Time.From, r.AST.CompareTo.From)
+	}
+}
+
+// Owner names keep the operator's casing (matched case-insensitively later).
+func TestOwnerKeepsItsCasing(t *testing.T) {
+	r := run(t, "show incidents owned by Comcast Business this week", cx)
+	if r.AST == nil || len(r.AST.Filters) == 0 || r.AST.Filters[0].Values[0] != "Comcast Business" {
+		t.Fatalf("got %+v", r.AST)
+	}
+}
