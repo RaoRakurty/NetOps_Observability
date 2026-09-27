@@ -37,7 +37,7 @@ func newTestAPI(t *testing.T, targets []dem.Target) (*API, *Counters) {
 			}
 			return dem.Principal{Tenant: "acme", Subject: "operator"}, true
 		},
-		Store:   NewFileStore(""),
+		Store:   newTestFileStore(""),
 		Targets: &memCatalogue{rows: targets},
 		Policy:  policy,
 		Enabled: true,

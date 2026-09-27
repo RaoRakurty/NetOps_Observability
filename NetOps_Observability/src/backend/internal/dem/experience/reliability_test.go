@@ -240,7 +240,7 @@ func TestCoverageServesTheGradesTheDetectorUses(t *testing.T) {
 		t.Fatal(err)
 	}
 	journey := checkoutJourney()
-	store := NewFileStore("")
+	store := newTestFileStore("")
 	if _, cerr := store.CreateJourney(context.Background(), journey); cerr != nil {
 		t.Fatal(cerr)
 	}

@@ -73,9 +73,56 @@ func CauseClassForChange(t string) string {
 // ends up in a change feed.
 const (
 	MaxChangeValueBytes    = 2000
-	MaxChangesPerTenant    = 20000
 	DefaultChangePageLimit = 100
 )
+
+// ChangeRetention is how long the ledger keeps a change, measured on EventAt
+// (when the change HAPPENED). It replaces the per-tenant row cap the ledger had
+// before N-D1: a row cap evicts the OLDEST rows of the busiest tenant first, so
+// "what changed on this device last quarter" depended on how chatty some other
+// producer had been this week. An age bound answers the same way for every
+// tenant and every producer.
+//
+// 180 days covers a quarter's change review with a quarter of headroom, and is
+// far beyond any incident's change lookback (DefaultChangeLookback), which is
+// the only thing the ledger is load-bearing for at read time. Both backends
+// enforce it PER TENANT: the Postgres delete runs inside the writing tenant's
+// RLS-scoped transaction, the file backend trims only the bucket it is writing
+// (see PruneChanges). A change whose event_at is already outside the window is
+// refused at write time with ErrChangeTooOld rather than stored and then
+// silently deleted by the next write.
+const ChangeRetention = 180 * 24 * time.Hour
+
+// Actor types — the CLOSED vocabulary of who (or what) made a change. Migration
+// 0052 CHECKs the same list, so a writer that bypassed the store is still
+// refused.
+const (
+	ChangeActorUser       = "user"       // a person, identified
+	ChangeActorService    = "service"    // a pipeline, integration or API client
+	ChangeActorAutomation = "automation" // an orchestrator acting on its own schedule
+	ChangeActorSystem     = "system"     // Correlix itself (a capture sweep, a worker)
+	ChangeActorUnknown    = "unknown"    // nobody recorded who — the honest default
+)
+
+var knownChangeActorTypes = map[string]bool{
+	ChangeActorUser: true, ChangeActorService: true, ChangeActorAutomation: true, ChangeActorSystem: true, ChangeActorUnknown: true,
+}
+
+// ValidChangeActorType reports whether t is one of the five declared change actor types.
+func ValidChangeActorType(t string) bool { return knownChangeActorTypes[t] }
+
+// Source systems a producer stamps on SourceSystem. The field is open (a new
+// producer names itself) but these are the ones this tree writes, and
+// SourceSystemLedger is the default for anything posted to /api/dem/changes and
+// for every row that predates the column.
+const (
+	SourceSystemLedger        = "ledger"
+	SourceSystemConfigCapture = "config_capture"
+	SourceSystemAudit         = "correlix_audit"
+)
+
+// maxSourceSystemBytes bounds the producer name. It is a label, not a payload.
+const maxSourceSystemBytes = 64
 
 // ChangeEvent is one normalized change.
 type ChangeEvent struct {
@@ -84,9 +131,28 @@ type ChangeEvent struct {
 	Type     string `json:"type"`
 
 	// Actor is who or what made the change (a username, a pipeline, a
-	// controller). Never a credential, never an email unless the tenant's data
-	// policy allows one — the data_class on the provenance says which.
+	// controller) EXACTLY as the source reported it. Never a credential, never
+	// an email unless the tenant's data policy allows one — the data_class on
+	// the provenance says which.
 	Actor string `json:"actor,omitempty"`
+	// ActorType is the closed who-kind (user | service | automation | system |
+	// unknown). ActorID is the Correlix canonical identity when the identity
+	// store knows the source actor, otherwise the source identity verbatim —
+	// never a guess (N-D4). ActorDisplay is a human label when one is known.
+	ActorType    string `json:"actor_type,omitempty"`
+	ActorID      string `json:"actor_id,omitempty"`
+	ActorDisplay string `json:"actor_display,omitempty"`
+	// Automation is true when no human made the change directly — a scheduled
+	// capture, a pipeline, an orchestrator.
+	Automation bool `json:"automation,omitempty"`
+	// SourceSystem names the producer that recorded the change in the ledger:
+	// config_capture, correlix_audit, or ledger (posted to the API). It is
+	// distinct from Provenance.Source, which is the closed evidence vocabulary
+	// the experience engine reasons over. DetectedAt is Provenance.ObservedAt:
+	// when Correlix LEARNED of the change, as against EventAt, when it happened.
+	SourceSystem string `json:"source_system,omitempty"`
+	// TicketRef is the change ticket the producer attached, if any.
+	TicketRef string `json:"ticket_ref,omitempty"`
 	// Object is what was changed — a device id, a resource arn, a service name,
 	// a flag key, a prefix.
 	Object     string `json:"object"`
@@ -129,6 +195,15 @@ func (c *ChangeEvent) Validate() error {
 		return fmt.Errorf("change %s: unknown type %q", c.ID, clip(c.Type, 40))
 	}
 	c.Actor = clip(strings.TrimSpace(c.Actor), MaxLabelBytes)
+	c.ActorID = clip(strings.TrimSpace(c.ActorID), MaxIDBytes)
+	c.ActorDisplay = clip(strings.TrimSpace(c.ActorDisplay), MaxLabelBytes)
+	c.ActorType = strings.ToLower(strings.TrimSpace(c.ActorType))
+	c.SourceSystem = sourceSystemSafe(c.SourceSystem)
+	c.TicketRef = clip(strings.TrimSpace(c.TicketRef), MaxIDBytes)
+	c.applyDefaults()
+	if !ValidChangeActorType(c.ActorType) {
+		return fmt.Errorf("change %s: unknown actor_type %q", c.ID, clip(c.ActorType, 32))
+	}
 	c.Object = clip(strings.TrimSpace(c.Object), MaxIDBytes)
 	if c.Object == "" {
 		return fmt.Errorf("change %s: object is required (a change to nothing cannot be correlated)", c.ID)
@@ -145,6 +220,43 @@ func (c *ChangeEvent) Validate() error {
 	c.Site, c.App, c.Seam = labelSafe(c.Site), labelSafe(c.App), labelSafe(c.Seam)
 	c.Cohort.normalize()
 	return c.Provenance.Validate()
+}
+
+// applyDefaults fills the fields a record written before N-D1 (or by a producer
+// that did not know them) leaves empty. It is the ONE definition of those
+// defaults: Validate applies it on write, the Postgres backend applies it to
+// every row it reads, and migration 0052 backfilled the typed columns with the
+// same values — so a filter on a column and the JSON a caller is shown never
+// disagree about an old row.
+func (c *ChangeEvent) applyDefaults() {
+	if c.SourceSystem == "" {
+		c.SourceSystem = SourceSystemLedger
+	}
+	if c.ActorID == "" {
+		// N-D4: when nothing resolved the source actor, the source identity IS
+		// the identity we have. Kept verbatim, never guessed at.
+		c.ActorID = c.Actor
+	}
+	if c.ActorType == "" {
+		c.ActorType = ChangeActorUnknown
+	}
+}
+
+// sourceSystemSafe normalizes a producer name to a lowercase token of
+// [a-z0-9_.-]. Anything else is dropped rather than escaped: the value is a
+// label that lands in a filter and a UI chip, never free text.
+func sourceSystemSafe(s string) string {
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-', r == '.':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r + ('a' - 'A')
+		default:
+			return -1
+		}
+	}, strings.TrimSpace(s))
+	return clip(s, maxSourceSystemBytes)
 }
 
 // ChangeRelevance is one change scored against an incident.

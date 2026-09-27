@@ -62,7 +62,7 @@ func newIngestAPI(t *testing.T, sink EventSink) (*API, *Counters) {
 			}
 			return dem.Principal{Tenant: "acme", Subject: "rum-key"}, true
 		},
-		Store:   NewFileStore(""),
+		Store:   newTestFileStore(""),
 		Targets: &memCatalogue{},
 		Events:  sink,
 		Policy:  policy,
