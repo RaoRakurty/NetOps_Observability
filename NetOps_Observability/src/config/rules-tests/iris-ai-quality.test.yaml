@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# promtool unit tests for the iris-ai-quality group in rules-scale-slo.yaml
+# (tracker 337 N-A3). Each rule: fires on its condition, stays silent below its
+# volume floor (a quiet lab), and stays silent when healthy.
+rule_files:
+  - /etc/prometheus/rules-scale-slo.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1a) 30 % of 60 answers/h had a guard fire → fires.
+  - interval: 1m
+    input_series:
+      - series: 'netops_ai_answers_total{grounded="yes",job="netops-api"}'
+        values: "0+1x120"
+      - series: 'netops_ai_grounding_guard_total{guard="fabricated_citation",job="netops-api"}'
+        values: "0+0.3x120"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: IrisUnsupportedClaimRateHigh
+        exp_alerts:
+          - exp_labels: { severity: warning, layer: ai, tier: warning }
+            exp_annotations:
+              summary: "Iris grounding guards are removing unsupported content from more than 20% of answers"
+              description: "Over the last hour a deterministic grounding guard (fabricated citation, uncertain claim stated as a verdict) fired on more than a fifth of Iris answers. Operators still received clean answers — the guard removed the offending text — but the model is producing unsupported content at a rate that says something changed: the provider model, the prompt version, or the evidence the tools hand it. Break the rate down by netops_ai_grounding_guard_total{guard} to see which guard, and check whether the model tier was changed in the AI settings recently."
+              runbook: "docs/runbooks/iris-ai-quality.md#unsupported-claim-rate"
+
+  # 1b) Same 30 % ratio, but only ~6 answers/h → below the volume floor, silent.
+  - interval: 1m
+    input_series:
+      - series: 'netops_ai_answers_total{grounded="yes",job="netops-api"}'
+        values: "0+0.1x120"
+      - series: 'netops_ai_grounding_guard_total{guard="fabricated_citation",job="netops-api"}'
+        values: "0+0.03x120"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: IrisUnsupportedClaimRateHigh
+        exp_alerts: []
+
+  # 1c) Healthy: 5 % → silent.
+  - interval: 1m
+    input_series:
+      - series: 'netops_ai_answers_total{grounded="yes",job="netops-api"}'
+        values: "0+1x120"
+      - series: 'netops_ai_grounding_guard_total{guard="uncertain_claim",job="netops-api"}'
+        values: "0+0.05x120"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: IrisUnsupportedClaimRateHigh
+        exp_alerts: []
+
+  # 2a) 70 % of calls report no usage → fires after 30m.
+  - interval: 1m
+    input_series:
+      - series: 'netops_ai_provider_calls_total{usage_reported="no",job="netops-api"}'
+        values: "0+0.7x150"
+      - series: 'netops_ai_provider_calls_total{usage_reported="yes",job="netops-api"}'
+        values: "0+0.3x150"
+    alert_rule_test:
+      - eval_time: 120m
+        alertname: IrisProviderUsageInvisible
+        exp_alerts:
+          - exp_labels: { severity: warning, layer: ai, tier: warning }
+            exp_annotations:
+              summary: "Most Iris model calls report no token usage — AI spend is not visible"
+              description: "More than half of the model-provider calls in the last hour came back without the provider's own token accounting. Iris never estimates tokens from characters, so this spend is simply unseen: the cost-per-investigation KPI and every tenant's daily-token budget undercount it. Usually the provider or model was switched to one whose response shape does not carry usage, or calls are failing before a response arrives. Check which provider the tenants use in the AI settings and the api logs for provider errors."
+              runbook: "docs/runbooks/iris-ai-quality.md#provider-usage-invisible"
+
+  # 2b) Healthy: every call reports usage → silent.
+  - interval: 1m
+    input_series:
+      - series: 'netops_ai_provider_calls_total{usage_reported="no",job="netops-api"}'
+        values: "0x150"
+      - series: 'netops_ai_provider_calls_total{usage_reported="yes",job="netops-api"}'
+        values: "0+1x150"
+    alert_rule_test:
+      - eval_time: 120m
+        alertname: IrisProviderUsageInvisible
+        exp_alerts: []
+
+  # 3a) Never sampled (-1) for longer than 30m → fires.
+  - interval: 1m
+    input_series:
+      - series: 'netops_ai_scorecard_sample_age_seconds{job="netops-api",instance="api:8080"}'
+        values: "-1x60"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: IrisScorecardNotSampling
+        exp_alerts:
+          - exp_labels: { severity: warning, layer: ai, tier: warning, job: netops-api, instance: "api:8080" }
+            exp_annotations:
+              summary: "The Iris scorecard has not sampled the correlation store in over 30 minutes"
+              description: "netops_ai_scorecard_sample_age_seconds is -1 (-1 means it has never sampled since the api started). The sampler reads aggregate counts from ClickHouse over the worker lane; while it is not completing, the scorecard's correlation-derived KPIs are stale or absent and must not be read as current. Look for \"ai-scorecard\" errors in the api logs and for ClickHouse being unreachable or over its worker query budget."
+              runbook: "docs/runbooks/iris-ai-quality.md#scorecard-not-sampling"
+
+  # 3b) Sampling every 5 min (age cycles 0..300) → silent.
+  - interval: 1m
+    input_series:
+      - series: 'netops_ai_scorecard_sample_age_seconds{job="netops-api",instance="api:8080"}'
+        values: "0 60 120 180 240 0 60 120 180 240 0 60 120 180 240 0 60 120 180 240 0 60 120 180 240 0 60 120 180 240 0 60 120 180 240 0 60 120 180 240 0 60 120 180 240 0 60 120 180 240"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: IrisScorecardNotSampling
+        exp_alerts: []
