@@ -117,6 +117,7 @@ import (
 	"math"
 	"netops/backend/internal/aiscore"
 	"netops/backend/internal/entityalias"
+	"netops/backend/internal/irisconvo"
 	"netops/backend/internal/nlquery/catalog"
 	"netops/backend/internal/secobs"
 	"netops/backend/internal/secprofile"
@@ -365,6 +366,7 @@ type server struct {
 	// and the per-tenant entity aliases.
 	nlqCatalog *catalog.Catalog
 	nlqAliases *entityalias.Store
+	nlqConvos  irisconvo.Store // server-held conversation state (N-C7)
 	// IRIS-NLQUERY-END
 	deviceSites *deviceSiteStore // operator device→site bindings (intent)
 	wanPolicy   *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
@@ -1193,6 +1195,7 @@ func newServer() *server {
 		sites:           sites,
 		nlqCatalog:      nlqCat,
 		nlqAliases:      &entityalias.Store{C: aliasKV, Cat: nlqCat},
+		nlqConvos:       newIrisConvoStore(),
 		deviceSites:     deviceSites,
 		wanPolicy:       wanPolicy,
 		systemNet:       systemNet,
@@ -3673,6 +3676,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/entities/resolve", s.handleAIEntityResolve) // Iris NL: resolution ladder (N-C2)
 	mux.HandleFunc("/api/ai/query/compile", s.handleAIQueryCompile)     // Iris NL: question → validated query (N-C5)
 	mux.HandleFunc("/api/ai/query/execute", s.handleAIQueryExecute)     // Iris NL: validated query → ResultSet (N-C5)
+	mux.HandleFunc("/api/ai/conversations", s.handleAIConversations)    // Iris NL: start a conversation (N-C7)
+	mux.HandleFunc("/api/ai/conversations/", s.handleAIConversation)    // Iris NL: read one · ask in context (N-C7)
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Self-describing API + ITSM connector status.
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)

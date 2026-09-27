@@ -19,6 +19,7 @@ import (
 	"netops/backend/ai"
 	"netops/backend/internal/aiscore"
 	"netops/backend/internal/entityalias"
+	"netops/backend/internal/irisconvo"
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/compile"
 	"netops/backend/internal/nlquery/plan"
@@ -817,28 +818,64 @@ func (s *server) handleAIQueryCompile(w http.ResponseWriter, r *http.Request) {
 		}
 		cx.PriorAST = prior
 	}
-	scope := s.nlqScopeFor(r, claims)
-	res, err := compile.Compiler{Cat: s.nlqCatalog, R: s.nlqResolver(r, claims)}.Compile(r.Context(), req.Question, cx)
+	c, err := s.nlqCompileQuestion(r, claims, req.Question, cx)
 	if err != nil {
 		logError("iris.nlquery", "compile failed", errf(err))
 		writeError(w, http.StatusInternalServerError, errors.New("the question could not be compiled"))
 		return
 	}
-	out := map[string]any{"intent": res.Intent, "entities": res.Entities, "clarify": res.Clarify,
-		"decline": res.Decline, "unparsed": res.Unparsed, "not_understood": res.NotUnderstood}
+	tenant, _ := principalTenant(claims)
+	logInfo("iris.nlquery", "compile", map[string]any{"tenant": tenant, "sub": claims.Sub, "intent": c.res.Intent,
+		"unparsed": c.res.Unparsed, "declined": c.res.Decline != "", "question_chars": len(req.Question)})
+	writeJSON(w, http.StatusOK, c.body())
+}
+
+// nlqCompiled is one question compiled and validated against the caller's scope.
+type nlqCompiled struct {
+	res     compile.Result
+	checked *nlqast.AST      // the validated query; nil unless it is valid
+	vr      *validate.Result // nil when nothing compiled
+}
+
+// nlqCompileQuestion runs the compiler and the validator for the caller.
+func (s *server) nlqCompileQuestion(r *http.Request, claims jwtClaims, question string, cx compile.Context) (nlqCompiled, error) {
+	res, err := compile.Compiler{Cat: s.nlqCatalog, R: s.nlqResolver(r, claims)}.Compile(r.Context(), question, cx)
+	if err != nil {
+		return nlqCompiled{}, err
+	}
+	out := nlqCompiled{res: res}
 	if res.AST != nil {
-		checked, vr := validate.Validate(r.Context(), s.nlqCatalog, scope, res.AST)
-		out["validation"] = vr
+		checked, vr := validate.Validate(r.Context(), s.nlqCatalog, s.nlqScopeFor(r, claims), res.AST)
+		out.vr = &vr
 		if vr.Valid {
-			out["ast"] = checked
-		} else {
-			out["ast"] = res.AST // shown so the operator sees what was understood — never executed
+			out.checked = checked
 		}
 	}
-	tenant, _ := principalTenant(claims)
-	logInfo("iris.nlquery", "compile", map[string]any{"tenant": tenant, "sub": claims.Sub, "intent": res.Intent,
-		"unparsed": res.Unparsed, "declined": res.Decline != "", "question_chars": len(req.Question)})
-	writeJSON(w, http.StatusOK, out)
+	return out, nil
+}
+
+// body is the compile answer: what was understood, and the query — the
+// validated one, or the invalid one shown (never executed) so the operator
+// sees what was understood.
+func (c nlqCompiled) body() map[string]any {
+	out := map[string]any{"intent": c.res.Intent, "entities": c.res.Entities, "clarify": c.res.Clarify,
+		"decline": c.res.Decline, "unparsed": c.res.Unparsed, "not_understood": c.res.NotUnderstood}
+	if c.res.AST != nil {
+		out["validation"] = *c.vr
+		if c.checked != nil {
+			out["ast"] = c.checked
+		} else {
+			out["ast"] = c.res.AST
+		}
+	}
+	return out
+}
+
+// nlqRun executes a VALIDATED query in the caller's scope.
+func (s *server) nlqRun(r *http.Request, claims jwtClaims, checked *nlqast.AST, vr validate.Result) (*plan.ResultSet, error) {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	return plan.Planner{Cat: s.nlqCatalog}.Execute(ctx, s.nlqScopeFor(r, claims), checked, vr.Constraints)
 }
 
 func (s *server) handleAIQueryExecute(w http.ResponseWriter, r *http.Request) {
@@ -866,9 +903,7 @@ func (s *server) handleAIQueryExecute(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"validation": vr})
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	rs, err := plan.Planner{Cat: s.nlqCatalog}.Execute(ctx, scope, checked, vr.Constraints)
+	rs, err := s.nlqRun(r, claims, checked, vr)
 	switch {
 	case errors.Is(err, plan.ErrNotFound):
 		writeError(w, http.StatusNotFound, errors.New("not found"))
@@ -883,4 +918,204 @@ func (s *server) handleAIQueryExecute(w http.ResponseWriter, r *http.Request) {
 		"ast_hash": rs.ASTHash, "catalog": rs.CatalogVersion, "rows": len(rs.Rows), "series": len(rs.Series),
 		"truncated": rs.Truncated, "duration_ms": rs.Provenance.DurationMs})
 	writeJSON(w, http.StatusOK, map[string]any{"result": rs, "validation": vr})
+}
+
+// ---- Iris NL: conversations (tracker 337 N-C7) --------------------------------
+//
+// POST /api/ai/conversations                 start one (owner + tenant scope from claims)
+// GET  /api/ai/conversations/{id}            its turns — the owner's own only; otherwise 404
+// POST /api/ai/conversations/{id}/messages   {question, tz?, incident_id?} → the compile
+//      answer + the result, compiled against the SERVER-HELD state of earlier
+//      turns ("that device", "what else did they change")
+//
+// §3a: a conversation belongs to one principal in one tenant scope; another
+// user of the same tenant, the same user in another scope, and an id that
+// never existed all get the same 404. The state (entity ids, actors, the last
+// validated query) never leaves the server and is never accepted from the
+// client; every query built from it is validated again against the caller's
+// CURRENT visibility before it runs.
+
+// newIrisConvoStore picks the conversation store: Postgres (RLS) when the
+// platform database is active, otherwise memory — conversations are working
+// state, and a restart simply starts new ones.
+func newIrisConvoStore() irisconvo.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return irisconvo.NewPGStore(ps.DB())
+	}
+	return irisconvo.NewMemStore()
+}
+
+func (s *server) handleAIConversations(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.nlqGate(w, r)
+	if !ok {
+		return
+	}
+	if s.nlqConvos == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("Iris conversations are not available on this deployment"))
+		return
+	}
+	tenant, _ := principalTenant(claims)
+	c, err := s.nlqConvos.Create(r.Context(), tenant, claims.Sub)
+	switch {
+	case errors.Is(err, irisconvo.ErrInvalid):
+		writeError(w, http.StatusBadRequest, errors.New("a conversation needs a signed-in user and a workspace"))
+		return
+	case err != nil:
+		logError("iris.convo", "create failed", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("the conversation could not be started"))
+		return
+	}
+	writeJSON(w, http.StatusCreated, c)
+}
+
+// handleAIConversation serves /api/ai/conversations/{id}[/messages].
+func (s *server) handleAIConversation(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/ai/conversations/")
+	id, sub, _ := strings.Cut(rest, "/")
+	if !irisconvo.ValidID(id) || (sub != "" && sub != "messages") {
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+		return
+	}
+	if sub == "messages" {
+		s.handleAIConversationMessage(w, r, id)
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET"))
+		return
+	}
+	if !aiEnabled() {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Iris AI is disabled — set FEATURE_AI=true"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
+		return
+	}
+	if s.nlqConvos == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("Iris conversations are not available on this deployment"))
+		return
+	}
+	tenant, _ := principalTenant(claims)
+	c, err := s.nlqConvos.Get(r.Context(), tenant, claims.Sub, id)
+	switch {
+	case errors.Is(err, irisconvo.ErrNotFound):
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+	case err != nil:
+		logError("iris.convo", "read failed", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("the conversation could not be read"))
+	default:
+		writeJSON(w, http.StatusOK, c)
+	}
+}
+
+func (s *server) handleAIConversationMessage(w http.ResponseWriter, r *http.Request, id string) {
+	claims, ok := s.nlqGate(w, r)
+	if !ok {
+		return
+	}
+	if s.nlqConvos == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("Iris conversations are not available on this deployment"))
+		return
+	}
+	var req struct {
+		Question   string `json:"question"`
+		IncidentID string `json:"incident_id"`
+		TZ         string `json:"tz"`
+	}
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields() // no client-supplied state, prior query or tenant
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if q := strings.TrimSpace(req.Question); q == "" || len([]rune(q)) > nlqQuestionMax {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("question is 1 to %d characters", nlqQuestionMax))
+		return
+	}
+	loc := time.UTC
+	if req.TZ != "" {
+		l, err := time.LoadLocation(req.TZ)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, errors.New("tz must be an IANA time zone"))
+			return
+		}
+		loc = l
+	}
+	incident := strings.TrimSpace(req.IncidentID)
+	if incident != "" && !isUUIDToken(incident) {
+		writeError(w, http.StatusBadRequest, errors.New("incident_id is not an incident id"))
+		return
+	}
+	tenant, _ := principalTenant(claims)
+	conv, err := s.nlqConvos.Get(r.Context(), tenant, claims.Sub, id)
+	if errors.Is(err, irisconvo.ErrNotFound) {
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+		return
+	}
+	if err != nil {
+		logError("iris.convo", "read failed", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("the conversation could not be read"))
+		return
+	}
+	st := conv.State
+	cx := compile.Context{Loc: loc, Now: time.Now(), IncidentID: incident, PriorAST: st.LastAST,
+		Conv: &compile.Conversation{Entities: st.Entities, Actors: st.Actors, ChangeIDs: st.ChangeIDs}}
+	c, err := s.nlqCompileQuestion(r, claims, req.Question, cx)
+	if err != nil {
+		logError("iris.nlquery", "compile failed", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("the question could not be compiled"))
+		return
+	}
+	turn := irisconvo.Turn{Question: req.Question, Intent: c.res.Intent}
+	out := c.body()
+	next := st
+	status := http.StatusOK
+	switch {
+	case c.res.Decline != "":
+		turn.Outcome = irisconvo.OutcomeDeclined
+	case len(c.res.Clarify) > 0:
+		turn.Outcome = irisconvo.OutcomeClarify
+	case c.res.Unparsed || c.res.AST == nil:
+		turn.Outcome = irisconvo.OutcomeUnparsed
+	case c.checked == nil:
+		turn.Outcome = irisconvo.OutcomeInvalid
+	default:
+		rs, err := s.nlqRun(r, claims, c.checked, *c.vr)
+		switch {
+		case errors.Is(err, plan.ErrNotFound):
+			// An ANSWER ("no such incident"), recorded as a turn — not a 404,
+			// which the client reads as "this conversation is gone".
+			turn.Outcome = irisconvo.OutcomeError
+			out["error"] = "not found"
+		case err != nil:
+			logError("iris.nlquery", "execute failed", errf(err))
+			turn.Outcome, status = irisconvo.OutcomeError, http.StatusInternalServerError
+			out["error"] = "the query could not be run"
+		default:
+			turn.Outcome, turn.ASTHash, turn.QueryID = irisconvo.OutcomeAnswered, rs.ASTHash, rs.QueryID
+			turn.Rows = len(rs.Rows) + len(rs.Series)
+			next = irisconvo.Next(s.nlqCatalog, st, c.checked, rs)
+			out["result"] = rs
+		}
+	}
+	saved, err := s.nlqConvos.Append(r.Context(), tenant, claims.Sub, id, turn, next)
+	switch {
+	case errors.Is(err, irisconvo.ErrFull):
+		writeError(w, http.StatusConflict, err)
+		return
+	case errors.Is(err, irisconvo.ErrNotFound):
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+		return
+	case err != nil:
+		logError("iris.convo", "append failed", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("the conversation could not be saved"))
+		return
+	}
+	out["conversation_id"] = saved.ID
+	out["turn"] = saved.Turns[len(saved.Turns)-1]
+	logInfo("iris.convo", "turn", map[string]any{"tenant": tenant, "sub": claims.Sub, "intent": turn.Intent,
+		"outcome": turn.Outcome, "turns": len(saved.Turns), "question_chars": len(req.Question)})
+	writeJSON(w, status, out)
 }

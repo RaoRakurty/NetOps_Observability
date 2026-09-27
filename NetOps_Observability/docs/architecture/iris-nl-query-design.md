@@ -249,3 +249,40 @@ import guard · 6 `dem/experience` ChangeQuery `Until/Actor/Objects` in SQL (+ p
 `newServer` — failure logs and disables NL routes, never aborts boot) · 9 root guard/isolation/adapter
 tests · 10 golden seed, then N-C5 (grammar + routes). **Blocked slices:** circuit/provider flagship
 (Parts 52, 63) on N-B5 + N-C2 aliases; Part 51 actor answers on N-D1/D2.
+
+## 9. N-C7 Conversations (`internal/irisconvo`, `compile/refer.go`)
+
+**Premise correction (found 2026-09-27).** Before N-C7, `it / that / there / those / them` were framing
+vocabulary, so a first-turn "show cpu on it" or "cpu on that device" compiled to CPU on EVERY device —
+a silent widening the coverage rule exists to prevent. The rule is now: **a referential phrase must be
+BOUND or the question is Unparsed, naming the phrase.** Existential "there" ("are there any…", "were
+there changes") is not a reference.
+
+**State = references, never prose.** Per conversation the server holds: the last validated AST, entity
+refs (most recent first: what the question named → what the answer returned → earlier turns), and —
+redefined by each change list — the actors ("they") and change ids ("what ELSE"). Result-derived ids are
+built as catalog canonical ids and kept only if they match the catalog's `id_pattern`; every query built
+from state is validated again against the caller's CURRENT visibility (stale or foreign ref ≡
+`unknown_entity`). The client supplies only the question: `prior_ast`, `state` or `tenant` in a message
+body is a 400.
+
+**Binding (deterministic).** Typed phrase ("that site", "the same router") → the most recent entity of
+that type; untyped ("it") → the most recent entity of a type the question can use; plural ("those
+circuits", "them") → every recent entity of the first match's type (≤ 10); "there" → a site; "they" in a
+change question → the previous change list's actors. With an incident on screen, the change path's
+pronouns bind to the incident (existing behaviour). Bound refs carry `resolution_method =
+"conversation"`.
+
+**Ownership & bounds.** One principal (`sub`) in one tenant scope (`principalTenant`; the Global view is
+its own scope). Another tenant, a same-tenant colleague, and an `as_tenant` walk get the same 404 as a
+never-existing id. 50 turns (409 past it), 50 conversations per owner (LRU), 7-day idle TTL. PG:
+`iris_conversations` (0053, FORCE-RLS `tenant_iso` + owner filter, `FOR UPDATE` serialises the turn
+cap); file mode: memory (working state — not imported at cutover).
+
+**API.** `POST /api/ai/conversations` · `GET /api/ai/conversations/{id}` (turns only — state never
+leaves the server) · `POST /api/ai/conversations/{id}/messages` → the compile answer + result + the
+recorded turn. A "not found" answer is a 200 turn with `error`, never a 404 (which the client reads as
+"conversation gone").
+
+**Not yet (N-C7 remainder):** editable-chip → AST regeneration (with N-E3/E4), the Part 2 §50
+multi-turn corpus scored like the golden corpus, and Part 2 §69's 14 routine questions end to end.

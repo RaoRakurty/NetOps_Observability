@@ -1908,6 +1908,25 @@ export interface IrisCompiled {
   ast?: Record<string, unknown>;
   validation?: IrisValidation;
 }
+export interface IrisTurn {
+  at: string;
+  question: string;
+  intent?: string;
+  outcome: "answered" | "clarify" | "declined" | "unparsed" | "invalid" | "error";
+  rows: number;
+}
+export interface IrisConversation {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  turns: IrisTurn[];
+}
+export interface IrisConversationAnswer extends IrisCompiled {
+  conversation_id: string;
+  turn: IrisTurn;
+  result?: IrisResultSet;
+  error?: string;
+}
 export interface IrisResultSet {
   query_id: string;
   query_type: string;
@@ -6087,6 +6106,13 @@ export const api = {
     request<IrisCompiled>("/api/ai/query/compile", { method: "POST", body: JSON.stringify(tz ? { question, tz } : { question }) }),
   executeIrisQuery: (ast: unknown) =>
     request<{ result: IrisResultSet }>("/api/ai/query/execute", { method: "POST", body: JSON.stringify({ ast }) }),
+  // Conversations (N-C7): follow-ups ("that device", "what else did they
+  // change") resolve against state the server holds — the client sends only
+  // the question.
+  startIrisConversation: () => request<IrisConversation>("/api/ai/conversations", { method: "POST" }),
+  askIrisConversation: (id: string, question: string, tz?: string) =>
+    request<IrisConversationAnswer>(`/api/ai/conversations/${encodeURIComponent(id)}/messages`,
+      { method: "POST", body: JSON.stringify(tz ? { question, tz } : { question }) }),
 
   // Native metrics (Prometheus-compatible API via the Go proxy).
   metricNames: () => request<PromNamesResponse>("/api/metrics/names"),

@@ -15,6 +15,8 @@ const deleteIrisAlias = vi.fn();
 const resolveIrisEntity = vi.fn();
 const compileIrisQuery = vi.fn();
 const executeIrisQuery = vi.fn();
+const startIrisConversation = vi.fn();
+const askIrisConversation = vi.fn();
 vi.mock("../services/api", () => ({
   api: {
     irisAliases: (...a: unknown[]) => irisAliases(...a),
@@ -23,6 +25,8 @@ vi.mock("../services/api", () => ({
     resolveIrisEntity: (...a: unknown[]) => resolveIrisEntity(...a),
     compileIrisQuery: (...a: unknown[]) => compileIrisQuery(...a),
     executeIrisQuery: (...a: unknown[]) => executeIrisQuery(...a),
+    startIrisConversation: (...a: unknown[]) => startIrisConversation(...a),
+    askIrisConversation: (...a: unknown[]) => askIrisConversation(...a),
   },
 }));
 
@@ -33,7 +37,8 @@ const ref = (id: string, over = {}) => ({
 });
 
 beforeEach(() => {
-  for (const f of [irisAliases, putIrisAlias, deleteIrisAlias, resolveIrisEntity, compileIrisQuery, executeIrisQuery]) f.mockReset();
+  for (const f of [irisAliases, putIrisAlias, deleteIrisAlias, resolveIrisEntity, compileIrisQuery, executeIrisQuery,
+    startIrisConversation, askIrisConversation]) f.mockReset();
   irisAliases.mockResolvedValue({ aliases: [{ entity_type: "device", entity_id: "device:fw-hq-01", alias: "HQ firewall" }], max: 2000 });
 });
 afterEach(() => cleanup());
@@ -127,7 +132,7 @@ describe("3 · try a question", () => {
     compileIrisQuery.mockResolvedValueOnce({ unparsed: true, not_understood: ["purple"], intent: "metric_query", ast: { type: "metric" }, validation: { valid: true } });
     render(<IrisVocabulary />);
     type("Question", "purple latency");
-    fireEvent.click(screen.getByText("Show what Iris understood"));
+    fireEvent.click(screen.getByText("Only show how Iris reads it"));
     expect(await screen.findByTestId("iris-understood")).toHaveTextContent("it could not place: purple");
     expect(screen.queryByText("Run it")).toBeNull();
   });
@@ -137,7 +142,7 @@ describe("3 · try a question", () => {
       validation: { valid: false, errors: [{ path: "metric", code: "unknown_metric", message: "unknown metric", suggestions: ["latency"] }] } });
     render(<IrisVocabulary />);
     type("Question", "latncy");
-    fireEvent.click(screen.getByText("Show what Iris understood"));
+    fireEvent.click(screen.getByText("Only show how Iris reads it"));
     expect(await screen.findByTestId("iris-validation-errors")).toHaveTextContent("unknown metric — did you mean latency?");
     expect(screen.queryByText("Run it")).toBeNull();
   });
@@ -149,7 +154,7 @@ describe("3 · try a question", () => {
       rows: [{ id: "c1", actor: "<b>x</b>" }], provenance: { source: "change_ledger", executed_at: "", duration_ms: 7 } } });
     render(<IrisVocabulary />);
     type("Question", "what changed today");
-    fireEvent.click(screen.getByText("Show what Iris understood"));
+    fireEvent.click(screen.getByText("Only show how Iris reads it"));
     fireEvent.click(await screen.findByText("Run it"));
     await waitFor(() => expect(executeIrisQuery).toHaveBeenCalledWith(ast));
     const res = await screen.findByTestId("iris-result");
@@ -162,9 +167,72 @@ describe("3 · try a question", () => {
     compileIrisQuery.mockResolvedValueOnce({ decline: "Iris is read-only; it never changes devices." });
     render(<IrisVocabulary />);
     type("Question", "shut the interface");
-    fireEvent.click(screen.getByText("Show what Iris understood"));
+    fireEvent.click(screen.getByText("Only show how Iris reads it"));
     expect(await screen.findByTestId("iris-understood")).toHaveTextContent("Iris will not do this: Iris is read-only");
     expect(screen.queryByText("Run it")).toBeNull();
+  });
+});
+
+describe("3 · follow-ups in a conversation", () => {
+  const answer = (q: string, over = {}) => ({
+    conversation_id: "c1", intent: "query_metric", ast: { v: 1 }, validation: { valid: true },
+    turn: { at: "", question: q, outcome: "answered", rows: 1 },
+    result: { query_id: "q", query_type: "metric_series", window: { from: "", to: "" }, truncated: false,
+      rows: [{ device: "edge-1", value: 12 }], provenance: { source: "victoriametrics", executed_at: "", duration_ms: 3 } },
+    ...over,
+  });
+
+  it("starts ONE conversation and asks every follow-up in it — only the question is sent", async () => {
+    startIrisConversation.mockResolvedValue({ id: "c1", created_at: "", updated_at: "", turns: [] });
+    askIrisConversation.mockImplementation((_id: string, q: string) => Promise.resolve(answer(q)));
+    render(<IrisVocabulary />);
+    type("Question", "cpu on edge-1");
+    fireEvent.click(screen.getByText("Ask"));
+    expect(await screen.findByTestId("iris-result")).toHaveTextContent("1 row");
+    type("Question", "memory on that device");
+    fireEvent.click(screen.getByText("Ask"));
+    await waitFor(() => expect(screen.getByTestId("iris-history")).toHaveTextContent("memory on that device — answered"));
+    expect(startIrisConversation).toHaveBeenCalledTimes(1);
+    expect(askIrisConversation.mock.calls.map((c) => c.slice(0, 2))).toEqual([["c1", "cpu on edge-1"], ["c1", "memory on that device"]]);
+    expect(screen.queryByText("Run it")).toBeNull(); // an asked answer already ran
+  });
+
+  it("a conversation that has ended is replaced once, and the restart is said", async () => {
+    startIrisConversation.mockResolvedValueOnce({ id: "old", turns: [] }).mockResolvedValueOnce({ id: "new", turns: [] });
+    askIrisConversation.mockRejectedValueOnce(new Error("404 Not Found: {\"error\":\"not found\"}"))
+      .mockImplementation((_id: string, q: string) => Promise.resolve(answer(q)));
+    render(<IrisVocabulary />);
+    type("Question", "cpu on edge-1");
+    fireEvent.click(screen.getByText("Ask"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("That conversation had ended — started a new one.");
+    expect(askIrisConversation.mock.calls.map((c) => c[0])).toEqual(["old", "new"]);
+  });
+
+  it("a reference with nothing to point at is shown as not understood", async () => {
+    startIrisConversation.mockResolvedValue({ id: "c1", turns: [] });
+    askIrisConversation.mockResolvedValue(answer("cpu on that device", {
+      ast: undefined, validation: undefined, result: undefined, unparsed: true, not_understood: ["that device"],
+      turn: { at: "", question: "cpu on that device", outcome: "unparsed", rows: 0 },
+    }));
+    render(<IrisVocabulary />);
+    type("Question", "cpu on that device");
+    fireEvent.click(screen.getByText("Ask"));
+    expect(await screen.findByTestId("iris-understood")).toHaveTextContent("it could not place: that device");
+    expect(screen.getByTestId("iris-history")).toHaveTextContent("cpu on that device — not understood");
+    expect(screen.queryByTestId("iris-result")).toBeNull();
+  });
+
+  it("New conversation forgets the follow-up context", async () => {
+    startIrisConversation.mockResolvedValueOnce({ id: "c1", turns: [] }).mockResolvedValueOnce({ id: "c2", turns: [] });
+    askIrisConversation.mockImplementation((_id: string, q: string) => Promise.resolve(answer(q)));
+    render(<IrisVocabulary />);
+    type("Question", "cpu on edge-1");
+    fireEvent.click(screen.getByText("Ask"));
+    fireEvent.click(await screen.findByText("New conversation"));
+    expect(screen.queryByTestId("iris-history")).toBeNull();
+    type("Question", "memory on edge-1");
+    fireEvent.click(screen.getByText("Ask"));
+    await waitFor(() => expect(askIrisConversation.mock.calls.map((c) => c[0])).toEqual(["c1", "c2"]));
   });
 });
 

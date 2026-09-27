@@ -164,8 +164,8 @@ Evidence paths are relative to `src/backend/` unless prefixed. "Closes in" names
 | 10 | Multi-layer RAG A–G (schema, environment, runbook, incident, docs, structured change, never-vector telemetry) | PARTIAL | Docs BM25 (E) shipped; others missing | N-C5, N-F3, N-F4, N-D3 |
 | 11 | Hybrid retrieval (filters + lexical + semantic + recency + authority + rerank) | PARTIAL | Lexical BM25 + tier tie-break only | N-F3 |
 | 12 | RAG security: tenant pre-filter, provenance fields, retrieved content is data | PARTIAL | Docs corpus is platform-global (no tenant data); investigation memory is tenant-scoped | N-F3 |
-| 13 | `IrisConversationState` | MISSING | Finding 1 | N-C7 |
-| 14 | Reference resolution (that/it/there/those) from structured state | MISSING | — | N-C7 |
+| 13 | `IrisConversationState` | DONE | `internal/irisconvo` + migration 0053 (2026-09-27); design §9 of `iris-nl-query-design.md` | — |
+| 14 | Reference resolution (that/it/there/those) from structured state | DONE | `compile/refer.go` — bound from server state or Unparsed (2026-09-27) | — |
 | 15 | `NLQueryCompiler` pipeline + compile/execute/get/explain APIs + `compile_query` tool | MISSING | — | N-C5 |
 | 16 | Query validation + hard limits; reject unknown/cross-tenant/forbidden | MISSING | — | N-C3 |
 | 17 | Query repair loop with structured errors, bounded retries | MISSING | — | N-C5 |
@@ -201,7 +201,7 @@ Evidence paths are relative to `src/backend/` unless prefixed. "Closes in" names
 | 47 | Performance targets per class; tenant-keyed caches | MISSING | — | N-C5, N-H4 |
 | 48 | Query eval metrics + targets (entity ≥99 %, exec ≥98 %, semantic ≥95 %) | MISSING | — | N-C6, N-H5 |
 | 49 | RAG evaluation per layer | PARTIAL | Docs hit@k only | N-F3, N-G2 |
-| 50 | Multi-turn naturalness tests | MISSING | — | N-C7 |
+| 50 | Multi-turn naturalness tests | PARTIAL | Unit + HTTP follow-up tests (`refer_test.go`, `nlquery_convo_isolation_test.go`); no scored multi-turn corpus yet | N-C7 |
 | 51 | Flagship test 1: change incident conversation | MISSING | — | N-S1 |
 | 52 | Flagship test 2: Comcast circuits → only Dallas → BGP flaps | MISSING | — | N-S2 |
 | 53 | Flagship test 3: changes 30 min before every SD-WAN incident this week | MISSING | — | N-S3 |
@@ -380,7 +380,7 @@ returns data, `pgintegration` when it touches PG, and the CI gate (§12). Effort
 | N-C4 | **Planner + adapters**: typed MetricsQL builder (escaped labels) → `vmRange`/`vmInstantScoped`; CH allowlisted templates → `chSelect`; RCA/change reads → existing functions; OS structured filters (no `query_string` from model text); site→device expansion; typed `ResultSet` with provenance; chokepoint guard test | C3, B5 | 3 |
 | N-C5 | **`NLQueryCompiler`**: deterministic grammar + intent taxonomy (Part 2 §6); model fallback via structured output + schema-RAG + example-RAG; repair loop ≤2; compile/execute/get/explain APIs; `compile_query` tool; interpreted-query explain | C2, C4, A4 | 4 |
 | N-C6 | **Golden NL corpus + example library**: `tests/iris/nlquery/golden/` (question, intent, entity refs, AST, alternates, result semantics) across Part 2 §20's 21 categories; controlled paraphrases validated to the same AST; CI metrics (entity precision, executable rate, semantic correctness) on the deterministic path; offline harness for the model path | C5 | 3 |
-| N-C7 | **Conversation state + follow-ups**: `iris_conversations` (RLS), structured state, reference resolver, AST rewriting (replace site/provider constraint, compare-to-yesterday, narrow to change class), editable-chip regeneration; multi-turn tests (Part 2 §50) | C5, A5 | 3 |
+| N-C7 | **Conversation remainder** (store, state, reference binding, follow-up rewriting and the conversation API SHIPPED 2026-09-27): editable-chip → AST regeneration; a scored multi-turn corpus (Part 2 §50) with a ratchet like the golden corpus; Part 2 §69's 14 routine questions end to end | C5, E3 | 1 |
 | N-C8 | **Query capture + operator corrections**: per-query record (Part 2 §22 fields) and chip edits stored for offline evaluation; no automatic retraining | C7, A6 | 1 |
 
 ### Phase D — Change Intelligence (Part 2 §24–29; Part 1 §33; D12)

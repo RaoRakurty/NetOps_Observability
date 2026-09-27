@@ -14,8 +14,8 @@
 // the words it could not place are listed, and nothing is run.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, type IrisAlias, type IrisCompiled, type IrisRef, type IrisResolution, type IrisResultSet } from "../services/api";
-import { operatorError } from "../lib/errors";
+import { api, type IrisAlias, type IrisCompiled, type IrisRef, type IrisResolution, type IrisResultSet, type IrisTurn } from "../services/api";
+import { httpFailure, operatorError } from "../lib/errors";
 
 // The entity kinds an alias can point at (catalog entities minus incidents and
 // changes, which are named by id, not by nickname).
@@ -35,6 +35,16 @@ export const METHOD_LABEL: Record<string, string> = {
 };
 
 const MAX_ROWS_SHOWN = 20;
+
+// Plain-language turn outcomes.
+export const OUTCOME_LABEL: Record<IrisTurn["outcome"], string> = {
+  answered: "answered", clarify: "needs you to choose", declined: "declined",
+  unparsed: "not understood", invalid: "could not be run", error: "failed",
+};
+
+function browserTZ(): string | undefined {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return undefined; }
+}
 
 const text14 = { fontSize: 14 } as const;
 const muted = { color: "var(--muted)", fontSize: 14 } as const;
@@ -77,6 +87,11 @@ export default function IrisVocabulary() {
   const [compiled, setCompiled] = useState<IrisCompiled | null>(null);
   const [result, setResult] = useState<IrisResultSet | null>(null);
   const [qErr, setQErr] = useState("");
+  // "asked" = the answer came from the conversation (already run); "preview" =
+  // only compiled, runnable on request.
+  const [mode, setMode] = useState<"asked" | "preview">("preview");
+  const [convId, setConvId] = useState<string | null>(null);
+  const [history, setHistory] = useState<IrisTurn[]>([]);
 
   const reload = useCallback(async () => {
     try {
@@ -167,12 +182,59 @@ export default function IrisVocabulary() {
     setQErr("");
     if (!question.trim()) return;
     try {
-      let tz: string | undefined;
-      try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { tz = undefined; }
-      setCompiled(await api.compileIrisQuery(question.trim(), tz));
+      setMode("preview");
+      setCompiled(await api.compileIrisQuery(question.trim(), browserTZ()));
     } catch (e) {
       setQErr(operatorError(e, "Could not read that question."));
     }
+  };
+
+  // ask sends the question into the conversation: follow-ups ("that device",
+  // "what else did they change") resolve against what the server holds. A
+  // conversation that has gone (expired, restarted) or is full is replaced
+  // once, and the restart is said, not hidden.
+  const ask = async () => {
+    setCompiled(null);
+    setResult(null);
+    setQErr("");
+    const q = question.trim();
+    if (!q) return;
+    const send = async (id: string) => api.askIrisConversation(id, q, browserTZ());
+    try {
+      let id = convId;
+      if (!id) {
+        id = (await api.startIrisConversation()).id;
+        setConvId(id);
+      }
+      let ans;
+      try {
+        ans = await send(id);
+      } catch (e) {
+        const st = httpFailure(e)?.status;
+        if (st !== 404 && st !== 409) throw e;
+        id = (await api.startIrisConversation()).id;
+        setConvId(id);
+        setHistory([]);
+        setQErr(st === 409 ? "That conversation was full — started a new one." : "That conversation had ended — started a new one.");
+        ans = await send(id);
+      }
+      setMode("asked");
+      setCompiled(ans);
+      setResult(ans.result ?? null);
+      if (ans.error) setQErr(ans.error === "not found" ? "Iris could not find that." : "The question could not be run.");
+      setHistory((h) => [...h, ans.turn]);
+      setQuestion("");
+    } catch (e) {
+      setQErr(operatorError(e, "The question could not be asked."));
+    }
+  };
+
+  const newConversation = () => {
+    setConvId(null);
+    setHistory([]);
+    setCompiled(null);
+    setResult(null);
+    setQErr("");
   };
 
   const run = async () => {
@@ -185,7 +247,7 @@ export default function IrisVocabulary() {
     }
   };
 
-  const runnable = !!compiled?.ast && !!compiled.validation?.valid && !compiled.unparsed && !compiled.decline;
+  const runnable = mode === "preview" && !!compiled?.ast && !!compiled.validation?.valid && !compiled.unparsed && !compiled.decline;
   const rows = result?.rows ?? [];
   const cols = rows.length ? Object.keys(rows[0]) : [];
 
@@ -247,11 +309,21 @@ export default function IrisVocabulary() {
       )}
 
       <div style={stepHead}>3. Try a question</div>
+      <p style={{ ...muted, margin: "0 0 6px" }}>Ask, then follow up — &quot;that device&quot;, &quot;what else did they change&quot;. Iris only follows up on what it answered.</p>
+      {history.length > 0 && (
+        <ol style={{ margin: "0 0 6px", paddingLeft: 22 }} data-testid="iris-history">
+          {history.map((h, i) => (
+            <li key={i} style={text14}>{h.question} <span style={muted}>— {OUTCOME_LABEL[h.outcome] ?? h.outcome}</span></li>
+          ))}
+        </ol>
+      )}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <input aria-label="Question" placeholder="e.g. latency on the HQ firewall last 24 hours" value={question} maxLength={1000}
-          onChange={(e) => setQuestion(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void understand(); }}
+          onChange={(e) => setQuestion(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void ask(); }}
           style={{ ...text14, flex: 1, minWidth: 220 }} />
-        <button type="button" className="dash-btn" style={text14} onClick={() => void understand()}>Show what Iris understood</button>
+        <button type="button" className="dash-btn accent" style={text14} onClick={() => void ask()}>Ask</button>
+        <button type="button" className="dash-btn" style={text14} onClick={() => void understand()}>Only show how Iris reads it</button>
+        {convId && <button type="button" className="dash-btn" style={text14} onClick={newConversation}>New conversation</button>}
       </div>
       {qErr && <div role="alert" style={{ ...text14, color: "var(--bad)" }}>{qErr}</div>}
       {compiled && (

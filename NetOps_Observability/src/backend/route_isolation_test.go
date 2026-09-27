@@ -66,7 +66,12 @@ var routeIsolationLedger = map[string]string{
 	"/api/ai/entities/resolve": "scoped",
 	"/api/ai/query/compile":    "scoped",
 	"/api/ai/query/execute":    "scoped",
-	"/api/alerts":              "scoped",
+	// Conversations (N-C7): owned by one principal in one tenant scope (RLS
+	// iris_conversations + owner filter); another tenant, a same-tenant
+	// colleague and an as_tenant walk all get 404 — nlquery_convo_isolation_test.go.
+	"/api/ai/conversations":  "scoped",
+	"/api/ai/conversations/": "scoped",
+	"/api/alerts":            "scoped",
 	// BGP Operations (item 10): the watchlist is per-tenant DATA (the prefixes/
 	// ASNs a tenant watches), owner stamped from the RLS GUC, cross-org
 	// isolation proven by TestBGPWatchlistTenantIsolationPG. The resource proxy
