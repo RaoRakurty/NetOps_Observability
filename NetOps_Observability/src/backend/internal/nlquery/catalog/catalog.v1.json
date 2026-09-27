@@ -638,7 +638,9 @@
     "interface flaps",
     "link flaps",
     "port flaps",
-    "flapping"
+    "flapping",
+    "flaps",
+    "flap"
    ],
    "entity_types": [
     "interface"
@@ -1032,7 +1034,9 @@
     "bgp flaps",
     "bgp resets",
     "session flaps",
-    "peer flaps"
+    "peer flaps",
+    "flaps",
+    "resets"
    ],
    "entity_types": [
     "bgp_peer"
@@ -1078,7 +1082,11 @@
     "prefixes received",
     "received prefixes",
     "bgp prefixes",
-    "routes received"
+    "routes received",
+    "prefixes",
+    "prefix count",
+    "prefix",
+    "receiving"
    ],
    "entity_types": [
     "bgp_peer"
