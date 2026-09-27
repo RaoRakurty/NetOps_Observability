@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"netops/backend/internal/audit"
+	"netops/backend/internal/changeledger"
 	"netops/backend/internal/platformdb"
 	"os"
 	"sort"
@@ -111,7 +112,11 @@ func auditDecision(status int) string {
 func (s *server) withAudit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(rec, r)
+		// The handler names the object it changed into this slot
+		// (changeledger.SetTarget); the change ledger records only mutations
+		// whose target is known.
+		slotCtx, slot := changeledger.WithTargetSlot(r.Context())
+		next.ServeHTTP(rec, r.WithContext(slotCtx))
 
 		if s.audit == nil || !strings.HasPrefix(r.URL.Path, "/api/") {
 			return
@@ -156,6 +161,28 @@ func (s *server) withAudit(next http.Handler) http.Handler {
 			Decision: auditDecision(rec.status),
 			Remote:   auditClientIP(r),
 		})
+		s.auditToChangeLedger(r, claims.Sub, tenant, cross, rec.status, slot)
+	})
+}
+
+// auditToChangeLedger hands an audited request whose handler named its target
+// to the change ledger (Iris N-D2, correlix_audit). Non-blocking: the producer
+// queues it, and skips — counted — anything that is not a tenant's change.
+func (s *server) auditToChangeLedger(r *http.Request, actor, tenant string, cross bool, status int, slot *changeledger.TargetSlot) {
+	target, ok := slot.Get()
+	if !ok || s.changeLedger == nil {
+		return
+	}
+	site := ""
+	if target.Kind == "device" && !cross {
+		if b, found := s.deviceSites.Get(tenant, false, target.ID); found {
+			site = b.Site
+		}
+	}
+	s.changeLedger.EnqueueAudit(changeledger.AuditMutation{
+		Tenant: tenant, Cross: cross, Actor: actor, Method: r.Method,
+		Path: maskCapabilityTokenPath(r.URL.Path), Status: status, At: time.Now().UTC(),
+		Target: target, Site: site,
 	})
 }
 

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 
+	"netops/backend/internal/changeledger"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/users"
 )
@@ -26,6 +27,28 @@ type (
 	User      = users.User
 	usersRepo = users.Repo
 )
+
+// changeLedgerDirectory is the canonical identity store as the change ledger's
+// actor normalization sees it (Iris N-D4): an EXACT principal-id lookup,
+// nothing else. The display label is the account's display name, or — for a
+// LOCAL account only — its login handle; a federated account's username is an
+// opaque id and is never shown as a name.
+type changeLedgerDirectory struct{ users usersRepo }
+
+func (d changeLedgerDirectory) PrincipalByID(id string) (changeledger.Person, bool) {
+	if d.users == nil {
+		return changeledger.Person{}, false
+	}
+	u, ok := d.users.Get(id)
+	if !ok {
+		return changeledger.Person{}, false
+	}
+	display := strings.TrimSpace(u.DisplayName)
+	if display == "" && (u.AuthSource == "" || u.AuthSource == "local") {
+		display = u.Username
+	}
+	return changeledger.Person{ID: u.ID, Display: display, TenantID: u.TenantID}, true
+}
 
 // guardFederatedRole prevents a federated identity from SILENTLY becoming the
 // platform owner (global tenant + super-admin) via an IdP role/tenant mapping

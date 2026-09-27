@@ -2371,46 +2371,73 @@ func (h *nlqScope) Incident(ctx context.Context, id string) (plan.IncidentDetail
 	return det, nil
 }
 
-// nlqChangeFetch bounds the ledger read the post-filter runs over; hitting it
-// is reported as truncation (N-D1 moves these filters into SQL).
+// nlqChangeFetch bounds one ledger read (and the answer when the caller set no
+// limit). Every filter is applied by the store BEFORE this limit (N-D1), so the
+// bound is on the matching rows, never on rows a Go filter then discards.
 const nlqChangeFetch = 500
+
+// nlqLedgerQuery maps the planner's change query onto the ledger store's. Every
+// field the plan can filter on has a store-side counterpart, so nothing is
+// post-filtered in Go; Sources are the ledger's source_system values ("ledger",
+// "config_capture", "correlix_audit").
+func nlqLedgerQuery(q plan.ChangeQuery, limit int) experience.ChangeQuery {
+	return experience.ChangeQuery{
+		Since: q.From, Until: q.To, Types: q.Types, Sites: q.Sites, Apps: q.Apps, Seams: q.Seams,
+		Actors: q.Actors, Objects: q.Objects, ObjectKinds: q.ObjectKinds, Sources: q.Sources,
+		ExcludeIDs: q.ExcludeIDs, Limit: limit,
+	}
+}
 
 func (h *nlqScope) Changes(ctx context.Context, q plan.ChangeQuery) ([]plan.ChangeRow, bool, error) {
 	tenant, _ := principalTenant(h.claims)
+	limit := q.Limit
+	if limit <= 0 || limit > nlqChangeFetch {
+		limit = nlqChangeFetch
+	}
 	var out []plan.ChangeRow
 	truncated := false
+	// Configuration versions the ledger already records (config_capture rows
+	// carry the version's content address as SourceObject), so the capture arm
+	// below does not list the same change twice.
+	inLedger := map[string]bool{}
 	if h.s.experienceStore != nil {
-		site, app := "", ""
-		if len(q.Sites) == 1 {
-			site = q.Sites[0]
-		}
-		if len(q.Apps) == 1 {
-			app = q.Apps[0]
-		}
-		evs, err := h.s.experienceStore.ListChanges(ctx, tenant, experience.ChangeQuery{Since: q.From, Types: q.Types, Site: site, App: app, Limit: nlqChangeFetch})
+		// ONE past the limit, to tell "that is all of them" from "that is all we
+		// would fetch".
+		evs, err := h.s.experienceStore.ListChanges(ctx, tenant, nlqLedgerQuery(q, limit+1))
 		if err != nil {
 			return nil, false, err
 		}
-		truncated = len(evs) >= nlqChangeFetch
+		if len(evs) > limit {
+			evs, truncated = evs[:limit], true
+		}
 		for _, ev := range evs {
-			row := plan.ChangeRow{ID: ev.ID, Type: ev.Type, Actor: ev.Actor, Source: "ledger", Object: ev.Object,
-				ObjectKind: ev.ObjectKind, Site: ev.Site, App: ev.App, Seam: ev.Seam, Summary: ev.Summary,
-				At: ev.EventAt, HasDiff: ev.Before != "" || ev.After != ""}
-			if changeMatches(row, q) {
-				out = append(out, row)
+			if ev.SourceSystem == experience.SourceSystemConfigCapture {
+				inLedger[ev.Object+"\x00"+ev.SourceObject] = true
 			}
+			out = append(out, plan.ChangeRow{ID: ev.ID, Type: ev.Type,
+				Actor:  firstNonBlank(ev.ActorDisplay, ev.ActorID, ev.Actor),
+				Source: ev.SourceSystem, Object: ev.Object, ObjectKind: ev.ObjectKind,
+				Site: ev.Site, App: ev.App, Seam: ev.Seam, Summary: ev.Summary, Ticket: ev.TicketRef,
+				At: ev.EventAt, HasDiff: ev.Before != "" || ev.After != ""})
 		}
 	}
-	// The configuration-capture arm: every observed config version change the
-	// caller may see, until N-D2 feeds these into the ledger itself.
-	if h.s.configBackup != nil && h.s.configDrift != nil && (len(q.Types) == 0 || stringSet(q.Types)[experience.ChangeConfig]) {
+	// The configuration-capture ARM: config versions captured before the
+	// ledger's config_capture producer existed (N-D2) live only in the version
+	// register. It is not the ledger, so it keeps its own predicate
+	// (changeMatches) — over rows it produced itself, never over ledger rows.
+	if h.s.configBackup != nil && h.s.configDrift != nil &&
+		(len(q.Types) == 0 || stringSet(q.Types)[experience.ChangeConfig]) &&
+		(len(q.Sources) == 0 || stringSet(q.Sources)[experience.SourceSystemConfigCapture]) {
 		secs := int(time.Since(q.From).Seconds())
 		rep, err := h.s.aiRecentChanges(h.claims)(ctx, ai.Principal{}, ai.ChangeQuery{SinceSeconds: secs, Limit: ai.MaxRecentChanges})
 		if err == nil && rep.NotWired == "" {
 			truncated = truncated || rep.Truncated
 			for _, c := range rep.Changes {
+				if inLedger[c.DeviceID+"\x00"+c.SHA] {
+					continue
+				}
 				row := plan.ChangeRow{ID: "config:" + c.DeviceID + ":" + shortVersion(c.SHA), Type: experience.ChangeConfig,
-					Source: "config_capture", Object: c.DeviceID, ObjectKind: "device", At: c.ChangedAt, HasDiff: c.PreviousSHA != "" || c.Added+c.Removed > 0,
+					Source: experience.SourceSystemConfigCapture, Object: c.DeviceID, ObjectKind: "device", At: c.ChangedAt, HasDiff: c.PreviousSHA != "" || c.Added+c.Removed > 0,
 					Summary: fmt.Sprintf("%s configuration %s (+%d/-%d lines)", firstNonBlank(c.DeviceName, c.DeviceID), c.State, c.Added, c.Removed)}
 				if changeMatches(row, q) {
 					out = append(out, row)
@@ -2425,7 +2452,9 @@ func (h *nlqScope) Changes(ctx context.Context, q plan.ChangeQuery) ([]plan.Chan
 	return out, truncated, nil
 }
 
-// changeMatches applies the filters the ledger read cannot yet push into SQL.
+// changeMatches is the configuration-capture ARM's predicate. The ledger rows
+// are filtered by the store (nlqLedgerQuery → SQL); this runs only over the rows
+// the arm builds itself from the version register, which has no query language.
 func changeMatches(c plan.ChangeRow, q plan.ChangeQuery) bool {
 	if !c.At.IsZero() && (c.At.Before(q.From) || (!q.To.IsZero() && c.At.After(q.To))) {
 		return false
