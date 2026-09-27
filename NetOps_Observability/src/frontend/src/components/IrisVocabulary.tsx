@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, type IrisAlias, type IrisCompiled, type IrisRef, type IrisResolution, type IrisResultSet } from "../services/api";
+import { operatorError } from "../lib/errors";
 
 // The entity kinds an alias can point at (catalog entities minus incidents and
 // changes, which are named by id, not by nickname).
@@ -37,11 +38,7 @@ const MAX_ROWS_SHOWN = 20;
 
 const text14 = { fontSize: 14 } as const;
 const muted = { color: "var(--muted)", fontSize: 14 } as const;
-const stepHead = { fontSize: 15, fontWeight: 600, margin: "14px 0 4px" } as const;
-
-function errText(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
+const stepHead = { fontSize: 16, fontWeight: 600, margin: "14px 0 4px" } as const;
 
 // cell renders one result value as text (objects as JSON — never as markup).
 export function cell(v: unknown): string {
@@ -88,7 +85,7 @@ export default function IrisVocabulary() {
       setMax(r.max);
       setLoadErr("");
     } catch (e) {
-      setLoadErr(errText(e));
+      setLoadErr(operatorError(e, "Could not load your team's names."));
     }
   }, []);
 
@@ -104,7 +101,7 @@ export default function IrisVocabulary() {
       setCandidates([]);
       await reload();
     } catch (e) {
-      setAddErr(errText(e));
+      setAddErr(operatorError(e, "The name could not be saved."));
     } finally {
       setBusy(false);
     }
@@ -138,7 +135,7 @@ export default function IrisVocabulary() {
         setAddErr(`No ${TYPE_LABEL[newType]?.toLowerCase() ?? newType} called "${target}" is visible to you. You can also enter its id, e.g. ${newType}:name.`);
       }
     } catch (e) {
-      setAddErr(errText(e));
+      setAddErr(operatorError(e, "Could not look that up."));
     } finally {
       setBusy(false);
     }
@@ -149,7 +146,7 @@ export default function IrisVocabulary() {
       await api.deleteIrisAlias(a.entity_type, a.alias);
       await reload();
     } catch (e) {
-      setLoadErr(errText(e));
+      setLoadErr(operatorError(e, "The name could not be removed."));
     }
   };
 
@@ -160,7 +157,7 @@ export default function IrisVocabulary() {
     try {
       setCheck(await api.resolveIrisEntity(checkText.trim()));
     } catch (e) {
-      setCheckErr(errText(e));
+      setCheckErr(operatorError(e, "Could not check that name."));
     }
   };
 
@@ -174,7 +171,7 @@ export default function IrisVocabulary() {
       try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { tz = undefined; }
       setCompiled(await api.compileIrisQuery(question.trim(), tz));
     } catch (e) {
-      setQErr(errText(e));
+      setQErr(operatorError(e, "Could not read that question."));
     }
   };
 
@@ -184,7 +181,7 @@ export default function IrisVocabulary() {
     try {
       setResult((await api.executeIrisQuery(compiled.ast)).result);
     } catch (e) {
-      setQErr(errText(e));
+      setQErr(operatorError(e, "The question could not be run."));
     }
   };
 
@@ -194,7 +191,7 @@ export default function IrisVocabulary() {
 
   return (
     <div data-testid="iris-vocabulary" style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
-      <div style={{ fontSize: 15, fontWeight: 600 }}>Iris vocabulary</div>
+      <div style={{ fontSize: 16, fontWeight: 600 }}>Iris vocabulary</div>
       <p style={{ ...muted, margin: "2px 0 0" }}>Teach Iris the names your team uses, and check how it reads a question. Only your workspace sees these.</p>
 
       <div style={stepHead}>1. Names your team uses</div>
