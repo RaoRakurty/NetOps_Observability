@@ -143,7 +143,7 @@ func TestListLimitIsNotATimeWindow(t *testing.T) {
 func TestUnresolvedTargetsAreNotDropped(t *testing.T) {
 	for q, phrase := range map[string]string{
 		"show memory on the dallas firewall for the last hour": "the dallas firewall", // ONE device, not all of Dallas
-		"prefixes received over direct connect last 24 hours": "connect",             // a circuit it did not resolve
+		"prefixes received over direct connect last 24 hours":  "connect",             // a circuit it did not resolve
 	} {
 		r := run(t, q, cx)
 		if r.AST != nil || !r.Unparsed {
@@ -175,9 +175,15 @@ func TestCompareKeepsTheQuestionsOwnWindow(t *testing.T) {
 }
 
 // Owner names keep the operator's casing (matched case-insensitively later).
+// The recovery matches on the original text — asciifold_slice_guard_test.go
+// forbids slicing it with an offset measured on a lowercased copy.
 func TestOwnerKeepsItsCasing(t *testing.T) {
-	r := run(t, "show incidents owned by Comcast Business this week", cx)
-	if r.AST == nil || len(r.AST.Filters) == 0 || r.AST.Filters[0].Values[0] != "Comcast Business" {
-		t.Fatalf("got %+v", r.AST)
+	for q, want := range map[string]string{
+		"show incidents owned by Comcast Business this week": "Comcast Business",
+	} {
+		r := run(t, q, cx)
+		if r.AST == nil || len(r.AST.Filters) == 0 || r.AST.Filters[0].Values[0] != want {
+			t.Errorf("%q: got %+v", q, r.AST)
+		}
 	}
 }

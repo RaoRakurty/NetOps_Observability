@@ -876,8 +876,10 @@ func (s *state) incidents() (Result, error) {
 		ownerValue := owner
 		// Keep the operator's casing ("Comcast Business"): the store matches
 		// case-insensitively, but the filter is shown back to them as typed.
-		if i := strings.Index(strings.ToLower(s.raw), owner); i >= 0 && i+len(owner) <= len(s.raw) {
-			ownerValue = s.raw[i : i+len(owner)]
+		// Matched ON the original text (never an offset taken from a folded
+		// copy: lowercasing can change byte lengths outside ASCII).
+		if m := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(owner)).FindString(s.raw); m != "" {
+			ownerValue = m
 		}
 		s.e.re(regexp.MustCompile(`\b(?:owned by|assigned to|owner is)\b`), s.text)
 		q.Filters = append(q.Filters, ast.Filter{Field: "owner", Op: "eq", Values: []string{ownerValue}})
