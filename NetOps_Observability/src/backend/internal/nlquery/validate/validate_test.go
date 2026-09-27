@@ -233,6 +233,10 @@ func TestCompoundIDsNeedTheirDeviceAndName(t *testing.T) {
 	mustFail(t, fakeScope{}, `{"v":1,"query_type":"metric_series","target":"bgp_peer","metric":"bgp_flaps","entities":[{"type":"bgp_peer","id":"bgp_peer:d1/not-an-ip"}]}`, CodeInvalidEntityID)
 }
 
-func TestMetricGroupByIsRefusedNotIgnored(t *testing.T) {
-	mustFail(t, fakeScope{}, strings.Replace(series, `"time_range"`, `"group_by":["site"],"time_range"`, 1), CodeForbiddenFieldForType)
+func TestMetricGroupByIsBoundedNotIgnored(t *testing.T) {
+	if _, res := Validate(context.Background(), cat, fakeScope{}, q(t, strings.Replace(series, `"time_range"`, `"group_by":["site"],"time_range"`, 1))); !res.Valid {
+		t.Fatalf("group by site must validate: %s", codes(res))
+	}
+	mustFail(t, fakeScope{}, strings.Replace(series, `"time_range"`, `"group_by":["change"],"time_range"`, 1), CodeUnknownDimension)
+	mustFail(t, fakeScope{}, strings.Replace(series, `"time_range"`, `"group_by":["site","device"],"time_range"`, 1), CodeTooBroad)
 }

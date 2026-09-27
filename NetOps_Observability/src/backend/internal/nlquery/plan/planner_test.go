@@ -295,3 +295,57 @@ func TestNegatedFiltersBecomeTheirComplement(t *testing.T) {
 		t.Fatalf("class ne wan → %v", sc.changeQs[0].Types)
 	}
 }
+
+func TestGroupableDimsMatchTheValidator(t *testing.T) {
+	// validate.metricGroupable is unexported; its behaviour is pinned in the
+	// validate tests. Here: the planner can place every groupable dimension.
+	for dim := range GroupableMetricDims {
+		if _, err := (Planner{Cat: cat}).groupKeys(context.Background(), &fakeScope{}, "device", dim); err != nil {
+			t.Errorf("groupKeys(%s): %v", dim, err)
+		}
+	}
+}
+
+func TestSeriesGroupedBySiteCombinePointByPoint(t *testing.T) {
+	sc := &fakeScope{series: []Series{
+		{Labels: map[string]string{"device": "edge-1"}, Points: []Point{{T: 1, V: 10}, {T: 2, V: 30}}},
+		{Labels: map[string]string{"device": "edge-2"}, Points: []Point{{T: 1, V: 20}, {T: 2, V: 50}}},
+		{Labels: map[string]string{"device": "ghost"}, Points: []Point{{T: 1, V: 99}}}, // no known site
+	}}
+	rs := run(t, sc, `{"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","aggregation":"avg","group_by":["site"],"time_range":{"kind":"relative","last":"2h"}}`)
+	if len(rs.Series) != 1 || rs.Series[0].Entity["site"] != "dfw-hq" || rs.Series[0].Entity["members"] != "2" {
+		t.Fatalf("groups = %+v", rs.Series)
+	}
+	if p := rs.Series[0].Points; p[0].V != 15 || p[1].V != 40 {
+		t.Fatalf("avg per point = %+v", p)
+	}
+	if !strings.Contains(strings.Join(rs.Notes, " "), "1 result(s) could not be placed in a site group") {
+		t.Fatalf("an unplaceable entity must be counted, not merged: %v", rs.Notes)
+	}
+}
+
+func TestRowsGroupedByDeviceAndCombine(t *testing.T) {
+	for agg, want := range map[string]float64{"max": 9, "avg": 6} { // if_errors allows avg and max
+		sc := &fakeScope{samples: map[time.Time][]Sample{now: {
+			{Labels: map[string]string{"device": "edge-1", "ifName": "a"}, Value: 3},
+			{Labels: map[string]string{"device": "edge-1", "ifName": "b"}, Value: 9},
+		}}}
+		rs := run(t, sc, `{"v":1,"query_type":"metric_topk","target":"interface","metric":"if_errors","aggregation":"`+agg+`","group_by":["device"],"time_range":{"kind":"relative","last":"1h"}}`)
+		if len(rs.Rows) != 1 || rs.Rows[0]["value"] != want || rs.Rows[0]["members"] != 2 {
+			t.Errorf("%s: rows = %+v", agg, rs.Rows)
+		}
+	}
+	if got := combine("sum", []float64{3, 9}); got != 12 {
+		t.Errorf("sum = %v", got)
+	}
+}
+
+func TestCombineP95(t *testing.T) {
+	vals := make([]float64, 100)
+	for i := range vals {
+		vals[i] = float64(i + 1)
+	}
+	if got := combine("p95", vals); got != 95 {
+		t.Fatalf("p95 of 1..100 = %v", got)
+	}
+}

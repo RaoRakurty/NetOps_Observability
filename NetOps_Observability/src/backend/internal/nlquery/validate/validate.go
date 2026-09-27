@@ -53,6 +53,10 @@ type Scope interface {
 	Now() time.Time
 }
 
+// metricGroupable mirrors plan.GroupableMetricDims (a test pins the two equal;
+// validate cannot import plan).
+var metricGroupable = map[string]bool{"site": true, "device": true, "provider": true}
+
 var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type checker struct {
@@ -524,10 +528,17 @@ func (c *checker) groupOrder() {
 	for i, g := range q.GroupBy {
 		path := fmt.Sprintf("group_by[%d]", i)
 		if q.Type.IsMetric() {
-			// Refused, not accepted-and-ignored: the v1 planner does not group
-			// metric series, and a query that silently dropped the grouping
-			// would answer a different question than the one asked.
-			c.fail(path, CodeForbiddenFieldForType, g, "grouping metric results is not available yet")
+			// Metrics group by ONE related entity the planner can place every
+			// result in: site, device or provider. Anything else is refused,
+			// never accepted and silently ignored.
+			switch {
+			case q.Type == ast.CompareWindows:
+				c.fail(path, CodeForbiddenFieldForType, g, "a comparison cannot also be grouped")
+			case len(q.GroupBy) > 1:
+				c.fail(path, CodeTooBroad, g, "metrics group by one field")
+			case !metricGroupable[g] || !c.cat.Reachable(q.Target, g):
+				c.fail(path, CodeUnknownDimension, g, "metrics group by site, device or provider", "site", "device", "provider")
+			}
 			continue
 		}
 		if d, ok := c.cat.Dimension(q.Target, g); !ok || !d.Groupable {

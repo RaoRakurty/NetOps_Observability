@@ -376,6 +376,9 @@ func (p Planner) metric(ctx context.Context, sc Scope, q *ast.AST, rs *ResultSet
 	case ast.CompareWindows:
 		return p.compare(ctx, sc, q, t, c, res, rs, step)
 	}
+	if err := p.applyGrouping(ctx, sc, q, rs); err != nil {
+		return err
+	}
 	source(rs, "victoriametrics")
 	return nil
 }
