@@ -665,6 +665,459 @@
       "notes": "nav-leaf coverage (N-G1): Overview \u2192 My Dashboard"
     },
     {
+      "id": "docs-062",
+      "category": "docs",
+      "question": "Where is the audit trail of who changed what in the console?",
+      "expect": {
+        "slugs": [
+          "administration/audit-log"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Access & Audit \u2192 Audit Log"
+    },
+    {
+      "id": "docs-063",
+      "category": "docs",
+      "question": "Which devices are missing SNMP or syslog coverage?",
+      "expect": {
+        "slugs": [
+          "onboard-devices/data-sources",
+          "onboard-devices/verify-monitoring"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Data sources \u2192 Data Sources"
+    },
+    {
+      "id": "docs-064",
+      "category": "docs",
+      "question": "How do I install a licence file?",
+      "expect": {
+        "slugs": [
+          "administration/licence",
+          "reference/licensing"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Licence"
+    },
+    {
+      "id": "docs-065",
+      "category": "docs",
+      "question": "How do I mask a field in my logs before it is stored?",
+      "expect": {
+        "slugs": [
+          "administration/processors"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Data handling \u2192 Processors"
+    },
+    {
+      "id": "docs-066",
+      "category": "docs",
+      "question": "Who tried to reveal a sealed secret value?",
+      "expect": {
+        "slugs": [
+          "administration/sensitive-data-access"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Data handling \u2192 Sensitive Data Access"
+    },
+    {
+      "id": "docs-067",
+      "category": "docs",
+      "question": "How do I add an SNMPv3 credential?",
+      "expect": {
+        "slugs": [
+          "onboard-devices/snmp-profiles"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Data sources \u2192 SNMP Profiles"
+    },
+    {
+      "id": "docs-068",
+      "category": "docs",
+      "question": "Which syslog message shapes does the parser not recognise?",
+      "expect": {
+        "slugs": [
+          "administration/telemetry-coverage"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Data sources \u2192 Telemetry Coverage"
+    },
+    {
+      "id": "docs-069",
+      "category": "docs",
+      "question": "An RCA ticket never arrived in ServiceNow. Where did it stop?",
+      "expect": {
+        "slugs": [
+          "incident-response/ticket-delivery"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Incident Response \u2192 Ticket Delivery"
+    },
+    {
+      "id": "docs-070",
+      "category": "docs",
+      "question": "Is the traffic between Correlix services encrypted with TLS?",
+      "expect": {
+        "slugs": [
+          "security/transport-security",
+          "deploy/enable-tls"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Access & Audit \u2192 Transport Security"
+    },
+    {
+      "id": "docs-071",
+      "category": "docs",
+      "question": "Where is the BGP watchlist and the RPKI view?",
+      "expect": {
+        "slugs": [
+          "bgp/overview",
+          "bgp/watchlist",
+          "bgp/rpki"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 Metric Dashboards \u2192 BGP Operations"
+    },
+    {
+      "id": "docs-072",
+      "category": "docs",
+      "question": "Where can I see syslog and SNMP traps on one timeline?",
+      "expect": {
+        "slugs": [
+          "explore/events"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Explore \u2192 Events"
+    },
+    {
+      "id": "docs-073",
+      "category": "docs",
+      "question": "Which devices have configuration drift from their baseline?",
+      "expect": {
+        "slugs": [
+          "security/config-drift"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Infrastructure \u2192 Config Drift"
+    },
+    {
+      "id": "docs-074",
+      "category": "docs",
+      "question": "Where do I see the transceiver optical power for a port?",
+      "expect": {
+        "slugs": [
+          "infrastructure/interfaces-and-optics"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Infrastructure \u2192 Interfaces & Optics"
+    },
+    {
+      "id": "docs-075",
+      "category": "docs",
+      "question": "How many access points hang off each wireless controller?",
+      "expect": {
+        "slugs": [
+          "infrastructure/wireless"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Infrastructure \u2192 Wireless"
+    },
+    {
+      "id": "docs-076",
+      "category": "docs",
+      "question": "How do I see the hop-by-hop path to a destination?",
+      "expect": {
+        "slugs": [
+          "infrastructure/paths-and-tunnels"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Investigate \u2192 Paths \u2192 Flow Trace"
+    },
+    {
+      "id": "docs-077",
+      "category": "docs",
+      "question": "Where do I check the health of my overlay tunnels?",
+      "expect": {
+        "slugs": [
+          "infrastructure/paths-and-tunnels"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Investigate \u2192 Paths \u2192 Tunnels"
+    },
+    {
+      "id": "docs-078",
+      "category": "docs",
+      "question": "How do I start troubleshooting a symptom a user reported?",
+      "expect": {
+        "slugs": [
+          "investigate/investigate-a-symptom",
+          "noc-guide/where-to-start"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Investigate \u2192 Troubleshooting"
+    },
+    {
+      "id": "docs-079",
+      "category": "docs",
+      "question": "How do I acknowledge and mute a repeating alert?",
+      "expect": {
+        "slugs": [
+          "monitoring/manage-alerts"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Operations \u2192 Active Alerts"
+    },
+    {
+      "id": "docs-080",
+      "category": "docs",
+      "question": "Pause alert notifications during planned maintenance",
+      "expect": {
+        "slugs": [
+          "monitoring/maintenance-windows"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Operations \u2192 Monitors \u2192 Maintenance Windows"
+    },
+    {
+      "id": "docs-081",
+      "category": "docs",
+      "question": "Why is some telemetry quarantined instead of stored?",
+      "expect": {
+        "slugs": [
+          "administration/review-quarantined-telemetry"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Platform \u2192 Tools \u2192 Quarantine"
+    },
+    {
+      "id": "docs-082",
+      "category": "docs",
+      "question": "How do I set the data residency region for a tenant?",
+      "expect": {
+        "slugs": [
+          "administration/regions"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Platform \u2192 Tools \u2192 Regions"
+    },
+    {
+      "id": "docs-083",
+      "category": "docs",
+      "question": "How do I filter the security findings by severity and seam?",
+      "expect": {
+        "slugs": [
+          "security/exposures"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Security \u2192 Exposures"
+    },
+    {
+      "id": "docs-084",
+      "category": "docs",
+      "question": "How much of my estate has been assessed for security?",
+      "expect": {
+        "slugs": [
+          "security/security-overview",
+          "security/ctem"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Security \u2192 Security Overview"
+    },
+    {
+      "id": "docs-085",
+      "category": "docs",
+      "question": "How do I turn on a detection rule for my tenant?",
+      "expect": {
+        "slugs": [
+          "security/detection-rules"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Security \u2192 Configuration \u2192 Detection Rules"
+    },
+    {
+      "id": "docs-086",
+      "category": "docs",
+      "question": "What is an exposure story?",
+      "expect": {
+        "slugs": [
+          "security/exposure-stories"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Security \u2192 Exposure Stories"
+    },
+    {
+      "id": "docs-087",
+      "category": "docs",
+      "question": "Where are the threat detections from device logs?",
+      "expect": {
+        "slugs": [
+          "security/threat-detection"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Security \u2192 Threat Detection"
+    },
+    {
+      "id": "docs-088",
+      "category": "docs",
+      "question": "Save a filter on the exposures table so I can reuse it",
+      "expect": {
+        "slugs": [
+          "security/saved-views"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Security \u2192 Configuration \u2192 Saved Views"
+    },
+    {
+      "id": "docs-089",
+      "category": "docs",
+      "question": "Which of my devices are affected by a vendor CVE advisory?",
+      "expect": {
+        "slugs": [
+          "security/vulnerabilities"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Security \u2192 Vulnerabilities"
+    },
+    {
+      "id": "docs-090",
+      "category": "docs",
+      "question": "Which built-in dashboards are available?",
+      "expect": {
+        "slugs": [
+          "dashboards-reports/built-in-dashboards"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 Dashboards \u2192 Dashboard List"
+    },
+    {
+      "id": "docs-091",
+      "category": "docs",
+      "question": "Which devices have the highest CPU and memory?",
+      "expect": {
+        "slugs": [
+          "dashboards-reports/built-in-dashboards"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 Metric Dashboards \u2192 Device Monitoring"
+    },
+    {
+      "id": "docs-092",
+      "category": "docs",
+      "question": "Which interfaces have the highest throughput and errors?",
+      "expect": {
+        "slugs": [
+          "dashboards-reports/built-in-dashboards",
+          "infrastructure/interfaces-and-optics"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 Metric Dashboards \u2192 Interface Performance"
+    },
+    {
+      "id": "docs-093",
+      "category": "docs",
+      "question": "Where do I check BGP session state and OSPF adjacencies?",
+      "expect": {
+        "slugs": [
+          "dashboards-reports/built-in-dashboards",
+          "investigate/igp-health"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 Metric Dashboards \u2192 Protocol Monitoring"
+    },
+    {
+      "id": "docs-094",
+      "category": "docs",
+      "question": "What is on the Demo Showcase board?",
+      "expect": {
+        "slugs": [
+          "dashboards-reports/demo-showcase"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 Dashboards \u2192 Demo Showcase"
+    },
+    {
+      "id": "docs-095",
+      "category": "docs",
+      "question": "Where do I download the PDF of a past outage report?",
+      "expect": {
+        "slugs": [
+          "dashboards-reports/rca-reports"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 RCA Reports"
+    },
+    {
+      "id": "docs-096",
+      "category": "docs",
+      "question": "How do I reopen a saved log search?",
+      "expect": {
+        "slugs": [
+          "explore/saved-searches"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Explore \u2192 Saved Searches"
+    },
+    {
+      "id": "docs-097",
+      "category": "docs",
+      "question": "How do I delete a custom monitor rule?",
+      "expect": {
+        "slugs": [
+          "monitoring/monitor-rules",
+          "monitoring/create-a-monitor"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Operations \u2192 Monitors \u2192 Monitor Rules"
+    },
+    {
+      "id": "docs-098",
+      "category": "docs",
+      "question": "What do the KPI tiles on the Command Center count?",
+      "expect": {
+        "slugs": [
+          "dashboards-reports/command-center"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Overview \u2192 Home"
+    },
+    {
+      "id": "docs-099",
+      "category": "docs",
+      "question": "Only open a ticket once the RCA is confirmed",
+      "expect": {
+        "slugs": [
+          "incident-response/rca-ticketing"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Incident Response \u2192 Ticketing & Automation"
+    },
+    {
+      "id": "docs-100",
+      "category": "docs",
+      "question": "How do I sync devices from an external inventory?",
+      "expect": {
+        "slugs": [
+          "automation/sites-and-inventory",
+          "automation/import-and-sync"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Infrastructure \u2192 Source of Truth"
+    },
+    {
+      "id": "docs-101",
+      "category": "docs",
+      "question": "How do I tell which seam owns an RCA case?",
+      "expect": {
+        "slugs": [
+          "investigate/read-an-rca-case",
+          "investigate/rca-explained",
+          "getting-started/concepts"
+        ]
+      },
+      "notes": "nav-leaf coverage (N-G1): Investigate \u2192 RCA"
+    },
+    {
       "id": "intent-001",
       "category": "intent",
       "question": "show me the top talkers",

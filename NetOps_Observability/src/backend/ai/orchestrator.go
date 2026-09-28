@@ -371,6 +371,18 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 	// is server-authored prose returned verbatim (explain.go). It runs first so a
 	// definition can never be re-derived as an investigation, and it reads no
 	// tenant data, so there is nothing to govern below.
+	//
+	// "What am I looking at?" is the same kind of lookup, keyed by the page
+	// the operator is on (docs_pages.go, plan N-G3). It yields to a NAMED
+	// explain topic — the `(i)` already said exactly what it wants — and
+	// otherwise runs before the explain keyword match, so a question about the
+	// page is answered from that page's documentation, not from whichever
+	// definition happens to share a word with it.
+	if _, named := explainTopicFromAsk(question, uiContext); !named {
+		if ans, handled := o.answerPageHelp(question, uiContext); handled {
+			return ans, nil
+		}
+	}
 	if ans, handled := o.answerExplain(question, uiContext); handled {
 		return ans, nil
 	}
@@ -470,7 +482,7 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 	case ModeProductNavigationHelp:
 		return o.answerNavigation(question, plan, disc), nil
 	case ModeProductAnswer:
-		return o.answerProduct(question, plan, disc), nil
+		return o.answerProductOnPage(question, plan, disc, uiContext), nil
 	case ModeInvestigationPlan:
 		return o.answerKB(question, plan, disc), nil
 	default:
@@ -1541,10 +1553,22 @@ func (o *Orchestrator) answerTimeRange(ctx context.Context, p Principal, questio
 // keyword ProductKB was removed 2026-09-26 — production always wired Docs, so
 // it was unreachable; its UI deep-link table lives on in docs_routes.go.
 func (o *Orchestrator) answerProduct(question string, plan Plan, disc []string) Answer {
+	return o.answerProductOnPage(question, plan, disc, nil)
+}
+
+// answerProductOnPage is answerProduct asked from a console page: when the ui
+// context names a known page (docs_pages.go), that page's documentation wins
+// close calls. An unknown or absent route is ignored — the answer is then
+// exactly answerProduct's.
+func (o *Orchestrator) answerProductOnPage(question string, plan Plan, disc []string, uiContext map[string]string) Answer {
 	if o.Docs == nil {
 		return o.answerCapability(plan)
 	}
-	if a, ok := o.answerProductFromDocs(question, plan, disc); ok {
+	var pageSlugs map[string]bool
+	if _, page, ok := pageForContext(uiContext); ok {
+		pageSlugs = page.slugSet()
+	}
+	if a, ok := o.answerProductFromDocs(question, plan, disc, pageSlugs); ok {
 		return a
 	}
 	// No documentation match → the honest decline. No navigation fallback
@@ -1564,8 +1588,8 @@ func (o *Orchestrator) answerProduct(question string, plan Plan, disc []string) 
 // Help drawer at that page+section, and — for curated concept chunks, which
 // have no portal page — a navigation citation to the Correlix page the concept
 // lives on (docs_routes.go). ok=false when the index has no honest match.
-func (o *Orchestrator) answerProductFromDocs(question string, plan Plan, disc []string) (Answer, bool) {
-	hits := o.Docs.Search(question, 4)
+func (o *Orchestrator) answerProductFromDocs(question string, plan Plan, disc []string, pageSlugs map[string]bool) (Answer, bool) {
+	hits := o.Docs.SearchOnPage(question, 4, pageSlugs)
 	if len(hits) == 0 {
 		return Answer{}, false
 	}

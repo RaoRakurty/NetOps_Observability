@@ -24,6 +24,7 @@ import Icon from "../components/Icon";
 import IrisVocabulary from "../components/IrisVocabulary";
 import PresentationPlanRenderer from "../iris/PresentationPlanRenderer";
 import { answerCiteHref } from "../iris/links";
+import { withPageContext } from "../iris/pageRoute";
 import { httpFailure, operatorError } from "../lib/errors";
 
 // The Iris box's server conversation (tracker 337 N-C7/N-E4): only its id
@@ -216,13 +217,16 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       try { id = (await api.startIrisConversation()).id; } catch { id = null; } // conversations unavailable: ask without
     }
     try {
-      const ans = await api.aiAsk(content, undefined, id ?? undefined);
+      // The page behind the box rides along (N-G3): the server answers "what am
+      // I looking at?" from that page's docs and ranks them first for product
+      // questions. It is re-validated server-side and never scopes data.
+      const ans = await api.aiAsk(content, withPageContext(), id ?? undefined);
       setConversation(ans.conversation_id ?? null);
       return ans;
     } catch (e) {
       if (!id || httpFailure(e)?.status !== 404) throw e;
       setConversation(null);
-      return api.aiAsk(content);
+      return api.aiAsk(content, withPageContext());
     }
   };
   const taRef = useRef<HTMLTextAreaElement | null>(null);
@@ -398,7 +402,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
     setBusy(true);
     setError(null);
     try {
-      const ans = await api.aiAsk(text, context);
+      const ans = await api.aiAsk(text, withPageContext(context));
       setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
       setGrounded((g) => ({ ...g, [idx]: ans }));
     } catch (e) {

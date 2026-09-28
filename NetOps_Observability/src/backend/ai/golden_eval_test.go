@@ -43,7 +43,10 @@ const (
 	// hit@1 0.88 (28/32), hit@3 1.00 (32/32).
 	// The hit@3 floor of 0.95 leaves a three-miss margin on 61 items; the hit@1
 	// floor is unchanged.
-	goldenHitAt1Floor = 0.75
+	// Measured 2026-09-27 after N-G1 completion (40 nav-leaf items, 101 total):
+	// hit@1 0.88 (89/101), hit@3 1.00 (101/101); the original 61 unchanged at
+	// hit@1 54/61. The hit@1 floor moves 0.75 → 0.80, an eight-miss margin.
+	goldenHitAt1Floor = 0.80
 	goldenHitAt3Floor = 0.95
 )
 
@@ -188,7 +191,7 @@ func TestGoldenDocsCitationCorrectness(t *testing.T) {
 		if !hitSlugs(hits, it.Expect.Slugs, 3) {
 			continue // retrieval miss — already accounted by the hit@k gate
 		}
-		ans, ok := o.answerProductFromDocs(it.Question, plan, nil)
+		ans, ok := o.answerProductFromDocs(it.Question, plan, nil, nil)
 		if !ok {
 			t.Errorf("%s: retrieval hit but the product answer declined", it.ID)
 			continue
