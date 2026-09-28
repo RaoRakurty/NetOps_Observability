@@ -71,7 +71,14 @@ var routeIsolationLedger = map[string]string{
 	// colleague and an as_tenant walk all get 404 — nlquery_convo_isolation_test.go.
 	"/api/ai/conversations":  "scoped",
 	"/api/ai/conversations/": "scoped",
-	"/api/alerts":            "scoped",
+	// Query capture + corrections (N-C8): records are stamped with the tenant
+	// and principal from the token (RLS iris_query_log + principal filter);
+	// the list is the caller's own (a workspace admin: the workspace's), and a
+	// correction lands only on the caller's own record — another tenant, a
+	// colleague and an as_tenant walk get 404. nlquery_querylog_isolation_test.go.
+	"/api/ai/queries":  "scoped",
+	"/api/ai/queries/": "scoped",
+	"/api/alerts":      "scoped",
 	// BGP Operations (item 10): the watchlist is per-tenant DATA (the prefixes/
 	// ASNs a tenant watches), owner stamped from the RLS GUC, cross-org
 	// isolation proven by TestBGPWatchlistTenantIsolationPG. The resource proxy

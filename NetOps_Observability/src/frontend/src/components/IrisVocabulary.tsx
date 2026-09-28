@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// IrisVocabulary — the workspace's own words for its network, in three steps
-// (tracker 337 N-C2 / N-C5):
+// IrisVocabulary — the workspace's own words for its network, in four steps
+// (tracker 337 N-C2 / N-C5 / N-C8):
 //
 //   1. Names your team uses — aliases ("the HQ firewall" → device:fw-hq-01).
 //   2. Check a name — how Iris resolves a phrase, and how sure it is.
 //   3. Try a question — what Iris understood, and the answer the deterministic
-//      query engine returns, before any model is involved.
+//      query engine returns, before any model is involved. "That's not what I
+//      meant" records a correction for offline review.
+//   4. Recent questions — the caller's own questions and what became of each.
 //
 // Everything here is scoped server-side to the caller's workspace; the tenant
 // is never sent. A question Iris did not fully understand is shown as such —
@@ -16,6 +18,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type IrisAlias, type IrisCompiled, type IrisRef, type IrisResolution, type IrisResultSet, type IrisTurn } from "../services/api";
 import { httpFailure, operatorError } from "../lib/errors";
+import QueryCorrection from "../iris/QueryCorrection";
+import RecentQuestions from "../iris/RecentQuestions";
 
 // The entity kinds an alias can point at (catalog entities minus incidents and
 // changes, which are named by id, not by nickname).
@@ -92,6 +96,8 @@ export default function IrisVocabulary() {
   const [mode, setMode] = useState<"asked" | "preview">("preview");
   const [convId, setConvId] = useState<string | null>(null);
   const [history, setHistory] = useState<IrisTurn[]>([]);
+  // Bumped after every question so "Recent questions" re-reads the log.
+  const [asked, setAsked] = useState(0);
 
   const reload = useCallback(async () => {
     try {
@@ -184,6 +190,7 @@ export default function IrisVocabulary() {
     try {
       setMode("preview");
       setCompiled(await api.compileIrisQuery(question.trim(), browserTZ()));
+      setAsked((n) => n + 1);
     } catch (e) {
       setQErr(operatorError(e, "Could not read that question."));
     }
@@ -224,6 +231,7 @@ export default function IrisVocabulary() {
       if (ans.error) setQErr(ans.error === "not found" ? "Iris could not find that." : "The question could not be run.");
       setHistory((h) => [...h, ans.turn]);
       setQuestion("");
+      setAsked((n) => n + 1);
     } catch (e) {
       setQErr(operatorError(e, "The question could not be asked."));
     }
@@ -354,6 +362,9 @@ export default function IrisVocabulary() {
             <div key={i} style={muted}>Adjusted: {c.reason}</div>
           ))}
           {runnable && <button type="button" className="dash-btn accent" style={{ ...text14, marginTop: 6 }} onClick={() => void run()}>Run it</button>}
+          {compiled.query_log_id && (
+            <QueryCorrection key={compiled.query_log_id} queryId={compiled.query_log_id} onSaved={() => setAsked((n) => n + 1)} />
+          )}
         </div>
       )}
       {result && (
@@ -378,6 +389,10 @@ export default function IrisVocabulary() {
           )}
         </div>
       )}
+
+      <div style={stepHead}>4. Recent questions</div>
+      <p style={{ ...muted, margin: "0 0 6px" }}>Your last questions and what Iris made of them. Mark any that went wrong.</p>
+      <RecentQuestions refreshKey={asked} />
     </div>
   );
 }

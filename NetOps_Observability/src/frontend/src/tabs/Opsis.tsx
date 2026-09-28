@@ -24,6 +24,7 @@ import Icon from "../components/Icon";
 import IrisVocabulary from "../components/IrisVocabulary";
 import PresentationPlanRenderer from "../iris/PresentationPlanRenderer";
 import { answerCiteHref } from "../iris/links";
+import QueryCorrection from "../iris/QueryCorrection";
 import { httpFailure, operatorError } from "../lib/errors";
 
 // The Iris box's server conversation (tracker 337 N-C7/N-E4): only its id
@@ -1020,6 +1021,11 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
       {ans.text && <div className="op-text">{ans.text}</div>}
       {ans.mode === "data_query" && ans.data?.result !== undefined && (
         <div data-testid="op-data-answer"><PresentationPlanRenderer result={ans.data.result} /></div>
+      )}
+      {/* "That's not what I meant" (N-C8): only on a data answer the server
+          recorded — the id names the caller's own query-log record. */}
+      {ans.mode === "data_query" && typeof ans.data?.query_log_id === "string" && (
+        <QueryCorrection key={ans.data.query_log_id} queryId={ans.data.query_log_id} />
       )}
 
       {/* Live-state briefing: counts → focus + why → suspected list → watch items. */}

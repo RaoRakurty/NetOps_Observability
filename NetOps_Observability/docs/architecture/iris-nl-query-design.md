@@ -300,3 +300,39 @@ recorded turn. A "not found" answer is a 200 turn with `error`, never a 404 (whi
 
 **Not yet (N-C7 remainder):** editable-chip → AST regeneration (with N-E3/E4), the Part 2 §50
 multi-turn corpus scored like the golden corpus, and Part 2 §69's 14 routine questions end to end.
+
+## 10. N-C8 Query capture + operator corrections (`internal/irisquerylog`)
+
+**One record per compiled question** — from the `/api/ai/ask` data arm (`router`), `/api/ai/query/compile`
+(`query_compile`), `/api/ai/query/execute` (`query_execute`, no question text) and conversation turns
+(`conversation`, with the conversation id). Fields (Part 2 §22, as they exist here): tenant and principal
+(from the token), timestamp, question (≤ 1000 runes), intent, outcome (`answered · compiled · clarify ·
+declined · unparsed · invalid · error`), query type, AST hash, catalog version, validation error codes
+(≤ 20), entities with their `resolution_method` (≤ 20), row/series COUNTS, duration. **Never** result rows,
+series points or model prose. The response carries `query_log_id` so the answer can be corrected.
+
+**Capture never fails the question.** A failed write is counted
+(`netops_iris_query_capture_total{result="failed"}`), logged, and the answer goes out without an id. The
+write is detached from the request's cancellation and bounded to 3 s.
+
+**Corrections** (`POST /api/ai/queries/{id}/corrections {kind, note?, ast?}`): kind is closed
+(`wrong_entity · wrong_metric · wrong_window · wrong_filter · other`); the note is ≤ 500 runes; the corrected
+query is decoded strictly (`ast.Decode`: a smuggled tenant field is a 400) and validated against the caller's
+CURRENT scope (a foreign entity is the same 422 as a missing one); the validated form and its hash are kept.
+Only the asker may correct their own record — another tenant, a colleague (admins included) and an
+`as_tenant` walk get the same 404 as an unknown id. ≤ 5 corrections per record (row lock in PG). They are
+for OFFLINE evaluation: nothing reads them back into the compiler, resolver or any model.
+
+**Reads** (`GET /api/ai/queries[?scope=tenant][&limit≤100]`): the caller's own; `scope=tenant` is the
+caller's workspace for its admins (`administration:admin`), never another tenant.
+
+**Bounds & storage.** 30-day retention and 5 000 records per tenant, both pruned on write inside the
+tenant's transaction. PG: `iris_query_log` (0054, FORCE-RLS `tenant_iso`, principal filter on top); file
+mode: memory (evaluation telemetry, not a system of record).
+
+**UI.** "That's not what I meant" under an Iris data answer and under Try-a-question; the rewording box is
+compiled by the server and attached only if it validates. "Recent questions" is step 4 of the vocabulary
+panel.
+
+**Not yet:** chip edits as corrections (needs N-C7's chip → AST regeneration); an offline export of
+corrections into the N-C6 harness.

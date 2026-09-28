@@ -17,6 +17,8 @@ const compileIrisQuery = vi.fn();
 const executeIrisQuery = vi.fn();
 const startIrisConversation = vi.fn();
 const askIrisConversation = vi.fn();
+const irisQueries = vi.fn();
+const correctIrisQuery = vi.fn();
 vi.mock("../services/api", () => ({
   api: {
     irisAliases: (...a: unknown[]) => irisAliases(...a),
@@ -27,6 +29,8 @@ vi.mock("../services/api", () => ({
     executeIrisQuery: (...a: unknown[]) => executeIrisQuery(...a),
     startIrisConversation: (...a: unknown[]) => startIrisConversation(...a),
     askIrisConversation: (...a: unknown[]) => askIrisConversation(...a),
+    irisQueries: (...a: unknown[]) => irisQueries(...a),
+    correctIrisQuery: (...a: unknown[]) => correctIrisQuery(...a),
   },
 }));
 
@@ -38,7 +42,8 @@ const ref = (id: string, over = {}) => ({
 
 beforeEach(() => {
   for (const f of [irisAliases, putIrisAlias, deleteIrisAlias, resolveIrisEntity, compileIrisQuery, executeIrisQuery,
-    startIrisConversation, askIrisConversation]) f.mockReset();
+    startIrisConversation, askIrisConversation, irisQueries, correctIrisQuery]) f.mockReset();
+  irisQueries.mockResolvedValue({ queries: [], scope: "mine", retention_days: 30, kinds: [] });
   irisAliases.mockResolvedValue({ aliases: [{ entity_type: "device", entity_id: "device:fw-hq-01", alias: "HQ firewall" }], max: 2000 });
 });
 afterEach(() => cleanup());
@@ -176,6 +181,39 @@ describe("3 · try a question", () => {
     fireEvent.click(screen.getByText("Only show how Iris reads it"));
     expect(await screen.findByTestId("iris-understood")).toHaveTextContent("Iris will not do this: Iris is read-only");
     expect(screen.queryByText("Run it")).toBeNull();
+  });
+});
+
+describe("3 · that's not what I meant (N-C8)", () => {
+  it("offers a correction on a recorded answer, tied to its record id", async () => {
+    const id = "11111111-2222-4333-8444-555555555555";
+    compileIrisQuery.mockResolvedValueOnce({ intent: "list_changes", ast: { v: 1 }, validation: { valid: true }, query_log_id: id });
+    correctIrisQuery.mockResolvedValue({});
+    render(<IrisVocabulary />);
+    type("Question", "what changed today");
+    fireEvent.click(screen.getByText("Only show how Iris reads it"));
+    fireEvent.click(await screen.findByText("That's not what I meant"));
+    fireEvent.change(screen.getByLabelText("Note (optional)"), { target: { value: "only WAN" } });
+    fireEvent.click(screen.getByText("Send"));
+    await waitFor(() => expect(correctIrisQuery).toHaveBeenCalledWith(id, { kind: "wrong_entity", note: "only WAN" }));
+  });
+
+  it("offers no correction when the server recorded nothing", async () => {
+    compileIrisQuery.mockResolvedValueOnce({ intent: "list_changes", ast: { v: 1 }, validation: { valid: true } });
+    render(<IrisVocabulary />);
+    type("Question", "what changed today");
+    fireEvent.click(screen.getByText("Only show how Iris reads it"));
+    await screen.findByTestId("iris-understood");
+    expect(screen.queryByText("That's not what I meant")).toBeNull();
+  });
+
+  it("re-reads recent questions after each question", async () => {
+    compileIrisQuery.mockResolvedValueOnce({ intent: "list_changes", ast: { v: 1 }, validation: { valid: true } });
+    render(<IrisVocabulary />);
+    await waitFor(() => expect(irisQueries).toHaveBeenCalledTimes(1));
+    type("Question", "what changed today");
+    fireEvent.click(screen.getByText("Only show how Iris reads it"));
+    await waitFor(() => expect(irisQueries).toHaveBeenCalledTimes(2));
   });
 });
 

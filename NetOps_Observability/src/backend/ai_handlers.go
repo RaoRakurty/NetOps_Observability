@@ -20,6 +20,7 @@ import (
 	"netops/backend/internal/aiscore"
 	"netops/backend/internal/entityalias"
 	"netops/backend/internal/irisconvo"
+	"netops/backend/internal/irisquerylog"
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/compile"
 	"netops/backend/internal/nlquery/modelc"
@@ -187,7 +188,7 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 	orch := s.newOrchestrator(r, claims)
 	var ran nlqRan
 	if conv != nil && orch.NLQuery != nil {
-		orch.NLQuery = s.aiNLQueryWith(r, claims, &conv.State, &ran)
+		orch.NLQuery = s.aiNLQueryWith(r, claims, &conv.State, conv.ID, &ran)
 	}
 	ans, err := orch.Ask(r.Context(), s.aiPrincipal(claims), question, req.Context)
 	if err != nil {
@@ -250,7 +251,7 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 // validator, scope and executor as /api/ai/query, and the same
 // infrastructure:read gate (which /api/ai/ask itself does not require).
 func (s *server) aiNLQuery(r *http.Request, claims jwtClaims) ai.NLQueryFunc {
-	return s.aiNLQueryWith(r, claims, nil, nil)
+	return s.aiNLQueryWith(r, claims, nil, "", nil)
 }
 
 // nlqRan records the query the data arm ran in this request, so a
@@ -261,23 +262,37 @@ type nlqRan struct {
 }
 
 // aiNLQueryWith is aiNLQuery inside a conversation: st (may be nil) is the
-// server-held state follow-ups resolve against, and ran (may be nil) receives
-// the query that answered.
-func (s *server) aiNLQueryWith(r *http.Request, claims jwtClaims, st *irisconvo.State, ran *nlqRan) ai.NLQueryFunc {
+// server-held state follow-ups resolve against, convID ("" outside one) is
+// recorded on the query log, and ran (may be nil) receives the query that
+// answered.
+func (s *server) aiNLQueryWith(r *http.Request, claims jwtClaims, st *irisconvo.State, convID string, ran *nlqRan) ai.NLQueryFunc {
 	if s.nlqCatalog == nil || s.roles == nil || !s.roles.Allows(claims.Role, "infrastructure", LevelRead) {
 		return nil
 	}
 	return func(ctx context.Context, _ ai.Principal, question string, opts ai.DataOpts) (ai.DataAnswer, error) {
+		start := time.Now()
+		rq := r.WithContext(ctx)
 		cx := compile.Context{Loc: time.UTC, Now: time.Now()}
 		if st != nil {
 			cx.PriorAST = st.LastAST
 			cx.Conv = &compile.Conversation{Entities: st.Entities, Actors: st.Actors, ChangeIDs: st.ChangeIDs}
 		}
-		c, err := s.nlqCompile(r.WithContext(ctx), claims, question, cx, opts.AllowModel)
+		c, err := s.nlqCompile(rq, claims, question, cx, opts.AllowModel)
 		if err != nil {
+			rec := irisquerylog.Record{Source: irisquerylog.SourceRouter, Question: question, Outcome: irisquerylog.OutcomeError, ConversationID: convID}
+			s.nlqCapture(rq, claims, &rec, start)
 			return ai.DataAnswer{}, err
 		}
-		return s.nlqDataAnswer(r.WithContext(ctx), claims, c, ran)
+		rec := irisquerylog.FromCompile(irisquerylog.SourceRouter, question, c.res, c.checked, c.vr)
+		rec.ConversationID = convID
+		d, err := s.nlqDataAnswer(rq, claims, c, ran, &rec)
+		if err != nil {
+			rec.Outcome = irisquerylog.OutcomeError
+		}
+		if id := s.nlqCapture(rq, claims, &rec, start); id != "" && err == nil {
+			d.Payload = withQueryLogID(d.Payload, id)
+		}
+		return d, err
 	}
 }
 
@@ -333,8 +348,9 @@ var nlqAnswerable = map[string]bool{
 	validate.CodeScopeUnavailable: true, validate.CodeUnmappedProvider: true,
 }
 
-// nlqDataAnswer turns one compiled question into the data arm's answer.
-func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled, ran *nlqRan) (ai.DataAnswer, error) {
+// nlqDataAnswer turns one compiled question into the data arm's answer; rec
+// (never nil) receives what the run produced — counts only.
+func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled, ran *nlqRan, rec *irisquerylog.Record) (ai.DataAnswer, error) {
 	notData := ai.DataAnswer{Status: ai.DataNotData}
 	switch {
 	case c.res.Decline != "" || c.res.Unparsed:
@@ -369,11 +385,13 @@ func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled,
 	}
 	rs, err := s.nlqRun(r, claims, c.checked, *c.vr)
 	if errors.Is(err, plan.ErrNotFound) {
+		rec.Outcome = irisquerylog.OutcomeError
 		return ai.DataAnswer{Status: ai.DataAnswered, Intent: c.res.Intent, Text: "Nothing by that name is visible to you."}, nil
 	}
 	if err != nil {
 		return ai.DataAnswer{}, err
 	}
+	rec.Answered(rs)
 	if ran != nil {
 		ran.q, ran.rs = c.checked, rs
 	}
@@ -1087,16 +1105,24 @@ func (s *server) handleAIQueryCompile(w http.ResponseWriter, r *http.Request) {
 		}
 		cx.PriorAST = prior
 	}
+	start := time.Now()
 	c, err := s.nlqCompileQuestion(r, claims, req.Question, cx)
 	if err != nil {
 		logError("iris.nlquery", "compile failed", errf(err))
+		rec := irisquerylog.Record{Source: irisquerylog.SourceQueryCompile, Question: req.Question, Outcome: irisquerylog.OutcomeError}
+		s.nlqCapture(r, claims, &rec, start)
 		writeError(w, http.StatusInternalServerError, errors.New("the question could not be compiled"))
 		return
 	}
 	tenant, _ := principalTenant(claims)
 	logInfo("iris.nlquery", "compile", map[string]any{"tenant": tenant, "sub": claims.Sub, "intent": c.res.Intent,
 		"unparsed": c.res.Unparsed, "declined": c.res.Decline != "", "source": c.source, "question_chars": len(req.Question)})
-	writeJSON(w, http.StatusOK, c.body())
+	out := c.body()
+	rec := irisquerylog.FromCompile(irisquerylog.SourceQueryCompile, req.Question, c.res, c.checked, c.vr)
+	if id := s.nlqCapture(r, claims, &rec, start); id != "" {
+		out["query_log_id"] = id
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // nlqCompiled is one question compiled and validated against the caller's scope.
@@ -1200,19 +1226,29 @@ func (s *server) handleAIQueryExecute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	start := time.Now()
 	scope := s.nlqScopeFor(r, claims)
 	checked, vr := validate.Validate(r.Context(), s.nlqCatalog, scope, q)
+	rec := irisquerylog.FromQuery(q, vr)
 	if !vr.Valid {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"validation": vr})
+		out := map[string]any{"validation": vr}
+		if id := s.nlqCapture(r, claims, &rec, start); id != "" {
+			out["query_log_id"] = id
+		}
+		writeJSON(w, http.StatusUnprocessableEntity, out)
 		return
 	}
 	rs, err := s.nlqRun(r, claims, checked, vr)
 	switch {
 	case errors.Is(err, plan.ErrNotFound):
+		rec.Outcome = irisquerylog.OutcomeError
+		s.nlqCapture(r, claims, &rec, start)
 		writeError(w, http.StatusNotFound, errors.New("not found"))
 		return
 	case err != nil:
 		logError("iris.nlquery", "execute failed", errf(err))
+		rec.Outcome = irisquerylog.OutcomeError
+		s.nlqCapture(r, claims, &rec, start)
 		writeError(w, http.StatusInternalServerError, errors.New("the query could not be run"))
 		return
 	}
@@ -1220,7 +1256,12 @@ func (s *server) handleAIQueryExecute(w http.ResponseWriter, r *http.Request) {
 	logInfo("iris.nlquery", "execute", map[string]any{"tenant": tenant, "sub": claims.Sub, "query_type": string(checked.Type),
 		"ast_hash": rs.ASTHash, "catalog": rs.CatalogVersion, "rows": len(rs.Rows), "series": len(rs.Series),
 		"truncated": rs.Truncated, "duration_ms": rs.Provenance.DurationMs})
-	writeJSON(w, http.StatusOK, map[string]any{"result": rs, "validation": vr})
+	out := map[string]any{"result": rs, "validation": vr}
+	rec.Answered(rs)
+	if id := s.nlqCapture(r, claims, &rec, start); id != "" {
+		out["query_log_id"] = id
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // ---- Iris NL: conversations (tracker 337 N-C7) --------------------------------
@@ -1363,14 +1404,19 @@ func (s *server) handleAIConversationMessage(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	st := conv.State
+	start := time.Now()
 	cx := compile.Context{Loc: loc, Now: time.Now(), IncidentID: incident, PriorAST: st.LastAST,
 		Conv: &compile.Conversation{Entities: st.Entities, Actors: st.Actors, ChangeIDs: st.ChangeIDs}}
 	c, err := s.nlqCompileQuestion(r, claims, req.Question, cx)
 	if err != nil {
 		logError("iris.nlquery", "compile failed", errf(err))
+		rec := irisquerylog.Record{Source: irisquerylog.SourceConversation, Question: req.Question, Outcome: irisquerylog.OutcomeError, ConversationID: id}
+		s.nlqCapture(r, claims, &rec, start)
 		writeError(w, http.StatusInternalServerError, errors.New("the question could not be compiled"))
 		return
 	}
+	rec := irisquerylog.FromCompile(irisquerylog.SourceConversation, req.Question, c.res, c.checked, c.vr)
+	rec.ConversationID = id
 	turn := irisconvo.Turn{Question: req.Question, Intent: c.res.Intent}
 	out := c.body()
 	next := st
@@ -1401,7 +1447,16 @@ func (s *server) handleAIConversationMessage(w http.ResponseWriter, r *http.Requ
 			turn.Rows = len(rs.Rows) + len(rs.Series)
 			next = irisconvo.Next(s.nlqCatalog, st, c.checked, rs)
 			out["result"] = rs
+			rec.Answered(rs)
 		}
+		if turn.Outcome == irisconvo.OutcomeError {
+			rec.Outcome = irisquerylog.OutcomeError
+		}
+	}
+	// The question is recorded whether or not the turn can be appended: it
+	// was compiled (and possibly run) either way.
+	if logID := s.nlqCapture(r, claims, &rec, start); logID != "" {
+		out["query_log_id"] = logID
 	}
 	saved, err := s.nlqConvos.Append(r.Context(), tenant, claims.Sub, id, turn, next)
 	switch {
@@ -1421,4 +1476,222 @@ func (s *server) handleAIConversationMessage(w http.ResponseWriter, r *http.Requ
 	logInfo("iris.convo", "turn", map[string]any{"tenant": tenant, "sub": claims.Sub, "intent": turn.Intent,
 		"outcome": turn.Outcome, "turns": len(saved.Turns), "question_chars": len(req.Question)})
 	writeJSON(w, status, out)
+}
+
+// ---- Iris NL: query capture + operator corrections (tracker 337 N-C8) -------
+//
+// Every compiled question — from the /api/ai/ask data arm, the query API and
+// conversations — leaves one record (internal/irisquerylog): the question,
+// intent, outcome, query hash, catalog version, validation codes, entities and
+// how they resolved, counts and duration. Never result rows, never prose.
+//
+// GET  /api/ai/queries[?scope=tenant][&limit=N]  the caller's own recent
+//      questions; scope=tenant (a workspace admin) lists the whole tenant's
+// POST /api/ai/queries/{id}/corrections  {kind, note?, ast?} — "that's not what
+//      I meant", on the caller's OWN record only; a corrected query is decoded
+//      strictly and validated in the caller's scope before it is kept
+//
+// §3a: the tenant and principal come from the token, never the request; a
+// record of another tenant or (for corrections) another person is the same
+// 404 as one that never existed. Corrections are stored for OFFLINE
+// evaluation only — nothing feeds them back into the compiler.
+
+// newIrisQueryLogStore picks the query-log store: Postgres (RLS) when the
+// platform database is active, otherwise memory.
+func newIrisQueryLogStore() irisquerylog.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return irisquerylog.NewPGStore(ps.DB())
+	}
+	return irisquerylog.NewMemStore()
+}
+
+// nlqCaptureTimeout bounds one capture write; the operator is waiting on it.
+const nlqCaptureTimeout = 3 * time.Second
+
+// nlqCapture stores rec for the caller and returns its id, or "" when capture
+// is off or failed. A failure NEVER fails the operator's question: it is
+// counted (netops_iris_query_capture_total{result="failed"}) and logged.
+func (s *server) nlqCapture(r *http.Request, claims jwtClaims, rec *irisquerylog.Record, start time.Time) string {
+	if s.nlqQueryLog == nil {
+		return ""
+	}
+	tenant, _ := principalTenant(claims)
+	rec.Principal = claims.Sub
+	rec.TenantID = tenant
+	if rec.CatalogVersion == "" && s.nlqCatalog != nil {
+		rec.CatalogVersion = s.nlqCatalog.Version()
+	}
+	rec.Took(start)
+	// Detached from the request's cancellation: an operator who closes the
+	// drawer mid-answer still leaves the record the evaluation needs.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), nlqCaptureTimeout)
+	defer cancel()
+	saved, err := s.nlqQueryLog.Record(ctx, tenant, *rec)
+	s.nlqQueryLogMetrics.Captured(err == nil)
+	if err != nil {
+		logError("iris.querylog", "capture failed", map[string]any{"tenant": tenant, "source": rec.Source, "error": err.Error()})
+		return ""
+	}
+	return saved.ID
+}
+
+// withQueryLogID adds "query_log_id" to a data-arm payload (a JSON object the
+// server itself encoded), so the answer can be corrected. Anything that is not
+// an object is returned unchanged.
+func withQueryLogID(payload json.RawMessage, id string) json.RawMessage {
+	var obj map[string]json.RawMessage
+	if len(payload) == 0 || json.Unmarshal(payload, &obj) != nil || obj == nil {
+		return payload
+	}
+	enc, err := json.Marshal(id)
+	if err != nil {
+		return payload
+	}
+	obj["query_log_id"] = enc
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return payload
+	}
+	return out
+}
+
+func (s *server) handleAIQueries(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET"))
+		return
+	}
+	if !aiEnabled() {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Iris AI is disabled — set FEATURE_AI=true"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
+		return
+	}
+	if s.nlqQueryLog == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("the Iris query log is not available on this deployment"))
+		return
+	}
+	q := r.URL.Query()
+	scope := q.Get("scope")
+	f := irisquerylog.ListFilter{Principal: claims.Sub}
+	switch scope {
+	case "", "mine":
+		scope = "mine"
+	case "tenant":
+		// The whole workspace's questions: its admins only. The tenant is
+		// still the caller's own — there is no cross-tenant listing.
+		if s.roles == nil || !s.roles.Allows(claims.Role, "administration", LevelAdmin) {
+			writeError(w, http.StatusForbidden, errors.New("only a workspace admin can see everyone's questions"))
+			return
+		}
+		f.Principal = ""
+	default:
+		writeError(w, http.StatusBadRequest, errors.New("scope is mine or tenant"))
+		return
+	}
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > irisquerylog.MaxListLimit {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("limit is 1 to %d", irisquerylog.MaxListLimit))
+			return
+		}
+		f.Limit = n
+	}
+	tenant, _ := principalTenant(claims)
+	recs, err := s.nlqQueryLog.List(r.Context(), tenant, f)
+	if err != nil {
+		logError("iris.querylog", "list failed", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("recent questions could not be read"))
+		return
+	}
+	// The workspace view shows WHAT was asked about and how it went — intent,
+	// outcome, entities, counts, when — never a colleague's own words: the
+	// question text and correction notes of someone else's record are
+	// withheld (they are that person's typed text, not operational data).
+	if scope == "tenant" {
+		for i := range recs {
+			if recs[i].Principal == claims.Sub {
+				continue
+			}
+			recs[i].Question = ""
+			for j := range recs[i].Corrections {
+				recs[i].Corrections[j].Note = ""
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"queries": recs, "scope": scope,
+		"retention_days": int(irisquerylog.Retention.Hours() / 24), "kinds": irisquerylog.Kinds})
+}
+
+// handleAIQueryCorrection serves POST /api/ai/queries/{id}/corrections.
+func (s *server) handleAIQueryCorrection(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/ai/queries/")
+	id, sub, _ := strings.Cut(rest, "/")
+	if !irisquerylog.ValidID(id) || sub != "corrections" {
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+		return
+	}
+	claims, ok := s.nlqGate(w, r)
+	if !ok {
+		return
+	}
+	if s.nlqQueryLog == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("the Iris query log is not available on this deployment"))
+		return
+	}
+	var req struct {
+		Kind string          `json:"kind"`
+		Note string          `json:"note"`
+		AST  json.RawMessage `json:"ast"`
+	}
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields() // a smuggled tenant or principal is an error, not a silent no-op
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !irisquerylog.ValidKind(req.Kind) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("kind is one of %s", strings.Join(irisquerylog.Kinds, ", ")))
+		return
+	}
+	if len([]rune(req.Note)) > irisquerylog.MaxNoteLen {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("note is at most %d characters", irisquerylog.MaxNoteLen))
+		return
+	}
+	// The corrected query is untrusted exactly like a model-written one: it is
+	// decoded strictly and validated against what the caller can see NOW.
+	checked, vr, err := irisquerylog.CheckCorrectedAST(r.Context(), s.nlqCatalog, s.nlqScopeFor(r, claims), req.AST)
+	switch {
+	case errors.Is(err, irisquerylog.ErrRejected):
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"validation": vr})
+		return
+	case err != nil:
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	tenant, _ := principalTenant(claims)
+	rec, err := s.nlqQueryLog.Correct(r.Context(), tenant, claims.Sub, id,
+		irisquerylog.Correction{Kind: req.Kind, By: claims.Sub, Note: req.Note, CorrectedAST: checked})
+	switch {
+	case errors.Is(err, irisquerylog.ErrNotFound):
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+		return
+	case errors.Is(err, irisquerylog.ErrFull):
+		writeError(w, http.StatusConflict, err)
+		return
+	case errors.Is(err, irisquerylog.ErrInvalid):
+		writeError(w, http.StatusBadRequest, err)
+		return
+	case err != nil:
+		logError("iris.querylog", "correction failed", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("the correction could not be saved"))
+		return
+	}
+	s.nlqQueryLogMetrics.Corrected(req.Kind)
+	// No note text in the log line — only what kind of wrong it was.
+	logInfo("iris.querylog", "correction", map[string]any{"tenant": tenant, "sub": claims.Sub, "kind": req.Kind,
+		"with_query": checked != nil, "note_chars": len(req.Note), "corrections": len(rec.Corrections)})
+	writeJSON(w, http.StatusCreated, rec)
 }

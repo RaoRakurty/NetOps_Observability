@@ -118,6 +118,7 @@ import (
 	"netops/backend/internal/aiscore"
 	"netops/backend/internal/entityalias"
 	"netops/backend/internal/irisconvo"
+	"netops/backend/internal/irisquerylog"
 	"netops/backend/internal/nlquery/catalog"
 	"netops/backend/internal/secobs"
 	"netops/backend/internal/secprofile"
@@ -367,6 +368,10 @@ type server struct {
 	nlqCatalog *catalog.Catalog
 	nlqAliases *entityalias.Store
 	nlqConvos  irisconvo.Store // server-held conversation state (N-C7)
+	// Query capture + operator corrections (N-C8): one record per compiled
+	// question, for offline evaluation only. nil = capture off.
+	nlqQueryLog        irisquerylog.Store
+	nlqQueryLogMetrics *irisquerylog.Metrics
 	// IRIS-NLQUERY-END
 	deviceSites *deviceSiteStore // operator device→site bindings (intent)
 	wanPolicy   *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
@@ -1196,10 +1201,13 @@ func newServer() *server {
 		nlqCatalog:      nlqCat,
 		nlqAliases:      &entityalias.Store{C: aliasKV, Cat: nlqCat},
 		nlqConvos:       newIrisConvoStore(),
-		deviceSites:     deviceSites,
-		wanPolicy:       wanPolicy,
-		systemNet:       systemNet,
-		hub:             NewHub(),
+		nlqQueryLog:     newIrisQueryLogStore(),
+		// Counters for query capture (N-C8) — rendered on /metrics.
+		nlqQueryLogMetrics: irisquerylog.NewMetrics(),
+		deviceSites:        deviceSites,
+		wanPolicy:          wanPolicy,
+		systemNet:          systemNet,
+		hub:                NewHub(),
 		// #13 Vulnerability Management: operator-prepared advisory feed
 		// (scripts/vuln-feed-prepare.py → data/vuln/, mounted ro at /data/vuln).
 		vulns: vuln.NewFeed(envOr("VULN_FEED_PATH", "/data/vuln/advisories.csv"),
@@ -3678,6 +3686,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/query/execute", s.handleAIQueryExecute)     // Iris NL: validated query → ResultSet (N-C5)
 	mux.HandleFunc("/api/ai/conversations", s.handleAIConversations)    // Iris NL: start a conversation (N-C7)
 	mux.HandleFunc("/api/ai/conversations/", s.handleAIConversation)    // Iris NL: read one · ask in context (N-C7)
+	mux.HandleFunc("/api/ai/queries", s.handleAIQueries)                // Iris NL: recent questions (N-C8)
+	mux.HandleFunc("/api/ai/queries/", s.handleAIQueryCorrection)       // Iris NL: "that's not what I meant" (N-C8)
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Self-describing API + ITSM connector status.
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
@@ -4519,6 +4529,7 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	// STORAGE-MEASUREMENT-END
 	// AI-SCORECARD-BEGIN
 	s.aiScore.Write(w)
+	s.nlqQueryLogMetrics.Write(w) // Iris query capture + corrections (N-C8); nil-safe
 	// AI-SCORECARD-END
 	// SECURITY-LANE-BEGIN
 	if s.securityLane != nil {
