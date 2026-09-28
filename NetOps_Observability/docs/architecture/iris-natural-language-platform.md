@@ -200,7 +200,7 @@ Evidence paths are relative to `src/backend/` unless prefixed. "Closes in" names
 | 46 | Streamed operational progress | MISSING | No SSE/Flusher anywhere | N-E2 |
 | 47 | Performance targets per class; tenant-keyed caches | MISSING | — | N-C5, N-H4 |
 | 48 | Query eval metrics + targets (entity ≥99 %, exec ≥98 %, semantic ≥95 %) | MISSING | — | N-C6, N-H5 |
-| 49 | RAG evaluation per layer | PARTIAL | Docs hit@1/hit@3 floors 0.75/0.95 (N-G2 shipped); other layers not built | N-F3 |
+| 49 | RAG evaluation per layer | PARTIAL | Docs hit@1/hit@3 floors 0.80/0.95 (N-G1/N-G2 shipped, 101 items); other layers not built | N-F3 |
 | 50 | Multi-turn naturalness tests | PARTIAL | Unit + HTTP follow-up tests (`refer_test.go`, `nlquery_convo_isolation_test.go`); no scored multi-turn corpus yet | N-C7 |
 | 51 | Flagship test 1: change incident conversation | MISSING | — | N-S1 |
 | 52 | Flagship test 2: Comcast circuits → only Dallas → BGP flaps | MISSING | — | N-S2 |
@@ -228,10 +228,10 @@ Evidence paths are relative to `src/backend/` unless prefixed. "Closes in" names
 
 | Requirement | Status | Evidence | Closes in |
 |---|---|---|---|
-| Answer any "how do I / what is / what does this page mean" question | PARTIAL | BM25 over 147 pages + 354 `(i)` explain answers (`ai/explain.go`) | N-G1…G3 |
-| Coverage of every nav area | PARTIAL | None/thin: Operations→Cloud (6 pages), Application Map, Business Services, DEM Journeys/Service Paths/Changes/Data Health, Access Explorer, Sessions, Search Dashboards, GraphQL Explorer, Stack Health, Self-Monitoring, Data Protection, Sensors, Action Queue, Recovery Scorecard, Findings | N-G1 |
+| Answer any "how do I / what is / what does this page mean" question | DONE | BM25 over 169 pages + 354 `(i)` explain answers (`ai/explain.go`); every nav leaf documented and asked about in the golden set (N-G1), page-aware answers (N-G3), 2026-09-27 | — |
+| Coverage of every nav area | DONE | All 76 nav leaves map to their portal pages in `ai/docs_pages.go`; `TestNavPageDocsCoverEveryNavLeaf` reads `nav.tsx` and `TestGoldenCoversEveryNavLeaf` requires a golden question per leaf (101 docs items; hit@1 0.88, hit@3 1.00; floors 0.80 / 0.95) | — |
 | Retrieval quality ≥ floor with headroom | DONE | hit@3 floor raised to 0.95 with folding/stemming, release-note down-weighting and the docs-031 fix (N-G2, 2026-09-26) | — |
-| Page-aware help ("what am I looking at?") | PARTIAL | `(i)` sends a topic; the drawer does not send the route | N-G3 |
+| Page-aware help ("what am I looking at?") | DONE | The Iris box sends the canonical route (`iris/pageRoute.ts`); the server validates it against `ai/docs_pages.go`, boosts that page's qualified docs hits ×1.35 (golden hit@1 0.88 → 0.95 asked from the answer's page) and answers "what am I looking at?" from the page's doc + its `(i)` | — |
 | One product-KB path (no dead code) | PARTIAL | `ProductKB` unreachable (`ai/orchestrator.go:1504-1523`); unique `productRoutes` deep-link map must move first | N-G2 |
 
 ---
@@ -418,8 +418,6 @@ plus a recorded-model run in the offline harness.
 
 | # | Item | Depends | ew |
 |---|---|---|---:|
-| N-G1 | **Corpus coverage**: write the missing pages (§3.1 list); one golden item per nav leaf (≈90, today 32) | — | 3 |
-| N-G3 | **Page-aware help**: current route boosts that page's docs; "what am I looking at?" answers from the page's doc + `(i)` answers | E4 | 1 |
 | N-G4 | **Router remainder** (deterministic data arm SHIPPED 2026-09-27: `/api/ai/ask` answers a question the NL compiler fully understands from its query — key-free summary + result rendered by the presentation renderer; diagnostic cues stay with skills; product questions never compile): model tie-break for questions two arms could claim; a routing scoreboard over the golden corpus | C5, E4 | 0.5 |
 
 ### Phase H — Evaluation, replay and release gates (Part 1 §43–48; Part 2 §48–50, 67; D13, D18)
@@ -465,7 +463,7 @@ flowchart LR
     C4 --> E1 --> E3 --> S1
     A5 --> E2 --> E3
     S1 --> S2 --> S3
-    G1 & G2 --> G4
+    G2 --> G4
     B1 --> F4
     A6 --> F1 --> F2 --> I5
     H1 --> H2
