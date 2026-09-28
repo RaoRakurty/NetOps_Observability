@@ -69,7 +69,7 @@ A large export is queued rather than blocked, and the page reports it: `Large ex
 
 ### Step 6 - Save the search
 
-Select the save control, name the search, and find it again under **Explore → Saved Searches**.
+Select the save control, name the search, and find it again under **Explore → Saved Searches**. See [Open a saved search](/explore/saved-searches).
 
 ## What you see
 

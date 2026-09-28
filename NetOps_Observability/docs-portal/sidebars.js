@@ -97,6 +97,7 @@ const sidebars = {
           link: { type: 'doc', id: 'monitoring/overview' },
           items: [
             'monitoring/create-a-monitor',
+            'monitoring/monitor-rules',
             'monitoring/manage-alerts',
             'monitoring/maintenance-windows',
             'monitoring/link-quality',
@@ -155,6 +156,7 @@ const sidebars = {
             'explore/flows',
             'explore/application-attribution',
             'explore/events',
+            'explore/saved-searches',
           ],
         },
         {
@@ -171,11 +173,14 @@ const sidebars = {
           label: 'Dashboards and reports',
           link: { type: 'doc', id: 'dashboards-reports/overview' },
           items: [
+            'dashboards-reports/command-center',
             'dashboards-reports/operations-overview',
             'dashboards-reports/my-dashboard',
             'dashboards-reports/built-in-dashboards',
             'dashboards-reports/reports',
             'dashboards-reports/recovery-scorecard',
+            'dashboards-reports/rca-reports',
+            'dashboards-reports/demo-showcase',
           ],
         },
       ],
@@ -215,6 +220,7 @@ const sidebars = {
       label: 'Security',
       link: { type: 'doc', id: 'security/overview' },
       items: [
+        'security/security-overview',
         'security/ctem',
         'security/run-a-scan',
         'security/investigate-a-finding',

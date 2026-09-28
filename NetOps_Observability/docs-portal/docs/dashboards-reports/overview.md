@@ -11,26 +11,17 @@ Boards and reports live under **Analytics**, alongside the operational landing v
 
 | Surface | Console path | What it is for |
 |---|---|---|
-| Home, the Command Center | **Overview → Home** | The triage queue: correlated incidents with RCA state, owner, ticket state and a recommended next action. |
+| [Home, the Command Center](/dashboards-reports/command-center) | **Overview → Home** | The triage queue: correlated incidents with RCA state, owner, ticket state and a recommended next action. |
 | [Operations Overview](/dashboards-reports/operations-overview) | **Overview → Operations Overview** | Fleet-wide health, root cause and impact on one screen. |
 | [My Dashboard](/dashboards-reports/my-dashboard) | **Overview → My Dashboard** | A fixed, dense operations board over live telemetry. |
 | [Built-in dashboards](/dashboards-reports/built-in-dashboards) | **Analytics → Dashboards → Dashboard List** | The directory of built-in boards, plus the dashboards you compose yourself. |
 | [Schedule a report](/dashboards-reports/reports) | **Analytics → Reports** | Build, schedule, preview and deliver a report. |
 
-**Analytics → RCA Reports** holds promoted real outages, and **Analytics → Recovery Scorecard** holds the reliability trend. See [Review the Recovery Scorecard](/dashboards-reports/recovery-scorecard).
+**Analytics → RCA Reports** holds promoted real outages, and **Analytics → Recovery Scorecard** holds the reliability trend. See [Review the RCA Reports library](/dashboards-reports/rca-reports) and [Review the Recovery Scorecard](/dashboards-reports/recovery-scorecard).
 
 ## Home, the Command Center
 
-**Overview → Home** is not a raw alert table. Each row is a correlated incident that already carries an RCA state, severity, impact, fault domain, evidence completeness, owner, age, ticket state and a recommended next action.
-
-1. Read the KPI tiles across the top. Select a tile to filter the Action Queue to that set, and select it again to clear.
-2. Narrow further with the filter bar above the table.
-3. Select a row to expand it. The expansion shows the impacted entities, each linking to that device's live status, an evidence brief, and the recommended next action.
-4. Act from the expanded row: open the RCA case, view the topology, assign an owner, or create a ticket.
-
-The **Problem ID** column is a stable, short handle for the case: the letter `P`, a hyphen, and the first six hexadecimal characters of the correlation identifier in upper case. The full identifier stays in the hover title and in the link, which is what the API keys on. The same handle is used in the RCA inspector and by Iris, so one case reads the same everywhere.
-
-The page refreshes every 30 seconds.
+**Overview → Home** is not a raw alert table. Each row is a correlated incident that already carries an RCA state, severity, impact, fault domain, evidence completeness, owner, age, ticket state and a recommended next action. The KPI tiles across the top filter the queue, and the page refreshes every 30 seconds. See [Read the Command Center](/dashboards-reports/command-center).
 
 ## Operations Overview
 

@@ -72,7 +72,7 @@ Answers whether each WAN circuit is meeting its SLA. The card opens **Investigat
 | Events | **Explore → Events** | The merged event timeline. See [Review the event feed](/explore/events). |
 | Threat Detection | **Security → Threat Detection** | Security findings and critical alerts. |
 
-**Analytics → Dashboards → Demo Showcase** renders the same live panel registry with different chrome, as a sales surface.
+**Analytics → Dashboards → Demo Showcase** renders the same live panel registry with different chrome, as a sales surface. See [View the Demo Showcase board](/dashboards-reports/demo-showcase).
 
 ## Dashboards you compose yourself
 

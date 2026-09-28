@@ -31,6 +31,7 @@ What that means in practice:
 
 | Page | What it answers |
 |---|---|
+| [Read the Security Overview](/security/security-overview) | The first page of the section: coverage, the pipeline, the flagship story and exposure by seam |
 | [Continuous threat and exposure management](/security/ctem) | What the CTEM funnel measures, and why `validate` is always 0 |
 | [Run a security scan](/security/run-a-scan) | How to make the producer lane assess this tenant now |
 | [Investigate a security finding](/security/investigate-a-finding) | How to read one verdict and decide what to do |
