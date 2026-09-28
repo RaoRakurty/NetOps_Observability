@@ -37,6 +37,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/changeapi"
 	"sort"
 	"strconv"
 	"strings"
@@ -2588,4 +2589,62 @@ func stringSet(xs []string) map[string]bool {
 		m[x] = true
 	}
 	return m
+}
+
+// ---- change APIs (tracker 337 N-D3) -----------------------------------------
+
+// handleChanges serves /api/changes[/{id}[/diff]] over the change ledger
+// (internal/changeapi). Every read is the caller's own tenant, from the token;
+// the incident anchor and the configuration diff reuse the SAME scoped reads
+// the NL query path and the config-diff tool use.
+func (s *server) handleChanges(w http.ResponseWriter, r *http.Request) {
+	if s.experienceStore == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("the change ledger is not available on this deployment"))
+		return
+	}
+	s.changeAPI().Handler(w, r)
+}
+
+func (s *server) changeAPI() changeapi.Deps {
+	return changeapi.Deps{
+		Store: s.experienceStore,
+		Authorize: func(w http.ResponseWriter, r *http.Request) (changeapi.Caller, bool) {
+			claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+			if !ok {
+				return changeapi.Caller{}, false
+			}
+			tenant, cross := principalTenant(claims)
+			return changeapi.Caller{Tenant: tenant, Cross: cross}, true
+		},
+		Incident: func(ctx context.Context, r *http.Request, id string) (changeapi.IncidentScope, error) {
+			claims, _ := userFrom(r.Context()) // Authorize already required a principal
+			det, err := s.nlqScopeFor(r, claims).Incident(ctx, id)
+			if errors.Is(err, plan.ErrNotFound) {
+				return changeapi.IncidentScope{}, changeapi.ErrNotFound
+			}
+			if err != nil {
+				return changeapi.IncidentScope{}, err
+			}
+			return changeapi.IncidentScope{ID: id, Start: det.Row.CreatedAt, Devices: det.Row.Devices, Sites: det.Row.Sites}, nil
+		},
+		ConfigDiff: func(ctx context.Context, r *http.Request, deviceID, from, to string) (changeapi.Diff, error) {
+			if s.configBackup == nil {
+				return changeapi.Diff{DeviceID: deviceID, Unavailable: "configuration backup is not enabled on this deployment"}, nil
+			}
+			claims, _ := userFrom(r.Context()) // Authorize already required a principal
+			rep, err := s.aiConfigDiff(r, claims)(ctx, ai.Principal{}, ai.ConfigDiffRequest{DeviceID: deviceID, From: from, To: to})
+			if errors.Is(err, ai.ErrNotFound) {
+				return changeapi.Diff{}, changeapi.ErrNotFound
+			}
+			if err != nil {
+				return changeapi.Diff{}, err
+			}
+			return changeapi.Diff{DeviceID: rep.DeviceID, FromVersion: rep.FromSHA, ToVersion: rep.ToSHA, FromAt: rep.FromAt, ToAt: rep.ToAt,
+				Added: rep.Added, Removed: rep.Removed, Unified: rep.Unified, Truncated: rep.Truncated,
+				Unavailable: firstNonBlank(rep.Unavailable, rep.NotWired)}, nil
+		},
+		Redact:     ai.RedactSecrets,
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+	}
 }

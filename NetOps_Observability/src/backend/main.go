@@ -3684,6 +3684,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/entities/resolve", s.handleAIEntityResolve) // Iris NL: resolution ladder (N-C2)
 	mux.HandleFunc("/api/ai/query/compile", s.handleAIQueryCompile)     // Iris NL: question → validated query (N-C5)
 	mux.HandleFunc("/api/ai/query/execute", s.handleAIQueryExecute)     // Iris NL: validated query → ResultSet (N-C5)
+	mux.HandleFunc("/api/changes", s.handleChanges)                     // change ledger (N-D3): list, one, diff
+	mux.HandleFunc("/api/changes/", s.handleChanges)                    // /{id} · /{id}/diff
 	mux.HandleFunc("/api/ai/conversations", s.handleAIConversations)    // Iris NL: start a conversation (N-C7)
 	mux.HandleFunc("/api/ai/conversations/", s.handleAIConversation)    // Iris NL: read one · ask in context (N-C7)
 	mux.HandleFunc("/api/ai/queries", s.handleAIQueries)                // Iris NL: recent questions (N-C8)

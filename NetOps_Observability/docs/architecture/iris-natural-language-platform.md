@@ -380,7 +380,7 @@ returns data, `pgintegration` when it touches PG, and the CI gate (§12). Effort
 | # | Item | Depends | ew |
 |---|---|---|---:|
 | N-D2 | **Remaining producers** (config capture + Correlix audit SHIPPED 2026-09-27, `internal/changeledger`). Open: (a) syslog `CONFIG_I`/`UI_COMMIT` — un-shadow only after real-traffic hit rate (`corr_parser_shadow_hits_total{rule_id="syslog.config.change"}`), per-vendor lab fixtures proving user/source/line extraction, and a false-positive check; then bridge into the ledger with a deterministic id, device user kept verbatim; (b) trap `trap.config.change` feeds only corr_signals — same bridge; (c) Versa `controller_policy_change` — needs an exact event-type allowlist (today a substring match on "policy" also catches violations) and real Concerto samples; (d) cloud — producer keyed on the provider event id, or a decision to keep cloud changes read-time only | — | 2 |
-| N-D3 | **Change APIs + tools**: `/api/changes[/{id}[/diff]]`; incident-anchored change read (cloud pattern); causal vs temporal label taken from the engine's chain only; structured before/after + redacted diff | D1, B1 | 2 |
+| N-D3 | **Change API remainder** (`/api/changes`, `/{id}`, `/{id}/diff` over the ledger — every filter, incident anchor labelled `temporal` + `in_incident_scope`, config changes as the redacted unified diff of their two captures, value changes redacted; the Changes page's "What changed" — SHIPPED 2026-09-28, `internal/changeapi`): a `corroborating` label once the engine chain carries its observation kinds (N-B4 phase 2); redact before/after on the older `/api/dem/changes` list, which still returns them raw | D1, B1 | 0.5 |
 
 ### Phase E — Presentation and the operator experience (Part 2 §27–37, 46, 64–66; Part 1 §30)
 

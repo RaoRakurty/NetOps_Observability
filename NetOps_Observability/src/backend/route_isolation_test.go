@@ -69,6 +69,10 @@ var routeIsolationLedger = map[string]string{
 	// Conversations (N-C7): owned by one principal in one tenant scope (RLS
 	// iris_conversations + owner filter); another tenant, a same-tenant
 	// colleague and an as_tenant walk all get 404 — nlquery_convo_isolation_test.go.
+	// Change ledger API (N-D3): own tenant from the token; foreign id → 404;
+	// change_api_isolation_test.go.
+	"/api/changes":           "scoped",
+	"/api/changes/":          "scoped",
 	"/api/ai/conversations":  "scoped",
 	"/api/ai/conversations/": "scoped",
 	// Query capture + corrections (N-C8): records are stamped with the tenant

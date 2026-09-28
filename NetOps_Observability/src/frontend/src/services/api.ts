@@ -1866,6 +1866,28 @@ export type CopilotConfig = {
 // Per-workspace (tenant) AI settings — a tenant admin's own view. The key is
 // write-only; entitlement fields are read-only here (platform-controlled).
 // ---- Iris vocabulary + NL query (internal/nlquery; tracker 337) ----
+// ---- change ledger API (N-D3) ----
+export interface ChangeConfigDiff {
+  device_id: string;
+  from_version: string;
+  to_version: string;
+  from_at: string;
+  to_at: string;
+  added: number;
+  removed: number;
+  unified: string;
+  truncated: boolean;
+  unavailable?: string;
+}
+export interface ChangeDiffResponse {
+  change_id: string;
+  kind: "config" | "values";
+  diff?: ChangeConfigDiff;
+  before?: string;
+  after?: string;
+  has_diff?: boolean;
+}
+
 export interface IrisAlias {
   entity_type: string;
   entity_id: string;
@@ -7334,6 +7356,10 @@ export const api = {
   demSyntheticCoverage: (window?: DemWindow) =>
     request<DemCoverageResponse>(`/api/dem/synthetics/coverage${demWindowQS(window)}`),
   /** The normalized change feed over the window. */
+  // The change ledger's own API (tracker 337 N-D3): one change's diff —
+  // a configuration change as the redacted unified diff of its two captured
+  // versions, any other change as its redacted before/after.
+  changeDiff: (id: string) => request<ChangeDiffResponse>(`/api/changes/${encodeURIComponent(id)}/diff`),
   demChanges: (opts: DemChangeQuery = {}) =>
     request<DemChangesResponse>(`/api/dem/changes${demChangeParams(opts)}`),
   /** Record a change event. The owning tenant is stamped from the token. */
