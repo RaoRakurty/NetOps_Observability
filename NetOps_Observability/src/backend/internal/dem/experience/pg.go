@@ -231,7 +231,7 @@ func (s *PGStore) DeleteJourney(ctx context.Context, tenant, id string) error {
 //
 //	$1 since  $2 until (NULL = open)  $3 types  $4 apps  $5 sites  $6 seams
 //	$7 actors (lower-cased)  $8 objects  $9 object kinds  $10 sources
-//	$11 excluded ids
+//	$11 excluded ids  $12 selected ids
 const pgChangeWhere = `WHERE event_at >= $1
 	    AND ($2::timestamptz IS NULL OR event_at <= $2::timestamptz)
 	    AND (COALESCE(cardinality($3::text[]), 0) = 0 OR change_type = ANY($3::text[]))
@@ -243,7 +243,8 @@ const pgChangeWhere = `WHERE event_at >= $1
 	    AND (COALESCE(cardinality($8::text[]), 0) = 0 OR object = ANY($8::text[]))
 	    AND (COALESCE(cardinality($9::text[]), 0) = 0 OR object_kind = ANY($9::text[]))
 	    AND (COALESCE(cardinality($10::text[]), 0) = 0 OR source_system = ANY($10::text[]))
-	    AND (COALESCE(cardinality($11::text[]), 0) = 0 OR NOT (change_id = ANY($11::text[])))`
+	    AND (COALESCE(cardinality($11::text[]), 0) = 0 OR NOT (change_id = ANY($11::text[])))
+	    AND (COALESCE(cardinality($12::text[]), 0) = 0 OR change_id = ANY($12::text[]))`
 
 // pgChangeArgs binds a normalized filter to pgChangeWhere's positions.
 func pgChangeArgs(f changeFilter) []any {
@@ -256,7 +257,7 @@ func pgChangeArgs(f changeFilter) []any {
 		until = f.until
 	}
 	return []any{since, until, f.types, f.apps, f.sites, f.seams, f.actors,
-		f.objects, f.objectKinds, f.sources, f.excludeIDs}
+		f.objects, f.objectKinds, f.sources, f.excludeIDs, f.ids}
 }
 
 func (s *PGStore) ListChanges(ctx context.Context, tenant string, q ChangeQuery) ([]ChangeEvent, error) {
@@ -281,7 +282,7 @@ func (s *PGStore) ListChanges(ctx context.Context, tenant string, q ChangeQuery)
 		// point of a bounded query is that the rows never leave the database.
 		rows, qerr := tx.Query(ctx,
 			`SELECT data FROM dem_change_events `+pgChangeWhere+`
-			  ORDER BY event_at DESC, change_id ASC LIMIT $12`, args...)
+			  ORDER BY event_at DESC, change_id ASC LIMIT $13`, args...)
 		if qerr != nil {
 			return qerr
 		}

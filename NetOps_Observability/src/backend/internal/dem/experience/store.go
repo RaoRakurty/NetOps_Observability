@@ -88,7 +88,9 @@ type ChangeQuery struct {
 	// Sources matches ChangeEvent.SourceSystem.
 	Sources    []string
 	ExcludeIDs []string
-	Limit      int
+	// IDs selects specific changes (any of) — the by-id read of /api/changes.
+	IDs   []string
+	Limit int
 }
 
 // changeFilter is a ChangeQuery after normalization: trimmed, empties dropped,
@@ -96,7 +98,7 @@ type ChangeQuery struct {
 type changeFilter struct {
 	since, until                               time.Time
 	types, apps, sites, seams, actors, objects []string
-	objectKinds, sources, excludeIDs           []string
+	objectKinds, sources, excludeIDs, ids      []string
 	limit                                      int
 }
 
@@ -134,6 +136,7 @@ func normalizeChangeQuery(q ChangeQuery) (changeFilter, error) {
 	f.objectKinds = list("object kind", q.ObjectKinds, same)
 	f.sources = list("source", q.Sources, strings.ToLower)
 	f.excludeIDs = list("exclude", q.ExcludeIDs, same)
+	f.ids = list("id", q.IDs, same)
 	return f, err
 }
 
@@ -160,7 +163,7 @@ func (f changeFilter) matches(c ChangeEvent) bool {
 	}
 	if !anyOf(f.types, c.Type) || !anyOf(f.apps, c.App) || !anyOf(f.sites, c.Site) ||
 		!anyOf(f.seams, c.Seam) || !anyOf(f.objects, c.Object) ||
-		!anyOf(f.objectKinds, c.ObjectKind) || !anyOf(f.sources, c.SourceSystem) {
+		!anyOf(f.objectKinds, c.ObjectKind) || !anyOf(f.sources, c.SourceSystem) || !anyOf(f.ids, c.ID) {
 		return false
 	}
 	if len(f.actors) > 0 && !anyOf(f.actors, strings.ToLower(c.Actor)) &&

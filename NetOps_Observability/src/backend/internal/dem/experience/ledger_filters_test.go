@@ -125,6 +125,7 @@ func TestBothBackendsApplyEveryLedgerFilterBeforeTheLimit(t *testing.T) {
 		{"until is inclusive and bounds the newest end", ChangeQuery{Since: window, Until: testNow.Add(-10 * time.Minute), Limit: 3}, []string{"10", "11"}},
 		{"excluded ids are never returned", ChangeQuery{ExcludeIDs: []string{fmt.Sprintf("chg-%032d", 1), fmt.Sprintf("chg-%032d", 2)}, Limit: 2}, []string{"3", "4"}},
 		{"filters combine with AND", ChangeQuery{Sites: []string{"dfw"}, Sources: []string{"ledger"}, Limit: 5}, []string{}},
+		{"selected ids, any of", ChangeQuery{IDs: []string{fmt.Sprintf("chg-%032d", 3), fmt.Sprintf("chg-%032d", 8), "chg-none"}, Limit: 5}, []string{"3", "8"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fileGot, err := file.ListChanges(ctx, "acme", tc.q)
