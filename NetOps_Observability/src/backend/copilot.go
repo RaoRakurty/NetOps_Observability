@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"netops/backend/ai"
+	"netops/backend/internal/aientitlement"
 )
 
 // appKnowledge is the authoritative, version-controlled brief about THIS product,
@@ -118,10 +119,11 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, fmt.Errorf("copilot rate limit exceeded — slow down"))
 		return
 	}
-	// Per-tenant entitlement (§3a): the assistant is a per-tenant feature, not a
-	// platform-global one. Cross-tenant principals are never gated here.
-	if !s.aiAssistantAllowed(claims) {
-		writeError(w, http.StatusForbidden, errAITenantDisabled)
+	// N-A7: ai.chat — the tier mapping, the Iris switch and the caller's own
+	// tenant switch (the assistant is per-tenant, not platform-global; cross-
+	// tenant principals are not tenant-gated). FEATURE_COPILOT above stays the
+	// provider-proxy switch on top of it.
+	if !s.requireAIEntitlement(w, claims, aientitlement.Chat) {
 		return
 	}
 

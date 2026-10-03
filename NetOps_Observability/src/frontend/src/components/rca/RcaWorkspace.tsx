@@ -10,6 +10,7 @@ import FidelityBadge from "../FidelityBadge";
 import RcaCaseHeader, { Pill } from "./RcaCaseHeader";
 import AskIris from "../AskIris";
 import { fmtTime, fmtDateTime, fmtDate, parseTs } from "../../lib/time";
+import { useAIEntitlements } from "../../lib/aiEntitlements";
 
 // RcaWorkspace — the production RCA detail view, organized after the reference
 // template (light, single-column report). PURE PRESENTATION: it renders an
@@ -39,7 +40,17 @@ import { fmtTime, fmtDateTime, fmtDate, parseTs } from "../../lib/time";
 // grounding, the server-originated case text never passed Redact, and the reply
 // was rendered with no citation verification at all. None of that is recoverable
 // in the browser, and none of it needs to be: the id is all the server needs.
+//
+// N-A7: the box exists only for a caller holding ai.chat. That is cosmetic —
+// /api/ai/ask refuses without it — so a caller without it is not shown a box
+// that can only answer "not available".
 function AskRcaPanel({ data, correlationId }: { data: RcaCase; correlationId?: string }) {
+  const ent = useAIEntitlements();
+  if (!ent.has("ai.chat")) return null;
+  return <AskRcaBox data={data} correlationId={correlationId} />;
+}
+
+function AskRcaBox({ data, correlationId }: { data: RcaCase; correlationId?: string }) {
   const [q, setQ] = useState(data.assistant.questions[0] ?? "");
   const [busy, setBusy] = useState(false);
   const [answer, setAnswer] = useState<AiAnswer | null>(null);

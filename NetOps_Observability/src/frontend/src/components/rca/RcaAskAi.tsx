@@ -5,6 +5,7 @@ import { useState } from "react";
 import { api, AiAnswer } from "../../services/api";
 import Icon from "../Icon";
 import AskIris from "../AskIris";
+import { useAIEntitlements } from "../../lib/aiEntitlements";
 
 // RcaAskAi — the Iris AI "Ask AI" card on the RCA Inspector. One click asks
 // the orchestrator to explain THIS correlation; the backend retrieves the
@@ -20,6 +21,8 @@ export default function RcaAskAi({ correlationId }: { correlationId: string }) {
   const [ans, setAns] = useState<AiAnswer | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // N-A7: no ai.chat → no card. Cosmetic: /api/ai/ask refuses without it.
+  const ent = useAIEntitlements();
 
   const ask = async () => {
     setBusy(true);
@@ -35,6 +38,8 @@ export default function RcaAskAi({ correlationId }: { correlationId: string }) {
   };
 
   const pe = ans?.problem;
+
+  if (!ent.has("ai.chat")) return null;
 
   return (
     <div className="card" style={{ borderColor: "var(--accent)" }}>

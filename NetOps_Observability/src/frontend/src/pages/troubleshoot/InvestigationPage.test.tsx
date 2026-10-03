@@ -45,6 +45,8 @@ const mocks = vi.hoisted(() => ({
   probePaths: vi.fn(), flowsByType: vi.fn(), topTalkers: vi.fn(),
   // iris + the TAC escalation panel that hangs off the answer
   aiAsk: vi.fn(), devices: vi.fn(), permissions: vi.fn(),
+  // the caller's AI entitlements (N-A7) — "Ask Iris" needs ai.chat
+  features: vi.fn(),
   tacState: vi.fn(), tacClassify: vi.fn(),
 }));
 
@@ -149,6 +151,7 @@ beforeEach(() => {
   mocks.topTalkers.mockResolvedValue({ data: [] });
   mocks.aiAsk.mockResolvedValue({ mode: "grounded", intent: "x", modules: [], text: "ok", citations: [], disclaimers: [] });
   mocks.devices.mockResolvedValue([]);
+  mocks.features.mockResolvedValue({ ai_entitlements: ["ai.chat", "ai.nlquery"] });
   // Nothing has been escalated in these fixtures — the state the panel renders
   // its one "Escalate to TAC" button for.
   mocks.tacState.mockResolvedValue({
@@ -490,6 +493,23 @@ describe("the actions", () => {
     expect(mocks.aiAsk).toHaveBeenCalledWith(expect.any(String), { correlation_id: CASE_ID });
     await click("Close Iris");
     expect(screen.queryByRole("region", { name: "Ask Iris" })).toBeNull();
+  });
+
+  it("hides Ask Iris from a caller without ai.chat (N-A7; the server still refuses /api/ai/ask)", async () => {
+    mocks.features.mockResolvedValue({ ai_entitlements: ["ai.nlquery"] });
+    await show(<InvestigationPage initialCaseId={CASE_ID} />);
+    await waitFor(() => expect(mocks.features).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByRole("button", { name: "Ask Iris" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Open ticket" })).toBeInTheDocument();
+    expect(mocks.aiAsk).not.toHaveBeenCalled();
+  });
+
+  it("hides Ask Iris when the entitlements cannot be read", async () => {
+    mocks.features.mockRejectedValue(new Error("network"));
+    await show(<InvestigationPage initialCaseId={CASE_ID} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByRole("button", { name: "Ask Iris" })).toBeNull();
   });
 
   it("offers 'Open Iris' only inside the shell, and opens the docked drawer", async () => {

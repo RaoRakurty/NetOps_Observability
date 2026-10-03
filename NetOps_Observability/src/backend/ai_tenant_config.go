@@ -6,10 +6,13 @@ package backend
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"netops/backend/ai"
+	"netops/backend/internal/aientitlement"
 )
 
 // ai_tenant_config.go — per-tenant Iris AI configuration (intelligence plan
@@ -68,15 +71,9 @@ func (s *server) dailyTokensFor(tenant string) int {
 
 // ---- gates (used by copilot.go / ai_handlers.go / copilot_agent.go) ----------
 
-// aiAssistantAllowed: cross-tenant principals always may use the assistant;
-// tenant users only when their tenant's entitlement says so.
-func (s *server) aiAssistantAllowed(claims jwtClaims) bool {
-	tenant, cross := principalTenant(claims)
-	if cross {
-		return true
-	}
-	return s.aiTenantCfg.AssistantEnabled(tenant)
-}
+// The per-tenant assistant / investigation switches are consulted through the
+// atomic AI entitlements (below, tracker 337 N-A7), which AND them
+// with the licence tier's mapping and the deployment flags.
 
 var errAITenantDisabled = errors.New("Iris AI isn't enabled for this account — contact your administrator")
 
@@ -328,4 +325,109 @@ func (s *server) handleAITenants(w http.ResponseWriter, r *http.Request) {
 // other config store).
 func aiTenantConfigPath() string {
 	return envOr("AI_TENANT_CONFIG_FILE", "/data/ai_tenant_config.json")
+}
+
+// ---- atomic AI entitlements (tracker 337 N-A7) -------------------------------
+
+// The server side of the atomic AI entitlements
+// (tracker 337 N-A7). Every AI route asks requireAIEntitlement for the one
+// capability it exercises; the frontend receives aiEntitlementsFor via
+// GET /api/features to hide what the caller cannot use. Hidden is cosmetic —
+// these server-side gates are the control, and they are default-closed: an
+// unparseable mapping, an unknown tier, a nil policy or a tenant with no
+// switch source grants nothing.
+//
+// The licence tier only ever reaches this file as an opaque key into the
+// shipped mapping (internal/aientitlement/tiers.json). Nothing here compares
+// it to a tier name.
+
+// aiDefaultPolicy is the shipped tier → entitlement mapping, parsed once. Like
+// aiSkills it is embedded, immutable content; a parse failure is content drift
+// identical on every deployment, logged LOUDLY, and the process then runs with
+// a nil policy — no AI capability is granted, rather than all of them.
+var aiDefaultPolicy = loadAIEntitlementPolicy()
+
+func loadAIEntitlementPolicy() *aientitlement.Policy {
+	p, err := aientitlement.Default()
+	if err != nil {
+		log.Printf("FATAL-GRADE CONFIG ERROR: the AI entitlement mapping failed to load — every AI capability is REFUSED for this process: %v", err)
+		return nil
+	}
+	return p
+}
+
+// aiPolicy is the mapping in force: the injected one when set (tests), else
+// the shipped default.
+func (s *server) aiPolicy() *aientitlement.Policy {
+	if s.aiEntitlementPolicy != nil {
+		return s.aiEntitlementPolicy
+	}
+	return aiDefaultPolicy
+}
+
+// aiEntitlementInputs gathers the three inputs for one principal: the licence
+// tier in force (Community when no licence service is wired — the entitlement
+// package's own fail-closed default), the process flags, and the caller's
+// tenant switches.
+func (s *server) aiEntitlementInputs(claims jwtClaims) aientitlement.Inputs {
+	tenant, cross := principalTenant(claims)
+	return aientitlement.Inputs{
+		Tier:   string(s.entitlements.Tier()), // nil-safe: a nil *licence.Service reads as Community
+		Env:    os.Getenv,
+		Tenant: tenant,
+		Cross:  cross,
+		// The store's own defaults apply when it holds no row for the tenant
+		// (assistant on, investigations off — the platform owner's staged-
+		// rollout policy, unchanged by N-A7). Its methods are nil-safe and
+		// answer those same defaults, exactly as the pre-N-A7 gates did.
+		Switches: s.aiTenantCfg,
+	}
+}
+
+// aiDecide answers one entitlement for one principal.
+func (s *server) aiDecide(claims jwtClaims, e aientitlement.Entitlement) aientitlement.Decision {
+	return aientitlement.Decide(s.aiPolicy(), e, s.aiEntitlementInputs(claims))
+}
+
+// aiEntitled is the boolean form, for paths that degrade rather than refuse
+// (the investigation loop inside a chat turn, the data arm of an ask).
+func (s *server) aiEntitled(claims jwtClaims, e aientitlement.Entitlement) bool {
+	return s.aiDecide(claims, e).Granted
+}
+
+// aiEntitlementsFor is the caller's granted set, for the frontend.
+func (s *server) aiEntitlementsFor(claims jwtClaims) []aientitlement.Entitlement {
+	return aientitlement.Resolve(s.aiPolicy(), s.aiEntitlementInputs(claims))
+}
+
+// requireAIEntitlement is the route gate. It writes the refusal and returns
+// false when the caller lacks e. Statuses keep their pre-N-A7 meaning so
+// existing clients read them the same way:
+//
+//	503 — a deployment flag is off (the feature is switched off here)
+//	403 — the licence tier's mapping does not include it, or the caller's
+//	      tenant is not switched on (errAITenantDisabled, unchanged text)
+//
+// The body carries the entitlement and a stable reason token so the SPA can
+// say WHICH capability is missing without parsing prose.
+func (s *server) requireAIEntitlement(w http.ResponseWriter, claims jwtClaims, e aientitlement.Entitlement) bool {
+	d := s.aiDecide(claims, e)
+	if d.Granted {
+		return true
+	}
+	status, msg := http.StatusForbidden, "this installation's licence does not include "+aientitlement.Label(e)
+	switch d.Reason {
+	case aientitlement.ReasonDisabled:
+		status = http.StatusServiceUnavailable
+		msg = "Iris AI is disabled — set FEATURE_AI=true"
+		if e == aientitlement.Investigate {
+			msg = "AI investigations are disabled — set FEATURE_AI_TOOLS=true"
+		}
+	case aientitlement.ReasonTenantOff:
+		msg = errAITenantDisabled.Error()
+	case aientitlement.ReasonUnknown:
+		msg = "unknown AI capability"
+	}
+	writeJSON(w, status, map[string]string{"error": msg, "entitlement": string(e), "reason": string(d.Reason)})
+	return false
 }
