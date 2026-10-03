@@ -7,7 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 )
+
+// reGoldenNav is the shape of a GoldenItem.Nav address: two or three
+// lower-case nav ids. Whether the address EXISTS is the coverage test's job
+// (it reads nav.tsx); the loader only refuses a malformed one.
+var reGoldenNav = regexp.MustCompile(`^[a-z0-9-]+/[a-z0-9-]+(?:/[a-z0-9-]+)?$`)
 
 // goldenset.go — loader for the versioned golden Q&A set (intelligence plan
 // P3). The fixtures live in docs/ai/golden-examples/golden-qa.json so the eval
@@ -54,7 +60,11 @@ type GoldenItem struct {
 	Payload  string       `json:"payload,omitempty"` // injection: the adversarial content
 	Expect   GoldenExpect `json:"expect"`
 	KnownGap bool         `json:"known_gap,omitempty"` // report-only: tracked, not gated (e.g. the payroll relevance case)
-	Notes    string       `json:"notes,omitempty"`
+	// Nav names the console screen a docs item covers, as its canonical
+	// nav.tsx address: "section/leaf", or "section/leaf/sub" for an in-page
+	// view. golden_nav_coverage_test.go requires one per nav leaf (N-G1).
+	Nav   string `json:"nav,omitempty"`
+	Notes string `json:"notes,omitempty"`
 }
 
 // GoldenSet is the parsed fixture file.
@@ -101,6 +111,17 @@ func LoadGoldenSet(path string) (*GoldenSet, error) {
 			return nil, fmt.Errorf("golden set: duplicate id %q", it.ID)
 		}
 		seen[it.ID] = true
+		if it.Nav != "" {
+			if it.Category != GoldenDocs {
+				return nil, fmt.Errorf("golden set: %s: only a docs item can name a nav leaf", it.ID)
+			}
+			if !reGoldenNav.MatchString(it.Nav) {
+				return nil, fmt.Errorf("golden set: %s: nav %q is not a section/leaf[/sub] address", it.ID, it.Nav)
+			}
+			if it.KnownGap {
+				return nil, fmt.Errorf("golden set: %s: a nav coverage item cannot be a known gap", it.ID)
+			}
+		}
 		switch it.Category {
 		case GoldenDocs:
 			if len(it.Expect.Slugs) == 0 {

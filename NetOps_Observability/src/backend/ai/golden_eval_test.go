@@ -43,7 +43,12 @@ const (
 	// hit@1 0.88 (28/32), hit@3 1.00 (32/32).
 	// The hit@3 floor of 0.95 leaves a three-miss margin on 61 items; the hit@1
 	// floor is unchanged.
-	goldenHitAt1Floor = 0.75
+	// Measured 2026-10-03 after N-G1 completion (one item per nav screen — 105
+	// screens read from nav.tsx, gated by golden_nav_coverage_test.go — 119 docs
+	// items): hit@1 0.91 (108/119), hit@3 1.00 (119/119); the original 61
+	// hit@1 55/61, the original 32 hit@1 28/32. The hit@1 floor moves 0.75 →
+	// 0.80 (a twelve-miss margin); hit@3 stays 0.95 (a five-miss margin).
+	goldenHitAt1Floor = 0.80
 	goldenHitAt3Floor = 0.95
 )
 

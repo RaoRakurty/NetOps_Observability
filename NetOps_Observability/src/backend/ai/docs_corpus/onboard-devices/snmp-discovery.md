@@ -16,7 +16,7 @@ server validates every range before it sweeps anything.
 What discovery produces is a **candidate list**, not a monitored fleet. A swept
 device is in the inventory and costs no licence allowance; Correlix starts
 collecting from it when you switch monitoring on in the Monitoring column of
-**Infrastructure → Inventory & Devices**. Sweep as widely as your bounds allow —
+**Infrastructure → Devices**. Sweep as widely as your bounds allow —
 the device ceiling counts monitored devices only. See
 [Licensing](/administration/licence).
 
@@ -24,6 +24,16 @@ Discovery is bounded on purpose: at most 4,096 addresses across at most 32
 ranges, 32 concurrent probes, a two-second budget per host, and one sweep per
 minute. A configuration that exceeds those bounds is refused with an error
 rather than trimmed.
+
+## Where to find it
+
+**Infrastructure → Discovery & NMS** is where devices get into the inventory.
+It has two tabs: **Subnet Discovery**, this page, which sweeps your management
+subnets, and **NMS Integrations**, which connects a network management system
+or vendor controller (see [Connect a vendor controller](/infrastructure/nms-integrations)).
+A tenant account sees an explanation on **Subnet Discovery** instead of the
+form: the platform operator sets the scan scope, and discovered devices appear
+in **Infrastructure → Devices** automatically.
 
 ## Before you begin
 

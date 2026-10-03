@@ -44,9 +44,13 @@ import (
 // ─────────────────────────────────────────────────────────────────────────────
 
 type navIndex struct {
-	sections     map[string]bool
-	leaves       map[string]map[string]bool // section id → leaf ids
-	subs         map[string]map[string]bool // "section/leaf" → sub-item ids
+	sections map[string]bool
+	leaves   map[string]map[string]bool // section id → leaf ids
+	subs     map[string]map[string]bool // "section/leaf" → sub-item ids
+	// subRoutes records a sub-item that carries its own `route:` — a link to
+	// another page ("section/leaf/sub" → that route) rather than a view of
+	// its own leaf.
+	subRoutes    map[string]string
 	routeAlias   map[string]string
 	sectionAlias map[string]string
 }
@@ -143,9 +147,10 @@ func aliasTable(src, name string) map[string]string {
 func parseNav(t *testing.T, src string) *navIndex {
 	t.Helper()
 	idx := &navIndex{
-		sections: map[string]bool{},
-		leaves:   map[string]map[string]bool{},
-		subs:     map[string]map[string]bool{},
+		sections:  map[string]bool{},
+		leaves:    map[string]map[string]bool{},
+		subs:      map[string]map[string]bool{},
+		subRoutes: map[string]string{},
 	}
 	anchor := strings.Index(src, "export const NAV")
 	if anchor < 0 {
@@ -159,7 +164,7 @@ func parseNav(t *testing.T, src string) *navIndex {
 
 	var stack []string // enclosing array kinds, innermost last
 	lastKey := ""
-	curSection, curLeaf := "", ""
+	curSection, curLeaf, curSub := "", "", ""
 
 	readString := func(i int) (string, int) {
 		quote := body[i]
@@ -200,7 +205,9 @@ func parseNav(t *testing.T, src string) *navIndex {
 						idx.leaves[curSection][val] = true
 					}
 				case "subItems":
+					curSub = ""
 					if curSection != "" && curLeaf != "" {
+						curSub = val
 						key := curSection + "/" + curLeaf
 						if idx.subs[key] == nil {
 							idx.subs[key] = map[string]bool{}
@@ -208,6 +215,9 @@ func parseNav(t *testing.T, src string) *navIndex {
 						idx.subs[key][val] = true
 					}
 				}
+			}
+			if lastKey == "route" && top(stack) == "subItems" && curSub != "" {
+				idx.subRoutes[curSection+"/"+curLeaf+"/"+curSub] = val
 			}
 			lastKey = ""
 		case c == '[':

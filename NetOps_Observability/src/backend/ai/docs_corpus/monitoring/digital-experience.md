@@ -217,6 +217,34 @@ points at an IP address; a target declared by hostname contributes no flow
 reading, and the coverage figure on the row says how many of your subjects are
 covered.
 
+### The Incidents view
+
+**Incidents** lists the experience incidents in the window. To narrow and
+open one:
+
+1. Select **Incidents**.
+2. Narrow the list by severity, application or workflow name. The filters
+   are kept in the page address, so a link you share opens the same list.
+   **Clear filters** removes all three.
+3. Read the **Results** count, for example `12 of 40`. When the list is longer
+   than one page, a line under the table says so.
+4. Select an incident's title to open it. **Back to incidents** returns to the
+   list.
+
+Each row gives the severity, the incident, the workflow or application it
+hit, **Impact**, **Business impact**, **Likely layer**, **Leading cause**,
+**Confidence**, **Owner** and **Duration**. A blank cell always says why, for example **Owner
+not determined** or **No cause has enough evidence yet**. **No incident open in
+this window.** means the read worked and found none.
+
+An opened incident shows its header, **Impact**, **Experience path**,
+**Timeline**, **Hypotheses**, **Changes**, **Evidence**, **Action** and
+**Verify**. An experience incident is derived from the window's evidence and
+has no durable record until it is promoted. **Promote** raises it as a platform
+incident on **Operations → Incidents**. It needs `infrastructure:write`, and it
+is offered only on the Postgres store, because that is where the incident
+record lives.
+
 ### The synthetic coverage view
 
 **Synthetics** reports protection rather than a list of tests. Each declared
