@@ -3,7 +3,7 @@
 
 package irisquerylog
 
-// pg.go — the Postgres store over iris_query_log (migration 0054). Every
+// pg.go — the Postgres store over iris_query_log (migrations 0054, 0055). Every
 // statement runs inside WithTenant(tenant, cross=false), so the FORCE-RLS
 // tenant_iso policy confines it to the principal's tenant; principal_sub is
 // filtered explicitly on top where a statement is about one person.
@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"netops/backend/internal/nlquery/ast"
 )
 
 // DB is the injected relational seam (the investigation-memory idiom).
@@ -56,6 +58,15 @@ func (p *PGStore) Record(ctx context.Context, tenant string, r Record) (Record, 
 	if r.ConversationID != "" {
 		conv = &r.ConversationID
 	}
+	var query *string // SQL NULL when no query validated
+	if r.Query != nil {
+		enc, err := r.Query.Canonical()
+		if err != nil {
+			return Record{}, fmt.Errorf("irisquerylog: encode query: %w", err)
+		}
+		s := string(enc)
+		query = &s
+	}
 	ctx, cancel := context.WithTimeout(ctx, pgTimeout)
 	defer cancel()
 	err = p.db.WithTenant(ctx, tenant, false, func(tx pgx.Tx) error {
@@ -71,10 +82,11 @@ func (p *PGStore) Record(ctx context.Context, tenant string, r Record) (Record, 
 		}
 		_, err := tx.Exec(ctx, `INSERT INTO iris_query_log (tenant_id, id, principal_sub, conversation_id, source,
 		        created_at, question, intent, outcome, query_type, ast_hash, catalog_version,
-		        validation_codes, entities, row_count, series_count, duration_ms, corrections)
-		    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15, $16, $17, '[]'::jsonb)`,
+		        validation_codes, entities, row_count, series_count, duration_ms, corrections, query, compiled_by)
+		    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15, $16, $17, '[]'::jsonb,
+		            $18::jsonb, $19)`,
 			tenant, r.ID, r.Principal, conv, r.Source, r.At, r.Question, r.Intent, r.Outcome, r.QueryType,
-			r.ASTHash, r.CatalogVersion, string(codes), string(ents), r.Rows, r.Series, r.DurationMs)
+			r.ASTHash, r.CatalogVersion, string(codes), string(ents), r.Rows, r.Series, r.DurationMs, query, r.CompiledBy)
 		return err
 	})
 	if err != nil {
@@ -85,7 +97,7 @@ func (p *PGStore) Record(ctx context.Context, tenant string, r Record) (Record, 
 
 const pgColumns = `id::text, principal_sub, COALESCE(conversation_id::text, ''), source, created_at, question, intent,
         outcome, query_type, ast_hash, catalog_version, validation_codes, entities, row_count, series_count,
-        duration_ms, corrections`
+        duration_ms, corrections, query, compiled_by`
 
 // List returns the tenant's live records, newest first.
 func (p *PGStore) List(ctx context.Context, tenant string, f ListFilter) ([]Record, error) {
@@ -114,6 +126,37 @@ func (p *PGStore) List(ctx context.Context, tenant string, f ListFilter) ([]Reco
 	})
 	if err != nil {
 		return nil, fmt.Errorf("irisquerylog: list: %w", err)
+	}
+	return out, nil
+}
+
+// Get returns one live record of the tenant (of principal, unless "").
+func (p *PGStore) Get(ctx context.Context, tenant, principal, id string) (Record, error) {
+	if !ValidID(id) {
+		return Record{}, ErrNotFound
+	}
+	ctx, cancel := context.WithTimeout(ctx, pgTimeout)
+	defer cancel()
+	var out Record
+	err := p.db.WithTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+		row := tx.QueryRow(ctx, `SELECT `+pgColumns+` FROM iris_query_log
+		    WHERE tenant_id = $1::text AND id = $2::uuid AND created_at >= $3::timestamptz
+		      AND ($4::text = '' OR principal_sub = $4::text)`, tenant, id, p.now().Add(-Retention), principal)
+		r, err := scanRecord(row, tenant)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		out = r
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return Record{}, err
+		}
+		return Record{}, fmt.Errorf("irisquerylog: get: %w", err)
 	}
 	return out, nil
 }
@@ -172,11 +215,25 @@ func (p *PGStore) Correct(ctx context.Context, tenant, principal, id string, c C
 // store does not trust it to still hold what was written.
 func scanRecord(row pgx.Row, tenant string) (Record, error) {
 	var r Record
-	var codes, ents, corr []byte
+	var codes, ents, corr, query []byte
 	if err := row.Scan(&r.ID, &r.Principal, &r.ConversationID, &r.Source, &r.At, &r.Question, &r.Intent,
 		&r.Outcome, &r.QueryType, &r.ASTHash, &r.CatalogVersion, &codes, &ents, &r.Rows, &r.Series,
-		&r.DurationMs, &corr); err != nil {
+		&r.DurationMs, &corr, &query, &r.CompiledBy); err != nil {
 		return Record{}, err
+	}
+	// The stored query is decoded STRICTLY (bounded, no unknown fields) and
+	// must carry a known author — exactly what Normalize admitted.
+	if len(query) > 0 {
+		q, err := ast.Decode(query)
+		if err != nil {
+			return Record{}, fmt.Errorf("irisquerylog: stored query unreadable: %w", err)
+		}
+		if !compiledBy[r.CompiledBy] {
+			return Record{}, fmt.Errorf("irisquerylog: stored query has an unknown author %q", r.CompiledBy)
+		}
+		r.Query = q
+	} else {
+		r.CompiledBy = ""
 	}
 	r.TenantID = tenant
 	if err := json.Unmarshal(codes, &r.ValidationCodes); err != nil {

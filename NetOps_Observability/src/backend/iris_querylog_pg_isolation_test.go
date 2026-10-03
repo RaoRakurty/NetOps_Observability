@@ -116,6 +116,82 @@ func TestIrisQueryLogRLSIsolationPG(t *testing.T) {
 	}
 }
 
+// Migration 0055 (tracker 337 N-C5): the validated query and its author
+// round-trip, Get is tenant- and principal-scoped under RLS, and a stored
+// query that does not decode strictly — or has no known author — is refused
+// on read rather than trusted.
+func TestIrisQueryLogGetAndStoredQueryPG(t *testing.T) {
+	ps, st := qlogPGStore(t)
+	ctx := context.Background()
+	q := &ast.AST{V: 1, Type: ast.MetricSeries, Target: "device", Metric: "cpu_util_pct",
+		Refs: []ast.EntityRef{{Type: "device", ID: "device:edge-1"}}, Time: ast.TimeRange{Kind: ast.TimeRelative, Last: "1h"}}
+	rec, err := st.Record(ctx, "acme", irisquerylog.Record{Principal: "alice", Source: irisquerylog.SourceQueryCompile,
+		Outcome: irisquerylog.OutcomeCompiled, Question: "cpu on edge-1", Query: q, CompiledBy: irisquerylog.CompiledByModel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := st.Record(ctx, "acme", irisquerylog.Record{Principal: "alice", Source: irisquerylog.SourceRouter,
+		Outcome: irisquerylog.OutcomeUnparsed, Question: "huh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := st.Get(ctx, "acme", "alice", rec.ID)
+	if err != nil || got.Query == nil || got.Query.Hash() != q.Hash() || got.CompiledBy != irisquerylog.CompiledByModel ||
+		got.ASTHash != q.Hash() || got.Question != "cpu on edge-1" {
+		t.Fatalf("own get: %v %+v", err, got)
+	}
+	if got, err := st.Get(ctx, "acme", "alice", plain.ID); err != nil || got.Query != nil || got.CompiledBy != "" {
+		t.Fatalf("a record without a query reads back without one: %v %+v", err, got)
+	}
+	if _, err := st.Get(ctx, "acme", "", rec.ID); err != nil {
+		t.Fatalf("tenant-wide get: %v", err)
+	}
+	for _, who := range [][2]string{{"globex", "alice"}, {"globex", ""}, {"acme", "carol"}} {
+		if _, err := st.Get(ctx, who[0], who[1], rec.ID); !errors.Is(err, irisquerylog.ErrNotFound) {
+			t.Fatalf("RLS/principal LEAK: %v read alice's record (%v)", who, err)
+		}
+	}
+	if _, err := st.Get(ctx, "acme", "alice", "11111111-2222-4333-8444-555555555555"); !errors.Is(err, irisquerylog.ErrNotFound) {
+		t.Fatalf("unknown id: %v", err)
+	}
+	if _, err := st.Get(ctx, "acme", "alice", "x' OR 1=1"); !errors.Is(err, irisquerylog.ErrNotFound) {
+		t.Fatalf("malformed id: %v", err)
+	}
+	// The list carries the query too (the handler strips it from the summary).
+	mine, err := st.List(ctx, "acme", irisquerylog.ListFilter{Principal: "alice"})
+	if err != nil || len(mine) != 2 {
+		t.Fatalf("list: %v %+v", err, mine)
+	}
+
+	// Tampered rows are refused on read, never trusted.
+	for name, set := range map[string]string{
+		"smuggled tenant in the query": `query = '{"v":1,"query_type":"change_list","target":"change","time_range":{"kind":"relative","last":"1h"},"tenant":"globex"}'::jsonb`,
+		"query without a known author": `compiled_by = 'llm'`,
+	} {
+		if err := ps.DB().WithTenant(ctx, "acme", false, func(tx pgx.Tx) error {
+			_, execErr := tx.Exec(ctx, `UPDATE iris_query_log SET `+set+` WHERE tenant_id = 'acme' AND id = $1::uuid`, rec.ID)
+			return execErr
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Get(ctx, "acme", "alice", rec.ID); err == nil || errors.Is(err, irisquerylog.ErrNotFound) {
+			t.Errorf("%s: a tampered row must be an error on read, got %v", name, err)
+		}
+		// Restore for the next case.
+		enc, err := q.Canonical()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ps.DB().WithTenant(ctx, "acme", false, func(tx pgx.Tx) error {
+			_, execErr := tx.Exec(ctx, `UPDATE iris_query_log SET query = $2::jsonb, compiled_by = 'model' WHERE tenant_id = 'acme' AND id = $1::uuid`, rec.ID, string(enc))
+			return execErr
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestIrisQueryLogBoundsPG(t *testing.T) {
 	_, st := qlogPGStore(t)
 	ctx := context.Background()

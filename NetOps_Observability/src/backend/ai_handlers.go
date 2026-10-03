@@ -23,6 +23,7 @@ import (
 	"netops/backend/internal/irisquerylog"
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/compile"
+	"netops/backend/internal/nlquery/explain"
 	"netops/backend/internal/nlquery/modelc"
 	"netops/backend/internal/nlquery/plan"
 	"netops/backend/internal/nlquery/resolve"
@@ -283,7 +284,7 @@ func (s *server) aiNLQueryWith(r *http.Request, claims jwtClaims, st *irisconvo.
 			s.nlqCapture(rq, claims, &rec, start)
 			return ai.DataAnswer{}, err
 		}
-		rec := irisquerylog.FromCompile(irisquerylog.SourceRouter, question, c.res, c.checked, c.vr)
+		rec := c.record(irisquerylog.SourceRouter, question)
 		rec.ConversationID = convID
 		d, err := s.nlqDataAnswer(rq, claims, c, ran, &rec)
 		if err != nil {
@@ -1118,7 +1119,7 @@ func (s *server) handleAIQueryCompile(w http.ResponseWriter, r *http.Request) {
 	logInfo("iris.nlquery", "compile", map[string]any{"tenant": tenant, "sub": claims.Sub, "intent": c.res.Intent,
 		"unparsed": c.res.Unparsed, "declined": c.res.Decline != "", "source": c.source, "question_chars": len(req.Question)})
 	out := c.body()
-	rec := irisquerylog.FromCompile(irisquerylog.SourceQueryCompile, req.Question, c.res, c.checked, c.vr)
+	rec := c.record(irisquerylog.SourceQueryCompile, req.Question)
 	if id := s.nlqCapture(r, claims, &rec, start); id != "" {
 		out["query_log_id"] = id
 	}
@@ -1180,6 +1181,17 @@ func (s *server) nlqCompile(r *http.Request, claims jwtClaims, question string, 
 	return out, nil
 }
 
+// record starts the query-log record for this compiled question: the
+// validated query is kept, attributed to the model when the fallback wrote it
+// (so the disclosure outlives the answer — GET /api/ai/query/{id}/explain).
+func (c nlqCompiled) record(source, question string) irisquerylog.Record {
+	rec := irisquerylog.FromCompile(source, question, c.res, c.checked, c.vr)
+	if c.source == modelc.SourceModel {
+		rec.ByModel()
+	}
+	return rec
+}
+
 // body is the compile answer: what was understood, and the query — the
 // validated one, or the invalid one shown (never executed) so the operator
 // sees what was understood.
@@ -1229,7 +1241,7 @@ func (s *server) handleAIQueryExecute(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	scope := s.nlqScopeFor(r, claims)
 	checked, vr := validate.Validate(r.Context(), s.nlqCatalog, scope, q)
-	rec := irisquerylog.FromQuery(q, vr)
+	rec := irisquerylog.FromQuery(q, checked, vr)
 	if !vr.Valid {
 		out := map[string]any{"validation": vr}
 		if id := s.nlqCapture(r, claims, &rec, start); id != "" {
@@ -1415,7 +1427,7 @@ func (s *server) handleAIConversationMessage(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, errors.New("the question could not be compiled"))
 		return
 	}
-	rec := irisquerylog.FromCompile(irisquerylog.SourceConversation, req.Question, c.res, c.checked, c.vr)
+	rec := c.record(irisquerylog.SourceConversation, req.Question)
 	rec.ConversationID = id
 	turn := irisconvo.Turn{Question: req.Question, Intent: c.res.Intent}
 	out := c.body()
@@ -1612,14 +1624,16 @@ func (s *server) handleAIQueries(w http.ResponseWriter, r *http.Request) {
 	// withheld (they are that person's typed text, not operational data).
 	if scope == "tenant" {
 		for i := range recs {
-			if recs[i].Principal == claims.Sub {
-				continue
-			}
-			recs[i].Question = ""
-			for j := range recs[i].Corrections {
-				recs[i].Corrections[j].Note = ""
+			if recs[i].Principal != claims.Sub {
+				withholdColleagueText(&recs[i])
 			}
 		}
+	}
+	// The list is a summary: the query itself is read one record at a time
+	// (GET /api/ai/query/{id}); compiled_by stays, so a model-written query
+	// is disclosed in the list too.
+	for i := range recs {
+		recs[i].Query = nil
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"queries": recs, "scope": scope,
 		"retention_days": int(irisquerylog.Retention.Hours() / 24), "kinds": irisquerylog.Kinds})
@@ -1694,4 +1708,194 @@ func (s *server) handleAIQueryCorrection(w http.ResponseWriter, r *http.Request)
 	logInfo("iris.querylog", "correction", map[string]any{"tenant": tenant, "sub": claims.Sub, "kind": req.Kind,
 		"with_query": checked != nil, "note_chars": len(req.Note), "corrections": len(rec.Corrections)})
 	writeJSON(w, http.StatusCreated, rec)
+}
+
+// withholdColleagueText blanks what a colleague TYPED — the question and
+// their correction notes — from a record a workspace admin reads. What was
+// asked about and how it went (intent, outcome, entities, the query) stays:
+// that is operational data, not the person's own words.
+func withholdColleagueText(rec *irisquerylog.Record) {
+	rec.Question = ""
+	for j := range rec.Corrections {
+		rec.Corrections[j].Note = ""
+	}
+}
+
+// ---- Iris NL: one query, and what it does (tracker 337 N-C5) ----------------
+//
+// GET /api/ai/query/{id}          one query-log record: the question, the
+//      outcome, the VALIDATED query and who wrote it (compiled_by: grammar,
+//      model or supplied) — a model-written query carries the disclosure
+// GET /api/ai/query/{id}/explain  that query in plain language (metric,
+//      entities, filters, window, grouping, …), whether the grammar or the
+//      model wrote it (source=model disclosed), and whether it still validates
+//      for the caller NOW
+//
+// §3a: the tenant and principal come from the token, never the request; the
+// record is read inside the caller's tenant only (RLS iris_query_log + the
+// store's tenant key), so another tenant's id — and an as_tenant walk into
+// another org — is the same 404 as an id that never existed. A colleague's
+// record is 404 too, except to a workspace admin, who reads it exactly as the
+// workspace list shows it: without the colleague's own words.
+
+func (s *server) handleAIQueryRecord(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/ai/query/")
+	id, sub, _ := strings.Cut(rest, "/")
+	if !irisquerylog.ValidID(id) || (sub != "" && sub != "explain") {
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET"))
+		return
+	}
+	if !aiEnabled() {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Iris AI is disabled — set FEATURE_AI=true"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
+		return
+	}
+	if s.nlqQueryLog == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("the Iris query log is not available on this deployment"))
+		return
+	}
+	if sub == "explain" {
+		if s.nlqCatalog == nil {
+			writeError(w, http.StatusServiceUnavailable, errors.New("the Iris query catalog is not available on this deployment"))
+			return
+		}
+		// Explaining re-validates the query against the caller's inventory:
+		// it shares the per-principal Iris budget.
+		if !s.copilotLimiter.AllowN(claims.Tenant+"|"+claims.Sub, envInt("COPILOT_RATE_PER_MIN", 20)) {
+			writeError(w, http.StatusTooManyRequests, fmt.Errorf("Iris AI rate limit exceeded — slow down"))
+			return
+		}
+	}
+	rec, ok := s.nlqReadRecord(w, r, claims, id)
+	if !ok {
+		return
+	}
+	if sub == "" {
+		writeJSON(w, http.StatusOK, nlqRecordView{Record: rec, Disclosure: nlqDisclosureFor(rec)})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.nlqExplainRecord(r, claims, rec))
+}
+
+// nlqRecordView is one record as GET /api/ai/query/{id} returns it.
+type nlqRecordView struct {
+	irisquerylog.Record
+	Disclosure string `json:"disclosure,omitempty"`
+}
+
+// nlqDisclosureFor is the model disclosure for a model-written record, else "".
+func nlqDisclosureFor(rec irisquerylog.Record) string {
+	if rec.CompiledBy == irisquerylog.CompiledByModel {
+		return nlqModelDisclosure
+	}
+	return ""
+}
+
+// nlqReadRecord reads one record for the caller, writing the error response
+// itself. The tenant is the caller's own; the principal filter is the
+// caller's, unless the caller is a workspace admin (then the colleague's
+// typed text is withheld).
+func (s *server) nlqReadRecord(w http.ResponseWriter, r *http.Request, claims jwtClaims, id string) (irisquerylog.Record, bool) {
+	tenant, _ := principalTenant(claims)
+	principal := claims.Sub
+	if s.roles != nil && s.roles.Allows(claims.Role, "administration", LevelAdmin) {
+		principal = "" // the workspace's records — still this tenant's only
+	}
+	if strings.TrimSpace(claims.Sub) == "" || strings.TrimSpace(tenant) == "" {
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+		return irisquerylog.Record{}, false
+	}
+	rec, err := s.nlqQueryLog.Get(r.Context(), tenant, principal, id)
+	switch {
+	case errors.Is(err, irisquerylog.ErrNotFound):
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+		return irisquerylog.Record{}, false
+	case err != nil:
+		logError("iris.querylog", "read failed", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("the question could not be read"))
+		return irisquerylog.Record{}, false
+	}
+	if rec.Principal != claims.Sub {
+		withholdColleagueText(&rec)
+	}
+	return rec, true
+}
+
+// nlqExplainRecord explains rec's query for the caller.
+func (s *server) nlqExplainRecord(r *http.Request, claims jwtClaims, rec irisquerylog.Record) map[string]any {
+	out := map[string]any{"id": rec.ID, "asked_via": rec.Source, "outcome": rec.Outcome, "question": rec.Question,
+		"query_type": rec.QueryType, "compiled_by": rec.CompiledBy, "catalog_version": rec.CatalogVersion,
+		"catalog_current": rec.CatalogVersion == "" || rec.CatalogVersion == s.nlqCatalog.Version()}
+	if rec.CompiledBy == irisquerylog.CompiledByModel {
+		out["source"] = modelc.SourceModel // interpreted by the model, not the grammar
+		out["disclosure"] = nlqModelDisclosure
+	}
+	tenant, _ := principalTenant(claims)
+	logInfo("iris.nlquery", "explain", map[string]any{"tenant": tenant, "sub": claims.Sub, "id": rec.ID,
+		"own": rec.Principal == claims.Sub, "compiled_by": rec.CompiledBy, "outcome": rec.Outcome})
+	if rec.Query == nil {
+		out["explanation"] = nil
+		out["reason"] = nlqNoQueryReason(rec.Outcome)
+		out["validation_codes"] = rec.ValidationCodes
+		return out
+	}
+	scope := s.nlqScopeFor(r, claims)
+	// The stored query is re-validated against what the caller can see NOW:
+	// an entity they lost access to since is reported, never silently run.
+	_, vr := validate.Validate(r.Context(), s.nlqCatalog, scope, rec.Query)
+	out["query"] = rec.Query
+	out["still_valid"] = vr.Valid
+	out["validation"] = vr
+	out["explanation"] = explain.Explain(s.nlqCatalog, rec.Query, s.nlqDeviceNamer(r.Context(), scope, rec.Query))
+	return out
+}
+
+// nlqDeviceNamer names the query's devices from the caller's VISIBLE inventory
+// only: a device the caller cannot see (any more) is shown by its id, which
+// the record already carries — never by a name looked up past their scope.
+func (s *server) nlqDeviceNamer(ctx context.Context, scope *nlqScope, q *nlqast.AST) explain.Namer {
+	var ids []string
+	for _, ref := range q.Refs {
+		if ref.Type == "device" {
+			ids = append(ids, strings.TrimPrefix(ref.ID, "device:"))
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	devs, err := scope.Devices(ctx, plan.DeviceFilter{IDs: ids})
+	if err != nil {
+		logError("iris.nlquery", "explain: device names unavailable", errf(err))
+		return nil
+	}
+	names := make(map[string]string, len(devs))
+	for _, d := range devs {
+		names["device:"+d.ID] = d.Name
+	}
+	return func(ref nlqast.EntityRef) string { return names[ref.ID] }
+}
+
+// nlqNoQueryReason says, for a record without a query, why there is none.
+func nlqNoQueryReason(outcome string) string {
+	switch outcome {
+	case irisquerylog.OutcomeClarify:
+		return "Iris needed you to choose between matches, so no query was built."
+	case irisquerylog.OutcomeDeclined:
+		return "Iris declined this question, so no query was built."
+	case irisquerylog.OutcomeUnparsed:
+		return "Iris did not understand this question, so no query was built."
+	case irisquerylog.OutcomeInvalid:
+		return "The query Iris built did not pass its checks, so it was never run. The check codes say why."
+	case irisquerylog.OutcomeError:
+		return "Iris failed while answering this question, before a query was kept."
+	}
+	return "No query was kept for this question."
 }

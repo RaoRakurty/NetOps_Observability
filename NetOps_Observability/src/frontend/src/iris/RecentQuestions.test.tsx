@@ -79,6 +79,19 @@ describe("RecentQuestions", () => {
     expect(alert.textContent).not.toContain("{");
   });
 
+  it("offers an explanation only for a question that kept a query, and marks a model-read one", async () => {
+    irisQueries.mockResolvedValue({ queries: [
+      rec({ compiled_by: "grammar" }),
+      rec({ id: "22222222-2222-4333-8444-555555555555", compiled_by: "model" }),
+      rec({ id: "33333333-2222-4333-8444-555555555555", outcome: "unparsed" }),
+    ], scope: "mine", retention_days: 30, kinds: [] });
+    render(<RecentQuestions />);
+    const list = await screen.findByTestId("iris-recent-list");
+    expect(screen.getAllByText("Explain this query")).toHaveLength(2);
+    expect(list).toHaveTextContent("read by the AI model");
+    expect(screen.getAllByText("read by the AI model")).toHaveLength(1);
+  });
+
   it("re-reads when asked to refresh", async () => {
     irisQueries.mockResolvedValue({ queries: [], scope: "mine", retention_days: 30, kinds: [] });
     const { rerender } = render(<RecentQuestions refreshKey={0} />);

@@ -91,6 +91,23 @@ func (m *MemStore) List(_ context.Context, tenant string, f ListFilter) ([]Recor
 	return out, nil
 }
 
+// Get returns one live record of the tenant (of principal, unless "").
+func (m *MemStore) Get(_ context.Context, tenant, principal, id string) (Record, error) {
+	if !ValidID(id) {
+		return Record{}, ErrNotFound
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cut := m.now().Add(-Retention)
+	for _, r := range m.recs[tenant] {
+		if r.ID != id || r.At.Before(cut) || (principal != "" && r.Principal != principal) {
+			continue
+		}
+		return cloneRecord(r), nil
+	}
+	return Record{}, ErrNotFound
+}
+
 // Correct attaches a correction to the principal's own live record.
 func (m *MemStore) Correct(_ context.Context, tenant, principal, id string, c Correction) (Record, error) {
 	m.mu.Lock()
@@ -136,6 +153,9 @@ func cloneRecord(r Record) Record {
 		cs = append(cs, c)
 	}
 	r.Corrections = cs
+	if r.Query != nil {
+		r.Query = r.Query.Clone()
+	}
 	return r
 }
 

@@ -66,6 +66,12 @@ var routeIsolationLedger = map[string]string{
 	"/api/ai/entities/resolve": "scoped",
 	"/api/ai/query/compile":    "scoped",
 	"/api/ai/query/execute":    "scoped",
+	// One query-log record + its plain-language explanation (N-C5): read in
+	// the caller's tenant only (RLS iris_query_log + store tenant key), the
+	// caller's own record (a workspace admin: the workspace's, without a
+	// colleague's words); another tenant, a colleague and an as_tenant walk
+	// get 404 — nlquery_explain_isolation_test.go.
+	"/api/ai/query/": "scoped",
 	// Conversations (N-C7): owned by one principal in one tenant scope (RLS
 	// iris_conversations + owner filter); another tenant, a same-tenant
 	// colleague and an as_tenant walk all get 404 — nlquery_convo_isolation_test.go.

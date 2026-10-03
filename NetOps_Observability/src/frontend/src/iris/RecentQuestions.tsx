@@ -5,6 +5,8 @@
 // each (tracker 337 N-C8). Each can be marked "That's not what I meant". A
 // workspace admin can switch to everyone's questions in the workspace; the
 // server decides who may, and scopes the list to the caller's workspace.
+// A question that compiled to a query can be explained in plain words
+// (N-C5); one the AI model read is marked as such.
 //
 // Question text is untrusted and rendered as escaped React text.
 
@@ -12,6 +14,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type IrisQueryRecord } from "../services/api";
 import { operatorError } from "../lib/errors";
 import QueryCorrection from "./QueryCorrection";
+import QueryExplain from "./QueryExplain";
 
 export const RECORD_OUTCOME_LABEL: Record<IrisQueryRecord["outcome"], string> = {
   answered: "answered", compiled: "read, not run", clarify: "needed you to choose", declined: "declined",
@@ -73,6 +76,8 @@ export default function RecentQuestions({ refreshKey = 0 }: { refreshKey?: numbe
                   {everyone && <>, asked by {r.principal}</>}
                 </span>
                 {fixes > 0 && <span className="badge" style={{ fontSize: 14, marginLeft: 6 }}>{fixes} correction{fixes === 1 ? "" : "s"}</span>}
+                {r.compiled_by === "model" && <span className="badge" style={{ fontSize: 14, marginLeft: 6 }}>read by the AI model</span>}
+                {r.compiled_by && <QueryExplain queryId={r.id} />}
                 {!everyone && <QueryCorrection queryId={r.id} onSaved={() => void load()} />}
               </li>
             );
