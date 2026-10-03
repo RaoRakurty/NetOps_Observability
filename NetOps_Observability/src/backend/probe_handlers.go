@@ -643,11 +643,13 @@ func (s *server) buildExperienceAPI(store experience.Store, cat dem.Catalogue) (
 		// The AI investigator needs BOTH the platform copilot and its own
 		// switch: a feature that can send evidence to a model gets its own.
 		InvestigatorEnabled: envBool("FEATURE_COPILOT") && envBool(experience.EnvInvestigatorFlag),
-		Now:                 func() time.Time { return time.Now().UTC() },
-		WriteJSON:           writeJSON,
-		WriteError:          writeError,
-		LogWarn:             func(m string, f map[string]any) { logWarn("dem", m, f) },
-		Counters:            s.demExperienceMetrics,
+		// The SAME redactor /api/changes uses (tracker 337 N-D3).
+		Redact:     redactChangeValue,
+		Now:        func() time.Time { return time.Now().UTC() },
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+		LogWarn:    func(m string, f map[string]any) { logWarn("dem", m, f) },
+		Counters:   s.demExperienceMetrics,
 	})
 }
 

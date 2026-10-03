@@ -185,12 +185,9 @@ func (d Deps) Handler(w http.ResponseWriter, r *http.Request) {
 	d.WriteJSON(w, http.StatusOK, v)
 }
 
-func (d Deps) redact(s string) string {
-	if s == "" || d.Redact == nil {
-		return s
-	}
-	return d.Redact(s)
-}
+// redact applies the ledger's one value-redaction rule, shared with the older
+// /api/dem/changes feed (tracker 337 N-D3): a nil Redact withholds, never leaks.
+func (d Deps) redact(s string) string { return experience.RedactChangeValue(s, d.Redact) }
 
 func (d Deps) one(ctx context.Context, caller Caller, id string) (experience.ChangeEvent, error) {
 	if caller.Cross {

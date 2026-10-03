@@ -192,6 +192,21 @@ func TestOneChangeIsTheCallersOwnAndRedacted(t *testing.T) {
 	}
 }
 
+// The ledger API and /api/dem/changes share one redaction rule
+// (experience.RedactChangeValue, tracker 337 N-D3): with no redactor wired a
+// value is withheld, never served raw.
+func TestOneChangeWithNoRedactorWithholdsValues(t *testing.T) {
+	f := newFixture(t)
+	f.deps.Redact = nil
+	code, out := f.get(t, "acme", "/api/changes/chg-a2")
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	if out["before"] != experience.ChangeValueWithheld || out["after"] != experience.ChangeValueWithheld {
+		t.Fatalf("a nil redactor must withhold before/after: %v", out)
+	}
+}
+
 func TestDiff(t *testing.T) {
 	f := newFixture(t)
 	code, out := f.get(t, "acme", "/api/changes/chg-a3/diff")
