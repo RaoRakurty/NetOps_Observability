@@ -585,12 +585,16 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 		}
 		if d := pol.EvaluateTool(tool, p); !d.Allow {
 			disc = append(disc, capitalize(d.Reason)+".")
+			o.auditTool(name, args, false, "policy_denied", nil, 0)
 			continue
 		}
+		started := time.Now()
 		res, terr := tool.Run(ctx, p, args)
 		if terr != nil {
+			o.auditTool(name, args, false, toolErrReason(terr), nil, time.Since(started))
 			continue // a tool failure degrades gracefully; never fail the whole answer
 		}
+		o.auditTool(name, args, true, "ok", &res, time.Since(started))
 		bundle = append(bundle, res.Items...)
 		disc = append(disc, res.Notes...)
 	}
@@ -1048,13 +1052,17 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 		found++
 		if d := pol.EvaluateTool(tool, p); !d.Allow {
 			disc = append(disc, capitalize(d.Reason)+".")
+			o.auditTool(name, ToolArgs{}, false, "policy_denied", nil, 0)
 			continue
 		}
+		started := time.Now()
 		res, terr := tool.Run(ctx, p, ToolArgs{})
 		if terr != nil {
+			o.auditTool(name, ToolArgs{}, false, toolErrReason(terr), nil, time.Since(started))
 			errored++ // a tool failure degrades gracefully — but is NOT "not built"
 			continue
 		}
+		o.auditTool(name, ToolArgs{}, true, "ok", &res, time.Since(started))
 		ran++
 		bundle = append(bundle, res.Items...)
 		// Carry a tool's notes ALWAYS (not only on truncation) — a note like

@@ -31,6 +31,7 @@ vi.mock("../services/api", () => ({
     askIrisConversation: (...a: unknown[]) => askIrisConversation(...a),
     irisQueries: (...a: unknown[]) => irisQueries(...a),
     correctIrisQuery: (...a: unknown[]) => correctIrisQuery(...a),
+    aiDecisions: () => Promise.resolve({ decisions: [], scope: "tenant", event_types: [] }),
   },
 }));
 

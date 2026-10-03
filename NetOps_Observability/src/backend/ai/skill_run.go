@@ -80,6 +80,13 @@ type ToolAuditEntry struct {
 	// Tool is "next_skill" is a SELECTION decision rather than a tool execution;
 	// its Reason is rule_selected / model_selected / model_selected_invalid.
 	Selected string `json:"selected,omitempty"`
+	// ArgsSHA256 / ResultSHA256 are the decision ledger's proof of what the
+	// step was asked and what it read (tracker 337 N-A6): SHA-256 of the
+	// canonical JSON of the arguments and of the result (HashToolArgs,
+	// HashToolResult). Hashes, never the values. ResultSHA256 is empty when the
+	// tool did not return.
+	ArgsSHA256   string `json:"args_sha256,omitempty"`
+	ResultSHA256 string `json:"result_sha256,omitempty"`
 }
 
 // reDeviceCandidate matches hostname-shaped tokens in an operator question. It
@@ -464,13 +471,13 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 			// than pretending the check happened.
 			notes = append(notes, ToolLabel(step.Tool)+" is not available on this deployment — treat that evidence as UNKNOWN, not clean")
 			st.recordTool(step.Tool, "not_wired")
-			o.auditSkillTool(sk.Name, step, false, "not_registered", 0, 0, round, selected)
+			o.auditSkillTool(sk.Name, step, false, "not_registered", 0, 0, round, selected, "")
 			continue
 		}
 		if d := pe.EvaluateTool(tool, p); !d.Allow {
 			notes = append(notes, ToolLabel(step.Tool)+" was not run: "+d.Reason)
 			st.recordTool(step.Tool, "denied")
-			o.auditSkillTool(sk.Name, step, false, "policy_denied", 0, 0, round, selected)
+			o.auditSkillTool(sk.Name, step, false, "policy_denied", 0, 0, round, selected, "")
 			continue
 		}
 		started := time.Now()
@@ -490,7 +497,7 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 				notes = append(notes, ToolLabel(step.Tool)+" failed — do NOT invent the data it would have returned")
 			}
 			st.recordTool(step.Tool, outcome)
-			o.auditSkillTool(sk.Name, step, false, reason, 0, elapsed, round, selected)
+			o.auditSkillTool(sk.Name, step, false, reason, 0, elapsed, round, selected, "")
 			continue
 		}
 		ran++
@@ -505,7 +512,7 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 		// observed. Neither can come from model text.
 		st.facts.addSignals(res.Signals)
 		st.recordTool(step.Tool, "ok")
-		o.auditSkillTool(sk.Name, step, true, "ok", len(res.Items), elapsed, round, selected)
+		o.auditSkillTool(sk.Name, step, true, "ok", len(res.Items), elapsed, round, selected, HashToolResult(res))
 	}
 	st.facts.addEvidence(items)
 	st.facts.addNotes(notes)
@@ -517,22 +524,59 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 
 // auditSkillTool records one gather execution (arg NAMES only — no values).
 // `took` is the tool's own wall time; a step that never ran records zero. Round
-// and selected place the entry in the investigation chain (Phase A2).
-func (o *Orchestrator) auditSkillTool(skill string, st plannedStep, allowed bool, reason string, items int, took time.Duration, round int, selected string) {
+// and selected place the entry in the investigation chain (Phase A2);
+// resultHash is HashToolResult of what the tool returned ("" when it did not).
+func (o *Orchestrator) auditSkillTool(skill string, st plannedStep, allowed bool, reason string, items int, took time.Duration, round int, selected, resultHash string) {
 	if o.ToolAudit == nil {
 		return
 	}
-	names := make([]string, 0, len(st.Args))
-	for k := range st.Args {
-		names = append(names, k)
-	}
-	sort.Strings(names)
 	o.ToolAudit(ToolAuditEntry{
-		Skill: skill, Tool: st.Tool, Args: names,
+		Skill: skill, Tool: st.Tool, Args: argNames(st.Args),
 		Allowed: allowed, Reason: reason, Items: items,
 		Duration: took.Milliseconds(),
 		Round:    round, Selected: selected,
+		ArgsSHA256: HashToolArgs(st.Args), ResultSHA256: resultHash,
 	})
+}
+
+// auditTool records one tool execution OUTSIDE a skill chain — the classic
+// answer paths (problem explanation, module health) run governed tools too,
+// and the decision ledger must see them (tracker 337 N-A6). Same entry shape,
+// Skill empty; res is nil when the tool did not return.
+func (o *Orchestrator) auditTool(tool string, args ToolArgs, allowed bool, reason string, res *ToolResult, took time.Duration) {
+	if o.ToolAudit == nil {
+		return
+	}
+	e := ToolAuditEntry{
+		Tool: tool, Args: argNames(args), Allowed: allowed, Reason: reason,
+		Duration: took.Milliseconds(), ArgsSHA256: HashToolArgs(args),
+	}
+	if res != nil {
+		e.Items, e.ResultSHA256 = len(res.Items), HashToolResult(*res)
+	}
+	o.ToolAudit(e)
+}
+
+// toolErrReason is the audit reason for a tool that returned an error — the
+// same closed words the skill gather records.
+func toolErrReason(err error) string {
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return "not_found"
+	case errors.Is(err, ErrNotImplemented):
+		return "not_implemented"
+	}
+	return "tool_error"
+}
+
+// argNames is the sorted argument NAMES — what an audit line may carry.
+func argNames(args ToolArgs) []string {
+	names := make([]string, 0, len(args))
+	for k := range args {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // skillSystemBlock is the server-owned instruction half of the skill: the method

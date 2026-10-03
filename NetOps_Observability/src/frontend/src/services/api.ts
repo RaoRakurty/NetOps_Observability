@@ -1968,6 +1968,39 @@ export interface IrisQueryList {
   retention_days: number;
   kinds: IrisCorrectionKind[];
 }
+// The Iris AI decision ledger (tracker 337 N-A6): one entry per step of one
+// decision. Hashes, counts and closed tokens only — the server never stores
+// the question, the data or the answer text, so there is none to render.
+export interface AiDecisionEntry {
+  tenant?: string; // set only on the platform owner's all-workspaces view
+  id: string;
+  decision_id: string;
+  seq: number;
+  event_type: string;
+  principal: string;
+  surface: string;
+  at: string;
+  incident_ref?: string;
+  intent?: string;
+  mode?: string;
+  skill?: string;
+  tool?: string;
+  tool_version?: string;
+  model_provider?: string;
+  model_name?: string;
+  model_tier?: string;
+  args_sha256?: string;
+  result_sha256?: string;
+  item_count?: number;
+  outcome?: string;
+  answer_id?: string;
+  query_log_id?: string;
+}
+export interface AiDecisionList {
+  decisions: AiDecisionEntry[] | null;
+  scope: "tenant" | "platform";
+  event_types: string[];
+}
 export interface IrisTurn {
   at: string;
   question: string;
@@ -6181,6 +6214,15 @@ export const api = {
     request<IrisQueryList>(`/api/ai/queries?scope=${scope}&limit=${limit}`),
   correctIrisQuery: (id: string, body: { kind: IrisCorrectionKind; note?: string; ast?: Record<string, unknown> }) =>
     request<IrisQueryRecord>(`/api/ai/queries/${encodeURIComponent(id)}/corrections`, { method: "POST", body: JSON.stringify(body) }),
+  // Decision ledger (N-A6): how answers were reached — workspace admins see
+  // their workspace's, the platform owner every workspace's (server-scoped).
+  // With a decision id: that decision's steps in order (404 when it is not
+  // in the caller's scope).
+  aiDecisions: (decisionId?: string, limit = 100) => {
+    const p = new URLSearchParams({ limit: String(limit) });
+    if (decisionId) p.set("decision_id", decisionId);
+    return request<AiDecisionList>(`/api/ai/decisions?${p.toString()}`);
+  },
 
   // Native metrics (Prometheus-compatible API via the Go proxy).
   metricNames: () => request<PromNamesResponse>("/api/metrics/names"),
@@ -9936,6 +9978,10 @@ export type AiAnswer = {
   // backend that does not stamp one leaves the server to fall back to the
   // principal's most recent conclusion.
   answer_id?: string;
+  // The decision-ledger record of how this answer was reached (N-A6). Absent
+  // when the ledger could not store it — never a pointer to nothing. A
+  // workspace admin opens it under Iris vocabulary → Decision ledger.
+  decision_id?: string;
   // IRIS Phase A — the answering skill's identity. Optional: a backend that
   // does not send it renders no skill chip (never an invented one).
   skill?: AiSkill;

@@ -10,6 +10,7 @@
 //      query engine returns, before any model is involved. "That's not what I
 //      meant" records a correction for offline review.
 //   4. Recent questions — the caller's own questions and what became of each.
+//   5. Decision ledger (admins, N-A6) — how answers were reached, as hashes.
 //
 // Everything here is scoped server-side to the caller's workspace; the tenant
 // is never sent. A question Iris did not fully understand is shown as such —
@@ -20,6 +21,7 @@ import { api, type IrisAlias, type IrisCompiled, type IrisRef, type IrisResoluti
 import { httpFailure, operatorError } from "../lib/errors";
 import QueryCorrection from "../iris/QueryCorrection";
 import RecentQuestions from "../iris/RecentQuestions";
+import DecisionLedger from "../iris/DecisionLedger";
 
 // The entity kinds an alias can point at (catalog entities minus incidents and
 // changes, which are named by id, not by nickname).
@@ -393,6 +395,10 @@ export default function IrisVocabulary() {
       <div style={stepHead}>4. Recent questions</div>
       <p style={{ ...muted, margin: "0 0 6px" }}>Your last questions and what Iris made of them. Mark any that went wrong.</p>
       <RecentQuestions refreshKey={asked} />
+
+      <div style={stepHead}>5. Decision ledger (admins)</div>
+      <p style={{ ...muted, margin: "0 0 6px" }}>How each answer was reached: the plan, the policy checks, the tools and versions it ran, and the model that answered.</p>
+      <DecisionLedger />
     </div>
   );
 }
