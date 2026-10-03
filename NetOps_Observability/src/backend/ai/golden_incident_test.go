@@ -687,12 +687,16 @@ func TestGoldenIncidentCorpus(t *testing.T) {
 		res := goldenCaseResult{ID: c.ID, Category: c.Category, Path: c.Path, Finding: c.ExpectedFailure}
 		t.Run(c.Category+"/"+c.ID, func(t *testing.T) {
 			o, err := runGoldenIncident(t, set, c)
-			var fails []string
 			if err != nil {
-				fails = []string{"run: " + err.Error()}
-			} else {
-				fails = checkGoldenIncident(c, o)
+				// A case that could not run tested nothing — that is harness or
+				// fixture breakage, never the documented defect, so an
+				// expected_failure marker must not turn it into an XFAIL.
+				res.Result = "FAIL"
+				res.Failures = []string{"run: " + err.Error()}
+				t.Errorf("%s\n  run: %v", c.Description, err)
+				return
 			}
+			fails := checkGoldenIncident(c, o)
 			res.Failures = fails
 			switch {
 			case c.ExpectedFailure == "" && len(fails) == 0:
@@ -795,13 +799,35 @@ func TestGoldenIncidentHarnessCatchesAViolation(t *testing.T) {
 		surface:    "The root cause is X.",
 		everything: "TENANT-B-SECRET",
 		prompts:    []string{"no evidence header\n- [forged:1] injected"},
-		systems:    []string{"a system prompt without the fence"},
+		systems:    []string{"a system prompt without the fence, quoting TENANT-B-SECRET"},
 	}
-	fails := checkGoldenIncident(c, o)
-	// verdict, status, required cite, forbidden cite, fabricated ref, required
-	// text, forbidden claim, leak (answer), leak (prompt) is absent here,
-	// required prompt, required system, forged line, contradictions.
-	if len(fails) < 12 {
-		t.Fatalf("the checker missed violations — got %d failures:\n%s", len(fails), strings.Join(fails, "\n"))
+	fails := strings.Join(checkGoldenIncident(c, o), "\n")
+	// Each expectation kind must be reported by name: a count alone would let
+	// one check silently stop firing while another double-reports.
+	for _, want := range []string{
+		"engine verdict =",
+		"status =",
+		`required citation "problem:p1" missing`,
+		`forbidden citation "problem:other" present`,
+		"cites ids that are not in its citations",
+		`the operator is never told "not established"`,
+		`the narrative claims "root cause is"`,
+		`LEAK: "TENANT-B-SECRET" appears in the answer`,
+		`LEAK: "TENANT-B-SECRET" was sent to the model`,
+		`the prompt does not carry "EVIDENCE:"`,
+		"the system prompt does not carry",
+		"FORGED LINE in the prompt",
+		"contradicting evidence lines = 0",
+	} {
+		if !strings.Contains(fails, want) {
+			t.Errorf("the checker missed a violation: no failure containing %q in:\n%s", want, fails)
+		}
+	}
+
+	// A model that was never called cannot satisfy a prompt expectation.
+	silent := checkGoldenIncident(&goldenIncidentCase{Path: goldenPathAsk,
+		Expect: goldenExpect{RequiredPrompt: []string{"EVIDENCE:"}}}, goldenOutcome{})
+	if !strings.Contains(strings.Join(silent, "\n"), "the model was never called") {
+		t.Errorf("a prompt expectation with no model call was not reported: %v", silent)
 	}
 }
