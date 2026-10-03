@@ -56,7 +56,7 @@ export default function RecentQuestions({ refreshKey = 0 }: { refreshKey?: numbe
   return (
     <div data-testid="iris-recent">
       <label style={{ ...text14, display: "inline-flex", gap: 6, alignItems: "center" }}>
-        <input type="checkbox" checked={everyone} onChange={(e) => setEveryone(e.target.checked)} />
+        <input type="checkbox" style={text14} checked={everyone} onChange={(e) => setEveryone(e.target.checked)} />
         Everyone in this workspace (admins)
       </label>
       {err && <div role="alert" style={{ ...text14, color: "var(--bad)" }}>{err}</div>}
