@@ -47,10 +47,16 @@ var envGateExempt = map[string]string{
 	// fresh checkout's data dir is empty, so the rehearsal would assert nothing.
 	// Its mechanism IS covered in CI: the same import path runs against
 	// fixtures in TestDomainCollectionsImportFromFilesPG on DATABASE_URL_TEST.
-	"IMPORT_REHEARSAL_DIR":        "cutover rehearsal against a COPY of a populated /data volume; CI has no populated volume, and the import path itself is covered by the fixture tests",
-	"LIVE_TRACE_DST":              "live traceroute needs CAP_NET_RAW and a real network destination",
-	"NETOPS_LDAP_LIVE":            "live LDAP IdP round-trip; needs lab directory infrastructure",
-	"NETOPS_OIDC_LIVE":            "live OIDC IdP round-trip; needs lab identity provider",
+	"IMPORT_REHEARSAL_DIR": "cutover rehearsal against a COPY of a populated /data volume; CI has no populated volume, and the import path itself is covered by the fixture tests",
+	"LIVE_TRACE_DST":       "live traceroute needs CAP_NET_RAW and a real network destination",
+	"NETOPS_LDAP_LIVE":     "live LDAP IdP round-trip; needs lab directory infrastructure",
+	"NETOPS_OIDC_LIVE":     "live OIDC IdP round-trip; needs lab identity provider",
+	// Iris NL query model fallback (internal/nlquery): the live evaluation calls a
+	// paid LLM provider, and the examples generator REWRITES a checked-in file —
+	// neither is an assertion CI can run. The checked-in examples are validated
+	// offline by the ordinary modelc tests.
+	"NLQ_EVAL_PROVIDER":           "live NL-query model evaluation needs a paid provider key; opt-in by hand",
+	"NLQ_WRITE_MODEL_EXAMPLES":    "opt-in regenerator for modelc/examples.v1.json, not an assertion gate",
 	"PG_HOSTSSL_TEST_DSN":         "needs a TLS-wrapped (hostssl) postgres, which the plain CI service container is not",
 	"RCA_EMIT_HTML":               "opt-in artifact emitter (writes an HTML file for eyeballing), not an assertion gate",
 	"RCA_EMIT_HTML_RICH":          "opt-in artifact emitter (writes an HTML file for eyeballing), not an assertion gate",
