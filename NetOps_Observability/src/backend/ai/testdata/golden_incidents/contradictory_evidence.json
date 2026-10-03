@@ -1,0 +1,282 @@
+[
+  {
+    "id": "ce-contradicted-hypothesis-model-confirms",
+    "category": "contradictory_evidence",
+    "description": "The leading hypothesis (DIA upstream packet loss) is contradicted: active probes show no loss. The model narrates it as confirmed. The contradiction must be filed as evidence AGAINST (never as support), cited, and the confirming sentence removed with a disclosure.",
+    "path": "ask",
+    "principal": {
+      "tenant": "t-a",
+      "perms": [
+        "correlations:read"
+      ]
+    },
+    "question": "explain this incident",
+    "ui": {
+      "correlation_id": "ce01eeee-0000-4000-8000-000000000021"
+    },
+    "tenants": {
+      "t-a": {
+        "problems": [
+          {
+            "id": "ce01eeee-0000-4000-8000-000000000021",
+            "title": "Slow application response via isp-gw-1",
+            "verdict": "suspected",
+            "confidence": 0.41,
+            "devices": [
+              "isp-gw-1"
+            ],
+            "signal_count": 4,
+            "node_count": 2,
+            "hypotheses": {
+              "ranking": {
+                "hypotheses": [
+                  {
+                    "id": "dia-loss",
+                    "title": "DIA upstream packet loss at isp-gw-1",
+                    "confidence": 0.41,
+                    "confidence_label": "suspected",
+                    "contradicted": true,
+                    "contradictions": [
+                      "probe_loss"
+                    ],
+                    "satisfied": [
+                      "bgp_session_flap"
+                    ],
+                    "verdict": {
+                      "verdict_tier": "suspected",
+                      "modality_coverage": [
+                        "control_plane"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    "model_reply": "Upstream packet loss at isp-gw-1 is confirmed as the cause of the slowdown [hypothesis:ce01eeee:0]. Next: open a ticket with the ISP.",
+    "expect": {
+      "verdict": "suspected",
+      "status": "Suspected",
+      "required_citations": [
+        "contradiction:ce01eeee",
+        "hypothesis:ce01eeee:0"
+      ],
+      "min_contradicting": 1,
+      "forbidden_claims": [
+        "is confirmed as the cause"
+      ],
+      "required_text": [
+        "contradicting evidence present: probe loss",
+        "single evidence stream cannot confirm"
+      ]
+    },
+    "expected_failure": "F7 — the verdict-honesty hedge list (verify.go certaintyHedges) contains the word 'hypothesis', and every engine-hypothesis citation id the explain path hands the model is 'hypothesis:<id>:<n>' (RankedHypothesisItems). The hedge regex runs over the whole sentence INCLUDING its bracketed citation, so any overclaiming sentence that cites the engine's own hypothesis evidence — the most natural citation on this path — is exempted: 'X is confirmed as the cause [hypothesis:ce01eeee:0]' ships under a suspected verdict. Citation ids should be removed before the hedge test."
+  },
+  {
+    "id": "ce-contradicted-overclaim-without-hypothesis-cite",
+    "category": "contradictory_evidence",
+    "description": "Positive control for the same contradicted incident: the model's confirming sentence cites the evidence-basis line instead of a hypothesis id. The contradiction must still be filed AGAINST and cited, and the confirming sentence removed with a disclosure.",
+    "path": "ask",
+    "principal": {
+      "tenant": "t-a",
+      "perms": [
+        "correlations:read"
+      ]
+    },
+    "question": "explain this incident",
+    "ui": {
+      "correlation_id": "ce04eeee-0000-4000-8000-000000000024"
+    },
+    "tenants": {
+      "t-a": {
+        "problems": [
+          {
+            "id": "ce04eeee-0000-4000-8000-000000000024",
+            "title": "Slow application response via isp-gw-1",
+            "verdict": "suspected",
+            "confidence": 0.41,
+            "devices": [
+              "isp-gw-1"
+            ],
+            "signal_count": 4,
+            "node_count": 2,
+            "hypotheses": {
+              "ranking": {
+                "hypotheses": [
+                  {
+                    "id": "dia-loss",
+                    "title": "DIA upstream packet loss at isp-gw-1",
+                    "confidence": 0.41,
+                    "confidence_label": "suspected",
+                    "contradicted": true,
+                    "contradictions": [
+                      "probe_loss"
+                    ],
+                    "satisfied": [
+                      "bgp_session_flap"
+                    ],
+                    "verdict": {
+                      "verdict_tier": "suspected",
+                      "modality_coverage": [
+                        "control_plane"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    "model_reply": "Upstream packet loss at isp-gw-1 is confirmed as the cause of the slowdown [evidence-basis:ce04eeee]. Next: open a ticket with the ISP.",
+    "expect": {
+      "verdict": "suspected",
+      "status": "Suspected",
+      "required_citations": [
+        "contradiction:ce04eeee",
+        "hypothesis:ce04eeee:0"
+      ],
+      "min_contradicting": 1,
+      "forbidden_claims": [
+        "is confirmed as the cause"
+      ],
+      "required_text": [
+        "contradicting evidence present: probe loss",
+        "single evidence stream cannot confirm",
+        "replaced with the evidence-only summary"
+      ]
+    }
+  },
+  {
+    "id": "ce-rca-confidence-breakdown-states-against",
+    "category": "contradictory_evidence",
+    "description": "The N-B2 confidence breakdown over an RCA result whose leading candidate has evidence for AND against it: the tool must put the AGAINST evidence in the line the model reads and instruct it to state that evidence, and the engine confidence must be reported as the engine's.",
+    "path": "rca_tool",
+    "rca_tool": "get_confidence_breakdown",
+    "principal": {
+      "tenant": "t-a",
+      "perms": [
+        "correlations:read"
+      ]
+    },
+    "ui": {
+      "correlation_id": "inc-ce02"
+    },
+    "tenants": {
+      "t-a": {
+        "rca": {
+          "inc-ce02": {
+            "incident_id": "inc-ce02",
+            "verdict": "suspected",
+            "root_cause_state": "not_identified",
+            "confidence": 0.41,
+            "confidence_label": "suspected",
+            "hypotheses": [
+              {
+                "rank": 1,
+                "title": "DIA upstream packet loss at isp-gw-1",
+                "causal_role": "root_cause_candidate",
+                "label": "suspected",
+                "confidence": 0.41,
+                "supporting": [
+                  "BGP session to the ISP flapped twice"
+                ],
+                "contradicting": [
+                  "active probes through isp-gw-1 show 0% loss"
+                ],
+                "missing": [
+                  "provider-side loss measurement"
+                ]
+              },
+              {
+                "rank": 2,
+                "title": "Application server saturation",
+                "label": "suspected",
+                "confidence": 0.22
+              }
+            ],
+            "missing": [
+              "provider-side loss measurement"
+            ]
+          }
+        }
+      }
+    },
+    "expect": {
+      "required_citations": [
+        "confidence:inc-ce02",
+        "hypothesis-1:inc-ce02",
+        "hypothesis-2:inc-ce02",
+        "missing:inc-ce02"
+      ],
+      "required_text": [
+        "AGAINST: active probes through isp-gw-1 show 0% loss",
+        "always state the evidence AGAINST",
+        "root cause not_identified",
+        "the confidence is the ENGINE's"
+      ]
+    }
+  },
+  {
+    "id": "ce-rca-causal-chain-primary-contradicted",
+    "category": "contradictory_evidence",
+    "description": "The N-B2 causal chain when the primary sequence's hypothesis is contradicted and one step carries the contradicting observation: the step must say CONTRADICTED BY, an inferred step must be labelled INFERRED, and the note must tell the model to present the sequence as disputed and to say 'followed by', never 'caused', where only timing links two steps.",
+    "path": "rca_tool",
+    "rca_tool": "get_causal_chain",
+    "principal": {
+      "tenant": "t-a",
+      "perms": [
+        "correlations:read"
+      ]
+    },
+    "ui": {
+      "correlation_id": "inc-ce03"
+    },
+    "tenants": {
+      "t-a": {
+        "rca": {
+          "inc-ce03": {
+            "incident_id": "inc-ce03",
+            "verdict": "suspected",
+            "root_cause_state": "not_identified",
+            "primary_contradicted": true,
+            "causal_chain": [
+              {
+                "number": 1,
+                "claim": "BGP session to the ISP flapped on isp-gw-1",
+                "relation": "OBSERVED",
+                "epistemic_state": "observed"
+              },
+              {
+                "number": 2,
+                "claim": "Upstream packet loss degraded the application path",
+                "relation": "INFERRED",
+                "epistemic_state": "inferred",
+                "link": "followed by",
+                "contradictions": [
+                  "active probes through isp-gw-1 show 0% loss"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    "expect": {
+      "required_citations": [
+        "chain-1:inc-ce03",
+        "chain-2:inc-ce03"
+      ],
+      "required_text": [
+        "CONTRADICTED BY: active probes through isp-gw-1 show 0% loss",
+        "[INFERRED, engine: inferred]",
+        "present it as disputed",
+        "never \"caused\""
+      ]
+    }
+  }
+]

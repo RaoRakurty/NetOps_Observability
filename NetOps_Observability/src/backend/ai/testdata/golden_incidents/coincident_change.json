@@ -1,0 +1,144 @@
+[
+  {
+    "id": "cc-confirmed-optic-model-blames-change",
+    "category": "coincident_change",
+    "description": "The engine CONFIRMED an optical loss of signal on edge-1 and ranked a configuration change in the same window as a low, unconfirmed candidate. The model narrates the change as the cause. A confirmed verdict passes the honesty gate untouched, so nothing checks that the narrated cause is the one the engine established, and nothing tells the operator the change is only temporally correlated.",
+    "path": "ask",
+    "principal": {"tenant": "t-a", "perms": ["correlations:read"]},
+    "question": "explain this incident",
+    "ui": {"correlation_id": "cc01aaaa-0000-4000-8000-000000000001"},
+    "tenants": {
+      "t-a": {
+        "problems": [
+          {
+            "id": "cc01aaaa-0000-4000-8000-000000000001",
+            "title": "Link down on edge-1 Ethernet1/1",
+            "verdict": "confirmed",
+            "confidence": 0.88,
+            "devices": ["edge-1", "core-1"],
+            "signal_count": 6,
+            "node_count": 2,
+            "hypotheses": {"ranking": {"hypotheses": [
+              {"id": "optic-los", "title": "Optical loss of signal on edge-1 Ethernet1/1", "confidence": 0.88, "confidence_label": "confirmed",
+               "satisfied": ["optic_rx_power_low", "interface_down"],
+               "verdict": {"verdict_tier": "confirmed", "modality_coverage": ["device_telemetry", "control_plane"]}},
+              {"id": "config-change", "title": "Configuration change on edge-1 at 10:02", "confidence": 0.12, "confidence_label": "suspected"}
+            ]}}
+          }
+        ]
+      }
+    },
+    "model_reply": "The link loss on edge-1 was caused by the configuration change pushed at 10:02 [hypothesis:cc01aaaa:1]. Next: roll back the change on edge-1.",
+    "expect": {
+      "verdict": "confirmed",
+      "status": "Confirmed",
+      "required_citations": ["hypothesis:cc01aaaa:0", "hypothesis:cc01aaaa:1"],
+      "forbidden_claims": ["caused by the configuration change"],
+      "required_text": ["temporally correlated, not established as"]
+    },
+    "expected_failure": "F1 — on a CONFIRMED verdict the narrative is never compared with the cause the engine established (verdictHonesty returns early for confirmed), so a model can name a coincident change the engine ranked as an unconfirmed candidate as the cause; and the problem-explanation path never discloses that a change in the window is temporally correlated, not established as cause (only changeapi.RelationNote and the nlquery change listing carry that sentence)."
+  },
+  {
+    "id": "cc-suspected-active-voice-triggered",
+    "category": "coincident_change",
+    "description": "Suspected BGP loss on edge-1; the controller reported a configuration change in the same window. The model says the change TRIGGERED the loss. The overclaim vocabulary only knows the passive 'is/was caused by', so an active-voice causal verb survives under a verdict that established no cause.",
+    "path": "ask",
+    "principal": {"tenant": "t-a", "perms": ["correlations:read"]},
+    "question": "explain this incident",
+    "ui": {"correlation_id": "cc02bbbb-0000-4000-8000-000000000002"},
+    "tenants": {
+      "t-a": {
+        "problems": [
+          {
+            "id": "cc02bbbb-0000-4000-8000-000000000002",
+            "title": "BGP session down on edge-1",
+            "verdict": "suspected",
+            "confidence": 0.55,
+            "devices": ["edge-1"],
+            "missing_evidence": ["needs probe_loss"],
+            "signal_count": 3,
+            "node_count": 1,
+            "hypotheses": {"ranking": {"hypotheses": [
+              {"id": "bgp-loss", "title": "BGP session loss on edge-1", "confidence": 0.55, "confidence_label": "suspected",
+               "satisfied": ["bgp_session_down", "controller_policy_change"],
+               "verdict": {"verdict_tier": "suspected", "modality_coverage": ["control_plane", "management_plane"]}}
+            ]}}
+          }
+        ]
+      }
+    },
+    "model_reply": "A configuration change on edge-1 at 10:02 triggered the BGP session loss [controller:cc02bbbb]. Next: review the change with its owner.",
+    "expect": {
+      "verdict": "suspected",
+      "status": "Suspected",
+      "required_citations": ["controller:cc02bbbb", "hypothesis:cc02bbbb:0"],
+      "forbidden_claims": ["triggered the bgp session loss"],
+      "required_text": ["temporally correlated, not established as"]
+    },
+    "expected_failure": "F2 — the verdict-honesty overclaim vocabulary (verify.go certaintyMarkers) catches only passive 'is/was caused by', 'root cause is', 'confirmed', 'definitely', 'certainly', 'proven'; active-voice causal verbs ('X triggered Y', 'X caused Y', 'led to', 'resulted in', 'due to') pass under a suspected verdict. Same missing temporal-correlation disclosure as F1."
+  },
+  {
+    "id": "cc-suspected-passive-overclaim-stripped",
+    "category": "coincident_change",
+    "description": "Positive control. Same incident shape as the active-voice case, but the model uses the passive 'was caused by' that the honesty gate does know: the overclaiming sentence must be removed and the removal disclosed, the honest observation must survive, and the engine verdict must stay suspected.",
+    "path": "ask",
+    "principal": {"tenant": "t-a", "perms": ["correlations:read"]},
+    "question": "explain this incident",
+    "ui": {"correlation_id": "cc03cccc-0000-4000-8000-000000000003"},
+    "tenants": {
+      "t-a": {
+        "problems": [
+          {
+            "id": "cc03cccc-0000-4000-8000-000000000003",
+            "title": "BGP session down on edge-1",
+            "verdict": "suspected",
+            "confidence": 0.55,
+            "devices": ["edge-1"],
+            "signal_count": 3,
+            "node_count": 1,
+            "hypotheses": {"ranking": {"hypotheses": [
+              {"id": "bgp-loss", "title": "BGP session loss on edge-1", "confidence": 0.55, "confidence_label": "suspected",
+               "satisfied": ["bgp_session_down", "controller_policy_change"],
+               "verdict": {"verdict_tier": "suspected", "modality_coverage": ["control_plane", "management_plane"]}}
+            ]}}
+          }
+        ]
+      }
+    },
+    "model_reply": "edge-1 lost its BGP session and the controller reported a configuration change in the same window [controller:cc03cccc]. The BGP outage was caused by that configuration change. Next: compare the running configuration with the previous capture.",
+    "expect": {
+      "verdict": "suspected",
+      "status": "Suspected",
+      "required_citations": ["controller:cc03cccc", "hypothesis:cc03cccc:0"],
+      "forbidden_claims": ["was caused by that configuration change"],
+      "required_text": ["claiming an established cause was removed", "reported a configuration change in the same window"]
+    }
+  },
+  {
+    "id": "cc-skill-log-confirmation-change-named-root-cause",
+    "category": "coincident_change",
+    "description": "The log-confirmation method gathers the device's syslog and its recorded configuration changes. A change preceded the link flap by four minutes. The skill's own look_for line says a change that merely preceded the fault is correlated, not proven cause — but the model names it the root cause, and the skill path runs no verdict-honesty gate at all.",
+    "path": "skill",
+    "skill": "log-confirmation",
+    "principal": {"tenant": "t-a", "perms": ["correlations:read", "infrastructure:read", "logs:read"]},
+    "question": "show me the logs for edge-1",
+    "ui": {"device": "edge-1"},
+    "tenants": {"t-a": {"devices": [{"id": "dev-a", "name": "edge-1"}]}},
+    "tools": {
+      "search_logs": {"items": [
+        {"citation_id": "log:os:0", "kind": "log", "text": "2026-10-01T10:02:11Z edge-1 %SYS-5-CONFIG_I: Configured from console by netops on vty0", "href": "#/explore/logs"},
+        {"citation_id": "log:os:1", "kind": "log", "text": "2026-10-01T10:06:40Z edge-1 %LINK-3-UPDOWN: Interface Ethernet1/1, changed state to down", "href": "#/explore/logs"}
+      ]},
+      "get_recent_changes": {"items": [
+        {"citation_id": "config:dev-a:9f2c4e1a7b3d", "kind": "config", "text": "edge-1 — changed on 2026-10-01T10:02:00Z (+3/-1 lines)", "href": "#/config/changes"}
+      ], "notes": ["window: last 24h"]}
+    },
+    "model_reply": "The root cause is the configuration change on edge-1 at 10:02 [config:dev-a:9f2c4e1a7b3d]; Ethernet1/1 went down four minutes later [log:os:1]. Next: roll back the change.",
+    "expect": {
+      "required_citations": ["config:dev-a:9f2c4e1a7b3d", "log:os:1"],
+      "forbidden_claims": ["root cause is the configuration change"],
+      "required_text": ["temporally correlated, not established as"]
+    },
+    "expected_failure": "F3 — the skill/troubleshoot path (skill_run.go answerSkill) runs VerifyGrounding but never enforceVerdictHonesty or any equivalent, so a skill narration may assert an established root cause (here a change that only preceded the fault) with no engine verdict behind it; no temporal-correlation disclosure is attached to change evidence either."
+  }
+]
