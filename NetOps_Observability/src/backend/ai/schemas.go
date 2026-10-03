@@ -117,6 +117,10 @@ type Answer struct {
 	// conclusion into an investigation-memory row. Opaque to the UI; echo it back
 	// on POST /api/ai/feedback as `answer_id`.
 	AnswerID string `json:"answer_id,omitempty"`
+	// DecisionID names the decision-ledger record of how this answer was
+	// reached (tracker 337 N-A6) — set by the server, never by the model; a
+	// workspace admin looks it up on GET /api/ai/decisions?decision_id=.
+	DecisionID string `json:"decision_id,omitempty"`
 }
 
 // IncidentCounts is the normalized incident-count set (spec §6). Every count

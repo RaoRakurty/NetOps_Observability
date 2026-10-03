@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"netops/backend/ai"
+	"netops/backend/internal/aidecision"
 	"netops/backend/internal/aiscore"
 	"netops/backend/internal/entityalias"
 	"netops/backend/internal/irisconvo"
@@ -185,6 +186,9 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		}
 		conv = &c
 	}
+	// The decision ledger (N-A6): from here on this question is one decision,
+	// and every seam below adds its steps through the request context.
+	r, rec := s.aiDecisionStart(r, claims, req)
 	orch := s.newOrchestrator(r, claims)
 	var ran nlqRan
 	if conv != nil && orch.NLQuery != nil {
@@ -192,18 +196,21 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	ans, err := orch.Ask(r.Context(), s.aiPrincipal(claims), question, req.Context)
 	if err != nil {
+		s.aiDecisionFinish(r, claims, rec, nil, err)
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
 	if conv != nil {
 		s.recordAskTurn(r, claims, conv, question, &ans, &ran)
 	}
+	decisionID := s.aiDecisionFinish(r, claims, rec, &ans, nil)
 	// AI audit (best-effort): who asked, intent, modules, provider — never the
 	// question text or any retrieved data (no PII/secret in the audit line).
 	logInfo("ai", "ask", map[string]any{
 		"tenant": claims.Tenant, "sub": claims.Sub,
 		"intent": ans.Intent, "mode": ans.Mode, "modules": ans.Modules,
 		"provider": ans.Provider, "tier": ai.RouteFor(ans.Mode).Tier, // §10 model-router tier
+		"decision_id": decisionID,
 	})
 	writeJSON(w, http.StatusOK, ans)
 }
@@ -219,6 +226,9 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 	// the assistant can never answer from a capability that is absent.
 	deps := s.aiTroubleshootDeps(r, claims)
 	tools.AddTroubleshootTools(ds, deps)
+	// Every audited tool step also lands in the decision ledger when this
+	// request is a ledgered decision (nil Recorder otherwise: a no-op).
+	toolAudit, ledger := s.aiToolAudit(claims), aidecision.FromContext(r.Context())
 	return &ai.Orchestrator{
 		DS:       ds,
 		Tools:    tools,
@@ -232,8 +242,10 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		Skills:   aiSkills,                                             // troubleshooting methods (nil = layer disabled)
 		Explain:  aiExplanations,                                       // authored UI explanations (the AskIris (i))
 
-		Troubleshoot: deps,                  // tenant-scoped Phase-A reads
-		ToolAudit:    s.aiToolAudit(claims), // one audit line per gather step (arg NAMES only)
+		Troubleshoot: deps, // tenant-scoped Phase-A reads
+		// One audit line per tool step (arg NAMES only) + its ledger entries
+		// (argument/result HASHES only).
+		ToolAudit: func(e ai.ToolAuditEntry) { toolAudit(e); aiLedgerToolEntry(ledger, e) },
 		// IRIS Phase B: where a CONCLUDED investigation goes. It is held (in
 		// memory, per principal) until an operator judges it on /api/ai/feedback;
 		// only then is a tenant-scoped memory row written.
@@ -277,14 +289,18 @@ func (s *server) aiNLQueryWith(r *http.Request, claims jwtClaims, st *irisconvo.
 			cx.PriorAST = st.LastAST
 			cx.Conv = &compile.Conversation{Entities: st.Entities, Actors: st.Actors, ChangeIDs: st.ChangeIDs}
 		}
+		ledger := aidecision.FromContext(ctx)
 		c, err := s.nlqCompile(rq, claims, question, cx, opts.AllowModel)
 		if err != nil {
 			rec := irisquerylog.Record{Source: irisquerylog.SourceRouter, Question: question, Outcome: irisquerylog.OutcomeError, ConversationID: convID}
 			s.nlqCapture(rq, claims, &rec, start)
+			ledger.Add(aidecision.Entry{EventType: aidecision.PlanCreated, Tool: nlqLedgerTool,
+				ArgsSHA256: aidecision.SHA256Hex([]byte(question)), Outcome: irisquerylog.OutcomeError})
 			return ai.DataAnswer{}, err
 		}
 		rec := irisquerylog.FromCompile(irisquerylog.SourceRouter, question, c.res, c.checked, c.vr)
 		rec.ConversationID = convID
+		ledger.Add(nlqPlanEntry(ledger, question, c, rec))
 		d, err := s.nlqDataAnswer(rq, claims, c, ran, &rec)
 		if err != nil {
 			rec.Outcome = irisquerylog.OutcomeError
@@ -384,6 +400,7 @@ func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled,
 			Text: "I understood the question but can't run it as asked: " + strings.Join(msgs, "; ") + "."}, nil
 	}
 	rs, err := s.nlqRun(r, claims, c.checked, *c.vr)
+	nlqLedgerRun(aidecision.FromContext(r.Context()), c, rs, err)
 	if errors.Is(err, plan.ErrNotFound) {
 		rec.Outcome = irisquerylog.OutcomeError
 		return ai.DataAnswer{Status: ai.DataAnswered, Intent: c.res.Intent, Text: "Nothing by that name is visible to you."}, nil

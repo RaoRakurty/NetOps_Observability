@@ -115,6 +115,7 @@ import (
 	"netops/backend/internal/seclane"
 	// SECURITY-LANE-END
 	"math"
+	"netops/backend/internal/aidecision"
 	"netops/backend/internal/aiscore"
 	"netops/backend/internal/entityalias"
 	"netops/backend/internal/irisconvo"
@@ -373,6 +374,11 @@ type server struct {
 	nlqQueryLog        irisquerylog.Store
 	nlqQueryLogMetrics *irisquerylog.Metrics
 	// IRIS-NLQUERY-END
+	// The Iris AI decision ledger (tracker 337 N-A6): append-only, tenant-RLS,
+	// hashes only. nil = the ledger is off (asks are not ledgered).
+	aiDecisions       aidecision.Store
+	aiDecisionMetrics *aidecision.Metrics
+
 	deviceSites *deviceSiteStore // operator device→site bindings (intent)
 	wanPolicy   *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
 	systemNet   *systemNetStore  // platform DNS + NTP system settings (clock sync + URL resolution)
@@ -1204,10 +1210,14 @@ func newServer() *server {
 		nlqQueryLog:     newIrisQueryLogStore(),
 		// Counters for query capture (N-C8) — rendered on /metrics.
 		nlqQueryLogMetrics: irisquerylog.NewMetrics(),
-		deviceSites:        deviceSites,
-		wanPolicy:          wanPolicy,
-		systemNet:          systemNet,
-		hub:                NewHub(),
+		// The AI decision ledger (N-A6) + its counters, rendered on /metrics.
+		aiDecisions:       newAIDecisionStore(),
+		aiDecisionMetrics: aidecision.NewMetrics(),
+
+		deviceSites: deviceSites,
+		wanPolicy:   wanPolicy,
+		systemNet:   systemNet,
+		hub:         NewHub(),
 		// #13 Vulnerability Management: operator-prepared advisory feed
 		// (scripts/vuln-feed-prepare.py → data/vuln/, mounted ro at /data/vuln).
 		vulns: vuln.NewFeed(envOr("VULN_FEED_PATH", "/data/vuln/advisories.csv"),
@@ -3690,6 +3700,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/conversations/", s.handleAIConversation)    // Iris NL: read one · ask in context (N-C7)
 	mux.HandleFunc("/api/ai/queries", s.handleAIQueries)                // Iris NL: recent questions (N-C8)
 	mux.HandleFunc("/api/ai/queries/", s.handleAIQueryCorrection)       // Iris NL: "that's not what I meant" (N-C8)
+	mux.HandleFunc("/api/ai/decisions", s.handleAIDecisions)            // Iris AI decision ledger (N-A6): admins, own tenant
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Self-describing API + ITSM connector status.
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
@@ -4532,6 +4543,7 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	// AI-SCORECARD-BEGIN
 	s.aiScore.Write(w)
 	s.nlqQueryLogMetrics.Write(w) // Iris query capture + corrections (N-C8); nil-safe
+	s.aiDecisionMetrics.Write(w)  // Iris AI decision ledger appends (N-A6); nil-safe
 	// AI-SCORECARD-END
 	// SECURITY-LANE-BEGIN
 	if s.securityLane != nil {
