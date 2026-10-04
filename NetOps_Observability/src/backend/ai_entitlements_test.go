@@ -244,11 +244,14 @@ func TestAIRoutesRefuseWithoutTheirEntitlementAndAdmitWithIt(t *testing.T) {
 	t.Setenv("FEATURE_AI", "true")
 	t.Setenv("FEATURE_COPILOT", "true") // the provider-proxy switch on top of ai.chat
 	t.Setenv("COPILOT_RATE_PER_MIN", "0")
+	// One fixture for every probe: each probe sets the policy it needs before
+	// each request, so nothing a previous probe did changes its gate decision.
+	// (A fixture per probe cost ~0.35 s each, ~10x that under -race, against a
+	// root-package -race budget that is already near its 40 m ceiling.)
+	s, h, a, _ := aiEntFixture(t)
 	for _, p := range aiRouteProbes {
 		p := p
 		t.Run(p.method+" "+p.path, func(t *testing.T) {
-			s, h, a, _ := aiEntFixture(t)
-
 			s.aiEntitlementPolicy = policyWithout(t, s, p.want)
 			w := serveAs(h, a, p.method, p.path, p.body)
 			got, reason := entitlementRefusal(w)
