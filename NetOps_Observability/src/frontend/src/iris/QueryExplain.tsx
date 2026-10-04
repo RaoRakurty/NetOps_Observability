@@ -90,6 +90,7 @@ export default function QueryExplain({ queryId }: { queryId: string }) {
                     </div>
                   )}
                   {ex.compiled_by === "supplied" && <div style={muted}>This query was supplied directly, not written from a question.</div>}
+                  {ex.compiled_by === "chip_edit" && <div style={muted}>This query was rebuilt by Iris from a filter you changed on an earlier answer.</div>}
                 </>
               ) : (
                 <div style={muted}>{ex.reason || "No query was kept for this question."}</div>
