@@ -48,7 +48,15 @@ func sampleReport() Report {
 		Totals: Totals{From: "2026-09-04", To: "2026-09-05", Days: 1, Meters: []MeterValue{
 			{Meter: MeterMonitoredDevicesPeak, Value: &two, Unit: UnitDevices, Source: SourceConfiguration, Samples: 2},
 		}},
-		Notes: StandingNotes(),
+		// The notes are CONTENT, pinned here as the literal the golden below
+		// was produced with, so this fixture tests the canonical FORMAT and a
+		// later wording change to StandingNotes (2026-10-03: the monitored
+		// device definition) does not masquerade as a format change. Every
+		// issued report carries its own notes inside its signed bytes.
+		Notes: []string{
+			"Monitored devices are counted from configuration — a device with at least one collector enabled — and never from recent telemetry. A device that stopped answering still counts; discovery does not consume the monitoring allowance.",
+			NoteNotMeasured, NoteDiagnostic, NoteNoPhoneHome,
+		},
 	}
 }
 

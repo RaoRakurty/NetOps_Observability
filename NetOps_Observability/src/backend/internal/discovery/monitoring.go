@@ -6,28 +6,28 @@ package discovery
 // monitoring.go — WHICH devices Correlix collects from, and the one place that
 // decides it.
 //
-// The device registry owns this because the registry owns the device: the
-// monitoring decision is an attribute of the device row, it must be evaluated
-// under the SAME lock as every other mutation of that row, and every consumer
-// (the collector pool, the licence usage counter, the API) must read one
-// answer. Two consumers deriving "is this monitored" independently is how a
-// count and a behaviour drift apart.
+// THE RULE (owner decision 2026-10-03; internal/devmon holds the policy): every
+// inventory device with an address is monitored, up to the licence ceiling.
+// Past the ceiling the FIRST N devices by first-seen time are collected from;
+// the rest stay in the inventory, marked over the licence limit. There is no
+// per-device switch and no operator decision to persist.
 //
-// LOCKING. Everything here runs under a.mu, the aggregator's single lock, and
-// that is what makes the entitlement check atomic: the capacity question and
-// the write that answers it happen in one hold, so two concurrent activations
-// at 24 of 25 cannot both succeed. The MonitorStore is a LEAF — it persists and
-// never calls back into the aggregator — so the lock order is always
-// a.mu → store, and there is no cycle to deadlock on.
+// The registry owns the FIRST-SEEN LEDGER because it owns the device: a device
+// is first seen when a record for it first enters the cache, under the same
+// lock as every other mutation of that row. The ledger is persisted
+// (FirstSeenStore) so the order survives a restart — without it, whichever
+// source happened to poll first after a reboot would take the licence slots.
 //
-// The POLICY (what "monitored" means, and the default for a device with no
-// explicit decision) lives in internal/devmon and not here, so the collector
-// pool and the licence counter can share it without importing the registry.
+// Every consumer (the collector pool, the licence usage counter, the API) reads
+// the state the registry stamps on Devices()/Get(); nothing re-derives it.
+//
+// LOCKING. Everything here runs under a.mu. The FirstSeenStore is a LEAF — it
+// persists and never calls back into the aggregator — and so is the injected
+// limit function, so the lock order is always a.mu → store, with no cycle.
 
 import (
 	"log"
 	"sort"
-	"strings"
 	"time"
 
 	"netops/backend/internal/devmon"
@@ -35,233 +35,148 @@ import (
 	"netops/backend/models"
 )
 
-// MonitorStore persists monitoring decisions. It is OPTIONAL: with no store
-// attached the decisions live only in memory, which is what tests and any build
-// without the wiring get, and the registry behaves exactly as it did before.
-//
-// Implementations MUST be safe for concurrent use and MUST NOT call back into
-// the aggregator (see the locking note above).
-type MonitorStore interface {
-	// MonitorRecords returns every stored decision. Called once, at wiring
-	// time, to seed the registry — the same shape DeviceStore.Devices has.
-	MonitorRecords() []devmon.Record
-	// PutMonitor stores one decision durably.
-	PutMonitor(devmon.Record) error
-	// DeleteMonitor removes a device's decision (used when the device itself is
-	// deleted, so a re-created device does not inherit a stale answer).
-	DeleteMonitor(tenant, deviceID string) error
+// FirstSeenRecord is one ledger entry: when the platform first saw the record
+// stored under DeviceID. TenantID is the OWNING tenant, stamped from the device
+// record (server-side state), never from a request.
+type FirstSeenRecord struct {
+	TenantID  string    `json:"tenant_id,omitempty"`
+	DeviceID  string    `json:"device_id"`
+	FirstSeen time.Time `json:"first_seen"`
 }
 
-// ErrUnknownDevice is returned by SetMonitoring for an id the registry does not
-// hold. The caller maps it to 404 — never to a create. It is devmon's sentinel,
-// not a second one: two sentinels for the same fact do not compare equal under
-// errors.Is, and the caller matching on the wrong one is a 500 where a 404
-// belongs.
-var ErrUnknownDevice = devmon.ErrUnknownDevice
+// FirstSeenStore persists the first-seen ledger. OPTIONAL: with no store the
+// ledger lives only in memory (tests, unwired builds), and the order is the
+// order of this process's first sightings.
+//
+// The ledger is registry-internal state, never served to a caller: it is read
+// once at boot (the same platform-wide seed DeviceStore.Devices performs) and
+// written as a whole. Implementations MUST be safe for concurrent use and MUST
+// NOT call back into the aggregator.
+type FirstSeenStore interface {
+	// FirstSeenRecords returns the whole ledger. Called once, at wiring time.
+	FirstSeenRecords() []FirstSeenRecord
+	// SaveFirstSeen replaces the stored ledger with recs.
+	SaveFirstSeen(recs []FirstSeenRecord) error
+}
 
-// SetMonitorStore attaches persistence and seeds the in-memory decisions from
-// it. Called once at startup, before Start(), like SetStore.
-func (a *DiscoveryAggregator) SetMonitorStore(st MonitorStore) {
+// SetFirstSeenStore attaches persistence and seeds the ledger from it. Called
+// once at startup, before Start(), like SetStore.
+func (a *DiscoveryAggregator) SetFirstSeenStore(st FirstSeenStore) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.monitorStore = st
+	a.firstSeenStore = st
 	if st == nil {
 		return
 	}
-	if a.monitor == nil {
-		a.monitor = map[string]devmon.Record{}
-	}
-	for _, rec := range st.MonitorRecords() {
-		if strings.TrimSpace(rec.DeviceID) == "" {
+	for _, rec := range st.FirstSeenRecords() {
+		if rec.DeviceID == "" || rec.FirstSeen.IsZero() {
 			continue
 		}
-		a.monitor[rec.DeviceID] = rec
+		// The stored time wins over any sighting this process already made
+		// (SetStore may have run first): the ledger is the older memory.
+		if cur, ok := a.firstSeen[rec.DeviceID]; !ok || rec.FirstSeen.Before(cur) {
+			a.firstSeen[rec.DeviceID] = rec.FirstSeen.UTC()
+		}
 	}
 }
 
-// SetMonitorGate injects the MONITORED-DEVICE ceiling. `gate(current)` is asked
-// before a device that is not monitored becomes monitored, with the number of
-// monitored devices there are now; a non-nil error refuses the transition.
+// SetMonitorLimit injects the MONITORED-DEVICE ceiling: how many devices may be
+// collected from right now (devmon.NoLimit for no ceiling). It is asked on
+// every evaluation, so a licence that grows starts collection on the next
+// devices in line at once.
 //
 // nil (the default, and what every test gets) means no ceiling, so this package
-// keeps knowing nothing about licensing: it asks a question and honours the
-// answer.
-func (a *DiscoveryAggregator) SetMonitorGate(gate func(current int) error) {
+// keeps knowing nothing about licensing.
+func (a *DiscoveryAggregator) SetMonitorLimit(limit func() int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.monitorGate = gate
+	a.monitorLimit = limit
 }
 
-// monState is one device's evaluated monitoring state.
-type monState struct {
-	on     bool
-	reason string
+// limitLocked is the ceiling in force. Caller holds a.mu.
+func (a *DiscoveryAggregator) limitLocked() int {
+	if a.monitorLimit == nil {
+		return devmon.NoLimit
+	}
+	return a.monitorLimit()
+}
+
+// noteSeenLocked records the first sighting of a cache id and reports whether
+// the ledger changed. Caller holds a.mu.
+func (a *DiscoveryAggregator) noteSeenLocked(id string, now time.Time) bool {
+	if _, ok := a.firstSeen[id]; ok {
+		return false
+	}
+	a.firstSeen[id] = now.UTC()
+	return true
+}
+
+// forgetSeenLocked drops a cache id from the ledger — the device left the
+// inventory, so if it ever returns it is a new arrival and joins the back of
+// the line. Caller holds a.mu.
+func (a *DiscoveryAggregator) forgetSeenLocked(id string) bool {
+	if _, ok := a.firstSeen[id]; !ok {
+		return false
+	}
+	delete(a.firstSeen, id)
+	return true
+}
+
+// persistSeenLocked writes the ledger. A failure is logged and NOT fatal: the
+// in-memory order is still correct for this process, and the next change
+// retries the whole write. Caller holds a.mu.
+func (a *DiscoveryAggregator) persistSeenLocked() {
+	if a.firstSeenStore == nil {
+		return
+	}
+	recs := make([]FirstSeenRecord, 0, len(a.firstSeen))
+	for id, at := range a.firstSeen {
+		recs = append(recs, FirstSeenRecord{TenantID: deviceTenantKey(a.cache[id]), DeviceID: id, FirstSeen: at})
+	}
+	sort.Slice(recs, func(i, j int) bool { return recs[i].DeviceID < recs[j].DeviceID })
+	if err := a.firstSeenStore.SaveFirstSeen(recs); err != nil {
+		log.Printf("discovery: first-seen ledger not persisted (%d entries): %v — the licence order is correct until a restart; the next inventory change retries", len(recs), err)
+	}
 }
 
 // monitorViewLocked evaluates monitoring for the whole registry in one pass.
 //
 // It works on the DEDUPED projection, because the deduped record is the device:
 // two rows that share an identity token (a NetBox entry and the SNMP scan that
-// found the same box) are one physical device and must consume one entitlement,
-// never two. Within a group an EXPLICIT decision beats a default, and among
-// explicit decisions "on" wins — the conservative direction, because a device
-// we are collecting from must be counted.
+// found the same box) are one physical device and take one licence slot. The
+// group's first-seen time is the EARLIEST of its members — the platform knew
+// the device from the first moment any source reported it.
 //
-// It returns the deduped devices, their state keyed by canonical id, and the
-// raw-id → canonical-id map, so a caller that needs all three pays for ONE
-// dedupe pass instead of three.
-//
-// Caller holds a.mu.
-func (a *DiscoveryAggregator) monitorViewLocked() ([]models.Device, map[string]monState, map[string]string) {
+// It returns the deduped devices, their verdicts keyed by canonical id, and the
+// raw-id → canonical-id map. Caller holds a.mu.
+func (a *DiscoveryAggregator) monitorViewLocked() ([]models.Device, map[string]devmon.Verdict, map[string]string) {
 	devices, owners := dedupeWithOwners(a.cache)
-	type agg struct {
-		explicit       bool
-		explicitOn     bool
-		explicitReason string
-		defaultOn      bool
-		defaultReason  string
-		withheld       string
-	}
-	groups := make(map[string]*agg, len(devices))
+	first := make(map[string]time.Time, len(devices))
 	for rawID, ownerID := range owners {
-		d, ok := a.cache[rawID]
+		at, ok := a.firstSeen[rawID]
 		if !ok {
-			continue
+			// Every insertion path notes a sighting; a gap is a bug, so rank
+			// the record by when it was last seen rather than at the front.
+			at = a.cache[rawID].LastSeen
 		}
-		g := groups[ownerID]
-		if g == nil {
-			g = &agg{}
-			groups[ownerID] = g
-		}
-		if r, has := a.monitor[rawID]; has {
-			on, why := devmon.Explicit(d, r.Enabled)
-			if !g.explicit || (on && !g.explicitOn) {
-				g.explicitReason = why
-			}
-			g.explicit = true
-			g.explicitOn = g.explicitOn || on
-		} else {
-			on, why := devmon.Default(d)
-			switch {
-			case on && !g.defaultOn:
-				g.defaultReason = why
-				g.defaultOn = true
-			case !on && g.defaultReason == "":
-				g.defaultReason = why
-			}
-		}
-		if why := a.withheld[rawID]; why != "" {
-			g.withheld = why
+		if cur, has := first[ownerID]; !has || at.Before(cur) {
+			first[ownerID] = at
 		}
 	}
-	state := make(map[string]monState, len(devices))
+	cands := make([]devmon.Candidate, 0, len(devices))
 	for _, d := range devices {
-		g := groups[d.ID]
-		if g == nil {
-			state[d.ID] = monState{on: false, reason: devmon.ReasonNoAddress}
-			continue
-		}
-		on, reason := g.defaultOn, g.defaultReason
-		if g.explicit {
-			on, reason = g.explicitOn, g.explicitReason
-		}
-		if on && g.withheld != "" {
-			on, reason = false, g.withheld
-		}
-		state[d.ID] = monState{on: on, reason: reason}
+		cands = append(cands, devmon.Candidate{Device: d, FirstSeen: first[d.ID]})
 	}
-	return devices, state, owners
+	return devices, devmon.Assign(cands, a.limitLocked()), owners
 }
 
-// monitoredCountLocked is the authoritative usage number: how many DISTINCT
-// devices Correlix is collecting from right now. Caller holds a.mu.
-func (a *DiscoveryAggregator) monitoredCountLocked() int {
-	_, state, _ := a.monitorViewLocked()
-	n := 0
-	for _, st := range state {
-		if st.on {
-			n++
-		}
-	}
-	return n
-}
-
-// monitoredIdentityIndexLocked answers, from ONE dedupe pass, the two questions
-// the poll loop's ceiling gate needs:
-//
-//   - how many DISTINCT devices are monitored right now (the number the ceiling
-//     is measured against), and
-//   - which IDENTITY TOKENS those devices carry.
-//
-// The second exists because the gate is asked about a RAW cache record while the
-// count is over the DEDUPED canonical device. Without it, a second source
-// reporting a device the platform is already collecting from (the NetBox entry
-// for a box the SNMP scan found) is charged a SECOND entitlement for ONE
-// physical device — and at a full ceiling the refusal is then folded into the
-// whole owner group by monitorViewLocked, switching a device that was already
-// being collected from OFF with a false "licence ceiling full" reason.
-//
-// The tokens are taken from the RAW records of every monitored group, not from
-// the merged record: the merge fills gaps and keeps one value per field, so a
-// member's address or serial can be absent from the merged row while still
-// being the token an arriving record would union on.
-//
-// Only groups that are actually ON contribute. A group that is off consumes no
-// entitlement, so a source reporting one of its members is asking to START
-// collecting and must be charged.
-//
-// Caller holds a.mu.
-func (a *DiscoveryAggregator) monitoredIdentityIndexLocked() (int, map[string]bool) {
-	_, state, owners := a.monitorViewLocked()
-	count := 0
-	for _, st := range state {
-		if st.on {
-			count++
-		}
-	}
-	tokens := make(map[string]bool, len(owners)*2)
-	for rawID, ownerID := range owners {
-		if !state[ownerID].on {
-			continue
-		}
-		d, ok := a.cache[rawID]
-		if !ok {
-			continue
-		}
-		for _, tok := range identityTokens(d) {
-			tokens[tok] = true
-		}
-	}
-	return count, tokens
-}
-
-// sharesMonitoredIdentity reports whether any of `toks` already belongs to a
-// monitored device. Tokens are TENANT-PARTITIONED (identityTokens), so this can
-// never match across a tenant boundary: two tenants running the same management
-// address or hostname stay two devices and are charged twice, as they must be.
-func sharesMonitoredIdentity(index map[string]bool, toks []string) bool {
-	for _, tok := range toks {
-		if index[tok] {
-			return true
-		}
-	}
-	return false
-}
-
-// MonitoredCount is the platform-wide count of monitored devices — the number
-// the licence ceiling is measured against.
-func (a *DiscoveryAggregator) MonitoredCount() int {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.monitoredCountLocked()
-}
-
-// stampLocked fills the monitoring fields on a copy of d from the evaluated
-// state. Caller holds a.mu.
-func stampMonitoring(d models.Device, st monState) models.Device {
-	d.Monitored = st.on
-	d.MonitorReason = st.reason
-	if st.on {
+// stampMonitoring fills the monitoring fields on a copy of d from its verdict.
+func stampMonitoring(d models.Device, v devmon.Verdict) models.Device {
+	d.Monitored = v.Monitored
+	d.MonitorState = v.State
+	d.MonitorReason = v.Reason
+	d.MonitorLimit = v.Limit
+	if v.Monitored {
 		d.MonitorMethods = devmon.Methods(d)
 	} else {
 		d.MonitorMethods = nil
@@ -269,95 +184,66 @@ func stampMonitoring(d models.Device, st monState) models.Device {
 	return d
 }
 
-// SetMonitoring turns monitoring on or off for one device and reports the
-// device as it now stands.
-//
-// This is THE transition point. The ceiling is asked exactly when a device that
-// is not monitored is about to become monitored — never when it is already
-// monitored (adding a second telemetry method to a counted device is free) and
-// never when monitoring is being turned OFF, which can only free capacity.
-// The check and the write share one hold of a.mu, so concurrent activations at
-// the ceiling serialise instead of both seeing a free slot.
-//
-// `by` is the principal making the decision, recorded on the stored record.
-func (a *DiscoveryAggregator) SetMonitoring(id string, enabled bool, by string) (models.Device, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	raw, ok := a.cache[id]
-	if !ok {
-		return models.Device{}, ErrUnknownDevice
-	}
-	// The decision is recorded against the id the caller named; the STATE that
-	// matters is the canonical device's, since that is what is counted.
-	_, state, owners := a.monitorViewLocked()
-	ownerID := owners[id]
-	if ownerID == "" {
-		ownerID = id
-	}
-	already := state[ownerID].on
-	if enabled && !already {
-		if err := a.gateMonitoringLocked(state); err != nil {
-			return models.Device{}, err
-		}
-	}
-	rec := devmon.Record{
-		TenantID:  deviceTenantKey(raw),
-		DeviceID:  id,
-		Enabled:   enabled,
-		UpdatedBy: by,
-		UpdatedAt: time.Now().UTC(),
-	}
-	if a.monitorStore != nil {
-		if err := a.monitorStore.PutMonitor(rec); err != nil {
-			// Never claim a decision that did not persist: it would come back
-			// undone on the next restart with nobody told.
-			return models.Device{}, err
-		}
-	}
-	if a.monitor == nil {
-		a.monitor = map[string]devmon.Record{}
-	}
-	a.monitor[id] = rec
-	// An operator decision clears any ceiling withholding for the device: the
-	// decision they just made is the one in force.
-	delete(a.withheld, id)
-	if ownerID != id {
-		delete(a.withheld, ownerID)
-	}
-	after, afterState, _ := a.monitorViewLocked()
-	for _, d := range after {
-		if d.ID == ownerID {
-			return stampMonitoring(d, afterState[d.ID]), nil
-		}
-	}
-	return stampMonitoring(raw, afterState[ownerID]), nil
+// clearMonitoring strips the server-stamped monitoring fields — they are never
+// request input and never persisted with the device.
+func clearMonitoring(d models.Device) models.Device {
+	d.Monitored, d.MonitorState, d.MonitorReason, d.MonitorLimit, d.MonitorMethods = false, "", "", 0, nil
+	return d
 }
 
-// gateMonitoringLocked asks the injected ceiling whether one more monitored
-// device is allowed. Caller holds a.mu.
-func (a *DiscoveryAggregator) gateMonitoringLocked(state map[string]monState) error {
-	if a.monitorGate == nil {
-		return nil
-	}
-	n := 0
-	for _, st := range state {
-		if st.on {
-			n++
+// monitoredCountLocked is the authoritative usage number: how many DISTINCT
+// devices Correlix is collecting from right now. Caller holds a.mu.
+func (a *DiscoveryAggregator) monitoredCountLocked() (monitored, overLimit int) {
+	_, state, _ := a.monitorViewLocked()
+	for _, v := range state {
+		switch v.State {
+		case devmon.StateMonitored:
+			monitored++
+		case devmon.StateOverLimit:
+			overLimit++
 		}
 	}
-	return a.monitorGate(n)
+	return monitored, overLimit
 }
 
-// MonitoringDecision reports the stored decision for a device id, if any.
-func (a *DiscoveryAggregator) MonitoringDecision(id string) (devmon.Record, bool) {
+// MonitoredCount is the platform-wide count of monitored devices — the number
+// the licence ceiling is measured against.
+func (a *DiscoveryAggregator) MonitoredCount() int {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	r, ok := a.monitor[id]
-	return r, ok
+	n, _ := a.monitoredCountLocked()
+	return n
 }
 
-// WithheldMonitoring is one device Correlix WOULD collect from but does not,
-// because the licence ceiling is full.
+// AddressableCount is the platform-wide number of DISTINCT addressable
+// devices — monitored plus over the limit. It is the licence's usage number
+// (owner decision 2026-10-03: monitored means "in the inventory and
+// addressable"); MonitoredCount is how many of them are actually collected.
+func (a *DiscoveryAggregator) AddressableCount() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	n, over := a.monitoredCountLocked()
+	return n + over
+}
+
+// logOverLimitLocked logs when the number of over-limit devices changes, so a
+// device that stops being collected from is never a silent event (§10).
+// Caller holds a.mu (write).
+func (a *DiscoveryAggregator) logOverLimitLocked() {
+	_, over := a.monitoredCountLocked()
+	if over == a.lastOverLimit {
+		return
+	}
+	if over > 0 {
+		log.Printf("discovery: %d device(s) are over the licence limit of %d and are not collected from — they stay in the inventory and are listed on the Devices and Licence pages", over, a.limitLocked())
+	} else {
+		log.Printf("discovery: no devices are over the licence limit; every addressable device is collected from")
+	}
+	a.lastOverLimit = over
+}
+
+// WithheldMonitoring is one device Correlix does NOT collect from because it is
+// past the licence ceiling in first-seen order.
 type WithheldMonitoring struct {
 	DeviceID string `json:"device_id"`
 	TenantID string `json:"tenant_id,omitempty"`
@@ -365,125 +251,64 @@ type WithheldMonitoring struct {
 	Reason   string `json:"reason"`
 }
 
-// MonitoringWithheldFor lists them FOR ONE PRINCIPAL. This is the honest half
-// of the ceiling: these devices are in the inventory, nothing about them was
-// deleted or hidden, and the operator is told exactly which ones are not being
-// collected from and why.
+// MonitoringWithheldFor lists the over-limit devices FOR ONE PRINCIPAL. These
+// devices are in the inventory, nothing about them was deleted or hidden, and
+// the operator is told exactly which ones are not being collected from and why.
 //
 // The scope is a required argument and there is deliberately no unscoped
 // sibling: the rows carry another tenant's device ids and names, so a caller
-// that wants the platform-wide view has to TYPE cross=true, which makes the
-// gate visible at the call site (CLAUDE.md §3a rules 1 and 3 — cross=true
-// belongs behind requirePlatformAdmin, as the Licence surface is). A scoped
-// caller sees only its own tenant's rows; untagged/platform-owned devices are
-// their own partition and are visible only cross-tenant, exactly as the device
-// registry itself treats them.
-//
-// The decision funnels through rbac.Authorize rather than re-deriving "same
-// tenant?" here, so this read can never drift from the one policy. A withheld
-// id with no row left in the cache is treated as platform-owned (tenant "") —
-// default-closed for every scoped caller.
+// that wants the platform-wide view has to TYPE cross=true (CLAUDE.md §3a rules
+// 1 and 3). The decision funnels through rbac.Authorize so this read can never
+// drift from the one policy. Order is the licence order (first-seen).
 func (a *DiscoveryAggregator) MonitoringWithheldFor(tenant string, cross bool) []WithheldMonitoring {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
+	devices, state, _ := a.monitorViewLocked()
 	p := rbac.Principal{Tenant: tenant, Cross: cross}
-	out := make([]WithheldMonitoring, 0, len(a.withheld))
-	for id, reason := range a.withheld {
-		w := WithheldMonitoring{DeviceID: id, Reason: reason}
-		if d, ok := a.cache[id]; ok {
-			w.TenantID = deviceTenantKey(d)
-			w.Name = d.Name
+	out := make([]WithheldMonitoring, 0)
+	for _, d := range devices {
+		v := state[d.ID]
+		if v.State != devmon.StateOverLimit {
+			continue
 		}
+		w := WithheldMonitoring{DeviceID: d.ID, TenantID: deviceTenantKey(d), Name: d.Name, Reason: v.Reason}
 		if !rbac.Authorize(p, rbac.ActionView, rbac.Resource{Type: rbac.ResDevice, Tenant: w.TenantID}).Allow {
 			continue
 		}
 		out = append(out, w)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].DeviceID < out[j].DeviceID })
 	return out
 }
 
-// MonitoringWithheldCount is the PLATFORM-WIDE size of that list without the
-// copy. It is a count and carries no tenant's identities: it feeds the licence
-// ceiling (which is itself platform-global — one installation, one allowance)
-// and the /metrics gauge. Anything that renders WHICH devices must go through
-// MonitoringWithheldFor.
+// MonitoringWithheldCount is the PLATFORM-WIDE number of over-limit devices,
+// without the copy. It carries no tenant's identities: it feeds the licence
+// page (itself platform-global) and the /metrics gauge. Anything that renders
+// WHICH devices must go through MonitoringWithheldFor.
 func (a *DiscoveryAggregator) MonitoringWithheldCount() int {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return len(a.withheld)
+	_, over := a.monitoredCountLocked()
+	return over
 }
 
-// admitMonitoringLocked decides, for a device arriving from a SOURCE, whether
-// its default-on monitoring may start.
-//
-// Discovery is NEVER blocked: the device enters the inventory either way. What
-// the ceiling can withhold is the COLLECTION, and when it does the device is
-// recorded in a.withheld so it is listed rather than quietly inert. A device
-// already withheld is re-asked on every poll, so raising the ceiling starts
-// collecting from it without the operator touching anything.
-//
-// `count` is the running monitored count for this poll; the caller increments
-// it when this function admits. Caller holds a.mu.
-func (a *DiscoveryAggregator) admitMonitoringLocked(d models.Device, count int) (admitted bool) {
-	if a.monitorGate == nil {
-		return true
-	}
-	if _, decided := a.monitor[d.ID]; decided {
-		// An explicit decision was already gated when it was made.
-		return true
-	}
-	if on, _ := devmon.Default(d); !on {
-		return true // nothing to admit: it is not monitored anyway
-	}
-	if err := a.monitorGate(count); err != nil {
-		if a.withheld == nil {
-			a.withheld = map[string]string{}
-		}
-		reason := "monitoring is not enabled for this device: the licence ceiling is full (" + err.Error() +
-			") — the device was found, nothing was deleted or hidden, and it is listed on the Licence page"
-		if _, told := a.withheld[d.ID]; !told {
-			// Once per device, not once per poll: this loop runs every interval
-			// and a per-poll line would bury the log.
-			log.Printf("discovery: %s not monitored: licence ceiling (%v) — the device IS in the inventory and nothing was deleted or hidden; it is listed on the Licence page", d.ID, err)
-		}
-		a.withheld[d.ID] = reason
-		return false
-	}
-	delete(a.withheld, d.ID)
-	return true
-}
-
-// OverCeiling is one monitored device beyond a licensed allowance.
-//
-// It is the SOFT-overage sibling of WithheldMonitoring, and the difference
-// between the two is the whole point of listing both: a WITHHELD device is one
-// Correlix is NOT collecting from because a hard ceiling was full; an
-// OVER-CEILING device is one Correlix IS collecting from, above a soft
-// allowance, recorded for true-up. Nothing about either is deleted or hidden.
+// OverCeiling is one monitored device beyond a SOFT licensed allowance: still
+// collected from, recorded for true-up.
 type OverCeiling struct {
-	DeviceID string `json:"device_id"`
-	TenantID string `json:"tenant_id,omitempty"`
-	Name     string `json:"name,omitempty"`
-	// EnabledAt is when an operator turned monitoring on, where there is an
-	// explicit decision. Zero for a device monitored by provenance default —
-	// which is why the ordering below falls back to the id.
-	EnabledAt time.Time `json:"enabled_at,omitzero"`
+	DeviceID  string    `json:"device_id"`
+	TenantID  string    `json:"tenant_id,omitempty"`
+	Name      string    `json:"name,omitempty"`
+	FirstSeen time.Time `json:"first_seen,omitzero"`
 }
 
-// MonitoredOverCeiling lists the monitored devices beyond `limit`, most
-// recently enabled first.
+// MonitoredOverCeiling lists the monitored devices beyond `limit` in the
+// licence's own order: the devices first seen AFTER the first `limit`, newest
+// first. Under a soft ceiling (paid tiers) every one of them is still being
+// collected from; the list exists for true-up.
 //
-// THE ORDERING IS PRESENTATIONAL AND NOTHING ELSE. Correlix does not choose
-// which devices a licence covers, and no device is treated differently for
-// appearing here: every one of them is still collected from. The order exists
-// so an operator reading "12 over" can see WHICH twelve arrived last, which is
-// the question they actually ask. Ties break on the device id so two reads of
-// the page never disagree.
-//
-// A limit of entitlement-unlimited (-1) or a non-positive limit returns nothing:
-// there is no "beyond" an unlimited allowance, and a zero limit is a
-// pathological licence whose overage is the whole fleet — the count already
-// says so and naming every device would be noise, not honesty.
+// A limit of entitlement-unlimited (-1) or a non-positive limit returns
+// nothing: there is no "beyond" an unlimited allowance, and a zero limit is a
+// pathological licence whose overage is the whole fleet.
 func (a *DiscoveryAggregator) MonitoredOverCeiling(limit int) []OverCeiling {
 	if limit <= 0 {
 		return nil
@@ -491,41 +316,36 @@ func (a *DiscoveryAggregator) MonitoredOverCeiling(limit int) []OverCeiling {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	devices, state, owners := a.monitorViewLocked()
-
-	// The newest explicit decision wins for a canonical device: a deduped device
-	// may carry decisions against more than one raw id.
-	enabledAt := make(map[string]time.Time, len(devices))
-	for rawID, rec := range a.monitor {
-		if !rec.Enabled {
+	first := make(map[string]time.Time, len(devices))
+	for rawID, ownerID := range owners {
+		at, ok := a.firstSeen[rawID]
+		if !ok {
 			continue
 		}
-		ownerID := owners[rawID]
-		if ownerID == "" {
-			ownerID = rawID
-		}
-		if rec.UpdatedAt.After(enabledAt[ownerID]) {
-			enabledAt[ownerID] = rec.UpdatedAt.UTC()
+		if cur, has := first[ownerID]; !has || at.Before(cur) {
+			first[ownerID] = at
 		}
 	}
-
 	rows := make([]OverCeiling, 0, len(devices))
 	for _, d := range devices {
-		if !state[d.ID].on {
+		if !state[d.ID].Monitored {
 			continue
 		}
-		rows = append(rows, OverCeiling{
-			DeviceID: d.ID, TenantID: deviceTenantKey(d), Name: d.Name,
-			EnabledAt: enabledAt[d.ID],
-		})
+		rows = append(rows, OverCeiling{DeviceID: d.ID, TenantID: deviceTenantKey(d), Name: d.Name, FirstSeen: first[d.ID]})
 	}
 	if len(rows) <= limit {
 		return nil
 	}
+	// Licence order (oldest first, ties by id), then take the tail newest-first.
 	sort.Slice(rows, func(i, j int) bool {
-		if !rows[i].EnabledAt.Equal(rows[j].EnabledAt) {
-			return rows[i].EnabledAt.After(rows[j].EnabledAt)
+		if !rows[i].FirstSeen.Equal(rows[j].FirstSeen) {
+			return rows[i].FirstSeen.Before(rows[j].FirstSeen)
 		}
-		return rows[i].DeviceID > rows[j].DeviceID
+		return rows[i].DeviceID < rows[j].DeviceID
 	})
-	return rows[:len(rows)-limit]
+	tail := append([]OverCeiling(nil), rows[limit:]...)
+	for i, j := 0, len(tail)-1; i < j; i, j = i+1, j-1 {
+		tail[i], tail[j] = tail[j], tail[i]
+	}
+	return tail
 }

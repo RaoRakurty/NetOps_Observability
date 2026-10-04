@@ -3,20 +3,21 @@
 
 package backend
 
-// device_monitoring_test.go — the C4 rule: a device consumes one Community
-// entitlement when Correlix is CONFIGURED TO MONITOR it, and discovery costs
-// nothing.
+// device_monitoring_test.go — the owner's 2026-10-03 rule, end to end in the
+// wiring: every inventory device with an address is monitored (whoever found
+// it, a subnet scan included), up to the licence ceiling in first-seen order.
+// The rest stay in the inventory, marked over the licence limit.
 //
-// internal/devmon proves the policy and internal/discovery proves the state
-// machine. What only exists HERE, in the wiring, is:
+// internal/devmon proves the policy and internal/discovery proves the ledger.
+// What only exists HERE, in the composition root, is:
 //
-//  1. the route is reachable through the real device dispatcher and takes the
-//     real permission gates;
-//  2. the transition is enforced SERVER-SIDE — a client that hides no button
-//     still cannot monitor device 26;
-//  3. the count is tenant-scoped, so one tenant filling the ceiling cannot be
-//     seen by, or block the view of, another;
-//  4. the whole sequence in the owner's definition of done runs end to end.
+//  1. the licence count and the collection ceiling come from the real licence
+//     service — hard on Community, soft (no cut) on paid tiers;
+//  2. the status route is reachable through the real device dispatcher, takes
+//     the real permission gate, is read-only, and is honest when no collector
+//     for a monitored device's methods is running;
+//  3. §3a: a tenant sees only its own devices, its own over-limit devices and
+//     its own count — never another tenant's, not even through ?as_tenant.
 
 import (
 	"encoding/json"
@@ -26,10 +27,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
+	"netops/backend/collectors"
 	"netops/backend/internal/devmon"
 	"netops/backend/internal/discovery"
 	"netops/backend/internal/entitlement"
@@ -42,11 +42,10 @@ import (
 // ─────────────────────────────────────────────────────────────────────────────
 
 // monServer builds the minimum server able to serve the device routes and the
-// monitoring switch, under the entitlement service `ent` (nil = no ceiling).
-//
-// The Deps come from devmonDeps(), the SAME function the composition root uses:
-// a test-only Deps literal is how a gate ends up proven in a fixture and absent
-// in production.
+// monitoring status, under the entitlement service `ent`. The collection
+// ceiling is the production closure (monitorCollectionLimit) and the Deps come
+// from devmonDeps() — a test-only literal is how a gate ends up proven in a
+// fixture and absent in production.
 func monServer(t *testing.T, ent *licence.Service, devs ...models.Device) *server {
 	t.Helper()
 	roles, err := newRoleStore(filepath.Join(t.TempDir(), "roles.json"))
@@ -54,23 +53,18 @@ func monServer(t *testing.T, ent *licence.Service, devs ...models.Device) *serve
 		t.Fatal(err)
 	}
 	d := discovery.NewDiscoveryAggregator()
+	s := &server{roles: roles, discovery: d, entitlements: ent}
+	d.SetMonitorLimit(s.monitorCollectionLimit)
 	for _, dev := range devs {
 		if err := d.Upsert(dev); err != nil {
 			t.Fatalf("seed %s: %v", dev.ID, err)
 		}
 	}
-	s := &server{roles: roles, discovery: d, entitlements: ent}
-	if ent != nil {
-		d.SetMonitorGate(func(current int) error {
-			return entitlement.CheckCeiling(ent, entitlement.CeilingDevices, current)
-		})
-	}
 	s.devmonAPI = devmon.New(s.devmonDeps())
 	return s
 }
 
-// monDeclared is a device an operator (or their source of truth) DECLARED:
-// monitored by default.
+// monDeclared is a device an operator created.
 func monDeclared(i int) models.Device {
 	return models.Device{
 		ID: "dev-" + strconv.Itoa(i), Name: "dev-" + strconv.Itoa(i),
@@ -78,22 +72,12 @@ func monDeclared(i int) models.Device {
 	}
 }
 
-// monDiscovered is a device the subnet SCAN found: a candidate, not monitored.
-func monDiscovered(i int) models.Device {
+// monScanned is a device the subnet SCAN found.
+func monScanned(i int) models.Device {
 	return models.Device{
 		ID: "scan-" + strconv.Itoa(i), Name: "scan-" + strconv.Itoa(i),
 		Address: fmt.Sprintf("10.30.%d.%d", i/250, i%250), Source: "snmp",
 	}
-}
-
-// monSet drives the REAL device dispatcher (handleDeviceByID → the monitoring
-// route), so the dispatch in main.go is under test too, not just the module.
-func monSet(t *testing.T, s *server, id string, enabled bool, c jwtClaims) *httptest.ResponseRecorder {
-	t.Helper()
-	body := `{"enabled":` + strconv.FormatBool(enabled) + `}`
-	w := httptest.NewRecorder()
-	s.handleDeviceByID(w, licReq(http.MethodPut, "/api/devices/"+id+"/monitoring", body, c))
-	return w
 }
 
 func monGet(t *testing.T, s *server, id string, c jwtClaims) (*httptest.ResponseRecorder, devmon.View) {
@@ -109,419 +93,6 @@ func monGet(t *testing.T, s *server, id string, c jwtClaims) (*httptest.Response
 	return w, v
 }
 
-func monMustSet(t *testing.T, s *server, id string, enabled bool) {
-	t.Helper()
-	if w := monSet(t, s, id, enabled, licClaims()); w.Code != http.StatusOK {
-		t.Fatalf("set monitoring %s=%v: %d %s", id, enabled, w.Code, w.Body.String())
-	}
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// The unit: monitored devices, not inventory rows
-// ─────────────────────────────────────────────────────────────────────────────
-
-// TestMonitoredUnitIsNotTheInventoryRow is the product decision itself. A
-// hundred discovered devices are a hundred inventory rows and zero entitlements.
-func TestMonitoredUnitIsNotTheInventoryRow(t *testing.T) {
-	k := newLicTestKey(t)
-	var fleet []models.Device
-	for i := 0; i < 100; i++ {
-		fleet = append(fleet, monDiscovered(i))
-	}
-	s := monServer(t, k.service(t, nil), fleet...)
-
-	if got := len(s.discovery.Devices()); got != 100 {
-		t.Fatalf("inventory = %d, want 100 — discovery is never refused", got)
-	}
-	if got := s.discovery.MonitoredCount(); got != 0 {
-		t.Fatalf("monitored = %d, want 0 — a discovered row is a candidate, not a monitored device", got)
-	}
-	if got := s.licenceUsage(t.Context())[entitlement.CeilingDevices]; got != 0 {
-		t.Fatalf("licence usage = %d, want 0 — the bar must count what is monitored", got)
-	}
-
-	t.Run("enabling twelve spends exactly twelve", func(t *testing.T) {
-		for i := 0; i < 12; i++ {
-			monMustSet(t, s, "scan-"+strconv.Itoa(i), true)
-		}
-		if got := s.licenceUsage(t.Context())[entitlement.CeilingDevices]; got != 12 {
-			t.Fatalf("licence usage = %d, want 12 of 25", got)
-		}
-		if got := len(s.discovery.Devices()); got != 100 {
-			t.Fatalf("the inventory must be untouched, got %d", got)
-		}
-	})
-}
-
-// TestMonitoredCountsTheDeviceNotTheCollectors pins the "several methods, one
-// device" rule and the release on the LAST one.
-func TestMonitoredCountsTheDeviceNotTheCollectors(t *testing.T) {
-	k := newLicTestKey(t)
-	dev := monDiscovered(1)
-	s := monServer(t, k.service(t, nil), dev)
-
-	monMustSet(t, s, dev.ID, true)
-	if got := s.discovery.MonitoredCount(); got != 1 {
-		t.Fatalf("the first enabled method counts one device, got %d", got)
-	}
-
-	t.Run("a second telemetry method adds no entitlement", func(t *testing.T) {
-		// SNMP credentials AND a gNMI subscription on the same box.
-		with := dev
-		with.CredentialRef = "lab-v2c"
-		with.Labels = map[string]string{"gnmi": "true"}
-		if err := s.discovery.Upsert(with); err != nil {
-			t.Fatal(err)
-		}
-		if got := s.discovery.MonitoredCount(); got != 1 {
-			t.Fatalf("monitored = %d, want 1 — the unit is the device", got)
-		}
-		_, v := monGet(t, s, dev.ID, licClaims())
-		if len(v.Methods) != 2 {
-			t.Fatalf("both methods must be VISIBLE even though they cost one entitlement: %v", v.Methods)
-		}
-	})
-
-	t.Run("removing one of two methods keeps the device counted", func(t *testing.T) {
-		back := dev
-		back.CredentialRef = "lab-v2c" // gnmi label dropped
-		if err := s.discovery.Upsert(back); err != nil {
-			t.Fatal(err)
-		}
-		if got := s.discovery.MonitoredCount(); got != 1 {
-			t.Fatalf("monitored = %d, want 1 — one method is still monitoring", got)
-		}
-	})
-
-	t.Run("turning monitoring off releases the entitlement", func(t *testing.T) {
-		monMustSet(t, s, dev.ID, false)
-		if got := s.discovery.MonitoredCount(); got != 0 {
-			t.Fatalf("monitored = %d, want 0", got)
-		}
-		if got := len(s.discovery.Devices()); got != 1 {
-			t.Fatalf("the device itself must stay in the inventory, got %d", got)
-		}
-	})
-}
-
-// TestMonitoredSurvivesUnreachability: the entitlement tracks CONFIGURED
-// INTENT, not reachability. A device that stopped answering days ago is still
-// being monitored — we are still trying — and freeing its licence on an outage
-// would hand a customer capacity exactly when their network is broken.
-func TestMonitoredSurvivesUnreachability(t *testing.T) {
-	k := newLicTestKey(t)
-	dead := monDeclared(1)
-	dead.LastSeen = time.Now().Add(-30 * 24 * time.Hour)
-	s := monServer(t, k.service(t, nil), dead)
-
-	if got := s.discovery.MonitoredCount(); got != 1 {
-		t.Fatalf("monitored = %d, want 1 — an unreachable device is still configured for monitoring", got)
-	}
-	_, v := monGet(t, s, dead.ID, licClaims())
-	if !v.Monitored {
-		t.Fatalf("the view must agree: %+v", v)
-	}
-}
-
-// TestMonitoredReleasedOnDelete: deleting a monitored device frees its
-// entitlement, and a device recreated later does not inherit the decision.
-func TestMonitoredReleasedOnDelete(t *testing.T) {
-	k := newLicTestKey(t)
-	dev := monDiscovered(7)
-	s := monServer(t, k.service(t, nil), dev)
-	monMustSet(t, s, dev.ID, true)
-	if got := s.discovery.MonitoredCount(); got != 1 {
-		t.Fatalf("monitored = %d, want 1", got)
-	}
-	if err := s.discovery.Delete(dev.ID); err != nil {
-		t.Fatal(err)
-	}
-	if got := s.discovery.MonitoredCount(); got != 0 {
-		t.Fatalf("monitored = %d, want 0 after the device was deleted", got)
-	}
-	if _, ok := s.discovery.MonitoringDecision(dev.ID); ok {
-		t.Fatal("the decision must die with the device — a recreated id must not inherit it")
-	}
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// The ceiling, enforced at the transition
-// ─────────────────────────────────────────────────────────────────────────────
-
-// TestMonitoringCeilingAtTheTransition is the owner's definition of done:
-// discover far past the ceiling, enable 25, be refused the 26th, and still be
-// free to add telemetry to a device that is already counted.
-func TestMonitoringCeilingAtTheTransition(t *testing.T) {
-	k := newLicTestKey(t)
-	var fleet []models.Device
-	for i := 0; i < 500; i++ {
-		fleet = append(fleet, monDiscovered(i))
-	}
-	s := monServer(t, k.service(t, nil), fleet...) // Community: 25
-
-	if got := s.discovery.MonitoredCount(); got != 0 {
-		t.Fatalf("500 discovered devices must cost nothing, got %d", got)
-	}
-	for i := 0; i < 25; i++ {
-		monMustSet(t, s, "scan-"+strconv.Itoa(i), true)
-	}
-	if got := s.discovery.MonitoredCount(); got != 25 {
-		t.Fatalf("monitored = %d, want 25", got)
-	}
-
-	t.Run("the 26th is refused, with a body a card can render", func(t *testing.T) {
-		w := monSet(t, s, "scan-25", true, licClaims())
-		licAssertRefusal(t, w, entitlement.KindCeiling, entitlement.CeilingDevices, entitlement.TierTeam)
-		var body struct {
-			Unit    string `json:"unit"`
-			Current int    `json:"current"`
-			Limit   int    `json:"limit"`
-		}
-		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-			t.Fatal(err)
-		}
-		if body.Unit != entitlement.UnitMonitoredDevices {
-			t.Fatalf("unit = %q, want %q — a client must never render this as a limit on inventory rows",
-				body.Unit, entitlement.UnitMonitoredDevices)
-		}
-		if body.Current != 25 || body.Limit != 25 {
-			t.Fatalf("current/limit = %d/%d, want 25/25", body.Current, body.Limit)
-		}
-		if got := s.discovery.MonitoredCount(); got != 25 {
-			t.Fatalf("a refused activation must change nothing, monitored = %d", got)
-		}
-	})
-
-	t.Run("the refused device is still fully usable", func(t *testing.T) {
-		// The cap is on monitoring, not on seeing: the device, its inventory
-		// row and its history stay exactly where they were.
-		w, v := monGet(t, s, "scan-25", licClaims())
-		if w.Code != http.StatusOK {
-			t.Fatalf("GET = %d %s", w.Code, w.Body.String())
-		}
-		if v.Monitored {
-			t.Fatal("the refused device must not read as monitored")
-		}
-		if strings.TrimSpace(v.Reason) == "" {
-			t.Fatal("every state must say why it is the state")
-		}
-		if _, ok := s.discovery.Get("scan-25"); !ok {
-			t.Fatal("the device must still be in the inventory")
-		}
-	})
-
-	t.Run("a device already counted may add telemetry", func(t *testing.T) {
-		with := monDiscovered(0)
-		with.CredentialRef = "lab-v2c"
-		with.Labels = map[string]string{"gnmi": "true"}
-		if err := s.discovery.Upsert(with); err != nil {
-			t.Fatalf("adding a method to a counted device must be allowed: %v", err)
-		}
-		if got := s.discovery.MonitoredCount(); got != 25 {
-			t.Fatalf("monitored = %d, want 25 — still the same 25 devices", got)
-		}
-	})
-
-	t.Run("turning one off makes room for another", func(t *testing.T) {
-		monMustSet(t, s, "scan-0", false)
-		if got := s.discovery.MonitoredCount(); got != 24 {
-			t.Fatalf("monitored = %d, want 24", got)
-		}
-		monMustSet(t, s, "scan-25", true)
-		if got := s.discovery.MonitoredCount(); got != 25 {
-			t.Fatalf("monitored = %d, want 25", got)
-		}
-	})
-}
-
-// TestMonitoringCeilingIsServerSide: the refusal does not depend on the SPA
-// hiding a control. The API is driven directly, with a platform-owner token.
-func TestMonitoringCeilingIsServerSide(t *testing.T) {
-	k := newLicTestKey(t)
-	var fleet []models.Device
-	for i := 0; i < 25; i++ {
-		fleet = append(fleet, monDeclared(i))
-	}
-	fleet = append(fleet, monDiscovered(99))
-	s := monServer(t, k.service(t, nil), fleet...)
-
-	w := monSet(t, s, "scan-99", true, licClaims())
-	if w.Code != entitlement.StatusLicence {
-		t.Fatalf("status = %d, want 402 — the ceiling must be enforced by the server, not by the UI: %s",
-			w.Code, w.Body.String())
-	}
-}
-
-// TestMonitoringCeilingIgnoresClientSuppliedState: a create that claims to be
-// monitored is stamped by the server, never trusted from the body.
-func TestMonitoringCeilingIgnoresClientSuppliedState(t *testing.T) {
-	k := newLicTestKey(t)
-	s := monServer(t, k.service(t, nil))
-	w := httptest.NewRecorder()
-	// A device with NO address cannot be collected from; claiming `monitored`
-	// must not make it so.
-	s.handleDevices(w, licReq(http.MethodPost, "/api/devices",
-		`{"id":"claimer","name":"claimer","monitored":true,"monitor_reason":"trust me"}`, licClaims()))
-	if w.Code != http.StatusCreated {
-		t.Fatalf("create = %d %s", w.Code, w.Body.String())
-	}
-	if got := s.discovery.MonitoredCount(); got != 0 {
-		t.Fatalf("monitored = %d, want 0 — monitoring is server state, never request input", got)
-	}
-	d, ok := s.discovery.Get("claimer")
-	if !ok {
-		t.Fatal("the device must exist")
-	}
-	if d.Monitored || d.MonitorReason == "trust me" {
-		t.Fatalf("the client's claim must be discarded: %+v", d)
-	}
-}
-
-// TestMonitoringPaidTierIsNotCappedAtCommunity: the Community number is never
-// applied to a licensed deployment.
-func TestMonitoringPaidTierIsNotCappedAtCommunity(t *testing.T) {
-	k := newLicTestKey(t)
-	var fleet []models.Device
-	for i := 0; i < 25; i++ {
-		fleet = append(fleet, monDeclared(i))
-	}
-	fleet = append(fleet, monDiscovered(1))
-	s := monServer(t, k.service(t, k.issue(t, entitlement.TierTeam, nil, nil)), fleet...)
-
-	if w := monSet(t, s, "scan-1", true, licClaims()); w.Code != http.StatusOK {
-		t.Fatalf("a Team licence covers 250 monitored devices: %d %s", w.Code, w.Body.String())
-	}
-	if got := s.discovery.MonitoredCount(); got != 26 {
-		t.Fatalf("monitored = %d, want 26", got)
-	}
-}
-
-// TestMonitoringConcurrentActivationsCannotExceedTheCeiling. Twenty goroutines
-// race for the last slot; exactly one may win.
-//
-// This is the failure the check-then-write shape produces: two callers both see
-// 24 of 25, both decide there is room, and the deployment ends up at 26. The
-// registry answers it by taking the capacity question and the write in one hold
-// of its lock.
-func TestMonitoringConcurrentActivationsCannotExceedTheCeiling(t *testing.T) {
-	k := newLicTestKey(t)
-	var fleet []models.Device
-	for i := 0; i < 24; i++ {
-		fleet = append(fleet, monDeclared(i))
-	}
-	const racers = 20
-	for i := 0; i < racers; i++ {
-		fleet = append(fleet, monDiscovered(i))
-	}
-	s := monServer(t, k.service(t, nil), fleet...)
-	if got := s.discovery.MonitoredCount(); got != 24 {
-		t.Fatalf("monitored = %d, want 24 (one slot left)", got)
-	}
-
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	won := 0
-	for i := 0; i < racers; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			if _, err := s.discovery.SetMonitoring("scan-"+strconv.Itoa(i), true, "racer"); err == nil {
-				mu.Lock()
-				won++
-				mu.Unlock()
-			}
-		}(i)
-	}
-	wg.Wait()
-
-	if won != 1 {
-		t.Fatalf("%d activations succeeded, want exactly 1 — the last slot may be taken once", won)
-	}
-	if got := s.discovery.MonitoredCount(); got != 25 {
-		t.Fatalf("monitored = %d, want 25 — the ceiling must hold under concurrency", got)
-	}
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Tenant isolation (CLAUDE.md §3a rule 5 — required with the feature)
-// ─────────────────────────────────────────────────────────────────────────────
-
-// TestMonitoringCrossOrgIsolation: the count is per tenant, and one tenant can
-// neither see nor change another's monitoring.
-func TestMonitoringCrossOrgIsolation(t *testing.T) {
-	k := newLicTestKey(t)
-	fleet := []models.Device{
-		{ID: "acme-1", Name: "acme-1", Address: "10.1.0.1", Source: "manual", TenantID: "acme"},
-		{ID: "acme-2", Name: "acme-2", Address: "10.1.0.2", Source: "manual", TenantID: "acme"},
-		{ID: "globex-1", Name: "globex-1", Address: "10.2.0.1", Source: "manual", TenantID: "globex"},
-		{ID: "platform-1", Name: "platform-1", Address: "10.3.0.1", Source: "manual"},
-	}
-	s := monServer(t, k.service(t, nil), fleet...)
-	acme := licTenantAdminOfClaims("acme")
-	globex := licTenantAdminOfClaims("globex")
-
-	t.Run("a tenant may read its own device", func(t *testing.T) {
-		w, v := monGet(t, s, "acme-1", acme)
-		if w.Code != http.StatusOK {
-			t.Fatalf("GET = %d %s", w.Code, w.Body.String())
-		}
-		if !v.Monitored {
-			t.Fatalf("acme-1 is a declared device and must read as monitored: %+v", v)
-		}
-	})
-
-	t.Run("another tenant's device is 404, never 403", func(t *testing.T) {
-		w, _ := monGet(t, s, "globex-1", acme)
-		if w.Code != http.StatusNotFound {
-			t.Fatalf("GET = %d, want 404 — a 403 would confirm the id exists elsewhere", w.Code)
-		}
-		if w := monSet(t, s, "globex-1", false, acme); w.Code != http.StatusNotFound {
-			t.Fatalf("PUT = %d, want 404", w.Code)
-		}
-		if !mustDevice(t, s, "globex-1").Monitored {
-			t.Fatal("a cross-tenant write must not have taken effect")
-		}
-	})
-
-	t.Run("a platform-owned device is nobody's tenant business", func(t *testing.T) {
-		if w, _ := monGet(t, s, "platform-1", acme); w.Code != http.StatusNotFound {
-			t.Fatalf("GET = %d, want 404", w.Code)
-		}
-		if w, _ := monGet(t, s, "platform-1", globex); w.Code != http.StatusNotFound {
-			t.Fatalf("GET = %d, want 404", w.Code)
-		}
-	})
-
-	t.Run("usage is counted per tenant", func(t *testing.T) {
-		u, _ := s.licenceTenantUsage(t.Context(), "acme")
-		if got := u[entitlement.CeilingDevices]; got != 2 {
-			t.Fatalf("acme counts %d monitored devices, want its own 2 — never the platform total", got)
-		}
-		u, _ = s.licenceTenantUsage(t.Context(), "globex")
-		if got := u[entitlement.CeilingDevices]; got != 1 {
-			t.Fatalf("globex counts %d, want 1", got)
-		}
-		u, _ = s.licenceTenantUsage(t.Context(), "initech")
-		if got := u[entitlement.CeilingDevices]; got != 0 {
-			t.Fatalf("a tenant with nothing counts %d, want a MEASURED zero", got)
-		}
-	})
-
-	t.Run("one tenant turning monitoring off does not move another's number", func(t *testing.T) {
-		if w := monSet(t, s, "acme-1", false, acme); w.Code != http.StatusOK {
-			t.Fatalf("PUT = %d %s", w.Code, w.Body.String())
-		}
-		u, _ := s.licenceTenantUsage(t.Context(), "acme")
-		if got := u[entitlement.CeilingDevices]; got != 1 {
-			t.Fatalf("acme = %d, want 1", got)
-		}
-		u, _ = s.licenceTenantUsage(t.Context(), "globex")
-		if got := u[entitlement.CeilingDevices]; got != 1 {
-			t.Fatalf("globex = %d, want 1 — unchanged", got)
-		}
-	})
-}
-
 func mustDevice(t *testing.T, s *server, id string) models.Device {
 	t.Helper()
 	d, ok := s.discovery.Get(id)
@@ -532,52 +103,320 @@ func mustDevice(t *testing.T, s *server, id string) models.Device {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The route itself
+// The licence count
 // ─────────────────────────────────────────────────────────────────────────────
 
-func TestMonitoringRouteContract(t *testing.T) {
+// TestScannedDevicesAreMonitoredAndCounted: a subnet scan's finds are
+// monitored and consume the licence — there is no "discovery is free" any more.
+func TestScannedDevicesAreMonitoredAndCounted(t *testing.T) {
 	k := newLicTestKey(t)
-	s := monServer(t, k.service(t, nil), monDeclared(1))
+	var fleet []models.Device
+	for i := 0; i < 12; i++ {
+		fleet = append(fleet, monScanned(i))
+	}
+	fleet = append(fleet, models.Device{ID: "noaddr", Name: "noaddr", Source: "manual"})
+	s := monServer(t, k.service(t, nil), fleet...) // Community: 25
+
+	if got := s.licenceUsage(t.Context())[entitlement.CeilingDevices]; got != 12 {
+		t.Fatalf("licence usage = %d, want the 12 addressable devices", got)
+	}
+	if mustDevice(t, s, "noaddr").Monitored {
+		t.Fatal("an addressless device is never monitored and never counted")
+	}
+}
+
+// TestCommunityCeilingCollectsTheFirst25AndListsTheRest is the owner's
+// definition of done for the hard ceiling.
+func TestCommunityCeilingCollectsTheFirst25AndListsTheRest(t *testing.T) {
+	k := newLicTestKey(t)
+	var fleet []models.Device
+	for i := 0; i < 37; i++ {
+		fleet = append(fleet, monScanned(i))
+	}
+	s := monServer(t, k.service(t, nil), fleet...) // Community: 25, hard
+
+	if got := len(s.discovery.Devices()); got != 37 {
+		t.Fatalf("inventory = %d, want 37 — nothing is dropped", got)
+	}
+	if got := s.licenceUsage(t.Context())[entitlement.CeilingDevices]; got != 37 {
+		t.Fatalf("licence usage = %d, want 37 — the bar counts every addressable device, collected or not", got)
+	}
+	if got := s.discovery.MonitoredCount(); got != 25 {
+		t.Fatalf("collected = %d, want the first 25", got)
+	}
+	if got := s.discovery.MonitoringWithheldCount(); got != 12 {
+		t.Fatalf("over the limit = %d, want 12", got)
+	}
+	// Seeded in order, so the first 25 seen are scan-0..scan-24.
+	for i := 0; i < 37; i++ {
+		d := mustDevice(t, s, "scan-"+strconv.Itoa(i))
+		if want := i < 25; d.Monitored != want {
+			t.Fatalf("scan-%d monitored = %v, want %v (first-seen order)", i, d.Monitored, want)
+		}
+		if i >= 25 && (d.MonitorState != devmon.StateOverLimit || d.MonitorLimit != 25) {
+			t.Fatalf("scan-%d must be marked over the limit of 25: %+v", i, d)
+		}
+	}
+	note := s.licenceUsageNotes(t.Context())[entitlement.CeilingDevices]
+	if !strings.Contains(note, "12 more device(s)") || !strings.Contains(note, "licence limit of 25") {
+		t.Fatalf("the licence page must say how many are not monitored and why: %q", note)
+	}
+
+	t.Run("a create past the ceiling is stored, never refused", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		s.handleDevices(w, licReq(http.MethodPost, "/api/devices",
+			`{"id":"late","name":"late","address":"10.99.0.1"}`, licClaims()))
+		if w.Code != http.StatusCreated {
+			t.Fatalf("POST = %d %s — the licence never refuses a device", w.Code, w.Body.String())
+		}
+		var got models.Device
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Monitored || got.MonitorState != devmon.StateOverLimit {
+			t.Fatalf("the create must report the truth — over the limit: %+v", got)
+		}
+	})
+
+	t.Run("deleting a monitored device promotes the next one", func(t *testing.T) {
+		if err := s.discovery.Delete("scan-0"); err != nil {
+			t.Fatal(err)
+		}
+		if !mustDevice(t, s, "scan-25").Monitored {
+			t.Fatal("scan-25 is next in first-seen order and must now be collected from")
+		}
+		if got := s.discovery.MonitoredCount(); got != 25 {
+			t.Fatalf("collected = %d, want 25", got)
+		}
+	})
+}
+
+// TestLicenceGrowthPromotesAndSoftTiersCutNothing: installing a bigger licence
+// starts collection on the waiting devices with no operator action, and on a
+// paid (soft) tier nothing is cut at all — the excess is recorded for true-up.
+func TestLicenceGrowthPromotesAndSoftTiersCutNothing(t *testing.T) {
+	k := newLicTestKey(t)
+	var fleet []models.Device
+	for i := 0; i < 30; i++ {
+		fleet = append(fleet, monScanned(i))
+	}
+	team := k.service(t, k.issue(t, entitlement.TierTeam, nil, func(c *entitlement.Ceilings) { c.Devices = 20 }))
+	s := monServer(t, team, fleet...)
+	if got := s.discovery.MonitoredCount(); got != 30 {
+		t.Fatalf("Team is a SOFT ceiling: monitored = %d, want all 30", got)
+	}
+	if got := s.discovery.MonitoringWithheldCount(); got != 0 {
+		t.Fatalf("a soft ceiling withholds nothing, got %d", got)
+	}
+	if rows := s.licenceOverCeilingDevices(t.Context()); len(rows) != 10 {
+		t.Fatalf("the 10 above the allowance are listed for true-up, got %d", len(rows))
+	}
+
+	// The same fleet under Community (hard 25), then a licence lifting it.
+	community := monServer(t, k.service(t, nil), fleet...)
+	if got := community.discovery.MonitoredCount(); got != 25 {
+		t.Fatalf("precondition: Community collects 25, got %d", got)
+	}
+	community.entitlements = k.service(t, k.issue(t, entitlement.TierEnterprise, nil, nil))
+	if got := community.discovery.MonitoredCount(); got != 30 {
+		t.Fatalf("a licence that grows promotes the waiting devices at once: %d, want 30", got)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The status route
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestMonitoringStatusIsHonestAboutCollectors(t *testing.T) {
+	k := newLicTestKey(t)
+	s := monServer(t, k.service(t, nil), monScanned(1))
+
+	t.Run("monitored, but no collector for its methods is running", func(t *testing.T) {
+		// s.collectors is nil here: nothing is enabled.
+		w, v := monGet(t, s, "scan-1", licClaims())
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET = %d %s", w.Code, w.Body.String())
+		}
+		if !v.Monitored || v.Collecting {
+			t.Fatalf("monitored but not collecting, got %+v", v)
+		}
+		if !strings.Contains(v.Reason, "no collector for snmp is enabled") {
+			t.Fatalf("the status must say nothing is collected: %q", v.Reason)
+		}
+	})
+
+	t.Run("monitored and its collector is running", func(t *testing.T) {
+		pool := collectors.NewPool(func() []collectors.Target { return nil })
+		pool.Enable("snmpv2c", true)
+		s.collectors = pool
+		s.devmonAPI = devmon.New(s.devmonDeps())
+		_, v := monGet(t, s, "scan-1", licClaims())
+		if !v.Collecting || len(v.CollectingMethods) != 1 || v.CollectingMethods[0] != devmon.MethodSNMP {
+			t.Fatalf("SNMP collection is on: %+v", v)
+		}
+	})
+
+	t.Run("there is no switch", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		s.handleDeviceByID(w, licReq(http.MethodPut, "/api/devices/scan-1/monitoring", `{"enabled":false}`, licClaims()))
+		if w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != http.MethodGet {
+			t.Fatalf("PUT = %d Allow=%q, want 405 GET", w.Code, w.Header().Get("Allow"))
+		}
+		if !mustDevice(t, s, "scan-1").Monitored {
+			t.Fatal("nothing may have changed")
+		}
+	})
 
 	t.Run("an unknown device is 404", func(t *testing.T) {
 		if w, _ := monGet(t, s, "nope", licClaims()); w.Code != http.StatusNotFound {
 			t.Fatalf("GET = %d, want 404", w.Code)
 		}
 	})
+}
 
-	t.Run("a body without a decision is refused", func(t *testing.T) {
-		w := httptest.NewRecorder()
-		s.handleDeviceByID(w, licReq(http.MethodPut, "/api/devices/dev-1/monitoring", `{}`, licClaims()))
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("PUT {} = %d, want 400 — a missing field must never be read as 'stop collecting'", w.Code)
+// ─────────────────────────────────────────────────────────────────────────────
+// Tenant isolation (CLAUDE.md §3a rule 5 — required with the feature)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestMonitoringCrossOrgIsolation runs through the REAL router and auth
+// middleware with two orgs, one tenant and one tenant-scoped operator each,
+// under a platform-wide ceiling that leaves devices of BOTH tenants over the
+// limit. It asserts own-only lists and counts, cross-tenant get/delete → 404,
+// and that ?as_tenant into the other org is ignored.
+func TestMonitoringCrossOrgIsolation(t *testing.T) {
+	srv, s := newTestServerState(t)
+	s.devmonAPI = devmon.New(s.devmonDeps())
+	// Platform-wide ceiling of 2: the first two devices created are monitored.
+	s.discovery.SetMonitorLimit(func() int { return 2 })
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+
+	type org struct{ tenantID, token string }
+	orgs := map[string]*org{}
+	for _, name := range []string{"A", "B"} {
+		st, b := do(t, srv, "POST", "/api/orgs", admin, map[string]any{"name": "Org " + name})
+		if st != 201 {
+			t.Fatalf("create org %s: %d %s", name, st, b)
 		}
-		if !mustDevice(t, s, "dev-1").Monitored {
-			t.Fatal("the device must still be monitored")
+		orgID := idOf(t, b)
+		st, b = do(t, srv, "POST", "/api/tenants", admin, map[string]any{"name": "Tenant " + name, "org_id": orgID})
+		if st != 201 {
+			t.Fatalf("create tenant %s: %d %s", name, st, b)
+		}
+		tenantID := idOf(t, b)
+		user := "mon-user-" + name
+		st, b = do(t, srv, "POST", "/api/users", admin, map[string]any{
+			"username": user, "password": "Passw0rd!2345", "role": "operator", "tenant_id": tenantID,
+		})
+		if st != 201 {
+			t.Fatalf("create user %s: %d %s", name, st, b)
+		}
+		orgs[name] = &org{tenantID: tenantID, token: login(t, srv, user, "Passw0rd!2345").Token}
+	}
+	a, b := orgs["A"], orgs["B"]
+
+	// Interleaved creates: a-1, b-1 take the two slots; a-2, b-2 are over.
+	// Each create carries the OTHER tenant in its body, which must be ignored.
+	create := func(o *org, other *org, id, addr string) {
+		t.Helper()
+		st, body := do(t, srv, "POST", "/api/devices", o.token, map[string]any{
+			"id": id, "name": id, "address": addr, "tenant_id": other.tenantID,
+		})
+		if st != 201 {
+			t.Fatalf("create %s: %d %s", id, st, body)
+		}
+	}
+	create(a, b, "a-1", "10.1.0.1")
+	create(b, a, "b-1", "10.2.0.1")
+	create(a, b, "a-2", "10.1.0.2")
+	create(b, a, "b-2", "10.2.0.2")
+
+	list := func(o *org, asTenant string) map[string]models.Device {
+		t.Helper()
+		path := "/api/devices"
+		if asTenant != "" {
+			path += "?as_tenant=" + asTenant
+		}
+		st, body := do(t, srv, "GET", path, o.token, nil)
+		if st != 200 {
+			t.Fatalf("GET %s: %d %s", path, st, body)
+		}
+		var devs []models.Device
+		if err := json.Unmarshal(body, &devs); err != nil {
+			t.Fatalf("decode devices: %v (%s)", err, body)
+		}
+		out := map[string]models.Device{}
+		for _, d := range devs {
+			out[d.ID] = d
+		}
+		return out
+	}
+
+	t.Run("own-only device list, with own over-limit rows only", func(t *testing.T) {
+		got := list(a, "")
+		if len(got) != 2 || got["a-1"].ID == "" || got["a-2"].ID == "" {
+			t.Fatalf("A sees %v, want exactly a-1, a-2", got)
+		}
+		if !got["a-1"].Monitored || got["a-2"].MonitorState != devmon.StateOverLimit {
+			t.Fatalf("A's states: %+v", got)
+		}
+		if got["a-1"].TenantID != a.tenantID {
+			t.Fatalf("the owner is stamped from the token, never the body: %q", got["a-1"].TenantID)
+		}
+		over := s.discovery.MonitoringWithheldFor(a.tenantID, false)
+		if len(over) != 1 || over[0].DeviceID != "a-2" {
+			t.Fatalf("A's over-limit list = %+v, want only a-2", over)
 		}
 	})
 
-	t.Run("only GET and PUT", func(t *testing.T) {
-		w := httptest.NewRecorder()
-		s.handleDeviceByID(w, licReq(http.MethodDelete, "/api/devices/dev-1/monitoring", "", licClaims()))
-		if w.Code != http.StatusMethodNotAllowed {
-			t.Fatalf("DELETE = %d, want 405", w.Code)
+	t.Run("?as_tenant into the other org is ignored", func(t *testing.T) {
+		got := list(a, b.tenantID)
+		if _, leaked := got["b-1"]; leaked || len(got) != 2 {
+			t.Fatalf("A with ?as_tenant=B sees %v, want only its own", got)
 		}
-		if got := w.Header().Get("Allow"); got != "GET, PUT" {
-			t.Fatalf("Allow = %q", got)
+		st, _ := do(t, srv, "GET", "/api/devices/b-1/monitoring?as_tenant="+b.tenantID, a.token, nil)
+		if st != 404 {
+			t.Fatalf("A reading B's monitoring status via ?as_tenant: %d, want 404", st)
 		}
 	})
 
-	t.Run("the decision is recorded with who made it", func(t *testing.T) {
-		monMustSet(t, s, "dev-1", false)
-		_, v := monGet(t, s, "dev-1", licClaims())
-		if !v.Decided {
-			t.Fatal("an explicit decision must be reported as one, not as a default")
+	t.Run("cross-tenant status, delete and switch attempts are refused", func(t *testing.T) {
+		if st, _ := do(t, srv, "GET", "/api/devices/b-2/monitoring", a.token, nil); st != 404 {
+			t.Fatalf("A GET B's status: %d, want 404", st)
 		}
-		if v.DecidedBy == "" || v.DecidedAt.IsZero() {
-			t.Fatalf("the decision must carry its author and time: %+v", v)
+		if st, body := do(t, srv, "GET", "/api/devices/a-2/monitoring", a.token, nil); st != 200 ||
+			!strings.Contains(string(body), devmon.StateOverLimit) {
+			t.Fatalf("A GET own over-limit status: %d %s", st, body)
 		}
-		if v.Monitored {
-			t.Fatal("the device must read as not monitored")
+		if st, _ := do(t, srv, "DELETE", "/api/devices/b-1", a.token, nil); st != 404 {
+			t.Fatalf("A DELETE B's device: %d, want 404", st)
+		}
+		if st, _ := do(t, srv, "PUT", "/api/devices/b-1/monitoring", a.token, map[string]any{"enabled": false}); st == 200 {
+			t.Fatal("there is no monitoring write, for anyone")
+		}
+		if got := list(b, ""); !got["b-1"].Monitored {
+			t.Fatalf("B's device must be untouched: %+v", got["b-1"])
+		}
+	})
+
+	t.Run("per-tenant counts never include the other tenant", func(t *testing.T) {
+		ua, _ := s.licenceTenantUsage(t.Context(), a.tenantID)
+		ub, _ := s.licenceTenantUsage(t.Context(), b.tenantID)
+		if ua[entitlement.CeilingDevices] != 2 || ub[entitlement.CeilingDevices] != 2 {
+			t.Fatalf("each tenant counts only its own two addressable devices: A=%d B=%d",
+				ua[entitlement.CeilingDevices], ub[entitlement.CeilingDevices])
+		}
+	})
+
+	t.Run("a freed slot goes to the next device in platform first-seen order", func(t *testing.T) {
+		if st, body := do(t, srv, "DELETE", "/api/devices/a-1", a.token, nil); st != 204 && st != 200 {
+			t.Fatalf("A DELETE own device: %d %s", st, body)
+		}
+		// a-2 was seen before b-2, so it is next in line.
+		if !list(a, "")["a-2"].Monitored {
+			t.Fatal("a-2 is next in first-seen order")
+		}
+		if list(b, "")["b-2"].Monitored {
+			t.Fatal("b-2 is still over the limit")
 		}
 	})
 }

@@ -3,8 +3,8 @@ topic: devices.allowance
 question: How is the monitored-device allowance counted?
 keywords: monitored device allowance, device overage, licence ceiling
 ---
-Your licence counts monitored devices, not discovered ones, so discovery never
-consumes allowance. A soft allowance warns and keeps collecting; a hard
-ceiling refuses to switch on further devices. Turn monitoring off where it is
-not needed, or raise the entitlement, and the warning clears at the next
-check. The Licence page shows the entitlement and the current count.
+Your licence counts every device in the inventory that has an address,
+including devices discovery found. A soft allowance (paid tiers) keeps
+collecting from all of them and records the overage. A hard limit (Community)
+collects from the first devices found and marks the rest over the licence
+limit. Delete devices you do not need, narrow discovery, or raise the licence.
