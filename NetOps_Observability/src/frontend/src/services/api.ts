@@ -1968,6 +1968,43 @@ export interface IrisQueryList {
   retention_days: number;
   kinds: IrisCorrectionKind[];
 }
+// Decision ledger (tracker 337 N-A6): one step of one Iris decision. Hashes
+// only — the ledger never holds the question, the data or the answer text.
+export type AiDecisionEventType =
+  | "QUESTION_RECEIVED" | "INVESTIGATION_STARTED" | "PLAN_CREATED" | "TOOL_SELECTED" | "TOOL_EXECUTED"
+  | "EVIDENCE_ADDED" | "HYPOTHESIS_CREATED" | "HYPOTHESIS_REJECTED" | "ROOT_CAUSE_SELECTED"
+  | "RECOMMENDATION_CREATED" | "ACTION_REQUESTED" | "POLICY_EVALUATED" | "APPROVAL_RECEIVED"
+  | "EXECUTION_STARTED" | "VERIFICATION_COMPLETED" | "ROLLBACK_EXECUTED" | "ANSWER_RETURNED";
+export interface AiDecisionEntry {
+  tenant?: string; // only on the platform owner's all-tenants view
+  id: string;
+  decision_id: string;
+  seq: number;
+  event_type: AiDecisionEventType;
+  principal: string;
+  surface: string;
+  at: string;
+  incident_ref?: string;
+  intent?: string;
+  mode?: string;
+  skill?: string;
+  tool?: string;
+  tool_version?: string;
+  model_provider?: string;
+  model_name?: string;
+  model_tier?: string;
+  args_sha256?: string;
+  result_sha256?: string;
+  item_count?: number;
+  outcome?: string;
+  answer_id?: string;
+  query_log_id?: string;
+}
+export interface AiDecisionList {
+  decisions: AiDecisionEntry[] | null;
+  scope: "tenant" | "platform";
+  event_types: AiDecisionEventType[];
+}
 export interface IrisTurn {
   at: string;
   question: string;
@@ -6181,6 +6218,16 @@ export const api = {
     request<IrisQueryList>(`/api/ai/queries?scope=${scope}&limit=${limit}`),
   correctIrisQuery: (id: string, body: { kind: IrisCorrectionKind; note?: string; ast?: Record<string, unknown> }) =>
     request<IrisQueryRecord>(`/api/ai/queries/${encodeURIComponent(id)}/corrections`, { method: "POST", body: JSON.stringify(body) }),
+  // Decision ledger (N-A6): how each Iris answer was reached — workspace
+  // admins see their workspace's, the platform owner every workspace's. One
+  // decision's steps in order when `decisionId` is given, else newest first.
+  aiDecisions: (opts: { decisionId?: string; limit?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.decisionId) p.set("decision_id", opts.decisionId);
+    if (opts.limit) p.set("limit", String(opts.limit));
+    const q = p.toString();
+    return request<AiDecisionList>(`/api/ai/decisions${q ? `?${q}` : ""}`);
+  },
 
   // Native metrics (Prometheus-compatible API via the Go proxy).
   metricNames: () => request<PromNamesResponse>("/api/metrics/names"),
@@ -9936,6 +9983,9 @@ export type AiAnswer = {
   // backend that does not stamp one leaves the server to fall back to the
   // principal's most recent conclusion.
   answer_id?: string;
+  // Decision ledger (N-A6): the ledger record of how this answer was reached.
+  // Absent when the ledger is off or its write failed — never a dangling id.
+  decision_id?: string;
   // IRIS Phase A — the answering skill's identity. Optional: a backend that
   // does not send it renders no skill chip (never an invented one).
   skill?: AiSkill;

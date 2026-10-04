@@ -24,6 +24,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -45,6 +46,23 @@ func ledgerFixture(t *testing.T) (*server, jwtClaims, jwtClaims) {
 	}
 	s.audit = au
 	return s, a, b
+}
+
+// askIrisRaw is askIris returning the response body exactly as written.
+func askIrisRaw(t *testing.T, s *server, c jwtClaims, question string) []byte {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"question": question})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/api/ai/ask", strings.NewReader(string(body)))
+	r = r.WithContext(context.WithValue(r.Context(), userCtxKey, c))
+	w := httptest.NewRecorder()
+	s.handleAIAsk(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ask %q: %d %s", question, w.Code, w.Body.String())
+	}
+	return w.Body.Bytes()
 }
 
 func ledgerCall(t *testing.T, s *server, c jwtClaims, query string) (int, map[string]any) {
@@ -80,7 +98,11 @@ func sha256hex(b []byte) string {
 func TestAskIsOneLedgeredDecision(t *testing.T) {
 	s, a, _ := ledgerFixture(t)
 	const question = "show cpu on edge-a for the last hour"
-	out := askIris(t, s, a, question)
+	rawBody := askIrisRaw(t, s, a, question)
+	var out map[string]any
+	if err := json.Unmarshal(rawBody, &out); err != nil {
+		t.Fatal(err)
+	}
 	id, _ := out["decision_id"].(string)
 	if !aidecision.ValidID(id) {
 		t.Fatalf("the answer must name its decision: %v", out)
@@ -124,14 +146,18 @@ func TestAskIsOneLedgeredDecision(t *testing.T) {
 		final["model_tier"] == nil {
 		t.Errorf("ANSWER_RETURNED: %v", final)
 	}
-	// The answer hash is of the answer exactly as returned, minus its own id.
+	// The answer hash is of the answer exactly as returned, minus its own id:
+	// decode the response body into the typed answer (json.RawMessage keeps the
+	// data payload byte for byte), clear the id, re-encode.
 	var ans ai.Answer
-	raw, _ := json.Marshal(out)
-	if err := json.Unmarshal(raw, &ans); err != nil {
+	if err := json.Unmarshal(rawBody, &ans); err != nil {
 		t.Fatal(err)
 	}
 	ans.DecisionID = ""
-	body, _ := json.Marshal(ans)
+	body, err := json.Marshal(ans)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if final["result_sha256"] != sha256hex(body) {
 		t.Errorf("ANSWER_RETURNED hash does not match the answer returned")
 	}
@@ -219,7 +245,7 @@ func TestDecisionLedgerIsolation(t *testing.T) {
 func TestDecisionLedgerRequestBounds(t *testing.T) {
 	s, a, _ := ledgerFixture(t)
 	for name, q := range map[string]string{
-		"bad id":     "?decision_id=x' OR 1=1",
+		"bad id":     "?decision_id=" + url.QueryEscape("x' OR 1=1"),
 		"limit 0":    "?limit=0",
 		"limit huge": "?limit=100000",
 		"bad before": "?before=yesterday",

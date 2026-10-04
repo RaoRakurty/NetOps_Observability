@@ -31,7 +31,9 @@ func HashToolArgs(args ToolArgs) string {
 
 // toolResultFingerprint is the hashed view of a result: everything the tool
 // returned that the answer could have used — items, the truncation flag, notes
-// and signals — in a fixed field order.
+// and signals — in a fixed field order. It mirrors ToolResult field for field
+// and is built by CONVERSION, so a field added to ToolResult is a compile error
+// here until someone decides whether the ledger hashes it.
 type toolResultFingerprint struct {
 	Items     []EvidenceItem `json:"items"`
 	Truncated bool           `json:"truncated"`
@@ -41,7 +43,7 @@ type toolResultFingerprint struct {
 
 // HashToolResult is SHA-256 (lowercase hex) of the result's canonical JSON.
 func HashToolResult(res ToolResult) string {
-	fp := toolResultFingerprint{Items: res.Items, Truncated: res.Truncated, Notes: res.Notes, Signals: res.Signals}
+	fp := toolResultFingerprint(res)
 	if fp.Items == nil {
 		fp.Items = []EvidenceItem{}
 	}

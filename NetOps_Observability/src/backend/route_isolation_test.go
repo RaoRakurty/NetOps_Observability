@@ -87,7 +87,7 @@ var routeIsolationLedger = map[string]string{
 	// tenant only — another tenant's decision id lists nothing, as_tenant is
 	// ignored) or the platform owner (all). ai_decision_ledger_isolation_test.go.
 	"/api/ai/decisions": "scoped",
-	"/api/alerts":      "scoped",
+	"/api/alerts":       "scoped",
 	// BGP Operations (item 10): the watchlist is per-tenant DATA (the prefixes/
 	// ASNs a tenant watches), owner stamped from the RLS GUC, cross-org
 	// isolation proven by TestBGPWatchlistTenantIsolationPG. The resource proxy
