@@ -72,8 +72,7 @@
         "contradicting evidence present: probe loss",
         "single evidence stream cannot confirm"
       ]
-    },
-    "expected_failure": "F7 — the verdict-honesty hedge list (verify.go certaintyHedges) contains the word 'hypothesis', and every engine-hypothesis citation id the explain path hands the model is 'hypothesis:<id>:<n>' (RankedHypothesisItems). The hedge regex runs over the whole sentence INCLUDING its bracketed citation, so any overclaiming sentence that cites the engine's own hypothesis evidence — the most natural citation on this path — is exempted: 'X is confirmed as the cause [hypothesis:ce01eeee:0]' ships under a suspected verdict. Citation ids should be removed before the hedge test."
+    }
   },
   {
     "id": "ce-contradicted-overclaim-without-hypothesis-cite",

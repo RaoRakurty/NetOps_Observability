@@ -167,8 +167,12 @@ var (
 // hedging it. Case-insensitive; the hedge exemption is scoped to the same
 // sentence so "X is confirmed" in one sentence is not excused by "possibly" in
 // another.
+//
+// The test reads the PROSE: bracketed citation ids are stripped first, because
+// an id such as "hypothesis:ab12:0" contains the hedge word "hypothesis" and
+// would otherwise exempt every overclaim that cites the engine's own evidence.
 func overclaims(sentence string) bool {
-	low := strings.ToLower(sentence)
+	low := strings.ToLower(stripCitations(sentence))
 	if certaintyHedges.MatchString(low) {
 		return false
 	}

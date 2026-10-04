@@ -77,7 +77,6 @@
     "expect": {
       "required_citations": ["problem:df04ffff-0000-4000-8000-000000000034", "problem:df05ffff-0000-4000-8000-000000000035"],
       "forbidden_claims": ["root cause is the optic failure", "was caused by it"]
-    },
-    "expected_failure": "F5 — answerCurrentState (orchestrator.go) narrates over incidents that are each suspected/undetermined but applies only verifyNarrative; it never runs the verdict-honesty gate, so the briefing headline can assert a root cause and merge two independent unconfirmed incidents into one causal chain."
+    }
   }
 ]

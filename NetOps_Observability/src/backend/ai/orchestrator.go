@@ -580,6 +580,10 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 	tb := o.Toolbox()
 	args := ToolArgs{"problem_id": id}
 	var bundle []EvidenceItem
+	// Statement classes (N-B4): every item is stamped with the class of the
+	// tool that produced it; the engine's verdict for THIS problem is the
+	// turn's verdict, and an incident is in scope by construction.
+	sc := &statementContext{verdict: strings.ToLower(strings.TrimSpace(pr.Verdict)), incident: true}
 	for _, name := range plan.Tools {
 		tool, d, ok := tb.Authorize(name, p)
 		if !ok {
@@ -599,6 +603,9 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 		o.auditTool(name, args, true, "ok", &res, time.Since(started))
 		bundle = append(bundle, res.Items...)
 		disc = append(disc, res.Notes...)
+		for _, ev := range res.Items {
+			sc.stamp(ev, name)
+		}
 	}
 
 	// Response-Quality layer (spec §8-15): NOC-friendly, deterministic structured
@@ -614,9 +621,11 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 	// general guidance, not evidence about this network).
 	for _, hit := range o.kbFor(pr) {
 		disc = append(disc, "Referenced general playbook: "+hit.Playbook.Title+" (guidance, not evidence).")
+		sc.docsInTurn = true
 	}
 	for _, h := range o.tacForProblem(pr) {
 		disc = append(disc, "Referenced vendor TAC knowledge: "+h.Title+" (guidance, not evidence).")
+		sc.docsInTurn = true
 	}
 
 	pe := &ProblemExplanation{
@@ -638,6 +647,7 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 	// choice — the policy is stated once and the mechanism reads it.
 	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeProblemExplanation).Tier, system, []LLMMessage{{Role: "user", Content: user}}, false)
 	evidenceOnly := false
+	var statements []Statement
 	if lerr != nil || strings.TrimSpace(text) == "" {
 		text = o.deterministicProblemSummary(pr, missing, owner)
 		provider = "none"
@@ -653,22 +663,35 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 		// narrative may not assert an established cause the engine did not
 		// establish. Deterministic — the verdict-conditional prompt above ASKS
 		// for hedged wording, this enforces it. The evidence-only summary is
-		// the fallback when nothing honest survives.
-		text, badges, disc = o.enforceVerdictHonesty(text, pr.Verdict,
-			o.deterministicProblemSummary(pr, missing, owner), badges, disc)
+		// the fallback when nothing honest survives. Statement classes (N-B4)
+		// run with it: a change named as the cause is reworded, a cause that
+		// is not the engine's OWN confirmed cause is removed even under a
+		// confirmed verdict, and every sentence is classified.
+		var sts []Statement
+		text, sts, badges, disc = o.applyStatementClasses(text,
+			o.deterministicProblemSummary(pr, missing, owner), ClassCorrelixRCA, sc, badges, disc)
+		statements = sts
+	} else {
+		statements = serverStatements(text, ClassCorrelixRCA, "", sc)
 	}
 	// Engine voice contract (v1 NOC catalog): when the matched signature carries
 	// owner-approved fault-family wording, LEAD with it — the AI narrates the
 	// engine's phrase, on both the model and evidence-only paths.
 	if pr.OperatorPhrase != "" && !strings.Contains(text, pr.OperatorPhrase) {
-		text = pr.OperatorPhrase + " " + strings.TrimSpace(text)
+		statements = append(serverStatements(strings.TrimSpace(pr.OperatorPhrase)+" ", ClassCorrelixRCA,
+			"Correlix's own wording for this fault.", nil), statements...)
 	}
 	// Preface with the "why this is the top incident" reasons (spec §4) so they
 	// show regardless of provider.
 	if len(whyFirst) > 0 {
-		text = "This is the top incident to work first. " + strings.TrimSpace(text)
+		statements = append(serverStatements("This is the top incident to work first. ", ClassCorrelixRCA,
+			"Correlix's priority ranking.", nil), statements...)
 	}
-	pe.Summary = Scrub(strings.TrimSpace(text))
+	for i := range statements {
+		statements[i].Text = Scrub(statements[i].Text)
+	}
+	statements = trimStatements(statements)
+	pe.Summary = joinStatements(statements)
 	pe.WhyFirst = whyFirst
 
 	// Status/evidence-strength badges (spec §19) — small, not the main answer.
@@ -682,7 +705,7 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 
 	cites := make([]Citation, 0, len(bundle))
 	for _, ev := range bundle {
-		cites = append(cites, Citation{ID: ev.CitationID, Kind: ev.Kind, Label: ev.Text, Href: ev.Href})
+		cites = append(cites, Citation{ID: ev.CitationID, Kind: ev.Kind, Label: ev.Text, Href: ev.Href, Class: sc.classOf(ev.CitationID)})
 	}
 
 	return Answer{
@@ -691,6 +714,7 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 		Status: status, ConfidenceLabel: confLabel, RecommendedOwner: owner,
 		NextActions: nextActions, MissingEvidence: missing,
 		ModeBadges: sortedUnique(badges), EvidenceOnly: evidenceOnly, ProviderNote: providerNote,
+		Statements: statements,
 	}, nil
 }
 
@@ -767,6 +791,9 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 	// List ONLY the actionable incidents (confirmed+suspected), ranked, capped —
 	// not a dump of every low-evidence undetermined item. Undetermined → watch note.
 	var cites []Citation
+	// Statement classes (N-B4): each listed incident is the engine's own
+	// conclusion for THAT incident, under that incident's verdict.
+	sc := &statementContext{perIncident: true}
 	for _, pr := range ranked {
 		if cs.ActionableCount > 0 && strings.EqualFold(pr.Verdict, "undetermined") {
 			continue // grouped into the watch note instead
@@ -777,7 +804,8 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 		cl := ConfidenceLabel(pr.Confidence, pr.Verdict)
 		line := fmt.Sprintf("%s — %s (%s, %s)", pr.Display(), pr.Title, StatusLabel(pr.Verdict), strings.ToLower(cl))
 		cs.ActiveIncidents = append(cs.ActiveIncidents, line)
-		cites = append(cites, Citation{ID: "problem:" + pr.ID, Kind: "finding", Label: line, Href: "#/monitoring/correlations?id=" + pr.ID})
+		cites = append(cites, Citation{ID: "problem:" + pr.ID, Kind: "finding", Label: line, Href: "#/monitoring/correlations?id=" + pr.ID, Class: ClassCorrelixRCA})
+		sc.stampIncident("problem:"+pr.ID, pr.ID, pr.Verdict, line)
 	}
 	if cs.Undetermined > 0 {
 		cs.WatchNote = fmt.Sprintf("%s active. Most are low-evidence patterns — treat as watch items unless they gain supporting evidence or map to service impact.",
@@ -796,18 +824,29 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 	// §10 model router: a grounded headline over an already-ranked structure is
 	// the FAST tier's work — RouteFor says so, this reads it.
 	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeCurrentStateSummary).Tier, system, []LLMMessage{{Role: "user", Content: user}}, false)
+	var statements []Statement
 	if lerr != nil || strings.TrimSpace(text) == "" {
 		text = o.deterministicStateSummary(cs)
 		provider = "none"
 		evidenceOnly = true
 		badges = append(badges, FallbackBadges(false)...)
 		providerNote = ProviderFallbackNote(false)
+		statements = serverStatements(text, ClassCorrelixRCA, "", sc)
 	} else {
 		// Unsupported-claim guard (§11/§16) — verify the model didn't cite an id
 		// that isn't among this answer's citations.
 		text, badges, disc = o.verifyNarrative(text, citationRefIDs(cites), badges, disc)
+		// Statement classes (N-B4): a cause may be stated only for an incident
+		// whose engine verdict is confirmed, and only as that incident's own
+		// cause — never one cause merged across separate incidents.
+		_, statements, badges, disc = o.applyStatementClasses(text, o.deterministicStateSummary(cs),
+			ClassCorrelixRCA, sc, badges, disc)
 	}
-	cs.Summary = Scrub(strings.TrimSpace(text))
+	for i := range statements {
+		statements[i].Text = Scrub(statements[i].Text)
+	}
+	statements = trimStatements(statements)
+	cs.Summary = joinStatements(statements)
 
 	// NO card-level status badge: the focus status lives in cs.FocusStatus and is
 	// rendered inside the Recommended-focus section, so the card never labels the
@@ -821,6 +860,7 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 		Title: cs.Title, Text: cs.Summary, CurrentState: cs, Citations: cites, Disclaimers: dedupeLines(disc), Provider: provider,
 		RecommendedOwner: focusOwner, Counts: &counts,
 		NextActions: nextActions, ModeBadges: sortedUnique(badges), EvidenceOnly: evidenceOnly, ProviderNote: providerNote,
+		Statements: statements,
 	}, nil
 }
 

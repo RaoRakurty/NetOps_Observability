@@ -2115,6 +2115,7 @@ func projectRCAReport(rep rca.Report) ai.RCAResult {
 			Basis: st.EpistemicBasis, Interval: st.Interval,
 			Evidence:       clipStrings(st.Evidence, ai.MaxRCAEvidenceLines, &trunc),
 			Contradictions: clipStrings(st.Contradictions, ai.MaxRCAEvidenceLines, &trunc),
+			Kinds:          clipStrings(st.Kinds, ai.MaxRCAEvidenceLines, &trunc),
 		})
 	}
 	for i, h := range rep.Hypotheses {

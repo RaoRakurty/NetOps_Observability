@@ -314,6 +314,12 @@ func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwt
 		}
 	}
 	text := ai.StripFabricatedDocRefs(res.Text, docRefs)
+	statements := res.Statements
+	if text != res.Text {
+		// The doc-ref strip changed the prose after it was classified: the
+		// statements no longer spell it, so the UI shows the plain text.
+		statements = nil
+	}
 	// Grounded only if the loop ACTUALLY investigated. A turn where the model
 	// declined every tool and simply talked is a plain completion wearing the
 	// agent loop's clothes; it must not claim to be anything else.
@@ -322,6 +328,7 @@ func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwt
 		"lookups": res.Lookups, "investigated": len(res.Lookups),
 		"citations": evCites, "truncated": res.Truncated,
 		"is_grounded": len(res.Lookups) > 0,
+		"statements":  statements, "disclaimers": res.Disclaimers,
 	})
 	return true
 }

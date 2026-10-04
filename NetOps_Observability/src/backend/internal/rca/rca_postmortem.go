@@ -73,6 +73,13 @@ type rcaCausalStep struct {
 	Evidence       []string `json:"evidence,omitempty"`
 	EvidenceIDs    []string `json:"evidence_ids,omitempty"`
 	Contradictions []string `json:"contradictions,omitempty"`
+	// Kinds are the engine observation kinds that actually carried evidence
+	// for this step ("config_change", "bgp_session_down", …), in the step's
+	// declared order. A declared kind with no observation in the window is
+	// NOT listed — this is what the step saw, not what it could have seen.
+	// Additive (tracker 337 N-B4): Iris reads it to tell a change that is IN
+	// the causal chain from one that merely happened around the incident.
+	Kinds []string `json:"kinds,omitempty"`
 }
 
 // rcaCausalBranch is one alternative hypothesis, rendered as a branch off the
@@ -186,6 +193,7 @@ func buildCausalChainView(hb rcaHypBlob, hyps []rcaHypothesis, anomalous []map[s
 			if ev == nil {
 				continue
 			}
+			step.Kinds = append(step.Kinds, k)
 			total += ev.n
 			label := noclabel.Kind(k)
 			if len(ev.observers) > 1 {

@@ -126,6 +126,10 @@ type RCACausalLink struct {
 	Link           string   `json:"link,omitempty"` // "followed by" etc. — temporal language only
 	Evidence       []string `json:"evidence,omitempty"`
 	Contradictions []string `json:"contradictions,omitempty"`
+	// Kinds are the engine observation kinds that carried evidence for this
+	// step (only kinds that had observations). Iris reads them to place a
+	// change relative to the chain (statement_class.go, R5).
+	Kinds []string `json:"kinds,omitempty"`
 }
 
 // RCAHypothesis is one ranked candidate with the evidence for AND against it.
@@ -354,7 +358,15 @@ func projectConfidence(res RCAResult, tr *ToolResult) {
 		if len(h.Missing) > 0 {
 			text += "; MISSING: " + strings.Join(h.Missing, "; ")
 		}
-		tr.Items = append(tr.Items, rcaItem(res, fmt.Sprintf("hypothesis-%d", h.Rank), "finding", text))
+		it := rcaItem(res, fmt.Sprintf("hypothesis-%d", h.Rank), "finding", text)
+		// N-B4 grounding fact: rank 1 is the engine's own leading cause, every
+		// other rank an alternative it did not settle on.
+		it.CauseRole = CauseRoleCandidate
+		if h.Rank == 1 {
+			it.CauseRole = CauseRoleEngine
+		}
+		it.Change = hypothesisTitleNamesChange(firstNonEmpty(h.Title, h.Problem))
+		tr.Items = append(tr.Items, it)
 	}
 	if len(res.Missing) > 0 {
 		tr.Items = append(tr.Items, rcaItem(res, "missing", "finding", "evidence the engine still needs: "+strings.Join(res.Missing, "; ")))

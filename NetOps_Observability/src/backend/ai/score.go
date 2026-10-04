@@ -54,6 +54,18 @@ const (
 	// the check is not wired: an absent series and a zero series mean different
 	// things to an alert.
 	GuardUncertainClaim = "uncertain_claim"
+	// GuardUnsupportedCause — the statement-class check (statement_class.go)
+	// removed a sentence stating a cause that is not the correlation engine's
+	// own confirmed cause: no confirmed verdict, or a confirmed verdict for a
+	// DIFFERENT cause than the one the sentence names.
+	GuardUnsupportedCause = "unsupported_cause"
+	// GuardChangeCausality — the statement-class check reworded a sentence that
+	// named a change as the cause into the temporal correlation it is.
+	GuardChangeCausality = "change_causality"
+	// GuardUngroundedStatement — the statement-class check removed a sentence
+	// attributing a claim to a source (Correlix's analysis, a past
+	// investigation, documentation) the turn holds no evidence from.
+	GuardUngroundedStatement = "ungrounded_statement"
 )
 
 // AnswerScore is one finished answer. Duration covers the whole turn as the

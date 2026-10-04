@@ -196,9 +196,17 @@ func RankedHypothesisItems(id, href string, hyps []RankedHypothesis) []EvidenceI
 		} else if h.Confidence > 0 {
 			text += fmt.Sprintf(" (score %.2f)", h.Confidence)
 		}
+		// The grounding facts (N-B4): rank 0 is the engine's OWN leading cause,
+		// every other rank an alternative it did not settle on; a hypothesis
+		// whose engine-authored id/title names a change describes a change.
+		role := CauseRoleCandidate
+		if i == 0 {
+			role = CauseRoleEngine
+		}
 		items = append(items, EvidenceItem{
 			CitationID: fmt.Sprintf("hypothesis:%s:%d", shortID(id), i),
 			Kind:       "finding", Text: text, Href: href,
+			CauseRole: role, Change: hypothesisNamesChange(h),
 		})
 		if i == 0 {
 			items = append(items, topHypothesisEvidenceItems(id, href, h)...)
@@ -231,7 +239,7 @@ func topHypothesisEvidenceItems(id, href string, h RankedHypothesis) []EvidenceI
 		}
 		items = append(items, EvidenceItem{
 			CitationID: "evidence-basis:" + shortID(id), Kind: "finding",
-			Text: basis, Href: href,
+			Text: basis, Href: href, CauseRole: CauseRoleEngine,
 		})
 	}
 
@@ -258,7 +266,8 @@ func topHypothesisEvidenceItems(id, href string, h RankedHypothesis) []EvidenceI
 		}
 		items = append(items, EvidenceItem{
 			CitationID: "controller:" + shortID(id), Kind: "finding",
-			Text: text, Href: href,
+			Text: text, Href: href, CauseRole: CauseRoleEngine,
+			Change: controllerReportsChange(ctrl),
 		})
 	}
 

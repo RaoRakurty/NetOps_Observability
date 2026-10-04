@@ -54,6 +54,9 @@ func TestEveryFamilyRendersAsZeroBeforeAnyObservation(t *testing.T) {
 		`netops_ai_citations_total 0`,
 		`netops_ai_grounding_guard_total{guard="fabricated_citation"} 0`,
 		`netops_ai_grounding_guard_total{guard="uncertain_claim"} 0`,
+		`netops_ai_grounding_guard_total{guard="unsupported_cause"} 0`,
+		`netops_ai_grounding_guard_total{guard="change_causality"} 0`,
+		`netops_ai_grounding_guard_total{guard="ungrounded_statement"} 0`,
 		`netops_ai_investigations_total{outcome="answered"} 0`,
 		`netops_ai_tool_calls_total{outcome="denied"} 0`,
 		`netops_ai_provider_calls_total{usage_reported="no"} 0`,
@@ -84,6 +87,25 @@ func TestAnswersGuardsAndUnknownLabelsDropped(t *testing.T) {
 		`netops_ai_unsupported_claims_total{guard="fabricated_citation"} 2`,
 	)
 	mustNotContain(t, out, "made_up_guard")
+}
+
+// The statement-class guards (tracker 337 N-B4) are first-class members of the
+// closed guard vocabulary: a firing is counted, and so are the sentences it
+// removed or reworded.
+func TestStatementClassGuardsAreCounted(t *testing.T) {
+	m := NewMetrics(Price{})
+	m.ObserveGuard("unsupported_cause", 2)
+	m.ObserveGuard("change_causality", 1)
+	m.ObserveGuard("ungrounded_statement", 3)
+	out := render(m)
+	mustContain(t, out,
+		`netops_ai_grounding_guard_total{guard="unsupported_cause"} 1`,
+		`netops_ai_unsupported_claims_total{guard="unsupported_cause"} 2`,
+		`netops_ai_grounding_guard_total{guard="change_causality"} 1`,
+		`netops_ai_unsupported_claims_total{guard="change_causality"} 1`,
+		`netops_ai_grounding_guard_total{guard="ungrounded_statement"} 1`,
+		`netops_ai_unsupported_claims_total{guard="ungrounded_statement"} 3`,
+	)
 }
 
 func TestRecoveryPopulationIsOnlyTurnsThatHitAFailure(t *testing.T) {
