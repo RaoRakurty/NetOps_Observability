@@ -53,7 +53,7 @@ export TPM2TOOLS_TCTI="swtpm:host=127.0.0.1,port=2321"
 # `exec socat` also replaced this shell, so no trap ever ran. The shell now stays
 # PID 1 and, on stop, quiesces socat, sends TPM2_Shutdown(CLEAR), then stops swtpm.
 SHUTDOWN_DONE=0
-# shellcheck disable=SC2329 # invoked from the TERM/INT/EXIT traps below
+# shellcheck disable=SC2317,SC2329 # invoked from the TERM/INT/EXIT traps below (SC2317 is the older shellcheck code for the same finding)
 shutdown_tpm() {
     [ "$SHUTDOWN_DONE" = 1 ] && return 0
     SHUTDOWN_DONE=1
@@ -97,10 +97,10 @@ da_field() {
 }
 da_counter="$(da_field TPM2_PT_LOCKOUT_COUNTER)"
 da_locked="$(da_field inLockout)"
-[ -n "$da_counter" ] && [ -n "$da_locked" ] || {
+if [ -z "$da_counter" ] || [ -z "$da_locked" ]; then
     echo "secrets-seal: FATAL: could not read the TPM dictionary-attack state (counter='$da_counter' inLockout='$da_locked')" >&2
     exit 1
-}
+fi
 if [ "$((da_counter))" -ne 0 ]; then
     echo "secrets-seal: WARNING: TPM dictionary-attack failure counter is $((da_counter)) (inLockout=$da_locked) at boot — earlier shutdowns were not orderly (crash, kill or power loss). Clearing it." >&2
     if ! out="$(tpm2_dictionarylockout -c 2>&1)"; then
