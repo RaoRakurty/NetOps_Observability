@@ -26,8 +26,8 @@ package wireless
 // as every SNMP, NetBox and operator-created device, and from there the single
 // definition in internal/devmon decides whether each one is monitored, the same
 // dedupe collapses a controller that SNMP and the integration both found into
-// one device, and the same ceiling gate is asked before an unmonitored device
-// becomes monitored. Adding a source is the whole change; nothing about the
+// one device, and the same licence ceiling ranks it by first-seen time like
+// every other device. Adding a source is the whole change; nothing about the
 // count is re-implemented here.
 //
 // The source reports ONLY the wireless entities an ENABLED integration is
@@ -48,8 +48,8 @@ import (
 )
 
 // SourceName is the discovery-source name wireless device rows carry. It is
-// also the provenance internal/devmon reads: not the subnet scan, therefore a
-// DECLARED device — an operator configured an integration that polls it.
+// also the provenance internal/devmon reads to word its reason ("polled through
+// its wireless controller integration").
 const SourceName = "wireless"
 
 // Device id prefixes. They are STRUCTURED like the wireless entity ids the

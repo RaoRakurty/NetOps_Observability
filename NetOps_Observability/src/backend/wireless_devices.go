@@ -14,15 +14,16 @@ package backend
 // Wireless entities an ENABLED integration polls are no longer projected here
 // at all: wireless.DeviceSource reports them to the device registry, where the
 // ONE monitored-device definition (internal/devmon) counts them, the ordinary
-// dedupe collapses a controller SNMP also found, and the licence ceiling gates
-// them like every other device. This projection is what is LEFT — the entities
+// dedupe collapses a controller SNMP also found, and the licence ceiling ranks
+// them by first-seen time like every other device. This projection is what is
+// LEFT — the entities
 // in the wireless store that nothing is currently polling, because their
 // integration is off or was removed.
 //
 // They are still shown, because deleting a row from the fleet the moment an
 // integration is disabled would look like the estate had shrunk. They are shown
-// as NOT monitored, with the reason, and they cost no licence allowance — the
-// same treatment a discovered-but-not-enabled device gets.
+// as NOT monitored, with the reason, and they cost no licence allowance —
+// nothing is polling them.
 //
 // §3a: tenant scoping is inherited from the wireless store's list methods
 // (default-closed); rows carry their owning tenant.
@@ -32,7 +33,6 @@ import (
 	"strings"
 
 	"netops/backend/internal/devmon"
-	"netops/backend/internal/entitlement"
 	"netops/backend/models"
 	"netops/backend/nms"
 	"netops/backend/wireless"
@@ -73,6 +73,7 @@ func (s *server) wirelessDeviceRows(ctx context.Context, claims jwtClaims, exist
 			return
 		}
 		d.Monitored = false
+		d.MonitorState = devmon.StateNotPolled
 		d.MonitorReason = devmon.ReasonWirelessNotPolled
 		out = append(out, d)
 	}
@@ -146,32 +147,4 @@ func (s *server) wirelessActiveTenants(ctx context.Context) (map[string]bool, er
 func nmsPollsWireless(spec nms.ConnectorSpec) bool {
 	decl, ok := spec.CapabilityOf(nms.CapAPInventory)
 	return ok && decl.Fidelity != nms.FidelityNone
-}
-
-// nmsWirelessActivationCeiling asks the MONITORED-DEVICE ceiling before an
-// integration that polls wireless inventory is switched on (tracker 256, owner
-// decision 2026-09-05).
-//
-// This is the wireless TRANSITION POINT. Every other path to a monitored device
-// asks the ceiling inside the registry, in the same lock hold as the write; a
-// wireless estate arrives asynchronously instead — the connector polls, the
-// store fills, the source reports — so the moment an operator can be told "no"
-// is the moment they enable the integration, which is the moment they ask
-// Correlix to start collecting from that estate.
-//
-// The refusal is entitlement's structured 402 and carries unit
-// "monitored_devices", so the SPA renders the same upgrade card it renders for
-// a refused device. On a tier where the device ceiling is SOFT nothing is
-// refused: the activation succeeds and the overage is recorded for true-up
-// (internal/licence.OverageTracker), which is CheckCeiling's own rule and not
-// re-decided here.
-//
-// A connector that cannot report wireless inventory is not gated: enabling an
-// SD-WAN or fabric integration adds no wireless devices, and charging it for
-// the ceiling would refuse work that costs nothing.
-func (s *server) nmsWirelessActivationCeiling(spec nms.ConnectorSpec) error {
-	if s.entitlements == nil || s.discovery == nil || !nmsPollsWireless(spec) {
-		return nil
-	}
-	return entitlement.CheckCeiling(s.entitlements, entitlement.CeilingDevices, s.discovery.MonitoredCount())
 }

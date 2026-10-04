@@ -91,7 +91,20 @@ ever (`docs/design/secret-custody.md` §5).
    the same key returns and existing sealed blobs keep loading). If a sidecar
    image predating this fix is in use: restart the sidecar after removing
    `primary.ctx` from the state volume — never touch `seal.priv`/`seal.pub`.
-9. If the KEK genuinely cannot be unsealed, go to Path C.
+9. **Dictionary-attack lockout (2026-10-03 incident, fixed).** Check this FIRST
+   when the handler answers `ERR load`:
+   `docker exec <seal-container> sh -c 'TPM2TOOLS_TCTI=swtpm:host=127.0.0.1,port=2321 tpm2_getcap properties-variable' | grep -iE 'inLockout|LOCKOUT_COUNTER'`.
+   `inLockout: 1` means the TPM refuses the sealed object (`0x921`), and the
+   KEK is intact. Each stop without an orderly TPM2_Shutdown, after an unseal
+   in that boot, costs one failure; swtpm locks at 3 and recovers one every
+   1000 s. Fixed sidecars shut down orderly and clear a non-zero counter at
+   boot (logged as `dictionary-attack failure counter is N`), so a restart
+   heals it. On an older image: run `tpm2_dictionarylockout -c` in the
+   container (same TCTI), then restart the api. It is safe: it resets the
+   counter and touches no key. If the sidecar logs `still in dictionary-attack
+   lockout`, a lockoutAuth has been set on the TPM; whoever set it must clear
+   the lockout with that auth.
+10. If the KEK genuinely cannot be unsealed, go to Path C.
 
 ### Path C — sealing state lost or corrupt (**data-loss event**)
 9. **Stop.** Escalate. Do not re-initialize anything yet.

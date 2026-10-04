@@ -764,7 +764,7 @@ export const NO_SNAPSHOT_TEXT =
 
 /** The wording the tiering plan fixes for the monitoring allowance
  *  (TIERING_PLAN_2026-09-03.md §9, "Onboarding message"). */
-export const DISCOVERY_NOTE = "Discovery does not consume your monitoring allowance.";
+export const DISCOVERY_NOTE = "Every device with an address counts, including devices found by discovery.";
 
 /** The monitored-device line: usage against the ceiling, in the plan's words. */
 export function monitoringLine(view: LicenceUsageView | null): string | null {

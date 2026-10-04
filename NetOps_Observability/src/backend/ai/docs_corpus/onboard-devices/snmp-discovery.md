@@ -21,12 +21,22 @@ scanned device is platform-owned until it is assigned to a tenant. A device the
 sweep finds is **bound to the profile that answered** (its `credential_ref` is
 set at discovery), so polling uses the credential discovery proved works.
 
-What discovery produces is a **candidate list**, not a monitored fleet. A swept
-device is in the inventory and costs no licence allowance; Correlix starts
-collecting from it when you switch monitoring on in the Monitoring column of
-**Infrastructure → Inventory & Devices**. Sweep as widely as your bounds allow —
-the device ceiling counts monitored devices only. See
+**Every device a sweep finds is monitored and uses the licence.** There is no
+per-device monitoring switch: a device in the inventory with a management
+address is collected from, up to your licence's device limit (25 on the
+Community tier). When there are more devices than the licence covers, the first
+ones found are collected from and the rest stay in the inventory marked **Over
+licence limit**, with a banner on **Infrastructure → Inventory & Devices**
+saying how many.
+
+:::warning Keep discovery scopes narrow
+Because a swept device uses the licence, a wide scope can fill the device limit
+with hosts you did not mean to monitor — and the devices you care about, if
+they are found later, wait behind them. Sweep only the management subnets of
+devices you want collected from. To free a slot, delete the device you do not
+want; the next device in line starts being collected from automatically. See
 [Licensing](/administration/licence).
+:::
 
 Discovery is bounded on purpose: at most 4,096 addresses across at most 32
 ranges, 32 concurrent probes, a two-second budget per host, and one sweep per

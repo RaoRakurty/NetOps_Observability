@@ -8,7 +8,7 @@ sidebar_position: 6
 
 # Pricing
 
-Correlix is priced on the **monitored device**. A device consumes one entitlement when at least one supported monitoring or collector configuration is enabled for it. Discovery is unlimited and free in every tier, and a device sitting in the inventory without active monitoring costs nothing. Several telemetry methods on one device are still one monitored device.
+Correlix is priced on the **monitored device**: every device in the inventory that has a management address, however it was found — discovery included. There is no per-device monitoring switch. Several telemetry methods on one device are still one monitored device.
 
 :::note These are launch prices, and they will be reviewed
 The figures below are the prices Correlix enters the market with, approved on 5 September 2026. They are market-entry hypotheses rather than fixed terms. Correlix reviews them once real conversion data from design partners and paying customers exists, so a figure here can change for a future order. A price already written into a signed order form is unaffected by a later review.
@@ -33,8 +33,8 @@ Community is free permanently, not a trial that lapses into something smaller. I
 | Fact | Value |
 |---|---|
 | Price | $0, permanently |
-| Monitored devices | 25, enforced as a hard limit. The 26th activation is refused |
-| Discovery | Unlimited. Discovery does not consume the monitoring allowance |
+| Monitored devices | 25, enforced as a hard limit. The first 25 devices found are collected from; the rest stay in the inventory marked over the licence limit |
+| Discovery | Unlimited scans, but every device a scan finds counts as a monitored device — keep scan scopes narrow |
 | Correlation, RCA, topology, protocol diagnostics | Included in full |
 | Tenant isolation, permissions, sign-in | Included in full, in every tier |
 
@@ -42,7 +42,7 @@ Community is free permanently, not a trial that lapses into something smaller. I
 
 The starter pack is one price for the first 50 monitored devices, so a team that grows from 12 devices to 40 pays the same. Above 50, each additional monitored device is charged at the per-device rate, up to the Team ceiling of 250.
 
-The monitored-device allowance on Team does not block. Enabling monitoring past the purchased count succeeds, the excess is recorded, and the Licence page shows it. The overage is settled as a true-up with the account team. Correlix refuses no device during an incident because of a number on an order form.
+The monitored-device allowance on Team does not block. Devices past the purchased count are still collected from, the excess is recorded, and the Licence page shows it. The overage is settled as a true-up with the account team. Correlix refuses no device during an incident because of a number on an order form.
 
 ## Enterprise and Enterprise MSP
 

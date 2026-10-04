@@ -15,8 +15,8 @@ import Wizard from "../components/Wizard";
 import DataTable, { Column, Sev } from "../components/DataTable";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 import AskIris from "../components/AskIris";
-import UpgradeCard, { licenceRefusalFromError, type LicenceRefusal } from "../components/licence/UpgradeCard";
-import { overageSummary, tierLabel } from "./licence.model";
+import { overageSummary } from "./licence.model";
+import { operatorError } from "../lib/errors";
 
 const Req = () => <span style={{ color: "var(--bad)", marginLeft: 2 }} title="required">*</span>;
 
@@ -121,9 +121,6 @@ export default function Devices() {
   const deferredQ = useDeferredValue(q);
   const [detail, setDetail] = useState<Device | null>(null);
   const [term, setTerm] = useState<Device | null>(null);
-  // MONITORING — a licence refusal is NOT an error: nothing broke and nothing
-  // was lost, so it renders as the upgrade card, never in the red error line.
-  const [refusal, setRefusal] = useState<LicenceRefusal | null>(null);
   // The licence view, BEST EFFORT. This page is not an admin page and most of
   // the people who open it cannot read /api/system/licence at all; a 403 here
   // must therefore leave the fleet table exactly as it was, with no banner and
@@ -131,7 +128,6 @@ export default function Devices() {
   // an operator enabling their 260th device should learn it is being recorded
   // here, where they are doing it, and not only on a page they never visit.
   const [licence, setLicence] = useState<LicenceView | null>(null);
-  const [busyMonitor, setBusyMonitor] = useState<string | null>(null);
 
   // Selecting a device opens the full-page detail view (Overview · Interfaces ·
   // Routing) — the reference design's graph rows need full width, which the narrow
@@ -171,7 +167,7 @@ export default function Devices() {
       setSotProvider(siteRes?.active ?? "internal");
       setError(null);
     } catch (e) {
-      setError((e as Error).message);
+      setError(operatorError(e, "The device inventory could not be loaded."));
     }
   };
 
@@ -183,28 +179,7 @@ export default function Devices() {
       else await api.clearDeviceSite(id);
       await load();
     } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-
-  // Turn monitoring on or off for one device.
-  //
-  // The SERVER decides: at the licence ceiling the PUT answers the structured
-  // 402 and the card below says so. Nothing here hides the control — a UI that
-  // enforced the limit by disabling a button would be enforcing nothing.
-  const setMonitoring = async (id: string, enabled: boolean) => {
-    setBusyMonitor(id);
-    try {
-      await api.setDeviceMonitoring(id, enabled);
-      setRefusal(null);
-      setError(null);
-      await load();
-    } catch (e) {
-      const r = licenceRefusalFromError(e);
-      if (r) setRefusal(r);
-      else setError((e as Error).message);
-    } finally {
-      setBusyMonitor(null);
+      setError(operatorError(e, "The site could not be assigned."));
     }
   };
 
@@ -221,17 +196,13 @@ export default function Devices() {
   const addDevice = async () => {
     if (!draft.id.trim() || !draft.address.trim()) return;
     try {
-      // A device an operator adds by hand is one they want collected from, so
-      // it is monitored from the start — and therefore consumes one
-      // monitored-device entitlement. At the ceiling the server refuses, and
-      // that refusal is an upgrade card, not a failure.
+      // Every device with an address is monitored, up to the licence limit.
+      // The server never refuses one for the licence: past the limit it is
+      // added and marked over the limit, and the banner below says so.
       await api.upsertDevice(draft);
-      setRefusal(null);
       setError(null);
     } catch (e) {
-      const r = licenceRefusalFromError(e);
-      if (r) setRefusal(r);
-      else setError((e as Error).message);
+      setError(operatorError(e, "The device could not be added."));
       return;
     }
     setDraft({ id: "", name: "", address: "", vendor: "" });
@@ -256,19 +227,25 @@ export default function Devices() {
     return s;
   }, [alerts]);
 
-  // MONITORED is the LICENSED unit and it is not the inventory size: a fleet of
-  // 500 discovered devices with 12 enabled is using 12 of its allowance. The two
-  // numbers are shown side by side precisely so nobody reads one as the other.
+  // MONITORED is what Correlix collects from: every device with an address, up
+  // to the licence limit, first found first (owner decision 2026-10-03). It is
+  // shown beside the inventory size so the gap — devices over the limit, or
+  // with no address — is visible.
   const monitoredCount = useMemo(() => devices.filter((d) => d.monitored).length, [devices]);
 
-  // The monitored-device overage, if the licence view loaded and there is one.
-  // SOFT overage (Team/Enterprise) is a billing fact and reads as one: nothing
-  // was blocked, disabled or deleted, and the excess is recorded for true-up
-  // (owner decision, 2026-09-05). A HARD overage — Community, or a licence past
-  // its grace period — says the honest other thing: the devices are here and
-  // they are not covered.
+  // Devices past the licence limit: in the inventory, NOT collected from. The
+  // rows come from /api/devices, which is already scoped to the caller's
+  // tenant, so a tenant's banner counts only its own devices. The limit rides
+  // on each over-limit row, so this needs no licence read.
+  const overLimit = useMemo(() => devices.filter((d) => d.monitor_state === "over_limit"), [devices]);
+  const overLimitCap = overLimit.find((d) => d.monitor_limit !== undefined)?.monitor_limit;
+
+  // The SOFT overage (Team/Enterprise), if the licence view loaded: a billing
+  // fact — every device is still collected from and the excess is recorded for
+  // true-up (owner decision, 2026-09-05). The HARD case is the banner above,
+  // built from the device rows themselves.
   const deviceOverage = useMemo(
-    () => (licence?.overages ?? []).filter((o) => o.ceiling === "devices"),
+    () => (licence?.overages ?? []).filter((o) => o.ceiling === "devices" && o.soft),
     [licence],
   );
 
@@ -365,15 +342,9 @@ export default function Devices() {
     },
     {
       key: "monitored", header: "Monitoring", width: "10%", sortable: true,
-      text: (d) => (d.monitored ? "monitored" : "not monitored"),
-      sortValue: (d) => (d.monitored ? "0" : "1"),
-      render: (d) => (
-        <MonitoringCell
-          device={d}
-          busy={busyMonitor === d.id}
-          onToggle={(next) => setMonitoring(d.id, next)}
-        />
-      ),
+      text: (d) => monitoringLabel(d),
+      sortValue: (d) => (d.monitored ? "0" : d.monitor_state === "over_limit" ? "1" : "2"),
+      render: (d) => <MonitoringBadge device={d} />,
     },
     {
       key: "source", header: "Source", width: "6%",
@@ -386,7 +357,7 @@ export default function Devices() {
       sev: (d) => healthSev(health.get(d.id) ?? "up"),
       render: (d) => <span title={fmtDateTime(d.last_seen)}>{relTime(d.last_seen)}</span>,
     },
-  ], [health, locs, siteOptions, editableSites, siteName, busyMonitor]);
+  ], [health, locs, siteOptions, editableSites, siteName]);
 
   const chip = (key: Filter, label: string, n: number, color?: string) => (
     <button
@@ -431,28 +402,18 @@ export default function Devices() {
         </p>
       )}
 
-      {deviceOverage.length > 0 && (
-        <p
-          className="empty"
-          role="note"
-          style={{ color: deviceOverage.every((o) => o.soft) ? "var(--warn)" : "var(--crit)", margin: "0 0 10px" }}
-        >
-          <strong>{deviceOverage.every((o) => o.soft) ? "Above your monitored-device allowance" : "Over the monitored-device ceiling"}</strong>{" "}
-          — {overageSummary(deviceOverage)}<AskIris topic="devices.allowance" label="the monitored-device allowance" />
+      {overLimit.length > 0 && (
+        <p className="empty" role="status" style={{ color: "var(--warn)", margin: "0 0 10px", fontSize: 14 }}>
+          <strong>{overLimitSentence(overLimit.length, overLimitCap)}</strong>
+          <AskIris topic="devices.allowance" label="the licence limit" />
         </p>
       )}
 
-      {refusal && (
-        <div style={{ marginBottom: 12 }}>
-          <UpgradeCard
-            refusal={refusal}
-            title="This device was not switched on for monitoring"
-            actions={<>
-              <p style={{ margin: "0 0 8px" }}>{monitoringRemedy(refusal)}</p>
-              <button className="btn" onClick={() => setRefusal(null)}>Dismiss</button>
-            </>}
-          />
-        </div>
+      {deviceOverage.length > 0 && (
+        <p className="empty" role="note" style={{ color: "var(--warn)", margin: "0 0 10px", fontSize: 14 }}>
+          <strong>Above your monitored-device allowance</strong>{" "}
+          — {overageSummary(deviceOverage)}<AskIris topic="devices.allowance" label="the monitored-device allowance" />
+        </p>
       )}
 
       {devices.length > 0 && <FleetComposition devices={devices} locs={locs} siteName={siteName} />}
@@ -569,53 +530,36 @@ export default function Devices() {
   );
 }
 
-// monitoringRemedy is the sentence an operator can act on when the ceiling
-// refuses an activation. The server's own message says what the licence covers;
-// this says what to DO about it, in the product's words.
-export function monitoringRemedy(r: LicenceRefusal): string {
-  const tier = tierLabel(r.tier) || "Your";
-  const counts =
-    r.current !== undefined && r.limit !== undefined
-      ? ` ${r.current} of ${r.limit} monitored devices are currently enabled.`
-      : "";
-  return `${tier} monitoring limit reached.${counts} Disable monitoring on another device, ` +
-    `or upgrade your licence to monitor this one. Nothing was deleted — the device stays in the inventory, ` +
-    `with its history and its place in the topology.`;
+// overLimitSentence is the banner: how many of the caller's devices are not
+// collected from because the licence limit is reached. Plain words, one line.
+export function overLimitSentence(n: number, limit?: number): string {
+  const subject = n === 1 ? "1 device is" : `${n} devices are`;
+  const cap = limit !== undefined ? `licence limit of ${limit} reached` : "licence limit reached";
+  return `${subject} not monitored: ${cap}`;
 }
 
-// MonitoringCell is the per-device switch: the state, why it is that state, and
-// the one control that changes it.
-//
-// The button is ALWAYS enabled, deliberately. The ceiling is enforced by the
-// server; a UI that greyed the control out would be hiding the reason instead
-// of showing it, and the operator would be left guessing why a device they own
-// cannot be monitored.
-function MonitoringCell({ device, busy, onToggle }: {
-  device: Device;
-  busy: boolean;
-  onToggle: (next: boolean) => void;
-}) {
-  const on = !!device.monitored;
+// monitoringLabel is the row's state in words, for the filter and the badge.
+export function monitoringLabel(d: Device): string {
+  if (d.monitored) return "Monitored";
+  if (d.monitor_state === "over_limit") return "Over licence limit";
+  return "Not monitored";
+}
+
+// MonitoringBadge shows whether Correlix collects from the device. There is no
+// switch: every device with an address is monitored, up to the licence limit
+// (owner decision 2026-10-03). The reason is the server's own sentence.
+function MonitoringBadge({ device }: { device: Device }) {
+  const label = monitoringLabel(device);
+  const tone = device.monitored ? "good" : device.monitor_state === "over_limit" ? "warn" : "";
   const methods = (device.monitor_methods ?? []).join(" · ");
-  const title = device.monitor_reason || (on ? "Correlix is collecting from this device" : "Correlix is not collecting from this device");
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }} title={title}>
-      <span className={`badge ${on ? "good" : ""}`} aria-label={on ? "Monitored" : "Not monitored"}>
-        {on ? "Monitored" : "Not monitored"}
-      </span>
-      {on && methods && (
-        <span style={{ color: "var(--fg-muted)", fontSize: 11 }} title={`Telemetry configured: ${methods} — several methods are still one monitored device`}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }} title={device.monitor_reason || label}>
+      <span className={`badge ${tone}`} style={{ fontSize: 14 }}>{label}</span>
+      {device.monitored && methods && (
+        <span style={{ color: "var(--fg-muted)", fontSize: 14 }} title={`Telemetry configured: ${methods}`}>
           {methods}
         </span>
       )}
-      <button
-        className="btn"
-        disabled={busy}
-        title={on ? "Stop collecting from this device (it stays in the inventory)" : "Start collecting from this device (uses one monitored-device entitlement)"}
-        onClick={(e) => { e.stopPropagation(); onToggle(!on); }}
-      >
-        {busy ? "…" : on ? "Stop" : "Monitor"}
-      </button>
     </span>
   );
 }

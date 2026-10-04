@@ -42,7 +42,7 @@ A licence is **one signed JSON file**. Nothing else.
 
 | Ceiling | Community | Enforced at |
 |---|---|---|
-| `devices` — the unit is a **MONITORED** device | **25** | the monitoring transition, in ONE place: the device registry's `SetMonitorGate` (`internal/discovery/monitoring.go`, wired in `main.go`). It is asked by `PUT /api/devices/{id}/monitoring`, by `POST /api/devices` (a manually created device is monitored), and by a discovery SOURCE reporting a device that would default to monitored. **Discovery is never refused** — an over-ceiling device enters the inventory and its COLLECTION is withheld and listed |
+| `devices` — the unit is a **MONITORED** device (every inventory device with a management address — owner decision 2026-10-03) | **25** | collection, in ONE place: the device registry ranks addressable devices by first-seen time (`internal/discovery/monitoring.go`, policy in `internal/devmon`) against `monitorCollectionLimit` (`main.go`). **No device is ever refused** — past a HARD ceiling the first N are collected and the rest stay in the inventory marked `over_limit` and listed. There is no per-device switch and no `PUT /api/devices/{id}/monitoring` |
 | `watched_prefixes` | **5** | the BGP watchlist `Add` path (`bgp_ops.go`) |
 
 The other five ceilings in the file — `tenants`, `orgs`, `retention_days`,
@@ -84,15 +84,15 @@ same value as `licence_state`:
 | `in_grace` | inside `expires_at + grace_days` | **nothing changes at all.** The Licence page shows the days left; `LicenceInGrace` warns |
 | `post_grace` | after that | creation and configuration of paid capability is refused; everything else keeps working |
 
-**What stops after grace, and what does not.** Refused: a monitoring activation
-beyond the Community 25, a second tenant or organisation, and any non-GET on a
+**What stops after grace, and what does not.** Refused: a second tenant or organisation, and any non-GET on a
 feature-gated route (SAML config, LDAP config/test, a new dialect, a SIEM
 export). Kept working: every GET/list/export of a licensed feature — findings,
 their facets and trend, the LDAP configuration as it stands, the tenant and org
-lists. Every device already monitored stays monitored. **Nothing is disabled,
-hidden or deleted, and Correlix never chooses which devices "lose"** — the
-over-ceiling devices are listed newest-first so the shape of the overage is
-visible, and the API says exactly that beside the list.
+lists. **Devices change**: the Community 25 is the limit in force, so the first
+25 devices by first-seen time stay collected from and the rest are marked over
+the licence limit (not polled) until a renewal is installed. Nothing is
+deleted or hidden — the Devices page banner and the Licence page note count
+them.
 
 **Grace defaults are the ISSUER's, not the format's.** `correlix-licence sign`
 writes an explicit number: 30 days for team/enterprise, 7 with `--trial`, 0 for
@@ -108,9 +108,10 @@ enforcement. Because `trial` is omitted from the canonical payload when false,
 every licence issued before the field existed still verifies.
 
 **Soft overage (Team and Enterprise).** The monitored-device allowance does not
-block: activation beyond it succeeds and is recorded. Never a kill switch during
-an incident. Community keeps the **hard** block at the 26th activation — a
-published free ceiling. The register beside the licence
+block: every device is collected from and the excess is recorded. Never a kill
+switch during an incident. Community keeps the **hard** limit — a published free
+ceiling: the 26th device found and later ones are in the inventory, not
+collected from. The register beside the licence
 (`licence-overage.json`) keeps `overage_since` and the peak across restarts and
 fails soft. **Do not quote a window**: how long an overage may run and what it
 costs are order-form terms and appear nowhere in the product. The word the
@@ -510,16 +511,15 @@ When usage exceeds an **enforced** ceiling, `State.Overages` produces a row per
 ceiling saying how many are over, that nothing has been removed, and which tier
 covers them. The Licence page renders that list.
 
-The device count is the **monitored** count: an inventory of five hundred
-discovered devices with twelve enabled reads 12 of 25, because discovery costs
-no allowance (owner C4, 2026-09-05). An over-ceiling number therefore only
-appears where monitoring was already in force — a Team deployment whose licence
-lapsed to Community, say — and in that case NOTHING is switched off: the
-existing monitoring keeps running, new activations are refused, and the page
-lists the excess. Devices whose default-on monitoring the ceiling withheld are
-counted separately and named in a note beside the bar
-(`netops_monitoring_withheld_devices_total`), so "25 of 25" is never the whole
-story on a network that has more.
+The device count is every **addressable** inventory device (owner decision
+2026-10-03): a subnet scan that finds 500 hosts reads 500 of 25. Under a hard
+ceiling the first 25 by first-seen time are collected from; the rest are
+counted (`netops_monitoring_withheld_devices_total`), named in the note beside
+the bar, and marked over the limit on the Devices page. **Discovery scopes must
+therefore be narrow** — every device a scan finds consumes the licence, and
+devices you care about that are found later wait behind it. Deleting a device or
+raising the licence promotes the next in line automatically; the order is
+persisted in `/data/device_first_seen.json` (an `app_kv` row on Postgres).
 
 Only enforced ceilings can produce an overage. Reporting one against a limit
 nothing gates would be theatre.
@@ -614,8 +614,8 @@ kept and the recorder prunes on every snapshot.
 | Postgres (when the platform PG backend is active) | table `metering_daily`, `tenant_iso` FORCE-RLS |
 | File (otherwise) | `/data/api/metering.json` (`METERING_FILE`), mode 0600 |
 
-The monitored-device count comes from **configuration** — a device with at least
-one collector enabled — never from recent telemetry, so an outage does not move
+The monitored-device count comes from the **inventory** — every addressable
+device Correlix collects from — never from recent telemetry, so an outage does not move
 the number. A meter this installation has no counter for is recorded as
 `not_measured` **with a reason**, never as a zero.
 
