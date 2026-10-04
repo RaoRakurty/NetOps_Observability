@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:ca1b835d-5239-58f7-b716-e4f2deeb3870",
+  "serialNumber": "urn:uuid:acf81ee1-d7a9-53d0-88be-9b9661704a63",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-09-26T13:49:59+00:00",
+    "timestamp": "2026-09-27T14:27:45+00:00",
     "tools": {
       "components": [
         {
@@ -16,9 +16,9 @@
     },
     "component": {
       "type": "application",
-      "bom-ref": "correlix@2026.09.26-g9cd97948#npm-docs-portal",
+      "bom-ref": "correlix@2026.09.27-g241b7602#npm-docs-portal",
       "name": "correlix",
-      "version": "2026.09.26-g9cd97948",
+      "version": "2026.09.27-g241b7602",
       "description": "Correlix \u2014 npm-docs-portal dependency inventory"
     },
     "properties": [
@@ -93,10 +93,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/%40algolia/autocomplete-core@1.19.11",
+      "bom-ref": "pkg:npm/%40algolia/autocomplete-core@1.19.12",
       "name": "@algolia/autocomplete-core",
-      "version": "1.19.11",
-      "purl": "pkg:npm/%40algolia/autocomplete-core@1.19.11",
+      "version": "1.19.12",
+      "purl": "pkg:npm/%40algolia/autocomplete-core@1.19.12",
       "scope": "required",
       "properties": [
         {
@@ -118,7 +118,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "4f18def12c39c8c1f8029be0a91f6b031c5682654a1be948825fdee8c127fc856442f07f359bbbad5dbed88cb8fe9df8fc3f83592fa1c6964bdfdc37de925728"
+          "content": "9c9534dcbdd0d0b95f9c5b104c4d58a694ab35c6cfd25060dbd98268609e60fa20f38d473fd5969392adad3bcd1f62cf5faa797842cf15eb527923bc2353053e"
         }
       ]
     },
@@ -155,10 +155,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/%40algolia/autocomplete-plugin-algolia-insights@1.19.11",
+      "bom-ref": "pkg:npm/%40algolia/autocomplete-plugin-algolia-insights@1.19.12",
       "name": "@algolia/autocomplete-plugin-algolia-insights",
-      "version": "1.19.11",
-      "purl": "pkg:npm/%40algolia/autocomplete-plugin-algolia-insights@1.19.11",
+      "version": "1.19.12",
+      "purl": "pkg:npm/%40algolia/autocomplete-plugin-algolia-insights@1.19.12",
       "scope": "required",
       "properties": [
         {
@@ -180,7 +180,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "356ee0549aa4d5d41078e12c63df86a889822708cbd18656e7480b0dd7e323ff737d8362082072ce941a50cf5847356bd5033ad451e25518d3e9a76f2f097d43"
+          "content": "2f716fbb80236fb73d5f50cc4c71450fc775b8af3df1bf5b83d10dae32e99123fc040ccee2f4b9fcc22c53492cd05aa93a2859e150c055845a53a6e19bf0a58d"
         }
       ]
     },
@@ -217,10 +217,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/%40algolia/autocomplete-shared@1.19.11",
+      "bom-ref": "pkg:npm/%40algolia/autocomplete-shared@1.19.12",
       "name": "@algolia/autocomplete-shared",
-      "version": "1.19.11",
-      "purl": "pkg:npm/%40algolia/autocomplete-shared@1.19.11",
+      "version": "1.19.12",
+      "purl": "pkg:npm/%40algolia/autocomplete-shared@1.19.12",
       "scope": "required",
       "properties": [
         {
@@ -242,7 +242,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "f6860f10c98c007fbf10350628927aa17e8923b60dabbb66593c446def2bfea9999cce41a094b3a3c0b759ad8a73f10fc8126316b8f0eeac28ee1bb3a80616d2"
+          "content": "8287b9e687eda0476eb8e1e14e0e2f887af9f3f66c66f604b5fc64285cba2dd27167bfa339d570a766d9cfbaa38a9f42745aa4201fb7e1de1eb1fb5c684ac2cc"
         }
       ]
     },
@@ -6559,13 +6559,6 @@
           "value": "false"
         }
       ],
-      "licenses": [
-        {
-          "license": {
-            "id": "BSD-3-Clause"
-          }
-        }
-      ],
       "hashes": [
         {
           "alg": "SHA-512",
@@ -6588,13 +6581,6 @@
         {
           "name": "correlix:dev",
           "value": "false"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "BSD-3-Clause"
-          }
         }
       ],
       "hashes": [
@@ -8156,13 +8142,6 @@
           "value": "false"
         }
       ],
-      "licenses": [
-        {
-          "license": {
-            "id": "BSD-3-Clause"
-          }
-        }
-      ],
       "hashes": [
         {
           "alg": "SHA-512",
@@ -8187,13 +8166,6 @@
           "value": "false"
         }
       ],
-      "licenses": [
-        {
-          "license": {
-            "id": "BSD-3-Clause"
-          }
-        }
-      ],
       "hashes": [
         {
           "alg": "SHA-512",
@@ -8216,13 +8188,6 @@
         {
           "name": "correlix:dev",
           "value": "false"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "BSD-3-Clause"
-          }
         }
       ],
       "hashes": [
@@ -10911,10 +10876,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/algoliasearch-helper@3.29.3",
+      "bom-ref": "pkg:npm/algoliasearch-helper@3.30.0",
       "name": "algoliasearch-helper",
-      "version": "3.29.3",
-      "purl": "pkg:npm/algoliasearch-helper@3.29.3",
+      "version": "3.30.0",
+      "purl": "pkg:npm/algoliasearch-helper@3.30.0",
       "scope": "required",
       "properties": [
         {
@@ -10936,7 +10901,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "81538c6db3d5ac23b75ecf81f812c020616a210a30eaa1cc4d8084781a8b401f66e1998a52a330904ba695a9768b2c9ecc711de18d05bc54cb6c246eb42bad21"
+          "content": "95e8b2002fc68aac64f4e5b66025190eda8a6489d2c0c81d85de0f36a7940bc78d05982d201f4195447446401b1de4bdaf91b12351a2254bb7d523bc46359f68"
         }
       ]
     },
@@ -11654,10 +11619,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/baseline-browser-mapping@2.11.26",
+      "bom-ref": "pkg:npm/baseline-browser-mapping@2.11.27",
       "name": "baseline-browser-mapping",
-      "version": "2.11.26",
-      "purl": "pkg:npm/baseline-browser-mapping@2.11.26",
+      "version": "2.11.27",
+      "purl": "pkg:npm/baseline-browser-mapping@2.11.27",
       "scope": "required",
       "properties": [
         {
@@ -11679,7 +11644,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "18b41d0f7cba505f2256e3099797c7804e23767fee6bb9feb6829f2e036583706a42d3998e9cbaf13f13ba9f3fc06599083966eca320eed3dbe0c3e7ee83744d"
+          "content": "125635d83691386b9a9fe94c999f02be8fd951b5cf7bb12773ff5553f6f54f72a9e1dc32b5170d751f03a1224de523494ff0aebdc080d031c356630e09e3dd45"
         }
       ]
     },
@@ -11891,10 +11856,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/brace-expansion@5.0.9",
+      "bom-ref": "pkg:npm/brace-expansion@5.0.12",
       "name": "brace-expansion",
-      "version": "5.0.9",
-      "purl": "pkg:npm/brace-expansion@5.0.9",
+      "version": "5.0.12",
+      "purl": "pkg:npm/brace-expansion@5.0.12",
       "scope": "required",
       "properties": [
         {
@@ -11916,7 +11881,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "49c43822ebc8105d533253fb66dfaf8c9ffff7394f6f64837315b13376e4f2ceade8619d27b28ed5d09c4e274e3c929e3d6df42c4ff6713ef00b23e1a3dfd6c6"
+          "content": "628bd0debce168b308ac38cd0cc90d4b4d6d79af77aa11211b9c72f1febe47497e770dca8bee6c0a822823de368ae2d94c75a881692d830543854d3d88d12299"
         }
       ]
     },
@@ -11946,10 +11911,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/browserslist@4.29.1",
+      "bom-ref": "pkg:npm/browserslist@4.28.8",
       "name": "browserslist",
-      "version": "4.29.1",
-      "purl": "pkg:npm/browserslist@4.29.1",
+      "version": "4.28.8",
+      "purl": "pkg:npm/browserslist@4.28.8",
       "scope": "required",
       "properties": [
         {
@@ -11971,7 +11936,38 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "014763b91c82346518b6aa6a7d3996c8ce1f5dacbcc8842198b9ef61efd31cc19f4fd07fdf85fbc5077789f2b1c3234f3e9a305418cb6feeb804df519f59a2cf"
+          "content": "576369a1f2db946eb899f3ad4a00e13891126441a88330cc06ffeaf96ea87382d758ffeaef978e5e839a68ebb510e69d07d538070c7f7b4cb36efc0a1fccda94"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/browserslist@4.29.3",
+      "name": "browserslist",
+      "version": "4.29.3",
+      "purl": "pkg:npm/browserslist@4.29.3",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "d51e248982971958aa10dd029e80eb5dcd52b43f67880c2efa3d9dba45b3ac3e1b260b03e250e6129d0245b73a13fbd82487d31f03e6c3268ab554ae74809d3c"
         }
       ]
     },
@@ -12420,10 +12416,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/caniuse-lite@1.0.30001810",
+      "bom-ref": "pkg:npm/caniuse-lite@1.0.30001814",
       "name": "caniuse-lite",
-      "version": "1.0.30001810",
-      "purl": "pkg:npm/caniuse-lite@1.0.30001810",
+      "version": "1.0.30001814",
+      "purl": "pkg:npm/caniuse-lite@1.0.30001814",
       "scope": "required",
       "properties": [
         {
@@ -12445,7 +12441,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "4c84d03d491acfe69593918be8d84e77093568468d4d20cfb06156ad3ba1286b634c5ef48cbfce86dd96e1ceab5d47b97eeec87b5f5521a8405c720889658d7a"
+          "content": "fd469fd65033af9f5770ca56d28f7a5a811fafe5572b6397e14f40805a22487b152781e9a67205523b58cecc831f6fad80035a41bdbfa31606c023daa4dd45a4"
         }
       ]
     },
@@ -14218,10 +14214,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/cssdb@8.11.0",
+      "bom-ref": "pkg:npm/cssdb@8.12.0",
       "name": "cssdb",
-      "version": "8.11.0",
-      "purl": "pkg:npm/cssdb@8.11.0",
+      "version": "8.12.0",
+      "purl": "pkg:npm/cssdb@8.12.0",
       "scope": "required",
       "properties": [
         {
@@ -14243,7 +14239,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "57363ff2470ae4cf28095aff730876e09f1756508e213a66cc28b32810b6f28ed9d6cdb730ca235e8277abb6be4d042830abf10b76251b467dc94d74909175b9"
+          "content": "03cfd73c0b46ca66a22ab554fbe5f19aefb6efb80d763287d3cefa40588416e7c0c8a3d7ed5ffe8d5ca76df88df5be391f3d3b88a3b86fba09b840854e5e9841"
         }
       ]
     },
@@ -15572,10 +15568,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/electron-to-chromium@1.5.439",
+      "bom-ref": "pkg:npm/electron-to-chromium@1.5.444",
       "name": "electron-to-chromium",
-      "version": "1.5.439",
-      "purl": "pkg:npm/electron-to-chromium@1.5.439",
+      "version": "1.5.444",
+      "purl": "pkg:npm/electron-to-chromium@1.5.444",
       "scope": "required",
       "properties": [
         {
@@ -15597,7 +15593,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "aaee9020f5e1b1bf8245c0224cc363478035cbfeed0982a42a3af90995d156287aaa40dfefda5e676069114deaa0304d091adccb732b6b75fd9c6e68aeeb80ed"
+          "content": "e6cb3fb897e80d80c74f495f2734fa15b72c908cd138838f7f405b6c590672f0f3a0953b8bfffd183af0c081d056622cac01a21778a1a400c1448b2b105b75ad"
         }
       ]
     },
@@ -16865,10 +16861,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/fast-uri@3.1.7",
+      "bom-ref": "pkg:npm/fast-uri@3.1.8",
       "name": "fast-uri",
-      "version": "3.1.7",
-      "purl": "pkg:npm/fast-uri@3.1.7",
+      "version": "3.1.8",
+      "purl": "pkg:npm/fast-uri@3.1.8",
       "scope": "required",
       "properties": [
         {
@@ -16890,7 +16886,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "74ebd95738dd65dcfba6177dbfa8c26f0c6b056ddf2ba9fc45cd02b5d98ce1bba6ccc9f1cb005886ea61e89f35f51470fe4bbeacb6de9707ccba792dbb35551e"
+          "content": "19932d6544cd4693952040a85f02cd652e7150613e99535b4c1f21ffb4708764c559c05088fcd3832662d39045f543192a42c9bfc5c14494e553bce0f3e65f32"
         }
       ]
     },
@@ -21375,10 +21371,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/mdast-util-directive@3.1.0",
+      "bom-ref": "pkg:npm/mdast-util-directive@3.1.1",
       "name": "mdast-util-directive",
-      "version": "3.1.0",
-      "purl": "pkg:npm/mdast-util-directive@3.1.0",
+      "version": "3.1.1",
+      "purl": "pkg:npm/mdast-util-directive@3.1.1",
       "scope": "required",
       "properties": [
         {
@@ -21400,7 +21396,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "2377cd16df831e6a56098013eeaba833a9477fdc2eaad23ea0239fbc82e7a2270d22a8e1e44ddd1095a25ee60c13680d7bcbe5d62310c325076bb6e01666a4e9"
+          "content": "1aaa5adcc1e8ad760467455f6eba32bc19552947f3dfbd55ea620446a39831c6f45b50f72f0985ab5656e0ed930eb6e7fb866618bc0c59e151260619f9b7397d"
         }
       ]
     },
@@ -21437,10 +21433,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/mdast-util-from-markdown@2.0.3",
+      "bom-ref": "pkg:npm/mdast-util-from-markdown@2.1.0",
       "name": "mdast-util-from-markdown",
-      "version": "2.0.3",
-      "purl": "pkg:npm/mdast-util-from-markdown@2.0.3",
+      "version": "2.1.0",
+      "purl": "pkg:npm/mdast-util-from-markdown@2.1.0",
       "scope": "required",
       "properties": [
         {
@@ -21462,7 +21458,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "5b8980593bd294abdff0be89f9537dc8b4aa43d00e000bc7ba80c098f933e1d1dfe79de6e60563d9e8da747261a0999c9b11273afe8f6bc5c9869c44f7791bf1"
+          "content": "2912e098f68fd87d6e9766e9a0990e4bef6901c0c0023f4dbb59aa2e787c34b7891b9b65be3e364c7f343c8181a513969515cb934943ad636e642172fedb01e0"
         }
       ]
     },
@@ -21561,10 +21557,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/mdast-util-gfm-strikethrough@2.0.0",
+      "bom-ref": "pkg:npm/mdast-util-gfm-strikethrough@2.0.1",
       "name": "mdast-util-gfm-strikethrough",
-      "version": "2.0.0",
-      "purl": "pkg:npm/mdast-util-gfm-strikethrough@2.0.0",
+      "version": "2.0.1",
+      "purl": "pkg:npm/mdast-util-gfm-strikethrough@2.0.1",
       "scope": "required",
       "properties": [
         {
@@ -21586,7 +21582,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "98a29bf75e5317e382e69b63e5b27b58544f758b6e1efd324d1c4adad26f8be043a9b9221bb87bbbff5223cf6744061c99aa76c4740bf43f901bfeb04ab4ed5e"
+          "content": "3ae247aafaf8e79a70bb639a3ab8abedd6f3aace2395628eb65bbd2fa1a37088e3430372c34d959ed42caff124ebf035def8275df52105e9164543f53a4362bf"
         }
       ]
     },
@@ -21871,10 +21867,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/mdast-util-to-markdown@2.1.2",
+      "bom-ref": "pkg:npm/mdast-util-to-markdown@2.2.0",
       "name": "mdast-util-to-markdown",
-      "version": "2.1.2",
-      "purl": "pkg:npm/mdast-util-to-markdown@2.1.2",
+      "version": "2.2.0",
+      "purl": "pkg:npm/mdast-util-to-markdown@2.2.0",
       "scope": "required",
       "properties": [
         {
@@ -21896,7 +21892,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "c63ebcc0c4ef19754e2a89e6a20e8bc3224aad85d93ef97069b6abc938cb87d2eebe8bc1fca007fa4be2f068e3fbbac98ec162db79e4531450bf52aa4aba0ca8"
+          "content": "d899ff003ac7145cb29e204c8b46e77136c9a94efc2b7fd3118bf3bf0ad65b30fd3183d46bf1a6e2bde739e285420fcf0cce41b1b0d875cf1a7245b835363a34"
         }
       ]
     },
@@ -22153,10 +22149,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/micromark-core-commonmark@2.0.3",
+      "bom-ref": "pkg:npm/micromark-core-commonmark@2.0.4",
       "name": "micromark-core-commonmark",
-      "version": "2.0.3",
-      "purl": "pkg:npm/micromark-core-commonmark@2.0.3",
+      "version": "2.0.4",
+      "purl": "pkg:npm/micromark-core-commonmark@2.0.4",
       "scope": "required",
       "properties": [
         {
@@ -22178,7 +22174,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "44306b1c4312c5514b83ac6f9d799bd40cabd96ccb0168de4804c0a31c0a60957de1378d6af82821d0346bdcadcc3495cc1cb660a14af9e9823ce1226cb782ae"
+          "content": "c3111e13cbfc5d5bceaf19f54d98fbe2a62102d4d0b12aae7c7552dee355c93d4cba95f187268793cffdc4334f87d0662fbed03438164e467746c607076af2ef"
         }
       ]
     },
@@ -22742,10 +22738,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/micromark-factory-space@2.0.1",
+      "bom-ref": "pkg:npm/micromark-factory-space@2.1.0",
       "name": "micromark-factory-space",
-      "version": "2.0.1",
-      "purl": "pkg:npm/micromark-factory-space@2.0.1",
+      "version": "2.1.0",
+      "purl": "pkg:npm/micromark-factory-space@2.1.0",
       "scope": "required",
       "properties": [
         {
@@ -22767,16 +22763,16 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "cd19318ed071c4b77649cd1df9f6e712e9ec4e3e3a4965e05dc899987ab49036069dc93f6521a3f7fc142d357de6ea1e6222b98515cfda627df14a3872afcb42"
+          "content": "7d2f219cb2239e3bdd4088f7f467ae83cc16b11d07ad8678dca4a12b135fc13eedd8b387a3f2db59913311a48e8f0b63742b23a04eacc878689c4cd6d33bf4f9"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/micromark-factory-space@2.0.1",
+      "bom-ref": "pkg:npm/micromark-factory-space@2.1.0",
       "name": "micromark-factory-space",
-      "version": "2.0.1",
-      "purl": "pkg:npm/micromark-factory-space@2.0.1",
+      "version": "2.1.0",
+      "purl": "pkg:npm/micromark-factory-space@2.1.0",
       "scope": "required",
       "properties": [
         {
@@ -22798,16 +22794,16 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "cd19318ed071c4b77649cd1df9f6e712e9ec4e3e3a4965e05dc899987ab49036069dc93f6521a3f7fc142d357de6ea1e6222b98515cfda627df14a3872afcb42"
+          "content": "7d2f219cb2239e3bdd4088f7f467ae83cc16b11d07ad8678dca4a12b135fc13eedd8b387a3f2db59913311a48e8f0b63742b23a04eacc878689c4cd6d33bf4f9"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/micromark-factory-space@2.0.1",
+      "bom-ref": "pkg:npm/micromark-factory-space@2.1.0",
       "name": "micromark-factory-space",
-      "version": "2.0.1",
-      "purl": "pkg:npm/micromark-factory-space@2.0.1",
+      "version": "2.1.0",
+      "purl": "pkg:npm/micromark-factory-space@2.1.0",
       "scope": "required",
       "properties": [
         {
@@ -22829,16 +22825,16 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "cd19318ed071c4b77649cd1df9f6e712e9ec4e3e3a4965e05dc899987ab49036069dc93f6521a3f7fc142d357de6ea1e6222b98515cfda627df14a3872afcb42"
+          "content": "7d2f219cb2239e3bdd4088f7f467ae83cc16b11d07ad8678dca4a12b135fc13eedd8b387a3f2db59913311a48e8f0b63742b23a04eacc878689c4cd6d33bf4f9"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/micromark-factory-space@2.0.1",
+      "bom-ref": "pkg:npm/micromark-factory-space@2.1.0",
       "name": "micromark-factory-space",
-      "version": "2.0.1",
-      "purl": "pkg:npm/micromark-factory-space@2.0.1",
+      "version": "2.1.0",
+      "purl": "pkg:npm/micromark-factory-space@2.1.0",
       "scope": "required",
       "properties": [
         {
@@ -22860,16 +22856,16 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "cd19318ed071c4b77649cd1df9f6e712e9ec4e3e3a4965e05dc899987ab49036069dc93f6521a3f7fc142d357de6ea1e6222b98515cfda627df14a3872afcb42"
+          "content": "7d2f219cb2239e3bdd4088f7f467ae83cc16b11d07ad8678dca4a12b135fc13eedd8b387a3f2db59913311a48e8f0b63742b23a04eacc878689c4cd6d33bf4f9"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/micromark-factory-space@2.0.1",
+      "bom-ref": "pkg:npm/micromark-factory-space@2.1.0",
       "name": "micromark-factory-space",
-      "version": "2.0.1",
-      "purl": "pkg:npm/micromark-factory-space@2.0.1",
+      "version": "2.1.0",
+      "purl": "pkg:npm/micromark-factory-space@2.1.0",
       "scope": "required",
       "properties": [
         {
@@ -22891,16 +22887,16 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "cd19318ed071c4b77649cd1df9f6e712e9ec4e3e3a4965e05dc899987ab49036069dc93f6521a3f7fc142d357de6ea1e6222b98515cfda627df14a3872afcb42"
+          "content": "7d2f219cb2239e3bdd4088f7f467ae83cc16b11d07ad8678dca4a12b135fc13eedd8b387a3f2db59913311a48e8f0b63742b23a04eacc878689c4cd6d33bf4f9"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/micromark-factory-space@2.0.1",
+      "bom-ref": "pkg:npm/micromark-factory-space@2.1.0",
       "name": "micromark-factory-space",
-      "version": "2.0.1",
-      "purl": "pkg:npm/micromark-factory-space@2.0.1",
+      "version": "2.1.0",
+      "purl": "pkg:npm/micromark-factory-space@2.1.0",
       "scope": "required",
       "properties": [
         {
@@ -22922,16 +22918,16 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "cd19318ed071c4b77649cd1df9f6e712e9ec4e3e3a4965e05dc899987ab49036069dc93f6521a3f7fc142d357de6ea1e6222b98515cfda627df14a3872afcb42"
+          "content": "7d2f219cb2239e3bdd4088f7f467ae83cc16b11d07ad8678dca4a12b135fc13eedd8b387a3f2db59913311a48e8f0b63742b23a04eacc878689c4cd6d33bf4f9"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/micromark-factory-space@2.0.1",
+      "bom-ref": "pkg:npm/micromark-factory-space@2.1.0",
       "name": "micromark-factory-space",
-      "version": "2.0.1",
-      "purl": "pkg:npm/micromark-factory-space@2.0.1",
+      "version": "2.1.0",
+      "purl": "pkg:npm/micromark-factory-space@2.1.0",
       "scope": "required",
       "properties": [
         {
@@ -22953,16 +22949,16 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "cd19318ed071c4b77649cd1df9f6e712e9ec4e3e3a4965e05dc899987ab49036069dc93f6521a3f7fc142d357de6ea1e6222b98515cfda627df14a3872afcb42"
+          "content": "7d2f219cb2239e3bdd4088f7f467ae83cc16b11d07ad8678dca4a12b135fc13eedd8b387a3f2db59913311a48e8f0b63742b23a04eacc878689c4cd6d33bf4f9"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/micromark-factory-space@2.0.1",
+      "bom-ref": "pkg:npm/micromark-factory-space@2.1.0",
       "name": "micromark-factory-space",
-      "version": "2.0.1",
-      "purl": "pkg:npm/micromark-factory-space@2.0.1",
+      "version": "2.1.0",
+      "purl": "pkg:npm/micromark-factory-space@2.1.0",
       "scope": "required",
       "properties": [
         {
@@ -22984,16 +22980,16 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "cd19318ed071c4b77649cd1df9f6e712e9ec4e3e3a4965e05dc899987ab49036069dc93f6521a3f7fc142d357de6ea1e6222b98515cfda627df14a3872afcb42"
+          "content": "7d2f219cb2239e3bdd4088f7f467ae83cc16b11d07ad8678dca4a12b135fc13eedd8b387a3f2db59913311a48e8f0b63742b23a04eacc878689c4cd6d33bf4f9"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/micromark-factory-space@2.0.1",
+      "bom-ref": "pkg:npm/micromark-factory-space@2.1.0",
       "name": "micromark-factory-space",
-      "version": "2.0.1",
-      "purl": "pkg:npm/micromark-factory-space@2.0.1",
+      "version": "2.1.0",
+      "purl": "pkg:npm/micromark-factory-space@2.1.0",
       "scope": "required",
       "properties": [
         {
@@ -23015,16 +23011,16 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "cd19318ed071c4b77649cd1df9f6e712e9ec4e3e3a4965e05dc899987ab49036069dc93f6521a3f7fc142d357de6ea1e6222b98515cfda627df14a3872afcb42"
+          "content": "7d2f219cb2239e3bdd4088f7f467ae83cc16b11d07ad8678dca4a12b135fc13eedd8b387a3f2db59913311a48e8f0b63742b23a04eacc878689c4cd6d33bf4f9"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/micromark-factory-space@2.0.1",
+      "bom-ref": "pkg:npm/micromark-factory-space@2.1.0",
       "name": "micromark-factory-space",
-      "version": "2.0.1",
-      "purl": "pkg:npm/micromark-factory-space@2.0.1",
+      "version": "2.1.0",
+      "purl": "pkg:npm/micromark-factory-space@2.1.0",
       "scope": "required",
       "properties": [
         {
@@ -23046,16 +23042,16 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "cd19318ed071c4b77649cd1df9f6e712e9ec4e3e3a4965e05dc899987ab49036069dc93f6521a3f7fc142d357de6ea1e6222b98515cfda627df14a3872afcb42"
+          "content": "7d2f219cb2239e3bdd4088f7f467ae83cc16b11d07ad8678dca4a12b135fc13eedd8b387a3f2db59913311a48e8f0b63742b23a04eacc878689c4cd6d33bf4f9"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/micromark-factory-space@2.0.1",
+      "bom-ref": "pkg:npm/micromark-factory-space@2.1.0",
       "name": "micromark-factory-space",
-      "version": "2.0.1",
-      "purl": "pkg:npm/micromark-factory-space@2.0.1",
+      "version": "2.1.0",
+      "purl": "pkg:npm/micromark-factory-space@2.1.0",
       "scope": "required",
       "properties": [
         {
@@ -23077,7 +23073,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "cd19318ed071c4b77649cd1df9f6e712e9ec4e3e3a4965e05dc899987ab49036069dc93f6521a3f7fc142d357de6ea1e6222b98515cfda627df14a3872afcb42"
+          "content": "7d2f219cb2239e3bdd4088f7f467ae83cc16b11d07ad8678dca4a12b135fc13eedd8b387a3f2db59913311a48e8f0b63742b23a04eacc878689c4cd6d33bf4f9"
         }
       ]
     },
@@ -23171,6 +23167,68 @@
         {
           "alg": "SHA-512",
           "content": "957ada4f0717df21ffbcc0da15609024fd6e22cccb55e6f351add91ddae0c6beca114ffd98be265600a919bca1bcd2cd95ab913a2354abb58de6eee775b63ac6"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/micromark-util-character@2.1.1",
+      "name": "micromark-util-character",
+      "version": "2.1.1",
+      "purl": "pkg:npm/micromark-util-character@2.1.1",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "c2ff2d7544c9ded8521451492ada5828e62218fdbebfde87be4e13bbc2a9080b1332ceb28be9d5986875b32bd20ac6b1cf8e49e896f0fbd0c3ea0f7bf8d57aed"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/micromark-util-character@2.1.1",
+      "name": "micromark-util-character",
+      "version": "2.1.1",
+      "purl": "pkg:npm/micromark-util-character@2.1.1",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "c2ff2d7544c9ded8521451492ada5828e62218fdbebfde87be4e13bbc2a9080b1332ceb28be9d5986875b32bd20ac6b1cf8e49e896f0fbd0c3ea0f7bf8d57aed"
         }
       ]
     },
@@ -23946,6 +24004,37 @@
         {
           "alg": "SHA-512",
           "content": "9c357fefb163e9e1f5ca7c2c7184ceb1b2bbad1fff523d1b65707025945f68b109d6218147a9087cd9a536a6aa25feb8f443f417735635d7898b4dde96594d51"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/micromark-util-edit-map@1.0.0",
+      "name": "micromark-util-edit-map",
+      "version": "1.0.0",
+      "purl": "pkg:npm/micromark-util-edit-map@1.0.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "3dada58e5b042fab15c056987b2ace2d261b42def726f19b3ce605abef401255e24a77c8e50e38eb9451675b07bfb9438c33a71910c36aa3d7a8296a58afead5"
         }
       ]
     },
@@ -25036,10 +25125,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/micromark-util-types@1.1.0",
-      "name": "micromark-util-types",
-      "version": "1.1.0",
-      "purl": "pkg:npm/micromark-util-types@1.1.0",
+      "bom-ref": "pkg:npm/micromark-util-symbol@2.0.1",
+      "name": "micromark-util-symbol",
+      "version": "2.0.1",
+      "purl": "pkg:npm/micromark-util-symbol@2.0.1",
       "scope": "required",
       "properties": [
         {
@@ -25061,7 +25150,38 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "ba44418227bc4c801c69cb1c5474a275d1e33b893fab7a6779d9b3310e22c0370ad05b450a884a3a515b68e2ff98f81f9cfb0bdc2d59cb125ae2c6d6ac19778e"
+          "content": "bece6df00a5ab9df4ddbc9200ab45474479de1427ec1636f89c1cb3f109af4436562e018df5334113cb9cb5bc0df762834f0c54e08446e787a79f684f21e31d1"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/micromark-util-symbol@2.0.1",
+      "name": "micromark-util-symbol",
+      "version": "2.0.1",
+      "purl": "pkg:npm/micromark-util-symbol@2.0.1",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "bece6df00a5ab9df4ddbc9200ab45474479de1427ec1636f89c1cb3f109af4436562e018df5334113cb9cb5bc0df762834f0c54e08446e787a79f684f21e31d1"
         }
       ]
     },
@@ -25098,10 +25218,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/micromark-util-types@2.0.2",
+      "bom-ref": "pkg:npm/micromark-util-types@1.1.0",
       "name": "micromark-util-types",
-      "version": "2.0.2",
-      "purl": "pkg:npm/micromark-util-types@2.0.2",
+      "version": "1.1.0",
+      "purl": "pkg:npm/micromark-util-types@1.1.0",
       "scope": "required",
       "properties": [
         {
@@ -25123,16 +25243,47 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "630d04092a49a15885d6a4d4e030ba370b42e1a586b75124cda401f0a3cfc82451f33f5359e5741db1051933be658d70076db39b19c9aa13f24e93950a97874c"
+          "content": "ba44418227bc4c801c69cb1c5474a275d1e33b893fab7a6779d9b3310e22c0370ad05b450a884a3a515b68e2ff98f81f9cfb0bdc2d59cb125ae2c6d6ac19778e"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/micromark@4.0.2",
+      "bom-ref": "pkg:npm/micromark-util-types@2.0.3",
+      "name": "micromark-util-types",
+      "version": "2.0.3",
+      "purl": "pkg:npm/micromark-util-types@2.0.3",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "a31076224d37848d20bfe54d9fdb67875b756047bd3033e9b558801207dd7f76101ec9f4a7319380276548225773086a9bca61684b8cef3784bb7410cd506b3e"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/micromark@4.0.3",
       "name": "micromark",
-      "version": "4.0.2",
-      "purl": "pkg:npm/micromark@4.0.2",
+      "version": "4.0.3",
+      "purl": "pkg:npm/micromark@4.0.3",
       "scope": "required",
       "properties": [
         {
@@ -25154,7 +25305,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "ce97bdf10ea4bdabe90abd4d3d548231e6c229f0fb080d8da99fabca478d84e348241a5cd6d14ab7d86e70b1b085ade3353348f251e972d5895a88a6545e0f7c"
+          "content": "a0661f4331d21b974e328bd0709ddfc93999956016a62d17034b09c09b3e8ba393f3ca35f89b70ffccf40a6768c122f11a18452bcf6b43fa17a61ff0374d8f37"
         }
       ]
     },
@@ -31090,10 +31241,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/regenerate-unicode-properties@10.2.2",
+      "bom-ref": "pkg:npm/regenerate-unicode-properties@10.3.0",
       "name": "regenerate-unicode-properties",
-      "version": "10.2.2",
-      "purl": "pkg:npm/regenerate-unicode-properties@10.2.2",
+      "version": "10.3.0",
+      "purl": "pkg:npm/regenerate-unicode-properties@10.3.0",
       "scope": "required",
       "properties": [
         {
@@ -31115,7 +31266,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "9b4dcffb38417907754469d8c6b1b20c03e9597fdea4a8ab2eba7c7b7a9ebd975590ab670ab8e359ccc86d873cfb177abdc4d2b5596a7f2713c75291e0b3abd2"
+          "content": "f67b3ca1d47c7bdab7a2d29e1e3dc313cd236582a0eb355e64a13ecd099129716855472e89319e3ba8aeb0384f46821040f54f46f1fe49f061ad3b9de1e733bb"
         }
       ]
     },
@@ -31152,10 +31303,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/regexpu-core@6.4.0",
+      "bom-ref": "pkg:npm/regexpu-core@6.5.2",
       "name": "regexpu-core",
-      "version": "6.4.0",
-      "purl": "pkg:npm/regexpu-core@6.4.0",
+      "version": "6.5.2",
+      "purl": "pkg:npm/regexpu-core@6.5.2",
       "scope": "required",
       "properties": [
         {
@@ -31177,7 +31328,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "d2086eceaebb2c8f5b2d7a4e5ff2127ef7bf32adf76b8685473a106219e7a24d49385a6613f0364c11a43557a738611e4810a322259c73a315386e47110bf4b0"
+          "content": "ce49951fdd839738d215ce31286669ff6057205ac321d050042f20517282b0c80a61bd5b9029317d2ba85b5c1eac38da4c43136d42e41ed2851ded4bf806e76b"
         }
       ]
     },
@@ -33370,10 +33521,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/source-map-js@1.2.1",
+      "bom-ref": "pkg:npm/source-map-js@1.2.2",
       "name": "source-map-js",
-      "version": "1.2.1",
-      "purl": "pkg:npm/source-map-js@1.2.1",
+      "version": "1.2.2",
+      "purl": "pkg:npm/source-map-js@1.2.2",
       "scope": "required",
       "properties": [
         {
@@ -33395,7 +33546,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "51758c2a12cec1529bef6f0852d40f5f17d853ebac7726ed52b2bff2e184f0240cbeb84ea70bf30c1c23d108522fb31073bbc8b084811bc550f3e203431a5f40"
+          "content": "2868fff18e37c77e5a6550edb7e27898ad61a0b18750b3187d290e0c93508cd0c2de85b53ea3e8c4cc28d292d4b1633f5041b338dfcdc5e1f2c047cd5cd3f757"
         }
       ]
     },
@@ -35421,6 +35572,37 @@
         {
           "alg": "SHA-512",
           "content": "a63cb66d8852b2e7f05a52b03dcfa5ddc37bfb0b8994aeaecf461d2443a54036e5ea3a3f6253e2e266fc6a0524542f0117b57c36ecdec8f36a464b00de1ced29"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/update-browserslist-db@1.3.2",
+      "name": "update-browserslist-db",
+      "version": "1.3.2",
+      "purl": "pkg:npm/update-browserslist-db@1.3.2",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "510f8c4b1961466d5bce3854f8372e5df8c53b517336daa12b9fbd62f969f7422d0cb939bd3f77d80d2b16eeb5f677fb4554be63f55e6945b58da443a99f1527"
         }
       ]
     },

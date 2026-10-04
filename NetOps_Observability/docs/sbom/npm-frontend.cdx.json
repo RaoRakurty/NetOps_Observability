@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:9f57741f-c2a0-5fa8-adb6-92b7f4282ffa",
+  "serialNumber": "urn:uuid:5fe64cc8-f0a1-5d00-abfb-90572782d2a3",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-09-26T13:49:59+00:00",
+    "timestamp": "2026-09-27T14:27:45+00:00",
     "tools": {
       "components": [
         {
@@ -16,9 +16,9 @@
     },
     "component": {
       "type": "application",
-      "bom-ref": "correlix@2026.09.26-g9cd97948#npm-frontend",
+      "bom-ref": "correlix@2026.09.27-g241b7602#npm-frontend",
       "name": "correlix",
-      "version": "2026.09.26-g9cd97948",
+      "version": "2026.09.27-g241b7602",
       "description": "Correlix \u2014 npm-frontend dependency inventory"
     },
     "properties": [
@@ -50,102 +50,6 @@
         {
           "alg": "SHA-512",
           "content": "e8ecdd7713e2a3d52259309e9a9e0df1c60b57664dd677119d5d5c546b6f7bb7613ceb51925791cb1df61900984b00d881a1d4dd448c9bce2d36cbcacd109ad5"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/%40asamuzakjp/css-color@5.1.11",
-      "name": "@asamuzakjp/css-color",
-      "version": "5.1.11",
-      "purl": "pkg:npm/%40asamuzakjp/css-color@5.1.11",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "295c3aa888824d44210727d377bf21db20f5ff4d306939a6f6ecbf47b0a4fdcb54c803e3f801032e44087495b44fcfaa1a08f78f96e934a2bb4371be2de7495a"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/%40asamuzakjp/dom-selector@7.1.1",
-      "name": "@asamuzakjp/dom-selector",
-      "version": "7.1.1",
-      "purl": "pkg:npm/%40asamuzakjp/dom-selector@7.1.1",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "ebb4590e761173c1fff0c2c381008313fff3a2a545c1a8e47a91d98265eb6f0c9bcd7384c0e5863d81a600b625f49d8338b7c53cfb3a90a0aa99bcd5f3de614d"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/%40asamuzakjp/generational-cache@1.0.1",
-      "name": "@asamuzakjp/generational-cache",
-      "version": "1.0.1",
-      "purl": "pkg:npm/%40asamuzakjp/generational-cache@1.0.1",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "c1a8df07c2aaccc08dd8a18d15d2e445e7879dc77402c9544abbc756fbd85ae53c8219dc449a00e74913df33fd3152f4fbd838ffaec7f9c76f06c923f531cfce"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/%40asamuzakjp/nwsapi@2.3.9",
-      "name": "@asamuzakjp/nwsapi",
-      "version": "2.3.9",
-      "purl": "pkg:npm/%40asamuzakjp/nwsapi@2.3.9",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "9fc1ae612ac8f5b17b14567f4a38707af94773cc5a5656ffec79877a59dcfcf657043d99478f4d9cdf6c30cb8374418f79e450e5dd21aa54a51298025f75a5d1"
         }
       ]
     },
@@ -759,174 +663,6 @@
         {
           "alg": "SHA-512",
           "content": "e33048c693f3a30899a6eb28164c865706a4751254cae1f93f143f3ebaa085f7455966acbe709d3df4171eb7a70da8be8322c046e9598d9a3008e8fa7e34f8a4"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/%40bramus/specificity@2.4.2",
-      "name": "@bramus/specificity",
-      "version": "2.4.2",
-      "purl": "pkg:npm/%40bramus/specificity@2.4.2",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "72dc6d27f780fadfbaab6fbebe3e63ec5617de746edf5d6ad707d81f7c6394b3ac733865871020d8558d5178691af030dc15a8d7105cbce57afd82dcdabe4527"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/%40csstools/color-helpers@6.0.2",
-      "name": "@csstools/color-helpers",
-      "version": "6.0.2",
-      "purl": "pkg:npm/%40csstools/color-helpers@6.0.2",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "2cc1902d2f44b800e5a04164713051dc1c15fc218757bcf20f1551b550d3c1d23609ae22b740825534fdc029314a0a248c4e47a38d6110f81bf0e114c285ebe9"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/%40csstools/css-calc@3.2.1",
-      "name": "@csstools/css-calc",
-      "version": "3.2.1",
-      "purl": "pkg:npm/%40csstools/css-calc@3.2.1",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "0ed7479605e1e59900e3773005c026fa1bb38098b0c776535958c1b3de24c33db12aa4a29830379418028e985883081550c59ab52334a4377c4c82c1d72ad556"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/%40csstools/css-color-parser@4.1.7",
-      "name": "@csstools/css-color-parser",
-      "version": "4.1.7",
-      "purl": "pkg:npm/%40csstools/css-color-parser@4.1.7",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "0a68c91504c5431fd4ff13498528c24348a5a5eb0f98d43cf9e39478cffe9033955b7deab088de397736eefad00dd59591ff376525b0b60ee45d252f28327c71"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/%40csstools/css-parser-algorithms@4.0.0",
-      "name": "@csstools/css-parser-algorithms",
-      "version": "4.0.0",
-      "purl": "pkg:npm/%40csstools/css-parser-algorithms@4.0.0",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "f81f3ba92edf206dcbe61deac09fc815b8e856839efdba4e761f610235dbbf1d28f08984994b065cdd229c53a79360a108582a92418543e4e9339adb86429ee3"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/%40csstools/css-syntax-patches-for-csstree@1.1.5",
-      "name": "@csstools/css-syntax-patches-for-csstree",
-      "version": "1.1.5",
-      "purl": "pkg:npm/%40csstools/css-syntax-patches-for-csstree@1.1.5",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "a0d8c1bf32ead863d9b49a610a32ea5e8c3f707c921d282dc6f2996fb3aa499ff11e0c3a3563617da77ee8007d70b7959ba780f5dfea32597725d1078f2e8cf8"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/%40csstools/css-tokenizer@4.0.0",
-      "name": "@csstools/css-tokenizer",
-      "version": "4.0.0",
-      "purl": "pkg:npm/%40csstools/css-tokenizer@4.0.0",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "43150b1c09bb70dbbbdb0f7b25434204538315a5e96c383e74ff1bfe8585019d8c4d1a69037534d18d8bd47a9a4b827ac81ab1c1afd8de73016b154a6c1fcdb0"
         }
       ]
     },
@@ -1551,30 +1287,6 @@
         {
           "alg": "SHA-512",
           "content": "6a5242d2e099a5316b48bd020838dc8257815cf9c2ac40214c120ba5e029eccfce160a2ab407ad7c1cd7d31334d0c52c5553e956394fb8c6d112a9d90976939c"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/%40exodus/bytes@1.15.1",
-      "name": "@exodus/bytes",
-      "version": "1.15.1",
-      "purl": "pkg:npm/%40exodus/bytes@1.15.1",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "4ba98bd32341fc06edf448b8b6af200e171ccdce12dfebd0e2b6bbbf19c07fe6070b4dacaedab128a660871d83abaa747bae931cac11eabf0de8ff79c04b72ed"
         }
       ]
     },
@@ -2658,6 +2370,37 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:npm/%40standard-schema/spec@1.1.0",
+      "name": "@standard-schema/spec",
+      "version": "1.1.0",
+      "purl": "pkg:npm/%40standard-schema/spec@1.1.0",
+      "scope": "optional",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-frontend"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "true"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "976685cb98c02e19e21b91e0aab0fa8d72e2feb516acabea37fa89c7aca826c80a85b95577e8aaa94e110976af9bf8cf8adc83a394c2bca327a632a73ab8b2d3"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:npm/%40testing-library/dom@10.4.1",
       "name": "@testing-library/dom",
       "version": "10.4.1",
@@ -3290,10 +3033,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/%40vitest/expect@3.2.6",
+      "bom-ref": "pkg:npm/%40vitest/expect@4.1.11",
       "name": "@vitest/expect",
-      "version": "3.2.6",
-      "purl": "pkg:npm/%40vitest/expect@3.2.6",
+      "version": "4.1.11",
+      "purl": "pkg:npm/%40vitest/expect@4.1.11",
       "scope": "optional",
       "properties": [
         {
@@ -3305,19 +3048,26 @@
           "value": "true"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "d7eeeaf41b5a2b31263be7e6353de462fa0d9f963bd57580c764391d18a6e2d4d5450551bf8b8914043915b2b438f51e34ffd69950a9c58c6825dbee1d58f305"
+          "content": "557db1e6f3495c44f8eca005cf011123e29132d4d30925937d230ab16ec9b14b17578a6cabef9edc3bd9a6e4c33a91dcc72b620ecea9da78556f6b550e289463"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/%40vitest/mocker@3.2.6",
+      "bom-ref": "pkg:npm/%40vitest/mocker@4.1.11",
       "name": "@vitest/mocker",
-      "version": "3.2.6",
-      "purl": "pkg:npm/%40vitest/mocker@3.2.6",
+      "version": "4.1.11",
+      "purl": "pkg:npm/%40vitest/mocker@4.1.11",
       "scope": "optional",
       "properties": [
         {
@@ -3329,19 +3079,26 @@
           "value": "true"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "1193aba436e42a8b4500fef03c0415d54232a063a4e285fbca75a10612c1eeffa678c1db421535ea83e92181934dee28165869af21a98297193ffb229f7858bb"
+          "content": "d972550f9e5dd68e40668bace42086292ef883fae23a3f68744b766d0a4255979b947c8776731e165e239745e3536d6cb5fe266e35247b0d9e5d066deb983909"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/%40vitest/pretty-format@3.2.6",
+      "bom-ref": "pkg:npm/%40vitest/pretty-format@4.1.11",
       "name": "@vitest/pretty-format",
-      "version": "3.2.6",
-      "purl": "pkg:npm/%40vitest/pretty-format@3.2.6",
+      "version": "4.1.11",
+      "purl": "pkg:npm/%40vitest/pretty-format@4.1.11",
       "scope": "optional",
       "properties": [
         {
@@ -3353,19 +3110,26 @@
           "value": "true"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "95bed75d7ce69b6876012cc59d1bd0a43a3aa274f5366309037b641935a2045b5127d971198dddde69bf029b77ea07a3d9b9243952cbff24ceb6e7c36856bf8c"
+          "content": "ca26733db1934bd4abfc9a4597ccc7adc2240287cd6c557a936d6f22040dfdc63fa3165e5e126fe6c73f3012798c5296996b3ea091f0d145cb66399ff77d7e57"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/%40vitest/runner@3.2.6",
+      "bom-ref": "pkg:npm/%40vitest/runner@4.1.11",
       "name": "@vitest/runner",
-      "version": "3.2.6",
-      "purl": "pkg:npm/%40vitest/runner@3.2.6",
+      "version": "4.1.11",
+      "purl": "pkg:npm/%40vitest/runner@4.1.11",
       "scope": "optional",
       "properties": [
         {
@@ -3377,19 +3141,26 @@
           "value": "true"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "1d87284a3d70e6d720527ce81741dcc9a0108e9035823f5fb5427b892252ba2a5cd368d6f602a48a0c196e31657407d81c0d5f6bc5195517ed74c6399ac58cf5"
+          "content": "2f3b6f52077030d24c2248f78509e7c620b65f2d73371abddbc5bfc618c22da342cea4d93ae763c1b41feaff489ed6463f0d77da2d8bab6ae04d16470f724737"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/%40vitest/snapshot@3.2.6",
+      "bom-ref": "pkg:npm/%40vitest/snapshot@4.1.11",
       "name": "@vitest/snapshot",
-      "version": "3.2.6",
-      "purl": "pkg:npm/%40vitest/snapshot@3.2.6",
+      "version": "4.1.11",
+      "purl": "pkg:npm/%40vitest/snapshot@4.1.11",
       "scope": "optional",
       "properties": [
         {
@@ -3401,19 +3172,26 @@
           "value": "true"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "1fe663353586a4e6de9e1d189e505cb403e7252236d0ff353cbf013f35a9c79e185cb2d39bc844b166b0b5c60b32bc2fa4ae3c846c4b2db092fb52915e1b0a87"
+          "content": "a4dee2927d4e37b87c79ee20200a78033c8afb306d24fcd56ea3a0bb92c2121e1568955b3d072061060920c1903d755e249ab57e77dace2b3b6b9a4534f6a1a2"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/%40vitest/spy@3.2.6",
+      "bom-ref": "pkg:npm/%40vitest/spy@4.1.11",
       "name": "@vitest/spy",
-      "version": "3.2.6",
-      "purl": "pkg:npm/%40vitest/spy@3.2.6",
+      "version": "4.1.11",
+      "purl": "pkg:npm/%40vitest/spy@4.1.11",
       "scope": "optional",
       "properties": [
         {
@@ -3425,19 +3203,26 @@
           "value": "true"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "a2ae816c7ebc5b37169b0b41ad4f67a8b79a5d34785f0245ec548b90a119a388ba7a85dcaf18dcc12b93bd60484544c2e950bbda75d8ba7cea81903e20a76dc6"
+          "content": "6a935afe9ad0cb6a827b2c219e2c4e1cf442806361be0ed3e036a97e5d466a12e9fd1fae8419b970fc85a0d572aac35dda1d672712fa06aa9d22388004beb460"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/%40vitest/utils@3.2.6",
+      "bom-ref": "pkg:npm/%40vitest/utils@4.1.11",
       "name": "@vitest/utils",
-      "version": "3.2.6",
-      "purl": "pkg:npm/%40vitest/utils@3.2.6",
+      "version": "4.1.11",
+      "purl": "pkg:npm/%40vitest/utils@4.1.11",
       "scope": "optional",
       "properties": [
         {
@@ -3449,10 +3234,17 @@
           "value": "true"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "948db79c8b386e74f74fc348a21faf15acf9b36fc374fd0982dda3c70816963bf09fcd9c2c9b728bf21ff9f8c5ca82cc1883b3d14fdf2af584d1de23b0d4047e"
+          "content": "cd30951a9c85b0658186594ec8a953c3fbe7afa0fdab1b1f483c9f6f26664f28c7c3937f56ebf31e91e84239b6649ce7e11260c79c38afb5747abebd0a62e03d"
         }
       ]
     },
@@ -3681,30 +3473,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/bidi-js@1.0.3",
-      "name": "bidi-js",
-      "version": "1.0.3",
-      "purl": "pkg:npm/bidi-js@1.0.3",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "44ab21408d51dd843e9fd609cf6410d78ecfeba10ba5ad45404836d0393ca16f6dd8a80b6e90cb2e9f5a199ef2f161d2b210e49c6d1b927a86c39fedc82b39b7"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/browserslist@4.28.8",
       "name": "browserslist",
       "version": "4.28.8",
@@ -3760,30 +3528,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/cac@6.7.14",
-      "name": "cac",
-      "version": "6.7.14",
-      "purl": "pkg:npm/cac@6.7.14",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "6fa225bacf9cdd1add0e4f8984b2940107f3ce02c43f2eb0717a92edfff17b51044efb033fa18e446ed216e3ace9c203e5892a7215bf2d765b5f96dcf23ed971"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/caniuse-lite@1.0.30001810",
       "name": "caniuse-lite",
       "version": "1.0.30001810",
@@ -3815,10 +3559,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/chai@5.3.3",
+      "bom-ref": "pkg:npm/chai@6.3.0",
       "name": "chai",
-      "version": "5.3.3",
-      "purl": "pkg:npm/chai@5.3.3",
+      "version": "6.3.0",
+      "purl": "pkg:npm/chai@6.3.0",
       "scope": "optional",
       "properties": [
         {
@@ -3830,34 +3574,17 @@
           "value": "true"
         }
       ],
-      "hashes": [
+      "licenses": [
         {
-          "alg": "SHA-512",
-          "content": "e333617490ff88e8d21f4034e5e6be29ee8c5399a6a5071b42c48e92075a50c27dcd39434c3fc6625c28866204daed206b11d88951c49f5170f6667f92d25683"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/check-error@2.1.3",
-      "name": "check-error",
-      "version": "2.1.3",
-      "purl": "pkg:npm/check-error@2.1.3",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
+          "license": {
+            "id": "MIT"
+          }
         }
       ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "3c025d0c9baca319f09b55705b4ed55b050dd6c97bb26982dce2a082f9dd24569dc710d1c852415ff8209eefca138910001edadc3a7c7ff6170b5165529ad698"
+          "content": "5d602dc09e8e1cefad8f410a0acd18d946a69f23b1b1e65696d538c76536c21f20e008a0763c2fb548ef2cfdadaa403f6afc4712dcf135aa86abf6063707242a"
         }
       ]
     },
@@ -3913,30 +3640,6 @@
         {
           "alg": "SHA-512",
           "content": "2afa78e7d1eb576144275080b22d4abbe318de46ac1f5f53172913cf6c5698c7aae9b936354dd75ef7c9f90eb59b4c64b56c2dfb51d261fdc966c4e6b3769126"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/css-tree@3.2.1",
-      "name": "css-tree",
-      "version": "3.2.1",
-      "purl": "pkg:npm/css-tree@3.2.1",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "5fbb2343371e521bb5bbb63fca5ad1645536152e8b462155a7aaca2cf836df2df1ddcdc338a030b97183a7e3c01a387a0929c28d8780ba5f29713f1b025fa548"
         }
       ]
     },
@@ -4213,30 +3916,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/data-urls@7.0.0",
-      "name": "data-urls",
-      "version": "7.0.0",
-      "purl": "pkg:npm/data-urls@7.0.0",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "db75c770217e7281987af8ab65c793543ecd7493aa567fb8f481f2c60b339be2488872e80764e498fb6c6243564f5a6f4521a4737e4be8d1ecd321e43764ae98"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/debug@4.4.3",
       "name": "debug",
       "version": "4.4.3",
@@ -4263,54 +3942,6 @@
         {
           "alg": "SHA-512",
           "content": "446c305a7c10be455f6af295b76d8518bc3ec5849dcc04709b4aeee83853540dee994e6165cdbc57790ee2cb6062bcab4e52e9baf808f468a28e5b408cd6dca8"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/decimal.js@10.6.0",
-      "name": "decimal.js",
-      "version": "10.6.0",
-      "purl": "pkg:npm/decimal.js@10.6.0",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "6298108884d6dc95c69edcdd526c9447557cd761e7f13d58557842bbec0edcea52e1e53d97861d0f7aa3ca229d57a9af576f736a990c783dfdd145447f696452"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/deep-eql@5.0.2",
-      "name": "deep-eql",
-      "version": "5.0.2",
-      "purl": "pkg:npm/deep-eql@5.0.2",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "87993fe54e74209245a737cbea73bd8da6ae99f8cefdfd8d8cafe8601d838f39b8a7d2fedd3f6a5a966a6768406cb3eeb98abdc2b534f164320532f919b3e4e5"
         }
       ]
     },
@@ -4498,34 +4129,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/entities@8.0.0",
-      "name": "entities",
-      "version": "8.0.0",
-      "purl": "pkg:npm/entities@8.0.0",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "cf07f325e710fd47a3eadbac32ac00a94ffa28bd97681d95676260e7825ee9a84d046347e8493a8378e33421747c6f4459028664d75d3635391756509ffb019c"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/es-module-lexer@1.7.0",
+      "bom-ref": "pkg:npm/es-module-lexer@2.3.2",
       "name": "es-module-lexer",
-      "version": "1.7.0",
-      "purl": "pkg:npm/es-module-lexer@1.7.0",
+      "version": "2.3.2",
+      "purl": "pkg:npm/es-module-lexer@2.3.2",
       "scope": "optional",
       "properties": [
         {
@@ -4537,10 +4144,17 @@
           "value": "true"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "8c44280b093c8726f6019ce220e2e10eaa66e7edb0c39b8813a9643bfea370e0aeb1f93a2e1307a575df04b5d367b61dcadd23e15a1442feae18d61b756fa404"
+          "content": "a681c6a4e4400688c926e72757d29b39abc44d6f250559e98645bbec4479fc1439173ee85d2a0235e93b207def4799d18ddb04cfddba89b1585fc2ad2d099dcb"
         }
       ]
     },
@@ -4927,30 +4541,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/html-encoding-sniffer@6.0.0",
-      "name": "html-encoding-sniffer",
-      "version": "6.0.0",
-      "purl": "pkg:npm/html-encoding-sniffer@6.0.0",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "095f535b76377fcff04f405115cd7f280550dd350789799a01be955bdbed88c15fed22e831dd4f7407385b728538511304951bf7429ab47aa5b1931657e47d1a"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/indent-string@4.0.0",
       "name": "indent-string",
       "version": "4.0.0",
@@ -4970,30 +4560,6 @@
         {
           "alg": "SHA-512",
           "content": "11d0c366ee00d8ec882bb2ebff6cc6fb0e6399bba4d435419c4c11110bc1ceca412640846d16bc1b153596085871a1890a745689b8c35e5abbefd5f5ff2e71c2"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/is-potential-custom-element-name@1.0.1",
-      "name": "is-potential-custom-element-name",
-      "version": "1.0.1",
-      "purl": "pkg:npm/is-potential-custom-element-name@1.0.1",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "6c261e440dab5626ca65dfacdbadb98069c617fb7b0d2a83b3874fec2acb0359bb8ca5b3ea9a6cd0ba582c937c43ae07b663ca27586b3779f33cd28510a39489"
         }
       ]
     },
@@ -5025,54 +4591,6 @@
         {
           "alg": "SHA-512",
           "content": "45d2547e5704ddc5332a232a420b02bb4e853eef5474824ed1b7986cf84737893a6a9809b627dca02b53f5b7313a9601b690f690233a49bce0e026aeb16fcf29"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/js-tokens@9.0.1",
-      "name": "js-tokens",
-      "version": "9.0.1",
-      "purl": "pkg:npm/js-tokens@9.0.1",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "9b16bd13d21314eb746da9f78fa2f93298f07a01b3ea505098cd4826459e05919c331b68e74f9e59d8c2ff9db10db4b6bf2d24eef20c2b415edb07cbf4e412a5"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/jsdom@29.1.1",
-      "name": "jsdom",
-      "version": "29.1.1",
-      "purl": "pkg:npm/jsdom@29.1.1",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "1028b8162d9fec1749b542937e56114e268cc480743bacdf4757d7d065e952b7fa7e5a7c408627d544f6d1842a75239f93675f902c12f0b005a090c4a6934ae5"
         }
       ]
     },
@@ -5171,54 +4689,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/loupe@3.2.1",
-      "name": "loupe",
-      "version": "3.2.1",
-      "purl": "pkg:npm/loupe@3.2.1",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "09dceaa3044909e2d4ef66c7bd6ab04410652dc304b48bc6ae5bde7fbe24327576028952f58f3152fd48d14fcc34058c84194a228cae120a09d2dfdb6f01db2d"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/lru-cache@11.5.1",
-      "name": "lru-cache",
-      "version": "11.5.1",
-      "purl": "pkg:npm/lru-cache@11.5.1",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "44f8a6c3feda31dbf6a2a46bc4ac2f65770f7f006b9ff259db161c63d1eeb3fe8b692dd538029558a5a034b0854a23a6d444978a78ec0e589d554ec996708dd8"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/lru-cache@5.1.1",
       "name": "lru-cache",
       "version": "5.1.1",
@@ -5293,30 +4763,6 @@
         {
           "alg": "SHA-512",
           "content": "bddd85e1853211728670b1e8abe4c4c828f1b9e49e1e7171cb28cda7cd328345d5e2f5219c37abfe5bef96a33f6ab0796d740de4adbfde88a7c82472c7c4f609"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/mdn-data@2.27.1",
-      "name": "mdn-data",
-      "version": "2.27.1",
-      "purl": "pkg:npm/mdn-data@2.27.1",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "f58b9b9edddef00d0e2b0c58497ca12f29865b8b02b9f70b1ba55d88375419590f869a8bc65bcfe6f975f7cde0423265deda9baccef7d668da65a3faf00828b1"
         }
       ]
     },
@@ -5487,6 +4933,37 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:npm/obug@2.2.1",
+      "name": "obug",
+      "version": "2.2.1",
+      "purl": "pkg:npm/obug@2.2.1",
+      "scope": "optional",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-frontend"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "true"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "5ebb2b853e6cc9bb4a23ac1a92bd923ce9466565986d45d9edad234fcfd039e00f6aefb55ff6d27a035ee5847be6826611941b2a78a7822ae618e10908893ad5"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:npm/pandemonium@2.4.1",
       "name": "pandemonium",
       "version": "2.4.1",
@@ -5511,30 +4988,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/parse5@8.0.1",
-      "name": "parse5",
-      "version": "8.0.1",
-      "purl": "pkg:npm/parse5@8.0.1",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "cf57bf1cc1bdd286d219e89d9658b7863edc6e8728bb4ff06b91da72f237012c77e0f79c36335079a1cda395886695a87cdf64824a95d6ae58bd77b71741683f"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/pathe@2.0.3",
       "name": "pathe",
       "version": "2.0.3",
@@ -5554,30 +5007,6 @@
         {
           "alg": "SHA-512",
           "content": "5948c6700a8fd6041a72841ef8e049b0503b2dde03c97b9422367971cef970b1ef27b76d36c4ee8298712000f0b294be02b68051e3c22ab495b4f2c58ff17cf3"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/pathval@2.0.1",
-      "name": "pathval",
-      "version": "2.0.1",
-      "purl": "pkg:npm/pathval@2.0.1",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "fff9ec8660f9e5ce3a16e170dbac55ff1140681e4717d5dd6a9ec7241067aca74077afc6c4305a340d7cef43bbf7ef6e7a0eb57192d255cf8e68595f98e6d855"
         }
       ]
     },
@@ -5741,30 +5170,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/punycode@2.3.1",
-      "name": "punycode",
-      "version": "2.3.1",
-      "purl": "pkg:npm/punycode@2.3.1",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "bd8b7b503d54f5683ad77f2c84bb4b3af740bbef03b02fe2945b44547707fb0c9d712a4d136d007d239db9fe8c91115a84be4563b5f5a14ee7295645b5fabc16"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/react-dom@18.3.1",
       "name": "react-dom",
       "version": "18.3.1",
@@ -5906,30 +5311,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/require-from-string@2.0.2",
-      "name": "require-from-string",
-      "version": "2.0.2",
-      "purl": "pkg:npm/require-from-string@2.0.2",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "5dfd2759ee91b1ece214cbbe029f5b8a251b9a996ae92f7fa7eef0ed85cffc904786b5030d48706bebc0372b9bbaa7d9593bde53ffc36151ac0c6ed128bfef13"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/rollup@4.60.4",
       "name": "rollup",
       "version": "4.60.4",
@@ -5956,30 +5337,6 @@
         {
           "alg": "SHA-512",
           "content": "58778549b658b0fbb7f9b2e835152e00efb06af365a1c38f7f7c121d33fb85c14a56725e5ac6250836ebde64d2d781428b37fd71c2315c0f2c18bf3329e40dde"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/saxes@6.0.0",
-      "name": "saxes",
-      "version": "6.0.0",
-      "purl": "pkg:npm/saxes@6.0.0",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "c4083b48e9c486b9b9cc8de9b8e38acb2d4e31c32520965834963bc4b0704b37b452384f2e759f8f6185d84a53d239b368928858a1cbb1a4926a37f7e5b7189c"
         }
       ]
     },
@@ -6150,10 +5507,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/std-env@3.10.0",
+      "bom-ref": "pkg:npm/std-env@4.3.0",
       "name": "std-env",
-      "version": "3.10.0",
-      "purl": "pkg:npm/std-env@3.10.0",
+      "version": "4.3.0",
+      "purl": "pkg:npm/std-env@4.3.0",
       "scope": "optional",
       "properties": [
         {
@@ -6165,10 +5522,17 @@
           "value": "true"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "e464b5d8574e64d9623399803b115183b22bd295b3f0c769626e8063a54f906a5b03b67399bccd701250d063efbf25a0718ed00210a07fd532f3d234ddf68b92"
+          "content": "3ad53f1204359089b92b0a90a410ba644317ad946e8b5d70f3381f4d6a7c71d3bd07c39a3ec6c0f1b4c73b63fe1cda3556551318c541c0f87276eea9a1e5e26a"
         }
       ]
     },
@@ -6198,54 +5562,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/strip-literal@3.1.0",
-      "name": "strip-literal",
-      "version": "3.1.0",
-      "purl": "pkg:npm/strip-literal@3.1.0",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "f2bde690833fdbe3e98c7a0eb62016f118378c92c7695ef13f01be6111abbfa14fd30c24feda13a404f1598396d0129d5b097cd954f6b45622e4395139ad0cc6"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/symbol-tree@3.2.4",
-      "name": "symbol-tree",
-      "version": "3.2.4",
-      "purl": "pkg:npm/symbol-tree@3.2.4",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "f50364e4ac0317e06fcfe3f239b9264988c8e64b15518b635bb014db6af634a71f2c9717a7dea1903594dfe5e774eb146fe010f5085fcdf093d8ef823564f94f"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/tinybench@2.9.0",
       "name": "tinybench",
       "version": "2.9.0",
@@ -6270,10 +5586,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/tinyexec@0.3.2",
+      "bom-ref": "pkg:npm/tinyexec@1.3.1",
       "name": "tinyexec",
-      "version": "0.3.2",
-      "purl": "pkg:npm/tinyexec@0.3.2",
+      "version": "1.3.1",
+      "purl": "pkg:npm/tinyexec@1.3.1",
       "scope": "optional",
       "properties": [
         {
@@ -6285,10 +5601,17 @@
           "value": "true"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "290411f7237b479f8e4b068ad174288f6da9c07a1396062a994b1c3d8a249cea160967e3ff9fc00533118baf45aca5397df3d587941c16292958923f3f5a1c1c"
+          "content": "182bc1ddaa32b3de88b8314131c4c1e3a24e47a99d32d013a2ac225bc2655a1b288759a11e2ff19fdb2cfc383b379e791a227212ddaace81bf3470b033a87510"
         }
       ]
     },
@@ -6318,34 +5641,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/tinypool@1.1.1",
-      "name": "tinypool",
-      "version": "1.1.1",
-      "purl": "pkg:npm/tinypool@1.1.1",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "65b6bcdacf3b205abd03d5e68e25f9b9903f011583ac1d3738796af95c357d276dd08fb8fcabadc32f013f863fcbf68e44ca3ad45434bc86f98f8e2f4a8e4f92"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/tinyrainbow@2.0.0",
+      "bom-ref": "pkg:npm/tinyrainbow@3.2.0",
       "name": "tinyrainbow",
-      "version": "2.0.0",
-      "purl": "pkg:npm/tinyrainbow@2.0.0",
+      "version": "3.2.0",
+      "purl": "pkg:npm/tinyrainbow@3.2.0",
       "scope": "optional",
       "properties": [
         {
@@ -6357,130 +5656,17 @@
           "value": "true"
         }
       ],
-      "hashes": [
+      "licenses": [
         {
-          "alg": "SHA-512",
-          "content": "a29e27b13478ed1ea9d2f314528625fdafa58cb155b657da5e42d09aa7cb475a8799ad61ff2b189388445d9f3cd1b7f6098813b24bd36bf7b5f7a55de5d0d05f"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/tinyspy@4.0.4",
-      "name": "tinyspy",
-      "version": "4.0.4",
-      "purl": "pkg:npm/tinyspy@4.0.4",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
+          "license": {
+            "id": "MIT"
+          }
         }
       ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "6b397eb74cfba70ff3f79f06cbdb2f393bb3a8893ac6af8d4a1789ce7e4c316b564c5cb021a720db0525cca146b6dddcb61c74af64b130ad32cc9391d08112ed"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/tldts-core@7.4.3",
-      "name": "tldts-core",
-      "version": "7.4.3",
-      "purl": "pkg:npm/tldts-core@7.4.3",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "dbb7a9e47f4fcdd06b35de4e14cfe3dd6094f05de43f033d0f404e68e7fbb987f13097f2af42b94e38faf46ae2fac6658765977796ee226e3b36e3c5dbd0838b"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/tldts@7.4.3",
-      "name": "tldts",
-      "version": "7.4.3",
-      "purl": "pkg:npm/tldts@7.4.3",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "03704340179eba460fcc1e10750d43b5d9549a9e31d8e087f27e545611166f200dc4d7a9f066afa2db4acddd7160a1492a35203323d3ec4cce7e704ee79b3c4a"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/tough-cookie@6.0.1",
-      "name": "tough-cookie",
-      "version": "6.0.1",
-      "purl": "pkg:npm/tough-cookie@6.0.1",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "2e4b5941bdc87a851607d96a4791164c7816fd54c84c25e0e03db533e96fc9b45577294bad1327a9a20e34b55be666aff2f335f66e381c8706ab8a8049ebb643"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/tr46@6.0.0",
-      "name": "tr46",
-      "version": "6.0.0",
-      "purl": "pkg:npm/tr46@6.0.0",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "6cb54c2cfb6cb6567888c407a451d347b1801a3da3c62f03834b3687631a7c0138b92585f7c142ff7328994e7589000c7fcfea0d46ca59fe46c6ebef55c5c487"
+          "content": "2e03b70fdc99263029522b947e5f62140c2bb5a5f8fa5a24df0248aadb46a0a08795652a1ea6d0a67c427fcd8bf058e02ac878886a3bf21a89c202fc17a4e8d8"
         }
       ]
     },
@@ -6572,37 +5758,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/undici@7.29.0",
-      "name": "undici",
-      "version": "7.29.0",
-      "purl": "pkg:npm/undici@7.29.0",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "203c5f95e2e699b4ac91f5925004e23759df9f6ac3baf9cc3aa6f909647dda221fa2303451dfae94e000110e7b2cfafdad69acade5327f9970c9aa3eec634d57"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/update-browserslist-db@1.3.2",
       "name": "update-browserslist-db",
       "version": "1.3.2",
@@ -6658,30 +5813,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/vite-node@3.2.4",
-      "name": "vite-node",
-      "version": "3.2.4",
-      "purl": "pkg:npm/vite-node@3.2.4",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "11b2922a1f9b875135205c5e3b4a60d67e1dbe8393b7450389731dfea9fefabf7cfa33ced71b498a5bd795d7ae43c822201e489298c280c95e1cc344b061faa6"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/vite@6.4.3",
       "name": "vite",
       "version": "6.4.3",
@@ -6706,10 +5837,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/vitest@3.2.6",
+      "bom-ref": "pkg:npm/vitest@4.1.11",
       "name": "vitest",
-      "version": "3.2.6",
-      "purl": "pkg:npm/vitest@3.2.6",
+      "version": "4.1.11",
+      "purl": "pkg:npm/vitest@4.1.11",
       "scope": "optional",
       "properties": [
         {
@@ -6721,58 +5852,17 @@
           "value": "true"
         }
       ],
-      "hashes": [
+      "licenses": [
         {
-          "alg": "SHA-512",
-          "content": "c5e8f26be6d3fe3ffe47f0066b55ce7d1c4b98d5252ed9708d1b055082c5fb11dfcc496619c985c9dcb682aa88addeb6a6d2047f054ca1f775f6e3560fd2fb37"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/w3c-xmlserializer@5.0.0",
-      "name": "w3c-xmlserializer",
-      "version": "5.0.0",
-      "purl": "pkg:npm/w3c-xmlserializer@5.0.0",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
+          "license": {
+            "id": "MIT"
+          }
         }
       ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "a3caa086523c3591d4d652cfae98b6f94abb69b8781863e96003656a5cd6c725ad789382b2bfcffa83c1038f5338bbb915364ee1ddc5f4c9d625f88ca3806498"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/webidl-conversions@8.0.1",
-      "name": "webidl-conversions",
-      "version": "8.0.1",
-      "purl": "pkg:npm/webidl-conversions@8.0.1",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "04c84b0ff4b0f866c90b6d42fd48326995f8d673edf1b51383e8d6c837a0edeed8378c4e334e583d221771e0029d756dab2130fcb30295440cb4c67e3c61a9a9"
+          "content": "7e1002acd5d489d21b19206be4595bb8190eed5582d59c8b9740cee025360eb42800fc57f3862cc6cf877864298a2e656565754388016534eee3d985f80e8477"
         }
       ]
     },
@@ -6797,54 +5887,6 @@
         {
           "alg": "SHA-512",
           "content": "9edf8dd9dcc8bad551c40471d678213ca1afd711e2914ec729d7da7ca90b34b8a77663d4fdc877537d4d38218603f7663dc99bd559687ced2f9ca01cb26d28fd"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/whatwg-mimetype@5.0.0",
-      "name": "whatwg-mimetype",
-      "version": "5.0.0",
-      "purl": "pkg:npm/whatwg-mimetype@5.0.0",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "b1770d707382e75b8f185d0ffc3e0d56dae48d25367cdb26f62a20e19bd926c2f7ae3a030335d98649b6316b75cbe3d476080a01856830021872cefcc09e750b"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/whatwg-url@16.0.1",
-      "name": "whatwg-url",
-      "version": "16.0.1",
-      "purl": "pkg:npm/whatwg-url@16.0.1",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "d6da38cd70719971d5dc8892484227aeb78896ed36bd43afae1c49247e6f731613043031e7572a66229dc93c6579c74a3528e3f04731181c4d7fa560fbde3983"
         }
       ]
     },
@@ -6893,54 +5935,6 @@
         {
           "alg": "SHA-512",
           "content": "56ca76f1bec345c8a6150bebaaed967a4df3d626310c25aa1d807c42c9e4fd2e117da090ccf18fc8136e563255ddc77a5222ad52da7ab0d33bee05afcdc087fa"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/xml-name-validator@5.0.0",
-      "name": "xml-name-validator",
-      "version": "5.0.0",
-      "purl": "pkg:npm/xml-name-validator@5.0.0",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "12f18af042770e16877db465113396012e693bd31921379ab87289c9bf30c9a8d47d051e9e4220d8cbcb0d36784ff4e021c9b71d4d1314181659ba00677d141e"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/xmlchars@2.2.0",
-      "name": "xmlchars",
-      "version": "2.2.0",
-      "purl": "pkg:npm/xmlchars@2.2.0",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "2599c328af01d11083c3ce0535d0c022964af89b89c3eb3b2f3f2792c23b488b94dd45c926c954b61b22fae5815183b03c5c16ed6ecf44b45f50aa718ed8c50b"
         }
       ]
     },

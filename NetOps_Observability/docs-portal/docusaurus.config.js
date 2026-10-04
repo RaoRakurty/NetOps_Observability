@@ -30,11 +30,11 @@ const config = {
 
   // A dead link in an administration guide costs an operator their time in the
   // middle of an incident. Both are hard failures.
+  // (Docusaurus 3.9 moved the markdown-link knob under markdown.hooks; the
+  // top-level spelling is deprecated and goes away in v4.)
   onBrokenLinks: 'throw',
-  onBrokenAnchors: 'warn',
-  // Docusaurus 3.10 moved the markdown-link check under markdown.hooks; the
-  // policy is unchanged — a broken markdown link still fails the build.
   markdown: { hooks: { onBrokenMarkdownLinks: 'throw' } },
+  onBrokenAnchors: 'warn',
 
   i18n: { defaultLocale: 'en', locales: ['en'] },
 

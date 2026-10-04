@@ -158,9 +158,11 @@ Triage keeps the tree moving. This is the half-hour that catches what triage can
    Anything else means the allowlist table in `CLAUDE.md` §6 was not amended. (No CI check enforces
    this yet — see the plan §9.1.)
 
-4. **Check `docs-portal` advisory count** against the last review. 26 as of 2026-09-03 (12 high), all
-   in the Docusaurus 3.5.2 build chain; tracker row 123. It is build-time-only on our own markdown,
-   but the number must be *known*, not merely tolerated.
+4. **Check `docs-portal` advisory count** against the last review. As of 2026-10-04 (Docusaurus
+   3.10.2): 2 root advisories, `braces` and `http-cache-semantics`, both with **no fixed release**
+   — see `docs/security/NPM_ADVISORY_TRIAGE_2026-10-04.md` §3. If either has shipped a fix, bump it
+   and delete its row there. Build-time-only on our own markdown, but the number must be *known*,
+   not merely tolerated.
 
 5. **Check the three unsynchronised toolchain sites** (plan §6.2 / §8.7): the satellite `go.mod` files,
    the hardcoded Go version in `fuzz-nightly.yml`, and the node-18-vs-20 split between `frontend-ci`
