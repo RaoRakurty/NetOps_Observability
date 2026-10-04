@@ -19,7 +19,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import {
   bootIris, openIris, askIris, topCpuAnswer, memorySeriesAnswer, capabilityAnswer, clarifyAnswer,
-  XSS_IMG, TENANT_CONFIG,
+  XSS_IMG, TENANT_CONFIG, SUGGESTION_IGNORED,
 } from "./irisBackend";
 
 test.use({ timezoneId: "UTC", locale: "en-US" });
@@ -84,6 +84,11 @@ test("follow-ups ride one server conversation, kept across closing and reopening
   // A series answer draws its chart and does not also claim "Nothing found".
   await expect(ans.locator("figure.iris-chart canvas").first()).toBeVisible();
   await expect(ans.getByText(/Nothing found/)).toHaveCount(0);
+  // The SERVER's plan is what is drawn (N-E1): its title, not the client's
+  // default ("Mem util pct over time"), and its disclosure about the ignored
+  // model suggestion, as text.
+  await expect(ans.getByRole("region", { name: "Memory over time" })).toBeVisible();
+  await expect(ans.getByTestId("iris-plan-disclosure")).toHaveText(SUGGESTION_IGNORED);
 
   expect(fake.started).toEqual(["conv-1"]); // one conversation, not two
   expect(fake.asks.map((a) => a.conversation_id)).toEqual(["conv-1", "conv-1"]);

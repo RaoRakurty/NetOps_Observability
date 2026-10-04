@@ -30,6 +30,7 @@ import (
 	"netops/backend/internal/nlquery/explain"
 	"netops/backend/internal/nlquery/modelc"
 	"netops/backend/internal/nlquery/plan"
+	"netops/backend/internal/nlquery/present"
 	"netops/backend/internal/nlquery/resolve"
 	"netops/backend/internal/nlquery/validate"
 	"netops/backend/internal/platformdb"
@@ -436,6 +437,8 @@ func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled,
 	}
 	body := c.body()
 	body["result"] = rs
+	view := c.presentation(rs)
+	body["presentation"] = view
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return ai.DataAnswer{}, err
@@ -451,7 +454,8 @@ func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled,
 	}
 	tenant, _ := principalTenant(claims)
 	logInfo("iris.router", "data answer", map[string]any{"tenant": tenant, "sub": claims.Sub, "intent": c.res.Intent,
-		"query_type": string(c.checked.Type), "rows": len(rs.Rows), "series": len(rs.Series), "source": c.source})
+		"query_type": string(c.checked.Type), "rows": len(rs.Rows), "series": len(rs.Series), "source": c.source,
+		"view": string(view.PrimaryView), "view_by": view.ChosenBy, "view_suggestion_ignored": view.Disclosure != ""})
 	return ai.DataAnswer{Status: ai.DataAnswered, Intent: c.res.Intent, Payload: payload, Notes: notes,
 		Text:      plan.Summarize(s.nlqCatalog, c.checked, rs),
 		Citations: []ai.Citation{{ID: "query:" + rs.QueryID, Kind: "query", Label: "Query " + rs.ASTHash, Href: ""}}}, nil
@@ -1354,6 +1358,16 @@ type nlqCompiled struct {
 	// question (the grammar's queries carry none); the UI and the router's
 	// data arm disclose it.
 	source string
+	// view is the model's raw, untrusted layout suggestion (tracker 337 N-E1);
+	// only present.Select reads it. Nil unless the model compiled the query.
+	view json.RawMessage
+}
+
+// presentation is the server's PresentationPlan for rs (tracker 337 N-E1): the
+// view is chosen from the validated query and the result's shape; the model's
+// suggestion is honoured only as a closed-enum member that fits.
+func (c nlqCompiled) presentation(rs *plan.ResultSet) present.Plan {
+	return present.Select(c.checked, rs, present.Suggestion{Raw: c.view})
 }
 
 // nlqCompileQuestion runs the compiler and the validator for the caller. When
@@ -1386,7 +1400,7 @@ func (s *server) nlqCompile(r *http.Request, claims jwtClaims, question string, 
 		}
 		if o.Accepted() {
 			vr := o.Validation
-			return nlqCompiled{res: o.Result, checked: o.Checked, vr: &vr, source: o.Source}, nil
+			return nlqCompiled{res: o.Result, checked: o.Checked, vr: &vr, source: o.Source, view: o.ViewSuggestion}, nil
 		}
 	}
 	out := nlqCompiled{res: res}
@@ -1487,7 +1501,8 @@ func (s *server) handleAIQueryExecute(w http.ResponseWriter, r *http.Request) {
 	logInfo("iris.nlquery", "execute", map[string]any{"tenant": tenant, "sub": claims.Sub, "query_type": string(checked.Type),
 		"ast_hash": rs.ASTHash, "catalog": rs.CatalogVersion, "rows": len(rs.Rows), "series": len(rs.Series),
 		"truncated": rs.Truncated, "duration_ms": rs.Provenance.DurationMs})
-	out := map[string]any{"result": rs, "validation": vr}
+	// A supplied AST has no model behind it: the plan is the server's alone.
+	out := map[string]any{"result": rs, "validation": vr, "presentation": present.Select(checked, rs, present.Suggestion{})}
 	rec.Answered(rs)
 	if id := s.nlqCapture(r, claims, &rec, start); id != "" {
 		out["query_log_id"] = id
@@ -1678,6 +1693,7 @@ func (s *server) handleAIConversationMessage(w http.ResponseWriter, r *http.Requ
 			turn.Rows = len(rs.Rows) + len(rs.Series)
 			next = irisconvo.Next(s.nlqCatalog, st, c.checked, rs)
 			out["result"] = rs
+			out["presentation"] = c.presentation(rs)
 			rec.Answered(rs)
 		}
 		if turn.Outcome == irisconvo.OutcomeError {

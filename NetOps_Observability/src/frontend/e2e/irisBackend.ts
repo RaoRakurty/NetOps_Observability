@@ -7,8 +7,9 @@
 //
 // The payloads mirror the Go JSON exactly (json tags read from the source):
 //   · /api/ai/ask → ai.Answer (ai/schemas.go); the data arm's `data` is
-//     nlqCompiled.body() + "result" (ai_handlers.go), result = plan.ResultSet
-//     (internal/nlquery/plan/result.go).
+//     nlqCompiled.body() + "result" + "presentation" (ai_handlers.go), result =
+//     plan.ResultSet (internal/nlquery/plan/result.go), presentation =
+//     present.Plan (internal/nlquery/present/present.go).
 //   · conversations → irisconvo.Conversation / Turn (internal/irisconvo/store.go);
 //     a conversation the server does not hold is 404 {"error":"not found"}.
 //   · aliases → entityalias.Alias; resolve → resolve.Result (refs + ambiguous).
@@ -23,6 +24,10 @@ export const FIXED_NOW = "2026-09-27T10:00:00Z";
 
 /** A hostile cell value: if anything renders it as HTML, onerror sets the flag. */
 export const XSS_IMG = '<img src=x onerror="window.__irisXss=1">';
+
+/** present.DisclosureNotAView — the server's note when it ignored a model suggestion. */
+export const SUGGESTION_IGNORED =
+  "The AI model suggested a layout Iris does not have, so it was ignored and the standard layout is shown.";
 
 export interface IrisFake {
   /** Every /api/ai/ask body, in order. */
@@ -128,6 +133,13 @@ export function memorySeriesAnswer(): Json {
         window: { from: "2026-09-27T09:00:00Z", to: FIXED_NOW, step: 600000000000 },
         series: [{ entity: { device: "device:core-rtr-1" }, points }], truncated: false,
         provenance: { source: "victoriametrics", entities: [{ type: "device", id: "device:core-rtr-1" }], executed_at: FIXED_NOW, duration_ms: 18 },
+      },
+      // The server's PresentationPlan (N-E1, present.Plan): here the model's
+      // view suggestion was out of the enum, so the server's choice stands and
+      // the plan says so. (topCpuAnswer sends none — an older server.)
+      presentation: {
+        primary_view: "TIME_SERIES", secondary_view: "TABLE", title: "Memory over time", chosen_by: "server",
+        disclosure: SUGGESTION_IGNORED,
       },
     },
   };

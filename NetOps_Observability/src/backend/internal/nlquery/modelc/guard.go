@@ -46,7 +46,10 @@ var (
 
 // parseReply decodes one reply. fatal is set for a reply that must end the
 // fallback (a forbidden field, an honest "cannot", a name it could not match).
-func parseReply(reply string) (q *ast.AST, problems []validate.Error, fatal string) {
+// view is the reply's optional layout suggestion (tracker 337 N-E1), RAW and
+// unvalidated: it is never a reason to repair or refuse the query — a bad one
+// is ignored, with a disclosure, by present.Select — so it is not decoded here.
+func parseReply(reply string) (q *ast.AST, problems []validate.Error, fatal string, view json.RawMessage) {
 	raw := strings.TrimSpace(reply)
 	if m := jsonFenceRe.FindStringSubmatch(raw); m != nil {
 		raw = m[1]
@@ -56,30 +59,31 @@ func parseReply(reply string) (q *ast.AST, problems []validate.Error, fatal stri
 	}
 	var generic any
 	if err := json.Unmarshal([]byte(raw), &generic); err != nil {
-		return nil, []validate.Error{{Code: CodeNotJSON}}, ""
+		return nil, []validate.Error{{Code: CodeNotJSON}}, "", nil
 	}
 	if hasForbiddenKey(generic, 0) {
-		return nil, nil, RefuseForbiddenField
+		return nil, nil, RefuseForbiddenField, nil
 	}
 	var env struct {
 		AST       json.RawMessage `json:"ast"`
 		Unmatched []string        `json:"unmatched_names"`
+		View      json.RawMessage `json:"view"`
 	}
 	dec := json.NewDecoder(bytes.NewReader([]byte(raw)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&env); err != nil {
-		return nil, []validate.Error{{Code: CodeBadEnvelope, Suggestions: []string{"ast", "unmatched_names"}}}, ""
+		return nil, []validate.Error{{Code: CodeBadEnvelope, Suggestions: []string{"ast", "unmatched_names", "view"}}}, "", nil
 	}
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return nil, []validate.Error{{Code: CodeNotJSON}}, ""
+		return nil, []validate.Error{{Code: CodeNotJSON}}, "", nil
 	}
 	for _, n := range env.Unmatched {
 		if strings.TrimSpace(n) != "" {
-			return nil, nil, RefuseUnresolvedName
+			return nil, nil, RefuseUnresolvedName, nil
 		}
 	}
 	if len(env.AST) == 0 || string(env.AST) == "null" {
-		return nil, nil, RefuseModelDeclined
+		return nil, nil, RefuseModelDeclined, nil
 	}
 	a, err := ast.Decode(env.AST)
 	if err != nil {
@@ -87,9 +91,9 @@ func parseReply(reply string) (q *ast.AST, problems []validate.Error, fatal stri
 		if f := unknownFieldRe.FindStringSubmatch(err.Error()); f != nil {
 			p = validate.Error{Path: f[1], Code: validate.CodeUnknownField}
 		}
-		return nil, []validate.Error{p}, ""
+		return nil, []validate.Error{p}, "", nil
 	}
-	return a, nil, ""
+	return a, nil, "", env.View
 }
 
 var unknownFieldRe = regexp.MustCompile(`unknown field "([a-z_]{1,32})"`)

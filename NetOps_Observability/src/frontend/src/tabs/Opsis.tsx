@@ -23,6 +23,7 @@ import {
 import Icon from "../components/Icon";
 import IrisVocabulary from "../components/IrisVocabulary";
 import PresentationPlanRenderer from "../iris/PresentationPlanRenderer";
+import { hintFromAst } from "../iris/presentation";
 import HypothesisTrace from "../iris/HypothesisTrace";
 import { answerCiteHref } from "../iris/links";
 import QueryCorrection from "../iris/QueryCorrection";
@@ -1034,7 +1035,11 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
           correlation engine's verdict — never a cause of Iris's own. */}
       {ans.hypotheses && <HypothesisTrace set={ans.hypotheses} />}
       {ans.mode === "data_query" && ans.data?.result !== undefined && (
-        <div data-testid="op-data-answer"><PresentationPlanRenderer result={ans.data.result} /></div>
+        <div data-testid="op-data-answer">
+          {/* The server chooses the view (N-E1) and sends it as `presentation`;
+              an older server sends none and the client's default applies. */}
+          <PresentationPlanRenderer result={ans.data.result} plan={ans.data.presentation} hint={hintFromAst(ans.data.ast)} />
+        </div>
       )}
       {/* "That's not what I meant" (N-C8): only on a data answer the server
           recorded — the id names the caller's own query-log record. */}
