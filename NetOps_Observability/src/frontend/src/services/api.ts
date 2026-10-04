@@ -1961,6 +1961,34 @@ export interface IrisQueryRecord {
   series: number;
   duration_ms: number;
   corrections: IrisCorrection[] | null;
+  /** Who wrote the stored query (N-C5): "model" means the AI model, not the grammar. Absent when no query was kept. */
+  compiled_by?: "grammar" | "model" | "supplied";
+  /** The validated query — only on GET /api/ai/query/{id}, never in the list. */
+  query?: Record<string, unknown>;
+  /** Set when the model wrote the query. */
+  disclosure?: string;
+}
+// GET /api/ai/query/{id}/explain (N-C5): what the stored query does, in words.
+export interface IrisQueryExplanation {
+  id: string;
+  asked_via: IrisQueryRecord["source"];
+  outcome: IrisQueryRecord["outcome"];
+  question: string;
+  query_type?: string;
+  compiled_by?: "grammar" | "model" | "supplied";
+  /** "model" when the AI model, not the grammar, wrote the query. */
+  source?: "model";
+  disclosure?: string;
+  catalog_version?: string;
+  catalog_current: boolean;
+  explanation: { summary: string; parts: { facet: string; text: string }[] } | null;
+  /** Why there is no explanation (no query was kept). */
+  reason?: string;
+  validation_codes?: string[] | null;
+  query?: Record<string, unknown>;
+  /** Whether the query still passes its checks for you now. */
+  still_valid?: boolean;
+  validation?: IrisValidation;
 }
 export interface IrisQueryList {
   queries: IrisQueryRecord[] | null;
@@ -6181,6 +6209,9 @@ export const api = {
     request<IrisQueryList>(`/api/ai/queries?scope=${scope}&limit=${limit}`),
   correctIrisQuery: (id: string, body: { kind: IrisCorrectionKind; note?: string; ast?: Record<string, unknown> }) =>
     request<IrisQueryRecord>(`/api/ai/queries/${encodeURIComponent(id)}/corrections`, { method: "POST", body: JSON.stringify(body) }),
+  // One recorded question's query in plain language (N-C5) — re-checked by
+  // the server against what the caller can see now.
+  explainIrisQuery: (id: string) => request<IrisQueryExplanation>(`/api/ai/query/${encodeURIComponent(id)}/explain`),
 
   // Native metrics (Prometheus-compatible API via the Go proxy).
   metricNames: () => request<PromNamesResponse>("/api/metrics/names"),

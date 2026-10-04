@@ -152,12 +152,59 @@ func TestFromCompileOutcomes(t *testing.T) {
 
 func TestFromQueryMarksSuppliedEntities(t *testing.T) {
 	q := &ast.AST{V: 1, Type: ast.MetricSeries, Target: "device", Refs: []ast.EntityRef{{Type: "device", ID: "device:edge-1"}}}
-	r := FromQuery(q, validate.Result{Valid: true})
+	checked := q.Clone()
+	checked.Time = ast.TimeRange{Kind: ast.TimeRelative, Last: "1h"} // the validator's default window
+	r := FromQuery(q, checked, validate.Result{Valid: true})
 	if r.Source != SourceQueryExecute || r.Outcome != OutcomeCompiled || r.Entities[0].Method != MethodSupplied || r.Question != "" {
 		t.Fatalf("%+v", r)
 	}
-	if FromQuery(q, validate.Result{}).Outcome != OutcomeInvalid {
-		t.Fatal("an invalid supplied query is recorded invalid")
+	// The record keeps the VALIDATED query (constraints applied), marked as
+	// supplied by the client, and its hash is that query's.
+	if r.Query != checked || r.CompiledBy != CompiledBySupplied || r.ASTHash != checked.Hash() {
+		t.Fatalf("supplied query: %+v", r)
+	}
+	bad := FromQuery(q, nil, validate.Result{})
+	if bad.Outcome != OutcomeInvalid || bad.Query != nil || bad.CompiledBy != "" {
+		t.Fatalf("an invalid supplied query is recorded invalid, without a query: %+v", bad)
+	}
+}
+
+func TestTheStoredQueryAndItsAuthor(t *testing.T) {
+	q := &ast.AST{V: 1, Type: ast.MetricSeries, Target: "device", Metric: "cpu_util_pct",
+		Time: ast.TimeRange{Kind: ast.TimeRelative, Last: "1h"}}
+	ok := &validate.Result{Valid: true}
+	r := FromCompile(SourceQueryCompile, "q", compile.Result{AST: q}, q, ok)
+	if r.Query != q || r.CompiledBy != CompiledByGrammar {
+		t.Fatalf("a grammar-compiled query is kept and attributed to the grammar: %+v", r)
+	}
+	r.ByModel()
+	if r.CompiledBy != CompiledByModel {
+		t.Fatalf("ByModel: %+v", r)
+	}
+	// No query → no author, whatever the caller claimed.
+	none := FromCompile(SourceQueryCompile, "q", compile.Result{AST: q}, nil, &validate.Result{})
+	none.ByModel()
+	if none.Query != nil || none.CompiledBy != "" {
+		t.Fatalf("an invalid question keeps no query and no author: %+v", none)
+	}
+	got, err := Normalize("acme", Record{Principal: "alice", Source: SourceRouter, Outcome: OutcomeUnparsed, CompiledBy: CompiledByModel}, time.Now())
+	if err != nil || got.CompiledBy != "" {
+		t.Fatalf("an author without a query is dropped: %v %+v", err, got)
+	}
+	// A query needs a known author.
+	for _, by := range []string{"", "llm", "Grammar"} {
+		bad := rec("alice", "q")
+		bad.Query, bad.CompiledBy = q, by
+		if _, err := Normalize("acme", bad, time.Now()); !errors.Is(err, ErrInvalid) {
+			t.Errorf("author %q: want ErrInvalid, got %v", by, err)
+		}
+	}
+	// Normalize stores a COPY, and fills the hash from it when absent.
+	keep := rec("alice", "q")
+	keep.Query, keep.CompiledBy = q, CompiledByModel
+	got, err = Normalize("acme", keep, time.Now())
+	if err != nil || got.Query == q || got.Query.Hash() != q.Hash() || got.ASTHash != q.Hash() || got.CompiledBy != CompiledByModel {
+		t.Fatalf("normalized query: %v %+v", err, got)
 	}
 }
 
@@ -250,6 +297,47 @@ func TestMemStoreIsTenantAndPrincipalScoped(t *testing.T) {
 	got, err := m.Correct(bg, "acme", "alice", a.ID, c)
 	if err != nil || len(got.Corrections) != 1 || got.Corrections[0].Kind != KindWrongEntity {
 		t.Fatalf("own correction: %v %+v", err, got)
+	}
+}
+
+func TestMemStoreGetIsTenantAndPrincipalScoped(t *testing.T) {
+	m := NewMemStore()
+	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return now }
+	q := &ast.AST{V: 1, Type: ast.ChangeList, Target: "change", Time: ast.TimeRange{Kind: ast.TimeRelative, Last: "24h"}}
+	in := rec("alice", "what changed")
+	in.Query, in.CompiledBy = q, CompiledByModel
+	a, err := m.Record(bg, "acme", in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := m.Get(bg, "acme", "alice", a.ID)
+	if err != nil || got.Query == nil || got.Query.Hash() != q.Hash() || got.CompiledBy != CompiledByModel || got.Question != "what changed" {
+		t.Fatalf("own get: %v %+v", err, got)
+	}
+	// principal "" is the tenant-wide read (the handler decides who may).
+	if _, err := m.Get(bg, "acme", "", a.ID); err != nil {
+		t.Fatalf("tenant-wide get: %v", err)
+	}
+	for _, who := range [][2]string{{"globex", "alice"}, {"globex", ""}, {"acme", "bob"}} {
+		if _, err := m.Get(bg, who[0], who[1], a.ID); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%v must not read alice's record: %v", who, err)
+		}
+	}
+	for _, id := range []string{"", "not-a-uuid", "11111111-2222-4333-8444-555555555555", strings.ToUpper(a.ID)} {
+		if _, err := m.Get(bg, "acme", "alice", id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("id %q: %v", id, err)
+		}
+	}
+	// The returned query is a copy.
+	got.Query.Metric = "mutated"
+	if again, _ := m.Get(bg, "acme", "alice", a.ID); again.Query.Metric != "" {
+		t.Fatal("a returned query aliases the store")
+	}
+	// Expired is gone.
+	now = now.Add(Retention + time.Minute)
+	if _, err := m.Get(bg, "acme", "alice", a.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an expired record: %v", err)
 	}
 }
 

@@ -11,7 +11,11 @@
 // answered it — the router's data arm, the query API or a conversation.
 //
 // What is NEVER stored: result rows, series points, model prose. The record is
-// telemetry about the question, not a copy of the answer.
+// telemetry about the question, not a copy of the answer. It DOES keep the
+// validated query itself (tracker 337 N-C5: GET /api/ai/query/{id} and its
+// plain-language /explain) and who wrote it — the grammar, the model fallback
+// or the client (the execute API) — so a model-written query stays disclosed
+// for as long as the record lives.
 //
 // A Correction is the operator's "that's not what I meant": a closed kind, an
 // optional corrected query (decoded strictly and validated against the
@@ -79,6 +83,16 @@ const (
 )
 
 var sources = map[string]bool{SourceRouter: true, SourceQueryCompile: true, SourceQueryExecute: true, SourceConversation: true}
+
+// CompiledBy values (closed): who wrote the stored query. A record without a
+// query has none.
+const (
+	CompiledByGrammar  = "grammar"  // the deterministic question grammar
+	CompiledByModel    = "model"    // the guarded model fallback (modelc.SourceModel)
+	CompiledBySupplied = "supplied" // a client-supplied query (the execute API)
+)
+
+var compiledBy = map[string]bool{CompiledByGrammar: true, CompiledByModel: true, CompiledBySupplied: true}
 
 // Correction kinds (closed).
 const (
@@ -151,6 +165,11 @@ type Record struct {
 	Series          int          `json:"series"`
 	DurationMs      int64        `json:"duration_ms"`
 	Corrections     []Correction `json:"corrections"`
+	// Query is the VALIDATED (constrained) query the question compiled to —
+	// nil unless one validated. CompiledBy says who wrote it; it is set
+	// exactly when Query is.
+	Query      *ast.AST `json:"query,omitempty"`
+	CompiledBy string   `json:"compiled_by,omitempty"`
 }
 
 // ListFilter selects records. Principal "" means every principal of the
@@ -167,6 +186,11 @@ type Store interface {
 	Record(ctx context.Context, tenant string, r Record) (Record, error)
 	// List returns the tenant's live records, newest first.
 	List(ctx context.Context, tenant string, f ListFilter) ([]Record, error)
+	// Get returns one live record of the tenant. principal "" means any
+	// principal of the tenant — the caller decides who may ask for that (a
+	// tenant admin); otherwise another principal's record, an expired one and
+	// a missing one are all ErrNotFound.
+	Get(ctx context.Context, tenant, principal, id string) (Record, error)
 	// Correct attaches a correction to the principal's OWN record. Another
 	// principal's record, an expired one and a missing one are ErrNotFound.
 	Correct(ctx context.Context, tenant, principal, id string, c Correction) (Record, error)
@@ -243,9 +267,35 @@ func Normalize(tenant string, r Record, now time.Time) (Record, error) {
 	if r.At.IsZero() {
 		r.At = now
 	}
+	if err := normalizeQuery(&r); err != nil {
+		return Record{}, err
+	}
 	// Corrections arrive only through Correct; a record is born without any.
 	r.Corrections = []Correction{}
 	return r, nil
+}
+
+// normalizeQuery keeps the stored query and its author consistent: a query
+// needs a known author, a record without one has no author, and the query is
+// re-encoded strictly and within ast.MaxBytes so nothing unrepresentable is
+// stored.
+func normalizeQuery(r *Record) error {
+	if r.Query == nil {
+		r.CompiledBy = ""
+		return nil
+	}
+	if !compiledBy[r.CompiledBy] {
+		return fmt.Errorf("%w: unknown query author %q", ErrInvalid, r.CompiledBy)
+	}
+	q := r.Query.Clone()
+	if q == nil {
+		return fmt.Errorf("%w: the query does not re-encode", ErrInvalid)
+	}
+	r.Query = q
+	if r.ASTHash == "" {
+		r.ASTHash = q.Hash()
+	}
+	return nil
 }
 
 // NormalizeCorrection bounds and checks a correction.
@@ -357,13 +407,24 @@ func FromCompile(source, question string, res compile.Result, checked *ast.AST, 
 		r.Outcome = OutcomeInvalid
 	default:
 		r.Outcome = OutcomeCompiled
+		r.Query, r.CompiledBy = checked, CompiledByGrammar
 	}
 	return r
 }
 
+// ByModel marks the record's query as written by the model fallback (the
+// caller knows that; compile.Result does not). A record without a query is
+// left alone.
+func (r *Record) ByModel() {
+	if r.Query != nil {
+		r.CompiledBy = CompiledByModel
+	}
+}
+
 // FromQuery starts a record for a client-supplied query (the execute API):
-// no question, its entities marked as supplied.
-func FromQuery(q *ast.AST, vr validate.Result) Record {
+// no question, its entities marked as supplied. checked is the validated
+// query (nil unless vr is valid) — the one the record keeps.
+func FromQuery(q, checked *ast.AST, vr validate.Result) Record {
 	r := Record{Source: SourceQueryExecute, Outcome: OutcomeInvalid}
 	if q != nil {
 		r.QueryType, r.ASTHash = string(q.Type), q.Hash()
@@ -374,8 +435,10 @@ func FromQuery(q *ast.AST, vr validate.Result) Record {
 	for _, e := range vr.Errors {
 		r.ValidationCodes = append(r.ValidationCodes, e.Code)
 	}
-	if vr.Valid {
+	if vr.Valid && checked != nil {
 		r.Outcome = OutcomeCompiled
+		r.Query, r.CompiledBy = checked, CompiledBySupplied
+		r.QueryType, r.ASTHash = string(checked.Type), checked.Hash()
 	}
 	return r
 }

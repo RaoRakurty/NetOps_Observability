@@ -237,6 +237,19 @@ resolved mention must narrow the query (no silent widening), string filter value
 come from the question (or the incident on screen). ≤ 2 repair rounds with closed codes only; still
 invalid ⇒ Unparsed. Accepted results carry `source: "model"`; the router's data arm discloses it.
 
+**Reading a query back (shipped 2026-10-03).** `GET /api/ai/query/{id}` returns one N-C8 record (§10) with
+the VALIDATED query it kept and `compiled_by` (`grammar · model · supplied`); a model-written one carries
+the disclosure text. `GET /api/ai/query/{id}/explain` renders that query in plain language
+(`internal/nlquery/explain`: catalog + AST only, deterministic — one part per filled slot: what, metric +
+aggregation, entities (OR within a type, AND across), filters, value condition (state codes named from
+`value_enum`), window, comparison window, grouping, order, limit, incident), says `source: "model"` +
+the disclosure whenever the model wrote it, and re-validates the stored query in the caller's CURRENT
+scope (`still_valid` + the validator's result). Device names come only from the caller's visible
+inventory; anything else is shown by the id the record already holds. §3a: read inside the caller's
+tenant; another tenant, an `as_tenant` walk and an unknown id are the same 404; a colleague's record is
+404 except to a workspace admin, who gets it without the colleague's typed words (as in the list).
+Not yet: the physical (MetricsQL/SQL) query for admins — the planner only produces it on execution.
+
 ## 7. Tests
 
 Catalog (strict load, uniqueness, alias collisions, relationship endpoints, drift + B5 tripwire, Go⇔JSON
@@ -309,7 +322,10 @@ multi-turn corpus scored like the golden corpus, and Part 2 §69's 14 routine qu
 (from the token), timestamp, question (≤ 1000 runes), intent, outcome (`answered · compiled · clarify ·
 declined · unparsed · invalid · error`), query type, AST hash, catalog version, validation error codes
 (≤ 20), entities with their `resolution_method` (≤ 20), row/series COUNTS, duration. **Never** result rows,
-series points or model prose. The response carries `query_log_id` so the answer can be corrected.
+series points or model prose. The response carries `query_log_id` so the answer can be corrected. Since
+N-C5's read-back (migration 0055) a record also keeps the validated query itself and `compiled_by`
+(`grammar · model · supplied`) — the query, never its result; the list omits the query, `GET
+/api/ai/query/{id}` and `/explain` (§6) read it.
 
 **Capture never fails the question.** A failed write is counted
 (`netops_iris_query_capture_total{result="failed"}`), logged, and the answer goes out without an id. The
