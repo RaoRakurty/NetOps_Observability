@@ -71,6 +71,7 @@ func ingestFixtures(t *testing.T) (*httptest.Server, *server, *captureSink, *org
 		Targets:    st.demTargets,
 		Events:     sink,
 		Policy:     experienceScorePolicy(),
+		Redact:     redactChangeValue,
 		Enabled:    true,
 		Now:        func() time.Time { return time.Now().UTC() },
 		WriteJSON:  writeJSON,

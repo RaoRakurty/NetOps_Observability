@@ -2605,6 +2605,15 @@ func (s *server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	s.changeAPI().Handler(w, r)
 }
 
+// redactChangeValue is THE redactor for a change's before/after values, wired
+// into BOTH APIs over the change ledger — /api/changes (internal/changeapi) and
+// the older /api/dem/changes feed (internal/dem/experience) — so one ledger is
+// never redacted two ways (tracker 337 N-D3). It is ai.RedactSecrets, the
+// credential tier of the platform's one DLP dialect: tokens, keys, passwords,
+// community strings, private keys and URL userinfo are masked; identifiers and
+// ordinary configuration values are left readable.
+func redactChangeValue(v string) string { return ai.RedactSecrets(v) }
+
 func (s *server) changeAPI() changeapi.Deps {
 	return changeapi.Deps{
 		Store: s.experienceStore,
@@ -2643,7 +2652,7 @@ func (s *server) changeAPI() changeapi.Deps {
 				Added: rep.Added, Removed: rep.Removed, Unified: rep.Unified, Truncated: rep.Truncated,
 				Unavailable: firstNonBlank(rep.Unavailable, rep.NotWired)}, nil
 		},
-		Redact:     ai.RedactSecrets,
+		Redact:     redactChangeValue,
 		WriteJSON:  writeJSON,
 		WriteError: writeError,
 	}

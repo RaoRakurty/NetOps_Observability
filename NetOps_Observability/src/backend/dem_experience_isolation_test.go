@@ -41,6 +41,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -225,6 +226,106 @@ func TestDEMExperienceChangesCrossOrgIsolation(t *testing.T) {
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 	if code, _ := do(t, srv, "GET", "/api/dem/changes", admin, nil); code != http.StatusBadRequest {
 		t.Fatalf("cross-tenant principal was served the change feed: %d", code)
+	}
+}
+
+// TestDEMChangesRedactLikeTheLedgerAPI — tracker 337 N-D3. The older
+// /api/dem/changes feed returns before/after through the SAME redactor as
+// /api/changes (redactChangeValue → ai.RedactSecrets), through the real router
+// and the real buildExperienceAPI wiring: credentials come back masked, the
+// non-secret value and every other field come back intact, the two routes agree
+// byte for byte on the values, and isolation is unchanged — org B never sees
+// org A's change, and B reading A's change by id is a 404.
+func TestDEMChangesRedactLikeTheLedgerAPI(t *testing.T) {
+	srv, _, a, b := experienceFixtures(t)
+	const (
+		before = "snmp-server community Publ1cRO RO; password=Sw0rdfish; " +
+			"Authorization: Bearer abcdefghijklmnop0123; backup https://admin:Pa55w0rd@10.0.0.9/cfg"
+		after = "interface ge-0/0/1 mtu 9000 description uplink-to-core"
+	)
+	secrets := []string{"Publ1cRO", "Sw0rdfish", "abcdefghijklmnop0123", "Pa55w0rd"}
+
+	code, body := do(t, srv, "POST", "/api/dem/changes", a.token, map[string]any{
+		"type": "CONFIG_CHANGE", "object": "edge-fw-1", "object_kind": "device",
+		"summary": "hardened the edge firewall", "app": "checkout", "site": "dc1",
+		"before": before, "after": after,
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("record: %d %s", code, body)
+	}
+	for _, s := range secrets {
+		if strings.Contains(string(body), s) {
+			t.Fatalf("POST /api/dem/changes echoed secret %q: %s", s, body)
+		}
+	}
+	var made experience.ChangeEvent
+	if err := json.Unmarshal(body, &made); err != nil {
+		t.Fatalf("decode: %v (%s)", err, body)
+	}
+
+	code, body = do(t, srv, "GET", "/api/dem/changes", a.token, nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET /api/dem/changes: %d %s", code, body)
+	}
+	for _, s := range secrets {
+		if strings.Contains(string(body), s) {
+			t.Fatalf("GET /api/dem/changes returned secret %q raw: %s", s, body)
+		}
+	}
+	var feed struct {
+		Changes []experience.ChangeEvent `json:"changes"`
+	}
+	if err := json.Unmarshal(body, &feed); err != nil {
+		t.Fatalf("decode: %v (%s)", err, body)
+	}
+	if len(feed.Changes) != 1 || feed.Changes[0].ID != made.ID {
+		t.Fatalf("org A sees %+v", feed.Changes)
+	}
+	got := feed.Changes[0]
+	if got.Before != redactChangeValue(before) || !strings.Contains(got.Before, "***") {
+		t.Fatalf("before was not redacted by the shared redactor: %q", got.Before)
+	}
+	// The secret KEYS survive so the value stays diagnostically useful.
+	for _, keep := range []string{"snmp-server community", "password=", "Authorization:", "10.0.0.9/cfg"} {
+		if !strings.Contains(got.Before, keep) {
+			t.Fatalf("redaction ate the non-secret context %q: %q", keep, got.Before)
+		}
+	}
+	if got.After != after {
+		t.Fatalf("a non-secret after value was altered: %q", got.After)
+	}
+	if got.Object != "edge-fw-1" || got.Summary != "hardened the edge firewall" ||
+		got.App != "checkout" || got.Site != "dc1" || got.TenantID != a.tenantID {
+		t.Fatalf("a non-secret field was altered: %+v", got)
+	}
+
+	// The two routes over one ledger agree on what a secret is.
+	code, body = do(t, srv, "GET", "/api/changes/"+made.ID, a.token, nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET /api/changes/{id}: %d %s", code, body)
+	}
+	var one struct {
+		Before string `json:"before"`
+		After  string `json:"after"`
+	}
+	if err := json.Unmarshal(body, &one); err != nil {
+		t.Fatalf("decode: %v (%s)", err, body)
+	}
+	if one.Before != got.Before || one.After != got.After {
+		t.Fatalf("/api/changes and /api/dem/changes redact differently:\n ledger %q / %q\n dem    %q / %q",
+			one.Before, one.After, got.Before, got.After)
+	}
+
+	// Isolation is unchanged: own-only list, and a foreign id is a 404.
+	code, body = do(t, srv, "GET", "/api/dem/changes", b.token, nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET /api/dem/changes as B: %d %s", code, body)
+	}
+	if strings.Contains(string(body), made.ID) || strings.Contains(string(body), "edge-fw-1") {
+		t.Fatalf("org B was served org A's change: %s", body)
+	}
+	if code, body := do(t, srv, "GET", "/api/changes/"+made.ID, b.token, nil); code != http.StatusNotFound {
+		t.Fatalf("cross-tenant GET of a change id → %d %s (must be 404)", code, body)
 	}
 }
 

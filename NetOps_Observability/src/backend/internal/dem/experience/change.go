@@ -222,6 +222,41 @@ func (c *ChangeEvent) Validate() error {
 	return c.Provenance.Validate()
 }
 
+// redactChangeValues returns a copy of the changes with each before/after value
+// passed through RedactChangeValue (tracker 337 N-D3). The input is not
+// modified — the rows may be the store's own, and the stored record stays
+// verbatim; only what leaves over the API is scrubbed. Every other field is
+// untouched.
+func redactChangeValues(in []ChangeEvent, redact func(string) string) []ChangeEvent {
+	if in == nil {
+		return nil
+	}
+	out := make([]ChangeEvent, len(in))
+	for i, c := range in {
+		c.Before, c.After = RedactChangeValue(c.Before, redact), RedactChangeValue(c.After, redact)
+		out[i] = c
+	}
+	return out
+}
+
+// RedactChangeValue is THE rule for scrubbing one change before/after value on
+// its way out of an API — used by /api/dem/changes here AND by /api/changes
+// (internal/changeapi), so one ledger is never redacted two ways (tracker 337
+// N-D3). An empty value stays empty. A nil redactor FAILS CLOSED: the value is
+// withheld rather than returned raw.
+func RedactChangeValue(v string, redact func(string) string) string {
+	if v == "" {
+		return v
+	}
+	if redact == nil {
+		return ChangeValueWithheld
+	}
+	return redact(v)
+}
+
+// ChangeValueWithheld stands in for a value when no redactor is wired.
+const ChangeValueWithheld = "***"
+
 // applyDefaults fills the fields a record written before N-D1 (or by a producer
 // that did not know them) leaves empty. It is the ONE definition of those
 // defaults: Validate applies it on write, the Postgres backend applies it to

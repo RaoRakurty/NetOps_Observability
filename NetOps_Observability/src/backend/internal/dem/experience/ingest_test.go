@@ -66,6 +66,7 @@ func newIngestAPI(t *testing.T, sink EventSink) (*API, *Counters) {
 		Targets: &memCatalogue{},
 		Events:  sink,
 		Policy:  policy,
+		Redact:  testRedact,
 		Enabled: true,
 		Now:     func() time.Time { return testNow },
 		WriteJSON: func(w http.ResponseWriter, status int, body any) {

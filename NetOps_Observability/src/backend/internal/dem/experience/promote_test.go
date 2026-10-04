@@ -111,6 +111,7 @@ func promoteAPIAt(t *testing.T, promoter IncidentPromoter, store Store, tenant s
 		Metrics:  failingQuerier{targetID: failingTarget(tenant).ID},
 		Promoter: promoter,
 		Policy:   policy,
+		Redact:   testRedact,
 		Enabled:  true,
 		Now:      now,
 		WriteJSON: func(w http.ResponseWriter, status int, body any) {
