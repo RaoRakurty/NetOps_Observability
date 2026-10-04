@@ -24,6 +24,7 @@ import (
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/resolve"
 	"netops/backend/internal/nlquery/validate"
+	"netops/backend/internal/ratelimit"
 	"netops/backend/models"
 )
 
@@ -211,5 +212,51 @@ func TestModelSuggestionWithoutAModelIsSaid(t *testing.T) {
 	}
 	if code, _ := resolveCall(t, s, a, `{"text":"dalas","suggest":"yes"}`); code != http.StatusBadRequest {
 		t.Fatalf("a non-boolean suggest must be refused, got %d", code)
+	}
+}
+
+// Every suggestion request is audited — who and how it ended, never the
+// typed text — and rides the per-principal Iris rate limit.
+func TestModelSuggestionIsAuditedAndRateLimited(t *testing.T) {
+	s, a, _ := rungsFixture(t)
+	t.Setenv("IRIS_NLQ_MODEL_FALLBACK", "false")
+	au, err := newAuditStore(t.TempDir() + "/audit.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.audit = au
+	resolveCall(t, s, a, `{"text":"dalas","suggest":true}`)
+	resolveCall(t, s, a, `{"text":"edge-a"}`) // a plain lookup is not a model request
+	evs, err := s.audit.List(a.Tenant, false, auditQuery{Path: "/api/ai/entities/resolve", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, e := range evs {
+		if e.Detail["action"] != "ai.entity_suggest" {
+			continue
+		}
+		n++
+		if e.Actor != a.Sub || e.Detail["outcome"] != "unavailable" {
+			t.Errorf("audit row = %+v", e)
+		}
+		if strings.Contains(nlqJSON(e), "dalas") {
+			t.Errorf("the audit row carries the typed text: %+v", e)
+		}
+	}
+	if n != 1 {
+		t.Fatalf("want exactly one suggestion audit row, got %d: %v", n, evs)
+	}
+
+	t.Setenv("COPILOT_RATE_PER_MIN", "1")
+	s.copilotLimiter = ratelimit.New()
+	if code, _ := resolveCall(t, s, a, `{"text":"dalas","suggest":true}`); code != http.StatusOK {
+		t.Fatalf("first suggestion = %d", code)
+	}
+	if code, _ := resolveCall(t, s, a, `{"text":"dalas","suggest":true}`); code != http.StatusTooManyRequests {
+		t.Fatalf("second suggestion within the limit window = %d, want 429", code)
+	}
+	if code, _ := resolveCall(t, s, a, `{"text":"edge-a"}`); code != http.StatusOK {
+		t.Fatalf("a plain lookup is not rate limited as a model request: %d", code)
 	}
 }

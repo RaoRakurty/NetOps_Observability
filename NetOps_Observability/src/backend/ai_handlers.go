@@ -908,6 +908,12 @@ func (s *server) handleAIEntityResolve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// A request that may reach a model rides the same per-principal limit as
+	// every other Iris model path (LLM04); a plain lookup does not.
+	if req.Suggest && !s.copilotLimiter.AllowN(claims.Tenant+"|"+claims.Sub, envInt("COPILOT_RATE_PER_MIN", 20)) {
+		writeError(w, http.StatusTooManyRequests, fmt.Errorf("Iris AI rate limit exceeded — slow down"))
+		return
+	}
 	res, err := s.nlqResolverWith(r, claims, req.Suggest).Resolve(r.Context(), req.Text, req.Types)
 	if err != nil {
 		logError("iris.resolve", "entity resolution failed", errf(err))
@@ -919,7 +925,34 @@ func (s *server) handleAIEntityResolve(w http.ResponseWriter, r *http.Request) {
 		// the response and recorded here (§10: no silent failure).
 		logWarn("iris.resolve", "model name suggestion unavailable", map[string]any{"reason": res.SuggestionError})
 	}
+	if req.Suggest {
+		s.aiSuggestAudit(r, claims, res)
+	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// aiSuggestAudit enters one model-suggestion request into the platform audit
+// trail: who asked and how it ended (suggested / none / unavailable / not
+// needed) — never the typed text or the suggested names.
+func (s *server) aiSuggestAudit(r *http.Request, claims jwtClaims, res resolve.Result) {
+	if s.audit == nil {
+		return
+	}
+	outcome := "not_needed" // a deterministic rung answered; no model was asked
+	switch {
+	case res.SuggestionError != "":
+		outcome = "unavailable"
+	case res.Disclosure != "":
+		outcome = "suggested"
+	case len(res.Refs) == 0:
+		outcome = "none"
+	}
+	tenant, cross := principalTenant(claims)
+	s.audit.Record(AuditEvent{
+		Actor: claims.Sub, Tenant: tenant, Cross: cross, SessionID: claims.Sid,
+		Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: "allow",
+		Remote: auditClientIP(r), Detail: map[string]any{"action": "ai.entity_suggest", "outcome": outcome, "candidates": len(res.Refs)},
+	})
 }
 
 // nlqResolver builds the resolution ladder over the caller's own aliases,
