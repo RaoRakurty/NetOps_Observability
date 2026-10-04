@@ -2321,5 +2321,223 @@
    "via": "change_field",
    "cardinality": "n:1"
   }
+ ],
+ "synonyms": [
+  {
+   "entity": "provider",
+   "seed": "provider:comcast",
+   "terms": [
+    "Comcast",
+    "Comcast Business",
+    "Xfinity"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:att",
+   "terms": [
+    "AT&T",
+    "ATT",
+    "AT and T",
+    "AT&T Business"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:verizon",
+   "terms": [
+    "Verizon",
+    "Verizon Business"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:lumen",
+   "terms": [
+    "Lumen",
+    "CenturyLink",
+    "Level 3",
+    "Level3"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:spectrum",
+   "terms": [
+    "Spectrum",
+    "Charter",
+    "Spectrum Business",
+    "Charter Spectrum"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:cox",
+   "terms": [
+    "Cox",
+    "Cox Business"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:frontier",
+   "terms": [
+    "Frontier",
+    "Frontier Business"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:windstream",
+   "terms": [
+    "Windstream"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:zayo",
+   "terms": [
+    "Zayo"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:cogent",
+   "terms": [
+    "Cogent"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:gtt",
+   "terms": [
+    "GTT"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:tata",
+   "terms": [
+    "Tata Communications",
+    "Tata"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:ntt",
+   "terms": [
+    "NTT"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:orange",
+   "terms": [
+    "Orange Business",
+    "Orange Business Services"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:bt",
+   "terms": [
+    "British Telecom",
+    "BT Global"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:vodafone",
+   "terms": [
+    "Vodafone"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:starlink",
+   "terms": [
+    "Starlink"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:aws",
+   "terms": [
+    "AWS",
+    "Amazon Web Services"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:azure",
+   "terms": [
+    "Azure",
+    "Microsoft Azure",
+    "ExpressRoute",
+    "Azure ExpressRoute"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:megaport",
+   "terms": [
+    "Megaport"
+   ]
+  },
+  {
+   "entity": "provider",
+   "seed": "provider:equinix",
+   "terms": [
+    "Equinix",
+    "Equinix Fabric"
+   ]
+  },
+  {
+   "entity": "application",
+   "terms": [
+    "Office 365",
+    "Microsoft 365",
+    "O365",
+    "M365",
+    "Office365"
+   ]
+  },
+  {
+   "entity": "application",
+   "terms": [
+    "Salesforce",
+    "SFDC",
+    "Salesforce.com"
+   ]
+  },
+  {
+   "entity": "application",
+   "terms": [
+    "Google Workspace",
+    "G Suite",
+    "GSuite"
+   ]
+  },
+  {
+   "entity": "application",
+   "terms": [
+    "Zoom",
+    "Zoom Meetings"
+   ]
+  },
+  {
+   "entity": "application",
+   "terms": [
+    "Webex",
+    "Cisco Webex"
+   ]
+  },
+  {
+   "entity": "application",
+   "terms": [
+    "ServiceNow",
+    "Service Now"
+   ]
+  }
  ]
 }

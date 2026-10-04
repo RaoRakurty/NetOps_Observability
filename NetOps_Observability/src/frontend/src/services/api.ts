@@ -1918,10 +1918,18 @@ export interface IrisRef {
   confidence: number;
   resolution_method: string;
   needs_confirmation?: boolean;
+  /** The name the AI model suggested (resolution_method "model_suggestion" only). */
+  model_suggested_text?: string;
 }
 export interface IrisResolution {
   refs: IrisRef[] | null;
   ambiguous: boolean;
+  /** Every ref is meant (a plural "routers next to X"), not a choice between them. */
+  set?: boolean;
+  /** Set when any candidate came from the AI model. */
+  disclosure?: string;
+  /** Set when a model suggestion was asked for and could not be had. */
+  suggestion_error?: string;
 }
 export interface IrisValidationError {
   path: string;
@@ -6241,8 +6249,12 @@ export const api = {
     request<IrisAlias>("/api/ai/aliases", { method: "PUT", body: JSON.stringify(a) }),
   deleteIrisAlias: (entityType: string, alias: string) =>
     request<void>(`/api/ai/aliases?entity_type=${encodeURIComponent(entityType)}&alias=${encodeURIComponent(alias)}`, { method: "DELETE" }),
-  resolveIrisEntity: (text: string, types: string[] = []) =>
-    request<IrisResolution>("/api/ai/entities/resolve", { method: "POST", body: JSON.stringify({ text, types }) }),
+  // suggest=true also asks the AI model for the name probably meant, only when
+  // Iris's own lookup finds nothing; its candidates always need confirmation.
+  resolveIrisEntity: (text: string, types: string[] = [], suggest = false) =>
+    request<IrisResolution>("/api/ai/entities/resolve", {
+      method: "POST", body: JSON.stringify(suggest ? { text, types, suggest } : { text, types }),
+    }),
   compileIrisQuery: (question: string, tz?: string) =>
     request<IrisCompiled>("/api/ai/query/compile", { method: "POST", body: JSON.stringify(tz ? { question, tz } : { question }) }),
   executeIrisQuery: (ast: unknown) =>

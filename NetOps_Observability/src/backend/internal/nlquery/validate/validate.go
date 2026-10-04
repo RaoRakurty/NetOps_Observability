@@ -51,6 +51,11 @@ type Scope interface {
 	// CrossTenant reports a platform-operator (Global) principal.
 	CrossTenant() bool
 	Now() time.Time
+	// ProviderMapped reports whether the caller has circuits attributed to
+	// this (visible) provider. A provider Iris can NAME but cannot map to any
+	// circuit is refused as unmapped_provider — answering it would read as
+	// "this carrier has nothing wrong", which is not what is known.
+	ProviderMapped(ctx context.Context, providerID string) (bool, error)
 }
 
 // metricGroupable mirrors plan.GroupableMetricDims (a test pins the two equal;
@@ -376,6 +381,13 @@ func (c *checker) ref(path string, r ast.EntityRef, target string) {
 	vis, err := c.sc.Visible(c.ctx, r)
 	if err != nil || !vis {
 		c.fail(path+".id", CodeUnknownEntity, r.ID, "no such "+r.Type+" is visible to you")
+		return
+	}
+	if r.Type == "provider" {
+		mapped, err := c.sc.ProviderMapped(c.ctx, r.ID)
+		if err != nil || !mapped {
+			c.fail(path+".id", CodeUnmappedProvider, r.ID, "none of your circuits is attributed to this provider yet, so Iris cannot tell which circuits it means")
+		}
 	}
 }
 
