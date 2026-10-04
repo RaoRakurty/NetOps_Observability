@@ -37,7 +37,7 @@ var vmUnscopedAllowlist = map[string]string{
 }
 
 // vmReadHelpers are the entry points that actually reach VictoriaMetrics.
-var vmReadHelpers = []string{"vmInstantUnscoped", "vmInstantScoped", "vmRange", "vmQueryRangeByIf", "vmRangeByDst"}
+var vmReadHelpers = []string{"vmInstantUnscoped", "vmInstantScoped", "vmRange", "vmQueryRangeByIf", "vmRangeByDst", "vmRangeSeries"}
 
 // vmNilFilterExceptions are the exact expressions allowed to pass a literal nil
 // filter set. Only the unscoped door's own body qualifies.

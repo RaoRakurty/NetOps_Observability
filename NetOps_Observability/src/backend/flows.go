@@ -590,16 +590,28 @@ func (s *server) deviceTenantPairCondFor(claims jwtClaims, localCol, remoteCol s
 	return "(" + localCol + " IN (" + in + ") OR " + remoteCol + " IN (" + in + "))", false
 }
 
-// sqlInList renders values as a quoted, comma-separated SQL list with single
-// quotes escaped. Inputs come from the device inventory (not the client), but we
-// escape regardless to keep the query well-formed and injection-safe.
+// sqlInList renders values as a quoted, comma-separated ClickHouse list.
+//
+// BOTH the quote and the backslash are escaped. ClickHouse reads backslash
+// escapes inside a string literal, so doubling only the quote left a value that
+// ENDS in `\` able to escape its own closing quote — the literal then ran on
+// into the next element, and the element after that parsed as SQL. Inputs here
+// include device names, which a device reports about itself (SNMP sysName), so
+// they are treated as untrusted (§3) regardless of which caller builds the list.
 func sqlInList(vals []string) string {
 	parts := make([]string, 0, len(vals))
 	for _, v := range vals {
-		parts = append(parts, "'"+strings.ReplaceAll(v, "'", "''")+"'")
+		parts = append(parts, chStringLiteral(v))
 	}
 	return strings.Join(parts, ", ")
 }
+
+// chLiteralEscaper escapes a value for a single-quoted ClickHouse string
+// literal: backslash first-class, then the quote.
+var chLiteralEscaper = strings.NewReplacer(`\`, `\\`, `'`, `\'`)
+
+// chStringLiteral renders one value as a safe single-quoted ClickHouse literal.
+func chStringLiteral(v string) string { return "'" + chLiteralEscaper.Replace(v) + "'" }
 
 // handleTunnels returns the latest sample for each overlay tunnel (IPsec /
 // SD-WAN / GRE) the collectors have reported, newest first. "LIMIT 1 BY id"

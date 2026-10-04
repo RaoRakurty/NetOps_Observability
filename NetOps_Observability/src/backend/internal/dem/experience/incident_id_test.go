@@ -77,7 +77,7 @@ func TestDerivedIncidentIDResolvesAfterTheClockAdvances(t *testing.T) {
 	for _, step := range []time.Duration{100 * time.Millisecond, time.Second, 5 * time.Second} {
 		t.Run(step.String(), func(t *testing.T) {
 			clock := newStepClock(testNow, step)
-			api, _ := promoteAPIAt(t, newFakePromoter(), NewFileStore(""), "acme", clock.Now)
+			api, _ := promoteAPIAt(t, newFakePromoter(), newTestFileStore(""), "acme", clock.Now)
 
 			id := derivedIncidentID(t, api, "acme")
 			// The list itself must not disagree with itself either.
@@ -101,7 +101,7 @@ func TestDerivedIncidentIDResolvesAfterTheClockAdvances(t *testing.T) {
 // call and, once one has landed, drops the "promoted" stamp off the next read.
 func TestPromotionSurvivesTheClockAdvancing(t *testing.T) {
 	clock := newStepClock(testNow, time.Second)
-	store := NewFileStore("")
+	store := newTestFileStore("")
 	api, _ := promoteAPIAt(t, newFakePromoter(), store, "acme", clock.Now)
 
 	id := derivedIncidentID(t, api, "acme")

@@ -33,6 +33,7 @@ import {
   type Device,
 } from "../../services/api";
 import { useWorkspace } from "../../context/workspace";
+import { ConfigDiffView } from "../../components/ConfigDiffView";
 import { fmtDateTime } from "../../lib/time";
 import {
   BACKUP_BUSY_MESSAGE,
@@ -43,7 +44,6 @@ import {
   NO_PERMISSION_MESSAGE,
   actionErrorMessage,
   classifyError,
-  diffLines,
   driftOf,
   driftTone,
   fmtBytes,
@@ -86,34 +86,9 @@ export function ConfigTextView({ doc }: { doc: ConfigText }) {
   );
 }
 
-/** A unified diff, coloured per line from the +/- prefix. Text only. */
-export function ConfigDiffView({ diff, title }: { diff: ConfigDiffResult; title: string }) {
-  const lines = diffLines(diff.unified);
-  return (
-    <div className="ccw-code">
-      <div className="ccw-code-h">
-        <span className="mono">{title}</span>
-        <span className="mini-meta">{fmtChurn(diff.added, diff.removed)}</span>
-      </div>
-      {diff.truncated && (
-        <p className="mini-meta cfg-note" role="status">
-          Truncated by the server — only the start of the change.
-          Open the full versions to read the rest.
-        </p>
-      )}
-      {lines.length === 0 ? (
-        <p className="fact-line" style={{ margin: 0 }}>The two versions are identical — the server returned an empty diff.</p>
-      ) : (
-        <pre className="ccw-pre cfg-diff" aria-label={title}>
-          {lines.map((l, i) => (
-            // Untrusted diff text — escaped React text node, coloured by CLASS.
-            <div key={i} className={`cfg-diff-line cfg-diff-${l.kind}`}>{l.text}</div>
-          ))}
-        </pre>
-      )}
-    </div>
-  );
-}
+// The unified diff view lives in components/ so the Iris answer surface reuses
+// it (tracker 337 N-E3); re-exported here so existing imports keep working.
+export { ConfigDiffView };
 
 // ── the panel ───────────────────────────────────────────────────────────────
 

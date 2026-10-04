@@ -26,7 +26,7 @@ per-device monitoring switch: a device in the inventory with a management
 address is collected from, up to your licence's device limit (25 on the
 Community tier). When there are more devices than the licence covers, the first
 ones found are collected from and the rest stay in the inventory marked **Over
-licence limit**, with a banner on **Infrastructure → Inventory & Devices**
+licence limit**, with a banner on **Infrastructure → Devices**
 saying how many.
 
 :::warning Keep discovery scopes narrow
@@ -42,6 +42,18 @@ Discovery is bounded on purpose: at most 4,096 addresses across at most 32
 ranges, 32 concurrent probes, a two-second budget per host, and one sweep per
 minute. A configuration that exceeds those bounds is refused with an error
 rather than trimmed.
+
+## Where to find it
+
+**Administration → Data sources → Subnet Discovery** is where you set the IP
+ranges the scan sweeps, switch scanning on, and read what the last sweep found.
+It sits next to **SNMP Profiles**, where the credentials the sweep tries are
+kept, and **Telemetry Coverage**. To connect a network management system or a
+vendor controller instead, use **Infrastructure → NMS Integrations** (see
+[Connect a vendor controller](/infrastructure/nms-integrations)). Subnet
+Discovery is platform-wide: a tenant account sees an explanation instead of the
+form, and discovered devices appear in **Infrastructure → Devices**
+automatically.
 
 ## Before you begin
 

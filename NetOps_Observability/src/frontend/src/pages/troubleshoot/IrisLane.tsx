@@ -39,6 +39,10 @@ import { api, type AiAnswer, type AiCitation, type AiSkillHop } from "../../serv
  *  backslash to a slash, so "/\\evil.example" is "//evil.example" off-origin. */
 export function safeCiteHref(href: string | undefined): string | null {
   const h = (href || "").trim();
+  // An in-app hash route ("#/monitoring/correlations?id=…") stays in this
+  // document — it is how the backend writes EVERY citation href, and refusing
+  // it rendered every citation on this page as plain text.
+  if (h.startsWith("#/")) return h;
   if (!h.startsWith("/")) return null;
   if (h.startsWith("//") || h.startsWith("/\\")) return null;
   return h;

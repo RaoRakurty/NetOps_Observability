@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for path-seam-handoff. Dialect + contract: skill_cases.go.
+#
+# Ownership is the whole point of this method, and ownership is not a machine
+# fact the tools declare: it is read off the seam. So every handoff here is a
+# human-authored reason offered as a CLOSED choice — never a deterministic hop.
+
+case: a seam question with no ownership fact takes no hop
+question: packet loss across the isp handoff
+ui:
+  - correlation_id=case-seam-flat
+  - device=edge-1
+tools:
+  - get_metric_anomalies=not_wired
+evidence:
+  - topology
+  - finding
+expect_chain:
+  - path-seam-handoff entry
+expect_selected: none
+expect_verdict:
+  - seam
+  - baseline
+expect_notes:
+  - Metric anomalies is not available on this deployment
+expect_never:
+  - optics-degraded
+  - interface-down
+  - app-edge-5xx
+  - bgp-prefix-missing
+expect_select: path-seam-handoff
+
+---
+
+case: a degraded hop on a link we own is the model's to propose
+question: hop loss on the wan on edge-1 with errors on our own link
+ui:
+  - correlation_id=case-seam-model
+  - device=edge-1
+model_next: optics-degraded
+evidence:
+  - topology
+expect_chain:
+  - path-seam-handoff entry
+  - optics-degraded model
+expect_selected: model
+expect_reason: a link we own
+expect_verdict:
+  - error type
+  - direction
+expect_never:
+  - interface-down
+  - app-edge-5xx
+
+---
+
+case: every hop within baseline while one application fails is the model's to propose
+question: latency and jitter on the dia path but only one app is failing
+ui:
+  - correlation_id=case-seam-app
+  - device=edge-1
+model_next: app-edge-5xx
+evidence:
+  - topology
+expect_chain:
+  - path-seam-handoff entry
+  - app-edge-5xx model
+expect_selected: model
+expect_reason: within baseline
+expect_verdict:
+  - baseline
+  - service-side
+expect_never:
+  - optics-degraded

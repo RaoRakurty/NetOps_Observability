@@ -75,10 +75,11 @@ func ImportFile(ctx context.Context, db DB, raw []byte) (int, error) {
 		for _, v := range list {
 			if _, err := tx.Exec(ctx, `INSERT INTO config_backup_versions
 			        (tenant_id, device_id, version_sha, captured_at, size_bytes, blob_ref,
-			         vendor, status, error_text, golden, drift_state, lines_added, lines_removed)
-			    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+			         vendor, status, error_text, golden, drift_state, lines_added, lines_removed,
+			         capture_trigger)
+			    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 				v.TenantID, v.DeviceID, v.SHA, v.CapturedAt, v.SizeBytes, v.BlobRef,
-				v.Vendor, v.Status, v.Error, v.Golden, v.Drift, v.Added, v.Removed); err != nil {
+				v.Vendor, v.Status, v.Error, v.Golden, v.Drift, v.Added, v.Removed, v.Trigger); err != nil {
 				return fmt.Errorf("configstore: import version %s of device %s (tenant %s): %w",
 					v.SHA, v.DeviceID, v.TenantID, err)
 			}

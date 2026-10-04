@@ -10,6 +10,12 @@ sidebar_position: 6
 
 Everything the console does goes through the REST API, so anything you can select, you can script. An API key is a long-lived, tenant-bound credential for machine clients such as CI pipelines, exporters and integrations. It carries no password and no MFA prompt.
 
+The **Administration → API Access** page has three tiles: **Generate API key**
+to mint and revoke keys, **Token Policy** for session token lifetimes, and
+**REST API Reference** for every endpoint, generated live from the running API.
+The strip above them counts your **Keys**, **Active**, **Revoked** and
+**Rate-limited** keys.
+
 ## Before you begin
 
 - **Permission:** `administration:admin`. API keys are per-tenant data. A tenant administrator sees and mints only their own tenant's keys, and a key created by a non-cross-tenant caller is stamped with that caller's tenant regardless of what the request body says.

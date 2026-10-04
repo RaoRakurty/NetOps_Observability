@@ -3,17 +3,18 @@
 
 package ai
 
-// product_kb_links_test.go — every UI deep link the assistant can hand out must
+// docs_routes_links_test.go — every UI deep link the assistant can hand out must
 // resolve to a page that exists.
 //
 // WHY THIS TEST EXISTS. A wrong deep link is worse than no deep link. The SPA
 // router never reports "not found": an unknown section falls back to the first
 // section and an unknown leaf to that section's first page, so a stale link
 // silently lands the reader on Home — or, worse, on a plausible-looking wrong
-// page — while the answer above it says "open X". Two of the routes in
-// product_kb.go had rotted exactly that way by 2026-09-05: "#/admin/security"
-// was never a route in any IA, and "#/monitoring/reports" quietly resolved to
-// the Operations section's first page.
+// page — while the answer above it says "open X". Two of the routes in the
+// deep-link table (then in product_kb.go, now docs_routes.go) had rotted
+// exactly that way by 2026-09-05: "#/admin/security" was never a route in any
+// IA, and "#/monitoring/reports" quietly resolved to the Operations section's
+// first page.
 //
 // HOW IT WORKS. The nav tree is the frontend's, so this test READS it —
 // src/frontend/src/nav.tsx — rather than restating it. A small stdlib extractor
@@ -43,15 +44,19 @@ import (
 // ─────────────────────────────────────────────────────────────────────────────
 
 type navIndex struct {
-	sections     map[string]bool
-	leaves       map[string]map[string]bool // section id → leaf ids
-	subs         map[string]map[string]bool // "section/leaf" → sub-item ids
+	sections map[string]bool
+	leaves   map[string]map[string]bool // section id → leaf ids
+	subs     map[string]map[string]bool // "section/leaf" → sub-item ids
+	// subRoutes records a sub-item that carries its own `route:` — a link to
+	// another page ("section/leaf/sub" → that route) rather than a view of
+	// its own leaf.
+	subRoutes    map[string]string
 	routeAlias   map[string]string
 	sectionAlias map[string]string
 }
 
 const navSourcePath = "../../frontend/src/nav.tsx"
-const productKBSourcePath = "product_kb.go"
+const docRoutesSourcePath = "docs_routes.go"
 const copilotKnowledgePath = "../copilot_knowledge.md"
 
 // stripTSComments blanks // and /* */ comments without touching string or
@@ -142,9 +147,10 @@ func aliasTable(src, name string) map[string]string {
 func parseNav(t *testing.T, src string) *navIndex {
 	t.Helper()
 	idx := &navIndex{
-		sections: map[string]bool{},
-		leaves:   map[string]map[string]bool{},
-		subs:     map[string]map[string]bool{},
+		sections:  map[string]bool{},
+		leaves:    map[string]map[string]bool{},
+		subs:      map[string]map[string]bool{},
+		subRoutes: map[string]string{},
 	}
 	anchor := strings.Index(src, "export const NAV")
 	if anchor < 0 {
@@ -158,7 +164,7 @@ func parseNav(t *testing.T, src string) *navIndex {
 
 	var stack []string // enclosing array kinds, innermost last
 	lastKey := ""
-	curSection, curLeaf := "", ""
+	curSection, curLeaf, curSub := "", "", ""
 
 	readString := func(i int) (string, int) {
 		quote := body[i]
@@ -199,7 +205,9 @@ func parseNav(t *testing.T, src string) *navIndex {
 						idx.leaves[curSection][val] = true
 					}
 				case "subItems":
+					curSub = ""
 					if curSection != "" && curLeaf != "" {
+						curSub = val
 						key := curSection + "/" + curLeaf
 						if idx.subs[key] == nil {
 							idx.subs[key] = map[string]bool{}
@@ -207,6 +215,9 @@ func parseNav(t *testing.T, src string) *navIndex {
 						idx.subs[key][val] = true
 					}
 				}
+			}
+			if lastKey == "route" && top(stack) == "subItems" && curSub != "" {
+				idx.subRoutes[curSection+"/"+curLeaf+"/"+curSub] = val
 			}
 			lastKey = ""
 		case c == '[':
@@ -399,14 +410,14 @@ func TestNavIndexExtractorSanity(t *testing.T) {
 	}
 }
 
-// TestProductKBDeepLinksResolve — every route the Product Knowledge Retriever
+// TestDocRoutesDeepLinksResolve — every in-app route a documentation answer
 // can offer must be a real page, and (since these are ours to keep current) the
 // CANONICAL address rather than one that survives only through an alias.
-func TestProductKBDeepLinksResolve(t *testing.T) {
+func TestDocRoutesDeepLinksResolve(t *testing.T) {
 	idx := loadNavIndex(t)
-	links := deepLinksIn(t, productKBSourcePath)
+	links := deepLinksIn(t, docRoutesSourcePath)
 	if len(links) == 0 {
-		t.Fatal("no deep links found in product_kb.go — the extractor or the file moved")
+		t.Fatal("no deep links found in docs_routes.go — the extractor or the file moved")
 	}
 	for _, link := range links {
 		problem, aliased := idx.resolveNavHash(link)

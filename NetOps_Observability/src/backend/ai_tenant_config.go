@@ -6,10 +6,13 @@ package backend
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"netops/backend/ai"
+	"netops/backend/internal/aientitlement"
 )
 
 // ai_tenant_config.go — per-tenant Iris AI configuration (intelligence plan
@@ -68,15 +71,9 @@ func (s *server) dailyTokensFor(tenant string) int {
 
 // ---- gates (used by copilot.go / ai_handlers.go / copilot_agent.go) ----------
 
-// aiAssistantAllowed: cross-tenant principals always may use the assistant;
-// tenant users only when their tenant's entitlement says so.
-func (s *server) aiAssistantAllowed(claims jwtClaims) bool {
-	tenant, cross := principalTenant(claims)
-	if cross {
-		return true
-	}
-	return s.aiTenantCfg.AssistantEnabled(tenant)
-}
+// The per-tenant assistant / investigation switches are consulted through the
+// atomic AI entitlements (below, tracker 337 N-A7), which AND them
+// with the licence tier's mapping and the deployment flags.
 
 var errAITenantDisabled = errors.New("Iris AI isn't enabled for this account — contact your administrator")
 
@@ -87,18 +84,33 @@ type providerCandidate struct {
 	source           string // "tenant" | "platform"
 }
 
-// providerCandidates resolves the provider fallback chain FOR A PRINCIPAL
-// (§3a: every data-touching surface scopes by the caller). Rules:
+// providerCandidates resolves the provider fallback chain FOR A PRINCIPAL with
+// NO routed tier — the free-form assistant proxy (copilot.go), which is not an
+// answer mode. It is the pre-router behaviour, preserved exactly.
+func (s *server) providerCandidates(claims jwtClaims) []providerCandidate {
+	return s.providerCandidatesForTier(claims, "")
+}
+
+// providerCandidatesForTier resolves the provider fallback chain FOR A PRINCIPAL
+// AND A MODEL TIER (§3a: every data-touching surface scopes by the caller;
+// §10: the router picks the tier, this picks the model). Rules, unchanged:
 //   - a tenant's own BYO key wins outright — their traffic never rides the
 //     platform account when they brought a key;
 //   - a strict tenant (no_platform_key) with no key of its own gets NOTHING —
 //     fail closed to key-free mode rather than leak onto the platform key;
 //   - otherwise (and always for cross-tenant principals) the platform chain
 //     applies: per-provider env keys, then the UI-stored platform key.
-func (s *server) providerCandidates(claims jwtClaims) []providerCandidate {
+//
+// The TIER only ever chooses which of one configuration's model names is used.
+// It cannot change the provider, cannot change the key, cannot add a candidate
+// and cannot reorder the chain — so none of the BYO rules above can be reached
+// through it. With no per-tier model configured (every deployment until an
+// operator sets one) every tier resolves to the same single model the chain
+// resolved before, which is why this change is invisible to an existing install.
+func (s *server) providerCandidatesForTier(claims jwtClaims, tier ai.ModelTier) []providerCandidate {
 	tenant, cross := principalTenant(claims)
 	if !cross {
-		if name, key, model, ok := s.aiTenantCfg.BYOProvider(tenant, providerModel); ok {
+		if name, key, model, ok := s.aiTenantCfg.BYOProvider(tenant, tier, providerModel); ok {
 			return []providerCandidate{{name: name, key: key, model: model, source: "tenant"}}
 		}
 		if s.aiTenantCfg.NoPlatformKey(tenant) {
@@ -107,6 +119,7 @@ func (s *server) providerCandidates(claims jwtClaims) []providerCandidate {
 	}
 	storedKey := s.copilotCfg.APIKey()
 	cfg := s.copilotCfg.Get()
+	tiered := cfg.Models().For(tier)
 	var out []providerCandidate
 	for _, name := range copilotProviderChain() {
 		key := providerKey(name)
@@ -117,8 +130,12 @@ func (s *server) providerCandidates(claims jwtClaims) []providerCandidate {
 			continue
 		}
 		model := providerModel(name)
-		if name == cfg.Provider && cfg.Model != "" {
-			model = cfg.Model
+		// A per-tier (or single) model override applies only to the provider it
+		// was configured FOR: a model name is provider-specific, and riding the
+		// anthropic model into the openai fallback produces exactly the baffling
+		// failure the provider-switch key rule already exists to prevent.
+		if name == cfg.Provider && tiered != "" {
+			model = tiered
 		}
 		out = append(out, providerCandidate{name: name, key: key, model: model, source: "platform"})
 	}
@@ -151,6 +168,8 @@ func (s *server) handleAITenantConfig(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Provider      string `json:"provider"`
 			Model         string `json:"model"`
+			ModelFast     string `json:"model_fast"`
+			ModelStrong   string `json:"model_strong"`
 			Key           string `json:"key"`
 			NoPlatformKey bool   `json:"no_platform_key"`
 			ClearKey      bool   `json:"clear_key"`
@@ -163,7 +182,11 @@ func (s *server) handleAITenantConfig(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errors.New("unknown provider — use anthropic, openai or gemini"))
 			return
 		}
-		if _, err := s.aiTenantCfg.SetTenantSettings(tenant, req.Provider, req.Model, req.Key, req.NoPlatformKey, req.ClearKey); err != nil {
+		if _, err := s.aiTenantCfg.SetTenantSettings(tenant, ai.TenantSettings{
+			Provider: req.Provider, Model: req.Model,
+			ModelFast: req.ModelFast, ModelStrong: req.ModelStrong,
+			Key: req.Key, NoPlatformKey: req.NoPlatformKey, ClearKey: req.ClearKey,
+		}); err != nil {
 			// Audit the REFUSAL too. A write that failed and was never recorded
 			// is indistinguishable from one that never happened.
 			s.audit.Record(AuditEvent{
@@ -192,8 +215,13 @@ func (s *server) handleAITenantConfig(w http.ResponseWriter, r *http.Request) {
 func (s *server) aiTenantConfigView(tenant string) map[string]any {
 	c := s.aiTenantCfg.Get(tenant)
 	return map[string]any{
-		"provider":               c.Provider,
-		"model":                  c.Model,
+		"provider": c.Provider,
+		"model":    c.Model,
+		// §10 model-router overrides. Blank means "this tier uses model", which
+		// is what the UI must render — not the resolved value, or an operator
+		// could not tell a deliberate split from an inherited default.
+		"model_fast":             c.ModelFast,
+		"model_strong":           c.ModelStrong,
 		"key_present":            c.Key != "",
 		"no_platform_key":        c.NoPlatformKey,
 		"assistant_enabled":      !c.AssistantOff,
@@ -297,4 +325,109 @@ func (s *server) handleAITenants(w http.ResponseWriter, r *http.Request) {
 // other config store).
 func aiTenantConfigPath() string {
 	return envOr("AI_TENANT_CONFIG_FILE", "/data/ai_tenant_config.json")
+}
+
+// ---- atomic AI entitlements (tracker 337 N-A7) -------------------------------
+
+// The server side of the atomic AI entitlements
+// (tracker 337 N-A7). Every AI route asks requireAIEntitlement for the one
+// capability it exercises; the frontend receives aiEntitlementsFor via
+// GET /api/features to hide what the caller cannot use. Hidden is cosmetic —
+// these server-side gates are the control, and they are default-closed: an
+// unparseable mapping, an unknown tier, a nil policy or a tenant with no
+// switch source grants nothing.
+//
+// The licence tier only ever reaches this file as an opaque key into the
+// shipped mapping (internal/aientitlement/tiers.json). Nothing here compares
+// it to a tier name.
+
+// aiDefaultPolicy is the shipped tier → entitlement mapping, parsed once. Like
+// aiSkills it is embedded, immutable content; a parse failure is content drift
+// identical on every deployment, logged LOUDLY, and the process then runs with
+// a nil policy — no AI capability is granted, rather than all of them.
+var aiDefaultPolicy = loadAIEntitlementPolicy()
+
+func loadAIEntitlementPolicy() *aientitlement.Policy {
+	p, err := aientitlement.Default()
+	if err != nil {
+		log.Printf("FATAL-GRADE CONFIG ERROR: the AI entitlement mapping failed to load — every AI capability is REFUSED for this process: %v", err)
+		return nil
+	}
+	return p
+}
+
+// aiPolicy is the mapping in force: the injected one when set (tests), else
+// the shipped default.
+func (s *server) aiPolicy() *aientitlement.Policy {
+	if s.aiEntitlementPolicy != nil {
+		return s.aiEntitlementPolicy
+	}
+	return aiDefaultPolicy
+}
+
+// aiEntitlementInputs gathers the three inputs for one principal: the licence
+// tier in force (Community when no licence service is wired — the entitlement
+// package's own fail-closed default), the process flags, and the caller's
+// tenant switches.
+func (s *server) aiEntitlementInputs(claims jwtClaims) aientitlement.Inputs {
+	tenant, cross := principalTenant(claims)
+	return aientitlement.Inputs{
+		Tier:   string(s.entitlements.Tier()), // nil-safe: a nil *licence.Service reads as Community
+		Env:    os.Getenv,
+		Tenant: tenant,
+		Cross:  cross,
+		// The store's own defaults apply when it holds no row for the tenant
+		// (assistant on, investigations off — the platform owner's staged-
+		// rollout policy, unchanged by N-A7). Its methods are nil-safe and
+		// answer those same defaults, exactly as the pre-N-A7 gates did.
+		Switches: s.aiTenantCfg,
+	}
+}
+
+// aiDecide answers one entitlement for one principal.
+func (s *server) aiDecide(claims jwtClaims, e aientitlement.Entitlement) aientitlement.Decision {
+	return aientitlement.Decide(s.aiPolicy(), e, s.aiEntitlementInputs(claims))
+}
+
+// aiEntitled is the boolean form, for paths that degrade rather than refuse
+// (the investigation loop inside a chat turn, the data arm of an ask).
+func (s *server) aiEntitled(claims jwtClaims, e aientitlement.Entitlement) bool {
+	return s.aiDecide(claims, e).Granted
+}
+
+// aiEntitlementsFor is the caller's granted set, for the frontend.
+func (s *server) aiEntitlementsFor(claims jwtClaims) []aientitlement.Entitlement {
+	return aientitlement.Resolve(s.aiPolicy(), s.aiEntitlementInputs(claims))
+}
+
+// requireAIEntitlement is the route gate. It writes the refusal and returns
+// false when the caller lacks e. Statuses keep their pre-N-A7 meaning so
+// existing clients read them the same way:
+//
+//	503 — a deployment flag is off (the feature is switched off here)
+//	403 — the licence tier's mapping does not include it, or the caller's
+//	      tenant is not switched on (errAITenantDisabled, unchanged text)
+//
+// The body carries the entitlement and a stable reason token so the SPA can
+// say WHICH capability is missing without parsing prose.
+func (s *server) requireAIEntitlement(w http.ResponseWriter, claims jwtClaims, e aientitlement.Entitlement) bool {
+	d := s.aiDecide(claims, e)
+	if d.Granted {
+		return true
+	}
+	status, msg := http.StatusForbidden, "this installation's licence does not include "+aientitlement.Label(e)
+	switch d.Reason {
+	case aientitlement.ReasonDisabled:
+		status = http.StatusServiceUnavailable
+		msg = "Iris AI is disabled — set FEATURE_AI=true"
+		if e == aientitlement.Investigate {
+			msg = "AI investigations are disabled — set FEATURE_AI_TOOLS=true"
+		}
+	case aientitlement.ReasonTenantOff:
+		msg = errAITenantDisabled.Error()
+	case aientitlement.ReasonUnknown:
+		msg = "unknown AI capability"
+	}
+	writeJSON(w, status, map[string]string{"error": msg, "entitlement": string(e), "reason": string(d.Reason)})
+	return false
 }

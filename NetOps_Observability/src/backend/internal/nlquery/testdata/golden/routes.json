@@ -1,0 +1,404 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "routes",
+  "cases": [
+    {
+      "id": "routes-001",
+      "category": "routes",
+      "question": "Show routing changes in the last 24 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "type",
+              "op": "eq",
+              "values": [
+                "ROUTE_CHANGE"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "24h"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1042"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "route changes last 24h",
+        "any routing policy changes past day",
+        "routing changes in the last day"
+      ]
+    },
+    {
+      "id": "routes-002",
+      "category": "routes",
+      "question": "Who changed the routing policy on dfw-edge-1 today?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [
+          {
+            "input": "dfw-edge-1",
+            "type": "device",
+            "id": "device:dfw-edge-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:dfw-edge-1"
+            }
+          ],
+          "filters": [
+            {
+              "field": "type",
+              "op": "eq",
+              "values": [
+                "ROUTE_CHANGE"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1042"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "who touched routing policy on dfw-edge-1 today",
+        "routing policy change on DFW-EDGE-1 today - who?",
+        "who modified the bgp policy on dfw edge 1 today"
+      ]
+    },
+    {
+      "id": "routes-003",
+      "category": "routes",
+      "question": "Show routes received from each BGP peer on nyc-edge-1 for the last 6 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "nyc-edge-1",
+            "type": "device",
+            "id": "device:nyc-edge-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "bgp_peer",
+          "metric": "bgp_prefixes_received",
+          "aggregation": "last",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:nyc-edge-1"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "6h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "bgp_peer:nyc-edge-1/169.254.10.1@aws-dx",
+            "bgp_peer:nyc-edge-1/198.51.100.77"
+          ]
+        }
+      },
+      "paraphrases": [
+        "received routes per peer on nyc-edge-1 last 6h",
+        "prefix counts for NYC-EDGE-1 neighbors past six hours",
+        "routes received nyc edge peers last 6 hrs"
+      ]
+    },
+    {
+      "id": "routes-004",
+      "category": "routes",
+      "question": "Show all route and network policy changes at Austin this week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [
+          {
+            "input": "Austin",
+            "type": "site",
+            "id": "site:aus-br",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:aus-br"
+            }
+          ],
+          "filters": [
+            {
+              "field": "class",
+              "op": "eq",
+              "values": [
+                "wan"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [
+          {
+            "v": 1,
+            "query_type": "change_list",
+            "target": "change",
+            "entities": [
+              {
+                "type": "site",
+                "id": "site:aus-br"
+              }
+            ],
+            "filters": [
+              {
+                "field": "type",
+                "op": "in",
+                "values": [
+                  "ROUTE_CHANGE",
+                  "NETWORK_CHANGE"
+                ]
+              }
+            ],
+            "time_range": {
+              "kind": "absolute",
+              "from": "2026-09-21T05:00:00Z",
+              "to": "2026-09-24T15:00:00Z"
+            },
+            "order_by": [
+              {
+                "field": "event_at",
+                "dir": "desc"
+              }
+            ]
+          }
+        ],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1044",
+            "change:chg-1054"
+          ],
+          "min_rows": 2
+        }
+      },
+      "paraphrases": [
+        "austin wan changes this week",
+        "route + network policy changes at aus since monday",
+        "austin routing and network changes this week"
+      ]
+    },
+    {
+      "id": "routes-005",
+      "category": "routes",
+      "question": "Which peers are sending fewer than 100 prefixes?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "bgp_peer",
+          "metric": "bgp_prefixes_received",
+          "aggregation": "last",
+          "predicate": {
+            "op": "lt",
+            "value": 100
+          },
+          "time_range": {}
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "peers with < 100 prefixes",
+        "which neighbors send under 100 routes",
+        "bgp peers below 100 received prefixes"
+      ]
+    },
+    {
+      "id": "routes-006",
+      "category": "routes",
+      "question": "Show BGP policy changes by mlee in the last 7 days.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "type",
+              "op": "eq",
+              "values": [
+                "ROUTE_CHANGE"
+              ]
+            },
+            {
+              "field": "actor",
+              "op": "eq",
+              "values": [
+                "mlee"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "7d"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1054"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "mlee bgp policy changes past week",
+        "routing changes made by mlee last 7 days",
+        "what bgp policy did mlee change this past week"
+      ]
+    },
+    {
+      "id": "routes-007",
+      "category": "routes",
+      "question": "Did received prefixes from the Comcast peer in Austin go up by more than 50 in the last hour?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [
+          {
+            "input": "the Comcast peer in Austin",
+            "type": "bgp_peer",
+            "id": "bgp_peer:aus-edge-1/203.0.113.9",
+            "method": "label_pair"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "bgp_peer",
+          "metric": "bgp_prefixes_received",
+          "aggregation": "last",
+          "entities": [
+            {
+              "type": "bgp_peer",
+              "id": "bgp_peer:aus-edge-1/203.0.113.9"
+            }
+          ],
+          "predicate": {
+            "op": "increased_by",
+            "value": 50
+          },
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "aus comcast peer prefixes up by 50+ last hour?",
+        "did 203.0.113.9 send 50 more routes in the past hour",
+        "prefix count jump over 50 from the austin comcast neighbor last 1h"
+      ]
+    }
+  ]
+}

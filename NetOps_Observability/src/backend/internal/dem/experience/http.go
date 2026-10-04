@@ -104,6 +104,15 @@ type Deps struct {
 	// is surfaced so the UI can render a disabled panel with the reason rather
 	// than hiding a feature the operator paid for.
 	InvestigatorEnabled bool
+	// Redact scrubs credentials out of a change's free-text before/after values
+	// on EVERY read path: the change feed, the overview and incident assemblies
+	// (and so the investigator packet built from them), and the record echo.
+	// Required, and it MUST be the function the change ledger's own API
+	// (/api/changes, internal/changeapi) is wired with, so the two routes over
+	// one ledger can never disagree about what a secret is (tracker 337 N-D3).
+	// A nil Redact makes NewAPI refuse: it would hand raw values back, which is
+	// the leak this field exists to close.
+	Redact func(string) string
 
 	Now        func() time.Time
 	WriteJSON  func(w http.ResponseWriter, status int, body any)
@@ -127,6 +136,7 @@ func (d Deps) validate() error {
 	check("WriteError", d.WriteError != nil)
 	check("LogWarn", d.LogWarn != nil)
 	check("Policy", d.Policy.Version > 0)
+	check("Redact", d.Redact != nil)
 	if len(missing) > 0 {
 		return fmt.Errorf("experience: Deps missing required fields: %s", strings.Join(missing, ", "))
 	}
@@ -287,7 +297,10 @@ func (a *API) assemble(r *http.Request, tenant, window string) (Assembly, error)
 	if cerr != nil {
 		return Assembly{}, cerr
 	}
-	in.Changes = changes
+	// Redacted HERE, at the one read that feeds every derived view, so the
+	// overview's change list, each incident's ranked changes and the packet the
+	// AI investigator sends to a provider never carry a raw before/after.
+	in.Changes = redactChangeValues(changes, a.deps.Redact)
 
 	a.deps.Counters.ViewsServed.Add(1)
 	asm := Assemble(in, a.deps.Policy)
@@ -1241,7 +1254,7 @@ func (a *API) listChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	atCeiling := len(all) > maxPageLimit
-	rows := httppage.SliceOf(all, page)
+	rows := redactChangeValues(httppage.SliceOf(all, page), a.deps.Redact)
 
 	// `total` MEANS "how many changes matched", and on a truncated read len(all)
 	// is not that number — it is `maxPageLimit + 1`, an artefact of the extra
@@ -1318,13 +1331,19 @@ func (a *API) recordChange(w http.ResponseWriter, r *http.Request) {
 	if src == "" {
 		src = SourceManual
 	}
-	actor := cw.Actor
-	if actor == "" {
-		actor = p.Subject
+	actor, actorType, actorID := cw.Actor, "", ""
+	if strings.TrimSpace(actor) == "" {
+		// Nobody named an actor, so the actor is the authenticated caller — a
+		// Correlix principal, whose id IS the canonical identity (N-D4). A body
+		// that names someone else is kept verbatim with type unknown: the API
+		// cannot vouch for who that string refers to.
+		actor, actorType, actorID = p.Subject, ChangeActorUser, p.Subject
 	}
 	ch := ChangeEvent{
 		TenantID: tenant, // from the TOKEN, never the body
-		Type:     cw.Type, Actor: actor, Object: cw.Object, ObjectKind: cw.ObjectKind,
+		Type:     cw.Type, Actor: actor, ActorType: actorType, ActorID: actorID,
+		SourceSystem: SourceSystemLedger,
+		Object:       cw.Object, ObjectKind: cw.ObjectKind,
 		Summary: cw.Summary, Before: cw.Before, After: cw.After,
 		ReleaseID: cw.ReleaseID, RollbackRef: cw.RollbackRef,
 		Site: cw.Site, App: cw.App, Seam: cw.Seam, Cohort: cw.Cohort,
@@ -1340,6 +1359,9 @@ func (a *API) recordChange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.deps.Counters.ChangesRecorded.Add(1)
+	// The echo is a read too: an idempotent repeat returns the STORED row, so it
+	// is redacted exactly like the list.
+	out.Before, out.After = RedactChangeValue(out.Before, a.deps.Redact), RedactChangeValue(out.After, a.deps.Redact)
 	a.deps.WriteJSON(w, http.StatusCreated, out)
 }
 

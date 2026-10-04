@@ -217,6 +217,34 @@ points at an IP address; a target declared by hostname contributes no flow
 reading, and the coverage figure on the row says how many of your subjects are
 covered.
 
+### The Incidents view
+
+**Incidents** lists the experience incidents in the window. To narrow and
+open one:
+
+1. Select **Incidents**.
+2. Narrow the list by severity, application or workflow name. The filters
+   are kept in the page address, so a link you share opens the same list.
+   **Clear filters** removes all three.
+3. Read the **Results** count, for example `12 of 40`. When the list is longer
+   than one page, a line under the table says so.
+4. Select an incident's title to open it. **Back to incidents** returns to the
+   list.
+
+Each row gives the severity, the incident, the workflow or application it
+hit, **Impact**, **Business impact**, **Likely layer**, **Leading cause**,
+**Confidence**, **Owner** and **Duration**. A blank cell always says why, for example **Owner
+not determined** or **No cause has enough evidence yet**. **No incident open in
+this window.** means the read worked and found none.
+
+An opened incident shows its header, **Impact**, **Experience path**,
+**Timeline**, **Hypotheses**, **Changes**, **Evidence**, **Action** and
+**Verify**. An experience incident is derived from the window's evidence and
+has no durable record until it is promoted. **Promote** raises it as a platform
+incident on **Operations → Incidents**. It needs `infrastructure:write`, and it
+is offered only on the Postgres store, because that is where the incident
+record lives.
+
 ### The synthetic coverage view
 
 **Synthetics** reports protection rather than a list of tests. Each declared
@@ -226,6 +254,51 @@ opinion. Zero declared steps is not 100 percent coverage, and the view says so.
 
 Per-check reliability reads `unknown` until the prober records per-run results.
 A check nobody has graded is not a check that passed.
+
+### The Journeys view
+
+**Journeys** lists the workflows declared for your tenant, with the count
+against the tenant limit. Each card shows the application, the business
+importance, the version and the objective. When the workflow is measured, the
+card shows its success rate and whether it meets or misses its objective. Use
+**Edit** and **Remove** on the card, and **Declare** to add one, as in the
+steps above.
+
+### The Service Paths view
+
+**Service Paths** shows observed paths only. Choose an open incident from the
+**Incident** list. The view shows the seam ribbon for it, meaning the likely
+layer, the seam, the owner and the leading cause, and the reference to the path
+observation the incident rode.
+
+The view never draws a path of its own. The ordered hops belong to the path
+graph. When no forward path was observed, the view prints the reason the server
+gives. "No forward path was observed" is a different finding from "the path was
+clean", and only the first one is claimed. With no incident open in the window,
+it reads **No incident open in this window**.
+
+### The Changes view
+
+**Changes** is one feed of everything done to the estate: deployments, device
+and cloud configuration, feature flags, security policy, DNS and routing. Filter
+it by **Kind of change** and **Application**. Each row gives **When**, **Kind**,
+**Object**, **Summary**, **Before → after**, **Actor**, **Where**, and a last
+column that names how the change is known. A field the producer did not send reads **not recorded**.
+
+An empty feed shows the server's note. Only the change producers that are wired
+report at all, so an empty feed is not proof that nothing changed.
+
+### The Data Health view
+
+**Data Health** says whether the other six views are worth reading. It opens
+with **Can a cause be confirmed?**. A tenant with fewer than two independent
+kinds of instrument can never reach a confirmed verdict, and this panel says so
+before you need it.
+
+**Sources** lists every source of experience evidence with its state, its
+**Coverage**, its **Freshness** and its **Effect on confidence**, meaning how
+much confidence its current state costs. The states are the ones in the
+telemetry-confidence table above.
 
 ## Related
 

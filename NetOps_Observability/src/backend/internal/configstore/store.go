@@ -232,7 +232,8 @@ func (s *FileStore) insertLocked(v Version) {
 //	TenantID, DeviceID, SHA          the row's identity, stamped from the device
 //	                                 record and the content address
 //	CapturedAt, SizeBytes, BlobRef   the capture's own facts ("last verified",
-//	Vendor, Status, Error            size, sealed blob, platform, outcome)
+//	Vendor, Status, Error, Trigger   size, sealed blob, platform, outcome,
+//	                                 what started the capture)
 //	Drift, Added, Removed            the drift verdict, restamped by
 //	                                 RecordDrift right after every capture
 //	Golden                           OPERATOR INTENT. Only SetGolden writes it,
@@ -503,12 +504,12 @@ type pgStore struct{ db DB }
 func NewPGStore(db DB) Store { return &pgStore{db: db} }
 
 const pgVersionCols = `tenant_id, device_id, version_sha, captured_at, size_bytes,
-	blob_ref, vendor, status, error_text, golden, drift_state, lines_added, lines_removed`
+	blob_ref, vendor, status, error_text, golden, drift_state, lines_added, lines_removed, capture_trigger`
 
 func scanVersion(rows pgx.Rows) (Version, error) {
 	var v Version
 	if err := rows.Scan(&v.TenantID, &v.DeviceID, &v.SHA, &v.CapturedAt, &v.SizeBytes,
-		&v.BlobRef, &v.Vendor, &v.Status, &v.Error, &v.Golden, &v.Drift, &v.Added, &v.Removed); err != nil {
+		&v.BlobRef, &v.Vendor, &v.Status, &v.Error, &v.Golden, &v.Drift, &v.Added, &v.Removed, &v.Trigger); err != nil {
 		return Version{}, err
 	}
 	v.CapturedAt = v.CapturedAt.UTC()
@@ -586,17 +587,19 @@ func (p *pgStore) Put(ctx context.Context, tenant string, cross bool, v Version)
 	return p.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `INSERT INTO config_backup_versions
 		        (tenant_id, device_id, version_sha, captured_at, size_bytes, blob_ref,
-		         vendor, status, error_text, drift_state, lines_added, lines_removed)
-		    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		         vendor, status, error_text, drift_state, lines_added, lines_removed,
+		         capture_trigger)
+		    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		    ON CONFLICT (tenant_id, device_id, version_sha) DO UPDATE SET
-		        captured_at = EXCLUDED.captured_at,
-		        size_bytes  = EXCLUDED.size_bytes,
-		        blob_ref    = EXCLUDED.blob_ref,
-		        vendor      = EXCLUDED.vendor,
-		        status      = EXCLUDED.status,
-		        error_text  = EXCLUDED.error_text`,
+		        captured_at     = EXCLUDED.captured_at,
+		        size_bytes      = EXCLUDED.size_bytes,
+		        blob_ref        = EXCLUDED.blob_ref,
+		        vendor          = EXCLUDED.vendor,
+		        status          = EXCLUDED.status,
+		        error_text      = EXCLUDED.error_text,
+		        capture_trigger = EXCLUDED.capture_trigger`,
 			v.TenantID, v.DeviceID, v.SHA, v.CapturedAt, v.SizeBytes, v.BlobRef,
-			v.Vendor, v.Status, v.Error, v.Drift, v.Added, v.Removed)
+			v.Vendor, v.Status, v.Error, v.Drift, v.Added, v.Removed, v.Trigger)
 		return err
 	})
 }

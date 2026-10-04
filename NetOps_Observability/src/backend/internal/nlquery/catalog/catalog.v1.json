@@ -1,0 +1,2325 @@
+{
+ "schema_version": 1,
+ "entities": [
+  {
+   "name": "site",
+   "description": "A customer site, branch or location",
+   "id_prefix": "site:",
+   "id_pattern": "^site:[a-z0-9][a-z0-9-]{0,63}$",
+   "name_fields": [
+    "name",
+    "slug"
+   ],
+   "aliases": [
+    "branch",
+    "location",
+    "office",
+    "campus",
+    "sites"
+   ],
+   "resolver": "site_store",
+   "sensitivity": "operational"
+  },
+  {
+   "name": "device",
+   "description": "A network device (router, switch, firewall, SD-WAN edge)",
+   "id_prefix": "device:",
+   "id_pattern": "^device:[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+   "name_fields": [
+    "name",
+    "id"
+   ],
+   "aliases": [
+    "router",
+    "switch",
+    "firewall",
+    "edge",
+    "box",
+    "node",
+    "devices",
+    "routers",
+    "switches"
+   ],
+   "resolver": "discovery",
+   "sensitivity": "operational",
+   "metric_labels": [
+    {
+     "label": "device",
+     "from": "device_id|device_name"
+    }
+   ]
+  },
+  {
+   "name": "interface",
+   "description": "An interface (port) on a device",
+   "id_prefix": "interface:",
+   "id_pattern": "^interface:[A-Za-z0-9][A-Za-z0-9._:-]{0,127}/[A-Za-z0-9._:/-]{1,64}$",
+   "name_fields": [
+    "ifName",
+    "ifAlias"
+   ],
+   "aliases": [
+    "port",
+    "ports",
+    "interfaces",
+    "link",
+    "links",
+    "intf"
+   ],
+   "resolver": "label_pair",
+   "sensitivity": "operational",
+   "metric_labels": [
+    {
+     "label": "device",
+     "from": "device_id|device_name"
+    },
+    {
+     "label": "ifName",
+     "from": "interface_name"
+    }
+   ]
+  },
+  {
+   "name": "circuit",
+   "description": "A WAN circuit (underlay link to a provider)",
+   "id_prefix": "circuit:",
+   "id_pattern": "^circuit:[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+   "name_fields": [
+    "local_device",
+    "local_if"
+   ],
+   "aliases": [
+    "circuits",
+    "wan circuit",
+    "wan link",
+    "wan links",
+    "underlay"
+   ],
+   "resolver": "wan_projection",
+   "sensitivity": "operational",
+   "metric_labels": [
+    {
+     "label": "circuit",
+     "from": "circuit_id"
+    },
+    {
+     "label": "local_device",
+     "from": "device_name"
+    }
+   ]
+  },
+  {
+   "name": "bgp_peer",
+   "description": "A BGP session between a device and a neighbour",
+   "id_prefix": "bgp_peer:",
+   "id_pattern": "^bgp_peer:[A-Za-z0-9][A-Za-z0-9._:-]{0,127}/[0-9A-Fa-f.:]{2,45}(@[A-Za-z0-9._-]{1,32})?$",
+   "name_fields": [
+    "peer"
+   ],
+   "aliases": [
+    "bgp peer",
+    "bgp peers",
+    "neighbor",
+    "neighbour",
+    "neighbors",
+    "neighbours",
+    "bgp session",
+    "bgp sessions"
+   ],
+   "resolver": "label_pair",
+   "sensitivity": "operational",
+   "metric_labels": [
+    {
+     "label": "device",
+     "from": "device_id|device_name"
+    },
+    {
+     "label": "peer",
+     "from": "peer_ip"
+    }
+   ]
+  },
+  {
+   "name": "provider",
+   "description": "A network service provider or carrier",
+   "id_prefix": "provider:",
+   "id_pattern": "^provider:[a-z0-9][a-z0-9-]{0,63}$",
+   "name_fields": [
+    "name"
+   ],
+   "aliases": [
+    "isp",
+    "carrier",
+    "providers",
+    "isps",
+    "carriers"
+   ],
+   "resolver": "alias_table",
+   "sensitivity": "operational"
+  },
+  {
+   "name": "application",
+   "description": "A business application or SaaS service",
+   "id_prefix": "app:",
+   "id_pattern": "^app:[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+   "name_fields": [
+    "name"
+   ],
+   "aliases": [
+    "app",
+    "apps",
+    "applications",
+    "saas",
+    "service",
+    "services"
+   ],
+   "resolver": "alias_table",
+   "sensitivity": "operational"
+  },
+  {
+   "name": "incident",
+   "description": "A Correlix incident (correlation case)",
+   "id_prefix": "incident:",
+   "id_pattern": "^incident:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+   "name_fields": [
+    "display_id",
+    "title"
+   ],
+   "aliases": [
+    "incidents",
+    "outage",
+    "outages",
+    "problem",
+    "problems",
+    "issue",
+    "issues",
+    "case"
+   ],
+   "resolver": "corr_current",
+   "sensitivity": "operational"
+  },
+  {
+   "name": "change",
+   "description": "A recorded operational change",
+   "id_prefix": "change:",
+   "id_pattern": "^change:[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+   "name_fields": [
+    "summary"
+   ],
+   "aliases": [
+    "changes",
+    "modification",
+    "modifications"
+   ],
+   "resolver": "change_ledger",
+   "sensitivity": "operational"
+  },
+  {
+   "name": "probe_target",
+   "description": "A synthetic probe target",
+   "id_prefix": "probe:",
+   "id_pattern": "^probe:[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+   "name_fields": [
+    "dst"
+   ],
+   "aliases": [
+    "probe target",
+    "probe targets",
+    "synthetic target"
+   ],
+   "resolver": "label_pair",
+   "sensitivity": "operational",
+   "metric_labels": [
+    {
+     "label": "dst",
+     "from": "target"
+    }
+   ]
+  }
+ ],
+ "metrics": [
+  {
+   "name": "if_in_bps",
+   "description": "Inbound traffic rate on an interface",
+   "unit": "bps",
+   "aliases": [
+    "inbound traffic",
+    "input traffic",
+    "ingress traffic",
+    "rx rate"
+   ],
+   "entity_types": [
+    "interface"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_if_in_octets"
+   ],
+   "labels": {
+    "device": "device",
+    "interface": "ifName"
+   },
+   "aggregations": [
+    "avg",
+    "max",
+    "p95"
+   ],
+   "default_agg": "avg",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 2,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_in_octets\""
+    },
+    {
+     "file": "deployment/docker/gnmic/gnmic.yaml",
+     "contains": "device_if_in_octets"
+    }
+   ],
+   "quality": [
+    "64-bit counters; gNMI owns the series when a device streams it"
+   ]
+  },
+  {
+   "name": "if_out_bps",
+   "description": "Outbound traffic rate on an interface",
+   "unit": "bps",
+   "aliases": [
+    "outbound traffic",
+    "output traffic",
+    "egress traffic",
+    "tx rate"
+   ],
+   "entity_types": [
+    "interface"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_if_out_octets"
+   ],
+   "labels": {
+    "device": "device",
+    "interface": "ifName"
+   },
+   "aggregations": [
+    "avg",
+    "max",
+    "p95"
+   ],
+   "default_agg": "avg",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 2,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_out_octets\""
+    },
+    {
+     "file": "deployment/docker/gnmic/gnmic.yaml",
+     "contains": "device_if_out_octets"
+    }
+   ]
+  },
+  {
+   "name": "if_total_bps",
+   "description": "Total traffic rate on an interface (in + out)",
+   "unit": "bps",
+   "aliases": [
+    "traffic",
+    "throughput",
+    "bandwidth",
+    "bandwidth usage"
+   ],
+   "entity_types": [
+    "interface"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_if_in_octets",
+    "device_if_out_octets"
+   ],
+   "labels": {
+    "device": "device",
+    "interface": "ifName"
+   },
+   "aggregations": [
+    "avg",
+    "max",
+    "p95"
+   ],
+   "default_agg": "avg",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 2,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_in_octets\""
+    },
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_out_octets\""
+    }
+   ],
+   "examples": [
+    "Show Dallas WAN throughput for the last two hours."
+   ]
+  },
+  {
+   "name": "if_util_in_pct",
+   "description": "Inbound utilization of an interface",
+   "unit": "percent",
+   "aliases": [
+    "inbound utilization",
+    "input utilization",
+    "rx utilization"
+   ],
+   "entity_types": [
+    "interface"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_if_in_octets",
+    "device_if_speed"
+   ],
+   "labels": {
+    "device": "device",
+    "interface": "ifName"
+   },
+   "aggregations": [
+    "avg",
+    "max",
+    "p95"
+   ],
+   "default_agg": "avg",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 2,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_in_octets\""
+    },
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_out_octets\""
+    },
+    {
+     "file": "deployment/docker/gnmic/gnmic.yaml",
+     "contains": "device_if_in_octets"
+    },
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_speed\""
+    }
+   ],
+   "default_threshold": 80.0,
+   "quality": [
+    "speed is ifHighSpeed in Mbps; interfaces reporting speed 0 are excluded, not shown as 0 %"
+   ]
+  },
+  {
+   "name": "if_util_out_pct",
+   "description": "Outbound utilization of an interface",
+   "unit": "percent",
+   "aliases": [
+    "outbound utilization",
+    "output utilization",
+    "tx utilization"
+   ],
+   "entity_types": [
+    "interface"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_if_out_octets",
+    "device_if_speed"
+   ],
+   "labels": {
+    "device": "device",
+    "interface": "ifName"
+   },
+   "aggregations": [
+    "avg",
+    "max",
+    "p95"
+   ],
+   "default_agg": "avg",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 2,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_in_octets\""
+    },
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_out_octets\""
+    },
+    {
+     "file": "deployment/docker/gnmic/gnmic.yaml",
+     "contains": "device_if_in_octets"
+    },
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_speed\""
+    }
+   ],
+   "default_threshold": 80.0
+  },
+  {
+   "name": "if_util_max_pct",
+   "description": "Utilization of an interface in its busier direction",
+   "unit": "percent",
+   "aliases": [
+    "utilization",
+    "util",
+    "usage",
+    "congestion",
+    "saturation"
+   ],
+   "entity_types": [
+    "interface"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_if_in_octets",
+    "device_if_out_octets",
+    "device_if_speed"
+   ],
+   "labels": {
+    "device": "device",
+    "interface": "ifName"
+   },
+   "aggregations": [
+    "avg",
+    "max",
+    "p95"
+   ],
+   "default_agg": "max",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 2,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_in_octets\""
+    },
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_out_octets\""
+    },
+    {
+     "file": "deployment/docker/gnmic/gnmic.yaml",
+     "contains": "device_if_in_octets"
+    },
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_speed\""
+    }
+   ],
+   "default_threshold": 80.0,
+   "examples": [
+    "Which interfaces were above 80% utilization this morning?"
+   ]
+  },
+  {
+   "name": "if_oper_status",
+   "description": "Operational state of an interface",
+   "unit": "state",
+   "aliases": [
+    "link state",
+    "interface state",
+    "up down",
+    "oper status",
+    "port status"
+   ],
+   "entity_types": [
+    "interface"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_if_oper_status"
+   ],
+   "labels": {
+    "device": "device",
+    "interface": "ifName"
+   },
+   "aggregations": [
+    "last"
+   ],
+   "default_agg": "last",
+   "operators": [
+    "eq",
+    "ne"
+   ],
+   "baseline_ok": false,
+   "fanout_hint": 1,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_oper_status\""
+    },
+    {
+     "file": "deployment/docker/gnmic/gnmic.yaml",
+     "contains": "device_if_oper_status"
+    }
+   ],
+   "value_enum": {
+    "up": 1,
+    "down": 2,
+    "lower_layer_down": 7
+   }
+  },
+  {
+   "name": "if_flaps",
+   "description": "Number of times an interface changed state",
+   "unit": "count",
+   "aliases": [
+    "interface flaps",
+    "link flaps",
+    "port flaps",
+    "flapping",
+    "flaps",
+    "flap"
+   ],
+   "entity_types": [
+    "interface"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_if_oper_status"
+   ],
+   "labels": {
+    "device": "device",
+    "interface": "ifName"
+   },
+   "aggregations": [
+    "sum"
+   ],
+   "default_agg": "sum",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le"
+   ],
+   "baseline_ok": false,
+   "fanout_hint": 1,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_oper_status\""
+    }
+   ],
+   "default_threshold": 0.0
+  },
+  {
+   "name": "if_in_errors",
+   "description": "Inbound error rate on an interface",
+   "unit": "per_second",
+   "aliases": [
+    "inbound errors",
+    "input errors",
+    "rx errors",
+    "crc errors"
+   ],
+   "entity_types": [
+    "interface"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_if_in_errors"
+   ],
+   "labels": {
+    "device": "device",
+    "interface": "ifName"
+   },
+   "aggregations": [
+    "avg",
+    "max"
+   ],
+   "default_agg": "max",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 2,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_in_errors\""
+    },
+    {
+     "file": "deployment/docker/gnmic/gnmic.yaml",
+     "contains": "device_if_in_errors"
+    }
+   ],
+   "default_threshold": 0.0
+  },
+  {
+   "name": "if_out_errors",
+   "description": "Outbound error rate on an interface",
+   "unit": "per_second",
+   "aliases": [
+    "outbound errors",
+    "output errors",
+    "tx errors"
+   ],
+   "entity_types": [
+    "interface"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_if_out_errors"
+   ],
+   "labels": {
+    "device": "device",
+    "interface": "ifName"
+   },
+   "aggregations": [
+    "avg",
+    "max"
+   ],
+   "default_agg": "max",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 2,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_out_errors\""
+    },
+    {
+     "file": "deployment/docker/gnmic/gnmic.yaml",
+     "contains": "device_if_out_errors"
+    }
+   ],
+   "default_threshold": 0.0
+  },
+  {
+   "name": "if_errors",
+   "description": "Total error rate on an interface (in + out)",
+   "unit": "per_second",
+   "aliases": [
+    "errors",
+    "interface errors",
+    "port errors"
+   ],
+   "entity_types": [
+    "interface"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_if_in_errors",
+    "device_if_out_errors"
+   ],
+   "labels": {
+    "device": "device",
+    "interface": "ifName"
+   },
+   "aggregations": [
+    "avg",
+    "max"
+   ],
+   "default_agg": "max",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 2,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_in_errors\""
+    },
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_out_errors\""
+    }
+   ],
+   "default_threshold": 0.0
+  },
+  {
+   "name": "if_in_discards",
+   "description": "Inbound discard rate on an interface",
+   "unit": "per_second",
+   "aliases": [
+    "inbound discards",
+    "input drops",
+    "rx drops"
+   ],
+   "entity_types": [
+    "interface"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_if_in_discards"
+   ],
+   "labels": {
+    "device": "device",
+    "interface": "ifName"
+   },
+   "aggregations": [
+    "avg",
+    "max"
+   ],
+   "default_agg": "max",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 2,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_in_discards\""
+    },
+    {
+     "file": "deployment/docker/gnmic/gnmic.yaml",
+     "contains": "device_if_in_discards"
+    }
+   ],
+   "default_threshold": 0.0
+  },
+  {
+   "name": "if_out_discards",
+   "description": "Outbound discard rate on an interface",
+   "unit": "per_second",
+   "aliases": [
+    "outbound discards",
+    "output drops",
+    "tx drops"
+   ],
+   "entity_types": [
+    "interface"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_if_out_discards"
+   ],
+   "labels": {
+    "device": "device",
+    "interface": "ifName"
+   },
+   "aggregations": [
+    "avg",
+    "max"
+   ],
+   "default_agg": "max",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 2,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_out_discards\""
+    },
+    {
+     "file": "deployment/docker/gnmic/gnmic.yaml",
+     "contains": "device_if_out_discards"
+    }
+   ],
+   "default_threshold": 0.0
+  },
+  {
+   "name": "if_discards",
+   "description": "Total discard rate on an interface (in + out)",
+   "unit": "per_second",
+   "aliases": [
+    "discards",
+    "drops",
+    "dropped packets",
+    "interface drops"
+   ],
+   "entity_types": [
+    "interface"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_if_in_discards",
+    "device_if_out_discards"
+   ],
+   "labels": {
+    "device": "device",
+    "interface": "ifName"
+   },
+   "aggregations": [
+    "avg",
+    "max"
+   ],
+   "default_agg": "max",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 2,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_in_discards\""
+    },
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_if_out_discards\""
+    }
+   ],
+   "default_threshold": 0.0
+  },
+  {
+   "name": "bgp_session_state",
+   "description": "State of a BGP session",
+   "unit": "state",
+   "aliases": [
+    "bgp state",
+    "bgp session state",
+    "session state",
+    "peer state"
+   ],
+   "entity_types": [
+    "bgp_peer"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_bgp_peer_state"
+   ],
+   "labels": {
+    "device": "device",
+    "bgp_peer": "peer"
+   },
+   "aggregations": [
+    "last"
+   ],
+   "default_agg": "last",
+   "operators": [
+    "eq",
+    "ne"
+   ],
+   "baseline_ok": false,
+   "fanout_hint": 1,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_bgp_peer_state\""
+    },
+    {
+     "file": "deployment/docker/gnmic/gnmic.yaml",
+     "contains": "device_bgp_peer_state"
+    }
+   ],
+   "quality": [
+    "\"down\" means not established (≠ 6)"
+   ],
+   "value_enum": {
+    "idle": 1,
+    "connect": 2,
+    "active": 3,
+    "opensent": 4,
+    "openconfirm": 5,
+    "established": 6
+   }
+  },
+  {
+   "name": "bgp_flaps",
+   "description": "Number of BGP session state transitions",
+   "unit": "count",
+   "aliases": [
+    "bgp flaps",
+    "bgp resets",
+    "session flaps",
+    "peer flaps",
+    "flaps",
+    "resets"
+   ],
+   "entity_types": [
+    "bgp_peer"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_bgp_fsm_transitions"
+   ],
+   "labels": {
+    "device": "device",
+    "bgp_peer": "peer"
+   },
+   "aggregations": [
+    "sum"
+   ],
+   "default_agg": "sum",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le"
+   ],
+   "baseline_ok": false,
+   "fanout_hint": 1,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_bgp_fsm_transitions\""
+    },
+    {
+     "file": "deployment/docker/gnmic/gnmic.yaml",
+     "contains": "device_bgp_fsm_transitions"
+    }
+   ],
+   "default_threshold": 0.0
+  },
+  {
+   "name": "bgp_prefixes_received",
+   "description": "Prefixes received from a BGP peer",
+   "unit": "prefixes",
+   "aliases": [
+    "prefixes received",
+    "received prefixes",
+    "bgp prefixes",
+    "routes received",
+    "prefixes",
+    "prefix count",
+    "prefix",
+    "receiving"
+   ],
+   "entity_types": [
+    "bgp_peer"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_bgp_pfx_in"
+   ],
+   "labels": {
+    "device": "device",
+    "bgp_peer": "peer"
+   },
+   "aggregations": [
+    "last",
+    "min"
+   ],
+   "default_agg": "last",
+   "operators": [
+    "lt",
+    "le",
+    "gt",
+    "ge",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 2,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "deployment/docker/gnmic/gnmic.yaml",
+     "contains": "device_bgp_pfx_in"
+    }
+   ],
+   "quality": [
+    "streamed by gNMI only; carries an afi_safi label"
+   ]
+  },
+  {
+   "name": "cpu_util_pct",
+   "description": "CPU utilization of a device",
+   "unit": "percent",
+   "aliases": [
+    "cpu",
+    "cpu utilization",
+    "cpu usage",
+    "processor"
+   ],
+   "entity_types": [
+    "device"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_cpu_percent"
+   ],
+   "labels": {
+    "device": "device"
+   },
+   "aggregations": [
+    "avg",
+    "max",
+    "p95"
+   ],
+   "default_agg": "avg",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 1,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_cpu_percent\""
+    },
+    {
+     "file": "deployment/docker/gnmic/gnmic.yaml",
+     "contains": "device_cpu_percent"
+    }
+   ],
+   "default_threshold": 85.0,
+   "quality": [
+    "averaged across CPUs per device; Cisco reports a 5-minute average"
+   ]
+  },
+  {
+   "name": "mem_util_pct",
+   "description": "Memory utilization of a device",
+   "unit": "percent",
+   "aliases": [
+    "memory",
+    "memory utilization",
+    "memory usage",
+    "ram"
+   ],
+   "entity_types": [
+    "device"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "device_mem_percent"
+   ],
+   "labels": {
+    "device": "device"
+   },
+   "aggregations": [
+    "avg",
+    "max"
+   ],
+   "default_agg": "avg",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 1,
+   "scope": "device_scoped",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/profiles.go",
+     "contains": "\"device_mem_percent\""
+    },
+    {
+     "file": "deployment/docker/gnmic/gnmic.yaml",
+     "contains": "device_mem_percent"
+    }
+   ],
+   "default_threshold": 90.0,
+   "quality": [
+    "Juniper reports buffer, not system memory"
+   ]
+  },
+  {
+   "name": "circuit_loss_pct",
+   "description": "Packet loss on a WAN circuit",
+   "unit": "percent",
+   "aliases": [
+    "packet loss",
+    "loss",
+    "wan loss",
+    "dropping packets",
+    "losing traffic"
+   ],
+   "entity_types": [
+    "circuit"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "circuit_loss_pct"
+   ],
+   "labels": {
+    "circuit": "circuit",
+    "device": "local_device"
+   },
+   "aggregations": [
+    "avg",
+    "max",
+    "p95"
+   ],
+   "default_agg": "avg",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 1,
+   "scope": "gated:N-B5",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/echo.go",
+     "contains": "circuit_loss_pct{%s}"
+    }
+   ],
+   "default_threshold": 1.0,
+   "quality": [
+    "emitted even on total loss (100 %)"
+   ],
+   "examples": [
+    "Show Dallas WAN packet loss for the last two hours."
+   ]
+  },
+  {
+   "name": "circuit_latency_ms",
+   "description": "Latency on a WAN circuit",
+   "unit": "ms",
+   "aliases": [
+    "latency",
+    "delay",
+    "wan latency",
+    "rtt"
+   ],
+   "entity_types": [
+    "circuit"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "circuit_latency_ms"
+   ],
+   "labels": {
+    "circuit": "circuit",
+    "device": "local_device"
+   },
+   "aggregations": [
+    "p95",
+    "avg",
+    "max"
+   ],
+   "default_agg": "p95",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 1,
+   "scope": "gated:N-B5",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/echo.go",
+     "contains": "circuit_latency_ms{%s}"
+    }
+   ],
+   "quality": [
+    "absent when no reply was received — a gap is not zero"
+   ]
+  },
+  {
+   "name": "circuit_jitter_ms",
+   "description": "Jitter on a WAN circuit",
+   "unit": "ms",
+   "aliases": [
+    "jitter",
+    "wan jitter"
+   ],
+   "entity_types": [
+    "circuit"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "circuit_jitter_ms"
+   ],
+   "labels": {
+    "circuit": "circuit",
+    "device": "local_device"
+   },
+   "aggregations": [
+    "p95",
+    "avg",
+    "max"
+   ],
+   "default_agg": "p95",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 1,
+   "scope": "gated:N-B5",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/echo.go",
+     "contains": "circuit_jitter_ms{%s}"
+    }
+   ],
+   "quality": [
+    "absent when no reply was received — a gap is not zero"
+   ]
+  },
+  {
+   "name": "circuit_qoe",
+   "description": "Quality-of-experience score of a WAN circuit",
+   "unit": "score",
+   "aliases": [
+    "qoe",
+    "quality",
+    "circuit quality",
+    "wan quality"
+   ],
+   "entity_types": [
+    "circuit"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "circuit_qoe"
+   ],
+   "labels": {
+    "circuit": "circuit",
+    "device": "local_device"
+   },
+   "aggregations": [
+    "avg",
+    "min"
+   ],
+   "default_agg": "avg",
+   "operators": [
+    "lt",
+    "le",
+    "gt",
+    "ge"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 1,
+   "scope": "gated:N-B5",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/echo.go",
+     "contains": "circuit_qoe{%s}"
+    }
+   ]
+  },
+  {
+   "name": "probe_rtt_ms",
+   "description": "Round-trip time measured by a synthetic probe",
+   "unit": "ms",
+   "aliases": [
+    "latency",
+    "rtt",
+    "round trip",
+    "probe latency"
+   ],
+   "entity_types": [
+    "probe_target"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "probe_rtt_ms"
+   ],
+   "labels": {
+    "probe_target": "dst"
+   },
+   "aggregations": [
+    "p95",
+    "avg",
+    "max"
+   ],
+   "default_agg": "p95",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 1,
+   "scope": "gated:N-B5",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/stamp.go",
+     "contains": "probe_rtt_ms{dst=%q"
+    }
+   ]
+  },
+  {
+   "name": "probe_loss_pct",
+   "description": "Packet loss measured by a synthetic probe",
+   "unit": "percent",
+   "aliases": [
+    "packet loss",
+    "loss",
+    "probe loss"
+   ],
+   "entity_types": [
+    "probe_target"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "probe_loss_pct"
+   ],
+   "labels": {
+    "probe_target": "dst"
+   },
+   "aggregations": [
+    "avg",
+    "max"
+   ],
+   "default_agg": "avg",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 1,
+   "scope": "gated:N-B5",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/stamp.go",
+     "contains": "probe_loss_pct{dst=%q"
+    }
+   ],
+   "default_threshold": 1.0
+  },
+  {
+   "name": "probe_pdv_ms",
+   "description": "Delay variation (jitter) measured by a synthetic probe",
+   "unit": "ms",
+   "aliases": [
+    "jitter",
+    "pdv",
+    "delay variation"
+   ],
+   "entity_types": [
+    "probe_target"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "probe_pdv_ms"
+   ],
+   "labels": {
+    "probe_target": "dst"
+   },
+   "aggregations": [
+    "p95",
+    "avg"
+   ],
+   "default_agg": "p95",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 1,
+   "scope": "gated:N-B5",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/stamp.go",
+     "contains": "probe_pdv_ms{dst=%q"
+    }
+   ]
+  },
+  {
+   "name": "probe_owd_ms",
+   "description": "One-way delay measured by a synthetic probe",
+   "unit": "ms",
+   "aliases": [
+    "one way delay",
+    "owd"
+   ],
+   "entity_types": [
+    "probe_target"
+   ],
+   "backend": "victoriametrics",
+   "physical_metrics": [
+    "probe_owd_ms"
+   ],
+   "labels": {
+    "probe_target": "dst"
+   },
+   "aggregations": [
+    "p95",
+    "avg"
+   ],
+   "default_agg": "p95",
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 1,
+   "scope": "gated:N-B5",
+   "emitters": [
+    {
+     "file": "src/backend/collectors/stamp.go",
+     "contains": "probe_owd_ms{dst=%q"
+    }
+   ]
+  }
+ ],
+ "dimensions": [
+  {
+   "entity": "change",
+   "name": "id",
+   "type": "string",
+   "aliases": [
+    "change id"
+   ],
+   "operators": [
+    "ne"
+   ],
+   "filterable": true,
+   "groupable": false,
+   "display": true,
+   "sensitivity": "operational"
+  },
+  {
+   "entity": "change",
+   "name": "type",
+   "type": "enum",
+   "aliases": [
+    "change type",
+    "kind"
+   ],
+   "enum": [
+    {
+     "value": "APPLICATION_DEPLOY",
+     "aliases": [
+      "deploy",
+      "deployment",
+      "release",
+      "application deploy"
+     ],
+     "physical": [
+      "APPLICATION_DEPLOY"
+     ]
+    },
+    {
+     "value": "CONFIG_CHANGE",
+     "aliases": [
+      "config",
+      "configuration",
+      "config change"
+     ],
+     "physical": [
+      "CONFIG_CHANGE"
+     ]
+    },
+    {
+     "value": "FEATURE_FLAG_CHANGE",
+     "aliases": [
+      "feature flag",
+      "flag"
+     ],
+     "physical": [
+      "FEATURE_FLAG_CHANGE"
+     ]
+    },
+    {
+     "value": "CLOUD_CHANGE",
+     "aliases": [
+      "cloud change"
+     ],
+     "physical": [
+      "CLOUD_CHANGE"
+     ]
+    },
+    {
+     "value": "NETWORK_CHANGE",
+     "aliases": [
+      "network change",
+      "network policy",
+      "sdwan policy",
+      "wan policy"
+     ],
+     "physical": [
+      "NETWORK_CHANGE"
+     ]
+    },
+    {
+     "value": "SECURITY_POLICY_CHANGE",
+     "aliases": [
+      "firewall change",
+      "security policy",
+      "firewall policy",
+      "acl"
+     ],
+     "physical": [
+      "SECURITY_POLICY_CHANGE"
+     ]
+    },
+    {
+     "value": "DNS_CHANGE",
+     "aliases": [
+      "dns change",
+      "dns"
+     ],
+     "physical": [
+      "DNS_CHANGE"
+     ]
+    },
+    {
+     "value": "ROUTE_CHANGE",
+     "aliases": [
+      "routing change",
+      "route change",
+      "routing policy",
+      "bgp policy"
+     ],
+     "physical": [
+      "ROUTE_CHANGE"
+     ]
+    },
+    {
+     "value": "INFRASTRUCTURE_CHANGE",
+     "aliases": [
+      "infrastructure change",
+      "infra change"
+     ],
+     "physical": [
+      "INFRASTRUCTURE_CHANGE"
+     ]
+    }
+   ],
+   "operators": [
+    "eq",
+    "ne",
+    "in"
+   ],
+   "filterable": true,
+   "groupable": true,
+   "display": true,
+   "sensitivity": "operational"
+  },
+  {
+   "entity": "change",
+   "name": "class",
+   "type": "enum",
+   "aliases": [
+    "category"
+   ],
+   "enum": [
+    {
+     "value": "wan",
+     "aliases": [
+      "wan",
+      "wan related",
+      "network"
+     ],
+     "physical": [
+      "NETWORK_CHANGE",
+      "ROUTE_CHANGE"
+     ]
+    },
+    {
+     "value": "security",
+     "aliases": [
+      "security"
+     ],
+     "physical": [
+      "SECURITY_POLICY_CHANGE"
+     ]
+    },
+    {
+     "value": "application",
+     "aliases": [
+      "application",
+      "app delivery"
+     ],
+     "physical": [
+      "APPLICATION_DEPLOY",
+      "FEATURE_FLAG_CHANGE"
+     ]
+    },
+    {
+     "value": "infrastructure",
+     "aliases": [
+      "infrastructure",
+      "infra",
+      "cloud"
+     ],
+     "physical": [
+      "INFRASTRUCTURE_CHANGE",
+      "CLOUD_CHANGE",
+      "CONFIG_CHANGE"
+     ]
+    },
+    {
+     "value": "dns",
+     "aliases": [
+      "dns related",
+      "name resolution"
+     ],
+     "physical": [
+      "DNS_CHANGE"
+     ]
+    }
+   ],
+   "operators": [
+    "eq",
+    "ne",
+    "in"
+   ],
+   "filterable": true,
+   "groupable": true,
+   "display": true,
+   "sensitivity": "operational"
+  },
+  {
+   "entity": "change",
+   "name": "actor",
+   "type": "string",
+   "aliases": [
+    "who",
+    "changed by",
+    "author",
+    "engineer",
+    "person",
+    "user"
+   ],
+   "operators": [
+    "eq",
+    "in"
+   ],
+   "filterable": true,
+   "groupable": true,
+   "display": true,
+   "sensitivity": "personal"
+  },
+  {
+   "entity": "change",
+   "name": "object",
+   "type": "string",
+   "aliases": [
+    "object",
+    "what changed",
+    "setting"
+   ],
+   "operators": [
+    "eq",
+    "in"
+   ],
+   "filterable": true,
+   "groupable": true,
+   "display": true,
+   "sensitivity": "operational"
+  },
+  {
+   "entity": "change",
+   "name": "object_kind",
+   "type": "string",
+   "aliases": [
+    "object kind",
+    "object type"
+   ],
+   "operators": [
+    "eq",
+    "in"
+   ],
+   "filterable": true,
+   "groupable": true,
+   "display": true,
+   "sensitivity": "operational"
+  },
+  {
+   "entity": "change",
+   "name": "site",
+   "type": "string",
+   "operators": [
+    "eq",
+    "in"
+   ],
+   "filterable": true,
+   "groupable": true,
+   "display": true,
+   "sensitivity": "operational"
+  },
+  {
+   "entity": "change",
+   "name": "app",
+   "type": "string",
+   "operators": [
+    "eq",
+    "in"
+   ],
+   "filterable": true,
+   "groupable": true,
+   "display": true,
+   "sensitivity": "operational"
+  },
+  {
+   "entity": "change",
+   "name": "seam",
+   "type": "enum",
+   "enum": [
+    {
+     "value": "DX",
+     "physical": [
+      "DX"
+     ]
+    },
+    {
+     "value": "VPN",
+     "physical": [
+      "VPN"
+     ]
+    },
+    {
+     "value": "SDWAN",
+     "physical": [
+      "SDWAN"
+     ]
+    },
+    {
+     "value": "DIA",
+     "physical": [
+      "DIA"
+     ]
+    },
+    {
+     "value": "CLOUD_BACKBONE",
+     "physical": [
+      "CLOUD_BACKBONE"
+     ]
+    }
+   ],
+   "operators": [
+    "eq",
+    "in"
+   ],
+   "filterable": true,
+   "groupable": true,
+   "display": true,
+   "sensitivity": "operational"
+  },
+  {
+   "entity": "change",
+   "name": "source",
+   "type": "enum",
+   "aliases": [
+    "source system",
+    "origin"
+   ],
+   "enum": [
+    {
+     "value": "ledger",
+     "physical": [
+      "ledger"
+     ]
+    },
+    {
+     "value": "config_capture",
+     "aliases": [
+      "config backup"
+     ],
+     "physical": [
+      "config_capture"
+     ]
+    },
+    {
+     "value": "correlix_audit",
+     "aliases": [
+      "made in correlix",
+      "platform audit"
+     ],
+     "physical": [
+      "correlix_audit"
+     ]
+    }
+   ],
+   "operators": [
+    "eq",
+    "in"
+   ],
+   "filterable": true,
+   "groupable": true,
+   "display": true,
+   "sensitivity": "operational"
+  },
+  {
+   "entity": "change",
+   "name": "event_at",
+   "type": "time",
+   "aliases": [
+    "when",
+    "time"
+   ],
+   "filterable": false,
+   "groupable": false,
+   "display": true,
+   "sensitivity": "operational"
+  },
+  {
+   "entity": "change",
+   "name": "summary",
+   "type": "string",
+   "filterable": false,
+   "groupable": false,
+   "display": true,
+   "sensitivity": "operational"
+  },
+  {
+   "entity": "change",
+   "name": "before",
+   "type": "string",
+   "filterable": false,
+   "groupable": false,
+   "display": true,
+   "sensitivity": "restricted"
+  },
+  {
+   "entity": "change",
+   "name": "after",
+   "type": "string",
+   "filterable": false,
+   "groupable": false,
+   "display": true,
+   "sensitivity": "restricted"
+  },
+  {
+   "entity": "incident",
+   "name": "state",
+   "type": "enum",
+   "aliases": [
+    "status"
+   ],
+   "enum": [
+    {
+     "value": "open",
+     "aliases": [
+      "open",
+      "active",
+      "ongoing"
+     ],
+     "physical": [
+      "open"
+     ]
+    },
+    {
+     "value": "closed",
+     "aliases": [
+      "closed",
+      "resolved"
+     ],
+     "physical": [
+      "closed"
+     ]
+    },
+    {
+     "value": "merged",
+     "physical": [
+      "merged"
+     ]
+    }
+   ],
+   "operators": [
+    "eq",
+    "ne",
+    "in"
+   ],
+   "filterable": true,
+   "groupable": true,
+   "display": true,
+   "sensitivity": "operational"
+  },
+  {
+   "entity": "incident",
+   "name": "verdict_tier",
+   "type": "enum",
+   "aliases": [
+    "verdict",
+    "certainty"
+   ],
+   "enum": [
+    {
+     "value": "undetermined",
+     "aliases": [
+      "undetermined",
+      "unknown cause"
+     ],
+     "physical": [
+      "undetermined"
+     ]
+    },
+    {
+     "value": "suspected",
+     "aliases": [
+      "suspected",
+      "likely"
+     ],
+     "physical": [
+      "suspected"
+     ]
+    },
+    {
+     "value": "confirmed",
+     "aliases": [
+      "confirmed"
+     ],
+     "physical": [
+      "confirmed"
+     ]
+    }
+   ],
+   "operators": [
+    "eq",
+    "ne",
+    "in"
+   ],
+   "filterable": true,
+   "groupable": true,
+   "display": true,
+   "sensitivity": "operational"
+  },
+  {
+   "entity": "incident",
+   "name": "top_confidence",
+   "type": "number",
+   "aliases": [
+    "confidence"
+   ],
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le"
+   ],
+   "filterable": true,
+   "groupable": false,
+   "display": true,
+   "sensitivity": "operational"
+  },
+  {
+   "entity": "incident",
+   "name": "seam_class",
+   "type": "enum",
+   "aliases": [
+    "seam",
+    "incident type",
+    "incident class"
+   ],
+   "enum": [
+    {
+     "value": "sdwan",
+     "aliases": [
+      "sdwan",
+      "sd wan"
+     ],
+     "physical": [
+      "SDWAN"
+     ]
+    },
+    {
+     "value": "wan",
+     "aliases": [
+      "wan"
+     ],
+     "physical": [
+      "SDWAN",
+      "VPN",
+      "DIA",
+      "DX"
+     ]
+    },
+    {
+     "value": "isp",
+     "aliases": [
+      "isp",
+      "internet",
+      "dia"
+     ],
+     "physical": [
+      "DIA"
+     ]
+    },
+    {
+     "value": "vpn",
+     "aliases": [
+      "vpn"
+     ],
+     "physical": [
+      "VPN"
+     ]
+    },
+    {
+     "value": "cloud",
+     "aliases": [
+      "cloud",
+      "direct connect",
+      "dx"
+     ],
+     "physical": [
+      "DX",
+      "CLOUD_BACKBONE"
+     ]
+    }
+   ],
+   "operators": [
+    "eq",
+    "in"
+   ],
+   "filterable": true,
+   "groupable": true,
+   "display": true,
+   "sensitivity": "operational"
+  },
+  {
+   "entity": "incident",
+   "name": "owner",
+   "type": "string",
+   "aliases": [
+    "owner",
+    "owning team"
+   ],
+   "operators": [
+    "eq",
+    "in"
+   ],
+   "filterable": true,
+   "groupable": true,
+   "display": true,
+   "sensitivity": "operational"
+  },
+  {
+   "entity": "incident",
+   "name": "created_at",
+   "type": "time",
+   "aliases": [
+    "started",
+    "start time"
+   ],
+   "filterable": false,
+   "groupable": false,
+   "display": true,
+   "sensitivity": "operational"
+  },
+  {
+   "entity": "incident",
+   "name": "top_hypothesis",
+   "type": "string",
+   "filterable": false,
+   "groupable": false,
+   "display": true,
+   "sensitivity": "operational"
+  }
+ ],
+ "relationships": [
+  {
+   "from": "site",
+   "to": "device",
+   "via": "sot_site",
+   "cardinality": "1:n"
+  },
+  {
+   "from": "device",
+   "to": "interface",
+   "via": "label",
+   "cardinality": "1:n"
+  },
+  {
+   "from": "device",
+   "to": "bgp_peer",
+   "via": "label",
+   "cardinality": "1:n"
+  },
+  {
+   "from": "circuit",
+   "to": "device",
+   "via": "wan_circuit_local",
+   "cardinality": "n:1"
+  },
+  {
+   "from": "circuit",
+   "to": "interface",
+   "via": "wan_circuit_local",
+   "cardinality": "n:1"
+  },
+  {
+   "from": "provider",
+   "to": "circuit",
+   "via": "alias_table",
+   "cardinality": "1:n"
+  },
+  {
+   "from": "provider",
+   "to": "circuit",
+   "via": "seam_owner",
+   "cardinality": "1:n"
+  },
+  {
+   "from": "incident",
+   "to": "site",
+   "via": "affected_json",
+   "cardinality": "n:n"
+  },
+  {
+   "from": "incident",
+   "to": "device",
+   "via": "affected_json",
+   "cardinality": "n:n"
+  },
+  {
+   "from": "incident",
+   "to": "application",
+   "via": "affected_json",
+   "cardinality": "n:n"
+  },
+  {
+   "from": "change",
+   "to": "site",
+   "via": "change_field",
+   "cardinality": "n:1"
+  },
+  {
+   "from": "change",
+   "to": "application",
+   "via": "change_field",
+   "cardinality": "n:1"
+  },
+  {
+   "from": "change",
+   "to": "device",
+   "via": "change_field",
+   "cardinality": "n:1"
+  }
+ ]
+}

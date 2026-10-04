@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for stp-topology. Dialect + contract: skill_cases.go.
+
+case: unreadable L2 tables send the change source to the device's own logs
+question: spanning tree topology change storm on edge-1
+ui:
+  - correlation_id=case-stp-notwired
+  - device=edge-1
+signals:
+  - state:collect=not_wired
+notes:
+  - live device state could not be read on this deployment — no command was run
+evidence:
+  - finding
+  - device
+expect_chain:
+  - stp-topology entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: must come from its logs
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - live device state could not be read on this deployment
+expect_never:
+  - mac-flap
+  - interface-down
+expect_select: stp-topology
+
+---
+
+case: a readable domain with no other fact takes no hop
+question: tcn burst and broadcast storm on the access vlan
+ui:
+  - correlation_id=case-stp-flat
+  - device=edge-1
+tools:
+  - get_metric_anomalies=error
+evidence:
+  - finding
+expect_chain:
+  - stp-topology entry
+expect_selected: none
+expect_verdict:
+  - vlan
+  - root
+expect_notes:
+  - do NOT invent the data it would have returned
+expect_never:
+  - mac-flap
+  - interface-down
+  - log-confirmation
+
+---
+
+case: hosts appearing on more than one port during the changes are the model's to propose
+question: root bridge moved on edge-1 and hosts are on two ports
+ui:
+  - correlation_id=case-stp-model
+  - device=edge-1
+model_next: mac-flap
+evidence:
+  - finding
+expect_chain:
+  - stp-topology entry
+  - mac-flap model
+expect_selected: model
+expect_reason: more than one port
+expect_verdict:
+  - two ports
+  - move rate
+expect_never:
+  - interface-down

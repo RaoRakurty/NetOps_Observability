@@ -268,6 +268,37 @@ type TroubleshootDeps struct {
 	// unscoped list). nil = investigation memory is not wired on this
 	// deployment, and `recall_investigations` is then not registered at all.
 	RecallInvestigations func(ctx context.Context, p Principal, q InvestigationQuery) ([]InvestigationRow, error)
+
+	// ── the Iris RCA contract (tracker 337 N-B1) ───────────────────────────
+
+	// RCAResult projects the correlation engine's own report for ONE incident
+	// the caller may see (the same tenant-scoped read the RCA page takes).
+	// Unknown or another tenant's incident is ErrNotFound. nil = not wired, and
+	// the four N-B2 tools are then not registered.
+	RCAResult func(ctx context.Context, p Principal, correlationID string) (RCAResult, error)
+
+	// ── configuration change (review item 10) ──────────────────────────────
+
+	// RecentChanges lists the configuration changes the CALLER may see — one
+	// device's history when q.DeviceID is set (already resolved through the
+	// caller's own inventory), otherwise their whole estate. Metadata only:
+	// fingerprints, counts and timestamps, never configuration text. nil =
+	// config backup is not enabled here, and `get_recent_changes` is then not
+	// registered at all.
+	RecentChanges func(ctx context.Context, p Principal, q ChangeQuery) (ChangeReport, error)
+	// ConfigDiff renders the REDACTED unified diff between two of ONE device's
+	// stored configuration versions. A foreign or unknown device is ErrNotFound.
+	// nil = config backup is not enabled here, and `get_config_diff` is then not
+	// registered at all.
+	ConfigDiff func(ctx context.Context, p Principal, req ConfigDiffRequest) (ConfigDiffReport, error)
+
+	// ── the NL query compiler (tracker 337 N-C5) ───────────────────────────
+
+	// CompileQuery interprets one question as the caller's validated
+	// CorrelixQueryAST — grammar first, guarded model fallback second — and
+	// NEVER runs it. nil = the query catalog is absent or the caller may not
+	// read infrastructure, and `compile_query` is then not registered.
+	CompileQuery func(ctx context.Context, p Principal, question string) (QueryInterpretation, error)
 }
 
 // ---- shared validation -----------------------------------------------------
@@ -788,6 +819,10 @@ func (r *ToolRegistry) AddTroubleshootTools(ds DataSource, d TroubleshootDeps) {
 	if d.CaseTimeline != nil {
 		r.add(caseTimelineTool{deps: d})
 	}
+	// The RCA contract tools are incident-scoped, not device-scoped.
+	r.AddRCATools(d)
+	// The NL query compiler interprets; it never reads data itself.
+	r.AddCompileQueryTool(d)
 	// The BGP operations reads are RESOURCE-scoped, not device-scoped: they need
 	// no inventory resolution, so they register independently of ResolveDevice.
 	if d.BGPWatchlist != nil {
@@ -820,6 +855,17 @@ func (r *ToolRegistry) AddTroubleshootTools(ds DataSource, d TroubleshootDeps) {
 	}
 	if d.DeviceState != nil {
 		r.add(deviceStateTool{deps: d})
+	}
+	// Configuration change (review item 10). Both resolve a device through the
+	// caller's own inventory, so they sit below the ResolveDevice guard even
+	// though get_recent_changes can also answer estate-wide: without an
+	// inventory seam a device ARGUMENT could not be scoped, and an unscopable
+	// argument is not a tool we ship.
+	if d.RecentChanges != nil {
+		r.add(recentChangesTool{deps: d})
+	}
+	if d.ConfigDiff != nil {
+		r.add(configDiffTool{deps: d})
 	}
 }
 

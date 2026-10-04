@@ -34,7 +34,7 @@ export type ShellState = {
   helpPath: string;
   // Open the Help drawer at a specific docs path (e.g. "/docs/send-data/syslog#step-1").
   openHelp: (path?: string) => void;
-  // Imperative navigation to a route id, e.g. "search/logs".
+  // Imperative navigation to a route id, e.g. "explore/logs".
   navigate: (route: string) => void;
 };
 

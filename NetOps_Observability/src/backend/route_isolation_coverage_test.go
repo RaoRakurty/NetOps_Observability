@@ -51,14 +51,12 @@ import (
 // xlsx unzipped, since a DEFLATEd sheet hides a leak from a byte search). The
 // baseline only ever shrinks.
 var isolationCoverageBaseline = map[string]string{
-	"/api/ai/modules":                         "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/appid/fusion/status":                "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/cloud/attribution/coverage":         "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/cloud/business-services":            "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/cloud/business-services/":           "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/cloud/resource-mappings":            "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/cloud/resource-mappings/":           "store/RLS-scoped; dedicated HTTP isolation test is backlog",
-	"/api/copilot/chat":                       "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/correlations/rca-reports":           "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/findings":                           "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/flows/by-proto":                     "store/RLS-scoped; dedicated HTTP isolation test is backlog",

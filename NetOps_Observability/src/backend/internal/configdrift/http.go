@@ -167,3 +167,16 @@ func (e *Evaluator) deviceNames(p Principal) map[string]string {
 	}
 	return out
 }
+
+// States pages the drift rows the principal may see, for a consumer outside
+// this package (today: the assistant's change-history seam). It is a thin
+// pass-through on purpose: the store IS the read rule (Principal.Admits — the
+// tenant boundary and the operator-visibility restriction), so this adds no
+// rule of its own and cannot forget one. state "" means every state.
+func (e *Evaluator) States(ctx context.Context, p Principal, cursor string, limit int) ([]State, string, error) {
+	if e == nil {
+		return nil, "", errors.New("configuration drift is not enabled")
+	}
+	rows, next, _, err := e.deps.Store.List(ctx, p, "", cursor, limit)
+	return rows, next, err
+}

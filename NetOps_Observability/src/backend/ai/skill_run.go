@@ -80,6 +80,13 @@ type ToolAuditEntry struct {
 	// Tool is "next_skill" is a SELECTION decision rather than a tool execution;
 	// its Reason is rule_selected / model_selected / model_selected_invalid.
 	Selected string `json:"selected,omitempty"`
+	// ArgsSHA256 / ResultSHA256 are the decision ledger's proof of what the
+	// step was asked and what it read (tracker 337 N-A6): SHA-256 of the
+	// canonical JSON of the arguments and of the result (HashToolArgs,
+	// HashToolResult). Hashes, never the values. ResultSHA256 is empty when the
+	// tool did not return.
+	ArgsSHA256   string `json:"args_sha256,omitempty"`
+	ResultSHA256 string `json:"result_sha256,omitempty"`
 }
 
 // reDeviceCandidate matches hostname-shaped tokens in an operator question. It
@@ -244,6 +251,11 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 	ctx, cancel := context.WithTimeout(ctx, SkillTurnBudget)
 	defer cancel()
 
+	// The investigation clock starts with the turn budget, not after the
+	// gather: the scorecard's "investigation latency" is what the operator
+	// waited, which includes entity resolution.
+	started := time.Now()
+
 	// §3a: entities are resolved ONCE per turn, under the caller's tenant,
 	// before any skill runs. Every later hop reuses this binding — a skill
 	// selected in a later round can never resolve a new device or otherwise
@@ -271,15 +283,18 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 			if len(o.chainCandidates(cur, st)) > 0 {
 				st.addNote("the investigation stopped at its " + strconv.Itoa(MaxInvestigationRounds) +
 					"-round budget — the remaining checks were not run")
+				st.cutoff(CutoffRounds)
 			}
 			break
 		}
 		if st.toolCalls >= MaxChainToolCalls {
 			st.addNote("the investigation stopped at its per-turn lookup budget — the remaining checks were not run")
+			st.cutoff(CutoffToolCalls)
 			break
 		}
 		if !timeLeftForAnotherRound(ctx) {
 			st.addNote("the investigation stopped at its time budget — the remaining checks were not run")
+			st.cutoff(CutoffTime)
 			break
 		}
 
@@ -298,11 +313,16 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 		cur, selected, reason = next, how, why
 	}
 	if st.ran == 0 || last == nil {
+		// The chain RAN and produced nothing. That is a task-completion failure
+		// and it is counted as one — the alternative, observing only the turns
+		// that succeeded, would report a completion rate of 100 % forever.
+		o.observeInvestigation(st, started, InvestigationNoEvidence, false)
 		return Answer{}, false // nothing was gathered — fall back rather than narrate nothing
 	}
 	st.notes = append(st.notes, ent.notes...)
 	if st.capped {
 		st.addNote("the gathered evidence was capped at the prompt budget — later rows were not narrated")
+		st.cutoff(CutoffEvidenceChars)
 	}
 	bundle, notes := st.bundle, dedupeStrings(st.notes)
 
@@ -332,7 +352,9 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 	prompt := o.skillPrompt(question, last, bundle, notes, match)
 	text, provider, err := "", "", error(nil)
 	if o.LLM != nil {
-		text, provider, err = o.LLM.Complete(ctx, system, []LLMMessage{{Role: "user", Content: o.redact(prompt)}})
+		// §10 model router: a skill finding reasons over everything a multi-hop
+		// chain gathered, which is the STRONG tier by RouteFor's own policy.
+		text, provider, err = o.completeTier(ctx, RouteFor(ModeTroubleshootFinding).Tier, system, []LLMMessage{{Role: "user", Content: o.redact(prompt)}}, true)
 	}
 	// A routing directive is a server↔model control line, never operator text:
 	// strip it even from the final narration — and BEFORE the emptiness check, so
@@ -352,11 +374,35 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 	// stripped before the operator ever sees it (fake authority is the worst
 	// failure mode, LLM09).
 	var badges []string
-	ans.Text, badges, ans.Disclaimers = verifyNarrative(ans.Text, bundleCitationIDs(bundle), badges, ans.Disclaimers)
+	ans.Text, badges, ans.Disclaimers = o.verifyNarrative(ans.Text, bundleCitationIDs(bundle), badges, ans.Disclaimers)
 	ans.ModeBadges = append(ans.ModeBadges, badges...)
 	ans.MissingEvidence = skillMissingEvidence(notes)
 	o.recordConcluded(ctx, p, &ans, ent, st)
+	o.observeInvestigation(st, started, InvestigationAnswered, len(ans.Citations) > 0)
 	return ans, true
+}
+
+// observeInvestigation reports one finished skill-chain turn to the scorecard
+// seam. It reads state the chain already computed and adds nothing; a nil sink
+// makes it free.
+func (o *Orchestrator) observeInvestigation(st *chainState, started time.Time, outcome string, evidenceBacked bool) {
+	s := o.score()
+	if s == nil || st == nil {
+		return
+	}
+	hops := make([]string, 0, len(st.chain))
+	for _, h := range st.chain {
+		hops = append(hops, h.Selected)
+	}
+	s.InvestigationObserved(InvestigationScore{
+		Outcome:        outcome,
+		Duration:       time.Since(started),
+		Hops:           hops,
+		HopsRejected:   st.hopsRejected,
+		ToolOutcomes:   st.toolOutcomes,
+		Cutoffs:        st.cutoffs,
+		EvidenceBacked: evidenceBacked,
+	})
 }
 
 // recordConcluded hands the finished investigation to the server's memory seam
@@ -424,14 +470,14 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 			// The capability is not wired on this deployment. Disclose it rather
 			// than pretending the check happened.
 			notes = append(notes, ToolLabel(step.Tool)+" is not available on this deployment — treat that evidence as UNKNOWN, not clean")
-			st.facts.recordTool(step.Tool, "not_wired")
-			o.auditSkillTool(sk.Name, step, false, "not_registered", 0, 0, round, selected)
+			st.recordTool(step.Tool, "not_wired")
+			o.auditSkillTool(sk.Name, step, false, "not_registered", 0, 0, round, selected, "")
 			continue
 		}
 		if d := pe.EvaluateTool(tool, p); !d.Allow {
 			notes = append(notes, ToolLabel(step.Tool)+" was not run: "+d.Reason)
-			st.facts.recordTool(step.Tool, "denied")
-			o.auditSkillTool(sk.Name, step, false, "policy_denied", 0, 0, round, selected)
+			st.recordTool(step.Tool, "denied")
+			o.auditSkillTool(sk.Name, step, false, "policy_denied", 0, 0, round, selected, "")
 			continue
 		}
 		started := time.Now()
@@ -450,8 +496,8 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 			default:
 				notes = append(notes, ToolLabel(step.Tool)+" failed — do NOT invent the data it would have returned")
 			}
-			st.facts.recordTool(step.Tool, outcome)
-			o.auditSkillTool(sk.Name, step, false, reason, 0, elapsed, round, selected)
+			st.recordTool(step.Tool, outcome)
+			o.auditSkillTool(sk.Name, step, false, reason, 0, elapsed, round, selected, "")
 			continue
 		}
 		ran++
@@ -465,8 +511,8 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 		// asserted about what it read; kinds and outcomes are what the SERVER
 		// observed. Neither can come from model text.
 		st.facts.addSignals(res.Signals)
-		st.facts.recordTool(step.Tool, "ok")
-		o.auditSkillTool(sk.Name, step, true, "ok", len(res.Items), elapsed, round, selected)
+		st.recordTool(step.Tool, "ok")
+		o.auditSkillTool(sk.Name, step, true, "ok", len(res.Items), elapsed, round, selected, HashToolResult(res))
 	}
 	st.facts.addEvidence(items)
 	st.facts.addNotes(notes)
@@ -478,22 +524,59 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 
 // auditSkillTool records one gather execution (arg NAMES only — no values).
 // `took` is the tool's own wall time; a step that never ran records zero. Round
-// and selected place the entry in the investigation chain (Phase A2).
-func (o *Orchestrator) auditSkillTool(skill string, st plannedStep, allowed bool, reason string, items int, took time.Duration, round int, selected string) {
+// and selected place the entry in the investigation chain (Phase A2);
+// resultHash is HashToolResult of what the tool returned ("" when it did not).
+func (o *Orchestrator) auditSkillTool(skill string, st plannedStep, allowed bool, reason string, items int, took time.Duration, round int, selected, resultHash string) {
 	if o.ToolAudit == nil {
 		return
 	}
-	names := make([]string, 0, len(st.Args))
-	for k := range st.Args {
-		names = append(names, k)
-	}
-	sort.Strings(names)
 	o.ToolAudit(ToolAuditEntry{
-		Skill: skill, Tool: st.Tool, Args: names,
+		Skill: skill, Tool: st.Tool, Args: argNames(st.Args),
 		Allowed: allowed, Reason: reason, Items: items,
 		Duration: took.Milliseconds(),
 		Round:    round, Selected: selected,
+		ArgsSHA256: HashToolArgs(st.Args), ResultSHA256: resultHash,
 	})
+}
+
+// auditTool records one tool execution OUTSIDE a skill chain — the classic
+// answer paths (problem explanation, module health) run governed tools too,
+// and the decision ledger must see them (tracker 337 N-A6). Same entry shape,
+// Skill empty; res is nil when the tool did not return.
+func (o *Orchestrator) auditTool(tool string, args ToolArgs, allowed bool, reason string, res *ToolResult, took time.Duration) {
+	if o.ToolAudit == nil {
+		return
+	}
+	e := ToolAuditEntry{
+		Tool: tool, Args: argNames(args), Allowed: allowed, Reason: reason,
+		Duration: took.Milliseconds(), ArgsSHA256: HashToolArgs(args),
+	}
+	if res != nil {
+		e.Items, e.ResultSHA256 = len(res.Items), HashToolResult(*res)
+	}
+	o.ToolAudit(e)
+}
+
+// toolErrReason is the audit reason for a tool that returned an error — the
+// same closed words the skill gather records.
+func toolErrReason(err error) string {
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return "not_found"
+	case errors.Is(err, ErrNotImplemented):
+		return "not_implemented"
+	}
+	return "tool_error"
+}
+
+// argNames is the sorted argument NAMES — what an audit line may carry.
+func argNames(args ToolArgs) []string {
+	names := make([]string, 0, len(args))
+	for k := range args {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // skillSystemBlock is the server-owned instruction half of the skill: the method

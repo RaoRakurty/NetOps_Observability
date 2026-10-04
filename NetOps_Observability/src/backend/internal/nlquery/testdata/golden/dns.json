@@ -1,0 +1,380 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "dns",
+  "cases": [
+    {
+      "id": "dns-001",
+      "category": "dns",
+      "question": "Show DNS changes in the last week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "type",
+              "op": "eq",
+              "values": [
+                "DNS_CHANGE"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "7d"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1046"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "dns changes past week",
+        "any dns edits last 7 days",
+        "what changed in dns this past week"
+      ]
+    },
+    {
+      "id": "dns-002",
+      "category": "dns",
+      "question": "Who changed DNS in NYC yesterday?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [
+          {
+            "input": "NYC",
+            "type": "site",
+            "id": "site:nyc-dc",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:nyc-dc"
+            }
+          ],
+          "filters": [
+            {
+              "field": "type",
+              "op": "eq",
+              "values": [
+                "DNS_CHANGE"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-23T05:00:00Z",
+            "to": "2026-09-24T05:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1046"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "nyc dns changes yesterday - who",
+        "who made dns changes at the new york dc yesterday",
+        "dns change author nyc yesterday"
+      ]
+    },
+    {
+      "id": "dns-003",
+      "category": "dns",
+      "question": "Show latency to the internal DNS server 10.20.0.53 for the last hour.",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "10.20.0.53",
+            "type": "probe_target",
+            "id": "probe:10.20.0.53",
+            "method": "label_pair"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "probe_target",
+          "metric": "probe_rtt_ms",
+          "aggregation": "p95",
+          "entities": [
+            {
+              "type": "probe_target",
+              "id": "probe:10.20.0.53"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "probe:10.20.0.53"
+          ]
+        }
+      },
+      "paraphrases": [
+        "rtt to 10.20.0.53 last hour",
+        "internal dns 10.20.0.53 latency past 60m",
+        "latency to our dns server 10.20.0.53 last 1h"
+      ]
+    },
+    {
+      "id": "dns-004",
+      "category": "dns",
+      "question": "Is 8.8.8.8 losing packets?",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [
+          {
+            "input": "8.8.8.8",
+            "type": "probe_target",
+            "id": "probe:8.8.8.8",
+            "method": "label_pair"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "probe_target",
+          "metric": "probe_loss_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "probe_target",
+              "id": "probe:8.8.8.8"
+            }
+          ],
+          "predicate": {
+            "op": "gt",
+            "value": 0
+          },
+          "time_range": {}
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "any loss to 8.8.8.8?",
+        "google dns 8.8.8.8 packet loss",
+        "are probes to 8.8.8.8 dropping"
+      ]
+    },
+    {
+      "id": "dns-005",
+      "category": "dns",
+      "question": "Show incidents affecting internal DNS this week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [
+          {
+            "input": "internal DNS",
+            "type": "application",
+            "id": "app:internal-dns",
+            "method": "alias_table"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "entities": [
+            {
+              "type": "application",
+              "id": "app:internal-dns"
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:4a0c8e5d-f913-4c72-8b4e-6d2f1a9c07b5"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "internal dns incidents this week",
+        "outages hitting internal dns since monday",
+        "any incidents on internal dns this week"
+      ]
+    },
+    {
+      "id": "dns-006",
+      "category": "dns",
+      "question": "Compare latency to 1.1.1.1 today with yesterday.",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "compare",
+        "entities": [
+          {
+            "input": "1.1.1.1",
+            "type": "probe_target",
+            "id": "probe:1.1.1.1",
+            "method": "label_pair"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "compare_windows",
+          "target": "probe_target",
+          "metric": "probe_rtt_ms",
+          "aggregation": "p95",
+          "entities": [
+            {
+              "type": "probe_target",
+              "id": "probe:1.1.1.1"
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "compare_to": {
+            "kind": "absolute",
+            "from": "2026-09-23T05:00:00Z",
+            "to": "2026-09-23T15:00:00Z"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "comparison",
+          "must_include_refs": [
+            "probe:1.1.1.1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "1.1.1.1 rtt today vs yesterday",
+        "latency to cloudflare dns today compared with yesterday",
+        "compare 1.1.1.1 latency today and yesterday"
+      ]
+    },
+    {
+      "id": "dns-007",
+      "category": "dns",
+      "question": "Show DNS changes made by mlee in the last 30 days.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "type",
+              "op": "eq",
+              "values": [
+                "DNS_CHANGE"
+              ]
+            },
+            {
+              "field": "actor",
+              "op": "eq",
+              "values": [
+                "mlee"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "30d"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1046"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "mlee dns changes last 30 days",
+        "dns edits by mlee past month",
+        "what dns did mlee change in the last 30d"
+      ]
+    }
+  ]
+}

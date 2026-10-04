@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for optics-degraded. Dialect + contract: skill_cases.go.
+
+# A brownout and a link failure are different faults with different owners. The
+# device's own oper state decides which one this is.
+case: a port the device reports operationally down is a link failure, not a brownout
+question: crc errors climbing on edge-1
+ui:
+  - correlation_id=case-optics-down
+  - device=edge-1
+signals:
+  - state:if_oper=down
+evidence:
+  - finding
+  - device
+expect_chain:
+  - optics-degraded entry
+  - interface-down rule
+expect_selected: rule
+expect_reason: operationally down
+expect_verdict:
+  - interface
+  - transition
+expect_never:
+  - log-confirmation
+  - path-seam-handoff
+  - app-edge-5xx
+
+---
+
+case: optics that cannot be read live leave the device's own alarms as the only evidence
+question: optics light level on edge-1
+ui:
+  - correlation_id=case-optics-notwired
+  - device=edge-1
+signals:
+  - state:collect=not_wired
+notes:
+  - live device state could not be read on this deployment — no command was run
+evidence:
+  - finding
+expect_chain:
+  - optics-degraded entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: could not be read live
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - live device state could not be read on this deployment
+expect_never:
+  - interface-down
+
+---
+
+case: a reading with no oper-state fact takes no hop
+question: input errors and fcs errors on edge-1
+ui:
+  - correlation_id=case-optics-flat
+  - device=edge-1
+tools:
+  - get_metric_anomalies=denied
+evidence:
+  - finding
+expect_chain:
+  - optics-degraded entry
+expect_selected: none
+expect_verdict:
+  - error type
+  - direction
+expect_notes:
+  - was not run
+expect_never:
+  - interface-down
+  - log-confirmation
+  - path-seam-handoff
+  - app-edge-5xx
+expect_select: optics-degraded
+
+---
+
+case: errors too few to explain the application impact are the model's to propose
+question: dirty fibre on edge-1 but the app team says the network is broken
+ui:
+  - correlation_id=case-optics-model
+  - device=edge-1
+model_next: app-edge-5xx
+evidence:
+  - finding
+expect_chain:
+  - optics-degraded entry
+  - app-edge-5xx model
+expect_selected: model
+expect_reason: too few to explain
+expect_verdict:
+  - baseline
+  - service-side
+expect_never:
+  - interface-down

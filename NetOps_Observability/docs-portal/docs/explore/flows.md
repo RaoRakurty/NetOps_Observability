@@ -83,6 +83,29 @@ the **Conversations** section over the same window. The conversation list is
 address-level, so it is not narrowed to the row you came from, and the control
 says so.
 
+## Investigate a sudden bandwidth spike
+
+A spike seen on an interface chart tells you *that* the link got busy. The flow
+view tells you *which traffic* made it busy.
+
+1. Set the top-bar range picker to a window that starts a little before the
+   spike and ends after it.
+2. Open **Flows** and read **Volume over time** to confirm the surge is in the
+   flow data and to see exactly when it started.
+3. Open **Traffic Volume** to find the exporter and the ingress or egress
+   interface that carried the extra load.
+4. Put that exporter's address in **Device (exporter IP)**, and the interface
+   index in **Ingress if** or **Egress if**, then select **Filter**. Every panel
+   except **Applications** and **Services** now covers only that link.
+5. Open **Conversations** to see the heaviest pairs on the link, then
+   **Destination Ports** and **Protocols** to name the traffic. **Applications**
+   reads the whole window, not the filtered link, so use it to name the
+   heaviest conversations you already found.
+
+If the spike is on a link but **Volume over time** shows no matching surge,
+check **Source presence** first: the exporter for that link may not be sending
+flow records at all.
+
 ## What you see
 
 Panels populated from the flow store, and a **Source presence** badge for each protocol actually arriving. The live lab has one flow type arriving from two exporters:

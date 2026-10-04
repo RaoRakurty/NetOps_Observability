@@ -207,7 +207,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     if (!name) return;
     try {
       await api.createSaved("saved_search", name, { query, signal });
-      window.alert(`Saved "${name}". Find it under Search → Saved.`);
+      window.alert(`Saved "${name}". Find it under Explore → Saved Searches.`);
     } catch (e) {
       window.alert(`Save failed: ${(e as Error).message}`);
     }

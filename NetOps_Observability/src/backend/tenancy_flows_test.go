@@ -70,11 +70,52 @@ func TestVisibleDeviceKeysTenantIsolation(t *testing.T) {
 
 func TestSQLInListEscapes(t *testing.T) {
 	got := sqlInList([]string{"a", "o'brien"})
-	want := []string{"'a'", "'o''brien'"}
+	want := []string{"'a'", `'o\'brien'`}
 	parts := strings.Split(got, ", ")
 	sort.Strings(parts)
 	sort.Strings(want)
 	if strings.Join(parts, "|") != strings.Join(want, "|") {
 		t.Errorf("sqlInList escaping: got %q", got)
 	}
+}
+
+// A value ending in a backslash must not escape its own closing quote: before
+// the fix, ["x\\", ") OR 1=1 --"] rendered 'x\', ') OR 1=1 --' and the second
+// element parsed as SQL. Now every literal is closed where it should be.
+func TestSQLInListBackslashCannotBreakOut(t *testing.T) {
+	got := sqlInList([]string{`x\`, `) OR 1=1 --`})
+	if got != `'x\\', ') OR 1=1 --'` {
+		t.Fatalf("sqlInList = %s", got)
+	}
+	// Structural check: scanning with ClickHouse's own escape rules, the output
+	// is exactly two closed literals separated by ", " and nothing else.
+	if lits, rest := scanCHLiterals(got); len(lits) != 2 || strings.TrimSpace(rest) != "," {
+		t.Fatalf("scan = %q (non-literal residue %q) — a value escaped its literal", lits, rest)
+	}
+}
+
+// scanCHLiterals tokenises single-quoted ClickHouse literals honouring the
+// backslash escape, returning the literal bodies and every character that was
+// NOT inside a literal.
+func scanCHLiterals(s string) (lits []string, outside string) {
+	var b, o strings.Builder
+	in := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case in && c == '\\' && i+1 < len(s):
+			b.WriteByte(s[i+1])
+			i++
+		case in && c == '\'':
+			lits, in = append(lits, b.String()), false
+			b.Reset()
+		case !in && c == '\'':
+			in = true
+		case in:
+			b.WriteByte(c)
+		default:
+			o.WriteByte(c)
+		}
+	}
+	return lits, o.String()
 }

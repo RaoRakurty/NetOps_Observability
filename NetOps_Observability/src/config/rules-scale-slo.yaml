@@ -16,6 +16,9 @@
 #   correlation-consumer-liveness  — "is the engine consuming at all?"
 #                                    (added 2026-09-02 after a 3h silent
 #                                    outage; see that group's header).
+#   iris-ai-quality                — is Iris answering from evidence, and is
+#                                    its spend visible? (warning tier only;
+#                                    tracker 337 N-A3, 2026-09-27).
 #
 # Thresholds are tied to the MEASURED L0/L1 ceilings in
 # docs/scale/CORRELIX_SCALE_TEST_REPORT.md (4 vCPU / 16 GiB rig):
@@ -1010,3 +1013,94 @@ groups:
             to refresh it. Until then treat the artifact as UNVERIFIED rather
             than good — that distinction is the whole lesson of 2026-08-26.
           runbook: "docs/runbooks/storage-and-volume-operations.md#bundle-restore-drill"
+
+  # ---------------------------------------------------------------------------
+  # iris-ai-quality — is Iris answering from evidence, and can we see its cost?
+  # (tracker 337 N-A3; metrics: internal/aiscore/metrics.go, docs/runbooks/iris-ai-quality.md)
+  #
+  # All WARNING tier: none of these is a platform outage, and none should wake
+  # anyone. Each one is a condition under which the Iris scorecard's own
+  # numbers stop meaning what they say, which is exactly when nobody looks.
+  #
+  # Deliberately NOT here: a provider error-rate alert. netops_ai_provider_calls_total
+  # carries only {usage_reported}, not an outcome, so an error rate cannot be
+  # expressed from what is exported — and an alert built on a guessed series
+  # is worse than none. Both ratio rules require a minimum volume in the
+  # window, so a quiet lab (three answers, one guard firing) never fires them.
+  - name: iris-ai-quality
+    interval: 1m
+    rules:
+
+      - alert: IrisUnsupportedClaimRateHigh
+        # The UNSUPPORTED-CLAIM RATE (aiscore: guard firings / answers). A
+        # grounding guard firing means the model wrote something the evidence
+        # did not support and the guard removed it: the answer shipped clean,
+        # but a sustained rate above 20 % says the model, the prompt or the
+        # evidence it is given has regressed.
+        expr: |
+          (
+            sum(increase(netops_ai_grounding_guard_total[1h]))
+            / sum(increase(netops_ai_answers_total[1h]))
+          ) > 0.2
+          and on() sum(increase(netops_ai_answers_total[1h])) >= 20
+        for: 15m
+        labels: { severity: warning, layer: ai, tier: warning }
+        annotations:
+          summary: "Iris grounding guards are removing unsupported content from more than 20% of answers"
+          description: >-
+            Over the last hour a deterministic grounding guard (fabricated
+            citation, uncertain claim stated as a verdict) fired on more than a
+            fifth of Iris answers. Operators still received clean answers — the
+            guard removed the offending text — but the model is producing
+            unsupported content at a rate that says something changed: the
+            provider model, the prompt version, or the evidence the tools hand
+            it. Break the rate down by netops_ai_grounding_guard_total{guard}
+            to see which guard, and check whether the model tier was changed in
+            the AI settings recently.
+          runbook: "docs/runbooks/iris-ai-quality.md#unsupported-claim-rate"
+
+      - alert: IrisProviderUsageInvisible
+        # More than half of model calls returned no token accounting, so the
+        # cost KPIs (netops_ai_model_cost_usd_total, cost per investigation)
+        # are computed over the minority of calls the provider did report.
+        expr: |
+          (
+            sum(increase(netops_ai_provider_calls_total{usage_reported="no"}[1h]))
+            / sum(increase(netops_ai_provider_calls_total[1h]))
+          ) > 0.5
+          and on() sum(increase(netops_ai_provider_calls_total[1h])) >= 20
+        for: 30m
+        labels: { severity: warning, layer: ai, tier: warning }
+        annotations:
+          summary: "Most Iris model calls report no token usage — AI spend is not visible"
+          description: >-
+            More than half of the model-provider calls in the last hour came
+            back without the provider's own token accounting. Iris never
+            estimates tokens from characters, so this spend is simply unseen:
+            the cost-per-investigation KPI and every tenant's daily-token budget
+            undercount it. Usually the provider or model was switched to one
+            whose response shape does not carry usage, or calls are failing
+            before a response arrives. Check which provider the tenants use in
+            the AI settings and the api logs for provider errors.
+          runbook: "docs/runbooks/iris-ai-quality.md#provider-usage-invisible"
+
+      - alert: IrisScorecardNotSampling
+        # The scorecard's correlation-store sample (every 5 min by default) has
+        # not completed for 30 min, or has NEVER completed (-1). Every KPI that
+        # reads it (compression, verdict mix) is frozen or absent.
+        expr: |
+          netops_ai_scorecard_sample_age_seconds > 1800
+          or netops_ai_scorecard_sample_age_seconds == -1
+        for: 30m
+        labels: { severity: warning, layer: ai, tier: warning }
+        annotations:
+          summary: "The Iris scorecard has not sampled the correlation store in over 30 minutes"
+          description: >-
+            netops_ai_scorecard_sample_age_seconds is {{ $value }} (-1 means it
+            has never sampled since the api started). The sampler reads
+            aggregate counts from ClickHouse over the worker lane; while it is
+            not completing, the scorecard's correlation-derived KPIs are stale
+            or absent and must not be read as current. Look for
+            "ai-scorecard" errors in the api logs and for ClickHouse being
+            unreachable or over its worker query budget.
+          runbook: "docs/runbooks/iris-ai-quality.md#scorecard-not-sampling"

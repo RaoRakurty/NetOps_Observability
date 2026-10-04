@@ -118,10 +118,9 @@ func ImportFile(ctx context.Context, db DB, raw []byte) (int, error) {
 			}
 		}
 		for _, r := range changes {
-			if _, err := tx.Exec(ctx,
-				`INSERT INTO dem_change_events (tenant_id, change_id, change_type, app, site, event_at, data)
-				 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-				r.c.TenantID, r.c.ID, r.c.Type, r.c.App, r.c.Site, r.c.EventAt, r.data); err != nil {
+			// The same statement RecordChange issues, so an imported row carries
+			// the typed ledger columns (migration 0052) exactly as a live one.
+			if _, err := tx.Exec(ctx, pgInsertChange, pgInsertChangeArgs(r.c, r.data)...); err != nil {
 				return fmt.Errorf("experience: import change %s (tenant %s): %w", r.c.ID, r.c.TenantID, err)
 			}
 		}

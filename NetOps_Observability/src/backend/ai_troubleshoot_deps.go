@@ -33,9 +33,11 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/changeapi"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,7 +46,16 @@ import (
 
 	"netops/backend/ai"
 	"netops/backend/internal/bgpdepth"
+	"netops/backend/internal/chschema"
+	"netops/backend/internal/configdrift"
+	"netops/backend/internal/configstore"
+	"netops/backend/internal/dem/experience"
+	nlqast "netops/backend/internal/nlquery/ast"
+	"netops/backend/internal/nlquery/mql"
+	"netops/backend/internal/nlquery/plan"
+	"netops/backend/internal/noclabel"
 	"netops/backend/internal/protocoldiag"
+	"netops/backend/internal/rca"
 	"netops/backend/internal/showparse"
 	"netops/backend/models"
 	"netops/backend/pathgraph"
@@ -171,6 +182,19 @@ func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.Troubl
 	if s.irisMemory != nil {
 		deps.RecallInvestigations = s.aiRecallInvestigations(claims)
 	}
+	// The Iris RCA contract (tracker 337 N-B1): the engine's own report,
+	// projected. It rides the same tenant-scoped slice read as the RCA page.
+	deps.RCAResult = s.aiRCAResult(r, claims)
+	// Configuration change history (design item 10). Wired only when config
+	// backup is enabled — the version register and the drift state it reads
+	// exist only then.
+	if s.configBackup != nil && s.configDrift != nil {
+		deps.RecentChanges = s.aiRecentChanges(claims)
+		deps.ConfigDiff = s.aiConfigDiff(r, claims)
+	}
+	// The NL query compiler (tracker 337 N-C5): interpret-only, and only for a
+	// caller who could run the same question on /api/ai/query/compile.
+	deps.CompileQuery = s.aiCompileQuery(r, claims)
 	return deps
 }
 
@@ -1725,4 +1749,911 @@ func aiBGPScopeLabel(tenant string, cross bool) string {
 		return "unscoped"
 	}
 	return tenant
+}
+
+// ---- configuration change history (design item 10, plan N-A2) ------------
+//
+// The assistant's configuration-change seams (IRIS design item 10, plan N-A2):
+// the server side of `get_recent_changes` and `get_config_diff` (ai/config_changes.go).
+//
+// Both seams answer through the SAME reads the /api/devices/{id}/config/* and
+// /api/config/drift handlers take, with the SAME read rule — configstore/configdrift
+// Principal.Admits, i.e. the tenant boundary AND the operator-visibility
+// restriction — resolved from the CLAIMS, never from anything the model said.
+// A device the caller may not see is ai.ErrNotFound, indistinguishable from one
+// that does not exist (§3a rule 1).
+//
+// They are wired only when configuration backup is enabled (s.configBackup and
+// s.configDrift non-nil), so a deployment without it never registers a tool that
+// could only answer "nothing".
+
+const (
+	// aiConfigReadTimeout bounds every store read one seam call makes (§9).
+	aiConfigReadTimeout = 5 * time.Second
+	// aiConfigScanLimit bounds how many drift rows an estate-wide change read
+	// scans. The drift store pages by device id, not by change time, so the scan
+	// is a bound on work, and hitting it is reported as truncation.
+	aiConfigScanLimit = 2000
+)
+
+// aiConfigPrincipal resolves the config-backup read principal for the caller —
+// the same fields configAuthz produces for the HTTP subtree.
+func (s *server) aiConfigPrincipal(claims jwtClaims) configstore.Principal {
+	tenant, cross := principalTenant(claims)
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
+	return configstore.Principal{Tenant: tenant, Cross: cross, Subject: claims.Sub, Deny: deny, ExcludeTenants: exclude}
+}
+
+// aiConfigDevice authorizes ONE device for the caller: it must exist in the
+// inventory and the caller's principal must admit its owning tenant. Absent,
+// foreign and operator-restricted are the same answer.
+func (s *server) aiConfigDevice(p configstore.Principal, deviceID string) (configstore.Device, bool) {
+	if p.Deny {
+		return configstore.Device{}, false
+	}
+	dev, ok := s.configLookupDevice(deviceID)
+	if !ok || !p.Admits(dev.TenantID) {
+		return configstore.Device{}, false
+	}
+	return dev, true
+}
+
+// aiRecentChanges is the `get_recent_changes` seam.
+func (s *server) aiRecentChanges(claims jwtClaims) func(context.Context, ai.Principal, ai.ChangeQuery) (ai.ChangeReport, error) {
+	cp := s.aiConfigPrincipal(claims)
+	return func(ctx context.Context, _ ai.Principal, q ai.ChangeQuery) (ai.ChangeReport, error) {
+		if s.configBackup == nil || s.configDrift == nil {
+			return ai.ChangeReport{NotWired: "configuration backup is not enabled on this deployment, so no change history exists"}, nil
+		}
+		ctx, cancel := context.WithTimeout(ctx, aiConfigReadTimeout)
+		defer cancel()
+		since := time.Now().UTC().Add(-time.Duration(q.SinceSeconds) * time.Second)
+		if q.DeviceID != "" {
+			return s.aiDeviceChangeHistory(ctx, cp, q, since)
+		}
+		return s.aiEstateChanges(ctx, cp, q, since)
+	}
+}
+
+// aiDeviceChangeHistory lists one device's captured configurations inside the
+// window: each successful version is a configuration the device moved to, and
+// the next-older successful version is what it moved from.
+func (s *server) aiDeviceChangeHistory(ctx context.Context, cp configstore.Principal, q ai.ChangeQuery, since time.Time) (ai.ChangeReport, error) {
+	dev, ok := s.aiConfigDevice(cp, q.DeviceID)
+	if !ok {
+		return ai.ChangeReport{}, ai.ErrNotFound
+	}
+	versions, err := s.configBackup.Versions(ctx, cp.Tenant, cp.Cross, dev.ID)
+	if err != nil {
+		return ai.ChangeReport{}, err
+	}
+	okVersions := successfulNewestFirst(versions)
+	rep := ai.ChangeReport{Scope: firstNonBlank(dev.Name, dev.ID)}
+	for i, v := range okVersions {
+		if v.CapturedAt.Before(since) {
+			break
+		}
+		c := ai.DeviceChange{
+			DeviceID: dev.ID, DeviceName: dev.Name, State: firstNonBlank(v.Drift, "unknown"),
+			SHA: v.SHA, Added: v.Added, Removed: v.Removed,
+			ChangedAt: v.CapturedAt, CapturedAt: v.CapturedAt, Golden: v.Golden,
+		}
+		if i+1 < len(okVersions) {
+			c.PreviousSHA = okVersions[i+1].SHA
+		}
+		if len(rep.Changes) == q.Limit {
+			rep.Truncated = true
+			break
+		}
+		rep.Changes = append(rep.Changes, c)
+	}
+	return rep, nil
+}
+
+// aiEstateChanges lists every device the caller may see whose configuration
+// moved inside the window, from the drift state rows.
+func (s *server) aiEstateChanges(ctx context.Context, cp configstore.Principal, q ai.ChangeQuery, since time.Time) (ai.ChangeReport, error) {
+	rep := ai.ChangeReport{}
+	if cp.Deny {
+		return rep, nil
+	}
+	dp := configdrift.Principal{Tenant: cp.Tenant, Cross: cp.Cross, Subject: cp.Subject, Deny: cp.Deny, ExcludeTenants: cp.ExcludeTenants}
+	cursor, scanned := "", 0
+	for {
+		rows, next, err := s.configDrift.States(ctx, dp, cursor, configdrift.MaxListLimit)
+		if err != nil {
+			return ai.ChangeReport{}, err
+		}
+		for _, st := range rows {
+			scanned++
+			if st.ChangedAt.IsZero() || st.ChangedAt.Before(since) {
+				continue
+			}
+			name := st.DeviceID
+			if dev, ok := s.configLookupDevice(st.DeviceID); ok {
+				name = firstNonBlank(dev.Name, dev.ID)
+			}
+			rep.Changes = append(rep.Changes, ai.DeviceChange{
+				DeviceID: st.DeviceID, DeviceName: name, State: st.State, SHA: st.LastSHA,
+				Added: st.Added, Removed: st.Removed, ChangedAt: st.ChangedAt, CapturedAt: st.LastCapture,
+				Golden: st.GoldenSHA != "" && st.GoldenSHA == st.LastSHA, Error: st.LastError,
+			})
+		}
+		if next == "" {
+			break
+		}
+		if scanned >= aiConfigScanLimit {
+			rep.Truncated = true
+			break
+		}
+		cursor = next
+	}
+	// The tool re-sorts and caps; the seam caps too so an estate with thousands
+	// of changes does not hand the tool an unbounded slice.
+	sort.SliceStable(rep.Changes, func(i, j int) bool { return rep.Changes[i].ChangedAt.After(rep.Changes[j].ChangedAt) })
+	if q.Limit > 0 && len(rep.Changes) > q.Limit {
+		rep.Changes = rep.Changes[:q.Limit]
+		rep.Truncated = true
+	}
+	return rep, nil
+}
+
+// aiConfigDiff is the `get_config_diff` seam. It reads the same sealed versions
+// the diff handler reads, diffs the UNREDACTED text and renders through the
+// redaction rules, and writes the same sensitive-read audit record.
+func (s *server) aiConfigDiff(r *http.Request, claims jwtClaims) func(context.Context, ai.Principal, ai.ConfigDiffRequest) (ai.ConfigDiffReport, error) {
+	cp := s.aiConfigPrincipal(claims)
+	return func(ctx context.Context, _ ai.Principal, req ai.ConfigDiffRequest) (ai.ConfigDiffReport, error) {
+		if s.configBackup == nil {
+			return ai.ConfigDiffReport{NotWired: "configuration backup is not enabled on this deployment"}, nil
+		}
+		dev, ok := s.aiConfigDevice(cp, req.DeviceID)
+		if !ok {
+			return ai.ConfigDiffReport{}, ai.ErrNotFound
+		}
+		ctx, cancel := context.WithTimeout(ctx, aiConfigReadTimeout)
+		defer cancel()
+		versions, err := s.configBackup.Versions(ctx, cp.Tenant, cp.Cross, dev.ID)
+		if err != nil {
+			return ai.ConfigDiffReport{}, err
+		}
+		rep := ai.ConfigDiffReport{DeviceID: dev.ID, DeviceName: dev.Name}
+		okVersions := successfulNewestFirst(versions)
+		if len(okVersions) < 2 {
+			rep.Unavailable = "fewer than two successful configuration captures are on file, so there is nothing to compare"
+			return rep, nil
+		}
+		toV, toLabel, found := pickVersion(okVersions, req.To, -1)
+		if !found {
+			rep.Unavailable = unavailableFor(req.To)
+			return rep, nil
+		}
+		fromV, fromLabel, found := pickVersion(okVersions, req.From, versionIndex(okVersions, toV.SHA))
+		if !found {
+			rep.Unavailable = unavailableFor(req.From)
+			return rep, nil
+		}
+		if fromV.SHA == toV.SHA {
+			rep.Unavailable = "both ends name the same configuration version"
+			return rep, nil
+		}
+		fromText, err1 := s.configBackup.Open(fromV)
+		toText, err2 := s.configBackup.Open(toV)
+		if err1 != nil || err2 != nil {
+			return ai.ConfigDiffReport{}, errors.New("stored configuration could not be read")
+		}
+		res := configstore.Diff(configstore.Vendor(toV.Vendor), fromText, toText)
+		s.configAudit(r, cp.Tenant, "config_backup_diff_read", map[string]any{
+			"device": dev.ID, "from": fromV.SHA, "to": toV.SHA, "sensitive": true, "redacted": true, "via": "assistant",
+		})
+		rep.FromSHA, rep.ToSHA = fromV.SHA, toV.SHA
+		rep.FromLabel, rep.ToLabel = fromLabel, toLabel
+		rep.FromAt, rep.ToAt = fromV.CapturedAt, toV.CapturedAt
+		rep.Added, rep.Removed = res.Added, res.Removed
+		rep.Unified, rep.Truncated = res.Unified, res.Truncated
+		return rep, nil
+	}
+}
+
+// successfulNewestFirst keeps the successful captures, newest first. A failed
+// capture has no configuration behind it and can never be one end of a diff.
+func successfulNewestFirst(vs []configstore.Version) []configstore.Version {
+	out := make([]configstore.Version, 0, len(vs))
+	for _, v := range vs {
+		if v.Status == configstore.StatusOK {
+			out = append(out, v)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].CapturedAt.After(out[j].CapturedAt) })
+	return out
+}
+
+// pickVersion resolves one diff end. `ref` is an anchor or a version id (or its
+// unique prefix, as the tool accepts ≥ 8 hex characters). For the "previous"
+// anchor, `after` is the index of the OTHER end: previous means the capture
+// immediately older than it (or than the newest, when after < 0).
+func pickVersion(vs []configstore.Version, ref string, after int) (configstore.Version, string, bool) {
+	switch ref {
+	case ai.DiffAnchorLatest:
+		return vs[0], "latest capture", true
+	case ai.DiffAnchorPrevious:
+		i := after + 1
+		if after < 0 {
+			i = 1
+		}
+		if i < len(vs) {
+			return vs[i], "the capture before it", true
+		}
+		return configstore.Version{}, "", false
+	case ai.DiffAnchorGolden:
+		for _, v := range vs {
+			if v.Golden {
+				return v, "golden baseline", true
+			}
+		}
+		return configstore.Version{}, "", false
+	}
+	var match configstore.Version
+	n := 0
+	for _, v := range vs {
+		if strings.HasPrefix(v.SHA, ref) {
+			match = v
+			n++
+		}
+	}
+	if n != 1 { // unknown, or an ambiguous prefix — never guess
+		return configstore.Version{}, "", false
+	}
+	return match, "version " + shortVersion(match.SHA), true
+}
+
+func versionIndex(vs []configstore.Version, sha string) int {
+	for i, v := range vs {
+		if v.SHA == sha {
+			return i
+		}
+	}
+	return -1
+}
+
+func unavailableFor(ref string) string {
+	switch ref {
+	case ai.DiffAnchorGolden:
+		return "no golden baseline is marked for this device"
+	case ai.DiffAnchorPrevious:
+		return "there is no earlier successful capture to compare against"
+	}
+	return "that configuration version is not on file for this device"
+}
+
+func shortVersion(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
+}
+
+func firstNonBlank(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// ---- the Iris RCA contract (tracker 337 N-B1) ------------------------------
+
+// aiRCAResult builds the engine's RCA report for ONE incident through the SAME
+// tenant-scoped read the RCA page takes (buildRcaReportForID → loadCorrSlice,
+// which scopes by the request's claims) and projects it for Iris, bounded. A
+// foreign or unknown incident is ai.ErrNotFound — never a 403 (§3a).
+func (s *server) aiRCAResult(r *http.Request, claims jwtClaims) func(context.Context, ai.Principal, string) (ai.RCAResult, error) {
+	return func(_ context.Context, _ ai.Principal, id string) (ai.RCAResult, error) {
+		if !isUUIDToken(id) {
+			return ai.RCAResult{}, ai.ErrNotFound
+		}
+		rep, status, err := s.buildRcaReportForID(r, claims, id, 0)
+		if err != nil {
+			if status == http.StatusNotFound || status == http.StatusForbidden {
+				return ai.RCAResult{}, ai.ErrNotFound
+			}
+			return ai.RCAResult{}, err
+		}
+		return projectRCAReport(rep), nil
+	}
+}
+
+// projectRCAReport is a pure projection — every value is the engine's, only
+// bounded. Nothing is recomputed.
+func projectRCAReport(rep rca.Report) ai.RCAResult {
+	trunc := false
+	out := ai.RCAResult{
+		IncidentID: rep.CorrelationID, DisplayID: rep.DisplayID, Title: rep.Title,
+		RootCause: ai.RCARootCause{
+			Identified: rep.RootCause.Identified, Statement: rep.RootCause.Statement,
+			Mechanism: rep.RootCause.Mechanism, Object: rep.RootCause.Object, ObjectType: rep.RootCause.ObjectType,
+			PossibleCause: rep.RootCause.PossibleCause,
+			Known:         clipStrings(rep.RootCause.EvidenceKnown, ai.MaxRCAEvidenceLines, &trunc),
+			Missing:       clipStrings(rep.RootCause.EvidenceMissing, ai.MaxRCAEvidenceLines, &trunc),
+		},
+		Localization: ai.RCALocalization{
+			Localized: rep.FaultLocalization.Localized, Statement: rep.FaultLocalization.Statement,
+			Object: rep.FaultLocalization.Object, ObjectType: rep.FaultLocalization.ObjectType,
+		},
+		ChainNote:           rep.CausalChain.Note,
+		PrimaryContradicted: rep.CausalChain.PrimaryContradicted,
+		Affected: ai.RCAAffected{
+			Services: clipStrings(rep.Scope.Services, ai.MaxRCAAffectedPerSet, &trunc),
+			Devices:  clipStrings(rep.Scope.Devices, ai.MaxRCAAffectedPerSet, &trunc),
+			Sites:    clipStrings(rep.Scope.Sites, ai.MaxRCAAffectedPerSet, &trunc),
+			Targets:  clipStrings(rep.Scope.Targets, ai.MaxRCAAffectedPerSet, &trunc),
+			Seams:    clipStrings(rep.Scope.Seams, ai.MaxRCAAffectedPerSet, &trunc),
+			Regions:  clipStrings(rep.Scope.Regions, ai.MaxRCAAffectedPerSet, &trunc),
+			Paths:    rep.Scope.PathsCount,
+		},
+		Owner: ai.RCAOwner{
+			Triage: rep.Ownership.TriageOwner, TriageReason: rep.Ownership.TriageReason,
+			SuspectedDomain: rep.Ownership.SuspectedDomain, Technical: rep.Ownership.TechnicalOwner,
+			ExternalCandidate: rep.Ownership.ExternalCandidate, Demarcation: rep.Ownership.Demarcation,
+			Escalation: rep.Ownership.EscalationOwner, EscalationWhy: rep.Ownership.EscalationReason,
+		},
+	}
+	for _, c := range rep.Ownership.Candidates {
+		out.Owner.Candidates = append(out.Owner.Candidates, strings.TrimSpace(c.Team+" — "+c.Reason))
+	}
+	for i, st := range rep.CausalChain.Steps {
+		if i == ai.MaxRCAChainSteps {
+			trunc = true
+			break
+		}
+		out.CausalChain = append(out.CausalChain, ai.RCACausalLink{
+			Number: st.Number, Claim: st.Claim, Role: st.CausalRole, Link: st.Link,
+			Relation: ai.RelationFor(st.EpistemicState), EpistemicState: st.EpistemicState,
+			Basis: st.EpistemicBasis, Interval: st.Interval,
+			Evidence:       clipStrings(st.Evidence, ai.MaxRCAEvidenceLines, &trunc),
+			Contradictions: clipStrings(st.Contradictions, ai.MaxRCAEvidenceLines, &trunc),
+		})
+	}
+	for i, h := range rep.Hypotheses {
+		if i == ai.MaxRCAHypotheses {
+			trunc = true
+			break
+		}
+		if i == 0 {
+			out.Confidence, out.ConfidenceLabel = h.Confidence, h.Label
+		}
+		out.Hypotheses = append(out.Hypotheses, ai.RCAHypothesis{
+			Rank: h.Rank, Title: h.Title, Problem: h.Problem, CausalRole: h.CausalRole, Candidacy: h.CandidacyState,
+			Confidence: h.Confidence, Label: h.Label, Owner: h.Owner,
+			Supporting:    clipStrings(h.Supporting, ai.MaxRCAEvidenceLines, &trunc),
+			Contradicting: clipStrings(h.Contradicting, ai.MaxRCAEvidenceLines, &trunc),
+			Missing:       clipStrings(h.Missing, ai.MaxRCAEvidenceLines, &trunc),
+			ConfirmWhen:   clipStrings(h.ConfirmWhen, ai.MaxRCAEvidenceLines, &trunc),
+		})
+	}
+	out.Verdict, out.RootCauseState = rep.States.Analysis, rep.States.RootCauseState
+	for i, m := range rep.ImpactProvenance.Measures {
+		if i == ai.MaxRCAImpactMeasures {
+			trunc = true
+			break
+		}
+		out.Impact = append(out.Impact, ai.RCAImpact{Measure: m.Measure, Label: m.Label, Status: m.Status,
+			Unit: m.Unit, Scope: m.Scope, Source: m.Source, Basis: m.Basis, Value: m.Value})
+	}
+	out.Missing = clipStrings(rep.RootCause.EvidenceMissing, ai.MaxRCAEvidenceLines, &trunc)
+	out.Truncated = trunc
+	return out
+}
+
+// clipStrings bounds a list, recording truncation instead of hiding it.
+func clipStrings(xs []string, n int, truncated *bool) []string {
+	if len(xs) <= n {
+		return xs
+	}
+	*truncated = true
+	return xs[:n]
+}
+
+// ---- the NL query Scope (tracker 337 N-C4) ----------------------------------
+//
+// nlqScope is the ONLY root implementation of nlquery's plan.Scope and
+// validate.Scope. It is bound to one request's claims, and every read goes
+// through the chokepoint the UI's own pages use:
+//   - VictoriaMetrics: s.metricsScopeFiltersFor(claims) as extra_filters[]
+//     (server-side AND on every selector; a denied operator gets the
+//     no-visible-device sentinel);
+//   - ClickHouse: s.chTenantScopeFor(claims) as the tenant_scope setting (row
+//     policies) + s.tenantIDExcludeCondFor for the operator restriction;
+//   - devices / sites / circuits: the caller's visibility sets;
+//   - changes: the tenant from principalTenant(claims).
+// A structural guard test pins each of those calls.
+
+// nlqIncidentLiveness bounds "open" to the platform's liveness horizon: the
+// corr_current projection keeps rows open long after history closed them
+// (tracker 328), and the engine re-persists every live object every 15 min.
+const nlqIncidentLiveness = 24 * time.Hour
+
+type nlqScope struct {
+	s      *server
+	r      *http.Request
+	claims jwtClaims
+}
+
+func (s *server) nlqScopeFor(r *http.Request, claims jwtClaims) *nlqScope {
+	return &nlqScope{s: s, r: r, claims: claims}
+}
+
+func (h *nlqScope) Now() time.Time { return time.Now().UTC() }
+
+func (h *nlqScope) CrossTenant() bool {
+	_, cross := principalTenant(h.claims)
+	return cross
+}
+
+func (h *nlqScope) MetricRange(ctx context.Context, e mql.Expr, from, to time.Time, step time.Duration, maxSeries int) ([]plan.Series, bool, error) {
+	return h.s.vmRangeSeries(ctx, e.String(), from, to, step, h.s.metricsScopeFiltersFor(h.claims), maxSeries)
+}
+
+func (h *nlqScope) MetricInstant(ctx context.Context, e mql.Expr, at time.Time, maxSeries int) ([]plan.Sample, bool, error) {
+	query := e.String()
+	if !at.IsZero() {
+		// vmInstantScoped evaluates "now"; an explicit evaluation time is sent
+		// as an offset-free `time` by wrapping nothing — instead shift the
+		// expression, which keeps the one scoped entry point.
+		if d := time.Since(at); d > time.Minute {
+			shifted, err := mql.Offset(e, d.Truncate(time.Second))
+			if err != nil {
+				return nil, false, err
+			}
+			query = shifted.String()
+		}
+	}
+	raw, err := h.s.vmInstantScoped(ctx, query, h.s.metricsScopeFiltersFor(h.claims))
+	if err != nil {
+		return nil, false, err
+	}
+	out := make([]plan.Sample, 0, len(raw))
+	truncated := false
+	for _, v := range raw {
+		if len(out) == maxSeries {
+			truncated = true
+			break
+		}
+		out = append(out, plan.Sample{Labels: v.Labels, Value: v.Value})
+	}
+	return out, truncated, nil
+}
+
+// visibleDevices returns the caller's devices with their SoT site.
+func (h *nlqScope) visibleDevices() []plan.DeviceRef {
+	tenant, cross := principalTenant(h.claims)
+	assign := h.s.geoAssignments(tenant, cross)
+	var out []plan.DeviceRef
+	for _, d := range h.s.visibleDevicesFor(h.claims) {
+		out = append(out, plan.DeviceRef{ID: d.ID, Name: d.Name, Site: sotSiteFor(d, assign)})
+	}
+	return out
+}
+
+func (h *nlqScope) Devices(_ context.Context, f plan.DeviceFilter) ([]plan.DeviceRef, error) {
+	ids, sites := stringSet(f.IDs), stringSet(f.Sites)
+	var out []plan.DeviceRef
+	for _, d := range h.visibleDevices() {
+		// AND across fields, OR within one (plan.DeviceFilter).
+		if (len(ids) == 0 || ids[d.ID]) && (len(sites) == 0 || (d.Site != "" && sites[d.Site])) {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
+func (h *nlqScope) Circuits(ctx context.Context, f plan.CircuitFilter) ([]plan.CircuitRef, error) {
+	if len(f.Providers) > 0 {
+		// Provider → circuit needs the per-tenant alias table (N-C2). Until it
+		// exists there is no honest mapping, so a provider resolves to nothing
+		// (the planner then answers "nothing visible", never an unscoped read).
+		return nil, nil
+	}
+	_, circuits, err := h.s.wanProject(ctx, h.s.deviceVisibilityFor(h.claims))
+	if err != nil {
+		return nil, err
+	}
+	devs := map[string]plan.DeviceRef{}
+	for _, d := range h.visibleDevices() {
+		devs[d.Name] = d
+	}
+	ids, sites, devIDs := stringSet(f.IDs), stringSet(f.Sites), stringSet(f.Devices)
+	var out []plan.CircuitRef
+	for _, c := range circuits {
+		d := devs[c.Local.Device]
+		ref := plan.CircuitRef{ID: c.ID, LocalDevice: c.Local.Device, LocalIf: c.Local.Interface, Site: d.Site}
+		// AND across fields, OR within one (plan.CircuitFilter).
+		if (len(ids) == 0 || ids[c.ID]) && (len(sites) == 0 || (ref.Site != "" && sites[ref.Site])) &&
+			(len(devIDs) == 0 || devIDs[d.ID]) {
+			out = append(out, ref)
+		}
+	}
+	return out, nil
+}
+
+// incidentRow maps one corr_current row. start is window_start — when the
+// incident BEGAN — not created_at, which is the latest version's time.
+func incidentRowFrom(r map[string]any) (plan.IncidentRow, error) {
+	start, err := time.Parse(time.RFC3339Nano, asStr(r["start_iso"]))
+	if err != nil {
+		// A start time we cannot read would anchor every incident window at
+		// the zero time — refuse the row loudly rather than answer wrongly.
+		return plan.IncidentRow{}, fmt.Errorf("incident %s: unreadable window_start %q: %w", asStr(r["correlation_id"]), asStr(r["start_iso"]), err)
+	}
+	id := asStr(r["correlation_id"])
+	row := plan.IncidentRow{
+		ID: id, DisplayID: noclabel.ProblemDisplayID(id), Title: noclabel.ProblemTitle(asStr(r["top_hypothesis"]), id),
+		State: asStr(r["state"]), Tier: asStr(r["verdict_tier"]), SeamType: asStr(r["seam_type"]),
+		Confidence: asFloat(r["top_confidence"]), CreatedAt: start.UTC(),
+	}
+	var aff struct {
+		Sites   []string `json:"sites"`
+		Devices []string `json:"devices"`
+	}
+	if raw := asStr(r["affected"]); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &aff) // best-effort: a malformed blob just lists no sites/devices
+	}
+	row.Sites, row.Devices = aff.Sites, aff.Devices
+	return row, nil
+}
+
+var nlqIncidentCols = `toString(correlation_id) AS correlation_id, state, verdict_tier, seam_type, top_hypothesis,
+       top_confidence, affected, ` + chschema.ISO("window_start") + ` AS start_iso`
+
+func (h *nlqScope) Incidents(ctx context.Context, q plan.IncidentQuery) ([]plan.IncidentRow, bool, error) {
+	sql, limit, err := nlqIncidentsSQL(q, h.s.tenantIDExcludeCondFor(h.claims, "tenant_id"))
+	if err != nil {
+		return nil, false, err
+	}
+	rows, err := h.s.chRowsScope(ctx, h.s.chTenantScopeFor(h.claims), sql, "iris:nlquery:incidents")
+	if err != nil {
+		return nil, false, err
+	}
+	out := make([]plan.IncidentRow, 0, len(rows))
+	for i, r := range rows {
+		if i == limit {
+			return out, true, nil
+		}
+		row, err := incidentRowFrom(r)
+		if err != nil {
+			return nil, false, err
+		}
+		out = append(out, row)
+	}
+	return out, false, nil
+}
+
+// nlqIncidentsSQL builds the incident list read. Pure, so the exact text is
+// testable against a real ClickHouse. Tenant scope is NOT in this text: it is
+// the tenant_scope setting (row policies) the caller passes to chRowsScope,
+// plus the operator-restriction condition passed in as exclude.
+func nlqIncidentsSQL(q plan.IncidentQuery, exclude string) (string, int, error) {
+	conds := []string{
+		"window_start >= toDateTime64(" + strconv.FormatInt(q.From.Unix(), 10) + ", 3)",
+		"window_start <= toDateTime64(" + strconv.FormatInt(q.To.Unix(), 10) + ", 3)",
+		"chaos_fixture = ''", "debug_excluded = 0",
+	}
+	if exclude != "" {
+		conds = append(conds, exclude)
+	}
+	in := func(col string, vals []string) {
+		if len(vals) > 0 {
+			conds = append(conds, col+" IN ("+sqlInList(vals)+")")
+		}
+	}
+	in("state", q.States)
+	in("verdict_tier", q.Tiers)
+	in("seam_type", q.SeamTypes)
+	// Owner names are matched case-insensitively ("comcast business" is
+	// "Comcast Business"); an exact match silently answered "no incidents".
+	if len(q.Owners) > 0 {
+		lowered := make([]string, len(q.Owners))
+		for i, o := range q.Owners {
+			lowered[i] = strings.ToLower(o)
+		}
+		conds = append(conds, "lower(owner) IN ("+sqlInList(lowered)+")")
+	}
+	if stringSet(q.States)["open"] {
+		conds = append(conds, "created_at >= now() - INTERVAL "+strconv.Itoa(int(nlqIncidentLiveness.Hours()))+" HOUR")
+	}
+	if q.MinConf > 0 {
+		conds = append(conds, "top_confidence >= "+strconv.FormatFloat(q.MinConf, 'f', 4, 64))
+	}
+	for _, key := range []string{"sites", "devices", "apps"} {
+		vals := map[string][]string{"sites": q.Sites, "devices": q.Devices, "apps": q.Apps}[key]
+		if len(vals) > 0 {
+			conds = append(conds, "hasAny(JSONExtract(affected, '"+key+"', 'Array(String)'), ["+sqlInList(vals)+"])")
+		}
+	}
+	order := "DESC"
+	if !q.NewestFirst {
+		order = "ASC"
+	}
+	limit := q.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 200
+	}
+	return "SELECT " + nlqIncidentCols + " FROM netops.corr_current FINAL WHERE " + strings.Join(conds, " AND ") +
+		" ORDER BY window_start " + order + " LIMIT " + strconv.Itoa(limit+1) + " FORMAT JSON", limit, nil
+}
+
+func (h *nlqScope) Incident(ctx context.Context, id string) (plan.IncidentDetail, error) {
+	if !isUUIDToken(id) {
+		return plan.IncidentDetail{}, plan.ErrNotFound
+	}
+	conds := []string{"correlation_id = '" + id + "'"}
+	if c := h.s.tenantIDExcludeCondFor(h.claims, "tenant_id"); c != "" {
+		conds = append(conds, c)
+	}
+	sql := "SELECT " + nlqIncidentCols + " FROM netops.corr_current FINAL WHERE " + strings.Join(conds, " AND ") + " LIMIT 1 FORMAT JSON"
+	rows, err := h.s.chRowsScope(ctx, h.s.chTenantScopeFor(h.claims), sql, "iris:nlquery:incident")
+	if err != nil {
+		return plan.IncidentDetail{}, err
+	}
+	if len(rows) == 0 {
+		return plan.IncidentDetail{}, plan.ErrNotFound
+	}
+	row, err := incidentRowFrom(rows[0])
+	if err != nil {
+		return plan.IncidentDetail{}, err
+	}
+	det := plan.IncidentDetail{Row: row}
+	if res, rerr := h.s.aiRCAResult(h.r, h.claims)(ctx, ai.Principal{}, id); rerr == nil {
+		det.Detail = res
+	}
+	return det, nil
+}
+
+// nlqChangeFetch bounds one ledger read (and the answer when the caller set no
+// limit). Every filter is applied by the store BEFORE this limit (N-D1), so the
+// bound is on the matching rows, never on rows a Go filter then discards.
+const nlqChangeFetch = 500
+
+// nlqLedgerQuery maps the planner's change query onto the ledger store's. Every
+// field the plan can filter on has a store-side counterpart, so nothing is
+// post-filtered in Go; Sources are the ledger's source_system values ("ledger",
+// "config_capture", "correlix_audit").
+func nlqLedgerQuery(q plan.ChangeQuery, limit int) experience.ChangeQuery {
+	return experience.ChangeQuery{
+		Since: q.From, Until: q.To, Types: q.Types, Sites: q.Sites, Apps: q.Apps, Seams: q.Seams,
+		Actors: q.Actors, Objects: q.Objects, ObjectKinds: q.ObjectKinds, Sources: q.Sources,
+		ExcludeIDs: q.ExcludeIDs, Limit: limit,
+	}
+}
+
+func (h *nlqScope) Changes(ctx context.Context, q plan.ChangeQuery) ([]plan.ChangeRow, bool, error) {
+	tenant, _ := principalTenant(h.claims)
+	limit := q.Limit
+	if limit <= 0 || limit > nlqChangeFetch {
+		limit = nlqChangeFetch
+	}
+	var out []plan.ChangeRow
+	truncated := false
+	// Configuration versions the ledger already records (config_capture rows
+	// carry the version's content address as SourceObject), so the capture arm
+	// below does not list the same change twice.
+	inLedger := map[string]bool{}
+	if h.s.experienceStore != nil {
+		// ONE past the limit, to tell "that is all of them" from "that is all we
+		// would fetch".
+		evs, err := h.s.experienceStore.ListChanges(ctx, tenant, nlqLedgerQuery(q, limit+1))
+		if err != nil {
+			return nil, false, err
+		}
+		if len(evs) > limit {
+			evs, truncated = evs[:limit], true
+		}
+		for _, ev := range evs {
+			if ev.SourceSystem == experience.SourceSystemConfigCapture {
+				inLedger[ev.Object+"\x00"+ev.SourceObject] = true
+			}
+			out = append(out, plan.ChangeRow{ID: ev.ID, Type: ev.Type,
+				Actor:  firstNonBlank(ev.ActorDisplay, ev.ActorID, ev.Actor),
+				Source: ev.SourceSystem, Object: ev.Object, ObjectKind: ev.ObjectKind,
+				Site: ev.Site, App: ev.App, Seam: ev.Seam, Summary: ev.Summary, Ticket: ev.TicketRef,
+				At: ev.EventAt, HasDiff: ev.Before != "" || ev.After != ""})
+		}
+	}
+	// The configuration-capture ARM: config versions captured before the
+	// ledger's config_capture producer existed (N-D2) live only in the version
+	// register. It is not the ledger, so it keeps its own predicate
+	// (changeMatches) — over rows it produced itself, never over ledger rows.
+	if h.s.configBackup != nil && h.s.configDrift != nil &&
+		(len(q.Types) == 0 || stringSet(q.Types)[experience.ChangeConfig]) &&
+		(len(q.Sources) == 0 || stringSet(q.Sources)[experience.SourceSystemConfigCapture]) {
+		secs := int(time.Since(q.From).Seconds())
+		rep, err := h.s.aiRecentChanges(h.claims)(ctx, ai.Principal{}, ai.ChangeQuery{SinceSeconds: secs, Limit: ai.MaxRecentChanges})
+		if err != nil {
+			// The ledger rows above still answer; the pre-ledger capture history
+			// is what is missing, so say so rather than fail the whole question.
+			logError("iris.nlquery", "config-capture arm unavailable", errf(err))
+			truncated = true
+		}
+		if err == nil && rep.NotWired == "" {
+			truncated = truncated || rep.Truncated
+			for _, c := range rep.Changes {
+				if inLedger[c.DeviceID+"\x00"+c.SHA] {
+					continue
+				}
+				row := plan.ChangeRow{ID: "config:" + c.DeviceID + ":" + shortVersion(c.SHA), Type: experience.ChangeConfig,
+					Source: experience.SourceSystemConfigCapture, Object: c.DeviceID, ObjectKind: "device", At: c.ChangedAt, HasDiff: c.PreviousSHA != "" || c.Added+c.Removed > 0,
+					Summary: fmt.Sprintf("%s configuration %s (+%d/-%d lines)", firstNonBlank(c.DeviceName, c.DeviceID), c.State, c.Added, c.Removed)}
+				if changeMatches(row, q) {
+					out = append(out, row)
+				}
+			}
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].At.After(out[j].At) })
+	if q.Limit > 0 && len(out) > q.Limit {
+		out, truncated = out[:q.Limit], true
+	}
+	return out, truncated, nil
+}
+
+// changeMatches is the configuration-capture ARM's predicate. The ledger rows
+// are filtered by the store (nlqLedgerQuery → SQL); this runs only over the rows
+// the arm builds itself from the version register, which has no query language.
+func changeMatches(c plan.ChangeRow, q plan.ChangeQuery) bool {
+	if !c.At.IsZero() && (c.At.Before(q.From) || (!q.To.IsZero() && c.At.After(q.To))) {
+		return false
+	}
+	match := func(vals []string, v string) bool { return len(vals) == 0 || stringSet(vals)[v] }
+	return match(q.Types, c.Type) && match(q.Actors, c.Actor) && match(q.Objects, c.Object) &&
+		match(q.ObjectKinds, c.ObjectKind) && match(q.Sites, c.Site) && match(q.Apps, c.App) &&
+		match(q.Seams, c.Seam) && match(q.Sources, c.Source) && !stringSet(q.ExcludeIDs)[c.ID]
+}
+
+// Visible answers validate.Scope: may the caller see this entity? A missing
+// and a foreign entity both answer false — the validator turns either into the
+// identical unknown_entity error.
+func (h *nlqScope) Visible(ctx context.Context, ref nlqast.EntityRef) (bool, error) {
+	id := ref.ID
+	if i := strings.IndexByte(id, ':'); i >= 0 {
+		id = id[i+1:]
+	}
+	tenant, cross := principalTenant(h.claims)
+	switch ref.Type {
+	case "site":
+		if h.s.sites == nil {
+			return false, nil
+		}
+		_, ok := h.s.sites.Get(tenant, cross, id)
+		return ok, nil
+	case "device", "interface", "bgp_peer":
+		dev := id
+		if j := strings.IndexByte(dev, '/'); j >= 0 {
+			dev = dev[:j]
+		}
+		for _, d := range h.visibleDevices() {
+			if d.ID == dev {
+				return true, nil
+			}
+		}
+		return false, nil
+	case "circuit":
+		cs, err := h.Circuits(ctx, plan.CircuitFilter{IDs: []string{id}})
+		return err == nil && len(cs) == 1, err
+	case "incident":
+		_, err := h.Incident(ctx, id)
+		if errors.Is(err, plan.ErrNotFound) {
+			return false, nil
+		}
+		return err == nil, err
+	case "probe_target":
+		return cross, nil // probe series are unscoped until N-B5 (the metric is gated too)
+	}
+	// provider, application, change: resolvable only through N-C2 / N-D.
+	return false, nil
+}
+
+// Count estimates how many target entities the refs select (validator cost).
+func (h *nlqScope) Count(ctx context.Context, target string, refs []nlqast.EntityRef) (int, error) {
+	var sites, devs []string
+	for _, r := range refs {
+		id := r.ID[strings.IndexByte(r.ID, ':')+1:]
+		switch r.Type {
+		case "site":
+			sites = append(sites, id)
+		case "device":
+			devs = append(devs, id)
+		case "interface", "bgp_peer", "circuit", "probe_target":
+			return len(refs), nil
+		}
+	}
+	d, err := h.Devices(ctx, plan.DeviceFilter{IDs: devs, Sites: sites})
+	if err != nil {
+		return 0, err
+	}
+	n := len(d)
+	switch target {
+	case "interface":
+		n *= 24
+	case "bgp_peer":
+		n *= 4
+	case "circuit":
+		n *= 2
+	}
+	return n, nil
+}
+
+func stringSet(xs []string) map[string]bool {
+	m := make(map[string]bool, len(xs))
+	for _, x := range xs {
+		m[x] = true
+	}
+	return m
+}
+
+// ---- change APIs (tracker 337 N-D3) -----------------------------------------
+
+// handleChanges serves /api/changes[/{id}[/diff]] over the change ledger
+// (internal/changeapi). Every read is the caller's own tenant, from the token;
+// the incident anchor and the configuration diff reuse the SAME scoped reads
+// the NL query path and the config-diff tool use.
+func (s *server) handleChanges(w http.ResponseWriter, r *http.Request) {
+	if s.experienceStore == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("the change ledger is not available on this deployment"))
+		return
+	}
+	s.changeAPI().Handler(w, r)
+}
+
+// redactChangeValue is THE redactor for a change's before/after values, wired
+// into BOTH APIs over the change ledger — /api/changes (internal/changeapi) and
+// the older /api/dem/changes feed (internal/dem/experience) — so one ledger is
+// never redacted two ways (tracker 337 N-D3). It is ai.RedactSecrets, the
+// credential tier of the platform's one DLP dialect: tokens, keys, passwords,
+// community strings, private keys and URL userinfo are masked; identifiers and
+// ordinary configuration values are left readable.
+func redactChangeValue(v string) string { return ai.RedactSecrets(v) }
+
+func (s *server) changeAPI() changeapi.Deps {
+	return changeapi.Deps{
+		Store: s.experienceStore,
+		Authorize: func(w http.ResponseWriter, r *http.Request) (changeapi.Caller, bool) {
+			claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+			if !ok {
+				return changeapi.Caller{}, false
+			}
+			tenant, cross := principalTenant(claims)
+			return changeapi.Caller{Tenant: tenant, Cross: cross}, true
+		},
+		Incident: func(ctx context.Context, r *http.Request, id string) (changeapi.IncidentScope, error) {
+			claims, _ := userFrom(r.Context()) // Authorize already required a principal
+			det, err := s.nlqScopeFor(r, claims).Incident(ctx, id)
+			if errors.Is(err, plan.ErrNotFound) {
+				return changeapi.IncidentScope{}, changeapi.ErrNotFound
+			}
+			if err != nil {
+				return changeapi.IncidentScope{}, err
+			}
+			return changeapi.IncidentScope{ID: id, Start: det.Row.CreatedAt, Devices: det.Row.Devices, Sites: det.Row.Sites}, nil
+		},
+		ConfigDiff: func(ctx context.Context, r *http.Request, deviceID, from, to string) (changeapi.Diff, error) {
+			if s.configBackup == nil {
+				return changeapi.Diff{DeviceID: deviceID, Unavailable: "configuration backup is not enabled on this deployment"}, nil
+			}
+			claims, _ := userFrom(r.Context()) // Authorize already required a principal
+			rep, err := s.aiConfigDiff(r, claims)(ctx, ai.Principal{}, ai.ConfigDiffRequest{DeviceID: deviceID, From: from, To: to})
+			if errors.Is(err, ai.ErrNotFound) {
+				return changeapi.Diff{}, changeapi.ErrNotFound
+			}
+			if err != nil {
+				return changeapi.Diff{}, err
+			}
+			return changeapi.Diff{DeviceID: rep.DeviceID, FromVersion: rep.FromSHA, ToVersion: rep.ToSHA, FromAt: rep.FromAt, ToAt: rep.ToAt,
+				Added: rep.Added, Removed: rep.Removed, Unified: rep.Unified, Truncated: rep.Truncated,
+				Unavailable: firstNonBlank(rep.Unavailable, rep.NotWired)}, nil
+		},
+		Redact:     redactChangeValue,
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+	}
 }

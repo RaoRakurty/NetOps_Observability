@@ -79,7 +79,7 @@ func TestAITenantConfigStoreDefaults(t *testing.T) {
 	if st.NoPlatformKey("t-x") {
 		t.Fatal("platform fallback must default allowed")
 	}
-	if _, _, _, ok := st.BYOProvider("t-x", providerModel); ok {
+	if _, _, _, ok := st.BYOProvider("t-x", "", providerModel); ok {
 		t.Fatal("no BYO provider without a key")
 	}
 	// Nil-store defense-in-depth: same defaults, no panic.
@@ -91,24 +91,24 @@ func TestAITenantConfigStoreDefaults(t *testing.T) {
 
 func TestAITenantConfigStoreKeyLifecycle(t *testing.T) {
 	st := newAITenantConfigStore("", nil)
-	_, _ = st.SetTenantSettings("t-a", "anthropic", "claude-sonnet-4-6", "sk-ant-secret", false, false)
-	name, key, model, ok := st.BYOProvider("t-a", providerModel)
+	_, _ = st.SetTenantSettings("t-a", ai.TenantSettings{Provider: "anthropic", Model: "claude-sonnet-4-6", Key: "sk-ant-secret"})
+	name, key, model, ok := st.BYOProvider("t-a", "", providerModel)
 	if !ok || name != "anthropic" || key != "sk-ant-secret" || model != "claude-sonnet-4-6" {
 		t.Fatalf("BYO provider wrong: %s %s %s %v", name, key, model, ok)
 	}
 	// A blank key on save preserves the stored one (the GET form is redacted and
 	// must not wipe the secret).
-	_, _ = st.SetTenantSettings("t-a", "anthropic", "claude-opus-4-8", "", false, false)
-	if _, key, model, _ := st.BYOProvider("t-a", providerModel); key != "sk-ant-secret" || model != "claude-opus-4-8" {
+	_, _ = st.SetTenantSettings("t-a", ai.TenantSettings{Provider: "anthropic", Model: "claude-opus-4-8"})
+	if _, key, model, _ := st.BYOProvider("t-a", "", providerModel); key != "sk-ant-secret" || model != "claude-opus-4-8" {
 		t.Fatalf("blank key must preserve stored secret, got %q model %q", key, model)
 	}
 	// clear_key removes it explicitly.
-	_, _ = st.SetTenantSettings("t-a", "", "", "", false, true)
-	if _, _, _, ok := st.BYOProvider("t-a", providerModel); ok {
+	_, _ = st.SetTenantSettings("t-a", ai.TenantSettings{ClearKey: true})
+	if _, _, _, ok := st.BYOProvider("t-a", "", providerModel); ok {
 		t.Fatal("clear_key must remove the BYO key")
 	}
 	// Entitlement writes never disturb tenant settings and vice versa.
-	_, _ = st.SetTenantSettings("t-a", "openai", "", "sk-oai", true, false)
+	_, _ = st.SetTenantSettings("t-a", ai.TenantSettings{Provider: "openai", Key: "sk-oai", NoPlatformKey: true})
 	_, _ = st.SetEntitlement("t-a", true, true, 0, 0)
 	c := st.Get("t-a")
 	if c.Key != "sk-oai" || !c.NoPlatformKey || !c.AssistantOff || !c.AgentTools {
@@ -124,7 +124,7 @@ func TestAITenantKeySealedAtRest(t *testing.T) {
 	v := newTestVault(t)
 	path := t.TempDir() + "/ai_tenant_config.json"
 	st := newAITenantConfigStore(path, v)
-	_, _ = st.SetTenantSettings("t-a", "anthropic", "", "sk-ant-supersecret", false, false)
+	_, _ = st.SetTenantSettings("t-a", ai.TenantSettings{Provider: "anthropic", Key: "sk-ant-supersecret"})
 
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -146,7 +146,7 @@ func TestAITenantKeySealedAtRest(t *testing.T) {
 	}
 	// Reload (fresh store, same vault) round-trips the decrypted key.
 	st2 := newAITenantConfigStore(path, v)
-	if _, key, _, ok := st2.BYOProvider("t-a", providerModel); !ok || key != "sk-ant-supersecret" {
+	if _, key, _, ok := st2.BYOProvider("t-a", "", providerModel); !ok || key != "sk-ant-supersecret" {
 		t.Fatalf("reload must recover the key, got %q ok=%v", key, ok)
 	}
 }
@@ -168,7 +168,7 @@ func TestProviderCandidatesPerTenant(t *testing.T) {
 
 	// Tenant A brings its own key: it wins OUTRIGHT (single candidate) — and
 	// tenant B still resolves to the platform chain, never A's key.
-	_, _ = s.aiTenantCfg.SetTenantSettings("t-a", "anthropic", "claude-sonnet-4-6", "sk-tenant-a", false, false)
+	_, _ = s.aiTenantCfg.SetTenantSettings("t-a", ai.TenantSettings{Provider: "anthropic", Model: "claude-sonnet-4-6", Key: "sk-tenant-a"})
 	cands = s.providerCandidates(jwtClaims{Role: "viewer", Tenant: "t-a"})
 	if len(cands) != 1 || cands[0].source != "tenant" || cands[0].key != "sk-tenant-a" || cands[0].name != "anthropic" {
 		t.Fatalf("tenant BYO key must win outright: %+v", cands)
@@ -180,7 +180,7 @@ func TestProviderCandidatesPerTenant(t *testing.T) {
 	}
 
 	// Strict tenant: no key of its own + no_platform_key → NOTHING (fail closed).
-	_, _ = s.aiTenantCfg.SetTenantSettings("t-b", "", "", "", true, false)
+	_, _ = s.aiTenantCfg.SetTenantSettings("t-b", ai.TenantSettings{NoPlatformKey: true})
 	if cands := s.providerCandidates(jwtClaims{Role: "viewer", Tenant: "t-b"}); cands != nil {
 		t.Fatalf("strict tenant without a key must get no provider: %+v", cands)
 	}
@@ -237,7 +237,7 @@ func TestAITenantConfigHandlerIsolation(t *testing.T) {
 	}
 	// And B's writes don't touch A.
 	put(aiTenantAdminB, `{"provider":"openai","key":"sk-b","no_platform_key":true}`)
-	if _, key, _, _ := s.aiTenantCfg.BYOProvider("t-a", providerModel); key != "sk-a-secret" {
+	if _, key, _, _ := s.aiTenantCfg.BYOProvider("t-a", "", providerModel); key != "sk-a-secret" {
 		t.Fatal("tenant B's write must not affect tenant A")
 	}
 

@@ -1,0 +1,97 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for security-exposure-context. Dialect + contract: skill_cases.go.
+#
+# Security evidence is ONE class among four here. When a confirmed outage
+# verdict is in scope, the operator's real question is the outage — and the
+# engine's own verdict tier is what says so.
+
+case: a confirmed outage verdict in scope returns the investigation to the entry method
+question: what is the security exposure on edge-1
+ui:
+  - correlation_id=case-sec-confirmed
+  - device=edge-1
+signals:
+  - verdict:tier=confirmed
+evidence:
+  - finding
+  - topology
+expect_chain:
+  - security-exposure-context entry
+  - osi-bisection rule
+expect_selected: rule
+expect_reason: confirmed outage verdict
+expect_verdict:
+  - layer
+  - evidence classes
+expect_never:
+  - path-seam-handoff
+expect_select: security-exposure-context
+
+---
+
+case: a suspected verdict is not a confirmed one, so posture stays the question
+question: open port and weak cipher risk on this device
+ui:
+  - correlation_id=case-sec-suspected
+  - device=edge-1
+signals:
+  - verdict:tier=suspected
+evidence:
+  - finding
+expect_chain:
+  - security-exposure-context entry
+expect_selected: none
+expect_verdict:
+  - severity
+  - assessed scope
+expect_never:
+  - osi-bisection
+  - path-seam-handoff
+
+---
+
+# Coverage is the honesty half of a posture answer: an unassessed device reads
+# as clean unless the gap is said out loud.
+case: findings that cannot be read are disclosed rather than read as clean
+question: cve and hardening posture on edge-1
+ui:
+  - correlation_id=case-sec-gap
+  - device=edge-1
+tools:
+  - get_security_findings=not_found
+evidence:
+  - finding
+expect_chain:
+  - security-exposure-context entry
+expect_selected: none
+expect_verdict:
+  - severity
+  - assessed scope
+expect_notes:
+  - found nothing for the id in scope
+expect_never:
+  - osi-bisection
+  - path-seam-handoff
+
+---
+
+case: an exposure on a seam we do not own is the model's to propose
+question: attack surface on the partner seam
+ui:
+  - correlation_id=case-sec-model
+  - device=edge-1
+model_next: path-seam-handoff
+evidence:
+  - finding
+expect_chain:
+  - security-exposure-context entry
+  - path-seam-handoff model
+expect_selected: model
+expect_reason: owner is not us
+expect_verdict:
+  - seam
+  - baseline
+expect_never:
+  - osi-bisection

@@ -54,6 +54,7 @@ import TacEscalationPanel from "./TacEscalationPanel";
 import TacCaseChip from "../../components/tac/TacCaseChip";
 import { caseLinkFromIncident } from "./tacModel";
 import IrisLane from "./IrisLane";
+import { useAIEntitlements } from "../../lib/aiEntitlements";
 import { LANE_COMPONENT, type LaneScope } from "./InvestigationLanes";
 import { operatorError } from "../../lib/errors";
 import { fmtDateTime } from "../../lib/time";
@@ -107,6 +108,9 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
   );
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [irisOpen, setIrisOpen] = useState(false);
+  // N-A7: "Ask Iris" only for a caller holding ai.chat. Cosmetic — the
+  // server refuses /api/ai/ask without it.
+  const aiEnt = useAIEntitlements();
   const [escalateOpen, setEscalateOpen] = useState(false);
   // The vendor case this incident carries. It arrives one of two ways: the
   // escalation panel reports the case it just opened, or — after a reload — the
@@ -349,12 +353,14 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
           </div>
 
           <div className="ts-actions" data-testid="ts-actions">
-            <button
-              type="button" className="btn-accent"
-              aria-expanded={irisOpen} onClick={() => setIrisOpen((o) => !o)}
-            >
-              {irisOpen ? "Close Iris" : "Ask Iris"}
-            </button>
+            {aiEnt.has("ai.chat") && (
+              <button
+                type="button" className="btn-accent"
+                aria-expanded={irisOpen} onClick={() => setIrisOpen((o) => !o)}
+              >
+                {irisOpen ? "Close Iris" : "Ask Iris"}
+              </button>
+            )}
             <button type="button" className="chip-btn" onClick={createTicket} disabled={!corrId}>
               {ticket?.ticket_number ? `Ticket ${ticket.ticket_number}` : "Open ticket"}
             </button>
@@ -377,7 +383,7 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
           {!corrId && <p className="ts-answer-f fact-line">A ticket needs a correlated case.</p>}
           {handoffNote && <p className="ts-answer-f fact-line" role="status">{handoffNote}</p>}
 
-          {irisOpen && (
+          {irisOpen && aiEnt.has("ai.chat") && (
             <IrisLane
               caseId={corrId || undefined}
               symptomLabel={row?.title}

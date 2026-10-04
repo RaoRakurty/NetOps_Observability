@@ -1854,6 +1854,12 @@ export type NormalizedChatResponse = {
   // the UI shows a slim disclosure banner.
   fallback?: "provider_unavailable";
   grounded?: AiAnswer;
+  // Whether the SERVER considers this answer grounded (tracker 330): true for an
+  // agent-loop turn that actually ran lookups and for the grounded-engine
+  // fallback, false for a plain provider completion with no tenant evidence
+  // behind it. The UI labels a false — it never infers grounding on its own, and
+  // an absent field is treated as NOT grounded (a pre-330 backend cannot claim it).
+  is_grounded?: boolean;
 };
 export type CopilotChatResponse = NormalizedChatResponse | AnthropicChatResponse | OpenAIChatResponse;
 
@@ -1862,6 +1868,9 @@ export type CopilotChatResponse = NormalizedChatResponse | AnthropicChatResponse
 export type CopilotConfig = {
   provider: string; // "anthropic" | "openai"
   model: string;
+  // Optional model-router overrides (blank = use `model` for every answer).
+  model_fast?: string;
+  model_strong?: string;
   system?: string;
   feature_enabled?: boolean;
   key_present?: boolean;
@@ -1872,9 +1881,212 @@ export type CopilotConfig = {
 
 // Per-workspace (tenant) AI settings — a tenant admin's own view. The key is
 // write-only; entitlement fields are read-only here (platform-controlled).
+// ---- Iris vocabulary + NL query (internal/nlquery; tracker 337) ----
+// ---- change ledger API (N-D3) ----
+export interface ChangeConfigDiff {
+  device_id: string;
+  from_version: string;
+  to_version: string;
+  from_at: string;
+  to_at: string;
+  added: number;
+  removed: number;
+  unified: string;
+  truncated: boolean;
+  unavailable?: string;
+}
+export interface ChangeDiffResponse {
+  change_id: string;
+  kind: "config" | "values";
+  diff?: ChangeConfigDiff;
+  before?: string;
+  after?: string;
+  has_diff?: boolean;
+}
+
+export interface IrisAlias {
+  entity_type: string;
+  entity_id: string;
+  alias: string;
+  created_by?: string;
+  created_at?: string;
+}
+export interface IrisRef {
+  input_text: string;
+  entity_id: string;
+  entity_type: string;
+  confidence: number;
+  resolution_method: string;
+  needs_confirmation?: boolean;
+}
+export interface IrisResolution {
+  refs: IrisRef[] | null;
+  ambiguous: boolean;
+}
+export interface IrisValidationError {
+  path: string;
+  code: string;
+  got?: string;
+  suggestions?: string[];
+  message?: string;
+}
+export interface IrisConstraint { path: string; from: string; to: string; reason: string }
+export interface IrisValidation {
+  valid: boolean;
+  errors?: IrisValidationError[];
+  constraints_applied?: IrisConstraint[];
+}
+export interface IrisCompiled {
+  intent?: string;
+  entities?: IrisRef[] | null;
+  clarify?: IrisRef[] | null;
+  decline?: string;
+  unparsed?: boolean;
+  not_understood?: string[] | null;
+  ast?: Record<string, unknown>;
+  validation?: IrisValidation;
+  /** The query-log record of this question (N-C8) — what a correction attaches to. */
+  query_log_id?: string;
+}
+// Query capture + operator corrections (tracker 337 N-C8). A record holds
+// counts and references about a question — never the answer's rows.
+export type IrisCorrectionKind = "wrong_entity" | "wrong_metric" | "wrong_window" | "wrong_filter" | "other";
+export interface IrisCorrection {
+  at: string;
+  by: string;
+  kind: IrisCorrectionKind;
+  note?: string;
+  corrected_ast?: Record<string, unknown>;
+  corrected_ast_hash?: string;
+}
+export interface IrisQueryRecord {
+  id: string;
+  principal: string;
+  conversation_id?: string;
+  source: "router" | "query_compile" | "query_execute" | "conversation";
+  at: string;
+  question: string;
+  intent?: string;
+  outcome: "answered" | "compiled" | "clarify" | "declined" | "unparsed" | "invalid" | "error";
+  query_type?: string;
+  ast_hash?: string;
+  catalog_version?: string;
+  validation_codes: string[] | null;
+  entities: { type: string; id: string; resolution_method: string; confidence?: number }[] | null;
+  rows: number;
+  series: number;
+  duration_ms: number;
+  corrections: IrisCorrection[] | null;
+  /** Who wrote the stored query (N-C5): "model" means the AI model, not the grammar. Absent when no query was kept. */
+  compiled_by?: "grammar" | "model" | "supplied";
+  /** The validated query — only on GET /api/ai/query/{id}, never in the list. */
+  query?: Record<string, unknown>;
+  /** Set when the model wrote the query. */
+  disclosure?: string;
+}
+// GET /api/ai/query/{id}/explain (N-C5): what the stored query does, in words.
+export interface IrisQueryExplanation {
+  id: string;
+  asked_via: IrisQueryRecord["source"];
+  outcome: IrisQueryRecord["outcome"];
+  question: string;
+  query_type?: string;
+  compiled_by?: "grammar" | "model" | "supplied";
+  /** "model" when the AI model, not the grammar, wrote the query. */
+  source?: "model";
+  disclosure?: string;
+  catalog_version?: string;
+  catalog_current: boolean;
+  explanation: { summary: string; parts: { facet: string; text: string }[] } | null;
+  /** Why there is no explanation (no query was kept). */
+  reason?: string;
+  validation_codes?: string[] | null;
+  query?: Record<string, unknown>;
+  /** Whether the query still passes its checks for you now. */
+  still_valid?: boolean;
+  validation?: IrisValidation;
+}
+export interface IrisQueryList {
+  queries: IrisQueryRecord[] | null;
+  scope: "mine" | "tenant";
+  retention_days: number;
+  kinds: IrisCorrectionKind[];
+}
+// Decision ledger (tracker 337 N-A6): one step of one Iris decision. Hashes
+// only — the ledger never holds the question, the data or the answer text.
+export type AiDecisionEventType =
+  | "QUESTION_RECEIVED" | "INVESTIGATION_STARTED" | "PLAN_CREATED" | "TOOL_SELECTED" | "TOOL_EXECUTED"
+  | "EVIDENCE_ADDED" | "HYPOTHESIS_CREATED" | "HYPOTHESIS_REJECTED" | "ROOT_CAUSE_SELECTED"
+  | "RECOMMENDATION_CREATED" | "ACTION_REQUESTED" | "POLICY_EVALUATED" | "APPROVAL_RECEIVED"
+  | "EXECUTION_STARTED" | "VERIFICATION_COMPLETED" | "ROLLBACK_EXECUTED" | "ANSWER_RETURNED";
+export interface AiDecisionEntry {
+  tenant?: string; // only on the platform owner's all-tenants view
+  id: string;
+  decision_id: string;
+  seq: number;
+  event_type: AiDecisionEventType;
+  principal: string;
+  surface: string;
+  at: string;
+  incident_ref?: string;
+  intent?: string;
+  mode?: string;
+  skill?: string;
+  tool?: string;
+  tool_version?: string;
+  model_provider?: string;
+  model_name?: string;
+  model_tier?: string;
+  args_sha256?: string;
+  result_sha256?: string;
+  item_count?: number;
+  outcome?: string;
+  answer_id?: string;
+  query_log_id?: string;
+}
+export interface AiDecisionList {
+  decisions: AiDecisionEntry[] | null;
+  scope: "tenant" | "platform";
+  event_types: AiDecisionEventType[];
+}
+export interface IrisTurn {
+  at: string;
+  question: string;
+  intent?: string;
+  outcome: "answered" | "clarify" | "declined" | "unparsed" | "invalid" | "error";
+  rows: number;
+}
+export interface IrisConversation {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  turns: IrisTurn[];
+}
+export interface IrisConversationAnswer extends IrisCompiled {
+  conversation_id: string;
+  turn: IrisTurn;
+  result?: IrisResultSet;
+  error?: string;
+}
+export interface IrisResultSet {
+  query_id: string;
+  query_type: string;
+  metric?: string;
+  unit?: string;
+  window: { from: string; to: string };
+  series?: { entity: Record<string, string>; points: { t: number; v: number }[] }[] | null;
+  rows?: Record<string, unknown>[] | null;
+  truncated: boolean;
+  notes?: string[] | null;
+  provenance: { source: string; executed_at: string; duration_ms: number };
+}
+
 export type AITenantConfig = {
   provider: string;
   model: string;
+  // Optional model-router overrides (blank = use `model` for every answer).
+  model_fast?: string;
+  model_strong?: string;
   key_present: boolean;
   no_platform_key: boolean;
   assistant_enabled: boolean;
@@ -4928,6 +5140,17 @@ export type VerificationSettingsPatch = {
 };
 
 
+/** GET /api/features — optional UI surfaces, plus the CALLER's atomic AI
+ *  entitlements (tracker 337 N-A7; see lib/aiEntitlements). Absent on a
+ *  server that predates N-A7. */
+export interface FeatureFlags {
+  copilot?: boolean;
+  device_ssh?: boolean;
+  active_verification?: boolean;
+  processors?: boolean;
+  ai_entitlements?: string[];
+}
+
 export const api = {
   // ---- BGP Operations (item 10) ----
   bgpWatchlist: () => request<BgpWatchlistResp>("/api/bgp/watchlist"),
@@ -5385,7 +5608,7 @@ export const api = {
   // (platform-owner only): a non-admin asking "should I render the SSH button?"
   // must not depend on an endpoint they are not allowed to read, or a 403 shows
   // up as "the feature does not exist".
-  features: () => request<Record<string, boolean>>("/api/features"),
+  features: () => request<FeatureFlags>("/api/features"),
   // Topology Operating Canvas: resolved, renderer-agnostic TopologyView for a
   // workflow mode. Typed `unknown` to keep services/api.ts decoupled from the
   // feature's contract types; the topology API client casts + normalizes it.
@@ -5968,10 +6191,10 @@ export const api = {
   // Iris AI — application-aware assistant. Ask a question (optionally with a
   // context id like the open RCA's correlation_id); returns a grounded, cited
   // answer in a typed answer-mode schema. Read-only (FEATURE_AI gated server-side).
-  aiAsk: (question: string, context?: Record<string, string>) =>
+  aiAsk: (question: string, context?: Record<string, string>, conversationId?: string) =>
     request<AiAnswer>("/api/ai/ask", {
       method: "POST",
-      body: JSON.stringify({ question, context }),
+      body: JSON.stringify(conversationId ? { question, context, conversation_id: conversationId } : { question, context }),
     }),
   // Slash-command registry (the "/" menu) — single source of truth on the server.
   aiCommands: () => request<{ commands: AiCommand[] }>("/api/ai/commands"),
@@ -5996,7 +6219,7 @@ export const api = {
 
   // Runtime assistant config (admin): provider/model picker. Key never returned.
   copilotConfig: () => request<CopilotConfig>("/api/copilot/config"),
-  setCopilotConfig: (cfg: { provider: string; model: string; system?: string; key?: string }) =>
+  setCopilotConfig: (cfg: { provider: string; model: string; model_fast?: string; model_strong?: string; system?: string; key?: string }) =>
     request<CopilotConfig>("/api/copilot/config", {
       method: "PUT",
       body: JSON.stringify(cfg),
@@ -6004,12 +6227,54 @@ export const api = {
   // Per-workspace AI settings (tenant admin): own provider key + platform-service
   // opt-out. 403 for non-admins, 400 for the platform owner (who uses the above).
   aiTenantConfig: () => request<AITenantConfig>("/api/ai/tenant-config"),
-  setAITenantConfig: (cfg: { provider: string; model: string; key?: string; no_platform_key: boolean; clear_key?: boolean }) =>
+  setAITenantConfig: (cfg: { provider: string; model: string; model_fast?: string; model_strong?: string; key?: string; no_platform_key: boolean; clear_key?: boolean }) =>
     request<AITenantConfig>("/api/ai/tenant-config", { method: "PUT", body: JSON.stringify(cfg) }),
   // Per-tenant AI access (platform owner): who gets the assistant/investigations.
   aiTenants: () => request<{ tenants: AITenantRow[] | null; tools_feature: boolean; defaults?: { max_calls: number; daily_tokens: number } }>("/api/ai/tenants"),
   setAITenantAccess: (id: string, body: { assistant_enabled: boolean; investigations_enabled: boolean; max_calls?: number; daily_tokens?: number }) =>
     request<AITenantRow>(`/api/ai/tenants/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
+  // Iris vocabulary (tracker 337 N-C2/N-C5): the workspace's own names for its
+  // entities, how a name resolves, and how a question compiles. All four are
+  // scoped server-side to the caller's workspace — the tenant is never sent.
+  irisAliases: () => request<{ aliases: IrisAlias[] | null; max: number }>("/api/ai/aliases"),
+  putIrisAlias: (a: { entity_type: string; entity_id: string; alias: string }) =>
+    request<IrisAlias>("/api/ai/aliases", { method: "PUT", body: JSON.stringify(a) }),
+  deleteIrisAlias: (entityType: string, alias: string) =>
+    request<void>(`/api/ai/aliases?entity_type=${encodeURIComponent(entityType)}&alias=${encodeURIComponent(alias)}`, { method: "DELETE" }),
+  resolveIrisEntity: (text: string, types: string[] = []) =>
+    request<IrisResolution>("/api/ai/entities/resolve", { method: "POST", body: JSON.stringify({ text, types }) }),
+  compileIrisQuery: (question: string, tz?: string) =>
+    request<IrisCompiled>("/api/ai/query/compile", { method: "POST", body: JSON.stringify(tz ? { question, tz } : { question }) }),
+  executeIrisQuery: (ast: unknown) =>
+    request<{ result: IrisResultSet }>("/api/ai/query/execute", { method: "POST", body: JSON.stringify({ ast }) }),
+  // Conversations (N-C7): follow-ups ("that device", "what else did they
+  // change") resolve against state the server holds — the client sends only
+  // the question.
+  startIrisConversation: () => request<IrisConversation>("/api/ai/conversations", { method: "POST" }),
+  askIrisConversation: (id: string, question: string, tz?: string) =>
+    request<IrisConversationAnswer>(`/api/ai/conversations/${encodeURIComponent(id)}/messages`,
+      { method: "POST", body: JSON.stringify(tz ? { question, tz } : { question }) }),
+  // Query capture (N-C8): the caller's own recent questions (a workspace admin
+  // may ask for the workspace's), and "that's not what I meant" on one of
+  // them. A corrected query is re-validated by the server; corrections are
+  // kept for offline evaluation only.
+  irisQueries: (scope: "mine" | "tenant" = "mine", limit = 10) =>
+    request<IrisQueryList>(`/api/ai/queries?scope=${scope}&limit=${limit}`),
+  correctIrisQuery: (id: string, body: { kind: IrisCorrectionKind; note?: string; ast?: Record<string, unknown> }) =>
+    request<IrisQueryRecord>(`/api/ai/queries/${encodeURIComponent(id)}/corrections`, { method: "POST", body: JSON.stringify(body) }),
+  // One recorded question's query in plain language (N-C5) — re-checked by
+  // the server against what the caller can see now.
+  explainIrisQuery: (id: string) => request<IrisQueryExplanation>(`/api/ai/query/${encodeURIComponent(id)}/explain`),
+  // Decision ledger (N-A6): how each Iris answer was reached — workspace
+  // admins see their workspace's, the platform owner every workspace's. One
+  // decision's steps in order when `decisionId` is given, else newest first.
+  aiDecisions: (opts: { decisionId?: string; limit?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.decisionId) p.set("decision_id", opts.decisionId);
+    if (opts.limit) p.set("limit", String(opts.limit));
+    const q = p.toString();
+    return request<AiDecisionList>(`/api/ai/decisions${q ? `?${q}` : ""}`);
+  },
 
   // Native metrics (Prometheus-compatible API via the Go proxy).
   metricNames: () => request<PromNamesResponse>("/api/metrics/names"),
@@ -7185,6 +7450,10 @@ export const api = {
   demSyntheticCoverage: (window?: DemWindow) =>
     request<DemCoverageResponse>(`/api/dem/synthetics/coverage${demWindowQS(window)}`),
   /** The normalized change feed over the window. */
+  // The change ledger's own API (tracker 337 N-D3): one change's diff —
+  // a configuration change as the redacted unified diff of its two captured
+  // versions, any other change as its redacted before/after.
+  changeDiff: (id: string) => request<ChangeDiffResponse>(`/api/changes/${encodeURIComponent(id)}/diff`),
   demChanges: (opts: DemChangeQuery = {}) =>
     request<DemChangesResponse>(`/api/dem/changes${demChangeParams(opts)}`),
   /** Record a change event. The owning tenant is stamped from the token. */
@@ -9739,6 +10008,13 @@ export type AiCommand = {
   requires_context?: boolean;
 };
 export type AiAnswer = {
+  // The question router's DATA arm (tracker 337 N-G4, mode "data_query"): the
+  // compile answer + the result set, rendered as data. Untrusted — the
+  // presentation renderer validates and bounds it.
+  data?: { result?: unknown; [k: string]: unknown };
+  // Set when the server recorded this answer in the caller's conversation;
+  // absent = the next question starts a new one.
+  conversation_id?: string;
   mode: string;
   intent: string;
   modules: string[];
@@ -9754,6 +10030,9 @@ export type AiAnswer = {
   // backend that does not stamp one leaves the server to fall back to the
   // principal's most recent conclusion.
   answer_id?: string;
+  // Decision ledger (N-A6): the ledger record of how this answer was reached.
+  // Absent when the ledger is off or its write failed — never a dangling id.
+  decision_id?: string;
   // IRIS Phase A — the answering skill's identity. Optional: a backend that
   // does not send it renders no skill chip (never an invented one).
   skill?: AiSkill;

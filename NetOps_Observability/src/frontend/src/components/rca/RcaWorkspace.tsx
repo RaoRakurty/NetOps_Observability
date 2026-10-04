@@ -3,13 +3,14 @@
 
 import { useState, ReactNode } from "react";
 import "./RcaWorkspace.css";
-import { api } from "../../services/api";
+import { api, type AiAnswer } from "../../services/api";
 import type { RcaCase, KV, CaseEvent } from "./rcaCase";
 import { bandLabel, bandTone, appIdSourceLabel } from "./labels";
 import FidelityBadge from "../FidelityBadge";
 import RcaCaseHeader, { Pill } from "./RcaCaseHeader";
 import AskIris from "../AskIris";
 import { fmtTime, fmtDateTime, fmtDate, parseTs } from "../../lib/time";
+import { useAIEntitlements } from "../../lib/aiEntitlements";
 
 // RcaWorkspace — the production RCA detail view, organized after the reference
 // template (light, single-column report). PURE PRESENTATION: it renders an
@@ -26,48 +27,44 @@ import { fmtTime, fmtDateTime, fmtDate, parseTs } from "../../lib/time";
 //    view, and epistemic state is never a grey chip (owner 2026-07-19).
 
 
-// Operator-safe grounding for the assistant — RCA facts only (already shown on
-// the page). No secrets/credentials/IDs are added (LLM06): the model sees exactly
-// what the operator sees, nothing more.
-function groundingText(d: RcaCase): string {
-  return [
-    `RCA: ${d.title}`,
-    `Status: ${d.pills.map((p) => p.text).join(" · ")}`,
-    `Summary: ${d.summary}`,
-    ...d.why.map((w) => `${w.label}: ${w.text}`),
-    `Impact: ${d.impact.map((i) => `${i.k}=${i.v}`).join("; ")}`,
-    `Evidence: ${d.evidence.map((e) => `${e.title} [${e.pill.text}] ${e.finding}`).join(" | ")}`,
-    `Hypotheses: ${d.hypotheses.map((h) => `${h.rank} ${h.hypo} (${h.conf.text})`).join("; ")}`,
-    `Decision: ${d.decision.text}`,
-  ].join("\n");
+// AskRcaPanel — the RCA assistant box, wired to the GROUNDED engine.
+//
+// It sends the operator's question VERBATIM to POST /api/ai/ask with the
+// correlation id as context, exactly as RcaAskAi does. The server retrieves the
+// tenant-scoped evidence for that case, redacts it, grounds the model on it and
+// verifies the citations before answering.
+//
+// It used to assemble the prompt HERE (tracker 330): an instruction preamble,
+// then a flattened "RCA context:" block, then the operator's text concatenated
+// AFTER it — so a question containing "\n\nRCA context:" rewrote its own
+// grounding, the server-originated case text never passed Redact, and the reply
+// was rendered with no citation verification at all. None of that is recoverable
+// in the browser, and none of it needs to be: the id is all the server needs.
+//
+// N-A7: the box exists only for a caller holding ai.chat. That is cosmetic —
+// /api/ai/ask refuses without it — so a caller without it is not shown a box
+// that can only answer "not available".
+function AskRcaPanel({ data, correlationId }: { data: RcaCase; correlationId?: string }) {
+  const ent = useAIEntitlements();
+  if (!ent.has("ai.chat")) return null;
+  return <AskRcaBox data={data} correlationId={correlationId} />;
 }
 
-// AskRcaPanel — wires the assistant box to Iris AI (the copilot proxy).
-// The server owns the system prompt (LLM01); we ground the question with the
-// operator-facing RCA context as a normal user turn and never inject a system
-// role. Degrades honestly when the assistant isn't enabled (no key / feature off).
-function AskRcaPanel({ data }: { data: RcaCase }) {
+function AskRcaBox({ data, correlationId }: { data: RcaCase; correlationId?: string }) {
   const [q, setQ] = useState(data.assistant.questions[0] ?? "");
   const [busy, setBusy] = useState(false);
-  const [answer, setAnswer] = useState("");
+  const [answer, setAnswer] = useState<AiAnswer | null>(null);
   const [offline, setOffline] = useState(false);
 
   const ask = async (question: string) => {
     const text = question.trim();
     if (!text || busy) return;
-    setBusy(true); setAnswer(""); setOffline(false);
+    setBusy(true); setAnswer(null); setOffline(false);
     try {
-      const res = await api.copilotChat([{
-        role: "user",
-        content:
-          "You are an RCA assistant for a network operations center. Answer the operator's question using ONLY the RCA context below. Be concise and factual. Do not claim customer impact is confirmed unless the status says CONFIRMED; if the context lacks the answer, say which evidence is missing.\n\n" +
-          `RCA context:\n${groundingText(data)}\n\nQuestion: ${text}`,
-      }]);
-      const out = (res as { text?: string }).text
-        ?? (res as { content?: { text?: string }[] }).content?.[0]?.text
-        ?? (res as { choices?: { message?: { content?: string } }[] }).choices?.[0]?.message?.content
-        ?? "";
-      if (out) setAnswer(out); else setOffline(true);
+      // No context id (a synthetic/example case) → still grounded, just without
+      // the case key. Never a browser-assembled substitute for it.
+      const ans = await api.aiAsk(text, correlationId ? { correlation_id: correlationId } : undefined);
+      if (ans?.text) setAnswer(ans); else setOffline(true);
     } catch {
       setOffline(true);
     } finally {
@@ -97,7 +94,21 @@ function AskRcaPanel({ data }: { data: RcaCase }) {
       {/* Live region (4.1.3): the async answer is announced when it arrives. */}
       <div className="rw-tdetail" style={{ marginTop: 10 }} role="status" aria-live="polite" aria-busy={busy}>
         {answer ? (
-          <><b>Iris AI:</b> {answer}</>
+          <>
+            <div><b>Iris AI:</b> {answer.text}</div>
+            {/* The evidence the server actually read — clickable back into the
+                source view, so the answer is never a black box. */}
+            {answer.citations && answer.citations.length > 0 && (
+              <div className="rw-small" style={{ marginTop: 8 }}>
+                {answer.citations.slice(0, 8).map((c) => (
+                  <a key={c.id} className="rw-ask-suggest" href={c.href} title={c.label}>{c.label || c.id}</a>
+                ))}
+              </div>
+            )}
+            {answer.disclaimers && answer.disclaimers.length > 0 && (
+              <div className="rw-small" style={{ marginTop: 6 }}>{answer.disclaimers.join(" ")}</div>
+            )}
+          </>
         ) : offline ? (
           <><b>Assistant not connected.</b> Iris AI isn&apos;t enabled yet — an administrator can connect a provider and key under Assistant settings. Until then, use the suggested reasoning: {data.assistant.sampleAnswer}</>
         ) : (
@@ -158,9 +169,13 @@ function EventTimeline({ events }: { events: CaseEvent[] }) {
 
 export default function RcaWorkspace({
   data, view, onView, onExportPdf, exportDisabled, debugExtra, pathSlot, timeImpactSlot, ticketSlot, aiSlot, verifySlot,
-  feedbackSlot,
+  feedbackSlot, correlationId,
 }: {
   data: RcaCase;
+  /** The case's correlation id — the grounding KEY handed to /api/ai/ask by the
+   *  assistant box. Absent for a synthetic/example case: the ask still goes to
+   *  the grounded engine, just without the case context. */
+  correlationId?: string;
   view: "operator" | "debug";
   onView: (v: "operator" | "debug") => void;
   onExportPdf: () => void;
@@ -528,7 +543,7 @@ export default function RcaWorkspace({
                 ))}
               </ol>
             </div>
-            <AskRcaPanel data={data} />
+            <AskRcaPanel data={data} correlationId={correlationId} />
           </section>
         </>
       ) : (

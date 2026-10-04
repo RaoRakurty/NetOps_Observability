@@ -1,0 +1,372 @@
+[
+  {
+    "id": "xt-explain-other-tenants-id-is-not-found",
+    "category": "cross_tenant_alias",
+    "description": "Tenants t-a and t-b both name a device edge-1. A t-a principal asks to explain t-b's incident by id. The answer must read exactly as an unknown id (no problem object), and none of t-b's incident text may reach the answer or the model.",
+    "path": "ask",
+    "principal": {
+      "tenant": "t-a",
+      "perms": [
+        "correlations:read"
+      ]
+    },
+    "question": "explain this incident",
+    "ui": {
+      "correlation_id": "b0b00000-0000-4000-8000-000000000051"
+    },
+    "tenants": {
+      "t-a": {
+        "problems": [
+          {
+            "id": "a0a00000-0000-4000-8000-000000000051",
+            "title": "Link down on edge-1 Ethernet1/1",
+            "verdict": "suspected",
+            "confidence": 0.5,
+            "devices": [
+              "edge-1"
+            ],
+            "signal_count": 2,
+            "node_count": 1
+          }
+        ]
+      },
+      "t-b": {
+        "problems": [
+          {
+            "id": "b0b00000-0000-4000-8000-000000000051",
+            "title": "TENANT-B-SECRET core breach at Dallas-B",
+            "verdict": "confirmed",
+            "confidence": 0.9,
+            "devices": [
+              "edge-1",
+              "dallas-b-core"
+            ],
+            "owner": "tenant-b-soc",
+            "signal_count": 7,
+            "node_count": 3,
+            "evidence": [
+              {
+                "citation_id": "log:os:0",
+                "kind": "log",
+                "text": "dallas-b-core TENANT-B-SECRET login from 203.0.113.9",
+                "href": "#/explore/logs"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "model_reply": "Problem not available.",
+    "expect": {
+      "not_found": true,
+      "forbidden_citations": [
+        "problem:b0b00000-0000-4000-8000-000000000051",
+        "log:os:0"
+      ],
+      "forbidden_anywhere": [
+        "TENANT-B-SECRET",
+        "Dallas-B",
+        "dallas-b-core",
+        "tenant-b-soc",
+        "203.0.113.9"
+      ]
+    }
+  },
+  {
+    "id": "xt-explain-own-incident-same-alias",
+    "category": "cross_tenant_alias",
+    "description": "The t-a principal explains its OWN incident on edge-1 while t-b has a confirmed incident on its own edge-1. Only t-a's facts may reach the prompt and the answer; the shared alias must not pull t-b's incident in.",
+    "path": "ask",
+    "principal": {
+      "tenant": "t-a",
+      "perms": [
+        "correlations:read"
+      ]
+    },
+    "question": "explain this incident",
+    "ui": {
+      "correlation_id": "a0a10000-0000-4000-8000-000000000052"
+    },
+    "tenants": {
+      "t-a": {
+        "problems": [
+          {
+            "id": "a0a10000-0000-4000-8000-000000000052",
+            "title": "Link down on edge-1 Ethernet1/1",
+            "verdict": "suspected",
+            "confidence": 0.5,
+            "devices": [
+              "edge-1"
+            ],
+            "signal_count": 2,
+            "node_count": 1,
+            "hypotheses": {
+              "ranking": {
+                "hypotheses": [
+                  {
+                    "id": "if-down",
+                    "title": "Interface down on edge-1 Ethernet1/1",
+                    "confidence": 0.5,
+                    "confidence_label": "suspected"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "t-b": {
+        "problems": [
+          {
+            "id": "b0b10000-0000-4000-8000-000000000052",
+            "title": "TENANT-B-SECRET core breach at Dallas-B",
+            "verdict": "confirmed",
+            "confidence": 0.9,
+            "devices": [
+              "edge-1",
+              "dallas-b-core"
+            ],
+            "owner": "tenant-b-soc",
+            "signal_count": 7,
+            "node_count": 3,
+            "hypotheses": {
+              "ranking": {
+                "hypotheses": [
+                  {
+                    "id": "breach",
+                    "title": "TENANT-B-SECRET credential compromise",
+                    "confidence": 0.9,
+                    "confidence_label": "confirmed"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    "model_reply": "edge-1 reported Ethernet1/1 down [hypothesis:a0a10000:0]; the cause is not established yet. Next: check the optic and the far end.",
+    "expect": {
+      "verdict": "suspected",
+      "required_citations": [
+        "problem:a0a10000-0000-4000-8000-000000000052",
+        "hypothesis:a0a10000:0"
+      ],
+      "forbidden_citations": [
+        "problem:b0b10000-0000-4000-8000-000000000052",
+        "hypothesis:b0b10000:0"
+      ],
+      "forbidden_anywhere": [
+        "TENANT-B-SECRET",
+        "Dallas-B",
+        "dallas-b-core",
+        "tenant-b-soc",
+        "b0b10000"
+      ],
+      "required_prompt": [
+        "Interface down on edge-1 Ethernet1/1"
+      ]
+    }
+  },
+  {
+    "id": "xt-skill-alias-resolves-within-callers-inventory",
+    "category": "cross_tenant_alias",
+    "description": "A t-b principal asks for the logs of 'edge-1'. Both tenants own a device named edge-1 (dev-a in t-a, dev-b in t-b). Entity resolution must bind t-b's dev-b, so the gather reads t-b's rows; t-a's rows for its own edge-1 must reach neither the model nor the answer.",
+    "path": "skill",
+    "skill": "log-confirmation",
+    "principal": {
+      "tenant": "t-b",
+      "perms": [
+        "correlations:read",
+        "infrastructure:read",
+        "logs:read"
+      ]
+    },
+    "question": "show me the logs for edge-1",
+    "ui": {
+      "device": "edge-1"
+    },
+    "tenants": {
+      "t-a": {
+        "devices": [
+          {
+            "id": "dev-a",
+            "name": "edge-1"
+          }
+        ]
+      },
+      "t-b": {
+        "devices": [
+          {
+            "id": "dev-b",
+            "name": "edge-1"
+          }
+        ]
+      }
+    },
+    "tools": {
+      "search_logs": {
+        "by_device": {
+          "dev-a": {
+            "items": [
+              {
+                "citation_id": "log:os:7",
+                "kind": "log",
+                "text": "2026-10-01T09:00:00Z edge-1 TENANT-A-SECRET %AUTH-4-FAIL login from 198.51.100.7",
+                "href": "#/explore/logs"
+              }
+            ]
+          },
+          "dev-b": {
+            "items": [
+              {
+                "citation_id": "log:os:0",
+                "kind": "log",
+                "text": "2026-10-01T10:06:40Z edge-1 %LINK-3-UPDOWN: Interface Ethernet2/4, changed state to down",
+                "href": "#/explore/logs"
+              }
+            ]
+          }
+        }
+      },
+      "get_recent_changes": {
+        "by_device": {
+          "dev-a": {
+            "items": [
+              {
+                "citation_id": "config:dev-a:aaaa11112222",
+                "kind": "config",
+                "text": "edge-1 TENANT-A-SECRET — changed on 2026-10-01T08:00:00Z (+40/-2 lines)",
+                "href": "#/config/changes"
+              }
+            ]
+          },
+          "dev-b": {
+            "notes": [
+              "no configuration change was recorded for edge-1 in the last 24h — say that no change was RECORDED, not that nothing changed (a device whose configuration is not backed up records nothing)"
+            ]
+          }
+        }
+      }
+    },
+    "model_reply": "edge-1 logged Ethernet2/4 going down at 10:06:40 [log:os:0]; no configuration change was recorded for it in the last 24 hours. Next: check the optic on Ethernet2/4.",
+    "expect": {
+      "required_citations": [
+        "log:os:0"
+      ],
+      "forbidden_citations": [
+        "log:os:7",
+        "config:dev-a:aaaa11112222"
+      ],
+      "forbidden_anywhere": [
+        "TENANT-A-SECRET",
+        "198.51.100.7",
+        "dev-a"
+      ],
+      "required_prompt": [
+        "[log:os:0] 2026-10-01T10:06:40Z edge-1 %LINK-3-UPDOWN: Interface Ethernet2/4"
+      ]
+    }
+  },
+  {
+    "id": "xt-rca-owner-other-tenants-incident-is-not-found",
+    "category": "cross_tenant_alias",
+    "description": "The N-B2 get_owner tool asked by t-a for an incident id that exists only in t-b: it must read as not found, returning nothing of t-b's ownership decision.",
+    "path": "rca_tool",
+    "rca_tool": "get_owner",
+    "principal": {
+      "tenant": "t-a",
+      "perms": [
+        "correlations:read"
+      ]
+    },
+    "ui": {
+      "correlation_id": "inc-xt04"
+    },
+    "tenants": {
+      "t-a": {
+        "rca": {}
+      },
+      "t-b": {
+        "rca": {
+          "inc-xt04": {
+            "incident_id": "inc-xt04",
+            "title": "TENANT-B-SECRET breach",
+            "owner": {
+              "triage": "tenant-b-soc",
+              "triage_reason": "TENANT-B-SECRET escalation"
+            }
+          }
+        }
+      }
+    },
+    "expect": {
+      "not_found": true,
+      "forbidden_anywhere": [
+        "TENANT-B-SECRET",
+        "tenant-b-soc"
+      ]
+    }
+  },
+  {
+    "id": "xt-current-state-shows-only-own-incidents",
+    "category": "cross_tenant_alias",
+    "description": "The current-state briefing for t-a while t-b has active incidents on its own same-named devices: only t-a's incidents may be listed, cited or sent to the model.",
+    "path": "ask",
+    "principal": {
+      "tenant": "t-a",
+      "perms": [
+        "correlations:read"
+      ]
+    },
+    "question": "what is going on right now",
+    "tenants": {
+      "t-a": {
+        "problems": [
+          {
+            "id": "a0a20000-0000-4000-8000-000000000055",
+            "title": "Link down on edge-1 Ethernet1/1",
+            "verdict": "suspected",
+            "confidence": 0.5,
+            "devices": [
+              "edge-1"
+            ],
+            "signal_count": 2,
+            "node_count": 1
+          }
+        ]
+      },
+      "t-b": {
+        "problems": [
+          {
+            "id": "b0b20000-0000-4000-8000-000000000055",
+            "title": "TENANT-B-SECRET core breach at Dallas-B",
+            "verdict": "confirmed",
+            "confidence": 0.9,
+            "devices": [
+              "edge-1",
+              "dallas-b-core"
+            ],
+            "signal_count": 7,
+            "node_count": 3
+          }
+        ]
+      }
+    },
+    "model_reply": "One suspected incident is active: Ethernet1/1 down on edge-1 [problem:a0a20000-0000-4000-8000-000000000055].",
+    "expect": {
+      "required_citations": [
+        "problem:a0a20000-0000-4000-8000-000000000055"
+      ],
+      "forbidden_citations": [
+        "problem:b0b20000-0000-4000-8000-000000000055"
+      ],
+      "forbidden_anywhere": [
+        "TENANT-B-SECRET",
+        "Dallas-B",
+        "dallas-b-core",
+        "b0b20000"
+      ]
+    }
+  }
+]

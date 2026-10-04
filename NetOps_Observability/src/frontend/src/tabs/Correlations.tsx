@@ -832,6 +832,7 @@ export function CorrelationDetail({ id }: { id: string }) {
   return (
     <RcaWorkspace
       data={rcaCase}
+      correlationId={obj.correlation_id || undefined}
       view={view}
       onView={setView}
       onExportPdf={exportPdf}

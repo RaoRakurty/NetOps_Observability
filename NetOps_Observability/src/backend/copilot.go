@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"netops/backend/ai"
+	"netops/backend/internal/aientitlement"
 )
 
 // appKnowledge is the authoritative, version-controlled brief about THIS product,
@@ -41,6 +42,17 @@ var appKnowledge string
 //     context to the message list, so a misbehaving model can't reach into
 //     arbitrary indices on its own.
 //   - Responses are rendered as escaped text by the SPA (LLM02: no output-as-HTML).
+//
+// GROUNDING HONESTY (tracker 330). This endpoint is NOT the grounded engine.
+// What comes back from here is, in descending order of grounding:
+//   - an agent-loop answer that actually executed governed read-only lookups,
+//   - the grounded orchestrator answering because no provider could be reached,
+//   - a PLAIN provider completion with no tenant evidence behind it at all.
+//
+// Every response therefore carries `is_grounded`, and the UI labels anything
+// that is false rather than rendering it beside a "grounded, tenant-scoped and
+// cited" claim. The SERVER states it; the client never infers it from the
+// endpoint it happened to call.
 
 // copilotBodyCap caps the request body (LLM04: bound the request).
 const copilotBodyCap = 256 << 10
@@ -72,6 +84,13 @@ func (s *server) copilotSystemPrompt() string {
 	// live in a console, and style instructions ("too verbose", "briefly") are
 	// commands, not commentary — live incident 2026-07-02.
 	persona += "\n\nBREVITY: be concise by default — at most ~6 short sentences unless the operator asks for detail. ALWAYS obey style instructions immediately: \"too verbose\"/\"briefly\"/\"shorter\" means compress your PREVIOUS answer to 2-3 sentences keeping the counts, the top item and the next action. Never respond to a style instruction with a menu of capabilities."
+	// The data-vs-instruction fence rides EVERY persona the same way, and for
+	// the same structural reason: a platform admin replacing the persona above
+	// must not be able to delete the LLM01 stance on untrusted content
+	// (CLAUDE.md §15). Concatenated after, so an override cannot reach it. The
+	// agent loop gets it a second time inside ai.AgentDoctrine — that path is
+	// the one carrying live syslog, so belt and braces is correct there.
+	persona += "\n\n" + ai.DataNotInstructionsFence()
 	// Always ground the assistant in the embedded application knowledge, whether
 	// the persona is the default or an admin override.
 	if k := strings.TrimSpace(appKnowledge); k != "" {
@@ -100,10 +119,11 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, fmt.Errorf("copilot rate limit exceeded — slow down"))
 		return
 	}
-	// Per-tenant entitlement (§3a): the assistant is a per-tenant feature, not a
-	// platform-global one. Cross-tenant principals are never gated here.
-	if !s.aiAssistantAllowed(claims) {
-		writeError(w, http.StatusForbidden, errAITenantDisabled)
+	// N-A7: ai.chat — the tier mapping, the Iris switch and the caller's own
+	// tenant switch (the assistant is per-tenant, not platform-global; cross-
+	// tenant principals are not tenant-gated). FEATURE_COPILOT above stays the
+	// provider-proxy switch on top of it.
+	if !s.requireAIEntitlement(w, claims, aientitlement.Chat) {
 		return
 	}
 
@@ -167,7 +187,12 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 			// retrieved chunks) — same fake-authority guardrail as the grounded
 			// engine, scoped to doc: ids so ordinary bracketed prose survives.
 			text = ai.StripFabricatedDocRefs(text, docRefs)
-			writeJSON(w, http.StatusOK, map[string]any{"provider": name, "text": text, "doc_refs": docRefs})
+			// A plain completion: retrieved documentation may have been appended
+			// to the system prompt, but NO tenant evidence was read and nothing
+			// was verified against citations. Say so (tracker 330).
+			writeJSON(w, http.StatusOK, map[string]any{
+				"provider": name, "text": text, "doc_refs": docRefs, "is_grounded": false,
+			})
 			return
 		}
 		// SR-022: the provider's raw error body is logged server-side by
@@ -185,6 +210,8 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusOK, map[string]any{
 					"provider": "engine", "text": ans.Text, "grounded": ans, "doc_refs": docRefs,
 					"fallback": "provider_unavailable",
+					// The orchestrator answered: tenant-scoped, redacted, cited.
+					"is_grounded": true,
 				})
 				return
 			}
@@ -270,10 +297,14 @@ func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwt
 		}
 	}
 	text := ai.StripFabricatedDocRefs(res.Text, docRefs)
+	// Grounded only if the loop ACTUALLY investigated. A turn where the model
+	// declined every tool and simply talked is a plain completion wearing the
+	// agent loop's clothes; it must not claim to be anything else.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"provider": name, "text": text, "doc_refs": docRefs,
 		"lookups": res.Lookups, "investigated": len(res.Lookups),
 		"citations": evCites, "truncated": res.Truncated,
+		"is_grounded": len(res.Lookups) > 0,
 	})
 	return true
 }

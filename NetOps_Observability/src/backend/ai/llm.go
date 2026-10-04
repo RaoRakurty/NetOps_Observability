@@ -21,6 +21,24 @@ type LLMClient interface {
 	Complete(ctx context.Context, system string, msgs []LLMMessage) (text string, provider string, err error)
 }
 
+// TieredLLMClient is the OPTIONAL extension of LLMClient: a client that can send
+// a completion to the model tier the router chose (router.go — TierFast for a
+// grounded headline or a chain-routing classification, TierStrong for a
+// multi-fact narrative).
+//
+// It is a separate interface, and asked for with a type assertion, so that every
+// existing LLMClient — MockLLM, the test stubs, any future adapter — keeps
+// working untouched and simply resolves every tier through its single model.
+// That is the same back-compat contract TierModels states: a client that does
+// not implement this makes exactly the calls it made before.
+type TieredLLMClient interface {
+	LLMClient
+	// CompleteTier is Complete, told which model tier the answer needs. An
+	// implementation that cannot honour a tier must fall back to its default
+	// model rather than fail — a tier is a cost preference, never a gate.
+	CompleteTier(ctx context.Context, tier ModelTier, system string, msgs []LLMMessage) (text string, provider string, err error)
+}
+
 // MockLLM is a deterministic LLMClient for tests + offline/dev (HLD P0 mock
 // provider). It returns a fixed reply (or echoes the last user message) so the
 // orchestrator and tools can be tested without a real provider.

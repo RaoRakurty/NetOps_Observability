@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/changeledger"
 	"netops/backend/internal/discovery"
 	"strings"
 	"time"
@@ -171,6 +172,7 @@ func (s *server) handleDeviceSite(w http.ResponseWriter, r *http.Request) {
 		if slug == "" {
 			// Empty site clears the binding (idempotent — DELETE-equivalent).
 			s.deviceSites.Delete(tenant, cross, d.ID)
+			changeledger.SetTarget(r.Context(), "device", d.ID) // the change ledger's target (N-D2)
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "site": ""})
 			return
 		}
@@ -197,12 +199,14 @@ func (s *server) handleDeviceSite(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		changeledger.SetTarget(r.Context(), "device", d.ID) // the change ledger's target (N-D2)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "site": slug})
 	case http.MethodDelete:
 		if !s.deviceSites.Delete(tenant, cross, d.ID) {
 			http.NotFound(w, r)
 			return
 		}
+		changeledger.SetTarget(r.Context(), "device", d.ID) // the change ledger's target (N-D2)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	default:
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET, PUT or DELETE"))

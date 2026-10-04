@@ -295,6 +295,17 @@ type chainState struct {
 	toolCalls int // tool executions attempted, across every round
 	chars     int // characters of accumulated evidence (the prompt budget)
 	capped    bool
+	// toolOutcomes is one entry per ATTEMPTED gather step, in order, carrying
+	// the same closed vocabulary chainFacts.recordTool uses. facts.tools is
+	// keyed by tool and keeps only the last outcome per tool, which is right for
+	// routing and wrong for counting; this is the counting copy.
+	toolOutcomes []string
+	// hopsRejected counts model-proposed next skills refused as out-of-set.
+	hopsRejected int
+	// cutoffs are the bounded budgets that ended the chain early, in the order
+	// they bound. The prose disclosures the operator sees are built from the
+	// same events; this is their countable form.
+	cutoffs []string
 }
 
 func newChainState() *chainState {
@@ -347,6 +358,23 @@ func (st *chainState) addNote(n string) {
 		st.notes = append(st.notes, n)
 	}
 }
+
+// recordTool folds one gather step's outcome into BOTH the routing facts and
+// the turn's ordered outcome list.
+//
+// Two lists, on purpose. chainFacts keeps the LAST outcome per tool, which is
+// the right thing for a routing condition ("did the bgp read fail?") and the
+// wrong thing for a metric: it deduplicates by tool and therefore undercounts
+// exactly the repeated failures a tool-error-recovery rate exists to measure.
+func (st *chainState) recordTool(tool, outcome string) {
+	st.facts.recordTool(tool, outcome)
+	st.toolOutcomes = append(st.toolOutcomes, outcome)
+}
+
+// cutoff records that a bounded budget ended the investigation early. It is
+// called beside — never instead of — the operator-facing disclosure, so the
+// number and the sentence can never disagree about what happened.
+func (st *chainState) cutoff(budget string) { st.cutoffs = append(st.cutoffs, budget) }
 
 // ---- candidate selection ---------------------------------------------------
 
@@ -446,7 +474,12 @@ func (o *Orchestrator) nextByModel(ctx context.Context, cur *Skill, st *chainSta
 	}
 	system := chainRouteSystemBlock(cur, cands)
 	prompt := chainRoutePrompt(question, cur, cands, roundItems)
-	text, _, err := o.LLM.Complete(ctx, system, []LLMMessage{{Role: "user", Content: o.redact(prompt)}})
+	// §10 model router. This is not an answer mode: it is CLASSIFICATION — pick
+	// one name out of a closed candidate list — which the strategy's Basic/
+	// Advanced split puts squarely on the cheap tier, so it is named directly
+	// rather than looked up by mode. Everything about the choice is still
+	// validated server-side below, so a weaker model cannot widen anything.
+	text, _, err := o.completeTier(ctx, TierFast, system, []LLMMessage{{Role: "user", Content: o.redact(prompt)}}, true)
 	if err != nil {
 		return nil, "", false // a routing failure ends the chain; it never guesses
 	}
@@ -466,7 +499,13 @@ func (o *Orchestrator) nextByModel(ctx context.Context, cur *Skill, st *chainSta
 		return nx, chainReasonFor(cur, c), true
 	}
 	// Out of the closed list (a real skill it may not reach from here, a tool
-	// name, or an invention). Refuse, audit, and end the chain.
+	// name, or an invention). Refuse, audit, count, and end the chain.
+	//
+	// The count is the scorecard's only HARD tool-selection-error signal: the
+	// model named something it was not offered, which is wrong by construction
+	// rather than by judgement. It is a COUNT and never the name — the refused
+	// string is untrusted model text and is not logged or labelled anywhere.
+	st.hopsRejected++
 	o.auditChainChoice(cur.Name, ChainSelectedModel, "model_selected_invalid", round, false)
 	return nil, "", false
 }

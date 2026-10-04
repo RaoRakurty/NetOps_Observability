@@ -1,0 +1,175 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for ospf-adjacency. Dialect + contract: skill_cases.go.
+
+case: a device with no OSPF adjacency at all points at the circuit beneath it
+question: ospf neighbor stuck in exstart on edge-1
+ui:
+  - correlation_id=case-ospf-none
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=ok
+signals:
+  - state:igp_nbr=none
+evidence:
+  - finding
+  - device
+expect_chain:
+  - ospf-adjacency entry
+  - interface-down rule
+expect_selected: rule
+expect_reason: no OSPF adjacency at all
+expect_verdict:
+  - interface
+  - transition
+expect_never:
+  - log-confirmation
+  - optics-degraded
+expect_select: ospf-adjacency
+
+---
+
+case: an unreadable adjacency table sends the transition times to the device's own words
+question: ospf down on edge-1
+ui:
+  - correlation_id=case-ospf-notwired
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=not_found
+signals:
+  - state:collect=not_wired
+notes:
+  - live device state could not be read on this deployment — no command was run
+evidence:
+  - finding
+expect_chain:
+  - ospf-adjacency entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: could not be read live
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - live device state could not be read on this deployment
+expect_never:
+  - interface-down
+
+---
+
+# The engine's own operator phrase, not the model's reading of it.
+case: the engine's verdict naming the link routes beneath the adjacency
+question: ospf not full on edge-1
+ui:
+  - correlation_id=case-ospf-phrase
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=not_found
+signals:
+  - verdict:phrase=link
+evidence:
+  - finding
+expect_chain:
+  - ospf-adjacency entry
+  - interface-down rule
+expect_selected: rule
+expect_reason: RCA verdict names the link
+expect_verdict:
+  - interface
+  - transition
+expect_never:
+  - log-confirmation
+
+---
+
+case: an OSPF capture that produced nothing is UNKNOWN, not clean
+question: ospf flapping on edge-1
+ui:
+  - correlation_id=case-ospf-uncollected
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=ok
+signals:
+  - signature=uncollected
+evidence:
+  - finding
+expect_chain:
+  - ospf-adjacency entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: rejected every read-only command
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - interface-down
+
+---
+
+case: a capture that matched no signature still pins the transition times from the logs
+question: ospf adjacency stuck on edge-1
+ui:
+  - correlation_id=case-ospf-nomatch
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=ok
+evidence:
+  - finding
+expect_chain:
+  - ospf-adjacency entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: no known signature matched
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - interface-down
+
+---
+
+case: no adjacency fact and no diagnostic outcome takes no hop
+question: igp adjacency question on edge-1
+ui:
+  - correlation_id=case-ospf-flat
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=not_found
+evidence:
+  - finding
+expect_chain:
+  - ospf-adjacency entry
+expect_selected: none
+expect_verdict:
+  - stuck state
+  - mismatch
+expect_notes:
+  - found nothing for the id in scope
+expect_never:
+  - interface-down
+  - log-confirmation
+  - optics-degraded
+
+---
+
+case: a clean link with errors big enough to drop database packets is the model's to propose
+question: ospf flapping on edge-1 while the link stays up
+ui:
+  - correlation_id=case-ospf-model
+  - device=edge-1
+tools:
+  - run_protocol_diagnostic=not_found
+model_next: optics-degraded
+evidence:
+  - finding
+expect_chain:
+  - ospf-adjacency entry
+  - optics-degraded model
+expect_selected: model
+expect_reason: dropping the larger database packets
+expect_verdict:
+  - error type
+  - direction
+expect_never:
+  - interface-down

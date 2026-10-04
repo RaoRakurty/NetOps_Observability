@@ -39,7 +39,7 @@ const mocks = vi.hoisted(() => ({
   correlationDetail: vi.fn(), correlationTimeline: vi.fn(),
   correlationTickets: vi.fn(), correlationTicketCreate: vi.fn(), downloadRcaReport: vi.fn(),
   pathsHealth: vi.fn(), eventsFeed: vi.fn(), metricNames: vi.fn(), metricsQuery: vi.fn(),
-  probePaths: vi.fn(), topTalkers: vi.fn(), aiAsk: vi.fn(),
+  probePaths: vi.fn(), topTalkers: vi.fn(), aiAsk: vi.fn(), features: vi.fn(),
 }));
 const errs = vi.hoisted(() => {
   class FakeNotPromoted extends Error {
@@ -95,6 +95,7 @@ beforeEach(() => {
   mocks.metricsQuery.mockResolvedValue({ status: "success", data: { resultType: "vector", result: [] } });
   mocks.probePaths.mockResolvedValue([]);
   mocks.topTalkers.mockResolvedValue({ data: [] });
+  mocks.features.mockResolvedValue({ ai_entitlements: ["ai.chat"] });
   mocks.aiAsk.mockResolvedValue({ mode: "grounded", intent: "x", modules: [], text: "", citations: [], disclaimers: [] });
   location.hash = "#/investigate/troubleshooting";
 });

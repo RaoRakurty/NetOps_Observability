@@ -1,0 +1,354 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "cloud",
+  "cases": [
+    {
+      "id": "cloud-001",
+      "category": "cloud",
+      "question": "Show cloud changes in the last 7 days.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "type",
+              "op": "eq",
+              "values": [
+                "CLOUD_CHANGE"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "7d"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1048"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "cloud changes past week",
+        "any cloud changes last 7 days",
+        "what changed in the cloud this past week"
+      ]
+    },
+    {
+      "id": "cloud-002",
+      "category": "cloud",
+      "question": "Show cloud incidents this week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "filters": [
+            {
+              "field": "seam_class",
+              "op": "eq",
+              "values": [
+                "cloud"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:c7e05b92-3d18-4a6f-9e27-b4f1a0c3d852",
+            "incident:4a0c8e5d-f913-4c72-8b4e-6d2f1a9c07b5"
+          ],
+          "min_rows": 2
+        }
+      },
+      "paraphrases": [
+        "cloud incidents this week",
+        "direct connect / cloud outages since monday",
+        "incidents on the cloud seam this week"
+      ]
+    },
+    {
+      "id": "cloud-003",
+      "category": "cloud",
+      "question": "Show latency on the AWS Direct Connect for the last 6 hours.",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "the AWS Direct Connect",
+            "type": "circuit",
+            "id": "circuit:nyc-aws-dx-1",
+            "method": "wan_projection"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "circuit",
+          "metric": "circuit_latency_ms",
+          "aggregation": "p95",
+          "entities": [
+            {
+              "type": "circuit",
+              "id": "circuit:nyc-aws-dx-1"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "6h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "circuit:nyc-aws-dx-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "aws dx latency last 6h",
+        "direct connect rtt past six hours",
+        "latency nyc-aws-dx-1 last 6 hrs"
+      ]
+    },
+    {
+      "id": "cloud-004",
+      "category": "cloud",
+      "question": "Show BGP state for the AWS DX peer today.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "the AWS DX peer",
+            "type": "bgp_peer",
+            "id": "bgp_peer:nyc-edge-1/169.254.10.1@aws-dx",
+            "method": "label_pair"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "bgp_peer",
+          "metric": "bgp_session_state",
+          "aggregation": "last",
+          "entities": [
+            {
+              "type": "bgp_peer",
+              "id": "bgp_peer:nyc-edge-1/169.254.10.1@aws-dx"
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "bgp_peer:nyc-edge-1/169.254.10.1@aws-dx"
+          ]
+        }
+      },
+      "paraphrases": [
+        "aws dx bgp state today",
+        "direct connect bgp session today",
+        "state of the aws neighbor today"
+      ]
+    },
+    {
+      "id": "cloud-005",
+      "category": "cloud",
+      "question": "What changed before the NYC Direct Connect incident?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [
+          {
+            "input": "the NYC Direct Connect incident",
+            "type": "incident",
+            "id": "incident:c7e05b92-3d18-4a6f-9e27-b4f1a0c3d852",
+            "method": "corr_current"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "time_range": {
+            "kind": "incident",
+            "anchor": {
+              "incident_id": "c7e05b92-3d18-4a6f-9e27-b4f1a0c3d852",
+              "before": "30m",
+              "after": "10m"
+            }
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1047",
+            "change:chg-1048"
+          ],
+          "min_rows": 2
+        }
+      },
+      "paraphrases": [
+        "changes before the nyc dx incident",
+        "what changed right before the direct connect outage in nyc",
+        "anything change before the NYC DX issue"
+      ]
+    },
+    {
+      "id": "cloud-006",
+      "category": "cloud",
+      "question": "Show changes on the DX seam this week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "seam",
+              "op": "eq",
+              "values": [
+                "DX"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1048"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "dx seam changes this week",
+        "direct connect changes since monday",
+        "changes touching the dx seam this week"
+      ]
+    },
+    {
+      "id": "cloud-007",
+      "category": "cloud",
+      "question": "Show prefixes received over Direct Connect for the last 24 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "Direct Connect",
+            "type": "bgp_peer",
+            "id": "bgp_peer:nyc-edge-1/169.254.10.1@aws-dx",
+            "method": "label_pair"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "bgp_peer",
+          "metric": "bgp_prefixes_received",
+          "aggregation": "last",
+          "entities": [
+            {
+              "type": "bgp_peer",
+              "id": "bgp_peer:nyc-edge-1/169.254.10.1@aws-dx"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "24h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "bgp_peer:nyc-edge-1/169.254.10.1@aws-dx"
+          ]
+        }
+      },
+      "paraphrases": [
+        "dx prefixes last 24h",
+        "routes received from aws direct connect past day",
+        "direct connect received prefixes last 24 hours"
+      ]
+    }
+  ]
+}

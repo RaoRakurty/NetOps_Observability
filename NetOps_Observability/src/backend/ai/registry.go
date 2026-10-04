@@ -99,7 +99,7 @@ var modules = []Module{
 		Description:        "Root-cause analysis: correlation groups (problems), their evidence ledger, timeline, candidate root domains, missing evidence, and recommended owner.",
 		Entities:           []string{"problem", "correlation_group", "evidence", "hypothesis", "owner"},
 		QuestionCategories: []string{"problem_explanation", "evidence", "missing_evidence", "recommended_owner", "root_domain"},
-		Tools:              []string{"get_problem", "get_problem_timeline", "get_problem_evidence", "get_candidate_root_domains", "get_missing_evidence", "get_recommended_owner", "get_rca_verdict", "get_case_timeline"},
+		Tools:              []string{"get_problem", "get_problem_timeline", "get_problem_evidence", "get_candidate_root_domains", "get_missing_evidence", "get_recommended_owner", "get_rca_verdict", "get_case_timeline", "get_causal_chain", "get_blast_radius", "get_owner", "get_confidence_breakdown", "get_affected_entities"},
 		Permissions:        []string{"correlations:read"},
 		Freshness:          FreshnessLive, Sensitivity: SensitivityOperational, Availability: AvailabilityStable,
 		CrossModule:   []string{"topology", "telemetry", "flow_analytics", "itsm"},
@@ -160,7 +160,7 @@ var modules = []Module{
 		Description:        "Device telemetry: metric anomalies, syslog, SNMP traps, probe health, interface health.",
 		Entities:           []string{"metric", "syslog", "snmp_trap", "probe", "interface"},
 		QuestionCategories: []string{"metric_anomaly", "syslog_summary", "trap_summary", "probe_health", "interface_health"},
-		Tools:              []string{"get_metric_anomalies", "get_syslog_summary", "get_snmp_trap_summary", "get_probe_health", "get_interface_health"},
+		Tools:              []string{"get_metric_anomalies", "get_syslog_summary", "get_snmp_trap_summary", "get_probe_health", "get_interface_health", "compile_query"},
 		Permissions:        []string{"infrastructure:read"},
 		Freshness:          FreshnessRecent, Sensitivity: SensitivityOperational, Availability: AvailabilityStable,
 		CrossModule:   []string{"correlations_rca", "topology"},
@@ -302,6 +302,42 @@ var modules = []Module{
 		Permissions:        []string{"infrastructure:read"},
 		Freshness:          FreshnessLive, Sensitivity: SensitivityOperational, Availability: AvailabilityStable,
 		CrossModule:   []string{"protocol_diagnostics", "correlations_rca", "topology"},
+		ResponseModes: []string{"troubleshoot_finding", "module_health_summary"},
+	},
+	{
+		// Review item 10. A NEW module rather than a tenant of an existing one,
+		// and the reasoning is worth stating because "just put it in telemetry"
+		// was the obvious alternative:
+		//
+		//   - No existing module owns CHANGE. telemetry is metrics/syslog/traps
+		//     (what the device is REPORTING), device_state is live CLI reads
+		//     (what it is DOING now), security_posture is control verdicts. A
+		//     configuration version register is a different bounded context, and
+		//     internal/configdrift's own package doc says so: config backup is
+		//     FOUNDATIONAL and security/compliance/RCA are its consumers.
+		//   - Sensitivity would have to be wrong somewhere else. A stored
+		//     configuration is a device's operational blueprint; this module is
+		//     SENSITIVE. telemetry is (correctly) operational, and widening it to
+		//     sensitive to accommodate these two tools would re-tag five
+		//     unrelated tools.
+		//   - A module is the unit the Policy Engine gates. Keeping change its
+		//     own module means an operator can deny configuration reads to the
+		//     assistant — DenyModules: ["config_changes"] — without also blinding
+		//     it to syslog, which is precisely the control a security-conscious
+		//     deployment asks for first.
+		//
+		// No AvailabilityFlag, matching protocol_diagnostics / device_state /
+		// bgp_operations: absence is expressed by NOT REGISTERING the tools (the
+		// seams are nil when config backup is off), which is the honest form —
+		// the module exists, the capability is simply not wired here.
+		ID: "config_changes", DisplayName: "Configuration Changes",
+		Description:        "What changed on a device and when: the per-device configuration version history, the drift verdict against its golden baseline, and the redacted line-by-line difference between two stored versions. Read-only — the assistant can never capture a configuration or move a baseline.",
+		Entities:           []string{"config_version", "config_change", "config_diff", "golden_baseline"},
+		QuestionCategories: []string{"recent_changes", "config_drift", "what_changed", "change_proximity"},
+		Tools:              []string{"get_recent_changes", "get_config_diff"},
+		Permissions:        []string{"infrastructure:read"},
+		Freshness:          FreshnessRecent, Sensitivity: SensitivitySensitive, Availability: AvailabilityStable,
+		CrossModule:   []string{"correlations_rca", "device_state", "security_posture", "topology"},
 		ResponseModes: []string{"troubleshoot_finding", "module_health_summary"},
 	},
 	{

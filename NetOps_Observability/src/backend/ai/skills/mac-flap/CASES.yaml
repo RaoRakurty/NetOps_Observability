@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for mac-flap. Dialect + contract: skill_cases.go.
+
+# The port PAIR is the finding, and it comes from the device's own tables. When
+# those cannot be read, the pair has to come from the logs — not from a guess.
+case: unreadable ARP and MAC tables send the port pair to the device's own logs
+question: mac address flapping between ports on edge-1
+ui:
+  - correlation_id=case-mac-notwired
+  - device=edge-1
+signals:
+  - state:collect=not_wired
+notes:
+  - live device state could not be read on this deployment — no command was run
+evidence:
+  - finding
+  - device
+expect_chain:
+  - mac-flap entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: must come from its logs
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - live device state could not be read on this deployment
+expect_never:
+  - stp-topology
+  - interface-down
+
+---
+
+case: a readable L2 table with no other fact takes no hop
+question: duplicate mac and station move on edge-1
+ui:
+  - correlation_id=case-mac-flat
+  - device=edge-1
+tools:
+  - get_metric_anomalies=denied
+evidence:
+  - finding
+expect_chain:
+  - mac-flap entry
+expect_selected: none
+expect_verdict:
+  - two ports
+  - move rate
+expect_notes:
+  - was not run
+expect_never:
+  - stp-topology
+  - interface-down
+  - log-confirmation
+expect_select: mac-flap
+
+---
+
+case: moves coincident with topology-change notifications are the model's to propose
+question: host moving between ports on edge-1 during topology changes
+ui:
+  - correlation_id=case-mac-model
+  - device=edge-1
+model_next: stp-topology
+evidence:
+  - finding
+expect_chain:
+  - mac-flap entry
+  - stp-topology model
+expect_selected: model
+expect_reason: topology-change notifications
+expect_verdict:
+  - vlan
+  - root
+expect_never:
+  - interface-down

@@ -35,14 +35,20 @@ type fakePusher struct {
 	script []error
 	gate   chan struct{} // non-nil: Push blocks until it is closed
 	signal chan notify.NtfyPush
+	// entered receives once each time Push starts waiting at the gate, so a
+	// test can know the drain worker is HOLDING an item before it builds on
+	// that (without it, whether the worker took an item before or after a
+	// flood was a race — 2 % of runs flaked).
+	entered chan struct{}
 }
 
 func newFakePusher() *fakePusher {
-	return &fakePusher{signal: make(chan notify.NtfyPush, 1024)}
+	return &fakePusher{signal: make(chan notify.NtfyPush, 1024), entered: make(chan struct{}, 1024)}
 }
 
 func (f *fakePusher) Push(p notify.NtfyPush) error {
 	if f.gate != nil {
+		f.entered <- struct{}{}
 		<-f.gate
 	}
 	f.mu.Lock()
@@ -376,9 +382,7 @@ func TestNoTopicConfiguredIsCountedAndLoggedOnce(t *testing.T) {
 	if !strings.Contains(txt, "netops_alert_webhook_host_route_enabled 0") {
 		t.Error("the host route gauge must read 0 when no topic is configured")
 	}
-	if n := r.logs.countContaining("NOT pushed to host monitoring"); n != 1 {
-		t.Fatalf("logged %d times, want exactly 1 — a per-alert warning is its own outage", n)
-	}
+	waitForLogCount(t, r.logs, "NOT pushed to host monitoring", 1)
 	// The product path is untouched by the missing host route.
 	if fired, _ := r.disp.counts(); fired != 5 {
 		t.Fatalf("product dispatches = %d, want 5", fired)
@@ -463,9 +467,7 @@ func TestPushFailureIsCountedAndNeverFailsTheRequest(t *testing.T) {
 	if n := r.push.count(); n != hostMaxAttempts {
 		t.Errorf("attempts = %d, want %d — a page must be retried before it is given up on", n, hostMaxAttempts)
 	}
-	if n := r.logs.countContaining("error: platform alert push to host monitoring FAILED"); n != 1 {
-		t.Errorf("a page that never landed must be logged ERROR exactly once, got %d", n)
-	}
+	waitForLogCount(t, r.logs, "error: platform alert push to host monitoring FAILED", 1)
 }
 
 // The queue is BOUNDED (§9): a wedged ntfy must cost dropped pushes, not a
@@ -514,6 +516,29 @@ func TestQueueFullDropsAreCountedNotBlocking(t *testing.T) {
 // waitForMetric settles on a counter that is written immediately after the
 // event the caller already synchronized on. Bounded, and it fails with the
 // whole metrics text so a mismatch names itself.
+// waitForLogCount waits until exactly want log lines contain sub. A log line
+// is written AFTER the metric that a test usually waits on (hostroute.go
+// increments the failure counter, then logs), so reading the log the instant
+// the metric appears raced the worker (~0.4 % of runs flaked). It still fails
+// on MORE lines than want: "exactly once" stays exact.
+func waitForLogCount(t *testing.T, l *logSpy, sub string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		n := l.countContaining(sub)
+		if n > want {
+			t.Fatalf("%q logged %d times, want exactly %d", sub, n, want)
+		}
+		if n == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%q logged %d times, want exactly %d", sub, n, want)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 func waitForMetric(t *testing.T, m *Metrics, want string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

@@ -115,7 +115,8 @@ monitor, either use the rule list or call
 :::note
 **Operations → Monitors → Monitor Rules** carries a second creation path, an
 **Add rule** modal whose finish button is **Save rule**. It writes the same
-object as the wizard, without the template list or the live preview.
+object as the wizard, without the template list or the live preview. See
+[Review and manage monitor rules](/monitoring/monitor-rules).
 :::
 
 :::note

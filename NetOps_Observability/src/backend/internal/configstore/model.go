@@ -84,6 +84,55 @@ type Version struct {
 	Drift   string `json:"drift,omitempty"`
 	Added   int    `json:"added,omitempty"`
 	Removed int    `json:"removed,omitempty"`
+	// Trigger is what started the capture that wrote this row: TriggerScheduled,
+	// TriggerManual, or ManualTrigger(subject) — "manual:<principal id>". It is
+	// the provenance the change ledger's actor is derived from, stored on the row
+	// so it outlives the audit log's retention (Iris N-D2). "" on rows written
+	// before migration 0052, whose trigger was never recorded here.
+	Trigger string `json:"trigger,omitempty"`
+}
+
+// Capture triggers. A trigger is a small closed prefix plus, for a manual
+// capture, the Correlix principal that asked for it.
+const (
+	TriggerScheduled = "scheduled"
+	TriggerManual    = "manual"
+)
+
+// maxTriggerBytes bounds a stored trigger (prefix + principal id).
+const maxTriggerBytes = 160
+
+// ManualTrigger is the trigger for a capture an operator asked for. The subject
+// is the authenticated principal id (never a request body field); an empty one
+// degrades to the bare TriggerManual rather than inventing an actor.
+func ManualTrigger(subject string) string {
+	subject = strings.Map(func(r rune) rune {
+		if r < 0x21 || r == 0x7f {
+			return -1 // no whitespace or control characters in a stored label
+		}
+		return r
+	}, subject)
+	if subject == "" {
+		return TriggerManual
+	}
+	t := TriggerManual + ":" + subject
+	if len(t) > maxTriggerBytes {
+		// Never cut a principal id in half: a truncated id names someone else.
+		return TriggerManual
+	}
+	return t
+}
+
+// SplitTrigger returns a trigger's kind (scheduled | manual | the raw value for
+// anything else) and the principal id a manual trigger carries ("" otherwise).
+func SplitTrigger(trigger string) (kind, subject string) {
+	if trigger == TriggerManual {
+		return TriggerManual, ""
+	}
+	if s, ok := strings.CutPrefix(trigger, TriggerManual+":"); ok {
+		return TriggerManual, s
+	}
+	return trigger, ""
 }
 
 // Errors the HTTP layer maps onto status codes. They are values, not strings

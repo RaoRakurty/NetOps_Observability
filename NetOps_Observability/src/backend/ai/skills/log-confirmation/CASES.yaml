@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for log-confirmation. Dialect + contract: skill_cases.go.
+#
+# This method authors NO machine condition on purpose: logs CONFIRM, they never
+# lead. Every handoff out of it is a human-authored reason the model may pick
+# from — which is exactly what these cases pin.
+
+case: logs alone never fire a deterministic hop
+question: show me the logs on edge-1
+ui:
+  - correlation_id=case-log-flat
+  - device=edge-1
+tools:
+  - search_logs=not_found
+evidence:
+  - log
+  - finding
+expect_chain:
+  - log-confirmation entry
+expect_selected: none
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - found nothing for the id in scope
+expect_never:
+  - interface-down
+  - bgp-session-down
+  - ospf-adjacency
+  - stp-topology
+expect_select: log-confirmation
+
+---
+
+case: link transitions in the logs are the model's to propose, with the author's own reason
+question: what is the device logging on edge-1
+ui:
+  - correlation_id=case-log-model
+  - device=edge-1
+model_next: interface-down
+evidence:
+  - log
+expect_chain:
+  - log-confirmation entry
+  - interface-down model
+expect_selected: model
+expect_reason: link transitions
+expect_verdict:
+  - interface
+  - transition
+expect_never:
+  - bgp-session-down
+  - stp-topology
+
+---
+
+case: a case timeline that is not wired on this deployment is disclosed, not imagined
+question: confirm from logs on edge-1
+ui:
+  - correlation_id=case-log-notwired
+  - device=edge-1
+tools:
+  - get_case_timeline=not_wired
+evidence:
+  - log
+expect_chain:
+  - log-confirmation entry
+expect_selected: none
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - Case timeline is not available on this deployment
+expect_never:
+  - interface-down
+  - bgp-session-down

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Orchestrator turns a question into a governed, evidence-grounded answer. It is
@@ -18,18 +19,20 @@ import (
 // an LLMClient (the provider proxy), the feature-flag lookup, and an optional
 // redactor. It holds NO credentials and makes NO store query itself.
 type Orchestrator struct {
-	DS     DataSource
-	Tools  *ToolRegistry
-	LLM    LLMClient
-	Flags  FlagLookup
-	Policy *PolicyEngine // the gate for what the AI may run; nil = safe default
+	// NLQuery is the question router's DATA arm (data_route.go): a question the
+	// NL compiler fully understands is answered from its query. nil = disabled.
+	NLQuery NLQueryFunc
+	DS      DataSource
+	Tools   *ToolRegistry
+	LLM     LLMClient
+	Flags   FlagLookup
+	Policy  *PolicyEngine // the gate for what the AI may run; nil = safe default
 	// Redactor strips secrets/PII before egress (LLM06). nil is NOT an escape
 	// hatch: redact() falls back to the package default Redact, so an
 	// orchestrator built without one still cannot leak. See redact.go.
-	Redactor  func(string) string
-	KB        *KB        // Network Expert KB (curated playbooks); nil = no supporting knowledge
-	ProductKB *ProductKB // Correlix product knowledge (concepts + how-tos); nil = no product answers
-	Docs      *DocsIndex // docs-portal BM25 retriever; when set it upgrades product answers with real page citations
+	Redactor func(string) string
+	KB       *KB        // Network Expert KB (curated playbooks); nil = no supporting knowledge
+	Docs     *DocsIndex // docs portal + curated product knowledge (BM25); nil = no product answers
 	// TAC is the vendor TAC knowledge (issue classes, per-vendor checks and their
 	// bound read-only commands) Iris reads before answering a troubleshooting
 	// question (tac_knowledge.go). nil = not wired; every answer keeps its shape.
@@ -63,6 +66,11 @@ type Orchestrator struct {
 	// memory row written. nil = investigation memory is not wired here, and
 	// nothing about the answer changes.
 	RecordInvestigation func(ctx context.Context, p Principal, inv ConcludedInvestigation)
+	// Score receives production-scorecard observations (score.go): grounding
+	// coverage, agent/tool outcomes, latency and provider token usage. nil =
+	// the layer is not wired and NOTHING about any answer changes. Nothing that
+	// crosses this seam identifies a tenant or an entity (§3a).
+	Score ScoreSink
 }
 
 // policy returns the configured Policy Engine, or the safe v1 default
@@ -340,7 +348,24 @@ func Classify(question string, uiContext map[string]string) Plan {
 
 // Ask is the entry point: classify → govern (availability + permissions) →
 // dispatch by answer mode → ground → return a typed Answer.
+//
+// It is a thin wrapper over ask so the production scorecard has EXACTLY ONE
+// place to observe a finished answer (score.go). ask has a dozen return paths;
+// instrumenting them individually is how a coverage metric ends up counting
+// some modes twice and others not at all. An error is not observed: a turn that
+// never produced an answer is not an answer with no citations, and folding the
+// two together would quietly depress grounding coverage whenever a provider or
+// a store was down.
 func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, uiContext map[string]string) (Answer, error) {
+	started := time.Now()
+	ans, err := o.ask(ctx, p, question, uiContext)
+	if err == nil {
+		o.observeAnswer(&ans, started)
+	}
+	return ans, err
+}
+
+func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, uiContext map[string]string) (Answer, error) {
 	// An EXPLAIN ask is a lookup, not a classification: the `(i)` next to a
 	// number on a screen already named the term it wants defined, and the answer
 	// is server-authored prose returned verbatim (explain.go). It runs first so a
@@ -351,6 +376,14 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 	}
 
 	plan := Classify(question, uiContext)
+
+	// The question router's DATA arm (N-G4) runs before module governance and
+	// skills: it claims only questions the NL compiler understands completely
+	// and that ask for a listing, not a diagnosis; everything else continues
+	// below unchanged.
+	if ans, handled := o.answerData(ctx, p, question, plan, nil); handled {
+		return ans, nil
+	}
 
 	// Governance: every module route passes the Policy Engine (availability +
 	// deny-list + RBAC/PBAC). Disallowed modules are dropped with an honest reason.
@@ -552,12 +585,16 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 		}
 		if d := pol.EvaluateTool(tool, p); !d.Allow {
 			disc = append(disc, capitalize(d.Reason)+".")
+			o.auditTool(name, args, false, "policy_denied", nil, 0)
 			continue
 		}
+		started := time.Now()
 		res, terr := tool.Run(ctx, p, args)
 		if terr != nil {
+			o.auditTool(name, args, false, toolErrReason(terr), nil, time.Since(started))
 			continue // a tool failure degrades gracefully; never fail the whole answer
 		}
+		o.auditTool(name, args, true, "ok", &res, time.Since(started))
 		bundle = append(bundle, res.Items...)
 		disc = append(disc, res.Notes...)
 	}
@@ -587,11 +624,7 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 		MissingEvidence:  missing,
 		RecommendedOwner: owner,
 	}
-	for _, ev := range bundle {
-		if !strings.HasPrefix(ev.CitationID, "problem:") { // header item is restated in the summary
-			pe.SupportingEvidence = append(pe.SupportingEvidence, ev.Text)
-		}
-	}
+	pe.SupportingEvidence, pe.ContradictingEvidence = splitEvidence(bundle)
 
 	// Grounded narrative from the model; degrade to a polished evidence-only
 	// summary (NOT a raw "provider unavailable" line) when the provider is absent.
@@ -599,7 +632,9 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 	var providerNote string
 	system := o.systemPrompt()
 	user := o.problemPrompt(question, pr, bundle)
-	text, provider, lerr := o.LLM.Complete(ctx, system, []LLMMessage{{Role: "user", Content: user}})
+	// §10 model router: this answer's tier comes from RouteFor, not from a local
+	// choice — the policy is stated once and the mechanism reads it.
+	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeProblemExplanation).Tier, system, []LLMMessage{{Role: "user", Content: user}}, false)
 	evidenceOnly := false
 	if lerr != nil || strings.TrimSpace(text) == "" {
 		text = o.deterministicProblemSummary(pr, missing, owner)
@@ -611,7 +646,14 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 	// Unsupported-claim guard (§11/§16): strip any citation the MODEL invented.
 	// The deterministic fallback is already grounded, so only verify model output.
 	if !evidenceOnly {
-		text, badges, disc = verifyNarrative(text, bundleCitationIDs(bundle), badges, disc)
+		text, badges, disc = o.verifyNarrative(text, bundleCitationIDs(bundle), badges, disc)
+		// Honesty gate (§15 / review item 5): the engine owns the verdict, so a
+		// narrative may not assert an established cause the engine did not
+		// establish. Deterministic — the verdict-conditional prompt above ASKS
+		// for hedged wording, this enforces it. The evidence-only summary is
+		// the fallback when nothing honest survives.
+		text, badges, disc = o.enforceVerdictHonesty(text, pr.Verdict,
+			o.deterministicProblemSummary(pr, missing, owner), badges, disc)
 	}
 	// Engine voice contract (v1 NOC catalog): when the matched signature carries
 	// owner-approved fault-family wording, LEAD with it — the AI narrates the
@@ -749,7 +791,9 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 	evidenceOnly := false
 	system := o.systemPrompt()
 	user := o.currentStatePrompt(question, cs)
-	text, provider, lerr := o.LLM.Complete(ctx, system, []LLMMessage{{Role: "user", Content: user}})
+	// §10 model router: a grounded headline over an already-ranked structure is
+	// the FAST tier's work — RouteFor says so, this reads it.
+	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeCurrentStateSummary).Tier, system, []LLMMessage{{Role: "user", Content: user}}, false)
 	if lerr != nil || strings.TrimSpace(text) == "" {
 		text = o.deterministicStateSummary(cs)
 		provider = "none"
@@ -759,7 +803,7 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 	} else {
 		// Unsupported-claim guard (§11/§16) — verify the model didn't cite an id
 		// that isn't among this answer's citations.
-		text, badges, disc = verifyNarrative(text, citationRefIDs(cites), badges, disc)
+		text, badges, disc = o.verifyNarrative(text, citationRefIDs(cites), badges, disc)
 	}
 	cs.Summary = Scrub(strings.TrimSpace(text))
 
@@ -1008,13 +1052,17 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 		found++
 		if d := pol.EvaluateTool(tool, p); !d.Allow {
 			disc = append(disc, capitalize(d.Reason)+".")
+			o.auditTool(name, ToolArgs{}, false, "policy_denied", nil, 0)
 			continue
 		}
+		started := time.Now()
 		res, terr := tool.Run(ctx, p, ToolArgs{})
 		if terr != nil {
+			o.auditTool(name, ToolArgs{}, false, toolErrReason(terr), nil, time.Since(started))
 			errored++ // a tool failure degrades gracefully — but is NOT "not built"
 			continue
 		}
+		o.auditTool(name, ToolArgs{}, true, "ok", &res, time.Since(started))
 		ran++
 		bundle = append(bundle, res.Items...)
 		// Carry a tool's notes ALWAYS (not only on truncation) — a note like
@@ -1060,11 +1108,16 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 	// Model headline grounded ONLY in the tool evidence (deterministic fallback).
 	system := o.systemPrompt()
 	user := o.moduleHealthPrompt(question, mh, bundle)
-	text, provider, lerr := o.LLM.Complete(ctx, system, []LLMMessage{{Role: "user", Content: user}})
+	// §10 model router: a module headline is the FAST tier (RouteFor's policy).
+	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeModuleHealthSummary).Tier, system, []LLMMessage{{Role: "user", Content: user}}, false)
 	var badges []string
 	var providerNote string
 	evidenceOnly := false
-	if lerr != nil {
+	// A provider that returns an empty body with a NIL error is the same
+	// outcome as a failed call — without the empty check (which the problem and
+	// current-state paths at :596/:753 already have) the module card renders an
+	// empty headline instead of the deterministic summary.
+	if lerr != nil || strings.TrimSpace(text) == "" {
 		mh.Headline = o.deterministicModuleSummary(mh, bundle)
 		provider = "none"
 		evidenceOnly = true
@@ -1072,19 +1125,22 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 		providerNote = ProviderFallbackNote(false)
 	} else {
 		// Unsupported-claim guard (§11/§16) on the model headline.
-		mh.Headline, badges, disc = verifyNarrative(strings.TrimSpace(text), bundleCitationIDs(bundle), badges, disc)
+		mh.Headline, badges, disc = o.verifyNarrative(strings.TrimSpace(text), bundleCitationIDs(bundle), badges, disc)
 	}
 	return Answer{Mode: ModeModuleHealthSummary, Intent: plan.Intent, Modules: allowed,
 		Text: mh.Headline, Module: mh, Citations: cites, Disclaimers: dedupeLines(disc), Provider: provider,
 		ModeBadges: sortedUnique(badges), EvidenceOnly: evidenceOnly, ProviderNote: providerNote}, nil
 }
 
+// moduleHealthPrompt assembles the module summary's grounded user message.
+// Line-structured, so every interpolated value passes promptLine — see
+// prompt_fence.go.
 func (o *Orchestrator) moduleHealthPrompt(question string, mh *ModuleHealthSummary, bundle []EvidenceItem) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Question: %s\n\n", strings.TrimSpace(question))
-	fmt.Fprintf(&b, "MODULE: %s\n\nEVIDENCE (cite ids):\n", mh.DisplayName)
+	fmt.Fprintf(&b, "Question: %s\n\n", promptLine(question))
+	fmt.Fprintf(&b, "MODULE: %s\n\nEVIDENCE (cite ids):\n", promptLine(mh.DisplayName))
 	for _, ev := range bundle {
-		fmt.Fprintf(&b, "- [%s] %s\n", ev.CitationID, ev.Text)
+		fmt.Fprintf(&b, "- [%s] %s\n", promptCitationID(ev.CitationID), promptLine(ev.Text))
 	}
 	b.WriteString("\nWrite a 2–3 sentence NOC summary grounded ONLY in the evidence above, citing ids. Lead with what matters most. Be concise. If the evidence shows nothing notable, say so plainly.")
 	return o.redact(b.String())
@@ -1106,26 +1162,31 @@ func aiDisplayName(m Module, id string) string {
 	return id
 }
 
+// currentStatePrompt assembles the shift-lead briefing's grounded user message.
+// Line-structured, so every interpolated value passes promptLine — incident
+// lines and impacted-entity labels carry device names that came from the
+// network (SNMP sysName), which is data, not prompt structure. See
+// prompt_fence.go.
 func (o *Orchestrator) currentStatePrompt(question string, cs *CurrentStateSummary) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Question: %s\n\n", strings.TrimSpace(question))
+	fmt.Fprintf(&b, "Question: %s\n\n", promptLine(question))
 	fmt.Fprintf(&b, "ACTIVE CORRELATIONS: %d confirmed, %d suspected, %d undetermined (total %d).\n",
 		cs.Confirmed, cs.Suspected, cs.Undetermined, cs.Confirmed+cs.Suspected+cs.Undetermined)
 	if len(cs.RecommendedFocus) > 0 {
-		fmt.Fprintf(&b, "RECOMMENDED FOCUS (highest operational priority): %s\n", cs.RecommendedFocus[0])
-		fmt.Fprintf(&b, "Why first: %s\n", cs.FocusReason)
+		fmt.Fprintf(&b, "RECOMMENDED FOCUS (highest operational priority): %s\n", promptLine(cs.RecommendedFocus[0]))
+		fmt.Fprintf(&b, "Why first: %s\n", promptLine(cs.FocusReason))
 	}
 	if len(cs.ActiveIncidents) > 0 {
 		b.WriteString("Other actionable incidents:\n")
 		for _, l := range cs.ActiveIncidents[1:] {
-			fmt.Fprintf(&b, "- %s\n", l)
+			fmt.Fprintf(&b, "- %s\n", promptLine(l))
 		}
 	}
 	if cs.WatchNote != "" {
-		fmt.Fprintf(&b, "WATCH ITEMS: %s\n", cs.WatchNote)
+		fmt.Fprintf(&b, "WATCH ITEMS: %s\n", promptLine(cs.WatchNote))
 	}
 	if len(cs.ImpactedEntities) > 0 {
-		fmt.Fprintf(&b, "Most impacted: %s\n", strings.Join(cs.ImpactedEntities, ", "))
+		fmt.Fprintf(&b, "Most impacted: %s\n", strings.Join(promptLines(cs.ImpactedEntities), ", "))
 	}
 	b.WriteString("\nWrite a 2–3 sentence NOC shift-lead briefing grounded ONLY in the above: the overall picture, then what to work FIRST and why. Treat undetermined low-evidence items as watch items, not equal priorities. Be concise and operational; do not invent severity or impact not stated.")
 	return o.redact(b.String())
@@ -1479,66 +1540,38 @@ func (o *Orchestrator) answerTimeRange(ctx context.Context, p Principal, questio
 // answerProduct answers a question ABOUT Correlix from the documentation index
 // (portal pages + curated product knowledge, §9 upgraded by the intelligence
 // plan §3.a) — deterministic, key-free, with citations that open the exact doc
-// page+section. Falls back to the legacy keyword KB when no docs index is
-// wired, and to an HONEST "the documentation doesn't cover that" when the
-// docs exist but genuinely don't answer (never a weak paraphrase source).
+// page+section. Returns an HONEST "the documentation doesn't cover that" when
+// the docs genuinely don't answer (never a weak paraphrase source), and the
+// capability clarification when no docs index is wired at all.
+//
+// The docs index is the ONE product-knowledge path: the curated concept doc
+// and the runbook brief are indexed into it as their own tiers. The older
+// keyword ProductKB was removed 2026-09-26 — production always wired Docs, so
+// it was unreachable; its UI deep-link table lives on in docs_routes.go.
 func (o *Orchestrator) answerProduct(question string, plan Plan, disc []string) Answer {
-	if o.Docs != nil {
-		if a, ok := o.answerProductFromDocs(question, plan, disc); ok {
-			return a
-		}
-		// No documentation match → the honest decline. No navigation fallback
-		// here: FindFeature keyword-matches eagerly, and "3 places in Correlix"
-		// for an uncovered product question is noise dressed as an answer
-		// ("where is X" questions classify to navigation before reaching here).
-		return Answer{
-			Mode: ModeProductAnswer, Intent: plan.Intent, Modules: plan.Modules,
-			Text:      "The documentation doesn't cover that (yet). I can explain what's going on right now, look up a troubleshooting playbook, or point you to a feature — or browse the docs from the ? menu.",
-			Citations: []Citation{}, ModeBadges: []string{"Product help"},
-			Disclaimers: append(disc, "No matching documentation — nothing was invented."),
-		}
-	}
-	if o.ProductKB == nil {
+	if o.Docs == nil {
 		return o.answerCapability(plan)
 	}
-	hits := o.ProductKB.Search(question, 3)
-	if len(hits) == 0 {
-		// Maybe they meant "where is X" — offer navigation as a fallback path.
-		if nav := FindFeature(question); len(nav) > 0 {
-			return o.answerNavigation(question, plan, disc)
-		}
-		return o.answerCapability(plan)
+	if a, ok := o.answerProductFromDocs(question, plan, disc); ok {
+		return a
 	}
-	top := hits[0].Section
-	mh := &ModuleHealthSummary{Module: "product_navigation", DisplayName: "Correlix"}
-	// The answer body is the top section (the curated content). Related sections
-	// become "learn more" pointers.
-	body := top.Body
-	if len(body) > 900 { // keep the card readable; the deep link has the rest
-		body = strings.TrimSpace(body[:900]) + " …"
-	}
-	cites := []Citation{}
-	if top.Route != "" {
-		cites = append(cites, Citation{ID: "doc:" + top.Title, Kind: "navigation", Label: top.Title, Href: top.Route})
-	}
-	var related []string
-	for _, h := range hits[1:] {
-		related = append(related, "See also: "+h.Section.Title)
-		if h.Section.Route != "" {
-			cites = append(cites, Citation{ID: "doc:" + h.Section.Title, Kind: "navigation", Label: h.Section.Title, Href: h.Section.Route})
-		}
-	}
-	mh.Headline = top.Title
+	// No documentation match → the honest decline. No navigation fallback
+	// here: FindFeature keyword-matches eagerly, and "3 places in Correlix"
+	// for an uncovered product question is noise dressed as an answer
+	// ("where is X" questions classify to navigation before reaching here).
 	return Answer{
 		Mode: ModeProductAnswer, Intent: plan.Intent, Modules: plan.Modules,
-		Text: body, Module: mh, Citations: cites, NextActions: related,
-		ModeBadges: []string{"Product help"}, Disclaimers: disc,
+		Text:      "The documentation doesn't cover that (yet). I can explain what's going on right now, look up a troubleshooting playbook, or point you to a feature — or browse the docs from the ? menu.",
+		Citations: []Citation{}, ModeBadges: []string{"Product help"},
+		Disclaimers: append(disc, "No matching documentation — nothing was invented."),
 	}
 }
 
 // answerProductFromDocs builds the documentation-grounded product answer: the
-// top chunk's text as the body, every hit as a citation that opens the Help
-// drawer at that page+section. ok=false when the index has no honest match.
+// top chunk's text as the body, every portal hit as a citation that opens the
+// Help drawer at that page+section, and — for curated concept chunks, which
+// have no portal page — a navigation citation to the Correlix page the concept
+// lives on (docs_routes.go). ok=false when the index has no honest match.
 func (o *Orchestrator) answerProductFromDocs(question string, plan Plan, disc []string) (Answer, bool) {
 	hits := o.Docs.Search(question, 4)
 	if len(hits) == 0 {
@@ -1549,17 +1582,24 @@ func (o *Orchestrator) answerProductFromDocs(question string, plan Plan, disc []
 	if len(body) > 900 { // keep the card readable; the doc link has the rest
 		body = strings.TrimSpace(body[:900]) + " …"
 	}
-	cites := make([]Citation, 0, len(hits))
+	cites := make([]Citation, 0, len(hits)+1)
+	var navCites []Citation // in-app links for curated chunks, after the doc links
+	navCited := map[string]bool{}
 	var related []string
 	for i, h := range hits {
 		c := h.Chunk
 		if c.Href != "" {
 			cites = append(cites, Citation{ID: c.ID, Kind: "doc", Label: c.Breadcrumb, Href: c.Href})
 		}
+		if route := docRoute(c); route != "" && !navCited[route] {
+			navCited[route] = true
+			navCites = append(navCites, Citation{ID: "nav:" + route, Kind: "navigation", Label: "Open in Correlix", Href: route})
+		}
 		if i > 0 {
 			related = append(related, "See also: "+c.Breadcrumb)
 		}
 	}
+	cites = append(cites, navCites...)
 	mh := &ModuleHealthSummary{Module: "product_navigation", DisplayName: "Correlix", Headline: top.Breadcrumb}
 	return Answer{
 		Mode: ModeProductAnswer, Intent: plan.Intent, Modules: plan.Modules,
@@ -1620,20 +1660,25 @@ func (o *Orchestrator) systemPrompt() string {
 }
 
 // problemPrompt assembles the grounded user message (redacted before egress).
+//
+// Every interpolated value passes promptLine (prompt_fence.go) because this
+// prompt is line-structured: an unflattened device name (SNMP sysName) or
+// evidence line could open a sibling "- [id] …" bullet and forge evidence.
 func (o *Orchestrator) problemPrompt(question string, pr *Problem, bundle []EvidenceItem) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Question: %s\n\n", strings.TrimSpace(question))
+	fmt.Fprintf(&b, "Question: %s\n\n", promptLine(question))
 	fmt.Fprintf(&b, "PROBLEM %s — %s\nverdict: %s (%.0f%% confidence); %d signals across %d nodes\ndevices: %s\n",
-		pr.Display(), pr.Title, pr.Verdict, pr.Confidence*100, pr.SignalCount, pr.NodeCount, strings.Join(pr.Devices, ", "))
+		promptLine(pr.Display()), promptLine(pr.Title), promptLine(pr.Verdict), pr.Confidence*100,
+		pr.SignalCount, pr.NodeCount, strings.Join(promptLines(pr.Devices), ", "))
 	if len(pr.MissingEvidence) > 0 {
-		fmt.Fprintf(&b, "missing evidence: %s\n", strings.Join(pr.MissingEvidence, ", "))
+		fmt.Fprintf(&b, "missing evidence: %s\n", strings.Join(promptLines(pr.MissingEvidence), ", "))
 	}
 	b.WriteString("\nEVIDENCE:\n")
 	if len(bundle) == 0 {
 		b.WriteString("(none beyond the problem facts above)\n")
 	}
 	for _, ev := range bundle {
-		fmt.Fprintf(&b, "- [%s] %s\n", ev.CitationID, ev.Text)
+		fmt.Fprintf(&b, "- [%s] %s\n", promptCitationID(ev.CitationID), promptLine(ev.Text))
 	}
 	// Supporting network-engineering knowledge (HLD §8/§9): a few relevant curated
 	// playbook snippets, clearly fenced as GENERAL guidance — never Correlix
@@ -1642,7 +1687,7 @@ func (o *Orchestrator) problemPrompt(question string, pr *Problem, bundle []Evid
 	if hits := o.kbFor(pr); len(hits) > 0 {
 		b.WriteString("\nSUPPORTING NETWORK-ENGINEERING KNOWLEDGE (general guidance, NOT Correlix evidence — the evidence above wins):\n")
 		for _, hit := range hits {
-			fmt.Fprintf(&b, "- %s\n", hit.Playbook.Snippet())
+			fmt.Fprintf(&b, "- %s\n", promptLine(hit.Playbook.Snippet()))
 		}
 	}
 	// Vendor TAC knowledge for the same problem, fenced the same way: what a
@@ -1650,11 +1695,31 @@ func (o *Orchestrator) problemPrompt(question string, pr *Problem, bundle []Evid
 	if hits := o.tacForProblem(pr); len(hits) > 0 {
 		b.WriteString("\nSUPPORTING VENDOR TAC KNOWLEDGE (what a vendor TAC checks first — general guidance, NOT Correlix evidence):\n")
 		for _, h := range hits {
-			fmt.Fprintf(&b, "- %s\n", strings.ReplaceAll(h.Snippet(), "\n", " · "))
+			fmt.Fprintf(&b, "- %s\n", promptLine(strings.ReplaceAll(h.Snippet(), "\n", " · ")))
 		}
 	}
-	b.WriteString("\nWrite 2–4 sentences: the likely root cause and why, grounded in the EVIDENCE above (the supporting knowledge is general guidance only, not facts about this network), citing ids. Then one line: the recommended next action.")
+	b.WriteString("\n" + problemClosingInstruction(pr.Verdict))
 	return o.redact(b.String())
+}
+
+// problemClosingInstruction is the closing ask, CONDITIONED ON THE ENGINE'S
+// VERDICT. The engine — not the model — decides whether a cause is established,
+// and every deterministic field already says so (StatusLabel "Undetermined",
+// ConfidenceLabel "Not established"). Asking for "the likely root cause and
+// why" regardless of tier is how the prose headline came to contradict the
+// badge beside it.
+//
+// The non-confirmed wording follows the RCA report's own philosophy
+// (internal/rca/rca_report_wording.go: "Root cause has not been identified —
+// possibly because of X (unconfirmed best hypothesis)"): state the symptom,
+// name what is missing, and hedge any hypothesis explicitly. The post-check in
+// verify.go enforces it deterministically, because a prompt is a request, not
+// a guarantee.
+func problemClosingInstruction(verdict string) string {
+	if strings.EqualFold(strings.TrimSpace(verdict), "confirmed") {
+		return "Write 2–4 sentences: the likely root cause and why, grounded in the EVIDENCE above (the supporting knowledge is general guidance only, not facts about this network), citing ids. Then one line: the recommended next action."
+	}
+	return "The correlation engine has NOT established a cause for this incident (verdict above). Write 2–4 sentences: the SYMPTOM that was observed and who/what it affects, grounded in the EVIDENCE above (the supporting knowledge is general guidance only, not facts about this network), citing ids, then what evidence is still missing before a cause could be established. Do NOT name, assert or imply a root cause, and do not use the words \"root cause is\", \"caused by\", \"confirmed\", \"definitely\" or \"proven\". If one explanation is worth mentioning, hedge it exactly like this: \"possibly because of X (unconfirmed)\". Then one line: the recommended next action."
 }
 
 // kbFor retrieves the playbooks relevant to a problem — keyed on its title +
@@ -1740,4 +1805,22 @@ func capitalize(s string) string {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// splitEvidence files a problem's evidence bundle into supporting and
+// contradicting lines. The engine's `contradiction:` item is evidence AGAINST
+// its leading hypothesis (Part 1 §12, tracker 336) — it used to be filed under
+// supporting evidence, which presented the argument against a cause as
+// support for it. The `problem:` header item is restated in the summary.
+func splitEvidence(bundle []EvidenceItem) (supporting, contradicting []string) {
+	for _, ev := range bundle {
+		switch {
+		case strings.HasPrefix(ev.CitationID, "problem:"):
+		case strings.HasPrefix(ev.CitationID, "contradiction:"):
+			contradicting = append(contradicting, ev.Text)
+		default:
+			supporting = append(supporting, ev.Text)
+		}
+	}
+	return supporting, contradicting
 }

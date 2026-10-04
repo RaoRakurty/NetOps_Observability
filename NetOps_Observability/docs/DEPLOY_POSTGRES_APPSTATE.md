@@ -180,6 +180,10 @@ injects a `Count`/`Import` pair per collection and
 | `tac_templates` | `tac_templates.json` | `tac_templates` |
 | `metering_daily` | `api/metering.json` | `metering_daily` |
 
+Not imported, by design: `iris_conversations` (migration 0053). Iris
+conversations are working state; a file-mode deployment keeps them in memory,
+and a cutover simply starts new ones.
+
 Each phase-2 importer is **stricter than its file store**. A file store drops an
 unreadable row and records `LoadErr` so a running install keeps serving; a
 migration must not, because a dropped row is data the operator never gets back

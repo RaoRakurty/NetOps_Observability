@@ -42,6 +42,7 @@ type Metrics struct {
 	bytesSealed int64
 	pruned      int64
 	redactions  int64
+	hookFailed  int64
 }
 
 // NewMetrics builds the counter set.
@@ -82,6 +83,18 @@ func (m *Metrics) RecordPruned(n int) {
 	m.pruned += int64(n)
 }
 
+// RecordNewVersionHookFailure counts one NEW version whose OnNewVersion consumer
+// (the change ledger) refused it. The version itself is stored; what is missing
+// is its entry in the change feed, and this counter is how that is visible.
+func (m *Metrics) RecordNewVersionHookFailure() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.hookFailed++
+}
+
 // RecordRedaction counts one redacted response body (a `sensitive` read).
 func (m *Metrics) RecordRedaction() {
 	if m == nil {
@@ -107,6 +120,7 @@ func (m *Metrics) Snapshot() map[string]int64 {
 	out["bytes_sealed_total"] = m.bytesSealed
 	out["pruned_total"] = m.pruned
 	out["redacted_reads_total"] = m.redactions
+	out["new_version_hook_failures_total"] = m.hookFailed
 	return out
 }
 
@@ -149,4 +163,8 @@ func (m *Metrics) Write(w io.Writer) {
 	fmt.Fprint(w, "# HELP netops_config_backup_pruned_total Configuration versions removed by per-device retention.\n")
 	fmt.Fprint(w, "# TYPE netops_config_backup_pruned_total counter\n")
 	fmt.Fprintf(w, "netops_config_backup_pruned_total %d\n", m.pruned)
+
+	fmt.Fprint(w, "# HELP netops_config_backup_new_version_hook_failures_total New configuration versions the change ledger could not record.\n")
+	fmt.Fprint(w, "# TYPE netops_config_backup_new_version_hook_failures_total counter\n")
+	fmt.Fprintf(w, "netops_config_backup_new_version_hook_failures_total %d\n", m.hookFailed)
 }

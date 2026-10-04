@@ -240,7 +240,7 @@ func TestCoverageServesTheGradesTheDetectorUses(t *testing.T) {
 		t.Fatal(err)
 	}
 	journey := checkoutJourney()
-	store := NewFileStore("")
+	store := newTestFileStore("")
 	if _, cerr := store.CreateJourney(context.Background(), journey); cerr != nil {
 		t.Fatal(cerr)
 	}
@@ -268,6 +268,7 @@ func TestCoverageServesTheGradesTheDetectorUses(t *testing.T) {
 		Targets: &memCatalogue{rows: targets},
 		Runs:    stubRunSource{runs: runs},
 		Policy:  policy,
+		Redact:  testRedact,
 		Enabled: true,
 		Now:     func() time.Time { return testNow },
 		WriteJSON: func(w http.ResponseWriter, status int, body any) {

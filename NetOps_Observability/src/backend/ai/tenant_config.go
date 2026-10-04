@@ -30,15 +30,29 @@ const FieldProviderKey = "ai_provider_key"
 // TenantConfig is one tenant's AI settings. The zero value IS the default
 // posture: assistant on, investigations off, platform-key fallback allowed.
 type TenantConfig struct {
-	TenantID      string `json:"tenant_id"`
-	AssistantOff  bool   `json:"assistant_off,omitempty"`   // entitlement: true → assistant disabled for this tenant
-	AgentTools    bool   `json:"agent_tools,omitempty"`     // entitlement: true → bounded agent loop enabled
-	MaxCalls      int    `json:"max_calls,omitempty"`       // guardrail override: lookups per question (0 → platform default, clamp 1-8)
-	DailyTokens   int    `json:"daily_tokens,omitempty"`    // guardrail override: tokens/day (0 → platform default)
-	Provider      string `json:"provider,omitempty"`        // BYO: "anthropic" | "openai" | "gemini" ("" → unset)
-	Model         string `json:"model,omitempty"`           // BYO model override ("" → provider default)
+	TenantID     string `json:"tenant_id"`
+	AssistantOff bool   `json:"assistant_off,omitempty"` // entitlement: true → assistant disabled for this tenant
+	AgentTools   bool   `json:"agent_tools,omitempty"`   // entitlement: true → bounded agent loop enabled
+	MaxCalls     int    `json:"max_calls,omitempty"`     // guardrail override: lookups per question (0 → platform default, clamp 1-8)
+	DailyTokens  int    `json:"daily_tokens,omitempty"`  // guardrail override: tokens/day (0 → platform default)
+	Provider     string `json:"provider,omitempty"`      // BYO: "anthropic" | "openai" | "gemini" ("" → unset)
+	Model        string `json:"model,omitempty"`         // BYO model override ("" → provider default)
+	// ModelFast / ModelStrong are this tenant's OPTIONAL §10 model-router
+	// overrides, and they ride the tenant's OWN key exactly as Model does: they
+	// take effect only on the BYO path, so a tenant can never steer the
+	// platform's spend onto a model the operator did not choose. Blank (the
+	// default, and what every stored record is today) means the tier resolves
+	// to Model — see ai.TierModels.
+	ModelFast     string `json:"model_fast,omitempty"`
+	ModelStrong   string `json:"model_strong,omitempty"`
 	Key           string `json:"key,omitempty"`             // BYO provider key — sealed under the tenant DEK, never sent to clients
 	NoPlatformKey bool   `json:"no_platform_key,omitempty"` // true → never fall back to the platform key
+}
+
+// Models projects the tenant's stored record onto the router's tier→model
+// mechanism.
+func (c TenantConfig) Models() TierModels {
+	return TierModels{Default: c.Model, Fast: c.ModelFast, Strong: c.ModelStrong}
 }
 
 // SecretSealer is the narrow slice of the Vault this store actually depends on
@@ -212,9 +226,15 @@ func (s *TenantConfigStore) AgentToolsEnabled(tenant string) bool {
 	return s.Get(tenant).AgentTools
 }
 
-// byoProvider returns the tenant's own provider configuration when a key is
+// BYOProvider returns the tenant's own provider configuration when a key is
 // stored. The returned key is the decrypted secret — server-side use only.
-func (s *TenantConfigStore) BYOProvider(tenant string, defaultModel func(string) string) (name, key, model string, ok bool) {
+//
+// `tier` is the §10 model-router tier this call is for. The resolution order is
+// unchanged apart from the tier lookup, and the tier lookup itself falls back to
+// the tenant's single Model: a tenant that configured one model gets exactly the
+// model it got before, for every tier. The zero tier "" means "no tier was
+// routed" and resolves the same way.
+func (s *TenantConfigStore) BYOProvider(tenant string, tier ModelTier, defaultModel func(string) string) (name, key, model string, ok bool) {
 	c := s.Get(tenant)
 	if c.Key == "" {
 		return "", "", "", false
@@ -223,7 +243,7 @@ func (s *TenantConfigStore) BYOProvider(tenant string, defaultModel func(string)
 	if name == "" {
 		name = "anthropic"
 	}
-	model = c.Model
+	model = c.Models().For(tier)
 	if model == "" && defaultModel != nil {
 		model = defaultModel(name)
 	}
@@ -234,25 +254,45 @@ func (s *TenantConfigStore) NoPlatformKey(tenant string) bool {
 	return s.Get(tenant).NoPlatformKey
 }
 
-// setTenantSettings updates the fields a TENANT ADMIN may change: provider,
-// model, BYO key, and the platform-key opt-out. Entitlement fields are not
-// reachable from here (§3a.2: never trust the request for authority). A blank
-// key preserves the stored one (the GET form is redacted and must not wipe the
-// secret on save); clearKey removes it explicitly.
-func (s *TenantConfigStore) SetTenantSettings(tenant, provider, model, key string, noPlatformKey, clearKey bool) (TenantConfig, error) {
+// TenantSettings is the input to SetTenantSettings: the fields a TENANT ADMIN
+// may change. It is a struct rather than a positional list because the §10
+// model router added two more model fields and a nine-argument call is where a
+// provider and a model get transposed silently.
+//
+// Entitlement fields are deliberately absent — they are not reachable from a
+// tenant-admin write at all (§3a.2: never trust the request for authority).
+type TenantSettings struct {
+	Provider    string
+	Model       string // the tenant's default model ("" → provider default)
+	ModelFast   string // optional §10 tier override (blank → Model)
+	ModelStrong string // optional §10 tier override (blank → Model)
+	Key         string // blank preserves the stored key; see ClearKey
+	// NoPlatformKey forbids the platform-key fallback for this tenant.
+	NoPlatformKey bool
+	// ClearKey removes the stored BYO key explicitly.
+	ClearKey bool
+}
+
+// SetTenantSettings updates the fields a TENANT ADMIN may change: provider,
+// the per-tier models, the BYO key, and the platform-key opt-out. A blank key
+// preserves the stored one (the GET form is redacted and must not wipe the
+// secret on save); ClearKey removes it explicitly.
+func (s *TenantConfigStore) SetTenantSettings(tenant string, in TenantSettings) (TenantConfig, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	prev, had := s.cfgs[tenant]
 	c := prev
 	c.TenantID = tenant
-	c.Provider = NormalizeProvider(provider)
-	c.Model = strings.TrimSpace(model)
-	c.NoPlatformKey = noPlatformKey
+	c.Provider = NormalizeProvider(in.Provider)
+	c.Model = strings.TrimSpace(in.Model)
+	c.ModelFast = strings.TrimSpace(in.ModelFast)
+	c.ModelStrong = strings.TrimSpace(in.ModelStrong)
+	c.NoPlatformKey = in.NoPlatformKey
 	switch {
-	case clearKey:
+	case in.ClearKey:
 		c.Key = ""
-	case strings.TrimSpace(key) != "":
-		c.Key = strings.TrimSpace(key)
+	case strings.TrimSpace(in.Key) != "":
+		c.Key = strings.TrimSpace(in.Key)
 	}
 	s.cfgs[tenant] = c
 	if err := s.saveLocked(); err != nil {

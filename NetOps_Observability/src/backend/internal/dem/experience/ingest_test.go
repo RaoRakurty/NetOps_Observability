@@ -62,10 +62,11 @@ func newIngestAPI(t *testing.T, sink EventSink) (*API, *Counters) {
 			}
 			return dem.Principal{Tenant: "acme", Subject: "rum-key"}, true
 		},
-		Store:   NewFileStore(""),
+		Store:   newTestFileStore(""),
 		Targets: &memCatalogue{},
 		Events:  sink,
 		Policy:  policy,
+		Redact:  testRedact,
 		Enabled: true,
 		Now:     func() time.Time { return testNow },
 		WriteJSON: func(w http.ResponseWriter, status int, body any) {

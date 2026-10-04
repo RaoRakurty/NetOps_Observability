@@ -4,16 +4,18 @@ layer: logs
 version: 1
 when_to_use: logs, syslog, what is the device logging, log messages, confirm from logs, device log, error message, show me the logs
 symptom_kinds: confirmation, logs, timing
-tools: search_logs, get_device_health, get_case_timeline, get_rca_verdict
+tools: search_logs, get_device_health, get_case_timeline, get_rca_verdict, get_recent_changes
 gather:
   - get_rca_verdict(correlation_id)
   - search_logs(device, window=6h)
   - get_case_timeline(correlation_id)
+  - get_recent_changes(device, window=24h)
 look_for:
   - The FIRST occurrence of the message, not the most recent. Onset time is what pins a fault to a change.
   - Whether the message rate is elevated relative to the rest of the window, rather than merely present.
   - Messages from the far end or the parent device in the same seconds, which turn one device's opinion into corroboration.
   - Silence. A device that stopped logging at the onset time is itself a finding.
+  - Whether the device's configuration changed in the same window. A "configured from console" or commit line in the log, matched by a recorded configuration change, names a human or a script — but a change that merely preceded the fault is correlated, not proven cause.
 decisions:
   - next=interface-down when the logs show link transitions
   - next=bgp-session-down when the logs show peer state changes

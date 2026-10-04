@@ -229,11 +229,71 @@ var toolMetas = map[string]toolMeta{
 			{name: "window", desc: "How far back to look: 24h, 7d, 30d, 90d (default) or 180d.", required: false},
 		},
 	},
+	// ── configuration change (review item 10) ──────────────────────────────
+	"get_recent_changes": {
+		description: "Configuration changes recorded for this tenant's devices: which device moved, when, how many lines, and whether it has drifted from its golden baseline. ASK THIS EARLY — a fault that began shortly after a configuration change is a different investigation from one that did not. Says plainly when a device has never been captured (that is NOT the same as unchanged).",
+		label:       "Recent changes",
+		args: []toolArgSpec{
+			{name: "device", desc: "Restrict to one device by name or id; omit for every device in your scope.", required: false},
+			{name: "window", desc: "Lookback window: 24h, 7d (default), 30d or 90d. Configuration changes are slower than telemetry — prefer a wider window than you would for logs.", required: false},
+		},
+	},
+	"get_config_diff": {
+		description: "The line-by-line difference between two stored configuration versions of one device, redacted. Use it after get_recent_changes to see WHAT changed, not just that something did. Secrets are masked; the added/removed counts are computed before masking.",
+		label:       "Configuration diff",
+		args: []toolArgSpec{
+			{name: "device", desc: "The device name or id exactly as it appears in the inventory.", required: true},
+			{name: "from", desc: "The older side: a configuration version id, or one of latest, previous (default), golden.", required: false},
+			{name: "to", desc: "The newer side: a configuration version id, or one of latest (default), previous, golden.", required: false},
+		},
+	},
 	"get_rca_verdict": {
 		description: "The engine's RCA header for one correlation case: what broke, the verdict tier and confidence, what is affected, what evidence is missing, and the recommended owner. START HERE when a case is in scope — narrate this conclusion rather than deriving a different one.",
 		label:       "RCA verdict",
 		args: []toolArgSpec{
 			{name: "correlation_id", desc: "The case's correlation UUID (take it from a problem:<uuid> citation id).", required: true},
+		},
+	},
+	"get_causal_chain": {
+		description: "The engine's proposed causal chain for one incident, step by step. Each step says whether it was OBSERVED or only INFERRED and what contradicts it. Use it to explain WHY the engine thinks what it thinks — never present an inferred step as observed, and where only timing links two steps say \"followed by\".",
+		label:       "Causal chain",
+		args: []toolArgSpec{
+			{name: "correlation_id", desc: "The incident's correlation UUID (take it from a problem:<uuid> or verdict:<uuid> citation id).", required: true},
+		},
+	},
+	"get_blast_radius": {
+		description: "Who and what one incident affects, from the engine's own scope: services, sites, devices, targets, seams, paths, and impact measures WITH provenance. A measure the engine did not measure is reported as not measured — never estimate a user count.",
+		label:       "Blast radius",
+		args: []toolArgSpec{
+			{name: "correlation_id", desc: "The incident's correlation UUID.", required: true},
+		},
+	},
+	"get_owner": {
+		description: "Who owns one incident, as the engine decided it: triage owner, technical owner, suspected domain, an external provider candidate with its demarcation state, and the escalation target. Never guess an owner the engine did not name.",
+		label:       "Owner",
+		args: []toolArgSpec{
+			{name: "correlation_id", desc: "The incident's correlation UUID.", required: true},
+		},
+	},
+	"get_affected_entities": {
+		description: "Every entity one incident affects, from the engine's own scope — each device, site, service, target, seam and region as its own citable item. Use it to answer \"which devices/sites are affected?\"; use get_blast_radius for how badly (impact measures).",
+		label:       "Affected entities",
+		args: []toolArgSpec{
+			{name: "correlation_id", desc: "The incident's correlation UUID.", required: true},
+		},
+	},
+	"compile_query": {
+		description: "Interpret an operator's data question the way Iris would: the validated query (metric, entities, window, filters) it compiles to, the entities it resolved, or what it did not understand. It NEVER runs the query or returns data — use it to check how a question will be read, or to explain an interpretation.",
+		label:       "Query interpretation",
+		args: []toolArgSpec{
+			{name: "question", desc: "The data question, in plain words (one line, at most 1000 characters).", required: true},
+		},
+	},
+	"get_confidence_breakdown": {
+		description: "Why the engine is as sure as it is: its verdict and confidence, then each ranked candidate cause with the evidence FOR it, the evidence AGAINST it and what is still missing. Use it for \"why does Correlix think X?\" and \"what argues against it?\".",
+		label:       "Confidence breakdown",
+		args: []toolArgSpec{
+			{name: "correlation_id", desc: "The incident's correlation UUID.", required: true},
 		},
 	},
 }

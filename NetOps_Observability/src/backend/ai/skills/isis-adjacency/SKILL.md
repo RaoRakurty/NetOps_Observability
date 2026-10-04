@@ -4,19 +4,21 @@ layer: igp
 version: 1
 when_to_use: isis, is-is, isis adjacency, isis neighbor, level-1, level-2, isis down, isis init, isis flapping
 symptom_kinds: igp, adjacency, routing
-tools: get_device_state, run_protocol_diagnostic, get_rca_verdict, get_topology_context, search_logs
+tools: get_device_state, run_protocol_diagnostic, get_rca_verdict, get_topology_context, search_logs, get_recent_changes
 gather:
   - get_device_state(device_id, area=igp)
   - get_rca_verdict(correlation_id)
   - run_protocol_diagnostic(device_id, protocol=isis, issue_id=isis-adjacency-down)
   - get_topology_context(device_id)
   - search_logs(device, query=ISIS, window=6h)
+  - get_recent_changes(device, window=24h)
 look_for:
   - The adjacency table read LIVE off the device, with the level and hold time the device itself prints.
   - Adjacency state and level. An adjacency stuck in INIT is hearing hellos without completing the handshake.
   - Level mismatch between the two ends, and area address agreement for Level-1 adjacencies.
   - MTU. IS-IS pads its hellos to the interface MTU, so an MTU mismatch prevents the adjacency from forming at all rather than degrading it.
   - Authentication and the interface circuit type, both of which fail quietly.
+  - Whether this device's configuration changed shortly before the adjacency dropped — a level, area address, MTU or authentication line changed on one side is the classic cause, but a change that merely preceded the drop is correlated, not proven cause.
 decisions:
   - next=interface-down when state:igp_nbr=none the device has no IS-IS adjacency at all in this table, so the circuit beneath it is the next check
   - next=log-confirmation when state:collect=not_wired the adjacency table could not be read live, so the transition times must come from the device's own words

@@ -3,6 +3,8 @@
 
 package ai
 
+import "encoding/json"
+
 // Answer modes (HLD §6). The Response Builder validates the assistant's output
 // into one of these typed schemas; the UI renders a card per mode. Every mode
 // carries Citations + Disclaimers so answers are always grounded and honest
@@ -66,6 +68,13 @@ type Answer struct {
 	Citations    []Citation           `json:"citations"`
 	Disclaimers  []string             `json:"disclaimers"`
 	Provider     string               `json:"provider,omitempty"` // which LLM answered (audit)
+	// Data is the structured answer of the DATA arm (ModeDataQuery, N-G4): the
+	// compile answer + result set, rendered by the client as data, never prose.
+	Data json.RawMessage `json:"data,omitempty"`
+	// ConversationID is set when this answer was recorded in the caller's
+	// conversation (the server's, never the client's state); empty = send the
+	// next question without it, or start a new conversation.
+	ConversationID string `json:"conversation_id,omitempty"`
 	// Universal Response-Quality fields (spec §6) — reusable across every answer
 	// mode, rendered by the generic AI answer card as badges + sections.
 	Status           string   `json:"status,omitempty"`           // NOC status word (Confirmed/Suspected/…)
@@ -108,6 +117,10 @@ type Answer struct {
 	// conclusion into an investigation-memory row. Opaque to the UI; echo it back
 	// on POST /api/ai/feedback as `answer_id`.
 	AnswerID string `json:"answer_id,omitempty"`
+	// DecisionID names the decision-ledger record of how this answer was
+	// reached (tracker 337 N-A6) — set by the server, never by the model; a
+	// workspace admin looks it up on GET /api/ai/decisions?decision_id=.
+	DecisionID string `json:"decision_id,omitempty"`
 }
 
 // IncidentCounts is the normalized incident-count set (spec §6). Every count

@@ -1,0 +1,422 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "metrics",
+  "cases": [
+    {
+      "id": "metrics-001",
+      "category": "metrics",
+      "question": "Show CPU on dfw-edge-1 for the last hour.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "dfw-edge-1",
+            "type": "device",
+            "id": "device:dfw-edge-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "device",
+          "metric": "cpu_util_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:dfw-edge-1"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "device:dfw-edge-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "cpu dfw-edge-1 last hour",
+        "how's the cpu on DFW-EDGE-1 over the past 60 min",
+        "dfw-edge-1 cpu past hour"
+      ]
+    },
+    {
+      "id": "metrics-002",
+      "category": "metrics",
+      "question": "Show memory usage on the Dallas routers over the last 6 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "Dallas",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "device",
+          "metric": "mem_util_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "6h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "device:dfw-edge-1",
+            "device:dfw-edge-2",
+            "device:dfw-core-1",
+            "device:dfw-fw-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "mem on the DFW boxes last 6h",
+        "memory utilization at dfw hq past six hours",
+        "dallas router memory last 6 hrs"
+      ]
+    },
+    {
+      "id": "metrics-003",
+      "category": "metrics",
+      "question": "Which devices have CPU above 80% in the last 15 minutes?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "device",
+          "metric": "cpu_util_pct",
+          "aggregation": "avg",
+          "predicate": {
+            "op": "gt",
+            "value": 80
+          },
+          "time_range": {
+            "kind": "relative",
+            "last": "15m"
+          }
+        },
+        "alternates": [
+          {
+            "v": 1,
+            "query_type": "metric_filter",
+            "target": "device",
+            "metric": "cpu_util_pct",
+            "aggregation": "max",
+            "predicate": {
+              "op": "gt",
+              "value": 80
+            },
+            "time_range": {
+              "kind": "relative",
+              "last": "15m"
+            }
+          }
+        ],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "any boxes over 80% cpu last 15 min",
+        "devices with cpu > 80 past 15m",
+        "who's above 80 percent cpu in the last quarter hour"
+      ]
+    },
+    {
+      "id": "metrics-004",
+      "category": "metrics",
+      "question": "Is memory above 90% anywhere in Austin right now?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [
+          {
+            "input": "Austin",
+            "type": "site",
+            "id": "site:aus-br",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "device",
+          "metric": "mem_util_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:aus-br"
+            }
+          ],
+          "predicate": {
+            "op": "gt",
+            "value": 90
+          },
+          "time_range": {
+            "kind": "relative",
+            "last": "5m"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "austin memory over 90 right now?",
+        "any aus devices above 90% mem currently",
+        "mem > 90% at the austin branch now?"
+      ]
+    },
+    {
+      "id": "metrics-005",
+      "category": "metrics",
+      "question": "Show p95 CPU for nyc-core-1 over the past 24 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "nyc-core-1",
+            "type": "device",
+            "id": "device:nyc-core-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "device",
+          "metric": "cpu_util_pct",
+          "aggregation": "p95",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:nyc-core-1"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "24h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "device:nyc-core-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "nyc-core-1 cpu p95 last 24h",
+        "95th percentile cpu on NYC-CORE-1 past day",
+        "p95 cpu nyc core last 24 hours"
+      ]
+    },
+    {
+      "id": "metrics-006",
+      "category": "metrics",
+      "question": "Show CPU on dfw-edge-1 and dfw-edge-2 for the last 2 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "dfw-edge-1",
+            "type": "device",
+            "id": "device:dfw-edge-1",
+            "method": "discovery"
+          },
+          {
+            "input": "dfw-edge-2",
+            "type": "device",
+            "id": "device:dfw-edge-2",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "device",
+          "metric": "cpu_util_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:dfw-edge-1"
+            },
+            {
+              "type": "device",
+              "id": "device:dfw-edge-2"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "2h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "device:dfw-edge-1",
+            "device:dfw-edge-2"
+          ]
+        }
+      },
+      "paraphrases": [
+        "cpu for both dfw edges last 2h",
+        "dfw-edge-1 + dfw-edge-2 cpu past two hours",
+        "compare-plot cpu dfw edge 1 and 2 last 2 hrs"
+      ]
+    },
+    {
+      "id": "metrics-007",
+      "category": "metrics",
+      "question": "Which Houston devices had unusual CPU today?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [
+          {
+            "input": "Houston",
+            "type": "site",
+            "id": "site:hou-br",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "device",
+          "metric": "cpu_util_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:hou-br"
+            }
+          ],
+          "predicate": {
+            "op": "above_baseline"
+          },
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "abnormal cpu at houston today?",
+        "hou devices with cpu above normal today",
+        "anything weird with cpu in Houston today"
+      ]
+    },
+    {
+      "id": "metrics-008",
+      "category": "metrics",
+      "question": "Show CPU on the affected router during this incident.",
+      "context": {
+        "tz": "America/Chicago",
+        "incident_id": "3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "this incident",
+            "type": "incident",
+            "id": "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+            "method": "context"
+          },
+          {
+            "input": "the affected router",
+            "type": "device",
+            "id": "device:dfw-edge-1",
+            "method": "context"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "device",
+          "metric": "cpu_util_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:dfw-edge-1"
+            }
+          ],
+          "time_range": {
+            "kind": "incident",
+            "anchor": {
+              "incident_id": "3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c"
+            }
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "device:dfw-edge-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "cpu on the impacted box during the incident",
+        "router cpu over the incident window",
+        "how was cpu on the affected device during this"
+      ]
+    }
+  ]
+}

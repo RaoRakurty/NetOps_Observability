@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"netops/backend/ai"
+	"netops/backend/internal/aientitlement"
 )
 
 // copilot_agent.go — the server-owned, bounded agent loop (intelligence plan
@@ -34,19 +35,13 @@ const (
 // featureAIToolsEnabled gates the loop (off by default — soak per plan §5 P2).
 func featureAIToolsEnabled() bool { return os.Getenv("FEATURE_AI_TOOLS") == "true" }
 
-// agentLoopEligible: the loop always runs for the platform owner / cross-tenant
-// principals; tenant users need their tenant's per-tenant entitlement
-// (ai_tenant_config.go, "AI Investigations"). AI_TOOLS_ALL_TENANTS=true remains
-// as a global override that entitles every tenant at once.
+// agentLoopEligible is the ai.investigate entitlement (N-A7): FEATURE_AI_TOOLS
+// on, the licence tier's mapping grants it, and — for a tenant user — their
+// tenant's "AI Investigations" switch (ai_tenant_config.go) or the global
+// AI_TOOLS_ALL_TENANTS override. Cross-tenant principals are not tenant-gated.
+// A chat turn without it degrades to plain chat; it never refuses the turn.
 func (s *server) agentLoopEligible(claims jwtClaims) bool {
-	if !featureAIToolsEnabled() {
-		return false
-	}
-	tenant, cross := principalTenant(claims)
-	if cross || os.Getenv("AI_TOOLS_ALL_TENANTS") == "true" {
-		return true
-	}
-	return s.aiTenantCfg.AgentToolsEnabled(tenant)
+	return s.aiEntitled(claims, aientitlement.Investigate)
 }
 
 // ---- daily per-tenant token budget (LLM04/LLM10, plan §4.5) ------------------
@@ -154,7 +149,10 @@ func (s *server) runAgentLoop(ctx context.Context, claims jwtClaims, p ai.Princi
 			continue
 		}
 		seen[ev.CitationID] = true
-		label := ev.Text
+		// Same rendering-boundary rule as the prompt (ai/prompt_fence.go): the
+		// chip label is cut from untrusted evidence text, so it is flattened
+		// before it is clipped.
+		label := ai.OneLine(ev.Text)
 		if len(label) > 80 {
 			label = label[:80] + "…"
 		}

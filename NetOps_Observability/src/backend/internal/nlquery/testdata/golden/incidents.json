@@ -1,0 +1,433 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "incidents",
+  "cases": [
+    {
+      "id": "incidents-001",
+      "category": "incidents",
+      "question": "What happened?",
+      "context": {
+        "tz": "America/Chicago",
+        "incident_id": "3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+        "script": "N-S1",
+        "turn": 1
+      },
+      "expect": {
+        "intent": "explain_incident",
+        "entities": [
+          {
+            "input": "this incident",
+            "type": "incident",
+            "id": "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+            "method": "context"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_explain",
+          "target": "incident",
+          "incident_id": "3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+          "time_range": {}
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_detail",
+          "must_include_refs": [
+            "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c"
+          ]
+        }
+      },
+      "paraphrases": [
+        "what happened here",
+        "what's going on with this incident",
+        "explain this incident"
+      ]
+    },
+    {
+      "id": "incidents-002",
+      "category": "incidents",
+      "question": "Show open incidents.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "filters": [
+            {
+              "field": "state",
+              "op": "eq",
+              "values": [
+                "open"
+              ]
+            }
+          ],
+          "time_range": {},
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+            "incident:5b9e3f10-a2c4-4d87-8f61-2c7a9e0b4d13"
+          ],
+          "min_rows": 2
+        }
+      },
+      "paraphrases": [
+        "open incidents",
+        "what's open right now",
+        "active incidents"
+      ]
+    },
+    {
+      "id": "incidents-003",
+      "category": "incidents",
+      "question": "Show confirmed incidents in the last 7 days.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "filters": [
+            {
+              "field": "verdict_tier",
+              "op": "eq",
+              "values": [
+                "confirmed"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "7d"
+          },
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+            "incident:c7e05b92-3d18-4a6f-9e27-b4f1a0c3d852",
+            "incident:e2d7a4c9-6b01-4f58-a3e9-71c5b8d02f6a"
+          ],
+          "min_rows": 3
+        }
+      },
+      "paraphrases": [
+        "confirmed incidents past week",
+        "incidents with a confirmed cause last 7 days",
+        "last week's confirmed incidents"
+      ]
+    },
+    {
+      "id": "incidents-004",
+      "category": "incidents",
+      "question": "Show incidents with confidence above 0.8 this week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "filters": [
+            {
+              "field": "top_confidence",
+              "op": "gt",
+              "values": [
+                "0.8"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+            "incident:c7e05b92-3d18-4a6f-9e27-b4f1a0c3d852",
+            "incident:e2d7a4c9-6b01-4f58-a3e9-71c5b8d02f6a"
+          ],
+          "min_rows": 3
+        }
+      },
+      "paraphrases": [
+        "high-confidence incidents this week (>0.8)",
+        "incidents over 80% confidence since monday",
+        "incidents confidence > 0.8 this week"
+      ]
+    },
+    {
+      "id": "incidents-005",
+      "category": "incidents",
+      "question": "Show the last 5 incidents.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "time_range": {},
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ],
+          "limit": 5
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+            "incident:5b9e3f10-a2c4-4d87-8f61-2c7a9e0b4d13"
+          ],
+          "min_rows": 3
+        }
+      },
+      "paraphrases": [
+        "last 5 incidents",
+        "5 most recent incidents",
+        "latest five incidents"
+      ]
+    },
+    {
+      "id": "incidents-006",
+      "category": "incidents",
+      "question": "Show incidents owned by network-ops in the last 3 days.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "filters": [
+            {
+              "field": "owner",
+              "op": "eq",
+              "values": [
+                "network-ops"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "3d"
+          },
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+            "incident:5b9e3f10-a2c4-4d87-8f61-2c7a9e0b4d13",
+            "incident:b6d31a7f-2c89-4e05-a1d6-9f4e7c3b582e"
+          ],
+          "min_rows": 3
+        }
+      },
+      "paraphrases": [
+        "network-ops incidents last 3 days",
+        "incidents assigned to network ops past 72h",
+        "what does network-ops own from the last three days"
+      ]
+    },
+    {
+      "id": "incidents-007",
+      "category": "incidents",
+      "question": "Which incidents are still undetermined?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "filters": [
+            {
+              "field": "verdict_tier",
+              "op": "eq",
+              "values": [
+                "undetermined"
+              ]
+            }
+          ],
+          "time_range": {},
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:5b9e3f10-a2c4-4d87-8f61-2c7a9e0b4d13"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "undetermined incidents",
+        "incidents with no known cause yet",
+        "which incidents have an undetermined verdict"
+      ]
+    },
+    {
+      "id": "incidents-008",
+      "category": "incidents",
+      "question": "Show closed incidents at NYC in the last 30 days.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [
+          {
+            "input": "NYC",
+            "type": "site",
+            "id": "site:nyc-dc",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:nyc-dc"
+            }
+          ],
+          "filters": [
+            {
+              "field": "state",
+              "op": "eq",
+              "values": [
+                "closed"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "30d"
+          },
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:c7e05b92-3d18-4a6f-9e27-b4f1a0c3d852"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "closed nyc incidents last 30 days",
+        "resolved incidents at the new york dc past month",
+        "nyc incidents that are closed, last 30d"
+      ]
+    },
+    {
+      "id": "incidents-009",
+      "category": "incidents",
+      "question": "Explain the Houston VPN incident.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "explain_incident",
+        "entities": [
+          {
+            "input": "the Houston VPN incident",
+            "type": "incident",
+            "id": "incident:5b9e3f10-a2c4-4d87-8f61-2c7a9e0b4d13",
+            "method": "corr_current"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_explain",
+          "target": "incident",
+          "incident_id": "5b9e3f10-a2c4-4d87-8f61-2c7a9e0b4d13",
+          "time_range": {}
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_detail",
+          "must_include_refs": [
+            "incident:5b9e3f10-a2c4-4d87-8f61-2c7a9e0b4d13"
+          ]
+        }
+      },
+      "paraphrases": [
+        "what happened with the houston vpn outage",
+        "explain the hou vpn incident",
+        "tell me about the Houston VPN issue"
+      ]
+    }
+  ]
+}

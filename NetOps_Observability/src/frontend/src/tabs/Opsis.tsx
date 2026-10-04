@@ -21,13 +21,65 @@ import {
   AiCommand,
 } from "../services/api";
 import Icon from "../components/Icon";
+import IrisVocabulary from "../components/IrisVocabulary";
+import PresentationPlanRenderer from "../iris/PresentationPlanRenderer";
+import { answerCiteHref } from "../iris/links";
+import QueryCorrection from "../iris/QueryCorrection";
+import { hasAIEntitlement } from "../lib/aiEntitlements";
+import { httpFailure, operatorError } from "../lib/errors";
+
+// The Iris box's server conversation (tracker 337 N-C7/N-E4): only its id
+// lives in the browser, in sessionStorage so it survives the drawer closing.
+// Storage can be unavailable (private window, blocked site data); then
+// follow-ups still work until the page reloads.
+const CONV_KEY = "iris.conversation";
+function loadConversation(): string | null {
+  try { return sessionStorage.getItem(CONV_KEY); } catch { return null; }
+}
+function saveConversation(id: string | null): void {
+  try {
+    if (id) sessionStorage.setItem(CONV_KEY, id);
+    else sessionStorage.removeItem(CONV_KEY);
+  } catch { /* storage unavailable: the in-memory id still carries this session */ }
+}
 import { friendlyProblemId } from "../components/rca/labels";
 import { useShell } from "../context/shell";
 
-// Iris AI — the in-app assistant chat. Posts to /api/copilot/chat (provider
-// fallback chain server-side); key-free questions fall through to the grounded
-// /api/ai/ask engine. Rendered inside the right-side drawer. Assistant output is
-// rendered as ESCAPED React text only (OWASP LLM02 — never dangerouslySetInnerHTML).
+// Iris AI — the in-app assistant chat, rendered inside the right-side drawer.
+// Assistant output is rendered as ESCAPED React text only (OWASP LLM02 — never
+// dangerouslySetInnerHTML).
+//
+// ROUTING (tracker 330 — the product's central claim).
+// EVERY freely typed question goes to the grounded engine, POST /api/ai/ask,
+// whether or not a provider key is configured. That is the only route that runs
+// classification → the policy engine → the skill chain → tenant-scoped evidence
+// → TAC/product knowledge → the quality layer → Redact → grounding verification
+// → citations. The orchestrator calls the SAME provider the plain proxy would
+// have called, so this is not a downgrade in answer quality: it is the same
+// model with the evidence attached and the claims checked.
+//
+// Until this change the branch was inverted — `key_present` sent free text to
+// the plain chat proxy — so configuring a key, the normal production state,
+// silently un-grounded the assistant while the panel went on advertising
+// "grounded, tenant-scoped and cited".
+//
+// WHAT IS LEFT ON THE PLAIN PROXY, and why.
+// Exactly one case: a question the engine could not place at all (it answers
+// with the capability clarification, mode "unavailable" / intent "capability"),
+// when a provider key IS configured. Those are the conversational turns the
+// single-shot grounded engine has no schema for — "shorter", "what about the
+// second one", "thanks" — and the 2026-07-02 brevity incident is precisely an
+// operator issuing one of them. Rather than dead-end a paid provider on
+// "I didn't quite catch that", the turn is retried on /api/copilot/chat WITH
+// the conversation, and the resulting bubble is labelled from the server's own
+// `is_grounded` flag. It costs one extra provider call at most, only on a
+// question the engine already declined, and it never carries the grounded claim.
+//
+// The model-driven agent loop (FEATURE_AI_TOOLS) is deliberately NOT the default
+// route for free text: it is off by default, entitled per tenant, and its tool
+// replies are not yet fenced as data (tracker 333), so it cannot carry the
+// grounded claim on its own. The server-planned skill chain inside the
+// orchestrator is the supported investigator.
 
 const SUGGESTIONS = [
   "Why might my edge router be dropping BGP sessions?",
@@ -91,6 +143,25 @@ const INTENT_BADGE: Record<string, string> = {
   time_range_summary: "History", product_navigation: "Navigation", help: "Help",
 };
 
+// isCapabilityMiss reports the grounded engine's honest "I could not place that
+// question" answer (orchestrator answerCapability): mode "unavailable" with
+// intent "capability". It is the ONLY engine outcome that may be retried on the
+// plain chat proxy — an access refusal, a not-built answer mode or any real
+// answer stays exactly as the engine wrote it.
+export function isCapabilityMiss(ans: AiAnswer): boolean {
+  return ans.mode === "unavailable" && ans.intent === "capability";
+}
+
+// groundedChipLabel is the per-answer provenance claim. "cited" is asserted only
+// when the answer actually carries citations — a grounded answer with nothing to
+// link to is still grounded, and saying "cited" beside no citation would be the
+// same class of untruth this whole change removes.
+export function groundedChipLabel(ans: AiAnswer): string {
+  return ans.citations && ans.citations.length > 0
+    ? "Grounded · tenant-scoped · cited"
+    : "Grounded · tenant-scoped";
+}
+
 // cmdToSlash adapts a backend AiCommand (the single source of truth) to the menu
 // row shape. Every command routes through the grounded engine as the raw "/cmd"
 // — the backend resolves it to the same intent as the natural-language question.
@@ -112,6 +183,9 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
 }) {
   const { setCopilotOpen, openHelp } = useShell();
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  // N-A7: natural-language questions are their own entitlement (ai.nlquery).
+  // Hiding is cosmetic — the server refuses the NL routes without it.
+  const [nlqEntitled, setNlqEntitled] = useState(false);
   const [history, setHistory] = useState<CopilotMessage[]>([]);
   // Grounded answers (from /api/ai/ask) keyed by their assistant-message index in
   // `history`, so those turns render the rich, cited card instead of plain text.
@@ -124,6 +198,10 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
   // ran ("Investigated 3 sources") + the evidence citations they produced.
   const [lookups, setLookups] = useState<Record<number, ChatLookup[]>>({});
   const [chatCites, setChatCites] = useState<Record<number, ChatCitation[]>>({});
+  // Assistant turns the SERVER reported as NOT grounded (tracker 330) — the
+  // general-model retry for a question the engine could not place. Keyed the same
+  // way as `grounded`; the two are mutually exclusive by construction.
+  const [ungrounded, setUngrounded] = useState<Record<number, boolean>>({});
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -131,6 +209,30 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
   // answered instead (owner decision: degrade elegantly, never dead-end).
   const [fallbackNote, setFallbackNote] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const convRef = useRef<string | null>(loadConversation());
+  // Read inside the async ask, so it tracks the latest answer without a stale closure.
+  const nlqEntitledRef = useRef(false);
+  nlqEntitledRef.current = nlqEntitled;
+  const setConversation = (id: string | null) => { convRef.current = id; saveConversation(id); };
+  // askInConversation sends a typed question in the box's conversation, so a
+  // follow-up ("memory on that device") resolves against what the server
+  // holds. A conversation the server no longer has is dropped and the
+  // question is asked without one — the next question starts a new one.
+  const askInConversation = async (content: string): Promise<AiAnswer> => {
+    let id = convRef.current;
+    if (!id && nlqEntitledRef.current) {
+      try { id = (await api.startIrisConversation()).id; } catch { id = null; } // conversations unavailable: ask without
+    }
+    try {
+      const ans = await api.aiAsk(content, undefined, id ?? undefined);
+      setConversation(ans.conversation_id ?? null);
+      return ans;
+    } catch (e) {
+      if (!id || httpFailure(e)?.status !== 404) throw e;
+      setConversation(null);
+      return api.aiAsk(content);
+    }
+  };
   const taRef = useRef<HTMLTextAreaElement | null>(null);
 
   const [cfg, setCfg] = useState<CopilotConfig | null>(null);
@@ -156,13 +258,18 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
 
   // New conversation — clear the thread + transient panels, focus the composer.
   const newConversation = () => {
-    setHistory([]); setGrounded({}); setDocRefs({}); setLookups({}); setChatCites({}); setDraft(""); setError(null);
+    setHistory([]); setGrounded({}); setDocRefs({}); setLookups({}); setChatCites({}); setUngrounded({});
+    setConversation(null); // a cleared chat forgets its follow-up context too
+    setDraft(""); setError(null);
     setShowSettings(false); setShowHelp(false); setSlashOpen(false);
     taRef.current?.focus();
   };
 
   useEffect(() => {
-    api.features().then((c) => setEnabled(Boolean(c?.copilot))).catch(() => setEnabled(false));
+    api.features().then((c) => {
+      setEnabled(Boolean(c?.copilot) && hasAIEntitlement(c, "ai.chat"));
+      setNlqEntitled(hasAIEntitlement(c, "ai.nlquery"));
+    }).catch(() => { setEnabled(false); setNlqEntitled(false); });
     // Platform owner → platform settings + the per-workspace access list;
     // tenant admin → their own workspace settings. Whichever call the caller
     // isn't authorized for simply stays null.
@@ -187,6 +294,8 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       const saved = await api.setCopilotConfig({
         provider: cfg.provider,
         model: cfg.model,
+        model_fast: cfg.model_fast ?? "",
+        model_strong: cfg.model_strong ?? "",
         system: cfg.system,
         ...(keyDraft.trim() ? { key: keyDraft.trim() } : {}),
       });
@@ -194,7 +303,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       setKeyDraft("");
       setShowSettings(false);
     } catch (e) {
-      setError((e as Error).message);
+      setError(operatorError(e, "The settings could not be saved."));
     } finally {
       setSavingCfg(false);
     }
@@ -210,6 +319,8 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       const saved = await api.setAITenantConfig({
         provider: tcfg.provider,
         model: tcfg.model,
+        model_fast: tcfg.model_fast ?? "",
+        model_strong: tcfg.model_strong ?? "",
         no_platform_key: tcfg.no_platform_key,
         ...(tKeyDraft.trim() ? { key: tKeyDraft.trim() } : {}),
       });
@@ -217,7 +328,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       setTKeyDraft("");
       setShowSettings(false);
     } catch (e) {
-      setError((e as Error).message);
+      setError(operatorError(e, "The settings could not be saved."));
     } finally {
       setSavingCfg(false);
     }
@@ -236,7 +347,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       });
     } catch (e) {
       setTenantRows((rows) => (rows ?? []).map((r) => (r.tenant_id === row.tenant_id ? row : r)));
-      setError((e as Error).message);
+      setError(operatorError(e, "That workspace's access could not be changed."));
     }
   };
 
@@ -250,31 +361,37 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
     setBusy(true);
     setError(null);
     try {
-      if (ready) {
-        // Free-form LLM chat — a provider key is configured.
-        const r = await api.copilotChat(newHistory);
-        setHistory([...newHistory, { role: "assistant", content: extractAssistantText(r) }]);
-        const nr = r as NormalizedChatResponse;
-        if (nr.doc_refs?.length) setDocRefs((d) => ({ ...d, [idx]: nr.doc_refs! }));
-        if (nr.lookups?.length) setLookups((d) => ({ ...d, [idx]: nr.lookups! }));
-        if (nr.citations?.length) setChatCites((d) => ({ ...d, [idx]: nr.citations! }));
-        // Provider-down fallback: the engine answered — render the rich grounded
-        // card and disclose it with the slim banner (never a dead-end error).
-        if (nr.fallback && nr.grounded) {
-          setGrounded((g) => ({ ...g, [idx]: nr.grounded! }));
-          setFallbackNote(true);
-        } else if (nr.provider && nr.provider !== "engine") {
-          setFallbackNote(false); // provider is back — banner clears itself
-        }
-      } else {
-        // No provider key: answer from the grounded engine instead of erroring, so
-        // any typed question still gets a tenant-scoped, evidence-cited answer.
-        const ans = await api.aiAsk(content);
+      // The grounded engine answers EVERY typed question, key or no key. See the
+      // ROUTING note at the top of this file for why this is unconditional.
+      const ans = await askInConversation(content);
+      if (!(ready && isCapabilityMiss(ans))) {
         setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
         setGrounded((g) => ({ ...g, [idx]: ans }));
+        return;
+      }
+      // The engine declined to place the question and a provider IS configured:
+      // retry the CONVERSATION on the plain proxy so a follow-up ("shorter",
+      // "what about the second one") still works. The answer is labelled from
+      // the server's `is_grounded` — we never infer grounding here.
+      const r = await api.copilotChat(newHistory);
+      setHistory([...newHistory, { role: "assistant", content: extractAssistantText(r) }]);
+      const nr = r as NormalizedChatResponse;
+      if (nr.doc_refs?.length) setDocRefs((d) => ({ ...d, [idx]: nr.doc_refs! }));
+      if (nr.lookups?.length) setLookups((d) => ({ ...d, [idx]: nr.lookups! }));
+      if (nr.citations?.length) setChatCites((d) => ({ ...d, [idx]: nr.citations! }));
+      // Provider-down fallback: the engine answered — render the rich grounded
+      // card and disclose it with the slim banner (never a dead-end error).
+      if (nr.fallback && nr.grounded) {
+        setGrounded((g) => ({ ...g, [idx]: nr.grounded! }));
+        setFallbackNote(true);
+      } else if (nr.provider && nr.provider !== "engine") {
+        setFallbackNote(false); // provider is back — banner clears itself
+      }
+      if (nr.is_grounded !== true && !(nr.fallback && nr.grounded)) {
+        setUngrounded((u) => ({ ...u, [idx]: true }));
       }
     } catch (e) {
-      setError((e as Error).message);
+      setError(operatorError(e, "Iris could not answer that — try again."));
     } finally {
       setBusy(false);
     }
@@ -296,7 +413,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
       setGrounded((g) => ({ ...g, [idx]: ans }));
     } catch (e) {
-      setError((e as Error).message);
+      setError(operatorError(e, "Iris could not answer that — try again."));
     } finally {
       setBusy(false);
     }
@@ -318,7 +435,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
       setGrounded((g) => ({ ...g, [idx]: ans }));
     } catch (e) {
-      setError((e as Error).message);
+      setError(operatorError(e, "Iris could not answer that — try again."));
     } finally {
       setBusy(false);
     }
@@ -340,7 +457,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
       setGrounded((g) => ({ ...g, [idx]: ans }));
     } catch (e) {
-      setError((e as Error).message);
+      setError(operatorError(e, "Iris could not answer that — try again."));
     } finally {
       setBusy(false);
     }
@@ -459,7 +576,9 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
             <li><b>Playbooks</b> — “how do I troubleshoot a BGP flap?”, CCIE-grade guidance.</li>
             <li><b>Navigation</b> — “where do I configure ServiceNow?”.</li>
           </ul>
-          <div className="op-help-tip">Type <kbd>/</kbd> in the box for ready-made questions. Answers are grounded, tenant-scoped and cited — setup and how-to answers link to the documentation, and the <b>?</b> button opens the full docs.</div>
+          {/* The claim, stated exactly as the routing makes it true (tracker
+              330): grounded by default, labelled when it isn't. */}
+          <div className="op-help-tip">Type <kbd>/</kbd> in the box for ready-made questions. Every question goes to the grounded engine first, so answers are tenant-scoped and cite the evidence or documentation behind them — setup and how-to answers link to the documentation, and the <b>?</b> button opens the full docs. If Iris can&apos;t place a question and a provider key is connected, it answers from the general model instead and labels that answer <b>Not grounded</b>.</div>
         </div>
       )}
 
@@ -512,6 +631,9 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
               </div>
             )}
           </div>
+          <TierModelFields
+            fast={cfg.model_fast ?? ""} strong={cfg.model_strong ?? ""}
+            onChange={(t) => setCfg({ ...cfg, model_fast: t.fast, model_strong: t.strong })} />
           <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
             <button className="dash-btn accent" onClick={saveCfg} disabled={savingCfg}>{savingCfg ? "Saving…" : "Save"}</button>
             <button className="dash-btn" onClick={() => setShowSettings(false)} disabled={savingCfg}>Cancel</button>
@@ -606,6 +728,9 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
               onChange={(e) => setTcfg({ ...tcfg, model: e.target.value })}
               placeholder="model id (blank = provider default)" />
           </div>
+          <TierModelFields
+            fast={tcfg.model_fast ?? ""} strong={tcfg.model_strong ?? ""}
+            onChange={(t) => setTcfg({ ...tcfg, model_fast: t.fast, model_strong: t.strong })} />
           {tcfg.platform_key_available && (
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--muted)", margin: "2px 0 8px" }}>
               <input type="checkbox" checked={!tcfg.no_platform_key}
@@ -620,12 +745,13 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
                 onClick={async () => {
                   setSavingCfg(true);
                   try { setTcfg(await api.setAITenantConfig({ provider: tcfg.provider, model: tcfg.model, no_platform_key: tcfg.no_platform_key, clear_key: true })); setTKeyDraft(""); }
-                  catch (e) { setError((e as Error).message); }
+                  catch (e) { setError(operatorError(e, "The key could not be removed.")); }
                   finally { setSavingCfg(false); }
                 }}>Remove key</button>
             )}
             <button className="dash-btn" onClick={() => setShowSettings(false)} disabled={savingCfg}>Cancel</button>
           </div>
+          {tcfg.assistant_enabled && nlqEntitled && <IrisVocabulary />}
         </div>
       )}
 
@@ -686,6 +812,23 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
           <div key={i} className={`op-row ${m.role}`}>
             {m.role === "assistant" && <span className="op-avatar"><Icon name="copilot" size={14} /></span>}
             <div className={`op-bubble ${m.role}${m.role === "assistant" && grounded[i] ? " op-bubble-grounded" : ""}`}>
+              {/* Provenance chip (tracker 330). Exactly one per assistant turn:
+                  what this answer is, stated beside the answer itself rather
+                  than as a blanket claim under the composer. */}
+              {m.role === "assistant" && grounded[i] && (
+                <div className="op-badges">
+                  <span className="op-badge tone-accent" data-testid="iris-grounded-chip">
+                    {groundedChipLabel(grounded[i])}
+                  </span>
+                </div>
+              )}
+              {m.role === "assistant" && !grounded[i] && ungrounded[i] && (
+                <div className="op-badges">
+                  <span className="op-badge tone-warn" data-testid="iris-ungrounded-chip">
+                    Not grounded — general AI answer, no evidence read
+                  </span>
+                </div>
+              )}
               {m.role === "assistant" && grounded[i]
                 ? <GroundedAnswer ans={grounded[i]} onCite={() => setCopilotOpen(false)} onClose={() => setCopilotOpen(false)} />
                 : renderContent(m.content)}
@@ -700,12 +843,14 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
               {m.role === "assistant" && chatCites[i] && chatCites[i].length > 0 && (
                 <div className="op-cites">
                   <span className="op-cites-h">Evidence</span>
-                  {chatCites[i].map((c) => (
-                    <a key={c.id} className="op-cite" href={c.href} title={c.label}
-                      onClick={() => setCopilotOpen(false)}>
-                      {c.label.length > 42 ? c.label.slice(0, 42) + "…" : c.label}
-                    </a>
-                  ))}
+                  {chatCites[i].map((c) => {
+                    const text = c.label.length > 42 ? c.label.slice(0, 42) + "…" : c.label;
+                    const href = answerCiteHref(c.href);
+                    return href
+                      ? <a key={c.id} className="op-cite" href={href} title={c.label}
+                          onClick={() => setCopilotOpen(false)}>{text}</a>
+                      : <span key={c.id} className="op-cite" title={c.label}>{text}</span>;
+                  })}
                 </div>
               )}
               {/* Documentation the answer was grounded in — opens the Help drawer
@@ -780,8 +925,10 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
           }}
         />
         <div className="op-composer-actions">
+          {/* A statement about the ROUTE (always true), not about every answer
+              (which is claimed per-bubble by the provenance chip). */}
           <span className="op-composer-hint">
-            <span className="op-composer-dot" /> Grounded · tenant-scoped · cited
+            <span className="op-composer-dot" /> Grounded engine by default · tenant-scoped
           </span>
           <button type="submit" className="op-send" disabled={busy || !draft.trim()} title="Send (⏎)">
             <Icon name="chevron" size={16} />
@@ -882,6 +1029,14 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
       )}
 
       {ans.text && <div className="op-text">{ans.text}</div>}
+      {ans.mode === "data_query" && ans.data?.result !== undefined && (
+        <div data-testid="op-data-answer"><PresentationPlanRenderer result={ans.data.result} /></div>
+      )}
+      {/* "That's not what I meant" (N-C8): only on a data answer the server
+          recorded — the id names the caller's own query-log record. */}
+      {ans.mode === "data_query" && typeof ans.data?.query_log_id === "string" && (
+        <QueryCorrection key={ans.data.query_log_id} queryId={ans.data.query_log_id} />
+      )}
 
       {/* Live-state briefing: counts → focus + why → suspected list → watch items. */}
       {cs && (
@@ -977,9 +1132,13 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
                   onClick={(e) => { e.preventDefault(); openHelp(c.href); }}>
                   <Icon name="docs" size={11} /> {c.label || c.id}
                 </a>
-              : <a key={c.id} className="op-cite" href={c.href} title={c.label} onClick={onCite}>
-                  <Icon name="external" size={11} /> {c.label || c.id}
-                </a>
+              : answerCiteHref(c.href)
+                ? <a key={c.id} className="op-cite" href={answerCiteHref(c.href)!} title={c.label} onClick={onCite}>
+                    <Icon name="external" size={11} /> {c.label || c.id}
+                  </a>
+                // Not a page (a query citation has no href) or not a safe one:
+                // the reference is still shown, as text.
+                : <span key={c.id} className="op-cite" title={c.label}>{c.label || c.id}</span>
           ))}
         </div>
       )}
@@ -1024,4 +1183,27 @@ function extractAssistantText(r: CopilotChatResponse): string {
   }
   if ((r as OpenAIChatResponse).choices) return (r as OpenAIChatResponse).choices[0]?.message?.content ?? "";
   return JSON.stringify(r);
+}
+
+// TierModelFields — the optional model-router overrides. Iris answers quick
+// look-ups with the "fast" model and multi-step investigations with the
+// "strong" one; blank means "use the model above for everything", which is the
+// behaviour of every install that never sets them.
+function TierModelFields({ fast, strong, onChange }: {
+  fast: string;
+  strong: string;
+  onChange: (t: { fast: string; strong: string }) => void;
+}) {
+  return (
+    <div className="op-field">
+      <span>Model for quick answers <span style={{ color: "var(--muted)" }}>(optional)</span></span>
+      <input className="op-modelinput" value={fast} aria-label="Model for quick answers"
+        onChange={(e) => onChange({ fast: e.target.value, strong })}
+        placeholder="blank = same as Model" />
+      <span>Model for deep investigations <span style={{ color: "var(--muted)" }}>(optional)</span></span>
+      <input className="op-modelinput" value={strong} aria-label="Model for deep investigations"
+        onChange={(e) => onChange({ fast, strong: e.target.value })}
+        placeholder="blank = same as Model" />
+    </div>
+  );
 }

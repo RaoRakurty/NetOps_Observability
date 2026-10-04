@@ -17,11 +17,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -115,6 +118,20 @@ func StripFabricatedDocRefs(text string, refs []DocRef) string {
 // assistant text or an error. Pure (no s) — the chain in handleCopilot owns
 // fallback/ordering.
 func CallProvider(ctx context.Context, name, key, model, system string, msgs []ChatMessage) (string, error) {
+	c, err := CallProviderUsage(ctx, name, key, model, system, msgs)
+	return c.Text, err
+}
+
+// Completion is one provider answer plus the PROVIDER'S OWN token accounting.
+// Usage.Reported is false when the response carried no usage block — the
+// number is then unknown, never estimated here.
+type Completion struct {
+	Text  string
+	Usage TokenUsage
+}
+
+// CallProviderUsage is CallProvider with the provider-reported usage attached.
+func CallProviderUsage(ctx context.Context, name, key, model, system string, msgs []ChatMessage) (Completion, error) {
 	switch name {
 	case "openai":
 		return callOpenAI(ctx, key, model, system, msgs)
@@ -123,7 +140,7 @@ func CallProvider(ctx context.Context, name, key, model, system string, msgs []C
 	case "anthropic":
 		return callAnthropic(ctx, key, model, system, msgs)
 	}
-	return "", fmt.Errorf("unknown provider %q", name)
+	return Completion{}, fmt.Errorf("unknown provider %q", name)
 }
 
 // copilotProviderChain returns the fallback order. Default ChatGPT→Gemini→
@@ -153,10 +170,73 @@ func SwapProviderHTTPForTest(c *http.Client) (restore func()) {
 	return func() { providerHTTP = prev }
 }
 
-// ProviderDo performs one provider HTTP call and returns the 2xx body. On a
-// non-2xx it logs the provider's error body server-side (SR-022 — never echoed
-// to the client) and returns an error so the chain falls through. The URL is
-// never logged (Gemini carries its key in the query string).
+// ProviderStatusError is a non-2xx provider answer. The status decides whether
+// the call is retried; the body is logged server-side only (SR-022).
+type ProviderStatusError struct {
+	Provider   string
+	Status     int
+	RetryAfter time.Duration // the provider's Retry-After hint, 0 when absent
+}
+
+func (e *ProviderStatusError) Error() string {
+	return fmt.Sprintf("%s: status %d", e.Provider, e.Status)
+}
+
+// Provider retry policy (CLAUDE.md §9: every network call retries with backoff
+// + jitter, bounded). A completion is a read — replaying it cannot change
+// anything — so a transient failure is retried; a caller error (4xx other than
+// 408/429) never is, because asking again cannot fix it. The context deadline
+// always wins: no sleep outlasts it.
+var (
+	providerMaxAttempts   = 3
+	providerBackoffBase   = 400 * time.Millisecond
+	providerBackoffCap    = 3 * time.Second
+	providerRetryAfterCap = 5 * time.Second
+	providerSleep         = sleepCtx
+)
+
+// retryableProviderStatus is the closed set of statuses worth asking again.
+// 529 is Anthropic's "overloaded".
+func retryableProviderStatus(code int) bool {
+	switch code {
+	case http.StatusRequestTimeout, http.StatusTooManyRequests,
+		http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout, 529:
+		return true
+	}
+	return false
+}
+
+// providerBackoff is full-jitter exponential backoff for retry n (1-based),
+// raised to the provider's own Retry-After hint when it gave one (bounded).
+func providerBackoff(n int, hint time.Duration) time.Duration {
+	ceil := providerBackoffBase << (n - 1)
+	if ceil > providerBackoffCap || ceil <= 0 {
+		ceil = providerBackoffCap
+	}
+	d := time.Duration(rand.Int64N(int64(ceil) + 1)) // #nosec G404 -- retry jitter, not a security context
+	if hint > d {
+		d = min(hint, providerRetryAfterCap)
+	}
+	return d
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// ProviderDo performs one provider HTTP call — retried on a transient failure
+// — and returns the 2xx body. On a non-2xx it logs the provider's error body
+// server-side (SR-022 — never echoed to the client) and returns an error so the
+// chain falls through. The URL is never logged (Gemini carries its key in the
+// query string).
 func ProviderDo(ctx context.Context, urlStr string, headers map[string]string, body []byte, provider string) ([]byte, error) {
 	// LLM06 backstop — the LAST line before bytes leave the process. Every
 	// assembler upstream (plain chat, the grounded prompts, the agent loop's
@@ -168,6 +248,47 @@ func ProviderDo(ctx context.Context, urlStr string, headers map[string]string, b
 	// Mask contains no quoting/escaping characters and the value patterns
 	// stop at structural characters, so the JSON payload stays well-formed.
 	body = []byte(RedactSecrets(string(body)))
+	var lastErr error
+	for attempt := 1; attempt <= providerMaxAttempts; attempt++ {
+		rb, err := providerDoOnce(ctx, urlStr, headers, body, provider)
+		if err == nil {
+			return rb, nil
+		}
+		lastErr = err
+		if attempt == providerMaxAttempts || ctx.Err() != nil {
+			break
+		}
+		var hint time.Duration
+		var se *ProviderStatusError
+		switch {
+		case errors.As(err, &se):
+			if !retryableProviderStatus(se.Status) {
+				return nil, err
+			}
+			hint = se.RetryAfter
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			return nil, err
+		default:
+			// A provider that hung until the client timeout is not retried: a
+			// second 60 s wait is worse than the chain falling through to the
+			// next provider now. Connection-level failures (refused, reset) are.
+			var te interface{ Timeout() bool }
+			if errors.As(err, &te) && te.Timeout() {
+				return nil, err
+			}
+		}
+		wait := providerBackoff(attempt, hint)
+		applog.Warn("copilot", "provider call failed — retrying", map[string]any{
+			"provider": provider, "attempt": attempt, "wait_ms": wait.Milliseconds(), "err": err.Error()})
+		if serr := providerSleep(ctx, wait); serr != nil {
+			return nil, lastErr
+		}
+	}
+	return nil, lastErr
+}
+
+// providerDoOnce is exactly one HTTP exchange.
+func providerDoOnce(ctx context.Context, urlStr string, headers map[string]string, body []byte, provider string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, urlStr, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -189,46 +310,58 @@ func ProviderDo(ctx context.Context, urlStr string, headers map[string]string, b
 			snippet = snippet[:512]
 		}
 		applog.Error("copilot", "provider returned error", map[string]any{"provider": provider, "status": resp.StatusCode, "body": string(snippet)})
-		return nil, fmt.Errorf("%s: status %d", provider, resp.StatusCode)
+		se := &ProviderStatusError{Provider: provider, Status: resp.StatusCode}
+		if secs, perr := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); perr == nil && secs > 0 {
+			se.RetryAfter = time.Duration(secs) * time.Second
+		}
+		return nil, se
 	}
 	return rb, nil
 }
 
 // ---- OpenAI (ChatGPT) -------------------------------------------------------
 
-func callOpenAI(ctx context.Context, key, model, system string, msgs []ChatMessage) (string, error) {
+func callOpenAI(ctx context.Context, key, model, system string, msgs []ChatMessage) (Completion, error) {
 	// The server-controlled system prompt goes in as a leading system-role
 	// message; msgs are already sanitized to user/assistant.
 	all := append([]ChatMessage{{Role: "system", Content: system}}, msgs...)
 	body, _ := json.Marshal(map[string]any{"model": model, "messages": all, "max_tokens": MaxOutputTokens}) // discard: marshalling an in-memory value cannot fail
 	rb, err := ProviderDo(ctx, "https://api.openai.com/v1/chat/completions", map[string]string{"Authorization": "Bearer " + key}, body, "openai")
 	if err != nil {
-		return "", err
+		return Completion{}, err
 	}
 	return parseOpenAI(rb)
 }
 
 // parseOpenAI extracts the assistant text from an OpenAI chat-completions body.
-func parseOpenAI(rb []byte) (string, error) {
+func parseOpenAI(rb []byte) (Completion, error) {
 	var out struct {
 		Choices []struct {
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage *struct {
+			PromptTokens     int64 `json:"prompt_tokens"`
+			CompletionTokens int64 `json:"completion_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.Unmarshal(rb, &out); err != nil {
-		return "", err
+		return Completion{}, err
 	}
 	if len(out.Choices) == 0 {
-		return "", fmt.Errorf("openai: empty response")
+		return Completion{}, fmt.Errorf("openai: empty response")
 	}
-	return out.Choices[0].Message.Content, nil
+	c := Completion{Text: out.Choices[0].Message.Content}
+	if out.Usage != nil {
+		c.Usage = TokenUsage{InputTokens: out.Usage.PromptTokens, OutputTokens: out.Usage.CompletionTokens, Reported: true}
+	}
+	return c, nil
 }
 
 // ---- Gemini (Google) --------------------------------------------------------
 
-func callGemini(ctx context.Context, key, model, system string, msgs []ChatMessage) (string, error) {
+func callGemini(ctx context.Context, key, model, system string, msgs []ChatMessage) (Completion, error) {
 	type gpart struct {
 		Text string `json:"text"`
 	}
@@ -254,13 +387,13 @@ func callGemini(ctx context.Context, key, model, system string, msgs []ChatMessa
 	endpoint := "https://generativelanguage.googleapis.com/v1beta/models/" + url.PathEscape(model) + ":generateContent?key=" + url.QueryEscape(key)
 	rb, err := ProviderDo(ctx, endpoint, nil, body, "gemini")
 	if err != nil {
-		return "", err
+		return Completion{}, err
 	}
 	return parseGemini(rb)
 }
 
 // parseGemini extracts the assistant text from a Gemini generateContent body.
-func parseGemini(rb []byte) (string, error) {
+func parseGemini(rb []byte) (Completion, error) {
 	var out struct {
 		Candidates []struct {
 			Content struct {
@@ -269,23 +402,31 @@ func parseGemini(rb []byte) (string, error) {
 				} `json:"parts"`
 			} `json:"content"`
 		} `json:"candidates"`
+		UsageMetadata *struct {
+			PromptTokenCount     int64 `json:"promptTokenCount"`
+			CandidatesTokenCount int64 `json:"candidatesTokenCount"`
+		} `json:"usageMetadata"`
 	}
 	if err := json.Unmarshal(rb, &out); err != nil {
-		return "", err
+		return Completion{}, err
 	}
 	if len(out.Candidates) == 0 {
-		return "", fmt.Errorf("gemini: empty response")
+		return Completion{}, fmt.Errorf("gemini: empty response")
 	}
 	var sb strings.Builder
 	for _, p := range out.Candidates[0].Content.Parts {
 		sb.WriteString(p.Text)
 	}
-	return sb.String(), nil
+	c := Completion{Text: sb.String()}
+	if out.UsageMetadata != nil {
+		c.Usage = TokenUsage{InputTokens: out.UsageMetadata.PromptTokenCount, OutputTokens: out.UsageMetadata.CandidatesTokenCount, Reported: true}
+	}
+	return c, nil
 }
 
 // ---- Anthropic (Copilot/Claude) ---------------------------------------------
 
-func callAnthropic(ctx context.Context, key, model, system string, msgs []ChatMessage) (string, error) {
+func callAnthropic(ctx context.Context, key, model, system string, msgs []ChatMessage) (Completion, error) {
 	// Anthropic Messages API: "system" is separate from messages.
 	body, _ := json.Marshal(map[string]any{ // discard: marshalling an in-memory value cannot fail
 		"model": model, "max_tokens": MaxOutputTokens, "system": system, "messages": msgs,
@@ -293,21 +434,25 @@ func callAnthropic(ctx context.Context, key, model, system string, msgs []ChatMe
 	rb, err := ProviderDo(ctx, "https://api.anthropic.com/v1/messages",
 		map[string]string{"x-api-key": key, "anthropic-version": "2023-06-01"}, body, "anthropic")
 	if err != nil {
-		return "", err
+		return Completion{}, err
 	}
 	return parseAnthropic(rb)
 }
 
 // parseAnthropic extracts the assistant text from an Anthropic Messages body.
-func parseAnthropic(rb []byte) (string, error) {
+func parseAnthropic(rb []byte) (Completion, error) {
 	var out struct {
 		Content []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
+		Usage *struct {
+			InputTokens  int64 `json:"input_tokens"`
+			OutputTokens int64 `json:"output_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.Unmarshal(rb, &out); err != nil {
-		return "", err
+		return Completion{}, err
 	}
 	var sb strings.Builder
 	for _, c := range out.Content {
@@ -316,9 +461,13 @@ func parseAnthropic(rb []byte) (string, error) {
 		}
 	}
 	if sb.Len() == 0 {
-		return "", fmt.Errorf("anthropic: empty response")
+		return Completion{}, fmt.Errorf("anthropic: empty response")
 	}
-	return sb.String(), nil
+	c := Completion{Text: sb.String()}
+	if out.Usage != nil {
+		c.Usage = TokenUsage{InputTokens: out.Usage.InputTokens, OutputTokens: out.Usage.OutputTokens, Reported: true}
+	}
+	return c, nil
 }
 
 func DefaultSystemPrompt() string {

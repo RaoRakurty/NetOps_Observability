@@ -44,6 +44,7 @@ import (
 	// VMALERT-WEBHOOK-END
 	"netops/backend/internal/applog"
 	"netops/backend/internal/audit"
+	"netops/backend/internal/changeledger"
 	// BMP-BEGIN
 	"netops/backend/internal/bmp"
 	// BMP-END
@@ -115,6 +116,13 @@ import (
 	"netops/backend/internal/seclane"
 	// SECURITY-LANE-END
 	"math"
+	"netops/backend/internal/aidecision"
+	"netops/backend/internal/aientitlement"
+	"netops/backend/internal/aiscore"
+	"netops/backend/internal/entityalias"
+	"netops/backend/internal/irisconvo"
+	"netops/backend/internal/irisquerylog"
+	"netops/backend/internal/nlquery/catalog"
 	"netops/backend/internal/secobs"
 	"netops/backend/internal/secprofile"
 	"netops/backend/internal/selfheal"
@@ -243,6 +251,10 @@ type server struct {
 	experienceStore      experience.Store
 	experienceAPI        *experience.API
 	demExperienceMetrics *experience.Counters
+	// changeLedger feeds experienceStore's change ledger from the config
+	// capture and the audit middleware (internal/changeledger, Iris N-D2).
+	// nil when it could not be built; both feeds then say so in the log.
+	changeLedger *changeledger.Producer
 	// experienceEvents is the bounded producer behind POST /api/dem/events and
 	// /business-events (tracker 254). nil when it could not be built, and the
 	// routes then answer 503 with the reason rather than 202 for events with
@@ -352,10 +364,26 @@ type server struct {
 	notifyCfg                  *notifyConfigStore
 	contactPoints              *contactPointStore
 	deviceLocations            *deviceLocationStore
-	sites                      *sitesStore      // internal SoT sites (default provider)
-	deviceSites                *deviceSiteStore // operator device→site bindings (intent)
-	wanPolicy                  *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
-	systemNet                  *systemNetStore  // platform DNS + NTP system settings (clock sync + URL resolution)
+	sites                      *sitesStore // internal SoT sites (default provider)
+	// IRIS-NLQUERY-BEGIN — the NL query path (tracker 337 Phase C): the
+	// semantic catalog (nil = catalog failed to load; NL routes answer 503)
+	// and the per-tenant entity aliases.
+	nlqCatalog *catalog.Catalog
+	nlqAliases *entityalias.Store
+	nlqConvos  irisconvo.Store // server-held conversation state (N-C7)
+	// Query capture + operator corrections (N-C8): one record per compiled
+	// question, for offline evaluation only. nil = capture off.
+	nlqQueryLog        irisquerylog.Store
+	nlqQueryLogMetrics *irisquerylog.Metrics
+	// IRIS-NLQUERY-END
+	// The Iris AI decision ledger (tracker 337 N-A6): append-only, tenant-RLS,
+	// hashes only. nil = the ledger is off (asks are not ledgered).
+	aiDecisions       aidecision.Store
+	aiDecisionMetrics *aidecision.Metrics
+
+	deviceSites *deviceSiteStore // operator device→site bindings (intent)
+	wanPolicy   *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
+	systemNet   *systemNetStore  // platform DNS + NTP system settings (clock sync + URL resolution)
 	// DATA-PROTECTION-BEGIN — the whole Data Protection domain lives in
 	// internal/dataprotect: the backup intent store + live DR status, the
 	// netops-daily SM policy control plane, the snapshot inventory/management
@@ -373,6 +401,13 @@ type server struct {
 	// registration, the sampler worker and the /metrics delegation (§2).
 	storageMeter *storagemeter.Meter
 	// STORAGE-MEASUREMENT-END
+	// AI-SCORECARD-BEGIN — the production Iris scorecard (tracker 337 N-A3,
+	// design item 19): live counters fed by the orchestrator's ScoreSink plus a
+	// cached correlation-store sample. Platform aggregates only (no tenant
+	// label — see internal/aiscore's package doc for why).
+	aiScore        *aiscore.Metrics
+	aiScoreSampler *aiscore.Sampler
+	// AI-SCORECARD-END
 	// LICENCE-BEGIN — the licence mechanism. `entitlements` is the CENTRAL
 	// entitlement service every commercial gate asks (entitlement.Service);
 	// `licenceStore` owns the signed document at /data/api/licence.json;
@@ -657,6 +692,10 @@ type server struct {
 	// of a bare `go func(){…}()` — and shutdown will then WAIT for it instead of
 	// abandoning it mid-write. Never nil for a server built by newServer().
 	workers *workerGroup
+
+	// aiEntitlementPolicy overrides the shipped tier → AI entitlement mapping
+	// (N-A7, ai_tenant_config.go). nil in production: the embedded default applies.
+	aiEntitlementPolicy *aientitlement.Policy
 }
 
 // serviceNowFor / jiraFor resolve a tenant's live ITSM connector (nil when
@@ -1061,6 +1100,21 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("device sites store: %v", err)
 	}
+	// IRIS-NLQUERY-BEGIN — a catalog that fails to load disables the NL routes
+	// LOUDLY (503 + an error log) instead of aborting boot: every other Iris
+	// path works without it.
+	nlqCat, nlqCatErr := catalog.Load()
+	if nlqCatErr != nil {
+		logError("iris.nlquery", "semantic catalog failed to load — NL query routes are disabled", errf(nlqCatErr))
+		nlqCat = nil
+	}
+	aliasKV, err := newTenantKV[entityalias.Alias](envOr("IRIS_ALIASES_FILE", "/data/iris_aliases.json"),
+		func(a entityalias.Alias) string { return a.TenantID },
+		func(a entityalias.Alias) string { return a.Key() })
+	if err != nil {
+		log.Fatalf("iris alias store: %v", err)
+	}
+	// IRIS-NLQUERY-END
 	// MONITORING-BEGIN — the FIRST-SEEN LEDGER (owner decision 2026-10-03).
 	// Every addressable inventory device is monitored up to the licence
 	// ceiling, admitted in first-seen order; the ledger is what keeps that
@@ -1126,10 +1180,20 @@ func newServer() *server {
 		contactPoints:   contactPoints,
 		deviceLocations: deviceLocations,
 		sites:           sites,
-		deviceSites:     deviceSites,
-		wanPolicy:       wanPolicy,
-		systemNet:       systemNet,
-		hub:             NewHub(),
+		nlqCatalog:      nlqCat,
+		nlqAliases:      &entityalias.Store{C: aliasKV, Cat: nlqCat},
+		nlqConvos:       newIrisConvoStore(),
+		nlqQueryLog:     newIrisQueryLogStore(),
+		// Counters for query capture (N-C8) — rendered on /metrics.
+		nlqQueryLogMetrics: irisquerylog.NewMetrics(),
+		// The AI decision ledger (N-A6) + its counters, rendered on /metrics.
+		aiDecisions:       newAIDecisionStore(),
+		aiDecisionMetrics: aidecision.NewMetrics(),
+
+		deviceSites: deviceSites,
+		wanPolicy:   wanPolicy,
+		systemNet:   systemNet,
+		hub:         NewHub(),
 		// #13 Vulnerability Management: operator-prepared advisory feed
 		// (scripts/vuln-feed-prepare.py → data/vuln/, mounted ro at /data/vuln).
 		vulns: vuln.NewFeed(envOr("VULN_FEED_PATH", "/data/vuln/advisories.csv"),
@@ -1159,6 +1223,18 @@ func newServer() *server {
 	// resolved ONCE below and travels in Deps as a value.
 	srv.storageMeter = storagemeter.New(srv.storageMeterDeps())
 	// STORAGE-MEASUREMENT-END
+	// AI-SCORECARD-BEGIN — built unconditionally: the counters cost nothing when
+	// Iris is idle, and an absent series would read as "never measured" to the
+	// alerts that watch it. The sample rides the cross-tenant ClickHouse worker
+	// lane and reads aggregate counts only.
+	srv.aiScore = aiscore.NewMetrics(aiScorePrice())
+	srv.aiScoreSampler = aiscore.NewSampler(srv.aiScore, aiscore.Deps{
+		Query: func(ctx context.Context, sql string) ([]map[string]any, error) {
+			return chWorkerQueryTuned(ctx, chWorkerRead{SQL: sql, Tag: "worker:ai-scorecard"})
+		},
+		Log: aiScoreLog,
+	})
+	// AI-SCORECARD-END
 	// LICENCE-BEGIN — built here, after srv exists, because the gate, the audit
 	// sink and the usage counters are all methods on *server.
 	//
@@ -1397,6 +1473,18 @@ func newServer() *server {
 	}
 	srv.demExperienceMetrics = experience.NewCounters()
 	srv.experienceStore = newExperienceStore()
+	// The change ledger's producers (Iris N-D2): config captures and audited
+	// mutations → srv.experienceStore. Its queue is drained by the
+	// "change-ledger" worker started beside the others.
+	if cl, err := changeledger.New(changeledger.Deps{
+		Sink:      srv.experienceStore,
+		Directory: changeLedgerDirectory{users: srv.users},
+		LogWarn:   func(m string, f map[string]any) { logWarn("change.ledger", m, f) },
+	}); err != nil {
+		logError("change.ledger", "the change-ledger producers could not be built — configuration changes and audited mutations will NOT appear in the change feed", errf(err))
+	} else {
+		srv.changeLedger = cl
+	}
 	if q, err := newExperienceEventLane(); err != nil {
 		logError("dem", "the experience event lane could not be built — POST /api/dem/events and /api/dem/business-events will answer 503 and no first-party RUM or business evidence can be collected", errf(err))
 	} else {
@@ -2541,6 +2629,10 @@ func Run() {
 		workers.start("bgp-watch", func() { eval.Run(ctx) })
 	}
 	// BGP-WATCH-END
+	if srv.changeLedger != nil {
+		cl := srv.changeLedger
+		workers.start("change-ledger", func() { cl.Run(ctx) })
+	}
 	// CONFIG-BACKUP-BEGIN — Config Backup & Drift (P3-CFG): capture over the SSH
 	// gateway → sealed, content-addressed version store → drift verdict →
 	// ConfigDrift finding onto netops.security. Opt-in and default-off; with the
@@ -2606,6 +2698,9 @@ func Run() {
 	// `system.parts` is a scrape that times out under load.
 	workers.start("storage-measurement-sampler", func() { srv.storageMeter.RunSampler(ctx) })
 	// STORAGE-MEASUREMENT-END
+	// AI-SCORECARD-BEGIN — same rule: the scrape formats the cache, never queries.
+	workers.start("ai-scorecard-sampler", func() { srv.aiScoreSampler.RunSampler(ctx) })
+	// AI-SCORECARD-END
 	// METERING-BEGIN — the hourly usage snapshot (tracker 258). It takes one
 	// reading immediately and then every hour: immediately, because otherwise
 	// the staleness rule spends its first hour unable to tell "just booted" from
@@ -3665,9 +3760,21 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/tenants", s.handleAITenants)
 	mux.HandleFunc("/api/ai/tenants/", s.handleAITenants)
 	mux.HandleFunc("/api/ai/modules", s.handleAIModules)
-	mux.HandleFunc("/api/ai/commands", s.handleAICommands)             // slash-command registry for the "/" menu
-	mux.HandleFunc("/api/ai/commands/suggestions", s.handleAICommands) // typed-fragment suggestions
-	mux.HandleFunc("/api/ai/feedback", s.handleAIFeedback)             // thumbs up/down (audited)
+	mux.HandleFunc("/api/ai/commands", s.handleAICommands)              // slash-command registry for the "/" menu
+	mux.HandleFunc("/api/ai/commands/suggestions", s.handleAICommands)  // typed-fragment suggestions
+	mux.HandleFunc("/api/ai/feedback", s.handleAIFeedback)              // thumbs up/down (audited)
+	mux.HandleFunc("/api/ai/aliases", s.handleAIAliases)                // Iris NL: per-tenant entity aliases (N-C2)
+	mux.HandleFunc("/api/ai/entities/resolve", s.handleAIEntityResolve) // Iris NL: resolution ladder (N-C2)
+	mux.HandleFunc("/api/ai/query/compile", s.handleAIQueryCompile)     // Iris NL: question → validated query (N-C5)
+	mux.HandleFunc("/api/ai/query/execute", s.handleAIQueryExecute)     // Iris NL: validated query → ResultSet (N-C5)
+	mux.HandleFunc("/api/ai/query/", s.handleAIQueryRecord)             // Iris NL: one query + /explain (N-C5)
+	mux.HandleFunc("/api/changes", s.handleChanges)                     // change ledger (N-D3): list, one, diff
+	mux.HandleFunc("/api/changes/", s.handleChanges)                    // /{id} · /{id}/diff
+	mux.HandleFunc("/api/ai/conversations", s.handleAIConversations)    // Iris NL: start a conversation (N-C7)
+	mux.HandleFunc("/api/ai/conversations/", s.handleAIConversation)    // Iris NL: read one · ask in context (N-C7)
+	mux.HandleFunc("/api/ai/queries", s.handleAIQueries)                // Iris NL: recent questions (N-C8)
+	mux.HandleFunc("/api/ai/queries/", s.handleAIQueryCorrection)       // Iris NL: "that's not what I meant" (N-C8)
+	mux.HandleFunc("/api/ai/decisions", s.handleAIDecisions)            // Iris AI decision ledger (N-A6): admins, own tenant
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Self-describing API + ITSM connector status.
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
@@ -4297,6 +4404,7 @@ func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, errors.New("device was not deleted"))
 			return
 		}
+		changeledger.SetTarget(r.Context(), "device", id) // the change ledger's target (N-D2)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.Header().Set("Allow", "GET, DELETE")
@@ -4344,11 +4452,17 @@ func (s *server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 // not exist" is the same silent-failure class this release is fixing, so the
 // answer is to split the surfaces rather than to widen the gate back.
 func (s *server) handleFeatures(w http.ResponseWriter, r *http.Request) {
-	if _, ok := userFrom(r.Context()); !ok {
+	claims, ok := userFrom(r.Context())
+	if !ok {
 		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
+		// N-A7: the CALLER's AI entitlements (tier mapping ∩ deployment flags ∩
+		// the caller's own tenant switches), so the SPA hides what this caller
+		// cannot use. Cosmetic only — every AI route gates server-side. It
+		// reads nothing about any tenant but the caller's own.
+		"ai_entitlements":     s.aiEntitlementsFor(claims),
 		"copilot":             os.Getenv("FEATURE_COPILOT") == "true",
 		"device_ssh":          os.Getenv("FEATURE_DEVICE_SSH") == "true",
 		"active_verification": os.Getenv("FEATURE_ACTIVE_VERIFICATION") == "true",
@@ -4486,6 +4600,11 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	// look the same, which is the presentation bug this was filed about.
 	s.storageMeter.Metrics().Write(w)
 	// STORAGE-MEASUREMENT-END
+	// AI-SCORECARD-BEGIN
+	s.aiScore.Write(w)
+	s.nlqQueryLogMetrics.Write(w) // Iris query capture + corrections (N-C8); nil-safe
+	s.aiDecisionMetrics.Write(w)  // Iris AI decision ledger appends (N-A6); nil-safe
+	// AI-SCORECARD-END
 	// SECURITY-LANE-BEGIN
 	if s.securityLane != nil {
 		s.securityLane.Metrics().Write(w)
@@ -4586,6 +4705,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 		// first day of the lane and rendered nowhere: nothing called Write, so
 		// a DEM ingest that started refusing every event was invisible here.
 		s.demExperienceMetrics.Write(w)
+	}
+	if s.changeLedger != nil {
+		s.changeLedger.Metrics().Write(w)
 	}
 	if s.secMetrics != nil {
 		s.secMetrics.Write(w)
@@ -7450,6 +7572,7 @@ func (s *server) buildConfigBackup() error {
 		Metrics:      configstore.NewMetrics(),
 		OnCapture:    drift.Observe,
 		OnFailure:    drift.OnFailure,
+		OnNewVersion: s.configChangeToLedger,
 		Authz:        s.configAuthz,
 		Audit:        s.configAudit,
 		AuditCapture: s.configCaptureAudit,
@@ -7467,6 +7590,32 @@ func (s *server) buildConfigBackup() error {
 	s.configDrift, s.configBackup = drift, mgr
 	s.configAPI = configstore.NewAPI(mgr, drift.StatusFor)
 	return nil
+}
+
+// configChangeToLedger adapts a stored NEW configuration version onto the change
+// ledger's config_capture producer (Iris N-D2): the device's site from the
+// operator's device→site binding (else the discovery-stamped site label — the
+// geomap's order), the trigger split into kind and principal. Thin wiring; the
+// change itself is built and written by internal/changeledger.
+func (s *server) configChangeToLedger(ctx context.Context, ev configstore.NewVersionEvent) error {
+	if s.changeLedger == nil {
+		return errors.New("the change-ledger producer is not running")
+	}
+	site := ""
+	if b, ok := s.deviceSites.Get(ev.Tenant, false, ev.Device.ID); ok {
+		site = b.Site
+	} else if s.discovery != nil {
+		if d, found := s.discovery.Get(ev.Device.ID); found && deviceTenant(d) == configstore.NormTenant(ev.Tenant) {
+			site = d.Labels["site"]
+		}
+	}
+	kind, subject := configstore.SplitTrigger(ev.Version.Trigger)
+	return s.changeLedger.RecordConfigCapture(ctx, changeledger.ConfigCapture{
+		Tenant: ev.Tenant, DeviceID: ev.Device.ID, DeviceName: ev.Device.Name, Site: site,
+		SHA: ev.Version.SHA, PreviousSHA: ev.PreviousSHA, HasPrevious: ev.HasPrevious,
+		CapturedAt: ev.Version.CapturedAt, TriggerKind: kind, TriggerSubject: subject,
+		Drift: ev.Version.Drift, Added: ev.Version.Added, Removed: ev.Version.Removed,
+	})
 }
 
 // configHardeningSource is the seam internal/seclane's Deps.ConfigSource takes.

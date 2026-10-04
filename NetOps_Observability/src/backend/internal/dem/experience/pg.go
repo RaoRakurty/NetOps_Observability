@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -31,12 +30,18 @@ type DB interface {
 }
 
 // PGStore is the Postgres-backed store.
-type PGStore struct{ db DB }
+type PGStore struct {
+	db DB
+	// now is the clock retention is measured against (tests pin it).
+	now func() time.Time
+}
 
 var _ Store = (*PGStore)(nil)
 
 // NewPGStore wraps the relational seam.
-func NewPGStore(db DB) *PGStore { return &PGStore{db: db} }
+func NewPGStore(db DB) *PGStore {
+	return &PGStore{db: db, now: func() time.Time { return time.Now().UTC() }}
+}
 
 // pgTimeout bounds every statement (§9: all IO has a timeout).
 const pgTimeout = 10 * time.Second
@@ -208,49 +213,76 @@ func (s *PGStore) DeleteJourney(ctx context.Context, tenant, id string) error {
 	})
 }
 
+// pgChangeWhere is the ONE predicate ListChanges and CountChanges run — the
+// same string, so a count can never answer a different question from the list
+// it accompanies. Every filter of a ChangeQuery is here, beside the time bound:
+// applying any of them in Go AFTER the row limit bounds a DIFFERENT set from the
+// one the caller asked for (on a busy tenant the limit is spent on rows that do
+// not match, and the answer comes back "nothing changed" while the deploy sits
+// one page down), and it made the two backends disagree about one question.
+//
+// An empty list is "no such filter", expressed in the statement so one
+// prepared shape serves every combination. COALESCE guards cardinality() against
+// a NULL array: without it `NULL = 0` is NULL and the row would be dropped by a
+// filter nobody asked for. There is deliberately no `tenant_id = …`: that is
+// RLS's job (see the file header).
+//
+// Positional arguments, in order (pgChangeArgs builds them):
+//
+//	$1 since  $2 until (NULL = open)  $3 types  $4 apps  $5 sites  $6 seams
+//	$7 actors (lower-cased)  $8 objects  $9 object kinds  $10 sources
+//	$11 excluded ids  $12 selected ids
+const pgChangeWhere = `WHERE event_at >= $1
+	    AND ($2::timestamptz IS NULL OR event_at <= $2::timestamptz)
+	    AND (COALESCE(cardinality($3::text[]), 0) = 0 OR change_type = ANY($3::text[]))
+	    AND (COALESCE(cardinality($4::text[]), 0) = 0 OR app = ANY($4::text[]))
+	    AND (COALESCE(cardinality($5::text[]), 0) = 0 OR site = ANY($5::text[]))
+	    AND (COALESCE(cardinality($6::text[]), 0) = 0 OR COALESCE(data->>'seam', '') = ANY($6::text[]))
+	    AND (COALESCE(cardinality($7::text[]), 0) = 0 OR lower(actor) = ANY($7::text[])
+	         OR lower(actor_id) = ANY($7::text[]) OR lower(actor_display) = ANY($7::text[]))
+	    AND (COALESCE(cardinality($8::text[]), 0) = 0 OR object = ANY($8::text[]))
+	    AND (COALESCE(cardinality($9::text[]), 0) = 0 OR object_kind = ANY($9::text[]))
+	    AND (COALESCE(cardinality($10::text[]), 0) = 0 OR source_system = ANY($10::text[]))
+	    AND (COALESCE(cardinality($11::text[]), 0) = 0 OR NOT (change_id = ANY($11::text[])))
+	    AND (COALESCE(cardinality($12::text[]), 0) = 0 OR change_id = ANY($12::text[]))`
+
+// pgChangeArgs binds a normalized filter to pgChangeWhere's positions.
+func pgChangeArgs(f changeFilter) []any {
+	since := f.since
+	if since.IsZero() {
+		since = time.Unix(0, 0).UTC()
+	}
+	var until any // an untyped nil binds SQL NULL: "no upper bound"
+	if !f.until.IsZero() {
+		until = f.until
+	}
+	return []any{since, until, f.types, f.apps, f.sites, f.seams, f.actors,
+		f.objects, f.objectKinds, f.sources, f.excludeIDs, f.ids}
+}
+
 func (s *PGStore) ListChanges(ctx context.Context, tenant string, q ChangeQuery) ([]ChangeEvent, error) {
 	t, err := concreteTenant(tenant)
 	if err != nil {
 		return []ChangeEvent{}, nil
 	}
-	limit := q.Limit
-	if limit <= 0 || limit > changeRetention {
-		limit = changeRetention
+	f, err := normalizeChangeQuery(q)
+	if err != nil {
+		return nil, err
 	}
-	since := q.Since
-	if since.IsZero() {
-		since = time.Unix(0, 0).UTC()
+	limit := f.limit
+	if limit <= 0 || limit > maxChangeRead {
+		limit = maxChangeRead
 	}
-	// The type/app/site predicates go into SQL beside the time bound, against
-	// the columns RecordChange already writes and dem_change_events already
-	// indexes on. Applying them in Go AFTER the row limit bounds a DIFFERENT
-	// set from the one the caller asked for: on a busy tenant the limit is
-	// spent on rows that do not match, and the answer comes back "nothing
-	// changed" while the deploy sits one page down. The file backend filters
-	// first, so leaving them in Go here also made the two backends disagree
-	// about the same question.
-	var types []string
-	for _, raw := range q.Types {
-		if v := strings.ToUpper(strings.TrimSpace(raw)); v != "" {
-			types = append(types, v)
-		}
-	}
+	args := append(pgChangeArgs(f), limit)
 	ctx, cancel := context.WithTimeout(ctx, pgTimeout)
 	defer cancel()
 	out := []ChangeEvent{}
 	err = s.db.WithTenant(ctx, t, false, func(tx pgx.Tx) error {
 		// The predicate is pushed into SQL rather than applied in Go: the whole
 		// point of a bounded query is that the rows never leave the database.
-		// An empty type list, app or site is "no such filter", expressed in the
-		// statement so one prepared shape serves every combination.
 		rows, qerr := tx.Query(ctx,
-			`SELECT data FROM dem_change_events
-			  WHERE event_at >= $1
-			    AND ($2::text[] IS NULL OR change_type = ANY($2::text[]))
-			    AND ($3::text = '' OR app = $3::text)
-			    AND ($4::text = '' OR site = $4::text)
-			  ORDER BY event_at DESC LIMIT $5`,
-			since, types, q.App, q.Site, limit)
+			`SELECT data FROM dem_change_events `+pgChangeWhere+`
+			  ORDER BY event_at DESC, change_id ASC LIMIT $13`, args...)
 		if qerr != nil {
 			return qerr
 		}
@@ -264,6 +296,11 @@ func (s *PGStore) ListChanges(ctx context.Context, tenant string, q ChangeQuery)
 			if jerr := json.Unmarshal(raw, &c); jerr != nil {
 				return jerr
 			}
+			// A row written before N-D1 carries none of the new fields in its
+			// JSON; the SAME defaults the migration backfilled into the typed
+			// columns are applied, so what the caller is shown matches what the
+			// filters matched on.
+			c.applyDefaults()
 			out = append(out, c)
 		}
 		return rows.Err()
@@ -271,48 +308,33 @@ func (s *PGStore) ListChanges(ctx context.Context, tenant string, q ChangeQuery)
 	if err != nil {
 		return nil, err
 	}
-	// filterChanges stays as the shared POST-CHECK, so both backends still fold
-	// the answer through one implementation of the predicate (and one sort and
-	// one limit). It must now be a no-op on these rows; it is kept because the
-	// alternative is two predicates that can drift apart unnoticed.
-	return filterChanges(out, q), nil
+	// The rows arrive filtered, ordered and limited by the database. They are
+	// deliberately NOT re-filtered here: a Go post-check that "must be a no-op"
+	// is a second predicate that can drift from the SQL one unnoticed; the
+	// backend-parity tests hold the two definitions together instead.
+	return out, nil
 }
 
-// CountChanges runs the SAME predicate as ListChanges with no LIMIT and no row
-// transfer — `SELECT count(*)`, which is what a database is for. The bounded
-// read above cannot answer "how many exist"; asking it to would mean shipping
-// every matching row across the wire to length one slice, which is the thing
-// the bound exists to prevent.
-//
-// The statement is kept character-for-character in step with ListChanges'
-// WHERE clause. If one changes, the other must: a count that answers a
-// different question from the list it accompanies is worse than no count.
+// CountChanges runs the SAME predicate as ListChanges (pgChangeWhere) with no
+// LIMIT and no row transfer — `SELECT count(*)`, which is what a database is
+// for. The bounded read above cannot answer "how many exist"; asking it to
+// would mean shipping every matching row across the wire to length one slice,
+// which is the thing the bound exists to prevent.
 func (s *PGStore) CountChanges(ctx context.Context, tenant string, q ChangeQuery) (int, error) {
 	t, err := concreteTenant(tenant)
 	if err != nil {
 		return 0, nil
 	}
-	since := q.Since
-	if since.IsZero() {
-		since = time.Unix(0, 0).UTC()
-	}
-	var types []string
-	for _, raw := range q.Types {
-		if v := strings.ToUpper(strings.TrimSpace(raw)); v != "" {
-			types = append(types, v)
-		}
+	f, err := normalizeChangeQuery(q)
+	if err != nil {
+		return 0, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, pgTimeout)
 	defer cancel()
 	n := 0
 	err = s.db.WithTenant(ctx, t, false, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			`SELECT count(*) FROM dem_change_events
-			  WHERE event_at >= $1
-			    AND ($2::text[] IS NULL OR change_type = ANY($2::text[]))
-			    AND ($3::text = '' OR app = $3::text)
-			    AND ($4::text = '' OR site = $4::text)`,
-			since, types, q.App, q.Site).Scan(&n)
+			`SELECT count(*) FROM dem_change_events `+pgChangeWhere, pgChangeArgs(f)...).Scan(&n)
 	})
 	if err != nil {
 		return 0, err
@@ -320,12 +342,39 @@ func (s *PGStore) CountChanges(ctx context.Context, tenant string, q ChangeQuery
 	return n, nil
 }
 
+// pgInsertChange is the ONE insert both RecordChange and ImportFile issue, so
+// the typed columns can never be filled differently by the two paths.
+const pgInsertChange = `INSERT INTO dem_change_events
+	  (tenant_id, change_id, change_type, app, site, event_at, data,
+	   source_system, actor, actor_type, actor_id, actor_display,
+	   object, object_kind, ticket_ref, automation, detected_at)
+	 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`
+
+// pgInsertChangeArgs binds a VALIDATED change to pgInsertChange.
+func pgInsertChangeArgs(c ChangeEvent, data []byte) []any {
+	return []any{c.TenantID, c.ID, c.Type, c.App, c.Site, c.EventAt, data,
+		c.SourceSystem, c.Actor, c.ActorType, c.ActorID, c.ActorDisplay,
+		c.Object, c.ObjectKind, c.TicketRef, c.Automation, c.ObservedAt}
+}
+
+// pgPruneChanges deletes at most $2 of the scoped tenant's rows older than $1,
+// oldest first. ctid-limited because DELETE has no LIMIT; RLS scopes both the
+// inner SELECT and the DELETE to the transaction's tenant, so this statement can
+// only ever reach the writing tenant's rows.
+const pgPruneChanges = `DELETE FROM dem_change_events WHERE ctid = ANY(ARRAY(
+	    SELECT ctid FROM dem_change_events WHERE event_at < $1
+	     ORDER BY event_at ASC LIMIT $2))`
+
 func (s *PGStore) RecordChange(ctx context.Context, in ChangeEvent) (ChangeEvent, error) {
 	if in.ID == "" {
 		in.ID = newChangeID()
 	}
 	if err := in.Validate(); err != nil {
 		return ChangeEvent{}, err
+	}
+	cutoff := s.now().Add(-ChangeRetention)
+	if in.EventAt.Before(cutoff) {
+		return ChangeEvent{}, ErrChangeTooOld
 	}
 	data, err := json.Marshal(in)
 	if err != nil {
@@ -336,16 +385,45 @@ func (s *PGStore) RecordChange(ctx context.Context, in ChangeEvent) (ChangeEvent
 	err = s.db.WithTenant(ctx, in.TenantID, false, func(tx pgx.Tx) error {
 		// ON CONFLICT DO NOTHING: a change is an IMMUTABLE fact, so a repeated
 		// id is idempotent and never rewrites what was recorded.
-		_, ierr := tx.Exec(ctx,
-			`INSERT INTO dem_change_events (tenant_id, change_id, change_type, app, site, event_at, data)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (tenant_id, change_id) DO NOTHING`,
-			in.TenantID, in.ID, in.Type, in.App, in.Site, in.EventAt, data)
-		return ierr
+		if _, ierr := tx.Exec(ctx, pgInsertChange+` ON CONFLICT (tenant_id, change_id) DO NOTHING`,
+			pgInsertChangeArgs(in, data)...); ierr != nil {
+			return ierr
+		}
+		// Age-based retention, in the SAME tenant-scoped transaction: bounded to
+		// one batch per write, and unable to reach another tenant's rows.
+		_, perr := tx.Exec(ctx, pgPruneChanges, cutoff, changePruneBatch)
+		return perr
 	})
 	if err != nil {
 		return ChangeEvent{}, err
 	}
 	return in, nil
+}
+
+// PruneChanges ages out at most max of ONE tenant's changes older than before.
+func (s *PGStore) PruneChanges(ctx context.Context, tenant string, before time.Time, max int) (int, error) {
+	t, err := concreteTenant(tenant)
+	if err != nil {
+		return 0, err
+	}
+	if max <= 0 {
+		return 0, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, pgTimeout)
+	defer cancel()
+	n := 0
+	err = s.db.WithTenant(ctx, t, false, func(tx pgx.Tx) error {
+		tag, derr := tx.Exec(ctx, pgPruneChanges, before, max)
+		if derr != nil {
+			return derr
+		}
+		n = int(tag.RowsAffected())
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // ── promotions (tracker 255) ────────────────────────────────────────────────

@@ -17,6 +17,7 @@
 import { api } from "../../services/api";
 import type { DemChangesResponse, DemCohort, DemWindow } from "../../services/api";
 import { fmtDateTime } from "../../lib/time";
+import ChangeDiff from "./ChangeDiff";
 import { ProvenanceChip, Loading, LoadError, Panel } from "./honest";
 import { useDemRead } from "./state";
 import type { DxRoute } from "./state";
@@ -94,7 +95,7 @@ export default function ExperienceChanges({ window: win, route }: {
                   <tr>
                     <th scope="col">When</th><th scope="col">Kind</th>
                     <th scope="col">Object</th><th scope="col">Summary</th>
-                    <th scope="col">Before → after</th><th scope="col">Actor</th>
+                    <th scope="col">What changed</th><th scope="col">Actor</th>
                     <th scope="col">Where</th><th scope="col">How we know</th>
                   </tr>
                 </thead>
@@ -114,7 +115,7 @@ export default function ExperienceChanges({ window: win, route }: {
                       </td>
                       <td className="dx-cap">
                         {c.before || c.after
-                          ? `${c.before || "—"} → ${c.after || "—"}`
+                          ? <ChangeDiff id={c.id} />
                           : <span className="dx-subtle">not recorded</span>}
                       </td>
                       <td>{c.actor || <span className="dx-subtle">not recorded</span>}</td>

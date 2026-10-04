@@ -34,7 +34,7 @@ export default function SavedSearches() {
 
   const open = (o: SavedObject) => {
     setQuery(o.body?.query ?? "*");
-    navigate("search/logs");
+    navigate("explore/logs");
   };
 
   const remove = async (o: SavedObject) => {
@@ -55,7 +55,7 @@ export default function SavedSearches() {
         <div className="empty">Loading…</div>
       ) : items.length === 0 ? (
         <div className="empty">
-          No saved searches yet. Run a query under <strong>Search</strong> and click ★ Save.
+          No saved searches yet. Run a query under <strong>Explore → Logs</strong> and click ★ Save.
         </div>
       ) : (
         <table>

@@ -1,0 +1,651 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "sdwan",
+  "cases": [
+    {
+      "id": "sdwan-001",
+      "category": "sdwan",
+      "question": "Show SD-WAN incidents this week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "filters": [
+            {
+              "field": "seam_class",
+              "op": "eq",
+              "values": [
+                "sdwan"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+            "incident:e2d7a4c9-6b01-4f58-a3e9-71c5b8d02f6a",
+            "incident:b6d31a7f-2c89-4e05-a1d6-9f4e7c3b582e"
+          ],
+          "min_rows": 3
+        }
+      },
+      "paraphrases": [
+        "sdwan incidents this week",
+        "sd-wan outages since monday",
+        "any sd wan incidents this week"
+      ]
+    },
+    {
+      "id": "sdwan-002",
+      "category": "sdwan",
+      "question": "Show SD-WAN policy changes in the last 3 days.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "type",
+              "op": "eq",
+              "values": [
+                "NETWORK_CHANGE"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "3d"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [
+          {
+            "v": 1,
+            "query_type": "change_list",
+            "target": "change",
+            "filters": [
+              {
+                "field": "type",
+                "op": "eq",
+                "values": [
+                  "NETWORK_CHANGE"
+                ]
+              },
+              {
+                "field": "seam",
+                "op": "eq",
+                "values": [
+                  "SDWAN"
+                ]
+              }
+            ],
+            "time_range": {
+              "kind": "relative",
+              "last": "3d"
+            },
+            "order_by": [
+              {
+                "field": "event_at",
+                "dir": "desc"
+              }
+            ]
+          }
+        ],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1044",
+            "change:chg-1050"
+          ],
+          "min_rows": 2
+        }
+      },
+      "paraphrases": [
+        "sdwan policy changes last 3 days",
+        "sd-wan policy edits past 72h",
+        "changes to sdwan policy last three days"
+      ]
+    },
+    {
+      "id": "sdwan-003",
+      "category": "sdwan",
+      "question": "Show changes on the SD-WAN seam at Dallas in the last 24 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [
+          {
+            "input": "Dallas",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "filters": [
+            {
+              "field": "seam",
+              "op": "eq",
+              "values": [
+                "SDWAN"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "24h"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1042"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "dfw sdwan seam changes last 24h",
+        "sd-wan related changes in dallas past day",
+        "dallas sdwan changes last 24 hours"
+      ]
+    },
+    {
+      "id": "sdwan-004",
+      "category": "sdwan",
+      "question": "Show loss on the SD-WAN underlay at Austin for the last 30 minutes.",
+      "context": {
+        "tz": "America/Chicago",
+        "cross": true
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "Austin",
+            "type": "site",
+            "id": "site:aus-br",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "circuit",
+          "metric": "circuit_loss_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:aus-br"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "30m"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "circuit:aus-comcast-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "austin underlay loss last 30m",
+        "sdwan underlay packet loss at aus past half hour",
+        "loss on austin underlay circuits last 30 min"
+      ]
+    },
+    {
+      "id": "sdwan-005",
+      "category": "sdwan",
+      "question": "Show open SD-WAN incidents with a confirmed root cause.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "filters": [
+            {
+              "field": "seam_class",
+              "op": "eq",
+              "values": [
+                "sdwan"
+              ]
+            },
+            {
+              "field": "state",
+              "op": "eq",
+              "values": [
+                "open"
+              ]
+            },
+            {
+              "field": "verdict_tier",
+              "op": "eq",
+              "values": [
+                "confirmed"
+              ]
+            }
+          ],
+          "time_range": {},
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "open confirmed sdwan incidents",
+        "sd-wan incidents still open with confirmed rca",
+        "confirmed + open sdwan incidents"
+      ]
+    },
+    {
+      "id": "sdwan-006",
+      "category": "sdwan",
+      "question": "Were there any confirmed SD-WAN incidents in the last 30 days?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "filters": [
+            {
+              "field": "seam_class",
+              "op": "eq",
+              "values": [
+                "sdwan"
+              ]
+            },
+            {
+              "field": "verdict_tier",
+              "op": "eq",
+              "values": [
+                "confirmed"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "30d"
+          },
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c",
+            "incident:e2d7a4c9-6b01-4f58-a3e9-71c5b8d02f6a"
+          ],
+          "min_rows": 2
+        }
+      },
+      "paraphrases": [
+        "confirmed sdwan incidents last 30 days",
+        "any confirmed sd-wan outages past month",
+        "sdwan incidents with a confirmed verdict in the last 30d"
+      ]
+    },
+    {
+      "id": "sdwan-007",
+      "category": "sdwan",
+      "question": "Show me what changed 30 minutes before every SD-WAN incident this week.",
+      "context": {
+        "tz": "America/Chicago",
+        "script": "N-S3",
+        "turn": 1
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "time_range": {
+            "kind": "incidents",
+            "anchor": {
+              "incidents": {
+                "time_range": {
+                  "kind": "absolute",
+                  "from": "2026-09-21T05:00:00Z",
+                  "to": "2026-09-24T15:00:00Z"
+                },
+                "filters": [
+                  {
+                    "field": "seam_class",
+                    "op": "eq",
+                    "values": [
+                      "sdwan"
+                    ]
+                  }
+                ]
+              },
+              "before": "30m",
+              "after": "1m"
+            }
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1042",
+            "change:chg-1049",
+            "change:chg-1054"
+          ],
+          "min_rows": 3
+        }
+      },
+      "paraphrases": [
+        "what changed in the 30 min before each sdwan incident this week",
+        "changes 30m before every sd-wan outage since monday",
+        "for each sdwan incident this week, what changed in the prior 30 minutes"
+      ]
+    },
+    {
+      "id": "sdwan-008",
+      "category": "sdwan",
+      "question": "Only WAN changes.",
+      "context": {
+        "tz": "America/Chicago",
+        "prior_ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "time_range": {
+            "kind": "incidents",
+            "anchor": {
+              "incidents": {
+                "time_range": {
+                  "kind": "absolute",
+                  "from": "2026-09-21T05:00:00Z",
+                  "to": "2026-09-24T15:00:00Z"
+                },
+                "filters": [
+                  {
+                    "field": "seam_class",
+                    "op": "eq",
+                    "values": [
+                      "sdwan"
+                    ]
+                  }
+                ]
+              },
+              "before": "30m",
+              "after": "1m"
+            }
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "script": "N-S3",
+        "turn": 2
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "class",
+              "op": "eq",
+              "values": [
+                "wan"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "incidents",
+            "anchor": {
+              "incidents": {
+                "time_range": {
+                  "kind": "absolute",
+                  "from": "2026-09-21T05:00:00Z",
+                  "to": "2026-09-24T15:00:00Z"
+                },
+                "filters": [
+                  {
+                    "field": "seam_class",
+                    "op": "eq",
+                    "values": [
+                      "sdwan"
+                    ]
+                  }
+                ]
+              },
+              "before": "30m",
+              "after": "1m"
+            }
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1042",
+            "change:chg-1049",
+            "change:chg-1054"
+          ],
+          "min_rows": 3
+        }
+      },
+      "paraphrases": [
+        "just wan changes",
+        "only the wan ones",
+        "filter to wan changes"
+      ]
+    },
+    {
+      "id": "sdwan-009",
+      "category": "sdwan",
+      "question": "Show the last 30 days.",
+      "context": {
+        "tz": "America/Chicago",
+        "prior_ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "class",
+              "op": "eq",
+              "values": [
+                "wan"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "incidents",
+            "anchor": {
+              "incidents": {
+                "time_range": {
+                  "kind": "absolute",
+                  "from": "2026-09-21T05:00:00Z",
+                  "to": "2026-09-24T15:00:00Z"
+                },
+                "filters": [
+                  {
+                    "field": "seam_class",
+                    "op": "eq",
+                    "values": [
+                      "sdwan"
+                    ]
+                  }
+                ]
+              },
+              "before": "30m",
+              "after": "1m"
+            }
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "script": "N-S3",
+        "turn": 3
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "filters": [
+            {
+              "field": "class",
+              "op": "eq",
+              "values": [
+                "wan"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "incidents",
+            "anchor": {
+              "incidents": {
+                "time_range": {
+                  "kind": "relative",
+                  "last": "30d"
+                },
+                "filters": [
+                  {
+                    "field": "seam_class",
+                    "op": "eq",
+                    "values": [
+                      "sdwan"
+                    ]
+                  }
+                ]
+              },
+              "before": "30m",
+              "after": "1m"
+            }
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1042",
+            "change:chg-1049",
+            "change:chg-1054"
+          ],
+          "min_rows": 3
+        }
+      },
+      "paraphrases": [
+        "last 30 days",
+        "expand to the past month",
+        "go back 30 days"
+      ]
+    }
+  ]
+}

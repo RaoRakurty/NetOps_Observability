@@ -1,0 +1,388 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "devices",
+  "cases": [
+    {
+      "id": "devices-001",
+      "category": "devices",
+      "question": "Show CPU on every device at Austin for the last 3 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "Austin",
+            "type": "site",
+            "id": "site:aus-br",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "device",
+          "metric": "cpu_util_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:aus-br"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "3h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "device:aus-edge-1",
+            "device:aus-sw-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "cpu for all austin devices last 3h",
+        "aus boxes cpu past three hours",
+        "every device in austin cpu last 3 hrs"
+      ]
+    },
+    {
+      "id": "devices-002",
+      "category": "devices",
+      "question": "Which devices are over 85% memory right now?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "device",
+          "metric": "mem_util_pct",
+          "aggregation": "avg",
+          "predicate": {
+            "op": "gt",
+            "value": 85
+          },
+          "time_range": {
+            "kind": "relative",
+            "last": "5m"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "boxes above 85% mem now",
+        "anything over 85 percent memory currently",
+        "devices with memory > 85 right now"
+      ]
+    },
+    {
+      "id": "devices-003",
+      "category": "devices",
+      "question": "Show incidents affecting dfw-edge-1 this week.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_incidents",
+        "entities": [
+          {
+            "input": "dfw-edge-1",
+            "type": "device",
+            "id": "device:dfw-edge-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "incident_list",
+          "target": "incident",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:dfw-edge-1"
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-21T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "order_by": [
+            {
+              "field": "created_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "incident_rows",
+          "must_include_refs": [
+            "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "dfw-edge-1 incidents this week",
+        "any outages involving DFW-EDGE-1 since monday",
+        "incidents on dfw edge 1 this week"
+      ]
+    },
+    {
+      "id": "devices-004",
+      "category": "devices",
+      "question": "What changed on dfw-edge-1 in the last 24 hours?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "list_changes",
+        "entities": [
+          {
+            "input": "dfw-edge-1",
+            "type": "device",
+            "id": "device:dfw-edge-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "change_list",
+          "target": "change",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:dfw-edge-1"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "24h"
+          },
+          "order_by": [
+            {
+              "field": "event_at",
+              "dir": "desc"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "change_rows",
+          "must_include_refs": [
+            "change:chg-1042"
+          ],
+          "min_rows": 1
+        }
+      },
+      "paraphrases": [
+        "changes on dfw-edge-1 past 24h",
+        "anything changed on DFW-EDGE-1 in the last day",
+        "dfw edge 1 changes last 24 hours"
+      ]
+    },
+    {
+      "id": "devices-005",
+      "category": "devices",
+      "question": "Show interface status on nyc-edge-1.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "nyc-edge-1",
+            "type": "device",
+            "id": "device:nyc-edge-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "interface",
+          "metric": "if_oper_status",
+          "aggregation": "last",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:nyc-edge-1"
+            }
+          ],
+          "time_range": {}
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "interface:nyc-edge-1/xe-0/0/0",
+            "interface:nyc-edge-1/xe-0/0/1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "nyc-edge-1 port status",
+        "link state for NYC-EDGE-1",
+        "up/down status of nyc edge interfaces"
+      ]
+    },
+    {
+      "id": "devices-006",
+      "category": "devices",
+      "question": "Is nyc-core-1's CPU above its normal level today?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "threshold",
+        "entities": [
+          {
+            "input": "nyc-core-1",
+            "type": "device",
+            "id": "device:nyc-core-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_filter",
+          "target": "device",
+          "metric": "cpu_util_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:nyc-core-1"
+            }
+          ],
+          "predicate": {
+            "op": "above_baseline"
+          },
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "entity_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "nyc-core-1 cpu above baseline today?",
+        "is NYC-CORE-1 cpu abnormal today",
+        "nyc core cpu higher than usual today?"
+      ]
+    },
+    {
+      "id": "devices-007",
+      "category": "devices",
+      "question": "Show every BGP session on dfw-edge-2.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "dfw-edge-2",
+            "type": "device",
+            "id": "device:dfw-edge-2",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "bgp_peer",
+          "metric": "bgp_session_state",
+          "aggregation": "last",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:dfw-edge-2"
+            }
+          ],
+          "time_range": {}
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "bgp_peer:dfw-edge-2/198.51.100.1@mpls"
+          ]
+        }
+      },
+      "paraphrases": [
+        "bgp sessions dfw-edge-2",
+        "all neighbors on DFW-EDGE-2",
+        "dfw edge 2 bgp peer state"
+      ]
+    },
+    {
+      "id": "devices-008",
+      "category": "devices",
+      "question": "Show memory on the NYC firewall for the last 12 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "the NYC firewall",
+            "type": "device",
+            "id": "device:nyc-fw-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "device",
+          "metric": "mem_util_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:nyc-fw-1"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "12h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "device:nyc-fw-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "nyc-fw-1 memory last 12h",
+        "ram on the new york firewall past 12 hours",
+        "NYC-FW-1 mem usage last 12 hrs"
+      ]
+    }
+  ]
+}
