@@ -83,7 +83,7 @@ func (s *server) copilotSystemPrompt() string {
 	// The brevity contract rides EVERY persona (default or override): operators
 	// live in a console, and style instructions ("too verbose", "briefly") are
 	// commands, not commentary — live incident 2026-07-02.
-	persona += "\n\nBREVITY: be concise by default — at most ~6 short sentences unless the operator asks for detail. ALWAYS obey style instructions immediately: \"too verbose\"/\"briefly\"/\"shorter\" means compress your PREVIOUS answer to 2-3 sentences keeping the counts, the top item and the next action. Never respond to a style instruction with a menu of capabilities."
+	persona += "\n\nBREVITY: be concise by default — at most ~6 short sentences unless the operator asks for detail. ALWAYS obey style instructions immediately: \"too verbose\"/\"briefly\"/\"shorter\" means answer the operator's previous question again in 2-3 sentences keeping the counts, the top item and the next action. Never respond to a style instruction with a menu of capabilities. Your earlier replies are not part of this conversation: never quote, paraphrase or claim to remember one."
 	// The data-vs-instruction fence rides EVERY persona the same way, and for
 	// the same structural reason: a platform admin replacing the persona above
 	// must not be able to delete the LLM01 stance on untrusted content
@@ -134,13 +134,28 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	msgs, err := ai.SanitizeMessages(req.Messages)
+	// Only the operator's own turns survive: client system AND assistant turns
+	// are dropped (LLM01; tracker 337 N-A5 — the server owns the conversation).
+	operatorTurns, err := ai.SanitizeMessages(req.Messages)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	question := ai.LatestUserMessage(operatorTurns)
+	msgs := ai.ServerConversation(operatorTurns)
 	// Server-controlled system prompt — req.System is intentionally ignored.
 	system := s.copilotSystemPrompt()
+
+	// One brain (N-A5): the grounded engine for this request is built at most
+	// once and shared — the agent loop runs on ITS registry and policy engine,
+	// and the provider-down fallback asks it.
+	var orch *ai.Orchestrator
+	engine := func() *ai.Orchestrator {
+		if orch == nil {
+			orch = s.newOrchestrator(r, claims)
+		}
+		return orch
+	}
 
 	// Docs-portal grounding (intelligence plan P1): retrieve the sections most
 	// relevant to the operator's LATEST question and append them as a labeled
@@ -148,8 +163,8 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 	// instructions). Retrieval is server-side and deterministic; the retrieved
 	// pages ride back to the UI as clickable "From the docs" links either way.
 	docRefs := []copilotDocRef{}
-	if q := ai.LatestUserMessage(msgs); q != "" {
-		hits := aiDocsIndex.Search(q, 3)
+	if question != "" {
+		hits := aiDocsIndex.Search(question, 3)
 		if block := ai.PromptBlock(hits, 2000, 7000); block != "" {
 			system += "\n\n" + block
 		}
@@ -166,7 +181,7 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 	// (no budget, provider refuses) — but a turn that already executed lookups
 	// fails cleanly rather than silently restarting as an unGrounded chat.
 	if s.agentLoopEligible(claims) {
-		if handled := s.tryAgentLoop(w, r, claims, msgs, system, docRefs); handled {
+		if handled := s.tryAgentLoop(w, r, claims, engine, msgs, system, docRefs); handled {
 			return
 		}
 	}
@@ -204,8 +219,8 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 	// disclosure the UI renders as a slim banner. The assistant degrades, never
 	// dead-ends. (No key configured at all still explains how to add one.)
 	if attempted {
-		if q := ai.LatestUserMessage(msgs); q != "" {
-			if ans, err := s.newOrchestrator(r, claims).Ask(r.Context(), s.aiPrincipal(claims), q, nil); err == nil {
+		if question != "" {
+			if ans, err := engine().Ask(r.Context(), s.aiPrincipal(claims), question, nil); err == nil {
 				logInfo("copilot", "provider unavailable — engine fallback answered", map[string]any{"tenant": claims.Tenant})
 				writeJSON(w, http.StatusOK, map[string]any{
 					"provider": "engine", "text": ans.Text, "grounded": ans, "doc_refs": docRefs,
@@ -236,7 +251,7 @@ func (s *server) firstConfiguredProvider(claims jwtClaims) (name, key, model str
 // tryAgentLoop attempts the tool-driven investigation for this turn. Returns
 // true when it wrote the response (success OR a mid-loop failure that must not
 // silently restart as plain chat); false → caller falls through to plain chat.
-func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwtClaims, msgs []copilotMessage, system string, docRefs []copilotDocRef) bool {
+func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwtClaims, engine func() *ai.Orchestrator, msgs []copilotMessage, system string, docRefs []copilotDocRef) bool {
 	name, key, model := s.firstConfiguredProvider(claims)
 	if key == "" {
 		return false // no provider — plain path renders the "add a key" message
@@ -247,11 +262,13 @@ func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwt
 		return false // fail closed to chat-without-tools (plan §4.5), disclosed via provider note
 	}
 	p := s.aiPrincipal(claims)
-	ds := aiDataSource{srv: s, ctx: r.Context(), scope: s.chTenantScope(r), claims: claims}
-	reg := ai.Tools(ds)
-	reg.AddDocsSearch(aiDocsIndex)
-	pol := ai.NewPolicyEngine(ai.PolicyConfig{}, envFlagLookup) // safe default: read-only
-	specs := ai.Manifest(reg, pol, p)
+	// One brain, one registry (tracker 337 N-A5): the loop runs on the grounded
+	// engine's own toolbox — the same registry entries (Phase-A tools and
+	// search_docs included), the same tenant-scoped data source and seams, the
+	// same policy engine. Gate 1 is the manifest below; gate 2 re-runs inside
+	// executeAgentTool through the same Toolbox.Authorize the engine uses.
+	reg, pol := agentToolbox(engine())
+	specs := ai.Toolbox{Registry: reg, Policy: pol}.Manifest(p)
 	if len(specs) == 0 {
 		return false // caller can run nothing — plain chat is strictly better
 	}
