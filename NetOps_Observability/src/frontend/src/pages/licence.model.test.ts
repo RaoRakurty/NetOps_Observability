@@ -745,7 +745,7 @@ describe("the monitoring line", () => {
 
   it("reads the way the tiering plan words it", () => {
     expect(monitoringLine(base)).toBe(
-      "Monitoring: 12 / 25 Community monitored devices. Discovery does not consume your monitoring allowance.",
+      "Monitoring: 12 / 25 Community monitored devices. Every device with an address counts, including devices found by discovery.",
     );
   });
 

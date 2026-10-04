@@ -28,30 +28,29 @@ proves the step worked.
 | [Check the data-source coverage matrix](/onboard-devices/data-sources) | See, per device, which of the four planes delivered data in the last 15 minutes. |
 | [Verify a device is being monitored](/onboard-devices/verify-monitoring) | Read the collector pool, the alerts it raises, and the honest empty states. |
 
-## Discovered, then monitored
+## In the inventory means monitored
 
-Being in the inventory and being monitored are two different states, and the
-difference is the one the licence counts.
+Every device in the inventory that has a management address is monitored —
+however it got there: added by hand, declared in the devices file, brought in
+from the source of truth, reported by a wireless integration, or found by the
+**subnet sweep**. There is no per-device monitoring switch. The licence counts
+these devices (25 on the Community tier); several telemetry methods on one
+device still count as one.
 
-- **Discovered** — Correlix knows the device exists. Free, unlimited, and never
-  refused by a licence: a sweep that finds five hundred devices creates five
-  hundred inventory records and uses none of the device allowance.
-- **Monitored** — Correlix collects from the device. This is what the device
-  ceiling counts (25 on the Community tier), and it is what the collectors poll.
+When there are more devices than the licence covers, the **first ones found**
+are collected from. The rest stay in the inventory, marked **Over licence
+limit**, and are not polled; a banner on **Infrastructure → Inventory &
+Devices** says how many. Nothing is dropped. Delete a device you do not need, or
+raise the licence, and the next devices in line start being collected from
+automatically.
 
-A device you add by hand, declare in the devices file, or bring in from the
-source of truth is monitored from the moment it appears: adding it is asking for
-it to be collected from. A device found only by the **subnet sweep** is a
-candidate — switch monitoring on for it in the Monitoring column of
-**Infrastructure → Inventory & Devices** when you want its telemetry. Several
-telemetry methods on one device still count as one monitored device, and turning
-monitoring off leaves the device, its history and its place in the topology
-exactly where they are.
+Because discovery fills the licence, keep sweep scopes narrow — see
+[Configure SNMP discovery](/onboard-devices/snmp-discovery).
 
 ## What each step gives you
 
-Metrics arrive as soon as a device is in the inventory WITH MONITORING ON and a
-credential that answers. The other three planes are configured on the device and covered in
+Metrics arrive as soon as a device is in the inventory, within the licence
+limit, and has a credential that answers. The other three planes are configured on the device and covered in
 [Send data to Correlix](/send-data/overview).
 
 | Plane | Direction | Where it is configured |

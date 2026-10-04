@@ -1,5 +1,14 @@
 # Correlix licensing model (design of record, 2026-09-04)
 
+> **Superseded in part — owner decision 2026-10-03.** The per-device monitoring
+> switch described below is REMOVED. Every inventory device with a management
+> address is monitored (discovery included, so discovery scopes must be narrow);
+> past a HARD ceiling the first N devices by first-seen time are collected and the
+> rest stay in the inventory marked over the licence limit — no device is ever
+> refused. `PUT /api/devices/{id}/monitoring` no longer exists. Current behaviour:
+> `internal/devmon`, `docs/runbooks/licensing.md`. The text below is the decision
+> record as it stood.
+
 > **RATIFIED 2026-09-05.** The owner re-affirmed the model as built: the root `LICENSE`
 > stays the concise mixed-licence notice (Apache-2.0 core + Correlix Enterprise
 > commercial/source-available portions) and is never the stock Apache text; the detailed

@@ -249,7 +249,7 @@ var meters = []Descriptor{
 	{
 		Name: MeterMonitoredDevicesUnique, Label: "Monitored devices (unique)", Unit: UnitDevices,
 		Kind: KindEntitlement, Agg: AggUnique, Scope: ScopeAny,
-		Doc: "Distinct devices with at least one collector enabled at any point in the day. Counted from configuration, not from traffic: a device that stopped answering still counts, and discovery does not consume the allowance.",
+		Doc: "Distinct devices collected from at any point in the day — every inventory device with a management address within the licence limit, discovered ones included. Counted from the inventory, not from traffic: a device that stopped answering still counts.",
 	},
 	{
 		Name: MeterMonitoredDevicesPeak, Label: "Monitored devices (peak)", Unit: UnitDevices,

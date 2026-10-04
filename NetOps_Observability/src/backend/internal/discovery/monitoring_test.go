@@ -3,17 +3,20 @@
 
 package discovery_test
 
-// monitoring_test.go — the device registry's monitoring state machine.
+// monitoring_test.go — the device registry's monitoring model (owner decision
+// 2026-10-03): every addressable inventory device is monitored, up to the
+// licence ceiling, in FIRST-SEEN order.
 //
-// The registry is where the monitoring decision LIVES, so this file proves the
-// three properties nothing above it can: a decision survives a restart, a
-// device that two sources report is ONE monitored device, and the ceiling is
-// asked once, at the transition, under the same lock as the write.
+// What this file proves is what nothing above the registry can: the first-seen
+// order is the registry's own and survives a restart, one physical device takes
+// one slot however many sources report it, and a freed slot (a delete, a device
+// leaving its source, a bigger licence) promotes the next device in line with no
+// operator action.
 
 import (
 	"context"
-	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,44 +26,40 @@ import (
 	"netops/backend/models"
 )
 
-// memMonitorStore is an in-memory MonitorStore.
-type memMonitorStore struct {
+// memLedger is an in-memory FirstSeenStore.
+type memLedger struct {
 	mu      sync.Mutex
-	records map[string]devmon.Record
-	putErr  error
-	puts    int
+	recs    []discovery.FirstSeenRecord
+	saves   int
+	saveErr error
 }
 
-func newMemMonitorStore() *memMonitorStore {
-	return &memMonitorStore{records: map[string]devmon.Record{}}
-}
-
-func (m *memMonitorStore) MonitorRecords() []devmon.Record {
+func (m *memLedger) FirstSeenRecords() []discovery.FirstSeenRecord {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]devmon.Record, 0, len(m.records))
-	for _, r := range m.records {
-		out = append(out, r)
-	}
-	return out
+	return append([]discovery.FirstSeenRecord(nil), m.recs...)
 }
 
-func (m *memMonitorStore) PutMonitor(r devmon.Record) error {
+func (m *memLedger) SaveFirstSeen(recs []discovery.FirstSeenRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.putErr != nil {
-		return m.putErr
+	if m.saveErr != nil {
+		return m.saveErr
 	}
-	m.puts++
-	m.records[r.DeviceID] = r
+	m.saves++
+	m.recs = append([]discovery.FirstSeenRecord(nil), recs...)
 	return nil
 }
 
-func (m *memMonitorStore) DeleteMonitor(_, deviceID string) error {
+func (m *memLedger) at(id string) (time.Time, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.records, deviceID)
-	return nil
+	for _, r := range m.recs {
+		if r.DeviceID == id {
+			return r.FirstSeen, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // fixedSource reports a fixed device list under a chosen source name.
@@ -75,218 +74,300 @@ func (f *fixedSource) Poll(context.Context) ([]models.Device, error) {
 	return append([]models.Device(nil), f.devices...), nil
 }
 
-func TestMonitoringDecisionSurvivesARestart(t *testing.T) {
-	store := newMemMonitorStore()
-	a := discovery.NewDiscoveryAggregator()
-	a.SetMonitorStore(store)
-	if err := a.Upsert(models.Device{ID: "d1", Name: "d1", Address: "10.0.0.1", Source: "manual"}); err != nil {
-		t.Fatal(err)
-	}
-	if a.MonitoredCount() != 1 {
-		t.Fatal("a declared device is monitored by default")
-	}
-	if _, err := a.SetMonitoring("d1", false, "op"); err != nil {
-		t.Fatal(err)
-	}
-	if a.MonitoredCount() != 0 {
-		t.Fatal("the decision must take effect")
-	}
+// limitOf returns a fixed ceiling.
+func limitOf(n int) func() int { return func() int { return n } }
 
-	// A second aggregator over the same store is the restart.
-	b := discovery.NewDiscoveryAggregator()
-	b.SetMonitorStore(store)
-	if err := b.Upsert(models.Device{ID: "d1", Name: "d1", Address: "10.0.0.1", Source: "manual"}); err != nil {
-		t.Fatal(err)
+// seededLedger pre-records first-seen times so a test controls the licence
+// order exactly: ids[0] was seen first, ids[1] a minute later, and so on.
+func seededLedger(ids ...string) *memLedger {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	l := &memLedger{}
+	for i, id := range ids {
+		l.recs = append(l.recs, discovery.FirstSeenRecord{DeviceID: id, FirstSeen: base.Add(time.Duration(i) * time.Minute)})
 	}
-	if b.MonitoredCount() != 0 {
-		t.Fatal("a decision that does not survive a restart is a device silently monitored again")
-	}
-	rec, ok := b.MonitoringDecision("d1")
-	if !ok || rec.Enabled || rec.UpdatedBy != "op" {
-		t.Fatalf("the stored decision must carry who made it: %+v ok=%v", rec, ok)
-	}
+	return l
 }
 
-func TestMonitoringIsNotClaimedWhenItDoesNotPersist(t *testing.T) {
-	store := newMemMonitorStore()
-	a := discovery.NewDiscoveryAggregator()
-	a.SetMonitorStore(store)
-	if err := a.Upsert(models.Device{ID: "d1", Address: "10.0.0.1", Source: "snmp"}); err != nil {
-		t.Fatal(err)
-	}
-	store.putErr = errNotPersisted
-	if _, err := a.SetMonitoring("d1", true, "op"); err == nil {
-		t.Fatal("a decision that did not persist must be reported as a failure, not answered 200")
-	}
-	if a.MonitoredCount() != 0 {
-		t.Fatal("the in-memory state must not claim what the store refused")
-	}
+func dev(id, addr string) models.Device {
+	return models.Device{ID: id, Name: id, Address: addr}
 }
 
-var errNotPersisted = errStr("disk full")
-
-type errStr string
-
-func (e errStr) Error() string { return string(e) }
-
-func TestOneDeviceReportedByTwoSourcesIsOneMonitoredDevice(t *testing.T) {
-	a := discovery.NewDiscoveryAggregator()
-	// The SAME box: a NetBox record and the SNMP scan that found it. They share
-	// a management address, so dedupe folds them into one device.
-	netbox := &fixedSource{name: "netbox", devices: []models.Device{
-		{ID: "netbox-1", Name: "leaf1", Address: "10.0.0.1"},
-	}}
-	scan := &fixedSource{name: "snmp", devices: []models.Device{
-		{ID: "snmp-leaf1", Name: "leaf1", Address: "10.0.0.1"},
-	}}
-	a.PollOnceForTest(context.Background(), netbox)
-	a.PollOnceForTest(context.Background(), scan)
-
-	if got := len(a.Devices()); got != 1 {
-		t.Fatalf("the two records are one device, got %d", got)
+func states(a *discovery.DiscoveryAggregator) map[string]models.Device {
+	out := map[string]models.Device{}
+	for _, d := range a.Devices() {
+		out[d.ID] = d
 	}
-	if got := a.MonitoredCount(); got != 1 {
-		t.Fatalf("monitored = %d, want 1 — never one per source record", got)
-	}
+	return out
 }
 
-func TestSourceReportedDevicesTakeTheirSourcesDefault(t *testing.T) {
+func monitoredIDs(a *discovery.DiscoveryAggregator) []string {
+	var out []string
+	for _, d := range a.Devices() {
+		if d.Monitored {
+			out = append(out, d.ID)
+		}
+	}
+	return out
+}
+
+func TestEveryAddressableDeviceIsMonitoredWhateverItsSource(t *testing.T) {
 	a := discovery.NewDiscoveryAggregator()
-	scan := &fixedSource{name: "snmp"}
-	declared := &fixedSource{name: "static"}
+	scan := &fixedSource{name: devmon.SourceSubnetScan}
+	declared := &fixedSource{name: devmon.SourceStatic}
 	for i := 0; i < 5; i++ {
-		scan.devices = append(scan.devices, models.Device{
-			ID: "scan-" + strconv.Itoa(i), Name: "scan-" + strconv.Itoa(i),
-			Address: "10.1.0." + strconv.Itoa(i),
-		})
-		declared.devices = append(declared.devices, models.Device{
-			ID: "static-" + strconv.Itoa(i), Name: "static-" + strconv.Itoa(i),
-			Address: "10.2.0." + strconv.Itoa(i),
-		})
+		scan.devices = append(scan.devices, dev("scan-"+strconv.Itoa(i), "10.1.0."+strconv.Itoa(i+1)))
+		declared.devices = append(declared.devices, dev("static-"+strconv.Itoa(i), "10.2.0."+strconv.Itoa(i+1)))
 	}
 	a.PollOnceForTest(context.Background(), scan)
 	a.PollOnceForTest(context.Background(), declared)
 
-	if got := len(a.Devices()); got != 10 {
-		t.Fatalf("inventory = %d, want 10", got)
-	}
-	if got := a.MonitoredCount(); got != 5 {
-		t.Fatalf("monitored = %d, want the 5 DECLARED ones — a scan result is a candidate", got)
+	if got := a.MonitoredCount(); got != 10 {
+		t.Fatalf("monitored = %d, want all 10 — a device found by a subnet scan is monitored like any other", got)
 	}
 	for _, d := range a.Devices() {
-		if d.MonitorReason == "" {
-			t.Fatalf("%s has no reason for its state", d.ID)
+		if !d.Monitored || d.MonitorState != devmon.StateMonitored || d.MonitorReason != devmon.ReasonMonitored {
+			t.Fatalf("%s: monitored=%v state=%q reason=%q", d.ID, d.Monitored, d.MonitorState, d.MonitorReason)
 		}
-		if d.Monitored && len(d.MonitorMethods) == 0 {
+		if len(d.MonitorMethods) == 0 {
 			t.Fatalf("%s is monitored but names no telemetry", d.ID)
 		}
 	}
 }
 
-func TestTheCeilingIsAskedOnlyAtTheTransition(t *testing.T) {
+func TestAnAddresslessDeviceIsNeverMonitoredAndTakesNoSlot(t *testing.T) {
 	a := discovery.NewDiscoveryAggregator()
-	asked := 0
-	a.SetMonitorGate(func(current int) error {
-		asked++
-		if current >= 2 {
-			return errNotPersisted // any refusal
-		}
-		return nil
-	})
-	dev := models.Device{ID: "d1", Name: "d1", Address: "10.0.0.1", Source: "manual"}
-	if err := a.Upsert(dev); err != nil {
-		t.Fatal(err)
+	a.SetFirstSeenStore(seededLedger("ghost", "real"))
+	a.SetMonitorLimit(limitOf(1))
+	a.PollOnceForTest(context.Background(), &fixedSource{name: devmon.SourceStatic, devices: []models.Device{
+		{ID: "ghost", Name: "ghost"}, // seen FIRST, but nothing can reach it
+		dev("real", "10.0.0.1"),
+	}})
+	s := states(a)
+	if g := s["ghost"]; g.Monitored || g.MonitorState != devmon.StateNoAddress || g.MonitorReason != devmon.ReasonNoAddress {
+		t.Fatalf("addressless device: %+v", g)
 	}
-	first := asked
-	if first == 0 {
-		t.Fatal("creating a monitored device must ask the ceiling")
+	if r := s["real"]; !r.Monitored {
+		t.Fatalf("the addressless device must not consume the only slot: %+v", r)
 	}
-	// Re-writing the SAME device, and adding telemetry to it, asks nothing: it
-	// is already counted.
-	dev.CredentialRef = "lab"
-	dev.Labels = map[string]string{"gnmi": "true"}
-	if err := a.Upsert(dev); err != nil {
-		t.Fatal(err)
-	}
-	if asked != first {
-		t.Fatalf("the ceiling was asked again for a device already monitored (%d → %d)", first, asked)
-	}
-	// Turning monitoring OFF can only free capacity: it must not be gated.
-	if _, err := a.SetMonitoring("d1", false, "op"); err != nil {
-		t.Fatal(err)
-	}
-	if asked != first {
-		t.Fatalf("turning monitoring off must never be refused by a ceiling (%d → %d)", first, asked)
+	if a.MonitoringWithheldCount() != 0 {
+		t.Fatal("an addressless device is not 'over the limit' — it is unreachable")
 	}
 }
 
-func TestWithheldMonitoringIsListedAndReleasable(t *testing.T) {
+func TestTheFirstNByFirstSeenAreMonitoredAndTheRestAreOverTheLimit(t *testing.T) {
 	a := discovery.NewDiscoveryAggregator()
-	limit := 2
-	a.SetMonitorGate(func(current int) error {
-		if current >= limit {
-			return errNotPersisted
-		}
-		return nil
-	})
-	src := &fixedSource{name: "static"}
+	// Seen order d3, d1, d4, d0, d2 — deliberately not the id order.
+	a.SetFirstSeenStore(seededLedger("d3", "d1", "d4", "d0", "d2"))
+	a.SetMonitorLimit(limitOf(3))
+	src := &fixedSource{name: devmon.SourceSubnetScan}
 	for i := 0; i < 5; i++ {
-		src.devices = append(src.devices, models.Device{
-			ID: "s" + strconv.Itoa(i), Name: "s" + strconv.Itoa(i), Address: "10.3.0." + strconv.Itoa(i),
-		})
+		src.devices = append(src.devices, dev("d"+strconv.Itoa(i), "10.0.0."+strconv.Itoa(i+1)))
 	}
 	a.PollOnceForTest(context.Background(), src)
 
+	if got := strings.Join(monitoredIDs(a), ","); !sameSet(got, "d3,d1,d4") {
+		t.Fatalf("monitored = %s, want the first three seen: d3,d1,d4", got)
+	}
+	s := states(a)
+	for _, id := range []string{"d0", "d2"} {
+		d := s[id]
+		if d.Monitored || d.MonitorState != devmon.StateOverLimit || d.MonitorLimit != 3 {
+			t.Fatalf("%s must be over the limit of 3: %+v", id, d)
+		}
+		if !strings.Contains(d.MonitorReason, "licence limit of 3") || len(d.MonitorMethods) != 0 {
+			t.Fatalf("%s reason/methods: %q %v", id, d.MonitorReason, d.MonitorMethods)
+		}
+	}
+	// Nothing was dropped: all five are in the inventory.
 	if got := len(a.Devices()); got != 5 {
-		t.Fatalf("every device must be in the inventory, got %d — the ceiling never blocks discovery", got)
+		t.Fatalf("inventory = %d, want 5 — over-limit devices stay", got)
 	}
-	if got := a.MonitoredCount(); got != 2 {
-		t.Fatalf("monitored = %d, want 2", got)
-	}
-	withheld := a.MonitoringWithheldFor("", true)
-	if len(withheld) != 3 || a.MonitoringWithheldCount() != 3 {
-		t.Fatalf("3 devices must be listed as withheld, got %d", len(withheld))
-	}
-	for _, w := range withheld {
-		if w.Reason == "" || w.Name == "" {
-			t.Fatalf("a withheld device must be identifiable and explained: %+v", w)
-		}
-	}
-	// The withheld devices are visible and carry the reason on the device row.
-	for _, d := range a.Devices() {
-		if !d.Monitored && d.MonitorReason == "" {
-			t.Fatalf("%s is not monitored and does not say why", d.ID)
-		}
-	}
-
-	// Raising the ceiling starts collecting from them on the next poll, with no
-	// operator action.
-	limit = 5
-	a.PollOnceForTest(context.Background(), src)
-	if got := a.MonitoredCount(); got != 5 {
-		t.Fatalf("monitored = %d, want 5 after the ceiling rose", got)
-	}
-	if got := a.MonitoringWithheldCount(); got != 0 {
-		t.Fatalf("withheld = %d, want 0", got)
+	if a.MonitoredCount() != 3 || a.MonitoringWithheldCount() != 2 {
+		t.Fatalf("counts: monitored=%d over=%d", a.MonitoredCount(), a.MonitoringWithheldCount())
 	}
 }
 
-func TestSetMonitoringOnAnUnknownDevice(t *testing.T) {
+func sameSet(csv, want string) bool {
+	got := map[string]bool{}
+	for _, s := range strings.Split(csv, ",") {
+		got[s] = true
+	}
+	w := strings.Split(want, ",")
+	if len(got) != len(w) {
+		return false
+	}
+	for _, s := range w {
+		if !got[s] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestDeletingAMonitoredDevicePromotesTheNextInLine(t *testing.T) {
 	a := discovery.NewDiscoveryAggregator()
-	if _, err := a.SetMonitoring("nope", true, "op"); err == nil {
-		t.Fatal("an unknown device must be refused, never created")
-	} else if !errors.Is(err, devmon.ErrUnknownDevice) {
-		t.Fatalf("err = %v, want the shared sentinel so a caller can answer 404", err)
+	a.SetFirstSeenStore(seededLedger("m1", "m2", "m3"))
+	a.SetMonitorLimit(limitOf(2))
+	for _, d := range []models.Device{dev("m1", "10.0.0.1"), dev("m2", "10.0.0.2"), dev("m3", "10.0.0.3")} {
+		if err := a.Upsert(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s := states(a); s["m3"].Monitored {
+		t.Fatal("precondition: m3 is third in line and over a limit of 2")
+	}
+	if err := a.Delete("m1"); err != nil {
+		t.Fatal(err)
+	}
+	s := states(a)
+	if !s["m3"].Monitored || !s["m2"].Monitored {
+		t.Fatalf("m1's slot must pass to m3 automatically: %+v", s)
+	}
+	if a.MonitoringWithheldCount() != 0 {
+		t.Fatal("nothing is over the limit any more")
+	}
+}
+
+func TestADeviceLeavingItsSourceFreesItsSlotAndRejoinsAtTheBack(t *testing.T) {
+	a := discovery.NewDiscoveryAggregator()
+	ledger := seededLedger("a", "b")
+	a.SetFirstSeenStore(ledger)
+	a.SetMonitorLimit(limitOf(1))
+	src := &fixedSource{name: devmon.SourceStatic, devices: []models.Device{dev("a", "10.0.0.1"), dev("b", "10.0.0.2")}}
+	a.PollOnceForTest(context.Background(), src)
+	if got := monitoredIDs(a); len(got) != 1 || got[0] != "a" {
+		t.Fatalf("precondition: a is first, got %v", got)
+	}
+	src.devices = []models.Device{dev("b", "10.0.0.2")}
+	a.PollOnceForTest(context.Background(), src)
+	if got := monitoredIDs(a); len(got) != 1 || got[0] != "b" {
+		t.Fatalf("b must take a's freed slot, got %v", got)
+	}
+	if _, ok := ledger.at("a"); ok {
+		t.Fatal("a device that left the inventory must leave the persisted ledger")
+	}
+	// a returns: it is a NEW arrival now and must not displace b.
+	src.devices = []models.Device{dev("a", "10.0.0.1"), dev("b", "10.0.0.2")}
+	a.PollOnceForTest(context.Background(), src)
+	if got := monitoredIDs(a); len(got) != 1 || got[0] != "b" {
+		t.Fatalf("a returning must join the back of the line, got %v", got)
+	}
+}
+
+func TestLicenceGrowthPromotesWithoutAnyOperatorAction(t *testing.T) {
+	a := discovery.NewDiscoveryAggregator()
+	limit := 1
+	var mu sync.Mutex
+	a.SetMonitorLimit(func() int { mu.Lock(); defer mu.Unlock(); return limit })
+	a.SetFirstSeenStore(seededLedger("x", "y", "z"))
+	a.PollOnceForTest(context.Background(), &fixedSource{name: devmon.SourceSubnetScan, devices: []models.Device{
+		dev("x", "10.0.0.1"), dev("y", "10.0.0.2"), dev("z", "10.0.0.3"),
+	}})
+	if a.MonitoredCount() != 1 || a.MonitoringWithheldCount() != 2 {
+		t.Fatalf("precondition: 1 monitored, 2 over; got %d, %d", a.MonitoredCount(), a.MonitoringWithheldCount())
+	}
+	mu.Lock()
+	limit = 2
+	mu.Unlock()
+	if s := states(a); !s["y"].Monitored || s["z"].Monitored {
+		t.Fatalf("growing the licence to 2 must promote y (next in line) and only y: %+v", s)
+	}
+	mu.Lock()
+	limit = devmon.NoLimit
+	mu.Unlock()
+	if a.MonitoredCount() != 3 || a.MonitoringWithheldCount() != 0 {
+		t.Fatal("an unlimited licence monitors every addressable device")
+	}
+}
+
+func TestTheOrderSurvivesARestartWhicheverSourcePollsFirst(t *testing.T) {
+	ledger := &memLedger{}
+	early := &fixedSource{name: devmon.SourceStatic, devices: []models.Device{dev("early", "10.0.0.1")}}
+	late := &fixedSource{name: devmon.SourceSubnetScan, devices: []models.Device{dev("late", "10.0.0.2")}}
+
+	a := discovery.NewDiscoveryAggregator()
+	a.SetFirstSeenStore(ledger)
+	a.SetMonitorLimit(limitOf(1))
+	a.PollOnceForTest(context.Background(), early)
+	time.Sleep(2 * time.Millisecond) // distinct first-seen instants
+	a.PollOnceForTest(context.Background(), late)
+	if got := monitoredIDs(a); len(got) != 1 || got[0] != "early" {
+		t.Fatalf("precondition: early holds the slot, got %v", got)
+	}
+
+	// Restart: a fresh registry over the same ledger, and this time the scan
+	// happens to poll first. It must NOT take the slot.
+	b := discovery.NewDiscoveryAggregator()
+	b.SetFirstSeenStore(ledger)
+	b.SetMonitorLimit(limitOf(1))
+	b.PollOnceForTest(context.Background(), late)
+	b.PollOnceForTest(context.Background(), early)
+	if got := monitoredIDs(b); len(got) != 1 || got[0] != "early" {
+		t.Fatalf("after a restart the licence order must be the persisted one, got %v", got)
+	}
+}
+
+func TestALedgerWriteFailureIsNotFatal(t *testing.T) {
+	a := discovery.NewDiscoveryAggregator()
+	a.SetFirstSeenStore(&memLedger{saveErr: errStr("disk full")})
+	if err := a.Upsert(dev("d1", "10.0.0.1")); err != nil {
+		t.Fatalf("the device was stored; a ledger failure must not refuse it: %v", err)
+	}
+	if a.MonitoredCount() != 1 {
+		t.Fatal("the in-memory order still applies")
+	}
+}
+
+type errStr string
+
+func (e errStr) Error() string { return string(e) }
+
+func TestOneDeviceReportedByTwoSourcesTakesOneSlot(t *testing.T) {
+	a := discovery.NewDiscoveryAggregator()
+	a.SetMonitorLimit(limitOf(1))
+	// The SAME box: a NetBox record and the SNMP scan that found it. They share
+	// a management address, so dedupe folds them into one device.
+	a.PollOnceForTest(context.Background(), &fixedSource{name: devmon.SourceNetbox, devices: []models.Device{
+		{ID: "netbox-1", Name: "leaf1", Address: "10.0.0.1"},
+	}})
+	a.PollOnceForTest(context.Background(), &fixedSource{name: devmon.SourceSubnetScan, devices: []models.Device{
+		{ID: "snmp-leaf1", Name: "leaf1", Address: "10.0.0.1"},
+	}})
+	if got := len(a.Devices()); got != 1 {
+		t.Fatalf("the two records are one device, got %d", got)
+	}
+	if a.MonitoredCount() != 1 || a.MonitoringWithheldCount() != 0 {
+		t.Fatalf("one physical device is one slot: monitored=%d over=%d", a.MonitoredCount(), a.MonitoringWithheldCount())
+	}
+	// The same hostname and address in ANOTHER tenant is a different device and
+	// does take a slot of its own (here: over the limit of 1).
+	a.PollOnceForTest(context.Background(), &fixedSource{name: devmon.SourceStatic, devices: []models.Device{
+		{ID: "other-leaf1", Name: "leaf1", Address: "10.0.0.1", TenantID: "globex"},
+	}})
+	if a.MonitoredCount() != 1 || a.MonitoringWithheldCount() != 1 {
+		t.Fatalf("another tenant's same-named box is a second device: monitored=%d over=%d", a.MonitoredCount(), a.MonitoringWithheldCount())
+	}
+}
+
+func TestACreatePastTheCeilingIsStoredAndMarkedOverTheLimit(t *testing.T) {
+	a := discovery.NewDiscoveryAggregator()
+	a.SetMonitorLimit(limitOf(0))
+	d, created, err := a.CreateOrResolve(dev("new", "10.9.9.9"))
+	if err != nil || !created {
+		t.Fatalf("a create is never refused by the licence: created=%v err=%v", created, err)
+	}
+	if d.Monitored || d.MonitorState != devmon.StateOverLimit {
+		t.Fatalf("the create must report the device's real state: %+v", d)
 	}
 }
 
 func TestClientSuppliedMonitoringStateIsDiscarded(t *testing.T) {
 	a := discovery.NewDiscoveryAggregator()
-	// A scan result that claims to be monitored, the way a crafted POST body
-	// would.
+	a.SetMonitorLimit(limitOf(0))
+	// A device that claims to be monitored, the way a crafted POST body would.
 	err := a.Upsert(models.Device{
 		ID: "scan-1", Name: "scan-1", Address: "10.0.0.1", Source: "snmp",
-		Monitored: true, MonitorReason: "trust me", MonitorMethods: []string{"snmp"},
+		Monitored: true, MonitorState: devmon.StateMonitored, MonitorReason: "trust me", MonitorMethods: []string{"snmp"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -298,76 +379,38 @@ func TestClientSuppliedMonitoringStateIsDiscarded(t *testing.T) {
 	if !ok {
 		t.Fatal("the device must exist")
 	}
-	if d.Monitored || d.MonitorReason == "trust me" {
+	if d.Monitored || d.MonitorReason == "trust me" || d.MonitorState != devmon.StateOverLimit {
 		t.Fatalf("the claim leaked into the registry: %+v", d)
 	}
 }
 
-// TestMonitoredOverCeiling is the SOFT-overage listing: which monitored devices
-// are beyond the allowance, most recently enabled first.
-//
-// The ordering is presentational and the API says so in words; what this test
-// pins is that it is DETERMINISTIC (two reads never disagree) and that nothing
-// about appearing on the list changes a device's state.
+// TestMonitoredOverCeiling is the SOFT-overage listing (paid tiers, where the
+// registry has no ceiling and every device is collected from): which monitored
+// devices are beyond the allowance — the ones first seen after the first N,
+// newest first.
 func TestMonitoredOverCeiling(t *testing.T) {
 	a := discovery.NewDiscoveryAggregator()
-	// Six DECLARED devices: monitored by provenance, no explicit decision.
-	for i := 0; i < 6; i++ {
-		if err := a.Upsert(models.Device{
-			ID: "dev-" + strconv.Itoa(i), Name: "dev-" + strconv.Itoa(i),
-			Address: "10.20.0." + strconv.Itoa(i+1), Source: devmon.SourceStatic,
-		}); err != nil {
+	ids := []string{"dev-0", "dev-1", "dev-2", "dev-3", "dev-4", "dev-5"}
+	a.SetFirstSeenStore(seededLedger(ids...))
+	for i, id := range ids {
+		if err := a.Upsert(models.Device{ID: id, Name: id, Address: "10.20.0." + strconv.Itoa(i+1), Source: devmon.SourceStatic}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if got := a.MonitoredCount(); got != 6 {
 		t.Fatalf("harness: %d monitored, want 6", got)
 	}
-
 	if rows := a.MonitoredOverCeiling(6); len(rows) != 0 {
 		t.Fatalf("exactly at the allowance nothing is over: %+v", rows)
-	}
-	if rows := a.MonitoredOverCeiling(10); len(rows) != 0 {
-		t.Fatalf("under the allowance nothing is over: %+v", rows)
 	}
 	if rows := a.MonitoredOverCeiling(-1); len(rows) != 0 {
 		t.Fatal("there is no `beyond` an unlimited allowance")
 	}
-
 	rows := a.MonitoredOverCeiling(4)
-	if len(rows) != 2 {
-		t.Fatalf("6 monitored against an allowance of 4 is 2 over, got %d: %+v", len(rows), rows)
+	if len(rows) != 2 || rows[0].DeviceID != "dev-5" || rows[1].DeviceID != "dev-4" {
+		t.Fatalf("want the two last-seen devices, newest first, got %+v", rows)
 	}
-	// Deterministic: the same read twice gives the same answer, or the page
-	// reshuffles under the operator every poll.
-	again := a.MonitoredOverCeiling(4)
-	for i := range rows {
-		if rows[i].DeviceID != again[i].DeviceID {
-			t.Fatalf("the ordering must be stable: %v then %v", rows, again)
-		}
-	}
-	// With no explicit decisions the fallback is the device id, descending, so
-	// the highest-numbered devices are the ones shown as "beyond".
-	if rows[0].DeviceID != "dev-5" || rows[1].DeviceID != "dev-4" {
-		t.Fatalf("want the last-added devices listed first, got %+v", rows)
-	}
-
-	// An OPERATOR decision is newer than any provenance default, so a device
-	// enabled by hand sorts to the front.
-	if _, err := a.SetMonitoring("dev-0", true, "operator@example.test"); err != nil {
-		t.Fatal(err)
-	}
-	rows = a.MonitoredOverCeiling(4)
-	if len(rows) != 2 || rows[0].DeviceID != "dev-0" {
-		t.Fatalf("the most recently ENABLED device leads the list, got %+v", rows)
-	}
-
-	// Nothing about the listing changes any device's state: all six are still
-	// monitored, and none was withheld.
 	if got := a.MonitoredCount(); got != 6 {
 		t.Fatalf("listing must not disable anything: %d monitored, want 6", got)
-	}
-	if got := a.MonitoringWithheldCount(); got != 0 {
-		t.Fatalf("a soft overage withholds nothing: %d withheld", got)
 	}
 }

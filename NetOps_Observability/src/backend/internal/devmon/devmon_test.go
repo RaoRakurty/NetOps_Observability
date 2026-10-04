@@ -6,112 +6,128 @@ package devmon_test
 // devmon_test.go — the DEFINITION of a monitored device.
 //
 // One number in the product depends on this file being right: the Community
-// tier's 25. Every case below is a sentence from the owner's C4 decision
-// (2026-09-05) turned into an assertion, because the failure mode is not a
-// crash — it is a customer quietly charged for devices nobody collects from, or
-// quietly collecting from devices nobody paid for.
+// tier's 25. Every case below is a sentence from the owner's 2026-10-03
+// decision turned into an assertion — every addressable device is monitored,
+// the first N by first-seen time when the licence is full — because the failure
+// mode is not a crash: it is a device quietly not collected from, or the wrong
+// device holding a slot.
 
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"netops/backend/internal/devmon"
 	"netops/backend/models"
 )
 
-func TestDefaultIsProvenance(t *testing.T) {
-	cases := []struct {
-		name    string
-		device  models.Device
-		want    bool
-		wantWhy string
-	}{
-		{
-			name:   "a subnet-scan result is a candidate, not a monitored device",
-			device: models.Device{ID: "scan-1", Address: "10.0.0.1", Source: "snmp"},
-			want:   false, wantWhy: devmon.ReasonDiscovered,
-		},
-		{
-			name:   "a manually created device is monitored — adding it is asking to collect from it",
-			device: models.Device{ID: "m1", Address: "10.0.0.2", Source: "manual"},
-			want:   true, wantWhy: devmon.ReasonDeclared,
-		},
-		{
-			name:   "an operator-authored devices file declares monitored devices",
-			device: models.Device{ID: "s1", Address: "10.0.0.3", Source: "static"},
-			want:   true, wantWhy: devmon.ReasonDeclared,
-		},
-		{
-			name:   "the source of truth declares monitored devices",
-			device: models.Device{ID: "n1", Address: "10.0.0.4", Source: "netbox"},
-			want:   true, wantWhy: devmon.ReasonDeclared,
-		},
-		{
-			name:   "a device nothing can reach is not monitored, whatever its source",
-			device: models.Device{ID: "m2", Source: "manual"},
-			want:   false, wantWhy: devmon.ReasonNoAddress,
-		},
-		{
-			name:   "an address of blanks is no address",
-			device: models.Device{ID: "m3", Address: "   ", Source: "manual"},
-			want:   false, wantWhy: devmon.ReasonNoAddress,
-		},
-		{
-			name:   "the source match is case-insensitive",
-			device: models.Device{ID: "scan-2", Address: "10.0.0.5", Source: "SNMP"},
-			want:   false, wantWhy: devmon.ReasonDiscovered,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, why := devmon.Default(tc.device)
-			if got != tc.want {
-				t.Fatalf("Default = %v, want %v (%s)", got, tc.want, why)
-			}
-			if why != tc.wantWhy {
-				t.Fatalf("reason = %q, want %q", why, tc.wantWhy)
-			}
-		})
-	}
+func cand(id, addr string, seen time.Time) devmon.Candidate {
+	return devmon.Candidate{Device: models.Device{ID: id, Address: addr}, FirstSeen: seen}
 }
 
-// TestEveryDecisionCarriesAReason — §10: no silent states. A device that is not
-// being collected from must always say what would change that.
-func TestEveryDecisionCarriesAReason(t *testing.T) {
-	for _, d := range []models.Device{
-		{ID: "a", Address: "10.0.0.1", Source: "snmp"},
-		{ID: "b", Address: "10.0.0.2", Source: "manual"},
-		{ID: "c", Source: "manual"},
-	} {
-		if _, why := devmon.Default(d); strings.TrimSpace(why) == "" {
-			t.Fatalf("Default(%s) gave no reason", d.ID)
-		}
-		for _, enabled := range []bool{true, false} {
-			if _, why := devmon.Explicit(d, enabled); strings.TrimSpace(why) == "" {
-				t.Fatalf("Explicit(%s, %v) gave no reason", d.ID, enabled)
+var t0 = time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
+
+func TestAddresslessIsNeverMonitoredWhateverTheLimit(t *testing.T) {
+	for _, limit := range []int{devmon.NoLimit, 0, 1, 100} {
+		got := devmon.Assign([]devmon.Candidate{cand("ghost", "", t0), cand("ws", "  ", t0)}, limit)
+		for _, id := range []string{"ghost", "ws"} {
+			v := got[id]
+			if v.Monitored || v.State != devmon.StateNoAddress || v.Reason != devmon.ReasonNoAddress {
+				t.Fatalf("limit %d: %s = %+v", limit, id, v)
 			}
 		}
 	}
 }
 
-func TestExplicitOverridesProvenance(t *testing.T) {
-	scan := models.Device{ID: "scan-1", Address: "10.0.0.1", Source: "snmp"}
-	if on, why := devmon.Explicit(scan, true); !on || why != devmon.ReasonEnabled {
-		t.Fatalf("an operator may enable a discovered device: %v %q", on, why)
+func TestFirstNByFirstSeenAreMonitored(t *testing.T) {
+	cands := []devmon.Candidate{
+		cand("late", "10.0.0.3", t0.Add(3*time.Hour)),
+		cand("first", "10.0.0.1", t0),
+		cand("noaddr", "", t0.Add(-time.Hour)), // earliest, but takes no slot
+		cand("second", "10.0.0.2", t0.Add(time.Hour)),
 	}
-	declared := models.Device{ID: "m1", Address: "10.0.0.2", Source: "manual"}
-	if on, why := devmon.Explicit(declared, false); on || why != devmon.ReasonDisabled {
-		t.Fatalf("an operator may turn a declared device off: %v %q", on, why)
+	got := devmon.Assign(cands, 2)
+	if !got["first"].Monitored || !got["second"].Monitored {
+		t.Fatalf("the two earliest addressable devices are monitored: %+v", got)
 	}
-	if !strings.Contains(devmon.ReasonDisabled, "stay exactly where they are") {
-		t.Fatalf("turning monitoring off must say the device is not being deleted: %q", devmon.ReasonDisabled)
+	l := got["late"]
+	if l.Monitored || l.State != devmon.StateOverLimit || l.Limit != 2 || l.Reason != devmon.OverLimitReason(2) {
+		t.Fatalf("the third is over the limit of 2: %+v", l)
 	}
+}
 
-	// An explicit "on" cannot conjure a collectable device out of one with no
-	// address: it would consume an entitlement and collect nothing.
-	noAddr := models.Device{ID: "m2", Source: "manual"}
-	if on, why := devmon.Explicit(noAddr, true); on || why != devmon.ReasonNoAddress {
-		t.Fatalf("enabling an addressless device must not count: %v %q", on, why)
+func TestTiesBreakOnIDSoTwoReadsAgree(t *testing.T) {
+	cands := []devmon.Candidate{cand("b", "10.0.0.2", t0), cand("a", "10.0.0.1", t0), cand("c", "10.0.0.3", t0)}
+	for i := 0; i < 20; i++ {
+		got := devmon.Assign(cands, 1)
+		if !got["a"].Monitored || got["b"].Monitored || got["c"].Monitored {
+			t.Fatalf("equal first-seen must break on id: %+v", got)
+		}
+		cands[0], cands[2] = cands[2], cands[0] // input order must not matter
+	}
+}
+
+func TestADeletionPromotesTheNextDevice(t *testing.T) {
+	cands := []devmon.Candidate{cand("a", "10.0.0.1", t0), cand("b", "10.0.0.2", t0.Add(time.Minute)), cand("c", "10.0.0.3", t0.Add(2*time.Minute))}
+	if devmon.Assign(cands, 2)["c"].Monitored {
+		t.Fatal("precondition: c is third")
+	}
+	if got := devmon.Assign(cands[1:], 2); !got["b"].Monitored || !got["c"].Monitored {
+		t.Fatalf("with a gone, c is promoted: %+v", got)
+	}
+}
+
+func TestLicenceGrowthPromotes(t *testing.T) {
+	cands := []devmon.Candidate{cand("a", "10.0.0.1", t0), cand("b", "10.0.0.2", t0.Add(time.Minute)), cand("c", "10.0.0.3", t0.Add(2*time.Minute))}
+	if got := devmon.Assign(cands, 1); got["b"].Monitored {
+		t.Fatal("precondition: one slot")
+	}
+	if got := devmon.Assign(cands, 2); !got["b"].Monitored || got["c"].Monitored {
+		t.Fatalf("a bigger licence promotes exactly the next device: %+v", got)
+	}
+	for _, unlimited := range []int{devmon.NoLimit, -7} {
+		for id, v := range devmon.Assign(cands, unlimited) {
+			if !v.Monitored {
+				t.Fatalf("no ceiling (%d): %s must be monitored", unlimited, id)
+			}
+		}
+	}
+	for id, v := range devmon.Assign(cands, 0) {
+		if v.Monitored || v.State != devmon.StateOverLimit {
+			t.Fatalf("a zero ceiling monitors nothing: %s = %+v", id, v)
+		}
+	}
+}
+
+func TestWirelessDevicesSayWhyInTheirOwnTerms(t *testing.T) {
+	c := cand("ap1", "10.0.0.9", t0)
+	c.Device.Source = devmon.SourceWireless
+	if v := devmon.Assign([]devmon.Candidate{c}, 5)["ap1"]; !v.Monitored || v.Reason != devmon.ReasonWireless {
+		t.Fatalf("wireless: %+v", v)
+	}
+}
+
+func TestEveryVerdictCarriesAReason(t *testing.T) {
+	cands := []devmon.Candidate{cand("a", "10.0.0.1", t0), cand("b", "10.0.0.2", t0.Add(time.Minute)), cand("c", "", t0)}
+	for id, v := range devmon.Assign(cands, 1) {
+		if v.Reason == "" || v.State == "" {
+			t.Fatalf("%s has a silent verdict: %+v", id, v)
+		}
+	}
+	if !strings.Contains(devmon.OverLimitReason(25), "licence limit of 25 devices") ||
+		!strings.Contains(devmon.OverLimitReason(1), "licence limit of 1 device ") {
+		t.Fatal("the over-limit sentence names the limit in plain words")
+	}
+}
+
+func TestCollectingKeepsOnlyMethodsWithARunningCollector(t *testing.T) {
+	on := func(m string) bool { return m == devmon.MethodGNMI }
+	got := devmon.Collecting([]string{devmon.MethodGNMI, devmon.MethodSNMP}, on)
+	if len(got) != 1 || got[0] != devmon.MethodGNMI {
+		t.Fatalf("Collecting = %v", got)
+	}
+	if devmon.Collecting([]string{devmon.MethodSNMP}, nil) != nil {
+		t.Fatal("no collector status means nothing can be claimed as collecting")
 	}
 }
 
