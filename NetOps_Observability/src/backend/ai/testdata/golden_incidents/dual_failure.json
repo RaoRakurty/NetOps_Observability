@@ -1,0 +1,83 @@
+[
+  {
+    "id": "df-two-candidates-model-merges-into-one-cause",
+    "category": "dual_failure",
+    "description": "Two independent faults overlap: an optical loss on edge-1 and DIA upstream loss at isp-gw-1, both strong candidates in one correlation. The model collapses them into one cause ('the DIA loss was caused by the optic failure'). Both candidates must stay cited and visible, and the merged causal claim must be removed under the non-confirmed verdict.",
+    "path": "ask",
+    "principal": {"tenant": "t-a", "perms": ["correlations:read"]},
+    "question": "explain this incident",
+    "ui": {"correlation_id": "df01ffff-0000-4000-8000-000000000031"},
+    "tenants": {
+      "t-a": {
+        "problems": [
+          {
+            "id": "df01ffff-0000-4000-8000-000000000031",
+            "title": "Branch-7 users degraded",
+            "verdict": "suspected",
+            "confidence": 0.62,
+            "devices": ["edge-1", "isp-gw-1"],
+            "signal_count": 9,
+            "node_count": 3,
+            "hypotheses": {"ranking": {"hypotheses": [
+              {"id": "optic-los", "title": "Optical loss of signal on edge-1 Ethernet1/1", "confidence": 0.62, "confidence_label": "likely",
+               "satisfied": ["optic_rx_power_low", "interface_down"],
+               "verdict": {"verdict_tier": "suspected", "modality_coverage": ["device_telemetry", "control_plane"]}},
+              {"id": "dia-loss", "title": "DIA upstream packet loss at isp-gw-1", "confidence": 0.58, "confidence_label": "likely"}
+            ]}}
+          }
+        ]
+      }
+    },
+    "model_reply": "Branch-7 users lost the edge-1 uplink and saw upstream loss at isp-gw-1 in the same window [hypothesis:df01ffff:0] [hypothesis:df01ffff:1]. The DIA packet loss at isp-gw-1 was caused by the optic failure on edge-1. Next: replace the optic on edge-1.",
+    "expect": {
+      "verdict": "suspected",
+      "status": "Suspected",
+      "required_citations": ["hypothesis:df01ffff:0", "hypothesis:df01ffff:1"],
+      "forbidden_claims": ["was caused by the optic failure"],
+      "required_text": ["Optical loss of signal on edge-1", "DIA upstream packet loss at isp-gw-1", "claiming an established cause was removed"]
+    }
+  },
+  {
+    "id": "df-current-state-lists-both-incidents",
+    "category": "dual_failure",
+    "description": "Positive control. Two separate suspected incidents are active at once. The current-state briefing must list and cite BOTH, and an honest headline keeps them separate.",
+    "path": "ask",
+    "principal": {"tenant": "t-a", "perms": ["correlations:read"]},
+    "question": "what is going on right now",
+    "tenants": {
+      "t-a": {
+        "problems": [
+          {"id": "df02ffff-0000-4000-8000-000000000032", "title": "Optical loss of signal on edge-1", "verdict": "suspected", "confidence": 0.6, "devices": ["edge-1"], "signal_count": 5, "node_count": 2},
+          {"id": "df03ffff-0000-4000-8000-000000000033", "title": "DIA upstream packet loss at isp-gw-1", "verdict": "suspected", "confidence": 0.57, "devices": ["isp-gw-1"], "signal_count": 4, "node_count": 2}
+        ]
+      }
+    },
+    "model_reply": "Two separate suspected incidents are active: an optical loss on edge-1 [problem:df02ffff-0000-4000-8000-000000000032] and upstream loss at isp-gw-1 [problem:df03ffff-0000-4000-8000-000000000033]. Work them in parallel; neither explains the other on current evidence.",
+    "expect": {
+      "required_citations": ["problem:df02ffff-0000-4000-8000-000000000032", "problem:df03ffff-0000-4000-8000-000000000033"],
+      "required_text": ["Optical loss of signal on edge-1", "DIA upstream packet loss at isp-gw-1"]
+    }
+  },
+  {
+    "id": "df-current-state-model-merges-two-incidents",
+    "category": "dual_failure",
+    "description": "Same two independent suspected incidents; the model's headline merges them into one causal story. The current-state path runs only VerifyGrounding, no verdict-honesty gate, so a causal claim joining two unconfirmed incidents ships as the briefing headline.",
+    "path": "ask",
+    "principal": {"tenant": "t-a", "perms": ["correlations:read"]},
+    "question": "what is going on right now",
+    "tenants": {
+      "t-a": {
+        "problems": [
+          {"id": "df04ffff-0000-4000-8000-000000000034", "title": "Optical loss of signal on edge-1", "verdict": "suspected", "confidence": 0.6, "devices": ["edge-1"], "signal_count": 5, "node_count": 2},
+          {"id": "df05ffff-0000-4000-8000-000000000035", "title": "DIA upstream packet loss at isp-gw-1", "verdict": "suspected", "confidence": 0.57, "devices": ["isp-gw-1"], "signal_count": 4, "node_count": 2}
+        ]
+      }
+    },
+    "model_reply": "One fault explains everything: the root cause is the optic failure on edge-1 [problem:df04ffff-0000-4000-8000-000000000034], and the DIA loss at isp-gw-1 was caused by it [problem:df05ffff-0000-4000-8000-000000000035]. Next: replace the optic.",
+    "expect": {
+      "required_citations": ["problem:df04ffff-0000-4000-8000-000000000034", "problem:df05ffff-0000-4000-8000-000000000035"],
+      "forbidden_claims": ["root cause is the optic failure", "was caused by it"]
+    },
+    "expected_failure": "F5 — answerCurrentState (orchestrator.go) narrates over incidents that are each suspected/undetermined but applies only verifyNarrative; it never runs the verdict-honesty gate, so the briefing headline can assert a root cause and merge two independent unconfirmed incidents into one causal chain."
+  }
+]
