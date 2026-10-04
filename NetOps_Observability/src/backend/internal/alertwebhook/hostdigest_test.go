@@ -315,9 +315,7 @@ func TestRateLimitedPageExhaustionLogsErrorAndCountsRateLimited(t *testing.T) {
 	if !strings.Contains(metricsText(r.mx), `netops_alert_webhook_push_failures_total{route="host_monitoring",reason="send_error"} 0`) {
 		t.Error("a rate-limit refusal must not also be counted as a send error")
 	}
-	if n := r.logs.countContaining("error: platform alert push to host monitoring FAILED"); n != 1 {
-		t.Fatalf("a dropped PAGE must be logged at ERROR exactly once, got %d", n)
-	}
+	waitForLogCount(t, r.logs, "error: platform alert push to host monitoring FAILED", 1)
 	// Total wall time is bounded by the deadline even in the worst case.
 	var total time.Duration
 	for _, w := range r.naps.waits() {
@@ -420,6 +418,17 @@ func TestAFailedDigestKeepsItsContentForTheNextWindow(t *testing.T) {
 	if !strings.Contains(first[0].Body, "VectorComponentErrors") {
 		t.Fatalf("the first digest did not carry the warning: %q", first[0].Body)
 	}
+	// The fake signals the push BEFORE it returns the 429, so the worker may
+	// not have folded the refused entries back yet. Opening window two before
+	// that restore composed an empty digest and nothing was sent (~1 % of runs
+	// flaked). restoreDigest logs only after the accumulator is updated.
+	deadline := time.Now().Add(5 * time.Second)
+	for r.logs.countContaining("kept for the next window after a failed push") == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the refused digest was never restored for the next window")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 
 	// Window two, with the server healthy again: the content comes back.
 	r.clock.advance(2 * time.Minute)
@@ -467,10 +476,23 @@ func TestADigestTheQueueRefusedKeepsItsContent(t *testing.T) {
 	})
 
 	// 1. Wedge the drain and fill the queue with PAGE traffic (the warning tier
-	//    never touches the queue — it is digested).
+	//    never touches the queue — it is digested). First ONE page, and wait
+	//    until the drain worker is provably holding it at the wedge: then the
+	//    flood fills the queue exactly (1 in flight + hostQueueSize queued), the
+	//    digest below is refused every time, and exactly hostQueueSize+1 drain.
+	//    Without this wait, whether the worker took an item before or after the
+	//    flood was a race (it flaked ~2 % of runs on main, in both directions).
+	if w := r.post(t, `[{"status":"firing","labels":{"alertname":"P-first","severity":"critical","layer":"stack","tier":"page"}}]`, bearer); w.Code != http.StatusOK {
+		t.Fatalf("first page post: status = %d", w.Code)
+	}
+	select {
+	case <-p.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the drain worker never picked up the first page")
+	}
 	var sb strings.Builder
 	sb.WriteString("[")
-	for i := 0; i < hostQueueSize+120; i++ {
+	for i := 0; i < hostQueueSize+120; i++ { // P-first is already in flight
 		if i > 0 {
 			sb.WriteString(",")
 		}
@@ -571,9 +593,7 @@ func TestBudgetReservesCapacityForPages(t *testing.T) {
 	}
 	// The refusal is logged, but ONCE per window — the condition repeats on
 	// every request and a per-request warning is its own outage.
-	if n := r.logs.countContaining("outbound push budget for this topic is spent"); n != 1 {
-		t.Errorf("budget refusal logged %d times, want exactly 1", n)
-	}
+	waitForLogCount(t, r.logs, "outbound push budget for this topic is spent", 1)
 }
 
 // A page the budget itself refuses is the worst case in this file: it is an
@@ -598,9 +618,7 @@ func TestBudgetExhaustedPageIsLoggedAtError(t *testing.T) {
 	if !strings.Contains(metricsText(r.mx), `netops_alert_webhook_push_failures_total{route="host_monitoring",reason="budget_exhausted"} 1`) {
 		t.Errorf("the refused page was not counted:\n%s", metricsText(r.mx))
 	}
-	if n := r.logs.countContaining("error: platform alert push SKIPPED"); n != 1 {
-		t.Fatalf("a page the budget refused must be an ERROR, got %d such lines", n)
-	}
+	waitForLogCount(t, r.logs, "error: platform alert push SKIPPED", 1)
 }
 
 // The bucket ARITHMETIC moved to notify/pushbudget_test.go together with the
