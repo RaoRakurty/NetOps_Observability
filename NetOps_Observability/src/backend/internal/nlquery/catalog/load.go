@@ -178,7 +178,55 @@ func (c *Catalog) index() error {
 			return fmt.Errorf("catalog: relationship %s→%s via %q is invalid", r.From, r.To, r.Via)
 		}
 	}
-	return c.checkAliasCollisions()
+	if err := c.checkAliasCollisions(); err != nil {
+		return err
+	}
+	return c.indexSynonyms()
+}
+
+// synonymEntities are the entity types a synonym group may name: the two whose
+// instances have public, well-known names.
+var synonymEntities = set("provider", "application")
+
+// indexSynonyms validates the synonym groups. A term is unique within its
+// entity type (two groups sharing a term would make the rung guess), and no
+// term is catalog vocabulary — a metric, dimension or entity-type word is
+// never also the name of a thing ("latency" is never a carrier).
+func (c *Catalog) indexSynonyms() error {
+	c.synByTerm = map[string][]int{}
+	seeds := map[string]bool{}
+	for i, g := range c.Synonyms {
+		if !synonymEntities[g.Entity] {
+			return fmt.Errorf("catalog: synonym group %d: entity %q is not provider or application", i, g.Entity)
+		}
+		if g.Seed != "" {
+			et := c.byEntity[g.Entity]
+			if g.Entity != "provider" || !regexp.MustCompile(et.IDPattern).MatchString(g.Seed) || seeds[g.Seed] {
+				return fmt.Errorf("catalog: synonym group %d: seed %q must be a unique, valid provider id", i, g.Seed)
+			}
+			seeds[g.Seed] = true
+		}
+		if len(g.Terms) == 0 || (g.Seed == "" && len(g.Terms) < 2) {
+			return fmt.Errorf("catalog: synonym group %d: needs two terms (one with a seed)", i)
+		}
+		for _, term := range g.Terms {
+			n := NormalizeAlias(term)
+			if n == "" || len(term) > 64 {
+				return fmt.Errorf("catalog: synonym group %d: empty or over-long term %q", i, term)
+			}
+			if len(c.aliases[n]) > 0 {
+				return fmt.Errorf("catalog: synonym %q is catalog vocabulary (%s %s)", term, c.aliases[n][0].Kind, c.aliases[n][0].Name)
+			}
+			k := g.Entity + "\x1f" + n
+			if len(c.synByTerm[k]) > 0 && c.synByTerm[k][len(c.synByTerm[k])-1] != i {
+				return fmt.Errorf("catalog: synonym %q is in two %s groups", term, g.Entity)
+			}
+			if len(c.synByTerm[k]) == 0 {
+				c.synByTerm[k] = []int{i}
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Catalog) addAliases(kind, name, forWhat string, words []string) {
@@ -274,6 +322,44 @@ func (c *Catalog) Aliases() []string {
 	sort.Strings(out)
 	return out
 }
+
+// SynonymsOf returns the synonym groups of entity type `entity` that contain
+// the term (normalized). At most one group per type holds a term (a load-time
+// rule), so the result has zero or one element.
+func (c *Catalog) SynonymsOf(entity, term string) []SynonymGroup {
+	var out []SynonymGroup
+	for _, i := range c.synByTerm[entity+"\x1f"+NormalizeAlias(term)] {
+		out = append(out, c.Synonyms[i])
+	}
+	return out
+}
+
+// Seeds returns the seeded synonym groups of the given entity type, in file
+// order.
+func (c *Catalog) Seeds(entity string) []SynonymGroup {
+	var out []SynonymGroup
+	for _, g := range c.Synonyms {
+		if g.Entity == entity && g.Seed != "" {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// IsSeed reports whether id is a catalog provider seed.
+func (c *Catalog) IsSeed(id string) bool {
+	for _, g := range c.Synonyms {
+		if g.Seed != "" && g.Seed == id {
+			return true
+		}
+	}
+	return false
+}
+
+// IsVocabulary reports whether text is a catalog word (a metric, dimension,
+// enum or entity-type alias) — a word of the question's grammar, never the
+// name of a thing.
+func (c *Catalog) IsVocabulary(text string) bool { return len(c.aliases[NormalizeAlias(text)]) > 0 }
 
 // Reachable reports whether `to` can be reached from `from` in at most two
 // relationship hops (either direction), or is the same type.

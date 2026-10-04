@@ -26,6 +26,7 @@ type fakeScope struct {
 var visibleToA = map[string]bool{
 	"site:dfw-hq": true, "device:edge-1": true, "circuit:dfw-comcast": true,
 	"incident:11111111-2222-3333-4444-555555555555": true, "provider:comcast": true,
+	"provider:att": true, // visible (a public carrier) but no circuit is attributed to it
 }
 
 func (f fakeScope) Visible(_ context.Context, r ast.EntityRef) (bool, error) {
@@ -38,7 +39,10 @@ func (f fakeScope) Count(_ context.Context, _ string, _ []ast.EntityRef) (int, e
 	return 10, nil
 }
 func (f fakeScope) CrossTenant() bool { return f.cross }
-func (f fakeScope) Now() time.Time    { return fixedNow }
+func (f fakeScope) ProviderMapped(_ context.Context, id string) (bool, error) {
+	return id == "provider:comcast", nil
+}
+func (f fakeScope) Now() time.Time { return fixedNow }
 
 var cat = catalog.MustLoad()
 
@@ -239,4 +243,28 @@ func TestMetricGroupByIsBoundedNotIgnored(t *testing.T) {
 	}
 	mustFail(t, fakeScope{}, strings.Replace(series, `"time_range"`, `"group_by":["change"],"time_range"`, 1), CodeUnknownDimension)
 	mustFail(t, fakeScope{}, strings.Replace(series, `"time_range"`, `"group_by":["site","device"],"time_range"`, 1), CodeTooBroad)
+}
+
+// N-C2 provider seeding: a provider Iris can NAME but cannot map to any of the
+// caller's circuits is refused precisely (unmapped_provider) — never answered
+// as "nothing wrong with this carrier". An invisible provider stays the plain
+// unknown_entity, so seeding opens no existence oracle.
+func TestUnmappedProviderIsRefusedPrecisely(t *testing.T) {
+	mk := func(id string) string {
+		return `{"v":1,"query_type":"metric_series","target":"circuit","metric":"circuit_loss_pct","entities":[{"type":"provider","id":"` + id + `"}]}`
+	}
+	if _, res := Validate(context.Background(), cat, fakeScope{cross: true}, q(t, mk("provider:comcast"))); !res.Valid {
+		t.Fatalf("a mapped provider must validate: %s", codes(res))
+	}
+	e := mustFail(t, fakeScope{cross: true}, mk("provider:att"), CodeUnmappedProvider)
+	if e.Path != "entities[0].id" || e.Message == "" {
+		t.Fatalf("unmapped_provider must name the ref and say why: %+v", e)
+	}
+	_, res := Validate(context.Background(), cat, fakeScope{cross: true}, q(t, mk("provider:tenant-b-carrier")))
+	for _, x := range res.Errors {
+		if x.Code == CodeUnmappedProvider {
+			t.Fatalf("an invisible provider must be unknown_entity only, got %s", codes(res))
+		}
+	}
+	mustFail(t, fakeScope{cross: true}, mk("provider:tenant-b-carrier"), CodeUnknownEntity)
 }

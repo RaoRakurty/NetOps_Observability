@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"net/http"
 	"netops/backend/internal/changeapi"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -53,6 +54,7 @@ import (
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/mql"
 	"netops/backend/internal/nlquery/plan"
+	"netops/backend/internal/nlquery/resolve"
 	"netops/backend/internal/noclabel"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/rca"
@@ -2548,9 +2550,117 @@ func (h *nlqScope) Visible(ctx context.Context, ref nlqast.EntityRef) (bool, err
 		return err == nil, err
 	case "probe_target":
 		return cross, nil // probe series are unscoped until N-B5 (the metric is gated too)
+	case "provider":
+		// A carrier is named by the caller's own alias or by a catalog seed
+		// (public carrier names — naming one reveals nothing about anyone).
+		// Whether any of the caller's circuits belong to it is ProviderMapped.
+		if h.s.nlqCatalog != nil && h.s.nlqCatalog.IsSeed(ref.ID) {
+			return true, nil
+		}
+		return h.aliasTarget("provider", ref.ID), nil
+	case "application":
+		// An application the caller's own aliases or own data name — nothing
+		// else, so another workspace's applications are never visible.
+		if h.aliasTarget("application", ref.ID) {
+			return true, nil
+		}
+		apps, err := h.appSeeds(ctx)
+		if err != nil {
+			return false, err
+		}
+		for _, a := range apps {
+			if a.ID == ref.ID {
+				return true, nil
+			}
+		}
+		return false, nil
 	}
-	// provider, application, change: resolvable only through N-C2 / N-D.
+	// change: resolvable only through N-D.
 	return false, nil
+}
+
+// ProviderMapped answers validate.Scope. Nothing in the platform attributes a
+// circuit to a carrier yet (the WAN projection has no provider field, and a
+// seam's control-plane owner is a CLASS — isp / cloud — not a carrier), so no
+// provider is mapped: a question naming one is refused as unmapped_provider
+// instead of answering "nothing visible" for a carrier whose circuits Iris
+// simply cannot pick out. When circuit → provider attribution lands, this is
+// the one place that changes.
+func (h *nlqScope) ProviderMapped(context.Context, string) (bool, error) { return false, nil }
+
+// aliasTarget reports whether one of the caller's own aliases points at id.
+func (h *nlqScope) aliasTarget(entityType, id string) bool {
+	if h.s.nlqAliases == nil {
+		return false
+	}
+	tenant, cross := principalTenant(h.claims)
+	for _, a := range h.s.nlqAliases.List(tenant, cross) {
+		if a.EntityType == entityType && a.EntityID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// Application seeding bounds (N-C2): the change ledger is read over the same
+// 30-day window the change questions default to at most, and at most
+// nlqAppSeedMax distinct applications are offered to the resolver.
+const (
+	nlqAppSeedWindow = 30 * 24 * time.Hour
+	nlqAppSeedFetch  = 500
+	nlqAppSeedMax    = 200
+)
+
+// appSeeds lists the applications the caller's OWN data names: the app of
+// each of the workspace's DEM journeys and of its recent change-ledger rows.
+// The id is exactly "app:" + the stored value, because that value is what the
+// change and incident filters match — a seed can only ever narrow to rows the
+// workspace itself recorded. A stored value that is not a valid application
+// id (e.g. it contains a space) cannot be carried by a query and is left out;
+// the operator can still name it through an alias.
+func (h *nlqScope) appSeeds(ctx context.Context) ([]resolve.Named, error) {
+	if h.s.experienceStore == nil || h.s.nlqCatalog == nil {
+		return nil, nil
+	}
+	et, ok := h.s.nlqCatalog.Entity("application")
+	if !ok {
+		return nil, nil
+	}
+	idRe, err := regexp.Compile(et.IDPattern)
+	if err != nil {
+		return nil, err
+	}
+	tenant, _ := principalTenant(h.claims)
+	var values []string
+	journeys, err := h.s.experienceStore.ListJourneys(ctx, tenant)
+	if err != nil {
+		return nil, err
+	}
+	for _, j := range journeys {
+		values = append(values, j.App)
+	}
+	evs, err := h.s.experienceStore.ListChanges(ctx, tenant, experience.ChangeQuery{Since: time.Now().Add(-nlqAppSeedWindow), Limit: nlqAppSeedFetch})
+	if err != nil {
+		return nil, err
+	}
+	for _, ev := range evs {
+		values = append(values, ev.App)
+	}
+	seen := map[string]bool{}
+	var out []resolve.Named
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		id := "app:" + v
+		if v == "" || seen[id] || !idRe.MatchString(id) {
+			continue
+		}
+		seen[id] = true
+		out = append(out, resolve.Named{Type: "application", ID: id, Names: []string{v}})
+		if len(out) == nlqAppSeedMax {
+			break
+		}
+	}
+	return out, nil
 }
 
 // Count estimates how many target entities the refs select (validator cost).

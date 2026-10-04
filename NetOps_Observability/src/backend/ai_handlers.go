@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"netops/backend/ai"
@@ -32,6 +33,7 @@ import (
 	"netops/backend/internal/nlquery/validate"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/tac"
+	"netops/backend/models"
 )
 
 // ai_handlers.go — the Iris AI HTTP surface. POST /api/ai/ask runs the
@@ -777,7 +779,10 @@ func (a aiTACCatalog) Lookup(query string, limit int) []ai.TACKnowledgeHit {
 // ---- Iris NL: entity aliases + resolution (tracker 337 N-C2) ----------------
 //
 // /api/ai/aliases        GET own aliases · PUT create/re-point · DELETE ?entity_type=&alias=
-// /api/ai/entities/resolve  POST {text, types[]} → the resolution ladder's answer
+// /api/ai/entities/resolve  POST {text, types[], suggest?} → the resolution ladder's answer
+//      suggest=true additionally asks the AI model for the name the operator
+//      probably meant when every deterministic rung found nothing; its
+//      candidates are disclosed as the model's and always need confirmation.
 //
 // §3a: per-tenant DATA → requirePerm + tenant filter. The owning tenant is
 // stamped from the principal, never the body; a Global (cross-tenant) view
@@ -886,8 +891,9 @@ func (s *server) handleAIEntityResolve(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, nlqBodyCap)
 	var req struct {
-		Text  string   `json:"text"`
-		Types []string `json:"types"`
+		Text    string   `json:"text"`
+		Types   []string `json:"types"`
+		Suggest bool     `json:"suggest"`
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -905,26 +911,111 @@ func (s *server) handleAIEntityResolve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	res, err := s.nlqResolver(r, claims).Resolve(r.Context(), req.Text, req.Types)
+	// A request that may reach a model rides the same per-principal limit as
+	// every other Iris model path (LLM04); a plain lookup does not.
+	if req.Suggest && !s.copilotLimiter.AllowN(claims.Tenant+"|"+claims.Sub, envInt("COPILOT_RATE_PER_MIN", 20)) {
+		writeError(w, http.StatusTooManyRequests, fmt.Errorf("Iris AI rate limit exceeded — slow down"))
+		return
+	}
+	res, err := s.nlqResolverWith(r, claims, req.Suggest).Resolve(r.Context(), req.Text, req.Types)
 	if err != nil {
 		logError("iris.resolve", "entity resolution failed", errf(err))
 		writeError(w, http.StatusInternalServerError, errors.New("entity resolution is unavailable"))
 		return
 	}
+	if res.SuggestionError != "" {
+		// The deterministic answer stands; the missing suggestion is said in
+		// the response and recorded here (§10: no silent failure).
+		logWarn("iris.resolve", "model name suggestion unavailable", map[string]any{"reason": res.SuggestionError})
+	}
+	if req.Suggest {
+		s.aiSuggestAudit(r, claims, res)
+	}
 	writeJSON(w, http.StatusOK, res)
 }
 
-// nlqResolver builds the resolution ladder over the caller's own aliases and
-// visible inventory.
-func (s *server) nlqResolver(r *http.Request, claims jwtClaims) resolve.Resolver {
-	return resolve.Resolver{Cat: s.nlqCatalog, L: nlqLookups{s: s, h: s.nlqScopeFor(r, claims), claims: claims}}
+// aiSuggestAudit enters one model-suggestion request into the platform audit
+// trail: who asked and how it ended (suggested / none / unavailable / not
+// needed) — never the typed text or the suggested names.
+func (s *server) aiSuggestAudit(r *http.Request, claims jwtClaims, res resolve.Result) {
+	if s.audit == nil {
+		return
+	}
+	outcome := "not_needed" // a deterministic rung answered; no model was asked
+	switch {
+	case res.SuggestionError != "":
+		outcome = "unavailable"
+	case res.Disclosure != "":
+		outcome = "suggested"
+	case len(res.Refs) == 0:
+		outcome = "none"
+	}
+	tenant, cross := principalTenant(claims)
+	s.audit.Record(AuditEvent{
+		Actor: claims.Sub, Tenant: tenant, Cross: cross, SessionID: claims.Sid,
+		Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: "allow",
+		Remote: auditClientIP(r), Detail: map[string]any{"action": "ai.entity_suggest", "outcome": outcome, "candidates": len(res.Refs)},
+	})
 }
 
-// nlqLookups implements resolve.Lookups from the caller's own scope.
+// nlqResolver builds the resolution ladder over the caller's own aliases,
+// visible inventory and adjacency. The model-suggestion rung is NOT wired:
+// this is the ladder the query compiler uses, and nothing a model suggests is
+// ever applied to a query without the operator confirming it first.
+func (s *server) nlqResolver(r *http.Request, claims jwtClaims) resolve.Resolver {
+	return s.nlqResolverWith(r, claims, false)
+}
+
+// nlqResolverWith is nlqResolver, plus — when suggest is set, Iris is on and
+// the caller may use a model — the model-suggestion rung, on the caller's own
+// provider chain and daily budget (nlqModel: credential-shaped text redacted
+// before it leaves, LLM06; budget refused before any call, LLM04).
+func (s *server) nlqResolverWith(r *http.Request, claims jwtClaims, suggest bool) resolve.Resolver {
+	l := newNLQLookups(s, r, claims)
+	res := resolve.Resolver{Cat: s.nlqCatalog, L: l, Topo: l}
+	if suggest {
+		if fb := s.nlqModelFallback(r, claims); fb.Model != nil {
+			res.Suggest = modelc.NameSuggester{Model: fb.Model}
+		} else {
+			res.Suggest = nlqNoSuggester{}
+		}
+	}
+	return res
+}
+
+// nlqNoSuggester answers a suggestion request on a deployment (or for a
+// caller) with no usable model: the response says the suggestion was
+// unavailable rather than pretending the model found nothing.
+type nlqNoSuggester struct{}
+
+func (nlqNoSuggester) SuggestNames(context.Context, string, []string) ([]string, error) {
+	return nil, errors.New("no model is available to this caller")
+}
+
+// nlqLookups implements resolve.Lookups and resolve.Topology from the
+// caller's own scope. One value serves one request: the query compiler asks
+// the ladder once per word group, so the reads that are not already in
+// memory (the application seeds, the adjacency set) are made once and kept
+// for that request only (cache) — never across requests or callers.
 type nlqLookups struct {
 	s      *server
 	h      *nlqScope
 	claims jwtClaims
+	cache  *nlqLookupCache
+}
+
+type nlqLookupCache struct {
+	appsOnce sync.Once
+	apps     []resolve.Named
+	appsErr  error
+
+	linksOnce sync.Once
+	links     []topoLink
+	linksErr  error
+}
+
+func newNLQLookups(s *server, r *http.Request, claims jwtClaims) nlqLookups {
+	return nlqLookups{s: s, h: s.nlqScopeFor(r, claims), claims: claims, cache: &nlqLookupCache{}}
 }
 
 func (l nlqLookups) Aliases(context.Context) ([]resolve.Alias, error) {
@@ -960,7 +1051,84 @@ func (l nlqLookups) Inventory(ctx context.Context, types []string) ([]resolve.Na
 			out = append(out, resolve.Named{Type: "circuit", ID: "circuit:" + c.ID, Names: []string{c.ID, c.Local.Device + " " + c.Local.Interface}})
 		}
 	}
+	if want["application"] {
+		// Application seeding (N-C2): the applications the caller's OWN data
+		// names. Providers are not listed here — a carrier is named through
+		// the caller's aliases or the catalog's public seeds (resolve rung 5).
+		apps, err := l.appSeeds(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, apps...)
+	}
 	return out, nil
+}
+
+func (l nlqLookups) appSeeds(ctx context.Context) ([]resolve.Named, error) {
+	if l.cache == nil {
+		return l.h.appSeeds(ctx)
+	}
+	l.cache.appsOnce.Do(func() { l.cache.apps, l.cache.appsErr = l.h.appSeeds(ctx) })
+	return l.cache.apps, l.cache.appsErr
+}
+
+// Neighbors implements resolve.Topology: the devices adjacent to deviceID in
+// the deduped LLDP/CDP/BGP-LS link set built over the caller's VISIBLE
+// devices only (the same gather /api/topology/view uses), so a neighbour
+// outside the caller's inventory can never be returned. An unreadable
+// adjacency source is an error — the rung must not report "no neighbours"
+// for "unknown".
+func (l nlqLookups) Neighbors(ctx context.Context, deviceID string) ([]resolve.Named, error) {
+	id := strings.TrimPrefix(deviceID, "device:")
+	devs := l.s.visibleDevicesFor(l.claims)
+	byID := make(map[string]resolve.Named, len(devs))
+	for _, d := range devs {
+		// The role the inventory knows: an explicit role label, else the
+		// inferred device type. "generic" is the inference saying it does
+		// not know — passed on as unknown, so the rung asks rather than
+		// excludes (or includes) the device on a guess.
+		role := strings.TrimSpace(d.Labels["role"])
+		if role == "" {
+			if role = inferDeviceType(d); role == "generic" {
+				role = ""
+			}
+		}
+		byID[d.ID] = resolve.Named{Type: "device", ID: "device:" + d.ID, Names: []string{d.Name, d.ID}, Role: role}
+	}
+	if _, ok := byID[id]; !ok {
+		return nil, nil
+	}
+	links, err := l.topoLinks(ctx, devs)
+	if err != nil {
+		return nil, err
+	}
+	var out []resolve.Named
+	for _, ln := range links {
+		other := ""
+		switch id {
+		case ln.Source:
+			other = ln.Target
+		case ln.Target:
+			other = ln.Source
+		}
+		if n, ok := byID[other]; ok && other != id {
+			out = append(out, n)
+		}
+	}
+	return out, nil
+}
+
+func (l nlqLookups) topoLinks(ctx context.Context, devs []models.Device) ([]topoLink, error) {
+	read := func() ([]topoLink, error) {
+		tctx, cancel := context.WithTimeout(ctx, aiTopoTimeout)
+		defer cancel()
+		return l.s.gatherTopoLinks(tctx, devs)
+	}
+	if l.cache == nil {
+		return read()
+	}
+	l.cache.linksOnce.Do(func() { l.cache.links, l.cache.linksErr = read() })
+	return l.cache.links, l.cache.linksErr
 }
 
 func (l nlqLookups) Visible(ctx context.Context, entityType, id string) (bool, error) {
@@ -1035,7 +1203,7 @@ const nlqModelFallbackTier = ai.TierStrong
 // provider this caller may use, Model stays nil and the fallback is silently
 // unavailable — the grammar's answer stands, key-free.
 func (s *server) nlqModelFallback(r *http.Request, claims jwtClaims) modelc.Fallback {
-	f := modelc.Fallback{Cat: s.nlqCatalog, L: nlqLookups{s: s, h: s.nlqScopeFor(r, claims), claims: claims}}
+	f := modelc.Fallback{Cat: s.nlqCatalog, L: newNLQLookups(s, r, claims)}
 	if !aiEnabled() || strings.EqualFold(strings.TrimSpace(os.Getenv("IRIS_NLQ_MODEL_FALLBACK")), "false") ||
 		s.aiTenantCfg == nil || s.copilotCfg == nil || len(s.providerCandidatesForTier(claims, nlqModelFallbackTier)) == 0 {
 		return f

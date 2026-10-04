@@ -378,12 +378,21 @@ func (s *state) mentions(types []string) ([]resolve.Ref, []resolve.Ref, error) {
 			if len(res.Refs) == 0 {
 				continue
 			}
-			if res.Refs[0].Method == resolve.MethodPartialName {
-				continue // too weak to use unasked; the model path may ask
+			if needsConfirmation(res.Refs) {
+				// A partial name, a neighbour of unknown role or a model
+				// suggestion: too weak to use unasked — the words stay
+				// unexplained, so the question is never answered as if they
+				// had been understood.
+				continue
 			}
-			if res.Ambiguous {
+			switch {
+			case res.Set:
+				// A plural topology phrase names every neighbour: the same
+				// type is a list (OR), never a guess between its members.
+				refs = append(refs, res.Refs...)
+			case res.Ambiguous:
 				clarify = append(clarify, res.Refs...)
-			} else {
+			default:
 				refs = append(refs, res.Refs[0])
 			}
 			if s.e != nil {
@@ -401,6 +410,16 @@ func (s *state) mentions(types []string) ([]resolve.Ref, []resolve.Ref, error) {
 		refs = append(refs, s.bindEntities(types)...)
 	}
 	return refs, clarify, nil
+}
+
+// needsConfirmation reports a resolution the operator must confirm first.
+func needsConfirmation(refs []resolve.Ref) bool {
+	for _, r := range refs {
+		if r.NeedsConfirmation {
+			return true
+		}
+	}
+	return false
 }
 
 func anyUsed(b []bool) bool {
