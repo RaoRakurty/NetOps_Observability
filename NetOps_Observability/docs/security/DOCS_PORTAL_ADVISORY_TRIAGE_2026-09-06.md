@@ -1,5 +1,9 @@
 # `docs-portal` npm advisory triage — 2026-09-06
 
+> **Superseded in part (2026-10-04):** the `image-size` residue below is fixed
+> — a patched 2.0.3 shipped and the portal moved to Docusaurus 3.10.2. Current
+> state: [`NPM_ADVISORY_TRIAGE_2026-10-04.md`](NPM_ADVISORY_TRIAGE_2026-10-04.md).
+
 **Scope:** `NetOps_Observability/docs-portal` (the Docusaurus 3.5.2 customer
 documentation portal). Closes tracker row 123.
 
