@@ -242,31 +242,6 @@ func TestDecisionLedgerIsolation(t *testing.T) {
 	}
 }
 
-func TestDecisionLedgerRequestBounds(t *testing.T) {
-	s, a, _ := ledgerFixture(t)
-	for name, q := range map[string]string{
-		"bad id":     "?decision_id=" + url.QueryEscape("x' OR 1=1"),
-		"limit 0":    "?limit=0",
-		"limit huge": "?limit=100000",
-		"bad before": "?before=yesterday",
-	} {
-		if code, _ := ledgerCall(t, s, a, q); code != http.StatusBadRequest {
-			t.Errorf("%s: %d, want 400", name, code)
-		}
-	}
-	r := httptest.NewRequest(http.MethodPost, "/api/ai/decisions", strings.NewReader("{}"))
-	r = r.WithContext(context.WithValue(r.Context(), userCtxKey, a))
-	w := httptest.NewRecorder()
-	s.handleAIDecisions(w, r)
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("the ledger is read-only over HTTP: POST got %d", w.Code)
-	}
-	s.aiDecisions = nil
-	if code, _ := ledgerCall(t, s, a, ""); code != http.StatusServiceUnavailable {
-		t.Errorf("no store: %d, want 503", code)
-	}
-}
-
 // failingLedger refuses every append.
 type failingLedger struct{ aidecision.Store }
 
@@ -274,33 +249,62 @@ func (failingLedger) Append(context.Context, string, []aidecision.Entry) error {
 	return errors.New("database unavailable")
 }
 
-func TestALedgerFailureNeverCostsTheAnswer(t *testing.T) {
+// The request bounds and the degraded ledgers share ONE fixture: each fixture
+// costs seconds under -race, and the root package's race run is long already.
+// The subtests run in order and each sets the store it needs.
+func TestDecisionLedgerRequestBounds(t *testing.T) {
 	s, a, _ := ledgerFixture(t)
-	s.aiDecisions = failingLedger{aidecision.NewMemStore()}
-	out := askIris(t, s, a, "show cpu on edge-a for the last hour")
-	if out["mode"] != "data_query" {
-		t.Fatalf("the operator must still get the answer: %v", out)
-	}
-	if _, named := out["decision_id"]; named {
-		t.Fatalf("an answer must not name a decision that was never stored: %v", out)
-	}
-	if _, _, failed, _ := s.aiDecisionMetrics.Snapshot(); failed != 1 {
-		t.Fatalf("a failed append must be counted, got %d", failed)
-	}
-	// The audit trail still records the ask (with no decision id).
-	evs, err := s.audit.List(a.Tenant, false, auditQuery{Path: "/api/ai/ask", Limit: 10})
-	if err != nil || len(evs) == 0 || evs[0].Detail["decision_id"] != "" {
-		t.Fatalf("audit row on a ledger failure: %v %v", err, evs)
-	}
-}
 
-func TestNoLedgerStoreMeansNoDecisionID(t *testing.T) {
-	s, a, _ := ledgerFixture(t)
-	s.aiDecisions = nil
-	out := askIris(t, s, a, "show cpu on edge-a for the last hour")
-	if _, named := out["decision_id"]; named {
-		t.Fatalf("no ledger, no decision id: %v", out)
-	}
+	t.Run("malformed reads are refused", func(t *testing.T) {
+		for name, q := range map[string]string{
+			"bad id":     "?decision_id=" + url.QueryEscape("x' OR 1=1"),
+			"limit 0":    "?limit=0",
+			"limit huge": "?limit=100000",
+			"bad before": "?before=yesterday",
+		} {
+			if code, _ := ledgerCall(t, s, a, q); code != http.StatusBadRequest {
+				t.Errorf("%s: %d, want 400", name, code)
+			}
+		}
+		r := httptest.NewRequest(http.MethodPost, "/api/ai/decisions", strings.NewReader("{}"))
+		r = r.WithContext(context.WithValue(r.Context(), userCtxKey, a))
+		w := httptest.NewRecorder()
+		s.handleAIDecisions(w, r)
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("the ledger is read-only over HTTP: POST got %d", w.Code)
+		}
+	})
+
+	t.Run("a ledger failure never costs the answer", func(t *testing.T) {
+		s.aiDecisions = failingLedger{aidecision.NewMemStore()}
+		s.aiDecisionMetrics = aidecision.NewMetrics()
+		out := askIris(t, s, a, "show cpu on edge-a for the last hour")
+		if out["mode"] != "data_query" {
+			t.Fatalf("the operator must still get the answer: %v", out)
+		}
+		if _, named := out["decision_id"]; named {
+			t.Fatalf("an answer must not name a decision that was never stored: %v", out)
+		}
+		if _, _, failed, _ := s.aiDecisionMetrics.Snapshot(); failed != 1 {
+			t.Fatalf("a failed append must be counted, got %d", failed)
+		}
+		// The audit trail still records the ask (with no decision id).
+		evs, err := s.audit.List(a.Tenant, false, auditQuery{Path: "/api/ai/ask", Limit: 10})
+		if err != nil || len(evs) == 0 || evs[0].Detail["decision_id"] != "" {
+			t.Fatalf("audit row on a ledger failure: %v %v", err, evs)
+		}
+	})
+
+	t.Run("no store: 503 on read, no decision id on ask", func(t *testing.T) {
+		s.aiDecisions = nil
+		if code, _ := ledgerCall(t, s, a, ""); code != http.StatusServiceUnavailable {
+			t.Errorf("no store: %d, want 503", code)
+		}
+		out := askIris(t, s, a, "show cpu on edge-a for the last hour")
+		if _, named := out["decision_id"]; named {
+			t.Fatalf("no ledger, no decision id: %v", out)
+		}
+	})
 }
 
 // The skill-chain path: tool steps reach the ledger through the ToolAudit hook
