@@ -85,7 +85,14 @@ func fileStateBlobKeys() []string {
 		// (see fileStatePrefixKeys).
 		"/data/devices.json",
 		"/data/device_locations.json", "/data/device_sites.json",
-		"/data/device_monitoring.json", "/data/sites.json",
+		// device_monitoring.json held the per-device on/off decisions of a
+		// build before 2026-10-03. It is still imported so the api's boot-time
+		// retirement (retireDeviceMonitoringDecisions) removes it from the
+		// active backend rather than leaving it stranded; nothing reads it.
+		// device_first_seen.json is the licence order (first-seen ledger) and
+		// MUST survive a cutover, or the slots go to whichever source polls
+		// first afterwards.
+		"/data/device_monitoring.json", "/data/device_first_seen.json", "/data/sites.json",
 		"/data/discovery_config.json", "/data/netbox_config.json",
 		// ---- alerting / notification runtime state -------------------------
 		"/data/alert_episodes.json", "/data/alert_notify_state.json",

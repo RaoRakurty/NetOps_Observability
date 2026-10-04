@@ -166,7 +166,7 @@ type UsageView struct {
 
 // SnapshotNoteText states the sampling shape wherever the numbers are shown.
 const SnapshotNoteText = "Usage is sampled hourly and rolled up by UTC day, so today's row grows through the day and the last hour may not be in it yet. " +
-	"Monitored devices are counted from configuration — a device with at least one collector enabled — never from recent telemetry."
+	"Monitored devices are counted from the inventory — every device with a management address that Correlix collects from — never from recent telemetry."
 
 // TenantScopeNoteText is the sentence beside a tenant's own numbers.
 const TenantScopeNoteText = "These are your tenant's numbers only. The installation's totals, the other tenants on it, and the platform-wide diagnostic meters are the provider's and are not shown here."

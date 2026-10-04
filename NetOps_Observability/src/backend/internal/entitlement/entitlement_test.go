@@ -423,7 +423,7 @@ func TestCeilingsSayWhatTheyCount(t *testing.T) {
 		t.Fatalf("the licence-file field must not be renamed: every issued document signs it (%q)", entitlement.CeilingDevices)
 	}
 	if got := entitlement.CeilingUnit(entitlement.CeilingDevices); got != entitlement.UnitMonitoredDevices {
-		t.Fatalf("unit = %q, want %q — discovery is free and inventory rows are not the licensed unit", got, entitlement.UnitMonitoredDevices)
+		t.Fatalf("unit = %q, want %q — the licensed unit is the monitored device", got, entitlement.UnitMonitoredDevices)
 	}
 	if got := entitlement.CeilingLabel(entitlement.CeilingDevices); got != "monitored devices" {
 		t.Fatalf("label = %q — a bar reading \"devices\" beside a 500-device inventory teaches the wrong rule", got)

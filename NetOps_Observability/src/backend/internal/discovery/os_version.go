@@ -252,7 +252,7 @@ func (a *DiscoveryAggregator) applyProbeReadingLocked(id string, cur osprobe.Cur
 	// the same rule rather than letting a probe be the one path that persists a
 	// stale copy of it.
 	persist := d
-	persist.Monitored, persist.MonitorReason, persist.MonitorMethods = false, "", nil
+	persist = clearMonitoring(persist)
 	if err := a.store.Put(persist); err != nil {
 		// The cache keeps what was learned either way; the next boot re-probes.
 		log.Printf("discovery: device %s probe reading not persisted: %v", id, err)

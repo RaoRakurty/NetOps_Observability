@@ -9,14 +9,15 @@ sidebar_position: 6
 # Add a device by hand
 
 Adding a device by hand puts one entry in the inventory with an id and a
-management address, and switches monitoring on for it: adding a device is asking
-Correlix to collect from it. Polling starts on the next cycle using the
-credential the device references, or the deployment-wide default community.
+management address, and Correlix collects from it like every other device with
+an address. Polling starts on the next cycle using the credential the device
+references, or the deployment-wide default community.
 
-Because it is monitored, the device consumes one monitored-device entitlement
-(25 on the Community tier). At the ceiling the create is refused with an upgrade
-card naming the limit; turn monitoring off on another device, or raise the
-licence. See [Licensing](/administration/licence).
+The device uses one place in the licence (25 devices on the Community tier). A
+create is never refused for the licence: past the limit the device is added,
+returned with `monitor_state: "over_limit"`, and waits behind the devices found
+before it. Delete a device you do not need, or raise the licence, and it starts
+being collected from automatically. See [Licensing](/administration/licence).
 
 Use this instead of [discovery](/onboard-devices/snmp-discovery) for a device
 that answers only SNMPv3, a device outside the ranges you sweep, a network where

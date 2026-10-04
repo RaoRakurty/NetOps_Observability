@@ -1,5 +1,14 @@
 # Correlix tiering plan — what is free, what is licensed (draft for owner decision, 2026-09-03)
 
+> **Superseded in part — owner decision 2026-10-03.** The per-device monitoring
+> switch described below is REMOVED. Every inventory device with a management
+> address is monitored (discovery included, so discovery scopes must be narrow);
+> past a HARD ceiling the first N devices by first-seen time are collected and the
+> rest stay in the inventory marked over the licence limit — no device is ever
+> refused. `PUT /api/devices/{id}/monitoring` no longer exists. Current behaviour:
+> `internal/devmon`, `docs/runbooks/licensing.md`. The text below is the decision
+> record as it stood.
+
 **Owner ask:** "Which items of the whole solution should be free tier, and licensed
 tiers. Come up with a plan." Cut lines decided by the owner on 2026-09-04 (Community: 25
 devices, 5 watched prefixes; security findings in Team; dialects + SIEM export in

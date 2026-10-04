@@ -58,7 +58,7 @@ Correlix re-reads the file within five seconds of a change, so a licence placed 
 
 | Ceiling | Community limit | Enforced |
 | --- | --- | --- |
-| `devices` | 25 **monitored** devices | Yes: turning monitoring on for a device, and `POST /api/devices` |
+| `devices` | 25 **monitored** devices | Yes: past it, devices stay in the inventory but are not collected from |
 | `watched_prefixes` | 5 | Yes: adding a prefix to the BGP watchlist |
 | `tenants` | 1 | No |
 | `orgs` | 1 | No |
@@ -74,24 +74,30 @@ An unlimited ceiling, written `-1` in the file, has no percentage. A bar drawn a
 
 ### What the device ceiling counts
 
-The Community tier supports up to **25 monitored devices**. A device consumes one entitlement when at least one supported monitoring or collector configuration is enabled for that device. Devices discovered or retained in the inventory without active monitoring configuration do not consume the monitored-device allowance.
+The Community tier supports up to **25 monitored devices**. A monitored device is **every device in the inventory that has a management address** — however it got there: added by hand, declared in the devices file, supplied by the source of truth, reported by a wireless integration, or found by a subnet scan. There is no per-device monitoring switch (owner decision, 3 October 2026).
 
-Three consequences follow, and each is deliberate:
+Consequences, each deliberate:
 
-- **Discovery is free.** A subnet scan that finds five hundred devices creates five hundred inventory records and uses none of the allowance. Nothing about discovery, the inventory, the topology or a device's history is limited by the licence — only collection is.
-- **Multiple enabled telemetry methods on the same device consume one monitored-device entitlement.** SNMP polling, a gNMI subscription and a configuration capture on one box are one monitored device, not three.
-- **Temporary device or collector unreachability does not release the entitlement while monitoring remains configured.** The ceiling tracks what Correlix is configured to collect from, not what is answering today; freeing a licence during an outage would hand a customer capacity exactly when their network is broken.
-- **Wireless controllers and access points count one each.** A monitored controller is one device and every monitored access point is one device, so one controller with fifty access points is fifty-one monitored devices. They are counted by the same rule as everything else: a controller or access point an SNMP sweep merely found costs nothing, an estate whose wireless integration is switched off costs nothing, and a controller that SNMP discovery and the controller integration both see is one device, not two.
+- **Discovery uses the licence.** Every device a subnet scan finds counts. Keep discovery scopes to the management subnets of devices you want collected from; a wide sweep can fill the limit with hosts you did not mean to monitor.
+- **Multiple telemetry methods on the same device count once.** SNMP polling, a gNMI subscription and a configuration capture on one box are one monitored device, not three.
+- **Temporary unreachability does not free a place.** The count tracks the inventory, not what is answering today; freeing a licence during an outage would hand capacity over exactly when the network is broken.
+- **Wireless controllers and access points count one each.** One controller with fifty access points polled by an enabled integration is fifty-one monitored devices. An estate whose integration is switched off does not count, and a controller that SNMP discovery and the integration both see is one device, not two.
 
-Turn monitoring on or off per device on **Infrastructure → Inventory & Devices**, in the Monitoring column, or through `PUT /api/devices/{id}/monitoring`. For a wireless estate the switch is the integration itself: enabling a controller integration on **Automation → Controller integrations** is what starts collecting from its controllers and access points, so that is where the ceiling is asked and where a `402` appears if there is no room for them. A device an operator adds by hand, an operator-authored devices file declares, or the source of truth supplies is monitored from the start — adding it is asking for it to be collected from. A device found only by the subnet scan is not, until somebody says so.
+### Over the limit: the first devices found are collected
 
-When the ceiling is full and a source reports another device that would be monitored, the device still enters the inventory and its collection is withheld. The Licence page says how many are in that state beside the usage bar, and the log names each one once. Raising the licence, or turning monitoring off elsewhere, starts collecting from them without any further action.
+When there are more devices than a **hard** limit allows (Community, or any licence past its grace period), Correlix collects from the **first N devices by the time it first saw them**. The rest stay in the inventory, marked **Over licence limit** with the reason, and are not polled. Nothing is refused and nothing is dropped:
+
+- the Devices page shows a banner — *12 devices are not monitored: licence limit of 25 reached* — counting only the devices the reader's tenant owns;
+- the Licence page's usage bar counts every device (it reads 37 of 25), and the note beside it says how many are not collected from;
+- `GET /api/devices/{id}/monitoring` says, per device, whether it is monitored, over the limit or without an address, and whether a collector for its telemetry is actually running.
+
+Deleting a monitored device, or installing a larger licence, starts collection on the next devices in line automatically. The first-seen order is stored, so a restart does not reshuffle it. A device that leaves the inventory and comes back joins the back of the line.
 
 ### Read the over-ceiling list
 
-When usage exceeds an enforced ceiling, the row turns red and the ceiling appears in the over-ceiling list with the number that is over and the tier that covers it. Everything in that list is still present. Correlix admits no new item above the ceiling, and it deletes nothing, hides nothing and stops collecting from nothing that is already there.
+When usage exceeds an enforced ceiling, the row turns red and the ceiling appears in the over-ceiling list with the number that is over and the tier that covers it. Everything in that list is still present: Correlix deletes nothing and hides nothing. For devices, the ones past a hard limit are not collected from, as described above.
 
-A refusal at a ceiling returns HTTP `402` and names the ceiling, the current value, the limit and the tier that raises it, so the console shows an upgrade card instead of an error. A `403` still means the caller lacks permission. The two answers stay distinct.
+A refusal at a ceiling (watched prefixes, tenants, licensed features — never a device) returns HTTP `402` and names the ceiling, the current value, the limit and the tier that raises it, so the console shows an upgrade card instead of an error. A `403` still means the caller lacks permission. The two answers stay distinct.
 
 ### Verify a licence offline {#verify-offline}
 
@@ -161,7 +167,7 @@ The **Usage** section answers a different question from **Current usage** above 
 
 Usage is recorded as its own data, kept apart from the licence on purpose: the licence says what you are allowed to do, and usage says what you used. Nothing in the product gates on a usage number — no device, query or permission depends on it — so a metering problem can lose you precision in a report and can never refuse anything.
 
-**Monitored devices are counted from configuration**, never from recent traffic: a device with at least one collector enabled counts, whether or not it answered in the last hour. A device that stopped responding during an incident still counts, and discovery does not consume your monitoring allowance. The section leads with that line — *Monitoring: N / 25 Community monitored devices. Discovery does not consume your monitoring allowance.*
+**Monitored devices are counted from the inventory**, never from recent traffic: a device collected from counts whether or not it answered in the last hour. A device that stopped responding during an incident still counts. The section leads with that line — *Monitoring: N / 25 Community monitored devices. Every device with an address counts, including devices found by discovery.*
 
 Samples are taken hourly and rolled up by UTC day, so today's row grows through the day and the last hour may not be in it yet. The page says when the numbers were last recorded rather than implying they are live. Thirteen months of daily rows are kept.
 
@@ -212,7 +218,6 @@ Licences are issued with **30 days of grace**; an evaluation licence is issued w
 
 **Refused** — anything that creates or configures paid capability:
 
-- switching monitoring on for a device beyond the Community allowance of 25 monitored devices;
 - creating a second tenant or a second organisation (the first of each is normal single-tenant operation and is never licensed);
 - configuring a licensed capability: writing a SAML connection, saving or testing an LDAP configuration, installing a dialect, creating a SIEM export.
 
@@ -223,9 +228,11 @@ Each of those answers `402` with a machine-readable body that now includes `lice
 - security findings, their facets and their trend, including exporting them;
 - the LDAP configuration as it stands;
 - the tenant and organisation lists;
-- every device that was already being monitored. None is switched off.
+- every device in the inventory. None is removed.
 
-Correlix never picks which devices a licence covers. When you are over an allowance the page lists the devices beyond it, most recently enabled first, purely so you can see the size and shape of the overage — and says so beside the list. Every one of them is still being collected from.
+**Changes for devices** — past grace the Community limit of 25 is the one in force, so if more devices are in the inventory, the first 25 found are collected from and the rest are marked over the licence limit until a renewal is installed.
+
+On a paid tier, when you are over a (soft) allowance the page lists the devices beyond it, the most recently found first, so you can see the size and shape of the overage. Every one of them is still being collected from.
 
 ## Evaluation licences
 
@@ -233,11 +240,11 @@ A trial is an ordinary signed licence with a short life: 30 days from issue, Tea
 
 ## Going over the monitored-device allowance
 
-On **Team and Enterprise** the monitored-device allowance does not block. Enabling monitoring past it succeeds, the excess is recorded, and the Licence and Devices pages show it. Correlix will not stop you adding a device during an incident because of a number on an order form. The overage is settled as a **true-up** with your account team; the product records when it started and how large it is, and deliberately states no deadline of its own — that is a commercial term, not a product one.
+On **Team and Enterprise** the monitored-device allowance does not block. Devices past it are still collected from, the excess is recorded, and the Licence and Devices pages show it. Correlix will not stop you adding a device during an incident because of a number on an order form. The overage is settled as a **true-up** with your account team; the product records when it started and how large it is, and deliberately states no deadline of its own — that is a commercial term, not a product one.
 
-On **Community** the allowance is a hard limit: the 26th activation is refused, with the usual upgrade card. 25 monitored devices is the published free ceiling. Discovery is unlimited and free in every case — discovery does not consume your monitoring allowance.
+On **Community** the allowance is a hard limit: the first 25 devices found are collected from, and the 26th and later stay in the inventory marked over the licence limit. 25 monitored devices is the published free ceiling. Every device discovery finds counts, so keep discovery scopes narrow.
 
-The same is true after grace: the Community allowance is the one in force, so a **new** activation past 25 is refused. Nothing already monitored is affected.
+The same is true after grace: the Community allowance is the one in force, so the first 25 devices found are collected from and the rest wait until a renewal is installed.
 
 ### What never changes
 

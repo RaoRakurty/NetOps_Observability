@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"netops/backend/collectors"
-	"netops/backend/internal/devmon"
 	"netops/backend/internal/osprobe"
 	"netops/backend/models"
 )
@@ -54,29 +53,18 @@ type DiscoveryAggregator struct {
 	// See device_persist.go.
 	store DeviceStore
 	// MONITORING-BEGIN — see monitoring.go for the whole model.
-	// monitor holds the operator's explicit per-device monitoring decisions,
-	// keyed by device id. A device with no entry has never been decided and
-	// devmon.Default applies.
-	monitor map[string]devmon.Record
-	// monitorStore persists those decisions. Nil-safe: without one they live
-	// only in memory (tests, unwired builds).
-	monitorStore MonitorStore
-	// monitorGate is the MONITORED-DEVICE ceiling, asked before an unmonitored
-	// device becomes monitored. nil = no ceiling, which is what every test and
-	// every build without the licence wiring gets, so this package's behaviour
-	// is unchanged unless an integrator injects a gate (SetMonitorGate).
-	//
-	// It gates COLLECTION, never DISCOVERY: a device found past the ceiling is
-	// still admitted to the inventory (owner decision C4, 2026-09-05 — finding
-	// a device is free, collecting from it is the priced act).
-	monitorGate func(current int) error
-	// withheld records the devices whose default-on monitoring the ceiling
-	// declined, so they can be LISTED rather than silently inert. That listing
-	// is the whole point: the design's rule is "over-ceiling devices are listed
-	// as 'not monitored: licence ceiling', nothing is deleted, nothing is
-	// hidden silently". A device that is quietly not being collected from, with
-	// no explanation anywhere, is the failure mode this map exists to prevent.
-	withheld map[string]string
+	// firstSeen is the FIRST-SEEN LEDGER: when each cache id was first seen.
+	// The licence ceiling admits devices in this order (owner decision
+	// 2026-10-03), so it must survive restarts — firstSeenStore persists it.
+	firstSeen      map[string]time.Time
+	firstSeenStore FirstSeenStore
+	// monitorLimit is the MONITORED-DEVICE ceiling (devmon.NoLimit = none).
+	// nil = no ceiling, which is what every test and every build without the
+	// licence wiring gets (SetMonitorLimit).
+	monitorLimit func() int
+	// lastOverLimit is the over-limit count last logged, so a change in WHICH
+	// devices are collected from is logged once, not once per poll.
+	lastOverLimit int
 	// MONITORING-END
 
 	// osLadder is the injected OS-VERSION SOURCE LADDER (internal/osprobe).
@@ -106,12 +94,11 @@ type sourceStats struct {
 
 func NewDiscoveryAggregator() *DiscoveryAggregator {
 	return &DiscoveryAggregator{
-		cache:    make(map[string]models.Device),
-		refresh:  make(chan struct{}, 1),
-		stats:    make(map[string]sourceStats),
-		detected: make(map[string]string),
-		monitor:  make(map[string]devmon.Record),
-		withheld: make(map[string]string),
+		cache:     make(map[string]models.Device),
+		refresh:   make(chan struct{}, 1),
+		stats:     make(map[string]sourceStats),
+		detected:  make(map[string]string),
+		firstSeen: make(map[string]time.Time),
 
 		osProbeAt: make(map[string]time.Time),
 	}
@@ -310,21 +297,8 @@ func (a *DiscoveryAggregator) pollOnce(ctx context.Context, src DiscoverySource)
 	// NetBox sync direction read→write at runtime would leave the old netbox-*
 	// records lingering as duplicates until a restart.
 	seen := make(map[string]bool, len(devices))
-	// monCount is the running number of MONITORED devices for this poll — read
-	// once, then incremented as devices are admitted to monitoring, so the
-	// ceiling question below is asked against a number that moves within the
-	// poll instead of every device seeing the same stale total.
-	//
-	// monIdentities is the identity-token set of the devices behind that count.
-	// The count is over DEDUPED canonical devices while the gate below is asked
-	// about a RAW record, so without it one physical device reported by two
-	// sources is charged twice (see monitoredIdentityIndexLocked). Both come
-	// from one dedupe pass.
-	monCount := 0
-	var monIdentities map[string]bool
-	if a.monitorGate != nil {
-		monCount, monIdentities = a.monitoredIdentityIndexLocked()
-	}
+	now := time.Now().UTC()
+	ledgerChanged := false
 	for _, d := range devices {
 		// An operator deleted this device: honour that instead of resurrecting
 		// it every poll (F-69). Recreating it via POST clears the tombstone.
@@ -351,50 +325,12 @@ func (a *DiscoveryAggregator) pollOnce(ctx context.Context, src DiscoverySource)
 		}
 		seen[d.ID] = true
 		d.Source = src.Name()
-		// MONITORING-BEGIN — the ceiling on MONITORED devices, asked for a
-		// device this source is reporting that would default to monitored.
-		//
-		// Asked AFTER the source is stamped, because the source IS the default:
-		// a subnet-scan result is a candidate and a declared device is not, and
-		// asking before this line would charge for every discovered device in
-		// the fleet (internal/devmon.Default).
-		//
-		// Discovery itself is never refused: the device is admitted to the
-		// inventory below whatever the answer, because finding a device costs
-		// no allowance (owner decision C4). What can be withheld is the
-		// COLLECTION, and a withheld device is listed with its reason.
-		//
-		// Already-withheld devices are re-asked every poll, so raising the
-		// ceiling resumes collection with no operator action; monCount is the
-		// running total for this poll so admitting one is reflected in the next
-		// question instead of every device seeing the same stale number.
-		//
-		// ONE PHYSICAL DEVICE, ONE ENTITLEMENT (owner decision C4). The gate is
-		// asked about the RAW cache id, but the count it is measured against is
-		// over the DEDUPED device, so a second source reporting a box the
-		// platform is already collecting from would otherwise be charged again —
-		// and at a full ceiling the refusal is folded into the whole owner group
-		// by monitorViewLocked, switching that already-collected device OFF with
-		// a licence reason that is not true. A record that shares an identity
-		// token with an already-monitored device is therefore admitted WITHOUT
-		// charging, and any stale withholding against it is cleared.
-		if a.monitorGate != nil {
-			_, already := a.cache[d.ID]
-			if (!already || a.withheld[d.ID] != "") && a.wouldMonitorLocked(d) {
-				toks := identityTokens(d)
-				switch {
-				case sharesMonitoredIdentity(monIdentities, toks):
-					// Already counted as part of this physical device.
-					delete(a.withheld, d.ID)
-				case a.admitMonitoringLocked(d, monCount):
-					monCount++
-					// A third source reporting the same box later in this poll
-					// must not be charged either.
-					for _, tok := range toks {
-						monIdentities[tok] = true
-					}
-				}
-			}
+		// MONITORING-BEGIN — the first sighting of this record joins the
+		// licence line (monitoring.go). Discovery is never refused and no
+		// device is gated here: whether it is collected from is decided on
+		// read, by first-seen order against the ceiling.
+		if a.noteSeenLocked(d.ID, now) {
+			ledgerChanged = true
 		}
 		// MONITORING-END
 		d.LastSeen = time.Now().UTC()
@@ -408,30 +344,18 @@ func (a *DiscoveryAggregator) pollOnce(ctx context.Context, src DiscoverySource)
 	for id, d := range a.cache {
 		if d.Source == src.Name() && !seen[id] {
 			delete(a.cache, id)
-			// A device that left the inventory cannot still be "not monitored
-			// because of the ceiling": a stale entry would inflate the withheld
-			// count on the Licence page and in the metric, which is a number an
-			// operator would act on.
-			delete(a.withheld, id)
+			// The device left the inventory: its licence slot frees and, if it
+			// returns, it joins the back of the line as a new arrival.
+			if a.forgetSeenLocked(id) {
+				ledgerChanged = true
+			}
 		}
 	}
-}
-
-// MONITORING-BEGIN
-
-// wouldMonitorLocked reports whether Correlix would collect from d as it
-// stands: the operator's explicit decision when there is one, otherwise the
-// default for how the device entered the inventory. Caller holds a.mu.
-func (a *DiscoveryAggregator) wouldMonitorLocked(d models.Device) bool {
-	if rec, has := a.monitor[d.ID]; has {
-		on, _ := devmon.Explicit(d, rec.Enabled)
-		return on
+	if ledgerChanged {
+		a.persistSeenLocked()
 	}
-	on, _ := devmon.Default(d)
-	return on
+	a.logOverLimitLocked()
 }
-
-// MONITORING-END
 
 // PollOnceForTest runs a single synchronous poll of src into the cache — test
 // support for seeding an aggregator without the poll loop.
@@ -733,12 +657,6 @@ func (a *DiscoveryAggregator) Get(id string) (models.Device, bool) {
 // once at startup, before Start(), so operator-created devices exist before the
 // first poll and before the API serves a request.
 //
-// The seed is deliberately NOT gated by the monitoring ceiling. A restart, an
-// upgrade or a restore must never switch monitoring off behind the operator's
-// back: a deployment that was collecting from a hundred devices yesterday is
-// still collecting from them today, and if that is over the licence it is
-// COUNTED and LISTED as over (State.Overages) rather than quietly trimmed to
-// fit. What the ceiling refuses is the NEXT activation.
 // NetboxConfig is the NetBox connection + sync-direction config (persisted by
 // the integrator's netbox_config store; the source only reads it).
 type NetboxConfig struct {
@@ -816,6 +734,9 @@ func (a *DiscoveryAggregator) SetStore(st DeviceStore) {
 			log.Printf("device store: repaired empty-id row -> %q (F-8)", derived)
 		}
 		a.cache[d.ID] = d
+		// The ledger (SetFirstSeenStore) may hold an older sighting; this is
+		// only the fallback for a device the ledger has never recorded.
+		a.noteSeenLocked(d.ID, time.Now())
 	}
 }
 
@@ -852,7 +773,7 @@ func (a *DiscoveryAggregator) upsertLocked(d models.Device) error {
 	// device's provenance) on every read. Stripping it here is the storage-layer
 	// enforcement — a caller that sends `"monitored": true` is ignored, and no
 	// stale copy can outlive the decision it was derived from.
-	d.Monitored, d.MonitorReason, d.MonitorMethods = false, "", nil
+	d = clearMonitoring(d)
 	// OS-VERSION PROVENANCE is server state too, and for the same reason. A
 	// caller MAY set a version — that is the documented manual path, and it is
 	// how a device nothing can probe becomes assessable — but it may not claim
@@ -892,24 +813,6 @@ func (a *DiscoveryAggregator) upsertLocked(d models.Device) error {
 	default:
 		d.SerialSource, d.SerialAt = string(osprobe.MethodManual), time.Now().UTC()
 	}
-	// MONITORING-BEGIN — the ceiling, asked when this write turns a device that
-	// is NOT monitored into one that is: a create of a declared device, or an
-	// address arriving on a record that had none. Re-writing a device that is
-	// already monitored is free (nothing new is being collected from) and so is
-	// adding a second telemetry method to it — the licensed unit is the device.
-	if a.monitorGate != nil && a.wouldMonitorLocked(d) {
-		_, state, owners := a.monitorViewLocked()
-		ownerID := owners[d.ID]
-		if ownerID == "" {
-			ownerID = d.ID
-		}
-		if !state[ownerID].on {
-			if err := a.gateMonitoringLocked(state); err != nil {
-				return err
-			}
-		}
-	}
-	// MONITORING-END
 	d.LastSeen = time.Now().UTC()
 	// Only manual devices persist; a source-owned record is rebuilt by its
 	// source and must not be shadowed here.
@@ -919,6 +822,12 @@ func (a *DiscoveryAggregator) upsertLocked(d models.Device) error {
 		}
 	}
 	a.cache[d.ID] = d
+	// A new device joins the licence line now; never refused — past the
+	// ceiling it is in the inventory and marked over the limit.
+	if a.noteSeenLocked(d.ID, time.Now()) {
+		a.persistSeenLocked()
+	}
+	a.logOverLimitLocked()
 	return nil
 }
 
@@ -1101,22 +1010,13 @@ func (a *DiscoveryAggregator) Delete(id string) error {
 			return err
 		}
 	}
-	// The monitoring decision dies with the device: a device re-created under
-	// the same id must not silently inherit an answer given about the record it
-	// replaced (and, at the ceiling, must not consume an entitlement nobody
-	// re-granted).
-	if rec, ok := a.monitor[id]; ok {
-		if a.monitorStore != nil {
-			if err := a.monitorStore.DeleteMonitor(rec.TenantID, id); err != nil {
-				// Never silent: the device is gone but its decision is not, so
-				// the next restart would resurrect it.
-				log.Printf("device %s deleted but its monitoring decision was not removed: %v", id, err)
-			}
-		}
-		delete(a.monitor, id)
-	}
-	delete(a.withheld, id)
 	delete(a.cache, id)
+	// Its licence slot frees: the next device in first-seen order starts being
+	// collected from on the next read, with no operator action.
+	if a.forgetSeenLocked(id) {
+		a.persistSeenLocked()
+	}
+	a.logOverLimitLocked()
 	return nil
 }
 
