@@ -172,6 +172,12 @@ func TestProtocolDiagnosticOutcomesAreDistinct(t *testing.T) {
 			if tc.unwantSignal != "" && has(tc.unwantSignal) {
 				t.Errorf("unexpected signal %q (got %v)", tc.unwantSignal, res.Signals)
 			}
+			// N-B3: only output that was captured AND scored asserts the
+			// reserved signature=none marker — "nothing matched" must never be
+			// claimed of a capture that did not happen.
+			if got, want := has(CondSignature+"="+CondSignatureNone), tc.name == "captured and scored"; got != want {
+				t.Errorf("signature=none asserted = %v, want %v (got %v)", got, want, res.Signals)
+			}
 		})
 	}
 }

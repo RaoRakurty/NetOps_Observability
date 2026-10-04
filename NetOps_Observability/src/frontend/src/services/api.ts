@@ -6275,6 +6275,10 @@ export const api = {
     const q = p.toString();
     return request<AiDecisionList>(`/api/ai/decisions${q ? `?${q}` : ""}`);
   },
+  // Investigation hypotheses (N-B3): one investigation's lines of
+  // investigation by id (its decision id) — the caller's own workspace only;
+  // another workspace's id is a 404.
+  aiHypotheses: (id: string) => request<AiHypothesisSet>(`/api/ai/hypotheses/${encodeURIComponent(id)}`),
 
   // Native metrics (Prometheus-compatible API via the Go proxy).
   metricNames: () => request<PromNamesResponse>("/api/metrics/names"),
@@ -9934,6 +9938,42 @@ export type AiSkill = { name: string; version?: number; layer?: string };
 // selection), "rule" (an authored machine condition fired) or "model" (the
 // model picked from that skill's own declared handoffs). A superset of AiSkill,
 // so the same rendering works for both.
+// Investigation hypotheses (tracker 337 N-B3). Every field is server-built;
+// none is model text. States are the closed five; an unknown one from a newer
+// backend is rendered verbatim as escaped text, never dropped.
+export type AiHypothesisState = "PROPOSED" | "TESTING" | "SUPPORTED" | "REJECTED" | "INCONCLUSIVE";
+export type AiHypothesisTransition = {
+  from?: AiHypothesisState | string;
+  to: AiHypothesisState | string;
+  round: number;
+  skill?: string;
+  tool?: string;
+  fact?: string;
+  reason: string;
+};
+export type AiHypothesis = {
+  id: string;
+  statement: string;
+  layer: string;
+  state: AiHypothesisState | string;
+  evidence?: string[];
+  engine_note?: string;
+  transitions: AiHypothesisTransition[];
+};
+export type AiHypothesisEngine = {
+  // confirmed | suspected | candidate | undetermined; absent = no verdict in scope.
+  tier?: string;
+  // The ENGINE's own verdict line — never Iris's words.
+  statement?: string;
+  citation_id?: string;
+  note: string;
+};
+export type AiHypothesisSet = {
+  id?: string;
+  notice: string;
+  engine: AiHypothesisEngine;
+  hypotheses: AiHypothesis[];
+};
 export type AiSkillHop = AiSkill & {
   selected?: "entry" | "rule" | "model" | string;
   round?: number;
@@ -10040,6 +10080,10 @@ export type AiAnswer = {
   // its LAST hop. Optional: a pre-A2 backend sends no chain and the breadcrumb
   // is simply not drawn.
   chain?: AiSkillHop[];
+  // Investigation hypotheses (N-B3) — what each check observed, beside the
+  // correlation engine's verdict, which they never replace. Optional: absent
+  // when the investigation opened none.
+  hypotheses?: AiHypothesisSet;
   disclaimers: string[];
   provider?: string;
   // Universal Response-Quality fields (rendered as badges + sections).

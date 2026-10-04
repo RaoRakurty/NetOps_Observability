@@ -375,8 +375,20 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 	// failure mode, LLM09).
 	var badges []string
 	ans.Text, badges, ans.Disclaimers = o.verifyNarrative(ans.Text, bundleCitationIDs(bundle), badges, ans.Disclaimers)
-	ans.ModeBadges = append(ans.ModeBadges, badges...)
+	// The engine alone names a cause (owner rule, 2026-10-04). A narrative that
+	// asserts one the engine has not established — its verdict is not
+	// confirmed, or no verdict was in scope at all — loses that sentence, the
+	// same gate the problem-explanation path runs. A model-free answer is the
+	// evidence itself and is not re-judged.
+	if !ans.EvidenceOnly {
+		ans.Text, badges, ans.Disclaimers = o.enforceVerdictHonesty(ans.Text, st.facts.engineTier(),
+			deterministicSkillSummary(last, bundle, notes), badges, ans.Disclaimers)
+	}
+	ans.ModeBadges = append(ans.ModeBadges, dedupeStrings(badges)...)
 	ans.MissingEvidence = skillMissingEvidence(notes)
+	// N-B3: the investigation's hypotheses, resolved against everything the
+	// chain read and the engine's verdict. Built by the server, never the model.
+	ans.Hypotheses = finishHypotheses(st)
 	o.recordConcluded(ctx, p, &ans, ent, st)
 	o.observeInvestigation(st, started, InvestigationAnswered, len(ans.Citations) > 0)
 	return ans, true
@@ -456,6 +468,17 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 	if len(steps) == 0 {
 		return nil, 0
 	}
+	// N-B3: the method opens the hypotheses it can actually test this round;
+	// what each step returned decides which of them move to TESTING.
+	st.hyp.Enter(round, sk.Name, string(sk.Layer), plannedTools(steps))
+	outcomes, cites := map[string]string{}, map[string][]string{}
+	outcome := func(tool, oc string) {
+		if _, seen := outcomes[tool]; !seen {
+			outcomes[tool] = oc
+		}
+		st.recordTool(tool, oc)
+	}
+	defer func() { st.hyp.Observe(round, sk.Name, outcomes, cites) }()
 	pe := o.policy()
 	var items []EvidenceItem
 	var notes []string
@@ -470,13 +493,13 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 			// The capability is not wired on this deployment. Disclose it rather
 			// than pretending the check happened.
 			notes = append(notes, ToolLabel(step.Tool)+" is not available on this deployment — treat that evidence as UNKNOWN, not clean")
-			st.recordTool(step.Tool, "not_wired")
+			outcome(step.Tool, "not_wired")
 			o.auditSkillTool(sk.Name, step, false, "not_registered", 0, 0, round, selected, "")
 			continue
 		}
 		if d := pe.EvaluateTool(tool, p); !d.Allow {
 			notes = append(notes, ToolLabel(step.Tool)+" was not run: "+d.Reason)
-			st.recordTool(step.Tool, "denied")
+			outcome(step.Tool, "denied")
 			o.auditSkillTool(sk.Name, step, false, "policy_denied", 0, 0, round, selected, "")
 			continue
 		}
@@ -485,18 +508,18 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 		elapsed := time.Since(started)
 		if err != nil {
 			// ErrNotFound covers unknown AND cross-tenant ids identically (§3a).
-			reason, outcome := "tool_error", "error"
+			reason, outc := "tool_error", "error"
 			switch {
 			case errors.Is(err, ErrNotFound):
-				reason, outcome = "not_found", "not_found"
+				reason, outc = "not_found", "not_found"
 				notes = append(notes, ToolLabel(step.Tool)+" found nothing for the id in scope")
 			case errors.Is(err, ErrNotImplemented):
-				reason, outcome = "not_implemented", "not_wired"
+				reason, outc = "not_implemented", "not_wired"
 				notes = append(notes, ToolLabel(step.Tool)+" is not implemented in this build")
 			default:
 				notes = append(notes, ToolLabel(step.Tool)+" failed — do NOT invent the data it would have returned")
 			}
-			st.recordTool(step.Tool, outcome)
+			outcome(step.Tool, outc)
 			o.auditSkillTool(sk.Name, step, false, reason, 0, elapsed, round, selected, "")
 			continue
 		}
@@ -511,7 +534,13 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 		// asserted about what it read; kinds and outcomes are what the SERVER
 		// observed. Neither can come from model text.
 		st.facts.addSignals(res.Signals)
-		st.recordTool(step.Tool, "ok")
+		st.noteDiagCapture(step.Tool, res.Signals)
+		outcome(step.Tool, "ok")
+		for _, ev := range res.Items {
+			if ev.CitationID != "" {
+				cites[step.Tool] = append(cites[step.Tool], ev.CitationID)
+			}
+		}
 		o.auditSkillTool(sk.Name, step, true, "ok", len(res.Items), elapsed, round, selected, HashToolResult(res))
 	}
 	st.facts.addEvidence(items)

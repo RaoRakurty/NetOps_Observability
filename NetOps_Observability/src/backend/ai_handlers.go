@@ -22,6 +22,7 @@ import (
 	"netops/backend/internal/aiscore"
 	"netops/backend/internal/entityalias"
 	"netops/backend/internal/irisconvo"
+	"netops/backend/internal/irishypo"
 	"netops/backend/internal/irisquerylog"
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/compile"
@@ -211,6 +212,9 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 	if conv != nil {
 		s.recordAskTurn(r, claims, conv, question, &ans, &ran)
 	}
+	// N-B3: hold the investigation's hypotheses under the decision's id, in the
+	// asker's tenant — before the ledger closes, so it records them.
+	s.aiHypothesesHold(r, claims, rec, &ans)
 	decisionID := s.aiDecisionFinish(r, claims, rec, &ans, nil)
 	// AI audit (best-effort): who asked, intent, modules, provider — never the
 	// question text or any retrieved data (no PII/secret in the audit line).
@@ -2155,6 +2159,7 @@ func aiLedgerAnswerEntries(rec *aidecision.Recorder, ans *ai.Answer) {
 		ids = append(ids, c.ID)
 	}
 	rec.AddEvidence(ids)
+	aiLedgerHypotheses(rec, ans.Hypotheses)
 	if len(ans.NextActions) > 0 {
 		b, err := json.Marshal(ans.NextActions)
 		if err != nil {
@@ -2209,6 +2214,114 @@ func (s *server) aiAskAudit(r *http.Request, claims jwtClaims, decisionID string
 		Method: r.Method, Path: r.URL.Path, Status: status, Decision: decision,
 		Remote: auditClientIP(r), Detail: detail,
 	})
+}
+
+// aiLedgerHypotheses records the investigation's hypotheses (tracker 337
+// N-B3): one HYPOTHESIS_CREATED per hypothesis — its id and final state, the
+// method that opened it, the tool that tested it, and the hash of the
+// hypothesis exactly as shown — plus HYPOTHESIS_REJECTED for each one its tool
+// rejected. Iris never records ROOT_CAUSE_SELECTED: the engine owns the cause.
+func aiLedgerHypotheses(rec *aidecision.Recorder, set *irishypo.Set) {
+	if rec == nil || set == nil {
+		return
+	}
+	for _, h := range set.Hypotheses {
+		skill, tool := "", ""
+		if len(h.Transitions) > 0 {
+			skill, tool = h.Transitions[0].Skill, h.Transitions[0].Tool
+		}
+		e := aidecision.Entry{EventType: aidecision.HypothesisCreated, Skill: skill, Tool: tool,
+			Outcome: h.ID + ":" + strings.ToLower(string(h.State))}
+		if b, err := json.Marshal(h); err == nil {
+			e.ResultSHA256 = aidecision.SHA256Hex(b)
+		} else {
+			logError("ai.ledger", "hypothesis not hashable", errf(err))
+		}
+		rec.Add(e)
+		if h.State == irishypo.Rejected {
+			rec.Add(aidecision.Entry{EventType: aidecision.HypothesisRejected, Skill: skill, Tool: tool, Outcome: h.ID})
+		}
+	}
+}
+
+// aiHypothesesHoldTimeout bounds the one hypothesis-store write per answer.
+const aiHypothesesHoldTimeout = 2 * time.Second
+
+// aiHypothesesHold names the answer's hypothesis set and holds it in the
+// asker's tenant (tracker 337 N-B3). The id is the decision's when the ask is
+// ledgered (one id names the investigation everywhere), else a fresh one; the
+// tenant is the token's, never anything in the request. A set that cannot be
+// held keeps no id — the answer still carries it inline — and the failure is
+// logged, never fatal to the answer.
+func (s *server) aiHypothesesHold(r *http.Request, claims jwtClaims, rec *aidecision.Recorder, ans *ai.Answer) {
+	if ans == nil || ans.Hypotheses == nil {
+		return
+	}
+	ans.Hypotheses.ID = ""
+	if s.aiHypotheses == nil {
+		return
+	}
+	id := rec.DecisionID()
+	if id == "" {
+		fresh, err := aidecision.NewID()
+		if err != nil {
+			logError("ai.hypotheses", "no id — this investigation's hypotheses are not held", errf(err))
+			return
+		}
+		id = fresh
+	}
+	set := *ans.Hypotheses
+	set.ID = id
+	tenant, _ := principalTenant(claims)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), aiHypothesesHoldTimeout)
+	defer cancel()
+	if err := s.aiHypotheses.Put(ctx, tenant, set); err != nil {
+		logError("ai.hypotheses", "hold failed", map[string]any{"tenant": tenant, "error": err.Error()})
+		return
+	}
+	ans.Hypotheses.ID = id
+}
+
+// handleAIHypotheses serves GET /api/ai/hypotheses/{id}: one investigation's
+// hypotheses, in the caller's own tenant (the platform owner: any tenant).
+// Another tenant's id, an expired one and a malformed one are the same 404.
+// Gated by ai.investigate — hypotheses exist only where the investigation loop
+// runs — and by infrastructure:read, which every read they were built from
+// needs.
+func (s *server) handleAIHypotheses(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET"))
+		return
+	}
+	if !aiEnabled() {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Iris AI is disabled — set FEATURE_AI=true"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok || !s.requireAIEntitlement(w, claims, aientitlement.Investigate) {
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/ai/hypotheses/")
+	if !irishypo.ValidID(id) {
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+		return
+	}
+	if s.aiHypotheses == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("investigation hypotheses are not held on this deployment"))
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	set, err := s.aiHypotheses.Get(r.Context(), tenant, cross, id)
+	switch {
+	case errors.Is(err, irishypo.ErrNotFound):
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+	case err != nil:
+		logError("ai.hypotheses", "read failed", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("the investigation's hypotheses could not be read"))
+	default:
+		writeJSON(w, http.StatusOK, set)
+	}
 }
 
 // handleAIDecisions serves GET /api/ai/decisions.
