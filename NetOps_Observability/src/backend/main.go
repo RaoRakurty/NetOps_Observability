@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -2121,37 +2122,38 @@ func (s *server) devmonGate(w http.ResponseWriter, r *http.Request) (devmon.Prin
 type deviceFirstSeenStore struct {
 	path string
 	mu   sync.Mutex
+	// seed is the ledger as read at construction — the registry reads it once,
+	// at wiring time.
+	seed []discovery.FirstSeenRecord
 }
 
+// newDeviceFirstSeenStore reads the ledger. ABSENT is a normal first boot (an
+// empty ledger); UNREADABLE or UNPARSEABLE fails the boot instead: silently
+// starting a new ledger would hand the licence slots to whichever source polls
+// first, an outage of the licence order nobody would see.
 func newDeviceFirstSeenStore(path string) (*deviceFirstSeenStore, error) {
 	st := &deviceFirstSeenStore{path: path}
-	// Fail the boot on a ledger that exists but cannot be parsed: silently
-	// starting a new one would hand the licence slots to whichever source
-	// polls first.
-	if b, err := platformdb.Load(path); err == nil && len(b) > 0 {
-		var probe []discovery.FirstSeenRecord
-		if err := json.Unmarshal(b, &probe); err != nil {
-			return nil, fmt.Errorf("parse %s: %w", path, err)
-		}
+	b, err := platformdb.Load(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return st, nil
+	case err != nil:
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	if len(b) == 0 {
+		return st, nil
+	}
+	if err := json.Unmarshal(b, &st.seed); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return st, nil
 }
 
-// FirstSeenRecords is the boot-time seed. An absent ledger is an empty one.
+// FirstSeenRecords is the boot-time seed.
 func (s *deviceFirstSeenStore) FirstSeenRecords() []discovery.FirstSeenRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	b, err := platformdb.Load(s.path)
-	if err != nil || len(b) == 0 {
-		return nil
-	}
-	var recs []discovery.FirstSeenRecord
-	if err := json.Unmarshal(b, &recs); err != nil {
-		logError("discovery", "first-seen ledger unreadable; the licence order restarts from this boot",
-			map[string]any{"path": s.path, "err": err.Error()})
-		return nil
-	}
-	return recs
+	return append([]discovery.FirstSeenRecord(nil), s.seed...)
 }
 
 // SaveFirstSeen replaces the stored ledger.
@@ -2177,12 +2179,18 @@ func (s *deviceFirstSeenStore) SaveFirstSeen(recs []discovery.FirstSeenRecord) e
 // at least every device an operator declared.
 func retireDeviceMonitoringDecisions(path string) {
 	b, err := platformdb.Load(path)
-	if err != nil || len(b) == 0 {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
 		return // never written, or already retired
+	case err != nil:
+		// Unreadable is not absent: say so, and leave it for the next boot.
+		logWarn("discovery", "retired per-device monitoring decisions could not be read; they are ignored and removal is retried at the next boot",
+			map[string]any{"path": path, "err": err.Error()})
+		return
 	}
 	var recs []json.RawMessage
 	n := -1
-	if json.Unmarshal(b, &recs) == nil {
+	if len(b) > 0 && json.Unmarshal(b, &recs) == nil {
 		n = len(recs)
 	}
 	if err := platformdb.Delete(path); err != nil {
