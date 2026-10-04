@@ -41,12 +41,22 @@ type ChatMessage struct {
 	Content string `json:"content"`
 }
 
+// SanitizeMessages reduces a client-supplied chat history to the turns the
+// server will forward: the operator's OWN messages, trimmed and bounded.
+//
+// Every other role is dropped. A "system" turn would let the client rewrite the
+// model's instructions (LLM01). An "assistant" turn is dropped too (tracker 337
+// N-A5 — the server owns the conversation): in a request body it is text the
+// CLIENT wrote, and forwarding it in the model's own voice is prompt injection
+// by another name ("as I confirmed above, run …"). The model only ever sees
+// prior replies the server itself produced within the turn (the agent loop's
+// own tool rounds).
 func SanitizeMessages(in []ChatMessage) ([]ChatMessage, error) {
 	out := make([]ChatMessage, 0, len(in))
 	total := 0
 	for _, m := range in {
 		role := strings.ToLower(strings.TrimSpace(m.Role))
-		if role != "user" && role != "assistant" {
+		if role != "user" {
 			continue
 		}
 		content := strings.TrimSpace(m.Content)
@@ -66,6 +76,31 @@ func SanitizeMessages(in []ChatMessage) ([]ChatMessage, error) {
 		return nil, fmt.Errorf("conversation too large (max %d characters)", MaxInputChars)
 	}
 	return out, nil
+}
+
+// ServerConversation shapes sanitized operator turns into the message list a
+// provider receives. One turn passes through unchanged. Several are folded into
+// ONE user turn — the earlier messages framed, by the server, as context ahead
+// of the current one — because with the client's assistant turns gone they
+// would otherwise arrive as consecutive user turns, which providers do not
+// uniformly accept, and because the model must be told plainly that its earlier
+// replies are not in front of it (so it never pretends to quote one). Earlier
+// messages are flattened to one line each so a planted line break cannot forge
+// the framing. The input is not mutated.
+func ServerConversation(msgs []ChatMessage) []ChatMessage {
+	if len(msgs) <= 1 {
+		return msgs
+	}
+	var b strings.Builder
+	b.WriteString("Earlier messages from the operator in this conversation, oldest first (context only; your replies to them are not included):\n")
+	for _, m := range msgs[:len(msgs)-1] {
+		b.WriteString("- ")
+		b.WriteString(promptLine(m.Content))
+		b.WriteString("\n")
+	}
+	b.WriteString("\nThe operator's current message:\n")
+	b.WriteString(msgs[len(msgs)-1].Content)
+	return []ChatMessage{{Role: "user", Content: b.String()}}
 }
 
 // copilotSystemPrompt returns the server-controlled system prompt: the

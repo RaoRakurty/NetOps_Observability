@@ -228,12 +228,15 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 // no LLM can). All reads ride the caller's tenant-scoped aiDataSource.
 func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestrator {
 	ds := aiDataSource{srv: s, ctx: r.Context(), scope: s.chTenantScope(r), claims: claims}
-	tools := ai.Tools(ds)
 	// IRIS Phase A: the read-only troubleshooting tools, wired to the seams this
 	// deployment actually has. A nil seam means the tool is NOT registered, so
 	// the assistant can never answer from a capability that is absent.
 	deps := s.aiTroubleshootDeps(r, claims)
-	tools.AddTroubleshootTools(ds, deps)
+	// Tracker 337 N-A5 — one brain, one registry: this is the ONLY place an
+	// Iris tool registry is built. The copilot agent loop takes its tools and
+	// its policy engine from this orchestrator (orch.Toolbox()), so a tool
+	// exists on both paths or on neither.
+	tools := ai.BuildToolRegistry(ds, deps, aiDocsIndex)
 	// Every audited tool step also lands in the decision ledger when this
 	// request is a ledgered decision (nil Recorder otherwise: a no-op).
 	toolAudit, ledger := s.aiToolAudit(claims), aidecision.FromContext(r.Context())

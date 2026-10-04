@@ -456,7 +456,7 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 	if len(steps) == 0 {
 		return nil, 0
 	}
-	pe := o.policy()
+	tb := o.Toolbox() // gate 2, shared with the copilot agent loop (tracker 337 N-A5)
 	var items []EvidenceItem
 	var notes []string
 	ran := 0
@@ -465,7 +465,7 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 			break // the per-turn ceiling; the caller discloses it
 		}
 		st.toolCalls++
-		tool, ok := o.Tools.Get(step.Tool)
+		tool, d, ok := tb.Authorize(step.Tool, p)
 		if !ok {
 			// The capability is not wired on this deployment. Disclose it rather
 			// than pretending the check happened.
@@ -474,7 +474,7 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 			o.auditSkillTool(sk.Name, step, false, "not_registered", 0, 0, round, selected, "")
 			continue
 		}
-		if d := pe.EvaluateTool(tool, p); !d.Allow {
+		if !d.Allow {
 			notes = append(notes, ToolLabel(step.Tool)+" was not run: "+d.Reason)
 			st.recordTool(step.Tool, "denied")
 			o.auditSkillTool(sk.Name, step, false, "policy_denied", 0, 0, round, selected, "")
