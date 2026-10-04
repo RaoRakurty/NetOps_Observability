@@ -344,7 +344,7 @@ export default function IrisVocabulary() {
       {check && (
         <div data-testid="iris-check">
           {(check.refs ?? []).length === 0
-            ? <div style={muted}>Iris does not recognise that name.</div>
+            ? <div style={muted} data-testid="iris-check-none">Iris does not recognise that name.</div>
             : (
               <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
                 {(check.refs ?? []).map((r) => (
