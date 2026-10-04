@@ -56,3 +56,9 @@ misconfigurations:
 # docs/security/DOCS_PORTAL_ADVISORY_TRIAGE_2026-09-06.md; none of it is
 # Trivy-visible under `ignore-unfixed: true` (no fix exists upstream), so none of
 # it belongs here either.
+#
+# 2026-10-04: that residue (image-size) was FIXED by the Docusaurus 3.10.2 bump.
+# The current residue — braces GHSA-vfj7-8cjw-p6xm and http-cache-semantics
+# GHSA-ch52-4w7c-c8xp, both affecting every published release — is justified in
+# docs/security/NPM_ADVISORY_TRIAGE_2026-10-04.md §3. Still no fix upstream, so
+# still not Trivy-visible and still no entry here.
