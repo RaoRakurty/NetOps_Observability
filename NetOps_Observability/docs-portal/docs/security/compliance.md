@@ -24,17 +24,19 @@ assessed against a framework nobody asked for.
 
 ## Steps
 
-1. Go to **Security → Compliance**. The section opens on **Control set**.
-2. Read **Frameworks this tenant is assessed against**. Two ship on by default:
+1. Go to **Security → Compliance**. The section opens on the **Frameworks**
+   view, which the sidebar calls **Control set**.
+2. Read **Frameworks in use**. Two ship on by default:
    `NIST SP 800-53 Rev5` and `CIS Controls v8.1`.
 3. Select **Add framework…** to see what else is available: `NIST CSF 2.0`,
    `HIPAA Security Rule` and `PCI DSS v4.0.1`.
 4. Tick the frameworks the organisation is subject to.
 5. Select **Save selection**.
 6. Read **Score by framework**, then select a card to open its control table.
-7. Read **Controls that reached no verdict, and why** underneath.
-8. Select **Drift & baselines** for the source-of-truth drift and
-   management-plane baseline board.
+7. Read **Unassessed controls** underneath. **Why no verdict** lists each
+   control that reached no verdict and the reason.
+8. Select **Drift & baselines** for the drift and management-plane baseline
+   checks. See [The Drift and baselines view](#the-drift-and-baselines-view).
 
 ## Result
 
@@ -57,6 +59,37 @@ The three that are off describe a regulatory position an organisation either
 has or does not. Rendering a HIPAA scorecard for a company that handles no
 protected health information is noise at best, and an implied compliance claim
 at worst.
+
+## The Drift and baselines view
+
+**Drift & baselines** checks your devices against what they should be. It
+needs no agent: every check is computed from data Correlix already holds. It
+covers two kinds of check:
+
+- **Drift**: differences between your declared inventory (the Source of Truth)
+  and what Correlix actually observes on the network.
+- **Policy**: management-plane baselines, such as the SNMP version and
+  strength, the fleet's golden OS version, and exposure to known-exploited
+  vulnerabilities.
+
+To work the view:
+
+1. Select **Drift & baselines**.
+2. Read the **Posture** strip: **Devices**, **Compliant**, **With findings**,
+   **Findings**, **Drift**, **Policy**, **High severity** and **Checks
+   active**.
+3. Narrow the findings table with the filter box. It matches the device, the
+   check, the framework and the observed or intended value.
+4. Read each finding's **Observed** value against its **Intended** value.
+5. Read **Checks** to see which checks ran. A check whose data source is not
+   connected reads **inactive**, with the reason in **Why inactive**.
+6. Read **Coverage gaps**, when present, for devices on which checks were
+   skipped and why.
+
+**Inactive means cannot assess, not compliant.** An inactive check found
+nothing because it did not run. When no inventory has been declared, the page
+says **Drift checks inactive: no declared inventory.** The view refreshes every
+minute and needs `infrastructure:read`.
 
 ## Reading a score honestly
 

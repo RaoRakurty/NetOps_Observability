@@ -32,8 +32,9 @@ skipped). The evals run deterministically on the mock provider and gate CI:
 
 | Category | Items | Eval | Guarantee |
 |----------|-------|------|-----------|
-| `docs` | 61 | `TestGoldenDocsRetrieval` (`ai/`) | retrieval ranks an expected portal page: **hit@1 ≥ 0.75, hit@3 ≥ 0.95** (floors) |
-| `docs` | 61 | `TestGoldenDocsCitationCorrectness` (`ai/`) | every retrieval hit produces a product answer that CITES an expected page, with a working Help-drawer link |
+| `docs` | 119 | `TestGoldenDocsRetrieval` (`ai/`) | retrieval ranks an expected portal page: **hit@1 ≥ 0.80, hit@3 ≥ 0.95** (floors) |
+| `docs` | 119 | `TestGoldenDocsCitationCorrectness` (`ai/`) | every retrieval hit produces a product answer that CITES an expected page, with a working Help-drawer link |
+| `docs` (`nav`) | 105 screens | `TestGoldenCoversEveryNavLeaf` (`ai/`) | every console screen read from `src/frontend/src/nav.tsx` (each nav leaf, plus each in-page view a leaf declares in `subItems` that has no `route` of its own) has a docs item naming it in `nav`, every `nav` names a real screen, and for every screen at least one of its items hits@3 |
 | `intent` | 7 | `TestGoldenIntentRouting` (`ai/`) | the deterministic router classifies each question exactly |
 | `agent_tool` | 11 | `TestGoldenAgentToolPlumbing` (server pkg) | the expected tool is in the caller's manifest, executes tenant-scoped, yields cited evidence that survives the grounding verifier |
 | `decline` | 7 | `TestGoldenDeclines` (`ai/`) | honesty floor: zero hits + explicit "documentation doesn't cover that" + zero citations; `known_gap` items report, never gate |
@@ -52,7 +53,16 @@ the pages they target, so the original-32 figure is the fairer measure of the
 retrieval change itself. A renamed page, broken chunker or scoring regression
 still fails CI.
 
-**Decision gate (plan P5):** hit@3 1.00 on 61 items means BM25 recall is still
+**N-G1 completion (2026-10-03).** Coverage is now counted mechanically: a
+docs item carries `"nav": "<section>/<leaf>[/<sub>]"`, and
+`TestGoldenCoversEveryNavLeaf` reads the screens from `nav.tsx` (105 today:
+76 leaves and 29 in-page views) and fails on a screen with no item, an item
+naming no screen, or a screen none of whose items retrieves at hit@3. 58 items
+were added (docs-062…119). Measured on all 119: **hit@1 0.91 (108/119), hit@3
+1.00 (119/119)**; the original 61 moved from hit@1 54/61 to 55/61. The hit@1
+floor moved 0.75 → 0.80.
+
+**Decision gate (plan P5):** hit@3 1.00 on 119 items means BM25 recall is still
 NOT the bottleneck, so the vector/hybrid retrieval upgrade stays deferred. The
 evidence is the re-measured number above, not the 2026-07-02 one. Revisit only
 if the hit@3 floor starts failing on legitimate paraphrase items.

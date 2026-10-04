@@ -118,7 +118,16 @@ A disabled provider answers its test with the stage `config` and the message `TA
 
 ### Set the token policy
 
-**Administration → API Access → Token Policy** governs interactive session tokens platform-wide. It is platform administrator only.
+**Administration → API Access → Token Policy** governs interactive session tokens platform-wide: how long a sign-in session lasts before it must be renewed or signed in again. It is platform administrator only.
+
+To change how long session tokens last:
+
+1. Go to **Administration → API Access** and select the **Token Policy** tile.
+2. Set **Access token TTL (minutes)**: how long an access token stays valid. The hint under the field gives the allowed range and the recommended maximum.
+3. Set **Refresh token TTL (days)**: how long a refresh token can renew a session without a new sign-in.
+4. Select **Save policy**. The new access lifetime applies to new sign-ins immediately, and the new refresh lifetime applies to newly issued refresh tokens.
+
+The same policy is readable over the API:
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
