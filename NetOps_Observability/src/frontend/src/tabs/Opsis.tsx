@@ -25,6 +25,7 @@ import IrisVocabulary from "../components/IrisVocabulary";
 import PresentationPlanRenderer from "../iris/PresentationPlanRenderer";
 import { answerCiteHref } from "../iris/links";
 import QueryCorrection from "../iris/QueryCorrection";
+import { hasAIEntitlement } from "../lib/aiEntitlements";
 import { httpFailure, operatorError } from "../lib/errors";
 
 // The Iris box's server conversation (tracker 337 N-C7/N-E4): only its id
@@ -182,6 +183,9 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
 }) {
   const { setCopilotOpen, openHelp } = useShell();
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  // N-A7: natural-language questions are their own entitlement (ai.nlquery).
+  // Hiding is cosmetic — the server refuses the NL routes without it.
+  const [nlqEntitled, setNlqEntitled] = useState(false);
   const [history, setHistory] = useState<CopilotMessage[]>([]);
   // Grounded answers (from /api/ai/ask) keyed by their assistant-message index in
   // `history`, so those turns render the rich, cited card instead of plain text.
@@ -206,6 +210,9 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
   const [fallbackNote, setFallbackNote] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   const convRef = useRef<string | null>(loadConversation());
+  // Read inside the async ask, so it tracks the latest answer without a stale closure.
+  const nlqEntitledRef = useRef(false);
+  nlqEntitledRef.current = nlqEntitled;
   const setConversation = (id: string | null) => { convRef.current = id; saveConversation(id); };
   // askInConversation sends a typed question in the box's conversation, so a
   // follow-up ("memory on that device") resolves against what the server
@@ -213,7 +220,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
   // question is asked without one — the next question starts a new one.
   const askInConversation = async (content: string): Promise<AiAnswer> => {
     let id = convRef.current;
-    if (!id) {
+    if (!id && nlqEntitledRef.current) {
       try { id = (await api.startIrisConversation()).id; } catch { id = null; } // conversations unavailable: ask without
     }
     try {
@@ -259,7 +266,10 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
   };
 
   useEffect(() => {
-    api.features().then((c) => setEnabled(Boolean(c?.copilot))).catch(() => setEnabled(false));
+    api.features().then((c) => {
+      setEnabled(Boolean(c?.copilot) && hasAIEntitlement(c, "ai.chat"));
+      setNlqEntitled(hasAIEntitlement(c, "ai.nlquery"));
+    }).catch(() => { setEnabled(false); setNlqEntitled(false); });
     // Platform owner → platform settings + the per-workspace access list;
     // tenant admin → their own workspace settings. Whichever call the caller
     // isn't authorized for simply stays null.
@@ -741,7 +751,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
             )}
             <button className="dash-btn" onClick={() => setShowSettings(false)} disabled={savingCfg}>Cancel</button>
           </div>
-          {tcfg.assistant_enabled && <IrisVocabulary />}
+          {tcfg.assistant_enabled && nlqEntitled && <IrisVocabulary />}
         </div>
       )}
 

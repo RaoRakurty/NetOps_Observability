@@ -12,10 +12,13 @@ import { signal, timeline, corrObject } from "../../test/factories";
 // never assembles a prompt (tracker 330).
 const aiAsk = vi.fn();
 const copilotChat = vi.fn();
+// The caller's AI entitlements (N-A7): the assistant box needs ai.chat.
+const features = vi.fn();
 vi.mock("../../services/api", () => ({
   api: {
     aiAsk: (...a: unknown[]) => aiAsk(...a),
     copilotChat: (...a: unknown[]) => copilotChat(...a),
+    features: (...a: unknown[]) => features(...a),
   },
 }));
 
@@ -43,7 +46,10 @@ function renderWS(data = suspectedCase(), view: "operator" | "debug" = "operator
   return { ...utils, onView, onExportPdf, data };
 }
 
-beforeEach(() => { cleanup(); aiAsk.mockReset(); copilotChat.mockReset(); });
+beforeEach(() => {
+  cleanup(); aiAsk.mockReset(); copilotChat.mockReset();
+  features.mockReset(); features.mockResolvedValue({ ai_entitlements: ["ai.chat"] });
+});
 
 describe("RcaWorkspace — operator view renders every widget from the data", () => {
   it("renders the case title, subtitle and all status pills", () => {
@@ -181,7 +187,7 @@ describe("RcaWorkspace — Ask RCA assistant (Iris AI) wiring", () => {
   it("asks the GROUNDED endpoint with the correlation id, never a browser-assembled prompt", async () => {
     aiAsk.mockResolvedValue(answer());
     renderWS();
-    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Ask" }));
     expect(aiAsk).toHaveBeenCalledOnce();
     expect(await screen.findByText(/Because evidence is single-source\./)).toBeInTheDocument();
 
@@ -197,22 +203,32 @@ describe("RcaWorkspace — Ask RCA assistant (Iris AI) wiring", () => {
   it("renders the evidence the grounded answer cited", async () => {
     aiAsk.mockResolvedValue(answer());
     renderWS();
-    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Ask" }));
     expect(await screen.findByText("wan-r2 bgp")).toBeInTheDocument();
   });
 
   it("omits the correlation context when the case has no id (synthetic example)", async () => {
     aiAsk.mockResolvedValue(answer());
     renderWS(suspectedCase(), "operator", null);
-    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Ask" }));
     expect(aiAsk).toHaveBeenCalledOnce();
     expect(aiAsk.mock.calls[0][1]).toBeUndefined();
+  });
+
+  it("is absent for a caller without ai.chat (N-A7; the server still refuses the ask)", async () => {
+    features.mockResolvedValue({ ai_entitlements: ["ai.nlquery"] });
+    renderWS();
+    await vi.waitFor(() => expect(features).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByRole("button", { name: "Ask" })).toBeNull();
+    expect(screen.queryByText("Ask RCA Assistant")).toBeNull();
+    expect(aiAsk).not.toHaveBeenCalled();
   });
 
   it("degrades to an honest 'not connected' state when the assistant errors", async () => {
     aiAsk.mockRejectedValue(new Error("feature disabled"));
     renderWS();
-    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Ask" }));
     expect(await screen.findByText(/Assistant not connected/)).toBeInTheDocument();
   });
 });

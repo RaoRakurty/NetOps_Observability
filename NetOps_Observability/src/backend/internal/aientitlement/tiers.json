@@ -1,0 +1,8 @@
+{
+  "note": "Tier -> AI entitlement mapping (tracker 337 N-A7). DATA, not code: the Go source never names a tier. Tier placement of the AI capabilities is an OPEN owner decision (iris-natural-language-platform.md, owner decision 1); until it is made every tier keeps every AI capability it had before N-A7, so this mapping changes no customer's behaviour. The deployment flags (FEATURE_AI / FEATURE_COPILOT / FEATURE_AI_TOOLS) and the per-tenant AI switches still apply on top. ai.context.author, ai.runbook.author and ai.mcp are listed so they are placed when their features land; they gate nothing yet.",
+  "tiers": {
+    "community": ["ai.chat", "ai.investigate", "ai.nlquery", "ai.context.author", "ai.runbook.author", "ai.mcp"],
+    "team": ["ai.chat", "ai.investigate", "ai.nlquery", "ai.context.author", "ai.runbook.author", "ai.mcp"],
+    "enterprise": ["ai.chat", "ai.investigate", "ai.nlquery", "ai.context.author", "ai.runbook.author", "ai.mcp"]
+  }
+}

@@ -115,6 +115,7 @@ import (
 	"netops/backend/internal/seclane"
 	// SECURITY-LANE-END
 	"math"
+	"netops/backend/internal/aientitlement"
 	"netops/backend/internal/aiscore"
 	"netops/backend/internal/entityalias"
 	"netops/backend/internal/irisconvo"
@@ -684,6 +685,10 @@ type server struct {
 	// of a bare `go func(){…}()` — and shutdown will then WAIT for it instead of
 	// abandoning it mid-write. Never nil for a server built by newServer().
 	workers *workerGroup
+
+	// aiEntitlementPolicy overrides the shipped tier → AI entitlement mapping
+	// (N-A7, ai_tenant_config.go). nil in production: the embedded default applies.
+	aiEntitlementPolicy *aientitlement.Policy
 }
 
 // serviceNowFor / jiraFor resolve a tenant's live ITSM connector (nil when
@@ -4388,11 +4393,17 @@ func (s *server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 // not exist" is the same silent-failure class this release is fixing, so the
 // answer is to split the surfaces rather than to widen the gate back.
 func (s *server) handleFeatures(w http.ResponseWriter, r *http.Request) {
-	if _, ok := userFrom(r.Context()); !ok {
+	claims, ok := userFrom(r.Context())
+	if !ok {
 		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
+		// N-A7: the CALLER's AI entitlements (tier mapping ∩ deployment flags ∩
+		// the caller's own tenant switches), so the SPA hides what this caller
+		// cannot use. Cosmetic only — every AI route gates server-side. It
+		// reads nothing about any tenant but the caller's own.
+		"ai_entitlements":     s.aiEntitlementsFor(claims),
 		"copilot":             os.Getenv("FEATURE_COPILOT") == "true",
 		"device_ssh":          os.Getenv("FEATURE_DEVICE_SSH") == "true",
 		"active_verification": os.Getenv("FEATURE_ACTIVE_VERIFICATION") == "true",

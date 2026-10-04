@@ -5087,6 +5087,17 @@ export type VerificationSettingsPatch = {
 };
 
 
+/** GET /api/features — optional UI surfaces, plus the CALLER's atomic AI
+ *  entitlements (tracker 337 N-A7; see lib/aiEntitlements). Absent on a
+ *  server that predates N-A7. */
+export interface FeatureFlags {
+  copilot?: boolean;
+  device_ssh?: boolean;
+  active_verification?: boolean;
+  processors?: boolean;
+  ai_entitlements?: string[];
+}
+
 export const api = {
   // ---- BGP Operations (item 10) ----
   bgpWatchlist: () => request<BgpWatchlistResp>("/api/bgp/watchlist"),
@@ -5555,7 +5566,7 @@ export const api = {
   // (platform-owner only): a non-admin asking "should I render the SSH button?"
   // must not depend on an endpoint they are not allowed to read, or a 403 shows
   // up as "the feature does not exist".
-  features: () => request<Record<string, boolean>>("/api/features"),
+  features: () => request<FeatureFlags>("/api/features"),
   // Topology Operating Canvas: resolved, renderer-agnostic TopologyView for a
   // workflow mode. Typed `unknown` to keep services/api.ts decoupled from the
   // feature's contract types; the topology API client casts + normalizes it.

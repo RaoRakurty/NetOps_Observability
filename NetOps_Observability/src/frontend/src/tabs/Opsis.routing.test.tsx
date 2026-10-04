@@ -348,3 +348,36 @@ describe("Opsis — follow-ups ride the server conversation (tracker 337 N-E4)",
     expect(aiAsk.mock.calls[0][2]).toBeUndefined();
   });
 });
+
+describe("Opsis — the caller's AI entitlements (tracker 337 N-A7)", () => {
+  it("without ai.chat the box is off and never asks", async () => {
+    features.mockResolvedValue({ copilot: true, ai_entitlements: ["ai.nlquery"] });
+    await renderOpsis();
+    await screen.findByText(/Iris AI is turned off/);
+    expect(screen.queryByPlaceholderText(/Ask Iris AI/)).toBeNull();
+    expect(aiAsk).not.toHaveBeenCalled();
+  });
+
+  it("with ai.chat but not ai.nlquery it asks without starting a conversation", async () => {
+    features.mockResolvedValue({ copilot: true, ai_entitlements: ["ai.chat"] });
+    startIrisConversation.mockReset().mockResolvedValue({ id: "c-1", turns: [] });
+    aiAsk.mockResolvedValue(citedAnswer());
+    await renderOpsis();
+    await screen.findByText(/How can I help/);
+    await ask("show cpu on edge-1");
+    await waitFor(() => expect(aiAsk).toHaveBeenCalledTimes(1));
+    expect(startIrisConversation).not.toHaveBeenCalled();
+    expect(aiAsk.mock.calls[0][2]).toBeUndefined();
+  });
+
+  it("with ai.nlquery it starts the conversation", async () => {
+    features.mockResolvedValue({ copilot: true, ai_entitlements: ["ai.chat", "ai.nlquery"] });
+    startIrisConversation.mockReset().mockResolvedValue({ id: "c-1", turns: [] });
+    aiAsk.mockResolvedValue(citedAnswer({ conversation_id: "c-1" }));
+    await renderOpsis();
+    await screen.findByText(/How can I help/);
+    await ask("show cpu on edge-1");
+    await waitFor(() => expect(aiAsk).toHaveBeenCalledTimes(1));
+    expect(startIrisConversation).toHaveBeenCalledTimes(1);
+  });
+});

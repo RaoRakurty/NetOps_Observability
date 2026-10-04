@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"netops/backend/ai"
+	"netops/backend/internal/aientitlement"
 	"netops/backend/internal/aiscore"
 	"netops/backend/internal/entityalias"
 	"netops/backend/internal/irisconvo"
@@ -135,9 +136,10 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, fmt.Errorf("Iris AI rate limit exceeded — slow down"))
 		return
 	}
-	// Per-tenant entitlement (§3a): cross-tenant principals are never gated.
-	if !s.aiAssistantAllowed(claims) {
-		writeError(w, http.StatusForbidden, errAITenantDisabled)
+	// N-A7: ai.chat (tier mapping ∩ flags ∩ the tenant's own switch; cross-
+	// tenant principals are not tenant-gated). The data arm additionally
+	// needs ai.nlquery — see aiNLQueryWith.
+	if !s.requireAIEntitlement(w, claims, aientitlement.Chat) {
 		return
 	}
 	// Bound the request before decoding (LLM10: no unbounded input).
@@ -177,8 +179,13 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 	// A conversation, when named, must be the caller's own and live: another
 	// principal's id, a stale one and a malformed one are the same 404, and
 	// the client starts a new conversation.
+	//
+	// N-A7: Iris conversations are part of ai.nlquery. A caller holding
+	// ai.chat without it gets a plain ask — the named conversation is neither
+	// read nor appended to, and the answer carries no conversation_id, so the
+	// client drops it.
 	var conv *irisconvo.Conversation
-	if id := strings.TrimSpace(req.ConversationID); id != "" {
+	if id := strings.TrimSpace(req.ConversationID); id != "" && s.aiEntitled(claims, aientitlement.NLQuery) {
 		c, status, err := s.askConversation(r, claims, id)
 		if err != nil {
 			writeError(w, status, err)
@@ -268,6 +275,11 @@ type nlqRan struct {
 // answered.
 func (s *server) aiNLQueryWith(r *http.Request, claims jwtClaims, st *irisconvo.State, convID string, ran *nlqRan) ai.NLQueryFunc {
 	if s.nlqCatalog == nil || s.roles == nil || !s.roles.Allows(claims.Role, "infrastructure", LevelRead) {
+		return nil
+	}
+	// N-A7: reaching the NL query engine needs ai.nlquery — an ask may hold
+	// ai.chat without it and then keeps the classic path.
+	if !s.aiEntitled(claims, aientitlement.NLQuery) {
 		return nil
 	}
 	return func(ctx context.Context, _ ai.Principal, question string, opts ai.DataOpts) (ai.DataAnswer, error) {
@@ -526,8 +538,12 @@ func (s *server) aiPrincipal(claims jwtClaims) ai.Principal {
 // for this caller (which modules are enabled + their question categories), so the
 // UI can show what Iris AI can answer. Read-only, any authenticated user.
 func (s *server) handleAIModules(w http.ResponseWriter, r *http.Request) {
-	if _, ok := userFrom(r.Context()); !ok {
+	claims, ok := userFrom(r.Context())
+	if !ok {
 		writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+		return
+	}
+	if !s.requireAIEntitlement(w, claims, aientitlement.Chat) {
 		return
 	}
 	type modView struct {
@@ -551,8 +567,12 @@ func (s *server) handleAIModules(w http.ResponseWriter, r *http.Request) {
 // "/" menu (read-only, any authenticated user). /commands/suggestions filters by
 // a typed fragment for live suggestions.
 func (s *server) handleAICommands(w http.ResponseWriter, r *http.Request) {
-	if _, ok := userFrom(r.Context()); !ok {
+	claims, ok := userFrom(r.Context())
+	if !ok {
 		writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+		return
+	}
+	if !s.requireAIEntitlement(w, claims, aientitlement.Chat) {
 		return
 	}
 	if strings.HasSuffix(r.URL.Path, "/suggestions") {
@@ -578,6 +598,9 @@ func (s *server) handleAIFeedback(w http.ResponseWriter, r *http.Request) {
 	claims, ok := userFrom(r.Context())
 	if !ok {
 		writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+		return
+	}
+	if !s.requireAIEntitlement(w, claims, aientitlement.Chat) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
@@ -668,7 +691,7 @@ func (s *server) rememberJudgedInvestigation(r *http.Request, claims jwtClaims, 
 // aggregate (up/down totals + per-intent breakdown) for the quality loop.
 func (s *server) handleAIFeedbackStats(w http.ResponseWriter, r *http.Request) {
 	claims, ok := s.requirePerm(w, r, "administration", LevelRead)
-	if !ok {
+	if !ok || !s.requireAIEntitlement(w, claims, aientitlement.Chat) {
 		return
 	}
 	if s.aiFeedback == nil {
@@ -752,7 +775,7 @@ func (s *server) handleAIAliases(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
-		if !ok {
+		if !ok || !s.requireAIEntitlement(w, claims, aientitlement.NLQuery) {
 			return
 		}
 		tenant, cross := principalTenant(claims)
@@ -761,7 +784,7 @@ func (s *server) handleAIAliases(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"aliases": list, "max": entityalias.MaxPerTenant})
 	case http.MethodPut:
 		claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
-		if !ok {
+		if !ok || !s.requireAIEntitlement(w, claims, aientitlement.NLQuery) {
 			return
 		}
 		tenant, cross := principalTenant(claims)
@@ -811,7 +834,7 @@ func (s *server) handleAIAliases(w http.ResponseWriter, r *http.Request) {
 		}
 	case http.MethodDelete:
 		claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
-		if !ok {
+		if !ok || !s.requireAIEntitlement(w, claims, aientitlement.NLQuery) {
 			return
 		}
 		tenant, cross := principalTenant(claims)
@@ -838,7 +861,7 @@ func (s *server) handleAIEntityResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
-	if !ok {
+	if !ok || !s.requireAIEntitlement(w, claims, aientitlement.NLQuery) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, nlqBodyCap)
@@ -932,6 +955,11 @@ func (l nlqLookups) Visible(ctx context.Context, entityType, id string) (bool, e
 // register).
 func (s *server) aiCompileQuery(r *http.Request, claims jwtClaims) func(context.Context, ai.Principal, string) (ai.QueryInterpretation, error) {
 	if s.nlqCatalog == nil || s.roles == nil || !s.roles.Allows(claims.Role, "infrastructure", LevelRead) {
+		return nil
+	}
+	// N-A7: reaching the NL query engine needs ai.nlquery — an ask may hold
+	// ai.chat without it and then keeps the classic path.
+	if !s.aiEntitled(claims, aientitlement.NLQuery) {
 		return nil
 	}
 	return func(ctx context.Context, _ ai.Principal, question string) (ai.QueryInterpretation, error) {
@@ -1055,8 +1083,7 @@ func (s *server) nlqGate(w http.ResponseWriter, r *http.Request) (jwtClaims, boo
 		writeError(w, http.StatusTooManyRequests, fmt.Errorf("Iris AI rate limit exceeded — slow down"))
 		return jwtClaims{}, false
 	}
-	if !s.aiAssistantAllowed(claims) {
-		writeError(w, http.StatusForbidden, errAITenantDisabled)
+	if !s.requireAIEntitlement(w, claims, aientitlement.NLQuery) {
 		return jwtClaims{}, false
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, nlqQueryBody)
@@ -1346,7 +1373,7 @@ func (s *server) handleAIConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
-	if !ok {
+	if !ok || !s.requireAIEntitlement(w, claims, aientitlement.NLQuery) {
 		return
 	}
 	if s.nlqConvos == nil {
@@ -1578,7 +1605,7 @@ func (s *server) handleAIQueries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
-	if !ok {
+	if !ok || !s.requireAIEntitlement(w, claims, aientitlement.NLQuery) {
 		return
 	}
 	if s.nlqQueryLog == nil {
