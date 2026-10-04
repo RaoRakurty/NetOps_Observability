@@ -69,7 +69,15 @@ const GATES: Record<string, { scope: "platform" | "tenant"; gate: string }> = {
   // Sensors is the ONE leaf that keeps a leaf-level platform stamp inside the
   // tenant-level section: the owner put it under Data sources, and the backend
   // is requireCrossTenant, so the leaf carries `platformOnly` instead.
-  sensors: { scope: "platform", gate: "main.go handleCollectors + snmp_discovery.go handleDiscoveryConfig → requireCrossTenant" },
+  sensors: { scope: "platform", gate: "main.go handleCollectors → requireCrossTenant" },
+  // Subnet Discovery mirrors the Notifications precedent below: the config
+  // half (snmp_discovery.go handleDiscoveryConfig / refresh → requireCrossTenant)
+  // is platform-global and the server refuses a tenant regardless, but the
+  // PAGE carries its own audience gate (pages/SubnetDiscovery.tsx: platform
+  // operator → config card, never fetched for a tenant; tenant → where its
+  // discovered devices and SNMP credentials live). The tenant half is the
+  // explanation, so the leaf is tenant-visible, NOT platformOnly.
+  discovery: { scope: "tenant", gate: "snmp_discovery.go handleDiscoveryConfig → requireCrossTenant; page audience-gates the card on platform_admin and shows tenants an explanation (MIXED)" },
   // Notifications mixes: the channel config is platform-global, the contact
   // points are tenant-scoped. It stays tenant-level because the tenant half is
   // the operator surface; the platform half already refuses a tenant admin.
@@ -182,6 +190,18 @@ describe("what each principal sees", () => {
 describe("Administration groups (owner IA, 2026-09-05)", () => {
   it("Sensors sits under Data sources", () => {
     expect(groupIds(admin, "Data sources")).toContain("sensors");
+  });
+
+  it("Subnet Discovery sits in Data sources, right after Telemetry Coverage", () => {
+    const ds = groupIds(admin, "Data sources");
+    expect(ds).toContain("discovery");
+    expect(ds.indexOf("discovery")).toBe(ds.indexOf("telemetry-coverage") + 1);
+    const leaf = (admin.children ?? []).find((l) => l.id === "discovery")!;
+    expect(leaf.label).toBe("Subnet Discovery");
+    expect(resolveRoute("#/admin/discovery", providerNav).leaf?.id).toBe("discovery");
+    // Tenants keep the page (it explains discovery to them); the card itself
+    // is gated inside the page.
+    expect(leafIds(tenantNav.find((s) => s.id === "admin"))).toContain("discovery");
   });
 
   it("Processors and Sensitive Data Access are one group", () => {

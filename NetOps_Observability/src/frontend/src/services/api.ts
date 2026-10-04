@@ -72,26 +72,40 @@ export type DeviceMonitoring = {
   decided_at?: string;
 };
 
-// Subnet discovery scan scope (platform-owner; GET is redacted — the probe
-// community is write-only).
+// Subnet discovery scan scope (platform-owner). Discovery has no credential of
+// its own: the sweep tries the platform-owned SNMP profiles (/api/snmp/credentials)
+// in name order and binds each found device to the profile that answered.
 export type DiscoveryConfig = {
   enabled: boolean;
   ranges: string[];
-  community_set: boolean;
   allow_non_private: boolean;
   interval_sec: number;
 };
+// No `community` field: a PUT carrying one is refused 400 — credentials live in
+// SNMP Profiles only.
 export type DiscoveryConfigInput = {
   enabled: boolean;
   ranges: string[];
-  community?: string; // comma-separated priority list; blank preserves the stored secret
   allow_non_private?: boolean;
   interval_sec?: number;
+};
+// A device the sweep found; credential_ref = the SNMP profile id that answered.
+export type DiscoveryFoundDevice = {
+  id: string;
+  name: string;
+  address: string;
+  vendor?: string;
+  credential_ref?: string;
 };
 export type DiscoveryConfigEnvelope = {
   config: DiscoveryConfig;
   limits?: { max_hosts: number; max_ranges: number };
   stats?: { last_poll?: string; last_error?: string; devices?: number };
+  // Platform-owned SNMP profiles the sweep will try, in name order.
+  scan_profiles?: { total: number; v2c: number; v3: number };
+  found?: DiscoveryFoundDevice[];
+  config_unavailable?: boolean;
+  config_error?: string;
 };
 
 export type CollectorStatus = {

@@ -80,7 +80,11 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   ActionQueue: () => import("./pages/ActionQueue"),
   DigitalExperience: () => import("./pages/DigitalExperience"),
   Sites: () => import("./pages/Sites"),
-  Discovery: () => import("./pages/Discovery"),
+  // Subnet discovery (Administration → Data sources) and the NMS vendor-
+  // controller integrations (Infrastructure) — split out of the 2026-08
+  // "Discovery & NMS" composite.
+  SubnetDiscovery: () => import("./pages/SubnetDiscovery"),
+  NmsIntegrations: () => import("./pages/NmsIntegrations"),
   LogsExplore: () => import("./pages/LogsExplore"),
   TelemetryCoverage: () => import("./pages/telemetry/TelemetryCoverage"),
   // Configuration backup & drift (Project 3, FEATURE_CONFIG_BACKUP).
@@ -165,11 +169,13 @@ const NewMonitor = lazy(ROUTE_CHUNKS["NewMonitor"] as () => Promise<{ default: R
 const CommandCenter = lazy(ROUTE_CHUNKS["CommandCenter"] as () => Promise<{ default: React.ComponentType<any> }>);
 // Nav-redesign promotions (2026-08, owner tree): the extracted Action Queue
 // page, the Sites page (Device Geomap folded in as its Map tab), the
-// Discovery & NMS composite, and the Logs explorer (Log Search + Cloud Logs).
+// Logs explorer (Log Search + Cloud Logs); subnet discovery and NMS
+// Integrations are their own leaves (Administration · Infrastructure).
 const ActionQueue = lazy(ROUTE_CHUNKS["ActionQueue"] as () => Promise<{ default: React.ComponentType<any> }>);
 const DigitalExperience = lazy(ROUTE_CHUNKS["DigitalExperience"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Sites = lazy(ROUTE_CHUNKS["Sites"] as () => Promise<{ default: React.ComponentType<any> }>);
-const Discovery = lazy(ROUTE_CHUNKS["Discovery"] as () => Promise<{ default: React.ComponentType<any> }>);
+const SubnetDiscovery = lazy(ROUTE_CHUNKS["SubnetDiscovery"] as () => Promise<{ default: React.ComponentType<any> }>);
+const NmsIntegrations = lazy(ROUTE_CHUNKS["NmsIntegrations"] as () => Promise<{ default: React.ComponentType<any> }>);
 const LogsExplore = lazy(ROUTE_CHUNKS["LogsExplore"] as () => Promise<{ default: React.ComponentType<any> }>);
 // Parser programme A6 — Administration → Data Collection coverage view.
 const TelemetryCoverage = lazy(ROUTE_CHUNKS["TelemetryCoverage"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -329,12 +335,11 @@ export const NAV: NavSection[] = [
       // Wired + wireless are ONE LAN domain (owner ruling) — this is the
       // wireless VIEW of it, filled by controller connectors (Catalyst 9800).
       { id: "wireless", label: "Wireless", render: () => <Wireless /> },
-      // Discovery & NMS — subnet discovery (platform-operated) + the NMS vendor-
-      // controller integrations (#95, dormant unless FEATURE_NMS_INTEGRATIONS).
-      { id: "discovery", label: "Discovery & NMS", render: () => <Discovery />, subItems: [
-        { id: "discovery", label: "Subnet Discovery" },
-        { id: "nms", label: "NMS Integrations" },
-      ] },
+      // NMS vendor-controller integrations (#95, dormant unless
+      // FEATURE_NMS_INTEGRATIONS). Subnet discovery left this section for
+      // Administration → Data sources (SNMP credentials live in ONE place,
+      // SNMP Profiles, and discovery sits beside them).
+      { id: "nms", label: "NMS Integrations", render: () => <NmsIntegrations /> },
       // Config drift — fleet configuration state; each row deep-links to the
       // device's Configuration panel. Dormant (renders "not enabled") unless
       // FEATURE_CONFIG_BACKUP is set on the backend.
@@ -464,11 +469,10 @@ export const NAV: NavSection[] = [
       { id: "datasources", label: "Data Sources", group: "Data sources", render: () => <DataSources /> },
       { id: "snmp", label: "SNMP Profiles", group: "Data sources", render: () => <SnmpProfileManager /> },
       // The collector/poller controls ("Sensors" in the owner tree). The list
-      // and the subnet-scan scope are requireCrossTenant on the server
-      // (main.go handleCollectors / snmp_discovery.go handleDiscoveryConfig),
-      // so the leaf stays platform-stamped even though it lives in the
-      // tenant-level section; its subnet-discovery card also surfaces under
-      // Infrastructure → Discovery & NMS for the same platform principals.
+      // is requireCrossTenant on the server (main.go handleCollectors), so the
+      // leaf stays platform-stamped even though it lives in the tenant-level
+      // section. Subnet discovery is NOT here any more — it has its own leaf
+      // below, beside Telemetry Coverage.
       { id: "sensors", label: "Sensors", group: "Data sources", platformOnly: true, render: () => <Collectors /> },
       // Parser programme A6: what the parser recognizes (platform-global stats,
       // 403 → "platform-admin only" card) beside the TENANT's own unrecognized
@@ -476,6 +480,15 @@ export const NAV: NavSection[] = [
       // requirePerm(infrastructure, read) and tenant-filtered, so the second
       // half is per-tenant data and the page belongs to the tenant section.
       { id: "telemetry-coverage", label: "Telemetry Coverage", group: "Data sources", render: () => <TelemetryCoverage /> },
+      // Subnet discovery — the ONE subnet-discovery screen (moved here from
+      // Infrastructure → "Discovery & NMS" and off the Sensors page). It has no
+      // credential of its own: the sweep tries the platform-owned SNMP Profiles
+      // in name order. /api/discovery/config is requireCrossTenant, but the
+      // page carries its own audience gate (platform operator → the config
+      // card; tenant → where discovered devices and SNMP credentials live), so
+      // the leaf is NOT platformOnly — tenants keep the honest explanation the
+      // old Infrastructure page gave them.
+      { id: "discovery", label: "Subnet Discovery", group: "Data sources", render: () => <SubnetDiscovery /> },
       // Data handling — how a record is reshaped on the way in, and who was
       // allowed to look at what it hid. Owner IA (2026-09-05): Processors and
       // Sensitive Data Access are ONE group; both are tenant-scoped on the
@@ -705,7 +718,14 @@ const LEGACY_ROUTE_ALIAS: Record<string, string> = {
   "automation/sot": "infrastructure/sot",
   // Infrastructure leaves that moved out or were renamed
   "infrastructure/ports": "infrastructure/interfaces",
-  "infrastructure/nms": "infrastructure/discovery/nms",
+  // The 2026-08 "Discovery & NMS" composite split (2026-10): subnet discovery
+  // moved to Administration → Data sources, NMS Integrations became its own
+  // Infrastructure leaf (so the pre-2026-08 "infrastructure/nms" is canonical
+  // again). Three-segment keys are tried first, so the explicit sub-tabs land
+  // on their own page rather than following the two-segment entry.
+  "infrastructure/discovery": "admin/discovery",
+  "infrastructure/discovery/discovery": "admin/discovery",
+  "infrastructure/discovery/nms": "infrastructure/nms",
   "infrastructure/monitoring": "analytics/device-monitoring",
   "infrastructure/ifperf": "analytics/interface-performance",
   "infrastructure/bgpospf": "analytics/protocols",
