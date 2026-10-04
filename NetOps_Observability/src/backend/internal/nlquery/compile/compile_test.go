@@ -125,6 +125,14 @@ func TestFollowUpsRewriteThePriorQuery(t *testing.T) {
 	if prior.Time.Last != "2h" {
 		t.Fatal("a follow-up must never mutate the prior query")
 	}
+	// Re-sizing a comparison re-sizes both windows, keeping the offset.
+	cmp := run(t, "compare it with yesterday", x)
+	y := x
+	y.PriorAST = cmp.AST
+	r = run(t, "show the last 6 hours", y)
+	if r.AST == nil || r.AST.Time.Last != "6h" || r.AST.CompareTo == nil || r.AST.CompareTo.Last != "6h" || r.AST.CompareTo.Offset != "1d" {
+		t.Fatalf("both compared windows must be re-sized: %+v", r.AST)
+	}
 	// "show only X" is the same refinement as "only X".
 	r2 := run(t, "show only dallas", x)
 	if r2.AST == nil || len(r2.AST.Refs) != 2 {

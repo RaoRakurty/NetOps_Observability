@@ -974,6 +974,15 @@ func (c Compiler) followUp(ctx context.Context, text string, cx Context) (Result
 				q.Time.Anchor.Incidents.Time = tp.tr
 			} else {
 				q.Time = tp.tr
+				// A comparison re-sizes BOTH windows and keeps its offset:
+				// re-sizing only one made the pair unequal, which the
+				// validator rightly refuses ("compare it with yesterday" →
+				// "show the last 6 hours" was a dead end).
+				if q.CompareTo != nil && tp.tr.Kind == ast.TimeRelative {
+					ct := tp.tr
+					ct.Offset = q.CompareTo.Offset
+					q.CompareTo = &ct
+				}
 			}
 			return Result{Intent: "refine_time", AST: q}, true, nil
 		}
