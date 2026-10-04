@@ -575,15 +575,17 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 	id := pr.ID
 	// Build the evidence bundle from governed read-only tools — each tool call
 	// passes the Policy Engine gate (capability=read, allow/deny, RBAC) first.
-	pol := o.policy()
+	// Gate 2 is the shared Toolbox.Authorize — the same check the copilot
+	// agent loop runs (tracker 337 N-A5).
+	tb := o.Toolbox()
 	args := ToolArgs{"problem_id": id}
 	var bundle []EvidenceItem
 	for _, name := range plan.Tools {
-		tool, ok := o.Tools.Get(name)
+		tool, d, ok := tb.Authorize(name, p)
 		if !ok {
 			continue // stubbed tool for this phase
 		}
-		if d := pol.EvaluateTool(tool, p); !d.Allow {
+		if !d.Allow {
 			disc = append(disc, capitalize(d.Reason)+".")
 			o.auditTool(name, args, false, "policy_denied", nil, 0)
 			continue
@@ -1041,16 +1043,16 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 	mod, _ := ModuleByID(modID)
 	mh := &ModuleHealthSummary{Module: modID, DisplayName: aiDisplayName(mod, modID)}
 
-	pol := o.policy()
+	tb := o.Toolbox() // gate 2, shared with the copilot agent loop (N-A5)
 	var bundle []EvidenceItem
 	ran, found, errored := 0, 0, 0
 	for _, name := range plan.Tools {
-		tool, ok := o.Tools.Get(name)
+		tool, d, ok := tb.Authorize(name, p)
 		if !ok {
 			continue // tool for this module not built yet — degrade honestly
 		}
 		found++
-		if d := pol.EvaluateTool(tool, p); !d.Allow {
+		if !d.Allow {
 			disc = append(disc, capitalize(d.Reason)+".")
 			o.auditTool(name, ToolArgs{}, false, "policy_denied", nil, 0)
 			continue

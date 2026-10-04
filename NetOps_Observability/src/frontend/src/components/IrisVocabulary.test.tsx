@@ -134,6 +134,63 @@ describe("2 · check a name", () => {
     fireEvent.click(screen.getByText("Check"));
     expect(await screen.findByTestId("iris-check")).toHaveTextContent("Iris does not recognise that name.");
   });
+
+  it("a model suggestion is disclosed, and only ever fills in step 1 — saving stays the operator's click", async () => {
+    resolveIrisEntity.mockResolvedValueOnce({ refs: [], ambiguous: false });
+    resolveIrisEntity.mockResolvedValueOnce({
+      refs: [ref("site:dfw-hq", {
+        input_text: "dalas", entity_type: "site", confidence: 0.5, resolution_method: "model_suggestion",
+        needs_confirmation: true, model_suggested_text: "Dallas",
+      })],
+      ambiguous: false,
+      disclosure: "Suggested by the AI model, not found by Iris's own name lookup — confirm it before it is used.",
+    });
+    putIrisAlias.mockResolvedValue({});
+    render(<IrisVocabulary />);
+    type("Name to check", "dalas");
+    fireEvent.click(screen.getByText("Check"));
+    fireEvent.click(await screen.findByText("Ask the AI model what I meant"));
+    await waitFor(() => expect(resolveIrisEntity).toHaveBeenLastCalledWith("dalas", [], true));
+    const check = await screen.findByTestId("iris-check");
+    expect(check).toHaveTextContent("suggested by the AI model — confirm");
+    expect(check).toHaveTextContent('the model read it as "Dallas"');
+    expect(check).toHaveTextContent("needs confirmation");
+    expect(screen.getByTestId("iris-model-disclosure")).toHaveTextContent("Suggested by the AI model");
+    fireEvent.click(screen.getByLabelText("Use site:dfw-hq for dalas"));
+    expect(screen.getByLabelText("Name your team uses")).toHaveValue("dalas");
+    expect(screen.getByLabelText("What it refers to")).toHaveValue("site:dfw-hq");
+    expect(screen.getByLabelText("Kind")).toHaveValue("site");
+    expect(putIrisAlias).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("Add"));
+    await waitFor(() => expect(putIrisAlias).toHaveBeenCalledWith({ entity_type: "site", entity_id: "site:dfw-hq", alias: "dalas" }));
+  });
+
+  it("says when the AI model could not be asked, and offers no guess", async () => {
+    resolveIrisEntity.mockResolvedValueOnce({ refs: [], ambiguous: false });
+    resolveIrisEntity.mockResolvedValueOnce({ refs: [], ambiguous: false, suggestion_error: "model_unavailable" });
+    render(<IrisVocabulary />);
+    type("Name to check", "dalas");
+    fireEvent.click(screen.getByText("Check"));
+    fireEvent.click(await screen.findByText("Ask the AI model what I meant"));
+    expect(await screen.findByText("The AI model could not be asked right now.")).toBeInTheDocument();
+    expect(screen.queryByText("Ask the AI model what I meant")).not.toBeInTheDocument();
+  });
+
+  it("a deterministic match never offers the model, and a topology set says all are used", async () => {
+    resolveIrisEntity.mockResolvedValueOnce({
+      refs: [ref("device:edge-1", { resolution_method: "topology_neighbor" }), ref("device:edge-2", { resolution_method: "topology_neighbor" })],
+      ambiguous: false, set: true,
+    });
+    render(<IrisVocabulary />);
+    type("Name to check", "routers next to core-1");
+    fireEvent.click(screen.getByText("Check"));
+    const check = await screen.findByTestId("iris-check");
+    expect(check).toHaveTextContent("connected to the device you named");
+    expect(check).toHaveTextContent("Iris will use all of these.");
+    expect(check).not.toHaveTextContent("More than one match");
+    expect(screen.queryByText("Ask the AI model what I meant")).not.toBeInTheDocument();
+    expect(screen.queryByText("Yes, that is what I meant")).not.toBeInTheDocument();
+  });
 });
 
 describe("3 · try a question", () => {

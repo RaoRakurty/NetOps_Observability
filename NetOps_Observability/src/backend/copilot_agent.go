@@ -52,6 +52,15 @@ func aiToolsDailyTokens() int { return envInt("AI_TOOLS_DAILY_TOKENS", 250_000) 
 
 // ---- the loop ----------------------------------------------------------------
 
+// agentToolbox is the tool surface the agent loop runs on: the grounded
+// engine's own registry and policy engine (tracker 337 N-A5 — one brain, one
+// registry). It is the single named seam between the two paths, so the guard
+// test can prove they hold the very same entries rather than parallel copies.
+func agentToolbox(orch *ai.Orchestrator) (*ai.ToolRegistry, *ai.PolicyEngine) {
+	tb := orch.Toolbox()
+	return tb.Registry, tb.Policy
+}
+
 // agentToolCaller is one model round-trip. Injected so tests drive the loop
 // with a mock model (runaway halt, cross-tenant probes) without HTTP.
 type agentToolCaller func(ctx context.Context, system string, turns []ai.AgentTurn, specs []ai.ToolSpec) (string, []ai.ToolCall, error)
@@ -182,13 +191,15 @@ func (s *server) executeAgentTool(ctx context.Context, claims jwtClaims, p ai.Pr
 		return rep, nil
 	}
 
-	tool, ok := reg.Get(c.Name)
+	// Re-authorize at execution time (defense in depth — the manifest filter is
+	// the first gate, this is the second; the tool itself re-validates args).
+	// Toolbox.Authorize is the SAME gate the grounded engine's execution sites
+	// run (tracker 337 N-A5), so a denial on one path is a denial on the other.
+	tool, d, ok := ai.Toolbox{Registry: reg, Policy: pol}.Authorize(c.Name, p)
 	if !ok {
 		return fail("unknown tool", "unknown_tool")
 	}
-	// Re-authorize at execution time (defense in depth — the manifest filter is
-	// the first gate, this is the second; the tool itself re-validates args).
-	if d := pol.EvaluateTool(tool, p); !d.Allow {
+	if !d.Allow {
 		return fail("not permitted: "+d.Reason, "policy_denied")
 	}
 	args, err := ai.ParseToolArgs(c.Name, c.Args)

@@ -12,8 +12,13 @@
 // catalog can never inject query text.
 //
 // Nothing here is tenant data. Tenant-specific vocabulary (site nicknames,
-// provider names) lives in the per-tenant alias table (N-C2), never in this
-// file and never in a model's weights.
+// a workspace's own name for a provider) lives in the per-tenant alias table
+// (N-C2), never in this file and never in a model's weights. The synonym
+// groups below are PUBLIC vocabulary — the well-known names of carriers and
+// SaaS applications ("AT&T" / "ATT", "Office 365" / "O365") — and a group
+// never creates a tenant entity: it only lets the resolver find the caller's
+// OWN entity by another of its common names (N-C2 catalog-synonym rung), and a
+// provider group with a seed lets a carrier be NAMED before anyone aliased it.
 package catalog
 
 // Catalog is the whole embedded schema. SchemaVersion is the file format
@@ -24,12 +29,29 @@ type Catalog struct {
 	Metrics       []Metric       `json:"metrics"`
 	Dimensions    []Dimension    `json:"dimensions"`
 	Relationships []Relationship `json:"relationships"`
+	// Synonyms are public names for providers and applications (N-C2).
+	Synonyms []SynonymGroup `json:"synonyms"`
 
-	version  string
-	byEntity map[string]*EntityType
-	byMetric map[string]*Metric
-	byDim    map[string]*Dimension // key: entity + "." + name
-	aliases  map[string][]AliasHit // normalized alias → hits
+	version   string
+	byEntity  map[string]*EntityType
+	byMetric  map[string]*Metric
+	byDim     map[string]*Dimension // key: entity + "." + name
+	aliases   map[string][]AliasHit // normalized alias → hits
+	synByTerm map[string][]int      // entity + "\x1f" + normalized term → indexes into Synonyms
+}
+
+// SynonymGroup is one set of names that mean the same provider or
+// application. Terms[0] is the display name. Seed, allowed only for a
+// provider, is the canonical id the group stands for when the caller has no
+// entity of their own by any of its names (provider seeding, N-C2): carriers
+// are public, so naming one reveals nothing about any tenant. Applications are
+// never seeded from here — the change ledger and incidents match an
+// application by the value the WORKSPACE stores, so an application only
+// resolves to an entity the caller's own data holds.
+type SynonymGroup struct {
+	Entity string   `json:"entity"`
+	Seed   string   `json:"seed,omitempty"`
+	Terms  []string `json:"terms"`
 }
 
 // EntityType is one queryable kind of object.

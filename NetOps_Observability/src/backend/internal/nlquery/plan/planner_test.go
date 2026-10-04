@@ -79,6 +79,7 @@ type visAll struct{}
 func (visAll) Visible(context.Context, ast.EntityRef) (bool, error)        { return true, nil }
 func (visAll) Count(context.Context, string, []ast.EntityRef) (int, error) { return 5, nil }
 func (visAll) CrossTenant() bool                                           { return true }
+func (visAll) ProviderMapped(context.Context, string) (bool, error)        { return true, nil }
 func (visAll) Now() time.Time                                              { return now }
 
 func run(t *testing.T, sc *fakeScope, js string) *ResultSet {

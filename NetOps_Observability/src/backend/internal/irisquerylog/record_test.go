@@ -218,8 +218,9 @@ func (fakeScope) Visible(_ context.Context, r ast.EntityRef) (bool, error) { ret
 func (fakeScope) Count(context.Context, string, []ast.EntityRef) (int, error) {
 	return 3, nil
 }
-func (fakeScope) CrossTenant() bool { return false }
-func (fakeScope) Now() time.Time    { return time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC) }
+func (fakeScope) CrossTenant() bool                                    { return false }
+func (fakeScope) ProviderMapped(context.Context, string) (bool, error) { return true, nil }
+func (fakeScope) Now() time.Time                                       { return time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC) }
 
 const goodAST = `{"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","entities":[{"type":"site","id":"site:dfw-hq"}],"time_range":{"kind":"relative","last":"2h"}}`
 

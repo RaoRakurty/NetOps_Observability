@@ -84,6 +84,29 @@ func TestParseRejects(t *testing.T) {
 		"alias collides two entity types": func(m map[string]any) {
 			first(m, "entities")["aliases"] = append(first(m, "entities")["aliases"].([]any), "router")
 		},
+		"synonym on a site": func(m map[string]any) {
+			m["synonyms"] = append(m["synonyms"].([]any), map[string]any{"entity": "site", "terms": []any{"HQ", "Head Office"}})
+		},
+		"application seed": func(m map[string]any) {
+			m["synonyms"] = append(m["synonyms"].([]any), map[string]any{"entity": "application", "seed": "app:crm", "terms": []any{"CRM", "Customer CRM"}})
+		},
+		"seed not a provider id": func(m map[string]any) { first(m, "synonyms")["seed"] = "provider:Not Valid" },
+		"duplicate seed": func(m map[string]any) {
+			m["synonyms"] = append(m["synonyms"].([]any), map[string]any{"entity": "provider", "seed": first(m, "synonyms")["seed"], "terms": []any{"Another Carrier"}})
+		},
+		"synonym is a metric word": func(m map[string]any) {
+			m["synonyms"] = append(m["synonyms"].([]any), map[string]any{"entity": "provider", "seed": "provider:lossy", "terms": []any{"Packet Loss"}})
+		},
+		"synonym is an entity-type word": func(m map[string]any) {
+			m["synonyms"] = append(m["synonyms"].([]any), map[string]any{"entity": "application", "terms": []any{"Router App", "router"}})
+		},
+		"one term in two groups": func(m map[string]any) {
+			m["synonyms"] = append(m["synonyms"].([]any), map[string]any{"entity": "application", "terms": []any{"SFDC", "Sales Cloud"}})
+		},
+		"unseeded group with one term": func(m map[string]any) {
+			m["synonyms"] = append(m["synonyms"].([]any), map[string]any{"entity": "application", "terms": []any{"Lonely"}})
+		},
+		"unknown synonym field": func(m map[string]any) { first(m, "synonyms")["tenant"] = "t-a" },
 	}
 	for name, f := range cases {
 		if err := mutate(t, f); err == nil {
@@ -132,5 +155,35 @@ func TestNormalizeAlias(t *testing.T) {
 		if got := NormalizeAlias(in); got != want {
 			t.Errorf("NormalizeAlias(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// Synonym lookups: a group is found by any of its terms, per entity type, and
+// only providers carry seeds.
+func TestSynonymLookups(t *testing.T) {
+	c := MustLoad()
+	g := c.SynonymsOf("application", "o365")
+	if len(g) != 1 || g[0].Terms[0] != "Office 365" || g[0].Seed != "" {
+		t.Fatalf("o365 → %+v", g)
+	}
+	if g := c.SynonymsOf("provider", "o365"); len(g) != 0 {
+		t.Fatalf("an application synonym must not answer for providers: %+v", g)
+	}
+	if g := c.SynonymsOf("provider", "Level-3"); len(g) != 1 || g[0].Seed != "provider:lumen" {
+		t.Fatalf("Level-3 → %+v", g)
+	}
+	if !c.IsSeed("provider:att") || c.IsSeed("app:salesforce") || c.IsSeed("provider:acme-private") {
+		t.Fatal("IsSeed must answer only for catalog provider seeds")
+	}
+	for _, s := range c.Seeds("provider") {
+		if s.Entity != "provider" || s.Seed == "" {
+			t.Fatalf("Seeds(provider) returned %+v", s)
+		}
+	}
+	if len(c.Seeds("application")) != 0 {
+		t.Fatal("applications are never seeded from the catalog")
+	}
+	if !c.IsVocabulary("Packet-Loss") || c.IsVocabulary("comcast") {
+		t.Fatal("IsVocabulary must answer for catalog words only")
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"netops/backend/ai"
@@ -22,6 +23,7 @@ import (
 	"netops/backend/internal/aiscore"
 	"netops/backend/internal/entityalias"
 	"netops/backend/internal/irisconvo"
+	"netops/backend/internal/irishypo"
 	"netops/backend/internal/irisquerylog"
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/compile"
@@ -32,6 +34,7 @@ import (
 	"netops/backend/internal/nlquery/validate"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/tac"
+	"netops/backend/models"
 )
 
 // ai_handlers.go — the Iris AI HTTP surface. POST /api/ai/ask runs the
@@ -211,6 +214,9 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 	if conv != nil {
 		s.recordAskTurn(r, claims, conv, question, &ans, &ran)
 	}
+	// N-B3: hold the investigation's hypotheses under the decision's id, in the
+	// asker's tenant — before the ledger closes, so it records them.
+	s.aiHypothesesHold(r, claims, rec, &ans)
 	decisionID := s.aiDecisionFinish(r, claims, rec, &ans, nil)
 	// AI audit (best-effort): who asked, intent, modules, provider — never the
 	// question text or any retrieved data (no PII/secret in the audit line).
@@ -228,12 +234,15 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 // no LLM can). All reads ride the caller's tenant-scoped aiDataSource.
 func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestrator {
 	ds := aiDataSource{srv: s, ctx: r.Context(), scope: s.chTenantScope(r), claims: claims}
-	tools := ai.Tools(ds)
 	// IRIS Phase A: the read-only troubleshooting tools, wired to the seams this
 	// deployment actually has. A nil seam means the tool is NOT registered, so
 	// the assistant can never answer from a capability that is absent.
 	deps := s.aiTroubleshootDeps(r, claims)
-	tools.AddTroubleshootTools(ds, deps)
+	// Tracker 337 N-A5 — one brain, one registry: this is the ONLY place an
+	// Iris tool registry is built. The copilot agent loop takes its tools and
+	// its policy engine from this orchestrator (orch.Toolbox()), so a tool
+	// exists on both paths or on neither.
+	tools := ai.BuildToolRegistry(ds, deps, aiDocsIndex)
 	// Every audited tool step also lands in the decision ledger when this
 	// request is a ledgered decision (nil Recorder otherwise: a no-op).
 	toolAudit, ledger := s.aiToolAudit(claims), aidecision.FromContext(r.Context())
@@ -774,7 +783,10 @@ func (a aiTACCatalog) Lookup(query string, limit int) []ai.TACKnowledgeHit {
 // ---- Iris NL: entity aliases + resolution (tracker 337 N-C2) ----------------
 //
 // /api/ai/aliases        GET own aliases · PUT create/re-point · DELETE ?entity_type=&alias=
-// /api/ai/entities/resolve  POST {text, types[]} → the resolution ladder's answer
+// /api/ai/entities/resolve  POST {text, types[], suggest?} → the resolution ladder's answer
+//      suggest=true additionally asks the AI model for the name the operator
+//      probably meant when every deterministic rung found nothing; its
+//      candidates are disclosed as the model's and always need confirmation.
 //
 // §3a: per-tenant DATA → requirePerm + tenant filter. The owning tenant is
 // stamped from the principal, never the body; a Global (cross-tenant) view
@@ -883,8 +895,9 @@ func (s *server) handleAIEntityResolve(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, nlqBodyCap)
 	var req struct {
-		Text  string   `json:"text"`
-		Types []string `json:"types"`
+		Text    string   `json:"text"`
+		Types   []string `json:"types"`
+		Suggest bool     `json:"suggest"`
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -902,26 +915,111 @@ func (s *server) handleAIEntityResolve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	res, err := s.nlqResolver(r, claims).Resolve(r.Context(), req.Text, req.Types)
+	// A request that may reach a model rides the same per-principal limit as
+	// every other Iris model path (LLM04); a plain lookup does not.
+	if req.Suggest && !s.copilotLimiter.AllowN(claims.Tenant+"|"+claims.Sub, envInt("COPILOT_RATE_PER_MIN", 20)) {
+		writeError(w, http.StatusTooManyRequests, fmt.Errorf("Iris AI rate limit exceeded — slow down"))
+		return
+	}
+	res, err := s.nlqResolverWith(r, claims, req.Suggest).Resolve(r.Context(), req.Text, req.Types)
 	if err != nil {
 		logError("iris.resolve", "entity resolution failed", errf(err))
 		writeError(w, http.StatusInternalServerError, errors.New("entity resolution is unavailable"))
 		return
 	}
+	if res.SuggestionError != "" {
+		// The deterministic answer stands; the missing suggestion is said in
+		// the response and recorded here (§10: no silent failure).
+		logWarn("iris.resolve", "model name suggestion unavailable", map[string]any{"reason": res.SuggestionError})
+	}
+	if req.Suggest {
+		s.aiSuggestAudit(r, claims, res)
+	}
 	writeJSON(w, http.StatusOK, res)
 }
 
-// nlqResolver builds the resolution ladder over the caller's own aliases and
-// visible inventory.
-func (s *server) nlqResolver(r *http.Request, claims jwtClaims) resolve.Resolver {
-	return resolve.Resolver{Cat: s.nlqCatalog, L: nlqLookups{s: s, h: s.nlqScopeFor(r, claims), claims: claims}}
+// aiSuggestAudit enters one model-suggestion request into the platform audit
+// trail: who asked and how it ended (suggested / none / unavailable / not
+// needed) — never the typed text or the suggested names.
+func (s *server) aiSuggestAudit(r *http.Request, claims jwtClaims, res resolve.Result) {
+	if s.audit == nil {
+		return
+	}
+	outcome := "not_needed" // a deterministic rung answered; no model was asked
+	switch {
+	case res.SuggestionError != "":
+		outcome = "unavailable"
+	case res.Disclosure != "":
+		outcome = "suggested"
+	case len(res.Refs) == 0:
+		outcome = "none"
+	}
+	tenant, cross := principalTenant(claims)
+	s.audit.Record(AuditEvent{
+		Actor: claims.Sub, Tenant: tenant, Cross: cross, SessionID: claims.Sid,
+		Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: "allow",
+		Remote: auditClientIP(r), Detail: map[string]any{"action": "ai.entity_suggest", "outcome": outcome, "candidates": len(res.Refs)},
+	})
 }
 
-// nlqLookups implements resolve.Lookups from the caller's own scope.
+// nlqResolver builds the resolution ladder over the caller's own aliases,
+// visible inventory and adjacency. The model-suggestion rung is NOT wired:
+// this is the ladder the query compiler uses, and nothing a model suggests is
+// ever applied to a query without the operator confirming it first.
+func (s *server) nlqResolver(r *http.Request, claims jwtClaims) resolve.Resolver {
+	return s.nlqResolverWith(r, claims, false)
+}
+
+// nlqResolverWith is nlqResolver, plus — when suggest is set, Iris is on and
+// the caller may use a model — the model-suggestion rung, on the caller's own
+// provider chain and daily budget (nlqModel: credential-shaped text redacted
+// before it leaves, LLM06; budget refused before any call, LLM04).
+func (s *server) nlqResolverWith(r *http.Request, claims jwtClaims, suggest bool) resolve.Resolver {
+	l := newNLQLookups(s, r, claims)
+	res := resolve.Resolver{Cat: s.nlqCatalog, L: l, Topo: l}
+	if suggest {
+		if fb := s.nlqModelFallback(r, claims); fb.Model != nil {
+			res.Suggest = modelc.NameSuggester{Model: fb.Model}
+		} else {
+			res.Suggest = nlqNoSuggester{}
+		}
+	}
+	return res
+}
+
+// nlqNoSuggester answers a suggestion request on a deployment (or for a
+// caller) with no usable model: the response says the suggestion was
+// unavailable rather than pretending the model found nothing.
+type nlqNoSuggester struct{}
+
+func (nlqNoSuggester) SuggestNames(context.Context, string, []string) ([]string, error) {
+	return nil, errors.New("no model is available to this caller")
+}
+
+// nlqLookups implements resolve.Lookups and resolve.Topology from the
+// caller's own scope. One value serves one request: the query compiler asks
+// the ladder once per word group, so the reads that are not already in
+// memory (the application seeds, the adjacency set) are made once and kept
+// for that request only (cache) — never across requests or callers.
 type nlqLookups struct {
 	s      *server
 	h      *nlqScope
 	claims jwtClaims
+	cache  *nlqLookupCache
+}
+
+type nlqLookupCache struct {
+	appsOnce sync.Once
+	apps     []resolve.Named
+	appsErr  error
+
+	linksOnce sync.Once
+	links     []topoLink
+	linksErr  error
+}
+
+func newNLQLookups(s *server, r *http.Request, claims jwtClaims) nlqLookups {
+	return nlqLookups{s: s, h: s.nlqScopeFor(r, claims), claims: claims, cache: &nlqLookupCache{}}
 }
 
 func (l nlqLookups) Aliases(context.Context) ([]resolve.Alias, error) {
@@ -957,7 +1055,84 @@ func (l nlqLookups) Inventory(ctx context.Context, types []string) ([]resolve.Na
 			out = append(out, resolve.Named{Type: "circuit", ID: "circuit:" + c.ID, Names: []string{c.ID, c.Local.Device + " " + c.Local.Interface}})
 		}
 	}
+	if want["application"] {
+		// Application seeding (N-C2): the applications the caller's OWN data
+		// names. Providers are not listed here — a carrier is named through
+		// the caller's aliases or the catalog's public seeds (resolve rung 5).
+		apps, err := l.appSeeds(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, apps...)
+	}
 	return out, nil
+}
+
+func (l nlqLookups) appSeeds(ctx context.Context) ([]resolve.Named, error) {
+	if l.cache == nil {
+		return l.h.appSeeds(ctx)
+	}
+	l.cache.appsOnce.Do(func() { l.cache.apps, l.cache.appsErr = l.h.appSeeds(ctx) })
+	return l.cache.apps, l.cache.appsErr
+}
+
+// Neighbors implements resolve.Topology: the devices adjacent to deviceID in
+// the deduped LLDP/CDP/BGP-LS link set built over the caller's VISIBLE
+// devices only (the same gather /api/topology/view uses), so a neighbour
+// outside the caller's inventory can never be returned. An unreadable
+// adjacency source is an error — the rung must not report "no neighbours"
+// for "unknown".
+func (l nlqLookups) Neighbors(ctx context.Context, deviceID string) ([]resolve.Named, error) {
+	id := strings.TrimPrefix(deviceID, "device:")
+	devs := l.s.visibleDevicesFor(l.claims)
+	byID := make(map[string]resolve.Named, len(devs))
+	for _, d := range devs {
+		// The role the inventory knows: an explicit role label, else the
+		// inferred device type. "generic" is the inference saying it does
+		// not know — passed on as unknown, so the rung asks rather than
+		// excludes (or includes) the device on a guess.
+		role := strings.TrimSpace(d.Labels["role"])
+		if role == "" {
+			if role = inferDeviceType(d); role == "generic" {
+				role = ""
+			}
+		}
+		byID[d.ID] = resolve.Named{Type: "device", ID: "device:" + d.ID, Names: []string{d.Name, d.ID}, Role: role}
+	}
+	if _, ok := byID[id]; !ok {
+		return nil, nil
+	}
+	links, err := l.topoLinks(ctx, devs)
+	if err != nil {
+		return nil, err
+	}
+	var out []resolve.Named
+	for _, ln := range links {
+		other := ""
+		switch id {
+		case ln.Source:
+			other = ln.Target
+		case ln.Target:
+			other = ln.Source
+		}
+		if n, ok := byID[other]; ok && other != id {
+			out = append(out, n)
+		}
+	}
+	return out, nil
+}
+
+func (l nlqLookups) topoLinks(ctx context.Context, devs []models.Device) ([]topoLink, error) {
+	read := func() ([]topoLink, error) {
+		tctx, cancel := context.WithTimeout(ctx, aiTopoTimeout)
+		defer cancel()
+		return l.s.gatherTopoLinks(tctx, devs)
+	}
+	if l.cache == nil {
+		return read()
+	}
+	l.cache.linksOnce.Do(func() { l.cache.links, l.cache.linksErr = read() })
+	return l.cache.links, l.cache.linksErr
 }
 
 func (l nlqLookups) Visible(ctx context.Context, entityType, id string) (bool, error) {
@@ -1032,7 +1207,7 @@ const nlqModelFallbackTier = ai.TierStrong
 // provider this caller may use, Model stays nil and the fallback is silently
 // unavailable — the grammar's answer stands, key-free.
 func (s *server) nlqModelFallback(r *http.Request, claims jwtClaims) modelc.Fallback {
-	f := modelc.Fallback{Cat: s.nlqCatalog, L: nlqLookups{s: s, h: s.nlqScopeFor(r, claims), claims: claims}}
+	f := modelc.Fallback{Cat: s.nlqCatalog, L: newNLQLookups(s, r, claims)}
 	if !aiEnabled() || strings.EqualFold(strings.TrimSpace(os.Getenv("IRIS_NLQ_MODEL_FALLBACK")), "false") ||
 		s.aiTenantCfg == nil || s.copilotCfg == nil || len(s.providerCandidatesForTier(claims, nlqModelFallbackTier)) == 0 {
 		return f
@@ -2155,6 +2330,7 @@ func aiLedgerAnswerEntries(rec *aidecision.Recorder, ans *ai.Answer) {
 		ids = append(ids, c.ID)
 	}
 	rec.AddEvidence(ids)
+	aiLedgerHypotheses(rec, ans.Hypotheses)
 	if len(ans.NextActions) > 0 {
 		b, err := json.Marshal(ans.NextActions)
 		if err != nil {
@@ -2209,6 +2385,114 @@ func (s *server) aiAskAudit(r *http.Request, claims jwtClaims, decisionID string
 		Method: r.Method, Path: r.URL.Path, Status: status, Decision: decision,
 		Remote: auditClientIP(r), Detail: detail,
 	})
+}
+
+// aiLedgerHypotheses records the investigation's hypotheses (tracker 337
+// N-B3): one HYPOTHESIS_CREATED per hypothesis — its id and final state, the
+// method that opened it, the tool that tested it, and the hash of the
+// hypothesis exactly as shown — plus HYPOTHESIS_REJECTED for each one its tool
+// rejected. Iris never records ROOT_CAUSE_SELECTED: the engine owns the cause.
+func aiLedgerHypotheses(rec *aidecision.Recorder, set *irishypo.Set) {
+	if rec == nil || set == nil {
+		return
+	}
+	for _, h := range set.Hypotheses {
+		skill, tool := "", ""
+		if len(h.Transitions) > 0 {
+			skill, tool = h.Transitions[0].Skill, h.Transitions[0].Tool
+		}
+		e := aidecision.Entry{EventType: aidecision.HypothesisCreated, Skill: skill, Tool: tool,
+			Outcome: h.ID + ":" + strings.ToLower(string(h.State))}
+		if b, err := json.Marshal(h); err == nil {
+			e.ResultSHA256 = aidecision.SHA256Hex(b)
+		} else {
+			logError("ai.ledger", "hypothesis not hashable", errf(err))
+		}
+		rec.Add(e)
+		if h.State == irishypo.Rejected {
+			rec.Add(aidecision.Entry{EventType: aidecision.HypothesisRejected, Skill: skill, Tool: tool, Outcome: h.ID})
+		}
+	}
+}
+
+// aiHypothesesHoldTimeout bounds the one hypothesis-store write per answer.
+const aiHypothesesHoldTimeout = 2 * time.Second
+
+// aiHypothesesHold names the answer's hypothesis set and holds it in the
+// asker's tenant (tracker 337 N-B3). The id is the decision's when the ask is
+// ledgered (one id names the investigation everywhere), else a fresh one; the
+// tenant is the token's, never anything in the request. A set that cannot be
+// held keeps no id — the answer still carries it inline — and the failure is
+// logged, never fatal to the answer.
+func (s *server) aiHypothesesHold(r *http.Request, claims jwtClaims, rec *aidecision.Recorder, ans *ai.Answer) {
+	if ans == nil || ans.Hypotheses == nil {
+		return
+	}
+	ans.Hypotheses.ID = ""
+	if s.aiHypotheses == nil {
+		return
+	}
+	id := rec.DecisionID()
+	if id == "" {
+		fresh, err := aidecision.NewID()
+		if err != nil {
+			logError("ai.hypotheses", "no id — this investigation's hypotheses are not held", errf(err))
+			return
+		}
+		id = fresh
+	}
+	set := *ans.Hypotheses
+	set.ID = id
+	tenant, _ := principalTenant(claims)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), aiHypothesesHoldTimeout)
+	defer cancel()
+	if err := s.aiHypotheses.Put(ctx, tenant, set); err != nil {
+		logError("ai.hypotheses", "hold failed", map[string]any{"tenant": tenant, "error": err.Error()})
+		return
+	}
+	ans.Hypotheses.ID = id
+}
+
+// handleAIHypotheses serves GET /api/ai/hypotheses/{id}: one investigation's
+// hypotheses, in the caller's own tenant (the platform owner: any tenant).
+// Another tenant's id, an expired one and a malformed one are the same 404.
+// Gated by ai.investigate — hypotheses exist only where the investigation loop
+// runs — and by infrastructure:read, which every read they were built from
+// needs.
+func (s *server) handleAIHypotheses(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET"))
+		return
+	}
+	if !aiEnabled() {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Iris AI is disabled — set FEATURE_AI=true"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok || !s.requireAIEntitlement(w, claims, aientitlement.Investigate) {
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/ai/hypotheses/")
+	if !irishypo.ValidID(id) {
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+		return
+	}
+	if s.aiHypotheses == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("investigation hypotheses are not held on this deployment"))
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	set, err := s.aiHypotheses.Get(r.Context(), tenant, cross, id)
+	switch {
+	case errors.Is(err, irishypo.ErrNotFound):
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+	case err != nil:
+		logError("ai.hypotheses", "read failed", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("the investigation's hypotheses could not be read"))
+	default:
+		writeJSON(w, http.StatusOK, set)
+	}
 }
 
 // handleAIDecisions serves GET /api/ai/decisions.

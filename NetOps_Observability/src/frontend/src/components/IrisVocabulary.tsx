@@ -36,7 +36,11 @@ export const METHOD_LABEL: Record<string, string> = {
   canonical_id: "exact id",
   tenant_alias: "your team's name",
   inventory_name: "inventory name",
+  topology_neighbor: "connected to the device you named",
+  catalog_synonym: "another common name",
+  catalog_seed: "well-known provider name",
   partial_name: "partial match — confirm",
+  model_suggestion: "suggested by the AI model — confirm",
 };
 
 const MAX_ROWS_SHOWN = 20;
@@ -62,12 +66,17 @@ export function cell(v: unknown): string {
   return String(v);
 }
 
-function RefLine({ r }: { r: IrisRef }) {
+function RefLine({ r, onUse }: { r: IrisRef; onUse?: (r: IrisRef) => void }) {
   return (
     <li style={text14} data-testid="iris-ref">
       <strong>{r.input_text}</strong> → {TYPE_LABEL[r.entity_type] ?? r.entity_type} <code>{r.entity_id}</code>{" "}
       <span style={muted}>({METHOD_LABEL[r.resolution_method] ?? r.resolution_method}, {Math.round(r.confidence * 100)}% sure)</span>
+      {r.model_suggested_text && <span style={muted}> — the model read it as &quot;{r.model_suggested_text}&quot;</span>}
       {r.needs_confirmation && <span className="badge warn" style={{ fontSize: 14, marginLeft: 6 }}>needs confirmation</span>}
+      {onUse && (
+        <button type="button" className="dash-btn" style={{ fontSize: 14, marginLeft: 6 }} onClick={() => onUse(r)}
+          aria-label={`Use ${r.entity_id} for ${r.input_text}`}>Yes, that is what I meant</button>
+      )}
     </li>
   );
 }
@@ -87,6 +96,7 @@ export default function IrisVocabulary() {
   const [checkText, setCheckText] = useState("");
   const [check, setCheck] = useState<IrisResolution | null>(null);
   const [checkErr, setCheckErr] = useState("");
+  const [suggested, setSuggested] = useState(false);
 
   const [question, setQuestion] = useState("");
   const [compiled, setCompiled] = useState<IrisCompiled | null>(null);
@@ -175,12 +185,35 @@ export default function IrisVocabulary() {
   const runCheck = async () => {
     setCheck(null);
     setCheckErr("");
+    setSuggested(false);
     if (!checkText.trim()) return;
     try {
       setCheck(await api.resolveIrisEntity(checkText.trim()));
     } catch (e) {
       setCheckErr(operatorError(e, "Could not check that name."));
     }
+  };
+
+  // Ask the AI model what the operator probably meant. Nothing it suggests is
+  // used until the operator confirms it — and confirming only fills in step 1,
+  // where saving the name is still their own click.
+  const askModel = async () => {
+    setCheckErr("");
+    if (!checkText.trim()) return;
+    try {
+      setCheck(await api.resolveIrisEntity(checkText.trim(), [], true));
+      setSuggested(true);
+    } catch (e) {
+      setCheckErr(operatorError(e, "Could not ask the AI model."));
+    }
+  };
+
+  const useSuggestion = (r: IrisRef) => {
+    setNewAlias(checkText.trim());
+    setNewType(r.entity_type);
+    setNewTarget(r.entity_id);
+    setCandidates([]);
+    setAddErr("");
   };
 
   const understand = async () => {
@@ -311,9 +344,28 @@ export default function IrisVocabulary() {
       {check && (
         <div data-testid="iris-check">
           {(check.refs ?? []).length === 0
-            ? <div style={muted}>Iris does not recognise that name.</div>
-            : <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>{(check.refs ?? []).map((r) => <RefLine key={r.entity_id} r={r} />)}</ul>}
-          {check.ambiguous && <div style={{ ...text14, color: "var(--warn)" }}>More than one match — Iris will ask which you mean.</div>}
+            ? <div style={muted} data-testid="iris-check-none">Iris does not recognise that name.</div>
+            : (
+              <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                {(check.refs ?? []).map((r) => (
+                  <RefLine key={r.entity_id} r={r} onUse={r.resolution_method === "model_suggestion" ? useSuggestion : undefined} />
+                ))}
+              </ul>
+            )}
+          {check.set && <div style={text14}>Iris will use all of these.</div>}
+          {check.ambiguous && !check.set && <div style={{ ...text14, color: "var(--warn)" }}>More than one match — Iris will ask which you mean.</div>}
+          {check.disclosure && (
+            <div style={{ ...text14, color: "var(--warn)" }} data-testid="iris-model-disclosure">
+              {check.disclosure} Choosing one fills in step 1; it becomes a name your team uses only when you click Add.
+            </div>
+          )}
+          {suggested && check.suggestion_error && <div style={muted}>The AI model could not be asked right now.</div>}
+          {suggested && !check.suggestion_error && (check.refs ?? []).length === 0 && <div style={muted}>The AI model had no suggestion that matches anything you can see.</div>}
+          {!suggested && (check.refs ?? []).length === 0 && (
+            <button type="button" className="dash-btn" style={{ ...text14, marginTop: 4 }} onClick={() => void askModel()}>
+              Ask the AI model what I meant
+            </button>
+          )}
         </div>
       )}
 

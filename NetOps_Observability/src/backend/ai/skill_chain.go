@@ -47,6 +47,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"netops/backend/internal/irishypo"
 )
 
 const (
@@ -147,7 +149,9 @@ func (f *chainFacts) addSignals(signals []string) {
 			case value == CondSignatureUncollected:
 				f.diagUncollected = true
 			case value == CondSignatureNone:
-				// Reserved: derived below from the tool outcome, never asserted.
+				// Reserved: the ROUTING fact is derived below from the tool
+				// outcome. A diagnostic asserts it only as its "captured and
+				// scored" marker for the hypothesis tracker; it is ignored here.
 			case reCondSignature.MatchString(value):
 				f.signatures[value] = true
 			}
@@ -306,12 +310,19 @@ type chainState struct {
 	// they bound. The prose disclosures the operator sees are built from the
 	// same events; this is their countable form.
 	cutoffs []string
+	// hyp holds the investigation's hypotheses (tracker 337 N-B3). Fed only
+	// with planned steps, tool outcomes and server facts — never model text.
+	hyp *irishypo.Tracker
+	// diagCaptured: a protocol diagnostic this turn captured and scored output
+	// (hypothesis.go noteDiagCapture). Read by the hypotheses only.
+	diagCaptured bool
 }
 
 func newChainState() *chainState {
 	return &chainState{
 		seenCite: map[string]bool{}, visited: map[string]bool{},
 		seenMod: map[string]bool{}, facts: newChainFacts(),
+		hyp: irishypo.NewTracker(hypothesisWording()),
 	}
 }
 

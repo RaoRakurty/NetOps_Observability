@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type AiDecisionEntry, type AiDecisionEventType } from "../services/api";
 import { httpFailure, operatorError } from "../lib/errors";
+import HypothesisTrace from "./HypothesisTrace";
 
 export const EVENT_LABEL: Record<AiDecisionEventType, string> = {
   QUESTION_RECEIVED: "question received", INVESTIGATION_STARTED: "investigation started",
@@ -75,6 +76,7 @@ function answerLine(a?: AiDecisionEntry): string {
 function Steps({ decisionId }: { decisionId: string }) {
   const [steps, setSteps] = useState<AiDecisionEntry[] | null>(null);
   const [err, setErr] = useState("");
+  const [showHyp, setShowHyp] = useState(false);
   useEffect(() => {
     let live = true;
     api.aiDecisions({ decisionId, limit: RECENT_ENTRIES })
@@ -84,20 +86,33 @@ function Steps({ decisionId }: { decisionId: string }) {
   }, [decisionId]);
   if (err) return <div role="alert" style={{ ...text14, color: "var(--bad)" }}>{err}</div>;
   if (!steps) return <div style={muted}>Loading steps…</div>;
+  // The investigation's hypotheses (N-B3) are held under the decision's id.
+  const hasHyp = steps.some((s) => s.event_type === "HYPOTHESIS_CREATED");
   return (
-    <ol start={0} style={{ margin: "4px 0 0", paddingLeft: 22 }} data-testid="iris-decision-steps">
-      {steps.map((s) => (
-        <li key={s.id} style={{ ...text14, marginBottom: 2 }}>
-          <span>{EVENT_LABEL[s.event_type] ?? s.event_type}</span>
-          {s.tool && <span style={mono}> {s.tool}</span>}
-          {s.skill && <span style={muted}> — method {s.skill}</span>}
-          {s.outcome && <span style={muted}> — {s.outcome}</span>}
-          {typeof s.item_count === "number" && s.item_count > 0 && <span style={muted}> — {s.item_count} item{s.item_count === 1 ? "" : "s"}</span>}
-          {s.args_sha256 && <span style={mono} title={s.args_sha256}> args {short(s.args_sha256)}</span>}
-          {s.result_sha256 && <span style={mono} title={s.result_sha256}> result {short(s.result_sha256)}</span>}
-        </li>
-      ))}
-    </ol>
+    <>
+      <ol start={0} style={{ margin: "4px 0 0", paddingLeft: 22 }} data-testid="iris-decision-steps">
+        {steps.map((s) => (
+          <li key={s.id} style={{ ...text14, marginBottom: 2 }}>
+            <span>{EVENT_LABEL[s.event_type] ?? s.event_type}</span>
+            {s.tool && <span style={mono}> {s.tool}</span>}
+            {s.skill && <span style={muted}> — method {s.skill}</span>}
+            {s.outcome && <span style={muted}> — {s.outcome}</span>}
+            {typeof s.item_count === "number" && s.item_count > 0 && <span style={muted}> — {s.item_count} item{s.item_count === 1 ? "" : "s"}</span>}
+            {s.args_sha256 && <span style={mono} title={s.args_sha256}> args {short(s.args_sha256)}</span>}
+            {s.result_sha256 && <span style={mono} title={s.result_sha256}> result {short(s.result_sha256)}</span>}
+          </li>
+        ))}
+      </ol>
+      {hasHyp && (
+        <div style={{ margin: "4px 0 0 22px" }}>
+          <button type="button" className="dash-btn" style={text14} aria-expanded={showHyp}
+            onClick={() => setShowHyp(!showHyp)}>
+            {showHyp ? "Hide lines of investigation" : "Show lines of investigation"}
+          </button>
+          {showHyp && <HypothesisTrace investigationId={decisionId} />}
+        </div>
+      )}
+    </>
   );
 }
 

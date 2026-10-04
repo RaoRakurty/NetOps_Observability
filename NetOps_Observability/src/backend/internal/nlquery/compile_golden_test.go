@@ -102,6 +102,36 @@ func (l fixtureLookups) Visible(_ context.Context, _ string, id string) (bool, e
 	return l.w.owner[id] == l.w.a.Tenant, nil
 }
 
+// Neighbors is tenant A's adjacency view: every link record either tenant's
+// collectors saw, restricted to devices tenant A owns — the root's
+// gatherTopoLinks(visibleDevices) does the same, so the trap link from a
+// tenant-B device is never a neighbour.
+func (l fixtureLookups) Neighbors(_ context.Context, deviceID string) ([]resolve.Named, error) {
+	devs := map[string]resolve.Named{}
+	for _, d := range l.w.a.Devices {
+		devs[d.ID] = resolve.Named{Type: "device", ID: d.ID, Names: []string{d.Name, tail(d.ID)}, Role: d.Role}
+	}
+	if _, ok := devs[deviceID]; !ok {
+		return nil, nil
+	}
+	var out []resolve.Named
+	for _, inv := range []*inventory{l.w.a, l.w.b} {
+		for _, ln := range inv.Links {
+			other := ""
+			switch deviceID {
+			case ln.A:
+				other = ln.B
+			case ln.B:
+				other = ln.A
+			}
+			if n, ok := devs[other]; ok {
+				out = append(out, n)
+			}
+		}
+	}
+	return out, nil
+}
+
 // canon is the semantic encoding: filter and entity ORDER carries no meaning,
 // so both are sorted before comparing.
 func canon(a *ast.AST) string {
@@ -129,7 +159,7 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 	w := loadWorld(t)
 	cases := loadCases(t)
 	ctx := context.Background()
-	comp := compile.Compiler{Cat: cat, R: resolve.Resolver{Cat: cat, L: fixtureLookups{w: w}}}
+	comp := compile.Compiler{Cat: cat, R: resolve.Resolver{Cat: cat, L: fixtureLookups{w: w}, Topo: fixtureLookups{w: w}}}
 
 	perCat := map[string]*score{}
 	var qScore, pScore score

@@ -383,6 +383,159 @@
         "ram on the new york firewall past 12 hours",
         "NYC-FW-1 mem usage last 12 hrs"
       ]
+    },
+    {
+      "id": "devices-009",
+      "category": "devices",
+      "question": "Show CPU on the routers next to DFW-CORE-1 for the last hour.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "routers next to DFW-CORE-1",
+            "type": "device",
+            "id": "device:dfw-edge-1",
+            "method": "discovery"
+          },
+          {
+            "input": "routers next to DFW-CORE-1",
+            "type": "device",
+            "id": "device:dfw-edge-2",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "device",
+          "metric": "cpu_util_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:dfw-edge-1"
+            },
+            {
+              "type": "device",
+              "id": "device:dfw-edge-2"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "device:dfw-edge-1",
+            "device:dfw-edge-2"
+          ]
+        }
+      },
+      "paraphrases": [
+        "cpu on routers connected to dfw-core-1 last hour",
+        "cpu of the routers adjacent to DFW-CORE-1 over the last hour",
+        "routers attached to dfw-core-1 cpu past hour"
+      ]
+    },
+    {
+      "id": "devices-010",
+      "category": "devices",
+      "question": "Show memory on the firewall next to NYC-CORE-1 over the last 24 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "firewall next to NYC-CORE-1",
+            "type": "device",
+            "id": "device:nyc-fw-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "device",
+          "metric": "mem_util_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:nyc-fw-1"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "24h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "device:nyc-fw-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "memory on the firewall connected to nyc-core-1 last 24h",
+        "memory of the firewall beside NYC-CORE-1 past 24 hours"
+      ]
+    },
+    {
+      "id": "devices-011",
+      "category": "devices",
+      "question": "Show CPU on the switch next to AUS-EDGE-1 for the last 6 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "show_metric",
+        "entities": [
+          {
+            "input": "switch next to AUS-EDGE-1",
+            "type": "device",
+            "id": "device:aus-sw-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "metric_series",
+          "target": "device",
+          "metric": "cpu_util_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:aus-sw-1"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "6h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "timeseries",
+          "must_include_refs": [
+            "device:aus-sw-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "cpu on the switch connected to aus-edge-1 last 6h",
+        "cpu of the switch adjacent to AUS-EDGE-1 over the past 6 hours"
+      ]
     }
   ]
 }

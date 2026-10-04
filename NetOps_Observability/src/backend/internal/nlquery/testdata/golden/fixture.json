@@ -1,6 +1,6 @@
 {
   "schema": "correlix.nlquery.golden.fixture/v1",
-  "description": "Fixed two-tenant inventory the golden NL corpus is written against. Tenant A (acme) is the asking tenant in every case. Tenant B (globex) exists so isolation can be asserted: none of its ids may appear in a tenant-A expectation, and its device gx-edge-9 carries the SAME site label slug as tenant A's site:dfw-hq (the isolation trap — site expansion must never pick it up). Device 'site' is the raw site LABEL slug (what Labels[\"site\"] holds), not an id. All times are UTC; 'now' is fixed so relative and calendar windows are deterministic.",
+  "description": "Fixed two-tenant inventory the golden NL corpus is written against. Tenant A (acme) is the asking tenant in every case. Tenant B (globex) exists so isolation can be asserted: none of its ids may appear in a tenant-A expectation, and its device gx-edge-9 carries the SAME site label slug as tenant A's site:dfw-hq (the isolation trap — site expansion must never pick it up). Device 'site' is the raw site LABEL slug (what Labels[\"site\"] holds), not an id. 'links' are the adjacency (LLDP/CDP) records each tenant's collectors saw; tenant B's second link names a tenant-A device (the topology trap — a neighbour lookup must never cross it). All times are UTC; 'now' is fixed so relative and calendar windows are deterministic.",
   "now": "2026-09-24T15:00:00Z",
   "tenant_a": {
     "tenant": "t-acme",
@@ -12,17 +12,25 @@
       {"id": "site:sjc-br", "name": "San Jose Branch", "aliases": ["san jose", "sjc"]}
     ],
     "devices": [
-      {"id": "device:dfw-edge-1", "name": "DFW-EDGE-1", "site": "dfw-hq"},
-      {"id": "device:dfw-edge-2", "name": "DFW-EDGE-2", "site": "dfw-hq"},
-      {"id": "device:dfw-core-1", "name": "DFW-CORE-1", "site": "dfw-hq"},
-      {"id": "device:dfw-fw-1", "name": "DFW-FW-1", "site": "dfw-hq"},
-      {"id": "device:aus-edge-1", "name": "AUS-EDGE-1", "site": "aus-br"},
-      {"id": "device:aus-sw-1", "name": "AUS-SW-1", "site": "aus-br"},
-      {"id": "device:hou-edge-1", "name": "HOU-EDGE-1", "site": "hou-br"},
-      {"id": "device:nyc-edge-1", "name": "NYC-EDGE-1", "site": "nyc-dc"},
-      {"id": "device:nyc-core-1", "name": "NYC-CORE-1", "site": "nyc-dc"},
-      {"id": "device:nyc-fw-1", "name": "NYC-FW-1", "site": "nyc-dc"},
-      {"id": "device:sjc-edge-1", "name": "SJC-EDGE-1", "site": "sjc-br"}
+      {"id": "device:dfw-edge-1", "name": "DFW-EDGE-1", "site": "dfw-hq", "role": "router"},
+      {"id": "device:dfw-edge-2", "name": "DFW-EDGE-2", "site": "dfw-hq", "role": "router"},
+      {"id": "device:dfw-core-1", "name": "DFW-CORE-1", "site": "dfw-hq", "role": "core-switch"},
+      {"id": "device:dfw-fw-1", "name": "DFW-FW-1", "site": "dfw-hq", "role": "firewall"},
+      {"id": "device:aus-edge-1", "name": "AUS-EDGE-1", "site": "aus-br", "role": "router"},
+      {"id": "device:aus-sw-1", "name": "AUS-SW-1", "site": "aus-br", "role": "access-switch"},
+      {"id": "device:hou-edge-1", "name": "HOU-EDGE-1", "site": "hou-br", "role": "router"},
+      {"id": "device:nyc-edge-1", "name": "NYC-EDGE-1", "site": "nyc-dc", "role": "router"},
+      {"id": "device:nyc-core-1", "name": "NYC-CORE-1", "site": "nyc-dc", "role": "core-switch"},
+      {"id": "device:nyc-fw-1", "name": "NYC-FW-1", "site": "nyc-dc", "role": "firewall"},
+      {"id": "device:sjc-edge-1", "name": "SJC-EDGE-1", "site": "sjc-br", "role": "router"}
+    ],
+    "links": [
+      {"a": "device:dfw-core-1", "b": "device:dfw-edge-1"},
+      {"a": "device:dfw-core-1", "b": "device:dfw-edge-2"},
+      {"a": "device:dfw-fw-1", "b": "device:dfw-core-1"},
+      {"a": "device:aus-edge-1", "b": "device:aus-sw-1"},
+      {"a": "device:nyc-core-1", "b": "device:nyc-edge-1"},
+      {"a": "device:nyc-core-1", "b": "device:nyc-fw-1"}
     ],
     "interfaces": [
       {"id": "interface:dfw-edge-1/ge-0/0/0", "device": "device:dfw-edge-1"},
@@ -115,9 +123,13 @@
       {"id": "site:gx-mia-br", "name": "Globex Miami Branch", "aliases": ["miami", "mia"]}
     ],
     "devices": [
-      {"id": "device:gx-core-1", "name": "GX-CORE-1", "site": "gx-chi-hq"},
-      {"id": "device:gx-edge-2", "name": "GX-EDGE-2", "site": "gx-mia-br"},
-      {"id": "device:gx-edge-9", "name": "GX-EDGE-9", "site": "dfw-hq"}
+      {"id": "device:gx-core-1", "name": "GX-CORE-1", "site": "gx-chi-hq", "role": "core-switch"},
+      {"id": "device:gx-edge-2", "name": "GX-EDGE-2", "site": "gx-mia-br", "role": "router"},
+      {"id": "device:gx-edge-9", "name": "GX-EDGE-9", "site": "dfw-hq", "role": "router"}
+    ],
+    "links": [
+      {"a": "device:gx-edge-9", "b": "device:gx-core-1"},
+      {"a": "device:gx-edge-9", "b": "device:dfw-core-1"}
     ],
     "interfaces": [
       {"id": "interface:gx-edge-9/ge-0/0/0", "device": "device:gx-edge-9"},

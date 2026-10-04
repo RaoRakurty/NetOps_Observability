@@ -10,8 +10,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 
 const aiDecisions = vi.fn();
+const aiHypotheses = vi.fn();
 vi.mock("../services/api", () => ({
-  api: { aiDecisions: (...a: unknown[]) => aiDecisions(...a) },
+  api: {
+    aiDecisions: (...a: unknown[]) => aiDecisions(...a),
+    aiHypotheses: (...a: unknown[]) => aiHypotheses(...a),
+  },
 }));
 
 import DecisionLedger, { summarize } from "./DecisionLedger";
@@ -24,7 +28,7 @@ const entry = (over = {}) => ({
   surface: "ask", at: "2026-10-01T10:00:00Z", ...over,
 });
 
-beforeEach(() => { aiDecisions.mockReset(); });
+beforeEach(() => { aiDecisions.mockReset(); aiHypotheses.mockReset(); });
 afterEach(() => cleanup());
 
 describe("summarize", () => {
@@ -91,6 +95,37 @@ describe("DecisionLedger", () => {
     aiDecisions.mockRejectedValue(new Error("503 Service Unavailable: {\"error\":\"the AI decision ledger is not available on this deployment\"}"));
     render(<DecisionLedger />);
     expect(await screen.findByRole("alert")).toHaveTextContent("The AI decision ledger is not available on this deployment.");
+  });
+
+  it("opens the investigation's lines of investigation from a decision that held them", async () => {
+    aiDecisions.mockImplementation((opts: { decisionId?: string }) => Promise.resolve(opts.decisionId
+      ? { scope: "tenant", event_types: [], decisions: [
+        entry({ seq: 0 }),
+        entry({ seq: 1, event_type: "HYPOTHESIS_CREATED", skill: "interface-down", tool: "get_device_state", outcome: "link-down:supported", result_sha256: H }),
+        entry({ seq: 2, event_type: "ANSWER_RETURNED", outcome: "answered" }),
+      ] }
+      : { scope: "tenant", event_types: [], decisions: [entry({ seq: 0 })] }));
+    aiHypotheses.mockResolvedValue({
+      id: D1, notice: "Lines of investigation, not causes.", engine: { note: "No correlation-engine verdict is in scope." },
+      hypotheses: [{ id: "link-down", statement: "The interface in scope is down", layer: "physical", state: "SUPPORTED", transitions: [] }],
+    });
+    render(<DecisionLedger />);
+    await screen.findByTestId("iris-ledger-list");
+    fireEvent.click(screen.getByText("Show steps"));
+    const steps = await screen.findByTestId("iris-decision-steps");
+    expect(steps).toHaveTextContent("hypothesis get_device_state — method interface-down — link-down:supported");
+    fireEvent.click(screen.getByText("Show lines of investigation"));
+    expect(await screen.findByTestId("iris-hypotheses")).toHaveTextContent("The interface in scope is down");
+    expect(aiHypotheses).toHaveBeenCalledWith(D1);
+  });
+
+  it("offers no lines of investigation for a decision that held none", async () => {
+    aiDecisions.mockResolvedValue({ scope: "tenant", event_types: [], decisions: [entry({ seq: 0 })] });
+    render(<DecisionLedger />);
+    await screen.findByTestId("iris-ledger-list");
+    fireEvent.click(screen.getByText("Show steps"));
+    await screen.findByTestId("iris-decision-steps");
+    expect(screen.queryByText("Show lines of investigation")).toBeNull();
   });
 
   it("says so when nothing has been recorded", async () => {

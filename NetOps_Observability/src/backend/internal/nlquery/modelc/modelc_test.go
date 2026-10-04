@@ -60,8 +60,9 @@ func (scopeA) Visible(_ context.Context, r ast.EntityRef) (bool, error) { return
 func (scopeA) Count(context.Context, string, []ast.EntityRef) (int, error) {
 	return 3, nil
 }
-func (scopeA) CrossTenant() bool { return false }
-func (scopeA) Now() time.Time    { return testNow }
+func (scopeA) CrossTenant() bool                                    { return false }
+func (scopeA) ProviderMapped(context.Context, string) (bool, error) { return true, nil }
+func (scopeA) Now() time.Time                                       { return testNow }
 
 // stubModel replays canned replies and records every call.
 type stubModel struct {
@@ -432,6 +433,7 @@ type permissive struct{}
 func (permissive) Visible(context.Context, ast.EntityRef) (bool, error)        { return true, nil }
 func (permissive) Count(context.Context, string, []ast.EntityRef) (int, error) { return 1, nil }
 func (permissive) CrossTenant() bool                                           { return true }
+func (permissive) ProviderMapped(context.Context, string) (bool, error)        { return true, nil }
 func (permissive) Now() time.Time                                              { return testNow }
 
 func TestEveryEmbeddedExampleDecodesAndValidates(t *testing.T) {

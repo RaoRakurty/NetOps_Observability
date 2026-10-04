@@ -65,6 +65,9 @@ var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	"/api/ai/conversations/":       aientitlement.NLQuery,
 	"/api/ai/queries":              aientitlement.NLQuery,
 	"/api/ai/queries/":             aientitlement.NLQuery,
+	// N-B3 investigation hypotheses: they exist only where the investigation
+	// loop runs, so reading one back is part of ai.investigate.
+	"/api/ai/hypotheses/": aientitlement.Investigate,
 
 	"/api/ai/tenant-config": adminPlane, // requireAdmin: the tenant's own BYO provider key
 	"/api/ai/tenants":       adminPlane, // requirePlatformAdmin: per-tenant AI switches
@@ -185,6 +188,7 @@ var aiRouteProbes = []aiProbe{
 	{"/api/ai/conversations/", http.MethodPost, "/api/ai/conversations/" + probeID + "/messages", `{"question":"cpu on edge-a"}`, aientitlement.NLQuery},
 	{"/api/ai/queries", http.MethodGet, "/api/ai/queries", "", aientitlement.NLQuery},
 	{"/api/ai/queries/", http.MethodPost, "/api/ai/queries/" + probeID + "/corrections", `{"kind":"wrong_entity"}`, aientitlement.NLQuery},
+	{"/api/ai/hypotheses/", http.MethodGet, "/api/ai/hypotheses/" + probeID, "", aientitlement.Investigate},
 }
 
 // policyWithout is a mapping for the tier in force that grants everything
@@ -251,6 +255,10 @@ func TestAIRoutesRefuseWithoutTheirEntitlementAndAdmitWithIt(t *testing.T) {
 	t.Setenv("FEATURE_AI", "true")
 	t.Setenv("FEATURE_COPILOT", "true") // the provider-proxy switch on top of ai.chat
 	t.Setenv("COPILOT_RATE_PER_MIN", "0")
+	// ai.investigate's deployment switch and tenant switch, so its probes are
+	// decided by the tier mapping alone, like every other entitlement's.
+	t.Setenv("FEATURE_AI_TOOLS", "true")
+	t.Setenv("AI_TOOLS_ALL_TENANTS", "true")
 	// One fixture for every probe: each probe sets the policy it needs before
 	// each request, so nothing a previous probe did changes its gate decision.
 	// (A fixture per probe cost ~0.35 s each, ~10x that under -race, against a

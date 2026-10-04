@@ -64,7 +64,7 @@ type phrasing struct {
 // Unparsed, with the grammar's own tallies.
 func unparsedPhrasings(t *testing.T, cat *catalog.Catalog, w *world) (out []phrasing, total int) {
 	t.Helper()
-	comp := compile.Compiler{Cat: cat, R: resolve.Resolver{Cat: cat, L: fixtureLookups{w: w}}}
+	comp := compile.Compiler{Cat: cat, R: resolve.Resolver{Cat: cat, L: fixtureLookups{w: w}, Topo: fixtureLookups{w: w}}}
 	for _, c := range loadCases(t) {
 		loc, err := time.LoadLocation(firstNonEmpty(c.Context.TZ, "UTC"))
 		if err != nil {

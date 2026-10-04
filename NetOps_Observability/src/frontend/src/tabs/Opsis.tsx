@@ -23,6 +23,7 @@ import {
 import Icon from "../components/Icon";
 import IrisVocabulary from "../components/IrisVocabulary";
 import PresentationPlanRenderer from "../iris/PresentationPlanRenderer";
+import HypothesisTrace from "../iris/HypothesisTrace";
 import { answerCiteHref } from "../iris/links";
 import QueryCorrection from "../iris/QueryCorrection";
 import { hasAIEntitlement } from "../lib/aiEntitlements";
@@ -1029,6 +1030,9 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
       )}
 
       {ans.text && <div className="op-text">{ans.text}</div>}
+      {/* Lines of investigation (N-B3): what each check observed, beside the
+          correlation engine's verdict — never a cause of Iris's own. */}
+      {ans.hypotheses && <HypothesisTrace set={ans.hypotheses} />}
       {ans.mode === "data_query" && ans.data?.result !== undefined && (
         <div data-testid="op-data-answer"><PresentationPlanRenderer result={ans.data.result} /></div>
       )}

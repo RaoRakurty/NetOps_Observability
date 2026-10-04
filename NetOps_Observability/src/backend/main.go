@@ -121,6 +121,7 @@ import (
 	"netops/backend/internal/aiscore"
 	"netops/backend/internal/entityalias"
 	"netops/backend/internal/irisconvo"
+	"netops/backend/internal/irishypo"
 	"netops/backend/internal/irisquerylog"
 	"netops/backend/internal/nlquery/catalog"
 	"netops/backend/internal/secobs"
@@ -380,6 +381,10 @@ type server struct {
 	// hashes only. nil = the ledger is off (asks are not ledgered).
 	aiDecisions       aidecision.Store
 	aiDecisionMetrics *aidecision.Metrics
+	// Investigation hypotheses (tracker 337 N-B3): each investigation's set,
+	// held per tenant (bounded, in memory) so the trace can be re-opened by id.
+	// nil = not held (the answer still carries its own set).
+	aiHypotheses irishypo.Store
 
 	deviceSites *deviceSiteStore // operator device→site bindings (intent)
 	wanPolicy   *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
@@ -1189,6 +1194,7 @@ func newServer() *server {
 		// The AI decision ledger (N-A6) + its counters, rendered on /metrics.
 		aiDecisions:       newAIDecisionStore(),
 		aiDecisionMetrics: aidecision.NewMetrics(),
+		aiHypotheses:      irishypo.NewMemStore(),
 
 		deviceSites: deviceSites,
 		wanPolicy:   wanPolicy,
@@ -3775,6 +3781,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/queries", s.handleAIQueries)                // Iris NL: recent questions (N-C8)
 	mux.HandleFunc("/api/ai/queries/", s.handleAIQueryCorrection)       // Iris NL: "that's not what I meant" (N-C8)
 	mux.HandleFunc("/api/ai/decisions", s.handleAIDecisions)            // Iris AI decision ledger (N-A6): admins, own tenant
+	mux.HandleFunc("/api/ai/hypotheses/", s.handleAIHypotheses)         // Iris investigation hypotheses (N-B3): own tenant, by id
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Self-describing API + ITSM connector status.
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)

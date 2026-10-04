@@ -168,7 +168,15 @@ type inventory struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 		Site string `json:"site"` // the raw site LABEL slug, not an id
+		Role string `json:"role,omitempty"`
 	} `json:"devices"`
+	// Links are the adjacency records this tenant's collectors saw (N-C2
+	// topology rung). Either end may name a device of ANOTHER tenant (the
+	// trap); a neighbour lookup must never return it.
+	Links []struct {
+		A string `json:"a"`
+		B string `json:"b"`
+	} `json:"links"`
 	Interfaces []struct {
 		ID     string `json:"id"`
 		Device string `json:"device"`
@@ -383,7 +391,23 @@ func (s fixtureScope) Count(ctx context.Context, target string, refs []ast.Entit
 }
 
 func (s fixtureScope) CrossTenant() bool { return s.cross }
-func (s fixtureScope) Now() time.Time    { return s.w.now }
+
+// ProviderMapped: the fixture attributes circuits to providers, so a provider
+// is mapped when one of the caller's visible circuits carries it.
+func (s fixtureScope) ProviderMapped(ctx context.Context, id string) (bool, error) {
+	for _, inv := range []*inventory{s.w.a, s.w.b} {
+		for _, c := range inv.Circuits {
+			if c.Provider != id {
+				continue
+			}
+			if vis, _ := s.Visible(ctx, ast.EntityRef{Type: "circuit", ID: c.ID}); vis {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+func (s fixtureScope) Now() time.Time { return s.w.now }
 
 // matches: refs of one type are OR'd, different types AND'd (ast.EntityRef).
 func (w *world) matches(id string, refs []ast.EntityRef) bool {

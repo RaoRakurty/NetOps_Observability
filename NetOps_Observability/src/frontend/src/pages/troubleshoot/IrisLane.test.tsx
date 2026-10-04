@@ -369,3 +369,45 @@ describe("model output is untrusted (§15 LLM02)", () => {
     expect(screen.getByRole("button", { name: "Ask Iris" })).toBeInTheDocument();
   });
 });
+
+// ── lines of investigation (N-B3) ────────────────────────────────────────────
+
+describe("the investigation trace shows its hypotheses", () => {
+  const hypotheses = {
+    notice: "Lines of investigation, not causes: each one records what a check observed. Only the correlation engine names a root cause.",
+    engine: { tier: "suspected", statement: "P-9 — High CPU on leaf-2", citation_id: "verdict:p9", note: "This is the correlation engine's verdict (Suspected)." },
+    hypotheses: [{
+      id: "control-plane-pressure", statement: "Control-plane CPU or memory on the device is above 90%", layer: "method",
+      state: "SUPPORTED", evidence: ["state:platform:dev:1"],
+      transitions: [{ from: "TESTING", to: "SUPPORTED", round: 1, skill: "osi-bisection", reason: "control-plane CPU is above 90%" }],
+    }],
+  };
+
+  it("renders them beside the path, with the engine's verdict labelled as the engine's", async () => {
+    aiAsk.mockResolvedValue(answer({ chain: [hop(), hop({ name: "interface-down", selected: "rule", round: 2 })], hypotheses }));
+    render(<IrisLane caseId="corr-abc123" />);
+    fireEvent.click(screen.getByRole("button", { name: "Ask Iris" }));
+    const trace = await screen.findByTestId("iris-hypotheses");
+    expect(screen.getByTestId("iris-chain")).toBeInTheDocument();
+    expect(screen.getByTestId("iris-hyp-engine")).toHaveTextContent("Correlation engine verdict: Suspected");
+    expect(screen.getByTestId("iris-hyp-state")).toHaveTextContent("Supported by evidence");
+    expect(trace).toHaveTextContent("Only the correlation engine names a root cause.");
+    // Rendering a set rides the answer: no second call.
+    Object.values(otherApi).forEach((f) => expect(f).not.toHaveBeenCalled());
+  });
+
+  it("draws no hypotheses when the answer carries none", async () => {
+    render(<IrisLane caseId="corr-abc123" />);
+    fireEvent.click(screen.getByRole("button", { name: "Ask Iris" }));
+    await screen.findByText("Nothing is wrong right now.");
+    expect(screen.queryByTestId("iris-hypotheses")).toBeNull();
+  });
+
+  it("shows a failed ask as an operator sentence, never developer text", async () => {
+    aiAsk.mockRejectedValue(new Error('502 Bad Gateway: {"error":"dial tcp 10.1.2.3:443: i/o timeout"}'));
+    render(<IrisLane caseId="corr-abc123" />);
+    fireEvent.click(screen.getByRole("button", { name: "Ask Iris" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).not.toMatch(/10\.1\.2\.3|dial tcp|\{/);
+  });
+});
