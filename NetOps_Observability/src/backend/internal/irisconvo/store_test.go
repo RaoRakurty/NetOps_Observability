@@ -112,6 +112,20 @@ func TestStateIsBoundedAndDeduplicated(t *testing.T) {
 	}
 }
 
+// The record a chip edit is filed against is kept only in the shape a record
+// id has: a stored state is not trusted to hold one.
+func TestStateKeepsOnlyARecordShapedLastLogID(t *testing.T) {
+	const good = "11111111-2222-4333-8444-555555555555"
+	if n := NormalizeState(State{LastLogID: good}); n.LastLogID != good {
+		t.Fatalf("a record id is kept: %q", n.LastLogID)
+	}
+	for _, bad := range []string{"x", "' OR 1=1 --", "AAAAAAAA-2222-4333-8444-555555555555", good + "0"} {
+		if n := NormalizeState(State{LastLogID: bad}); n.LastLogID != "" {
+			t.Errorf("%q kept", bad)
+		}
+	}
+}
+
 func TestReturnedConversationsAreCopies(t *testing.T) {
 	m := NewMemStore()
 	c, _ := m.Create(bg, "acme", "alice")

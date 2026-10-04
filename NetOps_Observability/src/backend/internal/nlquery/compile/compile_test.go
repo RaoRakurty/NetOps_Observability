@@ -125,6 +125,18 @@ func TestFollowUpsRewriteThePriorQuery(t *testing.T) {
 	if prior.Time.Last != "2h" {
 		t.Fatal("a follow-up must never mutate the prior query")
 	}
+	// "show only X" is the same refinement as "only X".
+	r2 := run(t, "show only dallas", x)
+	if r2.AST == nil || len(r2.AST.Refs) != 2 {
+		t.Fatalf("\"show only dallas\" = \"only dallas\": %+v", r2)
+	}
+	// "only WAN policies" narrows a change list to the WAN class (Part 2 §50 Q5).
+	x.PriorAST = &ast.AST{V: 1, Type: ast.ChangeList, Target: "change", Time: ast.TimeRange{Kind: ast.TimeRelative, Last: "24h"},
+		Filters: []ast.Filter{{Field: "actor", Op: "in", Values: []string{"John Smith"}}}}
+	r = run(t, "only wan policies", x)
+	if r.AST == nil || len(r.AST.Filters) != 2 || r.AST.Filters[1].Field != "class" || r.AST.Filters[1].Values[0] != "wan" {
+		t.Fatalf("\"only wan policies\" keeps the actor and adds class=wan: %+v", r)
+	}
 }
 
 func TestListLimitIsNotATimeWindow(t *testing.T) {

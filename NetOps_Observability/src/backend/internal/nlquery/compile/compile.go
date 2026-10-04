@@ -661,7 +661,7 @@ var (
 	everyIncRe  = regexp.MustCompile(`\b(\d{1,3})\s*(minutes?|mins?|hours?)\s+before\s+(?:every|each|all)\s+(sdwan|vpn|cloud|wan|isp|internet|dia)?\s*(?:incidents?|outages?)\b`)
 	notTypeRe   = regexp.MustCompile(`\bnon[- ]?(dns|config|cloud|security|route|routing|network)\b`)
 	actorWords  = map[string]bool{"type": true, "site": true, "actor": true, "person": true, "seam": true, "device": true, "owner": true,
-		"they": true, "he": true, "she": true, "them": true, "it": true, "someone": true, "anyone": true, "you": true, "we": true, "i": true}
+		"they": true, "he": true, "she": true, "him": true, "her": true, "them": true, "it": true, "someone": true, "anyone": true, "you": true, "we": true, "i": true}
 )
 
 var timeUnitWord = regexp.MustCompile(`^(?:minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|months?)$`)
@@ -817,7 +817,7 @@ func (s *state) changeTypeFilter() *ast.Filter {
 		value string
 	}
 	rules := []rule{
-		{regexp.MustCompile(`\broute and network policy\b|\bwan (?:related )?changes?\b|\bwan policy\b`), "class", "wan"},
+		{regexp.MustCompile(`\broute and network policy\b|\bwan (?:related )?changes?\b|\bwan polic(?:y|ies)\b`), "class", "wan"},
 		{regexp.MustCompile(`\b(?:security policy|firewall|acls?)\b`), "type", "SECURITY_POLICY_CHANGE"},
 		{regexp.MustCompile(`\b(?:routing|route|bgp policy|routing policy)\b`), "type", "ROUTE_CHANGE"},
 		{regexp.MustCompile(`\b(?:sdwan policy|network policy|network change)\b`), "type", "NETWORK_CHANGE"},
@@ -918,7 +918,7 @@ func (s *state) incidents() (Result, error) {
 // ---- follow-ups ------------------------------------------------------------------
 
 var (
-	onlyRe        = regexp.MustCompile(`^(?:now\s+)?(?:only|just)\s+(.+?)(?:\s+changes?)?$`)
+	onlyRe        = regexp.MustCompile(`^(?:now\s+)?(?:show\s+(?:me\s+)?)?(?:only|just)\s+(.+?)(?:\s+changes?)?$`)
 	compareRe     = regexp.MustCompile(`\bcompare (?:it|that|this|them) (?:with|to|against) (yesterday|last week|the previous \w+)`)
 	lastNRe       = regexp.MustCompile(`^(?:show|now show|and)?\s*(?:me\s+)?(?:the\s+)?(?:last|past)\s+`)
 	changedMostRe = regexp.MustCompile(`\bwhich (?:interfaces?|devices?|circuits?|sites?) changed (?:the )?most\b`)

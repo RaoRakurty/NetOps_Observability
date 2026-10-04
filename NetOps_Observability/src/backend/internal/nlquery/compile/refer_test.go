@@ -139,6 +139,43 @@ func TestWhatElseDidTheyChange(t *testing.T) {
 	}
 }
 
+// "He" / "she" is ONE person: bound only when the previous change list shows
+// exactly one actor. With several, it is neither one of them (a guess) nor all
+// of them (a widening) — it stays unbound and the question is not understood.
+func TestASingularPronounBindsOnlyASinglePerson(t *testing.T) {
+	one := withConv(&Conversation{Actors: []string{"John Smith"}, ChangeIDs: []string{"chg-1"}})
+	for _, q := range []string{"show what he changed", "what else did he change yesterday", "what did she change", "show changes by him"} {
+		r := run(t, q, one)
+		if r.AST == nil {
+			t.Errorf("%q with one actor must compile: %+v", q, r)
+			continue
+		}
+		if f := filterOf(r.AST, "actor"); f == nil || strings.Join(f.Values, ",") != "John Smith" {
+			t.Errorf("%q: he = the one actor, got %+v", q, r.AST.Filters)
+		}
+	}
+	two := withConv(&Conversation{Actors: []string{"alice", "bob"}, ChangeIDs: []string{"chg-1"}})
+	r := run(t, "what else did he change", two)
+	if r.AST != nil || !r.Unparsed || strings.Join(r.NotUnderstood, ",") != "he" {
+		t.Fatalf("he among two people must stay unbound, naming 'he': %+v", r)
+	}
+	// They still means all of them.
+	if r := run(t, "what else did they change", two); r.AST == nil {
+		t.Fatalf("they = every actor: %+v", r)
+	}
+	// Nothing to point at.
+	if r := run(t, "what did he change", cx); r.AST != nil || !r.Unparsed {
+		t.Fatalf("no conversation: he must stay unbound: %+v", r)
+	}
+	// With an incident on screen and several people, "he" is still not the
+	// incident.
+	x := two
+	x.IncidentID = "11111111-2222-4333-8444-555555555555"
+	if r := run(t, "what did he change", x); r.AST != nil {
+		t.Fatalf("he among two people must not fall back to the incident: %+v", r.AST)
+	}
+}
+
 // With an incident on screen AND a previous change list, "they" are the
 // people that list showed — the incident only takes the pronouns left over.
 func TestConversationActorsOutrankTheIncidentOnScreen(t *testing.T) {
