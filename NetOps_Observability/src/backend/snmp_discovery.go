@@ -292,7 +292,7 @@ func (c discoveryScanConfig) public() publicDiscoveryConfig {
 	if c.Ranges == nil {
 		c.Ranges = []string{}
 	}
-	return publicDiscoveryConfig{Enabled: c.Enabled, Ranges: c.Ranges, AllowNonPrivate: c.AllowNonPrivate, IntervalSec: c.IntervalSec}
+	return publicDiscoveryConfig(c)
 }
 
 // =============================================================================

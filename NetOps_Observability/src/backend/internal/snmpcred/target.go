@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-package backend
+package snmpcred
 
 import (
 	"strings"
 
 	"netops/backend/collectors"
-	"netops/backend/internal/snmpcred"
 	"netops/backend/models"
 )
 
-// collectorTargetFor builds one device's poll target for the collector pool.
+// TargetFor builds one device's poll target for the collector pool.
 //
 // Credentials come only from the SNMP profiles, through
-// snmpcred.ResolveForDevice: the sentinel's learned override wins while it
+// ResolveForDevice: the sentinel's learned override wins while it
 // stands, else the bound credential_ref, both tenant-checked (§3a). The override
 // applies WHETHER OR NOT a credential_ref is bound — the previous inline builder
 // consulted it only inside `if dev.CredentialRef != ""`, so every
@@ -22,7 +21,7 @@ import (
 // adopted kept polling with the SNMP_COMMUNITY/"public" fallback and stayed
 // down (proven live 2026-10-04). No profile → empty creds → the poller's
 // global SNMP_COMMUNITY fallback.
-func collectorTargetFor(dev models.Device, creds *snmpcred.Store, overrides *credOverrideStore) collectors.Target {
+func TargetFor(dev models.Device, creds *Store, overrides *OverrideStore) collectors.Target {
 	tgt := collectors.Target{
 		ID: dev.ID,
 		// The stored name (raw sysName for scan devices) rides along so the trap
@@ -41,8 +40,8 @@ func collectorTargetFor(dev models.Device, creds *snmpcred.Store, overrides *cre
 		// families (BGP/IS-IS) to gNMI on them, staying the floor elsewhere.
 		GNMICapable: strings.EqualFold(dev.Labels["gnmi"], "true"),
 	}
-	if c, ok := snmpcred.ResolveForDevice(creds, overrides, dev); ok {
-		snmpcred.ApplyCredToTarget(&tgt, c)
+	if c, ok := ResolveForDevice(creds, overrides, dev); ok {
+		ApplyCredToTarget(&tgt, c)
 	}
 	return tgt
 }

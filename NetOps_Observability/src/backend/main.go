@@ -795,11 +795,11 @@ func newServer() *server {
 			}
 			// MONITORING-END
 			// SNMP credentials come only from UI-configured credential profiles
-			// — resolved by collectorTargetFor (collector_targets.go), which
+			// — resolved by snmpcred.TargetFor (internal/snmpcred/target.go), which
 			// honours the sentinel's learned override whether or not a
 			// credential_ref is bound. No profile → the poller's global
 			// SNMP_COMMUNITY fallback.
-			out = append(out, collectorTargetFor(dev, snmpCredsRef, credOverridesRef))
+			out = append(out, snmpcred.TargetFor(dev, snmpCredsRef, credOverridesRef))
 		}
 		return out
 	})

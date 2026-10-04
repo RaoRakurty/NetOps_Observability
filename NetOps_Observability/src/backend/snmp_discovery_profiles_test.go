@@ -124,7 +124,7 @@ func TestScanTriesProfilesInNameOrderAndBindsTheAnsweringOne(t *testing.T) {
 
 	// Polling then uses exactly what discovery proved.
 	for _, d := range devs {
-		tgt := collectorTargetFor(d, cs, nil)
+		tgt := snmpcred.TargetFor(d, cs, nil)
 		switch d.Address {
 		case "10.20.0.1":
 			if tgt.Community != "mike" {
@@ -425,12 +425,12 @@ func TestSNMPProfilesNeverCrossTenantsForScanOrPoll(t *testing.T) {
 
 	// Poll: globex's device can never be polled with acme's secret.
 	for _, ref := range []string{"acme-v2c", "ACME-V2C"} {
-		tgt := collectorTargetFor(models.Device{ID: "g", Address: "10.0.0.5", TenantID: "globex", CredentialRef: ref}, s.snmpCreds, nil)
+		tgt := snmpcred.TargetFor(models.Device{ID: "g", Address: "10.0.0.5", TenantID: "globex", CredentialRef: ref}, s.snmpCreds, nil)
 		if tgt.Community == "s3cret" {
 			t.Fatalf("acme secret used for a globex device via ref %q", ref)
 		}
 	}
-	if tgt := collectorTargetFor(models.Device{ID: "a", Address: "10.0.0.6", TenantID: "acme", CredentialRef: "acme-v2c"}, s.snmpCreds, nil); tgt.Community != "s3cret" {
+	if tgt := snmpcred.TargetFor(models.Device{ID: "a", Address: "10.0.0.6", TenantID: "acme", CredentialRef: "acme-v2c"}, s.snmpCreds, nil); tgt.Community != "s3cret" {
 		t.Fatalf("own-tenant profile must apply: %+v", tgt)
 	}
 

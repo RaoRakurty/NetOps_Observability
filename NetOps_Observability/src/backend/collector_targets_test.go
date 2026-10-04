@@ -53,7 +53,7 @@ func TestCollectorTargetHonoursOverrideForUnboundDevice(t *testing.T) {
 	if err := ov.Set(credOverride{DeviceID: dev.ID, ProfileID: "vedge-ro", Since: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	tgt := collectorTargetFor(dev, creds, ov)
+	tgt := snmpcred.TargetFor(dev, creds, ov)
 	if tgt.Community != "vedge-ro-secret" || tgt.SNMPVersion == 3 {
 		t.Fatalf("unbound device must poll with the sentinel's adopted profile, got community=%q version=%d", tgt.Community, tgt.SNMPVersion)
 	}
@@ -65,20 +65,20 @@ func TestCollectorTargetOverrideBeatsBoundRef(t *testing.T) {
 	if err := ov.Set(credOverride{DeviceID: dev.ID, ProfileID: "vedge-ro", BoundRef: "core-v3", Since: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	if tgt := collectorTargetFor(dev, creds, ov); tgt.Community != "vedge-ro-secret" || tgt.SNMPVersion == 3 {
+	if tgt := snmpcred.TargetFor(dev, creds, ov); tgt.Community != "vedge-ro-secret" || tgt.SNMPVersion == 3 {
 		t.Fatalf("override must win over the bound ref while it stands, got %+v", tgt)
 	}
 	if err := ov.Clear(dev.ID); err != nil {
 		t.Fatal(err)
 	}
-	if tgt := collectorTargetFor(dev, creds, ov); tgt.SNMPVersion != 3 || tgt.V3User != "mon" {
+	if tgt := snmpcred.TargetFor(dev, creds, ov); tgt.SNMPVersion != 3 || tgt.V3User != "mon" {
 		t.Fatalf("with no override the bound v3 profile applies, got %+v", tgt)
 	}
 }
 
 func TestCollectorTargetUnboundNoOverrideUsesPollerDefault(t *testing.T) {
 	creds, ov := targetFixture(t)
-	tgt := collectorTargetFor(models.Device{ID: "x", Address: "10.40.0.9", TenantID: "acme", Labels: map[string]string{"gnmi": "TRUE"}}, creds, ov)
+	tgt := snmpcred.TargetFor(models.Device{ID: "x", Address: "10.40.0.9", TenantID: "acme", Labels: map[string]string{"gnmi": "TRUE"}}, creds, ov)
 	if tgt.Community != "" || tgt.SNMPVersion != 0 {
 		t.Fatalf("no profile → empty creds (poller's SNMP_COMMUNITY fallback), got %+v", tgt)
 	}
@@ -86,7 +86,7 @@ func TestCollectorTargetUnboundNoOverrideUsesPollerDefault(t *testing.T) {
 		t.Fatalf("target identity fields lost: %+v", tgt)
 	}
 	// Nil stores (early boot) are tolerated.
-	if tgt := collectorTargetFor(models.Device{ID: "x", CredentialRef: "vedge-ro"}, nil, nil); tgt.Community != "" {
+	if tgt := snmpcred.TargetFor(models.Device{ID: "x", CredentialRef: "vedge-ro"}, nil, nil); tgt.Community != "" {
 		t.Fatalf("nil stores must yield no creds, got %+v", tgt)
 	}
 }
@@ -115,7 +115,7 @@ func TestCollectorTargetNeverCrossesTenants(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			tgt := collectorTargetFor(c.dev, creds, ov)
+			tgt := snmpcred.TargetFor(c.dev, creds, ov)
 			if tgt.Community == "acme-secret" || tgt.Community == "globex-secret" {
 				t.Fatalf("cross-tenant secret threaded into %+v", c.dev)
 			}
@@ -123,10 +123,10 @@ func TestCollectorTargetNeverCrossesTenants(t *testing.T) {
 	}
 	// Positive controls: own tenant's profile, and a platform profile on a
 	// tenant device, both apply.
-	if tgt := collectorTargetFor(models.Device{ID: "a1", TenantID: "acme", CredentialRef: "acme-ro"}, creds, ov); tgt.Community != "acme-secret" {
+	if tgt := snmpcred.TargetFor(models.Device{ID: "a1", TenantID: "acme", CredentialRef: "acme-ro"}, creds, ov); tgt.Community != "acme-secret" {
 		t.Fatalf("own-tenant profile must apply, got %+v", tgt)
 	}
-	if tgt := collectorTargetFor(models.Device{ID: "a2", TenantID: "acme", CredentialRef: "vedge-ro"}, creds, ov); tgt.Community != "vedge-ro-secret" {
+	if tgt := snmpcred.TargetFor(models.Device{ID: "a2", TenantID: "acme", CredentialRef: "vedge-ro"}, creds, ov); tgt.Community != "vedge-ro-secret" {
 		t.Fatalf("platform profile must apply to a tenant device, got %+v", tgt)
 	}
 }
