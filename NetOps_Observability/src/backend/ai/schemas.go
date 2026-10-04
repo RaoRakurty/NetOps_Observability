@@ -3,7 +3,11 @@
 
 package ai
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"netops/backend/internal/irishypo"
+)
 
 // Answer modes (HLD §6). The Response Builder validates the assistant's output
 // into one of these typed schemas; the UI renders a card per mode. Every mode
@@ -121,6 +125,12 @@ type Answer struct {
 	// reached (tracker 337 N-A6) — set by the server, never by the model; a
 	// workspace admin looks it up on GET /api/ai/decisions?decision_id=.
 	DecisionID string `json:"decision_id,omitempty"`
+	// Hypotheses are the lines of investigation a skill chain held and what its
+	// tools said about each (tracker 337 N-B3): PROPOSED → TESTING →
+	// SUPPORTED / REJECTED / INCONCLUSIVE, every transition driven by a tool
+	// outcome or a server fact, beside the correlation engine's verdict which
+	// they never override. Set only on a skill-chain answer that opened any.
+	Hypotheses *irishypo.Set `json:"hypotheses,omitempty"`
 }
 
 // IncidentCounts is the normalized incident-count set (spec §6). Every count

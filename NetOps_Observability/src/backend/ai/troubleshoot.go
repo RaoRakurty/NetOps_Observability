@@ -424,6 +424,11 @@ func (t protocolDiagnosticTool) Run(ctx context.Context, p Principal, args ToolA
 		}
 	case rep.Collected:
 		// Fail-closed: signatures ran and none fired. Say so; never invent a cause.
+		// The reserved signature=none is ASSERTED here as the positive marker
+		// that output was captured and scored (N-B3 hypotheses read it). The
+		// chain still derives its own routing fact from the outcome and ignores
+		// the assertion (chainFacts.addSignals), so routing is unchanged.
+		tr.Signals = append(tr.Signals, CondSignature+"="+CondSignatureNone)
 		tr.Notes = append(tr.Notes, firstNonEmpty(rep.Unmatched,
 			"no known signature matched the captured output — report that plainly and show the raw output rather than naming a cause"))
 	case rep.Attempted:

@@ -41,10 +41,11 @@ import (
 // operator was shown, which §35 does not name but which is the decision every
 // other entry leads to. The read-only Iris of today emits QUESTION_RECEIVED,
 // INVESTIGATION_STARTED, PLAN_CREATED, TOOL_SELECTED, TOOL_EXECUTED,
-// POLICY_EVALUATED, EVIDENCE_ADDED, RECOMMENDATION_CREATED and ANSWER_RETURNED;
-// the hypothesis, root-cause and action/approval/execution types are accepted
-// so their producers (N-B3 hypotheses, a future gated action path) need no
-// migration, and are emitted by nothing yet.
+// POLICY_EVALUATED, EVIDENCE_ADDED, HYPOTHESIS_CREATED / HYPOTHESIS_REJECTED
+// (N-B3 investigation hypotheses), RECOMMENDATION_CREATED and ANSWER_RETURNED.
+// ROOT_CAUSE_SELECTED is never emitted by Iris — the correlation engine owns
+// the cause — and the action/approval/execution types are accepted so a future
+// gated action path needs no migration.
 const (
 	QuestionReceived      = "QUESTION_RECEIVED"
 	InvestigationStarted  = "INVESTIGATION_STARTED"

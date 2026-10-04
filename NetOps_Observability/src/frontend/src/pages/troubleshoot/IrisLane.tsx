@@ -22,6 +22,11 @@
 // hop draws no breadcrumb (the skill chip already says it), and a pre-A2 backend
 // sends no chain at all.
 //
+// HYPOTHESES (N-B3). When the investigation held lines of investigation, the
+// backend sends `hypotheses` — each with its state, the check and the fact
+// that moved it, beside the correlation engine's own verdict. They render
+// below the path, never as a cause: the engine alone names one.
+//
 // SECURITY (§15). Model output is untrusted (LLM02): every string here — the
 // narrative, the skill name, the tool name, each citation id — is rendered as an
 // ESCAPED React text node. There is no innerHTML, no dangerouslySetInnerHTML and
@@ -33,6 +38,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api, type AiAnswer, type AiCitation, type AiSkillHop } from "../../services/api";
+import { operatorError } from "../../lib/errors";
+import HypothesisTrace from "../../iris/HypothesisTrace";
 
 /** A relative, same-origin path is safe to link. Everything else is inert text.
  *  Both protocol-relative spellings are rejected: browsers normalise a leading
@@ -103,7 +110,7 @@ export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDra
     try {
       setAns(await api.aiAsk(question, caseId ? { correlation_id: caseId } : {}));
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(operatorError(e, "Iris could not answer just now."));
     } finally {
       setBusy(false);
     }
@@ -177,6 +184,9 @@ export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDra
               })}
             </ol>
           )}
+
+          {/* Lines of investigation (N-B3) — beside the engine's verdict. */}
+          {ans.hypotheses && <HypothesisTrace set={ans.hypotheses} />}
 
           <p className="tsl-iris-text">{ans.text || "No answer."}</p>
 
