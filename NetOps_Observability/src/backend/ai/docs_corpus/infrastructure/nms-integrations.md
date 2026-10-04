@@ -7,7 +7,7 @@ sidebar_position: 9
 
 # Connect a vendor controller
 
-**Infrastructure → Discovery & NMS → NMS Integrations** connects a third-party controller and ingests what that platform has already computed about its own domain: health state, SLA metrics and alarms. This is controller-intelligence ingestion, not log collection. A controller is treated as a domain expert whose view is harvested, normalized and reconciled against the telemetry Correlix collects directly.
+**Infrastructure → NMS Integrations** connects a third-party controller and ingests what that platform has already computed about its own domain: health state, SLA metrics and alarms. This is controller-intelligence ingestion, not log collection. A controller is treated as a domain expert whose view is harvested, normalized and reconciled against the telemetry Correlix collects directly.
 
 Every connector is read-only. None of them writes to a controller or changes its configuration.
 
@@ -21,7 +21,7 @@ Every connector is read-only. None of them writes to a controller or changes its
 
 ### Step 1 - Pick the vendor
 
-Open **Infrastructure → Discovery & NMS**, select the **NMS Integrations** tab, and select the vendor tile. Nine connectors ship:
+Open **Infrastructure → NMS Integrations** and select the vendor tile. Nine connectors ship:
 
 | Connector | Authentication it supports |
 |---|---|

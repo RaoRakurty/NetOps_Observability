@@ -65,7 +65,7 @@ under `docs-portal/docs/`.
 | Feature | Backend evidence | UI surface | Docs | Verdict | Missing |
 |---|---|---|---|---|---|
 | Device inventory + CRUD | `/api/devices*`, `discovery.go` | Infrastructure → Devices; `DeviceDetailPage.tsx` | `infrastructure/devices.md` | exposed | — |
-| SNMP subnet discovery | `ENABLE_SNMP_DISCOVERY`, `/api/discovery/{config,refresh}` | Infrastructure → Discovery & NMS | `onboard-devices/snmp-discovery.md` | exposed | — |
+| SNMP subnet discovery | `ENABLE_SNMP_DISCOVERY`, `/api/discovery/{config,refresh}` | Administration → Data sources → Subnet Discovery (moved 2026-10-04 from Infrastructure → Discovery & NMS) | `onboard-devices/snmp-discovery.md` | exposed | — |
 | SNMP profiles + credentials | `/api/snmp/{profiles,credentials,options}` | Administration → SNMP Profiles | `onboard-devices/snmp-profiles.md` | exposed | `deleteSnmpProfile` helper unused — no delete control |
 | Vendor detection | `ENABLE_VENDOR_DETECTION`, `collectors/vendor.go` | device attributes only | `onboard-devices/supported-devices.md` | partial | no coverage/failure view |
 | LLDP / CDP / BGP-LS topology | `ENABLE_{LLDP,CDP,BGPLS}_DISCOVERY`, `/api/topology/*` | Investigate → Topology; `DeviceNeighbors.tsx` | `infrastructure/topology-canvas.md` | exposed | — |
@@ -181,7 +181,7 @@ under `docs-portal/docs/`.
 | ITSM reconcile ("Sync now") | `FEATURE_ITSM_RECONCILE`, `/api/integrations/reconcile` | none | — | **MISSING UI** | written for NOC operators; reachable only by curl |
 | Ticket outbox + audit trail | `/api/tickets/{outbox,audit}` | none (`/api/tickets/links` is used) | — | **MISSING UI** | a stuck or failed ticket is invisible in-product |
 | Inbound ITSM / NMS webhooks | `/api/integrations/webhook/`, `/api/nms/webhook/` | none | — | headless-by-design | provider-authenticated inbound receivers |
-| NMS vendor integrations | `FEATURE_NMS_INTEGRATIONS`, `/api/nms/*` | Infrastructure → Discovery & NMS | `infrastructure/nms-integrations.md` | exposed | — |
+| NMS vendor integrations | `FEATURE_NMS_INTEGRATIONS`, `/api/nms/*` | Infrastructure → NMS Integrations | `infrastructure/nms-integrations.md` | exposed | — |
 | Scheduled reports (7 kinds; HTML/PDF/XLSX) | `ENABLE_REPORT_SCHEDULER`, `/api/reports/*` | Analytics → Reports | `dashboards-reports/reports.md` | exposed | — |
 | Report artifact links | `/api/reports/view/` | emailed link | — | headless-by-design | token-authenticated, opened outside the SPA |
 | Log export | `/api/logs/export`, `/api/exports/{policy,{id}}` | Explore → Logs | `explore/logs.md` | exposed | `logIndices` helper unused |

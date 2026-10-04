@@ -64,7 +64,7 @@ and shown under **Infrastructure → Devices**.
   Security + ClickHouse row policies + per-tenant OpenSearch indices. Platform-
   owner-only surfaces: the whole **Platform** section (Licence, Authentication,
   Data Protection, Stack Health, Self-Monitoring, Search Dashboards, Pipeline
-  Debugger, Regions, GraphQL), Administration → Data sources → **Sensors**, and
+  Debugger, Regions, GraphQL), Administration → Data sources → **Sensors** and **Subnet Discovery**, and
   creating tenants.
 - RBAC roles: super-admin, admin, operator, read-only (+ Auditor, API-Client).
 
@@ -72,7 +72,7 @@ and shown under **Infrastructure → Devices**.
 Overview (Home/Operations Overview/My Dashboard) · Operations (Incidents/Active
 Alerts/Action Queue/Services/Network Health; Monitors) · Investigate (RCA/
 Findings/Topology/Troubleshooting; Paths) · Infrastructure (Devices/Interfaces &
-Optics/Sites/Wireless/Discovery & NMS/Config Drift/Source of Truth) · Explore
+Optics/Sites/Wireless/NMS Integrations/Config Drift/Source of Truth) · Explore
 (Metrics/Logs/Flows/Events/Saved Searches) · Security (Overview/Exposures/
 Vulnerabilities/Threat Detection/Compliance) · Analytics (dashboards, Reports,
 RCA Reports, Recovery Scorecard) · Iris AI (this assistant) · **Administration**
@@ -98,7 +98,17 @@ never sees the Platform section at all.
 - **Administration → API Access**: API keys, token policy.
 - **Administration → Settings**: log-export limits (guided tile).
 - **Administration → Data sources → SNMP Profiles**: SNMP v2c/v3 credentials
-  (reading them is tenant-level; writing one is the provider's).
+  (reading them is tenant-level; writing one is the provider's). The ONLY place
+  SNMP credentials live — subnet discovery has no community of its own.
+- **Administration → Data sources → Subnet Discovery** (PROVIDER-ONLY):
+  numbered steps — 1) SNMP credentials (links to SNMP
+  Profiles, shows how many platform profiles the scan will try), 2) subnets,
+  3) turn on + save / scan now; results show which profile each found device
+  answered with. The scan tries the platform-owned profiles (v1/v2c and v3, in
+  profile-name order) per host; tenant-owned profiles are never used. With no
+  platform profile the sweep is refused ("Needs attention" / "Last scan stopped") instead of probing
+  with `public`. A found device is bound (`credential_ref`) to the profile that
+  answered.
 - **Infrastructure → Source of Truth**: bundled inventory (guided enable,
   embedded; provider-only leaf).
 - **Platform → Licence**: what this installation is licensed to run. The READ is
@@ -114,7 +124,7 @@ Give these as ordered steps with exact UI paths. All "Administration" items need
 
 **Discover devices**
 1. *Bundled inventory (recommended):* Infrastructure → Source of Truth → **Set up** → keep "bundled", **Enable inventory discovery**, set a poll interval → Save. It's auto-wired (no URL/token). The inventory opens embedded right there — create sites/devices/IPs in it; discovery imports them into Infrastructure → Devices on the next poll.
-2. *SNMP scan:* set `ENABLE_SNMP_DISCOVERY=true` + `SNMP_CIDR_RANGES` (narrow it — default `10.0.0.0/8` is broad) in `.env`; add credentials in Administration → Data sources → SNMP Profiles (v2c community or v3 USM). Restart api.
+2. *SNMP scan:* add platform-owned credentials in Administration → Data sources → SNMP Profiles (v2c community or v3 USM) — discovery has no community of its own and `SNMP_COMMUNITY` is not used by the scan. Then Administration → Data sources → **Subnet Discovery**: enter the subnets (narrow — at most 4,096 addresses), turn discovery on, Save, and Scan now (`ENABLE_SNMP_DISCOVERY=true` must be set). Each found device is bound to the profile that answered.
 3. *External inventory:* Infrastructure → Source of Truth → Manage → "Connect an external inventory" → URL + API token.
 
 **Turn on the Iris AI assistant**

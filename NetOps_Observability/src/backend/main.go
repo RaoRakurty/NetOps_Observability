@@ -758,16 +758,16 @@ func newServer() *server {
 	// (console-set store, env bootstrap fallback) so operators can scope and
 	// enable it at runtime without a restart. Poll is a no-op while disabled.
 	discoveryCfg := newDiscoveryConfigStore(envOr("DISCOVERY_CONFIG_FILE", "/data/discovery_config.json"), vault)
-	d.Register(newSNMPSourceFromStore(discoveryCfg, d.Devices))
+	// SNMP credential store is created below; capture a pointer the subnet
+	// sweep and the target builder resolve profiles against (set after init).
+	var snmpCredsRef *snmpcred.Store
+	d.Register(newSNMPSourceFromStore(discoveryCfg, func() *snmpcred.Store { return snmpCredsRef }, d.Devices))
 	// NetBox source-of-truth: registered always with a LIVE config getter (UI-set
 	// store, env fallback). Poll is a no-op while unconfigured/disabled, so it
 	// honors runtime changes from Automation → Source of Truth without a restart.
 	netboxCfg := newNetboxConfigStore(envOr("NETBOX_CONFIG_FILE", "/data/netbox_config.json"), vault)
 	d.Register(discovery.NewNetboxSource(netboxCfg.effective, func(msg string, fields map[string]any) { logWarn("discovery", msg, fields) }))
 
-	// SNMP credential store is created below; capture a pointer the target
-	// builder can resolve device credential_refs against (set after init).
-	var snmpCredsRef *snmpcred.Store
 	// Learned credential overrides (credential sentinel): when a device's bound
 	// profile stops answering, the sentinel adopts a stored profile that does;
 	// the target builder honors that resolution so polling self-heals.
@@ -795,41 +795,11 @@ func newServer() *server {
 			}
 			// MONITORING-END
 			// SNMP credentials come only from UI-configured credential profiles
-			// (resolved via the device's credential_ref). A v3 profile threads
-			// full USM params; a v1/v2c profile threads the community. An empty
-			// community falls back to the global SNMP_COMMUNITY in the poller.
-			tgt := collectors.Target{
-				ID: dev.ID,
-				// The stored name (raw sysName for scan devices) rides along so
-				// the trap receiver's NAT-surviving sysName rescue can match a
-				// trap's sysName varbind against what the device actually
-				// reports — the derived id (sanitized + addr-hash) never can.
-				Name:    dev.Name,
-				Address: dev.Address,
-				// §3a.2 / F-56: the owning tenant travels with the target so a
-				// collector that persists rows stamps it from the inventory,
-				// never from anything the device says on the wire.
-				TenantID: dev.TenantID,
-				Protocol: dev.PreferredProtocol,
-				// gNMI-capable devices (a gnmic subscription exists) declare it via the
-				// `gnmi: "true"` label; the SNMP collector then yields gNMI-owned metric
-				// families (BGP/IS-IS) to gNMI on them, staying the floor elsewhere.
-				GNMICapable: strings.EqualFold(dev.Labels["gnmi"], "true"),
-			}
-			if snmpCredsRef != nil && dev.CredentialRef != "" {
-				// The sentinel's learned override wins over the bound ref while it
-				// stands (it exists only when the bound profile stopped answering).
-				ref := dev.CredentialRef
-				if credOverridesRef != nil {
-					if ov, ok := credOverridesRef.Get(dev.ID); ok {
-						ref = ov.ProfileID
-					}
-				}
-				if c, ok := snmpCredsRef.Resolve(ref); ok {
-					snmpcred.ApplyCredToTarget(&tgt, c)
-				}
-			}
-			out = append(out, tgt)
+			// — resolved by snmpcred.TargetFor (internal/snmpcred/target.go), which
+			// honours the sentinel's learned override whether or not a
+			// credential_ref is bound. No profile → the poller's global
+			// SNMP_COMMUNITY fallback.
+			out = append(out, snmpcred.TargetFor(dev, snmpCredsRef, credOverridesRef))
 		}
 		return out
 	})
@@ -1048,6 +1018,12 @@ func newServer() *server {
 		log.Fatalf("snmp cred store: %v", err)
 	}
 	snmpCredsRef = snmpCreds // make profiles resolvable by the target builder
+	// One-time move of a discovery community saved by an older build into an
+	// SNMP profile (owner decision 2026-10-04: credentials live in ONE place).
+	// Not fatal: on failure the community stays on disk and is retried next boot.
+	if err := discoveryCfg.migrateLegacyCommunity(snmpCreds); err != nil {
+		logError("discovery", "discovery community migration failed — subnet discovery has no credential until it succeeds or an SNMP profile is added", errf(err))
+	}
 	credOverrides, err := newCredOverrideStore(envOr("CRED_OVERRIDES_FILE", "/data/credential_overrides.json"))
 	if err != nil {
 		log.Fatalf("credential overrides store: %v", err)

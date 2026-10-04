@@ -78,7 +78,7 @@ limit, and has a credential that answers. The other three planes are configured 
 | Console location | What it does |
 |---|---|
 | **Infrastructure → Devices** | The inventory. Add a device, filter by health, open a device workspace. |
-| **Infrastructure → Discovery & NMS → Subnet Discovery** | Scope the SNMP sweep. Platform administrators only. |
+| **Administration → Data sources → Subnet Discovery** | Scope the SNMP sweep; it tries the platform SNMP profiles. Platform administrators only. |
 | **Administration → Data sources → SNMP Profiles** | Credentials, the vendor OID library, and the configuration generator. |
 | **Administration → Data sources → Data Sources** | The per-device coverage matrix. |
 | **Administration → Data sources → Sensors** | Collector pool status. Platform administrators only. |

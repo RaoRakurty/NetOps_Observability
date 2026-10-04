@@ -38,8 +38,14 @@ export default function SnmpProfileManager() {
               </button>
             ))}
           </div>
-          <span style={{ color: "var(--muted)", fontSize: 12 }}>{active.hint}</span>
+          <span style={{ color: "var(--muted)", fontSize: 14 }}>{active.hint}</span>
         </div>
+        {/* SNMP credentials live in ONE place: subnet discovery has none of its
+            own and tries the platform-owned profiles here, in name order. */}
+        <p style={{ margin: "8px 0 0", color: "var(--muted)", fontSize: 14 }}>
+          <a href="#/admin/discovery">Subnet discovery</a> tries the platform&apos;s profiles in name order
+          and links each device it finds to the one that answered.
+        </p>
       </div>
       {pane === "credentials" ? <SnmpCredentials /> : pane === "profiles" ? <SnmpProfiles /> : <SnmpConfigGenerator />}
     </>

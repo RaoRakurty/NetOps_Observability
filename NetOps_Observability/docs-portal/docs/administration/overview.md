@@ -76,6 +76,7 @@ calling the route directly still returns `403`.
 | **Administration → Data sources → Data Sources** | Per-tenant | All administrators |
 | **Administration → Data sources → SNMP Profiles** | Mixed | All administrators; profile writes are platform-only |
 | **Administration → Data sources → Sensors** | Platform-global | Platform administrator only |
+| **Administration → Data sources → Subnet Discovery** | Platform-global | Platform administrator only |
 | **Administration → Data sources → Telemetry Coverage** | Both halves on one page | All administrators, parser statistics are platform-only |
 | **Administration → Data handling → Processors** | Per-tenant | All administrators |
 | **Administration → Data handling → Sensitive Data Access** | Per-tenant | Holders of `sensitive_data:admin` |

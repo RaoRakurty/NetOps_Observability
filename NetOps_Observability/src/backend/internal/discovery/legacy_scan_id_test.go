@@ -26,6 +26,7 @@ import (
 	"os"
 	"testing"
 
+	"netops/backend/collectors"
 	"netops/backend/models"
 )
 
@@ -43,11 +44,11 @@ func (m memKV) Save(key string, data []byte) error { m[key] = data; return nil }
 
 func newLegacyIDSource() *SNMPSource {
 	cfg := func() ScanSettings {
-		return ScanSettings{Enabled: true, Ranges: []string{"10.9.0.0/29"}, Community: "public"}
+		return ScanSettings{Enabled: true, Ranges: []string{"10.9.0.0/29"}, Credentials: []ScanCredential{{ProfileID: "lab-public"}}}
 	}
 	s := NewSNMPSource(cfg, nil)
-	s.SetProbeForTest(func(_ context.Context, addr, _ string) (string, string, string, bool) {
-		switch addr {
+	s.SetProbeForTest(func(_ context.Context, t collectors.Target) (string, string, string, bool) {
+		switch t.Address {
 		case "10.9.0.1":
 			return "core1", "arista", "descr", true // unique name
 		case "10.9.0.2", "10.9.0.3":
@@ -62,11 +63,11 @@ func newLegacyIDSource() *SNMPSource {
 // "core1", vendor arista) — used for the static-clash and hashed-window cases.
 func newCore1Source() *SNMPSource {
 	cfg := func() ScanSettings {
-		return ScanSettings{Enabled: true, Ranges: []string{"10.9.0.0/29"}, Community: "public"}
+		return ScanSettings{Enabled: true, Ranges: []string{"10.9.0.0/29"}, Credentials: []ScanCredential{{ProfileID: "lab-public"}}}
 	}
 	s := NewSNMPSource(cfg, nil)
-	s.SetProbeForTest(func(_ context.Context, addr, _ string) (string, string, string, bool) {
-		if addr == "10.9.0.1" {
+	s.SetProbeForTest(func(_ context.Context, t collectors.Target) (string, string, string, bool) {
+		if t.Address == "10.9.0.1" {
 			return "core1", "arista", "descr", true
 		}
 		return "", "", "", false

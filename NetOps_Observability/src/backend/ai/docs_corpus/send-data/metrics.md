@@ -36,8 +36,10 @@ polled and does not speak gNMI contributes only what it reports through
 1. Store the credential in
    **Administration → Data sources → SNMP Profiles → Credentials**.
 2. Set the device record's `credential_ref` to that profile's id or name. A
-   device with no reference falls back to the deployment-wide `SNMP_COMMUNITY`,
-   which defaults to `public`.
+   device found by subnet discovery is already bound to the profile that
+   answered. A device with no reference and no credential adopted by the
+   sentinel falls back to the deployment-wide `SNMP_COMMUNITY`, which defaults
+   to `public`.
 3. Confirm the device answers on UDP 161 from the Correlix host.
 4. On a gNMI platform, add the subscription. See
    [Set up gNMI streaming telemetry](/onboard-devices/streaming-gnmi).

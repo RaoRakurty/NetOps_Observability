@@ -169,7 +169,7 @@ export default function Wireless() {
         <div className="card" style={{ marginTop: 16 }}>
           <h3>No wireless inventory<AskIris topic="wifi.inventory-empty" label="No wireless inventory" /></h3>
           <p className="cc-empty">
-            Add a controller connector under <a href="#/infrastructure/discovery/nms">NMS integrations</a>.
+            Add a controller connector under <a href="#/infrastructure/nms">NMS integrations</a>.
           </p>
         </div>
       )}

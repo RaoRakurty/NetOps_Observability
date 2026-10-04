@@ -26,10 +26,12 @@ describe("Telemetry coverage nav placement", () => {
     expect(leaf!.group).toBe("Data sources");
   });
 
-  it("is the last Data sources item, and the shaping pair is its own group", () => {
+  it("closes the Data sources group with Subnet Discovery beside it, and the shaping pair is its own group", () => {
     const groupIds = (g: string) => (admin.children ?? []).filter((l) => l.group === g).map((l) => l.id);
+    // 2026-10: Subnet Discovery moved in from Infrastructure and sits right
+    // after Telemetry Coverage (SNMP credentials live in ONE place).
     expect(groupIds("Data sources")).toEqual([
-      "datasources", "snmp", "sensors", "telemetry-coverage",
+      "datasources", "snmp", "sensors", "telemetry-coverage", "discovery",
     ]);
     // Owner IA 2026-09-05: Processors and Sensitive Data Access are ONE group.
     expect(groupIds("Data handling")).toEqual(["processors", "sensitive-data-access"]);

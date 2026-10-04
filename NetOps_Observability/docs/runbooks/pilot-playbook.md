@@ -51,7 +51,8 @@ Scaffold-grade defaults are documented, not hidden. Agree in writing:
 
 - SNMP discovery defaults to `10.0.0.0/8` — **narrow it** before pointing at a
   real network (`ENABLE_SNMP_DISCOVERY`, discovery subnet in
-  Infrastructure → Discovery & NMS).
+  Administration → Data sources → Subnet Discovery; the scan tries the
+  platform-owned SNMP Profiles, it has no community of its own).
 - The OpenSearch security plugin is disabled in the appliance profile; the stack
   is single-host and expected to sit behind the partner's own perimeter.
 - Copilot / Iris AI is **off** unless `FEATURE_COPILOT=true` and

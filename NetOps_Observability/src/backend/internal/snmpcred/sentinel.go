@@ -212,16 +212,19 @@ func (cs *Sentinel) sweep(ctx context.Context) {
 
 // CheckDevice verifies one device's active credential and re-resolves on failure.
 func (cs *Sentinel) CheckDevice(ctx context.Context, dev models.Device) {
-	bound, boundOK := cs.creds.Resolve(dev.CredentialRef)
+	// Tenant-checked resolution (resolve.go): a ref naming another tenant's
+	// profile is treated as unbound, never probed with that tenant's secret.
+	bound, boundOK := cs.creds.ResolveFor(dev.CredentialRef, dev.TenantID)
 	ov, hasOv := cs.overrides.Get(dev.ID)
 
 	// Which credential is ACTIVE right now (what the poller is using)?
 	active, activeOK := bound, boundOK
 	if hasOv {
-		if c, ok := cs.creds.Resolve(ov.ProfileID); ok {
+		if c, ok := cs.creds.ResolveFor(ov.ProfileID, dev.TenantID); ok {
 			active, activeOK = c, true
 		} else {
-			// The learned profile was deleted — drop the stale override.
+			// The learned profile was deleted (or is not usable for this
+			// device's tenant) — drop the stale override.
 			if err := cs.overrides.Clear(dev.ID); err != nil {
 				applog.Warn("credsentinel", "clear override failed", map[string]any{"device": dev.ID, "err": err.Error()})
 			}
