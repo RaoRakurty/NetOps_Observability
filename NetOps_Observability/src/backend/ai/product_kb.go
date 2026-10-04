@@ -62,7 +62,7 @@ var productRoutes = map[string]string{
 	"incident":    "#/operations/incidents",
 	// The guided device-troubleshooting workspace, not the RCA board.
 	"troubleshooting": "#/investigate/troubleshooting",
-	"discovery":       "#/infrastructure/discovery",
+	"discovery":       "#/admin/discovery",
 	// SNMP credentials/profiles live in Administration → Data sources.
 	"snmp": "#/admin/snmp",
 	// Authentication is PROVIDER-only plumbing and moved to the Platform

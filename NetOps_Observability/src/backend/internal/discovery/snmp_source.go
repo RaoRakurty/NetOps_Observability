@@ -6,7 +6,7 @@ package discovery
 // snmp_source.go — the real SNMP subnet scanner (Phase-2 W3.9, extracted from
 // package main's snmp_discovery.go): range validation with the private-CIDR
 // guardrail and the 4096-host expansion cap, the bounded worker-pool sweep
-// with cooldown and multi-community fallback, and the stable device-id
+// with cooldown and ordered SNMP-profile fallback, and the stable device-id
 // derivation. The sealed config STORE, its env bootstrap and the handler stay
 // in main — the source reads live settings through the injected getter.
 
@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"sort"
@@ -30,11 +31,27 @@ import (
 type ScanSettings struct {
 	Enabled bool
 	Ranges  []string
-	// Community is a comma-separated priority list (per-vendor communities are
-	// the norm on mixed fleets); the caller resolves its env default.
-	Community       string
+	// Credentials are the stored SNMP profiles the sweep tries, IN ORDER, per
+	// host until one answers (owner decision 2026-10-04: SNMP credentials live
+	// in ONE place — the SNMP profiles; discovery has no community of its own).
+	// The caller decides which profiles are eligible (platform-owned only) and
+	// their order. Empty means the sweep cannot authenticate to anything: it
+	// refuses loudly rather than guessing "public".
+	Credentials     []ScanCredential
 	AllowNonPrivate bool
 }
+
+// ScanCredential is one stored SNMP profile, pre-applied to a probe target
+// template (v1/v2c community or v3 USM fields — the same mapping the pollers
+// use). ProfileID is what a device found with it is bound to (credential_ref).
+type ScanCredential struct {
+	ProfileID string
+	Target    collectors.Target
+}
+
+// ErrNoScanCredentials is the refusal the sweep reports when no SNMP profile is
+// eligible — surfaced in the source stats so the console says what to do.
+var ErrNoScanCredentials = errors.New("no SNMP profiles to try — add the credentials your devices use under Administration → Data sources → SNMP Profiles")
 
 const (
 	// MaxScanHosts caps the TOTAL number of addresses a scan may expand
@@ -120,9 +137,9 @@ func expandCIDR(cidr string) []string {
 	return out
 }
 
-// mapDiscovery transforms the probe community (platform DEK), mirroring
-// mapNetbox/mapCopilot in secrets_config.go.
-type Probe func(ctx context.Context, addr, community string) (sysName, vendor, sysDescr string, ok bool)
+// Probe identifies one host with one credential (t carries the address and the
+// SNMP fields). Production is collectors.ProbeIdentityTarget.
+type Probe func(ctx context.Context, t collectors.Target) (sysName, vendor, sysDescr string, ok bool)
 
 type SNMPSource struct {
 	cfg   func() ScanSettings    // live getter — console changes apply without restart
@@ -135,7 +152,7 @@ type SNMPSource struct {
 }
 
 func NewSNMPSource(cfg func() ScanSettings, known func() []models.Device) *SNMPSource {
-	return &SNMPSource{cfg: cfg, known: known, probe: collectors.ProbeIdentity, found: map[string]models.Device{}}
+	return &SNMPSource{cfg: cfg, known: known, probe: collectors.ProbeIdentityTarget, found: map[string]models.Device{}}
 }
 
 // SetProbeForTest injects a fake prober — tests only.
@@ -155,6 +172,11 @@ func (s *SNMPSource) Poll(ctx context.Context) ([]models.Device, error) {
 		// (§10: no silent failures) — and refuses oversized env defaults.
 		return s.snapshot(), fmt.Errorf("discovery ranges refused: %w", err)
 	}
+	if len(cfg.Credentials) == 0 {
+		// §10: never a silent "no devices found" when the truth is "nothing to
+		// authenticate with" — and never a guessed default community.
+		return s.snapshot(), fmt.Errorf("discovery sweep refused: %w", ErrNoScanCredentials)
+	}
 
 	s.mu.Lock()
 	if since := time.Since(s.lastSweep); since < ScanCooldown {
@@ -165,19 +187,10 @@ func (s *SNMPSource) Poll(ctx context.Context) ([]models.Device, error) {
 	s.lastSweep = time.Now()
 	s.mu.Unlock()
 
-	// The community field is a comma-separated priority list (per-vendor
-	// communities are the norm on mixed fleets); each host is tried in order
-	// until one answers.
-	raw := cfg.Community
-	if raw == "" {
-		raw = "public" // the SNMP protocol default; the caller's env may override
-	}
-	var communities []string
-	for _, c := range strings.Split(raw, ",") {
-		if c = strings.TrimSpace(c); c != "" {
-			communities = append(communities, c)
-		}
-	}
+	// Each host is tried with the stored profiles in the caller's order until
+	// one answers; the device is then BOUND to that profile, so polling uses
+	// exactly the credential discovery proved works.
+	creds := cfg.Credentials
 
 	// Addresses already in inventory (any source) are not re-probed: discovery
 	// only hunts for NEW devices, so it cannot duplicate manual/SoT entries.
@@ -207,13 +220,19 @@ func (s *SNMPSource) Poll(ctx context.Context) ([]models.Device, error) {
 		go func() {
 			defer wg.Done()
 			for addr := range jobs {
-				var sysName, vendor, descr string
+				var sysName, vendor, descr, profileID string
 				var ok bool
-				for _, community := range communities {
+				for _, cred := range creds {
+					tgt := cred.Target
+					tgt.Address = addr
 					pctx, cancel := context.WithTimeout(ctx, probeTimeout)
-					sysName, vendor, descr, ok = s.probe(pctx, addr, community)
+					sysName, vendor, descr, ok = s.probe(pctx, tgt)
 					cancel()
-					if ok || ctx.Err() != nil {
+					if ok {
+						profileID = cred.ProfileID
+						break
+					}
+					if ctx.Err() != nil {
 						break
 					}
 				}
@@ -231,6 +250,8 @@ func (s *SNMPSource) Poll(ctx context.Context) ([]models.Device, error) {
 					Vendor:  vendor,
 					OS:      TruncateDescr(descr),
 					Source:  "snmp",
+					// Bound to the profile that answered (owner decision b).
+					CredentialRef: profileID,
 					// TenantID deliberately empty: discovered infrastructure is
 					// platform-scoped until an operator assigns it (untagged =
 					// platform-only under the strict tenancy model).

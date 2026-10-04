@@ -108,7 +108,11 @@ Legacy env-based setup still works as a fallback:
 ## Configuring SNMP discovery range
 
 Edit `SNMP_CIDR_RANGES` in `.env`. Multiple ranges are comma-separated.
-Default is `10.0.0.0/8` — narrow it before scanning production.
+Default is `10.0.0.0/8` — narrow it before scanning production. The live scan
+scope is set in **Administration → Data sources → Subnet Discovery**
+(`#/admin/discovery`). Discovery has no community of its own: it tries the
+platform-owned profiles in **Administration → Data sources → SNMP Profiles**,
+and `SNMP_COMMUNITY` is not used by the sweep.
 
 ## Configuring alert channels
 

@@ -95,8 +95,14 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   http://localhost:8000/api/devices
 ```
 
-A device with no `credential_ref` falls back to the deployment-wide
-`SNMP_COMMUNITY`, which defaults to `public`.
+A device that [subnet discovery](/onboard-devices/snmp-discovery) found is bound
+for you: its `credential_ref` is set to the platform profile that answered the
+sweep. Platform-owned profiles are also the only credentials the sweep tries —
+discovery has no community of its own.
+
+A device with no `credential_ref` and no adopted override (see below) falls back
+to the deployment-wide `SNMP_COMMUNITY`, which defaults to `public`. That is
+the poller's last resort only; it is never used by discovery.
 
 Which collector polls a device follows from the resolved credential. A v1 or
 v2c profile puts the device on the `snmpv2c` collector; a v3 profile puts it on
@@ -112,6 +118,10 @@ per-device cooldown between sweeps. The device API then reports
 `credential_active` alongside `credential_ref`, so the console can show that
 polling is running on a profile other than the one bound. When the bound profile
 answers again the override is cleared.
+
+The adopted profile drives polling for a device with no `credential_ref` too: such
+a device polls with the adopted profile instead of `SNMP_COMMUNITY`. The
+verification runner's SNMP target follows the same rule.
 
 The sentinel selects among credentials you have already stored. It never guesses
 one, and it never crosses a tenant boundary.

@@ -84,11 +84,16 @@ actions through the platform-owner API/console:
 2. **Reach the agents**: attach the api container to twinnet —
    `docker network connect netops_twinnet <api-container>` (hot; reverse with
    `disconnect`). `twin.py --fidelity source_ip` does this for you.
-3. **Discovery** (`PUT /api/discovery/config`, platform-owner): ranges must be
-   narrow (≤ 4096 hosts) and 198.19.x is non-RFC1918, so acknowledge it:
-   `{"enabled": true, "ranges": ["198.19.0.0/28"], "allow_non_private": true,
-   "community": "public"}`. The sweep (≤ every 60 s) probes sysName/sysDescr
-   and files scan devices named after the agents' sysName. Note: discovery
+3. **Discovery** (`PUT /api/discovery/config`, platform-owner): discovery has
+   no community of its own — first create a PLATFORM-owned SNMP profile with
+   the agents' community (`POST /api/snmp/credentials`
+   `{"name": "twin-public", "version": "v2c", "community": "public"}`); the
+   sweep tries platform profiles in name order and binds each found device to
+   the one that answered. Ranges must be narrow (≤ 4096 hosts) and 198.19.x is
+   non-RFC1918, so acknowledge it:
+   `{"enabled": true, "ranges": ["198.19.0.0/28"], "allow_non_private": true}`
+   (a body carrying `community` is refused with 400). The sweep (≤ every 60 s)
+   probes sysName/sysDescr and files scan devices named after the agents' sysName. Note: discovery
    SKIPS addresses already in inventory — twin-REGISTERED devices won't be
    re-discovered; use a standalone (unregistered) agent fleet to exercise it.
 4. **Polling** (`ENABLE_SNMP_COLLECTION=true`, default on): pollers poll every

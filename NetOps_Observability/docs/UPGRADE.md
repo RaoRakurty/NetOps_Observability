@@ -197,6 +197,30 @@ docker compose exec postgres psql -U netops -c \
 On the file backend (`STORE_BACKEND=file`) there is nothing to apply — those
 stores use their tenant-keyed files.
 
+### 2026-10-04 — discovery community → SNMP profile
+
+Subnet discovery no longer stores a community of its own; the sweep tries the
+platform-owned SNMP profiles (Administration → Data sources → SNMP Profiles).
+On first boot after the upgrade the api migrates a stored discovery community
+once into a platform-owned v2c profile named **Migrated discovery community**
+(a comma-separated list becomes one profile per community: "Migrated discovery
+community", "Migrated discovery community 2", …), sealed like any profile
+secret, and re-saves the discovery config without it. It is idempotent and
+logs one info line — `discovery community migrated to SNMP profile` — naming
+the profiles, never the secret.
+
+What to check:
+
+- **Automation that `PUT`s `/api/discovery/config` with a `community` now gets
+  `400`.** Drop the field and manage the credential as an SNMP profile
+  (`/api/snmp/credentials`). `GET` no longer returns `community_set`.
+- **`SNMP_COMMUNITY` no longer feeds discovery.** It is only the poller's
+  last-resort fallback for a device with no profile. A stack that discovered
+  devices purely through `SNMP_COMMUNITY` (no stored discovery community) has
+  nothing to migrate: with no platform profile the sweep is refused
+  (**Last scan stopped** on Subnet Discovery) instead of probing with `public`
+  — add a platform SNMP profile.
+
 ## Your state backend does not change on upgrade (tracker 245)
 
 New installations are now generated with **`STORE_BACKEND=postgres`** — the

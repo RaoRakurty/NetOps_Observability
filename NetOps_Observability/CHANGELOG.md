@@ -52,6 +52,7 @@ Anyone upgrading across this window needs each of these. Ordered oldest first; s
 | 09-02 | **Go toolchain 1.25.13 → 1.26.8** | Build-environment requirement only |
 | 09-03 | On stacks already running TLS, the findings lane was unwritable | `bootstrap-opensearch.sh` is now TLS-aware and the sole owner of index templates — re-run it |
 | 09-08 | **A tenant-bound sign-in URL (`/t/{slug}`, `/org/{id}`) now refuses an account that does not belong to that realm** — platform and `global`-tenant accounts included | Platform staff sign in at the installation's own address through a provider no tenant owns, or at `/api/auth/sso/login?idp=<alias>`. A customer's tenant link no longer signs them in, and neither does an elevation door on one |
+| 10-04 | **Subnet discovery has no community of its own.** `community` is removed from `/api/discovery/config` (`community_set` gone from `GET`; a `PUT` with a non-empty `community` → `400`); the scan tries the platform-owned SNMP profiles instead, and `SNMP_COMMUNITY` no longer feeds discovery | Nothing on upgrade — a stored discovery community is migrated once into platform SNMP profile(s) named "Migrated discovery community" (log: `discovery community migrated to SNMP profile`). Scripts that `PUT` a `community` must drop it and create an SNMP profile instead. With no platform profile the sweep is refused, not probed with `public` |
 
 ### Security
 
@@ -90,6 +91,33 @@ Anyone upgrading across this window needs each of these. Ordered oldest first; s
 - The topbar theme toggle — appearance is chosen at login and changed from account settings.
 
 ---
+
+### 2026-10
+
+#### Discovery & SNMP credentials
+- **SNMP credentials live in one place: SNMP Profiles** (Administration → Data sources → SNMP
+  Profiles, `/api/snmp/credentials`). Subnet discovery lost its own community field; the sweep tries
+  the **platform-owned** v1/v2c and v3 profiles in profile-name order per host until one answers
+  (tenant-owned profiles are never used — a scanned device is platform-owned until assigned). With
+  no platform profile the sweep is refused (**Last scan stopped** / `last_error`) instead of probing with
+  `public`. `SNMP_COMMUNITY` stays only as the poller's last-resort fallback for unbound devices.
+- **A discovered device is bound to the profile that answered** — its `credential_ref` is set at
+  discovery, so polling uses the credential discovery proved works.
+- **Fix:** the credential sentinel's adopted profile ("credential override adopted") now applies to
+  polling even for a device with no `credential_ref`; previously such a device kept polling with
+  `SNMP_COMMUNITY`/`public` and stayed down. The verification runner's SNMP target gets the same fix.
+- **Upgrade migration:** a stored discovery community is moved once into a platform-owned v2c
+  profile "Migrated discovery community" (a comma-separated list becomes one profile per community:
+  "… community", "… community 2", …), sealed like any profile secret; the discovery config is
+  re-saved without it and an info line `discovery community migrated to SNMP profile` names the
+  profiles (never the secret). Idempotent.
+- **UI:** Subnet Discovery moved from Infrastructure → Discovery & NMS to **Administration → Data
+  sources → Subnet Discovery** (`#/admin/discovery`), a numbered-steps page (1 SNMP credentials —
+  with a link to SNMP Profiles and a count of profiles the scan will try · 2 subnets · 3 turn on,
+  save / scan now) whose results show which profile each device answered with. Infrastructure keeps
+  a plain **NMS Integrations** leaf (`#/infrastructure/nms`). Old links redirect
+  (`#/infrastructure/discovery[/discovery]` → `#/admin/discovery`, `#/infrastructure/discovery/nms`
+  → `#/infrastructure/nms`). The Sensors page no longer shows the discovery card.
 
 ### 2026-09 (1–3) · 108 commits
 
