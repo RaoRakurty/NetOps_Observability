@@ -16,8 +16,10 @@ export default defineConfig({
     css: false,
     include: ["perf/**/*.perf.tsx"],
     // One file, one worker, no concurrency: measurements must not contend.
+    // Vitest 4 removed `poolOptions`; its single-thread knob is now top-level
+    // `maxWorkers: 1` (was poolOptions.threads.{singleThread,maxThreads,minThreads}).
     pool: "threads",
-    poolOptions: { threads: { singleThread: true, maxThreads: 1, minThreads: 1 } },
+    maxWorkers: 1,
     fileParallelism: false,
     sequence: { concurrent: false },
     testTimeout: 180_000,
