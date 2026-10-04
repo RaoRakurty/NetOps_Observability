@@ -23,7 +23,14 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DC=(docker compose -f "$ROOT/deployment/docker/docker-compose.yml")
+COMPOSE_DIR="$ROOT/deployment/docker"
+# Compose runs FROM the compose directory with NO -f: only then does it read that
+# directory's .env COMPOSE_FILE chain (compose.tls.yml, the offline-images
+# override, …). An explicit -f keeps the .env VARIABLES but drops every overlay —
+# on a TLS install that recreated services half-plaintext (verify-full DSN, no
+# cert mounts), the api crash-looped, the site answered 502, and the rollback
+# used the same -f so it could not recover either (2026-10-04, lab).
+dc() { ( cd "$COMPOSE_DIR" && docker compose "$@" ); }
 PROJECT="netops"                                   # compose project → image prefix
 BASE_URL="${DEPLOY_BASE_URL:-http://localhost:8000}"
 SERVICES=("${@:-}"); [ -z "${SERVICES[*]}" ] && SERVICES=(frontend api)
@@ -42,7 +49,7 @@ health() {
     && curl -fsS -o /dev/null --max-time 5 "$BASE_URL/api/auth/methods"
 }
 wait_health() {
-  local i; for i in $(seq 1 "${1:-30}"); do health && return 0; sleep 2; done; return 1
+  local _; for _ in $(seq 1 "${1:-30}"); do health && return 0; sleep 2; done; return 1
 }
 served_bundle() { curl -fsS --max-time 5 "$BASE_URL/" | grep -oE 'index-[A-Za-z0-9_-]+\.js' | head -1; }
 
@@ -55,7 +62,7 @@ rollback() {
   for s in "${SERVICES[@]}"; do
     if [ -n "${OLD_IMG[$s]:-}" ]; then
       docker tag "${OLD_IMG[$s]}" "${PROJECT}-${s}:latest" >/dev/null 2>&1 \
-        && "${DC[@]}" up -d --no-build "$s" >/dev/null 2>&1 \
+        && dc up -d --no-build "$s" >/dev/null 2>&1 \
         && { restored=1; warn "  restored $s → ${OLD_IMG[$s]:7:12}"; }
     else
       warn "  no prior image recorded for $s (was it running before?)"
@@ -78,19 +85,20 @@ if has frontend; then
   if ! ( cd "$ROOT/src/frontend" && npm run build ); then
     die "frontend build failed — running stack left UNTOUCHED."; exit 1
   fi
+  # shellcheck disable=SC2012 # vite names its bundles index-<hash>.js ([A-Za-z0-9_-]); ls -t is the newest-first pick
   BUILT_HASH="$(basename "$(ls -t "$ROOT"/src/frontend/dist/assets/index-*.js | head -1)")"
   log "built bundle: $BUILT_HASH"
 fi
 
 # 2. record current images for rollback
 for s in "${SERVICES[@]}"; do
-  cid="$("${DC[@]}" ps -q "$s" 2>/dev/null || true)"
+  cid="$(dc ps -q "$s" 2>/dev/null || true)"
   [ -n "$cid" ] && OLD_IMG[$s]="$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null || true)"
 done
 
 # 3. rebuild + recreate
 log "rebuilding + recreating containers…"
-"${DC[@]}" up -d --build "${SERVICES[@]}" || rollback "compose build/up failed"
+dc up -d --build "${SERVICES[@]}" || rollback "compose build/up failed"
 
 # 4. health gate
 log "health gate…"
