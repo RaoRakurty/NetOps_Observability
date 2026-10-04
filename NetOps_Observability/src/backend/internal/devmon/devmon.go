@@ -3,47 +3,45 @@
 
 // Package devmon is the ONE definition of "Correlix is monitoring this device".
 //
-// # Why it exists (owner decision C4, 2026-09-05)
+// # The rule (owner decision, 2026-10-03 — supersedes the C4 switch)
 //
-// The Community tier covers 25 devices. The product question the owner
-// resolved is WHICH 25: a device consumes one entitlement when Correlix is
-// actively monitoring it through at least one enabled collector, and NOT
-// merely because a row for it exists in the inventory. Subnet discovery that
-// finds 500 devices creates 500 inventory records and consumes NOTHING; the
-// operator enables monitoring on twelve of them and the usage is 12 of 25.
+// There is no per-device monitoring switch. EVERY device in the inventory that
+// has a management address is monitored — whoever put it there: an operator,
+// the operator's devices file, the source of truth, a wireless controller
+// integration, or a subnet scan. The licence still counts monitored devices
+// (the C4 unit), so "monitored" now means "in the inventory and addressable",
+// up to the licence ceiling.
 //
-// Discovery is free by design: finding a device costs the platform nothing
-// beyond the scan itself, and a free tier that charged for looking would make
-// the honest thing (inventory everything, then decide) the expensive one. The
-// ceiling sits where the ongoing cost is — telemetry ingestion, storage,
-// correlation — which is exactly the set this package defines.
+// # Over the ceiling
+//
+// When there are more addressable devices than the licence covers, the FIRST N
+// by first-seen time are collected from. The rest stay in the inventory, are
+// NOT collected from, and are marked over the licence limit with a reason that
+// says so — nothing is silently dropped. Because the order is first-seen and
+// the ranking is recomputed on every read, deleting a monitored device or
+// growing the licence starts collection on the next devices in line with no
+// operator action.
+//
+// The ceiling is PLATFORM-WIDE (one installation, one allowance), so the
+// ranking runs over every tenant's devices at once. What a tenant is SHOWN of
+// it is scoped by the caller (the registry and the API filter by tenant); this
+// package only decides.
 //
 // # What it is NOT
 //
-// It is not a licensing package and it never imports one: it answers "is this
-// device monitored", never "may it be". The licence gate (internal/entitlement)
-// asks this package for the COUNT and applies the ceiling; keeping the two
-// apart is what lets the isolation and collection paths use this definition
-// without acquiring a dependency on entitlement state (see
-// internal/entitlement/safety_invariant_test.go).
+// It is not a licensing package and it never imports one: it is handed the
+// ceiling as a number and answers "which devices are monitored", never "what
+// does the licence say". Keeping entitlement out of this package is what lets
+// the isolation and collection paths use this definition without acquiring a
+// dependency on entitlement state (internal/entitlement/safety_invariant_test.go).
 //
-// # The definition
-//
-// A device is monitored when BOTH hold:
-//
-//  1. Correlix can reach it at all — it has an address. The collector pool
-//     skips an addressless record (main.go's target builder), so counting one
-//     would charge for a device nothing can ever poll.
-//  2. Monitoring is ON for it: the operator's explicit decision when there is
-//     one, and otherwise the default for how the device entered the inventory
-//     (Default below).
-//
-// Several telemetry methods on one device (SNMP creds AND a gNMI subscription
-// AND syslog) are still ONE monitored device: the unit is the device, and
-// Methods exists to show that, never to count it.
+// Several telemetry methods on one device (SNMP creds AND a gNMI subscription)
+// are still ONE monitored device: the unit is the device, and Methods exists to
+// show that, never to count it.
 package devmon
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -51,79 +49,78 @@ import (
 	"netops/backend/models"
 )
 
-// Record is one operator decision about whether Correlix collects from a
-// device. It is the persisted form of the monitoring state; a device with NO
-// record has never been decided and Default applies.
-//
-// The type lives in this leaf package so the device registry, its persistence
-// and the HTTP surface all name the same thing.
-type Record struct {
-	// TenantID is the OWNING tenant, stamped from the device record (whose
-	// tenant the create path stamped from the authenticated principal), never
-	// from a request body (CLAUDE.md §3a rule 2).
-	TenantID string `json:"tenant_id,omitempty"`
-	// DeviceID is the device this decision belongs to.
-	DeviceID string `json:"device_id"`
-	// Enabled is the decision itself.
-	Enabled bool `json:"enabled"`
-	// UpdatedBy is the principal who made it; UpdatedAt is when.
-	UpdatedBy string    `json:"updated_by,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
+// NoLimit is the ceiling value meaning "collect from every addressable
+// device". Any negative limit is treated the same way. It mirrors the
+// licence's own Unlimited without importing it.
+const NoLimit = -1
 
-// Source names of the discovery sources this package reasons about. They are
-// the names the sources report (DiscoverySource.Name), duplicated here as
-// CONSTANTS rather than imported so this package stays a leaf that
-// internal/discovery may depend on.
+// Source names this package mentions in its reasons. They are the names the
+// discovery sources report (DiscoverySource.Name), duplicated as CONSTANTS
+// rather than imported so this package stays a leaf.
 const (
-	// SourceSubnetScan is the platform's own SNMP subnet sweep. Its output is a
-	// CANDIDATE list: an address answered a probe. Nobody asked for it to be
-	// monitored, so it is not — that is the whole C4 decision.
+	// SourceSubnetScan is the platform's own SNMP subnet sweep. Every address it
+	// finds is monitored like any other device — which is why a discovery scope
+	// must be narrow: each device a scan finds consumes the licence.
 	SourceSubnetScan = "snmp"
-	// SourceNetbox is the external source of truth. A device in the SoT is one
-	// the organisation has declared it operates, so it is monitored by default.
+	// SourceNetbox is the external source of truth.
 	SourceNetbox = "netbox"
 	// SourceStatic is the operator-authored devices file.
 	SourceStatic = "static"
 	// SourceManual is a device created through the API/UI.
 	SourceManual = "manual"
-	// SourceWireless is a wireless controller or access point reported by the
-	// wireless canonical inventory (wireless.DeviceSource). An operator
-	// configured an integration and enabled it, and that integration is polling
-	// the controller right now — so the entity is DECLARED, not a candidate,
-	// and it counts (owner decision, tracker 256, 2026-09-05: a controller is
-	// one device and each of its access points is one device).
-	//
-	// Only the entities an ENABLED integration polls are reported under this
-	// source; the rest never reach the registry and are shown by the api's
-	// read-time projection as not monitored (ReasonWirelessNotPolled).
+	// SourceWireless is a wireless controller or access point reported by an
+	// ENABLED wireless integration (wireless.DeviceSource). Entities no enabled
+	// integration polls never reach the registry; the api's read-time
+	// projection shows them as StateNotPolled.
 	SourceWireless = "wireless"
 )
 
-// Reasons — the operator sentence attached to every decision. They are stated
-// once, here, so the API, the UI and the logs cannot drift into three different
-// explanations of the same fact.
+// Monitoring states — the machine token beside the operator sentence.
 const (
-	ReasonNoAddress  = "no management address — nothing can collect from this device until it has one"
-	ReasonDiscovered = "found by subnet discovery and not yet enabled for monitoring — " +
-		"discovery is free and costs no licence allowance; enable monitoring to start collecting"
-	ReasonDeclared = "monitoring is on: this device was declared in the inventory " +
-		"(added by an operator, an operator-authored file, or the source of truth)"
-	ReasonWireless          = "monitoring is on: this device is polled through its wireless controller integration"
-	ReasonWirelessNotPolled = "monitoring is off: no enabled wireless integration is polling this device — " +
-		"it stays in the inventory, nothing has been deleted or hidden, and it costs no licence allowance; " +
-		"enable its controller integration to start collecting"
-	ReasonEnabled  = "monitoring was enabled for this device by an operator"
-	ReasonDisabled = "monitoring was turned off for this device by an operator — " +
-		"the device, its history and its topology stay exactly where they are"
+	// StateMonitored: addressable and within the licence ceiling.
+	StateMonitored = "monitored"
+	// StateOverLimit: addressable, but found after the first N devices the
+	// licence covers. In the inventory, not collected from.
+	StateOverLimit = "over_limit"
+	// StateNoAddress: nothing can collect from it until it has an address.
+	StateNoAddress = "no_address"
+	// StateNotPolled: a wireless entity whose integration is off (the api's
+	// read-time projection; never produced by Assign).
+	StateNotPolled = "not_polled"
 )
+
+// Reasons — the operator sentence attached to every state. Stated once, here,
+// so the API, the UI and the logs cannot drift into different explanations.
+const (
+	ReasonNoAddress = "not monitored: this device has no management address, so nothing can collect from it until it has one"
+	ReasonMonitored = "monitored: this device is in the inventory, has a management address and is within the licence"
+	ReasonWireless  = "monitored: this device is polled through its wireless controller integration and is within the licence"
+	// ReasonWirelessNotPolled is the api's read-time projection of a wireless
+	// entity whose integration is disabled.
+	ReasonWirelessNotPolled = "not monitored: no enabled wireless integration is polling this device — " +
+		"it stays in the inventory, nothing has been deleted or hidden, and it does not use the licence; " +
+		"enable its controller integration to start collecting"
+)
+
+// OverLimitReason is the sentence for a device past the licence ceiling. The
+// limit is the installation's licence, not another tenant's data.
+func OverLimitReason(limit int) string {
+	return fmt.Sprintf("not monitored: licence limit of %d %s reached — this device was found after the first %d, "+
+		"so it stays in the inventory but nothing is collected from it; it starts being monitored automatically "+
+		"when a monitored device is deleted or the licence grows", limit, devicesWord(limit), limit)
+}
+
+func devicesWord(n int) string {
+	if n == 1 {
+		return "device"
+	}
+	return "devices"
+}
 
 // Telemetry method tokens. DISPLAY ONLY — the licensed unit is the device.
 const (
-	// MethodSNMP is SNMP polling. Every device with an address is polled by the
-	// SNMP collectors when monitoring is on: with the credential profile bound
-	// to it, or with the deployment-wide community when none is bound
-	// (collectors/poller.go Target.creds).
+	// MethodSNMP is SNMP polling: with the credential profile bound to the
+	// device, or the deployment-wide community when none is bound.
 	MethodSNMP = "snmp"
 	// MethodGNMI is a gNMI subscription, declared per device by the `gnmi`
 	// label (main.go's target builder reads exactly that).
@@ -135,47 +132,58 @@ const (
 // the line that must change with it.
 func HasAddress(d models.Device) bool { return strings.TrimSpace(d.Address) != "" }
 
-// Default reports whether a device with NO explicit operator decision is
-// monitored, and why.
-//
-// The rule is provenance, and it is the only defensible one in this codebase:
-// every path that puts a device in the inventory is either somebody DECLARING a
-// device (a manual create, the operator's devices file, the source of truth) or
-// the platform REPORTING that an address answered a probe (the subnet scan).
-// The first is a request to monitor; the second is a candidate list.
-//
-// Defaulting a declared device to monitored is also what keeps an upgrade
-// honest: every device an existing deployment declared keeps being collected
-// from, so no monitoring is silently switched off by installing this build.
-func Default(d models.Device) (bool, string) {
-	if !HasAddress(d) {
-		return false, ReasonNoAddress
-	}
-	switch {
-	case strings.EqualFold(strings.TrimSpace(d.Source), SourceSubnetScan):
-		return false, ReasonDiscovered
-	case strings.EqualFold(strings.TrimSpace(d.Source), SourceWireless):
-		// Declared, like any other, but say WHY in the operator's own terms:
-		// "declared in the inventory" would send them looking for a device file
-		// or a SoT entry that does not exist.
-		return true, ReasonWireless
-	}
-	return true, ReasonDeclared
+// Candidate is one DEDUPLICATED device as the ranking sees it. FirstSeen is
+// when the platform first saw any record of it (the earliest over every source
+// that reports it); the caller guarantees it is set.
+type Candidate struct {
+	Device    models.Device
+	FirstSeen time.Time
 }
 
-// Explicit reports the decision for a device that HAS an operator decision
-// (enabled true/false), and why.
+// Verdict is one device's monitoring state.
+type Verdict struct {
+	State     string
+	Monitored bool
+	Reason    string
+	// Limit is the licence ceiling an over-limit device is past. Zero for
+	// every other state.
+	Limit int
+}
+
+// Assign decides the monitoring state of every candidate, keyed by device id.
 //
-// An explicit "on" still requires an address: enabling monitoring on a device
-// nothing can reach would consume an entitlement and collect nothing.
-func Explicit(d models.Device, enabled bool) (bool, string) {
-	if !enabled {
-		return false, ReasonDisabled
+// Addressless devices are never monitored and never take a slot. The
+// addressable ones are ordered by first-seen time (ties broken by id, so two
+// reads never disagree) and the first `limit` are monitored; the rest are over
+// the limit. A negative limit means no ceiling.
+func Assign(cands []Candidate, limit int) map[string]Verdict {
+	out := make(map[string]Verdict, len(cands))
+	ranked := make([]Candidate, 0, len(cands))
+	for _, c := range cands {
+		if !HasAddress(c.Device) {
+			out[c.Device.ID] = Verdict{State: StateNoAddress, Reason: ReasonNoAddress}
+			continue
+		}
+		ranked = append(ranked, c)
 	}
-	if !HasAddress(d) {
-		return false, ReasonNoAddress
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if !ranked[i].FirstSeen.Equal(ranked[j].FirstSeen) {
+			return ranked[i].FirstSeen.Before(ranked[j].FirstSeen)
+		}
+		return ranked[i].Device.ID < ranked[j].Device.ID
+	})
+	for i, c := range ranked {
+		if limit >= 0 && i >= limit {
+			out[c.Device.ID] = Verdict{State: StateOverLimit, Reason: OverLimitReason(limit), Limit: limit}
+			continue
+		}
+		reason := ReasonMonitored
+		if strings.EqualFold(strings.TrimSpace(c.Device.Source), SourceWireless) {
+			reason = ReasonWireless
+		}
+		out[c.Device.ID] = Verdict{State: StateMonitored, Monitored: true, Reason: reason}
 	}
-	return true, ReasonEnabled
+	return out
 }
 
 // Methods lists the per-device telemetry configured for d, for display beside
@@ -204,5 +212,22 @@ func Methods(d models.Device) []string {
 		out = append(out, m)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// Collecting narrows methods to the ones a collector is actually running for
+// on this installation. A monitored device whose methods are ALL off is
+// counted by the licence but nothing is being collected from it — the status
+// surface must say so instead of reporting "monitored" as if data flowed.
+func Collecting(methods []string, enabled func(method string) bool) []string {
+	if enabled == nil {
+		return nil
+	}
+	out := make([]string, 0, len(methods))
+	for _, m := range methods {
+		if enabled(m) {
+			out = append(out, m)
+		}
+	}
 	return out
 }

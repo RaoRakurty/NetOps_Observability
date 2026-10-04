@@ -103,17 +103,25 @@ type Device struct {
 	Source           string            `json:"source"`
 	LastSeen         time.Time         `json:"last_seen"`
 
-	// Monitored — Correlix is CONFIGURED to collect telemetry from this device.
-	// It is the licensed unit (entitlement.CeilingDevices counts monitored
-	// devices, not inventory rows) and the collector pool polls only devices
-	// that carry it.
+	// Monitored — Correlix collects telemetry from this device: it is in the
+	// inventory, has a management address, and is within the licence ceiling
+	// by first-seen order (internal/devmon, owner decision 2026-10-03). It is
+	// the licensed unit and the collector pool polls only devices that carry it.
 	//
 	// SERVER-STAMPED, NEVER PERSISTED and never read from a request body: the
-	// device registry computes it from the operator's monitoring decision (or,
-	// absent one, the device's provenance) on every read — the same
-	// infer-on-read contract Type and CredentialActive follow. A client that
-	// sends it is ignored.
+	// device registry computes it on every read — the same infer-on-read
+	// contract Type and CredentialActive follow. A client that sends it is
+	// ignored.
 	Monitored bool `json:"monitored"`
+	// MonitorState is the machine token beside Monitored: "monitored",
+	// "over_limit" (addressable but past the licence ceiling), "no_address",
+	// or "not_polled" (a wireless entity whose integration is off).
+	// Server-stamped, like Monitored.
+	MonitorState string `json:"monitor_state,omitempty"`
+	// MonitorLimit is the licence ceiling an over-limit device is past, so a
+	// client can say "licence limit of 25 reached" without reading the
+	// licence. Zero for every other state. Server-stamped.
+	MonitorLimit int `json:"monitor_limit,omitempty"`
 	// MonitorReason says WHY Monitored has the value it has, in one operator
 	// sentence. Never silent: a device that is not collected from always says
 	// what would change that.

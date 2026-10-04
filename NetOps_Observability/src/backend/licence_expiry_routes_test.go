@@ -351,8 +351,9 @@ func TestLicencePostGraceChangesNoAuthorizationDecision(t *testing.T) {
 
 // TestLicenceSoftOverageOnPaidTiers is the "never a kill switch during an
 // incident" decision at the real chokepoint: at 250 of 250 monitored devices,
-// a Team deployment admits the 251st. The same request under Community at 25
-// is refused, because 25 is a published free ceiling.
+// a Team deployment collects from the 251st. Under Community at 25 the same
+// request stores the device marked over the licence limit (owner decision
+// 2026-10-03) — never refused, not collected from.
 func TestLicenceSoftOverageOnPaidTiers(t *testing.T) {
 	k := newLicTestKey(t)
 
@@ -392,31 +393,39 @@ func TestLicenceSoftOverageOnPaidTiers(t *testing.T) {
 		}
 	})
 
-	t.Run("Community still blocks the 26th", func(t *testing.T) {
+	t.Run("Community stores the 26th over the limit", func(t *testing.T) {
 		s := licDeviceServer(t, k.service(t, nil), 25)
 		w := httptest.NewRecorder()
 		s.handleDevices(w, licReq(http.MethodPost, "/api/devices",
 			`{"id":"over-1","name":"over-1","address":"10.99.0.1"}`, licClaims()))
-		licAssertRefusal(t, w, entitlement.KindCeiling, entitlement.CeilingDevices, entitlement.TierTeam)
-		if s.discovery.MonitoredCount() != 25 {
-			t.Fatalf("the refused device must not be monitored: count = %d", s.discovery.MonitoredCount())
+		if w.Code != http.StatusCreated {
+			t.Fatalf("POST = %d %s — the licence never refuses a device", w.Code, w.Body.String())
+		}
+		if s.discovery.MonitoredCount() != 25 || s.discovery.MonitoringWithheldCount() != 1 {
+			t.Fatalf("collected %d / over %d, want 25 / 1", s.discovery.MonitoredCount(), s.discovery.MonitoringWithheldCount())
 		}
 	})
 
-	t.Run("past grace the hard Community ceiling is back for NEW activations", func(t *testing.T) {
+	t.Run("past grace the hard Community ceiling applies, first-seen first", func(t *testing.T) {
 		raw := k.issueExpired(t, entitlement.TierTeam, nil, 40, licence.PaidGraceDays, false)
 		s := licDeviceServer(t, k.service(t, raw), 30)
-		// Nothing was disabled: the 30 devices admitted under the live licence
-		// are all still monitored.
-		if s.discovery.MonitoredCount() != 30 {
-			t.Fatalf("a lapse must not disable anything: count = %d, want 30", s.discovery.MonitoredCount())
+		// Owner decision 2026-10-03: past the hard ceiling the FIRST 25 by
+		// first-seen time are collected from and the rest stay in the
+		// inventory, marked over the licence limit. Nothing is deleted.
+		if s.discovery.MonitoredCount() != 25 || s.discovery.MonitoringWithheldCount() != 5 {
+			t.Fatalf("collected %d / over %d, want 25 / 5", s.discovery.MonitoredCount(), s.discovery.MonitoringWithheldCount())
+		}
+		if len(s.discovery.Devices()) != 30 {
+			t.Fatalf("a lapse must not remove anything from the inventory: %d", len(s.discovery.Devices()))
 		}
 		w := httptest.NewRecorder()
 		s.handleDevices(w, licReq(http.MethodPost, "/api/devices",
 			`{"id":"over-2","name":"over-2","address":"10.99.0.2"}`, licClaims()))
-		assertPostGraceRefusal(t, w, entitlement.KindCeiling, entitlement.CeilingDevices)
-		if s.discovery.MonitoredCount() != 30 {
-			t.Fatalf("and the refusal must not have changed the existing fleet: count = %d", s.discovery.MonitoredCount())
+		if w.Code != http.StatusCreated {
+			t.Fatalf("POST = %d %s", w.Code, w.Body.String())
+		}
+		if s.discovery.MonitoredCount() != 25 {
+			t.Fatalf("the new device joins the back of the line: collected = %d", s.discovery.MonitoredCount())
 		}
 	})
 }

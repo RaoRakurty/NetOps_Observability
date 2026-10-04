@@ -143,7 +143,7 @@ use this instead of something else.
 
 ## Steps
 
-1. Go to **Infrastructure → Discovery & NMS**.
+1. Go to **Administration → Data sources**.
 2. Select **Subnet Discovery**.
 3. Enter the CIDR ranges to sweep.
 4. Select **Start scan**.

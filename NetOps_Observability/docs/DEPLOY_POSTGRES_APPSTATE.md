@@ -130,7 +130,7 @@ not an audit trail.
 `tenant_governance` · `devices` (**including the per-device
 `devices.json.d/` subtree** — manual records, the `migrated` marker and the
 `suppressed` tombstones) · `device_locations` · `device_sites` ·
-`device_monitoring` · `sites` · `discovery_config` · `netbox_config` ·
+`device_monitoring` (retired 2026-10-03 — removed at boot) · `device_first_seen` (the licence order) · `sites` · `discovery_config` · `netbox_config` ·
 `alert_episodes` · `alert_notify_state` · `user_rules` · `rca_promotions` ·
 `rca_report_revisions` · `rca_action_items` · `security_settings` ·
 `security_policies` · `ssh_known_hosts` · `itsm_config` · `tac_connectors` ·

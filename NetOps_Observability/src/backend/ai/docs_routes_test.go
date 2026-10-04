@@ -25,7 +25,7 @@ func TestDocRouteMapsCuratedConcepts(t *testing.T) {
 		"What is a seam": "#/investigate/rca",
 		"What do the verdict tiers mean (confirmed, suspected, undetermined)": "#/investigate/rca",
 		"What is RCA (root cause analysis) in Correlix":                       "#/investigate/rca",
-		"How to set up SNMP discovery":                                        "#/infrastructure/discovery",
+		"How to set up SNMP discovery":                                        "#/admin/discovery",
 		"How to enable SSO (OIDC / SAML / LDAP / TACACS)":                     "#/platform/auth",
 		"How to create a report":                                              "#/analytics/reports",
 		"What is a tenant and an org":                                         "#/admin/identity",
@@ -74,7 +74,7 @@ func TestDocRouteNeverLinksPortalPages(t *testing.T) {
 // match everything).
 func TestDocRouteRulesAreOrderedAndResolvable(t *testing.T) {
 	c := DocChunk{PageTitle: "Correlix", SectionTitle: "How to set up SNMP discovery", Tier: DocTierCurated}
-	if got := docRoute(c); got != "#/infrastructure/discovery" {
+	if got := docRoute(c); got != "#/admin/discovery" {
 		t.Fatalf("SNMP discovery → %q, want the discovery page", got)
 	}
 	for _, r := range docRouteRules {

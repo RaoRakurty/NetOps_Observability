@@ -28,15 +28,28 @@ var sysNameOID = []int{1, 3, 6, 1, 2, 1, 1, 5, 0}     // SNMPv2-MIB::sysName.0
 // DetectVendor fills in vendor/sysDescr. ok is false when the host didn't
 // answer the initial GET; err carries the transport detail for diagnostics.
 func ProbeIdentity(ctx context.Context, addr, community string) (sysName, vendor, sysDescr string, ok bool) {
+	return probeIdentity(ctx, addr, v2c(community))
+}
+
+// ProbeIdentityTarget is ProbeIdentity with the target's full credential —
+// v1/v2c community OR v3 USM, exactly as the pollers would speak to it
+// (Target.creds). Subnet discovery uses it to try each stored SNMP profile, so
+// a device found by the sweep is proven to answer the profile it is bound to.
+// Only t.Address and the credential fields are read.
+func ProbeIdentityTarget(ctx context.Context, t Target) (sysName, vendor, sysDescr string, ok bool) {
+	return probeIdentity(ctx, t.Address, t.creds())
+}
+
+func probeIdentity(ctx context.Context, addr string, creds snmpCreds) (sysName, vendor, sysDescr string, ok bool) {
 	target := withPort(addr, 161)
-	v, err := snmpGet(ctx, target, v2c(community), sysNameOID)
+	v, err := snmpGet(ctx, target, creds, sysNameOID)
 	if err != nil {
 		return "", "", "", false
 	}
 	// sysName becomes a device label / inventory key — label-class bound, tighter
 	// than the decoder's text-class bound (caps.go, audit PIPE-MED-11).
 	sysName = sanitizeLabel(v.str())
-	vendor, sysDescr = DetectVendor(ctx, addr, community)
+	vendor, sysDescr = detectVendor(ctx, addr, creds)
 	return sysName, vendor, sysDescr, true
 }
 
@@ -57,13 +70,17 @@ func vendorForEnterprise(ent int) string {
 // "" when it can't be determined (unreachable, or an unknown enterprise with an
 // unrecognizable sysDescr).
 func DetectVendor(ctx context.Context, addr, community string) (vendor, sysDescr string) {
+	return detectVendor(ctx, addr, v2c(community))
+}
+
+func detectVendor(ctx context.Context, addr string, creds snmpCreds) (vendor, sysDescr string) {
 	addr = withPort(addr, 161)
-	if v, err := snmpGet(ctx, addr, v2c(community), sysObjectIDOID); err == nil && v.tag == 0x06 {
+	if v, err := snmpGet(ctx, addr, creds, sysObjectIDOID); err == nil && v.tag == 0x06 {
 		if ent, ok := enterpriseOf(decodeOID(v.raw)); ok {
 			vendor = vendorForEnterprise(ent) // "" if no profile claims the enterprise
 		}
 	}
-	if d, err := snmpGet(ctx, addr, v2c(community), sysDescrOID); err == nil {
+	if d, err := snmpGet(ctx, addr, creds, sysDescrOID); err == nil {
 		sysDescr = d.str()
 		if vendor == "" {
 			vendor = vendorFromDescr(sysDescr)

@@ -154,7 +154,7 @@ func ReportMeters() []ReportMeter {
 // because a number without them can be misread, and the person reading a
 // report a year from now will not have this package to consult.
 const (
-	NoteConfigured  = "Monitored devices are counted from configuration — a device with at least one collector enabled — and never from recent telemetry. A device that stopped answering still counts; discovery does not consume the monitoring allowance."
+	NoteConfigured  = "Monitored devices are counted from the inventory — every device with a management address that Correlix collects from, devices found by discovery included — and never from recent telemetry. A device that stopped answering still counts."
 	NoteNoPhoneHome = "Nothing in this report was sent anywhere. It was produced on the installation, signed by that installation's own key, and shared only if someone chose to share it."
 	NoteDiagnostic  = "Diagnostic meters are recorded because they are useful, not because anything is charged for them. On-premises telemetry ingestion is not metered for money."
 	NoteNotMeasured = "A meter with no value was NOT measured, and says why. It is never reported as zero: a zero means we counted and found none."

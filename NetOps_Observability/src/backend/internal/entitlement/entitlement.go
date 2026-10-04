@@ -394,10 +394,12 @@ const (
 // The unit is separate from the ceiling NAME on purpose. A name is a field of a
 // signed licence document and can never change without invalidating every
 // licence ever issued; the unit is the product statement of what that number
-// measures, and the owner's C4 decision (2026-09-05) changed exactly that for
-// devices: the licence counts devices Correlix is CONFIGURED TO MONITOR, not
-// rows in the inventory. Discovery is free — finding a device costs nothing and
-// consumes no allowance; collecting from one is the priced act.
+// measures. For devices the unit is the MONITORED device (C4, 2026-09-05), and
+// since the owner's 2026-10-03 decision a monitored device is every inventory
+// device with a management address — found by discovery or declared — so a
+// discovery scope consumes the licence. Past a hard ceiling the first N by
+// first-seen time are collected from and the rest are listed as over the limit
+// (internal/devmon, internal/discovery); nothing is refused.
 //
 // It rides in the refusal body so a client renders "25 of 25 monitored devices"
 // instead of the ambiguous "25 devices", without re-deriving product policy.
@@ -485,9 +487,11 @@ func Enforced(name string) bool { return enforcedCeilings[name] }
 // form, never in code.
 //
 // Community is the exception and stays HARD: 25 monitored devices is a
-// PUBLISHED free ceiling, and the 26th activation is refused (§9, Community
-// row: "Hard block at the 26th activation"). A free tier whose limit did not
-// bite would not be a limit.
+// PUBLISHED free ceiling, and the 26th device is not collected from (§9, Community
+// row). A free tier whose limit did not bite would not be a limit. Since the
+// owner's 2026-10-03 decision the bite is on COLLECTION, not admission: the
+// first 25 devices by first-seen time are collected from, the rest stay in the
+// inventory marked over the limit, and no device is ever refused.
 //
 // The watched-prefix ceiling stays hard at every tier: it is a small,
 // operator-chosen list with no incident-time urgency behind it, and the owner's
@@ -495,9 +499,9 @@ func Enforced(name string) bool { return enforcedCeilings[name] }
 // a commercial decision, not a diff.
 //
 // Post-grace consequence, and it is deliberate: at PhasePostGrace the tier in
-// force IS Community (the fallback), so this returns false and the hard block
-// applies to NEW activations. Nothing already monitored is touched — the gate
-// only ever sees a transition.
+// force IS Community (the fallback), so this returns false and the hard limit
+// applies — the first 25 devices by first-seen time stay collected from and the
+// rest are marked over the limit until a renewal is installed.
 func SoftCeiling(name string, at Tier) bool {
 	return name == CeilingDevices && rank(at) >= rank(TierTeam)
 }
@@ -506,10 +510,9 @@ func SoftCeiling(name string, at Tier) bool {
 func CeilingLabel(name string) string {
 	switch name {
 	case CeilingDevices:
-		// "monitored devices", not "devices": the number counts what Correlix
-		// is configured to collect from, and an inventory of five hundred
-		// discovered candidates against a limit of 25 must never read as if
-		// those rows were the thing being limited (owner C4, 2026-09-05).
+		// "monitored devices", not "devices": the unit is the device Correlix
+		// monitors — every inventory device with an address (owner decision
+		// 2026-10-03), several telemetry methods counting once.
 		return "monitored devices"
 	case CeilingWatchedPrefixes:
 		return "watched prefixes"

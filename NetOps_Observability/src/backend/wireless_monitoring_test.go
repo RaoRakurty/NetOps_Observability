@@ -4,23 +4,24 @@
 package backend
 
 // wireless_monitoring_test.go — tracker 256, owner decision 2026-09-05:
-// "wireless controllers and APs count against the monitored-device entitlement
-// when monitoring is intentionally enabled. Controller monitored → 1 device;
-// AP monitored → 1 device (1 controller + 50 APs = 51)."
+// "Controller monitored → 1 device; AP monitored → 1 device (1 controller +
+// 50 APs = 51)", under the 2026-10-03 rule that every addressable inventory
+// device is monitored up to the licence ceiling in first-seen order.
 //
 // What these tests pin is not a second counter — the point of the change is
 // that there ISN'T one. Wireless entities an enabled integration polls are
 // reported into the device registry by wireless.DeviceSource, and from there
 // the SAME definition (internal/devmon), the SAME dedupe and the SAME ceiling
-// gate that govern an SNMP or NetBox device govern them. So each test below
-// asserts a fact about the ONE definition as seen through the wireless path:
+// that govern an SNMP or NetBox device govern them. So each test below asserts
+// a fact about the ONE definition as seen through the wireless path:
 //
 //	51 = 1 + 50            the unit is the device, controller and AP alike
-//	discovered-only = 0    a WLC an SNMP sweep found is a candidate, not a spend
+//	scanned = monitored    a WLC an SNMP sweep found is monitored like any device
 //	disabled = 0           an integration nobody enabled polls nothing
 //	SNMP + NMS = 1         one physical box is one entitlement
-//	402 at 26              Community refuses the wireless activation, with unit
-//	overage on paid        Team records it instead, and refuses nothing
+//	26th = over the limit  Community never refuses the activation; the excess
+//	                       is in the inventory, marked over the licence limit
+//	overage on paid        Team collects it and records the overage
 //	tenant-scoped          identity never crosses a tenant boundary
 //	metered identically    tracker 258 reads the same set, with no new code
 
@@ -173,10 +174,10 @@ func TestWirelessControllerAndAPsEachCountOneDevice(t *testing.T) {
 	})
 }
 
-// TestWirelessDiscoveredOnlyIsNotCounted: a controller or AP an SNMP sweep
-// merely FOUND is a candidate. Discovery is free for wireless exactly as it is
-// for everything else.
-func TestWirelessDiscoveredOnlyIsNotCounted(t *testing.T) {
+// TestWirelessScannedDevicesAreMonitored: a controller or AP an SNMP sweep
+// found is in the inventory with an address, so it is monitored like any other
+// device. A wireless store with no enabled integration behind it is not.
+func TestWirelessScannedDevicesAreMonitored(t *testing.T) {
 	k := newLicTestKey(t)
 	scannedWLC := models.Device{
 		ID: "scan-wlc", Name: "scan-wlc", Address: "10.44.255.9",
@@ -193,8 +194,8 @@ func TestWirelessDiscoveredOnlyIsNotCounted(t *testing.T) {
 	f.aps(t, wlTenant, "wlc-idle", 5)
 	f.poll(t)
 
-	if got := f.monitored(); got != 0 {
-		t.Fatalf("monitored = %d, want 0 — nothing here was enabled for collection", got)
+	if got := f.monitored(); got != 2 {
+		t.Fatalf("monitored = %d, want the 2 scanned devices — the idle estate is not polled", got)
 	}
 	if got := len(f.s.discovery.Devices()); got != 2 {
 		t.Fatalf("the scanned rows must stay in the inventory, got %d", got)
@@ -209,7 +210,7 @@ func TestWirelessDiscoveredOnlyIsNotCounted(t *testing.T) {
 			if r.Monitored {
 				t.Fatalf("%s must not be stamped monitored: %+v", r.ID, r)
 			}
-			if r.MonitorReason != devmon.ReasonWirelessNotPolled {
+			if r.MonitorReason != devmon.ReasonWirelessNotPolled || r.MonitorState != devmon.StateNotPolled {
 				t.Fatalf("%s reason = %q, want the not-polled sentence", r.ID, r.MonitorReason)
 			}
 		}
@@ -321,10 +322,10 @@ func wlEnable(t *testing.T, s *server, id string, enabled bool) *httptest.Respon
 	return w
 }
 
-// TestWirelessActivationRefusedAtCommunityCeiling: at 25 of 25, enabling a
-// wireless integration is the 26th monitored device and Community refuses it —
-// with the structured 402 the SPA renders, carrying unit monitored_devices.
-func TestWirelessActivationRefusedAtCommunityCeiling(t *testing.T) {
+// TestWirelessActivationAtCommunityCeilingIsNotRefused: at 25 of 25,
+// enabling a wireless integration succeeds; its controller joins the inventory
+// as the 26th device, marked over the licence limit and not collected from.
+func TestWirelessActivationAtCommunityCeilingIsNotRefused(t *testing.T) {
 	k := newLicTestKey(t)
 	var fleet []models.Device
 	for i := 0; i < 25; i++ {
@@ -337,39 +338,27 @@ func TestWirelessActivationRefusedAtCommunityCeiling(t *testing.T) {
 	f.integration(t, wlTenant, wlVendor, false)
 	f.controller(t, wlTenant, "wlc-over", "10.44.251.1")
 
-	w := wlEnable(t, f.s, "nmsi-"+wlVendor+"-"+wlTenant, true)
-	licAssertRefusal(t, w, entitlement.KindCeiling, entitlement.CeilingDevices, entitlement.TierTeam)
-	if !strings.Contains(w.Body.String(), entitlement.UnitMonitoredDevices) {
-		t.Fatalf("the 402 must carry unit %q so a client renders the right thing: %s",
-			entitlement.UnitMonitoredDevices, w.Body.String())
+	if w := wlEnable(t, f.s, "nmsi-"+wlVendor+"-"+wlTenant, true); w.Code != http.StatusOK {
+		t.Fatalf("enable = %d %s — the licence never refuses; the excess is marked over the limit", w.Code, w.Body.String())
+	}
+	f.poll(t)
+	if got := f.monitored(); got != 25 {
+		t.Fatalf("monitored = %d, want 25 — nothing is collected past the ceiling", got)
+	}
+	d, ok := f.s.discovery.Get(wireless.ControllerDeviceIDPrefix + "wlc-over")
+	if !ok || d.Monitored || d.MonitorState != devmon.StateOverLimit {
+		t.Fatalf("the controller must be in the inventory, over the limit: ok=%v %+v", ok, d)
+	}
+	if got := f.s.licenceUsage(t.Context())[entitlement.CeilingDevices]; got != 26 {
+		t.Fatalf("licence usage = %d, want 26 — it counts the device past the limit too", got)
 	}
 
-	t.Run("the refusal actually stopped the activation", func(t *testing.T) {
-		ic, found, err := f.s.nms.Store().Get(t.Context(), wlTenant, false, "nmsi-"+wlVendor+"-"+wlTenant)
-		if err != nil || !found {
-			t.Fatalf("integration lookup: %v found=%v", err, found)
+	t.Run("deleting a monitored device starts collecting from the controller", func(t *testing.T) {
+		if err := f.s.discovery.Delete("dev-0"); err != nil {
+			t.Fatal(err)
 		}
-		if ic.Enabled {
-			t.Fatal("a refused activation must not have been written")
-		}
-		f.poll(t)
-		if got := f.monitored(); got != 25 {
-			t.Fatalf("monitored = %d, want 25 — nothing was collected past the ceiling", got)
-		}
-	})
-
-	t.Run("turning an integration OFF is never refused", func(t *testing.T) {
-		f.integration(t, wlTenant, wlVendor, true)
-		if w := wlEnable(t, f.s, "nmsi-"+wlVendor+"-"+wlTenant, false); w.Code != http.StatusOK {
-			t.Fatalf("disable = %d %s — freeing capacity cannot be a licence refusal", w.Code, w.Body.String())
-		}
-	})
-
-	t.Run("a connector with no wireless inventory is not gated", func(t *testing.T) {
-		f.integration(t, wlTenant, wlNoWiFi, false)
-		if w := wlEnable(t, f.s, "nmsi-"+wlNoWiFi+"-"+wlTenant, true); w.Code != http.StatusOK {
-			t.Fatalf("enable %s = %d %s — it adds no wireless devices, so it costs nothing",
-				wlNoWiFi, w.Code, w.Body.String())
+		if d, _ := f.s.discovery.Get(wireless.ControllerDeviceIDPrefix + "wlc-over"); !d.Monitored {
+			t.Fatalf("the controller is next in line: %+v", d)
 		}
 	})
 }

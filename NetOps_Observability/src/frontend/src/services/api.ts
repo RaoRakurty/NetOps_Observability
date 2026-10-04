@@ -44,14 +44,16 @@ export type Device = {
   source: string;
   last_seen: string;
   /**
-   * Correlix is configured to COLLECT from this device.
-   *
-   * This is the licensed unit — the device ceiling counts monitored devices,
-   * not inventory rows — and it is what the collectors poll. Server-stamped on
-   * every read: a device discovered but never enabled is inventory, not load,
-   * and costs no allowance. Sending it on a create is ignored.
+   * Correlix COLLECTS from this device: it has an address and is within the
+   * licence limit, first found first (owner decision 2026-10-03). There is no
+   * per-device switch. Server-stamped on every read; sending it is ignored.
    */
   monitored?: boolean;
+  /** "monitored" | "over_limit" (past the licence limit, not collected) |
+   *  "no_address" | "not_polled" (a wireless device whose integration is off). */
+  monitor_state?: "monitored" | "over_limit" | "no_address" | "not_polled";
+  /** The licence limit an over-limit device is past. */
+  monitor_limit?: number;
   /** Why `monitored` has the value it has. Always present on a device read. */
   monitor_reason?: string;
   /** The telemetry configured for the device (snmp, gnmi, …). Several methods
@@ -59,39 +61,53 @@ export type Device = {
   monitor_methods?: string[];
 };
 
-/** GET|PUT /api/devices/{id}/monitoring. */
+/** GET /api/devices/{id}/monitoring — read-only status. */
 export type DeviceMonitoring = {
   device_id: string;
   monitored: boolean;
+  state: "monitored" | "over_limit" | "no_address" | "";
   reason: string;
   methods?: string[];
-  /** false = nobody has decided; the state is the default for how the device
-   *  entered the inventory. */
-  decided: boolean;
-  decided_by?: string;
-  decided_at?: string;
+  /** false when monitored but no collector for its methods is running. */
+  collecting: boolean;
+  collecting_methods?: string[];
+  limit?: number;
 };
 
-// Subnet discovery scan scope (platform-owner; GET is redacted — the probe
-// community is write-only).
+// Subnet discovery scan scope (platform-owner). Discovery has no credential of
+// its own: the sweep tries the platform-owned SNMP profiles (/api/snmp/credentials)
+// in name order and binds each found device to the profile that answered.
 export type DiscoveryConfig = {
   enabled: boolean;
   ranges: string[];
-  community_set: boolean;
   allow_non_private: boolean;
   interval_sec: number;
 };
+// No `community` field: a PUT carrying one is refused 400 — credentials live in
+// SNMP Profiles only.
 export type DiscoveryConfigInput = {
   enabled: boolean;
   ranges: string[];
-  community?: string; // comma-separated priority list; blank preserves the stored secret
   allow_non_private?: boolean;
   interval_sec?: number;
+};
+// A device the sweep found; credential_ref = the SNMP profile id that answered.
+export type DiscoveryFoundDevice = {
+  id: string;
+  name: string;
+  address: string;
+  vendor?: string;
+  credential_ref?: string;
 };
 export type DiscoveryConfigEnvelope = {
   config: DiscoveryConfig;
   limits?: { max_hosts: number; max_ranges: number };
   stats?: { last_poll?: string; last_error?: string; devices?: number };
+  // Platform-owned SNMP profiles the sweep will try, in name order.
+  scan_profiles?: { total: number; v2c: number; v3: number };
+  found?: DiscoveryFoundDevice[];
+  config_unavailable?: boolean;
+  config_error?: string;
 };
 
 export type CollectorStatus = {
@@ -5505,17 +5521,6 @@ export const api = {
   /** Whether Correlix is collecting from one device, and why. */
   deviceMonitoring: (id: string) =>
     request<DeviceMonitoring>(`/api/devices/${encodeURIComponent(id)}/monitoring`),
-  /**
-   * Turn monitoring on or off for one device.
-   *
-   * Enabling the first device past the licence ceiling throws the structured
-   * 402 the UpgradeCard renders — the server decides, never this call.
-   */
-  setDeviceMonitoring: (id: string, enabled: boolean) =>
-    request<DeviceMonitoring>(`/api/devices/${encodeURIComponent(id)}/monitoring`, {
-      method: "PUT",
-      body: JSON.stringify({ enabled }),
-    }),
   collectors: () => request<CollectorStatus[]>("/api/collectors"),
   discoveryConfig: () => request<DiscoveryConfigEnvelope>("/api/discovery/config"),
   saveDiscoveryConfig: (c: DiscoveryConfigInput) =>

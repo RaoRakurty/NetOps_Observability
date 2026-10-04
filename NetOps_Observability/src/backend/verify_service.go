@@ -161,18 +161,12 @@ func (s *server) resolveVerifyTargets(tenant string, names []string) []verify.Ta
 			continue
 		}
 		t := verify.Target{Device: dev, SSH: sshCred}
-		if s.snmpCreds != nil && dev.CredentialRef != "" {
-			ref := dev.CredentialRef
-			if s.credOverrides != nil {
-				if ov, ok := s.credOverrides.Get(dev.ID); ok {
-					ref = ov.ProfileID
-				}
-			}
-			if c, ok := s.snmpCreds.Resolve(ref); ok {
-				tgt := collectors.Target{ID: dev.ID, Address: dev.Address}
-				snmpcred.ApplyCredToTarget(&tgt, c)
-				t.SNMP = &tgt
-			}
+		// Same resolution the pollers use (override first, even for an unbound
+		// device; tenant-checked) — see snmpcred.ResolveForDevice.
+		if c, ok := snmpcred.ResolveForDevice(s.snmpCreds, s.credOverrides, dev); ok {
+			tgt := collectors.Target{ID: dev.ID, Address: dev.Address}
+			snmpcred.ApplyCredToTarget(&tgt, c)
+			t.SNMP = &tgt
 		}
 		out = append(out, t)
 		if len(out) >= verify.MaxDevices() {

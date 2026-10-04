@@ -228,7 +228,13 @@ def test_reply_grammar_matches_go_client():
 # entrypoint.sh — executed with swtpm/tpm2/socat faked
 # ---------------------------------------------------------------------------
 
-def _run_entrypoint(tmp_path: Path, stray_kek: bool):
+def _run_entrypoint(tmp_path: Path, stray_kek: bool, da_counter: int = 0,
+                    da_locked: int = 0, clear_fails: bool = False):
+    # The dictionary-attack state the tpm2_getcap stub reports; the
+    # tpm2_dictionarylockout stub resets it unless clear_fails (2026-10-03).
+    da_state = tmp_path / "da-state"
+    da_state.write_text(f"{da_counter} {da_locked}\n")
+    calls = tmp_path / "tpm-calls.log"
     bindir = tmp_path / "bin"
     bindir.mkdir(exist_ok=True)
     # swtpm backgrounds; close inherited pipes so the test never hangs on EOF.
@@ -240,6 +246,18 @@ def _run_entrypoint(tmp_path: Path, stray_kek: bool):
         'while [ $# -gt 0 ]; do case "$1" in -c) echo ctx > "$2"; shift 2;; *) shift;; esac; done\n'
         "exit 0\n"
     ))
+    _write_exec(bindir / "tpm2_getcap", (
+        "#!/bin/sh\n"
+        'read -r c l < "$DA_STATE"\n'
+        'printf "  inLockout:                 %s\\nTPM2_PT_LOCKOUT_COUNTER: 0x%x\\n" "$l" "$c"\n'
+    ))
+    _write_exec(bindir / "tpm2_dictionarylockout", (
+        "#!/bin/sh\n"
+        'echo "dictionarylockout $*" >> "$TPM_CALLS"\n'
+        '[ -n "${DA_CLEAR_FAILS:-}" ] && { echo "ERROR: lockout auth failed" >&2; exit 1; }\n'
+        'echo "0 0" > "$DA_STATE"\n'
+    ))
+    _write_exec(bindir / "tpm2_shutdown", '#!/bin/sh\necho "shutdown $*" >> "$TPM_CALLS"\n')
     _write_exec(bindir / "socat", "#!/bin/sh\necho socat-exec-reached\nexit 0\n")
     tpmdir = tmp_path / "tpmstate"
     tpmdir.mkdir(exist_ok=True)
@@ -251,9 +269,53 @@ def _run_entrypoint(tmp_path: Path, stray_kek: bool):
     env["PATH"] = f"{bindir}:{env['PATH']}"
     env["TPMDIR"] = str(tpmdir)
     env["SEAL_SOCKET"] = str(tmp_path / "run" / "seal.sock")
+    env["DA_STATE"] = str(da_state)
+    env["TPM_CALLS"] = str(calls)
+    if clear_fails:
+        env["DA_CLEAR_FAILS"] = "1"
     r = subprocess.run(["sh", str(ENTRYPOINT)], env=env,
                        capture_output=True, text=True, timeout=60)
     return r, tpmdir
+
+
+def _tpm_calls(tmp_path: Path) -> str:
+    calls = tmp_path / "tpm-calls.log"
+    return calls.read_text() if calls.exists() else ""
+
+
+def test_entrypoint_clears_da_counter_loudly_before_serving(tmp_path):
+    """A locked TPM (counter 3, inLockout) is cleared at boot and NAMED first."""
+    r, _ = _run_entrypoint(tmp_path, stray_kek=False, da_counter=3, da_locked=1)
+    assert r.returncode == 0, r.stderr
+    assert "dictionary-attack failure counter is 3 (inLockout=1)" in r.stderr, r.stderr
+    assert "counter cleared (now 0)" in r.stderr, r.stderr
+    assert "dictionarylockout -c" in _tpm_calls(tmp_path)
+    assert "socat-exec-reached" in r.stdout
+
+
+def test_entrypoint_refuses_to_serve_while_still_locked(tmp_path):
+    """If the clear fails (a lockoutAuth was set), boot fails instead of
+    reporting ready while every UNSEAL would answer ERR load."""
+    r, _ = _run_entrypoint(tmp_path, stray_kek=False, da_counter=3, da_locked=1, clear_fails=True)
+    assert r.returncode == 1, r.stderr
+    assert "still in dictionary-attack lockout" in r.stderr, r.stderr
+    assert "socat-exec-reached" not in r.stdout, "a locked custodian must not serve"
+
+
+def test_entrypoint_quiet_and_untouched_when_da_counter_is_zero(tmp_path):
+    r, _ = _run_entrypoint(tmp_path, stray_kek=False)
+    assert r.returncode == 0, r.stderr
+    assert "dictionary-attack" not in r.stderr, "no failures, no alarm and no clear"
+    assert "dictionarylockout" not in _tpm_calls(tmp_path)
+
+
+def test_entrypoint_shuts_the_tpm_down_orderly_on_exit(tmp_path):
+    """socat ending must still send TPM2_Shutdown(CLEAR) before swtpm stops,
+    or the next boot counts a dictionary-attack failure."""
+    r, _ = _run_entrypoint(tmp_path, stray_kek=False)
+    assert r.returncode == 0, r.stderr
+    assert "shutdown -c" in _tpm_calls(tmp_path), r.stderr
+    assert "TPM shut down orderly" in r.stderr
 
 
 def test_entrypoint_purges_stray_kek_loudly(tmp_path):

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"netops/backend/internal/audit"
+	"netops/backend/internal/devmon"
 	"netops/backend/internal/discovery"
 	"netops/backend/internal/entitlement"
 	"netops/backend/internal/licence"
@@ -210,15 +211,15 @@ func licDeviceServer(t *testing.T, ent *licence.Service, seed int) *server {
 		t.Fatalf("harness seeded %d MONITORED devices, wanted %d — the fixture must "+
 			"represent a deployment that is actually collecting from them", got, seed)
 	}
-	d.SetMonitorGate(func(current int) error {
-		return entitlement.CheckCeiling(ent, entitlement.CeilingDevices, current)
-	})
-	return &server{roles: roles, discovery: d, entitlements: ent}
+	s := &server{roles: roles, discovery: d, entitlements: ent}
+	d.SetMonitorLimit(s.monitorCollectionLimit)
+	return s
 }
 
-// TestLicenceDeviceCeiling is the headline enforcement: under Community the
-// 26th MONITORED device is refused and under a Team licence it is admitted.
-// Same handler, same request, one file's difference.
+// TestLicenceDeviceCeiling is the headline enforcement (owner decision
+// 2026-10-03): under Community the 26th device is STORED and marked over the
+// licence limit — never refused — and under a Team licence it is collected
+// from. Same handler, same request, one file's difference.
 func TestLicenceDeviceCeiling(t *testing.T) {
 	k := newLicTestKey(t)
 	const body = `{"name":"new-switch","address":"10.10.10.10"}`
@@ -227,43 +228,30 @@ func TestLicenceDeviceCeiling(t *testing.T) {
 		s := licDeviceServer(t, k.service(t, nil), 24)
 		w := httptest.NewRecorder()
 		s.handleDevices(w, licReq(http.MethodPost, "/api/devices", body, licClaims()))
-		if w.Code == http.StatusPaymentRequired {
-			t.Fatalf("the 25th monitored device is inside the Community ceiling and must be admitted: %s", w.Body.String())
+		if w.Code != http.StatusCreated {
+			t.Fatalf("POST = %d %s", w.Code, w.Body.String())
 		}
 		if got := s.discovery.MonitoredCount(); got != 25 {
 			t.Fatalf("monitored = %d, want 25", got)
 		}
 	})
 
-	t.Run("community refuses the 26th", func(t *testing.T) {
+	t.Run("community stores the 26th, over the limit", func(t *testing.T) {
 		s := licDeviceServer(t, k.service(t, nil), 25)
 		w := httptest.NewRecorder()
 		s.handleDevices(w, licReq(http.MethodPost, "/api/devices", body, licClaims()))
-		licAssertRefusal(t, w, entitlement.KindCeiling, entitlement.CeilingDevices, entitlement.TierTeam)
-		// And nothing was written: a refused create must not half-happen.
-		if len(s.discovery.Devices()) != 25 {
-			t.Fatalf("a refused create must not add a device, fleet is now %d", len(s.discovery.Devices()))
+		if w.Code != http.StatusCreated {
+			t.Fatalf("the licence never refuses a device: %d %s", w.Code, w.Body.String())
 		}
-	})
-
-	t.Run("the refusal names the unit it counts", func(t *testing.T) {
-		// The machine token must say monitored_devices, so no client can render
-		// a limit on collection as a limit on inventory rows.
-		s := licDeviceServer(t, k.service(t, nil), 25)
-		w := httptest.NewRecorder()
-		s.handleDevices(w, licReq(http.MethodPost, "/api/devices", body, licClaims()))
-		var got struct {
-			Unit    string `json:"unit"`
-			Message string `json:"message"`
-		}
+		var got models.Device
 		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 			t.Fatal(err)
 		}
-		if got.Unit != entitlement.UnitMonitoredDevices {
-			t.Fatalf("unit = %q, want %q", got.Unit, entitlement.UnitMonitoredDevices)
+		if got.Monitored || got.MonitorState != devmon.StateOverLimit || got.MonitorLimit != 25 {
+			t.Fatalf("the 26th must be returned marked over the limit of 25: %+v", got)
 		}
-		if !strings.Contains(got.Message, "monitored devices") {
-			t.Fatalf("the sentence must say what is limited: %q", got.Message)
+		if len(s.discovery.Devices()) != 26 || s.discovery.MonitoredCount() != 25 {
+			t.Fatalf("fleet %d / monitored %d, want 26 / 25", len(s.discovery.Devices()), s.discovery.MonitoredCount())
 		}
 	})
 
@@ -272,11 +260,11 @@ func TestLicenceDeviceCeiling(t *testing.T) {
 		s := licDeviceServer(t, k.service(t, k.issue(t, entitlement.TierTeam, nil, nil)), 25)
 		w := httptest.NewRecorder()
 		s.handleDevices(w, licReq(http.MethodPost, "/api/devices", body, licClaims()))
-		if w.Code == http.StatusPaymentRequired {
-			t.Fatalf("a Team licence covers 250 devices — the 26th must be admitted: %s", w.Body.String())
+		if w.Code != http.StatusCreated {
+			t.Fatalf("POST = %d %s", w.Code, w.Body.String())
 		}
-		if len(s.discovery.Devices()) != 26 {
-			t.Fatalf("the device must actually be admitted, fleet is %d", len(s.discovery.Devices()))
+		if s.discovery.MonitoredCount() != 26 {
+			t.Fatalf("a Team licence covers 250 devices — the 26th must be collected from, monitored = %d", s.discovery.MonitoredCount())
 		}
 	})
 
@@ -312,62 +300,6 @@ func TestLicenceDeviceCeiling(t *testing.T) {
 	})
 }
 
-// TestLicenceDiscoveryIsNeverCharged is the C4 decision end to end: discovery
-// finds a network far larger than the ceiling, every device lands in the
-// inventory, and NONE of it consumes the allowance.
-func TestLicenceDiscoveryIsNeverCharged(t *testing.T) {
-	k := newLicTestKey(t)
-	ent := k.service(t, nil) // Community: 25
-	d := discovery.NewDiscoveryAggregator()
-	d.SetMonitorGate(func(current int) error {
-		return entitlement.CheckCeiling(ent, entitlement.CeilingDevices, current)
-	})
-
-	src := &licFakeSource{}
-	for i := 0; i < 500; i++ {
-		src.devices = append(src.devices, models.Device{
-			ID: "disc-" + strconv.Itoa(i), Name: "disc-" + strconv.Itoa(i),
-			Address: "10.0." + strconv.Itoa(i/250) + "." + strconv.Itoa(i%250),
-		})
-	}
-	d.PollOnceForTest(context.Background(), src)
-
-	if got := len(d.Devices()); got != 500 {
-		t.Fatalf("discovery admitted %d devices, want all 500 — finding a device is free and "+
-			"must never be refused by a licence", got)
-	}
-	if got := d.MonitoredCount(); got != 0 {
-		t.Fatalf("monitored = %d, want 0 — a subnet-scan result is a candidate, not a monitored device", got)
-	}
-	if got := d.MonitoringWithheldCount(); got != 0 {
-		t.Fatalf("withheld = %d, want 0 — nothing was withheld because nothing asked to be monitored", got)
-	}
-
-	t.Run("enabling monitoring on five spends five", func(t *testing.T) {
-		for i := 0; i < 5; i++ {
-			if _, err := d.SetMonitoring("disc-"+strconv.Itoa(i), true, "op@example.test"); err != nil {
-				t.Fatalf("enable %d: %v", i, err)
-			}
-		}
-		if got := d.MonitoredCount(); got != 5 {
-			t.Fatalf("monitored = %d, want 5", got)
-		}
-		if got := len(d.Devices()); got != 500 {
-			t.Fatalf("the inventory must be untouched, got %d", got)
-		}
-	})
-
-	t.Run("a re-poll does not double count or churn", func(t *testing.T) {
-		d.PollOnceForTest(context.Background(), src)
-		if got := d.MonitoredCount(); got != 5 {
-			t.Fatalf("rediscovery changed the count to %d, want 5", got)
-		}
-		if got := len(d.Devices()); got != 500 {
-			t.Fatalf("rediscovery changed the fleet to %d, want 500", got)
-		}
-	})
-}
-
 // TestLicenceSourceMonitoringWithheld is the honest-degradation half: a SOURCE
 // reporting devices that would default to monitored (an operator's devices
 // file, the source of truth) past the ceiling still puts every one of them in
@@ -376,9 +308,7 @@ func TestLicenceSourceMonitoringWithheld(t *testing.T) {
 	k := newLicTestKey(t)
 	ent := k.service(t, nil) // Community: 25
 	d := discovery.NewDiscoveryAggregator()
-	d.SetMonitorGate(func(current int) error {
-		return entitlement.CheckCeiling(ent, entitlement.CeilingDevices, current)
-	})
+	d.SetMonitorLimit((&server{entitlements: ent}).monitorCollectionLimit)
 
 	src := &licDeclaredSource{}
 	for i := 0; i < 40; i++ {
@@ -404,8 +334,8 @@ func TestLicenceSourceMonitoringWithheld(t *testing.T) {
 		if !strings.Contains(w.Reason, "licence") {
 			t.Fatalf("the withheld reason for %s must name the licence, got %q", w.DeviceID, w.Reason)
 		}
-		if !strings.Contains(w.Reason, "nothing was deleted") {
-			t.Fatalf("the reason must say nothing was deleted: %q", w.Reason)
+		if !strings.Contains(w.Reason, "stays in the inventory") {
+			t.Fatalf("the reason must say the device stays: %q", w.Reason)
 		}
 	}
 
@@ -420,15 +350,11 @@ func TestLicenceSourceMonitoringWithheld(t *testing.T) {
 	})
 
 	t.Run("freeing a slot starts collecting from a withheld device", func(t *testing.T) {
-		if _, err := d.SetMonitoring("sot-0", false, "op@example.test"); err != nil {
+		if err := d.Delete("sot-0"); err != nil {
 			t.Fatal(err)
 		}
-		if got := d.MonitoredCount(); got != 24 {
-			t.Fatalf("turning one off must release the entitlement, monitored = %d", got)
-		}
-		d.PollOnceForTest(context.Background(), src)
 		if got := d.MonitoredCount(); got != 25 {
-			t.Fatalf("the freed slot must be taken by a withheld device on the next poll, monitored = %d", got)
+			t.Fatalf("the freed slot must be taken by the next device at once, monitored = %d", got)
 		}
 		if got := d.MonitoringWithheldCount(); got != 14 {
 			t.Fatalf("withheld = %d, want 14", got)
@@ -443,15 +369,6 @@ type licDeclaredSource struct{ devices []models.Device }
 func (f *licDeclaredSource) Name() string            { return "static" }
 func (f *licDeclaredSource) Interval() time.Duration { return time.Minute }
 func (f *licDeclaredSource) Poll(context.Context) ([]models.Device, error) {
-	return append([]models.Device(nil), f.devices...), nil
-}
-
-// licFakeSource is a discovery source returning a fixed device list.
-type licFakeSource struct{ devices []models.Device }
-
-func (f *licFakeSource) Name() string            { return "snmp" }
-func (f *licFakeSource) Interval() time.Duration { return time.Minute }
-func (f *licFakeSource) Poll(context.Context) ([]models.Device, error) {
 	return append([]models.Device(nil), f.devices...), nil
 }
 
@@ -1396,18 +1313,16 @@ func TestLicenceRouteLifecycle(t *testing.T) {
 }
 
 // TestLicenceDegradedListsOverCeilingDevices is honest degradation end to end:
-// an estate ALREADY over the ceiling is COUNTED and LISTED on the page, not
-// pinned at the limit and not disabled behind the operator's back.
+// an estate over a HARD ceiling is COUNTED and LISTED on the page, not pinned
+// at the limit.
 //
-// This is the shape a downgrade takes — a Team deployment monitoring 35 devices
-// whose licence lapses to Community. Nothing is switched off (that would be a
-// silent outage caused by a billing event); the page says 35 of 25 and names
-// the excess.
+// This is the shape a downgrade takes — a deployment with 35 devices whose
+// licence is Community. Under the owner's 2026-10-03 rule the first 25 by
+// first-seen time are collected from and the other 10 stay in the inventory,
+// marked over the licence limit; the page says 35 of 25 and names the excess.
 func TestLicenceDegradedListsOverCeilingDevices(t *testing.T) {
 	k := newLicTestKey(t)
 	s := licAPIServer(t, k, nil)
-	// Seeded BEFORE the ceiling exists: these devices were already being
-	// collected from when the licence changed under them.
 	for i := 0; i < 35; i++ {
 		dev := models.Device{
 			ID: "d" + strconv.Itoa(i), Name: "d" + strconv.Itoa(i),
@@ -1417,11 +1332,12 @@ func TestLicenceDegradedListsOverCeilingDevices(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	s.discovery.SetMonitorGate(func(current int) error {
-		return entitlement.CheckCeiling(s.entitlements, entitlement.CeilingDevices, current)
-	})
-	if got := s.discovery.MonitoredCount(); got != 35 {
-		t.Fatalf("monitored = %d, want 35 — an over-ceiling estate must keep running", got)
+	s.discovery.SetMonitorLimit(s.monitorCollectionLimit)
+	if got := s.discovery.MonitoredCount(); got != 25 {
+		t.Fatalf("monitored = %d, want the first 25 collected from", got)
+	}
+	if got := s.discovery.MonitoringWithheldCount(); got != 10 {
+		t.Fatalf("over the limit = %d, want 10 — in the inventory, not collected", got)
 	}
 
 	w := httptest.NewRecorder()

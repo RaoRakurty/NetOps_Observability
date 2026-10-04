@@ -184,8 +184,7 @@ A request without a credential is refused with `401` and the body `{"error":"mis
 | `DELETE` | `/api/devices/&#123;id&#125;` | Delete a device |
 | `GET` | `/api/devices/&#123;id&#125;` | Fetch a device by id |
 | `GET` | `/api/devices/&#123;id&#125;/interfaces/by-vrf` | One device's interfaces grouped by routing instance, in the device's own dialect (VRF \| routing-instance \| VPRN \| VPN instance), with per-interface oper/admin state, in/out utilisation and error rates over ?window= (1m..24h, default 5m). Carries an honest coverage block: vrf_labels says whether any interface series actually carried a vrf label, transport names the lane (snmp is INFERRED from an absent transport stamp), and every absent measurement is null with a note rather than zero (infrastructure:read; 404 outside the caller's tenant, identical to an absent device) |
-| `GET` | `/api/devices/&#123;id&#125;/monitoring` | Whether Correlix is collecting from this device, why, and which telemetry methods are configured (infrastructure:read; 404 outside the caller's tenant) |
-| `PUT` | `/api/devices/&#123;id&#125;/monitoring` | Turn monitoring on or off for one device (&#123;"enabled": true\|false&#125;; infrastructure:write). Monitored devices are the unit the licence counts — enabling the first one past the ceiling answers the structured 402, disabling releases the entitlement, and the device, its history and its topology are untouched either way |
+| `GET` | `/api/devices/&#123;id&#125;/monitoring` | Read-only monitoring status of one device: monitored (in the inventory, addressable and within the licence limit by first-seen order) or over the licence limit or without an address, why, the configured telemetry methods, and whether a collector for any of them is actually running (infrastructure:read; 404 outside the caller's tenant). There is no per-device switch |
 
 ## Licence
 

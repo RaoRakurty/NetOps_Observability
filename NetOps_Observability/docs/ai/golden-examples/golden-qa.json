@@ -11,7 +11,7 @@
           "onboard-devices/snmp-discovery"
         ]
       },
-      "nav": "infrastructure/discovery/discovery"
+      "nav": "admin/discovery"
     },
     {
       "id": "docs-002",
@@ -1276,7 +1276,7 @@
           "infrastructure/nms-integrations"
         ]
       },
-      "nav": "infrastructure/discovery",
+      "nav": "admin/discovery",
       "notes": "nav-leaf coverage (N-G1): Infrastructure \u2192 Discovery & NMS"
     },
     {
@@ -1288,7 +1288,7 @@
           "infrastructure/nms-integrations"
         ]
       },
-      "nav": "infrastructure/discovery/nms",
+      "nav": "infrastructure/nms",
       "notes": "nav-leaf coverage (N-G1): Infrastructure \u2192 Discovery & NMS \u2192 NMS Integrations"
     },
     {

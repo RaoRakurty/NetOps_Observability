@@ -960,7 +960,7 @@ describe("recorded usage", () => {
     // "Monitoring: N / 25 …" against the ceiling, and the sentence that stops a
     // customer believing a discovery sweep spent their allowance.
     expect(await screen.findByText(/Monitoring: 12 \/ 25 Community monitored devices\./)).toBeTruthy();
-    expect(screen.getByText(/Discovery does not consume your monitoring allowance\./)).toBeTruthy();
+    expect(screen.getByText(/Every device with an address counts, including devices found by discovery\./)).toBeTruthy();
   });
 
   it("never renders an unmeasured meter as a zero", async () => {

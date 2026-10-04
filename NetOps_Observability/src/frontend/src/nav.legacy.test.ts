@@ -61,7 +61,12 @@ const LEGACY: [string, string, string][] = [
   // Infrastructure (old leaves that moved or renamed)
   ["#/infrastructure/devices", "infrastructure", "devices"],
   ["#/infrastructure/ports", "infrastructure", "interfaces"],
-  ["#/infrastructure/nms", "infrastructure", "discovery"],
+  // NMS Integrations is its own leaf again (2026-10, "Discovery & NMS" split).
+  ["#/infrastructure/nms", "infrastructure", "nms"],
+  // The 2026-08 "Discovery & NMS" composite and its two sub-tabs.
+  ["#/infrastructure/discovery", "admin", "discovery"],
+  ["#/infrastructure/discovery/discovery", "admin", "discovery"],
+  ["#/infrastructure/discovery/nms", "infrastructure", "nms"],
   ["#/infrastructure/wireless", "infrastructure", "wireless"],
   ["#/infrastructure/monitoring", "analytics", "device-monitoring"],
   ["#/infrastructure/ifperf", "analytics", "interface-performance"],
@@ -194,7 +199,6 @@ describe("canonicalHash — suffix + query preservation", () => {
     expect(canonicalHash("#/monitoring/appobs/investigations")).toBe("#/operations/cloud/investigations");
     expect(canonicalHash("#/logs/cloud")).toBe("#/explore/logs/cloud");
     expect(canonicalHash("#/infrastructure/geomap")).toBe("#/infrastructure/sites/map");
-    expect(canonicalHash("#/infrastructure/nms")).toBe("#/infrastructure/discovery/nms");
   });
 
   it("preserves ?query deep-link params", () => {
@@ -218,6 +222,8 @@ describe("canonicalHash — suffix + query preservation", () => {
     expect(canonicalHash("#/admin/access")).toBeNull();
     expect(canonicalHash("#/admin/licence")).toBeNull();
     expect(canonicalHash("#/infrastructure/devices")).toBeNull();
+    expect(canonicalHash("#/infrastructure/nms")).toBeNull();
+    expect(canonicalHash("#/admin/discovery")).toBeNull();
     expect(canonicalHash("#/resource/device/edge-1")).toBeNull();
     expect(canonicalHash("#/")).toBeNull();
     expect(canonicalHash("")).toBeNull();
@@ -316,6 +322,48 @@ describe("Services split — every old sub-view lands on its new home", () => {
     }
     // The old leaf id is gone from both sections.
     expect(NAV.find((s) => s.id === "operations")!.children!.map((l) => l.id)).not.toContain("services");
+  });
+});
+
+// ── "Discovery & NMS" split (2026-10, owner decision) ────────────────────────
+//
+// SNMP credentials live in ONE place (SNMP Profiles), so subnet discovery moved
+// beside them in Administration → Data sources, and NMS Integrations became a
+// plain Infrastructure leaf. Every link written for the composite must land on
+// the page that now owns its tab — as a full canonical hash, query intact.
+describe("Discovery & NMS split — every old link lands on its new home", () => {
+  const CASES: [string, string][] = [
+    ["#/infrastructure/discovery", "#/admin/discovery"],
+    ["#/infrastructure/discovery/discovery", "#/admin/discovery"],
+    ["#/infrastructure/discovery/nms", "#/infrastructure/nms"],
+  ];
+
+  it.each(CASES)("%s → %s", (from, to) => {
+    expect(canonicalHash(from)).toBe(to);
+  });
+
+  it("carries the deep-link query through the split", () => {
+    expect(canonicalHash("#/infrastructure/discovery/nms?vendor=meraki"))
+      .toBe("#/infrastructure/nms?vendor=meraki");
+    expect(canonicalHash("#/infrastructure/discovery?x=1")).toBe("#/admin/discovery?x=1");
+  });
+
+  it("a tenant following an old link reaches the tenant-visible page, not a fallback", () => {
+    const tenantNav = filteredNav(false);
+    expect(resolveRoute("#/infrastructure/discovery", tenantNav)).toMatchObject({
+      section: { id: "admin" },
+      leaf: { id: "discovery" },
+    });
+    expect(landingResolves("#/infrastructure/discovery/nms", tenantNav)).toBe(true);
+  });
+
+  it("Infrastructure carries NMS Integrations as a plain leaf and no Discovery & NMS", () => {
+    const infra = NAV.find((s) => s.id === "infrastructure")!.children!;
+    const nms = infra.find((l) => l.id === "nms");
+    expect(nms?.label).toBe("NMS Integrations");
+    expect(nms?.subItems).toBeUndefined();
+    expect(infra.map((l) => l.id)).not.toContain("discovery");
+    expect(infra.map((l) => l.label)).not.toContain("Discovery & NMS");
   });
 });
 

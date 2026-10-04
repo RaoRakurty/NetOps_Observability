@@ -5,11 +5,13 @@ package backend
 
 import (
 	"context"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"netops/backend/collectors"
 	"netops/backend/models"
 
 	"netops/backend/internal/discovery"
@@ -85,9 +87,13 @@ func TestExpandCIDRSkipsNetworkAndBroadcast(t *testing.T) {
 
 // --- the scan engine, with a fake prober (no network IO in tests) ---
 
+// oneProfile is a minimal sweep credential set for tests that are not about
+// credential selection (the sweep refuses to run with none).
+var oneProfile = []discovery.ScanCredential{{ProfileID: "lab-ro", Target: collectors.Target{Community: "lab"}}}
+
 func fakeProbe(alive map[string]string) discovery.Probe {
-	return func(_ context.Context, addr, _ string) (string, string, string, bool) {
-		name, ok := alive[addr]
+	return func(_ context.Context, tg collectors.Target) (string, string, string, bool) {
+		name, ok := alive[tg.Address]
 		if !ok {
 			return "", "", "", false
 		}
@@ -96,7 +102,7 @@ func fakeProbe(alive map[string]string) discovery.Probe {
 }
 
 func TestSNMPSourceDiscoversOnlyUnknownHosts(t *testing.T) {
-	cfg := discovery.ScanSettings{Enabled: true, Ranges: []string{"10.20.0.0/29"}}
+	cfg := discovery.ScanSettings{Enabled: true, Ranges: []string{"10.20.0.0/29"}, Credentials: oneProfile}
 	known := []models.Device{{ID: "existing", Address: "10.20.0.2"}}
 	src := discovery.NewSNMPSource(
 		func() discovery.ScanSettings { return cfg },
@@ -137,7 +143,7 @@ func TestSNMPSourceDisabledAndOversizedAreSafe(t *testing.T) {
 		},
 		nil,
 	)
-	src.SetProbeForTest(func(context.Context, string, string) (string, string, string, bool) {
+	src.SetProbeForTest(func(context.Context, collectors.Target) (string, string, string, bool) {
 		probed = true
 		return "", "", "", false
 	})
@@ -148,11 +154,11 @@ func TestSNMPSourceDisabledAndOversizedAreSafe(t *testing.T) {
 	// The shipped env default (10.0.0.0/8) must be refused, not swept.
 	src2 := discovery.NewSNMPSource(
 		func() discovery.ScanSettings {
-			return discovery.ScanSettings{Enabled: true, Ranges: []string{"10.0.0.0/8"}}
+			return discovery.ScanSettings{Enabled: true, Ranges: []string{"10.0.0.0/8"}, Credentials: oneProfile}
 		},
 		nil,
 	)
-	src2.SetProbeForTest(func(context.Context, string, string) (string, string, string, bool) {
+	src2.SetProbeForTest(func(context.Context, collectors.Target) (string, string, string, bool) {
 		t.Fatal("oversized range must never be probed")
 		return "", "", "", false
 	})
@@ -162,12 +168,12 @@ func TestSNMPSourceDisabledAndOversizedAreSafe(t *testing.T) {
 }
 
 func TestSNMPSourceCooldownServesCache(t *testing.T) {
-	cfg := discovery.ScanSettings{Enabled: true, Ranges: []string{"10.20.0.0/30"}}
+	cfg := discovery.ScanSettings{Enabled: true, Ranges: []string{"10.20.0.0/30"}, Credentials: oneProfile}
 	var probeCount atomic.Int64 // probes run concurrently — unsynced counter races
 	src := discovery.NewSNMPSource(func() discovery.ScanSettings { return cfg }, nil)
-	src.SetProbeForTest(func(_ context.Context, addr, _ string) (string, string, string, bool) {
+	src.SetProbeForTest(func(_ context.Context, tg collectors.Target) (string, string, string, bool) {
 		probeCount.Add(1)
-		return "sw-" + addr, "", "", true
+		return "sw-" + tg.Address, "", "", true
 	})
 	if _, err := src.Poll(context.Background()); err != nil {
 		t.Fatalf("first poll: %v", err)
@@ -192,7 +198,7 @@ func TestSNMPSourceCooldownServesCache(t *testing.T) {
 
 // --- config store semantics ---
 
-func TestDiscoveryConfigStoreValidatesAndPreservesSecret(t *testing.T) {
+func TestDiscoveryConfigStoreValidatesAndPersists(t *testing.T) {
 	dir := t.TempDir()
 	st := newDiscoveryConfigStore(dir+"/disc.json", nil)
 
@@ -203,41 +209,35 @@ func TestDiscoveryConfigStoreValidatesAndPreservesSecret(t *testing.T) {
 		t.Fatal("public range must be refused")
 	}
 
-	out, err := st.set(discoveryScanConfig{Enabled: true, Ranges: []string{"10.20.0.0/24"}, Community: "s3cret", IntervalSec: 10})
+	out, err := st.set(discoveryScanConfig{Enabled: true, Ranges: []string{"10.20.0.0/24"}, IntervalSec: 10})
 	if err != nil {
 		t.Fatalf("valid set: %v", err)
 	}
 	if out.IntervalSec != 60 {
 		t.Fatalf("interval floor not applied: %d", out.IntervalSec)
 	}
-	// Blank community on re-save preserves the stored secret.
-	out, err = st.set(discoveryScanConfig{Enabled: true, Ranges: []string{"10.20.0.0/24"}})
-	if err != nil {
-		t.Fatalf("re-save: %v", err)
-	}
-	if out.Community != "s3cret" {
-		t.Fatalf("blank save must preserve community, got %q", out.Community)
-	}
-	// The public (GET) shape never leaks the secret.
-	pub := out.public()
-	if !pub.CommunitySet {
-		t.Fatal("community_set should be true")
-	}
 
-	// A fresh store on the same path round-trips from disk.
+	// A fresh store on the same path round-trips from disk — and nothing
+	// community-shaped is ever written (credentials live in SNMP profiles).
 	st2 := newDiscoveryConfigStore(dir+"/disc.json", nil)
-	if got := st2.effective(); !got.Enabled || got.Community != "s3cret" || len(got.Ranges) != 1 {
+	if got := st2.effective(); !got.Enabled || len(got.Ranges) != 1 {
 		t.Fatalf("persistence round-trip wrong: %+v", got)
+	}
+	raw, err := os.ReadFile(dir + "/disc.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "community") {
+		t.Fatalf("discovery config must not persist a community: %s", raw)
 	}
 }
 
 func TestDiscoveryConfigEnvBootstrapFallback(t *testing.T) {
 	t.Setenv("ENABLE_SNMP_DISCOVERY", "true")
 	t.Setenv("SNMP_CIDR_RANGES", "10.9.0.0/24, 10.9.1.0/24")
-	t.Setenv("SNMP_COMMUNITY", "lab")
 	st := newDiscoveryConfigStore(t.TempDir()+"/none.json", nil)
 	got := st.effective()
-	if !got.Enabled || len(got.Ranges) != 2 || got.Community != "lab" {
+	if !got.Enabled || len(got.Ranges) != 2 {
 		t.Fatalf("env fallback wrong: %+v", got)
 	}
 	// A console-saved config wins over env.
@@ -282,33 +282,10 @@ func TestDiscoveryConfigHandlerRefusesTenantAdmin(t *testing.T) {
 	if st, b = do(t, srv, "PUT", "/api/discovery/config", admin, cfg); st != 200 {
 		t.Fatalf("platform admin should succeed, got %d: %s", st, b)
 	}
-	// The GET shape must not leak the community secret.
+	// The GET shape carries no community of any kind (discovery has none).
 	st, b = do(t, srv, "GET", "/api/discovery/config", admin, nil)
-	if st != 200 || strings.Contains(string(b), "s3cret") || strings.Contains(string(b), `"community"`) {
-		t.Fatalf("GET must be redacted: %d %s", st, b)
-	}
-}
-
-func TestSNMPSourceTriesCommunityList(t *testing.T) {
-	// Mixed fleets use per-vendor communities; the sweep tries each in priority
-	// order per host until one answers.
-	cfg := discovery.ScanSettings{Enabled: true, Ranges: []string{"10.20.0.0/31"}, Community: "arista-public, srl-public"}
-	src := discovery.NewSNMPSource(func() discovery.ScanSettings { return cfg }, nil)
-	src.SetProbeForTest(func(_ context.Context, addr, community string) (string, string, string, bool) {
-		if addr == "10.20.0.0" && community == "arista-public" {
-			return "leaf-1", "arista", "", true
-		}
-		if addr == "10.20.0.1" && community == "srl-public" {
-			return "spine-1", "nokia", "", true
-		}
-		return "", "", "", false
-	})
-	devs, err := src.Poll(context.Background())
-	if err != nil {
-		t.Fatalf("poll: %v", err)
-	}
-	if len(devs) != 2 || devs[0].Vendor != "arista" || devs[1].Vendor != "nokia" {
-		t.Fatalf("community list not tried per host: %+v", devs)
+	if st != 200 || strings.Contains(string(b), "community") {
+		t.Fatalf("GET must not mention a discovery community: %d %s", st, b)
 	}
 }
 

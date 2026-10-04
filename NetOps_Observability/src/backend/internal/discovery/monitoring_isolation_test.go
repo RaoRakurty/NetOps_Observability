@@ -3,7 +3,7 @@
 
 package discovery_test
 
-// monitoring_isolation_test.go — the withheld-monitoring list is tenant-scoped
+// monitoring_isolation_test.go — the over-limit (withheld) list is tenant-scoped
 // (CLAUDE.md §3a rule 1, tracker 292).
 //
 // The list names devices: id, tenant and NAME. Before this test the registry
@@ -23,11 +23,11 @@ import (
 )
 
 // withheldEverything builds a registry whose ceiling admits nothing, so every
-// device polled from the source lands on the withheld list.
+// device polled from the source lands on the over-limit list.
 func withheldEverything(t *testing.T, devs ...models.Device) *discovery.DiscoveryAggregator {
 	t.Helper()
 	a := discovery.NewDiscoveryAggregator()
-	a.SetMonitorGate(func(int) error { return errNotPersisted })
+	a.SetMonitorLimit(func() int { return 0 })
 	a.PollOnceForTest(context.Background(), &fixedSource{name: "static", devices: devs})
 	if got := a.MonitoringWithheldCount(); got != len(devs) {
 		t.Fatalf("withheld = %d, want %d — the fixture must actually withhold, or this test proves nothing", got, len(devs))
