@@ -323,7 +323,7 @@ multi-turn corpus scored like the golden corpus, and Part 2 §69's 14 routine qu
 declined · unparsed · invalid · error`), query type, AST hash, catalog version, validation error codes
 (≤ 20), entities with their `resolution_method` (≤ 20), row/series COUNTS, duration. **Never** result rows,
 series points or model prose. The response carries `query_log_id` so the answer can be corrected. Since
-N-C5's read-back (migration 0055) a record also keeps the validated query itself and `compiled_by`
+N-C5's read-back (migration 0056) a record also keeps the validated query itself and `compiled_by`
 (`grammar · model · supplied`) — the query, never its result; the list omits the query, `GET
 /api/ai/query/{id}` and `/explain` (§6) read it.
 

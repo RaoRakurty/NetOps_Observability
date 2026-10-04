@@ -8,6 +8,7 @@ import (
 	"errors"
 
 	"netops/backend/ai"
+	"netops/backend/internal/aidecision"
 )
 
 // ai_llm.go — adapts the existing provider-agnostic proxy (copilot.go's chain:
@@ -67,6 +68,9 @@ func (l aiLLM) CompleteTierWithUsage(ctx context.Context, tier ai.ModelTier, sys
 		c, err := ai.CallProviderUsage(ctx, cand.name, cand.key, cand.model, system, cmsgs)
 		if err == nil {
 			l.charge(c, chars)
+			// The decision ledger names the model that answered (N-A6); a
+			// no-op outside a ledgered request.
+			aidecision.FromContext(ctx).NoteModel(aidecision.ModelUse{Provider: cand.name, Name: cand.model, Tier: string(tier)})
 			return c.Text, cand.name, c.Usage, nil
 		}
 		// Raw provider error stays server-side (SR-022); fall through to the next.

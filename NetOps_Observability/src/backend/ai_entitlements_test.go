@@ -46,7 +46,11 @@ const adminPlane = aientitlement.Entitlement("admin-plane")
 
 // aiRouteEntitlements is THE classification of every AI route.
 var aiRouteEntitlements = map[string]aientitlement.Entitlement{
-	"/api/ai/ask":                  aientitlement.Chat,
+	"/api/ai/ask": aientitlement.Chat,
+	// N-A6 decision ledger: an AUDIT record, gated by administration:admin in
+	// handleAIDecisions. It must stay readable after an AI entitlement lapses —
+	// losing ai.chat must not erase the trail of answers already given.
+	"/api/ai/decisions":            adminPlane,
 	"/api/copilot/chat":            aientitlement.Chat, // + ai.investigate for the agent loop inside the turn
 	"/api/ai/modules":              aientitlement.Chat,
 	"/api/ai/commands":             aientitlement.Chat,
@@ -294,6 +298,7 @@ var adminPlaneProbes = []aiProbe{
 	{"/api/ai/tenants", http.MethodGet, "/api/ai/tenants", "", adminPlane},
 	{"/api/ai/tenants/", http.MethodPut, "/api/ai/tenants/t-a", `{"assistant_enabled":true}`, adminPlane},
 	{"/api/copilot/config", http.MethodGet, "/api/copilot/config", "", adminPlane},
+	{"/api/ai/decisions", http.MethodGet, "/api/ai/decisions", "", adminPlane},
 }
 
 func TestAIAdminPlaneRoutesRefuseNonAdmins(t *testing.T) {
@@ -305,8 +310,11 @@ func TestAIAdminPlaneRoutesRefuseNonAdmins(t *testing.T) {
 		if w := serveAs(h, op, p.method, p.path, p.body); w.Code != http.StatusForbidden {
 			t.Errorf("%s %s as a tenant operator: %d — want 403", p.method, p.path, w.Code)
 		}
-		if p.route == "/api/ai/tenant-config" {
-			continue // a tenant admin legitimately configures their OWN tenant's key
+		if p.route == "/api/ai/tenant-config" || p.route == "/api/ai/decisions" {
+			// A tenant admin legitimately configures their OWN tenant's key, and
+			// reads their OWN workspace's decision ledger (cross-tenant reads are
+			// pinned by TestDecisionLedgerIsolation).
+			continue
 		}
 		if w := serveAs(h, tenantAdmin, p.method, p.path, p.body); w.Code != http.StatusForbidden {
 			t.Errorf("%s %s as a tenant admin: %d — want 403 (platform-global, §3a rule 3)", p.method, p.path, w.Code)

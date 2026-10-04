@@ -18,6 +18,7 @@ const executeIrisQuery = vi.fn();
 const startIrisConversation = vi.fn();
 const askIrisConversation = vi.fn();
 const irisQueries = vi.fn();
+const aiDecisions = vi.fn();
 const correctIrisQuery = vi.fn();
 vi.mock("../services/api", () => ({
   api: {
@@ -30,6 +31,7 @@ vi.mock("../services/api", () => ({
     startIrisConversation: (...a: unknown[]) => startIrisConversation(...a),
     askIrisConversation: (...a: unknown[]) => askIrisConversation(...a),
     irisQueries: (...a: unknown[]) => irisQueries(...a),
+    aiDecisions: (...a: unknown[]) => aiDecisions(...a),
     correctIrisQuery: (...a: unknown[]) => correctIrisQuery(...a),
   },
 }));
@@ -44,6 +46,8 @@ beforeEach(() => {
   for (const f of [irisAliases, putIrisAlias, deleteIrisAlias, resolveIrisEntity, compileIrisQuery, executeIrisQuery,
     startIrisConversation, askIrisConversation, irisQueries, correctIrisQuery]) f.mockReset();
   irisQueries.mockResolvedValue({ queries: [], scope: "mine", retention_days: 30, kinds: [] });
+  aiDecisions.mockReset();
+  aiDecisions.mockResolvedValue({ decisions: [], scope: "tenant", event_types: [] });
   irisAliases.mockResolvedValue({ aliases: [{ entity_type: "device", entity_id: "device:fw-hq-01", alias: "HQ firewall" }], max: 2000 });
 });
 afterEach(() => cleanup());
