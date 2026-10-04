@@ -56,6 +56,7 @@ var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	"/api/ai/entities/resolve":     aientitlement.NLQuery,
 	"/api/ai/query/compile":        aientitlement.NLQuery,
 	"/api/ai/query/execute":        aientitlement.NLQuery,
+	"/api/ai/query/":               aientitlement.NLQuery, // GET {id} and {id}/explain (N-C5)
 	"/api/ai/conversations":        aientitlement.NLQuery,
 	"/api/ai/conversations/":       aientitlement.NLQuery,
 	"/api/ai/queries":              aientitlement.NLQuery,
@@ -173,6 +174,8 @@ var aiRouteProbes = []aiProbe{
 	{"/api/ai/entities/resolve", http.MethodPost, "/api/ai/entities/resolve", `{"text":"edge-a"}`, aientitlement.NLQuery},
 	{"/api/ai/query/compile", http.MethodPost, "/api/ai/query/compile", `{"question":"show cpu on edge-a for the last hour"}`, aientitlement.NLQuery},
 	{"/api/ai/query/execute", http.MethodPost, "/api/ai/query/execute", `{"ast":{}}`, aientitlement.NLQuery},
+	{"/api/ai/query/", http.MethodGet, "/api/ai/query/" + probeID, "", aientitlement.NLQuery},
+	{"/api/ai/query/", http.MethodGet, "/api/ai/query/" + probeID + "/explain", "", aientitlement.NLQuery},
 	{"/api/ai/conversations", http.MethodPost, "/api/ai/conversations", "", aientitlement.NLQuery},
 	{"/api/ai/conversations/", http.MethodGet, "/api/ai/conversations/" + probeID, "", aientitlement.NLQuery},
 	{"/api/ai/conversations/", http.MethodPost, "/api/ai/conversations/" + probeID + "/messages", `{"question":"cpu on edge-a"}`, aientitlement.NLQuery},

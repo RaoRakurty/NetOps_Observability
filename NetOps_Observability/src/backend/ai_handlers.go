@@ -1781,8 +1781,10 @@ func (s *server) handleAIQueryRecord(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Iris AI is disabled — set FEATURE_AI=true"))
 		return
 	}
+	// N-A7: reading a captured query back (and explaining it) is part of
+	// ai.nlquery, like the query log it reads.
 	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
-	if !ok {
+	if !ok || !s.requireAIEntitlement(w, claims, aientitlement.NLQuery) {
 		return
 	}
 	if s.nlqQueryLog == nil {
