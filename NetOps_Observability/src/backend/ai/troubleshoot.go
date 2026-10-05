@@ -770,10 +770,13 @@ func (t rcaVerdictTool) Run(ctx context.Context, p Principal, args ToolArgs) (To
 	conf := firstNonEmpty(pr.ConfidenceLabel, StatusLabel(pr.Verdict))
 	tr.Items = append(tr.Items, EvidenceItem{
 		CitationID: "verdict:" + pr.ID, Kind: "finding",
-		Text: clampText(fmt.Sprintf("%s — %s; verdict %s (%s, %.0f%% model confidence); %s across %s",
+		Text: clampText(fmt.Sprintf("%s — %s; verdict %s (%s, %.0f%% engine confidence); %s across %s",
 			pr.Display(), what, pr.Verdict, conf, pr.Confidence*100,
 			plural(pr.SignalCount, "signal"), plural(pr.NodeCount, "node")), maxToolTextChars),
 		Href: href,
+		// The engine's own conclusion (N-B4 grounding fact).
+		CauseRole: CauseRoleEngine,
+		Verdict:   pr.Verdict,
 	})
 	// 3. What is affected.
 	if len(pr.Devices) > 0 {

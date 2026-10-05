@@ -174,16 +174,46 @@ func TestUndeterminedVerdictNeverYieldsANarrativeNamingACause(t *testing.T) {
 }
 
 // TestConfirmedVerdictKeepsItsCauseNarrative is the other half: the guardrail
-// must not blunt an answer the engine actually earned.
+// must not blunt an answer the engine actually earned. Since N-B4 the cause
+// sentence must name the engine's OWN cause — it cites the engine's
+// correlation object — so the overclaim fixture's "BGP session reset on
+// core-1", which only cites a log line, is the wrong cause and is removed
+// even under the confirmed verdict (TestConfirmedVerdictForADifferentCause…).
 func TestConfirmedVerdictKeepsItsCauseNarrative(t *testing.T) {
 	ds := newMockDS() // "pa" is confirmed at 82%
+	o := &Orchestrator{DS: ds, Tools: Tools(ds), LLM: &scriptLLM{fallback: "The root cause is the BGP peer down on edge-1 [problem:pa]. " +
+		"edge-1 logged the adjacency change [log:os:1]. Next: verify the peering link."}, Flags: func(string) bool { return false }}
+	ans, err := o.Ask(context.Background(), tenantA(), "explain problem pa", map[string]string{"problem_id": "pa"})
+	if err != nil {
+		t.Fatalf("ask: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(ans.Text), "root cause is the bgp peer down on edge-1") {
+		t.Errorf("a confirmed verdict must keep its cause narrative: %q", ans.Text)
+	}
+}
+
+// TestConfirmedVerdictForADifferentCauseDropsTheModelsCause closes the gap
+// N-B3 left: a CONFIRMED verdict used to wave every cause sentence through.
+// The overclaim fixture names "a BGP session reset on core-1" — a cause the
+// engine never produced — citing only a log line.
+func TestConfirmedVerdictForADifferentCauseDropsTheModelsCause(t *testing.T) {
+	ds := newMockDS() // "pa" is confirmed at 82% for "BGP peer down on edge-1"
 	o := &Orchestrator{DS: ds, Tools: Tools(ds), LLM: overclaimLLM{}, Flags: func(string) bool { return false }}
 	ans, err := o.Ask(context.Background(), tenantA(), "explain problem pa", map[string]string{"problem_id": "pa"})
 	if err != nil {
 		t.Fatalf("ask: %v", err)
 	}
-	if !strings.Contains(strings.ToLower(ans.Text), "root cause is") {
-		t.Errorf("a confirmed verdict must keep its cause narrative: %q", ans.Text)
+	if strings.Contains(strings.ToLower(ans.Text), "bgp session reset on core-1") {
+		t.Errorf("a cause the engine did not produce survived a confirmed verdict: %q", ans.Text)
+	}
+	if !strings.Contains(ans.Text, "adjacency changes") {
+		t.Errorf("the grounded observation must survive: %q", ans.Text)
+	}
+	if !hasDisclaimer(ans.Disclaimers, "other than the one Correlix confirmed") {
+		t.Errorf("the removal must be disclosed, got %v", ans.Disclaimers)
+	}
+	if ans.Problem == nil || ans.Problem.Verdict != "confirmed" || ans.Status != "Confirmed" {
+		t.Errorf("the engine verdict must be untouched: %+v / %q", ans.Problem, ans.Status)
 	}
 }
 

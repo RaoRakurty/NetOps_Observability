@@ -79,6 +79,10 @@ type agentResult struct {
 	Citations []ai.Citation
 	Truncated bool
 	Calls     int // tool calls actually executed (0 → safe to fall back to plain chat)
+	// Statements classify every sentence of Text; Disclaimers say what the
+	// statement rules removed or reworded (tracker 337 N-B4).
+	Statements  []ai.Statement
+	Disclaimers []string
 }
 
 // runAgentLoop drives model↔tool rounds until the model answers in text, the
@@ -103,6 +107,9 @@ func (s *server) runAgentLoop(ctx context.Context, claims jwtClaims, p ai.Princi
 	tenant, _ := principalTenant(claims)
 	res := agentResult{}
 	var evidence []ai.EvidenceItem
+	// byTool keeps which governed tool produced each item: the statement
+	// class of evidence comes from its tool (tracker 337 N-B4).
+	var byTool []ai.AgentToolEvidence
 	started := time.Now()
 
 	// maxCalls tool calls → at most maxCalls+1 model round-trips, +1 for the
@@ -138,6 +145,9 @@ func (s *server) runAgentLoop(ctx context.Context, claims jwtClaims, p ai.Princi
 			replies = append(replies, rep)
 			res.Lookups = append(res.Lookups, agentLookup{Tool: c.Name, Label: ai.ToolLabel(c.Name), Items: len(items), Error: rep.IsError})
 			evidence = append(evidence, items...)
+			if len(items) > 0 {
+				byTool = append(byTool, ai.AgentToolEvidence{Tool: c.Name, Items: items})
+			}
 		}
 		turns = append(turns,
 			ai.AgentTurn{Role: "assistant", Content: text, Calls: calls},
@@ -168,6 +178,12 @@ func (s *server) runAgentLoop(ctx context.Context, claims jwtClaims, p ai.Princi
 		res.Citations = append(res.Citations, ai.Citation{ID: ev.CitationID, Kind: ev.Kind, Label: label, Href: ev.Href})
 	}
 	res.Text = ai.VerifyGrounding(res.Text, validIDs).Text
+	// Statement classes (N-B4) — the same rules the grounded engine runs: the
+	// correlation engine alone owns the cause, a change near an incident is
+	// temporally correlated unless the engine establishes it, and every
+	// sentence ships with its class.
+	g := ai.GroundAgentNarrative(res.Text, byTool, extraCiteIDs)
+	res.Text, res.Statements, res.Disclaimers = g.Text, g.Statements, g.Disclaimers
 
 	logInfo("ai", "agent_loop", map[string]any{
 		"tenant": claims.Tenant, "sub": claims.Sub,

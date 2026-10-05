@@ -1860,6 +1860,10 @@ export type NormalizedChatResponse = {
   // behind it. The UI labels a false — it never infers grounding on its own, and
   // an absent field is treated as NOT grounded (a pre-330 backend cannot claim it).
   is_grounded?: boolean;
+  // Statement classes (N-B4) for an agent-loop answer, and what the statement
+  // rules removed or reworded. Optional on older backends.
+  statements?: AiStatement[];
+  disclaimers?: string[];
 };
 export type CopilotChatResponse = NormalizedChatResponse | AnthropicChatResponse | OpenAIChatResponse;
 
@@ -9937,6 +9941,21 @@ export type AiCitation = {
   id: string; kind: string; label: string; href: string;
   tool?: string;      // the read-only IRIS tool that produced this evidence
   ids?: string[];     // the object ids that tool returned
+  // The statement class this evidence can support (tracker 337 N-B4), stamped
+  // by the server from the tool that produced it: OBSERVED | CORRELIX_RCA |
+  // DERIVED | HISTORICAL | DOCUMENTATION. Absent on a path that stamps none.
+  class?: string;
+};
+// One sentence of an Iris answer, classified by the server (tracker 337 N-B4).
+// Concatenated, the statements' texts are the answer text. `grounded` false
+// marks a sentence kept but carrying no evidence of its own class; `note` is
+// the server's per-sentence disclosure (downgraded, or reworded by Correlix).
+export type AiStatement = {
+  text: string;
+  class: string; // OBSERVED | CORRELIX_RCA | DERIVED | HISTORICAL | DOCUMENTATION | RECOMMENDATION
+  grounded: boolean;
+  citations?: string[];
+  note?: string;
 };
 // The IRIS skill that answered, when the backend names one (Phase A). Absent on
 // an older backend — the UI renders the chip only when it is present, never a
@@ -10098,6 +10117,9 @@ export type AiAnswer = {
   // correlation engine's verdict, which they never replace. Optional: absent
   // when the investigation opened none.
   hypotheses?: AiHypothesisSet;
+  // Statement classes (N-B4) — every sentence of `text`, classified by the
+  // server. Optional: an older backend sends none and the text renders plain.
+  statements?: AiStatement[];
   disclaimers: string[];
   provider?: string;
   // Universal Response-Quality fields (rendered as badges + sections).

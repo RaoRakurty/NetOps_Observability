@@ -256,3 +256,65 @@ func TestAgentLoopEligibility(t *testing.T) {
 		t.Fatal("AI_TOOLS_ALL_TENANTS widens the rollout globally")
 	}
 }
+
+// TestAgentLoopStatementClasses (tracker 337 N-B4): the copilot agent loop
+// runs the same statement rules as the grounded engine. The engine CONFIRMED
+// "BGP peer down" for tenant A's problem; the model names a fibre cut (a cause
+// the engine did not produce) and then the engine's own cause. Only the
+// engine's cause survives, the removal is disclosed, every sentence ships
+// classified — and nothing of tenant B's reaches the statements (§3a).
+func TestAgentLoopStatementClasses(t *testing.T) {
+	s, p, reg, pol, specs := agentTestSetup("t-a")
+	round := 0
+	call := func(_ context.Context, _ string, _ []ai.AgentTurn, _ []ai.ToolSpec) (string, []ai.ToolCall, error) {
+		round++
+		switch round {
+		case 1:
+			return "", []ai.ToolCall{
+				{ID: "c1", Name: "get_problem", Args: json.RawMessage(`{"problem_id":"` + problemA + `"}`)},
+				{ID: "c2", Name: "get_problem_evidence", Args: json.RawMessage(`{"problem_id":"` + problemA + `"}`)},
+				{ID: "c3", Name: "get_problem", Args: json.RawMessage(`{"problem_id":"` + problemB + `"}`)},
+			}, nil
+		}
+		return "The root cause is a fibre cut on core-9 [log:os:1]. " +
+			"The root cause is the BGP peer down [problem:" + problemA + "]. " +
+			"Tenant B is also down [problem:" + problemB + "]. Next: check the peer.", nil, nil
+	}
+	res, err := s.runAgentLoop(context.Background(), jwtClaims{Tenant: "t-a", Sub: "u"}, p, reg, pol, specs, "sys",
+		[]copilotMessage{{Role: "user", Content: "why is the peer down?"}}, nil, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Text, "fibre cut") || !strings.Contains(res.Text, "BGP peer down [problem:"+problemA+"]") {
+		t.Fatalf("only the engine's own cause may stand: %q", res.Text)
+	}
+	found := false
+	for _, d := range res.Disclaimers {
+		if strings.Contains(d, "other than the one Correlix confirmed") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the removal must be disclosed: %v", res.Disclaimers)
+	}
+	var joined strings.Builder
+	classes := []string{}
+	for _, st := range res.Statements {
+		joined.WriteString(st.Text)
+		classes = append(classes, st.Class)
+		for _, c := range st.Citations {
+			if strings.Contains(c, problemB) {
+				t.Fatalf("a statement cites tenant B's problem: %+v", st)
+			}
+		}
+	}
+	if joined.String() != res.Text {
+		t.Fatalf("statements must spell the text:\n%q\n%q", joined.String(), res.Text)
+	}
+	if strings.Contains(res.Text, problemB) {
+		t.Fatalf("tenant B's id survived: %q", res.Text)
+	}
+	if len(classes) == 0 || classes[0] != ai.ClassCorrelixRCA || classes[len(classes)-1] != ai.ClassRecommendation {
+		t.Errorf("classes = %v", classes)
+	}
+}

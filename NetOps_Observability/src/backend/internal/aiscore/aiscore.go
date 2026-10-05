@@ -59,12 +59,20 @@ var ToolOutcomes = []string{"ok", "error", "not_found", "not_wired", "denied"}
 //     the model invented (an id not in the bundle it was given).
 //   - uncertain_claim — a certainty-marker post-check refused a narrative that
 //     asserted an established cause under an unconfirmed verdict.
+//   - unsupported_cause — the statement-class check removed a sentence stating
+//     a cause that is not the correlation engine's own confirmed cause (no
+//     confirmed verdict, or a confirmed verdict for a DIFFERENT cause).
+//   - change_causality — the statement-class check reworded a sentence that
+//     named a change as the cause into temporal correlation.
+//   - ungrounded_statement — the statement-class check removed a sentence that
+//     attributed a claim to a source (Correlix's analysis, a past
+//     investigation, documentation) the turn holds no evidence from.
 //
 // uncertain_claim is declared here and emitted as a zero on every scrape even
 // where that check is not wired in this build: an absent series and a zero
 // series mean different things to an alert, and "this build runs no certainty
 // check" must be readable as a flat zero rather than as a gap.
-var GuardNames = []string{"fabricated_citation", "uncertain_claim"}
+var GuardNames = []string{"fabricated_citation", "uncertain_claim", "unsupported_cause", "change_causality", "ungrounded_statement"}
 
 // HopOrigins is how a skill-chain hop was chosen. `model` is the only origin
 // where the model had a say, and it is bounded to a CLOSED candidate set.
