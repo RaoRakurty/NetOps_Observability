@@ -2,7 +2,7 @@
 // Copyright 2026 Correlix
 
 // Iris vocabulary panel E2E (workspace AI settings) — tracker 337 N-E5.
-// Drives the real panel inside the Iris drawer against the faked Iris API
+// Drives the real panel inside the Iris window against the faked Iris API
 // (./irisBackend.ts) and proves:
 //   · adding a name whose target is ambiguous OFFERS a choice and saves nothing
 //     until the operator picks one — never an automatic guess;

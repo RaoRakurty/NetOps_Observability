@@ -13,9 +13,11 @@ evidence behind every claim, and says what is missing rather than filling the
 gap. This section is for the operator who asks it questions and for the
 administrator who turns it on.
 
-Open it from the button pinned at the foot of the left sidebar, labelled **Iris
-AI**. It opens as a slide-over that you can float over the page or dock beside
-it.
+Open it from the round **Ask Iris** button at the bottom right of every page,
+or press **Ctrl+I** (**⌘I** on a Mac). Iris opens in a chat window over the
+page, above the button. Select **Full screen** in the window's header to give
+the conversation the whole screen, and **Exit full screen** to bring it back.
+The window stays open, with its conversation, while you move between pages.
 
 | Page | What it gives you |
 |---|---|

@@ -3,12 +3,12 @@
 
 // IrisNav — Iris is an ACTION with no pages.
 //
-// Iris is pinned to the foot: clicking it opens the ask slide-over rather than
+// Iris is pinned to the foot: clicking it opens the floating Iris window rather than
 // navigating. It used to carry a routed Knowledge page (the TAC catalogue);
 // since 2026-09-15 that knowledge is built into Iris and read before it
 // answers, and the page is gone (owner: an administrator should not have to
 // read what Iris knows). This pins the leafless shape in every mode:
-//   · Ask Iris opens the slide-over and does not navigate (sidebar and rail);
+//   · Ask Iris opens the floating window and does not navigate (sidebar and rail);
 //   · no Knowledge leaf, no rail flyout, no ⌘K page destination;
 //   · the old #/copilot/knowledge link resolves to the section, never a page.
 
@@ -71,7 +71,7 @@ describe("the Iris nav section", () => {
 });
 
 describe("sidebar mode", () => {
-  it("opens the slide-over on click, does not navigate, and reveals no Knowledge", () => {
+  it("opens the floating window on click, does not navigate, and reveals no Knowledge", () => {
     const st = shell();
     withShell(
       <Sidebar nav={filteredNav(false)} activeSection="overview" collapsed={false} onToggle={vi.fn()} />,
@@ -85,7 +85,7 @@ describe("sidebar mode", () => {
 });
 
 describe("icon-rail mode", () => {
-  it("opens the slide-over on click and advertises no menu", () => {
+  it("opens the floating window on click and advertises no menu", () => {
     const st = shell();
     withShell(<IconRail nav={filteredNav(false)} activeSection="overview" user={USER} onLogout={vi.fn()} />, st);
     const iris = screen.getByRole("button", { name: /iris/i });

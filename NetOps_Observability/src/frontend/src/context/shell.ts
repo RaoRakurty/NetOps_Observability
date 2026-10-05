@@ -24,7 +24,7 @@ export type ShellState = {
   // Global query (top-bar omni-search). Handed to the Search section.
   query: string;
   setQuery: (q: string) => void;
-  // Copilot slide-over.
+  // The floating Iris window (components/IrisAssistant.tsx).
   copilotOpen: boolean;
   setCopilotOpen: (b: boolean) => void;
   // Documentation ("?") slide-over — embeds the /docs portal.

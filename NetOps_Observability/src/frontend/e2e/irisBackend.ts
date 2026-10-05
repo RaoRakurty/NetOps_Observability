@@ -272,9 +272,15 @@ export async function bootIris(page: Page, opts: IrisBackendOptions = {}): Promi
   return fake;
 }
 
-/** Open the Iris drawer from the icon rail and wait for the composer. */
+/** The floating Iris window (components/IrisAssistant.tsx). */
+export function irisWindow(page: Page) {
+  return page.getByRole("dialog", { name: "Iris" });
+}
+
+/** Open the Iris window from the bottom-right launcher and wait for the composer. */
 export async function openIris(page: Page) {
-  await page.locator('button.rail-item[title="Iris AI"]').click();
+  // exact: every page's `(i)` buttons are named "Ask Iris about …".
+  await page.getByRole("button", { name: "Ask Iris", exact: true }).click();
   await page.getByPlaceholder(/Ask Iris AI/).waitFor();
 }
 

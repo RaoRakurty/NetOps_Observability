@@ -2,7 +2,6 @@
 // Copyright 2026 Correlix
 
 import { useEffect, useRef, useState } from "react";
-import { AI_NAME } from "../brand";
 import {
   api,
   CopilotMessage,
@@ -33,7 +32,7 @@ import { hasAIEntitlement } from "../lib/aiEntitlements";
 import { httpFailure, operatorError } from "../lib/errors";
 
 // The Iris box's server conversation (tracker 337 N-C7/N-E4): only its id
-// lives in the browser, in sessionStorage so it survives the drawer closing.
+// lives in the browser, in sessionStorage so it survives the window closing.
 // Storage can be unavailable (private window, blocked site data); then
 // follow-ups still work until the page reloads.
 const CONV_KEY = "iris.conversation";
@@ -49,7 +48,8 @@ function saveConversation(id: string | null): void {
 import { friendlyProblemId } from "../components/rca/labels";
 import { useShell } from "../context/shell";
 
-// Iris AI — the in-app assistant chat, rendered inside the right-side drawer.
+// Iris AI — the in-app assistant chat, rendered inside the floating Iris window
+// (components/IrisAssistant.tsx).
 // Assistant output is rendered as ESCAPED React text only (OWASP LLM02 — never
 // dangerouslySetInnerHTML).
 //
@@ -178,14 +178,19 @@ function cmdToSlash(c: AiCommand): SlashCmd {
   };
 }
 
-export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
-  split?: boolean;
-  onToggleSplit?: () => void;
-  /** A pending AskIris request handed down by the drawer (components/AskIris.tsx). */
+export default function Opsis({ expanded, onToggleExpand, onLeave, ask, onAskHandled }: {
+  /** The floating window is full screen (components/IrisAssistant.tsx). */
+  expanded?: boolean;
+  onToggleExpand?: () => void;
+  /** A citation is taking the operator to another page. The window decides what
+   *  that means (it shrinks out of full screen); without one the panel closes. */
+  onLeave?: () => void;
+  /** A pending AskIris request handed down by the window (components/AskIris.tsx). */
   ask?: { topic: string; question: string; seq: number } | null;
   onAskHandled?: () => void;
 }) {
   const { setCopilotOpen, openHelp } = useShell();
+  const leave = () => (onLeave ? onLeave() : setCopilotOpen(false));
   const [enabled, setEnabled] = useState<boolean | null>(null);
   // N-A7: natural-language questions are their own entitlement (ai.nlquery).
   // Hiding is cosmetic — the server refuses the NL routes without it.
@@ -475,7 +480,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
   };
 
   // AskIris (components/AskIris.tsx) — the `(i)` beside a number on any screen.
-  // The drawer catches the event and hands the pending ask down here.
+  // The window catches the event and hands the pending ask down here.
   //
   // It goes through the GROUNDED route with the topic in context: the server
   // answers from its own authored file and refuses an unknown topic, so nothing
@@ -538,12 +543,12 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
 
   return (
     <div className="op-chat">
-      {/* Header — brand + control cluster: New · Split · Settings · Help · Close. */}
+      {/* Header — brand + control cluster: New · Full screen · Settings · Help · Close. */}
       <div className="op-hd">
         <span className="op-hd-brand">
           <span className="op-hd-logo"><Icon name="copilot" size={15} /></span>
           <span className="op-hd-text">
-            <span className="op-hd-title">{AI_NAME}</span>
+            <span className="op-hd-title" id="iris-window-title">Iris</span>
             <span className="op-hd-sub">
               <span className={`op-dot ${ready ? "ok" : "warn"}`} />
               {cfg
@@ -555,22 +560,25 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
           </span>
         </span>
         <span className="op-hd-actions">
-          <button className="op-hd-btn op-hd-new" title="New conversation" onClick={newConversation}>+</button>
-          {onToggleSplit && (
-            <button className={`op-hd-btn${split ? " on" : ""}`} onClick={() => onToggleSplit()}
-              title={split ? "Overlay mode — float over the page" : "Split screen — dock beside the page"}>
-              <Icon name="maximize" size={15} />
+          <button type="button" className="op-hd-btn op-hd-new" title="New conversation" aria-label="New conversation" onClick={newConversation}>+</button>
+          {onToggleExpand && (
+            <button type="button" className="op-hd-btn" onClick={() => onToggleExpand()}
+              aria-label={expanded ? "Exit full screen" : "Full screen"}
+              title={expanded ? "Exit full screen" : "Full screen"}>
+              <Icon name={expanded ? "minimize" : "maximize"} size={15} />
             </button>
           )}
-          <button className={`op-hd-btn${showSettings ? " on" : ""}`} title="Assistant settings"
+          <button type="button" className={`op-hd-btn${showSettings ? " on" : ""}`} title="Assistant settings"
+            aria-label="Assistant settings" aria-pressed={showSettings}
             onClick={() => { setShowSettings((v) => !v); setShowHelp(false); }}>
             <Icon name="settings" size={15} />
           </button>
-          <button className={`op-hd-btn${showHelp ? " on" : ""}`} title="Help & documentation"
+          <button type="button" className={`op-hd-btn${showHelp ? " on" : ""}`} title="Help & documentation"
+            aria-label="Help & documentation" aria-pressed={showHelp}
             onClick={() => { setShowHelp((v) => !v); setShowSettings(false); }}>
             <Icon name="help" size={15} />
           </button>
-          <button className="op-hd-btn" title="Close (Esc)" onClick={() => setCopilotOpen(false)}>
+          <button type="button" className="op-hd-btn" title="Close (Esc)" aria-label="Close Iris" onClick={() => setCopilotOpen(false)}>
             <Icon name="close" size={15} />
           </button>
         </span>
@@ -841,7 +849,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
                 </div>
               )}
               {m.role === "assistant" && grounded[i]
-                ? <GroundedAnswer ans={grounded[i]} onCite={() => setCopilotOpen(false)} onClose={() => setCopilotOpen(false)} />
+                ? <GroundedAnswer ans={grounded[i]} onCite={leave} onClose={() => setCopilotOpen(false)} />
                 : m.role === "assistant" && chatStmts[i] && !m.content.includes("```")
                   ? <StatementText className="op-text" text={m.content} statements={chatStmts[i]} />
                   : renderContent(m.content)}
@@ -867,7 +875,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
                     const href = answerCiteHref(c.href);
                     return href
                       ? <a key={c.id} className="op-cite" href={href} title={c.label}
-                          onClick={() => setCopilotOpen(false)}>{text}</a>
+                          onClick={leave}>{text}</a>
                       : <span key={c.id} className="op-cite" title={c.label}>{text}</span>;
                   })}
                 </div>

@@ -177,8 +177,8 @@
 .sec-stripe.t-warn { background: var(--warn); }
 .sec-stripe.t-good { background: var(--ok); }
 /* `sec-main`, not `main`: the app shell owns a GLOBAL `.main` (the content
-   region — grid-area:main, overflow:auto, its own background, and a
-   padding-left transition under body.ai-split). A bare `main` class here
+   region — grid-area:main, overflow:auto and its own background). A bare
+   `main` class here
    inherited all of it and took the row's middle cell out of the row grid,
    on top of the stripe and the count. */
 .sec-row .sec-main { min-width: 0; }

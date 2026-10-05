@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// Opsis.layout.test.ts — the Iris drawer's settings pane must scroll.
+// Opsis.layout.test.ts — the Iris window's settings pane must scroll.
 //
-// The drawer (.op-panel) is position:fixed with a flex column inside
+// The window (.iris-window) is position:fixed with a flex column inside
 // (.op-chat, min-height:0). The settings pane holds the workspace AI settings
 // and, since tracker 337 N-C2, the Iris vocabulary panel — about 1 000 px on a
-// 660 px drawer. With neither min-height:0 nor overflow on .op-settings the
+// 640 px window. With neither min-height:0 nor overflow on .op-settings the
 // pane could not shrink and the page could not scroll a fixed element, so the
 // vocabulary's Add / Check / Ask controls sat below the screen, unreachable.
 // Found by e2e/irisVocabulary.spec.ts (N-E5), which clicks them in a real
@@ -25,8 +25,8 @@ function rule(selector: string): string {
   return css.slice(at, css.indexOf("}", at));
 }
 
-describe("the Iris drawer's settings pane", () => {
-  it("can shrink inside the drawer and scrolls its own content", () => {
+describe("the Iris window's settings pane", () => {
+  it("can shrink inside the window and scrolls its own content", () => {
     const r = rule(".op-settings");
     expect(r).toMatch(/min-height:\s*0/);
     expect(r).toMatch(/overflow-y:\s*auto/);

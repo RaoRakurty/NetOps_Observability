@@ -243,7 +243,7 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
 
   const railItem = (s: NavSection) => {
     // Two INDEPENDENT questions, which this used to conflate:
-    //   · what does a CLICK do?      → act (Iris opens the slide-over) or route
+    //   · what does a CLICK do?      → act (Iris opens its floating window) or route
     //   · does it open a FLYOUT?     → does it have routed children
     // Iris answers "act" to the first and, having no pages, "no" to the second.
     // The flyout stays gated on children rather than on `!isCopilot`: gating on

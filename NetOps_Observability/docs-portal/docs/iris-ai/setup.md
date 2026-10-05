@@ -39,7 +39,8 @@ docker compose restart api
 
 ### Step 2 - Grant workspaces access
 
-1. Open Iris from the sidebar and select the gear, **Assistant settings**.
+1. Open Iris with the **Ask Iris** button at the bottom right of the page and
+   select the gear, **Assistant settings**.
 2. Under **Workspace access**, each workspace has two checkboxes:
    **Assistant** (may use Iris at all) and **Investigations** (may run governed,
    read-only lookups before answering). Assistant is enabled by default;
@@ -77,7 +78,7 @@ grounded answers, slash commands and skills all work without a provider.
 
 ### Step 4 - Verify
 
-1. Open Iris. Read the line under the title in the panel header:
+1. Open Iris. Read the line under the title in the window's header:
    - The provider and model, for example `Claude · claude-sonnet-4-6`, when a
      platform key is live.
    - `your key` on a workspace that supplied its own, or `Platform AI service`

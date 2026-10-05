@@ -58,7 +58,7 @@ describe("AskIris", () => {
   // The button reads NO context on purpose: it is dropped into cards that are
   // unit tested with the shell module mocked, and a context read here would make
   // an explanation affordance the reason an unrelated page test fails. Opening
-  // the drawer belongs to the drawer (components/OpsisDrawer.tsx).
+  // the window belongs to the window (components/IrisAssistant.tsx).
   it("touches no shell state — it only raises the event", () => {
     const setCopilotOpen = vi.fn();
     render(

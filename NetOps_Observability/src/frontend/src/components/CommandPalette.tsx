@@ -123,7 +123,7 @@ export default function CommandPalette({ nav }: { nav: NavSection[] }) {
       {
         id: "act:copilot",
         kind: "action",
-        title: "Open Copilot",
+        title: "Ask Iris",
         sub: "Assistant",
         run: () => {
           setCopilotOpen(true);

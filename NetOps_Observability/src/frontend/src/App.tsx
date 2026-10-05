@@ -19,7 +19,7 @@ import Sidebar from "./components/Sidebar";
 import IconRail from "./components/IconRail";
 import SubNav from "./components/SubNav";
 import ScopeBadge from "./components/ScopeBadge";
-import OpsisDrawer from "./components/OpsisDrawer";
+import IrisAssistant from "./components/IrisAssistant";
 import ElevationRequired from "./components/ElevationRequired";
 import HelpDrawer from "./components/HelpDrawer";
 import CommandPalette from "./components/CommandPalette";
@@ -394,7 +394,7 @@ export default function App() {
             </TenantGate>
           </div>
         </main>
-        <OpsisDrawer />
+        <IrisAssistant />
         <ElevationRequired />
         <HelpDrawer />
         <CommandPalette nav={nav} />

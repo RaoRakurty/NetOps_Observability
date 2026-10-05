@@ -1,7 +1,7 @@
 ---
 title: Investigate an incident with Iris
 sidebar_label: Ask Iris
-description: Query Iris from the case, the investigation lane or the drawer, then read the skill, the chain, the citations and what is missing.
+description: Query Iris from the case, the investigation lane or the Iris window, then read the skill, the chain, the citations and what is missing.
 page_type: task
 sidebar_position: 3
 ---
@@ -28,10 +28,14 @@ of an answer to know what a claim rests on.
 |---|---|---|
 | The RCA case | The **Iris AI** card, **Explain this problem** | A grounded explanation of that correlation: cause, supporting evidence, what is missing, recommended owner, next actions. |
 | The investigation workspace | The **Iris co-pilot** lane, **Ask Iris** | The same read of the open case, or of the symptom you selected, with the missing evidence named. |
-| Anywhere | The **Iris AI** button at the foot of the sidebar, or **Open Copilot** from the command palette | A free conversation carrying the same grounding. |
+| Anywhere | The round **Ask Iris** button at the bottom right of the page, **Ctrl+I** (**⌘I** on a Mac), the **Iris AI** item at the foot of the sidebar, or **Ask Iris** from the command palette | A free conversation carrying the same grounding. |
 
-The drawer opens as an overlay by default and can be docked beside the page with
-the split-screen control in its header. The choice is remembered.
+Iris opens in a chat window over the page, above the **Ask Iris** button.
+**Full screen** in the window's header gives the conversation the whole screen;
+**Exit full screen** brings the window back. **Esc** or **Close** closes it.
+The window stays open while you move between pages, and closing and reopening
+it continues the same conversation until you select **New conversation**.
+Following a citation leaves full screen so the page it opens is in view.
 
 ### Step 2 - Use a slash command for a fixed question
 

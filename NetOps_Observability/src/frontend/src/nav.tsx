@@ -214,7 +214,7 @@ export type NavSection = {
   icon: string;
   children?: NavLeaf[];
   render?: (c: SectionCtx) => JSX.Element;
-  action?: "copilot"; // opens the slide-over instead of routing
+  action?: "copilot"; // opens the floating Iris window instead of routing
   footer?: boolean; // pinned to the bottom of the sidebar
   platformOnly?: boolean; // visible only to the cross-tenant platform owner
 };
@@ -431,8 +431,9 @@ export const NAV: NavSection[] = [
       { id: "scorecard", label: "Recovery Scorecard", render: () => <ReliabilityScorecard /> },
     ],
   },
-  // Iris is an ACTION: clicking it opens the ask slide-over. It carries no
-  // pages. Its knowledge — the TAC catalogue of issue classes and per-vendor
+  // Iris is an ACTION: clicking it opens the floating Iris window — the same
+  // window as the bottom-right launcher (components/IrisAssistant.tsx). It
+  // carries no pages. Its knowledge — the TAC catalogue of issue classes and per-vendor
   // checks, the playbooks, the docs corpus, the skills — is built into Iris and
   // read before it answers (owner, 2026-09-15: an administrator should not have
   // to read what Iris knows). The Knowledge page that used to sit here is gone.
@@ -891,7 +892,7 @@ export function navDestinations(nav: NavSection[] = NAV): NavDestination[] {
   const out: NavDestination[] = [];
   for (const s of nav) {
     if (s.action) {
-      // The action itself ("Ask Iris" opens the slide-over) …
+      // The action itself ("Ask Iris" opens the floating window) …
       out.push({ label: s.label, section: s.label, route: s.id, action: s.action });
       // … and, when the section also routes, every leaf as a real destination.
       // Without this an acting section's pages would be unreachable from ⌘K,

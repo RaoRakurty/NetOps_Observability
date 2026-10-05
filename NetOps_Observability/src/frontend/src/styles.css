@@ -2242,45 +2242,78 @@ code, kbd, pre, .mono, td.mono {
 /* Cite chips: tabular, hairline, futuristic. */
 .op-cite { font-variant-numeric: tabular-nums; letter-spacing: .01em; }
 
-/* ===== Iris AI — LEFT-docked panel (attached to the rail knob) ===========
-   Slides in from the icon rail; overlay by default, or split (page reflows). */
-:root { --ai-panel-w: 432px; }
+/* ===== Iris — floating assistant (owner decision 2026-10-05) ==============
+   A round launcher bottom-right on every page; the window pops up above it,
+   over the page, and can go full screen. components/IrisAssistant.tsx.
+   Both sit clear of the docked Inspector (--ins-w) and bottom drawer
+   (--drawer-h), so they never cover those panes' controls. */
+:root { --iris-gap: 24px; --iris-launcher: 56px; }
 
-.op-panel {
+.iris-launcher {
+  position: fixed; z-index: 93;
+  right: calc(var(--ins-w, 0px) + var(--iris-gap));
+  bottom: calc(var(--drawer-h, 0px) + var(--iris-gap));
+  width: var(--iris-launcher); height: var(--iris-launcher); padding: 0;
+  display: grid; place-items: center; overflow: hidden; cursor: pointer;
+  border-radius: 50%; color: #fff;
+  background: var(--panel-solid);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  box-shadow: 0 12px 30px -10px rgba(0,0,0,.55), 0 0 0 4px var(--accent-soft, rgba(79,70,229,.16));
+  transition: transform .16s cubic-bezier(.22,.61,.36,1), box-shadow .16s ease, background .16s ease;
+}
+.iris-launcher:hover { transform: translateY(-2px) scale(1.04); box-shadow: 0 16px 34px -10px rgba(0,0,0,.6), 0 0 0 6px var(--accent-soft, rgba(79,70,229,.24)); }
+.iris-launcher:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.iris-launcher.open { background: var(--accent-grad, var(--accent)); }
+.iris-launcher-mark { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: block; pointer-events: none; }
+
+.iris-window {
   position: fixed; z-index: 95;
-  left: var(--sidebar-w, 64px); top: var(--topbar-h, 52px); bottom: 0;
-  width: min(var(--ai-panel-w), calc(100vw - var(--sidebar-w, 64px) - 8px));
-  display: flex; flex-direction: column;
-  background: var(--panel-solid); border-right: 1px solid var(--panel-border);
-  box-shadow: 18px 0 48px -28px rgba(0,0,0,.65);
-  /* closed → tucked behind the rail, faded out, inert */
-  transform: translateX(-18px); opacity: 0; visibility: hidden; pointer-events: none;
-  transition: transform .28s cubic-bezier(.22,.61,.36,1), opacity .2s ease, visibility 0s linear .28s;
+  right: calc(var(--ins-w, 0px) + var(--iris-gap));
+  bottom: calc(var(--drawer-h, 0px) + var(--iris-gap) + var(--iris-launcher) + 12px);
+  width: min(420px, calc(100vw - 32px));
+  height: min(640px, calc(100vh - var(--drawer-h, 0px) - var(--iris-gap) - var(--iris-launcher) - 24px));
+  min-height: 320px;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--panel-solid); color: var(--fg);
+  border: 1px solid var(--panel-border); border-radius: 16px;
+  box-shadow: 0 28px 70px -18px rgba(0,0,0,.6), 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+  transform-origin: bottom right;
+  animation: irisPop .22s cubic-bezier(.22,.61,.36,1);
 }
-.op-panel.open {
-  transform: none; opacity: 1; visibility: visible; pointer-events: auto;
-  transition: transform .28s cubic-bezier(.22,.61,.36,1), opacity .2s ease, visibility 0s;
+.iris-window:focus { outline: none; }
+.iris-window .op-chat { flex: 1; min-height: 0; }
+.iris-window .op-hd { border-radius: 16px 16px 0 0; }
+/* Full screen — the same conversation over the whole viewport. */
+.iris-window.expanded {
+  inset: 0; width: auto; height: auto; min-height: 0;
+  border: 0; border-radius: 0; box-shadow: none;
+  animation: irisGrow .2s ease;
 }
-/* The animated accent signature now rides the panel's left edge. */
-.op-panel::before {
-  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; z-index: 1;
-  background: linear-gradient(180deg, transparent, var(--accent), color-mix(in srgb, var(--accent) 50%, transparent), transparent);
-  background-size: 100% 220%; animation: opEdge 7s linear infinite; opacity: .85;
-}
-.op-panel .op-chat { flex: 1; min-height: 0; }
+.iris-window.expanded .op-hd { border-radius: 0; }
+/* Full screen keeps a readable measure: the conversation is centred, not
+   stretched across a wide monitor. */
+.iris-window.expanded .op-msgs,
+.iris-window.expanded .op-composer,
+.iris-window.expanded .op-settings,
+.iris-window.expanded .op-error { width: 100%; max-width: 960px; margin-left: auto; margin-right: auto; }
 
-/* Light scrim (overlay mode only) over the page area right of the rail. */
-.op-scrim {
-  position: fixed; left: var(--sidebar-w, 64px); top: var(--topbar-h, 52px); right: 0; bottom: 0;
-  background: rgba(8,11,20,.32); opacity: 0; pointer-events: none; transition: opacity .2s ease; z-index: 94;
+@keyframes irisPop { from { opacity: 0; transform: translateY(12px) scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes irisGrow { from { opacity: .6; } to { opacity: 1; } }
+
+/* Narrow screens: the window is a full-width sheet from the bottom edge. */
+@media (max-width: 640px) {
+  :root { --iris-gap: 16px; }
+  .iris-window:not(.expanded) {
+    left: 0; right: 0; bottom: 0; width: auto;
+    height: min(88vh, calc(100vh - 48px));
+    border-radius: 16px 16px 0 0; border-bottom: 0;
+  }
 }
-.op-scrim.open { opacity: 1; pointer-events: auto; }
+@media (prefers-reduced-motion: reduce) {
+  .iris-launcher, .iris-window, .iris-window.expanded { animation: none; transition: none; }
+}
 
-/* SPLIT mode — the page reflows beside the panel (no scrim, both usable). */
-.main { transition: padding-left .28s cubic-bezier(.22,.61,.36,1); }
-body.ai-split .main { padding-left: var(--ai-panel-w); }
-
-/* Header: brand + control cluster (New · Split · Settings · Help · Close). */
+/* Header: brand + control cluster (New · Full screen · Settings · Help · Close). */
 .op-hd {
   display: flex; align-items: center; gap: 10px; padding: 11px 12px 11px 14px;
   border-bottom: 1px solid var(--panel-border);
