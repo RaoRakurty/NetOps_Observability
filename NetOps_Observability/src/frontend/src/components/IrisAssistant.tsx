@@ -33,7 +33,6 @@ import Opsis from "../tabs/Opsis";
 import Icon from "./Icon";
 import { useShell } from "../context/shell";
 import { IRIS_ASK_EVENT, type IrisAskDetail } from "./AskIris";
-import irisMark from "../assets/brand/eye-iris.webp";
 
 /** sessionStorage key for the full-screen choice (per tab, like the conversation). */
 export const IRIS_EXPANDED_KEY = "iris.window.expanded";
@@ -194,7 +193,7 @@ export default function IrisAssistant() {
       >
         {open
           ? <Icon name="chevron-down" size={24} />
-          : <img className="iris-launcher-mark" src={irisMark} alt="" draggable={false} />}
+          : <Icon name="copilot" size={26} />}
       </button>
       {open && (
         <div
