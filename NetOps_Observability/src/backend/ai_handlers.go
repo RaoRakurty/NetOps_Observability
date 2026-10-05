@@ -1919,8 +1919,15 @@ func (s *server) nlqChipKnown(r *http.Request, claims jwtClaims, st irisconvo.St
 			}
 			// Cached state is not trusted: an entity is offered only while
 			// the caller can still see it (an edit is validated again anyway).
-			if ok, err := scope.Visible(r.Context(), e); err != nil || !ok {
+			ok, err := scope.Visible(r.Context(), e)
+			if err != nil {
+				// A failed check is not "invisible": it is logged, and the
+				// entity is withheld (fail closed) rather than offered unchecked.
+				logError("iris.nlquery", "chip option visibility check failed", errf(err))
 				continue
+			}
+			if !ok {
+				continue // no longer the caller's to see
 			}
 			out = append(out, chips.Option{Value: e.ID, Label: names[e.ID]})
 		}
