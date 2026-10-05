@@ -1990,7 +1990,7 @@ export interface IrisQueryRecord {
   duration_ms: number;
   corrections: IrisCorrection[] | null;
   /** Who wrote the stored query (N-C5): "model" means the AI model, not the grammar. Absent when no query was kept. */
-  compiled_by?: "grammar" | "model" | "supplied";
+  compiled_by?: "grammar" | "model" | "supplied" | "chip_edit";
   /** The validated query — only on GET /api/ai/query/{id}, never in the list. */
   query?: Record<string, unknown>;
   /** Set when the model wrote the query. */
@@ -2003,7 +2003,7 @@ export interface IrisQueryExplanation {
   outcome: IrisQueryRecord["outcome"];
   question: string;
   query_type?: string;
-  compiled_by?: "grammar" | "model" | "supplied";
+  compiled_by?: "grammar" | "model" | "supplied" | "chip_edit";
   /** "model" when the AI model, not the grammar, wrote the query. */
   source?: "model";
   disclosure?: string;
@@ -2067,6 +2067,8 @@ export interface IrisTurn {
   intent?: string;
   outcome: "answered" | "clarify" | "declined" | "unparsed" | "invalid" | "error";
   rows: number;
+  /** A turn made by editing a filter chip (N-C7); `question` is the server's description of the edit. */
+  edited?: boolean;
 }
 export interface IrisConversation {
   id: string;
@@ -2079,6 +2081,20 @@ export interface IrisConversationAnswer extends IrisCompiled {
   turn: IrisTurn;
   result?: IrisResultSet;
   error?: string;
+  /** The editable filters of the query this answer ran (N-C7), built by the server. */
+  chips?: unknown;
+  /** The hash of that query — an edit echoes it, so only the latest answer can be edited. */
+  chips_for?: string;
+  /** A chip edit's description and whether it was filed as a correction (N-C8). */
+  edit?: string;
+  correction?: "recorded" | "full" | "unavailable";
+}
+/** One chip edit: the server regenerates and re-validates the query — no query is ever sent. */
+export interface IrisChipEdit {
+  base: string;
+  chip: string;
+  op: "set" | "remove";
+  value?: string;
 }
 export interface IrisResultSet {
   query_id: string;
@@ -6270,6 +6286,12 @@ export const api = {
   askIrisConversation: (id: string, question: string, tz?: string) =>
     request<IrisConversationAnswer>(`/api/ai/conversations/${encodeURIComponent(id)}/messages`,
       { method: "POST", body: JSON.stringify(tz ? { question, tz } : { question }) }),
+  // A filter-chip edit of the conversation's latest answer (N-C7): the server
+  // rebuilds the query from the chip it offered, validates it like a typed
+  // question and answers it as the next turn.
+  editIrisChip: (id: string, edit: IrisChipEdit) =>
+    request<IrisConversationAnswer>(`/api/ai/conversations/${encodeURIComponent(id)}/edits`,
+      { method: "POST", body: JSON.stringify(edit) }),
   // Query capture (N-C8): the caller's own recent questions (a workspace admin
   // may ask for the workspace's), and "that's not what I meant" on one of
   // them. A corrected query is re-validated by the server; corrections are

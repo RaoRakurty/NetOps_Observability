@@ -1,0 +1,47 @@
+{
+ "corpus": "routine",
+ "description": "Part 2 §69 success criteria: the routine questions of an incident investigation, asked in ONE conversation with the incident on screen (incident_id, as the Iris drawer on an incident page sends it). What the query engine answers is scored; what it cannot answer yet must be refused honestly, naming the plan row that closes it — never answered with a broader or unrelated query",
+ "notes": {
+  "count": "Part 2 §69 lists 15 questions (the plan row says 14); all 15 are here, in the order of the source",
+  "world": "the same two-tenant world as multiturn.json; the incident on screen is tenant A's open SD-WAN incident in Dallas (started 90m ago); John Smith's NETWORK change chg-1 landed 100m ago, inside the incident's 30-minute look-back"
+ },
+ "conversations": [
+  {
+   "id": "s69-incident",
+   "category": "part2-s69",
+   "incident_id": "11111111-2222-4333-8444-555555555555",
+   "turns": [
+    {"q": "What happened?",
+     "expect_ast": {"v":1,"query_type":"incident_explain","target":"incident","time_range":{"kind":""},"incident_id":"11111111-2222-4333-8444-555555555555"}},
+    {"q": "Who changed it?",
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","time_range":{"kind":"incident","anchor":{"incident_id":"11111111-2222-4333-8444-555555555555","before":"30m","after":"10m"}},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"q": "What exactly did they change?", "binds": ["actor:John Smith"],
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","filters":[{"field":"actor","op":"in","values":["John Smith"]}],"time_range":{"kind":"relative","last":"24h"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"q": "Show me that.", "expect_outcome": "unparsed",
+     "gap": "N-S1: click-to-diff over the N-D3 change diff — the query engine has no 'show this change' type"},
+    {"q": "Did the problem start before or after the change?", "expect_outcome": "unparsed",
+     "gap": "N-S1: incident/change timeline ordering is not a query type"},
+    {"q": "Which users were affected?", "expect_outcome": "unparsed",
+     "gap": "UNPLANNED: no catalog entity or query type for affected users (DEM experience data is not in the NL catalog)"},
+    {"q": "Was anything else changed?",
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","filters":[{"field":"id","op":"ne","values":["chg-1"]}],"time_range":{"kind":"relative","last":"24h"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"q": "Show only Dallas.",
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","entities":[{"type":"site","id":"site:dfw-hq"}],"filters":[{"field":"id","op":"ne","values":["chg-1"]}],"time_range":{"kind":"relative","last":"24h"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"q": "Compare this with yesterday.", "expect_outcome": "unparsed",
+     "gap": "UNPLANNED: compare_windows is metrics-only; comparing a change list across days has no query type"},
+    {"q": "Have we seen this before?", "expect_outcome": "unparsed",
+     "gap": "N-F4: historical incident intelligence"},
+    {"q": "Why does Correlix think Comcast caused it?", "expect_outcome": "unparsed",
+     "gap": "N-I1: the RCA explanation is answered by the investigator path (/api/ai/ask), not the query engine"},
+    {"q": "Show me the evidence.", "expect_outcome": "unparsed",
+     "gap": "N-I1/N-E3: evidence is the RCA contract's, shown in the evidence drawer — not a query type"},
+    {"q": "What evidence argues against it?", "expect_outcome": "unparsed",
+     "gap": "N-I1: contradicting evidence lives on the RCA/hypothesis path, not the query engine"},
+    {"q": "What should I do?", "expect_outcome": "unparsed",
+     "gap": "N-I7: grounded recommendation cards"},
+    {"q": "Which Runbook applies?", "expect_outcome": "unparsed",
+     "gap": "N-F2: tenant runbooks and their associations"}
+   ]
+  }
+ ]
+}

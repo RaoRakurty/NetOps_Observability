@@ -26,6 +26,7 @@ import (
 	"netops/backend/internal/irishypo"
 	"netops/backend/internal/irisquerylog"
 	nlqast "netops/backend/internal/nlquery/ast"
+	"netops/backend/internal/nlquery/chips"
 	"netops/backend/internal/nlquery/compile"
 	"netops/backend/internal/nlquery/explain"
 	"netops/backend/internal/nlquery/modelc"
@@ -289,6 +290,9 @@ func (s *server) aiNLQuery(r *http.Request, claims jwtClaims) ai.NLQueryFunc {
 type nlqRan struct {
 	q  *nlqast.AST
 	rs *plan.ResultSet
+	// logID is the query-log record of that answer ("" when capture failed):
+	// a later chip edit of it is filed there as a correction.
+	logID string
 }
 
 // aiNLQueryWith is aiNLQuery inside a conversation: st (may be nil) is the
@@ -328,8 +332,12 @@ func (s *server) aiNLQueryWith(r *http.Request, claims jwtClaims, st *irisconvo.
 		if err != nil {
 			rec.Outcome = irisquerylog.OutcomeError
 		}
-		if id := s.nlqCapture(rq, claims, &rec, start); id != "" && err == nil {
+		id := s.nlqCapture(rq, claims, &rec, start)
+		if id != "" && err == nil {
 			d.Payload = withQueryLogID(d.Payload, id)
+		}
+		if ran != nil && err == nil {
+			ran.logID = id
 		}
 		return d, err
 	}
@@ -364,6 +372,7 @@ func (s *server) recordAskTurn(r *http.Request, claims jwtClaims, conv *irisconv
 	next := conv.State
 	if ran.rs != nil {
 		next = irisconvo.Next(s.nlqCatalog, conv.State, ran.q, ran.rs)
+		next.LastLogID = ran.logID
 		turn.ASTHash, turn.QueryID, turn.Rows = ran.rs.ASTHash, ran.rs.QueryID, len(ran.rs.Rows)+len(ran.rs.Series)
 	}
 	tenant, _ := principalTenant(claims)
@@ -1516,7 +1525,10 @@ func (s *server) handleAIQueryExecute(w http.ResponseWriter, r *http.Request) {
 // GET  /api/ai/conversations/{id}            its turns — the owner's own only; otherwise 404
 // POST /api/ai/conversations/{id}/messages   {question, tz?, incident_id?} → the compile
 //      answer + the result, compiled against the SERVER-HELD state of earlier
-//      turns ("that device", "what else did they change")
+//      turns ("that device", "what else did they change"); an answered turn
+//      carries the editable filter chips of the query it ran
+// POST /api/ai/conversations/{id}/edits      {base, chip, op, value?} → one
+//      chip edit, regenerated and validated server-side (see below)
 //
 // §3a: a conversation belongs to one principal in one tenant scope; another
 // user of the same tenant, the same user in another scope, and an id that
@@ -1562,12 +1574,16 @@ func (s *server) handleAIConversations(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleAIConversation(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/ai/conversations/")
 	id, sub, _ := strings.Cut(rest, "/")
-	if !irisconvo.ValidID(id) || (sub != "" && sub != "messages") {
+	if !irisconvo.ValidID(id) || (sub != "" && sub != "messages" && sub != "edits") {
 		writeError(w, http.StatusNotFound, errors.New("not found"))
 		return
 	}
-	if sub == "messages" {
+	switch sub {
+	case "messages":
 		s.handleAIConversationMessage(w, r, id)
+		return
+	case "edits":
+		s.handleAIConversationEdit(w, r, id)
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -1677,34 +1693,60 @@ func (s *server) handleAIConversationMessage(w http.ResponseWriter, r *http.Requ
 	case c.checked == nil:
 		turn.Outcome = irisconvo.OutcomeInvalid
 	default:
-		rs, err := s.nlqRun(r, claims, c.checked, *c.vr)
-		switch {
-		case errors.Is(err, plan.ErrNotFound):
-			// An ANSWER ("no such incident"), recorded as a turn — not a 404,
-			// which the client reads as "this conversation is gone".
-			turn.Outcome = irisconvo.OutcomeError
-			out["error"] = "not found"
-		case err != nil:
-			logError("iris.nlquery", "execute failed", errf(err))
-			turn.Outcome, status = irisconvo.OutcomeError, http.StatusInternalServerError
-			out["error"] = "the query could not be run"
-		default:
-			turn.Outcome, turn.ASTHash, turn.QueryID = irisconvo.OutcomeAnswered, rs.ASTHash, rs.QueryID
-			turn.Rows = len(rs.Rows) + len(rs.Series)
-			next = irisconvo.Next(s.nlqCatalog, st, c.checked, rs)
-			out["result"] = rs
-			out["presentation"] = c.presentation(rs)
-			rec.Answered(rs)
-		}
-		if turn.Outcome == irisconvo.OutcomeError {
-			rec.Outcome = irisquerylog.OutcomeError
-		}
+		next, status = s.nlqConvoRun(r, claims, st, c.checked, *c.vr, present.Suggestion{Raw: c.view}, &turn, &rec, out)
 	}
 	// The question is recorded whether or not the turn can be appended: it
 	// was compiled (and possibly run) either way.
-	if logID := s.nlqCapture(r, claims, &rec, start); logID != "" {
+	logID := s.nlqCapture(r, claims, &rec, start)
+	if logID != "" {
 		out["query_log_id"] = logID
 	}
+	if turn.Outcome == irisconvo.OutcomeAnswered {
+		next.LastLogID = logID
+	}
+	s.nlqConvoSave(w, r, claims, id, turn, next, out, status)
+}
+
+// nlqConvoRun runs a VALIDATED query as a conversation turn: it fills the
+// turn, the record and the answer, and returns the state the turn leaves (st
+// unchanged unless the query answered) and the response status.
+// suggest is the model's raw view suggestion (N-E1); a chip edit passes none, so
+// its answer carries the server's own plan.
+func (s *server) nlqConvoRun(r *http.Request, claims jwtClaims, st irisconvo.State, checked *nlqast.AST, vr validate.Result,
+	suggest present.Suggestion, turn *irisconvo.Turn, rec *irisquerylog.Record, out map[string]any) (irisconvo.State, int) {
+	next, status := st, http.StatusOK
+	rs, err := s.nlqRun(r, claims, checked, vr)
+	switch {
+	case errors.Is(err, plan.ErrNotFound):
+		// An ANSWER ("no such incident"), recorded as a turn — not a 404,
+		// which the client reads as "this conversation is gone".
+		turn.Outcome = irisconvo.OutcomeError
+		out["error"] = "not found"
+	case err != nil:
+		logError("iris.nlquery", "execute failed", errf(err))
+		turn.Outcome, status = irisconvo.OutcomeError, http.StatusInternalServerError
+		out["error"] = "the query could not be run"
+	default:
+		turn.Outcome, turn.ASTHash, turn.QueryID = irisconvo.OutcomeAnswered, rs.ASTHash, rs.QueryID
+		turn.Rows = len(rs.Rows) + len(rs.Series)
+		next = irisconvo.Next(s.nlqCatalog, st, checked, rs)
+		out["result"] = rs
+		out["presentation"] = present.Select(checked, rs, suggest)
+		rec.Answered(rs)
+	}
+	if turn.Outcome == irisconvo.OutcomeError {
+		rec.Outcome = irisquerylog.OutcomeError
+	}
+	return next, status
+}
+
+// nlqConvoSave appends the turn and writes the answer. An answered turn also
+// carries the filter chips of the query it ran (built from the state as
+// STORED, so the chips and the query an edit is checked against are the same)
+// and chips_for, the hash of that query, which an edit must echo.
+func (s *server) nlqConvoSave(w http.ResponseWriter, r *http.Request, claims jwtClaims, id string,
+	turn irisconvo.Turn, next irisconvo.State, out map[string]any, status int) {
+	tenant, _ := principalTenant(claims)
 	saved, err := s.nlqConvos.Append(r.Context(), tenant, claims.Sub, id, turn, next)
 	switch {
 	case errors.Is(err, irisconvo.ErrFull):
@@ -1720,9 +1762,197 @@ func (s *server) handleAIConversationMessage(w http.ResponseWriter, r *http.Requ
 	}
 	out["conversation_id"] = saved.ID
 	out["turn"] = saved.Turns[len(saved.Turns)-1]
+	if turn.Outcome == irisconvo.OutcomeAnswered && saved.State.LastAST != nil {
+		out["chips"] = chips.Build(s.nlqCatalog, saved.State.LastAST, s.nlqChipKnown(r, claims, saved.State))
+		out["chips_for"] = saved.State.LastAST.Hash()
+	}
 	logInfo("iris.convo", "turn", map[string]any{"tenant": tenant, "sub": claims.Sub, "intent": turn.Intent,
-		"outcome": turn.Outcome, "turns": len(saved.Turns), "question_chars": len(req.Question)})
+		"outcome": turn.Outcome, "edited": turn.Edited, "turns": len(saved.Turns), "question_chars": len(turn.Question)})
 	writeJSON(w, status, out)
+}
+
+// ---- Iris NL: editable filter chips (tracker 337 N-C7 / N-C8) ---------------
+//
+// POST /api/ai/conversations/{id}/edits  {base, chip, op, value?}
+//      → the answer to the query REGENERATED from one chip edit of the
+//        conversation's last answer, as a new turn of the same conversation.
+//
+// The client never sends a query. It names a chip the server built for the
+// query the SERVER holds (base = that query's hash, so an edit of an answer
+// that is no longer the latest is refused), an op (set / remove) and, for
+// set, one of the values the server offered for that chip. The regenerated
+// query is then validated exactly like a compiled one — in the caller's
+// CURRENT scope, so a foreign or vanished entity is unknown_entity — before
+// anything runs. A valid edit is also filed as a wrong_filter correction on
+// the query-log record of the answer it edited, carrying the regenerated
+// query (offline evaluation only).
+//
+// §3a: the conversation is the caller's own (another tenant, a colleague and
+// an as_tenant walk get the same 404 as an unknown id); entity options come
+// from the caller's own conversation and scoped inventory.
+
+const nlqChipEditBody = 2 << 10
+
+func (s *server) handleAIConversationEdit(w http.ResponseWriter, r *http.Request, id string) {
+	claims, ok := s.nlqGate(w, r)
+	if !ok {
+		return
+	}
+	if s.nlqConvos == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("Iris conversations are not available on this deployment"))
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, nlqChipEditBody)
+	var req struct {
+		Base  string `json:"base"`
+		Chip  string `json:"chip"`
+		Op    string `json:"op"`
+		Value string `json:"value"`
+	}
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields() // no query, state or tenant from the client — ever
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Chip == "" || len(req.Chip) > 64 || len(req.Base) != 64 || len(req.Value) > 256 {
+		writeError(w, http.StatusBadRequest, errors.New("an edit names the answer (base), a chip, an op and — to change it — a value"))
+		return
+	}
+	tenant, _ := principalTenant(claims)
+	conv, err := s.nlqConvos.Get(r.Context(), tenant, claims.Sub, id)
+	if errors.Is(err, irisconvo.ErrNotFound) {
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+		return
+	}
+	if err != nil {
+		logError("iris.convo", "read failed", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("the conversation could not be read"))
+		return
+	}
+	st := conv.State
+	if st.LastAST == nil || st.LastAST.Hash() != req.Base {
+		writeError(w, http.StatusConflict, errors.New("that answer is no longer the latest in this conversation — edit the filters of the newest answer"))
+		return
+	}
+	start := time.Now()
+	q, chip, err := chips.Apply(s.nlqCatalog, st.LastAST, s.nlqChipKnown(r, claims, st),
+		chips.Edit{Chip: req.Chip, Op: req.Op, Value: req.Value})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	desc := chips.Describe(chip, chips.Edit{Chip: req.Chip, Op: req.Op, Value: req.Value})
+	// Untrusted exactly like a compiled or client-written query.
+	checked, vr := validate.Validate(r.Context(), s.nlqCatalog, s.nlqScopeFor(r, claims), q)
+	rec := irisquerylog.FromChipEdit(desc, id, q, checked, vr)
+	turn := irisconvo.Turn{Question: desc, Intent: "edit_filter", Edited: true}
+	out := map[string]any{"intent": "edit_filter", "validation": vr, "edit": desc}
+	next, status := st, http.StatusOK
+	if !vr.Valid || checked == nil {
+		turn.Outcome = irisconvo.OutcomeInvalid
+		out["ast"] = q // shown, never run
+	} else {
+		out["ast"] = checked
+		next, status = s.nlqConvoRun(r, claims, st, checked, vr, present.Suggestion{}, &turn, &rec, out)
+		out["correction"] = s.nlqChipCorrection(r, claims, st.LastLogID, desc, checked)
+	}
+	logID := s.nlqCapture(r, claims, &rec, start)
+	if logID != "" {
+		out["query_log_id"] = logID
+	}
+	if turn.Outcome == irisconvo.OutcomeAnswered {
+		next.LastLogID = logID
+	}
+	s.nlqConvoSave(w, r, claims, id, turn, next, out, status)
+}
+
+// nlqChipCorrection files a valid chip edit as a wrong_filter correction on
+// the caller's own record of the answer it edited, carrying the regenerated
+// (validated) query. It never fails the edit: the outcome is reported —
+// "recorded", "full" (the record holds its maximum), or "unavailable" (no
+// record: its capture failed, it expired, or capture is off).
+func (s *server) nlqChipCorrection(r *http.Request, claims jwtClaims, logID, desc string, checked *nlqast.AST) string {
+	if s.nlqQueryLog == nil || logID == "" {
+		return "unavailable"
+	}
+	tenant, _ := principalTenant(claims)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), nlqCaptureTimeout)
+	defer cancel()
+	_, err := s.nlqQueryLog.Correct(ctx, tenant, claims.Sub, logID,
+		irisquerylog.Correction{Kind: irisquerylog.KindWrongFilter, By: claims.Sub, Note: desc, CorrectedAST: checked})
+	switch {
+	case err == nil:
+		s.nlqQueryLogMetrics.Corrected(irisquerylog.KindWrongFilter)
+		return "recorded"
+	case errors.Is(err, irisquerylog.ErrFull):
+		return "full"
+	case errors.Is(err, irisquerylog.ErrNotFound):
+		return "unavailable"
+	default:
+		logError("iris.querylog", "chip-edit correction failed", map[string]any{"tenant": tenant, "error": err.Error()})
+		return "unavailable"
+	}
+}
+
+// nlqChipMaxInventory bounds the inventory read behind one entity chip.
+const nlqChipMaxInventory = chips.MaxOptions
+
+// nlqChipKnown is what an entity chip may be changed to: the entities this
+// conversation already showed (most recent first), then — for sites and
+// devices — the caller's own visible inventory. Everything here is the
+// caller's: the conversation is theirs and the inventory is read through
+// their scope; whatever is picked is validated again before it runs.
+func (s *server) nlqChipKnown(r *http.Request, claims jwtClaims, st irisconvo.State) chips.Known {
+	cache := map[string][]chips.Option{}
+	return func(typ string) []chips.Option {
+		if v, ok := cache[typ]; ok {
+			return v
+		}
+		names := map[string]string{}
+		var inv []chips.Option
+		if typ == "site" || typ == "device" {
+			named, err := newNLQLookups(s, r, claims).Inventory(r.Context(), []string{typ})
+			if err != nil {
+				logError("iris.nlquery", "chip options unavailable", errf(err))
+			}
+			for _, n := range named {
+				if len(inv) == nlqChipMaxInventory {
+					break
+				}
+				label := n.ID
+				if len(n.Names) > 0 && n.Names[0] != "" {
+					label = n.Names[0]
+				}
+				names[n.ID] = label
+				inv = append(inv, chips.Option{Value: n.ID, Label: label})
+			}
+			sort.Slice(inv, func(i, j int) bool { return inv[i].Label < inv[j].Label })
+		}
+		var out []chips.Option
+		scope := s.nlqScopeFor(r, claims)
+		for _, e := range st.Entities {
+			if e.Type != typ {
+				continue
+			}
+			// Cached state is not trusted: an entity is offered only while
+			// the caller can still see it (an edit is validated again anyway).
+			ok, err := scope.Visible(r.Context(), e)
+			if err != nil {
+				// A failed check is not "invisible": it is logged, and the
+				// entity is withheld (fail closed) rather than offered unchecked.
+				logError("iris.nlquery", "chip option visibility check failed", errf(err))
+				continue
+			}
+			if !ok {
+				continue // no longer the caller's to see
+			}
+			out = append(out, chips.Option{Value: e.ID, Label: names[e.ID]})
+		}
+		out = append(out, inv...)
+		cache[typ] = out
+		return out
+	}
 }
 
 // ---- Iris NL: query capture + operator corrections (tracker 337 N-C8) -------

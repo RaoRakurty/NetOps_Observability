@@ -8,7 +8,9 @@
 //   2. Check a name — how Iris resolves a phrase, and how sure it is.
 //   3. Try a question — what Iris understood, and the answer the deterministic
 //      query engine returns, before any model is involved. "That's not what I
-//      meant" records a correction for offline review.
+//      meant" records a correction for offline review. An answer's filters are
+//      chips: changing one makes the SERVER rebuild and re-check the query and
+//      answer it as the next turn (N-C7), recorded as a correction (N-C8).
 //   4. Recent questions — the caller's own questions and what became of each.
 //
 // Everything here is scoped server-side to the caller's workspace; the tenant
@@ -16,9 +18,10 @@
 // the words it could not place are listed, and nothing is run.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, type IrisAlias, type IrisCompiled, type IrisRef, type IrisResolution, type IrisResultSet, type IrisTurn } from "../services/api";
+import { api, type IrisAlias, type IrisCompiled, type IrisConversationAnswer, type IrisRef, type IrisResolution, type IrisResultSet, type IrisTurn } from "../services/api";
 import { httpFailure, operatorError } from "../lib/errors";
 import QueryCorrection from "../iris/QueryCorrection";
+import FilterChipBar, { type FilterChipChange } from "../iris/FilterChipBar";
 import RecentQuestions from "../iris/RecentQuestions";
 import DecisionLedger from "../iris/DecisionLedger";
 
@@ -107,6 +110,12 @@ export default function IrisVocabulary() {
   const [mode, setMode] = useState<"asked" | "preview">("preview");
   const [convId, setConvId] = useState<string | null>(null);
   const [history, setHistory] = useState<IrisTurn[]>([]);
+  // The latest answer's filter chips and the hash of the query they belong to
+  // (an edit echoes it, so only the newest answer can be edited).
+  const [chips, setChips] = useState<unknown>(null);
+  const [chipsFor, setChipsFor] = useState("");
+  const [editNote, setEditNote] = useState("");
+  const [editing, setEditing] = useState(false);
   // Bumped after every question so "Recent questions" re-reads the log.
   const [asked, setAsked] = useState(0);
 
@@ -220,6 +229,9 @@ export default function IrisVocabulary() {
     setCompiled(null);
     setResult(null);
     setQErr("");
+    setChips(null);
+    setChipsFor("");
+    setEditNote("");
     if (!question.trim()) return;
     try {
       setMode("preview");
@@ -238,6 +250,7 @@ export default function IrisVocabulary() {
     setCompiled(null);
     setResult(null);
     setQErr("");
+    setEditNote("");
     const q = question.trim();
     if (!q) return;
     const send = async (id: string) => api.askIrisConversation(id, q, browserTZ());
@@ -259,21 +272,66 @@ export default function IrisVocabulary() {
         setQErr(st === 409 ? "That conversation was full — started a new one." : "That conversation had ended — started a new one.");
         ans = await send(id);
       }
-      setMode("asked");
-      setCompiled(ans);
-      setResult(ans.result ?? null);
-      if (ans.error) setQErr(ans.error === "not found" ? "Iris could not find that." : "The question could not be run.");
-      setHistory((h) => [...h, ans.turn]);
+      showAnswer(ans);
       setQuestion("");
-      setAsked((n) => n + 1);
     } catch (e) {
       setQErr(operatorError(e, "The question could not be asked."));
+    }
+  };
+
+  // showAnswer puts a conversation answer (a question's or a chip edit's) on
+  // screen. Chips belong to the answer they came with: a turn that was not
+  // answered shows none.
+  const showAnswer = (ans: IrisConversationAnswer) => {
+    setMode("asked");
+    setCompiled(ans);
+    setResult(ans.result ?? null);
+    if (ans.error) setQErr(ans.error === "not found" ? "Iris could not find that." : "The question could not be run.");
+    setHistory((h) => [...h, ans.turn]);
+    setChips(ans.turn?.outcome === "answered" ? ans.chips ?? null : null);
+    setChipsFor(ans.turn?.outcome === "answered" ? ans.chips_for ?? "" : "");
+    setAsked((n) => n + 1);
+  };
+
+  // editChip sends ONE chip change of the latest answer. The client names the
+  // chip and a value the server offered — never a query; the server rebuilds
+  // the query, checks it like a typed question and answers it as the next turn.
+  const editChip = async (e: FilterChipChange) => {
+    if (!convId || !chipsFor || editing) return;
+    setQErr("");
+    setEditNote("");
+    setEditing(true);
+    try {
+      const ans = await api.editIrisChip(convId, e.kind === "set"
+        ? { base: chipsFor, chip: e.id, op: "set", value: e.value }
+        : { base: chipsFor, chip: e.id, op: "remove" });
+      showAnswer(ans);
+      if (ans.turn?.outcome === "invalid") {
+        setQErr("Iris cannot run the query with that filter — the previous answer still stands.");
+      } else if (ans.correction === "recorded") {
+        setEditNote("Saved as a correction of the earlier answer, for review.");
+      }
+    } catch (err) {
+      const st = httpFailure(err)?.status;
+      if (st === 404) {
+        setConvId(null);
+        setChips(null);
+        setChipsFor("");
+        setQErr("That conversation had ended — ask the question again.");
+      } else {
+        setQErr(operatorError(err, "The filter could not be changed."));
+      }
+    } finally {
+      setEditing(false);
     }
   };
 
   const newConversation = () => {
     setConvId(null);
     setHistory([]);
+    setChips(null);
+    setChipsFor("");
+    setEditNote("");
     setCompiled(null);
     setResult(null);
     setQErr("");
@@ -374,7 +432,7 @@ export default function IrisVocabulary() {
       {history.length > 0 && (
         <ol style={{ margin: "0 0 6px", paddingLeft: 22 }} data-testid="iris-history">
           {history.map((h, i) => (
-            <li key={i} style={text14}>{h.question} <span style={muted}>— {OUTCOME_LABEL[h.outcome] ?? h.outcome}</span></li>
+            <li key={i} style={text14}>{h.edited && <span style={muted}>Filter changed: </span>}{h.question} <span style={muted}>— {OUTCOME_LABEL[h.outcome] ?? h.outcome}</span></li>
           ))}
         </ol>
       )}
@@ -420,6 +478,13 @@ export default function IrisVocabulary() {
           )}
         </div>
       )}
+      {mode === "asked" && chipsFor && chips != null && (
+        <div data-testid="iris-chips" style={{ marginTop: 8 }} aria-busy={editing}>
+          <div style={muted}>Filters on this answer — change or remove one and Iris re-runs it.</div>
+          <FilterChipBar chips={chips} onChange={(e) => void editChip(e)} />
+        </div>
+      )}
+      {editNote && <div style={muted} data-testid="iris-edit-note">{editNote}</div>}
       {result && (
         <div data-testid="iris-result" style={{ marginTop: 8 }}>
           <div style={muted}>
