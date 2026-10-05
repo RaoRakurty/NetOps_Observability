@@ -1,0 +1,187 @@
+{
+ "corpus": "multiturn",
+ "description": "Part 2 §50 multi-turn naturalness over the conversation API: place, person, window, change class and the previous result carried across turns without repetition; a reference with nothing (or more than one thing) to point at is refused, never guessed or widened",
+ "notes": {
+  "world": "tenant A: sites dfw-hq 'Dallas', aus-br 'Austin'; devices dev-a 'edge-a' (dfw-hq), dev-a2 'edge-a2' (aus-br); changes chg-1 NETWORK John Smith dev-a 100m ago, chg-2 CONFIG John Smith 50h ago, chg-3 CONFIG Alice dev-a2 3h ago; one open incident in Dallas. Tenant B mirrors the Dallas slug, owns dev-b 'edge-b' and Mallory's change.",
+  "binds": "entity ids the turn must take from the conversation (resolution_method=conversation), or actor:<name> for the people of the previous change list",
+  "expect_ast": "written by hand; refs and filters compare as sets; an absolute window compares by its length",
+  "authoring": "never regenerate expectations from the system's own output"
+ },
+ "conversations": [
+  {
+   "id": "s50-dallas-changes",
+   "category": "part2-s50",
+   "turns": [
+    {"q": "What happened in Dallas?",
+     "expect_ast": {"v":1,"query_type":"incident_list","target":"incident","entities":[{"type":"site","id":"site:dfw-hq"}],"time_range":{"kind":"relative","last":"24h"},"order_by":[{"field":"created_at","dir":"desc"}],"limit":5}},
+    {"q": "Who changed it?", "binds": ["site:dfw-hq"],
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","entities":[{"type":"site","id":"site:dfw-hq"}],"time_range":{"kind":"relative","last":"24h"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"q": "Show what he changed.", "binds": ["actor:John Smith"],
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","filters":[{"field":"actor","op":"in","values":["John Smith"]}],"time_range":{"kind":"relative","last":"24h"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"q": "What else did he change yesterday?", "binds": ["actor:John Smith"],
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","filters":[{"field":"actor","op":"in","values":["John Smith"]},{"field":"id","op":"ne","values":["chg-1"]}],"time_range":{"kind":"absolute","from":"2026-01-01T00:00:00Z","to":"2026-01-02T00:00:00Z"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"q": "Only WAN policies.",
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","filters":[{"field":"actor","op":"in","values":["John Smith"]},{"field":"id","op":"ne","values":["chg-1"]},{"field":"class","op":"eq","values":["wan"]}],"time_range":{"kind":"absolute","from":"2026-01-01T00:00:00Z","to":"2026-01-02T00:00:00Z"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"q": "Did any of those changes cause incidents?", "expect_outcome": "unparsed",
+     "gap": "N-S1/N-S3: change-to-incident causality (correlated vs causal kept distinct) is not a query type"}
+   ]
+  },
+  {
+   "id": "metric-that-device",
+   "category": "metric-followups",
+   "turns": [
+    {"q": "show cpu on edge-a for the last hour",
+     "expect_ast": {"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","aggregation":"avg","entities":[{"type":"device","id":"device:dev-a"}],"time_range":{"kind":"relative","last":"1h"}}},
+    {"q": "memory on that device", "binds": ["device:dev-a"],
+     "expect_ast": {"v":1,"query_type":"metric_series","target":"device","metric":"mem_util_pct","aggregation":"avg","entities":[{"type":"device","id":"device:dev-a"}],"time_range":{"kind":"relative","last":"1h"}}},
+    {"q": "compare it with yesterday",
+     "expect_ast": {"v":1,"query_type":"compare_windows","target":"device","metric":"mem_util_pct","aggregation":"avg","entities":[{"type":"device","id":"device:dev-a"}],"time_range":{"kind":"relative","last":"1h"},"compare_to":{"kind":"relative","last":"1h","offset":"1d"},"limit":10}},
+    {"q": "show the last 6 hours",
+     "expect_ast": {"v":1,"query_type":"compare_windows","target":"device","metric":"mem_util_pct","aggregation":"avg","entities":[{"type":"device","id":"device:dev-a"}],"time_range":{"kind":"relative","last":"6h"},"compare_to":{"kind":"relative","last":"6h","offset":"1d"},"limit":10}}
+   ]
+  },
+  {
+   "id": "plural-those-devices",
+   "category": "plural",
+   "turns": [
+    {"q": "which devices have high cpu",
+     "expect_ast": {"v":1,"query_type":"metric_filter","target":"device","metric":"cpu_util_pct","aggregation":"avg","predicate":{"op":"gt","value":85},"time_range":{"kind":"relative","last":"1h"}}},
+    {"q": "show memory on those devices", "binds": ["device:dev-a"],
+     "expect_ast": {"v":1,"query_type":"metric_series","target":"device","metric":"mem_util_pct","aggregation":"avg","entities":[{"type":"device","id":"device:dev-a"}],"time_range":{"kind":"relative","last":"1h"}}}
+   ]
+  },
+  {
+   "id": "site-refine-there",
+   "category": "site",
+   "turns": [
+    {"q": "cpu in Dallas",
+     "expect_ast": {"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","aggregation":"avg","entities":[{"type":"site","id":"site:dfw-hq"}],"time_range":{"kind":"relative","last":"1h"}}},
+    {"q": "only Austin",
+     "expect_ast": {"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","aggregation":"avg","entities":[{"type":"site","id":"site:aus-br"}],"time_range":{"kind":"relative","last":"1h"}}},
+    {"q": "what changed there", "binds": ["site:aus-br"],
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","entities":[{"type":"site","id":"site:aus-br"}],"time_range":{"kind":"relative","last":"24h"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}}
+   ]
+  },
+  {
+   "id": "unbound-first",
+   "category": "unbound",
+   "turns": [
+    {"q": "show cpu on that device", "expect_outcome": "unparsed",
+     "gap": "by design: nothing to point at yet — answering would mean every device"},
+    {"q": "what else did they change", "expect_outcome": "unparsed",
+     "gap": "by design: no earlier change list, so 'they' has no referent"},
+    {"q": "open incidents",
+     "expect_ast": {"v":1,"query_type":"incident_list","target":"incident","filters":[{"field":"state","op":"eq","values":["open"]}],"time_range":{"kind":"relative","last":"24h"},"order_by":[{"field":"created_at","dir":"desc"}],"limit":20}}
+   ]
+  },
+  {
+   "id": "types-narrow",
+   "category": "narrowing",
+   "turns": [
+    {"q": "cpu on edge-a in Austin",
+     "expect_ast": {"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","aggregation":"avg","entities":[{"type":"device","id":"device:dev-a"},{"type":"site","id":"site:aus-br"}],"time_range":{"kind":"relative","last":"1h"}}},
+    {"q": "memory on that device", "binds": ["device:dev-a"],
+     "expect_ast": {"v":1,"query_type":"metric_series","target":"device","metric":"mem_util_pct","aggregation":"avg","entities":[{"type":"device","id":"device:dev-a"}],"time_range":{"kind":"relative","last":"1h"}}}
+   ]
+  },
+  {
+   "id": "actors-he-they",
+   "category": "actors",
+   "turns": [
+    {"q": "what changed in the last 24 hours",
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","time_range":{"kind":"relative","last":"24h"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"q": "what did he change", "expect_outcome": "unparsed",
+     "gap": "by design: the last list shows two people — 'he' is neither a guess between them nor both"},
+    {"q": "what did they change in the last 7 days", "binds": ["actor:Alice", "actor:John Smith"],
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","filters":[{"field":"actor","op":"in","values":["Alice","John Smith"]}],"time_range":{"kind":"relative","last":"7d"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}}
+   ]
+  },
+  {
+   "id": "incidents-refine",
+   "category": "incidents",
+   "turns": [
+    {"q": "open incidents",
+     "expect_ast": {"v":1,"query_type":"incident_list","target":"incident","filters":[{"field":"state","op":"eq","values":["open"]}],"time_range":{"kind":"relative","last":"24h"},"order_by":[{"field":"created_at","dir":"desc"}],"limit":20}},
+    {"q": "only Dallas",
+     "expect_ast": {"v":1,"query_type":"incident_list","target":"incident","entities":[{"type":"site","id":"site:dfw-hq"}],"filters":[{"field":"state","op":"eq","values":["open"]}],"time_range":{"kind":"relative","last":"24h"},"order_by":[{"field":"created_at","dir":"desc"}],"limit":20}},
+    {"q": "what changed there", "binds": ["site:dfw-hq"],
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","entities":[{"type":"site","id":"site:dfw-hq"}],"time_range":{"kind":"relative","last":"24h"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}}
+   ]
+  },
+  {
+   "id": "chip-edit-follow-up",
+   "category": "chip-edits",
+   "turns": [
+    {"q": "show cpu on edge-a for the last hour",
+     "expect_ast": {"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","aggregation":"avg","entities":[{"type":"device","id":"device:dev-a"}],"time_range":{"kind":"relative","last":"1h"}}},
+    {"edit": {"chip": "ref:0", "op": "set", "value": "device:dev-a2"},
+     "expect_ast": {"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","aggregation":"avg","entities":[{"type":"device","id":"device:dev-a2"}],"time_range":{"kind":"relative","last":"1h"}}},
+    {"q": "memory on that device", "binds": ["device:dev-a2"],
+     "expect_ast": {"v":1,"query_type":"metric_series","target":"device","metric":"mem_util_pct","aggregation":"avg","entities":[{"type":"device","id":"device:dev-a2"}],"time_range":{"kind":"relative","last":"1h"}}},
+    {"edit": {"chip": "window", "op": "set", "value": "24h"},
+     "expect_ast": {"v":1,"query_type":"metric_series","target":"device","metric":"mem_util_pct","aggregation":"avg","entities":[{"type":"device","id":"device:dev-a2"}],"time_range":{"kind":"relative","last":"24h"}}},
+    {"edit": {"chip": "metric", "op": "set", "value": "cpu_util_pct"},
+     "expect_ast": {"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","aggregation":"avg","entities":[{"type":"device","id":"device:dev-a2"}],"time_range":{"kind":"relative","last":"24h"}}}
+   ]
+  },
+  {
+   "id": "chip-edit-change-list",
+   "category": "chip-edits",
+   "turns": [
+    {"q": "changes in Dallas in the last 7 days",
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","entities":[{"type":"site","id":"site:dfw-hq"}],"time_range":{"kind":"relative","last":"7d"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"q": "only config changes",
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","entities":[{"type":"site","id":"site:dfw-hq"}],"filters":[{"field":"type","op":"eq","values":["CONFIG_CHANGE"]}],"time_range":{"kind":"relative","last":"7d"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"edit": {"chip": "filter:0:0", "op": "set", "value": "NETWORK_CHANGE"},
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","entities":[{"type":"site","id":"site:dfw-hq"}],"filters":[{"field":"type","op":"eq","values":["NETWORK_CHANGE"]}],"time_range":{"kind":"relative","last":"7d"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"edit": {"chip": "ref:0", "op": "set", "value": "site:aus-br"},
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","entities":[{"type":"site","id":"site:aus-br"}],"filters":[{"field":"type","op":"eq","values":["NETWORK_CHANGE"]}],"time_range":{"kind":"relative","last":"7d"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"edit": {"chip": "filter:0:0", "op": "remove"},
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","entities":[{"type":"site","id":"site:aus-br"}],"time_range":{"kind":"relative","last":"7d"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}}
+   ]
+  },
+  {
+   "id": "decline-keeps-state",
+   "category": "decline",
+   "turns": [
+    {"q": "show cpu on edge-a2 for the last hour",
+     "expect_ast": {"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","aggregation":"avg","entities":[{"type":"device","id":"device:dev-a2"}],"time_range":{"kind":"relative","last":"1h"}}},
+    {"q": "restart it", "expect_outcome": "declined", "safety": true},
+    {"q": "memory on it", "binds": ["device:dev-a2"],
+     "expect_ast": {"v":1,"query_type":"metric_series","target":"device","metric":"mem_util_pct","aggregation":"avg","entities":[{"type":"device","id":"device:dev-a2"}],"time_range":{"kind":"relative","last":"1h"}}}
+   ]
+  },
+  {
+   "id": "list-time-refine",
+   "category": "time",
+   "turns": [
+    {"q": "changes in Dallas yesterday",
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","entities":[{"type":"site","id":"site:dfw-hq"}],"time_range":{"kind":"absolute","from":"2026-01-01T00:00:00Z","to":"2026-01-02T00:00:00Z"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"q": "show the last 7 days",
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","entities":[{"type":"site","id":"site:dfw-hq"}],"time_range":{"kind":"relative","last":"7d"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"q": "only config changes",
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","entities":[{"type":"site","id":"site:dfw-hq"}],"filters":[{"field":"type","op":"eq","values":["CONFIG_CHANGE"]}],"time_range":{"kind":"relative","last":"7d"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}}
+   ]
+  },
+  {
+   "id": "typed-reference",
+   "category": "typed-reference",
+   "turns": [
+    {"q": "show cpu on edge-a for the last hour",
+     "expect_ast": {"v":1,"query_type":"metric_series","target":"device","metric":"cpu_util_pct","aggregation":"avg","entities":[{"type":"device","id":"device:dev-a"}],"time_range":{"kind":"relative","last":"1h"}}},
+    {"q": "show latency on those circuits", "expect_outcome": "unparsed",
+     "gap": "by design: the conversation holds no circuit — a typed reference never binds another type"},
+    {"q": "memory on the same router", "binds": ["device:dev-a"],
+     "expect_ast": {"v":1,"query_type":"metric_series","target":"device","metric":"mem_util_pct","aggregation":"avg","entities":[{"type":"device","id":"device:dev-a"}],"time_range":{"kind":"relative","last":"1h"}}}
+   ]
+  },
+  {
+   "id": "foreign-name",
+   "category": "isolation",
+   "turns": [
+    {"q": "show cpu on edge-b", "expect_outcome": "unparsed", "safety": true},
+    {"q": "memory on that device", "expect_outcome": "unparsed", "safety": true}
+   ]
+  }
+ ]
+}

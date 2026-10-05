@@ -304,6 +304,10 @@ type chainState struct {
 	// keyed by tool and keeps only the last outcome per tool, which is right for
 	// routing and wrong for counting; this is the counting copy.
 	toolOutcomes []string
+	// stmt stamps every gathered item with the statement class of the tool
+	// that produced it (statement_class.go, N-B4) — recorded as the tool
+	// returns, never parsed back out of a citation id.
+	stmt statementContext
 	// hopsRejected counts model-proposed next skills refused as out-of-set.
 	hopsRejected int
 	// cutoffs are the bounded budgets that ended the chain early, in the order

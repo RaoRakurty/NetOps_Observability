@@ -10,6 +10,7 @@ import {
   CopilotDocRef,
   ChatLookup,
   ChatCitation,
+  AiStatement,
   NormalizedChatResponse,
   AnthropicChatResponse,
   OpenAIChatResponse,
@@ -23,7 +24,9 @@ import {
 import Icon from "../components/Icon";
 import IrisVocabulary from "../components/IrisVocabulary";
 import PresentationPlanRenderer from "../iris/PresentationPlanRenderer";
+import { hintFromAst } from "../iris/presentation";
 import HypothesisTrace from "../iris/HypothesisTrace";
+import StatementText from "../iris/StatementText";
 import { answerCiteHref } from "../iris/links";
 import QueryCorrection from "../iris/QueryCorrection";
 import { hasAIEntitlement } from "../lib/aiEntitlements";
@@ -199,6 +202,10 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
   // ran ("Investigated 3 sources") + the evidence citations they produced.
   const [lookups, setLookups] = useState<Record<number, ChatLookup[]>>({});
   const [chatCites, setChatCites] = useState<Record<number, ChatCitation[]>>({});
+  // Statement classes (N-B4) for an agent-loop turn, and what the statement
+  // rules removed or reworded in it.
+  const [chatStmts, setChatStmts] = useState<Record<number, AiStatement[]>>({});
+  const [chatDisc, setChatDisc] = useState<Record<number, string[]>>({});
   // Assistant turns the SERVER reported as NOT grounded (tracker 330) — the
   // general-model retry for a question the engine could not place. Keyed the same
   // way as `grounded`; the two are mutually exclusive by construction.
@@ -260,6 +267,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
   // New conversation — clear the thread + transient panels, focus the composer.
   const newConversation = () => {
     setHistory([]); setGrounded({}); setDocRefs({}); setLookups({}); setChatCites({}); setUngrounded({});
+    setChatStmts({}); setChatDisc({});
     setConversation(null); // a cleared chat forgets its follow-up context too
     setDraft(""); setError(null);
     setShowSettings(false); setShowHelp(false); setSlashOpen(false);
@@ -380,6 +388,8 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       if (nr.doc_refs?.length) setDocRefs((d) => ({ ...d, [idx]: nr.doc_refs! }));
       if (nr.lookups?.length) setLookups((d) => ({ ...d, [idx]: nr.lookups! }));
       if (nr.citations?.length) setChatCites((d) => ({ ...d, [idx]: nr.citations! }));
+      if (nr.statements?.length) setChatStmts((d) => ({ ...d, [idx]: nr.statements! }));
+      if (nr.disclaimers?.length) setChatDisc((d) => ({ ...d, [idx]: nr.disclaimers! }));
       // Provider-down fallback: the engine answered — render the rich grounded
       // card and disclose it with the slim banner (never a dead-end error).
       if (nr.fallback && nr.grounded) {
@@ -832,7 +842,15 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
               )}
               {m.role === "assistant" && grounded[i]
                 ? <GroundedAnswer ans={grounded[i]} onCite={() => setCopilotOpen(false)} onClose={() => setCopilotOpen(false)} />
-                : renderContent(m.content)}
+                : m.role === "assistant" && chatStmts[i] && !m.content.includes("```")
+                  ? <StatementText className="op-text" text={m.content} statements={chatStmts[i]} />
+                  : renderContent(m.content)}
+              {/* What the statement rules removed or reworded (N-B4). */}
+              {m.role === "assistant" && !grounded[i] && chatDisc[i] && chatDisc[i].length > 0 && (
+                <ul className="op-disc" data-testid="iris-chat-disclaimers" style={{ fontSize: 14, margin: "6px 0 0", paddingLeft: 18 }}>
+                  {chatDisc[i].map((d) => <li key={d}>{d}</li>)}
+                </ul>
+              )}
               {/* Agent-loop trail: which governed lookups the assistant ran for
                   this answer, plus the evidence they produced (deep links). */}
               {m.role === "assistant" && lookups[i] && lookups[i].length > 0 && (
@@ -1029,12 +1047,17 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
         </div>
       )}
 
-      {ans.text && <div className="op-text">{ans.text}</div>}
+      {/* Statement classes (N-B4): each sentence with the server's class. */}
+      {ans.text && <StatementText className="op-text" text={ans.text} statements={ans.statements} />}
       {/* Lines of investigation (N-B3): what each check observed, beside the
           correlation engine's verdict — never a cause of Iris's own. */}
       {ans.hypotheses && <HypothesisTrace set={ans.hypotheses} />}
       {ans.mode === "data_query" && ans.data?.result !== undefined && (
-        <div data-testid="op-data-answer"><PresentationPlanRenderer result={ans.data.result} /></div>
+        <div data-testid="op-data-answer">
+          {/* The server chooses the view (N-E1) and sends it as `presentation`;
+              an older server sends none and the client's default applies. */}
+          <PresentationPlanRenderer result={ans.data.result} plan={ans.data.presentation} hint={hintFromAst(ans.data.ast)} />
+        </div>
       )}
       {/* "That's not what I meant" (N-C8): only on a data answer the server
           recorded — the id names the caller's own query-log record. */}

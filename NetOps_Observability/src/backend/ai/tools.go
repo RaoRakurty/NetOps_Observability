@@ -91,6 +91,19 @@ type EvidenceItem struct {
 	Kind       string `json:"kind"` // finding | log | metric | ticket | topology | device
 	Text       string `json:"text"`
 	Href       string `json:"href"`
+	// CauseRole and Change are GROUNDING FACTS the server stamps where the item
+	// is produced, from the engine's structured output — never parsed back out
+	// of the text, never set from model output, never serialized (statement
+	// classes, tracker 337 N-B4). CauseRole is CauseRoleEngine for the
+	// correlation engine's own leading cause (and the direct evidence for it),
+	// CauseRoleCandidate for a ranked alternative it did not settle on, empty
+	// otherwise. Change marks an item that describes a change.
+	CauseRole string `json:"-"`
+	Change    bool   `json:"-"`
+	// Verdict is the engine's verdict tier for the incident this item IS (the
+	// correlation object itself), stamped where it is read. Empty for every
+	// other item.
+	Verdict string `json:"-"`
 }
 
 // ToolResult is a read-only tool's output. Truncated discloses a cap was hit.
@@ -217,6 +230,10 @@ func (t getProblemTool) Run(ctx context.Context, p Principal, args ToolArgs) (To
 		Kind:       "finding",
 		Text:       text,
 		Href:       "#/monitoring/correlations?id=" + pr.ID,
+		// The engine's own correlation object for this incident: its title and
+		// verdict are the engine's conclusion (N-B4 grounding fact).
+		CauseRole: CauseRoleEngine,
+		Verdict:   pr.Verdict,
 	}
 	return ToolResult{Items: []EvidenceItem{item}}, nil
 }

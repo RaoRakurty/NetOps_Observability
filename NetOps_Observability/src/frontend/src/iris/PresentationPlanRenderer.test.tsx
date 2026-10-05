@@ -219,3 +219,64 @@ describe("PresentationPlanRenderer — no dead ends", () => {
     expect(tags[0].closest("li")).toHaveTextContent("bob");
   });
 });
+
+// N-E1: the server chooses the view. The client draws the server's plan
+// (validated), and its own defaultPlanFor runs only for a server that sent none.
+describe("PresentationPlanRenderer — the server's plan", () => {
+  const serverPlan = { primary_view: "BAR", secondary_view: "TABLE", title: "Changes by Actor", chosen_by: "server" };
+
+  it("draws the server's view, not the client's default", () => {
+    render(<PresentationPlanRenderer result={changes()} plan={serverPlan} hint={{ group_by: ["actor"] }} />);
+    expect(screen.getByRole("heading", { name: "Changes by Actor" })).toBeInTheDocument();
+    expect(captured.some((c) => (c.option.series as { type: string }[])[0]?.type === "bar")).toBe(true);
+    // The client's own choice for this shape (a timeline) is not drawn.
+    expect(screen.queryByRole("list", { name: "Changes in this window" })).toBeNull();
+  });
+
+  it("a null plan (older server) falls back to the client's default", () => {
+    render(<PresentationPlanRenderer result={changes()} plan={null} />);
+    expect(screen.getByRole("heading", { name: "Changes in this window" })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Changes in this window" })).toBeInTheDocument();
+  });
+
+  it("a plan that was sent but is unusable is never silently replaced by the client's choice", () => {
+    render(<PresentationPlanRenderer result={changes()} plan={{ primary_view: "PIE", title: "t" }} />);
+    expect(screen.getByText(/shown as a plain summary because its layout was not recognised/)).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Changes in this window" })).toBeNull();
+  });
+
+  it("shows the server's disclosure for an ignored model suggestion — as escaped text", () => {
+    const { container } = render(
+      <PresentationPlanRenderer
+        result={changes()}
+        plan={{ ...serverPlan, primary_view: "TIMELINE", title: "Changes in this window", disclosure: HOSTILE }}
+      />,
+    );
+    expect(screen.getByTestId("iris-plan-disclosure")).toHaveTextContent(HOSTILE);
+    expect(container.querySelector("script")).toBeNull();
+  });
+
+  it("no disclosure, no notice", () => {
+    render(<PresentationPlanRenderer result={changes()} plan={serverPlan} />);
+    expect(screen.queryByTestId("iris-plan-disclosure")).toBeNull();
+  });
+
+  it("hostile cells stay text under every server-chosen view", () => {
+    const hostile = baseResult({
+      rows: [changeRow({ actor: HOSTILE, object: HOSTILE_IMG, summary: HOSTILE, before: HOSTILE_IMG, after: HOSTILE })],
+    });
+    for (const v of VIEW_TYPES) {
+      const { container, unmount } = render(
+        <PresentationPlanRenderer result={hostile} plan={{ primary_view: v, secondary_view: "TABLE", title: HOSTILE, chosen_by: "model_suggestion" }} />,
+      );
+      expect(container.querySelector("script, img, iframe, object, embed")).toBeNull();
+      // No element carries an event-handler attribute (the hostile text is
+      // only ever a text node or an attribute VALUE such as aria-label).
+      for (const el of Array.from(container.querySelectorAll("*"))) {
+        expect(el.getAttributeNames().some((n) => n.toLowerCase().startsWith("on"))).toBe(false);
+      }
+      expect(container.textContent).toContain(HOSTILE);
+      unmount();
+    }
+  });
+});

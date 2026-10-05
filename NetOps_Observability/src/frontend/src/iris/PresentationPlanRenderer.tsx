@@ -6,7 +6,8 @@
 //
 // Contract:
 //   · Both inputs are untrusted. The result goes through normalizeResult, the
-//     plan through validatePlan (or defaultPlanFor when the server sent none).
+//     plan through validatePlan — or defaultPlanFor only when the server sent no
+//     plan at all (a server older than N-E1); see planFor.
 //   · The view switch covers the CLOSED enum only. There is no default branch
 //     that renders anything the enum does not name; an unknown view has already
 //     become SUMMARY, which is escaped text.
@@ -24,7 +25,7 @@ import { fmtDateTime } from "../lib/time";
 import { ConfigDiffView } from "../components/ConfigDiffView";
 import {
   cellText,
-  defaultPlanFor,
+  planFor,
   entityLabel,
   hasBeforeAfter,
   highlightFor,
@@ -32,7 +33,6 @@ import {
   isEmptyResult,
   normalizeResult,
   rowId,
-  validatePlan,
   type PresentationPlan,
   type QueryHint,
   type ResultSet,
@@ -155,7 +155,7 @@ export default function PresentationPlanRenderer({
 }: {
   /** The server's ResultSet — untrusted. */
   result: unknown;
-  /** The server's PresentationPlan — untrusted; omitted → chosen from the result. */
+  /** The server's PresentationPlan — untrusted; omitted or null (an older server) → chosen from the result. */
   plan?: unknown;
   hint?: QueryHint;
   /** Told whenever the operator drills into a chart (the renderer also shows the rows). */
@@ -164,7 +164,7 @@ export default function PresentationPlanRenderer({
   const norm = useMemo(() => normalizeResult(rawResult), [rawResult]);
   const plan = useMemo<ValidatedPlan | null>(() => {
     if (!norm.ok) return null;
-    return rawPlan === undefined ? defaultPlanFor(norm.result, hint) : validatePlan(rawPlan);
+    return planFor(norm.result, rawPlan, hint);
   }, [norm, rawPlan, hint]);
   const [drill, setDrill] = useState<DrillDown | null>(null);
   const [evidence, setEvidence] = useState<{ row?: Row } | null>(null);
@@ -319,6 +319,11 @@ export default function PresentationPlanRenderer({
         {wtext && <span className="iris-muted">{wtext}</span>}
       </header>
 
+      {plan.disclosure && (
+        <p className="iris-notice" role="status" data-testid="iris-plan-disclosure">
+          {plan.disclosure}
+        </p>
+      )}
       {result.truncated && (
         <p className="iris-notice" role="status">
           Partial answer — more matched than could be shown. Narrow the time window or add a filter to see everything.

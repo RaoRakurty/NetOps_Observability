@@ -58,7 +58,11 @@ type reference struct {
 	typ    string // catalog entity type; "" = any type the question can use
 	plural bool
 	actor  bool // "they" / "them" as the people who made changes
-	bound  bool
+	// singular marks "he" / "she" / "him" / "her": ONE person. It binds only
+	// when the previous change list shows exactly one actor — with several,
+	// picking one would be a guess and taking all would widen.
+	singular bool
+	bound    bool
 }
 
 var (
@@ -66,6 +70,7 @@ var (
 	bareRe          = regexp.MustCompile(`\b(it|them|there|they|those|these)\b`)
 	existentialPre  = regexp.MustCompile(`\b(?:is|are|was|were|any|been|be)\s+$`)
 	existentialPost = regexp.MustCompile(`^\s+(?:is|are|was|were|been|be|any|a|an|some|many|no|more|anything|problems?|issues?|changes?|incidents?|outages?)\b`)
+	singularActorRe = regexp.MustCompile(`\b(he|she|him|her)\b`)
 	actorPronounRe  = regexp.MustCompile(`\b(?:did|have|has|had) they\b|\bthey (?:change|changed|make|made|touch|touched|push|pushed|modify|modified|deploy|deployed|edit|edited)\b|\bby them\b`)
 	referTypeOf     = map[string]string{
 		"device": "device", "router": "device", "switch": "device", "firewall": "device", "box": "device",
@@ -89,6 +94,10 @@ func findReferences(text string) []reference {
 		for i := m[0]; i < m[1]; i++ {
 			covered[i] = true
 		}
+	}
+	for _, m := range singularActorRe.FindAllStringSubmatchIndex(text, -1) {
+		w := text[m[2]:m[3]]
+		out = append(out, reference{phrase: w, words: []string{w}, actor: true, singular: true})
 	}
 	actorSense := actorPronounRe.MatchString(text)
 	for _, m := range bareRe.FindAllStringSubmatchIndex(text, -1) {
@@ -172,10 +181,12 @@ func (s *state) bindActors() ([]string, bool) {
 	}
 	found := false
 	for i := range s.refs {
-		if r := &s.refs[i]; r.actor && !r.bound {
-			s.bind(r)
-			found = true
+		r := &s.refs[i]
+		if !r.actor || r.bound || (r.singular && len(s.cx.Conv.Actors) != 1) {
+			continue
 		}
+		s.bind(r)
+		found = true
 	}
 	if !found {
 		return nil, false
@@ -188,9 +199,16 @@ func (s *state) bindActors() ([]string, bool) {
 // referent, and "they" is whoever made changes around it.
 func (s *state) bindIncidentPronouns() {
 	for i := range s.refs {
-		if r := &s.refs[i]; !r.bound && r.typ == "" && !r.plural {
-			s.bind(r)
+		r := &s.refs[i]
+		if r.bound || r.typ != "" || r.plural {
+			continue
 		}
+		// "he" with several people in the previous list is not the incident:
+		// it is one of them, and which one is not known.
+		if r.singular && s.cx.Conv != nil && len(s.cx.Conv.Actors) > 1 {
+			continue
+		}
+		s.bind(r)
 	}
 }
 

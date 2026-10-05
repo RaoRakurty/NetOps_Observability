@@ -55,6 +55,11 @@ type Citation struct {
 	Kind  string `json:"kind"`  // finding | log | metric | ticket | topology | device
 	Label string `json:"label"` // human label
 	Href  string `json:"href"`  // UI deep link back into the source view
+	// Class is the statement class this evidence can support
+	// (statement_class.go: OBSERVED | CORRELIX_RCA | DERIVED | HISTORICAL |
+	// DOCUMENTATION), stamped from the TOOL that produced it. Empty on a path
+	// that does not stamp one.
+	Class string `json:"class,omitempty"`
 }
 
 // Answer is the envelope returned to the UI. Mode selects the card; Text is the
@@ -131,6 +136,13 @@ type Answer struct {
 	// outcome or a server fact, beside the correlation engine's verdict which
 	// they never override. Set only on a skill-chain answer that opened any.
 	Hypotheses *irishypo.Set `json:"hypotheses,omitempty"`
+	// Statements are the sentences of Text, each CLASSIFIED by the server
+	// (tracker 337 N-B4): OBSERVED | CORRELIX_RCA | DERIVED | HISTORICAL |
+	// DOCUMENTATION | RECOMMENDATION, whether it is grounded in evidence of
+	// its class, and the server's note when it was downgraded or reworded.
+	// Concatenated, the statement texts are Text. Absent on a mode that does
+	// not classify its narrative.
+	Statements []Statement `json:"statements,omitempty"`
 }
 
 // IncidentCounts is the normalized incident-count set (spec §6). Every count

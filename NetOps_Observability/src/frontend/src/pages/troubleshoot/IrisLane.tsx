@@ -40,6 +40,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, type AiAnswer, type AiCitation, type AiSkillHop } from "../../services/api";
 import { operatorError } from "../../lib/errors";
 import HypothesisTrace from "../../iris/HypothesisTrace";
+import StatementText from "../../iris/StatementText";
 
 /** A relative, same-origin path is safe to link. Everything else is inert text.
  *  Both protocol-relative spellings are rejected: browsers normalise a leading
@@ -188,7 +189,8 @@ export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDra
           {/* Lines of investigation (N-B3) — beside the engine's verdict. */}
           {ans.hypotheses && <HypothesisTrace set={ans.hypotheses} />}
 
-          <p className="tsl-iris-text">{ans.text || "No answer."}</p>
+          {/* Statement classes (N-B4): each sentence with the server's class. */}
+          <StatementText className="tsl-iris-text" text={ans.text || "No answer."} statements={ans.statements} />
 
           {cites.length > 0 && (
             <div className="tsl-cites" aria-label="Evidence citations">

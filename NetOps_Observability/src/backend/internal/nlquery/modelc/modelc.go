@@ -30,6 +30,7 @@ package modelc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -125,8 +126,12 @@ type Outcome struct {
 	Checked    *ast.AST
 	Validation validate.Result
 	Source     string // SourceModel when accepted
-	Calls      int    // model calls made (1 + repair rounds)
-	Refusal    string // why the model path gave up (empty when accepted)
+	// ViewSuggestion is the accepted reply's optional "view" — raw, untrusted
+	// and unvalidated. It is only ever handed to present.Select, which accepts
+	// it solely as a member of the closed view enum that fits the result.
+	ViewSuggestion json.RawMessage
+	Calls          int    // model calls made (1 + repair rounds)
+	Refusal        string // why the model path gave up (empty when accepted)
 }
 
 // Accepted reports whether the model's query was accepted.
@@ -205,7 +210,7 @@ func (f Fallback) Compile(ctx context.Context, question string, cx compile.Conte
 			out.Refusal = RefuseModelError
 			return out, nil
 		}
-		q, problems, fatal := parseReply(reply)
+		q, problems, fatal, view := parseReply(reply)
 		if fatal != "" {
 			out.Refusal = fatal
 			return out, nil
@@ -217,6 +222,7 @@ func (f Fallback) Compile(ctx context.Context, question string, cx compile.Conte
 				if vr.Valid {
 					out.Result = compile.Result{Intent: intentFor(q.Type), AST: q, Entities: g.usedRefs(q)}
 					out.Checked, out.Validation, out.Source, out.Refusal = checked, vr, SourceModel, ""
+					out.ViewSuggestion = view
 					return out, nil
 				}
 				problems = vr.Errors

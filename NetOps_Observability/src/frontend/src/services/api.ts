@@ -1860,6 +1860,10 @@ export type NormalizedChatResponse = {
   // behind it. The UI labels a false — it never infers grounding on its own, and
   // an absent field is treated as NOT grounded (a pre-330 backend cannot claim it).
   is_grounded?: boolean;
+  // Statement classes (N-B4) for an agent-loop answer, and what the statement
+  // rules removed or reworded. Optional on older backends.
+  statements?: AiStatement[];
+  disclaimers?: string[];
 };
 export type CopilotChatResponse = NormalizedChatResponse | AnthropicChatResponse | OpenAIChatResponse;
 
@@ -1986,7 +1990,7 @@ export interface IrisQueryRecord {
   duration_ms: number;
   corrections: IrisCorrection[] | null;
   /** Who wrote the stored query (N-C5): "model" means the AI model, not the grammar. Absent when no query was kept. */
-  compiled_by?: "grammar" | "model" | "supplied";
+  compiled_by?: "grammar" | "model" | "supplied" | "chip_edit";
   /** The validated query — only on GET /api/ai/query/{id}, never in the list. */
   query?: Record<string, unknown>;
   /** Set when the model wrote the query. */
@@ -1999,7 +2003,7 @@ export interface IrisQueryExplanation {
   outcome: IrisQueryRecord["outcome"];
   question: string;
   query_type?: string;
-  compiled_by?: "grammar" | "model" | "supplied";
+  compiled_by?: "grammar" | "model" | "supplied" | "chip_edit";
   /** "model" when the AI model, not the grammar, wrote the query. */
   source?: "model";
   disclosure?: string;
@@ -2063,6 +2067,8 @@ export interface IrisTurn {
   intent?: string;
   outcome: "answered" | "clarify" | "declined" | "unparsed" | "invalid" | "error";
   rows: number;
+  /** A turn made by editing a filter chip (N-C7); `question` is the server's description of the edit. */
+  edited?: boolean;
 }
 export interface IrisConversation {
   id: string;
@@ -2075,6 +2081,20 @@ export interface IrisConversationAnswer extends IrisCompiled {
   turn: IrisTurn;
   result?: IrisResultSet;
   error?: string;
+  /** The editable filters of the query this answer ran (N-C7), built by the server. */
+  chips?: unknown;
+  /** The hash of that query — an edit echoes it, so only the latest answer can be edited. */
+  chips_for?: string;
+  /** A chip edit's description and whether it was filed as a correction (N-C8). */
+  edit?: string;
+  correction?: "recorded" | "full" | "unavailable";
+}
+/** One chip edit: the server regenerates and re-validates the query — no query is ever sent. */
+export interface IrisChipEdit {
+  base: string;
+  chip: string;
+  op: "set" | "remove";
+  value?: string;
 }
 export interface IrisResultSet {
   query_id: string;
@@ -6266,6 +6286,12 @@ export const api = {
   askIrisConversation: (id: string, question: string, tz?: string) =>
     request<IrisConversationAnswer>(`/api/ai/conversations/${encodeURIComponent(id)}/messages`,
       { method: "POST", body: JSON.stringify(tz ? { question, tz } : { question }) }),
+  // A filter-chip edit of the conversation's latest answer (N-C7): the server
+  // rebuilds the query from the chip it offered, validates it like a typed
+  // question and answers it as the next turn.
+  editIrisChip: (id: string, edit: IrisChipEdit) =>
+    request<IrisConversationAnswer>(`/api/ai/conversations/${encodeURIComponent(id)}/edits`,
+      { method: "POST", body: JSON.stringify(edit) }),
   // Query capture (N-C8): the caller's own recent questions (a workspace admin
   // may ask for the workspace's), and "that's not what I meant" on one of
   // them. A corrected query is re-validated by the server; corrections are
@@ -9937,6 +9963,21 @@ export type AiCitation = {
   id: string; kind: string; label: string; href: string;
   tool?: string;      // the read-only IRIS tool that produced this evidence
   ids?: string[];     // the object ids that tool returned
+  // The statement class this evidence can support (tracker 337 N-B4), stamped
+  // by the server from the tool that produced it: OBSERVED | CORRELIX_RCA |
+  // DERIVED | HISTORICAL | DOCUMENTATION. Absent on a path that stamps none.
+  class?: string;
+};
+// One sentence of an Iris answer, classified by the server (tracker 337 N-B4).
+// Concatenated, the statements' texts are the answer text. `grounded` false
+// marks a sentence kept but carrying no evidence of its own class; `note` is
+// the server's per-sentence disclosure (downgraded, or reworded by Correlix).
+export type AiStatement = {
+  text: string;
+  class: string; // OBSERVED | CORRELIX_RCA | DERIVED | HISTORICAL | DOCUMENTATION | RECOMMENDATION
+  grounded: boolean;
+  citations?: string[];
+  note?: string;
 };
 // The IRIS skill that answered, when the backend names one (Phase A). Absent on
 // an older backend — the UI renders the chip only when it is present, never a
@@ -10063,7 +10104,9 @@ export type AiAnswer = {
   // The question router's DATA arm (tracker 337 N-G4, mode "data_query"): the
   // compile answer + the result set, rendered as data. Untrusted — the
   // presentation renderer validates and bounds it.
-  data?: { result?: unknown; [k: string]: unknown };
+  // `presentation` is the server's PresentationPlan (N-E1) — also untrusted,
+  // validated by the renderer; absent from servers older than N-E1.
+  data?: { result?: unknown; presentation?: unknown; ast?: unknown; [k: string]: unknown };
   // Set when the server recorded this answer in the caller's conversation;
   // absent = the next question starts a new one.
   conversation_id?: string;
@@ -10096,6 +10139,9 @@ export type AiAnswer = {
   // correlation engine's verdict, which they never replace. Optional: absent
   // when the investigation opened none.
   hypotheses?: AiHypothesisSet;
+  // Statement classes (N-B4) — every sentence of `text`, classified by the
+  // server. Optional: an older backend sends none and the text renders plain.
+  statements?: AiStatement[];
   disclaimers: string[];
   provider?: string;
   // Universal Response-Quality fields (rendered as badges + sections).

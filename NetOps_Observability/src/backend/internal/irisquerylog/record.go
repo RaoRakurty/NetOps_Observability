@@ -90,9 +90,13 @@ const (
 	CompiledByGrammar  = "grammar"  // the deterministic question grammar
 	CompiledByModel    = "model"    // the guarded model fallback (modelc.SourceModel)
 	CompiledBySupplied = "supplied" // a client-supplied query (the execute API)
+	// CompiledByChipEdit is a query the SERVER regenerated from an operator's
+	// edit of a filter chip of an earlier answer (tracker 337 N-C7) — the
+	// client named a chip and an offered value, never the query.
+	CompiledByChipEdit = "chip_edit"
 )
 
-var compiledBy = map[string]bool{CompiledByGrammar: true, CompiledByModel: true, CompiledBySupplied: true}
+var compiledBy = map[string]bool{CompiledByGrammar: true, CompiledByModel: true, CompiledBySupplied: true, CompiledByChipEdit: true}
 
 // Correction kinds (closed).
 const (
@@ -119,6 +123,9 @@ func ValidKind(k string) bool {
 // MethodSupplied marks an entity that arrived in a client-supplied query
 // (the execute API) rather than being resolved from words.
 const MethodSupplied = "supplied"
+
+// MethodChipEdit marks an entity of a query regenerated from a chip edit.
+const MethodChipEdit = "chip_edit"
 
 // Errors.
 var (
@@ -439,6 +446,22 @@ func FromQuery(q, checked *ast.AST, vr validate.Result) Record {
 		r.Outcome = OutcomeCompiled
 		r.Query, r.CompiledBy = checked, CompiledBySupplied
 		r.QueryType, r.ASTHash = string(checked.Type), checked.Hash()
+	}
+	return r
+}
+
+// FromChipEdit starts a conversation record for a query the server
+// regenerated from a chip edit: the question is the server's description of
+// the edit, the entities are marked as coming from the edit, and the query is
+// kept (authored chip_edit) only when it validated.
+func FromChipEdit(description, conversationID string, q, checked *ast.AST, vr validate.Result) Record {
+	r := FromQuery(q, checked, vr)
+	r.Source, r.Question, r.Intent, r.ConversationID = SourceConversation, description, "edit_filter", conversationID
+	for i := range r.Entities {
+		r.Entities[i].Method = MethodChipEdit
+	}
+	if r.Query != nil {
+		r.CompiledBy = CompiledByChipEdit
 	}
 	return r
 }

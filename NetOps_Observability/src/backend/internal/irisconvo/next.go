@@ -57,6 +57,8 @@ func Next(cat *catalog.Catalog, prev State, q *ast.AST, rs *plan.ResultSet) Stat
 			ents = append(ents, r)
 		}
 	}
+	// LastLogID is the caller's to set: it belongs to the record of THIS
+	// answer, which is written after the state is computed.
 	st := State{LastAST: prev.LastAST, Actors: prev.Actors, ChangeIDs: prev.ChangeIDs}
 	if q != nil {
 		st.LastAST = q

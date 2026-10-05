@@ -411,3 +411,24 @@ describe("the investigation trace shows its hypotheses", () => {
     expect(alert.textContent).not.toMatch(/10\.1\.2\.3|dial tcp|\{/);
   });
 });
+
+describe("the investigation answer shows its statement classes (N-B4)", () => {
+  it("tags each sentence with the server's class word", async () => {
+    const statements = [
+      { text: "Ethernet1/1 went down [log:os:1]. ", class: "OBSERVED", grounded: true, citations: ["log:os:1"] },
+      { text: "Next: reseat the optic.", class: "RECOMMENDATION", grounded: true },
+    ];
+    aiAsk.mockResolvedValue(answer({ text: statements.map((s) => s.text).join(""), statements }));
+    render(<IrisLane caseId="corr-abc123" />);
+    fireEvent.click(screen.getByRole("button", { name: "Ask Iris" }));
+    await screen.findByTestId("iris-statements");
+    expect(screen.getAllByTestId("iris-stmt-class").map((t) => t.textContent)).toEqual(["Observed", "Recommendation"]);
+  });
+
+  it("renders the plain narrative when the backend sent no statements", async () => {
+    render(<IrisLane caseId="corr-abc123" />);
+    fireEvent.click(screen.getByRole("button", { name: "Ask Iris" }));
+    await screen.findByText("Nothing is wrong right now.");
+    expect(screen.queryByTestId("iris-statements")).toBeNull();
+  });
+});

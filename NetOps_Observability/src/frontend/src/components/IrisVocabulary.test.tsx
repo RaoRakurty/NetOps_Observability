@@ -20,6 +20,7 @@ const askIrisConversation = vi.fn();
 const irisQueries = vi.fn();
 const aiDecisions = vi.fn();
 const correctIrisQuery = vi.fn();
+const editIrisChip = vi.fn();
 vi.mock("../services/api", () => ({
   api: {
     irisAliases: (...a: unknown[]) => irisAliases(...a),
@@ -33,6 +34,7 @@ vi.mock("../services/api", () => ({
     irisQueries: (...a: unknown[]) => irisQueries(...a),
     aiDecisions: (...a: unknown[]) => aiDecisions(...a),
     correctIrisQuery: (...a: unknown[]) => correctIrisQuery(...a),
+    editIrisChip: (...a: unknown[]) => editIrisChip(...a),
   },
 }));
 
@@ -44,7 +46,7 @@ const ref = (id: string, over = {}) => ({
 
 beforeEach(() => {
   for (const f of [irisAliases, putIrisAlias, deleteIrisAlias, resolveIrisEntity, compileIrisQuery, executeIrisQuery,
-    startIrisConversation, askIrisConversation, irisQueries, correctIrisQuery]) f.mockReset();
+    startIrisConversation, askIrisConversation, irisQueries, correctIrisQuery, editIrisChip]) f.mockReset();
   irisQueries.mockResolvedValue({ queries: [], scope: "mine", retention_days: 30, kinds: [] });
   aiDecisions.mockReset();
   aiDecisions.mockResolvedValue({ decisions: [], scope: "tenant", event_types: [] });
@@ -338,6 +340,102 @@ describe("3 · follow-ups in a conversation", () => {
     type("Question", "memory on edge-1");
     fireEvent.click(screen.getByText("Ask"));
     await waitFor(() => expect(askIrisConversation.mock.calls.map((c) => c[0])).toEqual(["c1", "c2"]));
+  });
+});
+
+describe("3 · editable filter chips (N-C7)", () => {
+  const BASE = "a".repeat(64);
+  const deviceChip = {
+    id: "ref:0", field: "device", label: "Device", value: "device:dev-a", valueLabel: "edge-a", removable: true,
+    options: [{ value: "device:dev-a", label: "edge-a" }, { value: "device:dev-a2", label: "edge-a2" }],
+  };
+  const windowChip = { id: "window", field: "window", label: "Time", value: "1h", valueLabel: "Last hour", removable: false,
+    options: [{ value: "1h", label: "Last hour" }, { value: "24h", label: "Last 24 hours" }] };
+  const answered = (q: string, over = {}) => ({
+    conversation_id: "c1", intent: "query_metric", ast: { v: 1 }, validation: { valid: true },
+    turn: { at: "", question: q, outcome: "answered", rows: 1 },
+    result: { query_id: "q", query_type: "metric_series", window: { from: "", to: "" }, truncated: false,
+      rows: [{ device: "edge-1", value: 12 }], provenance: { source: "victoriametrics", executed_at: "", duration_ms: 3 } },
+    chips: [windowChip, deviceChip], chips_for: BASE, query_log_id: "11111111-2222-4333-8444-555555555555",
+    ...over,
+  });
+  const askFirst = async () => {
+    startIrisConversation.mockResolvedValue({ id: "c1", turns: [] });
+    askIrisConversation.mockResolvedValue(answered("cpu on edge-a"));
+    render(<IrisVocabulary />);
+    type("Question", "cpu on edge-a");
+    fireEvent.click(screen.getByText("Ask"));
+    return screen.findByTestId("iris-chips");
+  };
+
+  it("shows the answer's chips at ≥14px and sends ONLY the chip, the op, an offered value and the answer's hash", async () => {
+    editIrisChip.mockResolvedValue(answered("Changed Device from edge-a to edge-a2", {
+      turn: { at: "", question: "Changed Device from edge-a to edge-a2", outcome: "answered", rows: 1, edited: true },
+      chips_for: "b".repeat(64), correction: "recorded",
+    }));
+    const bar = await askFirst();
+    const hint = bar.firstElementChild as HTMLElement;
+    expect(parseInt(hint.style.fontSize, 10)).toBeGreaterThanOrEqual(14);
+    fireEvent.click(screen.getByRole("button", { name: /Device: edge-a\. Change/ }));
+    fireEvent.change(screen.getByLabelText("Change Device"), { target: { value: "device:dev-a2" } });
+    await waitFor(() => expect(editIrisChip).toHaveBeenCalledTimes(1));
+    expect(editIrisChip).toHaveBeenCalledWith("c1", { base: BASE, chip: "ref:0", op: "set", value: "device:dev-a2" });
+    const sent = JSON.stringify(editIrisChip.mock.calls[0][1]);
+    expect(sent).not.toMatch(/"ast"|"query"|tenant|state/);
+    // The edit is the next turn of the same conversation, and it was filed.
+    await waitFor(() => expect(screen.getByTestId("iris-history")).toHaveTextContent("Filter changed: Changed Device from edge-a to edge-a2 — answered"));
+    const note = screen.getByTestId("iris-edit-note");
+    expect(note).toHaveTextContent("Saved as a correction of the earlier answer");
+    expect(parseInt(note.style.fontSize, 10)).toBeGreaterThanOrEqual(14);
+    // The next edit carries the NEW answer's hash.
+    fireEvent.click(screen.getByRole("button", { name: "Remove Device filter" }));
+    await waitFor(() => expect(editIrisChip).toHaveBeenCalledTimes(2));
+    expect(editIrisChip.mock.calls[1][1]).toEqual({ base: "b".repeat(64), chip: "ref:0", op: "remove" });
+  });
+
+  it("a required chip (time) cannot be removed", async () => {
+    await askFirst();
+    expect(screen.queryByRole("button", { name: "Remove Time filter" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Remove Device filter" })).toBeInTheDocument();
+  });
+
+  it("a refused edit is explained in the operator's words, never raw", async () => {
+    editIrisChip.mockRejectedValue(new Error('400 Bad Request: {"error":"that value is not one of the choices for this filter"}'));
+    await askFirst();
+    fireEvent.click(screen.getByRole("button", { name: "Remove Device filter" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("That value is not one of the choices for this filter.");
+    expect(alert.textContent).not.toMatch(/400|Bad Request|\{/);
+    expect(parseInt((alert as HTMLElement).style.fontSize, 10)).toBeGreaterThanOrEqual(14);
+  });
+
+  it("an edit whose rebuilt query cannot run says so and shows no chips for it", async () => {
+    editIrisChip.mockResolvedValue(answered("Removed Device: edge-a", {
+      turn: { at: "", question: "Removed Device: edge-a", outcome: "invalid", rows: 0, edited: true },
+      result: undefined, chips: undefined, chips_for: undefined, validation: { valid: false, errors: [{ code: "too_broad", message: "too broad" }] },
+    }));
+    await askFirst();
+    fireEvent.click(screen.getByRole("button", { name: "Remove Device filter" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Iris cannot run the query with that filter");
+    expect(screen.queryByTestId("iris-chips")).toBeNull();
+    expect(screen.queryByTestId("iris-result")).toBeNull();
+  });
+
+  it("an ended conversation is said, and its chips go away", async () => {
+    editIrisChip.mockRejectedValue(new Error('404 Not Found: {"error":"not found"}'));
+    await askFirst();
+    fireEvent.click(screen.getByRole("button", { name: "Remove Device filter" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("That conversation had ended — ask the question again.");
+    expect(screen.queryByTestId("iris-chips")).toBeNull();
+  });
+
+  it("a preview (only how Iris reads it) has no chips — there is no answer to edit", async () => {
+    compileIrisQuery.mockResolvedValue({ intent: "query_metric", ast: { v: 1 }, validation: { valid: true } });
+    render(<IrisVocabulary />);
+    type("Question", "cpu on edge-a");
+    fireEvent.click(screen.getByText("Only show how Iris reads it"));
+    await screen.findByTestId("iris-understood");
+    expect(screen.queryByTestId("iris-chips")).toBeNull();
   });
 });
 

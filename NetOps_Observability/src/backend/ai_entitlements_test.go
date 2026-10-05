@@ -186,6 +186,7 @@ var aiRouteProbes = []aiProbe{
 	{"/api/ai/conversations", http.MethodPost, "/api/ai/conversations", "", aientitlement.NLQuery},
 	{"/api/ai/conversations/", http.MethodGet, "/api/ai/conversations/" + probeID, "", aientitlement.NLQuery},
 	{"/api/ai/conversations/", http.MethodPost, "/api/ai/conversations/" + probeID + "/messages", `{"question":"cpu on edge-a"}`, aientitlement.NLQuery},
+	{"/api/ai/conversations/", http.MethodPost, "/api/ai/conversations/" + probeID + "/edits", `{"chip":"window","op":"remove"}`, aientitlement.NLQuery},
 	{"/api/ai/queries", http.MethodGet, "/api/ai/queries", "", aientitlement.NLQuery},
 	{"/api/ai/queries/", http.MethodPost, "/api/ai/queries/" + probeID + "/corrections", `{"kind":"wrong_entity"}`, aientitlement.NLQuery},
 	{"/api/ai/hypotheses/", http.MethodGet, "/api/ai/hypotheses/" + probeID, "", aientitlement.Investigate},

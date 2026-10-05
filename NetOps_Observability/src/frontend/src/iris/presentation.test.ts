@@ -7,12 +7,19 @@
 // and the text helpers (unmeasured is never 0).
 
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
+  HIGHLIGHT_KINDS,
   LIMITS,
+  QUERY_TYPES,
   VIEW_TYPES,
   cellText,
   clip,
   defaultPlanFor,
+  hintFromAst,
+  planFor,
   entityLabel,
   fmtNumber,
   highlightFor,
@@ -270,5 +277,84 @@ describe("text helpers", () => {
     expect(isEmptyResult(norm(seriesResult({ series: [{ entity: {}, points: [{ t: 1, v: null }] }] })))).toBe(true);
     expect(isEmptyResult(norm(incidentResult({ rows: [] })))).toBe(false);
     expect(isEmptyResult(norm(baseResult()))).toBe(true);
+  });
+});
+
+// ── N-E1: the server plans, the client validates ─────────────────────────────
+
+describe("planFor — server plan first, client default only for an older server", () => {
+  const changes = () => norm(baseResult({ rows: [changeRow(), changeRow({ change_id: "chg-2" })] }));
+
+  it("uses the server's plan when one was sent", () => {
+    const p = planFor(changes(), { primary_view: "BAR", secondary_view: "TABLE", title: "Changes by Actor", chosen_by: "server" });
+    expect(p.primary_view).toBe("BAR");
+    expect(p.secondary_view).toBe("TABLE");
+    expect(p.title).toBe("Changes by Actor");
+    expect(p).not.toHaveProperty("chosen_by");
+  });
+
+  it("falls back to defaultPlanFor only when no plan was sent", () => {
+    for (const none of [undefined, null]) {
+      expect(planFor(changes(), none)).toEqual(defaultPlanFor(changes()));
+    }
+  });
+
+  it("a sent-but-broken plan degrades to SUMMARY, never to the client's own choice", () => {
+    for (const bad of ["TABLE", 7, [], { primary_view: "PIE" }, { primary_view: "table" }]) {
+      const p = planFor(changes(), bad);
+      expect(p.primary_view).toBe("SUMMARY");
+      expect(p.fallback).toBeDefined();
+    }
+  });
+});
+
+describe("validatePlan — the server's disclosure", () => {
+  it("is kept as clipped text", () => {
+    expect(validatePlan({ primary_view: "TABLE", title: "t", disclosure: "  ignored  " }).disclosure).toBe("ignored");
+    const long = validatePlan({ primary_view: "TABLE", title: "t", disclosure: "x".repeat(5000) }).disclosure ?? "";
+    expect(Array.from(long).length).toBe(LIMITS.disclosure + 1);
+    expect(validatePlan({ primary_view: "TABLE", title: "t", disclosure: HOSTILE }).disclosure).toBe(HOSTILE);
+  });
+
+  it("anything that is not a non-blank string is dropped", () => {
+    for (const d of [undefined, null, 3, {}, ["a"], "   "]) {
+      expect(validatePlan({ primary_view: "TABLE", title: "t", disclosure: d })).not.toHaveProperty("disclosure");
+    }
+  });
+});
+
+describe("hintFromAst", () => {
+  it("keeps only catalog field names from group_by, bounded", () => {
+    expect(hintFromAst({ group_by: ["actor"] })).toEqual({ group_by: ["actor"] });
+    expect(hintFromAst({ group_by: ["Actor<b>", "site", 3, "type", "app"] })).toEqual({ group_by: ["site", "type"] });
+    for (const bad of [undefined, null, "x", [], { group_by: "actor" }, { group_by: [] }, { group_by: ["__proto__!"] }]) {
+      expect(hintFromAst(bad)).toEqual({});
+    }
+  });
+});
+
+// One source of truth: the Go constants (present.go, ast.go) and the lists here
+// are the same members in the same order. present/drift_test.go checks the
+// other direction, so a drift fails both CI legs.
+describe("enum drift guard (Go ↔ TypeScript)", () => {
+  const backend = join(dirname(fileURLToPath(import.meta.url)), "../../../backend/internal/nlquery");
+  const goConsts = (file: string, type: string): string[] => {
+    const src = readFileSync(join(backend, file), "utf8");
+    const out: string[] = [];
+    const re = new RegExp(`^\\s+\\w+\\s+${type}\\s+=\\s+"([^"]+)"`, "gm");
+    for (const m of src.matchAll(re)) out.push(m[1]);
+    return out;
+  };
+
+  it("VIEW_TYPES is the server's View enum", () => {
+    expect(goConsts("present/present.go", "View")).toEqual([...VIEW_TYPES]);
+  });
+
+  it("HIGHLIGHT_KINDS is the server's HighlightKind enum", () => {
+    expect(goConsts("present/present.go", "HighlightKind")).toEqual([...HIGHLIGHT_KINDS]);
+  });
+
+  it("QUERY_TYPES is the AST's QueryType enum", () => {
+    expect(goConsts("ast/ast.go", "QueryType")).toEqual([...QUERY_TYPES]);
   });
 });

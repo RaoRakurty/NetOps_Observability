@@ -34,9 +34,8 @@
       "status": "Confirmed",
       "required_citations": ["hypothesis:cc01aaaa:0", "hypothesis:cc01aaaa:1"],
       "forbidden_claims": ["caused by the configuration change"],
-      "required_text": ["temporally correlated, not established as"]
-    },
-    "expected_failure": "F1 — on a CONFIRMED verdict the narrative is never compared with the cause the engine established (verdictHonesty returns early for confirmed), so a model can name a coincident change the engine ranked as an unconfirmed candidate as the cause; and the problem-explanation path never discloses that a change in the window is temporally correlated, not established as cause (only changeapi.RelationNote and the nlquery change listing carry that sentence)."
+      "required_text": ["temporally correlated, not established as cause"]
+    }
   },
   {
     "id": "cc-suspected-active-voice-triggered",
@@ -73,9 +72,8 @@
       "status": "Suspected",
       "required_citations": ["controller:cc02bbbb", "hypothesis:cc02bbbb:0"],
       "forbidden_claims": ["triggered the bgp session loss"],
-      "required_text": ["temporally correlated, not established as"]
-    },
-    "expected_failure": "F2 — the verdict-honesty overclaim vocabulary (verify.go certaintyMarkers) catches only passive 'is/was caused by', 'root cause is', 'confirmed', 'definitely', 'certainly', 'proven'; active-voice causal verbs ('X triggered Y', 'X caused Y', 'led to', 'resulted in', 'due to') pass under a suspected verdict. Same missing temporal-correlation disclosure as F1."
+      "required_text": ["temporally correlated, not established as cause"]
+    }
   },
   {
     "id": "cc-suspected-passive-overclaim-stripped",
@@ -137,8 +135,7 @@
     "expect": {
       "required_citations": ["config:dev-a:9f2c4e1a7b3d", "log:os:1"],
       "forbidden_claims": ["root cause is the configuration change"],
-      "required_text": ["temporally correlated, not established as"]
-    },
-    "expected_failure": "F3 — the skill/troubleshoot path (skill_run.go answerSkill) runs VerifyGrounding but never enforceVerdictHonesty or any equivalent, so a skill narration may assert an established root cause (here a change that only preceded the fault) with no engine verdict behind it; no temporal-correlation disclosure is attached to change evidence either."
+      "required_text": ["temporally correlated, not established as cause"]
+    }
   }
 ]

@@ -169,6 +169,28 @@ func TestFromQueryMarksSuppliedEntities(t *testing.T) {
 	}
 }
 
+func TestFromChipEditIsAConversationRecordAuthoredByTheEdit(t *testing.T) {
+	const conv = "11111111-2222-4333-8444-555555555555"
+	q := &ast.AST{V: 1, Type: ast.MetricSeries, Target: "device", Refs: []ast.EntityRef{{Type: "device", ID: "device:edge-2"}}}
+	checked := q.Clone()
+	checked.Time = ast.TimeRange{Kind: ast.TimeRelative, Last: "1h"}
+	r := FromChipEdit("Changed Device from edge-1 to edge-2", conv, q, checked, validate.Result{Valid: true})
+	if r.Source != SourceConversation || r.ConversationID != conv || r.Intent != "edit_filter" || r.Question == "" {
+		t.Fatalf("%+v", r)
+	}
+	if r.Query != checked || r.CompiledBy != CompiledByChipEdit || r.Entities[0].Method != MethodChipEdit || r.Outcome != OutcomeCompiled {
+		t.Fatalf("a valid edit keeps its validated query, authored chip_edit: %+v", r)
+	}
+	r.Principal = "u"
+	if _, err := Normalize("t", r, time.Now()); err != nil {
+		t.Fatalf("chip_edit is a known author: %v", err)
+	}
+	bad := FromChipEdit("Removed Device: edge-1", conv, q, nil, validate.Result{})
+	if bad.Outcome != OutcomeInvalid || bad.Query != nil || bad.CompiledBy != "" {
+		t.Fatalf("an invalid edit is recorded invalid, without a query: %+v", bad)
+	}
+}
+
 func TestTheStoredQueryAndItsAuthor(t *testing.T) {
 	q := &ast.AST{V: 1, Type: ast.MetricSeries, Target: "device", Metric: "cpu_util_pct",
 		Time: ast.TimeRange{Kind: ast.TimeRelative, Last: "1h"}}

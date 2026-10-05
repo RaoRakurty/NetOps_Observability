@@ -72,6 +72,10 @@ type Turn struct {
 	ASTHash  string    `json:"ast_hash,omitempty"`
 	QueryID  string    `json:"query_id,omitempty"`
 	Rows     int       `json:"rows"`
+	// Edited marks a turn that came from editing a filter chip of the
+	// previous answer (POST …/edits), not from a typed question; Question is
+	// then the server's own description of the edit.
+	Edited bool `json:"edited,omitempty"`
 }
 
 // State is what the next question may point at.
@@ -80,6 +84,10 @@ type State struct {
 	Entities  []ast.EntityRef `json:"entities,omitempty"` // most recent first
 	Actors    []string        `json:"actors,omitempty"`
 	ChangeIDs []string        `json:"change_ids,omitempty"`
+	// LastLogID is the query-log record of the answer LastAST came from — the
+	// record a chip edit of that answer is filed against as a correction
+	// (tracker 337 N-C8). Empty when that answer's capture failed.
+	LastLogID string `json:"last_log_id,omitempty"`
 }
 
 // Conversation is one owner's thread.
@@ -176,6 +184,9 @@ func NormalizeState(st State) State {
 	st.Entities = ents
 	st.Actors = boundedSet(st.Actors, MaxActors)
 	st.ChangeIDs = boundedSet(st.ChangeIDs, MaxChangeIDs)
+	if !ValidID(st.LastLogID) {
+		st.LastLogID = "" // the stored state is not trusted to hold a record id
+	}
 	if st.LastAST != nil {
 		st.LastAST = st.LastAST.Clone()
 	}
