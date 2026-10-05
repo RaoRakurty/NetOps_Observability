@@ -10063,7 +10063,9 @@ export type AiAnswer = {
   // The question router's DATA arm (tracker 337 N-G4, mode "data_query"): the
   // compile answer + the result set, rendered as data. Untrusted — the
   // presentation renderer validates and bounds it.
-  data?: { result?: unknown; [k: string]: unknown };
+  // `presentation` is the server's PresentationPlan (N-E1) — also untrusted,
+  // validated by the renderer; absent from servers older than N-E1.
+  data?: { result?: unknown; presentation?: unknown; ast?: unknown; [k: string]: unknown };
   // Set when the server recorded this answer in the caller's conversation;
   // absent = the next question starts a new one.
   conversation_id?: string;

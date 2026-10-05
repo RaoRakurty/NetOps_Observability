@@ -6,10 +6,15 @@
 // decision 7).
 //
 // Presentation is SERVER-planned and CLIENT-validated. The server returns a
-// typed ResultSet (src/backend/internal/nlquery/plan/result.go) and, later, a
-// PresentationPlan whose `view` comes from a CLOSED enum. The model may only
-// *suggest* a view from that enum — so everything here treats both the plan and
-// the result as untrusted input (§3 zero trust, §15 LLM02):
+// typed ResultSet (src/backend/internal/nlquery/plan/result.go) and, beside it,
+// a PresentationPlan (src/backend/internal/nlquery/present/present.go) whose
+// views come from a CLOSED enum. The model may only *suggest* a view from that
+// enum; the server ignores anything else. VIEW_TYPES / HIGHLIGHT_KINDS /
+// QUERY_TYPES here and the Go constants are pinned to each other by tests on
+// both sides (present/drift_test.go, presentation.test.ts). defaultPlanFor is
+// the fallback for a server that sent no plan (older builds). Everything here
+// still treats both the plan and the result as untrusted input (§3 zero trust,
+// §15 LLM02):
 //
 //   · validatePlan never throws and never returns a view outside the enum; an
 //     unknown view becomes SUMMARY (rendered as escaped text), unknown fields
@@ -74,6 +79,11 @@ export interface PresentationPlan {
 export interface ValidatedPlan extends PresentationPlan {
   /** Set when the incoming plan was unusable and a fallback was substituted. */
   fallback?: "malformed" | "unknown_view";
+  /**
+   * The server's note when it ignored the model's view suggestion. Server-
+   * written text, shown as escaped text only; clipped like any other string.
+   */
+  disclosure?: string;
 }
 
 // ── the ResultSet mirror (plan/result.go) ────────────────────────────────────
@@ -154,6 +164,7 @@ export interface ResultSet {
 
 export const LIMITS = {
   title: 200,
+  disclosure: 300,
   text: 2000,
   id: 128,
   field: 64,
@@ -204,8 +215,9 @@ export function isFieldName(v: unknown): v is string {
 const FALLBACK_TITLE = "Answer";
 
 /**
- * Turn an untrusted plan into a safe one. Never throws. Only the five known
- * fields are read; everything else is ignored.
+ * Turn an untrusted plan into a safe one. Never throws. Only the five contract
+ * fields and the server's `disclosure` are read; everything else (including
+ * the server's `chosen_by`) is ignored.
  */
 export function validatePlan(input: unknown): ValidatedPlan {
   if (!isObj(input)) {
@@ -242,7 +254,20 @@ export function validatePlan(input: unknown): ValidatedPlan {
     }
     if (hs.length > 0) out.highlight = hs;
   }
+  const disclosure = str(input.disclosure, LIMITS.disclosure).trim();
+  if (disclosure) out.disclosure = disclosure;
   return out;
+}
+
+/**
+ * The plan to draw with: the server's (validated) when it sent one, else the
+ * client's defaultPlanFor — only for a server that predates N-E1 and sends no
+ * plan at all (undefined or null). A plan that IS sent but is unusable is
+ * never replaced by the client's own choice: it degrades to SUMMARY, so a
+ * broken server plan is visible rather than silently overridden.
+ */
+export function planFor(result: ResultSet, rawPlan: unknown, hint: QueryHint = {}): ValidatedPlan {
+  return rawPlan === undefined || rawPlan === null ? defaultPlanFor(result, hint) : validatePlan(rawPlan);
 }
 
 // ── normalizeResult ───────────────────────────────────────────────────────────
@@ -406,6 +431,17 @@ export interface QueryHint {
   group_by?: string[];
   /** "show exactly what changed" — the compiler marks a request for the diff. */
   wants_diff?: boolean;
+}
+
+/**
+ * The hint from the server's (untrusted) query: its group-by fields, so a BAR
+ * of changes groups — and drills — by what was asked. Bounded; only catalog
+ * field names survive.
+ */
+export function hintFromAst(ast: unknown): QueryHint {
+  if (!isObj(ast) || !Array.isArray(ast.group_by)) return {};
+  const group_by = ast.group_by.filter(isFieldName).slice(0, 2);
+  return group_by.length > 0 ? { group_by } : {};
 }
 
 /**
