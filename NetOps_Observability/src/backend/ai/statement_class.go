@@ -990,7 +990,10 @@ func GroundAgentNarrative(text string, evidence []AgentToolEvidence, docIDs []st
 	// incident it cites, and the turn-level certainty gate (meant for one
 	// incident's narrative) does not run on a general answer.
 	sc.perIncident = sc.verdict == ""
-	o := &Orchestrator{} // no scorecard seam on this path; the disclosures carry the record
+	// No provider call is made here; the Redactor is wired anyway so the
+	// orchestrator is fail-safe by construction (§15/LLM06), and there is no
+	// scorecard seam on this path — the disclosures carry the record.
+	o := &Orchestrator{Redactor: Redact}
 	out, sts, _, disc := o.applyStatementClasses(text, agentFallbackText, ClassDerived, sc, nil, nil)
 	return AgentGrounding{Text: out, Statements: sts, Disclaimers: disc}
 }
