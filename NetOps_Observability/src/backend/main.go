@@ -4704,6 +4704,11 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	if s.tlsPeerProber != nil {
 		s.tlsPeerProber.WriteMetrics(w)
 	}
+	// SNMP column walks that hit their row bound before the column ended
+	// (collectors.snmpWalkColumn). Non-zero means some table was read partially.
+	fmt.Fprint(w, "# HELP collector_snmp_walk_truncated_total SNMP column walks stopped by the row bound before the column ended (rows past it were not read).\n")
+	fmt.Fprint(w, "# TYPE collector_snmp_walk_truncated_total counter\n")
+	fmt.Fprintf(w, "collector_snmp_walk_truncated_total %d\n", collectors.SNMPWalkTruncatedTotal())
 	if s.demMetrics != nil {
 		s.demMetrics.Write(w)
 	}
