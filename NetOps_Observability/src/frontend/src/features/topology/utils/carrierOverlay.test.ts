@@ -18,6 +18,29 @@ function emptyView(): TopologyView {
 }
 
 describe("withCarrierOverlay", () => {
+  // Tracker 349: an inferred uplink carries no link-state evidence, so it must
+  // not render as healthy; and a transport (`wan`) node is not a site egress.
+  it("never claims an inferred uplink is up", () => {
+    const out = withCarrierOverlay(cloudNetworkTopology);
+    const uplinks = out.edges.filter((e) => e.target === CARRIER_NODE_ID);
+    expect(uplinks.length).toBeGreaterThan(0);
+    for (const e of uplinks) {
+      expect(e.status).toBe("unknown");
+      expect(e.relationship).toBe("inferred");
+    }
+  });
+
+  it("does not attach a transport (wan) node to the carrier as if it were egress", () => {
+    const view = emptyView();
+    view.nodes = [{
+      id: "wan:t:biz-internet", label: "WAN transport · biz-internet", kind: "wan",
+      health: "unknown", confidence: 0.6, resolved: true,
+      evidence: [{ source: "cloud_api", confidence: 0.6 }],
+    }] as TopologyView["nodes"];
+    const out = withCarrierOverlay(view);
+    expect(out.edges.some((e) => e.source === "wan:t:biz-internet")).toBe(false);
+  });
+
   it("appends ONE carrier node + uplinks from egress points, all with evidence", () => {
     const out = withCarrierOverlay(cloudNetworkTopology);
     const carriers = out.nodes.filter((n) => n.id === CARRIER_NODE_ID);
