@@ -21,7 +21,7 @@ env:
   # to the grep that checks every workflow moved together.
   # MUST match NetOps_Observability/src/backend/go.mod's `toolchain` line —
   # guarded by tests/test_toolchain_pin.py.
-  GO_VERSION: '1.26.8'
+  GO_VERSION: '1.26.9'
 
 defaults:
   run:
