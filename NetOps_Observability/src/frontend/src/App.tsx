@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-import { ReactNode, Suspense, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ReactNode, Suspense, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { isLocalAccount, userLabel } from "./lib/userLabel";
 import { api, Health, LANDING_PENDING_KEY } from "./services/api";
 import { useAuth } from "./hooks/useAuth";
@@ -19,7 +19,8 @@ import Sidebar from "./components/Sidebar";
 import IconRail from "./components/IconRail";
 import SubNav from "./components/SubNav";
 import ScopeBadge from "./components/ScopeBadge";
-import OpsisDrawer from "./components/OpsisDrawer";
+import IrisPanel from "./components/IrisPanel";
+import { irisReducer, isOpen, loadIrisState, saveIrisState } from "./iris/panel/irisPanelState";
 import ElevationRequired from "./components/ElevationRequired";
 import HelpDrawer from "./components/HelpDrawer";
 import CommandPalette from "./components/CommandPalette";
@@ -115,7 +116,19 @@ export default function App() {
     setRangeState(r);
   };
   const [query, setQuery] = useState<string>("*");
-  const [copilotOpen, setCopilotOpen] = useState(false);
+  // The Iris panel's window state (closed / floating / docked / expanded —
+  // iris/panel/irisPanelState.ts). The shell's `copilotOpen` is DERIVED from it,
+  // so every entry point that opens "the assistant" opens this one panel.
+  // Starts closed; the remembered mode, docked width and pre-expand mode come
+  // back from localStorage and are written back whenever they change.
+  const [iris, irisDispatch] = useReducer(irisReducer, undefined, () => loadIrisState());
+  useEffect(() => {
+    // false = storage refused the write (private window, blocked site data):
+    // the choice still holds for this page load, there is nothing else to do.
+    saveIrisState(iris);
+  }, [iris.lastOpen, iris.beforeExpand, iris.width]); // eslint-disable-line react-hooks/exhaustive-deps
+  const copilotOpen = isOpen(iris.mode);
+  const setCopilotOpen = useCallback((b: boolean) => irisDispatch({ type: b ? "open" : "close" }), []);
   const [helpOpen, setHelpOpen] = useState(false);
   const [helpPath, setHelpPath] = useState("");
   const [collapsed, setCollapsed] = useState(false);
@@ -394,7 +407,7 @@ export default function App() {
             </TenantGate>
           </div>
         </main>
-        <OpsisDrawer />
+        <IrisPanel state={iris} dispatch={irisDispatch} />
         <ElevationRequired />
         <HelpDrawer />
         <CommandPalette nav={nav} />

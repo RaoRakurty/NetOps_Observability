@@ -76,7 +76,7 @@ vi.mock("./components/Sidebar", () => ({ default: () => null }));
 vi.mock("./components/IconRail", () => ({ default: () => <div>icon rail</div> }));
 vi.mock("./components/SubNav", () => ({ default: () => null }));
 vi.mock("./components/ScopeBadge", () => ({ default: () => null }));
-vi.mock("./components/OpsisDrawer", () => ({ default: () => null }));
+vi.mock("./components/IrisPanel", () => ({ default: () => null }));
 vi.mock("./components/HelpDrawer", () => ({ default: () => null }));
 vi.mock("./components/CommandPalette", () => ({ default: () => null }));
 vi.mock("./components/Inspector", () => ({ default: () => null }));

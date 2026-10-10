@@ -13,7 +13,7 @@
 // topic; Iris answers from the authored file and cites it.
 //
 // WHY AN EVENT AND NOT A PROP DRILL. The assistant is a shell-level surface (the
-// docked Iris drawer, components/OpsisDrawer.tsx → tabs/Opsis.tsx). Threading an
+// Iris panel, components/IrisPanel.tsx → tabs/Opsis.tsx). Threading an
 // "ask this" callback from the shell down through every KPI on every page would
 // couple every page to the assistant's internals; a single named window event is
 // the seam. It carries NO data of its own — just the topic id, which the server
@@ -24,21 +24,21 @@
 // The event is also why this component touches NO context. It is dropped into
 // dozens of cards that are unit tested standalone, often with the shell module
 // mocked; a context read here would make an explanation affordance the reason an
-// unrelated page test fails. Opening the drawer is the drawer's job.
+// unrelated page test fails. Opening the panel is the panel's job.
 //
 // The component makes NO network call until it is clicked, and none itself even
-// then: the drawer owns the ask.
+// then: the panel owns the ask.
 
 import { type MouseEvent } from "react";
 import Icon from "./Icon";
 
-/** The window event AskIris raises. components/OpsisDrawer.tsx is the only listener. */
+/** The window event AskIris raises. components/IrisPanel.tsx is the only listener. */
 export const IRIS_ASK_EVENT = "iris:ask";
 
 export type IrisAskDetail = {
   /** The authored topic id — the file name under ai/skills/explain/. */
   topic: string;
-  /** What the operator's turn reads as in the drawer. */
+  /** What the operator's turn reads as in the panel. */
   question: string;
 };
 

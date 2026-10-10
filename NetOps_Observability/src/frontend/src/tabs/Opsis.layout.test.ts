@@ -3,7 +3,7 @@
 
 // Opsis.layout.test.ts — the Iris drawer's settings pane must scroll.
 //
-// The drawer (.op-panel) is position:fixed with a flex column inside
+// The Iris panel (.iris-panel) is position:fixed with a flex column inside
 // (.op-chat, min-height:0). The settings pane holds the workspace AI settings
 // and, since tracker 337 N-C2, the Iris vocabulary panel — about 1 000 px on a
 // 660 px drawer. With neither min-height:0 nor overflow on .op-settings the

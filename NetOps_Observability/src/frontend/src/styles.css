@@ -408,11 +408,13 @@ code, kbd, pre, .mono, td.mono {
 /* ----- App shell: top bar across the top, sidebar + main below ----- */
 .shell {
   display: grid;
-  grid-template-columns: var(--sidebar-w) 1fr;
+  /* Third track: the docked Iris panel's column (components/IrisPanel.tsx sets
+     --iris-dock-w on this element; 0px unless Iris is docked). */
+  grid-template-columns: var(--sidebar-w) 1fr var(--iris-dock-w, 0px);
   grid-template-rows: var(--topbar-h) 1fr;
   grid-template-areas:
-    "sidebar topbar"
-    "sidebar main";
+    "sidebar topbar topbar"
+    "sidebar main   iris";
   height: 100vh;
 }
 .shell.collapsed { --sidebar-w: 56px; }
@@ -425,17 +427,18 @@ code, kbd, pre, .mono, td.mono {
 /* Shell-v2 extends the shell grid with a right Inspector column and a bottom
    Drawer row (#45 §11). Both collapse to 0px when their pane is closed (vars set
    by ShellGridSizing), so the center workspace TRUE-DOCKS — it reflows around
-   the panes instead of being overlaid. */
+   the panes instead of being overlaid. The last column is the docked Iris
+   panel's (--iris-dock-w, set by components/IrisPanel.tsx). */
 .shell.shell-v2 {
   --sidebar-w: 212px;
   --ins-w: 0px;
   --drawer-h: 0px;
-  grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--ins-w);
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--ins-w) var(--iris-dock-w, 0px);
   grid-template-rows: var(--topbar-h) minmax(0, 1fr) var(--drawer-h);
   grid-template-areas:
-    "sidebar topbar topbar"
-    "sidebar main   inspector"
-    "sidebar drawer inspector";
+    "sidebar topbar topbar    topbar"
+    "sidebar main   inspector iris"
+    "sidebar drawer inspector iris";
 }
 
 .rail {
@@ -2242,43 +2245,104 @@ code, kbd, pre, .mono, td.mono {
 /* Cite chips: tabular, hairline, futuristic. */
 .op-cite { font-variant-numeric: tabular-nums; letter-spacing: .01em; }
 
-/* ===== Iris AI — LEFT-docked panel (attached to the rail knob) ===========
-   Slides in from the icon rail; overlay by default, or split (page reflows). */
-:root { --ai-panel-w: 432px; }
+/* ===== Iris panel — ONE container: floating · docked · expanded ===========
+   Design of record: docs/design/IRIS_PANEL_DESIGN_2026-10-05.md (tracker
+   338–340); behaviour in components/IrisPanel.tsx. This is window geometry
+   only — the chat inside is .op-chat, unchanged. Built from the existing
+   tokens: --sp-3 gap, --r-4 radius, --border hairline, --shadow-pop (overlay
+   elevation only — the docked pane has none), --surface, --mod-copilot (Iris's
+   own module hue). The app has no motion tokens; the two locals below are this
+   component's motion (design §2: 180–220 ms, no bounce), not a new token set.
+   Motion is transform/opacity; a docked↔floating change is a FLIP in JS. */
+.iris-panel {
+  --iris-dur: 200ms;
+  --iris-ease: cubic-bezier(0.2, 0, 0, 1);
+  --iris-gap: var(--sp-3);
+  position: fixed; z-index: 55; /* over the page, under the top bar (60), rail flyouts (70), help (90) and modals (100+) */
+  top: calc(var(--topbar-h) + var(--iris-gap)); right: var(--iris-gap); bottom: var(--iris-gap);
+  width: min(448px, calc(100vw - 2 * var(--iris-gap)));
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--surface); color: var(--fg);
+  border: 1px solid var(--border); border-radius: var(--r-4);
+  box-shadow: var(--shadow-pop);
+  transition:
+    transform var(--iris-dur) var(--iris-ease), opacity var(--iris-dur) var(--iris-ease),
+    border-radius var(--iris-dur) var(--iris-ease), box-shadow var(--iris-dur) var(--iris-ease),
+    visibility 0s;
+}
+/* The panel itself is a programmatic focus target, not a control. */
+.iris-panel:focus { outline: none; }
+.iris-panel .op-chat { flex: 1; min-height: 0; }
+/* Closed: slides out to the right and fades, keeping the geometry it had. */
+.iris-panel.is-hidden {
+  transform: translateX(16px); opacity: 0; visibility: hidden; pointer-events: none;
+  transition:
+    transform var(--iris-dur) var(--iris-ease), opacity var(--iris-dur) var(--iris-ease),
+    visibility 0s linear var(--iris-dur);
+}
+/* Docked: joins the shell at the right edge — no gap, no shadow, square
+   corners; the shell grid reserves its column so the workspace reflows. */
+.iris-panel.is-docked {
+  top: var(--topbar-h); right: 0; bottom: 0; width: var(--iris-w);
+  border-width: 0 0 0 1px; border-radius: 0; box-shadow: none;
+}
+/* Expanded: a large investigation view over the workspace; the rail and the
+   top bar (with the ✦ Iris control) stay in reach. */
+.iris-panel.is-expanded { left: calc(var(--sidebar-w) + var(--iris-gap)); width: auto; }
+/* Narrow viewport: a near-full-screen sheet; never a squeezed workspace. */
+.iris-panel.is-sheet {
+  top: var(--topbar-h); left: 0; right: 0; bottom: 0; width: auto;
+  border-width: 1px 0 0; border-radius: 0;
+}
+/* Window chrome stays calm: no glow on the mark, no tinted header band. */
+.iris-panel .op-hd { background: var(--surface); }
+.iris-panel .op-hd-logo { box-shadow: none; }
+.iris-panel .op-hd-btn:focus-visible { outline: 2px solid var(--accent-ring, var(--accent)); outline-offset: 1px; }
+.iris-panel .iris-ctl:disabled { opacity: .45; cursor: not-allowed; }
+.iris-panel .iris-ctl:disabled:hover { background: transparent; color: var(--muted); }
 
-.op-panel {
-  position: fixed; z-index: 95;
-  left: var(--sidebar-w, 64px); top: var(--topbar-h, 52px); bottom: 0;
-  width: min(var(--ai-panel-w), calc(100vw - var(--sidebar-w, 64px) - 8px));
-  display: flex; flex-direction: column;
-  background: var(--panel-solid); border-right: 1px solid var(--panel-border);
-  box-shadow: 18px 0 48px -28px rgba(0,0,0,.65);
-  /* closed → tucked behind the rail, faded out, inert */
-  transform: translateX(-18px); opacity: 0; visibility: hidden; pointer-events: none;
-  transition: transform .28s cubic-bezier(.22,.61,.36,1), opacity .2s ease, visibility 0s linear .28s;
+/* Splitter — the docked pane's left edge. ew-resize, a hairline that lights in
+   Iris's hue on hover / drag / keyboard focus. */
+.iris-splitter {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 6px; z-index: 2;
+  cursor: ew-resize; touch-action: none;
 }
-.op-panel.open {
-  transform: none; opacity: 1; visibility: visible; pointer-events: auto;
-  transition: transform .28s cubic-bezier(.22,.61,.36,1), opacity .2s ease, visibility 0s;
+.iris-splitter::after {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+  background: transparent; transition: background-color .14s ease;
 }
-/* The animated accent signature now rides the panel's left edge. */
-.op-panel::before {
-  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; z-index: 1;
-  background: linear-gradient(180deg, transparent, var(--accent), color-mix(in srgb, var(--accent) 50%, transparent), transparent);
-  background-size: 100% 220%; animation: opEdge 7s linear infinite; opacity: .85;
+.iris-splitter:hover::after, .iris-splitter.dragging::after, .iris-splitter:focus-visible::after {
+  background: color-mix(in srgb, var(--mod-copilot) 70%, transparent);
 }
-.op-panel .op-chat { flex: 1; min-height: 0; }
+.iris-splitter:focus-visible { outline: 2px solid var(--accent-ring, var(--accent)); outline-offset: -2px; }
+:root.iris-resizing, :root.iris-resizing * { cursor: ew-resize !important; user-select: none; }
 
-/* Light scrim (overlay mode only) over the page area right of the rail. */
-.op-scrim {
-  position: fixed; left: var(--sidebar-w, 64px); top: var(--topbar-h, 52px); right: 0; bottom: 0;
-  background: rgba(8,11,20,.32); opacity: 0; pointer-events: none; transition: opacity .2s ease; z-index: 94;
+/* ✦ Iris — the header control (upper right of the global top bar). Quiet:
+   the sparkle carries Iris's hue, the label stays neutral until open. */
+.iris-launch {
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px;
+  border-radius: var(--r-2); border: 1px solid transparent; background: transparent; cursor: pointer;
+  font-family: inherit; font-size: var(--fs-sm); font-weight: 500; line-height: 1; color: var(--muted);
+  transition: color .14s ease, background-color .14s ease, border-color .14s ease;
 }
-.op-scrim.open { opacity: 1; pointer-events: auto; }
-
-/* SPLIT mode — the page reflows beside the panel (no scrim, both usable). */
-.main { transition: padding-left .28s cubic-bezier(.22,.61,.36,1); }
-body.ai-split .main { padding-left: var(--ai-panel-w); }
+.iris-launch svg { color: var(--mod-copilot); flex: none; }
+.iris-launch:hover { color: var(--fg); background: var(--hover, var(--surface-2)); border-color: var(--panel-border); }
+.iris-launch.on {
+  color: var(--fg); background: color-mix(in srgb, var(--mod-copilot) 14%, transparent);
+  border-color: color-mix(in srgb, var(--mod-copilot) 40%, transparent);
+}
+.shell-v2 .iris-launch { color: var(--rail-fg-muted, var(--muted)); }
+.shell-v2 .iris-launch:hover, .shell-v2 .iris-launch.on { color: var(--rail-fg); border-color: var(--rail-border); }
+.shell-v2 .iris-launch:hover { background: var(--rail-hover); }
+.iris-launch:focus-visible { outline: 2px solid var(--accent-ring, var(--accent)); outline-offset: 1px; }
+/* Keep ✦ Iris on screen when the header is short of room: the right cluster
+   may shrink and the search box gives way first (it keeps a usable minimum);
+   the Iris control itself never shrinks. Without this the cluster overflowed
+   the header below ~1100 px and its last item — now Iris — was cut off. */
+.topbar-right { min-width: 0; }
+.topbar-right .omni-compact { min-width: 120px; }
+.topbar-right .omni-compact input { min-width: 0; }
+.iris-launch { flex: none; }
 
 /* Header: brand + control cluster (New · Split · Settings · Help · Close). */
 .op-hd {
