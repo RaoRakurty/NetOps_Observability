@@ -210,14 +210,6 @@ func addrValue(v berVal) string {
 	return s
 }
 
-// textValue decodes a string- or integer-valued column.
-func textValue(v berVal) string {
-	if isIntegerTag(v.tag) {
-		return strconv.FormatInt(v.int(), 10)
-	}
-	return strings.TrimSpace(v.str())
-}
-
 func isIntegerTag(t byte) bool { return t == 0x02 || t == 0x41 || t == 0x42 || t == 0x47 }
 
 // siteIDValue accepts only an integer site-id (Unsigned32 in every MIB

@@ -507,17 +507,6 @@ func sortedFactIDs(m map[string]collectors.OverlayDeviceFacts) []string {
 	return out
 }
 
-func sortedSet(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		if k != "" {
-			out = append(out, k)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
 func ends(n int) string {
 	if n == 2 {
 		return "both ends"
