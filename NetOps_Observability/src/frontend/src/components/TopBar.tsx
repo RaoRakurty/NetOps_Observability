@@ -12,6 +12,7 @@ import Icon from "./Icon";
 import ScopeSelector from "./ScopeSelector";
 import AppearanceControls from "./AppearanceControls";
 import ScopeBadge from "./ScopeBadge";
+import IrisLauncher from "./IrisLauncher";
 
 type Props = {
   health: Health | null;
@@ -34,7 +35,7 @@ type TopHit = { kind: OmniKind | "logs"; id: string; label: string; sublabel?: s
 const hitIcon = (k: TopHit["kind"]): string => (k === "logs" ? "search" : OMNI_KIND_ICON[k]);
 const hitTag = (k: TopHit["kind"]): string => (k === "logs" ? "Logs" : OMNI_KIND_TAG[k]);
 
-// Global top bar: brand · omni-search · time range · health · user menu.
+// Global top bar: brand · omni-search · time range · health · ✦ Iris · user menu.
 // The search box and time picker drive every section through ShellContext.
 // The omni-search shows a live, kind-grouped results dropdown (devices ·
 // resources · services · accounts · cases · alerts · saved) backed by the
@@ -266,6 +267,9 @@ export default function TopBar({ health, user, onLogout, onChangePassword, onTwo
           <span className="dot" aria-hidden="true" />
           {ok ? "Healthy" : "Disconnected"}
         </span>
+
+        {/* Iris — the primary entry point (owner design 2026-10-05 §1), upper right. */}
+        <IrisLauncher />
 
         {!hideUserMenu && (
         <div className="user-menu" ref={menuRef} onKeyDown={onMenuKeyDown}>

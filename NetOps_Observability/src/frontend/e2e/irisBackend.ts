@@ -272,9 +272,21 @@ export async function bootIris(page: Page, opts: IrisBackendOptions = {}): Promi
   return fake;
 }
 
-/** Open the Iris drawer from the icon rail and wait for the composer. */
+/** The one Iris panel (components/IrisPanel.tsx) — a named complementary
+ *  landmark while it is open (a closed panel is aria-hidden and inert). */
+export function irisPanel(page: Page) {
+  return page.getByRole("complementary", { name: "Iris" });
+}
+
+/** The `✦ Iris` control in the global header — the primary way in. Exact: every
+ *  page's `(i)` buttons are named "Ask Iris about …" and the rail's is "Iris AI". */
+export function irisLauncher(page: Page) {
+  return page.locator("header.topbar").getByRole("button", { name: "Iris", exact: true });
+}
+
+/** Open the Iris panel from the header control and wait for the composer. */
 export async function openIris(page: Page) {
-  await page.locator('button.rail-item[title="Iris AI"]').click();
+  await irisLauncher(page).click();
   await page.getByPlaceholder(/Ask Iris AI/).waitFor();
 }
 
