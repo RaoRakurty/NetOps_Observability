@@ -8,7 +8,7 @@
 # failure so a pre-push hook can block. -race is CI-only (needs gcc, absent here).
 set -uo pipefail
 cd "$(dirname "$0")/../src/backend" || exit 1
-GOLANGCI_VERSION="v2.12.2"   # keep in sync with .github/workflows/backend-ci.yml
+GOLANGCI_VERSION="v2.14.0"   # keep in sync with .github/workflows/backend-ci.yml
 echo "▶ go build ./..."; go build ./... || { echo "✗ build failed"; exit 1; }
 echo "▶ go vet ./...";  go vet ./...  || { echo "✗ vet failed";   exit 1; }
 echo "▶ golangci-lint $GOLANGCI_VERSION run ./... (docker, matches CI)"

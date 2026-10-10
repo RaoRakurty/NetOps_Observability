@@ -57,7 +57,11 @@ env:
   # built with a Go >= the module's `go` directive, or it refuses to load the
   # module: the v2.12.2 linux-amd64 release is built with go1.26.2, so it still
   # loads the go 1.26.0 module after the 1.25.13 -> 1.26.8 toolchain raise.
-  GOLANGCI_VERSION: 'v2.12.2'
+  # 2026-10-10 -> v2.14.0: on go1.26.9 the go1.26.2-built v2.12.2 no longer sees
+  # testing.T.Fatal* as terminating and reported 22 false SA5011 nil-deref
+  # findings in tests (bisected: v2.12.2+go1.26.8 = 0, v2.12.2+go1.26.9 = 22,
+  # v2.14.0+go1.26.9 = 0). Keep this pin moving with the toolchain.
+  GOLANGCI_VERSION: 'v2.14.0'
 
 defaults:
   run:
