@@ -4,6 +4,8 @@
 package backend
 
 import (
+	"context"
+	"errors"
 	"netops/backend/internal/chschema"
 	"strings"
 	"testing"
@@ -16,10 +18,21 @@ import (
 
 func TestCorrCurrentRepairSQLStaysNarrow(t *testing.T) {
 	for name, sql := range map[string]string{
-		"backfill": chschema.CorrCurrentBackfillSQL(),
-		"drift":    chschema.CorrDriftRepairSQL(7),
+		"backfill":    chschema.CorrCurrentBackfillSQL(),
+		"drift":       chschema.CorrDriftRepairSQL(7),
+		"state drift": chschema.CorrStateDriftRepairSQL(),
 	} {
-		inner := sql[strings.Index(sql, "WHERE (o.tenant_id, o.correlation_id, o.version) IN ("):]
+		// Exact-row keying: engine restarts reset version counters, so
+		// (tenant, id, version) alone can match two history rows (tracker 328).
+		at := strings.Index(sql, "WHERE (o.tenant_id, o.correlation_id, o.version, o.created_at) IN (")
+		if at == -1 {
+			t.Fatalf("%s: repair is not keyed by (tenant, id, version, created_at):\n%s", name, sql)
+		}
+		inner := sql[at:]
+		// "Latest" is the newest row, never the highest version number.
+		if strings.Contains(inner, "version DESC") || !strings.Contains(inner, "created_at DESC") {
+			t.Errorf("%s: latest-row pick must order by created_at DESC, not version", name)
+		}
 		// The picking subquery (fold) must never reference a wide column.
 		for _, wide := range []string{"hypotheses", "layer_coverage", "app_impact"} {
 			if strings.Contains(inner, wide) {
@@ -159,5 +172,147 @@ func TestCHWorkloadProfileRouting(t *testing.T) {
 	t.Setenv("CH_WORKLOAD_PROFILES", "off")
 	if got := chWorkloadProfile("api:/api/correlations"); got != "" {
 		t.Errorf("kill-switch must disable profile routing, got %q", got)
+	}
+}
+
+// Tracker 328: the projection said 'open' for 56,397 objects that history had
+// closed — drift older than the lookback, or a stale row NEWER than history (a
+// heartbeat touch after the close). The state repair decides by STATE, at any
+// age, keyed to the projection's open set, and restamps so it wins the fold.
+// (Behaviour was proven against a throwaway ClickHouse with the lab DDL: the old
+// SQL left all three shapes open, the new one closed them and kept a genuinely
+// open control open.)
+func TestCorrStateDriftRepairIsStateKeyedUnboundedAndRestamped(t *testing.T) {
+	sel := chschema.CorrStateDriftSelect()
+	if strings.Contains(sel, "INTERVAL") {
+		t.Errorf("state drift must not be age-bounded — drift older than any window is exactly the bug:\n%s", sel)
+	}
+	for _, want := range []string{
+		"FROM netops.corr_current FINAL",
+		"WHERE state = 'open'",
+		"LIMIT 1 BY tenant_id, correlation_id",
+		"WHERE state != 'open'",
+	} {
+		if !strings.Contains(sel, want) {
+			t.Errorf("state drift pick missing %q:\n%s", want, sel)
+		}
+	}
+	// Pre-keyed by the projection's open set, never a whole-history fold.
+	if in, fold := strings.Index(sel, "IN ("), strings.Index(sel, "ORDER BY"); in == -1 || fold == -1 || in > fold {
+		t.Error("state drift's history fold is not pre-keyed by the projection's open set")
+	}
+	for _, wide := range []string{"hypotheses", "layer_coverage", "app_impact"} {
+		if strings.Contains(sel, wide) {
+			t.Errorf("state drift pick folds wide column %q (#100)", wide)
+		}
+	}
+	rep := chschema.CorrStateDriftRepairSQL()
+	if !strings.HasPrefix(rep, chschema.CorrCurrentRestampedInsertPrefix) || !strings.Contains(rep, "now64(3),") {
+		t.Error("state repair must restamp created_at, or a newer stale row keeps winning the fold")
+	}
+	if strings.Contains(chschema.CorrDriftRepairSQL(7), "now64(3),") || strings.Contains(chschema.CorrCurrentBackfillSQL(), "now64(3),") {
+		t.Error("drift repair and backfill must keep history's own created_at")
+	}
+	if !strings.Contains(chschema.CorrStateDriftCountSQL(), "AS state_drifted") {
+		t.Error("state drift count must expose the state_drifted column the reconciler reads")
+	}
+}
+
+// fakeReconcileCH scripts count results and records execs.
+type fakeReconcileCH struct {
+	counts   map[string]int   // keyed by the count column
+	countErr map[string]error // keyed by the count column
+	execErr  error
+	execs    []string
+}
+
+func (f *fakeReconcileCH) count(_ context.Context, _ string, column string) (int, error) {
+	if err := f.countErr[column]; err != nil {
+		return 0, err
+	}
+	return f.counts[column], nil
+}
+
+func (f *fakeReconcileCH) exec(_ context.Context, sql string) error {
+	f.execs = append(f.execs, sql)
+	return f.execErr
+}
+
+func TestCorrReconcilePassRepairsEveryKindAndCounts(t *testing.T) {
+	ch := &fakeReconcileCH{counts: map[string]int{"orphaned": 2, "drifted": 3, "state_drifted": 5}}
+	var st corrReconcileStats
+	corrReconcilePass(context.Background(), ch, &st, 7, 24)
+	want := []string{chschema.CorrOrphanCloseSQL(24), chschema.CorrDriftRepairSQL(7), chschema.CorrStateDriftRepairSQL()}
+	if len(ch.execs) != len(want) {
+		t.Fatalf("execs = %d, want %d (orphan close, drift repair, state repair in that order)", len(ch.execs), len(want))
+	}
+	for i := range want {
+		if ch.execs[i] != want[i] {
+			t.Errorf("exec %d is not the expected statement", i)
+		}
+	}
+	if st.orphaned.Load() != 2 || st.drifted.Load() != 3 || st.stateDrifted.Load() != 5 {
+		t.Errorf("gauges = %d/%d/%d, want 2/3/5", st.orphaned.Load(), st.drifted.Load(), st.stateDrifted.Load())
+	}
+	if st.repairedTotal.Load() != 8 || st.orphanClosedTotal.Load() != 2 || st.failuresTotal.Load() != 0 {
+		t.Errorf("counters repaired=%d orphanClosed=%d failures=%d, want 8/2/0",
+			st.repairedTotal.Load(), st.orphanClosedTotal.Load(), st.failuresTotal.Load())
+	}
+	if st.lastRunUnix.Load() == 0 {
+		t.Error("a completed pass must stamp its time")
+	}
+}
+
+// A failing step must not stop the next one: the old loop `continue`d on a
+// drift-count error, so one broken step silenced every repair after it.
+func TestCorrReconcilePassStepsAreIndependent(t *testing.T) {
+	ch := &fakeReconcileCH{
+		counts:   map[string]int{"state_drifted": 4},
+		countErr: map[string]error{"orphaned": errors.New("boom"), "drifted": errors.New("boom")},
+	}
+	var st corrReconcileStats
+	corrReconcilePass(context.Background(), ch, &st, 7, 24)
+	if len(ch.execs) != 1 || ch.execs[0] != chschema.CorrStateDriftRepairSQL() {
+		t.Fatalf("state repair must still run after earlier steps fail; execs=%d", len(ch.execs))
+	}
+	if st.failuresTotal.Load() != 2 || st.repairedTotal.Load() != 4 {
+		t.Errorf("failures=%d repaired=%d, want 2/4", st.failuresTotal.Load(), st.repairedTotal.Load())
+	}
+}
+
+func TestCorrReconcilePassFailedRepairIsCountedNotClaimed(t *testing.T) {
+	ch := &fakeReconcileCH{counts: map[string]int{"drifted": 3, "state_drifted": 1}, execErr: errors.New("ch down")}
+	var st corrReconcileStats
+	corrReconcilePass(context.Background(), ch, &st, 7, 0) // orphan sweep disabled
+	if len(ch.execs) != 2 {
+		t.Fatalf("execs = %d, want 2 (orphan sweep disabled)", len(ch.execs))
+	}
+	if st.repairedTotal.Load() != 0 || st.failuresTotal.Load() != 2 {
+		t.Errorf("a failed repair must not count as repaired: repaired=%d failures=%d", st.repairedTotal.Load(), st.failuresTotal.Load())
+	}
+	if st.drifted.Load() != 3 || st.stateDrifted.Load() != 1 {
+		t.Error("the gauges still report what was found when the repair fails")
+	}
+}
+
+func TestCorrReconcileMetricsRender(t *testing.T) {
+	var st corrReconcileStats
+	st.stateDrifted.Store(7)
+	st.failuresTotal.Store(1)
+	var b strings.Builder
+	st.WriteMetrics(&b)
+	out := b.String()
+	for _, want := range []string{
+		`netops_corr_current_drift_rows{kind="state_drifted"} 7`,
+		`netops_corr_current_drift_rows{kind="drifted"} 0`,
+		`netops_corr_current_drift_rows{kind="orphaned"} 0`,
+		"netops_corr_current_reconcile_failures_total 1",
+		"netops_corr_current_repaired_rows_total 0",
+		"# TYPE netops_corr_current_reconcile_failures_total counter",
+		"netops_corr_current_reconcile_last_run_timestamp_seconds 0",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("metrics missing %q", want)
+		}
 	}
 }

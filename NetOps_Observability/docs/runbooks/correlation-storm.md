@@ -97,3 +97,36 @@ material changes (pre-P3: one per 15 min heartbeat — 24× more).
   `correlation-retention-cold-archive.md`).
 - The storm is multi-tenant/platform-wide → suspect an ingest-tier defect
   (Vector/Kafka duplication), not a broken source.
+
+## 7. Projection drift — Command Center says open, history says closed
+
+`corr_current` (what Command Center, the health strip, Iris and the ticketing
+sweeper read) is a projection of `corr_objects` history. The api's
+`corr-current-reconcile` worker repairs it every `CORR_CURRENT_RECONCILE_INTERVAL`
+(default 1 h) in three independent steps, each logged and counted:
+
+| Kind (`netops_corr_current_drift_rows{kind}`) | Meaning | Repair |
+|---|---|---|
+| `orphaned` | open, no persist for `CORR_ORPHAN_OPEN_CLOSE_HOURS` (engine lost it at restart) | closing version written to history (`reconciler/orphan-close`) |
+| `drifted` | projection older than the newest history row, inside the 7-day lookback (lost projection write) | re-projected from history |
+| `state_drifted` | projection `open`, newest history row terminal, **any age** (tracker 328) | re-projected from history, restamped `now()` |
+
+Alerts: `CorrCurrentProjectionFailing` (the engine is losing projection writes),
+`CorrCurrentStateDriftPersisting` (the repair is not clearing state drift),
+`CorrCurrentReconcileFailing` (the reconciler's own steps error).
+
+Verify by hand (read-only, `SET tenant_scope='__all__'` first):
+
+```sql
+SELECT count() FROM (
+  SELECT tenant_id, correlation_id, state FROM netops.corr_objects
+   WHERE (tenant_id, correlation_id) IN
+         (SELECT tenant_id, correlation_id FROM netops.corr_current FINAL WHERE state = 'open')
+   ORDER BY tenant_id, correlation_id, created_at DESC
+   LIMIT 1 BY tenant_id, correlation_id)
+WHERE state != 'open';
+```
+
+Non-zero after a pass, with `state_repaired=` in the api log, means the repair
+ran but the fold did not take — check ClickHouse merges on `corr_current`. No
+`corr-current-reconcile` lines at all means the worker is not running.
