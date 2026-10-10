@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# promtool unit tests for the corr_current reconciler alerts (tracker 328).
+# Each rule must FIRE on a synthetic condition AND stay SILENT on the all-clear:
+#   * drift found once and repaired (gauge back to 0 next pass) is the system
+#     working, never an alert;
+#   * a single failed step is noise; repeated failures are not.
+rule_files:
+  - /etc/prometheus/rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) State drift the repair never clears: found on every pass for 3 h+.
+  - interval: 1m
+    input_series:
+      - series: 'netops_corr_current_drift_rows{kind="state_drifted"}'
+        values: "12x240"
+    alert_rule_test:
+      - eval_time: 200m
+        alertname: CorrCurrentStateDriftPersisting
+        exp_alerts:
+          - exp_labels: { severity: warning, layer: correlation, kind: state_drifted }
+            exp_annotations:
+              summary: "corr_current has called 12 closed object(s) open for 3 h despite repair — Command Center overcounts open incidents; check corr-current-reconcile in the api log"
+
+  # 2) Drift found and repaired: one pass at 40, then 0 — silent.
+  - interval: 1m
+    input_series:
+      - series: 'netops_corr_current_drift_rows{kind="state_drifted"}'
+        values: "0x60 40x60 0x120"
+    alert_rule_test:
+      - eval_time: 230m
+        alertname: CorrCurrentStateDriftPersisting
+        exp_alerts: []
+
+  # 3) Reconciler steps failing repeatedly.
+  - interval: 1m
+    input_series:
+      - series: 'netops_corr_current_reconcile_failures_total'
+        values: "0x60 1x60 2x60 3x60"
+    alert_rule_test:
+      - eval_time: 200m
+        alertname: CorrCurrentReconcileFailing
+        exp_alerts:
+          - exp_labels: { severity: warning, layer: correlation }
+            exp_annotations:
+              summary: "corr_current reconciler: 3 failed step(s) in 3 h — drift is not being repaired; check corr-current-reconcile in the api log and ClickHouse health"
+
+  # 4) One failed step in 3 h — silent.
+  - interval: 1m
+    input_series:
+      - series: 'netops_corr_current_reconcile_failures_total'
+        values: "0x60 1x200"
+    alert_rule_test:
+      - eval_time: 200m
+        alertname: CorrCurrentReconcileFailing
+        exp_alerts: []

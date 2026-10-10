@@ -51,7 +51,22 @@ func StrictRowPolicyDDL(table string) string {
 		" USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' TO ALL"
 }
 
-const CorrCurrentNarrowInsertPrefix = `INSERT INTO netops.corr_current
+// The narrow corr_current INSERT is assembled from a head, the created_at
+// expression and a tail so the two repair flavours share every other column:
+//
+//   - CorrCurrentNarrowInsertPrefix copies history's own created_at (the drift
+//     repair and the boot backfill: the projection row is older than history,
+//     so history's timestamp already wins the ReplacingMergeTree(created_at)
+//     fold).
+//   - CorrCurrentRestampedInsertPrefix stamps now64(3) (the state repair: the
+//     stale projection row can be NEWER than history — a heartbeat touch writes
+//     corr_current only, with a fresh created_at — so re-inserting history's
+//     older timestamp would lose the fold and repair nothing; tracker 328).
+//
+// Both key the picked rows by (tenant, id, version, created_at): engine
+// restarts reset version counters, so (tenant, id, version) alone can match
+// two history rows and re-project the stale one.
+const corrCurrentInsertHead = `INSERT INTO netops.corr_current
     (tenant_id, correlation_id, version, state, window_start, window_end,
      top_hypothesis, top_confidence, verdict_tier, evidence_missing, affected,
      signal_count, node_count, engine_version, catalog_version, merged_into,
@@ -59,7 +74,9 @@ const CorrCurrentNarrowInsertPrefix = `INSERT INTO netops.corr_current
 SELECT o.tenant_id, o.correlation_id, o.version, o.state, o.window_start, o.window_end,
        o.top_hypothesis, o.top_confidence, o.verdict_tier, o.evidence_missing, o.affected,
        o.signal_count, o.node_count, o.engine_version, o.catalog_version, o.merged_into,
-       o.created_at,
+       `
+
+const corrCurrentInsertTail = `
        JSONExtractString(o.hypotheses,'ranking','hypotheses',1,'verdict','owner'),
        toUInt8(length(JSONExtract(o.hypotheses,'ranking','hypotheses',1,'verdict','modality_coverage','Array(String)'))),
        toUInt8(length(JSONExtract(o.hypotheses,'ranking','hypotheses',1,'verdict','excluded_debug_probes','Array(String)')) > 0),
@@ -70,14 +87,22 @@ SELECT o.tenant_id, o.correlation_id, o.version, o.state, o.window_start, o.wind
        -- instead of the '' an un-backfilled row would keep.
        JSONExtractString(o.hypotheses,'grounding_context','seams',1,'seam_type')
   FROM netops.corr_objects AS o
- WHERE (o.tenant_id, o.correlation_id, o.version) IN (`
+ WHERE (o.tenant_id, o.correlation_id, o.version, o.created_at) IN (`
+
+// CorrCurrentNarrowInsertPrefix re-projects picked history rows with their own
+// created_at. The pick must yield (tenant_id, correlation_id, version, created_at).
+const CorrCurrentNarrowInsertPrefix = corrCurrentInsertHead + `o.created_at,` + corrCurrentInsertTail
+
+// CorrCurrentRestampedInsertPrefix re-projects picked history rows stamped
+// now64(3), so the repaired row wins the fold over a newer stale row.
+const CorrCurrentRestampedInsertPrefix = corrCurrentInsertHead + `now64(3),` + corrCurrentInsertTail
 
 func CorrCurrentBackfillSQL() string {
 	return CorrCurrentNarrowInsertPrefix + `
-       SELECT tenant_id, correlation_id, version
+       SELECT tenant_id, correlation_id, version, created_at
          FROM netops.corr_objects
         WHERE (tenant_id, correlation_id) NOT IN
               (SELECT tenant_id, correlation_id FROM netops.corr_current)
-        ORDER BY tenant_id, correlation_id, version DESC
+        ORDER BY tenant_id, correlation_id, created_at DESC
         LIMIT 1 BY tenant_id, correlation_id)`
 }
