@@ -26,20 +26,26 @@ import (
 // owning tenant ("" = global/platform-owned); it is stamped from the device, never
 // from a request body.
 type NodeRecord struct {
-	TenantID  string    `json:"tenant_id"`
-	ID        string    `json:"id"`
-	Label     string    `json:"label"`
-	Kind      string    `json:"kind"`
-	Role      string    `json:"role,omitempty"`
-	Vendor    string    `json:"vendor,omitempty"`
-	Model     string    `json:"model,omitempty"`
-	Site      string    `json:"site,omitempty"`
-	Rack      string    `json:"rack,omitempty"`
-	MgmtIP    string    `json:"mgmt_ip,omitempty"`
-	Owner     string    `json:"owner,omitempty"`
-	FirstSeen time.Time `json:"first_seen"`
-	LastSeen  time.Time `json:"last_seen"`
-	Stale     bool      `json:"stale"`
+	TenantID string `json:"tenant_id"`
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Kind     string `json:"kind"`
+	Role     string `json:"role,omitempty"`
+	Vendor   string `json:"vendor,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Site     string `json:"site,omitempty"`
+	Rack     string `json:"rack,omitempty"`
+	MgmtIP   string `json:"mgmt_ip,omitempty"`
+	Owner    string `json:"owner,omitempty"`
+	// Classified device role (roles.go) with its word-tier confidence and, for
+	// a WAN edge, its flavor (sdwan | routed) — tracker 349. Omitted when the
+	// classifier could not establish a role.
+	DeviceRole     string    `json:"device_role,omitempty"`
+	RoleConfidence string    `json:"role_confidence,omitempty"`
+	WANFlavor      string    `json:"wan_flavor,omitempty"`
+	FirstSeen      time.Time `json:"first_seen"`
+	LastSeen       time.Time `json:"last_seen"`
+	Stale          bool      `json:"stale"`
 }
 
 // EdgeRecord is one persisted topology edge. The id is deterministic (see EdgeID)

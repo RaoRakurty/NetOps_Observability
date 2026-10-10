@@ -330,7 +330,7 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 		Now:      time.Now(),
 		SrcID:    strings.TrimSpace(r.URL.Query().Get("src")),
 		DstID:    strings.TrimSpace(r.URL.Query().Get("dst")),
-		Devices:  toDeviceFacts(devs, lm.cpu, lm.mem, links),
+		Devices:  toDeviceFacts(devs, lm.cpu, lm.mem, links, s.gatherWANFacts(r.Context(), devs, s.metricsScopeFiltersFor(claims))),
 		Links:    linkFacts,
 		Alerts:   toAlertFacts(alerts),
 		// Item 121: devices inside an active window render the calm
@@ -414,12 +414,80 @@ func (s *server) projectGeoView(ctx context.Context, claims jwtClaims, tenant st
 	})
 }
 
+// wanFacts carries the WAN-edge flavor inputs toDeviceFacts injects
+// (tracker 349): interface names (SD-WAN interface markers) and the count of
+// BGP peers outside the device's own tenant inventory.
+type wanFacts struct {
+	ifNames     map[string][]string
+	externalBGP map[string]int
+}
+
+// gatherWANFacts reads the WAN-edge flavor inputs for devs. filters scopes the
+// BGP peer read: a request passes metricsScopeFiltersFor(claims); the
+// background reconciler, which has no principal, passes nil EXPLICITLY at its
+// call site. Every read here is best-effort and only ever ADDS evidence; an
+// unread source is logged (§10) and leaves those facts zero, which the
+// classifier treats as absence of evidence.
+func (s *server) gatherWANFacts(ctx context.Context, devs []models.Device, filters []string) *wanFacts {
+	out := &wanFacts{ifNames: map[string][]string{}, externalBGP: map[string]int{}}
+	if len(devs) == 0 {
+		return out
+	}
+	in := make(map[string]bool, len(devs))
+	for _, d := range devs {
+		in[d.ID] = true
+	}
+	ifIdx, err := collectors.FetchIfIndexMap(ctx)
+	if err != nil {
+		logWarn("topology", "interface names unread — SD-WAN interface markers unavailable to the role classifier",
+			map[string]any{"devices": len(devs), "error": err.Error()})
+	}
+	for dev, byIndex := range ifIdx {
+		if in[dev] {
+			out.ifNames[dev] = topology.SortedIfNames(byIndex)
+		}
+	}
+	ifAddr, err := collectors.FetchIfAddrMap(ctx)
+	if err != nil {
+		logWarn("topology", "interface addresses unread — a BGP peer on an inventory interface may count as external this cycle",
+			map[string]any{"devices": len(devs), "error": err.Error()})
+	}
+	bgp := topology.BGPPeerInputs{
+		DevTenant: make(map[string]string, len(devs)),
+		DevAddrs:  make(map[string][]string, len(devs)),
+		Peers:     map[string][]string{},
+	}
+	for _, d := range devs {
+		bgp.DevTenant[d.ID] = normTenant(d.TenantID)
+		addrs := []string{d.Address}
+		for ip := range ifAddr[d.ID] {
+			addrs = append(addrs, ip)
+		}
+		bgp.DevAddrs[d.ID] = addrs
+	}
+	qctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	peers := s.qVecBy2Scoped(qctx, `max by (device, peer) (last_over_time(device_bgp_peer_state[15m]))`, "device", "peer", filters)
+	if peers == nil {
+		logWarn("topology", "BGP peer state unread — routed WAN edges cannot be told from other routers this cycle",
+			map[string]any{"devices": len(devs)})
+	}
+	for k := range peers {
+		if in[k[0]] {
+			bgp.Peers[k[0]] = append(bgp.Peers[k[0]], k[1])
+		}
+	}
+	out.externalBGP = topology.ExternalBGPPeerCounts(bgp)
+	return out
+}
+
 // toDeviceFacts translates inventory + metric vectors into projection input. The
 // metric vectors are keyed by device id (the "device" label = inventory id).
 // links (may be nil) adds the LLDP/CDP/BGP-LS adjacency shape the role
 // classifier consumes (device_roles.go); absent links simply leave those facts
 // zero — the classifier treats that as absence of evidence, never a signal.
-func toDeviceFacts(devs []models.Device, cpu, mem map[string]float64, links []topoLink) []topology.DeviceFact {
+// wan (may be nil) adds the WAN-edge flavor facts (tracker 349).
+func toDeviceFacts(devs []models.Device, cpu, mem map[string]float64, links []topoLink, wan *wanFacts) []topology.DeviceFact {
 	typeByID := make(map[string]string, len(devs))
 	for _, d := range devs {
 		typeByID[d.ID] = inferDeviceType(d)
@@ -449,6 +517,11 @@ func toDeviceFacts(devs []models.Device, cpu, mem map[string]float64, links []to
 			f.Rack = d.Labels["rack"]
 			f.Owner = firstNonEmpty(d.Labels["owner"], d.Labels["team"])
 			f.Role = d.Labels["role"]
+			f.SiteKind = firstNonEmpty(d.Labels["site_kind"], d.Labels["site_type"])
+		}
+		if wan != nil {
+			f.IfNames = wan.ifNames[d.ID]
+			f.ExternalBGPPeers = wan.externalBGP[d.ID]
 		}
 		if v, ok := cpu[d.ID]; ok {
 			f.CPUPct, f.HasCPU = v, true
@@ -457,6 +530,14 @@ func toDeviceFacts(devs []models.Device, cpu, mem map[string]float64, links []to
 			f.MemPct, f.HasMem = v, true
 		}
 		out = append(out, f)
+	}
+	// Fabric adjacency needs every device's facts first (a neighbor is a
+	// leaf/spine by its own facts, never by its neighbors).
+	if len(links) > 0 {
+		fc := topology.FabricNeighborCounts(out, links)
+		for i := range out {
+			out[i].FabricNeighborCount = fc[out[i].ID]
+		}
 	}
 	return out
 }

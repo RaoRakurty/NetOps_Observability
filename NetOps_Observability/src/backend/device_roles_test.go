@@ -50,7 +50,7 @@ func TestToDeviceFactsCarriesRoleFacts(t *testing.T) {
 		{ID: "r1", Name: "core-r1", Vendor: "Cisco", Model: "ASR1001", LastSeen: time.Now()},
 	}
 	links := []topoLink{{Source: "sw1", Target: "r1", Resolved: true, SourceProto: "bgp_ls", IGP: "ospfv2"}}
-	facts := toDeviceFacts(devs, nil, nil, links)
+	facts := toDeviceFacts(devs, nil, nil, links, nil)
 	if len(facts) != 2 {
 		t.Fatalf("want 2 facts, got %d", len(facts))
 	}
@@ -102,5 +102,43 @@ func TestSpineRolesNeverStampFromOutsideTheVisibleIndex(t *testing.T) {
 	stampSpineRoles(spine, idx)
 	if spine[0].DeviceRole != "" {
 		t.Fatalf("cross-tenant hop must not be stamped: %+v", spine[0])
+	}
+}
+
+// Tracker 349: the WAN-edge flavor facts reach the classifier through the one
+// fact builder every caller uses (view, role index, reconcile).
+func TestToDeviceFactsCarriesWANFlavorFacts(t *testing.T) {
+	devs := []models.Device{
+		{ID: "cedge-1", Name: "cEDGE-1", Vendor: "cisco"},
+		{ID: "ce-2", Name: "branch-ce-2", Labels: map[string]string{"site_kind": "branch"}},
+		{ID: "dc-border", Name: "dc1-border"},
+		{ID: "leaf-1", Name: "dc1-leaf01"},
+	}
+	links := []topoLink{{Source: "dc-border", Target: "leaf-1", Resolved: true}}
+	wan := &wanFacts{
+		ifNames:     map[string][]string{"cedge-1": {"Gi1", "Sdwan-intf"}},
+		externalBGP: map[string]int{"ce-2": 1, "dc-border": 2},
+	}
+	byID := map[string]topology.DeviceFact{}
+	for _, f := range toDeviceFacts(devs, nil, nil, links, wan) {
+		byID[f.ID] = f
+	}
+	if f := byID["cedge-1"]; len(f.IfNames) != 2 {
+		t.Fatalf("interface names not carried: %+v", f)
+	}
+	if f := byID["ce-2"]; f.ExternalBGPPeers != 1 || f.SiteKind != "branch" {
+		t.Fatalf("external BGP / site kind not carried: %+v", f)
+	}
+	if f := byID["dc-border"]; f.FabricNeighborCount != 1 {
+		t.Fatalf("fabric neighbors not counted: %+v", f)
+	}
+	if r := topology.ClassifyDeviceRole(byID["cedge-1"]); r.WANFlavor != topology.WANFlavorSDWAN {
+		t.Fatalf("cEdge: %+v", r)
+	}
+	// A nil wan argument (callers without the inputs) leaves the facts zero.
+	for _, f := range toDeviceFacts(devs, nil, nil, nil, nil) {
+		if len(f.IfNames) != 0 || f.ExternalBGPPeers != 0 || f.FabricNeighborCount != 0 {
+			t.Fatalf("nil inputs must leave the facts zero: %+v", f)
+		}
 	}
 }

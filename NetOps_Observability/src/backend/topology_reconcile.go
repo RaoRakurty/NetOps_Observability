@@ -114,21 +114,6 @@ func (s *server) observeTopology(ctx context.Context) (topology.GraphRecords, er
 	}
 
 	var g topology.GraphRecords
-	for _, f := range toDeviceFacts(devs, nil, nil, nil) { // cpu/mem/links nil — structural only
-		g.Nodes = append(g.Nodes, topology.NodeRecord{
-			TenantID: tenantByDev[f.ID],
-			ID:       f.ID,
-			Label:    f.Name,
-			Kind:     topology.KindOf(f),
-			Role:     f.Role,
-			Vendor:   f.Vendor,
-			Model:    f.Model,
-			Site:     f.Site,
-			Rack:     f.Rack,
-			MgmtIP:   f.MgmtIP,
-			Owner:    f.Owner,
-		})
-	}
 	neighbors, linksErr := s.fetchTopoLinks(ctx)
 	// The interface registry only NAMES ports, so an unread registry does not stop
 	// this cycle — but on the one caller that WRITES it is not free either, and
@@ -143,7 +128,32 @@ func (s *server) observeTopology(ctx context.Context) (topology.GraphRecords, er
 	ifaddr, ifaddrErr := collectors.FetchIfAddrMap(ctx)
 	reportIfRegistryUnread("topology", "BGP-LS edge ports stay raw interface IPs this cycle, so those edges reconcile under a different id and the previous one ages toward Stale", ifaddrErr,
 		map[string]any{"devices": len(devs)})
-	for _, l := range observeTopoLinks(devs, neighbors, ifaddr) {
+	links := observeTopoLinks(devs, neighbors, ifaddr)
+	// The reconciler has no principal: the WAN-fact BGP read is platform-wide BY
+	// DESIGN (nil filters, explicit here), and ExternalBGPPeerCounts still scopes
+	// "external" to each device's own tenant (§3a). cpu/mem stay nil — structural only.
+	for _, f := range toDeviceFacts(devs, nil, nil, links, s.gatherWANFacts(ctx, devs, nil)) {
+		rr := topology.ClassifyDeviceRole(f)
+		n := topology.NodeRecord{
+			TenantID:  tenantByDev[f.ID],
+			ID:        f.ID,
+			Label:     f.Name,
+			Kind:      topology.KindOf(f),
+			Role:      f.Role,
+			Vendor:    f.Vendor,
+			Model:     f.Model,
+			Site:      f.Site,
+			Rack:      f.Rack,
+			MgmtIP:    f.MgmtIP,
+			Owner:     f.Owner,
+			WANFlavor: rr.WANFlavor,
+		}
+		if rr.Role != topology.DevRoleUnknown {
+			n.DeviceRole, n.RoleConfidence = rr.Role, rr.Confidence
+		}
+		g.Nodes = append(g.Nodes, n)
+	}
+	for _, l := range links {
 		g.Edges = append(g.Edges, topology.EdgeRecord{
 			TenantID:      tenantByDev[l.Source], // edge belongs to its source device's tenant
 			ID:            topoEdgeID(l),

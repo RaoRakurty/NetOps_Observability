@@ -98,7 +98,7 @@ func (s *server) deviceRoleIndex(ctx context.Context, claims jwtClaims) map[stri
 			map[string]any{"devices": len(devs), "error": err.Error()})
 	}
 	idx := make(map[string]topology.RoleResult)
-	for _, f := range toDeviceFacts(devs, nil, nil, links) {
+	for _, f := range toDeviceFacts(devs, nil, nil, links, s.gatherWANFacts(ctx, devs, s.metricsScopeFiltersFor(claims))) {
 		rr := topology.ClassifyDeviceRole(f)
 		if rr.Role == topology.DevRoleUnknown {
 			continue
