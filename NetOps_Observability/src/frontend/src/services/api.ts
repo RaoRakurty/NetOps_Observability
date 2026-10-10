@@ -2137,6 +2137,9 @@ export type AITenantRow = {
 
 export const TOKEN_KEY = "netops_token";
 export const REFRESH_KEY = "netops_refresh";
+// When the server last recorded activity for this session (see the activity
+// keep-alive below). Declared here, before setRefresh, which writes it.
+let lastRefreshAt = Date.now();
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -2157,7 +2160,12 @@ export function getRefresh(): string | null {
 }
 export function setRefresh(t: string | null): void {
   if (t === null) localStorage.removeItem(REFRESH_KEY);
-  else localStorage.setItem(REFRESH_KEY, t);
+  else {
+    localStorage.setItem(REFRESH_KEY, t);
+    // A fresh refresh token = the server just recorded activity (login or
+    // /refresh both Touch the session). The activity keep-alive counts from here.
+    lastRefreshAt = Date.now();
+  }
 }
 
 // sweepScopedUIState clears per-user/per-scope client state that must never
@@ -2392,7 +2400,13 @@ export function takeSessionEndMessage(): string | null {
 
 // Single-flight refresh: many requests can 401 at once; only one /refresh runs.
 let refreshInFlight: Promise<boolean> | null = null;
+// Why the last refresh failed: the server REFUSED it (the session or token is
+// gone — sign out) or it never got an answer (network — keep the session and
+// let the next activity try again). Only the activity keep-alive reads it; the
+// 401 path signs out either way because its own request already failed.
+let lastRefreshRejected = false;
 async function doRefresh(rt: string): Promise<boolean> {
+  lastRefreshRejected = false;
   try {
     const res = await fetch("/api/auth/refresh", {
       method: "POST",
@@ -2400,6 +2414,7 @@ async function doRefresh(rt: string): Promise<boolean> {
       body: JSON.stringify({ refresh_token: rt }),
     });
     if (!res.ok) {
+      lastRefreshRejected = res.status === 401 || res.status === 403;
       // Surface a session-end reason (idle/absolute/revoked) for the Login screen.
       try {
         const err = await res.json();
@@ -2426,6 +2441,50 @@ function tryRefresh(): Promise<boolean> {
     });
   }
   return refreshInFlight;
+}
+
+// ── Activity keep-alive (2026-10-10) ────────────────────────────────────────
+// The server records session ACTIVITY only at /api/auth/refresh (auth.go
+// handleRefresh → sessions.Touch), and this client used to refresh only when the
+// access token expired and a request came back 401. With the shipped defaults —
+// a 1 h access token (ACCESS_TOKEN_TTL) and a 30 min idle timeout — the first
+// refresh of every session landed ~1 h in, past the idle window, so an operator
+// who had been working the whole hour was signed out "for inactivity" (seen on
+// the lab: SESSION_IDLE_EXPIRED exactly an hour apart). Refresh on REAL input
+// instead, at most once per ACTIVITY_REFRESH_MS. Background polling never calls
+// this, so an unattended screen still idles out exactly as the policy intends.
+export const ACTIVITY_REFRESH_MS = 5 * 60 * 1000;
+// After a refresh that got no answer, try again on activity this soon.
+export const ACTIVITY_RETRY_MS = 30 * 1000;
+
+/** Record one user interaction. Returns the refresh it started, or null when
+ *  none was due (or there is no session). Exported for tests. */
+export function noteUserActivity(now: number = Date.now()): Promise<boolean> | null {
+  if (!getRefresh() || refreshInFlight) return null;
+  if (now - lastRefreshAt < ACTIVITY_REFRESH_MS) return null;
+  lastRefreshAt = now; // claim the slot: a burst of events makes ONE call
+  return tryRefresh().then((ok) => {
+    if (ok) return true;
+    if (lastRefreshRejected) {
+      // The session ended (idle / absolute / revoked) or the token was refused:
+      // same exit as the 401 path, and the Login screen shows why.
+      clearSession();
+      fireAuthChange(false);
+    } else {
+      lastRefreshAt = now - ACTIVITY_REFRESH_MS + ACTIVITY_RETRY_MS;
+    }
+    return false;
+  });
+}
+
+const ACTIVITY_EVENTS = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
+/** Listen for operator input while signed in. Returns the remover. */
+export function startActivityKeepAlive(): () => void {
+  const on = () => { void noteUserActivity(); };
+  for (const ev of ACTIVITY_EVENTS) window.addEventListener(ev, on, { capture: true, passive: true });
+  return () => {
+    for (const ev of ACTIVITY_EVENTS) window.removeEventListener(ev, on, { capture: true });
+  };
 }
 
 type AuthListener = (signedIn: boolean) => void;
