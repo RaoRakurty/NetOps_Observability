@@ -6,13 +6,16 @@ name: backend-ci
 # for those packages, and run repo-wide as non-blocking triage until the existing
 # backlog is burned down (then flip `full-lint` to blocking).
 #
-# Go is pinned to a patched toolchain (go1.26.8): govulncheck flagged a batch of
+# Go is pinned to a patched toolchain (go1.26.9): govulncheck flagged a batch of
 # stdlib CVEs (crypto/tls, crypto/x509, net/http, …) present in go1.24. The same
 # bump is applied to deployment/docker/Dockerfile.backend so prod ships patched.
 # Raised 1.25.13 -> 1.26.8 on 2026-09-02: x/crypto v0.56.0 (GO-2026-6354 /
 # GO-2026-6355, x/crypto/ssh DoS) declares `go 1.26.0`, so the module no longer
 # builds on 1.25. The scanner pins below moved with it — a scanner binary built
 # with an older Go refuses to load a go1.26 module.
+# 2026-10-10: 1.26.8 -> 1.26.9 for the stdlib batch govulncheck flags as CALLED
+# (GO-2026-6607/6608/6610/6611/6612/6613/6617: net/http, net/textproto,
+# crypto/tls). Patch release only; scanner pins unchanged.
 
 on:
   workflow_dispatch:   # manual re-run on a branch head (e.g. after a fix that did not touch this workflow's paths)
@@ -43,7 +46,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: '1.26.8'
+  GO_VERSION: '1.26.9'
   # All scanners pinned for reproducible, supply-chain-sound builds (SC-010): an
   # unpinned @latest would let a compromised/regressed release run in CI. Bump
   # deliberately (Dependabot watches these too).
