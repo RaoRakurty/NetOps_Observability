@@ -209,7 +209,7 @@ func TestReadSessionsFoldsPerPeerAndColor(t *testing.T) {
 	addSession(m, fam, [4]int{198, 51, 100, 9}, [4]int{198, 51, 100, 2}, [4]byte{10, 255, 0, 2}, 200, 4, 4, 3)
 	// Peer B: everything down.
 	addSession(m, fam, me, [4]int{198, 51, 100, 3}, [4]byte{10, 255, 0, 3}, 300, 4, 4, 1)
-	peers, rows, trunc, err := readSessions(context.Background(), m.walk, "x", v2c("c"), fam.name, lim)
+	peers, local, rows, trunc, err := readSessions(context.Background(), m.walk, "x", v2c("c"), fam.name, lim)
 	if err != nil || trunc || rows != 4 || len(peers) != 2 {
 		t.Fatalf("peers=%d rows=%d trunc=%v err=%v", len(peers), rows, trunc, err)
 	}
@@ -227,6 +227,49 @@ func TestReadSessionsFoldsPerPeerAndColor(t *testing.T) {
 	if !peerUp(a) || peerUp(b) {
 		t.Fatalf("peerUp: A=%v B=%v", peerUp(a), peerUp(b))
 	}
+	// The endpoints that resolve system-ip ownership downstream.
+	if strings.Join(a.TLOCAddrs, ",") != "192.0.2.2,198.51.100.2" || strings.Join(b.TLOCAddrs, ",") != "198.51.100.3" {
+		t.Fatalf("peer TLOC addrs: A=%v B=%v", a.TLOCAddrs, b.TLOCAddrs)
+	}
+	if strings.Join(local, ",") != "192.0.2.1,198.51.100.1,198.51.100.9" {
+		t.Fatalf("local TLOC addrs: %v", local)
+	}
+}
+
+// Identity columns differ between releases (lab, 2026-10-10: a vEdge answered
+// its site-id column with the vBond hostname, and no system-ip). A value of the
+// wrong type is dropped, never published as identity.
+func TestIdentityColumnsOfTheWrongTypeAreDropped(t *testing.T) {
+	m := newFakeMIB()
+	fam := sdwanMIBs[0]
+	seedEdge(m, fam, [4]byte{10, 255, 0, 1}, "vedge")
+	m.set(col(fam.local, localSiteID), "0", strVal("vbond.or2.sys.cisco"))
+	m.set(col(fam.local, localSystemIP), "0", strVal("not-an-address"))
+	f, _ := probeOverlay(context.Background(), m.walk, "x", v2c("c"), lim)
+	if f.SiteID != "" || f.SystemIP != "" {
+		t.Fatalf("wrong-typed identity published: site=%q system-ip=%q", f.SiteID, f.SystemIP)
+	}
+	// TLOCs still make the device worth walking.
+	if f.MIB != fam.name || len(f.TLOCs) != 2 {
+		t.Fatalf("%+v", f)
+	}
+}
+
+// Sessions + transports make an edge available even when no identity column
+// answered: the system-ip is resolved from the peers downstream.
+func TestEdgeWithSessionsButNoSystemIPIsAvailable(t *testing.T) {
+	m := newFakeMIB()
+	fam := sdwanMIBs[0]
+	seedEdge(m, fam, [4]byte{10, 255, 0, 1}, "vedge")
+	m.set(col(fam.local, localSystemIP), "0", strVal("")) // answers, empty
+	addSession(m, fam, [4]int{198, 51, 100, 1}, [4]int{198, 51, 100, 2}, [4]byte{10, 255, 0, 2}, 200, 4, 4, 3)
+	pub := &publishLog{}
+	c := newTestCollector(m, pub)
+	r := c.pollDevice(context.Background(), Target{ID: "v", Address: "192.0.2.20"})
+	if r.facts == nil || r.facts.Capability != OverlayAvailable || r.facts.SystemIP != "" ||
+		strings.Join(r.facts.LocalTLOCAddrs, ",") != "198.51.100.1" {
+		t.Fatalf("%+v", r.facts)
+	}
 }
 
 // A walk that hits the row cap says so — the peers past it are unknown.
@@ -236,7 +279,7 @@ func TestReadSessionsReportsTruncation(t *testing.T) {
 	for i := 2; i < 12; i++ {
 		addSession(m, fam, [4]int{10, 1, 0, 1}, [4]int{10, 1, 0, i}, [4]byte{10, 255, 1, byte(i)}, int64(i), 4, 4, 3)
 	}
-	peers, _, trunc, err := readSessions(context.Background(), m.walk, "x", v2c("c"), fam.name, overlayLimits{maxSessionRows: 5, maxTLOCRows: 8})
+	peers, _, _, trunc, err := readSessions(context.Background(), m.walk, "x", v2c("c"), fam.name, overlayLimits{maxSessionRows: 5, maxTLOCRows: 8})
 	if err != nil || !trunc || len(peers) != 5 {
 		t.Fatalf("peers=%d trunc=%v err=%v", len(peers), trunc, err)
 	}
@@ -480,7 +523,7 @@ func TestOverlayOverTheWire(t *testing.T) {
 	if err != nil || f.MIB != "cisco-sdwan" || f.SystemIP != "10.255.0.81" || f.Capability != OverlayAvailable {
 		t.Fatalf("probe over the wire: %+v err=%v", f, err)
 	}
-	peers, rows, trunc, err := readSessions(ctx, snmpWalkColumnBounded, addr, v2c("public"), f.MIB, lim)
+	peers, _, rows, trunc, err := readSessions(ctx, snmpWalkColumnBounded, addr, v2c("public"), f.MIB, lim)
 	if err != nil || trunc || rows != 2 || len(peers) != 2 || !peerUp(peers[0]) || peerUp(peers[1]) {
 		t.Fatalf("sessions over the wire: peers=%+v rows=%d trunc=%v err=%v", peers, rows, trunc, err)
 	}

@@ -70,6 +70,13 @@ type OverlayDeviceFacts struct {
 	SiteID      string        `json:"site_id,omitempty"`
 	TLOCs       []OverlayTLOC `json:"tlocs,omitempty"`
 	Peers       []OverlayPeer `json:"peers,omitempty"`
+	// LocalTLOCAddrs are this device's own transport addresses, from the
+	// source side of its BFD sessions. With the peers' remote addresses they
+	// resolve which device owns which system-ip without trusting any identity
+	// column (the local-properties columns differ between releases — measured
+	// on the lab 2026-10-10: a vEdge answered its site-id column with the
+	// vBond hostname and left system-ip empty).
+	LocalTLOCAddrs []string `json:"local_tloc_addrs,omitempty"`
 	// SessionsRead is how many BFD session rows the last detail walk folded.
 	SessionsRead int `json:"sessions_read"`
 	// Truncated: a walk hit its row cap — peers beyond it are UNKNOWN, not down.
@@ -95,6 +102,9 @@ type OverlayPeer struct {
 	SystemIP   string              `json:"system_ip"`
 	SiteID     string              `json:"site_id,omitempty"`
 	ColorPairs []OverlayColorPairs `json:"color_pairs"`
+	// TLOCAddrs are the peer's transport addresses as this device reaches them
+	// (the destination side of the sessions).
+	TLOCAddrs []string `json:"tloc_addrs,omitempty"`
 }
 
 // OverlayColorPairs folds the sessions of one (local color, remote color, proto).
@@ -200,13 +210,33 @@ func addrValue(v berVal) string {
 	return s
 }
 
-// textValue decodes a string- or integer-valued column (site-id is an integer on
-// some releases and a string on others).
+// textValue decodes a string- or integer-valued column.
 func textValue(v berVal) string {
-	if v.tag == 0x02 || v.tag == 0x41 || v.tag == 0x42 {
+	if isIntegerTag(v.tag) {
 		return strconv.FormatInt(v.int(), 10)
 	}
 	return strings.TrimSpace(v.str())
+}
+
+func isIntegerTag(t byte) bool { return t == 0x02 || t == 0x41 || t == 0x42 || t == 0x47 }
+
+// siteIDValue accepts only an integer site-id (Unsigned32 in every MIB
+// revision). A non-integer answer means the column means something else on
+// this release — it is dropped, never published as a site.
+func siteIDValue(v berVal) string {
+	if !isIntegerTag(v.tag) {
+		return ""
+	}
+	return strconv.FormatInt(v.int(), 10)
+}
+
+// systemIPValue accepts only a value that IS an IP address.
+func systemIPValue(v berVal) string {
+	a := addrValue(v)
+	if _, err := netip.ParseAddr(a); err != nil {
+		return ""
+	}
+	return a
 }
 
 // ── index parsing ────────────────────────────────────────────────────────────
@@ -338,12 +368,12 @@ func probeOverlay(ctx context.Context, walk walkFn, addr string, creds snmpCreds
 		}
 		f := OverlayDeviceFacts{MIB: m.name, WalkedAt: time.Now().UTC(), Truncated: tlTrunc}
 		for _, v := range sys {
-			f.SystemIP = addrValue(v)
+			f.SystemIP = systemIPValue(v)
 			break
 		}
 		if site, _, err := walk(ctx, addr, creds, col(m.local, localSiteID), 4); err == nil {
 			for _, v := range site {
-				f.SiteID = textValue(v)
+				f.SiteID = siteIDValue(v)
 				break
 			}
 		}
@@ -382,7 +412,7 @@ func probeOverlay(ctx context.Context, walk walkFn, addr string, creds snmpCreds
 
 // readSessions walks the BFD session table of the device's MIB family and folds
 // the rows per remote system-ip and (local color, remote color, proto).
-func readSessions(ctx context.Context, walk walkFn, addr string, creds snmpCreds, mib string, lim overlayLimits) (peers []OverlayPeer, rows int, truncated bool, err error) {
+func readSessions(ctx context.Context, walk walkFn, addr string, creds snmpCreds, mib string, lim overlayLimits) (peers []OverlayPeer, local []string, rows int, truncated bool, err error) {
 	var m *sdwanMIB
 	for i := range sdwanMIBs {
 		if sdwanMIBs[i].name == mib {
@@ -390,13 +420,13 @@ func readSessions(ctx context.Context, walk walkFn, addr string, creds snmpCreds
 		}
 	}
 	if m == nil {
-		return nil, 0, false, fmt.Errorf("sdwan overlay: unknown MIB family %q", mib)
+		return nil, nil, 0, false, fmt.Errorf("sdwan overlay: unknown MIB family %q", mib)
 	}
 	cols := map[int]map[string]berVal{}
 	for _, c := range []int{bfdSystemIP, bfdSiteID, bfdLocalColor, bfdColor, bfdState} {
 		vals, trunc, werr := walk(ctx, addr, creds, col(m.bfdEntry, c), lim.maxSessionRows)
 		if werr != nil {
-			return nil, 0, false, werr
+			return nil, nil, 0, false, werr
 		}
 		truncated = truncated || trunc
 		cols[c] = vals
@@ -404,6 +434,8 @@ func readSessions(ctx context.Context, walk walkFn, addr string, creds snmpCreds
 	type key struct{ local, remote, proto string }
 	byPeer := map[string]*OverlayPeer{}
 	pairs := map[string]map[key]*OverlayColorPairs{}
+	peerAddrs := map[string]map[string]bool{}
+	localAddrs := map[string]bool{}
 	for idx, sysv := range cols[bfdSystemIP] {
 		bi, ok := parseBFDIndex(idx)
 		if !ok {
@@ -416,10 +448,13 @@ func readSessions(ctx context.Context, walk walkFn, addr string, creds snmpCreds
 		}
 		p := byPeer[sys]
 		if p == nil {
-			p = &OverlayPeer{SystemIP: sys, SiteID: textValue(cols[bfdSiteID][idx])}
+			p = &OverlayPeer{SystemIP: sys, SiteID: siteIDValue(cols[bfdSiteID][idx])}
 			byPeer[sys] = p
 			pairs[sys] = map[key]*OverlayColorPairs{}
+			peerAddrs[sys] = map[string]bool{}
 		}
+		peerAddrs[sys][bi.dst] = true
+		localAddrs[bi.src] = true
 		k := key{colorName(cols[bfdLocalColor][idx]), colorName(cols[bfdColor][idx]), bi.proto}
 		cp := pairs[sys][k]
 		if cp == nil {
@@ -439,6 +474,7 @@ func readSessions(ctx context.Context, walk walkFn, addr string, creds snmpCreds
 		for _, cp := range pairs[sys] {
 			p.ColorPairs = append(p.ColorPairs, *cp)
 		}
+		p.TLOCAddrs = sortedKeys(peerAddrs[sys])
 		sort.Slice(p.ColorPairs, func(i, j int) bool {
 			a, b := p.ColorPairs[i], p.ColorPairs[j]
 			if a.LocalColor != b.LocalColor {
@@ -452,7 +488,16 @@ func readSessions(ctx context.Context, walk walkFn, addr string, creds snmpCreds
 		peers = append(peers, *p)
 	}
 	sort.Slice(peers, func(i, j int) bool { return peers[i].SystemIP < peers[j].SystemIP })
-	return peers, rows, truncated, nil
+	return peers, sortedKeys(localAddrs), rows, truncated, nil
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ── the collector ────────────────────────────────────────────────────────────
@@ -724,23 +769,28 @@ func (c *sdwanOverlayCollector) pollDevice(ctx context.Context, tg Target) devic
 	due := !snap.facts.DetailRead || !allUp || flapSum != snap.lastFlapSum || now.Sub(snap.facts.DetailAt) >= c.detailEvery
 	if due {
 		dctx, dcancel := context.WithTimeout(ctx, 120*time.Second)
-		peers, rows, trunc, derr := readSessions(dctx, c.walk, addr, creds, f.MIB, c.limits)
+		peers, local, rows, trunc, derr := readSessions(dctx, c.walk, addr, creds, f.MIB, c.limits)
 		dcancel()
 		if derr != nil {
 			// Keep the previous detail rather than publishing an empty overlay:
 			// an unread table is UNKNOWN, never "no tunnels".
 			res.err = "bfd walk: " + derr.Error()
 			f.Peers, f.SessionsRead, f.DetailRead, f.DetailAt = snap.facts.Peers, snap.facts.SessionsRead, snap.facts.DetailRead, snap.facts.DetailAt
+			f.LocalTLOCAddrs = snap.facts.LocalTLOCAddrs
 			f.Truncated = f.Truncated || snap.facts.Truncated
 		} else {
 			f.Peers, f.SessionsRead, f.DetailRead, f.DetailAt = peers, rows, true, time.Now().UTC()
+			f.LocalTLOCAddrs = local
 			f.Truncated = f.Truncated || trunc
-			if len(peers) > 0 && f.Capability == OverlayPartial && f.SystemIP != "" {
+			// Sessions + transports are what the overlay needs; a system-ip the
+			// identity column did not give is resolved from peers downstream.
+			if len(peers) > 0 && len(f.TLOCs) > 0 {
 				f.Capability = OverlayAvailable
 			}
 		}
 	} else {
 		f.Peers, f.SessionsRead, f.DetailRead, f.DetailAt = snap.facts.Peers, snap.facts.SessionsRead, snap.facts.DetailRead, snap.facts.DetailAt
+		f.LocalTLOCAddrs = snap.facts.LocalTLOCAddrs
 	}
 
 	if perr := c.publish(ctx, f, 3*c.detailEvery); perr != nil {
