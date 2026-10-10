@@ -174,6 +174,7 @@ FLAG_NOTES = {
     "ENABLE_LLDP_DISCOVERY": "Learn neighbours from LLDP.",
     "ENABLE_NETCONF_COLLECTION": "Poll device state over NETCONF.",
     "ENABLE_REPORT_SCHEDULER": "Run scheduled reports.",
+    "ENABLE_SDWAN_OVERLAY": "Read SD-WAN tunnels and transports from Cisco SD-WAN edges over SNMP.",
     "ENABLE_SEAM_BOOTSTRAP": "Seed the seam catalogue on first start.",
     "ENABLE_SNMP_COLLECTION": "Poll devices over SNMP v2c and v3.",
     "ENABLE_SNMP_DISCOVERY": "Sweep subnets for SNMP-speaking devices.",

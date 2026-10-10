@@ -1822,6 +1822,10 @@ services:
       # Vendor-neutral tunnel discovery (standard IF-MIB + TUNNEL-MIB walks over
       # the SNMP inventory) → netops.tunnels → Tunnels view + Device Monitoring.
       ENABLE_TUNNEL_DISCOVERY: ${ENABLE_TUNNEL_DISCOVERY:-true}
+      # SD-WAN overlay facts (tracker 349): probe every SNMP device for the
+      # Viptela / Cisco SD-WAN BFD + TLOC tables and walk only the edges that
+      # answer → the WAN overlay in Topology. Read-only, UDP/161.
+      ENABLE_SDWAN_OVERLAY: ${ENABLE_SDWAN_OVERLAY:-true}
       # #13 Vulnerability Management: operator-prepared advisory feed (run
       # scripts/vuln-feed-prepare.py → data/vuln/, mounted read-only below).
       # Lazy + mtime hot-reload; /api/vulns answers vuln_enabled:false until

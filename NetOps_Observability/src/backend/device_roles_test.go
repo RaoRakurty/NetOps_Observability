@@ -118,6 +118,8 @@ func TestToDeviceFactsCarriesWANFlavorFacts(t *testing.T) {
 	wan := &wanFacts{
 		ifNames:     map[string][]string{"cedge-1": {"Gi1", "Sdwan-intf"}},
 		externalBGP: map[string]int{"ce-2": 1, "dc-border": 2},
+		personality: map[string]string{"cedge-1": "vedge"},
+		systemIP:    map[string]string{"cedge-1": "10.255.0.81"},
 	}
 	byID := map[string]topology.DeviceFact{}
 	for _, f := range toDeviceFacts(devs, nil, nil, links, wan) {
@@ -132,7 +134,11 @@ func TestToDeviceFactsCarriesWANFlavorFacts(t *testing.T) {
 	if f := byID["dc-border"]; f.FabricNeighborCount != 1 {
 		t.Fatalf("fabric neighbors not counted: %+v", f)
 	}
-	if r := topology.ClassifyDeviceRole(byID["cedge-1"]); r.WANFlavor != topology.WANFlavorSDWAN {
+	if f := byID["cedge-1"]; f.SDWANPersonality != "vedge" || f.SDWANSystemIP != "10.255.0.81" {
+		t.Fatalf("overlay facts not carried: %+v", f)
+	}
+	// Overlay facts make the classification STRONG (interface markers alone are medium).
+	if r := topology.ClassifyDeviceRole(byID["cedge-1"]); r.WANFlavor != topology.WANFlavorSDWAN || r.Confidence != topology.RoleConfStrong {
 		t.Fatalf("cEdge: %+v", r)
 	}
 	// A nil wan argument (callers without the inputs) leaves the facts zero.

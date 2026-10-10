@@ -855,6 +855,10 @@ func newServer() *server {
 	pool.Enable("gnmi", os.Getenv("ENABLE_GNMI_COLLECTION") == "true")
 	pool.Enable("netconf", os.Getenv("ENABLE_NETCONF_COLLECTION") == "true")
 	pool.Enable("tunnels", os.Getenv("ENABLE_TUNNEL_DISCOVERY") == "true")
+	// SD-WAN overlay facts over SNMP (tracker 349): probes each device for the
+	// Viptela / Cisco SD-WAN BFD + TLOC tables with its stored credential and
+	// walks only the edges that answer. Read-only, UDP/161.
+	pool.Enable("sdwan_overlay", os.Getenv("ENABLE_SDWAN_OVERLAY") == "true")
 	pool.Enable("snmpmetrics", os.Getenv("ENABLE_SNMP_METRICS") == "true")
 	// Ubiquiti UniFi controller connector (device health via the controller API,
 	// not device SNMP). Opt-in; needs UNIFI_URL + creds.

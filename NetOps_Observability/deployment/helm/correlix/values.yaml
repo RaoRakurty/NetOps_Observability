@@ -235,6 +235,7 @@ env:
   ENABLE_GNMI_COLLECTION: "false"
   ENABLE_NETCONF_COLLECTION: "false"
   ENABLE_TUNNEL_DISCOVERY: "false"
+  ENABLE_SDWAN_OVERLAY: "true"
   # Notifications — every channel off until its credentials exist.
   FEATURE_SLACK_NOTIFICATIONS: "false"
   FEATURE_PAGERDUTY_NOTIFICATIONS: "false"

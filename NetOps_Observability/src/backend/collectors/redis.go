@@ -379,6 +379,71 @@ func redisMembers(c net.Conn, key string) ([]string, error) {
 	return out, nil
 }
 
+// redisArray sends one command whose reply is an array of bulk strings
+// (SMEMBERS, MGET) and returns it POSITIONALLY: a nil bulk (an MGET key that
+// does not exist) is a nil entry, so results line up with the keys asked for.
+// maxItems bounds the reply (§9); a larger count is refused as corrupt rather
+// than truncated silently.
+func redisArray(c net.Conn, maxItems int, args ...string) ([]*string, error) {
+	redisRefreshDeadline(c)
+	if _, err := c.Write(encodeRESP(args...)); err != nil {
+		return nil, fmt.Errorf("%w: %w", errRedisTransport, err)
+	}
+	r := bufio.NewReader(c)
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errRedisTransport, err)
+	}
+	if len(line) == 0 {
+		return nil, fmt.Errorf("%w: empty redis reply", errRedisTransport)
+	}
+	switch line[0] {
+	case '-':
+		return nil, fmt.Errorf("redis: %s", trimCRLF(line[1:]))
+	case '*':
+	default:
+		return nil, fmt.Errorf("%w: expected an array reply, got %q", errRedisTransport, trimCRLF(line))
+	}
+	n, err := strconv.Atoi(trimCRLF(line[1:]))
+	if err != nil {
+		return nil, fmt.Errorf("%w: unreadable array length", errRedisTransport)
+	}
+	if n <= 0 {
+		return nil, nil // empty (or nil) array
+	}
+	if n > maxItems {
+		return nil, fmt.Errorf("redis: array of %d items exceeds the %d-item bound", n, maxItems)
+	}
+	out := make([]*string, 0, n)
+	for i := 0; i < n; i++ {
+		hdr, err := r.ReadString('\n')
+		if err != nil {
+			return out, fmt.Errorf("%w: %w", errRedisTransport, err)
+		}
+		if len(hdr) == 0 || hdr[0] != '$' {
+			return out, fmt.Errorf("%w: array item %d is not a bulk string", errRedisTransport, i)
+		}
+		ln, err := strconv.Atoi(trimCRLF(hdr[1:]))
+		if err != nil {
+			return out, fmt.Errorf("%w: unreadable bulk length", errRedisTransport)
+		}
+		if ln < 0 {
+			out = append(out, nil)
+			continue
+		}
+		if ln > maxRESPBulkLen {
+			return out, fmt.Errorf("%w: bulk length %d exceeds %d-byte cap", errRedisTransport, ln, maxRESPBulkLen)
+		}
+		buf := make([]byte, ln+2)
+		if _, err := readFull(r, buf); err != nil {
+			return out, fmt.Errorf("%w: %w", errRedisTransport, err)
+		}
+		v := string(buf[:ln])
+		out = append(out, &v)
+	}
+	return out, nil
+}
+
 // FetchProbePathsAll merges the traceroute paths published by EVERY vantage, each
 // path attributed to the prober that measured it. This is the multi-vantage read:
 // the LAN vantage's client-anchored trace and the WAN prober's edge-anchored trace

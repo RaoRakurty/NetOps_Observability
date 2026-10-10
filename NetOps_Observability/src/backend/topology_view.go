@@ -420,6 +420,8 @@ func (s *server) projectGeoView(ctx context.Context, claims jwtClaims, tenant st
 type wanFacts struct {
 	ifNames     map[string][]string
 	externalBGP map[string]int
+	personality map[string]string // SD-WAN overlay collector (collectors.FetchOverlayFacts)
+	systemIP    map[string]string
 }
 
 // gatherWANFacts reads the WAN-edge flavor inputs for devs. filters scopes the
@@ -429,13 +431,27 @@ type wanFacts struct {
 // unread source is logged (§10) and leaves those facts zero, which the
 // classifier treats as absence of evidence.
 func (s *server) gatherWANFacts(ctx context.Context, devs []models.Device, filters []string) *wanFacts {
-	out := &wanFacts{ifNames: map[string][]string{}, externalBGP: map[string]int{}}
+	out := &wanFacts{ifNames: map[string][]string{}, externalBGP: map[string]int{},
+		personality: map[string]string{}, systemIP: map[string]string{}}
 	if len(devs) == 0 {
 		return out
 	}
 	in := make(map[string]bool, len(devs))
 	for _, d := range devs {
 		in[d.ID] = true
+	}
+	// SD-WAN overlay facts: keyed by device id and read only for devices the
+	// caller can see, so another tenant's edge never contributes (§3a).
+	overlay, err := collectors.FetchOverlayFacts(ctx)
+	if err != nil {
+		logWarn("topology", "SD-WAN overlay facts unread — SD-WAN edges classify from identity strings and interface markers only this cycle",
+			map[string]any{"devices": len(devs), "error": err.Error()})
+	}
+	for dev, f := range overlay {
+		if in[dev] {
+			out.personality[dev] = f.Personality
+			out.systemIP[dev] = f.SystemIP
+		}
 	}
 	ifIdx, err := collectors.FetchIfIndexMap(ctx)
 	if err != nil {
@@ -522,6 +538,8 @@ func toDeviceFacts(devs []models.Device, cpu, mem map[string]float64, links []to
 		if wan != nil {
 			f.IfNames = wan.ifNames[d.ID]
 			f.ExternalBGPPeers = wan.externalBGP[d.ID]
+			f.SDWANPersonality = wan.personality[d.ID]
+			f.SDWANSystemIP = wan.systemIP[d.ID]
 		}
 		if v, ok := cpu[d.ID]; ok {
 			f.CPUPct, f.HasCPU = v, true
