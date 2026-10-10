@@ -347,7 +347,9 @@ func TestDeviceTypeTextHintsArePinned(t *testing.T) {
 		"ap":            {"access point", "accesspoint", "air-ap", "air-cap", "aironet", "meraki mr", "uap-", "wifi", "wireless ap"},
 		"cloud-gw":      {"c8000v cloud", "cloud gateway", "cloud-gw", "cloudgw", "csr1000v", "tgw", "transit gateway", "vgw", "vmx cloud", "vpn gateway"},
 		"switch":        {" eos", " ex2", " ex3", " ex4", "arista", "catalyst", "dcs-", "icx", "nexus", "powerconnect", "qfx", "switch", "ws-c"},
-		"router":        {" mx", "7250", "7750", "asr", "c8000v", "crs", "csr", "gsr", "isr", "ncs", "ptx", "router", "vmx", "vsr"},
+		// cedge/vedge/viptela: Cisco SD-WAN edges (tracker 349) — a Viptela-OS
+		// vEdge matched nothing and fell to "generic", rendered as a switch.
+		"router": {" mx", "7250", "7750", "asr", "c8000v", "cedge", "crs", "csr", "gsr", "isr", "ncs", "ptx", "router", "vedge", "viptela", "vmx", "vsr"},
 	}
 	reg := Default()
 	for _, kind := range DeviceTypeOrder {
