@@ -296,6 +296,14 @@ type DeviceFact struct {
 	HasIGPAdjacency     bool   // appears in the BGP-LS/IGP topology
 	TunnelCount         int    // discovered tunnel interfaces terminating here
 	HasCloudTunnel      bool   // ≥1 tunnel remote end in published cloud space
+	// ── WAN-edge flavor facts (tracker 349) — same zero-value rule. ──
+	SysObjectID         string   // raw SNMP sysObjectID when discovery stored it
+	SDWANPersonality    string   // vedge|vsmart|vbond|vmanage, from the SD-WAN system MIB
+	SDWANSystemIP       string   // overlay system-ip, from the SD-WAN security MIB
+	IfNames             []string // interface names (SD-WAN interface markers are read from these)
+	ExternalBGPPeers    int      // BGP peers whose address belongs to no inventory device
+	FabricNeighborCount int      // neighbors classified dc_leaf / dc_spine
+	SiteKind            string   // declared site kind (dc | branch | campus …) from labels / source of truth
 }
 
 // LinkFact is one deduped, undirected adjacency (output of the link normalizer).
