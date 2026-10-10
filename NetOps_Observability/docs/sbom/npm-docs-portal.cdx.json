@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:acf81ee1-d7a9-53d0-88be-9b9661704a63",
+  "serialNumber": "urn:uuid:4c96a164-42d5-5342-a62d-d85e1a78b55d",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-09-27T14:27:45+00:00",
+    "timestamp": "2026-10-04T07:29:41+00:00",
     "tools": {
       "components": [
         {
@@ -16,9 +16,9 @@
     },
     "component": {
       "type": "application",
-      "bom-ref": "correlix@2026.09.27-g241b7602#npm-docs-portal",
+      "bom-ref": "correlix@2026.10.04-ga1b10bba#npm-docs-portal",
       "name": "correlix",
-      "version": "2026.09.27-g241b7602",
+      "version": "2026.10.04-ga1b10bba",
       "description": "Correlix \u2014 npm-docs-portal dependency inventory"
     },
     "properties": [
@@ -13382,10 +13382,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/compression@1.8.1",
+      "bom-ref": "pkg:npm/compression@1.8.2",
       "name": "compression",
-      "version": "1.8.1",
-      "purl": "pkg:npm/compression@1.8.1",
+      "version": "1.8.2",
+      "purl": "pkg:npm/compression@1.8.2",
       "scope": "required",
       "properties": [
         {
@@ -13397,10 +13397,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "f6602a18f1cb6a48422de372c4f90ae31568ef8eb343f7332c7d4acbebe48ad32759f599a6cf2bd2a5eec21c22cda80246db6c2f895f1b8a483af6962e900fd3"
+          "content": "a3cbc8e5113903a11554e77da38d632a9e35689a26f904c43bf071f0c60d8dec4ca3f06fd963a351f66bf9a2f45a7612832994cbacde82ea8b4ec22157480cbd"
         }
       ]
     },
@@ -30413,10 +30420,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/proxy-addr@2.0.7",
+      "bom-ref": "pkg:npm/proxy-addr@2.0.8",
       "name": "proxy-addr",
-      "version": "2.0.7",
-      "purl": "pkg:npm/proxy-addr@2.0.7",
+      "version": "2.0.8",
+      "purl": "pkg:npm/proxy-addr@2.0.8",
       "scope": "required",
       "properties": [
         {
@@ -30428,10 +30435,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "96542c30b4940d43d3e388ddad4fcedfbaa59e27e2b433fe670ae699972848ac8b2afb59c69c95d27dbf6c3fcde2d040019fe024475953b28cadaa0ad7e5d802"
+          "content": "e679f1d321b2554718eadf519d6700456b704fd1750fc3bdaedd3c86d3ef9dde3d5b522066d98b921bbd59f333423d5c1718c720ee9ca279d43555b993b015c9"
         }
       ]
     },
@@ -33119,10 +33133,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/shell-quote@1.9.0",
+      "bom-ref": "pkg:npm/shell-quote@1.12.0",
       "name": "shell-quote",
-      "version": "1.9.0",
-      "purl": "pkg:npm/shell-quote@1.9.0",
+      "version": "1.12.0",
+      "purl": "pkg:npm/shell-quote@1.12.0",
       "scope": "required",
       "properties": [
         {
@@ -33134,10 +33148,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "228bfe27016fff61dc4e973034c29df3e21635bf2d6e84093504e4018fcb2d52bb8061fd8f2f8b1a456a3f17de90797ec8c9a2a97b337465978247e697b863a8"
+          "content": "3dc072a8dc93ff7f05da40cd8b4d3a1c031125a50bb81ceafc53acc37a9d66f5ff180f56fe36a60da46c9201e3b9b1e27ed5cae6c205c4b364beb5d4c1ca1fe9"
         }
       ]
     },
@@ -34707,10 +34728,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/tinypool@1.1.1",
+      "bom-ref": "pkg:npm/tinypool@2.2.0",
       "name": "tinypool",
-      "version": "1.1.1",
-      "purl": "pkg:npm/tinypool@1.1.1",
+      "version": "2.2.0",
+      "purl": "pkg:npm/tinypool@2.2.0",
       "scope": "required",
       "properties": [
         {
@@ -34732,7 +34753,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "65b6bcdacf3b205abd03d5e68e25f9b9903f011583ac1d3738796af95c357d276dd08fb8fcabadc32f013f863fcbf68e44ca3ad45434bc86f98f8e2f4a8e4f92"
+          "content": "8c1ae6c7895899a0bd93f9a03dbca5c6cee4054c47b43f36e7aba9f878cb68315f5d270a250ca297e4965d2be102d4fb5c7a3ec93565a41f353c69873fca0b49"
         }
       ]
     },
