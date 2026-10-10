@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:cdbaba90-3aae-5da0-8393-f699ce2ad187",
+  "serialNumber": "urn:uuid:c52830bb-701b-53ce-aa2d-3cef41af30a7",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-09-27T14:27:45+00:00",
+    "timestamp": "2026-10-04T07:29:41+00:00",
     "tools": {
       "components": [
         {
@@ -16,9 +16,9 @@
     },
     "component": {
       "type": "application",
-      "bom-ref": "correlix@2026.09.27-g241b7602#go-backend",
+      "bom-ref": "correlix@2026.10.04-ga1b10bba#go-backend",
       "name": "correlix",
-      "version": "2026.09.27-g241b7602",
+      "version": "2026.10.04-ga1b10bba",
       "description": "Correlix \u2014 go-backend dependency inventory"
     },
     "properties": [
@@ -141,32 +141,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:golang/golang.org/x/crypto@v0.56.0",
+      "bom-ref": "pkg:golang/golang.org/x/crypto@v0.57.0",
       "name": "golang.org/x/crypto",
-      "version": "v0.56.0",
-      "purl": "pkg:golang/golang.org/x/crypto@v0.56.0",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "go-backend"
-        },
-        {
-          "name": "correlix:vendored",
-          "value": "true"
-        },
-        {
-          "name": "correlix:direct",
-          "value": "true"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:golang/golang.org/x/net@v0.57.0",
-      "name": "golang.org/x/net",
       "version": "v0.57.0",
-      "purl": "pkg:golang/golang.org/x/net@v0.57.0",
+      "purl": "pkg:golang/golang.org/x/crypto@v0.57.0",
       "scope": "required",
       "properties": [
         {
@@ -185,10 +163,32 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:golang/golang.org/x/sync@v0.22.0",
+      "bom-ref": "pkg:golang/golang.org/x/net@v0.60.0",
+      "name": "golang.org/x/net",
+      "version": "v0.60.0",
+      "purl": "pkg:golang/golang.org/x/net@v0.60.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "go-backend"
+        },
+        {
+          "name": "correlix:vendored",
+          "value": "true"
+        },
+        {
+          "name": "correlix:direct",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:golang/golang.org/x/sync@v0.23.0",
       "name": "golang.org/x/sync",
-      "version": "v0.22.0",
-      "purl": "pkg:golang/golang.org/x/sync@v0.22.0",
+      "version": "v0.23.0",
+      "purl": "pkg:golang/golang.org/x/sync@v0.23.0",
       "scope": "required",
       "properties": [
         {
@@ -207,10 +207,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:golang/golang.org/x/sys@v0.47.0",
+      "bom-ref": "pkg:golang/golang.org/x/sys@v0.48.0",
       "name": "golang.org/x/sys",
-      "version": "v0.47.0",
-      "purl": "pkg:golang/golang.org/x/sys@v0.47.0",
+      "version": "v0.48.0",
+      "purl": "pkg:golang/golang.org/x/sys@v0.48.0",
       "scope": "required",
       "properties": [
         {
@@ -229,10 +229,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:golang/golang.org/x/text@v0.41.0",
+      "bom-ref": "pkg:golang/golang.org/x/text@v0.42.0",
       "name": "golang.org/x/text",
-      "version": "v0.41.0",
-      "purl": "pkg:golang/golang.org/x/text@v0.41.0",
+      "version": "v0.42.0",
+      "purl": "pkg:golang/golang.org/x/text@v0.42.0",
       "scope": "required",
       "properties": [
         {
