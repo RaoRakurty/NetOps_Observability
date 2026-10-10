@@ -519,22 +519,23 @@ type server struct {
 	pathGraph       pathgraph.Store
 	pathFacts       pathFactSource
 	corrPath        corrPathRef
-	remotePaths     *remotePathStore      // remote-vantage traceroute pushes (POST /api/probe/paths)
-	integrations    *integration.Store    // integration-platform persistence (nil on file backend)
-	providers       *integration.Registry // inbound provider translators (registry)
-	nms             *nmsRuntime           // NMS vendor-controller framework #95 (nil unless FEATURE_NMS_INTEGRATIONS)
-	wireless        wireless.Store        // wireless canonical inventory #128 (always set: mem on file backend, PG on postgres)
-	wirelessActions *wirelessActionStore  // #128 Phase 8 guarded remediation (dormant unless FEATURE_WIRELESS_ACTIONS)
-	intMetrics      *integrationMetrics   // integration-platform Prometheus counters
-	vault           *vault.Vault          // secret-custody envelope (dormant unless SEAL_PROVIDER set)
-	tlsSrv          *tlsServer            // opt-in HTTPS/mTLS listener config (nil = plaintext)
-	tlsPeerProber   *tlsprobe.Prober      // SEC-019.1 served-cert expiry watcher (nil = plaintext baseline)
-	secMetrics      *secobs.Metrics       // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
-	transportInv    *secobs.Inventory     // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
-	exportPolicy    *exportPolicyStore    // runtime-tunable log-export limits
-	exportLimiter   *ratelimit.Limiter    // per-tenant export rate limit
-	copilotLimiter  *ratelimit.Limiter    // per-principal copilot rate limit (SR-021)
-	aiToolBudget    *ai.DailyBudget       // per-tenant daily token budget for the agent loop (P2, LLM04)
+	remotePaths     *remotePathStore                     // remote-vantage traceroute pushes (POST /api/probe/paths)
+	integrations    *integration.Store                   // integration-platform persistence (nil on file backend)
+	providers       *integration.Registry                // inbound provider translators (registry)
+	nms             *nmsRuntime                          // NMS vendor-controller framework #95 (nil unless FEATURE_NMS_INTEGRATIONS)
+	wireless        wireless.Store                       // wireless canonical inventory #128 (always set: mem on file backend, PG on postgres)
+	wirelessActions *wirelessActionStore                 // #128 Phase 8 guarded remediation (dormant unless FEATURE_WIRELESS_ACTIONS)
+	intMetrics      *integrationMetrics                  // integration-platform Prometheus counters
+	vault           *vault.Vault                         // secret-custody envelope (dormant unless SEAL_PROVIDER set)
+	tlsSrv          *tlsServer                           // opt-in HTTPS/mTLS listener config (nil = plaintext)
+	tlsPeerProber   *tlsprobe.Prober                     // SEC-019.1 served-cert expiry watcher (nil = plaintext baseline)
+	sdwanOverlay    atomic.Pointer[sdwanOverlaySnapshot] // tracker 349: last inferred SD-WAN overlay (reconcile cycle)
+	secMetrics      *secobs.Metrics                      // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
+	transportInv    *secobs.Inventory                    // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
+	exportPolicy    *exportPolicyStore                   // runtime-tunable log-export limits
+	exportLimiter   *ratelimit.Limiter                   // per-tenant export rate limit
+	copilotLimiter  *ratelimit.Limiter                   // per-principal copilot rate limit (SR-021)
+	aiToolBudget    *ai.DailyBudget                      // per-tenant daily token budget for the agent loop (P2, LLM04)
 	copilotCfg      *copilotConfigStore
 	aiTenantCfg     *aiTenantConfigStore   // per-tenant AI entitlement + BYO provider key (P4a)
 	displayPrefs    *tenantDisplayStore    // per-tenant display prefs (Wave 4 #11: time display)

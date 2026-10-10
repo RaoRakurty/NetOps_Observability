@@ -99,6 +99,7 @@ export type EdgeRelationship =
   | "path_hop" // a hop on a traced A→B path
   | "dependency" // flow/observed dependency
   | "containment" // cloud/group membership
+  | "overlay" // SD-WAN tunnels between two edges (observed BFD sessions)
   | "inferred"; // derived, not directly observed
 
 /** Visual treatment hint chosen by the adapter (not a wire field). */

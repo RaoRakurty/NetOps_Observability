@@ -6,6 +6,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -349,6 +350,12 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 
 	view := topology.Project(in)
 	view.Degraded = append(view.Degraded, degraded...)
+	// SD-WAN overlay (tracker 349) on the physical views — never on path_trace
+	// (the SPF graph does not cross the WAN yet), dependency or geo.
+	switch mode {
+	case topology.ModeExplore, topology.ModeInvestigate, topology.ModeCapacity:
+		attachSDWANOverlay(&view, s.sdwanOverlay.Load(), in.Devices, devs, time.Now())
+	}
 	// Path Trace: attach per-hop STAMP metrics (latency/jitter/delay/loss) to the
 	// hops on the resolved path so the NetworkPathView ribbon shows them hop-by-hop.
 	if mode == topology.ModePathTrace && len(view.Path) > 0 {
@@ -412,6 +419,81 @@ func (s *server) projectGeoView(ctx context.Context, claims jwtClaims, tenant st
 		Links:      links,
 		DeviceSite: deviceSite,
 	})
+}
+
+// attachSDWANOverlay appends the part of the inferred SD-WAN overlay
+// (tracker 349) the caller can see, and nothing else (§3a):
+//
+//   - an overlay edge only when BOTH ends are devices in the caller's view;
+//   - a membership edge only from a visible device;
+//   - a transport node only when at least one visible device attaches to it,
+//     with its member count recomputed from the visible members (the count of
+//     another principal's devices is not disclosed through it).
+//
+// It also says, in Degraded, when the overlay is stale or when classified
+// SD-WAN edges have no overlay data at all — a missing tunnel must read as
+// "not observed", never as "not connected".
+func attachSDWANOverlay(view *topology.View, snap *sdwanOverlaySnapshot, facts []topology.DeviceFact, devs []models.Device, now time.Time) {
+	visible := make(map[string]bool, len(devs))
+	for _, d := range devs {
+		visible[d.ID] = true
+	}
+	var appended map[string]bool
+	if snap != nil {
+		if age := now.Sub(snap.at); age > 5*time.Minute {
+			view.Degraded = append(view.Degraded, fmt.Sprintf("The SD-WAN overlay is %d minutes old — the background refresh has not run since", int(age.Minutes())))
+		}
+		appended = map[string]bool{}
+		present := make(map[string]bool, len(view.Nodes))
+		for _, n := range view.Nodes {
+			present[n.ID] = true
+		}
+		visibleMembers := map[string]int{}
+		for _, e := range snap.res.Edges {
+			switch e.Relationship {
+			case topology.RelOverlay:
+				if visible[e.Source] && visible[e.Target] {
+					view.Edges = append(view.Edges, e)
+					appended[e.Source], appended[e.Target] = true, true
+				}
+			case topology.RelInferred:
+				if visible[e.Source] {
+					view.Edges = append(view.Edges, e)
+					visibleMembers[e.Target]++
+					appended[e.Source] = true
+				}
+			}
+		}
+		for _, n := range snap.res.Nodes {
+			cnt := visibleMembers[n.ID]
+			if cnt == 0 || present[n.ID] {
+				continue
+			}
+			if total := int(n.Metrics["members"]); cnt < total {
+				// Partial visibility: disclose only what this caller can see.
+				n.Metrics = map[string]float64{"members": float64(cnt)}
+			}
+			view.Nodes = append(view.Nodes, n)
+		}
+	}
+	// SD-WAN edges the overlay knows nothing about.
+	missing := 0
+	for _, f := range facts {
+		if !visible[f.ID] {
+			continue
+		}
+		rr := topology.ClassifyDeviceRole(f)
+		if rr.WANFlavor != topology.WANFlavorSDWAN || (rr.Role != topology.DevRoleWANEdge && rr.Role != topology.DevRoleDCWANEdge) {
+			continue
+		}
+		if snap == nil || (!snap.facts[f.ID] && !appended[f.ID]) {
+			missing++
+		}
+	}
+	if missing > 0 {
+		view.Degraded = append(view.Degraded, fmt.Sprintf(
+			"SD-WAN overlay data is unavailable for %d SD-WAN edge(s): neither their own SD-WAN MIBs nor their peers' tunnels identify them (IOS XE SD-WAN needs 17.6.1a or later, and the SNMP view must include the SD-WAN subtrees)", missing))
+	}
 }
 
 // wanFacts carries the WAN-edge flavor inputs toDeviceFacts injects
