@@ -130,3 +130,11 @@ describe("the OMP section", () => {
     expect((await screen.findByTestId("device-omp-unread")).textContent).toMatch(/UNKNOWN here — not absent/);
   });
 });
+
+describe("peerKey — remote AS joins per instance", () => {
+  it("treats the global table's spellings as one and keeps VRFs apart", async () => {
+    const { peerKey } = await import("./DeviceNeighbors");
+    expect(peerKey(undefined, "10.0.0.1")).toBe(peerKey("default", "10.0.0.1"));
+    expect(peerKey("CUST-A", "10.0.0.1")).not.toBe(peerKey(undefined, "10.0.0.1"));
+  });
+});

@@ -62,6 +62,7 @@ func NewPool(targets TargetFunc) *Pool {
 	p.register(NewTunnels(targets))
 	p.register(NewSDWANOverlay(targets))
 	p.register(NewVRFInstances(targets))
+	p.register(NewBGPVRFPeers(targets))
 	p.register(NewSNMPMetrics(targets))
 	p.register(NewTrapReceiver(targets))
 	p.register(NewSTAMPSender())

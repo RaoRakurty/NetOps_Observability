@@ -69,7 +69,7 @@ func featureSpecs() []featureflags.Spec {
 		{Env: "ENABLE_CDP_DISCOVERY", Label: "CDP neighbours", Group: discover, Apply: restart, Help: "Learn neighbours from CDP."},
 		{Env: "ENABLE_TUNNEL_DISCOVERY", Label: "Tunnels", Group: discover, Apply: restart, Help: "Discover IPsec, GRE and SD-WAN tunnels."},
 		{Env: "ENABLE_SDWAN_OVERLAY", Label: "SD-WAN overlay", Group: discover, Apply: restart, Help: "Read SD-WAN tunnels and transports from SD-WAN edges."},
-		{Env: "ENABLE_VRF_COLLECTION", Label: "VRFs and routing instances", Group: discover, Apply: restart, Help: "Read routing instances and their interfaces."},
+		{Env: "ENABLE_VRF_COLLECTION", Label: "VRFs and routing instances", Group: discover, Apply: restart, Help: "Read routing instances, their interfaces and the BGP sessions inside them."},
 		{Env: "ENABLE_BGPLS_DISCOVERY", Label: "BGP-LS topology", Group: discover, Apply: restart, Help: "Learn topology from BGP-LS."},
 
 		{Env: "FEATURE_BGP_ALERTS", Label: "BGP alerts", Group: routing, Apply: restart, Help: "Watch prefixes and alert on hijacks and leaks."},

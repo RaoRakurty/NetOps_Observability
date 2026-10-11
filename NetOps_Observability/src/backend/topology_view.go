@@ -592,7 +592,11 @@ func (s *server) gatherWANFacts(ctx context.Context, devs []models.Device, filte
 	}
 	qctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	peers := s.qVecBy2Scoped(qctx, `max by (device, peer) (last_over_time(device_bgp_peer_state[15m]))`, "device", "peer", filters)
+	// Global-table peers only: a BGP session inside a VRF (PE-CE, SD-WAN service
+	// VPN) says nothing about the device being a routed WAN edge, and counting
+	// it flipped core/DC routers with VRF peers to "routed WAN edge". BGP4-MIB
+	// series carry no vrf label; the gNMI and VRF-peer lanes say "default".
+	peers := s.qVecBy2Scoped(qctx, `max by (device, peer) (last_over_time(device_bgp_peer_state{vrf=~"|(?i:default|global|master)"}[15m]))`, "device", "peer", filters)
 	if peers == nil {
 		logWarn("topology", "BGP peer state unread — routed WAN edges cannot be told from other routers this cycle",
 			map[string]any{"devices": len(devs)})

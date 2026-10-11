@@ -875,6 +875,9 @@ func newServer() *server {
 	// interfaces over SNMP, from whichever vendor or standard MIB the device
 	// answers (collectors/vrf_instances.go). Read-only, UDP/161.
 	pool.Enable("vrf_instances", os.Getenv("ENABLE_VRF_COLLECTION") == "true")
+	// BGP sessions inside those instances (collectors/bgp_vrf_peers.go) — the
+	// same switch: one feature, "VRFs and routing instances".
+	pool.Enable("bgp_vrf_peers", os.Getenv("ENABLE_VRF_COLLECTION") == "true")
 	pool.Enable("snmpmetrics", os.Getenv("ENABLE_SNMP_METRICS") == "true")
 	// Ubiquiti UniFi controller connector (device health via the controller API,
 	// not device SNMP). Opt-in; needs UNIFI_URL + creds.

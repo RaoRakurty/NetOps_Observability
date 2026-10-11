@@ -22,6 +22,12 @@ export const OMP_STATE: Record<string, string> = {
   "5": "init (graceful restart)", "6": "down (graceful restart)", "7": "handshake (graceful restart)", "8": "up (graceful restart)",
 };
 export const ompUp = (v: string) => v === "3" || v === "8";
+
+/** BGP4-MIB series carry no vrf label; the VRF lanes say "default" for the same table. */
+export const peerKey = (vrf: string | undefined, peer: string) => {
+  const v = (vrf ?? "").toLowerCase();
+  return `${v === "" || v === "default" || v === "global" || v === "master" ? "" : vrf}|${peer}`;
+};
 const tone = (up: boolean) => (up ? "var(--good)" : "var(--bad)");
 
 function StateDot({ color }: { color: string }) {
@@ -85,7 +91,8 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
         const m = new Map<string, string>();
         for (const s of r?.data?.result ?? []) {
           const peer = s.metric.peer || s.metric.index;
-          if (peer) m.set(peer, String(Math.round(Number(s.value?.[1]))));
+          // Keyed by instance too: one peer address can live in two VRFs.
+          if (peer) m.set(peerKey(s.metric.vrf, peer), String(Math.round(Number(s.value?.[1]))));
         }
         setRemoteAs(m);
       })
@@ -153,7 +160,7 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
                   <tr key={i}>
                     <td style={mono}>{peer || "—"}</td>
                     <td style={td}><StateDot color={tone(up)} />{label}</td>
-                    <td style={mono}>{remoteAs.get(peer) || s.metric.asn || "—"}</td>
+                    <td style={mono}>{remoteAs.get(peerKey(s.metric.vrf, peer)) || s.metric.asn || "—"}</td>
                     <td style={td}>{s.metric.vrf || (s.metric.vrf === undefined ? "global" : "—")}</td>
                   </tr>
                 );
