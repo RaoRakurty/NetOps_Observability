@@ -31,6 +31,7 @@ Two rules hold for all of them:
 | `ENABLE_SNMP_METRICS` | `true` | Collect the SNMP metric families. |
 | `ENABLE_TUNNEL_DISCOVERY` | `true` | Discover IPsec, GRE and SD-WAN tunnels. |
 | `ENABLE_VENDOR_DETECTION` | `false` | Identify vendor and OS from sysObjectID. |
+| `ENABLE_VRF_COLLECTION` | `true` | Read routing instances (VRF, VPN, routing-instance, VPRN) and their interfaces over SNMP. |
 | `FEATURE_ACTIVE_PROBE` | `false` | Send STAMP active-measurement probes. |
 | `FEATURE_ACTIVE_VERIFICATION` | `false` | Verify a recovery before closing a case. |
 | `FEATURE_AI` | `(empty)` | Master switch for the Iris assistant. |

@@ -860,6 +860,10 @@ func newServer() *server {
 	// Viptela / Cisco SD-WAN BFD + TLOC tables with its stored credential and
 	// walks only the edges that answer. Read-only, UDP/161.
 	pool.Enable("sdwan_overlay", os.Getenv("ENABLE_SDWAN_OVERLAY") == "true")
+	// Routing instances (VRF / VPN / routing-instance / VPRN) and their member
+	// interfaces over SNMP, from whichever vendor or standard MIB the device
+	// answers (collectors/vrf_instances.go). Read-only, UDP/161.
+	pool.Enable("vrf_instances", os.Getenv("ENABLE_VRF_COLLECTION") == "true")
 	pool.Enable("snmpmetrics", os.Getenv("ENABLE_SNMP_METRICS") == "true")
 	// Ubiquiti UniFi controller connector (device health via the controller API,
 	// not device SNMP). Opt-in; needs UNIFI_URL + creds.

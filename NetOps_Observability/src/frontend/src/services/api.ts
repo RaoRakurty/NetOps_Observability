@@ -4910,7 +4910,12 @@ export interface VrfDialect {
  *  carries the instance NAME but not which interfaces belong to it. */
 export interface VrfRoutingInstance {
   name: string;
+  /** "bgp_control_plane", or the VRF MIB the device answered ("mpls-l3vpn", "viptela-vpn", …). */
   source: string;
+  /** The device's own word: vrf / vpn / routing-instance / vprn / vr. */
+  kind?: string;
+  /** Route distinguisher, when the source reports one. */
+  rd?: string;
 }
 
 export interface VrfInterfacesResponse {
