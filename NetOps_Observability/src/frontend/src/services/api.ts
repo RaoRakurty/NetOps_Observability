@@ -5184,6 +5184,8 @@ export type VerificationSettingsPatch = {
 export interface FeatureFlags {
   copilot?: boolean;
   device_ssh?: boolean;
+  /** Configuration backup + drift (FEATURE_CONFIG_BACKUP). */
+  config_backup?: boolean;
   active_verification?: boolean;
   processors?: boolean;
   ai_entitlements?: string[];

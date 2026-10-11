@@ -4475,9 +4475,11 @@ func (s *server) handleFeatures(w http.ResponseWriter, r *http.Request) {
 		// the caller's own tenant switches), so the SPA hides what this caller
 		// cannot use. Cosmetic only — every AI route gates server-side. It
 		// reads nothing about any tenant but the caller's own.
-		"ai_entitlements":     s.aiEntitlementsFor(claims),
-		"copilot":             os.Getenv("FEATURE_COPILOT") == "true",
-		"device_ssh":          os.Getenv("FEATURE_DEVICE_SSH") == "true",
+		"ai_entitlements": s.aiEntitlementsFor(claims),
+		"copilot":         os.Getenv("FEATURE_COPILOT") == "true",
+		"device_ssh":      os.Getenv("FEATURE_DEVICE_SSH") == "true",
+		// Configuration backup + drift (the inventory's Sync / Backup columns).
+		"config_backup":       os.Getenv("FEATURE_CONFIG_BACKUP") == "true",
 		"active_verification": os.Getenv("FEATURE_ACTIVE_VERIFICATION") == "true",
 		// item 121: the per-tenant pipeline processor editor. The API itself is
 		// always up (rules persist regardless); the flag gates UI visibility and

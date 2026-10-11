@@ -76,6 +76,12 @@ export default function Devices() {
   const [siteOptions, setSiteOptions] = useState<SiteRow[]>([]); // declared SoT sites (assignable)
   const [sotProvider, setSotProvider] = useState<string>("internal"); // active SoT authority
   const [sshEnabled, setSshEnabled] = useState(false);
+  // FEATURE_CONFIG_BACKUP (configuration backup + drift). Its columns stay
+  // visible and say "Off" when it is disabled, so an operator sees what is
+  // switched off rather than a column that silently vanished.
+  const [configOn, setConfigOn] = useState(false);
+  // Per-device "Back up now" state: device id → "running" | error text.
+  const [backupState, setBackupState] = useState<Map<string, string>>(new Map());
   const [error, setError] = useState<string | null>(null);
   // Separate from `error`: the inventory loaded, but the alert correlation that
   // feeds "degraded" did not — so "Up" cannot be read as "healthy".
@@ -119,6 +125,18 @@ export default function Devices() {
     const dq = new URLSearchParams(qs).get("q");
     if (dq) setQ(dq);
   }, []);
+
+  // "Back up now": queue one capture; the drift columns refresh shortly after.
+  const backupNow = async (id: string) => {
+    setBackupState((m) => new Map(m).set(id, "running"));
+    try {
+      await api.configBackup(id);
+      setBackupState((m) => { const n = new Map(m); n.delete(id); return n; });
+      setTimeout(() => { void loadDrift(); }, 5000);
+    } catch (e) {
+      setBackupState((m) => new Map(m).set(id, operatorError(e, "The backup could not be started.")));
+    }
+  };
 
   // Config drift for the whole visible fleet, paged and bounded (§9: at most
   // 40 pages of 500). A deployment with config backup off answers "off" and the
@@ -183,7 +201,7 @@ export default function Devices() {
 
   useEffect(() => {
     load();
-    api.features().then((c) => setSshEnabled(!!c.device_ssh)).catch(() => {});
+    api.features().then((c) => { setSshEnabled(!!c.device_ssh); setConfigOn(!!c.config_backup); }).catch(() => {});
     // Deliberately swallowed: not being allowed to read the licence is the
     // normal case for an operator, not an error worth showing them.
     api.getLicence().then(setLicence).catch(() => setLicence(null));
@@ -329,34 +347,55 @@ export default function Devices() {
         ),
       },
     ];
-    if (drift) {
-      cols.push(
-        {
-          key: "config", header: "Config", width: 120, sortable: true,
-          text: (d) => statusBadge(drift.get(d.id)).label,
-          sortValue: (d) => statusBadge(drift.get(d.id)).label,
-          render: (d) => {
-            const b = statusBadge(drift.get(d.id));
-            return <span className={`badge ${b.tone}`} title={b.help}>{b.label}</span>;
-          },
+    const off = <span style={{ color: "var(--fg-subtle, var(--muted))" }}>Off</span>;
+    const configOffTip = "Configuration backup is turned off on this deployment (FEATURE_CONFIG_BACKUP). An administrator can enable it.";
+    const configLive = configOn && drift !== null;
+    cols.push(
+      {
+        // Sync = is the running config the approved (golden) one?
+        key: "sync", header: "Sync", width: 128, sortable: true,
+        text: (d) => (configLive ? syncLabel(drift?.get(d.id)).label : "Off"),
+        sortValue: (d) => (configLive ? syncLabel(drift?.get(d.id)).label : "~"),
+        render: (d) => {
+          if (!configLive) return <span title={configOffTip}>{off}</span>;
+          const b = syncLabel(drift?.get(d.id));
+          return <span className={`badge ${b.tone}`} title={b.help}>{b.label}</span>;
         },
-        {
-          key: "backup", header: "Last backup", width: 110, sortable: true,
-          sortValue: (d) => new Date(drift.get(d.id)?.last_capture_at ?? 0).getTime() || 0,
-          render: (d) => {
-            const at = drift.get(d.id)?.last_capture_at;
-            return at ? <span title={fmtDateTime(at)}>{relTime(at)}</span> : <span style={{ color: "var(--fg-subtle, var(--muted))" }}>never</span>;
-          },
+      },
+      {
+        key: "backup", header: "Config backup", width: 168, sortable: true,
+        sortValue: (d) => new Date(drift?.get(d.id)?.last_capture_at ?? 0).getTime() || 0,
+        render: (d) => {
+          if (!configLive) return <span title={configOffTip}>{off}</span>;
+          const at = drift?.get(d.id)?.last_capture_at;
+          const st = backupState.get(d.id);
+          return (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }} onClick={(e) => e.stopPropagation()}>
+              {at ? <span title={fmtDateTime(at)}>{relTime(at)}</span> : <span style={{ color: "var(--fg-subtle, var(--muted))" }}>never</span>}
+              <button className="btn" style={{ padding: "2px 8px" }} disabled={st === "running"}
+                title={st && st !== "running" ? st : "Capture the running configuration now"}
+                onClick={() => { void backupNow(d.id); }}>
+                {st === "running" ? "Backing up…" : "Back up now"}
+              </button>
+            </span>
+          );
         },
-      );
-    }
+      },
+      {
+        key: "ssh", header: "SSH", width: 104,
+        text: () => (sshEnabled ? "Connect" : "Off"),
+        render: (d) => sshEnabled
+          ? <button className="btn" title="Open an SSH session to the device" onClick={(e) => { e.stopPropagation(); setTerm(d); }}>Connect</button>
+          : <span title="Device SSH is turned off on this deployment (FEATURE_DEVICE_SSH). An administrator can enable it.">{off}</span>,
+      },
+    );
     cols.push({
       key: "source", header: "Source", width: 96,
       text: (d) => sourceLabel(d.source),
       render: (d) => <span className={`badge ${sourceTone(d.source)}`} title={`Discovery source: ${d.source || "unknown"}`}>{sourceLabel(d.source)}</span>,
     });
     return cols;
-  }, [health, locs, siteOptions, editableSites, siteName, drift]);
+  }, [health, locs, siteOptions, editableSites, siteName, drift, configOn, sshEnabled, backupState]);
 
   const chip = (key: Filter, label: string, n: number, color?: string) => (
     <button
@@ -507,11 +546,6 @@ export default function Devices() {
               initialSort={{ key: "vendor", dir: "asc" }}
               onRowClick={(d) => openDevice(d)}
               empty="No devices match this filter."
-              rowActions={sshEnabled ? (d) => (
-                // Connect is the device-SSH feature (FEATURE_DEVICE_SSH, off by
-                // default). Delete is not offered from the inventory list.
-                <button className="btn" title="Open an SSH session to the device" onClick={() => setTerm(d)}>Connect</button>
-              ) : undefined}
             />
           )}
         </div>
@@ -602,6 +636,22 @@ function SiteCell({
       {!slug && fromDevice}
     </span>
   );
+}
+
+// syncLabel: the drift state in the operator's words — is the running config
+// the approved (golden) one? "Changed" (differs from the previous capture) and
+// "Drifted" (differs from golden) are both "Not in sync" here; the detail
+// panel keeps the distinction.
+function syncLabel(r: ConfigDriftRow | undefined): { label: string; tone: string; help: string } {
+  const b = statusBadge(r);
+  if (!r || !r.last_capture_at) return { label: "Not captured", tone: "", help: b.help };
+  if (String(r.state) === "failed") return { label: "Capture failed", tone: "bad", help: b.help };
+  switch (String(r.state)) {
+    case "in_sync": return { label: "In sync", tone: "good", help: b.help };
+    case "changed":
+    case "drifted": return { label: "Not in sync", tone: String(r.state) === "drifted" ? "bad" : "warn", help: b.help };
+    default: return { label: "Unknown", tone: "", help: b.help };
+  }
 }
 
 // StatusGlyph: the circle is monitoring (green = Correlix collects from it,
