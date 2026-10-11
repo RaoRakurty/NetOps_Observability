@@ -282,7 +282,9 @@ func seamFetchBGPPeers(ctx context.Context) ([]seam.BGPPeer, error) {
 		}
 		peers = append(peers, seam.BGPPeer{
 			Device: r.Metric["device"],
-			PeerIP: r.Metric["index"],
+			// The BGP peer label is "peer" (the gNMI-aligned contract, profiles.go);
+			// rows written before that rename carry "index".
+			PeerIP: firstNonEmpty(r.Metric["peer"], r.Metric["index"]),
 			State:  state,
 		})
 	}

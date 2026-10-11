@@ -589,3 +589,35 @@ func TestCollectorCycleOverAMixedEstate(t *testing.T) {
 		t.Fatalf("published %d: %+v", len(pub.got), pub.got)
 	}
 }
+
+// ── derived memory percentage (owner report 2026-10-10: no Cisco SNMP device
+// showed memory, because every consumer reads device_mem_percent and Cisco
+// reports used/free bytes) ───────────────────────────────────────────────────
+
+func TestDerivedMemPercent(t *testing.T) {
+	got := derivedMemPercent("r1", "cisco",
+		map[string]int64{"1": 750, "11": 10, "2": 5, "3": 0},
+		map[string]int64{"1": 250, "11": 90, "3": 0}, 1000)
+	want := []string{
+		`device_mem_percent{device="r1",vendor="cisco",index="1",source="derived"} 75.00 1000`,
+		`device_mem_percent{device="r1",vendor="cisco",index="11",source="derived"} 10.00 1000`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	// Pool 2 (no free half) and pool 3 (zero total) yield nothing — never a guess.
+}
+
+func TestOSPFNeighborAddr(t *testing.T) {
+	for in, want := range map[string]string{
+		"172.16.40.41.0": "172.16.40.41", // ipAddr + addressless index
+		"10.0.0.9.7":     "10.0.0.9",
+		"10.0.0.9":       "10.0.0.9", // already an address
+		"1.2.3.999.0":    "1.2.3.999.0",
+		"x.y":            "x.y",
+	} {
+		if got := ospfNeighborAddr(in); got != want {
+			t.Errorf("%s → %s, want %s", in, got, want)
+		}
+	}
+}

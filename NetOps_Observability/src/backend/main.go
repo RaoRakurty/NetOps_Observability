@@ -4228,7 +4228,7 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		// Stable order: without one, paging over a map-backed aggregator can
 		// show the same device twice and never show another at all.
 		sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
-		rows := httppage.SliceOf(all, page)
+		rows := s.stampDeviceReadFields(r.Context(), claims, httppage.SliceOf(all, page))
 		httppage.LogTruncated("/api/devices", page, len(rows), len(all))
 		httppage.Write(w, "devices", rows, page, len(rows), len(all))
 	case http.MethodPost:
@@ -4393,6 +4393,7 @@ func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 		if d.Type == "" {
 			d.Type = inferDeviceType(d)
 		}
+		d = s.stampDeviceReadFields(r.Context(), claims, []models.Device{d})[0]
 		writeJSON(w, http.StatusOK, d)
 	case http.MethodDelete:
 		// SR-003: deleting a device is a write — gate it.

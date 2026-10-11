@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -124,6 +125,7 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	var lastErr, enrichErr string
 	ifaddr := map[string]map[string]string{}
 	ifindexMap := map[string]map[string]string{}
+	locations := map[string]string{}
 	for _, r := range results {
 		if r.lastErr != "" {
 			lastErr = r.lastErr
@@ -147,6 +149,9 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 			if r.ifindex != nil {
 				ifindexMap[r.id] = r.ifindex
 			}
+			if r.location != "" {
+				locations[r.id] = r.location
+			}
 		}
 	}
 
@@ -162,6 +167,14 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	if len(ifindexMap) > 0 {
 		if b, err := json.Marshal(ifindexMap); err == nil {
 			redisPublish(ctx, "interface-index", ifIndexKey, string(b), 1800)
+		}
+	}
+
+	// deviceID → sysLocation, read by the inventory to show the site the device
+	// itself is configured with. Same replace+TTL discipline.
+	if len(locations) > 0 {
+		if b, err := json.Marshal(locations); err == nil {
+			redisPublish(ctx, "device-locations", sysLocationKey, string(b), 1800)
 		}
 	}
 
@@ -205,6 +218,7 @@ type deviceOutcome struct {
 	reach     bool
 	ifaddr    map[string]string // interface IP → ifName
 	ifindex   map[string]string // ifIndex → ifName
+	location  string            // SNMPv2-MIB sysLocation as the device is configured ("" = not set)
 	lastErr   string
 	enrichErr string
 }
@@ -235,6 +249,13 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 	}
 	out.reach = true
 	vendor := vendorLabel(ent, entOK)
+	// sysLocation — what the operator configured on the device itself
+	// (`snmp-server location` / `snmp location` / `set snmp location` / …: the one
+	// location field every vendor's agent answers). Best-effort: an unset or
+	// unreadable location leaves it empty, which the inventory shows as empty.
+	if v, err := snmpGet(dctx, addr, creds, sysLocationOID); err == nil {
+		out.location = sanitizeLabel(v.str())
+	}
 
 	var lines []string
 	// Canonical metric events for the correlation bus (RCA families only;
@@ -249,6 +270,12 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 	// ifIndex→ifAlias (operator circuit ID, ifXTable). Walked lazily with the
 	// names; empty when the operator configured no interface description.
 	var ifAliases map[string]string
+	// Memory pools reported as used/free bytes (Cisco CISCO-MEMORY-POOL and
+	// every other vendor in that shape) carry no percentage, and every
+	// consumer — the device popup, the health score, topology and the memory
+	// alerts — reads device_mem_percent. It is derived below per pool.
+	memUsed, memFree := map[string]int64{}, map[string]int64{}
+	memPctNative := false
 	for _, prof := range selectProfiles(c.profiles, ent, entOK) {
 		for _, m := range prof.Metrics {
 			// Single-contract ownership: yield a metric to the transport that owns
@@ -285,8 +312,20 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 							events = append(events, ev)
 						}
 					} else {
+						switch m.Name {
+						case "device_mem_used_bytes":
+							memUsed[idx] = valueInt(v)
+						case "device_mem_free_bytes":
+							memFree[idx] = valueInt(v)
+						case "device_mem_percent":
+							memPctNative = true
+						}
+						lbl := idx
+						if idxLabel == "neighbor" {
+							lbl = ospfNeighborAddr(idx)
+						}
 						lines = append(lines, fmt.Sprintf("%s{device=%q,vendor=%q,%s=%q} %d %d",
-							m.Name, tg.ID, vendor, idxLabel, idx, valueInt(v), now))
+							m.Name, tg.ID, vendor, idxLabel, lbl, valueInt(v), now))
 						if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, idx, "", "", valueInt(v), now); ok {
 							events = append(events, ev)
 						}
@@ -304,6 +343,11 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 				}
 			}
 		}
+	}
+	// Derived memory percentage per pool (used / (used + free)), only when the
+	// device did not report one and no richer transport owns the family here.
+	if !memPctNative && !(SNMPMetric{Name: "device_mem_percent", Owner: "gnmi"}).ownedElsewhere(tg) {
+		lines = append(lines, derivedMemPercent(tg.ID, vendor, memUsed, memFree, now)...)
 	}
 	// FRU inventory (ENTITY-MIB) — info series, VM-only, best-effort. Devices
 	// without ENTITY-MIB yield nothing.
@@ -449,4 +493,45 @@ func valueInt(v berVal) int64 {
 	default:
 		return decodeInt(v.raw)
 	}
+}
+
+// derivedMemPercent turns per-pool used/free byte counts into
+// device_mem_percent{index} samples. A pool missing either half, or with a zero
+// total, yields nothing — never a guessed 0 % or 100 %.
+func derivedMemPercent(device, vendor string, used, free map[string]int64, now int64) []string {
+	idxs := make([]string, 0, len(used))
+	for idx := range used {
+		idxs = append(idxs, idx)
+	}
+	sort.Strings(idxs)
+	var out []string
+	for _, idx := range idxs {
+		u := used[idx]
+		f, ok := free[idx]
+		if !ok || u < 0 || f < 0 || u+f <= 0 {
+			continue
+		}
+		pct := float64(u) * 100 / float64(u+f)
+		out = append(out, fmt.Sprintf("device_mem_percent{device=%q,vendor=%q,index=%q,source=\"derived\"} %.2f %d",
+			device, vendor, idx, pct, now))
+	}
+	return out
+}
+
+// ospfNeighborAddr turns an ospfNbrTable row index (ospfNbrIpAddr +
+// ospfNbrAddressLessIndex, e.g. "172.16.40.41.0") into the neighbour address
+// the adjacency contract and every reader use ("172.16.40.41"). Any other
+// shape is returned unchanged — never guessed at.
+func ospfNeighborAddr(idx string) string {
+	parts := strings.Split(idx, ".")
+	if len(parts) != 5 {
+		return idx
+	}
+	for _, p := range parts[:4] {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 || n > 255 {
+			return idx
+		}
+	}
+	return strings.Join(parts[:4], ".")
 }

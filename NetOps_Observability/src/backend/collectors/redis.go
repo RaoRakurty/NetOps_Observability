@@ -659,6 +659,20 @@ func FetchRoutingDirection(ctx context.Context) ([]RoutingPair, error) {
 	return out, nil
 }
 
+// sysLocationKey holds deviceID → sysLocation, published by the SNMP metrics
+// collector.
+const sysLocationKey = "netops:inventory:syslocation"
+
+// FetchSysLocationMap reads the device → configured-location map. Absent →
+// empty map, nil error; unread or undecodable → error (tracker 307).
+func FetchSysLocationMap(ctx context.Context) (map[string]string, error) {
+	out := map[string]string{}
+	if err := redisGetJSON(ctx, "sysLocation map", sysLocationKey, &out); err != nil {
+		return map[string]string{}, err
+	}
+	return out, nil
+}
+
 // FetchIfIndexMap reads the ifIndex map (deviceID → ifIndex → ifName) published
 // by the SNMP metrics collector. Absent → empty map, nil error; unread or
 // undecodable → an error (tracker 307, same rule as FetchIfAddrMap).

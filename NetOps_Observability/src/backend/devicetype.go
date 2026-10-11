@@ -4,8 +4,12 @@
 package backend
 
 import (
+	"context"
 	"strings"
+	"time"
 
+	"netops/backend/collectors"
+	"netops/backend/internal/devreach"
 	"netops/backend/internal/vendorprofile"
 	"netops/backend/models"
 )
@@ -46,6 +50,42 @@ func withDeviceType(ds []models.Device) []models.Device {
 		if ds[i].Type == "" {
 			ds[i].Type = inferDeviceType(ds[i])
 		}
+	}
+	return ds
+}
+
+// stampDeviceReadFields fills the read-only, server-stamped fields of an
+// inventory read (tracker 349 follow-up, owner report 2026-10-10):
+//
+//   - Reachability from collector_target_up over the last 3 minutes, scoped
+//     to the caller's devices (metricsScopeFiltersFor — the chokepoint rule);
+//   - SoftwareVersion from the device's own description;
+//   - ConfiguredLocation from the sysLocation the SNMP collector publishes.
+//
+// Every source is best-effort and an unread one leaves its field empty /
+// "unknown" — never a guessed value — and is logged (§10).
+func (s *server) stampDeviceReadFields(ctx context.Context, claims jwtClaims, ds []models.Device) []models.Device {
+	if len(ds) == 0 {
+		return ds
+	}
+	qctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	f := s.metricsScopeFiltersFor(claims)
+	const q = `last_over_time(collector_target_up{collector!="netconf"}[3m])`
+	maxUp, okMax := s.qVecByScoped(qctx, "max by (device) ("+q+")", "device", f)
+	minUp, okMin := s.qVecByScoped(qctx, "min by (device) ("+q+")", "device", f)
+	if !okMax || !okMin {
+		logWarn("devices", "collector reachability unread — every device reads 'unknown' this request", map[string]any{"devices": len(ds)})
+		maxUp, minUp = nil, nil
+	}
+	locs, err := collectors.FetchSysLocationMap(ctx)
+	if err != nil {
+		logWarn("devices", "configured device locations unread — the device-configured site is blank this request", map[string]any{"error": err.Error()})
+	}
+	for i := range ds {
+		ds[i].Reachability = devreach.Fold(maxUp, minUp, ds[i].ID)
+		ds[i].SoftwareVersion = collectors.ResolveDeviceOS(strings.ToLower(ds[i].Vendor), ds[i].OS, ds[i].OSVersion).Version
+		ds[i].ConfiguredLocation = locs[ds[i].ID]
 	}
 	return ds
 }

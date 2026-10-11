@@ -130,6 +130,20 @@ type Device struct {
 	// for (e.g. "snmp", "gnmi"). It is DISPLAY, not the count: several methods
 	// on one device are still one monitored device.
 	MonitorMethods []string `json:"monitor_methods,omitempty"`
+
+	// ── server-stamped on read, never persisted, never request input ──────────
+	// (cleared with the monitoring fields before any write.)
+
+	// Reachability is the live liveness verdict from the collectors
+	// (internal/devreach: up | down | partial | unknown) — the ONE status every
+	// inventory surface renders. LastSeen is discovery bookkeeping, not this.
+	Reachability string `json:"reachability,omitempty"`
+	// SoftwareVersion is the OS version resolved from the device's own
+	// description (collectors.ResolveDeviceOS); "" when it does not carry one.
+	SoftwareVersion string `json:"software_version,omitempty"`
+	// ConfiguredLocation is the location configured ON the device (SNMPv2-MIB
+	// sysLocation, every vendor's agent answers it); "" when not configured.
+	ConfiguredLocation string `json:"configured_location,omitempty"`
 }
 
 // Metric is a single time-series sample emitted by a collector.
