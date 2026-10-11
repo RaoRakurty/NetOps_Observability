@@ -128,6 +128,7 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	ifaddr := map[string]map[string]string{}
 	ifindexMap := map[string]map[string]string{}
 	locations := map[string]string{}
+	softwareRevs := map[string]string{}
 	for _, r := range results {
 		if r.lastErr != "" {
 			lastErr = r.lastErr
@@ -154,6 +155,9 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 			if r.location != "" {
 				locations[r.id] = r.location
 			}
+			if r.softwareRev != "" {
+				softwareRevs[r.id] = r.softwareRev
+			}
 		}
 	}
 
@@ -177,6 +181,14 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	if len(locations) > 0 {
 		if b, err := json.Marshal(locations); err == nil {
 			redisPublish(ctx, "device-locations", sysLocationKey, string(b), 1800)
+		}
+	}
+
+	// deviceID → ENTITY-MIB software revision, the inventory's version source
+	// when the device's description carries none.
+	if len(softwareRevs) > 0 {
+		if b, err := json.Marshal(softwareRevs); err == nil {
+			redisPublish(ctx, "device-software", softwareRevKey, string(b), 1800)
 		}
 	}
 
@@ -214,15 +226,16 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 // (no shared mutable state during the parallel phase — the echo.go pattern), and
 // pollOnce aggregates serially after; correctness never depends on -race.
 type deviceOutcome struct {
-	id        string
-	lines     []string
-	events    []MetricEvent
-	reach     bool
-	ifaddr    map[string]string // interface IP → ifName
-	ifindex   map[string]string // ifIndex → ifName
-	location  string            // SNMPv2-MIB sysLocation as the device is configured ("" = not set)
-	lastErr   string
-	enrichErr string
+	id          string
+	lines       []string
+	events      []MetricEvent
+	reach       bool
+	ifaddr      map[string]string // interface IP → ifName
+	ifindex     map[string]string // ifIndex → ifName
+	location    string            // SNMPv2-MIB sysLocation as the device is configured ("" = not set)
+	softwareRev string            // ENTITY-MIB entPhysicalSoftwareRev of the chassis/module ("" = none)
+	lastErr     string
+	enrichErr   string
 }
 
 // pollDevice does ALL SNMP work for one device and stamps its samples with THIS
@@ -353,7 +366,9 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 	}
 	// FRU inventory (ENTITY-MIB) — info series, VM-only, best-effort. Devices
 	// without ENTITY-MIB yield nothing.
-	lines = append(lines, collectEntityInventory(dctx, addr, creds, tg.ID, vendor, now)...)
+	entLines, swRev := collectEntityInventory(dctx, addr, creds, tg.ID, vendor, now)
+	lines = append(lines, entLines...)
+	out.softwareRev = swRev
 	// DOM/DDM optics — Port Intelligence #94 P3, opt-in. Prefer a vendor DOM
 	// adapter (Juniper jnxDom / Nokia DDM, ifName-resolved); fall back to the
 	// universal ENTITY-SENSOR-MIB. Normalized rx/tx power, temp, voltage, bias

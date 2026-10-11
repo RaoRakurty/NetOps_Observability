@@ -82,9 +82,18 @@ func (s *server) stampDeviceReadFields(ctx context.Context, claims jwtClaims, ds
 	if err != nil {
 		logWarn("devices", "configured device locations unread — the device-configured site is blank this request", map[string]any{"error": err.Error()})
 	}
+	swRevs, err := collectors.FetchSoftwareRevMap(ctx)
+	if err != nil {
+		logWarn("devices", "ENTITY-MIB software revisions unread — the software version falls back to the device description only", map[string]any{"error": err.Error()})
+	}
 	for i := range ds {
 		ds[i].Reachability = devreach.Fold(maxUp, minUp, ds[i].ID)
-		ds[i].SoftwareVersion = collectors.ResolveDeviceOS(strings.ToLower(ds[i].Vendor), ds[i].OS, ds[i].OSVersion).Version
+		// The device's own description first (the version advisories are matched
+		// on), then the ENTITY-MIB software revision every vendor's agent can
+		// report per component.
+		ds[i].SoftwareVersion = firstNonEmpty(
+			collectors.ResolveDeviceOS(strings.ToLower(ds[i].Vendor), ds[i].OS, ds[i].OSVersion).Version,
+			swRevs[ds[i].ID])
 		ds[i].ConfiguredLocation = locs[ds[i].ID]
 	}
 	return ds

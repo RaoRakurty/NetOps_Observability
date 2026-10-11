@@ -663,6 +663,19 @@ func FetchRoutingDirection(ctx context.Context) ([]RoutingPair, error) {
 // collector.
 const sysLocationKey = "netops:inventory:syslocation"
 
+// softwareRevKey holds deviceID → ENTITY-MIB software revision.
+const softwareRevKey = "netops:inventory:softwarerev"
+
+// FetchSoftwareRevMap reads the device → ENTITY-MIB software revision map.
+// Absent → empty map, nil error; unread or undecodable → error (tracker 307).
+func FetchSoftwareRevMap(ctx context.Context) (map[string]string, error) {
+	out := map[string]string{}
+	if err := redisGetJSON(ctx, "software revision map", softwareRevKey, &out); err != nil {
+		return map[string]string{}, err
+	}
+	return out, nil
+}
+
 // FetchSysLocationMap reads the device → configured-location map. Absent →
 // empty map, nil error; unread or undecodable → error (tracker 307).
 func FetchSysLocationMap(ctx context.Context) (map[string]string, error) {
