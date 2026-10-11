@@ -108,3 +108,38 @@ func TestAggregateFlowApps_SrcResolution(t *testing.T) {
 		}
 	}
 }
+
+// The exporter's classification is reported beside the address verdict and
+// never changes it; an exporter that sends nothing groups exactly as before.
+func TestAggregateFlowAppsCarriesTheExporterVerdict(t *testing.T) {
+	cat := appid.NewCatalog(nil)
+	rows := []map[string]any{
+		{"d": "10.0.0.9", "s": "10.1.0.5", "xi": "13:453", "xn": "ms-office-365", "b": float64(900), "f": float64(9)},
+		{"d": "10.0.0.9", "s": "10.1.0.5", "xi": "13:77", "xn": "", "b": float64(300), "f": float64(3)},   // id only
+		{"d": "10.0.0.9", "s": "10.1.0.5", "xi": "3:443", "xn": "https", "b": float64(200), "f": float64(2)}, // port engine
+		{"d": "10.0.0.9", "s": "10.1.0.5", "xi": "garbage", "xn": "unknown", "b": float64(50), "f": float64(1)},
+		{"d": "10.0.0.9", "s": "10.1.0.5", "b": float64(10), "f": float64(1)}, // exporter sent nothing
+	}
+	out := aggregateFlowApps(rows, cat, nil)
+	byID := map[string]appFlowRow{}
+	for _, r := range out {
+		byID[r.ExporterAppID+"|"+r.ExporterApp] = r
+		if r.App != "unknown" {
+			t.Errorf("the address verdict must not change: %+v", r)
+		}
+	}
+	if r, ok := byID["13:453|ms-office-365"]; !ok || r.ExporterAppKind != appid.ExporterKindApp || r.Bytes != 900 {
+		t.Errorf("named exporter row: %+v", byID)
+	}
+	if r, ok := byID["13:77|"]; !ok || r.ExporterApp != "" {
+		t.Errorf("an id-only row must claim no name: %+v", byID)
+	}
+	if r, ok := byID["3:443|"]; !ok || r.ExporterAppKind != appid.ExporterKindServiceClass {
+		t.Errorf("a port-engine id is a service class with no app name: %+v", byID)
+	}
+	// "garbage"/"unknown" and the no-field row both carry no exporter verdict
+	// and fold into ONE row, as before this change.
+	if r, ok := byID["|"]; !ok || r.Bytes != 60 || r.ExporterAppKind != "" {
+		t.Errorf("rows with no usable exporter verdict: %+v", byID)
+	}
+}

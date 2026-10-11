@@ -261,6 +261,8 @@ SELECT count()                                       AS flows,
        countIf(proto = 6 AND tcp_flags > 0)          AS tcp_flows_with_flags,
        countIf(src_as > 0 OR dst_as > 0)             AS flows_with_as,
        countIf(` + priv("src_addr") + ` AND ` + priv("dst_addr") + `) AS private_only_flows,
+       countIf(exporter_app_id != '')                AS flows_with_app_id,
+       countIf(exporter_app_name != '')              AS flows_with_app_name,
        uniqExact(sampler_address)                    AS exporters
   FROM netops.flows
  WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + filter + `

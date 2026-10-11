@@ -28,6 +28,7 @@ import {
   windowScopeCaveat,
   windowScopeNote,
   windowScopeFields,
+  exporterView,
 } from "./flowsAppViews";
 import { useAppNames, ResolvedApp } from "../services/appNames";
 import { chartBase, axisStyle, timeAxisTicks, paletteColor, colorForMetric, hexToRgba } from "../theme/charts";
@@ -539,6 +540,7 @@ export function ApplicationsSection({
   const rows = useMemo(() => sortAppRows(resp?.apps), [resp]);
   const totals = useMemo(() => appTotals(rows), [rows]);
   const named = rows.filter((r) => !isUnknownApp(r.app)).length;
+  const exporterNamed = rows.filter((r) => exporterView(r).named).length;
   const caveat = windowScopeCaveat(filterKeys, "Applications") ?? windowScopeNote("Applications");
 
   const cols = useMemo<Column<FlowAppRow>[]>(
@@ -573,7 +575,15 @@ export function ApplicationsSection({
         ),
       },
       {
-        key: "tier", header: "Attribution", width: "16%", sortable: true,
+        key: "exporter", header: "Exporter says", width: "14%", sortable: true,
+        text: (r) => exporterView(r).label,
+        render: (r) => {
+          const x = exporterView(r);
+          return <span style={x.named ? undefined : { color: "var(--fg-subtle)" }} title={x.title}>{x.label}</span>;
+        },
+      },
+      {
+        key: "tier", header: "Attribution", width: "14%", sortable: true,
         text: (r) => tierView(r.tier).label,
         render: (r) => {
           const t = tierView(r.tier);
@@ -659,7 +669,7 @@ export function ApplicationsSection({
           </p>
         )}
       </div>
-      {resp && named === 0 && (
+      {resp && named === 0 && exporterNamed === 0 && (
         <>
           <TopNPanel title="Likely services (guessed from the port)" by="service_port" q={q} keyHeader="Service port" fmtKey={servicePortLabel} />
           <p className="fact-line" style={{ margin: "-4px 2px 0" }}>

@@ -5138,6 +5138,12 @@ export type FlowAppRow = {
   bytes: number;
   flows: number;
   dests: number;
+  /** What the exporter's own DPI called it (IPFIX/NetFlow v9 IE 96), app-kind ids only. */
+  exporter_app?: string;
+  /** IE 95 as "<engine>:<selector>" or "20:<pen>:<selector>" (RFC 6759). */
+  exporter_app_id?: string;
+  /** app | service_class | unclassified | unknown */
+  exporter_app_kind?: string;
 };
 export type FlowAppsResp = {
   apps: FlowAppRow[];

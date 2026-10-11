@@ -231,6 +231,92 @@ tests:
               assert!(contains(t, "flow_type=netflow"), t)
               assert!(contains(t, "ts_reason=derived from time_received_ns"), t)
 
+  - name: "flows: exporter application id (engine 13, NBAR-shaped) and name decode from hex"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "198.51.100.7"
+          src_addr: "10.40.0.10"
+          dst_addr: "10.40.0.20"
+          proto: "TCP"
+          type: "IPFIX"
+          time_received_ns: 1788888888000000000
+          application_id: "0d0001c5"
+          application_name: "6d732d6f66666963652d333635"
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.exporter_app_id, "13:453")
+              assert_eq!(.exporter_app_name, "ms-office-365")
+
+  - name: "flows: exporter application id with a PEN (engine 20, FortiGate-shaped) and a NUL-padded v9 name"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "198.51.100.7"
+          src_addr: "10.40.0.10"
+          dst_addr: "10.40.0.20"
+          proto: "UDP"
+          type: "NETFLOW_V9"
+          time_received_ns: 1788888888000000000
+          application_id: "14000030440000a1b2"
+          application_name: "7465616d732d6d656574696e67000000"
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.exporter_app_id, "20:12356:41394")
+              assert_eq!(.exporter_app_name, "teams-meeting")
+
+  - name: "flows: a hostile or malformed application identity is dropped, never stored"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "198.51.100.7"
+          src_addr: "10.40.0.10"
+          dst_addr: "10.40.0.20"
+          proto: "TCP"
+          type: "IPFIX"
+          time_received_ns: 1788888888000000000
+          application_id: "zz01"
+          application_name: "6d732d6f66666963652d333635222c2274656e616e745f6964223a2276696374696d"
+          exporter_app_name: "forged on the bus"
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.exporter_app_id), "non-hex id must be dropped")
+              assert!(!exists(.exporter_app_name), "a quote-bearing name and a forged bus value must both be dropped")
+              assert_eq!(.proto, 6)
+
+  - name: "flows: an exporter that sends no application fields is unchanged"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "198.51.100.7"
+          src_addr: "10.40.0.10"
+          dst_addr: "10.40.0.20"
+          proto: "UDP"
+          type: "IPFIX"
+          time_received_ns: 1788888888000000000
+          application_id: "00ff"
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.exporter_app_id), "engine 0 is invalid")
+              assert!(!exists(.exporter_app_name))
+              assert_eq!(.proto, 17)
+
   - name: "flows: protocol OSPFIGP is 89"
     inputs:
       - insert_at: flows_decoded

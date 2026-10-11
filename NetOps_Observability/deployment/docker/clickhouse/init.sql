@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS netops.flows
     vlan_id         UInt16,
     tcp_flags       UInt16 DEFAULT 0,  -- tcpControlBits (IPFIX IE6 / NetFlow TCP_FLAGS) via goflow2; 0 = none/not exported
     flow_type       LowCardinality(String) DEFAULT 'unknown',  -- netflow | ipfix | sflow
-    tenant_id       LowCardinality(String) DEFAULT ''  -- #20: stamped at Vector ingest (device→tenant); '' = global
+    tenant_id       LowCardinality(String) DEFAULT '',  -- #20: stamped at Vector ingest (device→tenant); '' = global
+    exporter_app_id   LowCardinality(String) DEFAULT '',  -- IPFIX/NetFlow v9 IE 95 as "<engine>:<selector>" (RFC 6759); '' = not exported
+    exporter_app_name LowCardinality(String) DEFAULT ''   -- IE 96, validated printable ≤64; '' = not exported (most exporters send names only in an options template)
 )
 ENGINE = MergeTree
 -- #20 Phase 3 — at-rest separation: tenant_id leads the partition key, so each

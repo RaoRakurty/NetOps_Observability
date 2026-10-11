@@ -827,6 +827,56 @@ transforms:
       # tcpControlBits (IPFIX IE6 / NetFlow TCP_FLAGS): ClickHouse column is
       # UInt16 — coerce like .proto so a string-typed value can't 400 the batch.
       .tcp_flags = to_int(.tcp_flags) ?? 0
+      # Exporter application identity — IPFIX / NetFlow v9 IE 95 applicationId
+      # and IE 96 applicationName (goflow2/mapping.yaml). goflow2 hands both
+      # over HEX-encoded, by design: its string renderer would splice raw
+      # exporter bytes into the JSON unescaped. The decoded values are only
+      # ever derived HERE from that hex — a pre-set exporter_app_* on the bus
+      # is deleted first. A value that fails validation is dropped (warned,
+      # rate-limited), never stored half-decoded; an exporter that sends
+      # neither field leaves both absent → '' in ClickHouse.
+      del(.exporter_app_id)
+      del(.exporter_app_name)
+      if exists(.application_id) {
+        ah = downcase(to_string(.application_id) ?? "")
+        aid = ""
+        if match(ah, r'^([0-9a-f]{2}){2,12}$') {
+          # RFC 6759: 1-byte classification engine, then the selector. Engine
+          # 20 (PANA-L7-PEN) carries a 4-byte private enterprise number first.
+          eng = parse_int(slice(ah, 0, 2) ?? "", base: 16) ?? 0
+          if eng == 20 && length(ah) >= 12 {
+            pen = parse_int(slice(ah, 2, 10) ?? "", base: 16) ?? -1
+            selh = slice(ah, 10) ?? ""
+            sel = -1
+            if length(selh) <= 14 { sel = parse_int(selh, base: 16) ?? -1 }
+            if pen >= 0 && sel >= 0 { aid = "20:" + to_string(pen) + ":" + to_string(sel) }
+          } else if eng > 0 && eng != 20 {
+            selh = slice(ah, 2) ?? ""
+            sel = -1
+            if length(selh) <= 14 { sel = parse_int(selh, base: 16) ?? -1 }
+            if sel >= 0 { aid = to_string(eng) + ":" + to_string(sel) }
+          }
+        }
+        if aid != "" {
+          .exporter_app_id = aid
+        } else {
+          log("component=flows_decoded dropped an exporter application_id that is not a valid RFC 6759 value", level: "warn", rate_limit_secs: 60)
+        }
+      }
+      if exists(.application_name) {
+        nh = downcase(to_string(.application_name) ?? "")
+        nm = ""
+        if length(nh) <= 256 && match(nh, r'^([0-9a-f]{2})+$') {
+          raw = decode_base16(nh) ?? ""
+          nm = strip_whitespace(replace(raw, r'\x00+$', ""))
+        }
+        # Printable ASCII without quote or backslash, 1..64.
+        if match(nm, r'^[\x20\x21\x23-\x5b\x5d-\x7e]{1,64}$') {
+          .exporter_app_name = nm
+        } else {
+          log("component=flows_decoded dropped an exporter application_name that is not printable or is too long", level: "warn", rate_limit_secs: 60)
+        }
+      }
       # Log-time standard: derive the ClickHouse `ts` from goflow2's receive
       # stamp (time_received_ns, UTC epoch) instead of leaving it to the column
       # DEFAULT now64() — which re-stamps every flow with the INSERT time, so

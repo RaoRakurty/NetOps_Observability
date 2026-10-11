@@ -574,6 +574,14 @@ services:
       - "netops.flows.raw"
       - "-transport.kafka.compression"
       - "snappy"
+      # Exporter application identity (IE 95/96), kept HEX — see the header
+      # of goflow2/mapping.yaml for why it must never be rendered as a string.
+      - "-mapping"
+      - "/etc/goflow2/mapping.yaml"
+    # DIRECTORY mount (F-51): a single-file bind pins the inode, so an
+    # editor's write-then-rename would leave the container on the old file.
+    volumes:
+      - ./goflow2:/etc/goflow2:ro
     ports:
       - "${NETFLOW_PORT:-2055}:2055/udp"
       - "${IPFIX_PORT:-4739}:4739/udp"

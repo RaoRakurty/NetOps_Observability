@@ -43,6 +43,11 @@ func ConvergeStmts(extra ...[]string) []string {
 		// clickhouse sink uses skip_unknown_fields, so the field starts landing
 		// as soon as the column exists — no ingest change needed on upgrade.
 		"ALTER TABLE netops.flows ADD COLUMN IF NOT EXISTS tcp_flags UInt16 DEFAULT 0 AFTER vlan_id",
+		// Exporter application identity (IPFIX / NetFlow v9 IE 95/96), decoded
+		// and validated by vector-router from goflow2's hex. Same upgrade path
+		// as tcp_flags: the field lands as soon as the column exists.
+		"ALTER TABLE netops.flows ADD COLUMN IF NOT EXISTS exporter_app_id LowCardinality(String) DEFAULT '' AFTER tenant_id",
+		"ALTER TABLE netops.flows ADD COLUMN IF NOT EXISTS exporter_app_name LowCardinality(String) DEFAULT '' AFTER exporter_app_id",
 		// Build-order #8: query-time IP→country enrichment. Lazy ip_trie
 		// dictionary over the operator-supplied CSV (scripts/geoip-prepare.py);
 		// safe to create with the file absent — the Geo endpoints probe and
