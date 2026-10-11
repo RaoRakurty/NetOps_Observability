@@ -207,3 +207,49 @@ func admitted(filters []string, series map[string]string) bool {
 	}
 	return false
 }
+
+// The exclusion partitions series by the presence of a device label: a
+// restricted device is hidden however it is identified, and ANOTHER device's
+// series is not hidden because its constant `source` equals a restricted
+// device's name.
+func TestMetricsExcludeFiltersPartitionByDeviceLabel(t *testing.T) {
+	f := metricsExcludeFilters([]string{"acme-core"}, []string{"derived"})
+	restricted := map[string]string{"__name__": "device_cpu_percent", "device": "acme-core"}
+	restrictedByName := map[string]string{"__name__": "cpu_usage", "hostname": "derived"}
+	other := map[string]string{"__name__": "device_mem_percent", "device": "globex-core", "source": "derived"}
+	if admittedEx(f, restricted) || admittedEx(f, restrictedByName) {
+		t.Errorf("a restricted device's series slipped through: %v", f)
+	}
+	if !admittedEx(f, other) {
+		t.Errorf("an unrestricted device's series was over-excluded by a constant source label: %v", f)
+	}
+}
+
+// admittedEx evaluates the exclusion filters (OR across filters; =, !=, !~
+// within one) against one series.
+func admittedEx(filters []string, series map[string]string) bool {
+	for _, f := range filters {
+		ok := true
+		for _, m := range strings.Split(strings.Trim(f, "{}"), ",") {
+			switch {
+			case strings.Contains(m, "!~"):
+				kv := strings.SplitN(m, "!~", 2)
+				for _, v := range strings.Split(strings.Trim(kv[1], `"`), "|") {
+					if v == series[kv[0]] {
+						ok = false
+					}
+				}
+			case strings.Contains(m, "!="):
+				kv := strings.SplitN(m, "!=", 2)
+				ok = ok && series[kv[0]] != strings.Trim(kv[1], `"`)
+			case strings.Contains(m, "="):
+				kv := strings.SplitN(m, "=", 2)
+				ok = ok && series[kv[0]] == strings.Trim(kv[1], `"`)
+			}
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
+}

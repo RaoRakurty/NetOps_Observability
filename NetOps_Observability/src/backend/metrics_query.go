@@ -63,23 +63,34 @@ import (
 //   - scoped with NO visible devices: returns a single matcher that can never
 //     match (an impossible label value), so the result set is empty.
 //
-// metricsExcludeFilter builds ONE VictoriaMetrics extra_filters[] entry that
-// EXCLUDES the given device ids/names (operator-visibility for restricted tenants).
-// All matchers are AND'd within the single filter so a restricted device's series
-// is dropped regardless of which label identifies it (device id, or hostname/source
-// name) — OR'd separate filters would let a series slip through on an absent label.
-func metricsExcludeFilter(ids, names []string) string {
-	var parts []string
-	if idRe := regexAlternation(ids); idRe != "" {
-		parts = append(parts, `device!~"`+idRe+`"`)
+// metricsExcludeFilters builds the VictoriaMetrics extra_filters[] that
+// EXCLUDE the given device ids/names (operator-visibility for restricted
+// tenants). extra_filters are OR'd, so the series are PARTITIONED by whether
+// they carry a device label, and each partition gets exactly one filter:
+//
+//	{device!="", device!~"<ids>"}                        — labelled series: by device id
+//	{device="",  hostname!~"<names>", source!~"<names>"} — device-less series: by name
+//
+// Every series falls in exactly one partition, so nothing slips through on an
+// absent label. The partition also stops OVER-exclusion: a labelled series is
+// judged by its device alone, so another device's series whose `source` holds
+// a constant ("derived", "sdwan-system") that happens to equal a restricted
+// device's name is no longer hidden (2026-10-11, the same defect class as the
+// scope filter's name matchers).
+func metricsExcludeFilters(ids, names []string) []string {
+	idRe, nameRe := regexAlternation(ids), regexAlternation(names)
+	if idRe == "" && nameRe == "" {
+		return nil
 	}
-	if nameRe := regexAlternation(names); nameRe != "" {
-		parts = append(parts, `hostname!~"`+nameRe+`"`, `source!~"`+nameRe+`"`)
+	labelled := `{device!=""`
+	if idRe != "" {
+		labelled += `,device!~"` + idRe + `"`
 	}
-	if len(parts) == 0 {
-		return ""
+	unlabelled := `{device=""`
+	if nameRe != "" {
+		unlabelled += `,hostname!~"` + nameRe + `",source!~"` + nameRe + `"`
 	}
-	return "{" + strings.Join(parts, ",") + "}"
+	return []string{labelled + "}", unlabelled + "}"}
 }
 
 // metricsNoVisibleDeviceFilter is the match-nothing selector: a label value that
@@ -121,8 +132,8 @@ func (s *server) metricsScopeFiltersFor(c jwtClaims) []string {
 	case !cross:
 		return metricsScopeFilters(ids, names, cross)
 	case len(rt.ids) > 0 || len(rt.names) > 0:
-		if f := metricsExcludeFilter(rt.ids, rt.names); f != "" {
-			return []string{f}
+		if f := metricsExcludeFilters(rt.ids, rt.names); len(f) > 0 {
+			return f
 		}
 	}
 	return nil
