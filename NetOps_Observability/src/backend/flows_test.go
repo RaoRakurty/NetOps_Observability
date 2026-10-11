@@ -482,3 +482,30 @@ func TestFlowTenantClauseMatchesTheExporter(t *testing.T) {
 		t.Error("no devices must stay default-closed")
 	}
 }
+
+// service_port folds both directions of a conversation onto the service end.
+func TestHandleFlowsTopNServicePort(t *testing.T) {
+	var gotSQL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotSQL = string(b)
+		_, _ = w.Write([]byte(`{"meta":[],"data":[],"rows":0}`))
+	}))
+	defer srv.Close()
+	t.Setenv("CLICKHOUSE_URL", srv.URL)
+
+	s := flowsTestServer(t)
+	w := httptest.NewRecorder()
+	s.handleFlowsTopN(w, req(http.MethodGet, "/api/flows/topn?by=service_port", "", superA()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	for _, want := range []string{
+		"concat(toString(proto), '/', toString(least(src_port, dst_port))) AS k",
+		"AND least(src_port, dst_port) > 0",
+	} {
+		if !strings.Contains(gotSQL, want) {
+			t.Errorf("SQL missing %q\n%s", want, gotSQL)
+		}
+	}
+}

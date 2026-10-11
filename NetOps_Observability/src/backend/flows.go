@@ -99,6 +99,12 @@ var flowTopDims = map[string]flowTopDim{
 	"src_port": {"toString(src_port)", "src_port"},
 	"dst_port": {"toString(dst_port)", "dst_port"},
 	"proto":    {"toString(proto)", ""},
+	// service_port is the LIKELY service end of a conversation, "<proto>/<port>":
+	// the lower of the two ports, since a client speaks from an ephemeral (high)
+	// port to the service's (low) one. It folds a conversation's two directions —
+	// request (dst_port = service) and reply (src_port = service) — into one row.
+	// A heuristic, and labelled as one wherever it is shown; never an app name.
+	"service_port": {"concat(toString(proto), '/', toString(least(src_port, dst_port)))", "least(src_port, dst_port)"},
 }
 
 // handleFlowsTopN is the generic top-N-by-dimension endpoint backing the NetFlow

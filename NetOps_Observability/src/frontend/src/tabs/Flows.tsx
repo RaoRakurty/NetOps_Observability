@@ -113,9 +113,12 @@ const PORT_NAMES: Record<string, string> = {
   "27017": "MongoDB", "9092": "Kafka", "9200": "Elasticsearch", "5672": "AMQP",
   // routing / network control
   "179": "BGP", "646": "LDP", "500": "IKE", "4500": "IPsec-NAT-T", "1701": "L2TP", "1723": "PPTP",
+  "3784": "BFD", "3785": "BFD-echo", "4784": "BFD-multihop", "520": "RIP", "1985": "HSRP",
+  // overlays / SD-WAN (12346 = Cisco SD-WAN DTLS control + IPsec data plane base port)
+  "4789": "VXLAN", "6081": "Geneve", "2152": "GTP-U", "12346": "SD-WAN DTLS/IPsec",
   // mgmt / telemetry
   "161": "SNMP", "162": "SNMP-trap", "514": "syslog", "6343": "sFlow", "2055": "NetFlow", "4739": "IPFIX",
-  "57400": "gNMI", "9339": "gNMI", "9090": "metrics", "8428": "metrics",
+  "57400": "gNMI", "9339": "gNMI", "6030": "gNMI", "830": "NETCONF", "9090": "metrics", "8428": "metrics",
   // AAA / voice
   "49": "TACACS+", "1812": "RADIUS-auth", "1813": "RADIUS-acct", "5060": "SIP", "5061": "SIP-TLS",
   // dhcp / misc
@@ -656,8 +659,32 @@ export function ApplicationsSection({
           </p>
         )}
       </div>
+      {resp && named === 0 && (
+        <>
+          <TopNPanel title="Likely services (guessed from the port)" by="service_port" q={q} keyHeader="Service port" fmtKey={servicePortLabel} />
+          <p className="fact-line" style={{ margin: "-4px 2px 0" }}>
+            No source named this traffic, so it is grouped by the port it most likely serves — a service class,
+            not the application. Name your applications in the{" "}
+            <a href="#/infrastructure/applications/registries" style={{ color: "var(--accent)", fontWeight: 500 }}>Registries</a>{" "}
+            to see them above.
+          </p>
+        </>
+      )}
     </>
   );
+}
+
+/**
+ * "6/443" → "443/tcp · HTTPS". The key is the service_port top-N dimension:
+ * protocol number and the lower of the two ports. Unknown shapes are shown
+ * verbatim, never guessed at.
+ */
+export function servicePortLabel(k: string): string {
+  const m = /^(\d{1,3})\/(\d{1,5})$/.exec(k);
+  if (!m) return k;
+  const proto = (PROTO_NAMES[m[1]] ?? `IP/${m[1]}`).toLowerCase();
+  const name = PORT_NAMES[m[2]];
+  return name ? `${m[2]}/${proto} · ${name}` : `${m[2]}/${proto}`;
 }
 
 // ── Section: Services — the catalog view of the flow plane (/api/flows/services)
