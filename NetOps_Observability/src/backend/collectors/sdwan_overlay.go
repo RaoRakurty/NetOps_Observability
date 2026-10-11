@@ -147,10 +147,14 @@ var sdwanMIBs = []sdwanMIB{
 	},
 }
 
-// Column numbers.
+// Column numbers. controlLocalProperties is numbered identically in every
+// published release of both families (Viptela 20.9–26.1, IOS XE SD-WAN
+// 17.9–26.1): .8 DnsName (the vBond hostname), .9 SiteId (Unsigned32),
+// .12 TlsPort, .13 SystemIp (InetAddressIP). Pinned by
+// TestSDWANOIDsArePinnedToTheMIB.
 const (
-	localSiteID   = 8
-	localSystemIP = 12
+	localSiteID   = 9
+	localSystemIP = 13
 	bfdSystemIP   = 6
 	bfdSiteID     = 7
 	bfdLocalColor = 8

@@ -236,9 +236,73 @@ func TestReadSessionsFoldsPerPeerAndColor(t *testing.T) {
 	}
 }
 
-// Identity columns differ between releases (lab, 2026-10-10: a vEdge answered
-// its site-id column with the vBond hostname, and no system-ip). A value of the
-// wrong type is dropped, never published as identity.
+// The lab (2026-10-10) showed the vBond hostname where the site-id was read:
+// the collector read column 8 (DnsName) instead of 9 (SiteId), and 12 (TlsPort)
+// instead of 13 (SystemIp). With the right columns, the neighbours do not leak
+// into identity and the real values are published.
+func TestIdentityIsReadFromSiteIdAndSystemIpNotTheirNeighbours(t *testing.T) {
+	m := newFakeMIB()
+	fam := sdwanMIBs[0]
+	seedEdge(m, fam, [4]byte{10, 255, 0, 1}, "vedge")
+	m.set(col(fam.local, 8), "0", strVal("vbond.or2.sys.cisco")) // DnsName
+	m.set(col(fam.local, 12), "0", intVal(23456))                // TlsPort
+	m.set(col(fam.local, 9), "0", intVal(50))                    // SiteId
+	m.set(col(fam.local, 13), "0", ipVal(10, 255, 0, 51))        // SystemIp
+	f, _ := probeOverlay(context.Background(), m.walk, "x", v2c("c"), lim)
+	if f.SiteID != "50" || f.SystemIP != "10.255.0.51" {
+		t.Fatalf("identity: site=%q system-ip=%q, want 50 / 10.255.0.51", f.SiteID, f.SystemIP)
+	}
+}
+
+// Numeric OIDs, as compiled by snmptranslate from the published MIBs. The
+// fixtures above are built from the same constants, so only a pin like this
+// can catch a wrong column.
+func TestSDWANOIDsArePinnedToTheMIB(t *testing.T) {
+	oid := func(a []int) string {
+		s := make([]string, len(a))
+		for i, n := range a {
+			s[i] = strconv.Itoa(n)
+		}
+		return strings.Join(s, ".")
+	}
+	want := map[string]string{
+		"viptela site-id":         "1.3.6.1.4.1.41916.4.2.5.9",
+		"viptela system-ip":       "1.3.6.1.4.1.41916.4.2.5.13",
+		"viptela personality":     "1.3.6.1.4.1.41916.11.1.1",
+		"viptela bfd system-ip":   "1.3.6.1.4.1.41916.6.1.1.1.6",
+		"viptela bfd state":       "1.3.6.1.4.1.41916.6.1.1.1.10",
+		"viptela tloc total":      "1.3.6.1.4.1.41916.6.1.6.1.3",
+		"cisco-sdwan site-id":     "1.3.6.1.4.1.9.9.1006.1.2.5.9",
+		"cisco-sdwan system-ip":   "1.3.6.1.4.1.9.9.1006.1.2.5.13",
+		"cisco-sdwan personality": "1.3.6.1.4.1.9.9.1004.1.1.1",
+		"cisco-sdwan bfd color":   "1.3.6.1.4.1.9.9.1002.1.1.1.1.9",
+		"cisco-sdwan tloc up":     "1.3.6.1.4.1.9.9.1002.1.1.6.1.4",
+		"cisco-sdwan tloc flap":   "1.3.6.1.4.1.9.9.1002.1.1.6.1.5",
+	}
+	v, c := sdwanMIBs[0], sdwanMIBs[1]
+	got := map[string]string{
+		"viptela site-id":         oid(col(v.local, localSiteID)),
+		"viptela system-ip":       oid(col(v.local, localSystemIP)),
+		"viptela personality":     oid(v.personality),
+		"viptela bfd system-ip":   oid(col(v.bfdEntry, bfdSystemIP)),
+		"viptela bfd state":       oid(col(v.bfdEntry, bfdState)),
+		"viptela tloc total":      oid(col(v.tlocEntry, tlocTotal)),
+		"cisco-sdwan site-id":     oid(col(c.local, localSiteID)),
+		"cisco-sdwan system-ip":   oid(col(c.local, localSystemIP)),
+		"cisco-sdwan personality": oid(c.personality),
+		"cisco-sdwan bfd color":   oid(col(c.bfdEntry, bfdColor)),
+		"cisco-sdwan tloc up":     oid(col(c.tlocEntry, tlocUp)),
+		"cisco-sdwan tloc flap":   oid(col(c.tlocEntry, tlocFlap)),
+	}
+	for k, w := range want {
+		if got[k] != w {
+			t.Errorf("%s = %s, want %s", k, got[k], w)
+		}
+	}
+}
+
+// A value of the wrong type in an identity column is dropped, never
+// published as identity (an agent that answers off-spec).
 func TestIdentityColumnsOfTheWrongTypeAreDropped(t *testing.T) {
 	m := newFakeMIB()
 	fam := sdwanMIBs[0]
