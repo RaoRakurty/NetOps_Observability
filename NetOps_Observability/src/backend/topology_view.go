@@ -348,6 +348,13 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 		in.CloudNodes, in.CloudEdges, in.CloudGroups = s.cloudPathGraph(r, tenant, cross, devs)
 	}
 
+	// SD-WAN branch segmentation: an edge with no site of record is grouped by
+	// the SD-WAN site its peers report (owner, 2026-10-10) — before projection,
+	// so the existing site grouping draws the branches.
+	switch mode {
+	case topology.ModeExplore, topology.ModeInvestigate, topology.ModeCapacity:
+		applySDWANSites(in.Devices, s.sdwanOverlay.Load())
+	}
 	view := topology.Project(in)
 	view.Degraded = append(view.Degraded, degraded...)
 	// SD-WAN overlay (tracker 349) on the physical views — never on path_trace
@@ -421,6 +428,23 @@ func (s *server) projectGeoView(ctx context.Context, claims jwtClaims, tenant st
 	})
 }
 
+// applySDWANSites gives each device with NO site of record the SD-WAN site its
+// overlay peers report. A site assigned by an operator or a source of truth
+// always wins; facts are the caller's visible devices only.
+func applySDWANSites(facts []topology.DeviceFact, snap *sdwanOverlaySnapshot) {
+	if snap == nil {
+		return
+	}
+	for i := range facts {
+		if facts[i].Site != "" {
+			continue
+		}
+		if site := snap.res.DeviceSites[facts[i].ID]; site != "" {
+			facts[i].Site = "SD-WAN site " + site
+		}
+	}
+}
+
 // attachSDWANOverlay appends the part of the inferred SD-WAN overlay
 // (tracker 349) the caller can see, and nothing else (§3a):
 //
@@ -492,7 +516,7 @@ func attachSDWANOverlay(view *topology.View, snap *sdwanOverlaySnapshot, facts [
 	}
 	if missing > 0 {
 		view.Degraded = append(view.Degraded, fmt.Sprintf(
-			"SD-WAN overlay data is unavailable for %d SD-WAN edge(s): neither their own SD-WAN MIBs nor their peers' tunnels identify them (IOS XE SD-WAN needs 17.6.1a or later, and the SNMP view must include the SD-WAN subtrees)", missing))
+			"%d SD-WAN edge(s) are shown without their tunnels: Correlix could not yet match them to the tunnels their peers report. Check that the edge answers SNMP for its interface addresses (and, on IOS XE SD-WAN, release 17.6.1a or later for the SD-WAN tables)", missing))
 	}
 }
 

@@ -7,11 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"netops/backend/safego"
@@ -367,11 +369,20 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 	// walked for interface metrics; one extra ipAddrTable walk). Lets BGP-LS
 	// links (interface IPs) resolve to real port names + join to metrics.
 	if ifNames != nil {
-		m, err := ipIfNameMap(dctx, addr, creds, ifNames)
+		// Its OWN deadline: this walk names the device's addresses, which is how
+		// topology and the SD-WAN overlay recognise the device at all (an edge
+		// whose SD-WAN MIBs do not answer is identified by its transport
+		// address). Run on the leftover of the metric walks' 8 s budget, it was
+		// cut off on slower agents and the device silently had no addresses
+		// (lab 2026-10-10: one cEdge of four published any).
+		ectx, ecancel := context.WithTimeout(ctx, 8*time.Second)
+		m, err := ipIfNameMap(ectx, addr, creds, ifNames)
+		ecancel()
 		if err != nil {
 			// Enrichment is best-effort, but its FAILURE is not benign: it is
 			// reported rather than vanishing into an empty map.
 			out.enrichErr = err.Error()
+			logEnrichFailure(tg.ID, err)
 		}
 		if len(m) > 0 {
 			out.ifaddr = m
@@ -534,4 +545,15 @@ func ospfNeighborAddr(idx string) string {
 		}
 	}
 	return strings.Join(parts[:4], ".")
+}
+
+// enrichFailLogAt rate-limits the per-device enrichment failure log (one line
+// a minute across the collector; the status LastError carries the rest).
+var enrichFailLogAt atomic.Int64
+
+func logEnrichFailure(device string, err error) {
+	now := time.Now().Unix()
+	if last := enrichFailLogAt.Load(); now-last >= 60 && enrichFailLogAt.CompareAndSwap(last, now) {
+		log.Printf("snmpmetrics: interface-address walk FAILED device=%s: %v — topology cannot match this device by its interface addresses this cycle", device, err)
+	}
 }

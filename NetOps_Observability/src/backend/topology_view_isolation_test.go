@@ -220,7 +220,7 @@ func twoTenantOverlay(t *testing.T) (*sdwanOverlaySnapshot, map[string]string) {
 			facts[id] = f
 		}
 	}
-	res := topology.InferOverlay(topology.OverlayInput{DevTenant: tenantOf, Facts: facts})
+	res := topology.InferOverlay(topology.OverlayInput{DevTenant: tenantOf, Facts: facts, DrawAllPairs: true})
 	have := map[string]bool{}
 	for id := range facts {
 		have[id] = true
@@ -291,7 +291,7 @@ func TestSDWANOverlayOnViewNamesWhatItCannotSee(t *testing.T) {
 	facts := []topology.DeviceFact{{ID: "cedge-9", Name: "cEDGE-9", IfNames: []string{"Sdwan-intf"}}}
 	var view topology.View
 	attachSDWANOverlay(&view, nil, facts, devs, time.Now())
-	if len(view.Degraded) != 1 || !strings.Contains(view.Degraded[0], "unavailable for 1 SD-WAN edge") {
+	if len(view.Degraded) != 1 || !strings.Contains(view.Degraded[0], "1 SD-WAN edge(s) are shown without their tunnels") {
 		t.Fatalf("no-snapshot note: %v", view.Degraded)
 	}
 	snap, _ := twoTenantOverlay(t)
@@ -299,11 +299,10 @@ func TestSDWANOverlayOnViewNamesWhatItCannotSee(t *testing.T) {
 	view = topology.View{}
 	attachSDWANOverlay(&view, snap, facts, devs, time.Now())
 	joined := strings.Join(view.Degraded, " | ")
-	if !strings.Contains(joined, "20 minutes old") || !strings.Contains(joined, "unavailable for 1 SD-WAN edge") {
+	if !strings.Contains(joined, "20 minutes old") || !strings.Contains(joined, "1 SD-WAN edge(s) are shown without their tunnels") {
 		t.Fatalf("stale + missing notes: %v", view.Degraded)
 	}
 }
-
 
 // ── SD-WAN tunnels on /api/tunnels (owner report 2026-10-10) ────────────────
 
@@ -346,4 +345,14 @@ func TestSDWANTunnelRowsHonourVisibilityStatusAndLimit(t *testing.T) {
 	if got := sdwanTunnelRows(nil, devsOf(tenantOf, "acme"), "", 10, time.Now()); got != nil {
 		t.Fatal("no snapshot must yield no rows")
 	}
+}
+
+func TestApplySDWANSitesNeverOverridesASiteOfRecord(t *testing.T) {
+	snap := &sdwanOverlaySnapshot{at: time.Now(), res: topology.OverlayResult{DeviceSites: map[string]string{"a": "40", "b": "60"}}}
+	facts := []topology.DeviceFact{{ID: "a"}, {ID: "b", Site: "London DC"}, {ID: "c"}}
+	applySDWANSites(facts, snap)
+	if facts[0].Site != "SD-WAN site 40" || facts[1].Site != "London DC" || facts[2].Site != "" {
+		t.Fatalf("sites: %q %q %q", facts[0].Site, facts[1].Site, facts[2].Site)
+	}
+	applySDWANSites(facts, nil) // no snapshot: no change, no panic
 }

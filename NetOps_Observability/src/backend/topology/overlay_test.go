@@ -104,6 +104,7 @@ func overlayEdges(r OverlayResult, rel string) map[string]Edge {
 func TestInferOverlayOnTheLabShape(t *testing.T) {
 	var in OverlayInput
 	estate{tenant: "t1", reporting: 4, silent: 4, colors: []string{"biz-internet", "mpls"}, peerOnly: true}.build(&in)
+	in.DrawAllPairs = true // the drill-down view: every pair drawn
 	r := InferOverlay(in)
 
 	if r.Stats.Unresolved != 0 || r.Stats.Ambiguous != 0 {
@@ -153,6 +154,7 @@ func TestInferOverlayOnTheLabShape(t *testing.T) {
 func TestInferOverlayPairStatus(t *testing.T) {
 	var in OverlayInput
 	estate{tenant: "t1", reporting: 3, colors: []string{"mpls"}, down: map[[2]int]bool{{0, 2}: true}}.build(&in)
+	in.DrawAllPairs = true
 	pairs := overlayEdges(InferOverlay(in), RelOverlay)
 	if s := pairs["sdwan|"+devID("t1", 0)+"|"+devID("t1", 2)].Status; s != StatusDown {
 		t.Fatalf("all sessions down: %s", s)
@@ -169,6 +171,7 @@ func TestInferOverlayPairStatus(t *testing.T) {
 	g := in2.Facts[devID("t1", 1)]
 	g.Peers[0].ColorPairs[1].Up, g.Peers[0].ColorPairs[1].State = 0, "down"
 	in2.Facts[devID("t1", 1)] = g
+	in2.DrawAllPairs = true
 	r := InferOverlay(in2)
 	if s := overlayEdges(r, RelOverlay)["sdwan|"+devID("t1", 0)+"|"+devID("t1", 1)].Status; s != StatusDegraded {
 		t.Fatalf("one colour down: %s", s)
@@ -368,5 +371,52 @@ func BenchmarkInferOverlay1000HubSpoke(b *testing.B) {
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
 		InferOverlay(in)
+	}
+}
+
+// Owner, 2026-10-10: the SD-WAN picture is branches attached to the shared
+// transports — not an edge↔edge mesh. By default only tunnels that are NOT
+// fully up are drawn between edges; every edge still attaches to its transports.
+func TestInferOverlayDefaultIsBranchesOnTransports(t *testing.T) {
+	var in OverlayInput
+	estate{tenant: "t1", reporting: 4, silent: 4, colors: []string{"biz-internet", "mpls"}, peerOnly: true,
+		down: map[[2]int]bool{{0, 5}: true}}.build(&in)
+	r := InferOverlay(in)
+	pairs := overlayEdges(r, RelOverlay)
+	if len(pairs) != 1 || pairs["sdwan|"+devID("t1", 0)+"|"+devID("t1", 5)].Status != StatusDown {
+		t.Fatalf("default view drew %d pair edges, want only the one that is down: %v", len(pairs), pairs)
+	}
+	if m := overlayEdges(r, RelInferred); len(m) != 16 {
+		t.Fatalf("every edge must still attach to its transports: %d memberships", len(m))
+	}
+}
+
+// Every edge gets its SD-WAN site from what its peers report — including the
+// edges that answer no SD-WAN MIB themselves.
+func TestInferOverlayResolvesSitesFromPeers(t *testing.T) {
+	var in OverlayInput
+	estate{tenant: "t1", reporting: 2, silent: 2, colors: []string{"mpls"}, peerOnly: true}.build(&in)
+	for id, f := range in.Facts {
+		for i := range f.Peers {
+			f.Peers[i].SiteID = "site-of-" + f.Peers[i].SystemIP
+		}
+		in.Facts[id] = f
+	}
+	r := InferOverlay(in)
+	for i := 0; i < 4; i++ {
+		if got := r.DeviceSites[devID("t1", i)]; got != "site-of-"+sysIP(i) {
+			t.Fatalf("edge %d site = %q", i, got)
+		}
+	}
+	// Conflicting reports leave the site unknown rather than picking one.
+	f := in.Facts[devID("t1", 0)]
+	for i := range f.Peers {
+		if f.Peers[i].SystemIP == sysIP(2) {
+			f.Peers[i].SiteID = "other"
+		}
+	}
+	in.Facts[devID("t1", 0)] = f
+	if got, ok := InferOverlay(in).DeviceSites[devID("t1", 2)]; ok {
+		t.Fatalf("a conflicted site was picked: %q", got)
 	}
 }

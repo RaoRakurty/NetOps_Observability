@@ -73,8 +73,15 @@ type OverlayInput struct {
 	// view switches to exceptions-only (0 → 2,000).
 	MaxPairEdges int
 	// DenseMeshMin: a tenant with at least this many overlay members whose
-	// pair density is ≥ 0.9 is drawn exceptions-only (0 → 16).
+	// pair density is ≥ 0.9 is drawn exceptions-only (0 → 16). Only consulted
+	// when DrawAllPairs is set.
 	DenseMeshMin int
+	// DrawAllPairs draws every edge↔edge overlay pair (a drill-down view). The
+	// DEFAULT is the SD-WAN picture operators read (owner, 2026-10-10): each
+	// branch attached to the shared transports, and an edge↔edge tunnel drawn
+	// only when it is NOT fully up — healthy tunnels are summarised on the
+	// transport nodes, never drawn as an N² mesh.
+	DrawAllPairs bool
 }
 
 // OverlayStats is what the inference could and could not establish.
@@ -94,6 +101,10 @@ type OverlayResult struct {
 	Stats OverlayStats
 	// SystemIPs: tenant → system-ip → device id (resolved owners only).
 	SystemIPs map[string]map[string]string
+	// DeviceSites: device id → SD-WAN site-id, from what its peers report in
+	// their BFD tables (and its own validated answer). Lets the view segment
+	// edges by branch even when the device answers no SD-WAN MIB.
+	DeviceSites map[string]string
 }
 
 // TransportNodeID is the stable, tenant-namespaced id of a transport node, so a
@@ -134,7 +145,7 @@ func InferOverlay(in OverlayInput) OverlayResult {
 	if denseMin <= 0 {
 		denseMin = 16
 	}
-	res := OverlayResult{SystemIPs: map[string]map[string]string{}, Stats: OverlayStats{Shape: map[string]string{}}}
+	res := OverlayResult{SystemIPs: map[string]map[string]string{}, DeviceSites: map[string]string{}, Stats: OverlayStats{Shape: map[string]string{}}}
 
 	// ── 1. address ownership, per tenant ──────────────────────────────────────
 	addrOwner := map[string]map[string]string{} // tenant → addr → device ("" = ambiguous)
@@ -241,6 +252,39 @@ func InferOverlay(in OverlayInput) OverlayResult {
 			}
 			res.SystemIPs[t][sys] = dev
 		}
+	}
+
+	// ── 2b. SD-WAN site per device ────────────────────────────────────────────
+	// A peer row carries the remote edge's site-id; with the system-ip resolved
+	// to its device, that is the device's site. Conflicting reports leave the
+	// site unknown rather than picking one.
+	siteVotes := map[string]string{}
+	conflicted := map[string]bool{}
+	vote := func(dev, site string) {
+		if dev == "" || site == "" || conflicted[dev] {
+			return
+		}
+		if prev, ok := siteVotes[dev]; ok && prev != site {
+			conflicted[dev] = true
+			delete(siteVotes, dev)
+			return
+		}
+		siteVotes[dev] = site
+	}
+	for _, dev := range devs {
+		f := in.Facts[dev]
+		t, ok := in.DevTenant[dev]
+		if !ok {
+			continue
+		}
+		vote(dev, f.SiteID)
+		owners := res.SystemIPs[t]
+		for _, p := range f.Peers {
+			vote(owners[p.SystemIP], p.SiteID)
+		}
+	}
+	for dev, site := range siteVotes {
+		res.DeviceSites[dev] = site
 	}
 
 	// ── 3. pairs and colours ──────────────────────────────────────────────────
@@ -396,7 +440,7 @@ func InferOverlay(in OverlayInput) OverlayResult {
 		shape := OverlayShapePairs
 		possible := members * (members - 1) / 2
 		dense := members >= denseMin && possible > 0 && float64(n) >= 0.9*float64(possible)
-		if n > maxPairs || dense {
+		if !in.DrawAllPairs || n > maxPairs || dense {
 			shape = OverlayShapeExceptions
 		}
 		res.Stats.Shape[t] = shape
