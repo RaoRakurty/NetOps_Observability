@@ -103,6 +103,7 @@ import (
 	"netops/backend/internal/parsetrace"
 	"netops/backend/internal/pipedebug"
 	// DEBUG-ROUTES-END
+	"netops/backend/internal/featureflags"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/quarantine"
@@ -660,7 +661,12 @@ type server struct {
 	ldap        *ldapConfigStore
 	tacacs      *tacacsConfigStore
 	tokenPolicy *tokenPolicyStore
-	secPolicy   *policy.SecurityStore // #24 security-policy engine Source (catalog + per-scope overrides)
+	// features is the platform-admin Features page registry (tracker 348).
+	// Loaded before any reader of its flags runs. restart carries a
+	// "restart to apply" request to Run.
+	features  *featureflags.Registry
+	restart   *restartGate
+	secPolicy *policy.SecurityStore // #24 security-policy engine Source (catalog + per-scope overrides)
 	// ITSM connectors (ServiceNow + Jira) are PER-TENANT and owned by itsmCfg
 	// (itsm_config.go), which builds + hot-swaps them on save. Resolve a tenant's
 	// connector via serviceNowFor()/jiraFor(); the incident-projection worker keys
@@ -762,6 +768,11 @@ func newServer() *server {
 		logInfo("store", "recovered settings written under pre-2026-07-21 store keys",
 			map[string]any{"keys": recovered, "count": len(recovered)})
 	}
+
+	// Features page (tracker 348): saved feature switches are applied to the
+	// environment HERE — after the store is selected, before any collector,
+	// worker or module reads them — so what starts is what was saved.
+	features := newFeatureRegistry()
 
 	// Secret-custody Vault (#17). Dormant (plaintext passthrough) unless
 	// SEAL_PROVIDER is set; fail closed if a configured provider can't unseal the
@@ -1160,6 +1171,8 @@ func newServer() *server {
 	}
 
 	srv := &server{
+		features:         features,
+		restart:          &restartGate{ch: make(chan struct{}, 1)},
 		startedAt:        time.Now().UTC(),
 		workers:          &workerGroup{},
 		discovery:        d,
@@ -2988,8 +3001,14 @@ func Run() {
 		}
 	}()
 
-	<-stop
-	logInfo("shutdown", "shutdown requested", nil)
+	select {
+	case <-stop:
+		logInfo("shutdown", "shutdown requested", nil)
+	case <-srv.restart.ch:
+		// Features page "restart to apply": the same graceful path; Run
+		// returns, the process exits 0 and its supervisor starts it again.
+		logInfo("shutdown", "restart requested from the Features page", nil)
+	}
 	// Order matters: stop accepting/finish in-flight HTTP first, THEN cancel the
 	// workers' context, THEN wait for them. Cancelling before the drain (and not
 	// waiting at all) is what abandoned in-flight ticketing/report/incident
@@ -3136,6 +3155,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/tacacs/config", s.handleTACACSConfig)
 	mux.HandleFunc("/api/auth/tacacs/test", s.handleTACACSTest)
 	mux.HandleFunc("/api/auth/token-policy", s.handleTokenPolicy)
+	// Features page (tracker 348): platform-global switches + restart-to-apply.
+	mux.HandleFunc("/api/platform/features", s.elevatedOnlyMutations(s.handlePlatformFeatures))
+	mux.HandleFunc("/api/platform/restart", s.elevatedOnly(s.handlePlatformRestart))
 	// Security Policy engine (#24): catalog, effective-policy/simulator, per-scope
 	// override editing. Admin-gated; system-scope writes are platform-owner only.
 	mux.HandleFunc("/api/policy/catalog", s.handlePolicyCatalog)

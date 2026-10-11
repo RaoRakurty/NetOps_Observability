@@ -237,6 +237,9 @@ env:
   ENABLE_TUNNEL_DISCOVERY: "false"
   ENABLE_SDWAN_OVERLAY: "true"
   ENABLE_VRF_COLLECTION: "true"
+  # The api Deployment restarts an exited pod, so the Features page may offer
+  # "restart to apply" (tracker 348). States a fact; not an operator knob.
+  CORRELIX_SUPERVISED: "true"
   # Notifications — every channel off until its credentials exist.
   FEATURE_SLACK_NOTIFICATIONS: "false"
   FEATURE_PAGERDUTY_NOTIFICATIONS: "false"

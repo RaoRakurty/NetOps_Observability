@@ -4908,6 +4908,32 @@ export interface VrfDialect {
 
 /** A routing instance the device's BGP control-plane series report. That lane
  *  carries the instance NAME but not which interfaces belong to it. */
+/** One switchable feature on the Features page (backend feature_flags.go). */
+export interface PlatformFeature {
+  env: string;
+  label: string;
+  group: string;
+  help: string;
+  /** "live": in force when saved. "restart": in force after the api restarts. */
+  apply: "live" | "restart";
+  /** Reaches into the network or out of the platform; turning it on needs a confirmation. */
+  risky: boolean;
+  running: boolean;
+  desired: boolean;
+  restart_pending: boolean;
+  source: "console" | "install" | "default";
+  install_value: boolean | null;
+  updated_by?: string;
+  updated_at?: string;
+}
+
+export interface PlatformFeatures {
+  features: PlatformFeature[];
+  restart_pending: boolean;
+  can_restart: boolean;
+  store_load_error: string;
+}
+
 export interface VrfRoutingInstance {
   name: string;
   /** "bgp_control_plane", or the VRF MIB the device answered ("mpls-l3vpn", "viptela-vpn", …). */
@@ -5488,6 +5514,15 @@ export const api = {
     request<{ config: TacacsConfig }>("/api/auth/tacacs/config", { method: "PUT", body: JSON.stringify(cfg) }),
   testTacacs: (username?: string, password?: string) =>
     request<AuthTestResult>("/api/auth/tacacs/test", { method: "POST", body: JSON.stringify({ username, password }) }),
+
+  // Features page (tracker 348) — platform-owner only; switches are platform-global.
+  platformFeatures: () => request<PlatformFeatures>("/api/platform/features"),
+  setPlatformFeature: (env: string, value: boolean, acknowledge?: string) =>
+    request<{ feature: PlatformFeature; restart_pending: boolean }>("/api/platform/features", {
+      method: "PUT",
+      body: JSON.stringify(acknowledge ? { env, value, acknowledge } : { env, value }),
+    }),
+  restartPlatform: () => request<{ status: string }>("/api/platform/restart", { method: "POST" }),
 
   // Token policy (access/refresh lifetimes) — admin-gated, clamped server-side.
   tokenPolicy: () => request<TokenPolicy>("/api/auth/token-policy"),

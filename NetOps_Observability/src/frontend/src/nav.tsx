@@ -97,6 +97,7 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   // Sealed-quarantine viewer (Platform → Tools) — /api/quarantine is
   // requirePlatformAdmin, so the page belongs to the provider section.
   Quarantine: () => import("./pages/platform/Quarantine"),
+  Features: () => import("./pages/platform/Features"),
 };
 
 const Dashboard = lazy(ROUTE_CHUNKS["Dashboard"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -187,6 +188,7 @@ const PipelineDebugger = lazy(ROUTE_CHUNKS["PipelineDebugger"] as () => Promise<
 const TicketDelivery = lazy(ROUTE_CHUNKS["TicketDelivery"] as () => Promise<{ default: React.ComponentType<any> }>);
 // Sealed-quarantine viewer — Platform → Tools.
 const Quarantine = lazy(ROUTE_CHUNKS["Quarantine"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Features = lazy(ROUTE_CHUNKS["Features"] as () => Promise<{ default: React.ComponentType<any> }>);
 
 // A leaf is one rendered view. Sections with multiple leaves get a SubNav.
 export type NavLeaf = {
@@ -568,6 +570,10 @@ export const NAV: NavSection[] = [
       //                   requirePlatformAdmin, uniformly on all six routes
       { id: "auth", label: "Authentication", group: "Security", render: () => <AuthenticationAdmin /> },
       { id: "data-protection", label: "Data Protection", group: "Security", render: () => <DataProtection /> },
+      // Configuration — what this installation runs (tracker 348, 2026-10-11).
+      // features → feature_flags.go handlePlatformFeatures / handlePlatformRestart,
+      //            requirePlatformAdmin (the switches are platform-global)
+      { id: "features", label: "Features", group: "Configuration", render: () => <Features /> },
       // Tools — the provider's operational instruments and the raw-backend
       // escape hatches.
       // health     → stack_health.go, requireCrossTenant

@@ -43,6 +43,7 @@ const GATES: Record<string, { scope: "platform" | "tenant"; gate: string }> = {
   // is the safe direction; unhiding it would be a new exposure.
   graphql: { scope: "platform", gate: "graphql.go handleGraphQL → requirePerm(infrastructure, read); UI kept provider-only (fail-closed)" },
   "pipeline-debugger": { scope: "platform", gate: "internal/pipedebug/http.go via debugAuthz → requirePlatformAdmin, on all five /api/debug/* routes" },
+  features: { scope: "platform", gate: "feature_flags.go handlePlatformFeatures / handlePlatformRestart → requirePlatformAdmin" },
   quarantine: { scope: "platform", gate: "pipeline_processors.go handleQuarantineList → requirePlatformAdmin (the index holds events attributable to NO tenant)" },
   // ── Administration ─────────────────────────────────────────────────────────
   access: { scope: "tenant", gate: "access_explain.go handleAccessExplain → requireAdmin" },
@@ -92,9 +93,10 @@ describe("Platform is ONE provider-only section", () => {
     expect(platform.label).toBe("Platform");
   });
 
-  it("carries exactly the Security and Tools groups the owner asked for", () => {
+  it("carries the Security and Tools groups the owner asked for, plus Configuration (Features, tracker 348)", () => {
     const groups = [...new Set((platform.children ?? []).map((l) => l.group).filter(Boolean))];
-    expect(groups).toEqual(["Security", "Tools"]);
+    expect(groups).toEqual(["Security", "Configuration", "Tools"]);
+    expect(groupIds(platform, "Configuration")).toEqual(["features"]);
   });
 
   it("Security holds the provider-level security plumbing", () => {

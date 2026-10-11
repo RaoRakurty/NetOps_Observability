@@ -1838,6 +1838,10 @@ services:
       # interfaces belong to each, from the vendor or standard MIB the device
       # answers → Device → Interfaces grouped by instance. Read-only, UDP/161.
       ENABLE_VRF_COLLECTION: ${ENABLE_VRF_COLLECTION:-true}
+      # Features page "restart to apply" (tracker 348): the api may exit 0 to
+      # restart itself ONLY because `restart: unless-stopped` brings it back.
+      # Not an operator knob — it states a fact about this deployment.
+      CORRELIX_SUPERVISED: "true"
       # #13 Vulnerability Management: operator-prepared advisory feed (run
       # scripts/vuln-feed-prepare.py → data/vuln/, mounted read-only below).
       # Lazy + mtime hot-reload; /api/vulns answers vuln_enabled:false until

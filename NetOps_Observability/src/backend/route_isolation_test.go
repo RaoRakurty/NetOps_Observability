@@ -786,6 +786,8 @@ var routeIsolationLedger = map[string]string{
 	"/api/auth/sso/tenant-idp/": "adminScoped",
 	"/api/auth/sso/config":      "platform",
 	"/api/auth/token-policy":    "platform",
+	"/api/platform/features":    "platform",
+	"/api/platform/restart":     "platform",
 	"/api/copilot/config":       "platform",
 	// Per-tenant ingestion service surface (Wave 1 #2): the cloud-ingest poller's
 	// platform credential (ingest:cloud API key in the global realm). It fans one
