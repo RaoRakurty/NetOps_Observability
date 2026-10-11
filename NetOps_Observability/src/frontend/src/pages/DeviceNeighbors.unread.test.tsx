@@ -83,3 +83,50 @@ describe("the BGP and OSPF sections", () => {
     expect(screen.queryByText(/No BGP peer seen on this device/)).toBeNull();
   });
 });
+
+// SD-WAN control plane (OMP): shown on edges with their sessions, hidden on
+// devices that run no OMP, counts-only on controllers, UNKNOWN when unread.
+describe("the OMP section", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.topologyLinks).mockResolvedValue({ links: [], count: 0, source: "none" } as never);
+  });
+  const route = (map: Record<string, unknown>) => (q: string) => {
+    for (const [k, v] of Object.entries(map)) if (q.startsWith(k + "{")) return v instanceof Error ? Promise.reject(v) : Promise.resolve(v);
+    return Promise.resolve({ data: { result: [] } });
+  };
+  const series = (metric: Record<string, string>, v: string) => ({ metric, value: [0, v] });
+
+  it("lists an edge's controller sessions with their state", async () => {
+    vi.mocked(api.metricsQuery).mockImplementation(route({
+      device_omp_peer_state: { data: { result: [series({ peer: "10.255.255.1", type: "vsmart", site_id: "1000" }, "3"), series({ peer: "10.255.255.2", type: "vsmart" }, "8")] } },
+      device_omp_peers: { data: { result: [series({ state: "up" }, "2"), series({ state: "not_up" }, "0")] } },
+    }) as never);
+    render(<DeviceNeighbors device={device} />);
+    expect(await screen.findByText("SD-WAN control sessions (OMP)")).toBeInTheDocument();
+    expect(screen.getByText("10.255.255.1")).toBeInTheDocument();
+    expect(screen.getByText("up (graceful restart)")).toBeInTheDocument();
+    expect(screen.getByText("2 up · 0 not up")).toBeInTheDocument();
+  });
+
+  it("stays hidden on a device that runs no OMP", async () => {
+    vi.mocked(api.metricsQuery).mockImplementation(route({}) as never);
+    render(<DeviceNeighbors device={device} />);
+    await screen.findByText(/No neighbour protocol reported one here/);
+    expect(screen.queryByText("SD-WAN control sessions (OMP)")).toBeNull();
+  });
+
+  it("says a controller shows counts only", async () => {
+    vi.mocked(api.metricsQuery).mockImplementation(route({
+      device_omp_peers: { data: { result: [series({ state: "up" }, "120"), series({ state: "not_up" }, "3")] } },
+    }) as never);
+    render(<DeviceNeighbors device={device} />);
+    expect(await screen.findByText(/This is a controller/)).toBeInTheDocument();
+  });
+
+  it("says UNKNOWN when the read fails", async () => {
+    vi.mocked(api.metricsQuery).mockImplementation(route({ device_omp_peer_state: new Error("502 Bad Gateway") }) as never);
+    render(<DeviceNeighbors device={device} />);
+    expect((await screen.findByTestId("device-omp-unread")).textContent).toMatch(/UNKNOWN here — not absent/);
+  });
+});

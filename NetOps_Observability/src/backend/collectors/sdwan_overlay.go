@@ -86,6 +86,14 @@ type OverlayDeviceFacts struct {
 	DetailRead bool      `json:"detail_read"`
 	WalkedAt   time.Time `json:"walked_at"`           // identity + TLOC
 	DetailAt   time.Time `json:"detail_at,omitempty"` // BFD sessions
+	// OMP control-plane sessions (sdwan_omp.go). OMPRead says the table was
+	// read; per-peer rows are kept for edges only (a controller lists every
+	// edge), the counts always.
+	OMPRead  bool             `json:"omp_read"`
+	OMPPeers []OverlayOMPPeer `json:"omp_peers,omitempty"`
+	OMPUp    int              `json:"omp_up"`
+	OMPNotUp int              `json:"omp_not_up"`
+	ompAll   []OverlayOMPPeer
 }
 
 // OverlayTLOC is one local transport locator (an interface on a transport).
@@ -340,6 +348,7 @@ func parseTLOCIndex(idx string) (ifName, encap string, ok bool) {
 type overlayLimits struct {
 	maxSessionRows int // BFD session rows per column
 	maxTLOCRows    int
+	maxOMPRows     int // OMP peer rows per column (a controller lists every edge)
 }
 
 // walkFn is the bounded column walk (snmpWalkColumnBounded in production; a
@@ -539,6 +548,7 @@ func NewSDWANOverlay(targets TargetFunc) Collector {
 		limits: overlayLimits{
 			maxSessionRows: envIntBounded("SDWAN_BFD_MAX_ROWS", 20000, 100, 200000),
 			maxTLOCRows:    256,
+			maxOMPRows:     envIntBounded("SDWAN_OMP_MAX_ROWS", 4096, 16, 100000),
 		},
 		targets: targets,
 		walk:    snmpWalkColumnBounded,
@@ -669,6 +679,9 @@ func (c *sdwanOverlayCollector) pollOnce(ctx context.Context) {
 				fmt.Sprintf(`device_sdwan_bfd_peers{device=%q,state="not_up"} %d %d`, r.id, peersDown, now),
 				fmt.Sprintf(`collector_sdwan_walk_rows{device=%q} %d %d`, r.id, f.SessionsRead, now))
 		}
+		if f.OMPRead {
+			lines = append(lines, ompLines(r.id, f.MIB, f.Personality, f.ompAll, now)...)
+		}
 		t := 0
 		if f.Truncated {
 			t = 1
@@ -787,6 +800,29 @@ func (c *sdwanOverlayCollector) pollDevice(ctx context.Context, tg Target) devic
 	} else {
 		f.Peers, f.SessionsRead, f.DetailRead, f.DetailAt = snap.facts.Peers, snap.facts.SessionsRead, snap.facts.DetailRead, snap.facts.DetailAt
 		f.LocalTLOCAddrs = snap.facts.LocalTLOCAddrs
+	}
+
+	// OMP sessions: every cycle for a capable device (a handful of rows on an
+	// edge). An unread table keeps the previous reading — UNKNOWN, never
+	// "no controllers".
+	octx, ocancel := context.WithTimeout(ctx, 20*time.Second)
+	omp, _, oerr := readOMP(octx, c.walk, addr, creds, f.MIB, c.limits.maxOMPRows)
+	ocancel()
+	if oerr != nil {
+		f.OMPRead, f.OMPPeers, f.OMPUp, f.OMPNotUp, f.ompAll = snap.facts.OMPRead, snap.facts.OMPPeers, snap.facts.OMPUp, snap.facts.OMPNotUp, snap.facts.ompAll
+	} else {
+		f.OMPRead, f.ompAll = true, omp
+		f.OMPUp, f.OMPNotUp = 0, 0
+		for _, p := range omp {
+			if p.Up() {
+				f.OMPUp++
+			} else {
+				f.OMPNotUp++
+			}
+		}
+		if !isController(f.Personality) {
+			f.OMPPeers = omp
+		}
 	}
 
 	if perr := c.publish(ctx, f, 3*c.detailEvery); perr != nil {

@@ -15,6 +15,13 @@ import AskIris from "../components/AskIris";
 
 const BGP_STATE: Record<string, string> = { "1": "idle", "2": "connect", "3": "active", "4": "opensent", "5": "openconfirm", "6": "established" };
 const OSPF_STATE: Record<string, string> = { "1": "down", "2": "attempt", "3": "init", "4": "two-way", "5": "exch-start", "6": "exchange", "7": "loading", "8": "full" };
+// Cisco SD-WAN OMP session states (VIPTELA-OMP / CISCO-SDWAN-OMP-MIB); up(3)
+// and up-in-gr(8, graceful restart) are healthy.
+export const OMP_STATE: Record<string, string> = {
+  "0": "invalid", "1": "init", "2": "handshake", "3": "up", "4": "down",
+  "5": "init (graceful restart)", "6": "down (graceful restart)", "7": "handshake (graceful restart)", "8": "up (graceful restart)",
+};
+export const ompUp = (v: string) => v === "3" || v === "8";
 const tone = (up: boolean) => (up ? "var(--good)" : "var(--bad)");
 
 function StateDot({ color }: { color: string }) {
@@ -49,6 +56,11 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
   const [bgpErr, setBgpErr] = useState<string | null>(null);
   const [ospfErr, setOspfErr] = useState<string | null>(null);
   const [remoteAs, setRemoteAs] = useState<Map<string, string>>(new Map());
+  // OMP (SD-WAN control plane). null = not read yet; [] with no counts = this
+  // device runs no OMP, and the section stays hidden.
+  const [omp, setOmp] = useState<PromInstantSeries[] | null>(null);
+  const [ompCounts, setOmpCounts] = useState<{ up: number; notUp: number } | null>(null);
+  const [ompErr, setOmpErr] = useState<string | null>(null);
   const id = device.id;
 
   useEffect(() => {
@@ -78,6 +90,18 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
         setRemoteAs(m);
       })
       .catch(() => { /* best-effort column: the AS cell shows — and the state is unaffected */ });
+    api.metricsQuery(`device_omp_peer_state{device="${id}"}`)
+      .then((r) => { if (alive) { setOmp(r?.data?.result ?? []); setOmpErr(null); } })
+      .catch((e) => { if (alive) { setOmp([]); setOmpErr(operatorError(e, "OMP session state could not be read.")); } });
+    api.metricsQuery(`device_omp_peers{device="${id}"}`)
+      .then((r) => {
+        if (!alive) return;
+        const rows = r?.data?.result ?? [];
+        if (rows.length === 0) { setOmpCounts(null); return; }
+        const get = (st: string) => Math.round(Number(rows.find((x) => x.metric.state === st)?.value?.[1] ?? 0));
+        setOmpCounts({ up: get("up"), notUp: get("not_up") });
+      })
+      .catch(() => { /* the per-peer read reports the failure */ });
     api.metricsQuery(`device_ospf_nbr_state{device="${id}"}`)
       .then((r) => { if (alive) { setOspf(r?.data?.result ?? []); setOspfErr(null); } })
       .catch((e) => { if (alive) { setOspf([]); setOspfErr(operatorError(e, "OSPF neighbour state could not be read.")); } });
@@ -138,6 +162,40 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
           </table>
         )}
       </Section>
+
+      {(ompErr || ompCounts || (omp && omp.length > 0)) && (
+        <Section
+          title="SD-WAN control sessions (OMP)"
+          sub={ompErr ? "unread" : ompCounts ? `${ompCounts.up} up · ${ompCounts.notUp} not up` : "loading…"}
+        >
+          {ompErr ? (
+            <p role="alert" data-testid="device-omp-unread" style={{ color: "var(--bad)", padding: "0 12px" }}>
+              OMP state could not be read, so this device&rsquo;s control sessions are UNKNOWN here — not absent. {ompErr}
+            </p>
+          ) : omp && omp.length > 0 ? (
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr><th style={th}>Peer system IP</th><th style={th}>Peer</th><th style={th}>State</th><th style={th}>Site</th></tr></thead>
+              <tbody>
+                {omp.map((s, i) => {
+                  const v = String(Math.round(Number(s.value?.[1])));
+                  return (
+                    <tr key={i}>
+                      <td style={mono}>{s.metric.peer || "—"}</td>
+                      <td style={td}>{s.metric.type || "—"}</td>
+                      <td style={td}><StateDot color={tone(ompUp(v))} />{OMP_STATE[v] ?? `state ${v}`}</td>
+                      <td style={mono}>{s.metric.site_id || "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : ompCounts && ompCounts.up + ompCounts.notUp > 0 ? (
+            <p className="cc-empty" style={{ padding: "0 12px" }}>This is a controller: it holds a session with every edge, so only the counts are shown.</p>
+          ) : (
+            <p className="cc-empty" style={{ padding: "0 12px" }}>This device reports no OMP session.</p>
+          )}
+        </Section>
+      )}
 
       <Section title="OSPF neighbors" sub={ospfErr ? "unread" : ospf ? `${ospf.length} adjacenc${ospf.length === 1 ? "y" : "ies"}` : "loading…"}>
         {ospfErr ? (

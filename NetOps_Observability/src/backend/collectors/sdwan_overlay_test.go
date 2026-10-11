@@ -115,7 +115,7 @@ func addSession(m *fakeMIB, fam sdwanMIB, src, dst [4]int, peerSys [4]byte, site
 	m.set(col(fam.bfdEntry, bfdState), idx, intVal(state))
 }
 
-var lim = overlayLimits{maxSessionRows: 1000, maxTLOCRows: 64}
+var lim = overlayLimits{maxSessionRows: 1000, maxTLOCRows: 64, maxOMPRows: 100}
 
 // ── index parsing ────────────────────────────────────────────────────────────
 
