@@ -33,6 +33,19 @@ import (
 // without opening a socket storm.
 const metricsPollWorkers = 32
 
+// metricsDeviceBudget bounds one device's profile walks. It was 8 s, which a
+// slow agent (a Viptela vEdge answers each request in hundreds of ms) used up
+// part-way through its interface columns: every column after the cut-off was
+// silently missing (lab 2026-10-11: three of four vEdges had no MTU, speed or
+// broadcast/multicast counters). 20 s is a third of the 60 s poll interval; a
+// dead device still fails at its first GET, so only slow-but-alive agents use
+// the extra time.
+const metricsDeviceBudget = 20 * time.Second
+
+// sdwanSystemBudget is the SD-WAN systemStatus read's OWN deadline: it runs
+// after the profile walks and must not depend on what they left over.
+const sdwanSystemBudget = 4 * time.Second
+
 type metricsCollector struct {
 	interval time.Duration
 	targets  TargetFunc
@@ -253,7 +266,7 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 	// device's credential profile by the target builder. Essential for a
 	// multi-vendor fleet where each device has its own creds.
 	creds := tg.creds()
-	dctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	dctx, cancel := context.WithTimeout(ctx, metricsDeviceBudget)
 
 	ent, entOK := 0, false
 	if v, err := snmpGet(dctx, addr, creds, sysObjectIDOID); err == nil && v.tag == 0x06 {
@@ -377,7 +390,9 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 	cpuOwned := (SNMPMetric{Name: "device_cpu_percent", Owner: "gnmi"}).ownedElsewhere(tg)
 	wantCPU, wantMem := !cpuNative && !cpuOwned, !memPctNative && !memOwned
 	if fam := sdwanSystemFamily(ent); entOK && fam != "" && (wantCPU || wantMem) {
-		smp := readSDWANSystem(dctx, snmpGet, addr, creds, fam, wantCPU, wantMem)
+		sctx, scancel := context.WithTimeout(ctx, sdwanSystemBudget)
+		smp := readSDWANSystem(sctx, snmpGet, addr, creds, fam, wantCPU, wantMem)
+		scancel()
 		lines = append(lines, smp.lines(tg.ID, vendor, now)...)
 		if smp.hasCPU {
 			if ev, ok := buildMetricEvent("device_cpu_percent", tg.ID, vendor, "system", "", "", int64(math.Round(smp.cpu)), now); ok {
@@ -413,7 +428,7 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 		// Its OWN deadline: this walk names the device's addresses, which is how
 		// topology and the SD-WAN overlay recognise the device at all (an edge
 		// whose SD-WAN MIBs do not answer is identified by its transport
-		// address). Run on the leftover of the metric walks' 8 s budget, it was
+		// address). Run on the leftover of the metric walks' budget, it was
 		// cut off on slower agents and the device silently had no addresses
 		// (lab 2026-10-10: one cEdge of four published any).
 		ectx, ecancel := context.WithTimeout(ctx, 8*time.Second)
