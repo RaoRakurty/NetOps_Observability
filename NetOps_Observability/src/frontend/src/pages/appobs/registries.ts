@@ -112,7 +112,7 @@ export function describeSpec(spec: Record<string, unknown> | null | undefined): 
   const ports = intsIn(spec.ports, 0, 65535);
   if (ports.length) parts.push(`ports ${ports.join(", ")}`);
   const pfx = cidrsIn(spec.dst_prefixes);
-  if (pfx.length) parts.push(`destinations ${pfx.join(", ")}`);
+  if (pfx.length) parts.push(`service addresses ${pfx.join(", ")}`);
   const protos = intsIn(spec.protocols, 0, 255);
   if (protos.length) parts.push(`protocols ${protos.join(", ")}`);
   return parts.join(" · ");
