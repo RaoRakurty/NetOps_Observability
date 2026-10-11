@@ -115,7 +115,7 @@ func TestAggregateFlowAppsCarriesTheExporterVerdict(t *testing.T) {
 	cat := appid.NewCatalog(nil)
 	rows := []map[string]any{
 		{"d": "10.0.0.9", "s": "10.1.0.5", "xi": "13:453", "xn": "ms-office-365", "b": float64(900), "f": float64(9)},
-		{"d": "10.0.0.9", "s": "10.1.0.5", "xi": "13:77", "xn": "", "b": float64(300), "f": float64(3)},   // id only
+		{"d": "10.0.0.9", "s": "10.1.0.5", "xi": "13:77", "xn": "", "b": float64(300), "f": float64(3)},      // id only
 		{"d": "10.0.0.9", "s": "10.1.0.5", "xi": "3:443", "xn": "https", "b": float64(200), "f": float64(2)}, // port engine
 		{"d": "10.0.0.9", "s": "10.1.0.5", "xi": "garbage", "xn": "unknown", "b": float64(50), "f": float64(1)},
 		{"d": "10.0.0.9", "s": "10.1.0.5", "b": float64(10), "f": float64(1)}, // exporter sent nothing

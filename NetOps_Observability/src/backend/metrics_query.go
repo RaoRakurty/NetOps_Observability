@@ -141,9 +141,17 @@ func metricsScopeFilters(ids, names []string, cross bool) []string {
 		filters = append(filters, `{device=~"`+idRe+`"}`)
 	}
 	if nameRe := regexAlternation(names); nameRe != "" {
-		// hostname (Telegraf) and source (gnmic) both carry the device name.
-		filters = append(filters, `{hostname=~"`+nameRe+`"}`)
-		filters = append(filters, `{source=~"`+nameRe+`"}`)
+		// hostname (Telegraf) and a raw gnmic `source` tag carry the device
+		// NAME on series that have no `device` label. The name matchers are
+		// bound to exactly those series (device=""): a series that HAS a device
+		// label is owned by that label alone. Without the binding these OR'd
+		// filters admitted any series whose `source`/`hostname` happened to
+		// equal one of the caller's device names — and collectors put
+		// constants in `source` ("derived", "sdwan-system", "mpls-l3vpn"), so a
+		// tenant that named a device after one read every tenant's series
+		// (2026-10-11). Device names are set by the device owner (sysName).
+		filters = append(filters, `{hostname=~"`+nameRe+`",device=""}`)
+		filters = append(filters, `{source=~"`+nameRe+`",device=""}`)
 	}
 	return filters
 }
