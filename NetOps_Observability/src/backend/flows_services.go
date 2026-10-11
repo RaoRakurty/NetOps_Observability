@@ -71,7 +71,7 @@ func (s *server) handleFlowsServices(w http.ResponseWriter, r *http.Request) {
 	// row policy shares untagged rows to every tenant scope (hybrid model), so
 	// the scan is bounded to the caller's device addresses; a principal with no
 	// visible devices skips the scan entirely (all totals stay 0, default-closed).
-	tenantClause, noAddrs := s.addrTenantClauseFor(claims, "src_addr", "dst_addr")
+	tenantClause, noAddrs := s.flowTenantClauseFor(claims)
 	if len(conds) > 0 && !noAddrs {
 		since := durationQuery(r, "since", time.Hour)
 		var sel []string

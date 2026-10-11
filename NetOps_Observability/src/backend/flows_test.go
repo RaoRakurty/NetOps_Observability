@@ -450,3 +450,35 @@ func TestHandleFlowsCoverageEmptyTenantShortCircuits(t *testing.T) {
 		t.Fatalf("body = %q, want empty envelope", body)
 	}
 }
+
+// A router reports the traffic it FORWARDS, almost none of which is to or from
+// its own management address. A scoped principal must therefore see the flows
+// its own devices exported (sampler_address), not only flows whose endpoint is
+// one of its devices — and never flows exported by another tenant's device or
+// by a shared device.
+func TestFlowTenantClauseMatchesTheExporter(t *testing.T) {
+	s := flowsTestServer(t)
+	clause, empty := s.flowTenantClauseFor(acme())
+	if empty {
+		t.Fatal("acme has devices")
+	}
+	if !strings.Contains(clause, "sampler_address IN ('10.1.0.1')") {
+		t.Fatalf("flow clause must match acme's exporter: %q", clause)
+	}
+	if !strings.HasPrefix(clause, " AND (") || !strings.HasSuffix(clause, ")") || strings.Count(clause, " OR ") != 2 {
+		t.Fatalf("the three matches must be ONE parenthesised OR group, or the AND binds wrong: %q", clause)
+	}
+	for _, leak := range []string{"'10.2.0.1'", "'10.9.0.1'"} {
+		if strings.Contains(clause, leak) {
+			t.Errorf("TENANT LEAK: %s in acme's flow clause %q", leak, clause)
+		}
+	}
+	// The two-endpoint form (non-flow tables) is unchanged.
+	if c, _ := s.addrTenantClauseFor(acme(), "src_ip", "dst_ip"); strings.Contains(c, "sampler_address") {
+		t.Errorf("non-flow clause must not name an exporter column: %q", c)
+	}
+	// A tenant with no devices still reads nothing.
+	if _, empty := flowsServerNoShared(t).flowTenantClauseFor(jwtClaims{Sub: "x", Role: RoleOperator, Tenant: "nobody"}); !empty {
+		t.Error("no devices must stay default-closed")
+	}
+}

@@ -477,7 +477,7 @@ func (d aiDataSource) ModuleQuery(_ context.Context, p ai.Principal, query strin
 // recent window: the "what services are busiest / app-to-DB" read. Tenant-scoped
 // by the flows row policy via d.scope.
 func (d aiDataSource) moduleServiceFlows() (ai.ToolResult, error) {
-	clause, empty := d.srv.addrTenantClauseFor(d.claims, "src_addr", "dst_addr")
+	clause, empty := d.srv.flowTenantClauseFor(d.claims)
 	if empty {
 		return ai.ToolResult{}, nil // no visible devices — honest empty, never platform data
 	}
@@ -637,7 +637,7 @@ SELECT app, count() AS flows, round(avg(confidence), 2) AS conf, any(provider) A
 // moduleTopTalkers — the heaviest conversations (bidirectional pairs) over the
 // recent window, sampling-rate corrected, tenant-scoped.
 func (d aiDataSource) moduleTopTalkers() (ai.ToolResult, error) {
-	clause, empty := d.srv.addrTenantClauseFor(d.claims, "src_addr", "dst_addr")
+	clause, empty := d.srv.flowTenantClauseFor(d.claims)
 	if empty {
 		return ai.ToolResult{}, nil
 	}
@@ -669,7 +669,7 @@ SELECT least(src_addr, dst_addr)  AS a,
 
 // moduleFlowSummary — one-line traffic totals over the recent window.
 func (d aiDataSource) moduleFlowSummary() (ai.ToolResult, error) {
-	clause, empty := d.srv.addrTenantClauseFor(d.claims, "src_addr", "dst_addr")
+	clause, empty := d.srv.flowTenantClauseFor(d.claims)
 	if empty {
 		return ai.ToolResult{}, nil
 	}

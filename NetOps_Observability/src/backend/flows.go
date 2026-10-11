@@ -543,30 +543,55 @@ func flowTypeClause(r *http.Request) string {
 }
 
 // flowTenantClause builds the SQL fragment that restricts flow rows to a scoped
-// principal's devices (matched on src_addr/dst_addr). It returns ("", false) for
-// cross-tenant principals (no restriction) and ("", true) when the principal has
-// no visible device addresses (caller should short-circuit to an empty result).
+// principal's devices. It returns ("", false) for cross-tenant principals (no
+// restriction) and ("", true) when the principal has no visible device
+// addresses (caller should short-circuit to an empty result).
 func (s *server) flowTenantClause(r *http.Request) (clause string, empty bool) {
 	claims, _ := userFrom(r.Context())
-	return s.addrTenantClauseFor(claims, "src_addr", "dst_addr")
+	return s.flowTenantClauseFor(claims)
 }
 
-// addrTenantClauseFor is the claims-based core of flowTenantClause, shared with
-// the AI DataSource (which has claims, not a request). The CH row policies share
-// untagged telemetry rows to every tenant scope by design (hybrid model), so THIS
-// app-layer narrowing is the isolation for untagged rows — a scoped principal
-// reads only rows touching its own device addresses, and a principal with no
-// devices reads nothing (default-closed).
+// flowTenantClauseFor is the netops.flows form of addrTenantClauseFor. A flow
+// record belongs to the tenant whose device EXPORTED it, not only to the tenant
+// whose device is one of its two endpoints: a router reports the traffic it
+// forwards, and almost none of that traffic is to or from the router's own
+// management address. Matching endpoints alone hid every transit flow from the
+// very tenant whose router saw it. So a scoped principal reads a flow when its
+// exporter (sampler_address) OR either endpoint is one of its own devices.
+// Shared/global devices are not in a scoped principal's address set, so a
+// shared exporter grants nothing (strict isolation is unchanged).
+func (s *server) flowTenantClauseFor(claims jwtClaims) (clause string, empty bool) {
+	return s.addrTenantClauseCols(claims, "src_addr", "dst_addr", "sampler_address")
+}
+
+// addrTenantClauseFor is the claims-based core for tables keyed by two endpoint
+// addresses, shared with the AI DataSource (which has claims, not a request).
+// The CH row policies share untagged telemetry rows to every tenant scope by
+// design (hybrid model), so THIS app-layer narrowing is the isolation for
+// untagged rows — a scoped principal reads only rows touching its own device
+// addresses, and a principal with no devices reads nothing (default-closed).
+// For netops.flows use flowTenantClauseFor, which also matches the exporter.
 func (s *server) addrTenantClauseFor(claims jwtClaims, srcCol, dstCol string) (clause string, empty bool) {
+	return s.addrTenantClauseCols(claims, srcCol, dstCol, "")
+}
+
+// addrTenantClauseCols matches the principal's device addresses against the
+// endpoint columns and, when exporterCol is set, the exporter column too.
+func (s *server) addrTenantClauseCols(claims jwtClaims, srcCol, dstCol, exporterCol string) (clause string, empty bool) {
 	addrs, cross := s.visibleDeviceAddrs(claims)
 	// Compliance (operator-visibility): deny if the operator scoped into a
-	// restricted tenant; in the Global view exclude restricted tenants' devices.
+	// restricted tenant; in the Global view exclude restricted tenants' devices
+	// — as endpoints, and as the exporter that saw the traffic.
 	if rt := s.restrictedTelemetry(claims); rt.deny {
 		return "", true
 	} else if cross {
 		if len(rt.addrs) > 0 {
 			in := sqlInList(rt.addrs)
-			return " AND " + srcCol + " NOT IN (" + in + ") AND " + dstCol + " NOT IN (" + in + ")", false
+			c := " AND " + srcCol + " NOT IN (" + in + ") AND " + dstCol + " NOT IN (" + in + ")"
+			if exporterCol != "" {
+				c += " AND " + exporterCol + " NOT IN (" + in + ")"
+			}
+			return c, false
 		}
 		return "", false
 	}
@@ -574,7 +599,11 @@ func (s *server) addrTenantClauseFor(claims jwtClaims, srcCol, dstCol string) (c
 		return "", true
 	}
 	in := sqlInList(addrs)
-	return " AND (" + srcCol + " IN (" + in + ") OR " + dstCol + " IN (" + in + "))", false
+	c := " AND (" + srcCol + " IN (" + in + ") OR " + dstCol + " IN (" + in + ")"
+	if exporterCol != "" {
+		c += " OR " + exporterCol + " IN (" + in + ")"
+	}
+	return c + ")", false
 }
 
 // deviceTenantCondFor is the device-keyed sibling of addrTenantClauseFor for

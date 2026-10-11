@@ -119,7 +119,7 @@ func (s *server) handleFlowsApps(w http.ResponseWriter, r *http.Request) {
 	// Tenant isolation: the flows row policy shares untagged rows to every tenant
 	// scope (hybrid model), so a scoped principal is narrowed to flows touching
 	// its own device addresses; no devices → nothing (default-closed).
-	clause, empty := s.addrTenantClauseFor(claims, "src_addr", "dst_addr")
+	clause, empty := s.flowTenantClauseFor(claims)
 	var rows []map[string]any
 	if !empty {
 		// src_addr rides along (#81 P3G) so the source side resolves too — the
