@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -291,6 +292,7 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 	// alerts — reads device_mem_percent. It is derived below per pool.
 	memUsed, memFree := map[string]int64{}, map[string]int64{}
 	memPctNative := false
+	cpuNative := false
 	for _, prof := range selectProfiles(c.profiles, ent, entOK) {
 		for _, m := range prof.Metrics {
 			// Single-contract ownership: yield a metric to the transport that owns
@@ -334,6 +336,8 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 							memFree[idx] = valueInt(v)
 						case "device_mem_percent":
 							memPctNative = true
+						case "device_cpu_percent":
+							cpuNative = true
 						}
 						lbl := idx
 						if idxLabel == "neighbor" {
@@ -361,8 +365,30 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 	}
 	// Derived memory percentage per pool (used / (used + free)), only when the
 	// device did not report one and no richer transport owns the family here.
-	if !memPctNative && !(SNMPMetric{Name: "device_mem_percent", Owner: "gnmi"}).ownedElsewhere(tg) {
-		lines = append(lines, derivedMemPercent(tg.ID, vendor, memUsed, memFree, now)...)
+	memOwned := (SNMPMetric{Name: "device_mem_percent", Owner: "gnmi"}).ownedElsewhere(tg)
+	if !memPctNative && !memOwned {
+		derived := derivedMemPercent(tg.ID, vendor, memUsed, memFree, now)
+		memPctNative = len(derived) > 0
+		lines = append(lines, derived...)
+	}
+	// SD-WAN edges that answered no CPU / memory MIB above (a Viptela vEdge
+	// answers neither HOST-RESOURCES nor a process MIB): read the SD-WAN
+	// systemStatus scalars instead. Only what is still missing is asked for.
+	cpuOwned := (SNMPMetric{Name: "device_cpu_percent", Owner: "gnmi"}).ownedElsewhere(tg)
+	wantCPU, wantMem := !cpuNative && !cpuOwned, !memPctNative && !memOwned
+	if fam := sdwanSystemFamily(ent); entOK && fam != "" && (wantCPU || wantMem) {
+		smp := readSDWANSystem(dctx, snmpGet, addr, creds, fam, wantCPU, wantMem)
+		lines = append(lines, smp.lines(tg.ID, vendor, now)...)
+		if smp.hasCPU {
+			if ev, ok := buildMetricEvent("device_cpu_percent", tg.ID, vendor, "system", "", "", int64(math.Round(smp.cpu)), now); ok {
+				events = append(events, ev)
+			}
+		}
+		if smp.hasMem {
+			if ev, ok := buildMetricEvent("device_mem_percent", tg.ID, vendor, "system", "", "", int64(math.Round(smp.mem)), now); ok {
+				events = append(events, ev)
+			}
+		}
 	}
 	// FRU inventory (ENTITY-MIB) — info series, VM-only, best-effort. Devices
 	// without ENTITY-MIB yield nothing.
