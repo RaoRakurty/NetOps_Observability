@@ -451,13 +451,35 @@ func readNokiaVRtr(ctx context.Context, e vrfEnv) (*vrfReading, error) {
 
 var viptelaIfEntry = []int{1, 3, 6, 1, 4, 1, 41916, 12, 2, 1, 1}
 
+// Only the INDEX carries what is needed (VPN id + interface name), so any
+// readable column of the row will do. Some vEdge agents answer a column with
+// genErr (error-status 5) — the lab's 20.x vEdges do for interfaceIfindex —
+// so the columns are tried in turn: ifindex, oper status, admin status, port
+// type, description.
+var viptelaIfColumns = []int{11, 6, 5, 10, 7}
+
 // readViptelaVPN: there is no VPN-list table; the VPNs are the distinct vpn-ids
 // of interfaceTable, INDEX {VpnId, Ifname, AfType} = vpn, len, name…, af. Each
 // interface appears once per address family, so membership is a set.
 func readViptelaVPN(ctx context.Context, e vrfEnv) (*vrfReading, error) {
-	rows, trunc, err := e.walk(ctx, e.addr, e.creds, oidPlus(viptelaIfEntry, 11), e.lim.maxMembers)
-	if err != nil || len(rows) == 0 {
-		return nil, err
+	var (
+		rows    map[string]berVal
+		trunc   bool
+		lastErr error
+	)
+	for _, c := range viptelaIfColumns {
+		r, t, err := e.walk(ctx, e.addr, e.creds, oidPlus(viptelaIfEntry, c), e.lim.maxMembers)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if len(r) > 0 {
+			rows, trunc, lastErr = r, t, nil
+			break
+		}
+	}
+	if len(rows) == 0 {
+		return nil, lastErr
 	}
 	r := newVRFReading(vrfSrcViptela)
 	r.Truncated = trunc

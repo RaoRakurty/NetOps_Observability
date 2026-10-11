@@ -338,3 +338,22 @@ func TestPollDeviceCachesUntilRefresh(t *testing.T) {
 		t.Fatal(r.capability())
 	}
 }
+
+// A vEdge agent that answers one column with genErr is read from the next.
+func TestViptelaFallsBackPastAColumnTheAgentRefuses(t *testing.T) {
+	m := newFakeMIB()
+	m.failOn[oidStr(oidPlus(viptelaIfEntry, 11))] = errors.New("snmp: agent error-status 5 (not a value)")
+	m.set(oidPlus(viptelaIfEntry, 6), "10."+lenIdx("ge0/2", 0), strVal("Up"))
+	r, err := srcViptela.read(context.Background(), envFor(m, nil))
+	if err != nil || r == nil || members(r, "10") != "ge0/2" {
+		t.Fatalf("%+v %v", r, err)
+	}
+	// Every column refused: the error is reported, not "no VPNs".
+	m2 := newFakeMIB()
+	for _, c := range viptelaIfColumns {
+		m2.failOn[oidStr(oidPlus(viptelaIfEntry, c))] = errors.New("genErr")
+	}
+	if r, err := srcViptela.read(context.Background(), envFor(m2, nil)); r != nil || err == nil {
+		t.Fatalf("all columns refused must be an error: %+v %v", r, err)
+	}
+}
