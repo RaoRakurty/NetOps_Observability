@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# promtool unit tests for the Cisco SD-WAN OMP alerts and the VRF-aware BGP
+# summary (rules.yaml noc-routing). Each rule FIRES on the synthetic fault and
+# stays SILENT on the all-clear; up-in-graceful-restart (8) is healthy.
+rule_files:
+  - /etc/prometheus/rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) OMPPeerDown — an edge's session to a vSmart stuck in handshake(2).
+  - interval: 1m
+    input_series:
+      - series: 'device_omp_peer_state{device="vedge-51",peer="10.255.255.2",type="vsmart",site_id="250",mib="viptela"}'
+        values: "2x30"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: OMPPeerDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              device: "vedge-51"
+              peer: "10.255.255.2"
+              type: "vsmart"
+              site_id: "250"
+              mib: "viptela"
+            exp_annotations:
+              summary: "vedge-51 OMP session to vsmart 10.255.255.2 is not up"
+
+  # 1a) up(3) and up-in-graceful-restart(8) never alert.
+  - interval: 1m
+    input_series:
+      - series: 'device_omp_peer_state{device="vedge-51",peer="10.255.255.2",type="vsmart",mib="viptela"}'
+        values: "3x15 8x15"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: OMPPeerDown
+        exp_alerts: []
+
+  # 2) OMPNoControllers — no session up at all.
+  - interval: 1m
+    input_series:
+      - series: 'device_omp_peers{device="vedge-20",state="up"}'
+        values: "0x30"
+      - series: 'device_omp_peers{device="vedge-20",state="not_up"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: OMPNoControllers
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              device: "vedge-20"
+              state: "up"
+            exp_annotations:
+              summary: "vedge-20 has no OMP session up to any SD-WAN controller"
+
+  # 2a) One controller up is enough; a short gap inside `for` does not fire.
+  - interval: 1m
+    input_series:
+      - series: 'device_omp_peers{device="vedge-20",state="up"}'
+        values: "1x10 0x3 1x15"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: OMPNoControllers
+        exp_alerts: []
+
+  # 3) BGPSessionDown names the VRF of a VRF peer, and stays plain for a
+  #    global-table peer (BGP4-MIB series carry no vrf label).
+  - interval: 1m
+    input_series:
+      - series: 'device_bgp_peer_state{device="pe1",peer="10.0.0.2",vrf="CUST-A",mib="cisco-bgp-peer3"}'
+        values: "3x30"
+      - series: 'device_bgp_peer_state{device="pe1",peer="192.0.2.1"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: BGPSessionDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              device: "pe1"
+              peer: "10.0.0.2"
+              vrf: "CUST-A"
+              mib: "cisco-bgp-peer3"
+            exp_annotations:
+              summary: "pe1 BGP peer 10.0.0.2 in CUST-A not established"
+          - exp_labels:
+              severity: critical
+              device: "pe1"
+              peer: "192.0.2.1"
+            exp_annotations:
+              summary: "pe1 BGP peer 192.0.2.1 not established"
