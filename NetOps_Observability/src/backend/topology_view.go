@@ -493,6 +493,9 @@ func attachSDWANOverlay(view *topology.View, snap *sdwanOverlaySnapshot, facts [
 			if cnt == 0 || present[n.ID] {
 				continue
 			}
+			// A view that carries WAN transports is drawn as a WAN: transports in
+			// the middle, sites around them — not spine/leaf tiers.
+			view.LayoutType = "wan_overlay"
 			if total := int(n.Metrics["members"]); cnt < total {
 				// Partial visibility: disclose only what this caller can see.
 				n.Metrics = map[string]float64{"members": float64(cnt)}

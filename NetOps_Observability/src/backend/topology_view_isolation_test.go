@@ -268,6 +268,11 @@ func TestSDWANOverlayOnViewIsTenantIsolated(t *testing.T) {
 	if overlay != 3 || members != 3 || len(view.Nodes) != 1 {
 		t.Fatalf("acme view: %d overlay edges, %d memberships, %d nodes", overlay, members, len(view.Nodes))
 	}
+	// A view carrying WAN transports is drawn as a WAN (transports in the
+	// middle, sites around them), never as spine/leaf tiers.
+	if view.LayoutType != "wan_overlay" {
+		t.Fatalf("layout = %q, want wan_overlay", view.LayoutType)
+	}
 }
 
 // A device the caller cannot see takes its edges with it, and the transport

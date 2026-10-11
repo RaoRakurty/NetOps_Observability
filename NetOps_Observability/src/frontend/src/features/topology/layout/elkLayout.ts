@@ -12,6 +12,7 @@ import type { TopologyView } from "../api/topologyTypes";
 import type { LayoutResult } from "./layoutTypes";
 import { NODE_SIZE } from "./layoutTypes";
 import { presetFor } from "./layoutPresets";
+import { wanOverlayLayout } from "./wanOverlayLayout";
 import { ELK_GROUP_PADDING, GROUP_GAP, GROUP_ASPECT, GROUP_MIN_W, GROUP_MIN_H } from "./groupGeometry";
 
 // elkjs is ~1.6 MB — dynamic-import it on first layout so it never rides in
@@ -83,6 +84,14 @@ export async function layoutView(view: TopologyView): Promise<LayoutResult> {
   if (hit) return hit;
 
   const preset = presetFor(view.layout_type);
+
+  // The WAN overlay is not a layered graph: transports in the middle, sites
+  // around them (wanOverlayLayout.ts). Deterministic, no ELK needed.
+  if (view.layout_type === "wan_overlay") {
+    const r = wanOverlayLayout(view);
+    cachePut(key, r);
+    return r;
+  }
 
   // If every node is pinned (e.g. geo/saved), short-circuit ELK entirely.
   if (view.nodes.length > 0 && view.nodes.every((n) => n.coordinates)) {
