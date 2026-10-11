@@ -289,6 +289,9 @@ func TestCapabilityNeverSaysNoVRFsForASilentDevice(t *testing.T) {
 	if got := (vrfResult{answered: true}).capability(); got != "no_instances" {
 		t.Error(got)
 	}
+	if got := (vrfResult{answered: true, err: "request timeout"}).capability(); got != "walk_failed" {
+		t.Error("an agent that answered but whose walk failed is not 'not answering':", got)
+	}
 	if got := (vrfResult{answered: true, reading: newVRFReading(vrfSrcArista)}).capability(); got != vrfSrcArista {
 		t.Error(got)
 	}

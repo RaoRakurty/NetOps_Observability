@@ -6,10 +6,12 @@ package collectors
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -642,16 +644,30 @@ type vrfResult struct {
 }
 
 // capability is the device_vrf_capability label: the source that answered,
-// "no_instances" when the agent answered SNMP but no routing-instance MIB, or
-// "not_answering" when the agent did not answer at all.
+// "no_instances" when the agent answered SNMP but no routing-instance MIB,
+// "walk_failed" when it answered but a routing-instance walk errored (so
+// "none" would be a guess), or "not_answering" when it did not answer at all.
 func (r vrfResult) capability() string {
 	switch {
 	case r.reading != nil:
 		return r.reading.Source
 	case r.answered && r.err == "":
 		return "no_instances"
+	case r.answered:
+		return "walk_failed"
 	}
 	return "not_answering"
+}
+
+// vrfFailLogAt rate-limits the walk-failure log (one line a minute across the
+// collector; device_vrf_capability carries every device's state).
+var vrfFailLogAt atomic.Int64
+
+func logVRFFailure(device, err string) {
+	now := time.Now().Unix()
+	if last := vrfFailLogAt.Load(); now-last >= 60 && vrfFailLogAt.CompareAndSwap(last, now) {
+		log.Printf("vrf_instances: routing-instance walk FAILED device=%s: %s — its instances are unknown this cycle, not absent", device, err)
+	}
 }
 
 func (c *vrfCollector) pollOnce(ctx context.Context) {
@@ -797,6 +813,7 @@ func (c *vrfCollector) walkDevice(ctx context.Context, tg Target) vrfResult {
 	r, err := readVRFs(dctx, sources, env)
 	if err != nil && r == nil {
 		res.err = err.Error()
+		logVRFFailure(tg.ID, res.err)
 	}
 	c.stMu.Lock()
 	if r != nil {
