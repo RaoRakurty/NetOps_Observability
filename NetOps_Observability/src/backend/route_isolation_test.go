@@ -541,6 +541,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/flows/by-type":                  "scoped",
 	"/api/flows/fanout":                   "scoped",
 	"/api/flows/flags":                    "scoped",
+	"/api/flows/coverage":                 "scoped",
 	"/api/flows/geo":                      "scoped",
 	"/api/flows/services":                 "scoped",
 	"/api/flows/timeseries":               "scoped",

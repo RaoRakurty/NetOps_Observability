@@ -225,6 +225,43 @@ SELECT tcp_flags,
 	s.proxyClickHouse(w, r, sql)
 }
 
+// handleFlowsCoverage says what the flows in the window CAN show, so every
+// Explore Flows tab explains an empty panel instead of claiming "no flow
+// records" (owner report 2026-10-10: AS, Geo, Flags, Applications were empty
+// while 29k flows/hour arrived). One scan, the SAME tenant clause and
+// flow-type filter as the tabs it explains, so it can never count rows a tab
+// could not show.
+func (s *server) handleFlowsCoverage(w http.ResponseWriter, r *http.Request) {
+	since := durationQuery(r, "since", time.Hour)
+	tenantClause, empty := s.flowTenantClause(r)
+	if empty {
+		writeEmptyClickHouse(w)
+		return
+	}
+	filter, err := flowFilterClause(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	priv := func(col string) string {
+		return "(isIPAddressInRange(" + col + ", '10.0.0.0/8') OR isIPAddressInRange(" + col + ", '172.16.0.0/12')" +
+			" OR isIPAddressInRange(" + col + ", '192.168.0.0/16') OR isIPAddressInRange(" + col + ", '100.64.0.0/10')" +
+			" OR isIPAddressInRange(" + col + ", '127.0.0.0/8') OR isIPAddressInRange(" + col + ", '169.254.0.0/16')" +
+			" OR isIPAddressInRange(" + col + ", 'fc00::/7') OR isIPAddressInRange(" + col + ", 'fe80::/10'))"
+	}
+	sql := `
+SELECT count()                                       AS flows,
+       countIf(proto = 6)                            AS tcp_flows,
+       countIf(proto = 6 AND tcp_flags > 0)          AS tcp_flows_with_flags,
+       countIf(src_as > 0 OR dst_as > 0)             AS flows_with_as,
+       countIf(` + priv("src_addr") + ` AND ` + priv("dst_addr") + `) AS private_only_flows,
+       uniqExact(sampler_address)                    AS exporters
+  FROM netops.flows
+ WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + filter + `
+ FORMAT JSON`
+	s.proxyClickHouse(w, r, sql)
+}
+
 // geoDictReady probes the geoip_country ip_trie dictionary with a single
 // dictGetOrDefault. The dictionary is created lazily at bootstrap even when the
 // operator hasn't supplied the CSV (licensing forbids bundling GeoIP data), so

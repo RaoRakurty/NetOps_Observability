@@ -5746,6 +5746,12 @@ export const api = {
     request<ClickHouseResponse>(
       `/api/flows/by-proto?since=${sinceSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
     ),
+  // Coverage of the window: what the flow records actually carry (TCP, flags,
+  // AS numbers, public addresses) so an empty panel can say WHY it is empty.
+  flowsCoverage: (sinceSeconds = 3600, type = "", filters?: FlowFilters) =>
+    request<ClickHouseResponse>(
+      `/api/flows/coverage?since=${sinceSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
+    ),
   flowsByType: (sinceSeconds = 3600) =>
     request<ClickHouseResponse>(`/api/flows/by-type?since=${sinceSeconds}s`),
   // Active-measurement path topology (traceroute).

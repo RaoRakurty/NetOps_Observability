@@ -62,6 +62,7 @@ var isolationCoverageBaseline = map[string]string{
 	"/api/flows/by-proto":                     "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/flows/fanout":                       "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/flows/flags":                        "store/RLS-scoped; dedicated HTTP isolation test is backlog",
+	"/api/flows/coverage":                     "store/RLS-scoped (the flow tabs' own flowTenantClause); dedicated HTTP isolation test is backlog",
 	"/api/flows/geo":                          "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/flows/timeseries":                   "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/infrastructure/port-filter-options": "store/RLS-scoped; dedicated HTTP isolation test is backlog",

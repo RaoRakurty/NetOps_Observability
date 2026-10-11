@@ -383,3 +383,70 @@ func TestHandleFlowsByTypeEmptyTenantShortCircuits(t *testing.T) {
 		t.Fatalf("body = %q, want empty envelope", body)
 	}
 }
+
+// handleFlowsCoverage feeds the honest empty states: it must count what the
+// window's flows carry, inside the caller's own tenant scope, with the user's
+// filters applied — and a tenant that sees nothing never reaches ClickHouse.
+func TestHandleFlowsCoverageScopedSQL(t *testing.T) {
+	var gotSQL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotSQL = string(b)
+		_, _ = w.Write([]byte(`{"meta":[],"data":[],"rows":0}`))
+	}))
+	defer srv.Close()
+	t.Setenv("CLICKHOUSE_URL", srv.URL)
+
+	s := flowsTestServer(t)
+	r := req(http.MethodGet, "/api/flows/coverage?since=900s&device=10.1.0.1", "", acme())
+	w := httptest.NewRecorder()
+	s.handleFlowsCoverage(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	for _, want := range []string{
+		"countIf(proto = 6) ",
+		"tcp_flags > 0",
+		"src_as > 0 OR dst_as > 0",
+		"private_only_flows",
+		"uniqExact(sampler_address)",
+		"INTERVAL 900 SECOND",
+		"src_addr IN", "'10.1.0.1'", // acme's own scope
+		"sampler_address = '10.1.0.1'",
+	} {
+		if !strings.Contains(gotSQL, want) {
+			t.Errorf("coverage SQL missing %q\nSQL:\n%s", want, gotSQL)
+		}
+	}
+	if strings.Contains(gotSQL, "'10.2.0.1'") {
+		t.Errorf("TENANT LEAK: acme coverage must not name globex's address:\n%s", gotSQL)
+	}
+
+	r = req(http.MethodGet, "/api/flows/coverage?src=1'+OR+'1'='1", "", superA())
+	w = httptest.NewRecorder()
+	s.handleFlowsCoverage(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("hostile filter: status = %d, want 400", w.Code)
+	}
+}
+
+func TestHandleFlowsCoverageEmptyTenantShortCircuits(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	t.Setenv("CLICKHOUSE_URL", srv.URL)
+
+	s := flowsServerNoShared(t)
+	r := req(http.MethodGet, "/api/flows/coverage", "", jwtClaims{Sub: "x", Role: RoleOperator, Tenant: "nobody"})
+	w := httptest.NewRecorder()
+	s.handleFlowsCoverage(w, r)
+	if called {
+		t.Fatal("empty-tenant coverage must not reach ClickHouse")
+	}
+	if body := w.Body.String(); body != `{"meta":[],"data":[],"rows":0}` {
+		t.Fatalf("body = %q, want empty envelope", body)
+	}
+}

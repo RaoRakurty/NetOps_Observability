@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import ReactECharts from "../components/EChart";
 import { api, FlowFilters, FlowAppRow, FlowAppsResp, FlowServiceRow } from "../services/api";
 import { operatorError, httpFailure } from "../lib/errors";
@@ -36,6 +36,7 @@ import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
 import AskIris from "../components/AskIris";
 import { EmptyHint, MetricStat, escapeHtml } from "../components/board/panels";
+import { FlowEmpty, type FlowDimension } from "./flowEmpty";
 import { StatStrip, Stat } from "../components/ui";
 
 // Flows — the NetFlow/IPFIX/sFlow analytics dashboard. Layout: a left
@@ -177,12 +178,14 @@ function TopNView({
   err,
   fmtKey,
   keyHeader = "Name",
+  empty,
 }: {
   title: string;
   rows: TopNRow[];
   err: string | null;
   fmtKey?: (k: string) => string;
   keyHeader?: string;
+  empty?: ReactNode;
 }) {
   const [view, setView] = useState<"bar" | "table">("bar");
   const label = (k: string) => (fmtKey ? fmtKey(k) : k);
@@ -226,7 +229,7 @@ function TopNView({
       {err ? (
         <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
       ) : rows.length === 0 ? (
-        <EmptyHint kind="flows" />
+        empty ?? <EmptyHint kind="flows" />
       ) : view === "bar" ? (
         <ReactECharts
           style={{ height: Math.min(420, 36 + rows.length * 24) }}
@@ -286,6 +289,7 @@ function TopNPanel({
   limit = 15,
   fmtKey,
   keyHeader = "Name",
+  dim = "generic",
 }: {
   title: string;
   by: string;
@@ -293,6 +297,7 @@ function TopNPanel({
   limit?: number;
   fmtKey?: (k: string) => string;
   keyHeader?: string;
+  dim?: FlowDimension;
 }) {
   const [rows, setRows] = useState<TopNRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -318,7 +323,7 @@ function TopNPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [by, q.since, q.ftype, q.fkey, limit]);
 
-  return <TopNView title={title} rows={rows} err={err} fmtKey={fmtKey} keyHeader={keyHeader} />;
+  return <TopNView title={title} rows={rows} err={err} fmtKey={fmtKey} keyHeader={keyHeader} empty={<FlowEmpty q={q} dim={dim} />} />;
 }
 
 // ── Section: Flows (volume timeseries + source presence chips) ────────────────
@@ -373,7 +378,7 @@ function FlowsSection({ q }: { q: FlowQuery }) {
         {err ? (
           <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
         ) : ts.length === 0 ? (
-          <EmptyHint kind="flows" />
+          <FlowEmpty q={q} />
         ) : (
           <ReactECharts
             style={{ height: 320 }}
@@ -468,7 +473,7 @@ export function ConversationsSection({ q }: { q: FlowQuery }) {
         {err ? (
           <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
         ) : rows.length === 0 ? (
-          <EmptyHint kind="flows" />
+          <FlowEmpty q={q} />
         ) : (
           <DataTable<TalkerRow>
             rows={rows}
@@ -851,7 +856,7 @@ function ProtocolsSection({ q }: { q: FlowQuery }) {
       {err ? (
         <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
       ) : rows.length === 0 ? (
-        <EmptyHint kind="flows" />
+        <FlowEmpty q={q} />
       ) : (
         <ReactECharts
           style={{ height: 300 }}
@@ -1048,7 +1053,7 @@ function FlagsSection({ q }: { q: FlowQuery }) {
         {err ? (
           <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
         ) : rows.length === 0 ? (
-          <EmptyHint kind="flows" />
+          <FlowEmpty q={q} dim="tcp_flags" />
         ) : view === "bar" ? (
           <ReactECharts
             style={{ height: Math.min(420, 36 + rows.length * 24) }}
@@ -1219,8 +1224,8 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
         )}
         {section === "asn" && (
           <div className="flows-grid">
-            <TopNPanel title="Top Initiator AS" by="src_as" q={q} keyHeader="Source AS" />
-            <TopNPanel title="Top Responder AS" by="dst_as" q={q} keyHeader="Destination AS" />
+            <TopNPanel title="Top Initiator AS" by="src_as" q={q} keyHeader="Source AS" dim="as" />
+            <TopNPanel title="Top Responder AS" by="dst_as" q={q} keyHeader="Destination AS" dim="as" />
           </div>
         )}
         {section === "sports" && (
