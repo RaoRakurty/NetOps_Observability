@@ -423,7 +423,10 @@ live**, and two things stand between the fixture and the estate:
 
 1. **The lab has no flow evidence to produce.** Its exporters (172.40.40.51/.52)
    emit OSPF hello flows only: over seven days, 53 002 rows, `tcp_flags = 0` on
-   every one, `proto = 0` on all but a single UDP record, `tenant_id = ''`
+   every one, `proto = 0` on all but a single UDP record (**correction
+   2026-10-11:** that `0` was a DECODER defect, not the traffic — goflow2 names
+   OSPF "OSPFIGP" and the flow VRL mapped only 12 names, storing every other
+   one as 0/HOPOPT; the full 0-145 table now maps OSPF to 89), `tenant_id = ''`
    throughout, and **zero rows touching the DEM tenant's declared subjects**
    (172.40.40.11/.12). The producer correctly reports `no_data` there, and
    `can_confirm` correctly stays false. Live proof needs an exporter pointed at

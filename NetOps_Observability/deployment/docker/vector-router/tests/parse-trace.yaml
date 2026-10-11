@@ -230,3 +230,147 @@ tests:
               assert!(contains(t, "tenant_reason=registry-hit"), t)
               assert!(contains(t, "flow_type=netflow"), t)
               assert!(contains(t, "ts_reason=derived from time_received_ns"), t)
+
+  - name: "flows: protocol OSPFIGP is 89"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "198.51.100.7"
+          src_addr: "10.40.0.10"
+          dst_addr: "10.40.0.20"
+          proto: "OSPFIGP"
+          type: "IPFIX"
+          time_received_ns: 1788888888000000000
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.proto, 89, "goflow2 names OSPF OSPFIGP; it used to be stored as 0 (HOPOPT)")
+
+  - name: "flows: protocol IPv6-ICMP is 58"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "198.51.100.7"
+          src_addr: "10.40.0.10"
+          dst_addr: "10.40.0.20"
+          proto: "IPv6-ICMP"
+          type: "IPFIX"
+          time_received_ns: 1788888888000000000
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.proto, 58, "goflow2 names ICMPv6 IPv6-ICMP; it used to be stored as 0")
+
+  - name: "flows: protocol PIM is 103"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "198.51.100.7"
+          src_addr: "10.40.0.10"
+          dst_addr: "10.40.0.20"
+          proto: "PIM"
+          type: "IPFIX"
+          time_received_ns: 1788888888000000000
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.proto, 103, "every goflow2 protocol name maps to its IANA number")
+
+  - name: "flows: protocol VRRP is 112"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "198.51.100.7"
+          src_addr: "10.40.0.10"
+          dst_addr: "10.40.0.20"
+          proto: "VRRP"
+          type: "IPFIX"
+          time_received_ns: 1788888888000000000
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.proto, 112, "every goflow2 protocol name maps to its IANA number")
+
+  - name: "flows: protocol a number passes through"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "198.51.100.7"
+          src_addr: "10.40.0.10"
+          dst_addr: "10.40.0.20"
+          proto: "17"
+          type: "IPFIX"
+          time_received_ns: 1788888888000000000
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.proto, 17, "a numeric protocol string keeps its number")
+
+  - name: "flows: protocol an integer passes through"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "198.51.100.7"
+          src_addr: "10.40.0.10"
+          dst_addr: "10.40.0.20"
+          proto: 6
+          type: "IPFIX"
+          time_received_ns: 1788888888000000000
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.proto, 6, "an integer protocol is kept as is")
+
+  - name: "flows: protocol an unnamed protocol is 255, never 0"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "198.51.100.7"
+          src_addr: "10.40.0.10"
+          dst_addr: "10.40.0.20"
+          proto: "unassigned"
+          type: "IPFIX"
+          time_received_ns: 1788888888000000000
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.proto, 255, "goflow2 lost the number; 255 says so instead of claiming HOPOPT")
+
+  - name: "flows: protocol the legacy ICMPv6 alias still maps"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "198.51.100.7"
+          src_addr: "10.40.0.10"
+          dst_addr: "10.40.0.20"
+          proto: "ICMPv6"
+          type: "IPFIX"
+          time_received_ns: 1788888888000000000
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.proto, 58, "older producers' spelling is kept as an alias")
