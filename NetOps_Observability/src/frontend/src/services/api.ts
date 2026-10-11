@@ -59,6 +59,13 @@ export type Device = {
   /** The telemetry configured for the device (snmp, gnmi, …). Several methods
    *  are still ONE monitored device: display, never a count. */
   monitor_methods?: string[];
+  /** Live liveness from the collectors' own polls — the ONE status every
+   *  inventory surface renders. Server-stamped on read. */
+  reachability?: "up" | "down" | "partial" | "unknown";
+  /** OS version resolved from the device's own description ("" when absent). */
+  software_version?: string;
+  /** The location configured ON the device (SNMP sysLocation); "" when unset. */
+  configured_location?: string;
 };
 
 /** GET /api/devices/{id}/monitoring — read-only status. */
@@ -1724,6 +1731,9 @@ export type Tunnel = {
   loss_pct: number;
   qoe: number;
   uptime_s: number;
+  /** false for a tunnel whose path quality is not measured (SD-WAN tunnels
+   *  read from the overlay): latency/jitter/loss/QoE render as "—". */
+  measured?: boolean;
 };
 
 // ---------- Vulnerability Management (#13) ----------

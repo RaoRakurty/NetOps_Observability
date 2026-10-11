@@ -112,6 +112,9 @@ type sdwanOverlaySnapshot struct {
 	res topology.OverlayResult
 	// facts: the device ids that published overlay facts this cycle.
 	facts map[string]bool
+	// devFacts: the published facts themselves (per-session detail the Tunnels
+	// view lists; the topology only needs the folded pairs).
+	devFacts map[string]collectors.OverlayDeviceFacts
 }
 
 // refreshSDWANOverlay re-infers the overlay from the collector's published
@@ -147,7 +150,7 @@ func (s *server) refreshSDWANOverlay(ctx context.Context) {
 	for id := range facts {
 		have[id] = true
 	}
-	s.sdwanOverlay.Store(&sdwanOverlaySnapshot{at: time.Now(), res: res, facts: have})
+	s.sdwanOverlay.Store(&sdwanOverlaySnapshot{at: time.Now(), res: res, facts: have, devFacts: facts})
 	if res.Stats.Unresolved > 0 || res.Stats.Ambiguous > 0 {
 		logInfo("topology", "SD-WAN overlay inferred with gaps", map[string]any{
 			"pairs": res.Stats.PairsObserved, "drawn": res.Stats.PairsDrawn, "unresolved_system_ips": res.Stats.Unresolved,

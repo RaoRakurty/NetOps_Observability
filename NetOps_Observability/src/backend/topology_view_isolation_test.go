@@ -225,7 +225,7 @@ func twoTenantOverlay(t *testing.T) (*sdwanOverlaySnapshot, map[string]string) {
 	for id := range facts {
 		have[id] = true
 	}
-	return &sdwanOverlaySnapshot{at: time.Now(), res: res, facts: have}, tenantOf
+	return &sdwanOverlaySnapshot{at: time.Now(), res: res, facts: have, devFacts: facts}, tenantOf
 }
 
 func devsOf(tenantOf map[string]string, tenant string, skip ...string) []models.Device {
@@ -301,5 +301,49 @@ func TestSDWANOverlayOnViewNamesWhatItCannotSee(t *testing.T) {
 	joined := strings.Join(view.Degraded, " | ")
 	if !strings.Contains(joined, "20 minutes old") || !strings.Contains(joined, "unavailable for 1 SD-WAN edge") {
 		t.Fatalf("stale + missing notes: %v", view.Degraded)
+	}
+}
+
+
+// ── SD-WAN tunnels on /api/tunnels (owner report 2026-10-10) ────────────────
+
+func TestSDWANTunnelRowsAreTenantIsolated(t *testing.T) {
+	snap, tenantOf := twoTenantOverlay(t)
+	rows := sdwanTunnelRows(snap, devsOf(tenantOf, "acme"), "", 1000, time.Now())
+	if len(rows) != 6 { // 3 edges × 2 peers × 1 colour pair
+		t.Fatalf("rows = %d, want 6", len(rows))
+	}
+	raw, _ := json.Marshal(rows)
+	if strings.Contains(string(raw), "globex") {
+		t.Fatalf("acme's tunnels carry globex: %s", raw)
+	}
+	for _, r := range rows {
+		if r["type"] != "sdwan" || !strings.HasPrefix(r["remote_device"].(string), "acme-") {
+			t.Fatalf("row %v: remote must resolve to an acme device", r)
+		}
+	}
+}
+
+func TestSDWANTunnelRowsHonourVisibilityStatusAndLimit(t *testing.T) {
+	snap, tenantOf := twoTenantOverlay(t)
+	// acme-e2 hidden: its own tunnels are not listed, and tunnels TO it carry
+	// the overlay system-ip, never its name.
+	rows := sdwanTunnelRows(snap, devsOf(tenantOf, "acme", "acme-e2"), "", 1000, time.Now())
+	for _, r := range rows {
+		if r["local_device"] == "acme-e2" || r["remote_device"] == "acme-e2" {
+			t.Fatalf("a hidden device's name leaked: %v", r)
+		}
+	}
+	if len(rows) != 4 {
+		t.Fatalf("rows = %d, want 4", len(rows))
+	}
+	if got := sdwanTunnelRows(snap, devsOf(tenantOf, "acme"), "down", 1000, time.Now()); len(got) != 0 {
+		t.Fatalf("status=down returned %d up tunnels", len(got))
+	}
+	if got := sdwanTunnelRows(snap, devsOf(tenantOf, "acme"), "", 2, time.Now()); len(got) != 2 {
+		t.Fatalf("limit not honoured: %d", len(got))
+	}
+	if got := sdwanTunnelRows(nil, devsOf(tenantOf, "acme"), "", 10, time.Now()); got != nil {
+		t.Fatal("no snapshot must yield no rows")
 	}
 }

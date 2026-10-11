@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"netops/backend/internal/chschema"
+	"netops/backend/models"
 )
 
 // isAlphaToken reports whether s is non-empty and contains only ASCII letters.
@@ -648,7 +650,13 @@ func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
 	if len(conds) > 0 {
 		where = " WHERE " + strings.Join(conds, " AND ") + " "
 	}
-	// Alias-shadowing guard (tracker 200) — same reasoning as handleFindings:
+	// SD-WAN tunnels (tracker 349): a Viptela/IOS XE SD-WAN tunnel is not an
+	// IF-MIB/TUNNEL-MIB interface, so the interface-based discovery behind
+	// netops.tunnels never sees it (owner report 2026-10-10: "vEdge tunnels are
+	// not showing"). They come from the SD-WAN overlay facts — never written to
+	// netops.tunnels, whose seam rule would turn every session into a VPN seam
+	// suggestion — and are merged here, for the caller's visible devices only.
+	sdwanRows := sdwanTunnelRows(s.sdwanOverlay.Load(), s.visibleDevicesFor(claims), r.URL.Query().Get("status"), limit, time.Now())
 	// `ts` is the wire field, so the ORDER BY is TABLE-QUALIFIED rather than
 	// renamed, and the fold sorts the DateTime column, never the ISO String.
 	sql := `
@@ -661,7 +669,91 @@ SELECT id, type, local_device, local_addr, remote_device, remote_addr,
  LIMIT 1 BY id
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
-	s.proxyClickHouse(w, r, sql)
+	if len(sdwanRows) == 0 {
+		s.proxyClickHouse(w, r, sql) // unchanged path: no SD-WAN tunnels visible
+		return
+	}
+	rows, err := s.chRows(r, sql)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, errors.New("tunnel inventory is unavailable"))
+		return
+	}
+	for _, sr := range sdwanRows {
+		if len(rows) >= limit {
+			break
+		}
+		rows = append(rows, sr)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": rows, "rows": len(rows)})
+}
+
+// sdwanTunnelRows lists the SD-WAN tunnels of the caller's visible devices as
+// tunnel rows: one per (device, remote edge, local colour, remote colour). The
+// remote device is named only when it resolves to a device of the SAME tenant
+// (the overlay inference is tenant-partitioned); otherwise the row carries the
+// remote system-ip. Latency/jitter/loss are not read over SNMP and stay 0.
+func sdwanTunnelRows(snap *sdwanOverlaySnapshot, visible []models.Device, status string, limit int, now time.Time) []map[string]any {
+	if snap == nil || len(snap.devFacts) == 0 || limit <= 0 {
+		return nil
+	}
+	tenantOf := make(map[string]string, len(visible))
+	nameOf := make(map[string]string, len(visible))
+	ids := make([]string, 0, len(visible))
+	for _, d := range visible {
+		tenantOf[d.ID] = normTenant(d.TenantID)
+		nameOf[d.ID] = firstNonEmpty(d.Name, d.ID)
+		ids = append(ids, d.ID)
+	}
+	sort.Strings(ids)
+	ts := snap.at.UTC().Format(time.RFC3339)
+	var out []map[string]any
+	for _, dev := range ids {
+		f, ok := snap.devFacts[dev]
+		if !ok {
+			continue
+		}
+		owners := snap.res.SystemIPs[tenantOf[dev]]
+		for _, p := range f.Peers {
+			remote := p.SystemIP
+			if owner, ok := owners[p.SystemIP]; ok {
+				if n, visibleToo := nameOf[owner]; visibleToo {
+					remote = n
+				}
+			}
+			remoteAddr := ""
+			if len(p.TLOCAddrs) > 0 {
+				remoteAddr = p.TLOCAddrs[0]
+			}
+			for _, cp := range p.ColorPairs {
+				st := "down"
+				if cp.Up > 0 {
+					st = "up"
+				}
+				if (status == "up" || status == "down") && st != status {
+					continue
+				}
+				out = append(out, map[string]any{
+					"id":            "sdwan|" + dev + "|" + p.SystemIP + "|" + cp.LocalColor + "|" + cp.RemoteColor,
+					"type":          "sdwan",
+					"local_device":  nameOf[dev],
+					"local_addr":    cp.LocalColor,
+					"remote_device": remote,
+					"remote_addr":   firstNonEmpty(remoteAddr, cp.RemoteColor),
+					"status":        st,
+					// Path quality is not read over SNMP for an SD-WAN tunnel:
+					// "measured": false makes the view show "—", never a 0 ms
+					// that reads like a perfect link.
+					"latency_ms": 0, "jitter_ms": 0, "loss_pct": 0, "qoe": 0, "uptime_s": 0,
+					"measured": false,
+					"ts":       ts,
+				})
+				if len(out) >= limit {
+					return out
+				}
+			}
+		}
+	}
+	return out
 }
 
 // intQuery parses a bounded integer query parameter.

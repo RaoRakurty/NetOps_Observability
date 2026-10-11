@@ -48,3 +48,38 @@ describe("the Neighbours tab when the adjacency evidence could not be read", () 
     expect(screen.queryByTestId("device-neighbours-unread")).toBeNull();
   });
 });
+
+// Owner report 2026-10-10: BGP and OSPF did not show in the device popup.
+describe("the BGP and OSPF sections", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const byQuery = (map: Record<string, unknown>) => (q: string) => {
+    for (const [k, v] of Object.entries(map)) if (q.startsWith(k)) return v instanceof Error ? Promise.reject(v) : Promise.resolve(v);
+    return Promise.resolve({ data: { result: [] } });
+  };
+
+  it("shows OSPF neighbours by their address label and BGP peers with their remote AS", async () => {
+    vi.mocked(api.topologyLinks).mockResolvedValue({ links: [], count: 0, source: "none" } as never);
+    vi.mocked(api.metricsQuery).mockImplementation(byQuery({
+      device_bgp_peer_state: { data: { result: [{ metric: { peer: "192.0.2.1" }, value: [0, "6"] }] } },
+      device_bgp_peer_remote_as: { data: { result: [{ metric: { peer: "192.0.2.1" }, value: [0, "65010"] }] } },
+      device_ospf_nbr_state: { data: { result: [{ metric: { neighbor: "172.16.40.41" }, value: [0, "8"] }] } },
+    }) as never);
+    render(<DeviceNeighbors device={device} />);
+    expect(await screen.findByText("172.16.40.41")).toBeInTheDocument();
+    expect(await screen.findByText("65010")).toBeInTheDocument();
+    expect(screen.getByText("192.0.2.1")).toBeInTheDocument();
+  });
+
+  it("says BGP and OSPF are UNKNOWN when their state could not be read", async () => {
+    vi.mocked(api.topologyLinks).mockResolvedValue({ links: [], count: 0, source: "none" } as never);
+    vi.mocked(api.metricsQuery).mockImplementation(byQuery({
+      device_bgp_peer_state: new Error("502 Bad Gateway"),
+      device_ospf_nbr_state: new Error("502 Bad Gateway"),
+    }) as never);
+    render(<DeviceNeighbors device={device} />);
+    expect((await screen.findByTestId("device-bgp-unread")).textContent).toMatch(/UNKNOWN here — not absent/);
+    expect((await screen.findByTestId("device-ospf-unread")).textContent).toMatch(/UNKNOWN here — not absent/);
+    expect(screen.queryByText(/No BGP peer seen on this device/)).toBeNull();
+  });
+});

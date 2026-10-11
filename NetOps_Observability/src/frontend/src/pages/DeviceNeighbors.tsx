@@ -44,6 +44,11 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
   const [linksError, setLinksError] = useState<string | null>(null);
   const [bgp, setBgp] = useState<PromInstantSeries[] | null>(null);
   const [ospf, setOspf] = useState<PromInstantSeries[] | null>(null);
+  // An unread metric query is UNKNOWN, never "no peers" (the tracker-290 rule
+  // the adjacency section already follows).
+  const [bgpErr, setBgpErr] = useState<string | null>(null);
+  const [ospfErr, setOspfErr] = useState<string | null>(null);
+  const [remoteAs, setRemoteAs] = useState<Map<string, string>>(new Map());
   const id = device.id;
 
   useEffect(() => {
@@ -59,8 +64,23 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
         setLinks([]);
         setLinksError(operatorError(e, "The adjacency evidence could not be read."));
       });
-    api.metricsQuery(`device_bgp_peer_state{device="${id}"}`).then((r) => alive && setBgp(r?.data?.result ?? [])).catch(() => alive && setBgp([]));
-    api.metricsQuery(`device_ospf_nbr_state{device="${id}"}`).then((r) => alive && setOspf(r?.data?.result ?? [])).catch(() => alive && setOspf([]));
+    api.metricsQuery(`device_bgp_peer_state{device="${id}"}`)
+      .then((r) => { if (alive) { setBgp(r?.data?.result ?? []); setBgpErr(null); } })
+      .catch((e) => { if (alive) { setBgp([]); setBgpErr(operatorError(e, "BGP peer state could not be read.")); } });
+    api.metricsQuery(`device_bgp_peer_remote_as{device="${id}"}`)
+      .then((r) => {
+        if (!alive) return;
+        const m = new Map<string, string>();
+        for (const s of r?.data?.result ?? []) {
+          const peer = s.metric.peer || s.metric.index;
+          if (peer) m.set(peer, String(Math.round(Number(s.value?.[1]))));
+        }
+        setRemoteAs(m);
+      })
+      .catch(() => { /* best-effort column: the AS cell shows — and the state is unaffected */ });
+    api.metricsQuery(`device_ospf_nbr_state{device="${id}"}`)
+      .then((r) => { if (alive) { setOspf(r?.data?.result ?? []); setOspfErr(null); } })
+      .catch((e) => { if (alive) { setOspf([]); setOspfErr(operatorError(e, "OSPF neighbour state could not be read.")); } });
     return () => { alive = false; };
   }, [id]);
 
@@ -92,19 +112,25 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
         )}
       </Section>
 
-      <Section title="BGP neighbors" sub={bgp ? `${bgp.length} peer${bgp.length === 1 ? "" : "s"}` : "loading…"}>
-        {bgp === null ? <div className="empty">Loading…</div> : bgp.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No BGP peer seen on this device.</p> : (
+      <Section title="BGP neighbors" sub={bgpErr ? "unread" : bgp ? `${bgp.length} peer${bgp.length === 1 ? "" : "s"}` : "loading…"}>
+        {bgpErr ? (
+          <p role="alert" data-testid="device-bgp-unread" style={{ color: "var(--bad)", padding: "0 12px" }}>
+            BGP state could not be read, so this device&rsquo;s BGP peers are UNKNOWN here — not absent. {bgpErr}
+          </p>
+        ) : bgp === null ? <div className="empty">Loading…</div> : bgp.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No BGP peer seen on this device.</p> : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={th}>Peer</th><th style={th}>State</th><th style={th}>AS / {vrfTerm(device.vendor)}</th></tr></thead>
+            <thead><tr><th style={th}>Peer</th><th style={th}>State</th><th style={th}>Remote AS</th><th style={th}>{vrfTerm(device.vendor)}</th></tr></thead>
             <tbody>
               {bgp.map((s, i) => {
                 const v = String(Math.round(Number(s.value?.[1])));
                 const label = BGP_STATE[v] ?? `state ${v}`; const up = v === "6";
+                const peer = s.metric.peer || s.metric.index || "";
                 return (
                   <tr key={i}>
-                    <td style={mono}>{s.metric.index || s.metric.peer || "—"}</td>
+                    <td style={mono}>{peer || "—"}</td>
                     <td style={td}><StateDot color={tone(up)} />{label}</td>
-                    <td style={td}>{s.metric.asn || s.metric.vrf || "—"}</td>
+                    <td style={mono}>{remoteAs.get(peer) || s.metric.asn || "—"}</td>
+                    <td style={td}>{s.metric.vrf || (s.metric.vrf === undefined ? "global" : "—")}</td>
                   </tr>
                 );
               })}
@@ -113,15 +139,21 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
         )}
       </Section>
 
-      <Section title="OSPF neighbors" sub={ospf ? `${ospf.length} adjacenc${ospf.length === 1 ? "y" : "ies"}` : "loading…"}>
-        {ospf === null ? <div className="empty">Loading…</div> : ospf.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No OSPF neighbour seen on this device.</p> : (
+      <Section title="OSPF neighbors" sub={ospfErr ? "unread" : ospf ? `${ospf.length} adjacenc${ospf.length === 1 ? "y" : "ies"}` : "loading…"}>
+        {ospfErr ? (
+          <p role="alert" data-testid="device-ospf-unread" style={{ color: "var(--bad)", padding: "0 12px" }}>
+            OSPF state could not be read, so this device&rsquo;s OSPF neighbours are UNKNOWN here — not absent. {ospfErr}
+          </p>
+        ) : ospf === null ? <div className="empty">Loading…</div> : ospf.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No OSPF neighbour seen on this device.</p> : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={th}>Neighbor</th><th style={th}>State</th></tr></thead>
             <tbody>
               {ospf.map((s, i) => {
                 const v = String(Math.round(Number(s.value?.[1])));
                 const label = OSPF_STATE[v] ?? `state ${v}`; const up = v === "8";
-                return <tr key={i}><td style={mono}>{s.metric.index || s.metric.nbr || "—"}</td><td style={td}><StateDot color={tone(up)} />{label}</td></tr>;
+                // The adjacency contract's label is "neighbor" (profiles.go); rows
+                // written before the rename carry "index".
+                return <tr key={i}><td style={mono}>{s.metric.neighbor || s.metric.index || s.metric.nbr || "—"}</td><td style={td}><StateDot color={tone(up)} />{label}</td></tr>;
               })}
             </tbody>
           </table>

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
+import { deviceHealth, DEVICE_HEALTH_META } from "./device/deviceHealth";
 import { fmtDateTime } from "../lib/time";
 import { useEffect, useMemo, useState } from "react";
 import { api, Device, Alert, Tunnel } from "../services/api";
@@ -53,14 +54,16 @@ function FleetPulse() {
   // something nothing is polling. Reachability is measured over that same set,
   // so "unreachable" cannot be inflated by devices nobody asked us to reach.
   const { discovered, monitored, reachable, unreachable } = useMemo(() => {
-    const now = Date.now();
     const on = devices.filter((d) => d.monitored);
     let r = 0;
+    let down = 0;
     for (const d of on) {
-      const seen = Date.parse(d.last_seen || "");
-      if (Number.isFinite(seen) && now - seen < 5 * 60_000) r++;
+      // The collectors' own poll result, the same status the inventory list and
+      // the device popup show (last_seen only means "discovery still lists it").
+      if (d.reachability === "up" || d.reachability === "partial") r++;
+      if (d.reachability === "down") down++; // no recent poll is not "unreachable"
     }
-    return { discovered: devices.length, monitored: on.length, reachable: r, unreachable: on.length - r };
+    return { discovered: devices.length, monitored: on.length, reachable: r, unreachable: down };
   }, [devices]);
 
   const bySev = useMemo(() => {
@@ -122,13 +125,11 @@ function DeviceInventory() {
     return () => { alive = false; clearInterval(id); };
   }, []);
 
-  const now = Date.now();
   const cols = useMemo<Column<Device>[]>(() => [
     {
       key: "reach", header: "", width: "28px", render: (d) => {
-        const seen = Date.parse(d.last_seen || "");
-        const up = Number.isFinite(seen) && now - seen < 5 * 60_000;
-        return <span title={up ? "Reachable" : "Unreachable"} style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: up ? "var(--good)" : "var(--bad)" }} />;
+        const m = DEVICE_HEALTH_META[deviceHealth(d, false)];
+        return <span title={m.label} aria-label={m.label} style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: m.color }} />;
       },
     },
     { key: "name", header: "Device", sortable: true, text: (d) => d.name, render: (d) => d.name },
