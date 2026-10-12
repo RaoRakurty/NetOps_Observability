@@ -5299,6 +5299,12 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.ResponseWriter.WriteHeader(code)
 }
 
+// Unwrap exposes the wrapped writer to http.ResponseController (Go 1.20+), so
+// Flush and SetWriteDeadline reach the connection through the logging and
+// audit wrappers. Without it a streamed response (Iris progress events,
+// tracker 337 N-E2) is silently buffered until the handler returns.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
 // Hijack lets the wrapped writer pass through to the underlying connection so
 // the WebSocket endpoint (/api/events) can take over the socket. Without this
 // the logging wrapper hides http.Hijacker and the upgrade fails with
