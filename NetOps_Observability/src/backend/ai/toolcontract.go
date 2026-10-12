@@ -78,7 +78,7 @@ func (s OutputSchema) Validate(r ToolResult) error {
 	}
 	for i, it := range r.Items {
 		if err := validateItem(it, s.MaxTextChars); err != nil {
-			return fmt.Errorf("%w: item %d: %v", ErrSchemaRejected, i, err)
+			return fmt.Errorf("%w: item %d: %w", ErrSchemaRejected, i, err)
 		}
 	}
 	if len(r.Notes) > s.MaxNotes {
@@ -86,7 +86,7 @@ func (s OutputSchema) Validate(r ToolResult) error {
 	}
 	for i, n := range r.Notes {
 		if err := cleanText(n, maxNoteChars); err != nil {
-			return fmt.Errorf("%w: note %d: %v", ErrSchemaRejected, i, err)
+			return fmt.Errorf("%w: note %d: %w", ErrSchemaRejected, i, err)
 		}
 	}
 	if len(r.Signals) > s.MaxSignals {
@@ -94,7 +94,7 @@ func (s OutputSchema) Validate(r ToolResult) error {
 	}
 	for i, sg := range r.Signals {
 		if err := cleanText(sg, maxSignalChars); err != nil {
-			return fmt.Errorf("%w: signal %d: %v", ErrSchemaRejected, i, err)
+			return fmt.Errorf("%w: signal %d: %w", ErrSchemaRejected, i, err)
 		}
 	}
 	return nil
