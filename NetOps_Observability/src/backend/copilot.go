@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"netops/backend/ai"
+	"netops/backend/internal/aidecision"
 	"netops/backend/internal/aientitlement"
 )
 
@@ -282,7 +283,11 @@ func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwt
 	for _, dr := range docRefs {
 		preIDs = append(preIDs, dr.ID)
 	}
-	res, err := s.runAgentLoop(r.Context(), claims, p, reg, pol, specs, system, msgs, preIDs, call)
+	// The copilot turn is a ledgered decision (tracker 337 N-A8): every tool
+	// call it makes is recorded, hashes only, like an /api/ai/ask decision.
+	rec := s.copilotDecisionStart(claims, msgs)
+	res, err := s.runAgentLoop(aidecision.WithRecorder(r.Context(), rec), claims, p, reg, pol, specs, system, msgs, preIDs, call)
+	s.copilotDecisionFinish(r, claims, rec, name, model, res, err)
 	if err != nil {
 		logWarn("ai", "agent loop failed", map[string]any{"provider": name, "calls": res.Calls, "err": err.Error()})
 		if res.Calls == 0 {

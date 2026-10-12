@@ -40,6 +40,19 @@ type aiDataSource struct {
 // corrRowVisible enforces strict tenancy on correlation intel app-side, as
 // defense-in-depth alongside the strict corr row policies: a scoped principal
 // sees ONLY rows stamped with its own tenant — never untagged (platform) rows.
+// with binds d to the per-call context (tracker 337 N-A8). Every read below
+// uses d.ctx, which was the REQUEST context: the tool gateway's per-tool
+// timeout — and the skill chain's turn budget — never reached the database.
+// Each DataSource method now rebinds its copy to the context it was handed,
+// so a deadline or a disconnect stops the read itself. A nil ctx keeps the
+// request's.
+func (d aiDataSource) with(ctx context.Context) aiDataSource {
+	if ctx != nil {
+		d.ctx = ctx
+	}
+	return d
+}
+
 func (d aiDataSource) corrRowVisible(row map[string]any) bool {
 	tenant, cross := principalTenant(d.claims)
 	if cross {
@@ -50,7 +63,8 @@ func (d aiDataSource) corrRowVisible(row map[string]any) bool {
 
 // GetProblem fetches one correlation object (tenant-scoped) and maps it to the
 // ai.Problem the assistant explains. Unknown / cross-tenant id → ErrNotFound.
-func (d aiDataSource) GetProblem(_ context.Context, _ ai.Principal, id string) (*ai.Problem, error) {
+func (d aiDataSource) GetProblem(ctx context.Context, _ ai.Principal, id string) (*ai.Problem, error) {
+	d = d.with(ctx)
 	if !isUUIDToken(id) {
 		return nil, ai.ErrNotFound
 	}
@@ -95,7 +109,8 @@ SELECT toString(o.correlation_id) AS correlation_id, tenant_id,
 // GetProblemEvidence derives bounded, cited evidence items for the problem from
 // its candidate hypotheses + affected entities (already in the object — no extra
 // heavy query). Each item carries a stable citation id + a UI deep link.
-func (d aiDataSource) GetProblemEvidence(_ context.Context, p ai.Principal, id string) ([]ai.EvidenceItem, error) {
+func (d aiDataSource) GetProblemEvidence(ctx context.Context, p ai.Principal, id string) ([]ai.EvidenceItem, error) {
+	d = d.with(ctx)
 	if !isUUIDToken(id) {
 		return nil, ai.ErrNotFound
 	}
@@ -256,7 +271,8 @@ SELECT toString(c.correlation_id) AS correlation_id, c.tenant_id AS tenant_id,
 // itself about to close. Bounded by limit, and by the row policy
 // on netops.corr_current to the caller's tenant (plus the strict app-side
 // corrRowVisible narrowing below). See aiActiveProblemsSQL for the measurements.
-func (d aiDataSource) ListActiveProblems(_ context.Context, _ ai.Principal, limit int) ([]ai.Problem, error) {
+func (d aiDataSource) ListActiveProblems(ctx context.Context, _ ai.Principal, limit int) ([]ai.Problem, error) {
+	d = d.with(ctx)
 	if limit <= 0 || limit > 100 {
 		limit = 25
 	}
@@ -409,7 +425,8 @@ SELECT toString(o.correlation_id) AS correlation_id, o.tenant_id AS tenant_id,
 // to open, so a time-range summary can distinguish still-open from resolved.
 // One row per correlation, and since 2026-09-20 that row is provably its LATEST
 // version. See aiProblemsInWindowSQL for the shape and the measurements.
-func (d aiDataSource) ListProblemsInWindow(_ context.Context, _ ai.Principal, sinceSeconds int) ([]ai.Problem, error) {
+func (d aiDataSource) ListProblemsInWindow(ctx context.Context, _ ai.Principal, sinceSeconds int) ([]ai.Problem, error) {
+	d = d.with(ctx)
 	if sinceSeconds <= 0 {
 		sinceSeconds = 12 * 3600
 	}
@@ -446,7 +463,8 @@ func (d aiDataSource) ListProblemsInWindow(_ context.Context, _ ai.Principal, si
 // netops.flows / netops.findings tenant_iso row policy via d.scope (a non-cross
 // caller sees only its own + untagged rows). Unknown query → ErrNotImplemented;
 // no data → empty result (honest, not an error).
-func (d aiDataSource) ModuleQuery(_ context.Context, p ai.Principal, query string, args ai.ToolArgs) (ai.ToolResult, error) {
+func (d aiDataSource) ModuleQuery(ctx context.Context, p ai.Principal, query string, args ai.ToolArgs) (ai.ToolResult, error) {
+	d = d.with(ctx)
 	switch query {
 	case "top_talkers":
 		return d.moduleTopTalkers()
