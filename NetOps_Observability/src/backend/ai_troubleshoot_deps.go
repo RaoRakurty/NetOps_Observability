@@ -2595,7 +2595,7 @@ func (h *nlqScope) aliasTarget(entityType, id string) bool {
 		return false
 	}
 	tenant, cross := principalTenant(h.claims)
-	for _, a := range h.s.nlqAliases.List(tenant, cross) {
+	for _, a := range h.s.nlqAliasList(tenant, cross) {
 		if a.EntityType == entityType && a.EntityID == id {
 			return true
 		}

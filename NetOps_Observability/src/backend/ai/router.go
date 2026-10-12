@@ -62,6 +62,43 @@ func RouteFor(mode AnswerMode) ModelRoute {
 	}
 }
 
+// RequestClass is an answer's PERFORMANCE class (tracker 337 N-H4): what the
+// operator should expect it to cost in time. Decided from the answer actually
+// shipped (its mode), not from the pre-answer intent — the data arm, the skill
+// layer and the capability path all re-route after Classify.
+type RequestClass string
+
+const (
+	ClassProduct       RequestClass = "product"       // a question about Correlix itself
+	ClassData          RequestClass = "data"          // a deterministic data query or listing
+	ClassRCA           RequestClass = "rca"           // a grounded explanation of an incident
+	ClassInvestigation RequestClass = "investigation" // a skill-chain investigation
+)
+
+// ClassFor maps a shipped answer to its class and whether it was answered or
+// refused. An unknown (future) mode is an INVESTIGATION — the slowest class —
+// so a new mode can never flatter a fast class's latency.
+func ClassFor(mode AnswerMode, intent string) (RequestClass, string) {
+	switch mode {
+	case ModeProductAnswer, ModeProductNavigationHelp, ModeInvestigationPlan:
+		return ClassProduct, "answered"
+	case ModeDataQuery, ModeIncidentStatusBreakdown, ModeShiftHandoff, ModeTimeRangeOutageSummary:
+		return ClassData, "answered"
+	case ModeProblemExplanation, ModeTopIncidentExplanation, ModeNocFocusRecommendation, ModeCurrentStateSummary,
+		ModeModuleHealthSummary, ModeTopologyPathExplanation, ModeEvidenceExplanation, ModeMissingEvidenceExplained,
+		ModeItsmUpdate, ModeExecutiveSummary:
+		return ClassRCA, "answered"
+	case ModeTroubleshootFinding:
+		return ClassInvestigation, "answered"
+	case ModeUnavailable:
+		if intent == "capability" {
+			return ClassProduct, "answered" // "what can you do" is a product answer
+		}
+		return ClassProduct, "refused" // disabled module / no access: counted, not timed
+	}
+	return ClassInvestigation, "answered"
+}
+
 // ── the MECHANISM half: which model a tier resolves to ──────────────────────
 
 // TierModels is one provider configuration's model selection: a single default
