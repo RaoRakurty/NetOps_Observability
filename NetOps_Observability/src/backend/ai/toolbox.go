@@ -31,6 +31,9 @@ package ai
 type Toolbox struct {
 	Registry *ToolRegistry
 	Policy   *PolicyEngine
+	// Gateway applies the tool contracts (N-A8): rate budget and metrics
+	// that outlive the request. Invoke falls back to a fresh one when nil.
+	Gateway *ToolGateway
 }
 
 // BuildToolRegistry is the ONE constructor for the Iris tool registry, used by
@@ -77,5 +80,17 @@ func (b Toolbox) Authorize(name string, p Principal) (tool AITool, d Decision, r
 // deterministic paths execute through — so the copilot agent loop runs on the
 // very same entries, not a parallel set.
 func (o *Orchestrator) Toolbox() Toolbox {
-	return Toolbox{Registry: o.Tools, Policy: o.policy()}
+	return Toolbox{Registry: o.Tools, Policy: o.policy(), Gateway: o.gateway()}
+}
+
+// gateway is the server's process-lived gateway when wired (Orchestrator.
+// Gateway), else one created once for this orchestrator — so a test or a
+// caller that builds an Orchestrator literal still runs every tool under its
+// contract.
+func (o *Orchestrator) gateway() *ToolGateway {
+	if o.Gateway != nil {
+		return o.Gateway
+	}
+	o.gatewayOnce.Do(func() { o.ownGateway = NewToolGateway() })
+	return o.ownGateway
 }
