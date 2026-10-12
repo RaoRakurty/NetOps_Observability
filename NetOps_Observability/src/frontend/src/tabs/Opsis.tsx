@@ -20,12 +20,15 @@ import {
   AiAnswer,
   AiCitation,
   AiCommand,
+  StreamBrokenError,
 } from "../services/api";
 import Icon from "../components/Icon";
 import IrisVocabulary from "../components/IrisVocabulary";
 import PresentationPlanRenderer from "../iris/PresentationPlanRenderer";
 import { hintFromAst } from "../iris/presentation";
 import HypothesisTrace from "../iris/HypothesisTrace";
+import IrisProgress, { type ProgressStep } from "../iris/IrisProgress";
+import { applyEvent } from "../iris/progressStream";
 import StatementText from "../iris/StatementText";
 import { answerCiteHref } from "../iris/links";
 import QueryCorrection from "../iris/QueryCorrection";
@@ -212,6 +215,8 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
   const [ungrounded, setUngrounded] = useState<Record<number, boolean>>({});
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  // What Iris is doing for the question in flight (N-E2); empty = no stream.
+  const [steps, setSteps] = useState<ProgressStep[]>([]);
   const [error, setError] = useState<string | null>(null);
   // Slim disclosure when the AI provider is unreachable and the grounded engine
   // answered instead (owner decision: degrade elegantly, never dead-end).
@@ -226,19 +231,32 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
   // follow-up ("memory on that device") resolves against what the server
   // holds. A conversation the server no longer has is dropped and the
   // question is asked without one — the next question starts a new one.
+  // askStreaming asks with live progress (tracker 337 N-E2): the steps fill in
+  // while the server works, and the answer is the same one aiAsk returns. A
+  // stream a proxy cut short falls back ONCE to the plain JSON ask.
+  const askStreaming = async (content: string, context?: Record<string, string>, convId?: string): Promise<AiAnswer> => {
+    setSteps([]);
+    try {
+      return await api.aiAskStream(content, context, convId, (ev) => setSteps((s) => applyEvent(s, ev)));
+    } catch (e) {
+      if (!(e instanceof StreamBrokenError)) throw e;
+      setSteps([]);
+      return api.aiAsk(content, context, convId);
+    }
+  };
   const askInConversation = async (content: string): Promise<AiAnswer> => {
     let id = convRef.current;
     if (!id && nlqEntitledRef.current) {
       try { id = (await api.startIrisConversation()).id; } catch { id = null; } // conversations unavailable: ask without
     }
     try {
-      const ans = await api.aiAsk(content, undefined, id ?? undefined);
+      const ans = await askStreaming(content, undefined, id ?? undefined);
       setConversation(ans.conversation_id ?? null);
       return ans;
     } catch (e) {
       if (!id || httpFailure(e)?.status !== 404) throw e;
       setConversation(null);
-      return api.aiAsk(content);
+      return askStreaming(content);
     }
   };
   const taRef = useRef<HTMLTextAreaElement | null>(null);
@@ -420,7 +438,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
     setBusy(true);
     setError(null);
     try {
-      const ans = await api.aiAsk(text, context);
+      const ans = await askStreaming(text, context);
       setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
       setGrounded((g) => ({ ...g, [idx]: ans }));
     } catch (e) {
@@ -892,7 +910,11 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
         {busy && (
           <div className="op-row assistant">
             <span className="op-avatar"><Icon name="copilot" size={14} /></span>
-            <div className="op-bubble assistant op-typing"><span /><span /><span /></div>
+            {steps.length > 0 ? (
+              <div className="op-bubble assistant"><IrisProgress steps={steps} /></div>
+            ) : (
+              <div className="op-bubble assistant op-typing"><span /><span /><span /></div>
+            )}
           </div>
         )}
         <div ref={endRef} />
