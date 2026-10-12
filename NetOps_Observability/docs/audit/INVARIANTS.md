@@ -518,3 +518,19 @@ difference between fixing an instance and fixing a generator.
 | A result that does not fit its output schema never reaches the model; its hash is ledgered as proof | ✅ | **BUILD** — `TestInvokeSchemaRejectDropsTheOutput`, `TestAddToolStepGatewayOutcomes` |
 | Every tool call is ledgered with latency and truncation, copilot turns included | ✅ on fixtures + PG | **BUILD** — `TestCopilotToolCallsAreLedgered`; pgintegration `TestAIDecisionLedgerToolContractColumnsPG` (0057 round-trip, CHECK, append-only, RLS) |
 | The contract VALUES (timeouts, rates, item ceilings) suit live traffic | ❌ **not live-measured** | Set from the code's own caps and backend class; `IrisToolEvidenceDropped` (warning) watches the drop rate. Re-tune from `netops_ai_tool_invocations_total{outcome}` after a week of real traffic. |
+
+## 15. Iris answer progress stream (tracker 337 N-E2, 2026-10-12)
+
+`POST /api/ai/ask` with `Accept: text/event-stream` streams progress
+(planning · tool started/finished · narrating · grounding), then the same
+answer the JSON path sends, then `done`. Any other Accept is unchanged.
+
+| Invariant | Status | Proof |
+|---|---|---|
+| A stream carries only a closed vocabulary: a fixed event type, a registry-shaped tool NAME, a fixed outcome — never model text, tool arguments or evidence before the grounded answer | ✅ | **BUILD** — `TestEmitAllowsOnlyTheClosedVocabulary`, `TestTraceCarriesNothingButTheVocabulary`; browser: `irisProgress.spec.ts` "hostile event and tool names never reach the screen" |
+| The streamed answer is the JSON answer (minus volatile fields); a client that does not ask for a stream sees no change | ✅ | **BUILD** — `TestAskStreamsProgressThenTheSameAnswer`, `TestAskWithoutStreamAcceptIsUnchanged`; refusals stay JSON (`TestAskStreamRefusalsAreJSON`) |
+| Progress is bounded and never blocks the answer (drops counted, reported in `done`) | ✅ | **BUILD** — `TestEmitIsBoundedAndNeverBlocks`; `netops_iris_stream_events_dropped_total` |
+| The client leaving cancels the work (no orphaned model/VM calls) | ✅ | **BUILD** — `TestAskStreamClientDisconnectCancelsTheWork` (real socket), `TestWriteFailureCancelsTheWork`, `TestCancellingTheRequestStopsTheAnswer` |
+| A streamed ask is ledgered in the asker's tenant | ✅ | **BUILD** — `TestAskStreamLedgerStaysInTheAskersTenant` |
+| Streaming survives the middleware chain and nginx (no buffering, no gzip of `text/event-stream`) | ✅ on config | **BUILD** — `TestStreamingPassesThroughTheMiddleware`, `tests/test_nginx_sse.py`. ❌ **not live-proven** through the lab's nginx — check on first deploy that progress arrives before the answer |
+| A broken or non-stream response falls back to ONE plain ask and the answer still renders | ✅ | **BUILD** — `progressStream.test.ts`; browser `irisProgress.spec.ts` (broken stream = 2 asks, JSON reply = 1) |
