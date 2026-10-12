@@ -2357,7 +2357,8 @@ code, kbd, pre, .mono, td.mono {
 }
 .op-hd-text { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
 .op-hd-title { font-weight: 600; font-size: 14px; letter-spacing: -.01em; }
-.op-hd-sub { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.op-hd-sub { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); white-space: nowrap; min-width: 0; max-width: 100%; }
+.op-hd-sub-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .op-hd-actions { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; }
 .op-hd-btn {
   display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; cursor: pointer;

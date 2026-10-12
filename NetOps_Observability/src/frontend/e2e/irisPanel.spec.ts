@@ -562,3 +562,19 @@ test("screenshots for the owner's review (IRIS_SCREENSHOT_DIR only)", async ({ p
   await settle(page);
   await page.screenshot({ path: `${dir}/iris-closed-header.png`, clip: { x: 1000, y: 0, width: 600, height: 80 } });
 });
+
+test("the header's engine line ends in an ellipsis, never clipped mid-word, in a narrow panel", async ({ page }) => {
+  await boot(page);
+  await open(page);
+  const line = page.locator("#iris-panel .op-hd-sub-text");
+  await expect(line).toBeVisible();
+  const m = await line.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    const box = el.getBoundingClientRect();
+    const hd = (el.closest(".op-hd") as HTMLElement).getBoundingClientRect();
+    return { overflow: cs.textOverflow, right: box.right, hdRight: hd.right, title: el.getAttribute("title") ?? "" };
+  });
+  expect(m.overflow).toBe("ellipsis");
+  expect(m.right).toBeLessThanOrEqual(m.hdRight);
+  expect(m.title.length).toBeGreaterThan(0); // the full line is on hover
+});

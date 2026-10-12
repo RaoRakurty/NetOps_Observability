@@ -518,6 +518,12 @@ export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
   const tenantReady = !!tcfg?.assistant_enabled &&
     (tcfg.key_present || (tcfg.platform_key_available && !tcfg.no_platform_key));
   const ready = (!!cfg?.feature_enabled && !!cfg?.key_present) || tenantReady;
+  // The header's engine line: which model answers, or the key-free engine.
+  const engineLine = cfg
+    ? (ready ? (cfg.provider === "anthropic" ? "Claude" : cfg.provider === "gemini" ? "Gemini" : cfg.provider === "openai" ? "GPT" : cfg.provider) + " · " + cfg.model : "Grounded engine · key-free")
+    : tcfg
+      ? (tenantReady ? (tcfg.key_present ? (tcfg.provider === "openai" ? "GPT" : tcfg.provider === "gemini" ? "Gemini" : "Claude") + " · your key" : "Platform AI service") : "Grounded engine · key-free")
+      : "Network assistant";
 
   // Slash menu: filter the pre-made questions by what's typed after "/".
   const slashQuery = draft.startsWith("/") ? draft.slice(1).toLowerCase().trim() : "";
@@ -553,11 +559,9 @@ export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
             <span className="op-hd-title">{AI_NAME}</span>
             <span className="op-hd-sub">
               <span className={`op-dot ${ready ? "ok" : "warn"}`} />
-              {cfg
-                ? (ready ? (cfg.provider === "anthropic" ? "Claude" : cfg.provider === "gemini" ? "Gemini" : cfg.provider === "openai" ? "GPT" : cfg.provider) + " · " + cfg.model : "Grounded engine · key-free")
-                : tcfg
-                  ? (tenantReady ? (tcfg.key_present ? (tcfg.provider === "openai" ? "GPT" : tcfg.provider === "gemini" ? "Gemini" : "Claude") + " · your key" : "Platform AI service") : "Grounded engine · key-free")
-                  : "Network assistant"}
+              {/* Its own span: text-overflow does not apply to a flex container's
+                  text, so a narrow (floating) header clipped the line mid-word. */}
+              <span className="op-hd-sub-text" title={engineLine}>{engineLine}</span>
             </span>
           </span>
         </span>
