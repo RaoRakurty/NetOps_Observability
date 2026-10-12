@@ -36,6 +36,7 @@ import (
 	"netops/backend/internal/nlquery/present"
 	"netops/backend/internal/nlquery/resolve"
 	"netops/backend/internal/nlquery/validate"
+	"netops/backend/internal/orgcontext"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/tac"
 	"netops/backend/models"
@@ -356,6 +357,9 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		// The question router's DATA arm (tracker 337 N-G4): nil when the
 		// catalog is absent or the caller may not read infrastructure data.
 		NLQuery: s.aiNLQuery(r, claims),
+		// Network context (N-F1): the customer's approved facts, read once per
+		// request, placed before the data fence.
+		OrgContext: func() string { return s.orgContextBlock(r.Context(), claims) },
 	}
 }
 
@@ -2891,4 +2895,115 @@ func (s *server) handleAIDecisions(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"decisions": entries, "scope": scope,
 		"event_types": aidecision.EventTypes})
+}
+
+// ── Network context (tracker 337 N-F1, internal/orgcontext) ────────────────
+//
+// §3a: per-tenant DATA → requirePerm(administration) + tenant filter; the
+// tenant comes from the principal (Authorize), never the body. Writing and
+// approving need a PERSON; approval needs a DIFFERENT person than the author.
+// Only APPROVED facts reach a prompt, only for a concrete tenant, and only
+// while that tenant holds ai.context.author (default-closed).
+
+// newOrgContextStore: Postgres (RLS, durable history) or nothing — approved
+// context must never silently vanish on a restart, so a file-backend
+// deployment answers 503 rather than keep it in memory.
+func newOrgContextStore() orgcontext.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return orgcontext.NewPGStore(ps.DB())
+	}
+	return nil
+}
+
+func (s *server) handleAIContext(w http.ResponseWriter, r *http.Request) {
+	if s.orgContext == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("network context needs the Postgres platform store on this deployment"))
+		return
+	}
+	s.orgContextAPI().Handler(w, r)
+}
+
+func (s *server) orgContextAPI() orgcontext.Deps {
+	return orgcontext.Deps{
+		Store: s.orgContext,
+		Authorize: func(w http.ResponseWriter, r *http.Request, level orgcontext.Level) (orgcontext.Caller, bool) {
+			perm := LevelRead
+			switch level {
+			case orgcontext.LevelAuthor:
+				perm = LevelWrite
+			case orgcontext.LevelManage:
+				perm = LevelAdmin
+			}
+			claims, ok := s.requirePerm(w, r, "administration", perm)
+			if !ok || !s.requireAIEntitlement(w, claims, aientitlement.ContextAuthor) {
+				return orgcontext.Caller{}, false
+			}
+			tenant, cross := principalTenant(claims)
+			return orgcontext.Caller{Tenant: tenant, Cross: cross, Sub: claims.Sub, Person: !strings.HasPrefix(claims.Sub, "apikey:")}, true
+		},
+		SiteVisible: func(ctx context.Context, r *http.Request, site string) (bool, error) {
+			claims, _ := userFrom(r.Context()) // Authorize already required a principal
+			return s.nlqScopeFor(r, claims).Visible(ctx, nlqast.EntityRef{Type: "site", ID: "site:" + site})
+		},
+		ToolNames: ai.ToolNames,
+		Preview: func(ctx context.Context, tenant string) (string, int, int, error) {
+			return s.orgContextRender(ctx, tenant)
+		},
+		Audit: func(r *http.Request, c orgcontext.Caller, decision string, detail map[string]any) {
+			s.audit.Record(AuditEvent{
+				Time: time.Now().UTC(), Actor: c.Sub, Tenant: c.Tenant, Cross: c.Cross,
+				Method: r.Method, Path: r.URL.Path, Status: 200, Decision: decision, Detail: detail,
+			})
+		},
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+		Log:        func(msg string, err error) { logError("iris.context", msg, errf(err)) },
+	}
+}
+
+// orgContextRender reads the tenant's active facts, re-validates every one
+// (a row that no longer passes is skipped and counted), and renders the block.
+func (s *server) orgContextRender(ctx context.Context, tenant string) (string, int, int, error) {
+	facts, err := s.orgContext.ActiveFacts(ctx, tenant)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	tools := ai.ToolNames()
+	out := make([]ai.ContextFact, 0, len(facts))
+	for _, f := range facts {
+		if !orgcontext.Usable(f, tools) {
+			s.orgContextMetrics.Skipped()
+			logError("iris.context", "a stored fact no longer passes validation and was left out", map[string]any{"doc_id": f.DocID, "version": f.Version})
+			continue
+		}
+		out = append(out, ai.ContextFact{Kind: orgcontext.Label(f.Kind), Scope: f.Scope, Key: f.Key, Body: f.Body})
+	}
+	block, omitted := ai.OrgContextBlock(out, ai.OrgContextMaxChars, ai.Redact)
+	return block, len(out), omitted, nil
+}
+
+// orgContextBlock is the block for one Iris request, or "" — for a Global
+// view, a tenant without ai.context.author, a deployment without the store,
+// or a failed read (the answer then runs without context; the failure is
+// logged and counted, never silent). A rendered block is ledgered as hashes.
+func (s *server) orgContextBlock(ctx context.Context, claims jwtClaims) string {
+	tenant, cross := principalTenant(claims)
+	if s.orgContext == nil || cross || tenant == "" || !s.aiEntitled(claims, aientitlement.ContextAuthor) {
+		return ""
+	}
+	rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	block, n, _, err := s.orgContextRender(rctx, tenant)
+	if err != nil {
+		s.orgContextMetrics.Failed()
+		logError("iris.context", "network context could not be read; answering without it", errf(err))
+		return ""
+	}
+	if block == "" {
+		s.orgContextMetrics.Empty()
+		return ""
+	}
+	s.orgContextMetrics.Rendered()
+	aidecision.FromContext(ctx).AddContext(ai.ContextBlockSHA256(block), n)
+	return block
 }

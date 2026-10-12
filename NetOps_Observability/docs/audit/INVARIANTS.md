@@ -534,3 +534,23 @@ answer the JSON path sends, then `done`. Any other Accept is unchanged.
 | A streamed ask is ledgered in the asker's tenant | ✅ | **BUILD** — `TestAskStreamLedgerStaysInTheAskersTenant` |
 | Streaming survives the middleware chain and nginx (no buffering, no gzip of `text/event-stream`) | ✅ on config | **BUILD** — `TestStreamingPassesThroughTheMiddleware`, `tests/test_nginx_sse.py`. ❌ **not live-proven** through the lab's nginx — check on first deploy that progress arrives before the answer |
 | A broken or non-stream response falls back to ONE plain ask and the answer still renders | ✅ | **BUILD** — `progressStream.test.ts`; browser `irisProgress.spec.ts` (broken stream = 2 asks, JSON reply = 1) |
+
+## 16. Network context — the Org Context Store (tracker 337 N-F1, 2026-10-12)
+
+Customer-written facts (9 closed kinds, ≤ 2000 bytes, 50 per tenant) that Iris
+reads before every answer. `internal/orgcontext`, migration 0058,
+`/api/ai/context/*`, Administration → Iris → Network Context.
+
+| Invariant | Status | Proof |
+|---|---|---|
+| A tenant never reads, changes or approves another tenant's facts, and never receives them in a prompt; a Global view renders none | ✅ | **BUILD** — `TestOrgContextIsolation` (every verb on a foreign id → 404, as_tenant walk, body tenant refused, prompt per tenant), `TestStoreTenantIsolation`; **PG** — `TestOrgContextRLSIsolationPG` (RLS count 0, WITH CHECK 42501) |
+| No text reaches a prompt without two people: the author cannot approve, an API key cannot approve, and the approval binds to the reviewed text (version + sha256) | ✅ | **BUILD** — `TestNobodyApprovesTheirOwnText`, `TestApprovalBindsToTheReviewedText`, `TestOrgContextTwoPeopleOverHTTP`; **PG** — `TestOrgContextDatabaseGuardsPG` (CHECK `approver_sub <> author_sub` refuses a direct write, 23514) |
+| History is never rewritten: submitted text, author and approver are frozen; only drafts are deleted; rollback is a new version that keeps the original two people | ✅ | **BUILD** — `TestTheFullLifecycle`; **PG** — `TestOrgContextDatabaseGuardsPG` (trigger 42501), `TestOrgContextLifecyclePG` |
+| Only APPROVED text renders; drafts, pending and retired versions never do; rendering also needs `ai.context.author` (default-closed) | ✅ | **BUILD** — `TestOrgContextOnlyApprovedTextReachesThePrompt`, `TestOrgContextIsolation` (entitlement lapse) |
+| Context renders before the data-not-instructions fence on both the copilot and the grounded-engine prompt; without context the engine prompt is byte-identical | ✅ | **BUILD** — `TestCopilotFenceFollowsNetworkContext`, `TestOrchestratorSystemPromptPlacesTheFenceAfterContext` |
+| Injection shapes (role markers, template tokens, our headers, citation ids, links, e-mail, tool names, invisible/control characters) are refused at write and re-checked at render | ✅ | **BUILD** — `TestInjectionShapesAreRefused`, `TestOrgContextRefusesInjectionAndUnseenSites`, `TestOrgContextSkipsATamperedStoredFact`, `TestOrgContextBlockNeutralisesWhatSlipsThrough` |
+| Bounded: 2000-byte body (CHECK + store), 50 facts per tenant under concurrency, 200 versions per fact, ~4000-char prompt budget with disclosed omission | ✅ | **BUILD** — `TestLimits`, `TestOrgContextBlockBudgetIsDisclosed`; **PG** — `TestOrgContextConcurrencyPG` |
+| The context that rode a prompt is ledgered (hash + count) | ✅ | **BUILD** — `TestOrgContextOnlyApprovedTextReachesThePrompt` |
+| The legacy platform-wide persona override (`CopilotConfig.System`) is gone: a stored value is ignored and logged, a PUT carrying one is refused | ✅ | **BUILD** — `TestRetiredPersonaOverrideIsIgnoredAndRefused`. Lab (.122) held no stored value (checked 2026-10-12). |
+| Facts change answers for the better and do not tilt verdicts | ❌ **not measured** | No model-eval run with context yet. The deterministic honesty gate (statement classes) still decides what the engine asserts; facts are not evidence and cannot be cited. |
+| A single-administrator workspace can still activate a fact | ✅ via the platform owner | The second person may be the platform owner acting in that workspace (tenant switcher), audited under their own identity — `TestOrgContextPlatformOwnerCanBeTheSecondPerson`. There is no other exception. Owner may revoke this path. |

@@ -94,6 +94,8 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   PipelineDebugger: () => import("./pages/platform/PipelineDebugger"),
   // ITSM delivery observability (Administration → Incident Response).
   TicketDelivery: () => import("./pages/admin/TicketDelivery"),
+  // Network context (Administration → Iris): the facts Iris reads (N-F1).
+  NetworkContext: () => import("./pages/admin/NetworkContext"),
   // Sealed-quarantine viewer (Platform → Tools) — /api/quarantine is
   // requirePlatformAdmin, so the page belongs to the provider section.
   Quarantine: () => import("./pages/platform/Quarantine"),
@@ -185,6 +187,7 @@ const ConfigDrift = lazy(ROUTE_CHUNKS["ConfigDrift"] as () => Promise<{ default:
 const PipelineDebugger = lazy(ROUTE_CHUNKS["PipelineDebugger"] as () => Promise<{ default: React.ComponentType<any> }>);
 // ITSM delivery outbox + audit trail — Administration → Incident Response.
 const TicketDelivery = lazy(ROUTE_CHUNKS["TicketDelivery"] as () => Promise<{ default: React.ComponentType<any> }>);
+const NetworkContext = lazy(ROUTE_CHUNKS["NetworkContext"] as () => Promise<{ default: React.ComponentType<any> }>);
 // Sealed-quarantine viewer — Platform → Tools.
 const Quarantine = lazy(ROUTE_CHUNKS["Quarantine"] as () => Promise<{ default: React.ComponentType<any> }>);
 
@@ -498,6 +501,11 @@ export const NAV: NavSection[] = [
       // Identity & Access — consolidates Users · Roles · Security Settings.
       // Sub-items deep-link its internal views via the #/admin/identity/<sub>
       // suffix (read by IdentityAccess, same mechanism as admin/api).
+      // Iris — what the assistant knows about THIS workspace's network. The
+      // /api/ai/context routes are requirePerm(administration) + the caller's
+      // own tenant (a Global view is told to choose a workspace), and approval
+      // needs a second administrator — tenant-level, not platform-stamped.
+      { id: "network-context", label: "Network Context", group: "Iris", render: () => <NetworkContext /> },
       { id: "identity", label: "Identity & Access", render: () => <IdentityAccess /> },
       // Access & Audit — who can reach what, who is signed in right now, what
       // was done, and how the transport carrying it is secured. Every route

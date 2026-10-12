@@ -78,12 +78,9 @@ func TestCopilotConfigSetGetPersistAndReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "copilot_config.json")
 	s := newCopilotConfigStore(path, nil)
 
-	out := s.Set(copilotConfig{Provider: "openai", Model: "  gpt-4o  ", System: "  be terse  "})
+	out := s.Set(copilotConfig{Provider: "openai", Model: "  gpt-4o  "})
 	if out.Model != "gpt-4o" {
 		t.Fatalf("model not trimmed: %q", out.Model)
-	}
-	if out.System != "be terse" {
-		t.Fatalf("system not trimmed: %q", out.System)
 	}
 
 	got := s.Get()
@@ -104,7 +101,7 @@ func TestCopilotConfigNeverPersistsAPIKey(t *testing.T) {
 	t.Setenv("COPILOT_API_KEY", "sk-super-secret-should-not-be-stored")
 	path := filepath.Join(t.TempDir(), "copilot_config.json")
 	s := newCopilotConfigStore(path, nil)
-	s.Set(copilotConfig{Provider: "anthropic", Model: "claude-opus-4-8", System: "hi"})
+	s.Set(copilotConfig{Provider: "anthropic", Model: "claude-opus-4-8"})
 
 	raw, err := platformdb.Load(path)
 	if err != nil {

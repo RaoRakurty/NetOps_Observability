@@ -91,7 +91,7 @@ func TestKnowledgeEmbeddedInSystemPrompt(t *testing.T) {
 		t.Fatalf("appKnowledge looks unembedded (len=%d)", len(appKnowledge))
 	}
 	s := &server{}
-	sp := s.copilotSystemPrompt()
+	sp := s.copilotSystemPrompt("")
 	if !strings.Contains(sp, "NetOps Observability") || !strings.Contains(sp, "Source of Truth") {
 		t.Error("system prompt should contain the embedded application knowledge")
 	}

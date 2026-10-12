@@ -7252,3 +7252,24 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
   .iris-kv dd { margin-bottom: 8px; }
   .iris-diff-row { grid-template-columns: 1fr; }
 }
+
+/* ── Network context (Administration → Iris, tracker 337 N-F1) ───────────── */
+.nctx .disc-field select,
+.nctx .disc-field textarea,
+.nctx-item textarea { padding: 8px 10px; border: 1px solid var(--panel-border); border-radius: 7px;
+  background: var(--panel); color: var(--fg); font: inherit; font-size: 14px; width: 100%; box-sizing: border-box; }
+.nctx-form { display: grid; gap: 12px; max-width: 720px; }
+.nctx-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 8px; }
+.nctx-count { color: var(--muted); font-size: 14px; margin-right: auto; }
+.nctx-count.over { color: var(--crit, #d14343); font-weight: 600; }
+.nctx-item { border: 1px solid var(--panel-border); border-radius: 8px; padding: 12px 14px; margin: 10px 0; display: grid; gap: 8px; }
+.nctx-item-head { font-weight: 600; font-size: 14px; }
+.nctx-body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; margin: 0; }
+.nctx-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.nctx-col-h { color: var(--muted); font-size: 14px; margin-bottom: 4px; }
+.nctx-preview { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 14px;
+  border: 1px solid var(--panel-border); border-radius: 8px; padding: 12px; margin: 0; max-height: 360px; overflow-y: auto; }
+.nctx-history { border-top: 1px solid var(--panel-border); padding: 10px 0; font-size: 14px; }
+.nctx-history > summary { cursor: pointer; font-weight: 600; }
+.nctx-history .disc-field { max-width: 480px; margin: 10px 0; }
+.nctx-table { margin-top: 10px; width: 100%; }

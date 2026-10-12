@@ -35,6 +35,7 @@ import (
 	"netops/backend/internal/aientitlement"
 	"netops/backend/internal/irisconvo"
 	"netops/backend/internal/irisquerylog"
+	"netops/backend/internal/orgcontext"
 )
 
 // adminPlane is the marker for AI CONFIGURATION routes. They configure the
@@ -57,6 +58,8 @@ var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	"/api/ai/commands/suggestions": aientitlement.Chat,
 	"/api/ai/feedback":             aientitlement.Chat,
 	"/api/ai/aliases":              aientitlement.NLQuery,
+	"/api/ai/context":              aientitlement.ContextAuthor, // Network context (N-F1)
+	"/api/ai/context/":             aientitlement.ContextAuthor,
 	"/api/ai/entities/resolve":     aientitlement.NLQuery,
 	"/api/ai/query/compile":        aientitlement.NLQuery,
 	"/api/ai/query/execute":        aientitlement.NLQuery,
@@ -189,6 +192,10 @@ var aiRouteProbes = []aiProbe{
 	{"/api/ai/conversations/", http.MethodPost, "/api/ai/conversations/" + probeID + "/edits", `{"chip":"window","op":"remove"}`, aientitlement.NLQuery},
 	{"/api/ai/queries", http.MethodGet, "/api/ai/queries", "", aientitlement.NLQuery},
 	{"/api/ai/queries/", http.MethodPost, "/api/ai/queries/" + probeID + "/corrections", `{"kind":"wrong_entity"}`, aientitlement.NLQuery},
+	{"/api/ai/context", http.MethodGet, "/api/ai/context", "", aientitlement.ContextAuthor},
+	{"/api/ai/context", http.MethodPost, "/api/ai/context", `{"kind":"topology_note","key":"dr","body":"core-02 is the DR site"}`, aientitlement.ContextAuthor},
+	{"/api/ai/context/", http.MethodGet, "/api/ai/context/preview", "", aientitlement.ContextAuthor},
+	{"/api/ai/context/", http.MethodPost, "/api/ai/context/" + probeID + "/approve", `{"version":1,"body_sha256":"x"}`, aientitlement.ContextAuthor},
 	{"/api/ai/hypotheses/", http.MethodGet, "/api/ai/hypotheses/" + probeID, "", aientitlement.Investigate},
 }
 
@@ -225,6 +232,7 @@ func aiEntFixture(t *testing.T) (*server, http.Handler, jwtClaims, jwtClaims) {
 	s, a, b := aliasFixture(t)
 	a.Role, b.Role = "admin", "admin"
 	s.nlqConvos = irisconvo.NewMemStore()
+	s.orgContext = orgcontext.NewMemStore()
 	s.nlqQueryLog = irisquerylog.NewMemStore()
 	s.aiTenantCfg = newAITenantConfigStore(t.TempDir()+"/ai_tenant_config.json", nil)
 	s.copilotCfg = newCopilotConfigStore(t.TempDir()+"/copilot_config.json", nil) // no key: no provider is ever called

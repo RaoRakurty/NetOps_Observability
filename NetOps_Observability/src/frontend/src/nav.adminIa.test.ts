@@ -63,6 +63,7 @@ const GATES: Record<string, { scope: "platform" | "tenant"; gate: string }> = {
   licence: { scope: "tenant", gate: "internal/licence/api.go GET → licenceReadGate → requireAdmin + principalTenant (tenant projection); PUT/DELETE alone → licenceGate → requirePlatformAdmin" },
   integrations: { scope: "tenant", gate: "integrations_http.go → requireAdmin, keyed by itsmKey(tenant)" },
   ticketing: { scope: "tenant", gate: "ticketing_http.go → requirePerm(administration, read|write)" },
+  "network-context": { scope: "tenant", gate: "ai_handlers.go handleAIContext → requirePerm(administration, read/write/admin) + ai.context.author + principalTenant (a Global view must choose a workspace); approval needs a second person (internal/orgcontext)" },
   "ticket-delivery": { scope: "tenant", gate: "ticketing_http.go handleTicketsOutbox/handleTicketsAudit → requirePerm(infrastructure, read) + principalTenant; integrations_http.go handleIntegrationReconcile → requireAdmin on the caller's own tenant" },
   datasources: { scope: "tenant", gate: "/api/devices → requirePerm(infrastructure, read)" },
   snmp: { scope: "tenant", gate: "snmp_profiles.go read → requirePerm(infrastructure, read); writes escalate to requirePlatformAdmin" },

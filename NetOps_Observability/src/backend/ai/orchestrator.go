@@ -65,7 +65,14 @@ type Orchestrator struct {
 	// when nil, gateway() creates one for this orchestrator.
 	Gateway *ToolGateway
 	// Trace receives the answer's operational progress (N-E2); nil = none.
-	Trace       TraceSink
+	Trace TraceSink
+	// OrgContext returns the customer's approved Network context block (N-F1,
+	// OrgContextBlock); "" or nil = none, and the system prompt is then
+	// byte-for-byte what it was before the store existed. Read once per
+	// orchestrator (one request).
+	OrgContext  func() string
+	orgOnce     sync.Once
+	orgBlock    string
 	gatewayOnce sync.Once
 	ownGateway  *ToolGateway
 	// RecordInvestigation receives one CONCLUDED skill-chain investigation (IRIS
@@ -1705,7 +1712,23 @@ func (o *Orchestrator) answerFuturePhase(plan Plan) Answer {
 
 // systemPrompt is server-owned (LLM01). It pins the model to grounded, concise,
 // non-fabricating NOC answers that cite the evidence ids provided.
+//
+// With approved Network context (N-F1) the customer's block follows the base
+// rules and the data-not-instructions fence follows the block, so the fence is
+// the last word before evidence. Without context the prompt is unchanged.
 func (o *Orchestrator) systemPrompt() string {
+	o.orgOnce.Do(func() {
+		if o.OrgContext != nil {
+			o.orgBlock = strings.TrimSpace(o.OrgContext())
+		}
+	})
+	if o.orgBlock == "" {
+		return o.baseSystemPrompt()
+	}
+	return o.baseSystemPrompt() + "\n\n" + o.orgBlock + "\n\n" + DataNotInstructionsFence()
+}
+
+func (o *Orchestrator) baseSystemPrompt() string {
 	return strings.Join([]string{
 		"You are Iris AI, an evidence-grounded NOC assistant for a network observability platform.",
 		"Answer ONLY from the EVIDENCE provided in the user message. Be concise and operational (a NOC engineer is reading).",

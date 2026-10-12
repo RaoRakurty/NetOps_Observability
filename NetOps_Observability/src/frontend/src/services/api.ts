@@ -1875,7 +1875,6 @@ export type CopilotConfig = {
   // Optional model-router overrides (blank = use `model` for every answer).
   model_fast?: string;
   model_strong?: string;
-  system?: string;
   feature_enabled?: boolean;
   key_present?: boolean;
   key_source?: "env" | "stored" | "none";
@@ -1886,6 +1885,46 @@ export type CopilotConfig = {
 // Per-workspace (tenant) AI settings — a tenant admin's own view. The key is
 // write-only; entitlement fields are read-only here (platform-controlled).
 // ---- Iris vocabulary + NL query (internal/nlquery; tracker 337) ----
+// ---- Network context (tracker 337 N-F1, internal/orgcontext) ----
+// Facts a workspace writes about its own network; a version reaches Iris only
+// after a SECOND administrator approves it. Text is plain and rendered as text.
+export type OrgContextState = "draft" | "pending" | "active" | "superseded" | "rejected" | "retired";
+export interface OrgContextVersion {
+  version: number;
+  body: string;
+  body_sha256: string;
+  state: OrgContextState;
+  author: string;
+  approver?: string;
+  activated_by?: string;
+  decided_by?: string;
+  restored_from?: number;
+  reason?: string;
+  created_at: string;
+  decided_at?: string;
+}
+export interface OrgContextFact {
+  id: string;
+  scope: string; // "tenant" | "site:<slug>"
+  kind: string;
+  key: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  versions: OrgContextVersion[];
+}
+export interface OrgContextList {
+  facts: OrgContextFact[];
+  kinds: { kind: string; label: string }[];
+  you: string;
+  limits: { body_bytes: number; key_bytes: number; facts: number };
+}
+export interface OrgContextPreview {
+  block: string;
+  facts: number;
+  omitted: number;
+}
+
 // ---- change ledger API (N-D3) ----
 export interface ChangeConfigDiff {
   device_id: string;
@@ -6320,9 +6359,25 @@ export const api = {
   // iframe (/netbox, /search) carries a fresh, correctly-pathed cookie. 204.
   ensureConsoleGate: () => request<void>("/api/auth/console-gate", { method: "POST" }),
 
+  // Network context (N-F1). The tenant always comes from the token.
+  orgContext: () => request<OrgContextList>("/api/ai/context"),
+  orgContextPreview: () => request<OrgContextPreview>("/api/ai/context/preview"),
+  orgContextCreate: (f: { scope: string; kind: string; key: string; body: string }) =>
+    request<OrgContextFact>("/api/ai/context", { method: "POST", body: JSON.stringify(f) }),
+  orgContextDraft: (id: string, body: string) =>
+    request<OrgContextFact>(`/api/ai/context/${encodeURIComponent(id)}/draft`, { method: "PUT", body: JSON.stringify({ body }) }),
+  orgContextDiscard: (id: string) =>
+    request<OrgContextFact | undefined>(`/api/ai/context/${encodeURIComponent(id)}/draft`, { method: "DELETE" }),
+  orgContextAct: (
+    id: string,
+    verb: "submit" | "withdraw" | "approve" | "reject" | "rollback" | "retire",
+    body: { version?: number; body_sha256?: string; to_version?: number; reason?: string } = {},
+  ) =>
+    request<OrgContextFact>(`/api/ai/context/${encodeURIComponent(id)}/${verb}`, { method: "POST", body: JSON.stringify(body) }),
+
   // Runtime assistant config (admin): provider/model picker. Key never returned.
   copilotConfig: () => request<CopilotConfig>("/api/copilot/config"),
-  setCopilotConfig: (cfg: { provider: string; model: string; model_fast?: string; model_strong?: string; system?: string; key?: string }) =>
+  setCopilotConfig: (cfg: { provider: string; model: string; model_fast?: string; model_strong?: string; key?: string }) =>
     request<CopilotConfig>("/api/copilot/config", {
       method: "PUT",
       body: JSON.stringify(cfg),
