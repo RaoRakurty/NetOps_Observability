@@ -156,8 +156,14 @@ func TestTroubleshootToolsAreReadOnly(t *testing.T) {
 		if !ok {
 			t.Fatalf("tool %q is not registered with fully wired deps", n)
 		}
-		if tool.Capability() != CapRead {
-			t.Errorf("%s has capability %q — every Phase-A tool must be read-only (the model can never reach a write)", n, tool.Capability())
+		// Read-only on the network: CapRead, or CapProbe for the two tools that
+		// open a read-only device session (N-A8 / D14). Never write/execute.
+		want := CapRead
+		if n == "run_protocol_diagnostic" || n == "get_device_state" {
+			want = CapProbe
+		}
+		if tool.Capability() != want {
+			t.Errorf("%s has capability %q, want %q — the model can never reach a write", n, tool.Capability(), want)
 		}
 		if len(tool.RequiredPerms()) == 0 {
 			t.Errorf("%s declares no required permission", n)

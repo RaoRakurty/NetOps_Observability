@@ -739,6 +739,12 @@ func newServer() *server {
 
 	// Select where the identity/saved stores persist (file by default; Postgres
 	// when STORE_BACKEND=postgres). Must run before any store is constructed.
+	// Iris tool contracts (tracker 337 N-A8): every tool's timeout, rate,
+	// risk tier and output bounds are a static table; an invalid table is a
+	// build defect, so the api refuses to start rather than run tools unbounded.
+	if err := ai.CheckToolContracts(); err != nil {
+		log.Fatalf("iris tool contracts: %v", err)
+	}
 	if err := initStoreBackend(); err != nil {
 		log.Fatalf("store backend: %v", err)
 	}
