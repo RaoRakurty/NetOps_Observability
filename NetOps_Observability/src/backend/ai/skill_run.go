@@ -359,6 +359,7 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 	if o.LLM != nil {
 		// §10 model router: a skill finding reasons over everything a multi-hop
 		// chain gathered, which is the STRONG tier by RouteFor's own policy.
+		o.trace(TraceNarrating)
 		text, provider, err = o.completeTier(ctx, RouteFor(ModeTroubleshootFinding).Tier, system, []LLMMessage{{Role: "user", Content: o.redact(prompt)}}, true)
 	}
 	// A routing directive is a server↔model control line, never operator text:

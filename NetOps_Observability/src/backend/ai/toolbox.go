@@ -34,6 +34,8 @@ type Toolbox struct {
 	// Gateway applies the tool contracts (N-A8): rate budget and metrics
 	// that outlive the request. Invoke falls back to a fresh one when nil.
 	Gateway *ToolGateway
+	// Trace receives tool_started / tool_finished (N-E2); nil = none.
+	Trace TraceSink
 }
 
 // BuildToolRegistry is the ONE constructor for the Iris tool registry, used by
@@ -80,7 +82,7 @@ func (b Toolbox) Authorize(name string, p Principal) (tool AITool, d Decision, r
 // deterministic paths execute through — so the copilot agent loop runs on the
 // very same entries, not a parallel set.
 func (o *Orchestrator) Toolbox() Toolbox {
-	return Toolbox{Registry: o.Tools, Policy: o.policy(), Gateway: o.gateway()}
+	return Toolbox{Registry: o.Tools, Policy: o.policy(), Gateway: o.gateway(), Trace: o.Trace}
 }
 
 // gateway is the server's process-lived gateway when wired (Orchestrator.
