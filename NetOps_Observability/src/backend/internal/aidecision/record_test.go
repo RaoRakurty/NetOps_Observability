@@ -95,7 +95,7 @@ func TestNormalizeRefusesWhatIsNotAnEntry(t *testing.T) {
 		"newline sub":   {"t", func(e *Entry) { e.Principal = "a\nb" }},
 		"long sub":      {"t", func(e *Entry) { e.Principal = strings.Repeat("a", MaxPrincipalLen+1) }},
 		"event type":    {"t", func(e *Entry) { e.EventType = "TOOL_DELETED" }},
-		"surface":       {"t", func(e *Entry) { e.Surface = "copilot" }},
+		"surface":       {"t", func(e *Entry) { e.Surface = "mcp" }},
 		"decision id":   {"t", func(e *Entry) { e.DecisionID = "x' OR 1=1" }},
 		"entry id":      {"t", func(e *Entry) { e.ID = "not-a-uuid" }},
 		"negative seq":  {"t", func(e *Entry) { e.Seq = -1 }},
