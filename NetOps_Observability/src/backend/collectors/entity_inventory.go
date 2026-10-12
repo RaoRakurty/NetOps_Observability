@@ -41,11 +41,9 @@ func pickSoftwareRev(swrev, class map[string]string) string {
 			idxs = append(idxs, idx)
 		}
 	}
-	sort.Slice(idxs, func(i, j int) bool {
-		a, _ := strconv.Atoi(idxs[i])
-		b, _ := strconv.Atoi(idxs[j])
-		return a < b
-	})
+	// Numeric order of the ENTITY-MIB indexes (integers). A malformed index
+	// sorts as 0 — the order only decides which revision string wins a tie.
+	sort.Slice(idxs, func(i, j int) bool { return atoiOrZero(idxs[i]) < atoiOrZero(idxs[j]) })
 	for _, want := range []string{"3", "9", ""} { // chassis, module, anything
 		for _, idx := range idxs {
 			if want == "" || strings.TrimSpace(class[idx]) == want {
@@ -131,4 +129,13 @@ func collectEntityInventory(ctx context.Context, addr string, creds snmpCreds, d
 		walkStr(entPhysicalDescrOID), walkStr(entPhysicalModelOID),
 		walkStr(entPhysicalSerialOID), class, tsMillis)
 	return lines, pickSoftwareRev(walkStr(entPhysicalSoftwareRevOID), class)
+}
+
+// atoiOrZero parses a decimal index; anything else is 0 (see the caller).
+func atoiOrZero(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return n
 }

@@ -665,7 +665,7 @@ type server struct {
 	// Loaded before any reader of its flags runs. restart carries a
 	// "restart to apply" request to Run.
 	features  *featureflags.Registry
-	restart   *restartGate
+	restart   *featureflags.RestartGate
 	secPolicy *policy.SecurityStore // #24 security-policy engine Source (catalog + per-scope overrides)
 	// ITSM connectors (ServiceNow + Jira) are PER-TENANT and owned by itsmCfg
 	// (itsm_config.go), which builds + hot-swaps them on save. Resolve a tenant's
@@ -772,7 +772,11 @@ func newServer() *server {
 	// Features page (tracker 348): saved feature switches are applied to the
 	// environment HERE — after the store is selected, before any collector,
 	// worker or module reads them — so what starts is what was saved.
-	features := newFeatureRegistry()
+	features := featureflags.New(featureflags.PlatformSpecs(), featureflags.OSEnv{},
+		featureflags.KVStore{Key: "/data/feature_flags.json", LoadFn: platformdb.Load, SaveFn: platformdb.Save})
+	if err := features.Load(); err != nil {
+		logError("features", "saved feature settings could not be read — install values are in force and risky features are OFF until they load", errf(err))
+	}
 
 	// Secret-custody Vault (#17). Dormant (plaintext passthrough) unless
 	// SEAL_PROVIDER is set; fail closed if a configured provider can't unseal the
@@ -1175,7 +1179,7 @@ func newServer() *server {
 
 	srv := &server{
 		features:         features,
-		restart:          &restartGate{ch: make(chan struct{}, 1)},
+		restart:          featureflags.NewRestartGate(5 * time.Minute),
 		startedAt:        time.Now().UTC(),
 		workers:          &workerGroup{},
 		discovery:        d,
@@ -3007,7 +3011,7 @@ func Run() {
 	select {
 	case <-stop:
 		logInfo("shutdown", "shutdown requested", nil)
-	case <-srv.restart.ch:
+	case <-srv.restart.C:
 		// Features page "restart to apply": the same graceful path; Run
 		// returns, the process exits 0 and its supervisor starts it again.
 		logInfo("shutdown", "restart requested from the Features page", nil)
@@ -3159,8 +3163,12 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/tacacs/test", s.handleTACACSTest)
 	mux.HandleFunc("/api/auth/token-policy", s.handleTokenPolicy)
 	// Features page (tracker 348): platform-global switches + restart-to-apply.
-	mux.HandleFunc("/api/platform/features", s.elevatedOnlyMutations(s.handlePlatformFeatures))
-	mux.HandleFunc("/api/platform/restart", s.elevatedOnly(s.handlePlatformRestart))
+	mux.HandleFunc("/api/platform/features", s.elevatedOnlyMutations(func(w http.ResponseWriter, r *http.Request) {
+		s.featuresAPI().HandleFeatures(w, r)
+	}))
+	mux.HandleFunc("/api/platform/restart", s.elevatedOnly(func(w http.ResponseWriter, r *http.Request) {
+		s.featuresAPI().HandleRestart(w, r)
+	}))
 	// Security Policy engine (#24): catalog, effective-policy/simulator, per-scope
 	// override editing. Admin-gated; system-scope writes are platform-owner only.
 	mux.HandleFunc("/api/policy/catalog", s.handlePolicyCatalog)
@@ -4951,6 +4959,29 @@ func envOr(key, fallback string) string {
 }
 
 func envBool(key string) bool { return os.Getenv(key) == "true" }
+
+// featuresAPI binds the Features page (internal/featureflags) to this server:
+// requirePlatformAdmin for every route, the strict audit trail, and the
+// restart gate Run waits on.
+func (s *server) featuresAPI() *featureflags.API {
+	return featureflags.NewAPI(s.features, s.restart, featureflags.Deps{
+		Authz: func(w http.ResponseWriter, r *http.Request) (featureflags.Caller, bool) {
+			claims, ok := s.requirePlatformAdmin(w, r)
+			return featureflags.Caller{Subject: claims.Sub, APIKey: strings.HasPrefix(claims.Sub, "apikey:")}, ok
+		},
+		AuditStrict: func(e featureflags.AuditEntry) error { return s.audit.RecordStrict(featureAudit(e)) },
+		Audit:       func(e featureflags.AuditEntry) { s.audit.Record(featureAudit(e)) },
+		WriteJSON:   writeJSON,
+		WriteErr:    writeError,
+		LogInfo:     func(msg string, f map[string]any) { logInfo("features", msg, f) },
+		Supervised:  func() bool { return featureflags.Supervised(os.LookupEnv) },
+		Now:         time.Now,
+	})
+}
+
+func featureAudit(e featureflags.AuditEntry) AuditEvent {
+	return AuditEvent{Actor: e.Subject, Cross: true, Method: e.Method, Path: e.Path, Status: e.Status, Decision: e.Outcome, Detail: e.Detail}
+}
 
 // ---------------------------------------------------------------------------
 // Package-wide helpers (Phase-2 Wave 0b consolidation, 2026-07-29).

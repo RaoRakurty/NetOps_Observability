@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"netops/backend/internal/featureflags"
 )
@@ -59,7 +60,7 @@ func TestFeatureSpecsAreReadAndSafe(t *testing.T) {
 	}
 	src := readGoSources(t)
 	seen := map[string]bool{}
-	for _, sp := range featureSpecs() {
+	for _, sp := range featureflags.PlatformSpecs() {
 		if why, bad := forbidden[sp.Env]; bad {
 			t.Errorf("%s must not be on the Features page: %s", sp.Env, why)
 		}
@@ -96,7 +97,7 @@ func readGoSources(t *testing.T) string {
 				if e.Name() != "vendor" && e.Name() != "testdata" && !strings.HasPrefix(e.Name(), ".") {
 					walk(p)
 				}
-			case strings.HasSuffix(e.Name(), ".go") && !strings.HasSuffix(e.Name(), "_test.go") && e.Name() != "feature_flags.go":
+			case strings.HasSuffix(e.Name(), ".go") && !strings.HasSuffix(e.Name(), "_test.go") && p != "./internal/featureflags/specs.go":
 				data, err := os.ReadFile(p)
 				if err != nil {
 					t.Fatal(err)
@@ -121,11 +122,11 @@ func newFeatureFixture(t *testing.T) *featureFixture {
 	t.Helper()
 	ts, s := newTestServerState(t)
 	env := &memEnv{m: map[string]string{"ENABLE_SNMP_COLLECTION": "true"}}
-	s.features = featureflags.New(featureSpecs(), env, &memStore{})
+	s.features = featureflags.New(featureflags.PlatformSpecs(), env, &memStore{})
 	if err := s.features.Load(); err != nil {
 		t.Fatal(err)
 	}
-	s.restart = &restartGate{ch: make(chan struct{}, 1)}
+	s.restart = featureflags.NewRestartGate(5 * time.Minute)
 	return &featureFixture{t: t, ts: ts, s: s, env: env, admin: login(t, ts, "admin", "Passw0rd!2345").Token}
 }
 
@@ -267,7 +268,7 @@ func TestPlatformRestartIsSupervisedAndRateLimited(t *testing.T) {
 		t.Fatalf("restart = %d %s", st, b)
 	}
 	select {
-	case <-f.s.restart.ch:
+	case <-f.s.restart.C:
 	default:
 		t.Fatal("the restart request did not reach Run")
 	}
