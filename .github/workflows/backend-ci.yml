@@ -314,3 +314,33 @@ jobs:
           version: ${{ env.GOLANGCI_VERSION }}
           working-directory: NetOps_Observability/src/backend
           args: ./...
+
+  iris-gates:
+    name: Iris release gates (report on PRs, enforced at release tags)
+    runs-on: ubuntu-latest
+    # Tracker 337 N-H5. The golden-corpus scorers write their raw counts to a
+    # report directory; internal/irisgate judges the owner's bars (Part 2
+    # §48/§67: entity ≥ 99 %, executable ≥ 98 %, semantic ≥ 95 %,
+    # cross-tenant = 0, unauthorized = 0, citation / injection / audit 100 %).
+    # On a PR or branch push the table goes to the step summary and nothing
+    # fails (several bars are not met yet — the gap is reported, the bar is not
+    # lowered). On a release TAG (release-gate.yml calls this workflow) every
+    # gate is ENFORCED: a failing or unmeasured gate fails the release.
+    # -count=1 is load-bearing: a cached test result never rewrites its report.
+    env:
+      IRIS_GATE_REPORT_DIR: ${{ github.workspace }}/.iris-gates
+      IRIS_RELEASE_GATES: ${{ startsWith(github.ref, 'refs/tags/') && 'enforce' || 'report' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+      - name: run the scorers (write gate reports)
+        run: |
+          go test -count=1 -timeout 20m -run '^TestCompilerAgainstTheGoldenCorpus$' ./internal/nlquery/
+          go test -count=1 -timeout 20m -run '^(TestGoldenIncidentCorpus|TestGoldenDocsCitationCorrectness|TestGoldenInjectionPromptBlockFence|TestGoldenInjectionFabricatedDocCite)$' ./ai/
+          go test -count=1 -timeout 20m -run '^(TestAIRoutesRefuseWithoutTheirEntitlementAndAdmitWithIt|TestAIAdminPlaneRoutesRefuseNonAdmins|TestIrisReleaseGateAuditCompleteness)$' .
+      - name: evaluate the gates
+        if: always()
+        run: go test -count=1 -v -run '^TestIrisReleaseGates$' ./internal/irisgate/

@@ -34,6 +34,7 @@ import (
 
 	"netops/backend/internal/aientitlement"
 	"netops/backend/internal/irisconvo"
+	"netops/backend/internal/irisgate"
 	"netops/backend/internal/irisquerylog"
 	"netops/backend/internal/orgcontext"
 )
@@ -273,12 +274,24 @@ func TestAIRoutesRefuseWithoutTheirEntitlementAndAdmitWithIt(t *testing.T) {
 	// (A fixture per probe cost ~0.35 s each, ~10x that under -race, against a
 	// root-package -race budget that is already near its 40 m ceiling.)
 	s, h, a, _ := aiEntFixture(t)
+	// N-H5 release gate "unauthorized": every probe is a check; a probe that
+	// was admitted without its entitlement is a leak.
+	var leaks int64
+	defer func() {
+		if err := irisgate.Record("root.entitlement_probes", irisgate.Measure{Gate: irisgate.GateUnauthorized,
+			Bad: leaks, Total: int64(len(aiRouteProbes)), Note: "AI routes admitting a caller without the entitlement"}); err != nil {
+			t.Fatal(err)
+		}
+	}()
 	for _, p := range aiRouteProbes {
 		p := p
 		t.Run(p.method+" "+p.path, func(t *testing.T) {
 			s.aiEntitlementPolicy = policyWithout(t, s, p.want)
 			w := serveAs(h, a, p.method, p.path, p.body)
 			got, reason := entitlementRefusal(w)
+			if w.Code < 400 {
+				leaks++
+			}
 			if w.Code != http.StatusForbidden || got != p.want || reason != string(aientitlement.ReasonNotInTier) {
 				t.Fatalf("without %s: got %d entitlement=%q reason=%q (%s) — want 403 refusing %s", p.want, w.Code, got, reason, w.Body.String(), p.want)
 			}
@@ -323,8 +336,22 @@ func TestAIAdminPlaneRoutesRefuseNonAdmins(t *testing.T) {
 	op := a
 	op.Role = "operator"
 	tenantAdmin := a // admin of ONE tenant: not the platform owner
+	// N-H5 release gate "unauthorized": a configuration route that answers a
+	// non-admin is a leak.
+	var leaks, checks int64
+	defer func() {
+		if err := irisgate.Record("root.admin_plane_probes", irisgate.Measure{Gate: irisgate.GateUnauthorized,
+			Bad: leaks, Total: checks, Note: "AI configuration routes admitting a non-admin"}); err != nil {
+			t.Fatal(err)
+		}
+	}()
 	for _, p := range adminPlaneProbes {
-		if w := serveAs(h, op, p.method, p.path, p.body); w.Code != http.StatusForbidden {
+		checks++
+		w := serveAs(h, op, p.method, p.path, p.body)
+		if w.Code < 400 {
+			leaks++
+		}
+		if w.Code != http.StatusForbidden {
 			t.Errorf("%s %s as a tenant operator: %d — want 403", p.method, p.path, w.Code)
 		}
 		if p.route == "/api/ai/tenant-config" || p.route == "/api/ai/decisions" {
