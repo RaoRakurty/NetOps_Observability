@@ -529,6 +529,7 @@ type server struct {
 	vault           *vault.Vault          // secret-custody envelope (dormant unless SEAL_PROVIDER set)
 	tlsSrv          *tlsServer            // opt-in HTTPS/mTLS listener config (nil = plaintext)
 	tlsPeerProber   *tlsprobe.Prober      // SEC-019.1 served-cert expiry watcher (nil = plaintext baseline)
+	corrReconcile   corrReconcileStats    // tracker 328: corr_current reconciler gauges/counters
 	secMetrics      *secobs.Metrics       // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
 	transportInv    *secobs.Inventory     // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
 	exportPolicy    *exportPolicyStore    // runtime-tunable log-export limits
@@ -4704,6 +4705,7 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	if s.tlsPeerProber != nil {
 		s.tlsPeerProber.WriteMetrics(w)
 	}
+	s.corrReconcile.WriteMetrics(w)
 	if s.demMetrics != nil {
 		s.demMetrics.Write(w)
 	}
