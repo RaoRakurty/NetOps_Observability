@@ -16,6 +16,7 @@
 import { useMemo } from "react";
 import EChart, { type EChartEvents } from "../components/EChart";
 import { axisStyle, chartBase, timeAxisTicks } from "../theme/charts";
+import { cssVar } from "../theme/tokens";
 import { entityLabel, fmtNumber, type OutSeries, type ResultSet, type Row } from "./presentation";
 
 export interface DrillDown {
@@ -176,7 +177,13 @@ export function barOption(m: BarModel, unit: string): Record<string, unknown> {
           ? {
               show: true,
               position: "right",
-              fontSize: 14,
+              fontSize: 13,
+              fontWeight: 600,
+              // Theme foreground and NO text outline: ECharts' default outline
+              // made every value look doubled on the dark theme.
+              color: cssVar("--fg", "#1a2230"),
+              textBorderWidth: 0,
+              textShadowBlur: 0,
               // Canvas text, not HTML. Shows the delta (compare) or the words
               // "not measured" where a value is missing — never a 0.
               formatter: (p: { dataIndex: number; value: number | null }) =>
@@ -214,8 +221,7 @@ export function BarView({
     <figure className="iris-chart">
       <EChart option={option} onEvents={events} notMerge style={{ height }} />
       <figcaption className="iris-note">
-        Select a bar to see the rows behind it.
-        {model.kind === "compare" && " The number beside each pair is the change from the earlier window."}
+        {model.kind === "compare" && "The number beside each pair is the change from the earlier window."}
         {result.truncated && model.kind === "counts" && " Counts cover only the rows returned, not every match."}
       </figcaption>
     </figure>

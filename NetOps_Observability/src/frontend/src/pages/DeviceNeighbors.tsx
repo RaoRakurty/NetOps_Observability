@@ -197,7 +197,7 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
               </tbody>
             </table>
           ) : ompCounts && ompCounts.up + ompCounts.notUp > 0 ? (
-            <p className="cc-empty" style={{ padding: "0 12px" }}>This is a controller: it holds a session with every edge, so only the counts are shown.</p>
+            <p className="cc-empty" style={{ padding: "0 12px" }}>Controller — session counts only.</p>
           ) : (
             <p className="cc-empty" style={{ padding: "0 12px" }}>This device reports no OMP session.</p>
           )}

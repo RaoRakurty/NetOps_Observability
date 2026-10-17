@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// Opsis.layout.test.ts — the Iris drawer's settings pane must scroll.
+// Iris.layout.test.ts — the Iris drawer's settings pane must scroll.
 //
 // The Iris panel (.iris-panel) is position:fixed with a flex column inside
 // (.op-chat, min-height:0). The settings pane holds the workspace AI settings

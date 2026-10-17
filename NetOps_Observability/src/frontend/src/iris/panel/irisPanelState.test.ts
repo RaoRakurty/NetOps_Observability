@@ -52,25 +52,25 @@ function memStore(seed: Record<string, string> = {}, fail = false) {
 const WIDE = { width: 1600, navWidth: 60 };
 
 describe("the mode state machine", () => {
-  it("starts closed and opens floating by default", () => {
+  it("starts closed and opens DOCKED by default (owner 2026-10-17)", () => {
     expect(INITIAL_IRIS_STATE.mode).toBe("closed");
-    expect(run(["open"]).mode).toBe("floating");
+    expect(run(["open"]).mode).toBe("docked");
   });
 
-  it("docks from floating and undocks back to floating", () => {
-    expect(run(["open", "dock"]).mode).toBe("docked");
-    expect(run(["open", "dock", "undock"]).mode).toBe("floating");
+  it("undocks to floating and docks back", () => {
+    expect(run(["open", "undock"]).mode).toBe("floating");
+    expect(run(["open", "undock", "dock"]).mode).toBe("docked");
   });
 
   it("expand returns to the mode it was entered from", () => {
-    expect(run(["open", "expand", "collapse"]).mode).toBe("floating");
+    expect(run(["open", "undock", "expand", "collapse"]).mode).toBe("floating");
     expect(run(["open", "dock", "expand", "collapse"]).mode).toBe("docked");
     expect(run(["open", "dock", "expand"]).beforeExpand).toBe("docked");
   });
 
   it("Esc: expanded → previous mode, floating/docked → closed, closed stays closed", () => {
     expect(run(["open", "dock", "expand", "escape"]).mode).toBe("docked");
-    expect(run(["open", "expand", "escape"]).mode).toBe("floating");
+    expect(run(["open", "undock", "expand", "escape"]).mode).toBe("floating");
     expect(run(["open", "escape"]).mode).toBe("closed");
     expect(run(["open", "dock", "escape"]).mode).toBe("closed");
     const closed = run([]);
@@ -79,7 +79,7 @@ describe("the mode state machine", () => {
 
   it("close and reopen restore the preferred mode", () => {
     expect(run(["open", "dock", "close", "open"]).mode).toBe("docked");
-    expect(run(["open", "dock", "undock", "close", "open"]).mode).toBe("floating");
+    expect(run(["open", "undock", "close", "open"]).mode).toBe("floating");
     // Closed from Expanded: reopens expanded, and Collapse still knows where to go.
     const s = run(["open", "dock", "expand", "close", "open"]);
     expect(s.mode).toBe("expanded");
@@ -87,19 +87,19 @@ describe("the mode state machine", () => {
   });
 
   it("toggle opens in the preferred mode and closes from any open mode", () => {
-    expect(run(["toggle"]).mode).toBe("floating");
+    expect(run(["toggle"]).mode).toBe("docked");
     expect(run(["open", "dock", "toggle"]).mode).toBe("closed");
     expect(run(["open", "dock", "toggle", "toggle"]).mode).toBe("docked");
   });
 
   it("actions that do not apply return the same state object (no re-render)", () => {
-    const floating = run(["open"]);
+    const floating = run(["open", "undock"]);
     for (const type of ["open", "undock", "collapse"] as const) {
       expect(irisReducer(floating, { type })).toBe(floating);
     }
     const docked = run(["open", "dock"]);
     expect(irisReducer(docked, { type: "dock" })).toBe(docked);
-    const expanded = run(["open", "expand"]);
+    const expanded = run(["open", "undock", "expand"]);
     expect(irisReducer(expanded, { type: "expand" })).toBe(expanded);
     expect(irisReducer(expanded, { type: "dock" }), "no docking from expanded").toBe(expanded);
     const closed = run([]);
@@ -193,6 +193,17 @@ describe("persistence", () => {
     expect([...store.map.keys()].some((k) => k.includes("conversation"))).toBe(false);
   });
 
+  it("a browser that saved 'floating' under the pre-2026-10-17 key opens DOCKED (the new default reaches everyone once)", () => {
+    const store = memStore({ "iris.panel.mode": "floating", "iris.panel.beforeExpand": "floating" });
+    const s = loadIrisState(store);
+    expect(s.lastOpen).toBe("docked");
+    expect(s.beforeExpand).toBe("docked");
+    expect(irisReducer(s, { type: "open" }).mode).toBe("docked");
+    // …and a choice made after that is remembered as before.
+    const after = memStore({ [IRIS_STORAGE_KEYS.lastOpen]: "floating" });
+    expect(loadIrisState(after).lastOpen).toBe("floating");
+  });
+
   it("treats stored values as untrusted input", () => {
     const store = memStore({
       [IRIS_STORAGE_KEYS.lastOpen]: "left-dock",
@@ -236,8 +247,8 @@ describe("viewport rules", () => {
   });
 
   it("floating and expanded never take space from the workspace", () => {
-    expect(workspaceReserve(run(["open"]), WIDE)).toBe(0);
-    expect(workspaceReserve(run(["open", "expand"]), WIDE)).toBe(0);
+    expect(workspaceReserve(run(["open", "undock"]), WIDE)).toBe(0);
+    expect(workspaceReserve(run(["open", "undock", "expand"]), WIDE)).toBe(0);
     expect(workspaceReserve(run([]), WIDE)).toBe(0);
   });
 

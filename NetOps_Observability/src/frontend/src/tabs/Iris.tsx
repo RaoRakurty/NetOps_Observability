@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { AI_NAME } from "../brand";
 import {
   api,
@@ -139,6 +139,14 @@ const PROVIDER_VENDOR: Record<string, string> = {
   openai: "OpenAI",
   gemini: "Google",
 };
+// Each provider tile carries one of the platform's module accents (the colours
+// the rail uses), so the models view reads in the same palette as every other
+// section. Theme tokens, not vendor brand colours.
+const PROVIDER_TINT: Record<string, string> = {
+  anthropic: "var(--mod-copilot)",
+  openai: "var(--mod-fleet)",
+  gemini: "var(--mod-network)",
+};
 const PROVIDER_MODEL: Record<string, string> = {
   anthropic: "Claude",
   openai: "GPT",
@@ -169,8 +177,8 @@ export function isCapabilityMiss(ans: AiAnswer): boolean {
 // same class of untruth this whole change removes.
 export function groundedChipLabel(ans: AiAnswer): string {
   return ans.citations && ans.citations.length > 0
-    ? "Grounded · tenant-scoped · cited"
-    : "Grounded · tenant-scoped";
+    ? "From your data · with sources"
+    : "From your data";
 }
 
 // cmdToSlash adapts a backend AiCommand (the single source of truth) to the menu
@@ -185,7 +193,7 @@ function cmdToSlash(c: AiCommand): SlashCmd {
   };
 }
 
-export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
+export default function Iris({ controls, onLeave, ask, onAskHandled }: {
   /** The panel's window controls (Dock / Expand), rendered in this header
    *  just before Close — components/IrisPanel.tsx owns what they do. */
   controls?: ReactNode;
@@ -543,10 +551,13 @@ export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
     (tcfg.key_present || (tcfg.platform_key_available && !tcfg.no_platform_key));
   const ready = (!!cfg?.feature_enabled && !!cfg?.key_present) || tenantReady;
   // The header's engine line: which model answers, or the key-free engine.
+  // Plain words only (owner 2026-10-17): the model family when one answers,
+  // otherwise "Built-in" — never model ids, key states or engine jargon.
+  const family = (p?: string) => (p === "openai" ? "GPT" : p === "gemini" ? "Gemini" : "Claude");
   const engineLine = cfg
-    ? (ready ? (cfg.provider === "anthropic" ? "Claude" : cfg.provider === "gemini" ? "Gemini" : cfg.provider === "openai" ? "GPT" : cfg.provider) + " · " + cfg.model : "Grounded engine · key-free")
+    ? (ready ? family(cfg.provider) : "Built-in")
     : tcfg
-      ? (tenantReady ? (tcfg.key_present ? (tcfg.provider === "openai" ? "GPT" : tcfg.provider === "gemini" ? "Gemini" : "Claude") + " · your key" : "Platform AI service") : "Grounded engine · key-free")
+      ? (tenantReady ? family(tcfg.provider) : "Built-in")
       : "Network assistant";
 
   // Slash menu: filter the pre-made questions by what's typed after "/".
@@ -591,9 +602,9 @@ export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
         </span>
         <span className="op-hd-actions">
           <button className="op-hd-btn op-hd-new" title="New conversation" onClick={newConversation}>+</button>
-          <button className={`op-hd-btn${showSettings ? " on" : ""}`} title="Assistant settings"
+          <button className={`op-hd-btn${showSettings ? " on" : ""}`} title="AI models" aria-label="AI models"
             onClick={() => { setShowSettings((v) => !v); setShowHelp(false); }}>
-            <Icon name="settings" size={15} />
+            <Icon name="model" size={15} />
           </button>
           <button className={`op-hd-btn${showHelp ? " on" : ""}`} title="Help & documentation"
             onClick={() => { setShowHelp((v) => !v); setShowSettings(false); }}>
@@ -619,7 +630,7 @@ export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
           </ul>
           {/* The claim, stated exactly as the routing makes it true (tracker
               330): grounded by default, labelled when it isn't. */}
-          <div className="op-help-tip">Type <kbd>/</kbd> in the box for ready-made questions. Every question goes to the grounded engine first, so answers are tenant-scoped and cite the evidence or documentation behind them — setup and how-to answers link to the documentation, and the <b>?</b> button opens the full docs. If Iris can&apos;t place a question and a provider key is connected, it answers from the general model instead and labels that answer <b>Not grounded</b>.</div>
+          <div className="op-help-tip">Type <kbd>/</kbd> for suggested questions. Answers come from your own network data and show their sources. An answer from a general AI model is marked <b>General answer</b>.</div>
         </div>
       )}
 
@@ -632,19 +643,19 @@ export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
             <span>
               {cfg.provider === "openai" ? "OpenAI" : cfg.provider === "gemini" ? "Gemini" : "Anthropic"} API key{" "}
               {cfg.key_present
-                ? <span className="badge good" style={{ fontSize: 12.5 }}>{cfg.key_source === "env" ? "via environment" : "configured"}</span>
+                ? <span className="badge good" style={{ fontSize: 12.5 }}>{cfg.key_source === "env" ? "set by installer" : "saved"}</span>
                 : <span className="badge warn" style={{ fontSize: 12.5 }}>not set</span>}
             </span>
             <input
               type="password"
               value={keyDraft}
               onChange={(e) => setKeyDraft(e.target.value)}
-              placeholder={cfg.key_present ? "•••••••• (stored — leave blank to keep)" : "paste an API key (e.g. sk-…)"}
+              placeholder={cfg.key_present ? "Saved — leave blank to keep" : "Paste API key"}
               autoComplete="off"
               disabled={cfg.key_source === "env"}
             />
             {cfg.key_source === "env" && (
-              <span style={{ color: "var(--muted)", fontSize: 12.5 }}>Set by your deployment configuration; clear it there to manage the key here.</span>
+              <span style={{ color: "var(--muted)", fontSize: 12.5 }}>Managed by your installation.</span>
             )}
           </label>
           <div className="op-field">
@@ -654,15 +665,20 @@ export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
                 <button type="button" key={pv}
                   className={`op-tile${cfg.provider === pv ? " on" : ""}`}
                   onClick={() => { const s = cfg.model_suggestions?.[pv] ?? []; setCfg({ ...cfg, provider: pv, model: s[0] ?? cfg.model }); }}>
-                  <span className="op-tile-name">{PROVIDER_VENDOR[pv] ?? pv}</span>
-                  <span className="op-tile-sub">{PROVIDER_MODEL[pv] ?? ""}</span>
+                  <span className="op-tile-icon" style={{ "--tile": PROVIDER_TINT[pv] ?? "var(--accent)" } as CSSProperties}>
+                    <Icon name="model" size={16} />
+                  </span>
+                  <span className="op-tile-text">
+                    <span className="op-tile-name">{PROVIDER_VENDOR[pv] ?? pv}</span>
+                    <span className="op-tile-sub">{PROVIDER_MODEL[pv] ?? ""}</span>
+                  </span>
                 </button>
               ))}
             </div>
           </div>
           <div className="op-field">
             <span>Model</span>
-            <input className="op-modelinput" list="copilot-models" value={cfg.model} onChange={(e) => setCfg({ ...cfg, model: e.target.value })} placeholder="model id" />
+            <input className="op-modelinput" list="copilot-models" value={cfg.model} onChange={(e) => setCfg({ ...cfg, model: e.target.value })} placeholder="Default model" />
             <datalist id="copilot-models">{modelChoices.map((m) => <option key={m} value={m} />)}</datalist>
             {modelChoices.length > 0 && (
               <div className="op-modelchips">
@@ -706,12 +722,12 @@ export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
                   </label>
                   {/* Per-workspace spend guardrails — blank = platform default. */}
                   <input type="number" min={0} max={8} value={row.max_calls || ""}
-                    title="Lookups per question (blank = platform default)"
+                    title="Lookups per question (empty = platform default)"
                     placeholder="4" disabled={!row.investigations_enabled}
                     style={{ width: 44, fontSize: 12.5 }}
                     onChange={(e) => setAccess(row, { max_calls: Math.max(0, Math.min(8, Number(e.target.value) || 0)) })} />
                   <input type="number" min={0} step={50000} value={row.daily_tokens || ""}
-                    title="AI tokens per day (blank = platform default)"
+                    title="AI tokens per day (empty = platform default)"
                     placeholder="250000" disabled={!row.assistant_enabled}
                     style={{ width: 84, fontSize: 12.5 }}
                     onChange={(e) => setAccess(row, { daily_tokens: Math.max(0, Number(e.target.value) || 0) })} />
@@ -732,8 +748,8 @@ export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
         <div className="op-settings">
           <p style={{ color: "var(--muted)", fontSize: 12.5, margin: "0 0 10px" }}>
             {tcfg.assistant_enabled
-              ? "Your workspace's AI settings. A key you add is encrypted at rest, never shown again, and only ever used for your workspace."
-              : "The assistant is currently disabled for this workspace — contact your administrator."}
+              ? "Your workspace's AI. Keys are encrypted and never shown again."
+              : "AI is turned off for this workspace — ask your administrator."}
           </p>
           <label className="op-field">
             <span>
@@ -746,7 +762,7 @@ export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
               type="password"
               value={tKeyDraft}
               onChange={(e) => setTKeyDraft(e.target.value)}
-              placeholder={tcfg.key_present ? "•••••••• (stored — leave blank to keep)" : "paste your API key (e.g. sk-…)"}
+              placeholder={tcfg.key_present ? "Saved — leave blank to keep" : "Paste API key"}
               autoComplete="off"
             />
           </label>
@@ -757,8 +773,13 @@ export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
                 <button type="button" key={pv}
                   className={`op-tile${tcfg.provider === pv || (!tcfg.provider && pv === "anthropic") ? " on" : ""}`}
                   onClick={() => { const s = tcfg.model_suggestions?.[pv] ?? []; setTcfg({ ...tcfg, provider: pv, model: s[0] ?? "" }); }}>
-                  <span className="op-tile-name">{PROVIDER_VENDOR[pv] ?? pv}</span>
-                  <span className="op-tile-sub">{PROVIDER_MODEL[pv] ?? ""}</span>
+                  <span className="op-tile-icon" style={{ "--tile": PROVIDER_TINT[pv] ?? "var(--accent)" } as CSSProperties}>
+                    <Icon name="model" size={16} />
+                  </span>
+                  <span className="op-tile-text">
+                    <span className="op-tile-name">{PROVIDER_VENDOR[pv] ?? pv}</span>
+                    <span className="op-tile-sub">{PROVIDER_MODEL[pv] ?? ""}</span>
+                  </span>
                 </button>
               ))}
             </div>
@@ -767,7 +788,7 @@ export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
             <span>Model</span>
             <input className="op-modelinput" value={tcfg.model}
               onChange={(e) => setTcfg({ ...tcfg, model: e.target.value })}
-              placeholder="model id (blank = provider default)" />
+              placeholder="Default model" />
           </div>
           <TierModelFields
             fast={tcfg.model_fast ?? ""} strong={tcfg.model_strong ?? ""}
@@ -866,7 +887,7 @@ export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
               {m.role === "assistant" && !grounded[i] && ungrounded[i] && (
                 <div className="op-badges">
                   <span className="op-badge tone-warn" data-testid="iris-ungrounded-chip">
-                    Not grounded — general AI answer, no evidence read
+                    General answer — not from your network data
                   </span>
                 </div>
               )}
@@ -963,7 +984,7 @@ export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
             setSlashOpen(open);
             if (open) setSlashIdx(0);
           }}
-          placeholder="Ask Iris AI…   ( / for quick questions · ⏎ send · ⇧⏎ newline )"
+          placeholder="Ask Iris AI…"
           rows={1}
           onKeyDown={(e) => {
             if (slashOpen && slashMatches.length > 0) {
@@ -978,11 +999,7 @@ export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
           }}
         />
         <div className="op-composer-actions">
-          {/* A statement about the ROUTE (always true), not about every answer
-              (which is claimed per-bubble by the provenance chip). */}
-          <span className="op-composer-hint">
-            <span className="op-composer-dot" /> Grounded engine by default · tenant-scoped
-          </span>
+          <span className="op-composer-hint">Type / for suggestions</span>
           <button type="submit" className="op-send" disabled={busy || !draft.trim()} title="Send (⏎)">
             <Icon name="chevron" size={16} />
           </button>
@@ -1060,7 +1077,8 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
   return (
     <div className="op-grounded">
       <div className="op-ans-head">
-        <span className="op-ans-kind">{kind}</span>
+        {/* A plain "Answer" pill only repeated the provenance chip above it. */}
+        {kind !== "Answer" && <span className="op-ans-kind">{kind}</span>}
         {pr && <span className="op-ans-id" title={pr.problem_id}>{friendlyProblemId(pr.problem_id)}</span>}
         <span className="op-ans-spacer" />
         <button type="button" className="op-ans-x" title="Close Iris AI" aria-label="Close" onClick={onClose}>
@@ -1263,11 +1281,11 @@ function TierModelFields({ fast, strong, onChange }: {
       <span>Model for quick answers <span style={{ color: "var(--muted)" }}>(optional)</span></span>
       <input className="op-modelinput" value={fast} aria-label="Model for quick answers"
         onChange={(e) => onChange({ fast: e.target.value, strong })}
-        placeholder="blank = same as Model" />
+        placeholder="Same as default model" />
       <span>Model for deep investigations <span style={{ color: "var(--muted)" }}>(optional)</span></span>
       <input className="op-modelinput" value={strong} aria-label="Model for deep investigations"
         onChange={(e) => onChange({ fast, strong: e.target.value })}
-        placeholder="blank = same as Model" />
+        placeholder="Same as default model" />
     </div>
   );
 }

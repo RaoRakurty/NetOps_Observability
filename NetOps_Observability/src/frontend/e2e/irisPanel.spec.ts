@@ -55,6 +55,14 @@ async function open(page: Page) {
   await settle(page);
 }
 
+/** Open, then Undock — the floating panel is one click away from the docked
+ *  default (owner 2026-10-17), and most criteria below start from it. */
+async function openFloating(page: Page) {
+  await open(page);
+  await ctl(page, "Undock").click();
+  await settle(page);
+}
+
 async function mode(page: Page) {
   return panelEl(page).getAttribute("data-mode");
 }
@@ -64,7 +72,7 @@ function near(actual: number, expected: number, what: string, tol = 1) {
 }
 
 // ── 1 ─────────────────────────────────────────────────────────────────────
-test("clicking ✦ Iris in the header opens a right-side floating panel", async ({ page }) => {
+test("clicking ✦ Iris in the header opens Iris DOCKED on the right; Undock floats it", async ({ page }) => {
   await boot(page);
   const launcher = irisLauncher(page);
   const bar = await rect(topbar(page));
@@ -80,8 +88,15 @@ test("clicking ✦ Iris in the header opens a right-side floating panel", async 
   await launcher.click();
   await settle(page);
   await expect(irisPanel(page)).toBeVisible();
-  expect(await mode(page)).toBe("floating");
+  expect(await mode(page), "docked is the default (owner 2026-10-17)").toBe("docked");
   await expect(launcher).toHaveAttribute("aria-expanded", "true");
+  const d = await rect(panelEl(page));
+  near(d.right, 1600, "docked flush with the right edge");
+  near(d.width, DOCK_W, "default dock width");
+
+  await ctl(page, "Undock").click();
+  await settle(page);
+  expect(await mode(page)).toBe("floating");
 
   const p = await rect(panelEl(page));
   near(p.width, FLOAT_W, "floating width");
@@ -101,7 +116,7 @@ test("clicking ✦ Iris in the header opens a right-side floating panel", async 
 test("the floating panel overlays the workspace without resizing it", async ({ page }) => {
   await boot(page);
   const before = await rect(workspace(page));
-  await open(page);
+  await openFloating(page);
   const after = await rect(workspace(page));
   expect(after).toEqual(before);
   const p = await rect(panelEl(page));
@@ -112,7 +127,7 @@ test("the floating panel overlays the workspace without resizing it", async ({ p
 test("Dock snaps Iris to the right edge and the workspace reflows beside it", async ({ page }) => {
   await boot(page);
   const before = await rect(workspace(page));
-  await open(page);
+  await openFloating(page);
   const bar = await rect(topbar(page));
 
   await ctl(page, "Dock").click();
@@ -139,7 +154,7 @@ test("Dock snaps Iris to the right edge and the workspace reflows beside it", as
 // ── 5 ─────────────────────────────────────────────────────────────────────
 test("the dock width is resizable by pointer and keyboard, and remembered", async ({ page }) => {
   await boot(page);
-  await open(page);
+  await openFloating(page);
   await ctl(page, "Dock").click();
   await settle(page);
   const before = await rect(workspace(page));
@@ -191,7 +206,7 @@ test("the dock width is resizable by pointer and keyboard, and remembered", asyn
 test("Undock restores the floating panel and the full-width workspace", async ({ page }) => {
   await boot(page);
   const before = await rect(workspace(page));
-  await open(page);
+  await openFloating(page);
   const floating = await rect(panelEl(page));
   await ctl(page, "Dock").click();
   await settle(page);
@@ -206,7 +221,7 @@ test("Undock restores the floating panel and the full-width workspace", async ({
 // ── 7 ─────────────────────────────────────────────────────────────────────
 test("Expand returns to the mode it was entered from", async ({ page }) => {
   await boot(page);
-  await open(page);
+  await openFloating(page);
   const floating = await rect(panelEl(page));
   const rail = await rect(page.locator(".shell > .rail"));
 
@@ -238,7 +253,7 @@ test("Expand returns to the mode it was entered from", async ({ page }) => {
 // ── 8 ─────────────────────────────────────────────────────────────────────
 test("close and reopen restore the preferred mode, from every entry point, in ONE panel", async ({ page }) => {
   await boot(page);
-  await open(page);
+  await openFloating(page);
   await ctl(page, "Dock").click();
   await settle(page);
 
@@ -282,7 +297,7 @@ test("close and reopen restore the preferred mode, from every entry point, in ON
 // ── 9 ─────────────────────────────────────────────────────────────────────
 test("the conversation and component state survive every transition", async ({ page }) => {
   const fake = await boot(page);
-  await open(page);
+  await openFloating(page);
   await askIris(page, "top 3 devices by cpu in the last hour");
   // By element, not role: a closed panel is aria-hidden, and what is being
   // proven is that its content is still there, untouched, while closed.
@@ -347,6 +362,9 @@ test("motion is restrained: 200 ms, transform and opacity only, nothing looping"
   expect(opening.map((a) => a.prop).sort()).toEqual(expect.arrayContaining(["opacity", "transform"]));
   for (const a of opening) if (a.prop === "transform" || a.prop === "opacity") expect(a.ms).toBe(200);
   await settle(page);
+  // It opens docked (the default); float it so docking can be measured.
+  await ctl(page, "Undock").click();
+  await settle(page);
 
   // Docking is one 200 ms transform from where the panel was (FLIP), no bounce.
   const docking = await page.evaluate(async () => {
@@ -392,20 +410,24 @@ test("keyboard and focus: Enter/Space open, Esc steps back, focus returns to ✦
 
   // Tab reaches the window controls; each is labelled, has a tooltip and a
   // visible keyboard focus ring.
-  for (const name of ["Dock", "Expand", "Close Iris"]) {
+  for (const name of ["Undock", "Expand", "Close Iris"]) {
     const b = ctl(page, name);
     await expect(b).toHaveAttribute("title", /.+/);
   }
   let reached = "";
-  for (let i = 0; i < 12 && reached !== "Dock"; i++) {
+  for (let i = 0; i < 12 && reached !== "Undock"; i++) {
     await page.keyboard.press("Shift+Tab");
     reached = await page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? "");
   }
-  expect(reached, "Shift+Tab from the question box reaches Dock").toBe("Dock");
+  expect(reached, "Shift+Tab from the question box reaches Undock").toBe("Undock");
   const ring = await page.evaluate(() => getComputedStyle(document.activeElement!).outlineStyle);
   expect(ring).not.toBe("none");
 
-  // Space on Dock docks; Enter on Expand expands; Esc steps back one level.
+  // Space on Undock floats; Space on Dock docks; Enter on Expand expands; Esc steps back one level.
+  await page.keyboard.press("Space");
+  await settle(page);
+  expect(await mode(page)).toBe("floating");
+  await ctl(page, "Dock").focus();
   await page.keyboard.press("Space");
   await settle(page);
   expect(await mode(page)).toBe("docked");
@@ -440,8 +462,8 @@ test("reduced-motion users get no motion", async ({ page }) => {
     .map((a) => Number((a.effect as KeyframeEffect).getTiming().duration))));
   expect(await longest(), "opening").toBeLessThanOrEqual(1);
   await settle(page);
-  await ctl(page, "Dock").click();
-  expect(await longest(), "docking").toBeLessThanOrEqual(1);
+  await ctl(page, "Undock").click();
+  expect(await longest(), "undocking").toBeLessThanOrEqual(1);
   await settle(page);
   await ctl(page, "Expand").click();
   expect(await longest(), "expanding").toBeLessThanOrEqual(1);
@@ -465,7 +487,7 @@ test("no bottom-right chatbot bubble exists — closed or open", async ({ page }
   });
   expect(await corner()).toEqual([]);
   await expect(page.locator(".iris-launcher, [data-testid='iris-launcher']")).toHaveCount(0);
-  await open(page);
+  await openFloating(page);
   expect(await corner()).toEqual([]);
   // The way in stays in the header.
   expect(await irisLauncher(page).evaluate((el) => !!el.closest("header.topbar"))).toBe(true);
@@ -474,7 +496,7 @@ test("no bottom-right chatbot bubble exists — closed or open", async ({ page }
 // ── 14 ────────────────────────────────────────────────────────────────────
 test("Iris only docks on the right — there is no left or bottom dock", async ({ page }) => {
   await boot(page);
-  await open(page);
+  await openFloating(page);
   const labels = await irisPanel(page).locator(".op-hd button").evaluateAll((bs) =>
     bs.map((b) => `${b.getAttribute("aria-label") ?? ""} ${b.getAttribute("title") ?? ""}`));
   expect(labels.filter((l) => /\b(left|bottom)\b/i.test(l))).toEqual([]);
@@ -489,7 +511,7 @@ test("Iris only docks on the right — there is no left or bottom dock", async (
 // ── §16 ───────────────────────────────────────────────────────────────────
 test("narrow viewports overlay instead of squeezing the workspace", async ({ page }) => {
   await boot(page);
-  await open(page);
+  await openFloating(page);
   await ctl(page, "Dock").click();
   await settle(page);
 
@@ -536,7 +558,7 @@ test("screenshots for the owner's review (IRIS_SCREENSHOT_DIR only)", async ({ p
   const dir = process.env.IRIS_SCREENSHOT_DIR;
   test.skip(!dir, "set IRIS_SCREENSHOT_DIR to write review screenshots");
   await boot(page);
-  await open(page);
+  await openFloating(page);
   await askIris(page, "top 3 devices by cpu in the last hour");
   await expect(irisPanel(page).locator(".op-row.assistant .op-bubble-grounded")).toHaveCount(1);
   await page.waitForTimeout(400); // chart paint
@@ -565,7 +587,7 @@ test("screenshots for the owner's review (IRIS_SCREENSHOT_DIR only)", async ({ p
 
 test("the header's engine line ends in an ellipsis, never clipped mid-word, in a narrow panel", async ({ page }) => {
   await boot(page);
-  await open(page);
+  await openFloating(page);
   const line = page.locator("#iris-panel .op-hd-sub-text");
   await expect(line).toBeVisible();
   const m = await line.evaluate((el) => {

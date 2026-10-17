@@ -44,7 +44,7 @@ async function openPanel(page: Page) {
   const fake = await bootIris(page, { tenantConfig: TENANT_CONFIG, converse, resolve });
   await page.goto("/#/overview/home");
   await openIris(page);
-  await page.getByTitle("Assistant settings").click();
+  await page.getByTitle("AI models").click();
   await expect(panel(page)).toBeVisible();
   await expect(panel(page).getByText("No names yet.")).toBeVisible();
   return fake;

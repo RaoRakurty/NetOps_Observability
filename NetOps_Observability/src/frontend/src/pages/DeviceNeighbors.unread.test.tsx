@@ -121,7 +121,7 @@ describe("the OMP section", () => {
       device_omp_peers: { data: { result: [series({ state: "up" }, "120"), series({ state: "not_up" }, "3")] } },
     }) as never);
     render(<DeviceNeighbors device={device} />);
-    expect(await screen.findByText(/This is a controller/)).toBeInTheDocument();
+    expect(await screen.findByText(/Controller — session counts only/)).toBeInTheDocument();
   });
 
   it("says UNKNOWN when the read fails", async () => {
