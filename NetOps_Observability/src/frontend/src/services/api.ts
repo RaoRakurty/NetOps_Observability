@@ -5091,6 +5091,26 @@ export type IncidentTimeMetric = {
   calculation_version: string;
 };
 
+/** Similar past incidents (N-F4). Below the threshold `matches` is empty. */
+export interface SimilarIncidentMatch {
+  correlation_id: string;
+  score: number;
+  strength: "similar" | "strong";
+  matched_on: string[];
+  differences?: string[];
+  occurred_at: string;
+  partial?: boolean;
+}
+export interface SimilarIncidents {
+  verdict: "similar_incidents" | "no_similar_incident";
+  matches: SimilarIncidentMatch[];
+  examined: number;
+  incomplete: number;
+  window: string;
+  note: string;
+  caveat: string;
+}
+
 /** One persisted phase-metric snapshot (GET /api/reliability/time-metrics). */
 export type IncidentTimeMetricRow = {
   correlation_id: string;
@@ -6208,6 +6228,9 @@ export const api = {
   // RCA Time Intelligence — incident time decomposition (phases + time-loss driver).
   correlationTimeMetrics: (id: string) =>
     request<TimeIntel>(`/api/correlations/${encodeURIComponent(id)}/time-metrics`),
+  // Similar past incidents (tracker 337 N-F4) — the same tenant's closed history.
+  correlationSimilar: (id: string, window?: string) =>
+    request<SimilarIncidents>(`/api/correlations/${encodeURIComponent(id)}/similar${window ? `?window=${encodeURIComponent(window)}` : ""}`),
   // Manual lifecycle events for one investigation (tenant-scoped; the embedded
   // drawer reads WHO closed it + the recorded verification state at close).
   correlationTimeEvents: (id: string) =>

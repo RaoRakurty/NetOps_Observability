@@ -90,6 +90,15 @@ func tsDeps() TroubleshootDeps {
 				{Prefix: "203.0.113.0/24", Origin: "AS64500", State: "valid", ROAs: 1},
 			}}, nil
 		},
+		SimilarIncidents: func(_ context.Context, p Principal, id, _ string) (SimilarIncidents, error) {
+			if p.Tenant != "t-a" || id != "11111111-2222-4333-8444-555555555555" {
+				return SimilarIncidents{}, ErrNotFound // another tenant's case is not found, never "no history"
+			}
+			return SimilarIncidents{Verdict: "similar_incidents", Caveat: "Similar is not the same cause.", Matches: []SimilarMatch{
+				{CorrelationID: "66666666-7777-4888-8999-aaaaaaaaaaaa", Strength: "strong", MatchedOn: []string{"same signature", "same device"},
+					OccurredAt: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
+			}}, nil
+		},
 		RecallInvestigations: func(_ context.Context, p Principal, q InvestigationQuery) ([]InvestigationRow, error) {
 			if p.Tenant != "t-a" {
 				return nil, nil // another tenant's memory is simply not there
@@ -143,8 +152,8 @@ func mustRun(t *testing.T, reg *ToolRegistry, name string, args ToolArgs) ToolRe
 func TestTroubleshootToolsAreReadOnly(t *testing.T) {
 	reg := tsRegistry(t, tsDeps())
 	names := TroubleshootToolNames()
-	if len(names) != 10 {
-		t.Fatalf("expected 10 Phase-A/A4/B tools, got %v", names)
+	if len(names) != 11 {
+		t.Fatalf("expected 11 Phase-A/A4/B/F4 tools, got %v", names)
 	}
 	for i := 1; i < len(names); i++ {
 		if names[i-1] >= names[i] {

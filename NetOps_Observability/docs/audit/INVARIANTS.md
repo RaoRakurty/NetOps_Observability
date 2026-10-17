@@ -587,3 +587,19 @@ pass by absence. Bars are pinned by `TestBarsArePinned` and are not lowered.
 
 Not covered by a gate: the model path's live accuracy (stub oracle in CI;
 `-tags nlqmodeleval` only) and the incident corpus as a whole (owner decision D5).
+
+## 21. Similar past incidents (tracker 337 N-F4, 2026-10-17)
+
+`GET /api/correlations/{id}/similar`, the Iris tool `find_similar_incidents`,
+and the "Similar past incidents" card share ONE recall (`similarIncidentsFor`,
+`internal/incidentfp`).
+
+| Invariant | Status | Proof |
+|---|---|---|
+| Only the subject's own tenant is compared: an identical twin in another tenant is never recalled; a foreign case and an as_tenant walk are 404; the platform owner viewing a tenant's case compares within that tenant | ✅ | **BUILD** — `TestSimilarIncidentsStayInTheSubjectsTenant`; **PG** — `TestIncidentFingerprintsRLSIsolationPG` (RLS count 0, WITH CHECK 42501) |
+| Every read of a past incident runs at the subject's tenant scope — never `__all__` — and only after the caller's own read proved access | ✅ | **BUILD** — `TestSimilarIncidentsStayInTheSubjectsTenant` (scope recorded per read; fails when the candidate read is widened to `__all__`) |
+| Below the documented threshold (0.55) the answer is "no similar incident" and the near miss appears nowhere; a domain/provider match alone never matches (hard gate); "no history" and "none similar" read differently | ✅ | **BUILD** — `TestBelowThresholdIsNoSimilarIncidentAndLeaksNothing`, `TestHardGate`, `TestWorkedExamples`, `TestRecallServiceBuildsWithinBudgetAndStores` |
+| History never steers an investigation: the tool declares no Signals and its evidence is HISTORICAL; every match says "context only, not confirmation" | ✅ | **BUILD** — `TestFindSimilarIncidentsIsHistoryNeverASignal` |
+| Bounded: 50 candidates after an exact-key prefilter, at most 8 fingerprints built per request (written through, closed incidents only), 5 matches | ✅ | **BUILD** — `TestRecallServiceBuildsWithinBudgetAndStores`, `TestRankOrderAndCap` |
+| The threshold and weights suit real history | ❌ **not calibrated** | Documented engineering defaults (incidentfp/score.go); calibrate on the golden incident corpus / real history before GA (owner decision). |
+| Past incidents are fingerprinted ahead of time | ❌ **not built** | On-demand only (write-through); a background enricher for closed incidents is a follow-up (owner decision). |

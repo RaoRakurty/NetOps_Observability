@@ -169,7 +169,7 @@ function EventTimeline({ events }: { events: CaseEvent[] }) {
 
 export default function RcaWorkspace({
   data, view, onView, onExportPdf, exportDisabled, debugExtra, pathSlot, timeImpactSlot, ticketSlot, aiSlot, verifySlot,
-  feedbackSlot, correlationId,
+  feedbackSlot, correlationId, similarSlot,
 }: {
   data: RcaCase;
   /** The case's correlation id — the grounding KEY handed to /api/ai/ask by the
@@ -187,6 +187,7 @@ export default function RcaWorkspace({
   // discovered), so no second topology section exists.
   pathSlot?: ReactNode;
   timeImpactSlot?: ReactNode; // RCA Time Intelligence — incident time decomposition card
+  similarSlot?: ReactNode;    // Similar past incidents (tracker 337 N-F4)
   ticketSlot?: ReactNode;     // RCA auto-ticketing (#78) — live external ticket status + actions
   aiSlot?: ReactNode;         // Iris AI — grounded "Ask AI" RCA explanation card
   verifySlot?: ReactNode;     // Active Verification (spec #8) — read-only device interrogation card
@@ -292,6 +293,14 @@ export default function RcaWorkspace({
             <>
               <h3 className="rw-section-title">Time impact</h3>
               <section style={{ marginBottom: 4 }}>{timeImpactSlot}</section>
+            </>
+          )}
+
+          {/* Similar past incidents (N-F4) — this workspace's closed history. */}
+          {similarSlot && (
+            <>
+              <h3 className="rw-section-title">Similar past incidents</h3>
+              <section style={{ marginBottom: 4 }}>{similarSlot}</section>
             </>
           )}
 
