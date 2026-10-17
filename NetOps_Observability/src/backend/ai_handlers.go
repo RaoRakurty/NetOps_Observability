@@ -262,6 +262,9 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		Explain:  aiExplanations,                                       // authored UI explanations (the AskIris (i))
 
 		Troubleshoot: deps, // tenant-scoped Phase-A reads
+		// Tool contract v2 (N-A8): the process-lived gateway, so the per-tenant
+		// per-tool budget spans requests and the metrics are one set.
+		Gateway: s.aiToolGateway,
 		// One audit line per tool step (arg NAMES only) + its ledger entries
 		// (argument/result HASHES only).
 		ToolAudit: func(e ai.ToolAuditEntry) { toolAudit(e); aiLedgerToolEntry(ledger, e) },
@@ -2419,6 +2422,16 @@ const aiDecisionAppendTimeout = 3 * time.Second
 
 // aiToolVersion is the version of every compiled-in tool: the build itself.
 // "unknown" stays visible (build_provenance.go: never invent a revision).
+// aiToolVersionFor is a tool's ledgered version: its contract version and the
+// build it ran in ("1@v0.9.0+abc123"). Steps that are not tools (next_skill)
+// carry the build alone.
+func aiToolVersionFor(tool string) string {
+	if c, ok := ai.ContractFor(tool); ok {
+		return aidecision.Token(strconv.Itoa(c.Version) + "@" + aiToolVersion())
+	}
+	return aiToolVersion()
+}
+
 func aiToolVersion() string {
 	sha := buildSHA
 	if len(sha) > 12 {
@@ -2457,7 +2470,8 @@ func (s *server) aiDecisionStart(r *http.Request, claims jwtClaims, req aiAskReq
 // ToolAudit hook calls it; rec is nil outside a ledgered request.
 func aiLedgerToolEntry(rec *aidecision.Recorder, e ai.ToolAuditEntry) {
 	rec.AddToolStep(aidecision.ToolStep{Skill: e.Skill, Tool: e.Tool, Selected: e.Selected, Reason: e.Reason,
-		Items: e.Items, ArgsSHA256: e.ArgsSHA256, ResultSHA256: e.ResultSHA256}, aiToolVersion())
+		Items: e.Items, ArgsSHA256: e.ArgsSHA256, ResultSHA256: e.ResultSHA256,
+		Latency: time.Duration(e.Duration) * time.Millisecond, Truncated: e.Truncated}, aiToolVersionFor(e.Tool))
 }
 
 // nlqLedgerTool names the data arm's query execution in the ledger.

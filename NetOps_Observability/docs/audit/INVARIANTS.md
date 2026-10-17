@@ -506,3 +506,15 @@ at. If the answer is PROSE, say so out loud in the PR rather than leaving a
 future reader to assume a gate exists. When an audit finding is closed, add the
 guard that makes its *class* unrepeatable and record it here — that is the
 difference between fixing an instance and fixing a generator.
+
+## 14. Iris tool contract (tracker 337 N-A8, 2026-10-12)
+
+| Invariant | Status | Proof |
+|---|---|---|
+| Every Iris tool call — engine problem path, module path, skill chain, copilot agent loop — passes ONE gateway (`ai.Toolbox.Invoke`) | ✅ | **BUILD** — `TestOnlyTheGatewayRunsTools` (AST: `AITool.Run` is called only in `ai/toolgateway.go`) and `TestRootPackageNeverRunsAToolDirectly` |
+| A tool without a valid contract is not registered; write/execute tools are structurally unregistrable | ✅ | **BUILD** — `TestRegisterRefusesWhatHasNoValidContract`, `TestEveryRegisteredToolHasAValidContract`; `CheckToolContracts` refuses to start the api on an invalid table |
+| A tool's contract timeout holds even when its data source ignores its context | ✅ | **BUILD** — `TestInvokeTimeoutHoldsEvenWhenTheToolIgnoresItsContext`; the data source now reads under the per-call context (`aiDataSource.with`) |
+| The per-tool rate is per tenant (from the token) and never throttles another tenant | ✅ | **BUILD** — `TestInvokeRateLimitIsPerTenantPerTool`, `TestCopilotToolRateIsPerTenant` |
+| A result that does not fit its output schema never reaches the model; its hash is ledgered as proof | ✅ | **BUILD** — `TestInvokeSchemaRejectDropsTheOutput`, `TestAddToolStepGatewayOutcomes` |
+| Every tool call is ledgered with latency and truncation, copilot turns included | ✅ on fixtures + PG | **BUILD** — `TestCopilotToolCallsAreLedgered`; pgintegration `TestAIDecisionLedgerToolContractColumnsPG` (0057 round-trip, CHECK, append-only, RLS) |
+| The contract VALUES (timeouts, rates, item ceilings) suit live traffic | ❌ **not live-measured** | Set from the code's own caps and backend class; `IrisToolEvidenceDropped` (warning) watches the drop rate. Re-tune from `netops_ai_tool_invocations_total{outcome}` after a week of real traffic. |

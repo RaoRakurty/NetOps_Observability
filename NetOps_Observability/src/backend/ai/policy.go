@@ -83,8 +83,10 @@ func (e *PolicyEngine) EvaluateModule(moduleID string, p Principal) Decision {
 func (e *PolicyEngine) EvaluateTool(t AITool, p Principal) Decision {
 	// 1. Capability — the "what can the AI execute" line. v1: read-only.
 	switch t.Capability() {
-	case CapRead:
-		// permitted (subject to the rest)
+	case CapRead, CapProbe:
+		// permitted (subject to the rest). A probe opens a read-only device
+		// session; the tool itself still requires infrastructure write to run
+		// one, and its contract rate-limits it hard (N-A8).
 	case CapWrite, CapExecute:
 		if !e.Cfg.AllowActions {
 			return deny("%s is a %s action — disabled (read-only mode); requires the gated action subsystem (HLD P6)", t.Name(), t.Capability())

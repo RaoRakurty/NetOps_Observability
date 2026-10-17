@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+	"time"
 )
 
 // ToolStep is one audited tool step, as the orchestrator's audit hook reports
@@ -27,7 +28,21 @@ type ToolStep struct {
 	Items        int
 	ArgsSHA256   string
 	ResultSHA256 string
+	// Latency and Truncated come from the tool gateway (N-A8): how long the
+	// call took and whether its result was cut to fit its declared bounds.
+	Latency   time.Duration
+	Truncated bool
 }
+
+// Tool-call outcomes the gateway adds (N-A8). rate_limited is a POLICY
+// decision — the tool never ran — so it is recorded as POLICY_EVALUATED only.
+const (
+	OutcomeTimeout        = "timeout"
+	OutcomeRateLimited    = "rate_limited"
+	OutcomeSchemaRejected = "schema_rejected"
+	OutcomeBadArgs        = "bad_args"
+	OutcomeCancelled      = "cancelled"
+)
 
 // NextSkillTool is the audit hook's name for a SELECTION — the investigation
 // moved to its next method — rather than a tool run.
@@ -61,12 +76,16 @@ func (r *Recorder) AddToolStep(s ToolStep, toolVersion string) {
 		r.Add(Entry{EventType: PolicyEvaluated, Skill: s.Skill, Tool: s.Tool,
 			ToolVersion: toolVersion, ArgsSHA256: s.ArgsSHA256, Outcome: "deny"})
 		return
+	case s.Reason == OutcomeRateLimited:
+		r.Add(Entry{EventType: PolicyEvaluated, Skill: s.Skill, Tool: s.Tool,
+			ToolVersion: toolVersion, ArgsSHA256: s.ArgsSHA256, Outcome: OutcomeRateLimited})
+		return
 	}
 	r.Add(Entry{EventType: PolicyEvaluated, Skill: s.Skill, Tool: s.Tool,
 		ToolVersion: toolVersion, ArgsSHA256: s.ArgsSHA256, Outcome: "allow"})
 	r.Add(Entry{EventType: ToolExecuted, Skill: s.Skill, Tool: s.Tool,
 		ToolVersion: toolVersion, ArgsSHA256: s.ArgsSHA256, ResultSHA256: s.ResultSHA256,
-		ItemCount: s.Items, Outcome: s.Reason})
+		ItemCount: s.Items, Outcome: s.Reason, LatencyMS: latencyMS(s.Latency), Truncated: s.Truncated})
 }
 
 // AddEvidence records EVIDENCE_ADDED for the citation ids an answer rests on:
@@ -102,4 +121,13 @@ func QueryLogID(data []byte) string {
 		return ""
 	}
 	return Token(obj.ID)
+}
+
+// latencyMS renders a duration for the ledger, clamped into its valid range.
+func latencyMS(d time.Duration) int64 {
+	ms := d.Milliseconds()
+	if ms < 0 {
+		return 0
+	}
+	return min(ms, MaxLatencyMS)
 }

@@ -348,7 +348,7 @@ type protocolDiagnosticTool struct{ deps TroubleshootDeps }
 
 func (t protocolDiagnosticTool) Name() string            { return "run_protocol_diagnostic" }
 func (t protocolDiagnosticTool) Module() string          { return "protocol_diagnostics" }
-func (t protocolDiagnosticTool) Capability() Capability  { return CapRead }
+func (t protocolDiagnosticTool) Capability() Capability  { return CapProbe }
 func (t protocolDiagnosticTool) RequiredPerms() []string { return []string{"infrastructure:read"} }
 func (t protocolDiagnosticTool) Freshness() Freshness    { return FreshnessLive }
 

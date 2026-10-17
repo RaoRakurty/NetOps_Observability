@@ -87,10 +87,15 @@ func ValidEventType(t string) bool {
 
 // Surfaces (closed): which API the decision was made on.
 const (
-	SurfaceAsk = "ask" // POST /api/ai/ask (and the data arm / grounded engine it fans into)
+	SurfaceAsk     = "ask"     // POST /api/ai/ask (and the data arm / grounded engine it fans into)
+	SurfaceCopilot = "copilot" // POST /api/copilot/chat — the model-driven agent loop (N-A8)
 )
 
-var surfaces = map[string]bool{SurfaceAsk: true}
+var surfaces = map[string]bool{SurfaceAsk: true, SurfaceCopilot: true}
+
+// MaxLatencyMS bounds a recorded tool latency (one hour): a larger value is a
+// clock error, not a measurement.
+const MaxLatencyMS = int64(time.Hour / time.Millisecond)
 
 // Bounds.
 const (
@@ -134,9 +139,14 @@ type Entry struct {
 	ArgsSHA256    string    `json:"args_sha256,omitempty"`
 	ResultSHA256  string    `json:"result_sha256,omitempty"`
 	ItemCount     int       `json:"item_count,omitempty"`
-	Outcome       string    `json:"outcome,omitempty"`
-	AnswerID      string    `json:"answer_id,omitempty"`
-	QueryLogID    string    `json:"query_log_id,omitempty"`
+	// LatencyMS is how long a tool call took (TOOL_EXECUTED; N-A8). 0 for
+	// every other event and for rows written before 0057.
+	LatencyMS int64 `json:"latency_ms,omitempty"`
+	// Truncated: the tool's result was cut to fit its declared bounds.
+	Truncated  bool   `json:"truncated,omitempty"`
+	Outcome    string `json:"outcome,omitempty"`
+	AnswerID   string `json:"answer_id,omitempty"`
+	QueryLogID string `json:"query_log_id,omitempty"`
 }
 
 // ListFilter selects entries. DecisionID "" means every decision; Before is
@@ -259,6 +269,9 @@ func Normalize(tenant string, e Entry, now time.Time) (Entry, error) {
 	e.ModelProvider, e.ModelName, e.ModelTier = Token(e.ModelProvider), Token(e.ModelName), Token(e.ModelTier)
 	e.Outcome, e.AnswerID, e.QueryLogID = Token(e.Outcome), Token(e.AnswerID), Token(e.QueryLogID)
 	e.ItemCount = max(e.ItemCount, 0)
+	if e.LatencyMS < 0 || e.LatencyMS > MaxLatencyMS {
+		return Entry{}, fmt.Errorf("%w: latency %d ms", ErrInvalid, e.LatencyMS)
+	}
 	if e.At.IsZero() {
 		e.At = now
 	}

@@ -5,13 +5,14 @@ package backend
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	"netops/backend/ai"
+	"netops/backend/internal/aidecision"
 	"netops/backend/internal/aientitlement"
 )
 
@@ -211,32 +212,64 @@ func (s *server) executeAgentTool(ctx context.Context, claims jwtClaims, p ai.Pr
 	// the first gate, this is the second; the tool itself re-validates args).
 	// Toolbox.Authorize is the SAME gate the grounded engine's execution sites
 	// run (tracker 337 N-A5), so a denial on one path is a denial on the other.
-	tool, d, ok := ai.Toolbox{Registry: reg, Policy: pol}.Authorize(c.Name, p)
+	tb := ai.Toolbox{Registry: reg, Policy: pol, Gateway: s.aiToolGateway}
+	// The copilot decision (N-A8) records every step: hashes, outcome, latency.
+	ledger := aidecision.FromContext(ctx)
+	ledgerStep := func(reason string, args ai.ToolArgs, iv ai.Invocation) {
+		step := aidecision.ToolStep{Tool: c.Name, Reason: reason, ArgsSHA256: ai.HashToolArgs(args),
+			Latency: iv.Elapsed, Truncated: iv.Truncated, Items: len(iv.Result.Items)}
+		if iv.OK() {
+			step.ResultSHA256 = ai.HashToolResult(iv.Result)
+		} else if iv.RejectedSHA256 != "" {
+			step.ResultSHA256 = iv.RejectedSHA256
+		}
+		ledger.AddToolStep(step, aiToolVersionFor(c.Name))
+	}
+	_, d, ok := tb.Authorize(c.Name, p)
 	if !ok {
+		ledgerStep("not_registered", nil, ai.Invocation{})
 		return fail("unknown tool", "unknown_tool")
 	}
 	if !d.Allow {
+		ledgerStep("policy_denied", nil, ai.Invocation{})
 		return fail("not permitted: "+d.Reason, "policy_denied")
 	}
 	args, err := ai.ParseToolArgs(c.Name, c.Args)
 	if err != nil {
+		ledgerStep(ai.OutcomeBadArgs, nil, ai.Invocation{})
 		return fail("invalid arguments: "+err.Error(), "bad_args")
 	}
-	result, err := tool.Run(ctx, p, args)
-	switch {
-	case errors.Is(err, ai.ErrNotFound):
+	// Tool contract v2 (N-A8): the SAME gateway the engine runs every tool
+	// through — per-tenant rate, contract timeout, output schema.
+	iv := tb.Invoke(ctx, p, c.Name, args)
+	ledgerStep(iv.Outcome, args, iv)
+	switch iv.Outcome {
+	case ai.OutcomeOK:
+	case "not_found":
 		// Cross-tenant / unknown ids look identical (§3a — never reveal existence).
 		rep.IsError = true
 		rep.Content = "not found"
 		s.auditAgentTool(claims, c, args, started, false, "not_found")
 		return rep, nil
-	case errors.Is(err, ai.ErrNotImplemented):
+	case "not_implemented":
 		return fail("this lookup is not available in this build", "not_implemented")
-	case err != nil:
-		logWarn("ai", "agent tool failed", map[string]any{"tool": c.Name, "err": err.Error()})
-		return fail("the lookup failed — do not invent its data", "tool_error")
+	case ai.OutcomeRateLimited:
+		return fail("this lookup was not run: the workspace reached its per-minute limit for it — say so, do not invent its data", ai.OutcomeRateLimited)
+	case ai.OutcomeTimeout:
+		return fail("the lookup did not answer in time — treat its data as UNKNOWN, do not invent it", ai.OutcomeTimeout)
+	case ai.OutcomeSchemaRejected:
+		logWarn("ai", "agent tool result rejected by its output schema", map[string]any{"tool": c.Name})
+		return fail("the lookup returned data that failed validation, so it was not used — do not invent its data", ai.OutcomeSchemaRejected)
+	default:
+		msg := "unknown"
+		if iv.Err != nil {
+			msg = iv.Err.Error()
+		}
+		logWarn("ai", "agent tool failed", map[string]any{"tool": c.Name, "outcome": iv.Outcome, "err": msg})
+		return fail("the lookup failed — do not invent its data", iv.Outcome)
 	}
 
+	result := iv.Result
 	rep.Content = ai.RenderToolReply(&result)
 	s.auditAgentTool(claims, c, args, started, true, "ok")
 	return rep, result.Items
@@ -256,4 +289,45 @@ func (s *server) auditAgentTool(claims jwtClaims, c ai.ToolCall, args ai.ToolArg
 		"allowed": allowed, "reason": reason,
 		"duration_ms": time.Since(started).Milliseconds(),
 	})
+}
+
+// copilotDecisionStart opens the ledger record for one copilot turn (surface
+// copilot): the question is the last user message, recorded as a hash only.
+// nil when the ledger is off — every Recorder method is nil-safe.
+func (s *server) copilotDecisionStart(claims jwtClaims, msgs []copilotMessage) *aidecision.Recorder {
+	if s.aiDecisions == nil {
+		return nil
+	}
+	rec, err := aidecision.NewRecorder(claims.Sub, aidecision.SurfaceCopilot)
+	if err != nil {
+		logError("ai.ledger", "decision id unavailable — this copilot turn is not ledgered", errf(err))
+		s.aiDecisionMetrics.Failed()
+		return nil
+	}
+	question := ""
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			question = msgs[i].Content
+			break
+		}
+	}
+	rec.Add(aidecision.Entry{EventType: aidecision.QuestionReceived, ArgsSHA256: aidecision.SHA256Hex([]byte(question))})
+	return rec
+}
+
+// copilotDecisionFinish closes and stores the copilot decision: the provider
+// and model that answered, how many items it cited, and the answer's hash.
+func (s *server) copilotDecisionFinish(r *http.Request, claims jwtClaims, rec *aidecision.Recorder, provider, model string, res agentResult, loopErr error) {
+	if rec == nil {
+		return
+	}
+	final := aidecision.Entry{EventType: aidecision.AnswerReturned, ModelProvider: provider, ModelName: model,
+		ItemCount: len(res.Citations), Outcome: "answered"}
+	if loopErr != nil {
+		final.Outcome = "error"
+	} else {
+		final.ResultSHA256 = aidecision.SHA256Hex([]byte(res.Text))
+	}
+	rec.Add(final)
+	s.aiDecisionAppend(r, claims, rec)
 }

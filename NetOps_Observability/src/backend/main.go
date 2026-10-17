@@ -381,6 +381,9 @@ type server struct {
 	// hashes only. nil = the ledger is off (asks are not ledgered).
 	aiDecisions       aidecision.Store
 	aiDecisionMetrics *aidecision.Metrics
+	// aiToolGateway applies the Iris tool contracts (tracker 337 N-A8). One
+	// per process, so a tenant's per-tool rate budget spans requests.
+	aiToolGateway *ai.ToolGateway
 	// Investigation hypotheses (tracker 337 N-B3): each investigation's set,
 	// held per tenant (bounded, in memory) so the trace can be re-opened by id.
 	// nil = not held (the answer still carries its own set).
@@ -740,6 +743,12 @@ func newServer() *server {
 
 	// Select where the identity/saved stores persist (file by default; Postgres
 	// when STORE_BACKEND=postgres). Must run before any store is constructed.
+	// Iris tool contracts (tracker 337 N-A8): every tool's timeout, rate,
+	// risk tier and output bounds are a static table; an invalid table is a
+	// build defect, so the api refuses to start rather than run tools unbounded.
+	if err := ai.CheckToolContracts(); err != nil {
+		log.Fatalf("iris tool contracts: %v", err)
+	}
 	if err := initStoreBackend(); err != nil {
 		log.Fatalf("store backend: %v", err)
 	}
@@ -1195,6 +1204,7 @@ func newServer() *server {
 		// The AI decision ledger (N-A6) + its counters, rendered on /metrics.
 		aiDecisions:       newAIDecisionStore(),
 		aiDecisionMetrics: aidecision.NewMetrics(),
+		aiToolGateway:     ai.NewToolGateway(),
 		aiHypotheses:      irishypo.NewMemStore(),
 
 		deviceSites: deviceSites,
@@ -4612,6 +4622,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	s.aiScore.Write(w)
 	s.nlqQueryLogMetrics.Write(w) // Iris query capture + corrections (N-C8); nil-safe
 	s.aiDecisionMetrics.Write(w)  // Iris AI decision ledger appends (N-A6); nil-safe
+	if s.aiToolGateway != nil {
+		_ = s.aiToolGateway.Metrics.Write(w) // best-effort: a failed scrape write surfaces to the scraper, not here
+	}
 	// AI-SCORECARD-END
 	// SECURITY-LANE-BEGIN
 	if s.securityLane != nil {

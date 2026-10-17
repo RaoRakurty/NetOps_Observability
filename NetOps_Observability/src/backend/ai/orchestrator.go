@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -59,6 +60,12 @@ type Orchestrator struct {
 	// the server adds the actor (tenant + subject); entries carry argument NAMES
 	// only, never values (§8 no-PII logging).
 	ToolAudit func(ToolAuditEntry)
+	// Gateway applies the tool contracts (tracker 337 N-A8). The server sets
+	// its process-lived gateway so a tenant's per-tool budget spans requests;
+	// when nil, gateway() creates one for this orchestrator.
+	Gateway     *ToolGateway
+	gatewayOnce sync.Once
+	ownGateway  *ToolGateway
 	// RecordInvestigation receives one CONCLUDED skill-chain investigation (IRIS
 	// Phase B). This package never writes memory itself and holds no store: the
 	// server decides what to do with the conclusion — today it holds it until an
@@ -585,22 +592,23 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 	// turn's verdict, and an incident is in scope by construction.
 	sc := &statementContext{verdict: strings.ToLower(strings.TrimSpace(pr.Verdict)), incident: true}
 	for _, name := range plan.Tools {
-		tool, d, ok := tb.Authorize(name, p)
-		if !ok {
+		iv := tb.Invoke(ctx, p, name, args)
+		switch {
+		case iv.Outcome == OutcomeNotRegistered:
 			continue // stubbed tool for this phase
-		}
-		if !d.Allow {
-			disc = append(disc, capitalize(d.Reason)+".")
-			o.auditTool(name, args, false, "policy_denied", nil, 0)
+		case iv.Outcome == OutcomePolicyDenied:
+			disc = append(disc, capitalize(iv.Decision.Reason)+".")
+			o.auditInvocation(name, args, iv)
 			continue
-		}
-		started := time.Now()
-		res, terr := tool.Run(ctx, p, args)
-		if terr != nil {
-			o.auditTool(name, args, false, toolErrReason(terr), nil, time.Since(started))
+		case !iv.OK():
+			if note := gatewayNote(name, iv.Outcome); note != "" {
+				disc = append(disc, note)
+			}
+			o.auditInvocation(name, args, iv)
 			continue // a tool failure degrades gracefully; never fail the whole answer
 		}
-		o.auditTool(name, args, true, "ok", &res, time.Since(started))
+		res := iv.Result
+		o.auditInvocation(name, args, iv)
 		bundle = append(bundle, res.Items...)
 		disc = append(disc, res.Notes...)
 		for _, ev := range res.Items {
@@ -1087,24 +1095,26 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 	var bundle []EvidenceItem
 	ran, found, errored := 0, 0, 0
 	for _, name := range plan.Tools {
-		tool, d, ok := tb.Authorize(name, p)
-		if !ok {
+		iv := tb.Invoke(ctx, p, name, ToolArgs{})
+		if iv.Outcome == OutcomeNotRegistered {
 			continue // tool for this module not built yet — degrade honestly
 		}
 		found++
-		if !d.Allow {
-			disc = append(disc, capitalize(d.Reason)+".")
-			o.auditTool(name, ToolArgs{}, false, "policy_denied", nil, 0)
+		if iv.Outcome == OutcomePolicyDenied {
+			disc = append(disc, capitalize(iv.Decision.Reason)+".")
+			o.auditInvocation(name, ToolArgs{}, iv)
 			continue
 		}
-		started := time.Now()
-		res, terr := tool.Run(ctx, p, ToolArgs{})
-		if terr != nil {
-			o.auditTool(name, ToolArgs{}, false, toolErrReason(terr), nil, time.Since(started))
+		if !iv.OK() {
+			if note := gatewayNote(name, iv.Outcome); note != "" {
+				disc = append(disc, note)
+			}
+			o.auditInvocation(name, ToolArgs{}, iv)
 			errored++ // a tool failure degrades gracefully — but is NOT "not built"
 			continue
 		}
-		o.auditTool(name, ToolArgs{}, true, "ok", &res, time.Since(started))
+		res := iv.Result
+		o.auditInvocation(name, ToolArgs{}, iv)
 		ran++
 		bundle = append(bundle, res.Items...)
 		// Carry a tool's notes ALWAYS (not only on truncation) — a note like
