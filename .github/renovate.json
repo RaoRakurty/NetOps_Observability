@@ -26,7 +26,7 @@
     "major is a re-review of the allowlist entry, not a patch.",
     "",
     "enabledManagers is an ALLOWLIST: a manager we did not ask for cannot open a PR against a file class nobody reviews.",
-    "constraints pins Go resolution to the toolchain the module actually declares (go.mod: go 1.26.0 / toolchain go1.26.8)."
+    "constraints pins Go resolution to the toolchain the module actually declares (go.mod: go 1.26.0 / toolchain go1.26.9)."
   ],
   "extends": [
     "config:recommended",
