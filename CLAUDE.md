@@ -556,6 +556,32 @@ waste, so CI round-trips are rare.
 - Never run `scripts/stack-watchdog.sh --test` to save time or to "check"; it
   pages the owner's phone.
 
+### Size the effort to the risk (`scripts/test-plan.py`)
+`python3 scripts/test-plan.py` reads the diff against `origin/main` and prints the
+tier and the local commands: **docs** (no code gate) · **frontend** (tsc + vite +
+the area's Playwright specs) · **code** (the touched packages; root package full
+run and `-race` to CI) · **high-risk** (full local gate + pgintegration + §3a test,
+whatever the size — auth, tenant, migrations, crypto/trust, the LLM boundary,
+dependencies, Dockerfiles, workflows). An unknown path is `code`, an unreadable
+diff `high-risk`: the script may shrink the LOCAL plan, never the merge gate.
+The pre-push hook runs `--run-fast` (SBOM, notices, digest lock, toolchain pins,
+~2 s) and BLOCKS on a stale generated artifact.
+
+### Red, flaky, lost (2026-10-17, after PR #22 sat red for a week)
+- **Pushing red is fine; leaving red is not.** Push a WIP branch or let CI run the
+  legs this host can't (`-race`, the root package, pgintegration) — then watch it.
+  A red branch nobody is fixing is named in the handoff with its owner and cause.
+- **Never merge red.** No exceptions for "known", "unrelated" or "slow".
+- **A cheap deterministic check is never left to CI.** If it runs in seconds
+  locally (generated artifacts, lint, the touched package's tests), it runs before
+  the push.
+- **"Flaky" is a finding, not a verdict.** Rerun it; if it reproduces, it is a bug;
+  if it does not, record the rerun. Never ship on "probably flaky".
+- **A lost research plan is re-run, not skipped.** If a `researcher` report never
+  arrived (usage cutoff, crash), the non-trivial build it was for waits for a new one.
+- **Merge when green.** Stacks and long-lived branches are integration risk; a PR
+  green in CI merges in order without waiting (owner authorization 2026-10-17).
+
 ### Never do to save tokens
 - Use Haiku/Sonnet to write, fix, or review code, tests, config, or scripts.
 - Lower effort on design, coding, testing, or review.

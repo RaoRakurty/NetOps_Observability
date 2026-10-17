@@ -4,11 +4,34 @@
 # backend CI). Bypass only in a true emergency with `git push --no-verify`.
 set -uo pipefail
 root="$(git rev-parse --show-toplevel)"
-changed="$(git diff --name-only @{push}..HEAD 2>/dev/null || git diff --name-only origin/HEAD..HEAD 2>/dev/null || echo "")"
+changed="$(git diff --name-only '@{push}..HEAD' 2>/dev/null || git diff --name-only origin/HEAD..HEAD 2>/dev/null || echo "")"
 if echo "$changed" | grep -q 'NetOps_Observability/src/backend/.*\.go$'; then
   echo "── pre-push: Go backend changed → running backend-ci guard ──"
   bash "$root/NetOps_Observability/scripts/ci-backend-guard.sh" || {
     echo "✗ PUSH BLOCKED: backend-ci gate failed locally. Fix, then push."; exit 1; }
+fi
+
+# Generated artifacts (2026-10-17): SBOM, licence notices, base-image digest
+# lock and toolchain pins are deterministic and take ~2 s to verify, yet a
+# stale one kept PR #22 red in CI for a week. BLOCK when the push changes an
+# input of one of them and the artifact was not regenerated. test-plan.py
+# decides from the diff whether the checks apply; a timeout is UNKNOWN, which
+# blocks too (an unverified artifact is not a verified one).
+if command -v python3 >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+  base="@{push}"
+  git rev-parse --verify --quiet "$base" >/dev/null || base="origin/main"
+  artifacts_rc=0
+  timeout --kill-after=2 180 python3 "$root/NetOps_Observability/scripts/test-plan.py" --run-fast --base "$base" || artifacts_rc=$?
+  if [ "$artifacts_rc" -eq 124 ] || [ "$artifacts_rc" -eq 137 ]; then
+    echo "✗ PUSH BLOCKED: generated-artifact check TIMED OUT after 180s — state UNKNOWN. Rerun: python3 scripts/test-plan.py --run-fast" >&2
+    exit 1
+  elif [ "$artifacts_rc" -ne 0 ]; then
+    echo "✗ PUSH BLOCKED: a generated artifact is stale (details above). Regenerate, commit, push." >&2
+    exit 1
+  fi
+else
+  # §16.2: name the missing tool; CI still gates these, so the push continues.
+  echo "⚠ pre-push: python3 or timeout not found — generated-artifact check SKIPPED (CI still runs it)" >&2
 fi
 
 # #97 customer-bundle lockstep: WARN (never block) when the newest offline
