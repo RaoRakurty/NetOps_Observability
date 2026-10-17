@@ -60,6 +60,11 @@ type DataOpts struct {
 	// could not parse. Off for questions the classifier already knows are
 	// product help: those have a better answer than up to three model calls.
 	AllowModel bool
+	// BeforeModel, when set, is asked right before the model compile would
+	// run (the grammar could not parse the question and a model is wired):
+	// false skips the model and leaves the question to the classic path. Set
+	// only for a CONTESTED question (route_tiebreak.go); nil = today's path.
+	BeforeModel func(ctx context.Context) bool
 }
 
 // NLQueryFunc answers a question with the NL query engine, in the caller's
@@ -76,7 +81,13 @@ func (o *Orchestrator) answerData(ctx context.Context, p Principal, question str
 		return Answer{}, false
 	}
 	emitTrace(o.Trace, TraceEvent{Type: TraceToolStarted, Tool: "nl_query"})
-	d, err := o.NLQuery(ctx, p, question, DataOpts{AllowModel: plan.Intent != "product_question" && plan.Intent != "product_navigation"})
+	opts := DataOpts{AllowModel: plan.Intent != "product_question" && plan.Intent != "product_navigation"}
+	if method := o.contestedMethod(question, plan, opts.AllowModel); method != "" {
+		// N-G4: the grammar may fail and a method also claims the question —
+		// ask once, cheaply, before spending the model compile on it.
+		opts.BeforeModel = func(ctx context.Context) bool { return o.routeTieBreak(ctx, question, method) }
+	}
+	d, err := o.NLQuery(ctx, p, question, opts)
 	nlqOutcome := "ok"
 	if err != nil || (d.Status != DataAnswered && d.Status != DataClarify) {
 		nlqOutcome = "skipped" // the classic path answers instead

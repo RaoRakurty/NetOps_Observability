@@ -70,7 +70,10 @@ type Orchestrator struct {
 	// OrgContextBlock); "" or nil = none, and the system prompt is then
 	// byte-for-byte what it was before the store existed. Read once per
 	// orchestrator (one request).
-	OrgContext  func() string
+	OrgContext func() string
+	// Routed receives the router's FIRST claim for each question (N-G4
+	// scoreboard): which arm took it, before that arm ran. nil in production.
+	Routed      func(RouteDecision)
 	orgOnce     sync.Once
 	orgBlock    string
 	gatewayOnce sync.Once
@@ -150,6 +153,14 @@ var (
 	// how-to ("how do I set up SNMP discovery / enable SSO / create a report").
 	// Answered from the curated product knowledge, not live data.
 	reProduct = regexp.MustCompile(`(?i)(\bwhat (is|are|does)\b|\bwhat.?s (a|an|the)\b|\bwhat does\b.*\bmean\b|\bhow does\b|\bhow do(es)? (correlix|the (engine|platform|product|system))\b|\bhow do i (set ?up|configure|enable|create|add|onboard|connect|turn on|register|provision|import|schedule|invite)\b|\bhow to (set ?up|configure|enable|create|add|onboard|connect|import)\b|\bexplain (the|how|correlix)\b|\btell me about\b|\bwhat (can|do) you (do|know)\b|\bwhat is correlix\b)`)
+	// A question about a SCREEN ("what does the Operations Overview page show",
+	// "what does this column mean") and an imperative how-to ("create a monitor
+	// that alerts on …", "connect ServiceNow so …", "what sampling rate should
+	// I configure") are product questions even when they name an operational
+	// noun the live-state rules would claim first (N-G4 routing scoreboard,
+	// 2026-10-17). Checked before every live-state rule.
+	reUIQuestion      = regexp.MustCompile(`(?i)\bwhat (does|do|is|are)\b[^?]*\b(page|tab|view|screen|panel|card|chart|column|graph|widget|dashboard)s?\b[^?]*\b(show|shows|display|displays|mean|means|tell|tells)\b`)
+	reHowToImperative = regexp.MustCompile(`(?i)(^\s*(please\s+)?(create|connect|configure|set ?up|enable|onboard|import|schedule|invite|register|integrate)\b|\bshould (i|we) (configure|set|use|enable|choose|pick)\b|\bhow (is|are) (the |a |an )?[a-z -]{2,60} (chosen|picked|selected|decided|calculated|computed|determined|derived)\b)`)
 	// Explicit "last/past N <unit>" window for the time-range summary parser.
 	reLookbackNum = regexp.MustCompile(`(?i)(?:last|past|previous)\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)\b`)
 
@@ -251,6 +262,11 @@ func Classify(question string, uiContext map[string]string) Plan {
 			Intent: "problem_explanation", Modules: []string{"correlations_rca"},
 			Mode: ModeProblemExplanation, Entities: ent, Freshness: FreshnessLive,
 			Tools: []string{"get_problem", "get_problem_evidence", "get_ticket_status"},
+		}
+	case reUIQuestion.MatchString(q) || reHowToImperative.MatchString(q):
+		return Plan{
+			Intent: "product_question", Modules: []string{"product_navigation"},
+			Mode: ModeProductAnswer, Entities: ent, Freshness: FreshnessConfig,
 		}
 	case reStyleFeedback.MatchString(q) && len(q) < 80:
 		// Pure style feedback → compact current-state re-briefing (brief mode).
@@ -397,10 +413,12 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 	// definition happens to share a word with it.
 	if _, named := explainTopicFromAsk(question, uiContext); !named {
 		if ans, handled := o.answerPageHelp(question, uiContext); handled {
+			o.routed(ArmPageHelp, ans.Mode)
 			return ans, nil
 		}
 	}
 	if ans, handled := o.answerExplain(question, uiContext); handled {
+		o.routed(ArmExplain, ans.Mode)
 		return ans, nil
 	}
 
@@ -411,6 +429,7 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 	// and that ask for a listing, not a diagnosis; everything else continues
 	// below unchanged.
 	if ans, handled := o.answerData(ctx, p, question, plan, nil); handled {
+		o.routed(ArmData, ans.Mode)
 		return ans, nil
 	}
 
@@ -447,6 +466,7 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 	// unchanged. No existing answer changes shape unless a skill grounded it.
 	if o.Skills != nil {
 		if match, ok := SelectSkill(o.Skills, question, plan); ok {
+			o.routed(ArmSkill, ModeTroubleshootFinding)
 			if ans, handled := o.answerSkill(ctx, p, question, plan, match, uiContext, disc); handled {
 				return ans, nil
 			}
@@ -461,6 +481,7 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 	// state. Unrecognized question → a helpful capability clarification (NOT the
 	// current-state briefing); it reads no data and needs no module.
 	if plan.Intent == "capability" {
+		o.routed(ArmCapability, ModeUnavailable)
 		// A protocol or vendor question the classifier could not place is often
 		// exactly what the TAC catalogue covers ("bgp neighbour down on SR
 		// Linux"): answer from that knowledge before falling back to the
@@ -471,6 +492,7 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 		return o.answerCapability(plan), nil
 	}
 
+	o.routed(ArmClassic, plan.Mode)
 	if len(allowed) == 0 {
 		return Answer{
 			Mode: ModeUnavailable, Intent: plan.Intent, Modules: plan.Modules,

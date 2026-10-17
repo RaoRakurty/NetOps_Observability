@@ -339,7 +339,7 @@ jobs:
       - name: run the scorers (write gate reports)
         run: |
           go test -count=1 -timeout 20m -run '^TestCompilerAgainstTheGoldenCorpus$' ./internal/nlquery/
-          go test -count=1 -timeout 20m -run '^(TestGoldenIncidentCorpus|TestGoldenDocsCitationCorrectness|TestGoldenInjectionPromptBlockFence|TestGoldenInjectionFabricatedDocCite)$' ./ai/
+          go test -count=1 -timeout 20m -run '^(TestGoldenIncidentCorpus|TestGoldenDocsCitationCorrectness|TestGoldenInjectionPromptBlockFence|TestGoldenInjectionFabricatedDocCite|TestRoutingScoreboard)$' ./ai/
           go test -count=1 -timeout 20m -run '^(TestAIRoutesRefuseWithoutTheirEntitlementAndAdmitWithIt|TestAIAdminPlaneRoutesRefuseNonAdmins|TestIrisReleaseGateAuditCompleteness)$' .
       - name: evaluate the gates
         if: always()
