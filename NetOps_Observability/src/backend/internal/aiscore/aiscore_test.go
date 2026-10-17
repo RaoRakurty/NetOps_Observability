@@ -279,7 +279,8 @@ func TestExpositionCarriesNoTenantOrEntityLabel(t *testing.T) {
 		[]map[string]any{{"signals": 1}}, nil)}).Sample(context.Background())
 	labelKey := regexp.MustCompile(`[{,]([a-z_]+)=`)
 	allowed := map[string]bool{"grounded": true, "guard": true, "outcome": true, "selected": true, "result": true,
-		"budget": true, "usage_reported": true, "direction": true, "tier": true, "basis": true, "metric": true, "reason": true, "le": true}
+		"budget": true, "usage_reported": true, "direction": true, "tier": true, "basis": true, "metric": true, "reason": true, "le": true,
+		"class": true} // N-H4 performance class: a closed server-side enum (RequestClasses)
 	for _, mt := range labelKey.FindAllStringSubmatch(render(m), -1) {
 		if !allowed[mt[1]] {
 			t.Errorf("label %q is not in the closed, entity-free label set", mt[1])

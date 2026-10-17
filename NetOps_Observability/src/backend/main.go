@@ -103,7 +103,9 @@ import (
 	"netops/backend/internal/parsetrace"
 	"netops/backend/internal/pipedebug"
 	// DEBUG-ROUTES-END
+	"netops/backend/internal/iriscache"
 	"netops/backend/internal/irisstream"
+	"netops/backend/internal/nlquery/modelc"
 	"netops/backend/internal/orgcontext"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/protocoldiag"
@@ -392,6 +394,13 @@ type server struct {
 	// file-backend deployment (the routes answer 503).
 	orgContext        orgcontext.Store
 	orgContextMetrics *orgcontext.Metrics
+	// Iris per-tenant caches (tracker 337 N-H4): the hot reads every answer
+	// makes, keyed by tenant identity and invalidated by their writers.
+	irisAliasCache   *iriscache.Cache[[]entityalias.Alias]
+	irisContextCache *iriscache.Cache[orgContextRendered]
+	// nlqExamples is the model fallback's example library, parsed once (N-H4)
+	// instead of on every fallback call; nil = the fallback parses its own.
+	nlqExamples []modelc.Example
 	// Investigation hypotheses (tracker 337 N-B3): each investigation's set,
 	// held per tenant (bounded, in memory) so the trace can be re-opened by id.
 	// nil = not held (the answer still carries its own set).
@@ -1216,6 +1225,9 @@ func newServer() *server {
 		irisStreamMetrics: &irisstream.Metrics{},
 		orgContext:        newOrgContextStore(),
 		orgContextMetrics: &orgcontext.Metrics{},
+		irisAliasCache:    newIrisAliasCache(),
+		irisContextCache:  newIrisContextCache(),
+		nlqExamples:       modelc.EmbeddedExamples(),
 		aiHypotheses:      irishypo.NewMemStore(),
 
 		deviceSites: deviceSites,
@@ -1626,6 +1638,9 @@ func newServer() *server {
 			"note":     "still-firing alerts will NOT be re-notified; anything that cleared while down resolves on the first tick",
 		})
 	}
+	// N-H4: every alias write invalidates the Iris alias cache, from the store
+	// itself so no writer can skip it.
+	srv.nlqAliases.OnWrite = srv.irisAliasesChanged
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
 	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"), vault)
 	srv.aiTenantCfg = newAITenantConfigStore(aiTenantConfigPath(), vault)
@@ -4633,10 +4648,11 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	// STORAGE-MEASUREMENT-END
 	// AI-SCORECARD-BEGIN
 	s.aiScore.Write(w)
-	s.nlqQueryLogMetrics.Write(w)    // Iris query capture + corrections (N-C8); nil-safe
-	s.aiDecisionMetrics.Write(w)     // Iris AI decision ledger appends (N-A6); nil-safe
-	_ = s.irisStreamMetrics.Write(w) // best-effort: nil-safe; a failed scrape write surfaces to the scraper
-	_ = s.orgContextMetrics.Write(w) // Network context reads (N-F1); nil-safe, best-effort like the line above
+	s.nlqQueryLogMetrics.Write(w)                                // Iris query capture + corrections (N-C8); nil-safe
+	s.aiDecisionMetrics.Write(w)                                 // Iris AI decision ledger appends (N-A6); nil-safe
+	_ = s.irisStreamMetrics.Write(w)                             // best-effort: nil-safe; a failed scrape write surfaces to the scraper
+	_ = s.orgContextMetrics.Write(w)                             // Network context reads (N-F1); nil-safe, best-effort like the line above
+	_ = iriscache.Write(w, s.irisAliasCache, s.irisContextCache) // Iris per-tenant caches (N-H4); best-effort like the lines above
 	if s.aiToolGateway != nil {
 		_ = s.aiToolGateway.Metrics.Write(w) // best-effort: a failed scrape write surfaces to the scraper, not here
 	}

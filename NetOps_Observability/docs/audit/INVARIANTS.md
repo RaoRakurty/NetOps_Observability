@@ -554,3 +554,15 @@ reads before every answer. `internal/orgcontext`, migration 0058,
 | The legacy platform-wide persona override (`CopilotConfig.System`) is gone: a stored value is ignored and logged, a PUT carrying one is refused | ✅ | **BUILD** — `TestRetiredPersonaOverrideIsIgnoredAndRefused`. Lab (.122) held no stored value (checked 2026-10-12). |
 | Facts change answers for the better and do not tilt verdicts | ❌ **not measured** | No model-eval run with context yet. The deterministic honesty gate (statement classes) still decides what the engine asserts; facts are not evidence and cannot be cited. |
 | A single-administrator workspace can still activate a fact | ✅ via the platform owner | The second person may be the platform owner acting in that workspace (tenant switcher), audited under their own identity — `TestOrgContextPlatformOwnerCanBeTheSecondPerson`. There is no other exception. Owner may revoke this path. |
+
+## 17. Iris performance classes and per-tenant caches (tracker 337 N-H4, 2026-10-12)
+
+| Invariant | Status | Proof |
+|---|---|---|
+| Every Iris ask is observed ONCE in its performance class (product · data · rca · investigation), by the answer actually shipped, on the JSON and streamed paths; NL query routes are `data`; an unknown mode lands in the slowest class | ✅ | **BUILD** — `TestEveryAskIsObservedOnceInItsClass`, `TestClassForCoversEveryMode`, `TestDataTimerOutcomes`, `TestRequestMetricsByClass` (`netops_ai_request_seconds{class}`, `netops_ai_requests_total{class,outcome}`; refusals counted, not timed) |
+| A per-tenant cache never serves one tenant's entry to another; the key is exactly the uncached read's inputs (tenant, cross, scope); an empty tenant is never cached | ✅ | **BUILD** — `TestTenantsNeverShareAnEntry`, `TestConcurrentReadsAndWrites`, `TestIrisAliasCacheIsTenantIsolated` (same alias text in two tenants, as_tenant walk), `TestIrisContextCacheIsTenantIsolatedAndInvalidated` |
+| A write is visible at once to its own tenant and to the Global view; other tenants' entries survive; a read racing a write never stores the stale value | ✅ | **BUILD** — `TestInvalidateTenantDropsItAndCrossOnly`, `TestInvalidateDuringLoadDoesNotResurrect`, `TestIrisAliasCacheIsTenantIsolated` (fails with a no-op hook) |
+| An alias store without a wired invalidation hook is never cached | ✅ | `nlqAliasList` reads directly when `OnWrite` is nil |
+| Cache metrics carry the cache name only — never a tenant | ✅ | **BUILD** — `TestMetricsCarryNoTenant` |
+| Per-class p50/p95 targets | ❌ **no targets yet** | Owner decision D2; record a week of `netops_ai_request_seconds` first. |
+| Staleness across replicas | ⚠ bounded by TTL (60 s) | Invalidation is in-process; the shipped topology is one api replica. |

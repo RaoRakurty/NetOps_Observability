@@ -23,6 +23,7 @@ import (
 	"netops/backend/internal/aientitlement"
 	"netops/backend/internal/aiscore"
 	"netops/backend/internal/entityalias"
+	"netops/backend/internal/iriscache"
 	"netops/backend/internal/irisconvo"
 	"netops/backend/internal/irishypo"
 	"netops/backend/internal/irisquerylog"
@@ -223,6 +224,7 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 // identical for the JSON and the streamed response. trace (nil = none)
 // receives the answer's progress.
 func (s *server) aiAskRun(r *http.Request, claims jwtClaims, req aiAskRequest, question string, conv *irisconvo.Conversation, trace ai.TraceSink) (ai.Answer, error) {
+	start := time.Now()
 	// The decision ledger (N-A6): from here on this question is one decision,
 	// and every seam below adds its steps through the request context.
 	r, rec := s.aiDecisionStart(r, claims, req)
@@ -235,8 +237,15 @@ func (s *server) aiAskRun(r *http.Request, claims jwtClaims, req aiAskRequest, q
 	ans, err := orch.Ask(r.Context(), s.aiPrincipal(claims), question, req.Context)
 	if err != nil {
 		s.aiDecisionFinish(r, claims, rec, nil, err)
+		// No answer, so no mode to classify by: an error is counted in the
+		// slowest class rather than flattering a fast one (N-H4).
+		s.aiScore.ObserveRequest(string(ai.ClassInvestigation), "error", 0)
 		return ai.Answer{}, err
 	}
+	// N-H4: one observation per ask, JSON and stream alike, by the class of
+	// the answer actually shipped.
+	class, outcome := ai.ClassFor(ans.Mode, ans.Intent)
+	s.aiScore.ObserveRequest(string(class), outcome, time.Since(start).Seconds())
 	if conv != nil {
 		s.recordAskTurn(r, claims, conv, question, &ans, &ran)
 	}
@@ -1123,7 +1132,7 @@ func newNLQLookups(s *server, r *http.Request, claims jwtClaims) nlqLookups {
 func (l nlqLookups) Aliases(context.Context) ([]resolve.Alias, error) {
 	tenant, cross := principalTenant(l.claims)
 	var out []resolve.Alias
-	for _, a := range l.s.nlqAliases.List(tenant, cross) {
+	for _, a := range l.s.nlqAliasList(tenant, cross) {
 		out = append(out, resolve.Alias{EntityType: a.EntityType, EntityID: a.EntityID, Alias: a.Alias})
 	}
 	return out, nil
@@ -1305,7 +1314,7 @@ const nlqModelFallbackTier = ai.TierStrong
 // provider this caller may use, Model stays nil and the fallback is silently
 // unavailable — the grammar's answer stands, key-free.
 func (s *server) nlqModelFallback(r *http.Request, claims jwtClaims) modelc.Fallback {
-	f := modelc.Fallback{Cat: s.nlqCatalog, L: newNLQLookups(s, r, claims)}
+	f := modelc.Fallback{Cat: s.nlqCatalog, L: newNLQLookups(s, r, claims), Examples: s.nlqExamples}
 	if !aiEnabled() || strings.EqualFold(strings.TrimSpace(os.Getenv("IRIS_NLQ_MODEL_FALLBACK")), "false") ||
 		s.aiTenantCfg == nil || s.copilotCfg == nil || len(s.providerCandidatesForTier(claims, nlqModelFallbackTier)) == 0 {
 		return f
@@ -1381,6 +1390,8 @@ func (s *server) nlqGate(w http.ResponseWriter, r *http.Request) (jwtClaims, boo
 }
 
 func (s *server) handleAIQueryCompile(w http.ResponseWriter, r *http.Request) {
+	w, observe := s.irisDataTimer(w)
+	defer observe()
 	claims, ok := s.nlqGate(w, r)
 	if !ok {
 		return
@@ -1547,6 +1558,8 @@ func (s *server) nlqRun(r *http.Request, claims jwtClaims, checked *nlqast.AST, 
 }
 
 func (s *server) handleAIQueryExecute(w http.ResponseWriter, r *http.Request) {
+	w, observe := s.irisDataTimer(w)
+	defer observe()
 	claims, ok := s.nlqGate(w, r)
 	if !ok {
 		return
@@ -1664,11 +1677,14 @@ func (s *server) handleAIConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch sub {
-	case "messages":
-		s.handleAIConversationMessage(w, r, id)
-		return
-	case "edits":
-		s.handleAIConversationEdit(w, r, id)
+	case "messages", "edits": // a follow-up question or a chip edit runs a data query (N-H4: class data)
+		w, observe := s.irisDataTimer(w)
+		defer observe()
+		if sub == "messages" {
+			s.handleAIConversationMessage(w, r, id)
+		} else {
+			s.handleAIConversationEdit(w, r, id)
+		}
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -2955,6 +2971,8 @@ func (s *server) orgContextAPI() orgcontext.Deps {
 				Method: r.Method, Path: r.URL.Path, Status: 200, Decision: decision, Detail: detail,
 			})
 		},
+		// N-H4: what Iris reads changed — drop the tenant's cached block.
+		Changed:    s.irisContextCache.InvalidateTenant,
 		WriteJSON:  writeJSON,
 		WriteError: writeError,
 		Log:        func(msg string, err error) { logError("iris.context", msg, errf(err)) },
@@ -2993,7 +3011,13 @@ func (s *server) orgContextBlock(ctx context.Context, claims jwtClaims) string {
 	}
 	rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	block, n, _, err := s.orgContextRender(rctx, tenant)
+	// N-H4: the rendered block is cached per tenant; an approve, rollback or
+	// retire invalidates it (orgContextAPI Changed).
+	got, err := s.irisContextCache.Get(iriscache.Key{Tenant: tenant}, func() (orgContextRendered, error) {
+		block, n, _, err := s.orgContextRender(rctx, tenant)
+		return orgContextRendered{block: block, facts: n}, err
+	})
+	block, n := got.block, got.facts
 	if err != nil {
 		s.orgContextMetrics.Failed()
 		logError("iris.context", "network context could not be read; answering without it", errf(err))
@@ -3006,4 +3030,78 @@ func (s *server) orgContextBlock(ctx context.Context, claims jwtClaims) string {
 	s.orgContextMetrics.Rendered()
 	aidecision.FromContext(ctx).AddContext(ai.ContextBlockSHA256(block), n)
 	return block
+}
+
+// irisDataTimer times one data-class Iris request (tracker 337 N-H4): the NL
+// query routes and conversation follow-ups. A 2xx is answered, a 4xx refused,
+// anything else an error; only answered requests are timed.
+func (s *server) irisDataTimer(w http.ResponseWriter) (http.ResponseWriter, func()) {
+	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+	start := time.Now()
+	return rec, func() {
+		outcome := "error"
+		switch {
+		case rec.status < 400:
+			outcome = "answered"
+		case rec.status < 500:
+			outcome = "refused"
+		}
+		s.aiScore.ObserveRequest(string(ai.ClassData), outcome, time.Since(start).Seconds())
+	}
+}
+
+// ── Iris per-tenant caches (tracker 337 N-H4, internal/iriscache) ─────────
+
+// orgContextRendered is one tenant's rendered Network context block.
+type orgContextRendered struct {
+	block string
+	facts int
+}
+
+// Cache bounds: invalidation on write is what keeps them correct; the TTL only
+// bounds staleness against a write this process did not see.
+const (
+	irisAliasCacheTTL   = 60 * time.Second
+	irisContextCacheTTL = 60 * time.Second
+	irisCacheMaxEntries = 4096
+)
+
+func newIrisAliasCache() *iriscache.Cache[[]entityalias.Alias] {
+	return iriscache.New("aliases", irisAliasCacheTTL, irisCacheMaxEntries, func(v []entityalias.Alias) []entityalias.Alias {
+		return append([]entityalias.Alias(nil), v...)
+	})
+}
+
+func newIrisContextCache() *iriscache.Cache[orgContextRendered] {
+	return iriscache.New[orgContextRendered]("network_context", irisContextCacheTTL, irisCacheMaxEntries, nil)
+}
+
+// nlqAliasList is the caller's aliases through the per-tenant cache, keyed by
+// exactly what principalTenant returned (the uncached read's inputs).
+func (s *server) nlqAliasList(tenant string, cross bool) []entityalias.Alias {
+	if s.nlqAliases == nil {
+		return nil
+	}
+	if s.nlqAliases.OnWrite == nil {
+		// No invalidation wired to this store: caching it could serve a stale
+		// alias after a write, so read it directly (default-closed).
+		return s.nlqAliases.List(tenant, cross)
+	}
+	v, err := s.irisAliasCache.Get(iriscache.Key{Tenant: tenant, Cross: cross}, func() ([]entityalias.Alias, error) {
+		return s.nlqAliases.List(tenant, cross), nil
+	})
+	if err != nil {
+		return s.nlqAliases.List(tenant, cross) // cannot happen: List has no error
+	}
+	return v
+}
+
+// irisAliasesChanged is the alias store's OnWrite: a tenant write drops that
+// tenant (and every cross view); a cross-tenant delete drops everything.
+func (s *server) irisAliasesChanged(tenant string, cross bool) {
+	if cross {
+		s.irisAliasCache.InvalidateAll()
+		return
+	}
+	s.irisAliasCache.InvalidateTenant(tenant)
 }

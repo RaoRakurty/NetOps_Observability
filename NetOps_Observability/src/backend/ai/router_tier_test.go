@@ -259,3 +259,31 @@ func TestCompleteTierWithoutProviderIsHonest(t *testing.T) {
 		t.Error("with no provider the answer must be marked evidence-only")
 	}
 }
+
+// TestClassForCoversEveryMode: every answer mode has a deliberate performance
+// class (N-H4), the data arm's mode included, and an unknown mode falls into
+// the slowest class.
+func TestClassForCoversEveryMode(t *testing.T) {
+	want := map[AnswerMode]RequestClass{
+		ModeProductAnswer: ClassProduct, ModeProductNavigationHelp: ClassProduct, ModeInvestigationPlan: ClassProduct,
+		ModeDataQuery: ClassData, ModeIncidentStatusBreakdown: ClassData, ModeShiftHandoff: ClassData, ModeTimeRangeOutageSummary: ClassData,
+		ModeProblemExplanation: ClassRCA, ModeTopIncidentExplanation: ClassRCA, ModeNocFocusRecommendation: ClassRCA,
+		ModeCurrentStateSummary: ClassRCA, ModeModuleHealthSummary: ClassRCA, ModeTopologyPathExplanation: ClassRCA,
+		ModeEvidenceExplanation: ClassRCA, ModeMissingEvidenceExplained: ClassRCA, ModeItsmUpdate: ClassRCA, ModeExecutiveSummary: ClassRCA,
+		ModeTroubleshootFinding: ClassInvestigation,
+	}
+	for mode, class := range want {
+		if got, outcome := ClassFor(mode, ""); got != class || outcome != "answered" {
+			t.Errorf("%s: %s/%s, want %s/answered", mode, got, outcome, class)
+		}
+	}
+	if c, o := ClassFor(ModeUnavailable, "capability"); c != ClassProduct || o != "answered" {
+		t.Errorf("capability: %s/%s", c, o)
+	}
+	if c, o := ClassFor(ModeUnavailable, "incident_status"); c != ClassProduct || o != "refused" {
+		t.Errorf("a refusal must be counted as refused: %s/%s", c, o)
+	}
+	if c, _ := ClassFor("some_future_mode", ""); c != ClassInvestigation {
+		t.Errorf("an unknown mode must land in the slowest class, got %s", c)
+	}
+}

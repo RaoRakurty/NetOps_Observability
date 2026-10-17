@@ -8,6 +8,7 @@ import (
 	"io"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -62,15 +63,19 @@ func (c *labelCounter) write(w io.Writer, name, help, label string) {
 	}
 }
 
-// histogram is a fixed-bucket Prometheus histogram over LatencyBuckets.
+// histogram is a fixed-bucket Prometheus histogram (LatencyBuckets unless
+// built with other bounds).
 type histogram struct {
-	counts []atomic.Int64 // per-bucket (non-cumulative); len == len(LatencyBuckets)+1 for +Inf
+	bounds []float64
+	counts []atomic.Int64 // per-bucket (non-cumulative); len == len(bounds)+1 for +Inf
 	sum    atomic.Uint64  // milliseconds, so the accumulator stays integral
 	n      atomic.Int64
 }
 
-func newHistogram() *histogram {
-	return &histogram{counts: make([]atomic.Int64, len(LatencyBuckets)+1)}
+func newHistogram() *histogram { return newHistogramWith(LatencyBuckets) }
+
+func newHistogramWith(bounds []float64) *histogram {
+	return &histogram{bounds: bounds, counts: make([]atomic.Int64, len(bounds)+1)}
 }
 
 // observe records one duration in seconds. A negative value is clamped to zero:
@@ -79,8 +84,8 @@ func (h *histogram) observe(seconds float64) {
 	if seconds < 0 {
 		seconds = 0
 	}
-	idx := len(LatencyBuckets) // +Inf
-	for i, b := range LatencyBuckets {
+	idx := len(h.bounds) // +Inf
+	for i, b := range h.bounds {
 		if seconds <= b {
 			idx = i
 			break
@@ -94,15 +99,26 @@ func (h *histogram) observe(seconds float64) {
 func (h *histogram) write(w io.Writer, name, help string) {
 	fmt.Fprintf(w, "# HELP %s %s\n", name, help)
 	fmt.Fprintf(w, "# TYPE %s histogram\n", name)
+	h.series(w, name, "")
+}
+
+// series writes the buckets, sum and count; labels is "" or `k="v",`.
+func (h *histogram) series(w io.Writer, name, labels string) {
 	var cum int64
-	for i, b := range LatencyBuckets {
+	for i, b := range h.bounds {
 		cum += h.counts[i].Load()
-		fmt.Fprintf(w, "%s_bucket{le=%q} %d\n", name, strconv.FormatFloat(b, 'g', -1, 64), cum)
+		fmt.Fprintf(w, "%s_bucket{%sle=%q} %d\n", name, labels, strconv.FormatFloat(b, 'g', -1, 64), cum)
 	}
-	cum += h.counts[len(LatencyBuckets)].Load()
-	fmt.Fprintf(w, "%s_bucket{le=\"+Inf\"} %d\n", name, cum)
-	fmt.Fprintf(w, "%s_sum %.3f\n", name, float64(h.sum.Load())/1000)
-	fmt.Fprintf(w, "%s_count %d\n", name, h.n.Load())
+	cum += h.counts[len(h.bounds)].Load()
+	fmt.Fprintf(w, "%s_bucket{%sle=\"+Inf\"} %d\n", name, labels, cum)
+	if labels == "" {
+		fmt.Fprintf(w, "%s_sum %.3f\n", name, float64(h.sum.Load())/1000)
+		fmt.Fprintf(w, "%s_count %d\n", name, h.n.Load())
+		return
+	}
+	l := strings.TrimSuffix(labels, ",")
+	fmt.Fprintf(w, "%s_sum{%s} %.3f\n", name, l, float64(h.sum.Load())/1000)
+	fmt.Fprintf(w, "%s_count{%s} %d\n", name, l, h.n.Load())
 }
 
 // ── configuration ────────────────────────────────────────────────────────────
@@ -190,9 +206,10 @@ type Metrics struct {
 	guardItems   *labelCounter // {guard} — individual claims/refs the guard removed
 	answerSecs   *histogram
 	investSecs   *histogram
-	invOutcomes  *labelCounter // {outcome}
-	recovery     *labelCounter // {result}
-	hops         *labelCounter // {selected}
+	requests     *requestMetrics // {class, outcome} + per-class latency (N-H4)
+	invOutcomes  *labelCounter   // {outcome}
+	recovery     *labelCounter   // {result}
+	hops         *labelCounter   // {selected}
 	hopsRejected atomic.Int64
 	toolCalls    *labelCounter // {outcome}
 	cutoffs      *labelCounter // {budget}
@@ -217,6 +234,7 @@ func NewMetrics(price Price) *Metrics {
 		guardItems:    newLabelCounter(GuardNames),
 		answerSecs:    newHistogram(),
 		investSecs:    newHistogram(),
+		requests:      newRequestMetrics(),
 		invOutcomes:   newLabelCounter(InvestigationOutcomes),
 		recovery:      newLabelCounter(RecoveryResults),
 		hops:          newLabelCounter(HopOrigins),
@@ -469,6 +487,7 @@ func (m *Metrics) writeAgent(w io.Writer) {
 }
 
 func (m *Metrics) writePerformance(w io.Writer) {
+	m.requests.write(w)
 	m.answerSecs.write(w,
 		"netops_ai_answer_seconds",
 		"Wall time of one Iris answer, end to end. p50/p95 via histogram_quantile. This is RESPONSE latency — it is NOT time to evidence-backed diagnosis, which is censored; see netops_ai_scorecard_censored.")
