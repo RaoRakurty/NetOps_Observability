@@ -90,9 +90,13 @@ type Answer struct {
 	ConfidenceLabel  string   `json:"confidence_label,omitempty"` // "Not established"/"Low"/"High" (never bare 0%)
 	RecommendedOwner string   `json:"recommended_owner,omitempty"`
 	NextActions      []string `json:"next_actions,omitempty"`
-	MissingEvidence  []string `json:"missing_evidence,omitempty"` // clean operational bullets
-	ModeBadges       []string `json:"mode_badges,omitempty"`      // e.g. ["Low evidence"] — status/provider live elsewhere
-	EvidenceOnly     bool     `json:"evidence_only,omitempty"`    // true → deterministic (no LLM) answer
+	// Recommendations are the next actions as grounded cards (N-I7,
+	// recommend.go): each cites this answer's evidence and is labelled
+	// "No action has been executed." Built by Ask from NextActions.
+	Recommendations []Recommendation `json:"recommendations,omitempty"`
+	MissingEvidence []string         `json:"missing_evidence,omitempty"` // clean operational bullets
+	ModeBadges      []string         `json:"mode_badges,omitempty"`      // e.g. ["Low evidence"] — status/provider live elsewhere
+	EvidenceOnly    bool             `json:"evidence_only,omitempty"`    // true → deterministic (no LLM) answer
 	// ProviderNote is the SINGLE, small provider-fallback line (spec §1/§8). It is
 	// rendered once as a footer/badge — never as the main answer sentence, never
 	// repeated in Text or Disclaimers. Empty when a live provider answered.

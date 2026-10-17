@@ -376,6 +376,9 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 	started := time.Now()
 	ans, err := o.ask(ctx, p, question, uiContext)
 	if err == nil {
+		// N-I7: the answer's next actions as grounded cards — built here, at
+		// the one exit, from server-authored steps and this answer's citations.
+		ans.Recommendations = RecommendationsFor(ans)
 		o.observeAnswer(&ans, started)
 	}
 	return ans, err
