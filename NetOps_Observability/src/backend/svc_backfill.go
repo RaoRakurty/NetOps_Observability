@@ -166,7 +166,7 @@ func (s *server) serveSelectorBackfill(w http.ResponseWriter, r *http.Request, s
 	// bound uses the owning tenant's own devices, exactly like the live roller.
 	set := svcSelectorSet{TenantID: svc.TenantID, ServiceID: serviceID, Version: version, Spec: spec}
 	clause := ""
-	if c, empty := s.addrTenantClauseFor(jwtClaims{Sub: "svc-backfill", Role: RoleOperator, Tenant: svc.TenantID}, "src_addr", "dst_addr"); !empty {
+	if c, empty := s.flowTenantClauseFor(jwtClaims{Sub: "svc-backfill", Role: RoleOperator, Tenant: svc.TenantID}); !empty {
 		clause = c
 	}
 	chunks := 0

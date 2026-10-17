@@ -248,7 +248,10 @@ func seamFetchProbePaths(ctx context.Context) ([]collectors.PathResult, error) {
 // (SNMP BGP4-MIB walk: device_bgp_peer_state{device, index=<peer ip>}).
 func seamFetchBGPPeers(ctx context.Context) ([]seam.BGPPeer, error) {
 	base := envOr("VICTORIA_URL", envOr("METRICS_URL", "http://victoria:8428"))
-	endpoint := strings.TrimRight(base, "/") + "/api/v1/query?query=" + url.QueryEscape("device_bgp_peer_state")
+	// Global-table peers only: a VRF peer (service-side BGP to a CE or a
+	// firewall) is not a provider hand-off, and would otherwise be seeded as a
+	// false "BGP provider" seam. BGP4-MIB series carry no vrf label.
+	endpoint := strings.TrimRight(base, "/") + "/api/v1/query?query=" + url.QueryEscape(`device_bgp_peer_state{vrf=~"|(?i:default|global|master)"}`)
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -282,7 +285,9 @@ func seamFetchBGPPeers(ctx context.Context) ([]seam.BGPPeer, error) {
 		}
 		peers = append(peers, seam.BGPPeer{
 			Device: r.Metric["device"],
-			PeerIP: r.Metric["index"],
+			// The BGP peer label is "peer" (the gNMI-aligned contract, profiles.go);
+			// rows written before that rename carry "index".
+			PeerIP: firstNonEmpty(r.Metric["peer"], r.Metric["index"]),
 			State:  state,
 		})
 	}

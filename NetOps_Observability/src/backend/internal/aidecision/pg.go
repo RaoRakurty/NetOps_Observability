@@ -49,12 +49,14 @@ func (p *PGStore) Append(ctx context.Context, tenant string, entries []Entry) er
 		for _, e := range es {
 			b.Queue(`INSERT INTO ai_decision_ledger (tenant_id, id, decision_id, seq, event_type, principal_sub,
 			        surface, created_at, incident_ref, intent, mode, skill, tool, tool_version, model_provider,
-			        model_name, model_tier, args_sha256, result_sha256, item_count, outcome, answer_id, query_log_id)
+			        model_name, model_tier, args_sha256, result_sha256, item_count, outcome, answer_id, query_log_id,
+			        latency_ms, truncated)
 			    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
-			        $20, $21, $22, $23)`,
+			        $20, $21, $22, $23, $24, $25)`,
 				e.TenantID, e.ID, e.DecisionID, e.Seq, e.EventType, e.Principal, e.Surface, e.At, e.IncidentRef,
 				e.Intent, e.Mode, e.Skill, e.Tool, e.ToolVersion, e.ModelProvider, e.ModelName, e.ModelTier,
-				e.ArgsSHA256, e.ResultSHA256, e.ItemCount, e.Outcome, e.AnswerID, e.QueryLogID)
+				e.ArgsSHA256, e.ResultSHA256, e.ItemCount, e.Outcome, e.AnswerID, e.QueryLogID,
+				e.LatencyMS, e.Truncated)
 		}
 		return tx.SendBatch(ctx, b).Close()
 	})
@@ -66,7 +68,7 @@ func (p *PGStore) Append(ctx context.Context, tenant string, entries []Entry) er
 
 const pgColumns = `tenant_id, id::text, decision_id::text, seq, event_type, principal_sub, surface, created_at,
         incident_ref, intent, mode, skill, tool, tool_version, model_provider, model_name, model_tier,
-        args_sha256, result_sha256, item_count, outcome, answer_id, query_log_id`
+        args_sha256, result_sha256, item_count, outcome, answer_id, query_log_id, latency_ms, truncated`
 
 // List returns entries newest first; one decision's steps come in seq order.
 func (p *PGStore) List(ctx context.Context, tenant string, cross bool, f ListFilter) ([]Entry, error) {
@@ -107,7 +109,7 @@ func (p *PGStore) List(ctx context.Context, tenant string, cross bool, f ListFil
 			if err := rows.Scan(&e.TenantID, &e.ID, &e.DecisionID, &e.Seq, &e.EventType, &e.Principal, &e.Surface,
 				&e.At, &e.IncidentRef, &e.Intent, &e.Mode, &e.Skill, &e.Tool, &e.ToolVersion, &e.ModelProvider,
 				&e.ModelName, &e.ModelTier, &e.ArgsSHA256, &e.ResultSHA256, &e.ItemCount, &e.Outcome, &e.AnswerID,
-				&e.QueryLogID); err != nil {
+				&e.QueryLogID, &e.LatencyMS, &e.Truncated); err != nil {
 				return err
 			}
 			e.At = e.At.UTC()

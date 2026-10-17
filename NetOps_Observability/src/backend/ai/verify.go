@@ -118,6 +118,7 @@ func citationRefIDs(cites []Citation) []string {
 // the seam is a name from a closed vocabulary and a COUNT — never the stripped
 // text, which is untrusted model output.
 func (o *Orchestrator) verifyNarrative(text string, validIDs, badges, disc []string) (string, []string, []string) {
+	o.trace(TraceGrounding)
 	vr := VerifyGrounding(text, validIDs)
 	if len(vr.Removed) > 0 {
 		badges = append(badges, "Verified")

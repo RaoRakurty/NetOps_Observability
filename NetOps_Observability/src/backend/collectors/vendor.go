@@ -21,6 +21,7 @@ import (
 var sysObjectIDOID = []int{1, 3, 6, 1, 2, 1, 1, 2, 0} // SNMPv2-MIB::sysObjectID.0
 var sysDescrOID = []int{1, 3, 6, 1, 2, 1, 1, 1, 0}    // SNMPv2-MIB::sysDescr.0
 var sysNameOID = []int{1, 3, 6, 1, 2, 1, 1, 5, 0}     // SNMPv2-MIB::sysName.0
+var sysLocationOID = []int{1, 3, 6, 1, 2, 1, 1, 6, 0} // SNMPv2-MIB::sysLocation.0
 
 // ProbeIdentity is the subnet-discovery probe: one sysName GET decides whether
 // an address is an SNMP-speaking device (a UDP timeout or SNMP error means "not

@@ -109,7 +109,7 @@ func overStep(fn, phys string) func(c tctx) (mql.Expr, error) {
 
 var (
 	ifLabels      = []string{"device", "ifName"}
-	bgpLabels     = []string{"device", "peer"}
+	bgpLabels     = []string{"device", "vrf", "peer"}
 	deviceLabels  = []string{"device"}
 	circuitLabels = []string{"circuit", "local_device"}
 	probeLabels   = []string{"dst"}

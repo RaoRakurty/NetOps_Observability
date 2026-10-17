@@ -3,7 +3,9 @@
 
 import { fmtDateTime } from "../lib/time";
 import { Suspense, lazy, startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
-import { api, Device, Alert, DeviceLocationRow, SiteRow, type LicenceView } from "../services/api";
+import { api, Device, Alert, DeviceLocationRow, SiteRow, type LicenceView, type ConfigDriftRow } from "../services/api";
+import { deviceHealth, DEVICE_HEALTH_META, type DeviceHealth } from "./device/deviceHealth";
+import { classifyError, statusBadge } from "./config/configModel";
 import { takeDrill } from "../theme/drill";
 import DeviceDetailPage from "./DeviceDetailPage";
 
@@ -20,43 +22,10 @@ import { operatorError } from "../lib/errors";
 
 const Req = () => <span style={{ color: "var(--bad)", marginLeft: 2 }} title="required">*</span>;
 
-// Device health is 3-state (#20 follow-up). Thresholds are heartbeat ages on
-// last_seen; "amber" also folds in active alerts so a reachable-but-sick device
-// reads as degraded, not healthy.
-const FRESH_MS = 5 * 60 * 1000; // fresher than this = healthy heartbeat
-const DOWN_MS = 15 * 60 * 1000; // staler than this = down
-type Health = "up" | "degraded" | "down";
-
-const HEALTH_META: Record<Health, { label: string; color: string }> = {
-  up: { label: "Up", color: "var(--good, #16a34a)" },
-  degraded: { label: "Degraded", color: "var(--warn, #d97706)" },
-  down: { label: "Down", color: "var(--bad, #dc2626)" },
-};
-
-function deviceHealth(d: Device, alertedDevices: Set<string>): Health {
-  const seen = new Date(d.last_seen).getTime();
-  const age = seen ? Date.now() - seen : Infinity;
-  if (age > DOWN_MS) return "down";
-  if (alertedDevices.has(d.id) || age > FRESH_MS) return "degraded";
-  return "up";
-}
-
-// A compact status dot shown inline, just before the device name. Tooltip
-// carries the label so we don't spend a column on it.
-function StatusDot({ health }: { health: Health }) {
-  const m = HEALTH_META[health];
-  return (
-    <span
-      title={m.label}
-      aria-label={m.label}
-      style={{
-        display: "inline-block", width: 8, height: 8, borderRadius: 999,
-        background: m.color, boxShadow: `0 0 0 2px color-mix(in srgb, ${m.color} 25%, transparent)`,
-        flex: "none", marginRight: 8, verticalAlign: "middle",
-      }}
-    />
-  );
-}
+// Device status: ONE helper (./device/deviceHealth) over the server's live
+// reachability, shared with the detail popup and the monitoring page.
+type Health = DeviceHealth;
+const HEALTH_META = DEVICE_HEALTH_META;
 
 // Stable accent per vendor so each group header reads as one product family.
 const VENDOR_HUE: Record<string, number> = {
@@ -107,6 +76,12 @@ export default function Devices() {
   const [siteOptions, setSiteOptions] = useState<SiteRow[]>([]); // declared SoT sites (assignable)
   const [sotProvider, setSotProvider] = useState<string>("internal"); // active SoT authority
   const [sshEnabled, setSshEnabled] = useState(false);
+  // FEATURE_CONFIG_BACKUP (configuration backup + drift). Its columns stay
+  // visible and say "Off" when it is disabled, so an operator sees what is
+  // switched off rather than a column that silently vanished.
+  const [configOn, setConfigOn] = useState(false);
+  // Per-device "Back up now" state: device id → "running" | error text.
+  const [backupState, setBackupState] = useState<Map<string, string>>(new Map());
   const [error, setError] = useState<string | null>(null);
   // Separate from `error`: the inventory loaded, but the alert correlation that
   // feeds "degraded" did not — so "Up" cannot be read as "healthy".
@@ -119,7 +94,14 @@ export default function Devices() {
   // so typing stays responsive on a fleet-sized list (DataTable's filter runs
   // every column's text accessor over every row).
   const deferredQ = useDeferredValue(q);
-  const [detail, setDetail] = useState<Device | null>(null);
+  // The popup holds the device ID and renders the LIVE row from the 30 s
+  // refresh: a captured row froze its status at click time (owner report
+  // 2026-10-10: the popup said down while the list said up).
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const detail = useMemo(() => (detailId ? devices.find((d) => d.id === detailId) ?? null : null), [detailId, devices]);
+  // Config drift per device (the Config Drift page, as inventory columns).
+  // null = the config backup feature is off on this deployment.
+  const [drift, setDrift] = useState<Map<string, ConfigDriftRow> | null>(new Map());
   const [term, setTerm] = useState<Device | null>(null);
   // The licence view, BEST EFFORT. This page is not an admin page and most of
   // the people who open it cannot read /api/system/licence at all; a 403 here
@@ -132,7 +114,7 @@ export default function Devices() {
   // Selecting a device opens the full-page detail view (Overview · Interfaces ·
   // Routing) — the reference design's graph rows need full width, which the narrow
   // inspector couldn't carry.
-  const openDevice = (d: Device) => setDetail(d);
+  const openDevice = (d: Device) => setDetailId(d.id);
 
   useEffect(() => {
     const d = takeDrill().devices;
@@ -143,6 +125,39 @@ export default function Devices() {
     const dq = new URLSearchParams(qs).get("q");
     if (dq) setQ(dq);
   }, []);
+
+  // "Back up now": queue one capture; the drift columns refresh shortly after.
+  const backupNow = async (id: string) => {
+    setBackupState((m) => new Map(m).set(id, "running"));
+    try {
+      await api.configBackup(id);
+      setBackupState((m) => { const n = new Map(m); n.delete(id); return n; });
+      setTimeout(() => { void loadDrift(); }, 5000);
+    } catch (e) {
+      setBackupState((m) => new Map(m).set(id, operatorError(e, "The backup could not be started.")));
+    }
+  };
+
+  // Config drift for the whole visible fleet, paged and bounded (§9: at most
+  // 40 pages of 500). A deployment with config backup off answers "off" and the
+  // config columns are hidden rather than shown empty.
+  const loadDrift = async () => {
+    try {
+      const m = new Map<string, ConfigDriftRow>();
+      let cursor: string | undefined;
+      for (let page = 0; page < 40; page++) {
+        const res = await api.configDriftList({ cursor, limit: 500 });
+        for (const r of res.items ?? []) m.set(r.device_id, r);
+        if (!res.next_cursor) break;
+        cursor = res.next_cursor;
+      }
+      setDrift(m);
+    } catch (e) {
+      // "off" hides the columns; any other failure keeps the last good read
+      // (the cells then show it rather than a false "never captured").
+      if (classifyError(e) === "off") setDrift(null);
+    }
+  };
 
   const load = async () => {
     try {
@@ -166,6 +181,7 @@ export default function Devices() {
       setSiteOptions([...(siteRes?.sites ?? [])].sort((a, b) => a.name.localeCompare(b.name)));
       setSotProvider(siteRes?.active ?? "internal");
       setError(null);
+      void loadDrift();
     } catch (e) {
       setError(operatorError(e, "The device inventory could not be loaded."));
     }
@@ -185,7 +201,7 @@ export default function Devices() {
 
   useEffect(() => {
     load();
-    api.features().then((c) => setSshEnabled(!!c.device_ssh)).catch(() => {});
+    api.features().then((c) => { setSshEnabled(!!c.device_ssh); setConfigOn(!!c.config_backup); }).catch(() => {});
     // Deliberately swallowed: not being allowed to read the licence is the
     // normal case for an operator, not an error worth showing them.
     api.getLicence().then(setLicence).catch(() => setLicence(null));
@@ -207,12 +223,6 @@ export default function Devices() {
     }
     setDraft({ id: "", name: "", address: "", vendor: "" });
     setShowAdd(false);
-    await load();
-  };
-
-  const remove = async (id: string) => {
-    if (!confirm(`Delete ${id}?`)) return;
-    await api.deleteDevice(id);
     await load();
   };
 
@@ -249,9 +259,9 @@ export default function Devices() {
     [licence],
   );
 
-  const health = useMemo(() => new Map(devices.map((d) => [d.id, deviceHealth(d, alertedDevices)])), [devices, alertedDevices]);
+  const health = useMemo(() => new Map(devices.map((d) => [d.id, deviceHealth(d, alertedDevices.has(d.id))])), [devices, alertedDevices]);
   const counts = useMemo(() => {
-    const c = { up: 0, degraded: 0, down: 0 };
+    const c = { up: 0, degraded: 0, down: 0, unknown: 0 };
     for (const h of health.values()) c[h]++;
     return c;
   }, [health]);
@@ -275,89 +285,117 @@ export default function Devices() {
 
   // Column defs for the telemetry table primitive. `text` feeds the inline
   // filter, `sortValue` the header sort, `sev` the conditional cell tint.
-  const columns = useMemo<Column<Device>[]>(() => [
-    {
-      key: "id", header: "Device", width: "14%", sortable: true,
-      text: (d) => d.id, sortValue: (d) => d.id,
-      render: (d) => (
-        <>
-          <StatusDot health={health.get(d.id) ?? "up"} />
-          <a className="dtv-link" title="View device details"
-            onClick={(e) => { e.stopPropagation(); openDevice(d); }}><span className="device-name">{d.id}</span></a>
-        </>
-      ),
-    },
-    {
-      key: "name", header: "Name", width: "14%", sortable: true,
-      text: (d) => d.name ?? "", render: (d) => <span className="device-name" title={d.name || ""}>{d.name || "—"}</span>,
-    },
-    {
-      key: "address", header: "IP", width: "12%",
-      text: (d) => d.address,
-      render: (d) => <span title={d.address} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>{d.address}</span>,
-    },
-    {
-      key: "type", header: "Type", width: "11%", sortable: true,
-      text: (d) => typeMeta(d.type).label, sortValue: (d) => d.type || "~",
-      render: (d) => {
-        const m = typeMeta(d.type);
-        return (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }} title={`Device type: ${m.label} (SNMP-inferred)`}>
-            <span style={{ width: 8, height: 8, borderRadius: 999, background: m.color, flex: "none" }} />
-            <span>{m.label}</span>
-          </span>
-        );
+  const columns = useMemo<Column<Device>[]>(() => {
+    const cols: Column<Device>[] = [
+      {
+        // ONE glyph: the circle says whether Correlix monitors it, the arrow says
+        // whether it is answering (owner spec 2026-10-10).
+        key: "status", header: "Status", width: 78, sortable: true,
+        text: (d) => `${monitoringLabel(d)} ${HEALTH_META[health.get(d.id) ?? "unknown"].label}`,
+        sortValue: (d) => ["down", "degraded", "unknown", "up"].indexOf(health.get(d.id) ?? "unknown"),
+        sev: (d) => healthSev(health.get(d.id) ?? "unknown"),
+        render: (d) => <StatusGlyph device={d} health={health.get(d.id) ?? "unknown"} />,
       },
-    },
-    {
-      key: "vendor", header: "Manufacturer", width: "11%", sortable: true,
-      text: (d) => d.vendor ?? "", sortValue: (d) => (d.vendor || "~").toLowerCase(),
-      render: (d) => {
-        const v = (d.vendor || "").trim() || "Unknown";
-        return (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }} title={v}>
-            <span style={{ width: 8, height: 8, borderRadius: 3, background: vendorColor(v), flex: "none" }} />
-            <span style={{ textTransform: "capitalize" }}>{v}</span>
-          </span>
-        );
+      {
+        // The hostname. The internal id is identity plumbing, not something an
+        // operator reads — it stays in the tooltip and in search.
+        key: "name", header: "Device", width: "17%", sortable: true,
+        text: (d) => `${d.name || ""} ${d.id}`, sortValue: (d) => (d.name || d.id).toLowerCase(),
+        render: (d) => (
+          <a className="dtv-link" title={`Open ${d.name || d.id} (id ${d.id})`}
+            onClick={(e) => { e.stopPropagation(); openDevice(d); }}><span className="device-name">{d.name || d.id}</span></a>
+        ),
       },
-    },
-    {
-      key: "location", header: "Site", width: "13%", sortable: true,
-      text: (d) => siteText(locs.get(d.id), siteName),
-      sortValue: (d) => siteText(locs.get(d.id), siteName) || "~",
-      render: (d) => (
-        <SiteCell
-          row={locs.get(d.id)}
-          options={siteOptions}
-          editable={editableSites}
-          siteName={siteName}
-          onAssign={(slug) => assignSite(d.id, slug)}
-        />
-      ),
-    },
-    {
-      key: "model", header: "Description", width: "13%",
-      text: (d) => d.model ?? d.os ?? "", render: (d) => <span title={d.model || d.os || ""} style={{ color: "var(--fg-muted)" }}>{d.model || d.os || "—"}</span>,
-    },
-    {
-      key: "monitored", header: "Monitoring", width: "10%", sortable: true,
-      text: (d) => monitoringLabel(d),
-      sortValue: (d) => (d.monitored ? "0" : d.monitor_state === "over_limit" ? "1" : "2"),
-      render: (d) => <MonitoringBadge device={d} />,
-    },
-    {
-      key: "source", header: "Source", width: "6%",
+      {
+        key: "address", header: "IP", width: 128,
+        text: (d) => d.address,
+        render: (d) => <span title={d.address} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 14 }}>{d.address}</span>,
+      },
+      {
+        key: "vendor", header: "Manufacturer", width: "11%", sortable: true,
+        text: (d) => d.vendor ?? "", sortValue: (d) => (d.vendor || "~").toLowerCase(),
+        render: (d) => {
+          const v = (d.vendor || "").trim() || "Unknown";
+          return (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }} title={v}>
+              <span style={{ width: 8, height: 8, borderRadius: 3, background: vendorColor(v), flex: "none" }} />
+              <span style={{ textTransform: "capitalize" }}>{v}</span>
+            </span>
+          );
+        },
+      },
+      {
+        key: "software", header: "Software", width: "11%", sortable: true,
+        text: (d) => d.software_version ?? "", sortValue: (d) => d.software_version || "~",
+        render: (d) => d.software_version
+          ? <span title={d.os || d.software_version} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 14 }}>{d.software_version}</span>
+          : <span style={{ color: "var(--fg-subtle, var(--muted))" }} title={d.os || "The device's description carries no version"}>—</span>,
+      },
+      {
+        key: "location", header: "Site", width: "14%", sortable: true,
+        text: (d) => siteText(locs.get(d.id), siteName) || d.configured_location || "",
+        sortValue: (d) => siteText(locs.get(d.id), siteName) || d.configured_location || "~",
+        render: (d) => (
+          <SiteCell
+            row={locs.get(d.id)}
+            options={siteOptions}
+            editable={editableSites}
+            siteName={siteName}
+            configured={d.configured_location}
+            onAssign={(slug) => assignSite(d.id, slug)}
+          />
+        ),
+      },
+    ];
+    const off = <span style={{ color: "var(--fg-subtle, var(--muted))" }}>Off</span>;
+    const configOffTip = "Configuration backup is turned off on this deployment (FEATURE_CONFIG_BACKUP). An administrator can enable it.";
+    const configLive = configOn && drift !== null;
+    cols.push(
+      {
+        // Sync = is the running config the approved (golden) one?
+        key: "sync", header: "Sync", width: 128, sortable: true,
+        text: (d) => (configLive ? syncLabel(drift?.get(d.id)).label : "Off"),
+        sortValue: (d) => (configLive ? syncLabel(drift?.get(d.id)).label : "~"),
+        render: (d) => {
+          if (!configLive) return <span title={configOffTip}>{off}</span>;
+          const b = syncLabel(drift?.get(d.id));
+          return <span className={`badge ${b.tone}`} title={b.help}>{b.label}</span>;
+        },
+      },
+      {
+        key: "backup", header: "Config backup", width: 168, sortable: true,
+        sortValue: (d) => new Date(drift?.get(d.id)?.last_capture_at ?? 0).getTime() || 0,
+        render: (d) => {
+          if (!configLive) return <span title={configOffTip}>{off}</span>;
+          const at = drift?.get(d.id)?.last_capture_at;
+          const st = backupState.get(d.id);
+          return (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }} onClick={(e) => e.stopPropagation()}>
+              {at ? <span title={fmtDateTime(at)}>{relTime(at)}</span> : <span style={{ color: "var(--fg-subtle, var(--muted))" }}>never</span>}
+              <button className="btn" style={{ padding: "2px 8px" }} disabled={st === "running"}
+                title={st && st !== "running" ? st : "Capture the running configuration now"}
+                onClick={() => { void backupNow(d.id); }}>
+                {st === "running" ? "Backing up…" : "Back up now"}
+              </button>
+            </span>
+          );
+        },
+      },
+      {
+        key: "ssh", header: "SSH", width: 104,
+        text: () => (sshEnabled ? "Connect" : "Off"),
+        render: (d) => sshEnabled
+          ? <button className="btn" title="Open an SSH session to the device" onClick={(e) => { e.stopPropagation(); setTerm(d); }}>Connect</button>
+          : <span title="Device SSH is turned off on this deployment (FEATURE_DEVICE_SSH). An administrator can enable it.">{off}</span>,
+      },
+    );
+    cols.push({
+      key: "source", header: "Source", width: 96,
       text: (d) => sourceLabel(d.source),
       render: (d) => <span className={`badge ${sourceTone(d.source)}`} title={`Discovery source: ${d.source || "unknown"}`}>{sourceLabel(d.source)}</span>,
-    },
-    {
-      key: "last_seen", header: "Polled", width: "6%", sortable: true,
-      sortValue: (d) => new Date(d.last_seen).getTime() || 0,
-      sev: (d) => healthSev(health.get(d.id) ?? "up"),
-      render: (d) => <span title={fmtDateTime(d.last_seen)}>{relTime(d.last_seen)}</span>,
-    },
-  ], [health, locs, siteOptions, editableSites, siteName]);
+    });
+    return cols;
+  }, [health, locs, siteOptions, editableSites, siteName, drift, configOn, sshEnabled, backupState]);
 
   const chip = (key: Filter, label: string, n: number, color?: string) => (
     <button
@@ -432,6 +470,7 @@ export default function Devices() {
               {chip("up", "Up", counts.up, HEALTH_META.up.color)}
               {chip("degraded", "Degraded", counts.degraded, HEALTH_META.degraded.color)}
               {chip("down", "Down", counts.down, HEALTH_META.down.color)}
+              {counts.unknown > 0 && chip("unknown", "Not polled", counts.unknown, HEALTH_META.unknown.color)}
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <input
@@ -507,20 +546,12 @@ export default function Devices() {
               initialSort={{ key: "vendor", dir: "asc" }}
               onRowClick={(d) => openDevice(d)}
               empty="No devices match this filter."
-              rowActions={(d) => (
-                <>
-                  {sshEnabled && (
-                    <button className="btn" title="SSH to device" onClick={() => setTerm(d)}>Connect</button>
-                  )}
-                  <button className="btn danger" onClick={() => remove(d.id)}>Delete</button>
-                </>
-              )}
             />
           )}
         </div>
       </div>
 
-      {detail && <DeviceDetailPage device={detail} onClose={() => setDetail(null)} />}
+      {detail && <DeviceDetailPage device={detail} onClose={() => setDetailId(null)} />}
       {term && (
         <Suspense fallback={<div style={{ padding: 40, color: "var(--muted)" }}>Loading…</div>}>
           <DeviceTerminal device={term} onClose={() => setTerm(null)} />
@@ -545,25 +576,6 @@ export function monitoringLabel(d: Device): string {
   return "Not monitored";
 }
 
-// MonitoringBadge shows whether Correlix collects from the device. There is no
-// switch: every device with an address is monitored, up to the licence limit
-// (owner decision 2026-10-03). The reason is the server's own sentence.
-function MonitoringBadge({ device }: { device: Device }) {
-  const label = monitoringLabel(device);
-  const tone = device.monitored ? "good" : device.monitor_state === "over_limit" ? "warn" : "";
-  const methods = (device.monitor_methods ?? []).join(" · ");
-  return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }} title={device.monitor_reason || label}>
-      <span className={`badge ${tone}`} style={{ fontSize: 14 }}>{label}</span>
-      {device.monitored && methods && (
-        <span style={{ color: "var(--fg-muted)", fontSize: 14 }} title={`Telemetry configured: ${methods}`}>
-          {methods}
-        </span>
-      )}
-    </span>
-  );
-}
-
 // siteText is the device's resolved site as plain text (for filtering / sorting):
 // a declared site's display name, else the raw label, else empty.
 function siteText(row: DeviceLocationRow | undefined, siteName: Map<string, string>): string {
@@ -577,22 +589,28 @@ function siteText(row: DeviceLocationRow | undefined, siteName: Map<string, stri
 // `row.source` distinguishes a declared-site placement ("sot") from a free-form
 // manual location ("manual"); the picker binds to a declared site by slug.
 function SiteCell({
-  row, options, editable, siteName, onAssign,
+  row, options, editable, siteName, configured, onAssign,
 }: {
   row: DeviceLocationRow | undefined;
   options: SiteRow[];
   editable: boolean;
   siteName: Map<string, string>;
+  /** The location configured ON the device (SNMP sysLocation), used when no
+   *  site is assigned; empty when the device has none configured. */
+  configured?: string;
   onAssign: (slug: string) => void;
 }) {
   const slug = row?.site ?? "";
   const isDeclared = !!slug && siteName.has(slug);
   const label = siteText(row, siteName);
+  const fromDevice = !label && configured
+    ? <span style={{ color: "var(--fg-muted)" }} title={`Configured on the device: ${configured}`}>{configured}</span>
+    : null;
 
   if (!editable) {
     return label
       ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title={label}><span aria-hidden style={{ color: "var(--muted)" }}>◍</span>{label}</span>
-      : <span style={{ color: "var(--fg-subtle, var(--muted))" }}>—</span>;
+      : fromDevice ?? <span style={{ color: "var(--fg-subtle, var(--muted))" }}>—</span>;
   }
 
   // A manual (non-declared) location is shown as a hint after the picker so the
@@ -614,7 +632,41 @@ function SiteCell({
           <option key={s.slug} value={s.slug}>{s.name}</option>
         ))}
       </select>
-      {manualHint && <span style={{ color: "var(--fg-subtle, var(--muted))", fontSize: 11 }} title={`Manual location: ${label}`}>· {label}</span>}
+      {manualHint && <span style={{ color: "var(--fg-subtle, var(--muted))", fontSize: 14 }} title={`Manual location: ${label}`}>· {label}</span>}
+      {!slug && fromDevice}
+    </span>
+  );
+}
+
+// syncLabel: the drift state in the operator's words — is the running config
+// the approved (golden) one? "Changed" (differs from the previous capture) and
+// "Drifted" (differs from golden) are both "Not in sync" here; the detail
+// panel keeps the distinction.
+function syncLabel(r: ConfigDriftRow | undefined): { label: string; tone: string; help: string } {
+  const b = statusBadge(r);
+  if (!r || !r.last_capture_at) return { label: "Not captured", tone: "", help: b.help };
+  if (String(r.state) === "failed") return { label: "Capture failed", tone: "bad", help: b.help };
+  switch (String(r.state)) {
+    case "in_sync": return { label: "In sync", tone: "good", help: b.help };
+    case "changed":
+    case "drifted": return { label: "Not in sync", tone: String(r.state) === "drifted" ? "bad" : "warn", help: b.help };
+    default: return { label: "Unknown", tone: "", help: b.help };
+  }
+}
+
+// StatusGlyph: the circle is monitoring (green = Correlix collects from it,
+// amber = past the licence limit, grey = not monitored); the arrow is the live
+// status from the collectors (↑ up, ↓ down, ↕ degraded, – not polled recently).
+function StatusGlyph({ device, health }: { device: Device; health: Health }) {
+  const ring = device.monitored ? "var(--good, #16a34a)" : device.monitor_state === "over_limit" ? "var(--warn, #d97706)" : "var(--muted, #94a3b8)";
+  const m = HEALTH_META[health];
+  const label = `${monitoringLabel(device)} · ${m.label}`;
+  const methods = device.monitored ? (device.monitor_methods ?? []).join(" · ") : "";
+  const title = [label, methods && `telemetry: ${methods}`, device.monitor_reason].filter(Boolean).join(" — ");
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title={title} aria-label={label}>
+      <span style={{ width: 12, height: 12, borderRadius: 999, background: ring, flex: "none" }} />
+      <span aria-hidden style={{ color: m.color, fontWeight: 700, fontSize: 16, lineHeight: 1 }}>{m.arrow}</span>
     </span>
   );
 }

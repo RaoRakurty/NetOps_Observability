@@ -239,3 +239,100 @@ func TestProjectStampsDeviceRoles(t *testing.T) {
 		t.Fatalf("unknown must be omitted from the payload, got %q", mysteryRole)
 	}
 }
+
+// ── WAN-edge flavor (tracker 349): SD-WAN vs data center vs plain routed ─────
+
+func TestWANEdgeFlavorClassification(t *testing.T) {
+	cases := []struct {
+		name                       string
+		d                          DeviceFact
+		role, conf, flavor, signal string
+	}{
+		{"vEdge personality", DeviceFact{Name: "site-a", SDWANPersonality: "vedge"},
+			DevRoleWANEdge, RoleConfStrong, WANFlavorSDWAN, "sdwan_personality"},
+		{"overlay system-ip answered", DeviceFact{Name: "site-b", SDWANSystemIP: "10.255.0.7"},
+			DevRoleWANEdge, RoleConfStrong, WANFlavorSDWAN, "sdwan_system_ip"},
+		{"Viptela enterprise sysObjectID", DeviceFact{Name: "site-c", SysObjectID: "1.3.6.1.4.1.41916.3.2.6"},
+			DevRoleWANEdge, RoleConfStrong, WANFlavorSDWAN, "sysobjectid"},
+		{"cEdge interface marker only", DeviceFact{Name: "br-12", Type: "router", IfNames: []string{"Gi1", "Gi2", "Sdwan-intf", "Tu1"}},
+			DevRoleWANEdge, RoleConfMedium, WANFlavorSDWAN, "sdwan_interfaces"},
+		{"vEdge interface markers", DeviceFact{Name: "br-13", IfNames: []string{"ge0/0", "system", "loopback65528"}},
+			DevRoleWANEdge, RoleConfMedium, WANFlavorSDWAN, "sdwan_interfaces"},
+		{"SD-WAN edge at a declared DC", DeviceFact{Name: "dc-hub", SDWANPersonality: "vedge", SiteKind: "DC"},
+			DevRoleDCWANEdge, RoleConfStrong, WANFlavorSDWAN, "site_kind"},
+		{"SD-WAN edge next to the fabric", DeviceFact{Name: "hub-2", IfNames: []string{"Sdwan-intf"}, FabricNeighborCount: 2},
+			DevRoleDCWANEdge, RoleConfMedium, WANFlavorSDWAN, "fabric_adjacency"},
+		{"plain CE with an ISP peer", DeviceFact{Name: "branch-7", Type: "router", ExternalBGPPeers: 1},
+			DevRoleWANEdge, RoleConfMedium, WANFlavorRouted, "external_bgp"},
+		{"router with external peer AND IGP is only weakly an edge", DeviceFact{Name: "rtr-9", Type: "router", ExternalBGPPeers: 2, HasIGPAdjacency: true},
+			DevRoleWANEdge, RoleConfWeak, WANFlavorRouted, "external_bgp"},
+		{"routed DC border", DeviceFact{Name: "dc-border-1", Type: "router", ExternalBGPPeers: 2, FabricNeighborCount: 4},
+			DevRoleDCWANEdge, RoleConfMedium, WANFlavorRouted, "fabric_adjacency"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := ClassifyDeviceRole(c.d)
+			if r.Role != c.role || r.Confidence != c.conf || r.WANFlavor != c.flavor {
+				t.Fatalf("got role=%s conf=%s flavor=%s, want %s/%s/%s (%+v)", r.Role, r.Confidence, r.WANFlavor, c.role, c.conf, c.flavor, r.Evidence)
+			}
+			evidenceMentions(t, r, c.signal)
+		})
+	}
+}
+
+// A controller is SD-WAN but never an edge: it has no transport and no site.
+func TestSDWANControllerIsNotAnEdge(t *testing.T) {
+	for _, p := range []string{"vsmart", "vbond", "vmanage", "vSmart"} {
+		r := ClassifyDeviceRole(DeviceFact{Name: "ctrl", SDWANPersonality: p, SysObjectID: "1.3.6.1.4.1.41916.3.2.1"})
+		if r.Role != DevRoleUnknown || r.WANFlavor != WANFlavorSDWAN || r.Confidence != "" {
+			t.Fatalf("%s: got %+v, want unknown role with the sdwan flavor", p, r)
+		}
+		evidenceMentions(t, r, "sdwan_controller")
+	}
+}
+
+// Generic names alone are not SD-WAN: `system` without the reserved loopbacks,
+// and NV0 (an IOS XE NAT interface) are on plenty of non-SD-WAN routers.
+func TestGenericInterfaceNamesAreNotSDWANEvidence(t *testing.T) {
+	for _, names := range [][]string{{"system"}, {"loopback65528"}, {"NV0", "Gi1"}, {"Tunnel1"}} {
+		if r := ClassifyDeviceRole(DeviceFact{Name: "x", IfNames: names}); r.WANFlavor != "" || r.Role != DevRoleUnknown {
+			t.Fatalf("%v classified as %+v", names, r)
+		}
+	}
+}
+
+// The operator names the role; the flavor is still measured, never declared.
+func TestDeclaredWANRoleStillCarriesAMeasuredFlavor(t *testing.T) {
+	if r := ClassifyDeviceRole(DeviceFact{Role: "wan_edge", IfNames: []string{"Sdwan-intf"}}); r.WANFlavor != WANFlavorSDWAN {
+		t.Fatalf("declared + SD-WAN marker: %+v", r)
+	}
+	if r := ClassifyDeviceRole(DeviceFact{Role: "dc_wan_edge", ExternalBGPPeers: 3}); r.Role != DevRoleDCWANEdge || r.WANFlavor != WANFlavorRouted {
+		t.Fatalf("declared DC edge + external BGP: %+v", r)
+	}
+	if r := ClassifyDeviceRole(DeviceFact{Role: "wan_edge"}); r.WANFlavor != "" {
+		t.Fatalf("declared with no evidence must not invent a flavor: %+v", r)
+	}
+	if r := ClassifyDeviceRole(DeviceFact{Role: "core_router", ExternalBGPPeers: 3}); r.WANFlavor != "" {
+		t.Fatalf("a non-WAN role carries no flavor: %+v", r)
+	}
+}
+
+func TestNoFactsNoFlavor(t *testing.T) {
+	if r := ClassifyDeviceRole(DeviceFact{}); r.Role != DevRoleUnknown || r.WANFlavor != "" || r.SDWANPersonality != "" {
+		t.Fatalf("empty facts: %+v", r)
+	}
+}
+
+// Node kind falls back to the classified role only when the type inference left
+// the device generic — an evidenced WAN edge renders as a router, not a switch.
+func TestNodeKindUsesTheClassifiedRoleForGenericDevices(t *testing.T) {
+	if k := KindOf(DeviceFact{Name: "vEdge-x", Type: "generic", SDWANSystemIP: "10.255.0.9"}); k != KindRouter {
+		t.Fatalf("evidenced SD-WAN edge: kind %q, want router", k)
+	}
+	if k := KindOf(DeviceFact{Name: "box-1", Type: "generic"}); k != KindSwitch {
+		t.Fatalf("no evidence must keep the neutral default: kind %q", k)
+	}
+	if k := KindOf(DeviceFact{Name: "fw-x", Type: "firewall", SDWANSystemIP: "10.255.0.9"}); k != KindFirewall {
+		t.Fatalf("the inferred type still wins over the role fallback: kind %q", k)
+	}
+}

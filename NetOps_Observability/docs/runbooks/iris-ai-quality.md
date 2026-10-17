@@ -39,3 +39,23 @@ is unseen by the cost KPIs and by every tenant's daily-token budget.
 2. ClickHouse reachable? Over its worker query budget
    (`docs/runbooks/clickhouse-query-budget.md`)?
 3. Until it recovers, read correlation-derived scorecard KPIs as stale.
+
+## Tool evidence dropped
+
+`IrisToolEvidenceDropped` — one Iris tool's results are being dropped on more
+than 10 % of its calls (at least 20 calls in the hour). Every Iris tool runs
+under a contract (tracker 337 N-A8): a timeout, a per-workspace rate, and the
+shape its result must have. A dropped result never reaches the model; the
+answer says that evidence is unknown.
+
+1. Split the rate: `increase(netops_ai_tool_timeouts_total{tool="…"}[1h])`
+   against `increase(netops_ai_tool_schema_rejects_total{tool="…"}[1h])`.
+2. **Timeouts** — the backend the tool reads is slow. Check the backend's own
+   health on **Platform → Tools → Stack Health** (ClickHouse for flow and
+   correlation tools, OpenSearch for log search, VictoriaMetrics for device
+   health, the device itself for the two probe tools).
+3. **Schema rejects** — the tool returned something its contract does not allow
+   (too many items, text over its bound, an external link). Search the api logs
+   for `rejected by its output schema`; this is a defect in the tool or in the
+   data it read, not an operator action. File it with the tool name.
+

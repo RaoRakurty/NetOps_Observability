@@ -41,6 +41,15 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  name: correlix-goflow2
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "goflow2") | indent 4 }}
+data:
+{{ (.Files.Glob "files/goflow2/*").AsConfig | indent 2 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
   name: correlix-gnmic
   labels:
 {{ include "correlix.labels" (dict "root" $ "component" "gnmic") | indent 4 }}

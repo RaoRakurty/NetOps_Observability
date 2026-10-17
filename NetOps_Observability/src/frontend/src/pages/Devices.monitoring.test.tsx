@@ -76,22 +76,23 @@ describe("there is no monitoring switch", () => {
   });
 });
 
-describe("the monitoring badge", () => {
-  it("says each row's state in plain words", async () => {
+describe("the status glyph", () => {
+  // Owner spec 2026-10-10: one glyph — the circle is monitoring, the arrow is
+  // the live status. The plain words ride on the accessible label, and the
+  // telemetry methods + the server's reason on the hover text.
+  it("says each row's monitoring state in plain words", async () => {
     setup([
-      device({ id: "d1", monitor_methods: ["gnmi", "snmp"] }),
+      device({ id: "d1", monitor_methods: ["gnmi", "snmp"], reachability: "up" }),
       overLimitDevice("d2"),
       device({ id: "d3", address: "", monitored: false, monitor_state: "no_address", monitor_methods: undefined }),
     ]);
     render(<Devices />);
-    expect(await screen.findByText("Monitored")).toBeTruthy();
-    const over = screen.getByText("Over licence limit");
-    expect(over.className).toContain("warn");
-    expect(screen.getByText("Not monitored")).toBeTruthy();
-    // Two methods on ONE device are shown, and are still one monitored device.
-    expect(screen.getByText("gnmi · snmp")).toBeTruthy();
-    // The server's own reason is the hover text.
-    expect(over.parentElement?.getAttribute("title")).toContain("licence limit of 25");
+    const mon = await screen.findByLabelText("Monitored · Up");
+    // Two methods on ONE device are still one monitored device — shown on hover.
+    expect(mon.getAttribute("title")).toContain("gnmi · snmp");
+    const over = screen.getByLabelText(/^Over licence limit · /);
+    expect(over.getAttribute("title")).toContain("licence limit of 25");
+    expect(screen.getByLabelText(/^Not monitored · /)).toBeTruthy();
   });
 
   it("labels states for the filter", () => {

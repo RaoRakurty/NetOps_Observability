@@ -68,3 +68,21 @@ func TestBuildEntityInfoLines_EmptyWhenNoInventory(t *testing.T) {
 		t.Errorf("non-FRU entities must be skipped, got %v", lines)
 	}
 }
+
+// The device's software revision: chassis first, then the first module (IOS XE
+// reports it on the route processor), then any entity that has one.
+func TestPickSoftwareRev(t *testing.T) {
+	class := map[string]string{"1": "3", "7": "9", "10": "9", "22": "6"}
+	if got := pickSoftwareRev(map[string]string{"1": "", "7": "17.03.04a", "10": "17.03.04b", "22": "x"}, class); got != "17.03.04a" {
+		t.Fatalf("module fallback: %q", got)
+	}
+	if got := pickSoftwareRev(map[string]string{"1": "Junos 23.4R1", "7": "x"}, class); got != "Junos 23.4R1" {
+		t.Fatalf("chassis first: %q", got)
+	}
+	if got := pickSoftwareRev(map[string]string{"22": "1.2"}, class); got != "1.2" {
+		t.Fatalf("any entity: %q", got)
+	}
+	if got := pickSoftwareRev(map[string]string{"1": "  "}, class); got != "" {
+		t.Fatalf("blank: %q", got)
+	}
+}

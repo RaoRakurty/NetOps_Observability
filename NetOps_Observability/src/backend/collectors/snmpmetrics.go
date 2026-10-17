@@ -7,10 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"math"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"netops/backend/safego"
@@ -28,6 +32,19 @@ import (
 // devices (8s timeout each) don't serialize the healthy ones past the interval,
 // without opening a socket storm.
 const metricsPollWorkers = 32
+
+// metricsDeviceBudget bounds one device's profile walks. It was 8 s, which a
+// slow agent (a Viptela vEdge answers each request in hundreds of ms) used up
+// part-way through its interface columns: every column after the cut-off was
+// silently missing (lab 2026-10-11: three of four vEdges had no MTU, speed or
+// broadcast/multicast counters). 20 s is a third of the 60 s poll interval; a
+// dead device still fails at its first GET, so only slow-but-alive agents use
+// the extra time.
+const metricsDeviceBudget = 20 * time.Second
+
+// sdwanSystemBudget is the SD-WAN systemStatus read's OWN deadline: it runs
+// after the profile walks and must not depend on what they left over.
+const sdwanSystemBudget = 4 * time.Second
 
 type metricsCollector struct {
 	interval time.Duration
@@ -124,6 +141,8 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	var lastErr, enrichErr string
 	ifaddr := map[string]map[string]string{}
 	ifindexMap := map[string]map[string]string{}
+	locations := map[string]string{}
+	softwareRevs := map[string]string{}
 	for _, r := range results {
 		if r.lastErr != "" {
 			lastErr = r.lastErr
@@ -147,6 +166,12 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 			if r.ifindex != nil {
 				ifindexMap[r.id] = r.ifindex
 			}
+			if r.location != "" {
+				locations[r.id] = r.location
+			}
+			if r.softwareRev != "" {
+				softwareRevs[r.id] = r.softwareRev
+			}
 		}
 	}
 
@@ -162,6 +187,22 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	if len(ifindexMap) > 0 {
 		if b, err := json.Marshal(ifindexMap); err == nil {
 			redisPublish(ctx, "interface-index", ifIndexKey, string(b), 1800)
+		}
+	}
+
+	// deviceID → sysLocation, read by the inventory to show the site the device
+	// itself is configured with. Same replace+TTL discipline.
+	if len(locations) > 0 {
+		if b, err := json.Marshal(locations); err == nil {
+			redisPublish(ctx, "device-locations", sysLocationKey, string(b), 1800)
+		}
+	}
+
+	// deviceID → ENTITY-MIB software revision, the inventory's version source
+	// when the device's description carries none.
+	if len(softwareRevs) > 0 {
+		if b, err := json.Marshal(softwareRevs); err == nil {
+			redisPublish(ctx, "device-software", softwareRevKey, string(b), 1800)
 		}
 	}
 
@@ -199,14 +240,16 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 // (no shared mutable state during the parallel phase — the echo.go pattern), and
 // pollOnce aggregates serially after; correctness never depends on -race.
 type deviceOutcome struct {
-	id        string
-	lines     []string
-	events    []MetricEvent
-	reach     bool
-	ifaddr    map[string]string // interface IP → ifName
-	ifindex   map[string]string // ifIndex → ifName
-	lastErr   string
-	enrichErr string
+	id          string
+	lines       []string
+	events      []MetricEvent
+	reach       bool
+	ifaddr      map[string]string // interface IP → ifName
+	ifindex     map[string]string // ifIndex → ifName
+	location    string            // SNMPv2-MIB sysLocation as the device is configured ("" = not set)
+	softwareRev string            // ENTITY-MIB entPhysicalSoftwareRev of the chassis/module ("" = none)
+	lastErr     string
+	enrichErr   string
 }
 
 // pollDevice does ALL SNMP work for one device and stamps its samples with THIS
@@ -223,7 +266,7 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 	// device's credential profile by the target builder. Essential for a
 	// multi-vendor fleet where each device has its own creds.
 	creds := tg.creds()
-	dctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	dctx, cancel := context.WithTimeout(ctx, metricsDeviceBudget)
 
 	ent, entOK := 0, false
 	if v, err := snmpGet(dctx, addr, creds, sysObjectIDOID); err == nil && v.tag == 0x06 {
@@ -235,6 +278,13 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 	}
 	out.reach = true
 	vendor := vendorLabel(ent, entOK)
+	// sysLocation — what the operator configured on the device itself
+	// (`snmp-server location` / `snmp location` / `set snmp location` / …: the one
+	// location field every vendor's agent answers). Best-effort: an unset or
+	// unreadable location leaves it empty, which the inventory shows as empty.
+	if v, err := snmpGet(dctx, addr, creds, sysLocationOID); err == nil {
+		out.location = sanitizeLabel(v.str())
+	}
 
 	var lines []string
 	// Canonical metric events for the correlation bus (RCA families only;
@@ -249,6 +299,13 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 	// ifIndex→ifAlias (operator circuit ID, ifXTable). Walked lazily with the
 	// names; empty when the operator configured no interface description.
 	var ifAliases map[string]string
+	// Memory pools reported as used/free bytes (Cisco CISCO-MEMORY-POOL and
+	// every other vendor in that shape) carry no percentage, and every
+	// consumer — the device popup, the health score, topology and the memory
+	// alerts — reads device_mem_percent. It is derived below per pool.
+	memUsed, memFree := map[string]int64{}, map[string]int64{}
+	memPctNative := false
+	cpuNative := false
 	for _, prof := range selectProfiles(c.profiles, ent, entOK) {
 		for _, m := range prof.Metrics {
 			// Single-contract ownership: yield a metric to the transport that owns
@@ -285,8 +342,22 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 							events = append(events, ev)
 						}
 					} else {
+						switch m.Name {
+						case "device_mem_used_bytes":
+							memUsed[idx] = valueInt(v)
+						case "device_mem_free_bytes":
+							memFree[idx] = valueInt(v)
+						case "device_mem_percent":
+							memPctNative = true
+						case "device_cpu_percent":
+							cpuNative = true
+						}
+						lbl := idx
+						if idxLabel == "neighbor" {
+							lbl = ospfNeighborAddr(idx)
+						}
 						lines = append(lines, fmt.Sprintf("%s{device=%q,vendor=%q,%s=%q} %d %d",
-							m.Name, tg.ID, vendor, idxLabel, idx, valueInt(v), now))
+							m.Name, tg.ID, vendor, idxLabel, lbl, valueInt(v), now))
 						if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, idx, "", "", valueInt(v), now); ok {
 							events = append(events, ev)
 						}
@@ -305,9 +376,40 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 			}
 		}
 	}
+	// Derived memory percentage per pool (used / (used + free)), only when the
+	// device did not report one and no richer transport owns the family here.
+	memOwned := (SNMPMetric{Name: "device_mem_percent", Owner: "gnmi"}).ownedElsewhere(tg)
+	if !memPctNative && !memOwned {
+		derived := derivedMemPercent(tg.ID, vendor, memUsed, memFree, now)
+		memPctNative = len(derived) > 0
+		lines = append(lines, derived...)
+	}
+	// SD-WAN edges that answered no CPU / memory MIB above (a Viptela vEdge
+	// answers neither HOST-RESOURCES nor a process MIB): read the SD-WAN
+	// systemStatus scalars instead. Only what is still missing is asked for.
+	cpuOwned := (SNMPMetric{Name: "device_cpu_percent", Owner: "gnmi"}).ownedElsewhere(tg)
+	wantCPU, wantMem := !cpuNative && !cpuOwned, !memPctNative && !memOwned
+	if fam := sdwanSystemFamily(ent); entOK && fam != "" && (wantCPU || wantMem) {
+		sctx, scancel := context.WithTimeout(ctx, sdwanSystemBudget)
+		smp := readSDWANSystem(sctx, snmpGet, addr, creds, fam, wantCPU, wantMem)
+		scancel()
+		lines = append(lines, smp.lines(tg.ID, vendor, now)...)
+		if smp.hasCPU {
+			if ev, ok := buildMetricEvent("device_cpu_percent", tg.ID, vendor, "system", "", "", int64(math.Round(smp.cpu)), now); ok {
+				events = append(events, ev)
+			}
+		}
+		if smp.hasMem {
+			if ev, ok := buildMetricEvent("device_mem_percent", tg.ID, vendor, "system", "", "", int64(math.Round(smp.mem)), now); ok {
+				events = append(events, ev)
+			}
+		}
+	}
 	// FRU inventory (ENTITY-MIB) — info series, VM-only, best-effort. Devices
 	// without ENTITY-MIB yield nothing.
-	lines = append(lines, collectEntityInventory(dctx, addr, creds, tg.ID, vendor, now)...)
+	entLines, swRev := collectEntityInventory(dctx, addr, creds, tg.ID, vendor, now)
+	lines = append(lines, entLines...)
+	out.softwareRev = swRev
 	// DOM/DDM optics — Port Intelligence #94 P3, opt-in. Prefer a vendor DOM
 	// adapter (Juniper jnxDom / Nokia DDM, ifName-resolved); fall back to the
 	// universal ENTITY-SENSOR-MIB. Normalized rx/tx power, temp, voltage, bias
@@ -323,11 +425,20 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 	// walked for interface metrics; one extra ipAddrTable walk). Lets BGP-LS
 	// links (interface IPs) resolve to real port names + join to metrics.
 	if ifNames != nil {
-		m, err := ipIfNameMap(dctx, addr, creds, ifNames)
+		// Its OWN deadline: this walk names the device's addresses, which is how
+		// topology and the SD-WAN overlay recognise the device at all (an edge
+		// whose SD-WAN MIBs do not answer is identified by its transport
+		// address). Run on the leftover of the metric walks' budget, it was
+		// cut off on slower agents and the device silently had no addresses
+		// (lab 2026-10-10: one cEdge of four published any).
+		ectx, ecancel := context.WithTimeout(ctx, 8*time.Second)
+		m, err := ipIfNameMap(ectx, addr, creds, ifNames)
+		ecancel()
 		if err != nil {
 			// Enrichment is best-effort, but its FAILURE is not benign: it is
 			// reported rather than vanishing into an empty map.
 			out.enrichErr = err.Error()
+			logEnrichFailure(tg.ID, err)
 		}
 		if len(m) > 0 {
 			out.ifaddr = m
@@ -448,5 +559,57 @@ func valueInt(v berVal) int64 {
 		return int64(decodeUint(v.raw)) // #nosec G115 -- SNMP counter; int64 range covers Counter32/64 telemetry
 	default:
 		return decodeInt(v.raw)
+	}
+}
+
+// derivedMemPercent turns per-pool used/free byte counts into
+// device_mem_percent{index} samples. A pool missing either half, or with a zero
+// total, yields nothing — never a guessed 0 % or 100 %.
+func derivedMemPercent(device, vendor string, used, free map[string]int64, now int64) []string {
+	idxs := make([]string, 0, len(used))
+	for idx := range used {
+		idxs = append(idxs, idx)
+	}
+	sort.Strings(idxs)
+	var out []string
+	for _, idx := range idxs {
+		u := used[idx]
+		f, ok := free[idx]
+		if !ok || u < 0 || f < 0 || u+f <= 0 {
+			continue
+		}
+		pct := float64(u) * 100 / float64(u+f)
+		out = append(out, fmt.Sprintf("device_mem_percent{device=%q,vendor=%q,index=%q,source=\"derived\"} %.2f %d",
+			device, vendor, idx, pct, now))
+	}
+	return out
+}
+
+// ospfNeighborAddr turns an ospfNbrTable row index (ospfNbrIpAddr +
+// ospfNbrAddressLessIndex, e.g. "172.16.40.41.0") into the neighbour address
+// the adjacency contract and every reader use ("172.16.40.41"). Any other
+// shape is returned unchanged — never guessed at.
+func ospfNeighborAddr(idx string) string {
+	parts := strings.Split(idx, ".")
+	if len(parts) != 5 {
+		return idx
+	}
+	for _, p := range parts[:4] {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 || n > 255 {
+			return idx
+		}
+	}
+	return strings.Join(parts[:4], ".")
+}
+
+// enrichFailLogAt rate-limits the per-device enrichment failure log (one line
+// a minute across the collector; the status LastError carries the rest).
+var enrichFailLogAt atomic.Int64
+
+func logEnrichFailure(device string, err error) {
+	now := time.Now().Unix()
+	if last := enrichFailLogAt.Load(); now-last >= 60 && enrichFailLogAt.CompareAndSwap(last, now) {
+		log.Printf("snmpmetrics: interface-address walk FAILED device=%s: %v — topology cannot match this device by its interface addresses this cycle", device, err)
 	}
 }

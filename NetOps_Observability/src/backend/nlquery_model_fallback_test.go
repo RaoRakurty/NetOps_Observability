@@ -16,6 +16,7 @@ package backend
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -24,8 +25,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"netops/backend/ai"
+	"netops/backend/internal/nlquery/compile"
 	"netops/backend/internal/nlquery/modelc"
 )
 
@@ -238,5 +241,41 @@ func TestCompileQueryToolInterpretsInScope(t *testing.T) {
 	viewer.Role = "no-such-role"
 	if s.aiCompileQuery(r, viewer) != nil {
 		t.Fatal("a caller without infrastructure:read must not get compile_query")
+	}
+}
+
+// N-G4 tie-break at the server: when the data arm carries BeforeModel (a
+// contested question), it is asked only once the grammar has failed AND a
+// model is wired; "no" means zero model compile calls and the question is
+// left unanswered by the data arm (the method runs instead).
+func TestBeforeModelGuardsTheModelCompile(t *testing.T) {
+	s, a, _, p := modelFallbackFixture(t, modelEnvelope(cpuOnDevA), "t-a")
+	r := httptest.NewRequest(http.MethodPost, "/api/ai/ask", nil)
+	asked := 0
+	no := func(context.Context) bool { asked++; return false }
+	cx := compile.Context{Loc: time.UTC, Now: time.Now()}
+
+	c, err := s.nlqCompile(r, a, hotCPUQuestion, cx, true, no)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asked != 1 || len(p.calls()) != 0 || c.checked != nil || c.source == modelc.SourceModel {
+		t.Fatalf("a 'no' must skip the model compile: asked=%d calls=%d checked=%v", asked, len(p.calls()), c.checked != nil)
+	}
+	// A question the grammar parses never asks.
+	if _, err := s.nlqCompile(r, a, "show cpu on edge-a for the last hour", cx, true, no); err != nil || asked != 1 {
+		t.Fatalf("a parsed question must not ask the tie-break (asked=%d, %v)", asked, err)
+	}
+	// "yes" keeps today's path: the model compiles and is validated.
+	yes := func(context.Context) bool { asked++; return true }
+	c, err = s.nlqCompile(r, a, hotCPUQuestion, cx, true, yes)
+	if err != nil || asked != 2 || len(p.calls()) != 1 || c.checked == nil {
+		t.Fatalf("a 'yes' must run the model compile: asked=%d calls=%d err=%v", asked, len(p.calls()), err)
+	}
+	// Without a provider no model is wired: the tie-break is never asked (no
+	// wasted call) — today's grammar-only path.
+	s2, a2, _, _ := modelFallbackFixture(t, modelEnvelope(cpuOnDevA))
+	if _, err := s2.nlqCompile(r, a2, hotCPUQuestion, cx, true, no); err != nil || asked != 2 {
+		t.Fatalf("no model wired: the tie-break must not be asked (asked=%d, %v)", asked, err)
 	}
 }

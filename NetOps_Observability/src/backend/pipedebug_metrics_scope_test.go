@@ -110,9 +110,16 @@ func TestDebugAuthzCarriesTheMetricsBoundary(t *testing.T) {
 
 	// 3. Global view with a restricted tenant: its devices are EXCLUDED, so a
 	//    passive follow naming acme-core cannot export it.
+	//    The exclusion is two OR'd filters partitioned by the device label
+	//    (metricsExcludeFilters); BOTH must exclude acme-core.
 	got, _ = debugPrincipalFor(t, s, owner)
-	if len(got) != 1 || !strings.Contains(got[0], "acme-core") || !strings.Contains(got[0], "!~") {
+	if len(got) != 2 {
 		t.Fatalf("the Global view must exclude the restricted tenant's devices, got %v", got)
+	}
+	for _, f := range got {
+		if !strings.Contains(f, "acme-core") || !strings.Contains(f, "!~") {
+			t.Fatalf("every partition of the Global view must exclude acme-core, got %v", got)
+		}
 	}
 
 	// 4. Scoped INTO the restricted tenant: the match-nothing sentinel.

@@ -38,6 +38,13 @@ type appFlowRow struct {
 	Bytes  float64 `json:"bytes"` // sampling-corrected
 	Flows  float64 `json:"flows"`
 	Dests  int     `json:"dests"` // distinct destination IPs attributed to this app
+	// What the EXPORTER called this traffic (IPFIX / NetFlow v9 IE 95/96), beside
+	// — never fused into — the address verdict above. Empty when the exporter
+	// sent nothing. ExporterApp is set only for an application-kind id with a
+	// real name; an id-only row carries ExporterAppID and no name.
+	ExporterApp     string `json:"exporter_app,omitempty"`
+	ExporterAppID   string `json:"exporter_app_id,omitempty"`
+	ExporterAppKind string `json:"exporter_app_kind,omitempty"`
 }
 
 func tierRank(t appid.Tier) int {
@@ -62,6 +69,8 @@ func tierRank(t appid.Tier) int {
 func aggregateFlowApps(rows []map[string]any, cat *appid.Catalog, extraFor func(addr string) []appid.Signal) []appFlowRow {
 	type agg struct {
 		app, srcApp  string
+		xName, xID   string
+		xKind        string
 		bytes, flows float64
 		dests        map[string]struct{} // distinct destination IPs (rows are src×dst pairs)
 		tier         appid.Tier
@@ -83,10 +92,11 @@ func aggregateFlowApps(rows []map[string]any, cat *appid.Catalog, extraFor func(
 		if src != "" {
 			srcApp = resolve(src).App // second extraFor pass — the SAME resolver path
 		}
-		key := v.App + "\x00" + srcApp
+		xName, xID, xKind := exporterVerdict(row)
+		key := v.App + "\x00" + srcApp + "\x00" + xID + "\x00" + xName
 		a := byPair[key]
 		if a == nil {
-			a = &agg{app: v.App, srcApp: srcApp, tier: v.Tier, dests: map[string]struct{}{}}
+			a = &agg{app: v.App, srcApp: srcApp, xName: xName, xID: xID, xKind: xKind, tier: v.Tier, dests: map[string]struct{}{}}
 			byPair[key] = a
 			order = append(order, key)
 		}
@@ -100,10 +110,30 @@ func aggregateFlowApps(rows []map[string]any, cat *appid.Catalog, extraFor func(
 	out := make([]appFlowRow, 0, len(byPair))
 	for _, key := range order {
 		a := byPair[key]
-		out = append(out, appFlowRow{App: a.app, SrcApp: a.srcApp, Tier: string(a.tier), Bytes: a.bytes, Flows: a.flows, Dests: len(a.dests)})
+		out = append(out, appFlowRow{App: a.app, SrcApp: a.srcApp, Tier: string(a.tier), Bytes: a.bytes, Flows: a.flows, Dests: len(a.dests),
+			ExporterApp: a.xName, ExporterAppID: a.xID, ExporterAppKind: a.xKind})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Bytes > out[j].Bytes })
 	return out
+}
+
+// exporterVerdict reads the exporter's classification off a row (xi = IE 95 as
+// stored by vector-router, xn = IE 96). A malformed id is ignored; a name is
+// kept only for an application-kind id (a port/protocol id names a service
+// class, not an application) or when no id was sent at all.
+func exporterVerdict(row map[string]any) (name, id, kind string) {
+	rawID, _ := row["xi"].(string)
+	rawName, _ := row["xn"].(string)
+	name = appid.ExporterAppName(rawName)
+	if p, ok := appid.ParseExporterAppID(rawID); ok {
+		id, kind = rawID, p.Kind
+		if p.Kind != appid.ExporterKindApp {
+			name = ""
+		}
+	} else if name != "" {
+		kind = appid.ExporterKindApp
+	}
+	return name, id, kind
 }
 
 func (s *server) handleFlowsApps(w http.ResponseWriter, r *http.Request) {
@@ -119,15 +149,18 @@ func (s *server) handleFlowsApps(w http.ResponseWriter, r *http.Request) {
 	// Tenant isolation: the flows row policy shares untagged rows to every tenant
 	// scope (hybrid model), so a scoped principal is narrowed to flows touching
 	// its own device addresses; no devices → nothing (default-closed).
-	clause, empty := s.addrTenantClauseFor(claims, "src_addr", "dst_addr")
+	clause, empty := s.flowTenantClauseFor(claims)
 	var rows []map[string]any
 	if !empty {
 		// src_addr rides along (#81 P3G) so the source side resolves too — the
 		// top-N is now the top src×dst pairs by bytes (coverage reports honestly).
-		sql := "SELECT dst_addr AS d, src_addr AS s, " +
+		// exporter_app_* ride along so the exporter's own classification (IE
+		// 95/96) is reported beside the address verdict; both are '' for an
+		// exporter that sends none, which groups exactly as before.
+		sql := "SELECT dst_addr AS d, src_addr AS s, exporter_app_id AS xi, exporter_app_name AS xn, " +
 			"sum(bytes*if(sampling_rate=0,1,sampling_rate)) AS b, count() AS f " +
 			"FROM netops.flows WHERE ts >= now() - INTERVAL " + intToString(int(since.Seconds())) + " SECOND" + clause + " " +
-			"GROUP BY dst_addr, src_addr ORDER BY b DESC LIMIT " + intToString(flowsAppsTopN) + " FORMAT JSON"
+			"GROUP BY dst_addr, src_addr, exporter_app_id, exporter_app_name ORDER BY b DESC LIMIT " + intToString(flowsAppsTopN) + " FORMAT JSON"
 		var err error
 		rows, err = s.chRows(r, sql)
 		if err != nil {

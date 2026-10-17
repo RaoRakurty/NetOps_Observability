@@ -301,3 +301,56 @@ func TestAIDecisionLedgerAskOverPGIsolation(t *testing.T) {
 		}
 	}
 }
+
+// Migration 0057 (tracker 337 N-A8): a tool call's latency and truncation and
+// the copilot surface round-trip; a negative latency is refused by CHECK; the
+// new columns are still append-only (an UPDATE of latency is refused); RLS is
+// unchanged for them.
+func TestAIDecisionLedgerToolContractColumnsPG(t *testing.T) {
+	_, ps, st := ledgerPGStore(t)
+	ctx := context.Background()
+	id, err := aidecision.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := aidecision.SHA256Hex([]byte("x"))
+	in := []aidecision.Entry{
+		{DecisionID: id, Seq: 0, EventType: aidecision.QuestionReceived, Principal: "alice", Surface: aidecision.SurfaceCopilot, ArgsSHA256: h},
+		{DecisionID: id, Seq: 1, EventType: aidecision.ToolExecuted, Principal: "alice", Surface: aidecision.SurfaceCopilot,
+			Tool: "search_logs", ToolVersion: "1@v1", ArgsSHA256: h, Outcome: aidecision.OutcomeTimeout, LatencyMS: 15000, Truncated: true},
+	}
+	if err := st.Append(ctx, "acme", in); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.List(ctx, "acme", false, aidecision.ListFilter{DecisionID: id})
+	if err != nil || len(got) != 2 {
+		t.Fatalf("round trip: %v %+v", err, got)
+	}
+	if e := got[1]; e.Surface != aidecision.SurfaceCopilot || e.LatencyMS != 15000 || !e.Truncated || e.Outcome != aidecision.OutcomeTimeout {
+		t.Fatalf("0057 columns did not round-trip: %+v", e)
+	}
+	if e := got[0]; e.LatencyMS != 0 || e.Truncated {
+		t.Fatalf("defaults: %+v", e)
+	}
+	// CHECK (latency_ms >= 0), under the tenant's own session.
+	negErr := ps.DB().WithTenant(ctx, "acme", false, func(tx pgx.Tx) error {
+		_, execErr := tx.Exec(ctx, `INSERT INTO ai_decision_ledger (tenant_id, id, decision_id, seq, event_type, principal_sub, surface, latency_ms)
+		    VALUES ('acme', gen_random_uuid(), gen_random_uuid(), 0, 'TOOL_EXECUTED', 'alice', 'copilot', -1)`)
+		return execErr
+	})
+	if pgCode(negErr) != "23514" {
+		t.Fatalf("a negative latency must violate the CHECK, got %v", negErr)
+	}
+	// Append-only still holds for the new columns.
+	updErr := ps.DB().WithTenant(ctx, "acme", false, func(tx pgx.Tx) error {
+		_, execErr := tx.Exec(ctx, `UPDATE ai_decision_ledger SET latency_ms = 0 WHERE decision_id = $1::uuid`, id)
+		return execErr
+	})
+	if updErr == nil {
+		t.Fatal("APPEND-ONLY broken: an UPDATE of latency_ms succeeded")
+	}
+	// RLS: another tenant cannot see the copilot decision.
+	if other, err := st.List(ctx, "globex", false, aidecision.ListFilter{DecisionID: id}); err != nil || len(other) != 0 {
+		t.Fatalf("RLS LEAK: globex read acme's copilot decision: %v %+v", err, other)
+	}
+}

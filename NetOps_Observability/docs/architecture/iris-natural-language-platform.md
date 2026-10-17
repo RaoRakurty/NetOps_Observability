@@ -318,8 +318,11 @@ flowchart TB
 - The planner calls only scoped executors (`metricsScopeFiltersFor`, `chTenantScopeFor`,
   `oslog.TenantFilter`, `WithTenant`); a guard test fails the build if an Iris path calls an
   unscoped one or the raw `/api/metrics/query` proxy or OS `query_string` with model-shaped text.
-- Retrieved text, change descriptions, ticket text, aliases and context bodies render inside the
-  data fence; none can become instructions.
+- Retrieved text, change descriptions, ticket text and aliases render inside the data fence; none
+  can become instructions. Network context bodies (N-F1) are the one exception by design: they are
+  two-person-approved customer text rendered as a labelled block BEFORE the fence (so the fence is
+  the last word before evidence), one line per fact, validated at write and again at render, never
+  citable as evidence.
 - Bounded everything: request bytes, turns per conversation, AST limits (window, rows, cardinality,
   joins), repair rounds, SSE duration, output tokens.
 

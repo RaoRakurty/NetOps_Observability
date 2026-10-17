@@ -609,8 +609,8 @@ func (s *server) bgpWatchAnnotateWatchlist(out map[string]any, list []bgpWatchEn
 		}
 	}
 	if s.bgpWatchEval == nil {
-		out["incidents_note"] = "Incident classification is off. Set " + bgpwatch.EnvFeatureFlag +
-			"=true to run the watchlist evaluator. No incident here means NOT EVALUATED, not healthy."
+		out["incidents_note"] = "Incident classification is off. A platform administrator can turn on " +
+			"\"BGP alerts\" (" + bgpwatch.EnvFeatureFlag + ") in Platform → Configuration → Features. No incident here means NOT EVALUATED, not healthy."
 		return
 	}
 	if cross || normTenant(tenant) == "" || tenant == TenantGlobal {

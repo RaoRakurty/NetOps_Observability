@@ -169,7 +169,8 @@ var toolStatementClass = map[string]string{
 	"get_affected_entities":      ClassCorrelixRCA,
 	"get_confidence_breakdown":   ClassCorrelixRCA,
 	// A prior conclusion — context, never evidence of the present.
-	"recall_investigations": ClassHistorical,
+	"recall_investigations":  ClassHistorical,
+	"find_similar_incidents": ClassHistorical,
 	// Reference material.
 	"search_docs": ClassDocumentation,
 	// A computed query result.

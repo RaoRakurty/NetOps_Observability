@@ -229,6 +229,15 @@ var toolMetas = map[string]toolMeta{
 			{name: "window", desc: "How far back to look: 24h, 7d, 30d, 90d (default) or 180d.", required: false},
 		},
 	},
+	// ── N-F4: historical incident intelligence (read-only, tenant-scoped) ──
+	"find_similar_incidents": {
+		description: "Earlier CLOSED incidents of this workspace that look like the given case — same engine signature, causal chain, devices or seam — above a documented similarity threshold. HISTORY, never current state and never proof of cause: say so. Says plainly when nothing similar was found (it never returns a weak near-miss).",
+		label:       "Similar past incidents",
+		args: []toolArgSpec{
+			{name: "correlation_id", desc: "The case's correlation UUID (take it from a problem:<uuid> citation id).", required: true},
+			{name: "window", desc: "How far back to look: 30d, 90d, 180d (default) or 365d.", required: false},
+		},
+	},
 	// ── configuration change (review item 10) ──────────────────────────────
 	"get_recent_changes": {
 		description: "Configuration changes recorded for this tenant's devices: which device moved, when, how many lines, and whether it has drifted from its golden baseline. ASK THIS EARLY — a fault that began shortly after a configuration change is a different investigation from one that did not. Says plainly when a device has never been captured (that is NOT the same as unchanged).",

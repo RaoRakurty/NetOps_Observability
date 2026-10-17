@@ -72,7 +72,7 @@ describe("specAttributes (mirror of servicecat.BuildSelectorCondition)", () => {
 describe("describeSpec / ignoredSpecKeys", () => {
   it("reads a spec back as one line", () => {
     expect(describeSpec({ ports: [443, 8443], dst_prefixes: ["10.0.0.0/8"], protocols: [6] }))
-      .toBe("ports 443, 8443 · destinations 10.0.0.0/8 · protocols 6");
+      .toBe("ports 443, 8443 · service addresses 10.0.0.0/8 · protocols 6");
     expect(describeSpec({})).toBe("");
   });
   it("names the keys the engine ignores, so a full-looking spec is not mistaken for a working one", () => {

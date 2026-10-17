@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# goflow2 v2.2.1 field mapping — MOUNTED (compose ./goflow2:/etc/goflow2:ro,
+# Helm ConfigMap correlix-goflow2) and passed as `-mapping
+# /etc/goflow2/mapping.yaml`.
+#
+# Purpose: carry the exporter's APPLICATION identity — IPFIX / NetFlow v9
+# IE 95 applicationId (RFC 6759: 1-byte classification engine + selector) and
+# IE 96 applicationName — onto the flow record, so Explore Flows can show
+# what the exporter's DPI (e.g. Cisco NBAR2, FortiGate) called the traffic.
+#
+# THREE RULES, each proven against the pinned image (2026-10-11):
+#
+# 1. `fields` must list ALL 50 built-in v2.2.1 fields, in struct order,
+#    plus the two custom ones. An absent `fields` list emits only the
+#    built-ins and drops the custom fields; a partial list drops built-ins.
+#    With this full list, a flow carrying no application fields renders
+#    byte-identical to the no-mapping output. Re-check this list on any
+#    goflow2 image bump (tests/test_goflow2_mapping.py pins it).
+#
+# 2. NO `render:` entry for application_*. Unrendered `bytes` fields come
+#    out HEX-encoded. goflow2's `string` renderer splices the raw bytes into
+#    the JSON UNESCAPED: an IE 96 value of `x","tenant_id":"victim` became
+#    a second tenant_id key — field injection from any UDP sender. Hex is
+#    immune; vector-router decodes and validates it (flows_decoded).
+#
+# 3. An exporter that sends neither field produces neither key (never "").
+formatter:
+  fields: [type, time_received_ns, sequence_num, sampling_rate, sampler_address, time_flow_start_ns, time_flow_end_ns, bytes, packets, src_addr, dst_addr, etype, proto, src_port, dst_port, in_if, out_if, src_mac, dst_mac, src_vlan, dst_vlan, vlan_id, ip_tos, forwarding_status, ip_ttl, ip_flags, tcp_flags, icmp_type, icmp_code, ipv6_flow_label, fragment_id, fragment_offset, src_as, dst_as, next_hop, next_hop_as, src_net, dst_net, bgp_next_hop, bgp_communities, as_path, mpls_ttl, mpls_label, mpls_ip, observation_domain_id, observation_point_id, layer_stack, layer_size, ipv6_routing_header_addresses, ipv6_routing_header_seg_left, application_id, application_name]
+  protobuf:
+    - name: application_id
+      index: 1095
+      type: bytes
+    - name: application_name
+      index: 1096
+      type: bytes
+ipfix:
+  mapping:
+    - field: 95
+      destination: application_id
+    - field: 96
+      destination: application_name
+netflowv9:
+  mapping:
+    - field: 95
+      destination: application_id
+    - field: 96
+      destination: application_name

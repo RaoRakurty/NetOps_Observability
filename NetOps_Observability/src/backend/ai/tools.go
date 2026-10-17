@@ -141,6 +141,7 @@ type Capability string
 
 const (
 	CapRead    Capability = "read"    // returns data; no side effects (allowed in v1)
+	CapProbe   Capability = "probe"   // opens a READ-ONLY device session (SSH show commands); allowed, rate-limited hard (N-A8, D14)
 	CapWrite   Capability = "write"   // mutates app state (ITSM ticket, owner) — P6, gated
 	CapExecute Capability = "execute" // touches a network device — P6+, fully gated
 )
@@ -479,10 +480,20 @@ func Tools(ds DataSource) *ToolRegistry {
 	return reg
 }
 
-// ToolRegistry is the Module Tool Registry: name → governed tool.
-type ToolRegistry struct{ byName map[string]AITool }
+// ToolRegistry is the Module Tool Registry: name → governed tool. A tool
+// enters only through register (toolcontract.go), which checks its contract.
+type ToolRegistry struct {
+	byName   map[string]AITool
+	rejected []error
+}
 
-func (r *ToolRegistry) add(t AITool) { r.byName[t.Name()] = t }
+// add registers t, recording (not panicking on) a contract failure: the tool
+// is simply absent — fail closed — and Rejected() names why.
+func (r *ToolRegistry) add(t AITool) {
+	if err := r.register(t); err != nil {
+		r.rejected = append(r.rejected, err)
+	}
+}
 
 // Get returns a tool by name (ok=false if not registered/implemented).
 func (r *ToolRegistry) Get(name string) (AITool, bool) {

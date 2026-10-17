@@ -1,0 +1,30 @@
+{
+  "description": "Routing labels for the Iris question router (tracker 337 N-G4). expect: product = a question about Correlix itself (docs, how-to, a screen, a decline the product answer handles); rca = live incidents/state; investigation = a troubleshooting method; not_product = anything but a product answer (live data or state). Scored by ai/routing_scoreboard_test.go on the router's FIRST claim. Questions only the data arm claims (they need the real grammar) are scored by the N-C6 compiler corpus, not here.",
+  "items": [
+    {"id": "r-ui-001", "expect": "product", "question": "What does the Operations Overview page show?"},
+    {"id": "r-ui-002", "expect": "product", "question": "What does the Cloud overview tab show?"},
+    {"id": "r-ui-003", "expect": "product", "question": "What does the Service Paths tab show for a digital experience incident?"},
+    {"id": "r-ui-004", "expect": "product", "question": "what does this column mean"},
+    {"id": "r-howto-001", "expect": "product", "question": "Create a monitor that alerts when interface errors climb"},
+    {"id": "r-howto-002", "expect": "product", "question": "Connect ServiceNow so incidents open tickets automatically"},
+    {"id": "r-howto-003", "expect": "product", "question": "What sampling rate should I configure for NetFlow export?"},
+    {"id": "r-howto-004", "expect": "product", "question": "how do I add a device"},
+    {"id": "r-howto-005", "expect": "product", "question": "how do I set up SNMP discovery"},
+    {"id": "r-howto-006", "expect": "product", "question": "Schedule a weekly availability report for my managers"},
+    {"id": "r-concept-001", "expect": "product", "question": "How is the measurement target chosen for a WAN interface?"},
+    {"id": "r-concept-002", "expect": "product", "question": "what is a seam"},
+    {"id": "r-concept-003", "expect": "product", "question": "what does suspected mean"},
+    {"id": "r-concept-004", "expect": "product", "question": "how does correlation work"},
+    {"id": "r-cap-001", "expect": "product", "question": "what can you do"},
+    {"id": "r-decline-001", "expect": "product", "question": "what's the weather in Amsterdam today?"},
+    {"id": "r-decline-002", "expect": "product", "question": "write me a poem about the ocean"},
+    {"id": "r-live-001", "expect": "rca", "question": "what's going on right now?"},
+    {"id": "r-live-002", "expect": "rca", "question": "show me the critical incidents"},
+    {"id": "r-live-003", "expect": "rca", "question": "give me a status update"},
+    {"id": "r-live-004", "expect": "not_product", "question": "Which devices have the highest CPU and memory?"},
+    {"id": "r-live-006", "expect": "not_product", "question": "are my integrations healthy?"},
+    {"id": "r-inv-001", "expect": "investigation", "question": "A user says an application is slow. Is it the network, the provider or the application?"},
+    {"id": "r-inv-002", "expect": "investigation", "question": "bgp neighbor down on edge-1"},
+    {"id": "r-inv-003", "expect": "investigation", "question": "the site is not working"}
+  ]
+}

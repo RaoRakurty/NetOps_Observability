@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"netops/backend/internal/irisgate"
 	"netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/catalog"
 	"netops/backend/internal/nlquery/compile"
@@ -175,6 +176,10 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 	//                        model fallback or a clarifying question).
 	var entityP, executable, answeredP, coverage score
 	var misses []string
+	// Release-gate counts (N-H5): the SAFETY checks below as numbers.
+	var refused score       // SAFETY 1: phrasings that must be refused and were
+	var foreignChecks int64 // SAFETY 2: compiled queries checked for a foreign entity
+	var foreignBad int64    //           ... and the ones that named one
 
 	for _, c := range cases {
 		loc, err := time.LoadLocation(firstNonEmpty(c.Context.TZ, "UTC"))
@@ -193,16 +198,23 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 				t.Fatalf("%s %q: %v", c.ID, question, err)
 			}
 			// SAFETY 1: actions / injection / cross-tenant are declined.
-			if c.Expect.Decline == compile.DeclineNotAQuery && res.AST != nil {
-				v, vr := validate.Validate(ctx, cat, sc, res.AST)
-				if vr.Valid && v != nil {
-					t.Errorf("SAFETY %s %q: must be refused, compiled to a valid query %s", c.ID, question, canon(res.AST))
+			if c.Expect.Decline == compile.DeclineNotAQuery {
+				refused.total++
+				refused.ok++
+				if res.AST != nil {
+					v, vr := validate.Validate(ctx, cat, sc, res.AST)
+					if vr.Valid && v != nil {
+						refused.ok--
+						t.Errorf("SAFETY %s %q: must be refused, compiled to a valid query %s", c.ID, question, canon(res.AST))
+					}
 				}
 			}
 			// SAFETY 2: nothing compiled names another tenant's entity.
 			if res.AST != nil {
+				foreignChecks++
 				for _, r := range res.AST.Refs {
 					if w.owner[r.ID] != "" && w.owner[r.ID] != w.a.Tenant {
+						foreignBad++
 						t.Errorf("SAFETY %s %q: compiled a foreign entity %s", c.ID, question, r.ID)
 					}
 				}
@@ -301,6 +313,16 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 	t.Log(b.String())
 	if testing.Verbose() {
 		t.Log("misses:\n" + strings.Join(misses, "\n"))
+	}
+	// N-H5: the measurements, as counts, for the release gates.
+	if err := irisgate.Record("nlquery.compile",
+		irisgate.Measure{Gate: irisgate.GateEntity, OK: int64(entityP.ok), Total: int64(entityP.total), Note: "compiled entity precision"},
+		irisgate.Measure{Gate: irisgate.GateExecutable, OK: int64(executable.ok), Total: int64(executable.total)},
+		irisgate.Measure{Gate: irisgate.GateSemantic, OK: int64(answeredP.ok), Total: int64(answeredP.total), Note: "answered precision"},
+		irisgate.Measure{Gate: irisgate.GateCrossTenant, Bad: foreignBad, Total: foreignChecks, Note: "compiled queries naming another tenant's entity"},
+		irisgate.Measure{Gate: irisgate.GateInjection, OK: int64(refused.ok), Total: int64(refused.total), Note: "actions/injection phrasings refused"},
+	); err != nil {
+		t.Fatal(err)
 	}
 	for _, f := range []struct {
 		name       string

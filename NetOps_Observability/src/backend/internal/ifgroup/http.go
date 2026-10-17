@@ -246,11 +246,16 @@ func (a *API) handleByVRF(w http.ResponseWriter, r *http.Request, id string) {
 	read("device_if_in_errors", "rate(device_if_in_errors"+sel+"["+rangeTok+"])", &series.InErr)
 	read("device_if_out_errors", "rate(device_if_out_errors"+sel+"["+rangeTok+"])", &series.OutErr)
 	read("device_bgp_peer_state", "device_bgp_peer_state"+sel, &series.BGPVRFs)
+	read("device_vrf_info", "device_vrf_info"+sel, &series.VRFInfo)
+	read("device_vrf_if_info", "device_vrf_if_info"+sel, &series.VRFIf)
 
 	term, vendorKnown := a.deps.VRFTerm(d.Vendor)
+	if t := TermFromKinds(series.VRFInfo); t != "" {
+		term = t // the device's own word, read from it (vEdge "VPN", SR OS "VPRN")
+	}
 	ifaces, truncated := BuildInterfaces(series, maxInterfaces)
 	groups, vrfLabels := GroupByVRF(ifaces, term)
-	instances := KnownRoutingInstances(series.BGPVRFs, maxInstances)
+	instances := CollectedRoutingInstances(series.VRFInfo, series.BGPVRFs, maxInstances)
 	cov := BuildCoverage(ifaces, groups, vrfLabels, truncated, term, instances)
 	for _, name := range degraded {
 		cov.Notes = append(cov.Notes,
@@ -291,5 +296,6 @@ func pluralTerm(term string) string {
 	case "VPN instance":
 		return "VPN instances"
 	}
+	// VPN, VPRN, VRF → VPNs, VPRNs, VRFs.
 	return term + "s"
 }

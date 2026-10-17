@@ -126,7 +126,30 @@ export function sortAppRows(rows: readonly FlowAppRow[] | undefined | null): Flo
 
 /** A stable identity for a src→dst pair (React keys, table rowKey). */
 export function appRowKey(row: FlowAppRow): string {
-  return `${txt(row.src_app)}→${txt(row.app)}`;
+  const base = `${txt(row.src_app)}→${txt(row.app)}`;
+  const x = txt(row.exporter_app_id) || txt(row.exporter_app);
+  return x ? `${base}|${txt(row.exporter_app_id)}|${txt(row.exporter_app)}` : base;
+}
+
+/** The exporter's own classification of a row, in plain words. */
+export type ExporterView = { label: string; title: string; named: boolean };
+
+export function exporterView(row: FlowAppRow): ExporterView {
+  const name = txt(row.exporter_app);
+  const id = txt(row.exporter_app_id);
+  switch (txt(row.exporter_app_kind)) {
+    case "app":
+      return name
+        ? { label: name, title: id ? `Named by the exporter (application id ${id}).` : "Named by the exporter.", named: true }
+        : { label: `id ${id}`, title: `Classified by the exporter (application id ${id}), but it sent no name — most exporters send names in a separate table.`, named: false };
+    case "service_class":
+      return { label: `port/protocol ${id}`, title: "The exporter classified this by port or protocol number — a service class, not the application.", named: false };
+    case "unclassified":
+      return { label: "unclassified", title: "The exporter sent an application id of 0: it could not classify this traffic.", named: false };
+    case "unknown":
+      return { label: `id ${id}`, title: "The exporter used a classification engine this screen does not recognise.", named: false };
+  }
+  return { label: "—", title: "The exporter sent no application identity for this traffic.", named: false };
 }
 
 export type AppTotals = { bytes: number; flows: number; unknownBytes: number; unknownRows: number };

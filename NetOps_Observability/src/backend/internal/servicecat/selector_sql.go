@@ -90,14 +90,23 @@ func joinInts(xs []int) string {
 // flows table. Pure + unit-tested. Returns ("", false) when the spec yields no
 // safe predicate (so the caller marks the service unattributed rather than match
 // everything).
+//
+// A flow record is ONE direction of a conversation. The client→service half
+// carries the service port as dst_port and the service address as dst_addr;
+// the service→client half — usually the larger one — carries them as src_port
+// and src_addr. Matching the destination side only dropped every reply, so a
+// service showed a fraction of its traffic. Ports and the service's addresses
+// (the `dst_prefixes` key, kept for stored specs) match EITHER side; each flow
+// row is still counted once, since it is one sumIf/countIf condition.
 func BuildSelectorCondition(spec map[string]any) (string, bool) {
 	var ors []string
 	if ports := intList(spec["ports"], 0, 65535); len(ports) > 0 {
-		ors = append(ors, "dst_port IN ("+joinInts(ports)+")")
+		in := joinInts(ports)
+		ors = append(ors, "dst_port IN ("+in+")", "src_port IN ("+in+")")
 	}
 	for _, c := range strList(spec["dst_prefixes"]) {
 		if isCIDRToken(c) {
-			ors = append(ors, "isIPAddressInRange(dst_addr, '"+c+"')")
+			ors = append(ors, "isIPAddressInRange(dst_addr, '"+c+"')", "isIPAddressInRange(src_addr, '"+c+"')")
 		}
 	}
 	if protos := intList(spec["protocols"], 0, 255); len(protos) > 0 {

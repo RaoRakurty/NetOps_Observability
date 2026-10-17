@@ -2,7 +2,7 @@
 // Copyright 2026 Correlix
 
 import { useEffect, useState } from "react";
-import { api, AuthUser, getToken, onAuthChange } from "../services/api";
+import { api, AuthUser, getToken, onAuthChange, startActivityKeepAlive } from "../services/api";
 
 // useAuth — single source of truth for "is the user signed in?".
 // We model state as { loading, user }. user === null means signed out.
@@ -44,6 +44,13 @@ export function useAuth() {
       off();
     };
   }, []);
+
+  // While signed in, operator input keeps the server-side session alive (the
+  // idle timeout counts from the last refresh; see noteUserActivity in api.ts).
+  useEffect(() => {
+    if (!user) return;
+    return startActivityKeepAlive();
+  }, [user]);
 
   const refresh = async () => {
     try {

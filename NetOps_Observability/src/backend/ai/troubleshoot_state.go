@@ -203,7 +203,7 @@ type deviceStateTool struct{ deps TroubleshootDeps }
 
 func (t deviceStateTool) Name() string            { return "get_device_state" }
 func (t deviceStateTool) Module() string          { return "device_state" }
-func (t deviceStateTool) Capability() Capability  { return CapRead }
+func (t deviceStateTool) Capability() Capability  { return CapProbe }
 func (t deviceStateTool) RequiredPerms() []string { return []string{"infrastructure:read"} }
 func (t deviceStateTool) Freshness() Freshness    { return FreshnessLive }
 

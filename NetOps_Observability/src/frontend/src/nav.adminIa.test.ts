@@ -43,6 +43,7 @@ const GATES: Record<string, { scope: "platform" | "tenant"; gate: string }> = {
   // is the safe direction; unhiding it would be a new exposure.
   graphql: { scope: "platform", gate: "graphql.go handleGraphQL → requirePerm(infrastructure, read); UI kept provider-only (fail-closed)" },
   "pipeline-debugger": { scope: "platform", gate: "internal/pipedebug/http.go via debugAuthz → requirePlatformAdmin, on all five /api/debug/* routes" },
+  features: { scope: "platform", gate: "feature_flags.go handlePlatformFeatures / handlePlatformRestart → requirePlatformAdmin" },
   quarantine: { scope: "platform", gate: "pipeline_processors.go handleQuarantineList → requirePlatformAdmin (the index holds events attributable to NO tenant)" },
   // ── Administration ─────────────────────────────────────────────────────────
   access: { scope: "tenant", gate: "access_explain.go handleAccessExplain → requireAdmin" },
@@ -63,6 +64,7 @@ const GATES: Record<string, { scope: "platform" | "tenant"; gate: string }> = {
   licence: { scope: "tenant", gate: "internal/licence/api.go GET → licenceReadGate → requireAdmin + principalTenant (tenant projection); PUT/DELETE alone → licenceGate → requirePlatformAdmin" },
   integrations: { scope: "tenant", gate: "integrations_http.go → requireAdmin, keyed by itsmKey(tenant)" },
   ticketing: { scope: "tenant", gate: "ticketing_http.go → requirePerm(administration, read|write)" },
+  "network-context": { scope: "tenant", gate: "ai_handlers.go handleAIContext → requirePerm(administration, read/write/admin) + ai.context.author + principalTenant (a Global view must choose a workspace); approval needs a second person (internal/orgcontext)" },
   "ticket-delivery": { scope: "tenant", gate: "ticketing_http.go handleTicketsOutbox/handleTicketsAudit → requirePerm(infrastructure, read) + principalTenant; integrations_http.go handleIntegrationReconcile → requireAdmin on the caller's own tenant" },
   datasources: { scope: "tenant", gate: "/api/devices → requirePerm(infrastructure, read)" },
   snmp: { scope: "tenant", gate: "snmp_profiles.go read → requirePerm(infrastructure, read); writes escalate to requirePlatformAdmin" },
@@ -92,9 +94,10 @@ describe("Platform is ONE provider-only section", () => {
     expect(platform.label).toBe("Platform");
   });
 
-  it("carries exactly the Security and Tools groups the owner asked for", () => {
+  it("carries the Security and Tools groups the owner asked for, plus Configuration (Features, tracker 348)", () => {
     const groups = [...new Set((platform.children ?? []).map((l) => l.group).filter(Boolean))];
-    expect(groups).toEqual(["Security", "Tools"]);
+    expect(groups).toEqual(["Security", "Configuration", "Tools"]);
+    expect(groupIds(platform, "Configuration")).toEqual(["features"]);
   });
 
   it("Security holds the provider-level security plumbing", () => {

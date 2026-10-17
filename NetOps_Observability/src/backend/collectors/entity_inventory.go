@@ -24,7 +24,35 @@ var (
 	entPhysicalClassOID  = []int{1, 3, 6, 1, 2, 1, 47, 1, 1, 1, 1, 5}  // entPhysicalClass
 	entPhysicalSerialOID = []int{1, 3, 6, 1, 2, 1, 47, 1, 1, 1, 1, 11} // entPhysicalSerialNum
 	entPhysicalModelOID  = []int{1, 3, 6, 1, 2, 1, 47, 1, 1, 1, 1, 13} // entPhysicalModelName
+	// entPhysicalSoftwareRev — the standard per-component software revision
+	// (RFC 6933). The device's software version when its sysDescr carries
+	// none (owner report 2026-10-10: the inventory's Software column was blank).
+	entPhysicalSoftwareRevOID = []int{1, 3, 6, 1, 2, 1, 47, 1, 1, 1, 1, 10}
 )
+
+// pickSoftwareRev chooses the device's software revision from the per-entity
+// column: the chassis row first, then the first module (IOS XE reports it on
+// the route-processor module, not the chassis), then any row that has one.
+// "" when no entity reports a revision. Pure.
+func pickSoftwareRev(swrev, class map[string]string) string {
+	idxs := make([]string, 0, len(swrev))
+	for idx, v := range swrev {
+		if strings.TrimSpace(v) != "" {
+			idxs = append(idxs, idx)
+		}
+	}
+	// Numeric order of the ENTITY-MIB indexes (integers). A malformed index
+	// sorts as 0 — the order only decides which revision string wins a tie.
+	sort.Slice(idxs, func(i, j int) bool { return atoiOrZero(idxs[i]) < atoiOrZero(idxs[j]) })
+	for _, want := range []string{"3", "9", ""} { // chassis, module, anything
+		for _, idx := range idxs {
+			if want == "" || strings.TrimSpace(class[idx]) == want {
+				return sanitizeLabel(swrev[idx])
+			}
+		}
+	}
+	return ""
+}
 
 // entClassName maps the ENTITY-MIB entPhysicalClass enum to a readable label.
 var entClassName = map[string]string{
@@ -74,7 +102,7 @@ func buildEntityInfoLines(device, vendor string, descr, model, serial, class map
 // collectEntityInventory walks the four ENTITY-MIB columns and returns FRU info
 // lines. Best-effort: a device that does not implement ENTITY-MIB yields no
 // lines (the walks return empty), so this is safe to call every poll.
-func collectEntityInventory(ctx context.Context, addr string, creds snmpCreds, device, vendor string, tsMillis int64) []string {
+func collectEntityInventory(ctx context.Context, addr string, creds snmpCreds, device, vendor string, tsMillis int64) ([]string, string) {
 	// Descr/Model/Serial are OCTET STRING → raw bytes are the text.
 	walkStr := func(oid []int) map[string]string {
 		out := map[string]string{}
@@ -96,7 +124,18 @@ func collectEntityInventory(ctx context.Context, addr string, creds snmpCreds, d
 		}
 		return out
 	}
-	return buildEntityInfoLines(device, vendor,
+	class := walkInt(entPhysicalClassOID)
+	lines := buildEntityInfoLines(device, vendor,
 		walkStr(entPhysicalDescrOID), walkStr(entPhysicalModelOID),
-		walkStr(entPhysicalSerialOID), walkInt(entPhysicalClassOID), tsMillis)
+		walkStr(entPhysicalSerialOID), class, tsMillis)
+	return lines, pickSoftwareRev(walkStr(entPhysicalSoftwareRevOID), class)
+}
+
+// atoiOrZero parses a decimal index; anything else is 0 (see the caller).
+func atoiOrZero(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return n
 }

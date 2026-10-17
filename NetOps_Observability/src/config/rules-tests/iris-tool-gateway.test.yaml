@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# promtool unit tests for IrisToolEvidenceDropped (rules-scale-slo.yaml,
+# iris-ai-quality group; tracker 337 N-A8): fires when one tool drops more
+# than 10 % of its results, stays silent below the volume floor and when the
+# tool is healthy.
+rule_files:
+  - /etc/prometheus/rules-scale-slo.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) 60 calls/h, 15 % timed out → fires for that tool only.
+  - interval: 1m
+    input_series:
+      - series: 'netops_ai_tool_invocations_total{tool="search_logs",outcome="ok",job="netops-api"}'
+        values: "0+0.85x120"
+      - series: 'netops_ai_tool_invocations_total{tool="search_logs",outcome="timeout",job="netops-api"}'
+        values: "0+0.15x120"
+      - series: 'netops_ai_tool_timeouts_total{tool="search_logs",job="netops-api"}'
+        values: "0+0.15x120"
+      - series: 'netops_ai_tool_invocations_total{tool="get_problem",outcome="ok",job="netops-api"}'
+        values: "0+1x120"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: IrisToolEvidenceDropped
+        exp_alerts:
+          - exp_labels: { severity: warning, layer: ai, tier: warning, tool: search_logs }
+            exp_annotations:
+              summary: "Iris tool search_logs is dropping more than 10% of its results"
+              description: "Over the last hour more than a tenth of search_logs calls either did not answer within the tool's contract timeout or returned a result that failed its declared output schema; Iris discloses the gap in each answer instead of using the result. A rise in timeouts points at the backend the tool reads (ClickHouse, OpenSearch, VictoriaMetrics, a device); a rise in schema rejects means the tool returns something its contract does not allow — check the api logs for \"rejected by its output schema\"."
+              runbook: "docs/runbooks/iris-ai-quality.md#tool-evidence-dropped"
+
+  # 2) Same 15 % but ~6 calls/h → below the floor, silent.
+  - interval: 1m
+    input_series:
+      - series: 'netops_ai_tool_invocations_total{tool="search_logs",outcome="ok",job="netops-api"}'
+        values: "0+0.085x120"
+      - series: 'netops_ai_tool_invocations_total{tool="search_logs",outcome="schema_rejected",job="netops-api"}'
+        values: "0+0.015x120"
+      - series: 'netops_ai_tool_schema_rejects_total{tool="search_logs",job="netops-api"}'
+        values: "0+0.015x120"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: IrisToolEvidenceDropped
+        exp_alerts: []
+
+  # 3) Healthy: 2 % dropped → silent.
+  - interval: 1m
+    input_series:
+      - series: 'netops_ai_tool_invocations_total{tool="get_top_talkers",outcome="ok",job="netops-api"}'
+        values: "0+0.98x120"
+      - series: 'netops_ai_tool_invocations_total{tool="get_top_talkers",outcome="timeout",job="netops-api"}'
+        values: "0+0.02x120"
+      - series: 'netops_ai_tool_timeouts_total{tool="get_top_talkers",job="netops-api"}'
+        values: "0+0.02x120"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: IrisToolEvidenceDropped
+        exp_alerts: []
