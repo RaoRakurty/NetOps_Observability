@@ -205,7 +205,7 @@ func TestGoldenDocsCitationCorrectness(t *testing.T) {
 		if !hitSlugs(hits, it.Expect.Slugs, 3) {
 			continue // retrieval miss — already accounted by the hit@k gate
 		}
-		ans, ok := o.answerProductFromDocs(it.Question, plan, nil)
+		ans, ok := o.answerProductFromDocs(it.Question, plan, nil, nil)
 		if !ok {
 			t.Errorf("%s: retrieval hit but the product answer declined", it.ID)
 			continue
