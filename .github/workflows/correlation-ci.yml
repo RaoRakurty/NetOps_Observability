@@ -73,9 +73,11 @@ jobs:
       plan: ${{ steps.plan.outputs.plan }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        # Default credentials, like every other checkout here: with
+        # persist-credentials:false the checkout removes them IN-STEP, walks
+        # submodules, and the repo's URL-less gitlink fails the step (exit 128).
         with:
           fetch-depth: 0
-          persist-credentials: false
       - id: plan
         uses: ./.github/actions/ci-plan
 
@@ -161,8 +163,6 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          persist-credentials: false
       - uses: ./.github/actions/ci-gate
         with:
           needs: ${{ toJSON(needs) }}
