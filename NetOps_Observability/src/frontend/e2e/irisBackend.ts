@@ -101,7 +101,7 @@ export function topCpuAnswer(): Json {
   return {
     mode: "data_query", intent: "query_metric", modules: [],
     text: `Cpu — 3 results: core-rtr-1 91.5%; ${XSS_IMG} 72%; edge-fw-2 40%;`,
-    citations: [{ id: "query:q-7f3a", kind: "query", label: "Query 5d41a8c0", href: "" }],
+    citations: [{ id: "query:q-7f3a", kind: "query", label: "Live network data", href: "" }],
     disclaimers: [],
     data: {
       intent: "query_metric", entities: null, clarify: null, decline: "", unparsed: false, not_understood: null,
@@ -125,7 +125,7 @@ export function memorySeriesAnswer(): Json {
   return {
     mode: "data_query", intent: "query_metric", modules: [],
     text: "Memory for 1 series, highest peak first: core-rtr-1 peak 66% (avg 63.5%);",
-    citations: [{ id: "query:q-8b21", kind: "query", label: "Query 9e107d9d", href: "" }],
+    citations: [{ id: "query:q-8b21", kind: "query", label: "Live network data", href: "" }],
     disclaimers: [],
     data: {
       intent: "query_metric", entities: [{ input_text: "that device", entity_id: "device:core-rtr-1", entity_type: "device", confidence: 1, resolution_method: "canonical_id" }],

@@ -173,7 +173,7 @@ describe("Iris — the grounded claim is per-answer, and an ungrounded answer is
     await ask("what is going on right now?");
 
     const chip = await screen.findByTestId("iris-grounded-chip");
-    expect(chip.textContent).toMatch(/cited/i);
+    expect(chip.textContent).toMatch(/with sources/i);
     expect(screen.queryByTestId("iris-ungrounded-chip")).toBeNull();
   });
 
@@ -185,8 +185,8 @@ describe("Iris — the grounded claim is per-answer, and an ungrounded answer is
     await ask("what is going on right now?");
 
     const chip = await screen.findByTestId("iris-grounded-chip");
-    expect(chip.textContent).toMatch(/grounded/i);
-    expect(chip.textContent).not.toMatch(/cited/i);
+    expect(chip.textContent).toMatch(/from your data/i);
+    expect(chip.textContent).not.toMatch(/sources/i);
   });
 
   it("labels the general-model answer from the server's own is_grounded flag", async () => {

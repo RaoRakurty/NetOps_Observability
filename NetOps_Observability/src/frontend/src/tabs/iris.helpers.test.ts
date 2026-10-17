@@ -93,14 +93,14 @@ describe("isCapabilityMiss — the ONLY engine outcome eligible for the plain pr
   });
 });
 
-describe("groundedChipLabel — 'cited' is claimed only when there are citations", () => {
-  it("claims cited when the answer carries citations", () => {
-    expect(groundedChipLabel(currentState())).toMatch(/cited/);
+describe("groundedChipLabel — 'with sources' is claimed only when there are citations", () => {
+  it("claims sources when the answer carries citations", () => {
+    expect(groundedChipLabel(currentState())).toBe("From your data · with sources");
   });
 
-  it("drops the cited claim when the answer carries none", () => {
+  it("drops the sources claim when the answer carries none", () => {
     const label = groundedChipLabel(currentState({ citations: [] }));
-    expect(label).toMatch(/Grounded/);
-    expect(label).not.toMatch(/cited/);
+    expect(label).toBe("From your data");
+    expect(label).not.toMatch(/sources/);
   });
 });

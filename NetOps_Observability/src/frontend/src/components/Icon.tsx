@@ -164,6 +164,23 @@ const PATHS: Record<string, JSX.Element> = {
       <line x1="17" y1="16" x2="23" y2="16" />
     </>
   ),
+  // upstream: Lucide `cpu` (ISC) — verbatim path data.
+  // AI model — the Iris models & keys view (owner 2026-10-17: the sliders mark
+  // read as "filters", not "which AI answers").
+  model: (
+    <>
+      <rect width="16" height="16" x="4" y="4" rx="2" />
+      <rect width="6" height="6" x="9" y="9" rx="1" />
+      <path d="M15 2v2" />
+      <path d="M15 20v2" />
+      <path d="M2 15h2" />
+      <path d="M2 9h2" />
+      <path d="M20 15h2" />
+      <path d="M20 9h2" />
+      <path d="M9 2v2" />
+      <path d="M9 20v2" />
+    </>
+  ),
   // Stack — layered planes, for the platform's own infra-stack section.
   stack: (
     <>

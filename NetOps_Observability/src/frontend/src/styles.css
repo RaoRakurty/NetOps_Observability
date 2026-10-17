@@ -2026,10 +2026,19 @@ code, kbd, pre, .mono, td.mono {
 /* Provider selection — modern segmented tiles instead of a <select>. */
 .op-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .op-tile {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 1px; cursor: pointer; text-align: left;
-  padding: 9px 12px; border-radius: 10px; background: var(--panel-solid); border: 1px solid var(--panel-border);
+  display: flex; flex-direction: row; align-items: center; gap: 10px; cursor: pointer; text-align: left;
+  padding: 10px 12px; border-radius: 10px; background: var(--panel-solid); border: 1px solid var(--panel-border);
   transition: border-color .12s, background .12s, transform .1s;
 }
+/* The provider's accent (a platform --mod-* token, set inline as --tile). */
+.op-tile-icon {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 8px;
+  color: var(--tile); background: color-mix(in srgb, var(--tile) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tile) 32%, transparent);
+}
+.op-tile-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.op-tile.on .op-tile-icon { background: color-mix(in srgb, var(--tile) 26%, transparent); }
 .op-tile:hover { border-color: var(--accent-ring); transform: translateY(-1px); }
 .op-tile.on { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent) inset; }
 .op-tile-name { font-size: 14px; font-weight: 600; color: var(--fg); text-transform: none; letter-spacing: normal; }
