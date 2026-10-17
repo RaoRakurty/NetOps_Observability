@@ -27,13 +27,16 @@ import (
 	"strings"
 	"time"
 
+	"netops/backend/ai"
 	"netops/backend/internal/chschema"
 	"netops/backend/internal/httppage"
+	"netops/backend/internal/incidentfp"
 	"netops/backend/internal/metricval"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/rca"
 	"netops/backend/rcafeedback"
 	"netops/backend/secapi"
+	"netops/backend/timeintel"
 )
 
 // The RCA Path View mapping moved to internal/rca (path_view.go, Phase-2 W1).
@@ -529,6 +532,9 @@ func (s *server) handleCorrelationByID(w http.ResponseWriter, r *http.Request) {
 		s.serveRcaRevisions(w, r, id)
 	case "time-metrics":
 		s.serveCorrelationTimeMetrics(w, r, id)
+	case "similar":
+		// N-F4: earlier closed incidents of the same tenant that look alike.
+		s.serveCorrelationSimilar(w, r, id)
 	case "replay":
 		s.proxyCorrelationReplay(w, r, id)
 	default:
@@ -1233,4 +1239,151 @@ func (s *server) securityExposureStories(r *http.Request, limit int) ([]map[stri
 		conds = append(conds, ex)
 	}
 	return s.chRows(r, correlationsListSQL(sinceCond, conds, limit))
+}
+
+// ── Similar past incidents (tracker 337 N-F4, internal/incidentfp) ─────────
+//
+// GET /api/correlations/{id}/similar?window=180d — "have we seen this before?"
+//
+// §3a: the SUBJECT is read under the caller's own scope and restriction
+// exclusion (loadCorrSlice), so a foreign or restricted incident is the same
+// 404 as a missing one. Only once that access is proven are candidates read —
+// always within the subject's OWNING tenant, cross=false, even for the
+// platform owner: another tenant's incidents are never compared.
+
+func newIncidentFingerprintStore() incidentfp.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return incidentfp.NewPGStore(ps.DB())
+	}
+	return incidentfp.NewMemStore(0)
+}
+
+// incidentFingerprintFrom derives an incident's fingerprint from its slice.
+func incidentFingerprintFrom(id string, meta map[string]any, sigRows, evRows, edgeRows []map[string]any, now time.Time) (incidentfp.Fingerprint, string, bool) {
+	// The same evidence stamping the RCA report builder does, so the symptoms
+	// and chain kinds read here are the ones the workspace shows.
+	_ = rca.MergeTimelineEvidence(sigRows, evRows, edgeRows, fmt.Sprintf("%v", meta["trigger_signal"])) // result unused: it stamps sigRows in place
+	rep := rca.BuildReport(rca.ReportInput{ID: id, Meta: meta, Signals: sigRows, Edges: edgeRows, Now: now})
+	affected := asString(meta["affected"])
+	group := timeintel.GroupKeysFromAffected(affected)
+	owner := asString(meta["owner"])
+	domain, _ := timeintel.ClassifyOwnerDomain(owner, group)
+	var a struct {
+		Devices    []string `json:"devices"`
+		Interfaces []string `json:"interfaces"`
+		Paths      []string `json:"paths"`
+		Sites      []string `json:"sites"`
+	}
+	_ = json.Unmarshal([]byte(affected), &a) // best-effort: a blob that does not parse contributes no entities
+	var chain [][]string
+	for _, st := range rep.CausalChain.Steps {
+		chain = append(chain, st.Kinds)
+	}
+	var symptoms []string
+	for _, sy := range rep.Evidence.Symptoms {
+		symptoms = append(symptoms, sy.Kind)
+	}
+	state := asString(meta["state"])
+	occurred := parseCHTime(meta["window_start"])
+	f := incidentfp.FromParts(incidentfp.Parts{
+		CorrelationID: id, Signature: asString(meta["top_hypothesis"]), OwnerDomain: string(domain),
+		SeamType: asString(meta["seam_type"]), Owner: owner,
+		Devices: append(a.Devices, rep.Scope.Devices...), Interfaces: a.Interfaces,
+		Sites: append(a.Sites, rep.Scope.Sites...), Services: rep.Scope.Services, Seams: rep.Scope.Seams, Paths: a.Paths,
+		ChainStepKinds: chain, ChainContradicted: rep.CausalChain.PrimaryContradicted, SymptomKinds: symptoms,
+		VerdictTier: asString(meta["verdict_tier"]), State: state, OccurredAt: occurred,
+	}, now)
+	return f, canonicalCorrTenant(asString(meta["tenant_id"])), strings.EqualFold(state, "closed")
+}
+
+func (s *server) incidentRecallDeps() incidentfp.Deps {
+	return incidentfp.Deps{
+		Store: s.incidentFP,
+		Candidates: func(ctx context.Context, tenant string, since time.Time) ([]incidentfp.Fingerprint, error) {
+			if s.incidentTimeMetrics == nil {
+				return nil, nil
+			}
+			rows, err := s.incidentTimeMetrics.ListWindow(ctx, tenant, false, since, timeIntelCalcVersion, timeIntelBackfillCap)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]incidentfp.Fingerprint, 0, len(rows))
+			for _, r := range rows {
+				if !strings.EqualFold(r.State, "closed") || r.Internal || r.TenantID != "" && r.TenantID != tenant {
+					continue // open, merged, platform-internal, or (defensively) another tenant's row
+				}
+				g := r.Group
+				out = append(out, incidentfp.FromParts(incidentfp.Parts{
+					CorrelationID: r.CorrelationID, Signature: g["signature"], OwnerDomain: r.OwnerDomain, SeamType: r.SeamType,
+					Owner: r.Owner, Devices: []string{g["device"]}, Interfaces: []string{g["interface"]}, Paths: []string{g["app_path"]},
+					State: r.State, OccurredAt: r.OccurredAt,
+				}, r.CalculatedAt))
+			}
+			return out, nil
+		},
+		// A candidate is read under ITS tenant (proven reachable by the subject
+		// read) with that tenant's exact scope — never "__all__".
+		Build: func(ctx context.Context, tenant, id string) (incidentfp.Fingerprint, error) {
+			meta, sigRows, evRows, edgeRows, _, err := s.loadCorrSliceAtScope(ctx, tenant, "", id, 0)
+			if err != nil {
+				return incidentfp.Fingerprint{}, err
+			}
+			f, owner, closed := incidentFingerprintFrom(id, meta, sigRows, evRows, edgeRows, time.Now())
+			if owner != tenant || !closed {
+				return incidentfp.Fingerprint{}, errors.New("not a closed incident of this tenant")
+			}
+			return f, nil
+		},
+	}
+}
+
+// similarIncidentsFor is THE recall for one case — the route and the Iris
+// tool both call it, so the two cannot disagree about scope or threshold.
+func (s *server) similarIncidentsFor(ctx context.Context, claims jwtClaims, id, window string) (incidentfp.Result, int, error) {
+	if _, ok := incidentfp.WindowFor(window); !ok {
+		return incidentfp.Result{}, http.StatusBadRequest, errors.New("window must be one of 30d, 90d, 180d, 365d")
+	}
+	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(ctx, claims, id, 0)
+	if err != nil {
+		return incidentfp.Result{}, status, err
+	}
+	subject, tenant, _ := incidentFingerprintFrom(id, meta, sigRows, evRows, edgeRows, time.Now())
+	res, err := s.incidentRecallDeps().Recall(ctx, tenant, subject, window)
+	if err != nil {
+		logError("incidentfp", "similar-incident recall failed", errf(err))
+		return incidentfp.Result{}, http.StatusInternalServerError, errors.New("similar incidents could not be read")
+	}
+	return res, http.StatusOK, nil
+}
+
+func (s *server) serveCorrelationSimilar(w http.ResponseWriter, r *http.Request, id string) {
+	claims, _ := userFrom(r.Context()) // the dispatcher already required infrastructure:read
+	res, status, err := s.similarIncidentsFor(r.Context(), claims, id, r.URL.Query().Get("window"))
+	if err != nil {
+		writeError(w, status, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// aiSimilarIncidents binds find_similar_incidents (N-F4) to the caller.
+func (s *server) aiSimilarIncidents(claims jwtClaims) func(context.Context, ai.Principal, string, string) (ai.SimilarIncidents, error) {
+	return func(ctx context.Context, _ ai.Principal, id, window string) (ai.SimilarIncidents, error) {
+		if !isUUIDToken(id) {
+			return ai.SimilarIncidents{}, ai.ErrNotFound
+		}
+		res, status, err := s.similarIncidentsFor(ctx, claims, id, window)
+		switch {
+		case status == http.StatusNotFound:
+			return ai.SimilarIncidents{}, ai.ErrNotFound
+		case err != nil:
+			return ai.SimilarIncidents{}, err
+		}
+		out := ai.SimilarIncidents{Verdict: res.Verdict, Note: res.Note, Caveat: res.Caveat, Examined: res.Examined}
+		for _, m := range res.Matches {
+			out.Matches = append(out.Matches, ai.SimilarMatch{CorrelationID: m.CorrelationID, Strength: m.Strength,
+				MatchedOn: m.MatchedOn, OccurredAt: m.OccurredAt})
+		}
+		return out, nil
+	}
 }

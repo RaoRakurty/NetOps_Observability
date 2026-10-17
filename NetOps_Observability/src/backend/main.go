@@ -177,6 +177,7 @@ import (
 	"netops/backend/secapi"
 
 	"netops/backend/internal/httppage"
+	"netops/backend/internal/incidentfp"
 
 	"netops/backend/internal/oidc"
 )
@@ -515,6 +516,7 @@ type server struct {
 	topology              topology.GraphStore       // persistent topology graph #77 (in-memory or pg)
 	incidentTimeline      timeintel.TimelineStore   // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
 	incidentTimeMetrics   incidentTimeMetricsStore  // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
+	incidentFP            incidentfp.Store          // similar-incident fingerprints (tracker 337 N-F4; pg or in-memory)
 	aiFeedback            ai.FeedbackStore          // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
 	// IRIS-MEMORY-BEGIN — IRIS Phase B investigation memory (design §3.5).
 	// irisMemory is the tenant-scoped store of CONCLUDED investigations
@@ -1376,6 +1378,7 @@ func newServer() *server {
 	srv.topology = newTopologyStore()                       // persistent topology graph (#77); reconciler starts in main()
 	srv.incidentTimeline = newIncidentTimelineStore()       // RCA Time Intelligence manual lifecycle events (#84)
 	srv.incidentTimeMetrics = newIncidentTimeMetricsStore() // RCA Time Intelligence backfilled snapshots (#84); ticker starts in main()
+	srv.incidentFP = newIncidentFingerprintStore()          // similar-incident fingerprints (N-F4), written through on demand
 	srv.aiFeedback = newAIFeedbackStore()                   // Iris AI feedback loop (privacy-safe ratings)
 	// IRIS-MEMORY-BEGIN
 	srv.irisMemory = newIrisInvestigationStore()    // Iris investigation memory (migration 0040 / file fallback)

@@ -26,6 +26,9 @@ func allSeamDeps() TroubleshootDeps {
 	d.CompileQuery = func(context.Context, Principal, string) (QueryInterpretation, error) {
 		return QueryInterpretation{}, nil
 	}
+	d.SimilarIncidents = func(context.Context, Principal, string, string) (SimilarIncidents, error) {
+		return SimilarIncidents{}, ErrNotFound
+	}
 	return d
 }
 
