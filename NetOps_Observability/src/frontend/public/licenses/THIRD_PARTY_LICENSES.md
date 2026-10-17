@@ -41,11 +41,11 @@ distributed and carries no notice obligation.
 | `github.com/jackc/pgservicefile` | v0.0.0-20240606120523-5a60cdf6a761 | MIT | statically linked into the Go binaries; must be permissive |
 | `github.com/jackc/pgx/v5` | v5.9.2 | MIT | statically linked into the Go binaries; must be permissive |
 | `github.com/jackc/puddle/v2` | v2.2.2 | MIT | statically linked into the Go binaries; must be permissive |
-| `golang.org/x/crypto` | v0.56.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
-| `golang.org/x/net` | v0.57.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
-| `golang.org/x/sync` | v0.22.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
-| `golang.org/x/sys` | v0.47.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
-| `golang.org/x/text` | v0.41.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
+| `golang.org/x/crypto` | v0.57.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
+| `golang.org/x/net` | v0.60.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
+| `golang.org/x/sync` | v0.23.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
+| `golang.org/x/sys` | v0.48.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
+| `golang.org/x/text` | v0.42.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
 
 ## api image (netops-api, netops-prober) runtime base
 
@@ -259,7 +259,6 @@ distributed and carries no notice obligation.
 | `python` | 3.12.14 | PSF-2.0 | origin: inherited-base-layer; source: not-required |
 | `readline` | 8.3.3-r1 | GPL-3.0-or-later | origin: inherited-base-layer; source: missing |
 | `scanelf` | 1.3.9-r1 | GPL-2.0-only | origin: inherited-base-layer; source: missing |
-| `Simple Launcher` | 1.1.0.14 | UNKNOWN | origin: inherited-base-layer; source: manual-review |
 | `sqlite-libs` | 3.53.4-r0 | blessing | origin: inherited-base-layer; source: not-required |
 | `ssl_client` | 1.37.0-r31 | GPL-2.0-only | origin: inherited-base-layer; source: verified; corresponding source retained as source-offer/busybox-1.37.0.tar.bz2 (distro-packaging-mismatch) |
 | `tzdata` | 2026c-r0 | Public-Domain | origin: inherited-base-layer; source: not-required |
