@@ -310,3 +310,21 @@ def test_push_runs_only_on_main_for_pr_workflows():
         on = _wf(name).get(True) or _wf(name).get("on")     # PyYAML reads `on:` as True
         assert on["push"]["branches"] == ["main"], name
         assert "pull_request" in on, name
+
+
+def test_hook_git_env_is_scrubbed():
+    env = {"GIT_DIR": "/x/.git/worktrees/w", "GIT_PREFIX": "", "PATH": "/bin"}
+    assert sorted(tp.scrub_hook_git_env(env)) == ["GIT_DIR", "GIT_PREFIX"]
+    assert env == {"PATH": "/bin"}
+
+
+def test_run_fast_is_correct_under_a_pre_push_hook_environment():
+    # 2026-10-17: git exports GIT_DIR to hooks; sbom.py's git (cwd = project
+    # dir) then listed nothing and --run-fast reported a false "SBOM stale".
+    gitdir = subprocess.run(["git", "rev-parse", "--absolute-git-dir"], cwd=ROOT, capture_output=True,
+                            text=True, timeout=30, check=True).stdout.strip()
+    env = {**os.environ, "GIT_DIR": gitdir, "GIT_PREFIX": ""}
+    res = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "test-plan.py"), "--run-fast", "--always"],
+                         cwd=os.path.dirname(ROOT), env=env, capture_output=True, text=True, timeout=300, check=False)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "no image references found" not in res.stderr

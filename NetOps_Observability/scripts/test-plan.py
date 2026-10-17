@@ -353,6 +353,21 @@ def run_fast_checks() -> list[str]:
     return failures
 
 
+# Variables git exports to hooks (githooks(5)). Inherited by a git started
+# from another directory they point it at the wrong worktree: inside pre-push,
+# sbom.py's `git ls-files` (cwd = the project dir) listed nothing, the component
+# set came out empty and --run-fast falsely reported docs/sbom/ stale
+# (2026-10-17). Every check here locates its own repository from its cwd.
+HOOK_GIT_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX",
+                "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR")
+
+
+def scrub_hook_git_env(env: dict | None = None) -> list[str]:
+    """Remove hook-exported repository variables in place; return what was removed."""
+    env = os.environ if env is None else env
+    return [k for k in HOOK_GIT_ENV if env.pop(k, None) is not None]
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--base", default="origin/main", help="diff base (default origin/main)")
@@ -370,6 +385,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="with --ci-groups: also append the result to this $GITHUB_OUTPUT file")
     ap.add_argument("paths", nargs="*", help="classify these paths instead of the git diff")
     args = ap.parse_args(argv)
+    scrub_hook_git_env()
 
     if args.ci_groups:
         if args.paths:
