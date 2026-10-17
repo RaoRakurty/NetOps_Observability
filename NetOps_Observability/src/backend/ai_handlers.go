@@ -2697,7 +2697,12 @@ func aiLedgerAnswerEntries(rec *aidecision.Recorder, ans *ai.Answer) {
 	rec.AddEvidence(ids)
 	aiLedgerHypotheses(rec, ans.Hypotheses)
 	if len(ans.NextActions) > 0 {
-		b, err := json.Marshal(ans.NextActions)
+		// The hash covers the steps AND the cards built from them (N-I7),
+		// basis included, so the ledger proves what was suggested on what.
+		b, err := json.Marshal(struct {
+			Steps []string            `json:"steps"`
+			Cards []ai.Recommendation `json:"cards,omitempty"`
+		}{ans.NextActions, ans.Recommendations})
 		if err != nil {
 			logError("ai.ledger", "next actions not hashable", errf(err))
 			return

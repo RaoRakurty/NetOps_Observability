@@ -32,6 +32,7 @@ import { applyEvent } from "../iris/progressStream";
 import StatementText from "../iris/StatementText";
 import { answerCiteHref } from "../iris/links";
 import { withPageContext } from "../iris/pageRoute";
+import RecommendationCards, { NO_ACTION_NOTICE } from "../iris/RecommendationCards";
 import QueryCorrection from "../iris/QueryCorrection";
 import { hasAIEntitlement } from "../lib/aiEntitlements";
 import { httpFailure, operatorError } from "../lib/errors";
@@ -1175,10 +1176,13 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
       )}
 
       {/* Recommended next actions — numbered. */}
-      {ans.next_actions && ans.next_actions.length > 0 && (
+      {ans.recommendations && ans.recommendations.length > 0 ? (
+        <RecommendationCards cards={ans.recommendations} citations={ans.citations ?? []} />
+      ) : ans.next_actions && ans.next_actions.length > 0 && (
         <div className="op-section">
           <div className="op-sec-h">Recommended next actions</div>
           <ol className="op-actions">{ans.next_actions.map((a, i) => <li key={i}>{a}</li>)}</ol>
+          <div className="iris-card-foot">{NO_ACTION_NOTICE}</div>
         </div>
       )}
 

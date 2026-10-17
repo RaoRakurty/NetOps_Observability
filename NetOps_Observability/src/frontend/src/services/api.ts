@@ -10338,6 +10338,9 @@ export type AiAnswer = {
   confidence_label?: string;
   recommended_owner?: string;
   next_actions?: string[];
+  // N-I7: the next actions as grounded cards (basis = citation ids of this
+  // answer). Optional: an older backend sends none.
+  recommendations?: AiRecommendation[];
   missing_evidence?: string[];
   mode_badges?: string[];
   evidence_only?: boolean;
@@ -10345,6 +10348,18 @@ export type AiAnswer = {
   title?: string; // card heading (spec §2)
   counts?: AiIncidentCounts; // normalized counts (spec §6)
 };
+
+// A recommendation card (N-I7). Text and citation ids only — no action field.
+export interface AiRecommendation {
+  id: string;
+  title: string;
+  steps: string[];
+  why: string;
+  basis: string[];
+  owner?: string;
+  origin: string;
+  notice: string;
+}
 
 // ── Licence (platform-global) ────────────────────────────────────────────────
 //

@@ -597,3 +597,14 @@ Not covered by a gate: the model path's live accuracy (stub oracle in CI;
 | Deterministic arms still win: under a model that always answers "data", only contested decisions move, and every move is method → data | ✅ | **BUILD** — `TestRoutingScoreboard` (adversarial run: 9 tie-breaks, 9 moves, 165 questions) |
 | Screen questions and imperative how-tos are product questions, not live-state or methods | ✅ | **BUILD** — `TestRoutingScoreboard` routing lane 25/25 (`ai/testdata/routing_golden.json`); docs items answered as product 108 → 115 of 127 (ratchet) |
 | A tie-break that says "data" never bypasses validation | ✅ | The model compile still validates in the caller's scope or the method runs (`nlqCompile`) |
+
+## 20. Iris recommendation cards (tracker 337 N-I7, 2026-10-17)
+
+| Invariant | Status | Proof |
+|---|---|---|
+| A card is a suggestion only: its wire shape has no href/URL/action/command/method field, and the UI renders no button, form or input inside it | ✅ | **BUILD** — `TestRecommendationCardsAreGroundedAndInert` (JSON-key golden), `RecommendationCards.test.tsx` ("nothing that acts") |
+| Every card says "No action has been executed." — a client constant, whatever the server sends; the plain next-actions list carries it too | ✅ | **BUILD** — `RecommendationCards.test.tsx` ("keeps the label even when the server's notice says otherwise") |
+| A card rests on THIS answer's citations: an operational card on evidence (never a UI link or a document), a playbook card on its document; no basis, no card | ✅ | **BUILD** — `TestRecommendationCardsAreGroundedAndInert`, `TestNoCardWithoutABasisOrForNonRecommendingModes`, `TestModelTextNeverBecomesACard` (basis ⊂ citations) |
+| Model prose never becomes a card: cards are built at Ask's exit from the server-authored next actions | ✅ | **BUILD** — `TestModelTextNeverBecomesACard` |
+| The ledger hash covers the cards and their basis | ✅ | `aiDecisionFinish` hashes `{steps, cards}` |
+| Cards in the copilot agent-loop path | ❌ **not built** | The agent loop's replies are model text; no deterministic next actions to card. |
