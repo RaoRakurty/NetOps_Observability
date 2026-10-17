@@ -777,19 +777,106 @@ transforms:
       if !((to_string(.cx_restored_from) ?? "") == "quarantine" && match(to_string(.cx_event_id) ?? "", r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')) {
         del(.cx_event_id)
       }
+      # goflow2 (v2.2.1, producer/proto/render.go protoName) renders the IP
+      # protocol as a NAME. This is its WHOLE table (0-145), generated from that
+      # source — the previous 12-entry subset stored every other name as 0
+      # (HOPOPT): OSPF hellos ("OSPFIGP"), ICMPv6 ("IPv6-ICMP"), PIM, VRRP …
+      # The legacy spellings stay as aliases for older producers.
       proto_names = {
-        "HOPOPT": 0, "ICMP": 1, "IGMP": 2, "TCP": 6, "UDP": 17,
-        "GRE": 47, "ESP": 50, "AH": 51, "ICMPv6": 58, "EIGRP": 88,
-        "OSPF": 89, "SCTP": 132
+        "HOPOPT": 0, "ICMP": 1, "IGMP": 2, "GGP": 3, "IPv4": 4, "ST": 5, "TCP": 6, "CBT": 7, "EGP": 8,
+        "IGP": 9, "BBN-RCC-MON": 10, "NVP-II": 11, "PUP": 12, "ARGUS": 13, "EMCON": 14, "XNET": 15,
+        "CHAOS": 16, "UDP": 17, "MUX": 18, "DCN-MEAS": 19, "HMP": 20, "PRM": 21, "XNS-IDP": 22,
+        "TRUNK-1": 23, "TRUNK-2": 24, "LEAF-1": 25, "LEAF-2": 26, "RDP": 27, "IRTP": 28, "ISO-TP4": 29,
+        "NETBLT": 30, "MFE-NSP": 31, "MERIT-INP": 32, "DCCP": 33, "3PC": 34, "IDPR": 35, "XTP": 36,
+        "DDP": 37, "IDPR-CMTP": 38, "TP++": 39, "IL": 40, "IPv6": 41, "SDRP": 42, "IPv6-Route": 43,
+        "IPv6-Frag": 44, "IDRP": 45, "RSVP": 46, "GRE": 47, "DSR": 48, "BNA": 49, "ESP": 50, "AH": 51,
+        "I-NLSP": 52, "SWIPE": 53, "NARP": 54, "Min-IPv4": 55, "TLSP": 56, "SKIP": 57, "IPv6-ICMP": 58,
+        "IPv6-NoNxt": 59, "IPv6-Opts": 60, "any-host-internal-protocol": 61, "CFTP": 62,
+        "any-local-network": 63, "SAT-EXPAK": 64, "KRYPTOLAN": 65, "RVD": 66, "IPPC": 67,
+        "any-distributed-file-system": 68, "SAT-MON": 69, "VISA": 70, "IPCV": 71, "CPNX": 72, "CPHB": 73,
+        "WSN": 74, "PVP": 75, "BR-SAT-MON": 76, "SUN-ND": 77, "WB-MON": 78, "WB-EXPAK": 79, "ISO-IP": 80,
+        "VMTP": 81, "SECURE-VMTP": 82, "VINES": 83, "IPTM": 84, "NSFNET-IGP": 85, "DGP": 86, "TCF": 87,
+        "EIGRP": 88, "OSPFIGP": 89, "Sprite-RPC": 90, "LARP": 91, "MTP": 92, "AX.25": 93, "IPIP": 94,
+        "MICP": 95, "SCC-SP": 96, "ETHERIP": 97, "ENCAP": 98, "any-private-encryption-scheme": 99,
+        "GMTP": 100, "IFMP": 101, "PNNI": 102, "PIM": 103, "ARIS": 104, "SCPS": 105, "QNX": 106, "A/N": 107,
+        "IPComp": 108, "SNP": 109, "Compaq-Peer": 110, "IPX-in-IP": 111, "VRRP": 112, "PGM": 113,
+        "any-0-hop-protocol": 114, "L2TP": 115, "DDX": 116, "IATP": 117, "STP": 118, "SRP": 119, "UTI": 120,
+        "SMP": 121, "SM": 122, "PTP": 123, "ISIS over IPv4": 124, "FIRE": 125, "CRTP": 126, "CRUDP": 127,
+        "SSCOPMCE": 128, "IPLT": 129, "SPS": 130, "PIPE": 131, "SCTP": 132, "FC": 133,
+        "RSVP-E2E-IGNORE": 134, "Mobility Header": 135, "UDPLite": 136, "MPLS-in-IP": 137, "manet": 138,
+        "HIP": 139, "Shim6": 140, "WESP": 141, "ROHC": 142, "Ethernet": 143, "AGGFRAG": 144, "NSH": 145,
+        "ICMPv6": 58, "OSPF": 89
       }
       if is_string(.proto) {
-        .proto = to_int(get(proto_names, [.proto]) ?? 0) ?? 0
+        pn = to_string(.proto) ?? ""
+        pv = get(proto_names, [pn]) ?? null
+        if pv != null {
+          .proto = to_int(pv) ?? 0
+        } else if match(pn, r'^[0-9]+$') {
+          .proto = to_int(pn) ?? 0
+        } else {
+          # goflow2 says "unassigned" / "experimental" / "reserved" / "unknown"
+          # for a number it has no name for — the number itself is lost. 255
+          # (IANA Reserved) is the explicit "unidentifiable" bucket, never 0,
+          # which would claim HOPOPT.
+          .proto = 255
+        }
       } else {
         .proto = to_int(.proto) ?? 0
       }
       # tcpControlBits (IPFIX IE6 / NetFlow TCP_FLAGS): ClickHouse column is
       # UInt16 — coerce like .proto so a string-typed value can't 400 the batch.
       .tcp_flags = to_int(.tcp_flags) ?? 0
+      # Exporter application identity — IPFIX / NetFlow v9 IE 95 applicationId
+      # and IE 96 applicationName (goflow2/mapping.yaml). goflow2 hands both
+      # over HEX-encoded, by design: its string renderer would splice raw
+      # exporter bytes into the JSON unescaped. The decoded values are only
+      # ever derived HERE from that hex — a pre-set exporter_app_* on the bus
+      # is deleted first. A value that fails validation is dropped (warned,
+      # rate-limited), never stored half-decoded; an exporter that sends
+      # neither field leaves both absent → '' in ClickHouse.
+      del(.exporter_app_id)
+      del(.exporter_app_name)
+      if exists(.application_id) {
+        ah = downcase(to_string(.application_id) ?? "")
+        aid = ""
+        if match(ah, r'^([0-9a-f]{2}){2,12}$') {
+          # RFC 6759: 1-byte classification engine, then the selector. Engine
+          # 20 (PANA-L7-PEN) carries a 4-byte private enterprise number first.
+          eng = parse_int(slice(ah, 0, 2) ?? "", base: 16) ?? 0
+          if eng == 20 && length(ah) >= 12 {
+            pen = parse_int(slice(ah, 2, 10) ?? "", base: 16) ?? -1
+            selh = slice(ah, 10) ?? ""
+            sel = -1
+            if length(selh) <= 14 { sel = parse_int(selh, base: 16) ?? -1 }
+            if pen >= 0 && sel >= 0 { aid = "20:" + to_string(pen) + ":" + to_string(sel) }
+          } else if eng > 0 && eng != 20 {
+            selh = slice(ah, 2) ?? ""
+            sel = -1
+            if length(selh) <= 14 { sel = parse_int(selh, base: 16) ?? -1 }
+            if sel >= 0 { aid = to_string(eng) + ":" + to_string(sel) }
+          }
+        }
+        if aid != "" {
+          .exporter_app_id = aid
+        } else {
+          log("component=flows_decoded dropped an exporter application_id that is not a valid RFC 6759 value", level: "warn", rate_limit_secs: 60)
+        }
+      }
+      if exists(.application_name) {
+        nh = downcase(to_string(.application_name) ?? "")
+        nm = ""
+        if length(nh) <= 256 && match(nh, r'^([0-9a-f]{2})+$') {
+          raw = decode_base16(nh) ?? ""
+          nm = strip_whitespace(replace(raw, r'\x00+$', ""))
+        }
+        # Printable ASCII without quote or backslash, 1..64.
+        if match(nm, r'^[\x20\x21\x23-\x5b\x5d-\x7e]{1,64}$') {
+          .exporter_app_name = nm
+        } else {
+          log("component=flows_decoded dropped an exporter application_name that is not printable or is too long", level: "warn", rate_limit_secs: 60)
+        }
+      }
       # Log-time standard: derive the ClickHouse `ts` from goflow2's receive
       # stamp (time_received_ns, UTC epoch) instead of leaving it to the column
       # DEFAULT now64() — which re-stamps every flow with the INSERT time, so

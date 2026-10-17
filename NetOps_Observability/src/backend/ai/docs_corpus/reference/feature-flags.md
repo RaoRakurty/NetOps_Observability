@@ -24,12 +24,14 @@ Two rules hold for all of them:
 | `ENABLE_LLDP_DISCOVERY` | `false` | Learn neighbours from LLDP. |
 | `ENABLE_NETCONF_COLLECTION` | `false` | Poll device state over NETCONF. |
 | `ENABLE_REPORT_SCHEDULER` | `true` | Run scheduled reports. |
+| `ENABLE_SDWAN_OVERLAY` | `true` | Read SD-WAN tunnels and transports from Cisco SD-WAN edges over SNMP. |
 | `ENABLE_SEAM_BOOTSTRAP` | `true` | Seed the seam catalogue on first start. |
 | `ENABLE_SNMP_COLLECTION` | `true` | Poll devices over SNMP v2c and v3. |
 | `ENABLE_SNMP_DISCOVERY` | `true` | Sweep subnets for SNMP-speaking devices. |
 | `ENABLE_SNMP_METRICS` | `true` | Collect the SNMP metric families. |
 | `ENABLE_TUNNEL_DISCOVERY` | `true` | Discover IPsec, GRE and SD-WAN tunnels. |
 | `ENABLE_VENDOR_DETECTION` | `false` | Identify vendor and OS from sysObjectID. |
+| `ENABLE_VRF_COLLECTION` | `true` | Read routing instances (VRF, VPN, routing-instance, VPRN) and their interfaces over SNMP. |
 | `FEATURE_ACTIVE_PROBE` | `false` | Send STAMP active-measurement probes. |
 | `FEATURE_ACTIVE_VERIFICATION` | `false` | Verify a recovery before closing a case. |
 | `FEATURE_AI` | `(empty)` | Master switch for the Iris assistant. |
@@ -41,6 +43,8 @@ Two rules hold for all of them:
 | `FEATURE_CLOUD_SIGNAL_NOTIFICATIONS` | `false` | Notify on cloud-provider events. |
 | `FEATURE_CONFIG_BACKUP` | `false` | Capture, store and diff device configurations. |
 | `FEATURE_COPILOT` | `true` | Expose the assistant chat endpoint. |
+| `FEATURE_DEM` | `false` |  |
+| `FEATURE_DEM_AI_INVESTIGATOR` | `false` |  |
 | `FEATURE_DEVICE_SSH` | `false` | Proxy an interactive SSH session to a device. |
 | `FEATURE_EMAIL_NOTIFICATIONS` | `false` | Deliver notifications over SMTP. |
 | `FEATURE_ITSM_INBOUND` | `false` | Accept ticket updates back from the ITSM system. |

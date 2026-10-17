@@ -574,6 +574,14 @@ services:
       - "netops.flows.raw"
       - "-transport.kafka.compression"
       - "snappy"
+      # Exporter application identity (IE 95/96), kept HEX — see the header
+      # of goflow2/mapping.yaml for why it must never be rendered as a string.
+      - "-mapping"
+      - "/etc/goflow2/mapping.yaml"
+    # DIRECTORY mount (F-51): a single-file bind pins the inode, so an
+    # editor's write-then-rename would leave the container on the old file.
+    volumes:
+      - ./goflow2:/etc/goflow2:ro
     ports:
       - "${NETFLOW_PORT:-2055}:2055/udp"
       - "${IPFIX_PORT:-4739}:4739/udp"
@@ -1822,6 +1830,18 @@ services:
       # Vendor-neutral tunnel discovery (standard IF-MIB + TUNNEL-MIB walks over
       # the SNMP inventory) → netops.tunnels → Tunnels view + Device Monitoring.
       ENABLE_TUNNEL_DISCOVERY: ${ENABLE_TUNNEL_DISCOVERY:-true}
+      # SD-WAN overlay facts (tracker 349): probe every SNMP device for the
+      # Viptela / Cisco SD-WAN BFD + TLOC tables and walk only the edges that
+      # answer → the WAN overlay in Topology. Read-only, UDP/161.
+      ENABLE_SDWAN_OVERLAY: ${ENABLE_SDWAN_OVERLAY:-true}
+      # Routing instances (VRF / VPN / routing-instance / VPRN) and which
+      # interfaces belong to each, from the vendor or standard MIB the device
+      # answers → Device → Interfaces grouped by instance. Read-only, UDP/161.
+      ENABLE_VRF_COLLECTION: ${ENABLE_VRF_COLLECTION:-true}
+      # Features page "restart to apply" (tracker 348): the api may exit 0 to
+      # restart itself ONLY because `restart: unless-stopped` brings it back.
+      # Not an operator knob — it states a fact about this deployment.
+      CORRELIX_SUPERVISED: "true"
       # #13 Vulnerability Management: operator-prepared advisory feed (run
       # scripts/vuln-feed-prepare.py → data/vuln/, mounted read-only below).
       # Lazy + mtime hot-reload; /api/vulns answers vuln_enabled:false until

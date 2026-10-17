@@ -14,20 +14,26 @@ import (
 	"strconv"
 )
 
-// CorrDriftSelect picks (tenant, id, version) of objects whose latest
-// in-window history row is NEWER than the corr_current row — i.e. a projection
-// write was lost. Missing rows also match (the LEFT JOIN default epoch
-// created_at is older than any real row), so one statement repairs both inside
-// the window. Narrow fold, created_at-bounded base scan.
+// CorrDriftSelect picks (tenant, id, version, created_at) of objects whose
+// latest in-window history row is NEWER than the corr_current row — i.e. a
+// projection write was lost. Missing rows also match (the LEFT JOIN default
+// epoch created_at is older than any real row), so one statement repairs both
+// inside the window. Narrow fold, created_at-bounded base scan.
+//
+// "Latest" is the newest created_at, NOT the highest version: engine restarts
+// reset version counters (measured on the lab 2026-10-10: an object whose
+// highest version is not its newest row), so a version-ordered pick chose a
+// stale pre-restart row, saw it as older than the projection, and never
+// repaired the object (tracker 328).
 func CorrDriftSelect(lookbackDays int) string {
 	d := strconv.Itoa(lookbackDays)
 	return `
-       SELECT l.tenant_id, l.correlation_id, l.version
+       SELECT l.tenant_id, l.correlation_id, l.version, l.created_at
          FROM (
               SELECT tenant_id, correlation_id, version, created_at
                 FROM netops.corr_objects
                WHERE created_at >= now() - INTERVAL ` + d + ` DAY
-               ORDER BY tenant_id, correlation_id, version DESC
+               ORDER BY tenant_id, correlation_id, created_at DESC
                LIMIT 1 BY tenant_id, correlation_id
          ) AS l
          LEFT JOIN (
@@ -46,6 +52,52 @@ func CorrDriftRepairSQL(lookbackDays int) string {
 // dry-run; also what the runbook uses to verify projection health).
 func CorrDriftCountSQL(lookbackDays int) string {
 	return `SELECT count() AS drifted FROM (` + CorrDriftSelect(lookbackDays) + `) FORMAT JSON`
+}
+
+// ── State drift: open in the projection, terminal in history (tracker 328) ───
+//
+// The created_at drift scan above cannot see two shapes, and on the lab
+// (2026-09-19) 56,397 of 56,402 'open' projection rows were one of them:
+//
+//  1. the terminal version is OLDER than the drift lookback — the scan only
+//     reads corr_objects inside the window, so drift that outlives it is
+//     permanent;
+//  2. the stale projection row is NEWER than the terminal version — a heartbeat
+//     touch writes corr_current only, with a fresh created_at, so
+//     c.created_at < l.created_at is false and the row is never "drifted".
+//
+// The orphan sweep skips both on purpose (it only closes objects whose history
+// is still open). So decide by STATE, keyed to the projection's open set —
+// small in a healthy system, and the same pre-keyed fold shape as the orphan
+// pick — with no age bound on history. The repair restamps created_at to
+// now64(3) so it wins the fold over a newer stale row.
+
+// CorrStateDriftSelect picks the exact latest history row of every object the
+// projection calls open but whose newest history row is terminal.
+func CorrStateDriftSelect() string {
+	return `
+       SELECT tenant_id, correlation_id, version, created_at
+         FROM (
+              SELECT tenant_id, correlation_id, version, state, created_at
+                FROM netops.corr_objects
+               WHERE (tenant_id, correlation_id) IN (
+                     SELECT tenant_id, correlation_id
+                       FROM netops.corr_current FINAL
+                      WHERE state = 'open')
+               ORDER BY tenant_id, correlation_id, created_at DESC
+               LIMIT 1 BY tenant_id, correlation_id
+         )
+        WHERE state != 'open'`
+}
+
+// CorrStateDriftRepairSQL re-projects every state-drifted object, restamped.
+func CorrStateDriftRepairSQL() string {
+	return CorrCurrentRestampedInsertPrefix + CorrStateDriftSelect() + `)`
+}
+
+// CorrStateDriftCountSQL measures state drift without repairing.
+func CorrStateDriftCountSQL() string {
+	return `SELECT count() AS state_drifted FROM (` + CorrStateDriftSelect() + `) FORMAT JSON`
 }
 
 // ── Orphaned-open sweep ───────────────────────────────────────────────────────

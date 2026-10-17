@@ -15,6 +15,19 @@ import AskIris from "../components/AskIris";
 
 const BGP_STATE: Record<string, string> = { "1": "idle", "2": "connect", "3": "active", "4": "opensent", "5": "openconfirm", "6": "established" };
 const OSPF_STATE: Record<string, string> = { "1": "down", "2": "attempt", "3": "init", "4": "two-way", "5": "exch-start", "6": "exchange", "7": "loading", "8": "full" };
+// Cisco SD-WAN OMP session states (VIPTELA-OMP / CISCO-SDWAN-OMP-MIB); up(3)
+// and up-in-gr(8, graceful restart) are healthy.
+export const OMP_STATE: Record<string, string> = {
+  "0": "invalid", "1": "init", "2": "handshake", "3": "up", "4": "down",
+  "5": "init (graceful restart)", "6": "down (graceful restart)", "7": "handshake (graceful restart)", "8": "up (graceful restart)",
+};
+export const ompUp = (v: string) => v === "3" || v === "8";
+
+/** BGP4-MIB series carry no vrf label; the VRF lanes say "default" for the same table. */
+export const peerKey = (vrf: string | undefined, peer: string) => {
+  const v = (vrf ?? "").toLowerCase();
+  return `${v === "" || v === "default" || v === "global" || v === "master" ? "" : vrf}|${peer}`;
+};
 const tone = (up: boolean) => (up ? "var(--good)" : "var(--bad)");
 
 function StateDot({ color }: { color: string }) {
@@ -44,6 +57,16 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
   const [linksError, setLinksError] = useState<string | null>(null);
   const [bgp, setBgp] = useState<PromInstantSeries[] | null>(null);
   const [ospf, setOspf] = useState<PromInstantSeries[] | null>(null);
+  // An unread metric query is UNKNOWN, never "no peers" (the tracker-290 rule
+  // the adjacency section already follows).
+  const [bgpErr, setBgpErr] = useState<string | null>(null);
+  const [ospfErr, setOspfErr] = useState<string | null>(null);
+  const [remoteAs, setRemoteAs] = useState<Map<string, string>>(new Map());
+  // OMP (SD-WAN control plane). null = not read yet; [] with no counts = this
+  // device runs no OMP, and the section stays hidden.
+  const [omp, setOmp] = useState<PromInstantSeries[] | null>(null);
+  const [ompCounts, setOmpCounts] = useState<{ up: number; notUp: number } | null>(null);
+  const [ompErr, setOmpErr] = useState<string | null>(null);
   const id = device.id;
 
   useEffect(() => {
@@ -59,8 +82,36 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
         setLinks([]);
         setLinksError(operatorError(e, "The adjacency evidence could not be read."));
       });
-    api.metricsQuery(`device_bgp_peer_state{device="${id}"}`).then((r) => alive && setBgp(r?.data?.result ?? [])).catch(() => alive && setBgp([]));
-    api.metricsQuery(`device_ospf_nbr_state{device="${id}"}`).then((r) => alive && setOspf(r?.data?.result ?? [])).catch(() => alive && setOspf([]));
+    api.metricsQuery(`device_bgp_peer_state{device="${id}"}`)
+      .then((r) => { if (alive) { setBgp(r?.data?.result ?? []); setBgpErr(null); } })
+      .catch((e) => { if (alive) { setBgp([]); setBgpErr(operatorError(e, "BGP peer state could not be read.")); } });
+    api.metricsQuery(`device_bgp_peer_remote_as{device="${id}"}`)
+      .then((r) => {
+        if (!alive) return;
+        const m = new Map<string, string>();
+        for (const s of r?.data?.result ?? []) {
+          const peer = s.metric.peer || s.metric.index;
+          // Keyed by instance too: one peer address can live in two VRFs.
+          if (peer) m.set(peerKey(s.metric.vrf, peer), String(Math.round(Number(s.value?.[1]))));
+        }
+        setRemoteAs(m);
+      })
+      .catch(() => { /* best-effort column: the AS cell shows — and the state is unaffected */ });
+    api.metricsQuery(`device_omp_peer_state{device="${id}"}`)
+      .then((r) => { if (alive) { setOmp(r?.data?.result ?? []); setOmpErr(null); } })
+      .catch((e) => { if (alive) { setOmp([]); setOmpErr(operatorError(e, "OMP session state could not be read.")); } });
+    api.metricsQuery(`device_omp_peers{device="${id}"}`)
+      .then((r) => {
+        if (!alive) return;
+        const rows = r?.data?.result ?? [];
+        if (rows.length === 0) { setOmpCounts(null); return; }
+        const get = (st: string) => Math.round(Number(rows.find((x) => x.metric.state === st)?.value?.[1] ?? 0));
+        setOmpCounts({ up: get("up"), notUp: get("not_up") });
+      })
+      .catch(() => { /* the per-peer read reports the failure */ });
+    api.metricsQuery(`device_ospf_nbr_state{device="${id}"}`)
+      .then((r) => { if (alive) { setOspf(r?.data?.result ?? []); setOspfErr(null); } })
+      .catch((e) => { if (alive) { setOspf([]); setOspfErr(operatorError(e, "OSPF neighbour state could not be read.")); } });
     return () => { alive = false; };
   }, [id]);
 
@@ -92,19 +143,25 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
         )}
       </Section>
 
-      <Section title="BGP neighbors" sub={bgp ? `${bgp.length} peer${bgp.length === 1 ? "" : "s"}` : "loading…"}>
-        {bgp === null ? <div className="empty">Loading…</div> : bgp.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No BGP peer seen on this device.</p> : (
+      <Section title="BGP neighbors" sub={bgpErr ? "unread" : bgp ? `${bgp.length} peer${bgp.length === 1 ? "" : "s"}` : "loading…"}>
+        {bgpErr ? (
+          <p role="alert" data-testid="device-bgp-unread" style={{ color: "var(--bad)", padding: "0 12px" }}>
+            BGP state could not be read, so this device&rsquo;s BGP peers are UNKNOWN here — not absent. {bgpErr}
+          </p>
+        ) : bgp === null ? <div className="empty">Loading…</div> : bgp.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No BGP peer seen on this device.</p> : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={th}>Peer</th><th style={th}>State</th><th style={th}>AS / {vrfTerm(device.vendor)}</th></tr></thead>
+            <thead><tr><th style={th}>Peer</th><th style={th}>State</th><th style={th}>Remote AS</th><th style={th}>{vrfTerm(device.vendor)}</th></tr></thead>
             <tbody>
               {bgp.map((s, i) => {
                 const v = String(Math.round(Number(s.value?.[1])));
                 const label = BGP_STATE[v] ?? `state ${v}`; const up = v === "6";
+                const peer = s.metric.peer || s.metric.index || "";
                 return (
                   <tr key={i}>
-                    <td style={mono}>{s.metric.index || s.metric.peer || "—"}</td>
+                    <td style={mono}>{peer || "—"}</td>
                     <td style={td}><StateDot color={tone(up)} />{label}</td>
-                    <td style={td}>{s.metric.asn || s.metric.vrf || "—"}</td>
+                    <td style={mono}>{remoteAs.get(peerKey(s.metric.vrf, peer)) || s.metric.asn || "—"}</td>
+                    <td style={td}>{s.metric.vrf || (s.metric.vrf === undefined ? "global" : "—")}</td>
                   </tr>
                 );
               })}
@@ -113,15 +170,55 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
         )}
       </Section>
 
-      <Section title="OSPF neighbors" sub={ospf ? `${ospf.length} adjacenc${ospf.length === 1 ? "y" : "ies"}` : "loading…"}>
-        {ospf === null ? <div className="empty">Loading…</div> : ospf.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No OSPF neighbour seen on this device.</p> : (
+      {(ompErr || ompCounts || (omp && omp.length > 0)) && (
+        <Section
+          title="SD-WAN control sessions (OMP)"
+          sub={ompErr ? "unread" : ompCounts ? `${ompCounts.up} up · ${ompCounts.notUp} not up` : "loading…"}
+        >
+          {ompErr ? (
+            <p role="alert" data-testid="device-omp-unread" style={{ color: "var(--bad)", padding: "0 12px" }}>
+              OMP state could not be read, so this device&rsquo;s control sessions are UNKNOWN here — not absent. {ompErr}
+            </p>
+          ) : omp && omp.length > 0 ? (
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr><th style={th}>Peer system IP</th><th style={th}>Peer</th><th style={th}>State</th><th style={th}>Site</th></tr></thead>
+              <tbody>
+                {omp.map((s, i) => {
+                  const v = String(Math.round(Number(s.value?.[1])));
+                  return (
+                    <tr key={i}>
+                      <td style={mono}>{s.metric.peer || "—"}</td>
+                      <td style={td}>{s.metric.type || "—"}</td>
+                      <td style={td}><StateDot color={tone(ompUp(v))} />{OMP_STATE[v] ?? `state ${v}`}</td>
+                      <td style={mono}>{s.metric.site_id || "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : ompCounts && ompCounts.up + ompCounts.notUp > 0 ? (
+            <p className="cc-empty" style={{ padding: "0 12px" }}>This is a controller: it holds a session with every edge, so only the counts are shown.</p>
+          ) : (
+            <p className="cc-empty" style={{ padding: "0 12px" }}>This device reports no OMP session.</p>
+          )}
+        </Section>
+      )}
+
+      <Section title="OSPF neighbors" sub={ospfErr ? "unread" : ospf ? `${ospf.length} adjacenc${ospf.length === 1 ? "y" : "ies"}` : "loading…"}>
+        {ospfErr ? (
+          <p role="alert" data-testid="device-ospf-unread" style={{ color: "var(--bad)", padding: "0 12px" }}>
+            OSPF state could not be read, so this device&rsquo;s OSPF neighbours are UNKNOWN here — not absent. {ospfErr}
+          </p>
+        ) : ospf === null ? <div className="empty">Loading…</div> : ospf.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No OSPF neighbour seen on this device.</p> : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={th}>Neighbor</th><th style={th}>State</th></tr></thead>
             <tbody>
               {ospf.map((s, i) => {
                 const v = String(Math.round(Number(s.value?.[1])));
                 const label = OSPF_STATE[v] ?? `state ${v}`; const up = v === "8";
-                return <tr key={i}><td style={mono}>{s.metric.index || s.metric.nbr || "—"}</td><td style={td}><StateDot color={tone(up)} />{label}</td></tr>;
+                // The adjacency contract's label is "neighbor" (profiles.go); rows
+                // written before the rename carry "index".
+                return <tr key={i}><td style={mono}>{s.metric.neighbor || s.metric.index || s.metric.nbr || "—"}</td><td style={td}><StateDot color={tone(up)} />{label}</td></tr>;
               })}
             </tbody>
           </table>

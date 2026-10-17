@@ -53,7 +53,11 @@ const CLOUD_EGRESS_ROLES = new Set([
 const EGRESS_RE = /(wan|edge|border|uplink|transit|vgw|vpn[-_]?gw|dx|expressroute|interconnect|igw|internet)/i;
 
 function isEgress(n: TopologyNode): boolean {
-  if (n.kind === "wan") return true;
+  // A `wan` node IS transport (an ISP/MPLS handoff, an SD-WAN transport colour —
+  // tracker 349), not an egress point INTO transport. Treating it as egress
+  // attached the transport to the carrier as if it were a site router, a second
+  // copy of the same network.
+  if (n.kind === "wan") return false;
   const role = (n.role ?? n.tags?.role ?? "").toLowerCase();
   if (CLOUD_EGRESS_ROLES.has(role)) return true;
   const hay = `${n.role ?? ""} ${n.tags?.role ?? ""} ${n.kind}`;
@@ -109,7 +113,9 @@ export function withCarrierOverlay(view: TopologyView, opts: CarrierOptions = {}
     target: CARRIER_NODE_ID,
     relationship: "inferred",
     protocol: "cloud_api",
-    status: "up",
+    // The overlay INFERS that this egress reaches the carrier; it has no
+    // evidence of the link's state. "up" painted every inferred uplink healthy.
+    status: "unknown",
     confidence: 0.6,
     direction: "bi",
     first_seen: now,

@@ -72,6 +72,7 @@ MAP=(
     "deployment/docker/vector-router/processors-default.yaml|vector-router/processors-default.yaml"
     "deployment/docker/vector-router/cx-secret-backend.sh|vector-router/cx-secret-backend.sh"
     "deployment/docker/gnmic/gnmic.yaml|gnmic/gnmic.yaml"
+    "deployment/docker/goflow2/mapping.yaml|goflow2/mapping.yaml"
     "deployment/docker/gnmic/gnmic-correlation.yaml|gnmic/gnmic-correlation.yaml"
     "deployment/docker/kafka/apply-acls.sh|kafka/apply-acls.sh"
     "deployment/docker/syslog-ng/syslog-ng.conf|syslog-ng/syslog-ng.conf"

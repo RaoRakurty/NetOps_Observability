@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AI_NAME } from "../brand";
 import {
   api,
@@ -20,20 +20,26 @@ import {
   AiAnswer,
   AiCitation,
   AiCommand,
+  StreamBrokenError,
 } from "../services/api";
 import Icon from "../components/Icon";
 import IrisVocabulary from "../components/IrisVocabulary";
 import PresentationPlanRenderer from "../iris/PresentationPlanRenderer";
 import { hintFromAst } from "../iris/presentation";
 import HypothesisTrace from "../iris/HypothesisTrace";
+import IrisProgress, { type ProgressStep } from "../iris/IrisProgress";
+import { applyEvent } from "../iris/progressStream";
 import StatementText from "../iris/StatementText";
 import { answerCiteHref } from "../iris/links";
+import { withPageContext } from "../iris/pageRoute";
+import RecommendationCards, { NO_ACTION_NOTICE } from "../iris/RecommendationCards";
 import QueryCorrection from "../iris/QueryCorrection";
 import { hasAIEntitlement } from "../lib/aiEntitlements";
 import { httpFailure, operatorError } from "../lib/errors";
 
 // The Iris box's server conversation (tracker 337 N-C7/N-E4): only its id
-// lives in the browser, in sessionStorage so it survives the drawer closing.
+// lives in the browser, in sessionStorage so it survives the panel closing and
+// every mode change (components/IrisPanel.tsx).
 // Storage can be unavailable (private window, blocked site data); then
 // follow-ups still work until the page reloads.
 const CONV_KEY = "iris.conversation";
@@ -49,7 +55,8 @@ function saveConversation(id: string | null): void {
 import { friendlyProblemId } from "../components/rca/labels";
 import { useShell } from "../context/shell";
 
-// Iris AI — the in-app assistant chat, rendered inside the right-side drawer.
+// Iris AI — the in-app assistant chat, rendered inside the Iris panel
+// (components/IrisPanel.tsx: floating, docked or expanded).
 // Assistant output is rendered as ESCAPED React text only (OWASP LLM02 — never
 // dangerouslySetInnerHTML).
 //
@@ -178,14 +185,19 @@ function cmdToSlash(c: AiCommand): SlashCmd {
   };
 }
 
-export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
-  split?: boolean;
-  onToggleSplit?: () => void;
-  /** A pending AskIris request handed down by the drawer (components/AskIris.tsx). */
+export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
+  /** The panel's window controls (Dock / Expand), rendered in this header
+   *  just before Close — components/IrisPanel.tsx owns what they do. */
+  controls?: ReactNode;
+  /** A citation is taking the operator to another page. The panel decides what
+   *  that means for its mode; without a panel, Iris closes as before. */
+  onLeave?: () => void;
+  /** A pending AskIris request handed down by the panel (components/AskIris.tsx). */
   ask?: { topic: string; question: string; seq: number } | null;
   onAskHandled?: () => void;
 }) {
   const { setCopilotOpen, openHelp } = useShell();
+  const leave = () => (onLeave ? onLeave() : setCopilotOpen(false));
   const [enabled, setEnabled] = useState<boolean | null>(null);
   // N-A7: natural-language questions are their own entitlement (ai.nlquery).
   // Hiding is cosmetic — the server refuses the NL routes without it.
@@ -212,6 +224,8 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
   const [ungrounded, setUngrounded] = useState<Record<number, boolean>>({});
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  // What Iris is doing for the question in flight (N-E2); empty = no stream.
+  const [steps, setSteps] = useState<ProgressStep[]>([]);
   const [error, setError] = useState<string | null>(null);
   // Slim disclosure when the AI provider is unreachable and the grounded engine
   // answered instead (owner decision: degrade elegantly, never dead-end).
@@ -226,19 +240,37 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
   // follow-up ("memory on that device") resolves against what the server
   // holds. A conversation the server no longer has is dropped and the
   // question is asked without one — the next question starts a new one.
+  // askStreaming asks with live progress (tracker 337 N-E2): the steps fill in
+  // while the server works, and the answer is the same one aiAsk returns. A
+  // stream a proxy cut short falls back ONCE to the plain JSON ask.
+  const askStreaming = async (content: string, context?: Record<string, string>, convId?: string): Promise<AiAnswer> => {
+    setSteps([]);
+    // The page behind the box rides along (N-G3): the server answers "what am
+    // I looking at?" from that page's docs and ranks them first for product
+    // questions. It is re-validated server-side and never scopes data. One
+    // point covers the stream, its JSON fallback and every caller.
+    context = withPageContext(context);
+    try {
+      return await api.aiAskStream(content, context, convId, (ev) => setSteps((s) => applyEvent(s, ev)));
+    } catch (e) {
+      if (!(e instanceof StreamBrokenError)) throw e;
+      setSteps([]);
+      return api.aiAsk(content, context, convId);
+    }
+  };
   const askInConversation = async (content: string): Promise<AiAnswer> => {
     let id = convRef.current;
     if (!id && nlqEntitledRef.current) {
       try { id = (await api.startIrisConversation()).id; } catch { id = null; } // conversations unavailable: ask without
     }
     try {
-      const ans = await api.aiAsk(content, undefined, id ?? undefined);
+      const ans = await askStreaming(content, undefined, id ?? undefined);
       setConversation(ans.conversation_id ?? null);
       return ans;
     } catch (e) {
       if (!id || httpFailure(e)?.status !== 404) throw e;
       setConversation(null);
-      return api.aiAsk(content);
+      return askStreaming(content);
     }
   };
   const taRef = useRef<HTMLTextAreaElement | null>(null);
@@ -305,7 +337,6 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
         model: cfg.model,
         model_fast: cfg.model_fast ?? "",
         model_strong: cfg.model_strong ?? "",
-        system: cfg.system,
         ...(keyDraft.trim() ? { key: keyDraft.trim() } : {}),
       });
       setCfg((c) => ({ ...(c ?? saved), ...saved }));
@@ -420,7 +451,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
     setBusy(true);
     setError(null);
     try {
-      const ans = await api.aiAsk(text, context);
+      const ans = await askStreaming(text, context);
       setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
       setGrounded((g) => ({ ...g, [idx]: ans }));
     } catch (e) {
@@ -475,7 +506,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
   };
 
   // AskIris (components/AskIris.tsx) — the `(i)` beside a number on any screen.
-  // The drawer catches the event and hands the pending ask down here.
+  // The panel catches the event and hands the pending ask down here.
   //
   // It goes through the GROUNDED route with the topic in context: the server
   // answers from its own authored file and refuses an unknown topic, so nothing
@@ -511,6 +542,12 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
   const tenantReady = !!tcfg?.assistant_enabled &&
     (tcfg.key_present || (tcfg.platform_key_available && !tcfg.no_platform_key));
   const ready = (!!cfg?.feature_enabled && !!cfg?.key_present) || tenantReady;
+  // The header's engine line: which model answers, or the key-free engine.
+  const engineLine = cfg
+    ? (ready ? (cfg.provider === "anthropic" ? "Claude" : cfg.provider === "gemini" ? "Gemini" : cfg.provider === "openai" ? "GPT" : cfg.provider) + " · " + cfg.model : "Grounded engine · key-free")
+    : tcfg
+      ? (tenantReady ? (tcfg.key_present ? (tcfg.provider === "openai" ? "GPT" : tcfg.provider === "gemini" ? "Gemini" : "Claude") + " · your key" : "Platform AI service") : "Grounded engine · key-free")
+      : "Network assistant";
 
   // Slash menu: filter the pre-made questions by what's typed after "/".
   const slashQuery = draft.startsWith("/") ? draft.slice(1).toLowerCase().trim() : "";
@@ -538,7 +575,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
 
   return (
     <div className="op-chat">
-      {/* Header — brand + control cluster: New · Split · Settings · Help · Close. */}
+      {/* Header — brand + control cluster: New · Settings · Help · [Dock · Expand] · Close. */}
       <div className="op-hd">
         <span className="op-hd-brand">
           <span className="op-hd-logo"><Icon name="copilot" size={15} /></span>
@@ -546,22 +583,14 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
             <span className="op-hd-title">{AI_NAME}</span>
             <span className="op-hd-sub">
               <span className={`op-dot ${ready ? "ok" : "warn"}`} />
-              {cfg
-                ? (ready ? (cfg.provider === "anthropic" ? "Claude" : cfg.provider === "gemini" ? "Gemini" : cfg.provider === "openai" ? "GPT" : cfg.provider) + " · " + cfg.model : "Grounded engine · key-free")
-                : tcfg
-                  ? (tenantReady ? (tcfg.key_present ? (tcfg.provider === "openai" ? "GPT" : tcfg.provider === "gemini" ? "Gemini" : "Claude") + " · your key" : "Platform AI service") : "Grounded engine · key-free")
-                  : "Network assistant"}
+              {/* Its own span: text-overflow does not apply to a flex container's
+                  text, so a narrow (floating) header clipped the line mid-word. */}
+              <span className="op-hd-sub-text" title={engineLine}>{engineLine}</span>
             </span>
           </span>
         </span>
         <span className="op-hd-actions">
           <button className="op-hd-btn op-hd-new" title="New conversation" onClick={newConversation}>+</button>
-          {onToggleSplit && (
-            <button className={`op-hd-btn${split ? " on" : ""}`} onClick={() => onToggleSplit()}
-              title={split ? "Overlay mode — float over the page" : "Split screen — dock beside the page"}>
-              <Icon name="maximize" size={15} />
-            </button>
-          )}
           <button className={`op-hd-btn${showSettings ? " on" : ""}`} title="Assistant settings"
             onClick={() => { setShowSettings((v) => !v); setShowHelp(false); }}>
             <Icon name="settings" size={15} />
@@ -570,7 +599,8 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
             onClick={() => { setShowHelp((v) => !v); setShowSettings(false); }}>
             <Icon name="help" size={15} />
           </button>
-          <button className="op-hd-btn" title="Close (Esc)" onClick={() => setCopilotOpen(false)}>
+          {controls}
+          <button type="button" className="op-hd-btn" title="Close (Esc)" aria-label="Close Iris" onClick={() => setCopilotOpen(false)}>
             <Icon name="close" size={15} />
           </button>
         </span>
@@ -841,7 +871,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
                 </div>
               )}
               {m.role === "assistant" && grounded[i]
-                ? <GroundedAnswer ans={grounded[i]} onCite={() => setCopilotOpen(false)} onClose={() => setCopilotOpen(false)} />
+                ? <GroundedAnswer ans={grounded[i]} onCite={leave} onClose={() => setCopilotOpen(false)} />
                 : m.role === "assistant" && chatStmts[i] && !m.content.includes("```")
                   ? <StatementText className="op-text" text={m.content} statements={chatStmts[i]} />
                   : renderContent(m.content)}
@@ -867,7 +897,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
                     const href = answerCiteHref(c.href);
                     return href
                       ? <a key={c.id} className="op-cite" href={href} title={c.label}
-                          onClick={() => setCopilotOpen(false)}>{text}</a>
+                          onClick={leave}>{text}</a>
                       : <span key={c.id} className="op-cite" title={c.label}>{text}</span>;
                   })}
                 </div>
@@ -892,7 +922,11 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
         {busy && (
           <div className="op-row assistant">
             <span className="op-avatar"><Icon name="copilot" size={14} /></span>
-            <div className="op-bubble assistant op-typing"><span /><span /><span /></div>
+            {steps.length > 0 ? (
+              <div className="op-bubble assistant"><IrisProgress steps={steps} /></div>
+            ) : (
+              <div className="op-bubble assistant op-typing"><span /><span /><span /></div>
+            )}
           </div>
         )}
         <div ref={endRef} />
@@ -1142,10 +1176,13 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
       )}
 
       {/* Recommended next actions — numbered. */}
-      {ans.next_actions && ans.next_actions.length > 0 && (
+      {ans.recommendations && ans.recommendations.length > 0 ? (
+        <RecommendationCards cards={ans.recommendations} citations={ans.citations ?? []} />
+      ) : ans.next_actions && ans.next_actions.length > 0 && (
         <div className="op-section">
           <div className="op-sec-h">Recommended next actions</div>
           <ol className="op-actions">{ans.next_actions.map((a, i) => <li key={i}>{a}</li>)}</ol>
+          <div className="iris-card-foot">{NO_ACTION_NOTICE}</div>
         </div>
       )}
 

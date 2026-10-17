@@ -100,6 +100,62 @@ func (s *server) reconcileTopologyOnce(ctx context.Context) {
 	if err := s.topology.ReplaceAll(ctx, merged); err != nil {
 		logError("topology", "reconcile replace", map[string]any{"error": err.Error()})
 	}
+	s.refreshSDWANOverlay(ctx)
+}
+
+// sdwanOverlaySnapshot is the last inferred SD-WAN overlay (tracker 349),
+// platform-wide and partitioned by tenant inside. The inference is O(pairs)
+// and can take seconds on a large mesh, so it runs once per reconcile cycle
+// and every /view request only FILTERS it to what the caller can see.
+type sdwanOverlaySnapshot struct {
+	at  time.Time
+	res topology.OverlayResult
+	// facts: the device ids that published overlay facts this cycle.
+	facts map[string]bool
+	// devFacts: the published facts themselves (per-session detail the Tunnels
+	// view lists; the topology only needs the folded pairs).
+	devFacts map[string]collectors.OverlayDeviceFacts
+}
+
+// refreshSDWANOverlay re-infers the overlay from the collector's published
+// facts. An unread facts channel keeps the previous snapshot (unread is not
+// "no overlay" — tracker 307) and is logged.
+func (s *server) refreshSDWANOverlay(ctx context.Context) {
+	facts, err := collectors.FetchOverlayFacts(ctx)
+	if err != nil {
+		logWarn("topology", "SD-WAN overlay facts unread — the previous overlay is kept", map[string]any{"error": err.Error()})
+		return
+	}
+	devs := s.discovery.Devices() // platform-wide: the reconciler has no principal
+	in := topology.OverlayInput{
+		DevTenant: make(map[string]string, len(devs)),
+		Facts:     facts,
+		IfAddrs:   map[string][]string{},
+	}
+	for _, d := range devs {
+		in.DevTenant[d.ID] = normTenant(d.TenantID)
+	}
+	ifaddr, ierr := collectors.FetchIfAddrMap(ctx)
+	if ierr != nil {
+		logWarn("topology", "interface addresses unread — SD-WAN edges that answer no SD-WAN MIB cannot be resolved this cycle", map[string]any{"error": ierr.Error()})
+	}
+	for dev, m := range ifaddr {
+		for ip := range m {
+			in.IfAddrs[dev] = append(in.IfAddrs[dev], ip)
+		}
+	}
+	start := time.Now()
+	res := topology.InferOverlay(in)
+	have := make(map[string]bool, len(facts))
+	for id := range facts {
+		have[id] = true
+	}
+	s.sdwanOverlay.Store(&sdwanOverlaySnapshot{at: time.Now(), res: res, facts: have, devFacts: facts})
+	if res.Stats.Unresolved > 0 || res.Stats.Ambiguous > 0 {
+		logInfo("topology", "SD-WAN overlay inferred with gaps", map[string]any{
+			"pairs": res.Stats.PairsObserved, "drawn": res.Stats.PairsDrawn, "unresolved_system_ips": res.Stats.Unresolved,
+			"ambiguous": res.Stats.Ambiguous, "took_ms": time.Since(start).Milliseconds()})
+	}
 }
 
 // observeTopology builds the current OBSERVED graph across ALL tenants: a node per
@@ -114,21 +170,6 @@ func (s *server) observeTopology(ctx context.Context) (topology.GraphRecords, er
 	}
 
 	var g topology.GraphRecords
-	for _, f := range toDeviceFacts(devs, nil, nil, nil) { // cpu/mem/links nil — structural only
-		g.Nodes = append(g.Nodes, topology.NodeRecord{
-			TenantID: tenantByDev[f.ID],
-			ID:       f.ID,
-			Label:    f.Name,
-			Kind:     topology.KindOf(f),
-			Role:     f.Role,
-			Vendor:   f.Vendor,
-			Model:    f.Model,
-			Site:     f.Site,
-			Rack:     f.Rack,
-			MgmtIP:   f.MgmtIP,
-			Owner:    f.Owner,
-		})
-	}
 	neighbors, linksErr := s.fetchTopoLinks(ctx)
 	// The interface registry only NAMES ports, so an unread registry does not stop
 	// this cycle — but on the one caller that WRITES it is not free either, and
@@ -143,7 +184,32 @@ func (s *server) observeTopology(ctx context.Context) (topology.GraphRecords, er
 	ifaddr, ifaddrErr := collectors.FetchIfAddrMap(ctx)
 	reportIfRegistryUnread("topology", "BGP-LS edge ports stay raw interface IPs this cycle, so those edges reconcile under a different id and the previous one ages toward Stale", ifaddrErr,
 		map[string]any{"devices": len(devs)})
-	for _, l := range observeTopoLinks(devs, neighbors, ifaddr) {
+	links := observeTopoLinks(devs, neighbors, ifaddr)
+	// The reconciler has no principal: the WAN-fact BGP read is platform-wide BY
+	// DESIGN (nil filters, explicit here), and ExternalBGPPeerCounts still scopes
+	// "external" to each device's own tenant (§3a). cpu/mem stay nil — structural only.
+	for _, f := range toDeviceFacts(devs, nil, nil, links, s.gatherWANFacts(ctx, devs, nil)) {
+		rr := topology.ClassifyDeviceRole(f)
+		n := topology.NodeRecord{
+			TenantID:  tenantByDev[f.ID],
+			ID:        f.ID,
+			Label:     f.Name,
+			Kind:      topology.KindOf(f),
+			Role:      f.Role,
+			Vendor:    f.Vendor,
+			Model:     f.Model,
+			Site:      f.Site,
+			Rack:      f.Rack,
+			MgmtIP:    f.MgmtIP,
+			Owner:     f.Owner,
+			WANFlavor: rr.WANFlavor,
+		}
+		if rr.Role != topology.DevRoleUnknown {
+			n.DeviceRole, n.RoleConfidence = rr.Role, rr.Confidence
+		}
+		g.Nodes = append(g.Nodes, n)
+	}
+	for _, l := range links {
 		g.Edges = append(g.Edges, topology.EdgeRecord{
 			TenantID:      tenantByDev[l.Source], // edge belongs to its source device's tenant
 			ID:            topoEdgeID(l),

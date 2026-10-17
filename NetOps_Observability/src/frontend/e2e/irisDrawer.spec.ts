@@ -1,30 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// Iris box (the AI drawer) E2E — tracker 337 N-E5. Drives the real SPA against
+// Iris box (the chat inside the Iris panel) E2E — tracker 337 N-E5. Drives the real SPA against
 // the Iris API faked at the network boundary (./irisBackend.ts) and proves:
 //   1. a data question is answered as DATA: the summary, the chart and the
 //      table all render, the query citation is shown, and hostile markup in a
 //      result cell or the summary is text — never HTML;
 //   2. follow-ups ride ONE server conversation: started once, its id sent with
-//      every ask, kept across closing/reopening the drawer (sessionStorage), a
+//      every ask, kept across closing/reopening the panel (sessionStorage), a
 //      conversation the server no longer has is dropped and the question still
 //      answered, and clearing the chat starts a new one;
 //   3. an unbound reference or an unplaceable question gets the honest "not
 //      understood" answer (no fabricated result), and an ambiguous name is
 //      asked back rather than guessed;
-//   4. accessibility smoke: the drawer is a named landmark, the answer is a
+//   4. accessibility smoke: the panel is a named landmark, the answer is a
 //      named region with a named grid, and every control has an accessible name.
 
 import { test, expect, type Page } from "@playwright/test";
 import {
-  bootIris, openIris, askIris, topCpuAnswer, memorySeriesAnswer, capabilityAnswer, clarifyAnswer,
+  bootIris, openIris, askIris, irisPanel, topCpuAnswer, memorySeriesAnswer, capabilityAnswer, clarifyAnswer,
   XSS_IMG, TENANT_CONFIG, SUGGESTION_IGNORED,
 } from "./irisBackend";
 
 test.use({ timezoneId: "UTC", locale: "en-US" });
 
-const drawer = (page: Page) => page.getByRole("complementary", { name: "Iris AI assistant" });
+// The window around the box is e2e/irisPanel.spec.ts's subject (tracker 338–342).
+const drawer = irisPanel;
 const answers = (page: Page) => drawer(page).locator(".op-row.assistant .op-bubble-grounded");
 
 async function boot(page: Page, answer: (q: string) => Record<string, unknown>) {
@@ -65,7 +66,7 @@ test("a data question renders the summary, the chart, the table and the citation
   expect(await page.evaluate(() => (window as unknown as { __irisXss?: number }).__irisXss)).toBeUndefined();
 });
 
-test("follow-ups ride one server conversation, kept across closing and reopening the drawer", async ({ page }) => {
+test("follow-ups ride one server conversation, kept across closing and reopening the panel", async ({ page }) => {
   const fake = await boot(page, (q) => (q.includes("memory") ? memorySeriesAnswer() : topCpuAnswer()));
 
   await askIris(page, "top 3 devices by cpu in the last hour");
@@ -73,9 +74,9 @@ test("follow-ups ride one server conversation, kept across closing and reopening
   expect(fake.started).toEqual(["conv-1"]);
   expect(await page.evaluate(() => sessionStorage.getItem("iris.conversation"))).toBe("conv-1");
 
-  // Close the drawer (Opsis unmounts) and reopen it: the conversation survives.
-  await drawer(page).getByTitle("Close (Esc)").click();
-  await expect(page.getByPlaceholder(/Ask Iris AI/)).toHaveCount(0);
+  // Close the panel and reopen it: the conversation survives.
+  await drawer(page).getByRole("button", { name: "Close Iris" }).click();
+  await expect(page.getByPlaceholder(/Ask Iris AI/)).toBeHidden();
   await openIris(page);
   await askIris(page, "memory on that device");
 

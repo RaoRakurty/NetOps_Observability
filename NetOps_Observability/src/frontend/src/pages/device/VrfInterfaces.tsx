@@ -209,11 +209,12 @@ export default function VrfInterfaces({ device }: { device: Device }) {
           {footnote && <div className="fact-line" style={{ marginTop: 6 }}>{footnote}</div>}
           {data.routing_instances.length > 0 && (
             <div className="fact-line" style={{ marginTop: 6 }}>
-              {data.dialect.term_plural} this device reports on its BGP control plane:{" "}
+              {data.dialect.term_plural} this device reports:{" "}
               <span style={{ fontFamily: "var(--font-mono)" }}>
-                {data.routing_instances.map((ri) => ri.name).join(", ")}
+                {data.routing_instances.map((ri) => (ri.rd ? `${ri.name} (RD ${ri.rd})` : ri.name)).join(", ")}
               </span>
-              {" — that lane carries the instance name but not its interface membership."}
+              {data.routing_instances.every((ri) => ri.source === "bgp_control_plane") &&
+                " — read from its BGP control plane, which carries the instance name but not its interface membership."}
             </div>
           )}
         </div>

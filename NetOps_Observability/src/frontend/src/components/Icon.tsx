@@ -405,6 +405,32 @@ const PATHS: Record<string, JSX.Element> = {
       <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
     </>
   ),
+  // minimize — collapse an expanded panel back to its previous size.
+  // upstream: Feather `minimize` (MIT) — verbatim path data.
+  minimize: (
+    <>
+      <path d="M8 3v3a2 2 0 0 1-2 2H3" />
+      <path d="M21 8h-3a2 2 0 0 1-2-2V3" />
+      <path d="M3 16h3a2 2 0 0 1 2 2v3" />
+      <path d="M16 21v-3a2 2 0 0 1 2-2h3" />
+    </>
+  ),
+  // dock-right — attach a panel to the right edge of the workspace (a window
+  // whose right column is the panel). Authored here, not copied.
+  "dock-right": (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M15 4v16" />
+    </>
+  ),
+  // undock — detach a docked panel back into a floating one (a small window
+  // floating inside a larger one). Authored here, not copied.
+  undock: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <rect x="11" y="10" width="7" height="7" rx="1.5" />
+    </>
+  ),
   // directory — LDAP / Active Directory (a tree of nodes).
   directory: (
     <>

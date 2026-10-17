@@ -33,7 +33,7 @@ import (
 
 // metricsFilterPrimitives are the building blocks that produce a VictoriaMetrics
 // extra_filters[] value. Each one, used alone, gives HALF the rule.
-var metricsFilterPrimitives = []string{"metricsScopeFilters", "metricsExcludeFilter"}
+var metricsFilterPrimitives = []string{"metricsScopeFilters", "metricsExcludeFilters"}
 
 // metricsChokepointFile is the only file allowed to call them.
 const metricsChokepointFile = "metrics_query.go"
@@ -105,13 +105,14 @@ func TestMetricsScopeFiltersForFoldsBothRules(t *testing.T) {
 
 	// 2. Platform owner in the Global view → acme's devices excluded.
 	f := s.metricsScopeFiltersFor(owner)
-	if len(f) != 1 || !strings.Contains(f[0], "acme-core") {
+	all := strings.Join(f, " ")
+	if len(f) != 2 || !strings.Contains(all, "acme-core") {
 		t.Fatalf("the Global view must exclude the restricted tenant's devices, got %v", f)
 	}
-	if !strings.Contains(f[0], `device!~`) {
+	if !strings.Contains(all, `device!~`) {
 		t.Fatalf("the Global-view filter must be an EXCLUSION, got %v", f)
 	}
-	if strings.Contains(f[0], "globex-core") {
+	if strings.Contains(all, "globex-core") {
 		t.Fatalf("an unrestricted tenant must not be excluded, got %v", f)
 	}
 

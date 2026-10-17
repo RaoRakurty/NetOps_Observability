@@ -48,3 +48,93 @@ describe("the Neighbours tab when the adjacency evidence could not be read", () 
     expect(screen.queryByTestId("device-neighbours-unread")).toBeNull();
   });
 });
+
+// Owner report 2026-10-10: BGP and OSPF did not show in the device popup.
+describe("the BGP and OSPF sections", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const byQuery = (map: Record<string, unknown>) => (q: string) => {
+    for (const [k, v] of Object.entries(map)) if (q.startsWith(k)) return v instanceof Error ? Promise.reject(v) : Promise.resolve(v);
+    return Promise.resolve({ data: { result: [] } });
+  };
+
+  it("shows OSPF neighbours by their address label and BGP peers with their remote AS", async () => {
+    vi.mocked(api.topologyLinks).mockResolvedValue({ links: [], count: 0, source: "none" } as never);
+    vi.mocked(api.metricsQuery).mockImplementation(byQuery({
+      device_bgp_peer_state: { data: { result: [{ metric: { peer: "192.0.2.1" }, value: [0, "6"] }] } },
+      device_bgp_peer_remote_as: { data: { result: [{ metric: { peer: "192.0.2.1" }, value: [0, "65010"] }] } },
+      device_ospf_nbr_state: { data: { result: [{ metric: { neighbor: "172.16.40.41" }, value: [0, "8"] }] } },
+    }) as never);
+    render(<DeviceNeighbors device={device} />);
+    expect(await screen.findByText("172.16.40.41")).toBeInTheDocument();
+    expect(await screen.findByText("65010")).toBeInTheDocument();
+    expect(screen.getByText("192.0.2.1")).toBeInTheDocument();
+  });
+
+  it("says BGP and OSPF are UNKNOWN when their state could not be read", async () => {
+    vi.mocked(api.topologyLinks).mockResolvedValue({ links: [], count: 0, source: "none" } as never);
+    vi.mocked(api.metricsQuery).mockImplementation(byQuery({
+      device_bgp_peer_state: new Error("502 Bad Gateway"),
+      device_ospf_nbr_state: new Error("502 Bad Gateway"),
+    }) as never);
+    render(<DeviceNeighbors device={device} />);
+    expect((await screen.findByTestId("device-bgp-unread")).textContent).toMatch(/UNKNOWN here — not absent/);
+    expect((await screen.findByTestId("device-ospf-unread")).textContent).toMatch(/UNKNOWN here — not absent/);
+    expect(screen.queryByText(/No BGP peer seen on this device/)).toBeNull();
+  });
+});
+
+// SD-WAN control plane (OMP): shown on edges with their sessions, hidden on
+// devices that run no OMP, counts-only on controllers, UNKNOWN when unread.
+describe("the OMP section", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.topologyLinks).mockResolvedValue({ links: [], count: 0, source: "none" } as never);
+  });
+  const route = (map: Record<string, unknown>) => (q: string) => {
+    for (const [k, v] of Object.entries(map)) if (q.startsWith(k + "{")) return v instanceof Error ? Promise.reject(v) : Promise.resolve(v);
+    return Promise.resolve({ data: { result: [] } });
+  };
+  const series = (metric: Record<string, string>, v: string) => ({ metric, value: [0, v] });
+
+  it("lists an edge's controller sessions with their state", async () => {
+    vi.mocked(api.metricsQuery).mockImplementation(route({
+      device_omp_peer_state: { data: { result: [series({ peer: "10.255.255.1", type: "vsmart", site_id: "1000" }, "3"), series({ peer: "10.255.255.2", type: "vsmart" }, "8")] } },
+      device_omp_peers: { data: { result: [series({ state: "up" }, "2"), series({ state: "not_up" }, "0")] } },
+    }) as never);
+    render(<DeviceNeighbors device={device} />);
+    expect(await screen.findByText("SD-WAN control sessions (OMP)")).toBeInTheDocument();
+    expect(screen.getByText("10.255.255.1")).toBeInTheDocument();
+    expect(screen.getByText("up (graceful restart)")).toBeInTheDocument();
+    expect(screen.getByText("2 up · 0 not up")).toBeInTheDocument();
+  });
+
+  it("stays hidden on a device that runs no OMP", async () => {
+    vi.mocked(api.metricsQuery).mockImplementation(route({}) as never);
+    render(<DeviceNeighbors device={device} />);
+    await screen.findByText(/No neighbour protocol reported one here/);
+    expect(screen.queryByText("SD-WAN control sessions (OMP)")).toBeNull();
+  });
+
+  it("says a controller shows counts only", async () => {
+    vi.mocked(api.metricsQuery).mockImplementation(route({
+      device_omp_peers: { data: { result: [series({ state: "up" }, "120"), series({ state: "not_up" }, "3")] } },
+    }) as never);
+    render(<DeviceNeighbors device={device} />);
+    expect(await screen.findByText(/This is a controller/)).toBeInTheDocument();
+  });
+
+  it("says UNKNOWN when the read fails", async () => {
+    vi.mocked(api.metricsQuery).mockImplementation(route({ device_omp_peer_state: new Error("502 Bad Gateway") }) as never);
+    render(<DeviceNeighbors device={device} />);
+    expect((await screen.findByTestId("device-omp-unread")).textContent).toMatch(/UNKNOWN here — not absent/);
+  });
+});
+
+describe("peerKey — remote AS joins per instance", () => {
+  it("treats the global table's spellings as one and keeps VRFs apart", async () => {
+    const { peerKey } = await import("./DeviceNeighbors");
+    expect(peerKey(undefined, "10.0.0.1")).toBe(peerKey("default", "10.0.0.1"));
+    expect(peerKey("CUST-A", "10.0.0.1")).not.toBe(peerKey(undefined, "10.0.0.1"));
+  });
+});

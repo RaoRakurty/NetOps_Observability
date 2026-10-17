@@ -684,6 +684,9 @@ var (
 	tmplLabel = regexp.MustCompile(`\{\{\s*\$labels\.([A-Za-z0-9_]+)\s*\}\}`)
 	tmplValue = regexp.MustCompile(`\{\{[^}]*\$value[^}]*\}\}`)
 	tmplAny   = regexp.MustCompile(`\{\{[^}]*\}\}`)
+	// {{ if $labels.x }}…{{ end }} — the one conditional the rules use (vmalert
+	// renders it natively): the inner text only when the label is non-empty.
+	tmplIf = regexp.MustCompile(`\{\{\s*if\s+\$labels\.([A-Za-z0-9_]+)\s*\}\}(.*?)\{\{\s*end\s*\}\}`)
 )
 
 // renderSummary expands a Prometheus-style annotation template against a firing
@@ -693,6 +696,13 @@ func renderSummary(tmpl string, labels map[string]string, value float64) string 
 	if tmpl == "" {
 		return tmpl
 	}
+	tmpl = tmplIf.ReplaceAllStringFunc(tmpl, func(m string) string {
+		sub := tmplIf.FindStringSubmatch(m)
+		if sub == nil || labels[sub[1]] == "" {
+			return ""
+		}
+		return sub[2]
+	})
 	s := tmplLabel.ReplaceAllStringFunc(tmpl, func(m string) string {
 		if sub := tmplLabel.FindStringSubmatch(m); sub != nil {
 			if v, ok := labels[sub[1]]; ok {

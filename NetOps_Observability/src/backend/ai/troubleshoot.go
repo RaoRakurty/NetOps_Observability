@@ -268,6 +268,11 @@ type TroubleshootDeps struct {
 	// unscoped list). nil = investigation memory is not wired on this
 	// deployment, and `recall_investigations` is then not registered at all.
 	RecallInvestigations func(ctx context.Context, p Principal, q InvestigationQuery) ([]InvestigationRow, error)
+	// SimilarIncidents answers "have we seen this before?" for one of the
+	// caller's cases (N-F4): earlier CLOSED incidents of the same tenant above
+	// the documented threshold. ErrNotFound for a case the caller cannot see.
+	// nil = find_similar_incidents is not registered.
+	SimilarIncidents func(ctx context.Context, p Principal, correlationID, window string) (SimilarIncidents, error)
 
 	// ── the Iris RCA contract (tracker 337 N-B1) ───────────────────────────
 
@@ -348,7 +353,7 @@ type protocolDiagnosticTool struct{ deps TroubleshootDeps }
 
 func (t protocolDiagnosticTool) Name() string            { return "run_protocol_diagnostic" }
 func (t protocolDiagnosticTool) Module() string          { return "protocol_diagnostics" }
-func (t protocolDiagnosticTool) Capability() Capability  { return CapRead }
+func (t protocolDiagnosticTool) Capability() Capability  { return CapProbe }
 func (t protocolDiagnosticTool) RequiredPerms() []string { return []string{"infrastructure:read"} }
 func (t protocolDiagnosticTool) Freshness() Freshness    { return FreshnessLive }
 
@@ -849,6 +854,9 @@ func (r *ToolRegistry) AddTroubleshootTools(ds DataSource, d TroubleshootDeps) {
 	if d.RecallInvestigations != nil {
 		r.add(recallInvestigationsTool{deps: d})
 	}
+	if d.SimilarIncidents != nil {
+		r.add(similarIncidentsTool{deps: d})
+	}
 	if d.ResolveDevice == nil {
 		return // every remaining tool resolves a device under the caller's tenant first
 	}
@@ -911,6 +919,8 @@ func TroubleshootToolNames() []string {
 		"get_device_state", "get_bgp_watchlist", "get_bgp_rpki", "get_bgp_feed_recent",
 		// Phase B.
 		"recall_investigations",
+		// N-F4.
+		"find_similar_incidents",
 	}
 	sort.Strings(out)
 	return out

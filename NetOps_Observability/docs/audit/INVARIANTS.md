@@ -414,6 +414,8 @@ would violate it.
 | Flow evidence is availability-shaped only, and says so | ✅ | **BUILD** — `TestFlowSourceHealthStatesAreFourDifferentSentences`: every Data Health state for the flow source states that responsiveness is not measured and names the columns `netops.flows` does not carry |
 | An exporter that reports no TCP flags is `not_supported`, never a healthy zero | ✅ | **BUILD** — `TestResetRatioBranches`: the reset ratio's denominator is flag-bearing flows only, and "0 of 1000 flows carried control bits" is reported as an exporter gap with the IPFIX field named |
 | The flow read is tenant-scoped three times over and default-closed | ✅ | **BUILD** — `dem_flow_isolation_test.go`: no principal → refused with no query; a scope that disagrees with the requested tenant → refused with no query; a tenant with no devices → nothing, with no query; a scoped read carries only its own device addresses and its own declared endpoints; aggregates only, never a raw conversation |
+| Exporter application identity (IE 95/96) travels only as hex from goflow2, and is decoded and validated in one place | ✅ **on fixtures**, ❌ **not live** | **BUILD** — `tests/test_goflow2_mapping.py` (no `render:` entry; every deployment path passes the same mapping; the 50-field list is pinned to the image digest) and the vector-router `parse-trace.yaml` cases (engine 13 and engine 20 ids, NUL-padded names, a quote-bearing name and a forged bus value are dropped). Proven by hand 2026-10-11 against the pinned v2.2.1 image: goflow2's string renderer splices exporter bytes into the JSON unescaped (a field-injection), hex does not. Live proof needs an NBAR / FortiGate exporter: the lab exporters send no application fields |
+| An exporter that sends no application identity yields no name — never a guessed one, and the address verdict is unchanged | ✅ | **BUILD** — `TestAggregateFlowAppsCarriesTheExporterVerdict` (id-only rows claim no name; a port-engine id is a service class; rows with no usable verdict group as before), `TestParseExporterAppID`; the exporter verdict is reported beside the address verdict and NOT fused (exporter and catalog vocabularies differ, and the fusion's contradiction rule would demote names shown today) |
 
 **Standing gap — the honest one, updated 2026-09-05 (tracker 252).** Every row
 above is proven on FIXTURES. The second anchor-capable class shipped
@@ -423,7 +425,10 @@ live**, and two things stand between the fixture and the estate:
 
 1. **The lab has no flow evidence to produce.** Its exporters (172.40.40.51/.52)
    emit OSPF hello flows only: over seven days, 53 002 rows, `tcp_flags = 0` on
-   every one, `proto = 0` on all but a single UDP record, `tenant_id = ''`
+   every one, `proto = 0` on all but a single UDP record (**correction
+   2026-10-11:** that `0` was a DECODER defect, not the traffic — goflow2 names
+   OSPF "OSPFIGP" and the flow VRL mapped only 12 names, storing every other
+   one as 0/HOPOPT; the full 0-145 table now maps OSPF to 89), `tenant_id = ''`
    throughout, and **zero rows touching the DEM tenant's declared subjects**
    (172.40.40.11/.12). The producer correctly reports `no_data` there, and
    `can_confirm` correctly stays false. Live proof needs an exporter pointed at
@@ -506,3 +511,121 @@ at. If the answer is PROSE, say so out loud in the PR rather than leaving a
 future reader to assume a gate exists. When an audit finding is closed, add the
 guard that makes its *class* unrepeatable and record it here — that is the
 difference between fixing an instance and fixing a generator.
+
+## 14. Iris tool contract (tracker 337 N-A8, 2026-10-12)
+
+| Invariant | Status | Proof |
+|---|---|---|
+| Every Iris tool call — engine problem path, module path, skill chain, copilot agent loop — passes ONE gateway (`ai.Toolbox.Invoke`) | ✅ | **BUILD** — `TestOnlyTheGatewayRunsTools` (AST: `AITool.Run` is called only in `ai/toolgateway.go`) and `TestRootPackageNeverRunsAToolDirectly` |
+| A tool without a valid contract is not registered; write/execute tools are structurally unregistrable | ✅ | **BUILD** — `TestRegisterRefusesWhatHasNoValidContract`, `TestEveryRegisteredToolHasAValidContract`; `CheckToolContracts` refuses to start the api on an invalid table |
+| A tool's contract timeout holds even when its data source ignores its context | ✅ | **BUILD** — `TestInvokeTimeoutHoldsEvenWhenTheToolIgnoresItsContext`; the data source now reads under the per-call context (`aiDataSource.with`) |
+| The per-tool rate is per tenant (from the token) and never throttles another tenant | ✅ | **BUILD** — `TestInvokeRateLimitIsPerTenantPerTool`, `TestCopilotToolRateIsPerTenant` |
+| A result that does not fit its output schema never reaches the model; its hash is ledgered as proof | ✅ | **BUILD** — `TestInvokeSchemaRejectDropsTheOutput`, `TestAddToolStepGatewayOutcomes` |
+| Every tool call is ledgered with latency and truncation, copilot turns included | ✅ on fixtures + PG | **BUILD** — `TestCopilotToolCallsAreLedgered`; pgintegration `TestAIDecisionLedgerToolContractColumnsPG` (0057 round-trip, CHECK, append-only, RLS) |
+| The contract VALUES (timeouts, rates, item ceilings) suit live traffic | ❌ **not live-measured** | Set from the code's own caps and backend class; `IrisToolEvidenceDropped` (warning) watches the drop rate. Re-tune from `netops_ai_tool_invocations_total{outcome}` after a week of real traffic. |
+
+## 15. Iris answer progress stream (tracker 337 N-E2, 2026-10-12)
+
+`POST /api/ai/ask` with `Accept: text/event-stream` streams progress
+(planning · tool started/finished · narrating · grounding), then the same
+answer the JSON path sends, then `done`. Any other Accept is unchanged.
+
+| Invariant | Status | Proof |
+|---|---|---|
+| A stream carries only a closed vocabulary: a fixed event type, a registry-shaped tool NAME, a fixed outcome — never model text, tool arguments or evidence before the grounded answer | ✅ | **BUILD** — `TestEmitAllowsOnlyTheClosedVocabulary`, `TestTraceCarriesNothingButTheVocabulary`; browser: `irisProgress.spec.ts` "hostile event and tool names never reach the screen" |
+| The streamed answer is the JSON answer (minus volatile fields); a client that does not ask for a stream sees no change | ✅ | **BUILD** — `TestAskStreamsProgressThenTheSameAnswer`, `TestAskWithoutStreamAcceptIsUnchanged`; refusals stay JSON (`TestAskStreamRefusalsAreJSON`) |
+| Progress is bounded and never blocks the answer (drops counted, reported in `done`) | ✅ | **BUILD** — `TestEmitIsBoundedAndNeverBlocks`; `netops_iris_stream_events_dropped_total` |
+| The client leaving cancels the work (no orphaned model/VM calls) | ✅ | **BUILD** — `TestAskStreamClientDisconnectCancelsTheWork` (real socket), `TestWriteFailureCancelsTheWork`, `TestCancellingTheRequestStopsTheAnswer` |
+| A streamed ask is ledgered in the asker's tenant | ✅ | **BUILD** — `TestAskStreamLedgerStaysInTheAskersTenant` |
+| Streaming survives the middleware chain and nginx (no buffering, no gzip of `text/event-stream`) | ✅ on config | **BUILD** — `TestStreamingPassesThroughTheMiddleware`, `tests/test_nginx_sse.py`. ❌ **not live-proven** through the lab's nginx — check on first deploy that progress arrives before the answer |
+| A broken or non-stream response falls back to ONE plain ask and the answer still renders | ✅ | **BUILD** — `progressStream.test.ts`; browser `irisProgress.spec.ts` (broken stream = 2 asks, JSON reply = 1) |
+
+## 16. Network context — the Org Context Store (tracker 337 N-F1, 2026-10-12)
+
+Customer-written facts (9 closed kinds, ≤ 2000 bytes, 50 per tenant) that Iris
+reads before every answer. `internal/orgcontext`, migration 0058,
+`/api/ai/context/*`, Administration → Iris → Network Context.
+
+| Invariant | Status | Proof |
+|---|---|---|
+| A tenant never reads, changes or approves another tenant's facts, and never receives them in a prompt; a Global view renders none | ✅ | **BUILD** — `TestOrgContextIsolation` (every verb on a foreign id → 404, as_tenant walk, body tenant refused, prompt per tenant), `TestStoreTenantIsolation`; **PG** — `TestOrgContextRLSIsolationPG` (RLS count 0, WITH CHECK 42501) |
+| No text reaches a prompt without two people: the author cannot approve, an API key cannot approve, and the approval binds to the reviewed text (version + sha256) | ✅ | **BUILD** — `TestNobodyApprovesTheirOwnText`, `TestApprovalBindsToTheReviewedText`, `TestOrgContextTwoPeopleOverHTTP`; **PG** — `TestOrgContextDatabaseGuardsPG` (CHECK `approver_sub <> author_sub` refuses a direct write, 23514) |
+| History is never rewritten: submitted text, author and approver are frozen; only drafts are deleted; rollback is a new version that keeps the original two people | ✅ | **BUILD** — `TestTheFullLifecycle`; **PG** — `TestOrgContextDatabaseGuardsPG` (trigger 42501), `TestOrgContextLifecyclePG` |
+| Only APPROVED text renders; drafts, pending and retired versions never do; rendering also needs `ai.context.author` (default-closed) | ✅ | **BUILD** — `TestOrgContextOnlyApprovedTextReachesThePrompt`, `TestOrgContextIsolation` (entitlement lapse) |
+| Context renders before the data-not-instructions fence on both the copilot and the grounded-engine prompt; without context the engine prompt is byte-identical | ✅ | **BUILD** — `TestCopilotFenceFollowsNetworkContext`, `TestOrchestratorSystemPromptPlacesTheFenceAfterContext` |
+| Injection shapes (role markers, template tokens, our headers, citation ids, links, e-mail, tool names, invisible/control characters) are refused at write and re-checked at render | ✅ | **BUILD** — `TestInjectionShapesAreRefused`, `TestOrgContextRefusesInjectionAndUnseenSites`, `TestOrgContextSkipsATamperedStoredFact`, `TestOrgContextBlockNeutralisesWhatSlipsThrough` |
+| Bounded: 2000-byte body (CHECK + store), 50 facts per tenant under concurrency, 200 versions per fact, ~4000-char prompt budget with disclosed omission | ✅ | **BUILD** — `TestLimits`, `TestOrgContextBlockBudgetIsDisclosed`; **PG** — `TestOrgContextConcurrencyPG` |
+| The context that rode a prompt is ledgered (hash + count) | ✅ | **BUILD** — `TestOrgContextOnlyApprovedTextReachesThePrompt` |
+| The legacy platform-wide persona override (`CopilotConfig.System`) is gone: a stored value is ignored and logged, a PUT carrying one is refused | ✅ | **BUILD** — `TestRetiredPersonaOverrideIsIgnoredAndRefused`. Lab (.122) held no stored value (checked 2026-10-12). |
+| Facts change answers for the better and do not tilt verdicts | ❌ **not measured** | No model-eval run with context yet. The deterministic honesty gate (statement classes) still decides what the engine asserts; facts are not evidence and cannot be cited. |
+| A single-administrator workspace can still activate a fact | ✅ via the platform owner | The second person may be the platform owner acting in that workspace (tenant switcher), audited under their own identity — `TestOrgContextPlatformOwnerCanBeTheSecondPerson`. There is no other exception. Owner may revoke this path. |
+
+## 17. Iris performance classes and per-tenant caches (tracker 337 N-H4, 2026-10-12)
+
+| Invariant | Status | Proof |
+|---|---|---|
+| Every Iris ask is observed ONCE in its performance class (product · data · rca · investigation), by the answer actually shipped, on the JSON and streamed paths; NL query routes are `data`; an unknown mode lands in the slowest class | ✅ | **BUILD** — `TestEveryAskIsObservedOnceInItsClass`, `TestClassForCoversEveryMode`, `TestDataTimerOutcomes`, `TestRequestMetricsByClass` (`netops_ai_request_seconds{class}`, `netops_ai_requests_total{class,outcome}`; refusals counted, not timed) |
+| A per-tenant cache never serves one tenant's entry to another; the key is exactly the uncached read's inputs (tenant, cross, scope); an empty tenant is never cached | ✅ | **BUILD** — `TestTenantsNeverShareAnEntry`, `TestConcurrentReadsAndWrites`, `TestIrisAliasCacheIsTenantIsolated` (same alias text in two tenants, as_tenant walk), `TestIrisContextCacheIsTenantIsolatedAndInvalidated` |
+| A write is visible at once to its own tenant and to the Global view; other tenants' entries survive; a read racing a write never stores the stale value | ✅ | **BUILD** — `TestInvalidateTenantDropsItAndCrossOnly`, `TestInvalidateDuringLoadDoesNotResurrect`, `TestIrisAliasCacheIsTenantIsolated` (fails with a no-op hook) |
+| An alias store without a wired invalidation hook is never cached | ✅ | `nlqAliasList` reads directly when `OnWrite` is nil |
+| Cache metrics carry the cache name only — never a tenant | ✅ | **BUILD** — `TestMetricsCarryNoTenant` |
+| Per-class p50/p95 targets | ❌ **no targets yet** | Owner decision D2; record a week of `netops_ai_request_seconds` first. |
+| Staleness across replicas | ⚠ bounded by TTL (60 s) | Invalidation is in-process; the shipped topology is one api replica. |
+
+## 18. Iris release gates (tracker 337 N-H5, 2026-10-12)
+
+The golden-corpus scorers write raw counts (`IRIS_GATE_REPORT_DIR`);
+`internal/irisgate` judges the owner's bars; the `iris-gates` CI job reports on
+PRs and **enforces at release tags**. A gate nothing measured is a FAIL, never a
+pass by absence. Bars are pinned by `TestBarsArePinned` and are not lowered.
+
+| Gate | Bar | Measured 2026-10-12 | Source |
+|---|---|---|---|
+| entity | ≥ 99 % | ❌ 89.2 % (224/251) | compiled entity precision, N-C6 corpus — 18 of 27 misses are composite references (site + provider → circuit), compiler work |
+| executable | ≥ 98 % | ❌ 97.5 % (347/356) | N-C6 |
+| semantic | ≥ 95 % | ❌ 86.0 % (306/356) | answered precision, N-C6 |
+| cross_tenant | = 0 | ✅ 0 of 401 checks | compiled foreign refs + cross-tenant alias incidents |
+| unauthorized | = 0 | ✅ 0 of 31 checks | entitlement + admin-plane probes |
+| citation | 100 % | ✅ 120/120 | docs answers citing an expected page with a link |
+| injection | 100 % | ❌ 31/32 → ✅ 32/32 once PR #30 (F6) merges | NL refusals, docs injection items, log-injection incidents (XFAIL = fail) |
+| audit | 100 % | ✅ 8/8 | asks across classes, JSON + stream, one complete ledgered decision |
+
+Not covered by a gate: the model path's live accuracy (stub oracle in CI;
+`-tags nlqmodeleval` only) and the incident corpus as a whole (owner decision D5).
+
+## 19. Iris routing — page-aware help, tie-break, scoreboard (tracker 337 N-G3/N-G4, 2026-10-17)
+
+| Invariant | Status | Proof |
+|---|---|---|
+| The page the operator is on only RANKS documentation: it is re-validated against a server table, never scopes data, never reaches a prompt or the ledger; plain retrieval is unchanged | ✅ | **BUILD** — `TestPageRouteKey`, `TestPageHelpIgnoresBadRoutes`, `TestPageBoostKeepsGoldenRetrieval` (plain hit@1 0.90 / hit@3 1.00; own page hit@1 0.96; unrelated page hit@3 0.99), `TestNavPageDocsCoverEveryNavLeaf` |
+| The model is asked "data or investigate?" ONLY for a contested question (grammar failed, model compile allowed, a method matched); every failure routes to the method; the reply must be exactly one ROUTE line | ✅ | **BUILD** — `TestTieBreakIsOfferedOnlyWhenContested`, `TestRouteTieBreakFailsTowardTheMethod`, `TestParseRouteIsStrict`, `TestBeforeModelGuardsTheModelCompile` (a "no" = zero model compile calls) |
+| Deterministic arms still win: under a model that always answers "data", only contested decisions move, and every move is method → data | ✅ | **BUILD** — `TestRoutingScoreboard` (adversarial run: 9 tie-breaks, 9 moves, 165 questions) |
+| Screen questions and imperative how-tos are product questions, not live-state or methods | ✅ | **BUILD** — `TestRoutingScoreboard` routing lane 25/25 (`ai/testdata/routing_golden.json`); docs items answered as product 108 → 115 of 127 (ratchet) |
+| A tie-break that says "data" never bypasses validation | ✅ | The model compile still validates in the caller's scope or the method runs (`nlqCompile`) |
+
+## 20. Iris recommendation cards (tracker 337 N-I7, 2026-10-17)
+
+| Invariant | Status | Proof |
+|---|---|---|
+| A card is a suggestion only: its wire shape has no href/URL/action/command/method field, and the UI renders no button, form or input inside it | ✅ | **BUILD** — `TestRecommendationCardsAreGroundedAndInert` (JSON-key golden), `RecommendationCards.test.tsx` ("nothing that acts") |
+| Every card says "No action has been executed." — a client constant, whatever the server sends; the plain next-actions list carries it too | ✅ | **BUILD** — `RecommendationCards.test.tsx` ("keeps the label even when the server's notice says otherwise") |
+| A card rests on THIS answer's citations: an operational card on evidence (never a UI link or a document), a playbook card on its document; no basis, no card | ✅ | **BUILD** — `TestRecommendationCardsAreGroundedAndInert`, `TestNoCardWithoutABasisOrForNonRecommendingModes`, `TestModelTextNeverBecomesACard` (basis ⊂ citations) |
+| Model prose never becomes a card: cards are built at Ask's exit from the server-authored next actions | ✅ | **BUILD** — `TestModelTextNeverBecomesACard` |
+| The ledger hash covers the cards and their basis | ✅ | `aiDecisionFinish` hashes `{steps, cards}` |
+| Cards in the copilot agent-loop path | ❌ **not built** | The agent loop's replies are model text; no deterministic next actions to card. |
+
+## 21. Similar past incidents (tracker 337 N-F4, 2026-10-17)
+
+`GET /api/correlations/{id}/similar`, the Iris tool `find_similar_incidents`,
+and the "Similar past incidents" card share ONE recall (`similarIncidentsFor`,
+`internal/incidentfp`).
+
+| Invariant | Status | Proof |
+|---|---|---|
+| Only the subject's own tenant is compared: an identical twin in another tenant is never recalled; a foreign case and an as_tenant walk are 404; the platform owner viewing a tenant's case compares within that tenant | ✅ | **BUILD** — `TestSimilarIncidentsStayInTheSubjectsTenant`; **PG** — `TestIncidentFingerprintsRLSIsolationPG` (RLS count 0, WITH CHECK 42501) |
+| Every read of a past incident runs at the subject's tenant scope — never `__all__` — and only after the caller's own read proved access | ✅ | **BUILD** — `TestSimilarIncidentsStayInTheSubjectsTenant` (scope recorded per read; fails when the candidate read is widened to `__all__`) |
+| Below the documented threshold (0.55) the answer is "no similar incident" and the near miss appears nowhere; a domain/provider match alone never matches (hard gate); "no history" and "none similar" read differently | ✅ | **BUILD** — `TestBelowThresholdIsNoSimilarIncidentAndLeaksNothing`, `TestHardGate`, `TestWorkedExamples`, `TestRecallServiceBuildsWithinBudgetAndStores` |
+| History never steers an investigation: the tool declares no Signals and its evidence is HISTORICAL; every match says "context only, not confirmation" | ✅ | **BUILD** — `TestFindSimilarIncidentsIsHistoryNeverASignal` |
+| Bounded: 50 candidates after an exact-key prefilter, at most 8 fingerprints built per request (written through, closed incidents only), 5 matches | ✅ | **BUILD** — `TestRecallServiceBuildsWithinBudgetAndStores`, `TestRankOrderAndCap` |
+| The threshold and weights suit real history | ❌ **not calibrated** | Documented engineering defaults (incidentfp/score.go); calibrate on the golden incident corpus / real history before GA (owner decision). |
+| Past incidents are fingerprinted ahead of time | ❌ **not built** | On-demand only (write-through); a background enricher for closed incidents is a follow-up (owner decision). |

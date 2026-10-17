@@ -504,7 +504,7 @@ func (rt *Runtime) Page(ctx context.Context, tenant string, resources []string, 
 		Lookback: rt.lookback.String(),
 	}
 	if !rt.enabled {
-		st.Note = "The near-live feed is off. Set " + EnvFeatureFlag + "=true to enable it."
+		st.Note = "The near-live feed is off. A platform administrator can turn on \"Live BGP update feed\" (" + EnvFeatureFlag + ") in Platform → Configuration → Features."
 		return FeedPage{Updates: []Update{}, Status: st}, ErrFeedDisabled
 	}
 	if len(res) == 0 {

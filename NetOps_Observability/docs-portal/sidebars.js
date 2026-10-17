@@ -276,6 +276,7 @@ const sidebars = {
         'administration/processors',
         'administration/sensitive-data-access',
         'administration/telemetry-coverage',
+        'administration/network-context',
         'administration/licence',
         'administration/debug-the-pipeline-cli',
         'administration/review-quarantined-telemetry',

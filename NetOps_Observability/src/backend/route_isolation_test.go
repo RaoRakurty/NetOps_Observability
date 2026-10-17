@@ -88,6 +88,11 @@ var routeIsolationLedger = map[string]string{
 	// colleague and an as_tenant walk get 404. nlquery_querylog_isolation_test.go.
 	"/api/ai/queries":  "scoped",
 	"/api/ai/queries/": "scoped",
+	// Network context (N-F1): tenant from the token (RLS org_context_* + store
+	// tenant key); a Global view must choose a workspace; a foreign id → 404,
+	// foreign approve/rollback/retire → 404 — org_context_isolation_test.go.
+	"/api/ai/context":  "scoped",
+	"/api/ai/context/": "scoped",
 	// AI decision ledger (N-A6): appended in the asker's tenant from the token
 	// (RLS ai_decision_ledger, append-only); read by a workspace admin (own
 	// tenant only — another tenant's decision id lists nothing, as_tenant is
@@ -541,6 +546,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/flows/by-type":                  "scoped",
 	"/api/flows/fanout":                   "scoped",
 	"/api/flows/flags":                    "scoped",
+	"/api/flows/coverage":                 "scoped",
 	"/api/flows/geo":                      "scoped",
 	"/api/flows/services":                 "scoped",
 	"/api/flows/timeseries":               "scoped",
@@ -785,6 +791,8 @@ var routeIsolationLedger = map[string]string{
 	"/api/auth/sso/tenant-idp/": "adminScoped",
 	"/api/auth/sso/config":      "platform",
 	"/api/auth/token-policy":    "platform",
+	"/api/platform/features":    "platform",
+	"/api/platform/restart":     "platform",
 	"/api/copilot/config":       "platform",
 	// Per-tenant ingestion service surface (Wave 1 #2): the cloud-ingest poller's
 	// platform credential (ingest:cloud API key in the global realm). It fans one

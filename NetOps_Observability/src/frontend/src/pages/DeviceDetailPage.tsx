@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
+import { deviceHealth, DEVICE_HEALTH_META } from "./device/deviceHealth";
 import { fmtDateTime } from "../lib/time";
 import { useState } from "react";
 import { Device } from "../services/api";
@@ -30,8 +31,6 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
   "cloud-gw": { label: "Cloud GW", color: "#f59e0b" }, generic: { label: "Generic", color: "var(--muted)" },
 };
 
-const DOWN_AFTER_MS = 5 * 60 * 1000;
-
 type Tab = "overview" | "interfaces" | "vrf" | "routing" | "config" | "capture";
 
 export default function DeviceDetailPage({ device, onClose }: { device: Device; onClose: () => void }) {
@@ -39,7 +38,13 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
   const d = device;
   const sel = labelSelector({ device: d.id });
   const seen = new Date(d.last_seen).getTime();
-  const down = !!seen && Date.now() - seen > DOWN_AFTER_MS;
+  // The SAME status the inventory list shows (owner report 2026-10-10: the
+  // popup used its own last_seen threshold and disagreed with the list).
+  const h = deviceHealth(d, false);
+  const hm = DEVICE_HEALTH_META[h];
+  // Liveness = the collectors' own poll results (NETCONF excluded: it is a
+  // config transport, not a poller that every device speaks).
+  const reachSel = sel.replace(/}$/, ',collector!="netconf"}');
   const t = TYPE_META[d.type || "generic"] ?? TYPE_META.generic;
 
   return (
@@ -52,15 +57,16 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
           <div className="ddp-title">
             <span className="ddp-typedot" style={{ background: t.color }} />
             <h2 className="device-name">{d.name || d.id}</h2>
-            <span className={`badge ${down ? "" : "good"}`} style={down ? { background: "var(--bad)", color: "#fff" } : undefined}>
-              {down ? "Down" : "Up"}
+            <span className="badge" style={{ background: hm.color, color: "#fff" }} title="Live status from the collectors' polls">
+              {hm.arrow} {hm.label}
             </span>
           </div>
           <div className="ddp-sub">
             <span style={{ color: t.color, fontWeight: 500 }}>{t.label}</span>
             <span>·</span><span style={{ fontFamily: "var(--font-mono)" }}>{d.address}</span>
             {d.vendor && <><span>·</span><span style={{ textTransform: "capitalize" }}>{d.vendor}</span></>}
-            <span>·</span><span>last seen {seen ? fmtDateTime(seen) : "—"}</span>
+            {d.software_version && <><span>·</span><span style={{ fontFamily: "var(--font-mono)" }}>{d.software_version}</span></>}
+            <span>·</span><span title="When discovery last listed this device (not whether it answers)">last discovered {seen ? fmtDateTime(seen) : "—"}</span>
           </div>
         </div>
 
@@ -75,16 +81,22 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
           {tab === "overview" && (
             <>
               <div className="ddp-kpis">
-                <MetricStat label="Reachability" query={`${seen && !down ? "vector(100)" : "vector(0)"}`} minutes={60} fmt={(v) => `${v}%`} tone={() => (down ? "bad" : "good")} />
+                <MetricStat label="Reachability (1h)" query={`100 * avg_over_time(min(collector_target_up${reachSel})[1h:1m])`} minutes={60} fmt={(v) => `${Math.round(v)}%`} tone={(n) => (n < 99 ? (n < 50 ? "bad" : "warn") : "good")} />
                 <MetricStat label="Interfaces up" query={`count(device_if_oper_status${sel} == 1) or vector(0)`} minutes={60} fmt={(v) => String(Math.round(v))} />
                 <MetricStat label="Interfaces down" query={`count(device_if_oper_status${sel} == 2) or vector(0)`} minutes={60} fmt={(v) => String(Math.round(v))} tone={(n) => (n > 0 ? "warn" : "")} />
+                <MetricStat label="BGP peers" query={`count(device_bgp_peer_state${sel}) or vector(0)`} minutes={60} fmt={(v) => String(Math.round(v))} />
                 <MetricStat label="BGP established" query={`count(device_bgp_peer_state${sel} == 6) or vector(0)`} minutes={60} fmt={(v) => String(Math.round(v))} />
+                <MetricStat label="OSPF neighbours" query={`count(device_ospf_nbr_state${sel}) or vector(0)`} minutes={60} fmt={(v) => String(Math.round(v))} />
+                <MetricStat label="OSPF full" query={`count(device_ospf_nbr_state${sel} == 8) or vector(0)`} minutes={60} fmt={(v) => String(Math.round(v))} />
                 <MetricStat label="Traffic in" query={`sum(rate(device_if_in_octets${sel}[5m]) * 8) or vector(0)`} minutes={60} fmt={fmtBps} />
                 <MetricStat label="Traffic out" query={`sum(rate(device_if_out_octets${sel}[5m]) * 8) or vector(0)`} minutes={60} fmt={fmtBps} />
               </div>
               <div className="ddp-grid2">
                 <MetricLine title="CPU usage" query={`device_cpu_percent${sel}`} minutes={120} fmtY={fmtPct} height={220} />
-                <MetricLine title="Memory usage" query={`device_mem_percent${sel}`} minutes={120} fmtY={fmtPct} height={220} />
+                {/* Per memory pool. Vendors that report used/free bytes (Cisco
+                    CISCO-MEMORY-POOL and others) get the percentage derived by
+                    the collector; a platform with no memory source shows no data. */}
+                <MetricLine title="Memory usage" query={`max by (index) (device_mem_percent${sel})`} minutes={120} fmtY={fmtPct} height={220} />
                 <MetricLine title="Traffic in" query={`sum(rate(device_if_in_octets${sel}[5m]) * 8)`} minutes={120} fmtY={fmtBps} height={220} />
                 <MetricLine title="Traffic out" query={`sum(rate(device_if_out_octets${sel}[5m]) * 8)`} minutes={120} fmtY={fmtBps} height={220} />
               </div>

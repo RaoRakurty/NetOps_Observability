@@ -69,6 +69,17 @@ type Store struct {
 	C   Collection
 	Cat *catalog.Catalog
 	Now func() time.Time
+	// OnWrite is called after a successful Put or Delete with the tenant that
+	// changed (cross=true: a cross-tenant delete, any tenant may have changed)
+	// — the Iris alias cache invalidates on it (N-H4). Kept in the store so no
+	// writer can skip it.
+	OnWrite func(tenant string, cross bool)
+}
+
+func (s *Store) changed(tenant string, cross bool) {
+	if s.OnWrite != nil {
+		s.OnWrite(tenant, cross)
+	}
 }
 
 // Validate normalizes a and checks it against the catalog. It does NOT check
@@ -122,6 +133,7 @@ func (s *Store) Put(a Alias) (Alias, error) {
 	if err := s.C.Upsert(a); err != nil {
 		return Alias{}, err
 	}
+	s.changed(a.TenantID, false)
 	return a, nil
 }
 
@@ -140,6 +152,7 @@ func (s *Store) Delete(tenant string, cross bool, entityType, alias string) erro
 	if !s.C.Delete(tenant, cross, key) {
 		return ErrNotFound
 	}
+	s.changed(tenant, cross)
 	return nil
 }
 

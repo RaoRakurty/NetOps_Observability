@@ -1104,3 +1104,31 @@ groups:
             "ai-scorecard" errors in the api logs and for ClickHouse being
             unreachable or over its worker query budget.
           runbook: "docs/runbooks/iris-ai-quality.md#scorecard-not-sampling"
+
+      - alert: IrisToolEvidenceDropped
+        # Tool contract v2 (tracker 337 N-A8): a tool's results are being
+        # DROPPED — cut off at its contract timeout or refused by its output
+        # schema — on more than a tenth of its calls, with a volume floor so
+        # a quiet lab does not alert. Iris discloses each gap in the answer;
+        # this says a backend is slow or a tool changed shape.
+        # One counter, split by outcome — a tool with only timeouts (or only
+        # rejects) still matches; adding the two dedicated counters would drop
+        # any tool missing one of them.
+        expr: |
+          sum by (tool) (increase(netops_ai_tool_invocations_total{outcome=~"timeout|schema_rejected"}[1h]))
+          / sum by (tool) (increase(netops_ai_tool_invocations_total[1h])) > 0.10
+          and on (tool) sum by (tool) (increase(netops_ai_tool_invocations_total[1h])) >= 20
+        for: 15m
+        labels: { severity: warning, layer: ai, tier: warning }
+        annotations:
+          summary: "Iris tool {{ $labels.tool }} is dropping more than 10% of its results"
+          description: >-
+            Over the last hour more than a tenth of {{ $labels.tool }} calls
+            either did not answer within the tool's contract timeout or returned
+            a result that failed its declared output schema; Iris discloses the
+            gap in each answer instead of using the result. A rise in timeouts
+            points at the backend the tool reads (ClickHouse, OpenSearch,
+            VictoriaMetrics, a device); a rise in schema rejects means the tool
+            returns something its contract does not allow — check the api logs
+            for "rejected by its output schema".
+          runbook: "docs/runbooks/iris-ai-quality.md#tool-evidence-dropped"

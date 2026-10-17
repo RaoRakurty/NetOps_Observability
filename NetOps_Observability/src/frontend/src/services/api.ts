@@ -59,6 +59,13 @@ export type Device = {
   /** The telemetry configured for the device (snmp, gnmi, …). Several methods
    *  are still ONE monitored device: display, never a count. */
   monitor_methods?: string[];
+  /** Live liveness from the collectors' own polls — the ONE status every
+   *  inventory surface renders. Server-stamped on read. */
+  reachability?: "up" | "down" | "partial" | "unknown";
+  /** OS version resolved from the device's own description ("" when absent). */
+  software_version?: string;
+  /** The location configured ON the device (SNMP sysLocation); "" when unset. */
+  configured_location?: string;
 };
 
 /** GET /api/devices/{id}/monitoring — read-only status. */
@@ -1724,6 +1731,9 @@ export type Tunnel = {
   loss_pct: number;
   qoe: number;
   uptime_s: number;
+  /** false for a tunnel whose path quality is not measured (SD-WAN tunnels
+   *  read from the overlay): latency/jitter/loss/QoE render as "—". */
+  measured?: boolean;
 };
 
 // ---------- Vulnerability Management (#13) ----------
@@ -1875,7 +1885,6 @@ export type CopilotConfig = {
   // Optional model-router overrides (blank = use `model` for every answer).
   model_fast?: string;
   model_strong?: string;
-  system?: string;
   feature_enabled?: boolean;
   key_present?: boolean;
   key_source?: "env" | "stored" | "none";
@@ -1886,6 +1895,46 @@ export type CopilotConfig = {
 // Per-workspace (tenant) AI settings — a tenant admin's own view. The key is
 // write-only; entitlement fields are read-only here (platform-controlled).
 // ---- Iris vocabulary + NL query (internal/nlquery; tracker 337) ----
+// ---- Network context (tracker 337 N-F1, internal/orgcontext) ----
+// Facts a workspace writes about its own network; a version reaches Iris only
+// after a SECOND administrator approves it. Text is plain and rendered as text.
+export type OrgContextState = "draft" | "pending" | "active" | "superseded" | "rejected" | "retired";
+export interface OrgContextVersion {
+  version: number;
+  body: string;
+  body_sha256: string;
+  state: OrgContextState;
+  author: string;
+  approver?: string;
+  activated_by?: string;
+  decided_by?: string;
+  restored_from?: number;
+  reason?: string;
+  created_at: string;
+  decided_at?: string;
+}
+export interface OrgContextFact {
+  id: string;
+  scope: string; // "tenant" | "site:<slug>"
+  kind: string;
+  key: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  versions: OrgContextVersion[];
+}
+export interface OrgContextList {
+  facts: OrgContextFact[];
+  kinds: { kind: string; label: string }[];
+  you: string;
+  limits: { body_bytes: number; key_bytes: number; facts: number };
+}
+export interface OrgContextPreview {
+  block: string;
+  facts: number;
+  omitted: number;
+}
+
 // ---- change ledger API (N-D3) ----
 export interface ChangeConfigDiff {
   device_id: string;
@@ -2137,6 +2186,9 @@ export type AITenantRow = {
 
 export const TOKEN_KEY = "netops_token";
 export const REFRESH_KEY = "netops_refresh";
+// When the server last recorded activity for this session (see the activity
+// keep-alive below). Declared here, before setRefresh, which writes it.
+let lastRefreshAt = Date.now();
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -2157,7 +2209,12 @@ export function getRefresh(): string | null {
 }
 export function setRefresh(t: string | null): void {
   if (t === null) localStorage.removeItem(REFRESH_KEY);
-  else localStorage.setItem(REFRESH_KEY, t);
+  else {
+    localStorage.setItem(REFRESH_KEY, t);
+    // A fresh refresh token = the server just recorded activity (login or
+    // /refresh both Touch the session). The activity keep-alive counts from here.
+    lastRefreshAt = Date.now();
+  }
 }
 
 // sweepScopedUIState clears per-user/per-scope client state that must never
@@ -2392,7 +2449,13 @@ export function takeSessionEndMessage(): string | null {
 
 // Single-flight refresh: many requests can 401 at once; only one /refresh runs.
 let refreshInFlight: Promise<boolean> | null = null;
+// Why the last refresh failed: the server REFUSED it (the session or token is
+// gone — sign out) or it never got an answer (network — keep the session and
+// let the next activity try again). Only the activity keep-alive reads it; the
+// 401 path signs out either way because its own request already failed.
+let lastRefreshRejected = false;
 async function doRefresh(rt: string): Promise<boolean> {
+  lastRefreshRejected = false;
   try {
     const res = await fetch("/api/auth/refresh", {
       method: "POST",
@@ -2400,6 +2463,7 @@ async function doRefresh(rt: string): Promise<boolean> {
       body: JSON.stringify({ refresh_token: rt }),
     });
     if (!res.ok) {
+      lastRefreshRejected = res.status === 401 || res.status === 403;
       // Surface a session-end reason (idle/absolute/revoked) for the Login screen.
       try {
         const err = await res.json();
@@ -2426,6 +2490,50 @@ function tryRefresh(): Promise<boolean> {
     });
   }
   return refreshInFlight;
+}
+
+// ── Activity keep-alive (2026-10-10) ────────────────────────────────────────
+// The server records session ACTIVITY only at /api/auth/refresh (auth.go
+// handleRefresh → sessions.Touch), and this client used to refresh only when the
+// access token expired and a request came back 401. With the shipped defaults —
+// a 1 h access token (ACCESS_TOKEN_TTL) and a 30 min idle timeout — the first
+// refresh of every session landed ~1 h in, past the idle window, so an operator
+// who had been working the whole hour was signed out "for inactivity" (seen on
+// the lab: SESSION_IDLE_EXPIRED exactly an hour apart). Refresh on REAL input
+// instead, at most once per ACTIVITY_REFRESH_MS. Background polling never calls
+// this, so an unattended screen still idles out exactly as the policy intends.
+export const ACTIVITY_REFRESH_MS = 5 * 60 * 1000;
+// After a refresh that got no answer, try again on activity this soon.
+export const ACTIVITY_RETRY_MS = 30 * 1000;
+
+/** Record one user interaction. Returns the refresh it started, or null when
+ *  none was due (or there is no session). Exported for tests. */
+export function noteUserActivity(now: number = Date.now()): Promise<boolean> | null {
+  if (!getRefresh() || refreshInFlight) return null;
+  if (now - lastRefreshAt < ACTIVITY_REFRESH_MS) return null;
+  lastRefreshAt = now; // claim the slot: a burst of events makes ONE call
+  return tryRefresh().then((ok) => {
+    if (ok) return true;
+    if (lastRefreshRejected) {
+      // The session ended (idle / absolute / revoked) or the token was refused:
+      // same exit as the 401 path, and the Login screen shows why.
+      clearSession();
+      fireAuthChange(false);
+    } else {
+      lastRefreshAt = now - ACTIVITY_REFRESH_MS + ACTIVITY_RETRY_MS;
+    }
+    return false;
+  });
+}
+
+const ACTIVITY_EVENTS = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
+/** Listen for operator input while signed in. Returns the remover. */
+export function startActivityKeepAlive(): () => void {
+  const on = () => { void noteUserActivity(); };
+  for (const ev of ACTIVITY_EVENTS) window.addEventListener(ev, on, { capture: true, passive: true });
+  return () => {
+    for (const ev of ACTIVITY_EVENTS) window.removeEventListener(ev, on, { capture: true });
+  };
 }
 
 type AuthListener = (signedIn: boolean) => void;
@@ -2591,7 +2699,16 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
     const text = await res.text().catch(() => "");
     throw new Error(`401 Unauthorized: ${text || "please sign in"}`);
   }
-  if (!res.ok) {
+  if (!res.ok) return failedResponse(res);
+  if (res.status === 204) return undefined as T;
+  return res.json() as Promise<T>;
+}
+
+// failedResponse turns a non-OK response into the error request() has always
+// thrown — shared with the Iris stream reader (aiAskStream) so a refusal reads
+// the same on both paths (403 step-up event, 503 ServiceBusyError, envelope).
+async function failedResponse(res: Response): Promise<never> {
+  {
     const text = await res.text().catch(() => "");
     // STEP-UP refusal. An elevated-only action refused for a standing session
     // comes back NAMED — it says which identity provider grants the access —
@@ -2614,8 +2731,72 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
     }
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
   }
-  if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+}
+
+/** The stream ended without an answer (a proxy cut it, the network dropped). */
+export class StreamBrokenError extends Error {}
+
+/** One Iris progress event from the /api/ai/ask stream (closed vocabulary). */
+export interface IrisStreamEvent {
+  type: string;
+  tool?: string;
+  outcome?: string;
+}
+
+/**
+ * aiAskStream asks Iris with `Accept: text/event-stream` (tracker 337 N-E2):
+ * onEvent receives the progress, the promise resolves to the SAME answer
+ * aiAsk returns. A server that answers JSON (older build, a refusal before the
+ * answer started) is read as JSON; an `error` event throws the error aiAsk
+ * would have thrown; a stream that ends without an answer throws
+ * StreamBrokenError so the caller can fall back to aiAsk once.
+ */
+async function aiAskStream(
+  question: string,
+  context: Record<string, string> | undefined,
+  conversationId: string | undefined,
+  onEvent: (e: IrisStreamEvent) => void,
+  signal?: AbortSignal,
+  retried = false,
+): Promise<AiAnswer> {
+  const body = JSON.stringify(conversationId ? { question, context, conversation_id: conversationId } : { question, context });
+  const res = await fetch("/api/ai/ask", {
+    method: "POST",
+    body,
+    signal,
+    headers: authHeaders({ "Content-Type": "application/json", Accept: "text/event-stream" }),
+  });
+  if (res.status === 401 && !retried && getRefresh() && (await tryRefresh())) {
+    return aiAskStream(question, context, conversationId, onEvent, signal, true);
+  }
+  if (res.status === 401) return request<AiAnswer>("/api/ai/ask", { method: "POST", body }, true); // the session flow request() owns
+  if (!res.ok) return failedResponse(res);
+  const ct = res.headers.get("Content-Type") ?? "";
+  if (!ct.startsWith("text/event-stream") || !res.body) return res.json() as Promise<AiAnswer>;
+  const { readSSE } = await import("../iris/sse");
+  for await (const msg of readSSE(res.body)) {
+    if (msg.event === "answer") return JSON.parse(msg.data) as AiAnswer;
+    if (msg.event === "error") {
+      let status = 502;
+      let text = msg.data;
+      try {
+        const e = JSON.parse(msg.data) as { error?: string; status?: number };
+        status = typeof e.status === "number" ? e.status : 502;
+        text = JSON.stringify({ error: e.error ?? "" });
+      } catch {
+        /* keep the raw data as the envelope text */
+      }
+      throw new Error(`${status} ${status === 500 ? "Internal Server Error" : "Bad Gateway"}: ${text}`);
+    }
+    if (msg.event === "done") break;
+    try {
+      const ev = JSON.parse(msg.data) as IrisStreamEvent;
+      if (ev && typeof ev.type === "string") onEvent({ type: ev.type, tool: ev.tool, outcome: ev.outcome });
+    } catch {
+      /* a malformed progress event is skipped, never fatal */
+    }
+  }
+  throw new StreamBrokenError("the answer stream ended before the answer");
 }
 
 // ---- auth types ----
@@ -4898,9 +5079,40 @@ export interface VrfDialect {
 
 /** A routing instance the device's BGP control-plane series report. That lane
  *  carries the instance NAME but not which interfaces belong to it. */
+/** One switchable feature on the Features page (backend feature_flags.go). */
+export interface PlatformFeature {
+  env: string;
+  label: string;
+  group: string;
+  help: string;
+  /** "live": in force when saved. "restart": in force after the api restarts. */
+  apply: "live" | "restart";
+  /** Reaches into the network or out of the platform; turning it on needs a confirmation. */
+  risky: boolean;
+  running: boolean;
+  desired: boolean;
+  restart_pending: boolean;
+  source: "console" | "install" | "default";
+  install_value: boolean | null;
+  updated_by?: string;
+  updated_at?: string;
+}
+
+export interface PlatformFeatures {
+  features: PlatformFeature[];
+  restart_pending: boolean;
+  can_restart: boolean;
+  store_load_error: string;
+}
+
 export interface VrfRoutingInstance {
   name: string;
+  /** "bgp_control_plane", or the VRF MIB the device answered ("mpls-l3vpn", "viptela-vpn", …). */
   source: string;
+  /** The device's own word: vrf / vpn / routing-instance / vprn / vr. */
+  kind?: string;
+  /** Route distinguisher, when the source reports one. */
+  rd?: string;
 }
 
 export interface VrfInterfacesResponse {
@@ -4978,6 +5190,26 @@ export type IncidentTimeMetric = {
   calculated_at: string;
   calculation_version: string;
 };
+
+/** Similar past incidents (N-F4). Below the threshold `matches` is empty. */
+export interface SimilarIncidentMatch {
+  correlation_id: string;
+  score: number;
+  strength: "similar" | "strong";
+  matched_on: string[];
+  differences?: string[];
+  occurred_at: string;
+  partial?: boolean;
+}
+export interface SimilarIncidents {
+  verdict: "similar_incidents" | "no_similar_incident";
+  matches: SimilarIncidentMatch[];
+  examined: number;
+  incomplete: number;
+  window: string;
+  note: string;
+  caveat: string;
+}
 
 /** One persisted phase-metric snapshot (GET /api/reliability/time-metrics). */
 export type IncidentTimeMetricRow = {
@@ -5123,6 +5355,12 @@ export type FlowAppRow = {
   bytes: number;
   flows: number;
   dests: number;
+  /** What the exporter's own DPI called it (IPFIX/NetFlow v9 IE 96), app-kind ids only. */
+  exporter_app?: string;
+  /** IE 95 as "<engine>:<selector>" or "20:<pen>:<selector>" (RFC 6759). */
+  exporter_app_id?: string;
+  /** app | service_class | unclassified | unknown */
+  exporter_app_kind?: string;
 };
 export type FlowAppsResp = {
   apps: FlowAppRow[];
@@ -5174,6 +5412,8 @@ export type VerificationSettingsPatch = {
 export interface FeatureFlags {
   copilot?: boolean;
   device_ssh?: boolean;
+  /** Configuration backup + drift (FEATURE_CONFIG_BACKUP). */
+  config_backup?: boolean;
   active_verification?: boolean;
   processors?: boolean;
   ai_entitlements?: string[];
@@ -5466,6 +5706,15 @@ export const api = {
   testTacacs: (username?: string, password?: string) =>
     request<AuthTestResult>("/api/auth/tacacs/test", { method: "POST", body: JSON.stringify({ username, password }) }),
 
+  // Features page (tracker 348) — platform-owner only; switches are platform-global.
+  platformFeatures: () => request<PlatformFeatures>("/api/platform/features"),
+  setPlatformFeature: (env: string, value: boolean, acknowledge?: string) =>
+    request<{ feature: PlatformFeature; restart_pending: boolean }>("/api/platform/features", {
+      method: "PUT",
+      body: JSON.stringify(acknowledge ? { env, value, acknowledge } : { env, value }),
+    }),
+  restartPlatform: () => request<{ status: string }>("/api/platform/restart", { method: "POST" }),
+
   // Token policy (access/refresh lifetimes) — admin-gated, clamped server-side.
   tokenPolicy: () => request<TokenPolicy>("/api/auth/token-policy"),
   saveTokenPolicy: (p: { access_ttl_seconds: number; refresh_ttl_seconds: number }) =>
@@ -5733,6 +5982,12 @@ export const api = {
   flowsByProto: (sinceSeconds = 3600, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
       `/api/flows/by-proto?since=${sinceSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
+    ),
+  // Coverage of the window: what the flow records actually carry (TCP, flags,
+  // AS numbers, public addresses) so an empty panel can say WHY it is empty.
+  flowsCoverage: (sinceSeconds = 3600, type = "", filters?: FlowFilters) =>
+    request<ClickHouseResponse>(
+      `/api/flows/coverage?since=${sinceSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
     ),
   flowsByType: (sinceSeconds = 3600) =>
     request<ClickHouseResponse>(`/api/flows/by-type?since=${sinceSeconds}s`),
@@ -6096,6 +6351,9 @@ export const api = {
   // RCA Time Intelligence — incident time decomposition (phases + time-loss driver).
   correlationTimeMetrics: (id: string) =>
     request<TimeIntel>(`/api/correlations/${encodeURIComponent(id)}/time-metrics`),
+  // Similar past incidents (tracker 337 N-F4) — the same tenant's closed history.
+  correlationSimilar: (id: string, window?: string) =>
+    request<SimilarIncidents>(`/api/correlations/${encodeURIComponent(id)}/similar${window ? `?window=${encodeURIComponent(window)}` : ""}`),
   // Manual lifecycle events for one investigation (tenant-scoped; the embedded
   // drawer reads WHO closed it + the recorded verification state at close).
   correlationTimeEvents: (id: string) =>
@@ -6219,6 +6477,8 @@ export const api = {
   // Iris AI — application-aware assistant. Ask a question (optionally with a
   // context id like the open RCA's correlation_id); returns a grounded, cited
   // answer in a typed answer-mode schema. Read-only (FEATURE_AI gated server-side).
+  // Streamed ask (N-E2): progress via onEvent, then the same answer as aiAsk.
+  aiAskStream,
   aiAsk: (question: string, context?: Record<string, string>, conversationId?: string) =>
     request<AiAnswer>("/api/ai/ask", {
       method: "POST",
@@ -6245,9 +6505,25 @@ export const api = {
   // iframe (/netbox, /search) carries a fresh, correctly-pathed cookie. 204.
   ensureConsoleGate: () => request<void>("/api/auth/console-gate", { method: "POST" }),
 
+  // Network context (N-F1). The tenant always comes from the token.
+  orgContext: () => request<OrgContextList>("/api/ai/context"),
+  orgContextPreview: () => request<OrgContextPreview>("/api/ai/context/preview"),
+  orgContextCreate: (f: { scope: string; kind: string; key: string; body: string }) =>
+    request<OrgContextFact>("/api/ai/context", { method: "POST", body: JSON.stringify(f) }),
+  orgContextDraft: (id: string, body: string) =>
+    request<OrgContextFact>(`/api/ai/context/${encodeURIComponent(id)}/draft`, { method: "PUT", body: JSON.stringify({ body }) }),
+  orgContextDiscard: (id: string) =>
+    request<OrgContextFact | undefined>(`/api/ai/context/${encodeURIComponent(id)}/draft`, { method: "DELETE" }),
+  orgContextAct: (
+    id: string,
+    verb: "submit" | "withdraw" | "approve" | "reject" | "rollback" | "retire",
+    body: { version?: number; body_sha256?: string; to_version?: number; reason?: string } = {},
+  ) =>
+    request<OrgContextFact>(`/api/ai/context/${encodeURIComponent(id)}/${verb}`, { method: "POST", body: JSON.stringify(body) }),
+
   // Runtime assistant config (admin): provider/model picker. Key never returned.
   copilotConfig: () => request<CopilotConfig>("/api/copilot/config"),
-  setCopilotConfig: (cfg: { provider: string; model: string; model_fast?: string; model_strong?: string; system?: string; key?: string }) =>
+  setCopilotConfig: (cfg: { provider: string; model: string; model_fast?: string; model_strong?: string; key?: string }) =>
     request<CopilotConfig>("/api/copilot/config", {
       method: "PUT",
       body: JSON.stringify(cfg),
@@ -10149,6 +10425,9 @@ export type AiAnswer = {
   confidence_label?: string;
   recommended_owner?: string;
   next_actions?: string[];
+  // N-I7: the next actions as grounded cards (basis = citation ids of this
+  // answer). Optional: an older backend sends none.
+  recommendations?: AiRecommendation[];
   missing_evidence?: string[];
   mode_badges?: string[];
   evidence_only?: boolean;
@@ -10156,6 +10435,18 @@ export type AiAnswer = {
   title?: string; // card heading (spec §2)
   counts?: AiIncidentCounts; // normalized counts (spec §6)
 };
+
+// A recommendation card (N-I7). Text and citation ids only — no action field.
+export interface AiRecommendation {
+  id: string;
+  title: string;
+  steps: string[];
+  why: string;
+  basis: string[];
+  owner?: string;
+  origin: string;
+  notice: string;
+}
 
 // ── Licence (platform-global) ────────────────────────────────────────────────
 //

@@ -153,6 +153,7 @@ var platformPathPrefixes = []string{
 	"/api/breakglass",
 	"/api/onboard",
 	"/api/quarantine",
+	"/api/platform/", // Features page switches + restart-to-apply (tracker 348)
 	// The tenancy tree and platform identity. Not "platform" in the route
 	// ledger's sense (they are adminScoped/scoped) but they are exactly the
 	// kind of change questioned days later — who created that tenant, who

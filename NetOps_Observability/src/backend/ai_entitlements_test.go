@@ -34,7 +34,9 @@ import (
 
 	"netops/backend/internal/aientitlement"
 	"netops/backend/internal/irisconvo"
+	"netops/backend/internal/irisgate"
 	"netops/backend/internal/irisquerylog"
+	"netops/backend/internal/orgcontext"
 )
 
 // adminPlane is the marker for AI CONFIGURATION routes. They configure the
@@ -57,6 +59,8 @@ var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	"/api/ai/commands/suggestions": aientitlement.Chat,
 	"/api/ai/feedback":             aientitlement.Chat,
 	"/api/ai/aliases":              aientitlement.NLQuery,
+	"/api/ai/context":              aientitlement.ContextAuthor, // Network context (N-F1)
+	"/api/ai/context/":             aientitlement.ContextAuthor,
 	"/api/ai/entities/resolve":     aientitlement.NLQuery,
 	"/api/ai/query/compile":        aientitlement.NLQuery,
 	"/api/ai/query/execute":        aientitlement.NLQuery,
@@ -189,6 +193,10 @@ var aiRouteProbes = []aiProbe{
 	{"/api/ai/conversations/", http.MethodPost, "/api/ai/conversations/" + probeID + "/edits", `{"chip":"window","op":"remove"}`, aientitlement.NLQuery},
 	{"/api/ai/queries", http.MethodGet, "/api/ai/queries", "", aientitlement.NLQuery},
 	{"/api/ai/queries/", http.MethodPost, "/api/ai/queries/" + probeID + "/corrections", `{"kind":"wrong_entity"}`, aientitlement.NLQuery},
+	{"/api/ai/context", http.MethodGet, "/api/ai/context", "", aientitlement.ContextAuthor},
+	{"/api/ai/context", http.MethodPost, "/api/ai/context", `{"kind":"topology_note","key":"dr","body":"core-02 is the DR site"}`, aientitlement.ContextAuthor},
+	{"/api/ai/context/", http.MethodGet, "/api/ai/context/preview", "", aientitlement.ContextAuthor},
+	{"/api/ai/context/", http.MethodPost, "/api/ai/context/" + probeID + "/approve", `{"version":1,"body_sha256":"x"}`, aientitlement.ContextAuthor},
 	{"/api/ai/hypotheses/", http.MethodGet, "/api/ai/hypotheses/" + probeID, "", aientitlement.Investigate},
 }
 
@@ -225,6 +233,7 @@ func aiEntFixture(t *testing.T) (*server, http.Handler, jwtClaims, jwtClaims) {
 	s, a, b := aliasFixture(t)
 	a.Role, b.Role = "admin", "admin"
 	s.nlqConvos = irisconvo.NewMemStore()
+	s.orgContext = orgcontext.NewMemStore()
 	s.nlqQueryLog = irisquerylog.NewMemStore()
 	s.aiTenantCfg = newAITenantConfigStore(t.TempDir()+"/ai_tenant_config.json", nil)
 	s.copilotCfg = newCopilotConfigStore(t.TempDir()+"/copilot_config.json", nil) // no key: no provider is ever called
@@ -265,12 +274,24 @@ func TestAIRoutesRefuseWithoutTheirEntitlementAndAdmitWithIt(t *testing.T) {
 	// (A fixture per probe cost ~0.35 s each, ~10x that under -race, against a
 	// root-package -race budget that is already near its 40 m ceiling.)
 	s, h, a, _ := aiEntFixture(t)
+	// N-H5 release gate "unauthorized": every probe is a check; a probe that
+	// was admitted without its entitlement is a leak.
+	var leaks int64
+	defer func() {
+		if err := irisgate.Record("root.entitlement_probes", irisgate.Measure{Gate: irisgate.GateUnauthorized,
+			Bad: leaks, Total: int64(len(aiRouteProbes)), Note: "AI routes admitting a caller without the entitlement"}); err != nil {
+			t.Fatal(err)
+		}
+	}()
 	for _, p := range aiRouteProbes {
 		p := p
 		t.Run(p.method+" "+p.path, func(t *testing.T) {
 			s.aiEntitlementPolicy = policyWithout(t, s, p.want)
 			w := serveAs(h, a, p.method, p.path, p.body)
 			got, reason := entitlementRefusal(w)
+			if w.Code < 400 {
+				leaks++
+			}
 			if w.Code != http.StatusForbidden || got != p.want || reason != string(aientitlement.ReasonNotInTier) {
 				t.Fatalf("without %s: got %d entitlement=%q reason=%q (%s) — want 403 refusing %s", p.want, w.Code, got, reason, w.Body.String(), p.want)
 			}
@@ -315,8 +336,22 @@ func TestAIAdminPlaneRoutesRefuseNonAdmins(t *testing.T) {
 	op := a
 	op.Role = "operator"
 	tenantAdmin := a // admin of ONE tenant: not the platform owner
+	// N-H5 release gate "unauthorized": a configuration route that answers a
+	// non-admin is a leak.
+	var leaks, checks int64
+	defer func() {
+		if err := irisgate.Record("root.admin_plane_probes", irisgate.Measure{Gate: irisgate.GateUnauthorized,
+			Bad: leaks, Total: checks, Note: "AI configuration routes admitting a non-admin"}); err != nil {
+			t.Fatal(err)
+		}
+	}()
 	for _, p := range adminPlaneProbes {
-		if w := serveAs(h, op, p.method, p.path, p.body); w.Code != http.StatusForbidden {
+		checks++
+		w := serveAs(h, op, p.method, p.path, p.body)
+		if w.Code < 400 {
+			leaks++
+		}
+		if w.Code != http.StatusForbidden {
 			t.Errorf("%s %s as a tenant operator: %d — want 403", p.method, p.path, w.Code)
 		}
 		if p.route == "/api/ai/tenant-config" || p.route == "/api/ai/decisions" {

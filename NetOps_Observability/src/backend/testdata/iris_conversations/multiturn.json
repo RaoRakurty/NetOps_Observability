@@ -2,6 +2,7 @@
  "corpus": "multiturn",
  "description": "Part 2 §50 multi-turn naturalness over the conversation API: place, person, window, change class and the previous result carried across turns without repetition; a reference with nothing (or more than one thing) to point at is refused, never guessed or widened",
  "notes": {
+  "s1-incident-to-change": "Tracker 337 N-S1 flagship slice (Part 2 §51/§62): from an incident, its relevant changes, who made them, what else they changed, narrowed to WAN, widened to 7 days — every follow-up bound from the server-held conversation, inside tenant A's scope (tenant B's Mallory/chg-9/dev-b never appear).",
   "world": "tenant A: sites dfw-hq 'Dallas', aus-br 'Austin'; devices dev-a 'edge-a' (dfw-hq), dev-a2 'edge-a2' (aus-br); changes chg-1 NETWORK John Smith dev-a 100m ago, chg-2 CONFIG John Smith 50h ago, chg-3 CONFIG Alice dev-a2 3h ago; one open incident in Dallas. Tenant B mirrors the Dallas slug, owns dev-b 'edge-b' and Mallory's change.",
   "binds": "entity ids the turn must take from the conversation (resolution_method=conversation), or actor:<name> for the people of the previous change list",
   "expect_ast": "written by hand; refs and filters compare as sets; an absolute window compares by its length",
@@ -181,6 +182,23 @@
    "turns": [
     {"q": "show cpu on edge-b", "expect_outcome": "unparsed", "safety": true},
     {"q": "memory on that device", "expect_outcome": "unparsed", "safety": true}
+   ]
+  },
+  {
+   "id": "s1-incident-to-change",
+   "category": "part2-s51-s62",
+   "incident_id": "11111111-2222-4333-8444-555555555555",
+   "turns": [
+    {"q": "What changed around this incident?",
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","time_range":{"kind":"incident","anchor":{"incident_id":"11111111-2222-4333-8444-555555555555","before":"30m","after":"10m"}},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"q": "Who changed it?", "binds": ["device:dev-a"],
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","entities":[{"type":"device","id":"device:dev-a"}],"time_range":{"kind":"incident","anchor":{"incident_id":"11111111-2222-4333-8444-555555555555","before":"30m","after":"10m"}},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"q": "What else did they change?", "binds": ["actor:John Smith"],
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","filters":[{"field":"actor","op":"in","values":["John Smith"]},{"field":"id","op":"ne","values":["chg-1"]}],"time_range":{"kind":"relative","last":"24h"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"q": "Only WAN changes", "binds": ["actor:John Smith"],
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","filters":[{"field":"actor","op":"in","values":["John Smith"]},{"field":"class","op":"eq","values":["wan"]},{"field":"id","op":"ne","values":["chg-1"]}],"time_range":{"kind":"relative","last":"24h"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
+    {"q": "Show the last 7 days", "binds": ["actor:John Smith"],
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","filters":[{"field":"actor","op":"in","values":["John Smith"]},{"field":"class","op":"eq","values":["wan"]},{"field":"id","op":"ne","values":["chg-1"]}],"time_range":{"kind":"relative","last":"7d"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}}
    ]
   }
  ]

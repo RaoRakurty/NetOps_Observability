@@ -69,6 +69,11 @@ func TestFlowsAppsScopedTenantBoundsScan(t *testing.T) {
 	if strings.Contains(sql, "10.2.0.1") || strings.Contains(sql, "10.9.0.1") {
 		t.Errorf("TENANT LEAK: acme scan mentions foreign/untagged addresses:\n%s", sql)
 	}
+	// The exporter's classification is read in the SAME scoped statement —
+	// it inherits the address clause, never a second unscoped read.
+	if !strings.Contains(sql, "exporter_app_id AS xi") || !strings.Contains(sql, "sampler_address IN ('10.1.0.1')") {
+		t.Errorf("exporter app columns must ride in the scoped scan:\n%s", sql)
+	}
 }
 
 func TestFlowsAppsNoDeviceTenantNeverQueries(t *testing.T) {

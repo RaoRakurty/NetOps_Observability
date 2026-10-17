@@ -80,7 +80,8 @@ const (
 	// reports false for them, and the route guard test refuses a route that
 	// claims one until Backed() is flipped in the same change.
 
-	// ContextAuthor — tenant-authored context for Iris (N-F1). Unbacked.
+	// ContextAuthor — tenant-authored Network context for Iris (N-F1): the
+	// /api/ai/context routes, and whether approved facts reach a prompt.
 	ContextAuthor Entitlement = "ai.context.author"
 	// RunbookAuthor — tenant-authored runbooks (N-F2). Unbacked.
 	RunbookAuthor Entitlement = "ai.runbook.author"
@@ -93,10 +94,11 @@ var order = []Entitlement{Chat, Investigate, NLQuery, ContextAuthor, RunbookAuth
 
 // backed records which entitlements a shipped route or feature gates on.
 var backed = map[Entitlement]bool{
-	Chat:        true,
-	Investigate: true,
-	NLQuery:     true,
-	// ContextAuthor, RunbookAuthor, MCP: not backed yet — see the const block.
+	Chat:          true,
+	Investigate:   true,
+	NLQuery:       true,
+	ContextAuthor: true,
+	// RunbookAuthor, MCP: not backed yet — see the const block.
 }
 
 // All returns the closed vocabulary in display order.

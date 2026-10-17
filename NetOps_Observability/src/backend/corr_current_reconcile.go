@@ -25,19 +25,29 @@ package backend
 //     reset in-memory versions to 1, and ReplacingMergeTree(created_at)
 //     already encodes "latest write wins").
 //
-// The drift scan is bounded to a lookback window (default 7 days): an object
-// that has not persisted a version inside the window cannot have drifted
-// inside it, and anything older that is missing outright is covered by the
-// boot-time backfill's full (but narrow) fold.
+// The drift scan is bounded to a lookback window (default 7 days) — cheap, but
+// on its own it was NOT enough: drift older than the window, and a stale row
+// NEWER than history (a heartbeat touch landing after the close), were both
+// permanent (tracker 328: 56,397 of 56,402 'open' rows wrong on the lab).
+//  3. STATE-DRIFTED rows — projection says open, newest history row says
+//     terminal, at any age. Keyed to the projection's open set, so it stays
+//     cheap; repaired with a fresh created_at so it wins the fold.
+//
+// Every pass publishes what it found and repaired (netops_corr_current_*), so
+// drift that the repair cannot clear is an alert, not a log line.
 //
 // Repaired rows lose only engine-derived, env-dependent decoration that
 // history does not carry (chaos_fixture): the next engine persist re-tags it.
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"log"
 	"netops/backend/internal/chschema"
 	"strconv"
+	"sync/atomic"
 	"time"
 )
 
@@ -69,6 +79,131 @@ func corrOrphanOpenCloseHours() int {
 	return corrOrphanOpenCloseHoursDefault
 }
 
+// corrReconcileStats is what the reconciler last saw and has repaired, for
+// /metrics. Gauges describe the newest pass; counters are monotonic.
+type corrReconcileStats struct {
+	lastRunUnix       atomic.Int64
+	orphaned          atomic.Int64
+	drifted           atomic.Int64
+	stateDrifted      atomic.Int64
+	repairedTotal     atomic.Int64 // rows re-projected (drift + state drift)
+	orphanClosedTotal atomic.Int64
+	failuresTotal     atomic.Int64 // any step that errored
+}
+
+// WriteMetrics renders the reconciler's gauges and counters.
+func (st *corrReconcileStats) WriteMetrics(w io.Writer) {
+	fmt.Fprint(w, "# HELP netops_corr_current_reconcile_last_run_timestamp_seconds When the corr_current reconciler last completed a pass (0 = never).\n")
+	fmt.Fprint(w, "# TYPE netops_corr_current_reconcile_last_run_timestamp_seconds gauge\n")
+	fmt.Fprintf(w, "netops_corr_current_reconcile_last_run_timestamp_seconds %d\n", st.lastRunUnix.Load())
+	fmt.Fprint(w, "# HELP netops_corr_current_drift_rows corr_current rows found wrong on the newest pass, by kind (orphaned = open with no persist past the horizon; drifted = older than history inside the lookback; state_drifted = open while history is terminal, any age).\n")
+	fmt.Fprint(w, "# TYPE netops_corr_current_drift_rows gauge\n")
+	fmt.Fprintf(w, "netops_corr_current_drift_rows{kind=\"orphaned\"} %d\n", st.orphaned.Load())
+	fmt.Fprintf(w, "netops_corr_current_drift_rows{kind=\"drifted\"} %d\n", st.drifted.Load())
+	fmt.Fprintf(w, "netops_corr_current_drift_rows{kind=\"state_drifted\"} %d\n", st.stateDrifted.Load())
+	fmt.Fprint(w, "# HELP netops_corr_current_repaired_rows_total corr_current rows re-projected from history by the reconciler.\n")
+	fmt.Fprint(w, "# TYPE netops_corr_current_repaired_rows_total counter\n")
+	fmt.Fprintf(w, "netops_corr_current_repaired_rows_total %d\n", st.repairedTotal.Load())
+	fmt.Fprint(w, "# HELP netops_corr_current_orphan_closed_total Orphaned open objects the reconciler closed through history.\n")
+	fmt.Fprint(w, "# TYPE netops_corr_current_orphan_closed_total counter\n")
+	fmt.Fprintf(w, "netops_corr_current_orphan_closed_total %d\n", st.orphanClosedTotal.Load())
+	fmt.Fprint(w, "# HELP netops_corr_current_reconcile_failures_total Reconciler steps that errored (count or repair).\n")
+	fmt.Fprint(w, "# TYPE netops_corr_current_reconcile_failures_total counter\n")
+	fmt.Fprintf(w, "netops_corr_current_reconcile_failures_total %d\n", st.failuresTotal.Load())
+}
+
+// corrReconcileCH is the ClickHouse surface one pass needs — injectable so the
+// pass is testable without a server.
+type corrReconcileCH interface {
+	count(ctx context.Context, sql, column string) (int, error)
+	exec(ctx context.Context, sql string) error
+}
+
+type serverReconcileCH struct {
+	s    *server
+	base string
+}
+
+func (c serverReconcileCH) count(ctx context.Context, sql, column string) (int, error) {
+	rows, err := c.s.chRowsScope(ctx, "__all__", sql, "worker:corr-current-reconcile")
+	if err != nil {
+		return 0, err
+	}
+	if len(rows) != 1 {
+		return 0, fmt.Errorf("count returned %d rows, want 1", len(rows))
+	}
+	return int(asFloat(rows[0][column])), nil
+}
+
+func (c serverReconcileCH) exec(_ context.Context, sql string) error {
+	if msg := chExecErr(c.base, sql); msg != "" {
+		return errors.New(msg)
+	}
+	return nil
+}
+
+// corrReconcilePass runs one reconcile pass. Each step is independent: a failed
+// step is counted and logged and the next step still runs (a broken drift count
+// must not also stop the state repair — that is how drift became permanent).
+func corrReconcilePass(ctx context.Context, ch corrReconcileCH, st *corrReconcileStats, lookbackDays, orphanHours int) {
+	fail := func(step string, err error) {
+		st.failuresTotal.Add(1)
+		log.Printf("corr-current-reconcile: %s failed: %v", step, err)
+	}
+	// Orphaned-open sweep FIRST: the closing versions it writes are exactly
+	// what the drift repair below re-projects in the same pass.
+	st.orphaned.Store(0)
+	if orphanHours > 0 {
+		if n, err := ch.count(ctx, chschema.CorrOrphanCountSQL(orphanHours), "orphaned"); err != nil {
+			fail("orphan count", err)
+		} else {
+			st.orphaned.Store(int64(n))
+			if n > 0 {
+				log.Printf("corr-current-reconcile: orphaned_open=%d threshold_hours=%d action=close", n, orphanHours)
+				if err := ch.exec(ctx, chschema.CorrOrphanCloseSQL(orphanHours)); err != nil {
+					fail("orphan close", err)
+				} else {
+					st.orphanClosedTotal.Add(int64(n))
+					log.Printf("corr-current-reconcile: orphan_closed=%d (janitor closing versions written to history)", n)
+				}
+			}
+		}
+	}
+	// Drift inside the lookback: a projection write was lost.
+	if n, err := ch.count(ctx, chschema.CorrDriftCountSQL(lookbackDays), "drifted"); err != nil {
+		fail("drift count", err)
+	} else {
+		st.drifted.Store(int64(n))
+		if n > 0 {
+			// Structured, observable repair (§10): the projection dual-write
+			// lost writes (see the engine's corr_current_projection_write_failures_total).
+			log.Printf("corr-current-reconcile: drifted_rows=%d lookback_days=%d action=repair", n, lookbackDays)
+			if err := ch.exec(ctx, chschema.CorrDriftRepairSQL(lookbackDays)); err != nil {
+				fail("drift repair", err)
+			} else {
+				st.repairedTotal.Add(int64(n))
+				log.Printf("corr-current-reconcile: repaired=%d (projection re-seeded from corr_objects)", n)
+			}
+		}
+	}
+	// State drift at any age (tracker 328).
+	if n, err := ch.count(ctx, chschema.CorrStateDriftCountSQL(), "state_drifted"); err != nil {
+		fail("state drift count", err)
+	} else {
+		st.stateDrifted.Store(int64(n))
+		if n > 0 {
+			log.Printf("corr-current-reconcile: state_drifted_rows=%d action=repair (open in projection, terminal in history)", n)
+			if err := ch.exec(ctx, chschema.CorrStateDriftRepairSQL()); err != nil {
+				fail("state drift repair", err)
+			} else {
+				st.repairedTotal.Add(int64(n))
+				log.Printf("corr-current-reconcile: state_repaired=%d (projection re-seeded from history, restamped)", n)
+			}
+		}
+	}
+	st.lastRunUnix.Store(time.Now().Unix())
+}
+
 func (s *server) corrCurrentReconcileLoop(ctx context.Context) {
 	interval := durationOr("CORR_CURRENT_RECONCILE_INTERVAL", time.Hour)
 	if interval <= 0 {
@@ -86,6 +221,7 @@ func (s *server) corrCurrentReconcileLoop(ctx context.Context) {
 	if base == "" {
 		return
 	}
+	ch := serverReconcileCH{s: s, base: base}
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -94,47 +230,6 @@ func (s *server) corrCurrentReconcileLoop(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		// Orphaned-open sweep FIRST: the closing versions it writes are exactly
-		// what the drift repair below re-projects in the same tick.
-		if orphanHours > 0 {
-			rows, err := s.chRowsScope(ctx, "__all__", chschema.CorrOrphanCountSQL(orphanHours),
-				"worker:corr-current-reconcile")
-			n := 0
-			if err == nil && len(rows) == 1 {
-				n = int(asFloat(rows[0]["orphaned"]))
-			}
-			if err != nil {
-				log.Printf("corr-current-reconcile: orphan count failed: %v", err)
-			} else if n > 0 {
-				log.Printf("corr-current-reconcile: orphaned_open=%d threshold_hours=%d action=close", n, orphanHours)
-				if msg := chExecErr(base, chschema.CorrOrphanCloseSQL(orphanHours)); msg != "" {
-					log.Printf("corr-current-reconcile: orphan close failed: %s", msg)
-				} else {
-					log.Printf("corr-current-reconcile: orphan_closed=%d (janitor closing versions written to history)", n)
-				}
-			}
-		}
-		rows, err := s.chRowsScope(ctx, "__all__", chschema.CorrDriftCountSQL(lookback),
-			"worker:corr-current-reconcile")
-		if err != nil {
-			log.Printf("corr-current-reconcile: drift count failed: %v", err)
-			continue
-		}
-		drifted := 0
-		if len(rows) == 1 {
-			drifted = int(asFloat(rows[0]["drifted"]))
-		}
-		if drifted == 0 {
-			continue
-		}
-		// Structured, observable repair (§10): stale hot-read rows were found —
-		// the projection dual-write lost writes (see the engine's
-		// corr_current_projection_write_failures_total for the cause).
-		log.Printf("corr-current-reconcile: drifted_rows=%d lookback_days=%d action=repair", drifted, lookback)
-		if msg := chExecErr(base, chschema.CorrDriftRepairSQL(lookback)); msg != "" {
-			log.Printf("corr-current-reconcile: repair failed: %s", msg)
-			continue
-		}
-		log.Printf("corr-current-reconcile: repaired=%d (projection re-seeded from corr_objects)", drifted)
+		corrReconcilePass(ctx, ch, &s.corrReconcile, lookback, orphanHours)
 	}
 }

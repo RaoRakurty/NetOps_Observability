@@ -15,7 +15,9 @@ import (
 
 // Membership says how an interface's routing-instance binding was established.
 const (
-	// MembershipObserved — the interface series itself carried a `vrf` label.
+	// MembershipObserved — the binding was reported by the device: either the
+	// interface series itself carried a `vrf` label, or the routing-instance
+	// collector read it from the device's VRF MIB (device_vrf_if_info).
 	MembershipObserved = "observed"
 	// MembershipNotCollected — no transport collecting this device reports an
 	// interface→instance binding. NOT the same as "the default instance".
@@ -77,7 +79,9 @@ type Group struct {
 // does carry the concept, with no claim about which interfaces are in it.
 type RoutingInstance struct {
 	Name   string `json:"name"`
-	Source string `json:"source"` // e.g. "bgp_control_plane"
+	Source string `json:"source"`         // e.g. "bgp_control_plane", "mpls-l3vpn", "viptela-vpn"
+	Kind   string `json:"kind,omitempty"` // the device's word: vrf / vpn / routing-instance / vprn / vr
+	RD     string `json:"rd,omitempty"`   // route distinguisher, when the source reports one
 }
 
 // Dialect is the vendor's own vocabulary for the concept.
@@ -188,6 +192,8 @@ type Series struct {
 	InErr   []Sample
 	OutErr  []Sample
 	BGPVRFs []Sample // control-plane lane, for the known-instance list
+	VRFInfo []Sample // device_vrf_info: instances read from the device's VRF MIB
+	VRFIf   []Sample // device_vrf_if_info: interface → instance membership
 }
 
 // BuildInterfaces folds the series into one row per interface.
@@ -228,6 +234,14 @@ func BuildInterfaces(s Series, max int) ([]Interface, bool) {
 	apply(s.Admin, func(i *Interface, sm Sample) {
 		v := int(sm.Value)
 		i.Admin, i.AdminValue = ifStateName(v), &v
+		if i.VRF == "" {
+			i.VRF = strings.TrimSpace(sm.Labels["vrf"])
+		}
+	})
+	// Membership read from the device's VRF MIB, joined on the interface name.
+	// A label already on the interface series wins (it is the same fact, from
+	// the richer lane).
+	apply(s.VRFIf, func(i *Interface, sm Sample) {
 		if i.VRF == "" {
 			i.VRF = strings.TrimSpace(sm.Labels["vrf"])
 		}
@@ -422,6 +436,72 @@ func KnownRoutingInstances(samples []Sample, max int) []RoutingInstance {
 	return out
 }
 
+// CollectedRoutingInstances lists the instances the routing-instance collector
+// read from the device itself (device_vrf_info), then adds any instance only
+// the BGP control-plane lane knows. Deduplicated by name; ordered by name.
+func CollectedRoutingInstances(info, bgp []Sample, max int) []RoutingInstance {
+	byName := map[string]RoutingInstance{}
+	for _, sm := range info {
+		n := strings.TrimSpace(sm.Labels["vrf"])
+		if n == "" {
+			continue
+		}
+		if _, seen := byName[n]; seen {
+			continue
+		}
+		byName[n] = RoutingInstance{
+			Name:   n,
+			Source: strings.TrimSpace(sm.Labels["source"]),
+			Kind:   strings.TrimSpace(sm.Labels["kind"]),
+			RD:     strings.TrimSpace(sm.Labels["rd"]),
+		}
+	}
+	for _, ri := range KnownRoutingInstances(bgp, 0) {
+		if _, seen := byName[ri.Name]; !seen {
+			byName[ri.Name] = ri
+		}
+	}
+	names := make([]string, 0, len(byName))
+	for n := range byName {
+		names = append(names, n)
+	}
+	sort.Slice(names, func(a, b int) bool { return naturalLess(names[a], names[b]) })
+	if max > 0 && len(names) > max {
+		names = names[:max]
+	}
+	out := make([]RoutingInstance, 0, len(names))
+	for _, n := range names {
+		out = append(out, byName[n])
+	}
+	return out
+}
+
+// TermFromKinds returns the device's own word for its instances when the
+// collector read them with one: a Viptela vEdge has "VPN"s, SR OS "VPRN"s,
+// Junos "routing-instance"s. "" when there is no such evidence (or mixed
+// kinds) and the vendor dialect stands.
+func TermFromKinds(info []Sample) string {
+	term := ""
+	for _, sm := range info {
+		t := ""
+		switch strings.TrimSpace(sm.Labels["kind"]) {
+		case "vpn":
+			t = "VPN"
+		case "vprn", "vr":
+			t = "VPRN"
+		case "routing-instance":
+			t = "routing-instance"
+		default:
+			return ""
+		}
+		if term != "" && term != t {
+			return ""
+		}
+		term = t
+	}
+	return term
+}
+
 // BuildCoverage assembles the honesty block, including the notes that name
 // every absent source. A source that is not collected is reported ABSENT with a
 // reason — never as a zero and never as "healthy".
@@ -455,13 +535,13 @@ func BuildCoverage(ifaces []Interface, groups []Group, vrfLabels, truncated bool
 	case len(ifaces) == 0:
 		notes = append(notes, "No interface state series exists for this device — nothing is collecting device_if_oper_status for it, so there are no interfaces to group.")
 	case !vrfLabels:
-		notes = append(notes, term+" membership is not collected on this transport: the canonical interface series carry {device, vendor, ifName, transport} and no vrf label. SNMP IF-MIB has no VRF column, and the gNMI interface subscriptions sit outside the /network-instances tree that carries the instance name.")
+		notes = append(notes, term+" membership is not collected for this device: its interface series carry no vrf label, and no VRF MIB the device answers (RFC 4382, CISCO-VRF, JUNIPER-VPN, ARISTA-VRF, TIMETRA-VRTR, VIPTELA-OPER-VPN) bound an interface to an instance. The gNMI interface subscriptions sit outside the /network-instances tree that carries the instance name.")
 		notes = append(notes, "These interfaces are shown ungrouped on purpose. They are NOT reported as members of a default "+term+" — that would be a claim about the device that no collected series supports.")
 	case cov.Ungrouped > 0:
 		notes = append(notes, "Some interface series carry a vrf label and some do not; the unlabelled ones are listed separately rather than folded into an instance.")
 	}
 	if len(instances) > 0 && !vrfLabels {
-		notes = append(notes, "The device does report routing instances on its BGP control-plane series; they are listed under routing_instances. That lane carries the instance name but not which interfaces belong to it.")
+		notes = append(notes, "The device does report routing instances; they are listed under routing_instances, without interface membership.")
 	}
 	if !cov.Utilisation && len(ifaces) > 0 {
 		notes = append(notes, "Utilisation percentages are null: no device_if_speed series was returned, so there is no link capacity to divide by.")

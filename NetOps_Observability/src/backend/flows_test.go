@@ -383,3 +383,129 @@ func TestHandleFlowsByTypeEmptyTenantShortCircuits(t *testing.T) {
 		t.Fatalf("body = %q, want empty envelope", body)
 	}
 }
+
+// handleFlowsCoverage feeds the honest empty states: it must count what the
+// window's flows carry, inside the caller's own tenant scope, with the user's
+// filters applied — and a tenant that sees nothing never reaches ClickHouse.
+func TestHandleFlowsCoverageScopedSQL(t *testing.T) {
+	var gotSQL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotSQL = string(b)
+		_, _ = w.Write([]byte(`{"meta":[],"data":[],"rows":0}`))
+	}))
+	defer srv.Close()
+	t.Setenv("CLICKHOUSE_URL", srv.URL)
+
+	s := flowsTestServer(t)
+	r := req(http.MethodGet, "/api/flows/coverage?since=900s&device=10.1.0.1", "", acme())
+	w := httptest.NewRecorder()
+	s.handleFlowsCoverage(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	for _, want := range []string{
+		"countIf(proto = 6) ",
+		"tcp_flags > 0",
+		"src_as > 0 OR dst_as > 0",
+		"private_only_flows",
+		"uniqExact(sampler_address)",
+		"INTERVAL 900 SECOND",
+		"src_addr IN", "'10.1.0.1'", // acme's own scope
+		"sampler_address = '10.1.0.1'",
+	} {
+		if !strings.Contains(gotSQL, want) {
+			t.Errorf("coverage SQL missing %q\nSQL:\n%s", want, gotSQL)
+		}
+	}
+	if strings.Contains(gotSQL, "'10.2.0.1'") {
+		t.Errorf("TENANT LEAK: acme coverage must not name globex's address:\n%s", gotSQL)
+	}
+
+	r = req(http.MethodGet, "/api/flows/coverage?src=1'+OR+'1'='1", "", superA())
+	w = httptest.NewRecorder()
+	s.handleFlowsCoverage(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("hostile filter: status = %d, want 400", w.Code)
+	}
+}
+
+func TestHandleFlowsCoverageEmptyTenantShortCircuits(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	t.Setenv("CLICKHOUSE_URL", srv.URL)
+
+	s := flowsServerNoShared(t)
+	r := req(http.MethodGet, "/api/flows/coverage", "", jwtClaims{Sub: "x", Role: RoleOperator, Tenant: "nobody"})
+	w := httptest.NewRecorder()
+	s.handleFlowsCoverage(w, r)
+	if called {
+		t.Fatal("empty-tenant coverage must not reach ClickHouse")
+	}
+	if body := w.Body.String(); body != `{"meta":[],"data":[],"rows":0}` {
+		t.Fatalf("body = %q, want empty envelope", body)
+	}
+}
+
+// A router reports the traffic it FORWARDS, almost none of which is to or from
+// its own management address. A scoped principal must therefore see the flows
+// its own devices exported (sampler_address), not only flows whose endpoint is
+// one of its devices — and never flows exported by another tenant's device or
+// by a shared device.
+func TestFlowTenantClauseMatchesTheExporter(t *testing.T) {
+	s := flowsTestServer(t)
+	clause, empty := s.flowTenantClauseFor(acme())
+	if empty {
+		t.Fatal("acme has devices")
+	}
+	if !strings.Contains(clause, "sampler_address IN ('10.1.0.1')") {
+		t.Fatalf("flow clause must match acme's exporter: %q", clause)
+	}
+	if !strings.HasPrefix(clause, " AND (") || !strings.HasSuffix(clause, ")") || strings.Count(clause, " OR ") != 2 {
+		t.Fatalf("the three matches must be ONE parenthesised OR group, or the AND binds wrong: %q", clause)
+	}
+	for _, leak := range []string{"'10.2.0.1'", "'10.9.0.1'"} {
+		if strings.Contains(clause, leak) {
+			t.Errorf("TENANT LEAK: %s in acme's flow clause %q", leak, clause)
+		}
+	}
+	// The two-endpoint form (non-flow tables) is unchanged.
+	if c, _ := s.addrTenantClauseFor(acme(), "src_ip", "dst_ip"); strings.Contains(c, "sampler_address") {
+		t.Errorf("non-flow clause must not name an exporter column: %q", c)
+	}
+	// A tenant with no devices still reads nothing.
+	if _, empty := flowsServerNoShared(t).flowTenantClauseFor(jwtClaims{Sub: "x", Role: RoleOperator, Tenant: "nobody"}); !empty {
+		t.Error("no devices must stay default-closed")
+	}
+}
+
+// service_port folds both directions of a conversation onto the service end.
+func TestHandleFlowsTopNServicePort(t *testing.T) {
+	var gotSQL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotSQL = string(b)
+		_, _ = w.Write([]byte(`{"meta":[],"data":[],"rows":0}`))
+	}))
+	defer srv.Close()
+	t.Setenv("CLICKHOUSE_URL", srv.URL)
+
+	s := flowsTestServer(t)
+	w := httptest.NewRecorder()
+	s.handleFlowsTopN(w, req(http.MethodGet, "/api/flows/topn?by=service_port", "", superA()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	for _, want := range []string{
+		"concat(toString(proto), '/', toString(least(src_port, dst_port))) AS k",
+		"AND least(src_port, dst_port) > 0",
+	} {
+		if !strings.Contains(gotSQL, want) {
+			t.Errorf("SQL missing %q\n%s", want, gotSQL)
+		}
+	}
+}

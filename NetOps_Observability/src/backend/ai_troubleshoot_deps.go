@@ -187,6 +187,10 @@ func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.Troubl
 	// The Iris RCA contract (tracker 337 N-B1): the engine's own report,
 	// projected. It rides the same tenant-scoped slice read as the RCA page.
 	deps.RCAResult = s.aiRCAResult(r, claims)
+	// N-F4: similar past incidents, from the caller's own closed history.
+	if s.incidentFP != nil {
+		deps.SimilarIncidents = s.aiSimilarIncidents(claims)
+	}
 	// Configuration change history (design item 10). Wired only when config
 	// backup is enabled — the version register and the drift state it reads
 	// exist only then.
@@ -2595,7 +2599,7 @@ func (h *nlqScope) aliasTarget(entityType, id string) bool {
 		return false
 	}
 	tenant, cross := principalTenant(h.claims)
-	for _, a := range h.s.nlqAliases.List(tenant, cross) {
+	for _, a := range h.s.nlqAliasList(tenant, cross) {
 		if a.EntityType == entityType && a.EntityID == id {
 			return true
 		}

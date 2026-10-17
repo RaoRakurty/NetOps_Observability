@@ -810,6 +810,18 @@
       "notes": "nav-leaf coverage (N-G1): Administration \u2192 Incident Response \u2192 Ticket Delivery"
     },
     {
+      "id": "docs-120",
+      "category": "docs",
+      "question": "How do I tell Iris that core-02 is our DR site?",
+      "expect": {
+        "slugs": [
+          "administration/network-context"
+        ]
+      },
+      "nav": "admin/network-context",
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Iris \u2192 Network Context (N-F1)"
+    },
+    {
       "id": "docs-070",
       "category": "docs",
       "question": "Is the traffic between Correlix services encrypted with TLS?",
@@ -1423,6 +1435,18 @@
       },
       "nav": "security/threat/behavior",
       "notes": "nav-leaf coverage (N-G1): Security \u2192 Threat Detection \u2192 Network Behavior"
+    },
+    {
+      "id": "docs-121",
+      "category": "docs",
+      "question": "How do I turn a feature on, like SSH to devices or configuration backup?",
+      "expect": {
+        "slugs": [
+          "administration/features"
+        ]
+      },
+      "nav": "platform/features",
+      "notes": "nav-leaf coverage (N-G1): Platform \u2192 Configuration \u2192 Features"
     },
     {
       "id": "intent-001",

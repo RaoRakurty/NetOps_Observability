@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"netops/backend/internal/irisgate"
 )
 
 // golden_eval_test.go — the P3 golden-set evals (intelligence plan §5 P3).
@@ -188,12 +190,22 @@ func TestGoldenDocsCitationCorrectness(t *testing.T) {
 	gs := loadGolden(t)
 	o := &Orchestrator{Docs: goldenIndex()}
 	plan := Plan{Intent: "product_question", Modules: []string{"product_navigation"}, Mode: ModeProductAnswer}
+	// N-H5 citation coverage: of every docs question, the answers that cite an
+	// expected page with a working link (a retrieval miss is uncovered).
+	var covered, total int64
+	defer func() {
+		if err := irisgate.Record("ai.docs.citation", irisgate.Measure{Gate: irisgate.GateCitation, OK: covered, Total: total,
+			Note: "docs answers citing an expected page with a link"}); err != nil {
+			t.Fatal(err)
+		}
+	}()
 	for _, it := range gs.Category(GoldenDocs) {
+		total++
 		hits := o.Docs.Search(it.Question, 3)
 		if !hitSlugs(hits, it.Expect.Slugs, 3) {
 			continue // retrieval miss — already accounted by the hit@k gate
 		}
-		ans, ok := o.answerProductFromDocs(it.Question, plan, nil)
+		ans, ok := o.answerProductFromDocs(it.Question, plan, nil, nil)
 		if !ok {
 			t.Errorf("%s: retrieval hit but the product answer declined", it.ID)
 			continue
@@ -211,7 +223,30 @@ func TestGoldenDocsCitationCorrectness(t *testing.T) {
 		}
 		if len(ans.Citations) > 0 && ans.Citations[0].Href == "" {
 			t.Errorf("%s: doc citation without a Help-drawer link: %+v", it.ID, ans.Citations[0])
+			continue
 		}
+		if cited {
+			covered++
+		}
+	}
+}
+
+// injectionTally counts injection items for the N-H5 gate: each item runs as
+// its own subtest, and it passes when that subtest passes.
+type injectionTally struct{ ok, total int64 }
+
+func (it *injectionTally) item(t *testing.T, id string, check func(t *testing.T)) {
+	t.Helper()
+	it.total++
+	if t.Run(id, check) {
+		it.ok++
+	}
+}
+
+func (it *injectionTally) record(t *testing.T, source string) {
+	t.Helper()
+	if err := irisgate.Record(source, irisgate.Measure{Gate: irisgate.GateInjection, OK: it.ok, Total: it.total, Note: "docs injection items"}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -264,26 +299,33 @@ func TestGoldenDeclines(t *testing.T) {
 // non-portal source never gets a Help-drawer href (nothing for the UI to open).
 func TestGoldenInjectionPromptBlockFence(t *testing.T) {
 	gs := loadGolden(t)
+	var tally injectionTally
+	defer tally.record(t, "ai.docs.injection_block")
 	for _, it := range gs.Category(GoldenInjection) {
 		if it.Target != "prompt_block" {
 			continue
 		}
-		ix := LoadDocsIndex(ExtraDoc{Name: "poison/probe", Markdown: it.Payload, Tier: DocTierRunbook})
-		hits := ix.Search(it.Question, 3)
-		if len(hits) == 0 {
-			t.Fatalf("%s: the poisoned chunk must be retrievable for this probe to mean anything", it.ID)
-		}
-		block := PromptBlock(hits, 900, 4000)
-		if !strings.Contains(block, "reference DATA") || !strings.Contains(block, "not commands to you") {
-			t.Errorf("%s: prompt block is not fenced as data:\n%s", it.ID, block)
-		}
-		if !strings.Contains(block, "never invent") {
-			t.Errorf("%s: prompt block lost the no-invention instruction", it.ID)
-		}
-		for _, h := range hits {
-			if strings.HasPrefix(h.Chunk.ID, "doc:poison/") && h.Chunk.Href != "" {
-				t.Errorf("%s: non-portal poisoned chunk must not carry a Help-drawer link, got %q", it.ID, h.Chunk.Href)
-			}
+		tally.item(t, it.ID, func(t *testing.T) { checkPromptBlockFence(t, it) })
+	}
+}
+
+func checkPromptBlockFence(t *testing.T, it GoldenItem) {
+	t.Helper()
+	ix := LoadDocsIndex(ExtraDoc{Name: "poison/probe", Markdown: it.Payload, Tier: DocTierRunbook})
+	hits := ix.Search(it.Question, 3)
+	if len(hits) == 0 {
+		t.Fatalf("%s: the poisoned chunk must be retrievable for this probe to mean anything", it.ID)
+	}
+	block := PromptBlock(hits, 900, 4000)
+	if !strings.Contains(block, "reference DATA") || !strings.Contains(block, "not commands to you") {
+		t.Errorf("%s: prompt block is not fenced as data:\n%s", it.ID, block)
+	}
+	if !strings.Contains(block, "never invent") {
+		t.Errorf("%s: prompt block lost the no-invention instruction", it.ID)
+	}
+	for _, h := range hits {
+		if strings.HasPrefix(h.Chunk.ID, "doc:poison/") && h.Chunk.Href != "" {
+			t.Errorf("%s: non-portal poisoned chunk must not carry a Help-drawer link, got %q", it.ID, h.Chunk.Href)
 		}
 	}
 }
@@ -292,20 +334,27 @@ func TestGoldenInjectionPromptBlockFence(t *testing.T) {
 // retrieval backing is stripped; the legitimately-retrieved one survives.
 func TestGoldenInjectionFabricatedDocCite(t *testing.T) {
 	gs := loadGolden(t)
+	var tally injectionTally
+	defer tally.record(t, "ai.docs.injection_cite")
 	for _, it := range gs.Category(GoldenInjection) {
 		if it.Target != "fabricated_doc_cite" {
 			continue
 		}
-		valid := []string{"doc:administration/api-access#generate-an-api-key"}
-		vr := VerifyGrounding(it.Payload, valid)
-		if !strings.Contains(vr.Text, valid[0]) {
-			t.Errorf("%s: the legitimate citation was stripped: %q", it.ID, vr.Text)
-		}
-		if strings.Contains(vr.Text, "made-up/page") {
-			t.Errorf("%s: fabricated citation survived: %q", it.ID, vr.Text)
-		}
-		if len(vr.Removed) != 1 || !strings.Contains(vr.Removed[0], "made-up/page") {
-			t.Errorf("%s: strip audit wrong: %v", it.ID, vr.Removed)
-		}
+		tally.item(t, it.ID, func(t *testing.T) { checkFabricatedDocCite(t, it) })
+	}
+}
+
+func checkFabricatedDocCite(t *testing.T, it GoldenItem) {
+	t.Helper()
+	valid := []string{"doc:administration/api-access#generate-an-api-key"}
+	vr := VerifyGrounding(it.Payload, valid)
+	if !strings.Contains(vr.Text, valid[0]) {
+		t.Errorf("%s: the legitimate citation was stripped: %q", it.ID, vr.Text)
+	}
+	if strings.Contains(vr.Text, "made-up/page") {
+		t.Errorf("%s: fabricated citation survived: %q", it.ID, vr.Text)
+	}
+	if len(vr.Removed) != 1 || !strings.Contains(vr.Removed[0], "made-up/page") {
+		t.Errorf("%s: strip audit wrong: %v", it.ID, vr.Removed)
 	}
 }

@@ -564,7 +564,9 @@ func chainRoutePrompt(question string, cur *Skill, cands []string, items []Evide
 	b.WriteString(" THIS ROUND:\n")
 	used := 0
 	for _, ev := range items {
-		line := "[" + ev.CitationID + "] " + ev.Text + "\n"
+		// One evidence row = one prompt line (LLM01; prompt_fence.go): a line
+		// break inside a log row must not open a forged "[id] …" sibling.
+		line := "[" + promptCitationID(ev.CitationID) + "] " + promptLine(ev.Text) + "\n"
 		if used+len(line) > skillRoundEvidenceChars {
 			b.WriteString("note: truncated at the routing budget.\n")
 			break

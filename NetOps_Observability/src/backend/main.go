@@ -103,6 +103,11 @@ import (
 	"netops/backend/internal/parsetrace"
 	"netops/backend/internal/pipedebug"
 	// DEBUG-ROUTES-END
+	"netops/backend/internal/featureflags"
+	"netops/backend/internal/iriscache"
+	"netops/backend/internal/irisstream"
+	"netops/backend/internal/nlquery/modelc"
+	"netops/backend/internal/orgcontext"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/quarantine"
@@ -173,6 +178,7 @@ import (
 	"netops/backend/secapi"
 
 	"netops/backend/internal/httppage"
+	"netops/backend/internal/incidentfp"
 
 	"netops/backend/internal/oidc"
 )
@@ -381,6 +387,22 @@ type server struct {
 	// hashes only. nil = the ledger is off (asks are not ledgered).
 	aiDecisions       aidecision.Store
 	aiDecisionMetrics *aidecision.Metrics
+	// aiToolGateway applies the Iris tool contracts (tracker 337 N-A8). One
+	// per process, so a tenant's per-tool rate budget spans requests.
+	aiToolGateway *ai.ToolGateway
+	// irisStreamMetrics counts streamed Iris answers (tracker 337 N-E2).
+	irisStreamMetrics *irisstream.Metrics
+	// orgContext is the Network context store (tracker 337 N-F1); nil on a
+	// file-backend deployment (the routes answer 503).
+	orgContext        orgcontext.Store
+	orgContextMetrics *orgcontext.Metrics
+	// Iris per-tenant caches (tracker 337 N-H4): the hot reads every answer
+	// makes, keyed by tenant identity and invalidated by their writers.
+	irisAliasCache   *iriscache.Cache[[]entityalias.Alias]
+	irisContextCache *iriscache.Cache[orgContextRendered]
+	// nlqExamples is the model fallback's example library, parsed once (N-H4)
+	// instead of on every fallback call; nil = the fallback parses its own.
+	nlqExamples []modelc.Example
 	// Investigation hypotheses (tracker 337 N-B3): each investigation's set,
 	// held per tenant (bounded, in memory) so the trace can be re-opened by id.
 	// nil = not held (the answer still carries its own set).
@@ -495,6 +517,7 @@ type server struct {
 	topology              topology.GraphStore       // persistent topology graph #77 (in-memory or pg)
 	incidentTimeline      timeintel.TimelineStore   // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
 	incidentTimeMetrics   incidentTimeMetricsStore  // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
+	incidentFP            incidentfp.Store          // similar-incident fingerprints (tracker 337 N-F4; pg or in-memory)
 	aiFeedback            ai.FeedbackStore          // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
 	// IRIS-MEMORY-BEGIN — IRIS Phase B investigation memory (design §3.5).
 	// irisMemory is the tenant-scoped store of CONCLUDED investigations
@@ -519,22 +542,24 @@ type server struct {
 	pathGraph       pathgraph.Store
 	pathFacts       pathFactSource
 	corrPath        corrPathRef
-	remotePaths     *remotePathStore      // remote-vantage traceroute pushes (POST /api/probe/paths)
-	integrations    *integration.Store    // integration-platform persistence (nil on file backend)
-	providers       *integration.Registry // inbound provider translators (registry)
-	nms             *nmsRuntime           // NMS vendor-controller framework #95 (nil unless FEATURE_NMS_INTEGRATIONS)
-	wireless        wireless.Store        // wireless canonical inventory #128 (always set: mem on file backend, PG on postgres)
-	wirelessActions *wirelessActionStore  // #128 Phase 8 guarded remediation (dormant unless FEATURE_WIRELESS_ACTIONS)
-	intMetrics      *integrationMetrics   // integration-platform Prometheus counters
-	vault           *vault.Vault          // secret-custody envelope (dormant unless SEAL_PROVIDER set)
-	tlsSrv          *tlsServer            // opt-in HTTPS/mTLS listener config (nil = plaintext)
-	tlsPeerProber   *tlsprobe.Prober      // SEC-019.1 served-cert expiry watcher (nil = plaintext baseline)
-	secMetrics      *secobs.Metrics       // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
-	transportInv    *secobs.Inventory     // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
-	exportPolicy    *exportPolicyStore    // runtime-tunable log-export limits
-	exportLimiter   *ratelimit.Limiter    // per-tenant export rate limit
-	copilotLimiter  *ratelimit.Limiter    // per-principal copilot rate limit (SR-021)
-	aiToolBudget    *ai.DailyBudget       // per-tenant daily token budget for the agent loop (P2, LLM04)
+	remotePaths     *remotePathStore                     // remote-vantage traceroute pushes (POST /api/probe/paths)
+	integrations    *integration.Store                   // integration-platform persistence (nil on file backend)
+	providers       *integration.Registry                // inbound provider translators (registry)
+	nms             *nmsRuntime                          // NMS vendor-controller framework #95 (nil unless FEATURE_NMS_INTEGRATIONS)
+	wireless        wireless.Store                       // wireless canonical inventory #128 (always set: mem on file backend, PG on postgres)
+	wirelessActions *wirelessActionStore                 // #128 Phase 8 guarded remediation (dormant unless FEATURE_WIRELESS_ACTIONS)
+	intMetrics      *integrationMetrics                  // integration-platform Prometheus counters
+	vault           *vault.Vault                         // secret-custody envelope (dormant unless SEAL_PROVIDER set)
+	tlsSrv          *tlsServer                           // opt-in HTTPS/mTLS listener config (nil = plaintext)
+	tlsPeerProber   *tlsprobe.Prober                     // SEC-019.1 served-cert expiry watcher (nil = plaintext baseline)
+	corrReconcile   corrReconcileStats                   // tracker 328: corr_current reconciler gauges/counters
+	sdwanOverlay    atomic.Pointer[sdwanOverlaySnapshot] // tracker 349: last inferred SD-WAN overlay (reconcile cycle)
+	secMetrics      *secobs.Metrics                      // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
+	transportInv    *secobs.Inventory                    // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
+	exportPolicy    *exportPolicyStore                   // runtime-tunable log-export limits
+	exportLimiter   *ratelimit.Limiter                   // per-tenant export rate limit
+	copilotLimiter  *ratelimit.Limiter                   // per-principal copilot rate limit (SR-021)
+	aiToolBudget    *ai.DailyBudget                      // per-tenant daily token budget for the agent loop (P2, LLM04)
 	copilotCfg      *copilotConfigStore
 	aiTenantCfg     *aiTenantConfigStore   // per-tenant AI entitlement + BYO provider key (P4a)
 	displayPrefs    *tenantDisplayStore    // per-tenant display prefs (Wave 4 #11: time display)
@@ -659,7 +684,12 @@ type server struct {
 	ldap        *ldapConfigStore
 	tacacs      *tacacsConfigStore
 	tokenPolicy *tokenPolicyStore
-	secPolicy   *policy.SecurityStore // #24 security-policy engine Source (catalog + per-scope overrides)
+	// features is the platform-admin Features page registry (tracker 348).
+	// Loaded before any reader of its flags runs. restart carries a
+	// "restart to apply" request to Run.
+	features  *featureflags.Registry
+	restart   *featureflags.RestartGate
+	secPolicy *policy.SecurityStore // #24 security-policy engine Source (catalog + per-scope overrides)
 	// ITSM connectors (ServiceNow + Jira) are PER-TENANT and owned by itsmCfg
 	// (itsm_config.go), which builds + hot-swaps them on save. Resolve a tenant's
 	// connector via serviceNowFor()/jiraFor(); the incident-projection worker keys
@@ -739,6 +769,12 @@ func newServer() *server {
 
 	// Select where the identity/saved stores persist (file by default; Postgres
 	// when STORE_BACKEND=postgres). Must run before any store is constructed.
+	// Iris tool contracts (tracker 337 N-A8): every tool's timeout, rate,
+	// risk tier and output bounds are a static table; an invalid table is a
+	// build defect, so the api refuses to start rather than run tools unbounded.
+	if err := ai.CheckToolContracts(); err != nil {
+		log.Fatalf("iris tool contracts: %v", err)
+	}
 	if err := initStoreBackend(); err != nil {
 		log.Fatalf("store backend: %v", err)
 	}
@@ -760,6 +796,15 @@ func newServer() *server {
 	if recovered := migrateLegacyKVKeys(); len(recovered) > 0 {
 		logInfo("store", "recovered settings written under pre-2026-07-21 store keys",
 			map[string]any{"keys": recovered, "count": len(recovered)})
+	}
+
+	// Features page (tracker 348): saved feature switches are applied to the
+	// environment HERE — after the store is selected, before any collector,
+	// worker or module reads them — so what starts is what was saved.
+	features := featureflags.New(featureflags.PlatformSpecs(), featureflags.OSEnv{},
+		featureflags.KVStore{Key: "/data/feature_flags.json", LoadFn: platformdb.Load, SaveFn: platformdb.Save})
+	if err := features.Load(); err != nil {
+		logError("features", "saved feature settings could not be read — install values are in force and risky features are OFF until they load", errf(err))
 	}
 
 	// Secret-custody Vault (#17). Dormant (plaintext passthrough) unless
@@ -855,6 +900,17 @@ func newServer() *server {
 	pool.Enable("gnmi", os.Getenv("ENABLE_GNMI_COLLECTION") == "true")
 	pool.Enable("netconf", os.Getenv("ENABLE_NETCONF_COLLECTION") == "true")
 	pool.Enable("tunnels", os.Getenv("ENABLE_TUNNEL_DISCOVERY") == "true")
+	// SD-WAN overlay facts over SNMP (tracker 349): probes each device for the
+	// Viptela / Cisco SD-WAN BFD + TLOC tables with its stored credential and
+	// walks only the edges that answer. Read-only, UDP/161.
+	pool.Enable("sdwan_overlay", os.Getenv("ENABLE_SDWAN_OVERLAY") == "true")
+	// Routing instances (VRF / VPN / routing-instance / VPRN) and their member
+	// interfaces over SNMP, from whichever vendor or standard MIB the device
+	// answers (collectors/vrf_instances.go). Read-only, UDP/161.
+	pool.Enable("vrf_instances", os.Getenv("ENABLE_VRF_COLLECTION") == "true")
+	// BGP sessions inside those instances (collectors/bgp_vrf_peers.go) — the
+	// same switch: one feature, "VRFs and routing instances".
+	pool.Enable("bgp_vrf_peers", os.Getenv("ENABLE_VRF_COLLECTION") == "true")
 	pool.Enable("snmpmetrics", os.Getenv("ENABLE_SNMP_METRICS") == "true")
 	// Ubiquiti UniFi controller connector (device health via the controller API,
 	// not device SNMP). Opt-in; needs UNIFI_URL + creds.
@@ -1151,6 +1207,8 @@ func newServer() *server {
 	}
 
 	srv := &server{
+		features:         features,
+		restart:          featureflags.NewRestartGate(5 * time.Minute),
 		startedAt:        time.Now().UTC(),
 		workers:          &workerGroup{},
 		discovery:        d,
@@ -1194,6 +1252,13 @@ func newServer() *server {
 		// The AI decision ledger (N-A6) + its counters, rendered on /metrics.
 		aiDecisions:       newAIDecisionStore(),
 		aiDecisionMetrics: aidecision.NewMetrics(),
+		aiToolGateway:     ai.NewToolGateway(),
+		irisStreamMetrics: &irisstream.Metrics{},
+		orgContext:        newOrgContextStore(),
+		orgContextMetrics: &orgcontext.Metrics{},
+		irisAliasCache:    newIrisAliasCache(),
+		irisContextCache:  newIrisContextCache(),
+		nlqExamples:       modelc.EmbeddedExamples(),
 		aiHypotheses:      irishypo.NewMemStore(),
 
 		deviceSites: deviceSites,
@@ -1342,6 +1407,7 @@ func newServer() *server {
 	srv.topology = newTopologyStore()                       // persistent topology graph (#77); reconciler starts in main()
 	srv.incidentTimeline = newIncidentTimelineStore()       // RCA Time Intelligence manual lifecycle events (#84)
 	srv.incidentTimeMetrics = newIncidentTimeMetricsStore() // RCA Time Intelligence backfilled snapshots (#84); ticker starts in main()
+	srv.incidentFP = newIncidentFingerprintStore()          // similar-incident fingerprints (N-F4), written through on demand
 	srv.aiFeedback = newAIFeedbackStore()                   // Iris AI feedback loop (privacy-safe ratings)
 	// IRIS-MEMORY-BEGIN
 	srv.irisMemory = newIrisInvestigationStore()    // Iris investigation memory (migration 0040 / file fallback)
@@ -1604,6 +1670,9 @@ func newServer() *server {
 			"note":     "still-firing alerts will NOT be re-notified; anything that cleared while down resolves on the first tick",
 		})
 	}
+	// N-H4: every alias write invalidates the Iris alias cache, from the store
+	// itself so no writer can skip it.
+	srv.nlqAliases.OnWrite = srv.irisAliasesChanged
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
 	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"), vault)
 	srv.aiTenantCfg = newAITenantConfigStore(aiTenantConfigPath(), vault)
@@ -2979,8 +3048,14 @@ func Run() {
 		}
 	}()
 
-	<-stop
-	logInfo("shutdown", "shutdown requested", nil)
+	select {
+	case <-stop:
+		logInfo("shutdown", "shutdown requested", nil)
+	case <-srv.restart.C:
+		// Features page "restart to apply": the same graceful path; Run
+		// returns, the process exits 0 and its supervisor starts it again.
+		logInfo("shutdown", "restart requested from the Features page", nil)
+	}
 	// Order matters: stop accepting/finish in-flight HTTP first, THEN cancel the
 	// workers' context, THEN wait for them. Cancelling before the drain (and not
 	// waiting at all) is what abandoned in-flight ticketing/report/incident
@@ -3127,6 +3202,13 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/tacacs/config", s.handleTACACSConfig)
 	mux.HandleFunc("/api/auth/tacacs/test", s.handleTACACSTest)
 	mux.HandleFunc("/api/auth/token-policy", s.handleTokenPolicy)
+	// Features page (tracker 348): platform-global switches + restart-to-apply.
+	mux.HandleFunc("/api/platform/features", s.elevatedOnlyMutations(func(w http.ResponseWriter, r *http.Request) {
+		s.featuresAPI().HandleFeatures(w, r)
+	}))
+	mux.HandleFunc("/api/platform/restart", s.elevatedOnly(func(w http.ResponseWriter, r *http.Request) {
+		s.featuresAPI().HandleRestart(w, r)
+	}))
 	// Security Policy engine (#24): catalog, effective-policy/simulator, per-scope
 	// override editing. Admin-gated; system-scope writes are platform-owner only.
 	mux.HandleFunc("/api/policy/catalog", s.handlePolicyCatalog)
@@ -3494,6 +3576,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/tickets/audit", s.handleTicketsAudit)
 	mux.HandleFunc("/api/tickets/links", s.handleTicketsLinks)
 	mux.HandleFunc("/api/flows/flags", s.handleFlowsFlags)
+	mux.HandleFunc("/api/flows/coverage", s.handleFlowsCoverage)
 	mux.HandleFunc("/api/flows/geo", s.handleFlowsGeo)
 	mux.HandleFunc("/api/flows/by-proto", s.handleFlowsByProto)
 	mux.HandleFunc("/api/flows/by-type", s.handleFlowsByType)
@@ -3769,6 +3852,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/commands", s.handleAICommands)              // slash-command registry for the "/" menu
 	mux.HandleFunc("/api/ai/commands/suggestions", s.handleAICommands)  // typed-fragment suggestions
 	mux.HandleFunc("/api/ai/feedback", s.handleAIFeedback)              // thumbs up/down (audited)
+	mux.HandleFunc("/api/ai/context", s.handleAIContext)                // Iris Network context (N-F1): facts, review, history
+	mux.HandleFunc("/api/ai/context/", s.handleAIContext)               // /preview · /{id} · /{id}/{draft,submit,withdraw,approve,reject,rollback,retire}
 	mux.HandleFunc("/api/ai/aliases", s.handleAIAliases)                // Iris NL: per-tenant entity aliases (N-C2)
 	mux.HandleFunc("/api/ai/entities/resolve", s.handleAIEntityResolve) // Iris NL: resolution ladder (N-C2)
 	mux.HandleFunc("/api/ai/query/compile", s.handleAIQueryCompile)     // Iris NL: question → validated query (N-C5)
@@ -4223,7 +4308,7 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		// Stable order: without one, paging over a map-backed aggregator can
 		// show the same device twice and never show another at all.
 		sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
-		rows := httppage.SliceOf(all, page)
+		rows := s.stampDeviceReadFields(r.Context(), claims, httppage.SliceOf(all, page))
 		httppage.LogTruncated("/api/devices", page, len(rows), len(all))
 		httppage.Write(w, "devices", rows, page, len(rows), len(all))
 	case http.MethodPost:
@@ -4388,6 +4473,7 @@ func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 		if d.Type == "" {
 			d.Type = inferDeviceType(d)
 		}
+		d = s.stampDeviceReadFields(r.Context(), claims, []models.Device{d})[0]
 		writeJSON(w, http.StatusOK, d)
 	case http.MethodDelete:
 		// SR-003: deleting a device is a write — gate it.
@@ -4469,9 +4555,11 @@ func (s *server) handleFeatures(w http.ResponseWriter, r *http.Request) {
 		// the caller's own tenant switches), so the SPA hides what this caller
 		// cannot use. Cosmetic only — every AI route gates server-side. It
 		// reads nothing about any tenant but the caller's own.
-		"ai_entitlements":     s.aiEntitlementsFor(claims),
-		"copilot":             os.Getenv("FEATURE_COPILOT") == "true",
-		"device_ssh":          os.Getenv("FEATURE_DEVICE_SSH") == "true",
+		"ai_entitlements": s.aiEntitlementsFor(claims),
+		"copilot":         os.Getenv("FEATURE_COPILOT") == "true",
+		"device_ssh":      os.Getenv("FEATURE_DEVICE_SSH") == "true",
+		// Configuration backup + drift (the inventory's Sync / Backup columns).
+		"config_backup":       os.Getenv("FEATURE_CONFIG_BACKUP") == "true",
 		"active_verification": os.Getenv("FEATURE_ACTIVE_VERIFICATION") == "true",
 		// item 121: the per-tenant pipeline processor editor. The API itself is
 		// always up (rules persist regardless); the flag gates UI visibility and
@@ -4609,8 +4697,14 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	// STORAGE-MEASUREMENT-END
 	// AI-SCORECARD-BEGIN
 	s.aiScore.Write(w)
-	s.nlqQueryLogMetrics.Write(w) // Iris query capture + corrections (N-C8); nil-safe
-	s.aiDecisionMetrics.Write(w)  // Iris AI decision ledger appends (N-A6); nil-safe
+	s.nlqQueryLogMetrics.Write(w)                                // Iris query capture + corrections (N-C8); nil-safe
+	s.aiDecisionMetrics.Write(w)                                 // Iris AI decision ledger appends (N-A6); nil-safe
+	_ = s.irisStreamMetrics.Write(w)                             // best-effort: nil-safe; a failed scrape write surfaces to the scraper
+	_ = s.orgContextMetrics.Write(w)                             // Network context reads (N-F1); nil-safe, best-effort like the line above
+	_ = iriscache.Write(w, s.irisAliasCache, s.irisContextCache) // Iris per-tenant caches (N-H4); best-effort like the lines above
+	if s.aiToolGateway != nil {
+		_ = s.aiToolGateway.Metrics.Write(w) // best-effort: a failed scrape write surfaces to the scraper, not here
+	}
 	// AI-SCORECARD-END
 	// SECURITY-LANE-BEGIN
 	if s.securityLane != nil {
@@ -4704,6 +4798,12 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	if s.tlsPeerProber != nil {
 		s.tlsPeerProber.WriteMetrics(w)
 	}
+	s.corrReconcile.WriteMetrics(w)
+	// SNMP column walks that hit their row bound before the column ended
+	// (collectors.snmpWalkColumn). Non-zero means some table was read partially.
+	fmt.Fprint(w, "# HELP collector_snmp_walk_truncated_total SNMP column walks stopped by the row bound before the column ended (rows past it were not read).\n")
+	fmt.Fprint(w, "# TYPE collector_snmp_walk_truncated_total counter\n")
+	fmt.Fprintf(w, "collector_snmp_walk_truncated_total %d\n", collectors.SNMPWalkTruncatedTotal())
 	if s.demMetrics != nil {
 		s.demMetrics.Write(w)
 	}
@@ -4908,6 +5008,29 @@ func envOr(key, fallback string) string {
 }
 
 func envBool(key string) bool { return os.Getenv(key) == "true" }
+
+// featuresAPI binds the Features page (internal/featureflags) to this server:
+// requirePlatformAdmin for every route, the strict audit trail, and the
+// restart gate Run waits on.
+func (s *server) featuresAPI() *featureflags.API {
+	return featureflags.NewAPI(s.features, s.restart, featureflags.Deps{
+		Authz: func(w http.ResponseWriter, r *http.Request) (featureflags.Caller, bool) {
+			claims, ok := s.requirePlatformAdmin(w, r)
+			return featureflags.Caller{Subject: claims.Sub, APIKey: strings.HasPrefix(claims.Sub, "apikey:")}, ok
+		},
+		AuditStrict: func(e featureflags.AuditEntry) error { return s.audit.RecordStrict(featureAudit(e)) },
+		Audit:       func(e featureflags.AuditEntry) { s.audit.Record(featureAudit(e)) },
+		WriteJSON:   writeJSON,
+		WriteErr:    writeError,
+		LogInfo:     func(msg string, f map[string]any) { logInfo("features", msg, f) },
+		Supervised:  func() bool { return featureflags.Supervised(os.LookupEnv) },
+		Now:         time.Now,
+	})
+}
+
+func featureAudit(e featureflags.AuditEntry) AuditEvent {
+	return AuditEvent{Actor: e.Subject, Cross: true, Method: e.Method, Path: e.Path, Status: e.Status, Decision: e.Outcome, Detail: e.Detail}
+}
 
 // ---------------------------------------------------------------------------
 // Package-wide helpers (Phase-2 Wave 0b consolidation, 2026-07-29).
@@ -5285,6 +5408,12 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.status = code
 	s.ResponseWriter.WriteHeader(code)
 }
+
+// Unwrap exposes the wrapped writer to http.ResponseController (Go 1.20+), so
+// Flush and SetWriteDeadline reach the connection through the logging and
+// audit wrappers. Without it a streamed response (Iris progress events,
+// tracker 337 N-E2) is silently buffered until the handler returns.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 // Hijack lets the wrapped writer pass through to the underlying connection so
 // the WebSocket endpoint (/api/events) can take over the socket. Without this

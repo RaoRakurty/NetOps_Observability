@@ -392,3 +392,75 @@ func TestInterfaceUpIsNeverTrueWithoutEvidence(t *testing.T) {
 		t.Error("oper 1 is up")
 	}
 }
+
+// Membership read from the device's VRF MIB groups the interfaces — joined on
+// the interface name, never invented for an interface it does not name.
+func TestCollectedMembershipGroupsInterfaces(t *testing.T) {
+	s := Series{
+		Oper: []Sample{
+			sample(1, "ifName", "ge0/0"), sample(1, "ifName", "ge0/2"), sample(2, "ifName", "eth0"), sample(1, "ifName", "loopback0"),
+		},
+		VRFIf: []Sample{
+			sample(1, "ifName", "ge0/0", "vrf", "0", "source", "viptela-vpn"),
+			sample(1, "ifName", "ge0/2", "vrf", "10", "source", "viptela-vpn"),
+			sample(1, "ifName", "eth0", "vrf", "512", "source", "viptela-vpn"),
+			sample(1, "ifName", "not-polled", "vrf", "10", "source", "viptela-vpn"),
+		},
+	}
+	ifaces, _ := BuildInterfaces(s, 0)
+	groups, labelled := GroupByVRF(ifaces, "VPN")
+	if !labelled {
+		t.Fatal("collected membership must count as observed")
+	}
+	got := map[string]int{}
+	ungrouped := 0
+	for _, g := range groups {
+		if g.Membership == MembershipObserved {
+			got[g.VRF] = g.Count
+		} else {
+			ungrouped += g.Count
+		}
+	}
+	if got["0"] != 1 || got["10"] != 1 || got["512"] != 1 || ungrouped != 1 {
+		t.Fatalf("groups %v ungrouped %d", got, ungrouped)
+	}
+}
+
+func TestCollectedInstancesMergeWithBGPAndKeepKindRD(t *testing.T) {
+	info := []Sample{
+		sample(1, "vrf", "CUST-A", "kind", "vrf", "rd", "65000:1", "source", "mpls-l3vpn"),
+		sample(1, "vrf", "CUST-A", "kind", "vrf", "rd", "65000:1", "source", "mpls-l3vpn"),
+	}
+	bgp := []Sample{sample(6, "vrf", "CUST-A"), sample(6, "vrf", "ONLY-BGP")}
+	out := CollectedRoutingInstances(info, bgp, 0)
+	if len(out) != 2 || out[0].Name != "CUST-A" || out[0].Source != "mpls-l3vpn" || out[0].RD != "65000:1" ||
+		out[1].Name != "ONLY-BGP" || out[1].Source != "bgp_control_plane" {
+		t.Fatalf("%+v", out)
+	}
+	if len(CollectedRoutingInstances(info, bgp, 1)) != 1 {
+		t.Error("cap not applied")
+	}
+}
+
+func TestTermFromKindsUsesTheDevicesWord(t *testing.T) {
+	for want, kinds := range map[string][]string{
+		"VPN":              {"vpn", "vpn"},
+		"VPRN":             {"vprn", "vr"},
+		"routing-instance": {"routing-instance"},
+		"":                 {"vrf"}, // the vendor dialect decides
+	} {
+		var info []Sample
+		for _, k := range kinds {
+			info = append(info, sample(1, "kind", k))
+		}
+		if got := TermFromKinds(info); got != want {
+			t.Errorf("%v → %q want %q", kinds, got, want)
+		}
+	}
+	if TermFromKinds([]Sample{sample(1, "kind", "vpn"), sample(1, "kind", "routing-instance")}) != "" {
+		t.Error("mixed kinds must not pick one")
+	}
+	if TermFromKinds(nil) != "" {
+		t.Error("no evidence must not pick a word")
+	}
+}

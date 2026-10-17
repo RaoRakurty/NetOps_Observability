@@ -12,6 +12,9 @@ name: tracker-ci
 
 on:
   push:
+    # main only (2026-10-17): a branch with an open PR got every job TWICE (push +
+    # pull_request). Branch feedback comes from the PR run (or workflow_dispatch).
+    branches: [main]
     paths:
       - 'NetOps_Observability/docs/TRACKER.md'
       - 'NetOps_Observability/scripts/tracker_staleness.py'

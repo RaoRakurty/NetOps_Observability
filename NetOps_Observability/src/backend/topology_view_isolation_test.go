@@ -18,7 +18,11 @@ package backend
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
+
+	"netops/backend/collectors"
 
 	"netops/backend/alerts"
 	"netops/backend/models"
@@ -188,4 +192,172 @@ func TestTopologyViewHTTPIsolation(t *testing.T) {
 	if nodeIDs(widen)["subnet-app"] || len(widen.Path) != 0 {
 		t.Fatalf("as_tenant leak: bob?as_tenant=acme reached the cloud slice")
 	}
+}
+
+// ── SD-WAN overlay on /view (tracker 349) ────────────────────────────────────
+
+// twoTenantOverlay builds a snapshot with two tenants whose overlays use the
+// SAME colour, system-ips and transport addresses.
+func twoTenantOverlay(t *testing.T) (*sdwanOverlaySnapshot, map[string]string) {
+	t.Helper()
+	tenantOf := map[string]string{}
+	facts := map[string]collectors.OverlayDeviceFacts{}
+	for _, tn := range []string{"acme", "globex"} {
+		for i := 0; i < 3; i++ {
+			id := tn + "-e" + string(rune('0'+i))
+			tenantOf[id] = tn
+			f := collectors.OverlayDeviceFacts{DeviceID: id, LocalTLOCAddrs: []string{"198.51.100." + string(rune('1'+i))}}
+			for j := 0; j < 3; j++ {
+				if j == i {
+					continue
+				}
+				f.Peers = append(f.Peers, collectors.OverlayPeer{
+					SystemIP:   "10.255.0." + string(rune('1'+j)),
+					TLOCAddrs:  []string{"198.51.100." + string(rune('1'+j))},
+					ColorPairs: []collectors.OverlayColorPairs{{LocalColor: "mpls", RemoteColor: "mpls", Sessions: 1, Up: 1, State: "up"}},
+				})
+			}
+			facts[id] = f
+		}
+	}
+	res := topology.InferOverlay(topology.OverlayInput{DevTenant: tenantOf, Facts: facts, DrawAllPairs: true})
+	have := map[string]bool{}
+	for id := range facts {
+		have[id] = true
+	}
+	return &sdwanOverlaySnapshot{at: time.Now(), res: res, facts: have, devFacts: facts}, tenantOf
+}
+
+func devsOf(tenantOf map[string]string, tenant string, skip ...string) []models.Device {
+	var out []models.Device
+	for id, tn := range tenantOf {
+		if tn != tenant {
+			continue
+		}
+		hidden := false
+		for _, x := range skip {
+			hidden = hidden || x == id
+		}
+		if !hidden {
+			out = append(out, models.Device{ID: id, Name: id, TenantID: tn})
+		}
+	}
+	return out
+}
+
+func TestSDWANOverlayOnViewIsTenantIsolated(t *testing.T) {
+	snap, tenantOf := twoTenantOverlay(t)
+	var view topology.View
+	attachSDWANOverlay(&view, snap, nil, devsOf(tenantOf, "acme"), time.Now())
+	raw, _ := json.Marshal(view)
+	if strings.Contains(string(raw), "globex") {
+		t.Fatalf("acme's view carries globex: %s", raw)
+	}
+	overlay, members := 0, 0
+	for _, e := range view.Edges {
+		switch e.Relationship {
+		case topology.RelOverlay:
+			overlay++
+		case topology.RelInferred:
+			members++
+			if e.Target != topology.TransportNodeID("acme", "mpls") {
+				t.Fatalf("membership into another tenant's transport: %+v", e)
+			}
+		}
+	}
+	if overlay != 3 || members != 3 || len(view.Nodes) != 1 {
+		t.Fatalf("acme view: %d overlay edges, %d memberships, %d nodes", overlay, members, len(view.Nodes))
+	}
+	// A view carrying WAN transports is drawn as a WAN (transports in the
+	// middle, sites around them), never as spine/leaf tiers.
+	if view.LayoutType != "wan_overlay" {
+		t.Fatalf("layout = %q, want wan_overlay", view.LayoutType)
+	}
+}
+
+// A device the caller cannot see takes its edges with it, and the transport
+// node discloses only the visible member count.
+func TestSDWANOverlayOnViewHonoursPartialVisibility(t *testing.T) {
+	snap, tenantOf := twoTenantOverlay(t)
+	var view topology.View
+	attachSDWANOverlay(&view, snap, nil, devsOf(tenantOf, "acme", "acme-e2"), time.Now())
+	for _, e := range view.Edges {
+		if e.Source == "acme-e2" || e.Target == "acme-e2" {
+			t.Fatalf("an edge to a hidden device: %+v", e)
+		}
+	}
+	if len(view.Nodes) != 1 || view.Nodes[0].Metrics["members"] != 2 || view.Nodes[0].Metrics["sessions"] != 0 {
+		t.Fatalf("transport discloses hidden members/sessions: %+v", view.Nodes)
+	}
+}
+
+func TestSDWANOverlayOnViewNamesWhatItCannotSee(t *testing.T) {
+	devs := []models.Device{{ID: "cedge-9", Name: "cEDGE-9", TenantID: "acme"}}
+	facts := []topology.DeviceFact{{ID: "cedge-9", Name: "cEDGE-9", IfNames: []string{"Sdwan-intf"}}}
+	var view topology.View
+	attachSDWANOverlay(&view, nil, facts, devs, time.Now())
+	if len(view.Degraded) != 1 || !strings.Contains(view.Degraded[0], "1 SD-WAN edge(s) are shown without their tunnels") {
+		t.Fatalf("no-snapshot note: %v", view.Degraded)
+	}
+	snap, _ := twoTenantOverlay(t)
+	snap.at = time.Now().Add(-20 * time.Minute)
+	view = topology.View{}
+	attachSDWANOverlay(&view, snap, facts, devs, time.Now())
+	joined := strings.Join(view.Degraded, " | ")
+	if !strings.Contains(joined, "20 minutes old") || !strings.Contains(joined, "1 SD-WAN edge(s) are shown without their tunnels") {
+		t.Fatalf("stale + missing notes: %v", view.Degraded)
+	}
+}
+
+// ── SD-WAN tunnels on /api/tunnels (owner report 2026-10-10) ────────────────
+
+func TestSDWANTunnelRowsAreTenantIsolated(t *testing.T) {
+	snap, tenantOf := twoTenantOverlay(t)
+	rows := sdwanTunnelRows(snap, devsOf(tenantOf, "acme"), "", 1000, time.Now())
+	if len(rows) != 6 { // 3 edges × 2 peers × 1 colour pair
+		t.Fatalf("rows = %d, want 6", len(rows))
+	}
+	raw, _ := json.Marshal(rows)
+	if strings.Contains(string(raw), "globex") {
+		t.Fatalf("acme's tunnels carry globex: %s", raw)
+	}
+	for _, r := range rows {
+		if r["type"] != "sdwan" || !strings.HasPrefix(r["remote_device"].(string), "acme-") {
+			t.Fatalf("row %v: remote must resolve to an acme device", r)
+		}
+	}
+}
+
+func TestSDWANTunnelRowsHonourVisibilityStatusAndLimit(t *testing.T) {
+	snap, tenantOf := twoTenantOverlay(t)
+	// acme-e2 hidden: its own tunnels are not listed, and tunnels TO it carry
+	// the overlay system-ip, never its name.
+	rows := sdwanTunnelRows(snap, devsOf(tenantOf, "acme", "acme-e2"), "", 1000, time.Now())
+	for _, r := range rows {
+		if r["local_device"] == "acme-e2" || r["remote_device"] == "acme-e2" {
+			t.Fatalf("a hidden device's name leaked: %v", r)
+		}
+	}
+	if len(rows) != 4 {
+		t.Fatalf("rows = %d, want 4", len(rows))
+	}
+	if got := sdwanTunnelRows(snap, devsOf(tenantOf, "acme"), "down", 1000, time.Now()); len(got) != 0 {
+		t.Fatalf("status=down returned %d up tunnels", len(got))
+	}
+	if got := sdwanTunnelRows(snap, devsOf(tenantOf, "acme"), "", 2, time.Now()); len(got) != 2 {
+		t.Fatalf("limit not honoured: %d", len(got))
+	}
+	if got := sdwanTunnelRows(nil, devsOf(tenantOf, "acme"), "", 10, time.Now()); got != nil {
+		t.Fatal("no snapshot must yield no rows")
+	}
+}
+
+func TestApplySDWANSitesNeverOverridesASiteOfRecord(t *testing.T) {
+	snap := &sdwanOverlaySnapshot{at: time.Now(), res: topology.OverlayResult{DeviceSites: map[string]string{"a": "40", "b": "60"}}}
+	facts := []topology.DeviceFact{{ID: "a"}, {ID: "b", Site: "London DC"}, {ID: "c"}}
+	applySDWANSites(facts, snap)
+	if facts[0].Site != "SD-WAN site 40" || facts[1].Site != "London DC" || facts[2].Site != "" {
+		t.Fatalf("sites: %q %q %q", facts[0].Site, facts[1].Site, facts[2].Site)
+	}
+	applySDWANSites(facts, nil) // no snapshot: no change, no panic
 }

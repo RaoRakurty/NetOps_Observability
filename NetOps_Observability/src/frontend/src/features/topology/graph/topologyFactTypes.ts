@@ -25,7 +25,11 @@ export type TopologySource =
   | "trace"
   | "syslog"
   | "metric"
-  | "manual";
+  | "manual"
+  // SD-WAN overlay (tracker 349): BFD sessions read over SNMP (observed), and a
+  // device's attachment to a transport colour (the network behind it inferred).
+  | "sdwan_bfd"
+  | "sdwan_tloc";
 
 /** A single normalized observation. Immutable; superseded, not mutated. */
 export type TopologyFact = {

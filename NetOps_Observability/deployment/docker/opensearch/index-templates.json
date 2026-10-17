@@ -378,6 +378,12 @@
             "tcp_flags": {
               "type": "integer"
             },
+            "exporter_app_id": {
+              "type": "keyword"
+            },
+            "exporter_app_name": {
+              "type": "keyword"
+            },
             "bytes": {
               "type": "long"
             },

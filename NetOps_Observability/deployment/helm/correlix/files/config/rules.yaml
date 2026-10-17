@@ -379,7 +379,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.device }} BGP peer {{ $labels.peer }} not established"
+          summary: "{{ $labels.device }} BGP peer {{ $labels.peer }}{{ if $labels.vrf }} in {{ $labels.vrf }}{{ end }} not established"
 
       - alert: BGPPeerFlapping
         expr: increase(device_bgp_fsm_transitions[15m]) > 3
@@ -404,6 +404,28 @@ groups:
           severity: critical
         annotations:
           summary: "{{ $labels.device }} has zero established BGP peers (isolation)"
+
+      # Cisco SD-WAN OMP (collectors/sdwan_omp.go). device_omp_peer_state is the
+      # MIB enum: up(3) and up-in-graceful-restart(8) are healthy. Emitted per
+      # peer on EDGES only (a controller lists every edge); device_omp_peers
+      # carries the up / not_up counts for every SD-WAN device.
+      - alert: OMPPeerDown
+        expr: device_omp_peer_state != 3 and device_omp_peer_state != 8
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} OMP session to {{ $labels.type }} {{ $labels.peer }} is not up"
+
+      # No controller session at all: the edge forwards on its last routes until
+      # the graceful-restart timer expires, then loses the overlay.
+      - alert: OMPNoControllers
+        expr: device_omp_peers{state="up"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} has no OMP session up to any SD-WAN controller"
 
       - alert: OSPFAdjacencyDown   # OSPF-MIB ospfNbrState (8=full); SNMP-owned, labelled {neighbor}
         expr: device_ospf_nbr_state != 8
@@ -1403,13 +1425,36 @@ groups:
         # A lost projection dual-write = a STALE incident list (an incident that
         # closed still shows open, or never appears). The engine's history write
         # succeeded, so nothing else looks broken — this counter is the only
-        # signal. Recovery: docs/runbooks/correlation-storm.md §projection;
+        # signal. Recovery: docs/runbooks/correlation-storm.md §7;
         # the Go corr-current-reconcile worker force-repairs hourly.
         expr: increase(corr_current_projection_write_failures_total[10m]) > 0
         for: 5m
         labels: { severity: critical, layer: correlation }
         annotations:
           summary: "corr_current projection lost {{ $value }} write(s)/10m — Command Center may be serving STALE incidents; check correlation logs (corr_current projection write FAILED) and ClickHouse health"
+
+      - alert: CorrCurrentStateDriftPersisting
+        # Tracker 328: the projection said 'open' for 56,397 objects history had
+        # closed, for weeks, and nothing said so. The reconciler now repairs that
+        # state drift every pass (hourly by default) and reports what it found;
+        # finding it on every pass for 3 h means the repair is not clearing it.
+        # Runbook: docs/runbooks/correlation-storm.md §7 — compare
+        # CorrStateDriftCountSQL against the api log's state_repaired lines.
+        expr: min_over_time(netops_corr_current_drift_rows{kind="state_drifted"}[3h]) > 0
+        for: 0m
+        labels: { severity: warning, layer: correlation }
+        annotations:
+          summary: "corr_current has called {{ $value }} closed object(s) open for 3 h despite repair — Command Center overcounts open incidents; check corr-current-reconcile in the api log"
+
+      - alert: CorrCurrentReconcileFailing
+        # The reconciler's own steps (counts and repairs) erroring. One failed
+        # step in a pass is noise; two inside 3 h means the repair that keeps
+        # Command Center honest is not running.
+        expr: increase(netops_corr_current_reconcile_failures_total[3h]) > 1
+        for: 0m
+        labels: { severity: warning, layer: correlation }
+        annotations:
+          summary: "corr_current reconciler: {{ $value }} failed step(s) in 3 h — drift is not being repaired; check corr-current-reconcile in the api log and ClickHouse health"
 
       - alert: CorrTenantWriteAmpOverBudget
         # #101 tenant storm budget, RE-DERIVED for P3 change A (46934f3f).

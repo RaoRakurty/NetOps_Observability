@@ -103,3 +103,34 @@ func TestPathBaselineSchemaPins(t *testing.T) {
 		t.Error("path_baselines policy must NOT carry the lenient untagged-shared clause")
 	}
 }
+
+// Every column the boot converge ADDs to netops.flows must also be in the
+// fresh-install DDL, or a new install and an upgraded one differ.
+func TestFlowsColumnsConvergeAndInitSQLInLockstep(t *testing.T) {
+	initSQL, err := os.ReadFile("../../deployment/docker/clickhouse/init.sql")
+	if err != nil {
+		t.Fatalf("read init.sql: %v", err)
+	}
+	body := string(initSQL)
+	start := strings.Index(body, "CREATE TABLE IF NOT EXISTS netops.flows")
+	if start < 0 {
+		t.Fatal("init.sql has no netops.flows table")
+	}
+	table := body[start:]
+	table = table[:strings.Index(table, "ENGINE")]
+	n := 0
+	for _, stmt := range chschema.ConvergeStmts() {
+		const pfx = "ALTER TABLE netops.flows ADD COLUMN IF NOT EXISTS "
+		if !strings.HasPrefix(stmt, pfx) {
+			continue
+		}
+		n++
+		col := strings.Fields(strings.TrimPrefix(stmt, pfx))[0]
+		if !strings.Contains(table, "\n    "+col+" ") {
+			t.Errorf("converge adds netops.flows.%s but init.sql's CREATE TABLE lacks it", col)
+		}
+	}
+	if n < 3 {
+		t.Fatalf("expected the tcp_flags + exporter_app_* converge columns, found %d", n)
+	}
+}

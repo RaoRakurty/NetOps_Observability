@@ -19,6 +19,8 @@ export interface ProgressStep {
   event: string;
   detail?: string;
   state?: ProgressState;
+  /** The tool a "tool" step is for (matches its finish); never rendered. */
+  tool?: string;
 }
 
 const EVENT_LABEL: Record<string, string> = {
@@ -27,6 +29,11 @@ const EVENT_LABEL: Record<string, string> = {
   found: "Found results",
   rca_loaded: "Loaded the root-cause analysis",
   rendering: "Preparing the answer",
+  // The /api/ai/ask stream (tracker 337 N-E2).
+  planning: "Understanding the question",
+  tool: "Reading",
+  narrating: "Writing the answer",
+  grounding: "Checking the answer against the evidence",
 };
 
 export function stepLabel(event: string): string {

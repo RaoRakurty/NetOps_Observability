@@ -273,3 +273,78 @@ func TestSnmpWalkColumn(t *testing.T) {
 		t.Errorf("row values: 1=%d 2=%d want 1,2", got["1"].int(), got["2"].int())
 	}
 }
+
+// endlessColumnAgent answers every GetNext with the next row of an unbounded
+// column (row = request number) until `rows` rows, then endOfMibView; rows < 0
+// never ends. The request-id is echoed so the stale-response guard is happy.
+func endlessColumnAgent(t *testing.T, col []int, rows int) string {
+	t.Helper()
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	go func() {
+		buf := make([]byte, 4096)
+		for hit := 1; ; hit++ {
+			_, peer, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			row := append(append([]int{}, col...), hit)
+			resp := snmpResponse(row, 0x02, []byte{0x01}, hit)
+			if rows >= 0 && hit > rows {
+				resp = snmpResponse(row, tagEndOfMibView, nil, hit)
+			}
+			if _, err := conn.WriteTo(resp, peer); err != nil {
+				return
+			}
+		}
+	}()
+	return conn.LocalAddr().String()
+}
+
+// A bounded walk that reaches its cap says so (2026-10-10: before this, a
+// walk that hit the bound returned its rows with a nil error, indistinguishable
+// from a complete table).
+func TestSnmpWalkColumnBoundedReportsTruncation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	got, truncated, err := snmpWalkColumnBounded(ctx, endlessColumnAgent(t, oidIfOper, -1), v2c("public"), oidIfOper, 25)
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if !truncated || len(got) != 25 {
+		t.Fatalf("truncated=%v rows=%d, want true/25", truncated, len(got))
+	}
+}
+
+func TestSnmpWalkColumnBoundedCompleteTableIsNotTruncated(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	got, truncated, err := snmpWalkColumnBounded(ctx, endlessColumnAgent(t, oidIfOper, 12), v2c("public"), oidIfOper, 25)
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if truncated || len(got) != 12 {
+		t.Fatalf("truncated=%v rows=%d, want false/12", truncated, len(got))
+	}
+}
+
+// The general-purpose walk keeps returning the rows it read (every caller
+// treats an error as "no column"), but the truncation is now counted.
+func TestSnmpWalkColumnCountsTruncationAndKeepsRows(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	before := SNMPWalkTruncatedTotal()
+	got, err := snmpWalkColumn(ctx, endlessColumnAgent(t, oidIfOper, -1), v2c("public"), oidIfOper)
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if len(got) != snmpWalkMaxRows {
+		t.Fatalf("rows=%d, want the %d the bound allows", len(got), snmpWalkMaxRows)
+	}
+	if SNMPWalkTruncatedTotal() != before+1 {
+		t.Fatalf("truncation not counted: %d -> %d", before, SNMPWalkTruncatedTotal())
+	}
+}
