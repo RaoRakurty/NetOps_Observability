@@ -330,7 +330,6 @@ export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
         model: cfg.model,
         model_fast: cfg.model_fast ?? "",
         model_strong: cfg.model_strong ?? "",
-        system: cfg.system,
         ...(keyDraft.trim() ? { key: keyDraft.trim() } : {}),
       });
       setCfg((c) => ({ ...(c ?? saved), ...saved }));

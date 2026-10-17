@@ -12,6 +12,7 @@ package backend
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -55,7 +56,6 @@ func (s *server) handleCopilotConfig(w http.ResponseWriter, r *http.Request) {
 			// a deliberate tier split from the single-model default.
 			"model_fast":      c.ModelFast,
 			"model_strong":    c.ModelStrong,
-			"system":          c.System,
 			"feature_enabled": aiEnabled(),
 			"key_present":     s.copilotKeyPresent(),
 			"key_source":      s.copilotKeySource(),
@@ -68,18 +68,27 @@ func (s *server) handleCopilotConfig(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 	case http.MethodPut:
-		var c copilotConfig
-		if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		var req struct {
+			copilotConfig
+			// System is the retired persona override (N-F1). An older client
+			// that round-trips it empty is fine; a non-empty one is refused, so
+			// the text is not silently dropped.
+			System string `json:"system"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		out := s.copilotCfg.Set(c)
+		if strings.TrimSpace(req.System) != "" {
+			writeError(w, http.StatusBadRequest, errors.New("the assistant persona override was retired — write what Iris should know as Network context facts (Administration → Network context)"))
+			return
+		}
+		out := s.copilotCfg.Set(req.copilotConfig)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"provider":        out.Provider,
 			"model":           out.Model,
 			"model_fast":      out.ModelFast,
 			"model_strong":    out.ModelStrong,
-			"system":          out.System,
 			"feature_enabled": aiEnabled(),
 			"key_present":     s.copilotKeyPresent(),
 			"key_source":      s.copilotKeySource(),

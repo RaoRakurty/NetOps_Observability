@@ -74,26 +74,27 @@ type (
 	copilotDocRef  = ai.DocRef
 )
 
-func (s *server) copilotSystemPrompt() string {
+// orgBlock is the caller's approved Network context (N-F1, orgContextBlock):
+// "" for none. It follows the persona and comes BEFORE the brevity contract and
+// the data-not-instructions fence, so customer-declared text is never the last
+// word the model reads before evidence.
+func (s *server) copilotSystemPrompt(orgBlock string) string {
 	persona := ai.DefaultSystemPrompt()
-	if s.copilotCfg != nil {
-		if sys := strings.TrimSpace(s.copilotCfg.Get().System); sys != "" {
-			persona = sys
-		}
+	if b := strings.TrimSpace(orgBlock); b != "" {
+		persona += "\n\n" + b
 	}
-	// The brevity contract rides EVERY persona (default or override): operators
-	// live in a console, and style instructions ("too verbose", "briefly") are
-	// commands, not commentary — live incident 2026-07-02.
+	// The brevity contract rides EVERY prompt: operators live in a console, and
+	// style instructions ("too verbose", "briefly") are commands, not
+	// commentary — live incident 2026-07-02.
 	persona += "\n\nBREVITY: be concise by default — at most ~6 short sentences unless the operator asks for detail. ALWAYS obey style instructions immediately: \"too verbose\"/\"briefly\"/\"shorter\" means answer the operator's previous question again in 2-3 sentences keeping the counts, the top item and the next action. Never respond to a style instruction with a menu of capabilities. Your earlier replies are not part of this conversation: never quote, paraphrase or claim to remember one."
-	// The data-vs-instruction fence rides EVERY persona the same way, and for
-	// the same structural reason: a platform admin replacing the persona above
-	// must not be able to delete the LLM01 stance on untrusted content
-	// (CLAUDE.md §15). Concatenated after, so an override cannot reach it. The
+	// The data-vs-instruction fence rides EVERY prompt the same way, and for
+	// the same structural reason: nothing customer-written above (Network
+	// context) can delete the LLM01 stance on untrusted content (CLAUDE.md
+	// §15). Concatenated after, so no earlier text can reach it. The
 	// agent loop gets it a second time inside ai.AgentDoctrine — that path is
 	// the one carrying live syslog, so belt and braces is correct there.
 	persona += "\n\n" + ai.DataNotInstructionsFence()
-	// Always ground the assistant in the embedded application knowledge, whether
-	// the persona is the default or an admin override.
+	// Always ground the assistant in the embedded application knowledge.
 	if k := strings.TrimSpace(appKnowledge); k != "" {
 		return persona + "\n\n" + k
 	}
@@ -145,7 +146,7 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 	question := ai.LatestUserMessage(operatorTurns)
 	msgs := ai.ServerConversation(operatorTurns)
 	// Server-controlled system prompt — req.System is intentionally ignored.
-	system := s.copilotSystemPrompt()
+	system := s.copilotSystemPrompt(s.orgContextBlock(r.Context(), claims))
 
 	// One brain (N-A5): the grounded engine for this request is built at most
 	// once and shared — the agent loop runs on ITS registry and policy engine,

@@ -88,6 +88,11 @@ var routeIsolationLedger = map[string]string{
 	// colleague and an as_tenant walk get 404. nlquery_querylog_isolation_test.go.
 	"/api/ai/queries":  "scoped",
 	"/api/ai/queries/": "scoped",
+	// Network context (N-F1): tenant from the token (RLS org_context_* + store
+	// tenant key); a Global view must choose a workspace; a foreign id → 404,
+	// foreign approve/rollback/retire → 404 — org_context_isolation_test.go.
+	"/api/ai/context":  "scoped",
+	"/api/ai/context/": "scoped",
 	// AI decision ledger (N-A6): appended in the asker's tenant from the token
 	// (RLS ai_decision_ledger, append-only); read by a workspace admin (own
 	// tenant only — another tenant's decision id lists nothing, as_tenant is

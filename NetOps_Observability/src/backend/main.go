@@ -104,6 +104,7 @@ import (
 	"netops/backend/internal/pipedebug"
 	// DEBUG-ROUTES-END
 	"netops/backend/internal/irisstream"
+	"netops/backend/internal/orgcontext"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/quarantine"
@@ -387,6 +388,10 @@ type server struct {
 	aiToolGateway *ai.ToolGateway
 	// irisStreamMetrics counts streamed Iris answers (tracker 337 N-E2).
 	irisStreamMetrics *irisstream.Metrics
+	// orgContext is the Network context store (tracker 337 N-F1); nil on a
+	// file-backend deployment (the routes answer 503).
+	orgContext        orgcontext.Store
+	orgContextMetrics *orgcontext.Metrics
 	// Investigation hypotheses (tracker 337 N-B3): each investigation's set,
 	// held per tenant (bounded, in memory) so the trace can be re-opened by id.
 	// nil = not held (the answer still carries its own set).
@@ -1209,6 +1214,8 @@ func newServer() *server {
 		aiDecisionMetrics: aidecision.NewMetrics(),
 		aiToolGateway:     ai.NewToolGateway(),
 		irisStreamMetrics: &irisstream.Metrics{},
+		orgContext:        newOrgContextStore(),
+		orgContextMetrics: &orgcontext.Metrics{},
 		aiHypotheses:      irishypo.NewMemStore(),
 
 		deviceSites: deviceSites,
@@ -3784,6 +3791,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/commands", s.handleAICommands)              // slash-command registry for the "/" menu
 	mux.HandleFunc("/api/ai/commands/suggestions", s.handleAICommands)  // typed-fragment suggestions
 	mux.HandleFunc("/api/ai/feedback", s.handleAIFeedback)              // thumbs up/down (audited)
+	mux.HandleFunc("/api/ai/context", s.handleAIContext)                // Iris Network context (N-F1): facts, review, history
+	mux.HandleFunc("/api/ai/context/", s.handleAIContext)               // /preview · /{id} · /{id}/{draft,submit,withdraw,approve,reject,rollback,retire}
 	mux.HandleFunc("/api/ai/aliases", s.handleAIAliases)                // Iris NL: per-tenant entity aliases (N-C2)
 	mux.HandleFunc("/api/ai/entities/resolve", s.handleAIEntityResolve) // Iris NL: resolution ladder (N-C2)
 	mux.HandleFunc("/api/ai/query/compile", s.handleAIQueryCompile)     // Iris NL: question → validated query (N-C5)
@@ -4627,6 +4636,7 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	s.nlqQueryLogMetrics.Write(w)    // Iris query capture + corrections (N-C8); nil-safe
 	s.aiDecisionMetrics.Write(w)     // Iris AI decision ledger appends (N-A6); nil-safe
 	_ = s.irisStreamMetrics.Write(w) // best-effort: nil-safe; a failed scrape write surfaces to the scraper
+	_ = s.orgContextMetrics.Write(w) // Network context reads (N-F1); nil-safe, best-effort like the line above
 	if s.aiToolGateway != nil {
 		_ = s.aiToolGateway.Metrics.Write(w) // best-effort: a failed scrape write surfaces to the scraper, not here
 	}

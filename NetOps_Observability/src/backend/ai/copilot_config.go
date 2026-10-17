@@ -42,8 +42,11 @@ type CopilotConfig struct {
 	// provider account, not a second provider chain.
 	ModelFast   string `json:"model_fast,omitempty"`
 	ModelStrong string `json:"model_strong,omitempty"`
-	System      string `json:"system"`        // optional system-prompt override ("" => default)
-	Key         string `json:"key,omitempty"` // provider API key — sealed at rest, never sent to clients
+	// System (a platform-wide persona override) was RETIRED by tracker 337
+	// N-F1: customer knowledge now lives in the per-tenant, two-person-approved
+	// Network context store. A stored legacy value is ignored and reported once
+	// at load (legacySystemNotice); the next save drops it.
+	Key string `json:"key,omitempty"` // provider API key — sealed at rest, never sent to clients
 }
 
 // Models projects the stored config onto the router's tier→model mechanism.
@@ -105,6 +108,7 @@ func (s *CopilotConfigStore) load() error {
 	if err := json.Unmarshal(b, &c); err != nil {
 		return fmt.Errorf("decode copilot config: %w", err)
 	}
+	legacySystemNotice(b)
 	// Decrypt the key (no-op when the sealer is dormant / nil). A failed unseal
 	// must NOT leave the sealed bytes in place as the API key: every provider
 	// call would then fail authentication and read as "the provider rejected
@@ -149,7 +153,6 @@ func (s *CopilotConfigStore) Set(c CopilotConfig) CopilotConfig {
 	// model at one price until an operator deliberately splits them.
 	c.ModelFast = strings.TrimSpace(c.ModelFast)
 	c.ModelStrong = strings.TrimSpace(c.ModelStrong)
-	c.System = strings.TrimSpace(c.System)
 	c.Key = strings.TrimSpace(c.Key)
 	s.mu.Lock()
 	// A blank key on save preserves the stored one — the GET form is redacted and
@@ -184,4 +187,17 @@ func (s *CopilotConfigStore) APIKey() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return strings.TrimSpace(s.cfg.Key)
+}
+
+// legacySystemNotice reports a retired persona override still present in a
+// stored config. It is not applied: a platform-wide free-text prompt is what
+// N-F1 replaced (it reached every tenant, with no author, approver or history).
+func legacySystemNotice(b []byte) {
+	var legacy struct {
+		System string `json:"system"`
+	}
+	if json.Unmarshal(b, &legacy) == nil && strings.TrimSpace(legacy.System) != "" {
+		applog.Warn("copilot.config", "a stored assistant persona override is no longer used; write the knowledge as Network context facts (Administration → Network context)",
+			map[string]any{"chars": len(legacy.System)})
+	}
 }

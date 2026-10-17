@@ -249,6 +249,17 @@ func ContractFor(name string) (ToolContract, bool) {
 	return c, ok
 }
 
+// ToolNames returns every contracted tool name, sorted (the Network context
+// validator refuses a fact that names one, N-F1).
+func ToolNames() []string {
+	names := make([]string, 0, len(toolContracts))
+	for n := range toolContracts {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // CheckToolContracts validates the whole table; the server calls it at boot
 // and refuses to start on an invalid table (a programming error, not input).
 func CheckToolContracts() error {

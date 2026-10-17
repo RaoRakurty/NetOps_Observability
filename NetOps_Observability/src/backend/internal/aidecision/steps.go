@@ -99,6 +99,16 @@ func (r *Recorder) AddEvidence(citationIDs []string) {
 	r.Add(Entry{EventType: EvidenceAdded, ResultSHA256: SHA256Hex([]byte(strings.Join(ids, "\n"))), ItemCount: len(ids)})
 }
 
+// AddContext records that the customer's Network context (N-F1) rode this
+// decision's prompt: EVIDENCE_ADDED with outcome "org_context", the hash of the
+// rendered block and how many facts it held. Nothing when there were none.
+func (r *Recorder) AddContext(blockSHA256 string, facts int) {
+	if r == nil || facts <= 0 {
+		return
+	}
+	r.Add(Entry{EventType: EvidenceAdded, Outcome: "org_context", ResultSHA256: blockSHA256, ItemCount: facts})
+}
+
 // AddRecommendation records RECOMMENDATION_CREATED: the hash of the
 // recommendations' canonical encoding and how many there are.
 func (r *Recorder) AddRecommendation(encoded []byte, n int) {
