@@ -414,6 +414,8 @@ would violate it.
 | Flow evidence is availability-shaped only, and says so | ✅ | **BUILD** — `TestFlowSourceHealthStatesAreFourDifferentSentences`: every Data Health state for the flow source states that responsiveness is not measured and names the columns `netops.flows` does not carry |
 | An exporter that reports no TCP flags is `not_supported`, never a healthy zero | ✅ | **BUILD** — `TestResetRatioBranches`: the reset ratio's denominator is flag-bearing flows only, and "0 of 1000 flows carried control bits" is reported as an exporter gap with the IPFIX field named |
 | The flow read is tenant-scoped three times over and default-closed | ✅ | **BUILD** — `dem_flow_isolation_test.go`: no principal → refused with no query; a scope that disagrees with the requested tenant → refused with no query; a tenant with no devices → nothing, with no query; a scoped read carries only its own device addresses and its own declared endpoints; aggregates only, never a raw conversation |
+| Exporter application identity (IE 95/96) travels only as hex from goflow2, and is decoded and validated in one place | ✅ **on fixtures**, ❌ **not live** | **BUILD** — `tests/test_goflow2_mapping.py` (no `render:` entry; every deployment path passes the same mapping; the 50-field list is pinned to the image digest) and the vector-router `parse-trace.yaml` cases (engine 13 and engine 20 ids, NUL-padded names, a quote-bearing name and a forged bus value are dropped). Proven by hand 2026-10-11 against the pinned v2.2.1 image: goflow2's string renderer splices exporter bytes into the JSON unescaped (a field-injection), hex does not. Live proof needs an NBAR / FortiGate exporter: the lab exporters send no application fields |
+| An exporter that sends no application identity yields no name — never a guessed one, and the address verdict is unchanged | ✅ | **BUILD** — `TestAggregateFlowAppsCarriesTheExporterVerdict` (id-only rows claim no name; a port-engine id is a service class; rows with no usable verdict group as before), `TestParseExporterAppID`; the exporter verdict is reported beside the address verdict and NOT fused (exporter and catalog vocabularies differ, and the fusion's contradiction rule would demote names shown today) |
 
 **Standing gap — the honest one, updated 2026-09-05 (tracker 252).** Every row
 above is proven on FIXTURES. The second anchor-capable class shipped
@@ -423,7 +425,10 @@ live**, and two things stand between the fixture and the estate:
 
 1. **The lab has no flow evidence to produce.** Its exporters (172.40.40.51/.52)
    emit OSPF hello flows only: over seven days, 53 002 rows, `tcp_flags = 0` on
-   every one, `proto = 0` on all but a single UDP record, `tenant_id = ''`
+   every one, `proto = 0` on all but a single UDP record (**correction
+   2026-10-11:** that `0` was a DECODER defect, not the traffic — goflow2 names
+   OSPF "OSPFIGP" and the flow VRL mapped only 12 names, storing every other
+   one as 0/HOPOPT; the full 0-145 table now maps OSPF to 89), `tenant_id = ''`
    throughout, and **zero rows touching the DEM tenant's declared subjects**
    (172.40.40.11/.12). The producer correctly reports `no_data` there, and
    `can_confirm` correctly stays false. Live proof needs an exporter pointed at

@@ -88,7 +88,7 @@ func newSvcRollupWorker(s *server) *svcRollupWorker {
 			// synthesized tenant-scoped principal (a background worker has no
 			// request claims). Non-platform principals bypass the operator-
 			// visibility restriction path by construction.
-			clause, empty := s.addrTenantClauseFor(jwtClaims{Sub: "svc-rollup-worker", Role: RoleOperator, Tenant: tenant}, "src_addr", "dst_addr")
+			clause, empty := s.flowTenantClauseFor(jwtClaims{Sub: "svc-rollup-worker", Role: RoleOperator, Tenant: tenant})
 			return clause, empty
 		},
 		now: func() time.Time { return time.Now().UTC() },

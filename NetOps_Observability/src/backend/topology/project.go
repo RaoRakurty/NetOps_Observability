@@ -244,6 +244,12 @@ func nodeKind(d DeviceFact) string {
 	if k := kindFromKeyword(d.Type); k != "" {
 		return k
 	}
+	// Classified role (tracker 349): a device the type inference left generic
+	// can still be a WAN edge by evidence (SD-WAN personality, sysObjectID,
+	// interface markers, external BGP). Only an evidenced role is used.
+	if k := kindFromRole(ClassifyDeviceRole(d).Role); k != "" {
+		return k
+	}
 	// Vendor hint: a vendor whose own NAME is a role claim (a dedicated
 	// firewall / SD-WAN-security vendor) resolves straight to that kind. Which
 	// vendor spellings those are is the registry's to say
@@ -285,6 +291,24 @@ func kindFromKeyword(s string) string {
 		return KindServer
 	case "cloud-gw", "cloud", "cloud-gateway":
 		return KindCloud
+	default:
+		return ""
+	}
+}
+
+// kindFromRole maps a classified device role to a NodeKind ("" for unknown).
+func kindFromRole(role string) string {
+	switch role {
+	case DevRoleWANEdge, DevRoleDCWANEdge, DevRoleCoreRouter, DevRoleCarrierHop:
+		return KindRouter
+	case DevRoleFirewall:
+		return KindFirewall
+	case DevRoleLoadBalancer:
+		return KindLoadBalancer
+	case DevRoleCloudEdge:
+		return KindCloud
+	case DevRoleAccessSwitch, DevRoleDistributionSwitch, DevRoleDCLeaf, DevRoleDCSpine:
+		return KindSwitch
 	default:
 		return ""
 	}

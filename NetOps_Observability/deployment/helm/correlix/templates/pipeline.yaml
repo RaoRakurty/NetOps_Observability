@@ -290,6 +290,12 @@ spec:
             - netops.flows.raw
             - -transport.kafka.compression
             - snappy
+            # Exporter application identity (IE 95/96), kept hex — see
+            # files/goflow2/mapping.yaml.
+            - -mapping
+            - /etc/goflow2/mapping.yaml
+          volumeMounts:
+            - {name: goflow2-conf, mountPath: /etc/goflow2, readOnly: true}
           env:
             - {name: GOMEMLIMIT, value: {{ .Values.goflow2.goMemLimit | quote }}}
           ports:
@@ -303,6 +309,8 @@ spec:
           # Liveness for this lane is the flow ingest rate in rules.yaml.
           resources:
 {{ toYaml .Values.goflow2.resources | indent 12 }}
+      volumes:
+        - {name: goflow2-conf, configMap: {name: correlix-goflow2}}
 {{- end }}
 {{- if .Values.gnmic.enabled }}
 ---

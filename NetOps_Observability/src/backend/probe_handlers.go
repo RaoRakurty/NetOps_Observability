@@ -259,7 +259,7 @@ func (q demFlowQuerier) FlowStats(ctx context.Context, tenant string, subjects [
 		// wiring mistake about tenancy is no data at all.
 		return nil, fmt.Errorf("dem flow: the caller's tenant scope does not match the requested tenant, so the read is refused")
 	}
-	clause, empty := q.s.addrTenantClauseFor(claims, "src_addr", "dst_addr")
+	clause, empty := q.s.flowTenantClauseFor(claims)
 	if empty {
 		// Default-closed: this principal can see no device addresses, so it can
 		// see no flows. Reported as an empty answer, not as an error — the

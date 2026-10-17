@@ -1141,7 +1141,7 @@ func (s *server) handleBGPFeed(w http.ResponseWriter, r *http.Request) {
 			"updates": []any{},
 			"status": map[string]any{
 				"enabled": false, "producer": "ripestat-poll", "ring_size": bgpdepth.RingSize,
-				"note": "The near-live feed is off. Set " + bgpdepth.EnvFeatureFlag + "=true to enable it.",
+				"note": "The near-live feed is off. A platform administrator can turn on \"Live BGP update feed\" (" + bgpdepth.EnvFeatureFlag + ") in Platform → Configuration → Features.",
 			},
 		})
 		return

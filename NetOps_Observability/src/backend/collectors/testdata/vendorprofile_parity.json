@@ -14,6 +14,7 @@
     "30065": "arista",
     "3375": "f5",
     "41112": "ubiquiti",
+    "41916": "cisco",
     "6527": "nokia",
     "674": "dell",
     "8072": "net-snmp",
@@ -4442,6 +4443,10 @@
     {
       "SysDescr": "Some Linux box with big-ip absent",
       "Vendor": "f5"
+    },
+    {
+      "SysDescr": "Viptela vEdge Cloud, 20.6.4",
+      "Vendor": "cisco"
     }
   ]
 }

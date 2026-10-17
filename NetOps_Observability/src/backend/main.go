@@ -103,6 +103,7 @@ import (
 	"netops/backend/internal/parsetrace"
 	"netops/backend/internal/pipedebug"
 	// DEBUG-ROUTES-END
+	"netops/backend/internal/featureflags"
 	"netops/backend/internal/iriscache"
 	"netops/backend/internal/irisstream"
 	"netops/backend/internal/nlquery/modelc"
@@ -541,23 +542,24 @@ type server struct {
 	pathGraph       pathgraph.Store
 	pathFacts       pathFactSource
 	corrPath        corrPathRef
-	remotePaths     *remotePathStore      // remote-vantage traceroute pushes (POST /api/probe/paths)
-	integrations    *integration.Store    // integration-platform persistence (nil on file backend)
-	providers       *integration.Registry // inbound provider translators (registry)
-	nms             *nmsRuntime           // NMS vendor-controller framework #95 (nil unless FEATURE_NMS_INTEGRATIONS)
-	wireless        wireless.Store        // wireless canonical inventory #128 (always set: mem on file backend, PG on postgres)
-	wirelessActions *wirelessActionStore  // #128 Phase 8 guarded remediation (dormant unless FEATURE_WIRELESS_ACTIONS)
-	intMetrics      *integrationMetrics   // integration-platform Prometheus counters
-	vault           *vault.Vault          // secret-custody envelope (dormant unless SEAL_PROVIDER set)
-	tlsSrv          *tlsServer            // opt-in HTTPS/mTLS listener config (nil = plaintext)
-	tlsPeerProber   *tlsprobe.Prober      // SEC-019.1 served-cert expiry watcher (nil = plaintext baseline)
-	corrReconcile   corrReconcileStats    // tracker 328: corr_current reconciler gauges/counters
-	secMetrics      *secobs.Metrics       // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
-	transportInv    *secobs.Inventory     // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
-	exportPolicy    *exportPolicyStore    // runtime-tunable log-export limits
-	exportLimiter   *ratelimit.Limiter    // per-tenant export rate limit
-	copilotLimiter  *ratelimit.Limiter    // per-principal copilot rate limit (SR-021)
-	aiToolBudget    *ai.DailyBudget       // per-tenant daily token budget for the agent loop (P2, LLM04)
+	remotePaths     *remotePathStore                     // remote-vantage traceroute pushes (POST /api/probe/paths)
+	integrations    *integration.Store                   // integration-platform persistence (nil on file backend)
+	providers       *integration.Registry                // inbound provider translators (registry)
+	nms             *nmsRuntime                          // NMS vendor-controller framework #95 (nil unless FEATURE_NMS_INTEGRATIONS)
+	wireless        wireless.Store                       // wireless canonical inventory #128 (always set: mem on file backend, PG on postgres)
+	wirelessActions *wirelessActionStore                 // #128 Phase 8 guarded remediation (dormant unless FEATURE_WIRELESS_ACTIONS)
+	intMetrics      *integrationMetrics                  // integration-platform Prometheus counters
+	vault           *vault.Vault                         // secret-custody envelope (dormant unless SEAL_PROVIDER set)
+	tlsSrv          *tlsServer                           // opt-in HTTPS/mTLS listener config (nil = plaintext)
+	tlsPeerProber   *tlsprobe.Prober                     // SEC-019.1 served-cert expiry watcher (nil = plaintext baseline)
+	corrReconcile   corrReconcileStats                   // tracker 328: corr_current reconciler gauges/counters
+	sdwanOverlay    atomic.Pointer[sdwanOverlaySnapshot] // tracker 349: last inferred SD-WAN overlay (reconcile cycle)
+	secMetrics      *secobs.Metrics                      // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
+	transportInv    *secobs.Inventory                    // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
+	exportPolicy    *exportPolicyStore                   // runtime-tunable log-export limits
+	exportLimiter   *ratelimit.Limiter                   // per-tenant export rate limit
+	copilotLimiter  *ratelimit.Limiter                   // per-principal copilot rate limit (SR-021)
+	aiToolBudget    *ai.DailyBudget                      // per-tenant daily token budget for the agent loop (P2, LLM04)
 	copilotCfg      *copilotConfigStore
 	aiTenantCfg     *aiTenantConfigStore   // per-tenant AI entitlement + BYO provider key (P4a)
 	displayPrefs    *tenantDisplayStore    // per-tenant display prefs (Wave 4 #11: time display)
@@ -682,7 +684,12 @@ type server struct {
 	ldap        *ldapConfigStore
 	tacacs      *tacacsConfigStore
 	tokenPolicy *tokenPolicyStore
-	secPolicy   *policy.SecurityStore // #24 security-policy engine Source (catalog + per-scope overrides)
+	// features is the platform-admin Features page registry (tracker 348).
+	// Loaded before any reader of its flags runs. restart carries a
+	// "restart to apply" request to Run.
+	features  *featureflags.Registry
+	restart   *featureflags.RestartGate
+	secPolicy *policy.SecurityStore // #24 security-policy engine Source (catalog + per-scope overrides)
 	// ITSM connectors (ServiceNow + Jira) are PER-TENANT and owned by itsmCfg
 	// (itsm_config.go), which builds + hot-swaps them on save. Resolve a tenant's
 	// connector via serviceNowFor()/jiraFor(); the incident-projection worker keys
@@ -791,6 +798,15 @@ func newServer() *server {
 			map[string]any{"keys": recovered, "count": len(recovered)})
 	}
 
+	// Features page (tracker 348): saved feature switches are applied to the
+	// environment HERE — after the store is selected, before any collector,
+	// worker or module reads them — so what starts is what was saved.
+	features := featureflags.New(featureflags.PlatformSpecs(), featureflags.OSEnv{},
+		featureflags.KVStore{Key: "/data/feature_flags.json", LoadFn: platformdb.Load, SaveFn: platformdb.Save})
+	if err := features.Load(); err != nil {
+		logError("features", "saved feature settings could not be read — install values are in force and risky features are OFF until they load", errf(err))
+	}
+
 	// Secret-custody Vault (#17). Dormant (plaintext passthrough) unless
 	// SEAL_PROVIDER is set; fail closed if a configured provider can't unseal the
 	// root KEK — never silently fall back to storing secrets in the clear.
@@ -884,6 +900,17 @@ func newServer() *server {
 	pool.Enable("gnmi", os.Getenv("ENABLE_GNMI_COLLECTION") == "true")
 	pool.Enable("netconf", os.Getenv("ENABLE_NETCONF_COLLECTION") == "true")
 	pool.Enable("tunnels", os.Getenv("ENABLE_TUNNEL_DISCOVERY") == "true")
+	// SD-WAN overlay facts over SNMP (tracker 349): probes each device for the
+	// Viptela / Cisco SD-WAN BFD + TLOC tables with its stored credential and
+	// walks only the edges that answer. Read-only, UDP/161.
+	pool.Enable("sdwan_overlay", os.Getenv("ENABLE_SDWAN_OVERLAY") == "true")
+	// Routing instances (VRF / VPN / routing-instance / VPRN) and their member
+	// interfaces over SNMP, from whichever vendor or standard MIB the device
+	// answers (collectors/vrf_instances.go). Read-only, UDP/161.
+	pool.Enable("vrf_instances", os.Getenv("ENABLE_VRF_COLLECTION") == "true")
+	// BGP sessions inside those instances (collectors/bgp_vrf_peers.go) — the
+	// same switch: one feature, "VRFs and routing instances".
+	pool.Enable("bgp_vrf_peers", os.Getenv("ENABLE_VRF_COLLECTION") == "true")
 	pool.Enable("snmpmetrics", os.Getenv("ENABLE_SNMP_METRICS") == "true")
 	// Ubiquiti UniFi controller connector (device health via the controller API,
 	// not device SNMP). Opt-in; needs UNIFI_URL + creds.
@@ -1180,6 +1207,8 @@ func newServer() *server {
 	}
 
 	srv := &server{
+		features:         features,
+		restart:          featureflags.NewRestartGate(5 * time.Minute),
 		startedAt:        time.Now().UTC(),
 		workers:          &workerGroup{},
 		discovery:        d,
@@ -3019,8 +3048,14 @@ func Run() {
 		}
 	}()
 
-	<-stop
-	logInfo("shutdown", "shutdown requested", nil)
+	select {
+	case <-stop:
+		logInfo("shutdown", "shutdown requested", nil)
+	case <-srv.restart.C:
+		// Features page "restart to apply": the same graceful path; Run
+		// returns, the process exits 0 and its supervisor starts it again.
+		logInfo("shutdown", "restart requested from the Features page", nil)
+	}
 	// Order matters: stop accepting/finish in-flight HTTP first, THEN cancel the
 	// workers' context, THEN wait for them. Cancelling before the drain (and not
 	// waiting at all) is what abandoned in-flight ticketing/report/incident
@@ -3167,6 +3202,13 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/tacacs/config", s.handleTACACSConfig)
 	mux.HandleFunc("/api/auth/tacacs/test", s.handleTACACSTest)
 	mux.HandleFunc("/api/auth/token-policy", s.handleTokenPolicy)
+	// Features page (tracker 348): platform-global switches + restart-to-apply.
+	mux.HandleFunc("/api/platform/features", s.elevatedOnlyMutations(func(w http.ResponseWriter, r *http.Request) {
+		s.featuresAPI().HandleFeatures(w, r)
+	}))
+	mux.HandleFunc("/api/platform/restart", s.elevatedOnly(func(w http.ResponseWriter, r *http.Request) {
+		s.featuresAPI().HandleRestart(w, r)
+	}))
 	// Security Policy engine (#24): catalog, effective-policy/simulator, per-scope
 	// override editing. Admin-gated; system-scope writes are platform-owner only.
 	mux.HandleFunc("/api/policy/catalog", s.handlePolicyCatalog)
@@ -3534,6 +3576,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/tickets/audit", s.handleTicketsAudit)
 	mux.HandleFunc("/api/tickets/links", s.handleTicketsLinks)
 	mux.HandleFunc("/api/flows/flags", s.handleFlowsFlags)
+	mux.HandleFunc("/api/flows/coverage", s.handleFlowsCoverage)
 	mux.HandleFunc("/api/flows/geo", s.handleFlowsGeo)
 	mux.HandleFunc("/api/flows/by-proto", s.handleFlowsByProto)
 	mux.HandleFunc("/api/flows/by-type", s.handleFlowsByType)
@@ -4265,7 +4308,7 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		// Stable order: without one, paging over a map-backed aggregator can
 		// show the same device twice and never show another at all.
 		sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
-		rows := httppage.SliceOf(all, page)
+		rows := s.stampDeviceReadFields(r.Context(), claims, httppage.SliceOf(all, page))
 		httppage.LogTruncated("/api/devices", page, len(rows), len(all))
 		httppage.Write(w, "devices", rows, page, len(rows), len(all))
 	case http.MethodPost:
@@ -4430,6 +4473,7 @@ func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 		if d.Type == "" {
 			d.Type = inferDeviceType(d)
 		}
+		d = s.stampDeviceReadFields(r.Context(), claims, []models.Device{d})[0]
 		writeJSON(w, http.StatusOK, d)
 	case http.MethodDelete:
 		// SR-003: deleting a device is a write — gate it.
@@ -4511,9 +4555,11 @@ func (s *server) handleFeatures(w http.ResponseWriter, r *http.Request) {
 		// the caller's own tenant switches), so the SPA hides what this caller
 		// cannot use. Cosmetic only — every AI route gates server-side. It
 		// reads nothing about any tenant but the caller's own.
-		"ai_entitlements":     s.aiEntitlementsFor(claims),
-		"copilot":             os.Getenv("FEATURE_COPILOT") == "true",
-		"device_ssh":          os.Getenv("FEATURE_DEVICE_SSH") == "true",
+		"ai_entitlements": s.aiEntitlementsFor(claims),
+		"copilot":         os.Getenv("FEATURE_COPILOT") == "true",
+		"device_ssh":      os.Getenv("FEATURE_DEVICE_SSH") == "true",
+		// Configuration backup + drift (the inventory's Sync / Backup columns).
+		"config_backup":       os.Getenv("FEATURE_CONFIG_BACKUP") == "true",
 		"active_verification": os.Getenv("FEATURE_ACTIVE_VERIFICATION") == "true",
 		// item 121: the per-tenant pipeline processor editor. The API itself is
 		// always up (rules persist regardless); the flag gates UI visibility and
@@ -4753,6 +4799,11 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 		s.tlsPeerProber.WriteMetrics(w)
 	}
 	s.corrReconcile.WriteMetrics(w)
+	// SNMP column walks that hit their row bound before the column ended
+	// (collectors.snmpWalkColumn). Non-zero means some table was read partially.
+	fmt.Fprint(w, "# HELP collector_snmp_walk_truncated_total SNMP column walks stopped by the row bound before the column ended (rows past it were not read).\n")
+	fmt.Fprint(w, "# TYPE collector_snmp_walk_truncated_total counter\n")
+	fmt.Fprintf(w, "collector_snmp_walk_truncated_total %d\n", collectors.SNMPWalkTruncatedTotal())
 	if s.demMetrics != nil {
 		s.demMetrics.Write(w)
 	}
@@ -4957,6 +5008,29 @@ func envOr(key, fallback string) string {
 }
 
 func envBool(key string) bool { return os.Getenv(key) == "true" }
+
+// featuresAPI binds the Features page (internal/featureflags) to this server:
+// requirePlatformAdmin for every route, the strict audit trail, and the
+// restart gate Run waits on.
+func (s *server) featuresAPI() *featureflags.API {
+	return featureflags.NewAPI(s.features, s.restart, featureflags.Deps{
+		Authz: func(w http.ResponseWriter, r *http.Request) (featureflags.Caller, bool) {
+			claims, ok := s.requirePlatformAdmin(w, r)
+			return featureflags.Caller{Subject: claims.Sub, APIKey: strings.HasPrefix(claims.Sub, "apikey:")}, ok
+		},
+		AuditStrict: func(e featureflags.AuditEntry) error { return s.audit.RecordStrict(featureAudit(e)) },
+		Audit:       func(e featureflags.AuditEntry) { s.audit.Record(featureAudit(e)) },
+		WriteJSON:   writeJSON,
+		WriteErr:    writeError,
+		LogInfo:     func(msg string, f map[string]any) { logInfo("features", msg, f) },
+		Supervised:  func() bool { return featureflags.Supervised(os.LookupEnv) },
+		Now:         time.Now,
+	})
+}
+
+func featureAudit(e featureflags.AuditEntry) AuditEvent {
+	return AuditEvent{Actor: e.Subject, Cross: true, Method: e.Method, Path: e.Path, Status: e.Status, Decision: e.Outcome, Detail: e.Detail}
+}
 
 // ---------------------------------------------------------------------------
 // Package-wide helpers (Phase-2 Wave 0b consolidation, 2026-07-29).

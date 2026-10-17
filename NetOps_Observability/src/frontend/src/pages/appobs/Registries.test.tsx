@@ -214,7 +214,7 @@ describe("Registries — a service's grouping rule (selectors)", () => {
     await openDrawer();
     await screen.findByText("1 · in force");
     fireEvent.change(screen.getByLabelText("Destination ports"), { target: { value: "443, 8443" } });
-    fireEvent.change(screen.getByLabelText("Destination prefixes"), { target: { value: "10.0.0.0/8" } });
+    fireEvent.change(screen.getByLabelText("Service addresses"), { target: { value: "10.0.0.0/8" } });
     fireEvent.change(screen.getByLabelText("Protocol numbers"), { target: { value: "6" } });
     fireEvent.click(screen.getByRole("button", { name: "Save version 2" }));
     await waitFor(() => expect(mock.addCatalogServiceSelector).toHaveBeenCalledWith(SVC_ID, {

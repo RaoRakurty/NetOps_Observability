@@ -27,8 +27,20 @@
 //     resulting label set outright: "{device, vendor, ifName, transport} for
 //     interfaces/resources, + {peer, vrf} for BGP".
 //
-// So on today's deployment an interface's VRF membership is NOT COLLECTED, and
-// this module says exactly that. It never invents a "default" group: "every
+// ── UPDATE 2026-10-11: membership IS collected over SNMP ───────────────────
+//
+// The routing-instance collector (collectors/vrf_instances.go) reads instances
+// and interface membership from whichever VRF MIB the device answers — RFC 4382
+// MPLS-L3VPN-STD-MIB, the draft MPLS-VPN-MIB, CISCO-VRF-MIB, JUNIPER-VPN-MIB,
+// ARISTA-VRF-MIB, TIMETRA-VRTR-MIB (Nokia SR OS), VIPTELA-OPER-VPN (vEdge) — and
+// publishes device_vrf_info / device_vrf_if_info. This module joins
+// device_vrf_if_info on ifName (MembershipObserved) and lists device_vrf_info
+// as routing_instances with the device's own word (TermFromKinds). The rest of
+// this comment still holds for devices that answer none of those MIBs (SONiC,
+// SR Linux, Junos virtual-router instances: gNMI only).
+//
+// Where neither lane reports it, an interface's VRF membership is NOT
+// COLLECTED, and this module says exactly that. It never invents a "default" group: "every
 // interface is in the default VRF" is a claim about the device, and we have no
 // evidence for it. An operator who reads "default" would design around it.
 //

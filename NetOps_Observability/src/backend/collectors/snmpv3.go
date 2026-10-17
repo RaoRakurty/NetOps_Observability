@@ -816,11 +816,11 @@ func snmpGetV3(ctx context.Context, addr string, creds snmpCreds, oid []int) (be
 	return berVal{tag: valTag, raw: append([]byte(nil), val...)}, nil
 }
 
-func snmpWalkColumnV3(ctx context.Context, addr string, creds snmpCreds, col []int) (map[string]berVal, error) {
+func snmpWalkColumnV3(ctx context.Context, addr string, creds snmpCreds, col []int, maxRows int) (map[string]berVal, bool, error) {
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "udp", addr)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer c.Close()
 	if dl, ok := ctx.Deadline(); ok {
@@ -828,23 +828,23 @@ func snmpWalkColumnV3(ctx context.Context, addr string, creds snmpCreds, col []i
 	}
 	sess, err := discoverV3(c, creds)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	out := make(map[string]berVal)
 	cur := col
-	for iter := 0; iter < 4096; iter++ {
+	for iter := 0; iter < maxRows; iter++ {
 		valTag, val, oid, err := sess.exchange(c, 0xA1, cur, iter+2)
 		if err != nil {
-			return out, err
+			return out, false, err
 		}
 		if valTag == tagEndOfMibView || valTag == tagNoSuchObject || valTag == tagNoSuchInstance {
-			break
+			return out, false, nil
 		}
 		if !oidUnder(oid, col) {
-			break
+			return out, false, nil
 		}
 		out[oidSuffix(oid, col)] = berVal{tag: valTag, raw: append([]byte(nil), val...)}
 		cur = oid
 	}
-	return out, nil
+	return out, true, nil // the bound stopped the walk; the column continues
 }

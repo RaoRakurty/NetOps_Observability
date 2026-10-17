@@ -23,6 +23,9 @@ const PRESETS: Record<LayoutType, LayoutPreset> = {
   // role partitioning — the mode-agnostic whole-tenant graph never asked for
   // DC spine/leaf tiering.
   layered: { intent: "layered", direction: "DOWN", layerSpacing: 110, nodeSpacing: 70 },
+  // SD-WAN / WAN overlay: laid out by wanOverlayLayout (transports in the
+  // middle, sites around them); the preset only serves fallbacks.
+  wan_overlay: { intent: "wan_overlay", direction: "DOWN", layerSpacing: 110, nodeSpacing: 70 },
 };
 
 export function presetFor(layoutType: LayoutType): LayoutPreset {

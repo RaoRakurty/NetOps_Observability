@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"netops/backend/internal/chschema"
+	"netops/backend/models"
 )
 
 // isAlphaToken reports whether s is non-empty and contains only ASCII letters.
@@ -97,6 +99,12 @@ var flowTopDims = map[string]flowTopDim{
 	"src_port": {"toString(src_port)", "src_port"},
 	"dst_port": {"toString(dst_port)", "dst_port"},
 	"proto":    {"toString(proto)", ""},
+	// service_port is the LIKELY service end of a conversation, "<proto>/<port>":
+	// the lower of the two ports, since a client speaks from an ephemeral (high)
+	// port to the service's (low) one. It folds a conversation's two directions —
+	// request (dst_port = service) and reply (src_port = service) — into one row.
+	// A heuristic, and labelled as one wherever it is shown; never an app name.
+	"service_port": {"concat(toString(proto), '/', toString(least(src_port, dst_port)))", "least(src_port, dst_port)"},
 }
 
 // handleFlowsTopN is the generic top-N-by-dimension endpoint backing the NetFlow
@@ -219,6 +227,45 @@ SELECT tcp_flags,
  GROUP BY tcp_flags
  ORDER BY flows DESC
  LIMIT ` + intToString(limit) + `
+ FORMAT JSON`
+	s.proxyClickHouse(w, r, sql)
+}
+
+// handleFlowsCoverage says what the flows in the window CAN show, so every
+// Explore Flows tab explains an empty panel instead of claiming "no flow
+// records" (owner report 2026-10-10: AS, Geo, Flags, Applications were empty
+// while 29k flows/hour arrived). One scan, the SAME tenant clause and
+// flow-type filter as the tabs it explains, so it can never count rows a tab
+// could not show.
+func (s *server) handleFlowsCoverage(w http.ResponseWriter, r *http.Request) {
+	since := durationQuery(r, "since", time.Hour)
+	tenantClause, empty := s.flowTenantClause(r)
+	if empty {
+		writeEmptyClickHouse(w)
+		return
+	}
+	filter, err := flowFilterClause(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	priv := func(col string) string {
+		return "(isIPAddressInRange(" + col + ", '10.0.0.0/8') OR isIPAddressInRange(" + col + ", '172.16.0.0/12')" +
+			" OR isIPAddressInRange(" + col + ", '192.168.0.0/16') OR isIPAddressInRange(" + col + ", '100.64.0.0/10')" +
+			" OR isIPAddressInRange(" + col + ", '127.0.0.0/8') OR isIPAddressInRange(" + col + ", '169.254.0.0/16')" +
+			" OR isIPAddressInRange(" + col + ", 'fc00::/7') OR isIPAddressInRange(" + col + ", 'fe80::/10'))"
+	}
+	sql := `
+SELECT count()                                       AS flows,
+       countIf(proto = 6)                            AS tcp_flows,
+       countIf(proto = 6 AND tcp_flags > 0)          AS tcp_flows_with_flags,
+       countIf(src_as > 0 OR dst_as > 0)             AS flows_with_as,
+       countIf(` + priv("src_addr") + ` AND ` + priv("dst_addr") + `) AS private_only_flows,
+       countIf(exporter_app_id != '')                AS flows_with_app_id,
+       countIf(exporter_app_name != '')              AS flows_with_app_name,
+       uniqExact(sampler_address)                    AS exporters
+  FROM netops.flows
+ WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + filter + `
  FORMAT JSON`
 	s.proxyClickHouse(w, r, sql)
 }
@@ -504,30 +551,55 @@ func flowTypeClause(r *http.Request) string {
 }
 
 // flowTenantClause builds the SQL fragment that restricts flow rows to a scoped
-// principal's devices (matched on src_addr/dst_addr). It returns ("", false) for
-// cross-tenant principals (no restriction) and ("", true) when the principal has
-// no visible device addresses (caller should short-circuit to an empty result).
+// principal's devices. It returns ("", false) for cross-tenant principals (no
+// restriction) and ("", true) when the principal has no visible device
+// addresses (caller should short-circuit to an empty result).
 func (s *server) flowTenantClause(r *http.Request) (clause string, empty bool) {
 	claims, _ := userFrom(r.Context())
-	return s.addrTenantClauseFor(claims, "src_addr", "dst_addr")
+	return s.flowTenantClauseFor(claims)
 }
 
-// addrTenantClauseFor is the claims-based core of flowTenantClause, shared with
-// the AI DataSource (which has claims, not a request). The CH row policies share
-// untagged telemetry rows to every tenant scope by design (hybrid model), so THIS
-// app-layer narrowing is the isolation for untagged rows — a scoped principal
-// reads only rows touching its own device addresses, and a principal with no
-// devices reads nothing (default-closed).
+// flowTenantClauseFor is the netops.flows form of addrTenantClauseFor. A flow
+// record belongs to the tenant whose device EXPORTED it, not only to the tenant
+// whose device is one of its two endpoints: a router reports the traffic it
+// forwards, and almost none of that traffic is to or from the router's own
+// management address. Matching endpoints alone hid every transit flow from the
+// very tenant whose router saw it. So a scoped principal reads a flow when its
+// exporter (sampler_address) OR either endpoint is one of its own devices.
+// Shared/global devices are not in a scoped principal's address set, so a
+// shared exporter grants nothing (strict isolation is unchanged).
+func (s *server) flowTenantClauseFor(claims jwtClaims) (clause string, empty bool) {
+	return s.addrTenantClauseCols(claims, "src_addr", "dst_addr", "sampler_address")
+}
+
+// addrTenantClauseFor is the claims-based core for tables keyed by two endpoint
+// addresses, shared with the AI DataSource (which has claims, not a request).
+// The CH row policies share untagged telemetry rows to every tenant scope by
+// design (hybrid model), so THIS app-layer narrowing is the isolation for
+// untagged rows — a scoped principal reads only rows touching its own device
+// addresses, and a principal with no devices reads nothing (default-closed).
+// For netops.flows use flowTenantClauseFor, which also matches the exporter.
 func (s *server) addrTenantClauseFor(claims jwtClaims, srcCol, dstCol string) (clause string, empty bool) {
+	return s.addrTenantClauseCols(claims, srcCol, dstCol, "")
+}
+
+// addrTenantClauseCols matches the principal's device addresses against the
+// endpoint columns and, when exporterCol is set, the exporter column too.
+func (s *server) addrTenantClauseCols(claims jwtClaims, srcCol, dstCol, exporterCol string) (clause string, empty bool) {
 	addrs, cross := s.visibleDeviceAddrs(claims)
 	// Compliance (operator-visibility): deny if the operator scoped into a
-	// restricted tenant; in the Global view exclude restricted tenants' devices.
+	// restricted tenant; in the Global view exclude restricted tenants' devices
+	// — as endpoints, and as the exporter that saw the traffic.
 	if rt := s.restrictedTelemetry(claims); rt.deny {
 		return "", true
 	} else if cross {
 		if len(rt.addrs) > 0 {
 			in := sqlInList(rt.addrs)
-			return " AND " + srcCol + " NOT IN (" + in + ") AND " + dstCol + " NOT IN (" + in + ")", false
+			c := " AND " + srcCol + " NOT IN (" + in + ") AND " + dstCol + " NOT IN (" + in + ")"
+			if exporterCol != "" {
+				c += " AND " + exporterCol + " NOT IN (" + in + ")"
+			}
+			return c, false
 		}
 		return "", false
 	}
@@ -535,7 +607,11 @@ func (s *server) addrTenantClauseFor(claims jwtClaims, srcCol, dstCol string) (c
 		return "", true
 	}
 	in := sqlInList(addrs)
-	return " AND (" + srcCol + " IN (" + in + ") OR " + dstCol + " IN (" + in + "))", false
+	c := " AND (" + srcCol + " IN (" + in + ") OR " + dstCol + " IN (" + in + ")"
+	if exporterCol != "" {
+		c += " OR " + exporterCol + " IN (" + in + ")"
+	}
+	return c + ")", false
 }
 
 // deviceTenantCondFor is the device-keyed sibling of addrTenantClauseFor for
@@ -648,7 +724,13 @@ func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
 	if len(conds) > 0 {
 		where = " WHERE " + strings.Join(conds, " AND ") + " "
 	}
-	// Alias-shadowing guard (tracker 200) — same reasoning as handleFindings:
+	// SD-WAN tunnels (tracker 349): a Viptela/IOS XE SD-WAN tunnel is not an
+	// IF-MIB/TUNNEL-MIB interface, so the interface-based discovery behind
+	// netops.tunnels never sees it (owner report 2026-10-10: "vEdge tunnels are
+	// not showing"). They come from the SD-WAN overlay facts — never written to
+	// netops.tunnels, whose seam rule would turn every session into a VPN seam
+	// suggestion — and are merged here, for the caller's visible devices only.
+	sdwanRows := sdwanTunnelRows(s.sdwanOverlay.Load(), s.visibleDevicesFor(claims), r.URL.Query().Get("status"), limit, time.Now())
 	// `ts` is the wire field, so the ORDER BY is TABLE-QUALIFIED rather than
 	// renamed, and the fold sorts the DateTime column, never the ISO String.
 	sql := `
@@ -661,7 +743,91 @@ SELECT id, type, local_device, local_addr, remote_device, remote_addr,
  LIMIT 1 BY id
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
-	s.proxyClickHouse(w, r, sql)
+	if len(sdwanRows) == 0 {
+		s.proxyClickHouse(w, r, sql) // unchanged path: no SD-WAN tunnels visible
+		return
+	}
+	rows, err := s.chRows(r, sql)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, errors.New("tunnel inventory is unavailable"))
+		return
+	}
+	for _, sr := range sdwanRows {
+		if len(rows) >= limit {
+			break
+		}
+		rows = append(rows, sr)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": rows, "rows": len(rows)})
+}
+
+// sdwanTunnelRows lists the SD-WAN tunnels of the caller's visible devices as
+// tunnel rows: one per (device, remote edge, local colour, remote colour). The
+// remote device is named only when it resolves to a device of the SAME tenant
+// (the overlay inference is tenant-partitioned); otherwise the row carries the
+// remote system-ip. Latency/jitter/loss are not read over SNMP and stay 0.
+func sdwanTunnelRows(snap *sdwanOverlaySnapshot, visible []models.Device, status string, limit int, now time.Time) []map[string]any {
+	if snap == nil || len(snap.devFacts) == 0 || limit <= 0 {
+		return nil
+	}
+	tenantOf := make(map[string]string, len(visible))
+	nameOf := make(map[string]string, len(visible))
+	ids := make([]string, 0, len(visible))
+	for _, d := range visible {
+		tenantOf[d.ID] = normTenant(d.TenantID)
+		nameOf[d.ID] = firstNonEmpty(d.Name, d.ID)
+		ids = append(ids, d.ID)
+	}
+	sort.Strings(ids)
+	ts := snap.at.UTC().Format(time.RFC3339)
+	var out []map[string]any
+	for _, dev := range ids {
+		f, ok := snap.devFacts[dev]
+		if !ok {
+			continue
+		}
+		owners := snap.res.SystemIPs[tenantOf[dev]]
+		for _, p := range f.Peers {
+			remote := p.SystemIP
+			if owner, ok := owners[p.SystemIP]; ok {
+				if n, visibleToo := nameOf[owner]; visibleToo {
+					remote = n
+				}
+			}
+			remoteAddr := ""
+			if len(p.TLOCAddrs) > 0 {
+				remoteAddr = p.TLOCAddrs[0]
+			}
+			for _, cp := range p.ColorPairs {
+				st := "down"
+				if cp.Up > 0 {
+					st = "up"
+				}
+				if (status == "up" || status == "down") && st != status {
+					continue
+				}
+				out = append(out, map[string]any{
+					"id":            "sdwan|" + dev + "|" + p.SystemIP + "|" + cp.LocalColor + "|" + cp.RemoteColor,
+					"type":          "sdwan",
+					"local_device":  nameOf[dev],
+					"local_addr":    cp.LocalColor,
+					"remote_device": remote,
+					"remote_addr":   firstNonEmpty(remoteAddr, cp.RemoteColor),
+					"status":        st,
+					// Path quality is not read over SNMP for an SD-WAN tunnel:
+					// "measured": false makes the view show "—", never a 0 ms
+					// that reads like a perfect link.
+					"latency_ms": 0, "jitter_ms": 0, "loss_pct": 0, "qoe": 0, "uptime_s": 0,
+					"measured": false,
+					"ts":       ts,
+				})
+				if len(out) >= limit {
+					return out
+				}
+			}
+		}
+	}
+	return out
 }
 
 // intQuery parses a bounded integer query parameter.

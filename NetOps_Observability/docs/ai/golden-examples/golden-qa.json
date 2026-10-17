@@ -1437,6 +1437,18 @@
       "notes": "nav-leaf coverage (N-G1): Security \u2192 Threat Detection \u2192 Network Behavior"
     },
     {
+      "id": "docs-120",
+      "category": "docs",
+      "question": "How do I turn a feature on, like SSH to devices or configuration backup?",
+      "expect": {
+        "slugs": [
+          "administration/features"
+        ]
+      },
+      "nav": "platform/features",
+      "notes": "nav-leaf coverage (N-G1): Platform \u2192 Configuration \u2192 Features"
+    },
+    {
       "id": "intent-001",
       "category": "intent",
       "question": "show me the top talkers",

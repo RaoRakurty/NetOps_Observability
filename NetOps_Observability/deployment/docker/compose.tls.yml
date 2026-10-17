@@ -710,6 +710,8 @@ services:
       - "netops.flows.raw"
       - "-transport.kafka.compression"
       - "snappy"
+      - "-mapping"
+      - "/etc/goflow2/mapping.yaml"
     environment:
       SSL_CERT_FILE: /tls/ca.pem
     volumes:

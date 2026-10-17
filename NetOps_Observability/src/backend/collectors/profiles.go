@@ -132,6 +132,10 @@ func builtinProfiles() []SNMPProfile {
 				// hand it to nobody. SNMP-owned until a gNMI source exists (found by
 				// tests/test_gnmi_ownership_contract.py while fixing tracker 230).
 				{Name: "device_bgp_in_updates", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 10}, Table: true, IndexLabel: "peer"}, // bgpPeerInUpdates
+				// bgpPeerRemoteAs — the device detail shows each peer's AS (owner report
+				// 2026-10-10: the AS column was always blank over SNMP). SNMP-owned: no
+				// gNMI series of this name exists, so an Owner would hand it to nobody.
+				{Name: "device_bgp_peer_remote_as", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 9}, Table: true, IndexLabel: "peer"}, // bgpPeerRemoteAs
 				// OSPF-MIB neighbor/interface state — SNMP-owned (gNMI carries IS-IS here,
 				// not OSPF). IndexLabel "neighbor" is the canonical adjacency identity.
 				{Name: "device_ospf_nbr_state", OID: []int{1, 3, 6, 1, 2, 1, 14, 10, 1, 6}, Table: true, IndexLabel: "neighbor"}, // ospfNbrState
@@ -186,6 +190,7 @@ func builtinProfiles() []SNMPProfile {
 			Metrics: []SNMPMetric{
 				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 4, 1, 9, 9, 109, 1, 1, 1, 1, 8}, Table: true, Owner: "gnmi"}, // cpmCPUTotal5minRev
 				{Name: "device_mem_used_bytes", OID: []int{1, 3, 6, 1, 4, 1, 9, 9, 48, 1, 1, 1, 5}, Table: true},                 // ciscoMemoryPoolUsed
+				{Name: "device_mem_free_bytes", OID: []int{1, 3, 6, 1, 4, 1, 9, 9, 48, 1, 1, 1, 6}, Table: true},                 // ciscoMemoryPoolFree
 				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 9, 9, 13, 1, 3, 1, 3}, Table: true, Owner: "gnmi"},    // ciscoEnvMonTemperatureValue
 			},
 		},

@@ -59,6 +59,13 @@ export type Device = {
   /** The telemetry configured for the device (snmp, gnmi, …). Several methods
    *  are still ONE monitored device: display, never a count. */
   monitor_methods?: string[];
+  /** Live liveness from the collectors' own polls — the ONE status every
+   *  inventory surface renders. Server-stamped on read. */
+  reachability?: "up" | "down" | "partial" | "unknown";
+  /** OS version resolved from the device's own description ("" when absent). */
+  software_version?: string;
+  /** The location configured ON the device (SNMP sysLocation); "" when unset. */
+  configured_location?: string;
 };
 
 /** GET /api/devices/{id}/monitoring — read-only status. */
@@ -1724,6 +1731,9 @@ export type Tunnel = {
   loss_pct: number;
   qoe: number;
   uptime_s: number;
+  /** false for a tunnel whose path quality is not measured (SD-WAN tunnels
+   *  read from the overlay): latency/jitter/loss/QoE render as "—". */
+  measured?: boolean;
 };
 
 // ---------- Vulnerability Management (#13) ----------
@@ -5069,9 +5079,40 @@ export interface VrfDialect {
 
 /** A routing instance the device's BGP control-plane series report. That lane
  *  carries the instance NAME but not which interfaces belong to it. */
+/** One switchable feature on the Features page (backend feature_flags.go). */
+export interface PlatformFeature {
+  env: string;
+  label: string;
+  group: string;
+  help: string;
+  /** "live": in force when saved. "restart": in force after the api restarts. */
+  apply: "live" | "restart";
+  /** Reaches into the network or out of the platform; turning it on needs a confirmation. */
+  risky: boolean;
+  running: boolean;
+  desired: boolean;
+  restart_pending: boolean;
+  source: "console" | "install" | "default";
+  install_value: boolean | null;
+  updated_by?: string;
+  updated_at?: string;
+}
+
+export interface PlatformFeatures {
+  features: PlatformFeature[];
+  restart_pending: boolean;
+  can_restart: boolean;
+  store_load_error: string;
+}
+
 export interface VrfRoutingInstance {
   name: string;
+  /** "bgp_control_plane", or the VRF MIB the device answered ("mpls-l3vpn", "viptela-vpn", …). */
   source: string;
+  /** The device's own word: vrf / vpn / routing-instance / vprn / vr. */
+  kind?: string;
+  /** Route distinguisher, when the source reports one. */
+  rd?: string;
 }
 
 export interface VrfInterfacesResponse {
@@ -5314,6 +5355,12 @@ export type FlowAppRow = {
   bytes: number;
   flows: number;
   dests: number;
+  /** What the exporter's own DPI called it (IPFIX/NetFlow v9 IE 96), app-kind ids only. */
+  exporter_app?: string;
+  /** IE 95 as "<engine>:<selector>" or "20:<pen>:<selector>" (RFC 6759). */
+  exporter_app_id?: string;
+  /** app | service_class | unclassified | unknown */
+  exporter_app_kind?: string;
 };
 export type FlowAppsResp = {
   apps: FlowAppRow[];
@@ -5365,6 +5412,8 @@ export type VerificationSettingsPatch = {
 export interface FeatureFlags {
   copilot?: boolean;
   device_ssh?: boolean;
+  /** Configuration backup + drift (FEATURE_CONFIG_BACKUP). */
+  config_backup?: boolean;
   active_verification?: boolean;
   processors?: boolean;
   ai_entitlements?: string[];
@@ -5657,6 +5706,15 @@ export const api = {
   testTacacs: (username?: string, password?: string) =>
     request<AuthTestResult>("/api/auth/tacacs/test", { method: "POST", body: JSON.stringify({ username, password }) }),
 
+  // Features page (tracker 348) — platform-owner only; switches are platform-global.
+  platformFeatures: () => request<PlatformFeatures>("/api/platform/features"),
+  setPlatformFeature: (env: string, value: boolean, acknowledge?: string) =>
+    request<{ feature: PlatformFeature; restart_pending: boolean }>("/api/platform/features", {
+      method: "PUT",
+      body: JSON.stringify(acknowledge ? { env, value, acknowledge } : { env, value }),
+    }),
+  restartPlatform: () => request<{ status: string }>("/api/platform/restart", { method: "POST" }),
+
   // Token policy (access/refresh lifetimes) — admin-gated, clamped server-side.
   tokenPolicy: () => request<TokenPolicy>("/api/auth/token-policy"),
   saveTokenPolicy: (p: { access_ttl_seconds: number; refresh_ttl_seconds: number }) =>
@@ -5924,6 +5982,12 @@ export const api = {
   flowsByProto: (sinceSeconds = 3600, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
       `/api/flows/by-proto?since=${sinceSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
+    ),
+  // Coverage of the window: what the flow records actually carry (TCP, flags,
+  // AS numbers, public addresses) so an empty panel can say WHY it is empty.
+  flowsCoverage: (sinceSeconds = 3600, type = "", filters?: FlowFilters) =>
+    request<ClickHouseResponse>(
+      `/api/flows/coverage?since=${sinceSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
     ),
   flowsByType: (sinceSeconds = 3600) =>
     request<ClickHouseResponse>(`/api/flows/by-type?since=${sinceSeconds}s`),

@@ -59,9 +59,12 @@ deliberately not asked to do anything else.
   polls the device list and produces `netops.metrics` to the bus directly.
   Telegraf is **legacy and does not run** (`profiles: [legacy]` in compose,
   kept only for archaeology); do not point an incident investigation at it.
-* **goflow2** decodes NetFlow v5/v9, IPFIX, sFlow and emits one JSON
-  record per flow to stdout. Vector picks them up via `docker_logs`.
-  Config: `deployment/docker/goflow2/goflow2.yaml`.
+* **goflow2** decodes NetFlow v5/v9, IPFIX, sFlow and produces one JSON
+  record per flow to Kafka (`netops.flows.raw`); vector-router re-keys it by
+  tenant onto `netops.flows`. Settings are flags on the compose `command:`;
+  the one mounted file is `deployment/docker/goflow2/mapping.yaml` (exporter
+  application identity, IE 95/96, kept hex). `goflow2.yaml` beside it is
+  reference documentation of the flow schema.
 
 The collectors run as separate containers so they can be scaled
 independently — a high-flow site can run multiple goflow2 instances

@@ -186,8 +186,8 @@ function SelectorSection({ service }: { service: CatalogServiceRow }) {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <input className="app-input" style={{ flex: "1 1 150px" }} aria-label="Destination ports"
             placeholder="ports, e.g. 443 8443" value={draft.ports} disabled={saving} onChange={set("ports")} />
-          <input className="app-input" style={{ flex: "1 1 180px" }} aria-label="Destination prefixes"
-            placeholder="destinations, e.g. 10.0.0.0/8" value={draft.prefixes} disabled={saving} onChange={set("prefixes")} />
+          <input className="app-input" style={{ flex: "1 1 180px" }} aria-label="Service addresses"
+            placeholder="service addresses, e.g. 10.0.0.0/8" value={draft.prefixes} disabled={saving} onChange={set("prefixes")} />
           <input className="app-input" style={{ flex: "1 1 130px" }} aria-label="Protocol numbers"
             placeholder="protocols, e.g. 6" value={draft.protocols} disabled={saving} onChange={set("protocols")} />
         </div>

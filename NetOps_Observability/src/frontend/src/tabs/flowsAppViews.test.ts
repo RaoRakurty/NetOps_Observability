@@ -12,6 +12,7 @@
 import { describe, it, expect } from "vitest";
 import type { FlowAppRow, FlowServiceRow } from "../services/api";
 import {
+  exporterView,
   UNKNOWN_APP,
   UNKNOWN_MEANING,
   UNMEASURED_LABEL,
@@ -280,5 +281,26 @@ describe("the drill is honest about what it cannot do", () => {
     expect(n).toMatch(/not narrowed/i);
     expect(n).toMatch(/address-level/i);
     expect(DRILL_ACTION).toMatch(/Conversations/);
+  });
+});
+
+describe("exporterView — the exporter's own classification in plain words", () => {
+  const row = (o: Partial<FlowAppRow>): FlowAppRow => ({ app: "unknown", tier: "undetermined", bytes: 1, flows: 1, dests: 1, ...o });
+  it("shows an exporter-named application as named", () => {
+    const v = exporterView(row({ exporter_app: "ms-office-365", exporter_app_id: "13:453", exporter_app_kind: "app" }));
+    expect(v).toMatchObject({ label: "ms-office-365", named: true });
+    expect(v.title).toMatch(/13:453/);
+  });
+  it("never invents a name for an id-only row", () => {
+    expect(exporterView(row({ exporter_app_id: "13:77", exporter_app_kind: "app" }))).toMatchObject({ label: "id 13:77", named: false });
+  });
+  it("calls a port-engine id a service class", () => {
+    expect(exporterView(row({ exporter_app_id: "3:443", exporter_app_kind: "service_class" })).label).toBe("port/protocol 3:443");
+  });
+  it("shows a dash when the exporter sent nothing", () => {
+    expect(exporterView(row({}))).toMatchObject({ label: "—", named: false });
+  });
+  it("keys rows by the exporter verdict too, so two verdicts on one pair are two rows", () => {
+    expect(appRowKey(row({ exporter_app_id: "13:1" }))).not.toBe(appRowKey(row({ exporter_app_id: "13:2" })));
   });
 });

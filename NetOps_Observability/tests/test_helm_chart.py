@@ -252,6 +252,9 @@ def test_staged_configs_match_canonical_sources():
 WHOLE_DIR_MOUNTS = {
     "deployment/docker/syslog-ng": ("syslog-ng", {}),
     "deployment/docker/gnmic": ("gnmic", {}),
+    "deployment/docker/goflow2": ("goflow2", {
+        "goflow2.yaml": "reference documentation of the flow schema; goflow2 reads only mapping.yaml",
+    }),
     "deployment/docker/vector": ("vector", {
         "tests": "Vector unit-test fixtures; not read at runtime",
         "generated": "spliced INTO vector.yaml at generation time, staged flat "

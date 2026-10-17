@@ -379,7 +379,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.device }} BGP peer {{ $labels.peer }} not established"
+          summary: "{{ $labels.device }} BGP peer {{ $labels.peer }}{{ if $labels.vrf }} in {{ $labels.vrf }}{{ end }} not established"
 
       - alert: BGPPeerFlapping
         expr: increase(device_bgp_fsm_transitions[15m]) > 3
@@ -404,6 +404,28 @@ groups:
           severity: critical
         annotations:
           summary: "{{ $labels.device }} has zero established BGP peers (isolation)"
+
+      # Cisco SD-WAN OMP (collectors/sdwan_omp.go). device_omp_peer_state is the
+      # MIB enum: up(3) and up-in-graceful-restart(8) are healthy. Emitted per
+      # peer on EDGES only (a controller lists every edge); device_omp_peers
+      # carries the up / not_up counts for every SD-WAN device.
+      - alert: OMPPeerDown
+        expr: device_omp_peer_state != 3 and device_omp_peer_state != 8
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} OMP session to {{ $labels.type }} {{ $labels.peer }} is not up"
+
+      # No controller session at all: the edge forwards on its last routes until
+      # the graceful-restart timer expires, then loses the overlay.
+      - alert: OMPNoControllers
+        expr: device_omp_peers{state="up"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} has no OMP session up to any SD-WAN controller"
 
       - alert: OSPFAdjacencyDown   # OSPF-MIB ospfNbrState (8=full); SNMP-owned, labelled {neighbor}
         expr: device_ospf_nbr_state != 8

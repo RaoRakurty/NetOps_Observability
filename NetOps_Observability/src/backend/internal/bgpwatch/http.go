@@ -168,7 +168,7 @@ func parseLimit(raw string, def, max int) (int, error) {
 }
 
 // disabledNote is the honest answer when FEATURE_BGP_ALERTS is off.
-const disabledNote = "BGP alerting is off. Set " + EnvFeatureFlag + "=true to run the watchlist evaluator. " +
+const disabledNote = "BGP alerting is off. A platform administrator can turn on \"BGP alerts\" (" + EnvFeatureFlag + ") in Platform → Configuration → Features to run the watchlist evaluator. " +
 	"An empty list here means the evaluator has not run — NOT that nothing is wrong."
 
 // HandleAlerts serves GET /api/bgp/alerts.

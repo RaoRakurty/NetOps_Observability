@@ -43,7 +43,9 @@ export type LayoutType =
   // (GET /api/topology/graph → ToView) declares. It used to be outside this
   // union, so presetFor silently substituted the spine_leaf DC tiering the
   // graph never asked for (audit S6).
-  | "layered";
+  | "layered"
+  // SD-WAN: transports in the middle, branch sites around them (tracker 349).
+  | "wan_overlay";
 
 export type NodeKind =
   | "switch"
@@ -99,6 +101,7 @@ export type EdgeRelationship =
   | "path_hop" // a hop on a traced A→B path
   | "dependency" // flow/observed dependency
   | "containment" // cloud/group membership
+  | "overlay" // SD-WAN tunnels between two edges (observed BFD sessions)
   | "inferred"; // derived, not directly observed
 
 /** Visual treatment hint chosen by the adapter (not a wire field). */

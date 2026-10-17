@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"netops/backend/chhttp"
@@ -241,18 +242,55 @@ func firstVarbind(pkt []byte, expectReqID int) (oid []int, valTag byte, val []by
 
 // ---- SNMP table-column walk -----------------------------------------------
 
+// snmpWalkMaxRows bounds one column walk for the general-purpose collectors
+// (guard against a misbehaving agent looping its GetNext answers).
+const snmpWalkMaxRows = 4096
+
+// snmpWalkTruncated counts column walks that hit their row bound with the
+// column not yet exhausted. Before 2026-10-10 a walk that hit the bound
+// returned what it had with a nil error, indistinguishable from a complete
+// table (§10). Published as collector_snmp_walk_truncated_total.
+var (
+	snmpWalkTruncated      atomic.Int64
+	snmpWalkTruncatedLogAt atomic.Int64 // unix seconds of the last truncation log line
+)
+
+// SNMPWalkTruncatedTotal snapshots the truncation counter for /metrics.
+func SNMPWalkTruncatedTotal() int64 { return snmpWalkTruncated.Load() }
+
 // snmpWalkColumn GetNext-walks one MIB column subtree, returning a map keyed by
 // the row index (the OID arcs trailing the column OID). One UDP socket is
 // reused for the whole walk; ctx's deadline bounds the column's total time.
+//
+// A walk that reaches snmpWalkMaxRows returns the rows it read, exactly as
+// before (every existing caller treats an error as "no column", so failing the
+// walk would throw away 4,096 good rows), but it is now COUNTED and logged.
+// A caller that must know whether it has the whole table uses
+// snmpWalkColumnBounded.
 func snmpWalkColumn(ctx context.Context, addr string, creds snmpCreds, col []int) (map[string]berVal, error) {
+	out, truncated, err := snmpWalkColumnBounded(ctx, addr, creds, col, snmpWalkMaxRows)
+	if truncated {
+		snmpWalkTruncated.Add(1)
+		now := time.Now().Unix()
+		if last := snmpWalkTruncatedLogAt.Load(); now-last >= 60 && snmpWalkTruncatedLogAt.CompareAndSwap(last, now) {
+			log.Printf("snmp walk TRUNCATED at %d rows: target=%s column=%s (the table is larger than the walk bound; rows past it were not read)",
+				snmpWalkMaxRows, addr, oidString(col))
+		}
+	}
+	return out, err
+}
+
+// snmpWalkColumnBounded walks one column, reading at most maxRows rows, and
+// reports whether the bound stopped it before the column ended.
+func snmpWalkColumnBounded(ctx context.Context, addr string, creds snmpCreds, col []int, maxRows int) (map[string]berVal, bool, error) {
 	if creds.isV3() {
-		return snmpWalkColumnV3(ctx, addr, creds, col)
+		return snmpWalkColumnV3(ctx, addr, creds, col, maxRows)
 	}
 	community := creds.Community
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "udp", addr)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer c.Close()
 	if dl, ok := ctx.Deadline(); ok {
@@ -262,10 +300,10 @@ func snmpWalkColumn(ctx context.Context, addr string, creds snmpCreds, col []int
 	out := make(map[string]berVal)
 	cur := col
 	buf := make([]byte, 8192)
-	for iter := 0; iter < 4096; iter++ { // guard against a misbehaving agent
+	for iter := 0; iter < maxRows; iter++ {
 		reqID := iter + 1
 		if _, err := c.Write(buildSNMPGetNext(community, cur, reqID)); err != nil {
-			return out, err
+			return out, false, err
 		}
 		// Read until we get THIS request's response: a delayed retransmit from an
 		// earlier iteration echoes an older request-id and must be discarded, not
@@ -278,29 +316,29 @@ func snmpWalkColumn(ctx context.Context, addr string, creds snmpCreds, col []int
 		for stale := 0; ; stale++ {
 			n, rerr := c.Read(buf)
 			if rerr != nil {
-				return out, rerr
+				return out, false, rerr
 			}
 			oid, valTag, val, err = firstVarbind(buf[:n], reqID)
 			if err == nil || !errors.Is(err, errStaleResponse) {
 				break
 			}
 			if stale >= 8 {
-				return out, fmt.Errorf("snmp walk: too many stale responses at reqID %d: %w", reqID, err)
+				return out, false, fmt.Errorf("snmp walk: too many stale responses at reqID %d: %w", reqID, err)
 			}
 		}
 		if err != nil {
-			return out, err
+			return out, false, err
 		}
 		if valTag == tagEndOfMibView || valTag == tagNoSuchObject || valTag == tagNoSuchInstance {
-			break
+			return out, false, nil
 		}
 		if !oidUnder(oid, col) {
-			break // walked out of the column subtree
+			return out, false, nil // walked out of the column subtree
 		}
 		out[oidSuffix(oid, col)] = berVal{tag: valTag, raw: append([]byte(nil), val...)}
 		cur = oid
 	}
-	return out, nil
+	return out, true, nil // the bound stopped the walk; the column continues
 }
 
 // oidUnder reports whether oid is a strict descendant of prefix.

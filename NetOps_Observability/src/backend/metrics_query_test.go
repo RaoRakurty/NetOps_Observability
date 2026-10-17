@@ -42,8 +42,8 @@ func TestMetricsScopeFiltersScopedWithDevices(t *testing.T) {
 	joined := strings.Join(got, " ")
 	for _, want := range []string{
 		`{device=~"core-1"}`,
-		`{hostname=~"core-1\.acme"}`, // regex metachars escaped
-		`{source=~"core-1\.acme"}`,
+		`{hostname=~"core-1\.acme",device=""}`, // regex metachars escaped
+		`{source=~"core-1\.acme",device=""}`,
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing filter %q in %v", want, got)
@@ -151,4 +151,105 @@ func TestVisibleDeviceMetricLabelsCrossTenant(t *testing.T) {
 	if ids != nil || names != nil {
 		t.Errorf("cross-tenant must return nil sets; got ids=%v names=%v", ids, names)
 	}
+}
+
+// A tenant whose device is NAMED like a constant some collector puts in the
+// `source` label ("derived", "sdwan-system", "mpls-l3vpn") must not read other
+// tenants' series through the name matchers: those match only series that
+// carry no device label at all.
+func TestMetricsScopeNameMatchersNeverAdmitDeviceLabelledSeries(t *testing.T) {
+	got := metricsScopeFilters([]string{"t1-dev"}, []string{"derived", "sdwan-system", "mpls-l3vpn"}, false)
+	for _, f := range got {
+		if strings.Contains(f, "hostname=~") || strings.Contains(f, "source=~") {
+			if !strings.Contains(f, `device=""`) {
+				t.Errorf("name matcher %q admits series of ANY device — cross-tenant read", f)
+			}
+		}
+	}
+	// Simulate VictoriaMetrics' extra_filters semantics (series admitted when
+	// ANY filter's matchers all hold) over another tenant's constant-source
+	// series and over a legitimate device-less Telegraf series.
+	foreign := map[string]string{"__name__": "device_mem_percent", "device": "t2-core", "source": "derived"}
+	telegraf := map[string]string{"__name__": "cpu_usage", "hostname": "derived"}
+	if admitted(got, foreign) {
+		t.Error("TENANT LEAK: another tenant's device series admitted via source=\"derived\"")
+	}
+	if !admitted(got, telegraf) {
+		t.Error("a device-less series of the caller's own named device must still be admitted")
+	}
+}
+
+// admitted evaluates the simple {label=~"a|b",label=""} filters the scope
+// builder emits against one series.
+func admitted(filters []string, series map[string]string) bool {
+	for _, f := range filters {
+		ok := true
+		for _, m := range strings.Split(strings.Trim(f, "{}"), ",") {
+			switch {
+			case strings.Contains(m, "=~"):
+				kv := strings.SplitN(m, "=~", 2)
+				vals := strings.Split(strings.Trim(kv[1], `"`), "|")
+				hit := false
+				for _, v := range vals {
+					if strings.ReplaceAll(v, `\.`, ".") == series[kv[0]] {
+						hit = true
+					}
+				}
+				ok = ok && hit
+			case strings.Contains(m, "="):
+				kv := strings.SplitN(m, "=", 2)
+				ok = ok && series[kv[0]] == strings.Trim(kv[1], `"`)
+			}
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+// The exclusion partitions series by the presence of a device label: a
+// restricted device is hidden however it is identified, and ANOTHER device's
+// series is not hidden because its constant `source` equals a restricted
+// device's name.
+func TestMetricsExcludeFiltersPartitionByDeviceLabel(t *testing.T) {
+	f := metricsExcludeFilters([]string{"acme-core"}, []string{"derived"})
+	restricted := map[string]string{"__name__": "device_cpu_percent", "device": "acme-core"}
+	restrictedByName := map[string]string{"__name__": "cpu_usage", "hostname": "derived"}
+	other := map[string]string{"__name__": "device_mem_percent", "device": "globex-core", "source": "derived"}
+	if admittedEx(f, restricted) || admittedEx(f, restrictedByName) {
+		t.Errorf("a restricted device's series slipped through: %v", f)
+	}
+	if !admittedEx(f, other) {
+		t.Errorf("an unrestricted device's series was over-excluded by a constant source label: %v", f)
+	}
+}
+
+// admittedEx evaluates the exclusion filters (OR across filters; =, !=, !~
+// within one) against one series.
+func admittedEx(filters []string, series map[string]string) bool {
+	for _, f := range filters {
+		ok := true
+		for _, m := range strings.Split(strings.Trim(f, "{}"), ",") {
+			switch {
+			case strings.Contains(m, "!~"):
+				kv := strings.SplitN(m, "!~", 2)
+				for _, v := range strings.Split(strings.Trim(kv[1], `"`), "|") {
+					if v == series[kv[0]] {
+						ok = false
+					}
+				}
+			case strings.Contains(m, "!="):
+				kv := strings.SplitN(m, "!=", 2)
+				ok = ok && series[kv[0]] != strings.Trim(kv[1], `"`)
+			case strings.Contains(m, "="):
+				kv := strings.SplitN(m, "=", 2)
+				ok = ok && series[kv[0]] == strings.Trim(kv[1], `"`)
+			}
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
 }

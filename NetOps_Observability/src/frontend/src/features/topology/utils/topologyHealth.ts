@@ -84,6 +84,8 @@ export const SOURCE_BASE_CONFIDENCE: Record<TopologySource, number> = {
   flow: 0.65, // flow-only dependency
   syslog: 0.55,
   manual: 0.8,
+  sdwan_bfd: 0.9, // observed BFD sessions between two SD-WAN edges
+  sdwan_tloc: 0.6, // transport attachment: the network behind a colour is inferred
 };
 
 export const SOURCE_LABEL: Record<TopologySource, string> = {
@@ -101,6 +103,8 @@ export const SOURCE_LABEL: Record<TopologySource, string> = {
   syslog: "Syslog",
   metric: "Metric",
   manual: "Manual",
+  sdwan_bfd: "SD-WAN tunnels (BFD)",
+  sdwan_tloc: "SD-WAN transport",
 };
 
 /** Confidence thresholds: below LOW = inferred/dashed; below DOTTED = dotted line. */

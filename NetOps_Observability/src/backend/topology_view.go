@@ -6,6 +6,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -330,7 +331,7 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 		Now:      time.Now(),
 		SrcID:    strings.TrimSpace(r.URL.Query().Get("src")),
 		DstID:    strings.TrimSpace(r.URL.Query().Get("dst")),
-		Devices:  toDeviceFacts(devs, lm.cpu, lm.mem, links),
+		Devices:  toDeviceFacts(devs, lm.cpu, lm.mem, links, s.gatherWANFacts(r.Context(), devs, s.metricsScopeFiltersFor(claims))),
 		Links:    linkFacts,
 		Alerts:   toAlertFacts(alerts),
 		// Item 121: devices inside an active window render the calm
@@ -347,8 +348,21 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 		in.CloudNodes, in.CloudEdges, in.CloudGroups = s.cloudPathGraph(r, tenant, cross, devs)
 	}
 
+	// SD-WAN branch segmentation: an edge with no site of record is grouped by
+	// the SD-WAN site its peers report (owner, 2026-10-10) — before projection,
+	// so the existing site grouping draws the branches.
+	switch mode {
+	case topology.ModeExplore, topology.ModeInvestigate, topology.ModeCapacity:
+		applySDWANSites(in.Devices, s.sdwanOverlay.Load())
+	}
 	view := topology.Project(in)
 	view.Degraded = append(view.Degraded, degraded...)
+	// SD-WAN overlay (tracker 349) on the physical views — never on path_trace
+	// (the SPF graph does not cross the WAN yet), dependency or geo.
+	switch mode {
+	case topology.ModeExplore, topology.ModeInvestigate, topology.ModeCapacity:
+		attachSDWANOverlay(&view, s.sdwanOverlay.Load(), in.Devices, devs, time.Now())
+	}
 	// Path Trace: attach per-hop STAMP metrics (latency/jitter/delay/loss) to the
 	// hops on the resolved path so the NetworkPathView ribbon shows them hop-by-hop.
 	if mode == topology.ModePathTrace && len(view.Path) > 0 {
@@ -414,12 +428,195 @@ func (s *server) projectGeoView(ctx context.Context, claims jwtClaims, tenant st
 	})
 }
 
+// applySDWANSites gives each device with NO site of record the SD-WAN site its
+// overlay peers report. A site assigned by an operator or a source of truth
+// always wins; facts are the caller's visible devices only.
+func applySDWANSites(facts []topology.DeviceFact, snap *sdwanOverlaySnapshot) {
+	if snap == nil {
+		return
+	}
+	for i := range facts {
+		if facts[i].Site != "" {
+			continue
+		}
+		if site := snap.res.DeviceSites[facts[i].ID]; site != "" {
+			facts[i].Site = "SD-WAN site " + site
+		}
+	}
+}
+
+// attachSDWANOverlay appends the part of the inferred SD-WAN overlay
+// (tracker 349) the caller can see, and nothing else (§3a):
+//
+//   - an overlay edge only when BOTH ends are devices in the caller's view;
+//   - a membership edge only from a visible device;
+//   - a transport node only when at least one visible device attaches to it,
+//     with its member count recomputed from the visible members (the count of
+//     another principal's devices is not disclosed through it).
+//
+// It also says, in Degraded, when the overlay is stale or when classified
+// SD-WAN edges have no overlay data at all — a missing tunnel must read as
+// "not observed", never as "not connected".
+func attachSDWANOverlay(view *topology.View, snap *sdwanOverlaySnapshot, facts []topology.DeviceFact, devs []models.Device, now time.Time) {
+	visible := make(map[string]bool, len(devs))
+	for _, d := range devs {
+		visible[d.ID] = true
+	}
+	var appended map[string]bool
+	if snap != nil {
+		if age := now.Sub(snap.at); age > 5*time.Minute {
+			view.Degraded = append(view.Degraded, fmt.Sprintf("The SD-WAN overlay is %d minutes old — the background refresh has not run since", int(age.Minutes())))
+		}
+		appended = map[string]bool{}
+		present := make(map[string]bool, len(view.Nodes))
+		for _, n := range view.Nodes {
+			present[n.ID] = true
+		}
+		visibleMembers := map[string]int{}
+		for _, e := range snap.res.Edges {
+			switch e.Relationship {
+			case topology.RelOverlay:
+				if visible[e.Source] && visible[e.Target] {
+					view.Edges = append(view.Edges, e)
+					appended[e.Source], appended[e.Target] = true, true
+				}
+			case topology.RelInferred:
+				if visible[e.Source] {
+					view.Edges = append(view.Edges, e)
+					visibleMembers[e.Target]++
+					appended[e.Source] = true
+				}
+			}
+		}
+		for _, n := range snap.res.Nodes {
+			cnt := visibleMembers[n.ID]
+			if cnt == 0 || present[n.ID] {
+				continue
+			}
+			// A view that carries WAN transports is drawn as a WAN: transports in
+			// the middle, sites around them — not spine/leaf tiers.
+			view.LayoutType = "wan_overlay"
+			if total := int(n.Metrics["members"]); cnt < total {
+				// Partial visibility: disclose only what this caller can see.
+				n.Metrics = map[string]float64{"members": float64(cnt)}
+			}
+			view.Nodes = append(view.Nodes, n)
+		}
+	}
+	// SD-WAN edges the overlay knows nothing about.
+	missing := 0
+	for _, f := range facts {
+		if !visible[f.ID] {
+			continue
+		}
+		rr := topology.ClassifyDeviceRole(f)
+		if rr.WANFlavor != topology.WANFlavorSDWAN || (rr.Role != topology.DevRoleWANEdge && rr.Role != topology.DevRoleDCWANEdge) {
+			continue
+		}
+		if snap == nil || (!snap.facts[f.ID] && !appended[f.ID]) {
+			missing++
+		}
+	}
+	if missing > 0 {
+		view.Degraded = append(view.Degraded, fmt.Sprintf(
+			"%d SD-WAN edge(s) are shown without their tunnels: Correlix could not yet match them to the tunnels their peers report. Check that the edge answers SNMP for its interface addresses (and, on IOS XE SD-WAN, release 17.6.1a or later for the SD-WAN tables)", missing))
+	}
+}
+
+// wanFacts carries the WAN-edge flavor inputs toDeviceFacts injects
+// (tracker 349): interface names (SD-WAN interface markers) and the count of
+// BGP peers outside the device's own tenant inventory.
+type wanFacts struct {
+	ifNames     map[string][]string
+	externalBGP map[string]int
+	personality map[string]string // SD-WAN overlay collector (collectors.FetchOverlayFacts)
+	systemIP    map[string]string
+}
+
+// gatherWANFacts reads the WAN-edge flavor inputs for devs. filters scopes the
+// BGP peer read: a request passes metricsScopeFiltersFor(claims); the
+// background reconciler, which has no principal, passes nil EXPLICITLY at its
+// call site. Every read here is best-effort and only ever ADDS evidence; an
+// unread source is logged (§10) and leaves those facts zero, which the
+// classifier treats as absence of evidence.
+func (s *server) gatherWANFacts(ctx context.Context, devs []models.Device, filters []string) *wanFacts {
+	out := &wanFacts{ifNames: map[string][]string{}, externalBGP: map[string]int{},
+		personality: map[string]string{}, systemIP: map[string]string{}}
+	if len(devs) == 0 {
+		return out
+	}
+	in := make(map[string]bool, len(devs))
+	for _, d := range devs {
+		in[d.ID] = true
+	}
+	// SD-WAN overlay facts: keyed by device id and read only for devices the
+	// caller can see, so another tenant's edge never contributes (§3a).
+	overlay, err := collectors.FetchOverlayFacts(ctx)
+	if err != nil {
+		logWarn("topology", "SD-WAN overlay facts unread — SD-WAN edges classify from identity strings and interface markers only this cycle",
+			map[string]any{"devices": len(devs), "error": err.Error()})
+	}
+	for dev, f := range overlay {
+		if in[dev] {
+			out.personality[dev] = f.Personality
+			out.systemIP[dev] = f.SystemIP
+		}
+	}
+	ifIdx, err := collectors.FetchIfIndexMap(ctx)
+	if err != nil {
+		logWarn("topology", "interface names unread — SD-WAN interface markers unavailable to the role classifier",
+			map[string]any{"devices": len(devs), "error": err.Error()})
+	}
+	for dev, byIndex := range ifIdx {
+		if in[dev] {
+			out.ifNames[dev] = topology.SortedIfNames(byIndex)
+		}
+	}
+	ifAddr, err := collectors.FetchIfAddrMap(ctx)
+	if err != nil {
+		logWarn("topology", "interface addresses unread — a BGP peer on an inventory interface may count as external this cycle",
+			map[string]any{"devices": len(devs), "error": err.Error()})
+	}
+	bgp := topology.BGPPeerInputs{
+		DevTenant: make(map[string]string, len(devs)),
+		DevAddrs:  make(map[string][]string, len(devs)),
+		Peers:     map[string][]string{},
+	}
+	for _, d := range devs {
+		bgp.DevTenant[d.ID] = normTenant(d.TenantID)
+		addrs := []string{d.Address}
+		for ip := range ifAddr[d.ID] {
+			addrs = append(addrs, ip)
+		}
+		bgp.DevAddrs[d.ID] = addrs
+	}
+	qctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	// Global-table peers only: a BGP session inside a VRF (PE-CE, SD-WAN service
+	// VPN) says nothing about the device being a routed WAN edge, and counting
+	// it flipped core/DC routers with VRF peers to "routed WAN edge". BGP4-MIB
+	// series carry no vrf label; the gNMI and VRF-peer lanes say "default".
+	peers := s.qVecBy2Scoped(qctx, `max by (device, peer) (last_over_time(device_bgp_peer_state{vrf=~"|(?i:default|global|master)"}[15m]))`, "device", "peer", filters)
+	if peers == nil {
+		logWarn("topology", "BGP peer state unread — routed WAN edges cannot be told from other routers this cycle",
+			map[string]any{"devices": len(devs)})
+	}
+	for k := range peers {
+		if in[k[0]] {
+			bgp.Peers[k[0]] = append(bgp.Peers[k[0]], k[1])
+		}
+	}
+	out.externalBGP = topology.ExternalBGPPeerCounts(bgp)
+	return out
+}
+
 // toDeviceFacts translates inventory + metric vectors into projection input. The
 // metric vectors are keyed by device id (the "device" label = inventory id).
 // links (may be nil) adds the LLDP/CDP/BGP-LS adjacency shape the role
 // classifier consumes (device_roles.go); absent links simply leave those facts
 // zero — the classifier treats that as absence of evidence, never a signal.
-func toDeviceFacts(devs []models.Device, cpu, mem map[string]float64, links []topoLink) []topology.DeviceFact {
+// wan (may be nil) adds the WAN-edge flavor facts (tracker 349).
+func toDeviceFacts(devs []models.Device, cpu, mem map[string]float64, links []topoLink, wan *wanFacts) []topology.DeviceFact {
 	typeByID := make(map[string]string, len(devs))
 	for _, d := range devs {
 		typeByID[d.ID] = inferDeviceType(d)
@@ -449,6 +646,13 @@ func toDeviceFacts(devs []models.Device, cpu, mem map[string]float64, links []to
 			f.Rack = d.Labels["rack"]
 			f.Owner = firstNonEmpty(d.Labels["owner"], d.Labels["team"])
 			f.Role = d.Labels["role"]
+			f.SiteKind = firstNonEmpty(d.Labels["site_kind"], d.Labels["site_type"])
+		}
+		if wan != nil {
+			f.IfNames = wan.ifNames[d.ID]
+			f.ExternalBGPPeers = wan.externalBGP[d.ID]
+			f.SDWANPersonality = wan.personality[d.ID]
+			f.SDWANSystemIP = wan.systemIP[d.ID]
 		}
 		if v, ok := cpu[d.ID]; ok {
 			f.CPUPct, f.HasCPU = v, true
@@ -457,6 +661,14 @@ func toDeviceFacts(devs []models.Device, cpu, mem map[string]float64, links []to
 			f.MemPct, f.HasMem = v, true
 		}
 		out = append(out, f)
+	}
+	// Fabric adjacency needs every device's facts first (a neighbor is a
+	// leaf/spine by its own facts, never by its neighbors).
+	if len(links) > 0 {
+		fc := topology.FabricNeighborCounts(out, links)
+		for i := range out {
+			out[i].FabricNeighborCount = fc[out[i].ID]
+		}
 	}
 	return out
 }

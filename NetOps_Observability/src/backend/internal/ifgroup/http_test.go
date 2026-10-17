@@ -235,6 +235,12 @@ func TestEveryMetricsReadCarriesTheCallersBoundary(t *testing.T) {
 	if len(f.queries) == 0 {
 		t.Fatal("no metrics read was issued")
 	}
+	all := strings.Join(f.queries, "\n")
+	for _, want := range []string{"device_vrf_info", "device_vrf_if_info"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("the %s read is missing — collected membership would never be shown", want)
+		}
+	}
 	for i, q := range f.queries {
 		if len(f.filters[i]) == 0 {
 			t.Errorf("UNSCOPED metrics read: %q", q)
