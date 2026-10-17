@@ -1972,7 +1972,7 @@ code, kbd, pre, .mono, td.mono {
 .drawer-close:hover { color: var(--fg); }
 .drawer-body { flex: 1; overflow: auto; padding: 16px; }
 
-/* ----- Opsis Ai assistant — modern chat ----- */
+/* ----- Iris AI assistant — modern chat ----- */
 .op-drawer { width: min(540px, 96vw); }
 .op-head {
   display: flex; align-items: center; justify-content: space-between;

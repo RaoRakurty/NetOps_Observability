@@ -33,7 +33,7 @@ applies to the platform operator, and is a no-op when no tenant is restricted.
     the export spec** at request time, so a queued export can't exfiltrate later.
   - `GET /api/logs/indices` — restricted tenants' index names filtered out
     (zero-knowledge); **fails closed** (empty) on any parse error.
-  - Opsis Ai "+ context" reads through `/api/logs/search`, so it inherits it.
+  - Iris AI "+ context" reads through `/api/logs/search`, so it inherits it.
 
 ✅ **ClickHouse + VictoriaMetrics** (`restrictedTelemetry`, device-keyed):
   - **Flows** (`flowTenantClause`) — `src/dst NOT IN` restricted tenants' device

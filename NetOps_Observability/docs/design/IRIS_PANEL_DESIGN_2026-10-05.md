@@ -28,7 +28,7 @@ The Iris conversation/content model (`docs/design/IRIS_AI_DESIGN.md`, the plan o
 
 | Concern | Today | This design |
 |---|---|---|
-| Container | `tabs/Opsis.tsx` header and body, opened via the shell's `copilotOpen` | One Iris container with a mode state machine. `Opsis.tsx` content is kept |
+| Container | `tabs/Iris.tsx` header and body, opened via the shell's `copilotOpen` | One Iris container with a mode state machine. `Iris.tsx` content is kept |
 | Entry points | icon-rail "Iris AI" item, command palette, investigation page, `(i)` AskIris buttons | `✦ Iris` header control (upper right) is primary; the others open the same panel |
 | Conversation | server conversation id in sessionStorage (`iris.conversation`) | unchanged; never reset across modes |
 | Page context | AskIris topic + investigation page (N-E4 partial) | shown as minimal chips; no new backend AI |

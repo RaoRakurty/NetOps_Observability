@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// Opsis.routing.test.tsx — the routing invariant behind Iris's central claim
+// Iris.routing.test.tsx — the routing invariant behind Iris's central claim
 // (tracker 330). Before this test, a configured provider key sent freely typed
 // questions to the PLAIN chat proxy, skipping classification, skills, the policy
 // engine, TAC, the quality layer and citations — while the panel still told the
@@ -18,7 +18,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
-import Opsis from "./Opsis";
+import Iris from "./Iris";
 import { ShellContext, TIME_RANGES, type ShellState } from "../context/shell";
 import { StreamBrokenError, type AiAnswer } from "../services/api";
 
@@ -105,7 +105,7 @@ function keyedOwner() {
 /** Render and let every mount fetch settle, so no state update escapes act(). */
 async function renderOpsis() {
   const utils = render(
-    <ShellContext.Provider value={shell}><Opsis /></ShellContext.Provider>,
+    <ShellContext.Provider value={shell}><Iris /></ShellContext.Provider>,
   );
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
   return utils;
@@ -130,7 +130,7 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 
-describe("Opsis — free text routes to the GROUNDED engine", () => {
+describe("Iris — free text routes to the GROUNDED engine", () => {
   it("posts a typed question to /api/ai/ask even when a provider key is configured", async () => {
     keyedOwner();
     aiAsk.mockResolvedValue(citedAnswer());
@@ -164,7 +164,7 @@ describe("Opsis — free text routes to the GROUNDED engine", () => {
   });
 });
 
-describe("Opsis — the grounded claim is per-answer, and an ungrounded answer is labelled", () => {
+describe("Iris — the grounded claim is per-answer, and an ungrounded answer is labelled", () => {
   it("renders the grounded+cited chip beside an answer that carries citations", async () => {
     keyedOwner();
     aiAsk.mockResolvedValue(citedAnswer());
@@ -238,7 +238,7 @@ describe("Opsis — the grounded claim is per-answer, and an ungrounded answer i
   });
 });
 
-describe("Opsis — a data answer renders its result as data (tracker 337 N-G4)", () => {
+describe("Iris — a data answer renders its result as data (tracker 337 N-G4)", () => {
   it("shows the summary text AND the result through the presentation renderer", async () => {
     aiAsk.mockResolvedValue(citedAnswer({
       mode: "data_query", intent: "query_metric", text: "Memory — 2 results: edge-1 91%; edge-2 88%;",
@@ -291,7 +291,7 @@ describe("Opsis — a data answer renders its result as data (tracker 337 N-G4)"
   });
 });
 
-describe("Opsis — a citation is a link only when it is a safe in-app one (tracker 337 N-E5)", () => {
+describe("Iris — a citation is a link only when it is a safe in-app one (tracker 337 N-E5)", () => {
   // Found by the N-E5 browser spec: the data arm cites its query with href ""
   // and the box rendered <a href="">, so clicking the citation reloaded the
   // whole app (route and drawer gone). A hostile href rendered as a live link.
@@ -324,7 +324,7 @@ describe("Opsis — a citation is a link only when it is a safe in-app one (trac
   });
 });
 
-describe("Opsis — follow-ups ride the server conversation (tracker 337 N-E4)", () => {
+describe("Iris — follow-ups ride the server conversation (tracker 337 N-E4)", () => {
   it("starts one conversation and sends its id with every typed question", async () => {
     startIrisConversation.mockReset().mockResolvedValue({ id: "c-1", turns: [] });
     aiAsk.mockResolvedValue(citedAnswer({ conversation_id: "c-1" }));
@@ -360,7 +360,7 @@ describe("Opsis — follow-ups ride the server conversation (tracker 337 N-E4)",
   });
 });
 
-describe("Opsis — the caller's AI entitlements (tracker 337 N-A7)", () => {
+describe("Iris — the caller's AI entitlements (tracker 337 N-A7)", () => {
   it("without ai.chat the box is off and never asks", async () => {
     features.mockResolvedValue({ copilot: true, ai_entitlements: ["ai.nlquery"] });
     await renderOpsis();
@@ -393,7 +393,7 @@ describe("Opsis — the caller's AI entitlements (tracker 337 N-A7)", () => {
   });
 });
 
-describe("Opsis — live progress while Iris works (tracker 337 N-E2)", () => {
+describe("Iris — live progress while Iris works (tracker 337 N-E2)", () => {
   it("shows the steps as they stream, then the answer replaces them", async () => {
     keyedOwner();
     let release: (a: AiAnswer) => void = () => {};
@@ -429,7 +429,7 @@ describe("Opsis — live progress while Iris works (tracker 337 N-E2)", () => {
 // Page-aware help (plan N-G3): the page behind the box rides along as the
 // `route` context key, so "what am I looking at?" is answered from that page's
 // docs. Only a real nav leaf is sent — the server re-validates it anyway.
-describe("Opsis — sends the current page as the route context", () => {
+describe("Iris — sends the current page as the route context", () => {
   afterEach(() => { window.location.hash = ""; });
 
   it("sends the canonical route of the page the operator is on", async () => {

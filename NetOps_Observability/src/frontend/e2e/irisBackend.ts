@@ -229,7 +229,7 @@ export async function bootIris(page: Page, opts: IrisBackendOptions = {}): Promi
       const plan = accept.includes("text/event-stream") && opts.stream ? opts.stream(b.question) : null;
       if (plan) {
         // Playwright delivers the body at once; live arrival is proven by the
-        // unit tests (src/tabs/Opsis.routing.test.tsx).
+        // unit tests (src/tabs/Iris.routing.test.tsx).
         const frames: string[] = [];
         const events = plan === "break" ? [{ type: "planning" }] : plan.events;
         events.forEach((e, i) => frames.push(`id: ${i + 1}\nevent: ${String(e.type)}\ndata: ${JSON.stringify({ seq: i + 1, ...e })}\n\n`));

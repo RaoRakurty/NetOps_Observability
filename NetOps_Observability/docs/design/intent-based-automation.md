@@ -1,4 +1,4 @@
-# Intent-Based Automation — Architecture (with Opsis Ai intake)
+# Intent-Based Automation — Architecture (with Iris AI intake)
 
 Status: **design / proposal — awaiting review & sign-off (no code yet).**
 Date: 2026-06-07.
@@ -8,14 +8,14 @@ Date: 2026-06-07.
 ## 0. Executive summary & review guide
 
 **What this is.** A plan to turn a *desired outcome* — typed into a form, written
-as a declarative file, or asked in plain English to **Opsis Ai** ("configure VLAN
+as a declarative file, or asked in plain English to **Iris AI** ("configure VLAN
 100 on the access leaves in BLR") — into the right config on the right devices,
 **safely**, and then keep it that way. Plus a config-management layer: **NETCONF
 push, config backup/storage, snapshots, 5-minute drift detection with a Sync
 status, and rollback.**
 
 **The one idea that drives the whole design.** Because a request can come from an
-LLM, **Opsis Ai only *proposes* a structured intent (validated JSON) — it never
+LLM, **Iris AI only *proposes* a structured intent (validated JSON) — it never
 renders config and never touches a device.** A deterministic, reviewable,
 human-approved pipeline does everything downstream. (Zero-trust; OWASP LLM02/08.)
 
@@ -54,7 +54,7 @@ Annotate inline or reply with answers; nothing gets built until you're satisfied
 ## 1. Goal
 
 Let an operator express a *desired outcome* — in a form, a declarative file, or
-**natural language to Opsis Ai** ("configure VLAN 100 on the access leaves in
+**natural language to Iris AI** ("configure VLAN 100 on the access leaves in
 site BLR") — and have the platform safely turn it into the right config on the
 **right devices**, then **continuously verify** it stays that way.
 
@@ -72,7 +72,7 @@ this design is a deterministic, reviewable pipeline with the AI strictly at the
 
 ## 2. Principles
 
-1. **The LLM proposes; it never executes.** Opsis Ai emits a *structured intent
+1. **The LLM proposes; it never executes.** Iris AI emits a *structured intent
    proposal* (validated JSON), not config and not a device action. (OWASP LLM02
    insecure-output-handling, LLM08 excessive-agency; CLAUDE.md §3/§15.)
 2. **Layered source of truth.** *Resources* (devices/sites/VLAN ranges) live in
@@ -91,7 +91,7 @@ this design is a deterministic, reviewable pipeline with the AI strictly at the
 
 ```
                          ┌──────────────────────────────────────────────┐
-  NL ("configure VLAN    │  Opsis Ai  — constrained tool/function call   │
+  NL ("configure VLAN    │  Iris AI  — constrained tool/function call   │
   100 on access leaves") │  emits a STRUCTURED INTENT PROPOSAL (JSON).   │
         │                │  Never config. Never a device action.        │
         ▼                └───────────────┬──────────────────────────────┘
@@ -125,7 +125,7 @@ this design is a deterministic, reviewable pipeline with the AI strictly at the
                               (9) AUDIT + EXECUTION HISTORY (immutable)
 ```
 
-The UI form, a declarative intent file (Git/API), and Opsis Ai are **three peer
+The UI form, a declarative intent file (Git/API), and Iris AI are **three peer
 front-ends that all produce the same validated intent object** — so the risky
 downstream stages are identical and testable regardless of origin.
 
@@ -141,7 +141,7 @@ a **scope selector** (who) and **parameters** (what), plus provenance.
   "tenant": "acme",
   "params": { "vlan_id": 100, "name": "USERS", "mtu": 9000 },
   "scope": { "roles": ["leaf"], "sites": ["BLR"], "tags": ["access"] },
-  "origin": { "via": "opsis-ai", "actor": "rao", "prompt_id": "…", "ts": "…" },
+  "origin": { "via": "iris-ai", "actor": "rao", "prompt_id": "…", "ts": "…" },
   "approval": { "required": true, "state": "pending" }
 }
 ```
@@ -156,7 +156,7 @@ a **scope selector** (who) and **parameters** (what), plus provenance.
 
 ## 5. Worked example — "configure VLAN 100"
 
-1. **Opsis Ai** receives *"configure VLAN 100 on the access leaves in BLR."* It is
+1. **Iris AI** receives *"configure VLAN 100 on the access leaves in BLR."* It is
    in **intent mode**: a function/tool schema forces it to return
    `{kind:"vlan", params:{vlan_id:100}, scope:{roles:["leaf"], sites:["BLR"], tags:["access"]}}`
    — and to **ask for missing required fields** (name? SVI?) rather than guess.
@@ -179,7 +179,7 @@ a **scope selector** (who) and **parameters** (what), plus provenance.
    intent `state: active`. Mismatch later (someone deletes it on the box) →
    **drift Finding/Incident** ("VLAN 100 missing on blr-leaf2, expected by
    intent vlan-100").
-9. **Audit**: every stage recorded with actor, origin (opsis-ai + prompt id),
+9. **Audit**: every stage recorded with actor, origin (iris-ai + prompt id),
    diff, result.
 
 ## 6. Safety & security model (the crux for AI intake)
@@ -222,7 +222,7 @@ After apply, verification is just observability — which you already have:
 
 | Need | Reuse |
 |------|-------|
-| NL intake | **Opsis Ai** (`copilot.go`) — add an *intent tool/function* mode that returns validated intent JSON |
+| NL intake | **Iris AI** (`copilot.go`) — add an *intent tool/function* mode that returns validated intent JSON |
 | Resource SoT / scope resolution | **NetBox** (Automation → Source of Truth) |
 | Device transport | **device-SSH gateway** (`device_ssh.go`, `golang.org/x/crypto/ssh`, FEATURE_DEVICE_SSH) + gNMI/NETCONF collectors |
 | Async execution (queue/workers/history) | the **report pipeline** pattern (PG `FOR UPDATE SKIP LOCKED`, lease heartbeat, immutable execution history, RLS) |
@@ -240,7 +240,7 @@ approvals, history) as a sibling of **Source of Truth**; new pkg `intent/`
 
 - **P0 — Intent core (read-only/dry-run).** Intent schema + store (Git/DB),
   compiler/resolver against NetBox, EOS+SR Linux renderers, **change plan + diff
-  only (no apply)**. Opsis Ai intent-tool mode producing proposals. → proves the
+  only (no apply)**. Iris AI intent-tool mode producing proposals. → proves the
   NL→intent→diff path safely with zero device risk.
 - **P1 — Guarded execution.** Approval gate + RBAC + caps + change windows;
   executor via SSH/gNMI with canary + commit-confirm + rollback; immutable

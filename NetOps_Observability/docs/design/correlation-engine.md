@@ -797,7 +797,7 @@ closed / merged) — powers the front page's live "Top Active Issues".
 - Go API is the only public surface; it enforces authz/RLS exactly as for findings
   today. OperatorRestricted tenants: their correlation objects are hidden from the
   platform operator on every endpoint (same enforcement point as flows/findings).
-- LLM note: if Opsis later summarizes objects, it receives the rendered evidence log
+- LLM note: if Iris later summarizes objects, it receives the rendered evidence log
   (already sanitized, no secrets by construction) — §15 OWASP rules apply unchanged.
 
 ## 8. Failure modes and handling

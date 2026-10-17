@@ -2,7 +2,7 @@
 // Copyright 2026 Correlix
 
 import { describe, it, expect } from "vitest";
-import { topProblemId, groundedToText, isCapabilityMiss, groundedChipLabel } from "./Opsis";
+import { topProblemId, groundedToText, isCapabilityMiss, groundedChipLabel } from "./Iris";
 import type { AiAnswer } from "../services/api";
 
 // A minimal current-state answer factory for the helper tests.

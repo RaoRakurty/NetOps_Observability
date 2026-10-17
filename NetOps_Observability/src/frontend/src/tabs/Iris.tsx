@@ -185,7 +185,7 @@ function cmdToSlash(c: AiCommand): SlashCmd {
   };
 }
 
-export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
+export default function Iris({ controls, onLeave, ask, onAskHandled }: {
   /** The panel's window controls (Dock / Expand), rendered in this header
    *  just before Close — components/IrisPanel.tsx owns what they do. */
   controls?: ReactNode;
