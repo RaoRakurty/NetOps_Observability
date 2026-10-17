@@ -71,7 +71,32 @@ defaults:
     working-directory: NetOps_Observability/src/backend
 
 jobs:
+  # Which job groups this diff needs — scripts/test-plan.py --ci-groups is the ONE
+  # source of that answer (CLAUDE.md §17). Non-PR events, CI edits, unknown paths
+  # and any planner failure select everything.
+  plan:
+    name: ci plan (backend-ci)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.plan.outputs.backend }}
+      correlation: ${{ steps.plan.outputs.correlation }}
+      frontend: ${{ steps.plan.outputs.frontend }}
+      install-boot: ${{ steps.plan.outputs.install-boot }}
+      plan: ${{ steps.plan.outputs.plan }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: plan
+        uses: ./.github/actions/ci-plan
+
   test:
+    # Skipped ONLY when a successful plan wrote exactly 'false' for backend: a failed,
+    # empty or misspelt plan runs the job (fail-closed). ci-gate checks the outcome.
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.backend != 'false' }}
     name: build · vet · test · race
     runs-on: ubuntu-latest
     steps:
@@ -124,6 +149,10 @@ jobs:
       # job (see fuzz-nightly.yml) for real exploration; seeds cover regression.
 
   offline-build:
+    # Skipped ONLY when a successful plan wrote exactly 'false' for backend: a failed,
+    # empty or misspelt plan runs the job (fail-closed). ci-gate checks the outcome.
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.backend != 'false' }}
     name: offline vendor build (blocking)
     runs-on: ubuntu-latest
     # CLAUDE.md §6 gate 2 — "offline-buildable" — enforced instead of asserted.
@@ -174,6 +203,10 @@ jobs:
         run: go test -run='^$' -count=1 ./...
 
   pg-integration:
+    # Skipped ONLY when a successful plan wrote exactly 'false' for backend: a failed,
+    # empty or misspelt plan runs the job (fail-closed). ci-gate checks the outcome.
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.backend != 'false' }}
     name: Postgres integration (blocking)
     runs-on: ubuntu-latest
     # INVARIANTS standing gap #4: statement_timeout, the migration advisory lock,
@@ -239,6 +272,10 @@ jobs:
         run: go test -tags=pgintegration -count=1 -p 1 -timeout 30m ./...
 
   vuln:
+    # Skipped ONLY when a successful plan wrote exactly 'false' for backend: a failed,
+    # empty or misspelt plan runs the job (fail-closed). ci-gate checks the outcome.
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.backend != 'false' }}
     name: govulncheck (blocking)
     runs-on: ubuntu-latest
     steps:
@@ -253,6 +290,10 @@ jobs:
         run: govulncheck ./...
 
   security-lint:
+    # Skipped ONLY when a successful plan wrote exactly 'false' for backend: a failed,
+    # empty or misspelt plan runs the job (fail-closed). ci-gate checks the outcome.
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.backend != 'false' }}
     name: staticcheck + gosec (crypto/trust packages, blocking)
     runs-on: ubuntu-latest
     steps:
@@ -304,6 +345,10 @@ jobs:
           args: ./tlsconfig/... ./internalca/... ./sealing/...
 
   full-lint:
+    # Skipped ONLY when a successful plan wrote exactly 'false' for backend: a failed,
+    # empty or misspelt plan runs the job (fail-closed). ci-gate checks the outcome.
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.backend != 'false' }}
     name: golangci-lint (repo-wide, blocking)
     runs-on: ubuntu-latest
     # Now BLOCKING: the repo-wide backlog was burned down to zero (2026-06-04), so
@@ -324,3 +369,21 @@ jobs:
           version: ${{ env.GOLANGCI_VERSION }}
           working-directory: NetOps_Observability/src/backend
           args: ./...
+
+  # The one verdict for this workflow: every job the plan selected succeeded, no
+  # selected job was skipped or cancelled, nothing unselected went red.
+  # always() (not !cancelled()): a cancelled run must FAIL here, not skip.
+  ci-gate:
+    name: ci-gate (backend-ci)
+    if: always()
+    needs: [plan, test, offline-build, pg-integration, vuln, security-lint, full-lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-gate
+        with:
+          needs: ${{ toJSON(needs) }}
+          jobs: test=backend offline-build=backend pg-integration=backend vuln=backend security-lint=backend full-lint=backend

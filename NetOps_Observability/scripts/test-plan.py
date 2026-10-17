@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -76,8 +77,100 @@ HIGH_RISK = (
     ".github/workflows/*",
 )
 
-DOCS = ("*.md", "docs/*", "*.txt", "LICENSE*", "NOTICE*")
+DOCS = ("*.md", "docs/*", "LICENSE*", "NOTICE*")
 FRONTEND = ("src/frontend/*", "docs-portal/*")
+
+# ── CI job selection (--ci-groups) ──────────────────────────────────────────
+# The CI workflows read THIS table, not their own path filters, so there is one
+# answer to "which jobs does this diff need". Only the groups below can be
+# skipped; every other job (gitleaks, Trivy, licence/OCI gates, ingest
+# contracts — which run the whole tests/ suite — tracker, telemetry catalog,
+# metric contract, install integrity, helm) runs on every PR.
+#
+# Fail-closed by construction (§3, CLAUDE.md §17): a path no rule names, a
+# change to CI itself, a non-PR event, or an unreadable/empty diff all mean
+# FULL — every group on. A rule can only ADD groups.
+CI_GROUPS = ("backend", "correlation", "frontend", "install-boot")
+BOOT = "install-boot"
+
+# Repo-root paths (outside the project dir) and project paths that force FULL.
+CI_FULL_TRIGGERS = (
+    ".github/*",                       # workflows, composite actions, CODEOWNERS
+    "scripts/test-plan.py", "scripts/ci/*",
+    "Makefile", ".dockerignore", ".gitattributes",
+)
+
+# (pattern, groups it needs). Every matching rule contributes; () = only the
+# always-run jobs. fnmatch's `*` crosses `/`, so "src/backend/*" is the tree.
+CI_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # Prose, policy and agent config: the always-run jobs cover them (gitleaks
+    # and the licence gate scan every file; ingest-contract runs tests that read docs/).
+    ("docs/*", ()), ("*.md", ()), ("LICENSE*", ()), ("LICENSES/*", ()), ("NOTICE", ()),
+    ("licensing-policy.json", ()), ("compliance/*", ()), ("tests/*", ()),
+    (".claude/*", ()), ("network-automation-mpls-l3vpn/*", ()), (".gitignore", ()),
+    (".gitleaks.toml", ()), (".gitleaksignore", ()), (".trivyignore.yaml", ()),
+    ("scripts/git-hooks/*", ()),
+    # Backend. Its root package builds newServer() and every boot path, so a root
+    # .go file, schema, trust material or the module graph also boots the stack.
+    ("src/backend/*", ("backend",)),
+    ("src/contracts/*", ("backend", "frontend")),
+    ("src/backend/migrations/*", (BOOT,)), ("src/backend/tlsconfig/*", (BOOT,)),
+    ("src/backend/internalca/*", (BOOT,)), ("src/backend/sealing/*", (BOOT,)),
+    ("src/backend/cmd/*", (BOOT,)), ("src/backend/go.mod", (BOOT,)),
+    ("src/backend/go.sum", (BOOT,)), ("src/backend/vendor/*", (BOOT,)),
+    # Correlation engine and the event catalogue it loads (producers.py).
+    ("src/correlation/*", ("correlation",)), ("telemetry-catalog/*", ("correlation",)),
+    ("src/correlation/requirements*.txt", (BOOT,)),
+    # Frontend; a dependency change can break the image the boot test builds.
+    ("src/frontend/*", ("frontend",)), ("docs-portal/*", ("frontend",)),
+    ("src/frontend/package*.json", (BOOT,)), ("docs-portal/package*.json", (BOOT,)),
+    # Config read by both the in-API engine and vmalert.
+    ("src/config/*", ("backend", BOOT)),
+    # Everything that builds, installs or starts the stack.
+    ("deployment/*", (BOOT,)),
+    ("deployment/docker/Dockerfile.backend", ("backend",)),
+    ("deployment/docker/Dockerfile.correlation", ("correlation",)),
+    ("deployment/docker/Dockerfile.frontend", ("frontend",)),
+    ("deployment/docker/Dockerfile.nginx", ("frontend",)),
+    ("scripts/*", (BOOT,)),
+)
+
+
+def _is_backend_root_go(rel: str) -> bool:
+    return rel.startswith("src/backend/") and rel.endswith(".go") and "/" not in rel[len("src/backend/"):]
+
+
+def ci_groups(paths: list[str], event: str = "pull_request") -> dict:
+    """Which CI job groups a diff needs. Pure: no IO.
+
+    Returns {"schema": 1, "mode": "full"|"selective", "groups": {g: bool},
+    "reasons": [...]}. mode "full" turns every group on.
+    """
+    reasons: list[str] = []
+    need: set[str] = set()
+    full = False
+    if event != "pull_request":
+        full, reasons = True, [f"event {event!r} is not a pull_request — full gate"]
+    elif not paths:
+        full, reasons = True, ["empty diff — full gate (nothing proves a skip is safe)"]
+    for raw in paths if not full else ():
+        rel = raw.removeprefix(PREFIX)
+        if _match(raw, CI_FULL_TRIGGERS) or _match(rel, CI_FULL_TRIGGERS):
+            full = True
+            reasons.append(f"full: {raw} changes CI or its planner")
+            continue
+        hits = [g for pat, gs in CI_RULES if fnmatch.fnmatch(rel, pat) for g in gs]
+        matched = any(fnmatch.fnmatch(rel, pat) for pat, _ in CI_RULES)
+        if not matched:
+            full = True
+            reasons.append(f"full: {raw} matches no rule")
+            continue
+        if _is_backend_root_go(rel):
+            hits.append(BOOT)
+        need.update(hits)
+        reasons.append(f"{','.join(sorted(set(hits))) or 'always-run only'}: {raw}")
+    groups = {g: (full or g in need) for g in CI_GROUPS}
+    return {"schema": 1, "mode": "full" if full else "selective", "groups": groups, "reasons": reasons}
 
 
 @dataclass
@@ -165,14 +258,47 @@ def classify(paths: list[str]) -> Plan:
     return plan
 
 
-def changed_paths(base: str) -> list[str]:
-    """Paths changed between base and HEAD, repo-root relative."""
-    out = subprocess.run(["git", "diff", "--name-only", f"{base}...HEAD"],
+def changed_paths(base: str, head: str = "HEAD") -> list[str]:
+    """Paths changed between merge-base(base, head) and head, repo-root relative.
+
+    --no-renames: a rename is reported as delete + add, so the OLD path (say, a
+    file moved out of an auth package) is classified too, not just the new one.
+    """
+    out = subprocess.run(["git", "diff", "--name-only", "--no-renames", f"{base}...{head}"],
                          cwd=PROJECT, capture_output=True, text=True,
                          timeout=GIT_TIMEOUT_S, check=False)
     if out.returncode != 0:
-        raise RuntimeError(f"git diff {base}...HEAD failed: {out.stderr.strip()}")
+        raise RuntimeError(f"git diff {base}...{head} failed: {out.stderr.strip()}")
     return [ln for ln in out.stdout.splitlines() if ln.strip()]
+
+
+def ci_plan_from_git(event: str, bases: list[str], head: str) -> dict:
+    """ci_groups over the UNION of the diffs against every base.
+
+    A stacked PR's base is another PR branch; diffing against it alone would see
+    only the top layer. The union with origin/main can only add groups.
+    A git failure is FULL, never a skip.
+    """
+    paths: set[str] = set()
+    try:
+        for b in bases:
+            paths.update(changed_paths(b, head))
+    except (RuntimeError, subprocess.TimeoutExpired) as exc:
+        # (git missing / OSError is NOT caught: the planner crashes and the
+        # ci-plan action falls back to the full gate — fail-closed either way.)
+        plan = ci_groups([], event)
+        plan.update(mode="full", groups={g: True for g in CI_GROUPS},
+                    reasons=[f"diff unreadable ({exc}) — full gate"])
+        return plan
+    return ci_groups(sorted(paths), event)
+
+
+def write_github_output(plan: dict, path: str) -> None:
+    """One `<group>=true|false` line per group (dashes kept) plus `plan=<json>`."""
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.writelines(f"{g}={'true' if on else 'false'}\n" for g, on in plan["groups"].items())
+        fh.write(f"mode={plan['mode']}\n")
+        fh.write("plan=" + json.dumps(plan, separators=(",", ":")) + "\n")
 
 
 def _load(name: str, rel: str):
@@ -234,8 +360,26 @@ def main(argv: list[str] | None = None) -> int:
                     help="run the cheap deterministic checks the diff calls for; non-zero on failure")
     ap.add_argument("--always", action="store_true",
                     help="with --run-fast: run the artifact checks even if no input changed")
+    ap.add_argument("--ci-groups", action="store_true",
+                    help="print which CI job groups the diff needs (JSON); fail-closed to full")
+    ap.add_argument("--event", default="pull_request", help="with --ci-groups: the GitHub event name")
+    ap.add_argument("--head", default="HEAD", help="with --ci-groups: the head revision")
+    ap.add_argument("--also-base", action="append", default=[],
+                    help="with --ci-groups: another base to union with (stacked PRs: origin/main)")
+    ap.add_argument("--github-output", metavar="FILE",
+                    help="with --ci-groups: also append the result to this $GITHUB_OUTPUT file")
     ap.add_argument("paths", nargs="*", help="classify these paths instead of the git diff")
     args = ap.parse_args(argv)
+
+    if args.ci_groups:
+        if args.paths:
+            ci = ci_groups(args.paths, args.event)
+        else:
+            ci = ci_plan_from_git(args.event, [args.base, *args.also_base], args.head)
+        print(json.dumps(ci, indent=2))
+        if args.github_output:
+            write_github_output(ci, args.github_output)
+        return 0
 
     try:
         paths = args.paths or changed_paths(args.base)
