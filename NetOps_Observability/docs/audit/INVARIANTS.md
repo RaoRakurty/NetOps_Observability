@@ -566,3 +566,24 @@ reads before every answer. `internal/orgcontext`, migration 0058,
 | Cache metrics carry the cache name only — never a tenant | ✅ | **BUILD** — `TestMetricsCarryNoTenant` |
 | Per-class p50/p95 targets | ❌ **no targets yet** | Owner decision D2; record a week of `netops_ai_request_seconds` first. |
 | Staleness across replicas | ⚠ bounded by TTL (60 s) | Invalidation is in-process; the shipped topology is one api replica. |
+
+## 18. Iris release gates (tracker 337 N-H5, 2026-10-12)
+
+The golden-corpus scorers write raw counts (`IRIS_GATE_REPORT_DIR`);
+`internal/irisgate` judges the owner's bars; the `iris-gates` CI job reports on
+PRs and **enforces at release tags**. A gate nothing measured is a FAIL, never a
+pass by absence. Bars are pinned by `TestBarsArePinned` and are not lowered.
+
+| Gate | Bar | Measured 2026-10-12 | Source |
+|---|---|---|---|
+| entity | ≥ 99 % | ❌ 89.2 % (224/251) | compiled entity precision, N-C6 corpus — 18 of 27 misses are composite references (site + provider → circuit), compiler work |
+| executable | ≥ 98 % | ❌ 97.5 % (347/356) | N-C6 |
+| semantic | ≥ 95 % | ❌ 86.0 % (306/356) | answered precision, N-C6 |
+| cross_tenant | = 0 | ✅ 0 of 401 checks | compiled foreign refs + cross-tenant alias incidents |
+| unauthorized | = 0 | ✅ 0 of 31 checks | entitlement + admin-plane probes |
+| citation | 100 % | ✅ 120/120 | docs answers citing an expected page with a link |
+| injection | 100 % | ❌ 31/32 → ✅ 32/32 once PR #30 (F6) merges | NL refusals, docs injection items, log-injection incidents (XFAIL = fail) |
+| audit | 100 % | ✅ 8/8 | asks across classes, JSON + stream, one complete ledgered decision |
+
+Not covered by a gate: the model path's live accuracy (stub oracle in CI;
+`-tags nlqmodeleval` only) and the incident corpus as a whole (owner decision D5).

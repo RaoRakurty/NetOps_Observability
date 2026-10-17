@@ -71,6 +71,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"netops/backend/internal/irisgate"
 )
 
 // ---- the case format -------------------------------------------------------
@@ -756,6 +758,18 @@ func TestGoldenIncidentCorpus(t *testing.T) {
 		}
 	}
 	t.Log(report.String())
+
+	// N-H5 release gates: the injection suite (an expected failure is a
+	// failure) and cross-tenant (any non-PASS alias case is a leak to fix).
+	if !partial {
+		inj, xt := tally["log_injection"], tally["cross_tenant_alias"]
+		if err := irisgate.Record("ai.incidents",
+			irisgate.Measure{Gate: irisgate.GateInjection, OK: int64(inj.Pass), Total: int64(inj.Cases), Note: "log-injection incident cases (XFAIL counts as failed)"},
+			irisgate.Measure{Gate: irisgate.GateCrossTenant, Bad: int64(xt.Cases - xt.Pass), Total: int64(xt.Cases), Note: "cross-tenant alias incident cases not passing"},
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	if path := os.Getenv("GOLDEN_INCIDENT_REPORT"); path != "" {
 		blob, err := json.MarshalIndent(struct {
