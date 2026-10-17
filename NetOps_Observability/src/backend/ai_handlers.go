@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"netops/backend/internal/irisconvo"
 	"netops/backend/internal/irishypo"
 	"netops/backend/internal/irisquerylog"
+	"netops/backend/internal/irisstream"
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/chips"
 	"netops/backend/internal/nlquery/compile"
@@ -199,10 +201,32 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		}
 		conv = &c
 	}
+	// N-E2: a client that asked for text/event-stream gets the answer's
+	// progress live, then the SAME answer bytes; everyone else gets the JSON
+	// response exactly as before. Every check that can fail ran above, so a
+	// refusal is always a JSON error.
+	if irisstream.WantsEventStream(r) && irisstream.CanFlush(w) {
+		s.aiAskStream(w, r, claims, req, question, conv)
+		return
+	}
+	ans, err := s.aiAskRun(r, claims, req, question, conv, nil)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ans)
+}
+
+// aiAskRun answers one accepted question: the decision ledger, the
+// orchestrator, the conversation turn, the hypotheses and the audit line —
+// identical for the JSON and the streamed response. trace (nil = none)
+// receives the answer's progress.
+func (s *server) aiAskRun(r *http.Request, claims jwtClaims, req aiAskRequest, question string, conv *irisconvo.Conversation, trace ai.TraceSink) (ai.Answer, error) {
 	// The decision ledger (N-A6): from here on this question is one decision,
 	// and every seam below adds its steps through the request context.
 	r, rec := s.aiDecisionStart(r, claims, req)
 	orch := s.newOrchestrator(r, claims)
+	orch.Trace = trace
 	var ran nlqRan
 	if conv != nil && orch.NLQuery != nil {
 		orch.NLQuery = s.aiNLQueryWith(r, claims, &conv.State, conv.ID, &ran)
@@ -210,8 +234,7 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 	ans, err := orch.Ask(r.Context(), s.aiPrincipal(claims), question, req.Context)
 	if err != nil {
 		s.aiDecisionFinish(r, claims, rec, nil, err)
-		writeError(w, http.StatusBadGateway, err)
-		return
+		return ai.Answer{}, err
 	}
 	if conv != nil {
 		s.recordAskTurn(r, claims, conv, question, &ans, &ran)
@@ -228,7 +251,62 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		"provider": ans.Provider, "tier": ai.RouteFor(ans.Mode).Tier, // §10 model-router tier
 		"decision_id": decisionID,
 	})
-	writeJSON(w, http.StatusOK, ans)
+	return ans, nil
+}
+
+// aiAskStreamBudget bounds a streamed answer; it is under the server's
+// WriteTimeout (180 s) so the stream ends with a frame, not a reset.
+const aiAskStreamBudget = 170 * time.Second
+
+// aiAskStream answers over Server-Sent Events (internal/irisstream): progress
+// while the answer is built, then `answer` — the exact bytes writeJSON would
+// have sent, minus its trailing newline — or `error`, then `done`. A client
+// that leaves cancels the work through the request context.
+func (s *server) aiAskStream(w http.ResponseWriter, r *http.Request, claims jwtClaims, req aiAskRequest, question string, conv *irisconvo.Conversation) {
+	// Read the body to EOF so the server notices a client that disconnects
+	// (Go watches the connection only once the request body is consumed).
+	_, _ = io.Copy(io.Discard, r.Body) // best-effort: the body was already decoded; an error here only delays disconnect detection
+	ctx, cancel := context.WithTimeout(r.Context(), aiAskStreamBudget)
+	defer cancel()
+	r = r.WithContext(ctx)
+	st := irisstream.Open(w, irisstream.DefaultConfig(), s.irisStreamMetrics, cancel)
+	var (
+		ans  ai.Answer
+		err  error
+		done = make(chan struct{})
+	)
+	go func() {
+		defer close(done)
+		ans, err = s.aiAskRun(r, claims, req, question, conv, aiTraceToStream{st})
+	}()
+	st.Pump(ctx, done)
+	<-done // the answer's goroutine has finished with r and the ledger
+	switch {
+	case st.Failed():
+		return // the client is gone; nothing more can be written
+	case err != nil:
+		if ctx.Err() != nil && r.Context().Err() != nil && errors.Is(ctx.Err(), context.Canceled) {
+			s.irisStreamMetrics.ClientGone()
+		}
+		st.WriteError(http.StatusBadGateway, err.Error())
+	default:
+		buf, merr := json.Marshal(ans)
+		if merr != nil {
+			jsonEncodeFailures.Add(1)
+			st.WriteError(http.StatusInternalServerError, "response encoding failed")
+			break
+		}
+		st.WriteAnswer(buf)
+	}
+	st.WriteDone()
+}
+
+// aiTraceToStream adapts the engine's progress to the stream's closed events
+// (neither package imports the other).
+type aiTraceToStream struct{ st *irisstream.Stream }
+
+func (a aiTraceToStream) Trace(e ai.TraceEvent) {
+	a.st.Emit(irisstream.Event{Type: string(e.Type), Tool: e.Tool, Outcome: e.Outcome})
 }
 
 // newOrchestrator builds the grounded engine for one request — shared by

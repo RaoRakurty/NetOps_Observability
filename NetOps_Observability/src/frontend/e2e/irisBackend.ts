@@ -42,6 +42,8 @@ export interface IrisFake {
   resolves: { text: string; types: string[] }[];
   /** The conversations the server holds; delete one to model a restart/expiry. */
   live: Set<string>;
+  /** The Accept header of every /api/ai/ask (N-E2). */
+  accepts: string[];
 }
 
 export interface IrisBackendOptions {
@@ -55,6 +57,12 @@ export interface IrisBackendOptions {
   converse?: (question: string, id: string) => Json;
   /** POST /api/ai/entities/resolve. */
   resolve?: (text: string, types: string[]) => Json;
+  /**
+   * N-E2: answer a streamed ask (Accept: text/event-stream) with these
+   * progress events before the answer; "break" ends the stream without an
+   * answer (a proxy cut it); null answers JSON as an older server would.
+   */
+  stream?: (question: string) => { events: Json[] } | "break" | null;
 }
 
 export const TENANT_ME = {
@@ -178,7 +186,7 @@ export function clarifyAnswer(): Json {
 // ---- the fake ------------------------------------------------------------------
 
 export async function bootIris(page: Page, opts: IrisBackendOptions = {}): Promise<IrisFake> {
-  const fake: IrisFake = { asks: [], started: [], messages: [], aliasPuts: [], resolves: [], live: new Set() };
+  const fake: IrisFake = { asks: [], started: [], messages: [], aliasPuts: [], resolves: [], live: new Set(), accepts: [] };
   const aliases: Json[] = [];
   let convSeq = 0;
   const turns = new Map<string, Json[]>();
@@ -216,6 +224,21 @@ export async function bootIris(page: Page, opts: IrisBackendOptions = {}): Promi
       if ("status" in a && typeof a.status === "number") return json(a.body, a.status);
       const out: Json = { ...a };
       if (b.conversation_id) out.conversation_id = b.conversation_id; // recorded in it
+      const accept = req.headers()["accept"] ?? "";
+      fake.accepts.push(accept);
+      const plan = accept.includes("text/event-stream") && opts.stream ? opts.stream(b.question) : null;
+      if (plan) {
+        // Playwright delivers the body at once; live arrival is proven by the
+        // unit tests (src/tabs/Opsis.routing.test.tsx).
+        const frames: string[] = [];
+        const events = plan === "break" ? [{ type: "planning" }] : plan.events;
+        events.forEach((e, i) => frames.push(`id: ${i + 1}\nevent: ${String(e.type)}\ndata: ${JSON.stringify({ seq: i + 1, ...e })}\n\n`));
+        if (plan !== "break") {
+          frames.push(`event: answer\ndata: ${JSON.stringify(out)}\n\n`);
+          frames.push(`event: done\ndata: {"type":"done","dropped":0}\n\n`);
+        }
+        return route.fulfill({ status: 200, contentType: "text/event-stream; charset=utf-8", body: frames.join("") });
+      }
       return json(out);
     }
 

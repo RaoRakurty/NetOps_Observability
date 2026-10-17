@@ -20,7 +20,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import Opsis from "./Opsis";
 import { ShellContext, TIME_RANGES, type ShellState } from "../context/shell";
-import type { AiAnswer } from "../services/api";
+import { StreamBrokenError, type AiAnswer } from "../services/api";
 
 const aiAsk = vi.fn();
 const copilotChat = vi.fn();
@@ -31,10 +31,20 @@ const aiCommands = vi.fn();
 const features = vi.fn();
 const startIrisConversation = vi.fn();
 const correctIrisQuery = vi.fn();
+// A test can take over the streamed ask (N-E2) to drive progress events.
+type StreamFn = (q: string, ctx: unknown, conv: unknown, onEvent: (e: { type: string; tool?: string; outcome?: string }) => void) => Promise<AiAnswer>;
+const streamOverride: { fn?: StreamFn } = {};
 
 vi.mock("../services/api", () => ({
+  // The streamed ask (N-E2) is the JSON ask as far as these tests go: a server
+  // that answers JSON resolves aiAskStream with the same answer.
+  StreamBrokenError: class StreamBrokenError extends Error {},
   api: {
     aiAsk: (...a: unknown[]) => aiAsk(...a),
+    aiAskStream: (q: string, ctx?: unknown, conv?: unknown, onEvent?: (e: { type: string }) => void) =>
+      streamOverride.fn && onEvent
+        ? streamOverride.fn(q, ctx, conv, onEvent)
+        : aiAsk(...([q, ctx, conv].slice(0, conv !== undefined ? 3 : ctx !== undefined ? 2 : 1))),
     copilotChat: (...a: unknown[]) => copilotChat(...a),
     copilotConfig: (...a: unknown[]) => copilotConfig(...a),
     aiTenantConfig: (...a: unknown[]) => aiTenantConfig(...a),
@@ -108,6 +118,7 @@ async function ask(text: string) {
 }
 
 beforeEach(() => {
+  streamOverride.fn = undefined;
   [aiAsk, copilotChat, copilotConfig, aiTenantConfig, aiTenants, aiCommands, features, startIrisConversation].forEach((m) => m.mockReset());
   try { sessionStorage.clear(); } catch { /* no storage in this environment */ }
   startIrisConversation.mockRejectedValue(new Error("503")); // conversations off unless a test turns them on
@@ -381,3 +392,36 @@ describe("Opsis — the caller's AI entitlements (tracker 337 N-A7)", () => {
     expect(startIrisConversation).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("Opsis — live progress while Iris works (tracker 337 N-E2)", () => {
+  it("shows the steps as they stream, then the answer replaces them", async () => {
+    keyedOwner();
+    let release: (a: AiAnswer) => void = () => {};
+    streamOverride.fn = (_q, _c, _v, onEvent) => {
+      onEvent({ type: "planning" });
+      onEvent({ type: "tool_started", tool: "get_problem" });
+      return new Promise<AiAnswer>((resolve) => { release = resolve; });
+    };
+    await renderOpsis();
+    await screen.findByText(/How can I help/);
+    await ask("why is wan-r2 flapping?");
+    expect(await screen.findByText("Understanding the question")).toBeTruthy();
+    expect(screen.getByText(/the incident/)).toBeTruthy();
+    await act(async () => { release(citedAnswer()); });
+    await waitFor(() => expect(screen.queryByText("Understanding the question")).toBeNull());
+    expect(await screen.findByText(/Three suspected incidents/)).toBeTruthy();
+    expect(aiAsk).not.toHaveBeenCalled();
+  });
+
+  it("falls back once to the plain ask when the stream breaks", async () => {
+    keyedOwner();
+    streamOverride.fn = () => Promise.reject(new StreamBrokenError("cut"));
+    aiAsk.mockResolvedValue(citedAnswer());
+    await renderOpsis();
+    await screen.findByText(/How can I help/);
+    await ask("why is wan-r2 flapping?");
+    expect(await screen.findByText(/Three suspected incidents/)).toBeTruthy();
+    expect(aiAsk).toHaveBeenCalledTimes(1);
+  });
+});
+

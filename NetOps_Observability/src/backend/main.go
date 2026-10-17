@@ -103,6 +103,7 @@ import (
 	"netops/backend/internal/parsetrace"
 	"netops/backend/internal/pipedebug"
 	// DEBUG-ROUTES-END
+	"netops/backend/internal/irisstream"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/quarantine"
@@ -384,6 +385,8 @@ type server struct {
 	// aiToolGateway applies the Iris tool contracts (tracker 337 N-A8). One
 	// per process, so a tenant's per-tool rate budget spans requests.
 	aiToolGateway *ai.ToolGateway
+	// irisStreamMetrics counts streamed Iris answers (tracker 337 N-E2).
+	irisStreamMetrics *irisstream.Metrics
 	// Investigation hypotheses (tracker 337 N-B3): each investigation's set,
 	// held per tenant (bounded, in memory) so the trace can be re-opened by id.
 	// nil = not held (the answer still carries its own set).
@@ -1205,6 +1208,7 @@ func newServer() *server {
 		aiDecisions:       newAIDecisionStore(),
 		aiDecisionMetrics: aidecision.NewMetrics(),
 		aiToolGateway:     ai.NewToolGateway(),
+		irisStreamMetrics: &irisstream.Metrics{},
 		aiHypotheses:      irishypo.NewMemStore(),
 
 		deviceSites: deviceSites,
@@ -4620,8 +4624,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	// STORAGE-MEASUREMENT-END
 	// AI-SCORECARD-BEGIN
 	s.aiScore.Write(w)
-	s.nlqQueryLogMetrics.Write(w) // Iris query capture + corrections (N-C8); nil-safe
-	s.aiDecisionMetrics.Write(w)  // Iris AI decision ledger appends (N-A6); nil-safe
+	s.nlqQueryLogMetrics.Write(w)    // Iris query capture + corrections (N-C8); nil-safe
+	s.aiDecisionMetrics.Write(w)     // Iris AI decision ledger appends (N-A6); nil-safe
+	_ = s.irisStreamMetrics.Write(w) // best-effort: nil-safe; a failed scrape write surfaces to the scraper
 	if s.aiToolGateway != nil {
 		_ = s.aiToolGateway.Metrics.Write(w) // best-effort: a failed scrape write surfaces to the scraper, not here
 	}
@@ -5300,6 +5305,12 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.status = code
 	s.ResponseWriter.WriteHeader(code)
 }
+
+// Unwrap exposes the wrapped writer to http.ResponseController (Go 1.20+), so
+// Flush and SetWriteDeadline reach the connection through the logging and
+// audit wrappers. Without it a streamed response (Iris progress events,
+// tracker 337 N-E2) is silently buffered until the handler returns.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 // Hijack lets the wrapped writer pass through to the underlying connection so
 // the WebSocket endpoint (/api/events) can take over the socket. Without this

@@ -2650,7 +2650,16 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
     const text = await res.text().catch(() => "");
     throw new Error(`401 Unauthorized: ${text || "please sign in"}`);
   }
-  if (!res.ok) {
+  if (!res.ok) return failedResponse(res);
+  if (res.status === 204) return undefined as T;
+  return res.json() as Promise<T>;
+}
+
+// failedResponse turns a non-OK response into the error request() has always
+// thrown — shared with the Iris stream reader (aiAskStream) so a refusal reads
+// the same on both paths (403 step-up event, 503 ServiceBusyError, envelope).
+async function failedResponse(res: Response): Promise<never> {
+  {
     const text = await res.text().catch(() => "");
     // STEP-UP refusal. An elevated-only action refused for a standing session
     // comes back NAMED — it says which identity provider grants the access —
@@ -2673,8 +2682,72 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
     }
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
   }
-  if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+}
+
+/** The stream ended without an answer (a proxy cut it, the network dropped). */
+export class StreamBrokenError extends Error {}
+
+/** One Iris progress event from the /api/ai/ask stream (closed vocabulary). */
+export interface IrisStreamEvent {
+  type: string;
+  tool?: string;
+  outcome?: string;
+}
+
+/**
+ * aiAskStream asks Iris with `Accept: text/event-stream` (tracker 337 N-E2):
+ * onEvent receives the progress, the promise resolves to the SAME answer
+ * aiAsk returns. A server that answers JSON (older build, a refusal before the
+ * answer started) is read as JSON; an `error` event throws the error aiAsk
+ * would have thrown; a stream that ends without an answer throws
+ * StreamBrokenError so the caller can fall back to aiAsk once.
+ */
+async function aiAskStream(
+  question: string,
+  context: Record<string, string> | undefined,
+  conversationId: string | undefined,
+  onEvent: (e: IrisStreamEvent) => void,
+  signal?: AbortSignal,
+  retried = false,
+): Promise<AiAnswer> {
+  const body = JSON.stringify(conversationId ? { question, context, conversation_id: conversationId } : { question, context });
+  const res = await fetch("/api/ai/ask", {
+    method: "POST",
+    body,
+    signal,
+    headers: authHeaders({ "Content-Type": "application/json", Accept: "text/event-stream" }),
+  });
+  if (res.status === 401 && !retried && getRefresh() && (await tryRefresh())) {
+    return aiAskStream(question, context, conversationId, onEvent, signal, true);
+  }
+  if (res.status === 401) return request<AiAnswer>("/api/ai/ask", { method: "POST", body }, true); // the session flow request() owns
+  if (!res.ok) return failedResponse(res);
+  const ct = res.headers.get("Content-Type") ?? "";
+  if (!ct.startsWith("text/event-stream") || !res.body) return res.json() as Promise<AiAnswer>;
+  const { readSSE } = await import("../iris/sse");
+  for await (const msg of readSSE(res.body)) {
+    if (msg.event === "answer") return JSON.parse(msg.data) as AiAnswer;
+    if (msg.event === "error") {
+      let status = 502;
+      let text = msg.data;
+      try {
+        const e = JSON.parse(msg.data) as { error?: string; status?: number };
+        status = typeof e.status === "number" ? e.status : 502;
+        text = JSON.stringify({ error: e.error ?? "" });
+      } catch {
+        /* keep the raw data as the envelope text */
+      }
+      throw new Error(`${status} ${status === 500 ? "Internal Server Error" : "Bad Gateway"}: ${text}`);
+    }
+    if (msg.event === "done") break;
+    try {
+      const ev = JSON.parse(msg.data) as IrisStreamEvent;
+      if (ev && typeof ev.type === "string") onEvent({ type: ev.type, tool: ev.tool, outcome: ev.outcome });
+    } catch {
+      /* a malformed progress event is skipped, never fatal */
+    }
+  }
+  throw new StreamBrokenError("the answer stream ended before the answer");
 }
 
 // ---- auth types ----
@@ -6278,6 +6351,8 @@ export const api = {
   // Iris AI — application-aware assistant. Ask a question (optionally with a
   // context id like the open RCA's correlation_id); returns a grounded, cited
   // answer in a typed answer-mode schema. Read-only (FEATURE_AI gated server-side).
+  // Streamed ask (N-E2): progress via onEvent, then the same answer as aiAsk.
+  aiAskStream,
   aiAsk: (question: string, context?: Record<string, string>, conversationId?: string) =>
     request<AiAnswer>("/api/ai/ask", {
       method: "POST",

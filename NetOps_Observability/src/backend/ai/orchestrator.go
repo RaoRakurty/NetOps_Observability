@@ -63,7 +63,9 @@ type Orchestrator struct {
 	// Gateway applies the tool contracts (tracker 337 N-A8). The server sets
 	// its process-lived gateway so a tenant's per-tool budget spans requests;
 	// when nil, gateway() creates one for this orchestrator.
-	Gateway     *ToolGateway
+	Gateway *ToolGateway
+	// Trace receives the answer's operational progress (N-E2); nil = none.
+	Trace       TraceSink
 	gatewayOnce sync.Once
 	ownGateway  *ToolGateway
 	// RecordInvestigation receives one CONCLUDED skill-chain investigation (IRIS
@@ -373,6 +375,7 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 }
 
 func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, uiContext map[string]string) (Answer, error) {
+	o.trace(TracePlanning)
 	// An EXPLAIN ask is a lookup, not a classification: the `(i)` next to a
 	// number on a screen already named the term it wants defined, and the answer
 	// is server-authored prose returned verbatim (explain.go). It runs first so a
@@ -653,6 +656,7 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 	user := o.problemPrompt(question, pr, bundle)
 	// §10 model router: this answer's tier comes from RouteFor, not from a local
 	// choice — the policy is stated once and the mechanism reads it.
+	o.trace(TraceNarrating)
 	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeProblemExplanation).Tier, system, []LLMMessage{{Role: "user", Content: user}}, false)
 	evidenceOnly := false
 	var statements []Statement
@@ -831,6 +835,7 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 	user := o.currentStatePrompt(question, cs)
 	// §10 model router: a grounded headline over an already-ranked structure is
 	// the FAST tier's work — RouteFor says so, this reads it.
+	o.trace(TraceNarrating)
 	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeCurrentStateSummary).Tier, system, []LLMMessage{{Role: "user", Content: user}}, false)
 	var statements []Statement
 	if lerr != nil || strings.TrimSpace(text) == "" {
@@ -1161,6 +1166,7 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 	system := o.systemPrompt()
 	user := o.moduleHealthPrompt(question, mh, bundle)
 	// §10 model router: a module headline is the FAST tier (RouteFor's policy).
+	o.trace(TraceNarrating)
 	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeModuleHealthSummary).Tier, system, []LLMMessage{{Role: "user", Content: user}}, false)
 	var badges []string
 	var providerNote string

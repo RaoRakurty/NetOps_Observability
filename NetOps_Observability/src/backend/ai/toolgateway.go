@@ -88,6 +88,9 @@ func (iv Invocation) OK() bool { return iv.Outcome == OutcomeOK }
 // gateway: the Toolbox built by Orchestrator.Toolbox always carries one.
 func (b Toolbox) Invoke(ctx context.Context, p Principal, name string, args ToolArgs) Invocation {
 	iv := Invocation{}
+	// Progress (N-E2): a start for every call, so every finish has one —
+	// including denied and not-wired steps. The tool NAME only.
+	emitTrace(b.Trace, TraceEvent{Type: TraceToolStarted, Tool: name})
 	tool, d, registered := b.Authorize(name, p)
 	iv.Tool, iv.Decision, iv.Registered = tool, d, registered
 	gw := b.Gateway
@@ -97,6 +100,7 @@ func (b Toolbox) Invoke(ctx context.Context, p Principal, name string, args Tool
 	finish := func(outcome string) Invocation {
 		iv.Outcome = outcome
 		gw.Metrics.observe(name, outcome)
+		emitTrace(b.Trace, TraceEvent{Type: TraceToolFinished, Tool: name, Outcome: traceOutcome(outcome)})
 		return iv
 	}
 	if !registered {

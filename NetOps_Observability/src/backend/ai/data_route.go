@@ -75,7 +75,13 @@ func (o *Orchestrator) answerData(ctx context.Context, p Principal, question str
 	if o.NLQuery == nil || plan.Intent == "problem_explanation" || diagnosticCue.MatchString(question) {
 		return Answer{}, false
 	}
+	emitTrace(o.Trace, TraceEvent{Type: TraceToolStarted, Tool: "nl_query"})
 	d, err := o.NLQuery(ctx, p, question, DataOpts{AllowModel: plan.Intent != "product_question" && plan.Intent != "product_navigation"})
+	nlqOutcome := "ok"
+	if err != nil || (d.Status != DataAnswered && d.Status != DataClarify) {
+		nlqOutcome = "skipped" // the classic path answers instead
+	}
+	emitTrace(o.Trace, TraceEvent{Type: TraceToolFinished, Tool: "nl_query", Outcome: nlqOutcome})
 	if err != nil || (d.Status != DataAnswered && d.Status != DataClarify) {
 		return Answer{}, false
 	}
