@@ -20,6 +20,9 @@ name: backend-ci
 on:
   workflow_dispatch:   # manual re-run on a branch head (e.g. after a fix that did not touch this workflow's paths)
   push:
+    # main only (2026-10-17): a branch with an open PR got every job TWICE (push +
+    # pull_request). Branch feedback comes from the PR run (or workflow_dispatch).
+    branches: [main]
     paths:
       - 'NetOps_Observability/src/backend/**'
       - 'NetOps_Observability/deployment/docker/Dockerfile.backend'

@@ -9,6 +9,9 @@ name: supply-chain
 on:
   workflow_dispatch:   # manual re-run on a branch head (e.g. after a fix that did not touch this workflow's paths)
   push:
+    # main only (2026-10-17): a branch with an open PR got every job TWICE (push +
+    # pull_request). Branch feedback comes from the PR run (or workflow_dispatch).
+    branches: [main]
   pull_request:
   # Reusable-workflow trigger (release gate). `release-gate.yml` — called by
   # publish-images.yml and release-bundle.yml — invokes this whole workflow on the
