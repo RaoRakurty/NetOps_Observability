@@ -31,6 +31,7 @@ import IrisProgress, { type ProgressStep } from "../iris/IrisProgress";
 import { applyEvent } from "../iris/progressStream";
 import StatementText from "../iris/StatementText";
 import { answerCiteHref } from "../iris/links";
+import { withPageContext } from "../iris/pageRoute";
 import QueryCorrection from "../iris/QueryCorrection";
 import { hasAIEntitlement } from "../lib/aiEntitlements";
 import { httpFailure, operatorError } from "../lib/errors";
@@ -243,6 +244,11 @@ export default function Opsis({ controls, onLeave, ask, onAskHandled }: {
   // stream a proxy cut short falls back ONCE to the plain JSON ask.
   const askStreaming = async (content: string, context?: Record<string, string>, convId?: string): Promise<AiAnswer> => {
     setSteps([]);
+    // The page behind the box rides along (N-G3): the server answers "what am
+    // I looking at?" from that page's docs and ranks them first for product
+    // questions. It is re-validated server-side and never scopes data. One
+    // point covers the stream, its JSON fallback and every caller.
+    context = withPageContext(context);
     try {
       return await api.aiAskStream(content, context, convId, (ev) => setSteps((s) => applyEvent(s, ev)));
     } catch (e) {

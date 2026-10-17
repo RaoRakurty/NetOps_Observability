@@ -174,6 +174,17 @@ func (ix *DocsIndex) finish() {
 	}
 }
 
+// chunkFor returns the portal chunk for a page slug and heading anchor
+// ("" = the page intro). ok=false when the corpus has no such section.
+func (ix *DocsIndex) chunkFor(slug, anchor string) (DocChunk, bool) {
+	for _, c := range ix.chunks {
+		if c.Tier == DocTierPortal && c.Slug == slug && c.Anchor == anchor {
+			return c, true
+		}
+	}
+	return DocChunk{}, false
+}
+
 // Len reports how many chunks are indexed (startup log + tests).
 func (ix *DocsIndex) Len() int { return len(ix.chunks) }
 
@@ -237,6 +248,20 @@ const docsChunkMinSpecificity = 0.30
 // When nothing clears them the caller must SAY the docs don't cover it, never
 // paraphrase from nothing.
 func (ix *DocsIndex) Search(query string, limit int) []DocsHit {
+	return ix.search(query, limit, nil)
+}
+
+// SearchOnPage is Search asked from a console page (plan N-G3): chunks of the
+// page's own documentation (pageSlugs) score docPageBoost× higher. The boost
+// is applied AFTER every honesty floor has decided which chunks qualify, so it
+// reorders the hits the question retrieves on its own and never admits one it
+// would not — asking from a page can change which answer comes first, never
+// whether an uncovered question is answered. A nil or empty set is Search.
+func (ix *DocsIndex) SearchOnPage(query string, limit int, pageSlugs map[string]bool) []DocsHit {
+	return ix.search(query, limit, pageSlugs)
+}
+
+func (ix *DocsIndex) search(query string, limit int, pageSlugs map[string]bool) []DocsHit {
 	qterms := docsQueryTerms(query)
 	if len(qterms) == 0 || len(ix.chunks) == 0 {
 		return nil
@@ -326,6 +351,10 @@ func (ix *DocsIndex) Search(query string, limit int) []DocsHit {
 		// never rides along behind a good hit.
 		if queryIDF > 0 && c.matchedIDF < docsChunkMinSpecificity*queryIDF {
 			continue
+		}
+		// The page boost runs only on a chunk that has already qualified.
+		if pageSlugs[c.hit.Chunk.Slug] {
+			c.hit.Score *= docPageBoost
 		}
 		hits = append(hits, c.hit)
 	}

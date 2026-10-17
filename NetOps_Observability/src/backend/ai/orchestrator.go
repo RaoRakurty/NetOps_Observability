@@ -70,7 +70,10 @@ type Orchestrator struct {
 	// OrgContextBlock); "" or nil = none, and the system prompt is then
 	// byte-for-byte what it was before the store existed. Read once per
 	// orchestrator (one request).
-	OrgContext  func() string
+	OrgContext func() string
+	// Routed receives the router's FIRST claim for each question (N-G4
+	// scoreboard): which arm took it, before that arm ran. nil in production.
+	Routed      func(RouteDecision)
 	orgOnce     sync.Once
 	orgBlock    string
 	gatewayOnce sync.Once
@@ -150,6 +153,14 @@ var (
 	// how-to ("how do I set up SNMP discovery / enable SSO / create a report").
 	// Answered from the curated product knowledge, not live data.
 	reProduct = regexp.MustCompile(`(?i)(\bwhat (is|are|does)\b|\bwhat.?s (a|an|the)\b|\bwhat does\b.*\bmean\b|\bhow does\b|\bhow do(es)? (correlix|the (engine|platform|product|system))\b|\bhow do i (set ?up|configure|enable|create|add|onboard|connect|turn on|register|provision|import|schedule|invite)\b|\bhow to (set ?up|configure|enable|create|add|onboard|connect|import)\b|\bexplain (the|how|correlix)\b|\btell me about\b|\bwhat (can|do) you (do|know)\b|\bwhat is correlix\b)`)
+	// A question about a SCREEN ("what does the Operations Overview page show",
+	// "what does this column mean") and an imperative how-to ("create a monitor
+	// that alerts on …", "connect ServiceNow so …", "what sampling rate should
+	// I configure") are product questions even when they name an operational
+	// noun the live-state rules would claim first (N-G4 routing scoreboard,
+	// 2026-10-17). Checked before every live-state rule.
+	reUIQuestion      = regexp.MustCompile(`(?i)\bwhat (does|do|is|are)\b[^?]*\b(page|tab|view|screen|panel|card|chart|column|graph|widget|dashboard)s?\b[^?]*\b(show|shows|display|displays|mean|means|tell|tells)\b`)
+	reHowToImperative = regexp.MustCompile(`(?i)(^\s*(please\s+)?(create|connect|configure|set ?up|enable|onboard|import|schedule|invite|register|integrate)\b|\bshould (i|we) (configure|set|use|enable|choose|pick)\b|\bhow (is|are) (the |a |an )?[a-z -]{2,60} (chosen|picked|selected|decided|calculated|computed|determined|derived)\b)`)
 	// Explicit "last/past N <unit>" window for the time-range summary parser.
 	reLookbackNum = regexp.MustCompile(`(?i)(?:last|past|previous)\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)\b`)
 
@@ -251,6 +262,11 @@ func Classify(question string, uiContext map[string]string) Plan {
 			Intent: "problem_explanation", Modules: []string{"correlations_rca"},
 			Mode: ModeProblemExplanation, Entities: ent, Freshness: FreshnessLive,
 			Tools: []string{"get_problem", "get_problem_evidence", "get_ticket_status"},
+		}
+	case reUIQuestion.MatchString(q) || reHowToImperative.MatchString(q):
+		return Plan{
+			Intent: "product_question", Modules: []string{"product_navigation"},
+			Mode: ModeProductAnswer, Entities: ent, Freshness: FreshnessConfig,
 		}
 	case reStyleFeedback.MatchString(q) && len(q) < 80:
 		// Pure style feedback → compact current-state re-briefing (brief mode).
@@ -388,7 +404,21 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 	// is server-authored prose returned verbatim (explain.go). It runs first so a
 	// definition can never be re-derived as an investigation, and it reads no
 	// tenant data, so there is nothing to govern below.
+	//
+	// "What am I looking at?" is the same kind of lookup, keyed by the page
+	// the operator is on (docs_pages.go, plan N-G3). It yields to a NAMED
+	// explain topic — the `(i)` already said exactly what it wants — and
+	// otherwise runs before the explain keyword match, so a question about the
+	// page is answered from that page's documentation, not from whichever
+	// definition happens to share a word with it.
+	if _, named := explainTopicFromAsk(question, uiContext); !named {
+		if ans, handled := o.answerPageHelp(question, uiContext); handled {
+			o.routed(ArmPageHelp, ans.Mode)
+			return ans, nil
+		}
+	}
 	if ans, handled := o.answerExplain(question, uiContext); handled {
+		o.routed(ArmExplain, ans.Mode)
 		return ans, nil
 	}
 
@@ -399,6 +429,7 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 	// and that ask for a listing, not a diagnosis; everything else continues
 	// below unchanged.
 	if ans, handled := o.answerData(ctx, p, question, plan, nil); handled {
+		o.routed(ArmData, ans.Mode)
 		return ans, nil
 	}
 
@@ -435,6 +466,7 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 	// unchanged. No existing answer changes shape unless a skill grounded it.
 	if o.Skills != nil {
 		if match, ok := SelectSkill(o.Skills, question, plan); ok {
+			o.routed(ArmSkill, ModeTroubleshootFinding)
 			if ans, handled := o.answerSkill(ctx, p, question, plan, match, uiContext, disc); handled {
 				return ans, nil
 			}
@@ -449,6 +481,7 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 	// state. Unrecognized question → a helpful capability clarification (NOT the
 	// current-state briefing); it reads no data and needs no module.
 	if plan.Intent == "capability" {
+		o.routed(ArmCapability, ModeUnavailable)
 		// A protocol or vendor question the classifier could not place is often
 		// exactly what the TAC catalogue covers ("bgp neighbour down on SR
 		// Linux"): answer from that knowledge before falling back to the
@@ -459,6 +492,7 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 		return o.answerCapability(plan), nil
 	}
 
+	o.routed(ArmClassic, plan.Mode)
 	if len(allowed) == 0 {
 		return Answer{
 			Mode: ModeUnavailable, Intent: plan.Intent, Modules: plan.Modules,
@@ -487,7 +521,7 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 	case ModeProductNavigationHelp:
 		return o.answerNavigation(question, plan, disc), nil
 	case ModeProductAnswer:
-		return o.answerProduct(question, plan, disc), nil
+		return o.answerProductOnPage(question, plan, disc, uiContext), nil
 	case ModeInvestigationPlan:
 		return o.answerKB(question, plan, disc), nil
 	default:
@@ -1614,10 +1648,22 @@ func (o *Orchestrator) answerTimeRange(ctx context.Context, p Principal, questio
 // keyword ProductKB was removed 2026-09-26 — production always wired Docs, so
 // it was unreachable; its UI deep-link table lives on in docs_routes.go.
 func (o *Orchestrator) answerProduct(question string, plan Plan, disc []string) Answer {
+	return o.answerProductOnPage(question, plan, disc, nil)
+}
+
+// answerProductOnPage is answerProduct asked from a console page: when the ui
+// context names a known page (docs_pages.go), that page's documentation wins
+// close calls. An unknown or absent route is ignored — the answer is then
+// exactly answerProduct's.
+func (o *Orchestrator) answerProductOnPage(question string, plan Plan, disc []string, uiContext map[string]string) Answer {
 	if o.Docs == nil {
 		return o.answerCapability(plan)
 	}
-	if a, ok := o.answerProductFromDocs(question, plan, disc); ok {
+	var pageSlugs map[string]bool
+	if _, page, ok := pageForContext(uiContext); ok {
+		pageSlugs = page.slugSet()
+	}
+	if a, ok := o.answerProductFromDocs(question, plan, disc, pageSlugs); ok {
 		return a
 	}
 	// No documentation match → the honest decline. No navigation fallback
@@ -1637,8 +1683,8 @@ func (o *Orchestrator) answerProduct(question string, plan Plan, disc []string) 
 // Help drawer at that page+section, and — for curated concept chunks, which
 // have no portal page — a navigation citation to the Correlix page the concept
 // lives on (docs_routes.go). ok=false when the index has no honest match.
-func (o *Orchestrator) answerProductFromDocs(question string, plan Plan, disc []string) (Answer, bool) {
-	hits := o.Docs.Search(question, 4)
+func (o *Orchestrator) answerProductFromDocs(question string, plan Plan, disc []string, pageSlugs map[string]bool) (Answer, bool) {
+	hits := o.Docs.SearchOnPage(question, 4, pageSlugs)
 	if len(hits) == 0 {
 		return Answer{}, false
 	}

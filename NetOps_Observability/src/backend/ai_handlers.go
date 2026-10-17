@@ -411,7 +411,7 @@ func (s *server) aiNLQueryWith(r *http.Request, claims jwtClaims, st *irisconvo.
 			cx.Conv = &compile.Conversation{Entities: st.Entities, Actors: st.Actors, ChangeIDs: st.ChangeIDs}
 		}
 		ledger := aidecision.FromContext(ctx)
-		c, err := s.nlqCompile(rq, claims, question, cx, opts.AllowModel)
+		c, err := s.nlqCompile(rq, claims, question, cx, opts.AllowModel, opts.BeforeModel)
 		if err != nil {
 			rec := irisquerylog.Record{Source: irisquerylog.SourceRouter, Question: question, Outcome: irisquerylog.OutcomeError, ConversationID: convID}
 			s.nlqCapture(rq, claims, &rec, start)
@@ -1480,20 +1480,27 @@ func (c nlqCompiled) presentation(rs *plan.ResultSet) present.Plan {
 // may: only then, only with a provider this caller may use, and only with a
 // query that passes the same validator in the same scope.
 func (s *server) nlqCompileQuestion(r *http.Request, claims jwtClaims, question string, cx compile.Context) (nlqCompiled, error) {
-	return s.nlqCompile(r, claims, question, cx, true)
+	return s.nlqCompile(r, claims, question, cx, true, nil)
 }
 
 // nlqCompile is nlqCompileQuestion with the model fallback optional
 // (allowModel=false: grammar only — the /ask data arm on product-help
 // questions).
-func (s *server) nlqCompile(r *http.Request, claims jwtClaims, question string, cx compile.Context, allowModel bool) (nlqCompiled, error) {
+func (s *server) nlqCompile(r *http.Request, claims jwtClaims, question string, cx compile.Context, allowModel bool, beforeModel func(context.Context) bool) (nlqCompiled, error) {
 	res, err := compile.Compiler{Cat: s.nlqCatalog, R: s.nlqResolver(r, claims)}.Compile(r.Context(), question, cx)
 	if err != nil {
 		return nlqCompiled{}, err
 	}
 	if res.Unparsed && allowModel {
+		fb := s.nlqModelFallback(r, claims)
+		if fb.Model != nil && beforeModel != nil && !beforeModel(r.Context()) {
+			// N-G4 tie-break: a troubleshooting method also claims this
+			// question and the model said "investigate" (or could not say):
+			// no model compile — the question goes to the method.
+			return nlqCompiled{res: res}, nil
+		}
 		scope := s.nlqScopeFor(r, claims)
-		o, err := s.nlqModelFallback(r, claims).Compile(r.Context(), question, cx, scope, res)
+		o, err := fb.Compile(r.Context(), question, cx, scope, res)
 		if err != nil {
 			return nlqCompiled{}, err
 		}

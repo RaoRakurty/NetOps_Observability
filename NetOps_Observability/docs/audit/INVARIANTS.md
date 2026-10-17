@@ -587,3 +587,13 @@ pass by absence. Bars are pinned by `TestBarsArePinned` and are not lowered.
 
 Not covered by a gate: the model path's live accuracy (stub oracle in CI;
 `-tags nlqmodeleval` only) and the incident corpus as a whole (owner decision D5).
+
+## 19. Iris routing — page-aware help, tie-break, scoreboard (tracker 337 N-G3/N-G4, 2026-10-17)
+
+| Invariant | Status | Proof |
+|---|---|---|
+| The page the operator is on only RANKS documentation: it is re-validated against a server table, never scopes data, never reaches a prompt or the ledger; plain retrieval is unchanged | ✅ | **BUILD** — `TestPageRouteKey`, `TestPageHelpIgnoresBadRoutes`, `TestPageBoostKeepsGoldenRetrieval` (plain hit@1 0.90 / hit@3 1.00; own page hit@1 0.96; unrelated page hit@3 0.99), `TestNavPageDocsCoverEveryNavLeaf` |
+| The model is asked "data or investigate?" ONLY for a contested question (grammar failed, model compile allowed, a method matched); every failure routes to the method; the reply must be exactly one ROUTE line | ✅ | **BUILD** — `TestTieBreakIsOfferedOnlyWhenContested`, `TestRouteTieBreakFailsTowardTheMethod`, `TestParseRouteIsStrict`, `TestBeforeModelGuardsTheModelCompile` (a "no" = zero model compile calls) |
+| Deterministic arms still win: under a model that always answers "data", only contested decisions move, and every move is method → data | ✅ | **BUILD** — `TestRoutingScoreboard` (adversarial run: 9 tie-breaks, 9 moves, 165 questions) |
+| Screen questions and imperative how-tos are product questions, not live-state or methods | ✅ | **BUILD** — `TestRoutingScoreboard` routing lane 25/25 (`ai/testdata/routing_golden.json`); docs items answered as product 108 → 115 of 127 (ratchet) |
+| A tie-break that says "data" never bypasses validation | ✅ | The model compile still validates in the caller's scope or the method runs (`nlqCompile`) |
