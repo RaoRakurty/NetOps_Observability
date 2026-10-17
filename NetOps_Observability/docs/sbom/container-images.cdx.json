@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:326c763c-9fd7-5280-a432-4949ed95b989",
+  "serialNumber": "urn:uuid:3e0bf226-4971-5483-a584-1620232626ea",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-09-27T14:27:45+00:00",
+    "timestamp": "2026-10-10T15:22:00+00:00",
     "tools": {
       "components": [
         {
@@ -16,9 +16,9 @@
     },
     "component": {
       "type": "application",
-      "bom-ref": "correlix@2026.09.27-g241b7602#container-images",
+      "bom-ref": "correlix@2026.10.10-g1ece29c7#container-images",
       "name": "correlix",
-      "version": "2026.09.27-g241b7602",
+      "version": "2026.10.10-g1ece29c7",
       "description": "Correlix \u2014 container-images dependency inventory"
     },
     "properties": [
@@ -416,10 +416,10 @@
     },
     {
       "type": "container",
-      "bom-ref": "container:golang:1.26.8-alpine@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628",
+      "bom-ref": "container:golang:1.26.9-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade",
       "name": "golang",
-      "version": "sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628",
-      "purl": "pkg:oci/golang@sha256%3Ace864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628?tag=1.26.8-alpine",
+      "version": "sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade",
+      "purl": "pkg:oci/golang@sha256%3A3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade?tag=1.26.9-alpine",
       "properties": [
         {
           "name": "correlix:class",
@@ -427,11 +427,11 @@
         },
         {
           "name": "correlix:image:ref",
-          "value": "golang:1.26.8-alpine@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628"
+          "value": "golang:1.26.9-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade"
         },
         {
           "name": "correlix:image:tag",
-          "value": "1.26.8-alpine"
+          "value": "1.26.9-alpine"
         },
         {
           "name": "correlix:image:digest-pinned",
@@ -445,7 +445,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628"
+          "content": "3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade"
         }
       ]
     },
