@@ -1963,7 +1963,7 @@ groups:
         for: 15m
         labels: { severity: warning, layer: storage }
         annotations:
-          summary: "OpenSearch cluster is {{ $labels.status_text }} ({{ $value }}) — a lane is missing a template, or a shard cannot be allocated"
+          summary: "OpenSearch cluster status {{ $value }} (0 green · 1 yellow · 2 red · 3 unknown) — a lane is missing a template, or a shard cannot be allocated"
 
       - alert: OpenSearchUnassignedShards
         expr: opensearch_cluster_unassigned_shards > 0

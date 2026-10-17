@@ -1144,7 +1144,11 @@ transforms:
       - type: gauge
         field: cluster_status
         name: "opensearch_cluster_status"
-        tags: { cluster: "{{ cluster }}", status_text: "{{ status_text }}" }
+        # NO status_text tag (2026-10-17): a status change started a NEW series,
+        # and the old one (say "red") stayed inside the 5-min lookback after the
+        # cluster recovered, so max() — the alert and deploy-qualify Q9 — read RED
+        # for ~5 min after a yellow/green. The value already encodes the status.
+        tags: { cluster: "{{ cluster }}" }
       - type: gauge
         field: active_shards
         name: "opensearch_cluster_active_shards"
