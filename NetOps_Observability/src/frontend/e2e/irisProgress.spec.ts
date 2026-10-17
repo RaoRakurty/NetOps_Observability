@@ -10,11 +10,12 @@
 //   4. hostile event and tool names never reach the screen.
 
 import { test, expect, type Page } from "@playwright/test";
-import { bootIris, openIris, askIris, topCpuAnswer, TENANT_CONFIG, XSS_IMG, type IrisBackendOptions } from "./irisBackend";
+import { bootIris, openIris, askIris, irisPanel, topCpuAnswer, TENANT_CONFIG, XSS_IMG, type IrisBackendOptions } from "./irisBackend";
 
 test.use({ timezoneId: "UTC", locale: "en-US" });
 
-const drawer = (page: Page) => page.getByRole("complementary", { name: "Iris AI assistant" });
+// The one Iris panel (#21); its window is e2e/irisPanel.spec.ts's subject.
+const drawer = irisPanel;
 const answers = (page: Page) => drawer(page).locator(".op-row.assistant .op-bubble-grounded");
 
 async function boot(page: Page, stream: IrisBackendOptions["stream"]) {
