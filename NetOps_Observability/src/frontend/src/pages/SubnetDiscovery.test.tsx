@@ -34,7 +34,7 @@ vi.mock("../services/api", () => ({
 
 import SubnetDiscovery from "./SubnetDiscovery";
 
-const TENANT_COPY = /Your platform operator runs subnet discovery/i;
+const TENANT_COPY = /Your platform operator runs the network scan/i;
 const PLATFORM = { user: { username: "root", platform_admin: true }, loading: false };
 
 function envelope(over: Partial<DiscoveryConfigEnvelope> = {}): DiscoveryConfigEnvelope {
@@ -68,14 +68,14 @@ describe("Subnet Discovery auth-audience gate", () => {
     mockUseAuth.mockReturnValue({ user: null, loading: true });
     render(<SubnetDiscovery />);
     expect(screen.queryByText(TENANT_COPY)).toBeNull();
-    expect(screen.queryByRole("heading", { name: "Subnet discovery", level: 2 })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Network Scan", level: 2 })).toBeNull();
     expect(discoveryConfig).not.toHaveBeenCalled();
   });
 
   it("shows the config card to the resolved platform operator", async () => {
     mockUseAuth.mockReturnValue(PLATFORM);
     render(<SubnetDiscovery />);
-    expect(await screen.findByRole("heading", { name: "Subnet discovery", level: 2 })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Network Scan", level: 2 })).toBeTruthy();
     expect(screen.queryByText(TENANT_COPY)).toBeNull();
   });
 
@@ -83,9 +83,9 @@ describe("Subnet Discovery auth-audience gate", () => {
     mockUseAuth.mockReturnValue({ user: { username: "t-user", platform_admin: false }, loading: false });
     render(<SubnetDiscovery />);
     expect(await screen.findByText(TENANT_COPY)).toBeTruthy();
-    expect(screen.getByRole("link", { name: "SNMP Profiles" }).getAttribute("href")).toBe("#/admin/snmp");
+    expect(screen.getByRole("link", { name: "SNMP Profiles" }).getAttribute("href")).toBe("#/admin/discovery/snmp");
     expect(screen.getByRole("link", { name: "Devices" }).getAttribute("href")).toBe("#/infrastructure/devices");
-    expect(screen.queryByRole("heading", { name: "Subnet discovery", level: 2 })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Network Scan", level: 2 })).toBeNull();
     // The tenant never triggers the requireCrossTenant config read.
     expect(discoveryConfig).not.toHaveBeenCalled();
   });
@@ -96,7 +96,7 @@ describe("Subnet Discovery card — credentials live in SNMP Profiles", () => {
 
   it("presents the workflow as three numbered steps", async () => {
     render(<SubnetDiscovery />);
-    const steps = await screen.findByRole("list", { name: "Set up subnet discovery" });
+    const steps = await screen.findByRole("list", { name: "Set up the network scan" });
     const items = within(steps).getAllByRole("listitem");
     expect(items).toHaveLength(3);
     expect(within(items[0]).getByRole("heading", { name: "Add SNMP credentials" })).toBeTruthy();
@@ -105,12 +105,12 @@ describe("Subnet Discovery card — credentials live in SNMP Profiles", () => {
     expect(items.map((li) => li.querySelector(".disc-step-num")?.textContent)).toEqual(["1", "2", "3"]);
     // Step 1 says what the sweep will try, and links to where credentials live.
     expect(within(items[0]).getByText("3 SNMP profiles will be tried (2 v2c, 1 v3), in name order.")).toBeTruthy();
-    expect(within(items[0]).getByRole("link", { name: "Open SNMP Profiles" }).getAttribute("href")).toBe("#/admin/snmp");
+    expect(within(items[0]).getByRole("link", { name: "Open SNMP Profiles" }).getAttribute("href")).toBe("#/admin/discovery/snmp");
   });
 
   it("has no community / password input anywhere", async () => {
     const { container } = render(<SubnetDiscovery />);
-    await screen.findByRole("list", { name: "Set up subnet discovery" });
+    await screen.findByRole("list", { name: "Set up the network scan" });
     expect(container.querySelector('input[type="password"]')).toBeNull();
     expect(screen.queryByText(/communit/i)).toBeNull();
     expect(screen.queryByPlaceholderText(/public/i)).toBeNull();
@@ -119,10 +119,10 @@ describe("Subnet Discovery card — credentials live in SNMP Profiles", () => {
   it("warns plainly when there are no SNMP profiles to try", async () => {
     discoveryConfig.mockResolvedValue(envelope({ scan_profiles: { total: 0, v2c: 0, v3: 0 }, found: [] }));
     render(<SubnetDiscovery />);
-    const steps = await screen.findByRole("list", { name: "Set up subnet discovery" });
+    const steps = await screen.findByRole("list", { name: "Set up the network scan" });
     const step1 = within(steps).getAllByRole("listitem")[0];
     expect(within(step1).getByRole("alert").textContent).toMatch(/Nothing can be found until you add one/);
-    expect(within(step1).getByRole("link", { name: "Add an SNMP profile" }).getAttribute("href")).toBe("#/admin/snmp");
+    expect(within(step1).getByRole("link", { name: "Add an SNMP profile" }).getAttribute("href")).toBe("#/admin/discovery/snmp");
     expect(screen.queryByText(/will be tried/)).toBeNull();
     expect(screen.getByText("Needs attention")).toBeTruthy();
     expect(screen.getByText("No devices found yet.")).toBeTruthy();

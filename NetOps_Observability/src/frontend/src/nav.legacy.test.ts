@@ -111,12 +111,14 @@ const LEGACY: [string, string, string][] = [
   // Administration — the leaves that STAYED tenant-level (kept ids + the
   // collectors rename)
   ["#/admin/settings", "admin", "settings"],
-  ["#/admin/datasources", "admin", "datasources"],
-  ["#/admin/collectors", "admin", "sensors"],
-  ["#/admin/snmp", "admin", "snmp"],
+  // The five Data sources leaves are sections of Discovery (2026-10-18).
+  ["#/admin/datasources", "admin", "discovery"],
+  ["#/admin/collectors", "admin", "discovery"],
+  ["#/admin/sensors", "admin", "discovery"],
+  ["#/admin/snmp", "admin", "discovery"],
   ["#/admin/processors", "admin", "processors"],
   ["#/admin/sensitive-data-access", "admin", "sensitive-data-access"],
-  ["#/admin/telemetry-coverage", "admin", "telemetry-coverage"],
+  ["#/admin/telemetry-coverage", "admin", "discovery"],
   ["#/admin/identity", "admin", "identity"],
   ["#/admin/access", "admin", "access"],
   ["#/admin/sessions", "admin", "sessions"],
@@ -332,9 +334,20 @@ describe("Services split — every old sub-view lands on its new home", () => {
 // plain Infrastructure leaf. Every link written for the composite must land on
 // the page that now owns its tab — as a full canonical hash, query intact.
 describe("Discovery & NMS split — every old link lands on its new home", () => {
+  // 2026-10-18: each old Data sources leaf opens ITS section of Discovery.
+  it.each([
+    ["#/admin/datasources", "#/admin/discovery/coverage"],
+    ["#/admin/snmp", "#/admin/discovery/snmp"],
+    ["#/admin/sensors", "#/admin/discovery/sensors"],
+    ["#/admin/collectors", "#/admin/discovery/sensors"],
+    ["#/admin/telemetry-coverage", "#/admin/discovery/telemetry"],
+  ])("%s opens %s", (from, to) => {
+    expect(canonicalHash(from)).toBe(to);
+  });
+
   const CASES: [string, string][] = [
-    ["#/infrastructure/discovery", "#/admin/discovery"],
-    ["#/infrastructure/discovery/discovery", "#/admin/discovery"],
+    ["#/infrastructure/discovery", "#/admin/discovery/scan"],
+    ["#/infrastructure/discovery/discovery", "#/admin/discovery/scan"],
     ["#/infrastructure/discovery/nms", "#/infrastructure/nms"],
   ];
 
@@ -345,7 +358,7 @@ describe("Discovery & NMS split — every old link lands on its new home", () =>
   it("carries the deep-link query through the split", () => {
     expect(canonicalHash("#/infrastructure/discovery/nms?vendor=meraki"))
       .toBe("#/infrastructure/nms?vendor=meraki");
-    expect(canonicalHash("#/infrastructure/discovery?x=1")).toBe("#/admin/discovery?x=1");
+    expect(canonicalHash("#/infrastructure/discovery?x=1")).toBe("#/admin/discovery/scan?x=1");
   });
 
   it("a tenant following an old link reaches the tenant-visible page, not a fallback", () => {

@@ -18,82 +18,17 @@
 //   · After a restart the page re-reads the server and shows the result it
 //     reads, not the result it expected.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, type PlatformFeature, type PlatformFeatures } from "../../services/api";
+import { useMemo, useState } from "react";
+import { type PlatformFeature } from "../../services/api";
 import { fmtDateTime } from "../../lib/time";
-import { httpFailure, operatorError } from "../../lib/errors";
 import { Modal } from "../../components/ui";
 import { groupFeatures, applyLabel, sourceLine, pendingLine, switchValue } from "./featuresModel";
-
-type Load =
-  | { kind: "loading" }
-  | { kind: "denied" }
-  | { kind: "error"; message: string }
-  | { kind: "ready"; data: PlatformFeatures };
-
-type Restart = { kind: "idle" } | { kind: "restarting"; since: number } | { kind: "done" } | { kind: "failed"; message: string };
-
-const RESTART_POLL_MS = 3000;
-const RESTART_GIVE_UP_MS = 180_000;
+import { useFeatureSwitches } from "./useFeatureSwitches";
 
 export default function Features() {
-  const [load, setLoad] = useState<Load>({ kind: "loading" });
-  const [busy, setBusy] = useState<string | null>(null);
-  const [rowError, setRowError] = useState<{ env: string; message: string } | null>(null);
+  const { load, busy, rowError, save: saveEnv, restart, requestRestart } = useFeatureSwitches();
   const [confirm, setConfirm] = useState<PlatformFeature | null>(null);
-  const [restart, setRestart] = useState<Restart>({ kind: "idle" });
-
-  const refresh = useCallback(async () => {
-    try {
-      const data = await api.platformFeatures();
-      setLoad({ kind: "ready", data });
-      return data;
-    } catch (e) {
-      const f = httpFailure(e);
-      if (f?.status === 403) setLoad({ kind: "denied" });
-      else setLoad({ kind: "error", message: operatorError(e, "Feature settings could not be read.") });
-      return null;
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  // While restarting: poll until the server answers with nothing pending.
-  useEffect(() => {
-    if (restart.kind !== "restarting") return;
-    const id = setInterval(async () => {
-      if (Date.now() - restart.since > RESTART_GIVE_UP_MS) {
-        setRestart({ kind: "failed", message: "Correlix has not come back after three minutes. Check Stack Health." });
-        return;
-      }
-      try {
-        const data = await api.platformFeatures();
-        setLoad({ kind: "ready", data });
-        setRestart(data.restart_pending ? { kind: "failed", message: "Correlix restarted, but some settings are still waiting. Restart again or check Stack Health." } : { kind: "done" });
-      } catch {
-        /* still restarting */
-      }
-    }, RESTART_POLL_MS);
-    return () => clearInterval(id);
-  }, [restart]);
-
-  const save = useCallback(
-    async (f: PlatformFeature, value: boolean, acknowledged: boolean) => {
-      setBusy(f.env);
-      setRowError(null);
-      try {
-        await api.setPlatformFeature(f.env, value, acknowledged ? f.env : undefined);
-        await refresh();
-      } catch (e) {
-        setRowError({ env: f.env, message: operatorError(e, "The change was not saved.") });
-      } finally {
-        setBusy(null);
-      }
-    },
-    [refresh],
-  );
+  const save = (f: PlatformFeature, value: boolean, acknowledged: boolean) => saveEnv(f.env, value, acknowledged);
 
   const onToggle = (f: PlatformFeature) => {
     const next = !switchValue(f);
@@ -139,14 +74,7 @@ export default function Features() {
               <span>Some changes apply after a restart. Pages reconnect when Correlix is back, usually within a minute or two.</span>
               <button
                 className="btn"
-                onClick={async () => {
-                  try {
-                    await api.restartPlatform();
-                    setRestart({ kind: "restarting", since: Date.now() });
-                  } catch (e) {
-                    setRestart({ kind: "failed", message: operatorError(e, "The restart was not requested.") });
-                  }
-                }}
+                onClick={() => void requestRestart()}
               >
                 Restart now
               </button>

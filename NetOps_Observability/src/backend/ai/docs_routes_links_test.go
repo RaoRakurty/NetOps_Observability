@@ -390,7 +390,7 @@ func TestNavIndexExtractorSanity(t *testing.T) {
 		// Licence moved BACK to Administration on 2026-09-05 with the licence
 		// read split (GET → requireAdmin + a tenant projection), so it is the
 		// anchor for a leaf that moved in BOTH directions in one day.
-		{"admin", "identity"}, {"admin", "snmp"}, {"admin", "licence"}, {"platform", "auth"},
+		{"admin", "identity"}, {"admin", "discovery"}, {"admin", "licence"}, {"platform", "auth"},
 		{"investigate", "rca"}, {"analytics", "reports"}, {"overview", "home"},
 	} {
 		if !idx.leaves[want[0]][want[1]] {

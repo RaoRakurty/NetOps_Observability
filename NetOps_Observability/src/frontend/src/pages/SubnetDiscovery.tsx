@@ -28,11 +28,11 @@ export default function SubnetDiscovery() {
   return (
     // Honest tenant state: discovery is real, it just isn't THEIR control.
     <div className="card" style={{ maxWidth: 760 }}>
-      <h3 style={{ marginTop: 0 }}>Subnet discovery</h3>
+      <h3 style={{ marginTop: 0 }}>Network Scan</h3>
       <p style={{ color: "var(--muted)", fontSize: 14 }}>
-        Your platform operator runs subnet discovery. Devices it finds appear in{" "}
+        Your platform operator runs the network scan. Devices it finds appear in{" "}
         <a href="#/infrastructure/devices">Devices</a>. The SNMP credentials it uses are in{" "}
-        <a href="#/admin/snmp">SNMP Profiles</a>.
+        <a href="#/admin/discovery/snmp">SNMP Profiles</a>.
       </p>
     </div>
   );

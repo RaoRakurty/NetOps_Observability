@@ -42,9 +42,9 @@ type docRouteRule struct {
 var docRouteRules = []docRouteRule{
 	// The guided device-troubleshooting workspace, not the RCA board.
 	{"troubleshooting", "#/investigate/troubleshooting"},
-	{"discovery", "#/admin/discovery"},
-	// SNMP credentials/profiles live in Administration → Data sources.
-	{"snmp", "#/admin/snmp"},
+	{"discovery", "#/admin/discovery/scan"},
+	// SNMP credentials/profiles live in Administration → Discovery.
+	{"snmp", "#/admin/discovery/snmp"},
 	// Authentication is PROVIDER-only plumbing and moved to the Platform
 	// section in the 2026-09-05 IA (docs/design/ADMIN_IA_2026-09-05.md §2).
 	{"sso", "#/platform/auth"},

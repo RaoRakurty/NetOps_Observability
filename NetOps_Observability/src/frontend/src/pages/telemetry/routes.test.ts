@@ -12,56 +12,59 @@
 // Sensors included) and "Data handling" (Processors beside Sensitive Data
 // Access). Telemetry coverage reports on what the SOURCES delivered, so it
 // stays with them. Its route and its gate are unchanged.
+//
+// 2026-10-18 (owner): the five Data sources leaves became sections of ONE
+// Administration → Discovery page. Telemetry Coverage is its last section
+// (#/admin/discovery/telemetry); the old #/admin/telemetry-coverage still
+// lands there. The tenant-visibility rule is unchanged.
 
 import { describe, it, expect } from "vitest";
-import { NAV, ROUTE_CHUNKS, filteredNav, resolveRoute, landingResolves } from "../../nav";
+import { NAV, ROUTE_CHUNKS, filteredNav, resolveRoute, landingResolves, canonicalHash } from "../../nav";
 
 const admin = NAV.find((s) => s.id === "admin")!;
-const leaf = (admin.children ?? []).find((l) => l.id === "telemetry-coverage");
+const leaf = (admin.children ?? []).find((l) => l.id === "discovery");
+const section = leaf?.subItems?.find((x) => x.id === "telemetry");
 
 describe("Telemetry coverage nav placement", () => {
-  it("sits in the Administration → Data sources group", () => {
+  it("is the Telemetry Coverage section of Administration → Data sources → Discovery", () => {
     expect(leaf).toBeDefined();
-    expect(leaf!.label).toBe("Telemetry Coverage");
     expect(leaf!.group).toBe("Data sources");
+    expect(section?.label).toBe("Telemetry Coverage");
+    expect(leaf!.subItems!.map((x) => x.id).at(-1)).toBe("telemetry");
   });
 
-  it("closes the Data sources group with Subnet Discovery beside it, and the shaping pair is its own group", () => {
+  it("the shaping pair stays its own group", () => {
     const groupIds = (g: string) => (admin.children ?? []).filter((l) => l.group === g).map((l) => l.id);
-    // 2026-10: Subnet Discovery moved in from Infrastructure and sits right
-    // after Telemetry Coverage (SNMP credentials live in ONE place).
-    expect(groupIds("Data sources")).toEqual([
-      "datasources", "snmp", "sensors", "telemetry-coverage", "discovery",
-    ]);
-    // Owner IA 2026-09-05: Processors and Sensitive Data Access are ONE group.
+    expect(groupIds("Data sources")).toEqual(["discovery"]);
     expect(groupIds("Data handling")).toEqual(["processors", "sensitive-data-access"]);
   });
 
   it("stays visible to a tenant admin (the unrecognized half is tenant-scoped)", () => {
     expect(leaf!.platformOnly).toBeUndefined();
-    const tenantIds = (filteredNav(false).find((s) => s.id === "admin")?.children ?? []).map((l) => l.id);
-    expect(tenantIds).toContain("telemetry-coverage");
+    expect(section?.platformOnly).toBeUndefined();
+    const tenantLeaf = (filteredNav(false).find((s) => s.id === "admin")?.children ?? []).find((l) => l.id === "discovery");
+    expect(tenantLeaf?.subItems?.map((x) => x.id)).toContain("telemetry");
   });
 
   it("never uses engine vocabulary in its label", () => {
-    expect(leaf!.label).not.toMatch(/\bSignals\b/);
+    expect(section!.label).not.toMatch(/\bSignals\b/);
   });
 });
 
 describe("Telemetry coverage route", () => {
-  it("resolves by hash for both principals and is a valid saved landing", () => {
+  it("resolves by hash for both principals (new and old address) and is a valid saved landing", () => {
+    expect(canonicalHash("#/admin/telemetry-coverage")).toBe("#/admin/discovery/telemetry");
     for (const platform of [true, false]) {
       const nav = filteredNav(platform);
-      expect(resolveRoute("#/admin/telemetry-coverage", nav)).toMatchObject({
-        section: { id: "admin" },
-        leaf: { id: "telemetry-coverage" },
-      });
-      expect(landingResolves("#/admin/telemetry-coverage", nav)).toBe(true);
+      for (const h of ["#/admin/discovery/telemetry", "#/admin/telemetry-coverage"]) {
+        expect(resolveRoute(h, nav)).toMatchObject({ section: { id: "admin" }, leaf: { id: "discovery" } });
+        expect(landingResolves(h, nav)).toBe(true);
+      }
     }
   });
 
-  it("is registered as its own lazy chunk for code-splitting + prefetch", () => {
-    expect(typeof ROUTE_CHUNKS["TelemetryCoverage"]).toBe("function");
+  it("is registered as a lazy chunk for code-splitting + prefetch", () => {
+    expect(typeof ROUTE_CHUNKS["DiscoveryHub"]).toBe("function");
   });
 
   it("renders the page component from the leaf", () => {

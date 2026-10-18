@@ -3,8 +3,9 @@
 
 import { fmtDateTime } from "../lib/time";
 import { useEffect, useState } from "react";
-import { api, CollectorStatus } from "../services/api";
+import { api, CollectorStatus, type PlatformFeature } from "../services/api";
 import { operatorError } from "../lib/errors";
+import { useFeatureSwitches } from "../pages/platform/useFeatureSwitches";
 // Friendly display names for collector ids. Unknown ids fall back to the raw
 // name uppercased, so new collectors still render sensibly.
 const COLLECTOR_LABELS: Record<string, string> = {
@@ -13,8 +14,27 @@ const COLLECTOR_LABELS: Record<string, string> = {
   snmpmetrics: "SNMP metrics",
   gnmi: "gNMI",
   netconf: "NETCONF",
+  snmptrap: "SNMP traps",
   tunnels: "Tunnels",
 };
+
+// Which platform switch turns each collector on (internal/featureflags/specs.go;
+// every one applies after a restart and none is licence-gated). The two SNMP
+// transports share one switch.
+export const COLLECTOR_SWITCH: Record<string, string> = {
+  snmpv2c: "ENABLE_SNMP_COLLECTION",
+  snmpv3: "ENABLE_SNMP_COLLECTION",
+  snmpmetrics: "ENABLE_SNMP_METRICS",
+  gnmi: "ENABLE_GNMI_COLLECTION",
+  netconf: "ENABLE_NETCONF_COLLECTION",
+  snmptrap: "FEATURE_SNMP_TRAPS",
+};
+
+/** What a switch is doing now: the RUNNING value, or what it becomes after the restart. */
+export function switchState(f: PlatformFeature): string {
+  if (f.restart_pending) return f.desired ? "On after restart" : "Off after restart";
+  return f.running ? "On" : "Off";
+}
 
 function collectorLabel(name: string): string {
   return COLLECTOR_LABELS[name] ?? name.toUpperCase();
@@ -39,6 +59,11 @@ function reachClass(c: CollectorStatus): string {
 export default function Collectors() {
   const [items, setItems] = useState<CollectorStatus[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  // The switches are platform-global (requirePlatformAdmin). This page is
+  // already platform-only; a 403 simply leaves the Switch column out.
+  const sw = useFeatureSwitches();
+  const features = sw.load.kind === "ready" ? sw.load.data : null;
+  const featureByEnv = new Map((features?.features ?? []).map((f) => [f.env, f]));
 
   useEffect(() => {
     let alive = true;
@@ -75,9 +100,50 @@ export default function Collectors() {
       ? "s-warn"
       : "s-good";
 
+  const switchCell = (env: string | undefined) => {
+    const f = env ? featureByEnv.get(env) : undefined;
+    if (!f) return <td>—</td>;
+    const next = !f.desired;
+    return (
+      <td>
+        <span className="sensor-switch">
+          <span className={`badge ${f.running ? "good" : "warn"}`}>{switchState(f)}</span>
+          <button className="btn" disabled={sw.busy !== null || sw.restart.kind === "restarting"}
+            onClick={() => void sw.save(f.env, next, false)} aria-label={`${next ? "Turn on" : "Turn off"} ${f.label}`}>
+            {next ? "Turn on" : "Turn off"}
+          </button>
+        </span>
+        {sw.rowError?.env === f.env && <div role="alert" style={{ color: "var(--bad)" }}>{sw.rowError.message}</div>}
+      </td>
+    );
+  };
+  // A collector that is switched off may not register at all: its switch
+  // still needs a row, or there is nothing to turn back on. (A switch that IS
+  // running with no row of its own reports under another collector.)
+  const shownEnvs = new Set(items.map((c) => COLLECTOR_SWITCH[c.name]).filter(Boolean));
+  const offOnly = features ? [...new Set(Object.values(COLLECTOR_SWITCH))].filter((env) => !shownEnvs.has(env) && featureByEnv.has(env)) : [];
+
   return (
     <div className="card">
       <h2>Collectors</h2>
+      {features && (features.restart_pending || sw.restart.kind !== "idle") && (
+        <div className="cc-panel" data-testid="sensor-restart-banner" style={{ padding: "10px 12px", marginBottom: 12, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          {sw.restart.kind === "restarting" ? (
+            <span>Restarting Correlix… this page will update when it is back.</span>
+          ) : sw.restart.kind === "done" ? (
+            <span>Correlix restarted. The new settings are running.</span>
+          ) : sw.restart.kind === "failed" ? (
+            <span role="alert">{sw.restart.message}</span>
+          ) : features.can_restart ? (
+            <>
+              <span>A change applies after a restart.</span>
+              <button className="btn accent" onClick={() => void sw.requestRestart()}>Restart now</button>
+            </>
+          ) : (
+            <span>A change applies after a restart. Restart the Correlix service from the host.</span>
+          )}
+        </div>
+      )}
       {err && <p style={{ color: "var(--bad)" }}>{err}</p>}
 
       <div className="stat-grid" style={{ marginBottom: 18 }}>
@@ -116,7 +182,7 @@ export default function Collectors() {
         </div>
       </div>
 
-      {items.length === 0 ? (
+      {items.length === 0 && offOnly.length === 0 ? (
         <div className="empty">No collectors registered.</div>
       ) : (
         <table>
@@ -129,6 +195,7 @@ export default function Collectors() {
               <th className="num">Reachable</th>
               <th className="num">Last poll</th>
               <th>Last tick</th>
+              {features && <th>Switch</th>}
             </tr>
           </thead>
           <tbody>
@@ -158,6 +225,21 @@ export default function Collectors() {
                 <td>
                   {c.last_tick ? fmtDateTime(c.last_tick) : "—"}
                 </td>
+                {features && switchCell(COLLECTOR_SWITCH[c.name])}
+              </tr>
+            ))}
+            {offOnly.map((env) => (
+              <tr key={env} className="dt-row" data-testid={`sensor-off-${env}`}>
+                <td>{featureByEnv.get(env)?.label}</td>
+                {/* No collector row of its own: when its switch runs, the work
+                    reports under another collector — never claim "off" here. */}
+                <td>{featureByEnv.get(env)?.running ? <span className="badge">no separate status</span> : <span className="badge warn">off</span>}</td>
+                <td>—</td>
+                <td className="num">—</td>
+                <td className="num">—</td>
+                <td className="num">—</td>
+                <td>—</td>
+                {switchCell(env)}
               </tr>
             ))}
           </tbody>

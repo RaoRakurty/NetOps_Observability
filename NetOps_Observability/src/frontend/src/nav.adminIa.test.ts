@@ -52,7 +52,6 @@ const GATES: Record<string, { scope: "platform" | "tenant"; gate: string }> = {
   transport: { scope: "tenant", gate: "/api/security/transport-posture → requireAdmin (export alone is requirePlatformAdmin)" },
   processors: { scope: "tenant", gate: "pipeline_processors.go handleProcessors → requireAdmin + principalTenant" },
   "sensitive-data-access": { scope: "tenant", gate: "pipeline_processors.go unseal routes → requirePerm(sensitive_data, admin)" },
-  "telemetry-coverage": { scope: "tenant", gate: "/api/telemetry/unrecognized → requirePerm(infrastructure, read); the parser-stats half alone is requirePlatformAdmin" },
   identity: { scope: "tenant", gate: "identity_handlers.go → requireAdmin (role/tenant/org writes alone escalate to requirePlatformAdmin)" },
   api: { scope: "tenant", gate: "identity_handlers.go apikeys → requireAdmin" },
   settings: { scope: "tenant", gate: "tenant_display.go → requireAdmin" },
@@ -66,20 +65,21 @@ const GATES: Record<string, { scope: "platform" | "tenant"; gate: string }> = {
   ticketing: { scope: "tenant", gate: "ticketing_http.go → requirePerm(administration, read|write)" },
   "network-context": { scope: "tenant", gate: "ai_handlers.go handleAIContext → requirePerm(administration, read/write/admin) + ai.context.author + principalTenant (a Global view must choose a workspace); approval needs a second person (internal/orgcontext)" },
   "ticket-delivery": { scope: "tenant", gate: "ticketing_http.go handleTicketsOutbox/handleTicketsAudit → requirePerm(infrastructure, read) + principalTenant; integrations_http.go handleIntegrationReconcile → requireAdmin on the caller's own tenant" },
-  datasources: { scope: "tenant", gate: "/api/devices → requirePerm(infrastructure, read)" },
-  snmp: { scope: "tenant", gate: "snmp_profiles.go read → requirePerm(infrastructure, read); writes escalate to requirePlatformAdmin" },
-  // Sensors is the ONE leaf that keeps a leaf-level platform stamp inside the
-  // tenant-level section: the owner put it under Data sources, and the backend
-  // is requireCrossTenant, so the leaf carries `platformOnly` instead.
-  sensors: { scope: "platform", gate: "main.go handleCollectors → requireCrossTenant" },
-  // Subnet Discovery mirrors the Notifications precedent below: the config
-  // half (snmp_discovery.go handleDiscoveryConfig / refresh → requireCrossTenant)
-  // is platform-global and the server refuses a tenant regardless, but the
-  // PAGE carries its own audience gate (pages/SubnetDiscovery.tsx: platform
-  // operator → config card, never fetched for a tenant; tenant → where its
-  // discovered devices and SNMP credentials live). The tenant half is the
-  // explanation, so the leaf is tenant-visible, NOT platformOnly.
-  discovery: { scope: "tenant", gate: "snmp_discovery.go handleDiscoveryConfig → requireCrossTenant; page audience-gates the card on platform_admin and shows tenants an explanation (MIXED)" },
+  // Discovery (owner 2026-10-18) is ONE tenant-visible leaf over five
+  // sections, each keeping the gate it had as a leaf (MIXED):
+  //   snmp      → snmp_profiles.go read → requirePerm(infrastructure, read);
+  //               writes escalate to requirePlatformAdmin
+  //   scan      → snmp_discovery.go handleDiscoveryConfig → requireCrossTenant;
+  //               SubnetDiscovery audience-gates the card on platform_admin and
+  //               shows tenants where their devices and credentials live
+  //   sensors   → main.go handleCollectors → requireCrossTenant, switches →
+  //               requirePlatformAdmin: the hub neither renders nor fetches it
+  //               for a tenant (DiscoveryHub.test.tsx) and the sub-item is
+  //               platformOnly
+  //   coverage  → /api/devices → requirePerm(infrastructure, read)
+  //   telemetry → /api/telemetry/unrecognized → requirePerm(infrastructure,
+  //               read); the parser-stats half alone is requirePlatformAdmin
+  discovery: { scope: "tenant", gate: "five sections, each its former leaf gate; Sensors platform-only inside the page (MIXED)" },
   // Notifications mixes: the channel config is platform-global, the contact
   // points are tenant-scoped. It stays tenant-level because the tenant half is
   // the operator surface; the platform half already refuses a tenant admin.
@@ -191,20 +191,22 @@ describe("what each principal sees", () => {
 });
 
 describe("Administration groups (owner IA, 2026-09-05)", () => {
-  it("Sensors sits under Data sources", () => {
-    expect(groupIds(admin, "Data sources")).toContain("sensors");
+  it("Data sources is ONE Discovery leaf, with its sections as sub-items in setup order", () => {
+    expect(groupIds(admin, "Data sources")).toEqual(["discovery"]);
+    const leaf = (admin.children ?? []).find((l) => l.id === "discovery")!;
+    expect(leaf.label).toBe("Discovery");
+    expect((leaf.subItems ?? []).map((x) => x.id)).toEqual(["snmp", "scan", "sensors", "coverage", "telemetry"]);
+    expect(resolveRoute("#/admin/discovery", providerNav).leaf?.id).toBe("discovery");
+    // Tenants keep the page (each section gates itself)…
+    expect(leafIds(tenantNav.find((s) => s.id === "admin"))).toContain("discovery");
   });
 
-  it("Subnet Discovery sits in Data sources, right after Telemetry Coverage", () => {
-    const ds = groupIds(admin, "Data sources");
-    expect(ds).toContain("discovery");
-    expect(ds.indexOf("discovery")).toBe(ds.indexOf("telemetry-coverage") + 1);
-    const leaf = (admin.children ?? []).find((l) => l.id === "discovery")!;
-    expect(leaf.label).toBe("Subnet Discovery");
-    expect(resolveRoute("#/admin/discovery", providerNav).leaf?.id).toBe("discovery");
-    // Tenants keep the page (it explains discovery to them); the card itself
-    // is gated inside the page.
-    expect(leafIds(tenantNav.find((s) => s.id === "admin"))).toContain("discovery");
+  it("the platform-only Sensors sub-item is never offered to a tenant", () => {
+    const sub = (nav: typeof providerNav) =>
+      (nav.find((s) => s.id === "admin")?.children ?? []).find((l) => l.id === "discovery")?.subItems?.map((x) => x.id) ?? [];
+    expect(sub(providerNav)).toContain("sensors");
+    expect(sub(tenantNav)).not.toContain("sensors");
+    expect(sub(tenantNav)).toEqual(["snmp", "scan", "coverage", "telemetry"]);
   });
 
   it("Processors and Sensitive Data Access are one group", () => {
