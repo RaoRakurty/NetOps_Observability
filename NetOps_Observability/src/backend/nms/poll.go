@@ -13,7 +13,9 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // poll.go — pollers. A Poller fetches raw payloads for one stream and advances
@@ -95,11 +97,49 @@ func fetch(ctx context.Context, in PollInput, path string) ([]byte, error) {
 // statistics for the metric lane.
 func vmanagePoller() Poller {
 	return vmanagePoll{rest: restPoller{paths: map[string]string{
-		"alarms":     "/dataservice/alarms",
-		"events":     "/dataservice/event",
 		"statistics": "/dataservice/statistics/approute",
 		"inventory":  "/dataservice/device",
 	}}}
+}
+
+// vmanageCursorStreams are read with an entry_time cursor. A bare GET of
+// /dataservice/event returned 17 h / 7,188 rows (5.5 MB) on every cycle (lab,
+// 2026-10-18) — more than the de-duplication window holds, so nearly every
+// event was re-emitted each poll. The query asks only for what is new.
+var vmanageCursorStreams = map[string]string{
+	"alarms": "/dataservice/alarms",
+	"events": "/dataservice/event",
+}
+
+// vmanageCursorOverlap re-reads a short window behind the cursor so a row that
+// lands late is not missed; the row id de-duplicates the overlap.
+const vmanageCursorOverlap = 2 * time.Minute
+
+// pollVManageSince GETs path?query=<entry_time greater than the cursor>. The
+// 20.x query grammar accepts epoch-ms for "greater" (verified on 20.6.1).
+func pollVManageSince(ctx context.Context, in PollInput, path string) ([][]byte, Checkpoint, error) {
+	since := in.Checkpoint.LastEventTime
+	if since.IsZero() {
+		back := in.Backfill
+		if back <= 0 {
+			back = DefaultBackfill
+		}
+		since = nowUTC().Add(-back)
+	}
+	since = since.Add(-vmanageCursorOverlap)
+	q, _ := json.Marshal(map[string]any{"query": map[string]any{ // discard: marshalling an in-memory value cannot fail
+		"condition": "AND",
+		"rules": []map[string]any{{
+			"value": []string{strconv.FormatInt(since.UnixMilli(), 10)}, "field": "entry_time",
+			"type": "date", "operator": "greater",
+		}},
+	}})
+	started := nowUTC()
+	body, err := fetch(ctx, in, path+"?query="+url.QueryEscape(string(q)))
+	if err != nil {
+		return nil, in.Checkpoint, err
+	}
+	return [][]byte{body}, Checkpoint{LastEventTime: started, LastSeq: in.Checkpoint.LastSeq + 1}, nil
 }
 
 // vmanagePerDevice are vManage's REAL-TIME device APIs. Every release answers
@@ -118,6 +158,9 @@ const vmanageMaxDevicesPerCycle = 200
 type vmanagePoll struct{ rest restPoller }
 
 func (p vmanagePoll) Poll(ctx context.Context, in PollInput) ([][]byte, Checkpoint, error) {
+	if path, ok := vmanageCursorStreams[in.Stream]; ok {
+		return pollVManageSince(ctx, in, path)
+	}
 	path, perDevice := vmanagePerDevice[in.Stream]
 	if !perDevice {
 		return p.rest.Poll(ctx, in)
