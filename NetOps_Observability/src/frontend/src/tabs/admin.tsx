@@ -28,23 +28,12 @@ import { userLabel } from "../lib/userLabel";
 import Icon from "../components/Icon";
 import { useAuth } from "../hooks/useAuth";
 import AskIris from "../components/AskIris";
+import AdminPageHeader from "../components/admin/AdminPageHeader";
 
 // ---- shared chrome ---------------------------------------------------------
 
-// AdminHead. The `sub` is one SHORT line at most — the sentence that used to
-// teach what the screen is for now lives in ai/skills/explain/<topic>.md and is
-// reached from the (i) beside the title (tracker 270, sweep 3).
-function AdminHead({ title, sub, topic }: { title: string; sub?: string; topic?: string }) {
-  return (
-    <div className="admin-head">
-      <h2 style={{ margin: 0, fontSize: "var(--fs-lg)" }}>
-        {title}
-        {topic ? <AskIris topic={topic} label={title} /> : null}
-      </h2>
-      {sub ? <p className="admin-sub">{sub}</p> : null}
-    </div>
-  );
-}
+// AdminHead is the shared Administration page header.
+const AdminHead = AdminPageHeader;
 
 // role=alert announces the failure to assistive tech when it appears (WCAG
 // 3.3.1/4.1.3) — used by every admin form, so the fix lands everywhere at once.

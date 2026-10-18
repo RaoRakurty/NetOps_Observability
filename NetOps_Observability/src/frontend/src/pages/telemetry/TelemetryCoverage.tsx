@@ -36,6 +36,7 @@ import { useWorkspace } from "../../context/workspace";
 import { fmtDateTime } from "../../lib/time";
 import { operatorError } from "../../lib/errors";
 import AskIris from "../../components/AskIris";
+import AdminPageHeader from "../../components/admin/AdminPageHeader";
 import {
   CATALOG_DOCS_URL,
   fidelityRank,
@@ -56,14 +57,7 @@ type LaneChoice = "all" | "syslog" | "trap";
 
 // ── small chrome (mirrors the other Administration surfaces) ────────────────
 
-function AdminHead({ title, sub }: { title: string; sub: string }) {
-  return (
-    <div className="admin-head">
-      <h2 style={{ margin: 0, fontSize: "var(--fs-lg)" }}>{title}</h2>
-      <p className="admin-sub">{sub}</p>
-    </div>
-  );
-}
+const AdminHead = AdminPageHeader;
 
 // The raw message stays in state because isForbidden() reads the 403 out of it
 // (a legitimate 403 is an ANSWER — the platform-admin card — not a failure).

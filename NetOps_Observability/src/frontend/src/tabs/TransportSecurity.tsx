@@ -12,21 +12,11 @@ import { useCallback, useEffect, useState } from "react";
 import { api, PostureRow } from "../services/api";
 import { fmtDate, fmtDateTime } from "../lib/time";
 import { StatStrip, Stat } from "../components/ui";
-import AskIris from "../components/AskIris";
+import AdminPageHeader from "../components/admin/AdminPageHeader";
 
 // ---- shared chrome (admin.tsx keeps these private; replicated, not imported) --
 
-function AdminHead({ title, sub, topic }: { title: string; sub: string; topic?: string }) {
-  return (
-    <div className="admin-head">
-      <h2 style={{ margin: 0, fontSize: "var(--fs-lg)" }}>{title}</h2>
-      <p className="admin-sub">
-        {sub}
-        {topic && <AskIris topic={topic} label={title} />}
-      </p>
-    </div>
-  );
-}
+const AdminHead = AdminPageHeader;
 
 // role=alert announces the failure to assistive tech when it appears (WCAG
 // 3.3.1/4.1.3) — same contract as the admin forms' ErrLine.
