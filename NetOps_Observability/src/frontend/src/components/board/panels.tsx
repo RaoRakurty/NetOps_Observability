@@ -14,6 +14,7 @@ import { cssVar } from "../../theme/tokens";
 import Icon from "../Icon";
 import { Modal, Stat, StatTone } from "../ui";
 import { escapeHtml } from "../../lib/text";
+import { deviceDisplayName, useDeviceNames, type DeviceNames } from "../../lib/deviceNames";
 export { escapeHtml }; // re-exported: panels was the original home; canonical lives in lib/text
 
 // ── formatters ───────────────────────────────────────────────────────────────
@@ -65,13 +66,15 @@ export function labelSelector(parts: Record<string, string | undefined>): string
 
 export const latest = (s: PromSeries): number => (s.values.length ? Number(s.values[s.values.length - 1][1]) : 0);
 
-export function seriesLabel(s: PromSeries, keys?: string[]): string {
+export function seriesLabel(s: PromSeries, keys?: string[], names: DeviceNames | null = null): string {
   const m = s.metric || {};
+  // The `device` label is the device ID; operators read its name.
+  const val = (k: string) => (k === "device" ? deviceDisplayName(m.device, names) : m[k]);
   if (keys) {
-    const parts = keys.map((k) => m[k]).filter(Boolean);
+    const parts = keys.map(val).filter(Boolean);
     if (parts.length) return parts.join(" · ");
   }
-  const dev = m.device || m.instance || m.host || "";
+  const dev = (m.device ? deviceDisplayName(m.device, names) : "") || m.instance || m.host || "";
   const idx = m.index || m.ifName || m.neighbor || m.peer || "";
   if (dev && idx) return `${dev} · ${idx}`;
   return dev || idx || m.__name__ || "series";
@@ -184,6 +187,7 @@ export function MetricLine({ title, query, minutes, fmtY, height = 240, labelKey
   title: string; query: string; minutes: number; fmtY: (n: number) => string; height?: number; labelKeys?: string[]; stepped?: boolean; dataKind?: DataKind;
 }) {
   const { series, err } = useMetricRange(query, minutes);
+  const names = useDeviceNames();
   return (
     <Panel title={title}>
       {err ? (
@@ -208,7 +212,7 @@ export function MetricLine({ title, query, minutes, fmtY, height = 240, labelKey
               // multi-series → the distinct categorical palette.
               const c = series.length === 1 ? colorForMetric(title) : paletteColor(i);
               return {
-                name: seriesLabel(s, labelKeys),
+                name: seriesLabel(s, labelKeys, names),
                 type: "line",
                 step: stepped ? "end" : undefined,
                 showSymbol: false,
@@ -234,8 +238,9 @@ export function MetricTop({ title, query, minutes, fmtX, limit = 10, labelKeys, 
   title: string; query: string; minutes: number; fmtX: (n: number) => string; limit?: number; labelKeys?: string[]; dataKind?: DataKind;
 }) {
   const { series, err } = useMetricRange(query, minutes, 60);
+  const names = useDeviceNames();
   const rows = series
-    .map((s) => ({ label: seriesLabel(s, labelKeys), value: latest(s) }))
+    .map((s) => ({ label: seriesLabel(s, labelKeys, names), value: latest(s) }))
     .filter((x) => Number.isFinite(x.value))
     .sort((a, b) => b.value - a.value)
     .slice(0, limit);

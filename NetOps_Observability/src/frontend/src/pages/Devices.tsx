@@ -325,7 +325,7 @@ export default function Devices() {
         },
       },
       {
-        key: "software", header: "Software", width: "11%", sortable: true,
+        key: "software", header: "Version", width: "11%", sortable: true,
         text: (d) => d.software_version ?? "", sortValue: (d) => d.software_version || "~",
         render: (d) => d.software_version
           ? <span title={d.os || d.software_version} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 14 }}>{d.software_version}</span>
