@@ -72,6 +72,15 @@ func (VManageStatsTransformer) Transform(tenant, integrationID string, raw []byt
 type VManageAutoTransformer struct{}
 
 func (VManageAutoTransformer) Transform(tenant, integrationID string, raw []byte) (Batch, error) {
+	// Per-device real-time rows first: each carries keys no alarm ever has.
+	switch {
+	case bytes.Contains(raw, []byte(`"detect-multiplier"`)):
+		return vmanageBFDTransform(tenant, integrationID, raw)
+	case bytes.Contains(raw, []byte(`"peer-type"`)) && bytes.Contains(raw, []byte(`"vdevice-dataKey"`)):
+		return vmanageControlTransform(tenant, integrationID, raw)
+	case bytes.Contains(raw, []byte(`"tunnel-protocol"`)) && bytes.Contains(raw, []byte(`"rx_octets"`)):
+		return vmanageTunnelStatsTransform(tenant, integrationID, raw)
+	}
 	if bytes.Contains(raw, []byte(`"vqoe_score"`)) || bytes.Contains(raw, []byte(`"loss_percentage"`)) {
 		return VManageStatsTransformer{}.Transform(tenant, integrationID, raw)
 	}
