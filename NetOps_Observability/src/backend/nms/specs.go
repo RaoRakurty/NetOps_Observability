@@ -67,8 +67,13 @@ func Specs() map[string]ConnectorSpec {
 			SupportedAuth: []AuthKind{AuthBasic, AuthToken, AuthSession},
 			PreferredAuth: AuthToken, // JWT+refresh (≥20.18); session fallback
 			Poll:          true,
-			Streams:       []string{"alarms", "events", "tunnels", "control_connections", "bfd", "inventory"},
-			DefaultPoll:   2 * time.Minute,
+			// Fleet-wide first: one aggregation call covers the fabric. The
+			// per-device real-time streams (tunnels, control_connections, bfd)
+			// cost a call per device; bfd/control stay for their up/down state,
+			// tunnels is opt-in (approute carries the same tunnels' quality).
+			Streams: []string{"alarms", "events", "inventory", "approute", "interfaces", "system",
+				"counters", "certs", "control_connections", "bfd"},
+			DefaultPoll: 2 * time.Minute,
 		},
 		"ndfc": {
 			Vendor: "ndfc", Product: "Cisco Nexus Dashboard / NDFC", SourceSystem: "ndfc",

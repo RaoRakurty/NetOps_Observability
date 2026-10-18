@@ -9,10 +9,10 @@
 //   - Off by default (compose profile "mock-nms"); the stack never starts it
 //     unless explicitly asked.
 //   - It implements only the endpoints the vmanage connector actually drives:
-//       POST /jwt/login                        (username/password → JWT)
-//       GET  /dataservice/alarms               (BFD/tunnel alarms → events+states)
-//       GET  /dataservice/statistics/approute  (latency/jitter/loss/QoE → metrics)
-//       GET  /dataservice/device               (+ the other streams: empty data)
+//     POST /jwt/login                        (username/password → JWT)
+//     GET  /dataservice/alarms               (BFD/tunnel alarms → events+states)
+//     GET  /dataservice/statistics/approute/aggregation  (10-min buckets → metrics)
+//     GET  /dataservice/device               (+ the other streams: empty data)
 //     plus non-vManage GET /inspect (watch what was served) and GET /healthz.
 //
 // Faithful behaviours that matter for the runtime's correctness:
@@ -178,34 +178,43 @@ func main() {
 		writeJSON(w, 200, map[string]any{"data": []any{alarm, tunnel}})
 	}))
 
-	mux.HandleFunc("/dataservice/statistics/approute", authed(func(w http.ResponseWriter, _ *http.Request) {
-		now := time.Now()
-		down, _ := bfdDown(now)
-		t := float64(now.Unix())
-		nowMS := now.UnixMilli()
-		mk := func(name, local, remote, lcolor, rcolor, site string, base, spread float64, lossy bool) map[string]any {
-			lat := base + spread*math.Sin(t/97.0) + 1.5*math.Sin(t/13.0)
-			jit := 2.0 + 1.2*math.Sin(t/31.0+2)
-			loss := 0.1 + 0.1*math.Sin(t/59.0+1)
-			qoe := 9.5 - loss
-			if lossy && down {
-				loss = 22.0 + 6*math.Sin(t/7.0) // BFD-down phase: mpls path bleeds
-				lat = base + 80 + 20*math.Sin(t/11.0)
-				qoe = 2.1
-			}
-			return map[string]any{
-				"vdevice_name": "vEdge-Branch-1", "local_system_ip": local, "remote_system_ip": remote,
-				"local_color": lcolor, "remote_color": rcolor, "site_id": site, "name": name,
-				"latency": round1(lat), "jitter": round1(jit), "loss_percentage": round1(loss),
-				"vqoe_score": round1(qoe), "entry_time": nowMS,
-			}
+	// The connector reads approute as the 20.x fleet-wide aggregation: 10-minute
+	// buckets inside the query's entry_time "between" window. One row per tunnel
+	// per bucket, valued at the bucket's own time.
+	mux.HandleFunc("/dataservice/statistics/approute/aggregation", authed(func(w http.ResponseWriter, r *http.Request) {
+		start, end, ok := aggWindow(r.URL.Query().Get("query"))
+		if !ok {
+			writeJSON(w, 400, map[string]any{"error": "query needs an entry_time between rule"})
+			return
 		}
-		writeJSON(w, 200, map[string]any{"data": []any{
-			mk("10.1.1.1:mpls-10.2.2.2:mpls", "10.1.1.1", "10.2.2.2", "mpls", "mpls", "100", 12, 3, true),
-			mk("10.1.1.1:biz-internet-10.2.2.2:biz-internet", "10.1.1.1", "10.2.2.2", "biz-internet", "biz-internet", "100", 28, 6, false),
-			mk("10.1.1.1:mpls-10.3.3.3:mpls", "10.1.1.1", "10.3.3.3", "mpls", "mpls", "100", 45, 8, false),
-			mk("10.1.1.1:biz-internet-10.3.3.3:biz-internet", "10.1.1.1", "10.3.3.3", "biz-internet", "biz-internet", "100", 61, 10, false),
-		}})
+		var rows []any
+		for b := start; b.Before(end) && len(rows) < 4*24*6; b = b.Add(10 * time.Minute) {
+			down, _ := bfdDown(b)
+			t := float64(b.Unix())
+			mk := func(name string, base, spread float64, lossy bool) map[string]any {
+				lat := base + spread*math.Sin(t/97.0) + 1.5*math.Sin(t/13.0)
+				jit := 2.0 + 1.2*math.Sin(t/31.0+2)
+				loss := 0.1 + 0.1*math.Sin(t/59.0+1)
+				qoe := 9.5 - loss
+				if lossy && down {
+					loss = 22.0 + 6*math.Sin(t/7.0) // BFD-down phase: mpls path bleeds
+					lat = base + 80 + 20*math.Sin(t/11.0)
+					qoe = 2.1
+				}
+				return map[string]any{
+					"entry_time": b.UnixMilli(), "count": 120, "name": name,
+					"latency": round1(lat), "jitter": round1(jit), "loss_percentage": round1(loss),
+					"vqoe_score": round1(qoe), "tx_octets": 6000000, "rx_octets": 4500000,
+				}
+			}
+			rows = append(rows,
+				mk("10.1.1.1:mpls-10.2.2.2:mpls", 12, 3, true),
+				mk("10.1.1.1:biz-internet-10.2.2.2:biz-internet", 28, 6, false),
+				mk("10.1.1.1:mpls-10.3.3.3:mpls", 45, 8, false),
+				mk("10.1.1.1:biz-internet-10.3.3.3:biz-internet", 61, 10, false),
+			)
+		}
+		writeJSON(w, 200, map[string]any{"data": rows})
 	}))
 
 	// Remaining vmanage streams: valid-but-empty payloads (the connector
@@ -215,6 +224,11 @@ func main() {
 		"/dataservice/device/tunnel/statistics",
 		"/dataservice/device/control/connections",
 		"/dataservice/device/bfd/sessions",
+		"/dataservice/statistics/interface/aggregation",
+		"/dataservice/statistics/system/aggregation",
+		"/dataservice/device/counters",
+		"/dataservice/system/device/vedges",
+		"/dataservice/system/device/controllers",
 	} {
 		mux.HandleFunc(p, authed(func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, 200, map[string]any{"data": []any{}})
@@ -233,6 +247,34 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// aggWindow reads [start, end) from a 20.x query's entry_time "between" rule.
+func aggWindow(q string) (time.Time, time.Time, bool) {
+	var body struct {
+		Query struct {
+			Rules []struct {
+				Field    string   `json:"field"`
+				Operator string   `json:"operator"`
+				Value    []string `json:"value"`
+			} `json:"rules"`
+		} `json:"query"`
+	}
+	if json.Unmarshal([]byte(q), &body) != nil {
+		return time.Time{}, time.Time{}, false
+	}
+	for _, r := range body.Query.Rules {
+		if r.Field != "entry_time" || r.Operator != "between" || len(r.Value) != 2 {
+			continue
+		}
+		const layout = "2006-01-02T15:04:05 UTC"
+		s, err1 := time.Parse(layout, r.Value[0])
+		e, err2 := time.Parse(layout, r.Value[1])
+		if err1 == nil && err2 == nil && e.After(s) {
+			return s.UTC(), e.UTC(), true
+		}
+	}
+	return time.Time{}, time.Time{}, false
 }
 
 func round1(f float64) float64 { return math.Round(f*10) / 10 }
