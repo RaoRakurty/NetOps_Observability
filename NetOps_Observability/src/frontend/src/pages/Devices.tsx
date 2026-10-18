@@ -443,7 +443,7 @@ export default function Devices() {
       {overLimit.length > 0 && (
         <p className="empty" role="status" style={{ color: "var(--warn)", margin: "0 0 10px", fontSize: 14 }}>
           <strong>{overLimitSentence(overLimit.length, overLimitCap)}</strong>
-          <AskIris topic="devices.allowance" label="the licence limit" />
+          <AskIris topic="devices.allowance" label="the license limit" />
         </p>
       )}
 
@@ -565,14 +565,14 @@ export default function Devices() {
 // collected from because the licence limit is reached. Plain words, one line.
 export function overLimitSentence(n: number, limit?: number): string {
   const subject = n === 1 ? "1 device is" : `${n} devices are`;
-  const cap = limit !== undefined ? `licence limit of ${limit} reached` : "licence limit reached";
+  const cap = limit !== undefined ? `license limit of ${limit} reached` : "license limit reached";
   return `${subject} not monitored: ${cap}`;
 }
 
 // monitoringLabel is the row's state in words, for the filter and the badge.
 export function monitoringLabel(d: Device): string {
   if (d.monitored) return "Monitored";
-  if (d.monitor_state === "over_limit") return "Over licence limit";
+  if (d.monitor_state === "over_limit") return "Over license limit";
   return "Not monitored";
 }
 
