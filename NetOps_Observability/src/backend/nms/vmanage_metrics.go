@@ -67,6 +67,11 @@ var vmanageAggregations = map[string]vmAggSpec{
 		metrics: [][2]string{{"rx_kbps", "avg"}, {"tx_kbps", "avg"}, {"rx_errors", "sum"}, {"tx_errors", "sum"},
 			{"rx_drops", "sum"}, {"tx_drops", "sum"}, {"up_capacity_percentage", "max"}},
 	},
+	"qos": {
+		index: "qos", group: []string{"vdevice_name", "interface", "queue_name"},
+		metrics: [][2]string{{"tx_bytes_in_kbps", "avg"}, {"drop_in_kbps", "avg"}, {"drop_in_pps", "avg"},
+			{"tail_drop_pkts", "sum"}, {"red_drop_pkts", "sum"}, {"queued_pkts", "max"}},
+	},
 	"system": {
 		index: "system", group: []string{"vdevice_name"},
 		metrics: [][2]string{{"cpu_idle", "avg"}, {"mem_util", "max"}, {"disk_used", "max"},
@@ -138,6 +143,7 @@ var vmanageSlowStreams = map[string]struct {
 }{
 	"counters": {10 * time.Minute, []string{"/dataservice/device/counters"}},
 	"certs":    {time.Hour, []string{"/dataservice/system/device/vedges", "/dataservice/system/device/controllers"}},
+	"hardware": {10 * time.Minute, []string{"/dataservice/device/hardwarehealth/detail"}},
 }
 
 func pollVManageSlow(ctx context.Context, in PollInput, every time.Duration, paths []string) ([][]byte, Checkpoint, error) {
@@ -316,6 +322,78 @@ func vmanageSystemAggTransform(tenant, integrationID string, raw []byte) (Batch,
 		if total := float64(r.DiskUsed + r.DiskAvail); total > 0 {
 			b.Metrics = append(b.Metrics, m("disk_pct", clampPct(float64(r.DiskUsed)/total*100), "percent"))
 		}
+	}
+	return b, nil
+}
+
+// vmanageQoSAggTransform: per-queue egress and drops (20.x "qos" index; the
+// "Aggregate" queue is the interface total and is kept as its own series).
+func vmanageQoSAggTransform(tenant, integrationID string, raw []byte) (Batch, error) {
+	var rows []struct {
+		EntryTime vmNum  `json:"entry_time"`
+		Count     vmNum  `json:"count"`
+		Device    string `json:"vdevice_name"`
+		Interface string `json:"interface"`
+		Queue     string `json:"queue_name"`
+		TxKbps    vmNum  `json:"tx_bytes_in_kbps"`
+		DropKbps  vmNum  `json:"drop_in_kbps"`
+		DropPPS   vmNum  `json:"drop_in_pps"`
+		TailDrops vmNum  `json:"tail_drop_pkts"`
+		REDDrops  vmNum  `json:"red_drop_pkts"`
+		Queued    vmNum  `json:"queued_pkts"`
+	}
+	if err := vmAggRows(raw, &rows); err != nil {
+		return Batch{}, err
+	}
+	var b Batch
+	for _, r := range rows {
+		if net.ParseIP(r.Device) == nil || strings.TrimSpace(r.Interface) == "" || strings.TrimSpace(r.Queue) == "" || r.Count <= 0 {
+			continue
+		}
+		ts := vmTime(int64(r.EntryTime))
+		tags := vmMetricTags(tenant, integrationID, "device", r.Device, "interface", r.Interface, "queue", r.Queue)
+		m := func(name string, v float64, unit string) ControllerMetric {
+			return vmMetric(tenant, integrationID, "controller_metric_qos_"+name, v, unit, ts, tags)
+		}
+		b.Metrics = append(b.Metrics,
+			m("tx_bps", float64(r.TxKbps)*1000, "bps"),
+			m("drop_bps", float64(r.DropKbps)*1000, "bps"),
+			m("drop_pps", float64(r.DropPPS), "per_second"),
+			m("tail_drops_per_sec", vmBucketRate(r.TailDrops), "per_second"),
+			m("red_drops_per_sec", vmBucketRate(r.REDDrops), "per_second"),
+			m("queue_depth_pkts", float64(r.Queued), "packets"),
+		)
+	}
+	return b, nil
+}
+
+// vmanageHardwareTransform: /dataservice/device/hardwarehealth/detail →
+// one hardware_health state per device (normal | warning | error). Any other
+// value is not a claim about the hardware and is dropped.
+func vmanageHardwareTransform(tenant, integrationID string, raw []byte) (Batch, error) {
+	var rows []struct {
+		SystemIP string `json:"system-ip"`
+		HostName string `json:"host-name"`
+		Model    string `json:"device-model"`
+		SiteID   vmStr  `json:"site-id"`
+		State    string `json:"hardwareState"`
+		LastUpd  vmNum  `json:"lastupdated"`
+	}
+	if err := vmAggRows(raw, &rows); err != nil {
+		return Batch{}, err
+	}
+	var b Batch
+	for _, r := range rows {
+		st := strings.ToLower(strings.TrimSpace(r.State))
+		if net.ParseIP(r.SystemIP) == nil || (st != "normal" && st != "warning" && st != "error") {
+			continue
+		}
+		b.States = append(b.States, ControllerState{
+			TenantID: tenant, IntegrationID: integrationID, SourceSystem: "vmanage",
+			EntityKey: r.SystemIP, StateKind: "hardware_health", CurrentState: st,
+			DeviceID: r.SystemIP, SiteID: string(r.SiteID), Time: vmTime(int64(r.LastUpd)),
+			Data: map[string]any{"device_name": r.HostName, "device_model": r.Model},
+		})
 	}
 	return b, nil
 }

@@ -30,6 +30,12 @@ func (t VManageAutoTransformer) TransformStream(tenant, integrationID, stream st
 		return vmanageInventoryTransform(tenant, integrationID, raw)
 	case "approute", "statistics":
 		return vmanageAppRouteAggTransform(tenant, integrationID, raw)
+	case "qos":
+		return vmanageQoSAggTransform(tenant, integrationID, raw)
+	case "hardware":
+		return vmanageHardwareTransform(tenant, integrationID, raw)
+	case "audit":
+		return vmanageAuditTransform(tenant, integrationID, raw)
 	case "interfaces":
 		return vmanageInterfaceAggTransform(tenant, integrationID, raw)
 	case "system":
@@ -174,6 +180,58 @@ func vmanageInventoryTransform(tenant, integrationID string, raw []byte) (Batch,
 				Data: map[string]any{"device_name": d.HostName, "description": d.StateDesc},
 			})
 		}
+	}
+	return b, nil
+}
+
+// vmanageAuditTransform: /dataservice/auditlog → change events.
+//
+// Template attaches, policy pushes, config syncs and certificate installs are
+// CHANGES — the evidence an RCA asks for first ("what changed before it
+// broke?"). They become controller_policy_change on the device they touched.
+// A successful login is not a change and is dropped; a failed one is kept as
+// an alarm on the manager. Entries without a device system-ip (a template
+// edited but not yet pushed, a push keyed by chassis UUID) are dropped: the
+// same push also logs one entry per device by system-ip.
+func vmanageAuditTransform(tenant, integrationID string, raw []byte) (Batch, error) {
+	var resp struct {
+		Data []struct {
+			ID        string `json:"logid"`
+			EntryTime vmNum  `json:"entry_time"`
+			Module    string `json:"logmodule"`
+			Feature   string `json:"logfeature"`
+			User      string `json:"loguser"`
+			Message   string `json:"logmessage"`
+			Device    string `json:"logdeviceid"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return Batch{}, err
+	}
+	var b Batch
+	for _, r := range resp.Data {
+		if r.ID == "" || net.ParseIP(r.Device) == nil {
+			continue
+		}
+		module := strings.ToLower(strings.TrimSpace(r.Module))
+		normType, severity := "controller_policy_change", "info"
+		if module == "user" {
+			if !strings.Contains(strings.ToLower(r.Message), "fail") {
+				continue // a successful login changes nothing
+			}
+			normType, severity = "controller_alarm", "minor"
+		}
+		e := ControllerEvent{
+			TenantID: tenant, IntegrationID: integrationID, SourceSystem: "vmanage",
+			Vendor: "cisco", Product: "Catalyst SD-WAN Manager",
+			EventID: "audit:" + r.ID, EventTime: vmTime(int64(r.EntryTime)), IngestTime: time.Now().UTC(),
+			EventType: "audit_" + module, NormalizedEventType: normType, Severity: severity,
+			Category: "audit", DeviceID: r.Device, Message: strings.TrimSpace(r.Message),
+			EvidenceRole:     roleForEventType(normType),
+			CorrelationHints: map[string]string{"audit_module": r.Module, "audit_feature": r.Feature, "user": r.User},
+		}
+		e.DedupeKey = DedupeKey(e)
+		b.Events = append(b.Events, e)
 	}
 	return b, nil
 }
