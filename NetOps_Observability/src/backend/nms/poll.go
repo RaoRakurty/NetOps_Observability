@@ -93,12 +93,12 @@ func fetch(ctx context.Context, in PollInput, path string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 }
 
-// vManage poll endpoints (verified paths). Alarms since a cursor; approute
-// statistics for the metric lane.
+// vManage poll endpoints (verified paths). Cursor streams, fleet-wide
+// aggregations and slow snapshots are dispatched in vmanagePoll.Poll; what is
+// left is a plain GET.
 func vmanagePoller() Poller {
 	return vmanagePoll{rest: restPoller{paths: map[string]string{
-		"statistics": "/dataservice/statistics/approute",
-		"inventory":  "/dataservice/device",
+		"inventory": "/dataservice/device",
 	}}}
 }
 
@@ -160,6 +160,12 @@ type vmanagePoll struct{ rest restPoller }
 func (p vmanagePoll) Poll(ctx context.Context, in PollInput) ([][]byte, Checkpoint, error) {
 	if path, ok := vmanageCursorStreams[in.Stream]; ok {
 		return pollVManageSince(ctx, in, path)
+	}
+	if agg, ok := vmanageAggregations[in.Stream]; ok {
+		return pollVManageAggregation(ctx, in, agg)
+	}
+	if slow, ok := vmanageSlowStreams[in.Stream]; ok {
+		return pollVManageSlow(ctx, in, slow.every, slow.paths)
 	}
 	path, perDevice := vmanagePerDevice[in.Stream]
 	if !perDevice {

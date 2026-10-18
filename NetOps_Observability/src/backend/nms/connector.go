@@ -42,15 +42,22 @@ const (
 //     NDFC) or session (older vManage) or raw Basic (Prime, legacy). Basic /
 //     credential login is therefore always a supported path for them.
 type ConnectorSpec struct {
-	Vendor        string        // meraki | catalyst_center | vmanage | ndfc | versa_director | versa_concerto | prime | generic
-	Product       string        // human product name
-	SourceSystem  string        // maps to Signal source_system
-	SupportedAuth []AuthKind    // all auth flows this connector implements (Basic/API-key always present for testing)
-	PreferredAuth AuthKind      // the flow the wizard defaults to (OAuth where the vendor supports it)
-	Webhook       bool          // supports inbound webhooks
-	Poll          bool          // supports REST polling
-	Streams       []string      // logical streams it can poll (alarms, inventory, tunnels, …)
-	DefaultPoll   time.Duration // recommended poll interval
+	Vendor        string     // meraki | catalyst_center | vmanage | ndfc | versa_director | versa_concerto | prime | generic
+	Product       string     // human product name
+	SourceSystem  string     // maps to Signal source_system
+	SupportedAuth []AuthKind // all auth flows this connector implements (Basic/API-key always present for testing)
+	PreferredAuth AuthKind   // the flow the wizard defaults to (OAuth where the vendor supports it)
+	Webhook       bool       // supports inbound webhooks
+	Poll          bool       // supports REST polling
+	Streams       []string   // logical streams it can poll (alarms, inventory, tunnels, …)
+	// DefaultStreams is what an integration polls when it has not chosen
+	// (nil = every Stream). A costly stream can be offered but left off.
+	DefaultStreams []string
+	// SupersededDefaults are earlier releases' default lists. The wizard saves
+	// the defaults it showed, so a saved list equal to one of these was not a
+	// choice — it follows today's DefaultStreams (and gains new streams).
+	SupersededDefaults [][]string
+	DefaultPoll        time.Duration // recommended poll interval
 	// RatePerSec bounds outbound calls (0 = connector default). E.g. Meraki 10/s.
 	RatePerSec float64
 	// Capabilities declares what the vendor can actually report and how proven
@@ -162,6 +169,39 @@ type Connector interface {
 }
 
 // Checkpoint is a resume cursor for a stream.
+// EffectiveStreams is what an integration with this saved list polls.
+func (s ConnectorSpec) EffectiveStreams(saved []string) []string {
+	def := s.DefaultStreams
+	if def == nil {
+		def = s.Streams
+	}
+	if len(saved) == 0 {
+		return def
+	}
+	for _, old := range s.SupersededDefaults {
+		if sameStreamSet(saved, old) {
+			return def
+		}
+	}
+	return saved
+}
+
+func sameStreamSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	in := make(map[string]bool, len(a))
+	for _, x := range a {
+		in[x] = true
+	}
+	for _, x := range b {
+		if !in[x] {
+			return false
+		}
+	}
+	return len(in) == len(b)
+}
+
 type Checkpoint struct {
 	LastEventTime time.Time
 	LastSeq       int64

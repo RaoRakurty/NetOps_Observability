@@ -32,10 +32,11 @@ Requires `FEATURE_NMS_INTEGRATIONS=true` on the api service.
   transition: each phase change is a fresh controller EVENT + a state
   TRANSITION (watch `flap_count` grow in the integration's States view), while
   steady-state polls are deduped.
-- **Approute metrics** (`/dataservice/statistics/approute`) — four tunnels with
-  smoothly jittering latency/jitter/loss/QoE; the mpls tunnel's loss spikes
-  during the BFD-down phase, so the metric lane visibly corroborates the event
-  lane.
+- **Approute metrics** (`/dataservice/statistics/approute/aggregation`) — four
+  tunnels with smoothly jittering latency/jitter/loss/QoE in 10-minute buckets;
+  the mpls tunnel's loss spikes during the BFD-down phase, so the metric lane
+  corroborates the event lane. Like a real vManage, buckets are read only once
+  they are 30 minutes old, so the first metrics appear ~30 minutes after connect.
 
 ## Watch it
 

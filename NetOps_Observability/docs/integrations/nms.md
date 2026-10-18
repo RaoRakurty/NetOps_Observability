@@ -9,7 +9,7 @@ Three signal classes, routed per class:
 
 | Class | Where it lands | Example |
 |---|---|---|
-| `controller_metric` | VictoriaMetrics (`controller_metric_*`) | vManage app-route latency/jitter/loss/QoE |
+| `controller_metric` | VictoriaMetrics (`controller_metric_*`) | vManage tunnel latency/jitter/loss/QoE/throughput, interface rates/errors/drops/utilization, device CPU/memory/disk/load, control/OMP/BFD counts, certificate expiry |
 | `controller_state`  | `controller_state_current` (PG, flap-tracked) | BFD session up/down, first/last seen, flap count |
 | `controller_event`  | `netops.controller_events` → correlation → `corr_signals` | BFD down alarm → `controller_bfd_down` signal |
 
@@ -71,7 +71,7 @@ scripts/validate-nms-e2e.sh --teardown  # remove what it created
 |---|---|---|---|
 | Meraki Dashboard | API key / OAuth bearer | alarms, inventory (needs `org` credential field) | ✔ shared-secret + HMAC |
 | Catalyst Center | Basic → X-Auth-Token (60 min) | assurance_issues, inventory, events | — |
-| Catalyst SD-WAN Manager (vManage) | user/pass → JWT (`/jwt/login`) | alarms, events, tunnels, control_connections, bfd, statistics, inventory | — |
+| Catalyst SD-WAN Manager (vManage) | user/pass → JWT (`/jwt/login`); 20.x session login (`j_security_check` + XSRF token) when JWT is absent | alarms, events, inventory, approute, interfaces, system, counters, certs, control_connections, bfd (default); tunnels (opt-in) | — |
 | Nexus Dashboard / NDFC | user/pass (+`domain`) → JWT | fabric_alarms, switch_health, interface_alarms, inventory | — |
 | Versa Director | OAuth client-credentials / Basic | alarms, appliances, events | — |
 | Versa Concerto | OAuth client-credentials / Basic | alarms, appliances, events | — |

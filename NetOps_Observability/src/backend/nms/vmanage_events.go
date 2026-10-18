@@ -28,8 +28,16 @@ func (t VManageAutoTransformer) TransformStream(tenant, integrationID, stream st
 		return vmanageEventsTransform(tenant, integrationID, raw)
 	case "inventory":
 		return vmanageInventoryTransform(tenant, integrationID, raw)
-	case "statistics":
-		return VManageStatsTransformer{}.Transform(tenant, integrationID, raw)
+	case "approute", "statistics":
+		return vmanageAppRouteAggTransform(tenant, integrationID, raw)
+	case "interfaces":
+		return vmanageInterfaceAggTransform(tenant, integrationID, raw)
+	case "system":
+		return vmanageSystemAggTransform(tenant, integrationID, raw)
+	case "counters":
+		return vmanageCountersTransform(tenant, integrationID, raw)
+	case "certs":
+		return vmanageCertsTransform(tenant, integrationID, raw)
 	case "bfd":
 		return vmanageBFDTransform(tenant, integrationID, raw)
 	case "control_connections":
