@@ -519,7 +519,7 @@ func CeilingLabel(name string) string {
 	case CeilingTenants:
 		return "tenants"
 	case CeilingOrgs:
-		return "organisations"
+		return "organizations"
 	case CeilingRetentionDays:
 		return "retention days"
 	case CeilingSkills:
@@ -689,7 +689,7 @@ type ErrLicence struct {
 // Error implements error.
 func (e *ErrLicence) Error() string {
 	if e == nil {
-		return "licence: refused"
+		return "license: refused"
 	}
 	return e.Message
 }
@@ -700,7 +700,7 @@ func (e *ErrLicence) Error() string {
 func (e *ErrLicence) Is(target error) bool { return target == ErrNotEntitled }
 
 // ErrNotEntitled is the sentinel every ErrLicence matches under errors.Is.
-var ErrNotEntitled = errors.New("licence: not entitled")
+var ErrNotEntitled = errors.New("license: not entitled")
 
 // As is the convenience wrapper for pulling the structured refusal out of a
 // wrapped error.
@@ -756,11 +756,11 @@ func Require(svc Service, f Feature) error {
 		// renewal, and the reassurance they need first is that the data they
 		// already have is still there.
 		lifted = ""
-		msg = fmt.Sprintf("%s cannot be configured: the licence that included it has expired and its grace period has ended. "+
+		msg = fmt.Sprintf("%s cannot be configured: the license that included it has expired and its grace period has ended. "+
 			"What is already here stays visible and exportable, and nothing has been disabled or deleted — "+
-			"install a renewed licence to configure it again", FeatureLabel(f))
+			"install a renewed license to configure it again", FeatureLabel(f))
 	} else {
-		msg = fmt.Sprintf("%s is not included in your %s licence", FeatureLabel(f), at.Label())
+		msg = fmt.Sprintf("%s is not included in your %s license", FeatureLabel(f), at.Label())
 		if lifted != "" {
 			msg += fmt.Sprintf(" — the %s tier includes it", lifted.Label())
 		} else {
@@ -852,7 +852,7 @@ func CheckCeilingValue(svc Service, name string, want, current int) error {
 		// gating.
 		return &ErrLicence{
 			Ceiling: name, Current: current, Tier: TierCommunity, LicenceState: PhaseOf(svc),
-			Message: fmt.Sprintf("unknown licence ceiling %q", name),
+			Message: fmt.Sprintf("unknown license ceiling %q", name),
 		}
 	}
 	at := TierCommunity
@@ -878,15 +878,15 @@ func CheckCeilingValue(svc Service, name string, want, current int) error {
 	}
 	phase := PhaseOf(svc)
 	lifted := LiftedBy(name, lim, at)
-	msg := fmt.Sprintf("your %s licence covers %d %s and %d %s in use",
+	msg := fmt.Sprintf("your %s license covers %d %s and %d %s in use",
 		at.Label(), lim, CeilingLabel(name), current, plural(current))
 	if phase == PhasePostGrace {
 		// The Community ceilings in force are a FALLBACK, not what the customer
 		// bought. Say so, and say what is not happening: nothing already
 		// admitted has been touched.
-		msg = fmt.Sprintf("the licence that covered this expired and its grace period has ended, so the Community ceiling of %d %s is the one in force and %d %s in use",
+		msg = fmt.Sprintf("the license that covered this expired and its grace period has ended, so the Community ceiling of %d %s is the one in force and %d %s in use",
 			lim, CeilingLabel(name), current, plural(current))
-		msg += " — nothing has been disabled or deleted and everything over the ceiling is listed; install a renewed licence to lift it again"
+		msg += " — nothing has been disabled or deleted and everything over the ceiling is listed; install a renewed license to lift it again"
 	} else if lifted != "" {
 		lc, _ := tierCeilings[lifted].Get(name)
 		if lc == Unlimited {
