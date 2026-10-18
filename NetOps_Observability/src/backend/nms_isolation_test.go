@@ -71,6 +71,21 @@ func TestNMSCrossOrgIsolation(t *testing.T) {
 
 	a, b := fix["A"], fix["B"]
 
+	// The platform owner in the Global view creates a PLATFORM-owned
+	// integration (single-company installs work entirely in the platform
+	// realm). Its owner is the platform, never a tenant.
+	st, pb := do(t, srv, "POST", "/api/nms/integrations", admin, map[string]any{
+		"vendor": "generic", "displayName": "Platform controller", "baseUrl": "https://controller-p.example",
+		"credentials": map[string]string{"password": secretValue},
+	})
+	if st != 201 {
+		t.Fatalf("platform owner create in the Global view: %d %s", st, pb)
+	}
+	platformID := idOf(t, pb)
+	if c, ok, err := s.nms.Store().Get(t.Context(), "", true, platformID); err != nil || !ok || c.Tenant != TenantGlobal {
+		t.Fatalf("platform integration owner = %q (ok=%v err=%v), want %q", c.Tenant, ok, err, TenantGlobal)
+	}
+
 	list := func(token, asTenant string) []string {
 		path := "/api/nms/integrations"
 		if asTenant != "" {
@@ -106,9 +121,28 @@ func TestNMSCrossOrgIsolation(t *testing.T) {
 		t.Fatalf("org B list leak: %v, want exactly [%s]", got, b.intID)
 	}
 
-	// 2) Platform owner sees both.
-	if got := list(admin, ""); len(got) != 2 {
-		t.Fatalf("platform owner sees %v, want 2", got)
+	// 2) Platform owner sees all three; no tenant sees the platform's.
+	if got := list(admin, ""); len(got) != 3 {
+		t.Fatalf("platform owner sees %v, want 3", got)
+	}
+	for _, f := range []*fixture{a, b} {
+		for _, id := range list(f.token, "") {
+			if id == platformID {
+				t.Fatalf("CROSS-SCOPE LEAK: a tenant user listed the platform integration %s", platformID)
+			}
+		}
+		for _, m := range []string{"GET", "PUT", "DELETE"} {
+			var body any
+			if m == "PUT" {
+				body = map[string]any{"displayName": "PWNED"}
+			}
+			if st, _ := do(t, srv, m, "/api/nms/integrations/"+platformID, f.token, body); st != 404 {
+				t.Fatalf("tenant user %s platform integration: %d, want 404", m, st)
+			}
+		}
+	}
+	if got := list(admin, ""); len(got) != 3 {
+		t.Fatalf("platform integration affected by a tenant's PUT/DELETE: %v", got)
 	}
 
 	// 3) Cross-tenant GET by id → 404 (existence never revealed), incl. health.

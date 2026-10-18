@@ -22,11 +22,24 @@ import (
 // controller alarm and the device's own syslog/traps/flows are one entity
 // (nms/identity.go explains why the join is at ingest).
 //
-// Tenant-strict: only devices the integration's OWN tenant owns are
-// candidates — never another tenant's, never the platform realm's. A key that
+// Owner-strict: only devices the integration's OWN owner owns are candidates.
+// A tenant's integration never matches another tenant's device or a platform
+// one; a platform-owned integration matches only platform devices. A key that
 // matches nothing, matches more than one device, or that two evidence tiers
 // attribute to different devices, resolves to nothing (the controller's key is
 // kept). A wrong merge would pin one device's outage on another.
+
+// ownerKey is the index's spelling of a device or integration owner. The
+// platform realm has two spellings — "" on devices ("untagged = platform") and
+// "global" on what a Global-view principal creates — and they are one owner.
+// Real tenant ids pass through untouched, so two tenants never collapse.
+func ownerKey(t string) string {
+	t = normTenant(t)
+	if t == TenantGlobal {
+		return ""
+	}
+	return t
+}
 
 // nmsDeviceIndex is one immutable snapshot of the candidate devices.
 type nmsDeviceIndex struct {
@@ -64,7 +77,7 @@ func buildNMSDeviceIndex(devs []models.Device, sysIPs map[string]map[string]stri
 		if d.ID == "" {
 			continue
 		}
-		t := normTenant(d.TenantID)
+		t := ownerKey(d.TenantID)
 		tenantOf[d.ID] = t
 		if ip := net.ParseIP(strings.TrimSpace(d.Address)); ip != nil {
 			addKey(idx.addr, t, ip.String(), d.ID)
@@ -89,8 +102,8 @@ func buildNMSDeviceIndex(devs []models.Device, sysIPs map[string]map[string]stri
 		for sys, dev := range m {
 			// The overlay already drops ambiguous system-ips; keep its tenant
 			// honest too — only a device that tenant owns.
-			if tenantOf[dev] == normTenant(t) {
-				addKey(idx.sysIP, normTenant(t), sys, dev)
+			if tenantOf[dev] == ownerKey(t) {
+				addKey(idx.sysIP, ownerKey(t), sys, dev)
 			}
 		}
 	}
@@ -111,7 +124,7 @@ const (
 // lookup applies the trust ladder for kind. Every tier that knows the key
 // votes; an ambiguous tier, or two tiers naming different devices, abstains.
 func (idx *nmsDeviceIndex) lookup(tenant string, kind nms.KeyKind, key, name string) (string, resolveOutcome) {
-	t := normTenant(tenant)
+	t := ownerKey(tenant)
 	key = strings.TrimSpace(key)
 	ipKey := ""
 	if p := net.ParseIP(key); p != nil {

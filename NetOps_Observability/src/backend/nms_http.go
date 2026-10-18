@@ -136,11 +136,14 @@ func (s *server) handleNMSIntegrations(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
+		// The owner is the caller's scope. A platform owner in the Global view
+		// creates a PLATFORM-owned integration (owner "global"): a company with
+		// no tenants works entirely in the platform realm, where SNMP discovery
+		// also files its devices, so the two join (owner decision 2026-10-18).
+		// Platform-owned rows are visible only to cross-tenant principals, like
+		// platform devices — a tenant never lists, reads or changes them
+		// (nms_isolation_test.go).
 		tenant, _ := principalTenant(claims)
-		if tenant == TenantGlobal {
-			http.Error(w, "select a tenant to own the integration", http.StatusBadRequest)
-			return
-		}
 		body, err := readBounded(w, r, 256<<10)
 		if err != nil {
 			http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
