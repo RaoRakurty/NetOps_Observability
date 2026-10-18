@@ -64,6 +64,7 @@ func (s *server) nmsIntegrationPublic(ctx context.Context, c nms.Integration) ma
 	}
 	if spec, ok := s.nms.Registry().Get(c.Vendor); ok {
 		out["product"] = spec.Spec().Product
+		out["streams"] = spec.Spec().EffectiveStreams(c.Streams) // what is polled, not a stale saved default
 	}
 	if c.WebhookToken != "" {
 		out["webhookUrl"] = "/api/nms/webhook/" + c.WebhookToken
@@ -93,14 +94,15 @@ func (s *server) handleNMSConnectors(w http.ResponseWriter, r *http.Request) {
 		}
 		spec := conn.Spec()
 		out = append(out, map[string]any{
-			"vendor":        spec.Vendor,
-			"product":       spec.Product,
-			"supportedAuth": spec.SupportedAuth,
-			"preferredAuth": spec.PreferredAuth,
-			"webhook":       spec.Webhook,
-			"poll":          spec.Poll,
-			"streams":       spec.Streams,
-			"defaultPollS":  int(spec.DefaultPoll / time.Second),
+			"vendor":         spec.Vendor,
+			"product":        spec.Product,
+			"supportedAuth":  spec.SupportedAuth,
+			"preferredAuth":  spec.PreferredAuth,
+			"webhook":        spec.Webhook,
+			"poll":           spec.Poll,
+			"streams":        spec.Streams,
+			"defaultStreams": spec.EffectiveStreams(nil),
+			"defaultPollS":   int(spec.DefaultPoll / time.Second),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"connectors": out})

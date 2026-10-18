@@ -416,7 +416,7 @@ function SetupWizard({ connector, onClose, onDone }: {
   const [baseUrl, setBaseUrl] = useState("https://");
   const [interval, setIntervalS] = useState(String(connector.defaultPollS || 300));
   const [tlsSkip, setTlsSkip] = useState(false);
-  const [streams, setStreams] = useState<string[]>(connector.streams);
+  const [streams, setStreams] = useState<string[]>(connector.defaultStreams ?? connector.streams);
   const [creds, setCreds] = useState<Record<string, string>>({});
 
   const fields = CRED_FIELDS[connector.vendor] || CRED_FIELDS.generic;

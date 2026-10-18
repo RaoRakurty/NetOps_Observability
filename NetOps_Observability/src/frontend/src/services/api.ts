@@ -9580,6 +9580,8 @@ export type NmsConnector = {
   webhook: boolean;
   poll: boolean;
   streams: string[];
+  /** What a new integration polls; streams not listed are offered but off. */
+  defaultStreams?: string[];
   defaultPollS: number;
 };
 

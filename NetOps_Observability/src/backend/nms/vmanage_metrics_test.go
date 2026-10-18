@@ -330,6 +330,50 @@ func TestVManageSlowStreamFailureKeepsCheckpoint(t *testing.T) {
 	}
 }
 
+func TestEffectiveStreams(t *testing.T) {
+	spec := Specs()["vmanage"]
+	def := spec.EffectiveStreams(nil)
+	if strings.Join(def, ",") != strings.Join(spec.DefaultStreams, ",") {
+		t.Fatalf("nothing saved → defaults, got %v", def)
+	}
+	for _, x := range def {
+		if x == "tunnels" {
+			t.Fatal("tunnels costs a call per device: offered, not on by default")
+		}
+	}
+	// The list the wizard saved before 2026-10-18 (in any order) was the
+	// defaults, not a choice: it follows today's defaults.
+	old := []string{"inventory", "bfd", "control_connections", "tunnels", "events", "alarms"}
+	if got := spec.EffectiveStreams(old); strings.Join(got, ",") != strings.Join(def, ",") {
+		t.Fatalf("superseded default kept: %v", got)
+	}
+	// A real choice is kept exactly — a subset, or the old list plus one more.
+	for _, chosen := range [][]string{{"alarms", "events"}, append(append([]string{}, old...), "system"), {"alarms", "alarms", "events", "tunnels", "control_connections", "bfd"}} {
+		if got := spec.EffectiveStreams(chosen); strings.Join(got, ",") != strings.Join(chosen, ",") {
+			t.Errorf("choice %v replaced by %v", chosen, got)
+		}
+	}
+	// A connector with no DefaultStreams polls everything it offers.
+	if got := (ConnectorSpec{Streams: []string{"a", "b"}}).EffectiveStreams(nil); len(got) != 2 {
+		t.Fatalf("%v", got)
+	}
+}
+
+// Defaults and superseded lists may only name streams the connector offers.
+func TestSpecDefaultStreamsAreOffered(t *testing.T) {
+	for vendor, spec := range Specs() {
+		offered := map[string]bool{}
+		for _, s := range spec.Streams {
+			offered[s] = true
+		}
+		for _, s := range spec.DefaultStreams {
+			if !offered[s] {
+				t.Errorf("%s: default %q is not offered — the wizard could never untick it", vendor, s)
+			}
+		}
+	}
+}
+
 // Every default stream must be one the poller and transformer handle — a
 // default that answers "not supported" is a stream the fabric silently lacks.
 func TestVManageDefaultStreamsAreAllServed(t *testing.T) {
@@ -338,7 +382,7 @@ func TestVManageDefaultStreamsAreAllServed(t *testing.T) {
 	f := &recordingVManage{body: map[string]string{}}
 	for _, p := range []string{"/dataservice/alarms", "/dataservice/event", "/dataservice/device/counters",
 		"/dataservice/system/device/vedges", "/dataservice/system/device/controllers",
-		"/dataservice/device/control/connections", "/dataservice/device/bfd/sessions"} {
+		"/dataservice/device/control/connections", "/dataservice/device/bfd/sessions", "/dataservice/device/tunnel/statistics"} {
 		f.body[p] = `{"data":[]}`
 	}
 	f.body["/dataservice/device"] = inv
@@ -349,7 +393,7 @@ func TestVManageDefaultStreamsAreAllServed(t *testing.T) {
 	if !ok {
 		t.Fatal("no vmanage spec")
 	}
-	for _, s := range spec.Streams {
+	for _, s := range append(append([]string{}, spec.Streams...), "statistics") {
 		raw, _, err := pollWith(t, f, s, Checkpoint{})
 		if err != nil {
 			t.Errorf("%s: %v", s, err)

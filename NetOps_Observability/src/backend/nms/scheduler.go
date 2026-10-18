@@ -265,10 +265,7 @@ func (rt *Runtime) pollOnce(ctx context.Context, ic Integration) (int64, error) 
 	if err != nil {
 		return 0, fmt.Errorf("resolve credentials: %w", err)
 	}
-	streams := ic.Streams
-	if len(streams) == 0 {
-		streams = spec.Streams
-	}
+	streams := spec.EffectiveStreams(ic.Streams)
 	do := NewRetryDoer(rt.httpClient(ic), NewTokenBucket(spec.RatePerSec), DefaultRetry())
 	cfg := IntegrationConfig{
 		Tenant: ic.Tenant, IntegrationID: ic.ID, Vendor: ic.Vendor,
