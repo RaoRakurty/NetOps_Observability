@@ -37,7 +37,7 @@ import (
 const (
 	defaultPollInterval = 5 * time.Minute
 	minPollInterval     = 30 * time.Second
-	pipelineSeenCap     = 4096
+	pipelineSeenCap     = 32768 // > one cycle of any stream (vManage events: ~350/h with cursor queries)
 
 	// DefaultBackfill is the poll lookback when the caller configures none
 	// (main resolves NMS_BACKFILL against it).
@@ -315,6 +315,8 @@ func (rt *Runtime) sinkRouted(ctx context.Context, ic Integration, routed Routed
 	if len(routed.StateChanges) > 0 {
 		events = append(events,
 			WirelessStateChangeEvents(ic.Tenant, ic.ID, ic.Vendor, routed.StateChanges)...)
+		events = append(events,
+			SDWANStateChangeEvents(ic.Tenant, ic.ID, ic.Vendor, routed.StateChanges)...)
 	}
 	if len(events) > 0 {
 		if rt.sinks.ProduceEvents == nil {

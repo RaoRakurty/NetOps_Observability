@@ -142,6 +142,15 @@ type Transformer interface {
 	Transform(tenant, integrationID string, raw []byte) (Batch, error)
 }
 
+// StreamTransformer is an optional Transformer extension: a connector whose
+// streams return look-alike payloads (vManage: alarms, events and inventory
+// are all {"data":[…]} rows) parses by the STREAM it polled instead of
+// guessing from the body. The runtime prefers it when the connector's
+// Transformer implements it.
+type StreamTransformer interface {
+	TransformStream(tenant, integrationID, stream string, raw []byte) (Batch, error)
+}
+
 // Connector bundles a vendor's pieces. Poll-only connectors return nil for
 // Webhook(); webhook-only connectors return nil for Poller().
 type Connector interface {

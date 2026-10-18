@@ -84,7 +84,13 @@ func RunPollSession(ctx context.Context, conn Connector, cfg IntegrationConfig, 
 			continue
 		}
 		for _, raw := range raws {
-			batch, terr := conn.Transformer().Transform(cfg.Tenant, cfg.IntegrationID, raw)
+			var batch Batch
+			var terr error
+			if st, ok := conn.Transformer().(StreamTransformer); ok {
+				batch, terr = st.TransformStream(cfg.Tenant, cfg.IntegrationID, stream, raw)
+			} else {
+				batch, terr = conn.Transformer().Transform(cfg.Tenant, cfg.IntegrationID, raw)
+			}
 			if terr != nil {
 				res.Errors[stream] = terr
 				continue
