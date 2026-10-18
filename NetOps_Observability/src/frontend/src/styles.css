@@ -4182,6 +4182,18 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
    click to open the combined guided-setup modal.
    =========================================================================== */
 .conn-grid { position: relative; display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: var(--sp-4); margin-bottom: var(--sp-4); }
+/* Balanced tile grids (owner 2026-10-18): the column count comes from the tile
+   count (lib/gridCols bestCols — 6 tiles read 3 + 3, never 4 + 2), and steps
+   down to 2 then 1 column as the window narrows. */
+.conn-grid[data-cols="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.conn-grid[data-cols="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.conn-grid[data-cols="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1280px) {
+  .conn-grid[data-cols="3"], .conn-grid[data-cols="4"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .conn-grid[data-cols] { grid-template-columns: minmax(0, 1fr); }
+}
 /* ambient colour wash so the frosted tiles have something to refract */
 .conn-grid::before { content: ""; position: absolute; inset: -12% -6%; z-index: -1; pointer-events: none;
   background:
