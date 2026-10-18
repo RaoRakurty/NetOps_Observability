@@ -122,6 +122,11 @@ func (b Toolbox) Invoke(ctx context.Context, p Principal, name string, args Tool
 		return finish(OutcomeRateLimited)
 	}
 
+	// The stopwatch starts BEFORE the deadline is set, so a call cut off at its
+	// contract timeout always reports Elapsed ≥ that timeout. Started after it,
+	// a slow scheduler could report a timeout that "took" less than the limit
+	// that ended it (CI 2026-10-18: 47.7 ms against a 50 ms timeout).
+	started := time.Now()
 	cctx, cancel := context.WithTimeout(ctx, c.Timeout)
 	defer cancel()
 	type ran struct {
@@ -129,7 +134,6 @@ func (b Toolbox) Invoke(ctx context.Context, p Principal, name string, args Tool
 		err error
 	}
 	done := make(chan ran, 1)
-	started := time.Now()
 	go func() {
 		res, err := tool.Run(cctx, p, args)
 		done <- ran{res, err}
