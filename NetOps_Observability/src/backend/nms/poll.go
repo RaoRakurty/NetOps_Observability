@@ -109,6 +109,7 @@ func vmanagePoller() Poller {
 var vmanageCursorStreams = map[string]string{
 	"alarms": "/dataservice/alarms",
 	"events": "/dataservice/event",
+	"audit":  "/dataservice/auditlog",
 }
 
 // vmanageCursorOverlap re-reads a short window behind the cursor so a row that

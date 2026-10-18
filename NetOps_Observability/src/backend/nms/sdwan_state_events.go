@@ -17,18 +17,19 @@ import (
 // consumer already binds (src/correlation/controller_events.py).
 
 var sdwanStateEventType = map[string]string{
-	"bfd":           "controller_bfd_down",
-	"control_conn":  "controller_control_connection_loss",
-	"omp":           "controller_control_connection_loss",
-	"reachability":  "controller_device_unreachable",
-	"bgp":           "controller_alarm",
-	"device_health": "controller_alarm",
+	"bfd":             "controller_bfd_down",
+	"control_conn":    "controller_control_connection_loss",
+	"omp":             "controller_control_connection_loss",
+	"reachability":    "controller_device_unreachable",
+	"bgp":             "controller_alarm",
+	"device_health":   "controller_alarm",
+	"hardware_health": "controller_alarm",
 }
 
 // sdwanBad is the state a transition INTO is a fault.
 func sdwanBad(to string) bool {
 	switch to {
-	case "down", "unreachable", "red":
+	case "down", "unreachable", "red", "error":
 		return true
 	}
 	return false
@@ -47,7 +48,7 @@ func SDWANStateChangeEvents(tenant, integrationID, sourceSystem string, changes 
 		switch {
 		case sdwanBad(ch.To):
 			severity, role = "major", RoleDiscriminating
-		case ch.To == "yellow":
+		case ch.To == "yellow" || ch.To == "warning":
 			severity, role = "minor", RoleDiscriminating
 		}
 		ev := ControllerEvent{

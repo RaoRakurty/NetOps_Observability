@@ -382,11 +382,12 @@ func TestVManageDefaultStreamsAreAllServed(t *testing.T) {
 	f := &recordingVManage{body: map[string]string{}}
 	for _, p := range []string{"/dataservice/alarms", "/dataservice/event", "/dataservice/device/counters",
 		"/dataservice/system/device/vedges", "/dataservice/system/device/controllers",
-		"/dataservice/device/control/connections", "/dataservice/device/bfd/sessions", "/dataservice/device/tunnel/statistics"} {
+		"/dataservice/device/control/connections", "/dataservice/device/bfd/sessions", "/dataservice/device/tunnel/statistics",
+		"/dataservice/auditlog", "/dataservice/device/hardwarehealth/detail"} {
 		f.body[p] = `{"data":[]}`
 	}
 	f.body["/dataservice/device"] = inv
-	for _, idx := range []string{"approute", "interface", "system"} {
+	for _, idx := range []string{"approute", "interface", "qos", "system"} {
 		f.body["/dataservice/statistics/"+idx+"/aggregation"] = `{"data":[]}`
 	}
 	spec, ok := Specs()["vmanage"]
