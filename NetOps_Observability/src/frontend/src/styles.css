@@ -7347,3 +7347,30 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
 .nctx-history > summary { cursor: pointer; font-weight: 600; }
 .nctx-history .disc-field { max-width: 480px; margin: 10px 0; }
 .nctx-table { margin-top: 10px; width: 100%; }
+
+/* ----- Iris: one purple family for every box (owner 2026-10-17) -----------
+   Iris's own accent is --mod-copilot (the violet the rail uses for Iris). The
+   panel's cards, tiles, inputs, chips, tables and dividers were neutral grey;
+   instead of restyling forty rules, the NEUTRAL tokens they all read are
+   re-tinted inside the panel only. The theme's own values are captured on
+   :root first (a custom property cannot reference itself), then mixed with the
+   accent — so it follows every theme (light, indigo, graphite, black) and
+   nothing outside Iris changes. */
+:root {
+  --iris-base-border: var(--border);
+  --iris-base-surface: var(--surface);
+  --iris-base-surface-2: var(--surface-2);
+  --iris-base-hover: var(--hover);
+  --iris-base-bg: var(--bg);
+}
+.iris-panel {
+  --iris-tint: var(--mod-copilot);
+  --border: color-mix(in srgb, var(--iris-tint) 45%, var(--iris-base-border));
+  --panel-border: var(--border);
+  --surface: color-mix(in srgb, var(--iris-tint) 9%, var(--iris-base-surface));
+  --panel: var(--surface);
+  --panel-solid: var(--surface);
+  --surface-2: color-mix(in srgb, var(--iris-tint) 15%, var(--iris-base-surface-2));
+  --hover: color-mix(in srgb, var(--iris-tint) 18%, var(--iris-base-hover));
+  --bg: color-mix(in srgb, var(--iris-tint) 6%, var(--iris-base-bg));
+}
