@@ -826,8 +826,8 @@ describe("open the case", () => {
     const row = screen.getByTestId("tac-conn-cisco-cxd");
     expect(row.className).toContain("off");
     expect(row).toHaveTextContent(CONNECTOR_CHIP["not-configured"]);
-    expect(within(row).getByRole("link", { name: "Ticket delivery" }))
-      .toHaveAttribute("href", "#/admin/ticket-delivery");
+    expect(within(row).getByRole("link", { name: "Set up case connectors" }))
+      .toHaveAttribute("href", "#/admin/ticketing/cases");
     expect(screen.getByRole("button", { name: "Cisco TAC" })).toBeDisabled();
   });
 
@@ -909,7 +909,7 @@ describe("an unconfigured connector never becomes a case", () => {
     }));
     const row = screen.getByTestId("tac-conn-juniper");
     expect(row).toHaveTextContent(CONNECTOR_CHIP["not-configured"]);
-    expect(within(row).getByRole("link", { name: "Ticket delivery" })).toHaveAttribute("title", CONNECTOR_NOT_CONFIGURED);
+    expect(within(row).getByRole("link", { name: "Set up case connectors" })).toHaveAttribute("title", CONNECTOR_NOT_CONFIGURED);
     fireEvent.click(screen.getByRole("button", { name: "Juniper" }));
     expect(mocks.tacCaseForm).not.toHaveBeenCalled();
   });
@@ -1014,8 +1014,8 @@ describe("the Nokia escalation shows the paths this device can use", () => {
     expect(row).not.toHaveTextContent("copy & paste");
     // Not configured yet, so the row offers the same next step an API connector
     // does — and the (i) is still there.
-    expect(within(row).getByRole("link", { name: "Ticket delivery" }))
-      .toHaveAttribute("href", "#/admin/ticket-delivery");
+    expect(within(row).getByRole("link", { name: "Set up case connectors" }))
+      .toHaveAttribute("href", "#/admin/ticketing/cases");
     expect(within(row).getByRole("button", { name: /Ask Iris/ }))
       .toHaveAttribute("data-topic", connectorTopic("portal-nokia"));
   });
@@ -1126,8 +1126,8 @@ describe("the Nokia escalation shows the paths this device can use", () => {
     fireEvent.click(screen.getByTestId("tac-send-btn"));
     const dead = screen.getByTestId("tac-route-portal-nokia");
     expect(within(dead).getByRole("button", { name: "Nokia portal" })).toBeDisabled();
-    expect(within(dead).getByRole("link", { name: "Ticket delivery" }))
-      .toHaveAttribute("href", "#/admin/ticket-delivery");
+    expect(within(dead).getByRole("link", { name: "Set up case connectors" }))
+      .toHaveAttribute("href", "#/admin/ticketing/cases");
   });
 
   it("choosing a route builds the confirmation screen for THAT connector", async () => {

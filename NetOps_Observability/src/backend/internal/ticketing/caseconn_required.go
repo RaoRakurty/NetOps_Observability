@@ -91,8 +91,8 @@ func requiredCaseFieldTable() map[string][]RequiredField {
 		fromForm    = "the case form"
 		fromSCM     = "the case form (copy it from Cisco Support Case Manager)"
 		fromDevice  = "the device record in Correlix inventory"
-		ciscoAdmin  = "Administration → Ticket delivery → Case connectors → Cisco"
-		juniperAdmn = "Administration → Ticket delivery → Case connectors → Juniper"
+		ciscoAdmin  = "Administration → RCA Tickets → Vendor case routing → Cisco"
+		juniperAdmn = "Administration → RCA Tickets → Vendor case routing → Juniper"
 		portalNote  = "the case form (Correlix pre-fills the portal text you paste)"
 	)
 
@@ -397,7 +397,7 @@ func altComplete(fields []RequiredField, group, alt string, present func(string)
 // missing, and a second naming the screens it is set on:
 //
 //	Cisco Smart Bonding needs your CCO-ID; a serial number, or a contract id and
-//	a PID. Set them in Administration → Ticket delivery → Case connectors →
+//	a PID. Set them in Administration → RCA Tickets → Vendor case routing →
 //	Cisco and the device record in Correlix inventory.
 //
 // Requirements are separated by a SEMICOLON, never by "and": an AnyOf group

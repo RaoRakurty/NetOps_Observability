@@ -92,7 +92,15 @@ function caseHref(id: string): string {
   return `#/investigate/rca?id=${encodeURIComponent(id)}`;
 }
 
-export default function TicketDelivery() {
+// `part` lets Administration → RCA Tickets show this page as two steps of its
+// flow — "deliveries" (stats, outbox, audit trail) and "cases" (case
+// connectors + vendor case routing) — each loading only its own data. "all"
+// (the default) is the whole page as it was.
+export type TicketDeliveryPart = "all" | "deliveries" | "cases";
+
+export default function TicketDelivery({ part = "all" }: { part?: TicketDeliveryPart } = {}) {
+  const showDeliveries = part !== "cases";
+  const showCases = part !== "deliveries";
   const [outbox, setOutbox] = useState<TicketOutboxItem[] | null>(null);
   const [outboxTotal, setOutboxTotal] = useState(0);
   const [outboxErr, setOutboxErr] = useState<string | null>(null);
@@ -174,9 +182,9 @@ export default function TicketDelivery() {
     }
   }, []);
 
-  useEffect(() => { void loadConnectors(); }, [loadConnectors]);
-  useEffect(() => { void loadOutbox(); }, [loadOutbox]);
-  useEffect(() => { void loadAudit(appliedFilter); }, [loadAudit, appliedFilter]);
+  useEffect(() => { if (showCases) void loadConnectors(); }, [loadConnectors, showCases]);
+  useEffect(() => { if (showDeliveries) void loadOutbox(); }, [loadOutbox, showDeliveries]);
+  useEffect(() => { if (showDeliveries) void loadAudit(appliedFilter); }, [loadAudit, appliedFilter, showDeliveries]);
 
   const applyFilter = useCallback(() => {
     const v = caseFilter.trim();
@@ -250,13 +258,16 @@ export default function TicketDelivery() {
 
   return (
     <div className="adm">
-      <div className="admin-head">
-        <h2 style={{ margin: 0, fontSize: "var(--fs-lg)" }}>
-          Ticket delivery
-          <AskIris topic="ticketing.outbox" label="Ticket delivery" />
-        </h2>
-        <p className="admin-sub">What auto-ticketing queued, failed or delivered.</p>
-      </div>
+      {part === "all" && (
+        <div className="admin-head">
+          <h2 style={{ margin: 0, fontSize: "var(--fs-lg)" }}>
+            Ticket delivery
+            <AskIris topic="ticketing.outbox" label="Ticket delivery" />
+          </h2>
+          <p className="admin-sub">What auto-ticketing queued, failed or delivered.</p>
+        </div>
+      )}
+      {showDeliveries && (<>
 
       <div className="admin-head-row" style={{ marginTop: "var(--sp-2)" }}>
         <StatStrip>
@@ -428,6 +439,8 @@ export default function TicketDelivery() {
         </p>
       )}
 
+      </>)}
+      {showCases && (<>
       <h3 style={{ marginBottom: "var(--sp-1)" }}>Case connectors</h3>
       <p className="adm-line">
         Vendor and ITSM paths a TAC escalation can use.
@@ -499,6 +512,7 @@ export default function TicketDelivery() {
           and entitlement identifiers, and it is what lets a one-click
           escalation arrive at its confirmation screen already complete. */}
       <TacRoutingSection />
+      </>)}
     </div>
   );
 }

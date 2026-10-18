@@ -678,7 +678,7 @@ func anyOfSatisfied(fields []RequiredField, group string, have map[string]string
 }
 
 // anyOfPhrase renders one unsatisfied group as "a serial number, or a contract
-// id and a PID (Administration → Ticket delivery → Vendor contracts)".
+// id and a PID (Administration → RCA Tickets → Vendor case routing)".
 func anyOfPhrase(fields []RequiredField, group string) string {
 	order := []string{}
 	byAlt := map[string][]string{}

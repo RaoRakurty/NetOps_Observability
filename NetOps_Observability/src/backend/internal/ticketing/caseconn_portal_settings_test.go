@@ -161,7 +161,7 @@ func TestPortalConnectorIsNotConfiguredUntilItsDetailsAreBrought(t *testing.T) {
 	}
 	if verr := c.ValidateConfig(TACConnectorConfig{}); verr == nil {
 		t.Fatal("a fresh tenant has brought nothing and the path must say so")
-	} else if !strings.Contains(verr.Error(), "Ticket delivery") {
+	} else if !strings.Contains(verr.Error(), "RCA Tickets → Vendor case routing") {
 		t.Errorf("the refusal must say where the details are brought, got %q", verr)
 	}
 	ok := TACConnectorConfig{Portals: map[string]PortalConnectorConfig{

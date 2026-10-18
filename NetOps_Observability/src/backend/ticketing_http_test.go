@@ -783,3 +783,40 @@ func TestITSMRCADestinationHandlers(t *testing.T) {
 		})
 	}
 }
+
+// GET /api/incident-policies says whether the ticketing worker runs at all: a
+// tenant whose policies can never fire must be told so (Administration → RCA
+// Tickets shows "Ticketing is off"). It is a platform-wide yes/no, and adding it
+// must not widen what a tenant lists.
+func TestIncidentPolicyAPI_ReportsWhetherTicketingRuns(t *testing.T) {
+	srv, s, fix := setupTicketingTenants(t)
+	a, b := fix["A"], fix["B"]
+	if st, body := do(t, srv, "POST", "/api/incident-policies", b.token, map[string]any{"name": "B only", "enabled": true}); st != 200 {
+		t.Fatalf("B create: %d %s", st, body)
+	}
+	read := func() (bool, int) {
+		t.Helper()
+		st, body := do(t, srv, "GET", "/api/incident-policies", a.token, nil)
+		if st != 200 {
+			t.Fatalf("A list: %d %s", st, body)
+		}
+		var r struct {
+			Policies []ticketing.IncidentPolicy `json:"policies"`
+			Running  *bool                      `json:"ticketing_running"`
+		}
+		if err := json.Unmarshal(body, &r); err != nil {
+			t.Fatal(err)
+		}
+		if r.Running == nil {
+			t.Fatalf("ticketing_running missing: %s", body)
+		}
+		return *r.Running, len(r.Policies)
+	}
+	if running, n := read(); running || n != 0 {
+		t.Fatalf("worker not started: running=%v policies=%d (want false, 0 — B's policy must not leak)", running, n)
+	}
+	s.ticketingRunning.Store(true)
+	if running, n := read(); !running || n != 0 {
+		t.Fatalf("worker started: running=%v policies=%d (want true, 0)", running, n)
+	}
+}

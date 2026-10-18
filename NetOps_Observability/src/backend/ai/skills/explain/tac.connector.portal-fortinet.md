@@ -10,5 +10,5 @@ disproven, only shown to be undocumented. This path is chipped Manual, never
 Ready: configuration cannot bring an API a vendor does not publish. What it does
 bring is yours — the portal your contract routes you to, a support mailbox, your
 support account, and the shape of a case number. Set those on Administration →
-Ticket delivery. The device's own `execute tac report` bundle is still attached
+RCA Tickets → Vendor case routing. The device's own `execute tac report` bundle is still attached
 by a human, and files are deleted 30 days after the ticket closes.

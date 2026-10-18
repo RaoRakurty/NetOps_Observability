@@ -137,8 +137,8 @@ import {
   STATE_READ_FAILED,
   STATUS_CHIP,
   TEMPLATE_NEEDS_NAME,
-  TICKET_DELIVERY_LABEL,
-  TICKET_DELIVERY_ROUTE,
+  CASE_ROUTING_LABEL,
+  CASE_ROUTING_ROUTE,
   UPLOAD_FAILED,
   UPLOAD_FORMATS_LINE,
   blockerLine,
@@ -1934,8 +1934,8 @@ function ConnectorRow({ info, bundleBytes, busy, onOpen }: {
       <span className={`tac-chip tac-chip-${state}`}>{CONNECTOR_CHIP[state]}</span>
       {over && <span className="mini-meta tac-over">{over}</span>}
       {needsSetup && (
-        <a className="mini-meta tac-conn-link" href={TICKET_DELIVERY_ROUTE} title={note}>
-          {TICKET_DELIVERY_LABEL}
+        <a className="mini-meta tac-conn-link" href={CASE_ROUTING_ROUTE} title={note}>
+          {CASE_ROUTING_LABEL}
         </a>
       )}
       {state === "unavailable" && (
@@ -1981,10 +1981,10 @@ function ChooserRow({ info, busy, onChoose }: {
       {!choosable && (
         <a
           className="mini-meta tac-conn-link"
-          href={TICKET_DELIVERY_ROUTE}
+          href={CASE_ROUTING_ROUTE}
           title={connectorStatusNote(info)}
         >
-          {TICKET_DELIVERY_LABEL}
+          {CASE_ROUTING_LABEL}
         </a>
       )}
     </li>
