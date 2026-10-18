@@ -223,7 +223,7 @@ export const NOT_ENFORCED_NOTE = "carried, not enforced";
  * is cheaper than an operator discovering it the hard way.
  */
 export const NOT_ENFORCED_REASON =
-  "This limit is carried in the licence so an issued file is complete, but nothing in the product gates on it today.";
+  "This limit is carried in the license so an issued file is complete, but nothing in the product gates on it today.";
 
 /** "Included in Team" — the upgrade half of a row, or null when none lifts it. */
 export function liftedByText(tier: LicenceTier | string | undefined): string | null {
@@ -271,7 +271,7 @@ export function headline(state: LicenceState): Headline {
   if (state.load_error) {
     return {
       state: "refused",
-      label: "Installed licence refused",
+      label: "Installed license refused",
       reason: state.load_error,
       tone: "bad",
     };
@@ -282,7 +282,7 @@ export function headline(state: LicenceState): Headline {
       label: "Past grace — running at Community ceilings",
       reason:
         state.reason ||
-        "The installed licence is past its grace period, so the Community ceilings are the ones in force. " +
+        "The installed license is past its grace period, so the Community ceilings are the ones in force. " +
           "Everything already here stays visible and exportable; only creating and configuring paid capability is refused.",
       tone: "bad",
     };
@@ -293,7 +293,7 @@ export function headline(state: LicenceState): Headline {
       label: "In grace",
       reason:
         state.reason ||
-        "The licence has expired and the issuer's grace period is still running. Nothing has changed: the licensed ceilings and capabilities stay in force until it ends.",
+        "The license has expired and the issuer's grace period is still running. Nothing has changed: the licensed ceilings and capabilities stay in force until it ends.",
       tone: "warn",
     };
   }
@@ -302,15 +302,15 @@ export function headline(state: LicenceState): Headline {
       state: "community",
       label: "Community",
       reason:
-        "No licence is installed. Community is the free tier, not a fault state — the ceilings below are the ones in force.",
+        "No license is installed. Community is the free tier, not a fault state — the ceilings below are the ones in force.",
       tone: "muted",
     };
   }
   return {
     state: "licensed",
     label: state.trial
-      ? `${tierLabel(state.licensed_tier || state.tier)} evaluation licence`
-      : `${tierLabel(state.licensed_tier || state.tier)} licence`,
+      ? `${tierLabel(state.licensed_tier || state.tier)} evaluation license`
+      : `${tierLabel(state.licensed_tier || state.tier)} license`,
     reason: `Issued to ${state.customer || "an unnamed customer"} and in force.`,
     tone: "good",
   };
@@ -355,7 +355,7 @@ export function stateChip(view: Pick<LicenceView, "state" | "days_to_expiry" | "
       label: days === null ? "In grace" : `In grace · ${days} ${days === 1 ? "day" : "days"} left`,
       tone: "warn",
       detail:
-        "The licence has expired and nothing has changed yet. Install a renewal before the grace period ends.",
+        "The license has expired and nothing has changed yet. Install a renewal before the grace period ends.",
     };
   }
   if (st.source === "community") {
@@ -363,14 +363,14 @@ export function stateChip(view: Pick<LicenceView, "state" | "days_to_expiry" | "
       phase: "community",
       label: "Community",
       tone: "muted",
-      detail: "The free tier. No licence is installed, and that is a supported state, not a fault.",
+      detail: "The free tier. No license is installed, and that is a supported state, not a fault.",
     };
   }
   const days = view.days_to_expiry;
   if (st.trial) {
     return {
       phase,
-      label: days === null || days === undefined ? "Evaluation licence" : `Evaluation licence · ${days} ${days === 1 ? "day" : "days"} left`,
+      label: days === null || days === undefined ? "Evaluation license" : `Evaluation license · ${days} ${days === 1 ? "day" : "days"} left`,
       tone: days !== null && days !== undefined && days <= 7 ? "warn" : "good",
       detail:
         "A trial grants exactly what its tier, ceilings and capabilities say. Nothing about it is a reduced version of the product.",
@@ -380,7 +380,7 @@ export function stateChip(view: Pick<LicenceView, "state" | "days_to_expiry" | "
     phase,
     label: days === null || days === undefined ? "Valid" : `Valid · expires in ${days} ${days === 1 ? "day" : "days"}`,
     tone: days !== null && days !== undefined && days <= EXPIRY_SOON_DAYS ? "warn" : "good",
-    detail: "The licence is in force.",
+    detail: "The license is in force.",
   };
 }
 
@@ -402,7 +402,7 @@ export const EXPIRY_SOON_DAYS = 30;
 
 export function expiryVerdict(view: Pick<LicenceView, "state" | "days_to_expiry">): ExpiryVerdict {
   const st = view.state;
-  const m = measured(view.days_to_expiry, "this licence carries no expiry");
+  const m = measured(view.days_to_expiry, "this license carries no expiry");
   if (!m.measured || !st.expires_at) {
     return { state: "none", text: "No expiry — Community ceilings do not lapse" };
   }
@@ -486,7 +486,7 @@ export function keyFileName(id: string): string {
  */
 export function keyFileBody(key: { id: string; role: string; note?: string; base64: string }): string {
   const lines = [
-    `# Correlix licence signing key`,
+    `# Correlix license signing key`,
     `# id: ${key.id}`,
     `# role: ${key.role}`,
   ];
@@ -499,9 +499,9 @@ export function keyFileBody(key: { id: string; role: string; note?: string; base
 export function keyRoleLabel(role: string): string {
   switch (role) {
     case "current":
-      return "Signs new licences";
+      return "Signs new licenses";
     case "previous":
-      return "Retired — still verifies licences already issued";
+      return "Retired — still verifies licenses already issued";
     default:
       return role || "Role not stated";
   }
@@ -523,7 +523,7 @@ export type DocumentCheck = { ok: true; document: string } | { ok: false; reason
  */
 export function checkDocument(text: string): DocumentCheck {
   const document = text.trim();
-  if (!document) return { ok: false, reason: "There is no licence document to install." };
+  if (!document) return { ok: false, reason: "There is no license document to install." };
   const bytes = new TextEncoder().encode(document).length;
   if (bytes > MAX_DOCUMENT_BYTES) {
     return {

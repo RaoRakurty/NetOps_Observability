@@ -548,7 +548,7 @@ export const NAV: NavSection[] = [
       // installing or replacing it remains the provider's action — the page
       // branches on the PAYLOAD's scope, not on who is looking, and hides the
       // install controls for a tenant admin instead of 403ing them.
-      { id: "licence", label: "Licence", render: () => <Licence /> },
+      { id: "licence", label: "License", render: () => <Licence /> },
     ],
   },
   // ── Platform — the PROVIDER's own section (owner IA, 2026-09-05) ────────────

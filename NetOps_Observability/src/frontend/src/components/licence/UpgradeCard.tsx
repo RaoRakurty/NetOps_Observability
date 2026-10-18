@@ -130,7 +130,7 @@ export function parseLicenceRefusal(status: number, body: unknown): LicenceRefus
     refusal.message =
       kind === "feature"
         ? `${refusedThing(refusal)} is not included in your ${at} licence.`
-        : `Your ${at} licence does not cover more ${refusedThing(refusal)}.`;
+        : `Your ${at} license does not cover more ${refusedThing(refusal)}.`;
   }
   return refusal;
 }
@@ -163,10 +163,10 @@ export default function UpgradeCard({ refusal, title, actions }: {
   const showCounts = refusal.kind === "ceiling" && refusal.current !== undefined && refusal.limit !== undefined;
 
   return (
-    <div className="lic-upgrade" role="note" aria-label="Licence limit">
+    <div className="lic-upgrade" role="note" aria-label="License limit">
       <div className="lic-upgrade-hd">
         <span className="lic-upgrade-title">
-          {title || (refusal.kind === "feature" ? "Not included in this licence" : "At a licence limit")}
+          {title || (refusal.kind === "feature" ? "Not included in this license" : "At a license limit")}
         </span>
         {at && <span className="lic-pill lic-muted">{at}</span>}
       </div>
@@ -201,7 +201,7 @@ export default function UpgradeCard({ refusal, title, actions }: {
 
       <p className="lic-upgrade-safe">
         Nothing has been removed and nothing has stopped.
-        <AskIris topic="licence.limit-not-a-fault" label="a licence limit" />
+        <AskIris topic="licence.limit-not-a-fault" label="a license limit" />
       </p>
 
       {actions && <div className="lic-actions">{actions}</div>}
