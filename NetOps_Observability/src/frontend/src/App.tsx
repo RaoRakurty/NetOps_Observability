@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-import { ReactNode, Suspense, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
+import { type CSSProperties, ReactNode, Suspense, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { isLocalAccount, userLabel } from "./lib/userLabel";
 import { api, Health, LANDING_PENDING_KEY } from "./services/api";
 import { useAuth } from "./hooks/useAuth";
@@ -33,6 +33,7 @@ import ChangePasswordCard from "./components/ChangePasswordCard";
 import TwoFactorCard from "./components/TwoFactorCard";
 import TenantGate from "./components/TenantGate";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { adminThemeFor, adminThemeVars } from "./admin/adminTheme";
 
 // ShellGridSizing mirrors the live pane sizes into the shell grid's track vars
 // (--ins-w / --drawer-h) so the docked Inspector/BottomDrawer reflow the center
@@ -401,7 +402,16 @@ export default function App() {
                     a named, recoverable panel. Before this, one bad field
                     access white-screened the whole console. */}
                 <ErrorBoundary label={viewLabel} route={hash} resetKey={routeKey}>
-                  <RouteView build={buildView} />
+                  {/* Administration: one colour per group (admin/adminTheme.ts),
+                      set once here so every page, button and focus ring follows. */}
+                  {section.id === "admin" && !resourceRoute ? (
+                    <div className="adm-scope" data-adm-group={adminThemeFor(leaf?.id).key}
+                      style={adminThemeVars(adminThemeFor(leaf?.id)) as CSSProperties}>
+                      <RouteView build={buildView} />
+                    </div>
+                  ) : (
+                    <RouteView build={buildView} />
+                  )}
                 </ErrorBoundary>
               </Suspense>
             </TenantGate>

@@ -2958,6 +2958,37 @@ body.dtv-resizing { cursor: col-resize !important; user-select: none !important;
 }
 .adm .mini-meta { font-size: 12.5px; line-height: 1.5; }
 
+/* ----- Administration colour scope (admin/adminTheme.ts) -----
+   App.tsx wraps every Administration leaf in `.adm-scope` and sets the group's
+   three shades (--adm-hue / --adm-ink / --adm-solid). Re-pointing the accent
+   HERE is what makes buttons, tabs, focus rings and stat accents follow the
+   group without per-page CSS. Mild by design (owner 2026-10-18): colour on the
+   header bar, a hairline on cards, primary buttons and focus — bodies stay
+   neutral. Text uses ink on light themes and the hue on dark ones; white text
+   only ever sits on the solid (≥ 4.5:1, adminTheme.test.ts). */
+.adm-scope {
+  --accent: var(--adm-ink);
+  --accent-bright: var(--adm-hue);
+  --accent-grad: linear-gradient(135deg, var(--adm-solid) 0%, color-mix(in srgb, var(--adm-solid) 82%, #000) 100%);
+  --accent-soft: color-mix(in srgb, var(--adm-hue) 10%, transparent);
+  --accent-ring: color-mix(in srgb, var(--adm-hue) 40%, transparent);
+}
+:root[data-theme="dark"] .adm-scope, :root[data-theme="oled"] .adm-scope,
+:root[data-theme="indigo"] .adm-scope, :root[data-theme="graphite"] .adm-scope {
+  --accent: var(--adm-hue);
+}
+.adm-scope .admin-head {
+  border-left: 3px solid var(--adm-hue);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--adm-hue) 7%, transparent);
+}
+.adm-scope .card { border-top: 2px solid color-mix(in srgb, var(--adm-hue) 45%, var(--panel-border)); }
+/* 14 px floor for Administration text (NOC-admin UI standard). */
+.adm-scope .admin-sub, .adm-scope .adm-line, .adm-scope .adm-grouphead,
+.adm-scope .adm .badge, .adm-scope .adm .conn-status, .adm-scope .adm .perm-pill,
+.adm-scope .adm .conn-meta, .adm-scope .adm .mini-meta { font-size: 14px; }
+
 /* Case connectors (Ticket delivery). One row per vendor path: the name, its
    state, what it does, and the vendor research behind its own disclosure —
    never inline. This page is where credentials are brought, so it is where the
