@@ -7348,29 +7348,71 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
 .nctx-history .disc-field { max-width: 480px; margin: 10px 0; }
 .nctx-table { margin-top: 10px; width: 100%; }
 
-/* ----- Iris: one purple family for every box (owner 2026-10-17) -----------
-   Iris's own accent is --mod-copilot (the violet the rail uses for Iris). The
-   panel's cards, tiles, inputs, chips, tables and dividers were neutral grey;
-   instead of restyling forty rules, the NEUTRAL tokens they all read are
-   re-tinted inside the panel only. The theme's own values are captured on
-   :root first (a custom property cannot reference itself), then mixed with the
-   accent — so it follows every theme (light, indigo, graphite, black) and
-   nothing outside Iris changes. */
-:root {
-  --iris-base-border: var(--border);
-  --iris-base-surface: var(--surface);
-  --iris-base-surface-2: var(--surface-2);
-  --iris-base-hover: var(--hover);
-  --iris-base-bg: var(--bg);
-}
+/* ----- Iris: a clean canvas, coloured boxes (owner 2026-10-18) ------------
+   The panel itself keeps the theme's own background (white / dark). Colour
+   lives only on the things you type into, read or press: purple (Iris's own
+   --mod-copilot) leads, and the other boxes take neighbouring platform module
+   accents so the panel reads as one palette, not one colour. Every colour is
+   a theme token mixed with transparency, so light and dark both follow. */
 .iris-panel {
   --iris-tint: var(--mod-copilot);
-  --border: color-mix(in srgb, var(--iris-tint) 45%, var(--iris-base-border));
-  --panel-border: var(--border);
-  --surface: color-mix(in srgb, var(--iris-tint) 9%, var(--iris-base-surface));
-  --panel: var(--surface);
-  --panel-solid: var(--surface);
-  --surface-2: color-mix(in srgb, var(--iris-tint) 15%, var(--iris-base-surface-2));
-  --hover: color-mix(in srgb, var(--iris-tint) 18%, var(--iris-base-hover));
-  --bg: color-mix(in srgb, var(--iris-tint) 6%, var(--iris-base-bg));
+  --iris-tint-2: var(--mod-network);
+  --iris-glow: 0 0 0 3px color-mix(in srgb, var(--iris-tint) 22%, transparent);
 }
+/* A box in a given hue: --box is set per element below. */
+.iris-panel .op-input, .iris-panel .op-field input, .iris-panel .op-field select,
+.iris-panel .op-modelinput, .iris-panel .op-grounded, .iris-panel .op-chip,
+.iris-panel .op-tile, .iris-panel .op-cite, .iris-panel .op-modelchip,
+.iris-panel .iris-chart, .iris-panel .dtv {
+  --box: var(--iris-tint);
+  background: color-mix(in srgb, var(--box) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--box) 34%, transparent);
+  transition: border-color .15s, background .15s, box-shadow .15s, transform .12s;
+}
+/* Typing surfaces: rounded, and a soft purple glow while focused. */
+.iris-panel .op-input, .iris-panel .op-field input, .iris-panel .op-field select,
+.iris-panel .op-modelinput { border-radius: 12px; }
+.iris-panel .op-input:focus, .iris-panel .op-field input:focus,
+.iris-panel .op-field select:focus, .iris-panel .op-modelinput:focus {
+  outline: none; border-color: var(--iris-tint); box-shadow: var(--iris-glow);
+  background: color-mix(in srgb, var(--iris-tint) 10%, transparent);
+}
+/* The answer card: purple frame, a lifted shadow, a violet→azure rail. */
+.iris-panel .op-grounded {
+  border-radius: 14px;
+  box-shadow: 0 10px 28px -18px color-mix(in srgb, var(--iris-tint) 70%, transparent);
+}
+.iris-panel .op-grounded::before { background: linear-gradient(180deg, var(--iris-tint), var(--iris-tint-2)); }
+/* Suggestion chips: a different accent each, lifting on hover. */
+.iris-panel .op-chip { border-radius: 999px; }
+.iris-panel .op-chips > :nth-child(4n+2) { --box: var(--mod-network); }
+.iris-panel .op-chips > :nth-child(4n+3) { --box: var(--mod-fleet); }
+.iris-panel .op-chips > :nth-child(4n+4) { --box: var(--mod-monitors); }
+.iris-panel .op-chip-primary { color: color-mix(in srgb, var(--box) 75%, var(--fg)); }
+.iris-panel .op-chip:hover, .iris-panel .op-tile:hover, .iris-panel .op-cite:hover, .iris-panel .op-modelchip:hover {
+  background: color-mix(in srgb, var(--box) 12%, transparent);
+  border-color: color-mix(in srgb, var(--box) 60%, transparent);
+  box-shadow: 0 6px 16px -10px color-mix(in srgb, var(--box) 60%, transparent);
+  transform: translateY(-1px);
+}
+/* Provider tiles keep their own accent (set inline as --tile). */
+.iris-panel .op-tile { --box: var(--tile, var(--iris-tint)); border-radius: 12px; }
+.iris-panel .op-tile.on {
+  border-color: var(--box); background: color-mix(in srgb, var(--box) 12%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--box) 22%, transparent);
+}
+/* Data inside answers: azure tables, teal charts, indigo citations. */
+.iris-panel .dtv { --box: var(--mod-network); border-radius: 12px; overflow: hidden; }
+.iris-panel .dtv-head { background: color-mix(in srgb, var(--mod-network) 12%, transparent); }
+.iris-panel .iris-chart { --box: var(--mod-fleet); border-radius: 12px; padding: 8px; }
+.iris-panel .op-cite, .iris-panel .op-modelchip { --box: var(--mod-logs); border-radius: 999px; }
+/* Feedback: green / red on hover. */
+.iris-panel .op-fb-btn { border-radius: 999px; }
+.iris-panel .op-fb-btn:first-of-type:hover { border-color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent); }
+.iris-panel .op-fb-btn:last-of-type:hover { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
+/* Your messages and Send: the violet→azure gradient. */
+.iris-panel .op-bubble.user, .iris-panel .op-send {
+  background: linear-gradient(135deg, var(--iris-tint), color-mix(in srgb, var(--iris-tint) 45%, var(--iris-tint-2)));
+  box-shadow: 0 6px 16px -10px color-mix(in srgb, var(--iris-tint) 80%, transparent);
+}
+.iris-panel .op-welcome-icon { background: linear-gradient(135deg, var(--iris-tint), var(--iris-tint-2)); }
