@@ -5,10 +5,14 @@ package nms
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 )
 
@@ -51,27 +55,7 @@ func (p restPoller) Poll(ctx context.Context, in PollInput) ([][]byte, Checkpoin
 			return nil, in.Checkpoint, fmt.Errorf("stream %q: unresolved path parameter %s (set it in the integration credentials)", in.Stream, path[i:i+j+1])
 		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(in.Base, "/")+path, nil)
-	if err != nil {
-		return nil, in.Checkpoint, err
-	}
-	for k, vs := range in.Session.Header {
-		for _, v := range vs {
-			req.Header.Add(k, v)
-		}
-	}
-	resp, err := in.Do.Do(req)
-	if err != nil {
-		return nil, in.Checkpoint, err
-	}
-	defer drainClose(resp)
-	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, in.Checkpoint, ErrUnauthorized // runtime re-authenticates
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, in.Checkpoint, fmt.Errorf("poll %s: status %d", in.Stream, resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	body, err := fetch(ctx, in, path)
 	if err != nil {
 		return nil, in.Checkpoint, err
 	}
@@ -81,18 +65,136 @@ func (p restPoller) Poll(ctx context.Context, in PollInput) ([][]byte, Checkpoin
 	return [][]byte{body}, next, nil
 }
 
+// fetch GETs base+path with the session's headers. 401 → ErrUnauthorized (the
+// runtime re-authenticates); any other non-2xx is an error naming the stream.
+func fetch(ctx context.Context, in PollInput, path string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(in.Base, "/")+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	for k, vs := range in.Session.Header {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
+	}
+	resp, err := in.Do.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer drainClose(resp)
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, ErrUnauthorized // runtime re-authenticates
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("poll %s: status %d", in.Stream, resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+}
+
 // vManage poll endpoints (verified paths). Alarms since a cursor; approute
 // statistics for the metric lane.
 func vmanagePoller() Poller {
-	return restPoller{paths: map[string]string{
-		"alarms":              "/dataservice/alarms",
-		"events":              "/dataservice/event",
-		"tunnels":             "/dataservice/device/tunnel/statistics",
-		"control_connections": "/dataservice/device/control/connections",
-		"bfd":                 "/dataservice/device/bfd/sessions",
-		"statistics":          "/dataservice/statistics/approute",
-		"inventory":           "/dataservice/device",
-	}}
+	return vmanagePoll{rest: restPoller{paths: map[string]string{
+		"alarms":     "/dataservice/alarms",
+		"events":     "/dataservice/event",
+		"statistics": "/dataservice/statistics/approute",
+		"inventory":  "/dataservice/device",
+	}}}
+}
+
+// vmanagePerDevice are vManage's REAL-TIME device APIs. Every release answers
+// them 400 without ?deviceId=<system-ip> (verified on 20.6.1, 2026-10-18), so
+// they are polled once per reachable device found in /dataservice/device.
+var vmanagePerDevice = map[string]string{
+	"tunnels":             "/dataservice/device/tunnel/statistics",
+	"control_connections": "/dataservice/device/control/connections",
+	"bfd":                 "/dataservice/device/bfd/sessions",
+}
+
+// vmanageMaxDevicesPerCycle bounds one stream's fan-out per poll; a larger
+// fabric is covered across cycles (the window rotates with the checkpoint).
+const vmanageMaxDevicesPerCycle = 200
+
+type vmanagePoll struct{ rest restPoller }
+
+func (p vmanagePoll) Poll(ctx context.Context, in PollInput) ([][]byte, Checkpoint, error) {
+	path, perDevice := vmanagePerDevice[in.Stream]
+	if !perDevice {
+		return p.rest.Poll(ctx, in)
+	}
+	inv, err := fetch(ctx, in, "/dataservice/device")
+	if err != nil {
+		return nil, in.Checkpoint, err
+	}
+	ids, err := vmanageDeviceIDs(inv, in.Stream)
+	if err != nil {
+		return nil, in.Checkpoint, err
+	}
+	window := rotateWindow(ids, int(in.Checkpoint.LastSeq), vmanageMaxDevicesPerCycle)
+	var out [][]byte
+	var failed []string
+	for _, id := range window {
+		body, err := fetch(ctx, in, path+"?deviceId="+url.QueryEscape(id))
+		if errors.Is(err, ErrUnauthorized) {
+			return nil, in.Checkpoint, err // the whole session is gone — re-authenticate
+		}
+		if err != nil {
+			failed = append(failed, id) // one unhealthy device must not blank the fabric
+			continue
+		}
+		out = append(out, body)
+	}
+	if len(out) == 0 && len(failed) > 0 {
+		return nil, in.Checkpoint, fmt.Errorf("poll %s: every device failed (%d), first %s", in.Stream, len(failed), failed[0])
+	}
+	next := Checkpoint{LastEventTime: nowUTC(), LastSeq: in.Checkpoint.LastSeq + 1}
+	return out, next, nil
+}
+
+// vmanageDeviceIDs extracts the system-ips worth querying from a
+// /dataservice/device response. Controller output is untrusted input: only a
+// syntactically valid IP becomes a query parameter. BFD and tunnel statistics
+// exist on edges only; control connections on every reachable device.
+func vmanageDeviceIDs(raw []byte, stream string) ([]string, error) {
+	var resp struct {
+		Data []struct {
+			SystemIP     string `json:"system-ip"`
+			DeviceType   string `json:"device-type"`
+			Reachability string `json:"reachability"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("vmanage inventory unreadable: %w", err)
+	}
+	seen := map[string]bool{}
+	var ids []string
+	for _, d := range resp.Data {
+		if !strings.EqualFold(d.Reachability, "reachable") || net.ParseIP(d.SystemIP) == nil || seen[d.SystemIP] {
+			continue
+		}
+		edge := strings.EqualFold(d.DeviceType, "vedge") // cEdges report "vedge" too
+		if stream != "control_connections" && !edge {
+			continue
+		}
+		seen[d.SystemIP] = true
+		ids = append(ids, d.SystemIP)
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
+// rotateWindow returns up to max ids starting at a cycle-dependent offset, so
+// successive cycles walk a fabric larger than max.
+func rotateWindow(ids []string, cycle, max int) []string {
+	if len(ids) <= max {
+		return ids
+	}
+	start := (cycle * max) % len(ids)
+	out := make([]string, 0, max)
+	for i := 0; i < max; i++ {
+		out = append(out, ids[(start+i)%len(ids)])
+	}
+	return out
 }
 
 func catalystPoller() Poller {
