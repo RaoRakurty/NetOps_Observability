@@ -167,7 +167,7 @@ func (VManageAuth) sessionLogin(ctx context.Context, base string, creds Credenti
 	if err != nil {
 		return Session{}, err
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16)) // bounded; an unreadable body is judged below as "no session"
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16)) // discard: a read error leaves body empty; the session-cookie check below still decides
 	drainClose(resp)
 	if resp.StatusCode != http.StatusOK {
 		return Session{}, fmt.Errorf("vmanage session login: status %d", resp.StatusCode)
@@ -194,7 +194,7 @@ func (VManageAuth) sessionLogin(ctx context.Context, base string, creds Credenti
 	if err != nil {
 		return Session{}, err
 	}
-	tok, _ := io.ReadAll(io.LimitReader(tresp.Body, 4096)) // bounded; validated below
+	tok, _ := io.ReadAll(io.LimitReader(tresp.Body, 4096)) // discard: a read error leaves the token empty, which is refused below
 	drainClose(tresp)
 	token := strings.TrimSpace(string(tok))
 	if tresp.StatusCode != http.StatusOK || token == "" || strings.ContainsAny(token, "<> \t\r\n") {
