@@ -7459,3 +7459,20 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
   box-shadow: 0 6px 16px -10px color-mix(in srgb, var(--iris-tint) 80%, transparent);
 }
 .iris-panel .op-welcome-icon { background: linear-gradient(135deg, var(--iris-tint), var(--iris-tint-2)); }
+
+/* Sensors: the state chip and its Turn on / Turn off button on one line. */
+.sensor-switch { display: inline-flex; align-items: center; gap: var(--sp-2); }
+
+/* Administration hub sections (components/admin/AdminSection.tsx). */
+.adm-section { border: 1px solid var(--panel-border); border-radius: 10px; margin-bottom: var(--sp-2); background: var(--panel); }
+.adm-section.open { border-color: color-mix(in srgb, var(--adm-hue, var(--accent)) 45%, var(--panel-border)); }
+.adm-section-head {
+  display: flex; align-items: baseline; gap: var(--sp-2); width: 100%;
+  padding: var(--sp-3); background: none; border: 0; text-align: left; cursor: pointer;
+  font: inherit; color: inherit;
+}
+.adm-section-head:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: -2px; border-radius: 10px; }
+.adm-section-chevron { color: var(--adm-hue, var(--accent)); width: 1em; }
+.adm-section-title { font-weight: 600; font-size: 15px; }
+.adm-section-summary { color: var(--muted); font-size: 14px; }
+.adm-section-body { padding: 0 var(--sp-3) var(--sp-3); }

@@ -38,7 +38,7 @@ const DASHBOARD_GROUPS: { title: string; cards: DashboardCard[] }[] = [
     title: "Health & operations",
     cards: [
       { id: "troubleshooting-board", label: "Troubleshooting", href: "#/investigate/troubleshooting", icon: "alerts" },
-      { id: "datasources-board", label: "Data Sources", href: "#/admin/datasources", icon: "datasets" },
+      { id: "datasources-board", label: "Data Sources", href: "#/admin/discovery/coverage", icon: "datasets" },
       { id: "events-board", label: "Events", href: "#/explore/events", icon: "logs" },
       { id: "threat-board", label: "Threat Detection", href: "#/security/threat", icon: "reports" },
     ],

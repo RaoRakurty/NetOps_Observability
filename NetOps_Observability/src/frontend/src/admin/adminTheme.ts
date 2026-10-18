@@ -38,10 +38,6 @@ export const ADMIN_THEMES: Record<string, AdminTheme> = {
 
 // Administration leaf id → theme key.
 export const ADMIN_LEAF_THEME: Record<string, keyof typeof ADMIN_THEMES> = {
-  datasources: "sources",
-  snmp: "sources",
-  sensors: "sources",
-  "telemetry-coverage": "sources",
   discovery: "sources",
   integrations: "response",
   notifications: "response",

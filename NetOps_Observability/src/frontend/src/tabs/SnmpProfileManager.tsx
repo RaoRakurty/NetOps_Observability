@@ -43,7 +43,7 @@ export default function SnmpProfileManager() {
         {/* SNMP credentials live in ONE place: subnet discovery has none of its
             own and tries the platform-owned profiles here, in name order. */}
         <p style={{ margin: "8px 0 0", color: "var(--muted)", fontSize: 14 }}>
-          <a href="#/admin/discovery">Subnet discovery</a> tries the platform&apos;s profiles in name order
+          <a href="#/admin/discovery/scan">Network Scan</a> tries the platform&apos;s profiles in name order
           and links each device it finds to the one that answered.
         </p>
       </div>

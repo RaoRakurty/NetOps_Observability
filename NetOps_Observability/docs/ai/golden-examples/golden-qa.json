@@ -11,7 +11,7 @@
           "onboard-devices/snmp-discovery"
         ]
       },
-      "nav": "admin/discovery"
+      "nav": "admin/discovery/scan"
     },
     {
       "id": "docs-002",
@@ -646,7 +646,7 @@
           "administration/sensors"
         ]
       },
-      "nav": "admin/sensors",
+      "nav": "admin/discovery/sensors",
       "notes": "nav-leaf coverage (N-G1): Administration \u2192 Data sources \u2192 Sensors"
     },
     {
@@ -733,7 +733,7 @@
           "onboard-devices/verify-monitoring"
         ]
       },
-      "nav": "admin/datasources",
+      "nav": "admin/discovery/coverage",
       "notes": "nav-leaf coverage (N-G1): Administration \u2192 Data sources \u2192 Data Sources"
     },
     {
@@ -782,7 +782,7 @@
           "onboard-devices/snmp-profiles"
         ]
       },
-      "nav": "admin/snmp",
+      "nav": "admin/discovery/snmp",
       "notes": "nav-leaf coverage (N-G1): Administration \u2192 Data sources \u2192 SNMP Profiles"
     },
     {
@@ -794,7 +794,7 @@
           "administration/telemetry-coverage"
         ]
       },
-      "nav": "admin/telemetry-coverage",
+      "nav": "admin/discovery/telemetry",
       "notes": "nav-leaf coverage (N-G1): Administration \u2192 Data sources \u2192 Telemetry Coverage"
     },
     {

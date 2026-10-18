@@ -6,7 +6,7 @@
 // route behind it (/api/discovery/config, /api/discovery/refresh) is
 // requireCrossTenant on the server.
 //
-// SNMP credentials live in ONE place — SNMP Profiles (#/admin/snmp,
+// SNMP credentials live in ONE place — SNMP Profiles (#/admin/discovery/snmp,
 // /api/snmp/credentials). Discovery has no community of its own: the sweep tries
 // the platform-owned profiles (v1/v2c and v3) in profile-name order per host
 // until one answers, and binds each found device to the profile that answered.
@@ -185,7 +185,7 @@ export default function SubnetDiscoveryCard() {
       <div className="disc-head">
         <div>
           <div className="disc-title-row">
-            <h2 className="disc-title">Subnet discovery</h2>
+            <h2 className="disc-title">Network Scan</h2>
             <span className={`disc-state ${state.cls}`}>
               <span className="disc-dot" aria-hidden />
               {state.label}
@@ -202,7 +202,7 @@ export default function SubnetDiscoveryCard() {
         </div>
       )}
 
-      <ol className="disc-steps" aria-label="Set up subnet discovery">
+      <ol className="disc-steps" aria-label="Set up the network scan">
         <li className="disc-step">
           <span className="disc-step-num" aria-hidden>1</span>
           <div className="disc-step-body">
@@ -217,7 +217,7 @@ export default function SubnetDiscoveryCard() {
                 {summary ?? "Discovery tries your SNMP profiles in name order."}
               </p>
             )}
-            <a className="disc-link" href="#/admin/snmp">
+            <a className="disc-link" href="#/admin/discovery/snmp">
               {noProfiles ? "Add an SNMP profile" : "Open SNMP Profiles"}
             </a>{" "}
             <AskIris topic="discovery.snmp-profiles" label="which credentials are tried" />
