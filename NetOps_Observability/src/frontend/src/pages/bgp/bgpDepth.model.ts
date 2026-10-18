@@ -42,13 +42,13 @@ export type RpkiTone = {
 export function rpkiStateTone(state: BgpRpkiState | undefined, reason?: string, error?: string): RpkiTone {
   switch (state) {
     case "valid":
-      return { label: "Origin authorised", term: "RPKI valid", tone: "var(--ok)", detail: "RPKI valid — a ROA authorises this origin AS to announce this prefix." };
+      return { label: "Origin authorized", term: "RPKI valid", tone: "var(--ok)", detail: "RPKI valid — a ROA authorizes this origin AS to announce this prefix." };
     case "invalid":
       if (reason === "origin_as")
-        return { label: "Wrong origin AS", term: "RPKI invalid", tone: "var(--crit)", detail: "RPKI invalid — a ROA exists but authorises a DIFFERENT origin AS. Hijack, or a stale ROA of your own." };
+        return { label: "Wrong origin AS", term: "RPKI invalid", tone: "var(--crit)", detail: "RPKI invalid — a ROA exists but authorizes a DIFFERENT origin AS. Hijack, or a stale ROA of your own." };
       if (reason === "max_length")
         return { label: "Too specific", term: "RPKI invalid", tone: "var(--crit)", detail: "RPKI invalid — more specific than the ROA's maxLength allows, often an accidental de-aggregation." };
-      return { label: "Not authorised", term: "RPKI invalid", tone: "var(--crit)", detail: "RPKI invalid — the announcement breaks a published ROA." };
+      return { label: "Not authorized", term: "RPKI invalid", tone: "var(--crit)", detail: "RPKI invalid — the announcement breaks a published ROA." };
     case "unknown":
       return { label: "Not protected", term: "no ROA (RPKI not found)", tone: "var(--muted)", detail: "No ROA covers this prefix. Publishing one is what lets the internet drop a hijack of it." };
     default:

@@ -78,7 +78,7 @@ describe("AppIdCoverageCard", () => {
   });
 
   // The one reading that DOES span tenants must say so on its face.
-  it("the platform owner's cross-tenant reading is labelled as one", async () => {
+  it("the platform owner's cross-tenant reading is labeled as one", async () => {
     mock.appIdStatus.mockResolvedValueOnce(h.status({
       scope: "platform", tenant: "global", ngfw_attributions: 900, cloud_attributions: 800,
     }));
@@ -88,7 +88,7 @@ describe("AppIdCoverageCard", () => {
     expect(screen.queryByText(/this tenant's own/)).toBeNull();
   });
 
-  it("a tenant order is labelled as one rather than as the default", async () => {
+  it("a tenant order is labeled as one rather than as the default", async () => {
     mock.appIdStatus.mockResolvedValueOnce(h.status({ precedence_is_default: false }));
     render(<AppIdCoverageCard />);
     expect(await screen.findByText(/tenant order · read-only/)).toBeTruthy();

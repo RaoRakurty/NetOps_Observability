@@ -122,7 +122,7 @@ export const CASE_HUMAN_APPROVED =
   "Review every field first — Correlix never opens a case on its own.";
 
 // Iris → Knowledge.
-export const KNOWLEDGE_FAILED = "The coverage catalogue could not be read.";
+export const KNOWLEDGE_FAILED = "The coverage catalog could not be read.";
 export const KNOWLEDGE_GROWTH_NOTE =
   "Coverage grows from owner runbooks: vendor research is filed under ai/tac/research/<vendor>.yaml and merged into the classes and the per-dialect plans by scripts/tac-merge-research.py.";
 // ── the learning backlog (tracker 243) ───────────────────────────────────────
@@ -139,7 +139,7 @@ export const BACKLOG_UNTRACKED =
 /** The backlog exists and no collection has run yet. */
 export const BACKLOG_EMPTY = "Nothing collected yet, so nothing has been read.";
 /** The backlog exists, collections have run, and every output was recognised. */
-export const BACKLOG_CLEAN = "Every collected output was recognised.";
+export const BACKLOG_CLEAN = "Every collected output was recognized.";
 export const BACKLOG_FAILED = "The learning backlog could not be read.";
 
 /** What each gap kind means as a work item — the point of separating them. */
@@ -154,7 +154,7 @@ export const CANDIDATE_NOTE = "A candidate is a proposal, never a rule.";
 export const CANDIDATE_NONE = "No answer has been written down yet.";
 export const CANDIDATE_EXPORT_FAILED = "The research file could not be built.";
 export const NO_UNPLANNED_DIALECTS =
-  "Every platform Correlix recognises carries an authored plan.";
+  "Every platform Correlix recognizes carries an authored plan.";
 /** The owner's 2026-09-05 output-only command rule, as the coverage page states
  *  it. The page shows COUNTS and never a command: a command in one of the three
  *  families is not knowledge Correlix holds, and this page is knowledge. */

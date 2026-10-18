@@ -49,10 +49,10 @@ export default function NetworkPath({ rangeMinutes = 60 }: { rangeMinutes?: numb
 
   return (
     <div className="dm-board">
-      <Group title="Path behaviour" hue="#14B8A6">
+      <Group title="Path behavior" hue="#14B8A6">
         <p className="proto-key">
           Each path against its own baseline. Worst first.
-          <AskIris topic="path.behaviour" label="Path behaviour" />
+          <AskIris topic="path.behaviour" label="Path behavior" />
         </p>
         <PathHealthList />
       </Group>

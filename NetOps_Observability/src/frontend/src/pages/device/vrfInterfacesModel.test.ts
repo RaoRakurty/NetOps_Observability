@@ -105,7 +105,7 @@ describe("coverageHeadline — the sentence above the tables", () => {
       .toMatch(/No interface telemetry is collected/);
   });
 
-  it("reports a partial labelling as its own third fact", () => {
+  it("reports a partial labeling as its own third fact", () => {
     const h = coverageHeadline(
       coverage({ vrf_labels: true, interfaces: 5, in_groups: 3, ungrouped: 2 }), dialect());
     expect(h).toMatch(/3 of 5/);

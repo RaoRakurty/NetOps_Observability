@@ -24,7 +24,7 @@ describe("normalizeTagKey (mirror of tenant_governance.go validation)", () => {
 
 describe("moveItem (precedence up/down reorder)", () => {
   const abc = ["a", "b", "c"];
-  it("swaps neighbours immutably", () => {
+  it("swaps neighbors immutably", () => {
     expect(moveItem(abc, 1, -1)).toEqual(["b", "a", "c"]);
     expect(moveItem(abc, 1, +1)).toEqual(["a", "c", "b"]);
     expect(abc).toEqual(["a", "b", "c"]); // untouched

@@ -71,14 +71,14 @@ describe("the connectors offered for one vendor's route", () => {
   // A tenant route naming an unconfigured connector is HONOURED by the server
   // and then refused by name on the confirmation screen. Hiding the choice
   // would make that rule unreachable.
-  it("offers an unconfigured connector, labelled as having no credentials", () => {
+  it("offers an unconfigured connector, labeled as having no credentials", () => {
     const sb = CONNECTORS.find((c) => c.id === "cisco-smart-bonding")!;
     expect(connectorChoiceLabel(sb)).toBe("Cisco Smart Bonding — no credentials yet");
     expect(connectorChoiceLabel(CONNECTORS.find((c) => c.id === "cisco-cxd")!)).toBe("Cisco CXD");
   });
 });
 
-describe("the account identifier is labelled in the vendor's own words", () => {
+describe("the account identifier is labeled in the vendor's own words", () => {
   it.each([
     ["cisco", "Cisco CCO ID"],
     ["juniper", "Juniper CSP user"],

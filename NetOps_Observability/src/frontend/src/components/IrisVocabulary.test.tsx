@@ -134,7 +134,7 @@ describe("2 · check a name", () => {
     render(<IrisVocabulary />);
     type("Name to check", "zzz");
     fireEvent.click(screen.getByText("Check"));
-    expect(await screen.findByTestId("iris-check")).toHaveTextContent("Iris does not recognise that name.");
+    expect(await screen.findByTestId("iris-check")).toHaveTextContent("Iris does not recognize that name.");
   });
 
   it("a model suggestion is disclosed, and only ever fills in step 1 — saving stays the operator's click", async () => {

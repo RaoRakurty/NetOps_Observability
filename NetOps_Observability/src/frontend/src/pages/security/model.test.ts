@@ -458,10 +458,10 @@ describe("unassessedReasons", () => {
 // These adapters are where "which frameworks does this tenant run" and "what may
 // this page legitimately claim about each" are decided.
 
-describe("framework catalogue", () => {
+describe("framework catalog", () => {
   it("names the origin in the operator's words, never the wire value", () => {
     const rows = frameworkRows(FRAMEWORK_CATALOG);
-    expect(rows.find((r) => r.id === "nist-800-53-r5")!.origin).toBe("Base catalogue");
+    expect(rows.find((r) => r.id === "nist-800-53-r5")!.origin).toBe("Base catalog");
     expect(rows.find((r) => r.id === "hipaa-security-rule")!.origin).toBe("Projected from NIST 800-53");
     for (const r of rows) expect(r.version).not.toBe("");
   });

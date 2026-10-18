@@ -102,7 +102,7 @@ describe("WindowedList — scrolling moves the window", () => {
 });
 
 describe("WindowedList — edges", () => {
-  it("renders the empty node inside the still-labelled region, with no rows", () => {
+  it("renders the empty node inside the still-labeled region, with no rows", () => {
     render(<List n={0} />);
     expect(screen.getByText("No devices.")).toBeInTheDocument();
     // The region KEEPS its role and name so assistive tech can still find and

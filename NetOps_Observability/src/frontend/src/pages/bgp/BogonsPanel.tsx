@@ -45,7 +45,7 @@ function BogonGroup({ g }: { g: ReturnType<typeof groupSightings>[number] }) {
       <div className="bgp-scroll">
         <table className="tbl bgp-tbl" style={{ width: "100%" }}>
           <thead>
-            <tr><th>Prefix</th><th>Seen by</th><th>Neighbour</th><th>Announced by</th><th>First seen</th><th>Last seen</th><th className="num">Times</th></tr>
+            <tr><th>Prefix</th><th>Seen by</th><th>Neighbor</th><th>Announced by</th><th>First seen</th><th>Last seen</th><th className="num">Times</th></tr>
           </thead>
           <tbody>
             {cap.rows.map((r) => (

@@ -229,7 +229,7 @@ function HealthBlock({ result }: { result: IgpResult<IgpHealthResponse> }) {
         {h && (
           <>
             <StatStrip>
-              <Stat label="Neighbours" value={countOrNotCollected(h.neighbor_count)} />
+              <Stat label="Neighbors" value={countOrNotCollected(h.neighbor_count)} />
               <Stat
                 label="Adjacencies up"
                 value={countOrNotCollected(h.adjacencies_up)}

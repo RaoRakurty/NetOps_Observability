@@ -64,7 +64,7 @@ describe("safeCiteHref", () => {
 
   it.each([
     "//evil.example/steal",
-    "/\\evil.example",              // browsers normalise "/\" to "//"
+    "/\\evil.example",              // browsers normalize "/\" to "//"
     "javascript:alert(1)",
     "JavaScript:alert(1)",
     "http://evil.example",
@@ -383,7 +383,7 @@ describe("the investigation trace shows its hypotheses", () => {
     }],
   };
 
-  it("renders them beside the path, with the engine's verdict labelled as the engine's", async () => {
+  it("renders them beside the path, with the engine's verdict labeled as the engine's", async () => {
     aiAsk.mockResolvedValue(answer({ chain: [hop(), hop({ name: "interface-down", selected: "rule", round: 2 })], hypotheses }));
     render(<IrisLane caseId="corr-abc123" />);
     fireEvent.click(screen.getByRole("button", { name: "Ask Iris" }));

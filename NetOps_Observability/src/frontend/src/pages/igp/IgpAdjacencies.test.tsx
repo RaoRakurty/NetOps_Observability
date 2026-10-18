@@ -241,7 +241,7 @@ describe("ready", () => {
     await waitFor(() => expect(view().dataset.state).toBe("ready"));
     expect(document.body.textContent).toContain("8 full");
     expect(screen.queryByRole("columnheader", { name: "Level" })).toBeNull();
-    expect(screen.getByRole("columnheader", { name: /Neighbour \(router/ })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: /Neighbor \(router/ })).toBeTruthy();
   });
 });
 
@@ -416,7 +416,7 @@ describe("advanced depth blocks", () => {
     expect(panel.textContent).toMatch(/countdown/i);
   });
 
-  it("renders OSPF timers per INTERFACE, with no per-neighbour column and no invented dead interval", async () => {
+  it("renders OSPF timers per INTERFACE, with no per-neighbor column and no invented dead interval", async () => {
     igpHealth.mockResolvedValue(healthBody({
       protocol: "ospf", device: "edge1", device_name: "edge1",
       timers: {
@@ -468,7 +468,7 @@ describe("advanced depth blocks", () => {
     expect(within(table).getAllByText("not collected").length).toBe(1);
   });
 
-  it("gives OSPF adjacencies NO hold column — OSPF-MIB has no per-neighbour timer", async () => {
+  it("gives OSPF adjacencies NO hold column — OSPF-MIB has no per-neighbor timer", async () => {
     igpAdjacencies.mockResolvedValue(adjBody({
       protocol: "ospf",
       adjacencies: [adjRow({ level: undefined, hold_seconds: null })],

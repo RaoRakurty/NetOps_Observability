@@ -90,7 +90,7 @@ import {
 } from "./tacModel";
 
 const step = (over: Partial<TacStep> = {}): TacStep => ({
-  intent: "ospf.neighbors", title: "OSPF neighbours", section: "deep-dive",
+  intent: "ospf.neighbors", title: "OSPF neighbors", section: "deep-dive",
   bound: true, command: "show ip ospf neighbor", verified: "capture", ...over,
 });
 
@@ -331,8 +331,8 @@ describe("pasteOffered", () => {
 
 describe("the paste target's words", () => {
   it("names what it collects and the command — never the intent id", () => {
-    const label = pasteOptionLabel(step({ intent: "ospf.neighbors", title: "OSPF neighbours", command: "show ip ospf neighbor" }));
-    expect(label).toBe("OSPF neighbours · show ip ospf neighbor");
+    const label = pasteOptionLabel(step({ intent: "ospf.neighbors", title: "OSPF neighbors", command: "show ip ospf neighbor" }));
+    expect(label).toBe("OSPF neighbors · show ip ospf neighbor");
     expect(label).not.toContain("ospf.neighbors");
   });
   it("counts what is left rather than drawing a box for each", () => {
@@ -762,7 +762,7 @@ describe("the write bodies carry no tenant and no unbounded list", () => {
   });
 });
 
-describe("the bundle's edit record is summarised for the operator", () => {
+describe("the bundle's edit record is summarized for the operator", () => {
   it("counts what the bundle will say", () => {
     const p = reviewPlan([{ command: "show version" }]);
     p.reviewed = true;

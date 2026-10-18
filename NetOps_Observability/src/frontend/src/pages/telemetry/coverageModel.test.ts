@@ -137,7 +137,7 @@ describe("unrecognizedNote", () => {
 });
 
 describe("severity mapping", () => {
-  it("names syslog numeric severities and colours them on the shared ramp", () => {
+  it("names syslog numeric severities and colors them on the shared ramp", () => {
     expect(severityLabel(3)).toBe("error");
     expect(severityLabel(5)).toBe("notice");
     expect(severityBadgeClass(0)).toBe("badge sev-critical");

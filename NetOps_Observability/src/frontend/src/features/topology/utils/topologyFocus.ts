@@ -92,6 +92,6 @@ export function focusSummary(
 ): string {
   const context = shown - matched;
   return context > 0
-    ? `${shown} of ${total} nodes — ${matched} matched, ${context} neighbouring`
+    ? `${shown} of ${total} nodes — ${matched} matched, ${context} neighboring`
     : `${shown} of ${total} nodes — ${matched} matched`;
 }

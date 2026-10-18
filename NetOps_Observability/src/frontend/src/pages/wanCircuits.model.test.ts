@@ -107,7 +107,7 @@ describe("provenance labels", () => {
   it("passes an unrecognised kind through instead of inventing a friendly word", () => {
     expect(targetKindLabel("satellite_uplink")).toBe("satellite_uplink");
     expect(targetKindChip("satellite_uplink")).toBe("satellite_uplink");
-    expect(targetKindMeaning("satellite_uplink")).toMatch(/does not recognise/);
+    expect(targetKindMeaning("satellite_uplink")).toMatch(/does not recognize/);
   });
 
   // UI-words sweep 4 (tracker 270): the tooltip NAMES the target; where ownership

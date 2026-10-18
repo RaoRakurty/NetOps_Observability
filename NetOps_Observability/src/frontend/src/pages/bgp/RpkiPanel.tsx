@@ -51,10 +51,10 @@ export function RpkiPanel({ resource }: { resource?: string }) {
     <Section
       id="rpki"
       title="Prefix origin problems"
-      sub="RPKI — is the announcing AS authorised?"
+      sub="RPKI — is the announcing AS authorized?"
       updatedAt={at}
     >
-      {busy && <div className="empty">Checking who is authorised…</div>}
+      {busy && <div className="empty">Checking who is authorized…</div>}
       {err && <p className="fact-line fact-bad" role="alert">{err}</p>}
 
       {data && summary && (

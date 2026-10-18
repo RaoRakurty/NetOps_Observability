@@ -152,14 +152,14 @@ export function hasEvidence(evidence: EvidenceRef[] | undefined): boolean {
 export const UNRESOLVED_REASON: Record<string, string> = {
   unmatched_remote_chassis: "Remote chassis ID not in inventory",
   unmatched_remote_hostname: "Remote hostname not in inventory",
-  inferred_neighbor: "Inferred neighbour — one-way discovery",
+  inferred_neighbor: "Inferred neighbor — one-way discovery",
   flow_only: "Flow-only dependency — no inventory/path evidence",
   missing_inventory_match: "No inventory match",
 };
 
 export function unresolvedReason(tags: Record<string, string> | undefined): string {
   const r = tags?.reason;
-  return (r && UNRESOLVED_REASON[r]) || "Unresolved remote neighbour";
+  return (r && UNRESOLVED_REASON[r]) || "Unresolved remote neighbor";
 }
 
 /**

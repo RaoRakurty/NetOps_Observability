@@ -120,7 +120,7 @@ describe("Applications section", () => {
     render(<ApplicationsSection q={q} filterKeys={[]} onDrill={noop} />);
     await waitFor(() => expect(screen.getByText(/busiest 200 source-to-destination pairs/i)).toBeInTheDocument());
     expect(screen.getByText(/not every flow/i)).toBeInTheDocument();
-    expect(screen.getByText(/1,240 catalogued address ranges/i)).toBeInTheDocument();
+    expect(screen.getByText(/1,240 cataloged address ranges/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Ask Iris about Coverage" })).toBeTruthy();
   });
 

@@ -1177,7 +1177,7 @@ function CanvasInner({
                   onClick={() => setFocusOn(true)}
                   title={searchMatches.size === 0
                     ? "Search first — focus narrows the canvas to what you matched"
-                    : `Focus on ${searchMatches.size} matched node(s) and their neighbours`}
+                    : `Focus on ${searchMatches.size} matched node(s) and their neighbors`}
                 >
                   Focus on {searchMatches.size || "matches"}
                 </button>
@@ -1196,7 +1196,7 @@ function CanvasInner({
                   is something to focus ON, so it never reads as a dead control. */}
               {searchMatches.size > 0 && !focusOn && (
                 <button className="btn btn-xs" onClick={() => setFocusOn(true)}
-                  title="Narrow the canvas to these matches and their neighbours">
+                  title="Narrow the canvas to these matches and their neighbors">
                   Focus on {searchMatches.size}
                 </button>
               )}

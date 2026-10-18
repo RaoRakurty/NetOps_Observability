@@ -400,7 +400,7 @@ function PolicySection({ panel, onRetry, canEdit, onSaved }: {
                     <tr className="dp-row-na">
                       <td colSpan={3}>
                         No ISP next-hop has been declared, so every interface without a
-                        neighbour on the wire measures to an anchor.
+                        neighbor on the wire measures to an anchor.
                       </td>
                     </tr>
                   ) : form.nextHops.map((r, i) => (

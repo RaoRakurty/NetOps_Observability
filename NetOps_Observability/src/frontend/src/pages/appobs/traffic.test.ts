@@ -23,7 +23,7 @@ const ev = (over: Partial<EvidenceRow> = {}): EvidenceRow => ({
 });
 
 describe("isLbErrorSignal", () => {
-  it("recognises every producer that emits an app-edge 5xx", () => {
+  it("recognizes every producer that emits an app-edge 5xx", () => {
     for (const k of ["cloud_lb_log", "lb_5xx", "alb_5xx", "synthetic_http_5xx"]) {
       expect(isLbErrorSignal(k)).toBe(true);
     }

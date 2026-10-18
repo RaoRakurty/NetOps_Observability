@@ -94,7 +94,7 @@ test("checking a name shows how Iris resolves it and how sure it is", async ({ p
 
   await p.getByLabel("Name to check").fill("nothing-like-it");
   await p.getByRole("button", { name: "Check", exact: true }).click();
-  await expect(p.getByTestId("iris-check-none")).toHaveText("Iris does not recognise that name.");
+  await expect(p.getByTestId("iris-check-none")).toHaveText("Iris does not recognize that name.");
   // N-C2: an unrecognised name offers the opt-in model suggestion — offered, never run unasked.
   await expect(p.getByTestId("iris-check").getByRole("button", { name: "Ask the AI model what I meant" })).toBeVisible();
 });

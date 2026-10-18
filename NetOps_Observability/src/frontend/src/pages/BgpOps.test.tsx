@@ -15,10 +15,10 @@ describe("rpkiVerdict", () => {
   // what happened; "RPKI" and "ROA" moved into the tooltip, which is asserted
   // here so the protocol word cannot quietly vanish along with the jargon.
   it("maps the RIPEstat statuses onto plain-language chips", () => {
-    expect(rpkiVerdict("valid").label).toBe("Origin authorised");
+    expect(rpkiVerdict("valid").label).toBe("Origin authorized");
     expect(rpkiVerdict("valid").detail).toMatch(/RPKI valid/);
     expect(rpkiVerdict("invalid").tone).toBe("var(--crit)");
-    expect(rpkiVerdict("invalid").label).toBe("Origin not authorised");
+    expect(rpkiVerdict("invalid").label).toBe("Origin not authorized");
     expect(rpkiVerdict("invalid_asn").label).toBe("Wrong origin AS");
     expect(rpkiVerdict("invalid_length").label).toBe("Prefix too specific");
     expect(rpkiVerdict("unknown").label).toBe("Not protected");
@@ -31,8 +31,8 @@ describe("rpkiVerdict", () => {
   // up the phone to an upstream. The term is a field of its own so the chip can
   // render it as small secondary text rather than a tooltip.
   it("carries the RFC 6811 term beside every state that has one", () => {
-    expect(rpkiVerdict("valid")).toMatchObject({ label: "Origin authorised", term: "RPKI valid" });
-    expect(rpkiVerdict("invalid")).toMatchObject({ label: "Origin not authorised", term: "RPKI invalid" });
+    expect(rpkiVerdict("valid")).toMatchObject({ label: "Origin authorized", term: "RPKI valid" });
+    expect(rpkiVerdict("invalid")).toMatchObject({ label: "Origin not authorized", term: "RPKI invalid" });
     expect(rpkiVerdict("invalid_asn")).toMatchObject({ label: "Wrong origin AS", term: "RPKI invalid" });
     expect(rpkiVerdict("invalid_length")).toMatchObject({ label: "Prefix too specific", term: "RPKI invalid" });
     expect(rpkiVerdict("unknown")).toMatchObject({ label: "Not protected", term: "no ROA (RPKI not found)" });
@@ -46,9 +46,9 @@ describe("rpkiVerdict", () => {
       expect(rpkiVerdict(s).label).not.toMatch(/RPKI|ROA/);
     }
   });
-  it("an absent status renders as unavailable, never as authorised", () => {
+  it("an absent status renders as unavailable, never as authorized", () => {
     const v = rpkiVerdict(undefined);
-    expect(v.label).not.toMatch(/authorised/i);
+    expect(v.label).not.toMatch(/authorized/i);
     expect(v.tone).toBe("var(--muted)");
   });
 });
@@ -117,7 +117,7 @@ describe("nextSteps", () => {
 
   it("acts on an unauthorised origin even when the classifier has not run", () => {
     const steps = nextSteps({ ...base, resource: "p", rpkiStatus: "invalid_asn" });
-    expect(steps.some((s) => /origin authorisation/i.test(s.title))).toBe(true);
+    expect(steps.some((s) => /origin authorization/i.test(s.title))).toBe(true);
   });
 
   it("treats a prefix nobody sees as the outage it is", () => {
@@ -582,13 +582,13 @@ describe("verdict bar", () => {
       expect(within(el).getByText(/RIPEstat timed out/)).toBeTruthy();
       return el;
     });
-    expect(within(verdict).queryByText(/Origin authorised/)).toBeNull();
+    expect(within(verdict).queryByText(/Origin authorized/)).toBeNull();
   });
 });
 
 describe("origin validation reads in both vocabularies", () => {
   it.each([
-    ["valid", "Origin authorised · RPKI valid"],
+    ["valid", "Origin authorized · RPKI valid"],
     ["invalid_asn", "Wrong origin AS · RPKI invalid"],
     ["unknown", "Not protected · no ROA (RPKI not found)"],
   ])("renders %s as ONE chip reading %s", async (status, text) => {
@@ -627,7 +627,7 @@ describe("origin validation reads in both vocabularies", () => {
 // normalisation the API applies (bgpNormalizeResource, src/backend/bgp_ops.go);
 // the case table lives in src/pages/bgp/prefix.test.ts.
 
-describe("the prefix input is normalised before anything is checked", () => {
+describe("the prefix input is normalized before anything is checked", () => {
   beforeEach(() => bgpStatus.mockImplementation((r: string) => Promise.resolve({ resource: r, kind: "prefix" as const })));
 
   it("checks a host address carrying a mask as its network address, and says so", async () => {
