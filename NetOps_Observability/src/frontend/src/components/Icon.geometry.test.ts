@@ -37,7 +37,7 @@ const RAIL_GLYPHS = [
   "shield", // Security
   "analytics", // Analytics
   "copilot", // Iris AI
-  "sliders", // Administration
+  "crown", // Administration
   "support", // foot: Support
   "help", // foot: Documentation
   "chevron", // foot: expand/collapse toggle

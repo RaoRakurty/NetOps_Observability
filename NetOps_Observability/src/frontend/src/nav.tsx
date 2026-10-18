@@ -454,7 +454,7 @@ export const NAV: NavSection[] = [
   {
     id: "admin",
     label: "Administration",
-    icon: "sliders",
+    icon: "crown",
     footer: true,
     children: [
       // Incident Response plumbing — configuration, not operations (the old

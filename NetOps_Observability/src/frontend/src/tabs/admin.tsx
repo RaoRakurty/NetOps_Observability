@@ -12,6 +12,7 @@
 //     (/api/itsm/servicenow, /api/itsm/jira)
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
+import { bestCols } from "../lib/gridCols";
 import { fmtDate, fmtDateTime } from "../lib/time";
 import { useCallback, useEffect, useState } from "react";
 import { api, AdminUser, AdminSession, Role, Tenant, Org, Region, RoleBinding, SecuritySettings as SecuritySettingsT, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, TeamsConfig, SNSConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus, IncidentPolicy, IncidentPolicyTestFacts, TicketPolicyDecision } from "../services/api";
@@ -2219,7 +2220,7 @@ export function ApiAccessAdmin() {
         <AskIris topic="api.scoped-credentials" label="API access" />
       </p>
 
-      <div className="conn-grid">
+      <div className="conn-grid" data-cols={bestCols(TILES.length)}>
         {TILES.map((t) => (
           <button key={t.id} className="conn-tile" onClick={() => openTile(t.id)} aria-label={t.name}>
             <span className={`conn-logo api-${t.id}`}><Icon name={t.icon} size={24} /></span>
@@ -2707,14 +2708,14 @@ function LdapAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embed
                     <select value={m.role} aria-label="Mapped role" onChange={(e) => setMapping(i, { role: e.target.value })}>
                       {roleIds.map((r) => <option key={r} value={r}>{r}</option>)}
                     </select>
-                    <button onClick={() => set({ role_mappings: cfg.role_mappings.filter((_, j) => j !== i) })}>Remove</button>
+                    <button className="btn" onClick={() => set({ role_mappings: cfg.role_mappings.filter((_, j) => j !== i) })}>Remove</button>
                   </div>
                 ))}
-                <button onClick={() => set({ role_mappings: [...cfg.role_mappings, { group: "", role: roleIds[0] || "read-only" }] })}>+ Add mapping</button>
+                <button className="btn accent" onClick={() => set({ role_mappings: [...cfg.role_mappings, { group: "", role: roleIds[0] || "read-only" }] })}>+ Add mapping</button>
                 <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <input aria-label="Test username (optional)" placeholder="test username (optional)" value={testUser} onChange={(e) => setTestUser(e.target.value)} style={{ padding: 6 }} />
                   <input type="password" aria-label="Test password" placeholder="test password" value={testPass} onChange={(e) => setTestPass(e.target.value)} style={{ padding: 6 }} />
-                  <button disabled={busy} onClick={test}>Test connection</button>
+                  <button className="btn" disabled={busy} onClick={test}>Test connection</button>
                 </div>
                 <TestResult r={result} />
               </>
@@ -2817,7 +2818,7 @@ function TacacsAdminForm({ roleIds, embedded = false }: { roleIds: string[]; emb
                 <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <input aria-label="Test username (optional)" placeholder="test username (optional)" value={testUser} onChange={(e) => setTestUser(e.target.value)} style={{ padding: 6 }} />
                   <input type="password" aria-label="Test password" placeholder="test password" value={testPass} onChange={(e) => setTestPass(e.target.value)} style={{ padding: 6 }} />
-                  <button disabled={busy} onClick={test}>Test connection</button>
+                  <button className="btn" disabled={busy} onClick={test}>Test connection</button>
                 </div>
                 <TestResult r={result} />
               </>
@@ -2880,7 +2881,7 @@ export function AuthenticationAdmin() {
         <Stat label="Local fallback" value="On" tone="good" />
       </StatStrip>
 
-      <div className="conn-grid">
+      <div className="conn-grid" data-cols={bestCols(AUTH_PROVIDERS.length)}>
         {AUTH_PROVIDERS.map((p) => {
           const st = statusFor(p.id);
           return (
@@ -3252,7 +3253,7 @@ export function IntegrationsAdmin() {
 
       {err && <div className="card pol-note bad">{err}</div>}
 
-      <div className="conn-grid">
+      <div className="conn-grid" data-cols={bestCols(CONNECTORS.length)}>
         {CONNECTORS.map((c) => {
           const sec = sectionFor(c.id);
           const st = statusFor(c.id);
@@ -3612,7 +3613,7 @@ function SyncSettings({ integration, inboundEnabled, webhookHint, onSaved }: {
       )}
       {!inboundEnabled && <p className="adm-line adm-mt">Recorded, not yet applied.</p>}
       <div className="admin-actions">
-        <button onClick={save} disabled={busy}>{busy ? "Saving…" : "Save sync"}</button>
+        <button className="btn accent" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save sync"}</button>
         {msg && <span className="adm-line">{msg}</span>}
       </div>
     </details>
@@ -3809,7 +3810,7 @@ export function NotificationsAdmin() {
 
       {/* Channel gallery — pick a channel to open its guided setup. Platform
           principal only: every tile's API surface is requirePlatformAdmin. */}
-      {platform && <div className="conn-grid">
+      {platform && <div className="conn-grid" data-cols={bestCols(CHANNELS.length)}>
         {CHANNELS.map((c) => {
           const loaded = smtp !== null;
           let enabled = false, configured = false, metaLine = "";
@@ -3879,8 +3880,8 @@ export function NotificationsAdmin() {
                 </div>
                 <RequiredLegend />
                 <div className="admin-actions">
-                  <button onClick={saveSmtp}>Save</button>
-                  <button className="ghost" onClick={() => test("smtp", api.testSmtp)}>Send test</button>
+                  <button className="btn accent" onClick={saveSmtp}>Save</button>
+                  <button className="btn" onClick={() => test("smtp", api.testSmtp)}>Send test</button>
                   {msg.smtp && <span className="adm-line">{msg.smtp}</span>}
                 </div>
               </>
@@ -3906,8 +3907,8 @@ export function NotificationsAdmin() {
                       <SeveritySelect value={twilio.min_severity} onChange={(v) => setTwilio({ ...twilio, min_severity: v })} />
                     </div>
                     <div className="admin-actions">
-                      <button onClick={saveTwilio}>Save SMS</button>
-                      <button className="ghost" onClick={() => test("twilio", api.testTwilio)}>Send test</button>
+                      <button className="btn accent" onClick={saveTwilio}>Save SMS</button>
+                      <button className="btn" onClick={() => test("twilio", api.testTwilio)}>Send test</button>
                       {msg.twilio && <span className="adm-line">{msg.twilio}</span>}
                     </div>
                   </>
@@ -3929,8 +3930,8 @@ export function NotificationsAdmin() {
                       <SeveritySelect value={ntfy.min_severity} onChange={(v) => setNtfy({ ...ntfy, min_severity: v })} />
                     </div>
                     <div className="admin-actions">
-                      <button onClick={saveNtfy}>Save push</button>
-                      <button className="ghost" onClick={() => test("ntfy", api.testNtfy)}>Send test</button>
+                      <button className="btn accent" onClick={saveNtfy}>Save push</button>
+                      <button className="btn" onClick={() => test("ntfy", api.testNtfy)}>Send test</button>
                       {msg.ntfy && <span className="adm-line">{msg.ntfy}</span>}
                     </div>
                   </>
@@ -3950,8 +3951,8 @@ export function NotificationsAdmin() {
                 </div>
                 <RequiredLegend />
                 <div className="admin-actions">
-                  <button onClick={saveSlack}>Save</button>
-                  <button className="ghost" onClick={() => test("slack", api.testSlack)}>Send test</button>
+                  <button className="btn accent" onClick={saveSlack}>Save</button>
+                  <button className="btn" onClick={() => test("slack", api.testSlack)}>Send test</button>
                   {msg.slack && <span className="adm-line">{msg.slack}</span>}
                 </div>
                 <SyncSettings integration={integrationFor("slack")} inboundEnabled={inboundEnabled} webhookHint="Paste into your Slack app's Interactivity & Shortcuts request URL." onSaved={onIntegrationSaved} />
@@ -3969,8 +3970,8 @@ export function NotificationsAdmin() {
                 </div>
                 <RequiredLegend />
                 <div className="admin-actions">
-                  <button onClick={savePager}>Save</button>
-                  <button className="ghost" onClick={() => test("pager", api.testPagerDuty)}>Send test</button>
+                  <button className="btn accent" onClick={savePager}>Save</button>
+                  <button className="btn" onClick={() => test("pager", api.testPagerDuty)}>Send test</button>
                   {msg.pager && <span className="adm-line">{msg.pager}</span>}
                 </div>
                 <SyncSettings integration={integrationFor("pagerduty")} inboundEnabled={inboundEnabled} webhookHint="Paste into a PagerDuty v3 webhook subscription." onSaved={onIntegrationSaved} />
@@ -3992,8 +3993,8 @@ export function NotificationsAdmin() {
                 </div>
                 <RequiredLegend />
                 <div className="admin-actions">
-                  <button onClick={saveTeams}>Save</button>
-                  <button className="ghost" onClick={() => test("teams", api.notifyTeamsTest)}>Send test</button>
+                  <button className="btn accent" onClick={saveTeams}>Save</button>
+                  <button className="btn" onClick={() => test("teams", api.notifyTeamsTest)}>Send test</button>
                   {msg.teams && <span className="adm-line">{msg.teams}</span>}
                 </div>
               </>
@@ -4037,8 +4038,8 @@ export function NotificationsAdmin() {
                 </div>
                 <RequiredLegend />
                 <div className="admin-actions">
-                  <button onClick={saveSns}>Save</button>
-                  <button className="ghost" onClick={() => test("sns", api.notifySNSTest)}>Send test</button>
+                  <button className="btn accent" onClick={saveSns}>Save</button>
+                  <button className="btn" onClick={() => test("sns", api.notifySNSTest)}>Send test</button>
                   {msg.sns && <span className="adm-line">{msg.sns}</span>}
                 </div>
               </>
@@ -4072,8 +4073,8 @@ export function NotificationsAdmin() {
                   <td className="adm-line">{cp.type === "email" ? (cp.email ?? []).join(", ") : cp.target}</td>
                   <td>{cp.enabled ? "Yes" : "No"}</td>
                   <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                    <button className="ghost" onClick={() => editCp(cp)}>Edit</button>
-                    <button className="ghost" onClick={() => deleteCp(cp)}>Delete</button>
+                    <button className="btn" onClick={() => editCp(cp)}>Edit</button>
+                    <button className="btn danger" onClick={() => deleteCp(cp)}>Delete</button>
                   </td>
                 </tr>
               ))}
@@ -4101,8 +4102,8 @@ export function NotificationsAdmin() {
         </div>
         <RequiredLegend />
         <div className="admin-actions">
-          <button onClick={saveCp}>{cpDraft.id ? "Update" : "Add"}</button>
-          {cpDraft.id && <button className="ghost" onClick={resetCp}>Cancel</button>}
+          <button className="btn accent" onClick={saveCp}>{cpDraft.id ? "Update contact point" : "Add contact point"}</button>
+          {cpDraft.id && <button className="btn" onClick={resetCp}>Cancel</button>}
           {msg.cp && <span className="adm-line">{msg.cp}</span>}
         </div>
       </div>
@@ -4257,7 +4258,7 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
 
       {canWrite && (
         <div className="admin-actions" style={{ marginTop: "var(--sp-3)" }}>
-          <button className="btn primary" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save policy"}</button>
+          <button className="btn accent" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save policy"}</button>
           {p.id && <button className="btn" disabled={busy} onClick={del} style={{ color: "var(--bad)" }}>Delete</button>}
         </div>
       )}
@@ -4343,7 +4344,7 @@ function PagerDutyPagingConnection() {
         <input className="app-input" type="password" style={{ minWidth: 280 }} value={key}
           placeholder={hasKey ? "routing key set — leave blank to keep" : "Events API v2 integration key"}
           onChange={(e) => setKey(e.target.value)} autoComplete="new-password" />
-        <button className="btn btn-primary" onClick={() => { void save(); }}>Save</button>
+        <button className="btn accent" onClick={() => { void save(); }}>Save</button>
         {hasKey && <span className="adm-line">key stored (write-only)</span>}
         {msg && <span className="adm-line">{msg}</span>}
       </div>
@@ -4381,7 +4382,7 @@ function SlackChannelConnection() {
         <input className="app-input" type="password" style={{ minWidth: 280 }} value={url}
           placeholder={hasHook ? "Webhook is set — leave blank to keep it" : "https://hooks.slack.com/services/…"}
           onChange={(e) => setUrl(e.target.value)} autoComplete="new-password" />
-        <button className="btn btn-primary" onClick={() => { void save(); }}>Save</button>
+        <button className="btn accent" onClick={() => { void save(); }}>Save</button>
         {hasHook && <span className="adm-line">webhook stored (write-only)</span>}
         {msg && <span className="adm-line">{msg}</span>}
       </div>
@@ -4450,7 +4451,7 @@ export function IncidentPoliciesAdmin() {
           <Stat label="Policies" value={policies?.length ?? "—"} />
           <Stat label="Active" value={policies ? policies.filter((p) => p.enabled).length : "—"} tone={conflictSystems.size > 0 ? "bad" : "good"} />
         </StatStrip>
-        {canWrite && <button className="btn primary" onClick={() => setSel(blankPolicy())}>+ New policy</button>}
+        {canWrite && <button className="btn accent" onClick={() => setSel(blankPolicy())}>+ New policy</button>}
       </div>
 
       {policies === null ? (
