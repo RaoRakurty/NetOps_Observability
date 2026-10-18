@@ -429,6 +429,13 @@ func (s *pgStore) Upsert(ctx context.Context, c Integration) error {
 	if err != nil {
 		return err
 	}
+	// "No streams chosen" is an empty list, never NULL: data_sources is NOT
+	// NULL, and pgx writes a nil slice as NULL — an API create that left the
+	// stream list to the defaults failed with a constraint error (2026-10-18).
+	streams := c.Streams
+	if streams == nil {
+		streams = []string{}
+	}
 	// System write at platform scope, stamping tenant_id (RLS WITH CHECK allows).
 	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
@@ -441,7 +448,7 @@ INSERT INTO integrations
    poll_interval_s=EXCLUDED.poll_interval_s, data_sources=EXCLUDED.data_sources,
    data=EXCLUDED.data, updated_at=now()`,
 			c.Tenant, c.ID, c.Vendor, c.Product, c.DisplayName, c.Enabled, c.BaseURL,
-			c.AuthType, c.PollIntervalS, c.Streams, data)
+			c.AuthType, c.PollIntervalS, streams, data)
 		return err
 	})
 }
