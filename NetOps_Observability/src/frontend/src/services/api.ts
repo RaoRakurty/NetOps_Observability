@@ -6418,7 +6418,8 @@ export const api = {
       `/api/correlations/${encodeURIComponent(id)}/verify`, { method: "POST", body: "{}" }),
   // Incident-policy CRUD + pure simulator (#78). Per-tenant: the backend scopes
   // by the caller and stamps the owner from the token.
-  incidentPolicies: () => request<{ policies: IncidentPolicy[] }>("/api/incident-policies"),
+  // ticketing_running: is the ticketing worker on at all (platform-wide yes/no).
+  incidentPolicies: () => request<{ policies: IncidentPolicy[]; ticketing_running?: boolean }>("/api/incident-policies"),
   incidentPolicyCreate: (p: Partial<IncidentPolicy>) =>
     request<IncidentPolicy>("/api/incident-policies", { method: "POST", body: JSON.stringify(p) }),
   incidentPolicyUpdate: (id: string, p: Partial<IncidentPolicy>) =>

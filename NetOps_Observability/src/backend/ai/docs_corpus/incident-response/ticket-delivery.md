@@ -10,9 +10,9 @@ sidebar_position: 5
 
 RCA ticketing does not call the ticketing system from the correlation path. A
 policy decides a case should be filed, a row is queued in an outbox, and a
-worker drains that outbox with bounded retries. **Ticket Delivery** is the view
-of that outbox, the audit trail beside it, and the provider's own refusal text
-on any row that failed.
+worker drains that outbox with bounded retries. **Deliveries** — step 4 of
+**Administration → RCA Tickets** — is the view of that outbox, the audit trail
+beside it, and the provider's own refusal text on any row that failed.
 
 Use this page when an operator says a ticket never appeared. It separates the
 two causes that look identical from the case: no policy filed anything, or
@@ -107,6 +107,16 @@ two you are looking at rather than showing one blank table for both.
 Paging is explicit. The line under the table says either "this is the whole
 outbox" or "the first N of M rows", so a bounded page is never mistaken for the
 complete set.
+
+## Vendor case routing
+
+Step 3 of **RCA Tickets** (optional) holds the paths a TAC escalation can open
+a vendor case through: the case connectors (Cisco, Juniper, Jira and the
+manual vendor portals) and this tenant's case routing — contacts, contracts
+and per-device overrides. Configure appears only on a connector that has
+something to set; a manual vendor portal holds your portal address, support
+desk and case-number shape. An escalation that is missing a detail names it
+and links straight back to this step.
 
 ## Related
 

@@ -326,7 +326,7 @@ func TestMissingRequired(t *testing.T) {
 				"serial_number": "JN123", "account_id": "A1",
 			},
 			wantMissing: []string{"app_id", "customer_source_id", "user_id"},
-			wantInMsg:   []string{"Juniper needs", "Administration → Ticket delivery → Case connectors → Juniper"},
+			wantInMsg:   []string{"Juniper needs", "Administration → RCA Tickets → Vendor case routing → Juniper"},
 		},
 		{
 			name: "an ITSM connector needs only the case body", connector: "servicenow",

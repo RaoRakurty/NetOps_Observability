@@ -142,8 +142,7 @@ var navPageDocs = map[string]navPage{
 	// Administration (tenant-level)
 	"admin/integrations":          {Label: "Administration → Incident Response → Integrations", Docs: []pageDoc{wholePage("incident-response/integrations")}},
 	"admin/notifications":         {Label: "Administration → Incident Response → Notifications", Docs: []pageDoc{wholePage("incident-response/notifications")}},
-	"admin/ticketing":             {Label: "Administration → Incident Response → Ticketing & Automation", Docs: []pageDoc{wholePage("incident-response/rca-ticketing")}},
-	"admin/ticket-delivery":       {Label: "Administration → Incident Response → Ticket Delivery", Docs: []pageDoc{wholePage("incident-response/ticket-delivery")}},
+	"admin/ticketing":             {Label: "Administration → Incident Response → RCA Tickets", Docs: []pageDoc{wholePage("incident-response/rca-ticketing"), wholePage("incident-response/ticket-delivery")}},
 	"admin/discovery":             {Label: "Administration → Data sources → Discovery", Docs: []pageDoc{wholePage("onboard-devices/snmp-profiles"), wholePage("onboard-devices/vendor-snmp-configs"), wholePage("onboard-devices/snmp-discovery"), wholePage("administration/sensors"), wholePage("onboard-devices/data-sources"), wholePage("administration/telemetry-coverage")}},
 	"admin/network-context":       {Label: "Administration → Iris → Network Context", Docs: []pageDoc{wholePage("administration/network-context")}},
 	"admin/processors":            {Label: "Administration → Data handling → Processors", Docs: []pageDoc{wholePage("administration/processors")}},

@@ -514,7 +514,7 @@ export function connectorVendorLabel(info: TacConnectorInfo): string {
  * "Manual" is the two states a vendor with NO case API can be in, and neither of
  * them is Ready. A row that read "Nokia portal · Ready" promised an integration
  * that cannot exist (owner, 2026-09-08). Once the customer has brought the
- * portal's details on Ticket delivery the row says so — "Manual · configured" —
+ * portal's details in RCA Tickets the row says so — "Manual · configured" —
  * because a configured manual path is a real, usable route and an unconfigured
  * one is a dead link.
  */
@@ -563,8 +563,13 @@ export const CONNECTOR_UNREADABLE =
   "The stored configuration for this connector could not be read.";
 
 /** Where a person brings credentials. */
-export const TICKET_DELIVERY_ROUTE = "#/admin/ticket-delivery";
+// Administration → RCA Tickets (2026-10-18): deliveries and vendor case
+// routing are steps 4 and 3 of one flow.
+export const TICKET_DELIVERY_ROUTE = "#/admin/ticketing/deliveries";
+export const CASE_ROUTING_ROUTE = "#/admin/ticketing/cases";
 export const TICKET_DELIVERY_LABEL = "Ticket delivery";
+/** Where a case connector is set up: RCA Tickets → Vendor case routing. */
+export const CASE_ROUTING_LABEL = "Set up case connectors";
 
 /** The disclosure that holds every connector this device has no use for. */
 export function showAllConnectorsLabel(n: number): string {
@@ -1313,23 +1318,32 @@ export function blockerLine(f: TacRequiredField): string {
 }
 
 /** Where a blocker is set. The server names the destination in words
- *  ("Administration → Ticket delivery → Vendor contracts"); the route is ours,
+ *  ("Administration → RCA Tickets → Vendor case routing → Cisco"); the route is ours,
  *  and an unrecognised hint gets NO link rather than a guessed one. */
 export const SETTINGS_ROUTES: Readonly<Record<string, string>> = Object.freeze({
+  "rca tickets": TICKET_DELIVERY_ROUTE,
+  deliveries: TICKET_DELIVERY_ROUTE,
+  "vendor case routing": CASE_ROUTING_ROUTE,
   "ticket delivery": TICKET_DELIVERY_ROUTE,
-  "vendor contracts": TICKET_DELIVERY_ROUTE,
-  "case connectors": TICKET_DELIVERY_ROUTE,
-  "tac routing": TICKET_DELIVERY_ROUTE,
+  "vendor contracts": CASE_ROUTING_ROUTE,
+  "case connectors": CASE_ROUTING_ROUTE,
+  "tac routing": CASE_ROUTING_ROUTE,
   inventory: "#/inventory/devices",
 });
 
 /** The href for a settings hint, or "" when nothing in it is recognised. */
 export function settingsHref(hint: string): string {
+  // The hint is a breadcrumb ("Administration → RCA Tickets → Vendor case
+  // routing → Cisco"): the DEEPEST recognised segment names the setting, so
+  // the match that starts last wins — never the table's key order.
   const h = (hint || "").toLowerCase();
+  let best = "";
+  let at = -1;
   for (const key of Object.keys(SETTINGS_ROUTES)) {
-    if (h.includes(key)) return SETTINGS_ROUTES[key];
+    const i = h.lastIndexOf(key);
+    if (i > at) { at = i; best = SETTINGS_ROUTES[key]; }
   }
-  return "";
+  return best;
 }
 
 /** The severity control: the vendor's own vocabulary when it publishes one,

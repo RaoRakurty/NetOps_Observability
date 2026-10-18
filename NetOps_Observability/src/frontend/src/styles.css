@@ -7476,3 +7476,25 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
 .adm-section-title { font-weight: 600; font-size: 15px; }
 .adm-section-summary { color: var(--muted); font-size: 14px; }
 .adm-section-body { padding: 0 var(--sp-3) var(--sp-3); }
+
+/* Numbered setup flows (components/admin/StepFlow.tsx). */
+.step-flow { list-style: none; margin: var(--sp-3) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-3); }
+.step-flow-step { border: 1px solid var(--panel-border); border-radius: 10px; background: var(--panel); padding: var(--sp-3); }
+.step-flow-step.locked { opacity: .72; }
+.step-flow-head { display: flex; align-items: center; gap: var(--sp-2); }
+.step-flow-num {
+  flex: none; width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 14px; color: var(--adm-ink, var(--accent));
+  background: color-mix(in srgb, var(--adm-hue, var(--accent)) 14%, transparent);
+}
+.step-flow-step.done .step-flow-num { color: #fff; background: var(--adm-solid, var(--accent)); }
+.step-flow-title { margin: 0; font-size: 16px; font-weight: 600; }
+.step-flow-opt { color: var(--muted); font-weight: 400; font-size: 14px; }
+.step-flow-status { margin-left: auto; color: var(--muted); font-size: 14px; }
+.step-flow-body { margin-top: var(--sp-3); }
+.step-flow-locked { margin: var(--sp-2) 0 0 36px; color: var(--muted); font-size: 14px; }
+
+/* RCA Tickets — step 1's destination list (pages/admin/RcaTickets.tsx). */
+.rca-dests { list-style: none; margin: 0 0 var(--sp-3); padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--sp-2); }
+.rca-dests li { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--panel-border); border-radius: 8px; }
+.rca-dest-name { font-weight: 500; }

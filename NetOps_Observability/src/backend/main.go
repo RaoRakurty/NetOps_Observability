@@ -507,18 +507,22 @@ type server struct {
 	tktPolicyConflicts    atomic.Int64
 	tktPolicyMultiEnabled atomic.Int64
 	tktMergedRedirects    atomic.Int64
-	seams                 *seam.Store               // canonical seam inventory, #67 build ⑤ (nil on file backend)
-	services              *pgServiceStore           // service catalog #69 §2 P2 (nil on file backend)
-	cloudConn             cloudconn.Repo            // multi-tenant cloud-connector framework (pg or in-memory)
-	cloudBroker           *cloudconn.IdentityBroker // cloud identity broker: scoped short-lived provider tokens + vault secret custody
-	workloadIssuer        *workloadIssuer           // platform OIDC issuer for minted workload assertions (Wave 4 #13); nil = dormant
-	cloudIngestInv        *cloudIngestInventory     // per-connector inventory snapshots → per-tenant merged inventory (Wave 1 #2)
-	cloudSourceStatus     *cloudSourceStatusStore   // poller-reported permission_denied/misconfigured per source (Wave 2 #4)
-	topology              topology.GraphStore       // persistent topology graph #77 (in-memory or pg)
-	incidentTimeline      timeintel.TimelineStore   // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
-	incidentTimeMetrics   incidentTimeMetricsStore  // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
-	incidentFP            incidentfp.Store          // similar-incident fingerprints (tracker 337 N-F4; pg or in-memory)
-	aiFeedback            ai.FeedbackStore          // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
+	// ticketingRunning is set when the ticketing worker starts (FEATURE_RCA_TICKETING):
+	// GET /api/incident-policies reports it, so a tenant can see that its policies
+	// will not fire, instead of policies that silently never ticket.
+	ticketingRunning    atomic.Bool
+	seams               *seam.Store               // canonical seam inventory, #67 build ⑤ (nil on file backend)
+	services            *pgServiceStore           // service catalog #69 §2 P2 (nil on file backend)
+	cloudConn           cloudconn.Repo            // multi-tenant cloud-connector framework (pg or in-memory)
+	cloudBroker         *cloudconn.IdentityBroker // cloud identity broker: scoped short-lived provider tokens + vault secret custody
+	workloadIssuer      *workloadIssuer           // platform OIDC issuer for minted workload assertions (Wave 4 #13); nil = dormant
+	cloudIngestInv      *cloudIngestInventory     // per-connector inventory snapshots → per-tenant merged inventory (Wave 1 #2)
+	cloudSourceStatus   *cloudSourceStatusStore   // poller-reported permission_denied/misconfigured per source (Wave 2 #4)
+	topology            topology.GraphStore       // persistent topology graph #77 (in-memory or pg)
+	incidentTimeline    timeintel.TimelineStore   // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
+	incidentTimeMetrics incidentTimeMetricsStore  // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
+	incidentFP          incidentfp.Store          // similar-incident fingerprints (tracker 337 N-F4; pg or in-memory)
+	aiFeedback          ai.FeedbackStore          // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
 	// IRIS-MEMORY-BEGIN — IRIS Phase B investigation memory (design §3.5).
 	// irisMemory is the tenant-scoped store of CONCLUDED investigations
 	// (migration 0040 / file fallback); irisPending holds a conclusion in memory
@@ -2890,6 +2894,7 @@ func Run() {
 		workers.start("ticketing-worker", func() {
 			tw.Run(ctx, durationOr("RCA_TICKETING_WORKER_INTERVAL", 15*time.Second))
 		})
+		srv.ticketingRunning.Store(true)
 		ts := newTicketSweeper(srv, srv.ticketing)
 		workers.start("ticketing-sweeper", func() {
 			ts.Run(ctx, durationOr("RCA_TICKETING_SWEEP_INTERVAL", 60*time.Second))
