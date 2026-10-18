@@ -19,15 +19,29 @@ import (
 // syslog/traps/flows are one entity (identity.go explains why the join is at
 // ingest). The api builds an index from inventory every minute and Stores it.
 //
-// Tenant-strict: only devices the integration's OWN tenant owns are
-// candidates — never another tenant's, never the platform realm's. A key that
+// Owner-strict: only devices the integration's OWN owner owns are candidates.
+// A tenant's integration never matches another tenant's device or a platform
+// one; a platform-owned integration matches only platform devices. A key that
 // matches nothing, matches more than one device, or that two evidence tiers
 // attribute to different devices, resolves to nothing (the controller's key is
 // kept). A wrong merge would pin one device's outage on another.
 
-// ownerOf is the index's spelling of an owner (tenant ids are compared
-// lower-cased and trimmed, as everywhere else).
-func ownerOf(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
+// PlatformOwner is the owner a Global-view principal stamps on what it creates
+// (the api's TenantGlobal; nms_isolation_test.go pins the two together).
+const PlatformOwner = "global"
+
+// ownerOf is the index's spelling of a device or integration owner. Tenant ids
+// are compared lower-cased and trimmed, as everywhere else. The platform realm
+// has two spellings — "" on devices ("untagged = platform") and "global" on
+// what a Global-view principal creates — and they are one owner. Real tenant
+// ids pass through untouched, so two tenants never collapse.
+func ownerOf(t string) string {
+	t = strings.ToLower(strings.TrimSpace(t))
+	if t == PlatformOwner {
+		return ""
+	}
+	return t
+}
 
 // InventoryIndex is one immutable snapshot of the candidate devices.
 type InventoryIndex struct {

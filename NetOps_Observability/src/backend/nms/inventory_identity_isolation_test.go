@@ -57,6 +57,16 @@ func TestInventoryResolverIsTenantStrict(t *testing.T) {
 	if id, ok := r.ResolveDevice("T_A ", KeySerial, "sn3", ""); !ok || id != "edge-a" {
 		t.Fatalf("tenant id is normalised the same way devices are: %q %v", id, ok)
 	}
+	// A platform-owned integration ("global") matches only platform devices
+	// (stored as ""), and never a tenant's.
+	if id, ok := r.ResolveDevice(PlatformOwner, KeySystemIP, "10.255.255.41", ""); !ok || id != "edge-global" {
+		t.Fatalf("platform integration → platform device: %q %v", id, ok)
+	}
+	for _, key := range []string{"10.255.255.40", "10.255.255.42"} {
+		if id, ok := r.ResolveDevice(PlatformOwner, KeySystemIP, key, ""); ok {
+			t.Fatalf("platform integration resolved tenant device %q via %s", id, key)
+		}
+	}
 	// B sees only its own.
 	if id, ok := r.ResolveDevice("t_b", KeySystemIP, "10.255.255.42", "edge-3"); ok {
 		t.Fatalf("tenant B resolved A's device %q", id)
