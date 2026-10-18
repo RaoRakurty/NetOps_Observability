@@ -28,7 +28,7 @@ owner, and they carry product and tenant alerts.
 
 ### Step 1: open the channel list
 
-1. Go to **Administration → Incident Response → Notifications**.
+1. Go to **Administration → Incident response → Notifications**.
 2. Pick a tile. Six tiles cover the seven configurations: **Email**, **SMS &
    Push**, **Slack**, **PagerDuty**, **Microsoft Teams** and **Amazon SNS**.
    Twilio and ntfy share the **SMS & Push** tile.

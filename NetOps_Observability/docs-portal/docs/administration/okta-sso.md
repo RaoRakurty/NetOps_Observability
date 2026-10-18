@@ -22,7 +22,7 @@ The tile experience is a Correlix-initiated bookmark launch. Correlix deliberate
 - **Okta administrator access** to your organization, because you will create two or three app integrations.
 - **Correlix reachable over HTTPS.** Browsers reject Keycloak's cross-site sign-on cookies over plain HTTP. A plain-HTTP lab works in a normal browser window only, and a strict or private window requires HTTPS. See [Enable TLS](/deploy/enable-tls).
 - **A local administrator account you will never federate.** If single sign-on breaks, that account is the way back in.
-- **The target tenant id** for Okta users. Every user of one provider configuration lands in one tenant. Read the id from **Administration → Identity & Access**, or from `GET /api/tenants`.
+- **The target tenant id** for Okta users. Every user of one provider configuration lands in one tenant. Read the id from **Administration → People & access → Identity & Access**, or from `GET /api/tenants`.
 
 Throughout, replace `correlix.example.com` with your host. Collect these values as you go: the Correlix base URL, the Keycloak realm name, the Keycloak client id and secret, and the Okta metadata URL.
 
@@ -136,7 +136,7 @@ Select **Save**. The tile shows **Enabled · Ready**.
 Once a configuration has been saved from this page, the saved configuration wins over the environment. Editing `OIDC_*` in `.env` afterwards changes nothing. Change it here.
 :::
 
-Verify: sign out. The login page shows the **Okta** button, selecting it lands on Okta, and signing in returns you to Correlix. Check the new account under **Administration → Identity & Access → Users** for the right email, tenant and role.
+Verify: sign out. The login page shows the **Okta** button, selecting it lands on Okta, and signing in returns you to Correlix. Check the new account under **Administration → People & access → Identity & Access → Users** for the right email, tenant and role.
 
 ### Step 7 — Add the Correlix tile in Okta
 

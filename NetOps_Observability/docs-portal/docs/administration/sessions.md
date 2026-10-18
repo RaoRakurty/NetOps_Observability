@@ -8,7 +8,7 @@ sidebar_position: 4
 
 # Review sign-in sessions
 
-**Administration → Access & Audit → Sessions** lists the live sign-in sessions.
+**Administration → People & access → Sessions** lists the live sign-in sessions.
 Use it to see who is signed in, and to end a session you do not recognise or
 that belongs to someone who has left.
 
@@ -20,7 +20,7 @@ that belongs to someone who has left.
 
 ## Steps
 
-1. Go to **Administration → Access & Audit → Sessions**.
+1. Go to **Administration → People & access → Sessions**.
 2. Read the summary: **Active** sessions, **Total** sessions, and **People**,
    the number of distinct people with an active session.
 3. Type in **Search sessions…** to narrow the list by person, tenant or
