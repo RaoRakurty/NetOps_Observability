@@ -216,7 +216,7 @@ under `docs-portal/docs/`.
 | Customer onboarding | `/api/onboard`, `/api/onboard/snmp-config` | none | `onboard-devices/overview.md` | partial | `onboardCustomer` helper unused |
 | GraphQL explorer | `/api/graphql` | Platform → GraphQL Explorer | `reference/api.md` | exposed | — |
 | Embedded console gate | `/api/auth/osd-gate` | nginx `auth_request` | — | headless-by-design | not a browser XHR |
-| Feature flags | `/api/features` | Devices, Opsis | `reference/feature-flags.md` | exposed | — |
+| Feature flags | `/api/features` | Devices, Iris | `reference/feature-flags.md` | exposed | — |
 | CLI tools | `cmd/correlix-debug`, `cmd/correlix-licence` | terminal | `administration/debug-the-pipeline-cli.md` | headless-by-design | CLI by design |
 
 ---

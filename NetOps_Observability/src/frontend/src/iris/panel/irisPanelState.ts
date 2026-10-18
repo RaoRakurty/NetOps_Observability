@@ -6,7 +6,7 @@
 //
 // The panel is ONE container with one mode at a time:
 //
-//   closed ──open──▶ the last open mode (floating by default)
+//   closed ──open──▶ the last open mode (DOCKED by default — owner 2026-10-17)
 //   floating ◀─dock/undock─▶ docked
 //   floating | docked ──expand──▶ expanded ──collapse / Esc──▶ the mode it came from
 //   floating | docked ──Esc / close──▶ closed
@@ -80,8 +80,8 @@ export const isOpen = (m: IrisMode): m is IrisOpenMode => m === "floating" || m 
 
 export const INITIAL_IRIS_STATE: IrisPanelState = {
   mode: "closed",
-  lastOpen: "floating",
-  beforeExpand: "floating",
+  lastOpen: "docked",
+  beforeExpand: "docked",
   width: DOCK_DEFAULT_W,
 };
 
@@ -122,10 +122,14 @@ export function irisReducer(s: IrisPanelState, a: IrisAction): IrisPanelState {
 // The app's pattern for a per-browser layout preference: localStorage, one key
 // per value, every access in try/catch (a private window or blocked site data
 // throws). Nothing about the conversation is stored here — its id stays in
-// sessionStorage, owned by tabs/Opsis.tsx.
+// sessionStorage, owned by tabs/Iris.tsx.
 export const IRIS_STORAGE_KEYS = {
-  lastOpen: "iris.panel.mode",
-  beforeExpand: "iris.panel.beforeExpand",
+  // ".v2" (2026-10-17): docked became the default, and every browser that had
+  // opened Iris had "floating" saved under the old key — so the new default
+  // would never have reached anyone. A fresh key starts everyone docked once;
+  // whatever they choose after that is remembered as before.
+  lastOpen: "iris.panel.mode.v2",
+  beforeExpand: "iris.panel.beforeExpand.v2",
   width: "iris.panel.width",
 } as const;
 
@@ -148,8 +152,8 @@ export function loadIrisState(store: KV | null = safeLocalStorage()): IrisPanelS
   const w = rawW !== null && /^\d{1,4}$/.test(rawW) ? Number(rawW) : NaN;
   return {
     mode: "closed",
-    lastOpen: lastOpen === "docked" || lastOpen === "expanded" || lastOpen === "floating" ? lastOpen : "floating",
-    beforeExpand: before === "docked" ? "docked" : "floating",
+    lastOpen: lastOpen === "docked" || lastOpen === "expanded" || lastOpen === "floating" ? lastOpen : "docked",
+    beforeExpand: before === "floating" ? "floating" : "docked",
     width: Number.isFinite(w) ? clampWidth(w) : DOCK_DEFAULT_W,
   };
 }

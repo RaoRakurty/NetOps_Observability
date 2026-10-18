@@ -5,7 +5,7 @@
 //
 // The harness wires the panel exactly as App does: the state machine in a
 // reducer, the shell's `copilotOpen` derived from it, preferences saved on
-// change. Opsis is replaced by a probe that counts its own mounts, so "never
+// change. The Iris content is replaced by a probe that counts its own mounts, so "never
 // remounted" is a number rather than an impression. Browser-level geometry,
 // reflow and motion are e2e/irisPanel.spec.ts.
 
@@ -30,7 +30,7 @@ import {
 
 const probe = vi.hoisted(() => ({ mounts: 0, unmounts: 0, asks: [] as string[] }));
 
-vi.mock("../tabs/Opsis", async () => {
+vi.mock("../tabs/Iris", async () => {
   const { useEffect: useEff } = await import("react");
   const { useShell: useSh } = await import("../context/shell");
   return {
@@ -130,15 +130,15 @@ describe("the Iris panel container", () => {
     expect(panelEl().getAttribute("aria-hidden")).toBe("true");
 
     fireEvent.click(launcher());
-    expect(current.mode).toBe("floating");
+    expect(current.mode, "docked is the default (owner 2026-10-17)").toBe("docked");
     expect(probe.mounts).toBe(1);
     expect(panelEl().hasAttribute("inert")).toBe(false);
     expect(launcher().getAttribute("aria-expanded")).toBe("true");
 
-    fireEvent.click(screen.getByRole("button", { name: "Dock" }));
+    fireEvent.click(screen.getByRole("button", { name: "Undock" }));
     fireEvent.click(screen.getByRole("button", { name: "Expand" }));
     fireEvent.click(screen.getByRole("button", { name: "Collapse" }));
-    fireEvent.click(screen.getByRole("button", { name: "Undock" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dock" }));
     fireEvent.click(screen.getByRole("button", { name: "Close Iris" }));
     expect(current.mode).toBe("closed");
     expect(panelEl().hasAttribute("inert"), "a closed panel cannot be tabbed into").toBe(true);
@@ -152,7 +152,7 @@ describe("the Iris panel container", () => {
     fireEvent.click(launcher());
     const box = screen.getByRole("textbox", { name: "Question" }) as HTMLTextAreaElement;
     fireEvent.change(box, { target: { value: "top talkers on core-rtr-1" } });
-    for (const name of ["Dock", "Expand", "Collapse", "Undock", "Close Iris"]) {
+    for (const name of ["Undock", "Expand", "Collapse", "Dock", "Close Iris"]) {
       fireEvent.click(screen.getByRole("button", { name }));
     }
     fireEvent.click(launcher());
@@ -163,12 +163,12 @@ describe("the Iris panel container", () => {
   it("every entry point opens the same panel", () => {
     render(<Harness />);
     fireEvent.click(screen.getByRole("button", { name: "Iris AI" }));
-    expect(current.mode).toBe("floating");
-    fireEvent.click(screen.getByRole("button", { name: "Dock" }));
+    expect(current.mode).toBe("docked");
+    fireEvent.click(screen.getByRole("button", { name: "Undock" }));
     fireEvent.click(screen.getByRole("button", { name: "Iris AI" }));
     expect(current.mode).toBe("closed");
     fireEvent.click(launcher());
-    expect(current.mode, "reopens docked, whichever control opens it").toBe("docked");
+    expect(current.mode, "reopens floating, whichever control opens it").toBe("floating");
     expect(probe.mounts).toBe(1);
   });
 });
@@ -200,7 +200,6 @@ describe("focus and Esc", () => {
   it("Esc from expanded returns to the previous mode and keeps Iris open", () => {
     render(<Harness />);
     fireEvent.click(launcher());
-    fireEvent.click(screen.getByRole("button", { name: "Dock" }));
     fireEvent.click(screen.getByRole("button", { name: "Expand" }));
     const box = screen.getByRole("textbox", { name: "Question" });
     box.focus();
@@ -221,7 +220,6 @@ describe("focus and Esc", () => {
   it("an Esc meant for the page does not close a docked panel, but closes a floating overlay", () => {
     render(<Harness />);
     fireEvent.click(launcher());
-    fireEvent.click(screen.getByRole("button", { name: "Dock" }));
     const pageCtl = screen.getByRole("button", { name: "page control" });
     pageCtl.focus();
     press("Escape", pageCtl);
@@ -240,12 +238,13 @@ describe("focus and Esc", () => {
     const ev = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
     ev.preventDefault();
     act(() => { box.dispatchEvent(ev); });
-    expect(current.mode).toBe("floating");
+    expect(current.mode).toBe("docked");
   });
 
   it("keeps Tab inside an expanded panel, not a floating one", () => {
     render(<Harness />);
     fireEvent.click(launcher());
+    fireEvent.click(screen.getByRole("button", { name: "Undock" }));
     fireEvent.click(screen.getByRole("button", { name: "Expand" }));
     const box = screen.getByRole("textbox", { name: "Question" });
     box.focus();
@@ -266,10 +265,12 @@ describe("docking and the splitter", () => {
     render(<Harness />);
     expect(shellEl().style.getPropertyValue("--iris-dock-w")).toBe("0px");
     fireEvent.click(launcher());
+    expect(shellEl().style.getPropertyValue("--iris-dock-w"), "opens docked by default").toBe(`${DOCK_DEFAULT_W}px`);
+    expect(shellEl().classList.contains("iris-docked")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Undock" }));
     expect(shellEl().style.getPropertyValue("--iris-dock-w"), "floating overlays").toBe("0px");
     fireEvent.click(screen.getByRole("button", { name: "Dock" }));
     expect(shellEl().style.getPropertyValue("--iris-dock-w")).toBe(`${DOCK_DEFAULT_W}px`);
-    expect(shellEl().classList.contains("iris-docked")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Close Iris" }));
     expect(shellEl().style.getPropertyValue("--iris-dock-w")).toBe("0px");
   });
@@ -277,7 +278,6 @@ describe("docking and the splitter", () => {
   it("resizes from the keyboard within 380–650 and remembers the width", () => {
     render(<Harness />);
     fireEvent.click(launcher());
-    fireEvent.click(screen.getByRole("button", { name: "Dock" }));
     const sep = screen.getByRole("separator", { name: "Resize Iris" });
     expect(sep.getAttribute("aria-valuenow")).toBe(String(DOCK_DEFAULT_W));
     expect(sep.getAttribute("aria-valuemin")).toBe(String(DOCK_MIN_W));
@@ -300,7 +300,6 @@ describe("docking and the splitter", () => {
   it("a pointer drag paints without re-rendering and commits once on release", () => {
     render(<Harness />);
     fireEvent.click(launcher());
-    fireEvent.click(screen.getByRole("button", { name: "Dock" }));
     const sep = screen.getByRole("separator", { name: "Resize Iris" });
     // Frames are queued and flushed by hand, so the test sees the throttle.
     const frames: FrameRequestCallback[] = [];
@@ -358,7 +357,7 @@ describe("docking and the splitter", () => {
   it("every window control is labelled and has a tooltip", () => {
     render(<Harness />);
     fireEvent.click(launcher());
-    for (const name of ["Dock", "Expand"]) {
+    for (const name of ["Undock", "Expand"]) {
       const b = screen.getByRole("button", { name });
       expect(b.getAttribute("title")).toBeTruthy();
     }

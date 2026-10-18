@@ -561,7 +561,7 @@ func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled,
 		"view": string(view.PrimaryView), "view_by": view.ChosenBy, "view_suggestion_ignored": view.Disclosure != ""})
 	return ai.DataAnswer{Status: ai.DataAnswered, Intent: c.res.Intent, Payload: payload, Notes: notes,
 		Text:      plan.Summarize(s.nlqCatalog, c.checked, rs),
-		Citations: []ai.Citation{{ID: "query:" + rs.QueryID, Kind: "query", Label: "Query " + rs.ASTHash, Href: ""}}}, nil
+		Citations: []ai.Citation{{ID: "query:" + rs.QueryID, Kind: "query", Label: "Live network data", Href: ""}}}, nil
 }
 
 // ---- production AI scorecard (tracker 337 N-A3, design item 19) -------------

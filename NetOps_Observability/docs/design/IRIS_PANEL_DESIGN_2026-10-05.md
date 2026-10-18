@@ -6,6 +6,14 @@ The Iris conversation/content model (`docs/design/IRIS_AI_DESIGN.md`, the plan o
 `docs/architecture/iris-natural-language-platform.md`) is **unchanged** by this document.
 **Tracker:** rows 338–342 (`docs/TRACKER.md`), under the umbrella of row 337.
 
+> **Amendment (owner, 2026-10-17): Iris opens DOCKED by default.** §2 below
+> ("Default open behavior — Floating mode") is superseded: the first open, and
+> every open with no remembered choice, docks Iris on the right and the
+> workspace reflows beside it. Floating is one click away (Undock) and, once
+> chosen, is remembered as before. Viewports too narrow to dock still overlay
+> (§16, unchanged). Implemented in `src/iris/panel/irisPanelState.ts` (storage
+> keys versioned `.v2` so the new default reaches every browser once).
+
 ## Relationship to the existing Iris design
 
 - `IRIS_AI_DESIGN.md` and the NL platform plan specify what goes **inside** an answer:
@@ -28,7 +36,7 @@ The Iris conversation/content model (`docs/design/IRIS_AI_DESIGN.md`, the plan o
 
 | Concern | Today | This design |
 |---|---|---|
-| Container | `tabs/Opsis.tsx` header and body, opened via the shell's `copilotOpen` | One Iris container with a mode state machine. `Opsis.tsx` content is kept |
+| Container | `tabs/Iris.tsx` header and body, opened via the shell's `copilotOpen` | One Iris container with a mode state machine. `Iris.tsx` content is kept |
 | Entry points | icon-rail "Iris AI" item, command palette, investigation page, `(i)` AskIris buttons | `✦ Iris` header control (upper right) is primary; the others open the same panel |
 | Conversation | server conversation id in sessionStorage (`iris.conversation`) | unchanged; never reset across modes |
 | Page context | AskIris topic + investigation page (N-E4 partial) | shown as minimal chips; no new backend AI |
@@ -71,7 +79,7 @@ Do not use a large bottom-right chatbot bubble. The control should feel native t
 
 When Iris has no activity, keep it visually quiet. When Iris is actively analyzing something, allow a very subtle ambient state on the icon, such as a soft pulse, a tiny animated ring, or a slight accent-color breathing effect. This should never be neon, flashy, rainbow-colored, or distracting. Respect `prefers-reduced-motion`.
 
-### 2. Default open behavior — Floating mode
+### 2. Default open behavior — Floating mode *(superseded 2026-10-17: Docked is the default — see the amendment above)*
 
 When the user clicks Iris, open it from the **right side as a floating panel**. Floating panel behavior:
 

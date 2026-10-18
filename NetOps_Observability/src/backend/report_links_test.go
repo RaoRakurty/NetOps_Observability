@@ -55,9 +55,9 @@ func TestReportLinkExpiry(t *testing.T) {
 
 func TestReportViewLink(t *testing.T) {
 	t.Setenv("REPORT_LINK_SECRET", "s")
-	t.Setenv("REPORT_PUBLIC_BASE_URL", "https://opsis.example.com/")
+	t.Setenv("REPORT_PUBLIC_BASE_URL", "https://portal.example.com/")
 	u := reportViewLink("exec-1", "acme", "html")
-	if !strings.HasPrefix(u, "https://opsis.example.com/api/reports/view/") {
+	if !strings.HasPrefix(u, "https://portal.example.com/api/reports/view/") {
 		t.Fatalf("link base wrong: %s", u)
 	}
 	if strings.Contains(u, "?format") {

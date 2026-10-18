@@ -403,7 +403,7 @@ describe("UI word budget — a screen states facts, it does not teach", () => {
     "tabs/Flows.tsx",
     "tabs/flowsAppViews.ts",
     "tabs/Logs.tsx",
-    "tabs/Opsis.tsx",
+    "tabs/Iris.tsx",
     "tabs/SnmpCredentials.tsx",
     "tabs/SourceOfTruth.tsx",
     "tabs/TransportSecurity.tsx",

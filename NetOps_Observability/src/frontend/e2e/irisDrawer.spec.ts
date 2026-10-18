@@ -56,10 +56,10 @@ test("a data question renders the summary, the chart, the table and the citation
 
   // The query citation is shown — as text: a query has no page, and an empty
   // href would be a full reload of the app.
-  const cite = ans.locator(".op-cite", { hasText: "Query 5d41a8c0" });
+  const cite = ans.locator(".op-cite", { hasText: "Live network data" });
   await expect(cite).toBeVisible();
   expect(await cite.evaluate((el) => el.tagName)).toBe("SPAN");
-  await expect(ans.getByTestId("iris-grounded-chip")).toHaveText("Grounded · tenant-scoped · cited");
+  await expect(ans.getByTestId("iris-grounded-chip")).toHaveText("From your data · with sources");
 
   // Nothing was ever parsed as HTML: no <img src=x> anywhere, the handler never ran.
   await expect(page.locator('img[src="x"]')).toHaveCount(0);
@@ -143,7 +143,7 @@ test("an unbound reference gets the honest 'not understood' answer — no fabric
   await expect(ans.getByRole("grid")).toHaveCount(0);
   await expect(ans.locator("canvas")).toHaveCount(0);
   await expect(ans.locator(".op-cite")).toHaveCount(0);
-  await expect(ans.getByTestId("iris-grounded-chip")).toHaveText("Grounded · tenant-scoped"); // never "cited"
+  await expect(ans.getByTestId("iris-grounded-chip")).toHaveText("From your data"); // never "with sources"
   await expect(ans.getByText("Was this helpful?")).toHaveCount(0); // nothing to rate
 });
 

@@ -5,17 +5,17 @@
 // docs/design/IRIS_PANEL_DESIGN_2026-10-05.md). It replaced the left slide-over
 // (OpsisDrawer: overlay / split) and owns only the WINDOW: where Iris sits, how
 // it moves, how it resizes, where focus goes. What an answer looks like is
-// tabs/Opsis.tsx and is unchanged by this file.
+// tabs/Iris.tsx and is unchanged by this file.
 //
 //   · Modes come from the pure state machine in iris/panel/irisPanelState.ts,
 //     held by App so the shell's `copilotOpen` IS "the panel is open": the
 //     `✦ Iris` header control, rail, sidebar, command palette, investigation
 //     page and `(i)` AskIris all open this panel and nothing else.
-//   · One element, mounted once, for every mode. Opsis is created on the FIRST
+//   · One element, mounted once, for every mode. the Iris content is created on the FIRST
 //     open and never unmounted after that — closing hides it (inert, invisible)
 //     — so the conversation, scroll position and settings pane survive every
 //     mode change and close/reopen. The server conversation id additionally
-//     lives in sessionStorage ("iris.conversation", owned by Opsis).
+//     lives in sessionStorage ("iris.conversation", owned by tabs/Iris.tsx).
 //   · Floating overlays the workspace; Docked reserves a shell grid column so the
 //     workspace reflows (App mirrors nothing — this component sets the column
 //     width on the shell element, the same pattern ShellGridSizing uses for the
@@ -37,7 +37,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import Opsis from "../tabs/Opsis";
+import Iris from "../tabs/Iris";
 import Icon from "./Icon";
 import { IRIS_ASK_EVENT, type IrisAskDetail } from "./AskIris";
 import {
@@ -86,7 +86,7 @@ export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; 
   const splitterRef = useRef<HTMLDivElement | null>(null);
   const open = isOpen(state.mode);
 
-  // Lazy initialisation (design §14): Opsis — and every request it makes on
+  // Lazy initialisation (design §14): the Iris content — and every request it makes on
   // mount — is created the first time Iris opens, then kept.
   const [initialized, setInitialized] = useState(open);
   if (open && !initialized) setInitialized(true);
@@ -264,7 +264,7 @@ export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; 
   // ── AskIris (components/AskIris.tsx) ───────────────────────────────────
   // The `(i)` beside a number raises one window event; this is its only
   // listener. The panel opens in the operator's mode and the ask is handed to
-  // Opsis. `seq` makes the same topic askable twice.
+  // the Iris content. `seq` makes the same topic askable twice.
   const [pendingAsk, setPendingAsk] = useState<(IrisAskDetail & { seq: number }) | null>(null);
   useEffect(() => {
     let seq = 0;
@@ -345,7 +345,7 @@ export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; 
     transition({ type: "resize", width: Math.min(room, Math.max(DOCK_MIN_W, next)) });
   };
 
-  // ── Window controls, rendered in Opsis's header ─────────────────────────
+  // ── Window controls, rendered in the Iris header ─────────────────────────
   const mode = state.mode;
   const controls = useMemo(() => {
     if (!isOpen(mode)) return null;
@@ -380,9 +380,9 @@ export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; 
     );
   }, [mode, dockable, transition]);
 
-  // Opsis re-renders only when what it is given changes — never on a resize.
+  // The Iris content re-renders only when what it is given changes — never on a resize.
   const body = useMemo(
-    () => (initialized ? <Opsis controls={controls} onLeave={onLeave} ask={pendingAsk} onAskHandled={onAskHandled} /> : null),
+    () => (initialized ? <Iris controls={controls} onLeave={onLeave} ask={pendingAsk} onAskHandled={onAskHandled} /> : null),
     [initialized, controls, onLeave, pendingAsk, onAskHandled],
   );
 

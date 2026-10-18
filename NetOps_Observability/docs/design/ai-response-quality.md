@@ -2,7 +2,7 @@
 
 Status: **shipped** (2026-06-30). Code: `src/backend/ai/` (orchestrator, quality,
 tools, registry, schemas), `src/backend/ai_datasource.go` (tenant-scoped reads),
-`src/backend/ai_labels.go` (NOC label mirror), `src/frontend/src/tabs/Opsis.tsx`
+`src/backend/ai_labels.go` (NOC label mirror), `src/frontend/src/tabs/Iris.tsx`
 (panel + reusable answer card + slash menu).
 
 This document is the contract for **how Iris AI answers** — not one-off RCA
@@ -97,7 +97,7 @@ isolated): flow_analytics (top_talkers, flow_summary), telemetry
 
 Free text and `/commands` converge on the same flow — commands are discoverable
 shortcuts, not separate logic. The frontend command registry
-(`SLASH_COMMANDS` in `Opsis.tsx`) carries command · title · module badge ·
+(`SLASH_COMMANDS` in `Iris.tsx`) carries command · title · module badge ·
 description · availability. Phase 1: `/status` `/top` `/critical` `/explain`
 `/talkers` `/anomalies` `/flows` `/handoff` `/itsm` `/where` `/help`. Not-yet-built
 commands show a "soon" badge and route to the honest disclosure. Keyboard: `/`

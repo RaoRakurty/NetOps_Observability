@@ -1972,7 +1972,7 @@ code, kbd, pre, .mono, td.mono {
 .drawer-close:hover { color: var(--fg); }
 .drawer-body { flex: 1; overflow: auto; padding: 16px; }
 
-/* ----- Opsis Ai assistant — modern chat ----- */
+/* ----- Iris AI assistant — modern chat ----- */
 .op-drawer { width: min(540px, 96vw); }
 .op-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -2026,10 +2026,19 @@ code, kbd, pre, .mono, td.mono {
 /* Provider selection — modern segmented tiles instead of a <select>. */
 .op-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .op-tile {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 1px; cursor: pointer; text-align: left;
-  padding: 9px 12px; border-radius: 10px; background: var(--panel-solid); border: 1px solid var(--panel-border);
+  display: flex; flex-direction: row; align-items: center; gap: 10px; cursor: pointer; text-align: left;
+  padding: 10px 12px; border-radius: 10px; background: var(--panel-solid); border: 1px solid var(--panel-border);
   transition: border-color .12s, background .12s, transform .1s;
 }
+/* The provider's accent (a platform --mod-* token, set inline as --tile). */
+.op-tile-icon {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 8px;
+  color: var(--tile); background: color-mix(in srgb, var(--tile) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tile) 32%, transparent);
+}
+.op-tile-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.op-tile.on .op-tile-icon { background: color-mix(in srgb, var(--tile) 26%, transparent); }
 .op-tile:hover { border-color: var(--accent-ring); transform: translateY(-1px); }
 .op-tile.on { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent) inset; }
 .op-tile-name { font-size: 14px; font-weight: 600; color: var(--fg); text-transform: none; letter-spacing: normal; }
@@ -7338,3 +7347,30 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
 .nctx-history > summary { cursor: pointer; font-weight: 600; }
 .nctx-history .disc-field { max-width: 480px; margin: 10px 0; }
 .nctx-table { margin-top: 10px; width: 100%; }
+
+/* ----- Iris: one purple family for every box (owner 2026-10-17) -----------
+   Iris's own accent is --mod-copilot (the violet the rail uses for Iris). The
+   panel's cards, tiles, inputs, chips, tables and dividers were neutral grey;
+   instead of restyling forty rules, the NEUTRAL tokens they all read are
+   re-tinted inside the panel only. The theme's own values are captured on
+   :root first (a custom property cannot reference itself), then mixed with the
+   accent — so it follows every theme (light, indigo, graphite, black) and
+   nothing outside Iris changes. */
+:root {
+  --iris-base-border: var(--border);
+  --iris-base-surface: var(--surface);
+  --iris-base-surface-2: var(--surface-2);
+  --iris-base-hover: var(--hover);
+  --iris-base-bg: var(--bg);
+}
+.iris-panel {
+  --iris-tint: var(--mod-copilot);
+  --border: color-mix(in srgb, var(--iris-tint) 45%, var(--iris-base-border));
+  --panel-border: var(--border);
+  --surface: color-mix(in srgb, var(--iris-tint) 9%, var(--iris-base-surface));
+  --panel: var(--surface);
+  --panel-solid: var(--surface);
+  --surface-2: color-mix(in srgb, var(--iris-tint) 15%, var(--iris-base-surface-2));
+  --hover: color-mix(in srgb, var(--iris-tint) 18%, var(--iris-base-hover));
+  --bg: color-mix(in srgb, var(--iris-tint) 6%, var(--iris-base-bg));
+}

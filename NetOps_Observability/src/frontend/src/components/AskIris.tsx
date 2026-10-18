@@ -13,7 +13,7 @@
 // topic; Iris answers from the authored file and cites it.
 //
 // WHY AN EVENT AND NOT A PROP DRILL. The assistant is a shell-level surface (the
-// Iris panel, components/IrisPanel.tsx → tabs/Opsis.tsx). Threading an
+// Iris panel, components/IrisPanel.tsx → tabs/Iris.tsx). Threading an
 // "ask this" callback from the shell down through every KPI on every page would
 // couple every page to the assistant's internals; a single named window event is
 // the seam. It carries NO data of its own — just the topic id, which the server
