@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
+import { buildDeviceNames, deviceDisplayName } from "../lib/deviceNames";
 import { useEffect, useMemo, useState } from "react";
 import { api, Device } from "../services/api";
 import {
@@ -25,13 +26,15 @@ export default function InterfacePerformance({ rangeMinutes = 60, initialDevice 
   const [device, setDevice] = useState<string>(() => initialDevice || deviceFromHash());
   const [iface, setIface] = useState<string>("");
 
-  // Device list for the picker (label by name, value = the metric `device` label
-  // which the collectors set to the device name).
+  // Device list for the picker: label = the device NAME, value = its ID, because
+  // the metric `device` label is the device ID (sysName-<hash>), not the name.
+  // Choosing by name matched no series at all (owner, 2026-10-18).
   useEffect(() => {
     let alive = true;
     api.devices().then((d) => { if (alive) setDevices(d ?? []); }).catch(() => {});
     return () => { alive = false; };
   }, []);
+  const names = useMemo(() => buildDeviceNames(devices), [devices]);
 
   // React to drill-down hash changes (e.g. arriving from Device Monitoring).
   useEffect(() => {
@@ -76,10 +79,10 @@ export default function InterfacePerformance({ rangeMinutes = 60, initialDevice 
   const devSel = labelSelector({ device });
   const sel = labelSelector(chosen?.byIndex ? { device, index: iface } : { device, ifName: iface });
   // Fleet-wide selector when no device chosen.
-  const scopeNote = device ? (iface ? `${device} · ${iface}` : device) : "all devices";
+  const scopeNote = device ? (iface ? `${deviceDisplayName(device, names)} · ${iface}` : deviceDisplayName(device, names)) : "all devices";
   // Flow filters key on the exporter IP (sampler_address) — resolve the device's
   // management address from inventory.
-  const deviceAddr = devices.find((d) => d.name === device)?.address || "";
+  const deviceAddr = devices.find((d) => d.id === device)?.address || "";
 
   return (
     <div className="dm-board">
@@ -91,7 +94,7 @@ export default function InterfacePerformance({ rangeMinutes = 60, initialDevice 
             <select value={device} onChange={(e) => { setDevice(e.target.value); setIface(""); }}>
               <option value="">All devices</option>
               {devices.map((d) => (
-                <option key={d.id} value={d.name}>{d.name}</option>
+                <option key={d.id} value={d.id}>{deviceDisplayName(d.id, names)}</option>
               ))}
             </select>
           </label>
