@@ -66,7 +66,7 @@ export function rowToInput(r: CloudMonitorRow, enabled: boolean): CloudMonitorIn
 export function describeMonitor(r: CloudMonitorRow): string {
   const metric = CLOUD_METRIC_FALLBACK.find((m) => m.name === r.metric)?.label ?? r.metric;
   const scope = r.resource_id ? `on ${r.resource_id}` : "on every cloud resource";
-  if (r.mode === "anomaly") return `${metric} ${scope} — alert on deviation from its own 6h behaviour`;
+  if (r.mode === "anomaly") return `${metric} ${scope} — alert on deviation from its own 6h behavior`;
   return `${metric} ${scope} — alert when ${r.condition} ${r.threshold}`;
 }
 

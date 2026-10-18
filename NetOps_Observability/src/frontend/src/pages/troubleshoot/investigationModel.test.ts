@@ -554,7 +554,7 @@ describe("laneSummary", () => {
   it("says what a lane found, with a singular and a plural form", () => {
     expect(laneSummary("health", "ready", 1)).toBe("1 interface is down right now.");
     expect(laneSummary("health", "ready", 3)).toBe("3 interfaces are down right now.");
-    expect(laneSummary("routing", "ready", 1)).toBe("1 routing neighbour is not up.");
+    expect(laneSummary("routing", "ready", 1)).toBe("1 routing neighbor is not up.");
     expect(laneSummary("changed", "ready", 2)).toBe("2 changes were recorded in this window.");
   });
 

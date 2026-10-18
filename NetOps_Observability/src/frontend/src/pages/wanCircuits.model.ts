@@ -77,9 +77,9 @@ const KIND_CHIP: Record<string, string> = {
  *  is an authored file (ai/skills/explain/wan.derived-target.md), reachable from
  *  the `(i)` beside the provenance chips — not repeated on every row. */
 const KIND_MEANING: Record<string, string> = {
-  direct_peer: "A neighbour on the wire, so the whole path is yours.",
+  direct_peer: "A neighbor on the wire, so the whole path is yours.",
   next_hop: "The ISP next-hop you declared.",
-  anchor: "No neighbour and no next-hop, so a public anchor.",
+  anchor: "No neighbor and no next-hop, so a public anchor.",
   "": "Nothing was derived, so it is not measured.",
 };
 
@@ -102,7 +102,7 @@ export function targetKindChip(kind: string | undefined | null): string {
 /** What this provenance means for path ownership, as one sentence. */
 export function targetKindMeaning(kind: string | undefined | null): string {
   const k = kind ?? "";
-  return KIND_MEANING[k] ?? "Derived a way this screen does not recognise.";
+  return KIND_MEANING[k] ?? "Derived a way this screen does not recognize.";
 }
 
 /** Sort rank; anything unrecognised sorts after every known kind. */

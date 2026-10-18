@@ -140,10 +140,10 @@ export default function ExperienceSynthetics({ window: win }: { window: DemWindo
         )}
       </Panel>
 
-      <Panel title="Check catalogue" label="Synthetic check catalogue">
-        {cat.status === "loading" && <Loading what="the check catalogue" />}
+      <Panel title="Check catalog" label="Synthetic check catalog">
+        {cat.status === "loading" && <Loading what="the check catalog" />}
         {cat.status === "error" && (
-          <LoadError what="The check catalogue" error={cat.error} onRetry={cat.reload} />
+          <LoadError what="The check catalog" error={cat.error} onRetry={cat.reload} />
         )}
         {cat.status === "ready" && cat.data && (
           <>
@@ -176,8 +176,8 @@ export default function ExperienceSynthetics({ window: win }: { window: DemWindo
                           </td>
                           <td>{t.kind}</td>
                           <td className="dx-mono">{t.host}</td>
-                          <td>{t.site || <span className="dx-subtle">not labelled</span>}</td>
-                          <td>{t.app || <span className="dx-subtle">not labelled</span>}</td>
+                          <td>{t.site || <span className="dx-subtle">not labeled</span>}</td>
+                          <td>{t.app || <span className="dx-subtle">not labeled</span>}</td>
                           <td>
                             {r?.measured && r.score !== undefined ? (
                               <span className="dx-card-foot">

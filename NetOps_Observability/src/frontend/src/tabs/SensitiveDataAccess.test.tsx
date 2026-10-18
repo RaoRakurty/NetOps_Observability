@@ -65,7 +65,7 @@ describe("Sealing key rotation", () => {
     expect(screen.getByRole("button", { name: "Confirm rotate" })).toBeTruthy();
   });
 
-  it("cancelling leaves the key alone", async () => {
+  it("canceling leaves the key alone", async () => {
     sealAccessAudit.mockResolvedValue([]);
     render(<SensitiveDataAccess />);
     fireEvent.click(await screen.findByRole("button", { name: "Rotate" }));

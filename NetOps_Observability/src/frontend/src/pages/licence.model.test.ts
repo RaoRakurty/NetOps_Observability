@@ -126,8 +126,8 @@ describe("usageBar — a fill only where a percentage is a real number", () => {
   });
 
   it("an uncounted ceiling has no bar, no number, and says why", () => {
-    const bar = usageBar(ceiling({ current: null, current_reason: "the platform does not count organisations" }));
-    expect(bar).toEqual({ kind: "unmeasured", reason: "the platform does not count organisations" });
+    const bar = usageBar(ceiling({ current: null, current_reason: "the platform does not count organizations" }));
+    expect(bar).toEqual({ kind: "unmeasured", reason: "the platform does not count organizations" });
     expect(JSON.stringify(bar)).not.toContain("percent");
   });
 
@@ -209,7 +209,7 @@ describe("featureStatus", () => {
     expect(featureStatus(f({ entitled: true }))).toEqual({ tone: "good", text: "Included" });
   });
 
-  it("one this licence lacks names the tier that has it, not a refusal", () => {
+  it("one this license lacks names the tier that has it, not a refusal", () => {
     expect(featureStatus(f())).toEqual({ tone: "muted", text: "Included in Enterprise" });
   });
 
@@ -229,13 +229,13 @@ describe("headline — the worst true statement wins, and it names the condition
     expect(h.reason).toContain("free tier");
   });
 
-  it("an installed licence names the customer", () => {
+  it("an installed license names the customer", () => {
     const h = headline(state({ source: "file", tier: "team", licensed_tier: "team", customer: "Acme Networks" }));
-    expect(h).toMatchObject({ state: "licensed", label: "Team licence", tone: "good" });
+    expect(h).toMatchObject({ state: "licensed", label: "Team license", tone: "good" });
     expect(h.reason).toContain("Acme Networks");
   });
 
-  it("a REFUSED licence outranks everything else on the page", () => {
+  it("a REFUSED license outranks everything else on the page", () => {
     const h = headline(state({
       source: "community", degraded: true, in_grace: true,
       load_error: "signature does not verify against any trusted key",
@@ -250,7 +250,7 @@ describe("headline — the worst true statement wins, and it names the condition
     expect(h.reason).toBe("expired 40 days ago, past a 30-day grace period");
   });
 
-  it("grace warns without pretending the licence has stopped working", () => {
+  it("grace warns without pretending the license has stopped working", () => {
     const h = headline(state({ source: "file", in_grace: true, reason: "expired 2 days ago" }));
     expect(h).toMatchObject({ state: "grace", tone: "warn" });
   });
@@ -345,7 +345,7 @@ describe("public keys", () => {
   });
 
   it("says what each role is FOR, not just its name", () => {
-    expect(keyRoleLabel("current")).toBe("Signs new licences");
+    expect(keyRoleLabel("current")).toBe("Signs new licenses");
     expect(keyRoleLabel("previous")).toContain("still verifies");
     expect(keyRoleLabel("")).toBe("Role not stated");
   });
@@ -359,7 +359,7 @@ describe("checkDocument — the only two things a browser may judge", () => {
   });
 
   it("refuses an empty document without pretending to verify it", () => {
-    expect(checkDocument("   ")).toEqual({ ok: false, reason: "There is no licence document to install." });
+    expect(checkDocument("   ")).toEqual({ ok: false, reason: "There is no license document to install." });
   });
 
   it("refuses one over the route's bound, and says both numbers", () => {
@@ -376,9 +376,9 @@ describe("checkDocument — the only two things a browser may judge", () => {
 
 describe("refusalReason — the server's words, unchanged", () => {
   it("unwraps the transport envelope and keeps the sentence exactly", () => {
-    const e = new Error('400 Bad Request: {"error":"licence expired on 2026-01-01 and its 30-day grace period has passed"}');
+    const e = new Error('400 Bad Request: {"error":"license expired on 2026-01-01 and its 30-day grace period has passed"}');
     expect(refusalReason(e, "fallback"))
-      .toBe("licence expired on 2026-01-01 and its 30-day grace period has passed");
+      .toBe("license expired on 2026-01-01 and its 30-day grace period has passed");
   });
 
   it("does not capitalize, punctuate or otherwise tidy the reason", () => {
@@ -390,8 +390,8 @@ describe("refusalReason — the server's words, unchanged", () => {
   });
 
   it("accepts a plain-text body as sent", () => {
-    expect(refusalReason(new Error("400 Bad Request: no licence document in the request"), "fallback"))
-      .toBe("no licence document in the request");
+    expect(refusalReason(new Error("400 Bad Request: no license document in the request"), "fallback"))
+      .toBe("no license document in the request");
   });
 
   it("falls back rather than showing a JSON body the server did not explain", () => {
@@ -510,16 +510,16 @@ describe("stateChip — valid / trial / in grace N days / past grace", () => {
     expect(c.detail).toContain("not a fault");
   });
 
-  it("counts down a valid licence and warns only inside the runway", () => {
+  it("counts down a valid license and warns only inside the runway", () => {
     expect(stateChip(view({ source: "file", tier: "team" }, 200)).label).toBe("Valid · expires in 200 days");
     expect(stateChip(view({ source: "file", tier: "team" }, 200)).tone).toBe("good");
     expect(stateChip(view({ source: "file", tier: "team" }, 9)).tone).toBe("warn");
     expect(stateChip(view({ source: "file", tier: "team" }, 1)).label).toBe("Valid · expires in 1 day");
   });
 
-  it("names an evaluation licence and says how long is left", () => {
+  it("names an evaluation license and says how long is left", () => {
     const c = stateChip(view({ source: "file", tier: "team", trial: true }, 12));
-    expect(c.label).toBe("Evaluation licence · 12 days left");
+    expect(c.label).toBe("Evaluation license · 12 days left");
     expect(c.tone).toBe("good");
     expect(stateChip(view({ source: "file", tier: "team", trial: true }, 3)).tone).toBe("warn");
   });

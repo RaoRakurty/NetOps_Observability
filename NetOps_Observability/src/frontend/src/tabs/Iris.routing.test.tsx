@@ -144,7 +144,7 @@ describe("Iris — free text routes to the GROUNDED engine", () => {
     expect(copilotChat).not.toHaveBeenCalled();
   });
 
-  it("still routes to /api/ai/ask when no key is configured (unchanged behaviour)", async () => {
+  it("still routes to /api/ai/ask when no key is configured (unchanged behavior)", async () => {
     aiAsk.mockResolvedValue(citedAnswer());
     await renderOpsis();
     await screen.findByText(/How can I help/);
@@ -164,7 +164,7 @@ describe("Iris — free text routes to the GROUNDED engine", () => {
   });
 });
 
-describe("Iris — the grounded claim is per-answer, and an ungrounded answer is labelled", () => {
+describe("Iris — the grounded claim is per-answer, and an ungrounded answer is labeled", () => {
   it("renders the grounded+cited chip beside an answer that carries citations", async () => {
     keyedOwner();
     aiAsk.mockResolvedValue(citedAnswer());

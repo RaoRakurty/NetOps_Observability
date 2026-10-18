@@ -111,18 +111,18 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
       .catch(() => { /* the per-peer read reports the failure */ });
     api.metricsQuery(`device_ospf_nbr_state{device="${id}"}`)
       .then((r) => { if (alive) { setOspf(r?.data?.result ?? []); setOspfErr(null); } })
-      .catch((e) => { if (alive) { setOspf([]); setOspfErr(operatorError(e, "OSPF neighbour state could not be read.")); } });
+      .catch((e) => { if (alive) { setOspf([]); setOspfErr(operatorError(e, "OSPF neighbor state could not be read.")); } });
     return () => { alive = false; };
   }, [id]);
 
   return (
     <div style={{ maxWidth: 1100 }}>
-      <Section title="Neighbours" sub={linksError ? "unread" : links ? `${links.length} adjacenc${links.length === 1 ? "y" : "ies"}` : "loading…"} ask={<AskIris topic="device.neighbors" label="Neighbours" />}>
+      <Section title="Neighbors" sub={linksError ? "unread" : links ? `${links.length} adjacenc${links.length === 1 ? "y" : "ies"}` : "loading…"} ask={<AskIris topic="device.neighbors" label="Neighbours" />}>
         {linksError ? (
           <p role="alert" data-testid="device-neighbours-unread" style={{ color: "var(--bad)", padding: "0 12px" }}>
-            The adjacency evidence could not be read, so this device&rsquo;s neighbours are UNKNOWN here — not absent. {linksError}
+            The adjacency evidence could not be read, so this device&rsquo;s neighbors are UNKNOWN here — not absent. {linksError}
           </p>
-        ) : links === null ? <div className="empty">Loading…</div> : links.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No neighbour protocol reported one here.</p> : (
+        ) : links === null ? <div className="empty">Loading…</div> : links.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No neighbor protocol reported one here.</p> : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={th}>Local port</th><th style={th}>Neighbor</th><th style={th}>Remote port</th><th style={th}>Protocol</th></tr></thead>
             <tbody>
@@ -207,9 +207,9 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
       <Section title="OSPF neighbors" sub={ospfErr ? "unread" : ospf ? `${ospf.length} adjacenc${ospf.length === 1 ? "y" : "ies"}` : "loading…"}>
         {ospfErr ? (
           <p role="alert" data-testid="device-ospf-unread" style={{ color: "var(--bad)", padding: "0 12px" }}>
-            OSPF state could not be read, so this device&rsquo;s OSPF neighbours are UNKNOWN here — not absent. {ospfErr}
+            OSPF state could not be read, so this device&rsquo;s OSPF neighbors are UNKNOWN here — not absent. {ospfErr}
           </p>
-        ) : ospf === null ? <div className="empty">Loading…</div> : ospf.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No OSPF neighbour seen on this device.</p> : (
+        ) : ospf === null ? <div className="empty">Loading…</div> : ospf.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No OSPF neighbor seen on this device.</p> : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={th}>Neighbor</th><th style={th}>State</th></tr></thead>
             <tbody>

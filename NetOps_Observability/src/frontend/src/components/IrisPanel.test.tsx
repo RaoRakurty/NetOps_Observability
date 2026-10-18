@@ -354,7 +354,7 @@ describe("docking and the splitter", () => {
     expect(screen.queryByRole("separator")).toBeNull();
   });
 
-  it("every window control is labelled and has a tooltip", () => {
+  it("every window control is labeled and has a tooltip", () => {
     render(<Harness />);
     fireEvent.click(launcher());
     for (const name of ["Undock", "Expand"]) {

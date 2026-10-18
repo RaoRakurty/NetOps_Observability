@@ -196,7 +196,7 @@ function PanelError({ text, onRetry }: { text: string; onRetry: () => void }) {
   return (
     <div className="lic-honest lic-bad" role="alert">
       <strong>{text}</strong>
-      <span>Nothing in this part of the page is a statement about the licence until it loads.</span>
+      <span>Nothing in this part of the page is a statement about the license until it loads.</span>
       <button type="button" className="lic-more" onClick={onRetry}>Read it again</button>
     </div>
   );
@@ -248,7 +248,7 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
           {provider && (
             <Fact label="Customer">
               <Value
-                m={measured(st.customer || null, "no licence names a customer on this platform")}
+                m={measured(st.customer || null, "no license names a customer on this platform")}
                 render={(v) => <span>{v}</span>}
               />
             </Fact>
@@ -256,13 +256,13 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
           <Fact label="Tier in force">
             <Pill tone={h.tone === "bad" ? "bad" : h.tone === "warn" ? "warn" : "good"}>{tierLabel(st.tier)}</Pill>
             {st.licensed_tier && st.licensed_tier !== st.tier && (
-              <span className="lic-line lic-block">the licence names {tierLabel(st.licensed_tier)}</span>
+              <span className="lic-line lic-block">the license names {tierLabel(st.licensed_tier)}</span>
             )}
           </Fact>
           {provider && (
-            <Fact label="Licence">
+            <Fact label="License">
               <Value
-                m={measured(st.licence_id || null, "no licence is installed")}
+                m={measured(st.licence_id || null, "no license is installed")}
                 render={(v) => <span className="mono">{v}</span>}
               />
               {st.issued_at && <span className="lic-line lic-block">issued {st.issued_at}</span>}
@@ -280,7 +280,7 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
           </Fact>
           <Fact label="Grace period">
             <Value
-              m={measured(st.grace_days ?? null, "no licence is installed, so no grace period applies")}
+              m={measured(st.grace_days ?? null, "no license is installed, so no grace period applies")}
               render={(v) => (
                 <>
                   <span>{v} days, set by the issuer</span>
@@ -298,7 +298,7 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
           {provider ? (
             <Fact label="Support">
               <Value
-                m={measured(support?.level || null, "the licence records no support level")}
+                m={measured(support?.level || null, "the license records no support level")}
                 render={(v) => (
                   <>
                     <span>{v}</span>
@@ -321,7 +321,7 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
       {st.load_error && (
         <HonestState
           tone="bad"
-          headline="A licence is installed, and the platform will not use it."
+          headline="A license is installed, and the platform will not use it."
           remedy={`${st.load_error} Until it is fixed the Community ceilings are in force.`}
         />
       )}
@@ -419,7 +419,7 @@ function UsageRow({ row }: { row: LicenceCeiling }) {
       <div className="lic-usage-ft">
         <span className="lic-line">
           {bar.kind === "unlimited"
-            ? "This licence sets no limit here."
+            ? "This license sets no limit here."
             : `Licensed limit ${fmtLimit(row.limit)}.`}
           {/* What actually happens past the limit, said only once the bar is in
               a warning band — below 80 % it is noise, and above it, it is the
@@ -446,7 +446,7 @@ function Usage({ rows, note }: { rows: readonly LicenceCeiling[]; note?: string 
       <HonestState
         tone="warn"
         headline="The platform listed no ceilings."
-        remedy="Nothing here states what this licence covers. Read the page again."
+        remedy="Nothing here states what this license covers. Read the page again."
       />
     );
   }
@@ -721,7 +721,7 @@ function Features({ view }: { view: LicenceView }) {
       <HonestState
         tone="warn"
         headline="The platform listed no commercial capabilities."
-        remedy="Read the page again. An empty list is not a licence that grants nothing."
+        remedy="Read the page again. An empty list is not a license that grants nothing."
       />
     );
   }
@@ -731,7 +731,7 @@ function Features({ view }: { view: LicenceView }) {
         <thead>
           <tr>
             <th scope="col">Capability</th>
-            <th scope="col">This licence</th>
+            <th scope="col">This license</th>
             <th scope="col">Lowest tier that includes it</th>
           </tr>
         </thead>
@@ -814,9 +814,9 @@ function InstallPanel({ view, canEdit, onInstalled }: {
       const next = await api.deleteLicence();
       onInstalled(next);
       setConfirm(null); setTyped("");
-      setDone("The licence was removed. The Community ceilings are now the ones in force.");
+      setDone("The license was removed. The Community ceilings are now the ones in force.");
     } catch (e: unknown) {
-      setRefused(refusalReason(e, "The licence could not be removed."));
+      setRefused(refusalReason(e, "The license could not be removed."));
     } finally {
       setBusy(false);
     }
@@ -831,7 +831,7 @@ function InstallPanel({ view, canEdit, onInstalled }: {
     return (
       <HonestState
         tone="muted"
-        headline="You are seeing this licence read-only."
+        headline="You are seeing this license read-only."
         remedy={view.managed_by_detail}
       />
     );
@@ -840,26 +840,26 @@ function InstallPanel({ view, canEdit, onInstalled }: {
   return (
     <div className="lic-install">
       <p className="lic-line">
-        A refused licence never displaces the one in force.
+        A refused license never displaces the one in force.
         <AskIris topic="licence.install-verified" label="verified before it is written" />
       </p>
 
       <label className="lic-field">
-        <span>Licence file</span>
+        <span>License file</span>
         <input
           type="file"
           className="lic-file"
-          aria-label="Licence file to install"
+          aria-label="License file to install"
           disabled={busy}
           onChange={(e) => { void onFile(e.target.files?.[0]); }}
         />
       </label>
 
       <label className="lic-field">
-        <span>Or paste the licence document</span>
+        <span>Or paste the license document</span>
         <textarea
           className="lic-textarea mono"
-          aria-label="Licence document"
+          aria-label="License document"
           rows={6}
           spellCheck={false}
           value={text}
@@ -871,7 +871,7 @@ function InstallPanel({ view, canEdit, onInstalled }: {
 
       {refused && (
         <div className="lic-honest lic-bad" role="alert">
-          <strong>The platform refused that licence.</strong>
+          <strong>The platform refused that license.</strong>
           <span className="lic-verbatim mono">{refused}</span>
           <span className="lic-line">
             The platform&rsquo;s own words. Nothing in force was touched.
@@ -882,18 +882,18 @@ function InstallPanel({ view, canEdit, onInstalled }: {
 
       <div className="lic-actions">
         <button type="button" className="btn accent" disabled={busy || !text.trim()} onClick={() => { void submitText(); }}>
-          {busy ? "Installing…" : "Install licence"}
+          {busy ? "Installing…" : "Install license"}
         </button>
         {installed && (
           <button type="button" className="btn danger" disabled={busy} onClick={() => { setConfirm(removeToken); setTyped(""); }}>
-            Remove licence…
+            Remove license…
           </button>
         )}
       </div>
 
       {confirm !== null && (
         <div className="lic-honest lic-warn" role="note">
-          <strong>Removing the licence drops the platform to the Community ceilings.</strong>
+          <strong>Removing the license drops the platform to the Community ceilings.</strong>
           <span>
             No data is deleted and nothing stops collecting. What is over a Community ceiling stays exactly where
             it is and is listed at the top of this page as over-ceiling.
@@ -902,7 +902,7 @@ function InstallPanel({ view, canEdit, onInstalled }: {
             <span>Type <span className="mono">{confirm}</span> to confirm</span>
             <input
               className="lic-input mono"
-              aria-label={`Type ${confirm} to confirm removing the licence`}
+              aria-label={`Type ${confirm} to confirm removing the license`}
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
             />
@@ -916,14 +916,14 @@ function InstallPanel({ view, canEdit, onInstalled }: {
               disabled={busy || !confirmMatches(typed, confirm)}
               onClick={() => { void remove(); }}
             >
-              {busy ? "Removing…" : "Remove licence"}
+              {busy ? "Removing…" : "Remove license"}
             </button>
           </div>
         </div>
       )}
 
       <p className="lic-line">
-        A licence may also be placed on the host at <span className="mono">{view.path}</span>.
+        A license may also be placed on the host at <span className="mono">{view.path}</span>.
       </p>
     </div>
   );
@@ -1004,7 +1004,7 @@ function Verification({ view }: { view: LicenceView }) {
         <HonestState
           tone="bad"
           headline="This build trusts no signing key."
-          remedy="No licence can be verified, so none can be installed. Report it with the platform version."
+          remedy="No license can be verified, so none can be installed. Report it with the platform version."
         />
       ) : (
         <ul className="lic-keys">
@@ -1041,7 +1041,7 @@ export default function Licence() {
   const platformAdmin = !!user?.platform_admin;
   const [panel, reload, put] = usePanel<LicenceView>(
     () => api.getLicence(),
-    "The licence could not be read.",
+    "The license could not be read.",
   );
   const view = panel.data;
 
@@ -1092,11 +1092,11 @@ export default function Licence() {
     <div className="lic-page">
       <Section
         id="licence"
-        title="Licence"
+        title="License"
         note={
           tenantScope
             ? "In force for your tenant"
-            : "One licence, every tenant"
+            : "One license, every tenant"
         }
         actions={
           <button type="button" className="btn sm" onClick={reload}>
@@ -1104,11 +1104,11 @@ export default function Licence() {
           </button>
         }
       >
-        {body("the licence", (v) => <LicenceHeadline view={v} />)}
+        {body("the license", (v) => <LicenceHeadline view={v} />)}
         {!authLoading && view && !provider && (
           <HonestState
             tone="muted"
-            headline="You are seeing this licence read-only."
+            headline="You are seeing this license read-only."
             remedy={
               platformAdmin
                 ? `${view.managed_by_detail} You are scoped into a tenant; return to the Global view to install or replace it.`
@@ -1168,10 +1168,10 @@ export default function Licence() {
 
       <Section
         id="install"
-        title={provider ? "Install a licence" : "Changing this licence"}
-        note="One licence file per installation"
+        title={provider ? "Install a license" : "Changing this license"}
+        note="One license file per installation"
       >
-        {body("the licence", (v) => (
+        {body("the license", (v) => (
           <InstallPanel view={v} canEdit={v.scope === "platform"} onInstalled={put} />
         ))}
       </Section>

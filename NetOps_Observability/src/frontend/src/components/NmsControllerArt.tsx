@@ -131,7 +131,7 @@ export const NMS_CONTROLLER_REGISTRY: Record<string, Omit<NmsControllerPresentat
     category: "Fabric controller",
     icon: "infrastructure",
     scene: "fabric",
-    capability: "Data-centre fabric state and switch health.",
+    capability: "Data-center fabric state and switch health.",
   },
   versa_director: {
     displayName: "Versa Director",

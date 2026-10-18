@@ -39,7 +39,7 @@ describe("floatingEdge geometry", () => {
     expect(p.ty).toBeCloseTo(300); // child top edge y
   });
 
-  it("two neighbours on different sides → different anchor points (fan-out, not stacked)", () => {
+  it("two neighbors on different sides → different anchor points (fan-out, not stacked)", () => {
     const hub = node(0, 0);
     const right = node(300, 0);
     const below = node(0, 300);
@@ -50,7 +50,7 @@ describe("floatingEdge geometry", () => {
     expect([toRight.sx, toRight.sy]).not.toEqual([toBelow.sx, toBelow.sy]);
   });
 
-  it("coincident nodes degrade to the centre without throwing", () => {
+  it("coincident nodes degrade to the center without throwing", () => {
     const a = node(0, 0);
     const b = node(0, 0);
     expect(nodeBorderPoint(a, b)).toEqual({ x: 50, y: 20 });

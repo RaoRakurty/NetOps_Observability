@@ -46,7 +46,7 @@ export function incidentTone(c: BgpIncidentClass | undefined): ClassTone {
       };
     case "rpki_invalid":
       return {
-        label: "Origin not authorised", term: "RPKI invalid", tone: "var(--crit)",
+        label: "Origin not authorized", term: "RPKI invalid", tone: "var(--crit)",
         detail: "RPKI invalid — the announcement breaks a published ROA. A stale ROA and a hijack look identical here.",
       };
     case "bogon":
@@ -67,7 +67,7 @@ export function incidentTone(c: BgpIncidentClass | undefined): ClassTone {
     case "none":
       return {
         label: "Healthy", tone: "var(--ok)",
-        detail: "Checked and clean: announced, origin authorised, visible to enough collectors.",
+        detail: "Checked and clean: announced, origin authorized, visible to enough collectors.",
       };
     default:
       return {

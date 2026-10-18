@@ -37,7 +37,7 @@ describe("EvidenceCategoryBadge", () => {
 describe("ProviderBadge cloud mark", () => {
   const BRAND_COLOURS = ["#ff9900", "#0078d4", "#4285f4", "#ea4335", "#34a853", "#fbbc05"];
 
-  it("draws an inline cloud glyph with no provider brand colour or logo asset", () => {
+  it("draws an inline cloud glyph with no provider brand color or logo asset", () => {
     for (const provider of ["aws", "azure", "gcp", "oracle"]) {
       const { container } = render(<ProviderBadge provider={provider} />);
       const html = container.innerHTML.toLowerCase();

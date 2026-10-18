@@ -210,7 +210,7 @@ describe("NmsMark render", () => {
     },
   );
 
-  it.each(RETIRED_MONOGRAM_CONTROLLERS)("$name renders NO vendor colour and NO monogram", ({ id, name }) => {
+  it.each(RETIRED_MONOGRAM_CONTROLLERS)("$name renders NO vendor color and NO monogram", ({ id, name }) => {
     const html = render(<NmsMark vendor={id} size={34} />).container.innerHTML;
     const lower = html.toLowerCase();
     for (const hex of VENDOR_PALETTE_HEXES) expect(lower, `${id} rendered ${hex}`).not.toContain(hex);
@@ -226,7 +226,7 @@ describe("NmsMark render", () => {
     expect(name.length).toBeGreaterThan(0);
   });
 
-  it("is decorative by default and labelled only on request (a11y)", () => {
+  it("is decorative by default and labeled only on request (a11y)", () => {
     const plain = render(<NmsMark vendor="meraki" />).container.querySelector("svg")!;
     expect(plain.getAttribute("aria-hidden")).toBe("true");
     expect(plain.getAttribute("role")).toBeNull();
@@ -277,7 +277,7 @@ describe("NmsDashArt render", () => {
       // Every colour in the scene is a theme token; the only literals allowed
       // are the defensive fallbacks INSIDE a var().
       const outsideVars = lower.replace(/var\([^)]*\)/g, "");
-      expect(outsideVars, `${id} paints a raw colour outside a token`).not.toMatch(/#[0-9a-f]{3,8}\b/);
+      expect(outsideVars, `${id} paints a raw color outside a token`).not.toMatch(/#[0-9a-f]{3,8}\b/);
     },
   );
 
@@ -345,7 +345,7 @@ describe("source scan — no NMS vendor palette or monogram anywhere in src/", (
     const rules = css.match(/\.nms-mark\b[^}]*\{[^}]*\}/g) ?? [];
     expect(rules.length, ".nms-mark chip style is missing").toBeGreaterThan(0);
     for (const rule of rules) {
-      expect(rule, ".nms-mark hardcodes a colour instead of a token").not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+      expect(rule, ".nms-mark hardcodes a color instead of a token").not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
     }
   });
 });

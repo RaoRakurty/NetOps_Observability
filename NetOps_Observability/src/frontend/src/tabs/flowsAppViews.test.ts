@@ -46,7 +46,7 @@ const svc = (over: Partial<FlowServiceRow>): FlowServiceRow => ({
 });
 
 describe("the unknown bucket is first class", () => {
-  it("recognises the engine's bucket and an absent name alike", () => {
+  it("recognizes the engine's bucket and an absent name alike", () => {
     expect(isUnknownApp("unknown")).toBe(true);
     expect(isUnknownApp("UNKNOWN")).toBe(true);
     expect(isUnknownApp("")).toBe(true);
@@ -220,7 +220,7 @@ describe("the coverage statement", () => {
   it("says so when nothing named the traffic from a catalog", () => {
     const s = coverageSentence({ top_pairs: 50, window_seconds: 900, catalog_prefixes: 0 });
     expect(s).toContain("the last 15 minutes");
-    expect(s).toMatch(/No catalogued address ranges/i);
+    expect(s).toMatch(/No cataloged address ranges/i);
   });
 
   it("still speaks when the endpoint reported no coverage at all", () => {

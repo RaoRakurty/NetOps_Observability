@@ -253,7 +253,7 @@ describe("set golden", () => {
     expect(await screen.findByText(new RegExp(`Golden baseline set to ${short}`))).toBeTruthy();
   });
 
-  it("can be cancelled without sending anything", async () => {
+  it("can be canceled without sending anything", async () => {
     ok();
     render(<DeviceConfigPanel device={DEVICE} />);
     const short = HEAD_SHA.slice(0, 12);

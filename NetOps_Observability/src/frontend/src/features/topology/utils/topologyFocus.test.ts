@@ -73,10 +73,10 @@ describe("focusView", () => {
 
 describe("focusSummary", () => {
   it("says it is a SUBSET, so a narrowed canvas is not mistaken for a small network", () => {
-    expect(focusSummary(500, 12, 3)).toBe("12 of 500 nodes — 3 matched, 9 neighbouring");
+    expect(focusSummary(500, 12, 3)).toBe("12 of 500 nodes — 3 matched, 9 neighboring");
   });
 
-  it("omits the neighbour clause when there are none", () => {
+  it("omits the neighbor clause when there are none", () => {
     expect(focusSummary(500, 3, 3)).toBe("3 of 500 nodes — 3 matched");
   });
 });

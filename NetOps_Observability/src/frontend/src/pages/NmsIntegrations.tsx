@@ -41,7 +41,7 @@ type CredField = { key: string; label: string; secret?: boolean; hint?: string }
 const CRED_FIELDS: Record<string, CredField[]> = {
   meraki: [
     { key: "api_key", label: "Dashboard API key", secret: true },
-    { key: "org", label: "Organization ID", hint: "Identifies your organisation with the vendor." },
+    { key: "org", label: "Organization ID", hint: "Identifies your organization with the vendor." },
     { key: "webhook_secret", label: "Webhook shared secret", secret: true, hint: "optional — verifies inbound alert webhooks" },
   ],
   catalyst_center: [

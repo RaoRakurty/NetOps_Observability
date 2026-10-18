@@ -48,10 +48,10 @@ describe("rpkiStateTone", () => {
   // admin quotes to an upstream, and a name you must hover to find is a name you
   // do not have on an outage call.
   it("carries the RFC 6811 term beside the plain label, in the chip", () => {
-    expect(rpkiStateTone("valid")).toMatchObject({ label: "Origin authorised", term: "RPKI valid" });
+    expect(rpkiStateTone("valid")).toMatchObject({ label: "Origin authorized", term: "RPKI valid" });
     expect(rpkiStateTone("invalid", "origin_as")).toMatchObject({ label: "Wrong origin AS", term: "RPKI invalid" });
     expect(rpkiStateTone("invalid", "max_length")).toMatchObject({ label: "Too specific", term: "RPKI invalid" });
-    expect(rpkiStateTone("invalid")).toMatchObject({ label: "Not authorised", term: "RPKI invalid" });
+    expect(rpkiStateTone("invalid")).toMatchObject({ label: "Not authorized", term: "RPKI invalid" });
     expect(rpkiStateTone("unknown")).toMatchObject({ label: "Not protected", term: "no ROA (RPKI not found)" });
   });
 

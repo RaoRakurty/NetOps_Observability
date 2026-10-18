@@ -47,7 +47,7 @@ describe("cloudNetworkTopology fixture", () => {
     expect(providers.has("azure")).toBe(true);
   });
 
-  it("route edges are control-plane FACTS labelled with the destination CIDR", () => {
+  it("route edges are control-plane FACTS labeled with the destination CIDR", () => {
     const routes = v.edges.filter((e) => e.relationship === "routed_adjacency");
     expect(routes.length).toBeGreaterThan(0);
     for (const r of routes) {

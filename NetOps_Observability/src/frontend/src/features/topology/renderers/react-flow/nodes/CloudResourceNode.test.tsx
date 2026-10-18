@@ -49,7 +49,7 @@ describe("CloudResourceNode", () => {
     expect([...container.querySelectorAll("text")].map((t) => t.textContent)).toContain("GCP");
   });
 
-  it("carries no provider trademark asset and no provider brand colour", () => {
+  it("carries no provider trademark asset and no provider brand color", () => {
     for (const provider of [...Object.keys(TAGS), "nifcloud"]) {
       const { container } = renderNode(provider, "igw");
       const html = container.innerHTML.toLowerCase();

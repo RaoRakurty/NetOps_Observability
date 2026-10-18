@@ -116,7 +116,7 @@ describe("failedCommands", () => {
 });
 
 describe("analysisWasScored", () => {
-  it("is false only when the server explicitly says nothing was analysed", () => {
+  it("is false only when the server explicitly says nothing was analyzed", () => {
     expect(analysisWasScored({ analyzed: false })).toBe(false);
     expect(analysisWasScored({ analyzed: true })).toBe(true);
     // An older server omits the field; "scored" is the safe reading, because the

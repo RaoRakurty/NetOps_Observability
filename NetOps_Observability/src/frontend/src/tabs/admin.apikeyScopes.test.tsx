@@ -76,7 +76,7 @@ describe("scope vocabulary", () => {
     }
   });
 
-  it("recognises the administrative scope, and only that one", () => {
+  it("recognizes the administrative scope, and only that one", () => {
     expect(isAdministrativeScope("admin:*")).toBe(true);
     for (const o of SCOPE_OPTIONS.filter((s) => s.id !== "admin:*")) {
       expect(isAdministrativeScope(o.id)).toBe(false);

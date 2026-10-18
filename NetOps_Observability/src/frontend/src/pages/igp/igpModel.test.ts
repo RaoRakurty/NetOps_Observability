@@ -251,11 +251,11 @@ describe("igpLoading / igpError", () => {
 });
 
 describe("adjTone / stateSourceLabel / currentStateLabel", () => {
-  it("colours ONLY a live verdict", () => {
+  it("colors ONLY a live verdict", () => {
     expect(adjTone(adjacency({ up: true }))).toBe("good");
     expect(adjTone(adjacency({ up: false }))).toBe("bad");
   });
-  it("gives an event-only adjacency NO colour — history is not the state now", () => {
+  it("gives an event-only adjacency NO color — history is not the state now", () => {
     expect(adjTone(adjacency({ state_source: "events", up: null }))).toBe("");
     expect(adjTone(adjacency({ state_source: "none", up: null }))).toBe("");
     // even if a server ever sent a stale `up` alongside an events source

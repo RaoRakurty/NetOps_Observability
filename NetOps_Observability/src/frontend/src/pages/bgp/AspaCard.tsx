@@ -38,7 +38,7 @@ export function AspaCard({ asn }: { asn?: string }) {
     <Section
       id="aspa"
       title="Approved upstream providers"
-      sub="ASPA — carriers the AS holder authorised"
+      sub="ASPA — carriers the AS holder authorized"
       updatedAt={at}
     >
       {!asn && <div className="empty">Pick an AS or prefix to see its approved carriers.</div>}

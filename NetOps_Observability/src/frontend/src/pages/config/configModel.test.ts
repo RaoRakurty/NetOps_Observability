@@ -47,7 +47,7 @@ describe("driftOf — untrusted wire values collapse to unknown", () => {
     expect(driftOf(7)).toBe("unknown");
   });
 
-  it("never colours an unknown verdict green", () => {
+  it("never colors an unknown verdict green", () => {
     expect(driftTone("unknown")).toBe("");
     expect(driftTone("in_sync")).toBe("good");
     expect(driftTone("changed")).toBe("warn");

@@ -39,7 +39,7 @@ describe("PresentationPlanRenderer — contract", () => {
 
   it("a malformed plan falls back to SUMMARY as escaped text", () => {
     const { container } = render(<PresentationPlanRenderer result={changes()} plan={{ primary_view: "<iframe>", title: HOSTILE }} />);
-    expect(screen.getByText(/shown as a plain summary because its layout was not recognised/)).toBeInTheDocument();
+    expect(screen.getByText(/shown as a plain summary because its layout was not recognized/)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: HOSTILE })).toBeInTheDocument();
     expect(container.querySelector("script, iframe")).toBeNull();
     expect(screen.getByText("2 rows found")).toBeInTheDocument();
@@ -241,7 +241,7 @@ describe("PresentationPlanRenderer — the server's plan", () => {
 
   it("a plan that was sent but is unusable is never silently replaced by the client's choice", () => {
     render(<PresentationPlanRenderer result={changes()} plan={{ primary_view: "PIE", title: "t" }} />);
-    expect(screen.getByText(/shown as a plain summary because its layout was not recognised/)).toBeInTheDocument();
+    expect(screen.getByText(/shown as a plain summary because its layout was not recognized/)).toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Changes in this window" })).toBeNull();
   });
 

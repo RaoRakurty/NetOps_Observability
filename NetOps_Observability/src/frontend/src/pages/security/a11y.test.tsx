@@ -87,7 +87,7 @@ describe("Security Overview a11y", () => {
     expect(live.getAttribute("role")).toBe("status");
   });
 
-  it("labels a severity by TEXT, never by colour alone", async () => {
+  it("labels a severity by TEXT, never by color alone", async () => {
     render(<SecurityOverview />);
     const lane = await screen.findByRole("region", { name: "Seam exposure" });
     expect(within(lane).getByText(/core-01/)).toBeTruthy();
@@ -129,7 +129,7 @@ describe("Finding detail a11y", () => {
     }
   });
 
-  it("states the verdict in words next to the colour", () => {
+  it("states the verdict in words next to the color", () => {
     render(<FindingDetail finding={FINDINGS[0]} />);
     expect(screen.getByText("Fail")).toBeTruthy();
     expect(screen.getByText("critical")).toBeTruthy();

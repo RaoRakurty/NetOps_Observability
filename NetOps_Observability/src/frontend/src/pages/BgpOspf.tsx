@@ -69,7 +69,7 @@ export default function BgpOspf({ rangeMinutes = 60 }: { rangeMinutes?: number }
           <MetricLine title="OSPF neighbor state over time" query="device_ospf_nbr_state" minutes={m} fmtY={(n) => `${n.toFixed(0)}`} labelKeys={["device", "neighbor"]} stepped />
           <MetricLine title="OSPF interface state over time" query="device_ospf_if_state" minutes={m} fmtY={(n) => `${n.toFixed(0)}`} labelKeys={["device", "index"]} stepped />
         </div>
-        <p className="proto-key">Only state 8 is a full adjacency.<AskIris topic="ospf.neighbor-states" label="OSPF neighbour state" /></p>
+        <p className="proto-key">Only state 8 is a full adjacency.<AskIris topic="ospf.neighbor-states" label="OSPF neighbor state" /></p>
         <IgpAdjacencies proto="ospf" />
       </Group>
 

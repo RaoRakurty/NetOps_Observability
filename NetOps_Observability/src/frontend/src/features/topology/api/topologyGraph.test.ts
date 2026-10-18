@@ -37,7 +37,7 @@ const realView: TopologyView & { coverage?: unknown } = {
       id: "lan-sw1", label: "lan-sw1", kind: "device", role: "switch",
       site: "hq", health: "healthy", confidence: 0.9, resolved: true,
       tags: { vendor: "arista" },
-      evidence: [{ source: "lldp", confidence: 0.9, detail: "lldp neighbour" }],
+      evidence: [{ source: "lldp", confidence: 0.9, detail: "lldp neighbor" }],
     },
   ],
   edges: [
