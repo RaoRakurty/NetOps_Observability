@@ -179,6 +179,7 @@ func (s *server) handleNMSIntegrations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.nms.Store().Upsert(r.Context(), c); err != nil {
+			logError("nms", "integration save failed", errf(err))
 			http.Error(w, "save failed", http.StatusInternalServerError)
 			return
 		}
@@ -371,6 +372,7 @@ func (s *server) nmsIntegrationCRUD(w http.ResponseWriter, r *http.Request, id s
 			return
 		}
 		if err := s.nms.Store().Upsert(r.Context(), c); err != nil {
+			logError("nms", "integration save failed", errf(err))
 			http.Error(w, "save failed", http.StatusInternalServerError)
 			return
 		}
