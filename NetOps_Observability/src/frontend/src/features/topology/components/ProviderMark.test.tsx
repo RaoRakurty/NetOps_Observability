@@ -70,12 +70,12 @@ describe("ProviderMark", () => {
   });
 
   // The regression guard: the trademark marks cannot come back silently.
-  it("renders NO provider brand colour and NO provider-logo asset path", () => {
+  it("renders NO provider brand color and NO provider-logo asset path", () => {
     for (const provider of [...Object.keys(TAGS), "nifcloud", undefined]) {
       const { container } = render(<ProviderMark provider={provider} />);
       const html = container.innerHTML.toLowerCase();
       for (const hex of BRAND_COLOURS) {
-        expect(html, `${provider} leaked brand colour ${hex}`).not.toContain(hex);
+        expect(html, `${provider} leaked brand color ${hex}`).not.toContain(hex);
       }
       for (const asset of BRAND_ASSETS) {
         expect(html, `${provider} leaked brand asset ${asset}`).not.toContain(asset);

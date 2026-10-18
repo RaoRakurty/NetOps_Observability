@@ -59,7 +59,7 @@ function stateChip(r: PeerRow) {
     <Chip
       label="Not reported"
       tone="var(--muted)"
-      title="Nothing has told us the state of this session. That is a missing measurement, not a healthy neighbour."
+      title="Nothing has told us the state of this session. That is a missing measurement, not a healthy neighbor."
     />
   );
 }
@@ -115,10 +115,10 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
     <Section
       id="peers"
       title="Sessions down or flapping"
-      sub="BGP neighbours on your routers, and your carriers"
+      sub="BGP neighbors on your routers, and your carriers"
       updatedAt={at}
     >
-      <SubBlock title="Neighbour sessions">
+      <SubBlock title="Neighbor sessions">
 
         {busy && rows.length === 0 && <div className="empty">Reading peer state…</div>}
 
@@ -126,12 +126,12 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
           <div className="empty">
             Nothing is reporting neighbour state: the BMP receiver is off (<span className="mono">FEATURE_BMP</span>).
             An absent feed, not a healthy fleet.
-            <AskIris topic="bgp.bmp-not-reporting" label="Nothing is reporting neighbour state" />
+            <AskIris topic="bgp.bmp-not-reporting" label="Nothing is reporting neighbor state" />
           </div>
         )}
         {!busy && state === "bmp_denied" && (
           <p className="fact-line fact-bad" role="alert">
-            <b>Neighbour state is being collected, but not for this account.</b>{" "}
+            <b>Neighbor state is being collected, but not for this account.</b>{" "}
             The BMP receiver is running and refused this read, so this list is
             empty for you — not for the network. Ask an administrator to include the
             BGP feed in your access.
@@ -140,14 +140,14 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
         {!busy && state === "bmp_unreadable" && (
           <p className="fact-line fact-bad" role="alert">
             <b>The BMP receiver is switched on and did not answer.</b>{" "}
-            Neighbour state is missing because the feed is broken, not because the
+            Neighbor state is missing because the feed is broken, not because the
             fleet is quiet. This one needs someone to look at it.
             {bmpErr && <> {bmpErr}</>}
           </p>
         )}
         {!busy && state === "no_exporter" && (
           <div className="empty">
-            No router is sending neighbour state yet. An empty feed, not a converged network.
+            No router is sending neighbor state yet. An empty feed, not a converged network.
           </div>
         )}
         {!busy && state === "no_peers" && (
@@ -157,7 +157,7 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
         )}
         {!busy && state === "error" && (
           <p className="fact-line fact-bad" role="alert">
-            Neighbour state could not be read: {err}
+            Neighbor state could not be read: {err}
           </p>
         )}
 
@@ -179,7 +179,7 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
             <table className="tbl bgp-tbl" style={{ width: "100%" }}>
               <thead>
                 <tr>
-                  <th>Router</th><th>Neighbour</th><th>Their AS</th><th>State</th>
+                  <th>Router</th><th>Neighbor</th><th>Their AS</th><th>State</th>
                   <th>Reported by<AskIris topic="bgp.peer-sources" label="Reported by" /></th>
                   <th className="num">Learned</th><th className="num">Withdrawn</th><th>Last change</th>
                 </tr>

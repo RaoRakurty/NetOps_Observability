@@ -109,14 +109,14 @@ describe("PrefixesPanel", () => {
         incidents={{
           "193.0.0.0/21": incident({
             class: "rpki_invalid", severity: "critical",
-            summary: "193.0.0.0/21 is announced by an AS no ROA authorises.",
+            summary: "193.0.0.0/21 is announced by an AS no ROA authorizes.",
           }),
         }}
         status={{ enabled: true, runs: 1 }} alerts={[]} active="" onInvestigate={() => {}}
       />,
     );
-    const chip = screen.getAllByText("Origin not authorised")[0].closest(".cc-badge") as HTMLElement;
-    expect(chip.textContent).toBe("Origin not authorised · RPKI invalid");
+    const chip = screen.getAllByText("Origin not authorized")[0].closest(".cc-badge") as HTMLElement;
+    expect(chip.textContent).toBe("Origin not authorized · RPKI invalid");
     // The classes that are OUR vocabulary get no protocol name they do not have.
     expect(screen.queryByText(/Origin changed ·/)).toBeNull();
   });
@@ -127,14 +127,14 @@ describe("PrefixesPanel", () => {
         watch={[entry("193.0.0.0/21")]} incidents={{}} status={{ enabled: true, runs: 1 }}
         alerts={[{
           id: "a1", resource: "193.0.0.0/21", class: "rpki_invalid", severity: "critical",
-          summary: "No ROA authorises the announcing AS.", fired_at: "2026-09-08T09:00:00Z",
+          summary: "No ROA authorizes the announcing AS.", fired_at: "2026-09-08T09:00:00Z",
           resolved: false,
         }]}
         active="" onInvestigate={() => {}}
       />,
     );
-    const chip = screen.getAllByText("Origin not authorised")[0].closest(".cc-badge") as HTMLElement;
-    expect(chip.textContent).toBe("Origin not authorised · RPKI invalid");
+    const chip = screen.getAllByText("Origin not authorized")[0].closest(".cc-badge") as HTMLElement;
+    expect(chip.textContent).toBe("Origin not authorized · RPKI invalid");
   });
 
   it("shows a corroboration shortfall rather than hiding the near-miss", () => {
@@ -281,7 +281,7 @@ describe("PeersPanel", () => {
     bgpBmpSessions.mockResolvedValue({ sessions: [], count: 0, coverage: { receiver_enabled: true, sessions_up: 0, complete: false, notes: [] } });
     metricsQuery.mockResolvedValue({ status: "success", data: { resultType: "vector", result: [] } });
     render(<PeersPanel />);
-    await waitFor(() => expect(screen.getByText(/No router is sending neighbour state/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/No router is sending neighbor state/i)).toBeTruthy());
   });
 
   it("renders both sources in one table and names which witness is talking", async () => {
@@ -412,7 +412,7 @@ describe("plain language for a NOC admin", () => {
     const peers = render(<PeersPanel />);
     await waitFor(() => expect(peers.container.querySelector("h2")).toBeTruthy());
     expect(peers.container.querySelector("h2")?.textContent).toBe("Sessions down or flapping");
-    expect(peers.container.querySelector(".bgp-sec-sub")?.textContent).toMatch(/BGP neighbours/);
+    expect(peers.container.querySelector(".bgp-sec-sub")?.textContent).toMatch(/BGP neighbors/);
     peers.unmount();
 
     const bogons = render(<BogonsPanel />);
@@ -469,7 +469,7 @@ describe("a failed lookup leaks no internal address", () => {
     metricsQuery.mockRejectedValue(ENVELOPE());
     const { container } = render(<PeersPanel />);
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toBe("Neighbour state could not be read: The service did not answer.");
+    expect(alert.textContent).toBe("Neighbor state could not be read: The service did not answer.");
     expectNoInternals(container.textContent ?? "");
   });
 

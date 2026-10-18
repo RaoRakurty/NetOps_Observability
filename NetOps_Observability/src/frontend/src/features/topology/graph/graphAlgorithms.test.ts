@@ -30,7 +30,7 @@ const G = viewOf([
 ]);
 
 describe("firstDegree", () => {
-  it("returns the node plus its immediate neighbours (undirected)", () => {
+  it("returns the node plus its immediate neighbors (undirected)", () => {
     expect(firstDegree(G, "b")).toEqual(new Set(["b", "a", "c", "d"]));
     expect(firstDegree(G, "a")).toEqual(new Set(["a", "b"]));
   });

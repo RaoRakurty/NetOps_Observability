@@ -132,18 +132,18 @@ export function rpkiVerdict(status: string | undefined, origin?: string): RpkiTo
   switch ((status || "").toLowerCase()) {
     case "valid":
       return {
-        label: "Origin authorised", term: "RPKI valid", tone: "var(--ok)",
-        detail: `RPKI valid — a ROA authorises this announcement${origin ? ` by ${origin}` : ""}.`,
+        label: "Origin authorized", term: "RPKI valid", tone: "var(--ok)",
+        detail: `RPKI valid — a ROA authorizes this announcement${origin ? ` by ${origin}` : ""}.`,
       };
     case "invalid":
       return {
-        label: "Origin not authorised", term: "RPKI invalid", tone: "var(--crit)",
+        label: "Origin not authorized", term: "RPKI invalid", tone: "var(--crit)",
         detail: "RPKI invalid — the announcement breaks a published ROA. Possible hijack, or a stale ROA of your own.",
       };
     case "invalid_asn":
       return {
         label: "Wrong origin AS", term: "RPKI invalid", tone: "var(--crit)",
-        detail: "RPKI invalid — a ROA exists but authorises a different origin AS.",
+        detail: "RPKI invalid — a ROA exists but authorizes a different origin AS.",
       };
     case "invalid_length":
       return {
@@ -301,7 +301,7 @@ export function nextSteps(input: {
   }
   if (has("rpki_invalid") || rpkiStatus?.toLowerCase().startsWith("invalid")) {
     out.push({
-      title: "Check the origin authorisation you published for this prefix",
+      title: "Check the origin authorization you published for this prefix",
       why: "The announcement does not match it. Either the record is out of date, or the announcement is not yours.",
     });
   }

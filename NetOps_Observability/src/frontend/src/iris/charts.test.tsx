@@ -125,7 +125,7 @@ describe("BarView — who made the most changes", () => {
 });
 
 describe("BarView — values and empties", () => {
-  it("top-k values: a missing value is labelled, not drawn as 0", () => {
+  it("top-k values: a missing value is labeled, not drawn as 0", () => {
     const m = barModel(norm(baseResult({ query_type: "metric_topk", metric: "cpu", rows: [{ device: "a", value: 90 }, { device: "b" }] })))!;
     expect(m.series[0].values).toEqual([90, null]);
     expect(m.labels).toEqual([null, "not measured"]);

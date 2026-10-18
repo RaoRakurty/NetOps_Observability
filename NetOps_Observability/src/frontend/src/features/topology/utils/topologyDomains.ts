@@ -29,7 +29,7 @@ export const DOMAINS: DomainMeta[] = [
   // it); the LABEL is honest about what the unfiltered canvas now holds.
   { id: "lan", label: "All networks", blurb: "The whole discovered estate on one canvas." },
   { id: "sdwan", label: "SD-WAN", blurb: "The WAN edge: gateways, tunnels and transport." },
-  { id: "dc", label: "DC", blurb: "The data-centre fabric and its compute rows." },
+  { id: "dc", label: "DC", blurb: "The data-center fabric and its compute rows." },
   { id: "cloud", label: "Cloud", blurb: "The discovered cloud network and its gateways." },
 ];
 

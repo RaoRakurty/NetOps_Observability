@@ -45,7 +45,7 @@ describe("Modal a11y contract", () => {
 });
 
 describe("Segmented a11y contract", () => {
-  it("is a labelled toggle group with aria-pressed on the active option", () => {
+  it("is a labeled toggle group with aria-pressed on the active option", () => {
     render(
       <Segmented
         value="b"

@@ -105,12 +105,12 @@ describe("JsonDiff", () => {
   });
 });
 
-describe("ConfigDiffView (lifted into components/, behaviour unchanged)", () => {
+describe("ConfigDiffView (lifted into components/, behavior unchanged)", () => {
   it("is the same component the device Configuration tab exports", () => {
     expect(ReExported).toBe(ConfigDiffView);
   });
 
-  it("colours lines by class, shows churn, and states server truncation", () => {
+  it("colors lines by class, shows churn, and states server truncation", () => {
     const { container } = render(
       <ConfigDiffView title="v1 → v2" diff={{ unified: "--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new\n ctx", added: 1, removed: 1, truncated: true }} />,
     );

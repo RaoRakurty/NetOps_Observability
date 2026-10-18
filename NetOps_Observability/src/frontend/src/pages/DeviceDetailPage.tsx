@@ -72,7 +72,7 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
 
         {/* Tabs */}
         <div className="ddp-tabs" role="tablist">
-          {([["overview", "Overview"], ["interfaces", "Interfaces"], ["vrf", `By ${vrfTerm(d.vendor)}`], ["routing", "Neighbours"], ["config", "Config"], ["capture", "Capture"]] as [Tab, string][]).map(([id, label]) => (
+          {([["overview", "Overview"], ["interfaces", "Interfaces"], ["vrf", `By ${vrfTerm(d.vendor)}`], ["routing", "Neighbors"], ["config", "Config"], ["capture", "Capture"]] as [Tab, string][]).map(([id, label]) => (
             <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>{label}</button>
           ))}
         </div>
@@ -86,7 +86,7 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
                 <MetricStat label="Interfaces down" query={`count(device_if_oper_status${sel} == 2) or vector(0)`} minutes={60} fmt={(v) => String(Math.round(v))} tone={(n) => (n > 0 ? "warn" : "")} />
                 <MetricStat label="BGP peers" query={`count(device_bgp_peer_state${sel}) or vector(0)`} minutes={60} fmt={(v) => String(Math.round(v))} />
                 <MetricStat label="BGP established" query={`count(device_bgp_peer_state${sel} == 6) or vector(0)`} minutes={60} fmt={(v) => String(Math.round(v))} />
-                <MetricStat label="OSPF neighbours" query={`count(device_ospf_nbr_state${sel}) or vector(0)`} minutes={60} fmt={(v) => String(Math.round(v))} />
+                <MetricStat label="OSPF neighbors" query={`count(device_ospf_nbr_state${sel}) or vector(0)`} minutes={60} fmt={(v) => String(Math.round(v))} />
                 <MetricStat label="OSPF full" query={`count(device_ospf_nbr_state${sel} == 8) or vector(0)`} minutes={60} fmt={(v) => String(Math.round(v))} />
                 <MetricStat label="Traffic in" query={`sum(rate(device_if_in_octets${sel}[5m]) * 8) or vector(0)`} minutes={60} fmt={fmtBps} />
                 <MetricStat label="Traffic out" query={`sum(rate(device_if_out_octets${sel}[5m]) * 8) or vector(0)`} minutes={60} fmt={fmtBps} />

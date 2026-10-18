@@ -320,7 +320,7 @@ describe("rail glyph geometry", () => {
     const dx = b.cx - CENTRE;
     expect(
       Math.abs(dx),
-      `glyph "${name}" bbox x-centre is ${b.cx.toFixed(3)} (dx ${dx.toFixed(3)}); ` +
+      `glyph "${name}" bbox x-center is ${b.cx.toFixed(3)} (dx ${dx.toFixed(3)}); ` +
         `left margin ${b.minX.toFixed(3)}, right margin ${(VIEWBOX - b.maxX).toFixed(3)}`,
     ).toBeLessThanOrEqual(TOLERANCE);
   });
@@ -330,7 +330,7 @@ describe("rail glyph geometry", () => {
     const dy = b.cy - CENTRE;
     expect(
       Math.abs(dy),
-      `glyph "${name}" bbox y-centre is ${b.cy.toFixed(3)} (dy ${dy.toFixed(3)}); ` +
+      `glyph "${name}" bbox y-center is ${b.cy.toFixed(3)} (dy ${dy.toFixed(3)}); ` +
         `top margin ${b.minY.toFixed(3)}, bottom margin ${(VIEWBOX - b.maxY).toFixed(3)}`,
     ).toBeLessThanOrEqual(TOLERANCE);
   });
@@ -373,7 +373,7 @@ describe("connector glyph geometry", () => {
     const dx = b.cx - CENTRE;
     expect(
       Math.abs(dx),
-      `glyph "${name}" bbox x-centre is ${b.cx.toFixed(3)} (dx ${dx.toFixed(3)})`,
+      `glyph "${name}" bbox x-center is ${b.cx.toFixed(3)} (dx ${dx.toFixed(3)})`,
     ).toBeLessThanOrEqual(TOLERANCE);
   });
 
@@ -382,7 +382,7 @@ describe("connector glyph geometry", () => {
     const dy = b.cy - CENTRE;
     expect(
       Math.abs(dy),
-      `glyph "${name}" bbox y-centre is ${b.cy.toFixed(3)} (dy ${dy.toFixed(3)})`,
+      `glyph "${name}" bbox y-center is ${b.cy.toFixed(3)} (dy ${dy.toFixed(3)})`,
     ).toBeLessThanOrEqual(TOLERANCE);
   });
 

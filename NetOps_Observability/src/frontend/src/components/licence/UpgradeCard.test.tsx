@@ -141,7 +141,7 @@ describe("httpFailure — the additive hook in lib/errors.ts", () => {
     expect(httpFailure(null)).toBeNull();
   });
 
-  it("leaves operatorError's own behaviour untouched", () => {
+  it("leaves operatorError's own behavior untouched", () => {
     expect(operatorError(new Error("500 Internal Server Error: {}"), "fallback"))
       .toBe("The service did not answer.");
   });

@@ -310,7 +310,7 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
   };
 
   const remove = async (s: SiteRow) => {
-    if (!window.confirm(`Delete site "${s.name}"? Devices labelled with its slug fall back to unplaced.`)) return;
+    if (!window.confirm(`Delete site "${s.name}"? Devices labeled with its slug fall back to unplaced.`)) return;
     setBusy(s.slug);
     try { await api.deleteSite(s.slug); setErr(null); await load(); onChanged(); }
     catch (e) { setErr(operatorError(e, "The site map could not be updated.")); }

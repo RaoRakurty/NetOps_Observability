@@ -75,7 +75,7 @@ describe("RpkiPanel", () => {
     render(<RpkiPanel />);
     await waitFor(() => expect(screen.getByText("Could not check")).toBeInTheDocument());
     expect(screen.getByText(/validator 503/)).toBeInTheDocument();
-    expect(screen.queryByText(/Authorised/)).toBeNull();
+    expect(screen.queryByText(/Authorized/)).toBeNull();
   });
 
   // Owner, 2026-09-08: "which is better, 'RPKI valid' or 'Origin authorised'?"
@@ -97,7 +97,7 @@ describe("RpkiPanel", () => {
     const chip = (label: string) => screen.getAllByText(label)[0].closest(".cc-badge") as HTMLElement;
     expect(chip("Wrong origin AS").textContent).toBe("Wrong origin AS · RPKI invalid");
     expect(chip("Not protected").textContent).toBe("Not protected · no ROA (RPKI not found)");
-    expect(chip("Origin authorised").textContent).toBe("Origin authorised · RPKI valid");
+    expect(chip("Origin authorized").textContent).toBe("Origin authorized · RPKI valid");
     // "Could not check" is not an RFC 6811 state and is never dressed as one.
     expect(chip("Could not check").textContent).toBe("Could not check");
   });

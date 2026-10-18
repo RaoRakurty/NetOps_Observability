@@ -144,7 +144,7 @@ describe("storageBadge", () => {
     expect(b?.title).toMatch(/survive an API restart/);
   });
 
-  it("an ephemeral backend is labelled ephemeral and warned about", () => {
+  it("an ephemeral backend is labeled ephemeral and warned about", () => {
     const b = storageBadge(row({ configured_backend: "memory", active_backend: "memory", persistence: "ephemeral" }));
     expect(b?.label).toBe("Memory · Ephemeral");
     expect(b?.tone).toBe("var(--warn)");

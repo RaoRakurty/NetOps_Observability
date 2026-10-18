@@ -879,7 +879,7 @@ export default function TacEscalationPanel({ incidentId, autoStart = false, onCa
     <section className="tac-panel card" aria-label="Escalate to TAC">
       <div className="tac-head">
         <h2 className="tac-h">Escalate to TAC</h2>
-        <span className="mini-meta tac-ver">Issue catalogue {info.catalog_version}</span>
+        <span className="mini-meta tac-ver">Issue catalog {info.catalog_version}</span>
       </div>
 
       {/* ── step 1: THE ONE ACTION ───────────────────────────────────────────

@@ -110,7 +110,7 @@ export function detectArchetype(view: TopologyView): ArchetypeVerdict {
     // ring: all degree 2, |E| == |V|
     const deg2 = degrees.filter((d) => d === 2).length;
     if (deg2 === n && edgeCount === n) {
-      return { archetype: "ring", confidence: 1, reason: "every device has exactly two neighbours in one closed loop" };
+      return { archetype: "ring", confidence: 1, reason: "every device has exactly two neighbors in one closed loop" };
     }
     // bus: a path — two ends of degree 1, the rest degree 2
     const ends = degrees.filter((d) => d === 1).length;
