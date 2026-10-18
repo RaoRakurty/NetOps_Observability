@@ -23,6 +23,7 @@ func Specs() map[string]ConnectorSpec {
 	return map[string]ConnectorSpec{
 		"meraki": {
 			Vendor: "meraki", Product: "Cisco Meraki Dashboard", SourceSystem: "meraki",
+			DeviceKeyKind: KeySerial, // Meraki keys devices by serial
 			// Meraki has no username/password; its testing credential is the API key.
 			SupportedAuth: []AuthKind{AuthAPIKey, AuthOAuth},
 			PreferredAuth: AuthOAuth,
@@ -33,6 +34,7 @@ func Specs() map[string]ConnectorSpec {
 		},
 		"catalyst_center": {
 			Vendor: "catalyst_center", Product: "Cisco Catalyst Center", SourceSystem: "catalyst_center",
+			DeviceKeyKind: KeyNone, // Catalyst Center device UUID: not an inventory key
 			SupportedAuth: []AuthKind{AuthBasic, AuthToken},
 			PreferredAuth: AuthToken, // Basic exchanged for X-Auth-Token
 			Webhook:       true, Poll: true,
@@ -41,6 +43,7 @@ func Specs() map[string]ConnectorSpec {
 		},
 		"catalyst_9800": {
 			Vendor: "catalyst_9800", Product: "Cisco Catalyst 9800 WLC", SourceSystem: "catalyst_9800",
+			DeviceKeyKind: KeyNone,               // APs are already canonical wireless inventory ids
 			SupportedAuth: []AuthKind{AuthBasic}, // RESTCONF = HTTP Basic (RFC 8040); no OAuth on IOS-XE
 			PreferredAuth: AuthBasic,
 			Poll:          true,
@@ -64,6 +67,7 @@ func Specs() map[string]ConnectorSpec {
 		},
 		"vmanage": {
 			Vendor: "vmanage", Product: "Cisco Catalyst SD-WAN Manager", SourceSystem: "vmanage",
+			DeviceKeyKind: KeySystemIP, // overlay system-ip
 			SupportedAuth: []AuthKind{AuthBasic, AuthToken, AuthSession},
 			PreferredAuth: AuthToken, // JWT+refresh (≥20.18); session fallback
 			Poll:          true,
@@ -83,6 +87,7 @@ func Specs() map[string]ConnectorSpec {
 		},
 		"ndfc": {
 			Vendor: "ndfc", Product: "Cisco Nexus Dashboard / NDFC", SourceSystem: "ndfc",
+			DeviceKeyKind: KeySerial, // switch serial (name fallback)
 			SupportedAuth: []AuthKind{AuthBasic, AuthToken, AuthAPIKey},
 			PreferredAuth: AuthToken, // login → JWT
 			Poll:          true,
@@ -91,6 +96,7 @@ func Specs() map[string]ConnectorSpec {
 		},
 		"prime": {
 			Vendor: "prime", Product: "Cisco Prime Infrastructure", SourceSystem: "prime",
+			DeviceKeyKind: KeyIP,                 // device IP
 			SupportedAuth: []AuthKind{AuthBasic}, // legacy: raw Basic only
 			PreferredAuth: AuthBasic,
 			Poll:          true,
@@ -100,6 +106,7 @@ func Specs() map[string]ConnectorSpec {
 		},
 		"versa_director": {
 			Vendor: "versa_director", Product: "Versa Director", SourceSystem: "versa_director",
+			DeviceKeyKind: KeyName, // appliance name
 			SupportedAuth: []AuthKind{AuthBasic, AuthOAuth},
 			PreferredAuth: AuthOAuth,
 			Poll:          true,
@@ -108,6 +115,7 @@ func Specs() map[string]ConnectorSpec {
 		},
 		"versa_concerto": {
 			Vendor: "versa_concerto", Product: "Versa Concerto", SourceSystem: "versa_concerto",
+			DeviceKeyKind: KeyName, // appliance name
 			SupportedAuth: []AuthKind{AuthBasic, AuthOAuth},
 			PreferredAuth: AuthOAuth,
 			Poll:          true,
@@ -116,6 +124,7 @@ func Specs() map[string]ConnectorSpec {
 		},
 		"generic": {
 			Vendor: "generic", Product: "Generic REST/Webhook", SourceSystem: "generic",
+			DeviceKeyKind: KeyNone, // caller-defined id
 			SupportedAuth: []AuthKind{AuthBasic, AuthAPIKey, AuthToken, AuthOAuth},
 			PreferredAuth: AuthBasic,
 			Webhook:       true, Poll: true,

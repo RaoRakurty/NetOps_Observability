@@ -58,6 +58,9 @@ type ConnectorSpec struct {
 	// choice — it follows today's DefaultStreams (and gains new streams).
 	SupersededDefaults [][]string
 	DefaultPoll        time.Duration // recommended poll interval
+	// DeviceKeyKind is what this connector's DeviceID names (identity.go);
+	// KeyNone for an opaque id that cannot be matched to inventory.
+	DeviceKeyKind KeyKind
 	// RatePerSec bounds outbound calls (0 = connector default). E.g. Meraki 10/s.
 	RatePerSec float64
 	// Capabilities declares what the vendor can actually report and how proven

@@ -102,6 +102,11 @@ type Routed struct {
 type Pipeline struct {
 	Seen  *SeenSet
 	State *StateTracker
+	// Resolver + KeyKind join controller device keys to inventory ids before
+	// anything is routed (identity.go). Nil resolver = keys pass through.
+	Resolver DeviceResolver
+	KeyKind  KeyKind
+	names    deviceNames
 }
 
 // NewPipeline builds a pipeline with a bounded seen-set + a state tracker.
@@ -112,6 +117,7 @@ func NewPipeline(seenCap int) *Pipeline {
 // Route processes one Batch: metrics → lines, states → tracker (emitting
 // changes), events → deduped. Pure aside from the tracker/seen-set it owns.
 func (p *Pipeline) Route(b Batch) Routed {
+	b = canonicalize(p.Resolver, p.KeyKind, &p.names, b)
 	var out Routed
 	for _, m := range b.Metrics {
 		if line := MetricLine(m); line != "" {

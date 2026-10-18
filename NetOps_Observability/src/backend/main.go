@@ -554,6 +554,7 @@ type server struct {
 	tlsPeerProber   *tlsprobe.Prober                     // SEC-019.1 served-cert expiry watcher (nil = plaintext baseline)
 	corrReconcile   corrReconcileStats                   // tracker 328: corr_current reconciler gauges/counters
 	sdwanOverlay    atomic.Pointer[sdwanOverlaySnapshot] // tracker 349: last inferred SD-WAN overlay (reconcile cycle)
+	nmsResolver     *nmsDeviceResolver                   // controller device key → inventory id (nil when NMS is off)
 	secMetrics      *secobs.Metrics                      // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
 	transportInv    *secobs.Inventory                    // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
 	exportPolicy    *exportPolicyStore                   // runtime-tunable log-export limits
@@ -1621,6 +1622,9 @@ func newServer() *server {
 			srv.nms = newNMSRuntime(nms.NewNonDurableStore())
 		}
 		srv.nms.SetWirelessStore(srv.wireless) // #128: wireless-inventory sink
+		// One router = one entity: controller device keys join inventory ids.
+		srv.nmsResolver = &nmsDeviceResolver{}
+		srv.nms.SetDeviceResolver(srv.nmsResolver)
 	}
 	// TRACKER 256 — wireless controllers and access points are DEVICES, and one
 	// entitlement each when Correlix is collecting from them. Registering them
@@ -2921,6 +2925,7 @@ func Run() {
 	// FEATURE_NMS_INTEGRATIONS=true.
 	if srv.nms != nil {
 		workers.start("nms-scheduler", func() { srv.nms.Run(ctx, durationOr("NMS_POLL_TICK", 30*time.Second)) })
+		workers.start("nms-device-resolver", func() { srv.runNMSDeviceResolver(ctx) })
 		logInfo("nms", "NMS integration scheduler enabled", nil)
 	}
 	// Active Verification auto-trigger (RCA spec item 8): watches suspected-tier
@@ -4666,6 +4671,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.sealMetrics != nil {
 		s.sealMetrics.write(w)
+	}
+	if s.nmsResolver != nil {
+		s.nmsResolver.write(w)
 	}
 	if s.quarMetrics != nil {
 		s.quarMetrics.Write(w)
