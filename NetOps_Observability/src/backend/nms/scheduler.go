@@ -71,6 +71,9 @@ type Runtime struct {
 	client         *http.Client // strict TLS (default)
 	insecureClient *http.Client // per-integration opt-in for self-signed controllers
 
+	// resolver joins controller device keys to inventory devices (nil = off).
+	resolver DeviceResolver
+
 	mu       sync.Mutex
 	pipes    map[string]*Pipeline // tenant\x00id → long-lived pipeline
 	lastRun  map[string]time.Time // tenant\x00id → last poll start
@@ -108,6 +111,10 @@ func NewRuntime(store ConfigStore, sinks Sinks, backfill time.Duration) *Runtime
 
 // SetWirelessStore wires the #128 canonical-inventory sink.
 func (rt *Runtime) SetWirelessStore(ws wireless.Store) { rt.wireless = ws }
+
+// SetDeviceResolver installs the controller→inventory device join. Call before
+// Start: pipelines pick it up when they are first built.
+func (rt *Runtime) SetDeviceResolver(r DeviceResolver) { rt.resolver = r }
 
 // Registry exposes the connector registry (vendor list / spec lookups).
 func (rt *Runtime) Registry() *Registry { return rt.reg }
@@ -169,12 +176,16 @@ func (rt *Runtime) due(ic Integration) bool {
 }
 
 // pipeline returns the long-lived per-integration pipeline (dedup + flap state).
-func (rt *Runtime) pipeline(key string) *Pipeline {
+func (rt *Runtime) pipeline(ic Integration) *Pipeline {
+	key := Key(ic.Tenant, ic.ID)
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	p, ok := rt.pipes[key]
 	if !ok {
 		p = NewPipeline(pipelineSeenCap)
+		if conn, found := rt.reg.Get(ic.Vendor); found && rt.resolver != nil {
+			p.Resolver, p.KeyKind = rt.resolver, conn.Spec().DeviceKeyKind
+		}
 		rt.pipes[key] = p
 	}
 	return p
@@ -217,7 +228,7 @@ func (rt *Runtime) HTTPClient(ic Integration) *http.Client { return rt.httpClien
 // and fans the routed output to the sinks. Returns the count of events
 // produced.
 func (rt *Runtime) IngestBatch(ctx context.Context, ic Integration, batch Batch) int64 {
-	return rt.sinkRouted(ctx, ic, rt.pipeline(Key(ic.Tenant, ic.ID)).Route(batch))
+	return rt.sinkRouted(ctx, ic, rt.pipeline(ic).Route(batch))
 }
 
 // PollIntegration executes one poll cycle for one integration, records the
@@ -278,7 +289,7 @@ func (rt *Runtime) pollOnce(ctx context.Context, ic Integration) (int64, error) 
 	// the controller every cycle. An errored run clears the cache so the next
 	// attempt starts from a clean login.
 	key := Key(ic.Tenant, ic.ID)
-	res, sess, err := RunPollSession(ctx, conn, cfg, do, rt.store.Checkpoints(), rt.pipeline(key), rt.session(key))
+	res, sess, err := RunPollSession(ctx, conn, cfg, do, rt.store.Checkpoints(), rt.pipeline(ic), rt.session(key))
 	rt.storeSession(key, sess, err)
 	if err != nil {
 		return 0, err
