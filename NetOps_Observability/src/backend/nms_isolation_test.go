@@ -82,6 +82,9 @@ func TestNMSCrossOrgIsolation(t *testing.T) {
 		t.Fatalf("platform owner create in the Global view: %d %s", st, pb)
 	}
 	platformID := idOf(t, pb)
+	if nms.PlatformOwner != TenantGlobal {
+		t.Fatalf("nms.PlatformOwner %q drifted from TenantGlobal %q — platform integrations would never match platform devices", nms.PlatformOwner, TenantGlobal)
+	}
 	if c, ok, err := s.nms.Store().Get(t.Context(), "", true, platformID); err != nil || !ok || c.Tenant != TenantGlobal {
 		t.Fatalf("platform integration owner = %q (ok=%v err=%v), want %q", c.Tenant, ok, err, TenantGlobal)
 	}

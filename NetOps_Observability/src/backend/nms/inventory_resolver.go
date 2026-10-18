@@ -1,26 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-package backend
+package nms
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net"
 	"strings"
 	"sync/atomic"
-	"time"
 
-	"netops/backend/collectors"
 	"netops/backend/models"
-	"netops/backend/nms"
 )
 
-// nms_device_resolver.go — maps a controller's key for a device (vManage
-// system-ip, Meraki serial, …) to the inventory id of the same device, so a
-// controller alarm and the device's own syslog/traps/flows are one entity
-// (nms/identity.go explains why the join is at ingest).
+// inventory_resolver.go — the DeviceResolver over Correlix inventory: maps a
+// controller's key for a device (vManage system-ip, Meraki serial, …) to the
+// inventory id of the same device, so a controller alarm and the device's own
+// syslog/traps/flows are one entity (identity.go explains why the join is at
+// ingest). The api builds an index from inventory every minute and Stores it.
 //
 // Owner-strict: only devices the integration's OWN owner owns are candidates.
 // A tenant's integration never matches another tenant's device or a platform
@@ -29,20 +26,25 @@ import (
 // attribute to different devices, resolves to nothing (the controller's key is
 // kept). A wrong merge would pin one device's outage on another.
 
-// ownerKey is the index's spelling of a device or integration owner. The
-// platform realm has two spellings — "" on devices ("untagged = platform") and
-// "global" on what a Global-view principal creates — and they are one owner.
-// Real tenant ids pass through untouched, so two tenants never collapse.
-func ownerKey(t string) string {
-	t = normTenant(t)
-	if t == TenantGlobal {
+// PlatformOwner is the owner a Global-view principal stamps on what it creates
+// (the api's TenantGlobal; nms_isolation_test.go pins the two together).
+const PlatformOwner = "global"
+
+// ownerOf is the index's spelling of a device or integration owner. Tenant ids
+// are compared lower-cased and trimmed, as everywhere else. The platform realm
+// has two spellings — "" on devices ("untagged = platform") and "global" on
+// what a Global-view principal creates — and they are one owner. Real tenant
+// ids pass through untouched, so two tenants never collapse.
+func ownerOf(t string) string {
+	t = strings.ToLower(strings.TrimSpace(t))
+	if t == PlatformOwner {
 		return ""
 	}
 	return t
 }
 
-// nmsDeviceIndex is one immutable snapshot of the candidate devices.
-type nmsDeviceIndex struct {
+// InventoryIndex is one immutable snapshot of the candidate devices.
+type InventoryIndex struct {
 	// tenant → key → device id; "" marks a key two devices share (ambiguous).
 	sysIP  map[string]map[string]string // device-reported SD-WAN system-ip
 	addr   map[string]map[string]string // management address or interface IP
@@ -64,11 +66,11 @@ func addKey(m map[string]map[string]string, tenant, key, dev string) {
 	m[tenant][key] = dev
 }
 
-// buildNMSDeviceIndex indexes devices by every key a controller may use.
+// BuildInventoryIndex indexes devices by every key a controller may use.
 // sysIPs is the SD-WAN overlay's tenant → system-ip → device map; ifAddrs is
 // device → interface IP set. Pure: tests drive it directly.
-func buildNMSDeviceIndex(devs []models.Device, sysIPs map[string]map[string]string, ifAddrs map[string]map[string]string) *nmsDeviceIndex {
-	idx := &nmsDeviceIndex{
+func BuildInventoryIndex(devs []models.Device, sysIPs map[string]map[string]string, ifAddrs map[string]map[string]string) *InventoryIndex {
+	idx := &InventoryIndex{
 		sysIP: map[string]map[string]string{}, addr: map[string]map[string]string{},
 		name: map[string]map[string]string{}, serial: map[string]map[string]string{},
 	}
@@ -77,7 +79,7 @@ func buildNMSDeviceIndex(devs []models.Device, sysIPs map[string]map[string]stri
 		if d.ID == "" {
 			continue
 		}
-		t := ownerKey(d.TenantID)
+		t := ownerOf(d.TenantID)
 		tenantOf[d.ID] = t
 		if ip := net.ParseIP(strings.TrimSpace(d.Address)); ip != nil {
 			addKey(idx.addr, t, ip.String(), d.ID)
@@ -102,8 +104,8 @@ func buildNMSDeviceIndex(devs []models.Device, sysIPs map[string]map[string]stri
 		for sys, dev := range m {
 			// The overlay already drops ambiguous system-ips; keep its tenant
 			// honest too — only a device that tenant owns.
-			if tenantOf[dev] == ownerKey(t) {
-				addKey(idx.sysIP, ownerKey(t), sys, dev)
+			if tenantOf[dev] == ownerOf(t) {
+				addKey(idx.sysIP, ownerOf(t), sys, dev)
 			}
 		}
 	}
@@ -123,8 +125,8 @@ const (
 
 // lookup applies the trust ladder for kind. Every tier that knows the key
 // votes; an ambiguous tier, or two tiers naming different devices, abstains.
-func (idx *nmsDeviceIndex) lookup(tenant string, kind nms.KeyKind, key, name string) (string, resolveOutcome) {
-	t := ownerKey(tenant)
+func (idx *InventoryIndex) lookup(tenant string, kind KeyKind, key, name string) (string, resolveOutcome) {
+	t := ownerOf(tenant)
 	key = strings.TrimSpace(key)
 	ipKey := ""
 	if p := net.ParseIP(key); p != nil {
@@ -137,13 +139,13 @@ func (idx *nmsDeviceIndex) lookup(tenant string, kind nms.KeyKind, key, name str
 	nameTier := tier{idx.name, strings.ToLower(strings.TrimSpace(name))}
 	var tiers []tier
 	switch kind {
-	case nms.KeySystemIP:
+	case KeySystemIP:
 		tiers = []tier{{idx.sysIP, ipKey}, {idx.addr, ipKey}, nameTier}
-	case nms.KeyIP:
+	case KeyIP:
 		tiers = []tier{{idx.addr, ipKey}, nameTier}
-	case nms.KeySerial:
+	case KeySerial:
 		tiers = []tier{{idx.serial, strings.ToUpper(key)}, nameTier}
-	case nms.KeyName:
+	case KeyName:
 		tiers = []tier{{idx.name, strings.ToLower(key)}}
 	default:
 		return "", resolveNoMatch
@@ -170,10 +172,10 @@ func (idx *nmsDeviceIndex) lookup(tenant string, kind nms.KeyKind, key, name str
 	return found, resolveMatched
 }
 
-// nmsDeviceResolver is the runtime's DeviceResolver: a periodically rebuilt
+// InventoryResolver is the runtime's DeviceResolver: a periodically rebuilt
 // index plus outcome counters.
-type nmsDeviceResolver struct {
-	idx      atomic.Pointer[nmsDeviceIndex]
+type InventoryResolver struct {
+	idx      atomic.Pointer[InventoryIndex]
 	outcomes [5]atomic.Int64 // indexed by resolveOutcomes()
 }
 
@@ -182,7 +184,7 @@ func resolveOutcomes() [5]resolveOutcome {
 	return [5]resolveOutcome{resolveMatched, resolveNoMatch, resolveAmbiguous, resolveConflict, resolveNoIndex}
 }
 
-func (r *nmsDeviceResolver) count(o resolveOutcome) {
+func (r *InventoryResolver) count(o resolveOutcome) {
 	for i, x := range resolveOutcomes() {
 		if x == o {
 			r.outcomes[i].Add(1)
@@ -191,8 +193,11 @@ func (r *nmsDeviceResolver) count(o resolveOutcome) {
 	}
 }
 
-// ResolveDevice implements nms.DeviceResolver.
-func (r *nmsDeviceResolver) ResolveDevice(tenant string, kind nms.KeyKind, key, name string) (string, bool) {
+// Store installs a freshly built index (nil keeps every key unresolved).
+func (r *InventoryResolver) Store(idx *InventoryIndex) { r.idx.Store(idx) }
+
+// ResolveDevice implements DeviceResolver.
+func (r *InventoryResolver) ResolveDevice(tenant string, kind KeyKind, key, name string) (string, bool) {
 	idx := r.idx.Load()
 	if idx == nil {
 		r.count(resolveNoIndex) // before the first build: keep the controller key
@@ -203,49 +208,11 @@ func (r *nmsDeviceResolver) ResolveDevice(tenant string, kind nms.KeyKind, key, 
 	return id, o == resolveMatched
 }
 
-func (r *nmsDeviceResolver) write(w io.Writer) {
+// WriteMetrics renders the outcome counters (Prometheus exposition).
+func (r *InventoryResolver) WriteMetrics(w io.Writer) {
 	fmt.Fprintf(w, "# HELP netops_nms_device_resolve_total Controller device keys resolved to an inventory device, by outcome.\n")
 	fmt.Fprintf(w, "# TYPE netops_nms_device_resolve_total counter\n")
 	for i, o := range resolveOutcomes() {
 		fmt.Fprintf(w, "netops_nms_device_resolve_total{result=%q} %d\n", o, r.outcomes[i].Load())
-	}
-}
-
-// nmsResolverRefresh is how often the index is rebuilt from inventory.
-const nmsResolverRefresh = time.Minute
-
-// rebuild snapshots inventory, the overlay and interface addresses. An unread
-// interface-address registry builds without those rows (fewer matches, never
-// wrong ones) and is logged.
-func (s *server) rebuildNMSDeviceIndex(ctx context.Context) {
-	if s.nmsResolver == nil || s.discovery == nil {
-		return
-	}
-	ifaddr, err := collectors.FetchIfAddrMap(ctx)
-	if err != nil {
-		logWarn("nms", "interface addresses unread — controller devices are matched by system-ip and name only this cycle", map[string]any{"error": err.Error()})
-		ifaddr = nil
-	}
-	var sys map[string]map[string]string
-	if snap := s.sdwanOverlay.Load(); snap != nil {
-		sys = snap.res.SystemIPs
-	}
-	s.nmsResolver.idx.Store(buildNMSDeviceIndex(s.discovery.Devices(), sys, ifaddr))
-}
-
-// runNMSDeviceResolver rebuilds the index every nmsResolverRefresh until ctx
-// ends. Blocking: started as a supervised worker beside the NMS scheduler.
-func (s *server) runNMSDeviceResolver(ctx context.Context) {
-	t := time.NewTicker(nmsResolverRefresh)
-	defer t.Stop()
-	for {
-		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		s.rebuildNMSDeviceIndex(rctx)
-		cancel()
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
 	}
 }

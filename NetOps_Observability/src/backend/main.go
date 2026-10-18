@@ -554,7 +554,7 @@ type server struct {
 	tlsPeerProber   *tlsprobe.Prober                     // SEC-019.1 served-cert expiry watcher (nil = plaintext baseline)
 	corrReconcile   corrReconcileStats                   // tracker 328: corr_current reconciler gauges/counters
 	sdwanOverlay    atomic.Pointer[sdwanOverlaySnapshot] // tracker 349: last inferred SD-WAN overlay (reconcile cycle)
-	nmsResolver     *nmsDeviceResolver                   // controller device key → inventory id (nil when NMS is off)
+	nmsResolver     *nms.InventoryResolver               // controller device key → inventory id (nil when NMS is off)
 	secMetrics      *secobs.Metrics                      // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
 	transportInv    *secobs.Inventory                    // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
 	exportPolicy    *exportPolicyStore                   // runtime-tunable log-export limits
@@ -1623,7 +1623,7 @@ func newServer() *server {
 		}
 		srv.nms.SetWirelessStore(srv.wireless) // #128: wireless-inventory sink
 		// One router = one entity: controller device keys join inventory ids.
-		srv.nmsResolver = &nmsDeviceResolver{}
+		srv.nmsResolver = &nms.InventoryResolver{}
 		srv.nms.SetDeviceResolver(srv.nmsResolver)
 	}
 	// TRACKER 256 — wireless controllers and access points are DEVICES, and one
@@ -4673,7 +4673,7 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 		s.sealMetrics.write(w)
 	}
 	if s.nmsResolver != nil {
-		s.nmsResolver.write(w)
+		s.nmsResolver.WriteMetrics(w)
 	}
 	if s.quarMetrics != nil {
 		s.quarMetrics.Write(w)
