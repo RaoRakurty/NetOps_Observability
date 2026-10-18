@@ -42,7 +42,7 @@ function device(over: Partial<Device> = {}): Device {
   return {
     id: "leaf1", name: "leaf1", address: "10.0.0.1", source: "snmp",
     last_seen: new Date().toISOString(), monitored: true, monitor_state: "monitored",
-    monitor_reason: "monitored: this device is in the inventory, has a management address and is within the licence",
+    monitor_reason: "monitored: this device is in the inventory, has a management address and is within the license",
     monitor_methods: ["snmp"],
     ...over,
   };
@@ -51,7 +51,7 @@ function device(over: Partial<Device> = {}): Device {
 function overLimitDevice(id: string): Device {
   return device({
     id, name: id, monitored: false, monitor_state: "over_limit", monitor_limit: 25, monitor_methods: undefined,
-    monitor_reason: "not monitored: licence limit of 25 devices reached — this device was found after the first 25",
+    monitor_reason: "not monitored: license limit of 25 devices reached — this device was found after the first 25",
   });
 }
 
@@ -90,14 +90,14 @@ describe("the status glyph", () => {
     const mon = await screen.findByLabelText("Monitored · Up");
     // Two methods on ONE device are still one monitored device — shown on hover.
     expect(mon.getAttribute("title")).toContain("gnmi · snmp");
-    const over = screen.getByLabelText(/^Over licence limit · /);
-    expect(over.getAttribute("title")).toContain("licence limit of 25");
+    const over = screen.getByLabelText(/^Over license limit · /);
+    expect(over.getAttribute("title")).toContain("license limit of 25");
     expect(screen.getByLabelText(/^Not monitored · /)).toBeTruthy();
   });
 
   it("labels states for the filter", () => {
     expect(monitoringLabel(device())).toBe("Monitored");
-    expect(monitoringLabel(overLimitDevice("x"))).toBe("Over licence limit");
+    expect(monitoringLabel(overLimitDevice("x"))).toBe("Over license limit");
     expect(monitoringLabel(device({ monitored: false, monitor_state: "not_polled" }))).toBe("Not monitored");
   });
 });
@@ -109,7 +109,7 @@ describe("the over-limit banner", () => {
     setup(fleet);
     render(<Devices />);
     const banner = await screen.findByRole("status");
-    expect(banner.textContent).toContain("12 devices are not monitored: licence limit of 25 reached");
+    expect(banner.textContent).toContain("12 devices are not monitored: license limit of 25 reached");
     // The 14px step of the type scale.
     expect((banner as HTMLElement).style.fontSize).toBe("14px");
     // Nothing is dropped: every row is still in the table.
@@ -117,8 +117,8 @@ describe("the over-limit banner", () => {
   });
 
   it("is singular for one device", () => {
-    expect(overLimitSentence(1, 25)).toBe("1 device is not monitored: licence limit of 25 reached");
-    expect(overLimitSentence(3)).toBe("3 devices are not monitored: licence limit reached");
+    expect(overLimitSentence(1, 25)).toBe("1 device is not monitored: license limit of 25 reached");
+    expect(overLimitSentence(3)).toBe("3 devices are not monitored: license limit reached");
   });
 
   it("does not appear when every device is monitored", async () => {
@@ -191,7 +191,7 @@ describe("the paid-tier overage banner", () => {
     expect(screen.queryByRole("note")).toBeNull();
   });
 
-  it("shows no licence banner at all when the caller cannot read the licence", async () => {
+  it("shows no license banner at all when the caller cannot read the license", async () => {
     setup([]);
     render(<Devices />);
     await screen.findByText("Inventory & Devices");

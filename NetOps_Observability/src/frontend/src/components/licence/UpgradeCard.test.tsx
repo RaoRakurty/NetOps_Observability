@@ -38,7 +38,7 @@ const CEILING_BODY = {
   limit: 25,
   tier: "community",
   lifted_by: "team",
-  message: "your Community licence covers 25 devices and 25 are in use — the Team tier raises it to 250",
+  message: "your Community license covers 25 devices and 25 are in use — the Team tier raises it to 250",
 };
 
 const FEATURE_BODY = {
@@ -46,7 +46,7 @@ const FEATURE_BODY = {
   feature: "saml",
   tier: "team",
   lifted_by: "enterprise",
-  message: "SAML single sign-on is not included in your Team licence — the Enterprise tier includes it",
+  message: "SAML single sign-on is not included in your Team license — the Enterprise tier includes it",
 };
 
 // ── 1 · the status boundary ─────────────────────────────────────────────────
@@ -71,7 +71,7 @@ describe("parseLicenceRefusal — 402 and nothing else", () => {
     expect(r).not.toHaveProperty("limit");
   });
 
-  it("a 403 is NEVER an upsell — an authorization failure is not a licence one", () => {
+  it("a 403 is NEVER an upsell — an authorization failure is not a license one", () => {
     expect(parseLicenceRefusal(403, CEILING_BODY)).toBeNull();
   });
 
@@ -85,7 +85,7 @@ describe("parseLicenceRefusal — 402 and nothing else", () => {
     expect(parseLicenceRefusal(402, JSON.stringify(CEILING_BODY))).toMatchObject({ ceiling: "devices" });
   });
 
-  it("answers null for anything that is not a licence refusal, so normal handling runs", () => {
+  it("answers null for anything that is not a license refusal, so normal handling runs", () => {
     expect(parseLicenceRefusal(402, { error: "payment_required", message: "x" })).toBeNull();
     expect(parseLicenceRefusal(402, "not json at all")).toBeNull();
     expect(parseLicenceRefusal(402, "{ broken")).toBeNull();
@@ -196,7 +196,7 @@ describe("the card", () => {
     // The reasoning ("a limit on what the licence covers, not a fault") moved to
     // ai/skills/explain/licence.limit-not-a-fault.md; the (i) is what carries it,
     // so it has to be here for the claim to still be reachable.
-    expect(screen.getByRole("button", { name: /Ask Iris about a licence limit/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about a license limit/ })).toBeTruthy();
   });
 
   it("takes the calling surface's own headline when it has one", () => {
@@ -212,7 +212,7 @@ describe("the card", () => {
 
   it("is a named landmark, so a screen reader announces what it is", () => {
     render(<UpgradeCard refusal={refusal()} />);
-    expect(screen.getByRole("note", { name: "Licence limit" })).toBeTruthy();
+    expect(screen.getByRole("note", { name: "License limit" })).toBeTruthy();
   });
 
   it("renders an unlimited limit as a word, never as -1", () => {
