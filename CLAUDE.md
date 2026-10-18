@@ -567,6 +567,40 @@ diff `high-risk`: the script may shrink the LOCAL plan, never the merge gate.
 The pre-push hook runs `--run-fast` (SBOM, notices, digest lock, toolchain pins,
 ~2 s) and BLOCKS on a stale generated artifact.
 
+### CI execution model (2026-10-17)
+- **One run per PR.** PR workflows trigger on `pull_request` (no paths filter, so
+  required checks always report) and on `push` to `main` only; superseded runs
+  cancel per ref (`refs/pull/N/merge`), so one PR never cancels another.
+- **One source of selection: `test-plan.py --ci-groups`.** Its `CI_RULES` table
+  maps paths to the skippable groups `backend` · `correlation` · `frontend` ·
+  `install-boot`; workflows hold NO path rules of their own. Each wired workflow
+  (backend, correlation, frontend, fresh-install) has a `plan` job (the
+  `.github/actions/ci-plan` action runs the **base** revision's planner, §3) and
+  its jobs carry `if: !cancelled() && needs.plan.outputs.<g> != 'false'` — a job
+  skips only on an explicit `false` from a plan that succeeded.
+- **Full gate whenever in doubt:** non-PR events (push to main, tags, the release
+  gate's `workflow_call`, dispatch), any `.github/**` change, the planner or
+  `scripts/ci/**` itself, a path no rule names, an empty or unreadable diff, a
+  base without the planner. A rule can only add groups. Stacked PRs are planned
+  over the union of the diffs against their base and `origin/main`.
+- **Never skipped:** supply-chain (gitleaks, Trivy, licence, OCI, CIS), ingest
+  contracts (the whole `tests/` suite), tracker, telemetry catalogue, metric
+  contract, install integrity + helm.
+- **install-boot is mandatory before merge** for the root backend package,
+  migrations, trust packages, `cmd/`, the Go module graph, lockfiles,
+  `deployment/**`, `src/config/**` and `scripts/**`.
+- **`ci-gate (<workflow>)`** (`if: always()`, `scripts/ci/ci_gate.py`) fails on
+  a selected job that failed, was cancelled or was skipped, on an unselected job
+  that went red, on a failed/unreadable plan, and on any unmapped job.
+- **Changing CI:** add a path rule + its `tests/test_test_plan.py` case before
+  relying on it; a new job must be mapped in its workflow's `ci-gate` (the shape
+  test fails otherwise). Never replace `!= 'false'` with a plain
+  `needs.plan.outputs.<g> == 'true'` — that skips on planner failure.
+- **Rollback:** delete the `if:` lines (or make `ci_groups` return full) and every
+  job runs again; the gates stay valid because full selects everything.
+- **Stacks:** merge each layer when green; when many PRs are green at once, land
+  them as one train branch (each merged `--no-ff`) so CI runs once, not N times.
+
 ### Red, flaky, lost (2026-10-17, after PR #22 sat red for a week)
 - **Pushing red is fine; leaving red is not.** Push a WIP branch or let CI run the
   legs this host can't (`-race`, the root package, pgintegration) — then watch it.

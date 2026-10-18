@@ -61,6 +61,29 @@ env:
   PYTEST_VERSION: '9.0.3'
 
 jobs:
+  # Which job groups this diff needs — scripts/test-plan.py --ci-groups is the ONE
+  # source of that answer (CLAUDE.md §17). Non-PR events, CI edits, unknown paths
+  # and any planner failure select everything.
+  plan:
+    name: ci plan (fresh-install-integrity)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.plan.outputs.backend }}
+      correlation: ${{ steps.plan.outputs.correlation }}
+      frontend: ${{ steps.plan.outputs.frontend }}
+      install-boot: ${{ steps.plan.outputs.install-boot }}
+      plan: ${{ steps.plan.outputs.plan }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        # Default credentials, like every other checkout here: with
+        # persist-credentials:false the checkout removes them IN-STEP, walks
+        # submodules, and the repo's URL-less gitlink fails the step (exit 128).
+        with:
+          fetch-depth: 0
+      - id: plan
+        uses: ./.github/actions/ci-plan
+
   scripts-lint:
     name: ruff (scripts/*.py, blocking)
     runs-on: ubuntu-latest
@@ -101,6 +124,10 @@ jobs:
   # explicit post-conditions — install.py exiting 0 is necessary but NOT
   # sufficient (it cannot see a service that crash-loops after phase B).
   tls-install-boot:
+    # Skipped ONLY when a successful plan wrote exactly 'false' for install-boot: a failed,
+    # empty or misspelt plan runs the job (fail-closed). ci-gate checks the outcome.
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.install-boot != 'false' }}
     name: install.py --tls=yes two-phase boot (blocking)
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -253,6 +280,10 @@ jobs:
   # NOT proven here: the .123 slow-disk timing (145 s recovery) — that needs the
   # rig or a throttled-disk leg (FMEA §5 item 4, feasibility unverified).
   tls-install-selfheal:
+    # Skipped ONLY when a successful plan wrote exactly 'false' for install-boot: a failed,
+    # empty or misspelt plan runs the job (fail-closed). ci-gate checks the outcome.
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.install-boot != 'false' }}
     name: install.py --tls=yes self-heal · postgres SIGKILL between phases · re-run · stability window (blocking)
     runs-on: ubuntu-latest
     # Two installs (the second reuses the build cache) + two stability windows
@@ -469,3 +500,19 @@ jobs:
         # -p no:randomly is not needed, but -rs is: a silent skip here would be
         # a gate that stopped gating.
         run: python3 -m pytest tests/test_helm_chart.py -v -rs
+
+  # The one verdict for this workflow: every job the plan selected succeeded, no
+  # selected job was skipped or cancelled, nothing unselected went red.
+  # always() (not !cancelled()): a cancelled run must FAIL here, not skip.
+  ci-gate:
+    name: ci-gate (fresh-install-integrity)
+    if: always()
+    needs: [plan, scripts-lint, integrity, tls-install-boot, tls-install-selfheal, helm-chart]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: ./.github/actions/ci-gate
+        with:
+          needs: ${{ toJSON(needs) }}
+          jobs: scripts-lint=always integrity=always tls-install-boot=install-boot tls-install-selfheal=install-boot helm-chart=always

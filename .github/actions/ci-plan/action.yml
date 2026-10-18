@@ -1,0 +1,58 @@
+name: ci-plan
+description: >
+  Decide which job groups this run needs (scripts/test-plan.py --ci-groups) and
+  publish them as step outputs. Fail-closed: anything but a successful plan from
+  the BASE revision's planner is the full gate. Needs a checkout with full history.
+outputs:
+  backend:
+    description: "'true' unless the plan proved backend jobs unnecessary"
+    value: ${{ steps.plan.outputs.backend }}
+  correlation:
+    description: "'true' unless the plan proved correlation jobs unnecessary"
+    value: ${{ steps.plan.outputs.correlation }}
+  frontend:
+    description: "'true' unless the plan proved frontend jobs unnecessary"
+    value: ${{ steps.plan.outputs.frontend }}
+  install-boot:
+    description: "'true' unless the plan proved the install-boot jobs unnecessary"
+    value: ${{ steps.plan.outputs.install-boot }}
+  plan:
+    description: the plan as one JSON line (read by ci-gate)
+    value: ${{ steps.plan.outputs.plan }}
+runs:
+  using: composite
+  steps:
+    - id: plan
+      shell: bash
+      env:
+        # Event data reaches the script through env, never ${{ }} inside run (§3).
+        EVENT: ${{ github.event_name }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        set -euo pipefail
+        planner="NetOps_Observability/scripts/test-plan.py"
+        full() {
+          echo "ci-plan: FULL gate — $1"
+          {
+            for g in backend correlation frontend install-boot; do echo "$g=true"; done
+            echo "mode=full"
+            echo "plan={\"schema\":1,\"mode\":\"full\",\"groups\":{\"backend\":true,\"correlation\":true,\"frontend\":true,\"install-boot\":true},\"reasons\":[\"ci-plan fallback\"]}"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+        }
+        [ "$EVENT" = "pull_request" ] || full "event '$EVENT' always runs everything"
+        [ -n "$BASE_SHA" ] || full "no pull_request base sha"
+        # The planner a PR ships is code that PR controls; the BASE revision's copy
+        # decides (zero trust, §3). Until the base has --ci-groups this is FULL.
+        base_planner="NetOps_Observability/scripts/.ci-plan-base.py"
+        if ! git show "$BASE_SHA:$planner" > "$base_planner" 2>/dev/null; then
+          full "base revision has no planner"
+        fi
+        out="$RUNNER_TEMP/ci-plan.out"
+        if ! python3 -I "$base_planner" --ci-groups --event "$EVENT" --base "$BASE_SHA" \
+             --also-base origin/main --head "$HEAD_SHA" --github-output "$out" > "$RUNNER_TEMP/ci-plan.json"; then
+          full "base planner failed or does not support --ci-groups"
+        fi
+        cat "$RUNNER_TEMP/ci-plan.json"
+        cat "$out" >> "$GITHUB_OUTPUT"

@@ -45,7 +45,34 @@ defaults:
     working-directory: NetOps_Observability/src/frontend
 
 jobs:
+  # Which job groups this diff needs — scripts/test-plan.py --ci-groups is the ONE
+  # source of that answer (CLAUDE.md §17). Non-PR events, CI edits, unknown paths
+  # and any planner failure select everything.
+  plan:
+    name: ci plan (frontend-ci)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.plan.outputs.backend }}
+      correlation: ${{ steps.plan.outputs.correlation }}
+      frontend: ${{ steps.plan.outputs.frontend }}
+      install-boot: ${{ steps.plan.outputs.install-boot }}
+      plan: ${{ steps.plan.outputs.plan }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        # Default credentials, like every other checkout here: with
+        # persist-credentials:false the checkout removes them IN-STEP, walks
+        # submodules, and the repo's URL-less gitlink fails the step (exit 128).
+        with:
+          fetch-depth: 0
+      - id: plan
+        uses: ./.github/actions/ci-plan
+
   build:
+    # Skipped ONLY when a successful plan wrote exactly 'false' for frontend: a failed,
+    # empty or misspelt plan runs the job (fail-closed). ci-gate checks the outcome.
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.frontend != 'false' }}
     name: tsc -b && vite build (blocking)
     runs-on: ubuntu-latest
     steps:
@@ -61,6 +88,10 @@ jobs:
         run: npm run build
 
   audit:
+    # Skipped ONLY when a successful plan wrote exactly 'false' for frontend: a failed,
+    # empty or misspelt plan runs the job (fail-closed). ci-gate checks the outcome.
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.frontend != 'false' }}
     name: npm audit (blocking)
     runs-on: ubuntu-latest
     # BLOCKING: verified green on a real run (2026-06-04).
@@ -75,6 +106,10 @@ jobs:
         run: npm audit --audit-level=high
 
   e2e:
+    # Skipped ONLY when a successful plan wrote exactly 'false' for frontend: a failed,
+    # empty or misspelt plan runs the job (fail-closed). ci-gate checks the outcome.
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.frontend != 'false' }}
     name: Playwright E2E (blocking)
     runs-on: ubuntu-latest
     # Browser-level proof that the operator workflows actually work (gap-report #2):
@@ -111,3 +146,19 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: audit
         run: python3 scripts/audit_metric_contract.py
+
+  # The one verdict for this workflow: every job the plan selected succeeded, no
+  # selected job was skipped or cancelled, nothing unselected went red.
+  # always() (not !cancelled()): a cancelled run must FAIL here, not skip.
+  ci-gate:
+    name: ci-gate (frontend-ci)
+    if: always()
+    needs: [plan, build, audit, e2e, metric-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: ./.github/actions/ci-gate
+        with:
+          needs: ${{ toJSON(needs) }}
+          jobs: build=frontend audit=frontend e2e=frontend metric-contract=always

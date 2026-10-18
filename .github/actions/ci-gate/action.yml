@@ -1,0 +1,23 @@
+name: ci-gate
+description: >
+  Pass only if every job the plan selected succeeded (scripts/ci/ci_gate.py).
+  Call it from a job with `if: always()` that needs the plan job and every other job.
+inputs:
+  needs:
+    description: toJSON(needs) of the calling job
+    required: true
+  jobs:
+    description: space-separated JOB_ID=GROUP pairs (GROUP is a planner group or `always`)
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        NEEDS: ${{ inputs.needs }}
+        JOBS: ${{ inputs.jobs }}
+      run: |
+        set -euo pipefail
+        args=()
+        for j in $JOBS; do args+=(--job "$j"); done
+        python3 -I NetOps_Observability/scripts/ci/ci_gate.py "${args[@]}"
