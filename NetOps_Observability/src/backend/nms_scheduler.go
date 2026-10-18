@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"netops/backend/collectors"
 	"netops/backend/nms"
 )
 
@@ -69,4 +70,45 @@ func nmsEmitMetrics(ctx context.Context, lines []string) error {
 		return fmt.Errorf("victoria import: status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// --- controller → inventory device join (nms/inventory_resolver.go) ---
+
+// nmsResolverRefresh is how often the index is rebuilt from inventory.
+const nmsResolverRefresh = time.Minute
+
+// rebuild snapshots inventory, the overlay and interface addresses. An unread
+// interface-address registry builds without those rows (fewer matches, never
+// wrong ones) and is logged.
+func (s *server) rebuildNMSDeviceIndex(ctx context.Context) {
+	if s.nmsResolver == nil || s.discovery == nil {
+		return
+	}
+	ifaddr, err := collectors.FetchIfAddrMap(ctx)
+	if err != nil {
+		logWarn("nms", "interface addresses unread — controller devices are matched by system-ip and name only this cycle", map[string]any{"error": err.Error()})
+		ifaddr = nil
+	}
+	var sys map[string]map[string]string
+	if snap := s.sdwanOverlay.Load(); snap != nil {
+		sys = snap.res.SystemIPs
+	}
+	s.nmsResolver.Store(nms.BuildInventoryIndex(s.discovery.Devices(), sys, ifaddr))
+}
+
+// runNMSDeviceResolver rebuilds the index every nmsResolverRefresh until ctx
+// ends. Blocking: started as a supervised worker beside the NMS scheduler.
+func (s *server) runNMSDeviceResolver(ctx context.Context) {
+	t := time.NewTicker(nmsResolverRefresh)
+	defer t.Stop()
+	for {
+		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		s.rebuildNMSDeviceIndex(rctx)
+		cancel()
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }

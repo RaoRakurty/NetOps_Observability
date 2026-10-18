@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-package backend
+package nms
 
 import (
 	"testing"
 
 	"netops/backend/models"
-	"netops/backend/nms"
 )
 
 // §3a: a controller integration in tenant A must never attach its data to a
@@ -15,7 +14,7 @@ import (
 // that device carries exactly the system-ip, address, serial or name A's
 // controller reports. Unmatched is safe (a second entity); a cross-tenant
 // match would put A's alarms on B's device.
-func TestNMSDeviceIdentityIsTenantStrict(t *testing.T) {
+func TestInventoryResolverIsTenantStrict(t *testing.T) {
 	devs := []models.Device{
 		{ID: "edge-b", Name: "edge-1", Address: "10.255.255.40", TenantID: "t_b", SerialNumber: "SN1"},
 		{ID: "edge-global", Name: "edge-2", Address: "10.255.255.41", TenantID: "", SerialNumber: "SN2"},
@@ -29,37 +28,37 @@ func TestNMSDeviceIdentityIsTenantStrict(t *testing.T) {
 		"":    {"10.255.255.41": "edge-global"},
 	}
 	ifs := map[string]map[string]string{"edge-b": {"10.9.9.9": "Lo0"}}
-	r := &nmsDeviceResolver{}
-	r.idx.Store(buildNMSDeviceIndex(devs, sys, ifs))
+	r := &InventoryResolver{}
+	r.Store(BuildInventoryIndex(devs, sys, ifs))
 
 	for _, c := range []struct {
-		kind      nms.KeyKind
+		kind      KeyKind
 		key, name string
 	}{
-		{nms.KeySystemIP, "10.255.255.40", ""}, // B's overlay system-ip + address
-		{nms.KeySystemIP, "10.255.255.50", ""}, // forged overlay row under A → B's device
-		{nms.KeySystemIP, "10.9.9.9", ""},      // B's interface address
-		{nms.KeySystemIP, "10.255.255.41", ""}, // the platform realm's device
-		{nms.KeySystemIP, "", "edge-1"},        // B's hostname
-		{nms.KeySystemIP, "", "EDGE-2"},        // global hostname
-		{nms.KeySerial, "SN1", ""},
-		{nms.KeySerial, "sn2", ""},
-		{nms.KeyIP, "10.255.255.40", ""},
-		{nms.KeyName, "edge-1", ""},
+		{KeySystemIP, "10.255.255.40", ""}, // B's overlay system-ip + address
+		{KeySystemIP, "10.255.255.50", ""}, // forged overlay row under A → B's device
+		{KeySystemIP, "10.9.9.9", ""},      // B's interface address
+		{KeySystemIP, "10.255.255.41", ""}, // the platform realm's device
+		{KeySystemIP, "", "edge-1"},        // B's hostname
+		{KeySystemIP, "", "EDGE-2"},        // global hostname
+		{KeySerial, "SN1", ""},
+		{KeySerial, "sn2", ""},
+		{KeyIP, "10.255.255.40", ""},
+		{KeyName, "edge-1", ""},
 	} {
 		if id, ok := r.ResolveDevice("t_a", c.kind, c.key, c.name); ok || id != "" {
 			t.Errorf("tenant A resolved %s %q/%q to %q — another scope's device", c.kind, c.key, c.name, id)
 		}
 	}
 	// A's own device still resolves — the isolation is not "resolve nothing".
-	if id, ok := r.ResolveDevice("t_a", nms.KeySystemIP, "10.255.255.42", ""); !ok || id != "edge-a" {
+	if id, ok := r.ResolveDevice("t_a", KeySystemIP, "10.255.255.42", ""); !ok || id != "edge-a" {
 		t.Fatalf("own device: %q %v", id, ok)
 	}
-	if id, ok := r.ResolveDevice("T_A ", nms.KeySerial, "sn3", ""); !ok || id != "edge-a" {
+	if id, ok := r.ResolveDevice("T_A ", KeySerial, "sn3", ""); !ok || id != "edge-a" {
 		t.Fatalf("tenant id is normalised the same way devices are: %q %v", id, ok)
 	}
 	// B sees only its own.
-	if id, ok := r.ResolveDevice("t_b", nms.KeySystemIP, "10.255.255.42", "edge-3"); ok {
+	if id, ok := r.ResolveDevice("t_b", KeySystemIP, "10.255.255.42", "edge-3"); ok {
 		t.Fatalf("tenant B resolved A's device %q", id)
 	}
 }
@@ -67,14 +66,14 @@ func TestNMSDeviceIdentityIsTenantStrict(t *testing.T) {
 // End to end through the runtime pipeline: tenant A's controller alarm for a
 // system-ip that only tenant B owns leaves the pipeline still keyed by A's
 // controller key, with no claim of a join.
-func TestNMSPipelineNeverJoinsAcrossTenants(t *testing.T) {
-	r := &nmsDeviceResolver{}
-	r.idx.Store(buildNMSDeviceIndex([]models.Device{{ID: "edge-b", Name: "edge-1", Address: "10.255.255.40", TenantID: "t_b"}}, nil, nil))
-	p := nms.NewPipeline(16)
-	p.Resolver, p.KeyKind = r, nms.KeySystemIP
-	out := p.Route(nms.Batch{
-		Events:  []nms.ControllerEvent{{TenantID: "t_a", IntegrationID: "i", EventID: "x", DeviceID: "10.255.255.40", DeviceName: "edge-1"}},
-		Metrics: []nms.ControllerMetric{{TenantID: "t_a", Name: "controller_metric_device_cpu_pct", Tags: map[string]string{"device": "10.255.255.40"}}},
+func TestPipelineNeverJoinsAcrossTenants(t *testing.T) {
+	r := &InventoryResolver{}
+	r.Store(BuildInventoryIndex([]models.Device{{ID: "edge-b", Name: "edge-1", Address: "10.255.255.40", TenantID: "t_b"}}, nil, nil))
+	p := NewPipeline(16)
+	p.Resolver, p.KeyKind = r, KeySystemIP
+	out := p.Route(Batch{
+		Events:  []ControllerEvent{{TenantID: "t_a", IntegrationID: "i", EventID: "x", DeviceID: "10.255.255.40", DeviceName: "edge-1"}},
+		Metrics: []ControllerMetric{{TenantID: "t_a", Name: "controller_metric_device_cpu_pct", Tags: map[string]string{"device": "10.255.255.40"}}},
 	})
 	if len(out.Events) != 1 || out.Events[0].DeviceID != "10.255.255.40" || out.Events[0].CorrelationHints["controller_device_id"] != "" {
 		t.Fatalf("event %+v", out.Events)
