@@ -241,7 +241,7 @@ describe("ready — the rows an operator came for", () => {
     expect(card("health")).toHaveTextContent("operationally down");
   });
 
-  it("routing names the neighbour that is not established", async () => {
+  it("routing names the neighbor that is not established", async () => {
     mocks.metricsQuery.mockResolvedValue({
       status: "success", data: { resultType: "vector", result: [promSeries({ device: "wan-r2", peer: "192.0.2.9" })] },
     });

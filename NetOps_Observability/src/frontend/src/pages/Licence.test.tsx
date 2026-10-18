@@ -83,7 +83,7 @@ function ceilings(): LicenceCeiling[] {
     ceiling({ name: "tenants", label: "tenants", limit: 1, current: 1, enforced: false }),
     ceiling({
       name: "orgs", label: "organisations", limit: 1, current: null,
-      current_reason: "the platform does not count organisations", enforced: false,
+      current_reason: "the platform does not count organizations", enforced: false,
     }),
     ceiling({ name: "retention_days", label: "retention days", limit: 7, current: null, current_reason: "retention is not counted as a usage", enforced: false }),
     ceiling({ name: "skills", label: "Iris skills", limit: 0, current: null, current_reason: "skills are not counted yet", enforced: false }),
@@ -434,7 +434,7 @@ describe("current usage", () => {
   it("a ceiling nobody counts shows the reason, never a zero", async () => {
     setup();
     render(<Licence />);
-    expect(await screen.findByText("not measured — the platform does not count organisations")).toBeTruthy();
+    expect(await screen.findByText("not measured — the platform does not count organizations")).toBeTruthy();
     expect(screen.getByText("not measured — provider spend is not counted on this platform")).toBeTruthy();
     expect(screen.queryByText("0 of 1")).toBeNull();
     expect(screen.queryByText("0 of 0")).toBeNull();

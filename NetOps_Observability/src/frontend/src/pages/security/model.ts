@@ -263,7 +263,7 @@ export function frameworkRows(cat: SecFrameworkCatalog | null): FrameworkRow[] {
       id: f.id,
       name: String(f.name ?? f.id),
       version: String(f.version ?? ""),
-      origin: f.source === "base" ? "Base catalogue" : "Projected from NIST 800-53",
+      origin: f.source === "base" ? "Base catalog" : "Projected from NIST 800-53",
       scope: String(f.scope ?? ""),
       enabled: !!f.enabled,
       defaultOn: !!f.default_on,

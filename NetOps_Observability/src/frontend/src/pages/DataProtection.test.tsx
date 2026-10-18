@@ -810,7 +810,7 @@ describe("restore wizard", () => {
     expect((within(dlg).getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("the in-place path is its own labelled step and needs the name typed exactly", async () => {
+  it("the in-place path is its own labeled step and needs the name typed exactly", async () => {
     setup();
     mockApi.restoreSnapshot.mockResolvedValue(op({ kind: "snapshot_restore", state: "running" }));
     mockApi.backupOperation.mockResolvedValue(op({ kind: "snapshot_restore", state: "running" }));
@@ -823,7 +823,7 @@ describe("restore wizard", () => {
     expect(within(dlg).getByText("An in-place restore closes and overwrites the live indices.")).toBeTruthy();
     expect((within(dlg).getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(true);
 
-    const confirm = within(dlg).getByLabelText(/Type netops-daily-20260904 to authorise the in-place restore/) as HTMLInputElement;
+    const confirm = within(dlg).getByLabelText(/Type netops-daily-20260904 to authorize the in-place restore/) as HTMLInputElement;
     fireEvent.change(confirm, { target: { value: "netops-daily-2026090" } });   // one character short
     expect((within(dlg).getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(confirm, { target: { value: "netops-daily-20260904" } });

@@ -161,12 +161,12 @@ describe("ConnectorLogos — no ITSM/chat/comms vendor trademark remains (tracke
     }
   });
 
-  it("carries NO raw colour literal at all — every glyph it renders is currentColor", () => {
+  it("carries NO raw color literal at all — every glyph it renders is currentColor", () => {
     expect(SOURCE).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
     expect(SOURCE_LC).not.toContain("<lineargradient");
   });
 
-  it("renders no vendor brand colour for ANY tile it still owns", () => {
+  it("renders no vendor brand color for ANY tile it still owns", () => {
     for (const [Logo, tag] of [[AwsLogo, "AWS"], [AzureLogo, "AZ"], [GcpLogo, "GCP"]] as const) {
       const html = render(<Logo size={40} />).container.innerHTML.toLowerCase();
       for (const hex of [...CLOUD_BRAND_HEXES, ...CONNECTOR_BRAND_HEXES]) {

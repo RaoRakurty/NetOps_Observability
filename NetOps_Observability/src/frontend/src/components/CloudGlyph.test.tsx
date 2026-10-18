@@ -70,7 +70,7 @@ describe("CloudGlyph", () => {
     expect(container.querySelector("use")).toBeNull();
   });
 
-  it("carries NO provider brand colour and NO provider-logo asset path", () => {
+  it("carries NO provider brand color and NO provider-logo asset path", () => {
     for (const p of [undefined, "aws", "azure", "gcp", "nifcloud"]) {
       const { container } = render(<CloudGlyph provider={p} />);
       const html = container.innerHTML.toLowerCase();
@@ -88,7 +88,7 @@ describe("CloudGlyph", () => {
     }
   });
 
-  it("is theme-aware: hidden from a11y unless labelled, labelled glyphs get a <title>", () => {
+  it("is theme-aware: hidden from a11y unless labeled, labeled glyphs get a <title>", () => {
     const plain = render(<CloudGlyph provider="aws" />).container.querySelector("svg")!;
     expect(plain.getAttribute("aria-hidden")).toBe("true");
     expect(plain.querySelector("title")).toBeNull();

@@ -106,7 +106,7 @@ const classification = (over = {}) => ({
   class_id: "ospf-adjacency",
   title: "OSPF adjacency will not form or is stuck",
   protocol: "ospf",
-  tac_first_look: "The neighbour state word, then the interface MTU.",
+  tac_first_look: "The neighbor state word, then the interface MTU.",
   classified: true,
   why: [{ kind: "signature", ref: "ospf-exstart-mtu", weight: 5 }],
   alternatives: [{ class_id: "ospf-flapping-link", title: "OSPF flapping link", score: 2, why: [] }],
@@ -140,7 +140,7 @@ const plan = (over: Partial<TacPlan> = {}): TacPlan => ({
   plan_version: "correlix-tac-plan-cisco-iosxe-2026-09-05",
   class_id: "ospf-adjacency",
   class_title: "OSPF adjacency will not form or is stuck",
-  tac_first_look: "The neighbour state word.",
+  tac_first_look: "The neighbor state word.",
   target: {},
   include_optional: false,
   steps: [
@@ -149,7 +149,7 @@ const plan = (over: Partial<TacPlan> = {}): TacPlan => ({
       bound: true, command: "show version", verified: "capture",
     },
     {
-      intent: "ospf.neighbors.detail", title: "OSPF neighbours, detailed", section: "deep-dive",
+      intent: "ospf.neighbors.detail", title: "OSPF neighbors, detailed", section: "deep-dive",
       bound: true, command: "show ip ospf neighbor detail", verified: "doc_claimed",
       sources: [{ title: "Troubleshoot OSPF Neighbor Problems", url: "https://example.invalid/ospf", retrieved: "2026-09-05" }],
     },
@@ -178,7 +178,7 @@ const defaultCapture = (over: Partial<TacCommandCapture> = {}): TacCommandCaptur
   dialect: "cisco-iosxe",
   commands: [
     { command: "show version", note: "Software version" },
-    { command: "show ip ospf neighbor detail", note: "OSPF neighbours, detailed" },
+    { command: "show ip ospf neighbor detail", note: "OSPF neighbors, detailed" },
   ],
   ...over,
 });
@@ -668,7 +668,7 @@ describe("what Correlix is doing", () => {
     expect(rows[0].textContent).toContain("Software version");
     expect(rows[0].textContent).toContain("show version");
     expect(rows[1].textContent).toContain("From vendor docs");
-    expect(within(table).getByRole("link", { name: /Vendor page for OSPF neighbours/ }))
+    expect(within(table).getByRole("link", { name: /Vendor page for OSPF neighbors/ }))
       .toHaveAttribute("href", "https://example.invalid/ospf");
     // The intent id stays on the row's tooltip for support, never in a cell.
     expect(rows[0].getAttribute("title")).toContain("system.version");

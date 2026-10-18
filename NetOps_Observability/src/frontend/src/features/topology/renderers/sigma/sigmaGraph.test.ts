@@ -54,7 +54,7 @@ describe("buildSigmaGraph", () => {
     expect(g1.getNodeAttribute("b", "y")).toBe(g2.getNodeAttribute("b", "y"));
   });
 
-  it("colours nodes by health", () => {
+  it("colors nodes by health", () => {
     const g = buildSigmaGraph(small);
     // ok and critical must differ
     expect(g.getNodeAttribute("a", "color")).not.toBe(g.getNodeAttribute("c", "color"));

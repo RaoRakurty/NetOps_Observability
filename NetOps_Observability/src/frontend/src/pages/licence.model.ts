@@ -655,7 +655,7 @@ export function meterUnitText(unit: string): string {
     case "monitored_devices": return "monitored devices";
     case "watched_prefixes": return "watched prefixes";
     case "tenants": return "tenants";
-    case "orgs": return "organisations";
+    case "orgs": return "organizations";
     case "days": return "days";
     case "records": return "records";
     case "samples": return "samples";

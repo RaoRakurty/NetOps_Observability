@@ -108,7 +108,7 @@ export function tierView(tier: string | undefined): TierView {
   const known = TIER_VIEWS[t];
   if (known) return known;
   if (t === "") return { label: "Not stated", tone: "var(--fg-subtle)", meaning: "This row carried no verdict." };
-  return { label: txt(tier), tone: "var(--fg-subtle)", meaning: "This verdict is not one this screen recognises." };
+  return { label: txt(tier), tone: "var(--fg-subtle)", meaning: "This verdict is not one this screen recognizes." };
 }
 
 // ── applications: ordering and share ────────────────────────────────────────
@@ -147,7 +147,7 @@ export function exporterView(row: FlowAppRow): ExporterView {
     case "unclassified":
       return { label: "unclassified", title: "The exporter sent an application id of 0: it could not classify this traffic.", named: false };
     case "unknown":
-      return { label: `id ${id}`, title: "The exporter used a classification engine this screen does not recognise.", named: false };
+      return { label: `id ${id}`, title: "The exporter used a classification engine this screen does not recognize.", named: false };
   }
   return { label: "—", title: "The exporter sent no application identity for this traffic.", named: false };
 }
@@ -258,8 +258,8 @@ export function coverageSentence(coverage: FlowAppsResp["coverage"] | undefined 
   const win = windowPhrase(num(coverage.window_seconds));
   const cat = num(coverage.catalog_prefixes);
   const catPart = cat > 0
-    ? ` ${cat.toLocaleString()} catalogued address ranges were available.`
-    : " No catalogued address ranges were available.";
+    ? ` ${cat.toLocaleString()} cataloged address ranges were available.`
+    : " No cataloged address ranges were available.";
   return `Named from the busiest ${pairs} source-to-destination pairs in ${win} — not every flow.${catPart}`;
 }
 

@@ -126,8 +126,8 @@ describe("usageBar — a fill only where a percentage is a real number", () => {
   });
 
   it("an uncounted ceiling has no bar, no number, and says why", () => {
-    const bar = usageBar(ceiling({ current: null, current_reason: "the platform does not count organisations" }));
-    expect(bar).toEqual({ kind: "unmeasured", reason: "the platform does not count organisations" });
+    const bar = usageBar(ceiling({ current: null, current_reason: "the platform does not count organizations" }));
+    expect(bar).toEqual({ kind: "unmeasured", reason: "the platform does not count organizations" });
     expect(JSON.stringify(bar)).not.toContain("percent");
   });
 

@@ -246,7 +246,7 @@ export const FRAMEWORK_CATALOG: SecFrameworkCatalog = {
     {
       id: "nist-800-53-r5", name: "NIST SP 800-53 Rev5", version: "Rev 5 (Release 5.2.0)",
       source: "base", default_on: true, enabled: true,
-      scope: "The control catalogue this platform models directly.",
+      scope: "The control catalog this platform models directly.",
     },
     {
       id: "cis-controls-v8", name: "CIS Controls v8.1", version: "8.1",

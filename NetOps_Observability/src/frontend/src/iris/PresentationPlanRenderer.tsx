@@ -111,7 +111,7 @@ function SummaryView({ result, plan }: { result: ResultSet; plan: ValidatedPlan 
     <div className="iris-summary">
       {plan.fallback === "unknown_view" && (
         <p className="iris-notice" role="status">
-          This answer is shown as a plain summary because its layout was not recognised.
+          This answer is shown as a plain summary because its layout was not recognized.
         </p>
       )}
       <p className="iris-text">

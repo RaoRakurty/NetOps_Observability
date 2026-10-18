@@ -26,10 +26,10 @@ vi.mock("../services/api", async () => {
 
 const device = { id: "spine-1", name: "spine-1", vendor: "arista" } as unknown as Device;
 
-describe("the Neighbours tab when the adjacency evidence could not be read", () => {
+describe("the Neighbors tab when the adjacency evidence could not be read", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("says the neighbours are UNKNOWN, not that there are none", async () => {
+  it("says the neighbors are UNKNOWN, not that there are none", async () => {
     vi.mocked(api.topologyLinks).mockRejectedValue(new Error("502 Bad Gateway"));
     render(<DeviceNeighbors device={device} />);
 
@@ -37,14 +37,14 @@ describe("the Neighbours tab when the adjacency evidence could not be read", () 
     expect(alert).toHaveAttribute("role", "alert");
     expect(alert.textContent).toMatch(/UNKNOWN here — not absent/);
     // The old sentence, which asserted a fact about the network, must be gone.
-    expect(screen.queryByText(/No neighbour protocol reported one here/)).toBeNull();
+    expect(screen.queryByText(/No neighbor protocol reported one here/)).toBeNull();
   });
 
   it("still reports an honestly empty adjacency set as empty", async () => {
     vi.mocked(api.topologyLinks).mockResolvedValue({ links: [], count: 0, source: "none" } as never);
     render(<DeviceNeighbors device={device} />);
 
-    await waitFor(() => expect(screen.getByText(/No neighbour protocol reported one here/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/No neighbor protocol reported one here/)).toBeInTheDocument());
     expect(screen.queryByTestId("device-neighbours-unread")).toBeNull();
   });
 });
@@ -58,7 +58,7 @@ describe("the BGP and OSPF sections", () => {
     return Promise.resolve({ data: { result: [] } });
   };
 
-  it("shows OSPF neighbours by their address label and BGP peers with their remote AS", async () => {
+  it("shows OSPF neighbors by their address label and BGP peers with their remote AS", async () => {
     vi.mocked(api.topologyLinks).mockResolvedValue({ links: [], count: 0, source: "none" } as never);
     vi.mocked(api.metricsQuery).mockImplementation(byQuery({
       device_bgp_peer_state: { data: { result: [{ metric: { peer: "192.0.2.1" }, value: [0, "6"] }] } },
@@ -112,7 +112,7 @@ describe("the OMP section", () => {
   it("stays hidden on a device that runs no OMP", async () => {
     vi.mocked(api.metricsQuery).mockImplementation(route({}) as never);
     render(<DeviceNeighbors device={device} />);
-    await screen.findByText(/No neighbour protocol reported one here/);
+    await screen.findByText(/No neighbor protocol reported one here/);
     expect(screen.queryByText("SD-WAN control sessions (OMP)")).toBeNull();
   });
 

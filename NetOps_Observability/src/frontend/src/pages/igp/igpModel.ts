@@ -60,8 +60,8 @@ export const PROTO_STATES: Record<IgpProto, string> = {
 
 /** The neighbour identity each protocol speaks. */
 export const PEER_LABEL: Record<IgpProto, string> = {
-  ospf: "Neighbour (router/interface address)",
-  isis: "Neighbour (IS-IS system-id)",
+  ospf: "Neighbor (router/interface address)",
+  isis: "Neighbor (IS-IS system-id)",
 };
 
 // ── coverage ────────────────────────────────────────────────────────────────

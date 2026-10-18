@@ -303,7 +303,7 @@ const LANE_FINDING: Record<LaneId, (n: number) => string> = {
   changed: (n) => `${n} change${n === 1 ? " was" : "s were"} recorded in this window.`,
   health: (n) => `${n} interface${n === 1 ? " is" : "s are"} down right now.`,
   path: (n) => `${n} traceroute${n === 1 ? "" : "s"} recorded for this scope.`,
-  routing: (n) => `${n} routing neighbour${n === 1 ? " is" : "s are"} not up.`,
+  routing: (n) => `${n} routing neighbor${n === 1 ? " is" : "s are"} not up.`,
   flows: (n) => `${n} busiest conversation${n === 1 ? "" : "s"} in this window.`,
   events: (n) => `${n} alert${n === 1 ? "" : "s"} or event${n === 1 ? "" : "s"} in this window.`,
 };

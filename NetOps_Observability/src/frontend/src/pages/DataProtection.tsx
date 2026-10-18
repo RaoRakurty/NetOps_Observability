@@ -952,10 +952,10 @@ function RestoreWizard({ draft, setDraft, onCancel, onFinish }: {
                 </span>
               </div>
               <label className="dp-field">
-                <span>Type the restore point name <span className="mono">{draft.snap.name}</span> to authorise it</span>
+                <span>Type the restore point name <span className="mono">{draft.snap.name}</span> to authorize it</span>
                 <input
                   className="dp-input mono"
-                  aria-label={`Type ${draft.snap.name} to authorise the in-place restore`}
+                  aria-label={`Type ${draft.snap.name} to authorize the in-place restore`}
                   value={draft.confirm}
                   onChange={(ev) => setDraft({ ...draft, confirm: ev.target.value })}
                 />

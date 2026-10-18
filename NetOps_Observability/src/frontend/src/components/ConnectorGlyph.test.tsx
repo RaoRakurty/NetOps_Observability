@@ -130,7 +130,7 @@ describe("connector registry", () => {
     }
   });
 
-  it("gives the six a DISTINCT glyph each, so identity does not lean on colour", () => {
+  it("gives the six a DISTINCT glyph each, so identity does not lean on color", () => {
     const icons = RETIRED_MARK_CONNECTORS.map((c) => connectorIcon(c.id));
     expect(new Set(icons).size).toBe(icons.length);
   });
@@ -159,7 +159,7 @@ describe("ConnectorGlyph render", () => {
     },
   );
 
-  it.each(RETIRED_MARK_CONNECTORS)("$name renders NO brand colour and NO brand geometry", ({ id }) => {
+  it.each(RETIRED_MARK_CONNECTORS)("$name renders NO brand color and NO brand geometry", ({ id }) => {
     const html = render(<ConnectorGlyph connector={id} size={40} />).container.innerHTML.toLowerCase();
     for (const hex of BRAND_HEXES) expect(html, `${id} rendered ${hex}`).not.toContain(hex);
     for (const frag of BRAND_PATH_FRAGMENTS) expect(html, `${id} rendered ${frag}`).not.toContain(frag);
@@ -173,7 +173,7 @@ describe("ConnectorGlyph render", () => {
     expect(html).toContain('fill="none"');
   });
 
-  it("is decorative by default and labelled only on request (a11y)", () => {
+  it("is decorative by default and labeled only on request (a11y)", () => {
     const plain = render(<ConnectorGlyph connector="slack" />).container.querySelector("svg")!;
     expect(plain.getAttribute("aria-hidden")).toBe("true");
     expect(plain.getAttribute("role")).toBeNull();
@@ -228,7 +228,7 @@ describe("source scan — no official connector mark anywhere in src/", () => {
       const body = readFileSync(f, "utf8").toLowerCase();
       for (const hex of BRAND_HEXES) if (body.includes(hex)) hits.push(`${rel(f)} :: ${hex}`);
     }
-    expect(hits, `vendor brand colour reintroduced:\n${hits.join("\n")}`).toEqual([]);
+    expect(hits, `vendor brand color reintroduced:\n${hits.join("\n")}`).toEqual([]);
   });
 
   it("contains no path geometry of the six retired marks", () => {
@@ -262,7 +262,7 @@ describe("source scan — no official connector mark anywhere in src/", () => {
     for (const cls of ["servicenow", "jira", "slack", "pagerduty", "teams", "twilio", "sns"]) {
       const m = chip.match(new RegExp(`\\.conn-logo\\.${cls}\\b[^}]*\\{[^}]*\\}`, "g")) ?? [];
       for (const rule of m) {
-        expect(rule, `.conn-logo.${cls} hardcodes a colour instead of a token`)
+        expect(rule, `.conn-logo.${cls} hardcodes a color instead of a token`)
           .not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
       }
     }

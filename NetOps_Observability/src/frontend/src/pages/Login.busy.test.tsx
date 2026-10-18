@@ -169,7 +169,7 @@ describe("the advertised delay", () => {
   const withRetryAfter = (v: string | null) =>
     new Response("{}", { status: 503, headers: v === null ? {} : { "Retry-After": v } });
 
-  it("is honoured, capped, and falls back when it is not a number of seconds", () => {
+  it("is honored, capped, and falls back when it is not a number of seconds", () => {
     expect(retryAfterSecondsFrom(withRetryAfter("0"))).toBe(0);
     expect(retryAfterSecondsFrom(withRetryAfter("5"))).toBe(5);
     // A server may advertise minutes; a spinner that honours it literally hangs.
