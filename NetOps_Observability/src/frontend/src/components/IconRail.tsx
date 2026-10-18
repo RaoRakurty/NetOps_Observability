@@ -30,7 +30,7 @@ const MOD_HUE: Record<string, string> = {
   security: "#EF4444", // Security — vivid red
   analytics: "#EAB308", // Analytics — vivid amber/gold
   copilot: "#8B5CF6", // Iris AI — violet (kept)
-  admin: "#94A3B8", // Admin — slate (utility)
+  admin: "#6366F1", // Admin — royal indigo (owner 2026-10-18: no longer slate grey)
   platform: "#64748B", // Platform (provider-only) — deeper slate than Admin
 };
 const hueFor = (id: string) => MOD_HUE[id] ?? "#818CF8";

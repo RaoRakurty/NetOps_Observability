@@ -164,6 +164,14 @@ const PATHS: Record<string, JSX.Element> = {
       <line x1="17" y1="16" x2="23" y2="16" />
     </>
   ),
+  // upstream: Lucide `crown` (ISC) — verbatim path data.
+  // Administration (owner 2026-10-18: "more royal and modern" than the sliders).
+  crown: (
+    <>
+      <path d="M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z" />
+      <path d="M5 21h14" />
+    </>
+  ),
   // upstream: Lucide `cpu` (ISC) — verbatim path data.
   // AI model — the Iris models & keys view (owner 2026-10-17: the sliders mark
   // read as "filters", not "which AI answers").
