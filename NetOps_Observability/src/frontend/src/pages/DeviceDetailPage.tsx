@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
+import { reportedSiteTitle } from "./device/reportedSite";
 import { deviceHealth, DEVICE_HEALTH_META } from "./device/deviceHealth";
 import { fmtDateTime } from "../lib/time";
 import { useState } from "react";
@@ -66,6 +67,7 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
             <span>·</span><span style={{ fontFamily: "var(--font-mono)" }}>{d.address}</span>
             {d.vendor && <><span>·</span><span style={{ textTransform: "capitalize" }}>{d.vendor}</span></>}
             {d.software_version && <><span>·</span><span style={{ fontFamily: "var(--font-mono)" }}>{d.software_version}</span></>}
+            {d.reported_site_id && <><span>·</span><span title={reportedSiteTitle(d.reported_site_source)}>Site ID {d.reported_site_id}</span></>}
             <span>·</span><span title="When discovery last listed this device (not whether it answers)">last discovered {seen ? fmtDateTime(seen) : "—"}</span>
           </div>
         </div>
