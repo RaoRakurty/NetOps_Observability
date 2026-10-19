@@ -63,6 +63,11 @@ func RunPollSession(ctx context.Context, conn Connector, cfg IntegrationConfig, 
 		}
 	}
 
+	// A controller inventory snapshot is COMPLETE only when an inventory
+	// stream was polled and every one of its payloads transformed cleanly this
+	// cycle. Only a complete snapshot may replace what is stored — a partial
+	// list must never prune devices the controller still has.
+	invSeen, invFailed := false, false
 	for _, stream := range cfg.Streams {
 		cp, _ := cps.Load(ctx, cfg.Tenant, cfg.IntegrationID, stream) // best-effort: a checkpoint read error restarts the stream from the top
 		in := PollInput{
@@ -83,6 +88,7 @@ func RunPollSession(ctx context.Context, conn Connector, cfg IntegrationConfig, 
 			res.Errors[stream] = perr
 			continue
 		}
+		streamHadDevices, streamFailed := false, false
 		for _, raw := range raws {
 			var batch Batch
 			var terr error
@@ -93,19 +99,30 @@ func RunPollSession(ctx context.Context, conn Connector, cfg IntegrationConfig, 
 			}
 			if terr != nil {
 				res.Errors[stream] = terr
+				streamFailed = true
 				continue
+			}
+			if batch.Devices != nil {
+				streamHadDevices = true
 			}
 			routed := pipe.Route(batch)
 			res.Routed.MetricLines = append(res.Routed.MetricLines, routed.MetricLines...)
 			res.Routed.Events = append(res.Routed.Events, routed.Events...)
 			res.Routed.States = append(res.Routed.States, routed.States...)
 			res.Routed.StateChanges = append(res.Routed.StateChanges, routed.StateChanges...)
+			if routed.Devices != nil {
+				res.Routed.Devices = append(res.Routed.Devices, routed.Devices...)
+			}
 			if routed.Wireless != nil {
 				if res.Routed.Wireless == nil {
 					res.Routed.Wireless = &wireless.Inventory{}
 				}
 				res.Routed.Wireless.Merge(routed.Wireless)
 			}
+		}
+		if streamHadDevices {
+			invSeen = true
+			invFailed = invFailed || streamFailed
 		}
 		res.Checkpoints[stream] = next
 		if err := cps.Save(ctx, cfg.Tenant, cfg.IntegrationID, stream, next); err != nil {
@@ -115,5 +132,6 @@ func RunPollSession(ctx context.Context, conn Connector, cfg IntegrationConfig, 
 				"integration": cfg.IntegrationID, "stream": stream, "error": err.Error()})
 		}
 	}
+	res.Routed.DevicesComplete = invSeen && !invFailed
 	return res, sess, nil
 }
