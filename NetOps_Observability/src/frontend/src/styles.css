@@ -7561,3 +7561,16 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
      instead of widening the page (security/overview, 2026-10-19). */
   .main table { display: block; max-width: 100%; overflow-x: auto; position: relative; }
 }
+/* License — feature chips and Details sub-heads (owner 2026-10-18). */
+.lic-feat { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.lic-feat-chip { display: inline-flex; align-items: baseline; gap: 6px; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--panel-border); }
+.lic-feat-chip.lic-good { border-color: color-mix(in srgb, var(--good) 45%, var(--panel-border)); background: color-mix(in srgb, var(--good) 8%, transparent); }
+.lic-feat-name { font-weight: 500; }
+.lic-feat-state { color: var(--muted); font-size: 13px; }
+.lic-sub { margin: var(--sp-3) 0 0; font-size: 15px; font-weight: 600; }
+.lic-sub-actions { display: flex; align-items: center; gap: var(--sp-2); }
+
+/* Device page — a controller's view of the device (pages/device/ControllerOverview.tsx). */
+.ddp-ctl { margin-top: var(--sp-3); }
+.ddp-ctl-head { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-2); }
+.ddp-ctl-head h3 { margin: 0; font-size: 15px; font-weight: 600; }

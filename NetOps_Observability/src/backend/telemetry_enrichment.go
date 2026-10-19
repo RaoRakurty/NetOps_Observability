@@ -13,6 +13,7 @@ import (
 	"sort"
 	"time"
 
+	"netops/backend/internal/devmon"
 	"netops/backend/models"
 )
 
@@ -68,6 +69,14 @@ func buildEnrichmentRows(devices []models.Device) []enrichmentRow {
 		seen[identity][tenant] = true
 	}
 	for _, d := range devices {
+		// A controller-ONLY device is left out: its events already carry the
+		// integration's tenant, and its name/address (a vManage edge reported
+		// to RETAIL and also found by the platform's SNMP scan) would make the
+		// other owner's identity ambiguous here — and an ambiguous identity is
+		// dropped, which would cost that owner its attribution.
+		if d.Source == devmon.SourceController {
+			continue
+		}
 		t := deviceTenant(d)
 		add(d.Name, t)
 		add(d.Address, t)

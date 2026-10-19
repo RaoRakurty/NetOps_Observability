@@ -238,7 +238,6 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
   const chip = stateChip(view);
   const expiry = expiryVerdict(view);
   const summary = overageSummary(view.overages);
-  const support = st.support;
   // The provider's commercial identity is not in the tenant projection at all.
   // Those facts are OMITTED rather than rendered as "not measured": the
   // platform knows the customer perfectly well, it simply is not this reader's
@@ -258,7 +257,9 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
                   and the metric can never disagree by a timezone. */}
               <Pill tone={chip.tone} title={chip.detail}>{chip.label}</Pill>
             </span>
-            <span className="lic-hero-reason">{h.reason}</span>
+            {/* The reason only speaks when something needs attention; a valid
+                license's "issued to … and in force" repeats the facts below. */}
+            {h.tone !== "good" && <span className="lic-hero-reason">{h.reason}</span>}
           </div>
         </div>
 
@@ -271,19 +272,12 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
               />
             </Fact>
           )}
-          <Fact label="Tier in force">
-            <Pill tone={h.tone === "bad" ? "bad" : h.tone === "warn" ? "warn" : "good"}>{tierLabel(st.tier)}</Pill>
-            {st.licensed_tier && st.licensed_tier !== st.tier && (
+          {/* The headline already names the tier; the fact speaks only when
+              the tier in force is NOT the one the license names. */}
+          {st.licensed_tier && st.licensed_tier !== st.tier && (
+            <Fact label="Tier in force">
+              <Pill tone={h.tone === "bad" ? "bad" : h.tone === "warn" ? "warn" : "good"}>{tierLabel(st.tier)}</Pill>
               <span className="lic-line lic-block">the license names {tierLabel(st.licensed_tier)}</span>
-            )}
-          </Fact>
-          {provider && (
-            <Fact label="License">
-              <Value
-                m={measured(st.licence_id || null, "no license is installed")}
-                render={(v) => <span className="mono">{v}</span>}
-              />
-              {st.issued_at && <span className="lic-line lic-block">issued {st.issued_at}</span>}
             </Fact>
           )}
           <Fact label="Expiry">
@@ -291,48 +285,12 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
               <span className="lic-line">{expiry.text}</span>
             ) : (
               <>
-                <Pill tone={expiry.tone}>{expiry.text}</Pill>
-                <span className="lic-line lic-block mono">{st.expires_at}</span>
+                {/* The chip above already counts the days while all is well. */}
+                {expiry.tone !== "good" && <Pill tone={expiry.tone}>{expiry.text}</Pill>}
+                <span className="lic-line lic-block mono">{(st.expires_at || "").slice(0, 10)}</span>
               </>
             )}
           </Fact>
-          <Fact label="Grace period">
-            <Value
-              m={measured(st.grace_days ?? null, "no license is installed, so no grace period applies")}
-              render={(v) => (
-                <>
-                  <span>{v} days, set by the issuer</span>
-                  {st.grace_ends_at && (
-                    <span className="lic-line lic-block">
-                      {view.grace_days_left === null || view.grace_days_left === undefined
-                        ? `covered until ${st.grace_ends_at}`
-                        : `${view.grace_days_left} ${view.grace_days_left === 1 ? "day" : "days"} left — until ${st.grace_ends_at}`}
-                    </span>
-                  )}
-                </>
-              )}
-            />
-          </Fact>
-          {provider ? (
-            <Fact label="Support">
-              <Value
-                m={measured(support?.level || null, "the license records no support level")}
-                render={(v) => (
-                  <>
-                    <span>{v}</span>
-                    {support?.contact && <span className="lic-line lic-block">{support.contact}</span>}
-                  </>
-                )}
-              />
-            </Fact>
-          ) : (
-            <Fact label="Managed by">
-              {/* The pill only. The sentence explaining it belongs where the
-                  reader asks the question — beside the licence and where the
-                  install controls would be — not a third time in a fact grid. */}
-              <Pill tone="muted">{view.managed_by}</Pill>
-            </Fact>
-          )}
         </dl>
       </div>
 
@@ -391,6 +349,66 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
   );
 }
 
+
+/** The license's paperwork — ID, issue date, grace terms, support. Kept for the
+ *  person who needs it (renewal, audit), behind Details; the headline carries
+ *  only what a customer reads at a glance. */
+function DetailFacts({ view }: { view: LicenceView }) {
+  const st = view.state;
+  const support = st.support;
+  const provider = view.scope === "platform";
+  return (
+    <dl className="lic-facts">
+          {provider && (
+            <Fact label="License">
+              <Value
+                m={measured(st.licence_id || null, "no license is installed")}
+                render={(v) => <span className="mono">{v}</span>}
+              />
+              {st.issued_at && <span className="lic-line lic-block">issued {st.issued_at}</span>}
+            </Fact>
+          )}
+          <Fact label="Grace period">
+            <Value
+              m={measured(st.grace_days ?? null, "no license is installed, so no grace period applies")}
+              render={(v) => (
+                <>
+                  <span>{v} days, set by the issuer</span>
+                  {st.grace_ends_at && (
+                    <span className="lic-line lic-block">
+                      {view.grace_days_left === null || view.grace_days_left === undefined
+                        ? `covered until ${st.grace_ends_at}`
+                        : `${view.grace_days_left} ${view.grace_days_left === 1 ? "day" : "days"} left — until ${st.grace_ends_at}`}
+                    </span>
+                  )}
+                </>
+              )}
+            />
+          </Fact>
+          {provider ? (
+            <Fact label="Support">
+              <Value
+                m={measured(support?.level || null, "the license records no support level")}
+                render={(v) => (
+                  <>
+                    <span>{v}</span>
+                    {support?.contact && <span className="lic-line lic-block">{support.contact}</span>}
+                  </>
+                )}
+              />
+            </Fact>
+          ) : (
+            <Fact label="Managed by">
+              {/* The pill only. The sentence explaining it belongs where the
+                  reader asks the question — beside the licence and where the
+                  install controls would be — not a third time in a fact grid. */}
+              <Pill tone="muted">{view.managed_by}</Pill>
+            </Fact>
+          )}
+    </dl>
+  );
+}
+
 // ── 2 · current usage ───────────────────────────────────────────────────────
 
 function UsageRow({ row }: { row: LicenceCeiling }) {
@@ -410,7 +428,7 @@ function UsageRow({ row }: { row: LicenceCeiling }) {
         {/* SOFT is stated on the row, not only in the overage banner: an
             operator reading a bar at 96 % needs to know, right there, whether
             the next device is admitted or refused. */}
-        {row.enforced && row.soft && <Pill tone="muted" title={ceilingConsequence(row)}>soft — recorded, not blocked</Pill>}
+        {row.enforced && row.soft && bar.kind !== "unlimited" && <Pill tone="muted" title={ceilingConsequence(row)}>soft — recorded, not blocked</Pill>}
         {bandText && <Pill tone={tone}>{bandText}</Pill>}
         <span className="lic-sp" />
         <span className="lic-usage-num">
@@ -458,12 +476,11 @@ function UsageRow({ row }: { row: LicenceCeiling }) {
 function Usage({ rows, note }: { rows: readonly LicenceCeiling[]; note?: string }) {
   const ordered = useMemo(() => sortedCeilings(rows), [rows]);
   const enforced = ordered.filter((r) => r.enforced);
-  const carried = ordered.filter((r) => !r.enforced);
   if (ordered.length === 0) {
     return (
       <HonestState
         tone="warn"
-        headline="The platform listed no ceilings."
+        headline="The platform listed no limits."
         remedy="Nothing here states what this license covers. Read the page again."
       />
     );
@@ -481,10 +498,22 @@ function Usage({ rows, note }: { rows: readonly LicenceCeiling[]; note?: string 
         </div>
       )}
       {enforced.length > 0 && <ul className="lic-usage">{enforced.map((r) => <UsageRow key={r.name} row={r} />)}</ul>}
+    </>
+  );
+}
+
+
+/** Limits the license carries but nothing gates on today — one table, one
+ *  reason, inside Details: a customer acts on enforced limits only. */
+function CarriedLimits({ rows }: { rows: readonly LicenceCeiling[] }) {
+  const carried = useMemo(() => sortedCeilings(rows).filter((r) => !r.enforced), [rows]);
+  if (carried.length === 0) return null;
+  return (
+    <>
       {/* Limits the file carries but nothing gates on today: ONE compact table
           under ONE reason (owner 2026-10-18: less verbose), never a bar — a bar
           nothing enforces would read as a live gate. */}
-      {carried.length > 0 && (
+      {(
         <div className="lic-carried" data-testid="lic-carried">
           <p className="lic-carried-head">
             <Pill tone="muted">{NOT_ENFORCED_NOTE}</Pill>
@@ -771,30 +800,27 @@ function Features({ view }: { view: LicenceView }) {
       />
     );
   }
+  // Included first, then what an upgrade would add — chips, not a table
+  // (owner 2026-10-18: less to read). The tier that includes a missing
+  // capability is in the chip itself.
+  const ordered = [...view.features].sort((x, y) => Number(featureStatus(y).tone === "good") - Number(featureStatus(x).tone === "good"));
   return (
-    <div className="lic-tblwrap">
-      <table className="lic-tbl" aria-label="Commercial capabilities">
-        <thead>
-          <tr>
-            <th scope="col">Capability</th>
-            <th scope="col">This license</th>
-            <th scope="col">Lowest tier that includes it</th>
-          </tr>
-        </thead>
-        <tbody>
-          {view.features.map((f) => {
-            const s = featureStatus(f);
-            return (
-              <tr key={f.name}>
-                <th scope="row">{f.label}</th>
-                <td><Pill tone={s.tone}>{s.text}</Pill></td>
-                <td>{tierLabel(f.included_in) || <span className="lic-absent">not stated</span>}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <ul className="lic-feat" aria-label="Commercial capabilities">
+      {ordered.map((f) => {
+        const s = featureStatus(f);
+        const tier = tierLabel(f.included_in);
+        return (
+          <li key={f.name} className={`lic-feat-chip lic-${s.tone}`} title={tier ? `Included from ${tier}` : undefined}>
+            <span className="lic-feat-name">{f.label}</span>
+            {/* An included chip carries a tick, not the word "Included" seven
+                times over; screen readers still hear it. */}
+            {s.tone === "good"
+              ? <span className="lic-feat-state"><Icon name="check" size={13} /><span className="sr-only">{s.text}</span></span>
+              : <span className="lic-feat-state">{s.text}</span>}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -1126,7 +1152,6 @@ export default function Licence() {
   // What the SERVER answered, not what the SPA believes about the caller. Until
   // the read lands we know nothing, and the page claims nothing.
   const provider = view?.scope === "platform";
-  const tenantScope = view?.scope === "tenant";
 
   const body = (what: string, render: (v: LicenceView) => ReactNode): ReactNode => {
     if (panel.error) return <PanelError text={panel.error} onRetry={reload} />;
@@ -1134,60 +1159,83 @@ export default function Licence() {
     return render(view);
   };
 
+  // WHAT A CUSTOMER COMES HERE FOR (owner 2026-10-18), in that order: am I
+  // licensed and until when; am I near a limit; what is included; what can I
+  // do. Everything else — the paperwork, limits nothing enforces, the daily
+  // usage history, the trust anchors — is one fold away under Details.
   return (
     <div className="lic-page">
       <Section
         id="licence"
         title="License"
-        note={
-          tenantScope
-            ? "In force for your tenant"
-            : "One license, every tenant"
-        }
         actions={
-          <button type="button" className="btn sm" onClick={reload}>
-            <Icon name="refresh" size={13} /> Re-read
-          </button>
+          <>
+            {provider && view && (
+              <a className="btn sm accent" href="#lic-install" onClick={() => document.getElementById("lic-install")?.querySelector("details")?.setAttribute("open", "")}>
+                {view.state.source === "file" ? "Replace license" : "Install a license"}
+              </a>
+            )}
+            <button type="button" className="btn sm" onClick={reload}>
+              <Icon name="refresh" size={13} /> Re-read
+            </button>
+          </>
         }
       >
         {body("the license", (v) => <LicenceHeadline view={v} />)}
         {!authLoading && view && !provider && (
-          <HonestState
-            tone="muted"
-            headline="You are seeing this license read-only."
-            remedy={
-              platformAdmin
-                ? `${view.managed_by_detail} You are scoped into a tenant; return to the Global view to install or replace it.`
-                : view.managed_by_detail
-            }
-          />
+          <p className="lic-line" role="note">
+            Read-only — {platformAdmin ? "return to the Global view to install or replace it." : `managed by ${view.managed_by}.`}
+          </p>
         )}
       </Section>
 
-      <Section
-        id="usage"
-        title="Current usage"
-        topic="licence.ceilings"
-        note={tenantScope ? "Your tenant against every ceiling" : "This platform against every ceiling"}
-      >
-        {body("the ceilings", (v) => <Usage rows={v.ceilings} note={v.scope_note} />)}
+      <Section id="usage" title="Usage" topic="licence.ceilings">
+        {body("the limits", (v) => <Usage rows={v.ceilings} note={v.scope_note} />)}
       </Section>
 
-      {/* RECORDED USAGE — what was actually consumed, and the signed document
-          that proves it. Placed after "Current usage" because it answers the
-          next question an operator has, and before "Features" because it is
-          still about consumption rather than capability. */}
-      <Section
-        id="metering"
-        title="Usage"
-        collapsible
-        note={`Recorded usage, ${periodLabel(span)} (UTC)`}
-        actions={
+      <Section id="features" title="Features" topic="licence.features">
+        {body("the capabilities", (v) => <Features view={v} />)}
+      </Section>
+
+      {provider && (
+        <div id="lic-install">
+          <Section id="install" title={view?.state.source === "file" ? "Replace the license" : "Install a license"} collapsible>
+            {body("the license", (v) => (
+              <InstallPanel view={v} canEdit={v.scope === "platform"} onInstalled={put} />
+            ))}
+          </Section>
+        </div>
+      )}
+
+      <Section id="details" title="Details" collapsible>
+        {/* ONE read state for everything here that comes from the license
+            read, so a failed read says so once, not five times. */}
+        {body("the license details", (v) => (
+          <>
+            <DetailFacts view={v} />
+            <CarriedLimits rows={v.ceilings} />
+            {v.scope === "tenant" ? (
+              <>
+                <h3 className="lic-sub">Expiry</h3>
+                <ExpiryNote text={v.expiry_semantics} />
+                <h3 className="lic-sub">Changing this license</h3>
+                <InstallPanel view={v} canEdit={false} onInstalled={put} />
+              </>
+            ) : (
+              <>
+                <h3 className="lic-sub">Verify this license</h3>
+                <Verification view={v} />
+              </>
+            )}
+          </>
+        ))}
+        <h3 className="lic-sub">Usage history</h3>
+        <div className="lic-sub-actions">
+          <span className="lic-line">{periodLabel(span)} (UTC)</span>
           <button type="button" className="btn sm" onClick={reloadUsage}>
             <Icon name="refresh" size={13} /> Re-read
           </button>
-        }
-      >
+        </div>
         {usage.error
           ? <PanelError text={usage.error} onRetry={reloadUsage} />
           : !usage.data
@@ -1203,42 +1251,6 @@ export default function Licence() {
               />
             )}
       </Section>
-
-      <Section
-        id="features"
-        title="Features"
-        collapsible
-        topic="licence.features"
-        note="Capabilities, and the tier each needs"
-      >
-        {body("the capabilities", (v) => <Features view={v} />)}
-      </Section>
-
-      <Section
-        id="install"
-        title={provider ? "Install a license" : "Changing this license"}
-        collapsible
-        note="One license file per installation"
-      >
-        {body("the license", (v) => (
-          <InstallPanel view={v} canEdit={v.scope === "platform"} onInstalled={put} />
-        ))}
-      </Section>
-
-      {/* VERIFICATION is provider-only, because the payload is: the trusted
-          public keys and the offline recipe are not in the tenant projection.
-          The standing expiry note is NOT provider-only, so the tenant scope
-          still gets it — on its own, rather than as a heading over an empty
-          section. */}
-      {tenantScope ? (
-        <Section id="expiry" title="Expiry" note="What expiry can and cannot do" collapsible>
-          {body("the expiry policy", (v) => <ExpiryNote text={v.expiry_semantics} />)}
-        </Section>
-      ) : (
-        <Section id="verification" title="Verification" note="Check it without trusting this page" collapsible>
-          {body("the trusted keys", (v) => <Verification view={v} />)}
-        </Section>
-      )}
     </div>
   );
 }
