@@ -134,6 +134,10 @@ type Batch struct {
 	// fourth, vendor-neutral output class for connectors that observe wireless
 	// entities. Nil for every non-wireless connector.
 	Wireless *wireless.Inventory
+	// Devices is the controller's device list (inventory.go) — the fifth class.
+	// A non-nil slice (even empty) means "this payload WAS an inventory
+	// snapshot"; nil means the payload carried no inventory at all.
+	Devices []ControllerDevice
 }
 
 // DedupeKey computes a stable dedupe key from the identity-bearing parts of an
