@@ -99,22 +99,22 @@ const (
 // so the API, the UI and the logs cannot drift into different explanations.
 const (
 	ReasonNoAddress  = "not monitored: this device has no management address, so nothing can collect from it until it has one"
-	ReasonMonitored  = "monitored: this device is in the inventory, has a management address and is within the licence"
-	ReasonWireless   = "monitored: this device is polled through its wireless controller integration and is within the licence"
-	ReasonController = "monitored: this device is known through its integration's API and is within the licence"
+	ReasonMonitored  = "monitored: this device is in the inventory, has a management address and is within the license"
+	ReasonWireless   = "monitored: this device is polled through its wireless controller integration and is within the license"
+	ReasonController = "monitored: this device is known through its integration's API and is within the license"
 	// ReasonWirelessNotPolled is the api's read-time projection of a wireless
 	// entity whose integration is disabled.
 	ReasonWirelessNotPolled = "not monitored: no enabled wireless integration is polling this device — " +
-		"it stays in the inventory, nothing has been deleted or hidden, and it does not use the licence; " +
+		"it stays in the inventory, nothing has been deleted or hidden, and it does not use the license; " +
 		"enable its controller integration to start collecting"
 )
 
 // OverLimitReason is the sentence for a device past the licence ceiling. The
 // limit is the installation's licence, not another tenant's data.
 func OverLimitReason(limit int) string {
-	return fmt.Sprintf("not monitored: licence limit of %d %s reached — this device was found after the first %d, "+
+	return fmt.Sprintf("not monitored: license limit of %d %s reached — this device was found after the first %d, "+
 		"so it stays in the inventory but nothing is collected from it; it starts being monitored automatically "+
-		"when a monitored device is deleted or the licence grows", limit, devicesWord(limit), limit)
+		"when a monitored device is deleted or the license grows", limit, devicesWord(limit), limit)
 }
 
 func devicesWord(n int) string {

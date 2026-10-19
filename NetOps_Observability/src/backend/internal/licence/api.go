@@ -245,7 +245,7 @@ const (
 
 // ManagedByProviderDetail is the sentence beside it. It answers the question a
 // tenant admin actually has when the install controls are not there.
-const ManagedByProviderDetail = "There is one licence file per installation and it covers every tenant on it, " +
+const ManagedByProviderDetail = "There is one license file per installation and it covers every tenant on it, " +
 	"so installing or replacing it is the provider's action. Everything shown here is what that single file puts in force for you."
 
 // TenantScopeNote states, on the page, exactly what the numbers mean in the
@@ -307,7 +307,7 @@ type View struct {
 // wrong conclusion — that Correlix picked them and is doing something to them.
 // It picked nothing and is doing nothing.
 const OverCeilingNoteText = "These are the monitored devices beyond the licensed allowance. " +
-	"Correlix does not choose which devices a licence covers: they are listed most-recently-enabled first purely so the size and shape of the overage are visible. " +
+	"Correlix does not choose which devices a license covers: they are listed most-recently-enabled first purely so the size and shape of the overage are visible. " +
 	"Every one of them is still being collected from — nothing here has been disabled, hidden or deleted."
 
 // ExpirySemanticsNote is the expiry, grace and overage policy, stated in the
@@ -316,13 +316,13 @@ const OverCeilingNoteText = "These are the monitored devices beyond the licensed
 //
 // It says what happens AND what does not, because the second half is the part
 // an operator reading this page at 2am actually needs.
-const ExpirySemanticsNote = "A paid licence carries a grace period after its expiry date — 30 days as issued, 7 for an evaluation licence — " +
+const ExpirySemanticsNote = "A paid license carries a grace period after its expiry date — 30 days as issued, 7 for an evaluation license — " +
 	"and during grace nothing changes at all. " +
 	"After grace, creating and configuring paid capability is refused: no new monitored devices beyond the Community allowance, " +
-	"no new tenants or organisations, no new configuration of licensed features. " +
+	"no new tenants or organizations, no new configuration of licensed features. " +
 	"Everything already here stays visible and exportable, everything over a ceiling is listed, and nothing is disabled or deleted. " +
 	"On Team and Enterprise the monitored-device allowance is a SOFT limit: going over it is allowed and recorded for true-up, never blocked mid-incident. " +
-	"No licence state can affect tenant isolation, data separation, permissions or sign-in — those are not licensed capabilities."
+	"No license state can affect tenant isolation, data separation, permissions or sign-in — those are not licensed capabilities."
 
 // VerifyHintText is the offline recipe. It names the command and the key so a
 // customer can verify a file we issued without contacting us.
@@ -331,7 +331,7 @@ const ExpirySemanticsNote = "A paid licence carries a grace period after its exp
 // which stops parsing at the first non-flag argument, so `verify <file>
 // --pubkey <key>` is refused as two positional arguments. A hint the operator
 // copies must be a line that actually runs.
-const VerifyHintText = "Verify a licence offline with: correlix-licence verify <file> — " +
+const VerifyHintText = "Verify a license offline with: correlix-licence verify <file> — " +
 	"or with the published public key: correlix-licence verify --pubkey <key> <file>"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -347,7 +347,7 @@ const VerifyHintText = "Verify a licence offline with: correlix-licence verify <
 func (a *API) Handle(w http.ResponseWriter, r *http.Request) {
 	if a == nil || a.d.Store == nil || a.d.Gate == nil {
 		// A surface that cannot gate must not serve. 503, not a silent open door.
-		http.Error(w, "licence service unavailable", http.StatusServiceUnavailable)
+		http.Error(w, "license service unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if r.Method == http.MethodGet {
@@ -405,14 +405,14 @@ func (a *API) install(w http.ResponseWriter, r *http.Request, caller Principal) 
 		a.audit(r, caller, http.StatusBadRequest, "deny", map[string]any{
 			"action": "licence_install", "reason": "unreadable or oversize body",
 		})
-		a.writeError(w, http.StatusBadRequest, fmt.Errorf("licence document could not be read (limit %d bytes): %w", MaxDocumentBytes, err))
+		a.writeError(w, http.StatusBadRequest, fmt.Errorf("license document could not be read (limit %d bytes): %w", MaxDocumentBytes, err))
 		return
 	}
 	if len(strings.TrimSpace(string(body))) == 0 {
 		a.audit(r, caller, http.StatusBadRequest, "deny", map[string]any{
 			"action": "licence_install", "reason": "empty body",
 		})
-		a.writeError(w, http.StatusBadRequest, errors.New("no licence document in the request"))
+		a.writeError(w, http.StatusBadRequest, errors.New("no license document in the request"))
 		return
 	}
 
@@ -546,7 +546,7 @@ func tenantState(st State) State {
 	// verbatim reason names a file path, a key id or a signature failure, which
 	// is provider detail. State the fact, not the forensics.
 	if st.LoadError != "" {
-		out.LoadError = "the licence installed on this platform was refused, so the Community ceilings are the ones in force — ask your provider"
+		out.LoadError = "the license installed on this platform was refused, so the Community ceilings are the ones in force — ask your provider"
 	}
 	return out
 }

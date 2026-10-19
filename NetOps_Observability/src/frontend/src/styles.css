@@ -7499,6 +7499,24 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
 .rca-dests li { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--panel-border); border-radius: 8px; }
 .rca-dest-name { font-weight: 500; }
 
+/* License page (owner 2026-10-18: modern, less verbose; NOC-admin standard:
+   ≥ 14 px). Sentence-case section heads, 14 px body and notes, folding
+   secondary sections, and one compact table for limits nothing enforces. */
+.lic-page { font-size: 14px; gap: var(--sp-3); }
+.lic-sec { padding: var(--sp-3); }
+.lic-sec-hd h2 { font-size: 16px; letter-spacing: 0; text-transform: none; }
+.lic-sec-note { font-size: 14px; }
+.lic-sec-fold > details > summary { cursor: pointer; list-style: none; border-bottom: 0; padding-bottom: 0; margin-bottom: 0; }
+.lic-sec-fold > details > summary::-webkit-details-marker { display: none; }
+.lic-sec-fold > details > summary::before { content: "▸"; color: var(--adm-hue, var(--accent)); width: 1em; }
+.lic-sec-fold > details[open] > summary { border-bottom: 1px solid var(--panel-border); padding-bottom: 6px; margin-bottom: 8px; }
+.lic-sec-fold > details[open] > summary::before { content: "▾"; }
+.lic-carried { border: 1px dashed var(--panel-border); border-radius: 8px; padding: var(--sp-2) var(--sp-3); }
+.lic-carried-head { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; margin: 0 0 var(--sp-2); }
+.lic-carried-table { width: 100%; border-collapse: collapse; }
+.lic-carried-table th { text-align: left; font-weight: 500; color: var(--muted); padding: 4px 8px 4px 0; border-bottom: 1px solid var(--panel-border); }
+.lic-carried-table td { padding: 6px 8px 6px 0; border-bottom: 1px solid color-mix(in srgb, var(--panel-border) 60%, transparent); }
+
 /* Device page — a controller's view of the device (pages/device/ControllerOverview.tsx). */
 .ddp-ctl { margin-top: var(--sp-3); }
 .ddp-ctl-head { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-2); }

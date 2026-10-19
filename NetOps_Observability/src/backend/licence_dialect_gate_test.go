@@ -73,7 +73,7 @@ func TestLicenceDialectGate(t *testing.T) {
 		if fs[0].ID != hardening.RuleDialectNotLicensed {
 			t.Fatalf("finding id = %q, want %q", fs[0].ID, hardening.RuleDialectNotLicensed)
 		}
-		if !strings.Contains(fs[0].Detail, "not included in this licence") {
+		if !strings.Contains(fs[0].Detail, "not included in this license") {
 			t.Fatalf("the finding must say WHY nothing was assessed: %q", fs[0].Detail)
 		}
 		if !strings.Contains(fs[0].Detail, "still discovered") {

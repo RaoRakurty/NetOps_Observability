@@ -452,24 +452,10 @@ export const NAV: NavSection[] = [
     icon: "crown",
     footer: true,
     children: [
-      // Incident Response plumbing — configuration, not operations (the old
-      // Incident Response rail section dissolved into here).
-      { id: "integrations", label: "Integrations", group: "Incident Response", render: () => <IntegrationsAdmin /> },
-      { id: "notifications", label: "Notifications", group: "Incident Response", render: () => <NotificationsAdmin /> },
-      // RCA Tickets (owner 2026-10-18): "Ticketing & Automation" and "Ticket
-      // Delivery" are ONE numbered, prerequisite-gated flow — connect
-      // destinations → ticket rules → vendor case routing (optional) →
-      // deliveries. Both former pages were tenant-scoped (requirePerm(
-      // administration) policies; requirePerm(infrastructure, read) outbox
-      // and audit + principalTenant), so the merged leaf is tenant-level.
-      // The old #/admin/ticket-delivery is an alias to its Deliveries step.
-      {
-        id: "ticketing", label: "RCA Tickets", group: "Incident Response", render: () => <RcaTickets />,
-        subItems: [
-          { id: "deliveries", label: "Deliveries" },
-          { id: "cases", label: "Vendor case routing" },
-        ],
-      },
+      // Group order is SETUP order (owner IA 2026-10-18, Administration
+      // phase 4): get data in, act on it, shape it, teach Iris, then people,
+      // audit, and the workspace itself. Each group has one colour
+      // (admin/adminTheme.ts). Every leaf is grouped.
       // Data sources — ONE leaf (owner 2026-10-18): everything that makes
       // devices and their data appear, in setup order. The five leaves it
       // replaced (datasources, snmp, sensors, telemetry-coverage, the old
@@ -491,6 +477,24 @@ export const NAV: NavSection[] = [
           { id: "telemetry", label: "Telemetry Coverage" },
         ],
       },
+      // Incident response plumbing — configuration, not operations (the old
+      // Incident Response rail section dissolved into here).
+      { id: "integrations", label: "Integrations", group: "Incident response", render: () => <IntegrationsAdmin /> },
+      { id: "notifications", label: "Notifications", group: "Incident response", render: () => <NotificationsAdmin /> },
+      // RCA Tickets (owner 2026-10-18): "Ticketing & Automation" and "Ticket
+      // Delivery" are ONE numbered, prerequisite-gated flow — connect
+      // destinations → ticket rules → vendor case routing (optional) →
+      // deliveries. Both former pages were tenant-scoped (requirePerm(
+      // administration) policies; requirePerm(infrastructure, read) outbox
+      // and audit + principalTenant), so the merged leaf is tenant-level.
+      // The old #/admin/ticket-delivery is an alias to its Deliveries step.
+      {
+        id: "ticketing", label: "RCA Tickets", group: "Incident response", render: () => <RcaTickets />,
+        subItems: [
+          { id: "deliveries", label: "Deliveries" },
+          { id: "cases", label: "Vendor case routing" },
+        ],
+      },
       // Data handling — how a record is reshaped on the way in, and who was
       // allowed to look at what it hid. Owner IA (2026-09-05): Processors and
       // Sensitive Data Access are ONE group; both are tenant-scoped on the
@@ -505,16 +509,25 @@ export const NAV: NavSection[] = [
       // own tenant (a Global view is told to choose a workspace), and approval
       // needs a second administrator — tenant-level, not platform-stamped.
       { id: "network-context", label: "Network Context", group: "Iris", render: () => <NetworkContext /> },
-      { id: "identity", label: "Identity & Access", render: () => <IdentityAccess /> },
-      // Access & Audit — who can reach what, who is signed in right now, what
-      // was done, and how the transport carrying it is secured. Every route
-      // behind this group is requireAdmin + tenant-filtered on the server, so
-      // the whole group is tenant-level and none of it is platform-stamped:
+      { id: "identity", label: "Identity & Access", group: "People & access", render: () => <IdentityAccess /> },
+      {
+        id: "api", label: "API Access", group: "People & access", render: () => <ApiAccessAdmin />,
+        subItems: [
+          { id: "keys", label: "Generate API key" },
+          { id: "token", label: "Token Policy" },
+          { id: "rest", label: "REST API Reference" },
+        ],
+      },
+      // Sessions — who is signed in right now. session_handlers.go
+      // handleSessions, requireAdmin + sameTenant() filter (a tenant admin sees
+      // only its own tenant's sessions; 2026-09-05 IA: not platform-stamped,
+      // because the data already is scoped). People & access since 2026-10-18.
+      { id: "sessions", label: "Sessions", group: "People & access", render: () => <SessionsAdmin /> },
+      // Audit & security — who can reach what, what was done, and how the
+      // transport carrying it is secured. Every route behind this group is
+      // requireAdmin + tenant-filtered on the server, so the whole group is
+      // tenant-level and none of it is platform-stamped:
       //   access    → access_explain.go handleAccessExplain, requireAdmin
-      //   sessions  → session_handlers.go handleSessions, requireAdmin +
-      //               sameTenant() filter (a tenant admin sees only its own
-      //               tenant's sessions — 2026-09-05 IA: the leaf stops being
-      //               platform-stamped, because the data already is scoped)
       //   audit     → audit.go handleAudit, requireAdmin
       //   transport → main.go /api/security/transport-posture, requireAdmin
       //               (only the EXPORT is requirePlatformAdmin; the page hides
@@ -522,19 +535,10 @@ export const NAV: NavSection[] = [
       // Authentication providers moved OUT of this group to Platform → Security
       // in the same change: OIDC/LDAP/TACACS/token-policy are all
       // requirePlatformAdmin, i.e. provider-level plumbing.
-      { id: "access", label: "Access Explorer", group: "Access & Audit", render: () => <AccessExplorer /> },
-      { id: "sessions", label: "Sessions", group: "Access & Audit", render: () => <SessionsAdmin /> },
-      { id: "audit", label: "Audit Log", group: "Access & Audit", render: () => <AuditLog /> },
-      { id: "transport", label: "Transport Security", group: "Access & Audit", render: () => <TransportSecurity /> },
-      {
-        id: "api", label: "API Access", render: () => <ApiAccessAdmin />,
-        subItems: [
-          { id: "keys", label: "Generate API key" },
-          { id: "token", label: "Token Policy" },
-          { id: "rest", label: "REST API Reference" },
-        ],
-      },
-      { id: "settings", label: "Settings", render: () => <Settings /> },
+      { id: "access", label: "Access Explorer", group: "Audit & security", render: () => <AccessExplorer /> },
+      { id: "audit", label: "Audit Log", group: "Audit & security", render: () => <AuditLog /> },
+      { id: "transport", label: "Transport Security", group: "Audit & security", render: () => <TransportSecurity /> },
+      { id: "settings", label: "Settings", group: "Workspace", render: () => <Settings /> },
       // Licence — what this installation is licensed to run and where this
       // tenant stands against every ceiling. TENANT-LEVEL since the 2026-09-05
       // read split: GET /api/system/licence is licenceReadGate → requireAdmin
@@ -545,7 +549,7 @@ export const NAV: NavSection[] = [
       // installing or replacing it remains the provider's action — the page
       // branches on the PAYLOAD's scope, not on who is looking, and hides the
       // install controls for a tenant admin instead of 403ing them.
-      { id: "licence", label: "License", render: () => <Licence /> },
+      { id: "licence", label: "License", group: "Workspace", render: () => <Licence /> },
     ],
   },
   // ── Platform — the PROVIDER's own section (owner IA, 2026-09-05) ────────────

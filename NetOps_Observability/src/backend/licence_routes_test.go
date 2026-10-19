@@ -331,7 +331,7 @@ func TestLicenceSourceMonitoringWithheld(t *testing.T) {
 		t.Fatalf("15 devices are over the ceiling and must be LISTED, got %d", len(withheld))
 	}
 	for _, w := range withheld {
-		if !strings.Contains(w.Reason, "licence") {
+		if !strings.Contains(w.Reason, "license") {
 			t.Fatalf("the withheld reason for %s must name the licence, got %q", w.DeviceID, w.Reason)
 		}
 		if !strings.Contains(w.Reason, "stays in the inventory") {

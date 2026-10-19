@@ -328,7 +328,7 @@ func TestUnknownCeilingRefusesRatherThanPermits(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown ceiling name must refuse, not silently permit")
 	}
-	if !strings.Contains(err.Error(), "unknown licence ceiling") {
+	if !strings.Contains(err.Error(), "unknown license ceiling") {
 		t.Fatalf("and must say so: %v", err)
 	}
 }

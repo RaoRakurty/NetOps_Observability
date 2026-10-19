@@ -114,8 +114,8 @@ func TestEveryVerdictCarriesAReason(t *testing.T) {
 			t.Fatalf("%s has a silent verdict: %+v", id, v)
 		}
 	}
-	if !strings.Contains(devmon.OverLimitReason(25), "licence limit of 25 devices") ||
-		!strings.Contains(devmon.OverLimitReason(1), "licence limit of 1 device ") {
+	if !strings.Contains(devmon.OverLimitReason(25), "license limit of 25 devices") ||
+		!strings.Contains(devmon.OverLimitReason(1), "license limit of 1 device ") {
 		t.Fatal("the over-limit sentence names the limit in plain words")
 	}
 }

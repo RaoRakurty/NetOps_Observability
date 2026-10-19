@@ -10,7 +10,7 @@ sidebar_position: 6
 
 Everything the console does goes through the REST API, so anything you can select, you can script. An API key is a long-lived, tenant-bound credential for machine clients such as CI pipelines, exporters and integrations. It carries no password and no MFA prompt.
 
-The **Administration → API Access** page has three tiles: **Generate API key**
+The **Administration → People & access → API Access** page has three tiles: **Generate API key**
 to mint and revoke keys, **Token Policy** for session token lifetimes, and
 **REST API Reference** for every endpoint, generated live from the running API.
 The strip above them counts your **Keys**, **Active**, **Revoked** and
@@ -19,7 +19,7 @@ The strip above them counts your **Keys**, **Active**, **Revoked** and
 ## Before you begin
 
 - **Permission:** `administration:admin`. API keys are per-tenant data. A tenant administrator sees and mints only their own tenant's keys, and a key created by a non-cross-tenant caller is stamped with that caller's tenant regardless of what the request body says.
-- **Token policy is different.** **Administration → API Access → Token Policy** governs interactive session tokens platform-wide and calls `requirePlatformAdmin`. See [Configure authentication](/administration/authentication).
+- **Token policy is different.** **Administration → People & access → API Access → Token Policy** governs interactive session tokens platform-wide and calls `requirePlatformAdmin`. See [Configure authentication](/administration/authentication).
 - Decide the scopes the client needs. A key can never exceed them.
 - Have a secret manager ready. The secret is displayed once and is never retrievable afterwards.
 
@@ -27,7 +27,7 @@ The strip above them counts your **Keys**, **Active**, **Revoked** and
 
 ### Generate an API key {#generate-an-api-key}
 
-1. Open **Administration → API Access** and select **Generate API key**.
+1. Open **Administration → People & access → API Access** and select **Generate API key**.
 2. Enter a **Label**. It is required, and it is how you will recognise the key later, for example `ci-pipeline`.
 3. Optionally set **Rate limit / min**. Blank inherits the server default of 600 requests per minute, and `0` means unlimited.
 4. Select the scopes:
@@ -155,7 +155,7 @@ If the account has MFA enrolled, the login returns `{"mfa_required": true, "mfa_
 
 ## The generated REST reference
 
-**Administration → API Access → REST API Reference** renders the specification produced by the running API, so it always matches the deployment you are looking at. The raw document imports into Postman or any OpenAPI client:
+**Administration → People & access → API Access → REST API Reference** renders the specification produced by the running API, so it always matches the deployment you are looking at. The raw document imports into Postman or any OpenAPI client:
 
 ```bash
 curl -s http://localhost:8000/api/openapi.json
