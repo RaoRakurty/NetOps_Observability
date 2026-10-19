@@ -481,3 +481,97 @@ func equalStrings(got, want []string) bool {
 	}
 	return true
 }
+
+// ── the SNMP rung's identity (ENTITY-MIB, published by the poller) ──────────
+
+func snmpWithChassis(serial, model string, err error) *SNMPSource {
+	s := NewSNMPSource(func(context.Context, string) (string, string) {
+		return "cisco", "Cisco IOS XE Software, Version 17.09.04a"
+	})
+	s.Chassis = func(_ context.Context, id string) (string, string, error) {
+		if id != "dev-1" {
+			return "", "", nil
+		}
+		return serial, model, err
+	}
+	return s
+}
+
+// TestSNMPRungReadsTheChassisSerialSoSSHIsNotDialled — a device whose own
+// ENTITY-MIB reports its chassis serial is identified by the SNMP rung, and the
+// SSH rung (a login at the device) is not dialled for it.
+func TestSNMPRungReadsTheChassisSerialSoSSHIsNotDialled(t *testing.T) {
+	ssh := &identityRung{method: MethodSSH, version: "17.09.04a", identity: deviceident.Identity{Serial: "SSH-SN"}}
+	l, err := NewLadder(nil, snmpWithChassis("FOC2130Z0RD", "C9300-48P", nil), ssh)
+	if err != nil {
+		t.Fatalf("NewLadder: %v", err)
+	}
+	r, ok := l.Probe(context.Background(), Target{DeviceID: "dev-1", Address: "10.0.0.1", Vendor: "cisco"}, Current{})
+	if !ok {
+		t.Fatal("the ladder learned nothing")
+	}
+	if r.Identity.Serial != "FOC2130Z0RD" || r.Identity.Model != "C9300-48P" || r.IdentityMethod != MethodSNMP {
+		t.Errorf("identity = %+v via %q, want the SNMP rung's ENTITY-MIB chassis", r.Identity, r.IdentityMethod)
+	}
+	if r.Identity.SerialCommand != EntityMIBCommand {
+		t.Errorf("serial provenance = %q, want %q", r.Identity.SerialCommand, EntityMIBCommand)
+	}
+	if ssh.calls != 0 {
+		t.Errorf("the SSH rung was dialled %d times for a serial SNMP already had", ssh.calls)
+	}
+}
+
+// TestSNMPRungWithNoChassisLeavesTheSerialToSSH — no chassis row (or an unread
+// map) is not a serial; the CLI rung is still asked.
+func TestSNMPRungWithNoChassisLeavesTheSerialToSSH(t *testing.T) {
+	for name, snmp := range map[string]*SNMPSource{
+		"none reported": snmpWithChassis("", "", nil),
+		"map unread":    snmpWithChassis("", "", errors.New("kv down")),
+	} {
+		ssh := &identityRung{method: MethodSSH, version: "17.09.04a", identity: deviceident.Identity{Serial: "SSH-SN"}}
+		l, err := NewLadder(nil, snmp, ssh)
+		if err != nil {
+			t.Fatalf("NewLadder: %v", err)
+		}
+		r, ok := l.Probe(context.Background(), Target{DeviceID: "dev-1", Address: "10.0.0.1", Vendor: "cisco"}, Current{})
+		if !ok || r.Identity.Serial != "SSH-SN" || r.IdentityMethod != MethodSSH {
+			t.Errorf("%s: identity = %+v via %q, want the SSH rung's", name, r.Identity, r.IdentityMethod)
+		}
+		if r.Version == "" || r.Method != MethodSNMP {
+			t.Errorf("%s: the version read must survive a failed identity read: %q via %q", name, r.Version, r.Method)
+		}
+	}
+}
+
+// TestSNMPRungNeverDisplacesAPersonsSerial — an operator's or an importer's
+// serial is never overwritten by the device-read one; the SNMP rung's own
+// earlier reading is refreshed (an RMA'd chassis).
+func TestSNMPRungNeverDisplacesAPersonsSerial(t *testing.T) {
+	l, err := NewLadder(nil, snmpWithChassis("NEW-CHASSIS", "", nil))
+	if err != nil {
+		t.Fatalf("NewLadder: %v", err)
+	}
+	tg := Target{DeviceID: "dev-1", Address: "10.0.0.1", Vendor: "cisco"}
+	if r, _ := l.Probe(context.Background(), tg, Current{Version: "17.9", Source: MethodSNMP, Serial: "ASSET-1", SerialSource: MethodManual}); r.Identity.Serial != "" {
+		t.Errorf("a manual serial was displaced by %q", r.Identity.Serial)
+	}
+	if r, _ := l.Probe(context.Background(), tg, Current{Version: "17.9", Source: MethodSNMP, Serial: "OLD-CHASSIS", SerialSource: MethodSNMP}); r.Identity.Serial != "NEW-CHASSIS" {
+		t.Errorf("the SNMP rung must refresh its own serial after a chassis swap, got %q", r.Identity.Serial)
+	}
+}
+
+// TestSNMPRungIsKeyedByDeviceIDNotAddress — the published map is keyed by the
+// inventory id (tenant-unique), so two tenants' devices at the same address
+// each get their OWN serial (§3a).
+func TestSNMPRungIsKeyedByDeviceIDNotAddress(t *testing.T) {
+	s := NewSNMPSource(func(context.Context, string) (string, string) { return "", "" })
+	s.Chassis = func(_ context.Context, id string) (string, string, error) {
+		return map[string]string{"tenantA-dev": "SN-A", "tenantB-dev": "SN-B"}[id], "", nil
+	}
+	for id, want := range map[string]string{"tenantA-dev": "SN-A", "tenantB-dev": "SN-B"} {
+		_, got, err := s.ProbeWithIdentity(context.Background(), Target{DeviceID: id, Address: "10.0.0.1"})
+		if err != nil || got.Serial != want {
+			t.Errorf("%s: serial %q err %v, want %q", id, got.Serial, err, want)
+		}
+	}
+}
