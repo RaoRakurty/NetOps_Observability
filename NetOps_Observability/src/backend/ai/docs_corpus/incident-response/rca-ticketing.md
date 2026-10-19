@@ -35,7 +35,7 @@ The lane is opt-in and dormant by default.
 
 ### Step 2: set the policy
 
-1. Go to **Administration → Incident Response → Ticketing & Automation**.
+1. Go to **Administration → Incident response → RCA Tickets**.
 2. Set the destination in **external system**.
 3. Set **minimum verdict** to `suspected` or `confirmed`.
 4. Set the guardrails. The shipped default policy is deliberately narrow:

@@ -174,7 +174,7 @@ func TestTheFirstNByFirstSeenAreMonitoredAndTheRestAreOverTheLimit(t *testing.T)
 		if d.Monitored || d.MonitorState != devmon.StateOverLimit || d.MonitorLimit != 3 {
 			t.Fatalf("%s must be over the limit of 3: %+v", id, d)
 		}
-		if !strings.Contains(d.MonitorReason, "licence limit of 3") || len(d.MonitorMethods) != 0 {
+		if !strings.Contains(d.MonitorReason, "license limit of 3") || len(d.MonitorMethods) != 0 {
 			t.Fatalf("%s reason/methods: %q %v", id, d.MonitorReason, d.MonitorMethods)
 		}
 	}

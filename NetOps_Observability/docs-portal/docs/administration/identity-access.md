@@ -15,7 +15,7 @@ Access in Correlix is a binding: a person is given a role at a scope. Users are 
 - **Permission:** `administration:admin`. Creating a user inside your own tenant is per-tenant data. Changing a role definition, and any grant at platform scope, is platform-global and needs the platform administrator.
 - Know the scope the person belongs to: the Provider realm, an organization, or one tenant. See [Create tenants and organizations](/administration/tenants-orgs).
 - Decide whether the account signs in locally or through an identity provider. A federated account is created on first sign-in instead. See [Configure authentication](/administration/authentication).
-- Open **Administration → Identity & Access**. A tenant administrator sees one scope. A platform administrator sees the Organizations tree with the Provider realm as its root row.
+- Open **Administration → People & access → Identity & Access**. A tenant administrator sees one scope. A platform administrator sees the Organizations tree with the Provider realm as its root row.
 
 ## Steps
 
@@ -45,7 +45,7 @@ A grant reaches wider than the scope the account lives in. Grants are written fr
 
 To grant access from an organization:
 
-1. Open **Administration → Identity & Access → Organizations → (org) → Access**.
+1. Open **Administration → People & access → Identity & Access → Organizations → (org) → Access**.
 2. Select the **Person**. Grants attach to accounts that already exist.
 3. Select the **Role**.
 4. Select the **Effect**, either **Allow** or **Deny**. Deny wins over allow, so a targeted deny carves an exception out of a wider grant.

@@ -418,7 +418,7 @@ var productNav = []ProductNavEntry{
 	{"Topology path for an incident", "#/infrastructure/topology-canvas", "infrastructure:read", "Open Topo and focus the incident's path.", "topology"},
 	{"Command Center / NOC queue", "#/dashboards/home", "correlations:read", "The action queue with RCA verdict, owner and ticket state.", "command_center"},
 	{"Generate a report", "#/monitoring/reports", "reports:read", "Use Guided Report Setup to pick an outcome, schedule and recipients.", "reports"},
-	{"Configure ServiceNow", "#/incident/integrations", "administration:read", "Set up the ServiceNow connector under Incident Response → Integrations.", "integrations"},
+	{"Configure ServiceNow", "#/incident/integrations", "administration:read", "Set up the ServiceNow connector under Administration → Incident response → Integrations.", "integrations"},
 	{"App identification confidence", "#/monitoring/appobs", "applications:read", "Service View shows app-identity matches and confidence.", "app_identification"},
 	{"Flow analytics", "#/flows", "flows:read", "Top talkers, conversations, ports, protocols and geo.", "flow_analytics"},
 	{"Logs", "#/explore/logs", "logs:read", "Log Search over syslog, traps, app logs and flows.", "telemetry"},

@@ -111,8 +111,8 @@ func TestDigitalExperienceAlertCrossOrgIsolation(t *testing.T) {
 		t.Fatalf("B /api/alerts: %d %s", st, body)
 	}
 	leak(t, "GET /api/alerts", body)
-	if !strings.Contains(string(body), "platform disk") {
-		t.Errorf("GET /api/alerts: an UNOWNED stack alert must stay visible to every tenant\n%s", body)
+	if strings.Contains(string(body), "platform disk") {
+		t.Errorf("PLATFORM LEAK on GET /api/alerts: a tenant was served the platform's own stack alert\n%s", body)
 	}
 	if !strings.Contains(string(body), "dev-b cpu high") {
 		t.Errorf("GET /api/alerts: tenant B lost its own device alert\n%s", body)
@@ -129,8 +129,8 @@ func TestDigitalExperienceAlertCrossOrgIsolation(t *testing.T) {
 		t.Fatalf("B episodes: %d %s", st, body)
 	}
 	leak(t, "GET /api/alerts/episodes", body)
-	if !strings.Contains(string(body), "platform disk") {
-		t.Errorf("GET /api/alerts/episodes: an UNOWNED stack episode must stay visible\n%s", body)
+	if strings.Contains(string(body), "platform disk") {
+		t.Errorf("PLATFORM LEAK on GET /api/alerts/episodes: a tenant was served the platform's own stack episode\n%s", body)
 	}
 	st, body = do(t, srv, "GET", "/api/alerts/episodes", a.token, nil)
 	if st != 200 {
@@ -172,18 +172,18 @@ func TestDigitalExperienceAlertCrossOrgIsolation(t *testing.T) {
 	if !s.alertVisibleTo(expA, claimsA) {
 		t.Errorf("the WebSocket alert feed dropped the owning tenant's own experience alert")
 	}
-	if !s.alertVisibleTo(stack, claimsB) {
-		t.Errorf("the WebSocket alert feed dropped an UNOWNED stack alert")
+	if s.alertVisibleTo(stack, claimsB) {
+		t.Errorf("PLATFORM LEAK on the WebSocket alert feed: a tenant would be broadcast the platform's stack alert")
 	}
 
 	// ── 6. the dashboard's Critical Threats tile (dashboard.go) ──────────────
-	// B's own critical alerts are its device alert plus the unowned stack one.
-	// A's experience alert must not be counted into B's tile.
-	if got := criticalThreatTile(t, s.currentMetricTiles(claimsB)); got != "2" {
-		t.Errorf("dashboard Critical Threats for org-B is %q, want \"2\" (its device alert + the unowned stack alert) — org-A's experience alert is being counted", got)
+	// B's own critical alerts are its device alert only: A's experience alert
+	// and the platform's stack alert are not B's to count.
+	if got := criticalThreatTile(t, s.currentMetricTiles(claimsB)); got != "1" {
+		t.Errorf("dashboard Critical Threats for org-B is %q, want \"1\" (its device alert) — another scope's alert is being counted", got)
 	}
-	if got := criticalThreatTile(t, s.currentMetricTiles(claimsA)); got != "2" {
-		t.Errorf("dashboard Critical Threats for org-A is %q, want \"2\" (its own experience alert + the unowned stack alert)", got)
+	if got := criticalThreatTile(t, s.currentMetricTiles(claimsA)); got != "1" {
+		t.Errorf("dashboard Critical Threats for org-A is %q, want \"1\" (its own experience alert)", got)
 	}
 
 	// ── 7. the scheduled-report renderer (report_scheduler.go) ───────────────
@@ -237,8 +237,8 @@ func TestDigitalExperienceEpisodeStaysWithItsTenant(t *testing.T) {
 			t.Errorf("TENANT LEAK: tenant-b listed tenant-a's device-less experience episode: %+v", ep)
 		}
 	}
-	if len(eps) != 1 || !strings.Contains(eps[0].Summary, "platform disk") {
-		t.Errorf("tenant-b must still see the UNOWNED stack episode and only that: %+v", eps)
+	if len(eps) != 0 {
+		t.Errorf("tenant-b owns nothing here, so it must list nothing — neither tenant-a's episode nor the platform's: %+v", eps)
 	}
 	own, _, _ := store.List(alerts.EpisodeScopeFor("tenant-a", false), alerts.EpisodeQuery{})
 	found := false

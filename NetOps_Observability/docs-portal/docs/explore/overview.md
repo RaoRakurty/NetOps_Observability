@@ -54,7 +54,7 @@ Press `Cmd+K` or `Ctrl+K` anywhere for the keyboard-first version of the same se
 
 ## Time is rendered per tenant
 
-Timestamps render in the mode a tenant administrator chose under **Administration → Settings**: your local zone or UTC. Storage is always UTC and only the rendering changes. Chart axes follow the same setting. See [System settings](/administration/system-settings).
+Timestamps render in the mode a tenant administrator chose under **Administration → Workspace → Settings**: your local zone or UTC. Storage is always UTC and only the rendering changes. Chart axes follow the same setting. See [System settings](/administration/system-settings).
 
 ## Prerequisites
 

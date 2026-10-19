@@ -135,7 +135,7 @@ func (a *DiscoveryAggregator) persistSeenLocked() {
 	}
 	sort.Slice(recs, func(i, j int) bool { return recs[i].DeviceID < recs[j].DeviceID })
 	if err := a.firstSeenStore.SaveFirstSeen(recs); err != nil {
-		log.Printf("discovery: first-seen ledger not persisted (%d entries): %v — the licence order is correct until a restart; the next inventory change retries", len(recs), err)
+		log.Printf("discovery: first-seen ledger not persisted (%d entries): %v — the license order is correct until a restart; the next inventory change retries", len(recs), err)
 	}
 }
 
@@ -236,9 +236,9 @@ func (a *DiscoveryAggregator) logOverLimitLocked() {
 		return
 	}
 	if over > 0 {
-		log.Printf("discovery: %d device(s) are over the licence limit of %d and are not collected from — they stay in the inventory and are listed on the Devices and Licence pages", over, a.limitLocked())
+		log.Printf("discovery: %d device(s) are over the license limit of %d and are not collected from — they stay in the inventory and are listed on the Devices and License pages", over, a.limitLocked())
 	} else {
-		log.Printf("discovery: no devices are over the licence limit; every addressable device is collected from")
+		log.Printf("discovery: no devices are over the license limit; every addressable device is collected from")
 	}
 	a.lastOverLimit = over
 }

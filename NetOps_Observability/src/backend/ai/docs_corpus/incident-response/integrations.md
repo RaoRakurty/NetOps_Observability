@@ -32,7 +32,7 @@ inside the platform, and the external ticket is a projection of it.
 
 ### Step 1: open the connector list
 
-1. Go to **Administration → Incident Response → Integrations**.
+1. Go to **Administration → Incident response → Integrations**.
 2. Pick a tile. Each tile shows **Not connected**, **Connected** or
    **Disabled**, and its control reads **Set up** or **Manage**.
 

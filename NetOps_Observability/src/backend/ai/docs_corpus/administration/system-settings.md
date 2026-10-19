@@ -8,7 +8,7 @@ sidebar_position: 9
 
 # Configure system settings
 
-**Administration → Settings** holds the platform's general configuration: where people land after signing in, how timestamps render, the resolvers and time sources the platform itself uses, and the guardrails on log exports. Integration credentials are not here. They live with their connectors under **Administration → Incident Response**.
+**Administration → Workspace → Settings** holds the platform's general configuration: where people land after signing in, how timestamps render, the resolvers and time sources the platform itself uses, and the guardrails on log exports. Integration credentials are not here. They live with their connectors under **Administration → Incident response**.
 
 ## Before you begin
 
@@ -33,7 +33,7 @@ sidebar_position: 9
 
 ### Set the default landing page
 
-1. Open **Administration → Settings**.
+1. Open **Administration → Workspace → Settings**.
 2. In **Default landing page**, pick from the list. **Built-in (Dashboards · Home)** is the shipped choice.
 3. The choice saves as you make it and applies at the next sign-in. A tenant can override it in Identity & Access.
 

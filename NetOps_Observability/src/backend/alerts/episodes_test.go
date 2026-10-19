@@ -313,18 +313,21 @@ func TestEpisodeListDeviceLessRowsAreGlobalOnlyWhenUnowned(t *testing.T) {
 	if other["ExperienceLatencyOverBudget"] {
 		t.Error("a device-less episode OWNED by acme was listed for globex")
 	}
-	if !other["StackDiskLow"] {
-		t.Error("a device-less episode nobody owns must stay visible to every tenant")
+	if other["StackDiskLow"] {
+		t.Error("PLATFORM LEAK: the platform's own device-less episode was listed for a tenant")
 	}
 	if other["HighCPU"] {
 		t.Error("acme's device episode was listed for globex")
 	}
 
 	own := signals("acme", false)
-	for _, want := range []string{"ExperienceLatencyOverBudget", "StackDiskLow", "HighCPU"} {
+	for _, want := range []string{"ExperienceLatencyOverBudget", "HighCPU"} {
 		if !own[want] {
 			t.Errorf("the owning tenant lost sight of its own %q episode", want)
 		}
+	}
+	if own["StackDiskLow"] {
+		t.Error("PLATFORM LEAK: the platform's disk episode was listed for acme")
 	}
 
 	all := signals("", true)

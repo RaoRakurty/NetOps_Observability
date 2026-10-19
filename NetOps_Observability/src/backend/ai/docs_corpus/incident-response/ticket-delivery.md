@@ -33,7 +33,7 @@ something was filed and the provider refused it.
 
 ### Step 1 — Read the outbox
 
-1. Go to **Administration → Incident Response → Ticket Delivery**.
+1. Go to **Administration → Incident response → RCA Tickets → Deliveries**.
 2. Read the three counts at the top: queued, failed, delivered.
 3. Select **Failed** to narrow the table to rows that stopped.
 

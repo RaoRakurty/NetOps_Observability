@@ -806,8 +806,10 @@ func (s *server) resolveSiteForScope(v tenantVisibility, slug string) (Site, sit
 // fails the build on a new direct caller.
 //
 // The rule itself: the platform owner sees all. A scoped principal sees alerts
-// on its own devices. A DEVICE-LESS alert is platform-global ONLY when nothing
-// owns it: the Digital Experience rules aggregate by target rather than device
+// on its own devices, and device-less alerts its own tenant owns. A DEVICE-LESS
+// alert that nothing else owns belongs to the PLATFORM and is platform-only
+// (it was once shown to every tenant — P1 2026-10-18). The Digital Experience
+// rules aggregate by target rather than device
 // and carry no `device` label, but they DO have an owner, and their summary
 // carries that tenant's target hostname, site and app. Treating "no device" as
 // "everybody's" handed one tenant's target names to every other tenant.
@@ -820,7 +822,14 @@ func alertVisibleTenantOnly(a models.Alert, tenant string, cross bool, ids map[s
 	}
 	owner := alertOwnerLabel(a)
 	if owner == "" {
-		return true // genuinely platform-owned: a stack-level alert
+		// Platform-owned — a stack-level alert (collectors, the correlation
+		// engine, the ingest pipeline, the host). It is the PROVIDER's
+		// operational state and names its internals (container addresses,
+		// mount points); "nothing owns it" means the platform owns it, so it is
+		// platform-only, never every tenant's. Default-closed (§3a): only the
+		// cross-tenant path above sees it. (P1, 2026-10-18: a tenant was shown
+		// the platform's collector and pipeline alerts.)
+		return false
 	}
 	return sameTenantStrict(owner, tenant)
 }
