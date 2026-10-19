@@ -85,6 +85,11 @@ func BuildInventoryIndex(devs []models.Device, sysIPs map[string]map[string]stri
 			addKey(idx.addr, t, ip.String(), d.ID)
 		}
 		addKey(idx.name, t, strings.ToLower(strings.TrimSpace(d.Name)), d.ID)
+		// A device a controller reported carries the controller's own key as
+		// a label (system_ip), so a merged SNMP twin still resolves by it.
+		if ip := net.ParseIP(strings.TrimSpace(d.Labels["system_ip"])); ip != nil {
+			addKey(idx.sysIP, t, ip.String(), d.ID)
+		}
 		for _, s := range []string{d.SerialNumber, d.Labels["serial"]} {
 			addKey(idx.serial, t, strings.ToUpper(strings.TrimSpace(s)), d.ID)
 		}

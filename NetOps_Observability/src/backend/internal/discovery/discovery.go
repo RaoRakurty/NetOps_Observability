@@ -571,7 +571,23 @@ func identityTokens(d models.Device) []string {
 // labels, last-seen, credential ref for polling).
 func mergeDevices(x, y models.Device) models.Device {
 	base, other := x, y
-	if y.Source == "netbox" && x.Source != "netbox" {
+	// Precedence for the BASE record (its id, source and protocol survive):
+	// NetBox (source of truth) > any directly-collected source > a
+	// controller-sourced record. A controller record must never become the
+	// base of a twin Correlix also collects from: its id would replace the one
+	// syslog, traps and flows key on, and its source would take the device off
+	// the collectors. The base was otherwise the alphabetically-first id —
+	// "ctl-…" sorts before "vedge-…". (Source "api" = controller-sourced.)
+	rank := func(d models.Device) int {
+		switch d.Source {
+		case "netbox":
+			return 0
+		case "api": // controller-sourced (nms.ControllerSourceName)
+			return 2
+		}
+		return 1
+	}
+	if rank(y) < rank(x) {
 		base, other = y, x
 	}
 	if base.Vendor == "" {
