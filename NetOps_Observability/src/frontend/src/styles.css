@@ -7516,3 +7516,8 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
 .lic-carried-table { width: 100%; border-collapse: collapse; }
 .lic-carried-table th { text-align: left; font-weight: 500; color: var(--muted); padding: 4px 8px 4px 0; border-bottom: 1px solid var(--panel-border); }
 .lic-carried-table td { padding: 6px 8px 6px 0; border-bottom: 1px solid color-mix(in srgb, var(--panel-border) 60%, transparent); }
+
+/* Device page — a controller's view of the device (pages/device/ControllerOverview.tsx). */
+.ddp-ctl { margin-top: var(--sp-3); }
+.ddp-ctl-head { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-2); }
+.ddp-ctl-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
