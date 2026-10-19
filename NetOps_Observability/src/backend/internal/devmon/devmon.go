@@ -73,6 +73,12 @@ const (
 	// integration polls never reach the registry; the api's read-time
 	// projection shows them as StateNotPolled.
 	SourceWireless = "wireless"
+	// SourceController is a device an integration's API reports
+	// (nms.ControllerDeviceSource) — known through its integration, never
+	// polled by Correlix's own collectors. Named "api" (owner 2026-10-19).
+	SourceController = "api"
+	// MethodController is the telemetry method of an API-sourced device.
+	MethodController = "api"
 )
 
 // Monitoring states — the machine token beside the operator sentence.
@@ -92,9 +98,10 @@ const (
 // Reasons — the operator sentence attached to every state. Stated once, here,
 // so the API, the UI and the logs cannot drift into different explanations.
 const (
-	ReasonNoAddress = "not monitored: this device has no management address, so nothing can collect from it until it has one"
-	ReasonMonitored = "monitored: this device is in the inventory, has a management address and is within the licence"
-	ReasonWireless  = "monitored: this device is polled through its wireless controller integration and is within the licence"
+	ReasonNoAddress  = "not monitored: this device has no management address, so nothing can collect from it until it has one"
+	ReasonMonitored  = "monitored: this device is in the inventory, has a management address and is within the licence"
+	ReasonWireless   = "monitored: this device is polled through its wireless controller integration and is within the licence"
+	ReasonController = "monitored: this device is known through its integration's API and is within the licence"
 	// ReasonWirelessNotPolled is the api's read-time projection of a wireless
 	// entity whose integration is disabled.
 	ReasonWirelessNotPolled = "not monitored: no enabled wireless integration is polling this device — " +
@@ -178,8 +185,11 @@ func Assign(cands []Candidate, limit int) map[string]Verdict {
 			continue
 		}
 		reason := ReasonMonitored
-		if strings.EqualFold(strings.TrimSpace(c.Device.Source), SourceWireless) {
+		switch src := strings.TrimSpace(c.Device.Source); {
+		case strings.EqualFold(src, SourceWireless):
 			reason = ReasonWireless
+		case strings.EqualFold(src, SourceController):
+			reason = ReasonController
 		}
 		out[c.Device.ID] = Verdict{State: StateMonitored, Monitored: true, Reason: reason}
 	}
@@ -194,6 +204,11 @@ func Assign(cands []Candidate, limit int) map[string]Verdict {
 func Methods(d models.Device) []string {
 	if !HasAddress(d) {
 		return nil
+	}
+	// A controller-sourced device is collected THROUGH its controller; none of
+	// Correlix's own collectors reach it, so its one method is the controller.
+	if strings.EqualFold(strings.TrimSpace(d.Source), SourceController) {
+		return []string{MethodController}
 	}
 	set := map[string]bool{}
 	proto := strings.ToLower(strings.TrimSpace(d.PreferredProtocol))
