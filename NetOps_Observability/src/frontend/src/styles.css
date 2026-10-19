@@ -7498,3 +7498,8 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
 .rca-dests { list-style: none; margin: 0 0 var(--sp-3); padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--sp-2); }
 .rca-dests li { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--panel-border); border-radius: 8px; }
 .rca-dest-name { font-weight: 500; }
+
+/* Device page — a controller's view of the device (pages/device/ControllerOverview.tsx). */
+.ddp-ctl { margin-top: var(--sp-3); }
+.ddp-ctl-head { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-2); }
+.ddp-ctl-head h3 { margin: 0; font-size: 15px; font-weight: 600; }

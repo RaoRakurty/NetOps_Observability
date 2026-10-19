@@ -11,6 +11,7 @@ import DeviceNeighbors from "./DeviceNeighbors";
 import DeviceConfigPanel from "./config/DeviceConfigPanel";
 import DevicePcapPanel from "./capture/DevicePcapPanel";
 import VrfInterfaces from "./device/VrfInterfaces";
+import ControllerOverview, { controllerOf, controllerOnly } from "./device/ControllerOverview";
 import { vrfTerm } from "../lib/vendorTerms";
 
 // DeviceDetailPage — the full-page device drill-down (NetBox/Dynatrace-style):
@@ -46,6 +47,11 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
   // config transport, not a poller that every device speaks).
   const reachSel = sel.replace(/}$/, ',collector!="netconf"}');
   const t = TYPE_META[d.type || "generic"] ?? TYPE_META.generic;
+  // A device a controller reports (vManage today) gets that controller's view;
+  // one known ONLY through the controller has no direct-collection figures to
+  // show, so it gets the controller's view alone.
+  const ctl = controllerOf(d);
+  const apiOnly = !!ctl && controllerOnly(d);
 
   return (
     <div className="ddp-scrim" onClick={onClose}>
@@ -78,7 +84,8 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
         </div>
 
         <div className="ddp-body">
-          {tab === "overview" && (
+          {tab === "overview" && apiOnly && ctl && <ControllerOverview device={d} info={ctl} />}
+          {tab === "overview" && !apiOnly && (
             <>
               <div className="ddp-kpis">
                 <MetricStat label="Reachability (1h)" query={`100 * avg_over_time(min(collector_target_up${reachSel})[1h:1m])`} minutes={60} fmt={(v) => `${Math.round(v)}%`} tone={(n) => (n < 99 ? (n < 50 ? "bad" : "warn") : "good")} />
@@ -100,6 +107,7 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
                 <MetricLine title="Traffic in" query={`sum(rate(device_if_in_octets${sel}[5m]) * 8)`} minutes={120} fmtY={fmtBps} height={220} />
                 <MetricLine title="Traffic out" query={`sum(rate(device_if_out_octets${sel}[5m]) * 8)`} minutes={120} fmtY={fmtBps} height={220} />
               </div>
+              {ctl && <ControllerOverview device={d} info={ctl} />}
             </>
           )}
           {tab === "interfaces" && <InterfacePerformance initialDevice={d.id} rangeMinutes={60} />}
