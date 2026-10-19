@@ -280,7 +280,7 @@ describe("feature flag off", () => {
     configVersions.mockRejectedValue(new Error("404 Not Found: "));
     permissions.mockResolvedValue({ role: "operator", permissions: { infrastructure: 2 } });
     render(<DeviceConfigPanel device={DEVICE} />);
-    expect(await screen.findByText(/Config backup is not enabled on this deployment/)).toBeTruthy();
+    expect(await screen.findByText(/Configuration backup is off/)).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByRole("button", { name: /Back up/ })).toBeNull();
   });
@@ -290,7 +290,7 @@ describe("feature flag off", () => {
     configVersions.mockRejectedValue(new Error("501 Not Implemented: feature disabled"));
     permissions.mockResolvedValue({ role: "operator", permissions: { infrastructure: 2 } });
     render(<DeviceConfigPanel device={DEVICE} />);
-    expect(await screen.findByText(/Config backup is not enabled on this deployment/)).toBeTruthy();
+    expect(await screen.findByText(/Configuration backup is off/)).toBeTruthy();
   });
 
   it("still reports a real server failure as an error", async () => {

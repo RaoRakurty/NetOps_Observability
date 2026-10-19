@@ -47,8 +47,8 @@ func PlatformSpecs() []Spec {
 		{Env: "FEATURE_UNIFI", Label: "UniFi controller", Group: collect, Apply: restart, Risky: true, Help: "Read device health from a Ubiquiti UniFi controller."},
 
 		{Env: "ENABLE_VENDOR_DETECTION", Label: "Vendor detection", Group: discover, Apply: restart, Help: "Identify vendor and OS from each device's system ID."},
-		{Env: "ENABLE_LLDP_DISCOVERY", Label: "LLDP neighbours", Group: discover, Apply: restart, Help: "Learn neighbours from LLDP."},
-		{Env: "ENABLE_CDP_DISCOVERY", Label: "CDP neighbours", Group: discover, Apply: restart, Help: "Learn neighbours from CDP."},
+		{Env: "ENABLE_LLDP_DISCOVERY", Label: "LLDP neighbors", Group: discover, Apply: restart, Help: "Learn neighbors from LLDP."},
+		{Env: "ENABLE_CDP_DISCOVERY", Label: "CDP neighbors", Group: discover, Apply: restart, Help: "Learn neighbors from CDP."},
 		{Env: "ENABLE_TUNNEL_DISCOVERY", Label: "Tunnels", Group: discover, Apply: restart, Help: "Discover IPsec, GRE and SD-WAN tunnels."},
 		{Env: "ENABLE_SDWAN_OVERLAY", Label: "SD-WAN overlay", Group: discover, Apply: restart, Help: "Read SD-WAN tunnels and transports from SD-WAN edges."},
 		{Env: "ENABLE_VRF_COLLECTION", Label: "VRFs and routing instances", Group: discover, Apply: restart, Help: "Read routing instances, their interfaces and the BGP sessions inside them."},

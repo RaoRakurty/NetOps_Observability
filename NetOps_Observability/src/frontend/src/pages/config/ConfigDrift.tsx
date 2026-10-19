@@ -19,6 +19,7 @@
 // Feature flag: the endpoint family is dormant unless FEATURE_CONFIG_BACKUP is
 // set on the backend. A 404/501 renders as the calm "not enabled" card.
 
+import FeatureOffNotice from "../../components/FeatureOffNotice";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type ConfigDriftPage, type ConfigDriftRow } from "../../services/api";
 import { Group, Panel } from "../../components/board/panels";
@@ -26,8 +27,8 @@ import { fmtDateTime } from "../../lib/time";
 import {
   DRIFT_FILTERS,
   DRIFT_HELP,
+  FEATURE_LABEL,
   FEATURE_OFF_HINT,
-  FEATURE_OFF_MESSAGE,
   classifyError,
   shortSha,
   statusBadge,
@@ -97,9 +98,7 @@ export default function ConfigDrift() {
     return (
       <div className="dm-board">
         <Panel title="Config drift">
-          <div className="empty" role="status">
-            {FEATURE_OFF_MESSAGE}. {FEATURE_OFF_HINT}
-          </div>
+          <FeatureOffNotice feature={FEATURE_LABEL} purpose={FEATURE_OFF_HINT} />
         </Panel>
       </div>
     );

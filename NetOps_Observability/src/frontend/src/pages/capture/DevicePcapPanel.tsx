@@ -31,6 +31,7 @@
 // infrastructure:write; the client gate is a courtesy only — a server 403 is
 // caught and shown inline, because the client is never the authority.
 
+import FeatureOffNotice from "../../components/FeatureOffNotice";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type Device, type PcapCapture } from "../../services/api";
 import { fmtDateTime } from "../../lib/time";
@@ -40,8 +41,8 @@ import {
   DEFAULT_DURATION_S,
   DEFAULT_PACKETS,
   DOWNLOAD_BLOCKED_HINT,
+  FEATURE_LABEL,
   FEATURE_OFF_HINT,
-  FEATURE_OFF_MESSAGE,
   FILTER_GRAMMAR_HINT,
   MAX_DURATION_S,
   MAX_FILTER_LEN,
@@ -275,9 +276,7 @@ export default function DevicePcapPanel({ device }: { device: Device }) {
     return (
       <section className="cfg-panel" aria-label="Packet capture">
         <h3 className="cfg-h">Packet capture</h3>
-        <div className="empty" role="status">
-          {FEATURE_OFF_MESSAGE}. {FEATURE_OFF_HINT}
-        </div>
+        <FeatureOffNotice feature={FEATURE_LABEL} purpose={FEATURE_OFF_HINT} />
       </section>
     );
   }

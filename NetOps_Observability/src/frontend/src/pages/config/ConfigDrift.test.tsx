@@ -97,7 +97,7 @@ describe("ConfigDrift list", () => {
   it("renders the feature-off card on 404 rather than an error", async () => {
     configDriftList.mockRejectedValue(new Error("404 Not Found: "));
     render(<ConfigDrift />);
-    expect(await screen.findByText(/Config backup is not enabled on this deployment/)).toBeTruthy();
+    expect(await screen.findByText(/Configuration backup is off/)).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 

@@ -90,8 +90,8 @@ const EMPTY_HINTS: Record<DataKind, { msg: string; hint: string }> = {
   metrics: { msg: "No SNMP metrics in this window.", hint: "Enable SNMP (read-only v2c/v3) on your devices and confirm reachability — no agent required." },
   flows: { msg: "No flow records in this window.", hint: "Point NetFlow / IPFIX / sFlow export from your routers at the collector." },
   logs: { msg: "No events in this window.", hint: "Forward syslog and SNMP traps from your devices to the collector." },
-  tunnels: { msg: "No tunnels discovered.", hint: "Set ENABLE_TUNNEL_DISCOVERY=true — tunnel interfaces (IPsec / GRE / VTI) are found via standard IF-MIB & TUNNEL-MIB SNMP walks, no per-vendor setup." },
-  synthetics: { msg: "No active measurements in this window.", hint: "Set FEATURE_SYNTHETICS=true with SYNTHETIC_HTTP/ICMP/TCP_TARGETS for service checks, and FEATURE_ACTIVE_PROBE + STAMP_TARGETS for path SLA (RFC 8762)." },
+  tunnels: { msg: "No tunnels discovered.", hint: "Turn on Tunnels in Platform › Features. IPsec, GRE and VTI tunnels are found over standard SNMP — no per-vendor setup." },
+  synthetics: { msg: "No active measurements in this window.", hint: "Service checks and path SLA probes are not set up on this installation. Ask your platform administrator to set them up." },
   generic: { msg: "Nothing collected in this window.", hint: "" },
 };
 export function EmptyHint({ kind = "metrics" }: { kind?: DataKind }) {
