@@ -553,3 +553,36 @@ func TestAskDoesNotReachConversationsWithoutNLQuery(t *testing.T) {
 		t.Fatalf("with nlquery the ask is recorded in the conversation: %d %s (turns=%d)", w.Code, w.Body.String(), turns())
 	}
 }
+
+// The Neighbors tab reads these to say WHICH switch is off instead of showing
+// an empty list as if the device had no neighbors.
+func TestFeaturesReportNeighborDiscoverySwitches(t *testing.T) {
+	_, h, a, _ := aiEntFixture(t)
+	read := func() (lldp, cdp *bool) {
+		t.Helper()
+		w := serveAs(h, a, http.MethodGet, "/api/features", "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("/api/features: %d %s", w.Code, w.Body.String())
+		}
+		var out struct {
+			LLDP *bool `json:"lldp_discovery"`
+			CDP  *bool `json:"cdp_discovery"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.LLDP == nil || out.CDP == nil {
+			t.Fatalf("both switches must always be present: %s", w.Body.String())
+		}
+		return out.LLDP, out.CDP
+	}
+	t.Setenv("ENABLE_LLDP_DISCOVERY", "")
+	t.Setenv("ENABLE_CDP_DISCOVERY", "")
+	if l, c := read(); *l || *c {
+		t.Fatalf("both off: lldp=%v cdp=%v", *l, *c)
+	}
+	t.Setenv("ENABLE_LLDP_DISCOVERY", "true")
+	if l, c := read(); !*l || *c {
+		t.Fatalf("lldp only: lldp=%v cdp=%v", *l, *c)
+	}
+}

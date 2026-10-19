@@ -5414,6 +5414,8 @@ export interface FeatureFlags {
   device_ssh?: boolean;
   /** Configuration backup + drift (FEATURE_CONFIG_BACKUP). */
   config_backup?: boolean;
+  lldp_discovery?: boolean; // neighbor discovery switches (running value)
+  cdp_discovery?: boolean;
   active_verification?: boolean;
   processors?: boolean;
   ai_entitlements?: string[];

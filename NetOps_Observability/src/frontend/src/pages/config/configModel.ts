@@ -158,10 +158,10 @@ export function classifyError(e: unknown): ApiFailure {
   return "other";
 }
 
-export const FEATURE_OFF_MESSAGE = "Config backup is not enabled on this deployment";
+export const FEATURE_LABEL = "Configuration backup"; // its switch on the Features page
+export const FEATURE_OFF_MESSAGE = "Configuration backup is off";
 export const FEATURE_OFF_HINT =
-  "Turn on FEATURE_CONFIG_BACKUP to capture device configurations, compare them against a " +
-  "golden baseline and track drift across the fleet.";
+  "Turn it on to back up device configurations, compare them with a baseline and track drift.";
 export const NO_PERMISSION_MESSAGE =
   "You do not have permission to do that — this action needs infrastructure write access.";
 export const BACKUP_BUSY_MESSAGE = "A backup is already running for this device.";

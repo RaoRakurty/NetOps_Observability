@@ -4596,6 +4596,11 @@ func (s *server) handleFeatures(w http.ResponseWriter, r *http.Request) {
 		// always up (rules persist regardless); the flag gates UI visibility and
 		// signals that the router is actually consuming the generated config.
 		"processors": os.Getenv("FEATURE_PROCESSORS") == "true",
+		// Neighbor discovery (pool.Enable at start, so the RUNNING value): the
+		// device page's Neighbors tab says which switch to turn on instead of
+		// showing an empty list as if the device had no neighbors.
+		"lldp_discovery": os.Getenv("ENABLE_LLDP_DISCOVERY") == "true",
+		"cdp_discovery":  os.Getenv("ENABLE_CDP_DISCOVERY") == "true",
 	})
 }
 

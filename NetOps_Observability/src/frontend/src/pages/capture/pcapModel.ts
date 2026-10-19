@@ -336,10 +336,10 @@ export function fmtFilter(f: string | undefined): string {
 
 // ── failure classification ──────────────────────────────────────────────────
 
-export const FEATURE_OFF_MESSAGE = "Packet capture is not enabled on this deployment";
+export const FEATURE_LABEL = "Packet capture"; // its switch on the Features page
+export const FEATURE_OFF_MESSAGE = "Packet capture is off";
 export const FEATURE_OFF_HINT =
-  "Turn on FEATURE_PACKET_CAPTURE to run bounded, on-demand packet captures against a " +
-  "device interface and download the resulting .pcap.";
+  "Turn it on to capture packets on a device interface on request and download the .pcap file.";
 export const NO_PERMISSION_MESSAGE =
   "You do not have permission to do that — this action needs infrastructure write access.";
 export const RUNNING_MESSAGE =

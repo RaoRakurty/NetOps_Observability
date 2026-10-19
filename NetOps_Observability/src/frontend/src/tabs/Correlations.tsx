@@ -615,7 +615,7 @@ function SignatureGaps() {
           <div className="empty" role="alert" style={{ color: "var(--bad)" }}>
             <strong>Signature coverage could not be read.</strong>
             <div style={{ marginTop: 4 }}>{err}</div>
-            <div style={{ marginTop: 4, color: "var(--muted)" }}>Coverage gaps are unknown — not absent.</div>
+            <div style={{ marginTop: 4, color: "var(--muted)" }}>So we don’t know whether there are coverage gaps.</div>
           </div>
         ) : !loaded ? (
           <div className="empty">Loading…</div>
