@@ -5995,7 +5995,11 @@ export const api = {
   probePaths: () => request<ProbePath[]>("/api/probe/paths"),
   // LLDP-discovered topology adjacencies (tenant-scoped, deduped). Empty when the
   // LLDP collector is off — the topology then falls back to tier inference.
-  topologyLinks: () => request<{ links: TopoLink[]; count: number; source: string }>("/api/topology/links"),
+  // device: one device's neighbours, filtered server-side (404 for a device
+  // the caller cannot see).
+  topologyLinks: (device?: string) =>
+    request<{ links: TopoLink[]; count: number; source: string }>(
+      device ? `/api/topology/links?device=${encodeURIComponent(device)}` : "/api/topology/links"),
   // Device Geomap — sites (SoT intent) + per-site device health.
   geomap: () => request<GeomapResponse>("/api/geomap"),
   deviceLocations: () => request<{ devices: DeviceLocationRow[] }>("/api/devices/locations"),
@@ -9673,6 +9677,8 @@ export type TopoLink = {
   local_port: string; remote_port: string; source_protocol: string;
   igp?: string; area?: string;
   resolved: boolean; bidirectional: boolean; last_observed_at: number;
+  /** What the source device heard: the neighbour's chassis id and port description. */
+  target_chassis?: string; target_port_desc?: string;
 };
 // Device Geomap — NetBox DCIM sites (lat/lng intent data) joined with inventory health.
 export type DeviceLocationRow = {

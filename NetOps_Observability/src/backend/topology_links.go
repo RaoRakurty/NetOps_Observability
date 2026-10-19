@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
+	"netops/backend/models"
 	"netops/backend/topology"
 )
 
@@ -69,5 +71,27 @@ func (s *server) handleTopologyLinks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, fmt.Errorf("%s: %w", topoLinksUnreadNote, err))
 		return
 	}
+	// ?device=<id> — one device's neighbours (the device page's Neighbors tab),
+	// filtered server-side rather than shipping the tenant's whole link set to
+	// the browser. The id must be a device the caller can see; anything else is
+	// 404, identical to an id that does not exist (§3a: never reveal another
+	// tenant's id).
+	if id := strings.TrimSpace(r.URL.Query().Get("device")); id != "" {
+		if !deviceVisibleIn(devs, id) {
+			writeError(w, http.StatusNotFound, errors.New("device not found"))
+			return
+		}
+		links = topology.LinksOfDevice(links, id)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"links": links, "count": len(links), "source": topology.LinkSources(links)})
+}
+
+// deviceVisibleIn reports whether id is one of the caller's visible devices.
+func deviceVisibleIn(devs []models.Device, id string) bool {
+	for _, d := range devs {
+		if d.ID == id {
+			return true
+		}
+	}
+	return false
 }
