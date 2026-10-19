@@ -7556,5 +7556,8 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
   .shell-v2 .main-head .subnav button { white-space: nowrap; }
   /* 119 plain <table>s (40 ds-table) have no scroll wrapper: on a phone each
      scrolls sideways in its own box instead of widening the page. */
-  .main table { display: block; max-width: 100%; overflow-x: auto; }
+  /* position:relative makes the table the containing block of its own
+     absolutely positioned children (sr-only labels), so they scroll with it
+     instead of widening the page (security/overview, 2026-10-19). */
+  .main table { display: block; max-width: 100%; overflow-x: auto; position: relative; }
 }

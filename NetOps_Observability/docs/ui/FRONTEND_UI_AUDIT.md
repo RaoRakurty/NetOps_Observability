@@ -27,8 +27,9 @@ sideways, and the computed font size of every visible text element.
 4. **Sub-nav** beside the breadcrumb was squeezed to a one-word-wide column.
 5. **KPI rows** stayed four columns wide.
 
-Fixed in C1 (this change) → **67 of 68** routes fit. Open: `security/overview`
-(see Open findings).
+Fixed in C1 (this change) → **68 of 68** routes fit. The last one
+(`security/overview`) was a table's sr-only labels (`position: absolute`)
+escaping its scroll box; the table is now their containing block.
 
 ### Type sizes (dark 1440, all routes)
 
@@ -93,6 +94,5 @@ TSX bypass the stylesheet altogether.
 |---|---|---|
 | U1 | Text below the 12.5px floor (≈2,000 elements at 9–12px) and body text (tables) at 12.5px instead of 14px | C2: lift everything to the floor, table/body text to `--fs-sm`, migrate raw sizes to tokens, with before/after shots |
 | U2 | Inline font sizes/colours in TSX (792) | Migrate with each page slice; new code uses tokens (see DESIGN_SYSTEM.md) |
-| U3 | `security/overview` still scrolls at 390px (1143px) although every overflowing element is clipped by its own scroll box; suspect a sticky table header inside a block table | Investigate in C2 |
 | U4 | Inventory IP / Status columns truncate | Widen with the C2 table pass |
 | U5 | Raw hex colours (373) and radius spread | C3: map to tokens |
