@@ -12,7 +12,7 @@ sidebar_position: 3
 ## Before you begin
 
 - The report scheduler running. `ENABLE_REPORT_SCHEDULER` is the one flag in this area that defaults **on**; scheduled delivery stops only when it is explicitly set to `false`.
-- At least one contact point. A report delivers to contact points, which are reusable recipient groups. Create them under **Administration → Incident Response → Notifications**. Where none exist, the recipients step reads `No contact points yet — create email groups in Administration → Notifications.`
+- At least one contact point. A report delivers to contact points, which are reusable recipient groups. Create them under **Administration → Incident response → Notifications**. Where none exist, the recipients step reads `No contact points yet — create email groups in Administration → Notifications.`
 - A decision on report type. Seven are available:
 
 | Type | What it contains |

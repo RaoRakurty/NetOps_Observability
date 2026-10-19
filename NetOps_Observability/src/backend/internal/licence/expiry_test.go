@@ -264,7 +264,7 @@ func TestTrialIsCarriedAndDisplayed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(expired.Reason, "evaluation licence") {
+	if !strings.Contains(expired.Reason, "evaluation license") {
 		t.Fatalf("an expired trial must say so in words: %q", expired.Reason)
 	}
 }

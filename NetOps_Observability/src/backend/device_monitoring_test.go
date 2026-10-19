@@ -158,7 +158,7 @@ func TestCommunityCeilingCollectsTheFirst25AndListsTheRest(t *testing.T) {
 		}
 	}
 	note := s.licenceUsageNotes(t.Context())[entitlement.CeilingDevices]
-	if !strings.Contains(note, "12 more device(s)") || !strings.Contains(note, "licence limit of 25") {
+	if !strings.Contains(note, "12 more device(s)") || !strings.Contains(note, "license limit of 25") {
 		t.Fatalf("the licence page must say how many are not monitored and why: %q", note)
 	}
 

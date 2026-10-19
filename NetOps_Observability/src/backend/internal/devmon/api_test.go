@@ -139,7 +139,7 @@ func TestAnOverLimitDeviceSaysSoAndIsNotCollecting(t *testing.T) {
 	if v.Monitored || v.Collecting || v.State != devmon.StateOverLimit || v.Limit != 25 {
 		t.Fatalf("view = %+v", v)
 	}
-	if !strings.Contains(v.Reason, "licence limit of 25") {
+	if !strings.Contains(v.Reason, "license limit of 25") {
 		t.Fatalf("reason = %q", v.Reason)
 	}
 }

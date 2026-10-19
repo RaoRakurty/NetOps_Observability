@@ -104,8 +104,8 @@ Revocation splits into two halves, and the difference matters when someone leave
 
 Until SCIM ships, deprovisioning is these four actions, and the first one is the one that matters.
 
-1. Set the account's **Status** to `disabled` in **Administration → Identity & Access**, or with `PATCH /api/users/{username}`. Every sign-in path refuses a disabled account, and every in-flight session fails on its next request.
-2. Revoke live sessions in **Administration → Access & Audit → Sessions**, or with `DELETE /api/sessions/{id}`.
+1. Set the account's **Status** to `disabled` in **Administration → People & access → Identity & Access**, or with `PATCH /api/users/{username}`. Every sign-in path refuses a disabled account, and every in-flight session fails on its next request.
+2. Revoke live sessions in **Administration → People & access → Sessions**, or with `DELETE /api/sessions/{id}`.
 3. Delete the account when the record is no longer needed. Its bindings are removed with it.
 4. Remove the person at the identity provider. On its own this stops the next sign-in and nothing else, which is why step 1 comes first.
 

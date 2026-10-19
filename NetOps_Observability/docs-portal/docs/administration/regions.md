@@ -49,7 +49,7 @@ Five regions ship, sorted by id. `us-east` is the default assigned when no regio
 
 ### Set an organization's home region
 
-1. Open **Administration → Identity & Access → Organizations**.
+1. Open **Administration → People & access → Identity & Access → Organizations**.
 2. Create the organization with **＋ Create organization**, or open an existing one and select **Edit**.
 3. Pick the **Region**. It is required on creation. The guided **＋ Add** wizard asks the same question as **Home region**.
 4. Save.

@@ -188,7 +188,7 @@ func syntheticDebugExclusion() map[string]any {
 // misleading failures) — they need to know which door to use instead.
 func logsForbiddenErr(signal string) error {
 	if oslog.IsSecFindingsSignal(signal) {
-		return errors.New("security findings are not part of log search — read them at /api/security/findings, which checks infrastructure:read and the licence feature")
+		return errors.New("security findings are not part of log search — read them at /api/security/findings, which checks infrastructure:read and the license feature")
 	}
 	return errors.New("app logs are restricted to the platform owner")
 }
