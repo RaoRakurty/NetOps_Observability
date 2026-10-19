@@ -212,7 +212,7 @@ func (s *FileStore) Install(raw []byte, now time.Time) (State, error) {
 		return s.State(), err
 	}
 	if err := atomicWrite(s.path, raw); err != nil {
-		return s.State(), fmt.Errorf("licence: verified but could not be stored at %s: %w", s.path, err)
+		return s.State(), fmt.Errorf("license: verified but could not be stored at %s: %w", s.path, err)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

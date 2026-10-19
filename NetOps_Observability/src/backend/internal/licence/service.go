@@ -215,7 +215,7 @@ func (s *Service) WriteMetrics(w io.Writer, now time.Time) {
 	if d, ok := st.DaysToExpiry(now); ok {
 		days = d
 	}
-	fmt.Fprintf(w, "# HELP %s Whole days until the installed licence expires (negative once expired; %d = no licence installed, nothing to expire).\n", MetricDaysToExpiry, NoExpirySentinel)
+	fmt.Fprintf(w, "# HELP %s Whole days until the installed license expires (negative once expired; %d = no license installed, nothing to expire).\n", MetricDaysToExpiry, NoExpirySentinel)
 	fmt.Fprintf(w, "# TYPE %s gauge\n", MetricDaysToExpiry)
 	fmt.Fprintf(w, "%s %d\n", MetricDaysToExpiry, days)
 

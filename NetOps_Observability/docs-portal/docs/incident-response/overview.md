@@ -23,13 +23,11 @@ long each phase took. A platform owner or tenant admin configures all four.
 ## The order to configure in
 
 1. **Channels first.** Nothing downstream delivers until at least one channel is
-   configured and enabled. Channel administration lives at **Administration →
-   Incident Response → Notifications** and is restricted to the platform owner.
+   configured and enabled. Channel administration lives at **Administration → Incident response → Notifications** and is restricted to the platform owner.
 2. **Connectors second.** ServiceNow and Jira are configured per tenant at
-   **Administration → Incident Response → Integrations**, so each tenant reaches
+   **Administration → Incident response → Integrations**, so each tenant reaches
    its own system of record.
-3. **The ticketing policy last.** **Administration → Incident Response →
-   Ticketing & Automation** decides which RCA cases are worth a ticket. It is
+3. **The ticketing policy last.** **Administration → Incident response → RCA Tickets** decides which RCA cases are worth a ticket. It is
    dormant until `FEATURE_RCA_TICKETING` is enabled.
 
 ## Two delivery lanes that are not the same

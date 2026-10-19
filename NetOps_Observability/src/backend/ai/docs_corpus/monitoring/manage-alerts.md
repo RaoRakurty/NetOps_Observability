@@ -19,7 +19,7 @@ while you work it, and leave a record for whoever picks it up next.
 ## Before you begin
 
 - `alerts:read` to see the queue. Every action on an episode needs
-  `alerts:write`. Check yours on **Administration → Identity & Access**, or
+  `alerts:write`. Check yours on **Administration → People & access → Identity & Access**, or
   read `GET /api/auth/permissions`.
 - A rule that is firing. An empty queue is a state in its own right, and the
   Result section below says how to read it.
