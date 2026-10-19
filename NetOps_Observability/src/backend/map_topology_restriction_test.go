@@ -942,3 +942,56 @@ func TestTopologyGraphHonoursTheOperatorVisibilityRestriction(t *testing.T) {
 			sortedKeys(acmeAfter.nodeIDs()), sortedKeys(acmeAfter.edgeIDs()))
 	}
 }
+
+// TestTopologyLinksDeviceFilterIsTenantScoped — ?device=<id> (the device
+// page's Neighbors tab): own device → its links only; another tenant's device
+// → 404, byte-identical to an id that does not exist; acting as another tenant
+// does not widen it (§3a).
+func TestTopologyLinksDeviceFilterIsTenantScoped(t *testing.T) {
+	seedTopologyLinks(t)
+	f := newRestrictedMapFixture(t)
+
+	var own linksResp
+	f.get(f.s.handleTopologyLinks, "/api/topology/links?device=acme-core", f.acmeUser(), &own)
+	if own.Count != 1 || !own.endpoints()["acme-core→acme-edge"] {
+		t.Fatalf("acme-core's neighbours = %v, want only acme-core→acme-edge", sortedKeys(own.endpoints()))
+	}
+
+	status := func(path string, c jwtClaims) (int, string) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		f.s.handleTopologyLinks(w, req(http.MethodGet, path, "", c))
+		return w.Code, w.Body.String()
+	}
+	crossCode, crossBody := status("/api/topology/links?device=globex-core", f.acmeUser())
+	absentCode, absentBody := status("/api/topology/links?device=no-such-device", f.acmeUser())
+	if crossCode != http.StatusNotFound || absentCode != http.StatusNotFound {
+		t.Fatalf("another tenant's device = %d, an absent one = %d; both must be 404", crossCode, absentCode)
+	}
+	if crossBody != absentBody {
+		t.Errorf("a cross-tenant id must be indistinguishable from an absent one: %q vs %q", crossBody, absentBody)
+	}
+	// The platform's own device is not acme's either.
+	if c, _ := status("/api/topology/links?device=stack-jump", f.acmeUser()); c != http.StatusNotFound {
+		t.Errorf("a platform device read by a tenant = %d, want 404", c)
+	}
+	// as_tenant into acme cannot reach globex's device through the filter.
+	if c, _ := status("/api/topology/links?device=globex-core", ownerActing(f.owner(), f.acme)); c != http.StatusNotFound {
+		t.Errorf("as_tenant=acme reading globex-core = %d, want 404", c)
+	}
+	// The neighbour's chassis id is the caller's own device's observation.
+	var gx struct {
+		Links []topology.TopoLink `json:"links"`
+	}
+	f.get(f.s.handleTopologyLinks, "/api/topology/links?device=globex-core",
+		jwtClaims{Sub: "g@globex", Role: RoleOperator, Tenant: f.globex}, &gx)
+	found := false
+	for _, l := range gx.Links {
+		if l.Target == "ext:isp-router" {
+			found = l.TargetChassis == "203.0.113.9"
+		}
+	}
+	if !found {
+		t.Errorf("globex-core's external neighbour lost its chassis id: %+v", gx.Links)
+	}
+}

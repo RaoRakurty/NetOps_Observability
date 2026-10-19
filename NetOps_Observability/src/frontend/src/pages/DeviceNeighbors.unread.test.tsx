@@ -138,3 +138,29 @@ describe("peerKey — remote AS joins per instance", () => {
     expect(peerKey("CUST-A", "10.0.0.1")).not.toBe(peerKey(undefined, "10.0.0.1"));
   });
 });
+
+describe("the Neighbors table", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("asks the server for this device's neighbors only", async () => {
+    vi.mocked(api.topologyLinks).mockResolvedValue({ links: [], count: 0, source: "none" } as never);
+    render(<DeviceNeighbors device={device} />);
+    await waitFor(() => expect(api.topologyLinks).toHaveBeenCalledWith("spine-1"));
+  });
+
+  it("shows what the device heard about its neighbor and when", async () => {
+    vi.mocked(api.topologyLinks).mockResolvedValue({
+      links: [{
+        source: "spine-1", target: "ext:isp", source_name: "spine-1", target_name: "isp-router",
+        local_port: "Et1", remote_port: "ge-0/0/0", source_protocol: "lldp", resolved: false,
+        bidirectional: false, last_observed_at: Date.UTC(2026, 9, 19, 3, 0),
+        target_chassis: "00:1c:73:aa:bb:cc", target_port_desc: "uplink to spine-1",
+      }],
+      count: 1, source: "lldp",
+    } as never);
+    render(<DeviceNeighbors device={device} />);
+    const cell = await screen.findByText("isp-router");
+    expect(cell.getAttribute("title")).toBe("Chassis 00:1c:73:aa:bb:cc · Port description: uplink to spine-1");
+    expect(screen.getByText("Last seen")).toBeTruthy();
+  });
+});
