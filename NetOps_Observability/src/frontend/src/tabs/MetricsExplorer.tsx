@@ -330,7 +330,7 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
               <>
                 No data for this query / range. Telemetry arrives every ~30–60s once collectors poll —
                 try a quick-pick above (e.g. <strong>CPU utilization</strong>) or widen the time range.
-                {names.length > 0 && <div style={{ marginTop: 6, fontSize: 12 }}>{names.length} metric names available.</div>}
+                {names.length > 0 && <div style={{ marginTop: 6, fontSize: 12.5 }}>{names.length} metric names available.</div>}
               </>
             )}
           </div>

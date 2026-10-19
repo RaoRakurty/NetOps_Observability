@@ -290,7 +290,7 @@ export default function Devices() {
       {
         // ONE glyph: the circle says whether Correlix monitors it, the arrow says
         // whether it is answering (owner spec 2026-10-10).
-        key: "status", header: "Status", width: 78, sortable: true,
+        key: "status", header: "Status", width: 92, sortable: true,
         text: (d) => `${monitoringLabel(d)} ${HEALTH_META[health.get(d.id) ?? "unknown"].label}`,
         sortValue: (d) => ["down", "degraded", "unknown", "up"].indexOf(health.get(d.id) ?? "unknown"),
         sev: (d) => healthSev(health.get(d.id) ?? "unknown"),
@@ -307,7 +307,7 @@ export default function Devices() {
         ),
       },
       {
-        key: "address", header: "IP", width: 128,
+        key: "address", header: "IP", width: 156,
         text: (d) => d.address,
         render: (d) => <span title={d.address} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 14 }}>{d.address}</span>,
       },
@@ -625,7 +625,7 @@ function SiteCell({
         title={isDeclared ? `Site: ${label}` : "Assign this device to a site"}
         value={isDeclared ? slug : ""}
         onChange={(e) => onAssign(e.target.value)}
-        style={{ height: 28, padding: "2px 6px", fontSize: 12, maxWidth: 150 }}
+        style={{ height: 28, padding: "2px 6px", fontSize: 12.5, maxWidth: 150 }}
       >
         <option value="">— Unassigned —</option>
         {options.map((s) => (

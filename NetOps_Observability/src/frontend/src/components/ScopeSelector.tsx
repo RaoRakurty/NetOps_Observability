@@ -125,7 +125,7 @@ export default function ScopeSelector() {
         <Icon name="infrastructure" size={13} />
         <span className="scope-btn-text">{label}</span>
         {region && region !== "all" && <span className="scope-region">{region}</span>}
-        <span style={{ opacity: 0.6, fontSize: 10 }} aria-hidden="true">▾</span>
+        <span style={{ opacity: 0.6, fontSize: 12.5 }} aria-hidden="true">▾</span>
       </button>
       {open && (
         <div className="scope-pop">

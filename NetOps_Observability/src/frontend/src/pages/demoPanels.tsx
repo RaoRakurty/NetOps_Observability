@@ -42,7 +42,7 @@ const base = {
     trigger: "axis" as const,
     backgroundColor: "rgba(10,14,26,0.94)",
     borderColor: "rgba(148,163,184,0.25)",
-    textStyle: { color: INK, fontSize: 11 },
+    textStyle: { color: INK, fontSize: 12.5 },
   },
 };
 
@@ -50,7 +50,7 @@ const axis = {
   axisLine: { lineStyle: { color: GRID } },
   axisTick: { show: false },
   splitLine: { lineStyle: { color: GRID, type: "dashed" as const } },
-  axisLabel: { color: INK_DIM, fontSize: 10 },
+  axisLabel: { color: INK_DIM, fontSize: 12.5 },
 };
 
 // UI-words sweep 5 (tracker 270): the loading / failed / empty lines below are
@@ -230,7 +230,7 @@ export function Ridgeline({ query, height = 250, topN = 6 }: {
           data: [{ yAxis: off }],
           label: {
             show: true, position: "start", formatter: r.name, color: INK_DIM,
-            fontSize: 10, padding: [0, 8, 0, 0],
+            fontSize: 12.5, padding: [0, 8, 0, 0],
           },
         },
       };
@@ -279,7 +279,7 @@ export function ActivityHeatmap({ query, height = 236, topN = 12 }: {
     visualMap: {
       min: 0, max, calculable: false, orient: "vertical", right: 0, top: "middle",
       itemWidth: 8, itemHeight: 96, inRange: { color: RAMP },
-      textStyle: { color: INK_DIM, fontSize: 9 },
+      textStyle: { color: INK_DIM, fontSize: 12.5 },
     },
     series: [{
       type: "heatmap", data: cells,
@@ -323,9 +323,9 @@ export function DistributionHistogram({ query, height = 210, bucketSize = 10 }: 
 
   const option = {
     ...base,
-    legend: { show: true, top: 0, right: 0, textStyle: { color: INK_DIM, fontSize: 10 }, itemWidth: 8, itemHeight: 8, icon: "roundRect" },
+    legend: { show: true, top: 0, right: 0, textStyle: { color: INK_DIM, fontSize: 12.5 }, itemWidth: 8, itemHeight: 8, icon: "roundRect" },
     grid: { left: 34, right: 8, top: 26, bottom: 24 },
-    xAxis: { type: "category", data: labels, ...axis, splitLine: { show: false }, name: "% util", nameTextStyle: { color: INK_DIM, fontSize: 9 }, nameLocation: "end", nameGap: 4 },
+    xAxis: { type: "category", data: labels, ...axis, splitLine: { show: false }, name: "% util", nameTextStyle: { color: INK_DIM, fontSize: 12.5 }, nameLocation: "end", nameGap: 4 },
     yAxis: { type: "value", ...axis, minInterval: 1 },
     series: bands.map((b, i) => ({
       type: "bar", stack: "d", name: b.name, data: b.data,
@@ -363,7 +363,7 @@ export function RacingBars({ query, height = 226, n = 8, unit = "%", fmt }: {
     yAxis: {
       type: "category", data: rows.map((r) => r.name), ...axis,
       splitLine: { show: false }, axisLine: { show: false },
-      axisLabel: { ...axis.axisLabel, fontSize: 10, width: 112, overflow: "truncate" },
+      axisLabel: { ...axis.axisLabel, fontSize: 12.5, width: 112, overflow: "truncate" },
     },
     series: [
       // ghost track behind each bar — gives the row structure at a glance
@@ -382,7 +382,7 @@ export function RacingBars({ query, height = 226, n = 8, unit = "%", fmt }: {
           },
         },
         label: {
-          show: true, position: "right", color: INK, fontSize: 10.5, fontWeight: 500,
+          show: true, position: "right", color: INK, fontSize: 12.5, fontWeight: 500,
           formatter: (p: { dataIndex: number }) => (fmt ? fmt(rows[p.dataIndex].v) : `${rows[p.dataIndex].v.toFixed(1)}${unit}`),
         },
       },
@@ -429,7 +429,7 @@ export function StreamGraph({ height = 226 }: { height?: number }) {
   const names = rows?.length ? Object.keys(rows[0].series) : [];
   const option = {
     ...base,
-    legend: { show: true, top: 0, right: 0, textStyle: { color: INK_DIM, fontSize: 10 }, itemWidth: 8, itemHeight: 8, icon: "roundRect" },
+    legend: { show: true, top: 0, right: 0, textStyle: { color: INK_DIM, fontSize: 12.5 }, itemWidth: 8, itemHeight: 8, icon: "roundRect" },
     grid: { left: 46, right: 10, top: 26, bottom: 22 },
     xAxis: { type: "category", data: rows?.map((r) => r.t.slice(11, 16)) ?? [], ...axis, splitLine: { show: false }, boundaryGap: false },
     yAxis: { type: "value", ...axis, axisLabel: { ...axis.axisLabel, formatter: (v: number) => (v > 1e9 ? `${(v / 1e9).toFixed(0)}G` : v > 1e6 ? `${(v / 1e6).toFixed(0)}M` : `${v}`) } },

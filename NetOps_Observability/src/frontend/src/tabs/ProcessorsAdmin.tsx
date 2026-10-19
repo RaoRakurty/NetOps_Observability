@@ -452,14 +452,14 @@ function Wizard({ catalog, initial, editingId, onDone, onCancel }: {
               <label className="ccw-field">
                 <span className="ccw-label">Before</span>
                 <textarea className="ccw-input" rows={9} value={sample} onChange={(e) => setSample(e.target.value)}
-                  style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }} />
+                  style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12.5 }} />
               </label>
               <label className="ccw-field">
                 <span className="ccw-label">After</span>
                 <textarea className="ccw-input" rows={9} readOnly
                   value={preview ? JSON.stringify(preview.event, null, 2) : ""}
                   placeholder="Run the preview to see the processed event"
-                  style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }} />
+                  style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12.5 }} />
               </label>
             </div>
             <div>
