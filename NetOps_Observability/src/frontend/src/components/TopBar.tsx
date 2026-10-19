@@ -265,7 +265,7 @@ export default function TopBar({ health, user, onLogout, onChangePassword, onTwo
 
         <span className={`health${ok ? "" : " bad"}`} role="status" title={ok ? `v${health?.version}` : "Disconnected"}>
           <span className="dot" aria-hidden="true" />
-          {ok ? "Healthy" : "Disconnected"}
+          <span className="health-label">{ok ? "Healthy" : "Disconnected"}</span>
         </span>
 
         {/* Iris — the primary entry point (owner design 2026-10-05 §1), upper right. */}
