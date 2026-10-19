@@ -37,7 +37,7 @@ Solutions.
 
 1. Confirm the method selector above the username field matches how the account is provisioned.
 2. If the account uses MFA, the password step succeeds first and the 6-digit code is asked second. A rejected code usually means the authenticator's clock has drifted or the code expired while it was being typed. Wait for the next code.
-3. Ask an administrator to check the account's status under **Administration → Identity & Access**. The message is deliberately the same for a wrong password and an unknown username, so it never confirms whether an account exists.
+3. Ask an administrator to check the account's status under **Administration → People & access → Identity & Access**. The message is deliberately the same for a wrong password and an unknown username, so it never confirms whether an account exists.
 
 **Error: "account temporarily locked due to failed sign-ins; try again later", HTTP 429**
 
@@ -47,7 +47,7 @@ Solutions.
 
 1. Wait for the lock to expire. The response carries a `Retry-After` header with the remaining seconds. More wrong guesses while locked do not extend it, but they do not help either.
 2. A successful sign-in clears the counter.
-3. An administrator can change the threshold and duration per scope under **Administration → Identity & Access → (scope) → Security Settings**. See [Configure authentication](/administration/authentication).
+3. An administrator can change the threshold and duration per scope under **Administration → People & access → Identity & Access → (scope) → Security Settings**. See [Configure authentication](/administration/authentication).
 
 **Error: "sign-in temporarily unavailable due to failed-login pressure", HTTP 429**
 
@@ -81,7 +81,7 @@ Causes and solutions, in order of likelihood.
 
 1. **Reachability.** Confirm the deployment host can reach the management subnet on UDP 161. A firewall or ACL on the path is the most common cause. See [Connectivity requirements](/reference/connectivity-requirements).
 2. **Range.** Confirm the devices are inside the scanned CIDR ranges. Discovery reports only hosts that are both in range and answering SNMP.
-3. **Credential.** Confirm a **platform-owned** profile under **Administration → Data sources → SNMP Profiles** works across the range. The sweep tries only platform profiles (v1/v2c and v3) and never a tenant's; with none stored, the sweep is refused and **Subnet Discovery** shows **Needs attention** with the reason under **Last scan stopped**.
+3. **Credential.** Confirm a **platform-owned** profile under **Administration → Discovery → SNMP Profiles** works across the range. The sweep tries only platform profiles (v1/v2c and v3) and never a tenant's; with none stored, the sweep is refused and **Subnet Discovery** shows **Needs attention** with the reason under **Last scan stopped**.
 4. **Device side.** Confirm the SNMP agent is enabled and its ACL permits the deployment host's source address.
 5. Re-run the scan after each fix. The full procedure is [Discover devices](/onboard-devices/snmp-discovery).
 
@@ -99,7 +99,7 @@ Causes and solutions.
 
 ## No SNMP metrics {#no-snmp-metrics}
 
-Condition. The device is listed, and its SNMP metrics cell under **Administration → Data sources → Data Sources** reads no data.
+Condition. The device is listed, and its SNMP metrics cell under **Administration → Discovery → Collection Coverage** reads no data.
 
 Causes and solutions.
 

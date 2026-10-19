@@ -384,7 +384,7 @@ type discoveryConfigInput struct {
 	Community string `json:"community,omitempty"`
 }
 
-var errDiscoveryCommunityRemoved = errors.New("subnet discovery no longer has its own community — add it as an SNMP profile under Administration → Data sources → SNMP Profiles; the sweep tries those profiles")
+var errDiscoveryCommunityRemoved = errors.New("subnet discovery no longer has its own community — add it as an SNMP profile under Administration → Discovery → SNMP Profiles; the scan tries those profiles")
 
 func (s *server) handleDiscoveryConfig(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireCrossTenant(w, r); !ok {

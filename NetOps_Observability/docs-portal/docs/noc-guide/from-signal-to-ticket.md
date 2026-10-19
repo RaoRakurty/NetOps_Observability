@@ -23,7 +23,7 @@ you have, and how much a given surface is entitled to assert.
 | Correlation | **Investigate → RCA** | The grouping. Related findings and events become one candidate with a **Linked by** relationship, a count of evidence types and an observation count. |
 | The RCA case | The RCA workspace, opened from a candidate | The verdict, the ranked hypotheses, the evidence matrix, the confidence ladder and the causal path. |
 | Triage | **Overview → Home**, then **Operations → Incidents** | An owner, a next action and a tracked lifecycle. |
-| Delivery | **Administration → Notifications** and **Administration → Ticketing & Automation** | The people who need to know, and one record per root cause. |
+| Delivery | **Administration → Incident response → Notifications** and **Administration → Incident response → RCA Tickets** | The people who need to know, and one record per root cause. |
 
 ### The grouping is the point
 

@@ -51,7 +51,7 @@ type ScanCredential struct {
 
 // ErrNoScanCredentials is the refusal the sweep reports when no SNMP profile is
 // eligible — surfaced in the source stats so the console says what to do.
-var ErrNoScanCredentials = errors.New("no SNMP profiles to try — add the credentials your devices use under Administration → Data sources → SNMP Profiles")
+var ErrNoScanCredentials = errors.New("no SNMP profiles to try — add the credentials your devices use under Administration → Discovery → SNMP Profiles")
 
 const (
 	// MaxScanHosts caps the TOTAL number of addresses a scan may expand
