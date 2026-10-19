@@ -1081,9 +1081,6 @@ const IA_TABS: { id: IATab; label: string }[] = [
   { id: "sso", label: "External SSO Roles" },
   { id: "security", label: "Security Settings" },
 ];
-// The Provider realm manages only its own users + scope-wide security. Roles
-// (built-in/custom) and external SSO role mappings are governed per-organization.
-const IA_TABS_PROVIDER = IA_TABS.filter((t) => t.id === "users" || t.id === "security");
 // An organization additionally owns its (optional) Tenants — isolation units it
 // creates only when it needs to split (prod/dev/region). Tenants live HERE, under
 // their org, not as a top-level peer.
@@ -1092,6 +1089,13 @@ const IA_TABS_PROVIDER = IA_TABS.filter((t) => t.id === "users" || t.id === "sec
 const IA_TABS_ORG: { id: IATab; label: string }[] = [
   IA_TABS[0], { id: "access", label: "Access" }, ...IA_TABS.slice(1), { id: "tenants", label: "Tenants" },
 ];
+// The Provider is an organization like any other (owner 2026-10-18: "the
+// Platform is like a tenant which can do everything except platform admin
+// functions"), so it gets the SAME tabs — users, access, roles, SSO roles,
+// security and its tenants — instead of the users + security it used to show.
+// Its users and security settings are the platform realm's (tenant ""); its
+// Access and Tenants are the Provider ORGANIZATION's (org id "global").
+const IA_TABS_PROVIDER = IA_TABS_ORG;
 
 // SecuritySettings — the scope-wide "User Global Settings": password, lockout and
 // session rules that apply to everyone in this scope (provider = the platform, or
@@ -1336,6 +1340,11 @@ function IAItems({ kind, id = "", name, tabs = IA_TABS, deepTab }: {
   }, [deepTab]);
   const cur = tabs.some((t) => t.id === tab) ? tab : (tabs[0]?.id ?? "users");
   const roleScope = kind === "provider" ? undefined : id;  // platform-wide role defs; scoped note when set
+  // Access grants and tenants belong to an ORGANIZATION. The Provider realm's
+  // organization is "global"; an empty id would read as "no org filter" and
+  // list every organization's tenants, so it is never passed through.
+  const orgId = kind === "provider" ? "global" : id;
+  const orgLabel = kind === "provider" ? (name || "Provider") : name;
   return (
     <>
       <div className="ia-tabs" role="tablist">
@@ -1346,12 +1355,12 @@ function IAItems({ kind, id = "", name, tabs = IA_TABS, deepTab }: {
         ))}
       </div>
       {cur === "users" && <UsersAdmin scopeTenant={id} scopeName={kind === "org" ? name : undefined} scopeNoun={kind === "org" ? "Organization" : "Tenant"} />}
-      {cur === "access" && <OrgAccessPanel orgId={id} orgName={name} />}
+      {cur === "access" && <OrgAccessPanel orgId={orgId} orgName={orgLabel} />}
       {cur === "userroles" && <RolesAdmin scopeTenant={roleScope} variant="builtin" />}
       {cur === "customroles" && <RolesAdmin scopeTenant={roleScope} variant="custom" />}
       {cur === "sso" && <SsoRolesPanel />}
       {cur === "security" && <SecuritySettings scopeTenant={id} />}
-      {cur === "tenants" && <OrgTenants orgId={id} orgName={name || id} />}
+      {cur === "tenants" && <OrgTenants orgId={orgId} orgName={orgLabel || orgId} />}
     </>
   );
 }
@@ -1793,10 +1802,10 @@ export function IdentityAccess() {
           <div className="ia-crumb">
             <button className="dash-btn" onClick={() => setSel(null)}>← Organizations</button>
             <span className="ia-crumb-name">{sel.name}</span>
-            <span className="adm-line">{isProvider ? "the platform's own realm — users · security" : "users · access · roles · security · tenants"}</span>
+            <span className="adm-line">{isProvider ? "the platform's own organization" : "organization"}</span>
           </div>
           {isProvider
-            ? <IAItems kind="provider" tabs={IA_TABS_PROVIDER} deepTab={deepTab} />
+            ? <IAItems kind="provider" name={sel.name} tabs={IA_TABS_PROVIDER} deepTab={deepTab} />
             : <IAItems kind="org" id={sel.id} name={sel.name} tabs={IA_TABS_ORG} deepTab={deepTab} />}
         </>
       ) : (
