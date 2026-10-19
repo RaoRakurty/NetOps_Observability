@@ -39,7 +39,7 @@ import (
 )
 
 // epRestrictFixture is two tenants, one device and one episode each, plus a
-// genuinely platform-owned device-less episode that must survive every filter.
+// genuinely platform-owned device-less episode, which only the platform view reads.
 type epRestrictFixture struct {
 	t              *testing.T
 	srv            *httptest.Server
@@ -192,11 +192,11 @@ func TestAlertEpisodesHonourTheOperatorVisibilityRestriction(t *testing.T) {
 	if st := f.ack(f.admin, f.bEpID, ""); st != http.StatusOK {
 		t.Fatalf("baseline: owner ack of tenant B's episode = %d, want 200", st)
 	}
-	// Tenant B's OWN view, captured BEFORE the switch: its own episode plus the
-	// platform's device-less one.
+	// Tenant B's OWN view, captured BEFORE the switch: its own episode only —
+	// the platform's device-less episode is platform-only (P1 2026-10-18).
 	bBefore := f.list(f.b.token, "")
-	if bBefore.Total != 2 {
-		t.Fatalf("baseline: tenant B should read its own episode + the platform's, total 2, got %d (%v)", bBefore.Total, bBefore.resources())
+	if bBefore.Total != 1 {
+		t.Fatalf("baseline: tenant B should read its own episode only, total 1, got %d (%v)", bBefore.Total, bBefore.resources())
 	}
 
 	f.restrictB()
@@ -243,9 +243,10 @@ func TestAlertEpisodesHonourTheOperatorVisibilityRestriction(t *testing.T) {
 		}
 	}
 
-	// ── the owner scoped into the UNRESTRICTED tenant is unmoved. ──
+	// ── the owner scoped into the UNRESTRICTED tenant is unmoved: tenant A's
+	// own episode, and (scoped into a tenant) no platform episode. ──
 	intoA := f.list(f.admin, f.a.tenantID)
-	if intoA.Total != 2 || !strings.Contains(intoA.raw, epAcmeDevice) {
+	if intoA.Total != 1 || !strings.Contains(intoA.raw, epAcmeDevice) {
 		t.Errorf("restricting tenant B moved the owner→tenantA view: total %d (%v)", intoA.Total, intoA.resources())
 	}
 

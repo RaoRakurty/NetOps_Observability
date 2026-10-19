@@ -10,7 +10,7 @@ sidebar_position: 13
 
 A Correlix licence is one signed JSON file. Correlix verifies it offline, against a public key built into the product, so installing a licence needs no connection to Correlix and no activation server. A deployment with no licence file runs at the Community ceilings, which is a supported state rather than a fault.
 
-**Administration → Licence** shows the licence in force and where you stand against every ceiling. A platform administrator also gets the controls that install or remove one.
+**Administration → Workspace → License** shows the licence in force and where you stand against every ceiling. A platform administrator also gets the controls that install or remove one.
 
 ## Before you begin
 
@@ -31,7 +31,7 @@ A trial is the same mechanism: a Team or Enterprise file with a short expiry dat
 
 ### Install the licence on the Licence page {#install-on-the-page}
 
-1. Open **Administration → Licence**.
+1. Open **Administration → Workspace → License**.
 2. Go to **Install a licence**.
 3. Select the file under **Licence file**, or paste the document into **Or paste the licence document**.
 4. Select **Install licence**.
@@ -68,7 +68,7 @@ Correlix re-reads the file within five seconds of a change, so a licence placed 
 
 **Carried, not enforced** is on a row whose limit nothing in the product gates on. The limit is in the licence file so that an issued file is complete and stays valid as the product grows, and the page labels it rather than drawing a bar that looks like a live gate. A row marked this way never refuses anything today.
 
-**Not measured** is different from zero, and the page never collapses the two. A ceiling Correlix counted shows the count, including a genuine `0`. A ceiling Correlix did not count shows `not measured` and the reason, such as `carried in the licence but not enforced by this build` or `the BGP watchlist is not available`. Zero devices in use is a measurement. A blank is silence, and it is written as silence.
+**Not measured** is different from zero, and the page never collapses the two. A ceiling Correlix counted shows the count, including a genuine `0`. A ceiling Correlix did not count shows `not measured` and the reason, such as `not counted by this build` or `the BGP watchlist is not available`. Limits the license carries but nothing enforces today sit together in one table, under one note. Zero devices in use is a measurement. A blank is silence, and it is written as silence.
 
 An unlimited ceiling, written `-1` in the file, has no percentage. A bar drawn against no limit would be an invented number, so the row shows the count in use and the word unlimited.
 
@@ -87,7 +87,7 @@ Consequences, each deliberate:
 
 When there are more devices than a **hard** limit allows (Community, or any licence past its grace period), Correlix collects from the **first N devices by the time it first saw them**. The rest stay in the inventory, marked **Over licence limit** with the reason, and are not polled. Nothing is refused and nothing is dropped:
 
-- the Devices page shows a banner — *12 devices are not monitored: licence limit of 25 reached* — counting only the devices the reader's tenant owns;
+- the Devices page shows a banner — *12 devices are not monitored: license limit of 25 reached* — counting only the devices the reader's tenant owns;
 - the Licence page's usage bar counts every device (it reads 37 of 25), and the note beside it says how many are not collected from;
 - `GET /api/devices/{id}/monitoring` says, per device, whether it is monitored, over the limit or without an address, and whether a collector for its telemetry is actually running.
 

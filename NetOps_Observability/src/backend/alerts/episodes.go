@@ -22,7 +22,7 @@ package alerts
 // Tenancy (§3a): an episode's tenant is derived from its device at fold time
 // by the CALLER (device-less/stack episodes are platform-owned, tenant "").
 // Reads mirror the /api/alerts rule — a scoped principal sees its own tenant's
-// episodes plus device-less ones; writes are strictly own-tenant (cross-tenant
+// episodes only (platform device-less episodes are platform-only); writes are strictly own-tenant (cross-tenant
 // id → ErrEpisodeNotFound so existence is never revealed).
 //
 // The env knobs (ALERT_EPISODE_*) are read by main and passed to the
@@ -118,13 +118,12 @@ func episodeKey(tenant, resource, signal, state string) string {
 // sameTenant mirrors main's sameTenantStrict rule for an already-scoped
 // principal (case/space-insensitive exact match; duplicated at the boundary
 // per the no-utils rule — the cross-tenant short-circuit stays with the caller).
-// episodeVisible is the scoped-read rule: the principal's own episodes, plus
-// the device-less ones that have no owner at all.
+// episodeVisible is the scoped-read rule: the principal's OWN episodes only.
+// A device-less episode nothing else owns is the platform's (tenant "") and is
+// read on the cross-tenant path alone — it was once served to every tenant
+// (P1, 2026-10-18), mirroring the same hole in the /api/alerts rule.
 func episodeVisible(ep Episode, tenant string) bool {
-	if sameTenant(ep.TenantID, tenant) {
-		return true
-	}
-	return ep.Resource == "" && strings.TrimSpace(ep.TenantID) == ""
+	return sameTenant(ep.TenantID, tenant)
 }
 
 func sameTenant(resourceTenant, principalTenant string) bool {
@@ -491,8 +490,8 @@ func (sc EpisodeScope) sees(ep Episode) bool {
 
 // List returns the episodes visible to the scope, most recently seen first,
 // capped with disclosure. Visibility mirrors /api/alerts: cross sees all; a
-// scoped principal sees its own tenant's episodes plus the device-less ones
-// NOTHING OWNS; and a restricted tenant is not readable by platform staff.
+// scoped principal sees its own tenant's episodes only; and a restricted
+// tenant is not readable by platform staff.
 //
 // `total` is the size of the VISIBLE set — counted after the scope's filter and
 // before the limit, in the one loop, so the count can never describe rows the

@@ -135,7 +135,7 @@ func (a *API) Handle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		a.d.WriteError(w, http.StatusMethodNotAllowed,
-			errors.New("monitoring is read-only: every device with an address is monitored, up to the licence limit"))
+			errors.New("monitoring is read-only: every device with an address is monitored, up to the license limit"))
 		return
 	}
 	caller, ok := a.d.ReadGate(w, r)

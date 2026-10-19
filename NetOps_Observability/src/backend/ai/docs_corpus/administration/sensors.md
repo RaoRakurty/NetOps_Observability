@@ -1,14 +1,14 @@
 ---
 title: Review collector status on the Sensors page
 sidebar_label: Sensors
-description: Check that each collector is enabled, healthy and reaching its targets, and scope the subnet discovery sweep, from Administration → Data sources → Sensors.
+description: Check that each collector is enabled, healthy and reaching its targets, and scope the subnet discovery sweep, from Administration → Discovery → Sensors.
 page_type: task
 sidebar_position: 26
 ---
 
 # Review collector status on the Sensors page
 
-**Administration → Data sources → Sensors** shows the collection layer: every
+**Administration → Discovery → Sensors** shows the collection layer: every
 protocol collector and the SNMP trap receiver, whether each is enabled and
 healthy, and how many of its targets it reaches. The subnet discovery settings
 sit at the top of the same page.
@@ -21,7 +21,7 @@ sit at the top of the same page.
 
 ## Steps
 
-1. Go to **Administration → Data sources → Sensors**.
+1. Go to **Administration → Discovery → Sensors**.
 2. Read the summary under **Collectors**:
    - **Collectors**: how many are registered.
    - **Enabled**: how many of them are on.

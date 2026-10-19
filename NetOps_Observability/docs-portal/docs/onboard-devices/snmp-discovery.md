@@ -45,7 +45,7 @@ rather than trimmed.
 
 ## Where to find it
 
-**Administration → Data sources → Subnet Discovery** is where you set the IP
+**Administration → Discovery → Network Scan** is where you set the IP
 ranges the scan sweeps, switch scanning on, and read what the last sweep found.
 It sits next to **SNMP Profiles**, where the credentials the sweep tries are
 kept, and **Telemetry Coverage**. To connect a network management system or a
@@ -66,7 +66,7 @@ automatically.
   than 4,096 addresses in total. A `/20` is the widest single range that fits.
 - At least one **platform-owned** SNMP profile the devices answer to — a v1/v2c
   community or a v3 USM profile — in
-  **Administration → Data sources → SNMP Profiles**. See
+  **Administration → Discovery → SNMP Profiles**. See
   [Add an SNMP credential](/onboard-devices/snmp-profiles). With no platform
   profile the sweep is refused rather than probing with `public`, and
   `SNMP_COMMUNITY` is not used by discovery.
@@ -83,7 +83,7 @@ it with your actual management subnets before enabling discovery.
 
 ## Steps
 
-1. Go to **Administration → Data sources → Subnet Discovery**
+1. Go to **Administration → Discovery → Network Scan**
    (`#/admin/discovery`). The page walks through three numbered steps.
 2. **Step 1 — Add SNMP credentials.** The step shows how many platform SNMP
    profiles the scan will try. If it shows **No SNMP profiles**, select
@@ -182,7 +182,7 @@ shows under **Last scan stopped** (the API's `last_error`).
 | IPv6 | `"2001:db8::/32": only IPv4 ranges are supported` |
 | More than 32 ranges | `at most 32 ranges are allowed` |
 | Enabled with no range | `at least one CIDR range is required to enable discovery` |
-| No platform-owned SNMP profile to try | `discovery sweep refused: no SNMP profiles to try — add the credentials your devices use under Administration → Data sources → SNMP Profiles` |
+| No platform-owned SNMP profile to try | `discovery sweep refused: no SNMP profiles to try — add the credentials your devices use under Administration → Discovery → SNMP Profiles` |
 
 Loopback, link-local, multicast and reserved space stay refused even with
 **Allow public address ranges** on.

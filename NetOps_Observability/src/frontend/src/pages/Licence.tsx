@@ -153,17 +153,35 @@ function Pill({ tone, children, title }: { tone: Tone; children: ReactNode; titl
 }
 
 /** A section of the page: a landmark, a stable id, and its own header. */
-function Section({ id, title, note, topic, actions, children }: {
-  id: string; title: string; note?: ReactNode; topic?: string; actions?: ReactNode; children: ReactNode;
+// `collapsible` sections open on demand (owner 2026-10-18: less to read): the
+// page leads with the license and where you stand; capabilities, installing
+// and verification are one click away. Their content stays in the document
+// (a closed <details>), so nothing a closed section says is lost to search or
+// assistive tech.
+function Section({ id, title, note, topic, actions, collapsible, children }: {
+  id: string; title: string; note?: ReactNode; topic?: string; actions?: ReactNode; collapsible?: boolean; children: ReactNode;
 }) {
+  const head = (
+    <>
+      <h2>{title}{topic ? <AskIris topic={topic} label={title} /> : null}</h2>
+      {note && <span className="lic-sec-note">{note}</span>}
+      <span className="lic-sp" />
+      {actions}
+    </>
+  );
+  if (collapsible) {
+    return (
+      <section className="lic-sec lic-sec-fold" data-section={id} role="region" aria-label={title}>
+        <details>
+          <summary className="lic-sec-hd">{head}</summary>
+          <div className="lic-sec-bd">{children}</div>
+        </details>
+      </section>
+    );
+  }
   return (
     <section className="lic-sec" data-section={id} role="region" aria-label={title}>
-      <div className="lic-sec-hd">
-        <h2>{title}{topic ? <AskIris topic={topic} label={title} /> : null}</h2>
-        {note && <span className="lic-sec-note">{note}</span>}
-        <span className="lic-sp" />
-        {actions}
-      </div>
+      <div className="lic-sec-hd">{head}</div>
       <div className="lic-sec-bd">{children}</div>
     </section>
   );
@@ -389,7 +407,6 @@ function UsageRow({ row }: { row: LicenceCeiling }) {
     <li className={`lic-usage-row lic-${tone}`}>
       <div className="lic-usage-hd">
         <span className="lic-usage-name">{row.label}</span>
-        {!row.enforced && <Pill tone="muted" title={NOT_ENFORCED_REASON}>{NOT_ENFORCED_NOTE}</Pill>}
         {/* SOFT is stated on the row, not only in the overage banner: an
             operator reading a bar at 96 % needs to know, right there, whether
             the next device is admitted or refused. */}
@@ -417,16 +434,15 @@ function UsageRow({ row }: { row: LicenceCeiling }) {
       </div>
 
       <div className="lic-usage-ft">
-        <span className="lic-line">
-          {bar.kind === "unlimited"
-            ? "This license sets no limit here."
-            : `Licensed limit ${fmtLimit(row.limit)}.`}
-          {/* What actually happens past the limit, said only once the bar is in
-              a warning band — below 80 % it is noise, and above it, it is the
-              question the operator has. */}
-          {row.enforced && bandText ? ` ${ceilingConsequence(row)}` : ""}
-          {row.enforced ? "" : ` ${NOT_ENFORCED_REASON}`}
-        </span>
+        {/* "no limit" is already in the number beside the name; the line
+            only speaks when it adds something: the limit, and — once the bar
+            is in a warning band — what happens past it. */}
+        {bar.kind !== "unlimited" && (
+          <span className="lic-line">
+            {`Licensed limit ${fmtLimit(row.limit)}.`}
+            {bandText ? ` ${ceilingConsequence(row)}` : ""}
+          </span>
+        )}
         {lifted && <Pill tone="muted">{lifted}</Pill>}
       </div>
 
@@ -441,6 +457,8 @@ function UsageRow({ row }: { row: LicenceCeiling }) {
 
 function Usage({ rows, note }: { rows: readonly LicenceCeiling[]; note?: string }) {
   const ordered = useMemo(() => sortedCeilings(rows), [rows]);
+  const enforced = ordered.filter((r) => r.enforced);
+  const carried = ordered.filter((r) => !r.enforced);
   if (ordered.length === 0) {
     return (
       <HonestState
@@ -462,7 +480,35 @@ function Usage({ rows, note }: { rows: readonly LicenceCeiling[]; note?: string 
           <span>{note}</span>
         </div>
       )}
-      <ul className="lic-usage">{ordered.map((r) => <UsageRow key={r.name} row={r} />)}</ul>
+      {enforced.length > 0 && <ul className="lic-usage">{enforced.map((r) => <UsageRow key={r.name} row={r} />)}</ul>}
+      {/* Limits the file carries but nothing gates on today: ONE compact table
+          under ONE reason (owner 2026-10-18: less verbose), never a bar — a bar
+          nothing enforces would read as a live gate. */}
+      {carried.length > 0 && (
+        <div className="lic-carried" data-testid="lic-carried">
+          <p className="lic-carried-head">
+            <Pill tone="muted">{NOT_ENFORCED_NOTE}</Pill>
+            <span className="lic-line">{NOT_ENFORCED_REASON}</span>
+          </p>
+          <table className="lic-carried-table">
+            <thead><tr><th>Limit</th><th>In use</th><th>Licensed</th></tr></thead>
+            <tbody>
+              {carried.map((r) => {
+                const bar = usageBar(r);
+                return (
+                  <tr key={r.name} data-testid={`lic-carried-${r.name}`}>
+                    <td>{r.label}</td>
+                    <td className="mono">
+                      {bar.kind === "unmeasured" ? <span className="lic-absent">{notMeasuredText(bar.reason)}</span> : bar.current}
+                    </td>
+                    <td className="mono">{r.limit < 0 ? "no limit" : fmtLimit(r.limit)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </>
   );
 }
@@ -1134,6 +1180,7 @@ export default function Licence() {
       <Section
         id="metering"
         title="Usage"
+        collapsible
         note={`Recorded usage, ${periodLabel(span)} (UTC)`}
         actions={
           <button type="button" className="btn sm" onClick={reloadUsage}>
@@ -1160,6 +1207,7 @@ export default function Licence() {
       <Section
         id="features"
         title="Features"
+        collapsible
         topic="licence.features"
         note="Capabilities, and the tier each needs"
       >
@@ -1169,6 +1217,7 @@ export default function Licence() {
       <Section
         id="install"
         title={provider ? "Install a license" : "Changing this license"}
+        collapsible
         note="One license file per installation"
       >
         {body("the license", (v) => (
@@ -1182,11 +1231,11 @@ export default function Licence() {
           still gets it — on its own, rather than as a heading over an empty
           section. */}
       {tenantScope ? (
-        <Section id="expiry" title="Expiry" note="What expiry can and cannot do">
+        <Section id="expiry" title="Expiry" note="What expiry can and cannot do" collapsible>
           {body("the expiry policy", (v) => <ExpiryNote text={v.expiry_semantics} />)}
         </Section>
       ) : (
-        <Section id="verification" title="Verification" note="Check it without trusting this page">
+        <Section id="verification" title="Verification" note="Check it without trusting this page" collapsible>
           {body("the trusted keys", (v) => <Verification view={v} />)}
         </Section>
       )}

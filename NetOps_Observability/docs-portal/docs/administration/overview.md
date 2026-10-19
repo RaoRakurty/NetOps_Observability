@@ -70,38 +70,37 @@ calling the route directly still returns `403`.
 
 | Console path | Plane | Who sees it |
 | --- | --- | --- |
-| **Administration → Incident Response → Integrations** | Per-tenant | All administrators |
-| **Administration → Incident Response → Notifications** | Mixed | All administrators; the channel configuration itself is platform-only |
-| **Administration → Incident Response → Ticketing & Automation** | Per-tenant | All administrators |
-| **Administration → Data sources → Data Sources** | Per-tenant | All administrators |
-| **Administration → Data sources → SNMP Profiles** | Mixed | All administrators; profile writes are platform-only |
-| **Administration → Data sources → Sensors** | Platform-global | Platform administrator only |
-| **Administration → Data sources → Subnet Discovery** | Platform-global | Platform administrator only |
-| **Administration → Data sources → Telemetry Coverage** | Both halves on one page | All administrators, parser statistics are platform-only |
+| **Administration → Incident response → Integrations** | Per-tenant | All administrators |
+| **Administration → Incident response → Notifications** | Mixed | All administrators; the channel configuration itself is platform-only |
+| **Administration → Incident response → RCA Tickets** | Per-tenant | All administrators |
+| **Administration → Discovery → Collection Coverage** | Per-tenant | All administrators |
+| **Administration → Discovery → SNMP Profiles** | Mixed | All administrators; profile writes are platform-only |
+| **Administration → Discovery → Sensors** | Platform-global | Platform administrator only |
+| **Administration → Discovery → Network Scan** | Platform-global | Platform administrator only |
+| **Administration → Discovery → Telemetry Coverage** | Both halves on one page | All administrators, parser statistics are platform-only |
 | **Administration → Data handling → Processors** | Per-tenant | All administrators |
 | **Administration → Data handling → Sensitive Data Access** | Per-tenant | Holders of `sensitive_data:admin` |
-| **Administration → Identity & Access** | Per-tenant | All administrators, scoped to what they own |
-| **Administration → Access & Audit → Access Explorer** | Per-tenant | All administrators |
-| **Administration → Access & Audit → Sessions** | Per-tenant | All administrators; you see your own tenant's sessions |
-| **Administration → Access & Audit → Audit Log** | Per-tenant | All administrators |
-| **Administration → Access & Audit → Transport Security** | Per-tenant | All administrators; the export is platform-only |
-| **Administration → API Access** | Mixed | All administrators, token policy is platform-only |
-| **Administration → Settings** | Mixed | All administrators, DNS and NTP are platform-only |
-| **Administration → Licence** | Mixed | All administrators read it, in their own scope; install and remove are platform-only |
+| **Administration → People & access → Identity & Access** | Per-tenant | All administrators, scoped to what they own |
+| **Administration → Audit & security → Access Explorer** | Per-tenant | All administrators |
+| **Administration → People & access → Sessions** | Per-tenant | All administrators; you see your own tenant's sessions |
+| **Administration → Audit & security → Audit Log** | Per-tenant | All administrators |
+| **Administration → Audit & security → Transport Security** | Per-tenant | All administrators; the export is platform-only |
+| **Administration → People & access → API Access** | Mixed | All administrators, token policy is platform-only |
+| **Administration → Workspace → Settings** | Mixed | All administrators, DNS and NTP are platform-only |
+| **Administration → Workspace → License** | Mixed | All administrators read it, in their own scope; install and remove are platform-only |
 | **Platform → Security → Authentication** | Platform-global | Platform administrator only |
 | **Platform → Security → Data Protection** | Platform-global | Platform administrator only |
 | **Platform → Tools → Stack Health · Self-Monitoring · Search Dashboards · Pipeline Debugger · Regions · GraphQL Explorer** | Platform-global | Platform administrator only |
 
 There is one licence file per installation: the same file sets the ceilings every
 tenant on the installation runs under, and installing or replacing it is a
-platform administrator's action. The reading of it is not. **Administration →
-Licence** answers each administrator in its own scope, so a tenant sees its tier,
+platform administrator's action. The reading of it is not. **Administration → Workspace → License** answers each administrator in its own scope, so a tenant sees its tier,
 its entitled features and its own usage against those ceilings, without the
 customer name, the licence id or the signing keys.
 
 ## Which administrator am I?
 
-Open **Administration → Identity & Access**. A platform administrator sees the Organizations tree with the Provider realm as a clickable root row. A tenant administrator sees one page headed "Users, roles and security settings for your tenant", with no tree and no picker. The second check is the icon rail: a **Platform** section sits under Administration at the foot of the rail, and it appears only for the platform administrator.
+Open **Administration → People & access → Identity & Access**. A platform administrator sees the Organizations tree with the Provider realm as a clickable root row. A tenant administrator sees one page headed "Users, roles and security settings for your tenant", with no tree and no picker. The second check is the icon rail: a **Platform** section sits under Administration at the foot of the rail, and it appears only for the platform administrator.
 
 ## Related
 

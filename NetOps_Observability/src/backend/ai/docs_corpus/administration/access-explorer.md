@@ -8,7 +8,7 @@ sidebar_position: 3
 
 # Check what an account can access
 
-**Administration → Access & Audit → Access Explorer** answers "why does this
+**Administration → Audit & security → Access Explorer** answers "why does this
 user have access to this tenant?". Enter a user or a service account and
 Correlix lists every tenant it can act in, traced back to the binding that
 grants it. Deny bindings and break-glass grants are shown, not hidden.
@@ -24,7 +24,7 @@ grants it. Deny bindings and break-glass grants are shown, not hidden.
 
 ## Steps
 
-1. Go to **Administration → Access & Audit → Access Explorer**.
+1. Go to **Administration → Audit & security → Access Explorer**.
 2. In **Person or service**, enter the username. Leave it blank to explain
    your own account.
 3. Select **Explain access**.
