@@ -24,6 +24,7 @@
 // "not_connected" and "empty" are never collapsed: the first means "we cannot
 // see", the second means "we looked and there was nothing".
 
+import { GLOBAL_DEFAULT_LABEL, isDefaultInstance } from "../../lib/vendorTerms";
 import type {
   VrfCoverage,
   VrfDialect,
@@ -116,6 +117,7 @@ export function transportLabel(coverage: VrfCoverage): string {
 /** groupHeading is the section title, in the device's own dialect. */
 export function groupHeading(group: VrfInterfaceGroup, dialect: VrfDialect): string {
   if (group.membership === "not_collected") return group.label;
+  if (isDefaultInstance(group.vrf, dialect.vendor)) return GLOBAL_DEFAULT_LABEL;
   return `${dialect.term} ${group.vrf}`;
 }
 

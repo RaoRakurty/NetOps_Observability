@@ -140,6 +140,13 @@ describe("dialect rendering per vendor", () => {
     expect(groupHeading(g, dialect({ term: "routing-instance" }))).toBe("routing-instance CORP-WAN");
   });
 
+  it("heads a group the device itself names as its default table \"Global (default)\"", () => {
+    const base = group({ vrf: "Base", membership: "observed", label: "Base" });
+    expect(groupHeading(base, dialect({ term: "VPRN", vendor: "nokia" }))).toBe("Global (default)");
+    // The same name on a vendor that does not use it stays the device's name.
+    expect(groupHeading(base, dialect({ term: "VRF", vendor: "arista" }))).toBe("VRF Base");
+  });
+
   it("uses the server's own label for the not-collected bucket, and never says default", () => {
     const h = groupHeading(group(), dialect());
     expect(h).toBe("VRF membership not collected on this transport");
