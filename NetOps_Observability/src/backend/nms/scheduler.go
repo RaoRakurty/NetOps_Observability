@@ -340,6 +340,13 @@ func (rt *Runtime) sinkRouted(ctx context.Context, ic Integration, routed Routed
 			applog.Warn("nms", "state sink", map[string]any{"integration": ic.ID, "error": err.Error()})
 		}
 	}
+	// Controller-sourced inventory (inventory.go): fifth sink. Applied ONLY for
+	// a complete snapshot; the owner is the integration's, never the batch's.
+	if routed.DevicesComplete {
+		if err := rt.store.ReplaceDevices(ctx, ic.Tenant, ic.ID, routed.Devices, time.Now().UTC()); err != nil {
+			applog.Warn("nms", "device inventory not stored", map[string]any{"integration": ic.ID, "error": err.Error()})
+		}
+	}
 	// Wireless canonical inventory (#128): fourth sink, same best-effort-per-
 	// lane contract. Tenant comes from the integration record, never the batch.
 	if inv := routed.Wireless; !inv.Empty() {

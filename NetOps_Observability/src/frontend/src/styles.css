@@ -7524,3 +7524,8 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
 .lic-feat-state { color: var(--muted); font-size: 13px; }
 .lic-sub { margin: var(--sp-3) 0 0; font-size: 15px; font-weight: 600; }
 .lic-sub-actions { display: flex; align-items: center; gap: var(--sp-2); }
+
+/* Device page — a controller's view of the device (pages/device/ControllerOverview.tsx). */
+.ddp-ctl { margin-top: var(--sp-3); }
+.ddp-ctl-head { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-2); }
+.ddp-ctl-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
