@@ -66,6 +66,11 @@ export type Device = {
   software_version?: string;
   /** The location configured ON the device (SNMP sysLocation); "" when unset. */
   configured_location?: string;
+  /** The site id the device or its controller reports (SD-WAN site-id), and
+   *  who reported it ("device" or the controller, e.g. "vmanage"). Shown beside
+   *  the operator's site, never instead of it. */
+  reported_site_id?: string;
+  reported_site_source?: string;
 };
 
 /** GET /api/devices/{id}/monitoring — read-only status. */

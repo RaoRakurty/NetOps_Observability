@@ -144,6 +144,14 @@ type Device struct {
 	// ConfiguredLocation is the location configured ON the device (SNMPv2-MIB
 	// sysLocation, every vendor's agent answers it); "" when not configured.
 	ConfiguredLocation string `json:"configured_location,omitempty"`
+	// ReportedSiteID is the site id the DEVICE or its controller reports (an
+	// SD-WAN edge's system site-id) and ReportedSiteSource says which: "device"
+	// (the edge's own SD-WAN MIB) or the controller's name ("vmanage").
+	// Server-stamped on read, never request input, never persisted, and never
+	// the operator's site: a manually set site always wins (owner decision
+	// 2026-10-18) — this is shown beside it, not instead of it.
+	ReportedSiteID     string `json:"reported_site_id,omitempty"`
+	ReportedSiteSource string `json:"reported_site_source,omitempty"`
 }
 
 // Metric is a single time-series sample emitted by a collector.

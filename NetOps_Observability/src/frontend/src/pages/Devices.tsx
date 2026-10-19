@@ -19,6 +19,7 @@ import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 import AskIris from "../components/AskIris";
 import { overageSummary } from "./licence.model";
 import { operatorError } from "../lib/errors";
+import { reportedSiteTitle } from "./device/reportedSite";
 
 const Req = () => <span style={{ color: "var(--bad)", marginLeft: 2 }} title="required">*</span>;
 
@@ -333,8 +334,8 @@ export default function Devices() {
       },
       {
         key: "location", header: "Site", width: "14%", sortable: true,
-        text: (d) => siteText(locs.get(d.id), siteName) || d.configured_location || "",
-        sortValue: (d) => siteText(locs.get(d.id), siteName) || d.configured_location || "~",
+        text: (d) => siteText(locs.get(d.id), siteName) || d.configured_location || (d.reported_site_id ? `Site ID ${d.reported_site_id}` : ""),
+        sortValue: (d) => siteText(locs.get(d.id), siteName) || d.configured_location || (d.reported_site_id ? `Site ID ${d.reported_site_id}` : "~"),
         render: (d) => (
           <SiteCell
             row={locs.get(d.id)}
@@ -342,6 +343,8 @@ export default function Devices() {
             editable={editableSites}
             siteName={siteName}
             configured={d.configured_location}
+            reported={d.reported_site_id}
+            reportedFrom={d.reported_site_source}
             onAssign={(slug) => assignSite(d.id, slug)}
           />
         ),
@@ -589,7 +592,7 @@ function siteText(row: DeviceLocationRow | undefined, siteName: Map<string, stri
 // `row.source` distinguishes a declared-site placement ("sot") from a free-form
 // manual location ("manual"); the picker binds to a declared site by slug.
 function SiteCell({
-  row, options, editable, siteName, configured, onAssign,
+  row, options, editable, siteName, configured, reported, reportedFrom, onAssign,
 }: {
   row: DeviceLocationRow | undefined;
   options: SiteRow[];
@@ -598,14 +601,21 @@ function SiteCell({
   /** The location configured ON the device (SNMP sysLocation), used when no
    *  site is assigned; empty when the device has none configured. */
   configured?: string;
+  /** The site id the device or its controller reports — last fallback, shown
+   *  only when nothing assigns or configures a site (a manual site wins). */
+  reported?: string;
+  reportedFrom?: string;
   onAssign: (slug: string) => void;
 }) {
   const slug = row?.site ?? "";
   const isDeclared = !!slug && siteName.has(slug);
   const label = siteText(row, siteName);
-  const fromDevice = !label && configured
-    ? <span style={{ color: "var(--fg-muted)" }} title={`Configured on the device: ${configured}`}>{configured}</span>
-    : null;
+  const fromDevice = label ? null
+    : configured
+      ? <span style={{ color: "var(--fg-muted)" }} title={`Configured on the device: ${configured}`}>{configured}</span>
+      : reported
+        ? <span style={{ color: "var(--fg-muted)" }} title={reportedSiteTitle(reportedFrom)}>Site ID {reported}</span>
+        : null;
 
   if (!editable) {
     return label
