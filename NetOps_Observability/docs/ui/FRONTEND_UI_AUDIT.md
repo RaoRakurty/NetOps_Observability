@@ -32,8 +32,8 @@ Fixed in C1 (this change) → **67 of 68** routes fit. Open: `security/overview`
 
 ### Type sizes (dark 1440, all routes)
 
-The NOC-admin standard (owner 2026-09-06) is **≥ 14px** for anything an
-operator reads. Text elements by computed size:
+The NOC-admin standard (owner 2026-09-06): **body ≥ 14px, headings ≥ 16px,
+nothing below 12.5px**. Text elements by computed size:
 
 | Size | Elements |
 |---|---|
@@ -91,7 +91,7 @@ TSX bypass the stylesheet altogether.
 
 | # | Finding | Next step |
 |---|---|---|
-| U1 | Text below 14px app-wide (table above) | C2: raise `--fs-micro/--fs-meta` floor and migrate raw sizes to tokens, page slice by slice, with before/after shots |
+| U1 | Text below the 12.5px floor (≈2,000 elements at 9–12px) and body text (tables) at 12.5px instead of 14px | C2: lift everything to the floor, table/body text to `--fs-sm`, migrate raw sizes to tokens, with before/after shots |
 | U2 | Inline font sizes/colours in TSX (792) | Migrate with each page slice; new code uses tokens (see DESIGN_SYSTEM.md) |
 | U3 | `security/overview` still scrolls at 390px (1143px) although every overflowing element is clipped by its own scroll box; suspect a sticky table header inside a block table | Investigate in C2 |
 | U4 | Inventory IP / Status columns truncate | Widen with the C2 table pass |

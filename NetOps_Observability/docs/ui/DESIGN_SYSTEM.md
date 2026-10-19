@@ -8,8 +8,8 @@ which to use, and why. The audit that measures adoption is
 ## Principles
 
 - **Readable first.** Operators read this on a wall screen and on a laptop at
-  2am: anything a person reads is **≥ 14px** (owner, 2026-09-06). Smaller sizes
-  are for non-reading marks only (sort arrows, chip counts).
+  2am (owner, 2026-09-06): **body ≥ 14px, headings ≥ 16px, nothing below
+  12.5px** — 12.5px is for secondary text (metadata, captions), never body.
 - **Plain words.** No environment-variable names, no internal state names, US
   English. `copyVoice.test.ts` enforces the list of removed phrases.
 - **Context-appropriate layouts, not identical screens.** A canvas (Topology)
@@ -22,8 +22,8 @@ which to use, and why. The audit that measures adoption is
 
 | Token | Size | Use |
 |---|---|---|
-| `--fs-micro` | 12px | Non-reading marks only: sort arrows, count badges |
-| `--fs-meta` | 13px | Being retired for reading text (U1) — use `--fs-sm` |
+| `--fs-micro` | 12px | Below the 12.5px floor — being raised (U1); do not use for text |
+| `--fs-meta` | 13px | Secondary text: metadata, captions, table headers |
 | `--fs-sm` | 14px | Dense body: tables, nav, buttons, form labels |
 | `--fs-base` | 15px | Body copy |
 | `--fs-md` | 18px | Sub-headings |
