@@ -10,6 +10,7 @@ package tenant
 import (
 	"encoding/json"
 	"errors"
+	"netops/backend/internal/owner"
 	"os"
 	"regexp"
 	"sort"
@@ -19,7 +20,7 @@ import (
 )
 
 // Global is the seeded root tenant that owns shared defaults.
-const Global = "global"
+const Global = owner.Platform
 
 type Tenant struct {
 	ID   string `json:"id"`
