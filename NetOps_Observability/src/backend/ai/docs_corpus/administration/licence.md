@@ -10,7 +10,7 @@ sidebar_position: 13
 
 A Correlix licence is one signed JSON file. Correlix verifies it offline, against a public key built into the product, so installing a licence needs no connection to Correlix and no activation server. A deployment with no licence file runs at the Community ceilings, which is a supported state rather than a fault.
 
-**Administration → Licence** shows the licence in force and where you stand against every ceiling. A platform administrator also gets the controls that install or remove one.
+**Administration → Workspace → License** shows the licence in force and where you stand against every ceiling. A platform administrator also gets the controls that install or remove one.
 
 ## Before you begin
 
@@ -31,7 +31,7 @@ A trial is the same mechanism: a Team or Enterprise file with a short expiry dat
 
 ### Install the licence on the Licence page {#install-on-the-page}
 
-1. Open **Administration → Licence**.
+1. Open **Administration → Workspace → License**.
 2. Go to **Install a licence**.
 3. Select the file under **Licence file**, or paste the document into **Or paste the licence document**.
 4. Select **Install licence**.

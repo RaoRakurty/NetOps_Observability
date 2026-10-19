@@ -22,7 +22,7 @@ to the case. For the search syntax and export options, see
 - **A time to search around.** A reported symptom time, an alert's fired-at
   time, or an RCA case's window.
 - **Syslog arriving from that device.** Check the device's **Syslog** cell on
-  **Administration → Data sources → Data Sources**. If it does not read
+  **Administration → Discovery → Collection Coverage**. If it does not read
   *receiving*, the absence of log lines says nothing about the device. See
   [Send syslog](/send-data/syslog).
 
@@ -144,7 +144,7 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 Every shard answered and none held a matching record. That separates
 *queried and empty* from *could not be queried*, which is a different fact. It still does not distinguish a healthy quiet device from a device
 whose logging path is broken, and neither does the console. Resolve it on
-**Administration → Data sources → Data Sources**: a device whose Syslog cell
+**Administration → Discovery → Collection Coverage**: a device whose Syslog cell
 reads *no data* is not sending, and silence from a device that normally reports
 steadily is itself worth investigating.
 

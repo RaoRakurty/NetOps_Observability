@@ -23,7 +23,7 @@ A federated account is created by its first successful sign-in, with no import s
 
 ### Set the password, lockout and session policy
 
-Policy is per scope: the Provider realm, an organization, or one tenant. Open **Administration → Identity & Access → (scope) → Security Settings**.
+Policy is per scope: the Provider realm, an organization, or one tenant. Open **Administration → People & access → Identity & Access → (scope) → Security Settings**.
 
 The shipped defaults:
 
@@ -118,11 +118,11 @@ A disabled provider answers its test with the stage `config` and the message `TA
 
 ### Set the token policy
 
-**Administration → API Access → Token Policy** governs interactive session tokens platform-wide: how long a sign-in session lasts before it must be renewed or signed in again. It is platform administrator only.
+**Administration → People & access → API Access → Token Policy** governs interactive session tokens platform-wide: how long a sign-in session lasts before it must be renewed or signed in again. It is platform administrator only.
 
 To change how long session tokens last:
 
-1. Go to **Administration → API Access** and select the **Token Policy** tile.
+1. Go to **Administration → People & access → API Access** and select the **Token Policy** tile.
 2. Set **Access token TTL (minutes)**: how long an access token stays valid. The hint under the field gives the allowed range and the recommended maximum.
 3. Set **Refresh token TTL (days)**: how long a refresh token can renew a session without a new sign-in.
 4. Select **Save policy**. The new access lifetime applies to new sign-ins immediately, and the new refresh lifetime applies to newly issued refresh tokens.

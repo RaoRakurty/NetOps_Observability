@@ -53,7 +53,7 @@ Slug rules, applied to a supplied slug and to one derived from the name alike:
 
 To create an organization and its first tenant in one pass:
 
-1. Open **Administration → Identity & Access**.
+1. Open **Administration → People & access → Identity & Access**.
 2. Select **＋ Add**, then the **Customer organization** card.
 3. Enter the **Organization name**, pick a **Home region**, and leave **SSO connection** blank if you will bind it later.
 4. On the next step, tick **Create a first tenant now** and enter the **Tenant name**. Leave **Region** on the inherited option unless this tenant genuinely differs from its organization.
@@ -62,7 +62,7 @@ To create an organization and its first tenant in one pass:
 
 To add a tenant to an existing organization:
 
-1. Open **Administration → Identity & Access → Organizations**.
+1. Open **Administration → People & access → Identity & Access → Organizations**.
 2. Select the organization, then its **Tenants** tab.
 3. Add the tenant there. It is pre-bound to that organization.
 
@@ -103,7 +103,7 @@ A tenant created before the lifecycle field existed carries no `status`. A blank
 
 Suspension is the reversible "pause this customer" switch. It takes effect on the next request, not at the next sign-in.
 
-1. Open the tenant's row under **Administration → Identity & Access → Organizations → (org) → Tenants**.
+1. Open the tenant's row under **Administration → People & access → Identity & Access → Organizations → (org) → Tenants**.
 2. Select **Suspend**.
 3. Confirm the prompt.
 

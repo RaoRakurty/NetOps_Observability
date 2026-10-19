@@ -25,7 +25,7 @@ Every operation takes one of two credentials in the `Authorization` header:
 | Credential | Header | Obtained from |
 |---|---|---|
 | Access token (JWT) | `Authorization: Bearer <jwt>` | `POST /api/auth/login` |
-| API key | `Authorization: Bearer ntk_…` or `X-API-Key: ntk_…` | **Administration → API Access** |
+| API key | `Authorization: Bearer ntk_…` or `X-API-Key: ntk_…` | **Administration → People & access → API Access** |
 
 A request without a credential is refused with `401` and the body `{"error":"missing bearer token"}`.
 

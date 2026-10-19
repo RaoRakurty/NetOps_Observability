@@ -221,11 +221,29 @@ describe("Administration groups (owner IA, 2026-09-05)", () => {
     expect(groups).not.toContain("Data Collection");
   });
 
-  it("Access & Audit is tenant-level throughout", () => {
-    expect(groupIds(admin, "Access & Audit")).toEqual(["access", "sessions", "audit", "transport"]);
-    for (const id of groupIds(admin, "Access & Audit")) {
+  it("People & access and Audit & security are tenant-level throughout", () => {
+    expect(groupIds(admin, "People & access")).toEqual(["identity", "api", "sessions"]);
+    expect(groupIds(admin, "Audit & security")).toEqual(["access", "audit", "transport"]);
+    for (const id of [...groupIds(admin, "People & access"), ...groupIds(admin, "Audit & security")]) {
       expect(GATES[id].scope).toBe("tenant");
     }
+  });
+
+  // Owner IA 2026-10-18 (Administration phase 4): seven groups in SETUP order,
+  // every leaf grouped, so the flyout reads top to bottom as a setup path.
+  it("groups appear in setup order and every leaf is grouped", () => {
+    const groups = [...new Set((admin.children ?? []).map((l) => l.group))];
+    expect(groups).toEqual([
+      "Data sources", "Incident response", "Data handling", "Iris", "People & access", "Audit & security", "Workspace",
+    ]);
+    expect((admin.children ?? []).every((l) => !!l.group)).toBe(true);
+    expect(groupIds(admin, "Incident response")).toEqual(["integrations", "notifications", "ticketing"]);
+    expect(groupIds(admin, "Workspace")).toEqual(["settings", "licence"]);
+  });
+
+  it("the retired group names are gone", () => {
+    const groups = (admin.children ?? []).map((l) => l.group);
+    for (const old of ["Access & Audit", "Incident Response"]) expect(groups).not.toContain(old);
   });
 });
 
