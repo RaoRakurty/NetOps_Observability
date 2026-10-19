@@ -42,7 +42,6 @@ export const ADMIN_LEAF_THEME: Record<string, keyof typeof ADMIN_THEMES> = {
   integrations: "response",
   notifications: "response",
   ticketing: "response",
-  "ticket-delivery": "response",
   processors: "handling",
   "sensitive-data-access": "handling",
   "network-context": "iris",

@@ -210,4 +210,4 @@ func PortalSettingsFor(connectorID string, cfg TACConnectorConfig) PortalConnect
 // NotConfiguredPortalNote is the state a tenant with no portal details is in. It
 // names the four facts and where they are brought, because unlike a credential
 // there is nothing to obtain from a vendor first.
-const NotConfiguredPortalNote = "No portal details for this tenant yet — add the portal address on Ticket delivery."
+const NotConfiguredPortalNote = "No portal details for this tenant yet — add the portal address in RCA Tickets → Vendor case routing."

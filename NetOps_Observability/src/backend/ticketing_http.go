@@ -43,7 +43,10 @@ func (s *server) handleIncidentPolicies(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"policies": policies})
+		// ticketing_running is a platform-wide yes/no (is the worker on at
+		// all), not tenant data: without it a tenant with an enabled policy
+		// cannot tell that no ticket will ever be cut.
+		writeJSON(w, http.StatusOK, map[string]any{"policies": policies, "ticketing_running": s.ticketingRunning.Load()})
 	case http.MethodPost:
 		claims, ok := s.requirePerm(w, r, "administration", LevelWrite)
 		if !ok {

@@ -125,6 +125,8 @@ const LEGACY: [string, string, string][] = [
   ["#/admin/audit", "admin", "audit"],
   ["#/admin/transport", "admin", "transport"],
   ["#/admin/integrations", "admin", "integrations"],
+  // Ticket Delivery is step 4 of RCA Tickets (2026-10-18).
+  ["#/admin/ticket-delivery", "admin", "ticketing"],
   ["#/admin/notifications", "admin", "notifications"],
   ["#/admin/ticketing", "admin", "ticketing"],
   ["#/admin/api", "admin", "api"],
@@ -341,6 +343,7 @@ describe("Discovery & NMS split — every old link lands on its new home", () =>
     ["#/admin/sensors", "#/admin/discovery/sensors"],
     ["#/admin/collectors", "#/admin/discovery/sensors"],
     ["#/admin/telemetry-coverage", "#/admin/discovery/telemetry"],
+    ["#/admin/ticket-delivery", "#/admin/ticketing/deliveries"],
   ])("%s opens %s", (from, to) => {
     expect(canonicalHash(from)).toBe(to);
   });

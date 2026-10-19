@@ -111,7 +111,7 @@ const CONNECTORS = [
     id: "portal-nokia", display: "Nokia portal", vendor: "nokia", vendor_display: "Nokia",
     portal_only: true, config_section: "portal",
     capabilities: [], max_attachment_bytes: 0, profile: "link_only", configured: false, note: NOKIA_RESEARCH,
-    status_note: "No portal details for this tenant yet — add the portal address on Ticket delivery.",
+    status_note: "No portal details for this tenant yet — add the portal address in RCA Tickets → Vendor case routing.",
   },
   {
     id: "juniper", display: "Juniper Service Case", vendor: "juniper",
@@ -489,7 +489,7 @@ describe("TicketDelivery — bringing your own credentials", () => {
     section: "portal",
     editable: true,
     configured: false,
-    status_note: "No portal details for this tenant yet — add the portal address on Ticket delivery.",
+    status_note: "No portal details for this tenant yet — add the portal address in RCA Tickets → Vendor case routing.",
     secrets: {},
     portal: {
       enabled: false,

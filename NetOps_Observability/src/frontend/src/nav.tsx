@@ -91,7 +91,8 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   // same /api/debug/* routes correlix-debug drives from the CLI.
   PipelineDebugger: () => import("./pages/platform/PipelineDebugger"),
   // ITSM delivery observability (Administration → Incident Response).
-  TicketDelivery: () => import("./pages/admin/TicketDelivery"),
+  // Administration → RCA Tickets: rules + case routing + deliveries as one flow.
+  RcaTickets: () => import("./pages/admin/RcaTickets"),
   // Network context (Administration → Iris): the facts Iris reads (N-F1).
   NetworkContext: () => import("./pages/admin/NetworkContext"),
   // Sealed-quarantine viewer (Platform → Tools) — /api/quarantine is
@@ -152,7 +153,6 @@ const AuthenticationAdmin = lazy(() => import("./tabs/admin").then((m) => ({ def
 const ApiAccessAdmin = lazy(() => import("./tabs/admin").then((m) => ({ default: m.ApiAccessAdmin })));
 const IntegrationsAdmin = lazy(() => import("./tabs/admin").then((m) => ({ default: m.IntegrationsAdmin })));
 const NotificationsAdmin = lazy(() => import("./tabs/admin").then((m) => ({ default: m.NotificationsAdmin })));
-const IncidentPoliciesAdmin = lazy(() => import("./tabs/admin").then((m) => ({ default: m.IncidentPoliciesAdmin })));
 const GraphQLExplorer = lazy(() => import("./tabs/admin").then((m) => ({ default: m.GraphQLExplorer })));
 const DashboardList = lazy(() => import("./pages/Placeholders").then((m) => ({ default: m.DashboardList })));
 const VulnerabilityManagement = lazy(ROUTE_CHUNKS["VulnerabilityManagement"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -180,7 +180,7 @@ const ConfigDrift = lazy(ROUTE_CHUNKS["ConfigDrift"] as () => Promise<{ default:
 // Pipeline debugger GUI — Platform → Tools.
 const PipelineDebugger = lazy(ROUTE_CHUNKS["PipelineDebugger"] as () => Promise<{ default: React.ComponentType<any> }>);
 // ITSM delivery outbox + audit trail — Administration → Incident Response.
-const TicketDelivery = lazy(ROUTE_CHUNKS["TicketDelivery"] as () => Promise<{ default: React.ComponentType<any> }>);
+const RcaTickets = lazy(ROUTE_CHUNKS["RcaTickets"] as () => Promise<{ default: React.ComponentType<any> }>);
 const DiscoveryHub = lazy(ROUTE_CHUNKS["DiscoveryHub"] as () => Promise<{ default: React.ComponentType<any> }>);
 const NetworkContext = lazy(ROUTE_CHUNKS["NetworkContext"] as () => Promise<{ default: React.ComponentType<any> }>);
 // Sealed-quarantine viewer — Platform → Tools.
@@ -456,13 +456,20 @@ export const NAV: NavSection[] = [
       // Incident Response rail section dissolved into here).
       { id: "integrations", label: "Integrations", group: "Incident Response", render: () => <IntegrationsAdmin /> },
       { id: "notifications", label: "Notifications", group: "Incident Response", render: () => <NotificationsAdmin /> },
-      { id: "ticketing", label: "Ticketing & Automation", group: "Incident Response", render: () => <IncidentPoliciesAdmin /> },
-      // Ticket Delivery — the outbox and audit trail BEHIND the policies above.
-      // /api/tickets/{outbox,audit} are requirePerm(infrastructure, read) +
-      // principalTenant, and /api/integrations/reconcile is requireAdmin on the
-      // caller's own tenant: tenant-scoped throughout, so it belongs here and
-      // not in Platform.
-      { id: "ticket-delivery", label: "Ticket Delivery", group: "Incident Response", render: () => <TicketDelivery /> },
+      // RCA Tickets (owner 2026-10-18): "Ticketing & Automation" and "Ticket
+      // Delivery" are ONE numbered, prerequisite-gated flow — connect
+      // destinations → ticket rules → vendor case routing (optional) →
+      // deliveries. Both former pages were tenant-scoped (requirePerm(
+      // administration) policies; requirePerm(infrastructure, read) outbox
+      // and audit + principalTenant), so the merged leaf is tenant-level.
+      // The old #/admin/ticket-delivery is an alias to its Deliveries step.
+      {
+        id: "ticketing", label: "RCA Tickets", group: "Incident Response", render: () => <RcaTickets />,
+        subItems: [
+          { id: "deliveries", label: "Deliveries" },
+          { id: "cases", label: "Vendor case routing" },
+        ],
+      },
       // Data sources — ONE leaf (owner 2026-10-18): everything that makes
       // devices and their data appear, in setup order. The five leaves it
       // replaced (datasources, snmp, sensors, telemetry-coverage, the old
@@ -757,6 +764,8 @@ const LEGACY_ROUTE_ALIAS: Record<string, string> = {
   // Administration → Discovery merge (owner 2026-10-18): the five Data
   // sources leaves became sections of one page.
   "admin/sensors": "admin/discovery/sensors",
+  // RCA Tickets merge (owner 2026-10-18).
+  "admin/ticket-delivery": "admin/ticketing/deliveries",
   "admin/datasources": "admin/discovery/coverage",
   "admin/snmp": "admin/discovery/snmp",
   "admin/telemetry-coverage": "admin/discovery/telemetry",

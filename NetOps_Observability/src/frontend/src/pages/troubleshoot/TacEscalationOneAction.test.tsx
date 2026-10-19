@@ -396,7 +396,7 @@ describe("a proposal that is not ready refuses BY NAME", () => {
     // The destination is a LINK where Correlix knows the route, and plain text
     // where it does not — never a guessed one.
     expect(screen.getByTestId("tac-blocker-account_id").querySelector("a"))
-      .toHaveAttribute("href", "#/admin/ticket-delivery");
+      .toHaveAttribute("href", "#/admin/ticketing/cases");
     expect(screen.getByTestId("tac-blocker-serial_number").querySelector("a"))
       .toHaveAttribute("href", "#/inventory/devices");
     expect(screen.getByTestId("tac-confirm-blocked")).toHaveTextContent(blocked.blocker_note!);
@@ -633,7 +633,7 @@ describe("the dry run proves the setup without creating anything", () => {
     await act(async () => { fireEvent.click(await screen.findByTestId("tac-dry-run-btn")); });
     const blockers = await screen.findByTestId("tac-dry-run-blockers");
     expect(blockers).toHaveTextContent("your CCO-ID — Cisco opens a case against the account that owns the contract.");
-    expect(blockers.querySelector("a")).toHaveAttribute("href", "#/admin/ticket-delivery");
+    expect(blockers.querySelector("a")).toHaveAttribute("href", "#/admin/ticketing/cases");
   });
 
   it("says what did not happen when the dry run itself could not be made", async () => {

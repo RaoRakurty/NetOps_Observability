@@ -3273,6 +3273,14 @@ export function IntegrationsAdmin() {
         })}
       </div>
 
+      {/* Paging and chat destinations for root-cause tickets — this tenant's own
+          PagerDuty routing key and Slack webhook (moved here from RCA Tickets,
+          owner 2026-10-18, so every destination lives in one place; same gate:
+          requireAdmin + itsmKey(tenant), itsm_config.go). */}
+      <h3 className="adm-grouphead" style={{ marginTop: "var(--sp-3)" }}>Paging and chat</h3>
+      <PagerDutyPagingConnection />
+      <SlackChannelConnection />
+
       {/* Live open tickets per connected connector — real operational data, not config. */}
       {sn?.enabled && (sn.open?.length ?? 0) > 0 && (
         <div className="card">
@@ -4380,9 +4388,18 @@ function SlackChannelConnection() {
   );
 }
 
-export function IncidentPoliciesAdmin() {
+// IncidentPoliciesAdmin — the ticket rules. Inside Administration → RCA
+// Tickets it is step 2 of the flow (`embedded`: no page header, and it tells
+// the flow what it read so the flow need not read it twice). The tenant's own
+// PagerDuty and Slack connections moved to Integrations, beside ServiceNow and
+// Jira (owner 2026-10-18: every destination in one place).
+export function IncidentPoliciesAdmin({ embedded = false, onLoaded }: {
+  embedded?: boolean;
+  onLoaded?: (r: { policies: IncidentPolicy[]; running: boolean | undefined; conflict: boolean }) => void;
+} = {}) {
   const { user } = useAuth();
   const [policies, setPolicies] = useState<IncidentPolicy[] | null>(null);
+  const [running, setRunning] = useState<boolean | undefined>(undefined);
   const [sel, setSel] = useState<IncidentPolicy | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [canWrite, setCanWrite] = useState(false);
@@ -4401,7 +4418,7 @@ export function IncidentPoliciesAdmin() {
 
   const load = useCallback(() => {
     setErr(null);
-    api.incidentPolicies().then((r) => setPolicies(r.policies ?? [])).catch((e) => {
+    api.incidentPolicies().then((r) => { setPolicies(r.policies ?? []); setRunning(r.ticketing_running); }).catch((e) => {
       setPolicies([]);
       setErr(String(e?.message ?? e).includes("403") ? "You need administration access to manage incident policies." : String(e?.message ?? e));
     });
@@ -4410,6 +4427,11 @@ export function IncidentPoliciesAdmin() {
     load();
     api.permissions().then((p) => setCanWrite((p.permissions?.administration ?? 0) >= 2)).catch(() => setCanWrite(false));
   }, [load]);
+  useEffect(() => {
+    if (policies !== null) onLoaded?.({ policies, running, conflict: conflictSystems.size > 0 });
+    // conflictSystems is derived from policies; onLoaded is the parent's setter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [policies, running]);
 
   return (
     <div className="adm">
@@ -4423,13 +4445,16 @@ export function IncidentPoliciesAdmin() {
           <PolicyEditor policy={sel} canWrite={canWrite} inModal onCancel={() => setSel(null)} onSaved={() => { setSel(null); load(); }} />
         </Modal>
       )}
-      <AdminHead title="RCA Auto-Ticketing" sub="When a root cause opens a ticket." topic="admin.rca-ticketing" />
+      {!embedded && <AdminHead title="RCA Auto-Ticketing" sub="When a root cause opens a ticket." topic="admin.rca-ticketing" />}
+      {running === false && (
+        <p className="adm-line" role="status" data-testid="ticketing-off">
+          Ticketing is off on this platform — no rule below cuts a ticket until your platform administrator turns it on.
+        </p>
+      )}
       <p className="adm-line">
         No policy means the safe ServiceNow default.
         <AskIris topic="policy.defaults" label="the default policy" />
       </p>
-      <PagerDutyPagingConnection />
-      <SlackChannelConnection />
       <ErrLine msg={err} />
       {conflictSystems.size > 0 && (
         <ErrLine msg={"More than one policy is enabled — auto-ticketing is HELD for this tenant until exactly one policy is enabled. Disable the extra policies below."} />

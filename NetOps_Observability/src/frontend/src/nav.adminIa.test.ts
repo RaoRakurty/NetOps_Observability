@@ -62,9 +62,10 @@ const GATES: Record<string, { scope: "platform" | "tenant"; gate: string }> = {
   // a mixed-verb page whose READ decides its placement (design note §5.1a).
   licence: { scope: "tenant", gate: "internal/licence/api.go GET → licenceReadGate → requireAdmin + principalTenant (tenant projection); PUT/DELETE alone → licenceGate → requirePlatformAdmin" },
   integrations: { scope: "tenant", gate: "integrations_http.go → requireAdmin, keyed by itsmKey(tenant)" },
-  ticketing: { scope: "tenant", gate: "ticketing_http.go → requirePerm(administration, read|write)" },
+  // RCA Tickets (owner 2026-10-18) merged Ticketing & Automation and Ticket
+  // Delivery into one flow; both halves were tenant-scoped.
+  ticketing: { scope: "tenant", gate: "ticketing_http.go policies → requirePerm(administration, read|write); handleTicketsOutbox/handleTicketsAudit → requirePerm(infrastructure, read) + principalTenant; integrations_http.go handleIntegrationReconcile → requireAdmin on the caller's own tenant" },
   "network-context": { scope: "tenant", gate: "ai_handlers.go handleAIContext → requirePerm(administration, read/write/admin) + ai.context.author + principalTenant (a Global view must choose a workspace); approval needs a second person (internal/orgcontext)" },
-  "ticket-delivery": { scope: "tenant", gate: "ticketing_http.go handleTicketsOutbox/handleTicketsAudit → requirePerm(infrastructure, read) + principalTenant; integrations_http.go handleIntegrationReconcile → requireAdmin on the caller's own tenant" },
   // Discovery (owner 2026-10-18) is ONE tenant-visible leaf over five
   // sections, each keeping the gate it had as a leaf (MIXED):
   //   snmp      → snmp_profiles.go read → requirePerm(infrastructure, read);

@@ -806,8 +806,8 @@
           "incident-response/ticket-delivery"
         ]
       },
-      "nav": "admin/ticket-delivery",
-      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Incident Response \u2192 Ticket Delivery"
+      "nav": "admin/ticketing/deliveries",
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Incident Response \u2192 RCA Tickets \u2192 Deliveries"
     },
     {
       "id": "docs-120",
@@ -1698,6 +1698,18 @@
       "known_gap": true,
       "question": "What changed in the network configuration in the last hour?",
       "notes": "midnight Q3 \u2014 change-timeline is the platform's top capability gap (build order \u2460); flags until get_recent_changes ships"
+    },
+    {
+      "id": "docs-122",
+      "category": "docs",
+      "question": "Where do I set up the case connector Iris uses to open a Cisco TAC case?",
+      "expect": {
+        "slugs": [
+          "incident-response/ticket-delivery"
+        ]
+      },
+      "nav": "admin/ticketing/cases",
+      "notes": "nav-leaf coverage (N-G1): Administration → Incident Response → RCA Tickets → Vendor case routing"
     }
   ]
 }
