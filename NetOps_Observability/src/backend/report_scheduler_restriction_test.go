@@ -222,8 +222,8 @@ func TestScheduledReportHonoursTheOperatorVisibilityRestriction(t *testing.T) {
 	// acme's OWN delivered report, captured BEFORE the switch.
 	acmeBefore := f.rs.tenantAlerts(f.acme)
 	acmeBeforeIDs := alertIDSet(acmeBefore)
-	if !acmeBeforeIDs[schedAcmeAlertID] || len(acmeBefore) != 3 {
-		t.Fatalf("baseline: acme's own report set = %v, want its device alert, its experience alert and the platform's stack alert",
+	if !acmeBeforeIDs[schedAcmeAlertID] || len(acmeBefore) != 2 {
+		t.Fatalf("baseline: acme's own report set = %v, want its device alert and its experience alert — never the platform's stack alert",
 			sortedKeys(acmeBeforeIDs))
 	}
 
