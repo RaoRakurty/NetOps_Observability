@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
+import FeatureOffNotice from "../components/FeatureOffNotice";
 import { useEffect, useState } from "react";
 import { vrfTerm } from "../lib/vendorTerms";
 import { api, Device, TopoLink, PromInstantSeries } from "../services/api";
@@ -67,7 +68,19 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
   const [omp, setOmp] = useState<PromInstantSeries[] | null>(null);
   const [ompCounts, setOmpCounts] = useState<{ up: number; notUp: number } | null>(null);
   const [ompErr, setOmpErr] = useState<string | null>(null);
+  // Both neighbor-discovery switches off: an empty list says which switch to
+  // turn on, not that the device has no neighbors. Best-effort — an unread
+  // features call keeps the plain empty state.
+  const [discoveryOff, setDiscoveryOff] = useState(false);
   const id = device.id;
+
+  useEffect(() => {
+    let alive = true;
+    api.features()
+      .then((f) => { if (alive) setDiscoveryOff(f.lldp_discovery === false && f.cdp_discovery === false); })
+      .catch(() => { /* keep the plain empty state */ });
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -80,7 +93,7 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
       .catch((e) => {
         if (!alive) return;
         setLinks([]);
-        setLinksError(operatorError(e, "The adjacency evidence could not be read."));
+        setLinksError(operatorError(e, "The neighbor list could not be read."));
       });
     api.metricsQuery(`device_bgp_peer_state{device="${id}"}`)
       .then((r) => { if (alive) { setBgp(r?.data?.result ?? []); setBgpErr(null); } })
@@ -117,12 +130,14 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
 
   return (
     <div style={{ maxWidth: 1100 }}>
-      <Section title="Neighbors" sub={linksError ? "unread" : links ? `${links.length} adjacenc${links.length === 1 ? "y" : "ies"}` : "loading…"} ask={<AskIris topic="device.neighbors" label="Neighbours" />}>
+      <Section title="Neighbors" sub={linksError ? "couldn’t read" : links ? `${links.length} neighbor${links.length === 1 ? "" : "s"}` : "loading…"} ask={<AskIris topic="device.neighbors" label="Neighbors" />}>
         {linksError ? (
           <p role="alert" data-testid="device-neighbours-unread" style={{ color: "var(--bad)", padding: "0 12px" }}>
-            The adjacency evidence could not be read, so this device&rsquo;s neighbors are UNKNOWN here — not absent. {linksError}
+            Couldn&rsquo;t read this device&rsquo;s neighbors, so we don&rsquo;t know whether it has any. {linksError}
           </p>
-        ) : links === null ? <div className="empty">Loading…</div> : links.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No neighbor protocol reported one here.</p> : (
+        ) : links === null ? <div className="empty">Loading…</div> : links.length === 0 ? (discoveryOff
+          ? <FeatureOffNotice feature="Neighbor discovery" purpose="Turn on “LLDP neighbors” (and “CDP neighbors” for Cisco devices) to list this device’s neighbors." />
+          : <p className="cc-empty" style={{ padding: "0 12px" }}>No neighbor protocol reported one here.</p>) : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={th}>Local port</th><th style={th}>Neighbor</th><th style={th}>Remote port</th><th style={th}>Protocol</th></tr></thead>
             <tbody>
@@ -143,10 +158,10 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
         )}
       </Section>
 
-      <Section title="BGP neighbors" sub={bgpErr ? "unread" : bgp ? `${bgp.length} peer${bgp.length === 1 ? "" : "s"}` : "loading…"}>
+      <Section title="BGP neighbors" sub={bgpErr ? "couldn’t read" : bgp ? `${bgp.length} peer${bgp.length === 1 ? "" : "s"}` : "loading…"}>
         {bgpErr ? (
           <p role="alert" data-testid="device-bgp-unread" style={{ color: "var(--bad)", padding: "0 12px" }}>
-            BGP state could not be read, so this device&rsquo;s BGP peers are UNKNOWN here — not absent. {bgpErr}
+            Couldn&rsquo;t read BGP, so we don&rsquo;t know whether this device has BGP peers. {bgpErr}
           </p>
         ) : bgp === null ? <div className="empty">Loading…</div> : bgp.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No BGP peer seen on this device.</p> : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -173,11 +188,11 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
       {(ompErr || ompCounts || (omp && omp.length > 0)) && (
         <Section
           title="SD-WAN control sessions (OMP)"
-          sub={ompErr ? "unread" : ompCounts ? `${ompCounts.up} up · ${ompCounts.notUp} not up` : "loading…"}
+          sub={ompErr ? "couldn’t read" : ompCounts ? `${ompCounts.up} up · ${ompCounts.notUp} not up` : "loading…"}
         >
           {ompErr ? (
             <p role="alert" data-testid="device-omp-unread" style={{ color: "var(--bad)", padding: "0 12px" }}>
-              OMP state could not be read, so this device&rsquo;s control sessions are UNKNOWN here — not absent. {ompErr}
+              Couldn&rsquo;t read OMP, so we don&rsquo;t know whether this device has control sessions. {ompErr}
             </p>
           ) : omp && omp.length > 0 ? (
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -204,10 +219,10 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
         </Section>
       )}
 
-      <Section title="OSPF neighbors" sub={ospfErr ? "unread" : ospf ? `${ospf.length} adjacenc${ospf.length === 1 ? "y" : "ies"}` : "loading…"}>
+      <Section title="OSPF neighbors" sub={ospfErr ? "couldn’t read" : ospf ? `${ospf.length} neighbor${ospf.length === 1 ? "" : "s"}` : "loading…"}>
         {ospfErr ? (
           <p role="alert" data-testid="device-ospf-unread" style={{ color: "var(--bad)", padding: "0 12px" }}>
-            OSPF state could not be read, so this device&rsquo;s OSPF neighbors are UNKNOWN here — not absent. {ospfErr}
+            Couldn&rsquo;t read OSPF, so we don&rsquo;t know whether this device has OSPF neighbors. {ospfErr}
           </p>
         ) : ospf === null ? <div className="empty">Loading…</div> : ospf.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No OSPF neighbor seen on this device.</p> : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>

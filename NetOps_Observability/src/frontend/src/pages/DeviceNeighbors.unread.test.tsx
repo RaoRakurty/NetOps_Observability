@@ -20,6 +20,7 @@ vi.mock("../services/api", async () => {
     api: {
       topologyLinks: vi.fn(),
       metricsQuery: vi.fn().mockResolvedValue({ data: { result: [] } }),
+      features: vi.fn().mockResolvedValue({ lldp_discovery: true, cdp_discovery: false }),
     },
   };
 });
@@ -35,7 +36,7 @@ describe("the Neighbors tab when the adjacency evidence could not be read", () =
 
     const alert = await waitFor(() => screen.getByTestId("device-neighbours-unread"));
     expect(alert).toHaveAttribute("role", "alert");
-    expect(alert.textContent).toMatch(/UNKNOWN here — not absent/);
+    expect(alert.textContent).toMatch(/we don’t know whether/);
     // The old sentence, which asserted a fact about the network, must be gone.
     expect(screen.queryByText(/No neighbor protocol reported one here/)).toBeNull();
   });
@@ -78,8 +79,8 @@ describe("the BGP and OSPF sections", () => {
       device_ospf_nbr_state: new Error("502 Bad Gateway"),
     }) as never);
     render(<DeviceNeighbors device={device} />);
-    expect((await screen.findByTestId("device-bgp-unread")).textContent).toMatch(/UNKNOWN here — not absent/);
-    expect((await screen.findByTestId("device-ospf-unread")).textContent).toMatch(/UNKNOWN here — not absent/);
+    expect((await screen.findByTestId("device-bgp-unread")).textContent).toMatch(/we don’t know whether/);
+    expect((await screen.findByTestId("device-ospf-unread")).textContent).toMatch(/we don’t know whether/);
     expect(screen.queryByText(/No BGP peer seen on this device/)).toBeNull();
   });
 });
@@ -127,7 +128,7 @@ describe("the OMP section", () => {
   it("says UNKNOWN when the read fails", async () => {
     vi.mocked(api.metricsQuery).mockImplementation(route({ device_omp_peer_state: new Error("502 Bad Gateway") }) as never);
     render(<DeviceNeighbors device={device} />);
-    expect((await screen.findByTestId("device-omp-unread")).textContent).toMatch(/UNKNOWN here — not absent/);
+    expect((await screen.findByTestId("device-omp-unread")).textContent).toMatch(/we don’t know whether/);
   });
 });
 
@@ -136,5 +137,33 @@ describe("peerKey — remote AS joins per instance", () => {
     const { peerKey } = await import("./DeviceNeighbors");
     expect(peerKey(undefined, "10.0.0.1")).toBe(peerKey("default", "10.0.0.1"));
     expect(peerKey("CUST-A", "10.0.0.1")).not.toBe(peerKey(undefined, "10.0.0.1"));
+  });
+});
+
+describe("the Neighbors tab when neighbor discovery is switched off", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("says which switch to turn on instead of claiming the device has no neighbors", async () => {
+    vi.mocked(api.topologyLinks).mockResolvedValue({ links: [], count: 0, source: "none" } as never);
+    vi.mocked(api.features).mockResolvedValue({ lldp_discovery: false, cdp_discovery: false } as never);
+    render(<DeviceNeighbors device={device} />);
+    expect(await screen.findByText("Neighbor discovery is off.")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toMatch(/LLDP neighbors/);
+    expect(screen.queryByText(/No neighbor protocol reported one here/)).toBeNull();
+  });
+
+  it("keeps the plain empty state when either switch is on", async () => {
+    vi.mocked(api.topologyLinks).mockResolvedValue({ links: [], count: 0, source: "none" } as never);
+    vi.mocked(api.features).mockResolvedValue({ lldp_discovery: false, cdp_discovery: true } as never);
+    render(<DeviceNeighbors device={device} />);
+    expect(await screen.findByText(/No neighbor protocol reported one here/)).toBeTruthy();
+    expect(screen.queryByText("Neighbor discovery is off.")).toBeNull();
+  });
+
+  it("keeps the plain empty state when the switches cannot be read", async () => {
+    vi.mocked(api.topologyLinks).mockResolvedValue({ links: [], count: 0, source: "none" } as never);
+    vi.mocked(api.features).mockRejectedValue(new Error("500"));
+    render(<DeviceNeighbors device={device} />);
+    expect(await screen.findByText(/No neighbor protocol reported one here/)).toBeTruthy();
   });
 });
