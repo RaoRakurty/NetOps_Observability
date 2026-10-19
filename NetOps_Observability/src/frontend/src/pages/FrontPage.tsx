@@ -194,7 +194,7 @@ function TopIssues() {
           <div key={o.correlation_id} className="fp-row clk" style={{ borderLeftColor: tone }} role="button" onClick={() => navigate("investigate/rca")}>
             <Tag tone={tone}>{VERDICT_NOC[o.verdict_tier] ?? o.verdict_tier}</Tag>
             <span className="fp-row-t">{upProto(signatureNocTitle(o.top_hypothesis))}</span>
-            {o.verdict_tier === "suspected" && <span style={{ fontSize: 10.5, color: "var(--fg-subtle)", letterSpacing: 0.04 }}>not confirmed</span>}
+            {o.verdict_tier === "suspected" && <span style={{ fontSize: 12.5, color: "var(--fg-subtle)", letterSpacing: 0.04 }}>not confirmed</span>}
             {o.owner && <span className="fp-owner" style={{ marginLeft: "auto" }}>{upProto(ownerLabel(o.owner))}</span>}
           </div>
         );
@@ -342,7 +342,7 @@ function CapacityOutlook() {
             <span className="fp-num" style={{ marginLeft: "auto", fontWeight: 600, color: tone }}>
               {r.status === "saturated" ? "at capacity" : `~${Math.round(r.days_to_90)}d to 90%`}
             </span>
-            <span className="fp-num" style={{ color: "var(--fg-muted)", fontSize: 11.5 }}>{Math.round(r.current_util_pct)}%</span>
+            <span className="fp-num" style={{ color: "var(--fg-muted)", fontSize: 12.5 }}>{Math.round(r.current_util_pct)}%</span>
           </div>
         );
       })}
@@ -366,7 +366,7 @@ function TopHealthContributors() {
         {contribs.slice(0, 8).map((c, i) => (
           <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 12.5 }}>
             <span className="fp-num" style={{ fontWeight: 600, minWidth: 30, textAlign: "right", color: c.points >= 12 ? "var(--crit)" : c.points >= 6 ? "var(--warn)" : "var(--fg)" }}>{c.points}</span>
-            <span style={{ fontSize: 10, color: "var(--fg-subtle)", textTransform: "uppercase", letterSpacing: 0.05, minWidth: 80, flexShrink: 0 }}>{c.signal_class.replace(/_/g, " ")}</span>
+            <span style={{ fontSize: 12.5, color: "var(--fg-subtle)", textTransform: "uppercase", letterSpacing: 0.05, minWidth: 80, flexShrink: 0 }}>{c.signal_class.replace(/_/g, " ")}</span>
             <span style={{ color: "var(--fg)", minWidth: 0 }}>{c.reason}</span>
           </div>
         ))}
@@ -397,7 +397,7 @@ function TelemetryCoverage() {
             <div key={c} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12.5 }}>
               <span style={{ width: 8, height: 8, borderRadius: "50%", background: tone, flexShrink: 0 }} />
               <span style={{ color: "var(--fg)" }}>{SIGNAL_CLASS_LABEL[c] ?? c}</span>
-              <span style={{ marginLeft: "auto", fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.06, color: tone, fontWeight: 600 }}>{txt}</span>
+              <span style={{ marginLeft: "auto", fontSize: 12.5, textTransform: "uppercase", letterSpacing: 0.06, color: tone, fontWeight: 600 }}>{txt}</span>
             </div>
           );
         })}

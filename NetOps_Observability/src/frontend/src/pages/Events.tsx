@@ -175,7 +175,7 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
         return (
           <span style={{ display: "inline-flex", gap: 8, alignItems: "baseline", minWidth: 0 }}>
             <LogMessage text={text} />
-            {f?.subsystem && <span className="lf-source" style={{ fontSize: 11, flex: "none", opacity: .85 }}>{f.subsystem}</span>}
+            {f?.subsystem && <span className="lf-source" style={{ fontSize: 12.5, flex: "none", opacity: .85 }}>{f.subsystem}</span>}
           </span>
         );
       },

@@ -70,18 +70,18 @@ export default function RcaReports() {
 
   const columns = useMemo<Column<RcaLibraryReport>[]>(() => [
     { key: "display_id", header: "ID", width: 88, sortable: true, text: (r) => r.display_id,
-      render: (r) => <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }} title={r.correlation_id}>{r.display_id}</span> },
+      render: (r) => <span style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }} title={r.correlation_id}>{r.display_id}</span> },
     { key: "title", header: "Report", width: "2fr", sortable: true, text: (r) => `${r.report_type} ${r.title}`,
       render: (r) => (
         <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.3, minWidth: 0 }}>
           <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.title}</span>
-          <span style={{ fontSize: 11, color: "var(--muted)" }}>{r.report_type}</span>
+          <span style={{ fontSize: 12.5, color: "var(--muted)" }}>{r.report_type}</span>
         </span>
       ) },
     { key: "glance", header: "Where · what · owner", width: "3fr",
       text: (r) => `${r.at_a_glance.where} ${r.at_a_glance.what} ${r.at_a_glance.owners.join(" ")}`,
       render: (r) => (
-        <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.3, fontSize: 12, minWidth: 0 }}>
+        <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.3, fontSize: 12.5, minWidth: 0 }}>
           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.at_a_glance.where}>
             <b>Where:</b> {r.at_a_glance.where}
           </span>
@@ -97,9 +97,9 @@ export default function RcaReports() {
       render: (r) => <Chip label={r.states.impact.replace(/_/g, " ")} tone={IMPACT_TONE[r.states.impact] ?? "var(--fg-subtle)"} /> },
     { key: "duration", header: "Duration", width: 88, align: "right", sortable: true,
       sortValue: (r) => r.times.duration_ms,
-      render: (r) => <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{fmtDurMs(r.times.duration_ms)}</span> },
+      render: (r) => <span style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{fmtDurMs(r.times.duration_ms)}</span> },
     { key: "end", header: "Ended", width: 150, sortable: true, sortValue: (r) => r.times.end,
-      render: (r) => <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{r.times.end ? fmtDateTime(r.times.end) : "—"}</span> },
+      render: (r) => <span style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{r.times.end ? fmtDateTime(r.times.end) : "—"}</span> },
     { key: "basis", header: "Promoted", width: 92, sortable: true, text: (r) => r.promotion.basis,
       render: (r) => {
         const b = promotionBadge(r);
@@ -109,10 +109,10 @@ export default function RcaReports() {
       render: (r) => (
         <span style={{ display: "inline-flex", gap: 8 }} onClick={(e) => e.stopPropagation()}>
           <a href={`#/investigate/rca?id=${encodeURIComponent(r.correlation_id)}`}
-            style={{ fontSize: 12 }} title="Open the full RCA workspace for this outage">
+            style={{ fontSize: 12.5 }} title="Open the full RCA workspace for this outage">
             Open workspace
           </a>
-          <button className="rw-btn" style={{ fontSize: 12, padding: "1px 8px" }}
+          <button className="rw-btn" style={{ fontSize: 12.5, padding: "1px 8px" }}
             title="Download the promoted RCA document (PDF; falls back to the print view when the PDF renderer is off)"
             onClick={() => {
               api.downloadRcaReport(r.correlation_id, r.display_id)
@@ -144,7 +144,7 @@ export default function RcaReports() {
       />
       {/* no silent caps: a full evaluation page is disclosed, never hidden */}
       {truncated && (
-        <div style={{ fontSize: 12, color: "var(--muted)", margin: "6px 2px" }}>
+        <div style={{ fontSize: 12.5, color: "var(--muted)", margin: "6px 2px" }}>
           Evaluated the {evaluated} most recent qualifying candidates — older promoted outages may exist beyond this page; narrow the window to see them all.
         </div>
       )}

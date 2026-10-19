@@ -48,7 +48,7 @@ function DefaultLandingCard() {
       </div>
       <div style={{ flex: 1 }}>
         <h3 style={{ fontWeight: 600, fontSize: "inherit", margin: 0 }}>Default landing page</h3>
-        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+        <div style={{ fontSize: 12.5, color: "var(--muted)" }}>
           The page everyone lands on after sign-in. Tenants can override this in Identity &amp; Access.
           {err && <span role="alert" style={{ color: "var(--crit)" }}> · {err}</span>}
           <span role="status">{saved ? " · saved" : ""}</span>
@@ -108,7 +108,7 @@ function TimeDisplayCard() {
       </div>
       <div style={{ flex: 1 }}>
         <h3 style={{ fontWeight: 600, fontSize: "inherit", margin: 0 }}>Time display</h3>
-        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+        <div style={{ fontSize: 12.5, color: "var(--muted)" }}>
           How every timestamp renders for this tenant — your local zone ({tzLabel("local")}) or UTC.
           Storage is always UTC; only display changes. Admin-set, applies to all of the tenant&apos;s users.
           {err && <span role="alert" style={{ color: "var(--crit)" }}> · {err}</span>}
@@ -182,7 +182,7 @@ export default function Settings() {
         </div>
         <div style={{ flex: 1 }}>
           <h3 style={{ fontWeight: 600, fontSize: "inherit", margin: 0 }}>Log export limits</h3>
-          <div style={{ fontSize: 12, color: "var(--muted)" }}>
+          <div style={{ fontSize: 12.5, color: "var(--muted)" }}>
             Anti-exfiltration guardrails for log exports — rate, row/size caps, runtime, link TTL.
           </div>
         </div>

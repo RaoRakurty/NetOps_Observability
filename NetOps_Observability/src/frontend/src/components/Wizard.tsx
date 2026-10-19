@@ -82,7 +82,7 @@ export default function Wizard({
           return (
             <li key={s.id} style={stepItem}>
               <span style={stepCircle(state)}>{state === "done" ? "✓" : idx + 1}</span>
-              <span style={{ fontSize: 12, fontWeight: idx === i ? 700 : 500, color: idx === i ? "var(--fg)" : "var(--muted)" }}>
+              <span style={{ fontSize: 12.5, fontWeight: idx === i ? 700 : 500, color: idx === i ? "var(--fg)" : "var(--muted)" }}>
                 {s.title}
               </span>
               {idx < steps.length - 1 && <span style={stepBar(idx < i)} />}
@@ -91,7 +91,7 @@ export default function Wizard({
         })}
       </ol>
 
-      {step.hint && <p style={{ color: "var(--muted)", fontSize: 12, margin: "4px 0 10px" }}>{step.hint}</p>}
+      {step.hint && <p style={{ color: "var(--muted)", fontSize: 12.5, margin: "4px 0 10px" }}>{step.hint}</p>}
 
       <div className="wizard-body">{step.render()}</div>
 
@@ -128,7 +128,7 @@ const footer: React.CSSProperties = { display: "flex", justifyContent: "space-be
 function stepCircle(state: "done" | "active" | "todo"): React.CSSProperties {
   const bg = state === "done" ? "var(--good)" : state === "active" ? "var(--accent)" : "var(--hover)";
   const color = state === "todo" ? "var(--muted)" : "#fff";
-  return { width: 22, height: 22, borderRadius: 999, background: bg, color, fontSize: 12, fontWeight: 600, display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none" };
+  return { width: 22, height: 22, borderRadius: 999, background: bg, color, fontSize: 12.5, fontWeight: 600, display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none" };
 }
 function stepBar(done: boolean): React.CSSProperties {
   return { width: 28, height: 2, background: done ? "var(--good)" : "var(--panel-border, #e2e6ee)", margin: "0 4px" };

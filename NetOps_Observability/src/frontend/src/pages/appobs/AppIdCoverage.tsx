@@ -42,7 +42,7 @@ function CoverageStat({ label, n, hint }: { label: string; n: number; hint: stri
     <div style={{ minWidth: 132 }}>
       <div style={{ fontSize: 20, color: r.known ? "var(--fg)" : "var(--fg-subtle)" }}
         title={hint}>{r.text}</div>
-      <div className="ao-muted" style={{ fontSize: 12 }}>{label}</div>
+      <div className="ao-muted" style={{ fontSize: 12.5 }}>{label}</div>
     </div>
   );
 }
@@ -79,7 +79,7 @@ export function AppIdCoverageCard() {
       </p>
 
       {busy ? (
-        <div className="ao-muted" style={{ fontSize: 12 }}>Loading…</div>
+        <div className="ao-muted" style={{ fontSize: 12.5 }}>Loading…</div>
       ) : !status ? null : (
         <>
           <ol style={{ listStyle: "none", margin: "0 0 12px", padding: 0, display: "flex", flexDirection: "column", gap: 4 }}>
@@ -89,7 +89,7 @@ export function AppIdCoverageCard() {
                 <span className="ao-muted" style={{ width: 16, textAlign: "right" }}>{r.rank}.</span>
                 <span style={{ flex: 1 }}>{r.label}</span>
                 {r.isOperator && (
-                  <span className="ao-muted" style={{ fontSize: 12 }}>your overrides, below</span>
+                  <span className="ao-muted" style={{ fontSize: 12.5 }}>your overrides, below</span>
                 )}
               </li>
             ))}
@@ -105,7 +105,7 @@ export function AppIdCoverageCard() {
             <CoverageStat label="Cloud attributions" n={status.cloud_attributions}
               hint={attributionHints(status).cloud} />
           </div>
-          <p className="ao-muted" style={{ fontSize: 12, margin: "0 0 12px" }}>
+          <p className="ao-muted" style={{ fontSize: 12.5, margin: "0 0 12px" }}>
             {coverageScopeNote(status)}
           </p>
 
@@ -232,7 +232,7 @@ export function AppIdOverridesCard() {
             <button className="ao-btn ao-btn--primary" disabled={saving} onClick={() => void create()}>
               {saving ? "Saving…" : "Add override"}
             </button>
-            <span className="ao-muted" style={{ fontSize: 12, alignSelf: "center" }}>
+            <span className="ao-muted" style={{ fontSize: 12.5, alignSelf: "center" }}>
               Leave confidence empty to take the engine&apos;s own default.
             </span>
           </div>
@@ -240,19 +240,19 @@ export function AppIdOverridesCard() {
       )}
 
       {busy ? (
-        <div className="ao-muted" style={{ fontSize: 12 }}>Loading…</div>
+        <div className="ao-muted" style={{ fontSize: 12.5 }}>Loading…</div>
       ) : readErr ? (
         // "We could not ask" and "there is nothing" are opposite facts. The
         // read failure set the list to [] and fell through to the definitive
         // empty state, so the screen asserted both at once.
-        <div className="ao-muted" style={{ fontSize: 12 }}>{readErr} This is not a statement that there are none.</div>
+        <div className="ao-muted" style={{ fontSize: 12.5 }}>{readErr} This is not a statement that there are none.</div>
       ) : rows.length === 0 ? (
-        <div className="ao-muted" style={{ fontSize: 12 }}>
+        <div className="ao-muted" style={{ fontSize: 12.5 }}>
           This tenant has declared no overrides — identification falls to the sources listed above.
         </div>
       ) : (
         <div style={{ overflowX: "auto" }}>
-          <table className="ao-kv" style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+          <table className="ao-kv" style={{ width: "100%", fontSize: 12.5, borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ textAlign: "left", color: "var(--fg-muted)" }}>
                 <th style={{ padding: "4px 8px" }}>Matches on</th>

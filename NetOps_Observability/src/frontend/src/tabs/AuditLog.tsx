@@ -36,7 +36,7 @@ export default function AuditLog() {
     { key: "decision", header: "Decision", width: 92, sortable: true, text: (e) => e.decision,
       render: (e) => <span className={`pill ${decisionClass(e.decision)}`}>{e.decision}</span> },
     { key: "from", header: "From", width: 130, text: (e) => e.remote ?? "",
-      render: (e) => <span style={{ ...muted, fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>{e.remote}</span> },
+      render: (e) => <span style={{ ...muted, fontFamily: "var(--font-mono, monospace)", fontSize: 12.5 }}>{e.remote}</span> },
   ], []);
 
   useEffect(() => {

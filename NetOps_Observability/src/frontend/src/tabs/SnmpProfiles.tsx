@@ -134,7 +134,7 @@ export default function SnmpProfiles() {
         </div>
         {[...grouped.entries()].map(([cat, ps]) => (
           <div key={cat} style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 11, textTransform: "uppercase", color: "var(--muted)", padding: "4px 8px" }}>
+            <div style={{ fontSize: 12.5, textTransform: "uppercase", color: "var(--muted)", padding: "4px 8px" }}>
               {CATEGORY_LABELS[cat] ?? cat}
             </div>
             {ps.map((p) => (
@@ -145,7 +145,7 @@ export default function SnmpProfiles() {
                 onClick={() => setSelected(p.id)}
               >
                 <span>{capitalize(p.vendor)}</span>
-                <span style={{ color: "var(--muted)", fontSize: 11 }}>{p.metrics.length}</span>
+                <span style={{ color: "var(--muted)", fontSize: 12.5 }}>{p.metrics.length}</span>
               </button>
             ))}
           </div>
@@ -172,7 +172,7 @@ export default function SnmpProfiles() {
 
             {showUpload && (
               <div className="card" style={{ marginTop: 10, padding: 12 }}>
-                <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 6 }}>
+                <div style={{ color: "var(--muted)", fontSize: 12.5, marginBottom: 6 }}>
                   Paste or upload a JSON array of metrics, e.g.{" "}
                   <code>{`[{"name":"x","oid":"1.3.6.1...","type":"gauge","unit":"%"}]`}</code>
                 </div>
@@ -180,7 +180,7 @@ export default function SnmpProfiles() {
                   value={uploadText}
                   onChange={(e) => setUploadText(e.target.value)}
                   rows={6}
-                  style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }}
+                  style={{ width: "100%", fontFamily: "monospace", fontSize: 12.5 }}
                   placeholder='[{"name":"...","oid":"...","type":"gauge","unit":"..."}]'
                 />
                 <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
@@ -192,7 +192,7 @@ export default function SnmpProfiles() {
             {current.description && (
               <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 8, maxWidth: 720 }}>{current.description}</p>
             )}
-            <div style={{ display: "flex", gap: 16, color: "var(--muted)", fontSize: 12, marginTop: 4, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 16, color: "var(--muted)", fontSize: 12.5, marginTop: 4, flexWrap: "wrap" }}>
               <span><strong style={{ color: "var(--fg)" }}>{current.metrics.length}</strong> enabled metrics</span>
               <span>category: {CATEGORY_LABELS[current.category] ?? current.category}</span>
               {current.sysobjectid_prefix && <span>sysObjectID: <code>{current.sysobjectid_prefix}</code></span>}
@@ -225,8 +225,8 @@ export default function SnmpProfiles() {
                   .map((mt) => (
                     <tr key={mt.oid + mt.name}>
                       <td>{mt.name}</td>
-                      <td><code style={{ fontSize: 12 }}>{mt.oid}</code></td>
-                      <td style={{ color: "var(--muted)", fontSize: 12 }}>{mt.mib || "—"}</td>
+                      <td><code style={{ fontSize: 12.5 }}>{mt.oid}</code></td>
+                      <td style={{ color: "var(--muted)", fontSize: 12.5 }}>{mt.mib || "—"}</td>
                       <td>{mt.category ? <span className="pill">{mt.category}</span> : <span style={{ color: "var(--muted)" }}>—</span>}</td>
                       <td>{mt.type}</td>
                       <td>{mt.unit}</td>

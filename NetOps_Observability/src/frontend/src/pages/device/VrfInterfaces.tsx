@@ -40,7 +40,7 @@ const WINDOWS: { id: string; label: string }[] = [
 ];
 
 const th: React.CSSProperties = {
-  textAlign: "left", fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em",
+  textAlign: "left", fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".04em",
   color: "var(--fg-muted)", padding: "4px 12px", fontWeight: 500,
 };
 const td: React.CSSProperties = {
@@ -128,10 +128,10 @@ function Group({
           border: "none", textAlign: "left", cursor: "pointer", padding: "8px 12px",
         }}
       >
-        <span aria-hidden style={{ fontSize: 11, color: "var(--fg-muted)" }}>{open ? "▾" : "▸"}</span>
+        <span aria-hidden style={{ fontSize: 12.5, color: "var(--fg-muted)" }}>{open ? "▾" : "▸"}</span>
         <h3 className="cc-panel-t" style={{ margin: 0 }}>{heading}</h3>
         {group.membership === "not_collected" && (
-          <span className="badge" style={{ fontSize: 10, textTransform: "uppercase" }}>not collected</span>
+          <span className="badge" style={{ fontSize: 12.5, textTransform: "uppercase" }}>not collected</span>
         )}
         <span className="cc-panel-meta" style={{ marginLeft: "auto" }}>{groupSummary(group)}</span>
       </button>
@@ -186,7 +186,7 @@ export default function VrfInterfaces({ device }: { device: Device }) {
               className={window_ === w.id ? "on" : ""}
               aria-pressed={window_ === w.id}
               onClick={() => setWindow(w.id)}
-              style={{ fontSize: 11, padding: "2px 8px" }}
+              style={{ fontSize: 12.5, padding: "2px 8px" }}
             >
               {w.label}
             </button>

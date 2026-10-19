@@ -625,7 +625,7 @@ function SiteCell({
         title={isDeclared ? `Site: ${label}` : "Assign this device to a site"}
         value={isDeclared ? slug : ""}
         onChange={(e) => onAssign(e.target.value)}
-        style={{ height: 28, padding: "2px 6px", fontSize: 12, maxWidth: 150 }}
+        style={{ height: 28, padding: "2px 6px", fontSize: 12.5, maxWidth: 150 }}
       >
         <option value="">— Unassigned —</option>
         {options.map((s) => (

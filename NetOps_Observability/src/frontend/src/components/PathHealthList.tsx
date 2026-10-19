@@ -37,7 +37,7 @@ function PathHealthCard({ p }: { p: PathHealthItem }) {
   // as a clean bill of health.
   const st = STATE_META[p.health_state] ?? STATE_META.unknown;
   const badge: React.CSSProperties = {
-    fontSize: 11, fontWeight: 600, letterSpacing: 0.3, padding: "1px 7px", borderRadius: 4,
+    fontSize: 12.5, fontWeight: 600, letterSpacing: 0.3, padding: "1px 7px", borderRadius: 4,
     color: "#fff", background: st.color, whiteSpace: "nowrap",
   };
   const muted: React.CSSProperties = { color: "var(--muted)" };
@@ -55,8 +55,8 @@ function PathHealthCard({ p }: { p: PathHealthItem }) {
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span style={badge}>{st.label}</span>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, overflowWrap: "anywhere" }}>{p.dst}</span>
-        <span style={{ ...muted, fontSize: 12 }}>· {p.agent}</span>
-        <span style={{ marginLeft: "auto", fontSize: 12, ...muted }}>Confidence: <b style={{ color: "var(--fg)" }}>{CONF_LABEL[p.confidence] ?? p.confidence}</b></span>
+        <span style={{ ...muted, fontSize: 12.5 }}>· {p.agent}</span>
+        <span style={{ marginLeft: "auto", fontSize: 12.5, ...muted }}>Confidence: <b style={{ color: "var(--fg)" }}>{CONF_LABEL[p.confidence] ?? p.confidence}</b></span>
       </div>
       <div style={{ fontSize: 13, marginTop: 6, color: "var(--fg)", lineHeight: 1.45 }}>{p.reason}</div>
       <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 12px", fontSize: 12.5, marginTop: 7 }}>
@@ -70,7 +70,7 @@ function PathHealthCard({ p }: { p: PathHealthItem }) {
       </div>
       {p.evidence && p.evidence.length > 0 && (
         <details style={{ marginTop: 7 }}>
-          <summary style={{ cursor: "pointer", fontSize: 12, color: "var(--accent, #4c8dff)" }}>Evidence ({p.evidence.length})</summary>
+          <summary style={{ cursor: "pointer", fontSize: 12.5, color: "var(--accent, #4c8dff)" }}>Evidence ({p.evidence.length})</summary>
           <ul style={{ margin: "4px 0 0", paddingLeft: 18, fontSize: 12.5, lineHeight: 1.5, color: "var(--fg)" }}>
             {p.evidence.map((e, i) => <li key={i}>{e}</li>)}
           </ul>
