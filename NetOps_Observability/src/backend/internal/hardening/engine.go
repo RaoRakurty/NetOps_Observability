@@ -328,15 +328,15 @@ func (e *Engine) dialectNotLicensed(dev Device, vendor Vendor) secfindings.Findi
 	f.ID = RuleDialectNotLicensed
 	f.RawRuleID = RuleDialectNotLicensed
 	f.ControlID = RuleDialectNotLicensed
-	f.ControlTitle = "Device dialect not included in this licence — no hardening control assessed"
+	f.ControlTitle = "Device dialect not included in this license — no hardening control assessed"
 	f.Category = CategoryCoverage
 	f.Severity = secfindings.SeverityInfo
 	f.Intended = "Every device resolves to a vendor dialect whose hardening controls can be evaluated."
 	f.Observed = truncateLabel(dev.Platform)
-	f.Detail = "unassessed: the " + string(vendor) + " hardening dialect is not included in this licence, " +
+	f.Detail = "unassessed: the " + string(vendor) + " hardening dialect is not included in this license, " +
 		"so NO hardening control was evaluated for this device. Nothing has been hidden or deleted — " +
 		"the device is still discovered, still monitored, and still appears everywhere else."
-	f.Remediation = "Add the multi-vendor hardening dialects to this deployment's licence, " +
+	f.Remediation = "Add the multi-vendor hardening dialects to this deployment's license, " +
 		"or exclude this device from the hardening scope."
 	f.SetStatus(secfindings.StatusUnknown)
 	return f

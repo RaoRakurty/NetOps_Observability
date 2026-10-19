@@ -68,7 +68,7 @@ Correlix re-reads the file within five seconds of a change, so a licence placed 
 
 **Carried, not enforced** is on a row whose limit nothing in the product gates on. The limit is in the licence file so that an issued file is complete and stays valid as the product grows, and the page labels it rather than drawing a bar that looks like a live gate. A row marked this way never refuses anything today.
 
-**Not measured** is different from zero, and the page never collapses the two. A ceiling Correlix counted shows the count, including a genuine `0`. A ceiling Correlix did not count shows `not measured` and the reason, such as `carried in the licence but not enforced by this build` or `the BGP watchlist is not available`. Zero devices in use is a measurement. A blank is silence, and it is written as silence.
+**Not measured** is different from zero, and the page never collapses the two. A ceiling Correlix counted shows the count, including a genuine `0`. A ceiling Correlix did not count shows `not measured` and the reason, such as `not counted by this build` or `the BGP watchlist is not available`. Limits the license carries but nothing enforces today sit together in one table, under one note. Zero devices in use is a measurement. A blank is silence, and it is written as silence.
 
 An unlimited ceiling, written `-1` in the file, has no percentage. A bar drawn against no limit would be an invented number, so the row shows the count in use and the word unlimited.
 
@@ -87,7 +87,7 @@ Consequences, each deliberate:
 
 When there are more devices than a **hard** limit allows (Community, or any licence past its grace period), Correlix collects from the **first N devices by the time it first saw them**. The rest stay in the inventory, marked **Over licence limit** with the reason, and are not polled. Nothing is refused and nothing is dropped:
 
-- the Devices page shows a banner — *12 devices are not monitored: licence limit of 25 reached* — counting only the devices the reader's tenant owns;
+- the Devices page shows a banner — *12 devices are not monitored: license limit of 25 reached* — counting only the devices the reader's tenant owns;
 - the Licence page's usage bar counts every device (it reads 37 of 25), and the note beside it says how many are not collected from;
 - `GET /api/devices/{id}/monitoring` says, per device, whether it is monitored, over the limit or without an address, and whether a collector for its telemetry is actually running.
 

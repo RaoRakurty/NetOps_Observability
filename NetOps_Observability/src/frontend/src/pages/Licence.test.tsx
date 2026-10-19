@@ -82,7 +82,7 @@ function ceilings(): LicenceCeiling[] {
     ceiling({ name: "watched_prefixes", label: "watched prefixes", limit: 5, current: 2 }),
     ceiling({ name: "tenants", label: "tenants", limit: 1, current: 1, enforced: false }),
     ceiling({
-      name: "orgs", label: "organisations", limit: 1, current: null,
+      name: "orgs", label: "organizations", limit: 1, current: null,
       current_reason: "the platform does not count organizations", enforced: false,
     }),
     ceiling({ name: "retention_days", label: "retention days", limit: 7, current: null, current_reason: "retention is not counted as a usage", enforced: false }),
@@ -440,26 +440,26 @@ describe("current usage", () => {
     expect(screen.queryByText("0 of 0")).toBeNull();
   });
 
-  it("draws NO bar for a ceiling nobody counted", async () => {
+  it("draws NO bar for a ceiling nobody counted, or one nothing enforces", async () => {
     setup();
     const { container } = render(<Licence />);
     await screen.findByText("12 of 25");
+    // The two ENFORCED ceilings are rows with a bar each — both counted.
     const rows = container.querySelectorAll(".lic-usage-row");
-    expect(rows.length).toBe(7);
-    // Two enforced rows are counted; the other five are not, so exactly two
-    // fills exist. A fill on an uncounted row would be an invented number.
+    expect(rows.length).toBe(2);
     expect(container.querySelectorAll(".lic-bar-fill").length).toBe(2);
-    // The track is still on every row, so nothing shifts between reads.
-    expect(container.querySelectorAll(".lic-bar").length).toBe(7);
-    // The un-enforced "tenants" row IS counted (1 of 1) and still gets no fill:
-    // a full bar on a limit nothing gates on would read as a live gate.
-    const tenants = [...container.querySelectorAll(".lic-usage-row")]
-      .find((r) => r.textContent?.includes("tenants")) as HTMLElement;
-    expect(tenants.textContent).toContain("1 of 1");
-    expect(tenants.querySelector(".lic-bar-fill")).toBeNull();
+    expect(container.querySelectorAll(".lic-bar").length).toBe(2);
+    // The five carried-but-un-enforced limits sit in ONE table with no bar at
+    // all: a bar on a limit nothing gates on would read as a live gate. The
+    // counted one ("tenants", 1 of 1) shows its number; uncounted ones say
+    // "not measured", never 0.
+    const carried = screen.getByTestId("lic-carried");
+    expect(carried.querySelectorAll("tbody tr").length).toBe(5);
+    expect(carried.querySelector(".lic-bar, .lic-bar-fill")).toBeNull();
+    expect(screen.getByTestId("lic-carried-tenants").textContent).toContain("1");
   });
 
-  it("an unlimited ceiling shows the count in use and no bar — never -1", async () => {
+  it("an unlimited ceiling shows the count in use and no bar — never -1, and no second sentence saying so", async () => {
     setup({
       view: view({
         ceilings: [ceiling({ name: "devices", label: "devices", limit: -1, current: 900 })],
@@ -467,17 +467,21 @@ describe("current usage", () => {
     });
     const { container } = render(<Licence />);
     expect(await screen.findByText("900 in use · no limit")).toBeTruthy();
-    expect(screen.getByText("This license sets no limit here.")).toBeTruthy();
+    // "no limit" is already in the number; the old line repeated it.
+    expect(screen.queryByText("This license sets no limit here.")).toBeNull();
     expect(container.querySelectorAll(".lic-bar-fill").length).toBe(0);
     const usage = container.querySelector('[data-section="usage"]') as HTMLElement;
     expect(usage.textContent).not.toContain("-1");
   });
 
-  it("a limit nothing gates on says so, in place, beside its number", async () => {
+  it("limits nothing gates on are said to be so ONCE, above one table of them", async () => {
     setup();
     render(<Licence />);
-    expect((await screen.findAllByText("carried, not enforced")).length).toBe(5);
-    expect(screen.getAllByText(/nothing in the product gates on it today/).length).toBe(5);
+    await screen.findByText("12 of 25");
+    expect(screen.getAllByText("carried, not enforced")).toHaveLength(1);
+    expect(screen.getAllByText(/nothing in the product gates on it today/)).toHaveLength(1);
+    const carried = screen.getByTestId("lic-carried");
+    expect(carried.textContent).toMatch(/carried, not enforced/);
   });
 
   it("over an enforced ceiling is marked on the row itself", async () => {

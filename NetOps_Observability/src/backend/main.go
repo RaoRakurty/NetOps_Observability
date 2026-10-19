@@ -2345,7 +2345,7 @@ func retireDeviceMonitoringDecisions(path string) {
 			map[string]any{"path": path, "err": err.Error()})
 		return
 	}
-	logInfo("discovery", "removed the per-device monitoring decisions of an older build; every addressable device is now monitored up to the licence limit",
+	logInfo("discovery", "removed the per-device monitoring decisions of an older build; every addressable device is now monitored up to the license limit",
 		map[string]any{"path": path, "decisions": n})
 }
 
@@ -4627,10 +4627,10 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	// been discovered and what is being collected from. Emitted every
 	// scrape, including as a zero: a series that vanishes is indistinguishable
 	// from a scrape failure.
-	fmt.Fprintf(w, "# HELP netops_monitored_devices_total Devices Correlix collects from (addressable, within the licence) — the unit the licence device ceiling counts.\n")
+	fmt.Fprintf(w, "# HELP netops_monitored_devices_total Devices Correlix collects from (addressable, within the license) — the unit the license device ceiling counts.\n")
 	fmt.Fprintf(w, "# TYPE netops_monitored_devices_total gauge\n")
 	fmt.Fprintf(w, "netops_monitored_devices_total %d\n", s.discovery.MonitoredCount())
-	fmt.Fprintf(w, "# HELP netops_monitoring_withheld_devices_total Addressable inventory devices not collected from because they are past the licence limit in first-seen order.\n")
+	fmt.Fprintf(w, "# HELP netops_monitoring_withheld_devices_total Addressable inventory devices not collected from because they are past the license limit in first-seen order.\n")
 	fmt.Fprintf(w, "# TYPE netops_monitoring_withheld_devices_total gauge\n")
 	fmt.Fprintf(w, "netops_monitoring_withheld_devices_total %d\n", s.discovery.MonitoringWithheldCount())
 	// MONITORING-END
@@ -6725,7 +6725,7 @@ func (s *server) licenceUsageScrape(ctx context.Context) licence.Usage {
 	case u := <-done:
 		return u
 	case <-ctx.Done():
-		logWarn("licence", "the licence usage measurement exceeded the scrape budget; the ceilings it could not count are reported as not measured",
+		logWarn("licence", "the license usage measurement exceeded the scrape budget; the ceilings it could not count are reported as not measured",
 			map[string]any{"budget": licenceScrapeBudget.String()})
 		return s.licenceUsageLocal()
 	}
@@ -6753,11 +6753,11 @@ func (s *server) licenceTenantUsage(ctx context.Context, tenant string) (licence
 	notes := map[string]string{}
 	for _, n := range entitlement.CeilingNames() {
 		if !entitlement.Enforced(n) {
-			notes[n] = "carried in the licence but not enforced by this build"
+			notes[n] = "not counted by this build"
 		}
 	}
-	notes[entitlement.CeilingTenants] = "carried in the licence but not enforced by this build; it counts the tenants on the whole installation, which is the provider's number, not yours"
-	notes[entitlement.CeilingSkills] = "carried in the licence but not enforced by this build; the Iris method catalog ships with the platform and is the same for every tenant"
+	notes[entitlement.CeilingTenants] = "it counts the whole installation's tenants — the provider's number, not yours"
+	notes[entitlement.CeilingSkills] = "the Iris method catalog ships with the platform and is the same for every tenant"
 
 	if s.discovery == nil {
 		notes[entitlement.CeilingDevices] = "the device registry is not available"
@@ -6819,7 +6819,7 @@ func (s *server) licenceUsageNotes(_ context.Context) map[string]string {
 	notes := map[string]string{}
 	for _, n := range entitlement.CeilingNames() {
 		if !entitlement.Enforced(n) {
-			notes[n] = "carried in the licence but not enforced by this build"
+			notes[n] = "not counted by this build"
 		}
 	}
 	if s.discovery == nil {
@@ -6841,8 +6841,8 @@ func (s *server) licenceUsageNotes(_ context.Context) map[string]string {
 		// difference between a limit and a mystery.
 		limit, _ := s.entitlements.Ceiling(entitlement.CeilingDevices)
 		notes[entitlement.CeilingDevices] = fmt.Sprintf(
-			"%d more device(s) are in the inventory but not monitored: the licence limit of %d is reached and they were found after the first %d — "+
-				"they stay visible and nothing has been deleted; they start being monitored automatically when a monitored device is deleted or the licence grows", n, limit, limit)
+			"%d more device(s) are in the inventory but not monitored: the license limit of %d is reached and they were found after the first %d — "+
+				"they stay visible and nothing has been deleted; they start being monitored automatically when a monitored device is deleted or the license grows", n, limit, limit)
 	}
 	if s.bgpWatch == nil {
 		notes[entitlement.CeilingWatchedPrefixes] = "the BGP watchlist is not available"
@@ -7387,16 +7387,16 @@ func (s *server) logLicenceState() {
 	st := s.licenceStore.State()
 	switch {
 	case st.LoadError != "":
-		logWarn("licence", "licence: "+st.Summary(), map[string]any{
+		logWarn("licence", "license: "+st.Summary(), map[string]any{
 			"source": string(st.Source), "path": s.licenceStore.Path(), "error": st.LoadError,
 		})
 	case st.Degraded:
-		logWarn("licence", "licence: "+st.Summary(), map[string]any{
+		logWarn("licence", "license: "+st.Summary(), map[string]any{
 			"source": string(st.Source), "tier": string(st.Tier),
 			"licensed_tier": string(st.LicensedTier), "degraded": true,
 		})
 	default:
-		logInfo("licence", "licence: "+st.Summary(), map[string]any{
+		logInfo("licence", "license: "+st.Summary(), map[string]any{
 			"source": string(st.Source), "tier": string(st.Tier), "in_grace": st.InGrace,
 		})
 	}
