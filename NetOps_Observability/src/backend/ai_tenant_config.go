@@ -415,7 +415,7 @@ func (s *server) requireAIEntitlement(w http.ResponseWriter, claims jwtClaims, e
 	if d.Granted {
 		return true
 	}
-	status, msg := http.StatusForbidden, "this installation's licence does not include "+aientitlement.Label(e)
+	status, msg := http.StatusForbidden, "this installation's license does not include "+aientitlement.Label(e)
 	switch d.Reason {
 	case aientitlement.ReasonDisabled:
 		status = http.StatusServiceUnavailable

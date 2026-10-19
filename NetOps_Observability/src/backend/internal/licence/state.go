@@ -173,7 +173,7 @@ func (s State) Summary() string {
 		base := fmt.Sprintf("none — Community ceilings (%d devices, %d watched prefixes)",
 			s.Ceilings.Devices, s.Ceilings.WatchedPrefixes)
 		if s.LoadError != "" {
-			return base + " — an installed licence was REFUSED: " + s.LoadError
+			return base + " — an installed license was REFUSED: " + s.LoadError
 		}
 		return base
 	}
@@ -269,7 +269,7 @@ func (s State) Overages(u Usage) []Overage {
 				"Monitoring continues — nothing has been blocked, disabled or deleted; the overage is recorded for true-up",
 				cur-limit, entitlement.CeilingLabel(name), s.Tier.Label(), limit, cur)
 		} else {
-			msg = fmt.Sprintf("%d of %d %s are over the %s ceiling of %d — they are still here and nothing has been deleted, but %d are not covered by the licence",
+			msg = fmt.Sprintf("%d of %d %s are over the %s ceiling of %d — they are still here and nothing has been deleted, but %d are not covered by the license",
 				cur-limit, cur, entitlement.CeilingLabel(name), s.Tier.Label(), limit, cur-limit)
 			if lifted != "" {
 				msg += fmt.Sprintf("; the %s tier covers them", lifted.Label())

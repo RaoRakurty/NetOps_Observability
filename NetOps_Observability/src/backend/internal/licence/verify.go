@@ -196,7 +196,7 @@ func evaluate(doc Document, now time.Time) State {
 	expired := doc.ExpiresAt.UTC().Format("2006-01-02")
 	kind := "licence"
 	if doc.Trial {
-		kind = "evaluation licence"
+		kind = "evaluation license"
 	}
 	if !now.After(graceEnd) {
 		st.Phase = entitlement.PhaseInGrace
@@ -220,7 +220,7 @@ func evaluate(doc Document, now time.Time) State {
 	}
 	st.Reason = fmt.Sprintf("%s expired on %s and %s; the Community ceilings are the ones in force. "+
 		"Existing data stays visible and exportable and everything over a ceiling is listed — nothing has been disabled or deleted. "+
-		"Creating or configuring paid capability is refused until a renewed licence is installed",
+		"Creating or configuring paid capability is refused until a renewed license is installed",
 		kind, expired, grace)
 	return st
 }
