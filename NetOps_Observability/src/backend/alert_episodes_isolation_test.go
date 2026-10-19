@@ -114,16 +114,22 @@ func TestAlertEpisodeCrossOrgIsolation(t *testing.T) {
 		}
 	}
 
-	// ── platform (device-less) episodes are visible to a scoped caller but
-	// triage-able only by the platform owner ─────────────────────────────────────
-	var platformID string
+	// ── platform (device-less) episodes are PLATFORM-ONLY: a scoped caller
+	// neither sees nor triages them (P1 2026-10-18: they used to be listed for
+	// every tenant) ─────────────────────────────────────────────────────────────
 	for _, ep := range lrA.Episodes {
+		if ep.Resource == "" {
+			t.Fatalf("PLATFORM LEAK: a scoped caller was listed a device-less platform episode: %+v", ep)
+		}
+	}
+	var platformID string
+	for _, ep := range list(admin).Episodes {
 		if ep.Resource == "" {
 			platformID = ep.ID
 		}
 	}
 	if platformID == "" {
-		t.Fatalf("scoped caller must still SEE device-less stack episodes: %+v", lrA.Episodes)
+		t.Fatalf("the platform owner must see the device-less stack episode")
 	}
 	if st, _ := do(t, srv, "POST", "/api/alerts/episodes/"+platformID+"/ack", a.token, map[string]any{}); st != http.StatusNotFound {
 		t.Fatalf("scoped caller must not triage a platform episode: %d", st)
