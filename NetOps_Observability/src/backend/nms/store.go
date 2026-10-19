@@ -128,28 +128,32 @@ type ConfigStore interface {
 	// (tenant-scoped read — the UI's state table).
 	States(ctx context.Context, tenant string, cross bool, integrationID string) ([]StateRecord, error)
 	Health(ctx context.Context, tenant string, cross bool, id string) (Health, bool, error)
+	// DeviceStore: controller-sourced inventory (device_store.go).
+	DeviceStore
 }
 
 // ── in-memory backend (dev/file backend + tests) ─────────────────────────────
 
 type memStore struct {
-	mu     sync.Mutex
-	ints   map[string]Integration       // tenant\x00id
-	creds  map[string]map[string]string // tenant\x00id → field→plaintext (mem = non-prod)
-	health map[string]Health            // tenant\x00id
-	runs   map[string][]RunRecord       // tenant\x00id, bounded
-	states map[string]StateRecord       // tenant\x00id\x00entity\x00kind
-	cks    *MemCheckpoints
+	mu      sync.Mutex
+	ints    map[string]Integration       // tenant\x00id
+	creds   map[string]map[string]string // tenant\x00id → field→plaintext (mem = non-prod)
+	health  map[string]Health            // tenant\x00id
+	runs    map[string][]RunRecord       // tenant\x00id, bounded
+	states  map[string]StateRecord       // tenant\x00id\x00entity\x00kind
+	devices map[string]*memDevice        // tenant\x00id\x00key (device_store.go)
+	cks     *MemCheckpoints
 }
 
 func NewMemStore() *memStore {
 	return &memStore{
-		ints:   map[string]Integration{},
-		creds:  map[string]map[string]string{},
-		health: map[string]Health{},
-		runs:   map[string][]RunRecord{},
-		states: map[string]StateRecord{},
-		cks:    NewMemCheckpoints(),
+		ints:    map[string]Integration{},
+		creds:   map[string]map[string]string{},
+		health:  map[string]Health{},
+		runs:    map[string][]RunRecord{},
+		states:  map[string]StateRecord{},
+		devices: map[string]*memDevice{},
+		cks:     NewMemCheckpoints(),
 	}
 }
 
@@ -206,6 +210,11 @@ func (m *memStore) Delete(_ context.Context, tenant string, cross bool, id strin
 			delete(m.creds, k)
 			delete(m.health, k)
 			delete(m.runs, k)
+			for dk := range m.devices {
+				if strings.HasPrefix(dk, k+"\x00") {
+					delete(m.devices, dk) // the integration's devices leave with it
+				}
+			}
 			return true, nil
 		}
 	}
@@ -463,6 +472,7 @@ func (s *pgStore) Delete(ctx context.Context, tenant string, cross bool, id stri
 			`DELETE FROM connector_health WHERE integration_id=$1`,
 			`DELETE FROM connector_run_history WHERE integration_id=$1`,
 			`DELETE FROM controller_state_current WHERE integration_id=$1`,
+			`DELETE FROM controller_devices WHERE integration_id=$1`,
 		} {
 			if _, err := tx.Exec(ctx, q, id); err != nil {
 				return err
