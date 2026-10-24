@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:e46a51bf-f327-5f0c-9714-ac89759b4652",
+  "serialNumber": "urn:uuid:374b0e95-ef85-5e7c-a8b6-9d26a578667b",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-10-10T15:22:00+00:00",
+    "timestamp": "2026-10-24T19:43:36+00:00",
     "tools": {
       "components": [
         {
@@ -16,9 +16,9 @@
     },
     "component": {
       "type": "application",
-      "bom-ref": "correlix@2026.10.10-g1ece29c7#go-backend",
+      "bom-ref": "correlix@2026.10.24-gb7a859fe#go-backend",
       "name": "correlix",
-      "version": "2026.10.10-g1ece29c7",
+      "version": "2026.10.24-gb7a859fe",
       "description": "Correlix \u2014 go-backend dependency inventory"
     },
     "properties": [
@@ -119,10 +119,10 @@
     },
     {
       "type": "platform",
-      "bom-ref": "pkg:golang/go@1.26.9",
+      "bom-ref": "pkg:golang/go@1.26.10",
       "name": "go",
-      "version": "1.26.9",
-      "purl": "pkg:golang/go@1.26.9",
+      "version": "1.26.10",
+      "purl": "pkg:golang/go@1.26.10",
       "description": "Go toolchain the backend is built with",
       "properties": [
         {
@@ -135,7 +135,7 @@
         },
         {
           "name": "correlix:go.mod:toolchain",
-          "value": "1.26.9"
+          "value": "1.26.10"
         }
       ]
     },
