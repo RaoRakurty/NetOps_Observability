@@ -29,6 +29,11 @@ type PeerPolicy struct {
 	// an audit log + metric without this package depending on either. identity is
 	// the peer's SANs (or "<none>"); err is the rejection reason.
 	OnReject func(identity string, err error)
+	// OnAccept, if set, is called with the verified peer leaf of every ACCEPTED
+	// handshake. Tracker 351: it is how a server learns the expiry of the
+	// certificate each client PRESENTS — the one class a served-cert probe can
+	// never see, and the one that killed alert delivery 2026-10-14→17.
+	OnAccept func(leaf *x509.Certificate)
 	// Federation, when non-nil and configured, enforces the SPIFFE trust-domain
 	// binding (a peer's SPIFFE domain must match the root that anchored its chain)
 	// BEFORE the identity allowlist. Nil/unconfigured → dormant: single-domain
@@ -38,6 +43,13 @@ type PeerPolicy struct {
 
 // empty reports whether the policy names no identities (no constraint configured).
 func (p PeerPolicy) empty() bool { return len(p.AllowedDNS) == 0 && len(p.AllowedURIs) == 0 }
+
+func (p PeerPolicy) accept(cs tls.ConnectionState) error {
+	if p.OnAccept != nil && len(cs.VerifiedChains) > 0 && len(cs.VerifiedChains[0]) > 0 {
+		p.OnAccept(cs.VerifiedChains[0][0])
+	}
+	return nil
+}
 
 func (p PeerPolicy) reject(identity string, err error) error {
 	if p.OnReject != nil {
@@ -63,7 +75,7 @@ func (p PeerPolicy) verify(cs tls.ConnectionState) error {
 		}
 	}
 	if p.empty() {
-		return nil // no identity allowlist configured → chain verification suffices
+		return p.accept(cs) // no identity allowlist configured → chain verification suffices
 	}
 	if len(cs.VerifiedChains) == 0 || len(cs.VerifiedChains[0]) == 0 {
 		return p.reject("<none>", fmt.Errorf("tlsconfig: no verified peer certificate"))
@@ -72,14 +84,14 @@ func (p PeerPolicy) verify(cs tls.ConnectionState) error {
 	for _, want := range p.AllowedDNS {
 		for _, got := range leaf.DNSNames {
 			if strings.EqualFold(want, got) {
-				return nil
+				return p.accept(cs)
 			}
 		}
 	}
 	for _, want := range p.AllowedURIs {
 		for _, u := range leaf.URIs {
 			if u != nil && u.String() == want {
-				return nil
+				return p.accept(cs)
 			}
 		}
 	}

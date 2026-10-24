@@ -1653,6 +1653,62 @@ start_install_log() {
 }
 
 # ---------- commands ----------------------------------------------------
+# ---------- certificate rotation sweep (tracker 351/352) ---------------
+# The api re-mints every mesh SVID at ~TTL/2, but services that load their
+# certificate once at start (vmalert, correlation, the vector pair, syslog-ng,
+# opensearch, …) keep the old copy until scripts/rotate-tls-services.sh
+# reloads or restarts them. That sweep used to be a hand-installed lab cron,
+# so every customer TLS install had NO renewal backstop and went dark one TTL
+# (7 days) after its last restart — exactly the 2026-10-14 alert-delivery
+# outage. The installer now owns the entry: one marker-tagged line in the
+# install user's crontab (the same docker-group user that runs compose, so it
+# gains no privilege), rewritten on every install/upgrade so it always points
+# at the CURRENT tree, removed on uninstall.
+TLS_CRON_MARK="# correlix-tls-rotate (managed by install-correlix.sh)"
+
+crontab_without_mark() {
+  # `crontab -l` exits 1 with "no crontab for <user>" when none exists — that
+  # is an empty table, not an error. Anything else is a real failure.
+  local out rc=0
+  out="$(crontab -l 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    case "$out" in *"no crontab for"*) return 0 ;; esac
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  printf '%s\n' "$out" | grep -vF "$TLS_CRON_MARK" || true  # grep exits 1 when every line was ours: still a valid (empty) table
+}
+
+install_tls_rotation_cron() {
+  tls_active || return 0
+  if ! command -v crontab >/dev/null 2>&1; then
+    warn "crontab is not installed: mesh certificates will NOT be refreshed in running services and TLS will fail 7 days after the last restart."
+    warn "Install cron (Debian/Ubuntu: sudo apt-get install cron · RHEL: sudo dnf install cronie), then re-run: ./install-correlix.sh"
+    return 1
+  fi
+  local table line
+  table="$(crontab_without_mark)" || { warn "could not read the crontab — certificate rotation sweep NOT installed"; return 1; }
+  line="7 5 * * * /bin/bash '$ROOT/scripts/rotate-tls-services.sh' >> '$ROOT/scripts/rotate-tls.log' 2>&1 $TLS_CRON_MARK"
+  if ! { [ -n "$table" ] && printf '%s\n' "$table"; printf '%s\n' "$line"; } | crontab -; then
+    warn "could not write the crontab — certificate rotation sweep NOT installed"
+    return 1
+  fi
+  ok "certificate rotation sweep scheduled (daily 05:07, $ROOT/scripts/rotate-tls.log)"
+}
+
+remove_tls_rotation_cron() {
+  command -v crontab >/dev/null 2>&1 || return 0  # no cron = nothing of ours can be scheduled
+  local table
+  table="$(crontab_without_mark)" || { warn "could not read the crontab — remove the '$TLS_CRON_MARK' line by hand (crontab -e)"; return 0; }
+  if [ -z "$table" ]; then
+    # Removing an absent table also exits 1 ("no crontab"): either way nothing
+    # of ours remains, which is the only outcome this step promises.
+    crontab -r 2>/dev/null || true
+  else
+    printf '%s\n' "$table" | crontab - || warn "could not rewrite the crontab — remove the '$TLS_CRON_MARK' line by hand (crontab -e)"
+  fi
+}
+
 cmd_install() {
   if [ -n "$CONFIG_FILE" ]; then
     load_config "$CONFIG_FILE"
@@ -1721,6 +1777,14 @@ cmd_install() {
     # verify_admin_login is advisory by design (it warns, never blocks), so
     # the stage always closes ok; the credential itself NEVER rides a marker.
     cx_stage verify-login "verifying the admin credential" ok
+    # Loud but not fatal: the stack IS up; a missing sweep is a warning the
+    # operator can fix with a re-run, and the watchdog reports a stale sweep.
+    cx_stage tls-rotation "scheduling certificate rotation" start
+    if install_tls_rotation_cron; then
+      cx_stage tls-rotation "scheduling certificate rotation" ok
+    else
+      cx_stage tls-rotation "scheduling certificate rotation" fail "certificate rotation sweep not scheduled (see the warning above)"
+    fi
     print_success
     cx_result ok "$(dashboard_url)" "$(env_get ADMIN_USERNAME || echo admin)"
   else
@@ -1927,6 +1991,7 @@ cmd_uninstall() {
     compose down --remove-orphans
   fi
   ok "containers removed"
+  remove_tls_rotation_cron
   if [ "$PURGE" = 1 ]; then
     say "Purging data, configuration, and loaded images..."
     # Data FIRST, images second: the removal needs a local image to run the
