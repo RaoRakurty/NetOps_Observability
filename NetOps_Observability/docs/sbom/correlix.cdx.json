@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:78ce9b28-20e3-5269-8805-2c3ddd24004d",
+  "serialNumber": "urn:uuid:cb07d8b3-d989-59bb-8bbc-605f0089b838",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-10-10T15:22:00+00:00",
+    "timestamp": "2026-10-18T15:07:38+00:00",
     "tools": {
       "components": [
         {
@@ -16,9 +16,9 @@
     },
     "component": {
       "type": "application",
-      "bom-ref": "correlix@2026.10.10-g1ece29c7#correlix",
+      "bom-ref": "correlix@2026.10.18-gcfff8c03#correlix",
       "name": "correlix",
-      "version": "2026.10.10-g1ece29c7",
+      "version": "2026.10.18-gcfff8c03",
       "description": "Correlix \u2014 correlix dependency inventory"
     },
     "properties": [
@@ -416,10 +416,10 @@
     },
     {
       "type": "container",
-      "bom-ref": "container:golang:1.26.9-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade",
+      "bom-ref": "container:golang:1.26.10-alpine@sha256:27f2d3b83cfc5803c8078f8e730af0f7c431bf067afaec8f60a36fb763187cba",
       "name": "golang",
-      "version": "sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade",
-      "purl": "pkg:oci/golang@sha256%3A3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade?tag=1.26.9-alpine",
+      "version": "sha256:27f2d3b83cfc5803c8078f8e730af0f7c431bf067afaec8f60a36fb763187cba",
+      "purl": "pkg:oci/golang@sha256%3A27f2d3b83cfc5803c8078f8e730af0f7c431bf067afaec8f60a36fb763187cba?tag=1.26.10-alpine",
       "properties": [
         {
           "name": "correlix:class",
@@ -427,11 +427,11 @@
         },
         {
           "name": "correlix:image:ref",
-          "value": "golang:1.26.9-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade"
+          "value": "golang:1.26.10-alpine@sha256:27f2d3b83cfc5803c8078f8e730af0f7c431bf067afaec8f60a36fb763187cba"
         },
         {
           "name": "correlix:image:tag",
-          "value": "1.26.9-alpine"
+          "value": "1.26.10-alpine"
         },
         {
           "name": "correlix:image:digest-pinned",
@@ -445,7 +445,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade"
+          "content": "27f2d3b83cfc5803c8078f8e730af0f7c431bf067afaec8f60a36fb763187cba"
         }
       ]
     },
@@ -1378,10 +1378,10 @@
     },
     {
       "type": "platform",
-      "bom-ref": "pkg:golang/go@1.26.9",
+      "bom-ref": "pkg:golang/go@1.26.10",
       "name": "go",
-      "version": "1.26.9",
-      "purl": "pkg:golang/go@1.26.9",
+      "version": "1.26.10",
+      "purl": "pkg:golang/go@1.26.10",
       "description": "Go toolchain the backend is built with",
       "properties": [
         {
@@ -1394,7 +1394,7 @@
         },
         {
           "name": "correlix:go.mod:toolchain",
-          "value": "1.26.9"
+          "value": "1.26.10"
         }
       ]
     },
@@ -15776,10 +15776,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/body-parser@1.20.6",
+      "bom-ref": "pkg:npm/body-parser@1.20.9",
       "name": "body-parser",
-      "version": "1.20.6",
-      "purl": "pkg:npm/body-parser@1.20.6",
+      "version": "1.20.9",
+      "purl": "pkg:npm/body-parser@1.20.9",
       "scope": "required",
       "properties": [
         {
@@ -15801,7 +15801,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "a79b40cd2e7b8b9315f5f6450e3f4b788893644b9f6d27b6783a333fe12585e494ab59bbe0246ad63238998343755b3dbd0ced5c52ee93f19de81593770449e6"
+          "content": "148488431579bbdd58f60bee16adeafed03fa93a8b267dc0851704bf2a33ca1253879381145b6ff36ec074753b45bc9cb78afe05ad7ff7da056b5637cae16c77"
         }
       ]
     },
@@ -21575,10 +21575,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/follow-redirects@1.16.0",
+      "bom-ref": "pkg:npm/follow-redirects@1.16.1",
       "name": "follow-redirects",
-      "version": "1.16.0",
-      "purl": "pkg:npm/follow-redirects@1.16.0",
+      "version": "1.16.1",
+      "purl": "pkg:npm/follow-redirects@1.16.1",
       "scope": "required",
       "properties": [
         {
@@ -21590,10 +21590,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "cb9acdfee3ac69d153fc97d8c21c514b947b41c7be837cc6f7bf89aed159942f64957fd6e610fb8a22f349c2389d9a944bb0cd51d84f830e3123c5b62ee5e553"
+          "content": "14dbc51b3a0c2d6984e988fdb296ffce377bca23421e2016f7f4e0f425eb43cc2ebb7d87b6524ec163b5d4e25a7e5e457d8dc3c53750d2f8f8db353592fbf98e"
         }
       ]
     },
@@ -23138,10 +23145,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/http-cache-semantics@4.2.0",
+      "bom-ref": "pkg:npm/http-cache-semantics@4.3.0",
       "name": "http-cache-semantics",
-      "version": "4.2.0",
-      "purl": "pkg:npm/http-cache-semantics@4.2.0",
+      "version": "4.3.0",
+      "purl": "pkg:npm/http-cache-semantics@4.3.0",
       "scope": "required",
       "properties": [
         {
@@ -23153,10 +23160,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-2-Clause"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "753c5cbcf5ea3ef5c1429ab9754afa9843095f8a08105bfa6f0a26dc50f02910ecb888e324600daa106ea009fd73545024874029abf7dc40fae44db2b3ef3b41"
+          "content": "339b792e52694b5507323bf045055d147bcf21219e2c0c4d72b5ae2647868742b1b2a0876753b7357654ffcc7b703d010dc196f246a9c4c293bf096aacd90790"
         }
       ]
     },
@@ -25314,10 +25328,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/launch-editor@2.14.1",
+      "bom-ref": "pkg:npm/launch-editor@2.14.2",
       "name": "launch-editor",
-      "version": "2.14.1",
-      "purl": "pkg:npm/launch-editor@2.14.1",
+      "version": "2.14.2",
+      "purl": "pkg:npm/launch-editor@2.14.2",
       "scope": "required",
       "properties": [
         {
@@ -25329,10 +25343,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "41606b42c3291fb80fafdeb976c283ff770a5a23684e3a404d07fef97abadcdeac29118cc25557cf8d4ed4865331f65080172d0ff2b966dd3afbf23aa4febe1c"
+          "content": "3472446f7d0c1810a49995cb670cf6e6ddfb411e1a634dd9ccf61425738968e6bddae5b013123d481414b88ce7058735c640fb7093465fba1cdcd977b2ada441"
         }
       ]
     },
@@ -39616,10 +39637,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:pypi/certifi@2026.5.20",
+      "bom-ref": "pkg:pypi/certifi@2026.10.19",
       "name": "certifi",
-      "version": "2026.5.20",
-      "purl": "pkg:pypi/certifi@2026.5.20",
+      "version": "2026.10.19",
+      "purl": "pkg:pypi/certifi@2026.10.19",
       "scope": "required",
       "properties": [
         {
@@ -39630,11 +39651,11 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "3c52e209ba0a4ad7aebe60436a4ab349c39e1e602e8c134221e546902ad25897"
+          "content": "035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae"
         },
         {
           "alg": "SHA-256",
-          "content": "69dea482ab64caa7b9f6aba1c6bf48bb6a5448d1c0f1b17ab42ad8c763a5344d"
+          "content": "42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b"
         }
       ]
     },

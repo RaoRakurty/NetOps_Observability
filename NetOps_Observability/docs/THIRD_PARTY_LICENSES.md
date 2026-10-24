@@ -112,7 +112,7 @@ distributed and carries no notice obligation.
 | `anyio` | 4.14.2 | MIT | installed into site-packages in the shipped image |
 | `async-timeout` | 5.0.1 | Apache-2.0 | installed into site-packages in the shipped image |
 | `asyncpg` | 0.29.0 | Apache-2.0 | installed into site-packages in the shipped image |
-| `certifi` | 2026.5.20 | MPL-2.0 | installed into site-packages in the shipped image |
+| `certifi` | 2026.10.19 | MPL-2.0 | installed into site-packages in the shipped image |
 | `click` | 8.4.1 | BSD-3-Clause | installed into site-packages in the shipped image |
 | `cramjam` | 2.8.4 | MIT | installed into site-packages in the shipped image |
 | `exceptiongroup` | 1.3.1 | MIT | installed into site-packages in the shipped image |
