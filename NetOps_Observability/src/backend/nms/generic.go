@@ -83,6 +83,9 @@ func (GenericTransformer) Transform(tenant, integrationID string, raw []byte) (B
 type GenericWebhook struct{}
 
 func (GenericWebhook) Verify(r *http.Request, body, secret []byte) error {
+	if len(secret) == 0 {
+		return ErrSignatureInvalid // an HMAC with an empty key is forgeable by anyone
+	}
 	sig := r.Header.Get("X-Correlix-Signature")
 	if sig == "" {
 		return ErrSignatureInvalid
