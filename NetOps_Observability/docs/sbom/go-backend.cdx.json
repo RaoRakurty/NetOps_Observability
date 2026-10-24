@@ -4,7 +4,7 @@
   "serialNumber": "urn:uuid:374b0e95-ef85-5e7c-a8b6-9d26a578667b",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-10-18T15:07:38+00:00",
+    "timestamp": "2026-10-24T19:43:36+00:00",
     "tools": {
       "components": [
         {
@@ -16,9 +16,9 @@
     },
     "component": {
       "type": "application",
-      "bom-ref": "correlix@2026.10.18-gcfff8c03#go-backend",
+      "bom-ref": "correlix@2026.10.24-gb7a859fe#go-backend",
       "name": "correlix",
-      "version": "2026.10.18-gcfff8c03",
+      "version": "2026.10.24-gb7a859fe",
       "description": "Correlix \u2014 go-backend dependency inventory"
     },
     "properties": [

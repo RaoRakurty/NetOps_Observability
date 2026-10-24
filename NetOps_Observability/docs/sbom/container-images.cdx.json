@@ -4,7 +4,7 @@
   "serialNumber": "urn:uuid:239ab258-a3cb-5572-a590-d11a597f605a",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-10-18T15:07:38+00:00",
+    "timestamp": "2026-10-24T19:43:36+00:00",
     "tools": {
       "components": [
         {
@@ -16,9 +16,9 @@
     },
     "component": {
       "type": "application",
-      "bom-ref": "correlix@2026.10.18-gcfff8c03#container-images",
+      "bom-ref": "correlix@2026.10.24-gb7a859fe#container-images",
       "name": "correlix",
-      "version": "2026.10.18-gcfff8c03",
+      "version": "2026.10.24-gb7a859fe",
       "description": "Correlix \u2014 container-images dependency inventory"
     },
     "properties": [
