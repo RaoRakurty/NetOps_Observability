@@ -46,6 +46,25 @@ func normSeverity(v string) string {
 	}
 }
 
+// canonicalSeverities is the last guard before controller events reach the bus:
+// any severity outside info|warn|high|crit (a connector that passes its vendor's
+// own words through) is mapped by normSeverity. The engine maps unknown words
+// to WARN, below its open floor, so a stray vocabulary silently mutes a whole
+// connector — this keeps one connector's slip from doing that. Returns how many
+// events needed fixing, so the caller can make the slip visible.
+func canonicalSeverities(events []ControllerEvent) int {
+	fixed := 0
+	for i := range events {
+		switch events[i].Severity {
+		case "info", "warn", "high", "crit":
+		default:
+			events[i].Severity = normSeverity(events[i].Severity)
+			fixed++
+		}
+	}
+	return fixed
+}
+
 // msToTime converts vendor epoch-millis to UTC time (0 → zero time).
 func msToTime(ms int64) time.Time {
 	if ms <= 0 {

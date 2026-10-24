@@ -56,7 +56,7 @@ CONTRACT_STAGES = ("prereq", "scaffold", "env", "sizing", "tls-env",
                    "up-a", "mint", "up-b",
                    "kafka-acls", "status",
                    "bootstrap-os", "bootstrap-kc", "bootstrap-grafana")
-WRAPPER_STAGES = ("preflight", "verify-health", "verify-login")
+WRAPPER_STAGES = ("preflight", "verify-health", "verify-login", "tls-rotation")
 
 
 def marker_lines(out: str) -> list[dict]:
@@ -477,6 +477,7 @@ cx_stage preflight "checking this host" fail "host preflight failed"
 cx_stage verify-health "waiting for services to become healthy" start
 cx_stage verify-health "waiting for services to become healthy" ok
 cx_stage verify-login "verifying the admin credential" ok
+cx_stage tls-rotation "scheduling certificate rotation" ok
 cx_result ok "http://10.0.0.5:8000" admin
 cx_result fail
 """
@@ -487,12 +488,12 @@ cx_result fail
     ms = marker_lines(r.stdout)
     assert [m.get("id", m["kind"]) for m in ms] == [
         "preflight", "preflight", "verify-health", "verify-health",
-        "verify-login", "result", "result"]
+        "verify-login", "tls-rotation", "result", "result"]
     assert set(m["id"] for m in ms if m["kind"] == "stage") <= set(WRAPPER_STAGES)
     assert ms[1]["status"] == "fail" and ms[1]["message"] == "host preflight failed"
-    assert ms[5] == {"kind": "result", "status": "ok",
+    assert ms[6] == {"kind": "result", "status": "ok",
                      "url": "http://10.0.0.5:8000", "admin_user": "admin"}
-    assert ms[6] == {"kind": "result", "status": "fail"}
+    assert ms[7] == {"kind": "result", "status": "fail"}
     # And silent when the activation env var is absent.
     r2 = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
                         timeout=30, env={"PATH": "/usr/bin:/bin"})

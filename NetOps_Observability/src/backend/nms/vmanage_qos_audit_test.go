@@ -49,7 +49,7 @@ func TestVManageHardwareHealth(t *testing.T) {
 	// A transition into error is a fault event; into warning a minor one.
 	rec := StateRecord{StateKind: "hardware_health", EntityKey: "10.255.255.52", DeviceID: "10.255.255.52", LastSeen: time.Unix(1, 0)}
 	evs := SDWANStateChangeEvents("t1", "i1", "vmanage", []StateChange{{Record: rec, From: "normal", To: "error"}, {Record: rec, From: "normal", To: "warning"}})
-	if len(evs) != 2 || evs[0].Severity != "major" || evs[0].EvidenceRole != RoleDiscriminating || evs[1].Severity != "minor" {
+	if len(evs) != 2 || evs[0].Severity != "high" || evs[0].EvidenceRole != RoleDiscriminating || evs[1].Severity != "warn" {
 		t.Fatalf("%+v", evs)
 	}
 }
@@ -73,7 +73,7 @@ func TestVManageAuditLog(t *testing.T) {
 	if c.NormalizedEventType != "controller_policy_change" || c.DeviceID != "10.255.255.51" || c.EventID != "audit:a1" || c.CorrelationHints["user"] != "admin" {
 		t.Fatalf("change %+v", c)
 	}
-	if f.NormalizedEventType != "controller_alarm" || f.Severity != "minor" || f.DeviceID != "10.255.255.1" {
+	if f.NormalizedEventType != "controller_alarm" || f.Severity != "warn" || f.DeviceID != "10.255.255.1" {
 		t.Fatalf("failed login %+v", f)
 	}
 	if c.DedupeKey == "" || c.DedupeKey == f.DedupeKey {
