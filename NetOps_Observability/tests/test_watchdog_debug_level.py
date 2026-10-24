@@ -202,13 +202,14 @@ def _layout(tmp_path: Path):
         "NTFY_TOPIC='correlix-test-topic'\n"
         f"CH_ENV_FILE='{stack_env}'\n"
         "DISK_WARN_PCT='101'\n"
-        # The two sibling probes that share the victoria container lookup are
+        # The sibling probes that share the victoria container lookup are
         # OFF here on purpose. It keeps the assertions about this block alone —
         # and it pins the guard extension: the lookup that populates eng_cid
         # must fire for DEBUG_LEVEL_CHECK too, or every test below would report
         # "no running victoria container" instead of reading the gauges.
         "ENGINE_CONSUMER_CHECK='0'\n"
         "SNAPSHOT_RESTORABLE_CHECK='0'\n"
+        "CLIENT_CERT_CHECK='0'\n"
     )
     return etc
 

@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -393,7 +394,18 @@ func MetricsPushStats() (ok, failed, dropped uint64, lastErr string) {
 	return metricsPushOK.Load(), metricsPushFailed.Load(), metricsPushDropped.Load(), lastErr
 }
 
+// urlUserinfo matches the credential part of a URL ("scheme://user:pass@").
+// VICTORIA_URL carries the vmauth credential as userinfo (SEC-010), and the
+// non-2xx branch below quotes the URL — so until tracker 367 the push password
+// was written to the api log in plaintext on every failed push.
+var urlUserinfo = regexp.MustCompile(`://[^/@\s]+@`)
+
+// redactUserinfo removes any URL credential from text bound for a log or a
+// stored error (§8: no secrets in logs).
+func redactUserinfo(s string) string { return urlUserinfo.ReplaceAllString(s, "://<redacted>@") }
+
 func notePushFailure(reason string) {
+	reason = redactUserinfo(reason) // every failure text passes here: one choke point
 	metricsPushFailed.Add(1)
 	metricsPushMu.Lock()
 	metricsPushLastErr = reason

@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# promtool unit tests for the CLIENT-certificate expiry rules in rules.yaml
+# (tls-posture group, tracker 351). The api exports, per mTLS caller identity,
+# the seconds until the client certificate it last presented expires. The
+# 2026-10-14 outage: vmalert presented a start-loaded SVID until it expired.
+#
+# Pinned: (a) the warning fires inside 48h, (b) critical inside 12h, (c) a
+# healthy caller — one presenting a freshly re-minted cert (> 84h left) — is
+# silent, so the rule cannot become the always-lit alert that gets muted.
+
+rule_files:
+  - /etc/prometheus/rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # (a) + (b): vmalert presents a cert with 40h left, burning down 60s/min.
+  - interval: 1m
+    input_series:
+      - series: 'netops_tls_client_cert_expiry_seconds{identity="spiffe://netops/ns/default/sa/vmalert"}'
+        values: "144000-60x60"
+      - series: 'netops_tls_client_cert_expiry_seconds{identity="spiffe://netops/ns/default/sa/nginx"}'
+        values: "36000-60x60"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: TLSClientCertExpiringSoon
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              identity: spiffe://netops/ns/default/sa/nginx
+            exp_annotations:
+              summary: "spiffe://netops/ns/default/sa/nginx is presenting a client certificate that expires in under 48h — it loaded its SVID at start and has not picked up the re-mint; run scripts/rotate-tls-services.sh or restart that service"
+          - exp_labels:
+              severity: warning
+              identity: spiffe://netops/ns/default/sa/vmalert
+            exp_annotations:
+              summary: "spiffe://netops/ns/default/sa/vmalert is presenting a client certificate that expires in under 48h — it loaded its SVID at start and has not picked up the re-mint; run scripts/rotate-tls-services.sh or restart that service"
+      - eval_time: 10m
+        alertname: TLSClientCertExpiryCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              identity: spiffe://netops/ns/default/sa/nginx
+            exp_annotations:
+              summary: "spiffe://netops/ns/default/sa/nginx presents a client certificate expiring in under 12h — its mTLS calls into the api (alert delivery, if this is vmalert) WILL fail; restart it now"
+
+  # (c) all-clear: a caller on a fresh mint (100h left) never fires.
+  - interval: 1m
+    input_series:
+      - series: 'netops_tls_client_cert_expiry_seconds{identity="spiffe://netops/ns/default/sa/vmalert"}'
+        values: "360000-60x60"
+    alert_rule_test:
+      - eval_time: 59m
+        alertname: TLSClientCertExpiringSoon
+        exp_alerts: []
+      - eval_time: 59m
+        alertname: TLSClientCertExpiryCritical
+        exp_alerts: []
