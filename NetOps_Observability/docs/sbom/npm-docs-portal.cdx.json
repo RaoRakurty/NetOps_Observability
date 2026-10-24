@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:4c96a164-42d5-5342-a62d-d85e1a78b55d",
+  "serialNumber": "urn:uuid:9ea21f75-bb2c-560d-8a13-4bab7abfe961",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-10-10T15:22:00+00:00",
+    "timestamp": "2026-10-24T19:43:36+00:00",
     "tools": {
       "components": [
         {
@@ -16,9 +16,9 @@
     },
     "component": {
       "type": "application",
-      "bom-ref": "correlix@2026.10.10-g1ece29c7#npm-docs-portal",
+      "bom-ref": "correlix@2026.10.24-gb7a859fe#npm-docs-portal",
       "name": "correlix",
-      "version": "2026.10.10-g1ece29c7",
+      "version": "2026.10.24-gb7a859fe",
       "description": "Correlix \u2014 npm-docs-portal dependency inventory"
     },
     "properties": [
@@ -11729,10 +11729,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/body-parser@1.20.6",
+      "bom-ref": "pkg:npm/body-parser@1.20.9",
       "name": "body-parser",
-      "version": "1.20.6",
-      "purl": "pkg:npm/body-parser@1.20.6",
+      "version": "1.20.9",
+      "purl": "pkg:npm/body-parser@1.20.9",
       "scope": "required",
       "properties": [
         {
@@ -11754,7 +11754,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "a79b40cd2e7b8b9315f5f6450e3f4b788893644b9f6d27b6783a333fe12585e494ab59bbe0246ad63238998343755b3dbd0ced5c52ee93f19de81593770449e6"
+          "content": "148488431579bbdd58f60bee16adeafed03fa93a8b267dc0851704bf2a33ca1253879381145b6ff36ec074753b45bc9cb78afe05ad7ff7da056b5637cae16c77"
         }
       ]
     },
@@ -17188,10 +17188,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/follow-redirects@1.16.0",
+      "bom-ref": "pkg:npm/follow-redirects@1.16.1",
       "name": "follow-redirects",
-      "version": "1.16.0",
-      "purl": "pkg:npm/follow-redirects@1.16.0",
+      "version": "1.16.1",
+      "purl": "pkg:npm/follow-redirects@1.16.1",
       "scope": "required",
       "properties": [
         {
@@ -17203,10 +17203,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "cb9acdfee3ac69d153fc97d8c21c514b947b41c7be837cc6f7bf89aed159942f64957fd6e610fb8a22f349c2389d9a944bb0cd51d84f830e3123c5b62ee5e553"
+          "content": "14dbc51b3a0c2d6984e988fdb296ffce377bca23421e2016f7f4e0f425eb43cc2ebb7d87b6524ec163b5d4e25a7e5e457d8dc3c53750d2f8f8db353592fbf98e"
         }
       ]
     },
@@ -18576,10 +18583,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/http-cache-semantics@4.2.0",
+      "bom-ref": "pkg:npm/http-cache-semantics@4.3.0",
       "name": "http-cache-semantics",
-      "version": "4.2.0",
-      "purl": "pkg:npm/http-cache-semantics@4.2.0",
+      "version": "4.3.0",
+      "purl": "pkg:npm/http-cache-semantics@4.3.0",
       "scope": "required",
       "properties": [
         {
@@ -18591,10 +18598,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-2-Clause"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "753c5cbcf5ea3ef5c1429ab9754afa9843095f8a08105bfa6f0a26dc50f02910ecb888e324600daa106ea009fd73545024874029abf7dc40fae44db2b3ef3b41"
+          "content": "339b792e52694b5507323bf045055d147bcf21219e2c0c4d72b5ae2647868742b1b2a0876753b7357654ffcc7b703d010dc196f246a9c4c293bf096aacd90790"
         }
       ]
     },
@@ -20869,10 +20883,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/launch-editor@2.14.1",
+      "bom-ref": "pkg:npm/launch-editor@2.14.2",
       "name": "launch-editor",
-      "version": "2.14.1",
-      "purl": "pkg:npm/launch-editor@2.14.1",
+      "version": "2.14.2",
+      "purl": "pkg:npm/launch-editor@2.14.2",
       "scope": "required",
       "properties": [
         {
@@ -20884,10 +20898,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "41606b42c3291fb80fafdeb976c283ff770a5a23684e3a404d07fef97abadcdeac29118cc25557cf8d4ed4865331f65080172d0ff2b966dd3afbf23aa4febe1c"
+          "content": "3472446f7d0c1810a49995cb670cf6e6ddfb411e1a634dd9ccf61425738968e6bddae5b013123d481414b88ce7058735c640fb7093465fba1cdcd977b2ada441"
         }
       ]
     },

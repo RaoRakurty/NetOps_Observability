@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:3f9f2e94-901a-5786-8423-7f995f7ddde8",
+  "serialNumber": "urn:uuid:e4d7441d-a71a-546a-8573-981af0641903",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-10-10T15:22:00+00:00",
+    "timestamp": "2026-10-24T19:43:36+00:00",
     "tools": {
       "components": [
         {
@@ -16,9 +16,9 @@
     },
     "component": {
       "type": "application",
-      "bom-ref": "correlix@2026.10.10-g1ece29c7#pip-correlation",
+      "bom-ref": "correlix@2026.10.24-gb7a859fe#pip-correlation",
       "name": "correlix",
-      "version": "2026.10.10-g1ece29c7",
+      "version": "2026.10.24-gb7a859fe",
       "description": "Correlix \u2014 pip-correlation dependency inventory"
     },
     "properties": [
@@ -447,10 +447,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:pypi/certifi@2026.5.20",
+      "bom-ref": "pkg:pypi/certifi@2026.10.19",
       "name": "certifi",
-      "version": "2026.5.20",
-      "purl": "pkg:pypi/certifi@2026.5.20",
+      "version": "2026.10.19",
+      "purl": "pkg:pypi/certifi@2026.10.19",
       "scope": "required",
       "properties": [
         {
@@ -461,11 +461,11 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "3c52e209ba0a4ad7aebe60436a4ab349c39e1e602e8c134221e546902ad25897"
+          "content": "035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae"
         },
         {
           "alg": "SHA-256",
-          "content": "69dea482ab64caa7b9f6aba1c6bf48bb6a5448d1c0f1b17ab42ad8c763a5344d"
+          "content": "42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b"
         }
       ]
     },
