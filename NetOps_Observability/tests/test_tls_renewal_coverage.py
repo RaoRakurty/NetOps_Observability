@@ -286,5 +286,46 @@ def test_watchdog_checks_client_cert_expiry_independently() -> None:
     assert "CLIENT_CERT_CHECK" in wd
 
 
+
+# ---------------------------------------------------------------------------
+# The watchdog's client-cert block, lifted and run against a stubbed query.
+# ---------------------------------------------------------------------------
+
+def _client_cert_block() -> str:
+    src = (SCRIPTS / "stack-watchdog.sh").read_text(encoding="utf-8")
+    start = src.index('if [ "${CLIENT_CERT_CHECK:-1}" = "1" ] && [ -n "${eng_cid:-}" ]; then')
+    end = src.index("# SNAPSHOT RESTORABILITY", start)
+    return src[start:src.rindex("\nfi\n", start, end) + 4]
+
+
+def _run_block(stub: str, **env: str) -> list[str]:
+    script = ("problems=()\neng_cid=victoria\n" + stub + "\n" + _client_cert_block()
+              + '\nprintf "%s\\n" "${problems[@]}"\n')
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,
+                       env={"PATH": "/usr/bin:/bin", **env})
+    assert r.returncode == 0, r.stderr
+    return [line for line in r.stdout.splitlines() if line]
+
+
+def test_watchdog_pages_on_a_client_cert_inside_12h() -> None:
+    probs = _run_block('eng_query() { eng_err=""; eng_val="3600"; return 0; }')
+    assert any(p.startswith("CLIENT_CERT_EXPIRING") for p in probs), probs
+
+
+def test_watchdog_quiet_on_a_healthy_or_absent_series() -> None:
+    assert _run_block('eng_query() { eng_err=""; eng_val="302400"; return 0; }') == []
+    assert _run_block('eng_query() { eng_err=""; eng_val=""; return 0; }') == []
+
+
+def test_watchdog_failed_or_garbage_query_is_never_healthy() -> None:
+    probs = _run_block('eng_query() { eng_err="victoria query failed (rc=8)"; eng_val=""; return 1; }')
+    assert any("SKIPPED" in p for p in probs), probs
+    probs = _run_block('eng_query() { eng_err=""; eng_val="NaN"; return 0; }')
+    assert any("UNKNOWN" in p for p in probs), probs
+
+
+def test_watchdog_client_cert_check_can_be_disabled() -> None:
+    assert _run_block('eng_query() { eng_err=""; eng_val="1"; return 0; }', CLIENT_CERT_CHECK="0") == []
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
