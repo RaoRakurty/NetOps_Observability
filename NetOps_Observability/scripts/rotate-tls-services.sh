@@ -138,18 +138,52 @@ disk_end() {
 }
 
 # served_end <host:port> [starttls-proto]: epoch NotAfter of the certificate
-# the endpoint SERVES, observed from inside the mesh (the correlation
-# container ships openssl and is always present).
+# the endpoint SERVES, observed from inside the mesh. The probe runs in the
+# first running mesh container that ships the openssl CLI — tracker 311/352:
+# this used to be hard-wired to correlation, whose image has NO openssl, so
+# every check returned 0, the sweep reported DEGRADED (11 failures) every day
+# from 2026-10-04 and needlessly restarted correlation/opensearch/aggregator
+# ("held-cert expiry unknown"). An external-broker install has no kafka
+# container, hence the ordered fallback list; none found is a loud failure.
+PROBE_CANDIDATES="${PROBE_CANDIDATES:-kafka syslog-ng redis secrets-seal}"
+PROBE_SVC=""
+probe_svc() {
+    [ -n "$PROBE_SVC" ] && { echo "$PROBE_SVC"; return 0; }
+    local c
+    for c in $PROBE_CANDIDATES; do
+        [ -n "$(dc ps -q --status running "$c" 2>/dev/null)" ] || continue
+        if dc exec -T "$c" sh -c 'command -v openssl' >/dev/null 2>&1; then
+            PROBE_SVC="$c"; echo "$c"; return 0
+        fi
+    done
+    return 1
+}
+
 served_end() {
-    local addr="$1" extra=""
+    local addr="$1" extra="" svc
     [ -n "${2:-}" ] && extra="-starttls $2"
+    svc=$(probe_svc) || { log "no running mesh container with openssl among: $PROBE_CANDIDATES"; echo 0; return; }
     local end
     # shellcheck disable=SC2086  # $extra is deliberately word-split flags
-    end=$(dc exec -T correlation sh -c \
+    end=$(dc exec -T "$svc" sh -c \
         "echo | timeout 15 openssl s_client $extra -connect '$addr' 2>/dev/null | openssl x509 -noout -enddate" \
         2>/dev/null | cut -d= -f2-) || { echo 0; return; }
     [ -n "$end" ] || { echo 0; return; }
     date -d "$end" +%s 2>/dev/null || echo 0
+}
+
+# started_at <svc>: epoch the service's running container started (0 = none).
+started_at() {
+    local cid ts
+    cid=$(dc ps -q --status running "$1" 2>/dev/null | head -1)
+    [ -n "$cid" ] || { echo 0; return; }
+    ts=$(docker inspect -f '{{.State.StartedAt}}' "$cid" 2>/dev/null) || { echo 0; return; }
+    date -d "$ts" +%s 2>/dev/null || echo 0
+}
+
+# disk_mtime <svc>: epoch the service's on-disk SVID was last written (0 = unreadable).
+disk_mtime() {
+    stat -c %Y "$TLS_DIR/services/$1/$1.crt" 2>/dev/null || echo 0
 }
 
 # ── held-cert bookkeeping (need-based restarts) ─────────────────────────────
@@ -160,6 +194,12 @@ served_end() {
 # An absent record forces one establishing restart; after that it is exact.
 ROTATE_STATE="${ROTATE_STATE:-$DIR/.rotate-tls.loaded}"
 RESTART_WHEN_LEFT_H="${RESTART_WHEN_LEFT_H:-72}"
+# Every service that loads a mesh SVID once at start and has no hot-reload
+# path. tracker 351: vmalert (v1.101 reads -notifier.tlsCert* once — alert
+# delivery died 2026-10-14→17) and cloud-ingest were missing. The api and the
+# prober are NOT here: their reloader renews on use (tlsconfig/reload.go).
+# tests/test_tls_renewal_coverage.py pins this list against compose.tls.yml.
+RESTART_CLASS="correlation opensearch vector-router vector-aggregator syslog-ng kafka-exporter grafana gnmic opensearch-dashboards vmalert cloud-ingest"
 RESTARTED=""   # services THIS run restarted — they get strict mint verification
 
 record_loaded() { # <svc> <epoch>
@@ -175,7 +215,19 @@ holds_end() { # <svc> — epoch NotAfter of the cert the running process HOLDS
         opensearch)       served_end opensearch:9200 ;;
         vector-aggregator) served_end vector-aggregator:6601 ;;
         gotenberg)        served_end gotenberg:3000 ;;
-        *) awk -v s="$1" '$1==s{print $2; found=1} END{if(!found) print 0}' \
+        *)
+            # A process loads its SVID at start, so a container that started
+            # AFTER the current mint was written holds exactly that mint — no
+            # matter who restarted it (a deploy, an operator, this sweep).
+            # Otherwise it holds an older one: use this sweep's own record of
+            # what it loaded, and 0 (unknown → establishing restart) without one.
+            local st mt
+            st=$(started_at "$1"); mt=$(disk_mtime "$1")
+            if [ "$st" -gt 0 ] && [ "$mt" -gt 0 ] && [ "$st" -ge "$mt" ]; then
+                disk_end "$1"
+                return
+            fi
+            awk -v s="$1" '$1==s{print $2; found=1} END{if(!found) print 0}' \
                "$ROTATE_STATE" 2>/dev/null || echo 0 ;;
     esac
 }
@@ -285,7 +337,13 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
     # syslog-ng: its client SVID (F-1 hop) is loaded at start; skipping it here
     # leaves the old cert in the running process until the aggregator refuses it.
     if [ "$RESTARTS_OK" -eq 1 ]; then
-        for svc in correlation opensearch vector-router vector-aggregator syslog-ng kafka-exporter grafana gnmic opensearch-dashboards; do
+        for svc in $RESTART_CLASS; do
+            # Optional services (cloud-ingest: cloud lane; gnmic: gNMI) are
+            # skipped when not running — an absent service holds no cert.
+            if [ -z "$(dc ps -q --status running "$svc" 2>/dev/null)" ]; then
+                log "skip: $svc (not running on this deployment)"
+                continue
+            fi
             cur=$(holds_end "$svc")
             if [ "$cur" -gt 0 ]; then
                 cur_left_h=$(( (cur - $(date +%s)) / 3600 ))
@@ -309,7 +367,7 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
             fi
         done
     else
-        log "DEFER: restart class (correlation opensearch vector-router vector-aggregator syslog-ng kafka-exporter grafana gnmic opensearch-dashboards) — live run owns the stack"
+        log "DEFER: restart class ($RESTART_CLASS) — live run owns the stack"
     fi
 
     # ── gotenberg (OPTIONAL pdf profile): re-stage + restart ────────────────

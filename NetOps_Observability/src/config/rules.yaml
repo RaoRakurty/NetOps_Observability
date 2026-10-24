@@ -650,6 +650,31 @@ groups:
         annotations:
           summary: "{{ $labels.endpoint }} serves a certificate expiring in under 6h — clients of this endpoint WILL start failing; reload/restart it now"
 
+      # Tracker 351: the certificate a service PRESENTS as a client is invisible
+      # to every served-cert probe above. vmalert held its start-loaded client
+      # SVID until it expired (2026-10-14) and alert delivery died for 3 days
+      # with all of these green. The api records the expiry of the client cert
+      # each mTLS caller presents on an accepted handshake. This group is also
+      # evaluated by the in-api engine, so it still fires when the caller whose
+      # cert is expiring is vmalert itself. Thresholds sit inside the SVID
+      # renewal margin: a healthy caller always presents a cert with > 84h left
+      # (re-mint at TTL/2 of 168h, sweep acts below 72h).
+      - alert: TLSClientCertExpiringSoon
+        expr: netops_tls_client_cert_expiry_seconds < 172800
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.identity }} is presenting a client certificate that expires in under 48h — it loaded its SVID at start and has not picked up the re-mint; run scripts/rotate-tls-services.sh or restart that service"
+
+      - alert: TLSClientCertExpiryCritical
+        expr: netops_tls_client_cert_expiry_seconds < 43200
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.identity }} presents a client certificate expiring in under 12h — its mTLS calls into the api (alert delivery, if this is vmalert) WILL fail; restart it now"
+
       - alert: TLSPeerProbeFailed
         expr: netops_tls_peer_probe_ok == 0
         for: 20m

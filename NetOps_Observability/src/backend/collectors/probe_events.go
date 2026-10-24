@@ -176,7 +176,8 @@ func newExecutionID() string {
 
 // forwardProbeEvents POSTs each event to the bus ingest source. Best-effort:
 // a failed POST is dropped (the VM gauges remain the rendering source of
-// truth; the bus lane is evidence for the correlation engine).
+// truth; the bus lane is evidence for the correlation engine) — but never
+// silently: rejections and no-response failures are both counted and logged.
 func forwardProbeEvents(ctx context.Context, events []ProbeEvent) {
 	sink := probeEventSink()
 	if sink == "" || len(events) == 0 {
@@ -197,6 +198,7 @@ func forwardProbeEvents(ctx context.Context, events []ProbeEvent) {
 		SetIngestAuth(req, LaneProbes) // F-08
 		resp, err := client.Do(req)
 		if err != nil {
+			logIngestDeliveryError("probes", sink, err)
 			continue
 		}
 		// F-08: the status code used to be discarded outright, so a rejected
