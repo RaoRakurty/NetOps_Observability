@@ -66,18 +66,16 @@ func vmDetails(s string) map[string]string {
 	return out
 }
 
-// vmEventSeverity maps vManage severity_level (critical|major|minor|medium|low).
+// vmEventSeverity maps vManage severity_level (critical|major|minor|medium|low)
+// onto the canonical contract info|warn|high|crit (model.go). It used to pass
+// vManage's own words through, and the engine reads only the canonical four:
+// "major" fell to WARN, below severity_open_floor="high", so no polled vManage
+// event could open an incident on its own (2026-10-24). An absent level is info.
 func vmEventSeverity(s string) string {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "critical":
-		return "critical"
-	case "major":
-		return "major"
-	case "minor", "medium":
-		return "minor"
-	default:
+	if strings.TrimSpace(s) == "" {
 		return "info"
 	}
+	return normSeverity(s)
 }
 
 // vmBGPState: only "established" is up; idle/active/connect/… are not.
@@ -247,7 +245,7 @@ func vmanageAuditTransform(tenant, integrationID string, raw []byte) (Batch, err
 			if !strings.Contains(strings.ToLower(r.Message), "fail") {
 				continue // a successful login changes nothing
 			}
-			normType, severity = "controller_alarm", "minor"
+			normType, severity = "controller_alarm", "warn"
 		}
 		e := ControllerEvent{
 			TenantID: tenant, IntegrationID: integrationID, SourceSystem: "vmanage",

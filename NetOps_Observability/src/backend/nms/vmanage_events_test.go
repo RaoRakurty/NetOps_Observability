@@ -35,7 +35,7 @@ func TestVManageEventsAreParsedAsEventsNotAlarms(t *testing.T) {
 	if len(b.Events) != 2 {
 		t.Fatalf("events %d — want the two valid rows (no id / no valid device are dropped)", len(b.Events))
 	}
-	if e := b.Events[0]; e.EventID != "ev1" || e.Severity != "major" || e.DeviceID != "10.255.255.81" || e.TenantID != "t-a" {
+	if e := b.Events[0]; e.EventID != "ev1" || e.Severity != "high" || e.DeviceID != "10.255.255.81" || e.TenantID != "t-a" {
 		t.Fatalf("event %+v", e)
 	}
 	if len(b.States) != 2 {
@@ -154,13 +154,13 @@ func TestSDWANTransitionsBecomeEvents(t *testing.T) {
 	if len(evs) != 3 {
 		t.Fatalf("events %d, want 3", len(evs))
 	}
-	if evs[0].NormalizedEventType != "controller_bfd_down" || evs[0].Severity != "major" || evs[0].EvidenceRole != RoleDiscriminating || evs[0].TenantID != "t-a" {
+	if evs[0].NormalizedEventType != "controller_bfd_down" || evs[0].Severity != "high" || evs[0].EvidenceRole != RoleDiscriminating || evs[0].TenantID != "t-a" {
 		t.Fatalf("bfd down %+v", evs[0])
 	}
 	if evs[1].Severity != "info" || evs[1].EvidenceRole != RoleSupporting {
 		t.Fatalf("a recovery supports, it is not a fault: %+v", evs[1])
 	}
-	if evs[2].Severity != "minor" {
+	if evs[2].Severity != "warn" {
 		t.Fatalf("yellow health %+v", evs[2])
 	}
 	if evs[0].EventID == SDWANStateChangeEvents("t-a", "i", "vmanage", []StateChange{{Record: rec("bfd"), From: "up", To: "down"}})[0].EventID == false {
