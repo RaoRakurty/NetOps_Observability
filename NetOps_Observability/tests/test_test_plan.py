@@ -162,6 +162,15 @@ ALL = set(tp.CI_GROUPS)
     ([P + "src/frontend/src/iris/Panel.tsx"], {"frontend"}),
     ([P + "src/correlation/engine.py"], {"correlation"}),
     ([P + "telemetry-catalog/events.yaml"], {"correlation"}),
+    # engine-input producers also run the correlation suite
+    ([P + "src/backend/nms/vmanage_events.go"], {"backend", "correlation"}),
+    ([P + "src/backend/collectors/metric_events.go"], {"backend", "correlation"}),
+    ([P + "src/backend/collectors/snmptrap.go"], {"backend", "correlation"}),
+    ([P + "src/backend/internal/bgpwatch/evidence.go"], {"backend", "correlation"}),
+    ([P + "src/backend/topology_links_enrichment.go"], {"backend", "correlation", "install-boot"}),
+    ([P + "src/contracts/events.json"], {"backend", "frontend", "correlation"}),
+    ([P + "deployment/docker/vector/vector.yaml"], {"correlation", "install-boot"}),
+    ([P + "deployment/docker/syslog-ng/syslog-ng.conf"], {"correlation", "install-boot"}),
     ([P + "src/config/rules.yaml"], {"backend", "install-boot"}),
     # an .md the product loads is code, not prose
     ([P + "src/backend/ai/skills/explain/kpi.md"], {"backend"}),
@@ -328,3 +337,13 @@ def test_run_fast_is_correct_under_a_pre_push_hook_environment():
                          cwd=os.path.dirname(ROOT), env=env, capture_output=True, text=True, timeout=300, check=False)
     assert res.returncode == 0, res.stdout + res.stderr
     assert "no image references found" not in res.stderr
+
+
+@pytest.mark.parametrize("rel", ["src/correlation/engine.py", "src/backend/nms/scheduler.go",
+                                 "deployment/docker/vector/vector.yaml"])
+def test_local_plan_runs_correlation_suite_for_engine_inputs(rel):
+    assert tp._needs_correlation(rel)
+
+
+def test_local_plan_skips_correlation_suite_for_unrelated_backend():
+    assert not tp._needs_correlation("src/backend/collectors/vrf.go")
