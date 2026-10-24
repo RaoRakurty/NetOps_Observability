@@ -185,3 +185,33 @@ func TestUnknownLaneSendsNothing(t *testing.T) {
 		t.Fatal("unknown lane must not send any credential")
 	}
 }
+
+// TestForwardersCountDeliveryFailures — tracker 351: a POST that never gets a
+// response (sink down, or a TLS handshake refused because the client SVID
+// expired) used to be skipped with a bare `continue`/`return`, so the lane went
+// quiet with nothing in any log or metric. Both lanes must now count it.
+func TestForwardersCountDeliveryFailures(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	dead := srv.URL
+	srv.Close() // nothing listens here any more: every POST fails before a status
+
+	t.Setenv("METRIC_EVENT_SINK_URL", dead)
+	t.Setenv("PROBE_EVENT_SINK_URL", dead)
+	resetIngestCredentialForTest()
+
+	mBefore, pBefore := IngestDeliveryErrors("metrics"), IngestDeliveryErrors("probes")
+	rBefore := IngestRejections("probes")
+	if sent := forwardMetricEvents(t.Context(), []MetricEvent{{Metric: "x", Device: "d"}}); sent != 0 {
+		t.Errorf("an undelivered batch must not be reported as sent, got %d", sent)
+	}
+	forwardProbeEvents(t.Context(), []ProbeEvent{{}})
+	if got := IngestDeliveryErrors("metrics"); got <= mBefore {
+		t.Errorf("metrics delivery failure not counted: %d -> %d", mBefore, got)
+	}
+	if got := IngestDeliveryErrors("probes"); got <= pBefore {
+		t.Errorf("probes delivery failure not counted: %d -> %d", pBefore, got)
+	}
+	if IngestRejections("probes") != rBefore {
+		t.Error("a no-response failure must not be booked as a rejection")
+	}
+}

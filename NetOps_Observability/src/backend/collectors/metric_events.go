@@ -185,7 +185,10 @@ func forwardMetricEvents(ctx context.Context, events []MetricEvent) int {
 	SetIngestAuth(req, LaneMetrics) // F-08
 	resp, err := meshHTTPClient(5 * time.Second).Do(req)
 	if err != nil {
-		return 0 // bus unreachable: collector keeps running; VM path unaffected
+		// bus unreachable: collector keeps running; VM path unaffected — but
+		// counted, so an expired client SVID is not a quiet lane (tracker 351).
+		logIngestDeliveryError("metrics", sink, err)
+		return 0
 	}
 	defer func() { _ = resp.Body.Close() }() // best-effort: nothing actionable on close failure
 	if resp.StatusCode >= 300 {
