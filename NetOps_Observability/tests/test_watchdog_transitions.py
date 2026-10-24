@@ -90,6 +90,9 @@ case "$1" in
         printf 'Udp: InDatagrams NoPorts InErrors OutDatagrams RcvbufErrors SndbufErrors\n'
         printf 'Udp: 100 0 0 50 0 0\n' ;;
       *ALERTS*) echo '{}' ;;
+      # A healthy mTLS caller presents a freshly re-minted SVID (84h left).
+      *wget*netops_tls_client_cert_expiry_seconds*)
+                echo '{"status":"success","data":{"result":[{"value":[1723710000,"302400"]}]}}' ;;
       *wget*)   echo '{"status":"success","data":{"result":[{"value":[1723710000,"5"]}]}}' ;;
       *--config*)
         cfg=$(cat)

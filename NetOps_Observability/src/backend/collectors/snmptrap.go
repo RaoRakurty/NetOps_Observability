@@ -1212,6 +1212,7 @@ func (r *trapReceiver) forward(ctx context.Context, client *http.Client, ev *Tra
 	SetIngestAuth(req, LaneTraps) // F-08
 	resp, err := client.Do(req)
 	if err != nil {
+		logIngestDeliveryError("snmptrap", r.sinkURL, err)
 		r.mu.Lock()
 		r.status.LastError = "forward: " + err.Error()
 		r.mu.Unlock()

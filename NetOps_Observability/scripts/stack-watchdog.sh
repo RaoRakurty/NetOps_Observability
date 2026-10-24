@@ -821,7 +821,10 @@ fi
 #      legitimately widen the gap, hence a floor above one deferred week).
 # An absent heartbeat is quiet: pre-first-run, or a deployment without the
 # TLS mesh — same convention as the hygiene blocks.
-tls_beat="$(dirname "${BASH_SOURCE[0]}")/rotate-tls.heartbeat"
+# TLS_ROTATE_HEARTBEAT: the sweep runs from the bundle's scripts/ dir (the
+# installer's crontab entry), but an install-watchdog.sh copy of this script
+# lives in /etc/correlix — install-watchdog.sh writes the bundle path here.
+tls_beat="${TLS_ROTATE_HEARTBEAT:-$(dirname "${BASH_SOURCE[0]}")/rotate-tls.heartbeat}"
 if [ -f "$tls_beat" ]; then
   if grep -q 'status=DEGRADED' "$tls_beat" 2>/dev/null; then
     problems+=("rotate-tls sweep DEGRADED: $(head -c 120 "$tls_beat") — wire may serve stale certs; see scripts/rotate-tls.log and re-run scripts/rotate-tls-services.sh")
@@ -830,7 +833,7 @@ if [ -f "$tls_beat" ]; then
   [ "$tls_age_h" -gt "${TLS_CHECK_MAX_AGE_H:-26}" ] &&
     problems+=("rotate-tls daily check stale: heartbeat ${tls_age_h}h old (cron dead? served-cert drift is unwatched)")
 fi
-tls_act_beat="$(dirname "${BASH_SOURCE[0]}")/rotate-tls.act.heartbeat"
+tls_act_beat="${tls_beat%.heartbeat}.act.heartbeat"
 if [ -f "$tls_act_beat" ]; then
   tls_act_days=$(( ($(date +%s) - $(stat -c %Y "$tls_act_beat" 2>/dev/null || echo 0)) / 86400 ))
   [ "$tls_act_days" -gt "${TLS_ACT_MAX_AGE_DAYS:-10}" ] &&
@@ -1421,7 +1424,7 @@ drift_check nginx             deployment/docker/nginx/nginx.conf          /etc/n
 eng_cid=""
 eng_err=""
 if [ "${ENGINE_CONSUMER_CHECK:-1}" = "1" ] || [ "${SNAPSHOT_RESTORABLE_CHECK:-1}" = "1" ] ||
-   [ "${DEBUG_LEVEL_CHECK:-1}" = "1" ]; then
+   [ "${DEBUG_LEVEL_CHECK:-1}" = "1" ] || [ "${CLIENT_CERT_CHECK:-1}" = "1" ]; then
   eng_cid=$(dkr ps -q --filter "label=com.docker.compose.project=$PROJECT" \
                       --filter "label=com.docker.compose.service=victoria" 2>/dev/null | head -1)
 fi
@@ -1560,6 +1563,36 @@ if [ "${ENGINE_CONSUMER_CHECK:-1}" = "1" ]; then
           problems+=("ALERT_DELIVERY_BROKEN: no alert has reached the platform for $(( eng_hb_age_i / 60 ))m (limit $(( eng_hb_max / 60 ))m) — vmalert is evaluating into a void and every 'quiet' alert is unproven. Runbook: docs/runbooks/engine-not-consuming.md")
         fi
       fi
+    fi
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# CLIENT-CERTIFICATE EXPIRY (tracker 351, 2026-10-24).
+#
+# THE GAP THIS CLOSES. vmalert presented the client SVID it loaded at start
+# until that cert expired on 2026-10-14; every notifier POST was refused and
+# alert delivery was dead for three days. The api now exports the expiry of the
+# client certificate each mTLS caller presents
+# (netops_tls_client_cert_expiry_seconds{identity}). rules.yaml alerts on it in
+# vmalert AND the in-api engine; this copy reads it over the watchdog's own
+# VictoriaMetrics seam so it still pages when the api→notify path is the thing
+# that is broken. Absent series is quiet: a plaintext install, or no mTLS caller
+# yet — never read as a pass, but not a problem either.
+#
+# CLIENT_CERT_CHECK=0 disables; CLIENT_CERT_MIN_SEC (default 43200 = 12h) is
+# the page threshold — a healthy caller always presents > 72h.
+if [ "${CLIENT_CERT_CHECK:-1}" = "1" ] && [ -n "${eng_cid:-}" ]; then
+  # min(netops_tls_client_cert_expiry_seconds)
+  if ! eng_query 'min%28netops_tls_client_cert_expiry_seconds%29'; then
+    problems+=("client-certificate expiry probe SKIPPED: $eng_err")
+  elif [ -n "$eng_val" ]; then
+    cc_left=${eng_val%%.*}
+    cc_min="${CLIENT_CERT_MIN_SEC:-43200}"
+    if ! printf '%s' "$cc_left" | grep -qE '^-?[0-9]+$'; then
+      problems+=("client-certificate expiry probe SKIPPED: value is not a number (got '${eng_val}') — treating as UNKNOWN, not as healthy")
+    elif [ "$cc_left" -lt "$cc_min" ]; then
+      problems+=("CLIENT_CERT_EXPIRING: an mTLS caller presents a client certificate with $(( cc_left / 3600 ))h left (limit $(( cc_min / 3600 ))h) — it loaded its SVID at start; see netops_tls_client_cert_expiry_seconds for which one, then run scripts/rotate-tls-services.sh or restart it")
     fi
   fi
 fi
