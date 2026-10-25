@@ -27,6 +27,11 @@ type StateRecord struct {
 	SiteID        string
 	TunnelID      string
 	PeerID        string
+	LocalColor    string
+	RemoteColor   string
+	// IntegrationID is filled on READ (store.OverlaySessions): which
+	// integration reported the session. Apply does not use it.
+	IntegrationID string
 }
 
 // StateChange is emitted when an entity's state transitions.
@@ -70,6 +75,7 @@ func (t *StateTracker) Apply(s ControllerState) (StateRecord, *StateChange) {
 			FirstSeen: ts, LastSeen: ts, FlapCount: 0,
 			DeviceID: s.DeviceID, SiteID: s.SiteID,
 			TunnelID: s.TunnelID, PeerID: s.PeerID,
+			LocalColor: s.LocalColor, RemoteColor: s.RemoteColor,
 		}
 		t.recs[key] = rec
 		return rec, nil // first sighting: not a flap
@@ -78,6 +84,7 @@ func (t *StateTracker) Apply(s ControllerState) (StateRecord, *StateChange) {
 	prev.LastSeen = ts
 	prev.DeviceID, prev.SiteID = s.DeviceID, s.SiteID
 	prev.TunnelID, prev.PeerID = s.TunnelID, s.PeerID
+	prev.LocalColor, prev.RemoteColor = s.LocalColor, s.RemoteColor
 	if s.CurrentState == prev.CurrentState {
 		t.recs[key] = prev
 		return prev, nil // steady state
