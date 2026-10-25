@@ -42,8 +42,13 @@ const (
 //     NDFC) or session (older vManage) or raw Basic (Prime, legacy). Basic /
 //     credential login is therefore always a supported path for them.
 type ConnectorSpec struct {
-	Vendor        string     // meraki | catalyst_center | vmanage | ndfc | versa_director | versa_concerto | prime | generic
-	Product       string     // human product name
+	Vendor  string // meraki | catalyst_center | vmanage | ndfc | versa_director | versa_concerto | prime | generic
+	Product string // human product name
+	// Maker is the equipment vendor the connector speaks for (cisco, versa, …),
+	// stamped on every event it emits. Vendor above is the CONNECTOR id, not a
+	// maker: SD-WAN transitions were hard-coded "cisco" for every connector,
+	// Versa and Prime included. "" = not known (generic).
+	Maker         string
 	SourceSystem  string     // maps to Signal source_system
 	SupportedAuth []AuthKind // all auth flows this connector implements (Basic/API-key always present for testing)
 	PreferredAuth AuthKind   // the flow the wizard defaults to (OAuth where the vendor supports it)

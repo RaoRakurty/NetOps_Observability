@@ -20,7 +20,7 @@ func wchange(kind, from, to string, flaps int64) StateChange {
 }
 
 func TestWirelessStateChangeEvents(t *testing.T) {
-	evs := WirelessStateChangeEvents("t1", "int-1", "catalyst_9800", []StateChange{
+	evs := WirelessStateChangeEvents(Specs()["catalyst_9800"], "t1", "int-1", []StateChange{
 		wchange("ap_join", "up", "down", 1),
 		wchange("ap_join", "down", "up", 1),
 		wchange("radio_oper", "up", "down", 1),
@@ -46,7 +46,7 @@ func TestWirelessStateChangeEvents(t *testing.T) {
 		t.Fatalf("DeviceID must be the canonical entity id, got %q", evs[0].DeviceID)
 	}
 	// Deterministic ids: same transition → same event id + dedupe key.
-	again := WirelessStateChangeEvents("t1", "int-1", "catalyst_9800", []StateChange{
+	again := WirelessStateChangeEvents(Specs()["catalyst_9800"], "t1", "int-1", []StateChange{
 		wchange("ap_join", "up", "down", 1),
 	})
 	if again[0].EventID != evs[0].EventID || again[0].DedupeKey != evs[0].DedupeKey {
@@ -55,7 +55,7 @@ func TestWirelessStateChangeEvents(t *testing.T) {
 }
 
 func TestWirelessFlapEscalation(t *testing.T) {
-	evs := WirelessStateChangeEvents("t1", "int-1", "catalyst_9800", []StateChange{
+	evs := WirelessStateChangeEvents(Specs()["catalyst_9800"], "t1", "int-1", []StateChange{
 		wchange("ap_join", "up", "down", wirelessFlapThreshold),
 		wchange("ap_join", "down", "up", wirelessFlapThreshold+1),
 	})
@@ -70,7 +70,7 @@ func TestWirelessFlapEscalation(t *testing.T) {
 
 // An unmappable transition must not fabricate a fault.
 func TestWirelessUnknownTransitionSilent(t *testing.T) {
-	evs := WirelessStateChangeEvents("t1", "int-1", "catalyst_9800", []StateChange{
+	evs := WirelessStateChangeEvents(Specs()["catalyst_9800"], "t1", "int-1", []StateChange{
 		wchange("ap_join", "up", "degraded", 1),
 	})
 	if len(evs) != 0 {

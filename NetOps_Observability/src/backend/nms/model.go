@@ -86,8 +86,13 @@ type ControllerState struct {
 	CurrentState  string // up | down | reachable | unreachable | success | ...
 	DeviceID      string
 	SiteID        string
-	Time          time.Time
-	Data          map[string]any
+	// TunnelID / PeerID identify a PATH state (a BFD session): the canonical
+	// id both ends share (CanonicalTunnelID) and the far end's native key.
+	// Empty for every non-path kind.
+	TunnelID string
+	PeerID   string
+	Time     time.Time
+	Data     map[string]any
 }
 
 // ControllerEvent is a discrete alarm/audit/change/incident (§3.3). Field set
@@ -121,6 +126,11 @@ type ControllerEvent struct {
 	Confidence          float64           `json:"confidence,omitempty"`
 	EvidenceRole        EvidenceRole      `json:"evidence_role,omitempty"`
 	CorrelationHints    map[string]string `json:"correlation_hints,omitempty"`
+	// ControllerInstance names the controller that relayed the event,
+	// independent of which integration polled it (two integrations of one
+	// vManage share it). Stamped centrally in the scheduler. Context only:
+	// it does not change the observer or the verdict.
+	ControllerInstance string `json:"controller_instance,omitempty"`
 }
 
 // Batch is what a Transformer returns for one raw response: the three classes,
