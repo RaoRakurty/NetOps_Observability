@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"netops/backend/internal/owner"
 	"strings"
 	"sync/atomic"
 
@@ -28,19 +29,22 @@ import (
 
 // PlatformOwner is the owner a Global-view principal stamps on what it creates
 // (the api's TenantGlobal; nms_isolation_test.go pins the two together).
-const PlatformOwner = "global"
+const PlatformOwner = owner.Platform
 
 // ownerOf is the index's spelling of a device or integration owner. Tenant ids
 // are compared lower-cased and trimmed, as everywhere else. The platform realm
 // has two spellings — "" on devices ("untagged = platform") and "global" on
 // what a Global-view principal creates — and they are one owner. Real tenant
 // ids pass through untouched, so two tenants never collapse.
+//
+// Its OUTPUT keeps the index's historical spelling ("" for the platform):
+// ControllerDeviceID hashes it, so changing it would re-key every
+// platform-owned controller device. The decision itself is owner.Of's.
 func ownerOf(t string) string {
-	t = strings.ToLower(strings.TrimSpace(t))
-	if t == PlatformOwner {
-		return ""
+	if o := owner.Of(t); o != owner.Platform {
+		return o
 	}
-	return t
+	return ""
 }
 
 // InventoryIndex is one immutable snapshot of the candidate devices.
