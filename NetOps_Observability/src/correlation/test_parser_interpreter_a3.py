@@ -649,6 +649,8 @@ TRAP_BENCH_RATIO = 2.0
 #: interpreter state, the same warmed caches and the same allocator.
 BENCH_ROUNDS = 7
 BENCH_INNER = 5
+#: Single warm-up passes per side; their minimum sizes the timed sample.
+BENCH_WARM = 3
 
 #: Seconds of work one TIMED SAMPLE must contain, and why there is a floor at
 #: all. The trap corpus is 240 events at ~40-65 us, so one pass over it is ~10-15
@@ -728,10 +730,16 @@ def _measure(golden, lane: str) -> LaneCost:
     events = [e["ev"] for e in golden if e["lane"] == lane]
     new = [f for _n, f, _o in LANE_FNS[lane]]
     old = [f for _n, _f, f in LANE_FNS[lane]]
-    warm_new = _bench(new, events, repeats=1)      # warm both sides' caches…
-    warm_old = _bench(old, events, repeats=1)
-    # …and size the sample off the SLOWER side, so both are timed over at least
-    # BENCH_SAMPLE_SECONDS of work.
+    # Warm both sides' caches, and size the sample off the SLOWER side so both
+    # are timed over at least BENCH_SAMPLE_SECONDS of work. The size comes from
+    # the BEST of BENCH_WARM single passes per side — the same estimator the
+    # timed samples use. Sizing off ONE cold pass over-estimated a pass on a
+    # busy runner, so `reps` came out too small and a timed sample held less
+    # than the floor it promises (PR #94 CI, 2026-10-25: the gate on the gate
+    # caught it). Single passes stay repeats=1 so they remain distinguishable
+    # from the timed samples.
+    warm_new = min(_bench(new, events, repeats=1) for _ in range(BENCH_WARM))
+    warm_old = min(_bench(old, events, repeats=1) for _ in range(BENCH_WARM))
     slowest = max(warm_new, warm_old, 1e-6)
     reps = max(1, math.ceil(BENCH_SAMPLE_SECONDS / slowest))
     ratios, news, olds = [], [], []
@@ -901,7 +909,7 @@ def test_the_cost_harness_is_drift_cancelling_by_construction(golden):
     with mock.patch.object(sys.modules[__name__], "_bench", recording):
         cost = _measure(golden, "trap")
 
-    timed = [c for c in calls if c[1] != 1]     # drop the two warm-up passes
+    timed = [c for c in calls if c[1] != 1]     # drop the single warm-up/sizing passes
     assert len(timed) == BENCH_ROUNDS * 2, (
         f"{len(timed)} timed samples for {BENCH_ROUNDS} rounds — a round must "
         "time BOTH sides or a machine drift lands on one of them")
