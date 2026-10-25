@@ -107,7 +107,7 @@ done
 
 # Validate --since at the boundary (§3): a bad value would otherwise surface as
 # eighteen identical `docker logs` failures halfway through the run.
-if ! printf '%s' "$SINCE" | grep -qE '^([0-9]+(ns|us|ms|s|m|h)|[0-9]+[dwy]|[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9:.+Z-]+)?)$'; then
+if ! grep -qE '^([0-9]+(ns|us|ms|s|m|h)|[0-9]+[dwy]|[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9:.+Z-]+)?)$' <<<"$SINCE"; then
   die "--since '$SINCE' is not a Docker duration (30m, 24h, 7d) or an RFC3339 timestamp"
 fi
 
@@ -432,7 +432,7 @@ c_vmalert() {
     return 1
   fi
   out="$(dkr exec "$cid" curl -sS -m 10 "http://vmalert:8880/api/v1/alerts" 2>&1)" || out=""
-  if [ -n "$out" ] && printf '%s' "$out" | grep -q '"alerts"'; then
+  if [ -n "$out" ] && grep -q '"alerts"' <<<"$out"; then
     printf '%s\n' "$out"
     return 0
   fi

@@ -283,7 +283,7 @@ PY
         exit 1
     }
     printf '%s\n' "$LANES" | sed 's/^/  role: /'
-    if printf '%s\n' "$LANES" | grep -q '^UNCOVERED'; then
+    if grep -q '^UNCOVERED' <<<"$LANES"; then
         echo "!! at least one router sink lane is NOT writable by svc_router (netops_writer)." >&2
         echo "   Every bulk write to it 403s on indices:admin/create and Vector DROPS the batch." >&2
         echo "   Add the pattern to deployment/docker/opensearch/security/roles.yml and re-apply" >&2

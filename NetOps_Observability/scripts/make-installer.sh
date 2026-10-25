@@ -934,10 +934,10 @@ echo "   $COUNT base images"
 #     and must ship Apache Kafka (bus) + Valkey (cache). Redis (RSAL) and
 #     Prometheus are REMOVED components — permanently out of the product —
 #     and must never reappear in any bundle. Hard build failures.
-if printf '%s\n' "$IMAGES" | grep -qi 'redpanda'; then
+if grep -qi 'redpanda' <<<"$IMAGES"; then
   echo "FATAL: redpanda image in bundle set — BSL-licensed, not redistributable" >&2; exit 1
 fi
-if printf '%s\n' "$IMAGES" | grep -Eqi 'redis|prometheus'; then
+if grep -Eqi 'redis|prometheus' <<<"$IMAGES"; then
   echo "FATAL: redis/prometheus image in bundle set — removed components (#97) must not ship" >&2; exit 1
 fi
 # Gotenberg (the `pdf` profile) must NEVER enter a customer bundle — owner
@@ -949,12 +949,12 @@ fi
 # under us between rebuilds. This was a written convention until now; a
 # convention is worth nothing the day someone adds `--profile pdf` to
 # BASE_PROFILES, so it is a build failure instead.
-if printf '%s\n' "$IMAGES" | grep -qi 'gotenberg'; then
+if grep -qi 'gotenberg' <<<"$IMAGES"; then
   echo "FATAL: gotenberg image in bundle set — the pdf profile carries a proprietary Microsoft font EULA, PDFtk (GPL-2.0+) and Google Chrome, and must never ship to a customer (licence audit D6). Switch to a slim variant without msttcorefonts/PDFtk and re-audit before reversing this." >&2; exit 1
 fi
-printf '%s\n' "$IMAGES" | grep -q '^apache/kafka:' \
+grep -q '^apache/kafka:' <<<"$IMAGES" \
   || { echo "FATAL: apache/kafka missing from bundle image set" >&2; exit 1; }
-printf '%s\n' "$IMAGES" | grep -q '^valkey/valkey:' \
+grep -q '^valkey/valkey:' <<<"$IMAGES" \
   || { echo "FATAL: valkey missing from bundle image set" >&2; exit 1; }
 echo "   licensing guards passed (kafka+valkey in; redpanda/redis/prometheus/gotenberg out)"
 
@@ -1041,12 +1041,12 @@ for spec in $ADDONS; do
   name="${spec%%:*}"; prof="${spec##*:}"
   PACK_IMAGES="$(cd "$COMPOSE_DIR" && docker compose "${BASE_PROFILES[@]}" --profile "$prof" config --images | sort -u | comm -13 <(printf '%s\n' "$IMAGES") -)"
   [ -n "$PACK_IMAGES" ] || { echo "FATAL: addon $name resolved no images" >&2; exit 1; }
-  if printf '%s\n' "$PACK_IMAGES" | grep -Eqi 'redpanda|redis|prometheus'; then
+  if grep -Eqi 'redpanda|redis|prometheus' <<<"$PACK_IMAGES"; then
     echo "FATAL: forbidden image (redpanda/redis/prometheus — removed components) in addon $name" >&2; exit 1
   fi
   # Same rule for add-on packs: an add-on is still something the customer
   # receives (licence audit D6).
-  if printf '%s\n' "$PACK_IMAGES" | grep -qi 'gotenberg'; then
+  if grep -qi 'gotenberg' <<<"$PACK_IMAGES"; then
     echo "FATAL: gotenberg image in addon $name — proprietary Microsoft font EULA + PDFtk (GPL-2.0+) + Chrome; must never ship (licence audit D6)" >&2; exit 1
   fi
   for img in $PACK_IMAGES; do

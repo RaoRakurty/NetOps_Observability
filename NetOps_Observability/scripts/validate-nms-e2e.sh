@@ -98,7 +98,7 @@ CREATED="$(curl -fsS -X POST "$BASE_URL/api/nms/integrations" "${AUTH[@]}" "${AC
 }")"
 IID="$(printf '%s' "$CREATED" | jget "['id']")"
 [ -n "$IID" ] || die "create failed: $CREATED"
-printf '%s' "$CREATED" | grep -q "$MOCK_PASS" && die "SECRET LEAKED in create response"
+grep -q "$MOCK_PASS" <<<"$CREATED" && die "SECRET LEAKED in create response"
 ok "created $IID (no secret in response)"
 
 say "3/7 Live auth test against the controller"
@@ -116,7 +116,7 @@ ok "poll ok — $PEVENTS controller events"
 
 say "5/7 Controller state tracked (BFD entity)"
 STATES="$(curl -fsS "$BASE_URL/api/nms/integrations/$IID/states" "${AUTH[@]}" "${ACT[@]}")"
-printf '%s' "$STATES" | grep -q '"stateKind": *"bfd"' || printf '%s' "$STATES" | grep -q '"stateKind":"bfd"' || die "no bfd state row: $STATES"
+grep -q '"stateKind": *"bfd"' <<<"$STATES" || grep -q '"stateKind":"bfd"' <<<"$STATES" || die "no bfd state row: $STATES"
 ok "controller_state_current has the BFD session"
 
 say "6/7 Metric lane → VictoriaMetrics controller_metric_tunnel_latency_ms"
@@ -127,10 +127,10 @@ VM_DEADLINE=$(( $(date +%s) + 60 ))
 VMQ=""
 while [ "$(date +%s)" -lt "$VM_DEADLINE" ]; do
   VMQ="$(docker exec netops-victoria-1 wget -qO- 'http://127.0.0.1:8428/api/v1/query?query=controller_metric_tunnel_latency_ms')"
-  printf '%s' "$VMQ" | grep -q '"__name__":"controller_metric_tunnel_latency_ms"' && break
+  grep -q '"__name__":"controller_metric_tunnel_latency_ms"' <<<"$VMQ" && break
   sleep 5
 done
-printf '%s' "$VMQ" | grep -q '"__name__":"controller_metric_tunnel_latency_ms"' || die "metric not in VictoriaMetrics after 60s: $VMQ"
+grep -q '"__name__":"controller_metric_tunnel_latency_ms"' <<<"$VMQ" || die "metric not in VictoriaMetrics after 60s: $VMQ"
 ok "controller metrics landed in VictoriaMetrics"
 
 say "7/7 Event lane → correlation → ClickHouse corr_signals (source=controller)"

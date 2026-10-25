@@ -115,7 +115,7 @@ else
     harness_rc=$?
 fi
 if [ "$harness_rc" -eq 0 ]; then
-    if printf '%s\n' "$harness_out" | grep -Eq '(^|[/[:space:]])python[0-9.]*[[:space:]]+[^[:space:]]*scale-miniladder\.py([[:space:]]|$)'; then
+    if grep -Eq '(^|[/[:space:]])python[0-9.]*[[:space:]]+[^[:space:]]*scale-miniladder\.py([[:space:]]|$)' <<<"$harness_out"; then
         harness_live=1
     fi
 elif [ "$harness_rc" -gt 1 ]; then
