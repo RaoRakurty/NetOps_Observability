@@ -7516,6 +7516,51 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
 .lic-carried-table { width: 100%; border-collapse: collapse; }
 .lic-carried-table th { text-align: left; font-weight: 500; color: var(--muted); padding: 4px 8px 4px 0; border-bottom: 1px solid var(--panel-border); }
 .lic-carried-table td { padding: 6px 8px 6px 0; border-bottom: 1px solid color-mix(in srgb, var(--panel-border) 60%, transparent); }
+
+/* ── Phone width (design-system pass C1, 2026-10-19) ─────────────────────────
+   The baseline crawl (docs/ui/FRONTEND_UI_AUDIT.md) found EVERY route scrolling
+   sideways at 390px: the brand image filled the top bar and pushed search,
+   scope, time range and Iris off-screen, and wide tables stretched their grid
+   tracks (a `1fr` track is minmax(auto, 1fr): it grows to its content) instead
+   of scrolling inside their own box. Grid and panel children may shrink;
+   tables (.dtv, overflow:auto) then scroll where they are. */
+.ov-grid > *, .cc-panel, .panel, .card, .cc-kpi-cell { min-width: 0; }
+@media (max-width: 640px) {
+  .topbar { gap: 4px; padding: 0 6px; }
+  .cx-brand-img { height: 24px; max-width: 24vw; object-fit: contain; object-position: left center; }
+  .topbar-right { gap: 4px; min-width: 0; }
+  .topbar-right .omni-compact { min-width: 0; flex: 1 1 auto; }
+  .omni-compact .omni-kbd { display: none; }
+  .cc-kpis, .cc-kpis-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .content { padding: var(--sp-2) var(--sp-3); }
+  /* Icon-only controls: the words stay for assistive tech (the sr-only pattern),
+     help stays reachable from the rail's "?" entry. */
+  .health-label, .iris-launch-label {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+  .topbar-right .help-btn { display: none; }
+  .scope-sel { max-width: 34vw; min-width: 96px; flex: 0 1 auto; }
+  .topbar-right .omni-compact { flex: 0 1 36px; padding: 0 8px; }
+  .scope-sel .scope-btn { max-width: 100%; overflow: hidden; }
+  .range-picker { max-width: 66px; }
+  .iris-launch { padding-left: 6px; padding-right: 6px; }
+  .scope-sel .scope-btn { display: inline-flex; align-items: center; gap: 4px; }
+  .scope-sel .scope-btn-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .scope-sel .scope-region { display: none; }
+  /* Breadcrumb on its own line, the leaf tabs one scrollable strip below it
+     (they were squeezed into a one-word-wide column beside the breadcrumb). */
+  .shell-v2 .main-head { flex-wrap: wrap; gap: 0; padding-left: var(--sp-3); padding-right: var(--sp-3); }
+  .shell-v2 .main-head .subnav { width: 100%; margin-top: 0; }
+  .subnav { flex-wrap: nowrap; overflow-x: auto; max-width: 100%; }
+  .shell-v2 .main-head .subnav button { white-space: nowrap; }
+  /* 119 plain <table>s (40 ds-table) have no scroll wrapper: on a phone each
+     scrolls sideways in its own box instead of widening the page. */
+  /* position:relative makes the table the containing block of its own
+     absolutely positioned children (sr-only labels), so they scroll with it
+     instead of widening the page (security/overview, 2026-10-19). */
+  .main table { display: block; max-width: 100%; overflow-x: auto; position: relative; }
+}
 /* License — feature chips and Details sub-heads (owner 2026-10-18). */
 .lic-feat { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 .lic-feat-chip { display: inline-flex; align-items: baseline; gap: 6px; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--panel-border); }
