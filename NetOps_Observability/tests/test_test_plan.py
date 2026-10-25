@@ -58,7 +58,7 @@ def test_vendor_changes_are_not_listed_as_packages_to_test():
 
 
 def test_high_risk_paths_win_regardless_of_diff_size():
-    for path in ("src/backend/migrations/0060_add.sql",
+    for path in ("src/backend/internal/platformdb/migrations/0060_add.sql",
                  "src/backend/tlsconfig/config.go",
                  "src/backend/sealing/seal.go",
                  "src/backend/tenant_scope.go",
@@ -141,7 +141,7 @@ ALL = set(tp.CI_GROUPS)
     # backend source: a sub-package needs backend; the root package boots the stack
     ([P + "src/backend/collectors/vrf.go"], {"backend"}),
     ([P + "src/backend/main.go"], {"backend", "install-boot"}),
-    ([P + "src/backend/migrations/0060_x.sql"], {"backend", "install-boot"}),
+    ([P + "src/backend/internal/platformdb/migrations/0060_x.sql"], {"backend", "install-boot"}),
     ([P + "src/backend/tlsconfig/config.go"], {"backend", "install-boot"}),
     # Go dependency changes
     ([P + "src/backend/go.mod", P + "src/backend/go.sum"], {"backend", "install-boot"}),
@@ -347,3 +347,29 @@ def test_local_plan_runs_correlation_suite_for_engine_inputs(rel):
 
 def test_local_plan_skips_correlation_suite_for_unrelated_backend():
     assert not tp._needs_correlation("src/backend/collectors/vrf.go")
+
+
+# Repo-root entries (outside the project dir) are matched against the raw path,
+# and these name files that need not exist for the rule to be right.
+_ROOT_LEVEL = (".github/", "network-automation-mpls-l3vpn/", ".gitleaks", ".trivyignore")
+
+
+def test_every_project_path_rule_matches_a_tracked_file():
+    """A rule naming a directory that does not exist is a rule that never fires.
+    `src/backend/migrations/*` did that: the real schema lives under
+    internal/platformdb/migrations, so a migration ran neither the high-risk
+    local plan nor install-boot in CI."""
+    import fnmatch
+    try:
+        files = subprocess.run(["git", "ls-files"], cwd=ROOT, check=True,
+                               capture_output=True, text=True, timeout=30).stdout.splitlines()
+    except (OSError, subprocess.SubprocessError) as exc:
+        pytest.skip(f"git ls-files unavailable: {exc}")
+    tables = {"HIGH_RISK": tp.HIGH_RISK, "ARTIFACT_INPUTS": tp.ARTIFACT_INPUTS,
+              "DOCS": tp.DOCS, "FRONTEND": tp.FRONTEND,
+              "CI_FULL_TRIGGERS": tp.CI_FULL_TRIGGERS,
+              "CI_RULES": tuple(p for p, _ in tp.CI_RULES)}
+    dead = [f"{name}: {pat}" for name, pats in tables.items() for pat in pats
+            if not pat.startswith(_ROOT_LEVEL)
+            and not any(fnmatch.fnmatch(f, pat) for f in files)]
+    assert not dead, f"planner patterns that match no tracked file: {dead}"

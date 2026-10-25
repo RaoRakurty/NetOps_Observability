@@ -67,7 +67,7 @@ ARTIFACT_INPUTS = (
 # the LLM boundary, and the dependency/supply-chain surface (CLAUDE.md §3,
 # §3a, §6, §8, §15).
 HIGH_RISK = (
-    "src/backend/migrations/*", "src/backend/tlsconfig/*", "src/backend/internalca/*",
+    "src/backend/internal/platformdb/migrations/*", "src/backend/tlsconfig/*", "src/backend/internalca/*",
     "src/backend/sealing/*", "src/backend/*auth*", "src/backend/*tenant*",
     "src/backend/*rls*", "src/backend/*isolation*", "src/backend/*rbac*",
     "src/backend/*copilot*", "src/backend/ai/*", "src/backend/*iris*",
@@ -114,7 +114,7 @@ CI_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     # .go file, schema, trust material or the module graph also boots the stack.
     ("src/backend/*", ("backend",)),
     ("src/contracts/*", ("backend", "frontend")),
-    ("src/backend/migrations/*", (BOOT,)), ("src/backend/tlsconfig/*", (BOOT,)),
+    ("src/backend/internal/platformdb/migrations/*", (BOOT,)), ("src/backend/tlsconfig/*", (BOOT,)),
     ("src/backend/internalca/*", (BOOT,)), ("src/backend/sealing/*", (BOOT,)),
     ("src/backend/cmd/*", (BOOT,)), ("src/backend/go.mod", (BOOT,)),
     ("src/backend/go.sum", (BOOT,)), ("src/backend/vendor/*", (BOOT,)),
