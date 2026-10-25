@@ -19,9 +19,9 @@ Owner decision (binding): build every feature assuming the NMS integration is th
 - ✔ Controller lane trusts payload tenant: handle_controller_event never calls verified_tenant (correlation/main.py:12796-12814) → T0 (§3a).
 - ✔ F1 PROVEN + FIXED (2026-10-25, metrics_unresolved_device_isolation_test.go red on main): scope matched `{device=~ids}` only, so a tenant that created a device named after another tenant's unresolved system-ip read that tenant's controller series; and a restricted tenant's unresolved series reached the Global view. Fix: every scoped filter also binds `tenant_id=~"(?i)(|<tenant>)"`; the Global-view exclusion also drops restricted tenants by `tenant_id`. Found alongside: `regexAlternation` put RE2 escapes into a PromQL string unescaped, which VictoriaMetrics rejects (`cannot parse extra_filters`), so any scoped tenant with a dotted device id or name got no metrics, and a `"` in a device-set sysName could inject matchers. Now escaped for the PromQL string too. Still T0 (identity PR): ctl-<integration>-<key> fallback so unresolved devices are stable per-integration entities (no same-tenant merge across integrations) and addressable in scoped views; reserved `ctl-` prefix on device create.
 - F2 alertTenant derives owner only via discovery.Get(DeviceID) (alert_episodes.go:99-121) → connector/unresolved alerts become platform-owned.
-- F3 BFD/control transitions carry no TunnelID/PeerID (sdwan_state_events.go:54-75) → two tunnel ends never meet.
-- F4 recovery emitted under fault kind (controller_bfd_down sev info).
-- F5 SDWANStateChangeEvents hard-codes Vendor cisco for every vendor (sdwan_state_events.go:57).
+- ✔ F3 FIXED (T0, 2026-10-25): canonical TunnelID (sorted TLOC pair) + PeerID on BFD/control states and transitions; verified on recorded lab payloads (vEdge 20.6 + IOS XE 17.3) that both ends mirror their fields.
+- ✔ F4 FIXED (T0): recoveries and cleared vManage alarms are `<kind>_clear` at info (a cleared Critical alarm used to arrive as crit).
+- ✔ F5 FIXED (T0): ConnectorSpec.Maker; SD-WAN and wireless transitions take vendor/product from the spec.
 - F7 catalyst_center spec Webhook:true but registry webhook nil.
 - F8 IngestPipelineSilent guarded by SNMP-only collector_targets_reachable>0 (rules-scale-slo.yaml:528-533) → NMS-only installs have NO ingest-silent page.
 - F9 controller contradiction/staleness handling is prose only; evidence_role unconsumed in src/correlation.

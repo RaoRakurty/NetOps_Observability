@@ -324,9 +324,21 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   fan-in with contrast (many sites converging on one element while their other sessions
   stay up) can confirm. Two integrations of one controller stay ONE witness.
   Plan: docs/design/NMS_FIRST_PLAN_2026-10-24.md (T2).
-- No controller topology: adjacency comes only from LLDP/CDP/BGP-LS. Controller PATH
-  events ground only through rank-7 tokens, which triggers the "no authoritative edge"
-  cap [lead] (plan T0/T4).
+- **Tunnel identity (T0, 2026-10-25).** A BFD transition carries `tunnel_id` =
+  the sorted TLOC pair `<ipA>/<colA>|<ipB>/<colB>` (nms/sdwan_tunnel.go) plus `peer_id`;
+  controller_events.py binds PATH kinds to `<tunnel_id>@<controller_instance>` when
+  the `tunnel_scheme=tloc_pair` hint is present. Both ends of one session are now ONE
+  node (rank-1 shared identity). The `@instance` scope keeps two overlays that reuse
+  system-ips apart. Older records without the hint bind as before.
+- **Recoveries are clears.** An SD-WAN transition back to a good state, and a cleared
+  vManage alarm, arrive as `<kind>_clear` at info. They bind to the fault's entity and
+  build_nodes skips them. Before T0 they were fault-kind evidence that kept a recovered
+  tunnel's node alive.
+- `controller_instance` (`ci-<hash>`, basis `host`) rides in attrs: context for T2's
+  witness rule. The observer and the verdict are unchanged.
+- No controller topology yet: adjacency comes only from LLDP/CDP/BGP-LS. A tunnel node
+  does not yet ground to its two endpoint DEVICES except through rank-7 tokens, which
+  triggers the "no authoritative edge" cap [lead] (plan T4).
 - Controller evidence later than 516.5 s behind the watermark never correlates. vManage
   statistics are 30–60 min late, so they are context only, never live corroboration.
 - Observer ids are lane-local strings (SNMP device id M:12451, syslog hostname
