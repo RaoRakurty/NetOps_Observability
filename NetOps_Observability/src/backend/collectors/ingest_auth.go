@@ -177,6 +177,38 @@ func logIngestRejection(lane, sink string, status int) {
 		`collector_ingest_rejected{lane=%q} %d %d`, lane, n, time.Now().UnixMilli()))
 }
 
+// ingestDeliveryErrors counts POSTs that never got a response at all —
+// connection refused, DNS, timeout, or a TLS handshake the sink refused (an
+// expired client SVID, tracker 351). The forwarders used to `continue` past
+// these, so a lane whose client cert had expired was silent in every log and
+// metric. Kept apart from ingestRejections: a status code proves the sink is
+// up and judged the request; this proves it never got that far.
+var ingestDeliveryErrors sync.Map // lane string -> *int64
+
+var ingestDeliveryLogThrottle sync.Map // lane string -> *int64 (unix seconds)
+
+func logIngestDeliveryError(lane, sink string, err error) {
+	v, _ := ingestDeliveryErrors.LoadOrStore(lane, new(int64))
+	n := atomic.AddInt64(v.(*int64), 1)
+
+	now := time.Now().Unix()
+	lv, _ := ingestDeliveryLogThrottle.LoadOrStore(lane, new(int64))
+	last := atomic.LoadInt64(lv.(*int64))
+	if now-last >= 60 && atomic.CompareAndSwapInt64(lv.(*int64), last, now) {
+		log.Printf("ingest: %s lane delivery to %s FAILED: %v (%d total)", lane, sink, err, n)
+	}
+	emitMetrics(context.Background(), fmt.Sprintf(
+		`collector_ingest_delivery_failed{lane=%q} %d %d`, lane, n, time.Now().UnixMilli()))
+}
+
+// IngestDeliveryErrors returns the per-lane no-response count (tests, health).
+func IngestDeliveryErrors(lane string) int64 {
+	if v, ok := ingestDeliveryErrors.Load(lane); ok {
+		return atomic.LoadInt64(v.(*int64))
+	}
+	return 0
+}
+
 // IngestRejections returns the per-lane rejection count. Exported for the
 // API's collector health surface and for tests.
 func IngestRejections(lane string) int64 {

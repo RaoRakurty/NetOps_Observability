@@ -320,11 +320,22 @@ func (rt *Runtime) sinkRouted(ctx context.Context, ic Integration, routed Routed
 	// evidence, not a parallel wireless pipeline. Non-wireless state kinds are
 	// untouched.
 	events := routed.Events
+	spec := ConnectorSpec{Vendor: ic.Vendor, SourceSystem: ic.Vendor}
+	if conn, ok := rt.reg.Get(ic.Vendor); ok {
+		spec = conn.Spec()
+	}
 	if len(routed.StateChanges) > 0 {
 		events = append(events,
-			WirelessStateChangeEvents(ic.Tenant, ic.ID, ic.Vendor, routed.StateChanges)...)
+			WirelessStateChangeEvents(spec, ic.Tenant, ic.ID, routed.StateChanges)...)
 		events = append(events,
-			SDWANStateChangeEvents(ic.Tenant, ic.ID, ic.Vendor, routed.StateChanges)...)
+			SDWANStateChangeEvents(spec, ic.Tenant, ic.ID, routed.StateChanges)...)
+	}
+	if err := stampControllerInstance(events, spec, ic); err != nil {
+		// Events still flow; they only lack the controller-instance context.
+		applog.Warn("nms", "controller instance not derivable from base URL", map[string]any{"integration": ic.ID, "error": err.Error()})
+	}
+	if n := canonicalSeverities(events); n > 0 {
+		applog.Warn("nms", "non-canonical event severity mapped (connector bug)", map[string]any{"integration": ic.ID, "vendor": ic.Vendor, "events": n})
 	}
 	if len(events) > 0 {
 		if rt.sinks.ProduceEvents == nil {

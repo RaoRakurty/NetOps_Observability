@@ -477,9 +477,14 @@ def _tenant_registry() -> dict[str, str]:
 
     This file is the ONLY authority on which tenant owns a piece of telemetry.
     It is produced by the platform from its own inventory, one row per distinct
-    device NAME and per distinct management ADDRESS, and an identity that maps
-    to more than one tenant is OMITTED by the exporter (fail-safe) — so a hit
-    here is unambiguous by construction.
+    inventory device ID, device NAME and management ADDRESS — every identity a
+    lane may carry for a known device (trap/metric `device` is the inventory id,
+    e.g. the SNMP scan id "vedge-20-1e95f00f"; syslog `hostname` is the name;
+    flow `sampler_address` / trap `host` is the address). An identity that maps
+    to more than one tenant is OMITTED by the exporter (fail-safe). The loader
+    re-asserts that here: an identity listed under two different tenants is
+    dropped, never last-row-wins — so a hit is unambiguous even if the file was
+    not written by the exporter.
 
     Cheap: re-reads the CSV only when its mtime changes."""
     global _tenant_map, _tenant_mtime, _tenant_stat_at
@@ -505,13 +510,27 @@ def _tenant_registry() -> dict[str, str]:
     if mt != _tenant_mtime:
         _tenant_mtime = mt  # retry on the next mtime change (writer refreshes every 60s)
         fresh: dict[str, str] = {}
+        conflicted: set[str] = set()
         try:
             with open(TENANT_ENRICHMENT_FILE, newline="") as f:
                 reader = csv.reader(f)
                 next(reader, None)  # header: identity,tenant_id
                 for row in reader:
                     if len(row) >= 2 and row[0]:
-                        fresh[row[0]] = row[1]
+                        ident, tid = row[0], row[1]
+                        prev = fresh.get(ident)
+                        if prev is not None and canon_tenant(prev) != canon_tenant(tid):
+                            conflicted.add(ident)  # §3a: two owners → neither
+                        fresh.setdefault(ident, tid)
+            for ident in conflicted:
+                del fresh[ident]
+            if conflicted:
+                # Not silent: the exporter guarantees uniqueness, so this means
+                # the file was written by something else. Count only — the
+                # identities themselves stay out of the log.
+                log.warning("tenant enrichment file lists %d identities under more "
+                            "than one tenant — dropped as ambiguous (registry miss)",
+                            len(conflicted))
             _tenant_map = fresh
         except OSError as exc:
             # An unreadable map means every signal falls back to untagged
@@ -11860,7 +11879,6 @@ class _AssignmentLogger(ConsumerRebalanceListener):
                 "replica count. Partition totals seen: %s",
                 CONSUMER_REBALANCES, CONSUMER_ZERO_ASSIGNMENTS,
                 dict(CONSUMER_PARTITION_TOTALS))
-        distinct = {tuple(p) for p in owned.values()}
         global COPARTITION_OK, COPARTITION_VIOLATIONS, COPARTITION_LAST_DETAIL
         # Only judge topics this member actually holds: with the range assignor
         # a member legitimately owns nothing on a topic it was not given, and
@@ -11871,12 +11889,15 @@ class _AssignmentLogger(ConsumerRebalanceListener):
             COPARTITION_VIOLATIONS += 1
             COPARTITION_LAST_DETAIL = "; ".join(
                 f"{t}={list(p)}" for t, p in sorted(held_sets.items()))[:400]
-        if len(distinct) > 1:
+        # The ERROR and the gauge judge the SAME sets. Judging the log on every
+        # owned topic, empty ones included, shouted BROKEN on each restart: an
+        # evidence topic subscribed after the first join holds [] for one
+        # rebalance while corr_copartition_ok read 1 (2026-10-24, lab).
+        if not COPARTITION_OK:
             log.error("CO-PARTITIONING BROKEN: this member owns different "
                       "partition sets per topic (%s) — topic partition counts "
                       "have diverged; re-run kafka-init with BUS_PARTITIONS "
-                      "and check `kafka-topics --describe`",
-                      {t: p for t, p in owned.items()})
+                      "and check `kafka-topics --describe`", held_sets)
         # Tracker 155 (completion): RELEASE. `CONSUMER_ASSIGNMENT` above is now
         # the new assignment, so this is the first moment that can tell a
         # partition that LEFT from one the eager rebalance revoked and handed
@@ -12800,10 +12821,30 @@ async def handle_controller_event(ev: dict) -> None:
     A controller is ONE modality (Source.CONTROLLER + MANAGEMENT_PLANE): the
     independence gate caps controller-alone pictures at suspected — confirmation
     always needs corroborating direct telemetry (the 3-tier evidence hierarchy)."""
-    global CONTROLLER_EVENTS_RECEIVED, CONTROLLER_EVENTS_SIGNALS, CONTROLLER_EVENTS_DROPPED
+    global CONTROLLER_EVENTS_RECEIVED, CONTROLLER_EVENTS_SIGNALS, CONTROLLER_EVENTS_DROPPED, DEADLETTER_COUNT
     CONTROLLER_EVENTS_RECEIVED += 1
     if not CORR_SIGNALS_ENABLED or ch is None:
         return
+    # §3a (2026-10-24): this lane used to persist under the payload's tenant_id
+    # without checking it — the only lane that did. The api stamps the tenant
+    # from the integration's owner, but zero-trust (§3) still verifies it here:
+    # a claim the device→tenant registry contradicts is quarantined, never
+    # correlated. Unanchored: an API-only device the registry has not heard of
+    # keeps the producer's claim (its identity comes from the controller, not
+    # from the registry), but a claim that disagrees with a KNOWN device — e.g.
+    # an unresolved raw system-ip that collides with another tenant's device id —
+    # is refused.
+    identity = str(ev.get("device_id") or ev.get("device_name") or "").strip()
+    if identity:
+        try:
+            tenant = verified_tenant(str(ev.get("tenant_id") or ""), identity,
+                                     "controller_events")
+        except TenantClaimRefused as exc:
+            DEADLETTER_COUNT += 1
+            CONTROLLER_EVENTS_DROPPED += 1
+            keep_deadletter_payload("controller_events", ev, exc)
+            return
+        ev = {**ev, "tenant_id": tenant}
     sig = controller_event_to_signal(ev, datetime.now(timezone.utc))
     if sig is None:
         CONTROLLER_EVENTS_DROPPED += 1  # no tenant/kind identity — default-closed

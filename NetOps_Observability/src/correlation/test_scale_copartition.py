@@ -293,6 +293,20 @@ def test_copartition_mismatch_is_an_error(caplog):
     _fresh_assignment_state()
 
 
+def test_a_topic_held_empty_is_not_a_copartition_error(caplog):
+    """An evidence topic subscribed after the first join is assigned [] for one
+    rebalance. The gauge already ignores it; the ERROR must agree with the gauge
+    instead of crying BROKEN on every restart."""
+    _fresh_assignment_state()
+    listener = main._AssignmentLogger(_Recorder())
+    tps = [_TP(t, 0) for t in main.TOPICS[:-1]]   # last topic: nothing held
+    with caplog.at_level("ERROR", logger="correlation"):
+        asyncio.run(listener.on_partitions_assigned(tps))
+    assert main.COPARTITION_OK
+    assert not any("CO-PARTITIONING BROKEN" in r.message for r in caplog.records)
+    _fresh_assignment_state()
+
+
 # ── leg 3: tenant-slice equivalence ─────────────────────────────────────────
 
 def _sig(tenant: str, kind: str, entity: str, offset_s: float) -> Signal:

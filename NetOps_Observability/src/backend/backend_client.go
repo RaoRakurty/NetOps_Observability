@@ -109,6 +109,11 @@ func initBackendTransport() error {
 			if err != nil {
 				return err
 			}
+			// Tracker 351: this pair renews on use (tlsconfig recheck); a failed
+			// re-read keeps the old cert and must not be silent.
+			rl.SetOnReloadError(func(e error) {
+				logError("tls", "backend client SVID reload", map[string]any{"path": cf, "error": e.Error()})
+			})
 			opts.Reloader = rl
 		}
 	}
