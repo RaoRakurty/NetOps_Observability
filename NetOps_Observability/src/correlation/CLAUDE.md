@@ -329,9 +329,16 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   tunnel's node alive.
 - `controller_instance` (`ci-<hash>`, basis `host`) rides in attrs: context for T2's
   witness rule. The observer and the verdict are unchanged.
-- No controller topology yet: adjacency comes only from LLDP/CDP/BGP-LS. A tunnel node
-  does not yet ground to its two endpoint DEVICES except through rank-7 tokens, which
-  triggers the "no authoritative edge" cap [lead] (plan T4).
+- **Controller topology (T4b/T4c, 2026-10-25).** The api draws the SD-WAN overlay from
+  the integration's stored BFD sessions (internal/ctloverlay), and exports
+  tunnel↔endpoint rows (`proto: sdwan_bfd`, `a` = `<tunnel_id>@<controller_instance>`,
+  `b` = endpoint inventory id, tenant never `""`) into topology_links.json.
+  `Node.adjacency_key()` (E) lets the rank-3 adjacency rung look a tunnel node up by its
+  own id, so a tunnel incident grounds to its edge devices AUTHORITATIVELY instead of
+  through a rank-7 token (no "no authoritative edge" cap). Device↔device overlay rows are
+  deliberately not exported: on a full mesh they would weld the fabric (#99 class).
+  ENGINE_SEMVER 3.2.0; byte-identical when no tunnel rows exist. The verdict tier still
+  stays suspected for controller-only evidence until T2 changes the witness rule.
 - Controller evidence later than 516.5 s behind the watermark never correlates. vManage
   statistics are 30–60 min late, so they are context only, never live corroboration.
 - Observer ids are lane-local strings (SNMP device id M:12451, syslog hostname
