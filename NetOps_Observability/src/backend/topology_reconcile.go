@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"netops/backend/collectors"
+	"netops/backend/internal/ctloverlay"
 	"netops/backend/models"
 	"netops/backend/topology"
 )
@@ -126,6 +127,24 @@ func (s *server) refreshSDWANOverlay(ctx context.Context) {
 		logWarn("topology", "SD-WAN overlay facts unread — the previous overlay is kept", map[string]any{"error": err.Error()})
 		return
 	}
+	// NMS-first (T4b): the integrations' stored BFD sessions are a source of
+	// record. Per device they replace the SNMP facts, so one device's sessions
+	// are never counted from both. An unread session store keeps the previous
+	// snapshot, exactly like an unread facts channel.
+	snmpFacts := len(facts)
+	ctl, cst, cerr := s.controllerOverlay(ctx)
+	if cerr != nil {
+		logWarn("topology", "controller BFD sessions unread — the previous overlay is kept", map[string]any{"error": cerr.Error()})
+		return
+	}
+	merged := make(map[string]collectors.OverlayDeviceFacts, len(facts)+len(ctl))
+	for id, f := range facts {
+		merged[id] = f
+	}
+	for id, f := range ctl {
+		merged[id] = f
+	}
+	facts = merged
 	devs := s.discovery.Devices() // platform-wide: the reconciler has no principal
 	in := topology.OverlayInput{
 		DevTenant: make(map[string]string, len(devs)),
@@ -151,10 +170,12 @@ func (s *server) refreshSDWANOverlay(ctx context.Context) {
 		have[id] = true
 	}
 	s.sdwanOverlay.Store(&sdwanOverlaySnapshot{at: time.Now(), res: res, facts: have, devFacts: facts})
-	if res.Stats.Unresolved > 0 || res.Stats.Ambiguous > 0 {
+	if res.Stats.Unresolved > 0 || res.Stats.Ambiguous > 0 || cst.Unresolved > 0 || cst.Malformed > 0 || cst.Truncated > 0 {
 		logInfo("topology", "SD-WAN overlay inferred with gaps", map[string]any{
 			"pairs": res.Stats.PairsObserved, "drawn": res.Stats.PairsDrawn, "unresolved_system_ips": res.Stats.Unresolved,
-			"ambiguous": res.Stats.Ambiguous, "took_ms": time.Since(start).Milliseconds()})
+			"ambiguous": res.Stats.Ambiguous, "took_ms": time.Since(start).Milliseconds(),
+			"snmp_devices": snmpFacts, "controller_devices": len(ctl), "controller_sessions": cst.Sessions,
+			"controller_unresolved": cst.Unresolved, "controller_malformed": cst.Malformed, "controller_truncated_tenants": cst.Truncated})
 	}
 }
 
@@ -263,4 +284,17 @@ func topoEdgeID(l topoLink) string {
 		a, b = b, a
 	}
 	return a + "--" + b
+}
+
+// controllerOverlay reads the controller overlay facts (NMS-first T4b,
+// internal/ctloverlay), or none when NMS is off.
+func (s *server) controllerOverlay(ctx context.Context) (map[string]collectors.OverlayDeviceFacts, ctloverlay.Stats, error) {
+	if s.nms == nil {
+		return nil, ctloverlay.Stats{}, nil
+	}
+	var res ctloverlay.KeyResolver
+	if s.nmsResolver != nil {
+		res = s.nmsResolver
+	}
+	return ctloverlay.Facts(ctx, s.nms.Store(), res, time.Now().UTC())
 }
