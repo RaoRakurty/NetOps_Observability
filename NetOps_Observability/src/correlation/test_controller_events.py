@@ -179,3 +179,95 @@ def test_warn_controller_event_alone_stays_an_episode():
     ev = _vmanage_bfd()
     ev.update(normalized_event_type="controller_device_unreachable", tunnel_id="", severity="minor")
     assert run_window([controller_event_to_signal(ev, INGEST)], builtin_catalog(), ()) == []
+
+
+# ── T0 (NMS-first plan, 2026-10-25): one tunnel, whichever end reports it ────
+_TID = "10.255.255.20/mpls|10.255.255.51/mpls"   # nms.CanonicalTunnelID shape
+
+
+def _bfd_end(device, peer, *, tenant="t-a", instance="ci-aaaaaaaaaaaaaaaa", kind="controller_bfd_down",
+             event_id="e", tunnel=_TID, sev="high"):
+    return {
+        "tenant_id": tenant, "integration_id": "nmsi-1", "source_system": "vmanage", "vendor": "cisco",
+        "normalized_event_type": kind, "severity": sev, "device_id": device, "peer_id": peer,
+        "site_id": "", "tunnel_id": tunnel, "event_id": event_id, "event_time": "2026-07-03T11:59:00Z",
+        "controller_instance": instance,
+        "correlation_hints": {"tunnel_scheme": "tloc_pair", "controller_instance_basis": "host"},
+    }
+
+
+def test_both_ends_of_one_tunnel_become_one_node():
+    from engine import build_nodes
+
+    a = controller_event_to_signal(_bfd_end("10.255.255.20", "10.255.255.51", event_id="a"), INGEST)
+    b = controller_event_to_signal(_bfd_end("10.255.255.51", "10.255.255.20", event_id="b"), INGEST)
+    assert a.entity_type == b.entity_type == EntityType.PATH
+    assert a.entity_id == b.entity_id == f"{_TID}@ci-aaaaaaaaaaaaaaaa"
+    nodes = build_nodes((a, b))
+    assert len(nodes) == 1 and len(nodes[0].signals) == 2, "the two halves of one session must meet"
+    # Each end's own device and the far end stay on the signal as tokens.
+    assert {"10.255.255.20", "10.255.255.51"} <= set(a.entity_tokens)
+
+
+def test_two_overlays_reusing_system_ips_never_merge():
+    from engine import build_nodes
+
+    a = controller_event_to_signal(_bfd_end("10.255.255.20", "10.255.255.51", event_id="a"), INGEST)
+    b = controller_event_to_signal(_bfd_end("10.255.255.20", "10.255.255.51", event_id="b",
+                                            instance="ci-bbbbbbbbbbbbbbbb"), INGEST)
+    assert a.entity_id != b.entity_id
+    assert len(build_nodes((a, b))) == 2
+
+
+def test_a_recovery_binds_the_same_tunnel_and_is_never_evidence():
+    from catalog import builtin_catalog
+    from engine import build_nodes, run_window
+
+    clear = controller_event_to_signal(_bfd_end("10.255.255.20", "10.255.255.51", event_id="c",
+                                                kind="controller_bfd_down_clear", sev="info"), INGEST)
+    fault = controller_event_to_signal(_bfd_end("10.255.255.20", "10.255.255.51", event_id="f"), INGEST)
+    assert clear.entity_type == EntityType.PATH and clear.entity_id == fault.entity_id
+    assert build_nodes((clear,)) == ()
+    assert run_window([clear], builtin_catalog(), ()) == [], "a recovery must open nothing"
+    nodes = build_nodes((fault, clear))
+    assert len(nodes) == 1 and all(not s.kind.endswith("_clear") for s in nodes[0].signals)
+
+
+def test_a_record_without_tunnel_identity_still_binds_as_before():
+    ev = _bfd_end("10.255.255.20", "", tunnel="")
+    ev.pop("controller_instance")
+    ev.pop("correlation_hints")
+    s = controller_event_to_signal(ev, INGEST)
+    assert s.entity_type == EntityType.PATH and s.entity_id == "10.255.255.20"
+    legacy = _vmanage_bfd()  # pre-T0 wire shape: an opaque tunnel id, no scheme hint
+    assert controller_event_to_signal(legacy, INGEST).entity_id == "mpls-biz"
+
+
+def test_controller_instance_is_context_not_a_new_witness():
+    from verdicts import witness_of
+
+    a = controller_event_to_signal(_bfd_end("10.255.255.20", "10.255.255.51", event_id="a"), INGEST)
+    b = controller_event_to_signal(_bfd_end("10.255.255.20", "10.255.255.51", event_id="b",
+                                            instance="ci-bbbbbbbbbbbbbbbb"), INGEST)
+    assert a.attrs["controller_instance"] == "ci-aaaaaaaaaaaaaaaa"
+    assert a.observer.observer_id == b.observer.observer_id == "vmanage:nmsi-1"
+    assert witness_of(a) == witness_of(b), "T0 must not change the verdict's witness model (that is T2)"
+
+
+def test_identical_tunnels_in_two_tenants_never_share_an_object():
+    from catalog import builtin_catalog
+    from engine import run_window
+
+    a = controller_event_to_signal(_bfd_end("10.255.255.20", "10.255.255.51", tenant="t-a", event_id="a"), INGEST)
+    b = controller_event_to_signal(_bfd_end("10.255.255.20", "10.255.255.51", tenant="t-b", event_id="b"), INGEST)
+    assert a.entity_id == b.entity_id  # same ids by design; isolation is by tenant
+    objs_a = run_window([a], builtin_catalog(), ())
+    objs_b = run_window([b], builtin_catalog(), ())
+    assert objs_a and objs_b
+    assert {o.tenant_id for o in objs_a} == {"t-a"} and {o.tenant_id for o in objs_b} == {"t-b"}
+    try:
+        run_window([a, b], builtin_catalog(), ())
+    except ValueError:
+        pass  # a mixed-tenant window is refused outright (engine.py single-tenant rule)
+    else:
+        raise AssertionError("a window mixing two tenants' tunnels must be refused")

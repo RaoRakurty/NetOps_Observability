@@ -19,9 +19,9 @@ Owner decision (binding): build every feature assuming the NMS integration is th
 - ✔ Controller lane trusts payload tenant: handle_controller_event never calls verified_tenant (correlation/main.py:12796-12814) → T0 (§3a).
 - F1 (plausible, unproven) unresolved controller key stays raw in `device` label (nms/identity.go:78-80); metric scope {device=~ids} (metrics_query.go:150); client-chosen device ids (main.go:4359) → tenant could read another tenant's unresolved series. T0 test decides.
 - F2 alertTenant derives owner only via discovery.Get(DeviceID) (alert_episodes.go:99-121) → connector/unresolved alerts become platform-owned.
-- F3 BFD/control transitions carry no TunnelID/PeerID (sdwan_state_events.go:54-75) → two tunnel ends never meet.
-- F4 recovery emitted under fault kind (controller_bfd_down sev info).
-- F5 SDWANStateChangeEvents hard-codes Vendor cisco for every vendor (sdwan_state_events.go:57).
+- ✔ F3 FIXED (T0, 2026-10-25): canonical TunnelID (sorted TLOC pair) + PeerID on BFD/control states and transitions; verified on recorded lab payloads (vEdge 20.6 + IOS XE 17.3) that both ends mirror their fields.
+- ✔ F4 FIXED (T0): recoveries and cleared vManage alarms are `<kind>_clear` at info (a cleared Critical alarm used to arrive as crit).
+- ✔ F5 FIXED (T0): ConnectorSpec.Maker; SD-WAN and wireless transitions take vendor/product from the spec.
 - F7 catalyst_center spec Webhook:true but registry webhook nil.
 - F8 IngestPipelineSilent guarded by SNMP-only collector_targets_reachable>0 (rules-scale-slo.yaml:528-533) → NMS-only installs have NO ingest-silent page.
 - F9 controller contradiction/staleness handling is prose only; evidence_role unconsumed in src/correlation.

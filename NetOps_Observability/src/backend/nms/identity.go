@@ -109,6 +109,18 @@ func canonicalize(r DeviceResolver, kind KeyKind, names *deviceNames, b Batch) B
 			e.CorrelationHints = hints
 			e.DeviceID = id
 		}
+		// The far end resolves like the near end. TunnelID is NEVER rewritten:
+		// it is built from both ends' native keys, and only native keys let the
+		// two reports of one session agree on it.
+		if id, ok := resolve(e.TenantID, e.PeerID); ok && id != e.PeerID {
+			hints := make(map[string]string, len(e.CorrelationHints)+1)
+			for k, v := range e.CorrelationHints {
+				hints[k] = v
+			}
+			hints["controller_peer_id"] = e.PeerID
+			e.CorrelationHints = hints
+			e.PeerID = id
+		}
 		events[i] = e
 	}
 	states := make([]ControllerState, len(b.States))
