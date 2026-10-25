@@ -47,3 +47,14 @@ def test_tenant_for_unmapped_device_is_canonical_global(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "_tenant_mtime", -1.0)
     assert main.tenant_for("some-unmapped-device") == "global"
     assert main.tenant_for("") == "global"
+
+
+def test_canon_tenant_matches_the_go_owner_table():
+    """Parity with the api's internal/owner.Of (tracker 356): both read one table."""
+    import json
+    from pathlib import Path
+    table = Path(__file__).resolve().parents[1] / "backend" / "internal" / "owner" / "testdata" / "parity.json"
+    cases = json.loads(table.read_text())["cases"]
+    assert cases, "the shared owner table is empty"
+    for given, want in cases:
+        assert main.canon_tenant(given) == want, (given, main.canon_tenant(given), want)
