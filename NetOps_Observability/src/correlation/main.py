@@ -12802,10 +12802,30 @@ async def handle_controller_event(ev: dict) -> None:
     A controller is ONE modality (Source.CONTROLLER + MANAGEMENT_PLANE): the
     independence gate caps controller-alone pictures at suspected — confirmation
     always needs corroborating direct telemetry (the 3-tier evidence hierarchy)."""
-    global CONTROLLER_EVENTS_RECEIVED, CONTROLLER_EVENTS_SIGNALS, CONTROLLER_EVENTS_DROPPED
+    global CONTROLLER_EVENTS_RECEIVED, CONTROLLER_EVENTS_SIGNALS, CONTROLLER_EVENTS_DROPPED, DEADLETTER_COUNT
     CONTROLLER_EVENTS_RECEIVED += 1
     if not CORR_SIGNALS_ENABLED or ch is None:
         return
+    # §3a (2026-10-24): this lane used to persist under the payload's tenant_id
+    # without checking it — the only lane that did. The api stamps the tenant
+    # from the integration's owner, but zero-trust (§3) still verifies it here:
+    # a claim the device→tenant registry contradicts is quarantined, never
+    # correlated. Unanchored: an API-only device the registry has not heard of
+    # keeps the producer's claim (its identity comes from the controller, not
+    # from the registry), but a claim that disagrees with a KNOWN device — e.g.
+    # an unresolved raw system-ip that collides with another tenant's device id —
+    # is refused.
+    identity = str(ev.get("device_id") or ev.get("device_name") or "").strip()
+    if identity:
+        try:
+            tenant = verified_tenant(str(ev.get("tenant_id") or ""), identity,
+                                     "controller_events")
+        except TenantClaimRefused as exc:
+            DEADLETTER_COUNT += 1
+            CONTROLLER_EVENTS_DROPPED += 1
+            keep_deadletter_payload("controller_events", ev, exc)
+            return
+        ev = {**ev, "tenant_id": tenant}
     sig = controller_event_to_signal(ev, datetime.now(timezone.utc))
     if sig is None:
         CONTROLLER_EVENTS_DROPPED += 1  # no tenant/kind identity — default-closed
