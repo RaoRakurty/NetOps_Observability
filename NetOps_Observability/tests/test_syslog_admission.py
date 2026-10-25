@@ -41,6 +41,9 @@ from pathlib import Path
 import pytest
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from vector_harness import run_vector_test  # tracker 350
+
 ROOT = Path(__file__).resolve().parent.parent
 VECTOR_DIR = ROOT / "deployment" / "docker" / "vector"
 VRL_PATH = VECTOR_DIR / "generated" / "syslog-admission.vrl"
@@ -287,13 +290,15 @@ def test_vector_unit_tests_prove_the_vrl_matches_the_python_screen():
             "run it before shipping: docker run --rm --entrypoint vector -v "
             "./deployment/docker/vector:/etc/vector/conf:ro " + VECTOR_IMAGE +
             " test /etc/vector/conf/tests/syslog-admission.yaml")
-    proc = subprocess.run(
+    # run_vector_test retries ONCE, loudly, and only for the upstream Vector 0.40
+    # buffer race (tests/vector_harness.py has the proof and the bounds).
+    run = run_vector_test(
         ["docker", "run", "--rm", "--entrypoint", "vector",
          "-v", f"{VECTOR_DIR}:/etc/vector/conf:ro", VECTOR_IMAGE,
          "test", "/etc/vector/conf/tests/syslog-admission.yaml"],
-        capture_output=True, text=True, timeout=600, check=False)
-    out = proc.stdout + proc.stderr
-    assert proc.returncode == 0, f"vector test failed:\n{out}"
+        label="syslog-admission", timeout=600)
+    out = run.output
+    assert run.final.returncode == 0, f"vector test failed:\n{run.report()}"
     assert "failed" not in out.lower(), out
     passed = out.count("... passed")
     assert passed >= 30, f"expected the full generated suite, saw {passed}:\n{out}"
