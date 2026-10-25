@@ -3,7 +3,7 @@
 
 import FeatureOffNotice from "../components/FeatureOffNotice";
 import { useEffect, useState } from "react";
-import { vrfTerm } from "../lib/vendorTerms";
+import { GLOBAL_DEFAULT_LABEL, instanceDisplay, vrfTerm } from "../lib/vendorTerms";
 import { api, Device, TopoLink, PromInstantSeries } from "../services/api";
 import { operatorError } from "../lib/errors";
 import AskIris from "../components/AskIris";
@@ -176,7 +176,9 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
                     <td style={mono}>{peer || "—"}</td>
                     <td style={td}><StateDot color={tone(up)} />{label}</td>
                     <td style={mono}>{remoteAs.get(peerKey(s.metric.vrf, peer)) || s.metric.asn || "—"}</td>
-                    <td style={td}>{s.metric.vrf || (s.metric.vrf === undefined ? "global" : "—")}</td>
+                    <td style={td} title={s.metric.vrf ? instanceDisplay(s.metric.vrf, device.vendor).title : s.metric.vrf === undefined ? "BGP4-MIB reports the default routing table" : undefined}>
+                      {s.metric.vrf ? instanceDisplay(s.metric.vrf, device.vendor).text : s.metric.vrf === undefined ? GLOBAL_DEFAULT_LABEL : "—"}
+                    </td>
                   </tr>
                 );
               })}
