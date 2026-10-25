@@ -124,6 +124,9 @@ type pairAgg struct {
 	up           int
 	aReported    bool
 	bReported    bool
+	// bySNMP / byController: which sources reported this pair's sessions.
+	bySNMP       bool
+	byController bool
 }
 
 // colorMask is the bit for colour index i (colours past 63 share bit 63; an
@@ -402,6 +405,11 @@ func InferOverlay(in OverlayInput) OverlayResult {
 			} else {
 				pa.bReported = true
 			}
+			if f.Source == collectors.OverlaySourceController {
+				pa.byController = true
+			} else {
+				pa.bySNMP = true
+			}
 			for _, cp := range p.ColorPairs {
 				if cp.LocalColor != "" {
 					lc := colorOf(cp.LocalColor)
@@ -483,12 +491,13 @@ func InferOverlay(in OverlayInput) OverlayResult {
 		if reporters == 2 {
 			conf = 0.95 // both ends reported the sessions
 		}
+		sources, via := pairSources(pa.bySNMP, pa.byController)
 		res.Edges = append(res.Edges, Edge{
 			ID: "sdwan|" + pa.a + "|" + pa.b, Source: pa.a, Target: pa.b,
 			Relationship: RelOverlay, Protocol: SrcSDWANBFD, Status: status, Confidence: conf,
 			Evidence: []EvidenceRef{{Source: SrcSDWANBFD, Confidence: conf,
-				Detail: fmt.Sprintf("SD-WAN tunnels over %s — %d of %d BFD sessions up (reported by %s)", strings.Join(cs, ", "), pa.up, pa.sessions, ends(reporters))}},
-			Tags: map[string]string{"provenance": "observed", "colors": strings.Join(cs, ","), "overlay": "sdwan"},
+				Detail: fmt.Sprintf("SD-WAN tunnels over %s — %d of %d BFD sessions up (reported by %s, %s)", strings.Join(cs, ", "), pa.up, pa.sessions, ends(reporters), via)}},
+			Tags: map[string]string{"provenance": "observed", "colors": strings.Join(cs, ","), "overlay": "sdwan", "sources": sources},
 		})
 		res.Stats.PairsDrawn++
 	}
@@ -549,6 +558,17 @@ func sortedFactIDs(m map[string]collectors.OverlayDeviceFacts) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// pairSources names the sources of a pair for its tags and evidence text.
+func pairSources(bySNMP, byController bool) (tag, via string) {
+	switch {
+	case bySNMP && byController:
+		return "controller,snmp", "via the SD-WAN manager and SNMP"
+	case byController:
+		return "controller", "via the SD-WAN manager"
+	}
+	return "snmp", "read over SNMP"
 }
 
 func ends(n int) string {

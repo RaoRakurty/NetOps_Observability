@@ -296,7 +296,7 @@ func TestSDWANOverlayOnViewNamesWhatItCannotSee(t *testing.T) {
 	facts := []topology.DeviceFact{{ID: "cedge-9", Name: "cEDGE-9", IfNames: []string{"Sdwan-intf"}}}
 	var view topology.View
 	attachSDWANOverlay(&view, nil, facts, devs, time.Now())
-	if len(view.Degraded) != 1 || !strings.Contains(view.Degraded[0], "1 SD-WAN edge(s) are shown without their tunnels") {
+	if len(view.Degraded) != 1 || !strings.Contains(view.Degraded[0], "1 SD-WAN edge(s) are monitored over SNMP only") {
 		t.Fatalf("no-snapshot note: %v", view.Degraded)
 	}
 	snap, _ := twoTenantOverlay(t)
@@ -304,8 +304,35 @@ func TestSDWANOverlayOnViewNamesWhatItCannotSee(t *testing.T) {
 	view = topology.View{}
 	attachSDWANOverlay(&view, snap, facts, devs, time.Now())
 	joined := strings.Join(view.Degraded, " | ")
-	if !strings.Contains(joined, "20 minutes old") || !strings.Contains(joined, "1 SD-WAN edge(s) are shown without their tunnels") {
+	if !strings.Contains(joined, "20 minutes old") || !strings.Contains(joined, "1 SD-WAN edge(s) are monitored over SNMP only") {
 		t.Fatalf("stale + missing notes: %v", view.Degraded)
+	}
+}
+
+// NMS-first: an edge an SD-WAN manager integration manages is never told to
+// fix SNMP — the note names the integration as the source that is missing.
+func TestSDWANMissingTunnelNoteNamesTheSourceThatCouldReportThem(t *testing.T) {
+	devs := []models.Device{
+		{ID: "ctl-1", Name: "cEDGE-40", TenantID: "acme", Labels: map[string]string{"controller_integration": "nmsi-1", "source_system": "vmanage"}},
+		{ID: "cedge-9", Name: "cEDGE-9", TenantID: "acme"},
+	}
+	facts := []topology.DeviceFact{
+		{ID: "ctl-1", Name: "cEDGE-40", IfNames: []string{"Sdwan-intf"}},
+		{ID: "cedge-9", Name: "cEDGE-9", IfNames: []string{"Sdwan-intf"}},
+	}
+	var view topology.View
+	attachSDWANOverlay(&view, nil, facts, devs, time.Now())
+	joined := strings.Join(view.Degraded, " | ")
+	if len(view.Degraded) != 2 ||
+		!strings.Contains(joined, "1 SD-WAN edge(s) have no tunnels drawn yet: their SD-WAN manager integration has not reported") ||
+		!strings.Contains(joined, "1 SD-WAN edge(s) are monitored over SNMP only") {
+		t.Fatalf("want one managed and one SNMP-only note: %v", view.Degraded)
+	}
+	if strings.Contains(view.Degraded[0], "SNMP") {
+		t.Fatalf("a managed edge must not be told to fix SNMP: %q", view.Degraded[0])
+	}
+	if got := missingTunnelNotes(0, 0); len(got) != 0 {
+		t.Fatalf("nothing missing, no note: %v", got)
 	}
 }
 
