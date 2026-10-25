@@ -158,6 +158,35 @@ func writeEnrichmentCSV(dir string, rows []enrichmentRow) (bool, error) {
 	return true, nil
 }
 
+// writeTenantEnrichmentOnce is one export tick. It reports whether it wrote.
+//
+// NOT-READY HOLD (tracker 366). Until the SNMP scanner's inventory is complete
+// — its memory restored at boot, or one sweep finished — the previous file is
+// left exactly as it stands. Writing earlier would publish every scanned
+// device that has not been re-found yet as unattributed, and the ingest tier
+// and correlation would stamp its telemetry platform-only for the minutes (or,
+// with an unreadable store and a down network, the hours) until it answered.
+// A stale map is right about everything it lists; a premature one is wrong
+// about exactly the devices an outage is about.
+func (s *server) writeTenantEnrichmentOnce(dir string) bool {
+	if !s.discovery.Ready("snmp") {
+		log.Printf("tenant-enrichment: SNMP inventory not complete yet (scan memory unread and no sweep finished) — %s/%s left as it stands", dir, enrichmentFileName)
+		return false
+	}
+	rows := buildEnrichmentRows(s.discovery.Devices())
+	changed, err := writeEnrichmentCSV(dir, rows)
+	if err != nil {
+		log.Printf("tenant-enrichment: write %s: %v", dir, err)
+		return false
+	}
+	if changed {
+		// The mtime bump is the signal the Vector-side reload wrapper
+		// (F-10) keys off — log it so a reload has a visible cause here.
+		log.Printf("tenant-enrichment: wrote %d identity rows to %s/%s (changed — vector tiers will reload)", len(rows), dir, enrichmentFileName)
+	}
+	return changed
+}
+
 // startTenantEnrichment runs the export loop until ctx is cancelled. It is a
 // no-op unless TENANT_ENRICHMENT_DIR is set (so the file backend / dev builds
 // without the shared volume are unaffected). It writes once immediately, then
@@ -173,19 +202,7 @@ func (s *server) startTenantEnrichment(ctx context.Context) {
 			interval = d
 		}
 	}
-	write := func() {
-		rows := buildEnrichmentRows(s.discovery.Devices())
-		changed, err := writeEnrichmentCSV(dir, rows)
-		if err != nil {
-			log.Printf("tenant-enrichment: write %s: %v", dir, err)
-			return
-		}
-		if changed {
-			// The mtime bump is the signal the Vector-side reload wrapper
-			// (F-10) keys off — log it so a reload has a visible cause here.
-			log.Printf("tenant-enrichment: wrote %d identity rows to %s/%s (changed — vector tiers will reload)", len(rows), dir, enrichmentFileName)
-		}
-	}
+	write := func() { s.writeTenantEnrichmentOnce(dir) }
 	go func() {
 		write()
 		t := time.NewTicker(interval)
