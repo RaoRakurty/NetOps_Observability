@@ -4706,6 +4706,12 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	if s.nmsResolver != nil {
 		s.nmsResolver.WriteMetrics(w)
 	}
+	if s.nms != nil {
+		// Connector health (nms/health.go): on THIS scrape, never the
+		// /api/v1/import push, so an api death makes the series go stale
+		// (NMSIngestSilent / NMSIntegrationDown read them).
+		s.nms.WriteMetrics(w)
+	}
 	if s.quarMetrics != nil {
 		s.quarMetrics.Write(w)
 	}

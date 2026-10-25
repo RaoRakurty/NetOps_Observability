@@ -40,6 +40,9 @@ func Specs() map[string]ConnectorSpec {
 			Webhook:       true, Poll: true,
 			Streams:     []string{"assurance_issues", "inventory", "events"},
 			DefaultPoll: 5 * time.Minute,
+			// unverified vendor limit: conservative default until a recorded
+			// controller confirms the real per-API throttle (a cycle is ~3 calls).
+			RatePerSec: 2,
 		},
 		"catalyst_9800": {
 			Vendor: "catalyst_9800", Product: "Cisco Catalyst 9800 WLC", SourceSystem: "catalyst_9800",
@@ -84,6 +87,11 @@ func Specs() map[string]ConnectorSpec {
 				{"alarms", "events", "inventory", "approute", "interfaces", "system", "counters", "certs", "control_connections", "bfd"},
 			},
 			DefaultPoll: 2 * time.Minute,
+			// unverified vendor limit: conservative default. A cycle fans out
+			// up to 2×vmanageMaxDevicesPerCycle per-device calls (bfd +
+			// control_connections), so 10/s keeps a 200-edge cycle near 40 s,
+			// inside the 120 s poll deadline.
+			RatePerSec: 10,
 		},
 		"ndfc": {
 			Vendor: "ndfc", Product: "Cisco Nexus Dashboard / NDFC", SourceSystem: "ndfc",
@@ -93,6 +101,7 @@ func Specs() map[string]ConnectorSpec {
 			Poll:          true,
 			Streams:       []string{"fabric_alarms", "switch_health", "interface_alarms", "deployments", "inventory"},
 			DefaultPoll:   5 * time.Minute,
+			RatePerSec:    5, // unverified vendor limit: conservative default
 		},
 		"prime": {
 			Vendor: "prime", Product: "Cisco Prime Infrastructure", SourceSystem: "prime",
@@ -112,6 +121,7 @@ func Specs() map[string]ConnectorSpec {
 			Poll:          true,
 			Streams:       []string{"alarms", "appliances", "interfaces", "tunnels", "events"},
 			DefaultPoll:   5 * time.Minute,
+			RatePerSec:    5, // unverified vendor limit: conservative default
 		},
 		"versa_concerto": {
 			Vendor: "versa_concerto", Product: "Versa Concerto", SourceSystem: "versa_concerto",
@@ -121,6 +131,7 @@ func Specs() map[string]ConnectorSpec {
 			Poll:          true,
 			Streams:       []string{"tenants", "sase", "policy", "events"},
 			DefaultPoll:   5 * time.Minute,
+			RatePerSec:    5, // unverified vendor limit: conservative default
 		},
 		"generic": {
 			Vendor: "generic", Product: "Generic REST/Webhook", SourceSystem: "generic",

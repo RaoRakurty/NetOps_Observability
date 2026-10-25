@@ -24,10 +24,16 @@ type nmsRuntime = nms.Runtime
 // newNMSRuntime builds the runtime over main's sinks. Dormant unless
 // FEATURE_NMS_INTEGRATIONS=true (main.go gates construction).
 func newNMSRuntime(store nms.ConfigStore) *nmsRuntime {
-	return nms.NewRuntime(store, nms.Sinks{
+	rt := nms.NewRuntime(store, nms.Sinks{
 		EmitMetrics:   nmsEmitMetrics,
 		ProduceEvents: nmsProduceEvents,
 	}, durationOr("NMS_BACKFILL", nms.DefaultBackfill))
+	// Worker pool + per-integration deadline (NMS-first T1): NMS_POLL_WORKERS
+	// is clamped to [1,16] (default 4); NMS_POLL_DEADLINE caps one cycle
+	// (default 120s; the effective deadline is min(interval, this)).
+	rt.SetPoolOptions(envInt("NMS_POLL_WORKERS", nms.DefaultPollWorkers),
+		durationOr("NMS_POLL_DEADLINE", nms.DefaultPollDeadline))
+	return rt
 }
 
 // nmsProduceEvents publishes controller events to netops.controller_events,

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"netops/backend/internal/vault"
 	"sort"
 	"strings"
@@ -51,9 +52,13 @@ type RunRecord struct {
 	RunID         string    `json:"runId"`
 	Started       time.Time `json:"started"`
 	Finished      time.Time `json:"finished"`
-	Status        string    `json:"status"` // ok | error
+	Status        string    `json:"status"` // ok | partial | error (busy: returned, never recorded)
 	Events        int64     `json:"events"`
 	Error         string    `json:"error,omitempty"`
+	// Streams is the per-stream outcome (migration 0064). A run is "partial"
+	// when some streams delivered and others did not — it counts as an error
+	// in the error rate and marks the connector unhealthy.
+	Streams []StreamResult `json:"streams,omitempty"`
 }
 
 // Health is the connector_health snapshot + recent runs.
@@ -597,12 +602,16 @@ INSERT INTO connector_checkpoints (tenant_id, integration_id, stream, last_event
 func (s *pgStore) Checkpoints() CheckpointStore { return pgNMSCheckpoints{db: s.db} }
 
 func (s *pgStore) RecordRun(ctx context.Context, rec RunRecord) error {
+	streamsJSON, err := encodeRunStreams(rec.Streams)
+	if err != nil {
+		return err
+	}
 	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `
-INSERT INTO connector_run_history (tenant_id, integration_id, run_id, started_at, finished_at, status, events, error)
- VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+INSERT INTO connector_run_history (tenant_id, integration_id, run_id, started_at, finished_at, status, events, error, streams)
+ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
  ON CONFLICT (tenant_id, integration_id, run_id) DO NOTHING`,
-			rec.Tenant, rec.IntegrationID, rec.RunID, rec.Started, rec.Finished, rec.Status, rec.Events, rec.Error); err != nil {
+			rec.Tenant, rec.IntegrationID, rec.RunID, rec.Started, rec.Finished, rec.Status, rec.Events, rec.Error, streamsJSON); err != nil {
 			return err
 		}
 		// Bound the history (reliability §9: no unbounded growth).
@@ -723,7 +732,7 @@ func (s *pgStore) Health(ctx context.Context, tenant string, cross bool, id stri
 		if updated != nil {
 			h.UpdatedAt = *updated
 		}
-		rows, err := tx.Query(ctx, `SELECT run_id, started_at, finished_at, status, events, error
+		rows, err := tx.Query(ctx, `SELECT run_id, started_at, finished_at, status, events, error, streams
 			FROM connector_run_history WHERE integration_id=$1 ORDER BY started_at DESC LIMIT 20`, id)
 		if err != nil {
 			return err
@@ -732,7 +741,11 @@ func (s *pgStore) Health(ctx context.Context, tenant string, cross bool, id stri
 		for rows.Next() {
 			var r RunRecord
 			var fin *time.Time
-			if err := rows.Scan(&r.RunID, &r.Started, &fin, &r.Status, &r.Events, &r.Error); err != nil {
+			var streams []byte
+			if err := rows.Scan(&r.RunID, &r.Started, &fin, &r.Status, &r.Events, &r.Error, &streams); err != nil {
+				return err
+			}
+			if r.Streams, err = decodeRunStreams(streams); err != nil {
 				return err
 			}
 			if fin != nil {
@@ -743,6 +756,35 @@ func (s *pgStore) Health(ctx context.Context, tenant string, cross bool, id stri
 		return rows.Err()
 	})
 	return h, found, err
+}
+
+// encodeRunStreams renders a run's stream results for the streams JSONB
+// column — never NULL (the column is NOT NULL DEFAULT '[]').
+func encodeRunStreams(streams []StreamResult) (string, error) {
+	if len(streams) == 0 {
+		return "[]", nil
+	}
+	b, err := json.Marshal(streams)
+	if err != nil {
+		return "", fmt.Errorf("encode run streams: %w", err)
+	}
+	return string(b), nil
+}
+
+// decodeRunStreams reads the streams column back. A row written before 0064
+// carries the default '[]'.
+func decodeRunStreams(raw []byte) ([]StreamResult, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var out []StreamResult
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("decode run streams: %w", err)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 // ── non-durable guard (F-76) ────────────────────────────────────────────────
