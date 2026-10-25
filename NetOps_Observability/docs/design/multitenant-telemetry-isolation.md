@@ -115,7 +115,7 @@ discovery. So the API **exports** the mapping and Vector **consumes** it:
  Go API (discovery, source of truth for Device.TenantID)
    │  every TENANT_ENRICHMENT_INTERVAL, atomically writes
    ▼
- data/enrichment/device_tenant.csv      (identity,tenant_id  — one row per name & per address)
+ data/enrichment/device_tenant.csv      (identity,tenant_id  — one row per device id, name & address)
    │  mounted read-only
    ├─────────────► vector-aggregator   enrichment_tables.device_tenant (file/csv)
    │                                    remap: .tenant_id = lookup(hostname|sampler_address) ?? ""

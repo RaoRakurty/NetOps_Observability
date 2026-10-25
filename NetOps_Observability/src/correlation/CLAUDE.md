@@ -62,7 +62,14 @@ VictoriaMetrics only (`collectors/metric_events.go:75-108`).
 - `debug_only` and `internal_self_probe` probes are persisted but never enter the
   window (M:1910-1920).
 - Tenant check: `verified_tenant` (M:660) refuses a claim that contradicts the registry;
-  "" becomes "global".
+  "" becomes "global". On the registry-anchored lanes (syslog, snmptrap, flows) an
+  identity the registry does not know is refused (`identity_unattributable`).
+  The registry (`device_tenant.csv`, `telemetry_enrichment.go`) has one row per
+  inventory device **id**, **name** and **address**. The id row matters: traps and
+  metrics carry the id, e.g. the SNMP scan id `vedge-20-1e95f00f`. Before
+  2026-10-25 the id row was missing and those traps were quarantined. An identity
+  claimed by two tenants is left out by the writer and dropped by the reader
+  (`_tenant_registry`).
   **[lead] The controller lane does NOT call `verified_tenant`; it trusts the tenant in
   the payload** (M:12796-12814).
 
