@@ -276,7 +276,7 @@ export default function TopBar({ health, user, onLogout, onChangePassword, onTwo
           <button className="user-btn" onClick={() => setMenuOpen((o) => !o)} aria-haspopup="menu" aria-expanded={menuOpen}>
             <span className="avatar" aria-hidden="true">{userLabel(user).slice(0, 1).toUpperCase()}</span>
             <span className="user-name">{userLabel(user)}</span>
-            <span style={{ opacity: 0.6, fontSize: 10 }} aria-hidden="true">▾</span>
+            <span style={{ opacity: 0.6, fontSize: 12.5 }} aria-hidden="true">▾</span>
           </button>
           {menuOpen && (
             <div className="menu-pop">

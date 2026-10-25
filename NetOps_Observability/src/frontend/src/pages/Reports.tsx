@@ -586,8 +586,8 @@ function ReportWizard({ contactPoints, onCancel, onDone }: { contactPoints: Cont
       </div>
       <div style={{ display: "flex", gap: 14, margin: "14px 0 18px", flexWrap: "wrap" }}>
         {STEPS.map((s, i) => (
-          <div key={s} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: i === step ? "var(--accent)" : "var(--muted)", fontWeight: i === step ? 700 : 400 }}>
-            <span style={{ width: 20, height: 20, borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", background: i < step ? "var(--good)" : i === step ? "var(--accent)" : "var(--panel-border)", color: "#fff", fontSize: 11 }}>{i < step ? "✓" : i + 1}</span>
+          <div key={s} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: i === step ? "var(--accent)" : "var(--muted)", fontWeight: i === step ? 700 : 400 }}>
+            <span style={{ width: 20, height: 20, borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", background: i < step ? "var(--good)" : i === step ? "var(--accent)" : "var(--panel-border)", color: "#fff", fontSize: 12.5 }}>{i < step ? "✓" : i + 1}</span>
             {s}
           </div>
         ))}
@@ -669,7 +669,7 @@ function ReportWizard({ contactPoints, onCancel, onDone }: { contactPoints: Cont
             <label className="form-label" htmlFor="rpt-wiz-name">Report name<span className="form-req">*</span></label>
             <input id="rpt-wiz-name" className="form-input" placeholder="e.g. Weekly exec health" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
-          <div className="report-wiz-q" style={{ fontWeight: 400, color: "var(--muted)", fontSize: 12 }}>
+          <div className="report-wiz-q" style={{ fontWeight: 400, color: "var(--muted)", fontSize: 12.5 }}>
             {nlSchedule(draft)} · {(draft.formats ?? ["html"]).join(", ")} · {(draft.contact_points ?? []).length} recipient group(s)
           </div>
           <div style={{ height: 480, border: "1px solid var(--panel-border)", borderRadius: 10, background: "#fff", overflow: "hidden" }}>

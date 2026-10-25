@@ -172,7 +172,7 @@ export default function DeviceTerminal({ device, onClose }: { device: Device; on
         <div style={header}>
           <div>
             <strong>SSH · {device.name || device.id}</strong>
-            <span style={{ color: "var(--muted)", marginLeft: 8, fontSize: 12 }}>{device.address}</span>
+            <span style={{ color: "var(--muted)", marginLeft: 8, fontSize: 12.5 }}>{device.address}</span>
           </div>
           <button className="btn" onClick={onClose}>Close</button>
         </div>
@@ -181,7 +181,7 @@ export default function DeviceTerminal({ device, onClose }: { device: Device; on
           <div
             style={{
               padding: "6px 10px",
-              fontSize: 12,
+              fontSize: 12.5,
               borderRadius: 6,
               margin: "0 0 8px",
               background: banner.kind === "error" ? "var(--bad)" : "var(--surface-2)",

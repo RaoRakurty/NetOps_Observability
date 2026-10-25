@@ -16,7 +16,7 @@ import { operatorError } from "../lib/errors";
 // #45 §11) with a "View logs" pivot into the bottom drawer; v1 falls back to an
 // inline detail card.
 
-const mono: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 12 };
+const mono: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 12.5 };
 
 export default function Findings() {
   const [items, setItems] = useState<Finding[]>([]);
@@ -159,7 +159,7 @@ export default function Findings() {
 // device) pivots into the device's logs in the bottom drawer.
 export function FindingDetailBody({ finding: f, onViewLogs }: { finding: Finding; onViewLogs?: () => void }) {
   const row = (k: string, v: React.ReactNode) => (
-    <div style={{ display: "flex", gap: 8, fontSize: 12, padding: "2px 0" }}>
+    <div style={{ display: "flex", gap: 8, fontSize: 12.5, padding: "2px 0" }}>
       <span style={{ color: "var(--muted)", minWidth: 84 }}>{k}</span>
       <span>{v}</span>
     </div>
@@ -170,12 +170,12 @@ export function FindingDetailBody({ finding: f, onViewLogs }: { finding: Finding
         <span className={`badge ${severityClass(f.severity)}`}>{f.severity}</span>
         <span className="badge">{f.kind}</span>
         {typeof f.score === "number" && (
-          <span style={{ fontSize: 12, color: "var(--muted)" }}>score {f.score.toFixed(1)}</span>
+          <span style={{ fontSize: 12.5, color: "var(--muted)" }}>score {f.score.toFixed(1)}</span>
         )}
       </div>
       <div style={{ fontSize: 13, fontWeight: 500 }}>{f.summary}</div>
       {f.description && (
-        <p style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "pre-wrap", margin: 0 }}>{f.description}</p>
+        <p style={{ fontSize: 12.5, color: "var(--muted)", whiteSpace: "pre-wrap", margin: 0 }}>{f.description}</p>
       )}
       <div>
         {row("Time", <span style={mono}>{fmtDateTime(f.ts)}</span>)}

@@ -363,11 +363,11 @@ export default function CloudLogs() {
 // exact document, pretty-printed, one click from the lane.
 export function CloudRowDetail({ row }: { row: CloudRow }) {
   const lbl = (s: string) => (
-    <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>{s}</div>
+    <div style={{ fontSize: 12.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>{s}</div>
   );
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12 }}>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12.5 }}>
         <span><span style={{ color: "var(--muted)" }}>Provider </span>{providerShortLabel(row.provider) || row.provider || "—"}</span>
         <span><span style={{ color: "var(--muted)" }}>Account </span>{row.account || "—"}</span>
         <span><span style={{ color: "var(--muted)" }}>Resource </span>{row.resource || "—"}</span>
@@ -379,7 +379,7 @@ export function CloudRowDetail({ row }: { row: CloudRow }) {
       </div>
       <div>
         {lbl("Record")}
-        <pre style={{ margin: 0, padding: 8, background: "var(--surface-2, rgba(127,127,127,.08))", borderRadius: 6, maxHeight: 320, overflow: "auto", fontSize: 12 }}>
+        <pre style={{ margin: 0, padding: 8, background: "var(--surface-2, rgba(127,127,127,.08))", borderRadius: 6, maxHeight: 320, overflow: "auto", fontSize: 12.5 }}>
           {JSON.stringify(row.raw, null, 2)}
         </pre>
       </div>

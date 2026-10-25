@@ -18,8 +18,8 @@ const taStyle: React.CSSProperties = {
   borderRadius: 8, color: "var(--fg)", font: "inherit", fontSize: 13, padding: "8px 10px",
   resize: "vertical", width: "100%",
 };
-const labelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 500, color: "var(--muted)" };
-const hintStyle: React.CSSProperties = { fontSize: 11.5, color: "var(--muted)" };
+const labelStyle: React.CSSProperties = { fontSize: 12.5, fontWeight: 500, color: "var(--muted)" };
+const hintStyle: React.CSSProperties = { fontSize: 12.5, color: "var(--muted)" };
 
 type Kind = "dns" | "ntp";
 
@@ -36,7 +36,7 @@ export default function SystemNetworkCards() {
       </div>
       <div style={{ flex: 1 }}>
         <div style={{ fontWeight: 600 }}>{title}</div>
-        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+        <div style={{ fontSize: 12.5, color: "var(--muted)" }}>
           {desc} {count > 0 && <span style={{ color: "var(--fg)" }}>· {count} configured</span>}
         </div>
       </div>
