@@ -86,6 +86,9 @@ func merakiNormType(typeID, typeText string) string {
 type MerakiWebhook struct{}
 
 func (MerakiWebhook) Verify(r *http.Request, body, secret []byte) error {
+	if len(secret) == 0 {
+		return ErrSignatureInvalid // "" == "" must never authenticate
+	}
 	// HMAC header form (X-Cisco-Meraki-Signature), if present.
 	if sig := r.Header.Get("X-Cisco-Meraki-Signature"); sig != "" {
 		mac := hmac.New(sha256.New, secret)

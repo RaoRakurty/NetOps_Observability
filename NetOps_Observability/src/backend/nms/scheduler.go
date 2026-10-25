@@ -326,6 +326,9 @@ func (rt *Runtime) sinkRouted(ctx context.Context, ic Integration, routed Routed
 		events = append(events,
 			SDWANStateChangeEvents(ic.Tenant, ic.ID, ic.Vendor, routed.StateChanges)...)
 	}
+	if n := canonicalSeverities(events); n > 0 {
+		applog.Warn("nms", "non-canonical event severity mapped (connector bug)", map[string]any{"integration": ic.ID, "vendor": ic.Vendor, "events": n})
+	}
 	if len(events) > 0 {
 		if rt.sinks.ProduceEvents == nil {
 			applog.Warn("nms", "event sink not wired; events dropped", map[string]any{"integration": ic.ID})

@@ -47,9 +47,9 @@ func SDWANStateChangeEvents(tenant, integrationID, sourceSystem string, changes 
 		severity, role := "info", RoleSupporting // a recovery supports; it is not a fault
 		switch {
 		case sdwanBad(ch.To):
-			severity, role = "major", RoleDiscriminating
+			severity, role = "high", RoleDiscriminating // canonical (model.go); "major" read as WARN and never opened
 		case ch.To == "yellow" || ch.To == "warning":
-			severity, role = "minor", RoleDiscriminating
+			severity, role = "warn", RoleDiscriminating
 		}
 		ev := ControllerEvent{
 			TenantID: tenant, IntegrationID: integrationID, SourceSystem: sourceSystem,
