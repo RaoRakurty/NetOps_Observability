@@ -386,10 +386,10 @@ drill_os() {
   local t_end; t_end=$(date +%s); RTO_OS=$((t_end - t_start))
   # 5. CONTENT assertions.
   local doc; doc=$(docker exec "$scratch" curl -s "http://localhost:9200/drill-canary/_doc/$DRILL_ID" 2>/dev/null)
-  echo "$doc" | grep -q CORRELIX_RESTORE_OK \
+  grep -q CORRELIX_RESTORE_OK <<<"$doc" \
     && assert ok "os: canary magic survived snapshot→restore" \
     || assert fail "os: canary magic absent after restore"
-  echo "$doc" | grep -q "$canary_ts" \
+  grep -q "$canary_ts" <<<"$doc" \
     && assert ok "os: canary timestamp intact (RPO: exact)" \
     || assert fail "os: canary timestamp mismatch"
   log "  OpenSearch RTO (snapshot+restore): ${RTO_OS}s"

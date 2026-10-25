@@ -91,7 +91,7 @@ if [ -n "$EVIDENCE" ]; then
   # The TLS phase B recreates postgres, so these lines are in the NEW
   # container's log only if its data directory really was left unclean.
   pg_log=$(timeout 60 docker logs "$pg_id" 2>&1)
-  if ! printf '%s\n' "$pg_log" | grep -E -q \
+  if ! grep -E -q <<<"$pg_log" \
       'database system was interrupted|database system was not properly shut down|automatic recovery in progress'; then
     printf '%s\n' "$pg_log" | tail -n 40 >&2
     die "postgres log shows no crash recovery after the SIGKILL — the chaos did not reach the data directory"
@@ -132,7 +132,7 @@ read -r kc_status kc_restarting _ <<<"$kc_state"
 # created before Keycloak's first start (ffbb4055), so this line must never
 # have been printed — not even once, early.
 kc_log=$(timeout 60 docker logs "$kc_id" 2>&1)
-if printf '%s\n' "$kc_log" | grep -F -q "database \"${kc_db}\" does not exist"; then
+if grep -F -q "database \"${kc_db}\" does not exist" <<<"$kc_log"; then
   printf '%s\n' "$kc_log" | grep -F "does not exist" | tail -n 5 >&2
   die "keycloak started before its database existed (the .123 crash-loop symptom)"
 fi

@@ -428,7 +428,7 @@ fw_stack_port_entries() {
   {
     while IFS=$'\t' read -r svc spec _ovr; do
       if [ -z "$svc" ] || [ "$spec" = "-" ]; then continue; fi
-      if printf '%s\n' "$overridden" | grep -qx -- "$svc"; then continue; fi
+      if grep -qx -- "$svc" <<<"$overridden"; then continue; fi
       fw_emit_publish "$spec"
     done <<< "$base"
     while IFS=$'\t' read -r svc spec _ovr; do
@@ -511,7 +511,7 @@ fw_apply_ufw() { # "port/proto ..." (SSH + stack + wizard)
       return 0
     fi
   fi
-  if out=$(timeout 30 ufw status verbose 2>&1) && printf '%s\n' "$out" | grep -q '^Status: active'; then
+  if out=$(timeout 30 ufw status verbose 2>&1) && grep -q '^Status: active' <<<"$out"; then
     was_active=1
     prev_default=$(printf '%s\n' "$out" | sed -n 's/^Default: \([a-z]*\) (incoming).*/\1/p')
   fi
@@ -660,7 +660,7 @@ fw_main() {
       else need "firewalld is missing allow rules for:$missing"; fi
     elif ! command -v ufw >/dev/null 2>&1; then
       need "UFW not installed (would install it, default-deny incoming, allow: $list)"
-    elif ! out=$(timeout 30 ufw status 2>&1) || ! printf '%s\n' "$out" | grep -q '^Status: active'; then
+    elif ! out=$(timeout 30 ufw status 2>&1) || ! grep -q '^Status: active' <<<"$out"; then
       need "UFW not active (would default-deny incoming and allow: $list)"
     else
       missing=$(fw_ufw_missing "$list")

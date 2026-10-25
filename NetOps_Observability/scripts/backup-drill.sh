@@ -337,7 +337,7 @@ drill_pg() {
   local restored_rows=0 live_rows=0 dbs_ok=0
   while IFS= read -r db; do
     [ -z "$db" ] && continue
-    if ! printf '%s\n' "$restored_dbs" | grep -qx -- "$db"; then
+    if ! grep -qx -- "$db" <<<"$restored_dbs"; then
       missing_db=$((missing_db + 1))
       err "  database '$db' is in the live cluster and NOT in the restore"
       continue
