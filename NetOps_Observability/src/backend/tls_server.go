@@ -6,11 +6,15 @@ package backend
 import (
 	"bytes"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -43,6 +47,95 @@ type tlsServer struct {
 type tlsMetrics struct {
 	handshakeErrors atomic.Int64 // TLS handshake failures at the listener
 	identityRejects atomic.Int64 // mTLS peers with a trusted chain but disallowed identity
+	clients         clientCertSeen
+}
+
+// clientCertSeen records, per peer identity, the expiry of the client
+// certificate it last presented on an accepted mTLS handshake (tracker 351).
+// vmalert held a start-loaded client SVID until it expired and alert delivery
+// died for 3 days; every served-cert probe stayed green because the failing
+// certificate was a CLIENT one. Exporting what each caller presents makes that
+// class visible — and because rules.yaml is also evaluated by the in-api
+// engine, the alert does not depend on the vmalert→api hop it is watching.
+//
+// Bounded: identities are mesh SVIDs admitted by the allowlist (a handful),
+// capped at clientCertSeenMax with the least-recently-seen evicted, and an
+// identity not seen for clientCertSeenTTL is no longer exported (a retired
+// caller must not alert forever).
+type clientCertSeen struct {
+	mu   sync.Mutex
+	byID map[string]clientCertObs
+}
+
+type clientCertObs struct {
+	notAfter time.Time
+	seen     time.Time
+}
+
+const (
+	clientCertSeenMax = 64
+	clientCertSeenTTL = 8 * 24 * time.Hour // > one SVID TTL (168h): a daily caller is never dropped
+)
+
+// clientIdentity is the label for a verified client leaf: its SPIFFE URI SAN,
+// else its first DNS SAN, else its CN. Bounded to 128 bytes.
+func clientIdentity(leaf *x509.Certificate) string {
+	id := leaf.Subject.CommonName
+	if len(leaf.DNSNames) > 0 {
+		id = leaf.DNSNames[0]
+	}
+	for _, u := range leaf.URIs {
+		if u != nil && u.Scheme == "spiffe" {
+			id = u.String()
+			break
+		}
+	}
+	if id == "" {
+		id = "<none>"
+	}
+	if len(id) > 128 {
+		id = id[:128]
+	}
+	return id
+}
+
+func (c *clientCertSeen) observe(leaf *x509.Certificate, now time.Time) {
+	if leaf == nil {
+		return
+	}
+	id := clientIdentity(leaf)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.byID == nil {
+		c.byID = map[string]clientCertObs{}
+	}
+	if _, ok := c.byID[id]; !ok && len(c.byID) >= clientCertSeenMax {
+		oldest, oldestAt := "", now
+		for k, v := range c.byID {
+			if v.seen.Before(oldestAt) {
+				oldest, oldestAt = k, v.seen
+			}
+		}
+		delete(c.byID, oldest)
+	}
+	c.byID[id] = clientCertObs{notAfter: leaf.NotAfter, seen: now}
+}
+
+// snapshot returns identity → seconds until expiry for every identity seen
+// within the TTL, sorted by identity for a stable exposition.
+func (c *clientCertSeen) snapshot(now time.Time) [][2]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([][2]string, 0, len(c.byID))
+	for id, o := range c.byID {
+		if now.Sub(o.seen) > clientCertSeenTTL {
+			delete(c.byID, id)
+			continue
+		}
+		out = append(out, [2]string{id, strconv.FormatFloat(o.notAfter.Sub(now).Seconds(), 'f', 0, 64)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i][0] < out[j][0] })
+	return out
 }
 
 // handshakeErrLog is wired to http.Server.ErrorLog when serving TLS. net/http
@@ -114,6 +207,7 @@ func buildTLSServer() (*tlsServer, error) {
 				metrics.identityRejects.Add(1)
 				logError("tls", "mTLS identity rejected", map[string]any{"peer_identity": identity, "reason": rerr.Error()})
 			},
+			OnAccept: func(leaf *x509.Certificate) { metrics.clients.observe(leaf, time.Now()) },
 		}
 		if len(fedEntries) > 0 {
 			// Auto-register the local domain so enabling federation doesn't reject
@@ -171,6 +265,23 @@ func (t *tlsServer) writeTLSMetrics(w io.Writer) {
 		fmt.Fprintf(w, "# HELP netops_tls_identity_rejected_total mTLS peers with a trusted chain but a disallowed identity.\n")
 		fmt.Fprintf(w, "# TYPE netops_tls_identity_rejected_total counter\n")
 		fmt.Fprintf(w, "netops_tls_identity_rejected_total %d\n", t.metrics.identityRejects.Load())
+		t.writeClientCertMetrics(w)
+	}
+}
+
+// writeClientCertMetrics exports what each mTLS caller presented (tracker 351).
+func (t *tlsServer) writeClientCertMetrics(w io.Writer) {
+	if t == nil || t.metrics == nil {
+		return
+	}
+	seen := t.metrics.clients.snapshot(time.Now())
+	if len(seen) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "# HELP netops_tls_client_cert_expiry_seconds Seconds until the client certificate each mTLS caller last presented to the API expires.\n")
+	fmt.Fprintf(w, "# TYPE netops_tls_client_cert_expiry_seconds gauge\n")
+	for _, kv := range seen {
+		fmt.Fprintf(w, "netops_tls_client_cert_expiry_seconds{identity=%s} %s\n", promLabelValue(kv[0]), kv[1])
 	}
 }
 
@@ -266,4 +377,20 @@ func durationOr(env string, def time.Duration) time.Duration {
 		}
 	}
 	return def
+}
+
+// promLabelValue renders a certificate-derived identity as a quoted exposition
+// label value. The identity comes from a VERIFIED mesh leaf, but it is still
+// peer-supplied text (§3): anything outside the SPIFFE/DNS charset becomes '_',
+// so no escape sequence, quote or newline can reach the exposition.
+func promLabelValue(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+			c == ':' || c == '/' || c == '.' || c == '_' || c == '-' || c == '<' || c == '>'
+		if !ok {
+			b[i] = '_'
+		}
+	}
+	return `"` + string(b) + `"`
 }

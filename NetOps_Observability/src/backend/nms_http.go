@@ -506,6 +506,13 @@ func (s *server) handleNMSWebhook(w http.ResponseWriter, r *http.Request) {
 	if creds.Extra != nil {
 		secret = creds.Extra["webhook_secret"]
 	}
+	// Fail closed on an unconfigured secret (§3, 2026-10-24): Meraki compared
+	// the payload's sharedSecret to "" and generic HMAC'd with an empty key, so
+	// an integration saved without a secret accepted any body that knew the URL.
+	if strings.TrimSpace(secret) == "" {
+		http.Error(w, "webhook secret not configured for this integration", http.StatusUnauthorized)
+		return
+	}
 	if err := conn.Webhook().Verify(r, body, []byte(secret)); err != nil {
 		http.Error(w, "signature verification failed", http.StatusUnauthorized)
 		return

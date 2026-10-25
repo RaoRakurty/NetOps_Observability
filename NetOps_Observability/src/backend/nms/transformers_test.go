@@ -303,3 +303,17 @@ func TestVManageOMPStateKind(t *testing.T) {
 		t.Fatalf("omp state kind = %s", b.States[0].StateKind)
 	}
 }
+
+// An empty configured secret must never authenticate (2026-10-24): Meraki
+// compared sharedSecret "" to "" and generic HMAC'd with an empty key.
+func TestWebhookVerifyRefusesEmptySecret(t *testing.T) {
+	r := httptest.NewRequest("POST", "/webhook", nil)
+	if err := (MerakiWebhook{}).Verify(r, []byte(`{"sharedSecret":""}`), nil); err == nil {
+		t.Fatal("meraki: empty sharedSecret against an empty configured secret must fail")
+	}
+	body := []byte(`{"event_id":"1"}`)
+	r.Header.Set("X-Correlix-Signature", hmacHex(nil, body)) // anyone can compute this
+	if err := (GenericWebhook{}).Verify(r, body, nil); err == nil {
+		t.Fatal("generic: an HMAC under an empty key must fail")
+	}
+}

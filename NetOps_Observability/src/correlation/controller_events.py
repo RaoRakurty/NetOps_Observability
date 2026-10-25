@@ -62,7 +62,14 @@ _ENTITY_BY_KIND = {
     "wireless_retry_rate_high": EntityType.RADIO,
 }
 
-_SEVERITY = {"info": Severity.INFO, "warn": Severity.WARN, "high": Severity.HIGH, "crit": Severity.CRIT}
+_SEVERITY = {"info": Severity.INFO, "warn": Severity.WARN, "high": Severity.HIGH, "crit": Severity.CRIT,
+             # Vendor words a connector may leak past the Go canonicaliser
+             # (nms/normalize.go canonicalSeverities). Before 2026-10-24 vManage
+             # emitted these and "major" fell to WARN — below the open floor, so a
+             # polled outage could never open an incident on its own.
+             "critical": Severity.CRIT, "major": Severity.HIGH, "error": Severity.HIGH,
+             "minor": Severity.WARN, "medium": Severity.WARN, "warning": Severity.WARN,
+             "low": Severity.INFO}
 
 
 def _parse_ts(raw: object, fallback: datetime) -> datetime:
