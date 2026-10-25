@@ -4,6 +4,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ScopeDetail, getActiveScope, setActiveScope } from "../services/api";
 import Icon from "./Icon";
+import { PROVIDER_TENANT } from "../lib/tenantOwner";
+
+/** The cross-tenant view's name (tracker 365: it was "All organizations"). */
+export const ALL_TENANTS_LABEL = "All tenants";
 
 // ScopeSelector — the Global top-bar Org | Region | Tenant context control.
 //
@@ -11,7 +15,13 @@ import Icon from "./Icon";
 // which is bindings-derived and server-enforced). Choosing one narrows the whole
 // app to that tenant (the selection rides on every API call as X-Acting-Tenant;
 // the backend only ever narrows to a bound scope, never widens). The platform
-// owner additionally gets an "All organizations" (cross-tenant) option.
+// owner additionally gets an "All tenants" (cross-tenant) option.
+//
+// Tracker 365: "Provider" (the Global tenant, id "global") is an ordinary
+// entry and NARROWS to the platform's own data. It used to mean cross-tenant,
+// so an operator who picked Provider saw every tenant's integrations
+// unlabelled and deleted another tenant's. "All tenants" (no scope) is now the
+// only cross view, and the pages it opens label every row with its tenant.
 //
 // This is also the landing control: a single-tenant user sees a static chip; a
 // multi-scope user lands in their last-used scope (persisted) and switches here.
@@ -41,7 +51,7 @@ export default function ScopeSelector() {
 
   // Follow scope changes made elsewhere in the shell — TenantGate's pick
   // dispatches netops:scope (same-tab, no reload), other tabs arrive via
-  // storage. Without this the label freezes on "All organizations" while every
+  // storage. Without this the label freezes on "All tenants" while every
   // page renders one tenant's data. Same pattern as TenantGate's sync effect.
   useEffect(() => {
     const sync = () => setActive(getActiveScope());
@@ -75,8 +85,9 @@ export default function ScopeSelector() {
   // TenantGate — an admin must open one tenant at a time — so the top bar has to
   // show which door is open and offer a one-click switch. Without it the only
   // way back out of a tenant would be clearing local storage.
-  // "All organizations" here means the ESTATE view (tenant list, platform
-  // config), not a merged telemetry dump: picking it re-locks the data sections.
+  // "All tenants" here means the ESTATE view (tenant list, platform config,
+  // and the inventory pages that label each row by tenant), not a merged
+  // telemetry dump: picking it re-locks the telemetry sections.
   const switchable = scopes.length > 1 || allTenants;
 
   const pick = (tenantId: string) => {
@@ -90,7 +101,7 @@ export default function ScopeSelector() {
 
   const label = active && current
     ? `${current.org_name} · ${current.tenant_name}`
-    : allTenants ? "All organizations" : current ? current.tenant_name : (scopes[0]?.tenant_name ?? "—");
+    : allTenants ? ALL_TENANTS_LABEL : current ? current.tenant_name : (scopes[0]?.tenant_name ?? "—");
   const region = current?.region || (allTenants ? "all" : scopes[0]?.region);
 
   if (!switchable) {
@@ -131,8 +142,8 @@ export default function ScopeSelector() {
         <div className="scope-pop">
           {allTenants && (
             <button className={`scope-opt${!active ? " on" : ""}`} aria-current={!active ? "true" : undefined} onClick={() => pick("")}>
-              <span className="scope-opt-title">All organizations</span>
-              <span className="scope-opt-sub">Estate view — tenant data stays locked</span>
+              <span className="scope-opt-title">{ALL_TENANTS_LABEL}</span>
+              <span className="scope-opt-sub">Every tenant, each row labelled with its tenant</span>
             </button>
           )}
           {byOrg.map(([orgId, og]) => (
@@ -141,7 +152,9 @@ export default function ScopeSelector() {
               {og.tenants.map((t) => (
                 <button key={t.tenant_id} className={`scope-opt${active === t.tenant_id ? " on" : ""}`} aria-current={active === t.tenant_id ? "true" : undefined} onClick={() => pick(t.tenant_id)}>
                   <span className="scope-opt-title">{t.tenant_name}</span>
-                  <span className="scope-opt-sub">{t.region}</span>
+                  <span className="scope-opt-sub">
+                    {t.tenant_id === PROVIDER_TENANT ? "Your own (platform) data only" : t.region}
+                  </span>
                 </button>
               ))}
             </div>

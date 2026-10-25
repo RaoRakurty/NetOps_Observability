@@ -28,6 +28,7 @@ import (
 	"sync"
 
 	"netops/backend/internal/applog"
+	"netops/backend/internal/owner"
 )
 
 type Collection[T any] struct {
@@ -92,14 +93,16 @@ func (s *Collection[T]) flushLocked() error {
 }
 
 // All returns the records VISIBLE to the (tenant, cross) principal, sorted by id.
-// A non-cross caller sees ONLY its own tenant's records. There is deliberately no
-// unscoped variant — that absence is the isolation guarantee.
+// A non-cross caller sees ONLY its own OWNER's records — "" and "global" are one
+// owner, the platform (internal/owner; the Provider scope, tracker 365), and
+// real tenant ids never collapse. There is deliberately no unscoped variant —
+// that absence is the isolation guarantee.
 func (s *Collection[T]) All(tenant string, cross bool) []T {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]T, 0, len(s.items))
 	for _, r := range s.items {
-		if cross || s.tenantOf(r) == tenant {
+		if cross || owner.Same(s.tenantOf(r), tenant) {
 			out = append(out, r)
 		}
 	}
@@ -114,6 +117,9 @@ func (s *Collection[T]) Get(tenant string, cross bool, id string) (T, bool) {
 	defer s.mu.RUnlock()
 	if r, ok := s.items[s.key(tenant, id)]; ok {
 		return r, true
+	}
+	if k, ok := s.platformAliasKeyLocked(tenant, id); ok {
+		return s.items[k], true
 	}
 	if cross {
 		for _, r := range s.items { // platform owner: id may live under any tenant
@@ -150,6 +156,15 @@ func (s *Collection[T]) Delete(tenant string, cross bool, id string) bool {
 		}
 		return true
 	}
+	if k, ok := s.platformAliasKeyLocked(tenant, id); ok {
+		delete(s.items, k)
+		if err := s.flushLocked(); err != nil {
+			// F-30 class, as above: visible, never silent.
+			applog.Error("tenantkv", "delete not persisted; record resurrects on restart", map[string]any{
+				"path": s.path, "id": id, "error": err.Error()})
+		}
+		return true
+	}
 	if cross {
 		for k, r := range s.items {
 			if s.idOf(r) == id {
@@ -165,6 +180,23 @@ func (s *Collection[T]) Delete(tenant string, cross bool, id string) bool {
 		}
 	}
 	return false
+}
+
+// platformAliasKeyLocked finds id under the platform's OTHER spelling when the
+// caller is the platform ("" ≡ "global", internal/owner): a record keyed under
+// "" is the Provider scope's own, and vice versa. A real tenant id never takes
+// this path, so two tenants can never reach each other's records through it.
+// Caller holds s.mu.
+func (s *Collection[T]) platformAliasKeyLocked(tenant, id string) (string, bool) {
+	if !owner.IsPlatform(tenant) {
+		return "", false
+	}
+	for k, r := range s.items {
+		if s.idOf(r) == id && owner.IsPlatform(s.tenantOf(r)) {
+			return k, true
+		}
+	}
+	return "", false
 }
 
 // Count is the total record count across all tenants (admin/metrics use only).

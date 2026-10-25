@@ -17,7 +17,11 @@ package rbac
 // by HTTP handlers, the WebSocket hub, and background jobs. The 404-vs-403
 // existence-hiding rule stays with the HTTP adapter in the entrypoint.
 
-import "strings"
+import (
+	"strings"
+
+	"netops/backend/internal/owner"
+)
 
 // Action is the verb a principal is attempting on a resource.
 type Action string
@@ -101,12 +105,42 @@ func Authorize(p Principal, a Action, r Resource) Decision {
 		return Decision{false, "platform administrator required"}
 
 	// Everything tenant-scoped (devices, saved objects, users, api keys, snmp
-	// credentials, alerts): exact tenant match. Global/untagged is platform-owned.
+	// credentials, alerts): same-owner match.
+	//
+	// DATA resources (devices, saved objects, alerts) compare by OWNER: the
+	// platform realm has two spellings, "" (untagged — discovered infrastructure
+	// is the platform's until assigned) and "global" (what the Provider scope
+	// stamps), and they are one owner (internal/owner). Without this a platform
+	// owner who selects Provider (tenant "global", non-cross — tracker 365) would
+	// lose every untagged platform device.
+	//
+	// IDENTITY resources (users, api keys, SNMP credentials, and anything not
+	// listed here) stay STRICT: a "" user is the platform owner's own account
+	// class, and letting a Provider-tenant admin reach it by owner aliasing
+	// would be a privilege escalation.
 	default:
+		if isDataResource(r.Type) {
+			if owner.Same(r.Tenant, p.Tenant) {
+				return Decision{true, "same owner"}
+			}
+			return Decision{false, "cross-tenant access denied"}
+		}
 		if SameTenantStrict(r.Tenant, p.Tenant) {
 			return Decision{true, "same tenant"}
 		}
 		return Decision{false, "cross-tenant access denied"}
+	}
+}
+
+// isDataResource reports whether r is tenant DATA, compared by owner
+// ("" ≡ "global"), rather than identity, compared strictly. A closed allowlist:
+// a new resource type is strict until someone decides otherwise.
+func isDataResource(t ResourceType) bool {
+	switch t {
+	case ResDevice, ResSaved, ResAlert:
+		return true
+	default:
+		return false
 	}
 }
 

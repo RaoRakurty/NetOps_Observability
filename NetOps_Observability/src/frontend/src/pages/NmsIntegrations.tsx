@@ -14,6 +14,8 @@ import Wizard, { WizardStep } from "../components/Wizard";
 import { Modal, Skeleton, Stat, StatStrip } from "../components/ui";
 import { NmsDashArt, NmsMark } from "../components/NmsControllerArt";
 import AskIris from "../components/AskIris";
+import { useTenantView, type TenantView } from "../components/useTenantView";
+import { confirmText, foreignOwnerNote, tenantLabel } from "../lib/tenantOwner";
 
 // NMS Integrations (#95) — the vendor-controller gallery + guided setup +
 // integration manager. Controller INTELLIGENCE ingestion: each connected
@@ -150,6 +152,10 @@ export default function NmsIntegrations() {
   const [banner, setBanner] = useState("");
   const [setupVendor, setSetupVendor] = useState<NmsConnector | null>(null);
   const [manage, setManage] = useState<NmsIntegration | null>(null);
+  // Tracker 365: under "All tenants" every tenant's integrations share this
+  // list — each row names its tenant, and a delete or change of another
+  // tenant's integration says whose it is first.
+  const tenantView = useTenantView();
 
   const load = useCallback(async () => {
     try {
@@ -285,6 +291,7 @@ export default function NmsIntegrations() {
         health={health}
         onManage={setManage}
         onChanged={load}
+        tenantView={tenantView}
       />
 
       {setupVendor ? (
@@ -302,6 +309,7 @@ export default function NmsIntegrations() {
         <ManageModal
           integration={manage}
           health={health[manage.id]}
+          tenantView={tenantView}
           onClose={() => setManage(null)}
           onChanged={async () => {
             await load();
@@ -330,12 +338,14 @@ function PageHead() {
   );
 }
 
-function ConfiguredList({ integrations, health, onManage, onChanged }: {
+function ConfiguredList({ integrations, health, onManage, onChanged, tenantView }: {
   integrations?: NmsIntegration[];
   health: Record<string, NmsHealth>;
   onManage: (i: NmsIntegration) => void;
   onChanged: () => Promise<void> | void;
+  tenantView: TenantView;
 }) {
+  const showTenant = tenantView.allTenants;
   const [busyId, setBusyId] = useState("");
   if (integrations === undefined) return <Skeleton w="100%" h={80} />;
   if (integrations.length === 0) {
@@ -355,6 +365,7 @@ function ConfiguredList({ integrations, health, onManage, onChanged }: {
           <tr>
             <th></th>
             <th>Name</th>
+            {showTenant ? <th>Tenant</th> : null}
             <th>Vendor</th>
             <th>Base URL</th>
             <th>Interval</th>
@@ -374,6 +385,11 @@ function ConfiguredList({ integrations, health, onManage, onChanged }: {
                   <button className="linklike strong" onClick={() => onManage(it)}>{it.displayName || it.id}</button>
                   {!it.enabled ? <span className="nms-off-pill">paused</span> : null}
                 </td>
+                {showTenant ? (
+                  <td className="nms-tenant" data-testid="nms-tenant" style={{ fontSize: 14 }}>
+                    {tenantLabel(it.tenantId, tenantView.names)}
+                  </td>
+                ) : null}
                 <td>{it.product || it.vendor}</td>
                 <td className="mono nms-url">{it.baseUrl}</td>
                 <td className="mono">{it.pollIntervalS}s</td>
@@ -549,14 +565,23 @@ function SetupWizard({ connector, onClose, onDone }: {
   );
 }
 
-function ManageModal({ integration, health, onClose, onChanged, onDeleted }: {
+function ManageModal({ integration, health, tenantView, onClose, onChanged, onDeleted }: {
   integration: NmsIntegration;
   health?: NmsHealth;
+  tenantView: TenantView;
   onClose: () => void;
   onChanged: () => Promise<void>;
   onDeleted: () => Promise<void>;
 }) {
   const it = integration;
+  // Whose integration this is, said plainly when it is not the scope the
+  // operator is acting in (the All-tenants view acts as the Provider).
+  const foreign = foreignOwnerNote(it.tenantId, tenantView.activeScope, tenantView.names, "integration");
+  const confirmChange = (verb: string, consequence?: string) =>
+    confirm(confirmText({
+      verb, name: it.displayName || it.id, noun: "integration",
+      rowTenant: it.tenantId, activeScope: tenantView.activeScope, names: tenantView.names, consequence,
+    }));
   const [states, setStates] = useState<NmsStateRow[] | undefined>();
   const [h, setH] = useState<NmsHealth | undefined>(health);
   const [busy, setBusy] = useState("");
@@ -601,6 +626,11 @@ function ManageModal({ integration, health, onClose, onChanged, onDeleted }: {
       wide
     >
       <div className="nms-manage">
+        {foreign ? (
+          <div className="note warn nms-owner-note" role="note" data-testid="nms-owner-note" style={{ fontSize: 14 }}>
+            {foreign} Anything you change here changes it for {tenantLabel(it.tenantId, tenantView.names)}.
+          </div>
+        ) : null}
         <StatStrip>
           <Stat label="Status" value={h ? (h.healthy ? "healthy" : h.lastError ? "failing" : "idle") : "—"} tone={h?.healthy ? "good" : h?.lastError ? "bad" : ""} />
           <Stat label="Last success" value={relTime(h?.lastSuccess)} />
@@ -618,7 +648,12 @@ function ManageModal({ integration, health, onClose, onChanged, onDeleted }: {
           <button
             className="btn"
             disabled={!!busy}
-            onClick={() => act("toggle", () => api.updateNmsIntegration(it.id, { enabled: !it.enabled }))}
+            onClick={() => {
+              // Your own integration toggles at once; another tenant's asks first
+              // and names that tenant.
+              if (foreign && !confirmChange(it.enabled ? "Pause collection for" : "Resume collection for")) return;
+              void act("toggle", () => api.updateNmsIntegration(it.id, { enabled: !it.enabled }));
+            }}
           >
             {it.enabled ? "Pause collection" : "Resume collection"}
           </button>
@@ -627,7 +662,7 @@ function ManageModal({ integration, health, onClose, onChanged, onDeleted }: {
             className="btn danger"
             disabled={!!busy}
             onClick={async () => {
-              if (!confirm(`Delete "${it.displayName || it.id}"? Checkpoints, health and state history go with it.`)) return;
+              if (!confirmChange("Delete", "Checkpoints, health and state history go with it.")) return;
               await api.deleteNmsIntegration(it.id);
               await onDeleted();
             }}

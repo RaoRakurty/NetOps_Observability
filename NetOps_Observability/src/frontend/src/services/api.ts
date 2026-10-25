@@ -43,6 +43,8 @@ export type Device = {
   labels?: Record<string, string>;
   source: string;
   last_seen: string;
+  /** Owning tenant. Absent / "" / "global" = the Provider (platform) — tracker 365. */
+  tenant_id?: string;
   /**
    * Correlix COLLECTS from this device: it has an address and is within the
    * licence limit, first found first (owner decision 2026-10-03). There is no
@@ -9590,6 +9592,8 @@ export type NmsConnector = {
 
 export type NmsIntegration = {
   id: string;
+  /** Owning tenant ("global" = the Provider) — labels the All-tenants view (tracker 365). */
+  tenantId?: string;
   vendor: string;
   product?: string;
   displayName: string;

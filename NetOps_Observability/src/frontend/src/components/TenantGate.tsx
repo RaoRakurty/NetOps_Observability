@@ -32,6 +32,13 @@ import AskIris from "./AskIris";
 // Deliberately NOT an "All tenants" escape hatch on telemetry: an aggregate view
 // is a real feature, but it must be a purpose-built cross-tenant rollup (counts
 // and health per tenant), not a merged row dump. Merging is what we are fixing.
+//
+// The one exception (owner intent, tracker 365, 2026-10-25): the INVENTORY
+// pages listed in ALL_TENANTS_LEAVES open under "All tenants" because each
+// of their rows carries a Tenant column, and a change to another tenant's row
+// names that tenant before it happens. That is the explicit, labelled
+// All-tenants view — not a merged dump. Adding a leaf here REQUIRES that page
+// to label its rows (see components/tenantColumn.tsx, lib/tenantOwner.ts).
 
 /** Sections that describe the PLATFORM or the tenant estate, not one tenant's
  *  telemetry. Everything not listed here is treated as tenant data and gated —
@@ -43,6 +50,15 @@ const PLATFORM_SECTIONS = new Set(["admin", "copilot", "platform"]);
 
 export function isTenantScopedSection(sectionId: string): boolean {
   return !PLATFORM_SECTIONS.has(sectionId);
+}
+
+/** "section/leaf" pages that open in the labelled All-tenants view (tracker
+ *  365). Each one MUST show a Tenant column there. */
+export const ALL_TENANTS_LEAVES = new Set(["infrastructure/devices", "infrastructure/nms"]);
+
+/** Whether this page opens for a cross-tenant admin with no tenant chosen. */
+export function opensInAllTenantsView(sectionId: string, leafId?: string): boolean {
+  return !isTenantScopedSection(sectionId) || (!!leafId && ALL_TENANTS_LEAVES.has(`${sectionId}/${leafId}`));
 }
 
 const RECENT_KEY = "netops.recentTenants";
@@ -72,10 +88,12 @@ type Props = {
   sectionId: string;
   /** Human label for the section, used in the gate copy. */
   sectionLabel: string;
+  /** Active leaf id within the section (e.g. "devices"), for ALL_TENANTS_LEAVES. */
+  leafId?: string;
   children: React.ReactNode;
 };
 
-export default function TenantGate({ sectionId, sectionLabel, children }: Props) {
+export default function TenantGate({ sectionId, sectionLabel, leafId, children }: Props) {
   const [scopes, setScopes] = useState<ScopeDetail[] | null>(null);
   const [crossTenant, setCrossTenant] = useState(false);
   const [active, setActive] = useState<string>(getActiveScope());
@@ -151,7 +169,7 @@ export default function TenantGate({ sectionId, sectionLabel, children }: Props)
   // Still resolving scopes — render nothing rather than flashing the gate at a
   // single-tenant user who should never see it.
   if (scopes === null) return null;
-  if (!crossTenant || active || !isTenantScopedSection(sectionId)) return <>{children}</>;
+  if (!crossTenant || active || opensInAllTenantsView(sectionId, leafId)) return <>{children}</>;
 
   return (
     <div className="tenant-gate" role="region" aria-label={`Select a tenant to view ${sectionLabel}`}>

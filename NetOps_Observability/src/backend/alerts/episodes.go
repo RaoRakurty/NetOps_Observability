@@ -36,11 +36,11 @@ import (
 	"fmt"
 	"io/fs"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"netops/backend/internal/applog"
+	"netops/backend/internal/owner"
 	"netops/backend/internal/platformdb"
 )
 
@@ -115,19 +115,21 @@ func episodeKey(tenant, resource, signal, state string) string {
 	return tenant + "\x1f" + resource + "\x1f" + signal + "\x1f" + state
 }
 
-// sameTenant mirrors main's sameTenantStrict rule for an already-scoped
-// principal (case/space-insensitive exact match; duplicated at the boundary
-// per the no-utils rule — the cross-tenant short-circuit stays with the caller).
 // episodeVisible is the scoped-read rule: the principal's OWN episodes only.
 // A device-less episode nothing else owns is the platform's (tenant "") and is
-// read on the cross-tenant path alone — it was once served to every tenant
-// (P1, 2026-10-18), mirroring the same hole in the /api/alerts rule.
+// read on the cross-tenant path and in the Provider scope ("global") alone — it
+// was once served to every tenant (P1, 2026-10-18), mirroring the same hole in
+// the /api/alerts rule.
 func episodeVisible(ep Episode, tenant string) bool {
 	return sameTenant(ep.TenantID, tenant)
 }
 
+// sameTenant is the owner comparison for an already-scoped principal
+// (internal/owner: case/space-insensitive, and "" ≡ "global" — the platform's
+// two spellings are one owner, tracker 365). The cross-tenant short-circuit
+// stays with the caller.
 func sameTenant(resourceTenant, principalTenant string) bool {
-	return strings.EqualFold(strings.TrimSpace(resourceTenant), strings.TrimSpace(principalTenant))
+	return owner.Same(resourceTenant, principalTenant)
 }
 
 // episodeID mints a random 8-byte hex id (main's randHex, duplicated).

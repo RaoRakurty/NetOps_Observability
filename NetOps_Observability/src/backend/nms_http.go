@@ -50,7 +50,12 @@ type nmsIntegrationInput struct {
 // nmsIntegrationPublic is the API projection — config + cred field names, never values.
 func (s *server) nmsIntegrationPublic(ctx context.Context, c nms.Integration) map[string]any {
 	out := map[string]any{
-		"id":            c.ID,
+		"id": c.ID,
+		// The owning tenant, so the All-tenants view can label every row and a
+		// delete/edit dialog can name whose integration it is (tracker 365: an
+		// unlabelled cross-tenant list cost a tenant its vManage integration).
+		// A scoped caller only ever lists its own, so this discloses nothing.
+		"tenantId":      c.Tenant,
 		"vendor":        c.Vendor,
 		"displayName":   c.DisplayName,
 		"enabled":       c.Enabled,
