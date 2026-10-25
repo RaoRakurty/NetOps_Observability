@@ -9,6 +9,16 @@ The project source lives under `NetOps_Observability/` (a nested dir of the same
 name). It has its own `README.md` and `docs/`; read those for depth, this file
 is the orientation map and the build/test cheat-sheet.
 
+**The original purpose is correlation / RCA (owner, 2026-10-24).** Every feature —
+connector, UI, ops fix, infra — is judged by what it gives the correlation engine
+(signals, entities, topology, contrast, timing, ownership) and which RCA outcome it
+improves. The engine's design is default knowledge, not something to rediscover:
+**`NetOps_Observability/src/correlation/CLAUDE.md` is its verified mental model —
+read it before designing, reviewing or approving anything that touches evidence,
+topology, identity or RCA.** Frame engine changes as a change to one named stage;
+never propose as new what the engine already does (e.g. it already ranks competing
+hypotheses: `scoring.py`).
+
 **Current work state = `docs/TRACKER.md` (open items only) + `docs/audit/INVARIANTS.md`
 (what is PROVEN vs merely built).** Anything under `docs/archive/` is frozen
 history — **never read it to decide what is open, shipped, or next**, only to

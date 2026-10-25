@@ -1162,3 +1162,15 @@ def test_a_release_of_only_git_retained_source_is_a_valid_record(
     assert sa.validate_index(arch.index, arch.index_path) == [], (
         "a release whose source is entirely retained in git must still validate")
     arch.save_index()
+
+
+def test_every_unretained_artifact_has_an_alternate_mirror():
+    """A component not retained in git is fetched on every CI run; with only its
+    pinned URL, one upstream outage turns the blocking OCI gate red on every PR
+    (2026-10-24: ftp.gnu.org unreachable from GitHub runners failed #86 on the
+    gettext tarball). The sha256 still decides; a mirror is only another host."""
+    with open(PINS, encoding="utf-8") as fh:
+        comps = json.load(fh)["components"]
+    lonely = [c["file"] for c in comps
+              if not c.get("retained_in_git") and not c.get("mirrors")]
+    assert not lonely, f"unretained artifacts with no alternate mirror: {lonely}"

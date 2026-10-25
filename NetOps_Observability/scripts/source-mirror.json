@@ -101,7 +101,13 @@
       "images": [
         "balabit/syslog-ng:4.7.1 (separate container, redistributed unmodified)"
       ],
-      "retained_in_git": ""
+      "retained_in_git": "",
+      "mirrors": [
+        {
+          "url": "https://distfiles.alpinelinux.org/distfiles/v3.20/syslog-ng-4.7.1.tar.gz",
+          "why": "Alpine's own distfiles mirror (v3.20) — the same release tarball. Fetched 2026-10-24 and it hashes to the pin byte-for-byte."
+        }
+      ]
     },
     {
       "name": "busybox",
@@ -368,7 +374,17 @@
         "netops-frontend (deployment/docker/Dockerfile.frontend)",
         "netops-nginx (deployment/docker/Dockerfile.nginx)"
       ],
-      "notes": "Serves BOTH apk packages built from this origin and shipped in the image: gettext-envsubst (GPL-3.0-or-later AND LGPL-2.1-or-later AND MIT) and libintl (LGPL-2.1-or-later)."
+      "notes": "Serves BOTH apk packages built from this origin and shipped in the image: gettext-envsubst (GPL-3.0-or-later AND LGPL-2.1-or-later AND MIT) and libintl (LGPL-2.1-or-later).",
+      "mirrors": [
+        {
+          "url": "https://distfiles.alpinelinux.org/distfiles/v3.21/gettext-0.22.5.tar.xz",
+          "why": "Alpine's own distfiles mirror — the tarball Alpine builds the apk from. Fetched 2026-10-24 and it hashes to the pin byte-for-byte."
+        },
+        {
+          "url": "https://mirrors.kernel.org/gnu/gettext/gettext-0.22.5.tar.xz",
+          "why": "kernel.org GNU mirror — same release tarball. Fetched 2026-10-24 and it hashes to the pin byte-for-byte."
+        }
+      ]
     },
     {
       "name": "gettext",
@@ -432,6 +448,16 @@
       "images": [
         "netops-frontend (deployment/docker/Dockerfile.frontend)",
         "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ],
+      "mirrors": [
+        {
+          "url": "https://distfiles.alpinelinux.org/distfiles/v3.21/libgcrypt-1.10.3.tar.bz2",
+          "why": "Alpine's own distfiles mirror — the tarball Alpine builds the apk from. Fetched 2026-10-24 and it hashes to the pin byte-for-byte."
+        },
+        {
+          "url": "https://www.mirrorservice.org/sites/ftp.gnupg.org/gcrypt/libgcrypt/libgcrypt-1.10.3.tar.bz2",
+          "why": "mirrorservice.org mirror of ftp.gnupg.org — same release tarball. Fetched 2026-10-24 and it hashes to the pin byte-for-byte."
+        }
       ]
     },
     {
@@ -496,6 +522,16 @@
       "images": [
         "netops-frontend (deployment/docker/Dockerfile.frontend)",
         "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ],
+      "mirrors": [
+        {
+          "url": "https://distfiles.alpinelinux.org/distfiles/v3.21/libgpg-error-1.51.tar.bz2",
+          "why": "Alpine's own distfiles mirror — the tarball Alpine builds the apk from. Fetched 2026-10-24 and it hashes to the pin byte-for-byte."
+        },
+        {
+          "url": "https://www.mirrorservice.org/sites/ftp.gnupg.org/gcrypt/libgpg-error/libgpg-error-1.51.tar.bz2",
+          "why": "mirrorservice.org mirror of ftp.gnupg.org — same release tarball. Fetched 2026-10-24 and it hashes to the pin byte-for-byte."
+        }
       ]
     },
     {
@@ -561,7 +597,17 @@
         "netops-frontend (deployment/docker/Dockerfile.frontend)",
         "netops-nginx (deployment/docker/Dockerfile.nginx)"
       ],
-      "notes": "Dual-licensed. Correlix retains the corresponding source regardless of which branch a recipient takes, because BOTH branches of this disjunction are copyleft."
+      "notes": "Dual-licensed. Correlix retains the corresponding source regardless of which branch a recipient takes, because BOTH branches of this disjunction are copyleft.",
+      "mirrors": [
+        {
+          "url": "https://distfiles.alpinelinux.org/distfiles/v3.21/libidn2-2.3.7.tar.gz",
+          "why": "Alpine's own distfiles mirror — the tarball Alpine builds the apk from. Fetched 2026-10-24 and it hashes to the pin byte-for-byte."
+        },
+        {
+          "url": "https://mirrors.kernel.org/gnu/libidn/libidn2-2.3.7.tar.gz",
+          "why": "kernel.org GNU mirror — same release tarball. Fetched 2026-10-24 and it hashes to the pin byte-for-byte."
+        }
+      ]
     },
     {
       "name": "libidn2",
@@ -625,6 +671,16 @@
       "images": [
         "netops-frontend (deployment/docker/Dockerfile.frontend)",
         "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ],
+      "mirrors": [
+        {
+          "url": "https://distfiles.alpinelinux.org/distfiles/v3.21/libunistring-1.2.tar.xz",
+          "why": "Alpine's own distfiles mirror — the tarball Alpine builds the apk from. Fetched 2026-10-24 and it hashes to the pin byte-for-byte."
+        },
+        {
+          "url": "https://mirrors.kernel.org/gnu/libunistring/libunistring-1.2.tar.xz",
+          "why": "kernel.org GNU mirror — same release tarball. Fetched 2026-10-24 and it hashes to the pin byte-for-byte."
+        }
       ]
     },
     {
@@ -892,7 +948,17 @@
       "images": [
         "netops-correlation (deployment/docker/Dockerfile.correlation)"
       ],
-      "notes": "Upstream release + Debian's packaging (patches, rules, control) + the signed .dsc that binds them; together these are the exact source Debian built libseccomp2 2.6.0-2 from. The 670 KB orig tarball is fetched per release from its pinned URL rather than retained in git; the two small packaging artifacts are retained."
+      "notes": "Upstream release + Debian's packaging (patches, rules, control) + the signed .dsc that binds them; together these are the exact source Debian built libseccomp2 2.6.0-2 from. The 670 KB orig tarball is fetched per release from its pinned URL rather than retained in git; the two small packaging artifacts are retained.",
+      "mirrors": [
+        {
+          "url": "https://snapshot.debian.org/archive/debian/20250201T000000Z/pool/main/libs/libseccomp/libseccomp_2.6.0.orig.tar.gz",
+          "why": "Debian's permanent snapshot archive of the same orig tarball. Fetched 2026-10-24 and it hashes to the pin byte-for-byte."
+        },
+        {
+          "url": "https://github.com/seccomp/libseccomp/releases/download/v2.6.0/libseccomp-2.6.0.tar.gz",
+          "why": "Upstream GitHub release asset; Debian's orig tarball is this file renamed. Fetched 2026-10-24 and it hashes to the pin byte-for-byte."
+        }
+      ]
     },
     {
       "name": "libseccomp",

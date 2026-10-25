@@ -138,3 +138,44 @@ def test_producer_kind_matches_a_catalog_clause():
     sig = controller_event_to_signal(ev, INGEST)
     clause_kinds = {k for t in builtin_catalog().enabled_templates() for c in t.requires for k in c.kinds()}
     assert sig.kind in clause_kinds, f"producer kind {sig.kind} matches no catalog clause"
+
+
+# --- severity contract (2026-10-24) -------------------------------------------
+# The Go connectors emit info|warn|high|crit. Until 2026-10-24 vManage leaked its
+# own words (critical|major|minor); "major" fell to WARN here, below the engine's
+# severity_open_floor="high", so a POLLED vManage outage (unreachable, BFD down,
+# control-connection loss) could never open an incident on its own.
+
+def test_vendor_severity_words_map_to_engine_severities():
+    for word, want in (("critical", Severity.CRIT), ("major", Severity.HIGH), ("error", Severity.HIGH),
+                       ("minor", Severity.WARN), ("medium", Severity.WARN), ("warning", Severity.WARN),
+                       ("low", Severity.INFO), ("high", Severity.HIGH), ("crit", Severity.CRIT)):
+        ev = _vmanage_bfd()
+        ev["severity"] = word
+        assert controller_event_to_signal(ev, INGEST).severity == want, word
+
+
+def test_lone_polled_vmanage_outage_opens_an_object():
+    """NMS-only deployment (owner decision 2026-10-24): a device vManage reports
+    unreachable must open an incident from that one witness."""
+    from catalog import builtin_catalog
+    from engine import run_window
+
+    for sev in ("high", "major"):  # what Go emits now, and the legacy alias
+        ev = _vmanage_bfd()
+        ev.update(normalized_event_type="controller_device_unreachable", tunnel_id="",
+                  severity=sev, event_id=f"uuid-{sev}")
+        s = controller_event_to_signal(ev, INGEST)
+        assert s is not None
+        objs = run_window([s], builtin_catalog(), ())
+        assert len(objs) == 1, f"a lone controller outage at severity {sev!r} must open an object"
+
+
+def test_warn_controller_event_alone_stays_an_episode():
+    """The floor still holds: a minor/warn controller event does not page alone."""
+    from catalog import builtin_catalog
+    from engine import run_window
+
+    ev = _vmanage_bfd()
+    ev.update(normalized_event_type="controller_device_unreachable", tunnel_id="", severity="minor")
+    assert run_window([controller_event_to_signal(ev, INGEST)], builtin_catalog(), ()) == []

@@ -87,7 +87,7 @@ Both belong to the S3 archive, and the threshold is an owner-owned field in a po
 cut line to make one CI failure go away is exactly the kind of quiet re-decision that file exists to
 prevent. So neither was committed here.
 
-What was done instead: `scripts/source-mirror.json` now lists an **alternate mirror** for each
+What was done instead: `scripts/source-mirror.json` lists **alternate mirrors** for every artifact not retained here — `tests/test_source_archive.py::test_every_unretained_artifact_has_an_alternate_mirror` fails if one is missing (until 2026-10-24 only busybox and musl had one, and an ftp.gnu.org outage turned the OCI gate red)
 (Alpine's own `distfiles.alpinelinux.org` — the tarball Alpine actually builds the apk from, verified
 2026-09-07 to hash to the existing pin byte-for-byte), and
 `scripts/source-archive.py materialise` tries **retained copy → mirror directory → pinned URL →
