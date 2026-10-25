@@ -11860,7 +11860,6 @@ class _AssignmentLogger(ConsumerRebalanceListener):
                 "replica count. Partition totals seen: %s",
                 CONSUMER_REBALANCES, CONSUMER_ZERO_ASSIGNMENTS,
                 dict(CONSUMER_PARTITION_TOTALS))
-        distinct = {tuple(p) for p in owned.values()}
         global COPARTITION_OK, COPARTITION_VIOLATIONS, COPARTITION_LAST_DETAIL
         # Only judge topics this member actually holds: with the range assignor
         # a member legitimately owns nothing on a topic it was not given, and
@@ -11871,12 +11870,15 @@ class _AssignmentLogger(ConsumerRebalanceListener):
             COPARTITION_VIOLATIONS += 1
             COPARTITION_LAST_DETAIL = "; ".join(
                 f"{t}={list(p)}" for t, p in sorted(held_sets.items()))[:400]
-        if len(distinct) > 1:
+        # The ERROR and the gauge judge the SAME sets. Judging the log on every
+        # owned topic, empty ones included, shouted BROKEN on each restart: an
+        # evidence topic subscribed after the first join holds [] for one
+        # rebalance while corr_copartition_ok read 1 (2026-10-24, lab).
+        if not COPARTITION_OK:
             log.error("CO-PARTITIONING BROKEN: this member owns different "
                       "partition sets per topic (%s) — topic partition counts "
                       "have diverged; re-run kafka-init with BUS_PARTITIONS "
-                      "and check `kafka-topics --describe`",
-                      {t: p for t, p in owned.items()})
+                      "and check `kafka-topics --describe`", held_sets)
         # Tracker 155 (completion): RELEASE. `CONSUMER_ASSIGNMENT` above is now
         # the new assignment, so this is the first moment that can tell a
         # partition that LEFT from one the eager rebalance revoked and handed

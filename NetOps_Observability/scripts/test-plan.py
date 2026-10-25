@@ -67,7 +67,7 @@ ARTIFACT_INPUTS = (
 # the LLM boundary, and the dependency/supply-chain surface (CLAUDE.md §3,
 # §3a, §6, §8, §15).
 HIGH_RISK = (
-    "src/backend/migrations/*", "src/backend/tlsconfig/*", "src/backend/internalca/*",
+    "src/backend/internal/platformdb/migrations/*", "src/backend/tlsconfig/*", "src/backend/internalca/*",
     "src/backend/sealing/*", "src/backend/*auth*", "src/backend/*tenant*",
     "src/backend/*rls*", "src/backend/*isolation*", "src/backend/*rbac*",
     "src/backend/*copilot*", "src/backend/ai/*", "src/backend/*iris*",
@@ -114,13 +114,34 @@ CI_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     # .go file, schema, trust material or the module graph also boots the stack.
     ("src/backend/*", ("backend",)),
     ("src/contracts/*", ("backend", "frontend")),
-    ("src/backend/migrations/*", (BOOT,)), ("src/backend/tlsconfig/*", (BOOT,)),
+    ("src/backend/internal/platformdb/migrations/*", (BOOT,)), ("src/backend/tlsconfig/*", (BOOT,)),
     ("src/backend/internalca/*", (BOOT,)), ("src/backend/sealing/*", (BOOT,)),
     ("src/backend/cmd/*", (BOOT,)), ("src/backend/go.mod", (BOOT,)),
     ("src/backend/go.sum", (BOOT,)), ("src/backend/vendor/*", (BOOT,)),
     # Correlation engine and the event catalogue it loads (producers.py).
     ("src/correlation/*", ("correlation",)), ("telemetry-catalog/*", ("correlation",)),
     ("src/correlation/requirements*.txt", (BOOT,)),
+    # Engine INPUTS (owner 2026-10-24: every change is judged by what it gives
+    # correlation). These produce the records or enrichment files the engine
+    # consumes, so a change to them can break correlation without touching
+    # src/correlation — run its suite on the PR, not first on main.
+    ("src/backend/nms/*", ("correlation",)),
+    ("src/backend/collectors/*_events.go", ("correlation",)),
+    ("src/backend/collectors/snmptrap.go", ("correlation",)),
+    ("src/backend/collectors/gnmi.go", ("correlation",)),
+    ("src/backend/*_enrichment.go", ("correlation",)),
+    ("src/backend/internal/bgpwatch/*", ("correlation",)),
+    ("src/backend/internal/igpmon/*", ("correlation",)),
+    ("src/backend/internal/secbus/*", ("correlation",)),
+    ("src/backend/internal/seclane/*", ("correlation",)),
+    ("src/backend/internal/dem/expbus/*", ("correlation",)),
+    ("src/backend/appid/*", ("correlation",)),
+    ("src/backend/pathgraph/*", ("correlation",)),
+    ("src/backend/verify_service.go", ("correlation",)),
+    ("src/contracts/*", ("correlation",)),
+    ("deployment/docker/vector/*", ("correlation",)),
+    ("deployment/docker/vector-router/*", ("correlation",)),
+    ("deployment/docker/syslog-ng/*", ("correlation",)),
     # Frontend; a dependency change can break the image the boot test builds.
     ("src/frontend/*", ("frontend",)), ("docs-portal/*", ("frontend",)),
     ("src/frontend/package*.json", (BOOT,)), ("docs-portal/package*.json", (BOOT,)),
@@ -134,6 +155,11 @@ CI_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("deployment/docker/Dockerfile.nginx", ("frontend",)),
     ("scripts/*", (BOOT,)),
 )
+
+
+def _needs_correlation(rel: str) -> bool:
+    """True when a CI rule selects the correlation suite for this path."""
+    return any("correlation" in groups and fnmatch.fnmatch(rel, pat) for pat, groups in CI_RULES)
 
 
 def _is_backend_root_go(rel: str) -> bool:
@@ -240,8 +266,8 @@ def classify(paths: list[str]) -> Plan:
             if "." in go_pkgs:
                 plan.local.append("(cd src/backend && go test -timeout 60m -run '<tests for the touched files>' .)")
                 plan.ci_only.append("root package full run (15-20 min) — locally too when the change alters shared root logic")
-        if any(r.startswith("src/correlation/") for r in rels):
-            plan.local.append("(cd src/correlation && python3 -m pytest -q)")
+        if any(_needs_correlation(r) for r in rels):
+            plan.local.append("(cd src/correlation && python3 -m pytest -q)   (the engine or one of its inputs changed)")
         if any(r.startswith("tests/") or (r.startswith("scripts/") and r.endswith(".py")) for r in rels):
             plan.local.append("python3 -m pytest -q tests/<the touched test files>")
         if any(r.endswith(".sh") for r in rels):
