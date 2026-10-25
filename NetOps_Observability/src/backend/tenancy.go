@@ -843,9 +843,10 @@ func alertVisibleTenantOnly(a models.Alert, tenant string, cross bool, ids map[s
 		// cross-tenant path above and the Provider scope itself see it (P1,
 		// 2026-10-18: a tenant was shown the platform's collector and pipeline
 		// alerts; tracker 365: Provider is the platform's own, non-cross scope).
-		return owner.IsPlatform(tenant)
+		// Exactly the Provider scope — an unbound "" caller is not the platform.
+		return strings.EqualFold(strings.TrimSpace(tenant), owner.Platform)
 	}
-	return owner.Same(alertOwner, tenant)
+	return owner.ScopeReads(tenant, alertOwner)
 }
 
 // alertVisibility is the alert-visibility decision RESOLVED for one principal:

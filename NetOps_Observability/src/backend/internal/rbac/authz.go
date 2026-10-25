@@ -107,12 +107,13 @@ func Authorize(p Principal, a Action, r Resource) Decision {
 	// Everything tenant-scoped (devices, saved objects, users, api keys, snmp
 	// credentials, alerts): same-owner match.
 	//
-	// DATA resources (devices, saved objects, alerts) compare by OWNER: the
+	// DATA resources (devices, saved objects, alerts) use owner.ScopeReads: the
 	// platform realm has two spellings, "" (untagged — discovered infrastructure
 	// is the platform's until assigned) and "global" (what the Provider scope
-	// stamps), and they are one owner (internal/owner). Without this a platform
-	// owner who selects Provider (tenant "global", non-cross — tracker 365) would
-	// lose every untagged platform device.
+	// stamps), and the Provider scope reads both. Without this a platform owner
+	// who selects Provider (tenant "global", non-cross — tracker 365) would lose
+	// every untagged platform device. It is DIRECTIONAL: an unbound principal
+	// with no tenant ("") never widens to the Provider's "global" rows.
 	//
 	// IDENTITY resources (users, api keys, SNMP credentials, and anything not
 	// listed here) stay STRICT: a "" user is the platform owner's own account
@@ -120,7 +121,7 @@ func Authorize(p Principal, a Action, r Resource) Decision {
 	// would be a privilege escalation.
 	default:
 		if isDataResource(r.Type) {
-			if owner.Same(r.Tenant, p.Tenant) {
+			if owner.ScopeReads(p.Tenant, r.Tenant) {
 				return Decision{true, "same owner"}
 			}
 			return Decision{false, "cross-tenant access denied"}

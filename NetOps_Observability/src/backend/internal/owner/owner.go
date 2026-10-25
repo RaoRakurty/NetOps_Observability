@@ -37,3 +37,22 @@ func IsPlatform(t string) bool { return Of(t) == Platform }
 
 // Same reports whether a and b are the same owner.
 func Same(a, b string) bool { return Of(a) == Of(b) }
+
+// ScopeReads is the DIRECTIONAL access rule for an already-scoped (non-cross)
+// principal: may a caller scoped to `scope` read a row owned by `row`?
+//
+// An exact owner match always may (case/space-insensitive). Beyond that, ONLY
+// the explicit Provider scope ("global") also reads the platform's untagged
+// ("") rows (tracker 365). The reverse is deliberately NOT granted: a
+// principal whose scope is "" is an unbound / unresolved caller, and widening
+// it to the Provider's "global" rows would turn a missing tenant into access.
+// This is the app-layer mirror of Postgres migration 0062 (platform_alias:
+// app.tenant_id = 'global' AND tenant_id = '').
+func ScopeReads(scope, row string) bool {
+	s := strings.ToLower(strings.TrimSpace(scope))
+	r := strings.ToLower(strings.TrimSpace(row))
+	if s == r {
+		return true
+	}
+	return s == Platform && r == ""
+}

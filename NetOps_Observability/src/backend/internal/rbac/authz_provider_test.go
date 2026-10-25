@@ -27,7 +27,10 @@ func TestAuthorizeProviderScopeOwnerAliasing(t *testing.T) {
 		{"provider views global device", provider, ActionView, Resource{ResDevice, "global"}, true},
 		{"provider deletes untagged saved", provider, ActionDelete, Resource{ResSaved, ""}, true},
 		{"provider views untagged alert", provider, ActionView, Resource{ResAlert, " GLOBAL "}, true},
-		{"blank principal views global device", blank, ActionView, Resource{ResDevice, "global"}, true},
+		// Directional: an unbound "" principal never widens to the Provider's rows.
+		{"blank principal views global device", blank, ActionView, Resource{ResDevice, "global"}, false},
+		{"blank principal views global saved", blank, ActionView, Resource{ResSaved, "global"}, false},
+		{"blank principal views untagged device", blank, ActionView, Resource{ResDevice, ""}, true},
 
 		// Data: a real tenant's rows are never the Provider's, nor vice versa.
 		{"provider views acme device", provider, ActionView, Resource{ResDevice, "acme"}, false},

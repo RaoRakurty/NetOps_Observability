@@ -37,8 +37,10 @@ func TestCollectionPlatformOwnerAliasing(t *testing.T) {
 	if got := ids(kv.All(Global, false)); got != "P-BLANK,P-GLOBAL,P-SHARED" {
 		t.Fatalf("All(global) = %s, want the platform's rows in both spellings only", got)
 	}
-	if got := ids(kv.All("", false)); got != "P-BLANK,P-GLOBAL,P-SHARED" {
-		t.Fatalf("All(\"\") = %s, want the same owner as global", got)
+	// Directional: an unbound "" caller sees only "" records, never the
+	// Provider's "global" ones.
+	if got := ids(kv.All("", false)); got != "P-BLANK,P-SHARED" {
+		t.Fatalf("All(\"\") = %s, want only the untagged records", got)
 	}
 	if got := ids(kv.All("t_acme", false)); got != "ACME,ACME-SHARED" {
 		t.Fatalf("All(t_acme) = %s, want own only", got)
@@ -46,8 +48,11 @@ func TestCollectionPlatformOwnerAliasing(t *testing.T) {
 	if r, ok := kv.Get(Global, false, "blank"); !ok || r.Val != "P-BLANK" {
 		t.Fatalf("Get(global, blank) = %+v %v, want the '' record", r, ok)
 	}
-	if r, ok := kv.Get("", false, "glob"); !ok || r.Val != "P-GLOBAL" {
-		t.Fatalf("Get('', glob) = %+v %v, want the global record", r, ok)
+	if _, ok := kv.Get("", false, "glob"); ok {
+		t.Fatal("Get('', glob) must not widen an unbound caller into the Provider's record")
+	}
+	if kv.Delete("", false, "glob") {
+		t.Fatal("Delete('', glob) must not delete the Provider's record")
 	}
 	if r, ok := kv.Get(Global, false, "shared"); !ok || r.Val != "P-SHARED" {
 		t.Fatalf("Get(global, shared) = %+v %v, want the platform's, never t_acme's", r, ok)

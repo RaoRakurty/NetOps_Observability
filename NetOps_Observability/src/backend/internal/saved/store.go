@@ -216,13 +216,14 @@ func (s *Store) Delete(id string) error {
 
 // randID returns a 16-byte hex identifier (stdlib crypto/rand).
 // sameTenant mirrors the integrator's saved-object tenancy rule (rbac ResSaved):
-// cross sees all; a scoped caller sees its own owner's objects, where "" and
-// "global" are one owner (internal/owner — the Provider scope, tracker 365).
+// cross sees all; a scoped caller sees its own objects, and the Provider scope
+// ("global") also the platform's untagged "" ones (owner.ScopeReads — tracker
+// 365; directional, an unbound "" caller never reaches "global").
 func sameTenant(resourceTenant, tenant string, cross bool) bool {
 	if cross {
 		return true
 	}
-	return owner.Same(resourceTenant, tenant)
+	return owner.ScopeReads(tenant, resourceTenant)
 }
 
 func randID() string {

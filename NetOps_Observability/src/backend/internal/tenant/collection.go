@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 
 	"netops/backend/internal/applog"
@@ -93,16 +94,17 @@ func (s *Collection[T]) flushLocked() error {
 }
 
 // All returns the records VISIBLE to the (tenant, cross) principal, sorted by id.
-// A non-cross caller sees ONLY its own OWNER's records — "" and "global" are one
-// owner, the platform (internal/owner; the Provider scope, tracker 365), and
-// real tenant ids never collapse. There is deliberately no unscoped variant —
+// A non-cross caller sees ONLY its own records (owner.ScopeReads): the Provider
+// scope ("global") also reads the platform's untagged "" records (tracker 365),
+// an unbound "" caller never widens to "global", and real tenant ids never
+// collapse. There is deliberately no unscoped variant —
 // that absence is the isolation guarantee.
 func (s *Collection[T]) All(tenant string, cross bool) []T {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]T, 0, len(s.items))
 	for _, r := range s.items {
-		if cross || owner.Same(s.tenantOf(r), tenant) {
+		if cross || owner.ScopeReads(tenant, s.tenantOf(r)) {
 			out = append(out, r)
 		}
 	}
@@ -182,17 +184,17 @@ func (s *Collection[T]) Delete(tenant string, cross bool, id string) bool {
 	return false
 }
 
-// platformAliasKeyLocked finds id under the platform's OTHER spelling when the
-// caller is the platform ("" ≡ "global", internal/owner): a record keyed under
-// "" is the Provider scope's own, and vice versa. A real tenant id never takes
-// this path, so two tenants can never reach each other's records through it.
-// Caller holds s.mu.
+// platformAliasKeyLocked finds id among the platform's untagged ("") records
+// when the caller is the Provider scope ("global") — owner.ScopeReads, the
+// directional rule: Provider reads both platform spellings, an unbound ""
+// caller never reaches "global". A real tenant id never takes this path, so
+// two tenants can never reach each other's records through it. Caller holds s.mu.
 func (s *Collection[T]) platformAliasKeyLocked(tenant, id string) (string, bool) {
-	if !owner.IsPlatform(tenant) {
+	if strings.ToLower(strings.TrimSpace(tenant)) != owner.Platform {
 		return "", false
 	}
 	for k, r := range s.items {
-		if s.idOf(r) == id && owner.IsPlatform(s.tenantOf(r)) {
+		if s.idOf(r) == id && owner.ScopeReads(tenant, s.tenantOf(r)) {
 			return k, true
 		}
 	}

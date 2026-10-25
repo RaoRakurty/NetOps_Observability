@@ -124,12 +124,12 @@ func episodeVisible(ep Episode, tenant string) bool {
 	return sameTenant(ep.TenantID, tenant)
 }
 
-// sameTenant is the owner comparison for an already-scoped principal
-// (internal/owner: case/space-insensitive, and "" ≡ "global" — the platform's
-// two spellings are one owner, tracker 365). The cross-tenant short-circuit
+// sameTenant is the owner rule for an already-scoped principal
+// (owner.ScopeReads: case/space-insensitive, and the Provider scope "global"
+// also reads the platform's untagged "" episodes — tracker 365; directional). The cross-tenant short-circuit
 // stays with the caller.
 func sameTenant(resourceTenant, principalTenant string) bool {
-	return owner.Same(resourceTenant, principalTenant)
+	return owner.ScopeReads(principalTenant, resourceTenant)
 }
 
 // episodeID mints a random 8-byte hex id (main's randHex, duplicated).

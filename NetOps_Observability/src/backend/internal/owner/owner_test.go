@@ -29,6 +29,31 @@ func TestRealTenantsNeverCollapse(t *testing.T) {
 	}
 }
 
+// ScopeReads is directional: the Provider scope reads both platform
+// spellings; an unbound "" scope never widens to "global"; tenants never mix.
+func TestScopeReadsIsDirectional(t *testing.T) {
+	for _, c := range []struct {
+		scope, row string
+		want       bool
+	}{
+		{"global", "global", true},
+		{"global", "", true},
+		{" GLOBAL ", "  ", true},
+		{"", "", true},
+		{"", "global", false}, // unbound caller never widens into the Provider
+		{"acme", "acme", true},
+		{"ACME", "acme", true},
+		{"acme", "", false},
+		{"acme", "global", false},
+		{"global", "acme", false},
+		{"", "acme", false},
+	} {
+		if got := ScopeReads(c.scope, c.row); got != c.want {
+			t.Errorf("ScopeReads(%q, %q) = %v, want %v", c.scope, c.row, got, c.want)
+		}
+	}
+}
+
 // TestParityWithCorrelation reads the table the correlation engine's
 // canon_tenant test also reads (src/correlation/test_canon_tenant.py).
 func TestParityWithCorrelation(t *testing.T) {
