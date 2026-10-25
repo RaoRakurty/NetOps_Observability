@@ -59,7 +59,11 @@ from signals import SIGNAL_NS, EntityType, Severity, Signal, Source
 from verdicts import Verdict as GateVerdict
 from verdicts import VerdictTier
 
-ENGINE_SEMVER = "3.1.0"  # 3.1.0: tracker 154 — (a) equal-confidence ranking ties break on
+ENGINE_SEMVER = "3.2.0"  # 3.2.0: NMS-first T4c — a controller tunnel node (PATH
+# `<tunnel>@<instance>`) is looked up on the adjacency rung by its own id
+# (Node.adjacency_key), so tunnel↔endpoint rows in topology_links.json ground it
+# to its edge devices at rank 3; byte-identical when no such row exists.
+# 3.1.0: tracker 154 — (a) equal-confidence ranking ties break on
 # grounded-seam-type affinity (the hypothesis whose declared seam scope matches the
 # TYPE of the seam the object actually grounded on wins the tie; strictly-higher
 # confidence is NEVER overridden, no seam ⇒ order unchanged); (b) same-window
@@ -459,6 +463,24 @@ class Node:
             return eid
         return None
 
+    def adjacency_key(self) -> str | None:
+        """The key this node is looked up by on the L2/L3 adjacency rung (rank 3).
+
+        A device-scoped node uses its device part (unchanged). A controller
+        TUNNEL node — PATH entity `<tloc-pair tunnel id>@<controller instance>`
+        (controller_events.py, NMS-first T0) — has no single device, so it is
+        looked up by its own id: the API exports tunnel↔endpoint rows into
+        topology_links.json (T4c), which is what lets a tunnel ground to the two
+        edge devices it runs between at an authoritative rank instead of a
+        rank-7 shared token. No such row ⇒ no adjacency ⇒ unchanged behaviour."""
+        dp = self.device_part()
+        if dp:
+            return dp
+        eid = self.entity_id
+        if self.entity_type == EntityType.PATH and "@" in eid and "->" not in eid:
+            return eid
+        return None
+
 
 _SEV_RANK = {Severity.INFO: 0, Severity.WARN: 1, Severity.HIGH: 2, Severity.CRIT: 3}
 
@@ -732,7 +754,7 @@ def resolve_grounding(
         return Grounding("topo", "shared:" + ref, resource_identity_relation(ref))
     # rank 3 — L2/L3 adjacency: two DIFFERENT devices joined by an inventoried link
     # (LLDP/CDP/BGP-LS), observed by the devices themselves.
-    da, db = a.device_part(), b.device_part()
+    da, db = a.adjacency_key(), b.adjacency_key()
     if da and db and adjacency.adjacent(da, db):
         lo, hi = sorted((da, db))
         return Grounding("topo", f"adj:{lo}--{hi}", topology_link_relation(lo, hi))
@@ -1257,7 +1279,7 @@ def prepare_window(
     refs = [nd.identity_refs() for nd in nodes]
     declared = [nd.declared_path_ids() for nd in nodes]
     windows = [nd.window() for nd in nodes]
-    devs = [nd.device_part() for nd in nodes]
+    devs = [nd.adjacency_key() for nd in nodes]
     seams_sorted = tuple(sorted(seams, key=lambda s: s.seam_id))
     seam_evs = [s.endpoint_values() | {s.seam_id} for s in seams_sorted]
     # per-node seam memberships, by STRUCTURAL identity and by token (rank 2 vs 7)
@@ -3754,7 +3776,7 @@ def run_window(
         cid = str(uuid.uuid5(SIGNAL_NS, f"corrobj|{tenant}|{first.key}|{onset_ms}"))
         # Component-scoped device set, for embedding the orientations + adjacency this
         # object grounded on (both replay deterministically from the snapshot).
-        comp_devs = {n.device_part() for n in comp} - {None}
+        comp_devs = {n.adjacency_key() for n in comp} - {None}
         orientations: tuple[tuple, ...] = ()
         if rec is not None and rec.calls:
             orientations = tuple(sorted(

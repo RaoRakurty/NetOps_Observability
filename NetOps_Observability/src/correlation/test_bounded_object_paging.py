@@ -79,7 +79,15 @@ T0 = datetime(2026, 6, 12, 9, 42, 0, tzinfo=timezone.utc)
 # `catalog_version` stamp, and the verdict is still `undetermined` with the same
 # top hypothesis. The proof is
 # test_config_change_symptom.py::test_v1_stream_is_byte_identical_with_and_without_the_optional_clause.
-FIXTURE_GOLDEN = "e8223a77e621d10e"
+#
+# RE-FROZEN, 2026-10-25, NMS-first T4c (was "e8223a77e621d10e"). `content_hash`
+# pins `engine_version`, and ENGINE_SEMVER went 3.1.0 → 3.2.0 because
+# Node.adjacency_key changed how the adjacency rung looks nodes up. This object
+# has no controller tunnel node and no tunnel adjacency row, so its DECISION
+# cannot move — CHECKED, not assumed: with ENGINE_SEMVER reverted to 3.1.0 and
+# the new code in place, content_hash is exactly the previous "e8223a77e621d10e"
+# (only the version stamp differs).
+FIXTURE_GOLDEN = "5207b1535b6f8b82"
 
 
 def _sig(kind, et, eid, *, off=0.0, src=Source.METRIC, sev=Severity.HIGH,

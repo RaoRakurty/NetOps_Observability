@@ -219,3 +219,107 @@ func TunnelEnds(tunnelID, peer string) (local, remote string, ok bool) {
 	}
 	return "", "", false
 }
+
+// Link is one topology_links.json row (the root writer's topologyLinkExport
+// shape: tenant_id, a, b, proto).
+type Link struct {
+	TenantID string
+	A, B     string
+	Proto    string
+}
+
+// ── T4c: tunnel ↔ endpoint adjacency for the correlation engine ─────────────
+
+// SpecFor returns the connector spec for a vendor id.
+type SpecFor func(vendor string) (nms.ConnectorSpec, bool)
+
+// Links returns topology_links.json rows that tie each
+// controller TUNNEL node to the two edge devices it runs between, so the
+// engine's adjacency rung (rank 3) grounds a tunnel incident to its devices
+// instead of through a rank-7 shared token (NMS-first plan T4c).
+//
+// Each row's `a` is byte-for-byte the engine's PATH entity id for that tunnel —
+// "<canonical tunnel id>@<controller instance>" (controller_events.py) — and
+// `b` is the endpoint's inventory id from the SAME resolver canonicalize uses,
+// so the engine's device nodes carry it. Device↔device rows are deliberately
+// NOT exported: on a full mesh they would make every edge adjacent to every
+// other and weld the fabric into one component (the #99 weld class).
+//
+// TENANT: a row carries its integration's owner, never "" — the engine merges
+// ""-tenant rows into EVERY tenant's adjacency. An end that does not resolve
+// within the integration's own tenant gets no row.
+func Links(ctx context.Context, st SessionStore, spec SpecFor, res KeyResolver, now time.Time) ([]Link, error) {
+	ints, err := st.ListEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]nms.Integration, len(ints))
+	tenants := map[string]bool{}
+	for _, ic := range ints {
+		byID[ic.ID] = ic
+		tenants[ic.Tenant] = true
+	}
+	order := make([]string, 0, len(tenants))
+	for t := range tenants {
+		order = append(order, t)
+	}
+	sort.Strings(order)
+	instance := map[string]string{} // integration id → controller instance ("" = none)
+	seen := map[string]bool{}
+	var out []Link
+	for _, tenant := range order {
+		recs, _, err := st.OverlaySessions(ctx, tenant, now.Add(-Window), RowCap)
+		if err != nil {
+			return nil, err
+		}
+		owner := tenant
+		if owner == "" {
+			owner = "global"
+		}
+		for _, r := range recs {
+			ic, ok := byID[r.IntegrationID]
+			if !ok {
+				continue // the integration was disabled or deleted since the row was written
+			}
+			ci, done := instance[ic.ID]
+			if !done {
+				if sp, ok := spec(ic.Vendor); ok {
+					if id, _, err := nms.ControllerInstanceID(sp, ic.BaseURL); err == nil {
+						ci = id
+					}
+				}
+				instance[ic.ID] = ci
+			}
+			if ci == "" || res == nil {
+				continue // no instance ⇒ the engine's entity carries no "@instance" to match
+			}
+			local, peer, ok := TunnelEnds(r.TunnelID, r.PeerID)
+			if !ok {
+				continue
+			}
+			node := r.TunnelID + "@" + ci
+			for _, sys := range [2]string{local, peer} {
+				dev, ok := res.ResolveDevice(tenant, nms.KeySystemIP, sys, "")
+				if !ok || dev == "" {
+					continue
+				}
+				key := owner + "\x00" + node + "\x00" + dev
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				out = append(out, Link{TenantID: owner, A: node, B: dev, Proto: "sdwan_bfd"})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].TenantID != out[j].TenantID {
+			return out[i].TenantID < out[j].TenantID
+		}
+		if out[i].A != out[j].A {
+			return out[i].A < out[j].A
+		}
+		return out[i].B < out[j].B
+	})
+	return out, nil
+}
