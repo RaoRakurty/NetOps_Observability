@@ -5,6 +5,7 @@ package backend
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -77,10 +78,20 @@ import (
 // a constant ("derived", "sdwan-system") that happens to equal a restricted
 // device's name is no longer hidden (2026-10-11, the same defect class as the
 // scope filter's name matchers).
-func metricsExcludeFilters(ids, names []string) []string {
+//
+// tenants are the restricted tenants themselves. Controller series carry the
+// integration's tenant_id but a device label that need not be an inventory id
+// (an unresolved system-ip), so excluding by device id alone let a restricted
+// tenant's unresolved controller series into the Global view.
+func metricsExcludeFilters(ids, names, tenants []string) []string {
 	idRe, nameRe := regexAlternation(ids), regexAlternation(names)
-	if idRe == "" && nameRe == "" {
+	tenantRe := regexAlternation(normalizedTenants(tenants))
+	if idRe == "" && nameRe == "" && tenantRe == "" {
 		return nil
+	}
+	tenantClause := ""
+	if tenantRe != "" {
+		tenantClause = `,tenant_id!~"(?i)(` + tenantRe + `)"`
 	}
 	labelled := `{device!=""`
 	if idRe != "" {
@@ -90,7 +101,39 @@ func metricsExcludeFilters(ids, names []string) []string {
 	if nameRe != "" {
 		unlabelled += `,hostname!~"` + nameRe + `",source!~"` + nameRe + `"`
 	}
-	return []string{labelled + "}", unlabelled + "}"}
+	return []string{labelled + tenantClause + "}", unlabelled + tenantClause + "}"}
+}
+
+// normalizedTenants lower-cases and trims tenant ids, dropping empties: the
+// form principalTenant and the controller tenant_id label share.
+func normalizedTenants(tenants []string) []string {
+	out := make([]string, 0, len(tenants))
+	for _, t := range tenants {
+		if t = strings.ToLower(strings.TrimSpace(t)); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// metricsTenantScoped binds every scope filter to the caller's tenant as well
+// as its devices. A device label is not proof of ownership: controller series
+// label an UNRESOLVED device by its native key (a system-ip), and a tenant may
+// create a device with any id, so {device=~"10.255.255.40"} alone read another
+// tenant's controller series once a tenant named a device 10.255.255.40 (F1,
+// 2026-10-24). Series with no tenant_id (SNMP, gNMI, probes) still match on
+// the empty alternative; the device filter keeps bounding them.
+func metricsTenantScoped(filters []string, tenant string) []string {
+	clause := `,tenant_id=~"(?i)(|` + regexAlternation(normalizedTenants([]string{tenant})) + `)"`
+	out := make([]string, 0, len(filters))
+	for _, f := range filters {
+		if f == metricsNoVisibleDeviceFilter || !strings.HasSuffix(f, "}") {
+			out = append(out, f)
+			continue
+		}
+		out = append(out, strings.TrimSuffix(f, "}")+clause+"}")
+	}
+	return out
 }
 
 // metricsNoVisibleDeviceFilter is the match-nothing selector: a label value that
@@ -130,9 +173,10 @@ func (s *server) metricsScopeFiltersFor(c jwtClaims) []string {
 	case rt.deny:
 		return []string{metricsNoVisibleDeviceFilter}
 	case !cross:
-		return metricsScopeFilters(ids, names, cross)
-	case len(rt.ids) > 0 || len(rt.names) > 0:
-		if f := metricsExcludeFilters(rt.ids, rt.names); len(f) > 0 {
+		tenant, _ := principalTenant(c)
+		return metricsTenantScoped(metricsScopeFilters(ids, names, cross), tenant)
+	case len(rt.ids) > 0 || len(rt.names) > 0 || len(rt.tenants) > 0:
+		if f := metricsExcludeFilters(rt.ids, rt.names, rt.tenants); len(f) > 0 {
 			return f
 		}
 	}
@@ -167,20 +211,58 @@ func metricsScopeFilters(ids, names []string, cross bool) []string {
 	return filters
 }
 
-// regexAlternation renders values as an anchored RE2 alternation suitable for a
-// `label=~"..."` matcher (e.g. ["a","b.c"] -> `a|b\.c`). Each value is regex-
-// quoted so metacharacters in device ids/names are treated literally. VM anchors
-// =~ matchers at both ends, so the alternation matches the full label value.
-// Returns "" for an empty input.
+// regexAlternation renders values as an anchored RE2 alternation ready to sit
+// INSIDE a double-quoted PromQL label matcher, `label=~"..."`
+// (e.g. ["a","b.c"] -> `a|b\\.c`). Two layers of quoting, both required:
+//
+//   - regexp.QuoteMeta makes metacharacters literal for RE2;
+//   - promQLStringEscape then escapes for the PromQL string literal, where a
+//     backslash starts an escape sequence. Without it VictoriaMetrics rejects
+//     `"10\.0\.0\.1"` ("cannot parse extra_filters"), so a scoped tenant with
+//     any dotted device id or name (an IP, an FQDN sysName) got NO metrics; and
+//     a `"` in a device name (sysName is set by the device) closed the string
+//     and let the name inject matchers into the caller's tenant scope.
+//
+// VM anchors =~ matchers at both ends, so the alternation matches the full
+// label value. Returns "" for an empty input.
 func regexAlternation(vals []string) string {
 	if len(vals) == 0 {
 		return ""
 	}
 	parts := make([]string, 0, len(vals))
 	for _, v := range vals {
-		parts = append(parts, regexp.QuoteMeta(v))
+		parts = append(parts, promQLStringEscape(regexp.QuoteMeta(v)))
 	}
 	return strings.Join(parts, "|")
+}
+
+// promQLStringEscape escapes s for a double-quoted PromQL string literal.
+// Control characters are escaped too, so no value can end the literal or the
+// selector line.
+func promQLStringEscape(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, `\x%02x`, r)
+				continue
+			}
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // metricsUpstreamIsVictoria reports whether the configured METRICS_URL is a

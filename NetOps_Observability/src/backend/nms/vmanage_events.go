@@ -66,18 +66,16 @@ func vmDetails(s string) map[string]string {
 	return out
 }
 
-// vmEventSeverity maps vManage severity_level (critical|major|minor|medium|low).
+// vmEventSeverity maps vManage severity_level (critical|major|minor|medium|low)
+// onto the canonical contract info|warn|high|crit (model.go). It used to pass
+// vManage's own words through, and the engine reads only the canonical four:
+// "major" fell to WARN, below severity_open_floor="high", so no polled vManage
+// event could open an incident on its own (2026-10-24). An absent level is info.
 func vmEventSeverity(s string) string {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "critical":
-		return "critical"
-	case "major":
-		return "major"
-	case "minor", "medium":
-		return "minor"
-	default:
+	if strings.TrimSpace(s) == "" {
 		return "info"
 	}
+	return normSeverity(s)
 }
 
 // vmBGPState: only "established" is up; idle/active/connect/… are not.
@@ -137,8 +135,11 @@ func vmanageEventsTransform(tenant, integrationID string, raw []byte) (Batch, er
 	return b, nil
 }
 
-// vmanageInventoryTransform: /dataservice/device → reachability + health states.
-// Inventory is not an alarm source; it produces no events.
+// vmanageInventoryTransform: /dataservice/device → reachability + health states,
+// and the device snapshot (inventory.go). Inventory is not an alarm source; it
+// produces no events. Every row is a device the fabric knows; the edges
+// (device-type "vedge" — cEdges report it too) are the MANAGED ones, and
+// vManage / vSmart / vBond are the controller's own nodes (Managed=false).
 func vmanageInventoryTransform(tenant, integrationID string, raw []byte) (Batch, error) {
 	var resp struct {
 		Data []struct {
@@ -151,17 +152,42 @@ func vmanageInventoryTransform(tenant, integrationID string, raw []byte) (Batch,
 			SiteID       vmStr  `json:"site-id"`
 			Version      string `json:"version"`
 			LastUpd      vmNum  `json:"lastupdated"`
+			Model        string `json:"device-model"`
+			BoardSerial  string `json:"board-serial"`
+			UUID         string `json:"uuid"`
+			Personality  string `json:"personality"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return Batch{}, err
 	}
-	var b Batch
+	b := Batch{Devices: make([]ControllerDevice, 0, len(resp.Data))} // non-nil: this IS an inventory snapshot
 	for _, d := range resp.Data {
 		if net.ParseIP(d.SystemIP) == nil {
 			continue
 		}
 		ts := vmTime(int64(d.LastUpd))
+		edge := strings.EqualFold(d.DeviceType, "vedge")
+		role := "controller"
+		if edge {
+			role = "edge"
+		}
+		b.Devices = append(b.Devices, ControllerDevice{
+			TenantID: tenant, IntegrationID: integrationID, SourceSystem: "vmanage",
+			KeyKind: KeySystemIP, Key: d.SystemIP,
+			Name: d.HostName,
+			// The system-ip is the address vManage and every SD-WAN signal name
+			// the device by; an SNMP twin of the same box is often reached at it
+			// too, which is what lets the two de-duplicate.
+			MgmtAddr: d.SystemIP,
+			// board-serial is the board/SUDI identity on a cEdge, not necessarily
+			// the chassis serial a support case asks for — an alias, not a claim.
+			Vendor: "cisco", Model: d.Model, OS: "Catalyst SD-WAN", OSVersion: d.Version,
+			SiteID: string(d.SiteID), Role: role, Managed: edge,
+			Reachable: strings.ToLower(d.Reachability),
+			Aliases:   map[string]string{"system_ip": d.SystemIP, "uuid": d.UUID, "board_serial": d.BoardSerial, "personality": d.Personality},
+			LastSeen:  ts,
+		})
 		reach := "unreachable"
 		if strings.EqualFold(d.Reachability, "reachable") {
 			reach = "reachable"
@@ -219,7 +245,7 @@ func vmanageAuditTransform(tenant, integrationID string, raw []byte) (Batch, err
 			if !strings.Contains(strings.ToLower(r.Message), "fail") {
 				continue // a successful login changes nothing
 			}
-			normType, severity = "controller_alarm", "minor"
+			normType, severity = "controller_alarm", "warn"
 		}
 		e := ControllerEvent{
 			TenantID: tenant, IntegrationID: integrationID, SourceSystem: "vmanage",

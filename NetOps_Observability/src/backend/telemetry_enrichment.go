@@ -13,6 +13,7 @@ import (
 	"sort"
 	"time"
 
+	"netops/backend/internal/devmon"
 	"netops/backend/models"
 )
 
@@ -23,10 +24,23 @@ import (
 //
 // The Go API's discovery is the source of truth for Device.TenantID, but the
 // aggregator has no inventory access — so we periodically write a small CSV
-// keyed by the device-identity values that telemetry carries (the device NAME,
-// which appears as syslog `hostname`, and the management ADDRESS, which appears
-// as the flows `sampler_address`/`src/dst_addr`). The aggregator loads it as a
-// Vector enrichment table and looks each event up by that identity.
+// keyed by EVERY device-identity value that telemetry carries:
+//
+//   - the inventory device ID — what the in-API collectors stamp as `device`
+//     (SNMP traps — collectors/snmptrap.go attributeDevice sets Target.ID —,
+//     SNMP metrics, the C7.1 entity-resolver trap rescue). For an SNMP-scanned
+//     device that is discovery.ScanDeviceID(sysName, addr), e.g.
+//     "vedge-20-1e95f00f", which equals NEITHER the name nor the address;
+//   - the device NAME, which appears as syslog `hostname`;
+//   - the management ADDRESS, which appears as the flows
+//     `sampler_address`/`src/dst_addr` and the trap source `host`.
+//
+// The aggregator loads it as a Vector enrichment table and looks each event up
+// by that identity; the correlation engine's verified_tenant reads the same
+// file. (2026-10-25 lab defect: the ID row was missing, so every trap from an
+// SNMP-discovered device — whose `device` is its scan id — was a registry MISS
+// on the registry-anchored trap lane: quarantined as identity_unattributable
+// and never correlated, while its metrics silently fell to the platform tenant.)
 //
 // Reads do NOT depend on this file — they still use the live read-time device
 // matcher (tenancy.go). The exported tag is defense-in-depth groundwork that
@@ -46,12 +60,15 @@ type enrichmentRow struct {
 // rows the ingest tier looks up. Pure (no IO) so it is unit-testable.
 //
 // Rules:
-//   - one row per distinct non-empty device NAME and per distinct ADDRESS;
+//   - one row per distinct non-empty device ID, device NAME and ADDRESS — the
+//     three identities share ONE namespace, because a lane's lookup key is a
+//     bare string that does not say which of the three it is;
 //   - tenant is the device's normalized TenantID ("" = global/platform);
 //   - an identity that maps to MORE THAN ONE distinct tenant is AMBIGUOUS and is
-//     omitted entirely (fail-safe: it stays untagged → "" → platform-only, never
-//     leaked to a wrong tenant). NAT can collapse several devices onto one
-//     address, so this guard matters.
+//     omitted entirely (fail-safe: it is a registry MISS — quarantined on the
+//     registry-anchored lanes, never leaked to a wrong tenant). NAT can collapse
+//     several devices onto one address, and one device's id can equal another
+//     tenant's device name, so this guard matters across all three kinds.
 //
 // Rows are returned sorted by identity for deterministic output (stable file,
 // clean diffs, reproducible tests).
@@ -68,7 +85,16 @@ func buildEnrichmentRows(devices []models.Device) []enrichmentRow {
 		seen[identity][tenant] = true
 	}
 	for _, d := range devices {
+		// A controller-ONLY device is left out: its events already carry the
+		// integration's tenant, and its name/address (a vManage edge reported
+		// to RETAIL and also found by the platform's SNMP scan) would make the
+		// other owner's identity ambiguous here — and an ambiguous identity is
+		// dropped, which would cost that owner its attribution.
+		if d.Source == devmon.SourceController {
+			continue
+		}
 		t := deviceTenant(d)
+		add(d.ID, t)
 		add(d.Name, t)
 		add(d.Address, t)
 	}

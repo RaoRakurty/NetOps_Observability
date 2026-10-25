@@ -308,9 +308,9 @@ describe("the license headline", () => {
   it("Community reads as the free tier, not as a fault", async () => {
     setup();
     render(<Licence />);
-    // "Community" is the headline state, the state chip and the tier in force,
-    // so it is deliberately on the page three times.
-    expect((await screen.findAllByText("Community")).length).toBe(3);
+    // "Community" is the headline state and the state chip; the tier fact
+    // stays away while the tier in force is the one the license names.
+    expect((await screen.findAllByText("Community")).length).toBe(2);
     expect(screen.getByText(/free tier, not a fault state/)).toBeTruthy();
   });
 
@@ -329,7 +329,7 @@ describe("the license headline", () => {
     expect(await screen.findByText("Team license")).toBeTruthy();
     expect(screen.getByText("Acme Networks")).toBeTruthy();
     expect(screen.getByText("lic-2026-0007")).toBeTruthy();
-    expect(screen.getByText("expires in 119 days")).toBeTruthy();
+    expect(screen.getByText(/expires in 119 days/)).toBeTruthy();
     expect(screen.getByText("30 days, set by the issuer")).toBeTruthy();
     expect(screen.getByText("business hours")).toBeTruthy();
   });
@@ -687,11 +687,11 @@ describe("the tenant projection", () => {
   it("a tenant admin sees the license read-only and is told who may change it", async () => {
     setup({ view: tenantProjection(), platformAdmin: false });
     render(<Licence />);
-    // Said twice on purpose: once beside the licence itself, and again where
-    // the install controls would have been.
+    // Said once, short, beside the license; the full sentence on who may
+    // change it is in Details, where the install controls would have been.
     expect(await screen.findByText("Team license")).toBeTruthy();
-    await waitFor(() => expect(screen.getAllByText("You are seeing this license read-only.").length).toBe(2));
-    expect(screen.getAllByText(MANAGED_BY_DETAIL).length).toBe(2);
+    await waitFor(() => expect(screen.getByText(/^Read-only — managed by/)).toBeTruthy());
+    expect(screen.getAllByText(MANAGED_BY_DETAIL).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Managed by")).toBeTruthy();
     expect(screen.getByText("provider")).toBeTruthy();
   });
@@ -719,9 +719,9 @@ describe("the tenant projection", () => {
     setup({ view: tenantProjection(), platformAdmin: false });
     render(<Licence />);
     expect(await screen.findByText("Team license")).toBeTruthy();
-    // "Team" is the tier pill AND the tier that lifts several ceilings.
-    expect(screen.getAllByText("Team").length).toBeGreaterThan(0);
-    expect(screen.getByText("expires in 119 days")).toBeTruthy();
+    // The headline names the tier; no second "Team" pill repeats it.
+    expect(screen.queryAllByText("Team")).toEqual([]);
+    expect(screen.getByText(/expires in 119 days/)).toBeTruthy();
     expect(screen.getByText("30 days, set by the issuer")).toBeTruthy();
     expect(screen.getByText("security findings")).toBeTruthy();
   });
@@ -734,7 +734,7 @@ describe("the tenant projection", () => {
     // well, it is simply not this reader's business. Assert the fact grid
     // itself, so a section heading called "Licence" cannot mask the check.
     expect([...container.querySelectorAll(".lic-facts dt")].map((d) => d.textContent))
-      .toEqual(["Tier in force", "Expiry", "Grace period", "Managed by"]);
+      .toEqual(["Expiry", "Grace period", "Managed by"]);
     expect(screen.queryByText(/no license names a customer/)).toBeNull();
     expect(screen.queryByText(/no license is installed/)).toBeNull();
     // No key material, no offline recipe, no host path.
@@ -748,7 +748,7 @@ describe("the tenant projection", () => {
     setup({ view: tenantProjection(), platformAdmin: false });
     render(<Licence />);
     expect(await screen.findByText(EXPIRY_NOTE)).toBeTruthy();
-    expect(screen.getByRole("region", { name: "Expiry" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Expiry" })).toBeTruthy();
   });
 
   it("a REFUSED license still reaches the tenant, without the forensics", async () => {
@@ -790,10 +790,12 @@ describe("a read that failed", () => {
   it("every section says it cannot describe the license, and none pretends otherwise", async () => {
     setup({ view: new Error("500 Internal Server Error: {}") });
     render(<Licence />);
+    // License, Usage, Included features and Details each read the license (Install
+    // is offered only once the server says the caller is the provider).
     const errs = await screen.findAllByText("The service did not answer.");
-    expect(errs.length).toBe(5);
+    expect(errs.length).toBe(4);
     expect(screen.queryAllByText("Community")).toEqual([]);
-    expect(screen.getAllByText(/Nothing in this part of the page is a statement about the license/).length).toBe(5);
+    expect(screen.getAllByText(/Nothing in this part of the page is a statement about the license/).length).toBe(4);
   });
 
   it("offers a re-read from the failed panel itself", async () => {
@@ -802,7 +804,7 @@ describe("a read that failed", () => {
     const again = (await screen.findAllByRole("button", { name: "Read it again" }))[0];
     mockApi.getLicence.mockResolvedValue(view());
     fireEvent.click(again);
-    expect((await screen.findAllByText("Community")).length).toBe(3);
+    expect((await screen.findAllByText("Community")).length).toBe(2);
   });
 });
 
@@ -812,7 +814,7 @@ describe("accessibility", () => {
   it("every part of the page is a named landmark", async () => {
     setup();
     render(<Licence />);
-    for (const name of ["License", "Current usage", "Features", "Install a license", "Verification"]) {
+    for (const name of ["License", "Usage", "Features", "Install a license", "Details"]) {
       expect(await screen.findByRole("region", { name })).toBeTruthy();
     }
   });
@@ -822,16 +824,16 @@ describe("accessibility", () => {
     const { container } = render(<Licence />);
     await screen.findAllByText("Community");
     expect([...container.querySelectorAll("[data-section]")].map((s) => s.getAttribute("data-section")))
-      .toEqual(["licence", "usage", "metering", "features", "install", "verification"]);
+      .toEqual(["licence", "usage", "features", "install", "details"]);
   });
 
-  it("the tenant projection keeps the same landmarks, with Expiry where Verification was", async () => {
+  it("the tenant projection keeps the landmarks, without the install section it could not use", async () => {
     setup({ view: tenantProjection(), platformAdmin: false });
     const { container } = render(<Licence />);
     await screen.findByText("Team license");
     expect([...container.querySelectorAll("[data-section]")].map((s) => s.getAttribute("data-section")))
-      .toEqual(["licence", "usage", "metering", "features", "install", "expiry"]);
-    for (const name of ["License", "Current usage", "Features", "Changing this license", "Expiry"]) {
+      .toEqual(["licence", "usage", "features", "details"]);
+    for (const name of ["License", "Usage", "Features", "Details"]) {
       expect(screen.getByRole("region", { name })).toBeTruthy();
     }
   });
@@ -1073,7 +1075,7 @@ describe("recorded usage", () => {
     setup({ view: new Error("500 Internal Server Error: {}") });
     render(<Licence />);
     // The licence sections say they cannot describe the licence…
-    expect((await screen.findAllByText("The service did not answer.")).length).toBe(5);
+    expect((await screen.findAllByText("The service did not answer.")).length).toBe(4);
     // …and the usage section still reports what was actually used.
     expect(screen.getByText("Entitlement meters")).toBeTruthy();
   });

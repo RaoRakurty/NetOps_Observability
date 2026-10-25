@@ -62,7 +62,7 @@ rollback() {
   for s in "${SERVICES[@]}"; do
     if [ -n "${OLD_IMG[$s]:-}" ]; then
       docker tag "${OLD_IMG[$s]}" "${PROJECT}-${s}:latest" >/dev/null 2>&1 \
-        && dc up -d --no-build "$s" >/dev/null 2>&1 \
+        && dc up -d --no-build --no-deps "$s" >/dev/null 2>&1 \
         && { restored=1; warn "  restored $s → ${OLD_IMG[$s]:7:12}"; }
     else
       warn "  no prior image recorded for $s (was it running before?)"
@@ -96,9 +96,18 @@ for s in "${SERVICES[@]}"; do
   [ -n "$cid" ] && OLD_IMG[$s]="$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null || true)"
 done
 
-# 3. rebuild + recreate
-log "rebuilding + recreating containers…"
-dc up -d --build "${SERVICES[@]}" || rollback "compose build/up failed"
+# 3. build ONLY the named services, then recreate ONLY them. `up --build`
+# also rebuilds (and, on a new image, recreates) every dependency with a build
+# section — deploying the api rebuilt secrets-seal from scratch (a ~35-minute
+# apt install on a cold build cache, past the deploy timeout) and could restart
+# the TPM custody sidecar, whose unclean stops cause dictionary-attack lockouts.
+# A build failure happens BEFORE the running stack is touched.
+log "building ${SERVICES[*]}…"
+if ! dc build "${SERVICES[@]}"; then
+  die "image build failed — running stack left UNTOUCHED."; exit 1
+fi
+log "recreating ${SERVICES[*]} (dependencies left running)…"
+dc up -d --no-deps "${SERVICES[@]}" || rollback "compose up failed"
 
 # 4. health gate
 log "health gate…"

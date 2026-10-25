@@ -95,7 +95,7 @@ describe("feature flag — 404/501 is a product state", () => {
     portInterfaces.mockResolvedValue({ interfaces: [] });
     render(<DevicePcapPanel device={DEVICE} />);
     expect(await screen.findByText(new RegExp(FEATURE_OFF_MESSAGE))).toBeTruthy();
-    expect(screen.getByText(/FEATURE_PACKET_CAPTURE/)).toBeTruthy();
+    expect(screen.getByText(/A platform administrator can turn it on in Platform › Features/)).toBeTruthy();
     // No form is offered for a family that does not exist here.
     expect(screen.queryByRole("button", { name: /Start a packet capture/i })).toBeNull();
   });

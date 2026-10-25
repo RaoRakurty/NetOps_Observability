@@ -876,6 +876,9 @@ func newServer() *server {
 			if dev.Address == "" {
 				continue
 			}
+			if !collectedDirectly(dev) {
+				continue
+			}
 			// MONITORING-BEGIN — collect only from MONITORED devices: every
 			// addressable inventory device, up to the licence ceiling in
 			// first-seen order (owner decision 2026-10-03). A device past the
@@ -1642,6 +1645,15 @@ func newServer() *server {
 	// before discovery.Start(), which copies the source set once.
 	if srv.wireless != nil {
 		srv.discovery.Register(wireless.NewDeviceSource(srv.wireless, srv.wirelessActiveTenants, 0))
+	}
+	// Controller-sourced inventory (owner 2026-10-19): devices known only
+	// through a controller integration become the owning tenant's inventory —
+	// the same registration pattern as the wireless source above, so the one
+	// monitored-device definition (internal/devmon), the same tenant-partitioned
+	// dedupe and the same licence ceiling apply. Registered before
+	// discovery.Start, which copies the source set once.
+	if srv.nms != nil {
+		srv.discovery.Register(nms.NewControllerDeviceSource(srv.nms.Store(), 0))
 	}
 	srv.intMetrics = &integrationMetrics{}
 	srv.vault = vault
@@ -4543,6 +4555,15 @@ func (s *server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, filtered)
 }
 
+// collectedDirectly reports whether Correlix's own collectors (SNMP, gNMI,
+// NETCONF, …) may poll a device. A controller-sourced device is collected
+// THROUGH its controller's API (its address is the controller's key for it,
+// e.g. a vManage system-ip) and is never polled directly. A merged twin that
+// SNMP also found keeps Source=snmp and is still polled.
+func collectedDirectly(d models.Device) bool {
+	return d.Source != devmon.SourceController
+}
+
 // handleFeatures reports which OPTIONAL UI SURFACES are switched on. It carries
 // no credential presence, no integration inventory and no tenant data — only
 // "is this feature compiled in and enabled", which every authenticated user
@@ -4575,6 +4596,11 @@ func (s *server) handleFeatures(w http.ResponseWriter, r *http.Request) {
 		// always up (rules persist regardless); the flag gates UI visibility and
 		// signals that the router is actually consuming the generated config.
 		"processors": os.Getenv("FEATURE_PROCESSORS") == "true",
+		// Neighbor discovery (pool.Enable at start, so the RUNNING value): the
+		// device page's Neighbors tab says which switch to turn on instead of
+		// showing an empty list as if the device had no neighbors.
+		"lldp_discovery": os.Getenv("ENABLE_LLDP_DISCOVERY") == "true",
+		"cdp_discovery":  os.Getenv("ENABLE_CDP_DISCOVERY") == "true",
 	})
 }
 

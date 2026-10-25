@@ -691,3 +691,71 @@ def test_repo_layout_assumption_holds():
     """Guards the REPO path these config tests resolve from."""
     assert (REPO / "deployment" / "docker" / "vector" / "vector.yaml").is_file()
     assert os.path.isdir(REPO / "src" / "correlation")
+
+
+# --- controller lane (2026-10-24) ---------------------------------------------
+# netops.controller_events was the one lane that persisted under the payload's
+# tenant_id unchecked (main.handle_controller_event). Same contract as the rest.
+
+def _controller(**over):
+    ev = {"tenant_id": "acme", "integration_id": "int-vm", "source_system": "vmanage",
+          "vendor": "cisco", "normalized_event_type": "controller_device_unreachable",
+          "severity": "high", "device_id": "leaf1", "event_id": "c-1",
+          "event_time": "2026-10-24T12:00:00Z"}
+    ev.update(over)
+    return ev
+
+
+def test_forged_controller_tenant_is_quarantined_and_never_persisted(registry, monkeypatch):
+    ch = RecordingCH()
+    monkeypatch.setattr(main, "ch", ch)
+    monkeypatch.setattr(main, "CORR_SIGNALS_ENABLED", True)
+    before = main.DEADLETTER_COUNT
+
+    run(main.handle_controller_event(_controller(tenant_id="victim-corp")))
+
+    assert ch.inserts == [], "a forged-tenant controller event reached ClickHouse"
+    assert main.TENANT_REFUSALS == {"controller_events:claim_mismatch": 1}
+    assert main.DEADLETTER_COUNT == before + 1
+    assert main.QUARANTINE[-1]["topic"] == "deadletter:controller_events"
+
+
+def test_legit_controller_event_still_flows(registry, monkeypatch):
+    seen = []
+    monkeypatch.setattr(main, "ch", RecordingCH())
+    monkeypatch.setattr(main, "CORR_SIGNALS_ENABLED", True)
+    monkeypatch.setattr(main, "batch_signal", lambda row: _noop())
+    monkeypatch.setattr(main, "buffer_signal", lambda sig: seen.append(sig))
+
+    run(main.handle_controller_event(_controller()))
+
+    assert main.TENANT_REFUSALS == {}
+    assert len(seen) == 1 and seen[0].tenant_id == "acme"
+
+
+def test_api_only_controller_device_keeps_the_producer_claim(registry, monkeypatch):
+    """A controller-only device the registry has never heard of (ctl-vmanage-…)
+    is attributed by the authenticated producer — unanchored lane."""
+    seen = []
+    monkeypatch.setattr(main, "ch", RecordingCH())
+    monkeypatch.setattr(main, "CORR_SIGNALS_ENABLED", True)
+    monkeypatch.setattr(main, "batch_signal", lambda row: _noop())
+    monkeypatch.setattr(main, "buffer_signal", lambda sig: seen.append(sig))
+
+    run(main.handle_controller_event(_controller(device_id="ctl-vmanage-0123abcd")))
+
+    assert main.TENANT_REFUSALS == {}
+    assert len(seen) == 1 and seen[0].tenant_id == "acme"
+
+
+def test_controller_claim_on_a_platform_device_is_refused(registry, monkeypatch):
+    """F1 shape: an unresolved controller key that equals ANOTHER owner's device
+    id must not be correlated under the claimant's tenant."""
+    monkeypatch.setattr(main, "ch", RecordingCH())
+    monkeypatch.setattr(main, "CORR_SIGNALS_ENABLED", True)
+    run(main.handle_controller_event(_controller(device_id="plat1")))
+    assert main.TENANT_REFUSALS == {"controller_events:claim_mismatch": 1}
+
+
+async def _noop():
+    return None

@@ -29,7 +29,7 @@ def _stub(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
-def _run(tmp_path: Path, healthy: bool) -> tuple[subprocess.CompletedProcess, list[str]]:
+def _run(tmp_path: Path, healthy: bool, build_fails: bool = False) -> tuple[subprocess.CompletedProcess, list[str]]:
     bindir = tmp_path / "bin"
     bindir.mkdir()
     calls = tmp_path / "docker-calls.log"
@@ -39,7 +39,8 @@ def _run(tmp_path: Path, healthy: bool) -> tuple[subprocess.CompletedProcess, li
         'case "$*" in\n'
         '  *"ps -q"*) echo cid-1 ;;\n'
         '  inspect*) echo sha256:oldimage ;;\n'
-        'esac\n'
+        + ('  *"compose build"*) exit 1 ;;\n' if build_fails else '')
+        + 'esac\n'
         'exit 0\n'))
     _stub(bindir / "curl", "exit 0\n" if healthy else "exit 7\n")
     _stub(bindir / "sleep", "exit 0\n")  # the health waits must not cost real time
@@ -68,7 +69,29 @@ def test_deploy_runs_compose_through_the_env_chain(tmp_path):
     r, compose_calls = _run(tmp_path, healthy=True)
     assert r.returncode == 0, r.stdout + r.stderr
     _assert_chain(compose_calls)
-    assert any(" up -d --build api" in ln for ln in compose_calls), compose_calls
+    assert any(ln.endswith("|compose build api") for ln in compose_calls), compose_calls
+    assert any(ln.endswith("|compose up -d --no-deps api") for ln in compose_calls), compose_calls
+
+
+def test_deploy_builds_and_recreates_only_the_named_services(tmp_path):
+    # 2026-10-19: `up -d --build api` rebuilt every dependency with a build
+    # section (secrets-seal: a ~35-minute apt install on a cold cache, past the
+    # deploy timeout) and could restart the TPM custody sidecar. Every compose
+    # call that builds or creates must be scoped to the named service.
+    r, compose_calls = _run(tmp_path, healthy=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    for ln in compose_calls:
+        args = ln.split("|", 1)[1]
+        if " up" in f" {args}":
+            assert "--no-deps" in args, f"compose up without --no-deps recreates dependencies: {args}"
+            assert "--build" not in args.split(), f"compose up rebuilt images: {args}"
+
+
+def test_a_failed_build_leaves_the_running_stack_untouched(tmp_path):
+    r, compose_calls = _run(tmp_path, healthy=True, build_fails=True)
+    assert r.returncode != 0, "a failed build must not report success"
+    assert not any("|compose up" in ln for ln in compose_calls), (
+        "the stack was recreated after its image failed to build", compose_calls)
 
 
 def test_rollback_also_runs_compose_through_the_env_chain(tmp_path):
@@ -77,7 +100,7 @@ def test_rollback_also_runs_compose_through_the_env_chain(tmp_path):
     r, compose_calls = _run(tmp_path, healthy=False)
     assert r.returncode != 0, "an unhealthy deploy must not report success"
     _assert_chain(compose_calls)
-    assert any(" up -d --no-build api" in ln for ln in compose_calls), (
+    assert any(" up -d --no-build --no-deps api" in ln for ln in compose_calls), (
         "the rollback never re-created the service", compose_calls)
 
 

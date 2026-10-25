@@ -37,23 +37,43 @@ func sdwanBad(to string) bool {
 
 // SDWANStateChangeEvents turns SD-WAN state transitions into events.
 // Non-SD-WAN kinds are ignored (wireless has its own synthesizer).
-func SDWANStateChangeEvents(tenant, integrationID, sourceSystem string, changes []StateChange) []ControllerEvent {
+//
+// A transition into a fault emits the fault kind. A RECOVERY (back to a good
+// state) emits the same kind with a "_clear" suffix, the engine's existing
+// clear convention (engine.py build_nodes skips *_clear; layers.py strips it).
+// Until 2026-10-25 a recovery was emitted under the FAULT kind at info
+// severity: it joined the fault's node, stretched its activity window and kept
+// the object "seen", so a tunnel that came back looked like one still failing.
+//
+// Vendor and product come from the connector spec; PATH kinds carry the
+// canonical TunnelID both ends share, so the two halves of one session meet.
+func SDWANStateChangeEvents(spec ConnectorSpec, tenant, integrationID string, changes []StateChange) []ControllerEvent {
 	var out []ControllerEvent
 	for _, ch := range changes {
 		typ, ok := sdwanStateEventType[ch.Record.StateKind]
 		if !ok || ch.From == ch.To {
 			continue
 		}
-		severity, role := "info", RoleSupporting // a recovery supports; it is not a fault
+		severity, role, transition := "info", RoleSupporting, "recovery"
 		switch {
 		case sdwanBad(ch.To):
-			severity, role = "major", RoleDiscriminating
+			severity, role, transition = "high", RoleDiscriminating, "fault" // canonical (model.go); "major" read as WARN and never opened
 		case ch.To == "yellow" || ch.To == "warning":
-			severity, role = "minor", RoleDiscriminating
+			severity, role, transition = "warn", RoleDiscriminating, "degraded"
+		}
+		if transition == "recovery" {
+			typ += "_clear"
+		}
+		hints := map[string]string{
+			"state_kind": ch.Record.StateKind, "entity": ch.Record.EntityKey,
+			"from": ch.From, "to": ch.To, "transition": transition,
+		}
+		if ch.Record.TunnelID != "" {
+			hints["tunnel_scheme"] = "tloc_pair"
 		}
 		ev := ControllerEvent{
-			TenantID: tenant, IntegrationID: integrationID, SourceSystem: sourceSystem,
-			Vendor: "cisco", Product: "Catalyst SD-WAN Manager",
+			TenantID: tenant, IntegrationID: integrationID, SourceSystem: spec.SourceSystem,
+			Vendor: spec.Maker, Product: spec.Product,
 			// Deterministic id: one event per (entity, transition, time) even if
 			// the cycle re-runs.
 			EventID:             fmt.Sprintf("%s|%s|%s->%s|%d", ch.Record.EntityKey, ch.Record.StateKind, ch.From, ch.To, ch.Record.LastSeen.UnixMilli()),
@@ -65,12 +85,11 @@ func SDWANStateChangeEvents(tenant, integrationID, sourceSystem string, changes 
 			Category:            "sdwan_state",
 			DeviceID:            ch.Record.DeviceID,
 			SiteID:              ch.Record.SiteID,
+			TunnelID:            ch.Record.TunnelID,
+			PeerID:              ch.Record.PeerID,
 			Message:             fmt.Sprintf("%s %s → %s (flap count %d)", ch.Record.StateKind, ch.From, ch.To, ch.Record.FlapCount),
 			EvidenceRole:        role,
-			CorrelationHints: map[string]string{
-				"state_kind": ch.Record.StateKind, "entity": ch.Record.EntityKey,
-				"from": ch.From, "to": ch.To,
-			},
+			CorrelationHints:    hints,
 		}
 		ev.DedupeKey = DedupeKey(ev)
 		out = append(out, ev)

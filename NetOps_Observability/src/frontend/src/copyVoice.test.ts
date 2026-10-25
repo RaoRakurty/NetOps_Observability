@@ -205,6 +205,22 @@ export const RULES: readonly CopyRule[] = [
     re: /\bNO certificate\b|\bValidator (fatal|warn)\b|\bPAUSED · |"POLLING"|\bDebug View\b/,
     why: "Sentence-case an operator-readable state, not a shouted internal one.",
   },
+  {
+    // 2026-10-19 device-page sweep: "UNKNOWN here — not absent" on four tabs.
+    id: "unknown-not-absent",
+    re: /UNKNOWN here|not absent\b/,
+    why: 'Say it plainly: "Couldn\u2019t read X, so we don\u2019t know whether it has any."',
+  },
+  {
+    // 2026-10-19: off-state panels and tooltips named FEATURE_CONFIG_BACKUP,
+    // FEATURE_PACKET_CAPTURE and FEATURE_DEVICE_SSH. Customers never edit the
+    // environment (features are switched on the Features page) — use
+    // components/FeatureOffNotice.
+    id: "env-switch-in-copy",
+    re: /\b(FEATURE|ENABLE)_[A-Z][A-Z0-9_]+\b/,
+    why: 'Name the switch as the Features page does ("Configuration backup is off") — see components/FeatureOffNotice.',
+    proseOnly: true,
+  },
 ];
 
 // ── the scan ────────────────────────────────────────────────────────────────

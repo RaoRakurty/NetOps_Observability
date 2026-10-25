@@ -23,6 +23,7 @@
 // infrastructure:write; the client gate is a courtesy only — a server 403 is
 // caught and shown inline, because the client is never the authority.
 
+import FeatureOffNotice from "../../components/FeatureOffNotice";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
@@ -39,8 +40,8 @@ import {
   BACKUP_BUSY_MESSAGE,
   DRIFT_LABEL,
   DRIFT_HELP,
+  FEATURE_LABEL,
   FEATURE_OFF_HINT,
-  FEATURE_OFF_MESSAGE,
   NO_PERMISSION_MESSAGE,
   actionErrorMessage,
   classifyError,
@@ -221,9 +222,7 @@ export default function DeviceConfigPanel({ device }: { device: Device }) {
     return (
       <section className="cfg-panel" aria-label="Configuration">
         <h3 className="cfg-h">Configuration</h3>
-        <div className="empty" role="status">
-          {FEATURE_OFF_MESSAGE}. {FEATURE_OFF_HINT}
-        </div>
+        <FeatureOffNotice feature={FEATURE_LABEL} purpose={FEATURE_OFF_HINT} />
       </section>
     );
   }

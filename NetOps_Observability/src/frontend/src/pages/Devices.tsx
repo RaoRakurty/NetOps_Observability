@@ -20,6 +20,7 @@ import AskIris from "../components/AskIris";
 import { overageSummary } from "./licence.model";
 import { operatorError } from "../lib/errors";
 import { deviceSerial } from "./device/serial";
+import { featureOffTip } from "../components/FeatureOffNotice";
 
 const Req = () => <span style={{ color: "var(--bad)", marginLeft: 2 }} title="required">*</span>;
 
@@ -359,7 +360,7 @@ export default function Devices() {
       },
     ];
     const off = <span style={{ color: "var(--fg-subtle, var(--muted))" }}>Off</span>;
-    const configOffTip = "Configuration backup is turned off on this deployment (FEATURE_CONFIG_BACKUP). An administrator can enable it.";
+    const configOffTip = featureOffTip("Configuration backup");
     const configLive = configOn && drift !== null;
     cols.push(
       {
@@ -397,7 +398,7 @@ export default function Devices() {
         text: () => (sshEnabled ? "Connect" : "Off"),
         render: (d) => sshEnabled
           ? <button className="btn" title="Open an SSH session to the device" onClick={(e) => { e.stopPropagation(); setTerm(d); }}>Connect</button>
-          : <span title="Device SSH is turned off on this deployment (FEATURE_DEVICE_SSH). An administrator can enable it.">{off}</span>,
+          : <span title={featureOffTip("SSH to devices")}>{off}</span>,
       },
     );
     cols.push({

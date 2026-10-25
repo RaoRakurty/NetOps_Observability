@@ -62,7 +62,14 @@ _ENTITY_BY_KIND = {
     "wireless_retry_rate_high": EntityType.RADIO,
 }
 
-_SEVERITY = {"info": Severity.INFO, "warn": Severity.WARN, "high": Severity.HIGH, "crit": Severity.CRIT}
+_SEVERITY = {"info": Severity.INFO, "warn": Severity.WARN, "high": Severity.HIGH, "crit": Severity.CRIT,
+             # Vendor words a connector may leak past the Go canonicaliser
+             # (nms/normalize.go canonicalSeverities). Before 2026-10-24 vManage
+             # emitted these and "major" fell to WARN — below the open floor, so a
+             # polled outage could never open an incident on its own.
+             "critical": Severity.CRIT, "major": Severity.HIGH, "error": Severity.HIGH,
+             "minor": Severity.WARN, "medium": Severity.WARN, "warning": Severity.WARN,
+             "low": Severity.INFO}
 
 
 def _parse_ts(raw: object, fallback: datetime) -> datetime:
@@ -132,11 +139,23 @@ def controller_event_to_signal(ev: dict, ingest_ts: datetime) -> Signal | None:
     device = str(ev.get("device_id") or ev.get("device_name") or "").strip()
     site = str(ev.get("site_id") or "").strip()
     tunnel = str(ev.get("tunnel_id") or "").strip()
+    peer = str(ev.get("peer_id") or "").strip()
     iface = str(ev.get("interface_name") or "").strip()
+    instance = str(ev.get("controller_instance") or "").strip()
+    raw_hints = ev.get("correlation_hints")
+    hints: dict = raw_hints if isinstance(raw_hints, dict) else {}
 
-    # Bind to the most specific entity available.
-    entity_type = _ENTITY_BY_KIND.get(kind, EntityType.DEVICE)
+    # Bind to the most specific entity available. A recovery (`<kind>_clear`)
+    # binds to the SAME entity as its fault; build_nodes then skips it as a
+    # clear, so it never becomes evidence or opens an object.
+    entity_type = _ENTITY_BY_KIND.get(kind.removesuffix("_clear"), EntityType.DEVICE)
     if entity_type == EntityType.PATH:
+        # A tloc-pair tunnel id is the SAME for both ends of one session
+        # (nms/sdwan_tunnel.go), so both reports land on one node. Scoped by the
+        # controller instance: two overlays in one tenant may reuse system-ips
+        # (two vManage fabrics), and their tunnels must never merge.
+        if tunnel and instance and hints.get("tunnel_scheme") == "tloc_pair":
+            tunnel = f"{tunnel}@{instance}"
         entity_id = tunnel or device
     elif entity_type == EntityType.SITE:
         entity_id = site or device
@@ -159,7 +178,7 @@ def controller_event_to_signal(ev: dict, ingest_ts: datetime) -> Signal | None:
         clock_quality="unknown",
     )
 
-    tokens = tuple(t for t in (device, site, tunnel, iface) if t)
+    tokens = tuple(t for t in (device, site, tunnel, iface, peer) if t)
     return Signal(
         tenant_id=tenant,
         ts=ts,
@@ -188,6 +207,10 @@ def controller_event_to_signal(ev: dict, ingest_ts: datetime) -> Signal | None:
             "event_type": cap_label(ev.get("event_type") or "", where="controller", field_name="event_type"),
             "interface_name": cap_label(iface, where="controller", field_name="interface_name"),
             "tunnel_id": cap_label(tunnel, where="controller", field_name="tunnel_id"),
+            "peer_id": cap_label(peer, where="controller", field_name="peer_id"),
+            # Context for the verdict's independence rule (NMS-first plan T2);
+            # it does not change the observer, so verdicts are unchanged today.
+            "controller_instance": cap_label(instance, where="controller", field_name="controller_instance"),
             **({"correlation_hints": _bounded_hints(ev["correlation_hints"])}
                if ev.get("correlation_hints") else {}),
         },

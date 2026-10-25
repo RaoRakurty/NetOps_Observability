@@ -94,6 +94,12 @@ type Routed struct {
 	States       []StateRecord       // EVERY state applied this batch (first sightings + refreshes) — persist these
 	StateChanges []StateChange       // the subset that TRANSITIONED — emit these as change-events
 	Wireless     *wireless.Inventory // canonical wireless inventory (#128) — upserted by the scheduler
+	// Devices is the validated controller device list (inventory.go).
+	// DevicesComplete is set by the poll runner only when an inventory stream
+	// was polled AND transformed with no error this cycle: only a complete
+	// snapshot may replace what is stored (an incomplete one deletes nothing).
+	Devices         []ControllerDevice
+	DevicesComplete bool
 }
 
 // Pipeline routes normalized batches: dedupes events, folds state (flap
@@ -135,6 +141,12 @@ func (p *Pipeline) Route(b Batch) Routed {
 	if !b.Wireless.Empty() {
 		out.Wireless = &wireless.Inventory{}
 		out.Wireless.Merge(b.Wireless)
+	}
+	// Controller devices are validated HERE, the one chokepoint every
+	// connector's output passes, and are never canonicalised (they ARE the
+	// identities the join resolves to).
+	if b.Devices != nil {
+		out.Devices = ValidateSnapshot(b.Devices)
 	}
 	return out
 }
