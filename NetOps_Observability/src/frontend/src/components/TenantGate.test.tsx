@@ -14,7 +14,7 @@
 //    control — the server enforces isolation regardless)
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, waitFor, fireEvent } from "@testing-library/react";
-import TenantGate, { isTenantScopedSection } from "./TenantGate";
+import TenantGate, { isTenantScopedSection, opensInAllTenantsView } from "./TenantGate";
 import { api, getActiveScope, setActiveScope } from "../services/api";
 
 const SCOPES = [
@@ -169,5 +169,42 @@ describe("TenantGate", () => {
     // The gate organises the UI; it is not the isolation boundary, so a
     // metadata failure must not blank the app.
     expect(await screen.findByText("TENANT DATA")).toBeTruthy();
+  });
+});
+
+// Tracker 365 (owner intent 2026-10-25): the INVENTORY pages open in the
+// labelled All-tenants view — every row carries a Tenant column there — while
+// every other infrastructure page stays behind the gate.
+describe("the labelled All-tenants view", () => {
+  it("opens Devices and NMS Integrations for an unscoped platform admin", async () => {
+    mockScopes(true);
+    for (const leaf of ["devices", "nms"]) {
+      render(
+        <TenantGate sectionId="infrastructure" sectionLabel="Infrastructure" leafId={leaf}>
+          <div>INVENTORY {leaf}</div>
+        </TenantGate>,
+      );
+      expect(await screen.findByText(`INVENTORY ${leaf}`)).toBeTruthy();
+      cleanup();
+    }
+  });
+
+  it("still gates the other infrastructure pages", async () => {
+    mockScopes(true);
+    render(
+      <TenantGate sectionId="infrastructure" sectionLabel="Infrastructure" leafId="interfaces">
+        <div>TENANT DATA</div>
+      </TenantGate>,
+    );
+    await waitFor(() => expect(screen.getByRole("region", { name: /select a tenant/i })).toBeTruthy());
+    expect(screen.queryByText("TENANT DATA")).toBeNull();
+  });
+
+  it("matches the section AND the leaf, never a leaf name alone", () => {
+    expect(opensInAllTenantsView("infrastructure", "devices")).toBe(true);
+    expect(opensInAllTenantsView("infrastructure", "nms")).toBe(true);
+    expect(opensInAllTenantsView("logs", "devices")).toBe(false);
+    expect(opensInAllTenantsView("infrastructure", undefined)).toBe(false);
+    expect(opensInAllTenantsView("admin", undefined)).toBe(true);
   });
 });
