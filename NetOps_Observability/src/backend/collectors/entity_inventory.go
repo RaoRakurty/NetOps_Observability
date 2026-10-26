@@ -54,6 +54,63 @@ func pickSoftwareRev(swrev, class map[string]string) string {
 	return ""
 }
 
+// ChassisIdentity is the device's chassis serial and model as its own
+// ENTITY-MIB reports them (the chassis row, entPhysicalClass=3).
+type ChassisIdentity struct {
+	Serial string `json:"serial"`
+	Model  string `json:"model,omitempty"`
+}
+
+// junkSerials are values agents put in entPhysicalSerialNum when there is no
+// serial (virtual platforms, containers, unprogrammed EEPROMs). Compared
+// case-insensitively after trimming.
+var junkSerials = map[string]bool{
+	"": true, "n/a": true, "na": true, "none": true, "unknown": true, "null": true,
+	"not available": true, "not specified": true, "default string": true, "to be filled by o.e.m.": true,
+}
+
+// usableSerial reports whether a serial is a real one: not a placeholder, not
+// all zeros / all the same character, and made of the characters serials are
+// made of (the same alphabet nms.cleanSerial accepts).
+func usableSerial(s string) bool {
+	s = strings.TrimSpace(s)
+	if junkSerials[strings.ToLower(s)] || len(s) < 3 || len(s) > 64 {
+		return false
+	}
+	same := true
+	for i, r := range s {
+		if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.') {
+			return false
+		}
+		if i > 0 && byte(r) != s[0] {
+			same = false
+		}
+	}
+	return !same
+}
+
+// pickChassisIdentity chooses the device's chassis identity: the LOWEST-indexed
+// chassis row (entPhysicalClass=3) that carries a usable serial. A stack or a
+// multi-chassis system reports several chassis rows; the lowest index is the
+// one agents list first (the stack master / the primary chassis on Cisco,
+// Juniper, Arista and SONiC alike), and the choice is stable across polls. A
+// device with no chassis row, or none with a real serial, has no identity here
+// — the CLI rung of the identity ladder (internal/osprobe) still can. Pure.
+func pickChassisIdentity(serial, model, class map[string]string) (ChassisIdentity, bool) {
+	idxs := make([]string, 0, len(class))
+	for idx, c := range class {
+		if strings.TrimSpace(c) == "3" && usableSerial(serial[idx]) {
+			idxs = append(idxs, idx)
+		}
+	}
+	if len(idxs) == 0 {
+		return ChassisIdentity{}, false
+	}
+	sort.Slice(idxs, func(i, j int) bool { return atoiOrZero(idxs[i]) < atoiOrZero(idxs[j]) })
+	idx := idxs[0]
+	return ChassisIdentity{Serial: strings.TrimSpace(serial[idx]), Model: sanitizeLabel(model[idx])}, true
+}
+
 // entClassName maps the ENTITY-MIB entPhysicalClass enum to a readable label.
 var entClassName = map[string]string{
 	"1": "other", "2": "unknown", "3": "chassis", "4": "backplane",
@@ -99,10 +156,12 @@ func buildEntityInfoLines(device, vendor string, descr, model, serial, class map
 	return lines
 }
 
-// collectEntityInventory walks the four ENTITY-MIB columns and returns FRU info
-// lines. Best-effort: a device that does not implement ENTITY-MIB yields no
-// lines (the walks return empty), so this is safe to call every poll.
-func collectEntityInventory(ctx context.Context, addr string, creds snmpCreds, device, vendor string, tsMillis int64) ([]string, string) {
+// collectEntityInventory walks the ENTITY-MIB columns and returns FRU info
+// lines, the software revision and the chassis identity (ok=false when the
+// device reports none). Best-effort: a device that does not implement
+// ENTITY-MIB yields nothing (the walks return empty), so this is safe to call
+// every poll.
+func collectEntityInventory(ctx context.Context, addr string, creds snmpCreds, device, vendor string, tsMillis int64) ([]string, string, ChassisIdentity, bool) {
 	// Descr/Model/Serial are OCTET STRING → raw bytes are the text.
 	walkStr := func(oid []int) map[string]string {
 		out := map[string]string{}
@@ -125,10 +184,48 @@ func collectEntityInventory(ctx context.Context, addr string, creds snmpCreds, d
 		return out
 	}
 	class := walkInt(entPhysicalClassOID)
-	lines := buildEntityInfoLines(device, vendor,
-		walkStr(entPhysicalDescrOID), walkStr(entPhysicalModelOID),
-		walkStr(entPhysicalSerialOID), class, tsMillis)
-	return lines, pickSoftwareRev(walkStr(entPhysicalSoftwareRevOID), class)
+	model, serial := walkStr(entPhysicalModelOID), walkStr(entPhysicalSerialOID)
+	lines := buildEntityInfoLines(device, vendor, walkStr(entPhysicalDescrOID), model, serial, class, tsMillis)
+	chassis, ok := pickChassisIdentity(serial, model, class)
+	if !ok {
+		chassis, ok = vendorChassisIdentity(ctx, addr, creds, vendor)
+	}
+	return lines, pickSoftwareRev(walkStr(entPhysicalSoftwareRevOID), class), chassis, ok
+}
+
+// Vendor chassis scalars for platforms whose ENTITY-MIB carries no chassis row
+// with a serial. Junos: JUNIPER-MIB jnxBoxSerialNo / jnxBoxDescr (scalars,
+// instance .0; verified against the vendored MIB index). Nokia SR OS / SR
+// Linux are identified by the CLI rung (vendorprofile nokia identity probes),
+// so they need no SNMP fallback here.
+var (
+	jnxBoxSerialNoOID = []int{1, 3, 6, 1, 4, 1, 2636, 3, 1, 3, 0}
+	jnxBoxDescrOID    = []int{1, 3, 6, 1, 4, 1, 2636, 3, 1, 2, 0}
+)
+
+// vendorChassisIdentity reads the vendor chassis scalars (two GETs, only for
+// a vendor that has them and only when ENTITY-MIB had no chassis serial).
+func vendorChassisIdentity(ctx context.Context, addr string, creds snmpCreds, vendor string) (ChassisIdentity, bool) {
+	if vendor != "juniper" {
+		return ChassisIdentity{}, false
+	}
+	sv, err := snmpGet(ctx, addr, creds, jnxBoxSerialNoOID)
+	if err != nil {
+		return ChassisIdentity{}, false
+	}
+	var descr string
+	if dv, err := snmpGet(ctx, addr, creds, jnxBoxDescrOID); err == nil {
+		descr = string(dv.raw)
+	}
+	return juniperChassis(string(sv.raw), descr)
+}
+
+// juniperChassis validates the Junos chassis scalars. Pure.
+func juniperChassis(serial, descr string) (ChassisIdentity, bool) {
+	if !usableSerial(serial) {
+		return ChassisIdentity{}, false
+	}
+	return ChassisIdentity{Serial: strings.TrimSpace(serial), Model: sanitizeLabel(descr)}, true
 }
 
 // atoiOrZero parses a decimal index; anything else is 0 (see the caller).

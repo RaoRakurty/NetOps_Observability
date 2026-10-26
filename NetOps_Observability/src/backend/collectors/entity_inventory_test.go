@@ -86,3 +86,57 @@ func TestPickSoftwareRev(t *testing.T) {
 		t.Fatalf("blank: %q", got)
 	}
 }
+
+// pickChassisIdentity: the device's serial is the lowest-indexed chassis row
+// with a REAL serial — never a module's, never a placeholder.
+func TestPickChassisIdentity(t *testing.T) {
+	class := map[string]string{"1": "3", "2": "9", "1001": "3", "3": "6"}
+	cases := []struct {
+		name          string
+		serial, model map[string]string
+		class         map[string]string
+		want          ChassisIdentity
+		ok            bool
+	}{
+		{"single chassis (Cisco/Arista/SONiC)", map[string]string{"1": "FDO2231X0AB", "2": "MOD123"}, map[string]string{"1": "C9300-48P"}, class,
+			ChassisIdentity{Serial: "FDO2231X0AB", Model: "C9300-48P"}, true},
+		{"stack: lowest-indexed chassis wins", map[string]string{"1001": "FOC2", "1": "FOC1"}, nil, class, ChassisIdentity{Serial: "FOC1"}, true},
+		{"junk on the first chassis falls to the next", map[string]string{"1": "N/A", "1001": "JN11D2E3AFJA"}, nil, class, ChassisIdentity{Serial: "JN11D2E3AFJA"}, true},
+		{"a module's serial is never the device's", map[string]string{"2": "MOD123", "3": "PSU9"}, nil, class, ChassisIdentity{}, false},
+		{"no chassis row at all", map[string]string{"7": "ABC123"}, nil, map[string]string{"7": "10"}, ChassisIdentity{}, false},
+		{"all zeros is a placeholder", map[string]string{"1": "000000000"}, nil, class, ChassisIdentity{}, false},
+		{"control characters are not a serial", map[string]string{"1": "AB\x00CD"}, nil, class, ChassisIdentity{}, false},
+		{"empty walk", nil, nil, nil, ChassisIdentity{}, false},
+	}
+	for _, c := range cases {
+		got, ok := pickChassisIdentity(c.serial, c.model, c.class)
+		if ok != c.ok || got != c.want {
+			t.Errorf("%s: got %+v,%v want %+v,%v", c.name, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+func TestUsableSerial(t *testing.T) {
+	for _, s := range []string{"", "N/A", "unknown", "Default string", "To Be Filled By O.E.M.", "0000", "XXXXXX", "ab", "has space"} {
+		if usableSerial(s) {
+			t.Errorf("%q must not be a usable serial", s)
+		}
+	}
+	for _, s := range []string{"FDO2231X0AB", "JN11D2E3AFJA", "NS1234567", "SSI1234-A.1"} {
+		if !usableSerial(s) {
+			t.Errorf("%q must be a usable serial", s)
+		}
+	}
+}
+
+func TestJuniperChassisFallback(t *testing.T) {
+	if got, ok := juniperChassis("JN11D2E3AFJA", "Juniper MX204 Internet Backbone Router"); !ok || got.Serial != "JN11D2E3AFJA" || got.Model == "" {
+		t.Errorf("a real Junos chassis serial: got %+v,%v", got, ok)
+	}
+	if _, ok := juniperChassis("", "vMX"); ok {
+		t.Error("an empty jnxBoxSerialNo is not a serial")
+	}
+	if _, ok := juniperChassis("VM5F3A0B1C2D-?", "vMX"); ok {
+		t.Error("a malformed serial is refused")
+	}
+}
