@@ -85,10 +85,9 @@ func TestDigestAggregatesCountFirstSeenAndLastSeen(t *testing.T) {
 			t.Errorf("digest body is missing %q:\n%s", want, p.Body)
 		}
 	}
+	// Counted after Push returns, not when the fake signals: wait, don't read.
+	waitForMetric(t, r.mx, `netops_alert_webhook_pushed_total{route="host_monitoring",tier="digest"} 1`)
 	txt := metricsText(r.mx)
-	if !strings.Contains(txt, `netops_alert_webhook_pushed_total{route="host_monitoring",tier="digest"} 1`) {
-		t.Errorf("the digest push was not counted under its own tier:\n%s", txt)
-	}
 	if !strings.Contains(txt, "netops_alert_webhook_digest_alerts_total 4") {
 		t.Errorf("4 alerts were folded and the counter disagrees:\n%s", txt)
 	}
