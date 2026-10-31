@@ -818,14 +818,17 @@ func (s *server) resolveSiteForScope(v tenantVisibility, slug string) (Site, sit
 // and carry no `device` label, but they DO have an owner, and their summary
 // carries that tenant's target hostname, site and app. Treating "no device" as
 // "everybody's" handed one tenant's target names to every other tenant.
-func alertVisibleTenantOnly(a models.Alert, tenant string, cross bool, ids map[string]bool) bool {
+//
+// owner is the DEVICE-LESS alert's resolved owner (alertVisibility.ownerOf —
+// s.alertOwner, the same derivation the episode store records); it is ignored
+// for a device alert, which is decided by the visible device set.
+func alertVisibleTenantOnly(a models.Alert, owner, tenant string, cross bool, ids map[string]bool) bool {
 	if cross {
 		return true
 	}
 	if a.DeviceID != "" {
 		return ids[a.DeviceID]
 	}
-	owner := alertOwnerLabel(a)
 	if owner == "" {
 		// Platform-owned — a stack-level alert (collectors, the correlation
 		// engine, the ingest pipeline, the host). It is the PROVIDER's
@@ -863,8 +866,24 @@ type alertVisibility struct {
 	// what it fired on.
 	hiddenDevices map[string]bool
 	// hiddenTenants is the same restriction in its tenant_id form, for the
-	// DEVICE-LESS alerts that carry an owner label instead (alertOwnerLabel).
+	// DEVICE-LESS alerts that have an owner instead (ownerOf).
 	hiddenTenants []string
+
+	// owner resolves a device-less alert's owning tenant: s.alertOwner, the ONE
+	// derivation alertTenant (episodes, incidents) also uses, so a connector
+	// alert is owned and shown by the same rule. Nil (a value built without a
+	// server) falls back to alertOwnerLabel, under which every server-backed
+	// owner — the NMS integration snapshot — is "" (platform-only), the
+	// default-closed direction.
+	owner func(models.Alert) string
+}
+
+// ownerOf is the resolved owner of a DEVICE-LESS alert ("" = platform-owned).
+func (v alertVisibility) ownerOf(a models.Alert) string {
+	if v.owner != nil {
+		return v.owner(a)
+	}
+	return alertOwnerLabel(a)
 }
 
 // alertVisibilityFor resolves the rule ONCE for a principal. Both restriction
@@ -886,7 +905,7 @@ func (s *server) alertVisibilityFor(c jwtClaims) alertVisibility {
 // it must be filtered by the same object the HTTP surfaces filter by, not by a
 // hand-written copy of the rule that would drift away from it.
 func (s *server) alertVisibilityForScope(tenant string, cross bool, ids map[string]bool, restricted []string) alertVisibility {
-	v := alertVisibility{tenant: tenant, cross: cross, ids: ids}
+	v := alertVisibility{tenant: tenant, cross: cross, ids: ids, owner: s.alertOwner}
 
 	rt := s.telemetryRestrictionFor(tenant, cross, restricted)
 	v.deny = rt.deny
@@ -923,14 +942,21 @@ func (v alertVisibility) visible(a models.Alert) bool {
 	if a.DeviceID != "" && v.hiddenDevices[a.DeviceID] {
 		return false
 	}
-	if owner := alertOwnerLabel(a); owner != "" {
+	// The owner is resolved once, and only for a device-less alert: a device
+	// alert is decided by the device set (and hiddenDevices above), exactly as
+	// before, with no per-row discovery lookup on the list path.
+	owner := ""
+	if a.DeviceID == "" {
+		owner = v.ownerOf(a)
+	}
+	if owner != "" {
 		for _, x := range v.hiddenTenants {
 			if strings.EqualFold(strings.TrimSpace(x), owner) {
 				return false
 			}
 		}
 	}
-	return alertVisibleTenantOnly(a, v.tenant, v.cross, v.ids)
+	return alertVisibleTenantOnly(a, owner, v.tenant, v.cross, v.ids)
 }
 
 // alertVisibleTo applies the resolved rule to a principal's claims. Used by the
