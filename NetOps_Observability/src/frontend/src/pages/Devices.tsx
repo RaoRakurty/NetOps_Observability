@@ -19,6 +19,7 @@ import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 import AskIris from "../components/AskIris";
 import { overageSummary } from "./licence.model";
 import { operatorError } from "../lib/errors";
+import { deviceSerial } from "./device/serial";
 import { featureOffTip } from "../components/FeatureOffNotice";
 
 const Req = () => <span style={{ color: "var(--bad)", marginLeft: 2 }} title="required">*</span>;
@@ -331,6 +332,16 @@ export default function Devices() {
         render: (d) => d.software_version
           ? <span title={d.os || d.software_version} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 14 }}>{d.software_version}</span>
           : <span style={{ color: "var(--fg-subtle, var(--muted))" }} title={d.os || "The device's description carries no version"}>—</span>,
+      },
+      {
+        key: "serial", header: "Serial", width: 140, sortable: true,
+        text: (d) => deviceSerial(d)?.serial ?? "", sortValue: (d) => deviceSerial(d)?.serial || "~",
+        render: (d) => {
+          const sv = deviceSerial(d);
+          return sv
+            ? <span title={sv.from} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 14 }}>{sv.serial}</span>
+            : <span style={{ color: "var(--fg-subtle, var(--muted))" }} title="The device has not reported a serial number yet">—</span>;
+        },
       },
       {
         key: "location", header: "Site", width: "14%", sortable: true,

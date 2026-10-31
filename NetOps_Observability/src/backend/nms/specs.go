@@ -22,7 +22,7 @@ import "time"
 func Specs() map[string]ConnectorSpec {
 	return map[string]ConnectorSpec{
 		"meraki": {
-			Vendor: "meraki", Product: "Cisco Meraki Dashboard", SourceSystem: "meraki",
+			Vendor: "meraki", Product: "Cisco Meraki Dashboard", Maker: "cisco", SourceSystem: "meraki",
 			DeviceKeyKind: KeySerial, // Meraki keys devices by serial
 			// Meraki has no username/password; its testing credential is the API key.
 			SupportedAuth: []AuthKind{AuthAPIKey, AuthOAuth},
@@ -33,7 +33,7 @@ func Specs() map[string]ConnectorSpec {
 			RatePerSec:  10, // 10 req/s per org (verified)
 		},
 		"catalyst_center": {
-			Vendor: "catalyst_center", Product: "Cisco Catalyst Center", SourceSystem: "catalyst_center",
+			Vendor: "catalyst_center", Product: "Cisco Catalyst Center", Maker: "cisco", SourceSystem: "catalyst_center",
 			DeviceKeyKind: KeyNone, // Catalyst Center device UUID: not an inventory key
 			SupportedAuth: []AuthKind{AuthBasic, AuthToken},
 			PreferredAuth: AuthToken, // Basic exchanged for X-Auth-Token
@@ -42,7 +42,7 @@ func Specs() map[string]ConnectorSpec {
 			DefaultPoll: 5 * time.Minute,
 		},
 		"catalyst_9800": {
-			Vendor: "catalyst_9800", Product: "Cisco Catalyst 9800 WLC", SourceSystem: "catalyst_9800",
+			Vendor: "catalyst_9800", Product: "Cisco Catalyst 9800 WLC", Maker: "cisco", SourceSystem: "catalyst_9800",
 			DeviceKeyKind: KeyNone,               // APs are already canonical wireless inventory ids
 			SupportedAuth: []AuthKind{AuthBasic}, // RESTCONF = HTTP Basic (RFC 8040); no OAuth on IOS-XE
 			PreferredAuth: AuthBasic,
@@ -66,7 +66,7 @@ func Specs() map[string]ConnectorSpec {
 			},
 		},
 		"vmanage": {
-			Vendor: "vmanage", Product: "Cisco Catalyst SD-WAN Manager", SourceSystem: "vmanage",
+			Vendor: "vmanage", Product: "Cisco Catalyst SD-WAN Manager", Maker: "cisco", SourceSystem: "vmanage",
 			DeviceKeyKind: KeySystemIP, // overlay system-ip
 			SupportedAuth: []AuthKind{AuthBasic, AuthToken, AuthSession},
 			PreferredAuth: AuthToken, // JWT+refresh (≥20.18); session fallback
@@ -86,7 +86,7 @@ func Specs() map[string]ConnectorSpec {
 			DefaultPoll: 2 * time.Minute,
 		},
 		"ndfc": {
-			Vendor: "ndfc", Product: "Cisco Nexus Dashboard / NDFC", SourceSystem: "ndfc",
+			Vendor: "ndfc", Product: "Cisco Nexus Dashboard / NDFC", Maker: "cisco", SourceSystem: "ndfc",
 			DeviceKeyKind: KeySerial, // switch serial (name fallback)
 			SupportedAuth: []AuthKind{AuthBasic, AuthToken, AuthAPIKey},
 			PreferredAuth: AuthToken, // login → JWT
@@ -95,7 +95,7 @@ func Specs() map[string]ConnectorSpec {
 			DefaultPoll:   5 * time.Minute,
 		},
 		"prime": {
-			Vendor: "prime", Product: "Cisco Prime Infrastructure", SourceSystem: "prime",
+			Vendor: "prime", Product: "Cisco Prime Infrastructure", Maker: "cisco", SourceSystem: "prime",
 			DeviceKeyKind: KeyIP,                 // device IP
 			SupportedAuth: []AuthKind{AuthBasic}, // legacy: raw Basic only
 			PreferredAuth: AuthBasic,
@@ -105,7 +105,7 @@ func Specs() map[string]ConnectorSpec {
 			RatePerSec:    2,
 		},
 		"versa_director": {
-			Vendor: "versa_director", Product: "Versa Director", SourceSystem: "versa_director",
+			Vendor: "versa_director", Product: "Versa Director", Maker: "versa", SourceSystem: "versa_director",
 			DeviceKeyKind: KeyName, // appliance name
 			SupportedAuth: []AuthKind{AuthBasic, AuthOAuth},
 			PreferredAuth: AuthOAuth,
@@ -114,7 +114,7 @@ func Specs() map[string]ConnectorSpec {
 			DefaultPoll:   5 * time.Minute,
 		},
 		"versa_concerto": {
-			Vendor: "versa_concerto", Product: "Versa Concerto", SourceSystem: "versa_concerto",
+			Vendor: "versa_concerto", Product: "Versa Concerto", Maker: "versa", SourceSystem: "versa_concerto",
 			DeviceKeyKind: KeyName, // appliance name
 			SupportedAuth: []AuthKind{AuthBasic, AuthOAuth},
 			PreferredAuth: AuthOAuth,
