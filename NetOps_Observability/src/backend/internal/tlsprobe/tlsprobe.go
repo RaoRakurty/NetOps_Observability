@@ -21,10 +21,19 @@ package tlsprobe
 //     certificate and hangs up. It never sends application data, so chain
 //     verification is not load-bearing here — expiry of whatever is served
 //     is exactly the datum, even (especially) when the chain is broken.
-//   - A server that requires a client certificate (correlation, MTLS:9094)
-//     still presents its own certificate before rejecting ours — the
-//     capture callback fires before the handshake fails, so a failed
-//     handshake with a captured cert still yields the gauge.
+//   - A server that requires a client certificate (correlation, MTLS:9094,
+//     the aggregator's syslog_in) still presents its own certificate before
+//     rejecting ours — the capture callback fires before the handshake
+//     fails, so a failed handshake with a captured cert still yields the
+//     gauge.
+//   - BUT the rejected handshake is not free for the SERVER: vector counts it
+//     in vector_component_errors_total{component_id="syslog_in"} and logs an
+//     ERROR every sweep, which kept VectorComponentErrors permanently firing
+//     on the lab (2026-10-31) and would mask a real device-side mTLS failure.
+//     So when the api HAS a client SVID (WithClientCertificate), the probe
+//     presents it: the handshake completes and the probe hangs up cleanly.
+//     Without one (or if the getter fails) it presents nothing, exactly as
+//     before — the served-cert datum never depends on our own identity.
 //   - postgres does not speak TLS-on-accept: the 8-byte SSLRequest
 //     preamble (length=8, code=80877103) and a single 'S' byte come first.
 //
@@ -90,6 +99,10 @@ type Prober struct {
 
 	warnf func(msg string, fields map[string]any)
 
+	// clientCert, when set, is offered to servers that request a client
+	// certificate. nil = present none (the pre-2026-10-31 behaviour).
+	clientCert func(*tls.CertificateRequestInfo) (*tls.Certificate, error)
+
 	mu      sync.RWMutex
 	results map[string]peerProbeResult
 }
@@ -131,18 +144,57 @@ func parsePeerEndpoints(spec string) ([]peerEndpoint, error) {
 
 // New builds a Prober from the TLS_PROBE_ENDPOINTS-style spec (empty =
 // the built-in mesh surface). warnf receives probe-failure log events.
-func New(spec string, warnf func(msg string, fields map[string]any)) (*Prober, error) {
+func New(spec string, warnf func(msg string, fields map[string]any), opts ...Option) (*Prober, error) {
 	eps, err := parsePeerEndpoints(spec)
 	if err != nil {
 		return nil, err
 	}
-	return &Prober{
+	p := &Prober{
 		warnf:     warnf,
 		endpoints: eps,
 		interval:  5 * time.Minute,
 		timeout:   6 * time.Second,
 		results:   make(map[string]peerProbeResult),
-	}, nil
+	}
+	for _, o := range opts {
+		o(p)
+	}
+	return p, nil
+}
+
+// Option configures a Prober at construction.
+type Option func(*Prober)
+
+// WithClientCertificate makes the probe present the caller's client
+// certificate to servers that request one (see the file comment for why).
+// get is consulted per dial, so a rotated SVID is picked up without a
+// restart; a nil get is ignored.
+func WithClientCertificate(get func(*tls.CertificateRequestInfo) (*tls.Certificate, error)) Option {
+	return func(p *Prober) {
+		if get != nil {
+			p.clientCert = get
+		}
+	}
+}
+
+// offerClientCert is the tls.Config hook. A getter error or nil certificate
+// degrades to presenting NO certificate (crypto/tls requires a non-nil
+// return) — the probe's datum is the SERVER's certificate, so our own
+// identity being unavailable must never cost the observation. The failure is
+// still reported through warnf.
+func (p *Prober) offerClientCert(cri *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+	c, err := p.clientCert(cri)
+	if err != nil || c == nil {
+		if p.warnf != nil {
+			fields := map[string]any{}
+			if err != nil {
+				fields["error"] = err.Error()
+			}
+			p.warnf("peer certificate probe: client SVID unavailable, probing without one", fields)
+		}
+		return &tls.Certificate{}, nil
+	}
+	return c, nil
 }
 
 // run probes every endpoint on the interval until ctx is done. The first
@@ -213,6 +265,9 @@ func (p *Prober) probe(ctx context.Context, ep peerEndpoint) peerProbeResult {
 			}
 			return nil
 		},
+	}
+	if p.clientCert != nil {
+		cfg.GetClientCertificate = p.offerClientCert
 	}
 	tc := tls.Client(raw, cfg)
 	// A handshake error (e.g. the server requires a client certificate) is

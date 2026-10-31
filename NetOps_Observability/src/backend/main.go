@@ -3012,8 +3012,12 @@ func Run() {
 	// silently un-watches an endpoint is this feature's own failure mode).
 	if os.Getenv("TLS_INTERNAL_CA") == "true" ||
 		strings.TrimSpace(envOr("TLS_BACKEND_CA_FILE", os.Getenv("TLS_CLIENT_CA_FILE"))) != "" {
+		// Present the api's client SVID (when it has one) so mTLS endpoints
+		// see a completed handshake rather than a refused one every sweep —
+		// see tlsprobe's file comment (2026-10-31: permanent syslog_in error).
 		prober, err := tlsprobe.New(os.Getenv("TLS_PROBE_ENDPOINTS"),
-			func(msg string, fields map[string]any) { logWarn("tls", msg, fields) })
+			func(msg string, fields map[string]any) { logWarn("tls", msg, fields) },
+			tlsprobe.WithClientCertificate(backendClientCertificate()))
 		if err != nil {
 			log.Fatalf("tls peer prober: %v", err)
 		}
