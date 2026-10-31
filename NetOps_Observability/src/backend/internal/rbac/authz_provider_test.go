@@ -12,7 +12,7 @@ import "testing"
 // platform owner's own account class — aliasing it would be an escalation).
 func TestAuthorizeProviderScopeOwnerAliasing(t *testing.T) {
 	provider := Principal{Subject: "root", Role: RoleSuperAdmin, Tenant: "global"} // owner narrowed to Provider
-	blank := Principal{Subject: "x", Role: "admin", Tenant: ""}                     // a "" realm principal
+	blank := Principal{Subject: "x", Role: "admin", Tenant: ""}                    // a "" realm principal
 	acme := Principal{Subject: "a", Role: RoleSuperAdmin, Tenant: "acme"}
 
 	cases := []struct {

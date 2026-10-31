@@ -47,7 +47,7 @@ func Same(a, b string) bool { return Of(a) == Of(b) }
 // principal whose scope is "" is an unbound / unresolved caller, and widening
 // it to the Provider's "global" rows would turn a missing tenant into access.
 // This is the app-layer mirror of Postgres migration 0062 (platform_alias:
-// app.tenant_id = 'global' AND tenant_id = '').
+// app.tenant_id = 'global' AND tenant_id = ”).
 func ScopeReads(scope, row string) bool {
 	s := strings.ToLower(strings.TrimSpace(scope))
 	r := strings.ToLower(strings.TrimSpace(row))
