@@ -67,6 +67,7 @@ MAP=(
     "src/config/gnmi_fidelity.yaml|config/gnmi_fidelity.yaml"
     "deployment/docker/vector/vector.yaml|vector/vector.yaml"
     "deployment/docker/vector/cx-enrichment-reload.sh|vector/cx-enrichment-reload.sh"
+    "deployment/docker/vector/cx-lane-watch.sh|vector/cx-lane-watch.sh"
     "deployment/docker/vector/generated/syslog-admission.vrl|vector/syslog-admission.vrl"
     "deployment/docker/vector-router/vector.yaml|vector-router/vector.yaml"
     "deployment/docker/vector-router/processors-default.yaml|vector-router/processors-default.yaml"
