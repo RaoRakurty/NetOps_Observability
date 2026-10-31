@@ -42,8 +42,8 @@ func TestMetricsScopeFiltersScopedWithDevices(t *testing.T) {
 	joined := strings.Join(got, " ")
 	for _, want := range []string{
 		`{device=~"core-1"}`,
-		`{hostname=~"core-1\.acme",device=""}`, // regex metachars escaped
-		`{source=~"core-1\.acme",device=""}`,
+		`{hostname=~"core-1\\.acme",device=""}`, // RE2-escaped, then PromQL-string-escaped
+		`{source=~"core-1\\.acme",device=""}`,
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing filter %q in %v", want, got)
@@ -85,7 +85,8 @@ func TestRegexAlternationEscaping(t *testing.T) {
 	}{
 		{nil, ""},
 		{[]string{"core-1"}, "core-1"},
-		{[]string{"a.b", "c+d"}, `a\.b|c\+d`},
+		{[]string{"a.b", "c+d"}, `a\\.b|c\\+d`}, // VictoriaMetrics rejects a lone \. inside "…"
+		{[]string{`q"x`}, `q\"x`},
 	}
 	for _, c := range cases {
 		if got := regexAlternation(c.in); got != c.want {
@@ -213,7 +214,7 @@ func admitted(filters []string, series map[string]string) bool {
 // series is not hidden because its constant `source` equals a restricted
 // device's name.
 func TestMetricsExcludeFiltersPartitionByDeviceLabel(t *testing.T) {
-	f := metricsExcludeFilters([]string{"acme-core"}, []string{"derived"})
+	f := metricsExcludeFilters([]string{"acme-core"}, []string{"derived"}, nil)
 	restricted := map[string]string{"__name__": "device_cpu_percent", "device": "acme-core"}
 	restrictedByName := map[string]string{"__name__": "cpu_usage", "hostname": "derived"}
 	other := map[string]string{"__name__": "device_mem_percent", "device": "globex-core", "source": "derived"}

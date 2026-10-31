@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"netops/backend/internal/devmon"
+	"netops/backend/internal/discovery"
 	"netops/backend/models"
 )
 
@@ -19,13 +21,18 @@ func TestBuildEnrichmentRows(t *testing.T) {
 		{ID: "d1", Name: "leaf1", Address: "10.0.0.1", TenantID: "Acme"}, // tenant normalized to lower
 		{ID: "d2", Name: "leaf2", Address: "10.0.0.2", TenantID: "acme"},
 		{ID: "d3", Name: "spine1", Address: "10.0.0.3", TenantID: ""}, // global
-		{ID: "d4", Name: "", Address: ""},                             // empty identities → skipped
+		{ID: "d4", Name: "", Address: ""},                             // empty name/address skipped; the id still names it
+		{ID: "", Name: "", Address: ""},                               // no identity at all → no row
 	}
 	got := buildEnrichmentRows(devices)
 	want := []enrichmentRow{
 		{"10.0.0.1", "acme"},
 		{"10.0.0.2", "acme"},
 		{"10.0.0.3", ""},
+		{"d1", "acme"},
+		{"d2", "acme"},
+		{"d3", ""},
+		{"d4", ""},
 		{"leaf1", "acme"},
 		{"leaf2", "acme"},
 		{"spine1", ""},
@@ -44,6 +51,8 @@ func TestBuildEnrichmentRows_AmbiguousIdentityOmitted(t *testing.T) {
 	}
 	got := buildEnrichmentRows(devices)
 	want := []enrichmentRow{
+		{"d1", "acme"},
+		{"d2", "globex"},
 		{"r1", "acme"},
 		{"r2", "globex"},
 	}
@@ -64,9 +73,97 @@ func TestBuildEnrichmentRows_SameTenantDuplicateAddressKept(t *testing.T) {
 		{"10.0.0.5", "acme"},
 		{"a", "acme"},
 		{"b", "acme"},
+		{"d1", "acme"},
+		{"d2", "acme"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("same-tenant duplicate address mismatch:\n got=%v\nwant=%v", got, want)
+	}
+}
+
+// 2026-10-25 lab regression: an SNMP-scanned device's inventory id is
+// discovery.ScanDeviceID(sysName, addr) — e.g. "vedge-20-1e95f00f" — which is
+// neither its name ("vEdge-20") nor its address. The trap receiver stamps that
+// id as the trap's `device` (attributeDevice → Target.ID) and both the Vector
+// aggregator and the correlation engine look the trap up by it. The registry
+// carried only name + address rows, so every such trap was a registry MISS on
+// a registry-anchored lane and was quarantined as identity_unattributable. The
+// id must be a row of its own, owned by the device's tenant.
+func TestBuildEnrichmentRows_ScanDeviceIDIsAnIdentity(t *testing.T) {
+	devices := []models.Device{
+		{ID: discovery.ScanDeviceID("vEdge-20", "192.168.222.20"), Name: "vEdge-20", Address: "192.168.222.20", TenantID: ""},
+		{ID: discovery.ScanDeviceID("cEDGE-81", "192.168.222.81"), Name: "cEDGE-81", Address: "192.168.222.81", TenantID: "Retail"},
+		// Vendor-neutral: the id form is derived from sysName, whatever the vendor.
+		{ID: discovery.ScanDeviceID("mx480-core#1", "10.20.0.1"), Name: "mx480-core#1", Address: "10.20.0.1", TenantID: "acme"},
+	}
+	byIdentity := map[string]string{}
+	for _, r := range buildEnrichmentRows(devices) {
+		byIdentity[r.Identity] = r.Tenant
+	}
+	for _, d := range devices {
+		if d.ID == d.Name || d.ID == d.Address {
+			t.Fatalf("fixture premise broken: scan id %q must differ from name and address", d.ID)
+		}
+		want := deviceTenant(d)
+		for _, identity := range []string{d.ID, d.Name, d.Address} {
+			got, ok := byIdentity[identity]
+			if !ok {
+				t.Fatalf("identity %q of device %q has no registry row — a lane keyed on it is a registry MISS", identity, d.ID)
+			}
+			if got != want {
+				t.Fatalf("identity %q attributed to %q, want the device's own tenant %q", identity, got, want)
+			}
+		}
+	}
+	if len(byIdentity) != 3*len(devices) {
+		t.Fatalf("want exactly 3 identities per device, got %d: %v", len(byIdentity), byIdentity)
+	}
+}
+
+// §3a: id, name and address share ONE lookup namespace (a lane's key is a bare
+// string that does not say which kind it is), so a string that is one tenant's
+// device id and another tenant's device name is ambiguous and must be omitted —
+// never resolved to either owner. The devices' unshared identities keep their
+// attribution.
+func TestBuildEnrichmentRows_IDCollidingAcrossTenantsIsOmitted(t *testing.T) {
+	devices := []models.Device{
+		{ID: "core-1", Name: "acme-core", Address: "10.0.0.1", TenantID: "acme"},
+		{ID: "globex-dev-7", Name: "core-1", Address: "10.0.0.2", TenantID: "globex"},
+	}
+	got := buildEnrichmentRows(devices)
+	want := []enrichmentRow{
+		{"10.0.0.1", "acme"},
+		{"10.0.0.2", "globex"},
+		{"acme-core", "acme"},
+		{"globex-dev-7", "globex"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("an id shared across tenants must be omitted:\n got=%v\nwant=%v", got, want)
+	}
+}
+
+// A device whose id IS its name (static/operator inventory) yields one row,
+// not a self-collision.
+func TestBuildEnrichmentRows_IDEqualToNameIsOneRow(t *testing.T) {
+	devices := []models.Device{{ID: "edge1", Name: "edge1", Address: "10.0.0.7", TenantID: "acme"}}
+	got := buildEnrichmentRows(devices)
+	want := []enrichmentRow{{"10.0.0.7", "acme"}, {"edge1", "acme"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("id==name mismatch:\n got=%v\nwant=%v", got, want)
+	}
+}
+
+// A controller-only device stays out entirely — its id included — so it can
+// never make an SNMP-discovered twin's identities ambiguous.
+func TestBuildEnrichmentRows_ControllerOnlyDeviceIDNotExported(t *testing.T) {
+	devices := []models.Device{
+		{ID: "vedge-20-1e95f00f", Name: "vEdge-20", Address: "192.168.222.20", TenantID: ""},
+		{ID: "vedge-20-1e95f00f", Name: "vEdge-20", Address: "192.168.222.20", TenantID: "retail", Source: devmon.SourceController},
+	}
+	got := buildEnrichmentRows(devices)
+	want := []enrichmentRow{{"192.168.222.20", ""}, {"vEdge-20", ""}, {"vedge-20-1e95f00f", ""}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("controller-only device must not reach the registry:\n got=%v\nwant=%v", got, want)
 	}
 }
 

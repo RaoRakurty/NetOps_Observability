@@ -34,7 +34,7 @@ func TestVManageSeverityLevelsAreCanonical(t *testing.T) {
 func TestSDWANStateChangeSeveritiesAreCanonical(t *testing.T) {
 	for _, kind := range []string{"bfd", "control_conn", "omp", "reachability", "bgp", "device_health", "hardware_health"} {
 		for _, to := range []string{"down", "unreachable", "red", "error", "yellow", "warning", "up", "green"} {
-			evs := SDWANStateChangeEvents("t-a", "i-1", "vmanage", []StateChange{{
+			evs := SDWANStateChangeEvents(Specs()["vmanage"], "t-a", "i-1", []StateChange{{
 				Record: StateRecord{EntityKey: "e1", StateKind: kind, DeviceID: "10.255.255.1"}, From: "x", To: to,
 			}})
 			for _, e := range evs {

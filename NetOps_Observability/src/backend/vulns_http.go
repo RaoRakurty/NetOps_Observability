@@ -250,9 +250,23 @@ func (s *server) buildOSVersionLadder() {
 	// structured sink as the ladder's, so one operator view covers both.
 	sshRung := osprobe.NewSSHSource(osProbeSSHRunner{gw: s.configGateway()}, reg)
 	sshRung.Logf = func(msg string, fields map[string]any) { logWarn("osprobe", msg, fields) }
+	// The SNMP rung reads the chassis serial + model the SNMP poller publishes
+	// from the device's own ENTITY-MIB (collectors.FetchChassisIdentityMap) —
+	// keyed by inventory id, so the answer is this row's device and nobody
+	// else's (§3a), and no second connection is made to the device.
+	snmpRung := osprobe.NewSNMPSource(osProbeSysDescr)
+	snmpRung.Chassis = func(ctx context.Context, deviceID string) (string, string, error) {
+		m, err := collectors.FetchChassisIdentityMap(ctx)
+		if err != nil {
+			return "", "", err
+		}
+		c := m[deviceID]
+		return c.Serial, c.Model, nil
+	}
+	snmpRung.Logf = func(msg string, fields map[string]any) { logWarn("osprobe", msg, fields) }
 	ladder, err := osprobe.NewLadder(
 		func(msg string, fields map[string]any) { logWarn("osprobe", msg, fields) },
-		osprobe.NewSNMPSource(osProbeSysDescr),
+		snmpRung,
 		// The gNMI rung is DECLARED with no client. Correlix speaks gNMI through
 		// the gnmic sidecar, which SUBSCRIBES and remote-writes samples to
 		// VictoriaMetrics; it is not a Get client, and a Get client is gRPC +
