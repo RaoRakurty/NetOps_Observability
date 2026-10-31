@@ -60,6 +60,54 @@ type SysDescrFunc func(ctx context.Context, addr string) (vendor, sysDescr strin
 type SNMPSource struct {
 	// Describe is the injected sysDescr read. Nil = the rung is not configured.
 	Describe SysDescrFunc
+	// Chassis is the injected ENTITY-MIB chassis identity read (the SNMP
+	// poller's published chassis serial + model, keyed by device id). Nil =
+	// the rung reads no identity, exactly as before it existed.
+	Chassis ChassisFunc
+	// Logf is the structured-log sink for a NON-FATAL failure — an identity
+	// read that failed while the version was read fine.
+	Logf func(msg string, fields map[string]any)
+}
+
+// ChassisFunc returns the chassis identity the device's own ENTITY-MIB reports
+// for a device id. ("", "", nil) is the honest "the device reports none"; an
+// error is "the published identities could not be read".
+type ChassisFunc func(ctx context.Context, deviceID string) (serial, model string, err error)
+
+// EntityMIBCommand names where an SNMP identity was read — the audit trail
+// deviceident.Identity carries for every serial.
+const EntityMIBCommand = "SNMP ENTITY-MIB entPhysicalSerialNum (chassis)"
+
+// ProbeWithIdentity implements IdentitySource: the version from sysDescr (the
+// Probe contract, unchanged) and the chassis identity from ENTITY-MIB. The
+// identity is NOT a second dial at the device: the SNMP poller already walks
+// ENTITY-MIB every cycle with the device's own credentials (SNMPv3 included,
+// which the sysDescr read here does not speak) and publishes it. A failed
+// identity read leaves the identity empty and is logged; it never discards a
+// version that was read.
+func (s *SNMPSource) ProbeWithIdentity(ctx context.Context, t Target) (string, deviceident.Identity, error) {
+	var id deviceident.Identity
+	version, err := s.Probe(ctx, t)
+	if err != nil && !(errors.Is(err, ErrNotConfigured) && s != nil && s.Chassis != nil) {
+		return "", id, err
+	}
+	if s == nil || s.Chassis == nil || strings.TrimSpace(t.DeviceID) == "" {
+		return version, id, nil
+	}
+	serial, model, cerr := s.Chassis(ctx, t.DeviceID)
+	if cerr != nil {
+		logFields(s.Logf, "osprobe: ", "SNMP chassis identity unread — the serial is left for another rung", map[string]any{
+			"device_id": t.DeviceID, "error": cerr.Error(),
+		})
+		return version, id, nil
+	}
+	if serial = strings.TrimSpace(serial); serial != "" {
+		id.Serial, id.SerialCommand = serial, EntityMIBCommand
+	}
+	if model = strings.TrimSpace(model); model != "" {
+		id.Model, id.ModelCommand = model, EntityMIBCommand
+	}
+	return version, id, nil
 }
 
 // NewSNMPSource builds the sysDescr rung.
