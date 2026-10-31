@@ -164,6 +164,27 @@ reach `corr_signals`.
   authenticated by the opaque token + the connector's signature verification.
 - Scheduler: each enabled integration polls on its own `pollIntervalS`
   (floored at 30s); `NMS_POLL_TICK` (default 30s) only re-evaluates due-ness.
+  Due integrations go to a worker pool of `NMS_POLL_WORKERS` (default 4,
+  clamped 1–16), dispatched round-robin by tenant; one integration never runs
+  twice at once ("Poll now" during a scheduled cycle answers `409 busy`). Each
+  cycle has a deadline of `min(interval, NMS_POLL_DEADLINE)` (default 120s);
+  streams it never reached are recorded `skipped_deadline`. A per-integration
+  circuit breaker opens after 3 consecutive cycles ending unreachable /
+  timeout / 5xx / auth_failed (auth included so a wrong password cannot lock
+  the service account out), waits a full-jitter exponential cooldown (base =
+  interval, cap 30 min), then makes ONE login probe; "Poll now" probes at once.
+- Run history is per stream (`connector_run_history.streams`, migration
+  0064): a run is `ok`, `partial` (some streams delivered) or `error`;
+  `partial` counts as an error in the error rate.
+- Connector health is exported on the api's own `/metrics` scrape (never the
+  import push, so a dead api reads as absent, not frozen):
+  `netops_nms_poll_runs_total{tenant_id,integration_id,vendor,stream,result}`,
+  `netops_nms_last_success_timestamp_seconds`, `_poll_duration_seconds`,
+  `_poll_interval_seconds`, `_ever_succeeded`, `_consecutive_failures`,
+  `_circuit_open`, `_devices_reported`, `_devices_unreachable`,
+  `_auth_failures_total`, `_sink_failures_total{lane}`,
+  `netops_nms_integrations_enabled{vendor}`. Labels are exactly those — never
+  names, URLs, error text or device labels.
 - Correlation `/healthz` → `ingest.controller_events_*` counters prove the
   event lane end-to-end.
 - **AI evidence answers** (P6): the assistant answers "what did the controller

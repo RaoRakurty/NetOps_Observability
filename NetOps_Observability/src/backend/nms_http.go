@@ -276,6 +276,12 @@ func (s *server) nmsIntegrationPollNow(w http.ResponseWriter, r *http.Request, i
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	rec := s.nms.PollIntegration(ctx, c)
+	if rec.Status == nms.RunStatusBusy {
+		// One integration never polls twice at once: the scheduler (or
+		// another operator) is mid-cycle. Nothing was run or recorded.
+		writeJSON(w, http.StatusConflict, map[string]any{"status": rec.Status, "error": rec.Error})
+		return
+	}
 	out := map[string]any{
 		"status":     rec.Status,
 		"events":     rec.Events,
@@ -283,6 +289,9 @@ func (s *server) nmsIntegrationPollNow(w http.ResponseWriter, r *http.Request, i
 	}
 	if rec.Error != "" {
 		out["error"] = rec.Error
+	}
+	if len(rec.Streams) > 0 {
+		out["streams"] = rec.Streams
 	}
 	writeJSON(w, http.StatusOK, out)
 }
