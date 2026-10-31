@@ -180,26 +180,25 @@ func upsertFoundChunk(ctx context.Context, tx pgx.Tx, recs []FoundRecord) error 
 		idx[r.Key()] = len(uniq)
 		uniq = append(uniq, r)
 	}
-	n := len(uniq)
-	var (
-		tenants, sources, addrs, ids, names, vendors, oses, creds, datas = make([]string, n), make([]string, n),
-			make([]string, n), make([]string, n), make([]string, n), make([]string, n), make([]string, n),
-			make([]string, n), make([]string, n)
-		first, answered = make([]time.Time, n), make([]time.Time, n)
-		stale           = make([]*time.Time, n)
-	)
-	for i, r := range uniq {
-		tenants[i], sources[i], addrs[i], ids[i] = r.TenantID, r.Source, r.Address, r.DeviceID
-		names[i], vendors[i], oses[i], creds[i] = r.Name, r.Vendor, r.OS, r.CredentialRef
-		first[i], answered[i] = r.FirstFound.UTC(), r.LastAnswered.UTC()
+	// Column arrays for unnest: one statement per chunk.
+	var tenants, sources, addrs, ids, names, vendors, oses, creds, datas []string
+	var first, answered []time.Time
+	var stale []*time.Time // nil element = NULL stale_since
+	for _, r := range uniq {
+		tenants, sources, addrs, ids = append(tenants, r.TenantID), append(sources, r.Source), append(addrs, r.Address), append(ids, r.DeviceID)
+		names, vendors, oses, creds = append(names, r.Name), append(vendors, r.Vendor), append(oses, r.OS), append(creds, r.CredentialRef)
+		first, answered = append(first, r.FirstFound.UTC()), append(answered, r.LastAnswered.UTC())
+		var st *time.Time
 		if !r.StaleSince.IsZero() {
 			t := r.StaleSince.UTC()
-			stale[i] = &t
+			st = &t
 		}
-		datas[i] = "{}"
+		stale = append(stale, st)
+		data := "{}"
 		if len(r.Data) > 0 {
-			datas[i] = string(r.Data)
+			data = string(r.Data)
 		}
+		datas = append(datas, data)
 	}
 	_, err := tx.Exec(ctx, `
 INSERT INTO discovered_devices

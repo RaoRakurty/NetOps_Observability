@@ -726,6 +726,17 @@ func TestFileFoundStoreIsTenantScoped(t *testing.T) {
 	}
 }
 
+// DiscoveryStale is source-stamped: an operator write never carries it.
+func TestOperatorWriteNeverCarriesDiscoveryStale(t *testing.T) {
+	a := NewDiscoveryAggregator()
+	if err := a.Upsert(models.Device{ID: "man-1", Name: "man-1", Address: "10.5.5.5", DiscoveryStale: true}); err != nil {
+		t.Fatal(err)
+	}
+	if d, ok := a.Get("man-1"); !ok || d.DiscoveryStale {
+		t.Fatalf("a request body set discovery_stale on a manual device: %+v", d)
+	}
+}
+
 func TestMergedRecordIsStaleOnlyIfEveryRecordIs(t *testing.T) {
 	stale := models.Device{ID: "snmp-a", Source: "snmp", Address: "10.1.1.1", DiscoveryStale: true}
 	live := models.Device{ID: "static-a", Source: "static", Address: "10.1.1.1"}
