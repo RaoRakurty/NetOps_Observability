@@ -25,6 +25,8 @@ type StateRecord struct {
 	FlapCount     int64
 	DeviceID      string
 	SiteID        string
+	TunnelID      string
+	PeerID        string
 }
 
 // StateChange is emitted when an entity's state transitions.
@@ -67,6 +69,7 @@ func (t *StateTracker) Apply(s ControllerState) (StateRecord, *StateChange) {
 			CurrentState: s.CurrentState, PreviousState: "",
 			FirstSeen: ts, LastSeen: ts, FlapCount: 0,
 			DeviceID: s.DeviceID, SiteID: s.SiteID,
+			TunnelID: s.TunnelID, PeerID: s.PeerID,
 		}
 		t.recs[key] = rec
 		return rec, nil // first sighting: not a flap
@@ -74,6 +77,7 @@ func (t *StateTracker) Apply(s ControllerState) (StateRecord, *StateChange) {
 
 	prev.LastSeen = ts
 	prev.DeviceID, prev.SiteID = s.DeviceID, s.SiteID
+	prev.TunnelID, prev.PeerID = s.TunnelID, s.PeerID
 	if s.CurrentState == prev.CurrentState {
 		t.recs[key] = prev
 		return prev, nil // steady state

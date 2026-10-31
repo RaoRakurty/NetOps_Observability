@@ -676,6 +676,19 @@ func FetchSoftwareRevMap(ctx context.Context) (map[string]string, error) {
 	return out, nil
 }
 
+// chassisIdentityKey holds deviceID → ENTITY-MIB chassis serial + model.
+const chassisIdentityKey = "netops:inventory:chassis"
+
+// FetchChassisIdentityMap reads the device → chassis identity map. Absent →
+// empty map, nil error; unread or undecodable → error (tracker 307).
+func FetchChassisIdentityMap(ctx context.Context) (map[string]ChassisIdentity, error) {
+	out := map[string]ChassisIdentity{}
+	if err := redisGetJSON(ctx, "chassis identity map", chassisIdentityKey, &out); err != nil {
+		return map[string]ChassisIdentity{}, err
+	}
+	return out, nil
+}
+
 // FetchSysLocationMap reads the device → configured-location map. Absent →
 // empty map, nil error; unread or undecodable → error (tracker 307).
 func FetchSysLocationMap(ctx context.Context) (map[string]string, error) {

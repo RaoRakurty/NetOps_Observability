@@ -143,6 +143,7 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	ifindexMap := map[string]map[string]string{}
 	locations := map[string]string{}
 	softwareRevs := map[string]string{}
+	chassisIDs := map[string]ChassisIdentity{}
 	for _, r := range results {
 		if r.lastErr != "" {
 			lastErr = r.lastErr
@@ -171,6 +172,9 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 			}
 			if r.softwareRev != "" {
 				softwareRevs[r.id] = r.softwareRev
+			}
+			if r.chassis != nil {
+				chassisIDs[r.id] = *r.chassis
 			}
 		}
 	}
@@ -203,6 +207,14 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	if len(softwareRevs) > 0 {
 		if b, err := json.Marshal(softwareRevs); err == nil {
 			redisPublish(ctx, "device-software", softwareRevKey, string(b), 1800)
+		}
+	}
+	// deviceID → ENTITY-MIB chassis serial + model, read by the identity
+	// ladder's SNMP rung (internal/osprobe) — the device's serial over the
+	// credentials this poller already holds, no extra connection.
+	if len(chassisIDs) > 0 {
+		if b, err := json.Marshal(chassisIDs); err == nil {
+			redisPublish(ctx, "device-chassis", chassisIdentityKey, string(b), 1800)
 		}
 	}
 
@@ -248,6 +260,7 @@ type deviceOutcome struct {
 	ifindex     map[string]string // ifIndex → ifName
 	location    string            // SNMPv2-MIB sysLocation as the device is configured ("" = not set)
 	softwareRev string            // ENTITY-MIB entPhysicalSoftwareRev of the chassis/module ("" = none)
+	chassis     *ChassisIdentity  // ENTITY-MIB chassis serial + model (nil = none reported)
 	lastErr     string
 	enrichErr   string
 }
@@ -407,9 +420,12 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 	}
 	// FRU inventory (ENTITY-MIB) — info series, VM-only, best-effort. Devices
 	// without ENTITY-MIB yield nothing.
-	entLines, swRev := collectEntityInventory(dctx, addr, creds, tg.ID, vendor, now)
+	entLines, swRev, chassis, hasChassis := collectEntityInventory(dctx, addr, creds, tg.ID, vendor, now)
 	lines = append(lines, entLines...)
 	out.softwareRev = swRev
+	if hasChassis {
+		out.chassis = &chassis
+	}
 	// DOM/DDM optics — Port Intelligence #94 P3, opt-in. Prefer a vendor DOM
 	// adapter (Juniper jnxDom / Nokia DDM, ifName-resolved); fall back to the
 	// universal ENTITY-SENSOR-MIB. Normalized rx/tx power, temp, voltage, bias
