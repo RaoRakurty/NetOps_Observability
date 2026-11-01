@@ -440,6 +440,11 @@ func (rs *reportScheduler) deliverToContactPoints(msg models.Alert, o saved.Obje
 		return 0, ""
 	}
 	t := normTenant(o.TenantID)
+	// A platform-owned report ("" or "global") still resolves CROSS here, on
+	// purpose and unchanged by tracker 365: the scheduler has no principal, the
+	// report was authored by the platform owner, and its contact points are
+	// platform-global resources. Tracker 365 made "global" a non-cross scope
+	// only for a REQUEST's X-Acting-Tenant (tenancy.go withActingTenant).
 	cross := t == "" || t == TenantGlobal
 	recipients := rs.srv.contactPoints.ResolveEmailRecipients(spec.ContactPoints, t, cross)
 	if len(recipients) == 0 {
@@ -587,7 +592,9 @@ func (rs *reportScheduler) tenantDevices(tenant string) []models.Device {
 //
 // A TENANT-owned report is that tenant's own view of its own estate: nothing is
 // hidden from it. A PLATFORM-owned report is the operator's Global view, so the
-// restricted tenants' devices come out of it.
+// restricted tenants' devices come out of it. That platform-report = cross rule
+// is deliberately UNCHANGED by tracker 365, which narrowed "global" only for a
+// request's acting scope — see deliverToContactPoints.
 func (rs *reportScheduler) deviceVisibility(tenant string) deviceVisibility {
 	t := normTenant(tenant)
 	if t == "" || t == TenantGlobal {
