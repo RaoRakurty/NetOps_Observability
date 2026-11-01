@@ -49,8 +49,8 @@ func registerFake(rt *Runtime, vendor string, rate float64, streams ...string) {
 		paths[s] = "/" + s
 	}
 	rt.reg.connectors[vendor] = connector{
-		spec:   ConnectorSpec{Vendor: vendor, Product: vendor, SourceSystem: vendor, Poll: true, Streams: streams, RatePerSec: rate},
-		auth:   fakeAuth{}, poller: restPoller{paths: paths}, transformer: GenericTransformer{},
+		spec: ConnectorSpec{Vendor: vendor, Product: vendor, SourceSystem: vendor, Poll: true, Streams: streams, RatePerSec: rate},
+		auth: fakeAuth{}, poller: restPoller{paths: paths}, transformer: GenericTransformer{},
 	}
 }
 
